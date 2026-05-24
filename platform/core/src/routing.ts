@@ -813,7 +813,7 @@ export function compileLegacyRoutingConfig(opts: {
 	policies["legacy-default"] = {
 		mode: "automatic",
 		defaultTargets,
-		fallbackTargets: fallbackTargets.length > 0 ? fallbackTargets : defaultTargets,
+		fallbackTargets,
 	};
 	workloads.default = {
 		policy: "legacy-default",
@@ -1107,20 +1107,17 @@ function orderedPreferenceLists(
 		};
 	}
 	const pinnedTarget = agentConfig?.pinnedTargets?.[classification.taskClass] ?? agentConfig?.pinnedTargets?.default;
+	const workloadTargets = workload?.target
+		? [workload.target]
+		: mergeUnique(
+				config.taskClasses[classification.taskClass]?.preferredTargets ?? [],
+				mergeUnique(policy.taskTargets?.[classification.taskClass] ?? [], policy.defaultTargets ?? []),
+			);
 	const orderedTargets = mergeUnique(
 		explicitTargets,
 		mergeUnique(
 			pinnedTarget ? [pinnedTarget] : [],
-			mergeUnique(
-				workload?.target ? [workload.target] : [],
-				mergeUnique(
-					agentConfig?.preferredTargets?.[classification.taskClass] ?? [],
-					mergeUnique(
-						config.taskClasses[classification.taskClass]?.preferredTargets ?? [],
-						mergeUnique(policy.taskTargets?.[classification.taskClass] ?? [], policy.defaultTargets ?? []),
-					),
-				),
-			),
+			mergeUnique(agentConfig?.preferredTargets?.[classification.taskClass] ?? [], workloadTargets),
 		),
 	).filter((targetRef) => allowedTargets.has(targetRef));
 
@@ -1327,10 +1324,9 @@ export function resolveRoutingDecision(
 	}
 	const policy = config.policies[pref.policyId];
 	const classification = classifyRouteRequest(config, request);
-	const candidateRefs = mergeUnique(
-		pref.orderedTargets,
-		mergeUnique(targetRefsForRoster(config, request, classification, policy), pref.fallbackTargets),
-	);
+	const workload = workloadBindingForOperation(config, request.operation);
+	const rosterCandidates = workload?.target ? [] : targetRefsForRoster(config, request, classification, policy);
+	const candidateRefs = mergeUnique(pref.orderedTargets, mergeUnique(rosterCandidates, pref.fallbackTargets));
 	if (candidateRefs.length === 0) {
 		return err("no-candidates", "No route candidates were available for this request.", {
 			policyId: pref.policyId,

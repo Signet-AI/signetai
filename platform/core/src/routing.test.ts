@@ -265,9 +265,53 @@ describe("inference config + decision engine", () => {
 		});
 
 		expect(legacy.targets["legacy-extraction-fallback"]).toBeUndefined();
-		expect(legacy.policies["legacy-default"]?.fallbackTargets).toEqual([
-			makeRoutingTargetRef("legacy-extraction", "default"),
-		]);
+		expect(legacy.policies["legacy-default"]?.fallbackTargets).toEqual([]);
+	});
+
+	it("fails closed for legacy extraction when fallbackProvider is none and synthesis is available", () => {
+		const extractionRef = makeRoutingTargetRef("legacy-extraction", "default");
+		const synthesisRef = makeRoutingTargetRef("legacy-synthesis", "default");
+		const legacy = compileLegacyRoutingConfig({
+			extraction: {
+				provider: "openai-compatible",
+				model: "remote-extractor",
+				endpoint: "https://gateway.example.test/v1",
+				command: undefined,
+				fallbackProvider: "none",
+			},
+			synthesis: {
+				enabled: true,
+				provider: "llama-cpp",
+				model: "qwen3:4b",
+				endpoint: "http://127.0.0.1:8080",
+			},
+		});
+
+		const decision = resolveRoutingDecision(
+			legacy,
+			{ operation: "memory_extraction" },
+			{
+				targets: {
+					[extractionRef]: {
+						available: false,
+						health: "blocked",
+						circuitOpen: false,
+						accountState: "missing",
+						unavailableReason: "missing credential",
+					},
+					[synthesisRef]: ready,
+				},
+			},
+		);
+
+		expect(decision.ok).toBe(false);
+		if ("error" in decision) {
+			expect(decision.error.code).toBe("no-candidates");
+			const trace = decision.error.details?.trace as
+				| { readonly candidates: readonly { readonly targetRef: string }[] }
+				| undefined;
+			expect(trace?.candidates.map((candidate) => candidate.targetRef)).toEqual([extractionRef]);
+		}
 	});
 
 	it("parses ACPX as a first-class restricted harness-backed target", () => {
