@@ -740,7 +740,7 @@ function parseMessage(
 	const channelId = stringField(raw, "channel_id");
 	if (!looksSnowflake(id) || !looksSnowflake(channelId)) return null;
 	const author = recordField(raw, "author");
-	const content = typeof raw.content === "string" ? raw.content : "";
+	const content = typeof raw.content === "string" ? sanitizeCacheText(raw.content.trim()) : "";
 	if (!content && !author) return null;
 	const createdAt = parseDiscordTime(stringField(raw, "timestamp")) ?? snowflakeTime(id) ?? new Date(fallbackMtimeMs);
 	const channel = channels.get(channelId);
