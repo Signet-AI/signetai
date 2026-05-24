@@ -223,12 +223,12 @@ describe("handleUserPromptSubmit observability", () => {
 				},
 				{
 					id: "native-claude",
-					content: "Claude Code source-backed context still matters",
+					content: "Claude Code source-backed Codex context still matters",
 					score: 0.93,
 					source: "native_memory",
 					source_id: "native:claude-code:native_claude_memory:def456",
 					type: "native_claude_memory",
-					tags: "claude-code,native-memory,native_claude_memory",
+					tags: "claude-code,codex,native-memory,native_claude_memory",
 					who: "claude-code",
 					created_at: "2026-05-24T00:00:00.000Z",
 				},
@@ -253,7 +253,7 @@ describe("handleUserPromptSubmit observability", () => {
 		);
 
 		expect(result.memoryCount).toBe(2);
-		expect(result.inject).toContain("Claude Code source-backed context still matters");
+		expect(result.inject).toContain("Claude Code source-backed Codex context still matters");
 		expect(result.inject).toContain("Accepted Signet decision from another harness");
 		expect(result.inject).not.toContain("Codex native memory duplicate");
 	});

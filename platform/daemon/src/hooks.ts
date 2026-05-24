@@ -770,11 +770,6 @@ function isCodexNativeMemoryRow(row: {
 	if (sourceId.startsWith("native:codex:") || sourceId.startsWith("codex_native_memory:")) return true;
 	const who = row.who?.trim().toLowerCase();
 	if (who === "codex") return true;
-	const tags = row.tags
-		?.split(",")
-		.map((tag) => tag.trim().toLowerCase())
-		.filter(Boolean);
-	if (tags?.includes("codex")) return true;
 	const path = row.source_path?.replace(/\\/g, "/");
 	if (!path) return false;
 	const home = (process.env.CODEX_HOME?.trim() || join(homedir(), ".codex")).replace(/\\/g, "/").replace(/\/$/, "");
