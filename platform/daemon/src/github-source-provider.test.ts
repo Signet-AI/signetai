@@ -263,6 +263,99 @@ describe("github-source-provider", () => {
 		expect(rows.map((row) => row.source_kind)).toContain("source_github_failure");
 	});
 
+	it("does not purge sibling repo paths with shared name prefixes", async () => {
+		const source: SignetSourceEntry = {
+			id: "github:sibling-prefix",
+			kind: "github",
+			name: "GitHub",
+			root: "github://repos/Signet-AI/signetai,Signet-AI/signetai-extra",
+			enabled: true,
+			mode: "read-only",
+			createdAt: "2026-01-01T00:00:00.000Z",
+			updatedAt: "2026-01-01T00:00:00.000Z",
+			providerSettings: {
+				repos: ["Signet-AI/signetai", "Signet-AI/signetai-extra"],
+				resourceTypes: ["issues"],
+				state: "all",
+				includeComments: false,
+				docPaths: ["README.md"],
+				maxItemsPerRepo: 5,
+			},
+		};
+		indexExternalMemoryArtifact({
+			agentId: "default",
+			harness: "github",
+			sourceId: source.id,
+			sourceRoot: source.root,
+			sourceExternalId: "Signet-AI/signetai-extra:issue:999",
+			sourceParentPath: "github://Signet-AI/signetai-extra",
+			sourcePath: "github://Signet-AI/signetai-extra/issues/999",
+			sourceKind: "source_github_issue",
+			sourceMtimeMs: Date.parse("2025-01-01T00:00:00.000Z"),
+			capturedAt: "2025-01-01T00:00:00.000Z",
+			content: "sibling stale issue",
+		});
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare("UPDATE memory_artifacts SET updated_at = ? WHERE source_id = ? AND source_path = ?").run(
+				"2025-01-01T00:00:00.000Z",
+				source.id,
+				"github://Signet-AI/signetai-extra/issues/999",
+			);
+		});
+		globalThis.fetch = mock((url: string | URL | Request) => {
+			const text = String(url);
+			if (text.endsWith("/repos/Signet-AI/signetai")) {
+				return Promise.resolve(
+					Response.json({ name: "signetai", full_name: "Signet-AI/signetai", default_branch: "main" }),
+				);
+			}
+			if (text.endsWith("/repos/Signet-AI/signetai-extra")) {
+				return Promise.resolve(
+					Response.json({
+						name: "signetai-extra",
+						full_name: "Signet-AI/signetai-extra",
+						default_branch: "main",
+					}),
+				);
+			}
+			if (text.includes("/repos/Signet-AI/signetai/issues?")) {
+				return Promise.resolve(
+					Response.json([
+						{
+							number: 12,
+							title: "Current issue",
+							body: "body",
+							state: "open",
+							html_url: "https://github.com/Signet-AI/signetai/issues/12",
+							user: { login: "alice" },
+							labels: [],
+							created_at: "2026-01-01T00:00:00.000Z",
+							updated_at: "2026-01-02T00:00:00.000Z",
+							closed_at: null,
+							comments: 0,
+						},
+					]),
+				);
+			}
+			if (text.includes("/repos/Signet-AI/signetai-extra/issues?")) {
+				return Promise.resolve(Response.json({ message: "missing" }, { status: 404 }));
+			}
+			return Promise.resolve(Response.json([]));
+		}) as typeof fetch;
+
+		const result = await githubSourceProvider.sync?.({
+			source,
+			agentsDir: dir,
+			agentId: "default",
+			shouldContinue: () => true,
+		});
+
+		const rows = sourceRows(source.id);
+		expect(result?.failures[0]?.message).toContain("Issues fetch failed: 404");
+		expect(rows.map((row) => row.source_external_id)).toContain("Signet-AI/signetai:issue:12");
+		expect(rows.map((row) => row.source_external_id)).toContain("Signet-AI/signetai-extra:issue:999");
+	});
+
 	it("purges stale failure artifacts after a later successful sync", async () => {
 		const source: SignetSourceEntry = {
 			id: "github:recovered",

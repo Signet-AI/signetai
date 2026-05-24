@@ -364,6 +364,7 @@ function purgeStaleGitHubArtifacts(
 	seenPaths: ReadonlySet<string>,
 	repo: string,
 ): void {
+	const repoPathPrefix = `github://${repo}/`;
 	getDbAccessor().withWriteTx((db) => {
 		const rows = db
 			.prepare(
@@ -375,7 +376,7 @@ function purgeStaleGitHubArtifacts(
 				   AND updated_at < ?
 				   AND COALESCE(is_deleted, 0) = 0`,
 			)
-			.all(agentId, sourceId, `github://${repo}`, `github://${repo}\uffff`, syncStartedAt) as Array<{
+			.all(agentId, sourceId, repoPathPrefix, `${repoPathPrefix}\uffff`, syncStartedAt) as Array<{
 			rowid: number;
 			source_path: string;
 		}>;
