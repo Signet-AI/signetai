@@ -308,6 +308,7 @@ async function indexResource(
 			comments: comments?.map((c) => ({ author: c.author, body: c.body, createdAt: c.createdAt })),
 			embeddingConfig: options.embeddingConfig,
 			fetchEmbedding: options.fetchEmbedding,
+			sourceActiveCheck: options.sourceActiveCheck,
 		});
 	}
 }
@@ -458,8 +459,12 @@ export function startGitHubSourceBridge(
 				}
 				try {
 					const result = await syncGitHubSource(source, { ...options, agentId });
-					if (!result.hadErrors) markSourceIndexed(source.id, undefined, options.agentsDir);
-					completeSourceIndexJob(source.id, job.id, result.indexed);
+					if (result.hadErrors) {
+						failSourceIndexJob(source.id, job.id, "GitHub source sync completed with partial errors");
+					} else {
+						markSourceIndexed(source.id, undefined, options.agentsDir);
+						completeSourceIndexJob(source.id, job.id, result.indexed);
+					}
 					total += result.indexed;
 				} catch (err) {
 					failSourceIndexJob(source.id, job.id, err);

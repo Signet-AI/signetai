@@ -470,7 +470,7 @@ export async function fetchPullRequestsBySearch(
 	let rateLimitReset = 0;
 	let page = 1;
 
-	const labelQuery = labels.map((l) => `label:"${l}"`).join(" ");
+	const labelQuery = labels.map((l) => `label:"${escapeGitHubSearchValue(l)}"`).join(" ");
 	const stateQuery = state === "all" ? "" : ` is:${state}`;
 	const q = `repo:${config.owner}/${config.repo} type:pr${stateQuery} ${labelQuery}`;
 
@@ -516,6 +516,10 @@ export async function fetchPullRequestsBySearch(
 		page++;
 	}
 	return { resources, rateLimitRemaining, rateLimitReset, errors };
+}
+
+function escapeGitHubSearchValue(value: string): string {
+	return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\r?\n/g, " ").trim();
 }
 
 export async function fetchDiscussions(

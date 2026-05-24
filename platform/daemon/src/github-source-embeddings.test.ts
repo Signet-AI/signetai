@@ -1,5 +1,10 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { buildGitHubSourceChunks } from "./github-source-embeddings";
+import { indexGitHubSourceEmbeddings } from "./github-source-embeddings";
+import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import type { GitHubResource } from "./github-source-fetch";
 
 function makeIssue(overrides: Partial<GitHubResource> = {}): GitHubResource {
@@ -20,6 +25,10 @@ function makeIssue(overrides: Partial<GitHubResource> = {}): GitHubResource {
 		...overrides,
 	};
 }
+
+afterEach(() => {
+	closeDbAccessor();
+});
 
 describe("buildGitHubSourceChunks", () => {
 	test("produces chunks from an issue", () => {
@@ -100,5 +109,31 @@ describe("buildGitHubSourceChunks", () => {
 			resource,
 		});
 		expect(chunks.length).toBeGreaterThan(1);
+	});
+
+	test("aborts before writing embeddings when the source becomes inactive", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "signet-github-embeddings-"));
+		initDbAccessor(join(dir, "memories.db"));
+		let active = true;
+
+		await expect(
+			indexGitHubSourceEmbeddings({
+				agentId: "default",
+				sourceId: "github:abc123",
+				repo: "Signet-AI/signetai",
+				resource: makeIssue(),
+				embeddingConfig: { provider: "openai", model: "text-embedding-3-small", dimensions: 3 },
+				fetchEmbedding: async () => {
+					active = false;
+					return [0.1, 0.2, 0.3];
+				},
+				sourceActiveCheck: () => active,
+			}),
+		).rejects.toThrow("removed during embedding sync");
+
+		const count = getDbAccessor().withReadDb(
+			(db) => (db.prepare("SELECT COUNT(*) AS count FROM embeddings").get() as { count: number }).count,
+		);
+		expect(count).toBe(0);
 	});
 });

@@ -27,6 +27,7 @@ export interface IndexGitHubSourceEmbeddingsInput {
 	readonly comments?: readonly { author: string | null; body: string; createdAt: string }[];
 	readonly embeddingConfig: EmbeddingConfig;
 	readonly fetchEmbedding: SourceEmbeddingFetch;
+	readonly sourceActiveCheck?: () => boolean;
 }
 
 export interface IndexGitHubSourceEmbeddingsResult {
@@ -192,6 +193,12 @@ function sleep(ms: number): Promise<void> {
 	return ms > 0 ? new Promise((resolve) => setTimeout(resolve, ms)) : Promise.resolve();
 }
 
+function assertSourceActive(input: IndexGitHubSourceEmbeddingsInput): void {
+	if (input.sourceActiveCheck && !input.sourceActiveCheck()) {
+		throw new Error(`Source ${input.sourceId} removed during embedding sync`);
+	}
+}
+
 export async function indexGitHubSourceEmbeddings(
 	input: IndexGitHubSourceEmbeddingsInput,
 ): Promise<IndexGitHubSourceEmbeddingsResult> {
@@ -204,6 +211,7 @@ export async function indexGitHubSourceEmbeddings(
 	const now = new Date().toISOString();
 
 	for (const chunk of chunks) {
+		assertSourceActive(input);
 		const contentHash = hash(`${input.agentId}\n${chunk.id}\n${chunk.chunkText}`);
 		currentHashes.add(contentHash);
 		if (existingChunkEmbeddingContentHash(input.agentId, chunk.id) === contentHash) {
@@ -213,12 +221,14 @@ export async function indexGitHubSourceEmbeddings(
 			continue;
 		}
 		const vector = await input.fetchEmbedding(chunk.chunkText, input.embeddingConfig);
+		assertSourceActive(input);
 		if (!vector || vector.length === 0) {
 			skipped++;
 			await yielder();
 			await sleep(GITHUB_SOURCE_CHUNK_DELAY_MS);
 			continue;
 		}
+		assertSourceActive(input);
 		getDbAccessor().withWriteTx((db) => {
 			const embId = hash(`${GITHUB_CHUNK_SOURCE_TYPE}:${input.agentId}:${chunk.id}`).slice(0, 32);
 			const existingForId = db.prepare("SELECT content_hash FROM embeddings WHERE id = ?").get(embId) as
@@ -262,6 +272,7 @@ export async function indexGitHubSourceEmbeddings(
 	}
 
 	const prefix = `${resourceId(input.sourceId, input.repo, input.resource)}#`;
+	assertSourceActive(input);
 	getDbAccessor().withWriteTx((db) => {
 		const stale = db
 			.prepare(

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { expandRepoGlob, fetchDiscussions, fetchIssues, fetchRepoDocs } from "./github-source-fetch";
+import { expandRepoGlob, fetchDiscussions, fetchIssues, fetchPullRequestsBySearch, fetchRepoDocs } from "./github-source-fetch";
 
 const originalFetch = globalThis.fetch;
 
@@ -146,6 +146,38 @@ describe("fetchDiscussions", () => {
 		expect(result.resources).toHaveLength(2);
 		expect(result.resources.map((resource) => resource.number)).toEqual([2, 3]);
 		expect(result.resources.map((resource) => resource.state)).toEqual(["closed", "closed"]);
+	});
+});
+
+describe("fetchPullRequestsBySearch", () => {
+	test("escapes label values before building the GitHub search query", async () => {
+		let capturedQuery = "";
+		globalThis.fetch = (async (input) => {
+			const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url);
+			capturedQuery = url.searchParams.get("q") ?? "";
+			return new Response(
+				JSON.stringify({
+					items: [],
+					total_count: 0,
+				}),
+				{
+					status: 200,
+					headers: {
+						"content-type": "application/json",
+						"x-ratelimit-remaining": "29",
+						"x-ratelimit-reset": "0",
+					},
+				},
+			);
+		}) as typeof fetch;
+
+		const result = await fetchPullRequestsBySearch(
+			{ owner: "Signet-AI", repo: "signetai" },
+			['needs "quote" \\ slash'],
+		);
+
+		expect(result.resources).toEqual([]);
+		expect(capturedQuery).toContain('label:"needs \\"quote\\" \\\\ slash"');
 	});
 });
 
