@@ -233,6 +233,26 @@ describe("github-source-fetch", () => {
 		);
 	});
 
+	it("preserves nested path separators when fetching docs", async () => {
+		let requested = "";
+		globalThis.fetch = mock((url: string | URL | Request) => {
+			requested = String(url);
+			return Promise.resolve(
+				Response.json({
+					content: Buffer.from("# api").toString("base64"),
+					encoding: "base64",
+					sha: "abc",
+				}),
+			);
+		}) as typeof fetch;
+
+		const result = await fetchRepoDocs({ owner: "o", repo: "r" }, ["docs/API.md"], "main", 1);
+
+		expect(result.resources[0]?.path).toBe("docs/API.md");
+		expect(requested).toContain("/contents/docs/API.md?");
+		expect(requested).not.toContain("docs%2FAPI.md");
+	});
+
 	it("applies maxItems to wildcard docs", async () => {
 		globalThis.fetch = mock((url: string | URL | Request) => {
 			const text = String(url);

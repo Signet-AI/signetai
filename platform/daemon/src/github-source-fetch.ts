@@ -458,7 +458,7 @@ export async function fetchRepoDocs(
 
 async function fetchDoc(config: GitHubFetchConfig, path: string, ref: string): Promise<GitHubResource | null> {
 	const response = await githubRequest(
-		`${GITHUB_API_BASE}/repos/${config.owner}/${config.repo}/contents/${encodeURIComponent(path)}?ref=${encodeURIComponent(ref)}`,
+		`${GITHUB_API_BASE}/repos/${config.owner}/${config.repo}/contents/${encodeGitHubContentPath(path)}?ref=${encodeURIComponent(ref)}`,
 		config.token,
 	);
 	if (response.status === 404) return null;
@@ -606,6 +606,10 @@ function docResource(path: string, content: string, sha: string, url?: string): 
 
 function quoteSearchValue(value: string): string {
 	return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+}
+
+function encodeGitHubContentPath(path: string): string {
+	return path.split("/").map(encodeURIComponent).join("/");
 }
 
 function globToRegexSource(pattern: string): string {
