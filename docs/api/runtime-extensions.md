@@ -615,7 +615,8 @@ group where the platform supports it.
 ### GET /api/secrets/exec/:jobId
 
 Return the in-memory status for a queued secret exec job. Completed jobs
-include the same redacted `result` object as the synchronous response.
+include a redacted `result` object with stdout, stderr, exit code, timeout,
+and truncation metadata.
 
 ### POST /api/secrets/:name/exec
 
@@ -635,12 +636,14 @@ new integrations.
 ```
 
 `command` is required. `secrets` is optional — if omitted, the named secret
-from the URL path is injected under its own name.
+from the URL path is injected under its own name. Like `/api/secrets/exec`,
+this legacy endpoint is queued and returns immediately with HTTP `202`.
+Callers poll `GET /api/secrets/exec/:jobId` for the redacted result.
 
-**Response**
+**Queued response (`202`)**
 
 ```json
-{ "code": 0, "stdout": "...", "stderr": "" }
+{ "id": "uuid", "status": "queued", "createdAt": "...", "timeoutMs": 300000 }
 ```
 
 ### GET /api/secrets/bitwarden/status
