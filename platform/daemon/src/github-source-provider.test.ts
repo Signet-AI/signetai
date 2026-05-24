@@ -390,6 +390,117 @@ describe("github-source-provider", () => {
 		expect(rows.map((row) => row.content).join("\n")).not.toContain("second comment");
 	});
 
+	it("tracks refreshed comment paths during stale purge", async () => {
+		const source: SignetSourceEntry = {
+			id: "github:comment-seen",
+			kind: "github",
+			name: "GitHub",
+			root: "github://repos/Signet-AI/signetai",
+			enabled: true,
+			mode: "read-only",
+			createdAt: "2026-01-01T00:00:00.000Z",
+			updatedAt: "2026-01-01T00:00:00.000Z",
+			providerSettings: {
+				repos: ["Signet-AI/signetai"],
+				resourceTypes: ["issues"],
+				state: "all",
+				includeComments: true,
+				docPaths: ["README.md"],
+				maxItemsPerRepo: 5,
+			},
+		};
+		const originalDate = globalThis.Date;
+		let constructedDates = 0;
+		globalThis.Date = class extends originalDate {
+			constructor(value?: string | number | Date) {
+				if (value === undefined) {
+					super(constructedDates === 0 ? "2026-02-01T00:00:00.000Z" : "2026-01-01T00:00:00.000Z");
+					constructedDates++;
+				} else {
+					super(value);
+				}
+			}
+
+			static now(): number {
+				return originalDate.parse("2026-01-01T00:00:00.000Z");
+			}
+
+			static parse(value: string): number {
+				return originalDate.parse(value);
+			}
+
+			static UTC(
+				year: number,
+				monthIndex: number,
+				date?: number,
+				hours?: number,
+				minutes?: number,
+				seconds?: number,
+				ms?: number,
+			): number {
+				return originalDate.UTC(year, monthIndex, date, hours, minutes, seconds, ms);
+			}
+		} as DateConstructor;
+		globalThis.fetch = mock((url: string | URL | Request) => {
+			const text = String(url);
+			if (text.endsWith("/repos/Signet-AI/signetai")) {
+				return Promise.resolve(
+					Response.json({ name: "signetai", full_name: "Signet-AI/signetai", default_branch: "main" }),
+				);
+			}
+			if (text.includes("/issues?")) {
+				return Promise.resolve(
+					Response.json([
+						{
+							number: 12,
+							title: "Current issue",
+							body: "body",
+							state: "open",
+							html_url: "https://github.com/Signet-AI/signetai/issues/12",
+							user: { login: "alice" },
+							labels: [],
+							created_at: "2026-01-01T00:00:00.000Z",
+							updated_at: "2026-01-02T00:00:00.000Z",
+							closed_at: null,
+							comments: 1,
+						},
+					]),
+				);
+			}
+			if (text.includes("/issues/12/comments")) {
+				return Promise.resolve(
+					Response.json([
+						{
+							id: 1,
+							body: "current comment",
+							user: { login: "bob" },
+							created_at: "2026-01-03T00:00:00.000Z",
+							updated_at: "2026-01-03T00:00:00.000Z",
+						},
+					]),
+				);
+			}
+			return Promise.resolve(Response.json([]));
+		}) as typeof fetch;
+
+		try {
+			const result = await githubSourceProvider.sync?.({
+				source,
+				agentsDir: dir,
+				agentId: "default",
+				shouldContinue: () => true,
+			});
+
+			const rows = sourceRows(source.id);
+			expect(result?.failures).toEqual([]);
+			expect(rows.map((row) => row.source_path)).toContain("github://Signet-AI/signetai/issues/12");
+			expect(rows.map((row) => row.source_path)).toContain("github://Signet-AI/signetai/issues/12#comment-1");
+			expect(rows.find((row) => row.source_kind === "source_github_comment")?.content).toContain("current comment");
+		} finally {
+			globalThis.Date = originalDate;
+		}
+	});
+
 	it("purges stale artifacts for successful repos after another repo fails", async () => {
 		const source: SignetSourceEntry = {
 			id: "github:partial",

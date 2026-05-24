@@ -42,6 +42,11 @@ interface ResolvedRepo {
 	readonly defaultBranch: string;
 }
 
+interface WrittenGitHubArtifacts {
+	readonly count: number;
+	readonly paths: readonly string[];
+}
+
 export const githubSourceProvider: SourceProviderAdapter = {
 	kind: "github",
 	sync: syncGitHubSource,
@@ -82,9 +87,11 @@ async function syncGitHubSource(context: SourceProviderSyncContext): Promise<Sou
 				failures,
 				settings.maxItemsPerRepo - repoIndexed,
 			);
-			repoIndexed += written;
-			indexed += written;
-			seenPaths.add(resourcePath(repo.fullName, resource));
+			repoIndexed += written.count;
+			indexed += written.count;
+			for (const path of written.paths) {
+				seenPaths.add(path);
+			}
 			await yielder();
 		}
 		scanned++;
@@ -183,22 +190,22 @@ async function writeResourceWithComments(
 	settings: GitHubSourceSettings,
 	failures: SourceFailureState[],
 	remainingArtifactBudget: number,
-): Promise<number> {
-	if (remainingArtifactBudget <= 0) return 0;
-	let indexed = writeResourceArtifact(source, agentId, repo, resource);
-	const remainingCommentBudget = remainingArtifactBudget - indexed;
+): Promise<WrittenGitHubArtifacts> {
+	if (remainingArtifactBudget <= 0) return { count: 0, paths: [] };
+	const paths = [writeResourceArtifact(source, agentId, repo, resource)];
+	const remainingCommentBudget = remainingArtifactBudget - paths.length;
 	if (
 		!settings.includeComments ||
 		resource.commentsCount <= 0 ||
 		resource.type === "doc" ||
 		remainingCommentBudget <= 0
 	) {
-		return indexed;
+		return { count: paths.length, paths };
 	}
 	try {
 		const comments = await fetchCommentsForResource(config, resource);
 		for (const comment of comments.slice(0, remainingCommentBudget)) {
-			indexed += writeCommentArtifact(source, agentId, repo, resource, comment);
+			paths.push(writeCommentArtifact(source, agentId, repo, resource, comment));
 		}
 	} catch (err) {
 		logGitHubFetchError(source.id, repo, `${resource.type}_comments`, err);
@@ -211,7 +218,7 @@ async function writeResourceWithComments(
 			}),
 		);
 	}
-	return indexed;
+	return { count: paths.length, paths };
 }
 
 async function fetchCommentsForResource(
@@ -234,7 +241,8 @@ function writeResourceArtifact(
 	agentId: string,
 	repo: string,
 	resource: GitHubResource,
-): number {
+): string {
+	const path = resourcePath(repo, resource);
 	indexExternalMemoryArtifact({
 		agentId,
 		harness: GITHUB_HARNESS,
@@ -242,7 +250,7 @@ function writeResourceArtifact(
 		sourceRoot: source.root,
 		sourceExternalId: resourceExternalId(repo, resource),
 		sourceParentPath: `github://${repo}`,
-		sourcePath: resourcePath(repo, resource),
+		sourcePath: path,
 		sourceKind: `source_github_${resource.type}`,
 		sourceMtimeMs: Date.parse(resource.updatedAt) || Date.now(),
 		capturedAt: resource.updatedAt,
@@ -264,7 +272,7 @@ function writeResourceArtifact(
 			...resource.extra,
 		},
 	});
-	return 1;
+	return path;
 }
 
 function writeCommentArtifact(
@@ -273,10 +281,11 @@ function writeCommentArtifact(
 	repo: string,
 	resource: GitHubResource,
 	comment: GitHubComment,
-): number {
+): string {
 	const author =
 		typeof comment.author === "string" ? comment.author : (comment.author?.login ?? comment.user?.login ?? null);
 	const commentId = String(comment.id);
+	const path = `${resourcePath(repo, resource)}#comment-${commentId}`;
 	indexExternalMemoryArtifact({
 		agentId,
 		harness: GITHUB_HARNESS,
@@ -284,7 +293,7 @@ function writeCommentArtifact(
 		sourceRoot: source.root,
 		sourceExternalId: `${resourceExternalId(repo, resource)}#comment:${commentId}`,
 		sourceParentPath: resourcePath(repo, resource),
-		sourcePath: `${resourcePath(repo, resource)}#comment-${commentId}`,
+		sourcePath: path,
 		sourceKind: "source_github_comment",
 		sourceMtimeMs: Date.parse(comment.updated_at) || Date.now(),
 		capturedAt: comment.updated_at,
@@ -301,7 +310,7 @@ function writeCommentArtifact(
 			updatedAt: comment.updated_at,
 		},
 	});
-	return 1;
+	return path;
 }
 
 function writeFetchFailures(
