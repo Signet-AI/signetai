@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -107,13 +107,30 @@ function noteSlug(title: string | undefined, content: string): string {
 	return slug || createHash("sha256").update(content).digest("hex").slice(0, 12);
 }
 
-function writeCodexNativeNote(input: { readonly content: string; readonly title?: string; readonly tags?: string }): string {
-	const now = new Date();
+interface CodexNativeNoteWriteOptions {
+	readonly now?: Date;
+	readonly uniqueSuffix?: () => string;
+}
+
+function hasErrorCode(error: unknown, code: string): boolean {
+	return (
+		typeof error === "object" &&
+		error !== null &&
+		"code" in error &&
+		(error as { readonly code?: unknown }).code === code
+	);
+}
+
+export function writeCodexNativeNote(
+	input: { readonly content: string; readonly title?: string; readonly tags?: string },
+	options: CodexNativeNoteWriteOptions = {},
+): string {
+	const now = options.now ?? new Date();
 	const timestamp = now.toISOString().replace(/[:.]/g, "-");
 	const slug = noteSlug(input.title, input.content);
 	const dir = join(codexHome(), "memories", "extensions", "ad_hoc", "notes");
 	mkdirSync(dir, { recursive: true });
-	const path = join(dir, `${timestamp}-${slug}.md`);
+	const baseName = `${timestamp}-${slug}`;
 	const frontmatter = [
 		"---",
 		"source: signet_save_note",
@@ -123,8 +140,19 @@ function writeCodexNativeNote(input: { readonly content: string; readonly title?
 		"---",
 		"",
 	].join("\n");
-	writeFileSync(path, `${frontmatter}${input.content.trim()}\n`, "utf-8");
-	return path;
+	const noteContent = `${frontmatter}${input.content.trim()}\n`;
+	for (let attempt = 0; attempt < 8; attempt += 1) {
+		const suffix = attempt === 0 ? "" : `-${options.uniqueSuffix?.() ?? randomUUID().slice(0, 8)}`;
+		const path = join(dir, `${baseName}${suffix}.md`);
+		try {
+			writeFileSync(path, noteContent, { encoding: "utf-8", flag: "wx" });
+			return path;
+		} catch (error) {
+			if (hasErrorCode(error, "EEXIST")) continue;
+			throw error;
+		}
+	}
+	throw new Error("Failed to allocate a unique Codex native note path");
 }
 
 interface RememberRowProvenance {
