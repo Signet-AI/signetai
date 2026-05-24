@@ -361,10 +361,17 @@ export async function fetchDiscussions(
 			}
 		}`;
 	let cursor: string | null = null;
-	while (resources.length < maxItems) {
+	let scanned = 0;
+	while (resources.length < maxItems && scanned < maxItems) {
+		const remainingScan = maxItems - scanned;
 		const response = await githubRequest(GRAPHQL_URL, config.token, "POST", {
 			query,
-			variables: { owner: config.owner, name: config.repo, first: Math.min(maxItems, PER_PAGE), after: cursor },
+			variables: {
+				owner: config.owner,
+				name: config.repo,
+				first: Math.min(remainingScan, PER_PAGE),
+				after: cursor,
+			},
 		});
 		if (response.status !== 200) {
 			errors.push({ message: `Discussions fetch failed: ${response.status}`, retryable: false });
@@ -384,10 +391,12 @@ export async function fetchDiscussions(
 		}
 		const discussions = data.data?.repository?.discussions;
 		const nodes = discussions?.nodes ?? [];
+		scanned += nodes.length;
 		for (const resource of nodes.map(discussionResource)) {
 			if (resources.length >= maxItems) break;
 			if (state === "all" || resource.state === state) resources.push(resource);
 		}
+		if (nodes.length === 0) break;
 		if (!discussions?.pageInfo?.hasNextPage) break;
 		cursor = discussions.pageInfo.endCursor ?? null;
 		if (!cursor) break;

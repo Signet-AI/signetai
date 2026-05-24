@@ -181,6 +181,45 @@ describe("github-source-fetch", () => {
 		expect(afterValues).toEqual([null, "cursor-1"]);
 	});
 
+	it("bounds discussion scanning when state filters reject fetched nodes", async () => {
+		const afterValues: Array<string | null> = [];
+		globalThis.fetch = mock((_url: string | URL | Request, init?: RequestInit) => {
+			const variables = JSON.parse(String(init?.body)).variables as { after?: string | null; first?: number };
+			afterValues.push(variables.after ?? null);
+			expect(variables.first).toBe(1);
+			return Promise.resolve(
+				Response.json({
+					data: {
+						repository: {
+							discussions: {
+								nodes: [
+									{
+										number: 1,
+										title: "Closed discussion",
+										body: "body",
+										url: "https://github.com/o/r/discussions/1",
+										closed: true,
+										createdAt: "2026-01-01T00:00:00.000Z",
+										updatedAt: "2026-01-02T00:00:00.000Z",
+										author: { login: "alice" },
+										labels: { nodes: [] },
+										comments: { totalCount: 0 },
+									},
+								],
+								pageInfo: { hasNextPage: true, endCursor: "cursor-1" },
+							},
+						},
+					},
+				}),
+			);
+		}) as typeof fetch;
+
+		const result = await fetchDiscussions({ owner: "o", repo: "r", token: "token" }, undefined, "open", 1);
+
+		expect(result.resources).toEqual([]);
+		expect(afterValues).toEqual([null]);
+	});
+
 	it("preserves opaque GraphQL discussion comment ids", async () => {
 		globalThis.fetch = mock(() =>
 			Promise.resolve(
