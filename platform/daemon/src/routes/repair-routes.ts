@@ -1,4 +1,5 @@
 import type { Context, Hono } from "hono";
+import { resolveAgentId, resolveDaemonAgentId } from "../agent-id";
 import { requirePermission } from "../auth";
 import { getDbAccessor } from "../db-accessor.js";
 import { fetchEmbedding } from "../embedding-fetch.js";
@@ -48,6 +49,30 @@ function repairHttpStatus(result: RepairResult): 200 | 429 | 500 {
 		return 429;
 	}
 	return 500;
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+	return value as Record<string, unknown>;
+}
+
+function readString(record: Readonly<Record<string, unknown>>, key: string): string | undefined {
+	const value = record[key];
+	if (typeof value !== "string") return undefined;
+	const trimmed = value.trim();
+	return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function resolveRepairAgentId(c: Context, body: Readonly<Record<string, unknown>> = {}): string {
+	return resolveAgentId({
+		agentId:
+			readString(body, "agentId") ??
+			readString(body, "agent_id") ??
+			c.req.query("agentId") ??
+			c.req.query("agent_id") ??
+			c.req.header("x-signet-agent-id") ??
+			resolveDaemonAgentId(),
+	});
 }
 
 export function registerRepairRoutes(app: Hono): void {
@@ -269,15 +294,15 @@ export function registerRepairRoutes(app: Hono): void {
 		const ctx = resolveRepairContext(c);
 		let batchSize = 100;
 		let dryRun = true;
-		let agentId = c.req.query("agent_id") ?? "default";
+		let body: Record<string, unknown> = {};
 		try {
-			const body = await c.req.json();
+			body = asRecord(await c.req.json());
 			if (typeof body?.batchSize === "number") batchSize = body.batchSize;
 			if (typeof body?.dryRun === "boolean") dryRun = body.dryRun;
-			if (typeof body?.agentId === "string" && body.agentId.trim()) agentId = body.agentId.trim();
 		} catch {
 			// no body or invalid JSON — use defaults
 		}
+		const agentId = resolveRepairAgentId(c, body);
 		const result = pruneGenericEntities(getDbAccessor(), cfg.pipelineV2, ctx, repairLimiter, {
 			batchSize,
 			dryRun,
@@ -350,20 +375,21 @@ export function registerRepairRoutes(app: Hono): void {
 	});
 
 	app.post("/api/repair/cluster-entities", (c) => {
-		const agentId = c.req.query("agent_id") ?? "default";
+		const agentId = resolveRepairAgentId(c);
 		const result = getDbAccessor().withWriteTx((db) => clusterEntities(db, agentId));
 		return c.json(result);
 	});
 
 	app.post("/api/repair/relink-entities", async (c) => {
-		const agentId = c.req.query("agent_id") ?? "default";
 		let batchSize = 500;
+		let body: Record<string, unknown> = {};
 		try {
-			const body = await c.req.json();
+			body = asRecord(await c.req.json());
 			if (typeof body?.batchSize === "number") batchSize = body.batchSize;
 		} catch {
 			// defaults
 		}
+		const agentId = resolveRepairAgentId(c, body);
 		const accessor = getDbAccessor();
 
 		const unlinked = accessor.withReadDb(
@@ -372,10 +398,11 @@ export function registerRepairRoutes(app: Hono): void {
 					.prepare(
 						`SELECT id, content FROM memories
 			 WHERE is_deleted = 0
+			   AND COALESCE(NULLIF(agent_id, ''), 'default') = ?
 			   AND id NOT IN (SELECT DISTINCT memory_id FROM memory_entity_mentions)
 			 LIMIT ?`,
 					)
-					.all(batchSize) as Array<{ id: string; content: string }>,
+					.all(agentId, batchSize) as Array<{ id: string; content: string }>,
 		);
 
 		if (unlinked.length === 0) {
@@ -402,9 +429,10 @@ export function registerRepairRoutes(app: Hono): void {
 						.prepare(
 							`SELECT COUNT(*) as cnt FROM memories
 			 WHERE is_deleted = 0
+			   AND COALESCE(NULLIF(agent_id, ''), 'default') = ?
 			   AND id NOT IN (SELECT DISTINCT memory_id FROM memory_entity_mentions)`,
 						)
-						.get() as { cnt: number }
+						.get(agentId) as { cnt: number }
 				).cnt,
 		);
 

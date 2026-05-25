@@ -313,16 +313,17 @@ Requires `admin` permission.
 
 **Query parameters**
 
-| Parameter | Type   | Required | Description         |
-|-----------|--------|----------|---------------------|
-| `agentId` | string | no       | Agent ID (default: `"default"`) |
+| Parameter  | Type   | Required | Description                                  |
+|------------|--------|----------|----------------------------------------------|
+| `agentId`  | string | no       | Agent ID (default: daemon configured agent)  |
+| `agent_id` | string | no       | Alias for `agentId`                          |
 
 **Response**
 
 ```json
 {
   "enabled": true,
-  "worker": { "running": true, "active": false },
+  "worker": { "running": true, "active": false, "activeAgentId": null },
   "state": {
     "tokensSinceLastPass": 42000,
     "lastPassAt": "2026-04-01T12:00:00.000Z",
@@ -368,11 +369,15 @@ Poll `GET /api/dream/status` and check `passes[0].status` for completion.
 
 ```json
 {
-  "mode": "incremental"
+  "mode": "incremental",
+  "agentId": "noam"
 }
 ```
 
-`mode` is `"incremental"` (default) or `"compact"`.
+`mode` is `"incremental"` (default) or `"compact"`. `agentId` is optional
+and defaults to the daemon configured agent; `agent_id`, the `agentId` query
+parameter, the `agent_id` query parameter, and `x-signet-agent-id` are also
+accepted.
 
 **Response** — `202 Accepted`
 
@@ -381,7 +386,8 @@ Poll `GET /api/dream/status` and check `passes[0].status` for completion.
   "accepted": true,
   "passId": "pass-uuid",
   "status": "running",
-  "mode": "incremental"
+  "mode": "incremental",
+  "agentId": "noam"
 }
 ```
 

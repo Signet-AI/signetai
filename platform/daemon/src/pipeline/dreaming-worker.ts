@@ -6,8 +6,8 @@
 
 import type { DreamingConfig } from "@signet/core";
 import type { DbAccessor } from "../db-accessor";
-import { logger } from "../logger";
 import { getSynthesisProvider } from "../llm";
+import { logger } from "../logger";
 import {
 	type DreamingMode,
 	createDreamingPass,
@@ -30,6 +30,7 @@ export interface DreamingWorkerHandle {
 	/** Force-trigger a pass synchronously (CLI / testing). */
 	trigger(
 		mode: DreamingMode,
+		agentId?: string,
 	): Promise<{ passId: string; applied: number; skipped: number; failed: number; summary: string }>;
 	/**
 	 * Fire-and-forget trigger: creates the pass record synchronously
@@ -37,8 +38,9 @@ export interface DreamingWorkerHandle {
 	 * background. Callers should poll GET /api/dream/status for completion.
 	 * Throws AlreadyRunningError if a pass is already active.
 	 */
-	triggerAsync(mode: DreamingMode): string;
+	triggerAsync(mode: DreamingMode, agentId?: string): string;
 	readonly running: boolean;
+	readonly activeAgentId: string | null;
 	/**
 	 * Resolves when the in-flight pass completes (or is null when idle).
 	 * Await this (with a timeout) during shutdown before closing the DB.
@@ -48,19 +50,51 @@ export interface DreamingWorkerHandle {
 
 const CHECK_INTERVAL_MS = 5 * 60 * 1000; // 5 min
 
+function normalizeAgentId(agentId: string | undefined, fallback: string): string {
+	const trimmed = agentId?.trim();
+	return trimmed ? trimmed : fallback;
+}
+
+export function getDreamingWorkerAgentIds(accessor: DbAccessor, defaultAgentId: string): readonly string[] {
+	return accessor.withReadDb((db) => {
+		const rows = db
+			.prepare(
+				`SELECT id FROM agents
+				 UNION
+				 SELECT DISTINCT agent_id AS id FROM dreaming_state
+				 UNION
+				 SELECT DISTINCT agent_id AS id FROM dreaming_passes
+				 UNION
+				 SELECT DISTINCT agent_id AS id FROM memories WHERE is_deleted = 0
+				 UNION
+				 SELECT DISTINCT agent_id AS id FROM session_summaries
+				 UNION
+				 SELECT DISTINCT agent_id AS id FROM entities`,
+			)
+			.all() as Array<{ id: string | null }>;
+		const ids = new Set<string>([defaultAgentId]);
+		for (const row of rows) {
+			const id = normalizeAgentId(row.id ?? undefined, "");
+			if (id) ids.add(id);
+		}
+		return [...ids].sort();
+	});
+}
+
 export function startDreamingWorker(
 	accessor: DbAccessor,
 	cfg: DreamingConfig,
 	agentsDir: string,
-	agentId: string,
+	defaultAgentId: string,
 ): DreamingWorkerHandle {
 	let timer: ReturnType<typeof setTimeout> | null = null;
 	let active = false;
+	let activeAgent: string | null = null;
 	let stopped = false;
 	let activePassPromise: Promise<unknown> | null = null;
 
 	// Sweep orphaned passes from unclean shutdown: any 'running' record
-	// for this agent was left by a crash or forced stop — mark it failed
+	// was left by a crash or forced stop — mark it failed
 	// so the status API doesn't show a forever-running ghost pass.
 	accessor.withWriteTx((db) => {
 		const orphaned = db
@@ -69,43 +103,64 @@ export function startDreamingWorker(
 				 SET status = 'failed',
 				     completed_at = datetime('now'),
 				     error = 'Orphaned by daemon restart'
-				 WHERE agent_id = ? AND status = 'running'`,
+				 WHERE status = 'running'`,
 			)
-			.run(agentId);
+			.run();
 		if (orphaned.changes > 0) {
 			logger.warn("dreaming-worker", `Swept ${orphaned.changes} orphaned running pass(es) from prior shutdown`);
 		}
 	});
 
+	async function runPass(
+		runAgentId: string,
+		mode: DreamingMode,
+		existingPassId?: string,
+	): Promise<{ passId: string; applied: number; skipped: number; failed: number; summary: string }> {
+		if (active) throw new AlreadyRunningError();
+		const synth = getSynthesisProvider();
+		active = true;
+		activeAgent = runAgentId;
+		const p = runDreamingPass(accessor, synth.generate.bind(synth), cfg, agentsDir, runAgentId, mode, existingPassId);
+		activePassPromise = p;
+		try {
+			return await p;
+		} catch (e) {
+			recordDreamingFailure(accessor, runAgentId);
+			throw e;
+		} finally {
+			active = false;
+			activeAgent = null;
+			activePassPromise = null;
+		}
+	}
+
 	async function check(): Promise<void> {
 		if (stopped || active) return;
 
-		try {
-			const state = getDreamingState(accessor, agentId);
-			const isFirst = state.lastPassAt === null && cfg.backfillOnFirstRun;
-			const mode: DreamingMode = isFirst ? "compact" : "incremental";
+		for (const runAgentId of getDreamingWorkerAgentIds(accessor, defaultAgentId)) {
+			if (stopped || active) return;
+			try {
+				const state = getDreamingState(accessor, runAgentId);
+				const isFirst = state.lastPassAt === null && cfg.backfillOnFirstRun;
+				const mode: DreamingMode = isFirst ? "compact" : "incremental";
 
-			if (!shouldTriggerDreaming(accessor, cfg, agentId)) return;
+				if (!shouldTriggerDreaming(accessor, cfg, runAgentId)) continue;
 
-			logger.info("dreaming-worker", "Token threshold reached, starting dreaming pass", {
-				tokens: state.tokensSinceLastPass,
-				threshold: cfg.tokenThreshold,
-				mode,
-			});
+				logger.info("dreaming-worker", "Token threshold reached, starting dreaming pass", {
+					agentId: runAgentId,
+					tokens: state.tokensSinceLastPass,
+					threshold: cfg.tokenThreshold,
+					mode,
+				});
 
-			active = true;
-			const synth = getSynthesisProvider();
-			const p = runDreamingPass(accessor, synth.generate.bind(synth), cfg, agentsDir, agentId, mode);
-			activePassPromise = p;
-			await p;
-		} catch (e) {
-			recordDreamingFailure(accessor, agentId);
-			logger.error("dreaming-worker", "Dreaming check failed", undefined, {
-				error: e instanceof Error ? e.message : String(e),
-			});
-		} finally {
-			active = false;
-			activePassPromise = null;
+				await runPass(runAgentId, mode);
+			} catch (e) {
+				if (e instanceof AlreadyRunningError) return;
+				logger.error("dreaming-worker", "Dreaming check failed", undefined, {
+					agentId: runAgentId,
+					error: e instanceof Error ? e.message : String(e),
+				});
+			}
 		}
 	}
 
@@ -136,38 +191,29 @@ export function startDreamingWorker(
 			}
 		},
 
-		async trigger(mode: DreamingMode) {
-			if (active) throw new AlreadyRunningError();
-			active = true;
-			const synth = getSynthesisProvider();
-			const p = runDreamingPass(accessor, synth.generate.bind(synth), cfg, agentsDir, agentId, mode);
-			activePassPromise = p;
-			try {
-				return await p;
-			} catch (e) {
-				recordDreamingFailure(accessor, agentId);
-				throw e;
-			} finally {
-				active = false;
-				activePassPromise = null;
-			}
+		trigger(mode: DreamingMode, agentId?: string) {
+			return runPass(normalizeAgentId(agentId, defaultAgentId), mode);
 		},
 
-		triggerAsync(mode: DreamingMode): string {
+		triggerAsync(mode: DreamingMode, agentId?: string): string {
 			if (active) throw new AlreadyRunningError();
-			const passId = createDreamingPass(accessor, agentId, mode);
-			active = true;
+			const runAgentId = normalizeAgentId(agentId, defaultAgentId);
 			const synth = getSynthesisProvider();
-			const p = runDreamingPass(accessor, synth.generate.bind(synth), cfg, agentsDir, agentId, mode, passId);
+			const passId = createDreamingPass(accessor, runAgentId, mode);
+			active = true;
+			activeAgent = runAgentId;
+			const p = runDreamingPass(accessor, synth.generate.bind(synth), cfg, agentsDir, runAgentId, mode, passId);
 			activePassPromise = p;
 			p.catch((e) => {
-				recordDreamingFailure(accessor, agentId);
-			logger.error("dreaming-worker", "Async trigger failed", undefined, {
-				passId,
-				error: e instanceof Error ? e.message : String(e),
-			});
+				recordDreamingFailure(accessor, runAgentId);
+				logger.error("dreaming-worker", "Async trigger failed", undefined, {
+					agentId: runAgentId,
+					passId,
+					error: e instanceof Error ? e.message : String(e),
+				});
 			}).finally(() => {
 				active = false;
+				activeAgent = null;
 				activePassPromise = null;
 			});
 			return passId;
@@ -175,6 +221,10 @@ export function startDreamingWorker(
 
 		get running() {
 			return active;
+		},
+
+		get activeAgentId() {
+			return activeAgent;
 		},
 
 		get activePass() {

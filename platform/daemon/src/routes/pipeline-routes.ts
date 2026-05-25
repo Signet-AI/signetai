@@ -90,6 +90,18 @@ function readBoolean(record: Readonly<Record<string, unknown>>, key: string): bo
 	return undefined;
 }
 
+export function resolveDreamRequestAgentId(c: Context, body: Readonly<Record<string, unknown>> = {}): string {
+	return resolveAgentId({
+		agentId:
+			readString(body, "agentId") ??
+			readString(body, "agent_id") ??
+			c.req.query("agentId") ??
+			c.req.query("agent_id") ??
+			c.req.header("x-signet-agent-id") ??
+			resolveDaemonAgentId(),
+	});
+}
+
 async function togglePipelinePause(c: Context, paused: boolean): Promise<Response> {
 	if (pipelineTransition) {
 		return c.json({ error: "Pipeline transition already in progress" }, 409);
@@ -474,18 +486,19 @@ export function registerPipelineRoutes(app: Hono): void {
 	app.get("/api/dream/status", (c) => {
 		const cfg = loadMemoryConfig(AGENTS_DIR);
 		const accessor = getDbAccessor();
-		const agentId = resolveAgentId({
-			agentId: c.req.query("agentId") ?? c.req.header("x-signet-agent-id"),
-		});
+		const agentId = resolveDreamRequestAgentId(c);
 
 		const state = getDreamingState(accessor, agentId);
 		const passes = getDreamingPasses(accessor, agentId, 10);
-		const defaultAgent = resolveAgentId({});
-		const worker = agentId === defaultAgent ? getDreamingWorker() : null;
+		const worker = getDreamingWorker();
 
 		return c.json({
 			enabled: cfg.dreaming.enabled,
-			worker: { running: worker !== null, active: worker?.running ?? false },
+			worker: {
+				running: worker !== null,
+				active: worker?.activeAgentId === agentId,
+				activeAgentId: worker?.activeAgentId ?? null,
+			},
 			state,
 			config: {
 				tokenThreshold: cfg.dreaming.tokenThreshold,
@@ -502,9 +515,7 @@ export function registerPipelineRoutes(app: Hono): void {
 		const raw: unknown = await c.req.json().catch(() => null);
 		if (raw === null) return c.json({ error: "Malformed JSON body" }, 400);
 		const body = asRecord(raw);
-		const agentId = resolveAgentId({
-			agentId: readString(body, "agent_id") ?? c.req.header("x-signet-agent-id"),
-		});
+		const agentId = resolveDreamRequestAgentId(c, body);
 		const from = readString(body, "from");
 		if (!from) return c.json({ error: "from is required" }, 400);
 		const useProvider = readBoolean(body, "use_provider") ?? false;
@@ -537,27 +548,27 @@ export function registerPipelineRoutes(app: Hono): void {
 
 		const contentType = c.req.header("content-type") ?? "";
 		let mode: "compact" | "incremental" = "incremental";
+		let body: Record<string, unknown> = {};
 		if (contentType.includes("application/json")) {
 			const raw: unknown = await c.req.json().catch(() => null);
 			if (raw === null) {
 				return c.json({ error: "Malformed JSON body" }, 400);
 			}
-			if (typeof raw === "object") {
-				const body = raw as { mode?: unknown };
-				if (body.mode === "compact") {
-					mode = "compact";
-				}
+			body = asRecord(raw);
+			if (body.mode === "compact") {
+				mode = "compact";
 			}
 		}
+		const agentId = resolveDreamRequestAgentId(c, body);
 
 		let passId: string;
 		try {
-			passId = worker.triggerAsync(mode);
+			passId = worker.triggerAsync(mode, agentId);
 		} catch (e) {
 			if (e instanceof AlreadyRunningError) return c.json({ error: e.message }, 409);
 			const msg = e instanceof Error ? e.message : String(e);
 			return c.json({ error: msg }, 500);
 		}
-		return c.json({ accepted: true, passId, status: "running", mode }, 202);
+		return c.json({ accepted: true, passId, status: "running", mode, agentId }, 202);
 	});
 }
