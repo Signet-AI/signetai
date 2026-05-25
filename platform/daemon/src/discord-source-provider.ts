@@ -318,6 +318,10 @@ async function syncDiscordGatewayTailSource(
 						indexed += writeArtifact(context.source, agentId, embedArtifact(guild, channel, message, embed, index));
 				}
 				if (message.poll) indexed += writeArtifact(context.source, agentId, pollArtifact(guild, channel, message));
+			} else if (gatewayEventType === "MESSAGE_UPDATE") {
+				const patched = patchedMessageArtifact(context.source, agentId, guildId, channelId, messageId, payload);
+				if (patched) indexed += writeArtifact(context.source, agentId, patched);
+				purgeClearedPartialUpdateArtifacts(context.source, agentId, guildId, channelId, messageId, payload);
 			}
 			indexed += writeArtifact(
 				context.source,
@@ -778,6 +782,196 @@ function messageArtifact(guild: DiscordGuild, channel: DiscordChannel, msg: Disc
 	};
 }
 
+function patchedMessageArtifact(
+	source: SignetSourceEntry,
+	agentId: string,
+	guildId: string,
+	channelId: string,
+	messageId: string,
+	payload: unknown,
+): DiscordArtifact | null {
+	if (!isRecord(payload)) return null;
+	const row = getDbAccessor().withReadDb(
+		(db) =>
+			db
+				.prepare(
+					`SELECT content, source_meta_json
+					 FROM memory_artifacts
+					 WHERE agent_id = ?
+					   AND source_id = ?
+					   AND source_kind = 'source_discord_message'
+					   AND source_path = ?
+					 LIMIT 1`,
+				)
+				.get(agentId, source.id, `discord://guild/${guildId}/channel/${channelId}/messages/${messageId}`) as
+				| { content: string; source_meta_json: string | null }
+				| undefined,
+	);
+	if (!row) return null;
+	const meta = parseMetaJson(row.source_meta_json);
+	const editedAt = readPayloadString(payload, "edited_timestamp") ?? readMetaString(meta, "editedAt");
+	const pinned = typeof payload.pinned === "boolean" ? payload.pinned : null;
+	const content = patchMessageContent(row.content, {
+		content: readPayloadString(payload, "content"),
+		editedAt,
+		meta,
+		pinned,
+	});
+	return {
+		kind: "source_discord_message",
+		externalId: `message:${messageId}`,
+		path: `discord://guild/${guildId}/channel/${channelId}/messages/${messageId}`,
+		parentPath: `discord://guild/${guildId}/channel/${channelId}`,
+		mtimeMs: Date.parse(editedAt ?? "") || Date.now(),
+		content,
+		meta: {
+			...meta,
+			provider: DISCORD_PROVIDER_KIND,
+			recordType: "message",
+			guildId,
+			channelId,
+			messageId,
+			editedAt: editedAt ?? null,
+			...(typeof payload.pinned === "boolean" ? { pinned: payload.pinned } : {}),
+			...(typeof payload.flags === "number" ? { flags: payload.flags } : {}),
+			...(Array.isArray(payload.attachments)
+				? { attachmentIds: payload.attachments.map(discordPayloadId).filter(isNonNullString) }
+				: {}),
+			...(Array.isArray(payload.mentions)
+				? { mentionUserIds: payload.mentions.map(discordPayloadId).filter(isNonNullString) }
+				: {}),
+			...(Array.isArray(payload.mention_roles) ? { mentionRoleIds: payload.mention_roles.filter(isString) } : {}),
+			...(Array.isArray(payload.embeds) ? { embedCount: payload.embeds.length } : {}),
+			...(hasOwn(payload, "poll") ? { pollPresent: isRecord(payload.poll) } : {}),
+			...(Array.isArray(payload.reactions) ? { reactions: payload.reactions.map(discordPayloadReaction) } : {}),
+		},
+	};
+}
+
+function purgeClearedPartialUpdateArtifacts(
+	source: SignetSourceEntry,
+	agentId: string,
+	guildId: string,
+	channelId: string,
+	messageId: string,
+	payload: unknown,
+): number {
+	if (!isRecord(payload)) return 0;
+	const clearedKinds: string[] = [];
+	if (hasOwn(payload, "poll") && !isRecord(payload.poll)) clearedKinds.push("source_discord_poll");
+	if (Array.isArray(payload.attachments) && payload.attachments.length === 0)
+		clearedKinds.push("source_discord_attachment");
+	if (Array.isArray(payload.embeds) && payload.embeds.length === 0) clearedKinds.push("source_discord_embed");
+	const mentions = Array.isArray(payload.mentions) ? payload.mentions : null;
+	const mentionRoles = Array.isArray(payload.mention_roles) ? payload.mention_roles : null;
+	if (
+		(mentions !== null || mentionRoles !== null) &&
+		!(mentions && mentions.length > 0) &&
+		!(mentionRoles && mentionRoles.length > 0)
+	)
+		clearedKinds.push("source_discord_mention");
+	if (clearedKinds.length === 0) return 0;
+	const sourceParentPath = `discord://guild/${guildId}/channel/${channelId}/messages/${messageId}`;
+	const placeholders = clearedKinds.map(() => "?").join(", ");
+	const params = [agentId, source.id, sourceParentPath, ...clearedKinds];
+	const rows = getDbAccessor().withReadDb(
+		(db) =>
+			db
+				.prepare(
+					`SELECT source_path FROM memory_artifacts
+					 WHERE agent_id = ?
+					   AND source_id = ?
+					   AND source_parent_path = ?
+					   AND source_kind IN (${placeholders})`,
+				)
+				.all(...params) as Array<{ source_path: string }>,
+	);
+	for (const row of rows) purgeSourceArtifactStructure({ agentId, sourceId: source.id, sourcePath: row.source_path });
+	return getDbAccessor().withWriteTx((db) =>
+		countChanges(
+			db
+				.prepare(
+					`DELETE FROM memory_artifacts
+					 WHERE agent_id = ?
+					   AND source_id = ?
+					   AND source_parent_path = ?
+					   AND source_kind IN (${placeholders})`,
+				)
+				.run(...params),
+		),
+	);
+}
+
+function patchMessageContent(
+	previous: string,
+	patch: {
+		readonly content: string | null;
+		readonly editedAt: string | null;
+		readonly meta: Readonly<Record<string, unknown>>;
+		readonly pinned: boolean | null;
+	},
+): string {
+	const lines = previous.split("\n");
+	if (patch.editedAt) {
+		const editedIndex = lines.findIndex((line) => line.startsWith("Edited: "));
+		if (editedIndex >= 0) lines[editedIndex] = `Edited: ${patch.editedAt}`;
+		else {
+			const createdIndex = lines.findIndex((line) => line.startsWith("Created: "));
+			lines.splice(createdIndex >= 0 ? createdIndex + 1 : Math.min(lines.length, 6), 0, `Edited: ${patch.editedAt}`);
+		}
+	}
+	if (patch.pinned === false) {
+		const pinnedIndex = lines.indexOf("Pinned: true");
+		if (pinnedIndex >= 0) lines.splice(pinnedIndex, 1);
+	} else if (patch.pinned === true && !lines.includes("Pinned: true")) {
+		const replyIndex = lines.findIndex((line) => line.startsWith("Reply to: "));
+		const editedIndex = lines.findIndex((line) => line.startsWith("Edited: "));
+		const createdIndex = lines.findIndex((line) => line.startsWith("Created: "));
+		lines.splice(
+			replyIndex >= 0 ? replyIndex + 1 : editedIndex >= 0 ? editedIndex + 1 : createdIndex >= 0 ? createdIndex + 1 : 0,
+			0,
+			"Pinned: true",
+		);
+	}
+	if (patch.content === null) return lines.join("\n");
+	const bodyStart = messageBodyStartIndex(lines, {
+		...patch.meta,
+		editedAt: patch.editedAt,
+		...(patch.pinned === null ? {} : { pinned: patch.pinned }),
+	});
+	return [...lines.slice(0, bodyStart), patch.content].join("\n");
+}
+
+function messageBodyStartIndex(lines: readonly string[], meta: Readonly<Record<string, unknown>>): number {
+	let index = consumeLine(lines, 0, "# Discord Message: ");
+	index = consumeBlankLine(lines, index);
+	index = consumeLine(lines, index, "Guild: ");
+	index = consumeLine(lines, index, "Channel: ");
+	index = consumeLine(lines, index, "Author: ");
+	index = consumeLine(lines, index, "Created: ");
+	if (readMetaString(meta, "editedAt")) index = consumeLine(lines, index, "Edited: ");
+	if (readMetaString(meta, "replyToMessageId")) index = consumeLine(lines, index, "Reply to: ");
+	if (meta.pinned === true) index = consumeExactLine(lines, index, "Pinned: true");
+	index = consumeBlankLine(lines, index);
+	return index;
+}
+
+function consumeLine(lines: readonly string[], index: number, prefix: string): number {
+	return (lines[index] ?? "").startsWith(prefix) ? index + 1 : index;
+}
+
+function consumeExactLine(lines: readonly string[], index: number, expected: string): number {
+	return lines[index] === expected ? index + 1 : index;
+}
+
+function consumeBlankLine(lines: readonly string[], index: number): number {
+	return lines[index] === "" ? index + 1 : index;
+}
+
+function hasOwn(record: Readonly<Record<string, unknown>>, key: string): boolean {
+	return Object.prototype.hasOwnProperty.call(record, key);
+}
+
 function mentionArtifact(guild: DiscordGuild, channel: DiscordChannel, msg: DiscordMessage): DiscordArtifact {
 	return {
 		kind: "source_discord_mention",
@@ -1224,6 +1418,49 @@ function hashKey(input: string): string {
 		hash = (hash * 31 + input.charCodeAt(index)) >>> 0;
 	}
 	return hash.toString(16).padStart(8, "0");
+}
+
+function parseMetaJson(value: string | null): Record<string, unknown> {
+	if (!value) return {};
+	try {
+		const parsed = JSON.parse(value) as unknown;
+		return isRecord(parsed) ? parsed : {};
+	} catch {
+		return {};
+	}
+}
+
+function readMetaString(meta: Readonly<Record<string, unknown>>, key: string): string | null {
+	const value = meta[key];
+	return typeof value === "string" && value.trim().length > 0 ? value : null;
+}
+
+function readPayloadString(payload: Readonly<Record<string, unknown>>, key: string): string | null {
+	const value = payload[key];
+	return typeof value === "string" ? value : null;
+}
+
+function discordPayloadId(value: unknown): string | null {
+	return isRecord(value) ? readPayloadString(value, "id") : null;
+}
+
+function discordPayloadReaction(value: unknown): Record<string, unknown> {
+	if (!isRecord(value)) return {};
+	const emoji = isRecord(value.emoji)
+		? {
+				emojiId: readPayloadString(value.emoji, "id"),
+				emojiName: readPayloadString(value.emoji, "name"),
+			}
+		: {};
+	return { count: typeof value.count === "number" ? value.count : 0, ...emoji };
+}
+
+function isString(value: unknown): value is string {
+	return typeof value === "string";
+}
+
+function isNonNullString(value: string | null): value is string {
+	return value !== null;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -73,6 +73,7 @@ const result = await signet.remember("Prefers TypeScript over JavaScript", {
   importance: 0.9,
   tags: "language,tooling",
   pinned: false,
+  occurredAt: "2026-05-13T18:00:00Z",
   mode: "sync",         // "auto" | "sync" | "async"
   idempotencyKey: "pref-ts-001",
 });
@@ -93,9 +94,11 @@ A good default posture is:
 const { results, query, method, meta } = await signet.recall("language preferences", {
   project: "/home/user/myapp",
   limit: 10,
+  time: { start: "2026-05-13T00:00:00Z", end: "2026-05-14T00:00:00Z" },
   expand: true,
 });
 // meta.timings?.stages — daemon-side recall stages and durations
+// meta.temporal — resolved temporal window when date recall is active
 ```
 
 You can refine further when needed:

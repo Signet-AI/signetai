@@ -544,6 +544,12 @@ export interface RecallRequest {
 	who?: string;
 	since?: string;
 	until?: string;
+	time?: {
+		start?: string;
+		end?: string;
+		facets?: readonly string[];
+		mode?: "auto" | "timeline" | "filter";
+	};
 	expand?: boolean;
 	sessionKey?: string;
 	agentId?: string;
@@ -720,7 +726,8 @@ function buildNoStrongMemoryMatchGuidance(harness: string): string {
 }
 
 function buildDurableSaveGuidance(harness: string): string {
-	if (harness === "codex") return "If you learn something explicitly durable for Codex memory, save it with signet_save_note.";
+	if (harness === "codex")
+		return "If you learn something explicitly durable for Codex memory, save it with signet_save_note.";
 	if (isPiHarness(harness)) return "If you learn something durable, save it with /remember or signet_remember.";
 	return "If you learn something durable, save it with /remember or memory_store.";
 }

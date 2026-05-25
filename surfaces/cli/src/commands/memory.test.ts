@@ -64,6 +64,40 @@ describe("registerMemoryCommands remember", () => {
 			hints: ["What did Avery say about Signet recall?", "Can Signet recall be useful from the terminal?"],
 		});
 	});
+
+	test("forwards explicit temporal memory fields", async () => {
+		let capturedBody: unknown;
+		const program = new Command();
+		registerMemoryCommands(program, {
+			ensureDaemonForSecrets: async () => true,
+			secretApiCall: async (_method, _path, body) => {
+				capturedBody = body;
+				return {
+					ok: true,
+					data: { id: "mem-1", embedded: true },
+				};
+			},
+		});
+
+		await program.parseAsync([
+			"node",
+			"test",
+			"remember",
+			"We debugged exact date recall",
+			"--occurred-at",
+			"2026-05-13T18:00:00.000Z",
+			"--source-created-at",
+			"2026-05-13T17:00:00.000Z",
+		]);
+
+		expect(capturedBody).toEqual({
+			content: "We debugged exact date recall",
+			importance: 0.7,
+			who: "user",
+			occurredAt: "2026-05-13T18:00:00.000Z",
+			sourceCreatedAt: "2026-05-13T17:00:00.000Z",
+		});
+	});
 });
 
 describe("registerMemoryCommands recall", () => {
@@ -153,6 +187,14 @@ describe("registerMemoryCommands recall", () => {
 			"2026-01-01",
 			"--until",
 			"2026-04-01",
+			"--time-start",
+			"2026-05-13T00:00:00.000Z",
+			"--time-end",
+			"2026-05-14T00:00:00.000Z",
+			"--time-facets",
+			"session,occurred",
+			"--time-mode",
+			"timeline",
 			"--min-score",
 			"0.8",
 			"--json",
@@ -170,6 +212,12 @@ describe("registerMemoryCommands recall", () => {
 			importance_min: 0.7,
 			since: "2026-01-01",
 			until: "2026-04-01",
+			time: {
+				start: "2026-05-13T00:00:00.000Z",
+				end: "2026-05-14T00:00:00.000Z",
+				facets: ["session", "occurred"],
+				mode: "timeline",
+			},
 		});
 		expect(capturedTimeout).toBe(30_000);
 		expect(lines).toHaveLength(1);

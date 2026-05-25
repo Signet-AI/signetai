@@ -348,6 +348,522 @@ describe("hybridRecall", () => {
 		expect(result.meta.noHits).toBe(true);
 	});
 
+	it("returns a timeline for date-only recall from session summaries", async () => {
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO session_summaries (
+					id, project, depth, kind, content, earliest_at, latest_at, session_key, harness, agent_id, created_at
+				) VALUES (?, ?, 0, 'session', ?, ?, ?, ?, 'codex', ?, ?)`,
+			).run(
+				"summary-may-13",
+				"/repo",
+				"We worked on temporal recall and source-backed date lookup.",
+				"2026-05-13T18:00:00.000Z",
+				"2026-05-13T19:00:00.000Z",
+				"sess-may-13",
+				"agent-a",
+				"2026-05-13T19:00:00.000Z",
+			);
+			db.prepare(
+				`INSERT INTO memory_artifacts (
+					agent_id, source_path, source_sha256, source_kind, session_id, session_token,
+					project, harness, captured_at, content, updated_at, source_mtime_ms
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			).run(
+				"agent-a",
+				"/repo/notes/temporal.md",
+				"sha-temporal",
+				"obsidian",
+				"sess-may-13",
+				"token-may-13",
+				"/repo",
+				"codex",
+				"2026-05-14T01:00:00.000Z",
+				"Source file changed while working on exact date recall.",
+				"2026-05-14T01:00:00.000Z",
+				Date.parse("2026-05-13T18:30:00.000Z"),
+			);
+			db.prepare(
+				`INSERT INTO session_transcripts (
+					session_key, content, harness, project, agent_id, created_at, updated_at
+				) VALUES (?, ?, 'codex', ?, ?, ?, ?)`,
+			).run(
+				"sess-raw-may-13",
+				"Raw transcript text must stay on session search.",
+				"/repo",
+				"agent-a",
+				"2026-05-13T18:15:00.000Z",
+				"2026-05-13T18:45:00.000Z",
+			);
+		});
+
+		const result = await hybridRecall(
+			{
+				query: "2026/05/13",
+				limit: 5,
+				agentId: "agent-a",
+				readPolicy: "isolated",
+			},
+			testCfg(),
+			async () => null,
+		);
+
+		expect(result.meta.temporal?.mode).toBe("timeline");
+		expect(result.results).toHaveLength(2);
+		expect(result.results[0]?.subject_type).toBe("session_summary");
+		expect(result.results[0]?.temporal_facet).toBe("session");
+		expect(result.results[0]?.content).toContain("temporal recall");
+		expect(JSON.stringify(result)).not.toContain("Raw transcript text");
+		expect(result.results.some((row) => row.source_path === "/repo/notes/temporal.md")).toBe(true);
+	});
+
+	it("honors group policy for temporal session and source rows", async () => {
+		const now = "2026-05-24T18:00:00.000Z";
+		getDbAccessor().withWriteTx((db) => {
+			const agent = db.prepare(
+				`INSERT INTO agents (id, name, read_policy, policy_group, created_at, updated_at)
+				 VALUES (?, ?, 'isolated', ?, ?, ?)
+				 ON CONFLICT(id) DO UPDATE SET policy_group = excluded.policy_group, updated_at = excluded.updated_at`,
+			);
+			agent.run("agent-group", "agent-group", "team-1", now, now);
+			agent.run("agent-alpha", "agent-alpha", "team-1", now, now);
+			agent.run("agent-beta", "agent-beta", "team-2", now, now);
+
+			const summary = db.prepare(
+				`INSERT INTO session_summaries (
+					id, project, depth, kind, content, earliest_at, latest_at, session_key, harness, agent_id, created_at
+				) VALUES (?, ?, 0, 'session', ?, ?, ?, ?, 'codex', ?, ?)`,
+			);
+			summary.run(
+				"summary-alpha-group",
+				"/repo",
+				"Team alpha session timeline activity.",
+				"2026-05-13T16:00:00.000Z",
+				"2026-05-13T17:00:00.000Z",
+				"sess-alpha-group",
+				"agent-alpha",
+				"2026-05-13T17:00:00.000Z",
+			);
+			summary.run(
+				"summary-beta-group",
+				"/repo",
+				"Team beta session timeline activity.",
+				"2026-05-13T18:00:00.000Z",
+				"2026-05-13T19:00:00.000Z",
+				"sess-beta-group",
+				"agent-beta",
+				"2026-05-13T19:00:00.000Z",
+			);
+
+			const artifact = db.prepare(
+				`INSERT INTO memory_artifacts (
+					agent_id, source_path, source_sha256, source_kind, session_id, session_token,
+					project, harness, captured_at, content, updated_at
+				) VALUES (?, ?, ?, 'obsidian', ?, ?, '/repo', 'codex', ?, ?, ?)`,
+			);
+			artifact.run(
+				"agent-alpha",
+				"/repo/alpha-temporal.md",
+				createHash("sha256").update("alpha-temporal").digest("hex"),
+				"sess-alpha-group",
+				"token-alpha-group",
+				"2026-05-13T16:30:00.000Z",
+				"Team alpha source activity.",
+				"2026-05-13T16:30:00.000Z",
+			);
+			artifact.run(
+				"agent-beta",
+				"/repo/beta-temporal.md",
+				createHash("sha256").update("beta-temporal").digest("hex"),
+				"sess-beta-group",
+				"token-beta-group",
+				"2026-05-13T18:30:00.000Z",
+				"Team beta source activity.",
+				"2026-05-13T18:30:00.000Z",
+			);
+		});
+
+		const result = await hybridRecall(
+			{
+				query: "2026/05/13",
+				limit: 10,
+				agentId: "agent-group",
+				readPolicy: "group",
+				policyGroup: "team-1",
+			},
+			testCfg(),
+			async () => null,
+		);
+
+		const resultText = JSON.stringify(result);
+		expect(resultText).toContain("Team alpha session timeline activity");
+		expect(resultText).toContain("/repo/alpha-temporal.md");
+		expect(resultText).not.toContain("Team beta session timeline activity");
+		expect(resultText).not.toContain("/repo/beta-temporal.md");
+	});
+
+	it("keeps shared temporal session and source rows own-agent only", async () => {
+		const now = "2026-05-24T18:00:00.000Z";
+		getDbAccessor().withWriteTx((db) => {
+			const agent = db.prepare(
+				`INSERT INTO agents (id, name, read_policy, created_at, updated_at)
+				 VALUES (?, ?, ?, ?, ?)
+				 ON CONFLICT(id) DO UPDATE SET read_policy = excluded.read_policy, updated_at = excluded.updated_at`,
+			);
+			agent.run("agent-a", "agent-a", "shared", now, now);
+			agent.run("agent-shared-other", "agent-shared-other", "shared", now, now);
+
+			const summary = db.prepare(
+				`INSERT INTO session_summaries (
+					id, project, depth, kind, content, earliest_at, latest_at, session_key, harness, agent_id, created_at
+				) VALUES (?, ?, 0, 'session', ?, ?, ?, ?, 'codex', ?, ?)`,
+			);
+			summary.run(
+				"summary-own-shared",
+				"/repo",
+				"Own shared-policy session timeline activity.",
+				"2026-05-13T16:00:00.000Z",
+				"2026-05-13T17:00:00.000Z",
+				"sess-own-shared",
+				"agent-a",
+				"2026-05-13T17:00:00.000Z",
+			);
+			summary.run(
+				"summary-other-shared",
+				"/repo",
+				"Other shared-policy session timeline activity.",
+				"2026-05-13T18:00:00.000Z",
+				"2026-05-13T19:00:00.000Z",
+				"sess-other-shared",
+				"agent-shared-other",
+				"2026-05-13T19:00:00.000Z",
+			);
+
+			const artifact = db.prepare(
+				`INSERT INTO memory_artifacts (
+					agent_id, source_path, source_sha256, source_kind, session_id, session_token,
+					project, harness, captured_at, content, updated_at
+				) VALUES (?, ?, ?, 'obsidian', ?, ?, '/repo', 'codex', ?, ?, ?)`,
+			);
+			artifact.run(
+				"agent-a",
+				"/repo/own-shared-temporal.md",
+				createHash("sha256").update("own-shared-temporal").digest("hex"),
+				"sess-own-shared",
+				"token-own-shared",
+				"2026-05-13T16:30:00.000Z",
+				"Own shared-policy source activity.",
+				"2026-05-13T16:30:00.000Z",
+			);
+			artifact.run(
+				"agent-shared-other",
+				"/repo/other-shared-temporal.md",
+				createHash("sha256").update("other-shared-temporal").digest("hex"),
+				"sess-other-shared",
+				"token-other-shared",
+				"2026-05-13T18:30:00.000Z",
+				"Other shared-policy source activity.",
+				"2026-05-13T18:30:00.000Z",
+			);
+		});
+
+		const result = await hybridRecall(
+			{
+				query: "2026/05/13",
+				limit: 10,
+				agentId: "agent-a",
+				readPolicy: "shared",
+			},
+			testCfg(),
+			async () => null,
+		);
+
+		const resultText = JSON.stringify(result);
+		expect(resultText).toContain("Own shared-policy session timeline activity");
+		expect(resultText).toContain("/repo/own-shared-temporal.md");
+		expect(resultText).not.toContain("Other shared-policy session timeline activity");
+		expect(resultText).not.toContain("/repo/other-shared-temporal.md");
+	});
+
+	it("uses explicit occurred temporal edges for date plus topic recall", async () => {
+		const savedAt = "2026-05-24T18:00:00.000Z";
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO memories (
+					id, content, type, agent_id, visibility, created_at, updated_at, updated_by, is_deleted
+				) VALUES (?, ?, 'fact', ?, 'global', ?, ?, 'test', 0)`,
+			).run("mem-temporal", "Signet recall should support exact date queries", "agent-a", savedAt, savedAt);
+			db.prepare(
+				`INSERT INTO memories (
+					id, content, type, agent_id, visibility, created_at, updated_at, updated_by, is_deleted
+				) VALUES (?, ?, 'fact', ?, 'global', ?, ?, 'test', 0)`,
+			).run("mem-later", "Signet recall unrelated saved later", "agent-a", savedAt, savedAt);
+			db.prepare(
+				`INSERT INTO temporal_edges (
+					id, agent_id, subject_type, subject_id, facet, start_at, end_at,
+					confidence, created_at, updated_at
+				) VALUES (?, ?, 'memory', ?, 'occurred', ?, ?, 1.0, ?, ?)`,
+			).run(
+				"edge-temporal",
+				"agent-a",
+				"mem-temporal",
+				"2026-05-13T18:00:00.000Z",
+				"2026-05-13T18:00:00.000Z",
+				savedAt,
+				savedAt,
+			);
+		});
+
+		const result = await hybridRecall(
+			{
+				query: "2026/05/13 Signet recall",
+				keywordQuery: "Signet recall",
+				limit: 5,
+				agentId: "agent-a",
+				readPolicy: "isolated",
+			},
+			testCfg(),
+			async () => null,
+		);
+
+		expect(result.meta.temporal?.mode).toBe("filter");
+		expect(result.results.map((row) => row.id)).toContain("mem-temporal");
+		expect(result.results.map((row) => row.id)).not.toContain("mem-later");
+	});
+
+	it("lets hybrid topic evidence filter scoped temporal edge candidates", async () => {
+		const savedAt = "2026-05-24T18:00:00.000Z";
+		getDbAccessor().withWriteTx((db) => {
+			const agent = db.prepare(
+				`INSERT INTO agents (id, name, read_policy, policy_group, created_at, updated_at)
+				 VALUES (?, ?, 'isolated', ?, ?, ?)
+				 ON CONFLICT(id) DO UPDATE SET policy_group = excluded.policy_group, updated_at = excluded.updated_at`,
+			);
+			agent.run("agent-group", "agent-group", "team-1", savedAt, savedAt);
+			agent.run("agent-alpha", "agent-alpha", "team-1", savedAt, savedAt);
+			agent.run("agent-beta", "agent-beta", "team-2", savedAt, savedAt);
+
+			db.prepare(
+				`INSERT INTO memories (
+					id, content, type, agent_id, visibility, created_at, updated_at, updated_by, is_deleted
+				) VALUES (?, ?, 'fact', ?, 'global', ?, ?, 'test', 0)`,
+			).run(
+				"mem-alpha-edge",
+				"Alpha dated memory mentions rollout but not every topic word.",
+				"agent-alpha",
+				savedAt,
+				savedAt,
+			);
+			db.prepare(
+				`INSERT INTO memories (
+					id, content, type, agent_id, visibility, created_at, updated_at, updated_by, is_deleted
+				) VALUES (?, ?, 'fact', ?, 'global', ?, ?, 'test', 0)`,
+			).run(
+				"mem-alpha-offtopic-edge",
+				"Alpha dated memory uses unrelated checklist wording.",
+				"agent-alpha",
+				savedAt,
+				savedAt,
+			);
+			db.prepare(
+				`INSERT INTO memories (
+					id, content, type, agent_id, visibility, created_at, updated_at, updated_by, is_deleted
+				) VALUES (?, ?, 'fact', ?, 'global', ?, ?, 'test', 0)`,
+			).run("mem-beta-edge", "Beta dated memory mentions rollout directly.", "agent-beta", savedAt, savedAt);
+			const edge = db.prepare(
+				`INSERT INTO temporal_edges (
+					id, agent_id, subject_type, subject_id, facet, start_at, end_at,
+					confidence, created_at, updated_at
+				) VALUES (?, ?, 'memory', ?, 'occurred', ?, ?, 1.0, ?, ?)`,
+			);
+			edge.run(
+				"edge-alpha-group",
+				"agent-alpha",
+				"mem-alpha-edge",
+				"2026-05-13T18:00:00.000Z",
+				"2026-05-13T18:00:00.000Z",
+				savedAt,
+				savedAt,
+			);
+			edge.run(
+				"edge-alpha-offtopic-group",
+				"agent-alpha",
+				"mem-alpha-offtopic-edge",
+				"2026-05-13T18:00:00.000Z",
+				"2026-05-13T18:00:00.000Z",
+				savedAt,
+				savedAt,
+			);
+			edge.run(
+				"edge-beta-group",
+				"agent-beta",
+				"mem-beta-edge",
+				"2026-05-13T18:00:00.000Z",
+				"2026-05-13T18:00:00.000Z",
+				savedAt,
+				savedAt,
+			);
+		});
+
+		const result = await hybridRecall(
+			{
+				query: "2026/05/13 rollout planning migration schedule",
+				keywordQuery: "rollout planning migration schedule",
+				limit: 5,
+				agentId: "agent-group",
+				readPolicy: "group",
+				policyGroup: "team-1",
+			},
+			testCfg(),
+			async () => null,
+		);
+
+		expect(result.results.map((row) => row.id)).toContain("mem-alpha-edge");
+		expect(result.results.map((row) => row.id)).not.toContain("mem-alpha-offtopic-edge");
+		expect(result.results.map((row) => row.id)).not.toContain("mem-beta-edge");
+	});
+
+	it("does not cap temporal edge candidates to result limit before topic evidence", async () => {
+		const savedAt = "2026-05-24T18:00:00.000Z";
+		getDbAccessor().withWriteTx((db) => {
+			for (let index = 0; index < 8; index += 1) {
+				const id = `mem-offtopic-limit-${index}`;
+				db.prepare(
+					`INSERT INTO memories (
+						id, content, type, agent_id, visibility, created_at, updated_at, updated_by, is_deleted
+					) VALUES (?, ?, 'fact', 'agent-a', 'global', ?, ?, 'test', 0)`,
+				).run(id, `Same-day off-topic temporal candidate ${index}.`, savedAt, savedAt);
+				db.prepare(
+					`INSERT INTO temporal_edges (
+						id, agent_id, subject_type, subject_id, facet, start_at, end_at,
+						confidence, created_at, updated_at
+					) VALUES (?, 'agent-a', 'memory', ?, 'occurred', ?, ?, 1.0, ?, ?)`,
+				).run(
+					`edge-offtopic-limit-${index}`,
+					id,
+					`2026-05-13T20:${index.toString().padStart(2, "0")}:00.000Z`,
+					`2026-05-13T20:${index.toString().padStart(2, "0")}:00.000Z`,
+					savedAt,
+					savedAt,
+				);
+			}
+			db.prepare(
+				`INSERT INTO memories (
+					id, content, type, agent_id, visibility, created_at, updated_at, updated_by, is_deleted
+				) VALUES (?, ?, 'fact', 'agent-a', 'global', ?, ?, 'test', 0)`,
+			).run(
+				"mem-relevant-limit",
+				"Relevant rollout memory should survive temporal candidate scanning.",
+				savedAt,
+				savedAt,
+			);
+			db.prepare(
+				`INSERT INTO temporal_edges (
+					id, agent_id, subject_type, subject_id, facet, start_at, end_at,
+					confidence, created_at, updated_at
+				) VALUES (?, 'agent-a', 'memory', ?, 'occurred', ?, ?, 1.0, ?, ?)`,
+			).run(
+				"edge-relevant-limit",
+				"mem-relevant-limit",
+				"2026-05-13T12:00:00.000Z",
+				"2026-05-13T12:00:00.000Z",
+				savedAt,
+				savedAt,
+			);
+		});
+
+		const result = await hybridRecall(
+			{
+				query: "2026/05/13 rollout planning migration",
+				keywordQuery: "rollout planning migration",
+				limit: 2,
+				agentId: "agent-a",
+				readPolicy: "isolated",
+			},
+			testCfg(),
+			async () => null,
+		);
+
+		expect(result.results.map((row) => row.id)).toContain("mem-relevant-limit");
+		expect(result.results.some((row) => row.id.startsWith("mem-offtopic-limit-"))).toBe(false);
+	});
+
+	it("honors explicit timeline mode even when query text is present", async () => {
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO session_summaries (
+					id, project, depth, kind, content, earliest_at, latest_at, session_key, harness, agent_id, created_at
+				) VALUES (?, ?, 0, 'session', ?, ?, ?, ?, 'codex', ?, ?)`,
+			).run(
+				"sess-summary-timeline-mode",
+				"/repo",
+				"Worked on dashboard polish.",
+				"2026-05-13T18:00:00.000Z",
+				"2026-05-13T19:00:00.000Z",
+				"sess-timeline-mode",
+				"agent-a",
+				"2026-05-13T19:00:00.000Z",
+			);
+		});
+
+		const result = await hybridRecall(
+			{
+				query: "temporal recall",
+				time: {
+					start: "2026-05-13T00:00:00.000Z",
+					end: "2026-05-14T00:00:00.000Z",
+					mode: "timeline",
+				},
+				limit: 5,
+				agentId: "agent-a",
+				readPolicy: "isolated",
+			},
+			testCfg(),
+			async () => null,
+		);
+
+		expect(result.meta.temporal?.mode).toBe("timeline");
+		expect(result.results.map((row) => row.id)).toContain(
+			"temporal:session_summary:sess-summary-timeline-mode:session",
+		);
+	});
+
+	it("keeps explicit temporal edge recall behind memory visibility rules", async () => {
+		const savedAt = "2026-05-24T18:00:00.000Z";
+		getDbAccessor().withWriteTx((db) => {
+			for (const [id, visibility] of [
+				["mem-temporal-visible", "global"],
+				["mem-temporal-archived", "archived"],
+			] as const) {
+				db.prepare(
+					`INSERT INTO memories (
+						id, content, type, agent_id, visibility, created_at, updated_at, updated_by, is_deleted
+					) VALUES (?, ?, 'fact', ?, ?, ?, ?, 'test', 0)`,
+				).run(id, "Hidden temporal recall project marker", "agent-a", visibility, savedAt, savedAt);
+				db.prepare(
+					`INSERT INTO temporal_edges (
+						id, agent_id, subject_type, subject_id, facet, start_at, end_at,
+						confidence, created_at, updated_at
+					) VALUES (?, ?, 'memory', ?, 'occurred', ?, ?, 1.0, ?, ?)`,
+				).run(`edge-${id}`, "agent-a", id, "2026-05-13T18:00:00.000Z", "2026-05-13T18:00:00.000Z", savedAt, savedAt);
+			}
+		});
+
+		const result = await hybridRecall(
+			{
+				query: "2026/05/13 Hidden temporal recall",
+				keywordQuery: "Hidden temporal recall",
+				limit: 5,
+				agentId: "agent-a",
+				readPolicy: "isolated",
+			},
+			testCfg(),
+			async () => null,
+		);
+
+		expect(result.results.map((row) => row.id)).toEqual(["mem-temporal-visible"]);
+	});
+
 	it("drops ambiguous source chunk vector matches for project-scoped recall", async () => {
 		const now = new Date().toISOString();
 		const vec = unitVector();

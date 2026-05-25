@@ -396,6 +396,20 @@ function parsePackageTable(content: string, sectionHeader: string): Map<string, 
 	return result;
 }
 
+function tableCoversDir(table: Map<string, string>, dir: string): boolean {
+	if (table.has(dir)) return true;
+	for (const key of table.keys()) {
+		if (!key.includes("*")) continue;
+		const pattern = new RegExp(`^${key.split("*").map(escapeRegex).join(".*")}$`);
+		if (pattern.test(dir)) return true;
+	}
+	return false;
+}
+
+function escapeRegex(value: string): string {
+	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 function checkPackageDrift(claudeMd: string): PackageTableDrift[] {
 	const actual = getActualPackages();
 	const actualDirs = new Set(actual.map((p) => p.dir));
@@ -403,11 +417,16 @@ function checkPackageDrift(claudeMd: string): PackageTableDrift[] {
 	const results: PackageTableDrift[] = [];
 
 	// CLAUDE.md
-	const claudeTable = parsePackageTable(claudeMd, "## Package map");
+	const legacyClaudeTable = parsePackageTable(claudeMd, "## Package map");
+	const claudeTable =
+		legacyClaudeTable.size > 0 ? legacyClaudeTable : parsePackageTable(claudeMd, "## Package And Directory Map");
 	results.push({
 		file: "AGENTS.md",
-		missingFromTable: actual.filter((p) => !claudeTable.has(p.dir)),
-		extraInTable: [...claudeTable.keys()].filter((dir) => !actualDirs.has(dir) && !fileExists(dir)),
+		missingFromTable: actual.filter((p) => !tableCoversDir(claudeTable, p.dir)),
+		extraInTable: [...claudeTable.keys()].filter((dir) => {
+			if (dir.includes("*")) return !actual.some((p) => tableCoversDir(new Map([[dir, ""]]), p.dir));
+			return !actualDirs.has(dir) && !fileExists(dir);
+		}),
 	});
 
 	// README.md

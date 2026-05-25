@@ -60,6 +60,7 @@ import {
 	releaseSession,
 	renewSession,
 } from "../session-tracker.js";
+import { validateTemporalTimeOptions } from "../temporal-recall";
 import { upsertThreadHead } from "../thread-heads";
 import { autoConnectGraphiq } from "./graphiq-routes.js";
 import {
@@ -514,6 +515,8 @@ function registerRecall(app: Hono): void {
 			if (aggregateBudgetInput !== undefined && aggregateBudget === null) {
 				return c.json({ error: "Invalid aggregateBudget. Expected one of: small, medium, large." }, 400);
 			}
+			const temporalTimeError = validateTemporalTimeOptions(body.time);
+			if (temporalTimeError) return c.json({ error: temporalTimeError }, 400);
 
 			const runtimePath = resolveRuntimePath(c, body);
 			if (runtimePath) body.runtimePath = runtimePath;
@@ -562,6 +565,7 @@ function registerRecall(app: Hono): void {
 				who: body.who,
 				since: body.since,
 				until: body.until,
+				time: body.time,
 				expand: body.expand,
 				agentId,
 				readPolicy: agentScope.readPolicy,

@@ -528,6 +528,12 @@ describe("createMcpServer", () => {
 				importance_min: 0.7,
 				since: "2026-01-01",
 				until: "2026-04-01",
+				time: {
+					start: "2026-05-13T00:00:00.000Z",
+					end: "2026-05-14T00:00:00.000Z",
+					facets: ["session", "occurred"],
+					mode: "timeline",
+				},
 				score_min: 0.8,
 				aggregate: true,
 				aggregate_budget: "medium",
@@ -547,6 +553,12 @@ describe("createMcpServer", () => {
 			expect(body.importance_min).toBe(0.7);
 			expect(body.since).toBe("2026-01-01");
 			expect(body.until).toBe("2026-04-01");
+			expect(body.time).toEqual({
+				start: "2026-05-13T00:00:00.000Z",
+				end: "2026-05-14T00:00:00.000Z",
+				facets: ["session", "occurred"],
+				mode: "timeline",
+			});
 			expect(body.expand).toBeUndefined();
 			expect(body.aggregate).toBe(true);
 			expect(body.aggregateBudget).toBe("medium");
@@ -851,6 +863,22 @@ describe("createMcpServer", () => {
 
 			const body = JSON.parse(cap.body ?? "{}");
 			expect(body.pinned).toBe(true);
+		});
+
+		it("passes explicit temporal fields through to remember", async () => {
+			const cap: { body?: string } = {};
+			mockFetch(200, { id: "temporal-1", deduped: false }, cap);
+
+			await callTool(server, "memory_store", {
+				content: "We worked on exact date recall",
+				hints: ["What did we work on during exact date recall?"],
+				occurredAt: "2026-05-13T18:00:00.000Z",
+				sourceCreatedAt: "2026-05-13T17:00:00.000Z",
+			});
+
+			const body = JSON.parse(cap.body ?? "{}");
+			expect(body.occurredAt).toBe("2026-05-13T18:00:00.000Z");
+			expect(body.sourceCreatedAt).toBe("2026-05-13T17:00:00.000Z");
 		});
 
 		it("passes hints, transcript, and structured graph payloads through to remember", async () => {

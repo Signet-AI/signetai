@@ -24,6 +24,7 @@ import { recordPathFeedback } from "../path-feedback";
 import { enqueueDocumentIngestJob } from "../pipeline";
 import { parseFeedback, recordAgentFeedback } from "../session-memories";
 import { upsertSessionTranscript } from "../session-transcripts";
+import { createTemporalEdgeId, normalizeTemporalTimestamp, validateTemporalTimeOptions } from "../temporal-recall";
 import { txForgetMemory, txIngestEnvelope, txModifyMemory, txRecoverMemory } from "../transactions";
 import { cacheProjection, computeProjection, computeProjectionForQuery, getCachedProjection } from "../umap-projection";
 import {
@@ -91,6 +92,92 @@ function parseOptionalIsoTimestamp(value: unknown): string | null {
 	if (!trimmed) return null;
 	const ts = new Date(trimmed);
 	return Number.isNaN(ts.getTime()) ? null : ts.toISOString();
+}
+
+interface ExplicitTemporalInput {
+	readonly facet: "source" | "observed" | "occurred" | "valid";
+	readonly startAt: string;
+	readonly endAt: string | null;
+	readonly provenance: string;
+}
+
+function collectExplicitTemporalInputs(body: {
+	readonly sourceCreatedAt?: string;
+	readonly observedAt?: string;
+	readonly occurredAt?: string;
+	readonly validFrom?: string;
+	readonly validUntil?: string;
+}): { inputs?: readonly ExplicitTemporalInput[]; error?: string } {
+	const sourceCreatedAt = normalizeTemporalTimestamp(body.sourceCreatedAt);
+	const observedAt = normalizeTemporalTimestamp(body.observedAt);
+	const occurredAt = normalizeTemporalTimestamp(body.occurredAt);
+	const validFrom = normalizeTemporalTimestamp(body.validFrom);
+	const validUntil = normalizeTemporalTimestamp(body.validUntil);
+	if (body.sourceCreatedAt !== undefined && !sourceCreatedAt)
+		return { error: "sourceCreatedAt must be a valid ISO timestamp" };
+	if (body.observedAt !== undefined && !observedAt) return { error: "observedAt must be a valid ISO timestamp" };
+	if (body.occurredAt !== undefined && !occurredAt) return { error: "occurredAt must be a valid ISO timestamp" };
+	if (body.validFrom !== undefined && !validFrom) return { error: "validFrom must be a valid ISO timestamp" };
+	if (body.validUntil !== undefined && !validUntil) return { error: "validUntil must be a valid ISO timestamp" };
+	if (validUntil && validFrom && validUntil <= validFrom) return { error: "validUntil must be after validFrom" };
+
+	const inputs: ExplicitTemporalInput[] = [];
+	if (sourceCreatedAt)
+		inputs.push({
+			facet: "source",
+			startAt: sourceCreatedAt,
+			endAt: sourceCreatedAt,
+			provenance: "remember.sourceCreatedAt",
+		});
+	if (observedAt)
+		inputs.push({ facet: "observed", startAt: observedAt, endAt: observedAt, provenance: "remember.observedAt" });
+	if (occurredAt)
+		inputs.push({ facet: "occurred", startAt: occurredAt, endAt: occurredAt, provenance: "remember.occurredAt" });
+	if (validFrom)
+		inputs.push({ facet: "valid", startAt: validFrom, endAt: validUntil, provenance: "remember.validRange" });
+	return { inputs };
+}
+
+function txInsertExplicitTemporalEdges(params: {
+	readonly db: WriteDb;
+	readonly memoryId: string;
+	readonly agentId: string;
+	readonly inputs: readonly ExplicitTemporalInput[];
+	readonly now: string;
+}): void {
+	if (params.inputs.length === 0) return;
+	const table = params.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='temporal_edges'").get();
+	if (!table) return;
+	const stmt = params.db.prepare(
+		`INSERT INTO temporal_edges
+		   (id, agent_id, subject_type, subject_id, facet, start_at, end_at, confidence,
+		    provenance_json, metadata_json, created_at, updated_at)
+		 VALUES (?, ?, 'memory', ?, ?, ?, ?, 1.0, ?, NULL, ?, ?)
+		 ON CONFLICT(id) DO UPDATE SET
+		   end_at = excluded.end_at,
+		   confidence = excluded.confidence,
+		   provenance_json = excluded.provenance_json,
+		   updated_at = excluded.updated_at`,
+	);
+	for (const input of params.inputs) {
+		stmt.run(
+			createTemporalEdgeId({
+				agentId: params.agentId,
+				subjectType: "memory",
+				subjectId: params.memoryId,
+				facet: input.facet,
+				startAt: input.startAt,
+			}),
+			params.agentId,
+			params.memoryId,
+			input.facet,
+			input.startAt,
+			input.endAt,
+			JSON.stringify({ source: input.provenance }),
+			params.now,
+			params.now,
+		);
+	}
 }
 
 function codexHome(): string {
@@ -169,6 +256,7 @@ interface RememberDedupeScope {
 
 interface RememberDedupeRow {
 	readonly id: string;
+	readonly agentId: string;
 	readonly type: string;
 	readonly tags: string | null;
 	readonly pinned: number;
@@ -298,12 +386,29 @@ function getScopedIdempotencyDedupeRow(
 	const scoped = scopedMemoryPredicate(input);
 	return db
 		.prepare(
-			`SELECT id, type, tags, pinned, importance, content
+			`SELECT id, COALESCE(NULLIF(agent_id, ''), 'default') AS agentId, type, tags, pinned, importance, content
 			 FROM memories
 			 WHERE idempotency_key = ? AND ${scoped.sql} AND is_deleted = 0
 			 LIMIT 1`,
 		)
 		.get(key, ...scoped.params) as RememberDedupeRow | undefined;
+}
+
+function getScopedSourceDedupeRow(
+	db: WriteDb,
+	sourceType: string,
+	sourceId: string,
+	input: RememberDedupeScope,
+): RememberDedupeRow | undefined {
+	const scoped = scopedMemoryPredicate(input);
+	return db
+		.prepare(
+			`SELECT id, COALESCE(NULLIF(agent_id, ''), 'default') AS agentId, type, tags, pinned, importance, content
+			 FROM memories
+			 WHERE source_type = ? AND source_id = ? AND ${scoped.sql} AND is_deleted = 0
+			 LIMIT 1`,
+		)
+		.get(sourceType, sourceId, ...scoped.params) as RememberDedupeRow | undefined;
 }
 
 function getScopedContentHashMemoryId(
@@ -335,7 +440,7 @@ function getScopedContentHashDedupeRow(
 	const scoped = scopedContentHashPredicate(input);
 	return db
 		.prepare(
-			`SELECT id, type, tags, pinned, importance, content
+			`SELECT id, COALESCE(NULLIF(agent_id, ''), 'default') AS agentId, type, tags, pinned, importance, content
 			 FROM memories
 			 WHERE content_hash = ? AND ${scoped.sql} AND is_deleted = 0
 			 LIMIT 1`,
@@ -795,6 +900,11 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			sourceType?: string;
 			sourceId?: string;
 			createdAt?: string;
+			occurredAt?: string;
+			observedAt?: string;
+			validFrom?: string;
+			validUntil?: string;
+			sourceCreatedAt?: string;
 			scope?: string | null;
 			agentId?: string;
 			visibility?: "global" | "private" | "archived";
@@ -845,6 +955,8 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		if (body.createdAt !== undefined && !requestedCreatedAt) {
 			return c.json({ error: "createdAt must be a valid ISO timestamp" }, 400);
 		}
+		const temporalInputs = collectExplicitTemporalInputs(body);
+		if (temporalInputs.error) return c.json({ error: temporalInputs.error }, 400);
 		const scope = body.scope ?? null;
 		const rowProvenance = parseRememberRowProvenance(body as Record<string, unknown>);
 		const agentId = resolveAgentId({ agentId: body.agentId, sessionKey: c.req.header("x-signet-session-key") });
@@ -1172,27 +1284,11 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			return c.json({ error: "idempotencyKey already used for chunked content" }, 409);
 		}
 
-		type DedupeRow = RememberDedupeRow;
-
 		try {
 			const result = getDbAccessor().withWriteTx((db) => {
 				// Check sourceId-based dedupe first (scope-aware)
 				if (sourceId) {
-					const bySource = (
-						scope !== null
-							? db
-									.prepare(
-										`SELECT id, type, tags, pinned, importance, content
-						 FROM memories WHERE source_type = ? AND source_id = ? AND scope = ? AND is_deleted = 0 LIMIT 1`,
-									)
-									.get(sourceType, sourceId, scope)
-							: db
-									.prepare(
-										`SELECT id, type, tags, pinned, importance, content
-						 FROM memories WHERE source_type = ? AND source_id = ? AND scope IS NULL AND is_deleted = 0 LIMIT 1`,
-									)
-									.get(sourceType, sourceId)
-					) as DedupeRow | undefined;
+					const bySource = getScopedSourceDedupeRow(db, sourceType, sourceId, dedupeScope);
 					if (bySource) return { deduped: true as const, row: bySource };
 				}
 
@@ -1236,10 +1332,26 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 					visibility,
 					createdAt,
 				});
+				txInsertExplicitTemporalEdges({
+					db,
+					memoryId: id,
+					agentId,
+					inputs: temporalInputs.inputs ?? [],
+					now,
+				});
 				return { deduped: false as const };
 			});
 
 			if (result.deduped) {
+				getDbAccessor().withWriteTx((db) =>
+					txInsertExplicitTemporalEdges({
+						db,
+						memoryId: result.row.id,
+						agentId: result.row.agentId,
+						inputs: temporalInputs.inputs ?? [],
+						now,
+					}),
+				);
 				return c.json({
 					id: result.row.id,
 					type: result.row.type,
@@ -1260,6 +1372,15 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 					return getScopedContentHashDedupeRow(db, contentHash, dedupeScope);
 				});
 				if (existing) {
+					getDbAccessor().withWriteTx((db) =>
+						txInsertExplicitTemporalEdges({
+							db,
+							memoryId: existing.id,
+							agentId: existing.agentId,
+							inputs: temporalInputs.inputs ?? [],
+							now,
+						}),
+					);
 					return c.json({
 						id: existing.id,
 						type: existing.type,
@@ -2405,6 +2526,8 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		if (aggregateBudgetInput !== undefined && aggregateBudget === null) {
 			return c.json({ error: "Invalid aggregateBudget. Expected one of: small, medium, large." }, 400);
 		}
+		const temporalTimeError = validateTemporalTimeOptions(body.time);
+		if (temporalTimeError) return c.json({ error: temporalTimeError }, 400);
 
 		const aggregateSaveRequested =
 			body.aggregate === true && body.saveAggregate !== false && body.save_aggregate !== false;
@@ -2486,6 +2609,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		const pinned = c.req.query("pinned");
 		const importanceMin = c.req.query("importance_min");
 		const since = c.req.query("since");
+		const until = c.req.query("until");
 		const expand = c.req.query("expand");
 		const project = c.req.query("project");
 		const includeRecalled = c.req.query("includeRecalled") ?? c.req.query("include_recalled");
@@ -2510,6 +2634,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				pinned: pinned === "1" || pinned === "true",
 				importance_min: importanceMin ? Number.parseFloat(importanceMin) : undefined,
 				since,
+				until,
 				expand: expand === "1" || expand === "true",
 				project,
 				agentId,

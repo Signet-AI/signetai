@@ -13,6 +13,8 @@ export interface RecallRow extends RecallPartitionableRow {
 	readonly created_at?: string;
 	readonly score?: number;
 	readonly source?: string;
+	readonly source_id?: string;
+	readonly source_path?: string;
 	readonly who?: string;
 	readonly type?: string;
 	readonly tags?: string | null;
@@ -20,12 +22,18 @@ export interface RecallRow extends RecallPartitionableRow {
 	readonly project?: string | null;
 	readonly importance?: number;
 	readonly already_recalled?: boolean;
+	readonly temporal_facet?: TemporalFacet;
+	readonly temporal_start_at?: string;
+	readonly temporal_end_at?: string | null;
+	readonly subject_type?: string;
+	readonly subject_id?: string;
 }
 
 export interface RecallMeta {
 	readonly totalReturned: number;
 	readonly hasSupplementary: boolean;
 	readonly noHits: boolean;
+	readonly temporal?: RecallTemporalMeta;
 	readonly dedupe?: {
 		readonly enabled: boolean;
 		readonly contextEpoch?: number;
@@ -35,6 +43,25 @@ export interface RecallMeta {
 }
 
 export type AggregateRecallBudget = "small" | "medium" | "large";
+
+export type TemporalFacet = "captured" | "session" | "source" | "observed" | "occurred" | "valid";
+
+export interface RecallTimeOptions {
+	readonly start?: string;
+	readonly end?: string;
+	readonly facets?: readonly TemporalFacet[];
+	readonly mode?: "auto" | "timeline" | "filter";
+}
+
+export interface RecallTemporalMeta {
+	readonly mode: "timeline" | "filter";
+	readonly source: "query" | "request";
+	readonly originalQuery: string;
+	readonly contentQuery: string;
+	readonly start: string;
+	readonly end: string;
+	readonly facets: readonly TemporalFacet[];
+}
 
 export interface AggregateRecallMeta {
 	readonly savedMemoryId: string | null;
@@ -98,6 +125,7 @@ export interface RecallRequestOptions {
 	readonly importance_min?: number;
 	readonly since?: string;
 	readonly until?: string;
+	readonly time?: RecallTimeOptions;
 	readonly expand?: boolean;
 	readonly agentId?: string;
 	readonly sessionKey?: string;
@@ -121,6 +149,11 @@ export interface RememberRequestOptions {
 	readonly sourceId?: string;
 	readonly sourcePath?: string;
 	readonly createdAt?: string;
+	readonly occurredAt?: string;
+	readonly observedAt?: string;
+	readonly validFrom?: string;
+	readonly validUntil?: string;
+	readonly sourceCreatedAt?: string;
 	readonly hints?: readonly string[];
 	readonly transcript?: string;
 	readonly structured?: unknown;
@@ -194,7 +227,8 @@ export function parseRecallMeta(raw: unknown, fallbackCount: number): RecallMeta
 				repeatedReturned: typeof raw.dedupe.repeatedReturned === "number" ? raw.dedupe.repeatedReturned : 0,
 			}
 		: undefined;
-	return { totalReturned, hasSupplementary, noHits, ...(dedupe ? { dedupe } : {}) };
+	const temporal = isRecord(raw.temporal) ? (raw.temporal as unknown as RecallTemporalMeta) : undefined;
+	return { totalReturned, hasSupplementary, noHits, ...(dedupe ? { dedupe } : {}), ...(temporal ? { temporal } : {}) };
 }
 
 export function parseRecallPayload(raw: unknown): {
@@ -246,6 +280,7 @@ export function applyRecallScoreThreshold(raw: unknown, minScore?: number): unkn
 			hasSupplementary: filtered.some((row) => row.supplementary === true),
 			noHits: filtered.length === 0,
 			...(isRecord(payload.meta) && isRecord(payload.meta.dedupe) ? { dedupe: payload.meta.dedupe } : {}),
+			...(isRecord(payload.meta) && isRecord(payload.meta.temporal) ? { temporal: payload.meta.temporal } : {}),
 		},
 	};
 }
@@ -265,6 +300,41 @@ function formatRecallRow(row: RecallRow, options?: { readonly includeIndex?: num
 	return `${prefix}${score}${id}${row.content ?? ""} (${type}, ${source}, ${createdAt}${who})`;
 }
 
+function temporalGroupLabel(row: RecallRow): string {
+	if (row.temporal_facet === "session") return "Sessions";
+	if (row.temporal_facet === "source") return "Source Activity";
+	if (row.temporal_facet === "occurred" || row.temporal_facet === "observed" || row.temporal_facet === "valid") {
+		return "Events";
+	}
+	return "Memories Captured";
+}
+
+function formatTemporalDate(value: string): string {
+	const parsed = new Date(value);
+	if (Number.isNaN(parsed.getTime())) return value.slice(0, 10);
+	return parsed.toLocaleDateString("en-US", {
+		month: "long",
+		day: "numeric",
+		year: "numeric",
+		timeZone: "UTC",
+	});
+}
+
+function formatTemporalRecallText(rows: readonly RecallRow[], meta: RecallTemporalMeta): string {
+	const parts = [formatTemporalDate(meta.start)];
+	const groups = new Map<string, RecallRow[]>();
+	for (const row of rows) {
+		const label = temporalGroupLabel(row);
+		groups.set(label, [...(groups.get(label) ?? []), row]);
+	}
+	for (const label of ["Sessions", "Source Activity", "Events", "Memories Captured"]) {
+		const group = groups.get(label);
+		if (!group || group.length === 0) continue;
+		parts.push("", label, ...group.map((row) => formatRecallRow(row)));
+	}
+	return parts.join("\n");
+}
+
 export function formatRecallText(raw: unknown): string {
 	if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
 		return typeof raw === "string" ? raw : JSON.stringify(raw, null, 2);
@@ -276,6 +346,7 @@ export function formatRecallText(raw: unknown): string {
 	if (parsed.meta.noHits || parsed.rows.length === 0) return "No matching memories found.";
 
 	const { primary, supporting } = partitionRecallRows(parsed.rows);
+	if (parsed.meta.temporal?.mode === "timeline") return formatTemporalRecallText(primary, parsed.meta.temporal);
 	const noun = parsed.meta.totalReturned === 1 ? "memory" : "memories";
 	const parts = [`Found ${parsed.meta.totalReturned} ${noun}${parsed.method ? ` (${parsed.method})` : ""}.`];
 
@@ -303,6 +374,7 @@ export function buildRecallRequestBody(query: string, options: RecallRequestOpti
 		importance_min: options.importance_min,
 		since: options.since,
 		until: options.until,
+		time: options.time,
 		expand: options.expand === true ? true : undefined,
 		agentId: options.agentId,
 		sessionKey: options.sessionKey,
@@ -365,6 +437,11 @@ export function buildRememberRequestBody(
 		sourceId: options.sourceId,
 		sourcePath: options.sourcePath,
 		createdAt: options.createdAt,
+		occurredAt: options.occurredAt,
+		observedAt: options.observedAt,
+		validFrom: options.validFrom,
+		validUntil: options.validUntil,
+		sourceCreatedAt: options.sourceCreatedAt,
 		hints: options.hints,
 		transcript: options.transcript,
 		structured: normalizeStructuredMemoryPayload(options.structured),

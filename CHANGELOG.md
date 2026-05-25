@@ -7,7 +7,8 @@ All notable changes to Signet are documented here.
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
 ### 2026-05-25
-- Bug fixes: avoid duplicate native plugin hooks.
+- Features: tail Discord gateway events.
+- Bug fixes: patch partial Discord gateway updates; avoid duplicate native plugin hooks.
 
 ### 2026-05-24
 - Features: resume Discord history backfill; resume Discord history backfill from checkpoints; add dashboard snapshot operations; project provider artifacts into graph; add native plugin memory integration; add source operations diagnostics; add GitHub source provider; add source snapshot operations; import Discord desktop cache; add Discord source adapter.
@@ -36,6 +37,24 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Bug fixes: minimize bundle release smoke workspace; install bun in bundle release job.
 
 ## Release Ledger
+
+## [0.134.1] - 2026-05-25
+
+Release summary: 1 bug fix.
+Tag range: `bundle-0.132.0-47f125b114f64fb0eafbed3ce02857c21f2bfb3b..v0.134.1`.
+
+### Bug Fixes
+
+- **sources**: patch partial Discord gateway updates (#778)
+
+## [0.134.0] - 2026-05-25
+
+Release summary: 1 feature.
+Tag range: `v0.133.1..v0.134.0`.
+
+### Features
+
+- **sources**: tail Discord gateway events (#777)
 
 ## [0.133.1] - 2026-05-25
 
