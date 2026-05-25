@@ -157,10 +157,6 @@ interface RawTemporalRow {
 	readonly source_rank: number;
 }
 
-function pad(value: number): string {
-	return String(value).padStart(2, "0");
-}
-
 function localDayRange(year: number, month: number, day: number): { start: string; end: string } | null {
 	const start = new Date(year, month - 1, day);
 	if (start.getFullYear() !== year || start.getMonth() !== month - 1 || start.getDate() !== day) return null;
