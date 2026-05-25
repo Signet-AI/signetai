@@ -229,9 +229,10 @@ describe("getIndexHealth", () => {
 
 describe("getGraphHealth", () => {
 	test("small or empty graph state stays healthy while it is still inconclusive", () => {
-		const result = getGraphHealth(asReadDb(db));
+		const result = getGraphHealth(asReadDb(db), { graphExtractionWritesEnabled: false });
 		expect(result.status).toBe("healthy");
 		expect(result.score).toBe(1);
+		expect(result.extractionWritesEnabled).toBe(false);
 		expect(result.entityCount).toBe(0);
 		expect(result.quality).toBe("unknown");
 	});
@@ -241,8 +242,9 @@ describe("getGraphHealth", () => {
 			insertMemory(db, `mem-graph-flatline-${i}`);
 		}
 
-		const result = getGraphHealth(asReadDb(db));
+		const result = getGraphHealth(asReadDb(db), { graphExtractionWritesEnabled: false });
 		expect(result.entityCount).toBe(0);
+		expect(result.extractionWritesEnabled).toBe(false);
 		expect(result.status).toBe("degraded");
 		expect(result.score).toBeLessThan(0.8);
 	});
@@ -252,8 +254,9 @@ describe("getGraphHealth", () => {
 			insertMemory(db, `mem-graph-disabled-${i}`);
 		}
 
-		const result = getGraphHealth(asReadDb(db), { graphEnabled: false });
+		const result = getGraphHealth(asReadDb(db), { graphEnabled: false, graphExtractionWritesEnabled: false });
 		expect(result.entityCount).toBe(0);
+		expect(result.extractionWritesEnabled).toBe(false);
 		expect(result.status).toBe("healthy");
 		expect(result.score).toBe(1);
 	});
@@ -264,9 +267,12 @@ describe("getGraphHealth", () => {
 		}
 
 		const tracker = createProviderTracker();
-		const report = getDiagnostics(asReadDb(db), tracker);
+		const report = getDiagnostics(asReadDb(db), tracker, undefined, undefined, {
+			graphExtractionWritesEnabled: false,
+		});
 
 		expect(report.graph.status).toBe("degraded");
+		expect(report.graph.extractionWritesEnabled).toBe(false);
 		expect(report.composite.status).toBe("degraded");
 	});
 });

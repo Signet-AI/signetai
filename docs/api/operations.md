@@ -199,7 +199,8 @@ derived from queue, storage, index, provider, mutation, duplicate, connector,
 update, and graph health. `storage.dbSizeBytes` is computed from SQLite page
 metadata. When graph is enabled, `graph.status` is included in composite status
 so a flatlined knowledge graph cannot be hidden behind otherwise healthy
-storage and index signals.
+storage and index signals. `graph.extractionWritesEnabled` reports whether the
+background extractor is allowed to persist extracted entities into the graph.
 
 **Response** — a multi-domain report object. Domains include `queue`,
 `storage`, `index`, `provider`, `mutation`, `duplicate`, `connector`, `update`,

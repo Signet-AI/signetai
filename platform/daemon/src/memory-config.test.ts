@@ -8,6 +8,7 @@ import {
 	MIN_PROMPT_SUBMIT_EMBEDDING_TIMEOUT_MS,
 	loadMemoryConfig,
 	loadPipelineConfig,
+	shouldWarnGraphExtractionWritesDisabled,
 } from "./memory-config";
 
 const tmpDirs: string[] = [];
@@ -94,6 +95,39 @@ describe("loadMemoryConfig", () => {
 		expect(cfg.embedding.model).toBe("nomic-embed-text-v1.5");
 		expect(cfg.embedding.dimensions).toBe(768);
 		expect(cfg.embedding.promptSubmitTimeoutMs).toBe(MIN_PROMPT_SUBMIT_EMBEDDING_TIMEOUT_MS);
+	});
+
+	it("warns when graph reads are enabled but extraction writes are disabled", () => {
+		const agentsDir = makeTempAgentsDir();
+		const cfg = loadMemoryConfig(agentsDir);
+
+		expect(cfg.pipelineV2.graph.enabled).toBe(true);
+		expect(cfg.pipelineV2.graph.extractionWritesEnabled).toBe(false);
+		expect(shouldWarnGraphExtractionWritesDisabled(cfg)).toBe(true);
+	});
+
+	it("does not warn for disabled, paused, or write-enabled graph extraction states", () => {
+		const agentsDir = makeTempAgentsDir();
+		const cfg = loadMemoryConfig(agentsDir);
+
+		expect(
+			shouldWarnGraphExtractionWritesDisabled({
+				...cfg,
+				pipelineV2: { ...cfg.pipelineV2, graph: { ...cfg.pipelineV2.graph, extractionWritesEnabled: true } },
+			}),
+		).toBe(false);
+		expect(
+			shouldWarnGraphExtractionWritesDisabled({
+				...cfg,
+				pipelineV2: { ...cfg.pipelineV2, graph: { ...cfg.pipelineV2.graph, enabled: false } },
+			}),
+		).toBe(false);
+		expect(shouldWarnGraphExtractionWritesDisabled({ ...cfg, pipelineV2: { ...cfg.pipelineV2, paused: true } })).toBe(
+			false,
+		);
+		expect(shouldWarnGraphExtractionWritesDisabled({ ...cfg, pipelineV2: { ...cfg.pipelineV2, enabled: false } })).toBe(
+			false,
+		);
 	});
 
 	it("loads embedding prompt-submit timeout from agent.yaml", () => {
@@ -507,7 +541,6 @@ describe("loadPipelineConfig", () => {
 		expect(result.synthesis.model).toBe("gpt-4o-mini");
 		expect(result.synthesis.endpoint).toBe("https://gateway.example.test/v1");
 	});
-
 
 	it("accepts codex synthesis provider", () => {
 		const result = loadPipelineConfig({

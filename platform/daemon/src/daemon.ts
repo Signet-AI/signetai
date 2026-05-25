@@ -46,7 +46,7 @@ import { syncAgentWorkspaces } from "./identity-sync";
 import { type InferenceStatusSummary, getOrCreateInferenceRouter } from "./inference-router.js";
 import { closeInferenceProviderResolver, getInferenceProvider, initInferenceProviderResolver } from "./llm";
 import { logger } from "./logger";
-import { type ResolvedMemoryConfig, loadMemoryConfig } from "./memory-config";
+import { type ResolvedMemoryConfig, loadMemoryConfig, shouldWarnGraphExtractionWritesDisabled } from "./memory-config";
 import { registerGlobalMiddleware } from "./middleware";
 import { type NativeMemoryBridgeHandle, startNativeMemoryBridge } from "./native-memory-sources";
 import { DEFAULT_RETENTION, ensureRetentionWorker, setDreamingWorker, startPipeline, stopPipeline } from "./pipeline";
@@ -970,6 +970,13 @@ function syncAgentRoster(agentsDir: string): void {
 async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?: TelemetryCollector): Promise<void> {
 	const pipelinePaused = memoryCfg.pipelineV2.paused;
 	clearStructuralBackfillTimer();
+	if (shouldWarnGraphExtractionWritesDisabled(memoryCfg)) {
+		logger.warn("pipeline", "Graph extraction writes are disabled while graph reads are enabled", {
+			graphEnabled: memoryCfg.pipelineV2.graph.enabled,
+			extractionWritesEnabled: memoryCfg.pipelineV2.graph.extractionWritesEnabled,
+			hint: "Set memory.pipelineV2.graph.extractionWritesEnabled: true to persist entities extracted by the background worker.",
+		});
+	}
 	logger.info("config", "Resolved embedding config", {
 		provider: memoryCfg.embedding.provider,
 		model: memoryCfg.embedding.model,

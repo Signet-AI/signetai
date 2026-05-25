@@ -285,6 +285,11 @@ available. Background extraction only persists extracted entity triples when
 `false` so graph navigation can stay on without letting the async extractor
 author semantic graph structure.
 
+The daemon logs a startup warning when graph reads are enabled while extraction
+writes are disabled. `/api/diagnostics` also reports
+`graph.extractionWritesEnabled` and degrades graph health once enough active
+memories exist but the graph still has no entities.
+
 If extraction graph writes are explicitly enabled, they happen in a
 **separate** transaction immediately after the main write transaction commits.
 Graph persistence failure is non-fatal: it logs a warning but never reverts the

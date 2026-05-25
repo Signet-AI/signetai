@@ -396,7 +396,11 @@ export function buildOpenClawHealth(): import("../diagnostics").OpenClawHealth {
 
 export function getDiagnosticsOptions(): DiagnosticsOptions {
 	try {
-		return { graphEnabled: loadMemoryConfig(getCurrentAgentsDir()).pipelineV2.graph.enabled };
+		const graph = loadMemoryConfig(getCurrentAgentsDir()).pipelineV2.graph;
+		return {
+			graphEnabled: graph.enabled,
+			graphExtractionWritesEnabled: graph.extractionWritesEnabled,
+		};
 	} catch (err) {
 		logger.warn("diagnostics", "Failed to load graph diagnostics config; defaulting graph health to enabled", {
 			error: err instanceof Error ? err.message : String(err),

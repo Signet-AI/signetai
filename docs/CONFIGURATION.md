@@ -817,6 +817,7 @@ from extracted facts and uses them to boost search relevance.
 | Field | Default | Range | Description |
 |-------|---------|-------|-------------|
 | `enabled` | `true` | — | Enable knowledge graph building and querying |
+| `extractionWritesEnabled` | `false` | — | Persist entities and links produced by background extraction. Leave `false` to keep graph traversal/read paths enabled without letting the async extractor author graph structure. |
 | `boostWeight` | `0.15` | 0.0-1.0 | Weight applied to graph-neighbor score boost |
 | `boostTimeoutMs` | `500` | 50-5000 ms | Timeout for graph lookup during search |
 

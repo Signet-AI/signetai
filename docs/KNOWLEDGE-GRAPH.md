@@ -228,6 +228,9 @@ Background extraction graph writes are controlled by
 `memory.pipelineV2.graph.extractionWritesEnabled`, which defaults to `false`.
 Keeping graph traversal enabled does not necessarily mean the async extractor is
 allowed to author ontology structure.
+When graph reads are enabled but extraction writes remain disabled, the daemon
+emits a startup warning and `/api/diagnostics` exposes the disabled write gate
+as `graph.extractionWritesEnabled: false`.
 
 ### Ontology Operation Handlers
 

@@ -273,6 +273,15 @@ export interface ResolvedMemoryConfig {
 	auth: AuthConfig;
 }
 
+export function shouldWarnGraphExtractionWritesDisabled(cfg: ResolvedMemoryConfig): boolean {
+	return (
+		cfg.pipelineV2.enabled &&
+		!cfg.pipelineV2.paused &&
+		cfg.pipelineV2.graph.enabled &&
+		cfg.pipelineV2.graph.extractionWritesEnabled !== true
+	);
+}
+
 class MemoryConfigValidationError extends Error {}
 
 function clampPositive(raw: unknown, min: number, max: number, fallback: number): number {
@@ -564,9 +573,7 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): ResolvedPipel
 				: effectiveProvider === "command"
 					? d.synthesis.model
 					: effectiveModel;
-	const resolvedSynthesisEndpoint = synthesisProviderChangedForLock
-		? undefined
-		: requestedSynthesisEndpoint;
+	const resolvedSynthesisEndpoint = synthesisProviderChangedForLock ? undefined : requestedSynthesisEndpoint;
 	const resolvedSynthesisTimeout = clampPositive(
 		synthesisRaw?.timeout,
 		5000,
@@ -992,7 +999,6 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): ResolvedPipel
 				d.writeGate?.continuityDiscount ?? 0.15,
 			),
 		},
-
 
 		modelRegistry: {
 			enabled: resolveBool(modelRegistryRaw?.enabled, undefined, d.modelRegistry.enabled),

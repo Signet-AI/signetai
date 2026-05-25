@@ -73,6 +73,7 @@ export interface UpdateHealth extends HealthScore {
 }
 
 export interface GraphHealth extends HealthScore {
+	readonly extractionWritesEnabled: boolean | null;
 	readonly entityCount: number;
 	readonly edgeCount: number;
 	readonly communityCount: number;
@@ -110,6 +111,7 @@ export interface DiagnosticsReport {
 
 export interface DiagnosticsOptions {
 	readonly graphEnabled?: boolean;
+	readonly graphExtractionWritesEnabled?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -556,7 +558,11 @@ const BASE_WEIGHTS = {
 // Graph health
 // ---------------------------------------------------------------------------
 
-export function getGraphHealth(db: ReadDb, options?: Pick<DiagnosticsOptions, "graphEnabled">): GraphHealth {
+export function getGraphHealth(
+	db: ReadDb,
+	options?: Pick<DiagnosticsOptions, "graphEnabled" | "graphExtractionWritesEnabled">,
+): GraphHealth {
+	const extractionWritesEnabled = options?.graphExtractionWritesEnabled ?? null;
 	try {
 		const entityRow = db.prepare("SELECT COUNT(*) AS n FROM entities").get() as { n: number } | undefined;
 		const edgeRow = db.prepare("SELECT COUNT(*) AS n FROM entity_dependencies").get() as { n: number } | undefined;
@@ -591,6 +597,7 @@ export function getGraphHealth(db: ReadDb, options?: Pick<DiagnosticsOptions, "g
 		return {
 			score,
 			status: scoreStatus(score),
+			extractionWritesEnabled,
 			entityCount,
 			edgeCount,
 			communityCount,
@@ -602,6 +609,7 @@ export function getGraphHealth(db: ReadDb, options?: Pick<DiagnosticsOptions, "g
 		return {
 			score: 1,
 			status: "healthy",
+			extractionWritesEnabled,
 			entityCount: 0,
 			edgeCount: 0,
 			communityCount: 0,
@@ -626,7 +634,10 @@ export function getDiagnostics(
 	const duplicate = getDuplicateHealth(db);
 	const connector = getConnectorHealth(db);
 	const update = getUpdateHealth(updateState);
-	const graph = getGraphHealth(db, { graphEnabled: options?.graphEnabled });
+	const graph = getGraphHealth(db, {
+		graphEnabled: options?.graphEnabled,
+		graphExtractionWritesEnabled: options?.graphExtractionWritesEnabled,
+	});
 
 	const compositeScore = clamp(
 		queue.score * BASE_WEIGHTS.queue +
