@@ -723,6 +723,71 @@ describe("hybridRecall", () => {
 		expect(result.results.map((row) => row.id)).not.toContain("mem-beta-edge");
 	});
 
+	it("does not cap temporal edge candidates to result limit before topic evidence", async () => {
+		const savedAt = "2026-05-24T18:00:00.000Z";
+		getDbAccessor().withWriteTx((db) => {
+			for (let index = 0; index < 8; index += 1) {
+				const id = `mem-offtopic-limit-${index}`;
+				db.prepare(
+					`INSERT INTO memories (
+						id, content, type, agent_id, visibility, created_at, updated_at, updated_by, is_deleted
+					) VALUES (?, ?, 'fact', 'agent-a', 'global', ?, ?, 'test', 0)`,
+				).run(id, `Same-day off-topic temporal candidate ${index}.`, savedAt, savedAt);
+				db.prepare(
+					`INSERT INTO temporal_edges (
+						id, agent_id, subject_type, subject_id, facet, start_at, end_at,
+						confidence, created_at, updated_at
+					) VALUES (?, 'agent-a', 'memory', ?, 'occurred', ?, ?, 1.0, ?, ?)`,
+				).run(
+					`edge-offtopic-limit-${index}`,
+					id,
+					`2026-05-13T20:${index.toString().padStart(2, "0")}:00.000Z`,
+					`2026-05-13T20:${index.toString().padStart(2, "0")}:00.000Z`,
+					savedAt,
+					savedAt,
+				);
+			}
+			db.prepare(
+				`INSERT INTO memories (
+					id, content, type, agent_id, visibility, created_at, updated_at, updated_by, is_deleted
+				) VALUES (?, ?, 'fact', 'agent-a', 'global', ?, ?, 'test', 0)`,
+			).run(
+				"mem-relevant-limit",
+				"Relevant rollout memory should survive temporal candidate scanning.",
+				savedAt,
+				savedAt,
+			);
+			db.prepare(
+				`INSERT INTO temporal_edges (
+					id, agent_id, subject_type, subject_id, facet, start_at, end_at,
+					confidence, created_at, updated_at
+				) VALUES (?, 'agent-a', 'memory', ?, 'occurred', ?, ?, 1.0, ?, ?)`,
+			).run(
+				"edge-relevant-limit",
+				"mem-relevant-limit",
+				"2026-05-13T12:00:00.000Z",
+				"2026-05-13T12:00:00.000Z",
+				savedAt,
+				savedAt,
+			);
+		});
+
+		const result = await hybridRecall(
+			{
+				query: "2026/05/13 rollout planning migration schedule",
+				keywordQuery: "rollout planning migration schedule",
+				limit: 2,
+				agentId: "agent-a",
+				readPolicy: "isolated",
+			},
+			testCfg(),
+			async () => null,
+		);
+
+		expect(result.results.map((row) => row.id)).toContain("mem-relevant-limit");
+		expect(result.results.some((row) => row.id.startsWith("mem-offtopic-limit-"))).toBe(false);
+	});
+
 	it("honors explicit timeline mode even when query text is present", async () => {
 		getDbAccessor().withWriteTx((db) => {
 			db.prepare(

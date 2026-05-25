@@ -12,6 +12,8 @@ const DEFAULT_TEMPORAL_FACETS: readonly TemporalFacet[] = [
 ];
 const TEMPORAL_FACET_SET = new Set<string>(DEFAULT_TEMPORAL_FACETS);
 const TEMPORAL_MODES = new Set(["auto", "timeline", "filter"]);
+const TEMPORAL_FILTER_MIN_CANDIDATES = 100;
+const TEMPORAL_FILTER_LIMIT_MULTIPLIER = 20;
 
 const WEAK_TEMPORAL_TERMS = new Set([
 	"what",
@@ -318,6 +320,13 @@ function projectSql(project: string | undefined, column = "project"): { sql: str
 
 function temporalFacetAllowed(facets: readonly TemporalFacet[], facet: TemporalFacet): boolean {
 	return facets.includes(facet);
+}
+
+function temporalRowLimit(intent: ParsedTemporalIntent, resultLimit: number): number {
+	if (intent.mode === "filter" && intent.contentQuery.length > 0) {
+		return Math.max(resultLimit * TEMPORAL_FILTER_LIMIT_MULTIPLIER, TEMPORAL_FILTER_MIN_CANDIDATES);
+	}
+	return resultLimit;
 }
 
 function memoryVisibilitySql(params: TemporalRecallParams): { sql: string; args: unknown[] } {
@@ -658,6 +667,7 @@ function collectTemporalRows(intent: ParsedTemporalIntent, params: TemporalRecal
 export function resolveTemporalRecall(params: TemporalRecallParams): TemporalRecallResult {
 	const intent = parseTemporalRecallIntent({ query: params.query, time: params.time });
 	if (!intent) return {};
+	const rowLimit = temporalRowLimit(intent, params.limit);
 	const meta: RecallTemporalMeta = {
 		mode: intent.mode,
 		source: intent.source,
@@ -668,7 +678,7 @@ export function resolveTemporalRecall(params: TemporalRecallParams): TemporalRec
 		facets: intent.facets,
 	};
 
-	const rows = collectTemporalRows(intent, params)
+	const rows = collectTemporalRows(intent, { ...params, limit: rowLimit })
 		.filter(
 			(row) =>
 				intent.mode !== "filter" || row.subject_type === "memory" || textMatches(row.content, intent.contentQuery),
@@ -687,7 +697,7 @@ export function resolveTemporalRecall(params: TemporalRecallParams): TemporalRec
 		if (seen.has(key)) continue;
 		seen.add(key);
 		deduped.push(row);
-		if (deduped.length >= params.limit) break;
+		if (deduped.length >= rowLimit) break;
 	}
 
 	if (intent.mode === "filter" && intent.contentQuery.length > 0) {
@@ -697,7 +707,7 @@ export function resolveTemporalRecall(params: TemporalRecallParams): TemporalRec
 		}
 	}
 
-	const results = deduped.map(toRecallRow);
+	const results = deduped.slice(0, params.limit).map(toRecallRow);
 	return {
 		response: {
 			results,
