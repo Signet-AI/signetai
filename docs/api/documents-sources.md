@@ -254,6 +254,17 @@ folder exists. The selected cache root must be a known Discord-compatible
 application data folder. `desktopCacheFullScan` expands cache file scanning;
 the default scans LevelDB/log JSON and route-bearing Chromium cache entries.
 
+For live gateway tailing:
+
+```json
+{
+  "guildIds": ["123456789012345678"],
+  "tokenRef": "DISCORD_BOT_TOKEN",
+  "name": "Team Discord Tail",
+  "syncMode": "gateway-tail"
+}
+```
+
 **Response**
 
 ```json
@@ -271,6 +282,12 @@ channels, forums, active and archived threads, member snapshots, thread member
 snapshots, per-message artifacts, message windows, mentions, attachment
 metadata, embeds, polls, checkpoints, and partial-failure artifacts. Partial Discord listings are not
 used as authoritative deletes.
+
+The gateway-tail sync path keeps the shared source job open while it listens for
+Discord gateway events. It indexes message create/update/delete lifecycle
+events, deleted-message tombstones, channel/thread upserts, member upserts,
+member removals, and per-channel tail checkpoints. Canceling or removing the
+source closes the gateway connection.
 
 The desktop-cache sync path indexes classifiable route-bearing cached messages,
 DMs under the synthetic guild id `@me`, cache-observed channel metadata, message

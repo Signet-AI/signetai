@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { addDiscordSource } from "@signet/core";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import { DISCORD_CHANNEL_TYPES } from "./discord-source-fetch";
-import { discordSourceProvider } from "./discord-source-provider";
+import { discordSourceProvider, setDiscordGatewaySocketFactoryForTest } from "./discord-source-provider";
 import { indexExternalMemoryArtifact } from "./memory-lineage";
 import { putSecret } from "./secrets";
 import { indexSourceArtifactStructure } from "./source-artifact-graph";
@@ -28,6 +28,7 @@ describe("discord-source-provider", () => {
 
 	afterEach(() => {
 		globalThis.fetch = originalFetch;
+		setDiscordGatewaySocketFactoryForTest(null);
 		closeDbAccessor();
 		if (previousSignetPath === undefined) Reflect.deleteProperty(process.env, "SIGNET_PATH");
 		else process.env.SIGNET_PATH = previousSignetPath;
@@ -96,6 +97,52 @@ describe("discord-source-provider", () => {
 		}));
 		expect(graph.docs).toBeGreaterThan(0);
 		expect(graph.attrs).toBeGreaterThan(0);
+	});
+
+	it("tails Discord gateway events into source lifecycle artifacts", async () => {
+		let shouldContinue = true;
+		let socket: FakeDiscordGatewaySocket | null = null;
+		setDiscordGatewaySocketFactoryForTest(() => {
+			socket = new FakeDiscordGatewaySocket(() => {
+				shouldContinue = false;
+			});
+			return socket;
+		});
+		const added = addDiscordSource(
+			{
+				guildIds: ["123456789012345678"],
+				tokenRef: "DISCORD_BOT_TOKEN",
+				syncMode: "gateway-tail",
+				now: "2026-01-01T00:00:00.000Z",
+			},
+			dir,
+		);
+		expect(added.ok).toBe(true);
+		if (added.ok === false) throw new Error(added.error);
+
+		const result = await discordSourceProvider.sync?.({
+			source: added.source,
+			agentsDir: dir,
+			agentId: "default",
+			shouldContinue: () => shouldContinue,
+		});
+
+		expect(result?.failures).toEqual([]);
+		expect(socket?.sent.some((entry) => entry.includes('"op":2'))).toBe(true);
+		const rows = sourceRows(added.source.id);
+		expect(rows.map((row) => row.source_kind)).toContain("source_discord_message");
+		expect(rows.map((row) => row.source_kind)).toContain("source_discord_message_event");
+		expect(rows.map((row) => row.source_kind)).toContain("source_discord_message_tombstone");
+		expect(rows.map((row) => row.source_kind)).toContain("source_discord_channel");
+		expect(rows.map((row) => row.source_kind)).toContain("source_discord_member");
+		expect(rows.map((row) => row.source_kind)).toContain("source_discord_member_event");
+		expect(rows.map((row) => row.source_kind)).toContain("source_discord_checkpoint");
+		const deleteEvent = rows.find(
+			(row) => row.source_kind === "source_discord_message_event" && row.content.includes("delete"),
+		);
+		expect(deleteEvent?.source_meta_json).toContain('"eventType":"delete"');
+		const tombstone = rows.find((row) => row.source_kind === "source_discord_message_tombstone");
+		expect(tombstone?.source_meta_json).toContain('"deleted":true');
 	});
 
 	it("records partial Discord failures without deleting existing source-owned rows", async () => {
@@ -1090,6 +1137,84 @@ describe("discord-source-provider", () => {
 		).toBe(0);
 	});
 });
+
+class FakeDiscordGatewaySocket {
+	onopen: ((event: unknown) => void) | null = null;
+	onmessage: ((event: { readonly data: unknown }) => void) | null = null;
+	onerror: ((event: unknown) => void) | null = null;
+	onclose: ((event: { readonly code?: number; readonly reason?: string }) => void) | null = null;
+	readonly sent: string[] = [];
+	private readonly stop: () => void;
+
+	constructor(stop: () => void) {
+		this.stop = stop;
+		queueMicrotask(() => {
+			this.onopen?.({});
+			this.onmessage?.({ data: JSON.stringify({ op: 10, d: { heartbeat_interval: 1_000 } }) });
+		});
+	}
+
+	send(data: string): void {
+		this.sent.push(data);
+		if (!data.includes('"op":2')) return;
+		queueMicrotask(() => {
+			this.dispatch("CHANNEL_UPDATE", 1, {
+				id: "123456789012345679",
+				guild_id: "123456789012345678",
+				type: DISCORD_CHANNEL_TYPES.guildText,
+				name: "general",
+				topic: "tail",
+			});
+			this.dispatch("GUILD_MEMBER_UPDATE", 2, {
+				guild_id: "123456789012345678",
+				user: { id: "123456789012345681", username: "alice", global_name: "Alice" },
+				roles: ["role1"],
+				joined_at: "2026-01-01T00:00:00.000Z",
+			});
+			this.dispatch("MESSAGE_CREATE", 3, gatewayMessagePayload("999999999999999991", "hello gateway"));
+			this.dispatch("MESSAGE_UPDATE", 4, {
+				...gatewayMessagePayload("999999999999999991", "hello gateway edited"),
+				edited_timestamp: "2026-01-02T00:01:00.000Z",
+			});
+			this.dispatch("MESSAGE_DELETE", 5, {
+				id: "999999999999999991",
+				guild_id: "123456789012345678",
+				channel_id: "123456789012345679",
+			});
+			this.dispatch("GUILD_MEMBER_REMOVE", 6, {
+				guild_id: "123456789012345678",
+				user: { id: "123456789012345681", username: "alice", global_name: "Alice" },
+			});
+			this.stop();
+			this.close(1000, "test complete");
+		});
+	}
+
+	close(code?: number, reason?: string): void {
+		this.onclose?.({ code, reason });
+	}
+
+	private dispatch(type: string, sequence: number, data: Record<string, unknown>): void {
+		this.onmessage?.({ data: JSON.stringify({ op: 0, t: type, s: sequence, d: data }) });
+	}
+}
+
+function gatewayMessagePayload(id: string, content: string): Record<string, unknown> {
+	return {
+		id,
+		type: 0,
+		guild_id: "123456789012345678",
+		channel_id: "123456789012345679",
+		content,
+		author: { id: "123456789012345681", username: "alice", global_name: "Alice" },
+		timestamp: "2026-01-02T00:00:00.000Z",
+		mentions: [{ id: "123456789012345682", username: "bob", global_name: "Bob" }],
+		attachments: [{ id: "123456789012345684", filename: "context.txt", size: 42 }],
+		embeds: [{ title: "Embed title", description: "Embed body" }],
+		poll: { question: { text: "Ship it?" }, answers: [{ answer_id: 1, poll_media: { text: "yes" } }] },
+		reactions: [{ count: 2, emoji: { id: null, name: "thumbsup" } }],
+	};
+}
 
 function discordResponse(url: string): Response {
 	if (url.includes("/guilds/123456789012345678?with_counts=true")) {

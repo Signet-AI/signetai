@@ -8,6 +8,7 @@ import { resolveDaemonAgentId } from "./agent-id";
 import { getDbAccessor } from "./db-accessor";
 import { countChanges } from "./db-helpers";
 import { syncDiscordDesktopCacheSource } from "./discord-desktop-cache-source";
+import { setDiscordGatewaySocketFactoryForTest, syncDiscordGatewayTail } from "./discord-gateway-tail";
 import {
 	DISCORD_CHANNEL_TYPES,
 	type DiscordAttachment,
@@ -43,11 +44,15 @@ const DEFAULT_MAX_THREADS_PER_PARENT = 1_000;
 const DISCORD_MESSAGE_HISTORY_KINDS = [
 	"source_discord_message_window",
 	"source_discord_message",
+	"source_discord_message_tombstone",
+	"source_discord_message_event",
 	"source_discord_mention",
 	"source_discord_attachment",
 	"source_discord_embed",
 	"source_discord_poll",
 ] as const;
+
+export { setDiscordGatewaySocketFactoryForTest };
 
 export const discordSourceProvider: SourceProviderAdapter = {
 	kind: "discord",
@@ -79,18 +84,8 @@ async function syncDiscordSource(context: SourceProviderSyncContext): Promise<So
 	const fetchConfig: DiscordFetchConfig = { token };
 	const incrementalMessageChannelPaths = new Set<string>();
 
-	if (settings.syncMode !== "rest") {
-		const failure = failureState(
-			context.source,
-			`Discord sync mode '${settings.syncMode}' is configured but not implemented`,
-			{
-				syncMode: settings.syncMode,
-			},
-		);
-		failures.push(failure);
-		writeFailureArtifact(context.source, agentId, failure);
-		return { indexed: 1, scanned: 0, total, failures };
-	}
+	if (settings.syncMode === "gateway-tail")
+		return syncDiscordGatewayTailSource(context, agentId, token, settings.guildIds);
 
 	const sinceId = settings.since ? snowflakeIdForTimestamp(settings.since) : undefined;
 	for (const guildId of settings.guildIds) {
@@ -284,6 +279,94 @@ async function syncDiscordSource(context: SourceProviderSyncContext): Promise<So
 	}
 
 	return { indexed, scanned, total, failures };
+}
+
+async function syncDiscordGatewayTailSource(
+	context: SourceProviderSyncContext,
+	agentId: string,
+	token: string,
+	guildIds: readonly string[],
+): Promise<SourceProviderSyncResult> {
+	const failures: SourceFailureState[] = [];
+	let indexed = 0;
+	const total = guildIds.length;
+	const result = await syncDiscordGatewayTail({
+		source: context.source,
+		token,
+		guildIds,
+		shouldContinue: context.shouldContinue,
+		onProgress: context.onProgress,
+		recordFailure: (message, metadata, recoverable) => {
+			const failure = failureState(context.source, message, metadata, recoverable);
+			failures.push(failure);
+			writeFailureArtifact(context.source, agentId, failure);
+			indexed++;
+		},
+		recordMessage: (guildId, channelId, messageId, message, gatewayEventType, sequence, payload) => {
+			if (message) {
+				const guild = gatewayGuild(guildId);
+				const channel = gatewayChannel(guildId, channelId);
+				indexed += writeArtifact(context.source, agentId, messageArtifact(guild, channel, message));
+				if (message.mentions && message.mentions.length > 0)
+					indexed += writeArtifact(context.source, agentId, mentionArtifact(guild, channel, message));
+				for (const attachment of message.attachments ?? []) {
+					indexed += writeArtifact(context.source, agentId, attachmentArtifact(guild, channel, message, attachment));
+				}
+				for (let index = 0; index < (message.embeds ?? []).length; index++) {
+					const embed = message.embeds?.[index];
+					if (embed)
+						indexed += writeArtifact(context.source, agentId, embedArtifact(guild, channel, message, embed, index));
+				}
+				if (message.poll) indexed += writeArtifact(context.source, agentId, pollArtifact(guild, channel, message));
+			}
+			indexed += writeArtifact(
+				context.source,
+				agentId,
+				messageEventArtifact(context.source, guildId, channelId, messageId, gatewayEventType, sequence, payload),
+			);
+			if (message)
+				indexed += writeArtifact(
+					context.source,
+					agentId,
+					gatewayCheckpointArtifact(context.source, guildId, channelId, message.id, gatewayEventType),
+				);
+		},
+		recordMessageDelete: (guildId, channelId, messageId, sequence, payload) => {
+			indexed += writeArtifact(
+				context.source,
+				agentId,
+				messageTombstoneArtifact(guildId, channelId, messageId, sequence, payload),
+			);
+			indexed += writeArtifact(
+				context.source,
+				agentId,
+				messageEventArtifact(context.source, guildId, channelId, messageId, "MESSAGE_DELETE", sequence, payload),
+			);
+			indexed += writeArtifact(
+				context.source,
+				agentId,
+				gatewayCheckpointArtifact(context.source, guildId, channelId, messageId, "MESSAGE_DELETE"),
+			);
+		},
+		recordChannel: (guildId, channel) => {
+			indexed += writeArtifact(
+				context.source,
+				agentId,
+				channelArtifact(context.source, gatewayGuild(guildId), channel),
+			);
+		},
+		recordMember: (guildId, member) => {
+			indexed += writeArtifact(context.source, agentId, memberArtifact(gatewayGuild(guildId), member));
+		},
+		recordMemberRemove: (guildId, userId, sequence, payload) => {
+			indexed += writeArtifact(
+				context.source,
+				agentId,
+				memberEventArtifact(guildId, userId, "remove", sequence, payload),
+			);
+		},
+	});
+	return { indexed, scanned: result.indexedEvents, total, failures: result.canceled ? [] : failures };
 }
 
 function writeArtifact(source: SignetSourceEntry, agentId: string, artifact: DiscordArtifact): number {
@@ -821,6 +904,142 @@ function pollArtifact(guild: DiscordGuild, channel: DiscordChannel, msg: Discord
 	};
 }
 
+function messageEventArtifact(
+	source: SignetSourceEntry,
+	guildId: string,
+	channelId: string,
+	messageId: string,
+	gatewayEventType: string,
+	sequence: number | null,
+	payload: unknown,
+): DiscordArtifact {
+	const eventType = gatewayEventType.replace(/^MESSAGE_/, "").toLowerCase();
+	const eventKey = sequence === null ? hashKey(JSON.stringify(payload)) : String(sequence);
+	return {
+		kind: "source_discord_message_event",
+		externalId: `message_event:${gatewayEventType}:${messageId}:${eventKey}`,
+		path: `discord://guild/${guildId}/channel/${channelId}/message/${messageId}/event/${eventKey}`,
+		parentPath: `discord://guild/${guildId}/channel/${channelId}/messages/${messageId}`,
+		mtimeMs: Date.now(),
+		content: [
+			"# Discord Message Event",
+			"",
+			`Source: ${source.name}`,
+			`Guild: ${guildId}`,
+			`Channel: ${channelId}`,
+			`Message: ${messageId}`,
+			`Event: ${eventType}`,
+		].join("\n"),
+		meta: {
+			provider: DISCORD_PROVIDER_KIND,
+			recordType: "message_event",
+			guildId,
+			channelId,
+			messageId,
+			eventType,
+			gatewayEventType,
+			sequence,
+			payload: compactGatewayPayload(payload),
+		},
+	};
+}
+
+function messageTombstoneArtifact(
+	guildId: string,
+	channelId: string,
+	messageId: string,
+	sequence: number | null,
+	payload: unknown,
+): DiscordArtifact {
+	return {
+		kind: "source_discord_message_tombstone",
+		externalId: `message_tombstone:${messageId}`,
+		path: `discord://guild/${guildId}/channel/${channelId}/messages/${messageId}/deleted`,
+		parentPath: `discord://guild/${guildId}/channel/${channelId}/messages/${messageId}`,
+		mtimeMs: Date.now(),
+		content: [
+			"# Discord Deleted Message",
+			"",
+			`Guild: ${guildId}`,
+			`Channel: ${channelId}`,
+			`Message: ${messageId}`,
+			"Deleted: true",
+		].join("\n"),
+		meta: {
+			provider: DISCORD_PROVIDER_KIND,
+			recordType: "message_tombstone",
+			guildId,
+			channelId,
+			messageId,
+			deleted: true,
+			sequence,
+			payload: compactGatewayPayload(payload),
+		},
+	};
+}
+
+function memberEventArtifact(
+	guildId: string,
+	userId: string,
+	eventType: "remove",
+	sequence: number | null,
+	payload: unknown,
+): DiscordArtifact {
+	return {
+		kind: "source_discord_member_event",
+		externalId: `member_event:${guildId}:${userId}:${eventType}:${sequence ?? hashKey(JSON.stringify(payload))}`,
+		path: `discord://guild/${guildId}/member/${userId}/event/${sequence ?? "unknown"}`,
+		parentPath: `discord://guild/${guildId}/member/${userId}`,
+		mtimeMs: Date.now(),
+		content: ["# Discord Member Event", "", `Guild: ${guildId}`, `User: ${userId}`, `Event: ${eventType}`].join("\n"),
+		meta: {
+			provider: DISCORD_PROVIDER_KIND,
+			recordType: "member_event",
+			guildId,
+			userId,
+			eventType,
+			sequence,
+			payload: compactGatewayPayload(payload),
+		},
+	};
+}
+
+function gatewayCheckpointArtifact(
+	source: SignetSourceEntry,
+	guildId: string,
+	channelId: string,
+	messageId: string,
+	gatewayEventType: string,
+): DiscordArtifact {
+	return {
+		kind: "source_discord_checkpoint",
+		externalId: `checkpoint:gateway:${guildId}:${channelId}`,
+		path: `discord://source/${source.id}/checkpoint/gateway/${guildId}/${channelId}`,
+		parentPath: `discord://guild/${guildId}/channel/${channelId}`,
+		mtimeMs: Date.now(),
+		content: [
+			"# Discord Gateway Checkpoint",
+			"",
+			`Guild: ${guildId}`,
+			`Channel: ${channelId}`,
+			`Latest event: ${gatewayEventType}`,
+			`Latest cursor: ${messageId}`,
+		].join("\n"),
+		meta: {
+			provider: DISCORD_PROVIDER_KIND,
+			recordType: "checkpoint",
+			syncMode: "gateway-tail",
+			guildId,
+			channelId,
+			status: "tailing",
+			latestCursor: messageId,
+			backfillCursor: null,
+			backfillComplete: false,
+			gatewayEventType,
+		},
+	};
+}
+
 function checkpointArtifact(
 	source: SignetSourceEntry,
 	guild: DiscordGuild,
@@ -895,6 +1114,33 @@ function parseDiscordSnowflake(value: string): bigint | null {
 	} catch {
 		return null;
 	}
+}
+
+function gatewayGuild(guildId: string): DiscordGuild {
+	return { id: guildId, name: guildId };
+}
+
+function gatewayChannel(guildId: string, channelId: string): DiscordChannel {
+	return { id: channelId, guild_id: guildId, type: DISCORD_CHANNEL_TYPES.guildText, name: channelId };
+}
+
+function compactGatewayPayload(payload: unknown): unknown {
+	if (!isRecord(payload)) return payload;
+	const compact: Record<string, unknown> = {};
+	for (const key of [
+		"id",
+		"guild_id",
+		"channel_id",
+		"type",
+		"timestamp",
+		"edited_timestamp",
+		"author",
+		"user",
+		"message_reference",
+	]) {
+		if (key in payload) compact[key] = payload[key];
+	}
+	return compact;
 }
 
 function failureState(

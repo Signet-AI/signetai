@@ -47,11 +47,11 @@ signet sources remove discord:...
 
 The daemon rejects raw Discord tokens in source config. Store the bot token in Signet Secrets or an external secret reference, then pass the secret name with `--token-ref`.
 
-The dashboard Sources tab exposes both modes. Open Discord, choose Connect,
-then select Bot REST for guild indexing or Desktop cache for local cache import.
-Desktop cache mode can use the platform default Discord Desktop data folder or
-a picked folder path, and Signet queues the shared source index job in the
-background.
+The dashboard Sources tab exposes all Discord modes. Open Discord, choose
+Connect, then select Bot REST for bounded guild indexing, Gateway tail for live
+incremental events, or Desktop cache for local cache import. Desktop cache mode
+can use the platform default Discord Desktop data folder or a picked folder
+path, and Signet queues the shared source index job in the background.
 
 The REST sync path indexes:
 
@@ -75,6 +75,13 @@ messages without a bot token or user-token automation:
 Desktop cache imports are cache-observed, not authoritative. Cache eviction or
 missing local files do not delete previously indexed cache artifacts; removing
 the source still purges all Signet-owned rows for that source.
+
+Gateway tail mode keeps a bot gateway connection open through the shared source
+job lifecycle. It identifies with guild, guild member, guild message, message
+reaction, and message content intents, then indexes gateway-observed message
+creates, message updates, message deletes, channel/thread upserts, member
+upserts, member removals, and per-channel tail checkpoints as Signet source
+artifacts. Removing or canceling the source closes the gateway connection.
 
 Partial Discord listings are never treated as authoritative deletes. If a channel, thread, member, or message fetch fails, Signet records a source failure artifact and preserves existing source-owned rows until a successful sync can refresh them.
 
@@ -281,8 +288,8 @@ The desktop shell uses native folder selection through IPC. The daemon picker ro
 Limitations in v1
 -----------------
 
-- Discord gateway tailing is represented in config but not active yet. Supported
-  Discord sync modes are REST and local desktop cache import.
+- Discord gateway tailing depends on a bot token with the required gateway
+  intents and keeps a source job open while it is connected.
 - Sources are local/operator-managed. Permissions and RBAC are intentionally out of scope for v1.
 - Signet does not write back to Obsidian or Discord.
 - Rename handling is delete + add.

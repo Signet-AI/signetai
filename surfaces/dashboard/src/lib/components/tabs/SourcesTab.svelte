@@ -119,7 +119,7 @@ let excludeGlobsText = $state("**/.obsidian/**\n**/.trash/**\n**/.hermes/**\n**/
 // biome-ignore lint/style/useConst: Svelte bind:value mutates this rune from markup.
 let discordName = $state("Discord");
 // biome-ignore lint/style/useConst: Svelte bind:value mutates this rune from markup.
-let discordSyncMode = $state<"rest" | "desktop-cache">("rest");
+let discordSyncMode = $state<"rest" | "gateway-tail" | "desktop-cache">("rest");
 let discordGuildIdsText = $state("");
 let discordTokenRef = $state("");
 let discordDesktopCachePath = $state("");
@@ -1343,6 +1343,7 @@ function sourceIndexCurrentPath(source: SignetSourceEntry): string {
 												<span>Mode</span>
 												<select bind:value={discordSyncMode}>
 													<option value="rest">Bot REST</option>
+													<option value="gateway-tail">Gateway tail</option>
 													<option value="desktop-cache">Desktop cache</option>
 												</select>
 											</label>
