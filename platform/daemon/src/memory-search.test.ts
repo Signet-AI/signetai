@@ -383,6 +383,18 @@ describe("hybridRecall", () => {
 				"2026-05-14T01:00:00.000Z",
 				Date.parse("2026-05-13T18:30:00.000Z"),
 			);
+			db.prepare(
+				`INSERT INTO session_transcripts (
+					session_key, content, harness, project, agent_id, created_at, updated_at
+				) VALUES (?, ?, 'codex', ?, ?, ?, ?)`,
+			).run(
+				"sess-raw-may-13",
+				"Raw transcript text must stay on session search.",
+				"/repo",
+				"agent-a",
+				"2026-05-13T18:15:00.000Z",
+				"2026-05-13T18:45:00.000Z",
+			);
 		});
 
 		const result = await hybridRecall(
@@ -401,6 +413,7 @@ describe("hybridRecall", () => {
 		expect(result.results[0]?.subject_type).toBe("session_summary");
 		expect(result.results[0]?.temporal_facet).toBe("session");
 		expect(result.results[0]?.content).toContain("temporal recall");
+		expect(JSON.stringify(result)).not.toContain("Raw transcript text");
 		expect(result.results.some((row) => row.source_path === "/repo/notes/temporal.md")).toBe(true);
 	});
 

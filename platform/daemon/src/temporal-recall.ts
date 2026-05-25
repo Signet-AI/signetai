@@ -10,6 +10,8 @@ const DEFAULT_TEMPORAL_FACETS: readonly TemporalFacet[] = [
 	"valid",
 	"captured",
 ];
+const TEMPORAL_FACET_SET = new Set<string>(DEFAULT_TEMPORAL_FACETS);
+const TEMPORAL_MODES = new Set(["auto", "timeline", "filter"]);
 
 const WEAK_TEMPORAL_TERMS = new Set([
 	"what",
@@ -218,6 +220,37 @@ function parseTimeRange(time: TemporalTimeOptions | undefined): { start: string;
 	return { start: startDate.toISOString(), end: endDate.toISOString() };
 }
 
+export function validateTemporalTimeOptions(time: unknown): string | null {
+	if (time === undefined) return null;
+	if (typeof time !== "object" || time === null || Array.isArray(time)) return "time must be an object";
+	const options = time as Record<string, unknown>;
+	if (typeof options.start !== "string" || options.start.trim().length === 0) {
+		return "time.start is required when time is provided";
+	}
+	const startDate = new Date(options.start);
+	if (Number.isNaN(startDate.getTime())) return "time.start must be a valid ISO timestamp";
+	if (options.end !== undefined) {
+		if (typeof options.end !== "string" || options.end.trim().length === 0) {
+			return "time.end must be a valid ISO timestamp";
+		}
+		const endDate = new Date(options.end);
+		if (Number.isNaN(endDate.getTime())) return "time.end must be a valid ISO timestamp";
+		if (endDate.getTime() <= startDate.getTime()) return "time.end must be after time.start";
+	}
+	if (options.facets !== undefined) {
+		if (!Array.isArray(options.facets)) return "time.facets must be an array";
+		for (const facet of options.facets) {
+			if (typeof facet !== "string" || !TEMPORAL_FACET_SET.has(facet)) {
+				return "time.facets entries must be one of: session, source, captured, observed, occurred, valid";
+			}
+		}
+	}
+	if (options.mode !== undefined && (typeof options.mode !== "string" || !TEMPORAL_MODES.has(options.mode))) {
+		return "time.mode must be one of: auto, timeline, filter";
+	}
+	return null;
+}
+
 export function parseTemporalRecallIntent(params: {
 	readonly query: string;
 	readonly time?: TemporalTimeOptions;
@@ -374,50 +407,6 @@ function collectTemporalRows(intent: ParsedTemporalIntent, params: TemporalRecal
 					subject_type: "session_summary",
 					subject_id: row.id,
 					source_rank: 1,
-				});
-			}
-		}
-
-		if (temporalFacetAllowed(intent.facets, "session") && tableExists(db, "session_transcripts")) {
-			const updatedExpr = columnExists(db, "session_transcripts", "updated_at")
-				? "COALESCE(updated_at, created_at)"
-				: "created_at";
-			const project = projectSql(params.project, "project");
-			const transcriptRows = db
-				.prepare(
-					`SELECT session_key, content, harness, project, created_at, ${updatedExpr} AS end_at
-					 FROM session_transcripts
-					 WHERE agent_id = ?
-					   AND ${overlapClause("created_at", updatedExpr)}${project.sql}
-					 ORDER BY end_at DESC
-					 LIMIT ?`,
-				)
-				.all(agentId, intent.end, intent.start, ...project.args, params.limit * 4) as Array<{
-				session_key: string;
-				content: string;
-				harness: string | null;
-				project: string | null;
-				created_at: string;
-				end_at: string;
-			}>;
-			for (const row of transcriptRows) {
-				rows.push({
-					id: row.session_key,
-					content: row.content,
-					project: row.project,
-					created_at: row.created_at,
-					session_id: row.session_key,
-					type: "transcript",
-					who: row.harness ?? "session",
-					importance: 0.65,
-					pinned: false,
-					tags: "temporal,transcript",
-					facet: "session",
-					start_at: row.created_at,
-					end_at: row.end_at,
-					subject_type: "session_transcript",
-					subject_id: row.session_key,
-					source_rank: 0.9,
 				});
 			}
 		}

@@ -24,7 +24,7 @@ import { recordPathFeedback } from "../path-feedback";
 import { enqueueDocumentIngestJob } from "../pipeline";
 import { parseFeedback, recordAgentFeedback } from "../session-memories";
 import { upsertSessionTranscript } from "../session-transcripts";
-import { createTemporalEdgeId, normalizeTemporalTimestamp } from "../temporal-recall";
+import { createTemporalEdgeId, normalizeTemporalTimestamp, validateTemporalTimeOptions } from "../temporal-recall";
 import { txForgetMemory, txIngestEnvelope, txModifyMemory, txRecoverMemory } from "../transactions";
 import { cacheProjection, computeProjection, computeProjectionForQuery, getCachedProjection } from "../umap-projection";
 import {
@@ -2524,6 +2524,8 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		if (aggregateBudgetInput !== undefined && aggregateBudget === null) {
 			return c.json({ error: "Invalid aggregateBudget. Expected one of: small, medium, large." }, 400);
 		}
+		const temporalTimeError = validateTemporalTimeOptions(body.time);
+		if (temporalTimeError) return c.json({ error: temporalTimeError }, 400);
 
 		const aggregateSaveRequested =
 			body.aggregate === true && body.saveAggregate !== false && body.save_aggregate !== false;
