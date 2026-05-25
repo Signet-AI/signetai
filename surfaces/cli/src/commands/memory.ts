@@ -40,6 +40,11 @@ export function registerMemoryCommands(program: Command, deps: MemoryDeps): void
 		.option("--critical", "Mark as critical (pinned)", false)
 		.option("--agent <name>", "Agent ID to associate with this memory")
 		.option("--hint <hint>", "Prospective recall hint (repeatable)", collectHint)
+		.option("--occurred-at <iso>", "Event time this memory is about")
+		.option("--observed-at <iso>", "Observation time this memory records")
+		.option("--source-created-at <iso>", "Source-system creation time for this memory")
+		.option("--valid-from <iso>", "Start of validity window for this memory")
+		.option("--valid-until <iso>", "End of validity window for this memory")
 		.option("--private", "Set visibility to private", false)
 		.action(async (content: string, options) => {
 			if (!(await deps.ensureDaemonForSecrets())) return;
@@ -55,6 +60,11 @@ export function registerMemoryCommands(program: Command, deps: MemoryDeps): void
 					pinned: options.critical,
 					agentId: options.agent,
 					hints: options.hint,
+					occurredAt: options.occurredAt,
+					observedAt: options.observedAt,
+					sourceCreatedAt: options.sourceCreatedAt,
+					validFrom: options.validFrom,
+					validUntil: options.validUntil,
 					visibility: options.private ? "private" : undefined,
 				}),
 			);
@@ -91,6 +101,10 @@ export function registerMemoryCommands(program: Command, deps: MemoryDeps): void
 		.option("--who <who>", "Filter by who")
 		.option("--since <date>", "Only memories created after this date (ISO or YYYY-MM-DD)")
 		.option("--until <date>", "Only memories created before this date (ISO or YYYY-MM-DD)")
+		.option("--time-start <iso>", "Temporal recall lower bound")
+		.option("--time-end <iso>", "Temporal recall upper bound")
+		.option("--time-facets <facets>", "Temporal facets to search (comma-separated)")
+		.option("--time-mode <mode>", "Temporal mode: auto, timeline, or filter", "auto")
 		.option("--keyword-query <query>", "Override the keyword/FTS query used for recall")
 		.option("--pinned", "Only return pinned memories", false)
 		.option("--importance-min <n>", "Only return memories at or above this importance", Number.parseFloat)
@@ -122,6 +136,17 @@ export function registerMemoryCommands(program: Command, deps: MemoryDeps): void
 					importance_min: options.importanceMin,
 					since: options.since,
 					until: options.until,
+					time: options.timeStart
+						? {
+								start: options.timeStart,
+								end: options.timeEnd,
+								facets:
+									typeof options.timeFacets === "string"
+										? options.timeFacets.split(",").map((s: string) => s.trim())
+										: undefined,
+								mode: options.timeMode,
+							}
+						: undefined,
 					agentId: options.agent,
 					aggregate: aggregateRequested,
 					aggregateBudget: aggregateRequested ? options.aggregateBudget : undefined,

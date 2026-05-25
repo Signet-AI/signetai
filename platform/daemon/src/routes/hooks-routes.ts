@@ -562,6 +562,7 @@ function registerRecall(app: Hono): void {
 				who: body.who,
 				since: body.since,
 				until: body.until,
+				time: body.time,
 				expand: body.expand,
 				agentId,
 				readPolicy: agentScope.readPolicy,

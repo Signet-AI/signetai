@@ -798,6 +798,15 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 				who: z.string().optional().describe("Filter by author"),
 				since: z.string().optional().describe("Only include memories created after this date"),
 				until: z.string().optional().describe("Only include memories created before this date"),
+				time: z
+					.object({
+						start: z.string().optional(),
+						end: z.string().optional(),
+						facets: z.array(z.enum(["captured", "session", "source", "observed", "occurred", "valid"])).optional(),
+						mode: z.enum(["auto", "timeline", "filter"]).optional(),
+					})
+					.optional()
+					.describe("Temporal recall range/facet options for date and timeline queries"),
 				keyword_query: z.string().optional().describe("Override the keyword/FTS query used for recall"),
 				pinned: z.boolean().optional().describe("Only return pinned memories"),
 				importance_min: z.number().optional().describe("Minimum memory importance threshold"),
@@ -826,6 +835,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			importance_min,
 			since,
 			until,
+			time,
 			min_score,
 			score_min,
 			aggregate,
@@ -848,6 +858,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 					importance_min: importance_min ?? min_score,
 					since,
 					until,
+					time,
 					aggregate,
 					aggregate_budget,
 					save_aggregate,
@@ -881,6 +892,15 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 				who: z.string().optional().describe("Filter by author"),
 				since: z.string().optional().describe("Only include memories created after this date"),
 				until: z.string().optional().describe("Only include memories created before this date"),
+				time: z
+					.object({
+						start: z.string().optional(),
+						end: z.string().optional(),
+						facets: z.array(z.enum(["captured", "session", "source", "observed", "occurred", "valid"])).optional(),
+						mode: z.enum(["auto", "timeline", "filter"]).optional(),
+					})
+					.optional()
+					.describe("Temporal recall range/facet options for date and timeline queries"),
 				keyword_query: z.string().optional().describe("Override the keyword/FTS query used for recall"),
 				score_min: z.number().optional().describe("Minimum recall score threshold (client-side)"),
 				aggregate: z.boolean().optional().describe("Synthesize an aggregate answer from bounded recall evidence"),
@@ -901,6 +921,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			who,
 			since,
 			until,
+			time,
 			score_min,
 			aggregate,
 			aggregate_budget,
@@ -920,6 +941,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 					who,
 					since,
 					until,
+					time,
 					aggregate,
 					aggregate_budget,
 					save_aggregate,
@@ -993,6 +1015,11 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 					.string()
 					.optional()
 					.describe("Source ISO timestamp for imported/older memories; used for currentness and supersession."),
+				occurredAt: z.string().optional().describe("Event time this memory is about"),
+				observedAt: z.string().optional().describe("Observation time this memory records"),
+				sourceCreatedAt: z.string().optional().describe("Source-system creation time for this memory"),
+				validFrom: z.string().optional().describe("Start of validity window for this memory"),
+				validUntil: z.string().optional().describe("End of validity window for this memory"),
 				transcript: z
 					.string()
 					.optional()
@@ -1057,7 +1084,22 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			}),
 			annotations: { readOnlyHint: false },
 		},
-		async ({ content, type, importance, tags, hints, transcript, structured, pinned, createdAt }) => {
+		async ({
+			content,
+			type,
+			importance,
+			tags,
+			hints,
+			transcript,
+			structured,
+			pinned,
+			createdAt,
+			occurredAt,
+			observedAt,
+			sourceCreatedAt,
+			validFrom,
+			validUntil,
+		}) => {
 			const result = await daemonFetch<unknown>(baseUrl, "/api/memory/remember", {
 				method: "POST",
 				body: buildRememberRequestBody(content, {
@@ -1069,6 +1111,11 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 					structured,
 					pinned,
 					createdAt,
+					occurredAt,
+					observedAt,
+					sourceCreatedAt,
+					validFrom,
+					validUntil,
 				}),
 			});
 

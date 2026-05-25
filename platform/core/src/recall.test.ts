@@ -63,6 +63,27 @@ describe("recall surface helpers", () => {
 		});
 	});
 
+	it("forwards temporal recall request options", () => {
+		expect(
+			buildRecallRequestBody("2026/05/13", {
+				time: {
+					start: "2026-05-13T00:00:00.000Z",
+					end: "2026-05-14T00:00:00.000Z",
+					facets: ["session", "occurred"],
+					mode: "timeline",
+				},
+			}),
+		).toEqual({
+			query: "2026/05/13",
+			time: {
+				start: "2026-05-13T00:00:00.000Z",
+				end: "2026-05-14T00:00:00.000Z",
+				facets: ["session", "occurred"],
+				mode: "timeline",
+			},
+		});
+	});
+
 	it("preserves dedupe metadata when client-side score filtering rewrites counts", () => {
 		const result = applyRecallScoreThreshold(
 			{
@@ -125,6 +146,8 @@ describe("recall surface helpers", () => {
 		const body = buildRememberRequestBody("Remember this", {
 			tags: ["graph", "parity"],
 			sourcePath: "/tmp/source.md",
+			occurredAt: "2026-05-13T18:00:00.000Z",
+			sourceCreatedAt: "2026-05-13T17:00:00.000Z",
 			runtimePath: "memory/source.md",
 			idempotencyKey: "stable-import-key",
 			structured: {
@@ -143,6 +166,8 @@ describe("recall surface helpers", () => {
 
 		expect(body.tags).toBe("graph,parity");
 		expect(body.sourcePath).toBe("/tmp/source.md");
+		expect(body.occurredAt).toBe("2026-05-13T18:00:00.000Z");
+		expect(body.sourceCreatedAt).toBe("2026-05-13T17:00:00.000Z");
 		expect(body.runtimePath).toBe("memory/source.md");
 		expect(body.idempotencyKey).toBe("stable-import-key");
 		expect(body.structured).toEqual({

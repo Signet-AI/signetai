@@ -15,13 +15,15 @@
 import { createHash } from "node:crypto";
 import {
 	LEGACY_OBSIDIAN_CHUNK_SOURCE_TYPE,
-	SOURCE_CHUNK_SOURCE_TYPE,
 	type LlmUsage,
+	type RecallTemporalMeta,
+	SOURCE_CHUNK_SOURCE_TYPE,
 	vectorSearch,
 } from "@signet/core";
 import { getDbAccessor } from "./db-accessor";
 import { getLlmProvider } from "./llm";
 import { logger } from "./logger";
+import { buildAgentScopeClause } from "./memory-access-scope";
 import type { EmbeddingConfig, MemorySearchConfig, ResolvedMemoryConfig } from "./memory-config";
 import { NATIVE_MEMORY_BRIDGE_SOURCE_NODE_ID } from "./native-memory-constants";
 import { constructContextBlocks } from "./pipeline/context-construction";
@@ -40,6 +42,7 @@ import {
 import { findStructuredPathCandidates, scoreStructuredPathEvidence } from "./pipeline/structured-path-evidence";
 import { type RecallDedupeMeta, applyRecallDedupe } from "./session-recall-dedupe";
 import { escapeLike } from "./sql-utils";
+import { type TemporalTimeOptions, resolveTemporalRecall } from "./temporal-recall";
 
 // ---------------------------------------------------------------------------
 // Public interfaces
@@ -66,6 +69,7 @@ export interface RecallParams {
 	importance_min?: number;
 	since?: string;
 	until?: string;
+	time?: TemporalTimeOptions;
 	scope?: string | null;
 	expand?: boolean;
 	/** When set, restricts results to memories belonging to this project (auth scope enforcement). */
@@ -117,6 +121,7 @@ export interface RecallResponse {
 		hasSupplementary: boolean;
 		noHits: boolean;
 		timings: RecallTimings;
+		temporal?: RecallTemporalMeta;
 		dedupe?: RecallDedupeMeta;
 	};
 	aggregate?: {
@@ -210,33 +215,7 @@ function createRecallTimingCollector(): {
 	};
 }
 
-// ---------------------------------------------------------------------------
-// Agent scope clause (exported for testing)
-// ---------------------------------------------------------------------------
-
-export function buildAgentScopeClause(
-	agentId: string,
-	readPolicy: string,
-	policyGroup: string | null,
-): { sql: string; args: unknown[] } {
-	if (readPolicy === "shared") {
-		return {
-			sql: " AND (m.visibility = 'global' OR m.agent_id = ?) AND m.visibility != 'archived'",
-			args: [agentId],
-		};
-	}
-	if (readPolicy === "group" && policyGroup) {
-		return {
-			sql: " AND ((m.visibility = 'global' AND m.agent_id IN (SELECT id FROM agents WHERE policy_group = ?)) OR m.agent_id = ?) AND m.visibility != 'archived'",
-			args: [policyGroup, agentId],
-		};
-	}
-	// 'isolated', 'group' without policyGroup, or unknown — own memories only
-	return {
-		sql: " AND m.agent_id = ? AND m.visibility != 'archived'",
-		args: [agentId],
-	};
-}
+export { buildAgentScopeClause } from "./memory-access-scope";
 
 // ---------------------------------------------------------------------------
 // Filter clause builder (private)
@@ -1014,9 +993,7 @@ export async function hybridRecall(
 	cfg: ResolvedMemoryConfig,
 	embedFn: EmbedFn,
 ): Promise<RecallResponse> {
-	const query = params.query;
-	const expandedQuery = expandRecallKeywordQuery(params.query);
-	const keywordQuery = sanitizeFtsQuery((params.keywordQuery ?? expandedQuery).trim());
+	let query = params.query;
 	const limit = normalizeRecallLimit(params.limit);
 	const alpha = cfg.search.alpha;
 	const minScore = cfg.search.min_score;
@@ -1108,6 +1085,27 @@ export async function hybridRecall(
 			},
 		};
 	};
+
+	const temporal = resolveTemporalRecall({
+		query,
+		time: params.time,
+		limit,
+		agentId: params.agentId,
+		readPolicy: params.readPolicy,
+		policyGroup: params.policyGroup,
+		project: params.project,
+		sessionKey: params.sessionKey,
+	});
+	if (temporal.response) {
+		return await finish(temporal.response);
+	}
+	if (temporal.adjustedQuery) {
+		query = temporal.adjustedQuery;
+	}
+	const temporalCandidateSet = new Set(temporal.candidateIds ?? []);
+
+	const expandedQuery = expandRecallKeywordQuery(query);
+	const keywordQuery = sanitizeFtsQuery((params.keywordQuery ?? expandedQuery).trim());
 	const queryVecPromise = (() => {
 		const embeddingStart = performance.now();
 		let promise: Promise<number[] | null>;
@@ -1298,7 +1296,13 @@ export async function hybridRecall(
 	}
 
 	// --- Flat search: merge BM25 + vector + structured path candidate scores ---
-	const allIds = new Set([...bm25Map.keys(), ...hintMap.keys(), ...vectorMap.keys(), ...structuredCandidateMap.keys()]);
+	const allIds = new Set([
+		...bm25Map.keys(),
+		...hintMap.keys(),
+		...vectorMap.keys(),
+		...structuredCandidateMap.keys(),
+		...temporalCandidateSet,
+	]);
 	const flatScored: Array<{ id: string; score: number; source: string }> = [];
 
 	timings.time("flat_score_merge", () => {
@@ -1307,6 +1311,7 @@ export async function hybridRecall(
 			const hint = hintMap.get(id) ?? 0;
 			const vec = vectorMap.get(id) ?? 0;
 			const structured = structuredCandidateMap.get(id) ?? 0;
+			const temporalScore = temporalCandidateSet.has(id) ? 0.85 : 0;
 			let score: number;
 			let source: string;
 
@@ -1319,6 +1324,9 @@ export async function hybridRecall(
 			} else if (bm25 > 0) {
 				score = bm25;
 				source = "keyword";
+			} else if (temporalScore > 0) {
+				score = temporalScore;
+				source = "temporal";
 			} else {
 				score = structured;
 				source = "structured";
@@ -1331,6 +1339,10 @@ export async function hybridRecall(
 			if (structured > 0 && structured >= score) {
 				score = structured;
 				source = bm25 > 0 || vec > 0 || hint > 0 ? "sec" : "structured";
+			}
+			if (temporalScore > 0 && temporalScore >= score) {
+				score = temporalScore;
+				source = bm25 > 0 || vec > 0 || hint > 0 || structured > 0 ? "temporal_hybrid" : "temporal";
 			}
 
 			if (score >= minScore) flatScored.push({ id, score, source });
@@ -1893,6 +1905,9 @@ export async function hybridRecall(
 	}
 
 	timings.time("final_rank", () => {
+		if (temporalCandidateSet.size > 0) {
+			scored = scored.filter((row) => temporalCandidateSet.has(row.id));
+		}
 		for (const row of scored) {
 			const hasDirectEvidence =
 				(bm25Map.get(row.id) ?? 0) > 0 ||
@@ -2453,6 +2468,7 @@ export async function hybridRecall(
 			totalReturned: results.length,
 			hasSupplementary: results.some((row) => row.supplementary === true),
 			noHits: results.length === 0,
+			...(temporal.meta ? { temporal: temporal.meta } : {}),
 		},
 		entities: entityContext && entityContext.length > 0 ? entityContext : undefined,
 	});

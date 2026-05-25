@@ -348,6 +348,144 @@ describe("hybridRecall", () => {
 		expect(result.meta.noHits).toBe(true);
 	});
 
+	it("returns a timeline for date-only recall from session summaries", async () => {
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO session_summaries (
+					id, project, depth, kind, content, earliest_at, latest_at, session_key, harness, agent_id, created_at
+				) VALUES (?, ?, 0, 'session', ?, ?, ?, ?, 'codex', ?, ?)`,
+			).run(
+				"summary-may-13",
+				"/repo",
+				"We worked on temporal recall and source-backed date lookup.",
+				"2026-05-13T18:00:00.000Z",
+				"2026-05-13T19:00:00.000Z",
+				"sess-may-13",
+				"agent-a",
+				"2026-05-13T19:00:00.000Z",
+			);
+			db.prepare(
+				`INSERT INTO memory_artifacts (
+					agent_id, source_path, source_sha256, source_kind, session_id, session_token,
+					project, harness, captured_at, content, updated_at, source_mtime_ms
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			).run(
+				"agent-a",
+				"/repo/notes/temporal.md",
+				"sha-temporal",
+				"obsidian",
+				"sess-may-13",
+				"token-may-13",
+				"/repo",
+				"codex",
+				"2026-05-14T01:00:00.000Z",
+				"Source file changed while working on exact date recall.",
+				"2026-05-14T01:00:00.000Z",
+				Date.parse("2026-05-13T18:30:00.000Z"),
+			);
+		});
+
+		const result = await hybridRecall(
+			{
+				query: "2026/05/13",
+				limit: 5,
+				agentId: "agent-a",
+				readPolicy: "isolated",
+			},
+			testCfg(),
+			async () => null,
+		);
+
+		expect(result.meta.temporal?.mode).toBe("timeline");
+		expect(result.results).toHaveLength(2);
+		expect(result.results[0]?.subject_type).toBe("session_summary");
+		expect(result.results[0]?.temporal_facet).toBe("session");
+		expect(result.results[0]?.content).toContain("temporal recall");
+		expect(result.results.some((row) => row.source_path === "/repo/notes/temporal.md")).toBe(true);
+	});
+
+	it("uses explicit occurred temporal edges for date plus topic recall", async () => {
+		const savedAt = "2026-05-24T18:00:00.000Z";
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO memories (
+					id, content, type, agent_id, visibility, created_at, updated_at, updated_by, is_deleted
+				) VALUES (?, ?, 'fact', ?, 'global', ?, ?, 'test', 0)`,
+			).run("mem-temporal", "Signet recall should support exact date queries", "agent-a", savedAt, savedAt);
+			db.prepare(
+				`INSERT INTO memories (
+					id, content, type, agent_id, visibility, created_at, updated_at, updated_by, is_deleted
+				) VALUES (?, ?, 'fact', ?, 'global', ?, ?, 'test', 0)`,
+			).run("mem-later", "Signet recall unrelated saved later", "agent-a", savedAt, savedAt);
+			db.prepare(
+				`INSERT INTO temporal_edges (
+					id, agent_id, subject_type, subject_id, facet, start_at, end_at,
+					confidence, created_at, updated_at
+				) VALUES (?, ?, 'memory', ?, 'occurred', ?, ?, 1.0, ?, ?)`,
+			).run(
+				"edge-temporal",
+				"agent-a",
+				"mem-temporal",
+				"2026-05-13T18:00:00.000Z",
+				"2026-05-13T18:00:00.000Z",
+				savedAt,
+				savedAt,
+			);
+		});
+
+		const result = await hybridRecall(
+			{
+				query: "2026/05/13 Signet recall",
+				keywordQuery: "Signet recall",
+				limit: 5,
+				agentId: "agent-a",
+				readPolicy: "isolated",
+			},
+			testCfg(),
+			async () => null,
+		);
+
+		expect(result.meta.temporal?.mode).toBe("filter");
+		expect(result.results.map((row) => row.id)).toContain("mem-temporal");
+		expect(result.results.map((row) => row.id)).not.toContain("mem-later");
+	});
+
+	it("keeps explicit temporal edge recall behind memory visibility rules", async () => {
+		const savedAt = "2026-05-24T18:00:00.000Z";
+		getDbAccessor().withWriteTx((db) => {
+			for (const [id, visibility] of [
+				["mem-temporal-visible", "global"],
+				["mem-temporal-archived", "archived"],
+			] as const) {
+				db.prepare(
+					`INSERT INTO memories (
+						id, content, type, agent_id, visibility, created_at, updated_at, updated_by, is_deleted
+					) VALUES (?, ?, 'fact', ?, ?, ?, ?, 'test', 0)`,
+				).run(id, "Hidden temporal recall project marker", "agent-a", visibility, savedAt, savedAt);
+				db.prepare(
+					`INSERT INTO temporal_edges (
+						id, agent_id, subject_type, subject_id, facet, start_at, end_at,
+						confidence, created_at, updated_at
+					) VALUES (?, ?, 'memory', ?, 'occurred', ?, ?, 1.0, ?, ?)`,
+				).run(`edge-${id}`, "agent-a", id, "2026-05-13T18:00:00.000Z", "2026-05-13T18:00:00.000Z", savedAt, savedAt);
+			}
+		});
+
+		const result = await hybridRecall(
+			{
+				query: "2026/05/13 Hidden temporal recall",
+				keywordQuery: "Hidden temporal recall",
+				limit: 5,
+				agentId: "agent-a",
+				readPolicy: "isolated",
+			},
+			testCfg(),
+			async () => null,
+		);
+
+		expect(result.results.map((row) => row.id)).toEqual(["mem-temporal-visible"]);
+	});
+
 	it("drops ambiguous source chunk vector matches for project-scoped recall", async () => {
 		const now = new Date().toISOString();
 		const vec = unitVector();

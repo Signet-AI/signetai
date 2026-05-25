@@ -175,6 +175,12 @@ export class SignetClientP2 {
 		readonly who?: string;
 		readonly since?: string;
 		readonly until?: string;
+		readonly time?: {
+			readonly start?: string;
+			readonly end?: string;
+			readonly facets?: readonly string[];
+			readonly mode?: "auto" | "timeline" | "filter";
+		};
 		readonly expand?: boolean;
 		readonly sessionKey?: string;
 		readonly agentId?: string;
@@ -197,6 +203,12 @@ export class SignetClientP2 {
 		readonly who?: string;
 		readonly since?: string;
 		readonly until?: string;
+		readonly time?: {
+			readonly start?: string;
+			readonly end?: string;
+			readonly facets?: readonly string[];
+			readonly mode?: "auto" | "timeline" | "filter";
+		};
 		readonly expand?: boolean;
 		readonly sessionKey?: string;
 		readonly agentId?: string;

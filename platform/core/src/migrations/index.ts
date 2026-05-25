@@ -81,6 +81,7 @@ import { up as agentScopedIdempotencyKey } from "./072-agent-scoped-idempotency-
 import { up as recallContextDedupe } from "./073-recall-context-dedupe";
 import { up as aggregateMemoryLinks } from "./074-aggregate-memory-links";
 import { up as memoryArtifactSourceProvenance } from "./075-memory-artifact-source-provenance";
+import { up as temporalEdges } from "./076-temporal-edges";
 
 // -- Public interface consumed by Database.init() --
 
@@ -715,6 +716,14 @@ export const MIGRATIONS: readonly Migration[] = [
 				{ table: "memory_artifacts", column: "source_parent_path" },
 				{ table: "memory_artifacts", column: "source_meta_json" },
 			],
+		},
+	},
+	{
+		version: 76,
+		name: "temporal-edges",
+		up: temporalEdges,
+		artifacts: {
+			tables: ["temporal_edges"],
 		},
 	},
 ];

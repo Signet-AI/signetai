@@ -82,6 +82,11 @@ Body-level fields override prefix-parsed values.
   "runtimePath": "memory/MEMORY.md",
   "idempotencyKey": "stable-import-key",
   "createdAt": "2026-02-21T10:00:00.000Z",
+  "occurredAt": "2026-02-20T15:00:00.000Z",
+  "observedAt": "2026-02-21T09:55:00.000Z",
+  "sourceCreatedAt": "2026-02-20T15:05:00.000Z",
+  "validFrom": "2026-02-20T00:00:00.000Z",
+  "validUntil": "2026-03-01T00:00:00.000Z",
   "agentId": "alice",
   "visibility": "global"
 }
@@ -98,6 +103,12 @@ Only `content` is required. Multi-agent fields:
 memory is sourced from an older conversation or imported artifact so structured
 currentness and supersession can compare facts by source time instead of ingest
 time.
+
+`occurredAt`, `observedAt`, `sourceCreatedAt`, and `validFrom`/`validUntil`
+attach explicit temporal edges to the memory without duplicating the memory
+content. Use them when the memory is saved later than the event, observation,
+source creation time, or validity window it describes. Each value must be a
+valid ISO timestamp; `validUntil` must be after `validFrom` when both are set.
 
 Row-level provenance fields are optional: `sourcePath`/`source_path` stores the
 original source path, `runtimePath`/`runtime_path` stores the runtime-relative
@@ -147,6 +158,34 @@ record — no duplicate is created.
 
 Alias for `POST /api/memory/remember`. Accepts the same request body and
 returns the same response. Requires `remember` permission.
+
+### POST /api/memory/codex-native-note
+
+Write an explicit Codex native memory note under the local Codex memory
+extension path. Requires `remember` permission and respects the
+`mutationsFrozen` kill switch.
+
+**Request body**
+
+```json
+{
+  "content": "Small scoped note to preserve",
+  "title": "Optional title",
+  "tags": "codex,note"
+}
+```
+
+`content` is required and capped at 8000 characters. `title` and `tags` are
+optional strings.
+
+**Response**
+
+```json
+{
+  "ok": true,
+  "path": "/home/user/.codex/memories/extensions/ad_hoc/notes/..."
+}
+```
 
 ### POST /api/hook/remember
 
@@ -532,6 +571,12 @@ permission. For the full execution model, see [Hybrid Recall](../MEMORY.md#hybri
   "pinned": false,
   "importance_min": 0.5,
   "since": "2026-01-01T00:00:00Z",
+  "time": {
+    "start": "2026-05-13T00:00:00.000Z",
+    "end": "2026-05-14T00:00:00.000Z",
+    "facets": ["session", "occurred", "source", "captured"],
+    "mode": "auto"
+  },
   "aggregate": false,
   "aggregateBudget": "small",
   "saveAggregate": true,
@@ -542,6 +587,15 @@ permission. For the full execution model, see [Hybrid Recall](../MEMORY.md#hybri
 ```
 
 Only `query` is required.
+
+Exact date phrases in `query`, such as `2026/05/13`, `2026-05-13`, or
+`May 13 2026`, activate temporal recall automatically. A date-only query
+returns a timeline assembled from existing session, source, captured-memory,
+and explicit temporal-edge metadata. A date plus topic uses the date as a
+filter and the remaining words as the content query. Callers can also pass a
+`time` object directly. Supported temporal facets are `session`, `source`,
+`captured`, `observed`, `occurred`, and `valid`; `mode` may be `auto`,
+`timeline`, or `filter`.
 
 When `sessionKey` is present, recall uses a daemon-owned context ledger keyed by
 `(sessionKey, agentId, contextEpoch)`. Rows returned once in the current epoch
@@ -567,6 +621,11 @@ to return repeats; repeated rows are annotated with
       "who": "claude-code",
       "project": null,
       "created_at": "2026-02-21T10:00:00.000Z",
+      "temporal_facet": "occurred",
+      "temporal_start_at": "2026-02-20T15:00:00.000Z",
+      "temporal_end_at": "2026-02-20T15:00:00.000Z",
+      "subject_type": "memory",
+      "subject_id": "uuid",
       "supplementary": false,
       "already_recalled": false
     }
@@ -590,6 +649,15 @@ to return repeats; repeated rows are annotated with
       "contextEpoch": 0,
       "suppressed": 0,
       "repeatedReturned": 0
+    },
+    "temporal": {
+      "mode": "filter",
+      "source": "query",
+      "originalQuery": "2026/05/13 editor",
+      "contentQuery": "editor",
+      "start": "2026-05-13T06:00:00.000Z",
+      "end": "2026-05-14T06:00:00.000Z",
+      "facets": ["session", "source", "occurred", "observed", "valid", "captured"]
     }
   }
 }
@@ -609,6 +677,8 @@ normally but found no matching results.
 milliseconds. Aggregate recall fills the same field with aggregate-specific
 stages such as `aggregate_planning`, `aggregate_followup_recalls`, and
 `aggregate_synthesis`.
+`meta.temporal`, when present, describes the resolved temporal window, facets,
+and content query used by automatic date parsing or an explicit `time` request.
 When session dedupe is enabled, `meta.dedupe.suppressed` counts rows omitted
 because they were already recalled in the current epoch, and
 `meta.dedupe.repeatedReturned` counts repeated rows returned only because the
@@ -715,6 +785,7 @@ to the recall endpoint. Requires `recall` permission.
 | `pinned`       | `1` or `true` to filter       |
 | `importance_min` | Minimum importance float    |
 | `since`        | ISO timestamp lower bound     |
+| `until`        | ISO timestamp upper bound     |
 | `sessionKey` / `session_key` | Session key for context dedupe |
 | `includeRecalled` / `include_recalled` | `1` or `true` to return repeats |
 

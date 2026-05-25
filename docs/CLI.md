@@ -558,6 +558,7 @@ an embedding provider is configured.
 signet remember "User prefers dark mode"
 signet remember "critical: never push to main" --critical
 signet remember "deploy runs on Friday" --tags devops,deploy --who user
+signet remember "deploy incident started before it was written down" --occurred-at 2026-05-13T18:00:00Z
 ```
 
 Options:
@@ -568,6 +569,11 @@ Options:
 | `-t, --tags <tags>` | Comma-separated tags |
 | `-i, --importance <n>` | Importance score, 0-1 (default: 0.7) |
 | `--critical` | Mark as critical/pinned |
+| `--occurred-at <iso>` | Event time this memory is about |
+| `--observed-at <iso>` | Observation time this memory records |
+| `--source-created-at <iso>` | Source-system creation time for this memory |
+| `--valid-from <iso>` | Start of validity window for this memory |
+| `--valid-until <iso>` | End of validity window for this memory |
 
 Output:
 
@@ -589,6 +595,8 @@ signet recall "release notes" --project /home/user/myapp
 signet recall "deploy process" --limit 5 --type decision
 signet recall "auth" --tags backend --who claude-code --since 2026-01-01
 signet recall "deploy checklist" --keyword-query "deploy OR rollback" --min-score 0.8
+signet recall "2026/05/13"
+signet recall "temporal recall" --time-start 2026-05-13T00:00:00Z --time-end 2026-05-14T00:00:00Z
 signet recall "project history" --aggregate --aggregate-budget small
 signet recall "secrets" --json
 ```
@@ -609,6 +617,14 @@ Common refinements:
 | `--who <who>` | Filter by author |
 | `--since <date>` | Only include memories created after this date |
 | `--until <date>` | Only include memories created before this date |
+| `--time-start <iso>` | Temporal recall lower bound |
+| `--time-end <iso>` | Temporal recall upper bound |
+| `--time-facets <facets>` | Temporal facets to search: `session`, `source`, `captured`, `observed`, `occurred`, `valid` |
+| `--time-mode <mode>` | Temporal mode: `auto`, `timeline`, or `filter` |
+
+Exact date queries such as `2026/05/13`, `2026-05-13`, and `May 13 2026`
+activate temporal recall automatically. Date-only queries return a timeline;
+date plus topic filters recall to matching temporal rows.
 
 Advanced controls:
 

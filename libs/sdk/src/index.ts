@@ -129,6 +129,11 @@ export class SignetClient extends SignetClientHelpers {
 			readonly sourceType?: string;
 			readonly sourceId?: string;
 			readonly sourcePath?: string;
+			readonly occurredAt?: string;
+			readonly observedAt?: string;
+			readonly sourceCreatedAt?: string;
+			readonly validFrom?: string;
+			readonly validUntil?: string;
 			readonly mode?: "auto" | "sync" | "async";
 			readonly idempotencyKey?: string;
 			readonly runtimePath?: string;
@@ -153,6 +158,12 @@ export class SignetClient extends SignetClientHelpers {
 			readonly importance_min?: number;
 			readonly since?: string;
 			readonly until?: string;
+			readonly time?: {
+				readonly start?: string;
+				readonly end?: string;
+				readonly facets?: readonly string[];
+				readonly mode?: "auto" | "timeline" | "filter";
+			};
 			readonly minScore?: number;
 			readonly expand?: boolean;
 			readonly agentId?: string;
