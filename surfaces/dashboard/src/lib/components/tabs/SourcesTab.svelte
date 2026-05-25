@@ -176,6 +176,8 @@ let touchedPath = $state(false);
 let touchedDiscord = $state(false);
 let touchedGithub = $state(false);
 let expandedKind = $state<SourceKind | null>(null);
+// biome-ignore lint/style/useConst: Svelte event handlers mutate this rune from markup.
+let selectedDiscordSourceId = $state<string | null>(null);
 let sourceRefreshTimer: ReturnType<typeof setInterval> | null = null;
 
 const connectors: SourceConnector[] = [
@@ -512,6 +514,9 @@ const obsidianSources = $derived(sources.filter((source) => source.kind === "obs
 const discordSources = $derived(sources.filter((source) => source.kind === "discord"));
 const githubSources = $derived(sources.filter((source) => source.kind === "github"));
 const connectedSourceList = $derived([...obsidianSources, ...discordSources, ...githubSources]);
+const selectedDiscordSource = $derived(
+	discordSources.find((source) => source.id === selectedDiscordSourceId) ?? discordSources[0] ?? null,
+);
 const connectedCount = $derived(connectedSourceList.length);
 const indexedCount = $derived(
 	connectedSourceList.filter((source) => source.lastIndexedAt || (source.stats?.indexed ?? 0) > 0).length,
@@ -869,6 +874,18 @@ function formatDate(value: string | undefined): string {
 	return date.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
+function formatOptionalDate(value: string | null | undefined): string {
+	return value ? formatDate(value) : "No rows yet";
+}
+
+function formatDateOnly(value: string | null | undefined, empty: string): string {
+	if (!value) return empty;
+	const isoDate = value.match(/^(\d{4})-(\d{2})-(\d{2})/);
+	const date = isoDate ? new Date(Number(isoDate[1]), Number(isoDate[2]) - 1, Number(isoDate[3])) : new Date(value);
+	if (Number.isNaN(date.getTime())) return value;
+	return date.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+}
+
 function parseExcludeGlobs(value: string): string[] {
 	return parseListInput(value);
 }
@@ -939,6 +956,63 @@ function sourceIndexCurrentPath(source: SignetSourceEntry): string {
 	const currentPath = source.indexJob?.currentPath;
 	if (!currentPath) return "";
 	return currentPath.startsWith(`${source.root}/`) ? currentPath.slice(source.root.length + 1) : currentPath;
+}
+
+function sourceSettingString(source: SignetSourceEntry, key: string): string | null {
+	const value = source.providerSettings?.[key];
+	return typeof value === "string" && value.trim().length > 0 ? value : null;
+}
+
+function sourceSettingNumber(source: SignetSourceEntry, key: string): number | null {
+	const value = source.providerSettings?.[key];
+	return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function sourceSettingBoolean(source: SignetSourceEntry, key: string): boolean | null {
+	const value = source.providerSettings?.[key];
+	return typeof value === "boolean" ? value : null;
+}
+
+function sourceSettingStringList(source: SignetSourceEntry, key: string): string[] {
+	const value = source.providerSettings?.[key];
+	return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : [];
+}
+
+function discordModeLabel(source: SignetSourceEntry): string {
+	const mode = sourceSettingString(source, "syncMode") ?? "rest";
+	if (mode === "gateway-tail") return "Gateway tail";
+	if (mode === "desktop-cache") return "Desktop cache";
+	return "Bot REST";
+}
+
+function compactSettingValue(value: string): string {
+	if (/^\d{17,20}$/.test(value)) return `${value.slice(0, 6)}...${value.slice(-4)}`;
+	return value;
+}
+
+function compactListLabel(items: readonly string[], empty: string): string {
+	if (items.length === 0) return empty;
+	const labels = items.map(compactSettingValue);
+	if (labels.length <= 2) return labels.join(", ");
+	return `${labels.slice(0, 2).join(", ")} +${labels.length - 2}`;
+}
+
+function discordGuildLabel(source: SignetSourceEntry): string {
+	if (sourceSettingString(source, "syncMode") === "desktop-cache") return "Local desktop cache";
+	const guildIds = sourceSettingStringList(source, "guildIds");
+	if (guildIds.length === 0) return "No guilds configured";
+	if (guildIds.length === 1) return compactSettingValue(guildIds[0] ?? "");
+	return `${guildIds.length} guilds`;
+}
+
+function discordAttachmentTextLabel(source: SignetSourceEntry): string {
+	if (sourceSettingBoolean(source, "includeAttachmentText") !== true) return "Off";
+	const maxBytes = sourceSettingNumber(source, "maxAttachmentTextBytes");
+	return maxBytes ? `On · ${maxBytes.toLocaleString()} bytes` : "On";
+}
+
+function discordYesNo(source: SignetSourceEntry, key: string, defaultValue = true): string {
+	return (sourceSettingBoolean(source, key) ?? defaultValue) ? "On" : "Off";
 }
 </script>
 
@@ -1171,6 +1245,234 @@ function sourceIndexCurrentPath(source: SignetSourceEntry): string {
 				</div>
 				<div class="map-counts"><span>{connectedCount} connected</span><span>{indexedCount} indexed</span></div>
 			</section>
+
+			{#if discordSources.length > 0 && selectedDiscordSource}
+				{@const source = selectedDiscordSource}
+				<section class="discord-operations" aria-label="Discord source operations">
+					<header class="discord-operations__header">
+						<div>
+							<span class="section-label">Discord operations</span>
+							<p>Monitor bot REST, gateway tailing, and desktop-cache Discord sources without leaving source management.</p>
+						</div>
+						<button class="discord-operations__refresh" type="button" disabled={loading} onclick={() => void refreshSources()}>
+							<RefreshCw />
+							Refresh
+						</button>
+					</header>
+
+					{#if discordSources.length > 1}
+						<div class="discord-source-switcher" role="tablist" aria-label="Discord sources">
+							{#each discordSources as option (option.id)}
+								<button
+									type="button"
+									role="tab"
+									aria-selected={option.id === source.id}
+									class:active={option.id === source.id}
+									onclick={() => (selectedDiscordSourceId = option.id)}
+								>
+									<span>{option.name}</span>
+									<small>{discordModeLabel(option)}</small>
+								</button>
+							{/each}
+						</div>
+					{/if}
+
+					<div class="discord-detail">
+						<div class="discord-panel">
+							<div class="discord-panel__head">
+								<div>
+									<strong>{source.name}</strong>
+									<code>{source.root}</code>
+								</div>
+								<span class={`source-health-pill source-health-pill--${sourceHealthTone(source)}`}>
+									{sourceHealthLabel(source)}
+								</span>
+							</div>
+
+							<div class="discord-metrics" aria-label="Discord indexed coverage">
+								<div class="discord-metric">
+									<span>Artifacts</span>
+									<strong>{(source.stats?.artifacts ?? 0).toLocaleString()}</strong>
+								</div>
+								<div class="discord-metric">
+									<span>Chunks</span>
+									<strong>{(source.stats?.chunks ?? 0).toLocaleString()}</strong>
+								</div>
+								<div class="discord-metric">
+									<span>Indexed</span>
+									<strong>{(source.stats?.indexed ?? 0).toLocaleString()}</strong>
+								</div>
+								<div class="discord-metric">
+									<span>Graph rows</span>
+									<strong>{(source.health?.semantic.total ?? 0).toLocaleString()}</strong>
+								</div>
+							</div>
+
+							{#if source.indexJob?.status === "queued" || source.indexJob?.status === "running"}
+								<div class="source-index-progress">
+									<div class="source-index-progress__head">
+										<span>{source.indexJob.status === "queued" ? "Queued" : "Indexing"}</span>
+										<strong>{sourceIndexPercent(source)}%</strong>
+									</div>
+									<div
+										class="source-index-progress__bar"
+										role="progressbar"
+										aria-valuemin="0"
+										aria-valuemax="100"
+										aria-valuenow={sourceIndexPercent(source)}
+										aria-label={`Indexing ${source.name}`}
+									>
+										<span style={`width: ${sourceIndexPercent(source)}%`}></span>
+									</div>
+									{#if sourceIndexCurrentPath(source)}
+										<code class="source-index-progress__path">{sourceIndexCurrentPath(source)}</code>
+									{/if}
+								</div>
+							{/if}
+
+							<div class="discord-settings-grid" aria-label="Discord source settings">
+								<div class="discord-setting">
+									<span>Mode</span>
+									<strong>{discordModeLabel(source)}</strong>
+								</div>
+								<div class="discord-setting">
+									<span>Guilds</span>
+									<strong>{discordGuildLabel(source)}</strong>
+								</div>
+								<div class="discord-setting">
+									<span>Channels</span>
+									<strong>{compactListLabel(sourceSettingStringList(source, "channelFilter"), "All visible channels")}</strong>
+								</div>
+								<div class="discord-setting">
+									<span>Message cap</span>
+									<strong>{sourceSettingNumber(source, "maxMessagesPerChannel")?.toLocaleString() ?? "Default"}</strong>
+								</div>
+								<div class="discord-setting">
+									<span>Since</span>
+									<strong>{formatDateOnly(sourceSettingString(source, "since"), "No lower bound")}</strong>
+								</div>
+								<div class="discord-setting">
+									<span>Members</span>
+									<strong>{discordYesNo(source, "includeMembers")}</strong>
+								</div>
+								<div class="discord-setting">
+									<span>Threads</span>
+									<strong>{discordYesNo(source, "includeThreads")}</strong>
+								</div>
+								<div class="discord-setting">
+									<span>Archived</span>
+									<strong>{discordYesNo(source, "includeArchivedThreads")}</strong>
+								</div>
+								<div class="discord-setting">
+									<span>Private archived</span>
+									<strong>{discordYesNo(source, "includePrivateArchivedThreads", false)}</strong>
+								</div>
+								<div class="discord-setting">
+									<span>Thread members</span>
+									<strong>{discordYesNo(source, "includeThreadMembers")}</strong>
+								</div>
+								<div class="discord-setting">
+									<span>Attachments</span>
+									<strong>{discordYesNo(source, "includeAttachments")}</strong>
+								</div>
+								<div class="discord-setting">
+									<span>Attachment text</span>
+									<strong>{discordAttachmentTextLabel(source)}</strong>
+								</div>
+								<div class="discord-setting">
+									<span>Embeds</span>
+									<strong>{discordYesNo(source, "includeEmbeds")}</strong>
+								</div>
+								<div class="discord-setting">
+									<span>Polls</span>
+									<strong>{discordYesNo(source, "includePolls")}</strong>
+								</div>
+							</div>
+						</div>
+
+						<div class="discord-panel discord-panel--status">
+							<div class="discord-health-grid" aria-label="Discord source health">
+								<div>
+									<span>Latest artifact</span>
+									<strong>{formatOptionalDate(source.health?.latestArtifactAt)}</strong>
+								</div>
+								<div>
+									<span>Latest checkpoint</span>
+									<strong>{formatOptionalDate(source.health?.latestCheckpointAt)}</strong>
+								</div>
+								<div>
+									<span>Checkpoints</span>
+									<strong>{(source.health?.checkpoints.total ?? 0).toLocaleString()}</strong>
+								</div>
+								<div>
+									<span>Partial / stale</span>
+									<strong>{source.health?.checkpoints.partial ?? 0} / {source.health?.checkpoints.stale ?? 0}</strong>
+								</div>
+								<div>
+									<span>Fetch failures</span>
+									<strong>{source.health?.failures.recoverable ?? 0} recoverable / {source.health?.failures.total ?? 0} total</strong>
+								</div>
+								<div>
+									<span>Chunk coverage</span>
+									<strong>{Math.round((source.health?.chunkCoverage ?? 0) * 100)}%</strong>
+								</div>
+								<div>
+									<span>Purge residue</span>
+									<strong>{source.health?.purge.deletedArtifacts ?? 0} deleted / {source.health?.purge.orphanChunks ?? 0} orphan chunks</strong>
+								</div>
+								<div>
+									<span>Enabled</span>
+									<strong>{source.enabled ? "Yes" : "No"}</strong>
+								</div>
+							</div>
+
+							<div class="discord-actions">
+								<div class="source-ops">
+									<div class="source-ops__buttons">
+										<button
+											class="source-action-button"
+											type="button"
+											disabled={snapshotBusySourceId === source.id}
+											onclick={() => void exportSnapshot(source)}
+										>
+											{#if snapshotBusySourceId === source.id}<span class="spin"><RefreshCw /></span>{:else}<Download />{/if}
+											Export snapshot
+										</button>
+										<label class="source-action-button" class:source-action-button--disabled={snapshotBusySourceId === source.id}>
+											{#if snapshotBusySourceId === source.id}<span class="spin"><RefreshCw /></span>{:else}<Upload />{/if}
+											Import snapshot
+											<input
+												class="snapshot-file-input"
+												type="file"
+												accept="application/json,.json"
+												disabled={snapshotBusySourceId === source.id}
+												onchange={(event) => void importSnapshotFile(source, event)}
+											/>
+										</label>
+									</div>
+									<label class="source-option-row source-option-row--compact">
+										<input
+											checked={snapshotIncludesLocalDiscord(source.id)}
+											type="checkbox"
+											onchange={(event) => setSnapshotIncludesLocalDiscord(source.id, event.currentTarget.checked)}
+										/>
+										<span>Include local Discord cache</span>
+									</label>
+								</div>
+								<button
+									class="disconnect-button"
+									type="button"
+									disabled={removingSourceId === source.id}
+									onclick={() => void disconnectSource(source)}
+								>
+									{#if removingSourceId === source.id}<span class="spin"><RefreshCw /></span>{:else}<X />{/if}
+									{removingSourceId === source.id ? "Removing" : "Disconnect Discord"}
+								</button>
+							</div>
+						</div>
+					</div>
+				</section>
+			{/if}
 
 			<section id="featured-sources" class="featured-panel" aria-label="Featured sources">
 				<header class="section-label">Featured sources</header>
@@ -2071,6 +2373,253 @@ function sourceIndexCurrentPath(source: SignetSourceEntry): string {
 		box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04), 0 2px 4px rgba(0, 0, 0, 0.3);
 	}
 
+	.discord-operations {
+		display: grid;
+		gap: 10px;
+		margin-top: 10px;
+		border: 1px solid var(--sig-border-strong);
+		border-radius: 0;
+		background: var(--sig-surface);
+		padding: 10px;
+		box-shadow: inset 2px 0 0 rgba(88, 101, 242, 0.42), 0 2px 4px rgba(0, 0, 0, 0.3);
+	}
+
+	.discord-operations__header {
+		display: flex;
+		align-items: flex-start;
+		justify-content: space-between;
+		gap: 14px;
+	}
+
+	.discord-operations__header .section-label {
+		padding: 0 0 4px;
+	}
+
+	.discord-operations__header p {
+		font-size: 11px;
+		line-height: 1.45;
+		color: var(--sig-text-muted);
+	}
+
+	.discord-operations__refresh {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		gap: 6px;
+		height: 28px;
+		border: 1px solid var(--sig-border-strong);
+		border-radius: 0;
+		background: var(--sig-surface-raised);
+		padding: 0 10px;
+		color: var(--sig-text);
+		font: 10px var(--font-mono);
+		text-transform: uppercase;
+		letter-spacing: 0.08em;
+		cursor: pointer;
+	}
+
+	.discord-operations__refresh:hover:not(:disabled) {
+		border-color: var(--sig-accent);
+		color: var(--sig-text-bright);
+	}
+
+	.discord-operations__refresh:disabled {
+		cursor: wait;
+		opacity: 0.62;
+	}
+
+	.discord-operations__refresh :global(svg) {
+		width: 13px;
+		height: 13px;
+	}
+
+	.discord-source-switcher {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+		border: 1px solid var(--sig-border);
+	}
+
+	.discord-source-switcher button {
+		display: grid;
+		gap: 2px;
+		border: 0;
+		border-right: 1px solid var(--sig-border);
+		background: transparent;
+		padding: 8px 10px;
+		text-align: left;
+		color: var(--sig-text);
+		cursor: pointer;
+	}
+
+	.discord-source-switcher button:last-child {
+		border-right: 0;
+	}
+
+	.discord-source-switcher button.active,
+	.discord-source-switcher button:hover {
+		background: var(--sig-surface-raised);
+	}
+
+	.discord-source-switcher span {
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		font-size: 11px;
+		color: var(--sig-text-bright);
+	}
+
+	.discord-source-switcher small {
+		font: 9px var(--font-mono);
+		text-transform: uppercase;
+		letter-spacing: 0.08em;
+		color: var(--sig-text-muted);
+	}
+
+	.discord-detail {
+		display: grid;
+		grid-template-columns: minmax(0, 1.45fr) minmax(230px, 0.8fr);
+		gap: 10px;
+	}
+
+	.discord-panel {
+		display: grid;
+		align-content: start;
+		gap: 10px;
+		border: 1px solid var(--sig-border);
+		border-radius: 0;
+		background: var(--sig-surface-raised);
+		padding: 10px;
+		min-width: 0;
+	}
+
+	.discord-panel--status {
+		background: rgba(255, 255, 255, 0.02);
+	}
+
+	.discord-panel__head {
+		display: flex;
+		align-items: flex-start;
+		justify-content: space-between;
+		gap: 10px;
+		min-width: 0;
+	}
+
+	.discord-panel__head strong {
+		display: block;
+		margin-bottom: 4px;
+		font-size: 13px;
+		color: var(--sig-text-bright);
+	}
+
+	.discord-panel__head code {
+		display: block;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		font-size: 10px;
+		color: var(--sig-text-muted);
+	}
+
+	.source-health-pill {
+		display: inline-flex;
+		max-width: 220px;
+		border: 1px solid var(--sig-border);
+		padding: 3px 6px;
+		font: 9px/1.35 var(--font-mono);
+		text-transform: uppercase;
+		letter-spacing: 0.08em;
+		color: var(--sig-text-muted);
+	}
+
+	.source-health-pill--healthy {
+		border-color: rgba(34, 197, 94, 0.45);
+		color: var(--sig-success);
+		background: rgba(34, 197, 94, 0.08);
+	}
+
+	.source-health-pill--degraded {
+		border-color: rgba(245, 158, 11, 0.42);
+		color: #d9b862;
+		background: rgba(245, 158, 11, 0.08);
+	}
+
+	.source-health-pill--unhealthy {
+		border-color: rgba(239, 68, 68, 0.42);
+		color: #fca5a5;
+		background: rgba(239, 68, 68, 0.08);
+	}
+
+	.discord-metrics {
+		display: grid;
+		grid-template-columns: repeat(4, minmax(0, 1fr));
+		border: 1px solid var(--sig-border);
+	}
+
+	.discord-metric {
+		display: grid;
+		gap: 5px;
+		border-right: 1px solid var(--sig-border);
+		padding: 8px;
+	}
+
+	.discord-metric:last-child {
+		border-right: 0;
+	}
+
+	.discord-metric span,
+	.discord-setting span,
+	.discord-health-grid span {
+		font: 9px var(--font-mono);
+		letter-spacing: 0.08em;
+		text-transform: uppercase;
+		color: var(--sig-text-muted);
+	}
+
+	.discord-metric strong {
+		font: 16px/1 var(--font-display);
+		color: var(--sig-text-bright);
+	}
+
+	.discord-settings-grid,
+	.discord-health-grid {
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 1px;
+		background: var(--sig-border);
+		border: 1px solid var(--sig-border);
+	}
+
+	.discord-setting,
+	.discord-health-grid div {
+		display: grid;
+		gap: 5px;
+		min-width: 0;
+		background: var(--sig-surface);
+		padding: 8px;
+	}
+
+	.discord-setting strong,
+	.discord-health-grid strong {
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		font: 11px/1.35 var(--font-body);
+		font-weight: 600;
+		color: var(--sig-text-bright);
+	}
+
+	.discord-health-grid strong {
+		overflow: visible;
+		text-overflow: clip;
+		white-space: normal;
+		word-break: break-word;
+	}
+
+	.discord-actions {
+		display: grid;
+		gap: 8px;
+	}
+
 	.section-label {
 		display: block;
 		padding: 7px 0 4px;
@@ -2753,8 +3302,19 @@ function sourceIndexCurrentPath(source: SignetSourceEntry): string {
 	}
 
 	.source-option-row--compact {
+		display: inline-grid;
+		grid-template-columns: 14px minmax(0, 1fr);
+		align-items: center;
+		gap: 8px;
 		font-size: 10px;
 		color: var(--sig-text-muted);
+	}
+
+	.source-option-row--compact input {
+		width: 14px;
+		height: 14px;
+		margin: 0;
+		accent-color: var(--sig-accent);
 	}
 
 	.disconnect-button {
@@ -2799,7 +3359,8 @@ function sourceIndexCurrentPath(source: SignetSourceEntry): string {
 
 	:global([data-theme="light"]) .detail-panel,
 	:global([data-theme="light"]) .featured-panel,
-	:global([data-theme="light"]) .connected-panel {
+	:global([data-theme="light"]) .connected-panel,
+	:global([data-theme="light"]) .discord-operations {
 		background: var(--sig-surface);
 		border-color: var(--sig-border);
 		box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7), 0 1px 3px rgba(0, 0, 0, 0.08);
@@ -2813,13 +3374,18 @@ function sourceIndexCurrentPath(source: SignetSourceEntry): string {
 	:global([data-theme="light"]) .connector-row,
 	:global([data-theme="light"]) .connected-list,
 	:global([data-theme="light"]) .connected-loading,
-	:global([data-theme="light"]) .connected-row {
+	:global([data-theme="light"]) .connected-row,
+	:global([data-theme="light"]) .discord-panel,
+	:global([data-theme="light"]) .discord-setting,
+	:global([data-theme="light"]) .discord-health-grid div {
 		background: var(--sig-surface);
 	}
 
 	:global([data-theme="light"]) .connector-row:hover,
 	:global([data-theme="light"]) .connector-row.selected,
-	:global([data-theme="light"]) .connected-row {
+	:global([data-theme="light"]) .connected-row,
+	:global([data-theme="light"]) .discord-source-switcher button.active,
+	:global([data-theme="light"]) .discord-source-switcher button:hover {
 		background: var(--sig-surface-raised);
 	}
 
@@ -2840,8 +3406,38 @@ function sourceIndexCurrentPath(source: SignetSourceEntry): string {
 
 		.source-toolbar,
 		.connector-grid,
-		.connected-row {
+		.connected-row,
+		.discord-detail,
+		.discord-metrics,
+		.discord-settings-grid,
+		.discord-health-grid {
 			grid-template-columns: 1fr;
+		}
+
+		.discord-operations__header,
+		.discord-panel__head {
+			display: grid;
+		}
+
+		.discord-operations__refresh,
+		.source-health-pill {
+			width: 100%;
+			max-width: none;
+		}
+
+		.discord-source-switcher {
+			grid-template-columns: 1fr;
+		}
+
+		.discord-source-switcher button,
+		.discord-metric {
+			border-right: 0;
+			border-bottom: 1px solid var(--sig-border);
+		}
+
+		.discord-source-switcher button:last-child,
+		.discord-metric:last-child {
+			border-bottom: 0;
 		}
 
 		.filter-tabs {
