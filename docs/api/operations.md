@@ -195,12 +195,16 @@ Requires `diagnostics` permission.
 ### GET /api/diagnostics
 
 Full diagnostic report across all domains. Includes a composite health score
-derived from database health, pipeline state, embedding availability, and
-mutation integrity.
+derived from queue, storage, index, provider, mutation, duplicate, connector,
+update, and graph health. `storage.dbSizeBytes` is computed from SQLite page
+metadata. When graph is enabled, `graph.status` is included in composite status
+so a flatlined knowledge graph cannot be hidden behind otherwise healthy
+storage and index signals. `graph.extractionWritesEnabled` reports whether the
+background extractor is allowed to persist extracted entities into the graph.
 
-**Response** — a multi-domain report object. Domains include `database`,
-`pipeline`, `embedding`, `mutation`, `fts`, and `composite`. The `composite`
-field looks like:
+**Response** — a multi-domain report object. Domains include `queue`,
+`storage`, `index`, `provider`, `mutation`, `duplicate`, `connector`, `update`,
+`graph`, `openclaw`, and `composite`. The `composite` field looks like:
 
 ```json
 { "score": 0.95, "status": "healthy" }
@@ -208,8 +212,9 @@ field looks like:
 
 ### GET /api/diagnostics/:domain
 
-Diagnostic data for a single domain. Known domains: `database`, `pipeline`,
-`embedding`, `mutation`, `fts`, `composite`.
+Diagnostic data for a single domain. Known domains include `queue`, `storage`,
+`index`, `provider`, `mutation`, `duplicate`, `connector`, `update`, `graph`,
+`openclaw`, and `composite`.
 
 Returns `400` for unknown domains.
 

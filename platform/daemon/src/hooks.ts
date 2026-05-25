@@ -17,7 +17,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Worker } from "node:worker_threads";
 import { getAgentIdentityFiles, parseSimpleYaml } from "@signet/core";
-import { getAgentScope, resolveAgentId } from "./agent-id";
+import { ensureAgentRegistered, getAgentScope, resolveAgentId } from "./agent-id";
 import { extractAnchorTerms } from "./anchor-terms";
 import {
 	clearContinuity,
@@ -1509,6 +1509,8 @@ function getMemoriesSince(
 
 export async function handleSessionStart(req: SessionStartRequest): Promise<SessionStartResponse> {
 	const start = Date.now();
+	const agentId = resolveAgentId(req);
+	ensureAgentRegistered(agentId);
 	const config = loadHooksConfig().sessionStart || {};
 	const includeIdentity = config.includeIdentity !== false;
 
@@ -1549,7 +1551,7 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 		initContinuity(req.sessionKey, req.harness, req.project);
 	}
 
-	const identityFiles = resolveIdentityFiles(resolveAgentId(req));
+	const identityFiles = resolveIdentityFiles(agentId);
 	const identity = includeIdentity ? loadIdentity(identityFiles) : { name: "Agent" };
 
 	// Read AGENTS.md first so harness instructions precede synthesized memory
@@ -1561,7 +1563,7 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 	const memoryCfg = loadMemoryConfig(getAgentsDir());
 	const traversalCfg = memoryCfg.pipelineV2.traversal;
 	const traversalEnabled = memoryCfg.pipelineV2.graph.enabled && traversalCfg?.enabled === true;
-	const traversalAgentId = resolveAgentId(req);
+	const traversalAgentId = agentId;
 	const agentScope = getAgentScope(traversalAgentId);
 	let inheritedSection = "";
 	if (req.sessionKey && existsSync(getMemoryDbPath())) {
@@ -1718,7 +1720,6 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 	// ---------------------------------------------------------------
 	// Baseline ranking
 	// ---------------------------------------------------------------
-	const agentId = traversalAgentId;
 	const dbAcc = loadDbAccessor();
 	const candidateIdsForFeatures = mergedCandidates.map((c) => c.id);
 	const structuralById = dbAcc
@@ -3018,6 +3019,7 @@ export function deriveSessionEndFallbackId(
 export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionEndResponse> {
 	const sessionKey = req.sessionKey || req.sessionId;
 	const agentId = resolveAgentId({ agentId: req.agentId, sessionKey: req.sessionKey || req.sessionId });
+	ensureAgentRegistered(agentId);
 	const endedAt = new Date().toISOString();
 
 	// Keep session-start dedup across normal Stop/session-end hooks. Codex can
@@ -3450,6 +3452,7 @@ function advanceExtractCursor(sessionKey: string, agentId: string, offset: numbe
  */
 export function handleCheckpointExtract(req: CheckpointExtractRequest): CheckpointExtractResponse {
 	const agentId = resolveAgentId({ agentId: req.agentId, sessionKey: req.sessionKey });
+	ensureAgentRegistered(agentId);
 
 	// Respect the pipeline master switch
 	const memoryCfg = loadMemoryConfig(getAgentsDir());

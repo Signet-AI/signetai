@@ -1995,6 +1995,23 @@ function placeholders(count: number): string {
 	return Array.from({ length: count }, () => "?").join(", ");
 }
 
+function getConstellationVisibleAgentIds(db: ReadDb, agentId: string): readonly string[] {
+	const ids = new Set<string>([agentId]);
+	try {
+		const rows = db
+			.prepare("SELECT id FROM agents WHERE id = ? OR read_policy = 'shared'")
+			.all(agentId) as Array<Record<string, unknown>>;
+		for (const row of rows) {
+			if (typeof row.id === "string" && row.id.trim().length > 0) {
+				ids.add(row.id);
+			}
+		}
+	} catch {
+		// Older or partially-initialized databases still get the requested agent.
+	}
+	return [...ids];
+}
+
 function parseJsonRecord(value: unknown): Record<string, unknown> {
 	if (typeof value !== "string") return {};
 	try {
@@ -2123,6 +2140,8 @@ export function getKnowledgeGraphForConstellation(
 	const dependencyLimit = boundedInteger(options.dependencyLimit, 500, 1, 2000);
 
 	return accessor.withReadDb((db) => {
+		const visibleAgentIds = getConstellationVisibleAgentIds(db, agentId);
+		const agentPlaceholders = placeholders(visibleAgentIds.length);
 		// Keep the dashboard read path bounded. The previous implementation loaded
 		// every aspect, active attribute, and dependency for the agent, then filtered
 		// in JS. Large real workspaces can turn a simple Ontology tab visit into an
@@ -2131,13 +2150,13 @@ export function getKnowledgeGraphForConstellation(
 			.prepare(
 				`SELECT e.id, e.name, e.entity_type, e.mentions, e.pinned, e.status, e.proposal_id
 				 FROM entities e
-				 WHERE e.agent_id = ?
+				 WHERE e.agent_id IN (${agentPlaceholders})
 				   AND COALESCE(e.status, 'active') = 'active'
 				   AND (e.mentions > 0 OR e.pinned = 1)
 				 ORDER BY e.pinned DESC, e.mentions DESC, e.name ASC
 				 LIMIT ?`,
 			)
-			.all(agentId, limit) as Array<Record<string, unknown>>;
+			.all(...visibleAgentIds, limit) as Array<Record<string, unknown>>;
 
 		const entityIds = entityRows.map((r) => r.id as string).filter((id) => typeof id === "string");
 
@@ -2162,14 +2181,14 @@ export function getKnowledgeGraphForConstellation(
 				   SELECT id, entity_id, name, weight, status, proposal_id,
 				          ROW_NUMBER() OVER (PARTITION BY entity_id ORDER BY weight DESC, name ASC) AS rn
 				   FROM entity_aspects
-				   WHERE agent_id = ?
+				   WHERE agent_id IN (${agentPlaceholders})
 				     AND COALESCE(status, 'active') = 'active'
 				     AND entity_id IN (${entityIdPlaceholders})
 				 ) ranked_aspects
 				 WHERE rn <= ?
 				 ORDER BY entity_id ASC, weight DESC, name ASC`,
 			)
-			.all(agentId, ...entityIds, maxAspectsPerEntity) as Array<Record<string, unknown>>;
+			.all(...visibleAgentIds, ...entityIds, maxAspectsPerEntity) as Array<Record<string, unknown>>;
 
 		const aspectsByEntity = new Map<
 			string,
@@ -2217,12 +2236,12 @@ export function getKnowledgeGraphForConstellation(
 					          proposal_id, proposal_evidence,
 					          ROW_NUMBER() OVER (PARTITION BY aspect_id ORDER BY importance DESC, id ASC) AS rn
 					   FROM entity_attributes
-					   WHERE agent_id = ? AND status = 'active' AND aspect_id IN (${aspectIdPlaceholders})
+					   WHERE agent_id IN (${agentPlaceholders}) AND status = 'active' AND aspect_id IN (${aspectIdPlaceholders})
 					 ) ranked_attributes
 					 WHERE rn <= ?
 					 ORDER BY aspect_id ASC, importance DESC`,
 				)
-				.all(agentId, ...aspectIds, maxAttributesPerAspect) as Array<Record<string, unknown>>;
+				.all(...visibleAgentIds, ...aspectIds, maxAttributesPerAspect) as Array<Record<string, unknown>>;
 
 			for (const row of attrRows) {
 				const aspectId = row.aspect_id as string;
@@ -2281,14 +2300,14 @@ export function getKnowledgeGraphForConstellation(
 			.prepare(
 				`SELECT source_entity_id, target_entity_id, dependency_type, strength, status, proposal_id, proposal_evidence
 				 FROM entity_dependencies
-				 WHERE agent_id = ?
+				 WHERE agent_id IN (${agentPlaceholders})
 				   AND COALESCE(status, 'active') = 'active'
 				   AND source_entity_id IN (${entityIdPlaceholders})
 				   AND target_entity_id IN (${entityIdPlaceholders})
 				 ORDER BY strength DESC
 				 LIMIT ?`,
 			)
-			.all(agentId, ...entityIds, ...entityIds, dependencyLimit) as Array<Record<string, unknown>>;
+			.all(...visibleAgentIds, ...entityIds, ...entityIds, dependencyLimit) as Array<Record<string, unknown>>;
 
 		const dependencies: ConstellationDependency[] = depRows.map((row) => ({
 			sourceEntityId: row.source_entity_id as string,
@@ -2305,11 +2324,11 @@ export function getKnowledgeGraphForConstellation(
 				`SELECT id, operation, payload, confidence, rationale, evidence,
 				        source_kind, source_path, updated_at
 				 FROM ontology_proposals
-				 WHERE agent_id = ? AND status = 'pending'
+				 WHERE agent_id IN (${agentPlaceholders}) AND status = 'pending'
 				 ORDER BY updated_at DESC
 				 LIMIT 80`,
 			)
-			.all(agentId) as Array<Record<string, unknown>>;
+			.all(...visibleAgentIds) as Array<Record<string, unknown>>;
 		const proposals: ConstellationProposal[] = proposalRows.map((row) => {
 			const payload = parseJsonRecord(row.payload);
 			const target = resolveProposalTargetEntity(payload, entitiesById, entitiesByName);

@@ -31,6 +31,7 @@ import { addDreamingTokens } from "./dreaming";
 import { RateLimitExceededError } from "./provider";
 import { type SignificanceConfig, assessSignificance } from "./significance-gate";
 import { countTokens } from "./tokenizer";
+import { enqueueExtractionJobInTx } from "./worker";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -671,7 +672,6 @@ async function processJob(
 		});
 	}
 
-
 	try {
 		const { getSynthesisWorker } = await import("./index");
 		void getSynthesisWorker()
@@ -1115,6 +1115,7 @@ export function insertSummaryFacts(
 				if (isContentHashUniqueError(err)) continue;
 				throw err;
 			}
+			enqueueExtractionJobInTx(db, id);
 			count++;
 		}
 		return count;

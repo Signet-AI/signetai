@@ -10,9 +10,11 @@ import {
 	closeDbAccessor,
 	getDbAccessor,
 	initDbAccessor,
+	readVecEmbeddingDimensions,
 	resolveCustomSqlitePath,
 	resolveSqliteAgentsDir,
 	resolveSqliteRuntimeConfig,
+	vecEmbeddingsSchemaNeedsRepair,
 } from "./db-accessor";
 
 function tmpDbPath(): string {
@@ -439,5 +441,23 @@ describe("sqlite runtime ordering", () => {
 		}
 
 		expect(hits).toEqual(["db-accessor.ts"]);
+	});
+});
+
+describe("vec_embeddings schema repair", () => {
+	const currentSql = `CREATE VIRTUAL TABLE vec_embeddings USING vec0(
+		id TEXT PRIMARY KEY,
+		embedding FLOAT[1536] distance_metric=cosine
+	)`;
+
+	test("reads vec0 embedding dimensions from the virtual table SQL", () => {
+		expect(readVecEmbeddingDimensions(currentSql)).toBe(1536);
+		expect(readVecEmbeddingDimensions("CREATE VIRTUAL TABLE vec_embeddings USING vec0(id TEXT PRIMARY KEY)")).toBeNull();
+	});
+
+	test("repairs stale vector dimensions instead of keeping a wrong FLOAT size", () => {
+		expect(vecEmbeddingsSchemaNeedsRepair(currentSql, 1536)).toBe(false);
+		expect(vecEmbeddingsSchemaNeedsRepair(currentSql.replace("FLOAT[1536]", "FLOAT[768]"), 1536)).toBe(true);
+		expect(vecEmbeddingsSchemaNeedsRepair(currentSql.replace("id TEXT PRIMARY KEY,", ""), 1536)).toBe(true);
 	});
 });

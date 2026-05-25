@@ -29,6 +29,7 @@ import {
 	recreateMemoriesFts,
 	runMigrations,
 } from "@signet/core";
+import { loadMemoryConfig } from "./memory-config";
 
 const isBun = typeof (globalThis as Record<string, unknown>).Bun !== "undefined";
 const require = createRequire(import.meta.url);
@@ -616,11 +617,12 @@ export function initDbAccessor(path: string, opts?: { readonly agentsDir?: strin
 	// older installs where the table was dropped or never created.
 	ensureFtsTable(writeConn);
 
-	// Ensure vec_embeddings virtual table exists with correct schema.
-	// Older tables may lack the TEXT id column needed to join with embeddings.
+	// Ensure vec_embeddings virtual table exists with the configured dimensions.
+	// Older tables may lack the TEXT id column or carry stale FLOAT[N] dims.
 	if (vecExtPath) {
+		const vecDimensions = resolveVecEmbeddingDimensions(opts?.agentsDir);
 		try {
-			ensureVecTable(writeConn);
+			ensureVecTable(writeConn, vecDimensions);
 		} catch (err) {
 			// ensureVecTable failure means the vec0 runtime extension is not
 			// usable — disable vector search for this process lifetime.
@@ -630,7 +632,7 @@ export function initDbAccessor(path: string, opts?: { readonly agentsDir?: strin
 		}
 		if (vecLoaded) {
 			try {
-				backfillVecEmbeddings(writeConn);
+				backfillVecEmbeddings(writeConn, vecDimensions);
 			} catch (err) {
 				// Backfill failure is a data issue (e.g. bad row, schema mismatch),
 				// not a runtime unavailability — vector search stays enabled.
@@ -701,32 +703,57 @@ export function ensureFtsTable(db: SqliteDatabase): void {
 // Vec table creation + backfill
 // ---------------------------------------------------------------------------
 
-function ensureVecTable(db: SqliteDatabase): void {
-	// Check if vec_embeddings exists and has the correct schema (TEXT id).
-	// If it exists without an id column, drop and recreate.
+function resolveVecEmbeddingDimensions(agentsDir?: string): number {
+	try {
+		const dimensions = loadMemoryConfig(agentsDir ?? resolveSqliteAgentsDir()).embedding.dimensions;
+		if (Number.isInteger(dimensions) && dimensions > 0) return dimensions;
+	} catch (err) {
+		console.warn(
+			"[db-accessor] Failed to read embedding dimensions from config; using default:",
+			err instanceof Error ? err.message : String(err),
+		);
+	}
+	return DEFAULT_EMBEDDING_DIMENSIONS;
+}
+
+export function readVecEmbeddingDimensions(sql: string | null | undefined): number | null {
+	if (!sql) return null;
+	const match = /\bembedding\s+FLOAT\s*\[\s*(\d+)\s*\]/i.exec(sql);
+	if (!match) return null;
+	const parsed = Number.parseInt(match[1], 10);
+	return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+export function vecEmbeddingsSchemaNeedsRepair(sql: string | null | undefined, expectedDimensions: number): boolean {
+	if (!sql) return true;
+	if (!/\bid\s+TEXT\b/i.test(sql)) return true;
+	return readVecEmbeddingDimensions(sql) !== expectedDimensions;
+}
+
+function ensureVecTable(db: SqliteDatabase, expectedDimensions: number): void {
 	const existing = db.prepare("SELECT sql FROM sqlite_master WHERE name = 'vec_embeddings' AND type = 'table'").get() as
 		| { sql: string }
 		| undefined;
 
 	if (existing) {
-		if (existing.sql.includes("id TEXT")) return;
-		// Old schema without id — drop it
+		if (!vecEmbeddingsSchemaNeedsRepair(existing.sql, expectedDimensions)) return;
+		if (/\bid\s+TEXT\b/i.test(existing.sql)) {
+			console.warn(
+				`[db-accessor] vec_embeddings schema drift detected; recreating with FLOAT[${expectedDimensions}]`,
+			);
+		}
 		db.exec("DROP TABLE vec_embeddings");
 	}
-
-	// Detect actual embedding dimensions from existing data
-	const dimRow = db.prepare("SELECT dimensions FROM embeddings LIMIT 1").get() as { dimensions: number } | undefined;
-	const dims = dimRow?.dimensions ?? DEFAULT_EMBEDDING_DIMENSIONS;
 
 	db.exec(`
 		CREATE VIRTUAL TABLE vec_embeddings USING vec0(
 			id TEXT PRIMARY KEY,
-			embedding FLOAT[${dims}] distance_metric=cosine
+			embedding FLOAT[${expectedDimensions}] distance_metric=cosine
 		);
 	`);
 }
 
-function backfillVecEmbeddings(db: SqliteDatabase): void {
+function backfillVecEmbeddings(db: SqliteDatabase, expectedDimensions: number): void {
 	// Directly query for missing rows instead of comparing counts.
 	// Count comparison is racy — a row can exist in embeddings but not
 	// vec_embeddings even when counts match (e.g. after a crash mid-sync).
@@ -734,9 +761,23 @@ function backfillVecEmbeddings(db: SqliteDatabase): void {
 		.prepare(
 			`SELECT e.id, e.vector FROM embeddings e
 			 LEFT JOIN vec_embeddings v ON v.id = e.id
-			 WHERE v.id IS NULL`,
+			 WHERE v.id IS NULL AND e.dimensions = ?`,
 		)
-		.all() as Array<{ id: string; vector: Buffer }>;
+		.all(expectedDimensions) as Array<{ id: string; vector: Buffer }>;
+
+	const skippedRow = db
+		.prepare(
+			`SELECT COUNT(*) AS n FROM embeddings e
+			 LEFT JOIN vec_embeddings v ON v.id = e.id
+			 WHERE v.id IS NULL AND e.dimensions != ?`,
+		)
+		.get(expectedDimensions) as { n: number } | undefined;
+	const skippedCount = skippedRow?.n ?? 0;
+	if (skippedCount > 0) {
+		console.warn(
+			`[db-accessor] Skipped ${skippedCount} embeddings with dimensions that do not match FLOAT[${expectedDimensions}]`,
+		);
+	}
 
 	if (rows.length === 0) return;
 

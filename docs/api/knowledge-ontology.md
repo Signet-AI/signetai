@@ -108,9 +108,11 @@ signet knowledge hygiene
 
 Return the bounded graph overlay used by the dashboard Ontology constellation.
 Query parameters: `agent_id`, `limit`, `max_aspects_per_entity`,
-`max_attributes_per_aspect`, and `dependency_limit`. The daemon clamps these
-limits so dashboard navigation cannot load the entire knowledge graph into one
-read response.
+`max_attributes_per_aspect`, and `dependency_limit`. When `agent_id` is
+omitted, the daemon uses the configured daemon agent ID (`SIGNET_AGENT_ID`, or
+`default`). The read includes the requested agent plus agents whose
+`read_policy` is `shared`, and clamps limits so dashboard navigation cannot
+load the entire knowledge graph into one read response.
 
 Defaults: `limit=150`, `max_aspects_per_entity=6`,
 `max_attributes_per_aspect=4`, and `dependency_limit=500`.

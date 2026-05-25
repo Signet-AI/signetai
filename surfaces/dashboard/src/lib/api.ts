@@ -213,6 +213,7 @@ export interface DaemonStatus {
 	host: string;
 	bindHost: string;
 	networkMode: "localhost" | "tailscale";
+	agentId: string;
 	agentsDir: string;
 	memoryDb: boolean;
 	activeSessions?: number;
@@ -3261,6 +3262,13 @@ export interface DiagnosticsReport {
 	connector: DiagnosticsDomain & { count?: number; errorCount?: number };
 	predictor: DiagnosticsDomain & { alpha?: number; successRate?: number };
 	mutation: DiagnosticsDomain;
+	graph: DiagnosticsDomain & {
+		extractionWritesEnabled?: boolean | null;
+		entityCount?: number;
+		edgeCount?: number;
+		communityCount?: number;
+		quality?: string;
+	};
 	[key: string]: unknown;
 }
 

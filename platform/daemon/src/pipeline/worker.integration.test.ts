@@ -762,6 +762,47 @@ describe("pipeline integration", () => {
 		expect(bob).toBeFalsy();
 	});
 
+	it("graph persistence unavailable: completes extraction and fact writes without failing the job", async () => {
+		const sourceId = crypto.randomUUID();
+		insertMemory(db, sourceId, "Nicholai moved from Portland to Seattle in 2019 for a new engineering role");
+		db.exec("DROP TABLE memory_entity_mentions");
+
+		const provider = scriptedProvider([
+			JSON.stringify({
+				facts: [
+					{
+						content: longFact("Nicholai relocated from Portland to Seattle in 2019 for a new engineering role"),
+						type: "fact",
+						confidence: 0.9,
+					},
+				],
+				entities: [
+					{
+						source: "Nicholai",
+						source_type: "person",
+						relationship: "relocated_to",
+						target: "Seattle",
+						target_type: "place",
+						confidence: 0.9,
+					},
+				],
+			}),
+			DECISION_ADD_RESPONSE,
+		]);
+
+		enqueueExtractionJob(accessor, sourceId);
+		const worker = startWorker(accessor, provider, testPipelineCfg(), testDecisionCfg());
+		await new Promise((r) => setTimeout(r, 500));
+		await worker.stop();
+
+		const job = getJob(db, sourceId, "extract");
+		expect(job).toBeDefined();
+		expect(job!.status).toBe("completed");
+		expect(job!.error).toBeNull();
+		expect(getWrittenFacts(db, sourceId).length).toBe(1);
+		expect(getEntities(db, "Nicholai")).toBeFalsy();
+	});
+
 	it("hints disabled: no prospective_index jobs enqueued", async () => {
 		const sourceId = crypto.randomUUID();
 		insertMemory(db, sourceId, "Carol lives in Denver and works at a local coffee shop downtown");

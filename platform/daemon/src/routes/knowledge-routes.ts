@@ -1,6 +1,6 @@
 import type { Hono } from "hono";
 
-import { resolveAgentId } from "../agent-id";
+import { resolveAgentId, resolveDaemonAgentId } from "../agent-id";
 import { requirePermission } from "../auth";
 import { getDbAccessor } from "../db-accessor";
 import { walkImpact } from "../graph-impact";
@@ -311,7 +311,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 	});
 
 	app.get("/api/knowledge/constellation", (c) => {
-		const agentId = c.req.query("agent_id") ?? "default";
+		const agentId = c.req.query("agent_id") ?? resolveDaemonAgentId();
 		return c.json(
 			getKnowledgeGraphForConstellation(getDbAccessor(), agentId, {
 				limit: parseNavigationLimit(c.req.query("limit"), 150, 300),

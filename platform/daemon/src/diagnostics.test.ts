@@ -12,6 +12,7 @@ import type { ReadDb } from "./db-accessor";
 import {
 	createProviderTracker,
 	getDiagnostics,
+	getGraphHealth,
 	getIndexHealth,
 	getMutationHealth,
 	getProviderHealth,
@@ -160,7 +161,7 @@ describe("getStorageHealth", () => {
 		expect(result.status).toBe("healthy");
 		expect(result.totalMemories).toBe(0);
 		expect(result.deletedTombstones).toBe(0);
-		expect(result.dbSizeBytes).toBe(0);
+		expect(result.dbSizeBytes).toBeGreaterThan(0);
 	});
 
 	test("high tombstone ratio degrades storage health", () => {
@@ -219,6 +220,60 @@ describe("getIndexHealth", () => {
 		const result = getIndexHealth(asReadDb(db));
 		expect(result.embeddingCoverage).toBe(0.2);
 		expect(result.score).toBeLessThan(0.8);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Graph health
+// ---------------------------------------------------------------------------
+
+describe("getGraphHealth", () => {
+	test("small or empty graph state stays healthy while it is still inconclusive", () => {
+		const result = getGraphHealth(asReadDb(db), { graphExtractionWritesEnabled: false });
+		expect(result.status).toBe("healthy");
+		expect(result.score).toBe(1);
+		expect(result.extractionWritesEnabled).toBe(false);
+		expect(result.entityCount).toBe(0);
+		expect(result.quality).toBe("unknown");
+	});
+
+	test("flatlined graph degrades when many active memories have no entities", () => {
+		for (let i = 0; i < 10; i++) {
+			insertMemory(db, `mem-graph-flatline-${i}`);
+		}
+
+		const result = getGraphHealth(asReadDb(db), { graphExtractionWritesEnabled: false });
+		expect(result.entityCount).toBe(0);
+		expect(result.extractionWritesEnabled).toBe(false);
+		expect(result.status).toBe("degraded");
+		expect(result.score).toBeLessThan(0.8);
+	});
+
+	test("disabled graph health stays healthy even with many memories and no entities", () => {
+		for (let i = 0; i < 10; i++) {
+			insertMemory(db, `mem-graph-disabled-${i}`);
+		}
+
+		const result = getGraphHealth(asReadDb(db), { graphEnabled: false, graphExtractionWritesEnabled: false });
+		expect(result.entityCount).toBe(0);
+		expect(result.extractionWritesEnabled).toBe(false);
+		expect(result.status).toBe("healthy");
+		expect(result.score).toBe(1);
+	});
+
+	test("composite status reflects graph degradation", () => {
+		for (let i = 0; i < 10; i++) {
+			insertMemory(db, `mem-graph-composite-${i}`);
+		}
+
+		const tracker = createProviderTracker();
+		const report = getDiagnostics(asReadDb(db), tracker, undefined, undefined, {
+			graphExtractionWritesEnabled: false,
+		});
+
+		expect(report.graph.status).toBe("degraded");
+		expect(report.graph.extractionWritesEnabled).toBe(false);
+		expect(report.composite.status).toBe("degraded");
 	});
 });
 
@@ -349,7 +404,7 @@ describe("getDiagnostics", () => {
 		expect(report.queue.depth).toBe(51);
 		expect(report.queue.deadRate).toBeGreaterThan(0.01);
 		expect(report.queue.status).toBe("unhealthy");
-		expect(report.composite.score).toBeGreaterThanOrEqual(0.8);
+		expect(report.composite.score).toBeGreaterThanOrEqual(0.75);
 		expect(report.composite.status).toBe("unhealthy");
 	});
 });

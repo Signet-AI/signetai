@@ -225,9 +225,12 @@ create aspect or attribute rows by itself.
 ### Pipeline Graph Writes
 
 Background extraction graph writes are controlled by
-`memory.pipelineV2.graph.extractionWritesEnabled`, which defaults to `false`.
-Keeping graph traversal enabled does not necessarily mean the async extractor is
-allowed to author ontology structure.
+`memory.pipelineV2.graph.extractionWritesEnabled`, which defaults to `true`.
+Set it to `false` when graph traversal should stay enabled but the async
+extractor should not author ontology structure.
+When graph reads are enabled but extraction writes remain disabled, the daemon
+emits a startup warning and `/api/diagnostics` exposes the disabled write gate
+as `graph.extractionWritesEnabled: false`.
 
 ### Ontology Operation Handlers
 
@@ -434,12 +437,19 @@ dependencies, proposal overlays, and dreaming summaries within bounded limits.
 The dashboard then converts that payload into entity, aspect, attribute, memory,
 proposal, and relationship nodes.
 
+When the request does not include `agent_id`, `/api/knowledge/constellation`
+uses the configured daemon agent ID (`SIGNET_AGENT_ID`, falling back to
+`default`). The constellation payload includes rows owned by the requested
+agent and rows owned by agents whose `read_policy` is `shared`, so the main
+dashboard can surface shared named-agent graphs instead of showing an empty
+default-agent view.
+
 ## Agent Scope
 
-Every graph read or write must be scoped by `agent_id`. Existing route defaults
-to `"default"` are compatibility defaults at the boundary; internal logic should
-thread the resolved agent ID through queries and mutations rather than relying
-on a global graph.
+Every graph read or write must be scoped by `agent_id`. Route defaults should
+resolve through the daemon's configured agent ID where possible; internal logic
+should thread the resolved agent ID through queries and mutations rather than
+relying on a global graph.
 
 ## See Also
 

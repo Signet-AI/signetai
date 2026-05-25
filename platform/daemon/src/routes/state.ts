@@ -6,11 +6,7 @@ import { networkModeFromBindHost, parseSimpleYaml, readNetworkMode, resolveNetwo
 import { type AnalyticsCollector, createAnalyticsCollector } from "../analytics";
 import { type AuthConfig, AuthRateLimiter, loadOrCreateSecret, parseAuthConfig } from "../auth";
 import { getDbAccessor } from "../db-accessor";
-import {
-	type DiagnosticsReport,
-	createProviderTracker,
-	getDiagnostics,
-} from "../diagnostics";
+import { type DiagnosticsOptions, type DiagnosticsReport, createProviderTracker, getDiagnostics } from "../diagnostics";
 import type { EmbeddingTrackerHandle } from "../embedding-tracker";
 import { logger } from "../logger";
 import { type ResolvedMemoryConfig, loadMemoryConfig } from "../memory-config";
@@ -398,14 +394,30 @@ export function buildOpenClawHealth(): import("../diagnostics").OpenClawHealth {
 	};
 }
 
+export function getDiagnosticsOptions(): DiagnosticsOptions {
+	try {
+		const graph = loadMemoryConfig(getCurrentAgentsDir()).pipelineV2.graph;
+		return {
+			graphEnabled: graph.enabled,
+			graphExtractionWritesEnabled: graph.extractionWritesEnabled,
+		};
+	} catch (err) {
+		logger.warn("diagnostics", "Failed to load graph diagnostics config; defaulting graph health to enabled", {
+			error: err instanceof Error ? err.message : String(err),
+		});
+		return { graphEnabled: true };
+	}
+}
+
 export function getCachedDiagnosticsReport(): DiagnosticsReport {
 	const now = Date.now();
 	if (diagnosticsCache !== null && diagnosticsCache.expiresAt > now) {
 		return diagnosticsCache.report;
 	}
 
+	const diagnosticsOptions = getDiagnosticsOptions();
 	const report = getDbAccessor().withReadDb((db) =>
-		getDiagnostics(db, providerTracker, getUpdateState(), buildOpenClawHealth()),
+		getDiagnostics(db, providerTracker, getUpdateState(), buildOpenClawHealth(), diagnosticsOptions),
 	);
 	diagnosticsCache = {
 		report,
@@ -414,7 +426,6 @@ export function getCachedDiagnosticsReport(): DiagnosticsReport {
 	return report;
 }
 
-
 export function setPipelineTransition(value: boolean): void {
 	pipelineTransition = value;
 }
@@ -422,7 +433,6 @@ export function setPipelineTransition(value: boolean): void {
 export function setTelemetryRef(value: TelemetryCollector | undefined): void {
 	telemetryRef = value;
 }
-
 
 export function setHeartbeatTimer(value: ReturnType<typeof setInterval> | undefined): void {
 	heartbeatTimer = value;

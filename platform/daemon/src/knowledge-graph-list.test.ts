@@ -123,6 +123,17 @@ function seedMemory(id: string, agentId = "default"): void {
 	});
 }
 
+function seedAgent(id: string, readPolicy: "isolated" | "shared"): void {
+	const now = new Date().toISOString();
+	getDbAccessor().withWriteTx((db) => {
+		db.prepare(
+			`INSERT INTO agents (id, name, read_policy, created_at, updated_at)
+			 VALUES (?, ?, ?, ?, ?)
+			 ON CONFLICT(id) DO UPDATE SET read_policy = excluded.read_policy, updated_at = excluded.updated_at`,
+		).run(id, id, readPolicy, now, now);
+	});
+}
+
 function seedMention(memoryId: string, entityId: string): void {
 	getDbAccessor().withWriteTx((db) => {
 		db.prepare(
@@ -382,6 +393,34 @@ describe("listKnowledgeEntities (issue #515)", () => {
 		expect(graph.metadata.proposals.appliedRecent).toBe(1);
 		expect(graph.metadata.dreaming.tokensSinceLastPass).toBe(2400);
 		expect(graph.metadata.dreaming.latestPass?.mutationsApplied).toBe(3);
+	});
+
+	test("constellation includes shared-agent graph rows for the current view", () => {
+		dbPath = makeDbPath();
+		initDbAccessor(dbPath);
+
+		seedAgent("default", "shared");
+		seedAgent("noam", "shared");
+		seedAgent("private-agent", "isolated");
+		seedEntity("e-default", "Default Entity", { agentId: "default", mentions: 5 });
+		seedEntity("e-noam", "Noam Entity", { agentId: "noam", mentions: 4 });
+		seedEntity("e-private", "Private Entity", { agentId: "private-agent", mentions: 9 });
+		seedAspect("asp-noam", "e-noam", "shared aspect", "noam");
+		seedAttribute("attr-noam", "asp-noam", { agentId: "noam", content: "shared attribute" });
+		seedDependency("dep-shared", "e-default", "e-noam", { agentId: "noam", strength: 0.9 });
+
+		const graph = getKnowledgeGraphForConstellation(getDbAccessor(), "default", {
+			limit: 10,
+			maxAspectsPerEntity: 2,
+			maxAttributesPerAspect: 2,
+			dependencyLimit: 10,
+		});
+
+		expect(graph.entities.map((entity) => entity.id)).toEqual(["e-default", "e-noam"]);
+		expect(graph.entities.map((entity) => entity.id)).not.toContain("e-private");
+		const noamEntity = graph.entities.find((entity) => entity.id === "e-noam");
+		expect(noamEntity?.aspects[0]?.attributes[0]?.id).toBe("attr-noam");
+		expect(graph.dependencies.map((dependency) => dependency.sourceEntityId)).toEqual(["e-default"]);
 	});
 });
 

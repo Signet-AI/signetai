@@ -206,6 +206,43 @@ describe("insertSummaryFacts", () => {
 		expect((row?.content_hash ?? "").length).toBeGreaterThan(0);
 	});
 
+	it("queues extraction jobs for inserted summary facts", () => {
+		const saved = insertSummaryFacts(
+			accessor,
+			{
+				harness: "oh-my-pi",
+				project: "/mnt/work/dev/project",
+				session_key: "sess-extract-queue",
+				session_id: "sess-extract-queue",
+				id: "job-extract-queue",
+				agent_id: "test-agent",
+			},
+			[
+				{
+					content: "The summary worker should enqueue extraction for synthesized facts about Alpine routing.",
+					type: "fact",
+				},
+				{ content: "OMP diagnostics should surface graph extraction failures from session synthesis.", type: "fact" },
+			],
+		);
+
+		expect(saved).toBe(2);
+
+		const jobs = db
+			.prepare(
+				`SELECT j.job_type, j.status, m.source_id
+				 FROM memory_jobs j
+				 JOIN memories m ON m.id = j.memory_id
+				 ORDER BY m.content ASC`,
+			)
+			.all() as Array<{ job_type: string; status: string; source_id: string }>;
+
+		expect(jobs).toEqual([
+			{ job_type: "extract", status: "pending", source_id: "sess-extract-queue" },
+			{ job_type: "extract", status: "pending", source_id: "sess-extract-queue" },
+		]);
+	});
+
 	it("treats content_hash collisions as deduplication instead of job failures", () => {
 		const saved = insertSummaryFacts(
 			accessor,

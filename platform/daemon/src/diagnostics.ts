@@ -72,7 +72,8 @@ export interface UpdateHealth extends HealthScore {
 	readonly lastError: string | null;
 }
 
-export interface GraphHealth {
+export interface GraphHealth extends HealthScore {
+	readonly extractionWritesEnabled: boolean | null;
 	readonly entityCount: number;
 	readonly edgeCount: number;
 	readonly communityCount: number;
@@ -106,6 +107,11 @@ export interface DiagnosticsReport {
 	readonly update: UpdateHealth;
 	readonly graph: GraphHealth;
 	readonly openclaw: OpenClawHealth;
+}
+
+export interface DiagnosticsOptions {
+	readonly graphEnabled?: boolean;
+	readonly graphExtractionWritesEnabled?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -185,6 +191,7 @@ function clamp(n: number): number {
 }
 
 const QUEUE_RECENT_WINDOW_MS = 60 * 60 * 1000;
+const GRAPH_FLATLINE_MEMORY_THRESHOLD = 10;
 
 // ---------------------------------------------------------------------------
 // Domain health functions
@@ -270,9 +277,20 @@ export function getStorageHealth(db: ReadDb): StorageHealth {
 		status: scoreStatus(score),
 		totalMemories,
 		deletedTombstones,
-		// Can't get actual file size from a read connection
-		dbSizeBytes: 0,
+		dbSizeBytes: getDatabaseSizeBytes(db),
 	};
+}
+
+function getDatabaseSizeBytes(db: ReadDb): number {
+	try {
+		const pageCount = db.prepare("PRAGMA page_count").get() as { page_count?: number } | undefined;
+		const pageSize = db.prepare("PRAGMA page_size").get() as { page_size?: number } | undefined;
+		const pages = pageCount?.page_count ?? 0;
+		const bytesPerPage = pageSize?.page_size ?? 0;
+		return Number.isFinite(pages) && Number.isFinite(bytesPerPage) ? pages * bytesPerPage : 0;
+	} catch {
+		return 0;
+	}
 }
 
 export function getIndexHealth(db: ReadDb): IndexHealth {
@@ -525,25 +543,33 @@ export function getUpdateHealth(state?: UpdateState): UpdateHealth {
 // ---------------------------------------------------------------------------
 
 const BASE_WEIGHTS = {
-	queue: 0.25,
+	queue: 0.23,
 	storage: 0.1,
 	index: 0.15,
-	provider: 0.22,
+	provider: 0.2,
 	mutation: 0.08,
 	duplicate: 0.04,
 	connector: 0.05,
-	update: 0.11,
+	update: 0.1,
+	graph: 0.05,
 } as const;
 
 // ---------------------------------------------------------------------------
-// Graph health (informational, not included in composite score)
+// Graph health
 // ---------------------------------------------------------------------------
 
-export function getGraphHealth(db: ReadDb): GraphHealth {
+export function getGraphHealth(
+	db: ReadDb,
+	options?: Pick<DiagnosticsOptions, "graphEnabled" | "graphExtractionWritesEnabled">,
+): GraphHealth {
+	const extractionWritesEnabled = options?.graphExtractionWritesEnabled ?? null;
 	try {
 		const entityRow = db.prepare("SELECT COUNT(*) AS n FROM entities").get() as { n: number } | undefined;
 		const edgeRow = db.prepare("SELECT COUNT(*) AS n FROM entity_dependencies").get() as { n: number } | undefined;
 		const communityRow = db.prepare("SELECT COUNT(*) AS n FROM entity_communities").get() as { n: number } | undefined;
+		const memoryRow = db.prepare("SELECT COUNT(*) AS n FROM memories WHERE COALESCE(is_deleted, 0) = 0").get() as
+			| { n: number }
+			| undefined;
 
 		const communityCount = communityRow?.n ?? 0;
 
@@ -554,6 +580,9 @@ export function getGraphHealth(db: ReadDb): GraphHealth {
 
 		const entityCount = entityRow?.n ?? 0;
 		const edgeCount = edgeRow?.n ?? 0;
+		const activeMemoryCount = memoryRow?.n ?? 0;
+		const graphEnabled = options?.graphEnabled ?? true;
+		const score = graphEnabled && activeMemoryCount >= GRAPH_FLATLINE_MEMORY_THRESHOLD && entityCount === 0 ? 0.6 : 1.0;
 
 		const avg = cohesionRow?.avg;
 		const quality: GraphHealth["quality"] =
@@ -565,10 +594,22 @@ export function getGraphHealth(db: ReadDb): GraphHealth {
 						? "moderate"
 						: "fragmented";
 
-		return { entityCount, edgeCount, communityCount, modularity: null, quality };
+		return {
+			score,
+			status: scoreStatus(score),
+			extractionWritesEnabled,
+			entityCount,
+			edgeCount,
+			communityCount,
+			modularity: null,
+			quality,
+		};
 	} catch {
 		// entity_communities table may not exist yet
 		return {
+			score: 1,
+			status: "healthy",
+			extractionWritesEnabled,
 			entityCount: 0,
 			edgeCount: 0,
 			communityCount: 0,
@@ -583,6 +624,7 @@ export function getDiagnostics(
 	tracker: ProviderTracker,
 	updateState?: UpdateState,
 	openclawHealth?: OpenClawHealth,
+	options?: DiagnosticsOptions,
 ): DiagnosticsReport {
 	const queue = getQueueHealth(db);
 	const storage = getStorageHealth(db);
@@ -592,7 +634,10 @@ export function getDiagnostics(
 	const duplicate = getDuplicateHealth(db);
 	const connector = getConnectorHealth(db);
 	const update = getUpdateHealth(updateState);
-	const graph = getGraphHealth(db);
+	const graph = getGraphHealth(db, {
+		graphEnabled: options?.graphEnabled,
+		graphExtractionWritesEnabled: options?.graphExtractionWritesEnabled,
+	});
 
 	const compositeScore = clamp(
 		queue.score * BASE_WEIGHTS.queue +
@@ -602,7 +647,8 @@ export function getDiagnostics(
 			mutation.score * BASE_WEIGHTS.mutation +
 			duplicate.score * BASE_WEIGHTS.duplicate +
 			connector.score * BASE_WEIGHTS.connector +
-			update.score * BASE_WEIGHTS.update,
+			update.score * BASE_WEIGHTS.update +
+			graph.score * BASE_WEIGHTS.graph,
 	);
 
 	const composite: HealthScore = {
@@ -616,6 +662,7 @@ export function getDiagnostics(
 			duplicate.status,
 			connector.status,
 			update.status,
+			graph.status,
 		]),
 	};
 

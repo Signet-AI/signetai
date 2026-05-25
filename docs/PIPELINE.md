@@ -281,9 +281,15 @@ Knowledge Graph
 
 When `graph.enabled` is true, graph reads, traversal, and recall boosting are
 available. Background extraction only persists extracted entity triples when
-`graph.extractionWritesEnabled` is also true. That second gate defaults to
-`false` so graph navigation can stay on without letting the async extractor
-author semantic graph structure.
+`graph.extractionWritesEnabled` is also true. That write gate defaults to
+`true` so new installs populate the graph from extraction. Set it to `false`
+to keep graph navigation on without letting the async extractor author semantic
+graph structure.
+
+The daemon logs a startup warning when graph reads are enabled while extraction
+writes are disabled. `/api/diagnostics` also reports
+`graph.extractionWritesEnabled` and degrades graph health once enough active
+memories exist but the graph still has no entities.
 
 If extraction graph writes are explicitly enabled, they happen in a
 **separate** transaction immediately after the main write transaction commits.
@@ -501,9 +507,11 @@ on-demand inspection.
 
 Each maintenance cycle runs three phases. First, `getDiagnostics` produces
 a `DiagnosticsReport` that captures queue health (dead rate, stale lease
-count), index health (FTS row count vs active memory count), and storage
-health (tombstone ratio). A composite score in [0, 1] summarizes overall
-health.
+count), index health (FTS row count vs active memory count), storage health
+(tombstone ratio and SQLite page size), and graph health. A composite score in
+[0, 1] summarizes overall health, and when graph is enabled the composite
+status propagates graph degradation when the graph has flatlined across many
+active memories.
 
 Second, `buildRecommendations` translates the report into a list of repair
 actions:
@@ -714,6 +722,12 @@ Each cycle:
    source (except the new hash), the new embedding row is upserted on
    `content_hash` conflict, the `vec_embeddings` virtual table is synced,
    and `embedding_model` is updated on the memory row.
+
+At daemon startup, the `vec_embeddings` virtual table is checked against the
+configured embedding dimensions. If the table was created with stale
+`FLOAT[N]` dimensions, the daemon logs schema drift, recreates the virtual
+table with the configured size, and backfills stored embeddings that match that
+dimension.
 
 The tracker uses `setTimeout` chains for natural backpressure. It
 exposes a `getStats()` method returning `{ running, processed, failed,
@@ -1076,7 +1090,7 @@ worker:
 
 graph:
   enabled: true
-  extractionWritesEnabled: false # default; structured remember authors graph data
+  extractionWritesEnabled: true  # default; persists extracted entities when graph tables are available
   boostWeight: 0.15              # fraction 0.0–1.0
   boostTimeoutMs: 500            # ms, range 50–5000
 
@@ -1186,7 +1200,7 @@ memory:
     enabled: true
     graph:
       enabled: true
-      extractionWritesEnabled: false
+      extractionWritesEnabled: true
     extraction:
       minConfidence: 0.75
 ```
