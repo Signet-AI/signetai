@@ -723,6 +723,12 @@ Each cycle:
    `content_hash` conflict, the `vec_embeddings` virtual table is synced,
    and `embedding_model` is updated on the memory row.
 
+At daemon startup, the `vec_embeddings` virtual table is checked against the
+configured embedding dimensions. If the table was created with stale
+`FLOAT[N]` dimensions, the daemon logs schema drift, recreates the virtual
+table with the configured size, and backfills stored embeddings that match that
+dimension.
+
 The tracker uses `setTimeout` chains for natural backpressure. It
 exposes a `getStats()` method returning `{ running, processed, failed,
 skippedCycles, lastCycleAt, queueDepth }`.

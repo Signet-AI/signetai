@@ -41,11 +41,12 @@ import { onMount } from "svelte";
 
 const activeTab = $derived(nav.activeTab);
 const { data } = $props();
-const agentId = $derived.by(() => {
-	if (typeof window === "undefined") return "default";
-	return new URLSearchParams(window.location.search).get("agent_id") ?? "default";
-});
 let daemonStatus = $state<DaemonStatus | null>(null);
+const agentId = $derived.by(() => {
+	const fallback = daemonStatus?.agentId ?? "default";
+	if (!browser) return fallback;
+	return new URLSearchParams(window.location.search).get("agent_id") ?? fallback;
+});
 // biome-ignore lint/style/useConst: Svelte state is rebound by UpgradeBanner.
 let bannerShowing = $state(false);
 let embeddingsPrefetchPromise: Promise<unknown[]> | null = null;

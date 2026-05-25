@@ -15,7 +15,8 @@ export interface AgentScope {
  * Final fallback: "default".
  */
 export function resolveAgentId(body: { agentId?: string; sessionKey?: string }): string {
-	if (body.agentId) return body.agentId;
+	const explicit = body.agentId?.trim();
+	if (explicit) return explicit;
 	const parts = (body.sessionKey ?? "").split(":");
 	if (parts[0] === "agent" && parts[1]?.trim()) return parts[1].trim();
 	return "default";
@@ -52,5 +53,24 @@ export function getAgentScope(agentId: string): AgentScope {
 			readPolicy: "isolated",
 			policyGroup: null,
 		};
+	}
+}
+
+export function ensureAgentRegistered(agentId: string, readPolicy = "shared"): void {
+	const id = agentId.trim() || "default";
+	const now = new Date().toISOString();
+	try {
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO agents (id, name, read_policy, policy_group, created_at, updated_at)
+				 VALUES (?, ?, ?, NULL, ?, ?)
+				 ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at`,
+			).run(id, id, readPolicy, now, now);
+		});
+	} catch (err) {
+		console.warn(
+			`[agent-id] Failed to register agent "${id}" (non-fatal):`,
+			err instanceof Error ? err.message : String(err),
+		);
 	}
 }

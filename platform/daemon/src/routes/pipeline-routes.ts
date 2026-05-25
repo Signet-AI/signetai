@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { parseSimpleYaml, readPipelinePauseState, setPipelinePaused } from "@signet/core";
 import type { Context, Hono } from "hono";
-import { resolveAgentId } from "../agent-id.js";
+import { resolveAgentId, resolveDaemonAgentId } from "../agent-id.js";
 import { requirePermission, requireRateLimit } from "../auth";
 import { getDbAccessor } from "../db-accessor.js";
 import { DreamPromotionError, promoteDreamingEvidence } from "../dream-promotion.js";
@@ -182,6 +182,7 @@ export function registerPipelineRoutes(app: Hono): void {
 			host: HOST,
 			bindHost: BIND_HOST,
 			networkMode: NETWORK_MODE,
+			agentId: resolveDaemonAgentId(),
 			agentsDir: AGENTS_DIR,
 			memoryDb: existsSync(MEMORY_DB),
 			pipelineV2: config.pipelineV2,

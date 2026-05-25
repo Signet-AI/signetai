@@ -41,9 +41,11 @@ for injection into the harness system prompt. Requires `remember` permission
 }
 ```
 
-`harness` is required. `agentId` is the Signet persistence scope. Harness
-native sub-agent identifiers, such as Claude Code's `agent_id`, must be sent as
-`harnessAgentId`; they are lineage hints and are not used for Signet data
+`harness` is required. `agentId` is the Signet persistence scope. First-seen
+named agent IDs are registered in the `agents` table with `read_policy` set to
+`shared` as the initial policy; existing agent policy rows are preserved.
+Harness native sub-agent identifiers, such as Claude Code's `agent_id`, must be
+sent as `harnessAgentId`; they are lineage hints and are not used for Signet data
 scoping. `parentSessionKey` may be provided when the harness exposes explicit
 lineage. If it is absent, Signet infers parent context where possible from
 harness-native signals such as OpenClaw lineage session keys or recent Claude

@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { vectorSearch } from "@signet/core";
 import type { Hono } from "hono";
-import { getAgentScope, resolveAgentId } from "../agent-id";
+import { ensureAgentRegistered, getAgentScope, resolveAgentId } from "../agent-id";
 import { aggregateRecall, parseAggregateRecallBudget, readAggregateRecallBudgetInput } from "../aggregate-recall";
 import { checkScope, requirePermission, requireRateLimit } from "../auth";
 import { normalizeAndHashContent } from "../content-normalization";
@@ -960,6 +960,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		const scope = body.scope ?? null;
 		const rowProvenance = parseRememberRowProvenance(body as Record<string, unknown>);
 		const agentId = resolveAgentId({ agentId: body.agentId, sessionKey: c.req.header("x-signet-session-key") });
+		ensureAgentRegistered(agentId);
 		const visibility = body.visibility === "private" ? "private" : "global";
 		const dedupeScope = { agentId, visibility, scope };
 		const hasBodyTags = Object.prototype.hasOwnProperty.call(body, "tags");

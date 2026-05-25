@@ -99,6 +99,9 @@ Only `content` is required. Multi-agent fields:
 | `agentId`    | Agent that owns this memory. Defaults to `"default"`. |
 | `visibility` | `"global"` (any permitted agent can read), `"private"` (owner only). Defaults to `"global"`. |
 
+First-seen named `agentId` values are registered in the `agents` table with
+`read_policy` set to `shared`; existing agent policy rows are preserved.
+
 `createdAt` is optional and must be a valid ISO timestamp. Use it when the
 memory is sourced from an older conversation or imported artifact so structured
 currentness and supersession can compare facts by source time instead of ingest

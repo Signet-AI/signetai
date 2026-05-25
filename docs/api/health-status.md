@@ -61,6 +61,7 @@ silent fallback or hard-blocked extraction after boot.
   "host": "127.0.0.1",
   "bindHost": "127.0.0.1",
   "networkMode": "localhost",
+  "agentId": "default",
   "agentsDir": "/home/user/.agents",
   "memoryDb": true,
   "pipelineV2": {
