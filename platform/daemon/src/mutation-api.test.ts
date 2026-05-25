@@ -290,6 +290,58 @@ memory:
 		expect(row?.count).toBe(3);
 	});
 
+	it("POST /api/memory/remember scopes source-id temporal dedupe by memory owner", async () => {
+		const first = await app.request("http://localhost/api/memory/remember", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				content: "Default source temporal provenance import",
+				who: "soulvessel.tests",
+				sourceType: "source-temporal-test",
+				sourceId: "shared-source-temporal-key",
+				occurredAt: "2026-05-13T18:00:00.000Z",
+			}),
+		});
+		const firstJson = (await first.json()) as { id?: string; deduped?: boolean };
+		expect(first.status).toBe(200);
+		expect(firstJson.id).toBeString();
+		expect(firstJson.deduped).toBeUndefined();
+
+		const otherAgent = await app.request("http://localhost/api/memory/remember", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				content: "Agent source temporal provenance import",
+				who: "soulvessel.tests",
+				agentId: "agent-a",
+				sourceType: "source-temporal-test",
+				sourceId: "shared-source-temporal-key",
+				occurredAt: "2026-05-13T19:00:00.000Z",
+			}),
+		});
+		const otherAgentJson = (await otherAgent.json()) as { id?: string; deduped?: boolean };
+		expect(otherAgent.status).toBe(200);
+		expect(otherAgentJson.id).toBeString();
+		expect(otherAgentJson.id).not.toBe(firstJson.id);
+		expect(otherAgentJson.deduped).toBeUndefined();
+
+		const rows = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare(
+						`SELECT agent_id AS agentId, subject_id AS subjectId
+						 FROM temporal_edges
+						 WHERE subject_type = 'memory' AND facet = 'occurred'
+						 ORDER BY agent_id`,
+					)
+					.all() as Array<{ agentId: string; subjectId: string }>,
+		);
+		expect(rows).toEqual([
+			{ agentId: "agent-a", subjectId: otherAgentJson.id },
+			{ agentId: "default", subjectId: firstJson.id },
+		]);
+	});
+
 	it("POST /api/memory/remember matches normalized idempotency-key index scope", async () => {
 		const first = await app.request("http://localhost/api/memory/remember", {
 			method: "POST",

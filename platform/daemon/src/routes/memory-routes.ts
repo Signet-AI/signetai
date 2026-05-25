@@ -256,6 +256,7 @@ interface RememberDedupeScope {
 
 interface RememberDedupeRow {
 	readonly id: string;
+	readonly agentId: string;
 	readonly type: string;
 	readonly tags: string | null;
 	readonly pinned: number;
@@ -385,12 +386,29 @@ function getScopedIdempotencyDedupeRow(
 	const scoped = scopedMemoryPredicate(input);
 	return db
 		.prepare(
-			`SELECT id, type, tags, pinned, importance, content
+			`SELECT id, COALESCE(NULLIF(agent_id, ''), 'default') AS agentId, type, tags, pinned, importance, content
 			 FROM memories
 			 WHERE idempotency_key = ? AND ${scoped.sql} AND is_deleted = 0
 			 LIMIT 1`,
 		)
 		.get(key, ...scoped.params) as RememberDedupeRow | undefined;
+}
+
+function getScopedSourceDedupeRow(
+	db: WriteDb,
+	sourceType: string,
+	sourceId: string,
+	input: RememberDedupeScope,
+): RememberDedupeRow | undefined {
+	const scoped = scopedMemoryPredicate(input);
+	return db
+		.prepare(
+			`SELECT id, COALESCE(NULLIF(agent_id, ''), 'default') AS agentId, type, tags, pinned, importance, content
+			 FROM memories
+			 WHERE source_type = ? AND source_id = ? AND ${scoped.sql} AND is_deleted = 0
+			 LIMIT 1`,
+		)
+		.get(sourceType, sourceId, ...scoped.params) as RememberDedupeRow | undefined;
 }
 
 function getScopedContentHashMemoryId(
@@ -422,7 +440,7 @@ function getScopedContentHashDedupeRow(
 	const scoped = scopedContentHashPredicate(input);
 	return db
 		.prepare(
-			`SELECT id, type, tags, pinned, importance, content
+			`SELECT id, COALESCE(NULLIF(agent_id, ''), 'default') AS agentId, type, tags, pinned, importance, content
 			 FROM memories
 			 WHERE content_hash = ? AND ${scoped.sql} AND is_deleted = 0
 			 LIMIT 1`,
@@ -1266,27 +1284,11 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			return c.json({ error: "idempotencyKey already used for chunked content" }, 409);
 		}
 
-		type DedupeRow = RememberDedupeRow;
-
 		try {
 			const result = getDbAccessor().withWriteTx((db) => {
 				// Check sourceId-based dedupe first (scope-aware)
 				if (sourceId) {
-					const bySource = (
-						scope !== null
-							? db
-									.prepare(
-										`SELECT id, type, tags, pinned, importance, content
-						 FROM memories WHERE source_type = ? AND source_id = ? AND scope = ? AND is_deleted = 0 LIMIT 1`,
-									)
-									.get(sourceType, sourceId, scope)
-							: db
-									.prepare(
-										`SELECT id, type, tags, pinned, importance, content
-						 FROM memories WHERE source_type = ? AND source_id = ? AND scope IS NULL AND is_deleted = 0 LIMIT 1`,
-									)
-									.get(sourceType, sourceId)
-					) as DedupeRow | undefined;
+					const bySource = getScopedSourceDedupeRow(db, sourceType, sourceId, dedupeScope);
 					if (bySource) return { deduped: true as const, row: bySource };
 				}
 
@@ -1345,7 +1347,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 					txInsertExplicitTemporalEdges({
 						db,
 						memoryId: result.row.id,
-						agentId,
+						agentId: result.row.agentId,
 						inputs: temporalInputs.inputs ?? [],
 						now,
 					}),
@@ -1374,7 +1376,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 						txInsertExplicitTemporalEdges({
 							db,
 							memoryId: existing.id,
-							agentId,
+							agentId: existing.agentId,
 							inputs: temporalInputs.inputs ?? [],
 							now,
 						}),
