@@ -501,9 +501,11 @@ on-demand inspection.
 
 Each maintenance cycle runs three phases. First, `getDiagnostics` produces
 a `DiagnosticsReport` that captures queue health (dead rate, stale lease
-count), index health (FTS row count vs active memory count), and storage
-health (tombstone ratio). A composite score in [0, 1] summarizes overall
-health.
+count), index health (FTS row count vs active memory count), storage health
+(tombstone ratio and SQLite page size), and graph health. A composite score in
+[0, 1] summarizes overall health, and when graph is enabled the composite
+status propagates graph degradation when the graph has flatlined across many
+active memories.
 
 Second, `buildRecommendations` translates the report into a list of repair
 actions:

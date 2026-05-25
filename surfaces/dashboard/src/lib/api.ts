@@ -3259,6 +3259,12 @@ export interface DiagnosticsReport {
 	connector: DiagnosticsDomain & { count?: number; errorCount?: number };
 	predictor: DiagnosticsDomain & { alpha?: number; successRate?: number };
 	mutation: DiagnosticsDomain;
+	graph: DiagnosticsDomain & {
+		entityCount?: number;
+		edgeCount?: number;
+		communityCount?: number;
+		quality?: string;
+	};
 	[key: string]: unknown;
 }
 

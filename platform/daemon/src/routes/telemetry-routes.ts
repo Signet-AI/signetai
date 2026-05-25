@@ -14,6 +14,7 @@ import {
 	CURRENT_VERSION,
 	analyticsCollector,
 	authConfig,
+	getDiagnosticsOptions,
 	getUpdateState,
 	providerTracker,
 	telemetryRef,
@@ -64,7 +65,9 @@ export function registerTelemetryRoutes(app: Hono): void {
 	});
 
 	app.get("/api/analytics/memory-safety", (c) => {
-		const mutationHealth = getDbAccessor().withReadDb((db) => getDiagnostics(db, providerTracker, getUpdateState()));
+		const mutationHealth = getDbAccessor().withReadDb((db) =>
+			getDiagnostics(db, providerTracker, getUpdateState(), undefined, getDiagnosticsOptions()),
+		);
 		const recentMutationErrors = analyticsCollector.getErrors({
 			stage: "mutation",
 			limit: 50,
