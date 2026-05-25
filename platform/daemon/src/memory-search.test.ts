@@ -502,6 +502,89 @@ describe("hybridRecall", () => {
 		expect(resultText).not.toContain("/repo/beta-temporal.md");
 	});
 
+	it("keeps shared temporal session and source rows own-agent only", async () => {
+		const now = "2026-05-24T18:00:00.000Z";
+		getDbAccessor().withWriteTx((db) => {
+			const agent = db.prepare(
+				`INSERT INTO agents (id, name, read_policy, created_at, updated_at)
+				 VALUES (?, ?, ?, ?, ?)
+				 ON CONFLICT(id) DO UPDATE SET read_policy = excluded.read_policy, updated_at = excluded.updated_at`,
+			);
+			agent.run("agent-a", "agent-a", "shared", now, now);
+			agent.run("agent-shared-other", "agent-shared-other", "shared", now, now);
+
+			const summary = db.prepare(
+				`INSERT INTO session_summaries (
+					id, project, depth, kind, content, earliest_at, latest_at, session_key, harness, agent_id, created_at
+				) VALUES (?, ?, 0, 'session', ?, ?, ?, ?, 'codex', ?, ?)`,
+			);
+			summary.run(
+				"summary-own-shared",
+				"/repo",
+				"Own shared-policy session timeline activity.",
+				"2026-05-13T16:00:00.000Z",
+				"2026-05-13T17:00:00.000Z",
+				"sess-own-shared",
+				"agent-a",
+				"2026-05-13T17:00:00.000Z",
+			);
+			summary.run(
+				"summary-other-shared",
+				"/repo",
+				"Other shared-policy session timeline activity.",
+				"2026-05-13T18:00:00.000Z",
+				"2026-05-13T19:00:00.000Z",
+				"sess-other-shared",
+				"agent-shared-other",
+				"2026-05-13T19:00:00.000Z",
+			);
+
+			const artifact = db.prepare(
+				`INSERT INTO memory_artifacts (
+					agent_id, source_path, source_sha256, source_kind, session_id, session_token,
+					project, harness, captured_at, content, updated_at
+				) VALUES (?, ?, ?, 'obsidian', ?, ?, '/repo', 'codex', ?, ?, ?)`,
+			);
+			artifact.run(
+				"agent-a",
+				"/repo/own-shared-temporal.md",
+				createHash("sha256").update("own-shared-temporal").digest("hex"),
+				"sess-own-shared",
+				"token-own-shared",
+				"2026-05-13T16:30:00.000Z",
+				"Own shared-policy source activity.",
+				"2026-05-13T16:30:00.000Z",
+			);
+			artifact.run(
+				"agent-shared-other",
+				"/repo/other-shared-temporal.md",
+				createHash("sha256").update("other-shared-temporal").digest("hex"),
+				"sess-other-shared",
+				"token-other-shared",
+				"2026-05-13T18:30:00.000Z",
+				"Other shared-policy source activity.",
+				"2026-05-13T18:30:00.000Z",
+			);
+		});
+
+		const result = await hybridRecall(
+			{
+				query: "2026/05/13",
+				limit: 10,
+				agentId: "agent-a",
+				readPolicy: "shared",
+			},
+			testCfg(),
+			async () => null,
+		);
+
+		const resultText = JSON.stringify(result);
+		expect(resultText).toContain("Own shared-policy session timeline activity");
+		expect(resultText).toContain("/repo/own-shared-temporal.md");
+		expect(resultText).not.toContain("Other shared-policy session timeline activity");
+		expect(resultText).not.toContain("/repo/other-shared-temporal.md");
+	});
+
 	it("uses explicit occurred temporal edges for date plus topic recall", async () => {
 		const savedAt = "2026-05-24T18:00:00.000Z";
 		getDbAccessor().withWriteTx((db) => {
@@ -548,7 +631,7 @@ describe("hybridRecall", () => {
 		expect(result.results.map((row) => row.id)).not.toContain("mem-later");
 	});
 
-	it("uses scoped temporal edge candidates without lexical prefiltering", async () => {
+	it("lets hybrid topic evidence filter scoped temporal edge candidates", async () => {
 		const savedAt = "2026-05-24T18:00:00.000Z";
 		getDbAccessor().withWriteTx((db) => {
 			const agent = db.prepare(
@@ -564,7 +647,24 @@ describe("hybridRecall", () => {
 				`INSERT INTO memories (
 					id, content, type, agent_id, visibility, created_at, updated_at, updated_by, is_deleted
 				) VALUES (?, ?, 'fact', ?, 'global', ?, ?, 'test', 0)`,
-			).run("mem-alpha-edge", "Alpha dated memory uses launch checklist wording.", "agent-alpha", savedAt, savedAt);
+			).run(
+				"mem-alpha-edge",
+				"Alpha dated memory mentions rollout but not every topic word.",
+				"agent-alpha",
+				savedAt,
+				savedAt,
+			);
+			db.prepare(
+				`INSERT INTO memories (
+					id, content, type, agent_id, visibility, created_at, updated_at, updated_by, is_deleted
+				) VALUES (?, ?, 'fact', ?, 'global', ?, ?, 'test', 0)`,
+			).run(
+				"mem-alpha-offtopic-edge",
+				"Alpha dated memory uses unrelated checklist wording.",
+				"agent-alpha",
+				savedAt,
+				savedAt,
+			);
 			db.prepare(
 				`INSERT INTO memories (
 					id, content, type, agent_id, visibility, created_at, updated_at, updated_by, is_deleted
@@ -586,6 +686,15 @@ describe("hybridRecall", () => {
 				savedAt,
 			);
 			edge.run(
+				"edge-alpha-offtopic-group",
+				"agent-alpha",
+				"mem-alpha-offtopic-edge",
+				"2026-05-13T18:00:00.000Z",
+				"2026-05-13T18:00:00.000Z",
+				savedAt,
+				savedAt,
+			);
+			edge.run(
 				"edge-beta-group",
 				"agent-beta",
 				"mem-beta-edge",
@@ -598,8 +707,8 @@ describe("hybridRecall", () => {
 
 		const result = await hybridRecall(
 			{
-				query: "2026/05/13 rollout",
-				keywordQuery: "rollout",
+				query: "2026/05/13 rollout planning migration schedule",
+				keywordQuery: "rollout planning migration schedule",
 				limit: 5,
 				agentId: "agent-group",
 				readPolicy: "group",
@@ -610,6 +719,7 @@ describe("hybridRecall", () => {
 		);
 
 		expect(result.results.map((row) => row.id)).toContain("mem-alpha-edge");
+		expect(result.results.map((row) => row.id)).not.toContain("mem-alpha-offtopic-edge");
 		expect(result.results.map((row) => row.id)).not.toContain("mem-beta-edge");
 	});
 

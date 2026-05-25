@@ -1296,13 +1296,7 @@ export async function hybridRecall(
 	}
 
 	// --- Flat search: merge BM25 + vector + structured path candidate scores ---
-	const allIds = new Set([
-		...bm25Map.keys(),
-		...hintMap.keys(),
-		...vectorMap.keys(),
-		...structuredCandidateMap.keys(),
-		...temporalCandidateSet,
-	]);
+	const allIds = new Set([...bm25Map.keys(), ...hintMap.keys(), ...vectorMap.keys(), ...structuredCandidateMap.keys()]);
 	const flatScored: Array<{ id: string; score: number; source: string }> = [];
 
 	timings.time("flat_score_merge", () => {
@@ -1311,7 +1305,8 @@ export async function hybridRecall(
 			const hint = hintMap.get(id) ?? 0;
 			const vec = vectorMap.get(id) ?? 0;
 			const structured = structuredCandidateMap.get(id) ?? 0;
-			const temporalScore = temporalCandidateSet.has(id) ? 0.85 : 0;
+			const topicEvidence = bm25 > 0 || hint > 0 || vec > 0 || structured > 0;
+			const temporalScore = temporalCandidateSet.has(id) && topicEvidence ? 0.85 : 0;
 			let score: number;
 			let source: string;
 
@@ -1928,7 +1923,7 @@ export async function hybridRecall(
 			: limit;
 	const topIds = params.sourceOnly === true ? [] : scored.slice(0, preHydrate).map((s) => s.id);
 	const recallTruncate = cfg.pipelineV2.guardrails.recallTruncateChars;
-	const allowSourceFallbacks = !hasMemoryMetadataFilters(params);
+	const allowSourceFallbacks = temporalCandidateSet.size === 0 && !hasMemoryMetadataFilters(params);
 
 	if (topIds.length === 0) {
 		const fallbackLimit = selectionDedupeEnabled ? Math.max(limit * 3, limit + 10) : limit;

@@ -330,12 +330,6 @@ function memoryVisibilitySql(params: TemporalRecallParams): { sql: string; args:
 
 function temporalOwnerSql(column: string, params: TemporalRecallParams): { sql: string; args: unknown[] } {
 	const agentId = params.agentId ?? "default";
-	if (params.readPolicy === "shared") {
-		return {
-			sql: ` AND (${column} = ? OR ${column} IN (SELECT id FROM agents WHERE read_policy = 'shared'))`,
-			args: [agentId],
-		};
-	}
 	if (params.readPolicy === "group" && params.policyGroup) {
 		return {
 			sql: ` AND (${column} = ? OR ${column} IN (SELECT id FROM agents WHERE policy_group = ?))`,
