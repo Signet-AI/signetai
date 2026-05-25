@@ -328,6 +328,23 @@ function memoryVisibilitySql(params: TemporalRecallParams): { sql: string; args:
 	);
 }
 
+function temporalOwnerSql(column: string, params: TemporalRecallParams): { sql: string; args: unknown[] } {
+	const agentId = params.agentId ?? "default";
+	if (params.readPolicy === "shared") {
+		return {
+			sql: ` AND (${column} = ? OR ${column} IN (SELECT id FROM agents WHERE read_policy = 'shared'))`,
+			args: [agentId],
+		};
+	}
+	if (params.readPolicy === "group" && params.policyGroup) {
+		return {
+			sql: ` AND (${column} = ? OR ${column} IN (SELECT id FROM agents WHERE policy_group = ?))`,
+			args: [agentId, params.policyGroup],
+		};
+	}
+	return { sql: ` AND ${column} = ?`, args: [agentId] };
+}
+
 function shorten(content: string, maxChars: number): { content: string; truncated: boolean; length: number } {
 	const oneLine = content.replace(/\s+/g, " ").trim();
 	return {
@@ -372,18 +389,19 @@ function collectTemporalRows(intent: ParsedTemporalIntent, params: TemporalRecal
 
 	return getDbAccessor().withReadDb((db) => {
 		if (temporalFacetAllowed(intent.facets, "session") && tableExists(db, "session_summaries")) {
+			const owner = temporalOwnerSql("agent_id", params);
 			const project = projectSql(params.project, "project");
 			const sessionRows = db
 				.prepare(
 					`SELECT id, content, project, session_key, harness, earliest_at, latest_at, created_at
 					 FROM session_summaries
-					 WHERE agent_id = ?
+					 WHERE 1 = 1${owner.sql}
 					   AND COALESCE(source_type, kind) != 'chunk'
 					   AND ${overlapClause("earliest_at", "latest_at")}${project.sql}
 					 ORDER BY latest_at DESC
 					 LIMIT ?`,
 				)
-				.all(agentId, intent.end, intent.start, ...project.args, params.limit * 6) as Array<{
+				.all(...owner.args, intent.end, intent.start, ...project.args, params.limit * 6) as Array<{
 				id: string;
 				content: string;
 				project: string | null;
@@ -469,20 +487,21 @@ function collectTemporalRows(intent: ParsedTemporalIntent, params: TemporalRecal
 		}
 
 		if (tableExists(db, "memory_artifacts")) {
+			const owner = temporalOwnerSql("agent_id", params);
 			const project = projectSql(params.project, "project");
 			if (temporalFacetAllowed(intent.facets, "captured")) {
 				const artifactRows = db
 					.prepare(
 						`SELECT rowid, source_path, source_kind, source_id, harness, project, content, captured_at, updated_at
 						 FROM memory_artifacts
-						 WHERE agent_id = ?
+						 WHERE 1 = 1${owner.sql}
 						   AND COALESCE(is_deleted, 0) = 0
 						   AND captured_at >= ?
 						   AND captured_at < ?${project.sql}
 						 ORDER BY captured_at DESC
 						 LIMIT ?`,
 					)
-					.all(agentId, intent.start, intent.end, ...project.args, params.limit * 4) as Array<{
+					.all(...owner.args, intent.start, intent.end, ...project.args, params.limit * 4) as Array<{
 					rowid: number;
 					source_path: string;
 					source_kind: string;
@@ -523,7 +542,7 @@ function collectTemporalRows(intent: ParsedTemporalIntent, params: TemporalRecal
 						`SELECT rowid, source_path, source_kind, source_id, harness, project, content,
 						        ${sourceAtExpr} AS source_at
 						 FROM memory_artifacts
-						 WHERE agent_id = ?
+						 WHERE 1 = 1${owner.sql}
 						   AND COALESCE(is_deleted, 0) = 0
 						   AND source_mtime_ms IS NOT NULL
 						   AND ${sourceAtExpr} >= ?
@@ -531,7 +550,7 @@ function collectTemporalRows(intent: ParsedTemporalIntent, params: TemporalRecal
 						 ORDER BY source_at DESC
 						 LIMIT ?`,
 					)
-					.all(agentId, intent.start, intent.end, ...project.args, params.limit * 4) as Array<{
+					.all(...owner.args, intent.start, intent.end, ...project.args, params.limit * 4) as Array<{
 					rowid: number;
 					source_path: string;
 					source_kind: string;

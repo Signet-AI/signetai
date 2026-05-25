@@ -417,6 +417,91 @@ describe("hybridRecall", () => {
 		expect(result.results.some((row) => row.source_path === "/repo/notes/temporal.md")).toBe(true);
 	});
 
+	it("honors group policy for temporal session and source rows", async () => {
+		const now = "2026-05-24T18:00:00.000Z";
+		getDbAccessor().withWriteTx((db) => {
+			const agent = db.prepare(
+				`INSERT INTO agents (id, name, read_policy, policy_group, created_at, updated_at)
+				 VALUES (?, ?, 'isolated', ?, ?, ?)
+				 ON CONFLICT(id) DO UPDATE SET policy_group = excluded.policy_group, updated_at = excluded.updated_at`,
+			);
+			agent.run("agent-group", "agent-group", "team-1", now, now);
+			agent.run("agent-alpha", "agent-alpha", "team-1", now, now);
+			agent.run("agent-beta", "agent-beta", "team-2", now, now);
+
+			const summary = db.prepare(
+				`INSERT INTO session_summaries (
+					id, project, depth, kind, content, earliest_at, latest_at, session_key, harness, agent_id, created_at
+				) VALUES (?, ?, 0, 'session', ?, ?, ?, ?, 'codex', ?, ?)`,
+			);
+			summary.run(
+				"summary-alpha-group",
+				"/repo",
+				"Team alpha session timeline activity.",
+				"2026-05-13T16:00:00.000Z",
+				"2026-05-13T17:00:00.000Z",
+				"sess-alpha-group",
+				"agent-alpha",
+				"2026-05-13T17:00:00.000Z",
+			);
+			summary.run(
+				"summary-beta-group",
+				"/repo",
+				"Team beta session timeline activity.",
+				"2026-05-13T18:00:00.000Z",
+				"2026-05-13T19:00:00.000Z",
+				"sess-beta-group",
+				"agent-beta",
+				"2026-05-13T19:00:00.000Z",
+			);
+
+			const artifact = db.prepare(
+				`INSERT INTO memory_artifacts (
+					agent_id, source_path, source_sha256, source_kind, session_id, session_token,
+					project, harness, captured_at, content, updated_at
+				) VALUES (?, ?, ?, 'obsidian', ?, ?, '/repo', 'codex', ?, ?, ?)`,
+			);
+			artifact.run(
+				"agent-alpha",
+				"/repo/alpha-temporal.md",
+				createHash("sha256").update("alpha-temporal").digest("hex"),
+				"sess-alpha-group",
+				"token-alpha-group",
+				"2026-05-13T16:30:00.000Z",
+				"Team alpha source activity.",
+				"2026-05-13T16:30:00.000Z",
+			);
+			artifact.run(
+				"agent-beta",
+				"/repo/beta-temporal.md",
+				createHash("sha256").update("beta-temporal").digest("hex"),
+				"sess-beta-group",
+				"token-beta-group",
+				"2026-05-13T18:30:00.000Z",
+				"Team beta source activity.",
+				"2026-05-13T18:30:00.000Z",
+			);
+		});
+
+		const result = await hybridRecall(
+			{
+				query: "2026/05/13",
+				limit: 10,
+				agentId: "agent-group",
+				readPolicy: "group",
+				policyGroup: "team-1",
+			},
+			testCfg(),
+			async () => null,
+		);
+
+		const resultText = JSON.stringify(result);
+		expect(resultText).toContain("Team alpha session timeline activity");
+		expect(resultText).toContain("/repo/alpha-temporal.md");
+		expect(resultText).not.toContain("Team beta session timeline activity");
+		expect(resultText).not.toContain("/repo/beta-temporal.md");
+	});
+
 	it("uses explicit occurred temporal edges for date plus topic recall", async () => {
 		const savedAt = "2026-05-24T18:00:00.000Z";
 		getDbAccessor().withWriteTx((db) => {
