@@ -41,6 +41,30 @@ const DISCORD_PROVIDER_KIND: SourceProviderKind = "discord";
 const DISCORD_HARNESS = "discord";
 const DEFAULT_MAX_MEMBERS_PER_GUILD = 10_000;
 const DEFAULT_MAX_THREADS_PER_PARENT = 1_000;
+const ATTACHMENT_TEXT_FETCH_TIMEOUT_MS = 15_000;
+const TEXT_ATTACHMENT_EXTENSIONS = new Set([
+	".txt",
+	".md",
+	".markdown",
+	".csv",
+	".tsv",
+	".json",
+	".jsonl",
+	".yaml",
+	".yml",
+	".xml",
+	".html",
+	".htm",
+	".css",
+	".js",
+	".ts",
+	".tsx",
+	".jsx",
+	".log",
+	".sql",
+	".toml",
+	".ini",
+]);
 const DISCORD_MESSAGE_HISTORY_KINDS = [
 	"source_discord_message_window",
 	"source_discord_message",
@@ -48,6 +72,7 @@ const DISCORD_MESSAGE_HISTORY_KINDS = [
 	"source_discord_message_event",
 	"source_discord_mention",
 	"source_discord_attachment",
+	"source_discord_attachment_text",
 	"source_discord_embed",
 	"source_discord_poll",
 ] as const;
@@ -234,8 +259,10 @@ async function syncDiscordSource(context: SourceProviderSyncContext): Promise<So
 				});
 			}
 			const channelMessages = [...messages.data, ...(backfill?.data ?? [])];
-			indexed += writeMessageArtifacts(context.source, agentId, guild, channel, channelMessages, {
+			indexed += await writeMessageArtifacts(context.source, agentId, guild, channel, channelMessages, failures, {
 				includeAttachments: settings.includeAttachments,
+				includeAttachmentText: settings.includeAttachmentText,
+				maxAttachmentTextBytes: settings.maxAttachmentTextBytes,
 				includeEmbeds: settings.includeEmbeds,
 				includePolls: settings.includePolls,
 			});
@@ -411,14 +438,21 @@ function sourceArtifactDisplayName(artifact: DiscordArtifact): string | undefine
 	return typeof name === "string" && name.trim().length > 0 ? name.trim() : undefined;
 }
 
-function writeMessageArtifacts(
+async function writeMessageArtifacts(
 	source: SignetSourceEntry,
 	agentId: string,
 	guild: DiscordGuild,
 	channel: DiscordChannel,
 	messages: readonly DiscordMessage[],
-	options: { readonly includeAttachments: boolean; readonly includeEmbeds: boolean; readonly includePolls: boolean },
-): number {
+	failures: SourceFailureState[],
+	options: {
+		readonly includeAttachments: boolean;
+		readonly includeAttachmentText: boolean;
+		readonly maxAttachmentTextBytes: number;
+		readonly includeEmbeds: boolean;
+		readonly includePolls: boolean;
+	},
+): Promise<number> {
 	if (messages.length === 0) return 0;
 	let indexed = writeArtifact(source, agentId, messageWindowArtifact(guild, channel, messages));
 	for (const msg of messages) {
@@ -428,6 +462,29 @@ function writeMessageArtifacts(
 		if (options.includeAttachments) {
 			for (const attachment of msg.attachments ?? []) {
 				indexed += writeArtifact(source, agentId, attachmentArtifact(guild, channel, msg, attachment));
+				if (options.includeAttachmentText) {
+					const extracted = await attachmentTextArtifact(
+						guild,
+						channel,
+						msg,
+						attachment,
+						options.maxAttachmentTextBytes,
+					);
+					if (extracted.ok) {
+						if (extracted.artifact) indexed += writeArtifact(source, agentId, extracted.artifact);
+					} else {
+						const failure = failureState(source, extracted.error, {
+							guildId: guild.id,
+							channelId: channel.id,
+							messageId: msg.id,
+							attachmentId: attachment.id,
+							phase: "attachment_text",
+						});
+						failures.push(failure);
+						writeFailureArtifact(source, agentId, failure);
+						indexed++;
+					}
+				}
 			}
 		}
 		if (options.includeEmbeds) {
@@ -860,7 +917,7 @@ function purgeClearedPartialUpdateArtifacts(
 	const clearedKinds: string[] = [];
 	if (hasOwn(payload, "poll") && !isRecord(payload.poll)) clearedKinds.push("source_discord_poll");
 	if (Array.isArray(payload.attachments) && payload.attachments.length === 0)
-		clearedKinds.push("source_discord_attachment");
+		clearedKinds.push("source_discord_attachment", "source_discord_attachment_text");
 	if (Array.isArray(payload.embeds) && payload.embeds.length === 0) clearedKinds.push("source_discord_embed");
 	const mentions = Array.isArray(payload.mentions) ? payload.mentions : null;
 	const mentionRoles = Array.isArray(payload.mention_roles) ? payload.mention_roles : null;
@@ -1040,6 +1097,118 @@ function attachmentArtifact(
 			proxyUrlPresent: !!attachment.proxy_url,
 		},
 	};
+}
+
+async function attachmentTextArtifact(
+	guild: DiscordGuild,
+	channel: DiscordChannel,
+	msg: DiscordMessage,
+	attachment: DiscordAttachment,
+	maxBytes: number,
+): Promise<
+	{ readonly ok: true; readonly artifact?: DiscordArtifact } | { readonly ok: false; readonly error: string }
+> {
+	if (!attachment.url || !isAllowedDiscordAttachmentUrl(attachment.url)) return { ok: true };
+	if (isSensitiveAttachmentFilename(attachment.filename) || !isTextLikeAttachment(attachment)) return { ok: true };
+	if (attachment.size > maxBytes) return { ok: true };
+	const controller = new AbortController();
+	const timeout = setTimeout(() => controller.abort(), ATTACHMENT_TEXT_FETCH_TIMEOUT_MS);
+	try {
+		const response = await fetch(attachment.url, {
+			headers: { "User-Agent": "Signet-Daemon (discord-source-attachment-text)" },
+			signal: controller.signal,
+		});
+		if (!response.ok) return { ok: false, error: `Discord attachment text fetch failed: HTTP ${response.status}` };
+		const contentLength = Number(response.headers.get("content-length") ?? "0");
+		if (contentLength > maxBytes) return { ok: true };
+		const responseType = response.headers.get("content-type") ?? attachment.content_type ?? "";
+		if (!isTextLikeContentType(responseType) && !isTextLikeFilename(attachment.filename)) return { ok: true };
+		const data = await response.arrayBuffer();
+		if (data.byteLength > maxBytes) return { ok: false, error: "Discord attachment text fetch exceeded byte limit" };
+		const text = new TextDecoder("utf-8").decode(data).trim();
+		if (!text) return { ok: true };
+		const attachmentPath = `discord://guild/${guild.id}/channel/${channel.id}/message/${msg.id}/attachment/${attachment.id}`;
+		return {
+			ok: true,
+			artifact: {
+				kind: "source_discord_attachment_text",
+				externalId: `attachment_text:${attachment.id}`,
+				path: `${attachmentPath}/text`,
+				parentPath: attachmentPath,
+				mtimeMs: Date.parse(msg.timestamp) || Date.now(),
+				content: [
+					`# Discord Attachment Text: ${attachment.filename}`,
+					"",
+					`Guild: ${guild.name}`,
+					`Channel: ${channel.name ?? channel.id}`,
+					`Message: ${msg.id}`,
+					`Attachment: ${attachment.id}`,
+					`Bytes: ${data.byteLength}`,
+					"",
+					text,
+				].join("\n"),
+				meta: {
+					provider: DISCORD_PROVIDER_KIND,
+					recordType: "attachment_text",
+					guildId: guild.id,
+					channelId: channel.id,
+					messageId: msg.id,
+					attachmentId: attachment.id,
+					filename: attachment.filename,
+					contentType: responseType || null,
+					byteLength: data.byteLength,
+				},
+			},
+		};
+	} catch (err) {
+		return { ok: false, error: `Discord attachment text fetch failed: ${errorMessage(err)}` };
+	} finally {
+		clearTimeout(timeout);
+	}
+}
+
+function isAllowedDiscordAttachmentUrl(raw: string): boolean {
+	try {
+		const url = new URL(raw);
+		return (
+			url.protocol === "https:" && (url.hostname === "cdn.discordapp.com" || url.hostname === "media.discordapp.net")
+		);
+	} catch {
+		return false;
+	}
+}
+
+function isTextLikeAttachment(attachment: DiscordAttachment): boolean {
+	return isTextLikeContentType(attachment.content_type ?? "") || isTextLikeFilename(attachment.filename);
+}
+
+function isTextLikeContentType(value: string): boolean {
+	const contentType = value.toLowerCase().split(";")[0]?.trim() ?? "";
+	return (
+		contentType.startsWith("text/") ||
+		contentType === "application/json" ||
+		contentType === "application/jsonlines" ||
+		contentType === "application/x-ndjson" ||
+		contentType === "application/xml" ||
+		contentType === "application/yaml" ||
+		contentType === "application/x-yaml" ||
+		contentType === "application/javascript" ||
+		contentType === "application/typescript"
+	);
+}
+
+function isTextLikeFilename(filename: string): boolean {
+	const lower = filename.toLowerCase();
+	for (const extension of TEXT_ATTACHMENT_EXTENSIONS) {
+		if (lower.endsWith(extension)) return true;
+	}
+	return false;
+}
+
+function isSensitiveAttachmentFilename(filename: string): boolean {
+	const lower = filename.toLowerCase();
+	const basename = lower.split(/[\\/]/).pop() ?? lower;
+	return basename === ".env" || basename.startsWith(".env.") || basename.endsWith(".env");
 }
 
 function embedArtifact(

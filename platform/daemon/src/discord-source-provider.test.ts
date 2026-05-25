@@ -99,6 +99,101 @@ describe("discord-source-provider", () => {
 		expect(graph.attrs).toBeGreaterThan(0);
 	});
 
+	it("optionally indexes bounded text-like Discord attachments", async () => {
+		const requested: string[] = [];
+		globalThis.fetch = mock((url: string | URL | Request) => {
+			const text = String(url);
+			requested.push(text);
+			if (text === "https://cdn.discordapp.com/attachments/123/context.txt") {
+				return Promise.resolve(
+					new Response("launch plan body", {
+						headers: { "content-type": "text/plain; charset=utf-8", "content-length": "16" },
+					}),
+				);
+			}
+			if (text.includes("/guilds/123456789012345678?with_counts=true")) {
+				return Promise.resolve(Response.json({ id: "123456789012345678", name: "Guild A" }));
+			}
+			if (text.includes("/guilds/123456789012345678/channels")) {
+				return Promise.resolve(
+					Response.json([{ id: "123456789012345679", type: DISCORD_CHANNEL_TYPES.guildText, name: "general" }]),
+				);
+			}
+			if (text.includes("/channels/123456789012345679/messages")) {
+				return Promise.resolve(
+					Response.json([
+						{
+							id: "999999999999999999",
+							type: 0,
+							channel_id: "123456789012345679",
+							content: "message with files",
+							author: { id: "123456789012345681", username: "alice" },
+							timestamp: "2026-01-02T00:00:00.000Z",
+							attachments: [
+								{
+									id: "123456789012345684",
+									filename: "context.txt",
+									url: "https://cdn.discordapp.com/attachments/123/context.txt",
+									size: 16,
+									content_type: "text/plain",
+								},
+								{
+									id: "123456789012345685",
+									filename: "photo.png",
+									url: "https://cdn.discordapp.com/attachments/123/photo.png",
+									size: 64,
+									content_type: "image/png",
+								},
+								{
+									id: "123456789012345686",
+									filename: ".env",
+									url: "https://cdn.discordapp.com/attachments/123/.env",
+									size: 42,
+									content_type: "text/plain",
+								},
+							],
+						},
+					]),
+				);
+			}
+			if (text.includes("/members?")) return Promise.resolve(Response.json([]));
+			if (text.includes("/threads/active")) return Promise.resolve(Response.json({ threads: [] }));
+			if (text.includes("/threads/archived/")) return Promise.resolve(Response.json({ threads: [], has_more: false }));
+			return Promise.resolve(Response.json([]));
+		}) as typeof fetch;
+		const added = addDiscordSource(
+			{
+				guildIds: ["123456789012345678"],
+				tokenRef: "DISCORD_BOT_TOKEN",
+				includeAttachmentText: true,
+				maxAttachmentTextBytes: 1024,
+				now: "2026-01-01T00:00:00.000Z",
+			},
+			dir,
+		);
+		expect(added.ok).toBe(true);
+		if (added.ok === false) throw new Error(added.error);
+
+		const result = await discordSourceProvider.sync?.({
+			source: added.source,
+			agentsDir: dir,
+			agentId: "default",
+			shouldContinue: () => true,
+		});
+
+		expect(result?.failures).toEqual([]);
+		expect(requested).toContain("https://cdn.discordapp.com/attachments/123/context.txt");
+		expect(requested).not.toContain("https://cdn.discordapp.com/attachments/123/photo.png");
+		expect(requested).not.toContain("https://cdn.discordapp.com/attachments/123/.env");
+		const rows = sourceRows(added.source.id);
+		const textArtifact = rows.find((row) => row.source_kind === "source_discord_attachment_text");
+		expect(textArtifact?.content).toContain("launch plan body");
+		expect(textArtifact?.source_path).toBe(
+			"discord://guild/123456789012345678/channel/123456789012345679/message/999999999999999999/attachment/123456789012345684/text",
+		);
+		expect(textArtifact?.source_meta_json).toContain('"byteLength":16');
+	});
+
 	it("tails Discord gateway events into source lifecycle artifacts", async () => {
 		let shouldContinue = true;
 		let socket: FakeDiscordGatewaySocket | null = null;

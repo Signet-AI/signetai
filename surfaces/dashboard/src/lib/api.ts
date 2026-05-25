@@ -1248,6 +1248,8 @@ export interface AddDiscordSourceInput {
 	includePrivateArchivedThreads?: boolean;
 	includeMembers?: boolean;
 	includeAttachments?: boolean;
+	includeAttachmentText?: boolean;
+	maxAttachmentTextBytes?: number;
 	includeEmbeds?: boolean;
 	includePolls?: boolean;
 	includeThreadMembers?: boolean;

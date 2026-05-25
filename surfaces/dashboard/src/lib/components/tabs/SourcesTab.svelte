@@ -140,6 +140,10 @@ let discordIncludePrivateArchivedThreads = $state(false);
 // biome-ignore lint/style/useConst: Svelte bind:checked mutates this rune from markup.
 let discordIncludeAttachments = $state(true);
 // biome-ignore lint/style/useConst: Svelte bind:checked mutates this rune from markup.
+let discordIncludeAttachmentText = $state(false);
+// biome-ignore lint/style/useConst: Svelte bind:value mutates this rune from markup.
+let discordMaxAttachmentTextBytes = $state(262144);
+// biome-ignore lint/style/useConst: Svelte bind:checked mutates this rune from markup.
 let discordIncludeEmbeds = $state(true);
 // biome-ignore lint/style/useConst: Svelte bind:checked mutates this rune from markup.
 let discordIncludePolls = $state(true);
@@ -692,6 +696,10 @@ async function submitDiscordSource(): Promise<void> {
 			includeArchivedThreads: discordUsesDesktopCache ? undefined : discordIncludeArchivedThreads,
 			includePrivateArchivedThreads: discordUsesDesktopCache ? undefined : discordIncludePrivateArchivedThreads,
 			includeAttachments: discordUsesDesktopCache ? undefined : discordIncludeAttachments,
+			includeAttachmentText: discordUsesDesktopCache
+				? undefined
+				: discordIncludeAttachments && discordIncludeAttachmentText,
+			maxAttachmentTextBytes: discordUsesDesktopCache ? undefined : discordMaxAttachmentTextBytes,
 			includeEmbeds: discordUsesDesktopCache ? undefined : discordIncludeEmbeds,
 			includePolls: discordUsesDesktopCache ? undefined : discordIncludePolls,
 			includeThreadMembers: discordUsesDesktopCache ? undefined : discordIncludeThreadMembers,
@@ -1425,6 +1433,10 @@ function sourceIndexCurrentPath(source: SignetSourceEntry): string {
 														<span>Attachments</span>
 													</label>
 													<label class="source-option-row">
+														<input bind:checked={discordIncludeAttachmentText} disabled={!discordIncludeAttachments} type="checkbox" />
+														<span>Attachment text</span>
+													</label>
+													<label class="source-option-row">
 														<input bind:checked={discordIncludeEmbeds} type="checkbox" />
 														<span>Embeds</span>
 													</label>
@@ -1433,6 +1445,13 @@ function sourceIndexCurrentPath(source: SignetSourceEntry): string {
 														<span>Polls</span>
 													</label>
 												</div>
+												{#if discordIncludeAttachmentText && discordIncludeAttachments}
+													<label>
+														<span>Attachment text bytes</span>
+														<input bind:value={discordMaxAttachmentTextBytes} type="number" min="1" max="1048576" />
+														<small class="field-hint">Only small text-like uploads are fetched. Binary media stays disabled.</small>
+													</label>
+												{/if}
 											{/if}
 											<button class="connect-button" type="submit" disabled={!canSubmit}>
 												{#if adding}<span class="spin"><RefreshCw /></span>{:else}<CirclePlus />{/if}

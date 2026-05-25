@@ -79,6 +79,8 @@ interface AddDiscordSourceBody {
 	readonly includePrivateArchivedThreads?: boolean;
 	readonly includeMembers?: boolean;
 	readonly includeAttachments?: boolean;
+	readonly includeAttachmentText?: boolean;
+	readonly maxAttachmentTextBytes?: number;
 	readonly includeEmbeds?: boolean;
 	readonly includePolls?: boolean;
 	readonly includeThreadMembers?: boolean;
@@ -201,6 +203,8 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 				includePrivateArchivedThreads: body.includePrivateArchivedThreads,
 				includeMembers: body.includeMembers,
 				includeAttachments: body.includeAttachments,
+				includeAttachmentText: body.includeAttachmentText,
+				maxAttachmentTextBytes: body.maxAttachmentTextBytes,
 				includeEmbeds: body.includeEmbeds,
 				includePolls: body.includePolls,
 				includeThreadMembers: body.includeThreadMembers,

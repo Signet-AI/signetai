@@ -148,17 +148,24 @@ describe("Sources routes", () => {
 				name: "Route Discord",
 				channelFilter: ["general"],
 				maxMessagesPerChannel: 25,
+				includeAttachmentText: true,
+				maxAttachmentTextBytes: 2048,
 			}),
 		});
 
 		expect(res.status).toBe(202);
 		const body = (await res.json()) as {
-			source: { kind: string; providerSettings?: { tokenRef?: string } };
+			source: {
+				kind: string;
+				providerSettings?: { tokenRef?: string; includeAttachmentText?: boolean; maxAttachmentTextBytes?: number };
+			};
 			queued: boolean;
 		};
 		expect(body.queued).toBe(true);
 		expect(body.source.kind).toBe("discord");
 		expect(body.source.providerSettings?.tokenRef).toBe("DISCORD_BOT_TOKEN");
+		expect(body.source.providerSettings?.includeAttachmentText).toBe(true);
+		expect(body.source.providerSettings?.maxAttachmentTextBytes).toBe(2048);
 		expect(loadSourcesConfig(dir).sources[0]?.kind).toBe("discord");
 	});
 

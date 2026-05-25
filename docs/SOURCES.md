@@ -58,7 +58,7 @@ The REST sync path indexes:
 - multiple guilds per source;
 - guilds, categories, text channels, announcement channels, forums, media channels, active threads, and archived public/private thread catalogs;
 - guild member snapshots and thread member snapshots;
-- per-message artifacts and message windows with reply references, pins, mentions, attachment metadata, embed metadata, poll metadata, reactions metadata, and message lifecycle fields;
+- per-message artifacts and message windows with reply references, pins, mentions, attachment metadata, optional bounded text-like attachment contents, embed metadata, poll metadata, reactions metadata, and message lifecycle fields;
 - source checkpoints with latest/backfill cursors and authoritative vs partial status; routine REST refreshes fetch newer messages from the latest checkpoint cursor, then resume bounded historical backfill from the backfill cursor until history is complete within the configured `since` bound;
 - source failure artifacts for unavailable or partial fetches.
 
@@ -294,7 +294,7 @@ Limitations in v1
 - Signet does not write back to Obsidian or Discord.
 - Rename handling is delete + add.
 - Non-Markdown Obsidian attachments are not indexed by the Obsidian v1 source path.
-- Discord attachment binary/media extraction is disabled by default; v1 indexes attachment metadata.
+- Discord attachment binary/media extraction is disabled by default; opt-in text attachment extraction only fetches bounded text-like uploads.
 
 Operational safety
 ------------------

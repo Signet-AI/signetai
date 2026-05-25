@@ -227,6 +227,8 @@ cache artifacts and does not require a token.
   "includePrivateArchivedThreads": false,
   "includeMembers": true,
   "includeAttachments": true,
+  "includeAttachmentText": false,
+  "maxAttachmentTextBytes": 262144,
   "includeEmbeds": true,
   "includePolls": true,
   "includeThreadMembers": true,
@@ -280,8 +282,10 @@ For live gateway tailing:
 The REST sync path indexes guilds, categories, channels, announcement
 channels, forums, active and archived threads, member snapshots, thread member
 snapshots, per-message artifacts, message windows, mentions, attachment
-metadata, embeds, polls, checkpoints, and partial-failure artifacts. Partial Discord listings are not
-used as authoritative deletes.
+metadata, optional bounded text-like attachment contents, embeds, polls,
+checkpoints, and partial-failure artifacts. Partial Discord listings are not
+used as authoritative deletes. Attachment text extraction is opt-in and skips
+binary/media uploads by default.
 
 The gateway-tail sync path keeps the shared source job open while it listens for
 Discord gateway events. It indexes message create/update/delete lifecycle
