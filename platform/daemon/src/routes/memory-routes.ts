@@ -119,7 +119,7 @@ function collectExplicitTemporalInputs(body: {
 	if (body.occurredAt !== undefined && !occurredAt) return { error: "occurredAt must be a valid ISO timestamp" };
 	if (body.validFrom !== undefined && !validFrom) return { error: "validFrom must be a valid ISO timestamp" };
 	if (body.validUntil !== undefined && !validUntil) return { error: "validUntil must be a valid ISO timestamp" };
-	if (validUntil && validFrom && validUntil < validFrom) return { error: "validUntil must be after validFrom" };
+	if (validUntil && validFrom && validUntil <= validFrom) return { error: "validUntil must be after validFrom" };
 
 	const inputs: ExplicitTemporalInput[] = [];
 	if (sourceCreatedAt)
