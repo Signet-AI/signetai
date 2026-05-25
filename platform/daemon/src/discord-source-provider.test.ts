@@ -144,6 +144,13 @@ describe("discord-source-provider", () => {
 									size: 64,
 									content_type: "image/png",
 								},
+								{
+									id: "123456789012345686",
+									filename: ".env",
+									url: "https://cdn.discordapp.com/attachments/123/.env",
+									size: 42,
+									content_type: "text/plain",
+								},
 							],
 						},
 					]),
@@ -177,6 +184,7 @@ describe("discord-source-provider", () => {
 		expect(result?.failures).toEqual([]);
 		expect(requested).toContain("https://cdn.discordapp.com/attachments/123/context.txt");
 		expect(requested).not.toContain("https://cdn.discordapp.com/attachments/123/photo.png");
+		expect(requested).not.toContain("https://cdn.discordapp.com/attachments/123/.env");
 		const rows = sourceRows(added.source.id);
 		const textArtifact = rows.find((row) => row.source_kind === "source_discord_attachment_text");
 		expect(textArtifact?.content).toContain("launch plan body");

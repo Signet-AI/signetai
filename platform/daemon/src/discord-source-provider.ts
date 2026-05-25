@@ -64,7 +64,6 @@ const TEXT_ATTACHMENT_EXTENSIONS = new Set([
 	".sql",
 	".toml",
 	".ini",
-	".env",
 ]);
 const DISCORD_MESSAGE_HISTORY_KINDS = [
 	"source_discord_message_window",
@@ -1110,7 +1109,7 @@ async function attachmentTextArtifact(
 	{ readonly ok: true; readonly artifact?: DiscordArtifact } | { readonly ok: false; readonly error: string }
 > {
 	if (!attachment.url || !isAllowedDiscordAttachmentUrl(attachment.url)) return { ok: true };
-	if (!isTextLikeAttachment(attachment)) return { ok: true };
+	if (isSensitiveAttachmentFilename(attachment.filename) || !isTextLikeAttachment(attachment)) return { ok: true };
 	if (attachment.size > maxBytes) return { ok: true };
 	const controller = new AbortController();
 	const timeout = setTimeout(() => controller.abort(), ATTACHMENT_TEXT_FETCH_TIMEOUT_MS);
@@ -1204,6 +1203,12 @@ function isTextLikeFilename(filename: string): boolean {
 		if (lower.endsWith(extension)) return true;
 	}
 	return false;
+}
+
+function isSensitiveAttachmentFilename(filename: string): boolean {
+	const lower = filename.toLowerCase();
+	const basename = lower.split(/[\\/]/).pop() ?? lower;
+	return basename === ".env" || basename.startsWith(".env.") || basename.endsWith(".env");
 }
 
 function embedArtifact(
