@@ -1,8 +1,8 @@
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { spawnSync } from "node:child_process";
 import { BaseConnector, type InstallResult, type UninstallResult, atomicWriteJson } from "@signet/connector-base";
 import {
 	expandHome,
@@ -714,7 +714,10 @@ function removeTomlSection(content: string, header: string): string {
 		}
 		if (!inSection) filtered.push(line);
 	}
-	return `${filtered.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd()}\n`;
+	return `${filtered
+		.join("\n")
+		.replace(/\n{3,}/g, "\n\n")
+		.trimEnd()}\n`;
 }
 
 function patchNativePluginConfig(path: string, marketplaceRoot: string): boolean {
@@ -773,7 +776,7 @@ export class CodexConnector extends BaseConnector {
 	}
 
 	protected nativePluginProvidesHooks(): boolean {
-		return false;
+		return readEnv("SIGNET_CODEX_FORCE_COMPAT_HOOKS") !== "1";
 	}
 
 	protected installNativePlugin(codexHome: string): NativePluginCommandResult {
@@ -855,6 +858,40 @@ export class CodexConnector extends BaseConnector {
 		}
 	}
 
+	private removeCompatibilityHooks(configsPatched: string[]): void {
+		const hooksPath = this.getHooksJsonPath();
+		const existing = readHooksFile(hooksPath);
+		const hookTrustEntries = existing ? buildHookTrustEntries(hooksPath, existing) : [];
+		if (existing) {
+			const hasMarker = isSignetOwned(existing);
+			const events = existing.hooks;
+			const hasHandlers =
+				events &&
+				typeof events === "object" &&
+				Object.values(events as Record<string, unknown[]>).some(
+					(groups) => Array.isArray(groups) && groups.some(isSignetMatcherGroup),
+				);
+			if (hasMarker || hasHandlers) {
+				const cleaned = removeSignetEntries(existing);
+				const remaining = Object.keys(cleaned).filter((k) => k !== "_signet" && k !== "hooks");
+				const hooksRemain = cleaned.hooks && Object.keys(cleaned.hooks as Record<string, unknown>).length > 0;
+				if (remaining.length === 0 && !hooksRemain) {
+					rmSync(hooksPath, { force: true });
+				} else {
+					writeHooksFile(hooksPath, cleaned);
+				}
+				if (!configsPatched.includes(hooksPath)) {
+					configsPatched.push(hooksPath);
+				}
+			}
+		}
+
+		const configPath = this.getConfigPath();
+		if (removeHookTrustState(configPath, hookTrustEntries) && !configsPatched.includes(configPath)) {
+			configsPatched.push(configPath);
+		}
+	}
+
 	async install(basePath: string): Promise<InstallResult> {
 		const filesWritten: string[] = [];
 		const configsPatched: string[] = [];
@@ -894,11 +931,7 @@ export class CodexConnector extends BaseConnector {
 					configsPatched.push(this.getConfigPath());
 				}
 				if (this.nativePluginProvidesHooks()) {
-					const existingHooks = readHooksFile(this.getHooksJsonPath());
-					const trustEntries = existingHooks ? buildHookTrustEntries(this.getHooksJsonPath(), existingHooks) : [];
-					if (removeHookTrustState(this.getConfigPath(), trustEntries) && !configsPatched.includes(this.getConfigPath())) {
-						configsPatched.push(this.getConfigPath());
-					}
+					this.removeCompatibilityHooks(configsPatched);
 				} else {
 					this.installCompatibilityHooks(signetArgs, filesWritten, configsPatched, warnings);
 					warnings.push(
@@ -908,7 +941,7 @@ export class CodexConnector extends BaseConnector {
 
 				return {
 					success: true,
-					message: "Codex integration installed — native plugin bundle + Signet lifecycle hooks",
+					message: "Codex integration installed — native plugin bundle + compatibility MCP server",
 					filesWritten,
 					configsPatched,
 					warnings,
@@ -1012,7 +1045,10 @@ export class CodexConnector extends BaseConnector {
 
 	isInstalled(): boolean {
 		const configPath = this.getConfigPath();
-		if (existsSync(configPath) && readFileSync(configPath, "utf-8").includes(`[plugins."${CODEX_PLUGIN_CONFIG_NAME}"]`)) {
+		if (
+			existsSync(configPath) &&
+			readFileSync(configPath, "utf-8").includes(`[plugins."${CODEX_PLUGIN_CONFIG_NAME}"]`)
+		) {
 			return true;
 		}
 		const file = readHooksFile(this.getHooksJsonPath());

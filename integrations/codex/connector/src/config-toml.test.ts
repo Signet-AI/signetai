@@ -50,7 +50,11 @@ class NativePluginConfigParsingTempConnector extends TempConnector {
 	protected override supportsNativePluginInstall(): boolean {
 		return true;
 	}
-	protected override installNativePlugin(codexHome: string): { success: boolean; filesWritten: readonly string[]; warning?: string } {
+	protected override installNativePlugin(codexHome: string): {
+		success: boolean;
+		filesWritten: readonly string[];
+		warning?: string;
+	} {
 		if (readFileSync(this.getConfigPath(), "utf-8").includes("[mcp_servers.signet]")) {
 			return { success: false, filesWritten: [], warning: "codex refused stale mcp_servers.signet" };
 		}
@@ -68,6 +72,7 @@ let previousSessionStartTimeout: string | undefined;
 let previousFetchTimeout: string | undefined;
 let previousPromptSubmitTimeout: string | undefined;
 let previousDaemonUrl: string | undefined;
+let previousForceCompatHooks: string | undefined;
 
 function restoreEnv(name: string, value: string | undefined): void {
 	if (value === undefined) {
@@ -82,10 +87,12 @@ beforeEach(() => {
 	previousFetchTimeout = process.env.SIGNET_FETCH_TIMEOUT;
 	previousPromptSubmitTimeout = process.env.SIGNET_PROMPT_SUBMIT_TIMEOUT;
 	previousDaemonUrl = process.env.SIGNET_DAEMON_URL;
+	previousForceCompatHooks = process.env.SIGNET_CODEX_FORCE_COMPAT_HOOKS;
 	Reflect.deleteProperty(process.env, "SIGNET_SESSION_START_TIMEOUT");
 	Reflect.deleteProperty(process.env, "SIGNET_FETCH_TIMEOUT");
 	Reflect.deleteProperty(process.env, "SIGNET_PROMPT_SUBMIT_TIMEOUT");
 	Reflect.deleteProperty(process.env, "SIGNET_DAEMON_URL");
+	Reflect.deleteProperty(process.env, "SIGNET_CODEX_FORCE_COMPAT_HOOKS");
 	tempHome = join(tmpdir(), `signet-codex-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 	codexDir = join(tempHome, ".codex");
 	configPath = join(codexDir, "config.toml");
@@ -98,6 +105,7 @@ afterEach(() => {
 	restoreEnv("SIGNET_FETCH_TIMEOUT", previousFetchTimeout);
 	restoreEnv("SIGNET_PROMPT_SUBMIT_TIMEOUT", previousPromptSubmitTimeout);
 	restoreEnv("SIGNET_DAEMON_URL", previousDaemonUrl);
+	restoreEnv("SIGNET_CODEX_FORCE_COMPAT_HOOKS", previousForceCompatHooks);
 	rmSync(tempHome, { recursive: true, force: true });
 });
 
@@ -341,7 +349,14 @@ describe("CodexConnector.install — native plugin bundle", () => {
 	test("installs a local Codex plugin marketplace when plugin support is available", async () => {
 		const result = await nativePluginConnector().install(tempHome);
 
-		const marketplacePath = join(codexDir, ".tmp", "signet-plugin-marketplace", ".agents", "plugins", "marketplace.json");
+		const marketplacePath = join(
+			codexDir,
+			".tmp",
+			"signet-plugin-marketplace",
+			".agents",
+			"plugins",
+			"marketplace.json",
+		);
 		const pluginManifestPath = join(
 			codexDir,
 			".tmp",
@@ -359,11 +374,12 @@ describe("CodexConnector.install — native plugin bundle", () => {
 
 		const config = readFileSync(configPath, "utf-8");
 		expect(config).toContain("[marketplaces.signet-local]");
-		expect(config).toContain("[plugins.\"signet@signet-local\"]");
+		expect(config).toContain('[plugins."signet@signet-local"]');
 		expect(config).toContain("enabled = true");
 		expect(config).toContain("[mcp_servers.signet]");
 		expect(config).toContain("command = 'signet-mcp'");
-		expect(config).toContain("[hooks.state.");
+		expect(config).not.toContain(`[hooks.state."${hooksPath}:`);
+		expect(existsSync(hooksPath)).toBe(false);
 
 		const plugin = JSON.parse(readFileSync(pluginManifestPath, "utf-8")) as {
 			mcpServers?: string;
@@ -385,6 +401,33 @@ describe("CodexConnector.install — native plugin bundle", () => {
 		expect(firstConfig.match(/\[marketplaces\.signet-local\]/g)).toHaveLength(1);
 	});
 
+	test("native plugin install removes stale compatibility Signet hooks", async () => {
+		await connector().install(tempHome);
+		expect(existsSync(hooksPath)).toBe(true);
+		expect(readFileSync(configPath, "utf-8")).toContain(`[hooks.state."${hooksPath}:user_prompt_submit:0:0"]`);
+
+		await nativePluginConnector().install(tempHome);
+
+		const config = readFileSync(configPath, "utf-8");
+		expect(config).toContain('[plugins."signet@signet-local"]');
+		expect(config).toContain("[mcp_servers.signet]");
+		expect(config).not.toContain(`[hooks.state."${hooksPath}:`);
+		expect(existsSync(hooksPath)).toBe(false);
+	});
+
+	test("can force compatibility hooks when native plugin hooks are unavailable", async () => {
+		process.env.SIGNET_CODEX_FORCE_COMPAT_HOOKS = "1";
+
+		const result = await nativePluginConnector().install(tempHome);
+
+		const config = readFileSync(configPath, "utf-8");
+		expect(result.warnings).toContain(
+			"Codex plugin support detected, but lifecycle hooks still require the compatibility hooks.json path in this Codex version",
+		);
+		expect(config).toContain(`[hooks.state."${hooksPath}:user_prompt_submit:0:0"]`);
+		expect(existsSync(hooksPath)).toBe(true);
+	});
+
 	test("removes stale compatibility MCP before native plugin add reads Codex config", async () => {
 		writeFileSync(
 			configPath,
@@ -402,9 +445,9 @@ describe("CodexConnector.install — native plugin bundle", () => {
 		const result = await configParsingNativePluginConnector().install(tempHome);
 
 		const config = readFileSync(configPath, "utf-8");
-		expect(result.message).toBe("Codex integration installed — native plugin bundle + Signet lifecycle hooks");
+		expect(result.message).toBe("Codex integration installed — native plugin bundle + compatibility MCP server");
 		expect(result.warnings).not.toContain("codex refused stale mcp_servers.signet");
-		expect(config).toContain("[plugins.\"signet@signet-local\"]");
+		expect(config).toContain('[plugins."signet@signet-local"]');
 		expect(config).toContain("[mcp_servers.signet]");
 		expect(config).toContain("command = 'signet-mcp'");
 		expect(config).not.toContain("transport = 'sse'");
@@ -417,7 +460,7 @@ describe("CodexConnector.install — native plugin bundle", () => {
 		expect(result.message).toBe("Codex integration installed — native hooks + MCP server");
 		expect(result.warnings).toContain("native plugin add failed in test");
 		expect(config).toContain("[mcp_servers.signet]");
-		expect(config).not.toContain("[plugins.\"signet@signet-local\"]");
+		expect(config).not.toContain('[plugins."signet@signet-local"]');
 		expect(config).not.toContain("[marketplaces.signet-local]");
 		expect(existsSync(hooksPath)).toBe(true);
 	});
@@ -434,7 +477,7 @@ describe("CodexConnector.install — native plugin bundle", () => {
 		await c.uninstall();
 
 		const config = readFileSync(configPath, "utf-8");
-		expect(config).not.toContain("[plugins.\"signet@signet-local\"]");
+		expect(config).not.toContain('[plugins."signet@signet-local"]');
 		expect(config).not.toContain("[marketplaces.signet-local]");
 		expect(existsSync(pluginCache)).toBe(false);
 		expect(existsSync(join(codexDir, ".tmp", "signet-plugin-marketplace"))).toBe(false);
