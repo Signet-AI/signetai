@@ -137,6 +137,43 @@ describe("discord-source-provider", () => {
 		expect(rows.map((row) => row.source_kind)).toContain("source_discord_member");
 		expect(rows.map((row) => row.source_kind)).toContain("source_discord_member_event");
 		expect(rows.map((row) => row.source_kind)).toContain("source_discord_checkpoint");
+		expect(rows.map((row) => row.source_kind)).not.toContain("source_discord_attachment");
+		expect(rows.map((row) => row.source_kind)).not.toContain("source_discord_embed");
+		expect(rows.map((row) => row.source_kind)).not.toContain("source_discord_mention");
+		expect(rows.map((row) => row.source_kind)).not.toContain("source_discord_poll");
+		const message = rows.find((row) => row.source_kind === "source_discord_message");
+		expect(message?.content).toContain("Guild: 123456789012345678");
+		expect(message?.content).toContain("Channel: 123456789012345679");
+		expect(message?.content).toContain("Author: Alice (123456789012345681)");
+		expect(message?.content).toContain("Created: 2026-01-02T00:00:00.000Z");
+		expect(message?.content).toContain("Guild: new header-like");
+		expect(message?.content).toContain("new second");
+		expect(message?.content).not.toContain("Guild: old header-like");
+		expect(message?.content).not.toContain("old second");
+		expect(message?.content).toContain("Edited: 2026-01-02T00:01:00.000Z");
+		expect(message?.content).not.toContain("Pinned: true");
+		expect(message?.source_meta_json).toContain('"pinned":false');
+		expect(message?.source_meta_json).toContain('"pollPresent":false');
+		expect(
+			getDbAccessor().withReadDb(
+				(db) =>
+					(
+						db
+							.prepare(
+								`SELECT COUNT(*) AS count
+								 FROM entities
+								 WHERE source_id = ?
+								   AND source_kind IN (
+								     'source_discord_attachment',
+								     'source_discord_embed',
+								     'source_discord_mention',
+								     'source_discord_poll'
+								   )`,
+							)
+							.get(added.source.id) as { count: number }
+					).count,
+			),
+		).toBe(0);
 		const deleteEvent = rows.find(
 			(row) => row.source_kind === "source_discord_message_event" && row.content.includes("delete"),
 		);
@@ -1171,10 +1208,23 @@ class FakeDiscordGatewaySocket {
 				roles: ["role1"],
 				joined_at: "2026-01-01T00:00:00.000Z",
 			});
-			this.dispatch("MESSAGE_CREATE", 3, gatewayMessagePayload("999999999999999991", "hello gateway"));
+			this.dispatch(
+				"MESSAGE_CREATE",
+				3,
+				gatewayMessagePayload("999999999999999991", "Guild: old header-like\n\nold second"),
+			);
 			this.dispatch("MESSAGE_UPDATE", 4, {
-				...gatewayMessagePayload("999999999999999991", "hello gateway edited"),
+				id: "999999999999999991",
+				guild_id: "123456789012345678",
+				channel_id: "123456789012345679",
+				content: "Guild: new header-like\n\nnew second",
 				edited_timestamp: "2026-01-02T00:01:00.000Z",
+				pinned: false,
+				mentions: [],
+				mention_roles: [],
+				attachments: [],
+				embeds: [],
+				poll: null,
 			});
 			this.dispatch("MESSAGE_DELETE", 5, {
 				id: "999999999999999991",
@@ -1208,6 +1258,7 @@ function gatewayMessagePayload(id: string, content: string): Record<string, unkn
 		content,
 		author: { id: "123456789012345681", username: "alice", global_name: "Alice" },
 		timestamp: "2026-01-02T00:00:00.000Z",
+		pinned: true,
 		mentions: [{ id: "123456789012345682", username: "bob", global_name: "Bob" }],
 		attachments: [{ id: "123456789012345684", filename: "context.txt", size: 42 }],
 		embeds: [{ title: "Embed title", description: "Embed body" }],

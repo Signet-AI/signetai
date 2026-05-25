@@ -1,6 +1,6 @@
 {
   "name": "@signet/connector-forge",
-  "version": "0.134.0",
+  "version": "0.134.1",
   "description": "Signet connector for ForgeCode",
   "type": "module",
   "main": "./dist/index.js",
