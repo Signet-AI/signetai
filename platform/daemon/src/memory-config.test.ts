@@ -97,37 +97,55 @@ describe("loadMemoryConfig", () => {
 		expect(cfg.embedding.promptSubmitTimeoutMs).toBe(MIN_PROMPT_SUBMIT_EMBEDDING_TIMEOUT_MS);
 	});
 
-	it("warns when graph reads are enabled but extraction writes are disabled", () => {
+	it("enables graph extraction writes by default", () => {
 		const agentsDir = makeTempAgentsDir();
 		const cfg = loadMemoryConfig(agentsDir);
 
 		expect(cfg.pipelineV2.graph.enabled).toBe(true);
-		expect(cfg.pipelineV2.graph.extractionWritesEnabled).toBe(false);
-		expect(shouldWarnGraphExtractionWritesDisabled(cfg)).toBe(true);
+		expect(cfg.pipelineV2.graph.extractionWritesEnabled).toBe(true);
+		expect(shouldWarnGraphExtractionWritesDisabled(cfg)).toBe(false);
 	});
 
-	it("does not warn for disabled, paused, or write-enabled graph extraction states", () => {
+	it("warns only when graph reads are enabled but extraction writes are explicitly disabled", () => {
 		const agentsDir = makeTempAgentsDir();
 		const cfg = loadMemoryConfig(agentsDir);
 
 		expect(
 			shouldWarnGraphExtractionWritesDisabled({
 				...cfg,
-				pipelineV2: { ...cfg.pipelineV2, graph: { ...cfg.pipelineV2.graph, extractionWritesEnabled: true } },
+				pipelineV2: { ...cfg.pipelineV2, graph: { ...cfg.pipelineV2.graph, extractionWritesEnabled: false } },
+			}),
+		).toBe(true);
+		expect(shouldWarnGraphExtractionWritesDisabled(cfg)).toBe(false);
+		expect(
+			shouldWarnGraphExtractionWritesDisabled({
+				...cfg,
+				pipelineV2: {
+					...cfg.pipelineV2,
+					graph: { ...cfg.pipelineV2.graph, enabled: false, extractionWritesEnabled: false },
+				},
 			}),
 		).toBe(false);
 		expect(
 			shouldWarnGraphExtractionWritesDisabled({
 				...cfg,
-				pipelineV2: { ...cfg.pipelineV2, graph: { ...cfg.pipelineV2.graph, enabled: false } },
+				pipelineV2: {
+					...cfg.pipelineV2,
+					paused: true,
+					graph: { ...cfg.pipelineV2.graph, extractionWritesEnabled: false },
+				},
 			}),
 		).toBe(false);
-		expect(shouldWarnGraphExtractionWritesDisabled({ ...cfg, pipelineV2: { ...cfg.pipelineV2, paused: true } })).toBe(
-			false,
-		);
-		expect(shouldWarnGraphExtractionWritesDisabled({ ...cfg, pipelineV2: { ...cfg.pipelineV2, enabled: false } })).toBe(
-			false,
-		);
+		expect(
+			shouldWarnGraphExtractionWritesDisabled({
+				...cfg,
+				pipelineV2: {
+					...cfg.pipelineV2,
+					enabled: false,
+					graph: { ...cfg.pipelineV2.graph, extractionWritesEnabled: false },
+				},
+			}),
+		).toBe(false);
 	});
 
 	it("loads embedding prompt-submit timeout from agent.yaml", () => {

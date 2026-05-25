@@ -281,9 +281,10 @@ Knowledge Graph
 
 When `graph.enabled` is true, graph reads, traversal, and recall boosting are
 available. Background extraction only persists extracted entity triples when
-`graph.extractionWritesEnabled` is also true. That second gate defaults to
-`false` so graph navigation can stay on without letting the async extractor
-author semantic graph structure.
+`graph.extractionWritesEnabled` is also true. That write gate defaults to
+`true` so new installs populate the graph from extraction. Set it to `false`
+to keep graph navigation on without letting the async extractor author semantic
+graph structure.
 
 The daemon logs a startup warning when graph reads are enabled while extraction
 writes are disabled. `/api/diagnostics` also reports
@@ -1083,7 +1084,7 @@ worker:
 
 graph:
   enabled: true
-  extractionWritesEnabled: false # default; structured remember authors graph data
+  extractionWritesEnabled: true  # default; persists extracted entities when graph tables are available
   boostWeight: 0.15              # fraction 0.0–1.0
   boostTimeoutMs: 500            # ms, range 50–5000
 
@@ -1193,7 +1194,7 @@ memory:
     enabled: true
     graph:
       enabled: true
-      extractionWritesEnabled: false
+      extractionWritesEnabled: true
     extraction:
       minConfidence: 0.75
 ```

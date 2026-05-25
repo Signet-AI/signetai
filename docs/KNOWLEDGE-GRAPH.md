@@ -225,9 +225,9 @@ create aspect or attribute rows by itself.
 ### Pipeline Graph Writes
 
 Background extraction graph writes are controlled by
-`memory.pipelineV2.graph.extractionWritesEnabled`, which defaults to `false`.
-Keeping graph traversal enabled does not necessarily mean the async extractor is
-allowed to author ontology structure.
+`memory.pipelineV2.graph.extractionWritesEnabled`, which defaults to `true`.
+Set it to `false` when graph traversal should stay enabled but the async
+extractor should not author ontology structure.
 When graph reads are enabled but extraction writes remain disabled, the daemon
 emits a startup warning and `/api/diagnostics` exposes the disabled write gate
 as `graph.extractionWritesEnabled: false`.

@@ -70,7 +70,7 @@ silent fallback or hard-blocked extraction after boot.
     "mutationsFrozen": false,
     "graph": {
       "enabled": true,
-      "extractionWritesEnabled": false
+      "extractionWritesEnabled": true
     },
     "autonomous": {
       "enabled": true,

@@ -98,7 +98,7 @@ export const DEFAULT_PIPELINE_V2: ResolvedPipelineV2Config = {
 	},
 	graph: {
 		enabled: true,
-		extractionWritesEnabled: false,
+		extractionWritesEnabled: true,
 		boostWeight: 0.15,
 		boostTimeoutMs: 500,
 	},
