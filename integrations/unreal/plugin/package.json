@@ -1,0 +1,11 @@
+{
+	"name": "@signet/unreal-plugin",
+	"version": "0.133.1",
+	"private": true,
+	"description": "Signet Unreal Engine plugin manifest and source checks",
+	"type": "module",
+	"scripts": {
+		"test": "bun test"
+	},
+	"license": "Apache-2.0"
+}

@@ -1,0 +1,28 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "0.0.1",
+	"FriendlyName": "Signet Unreal",
+	"Description": "Use Signet as a persistent memory backend for AI-driven Unreal NPC agents.",
+	"Category": "AI",
+	"CreatedBy": "Signet AI",
+	"CreatedByURL": "https://github.com/signetai/signetai",
+	"DocsURL": "https://github.com/signetai/signetai",
+	"MarketplaceURL": "",
+	"SupportURL": "https://github.com/signetai/signetai/issues",
+	"CanContainContent": true,
+	"IsBetaVersion": true,
+	"Installed": false,
+	"Modules": [
+		{
+			"Name": "SignetUnrealRuntime",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		}
+	],
+	"SupportedTargetPlatforms": [
+		"Win64",
+		"Mac",
+		"Linux"
+	]
+}
