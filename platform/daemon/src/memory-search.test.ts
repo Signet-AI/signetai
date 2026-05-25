@@ -774,8 +774,8 @@ describe("hybridRecall", () => {
 
 		const result = await hybridRecall(
 			{
-				query: "2026/05/13 rollout planning migration schedule",
-				keywordQuery: "rollout planning migration schedule",
+				query: "2026/05/13 rollout planning migration",
+				keywordQuery: "rollout planning migration",
 				limit: 2,
 				agentId: "agent-a",
 				readPolicy: "isolated",

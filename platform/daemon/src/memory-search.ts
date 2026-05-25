@@ -972,6 +972,22 @@ function cosineSimilarity(query: Float32Array, memory: Float32Array): number {
 // not outrank directly grounded lexical/vector/structured evidence. A hint
 // supported by direct evidence can keep its score; only hint-only rows are capped.
 const HINT_ONLY_SCORE_CAP = 0.75;
+const TEMPORAL_TOPIC_SCORE_CAP = 0.85;
+
+function temporalTopicTokens(raw: string): string[] {
+	return [...new Set(tokenizeGraphQuery(raw))];
+}
+
+function scoreTemporalTopicEvidence(query: string, content: string): number {
+	const queryTokens = temporalTopicTokens(query);
+	if (queryTokens.length === 0) return 0;
+	const contentTokens = new Set(temporalTopicTokens(content));
+	const matched = queryTokens.filter((token) => contentTokens.has(token));
+	if (matched.length === 0) return 0;
+	const coverage = matched.length / queryTokens.length;
+	const density = matched.length / Math.max(8, contentTokens.size);
+	return Math.min(TEMPORAL_TOPIC_SCORE_CAP, 0.35 + coverage * 0.4 + density * 0.1);
+}
 
 /**
  * Run the recall pipeline.
@@ -1103,6 +1119,9 @@ export async function hybridRecall(
 		query = temporal.adjustedQuery;
 	}
 	const temporalCandidateSet = new Set(temporal.candidateIds ?? []);
+	const temporalCandidateMap = new Map<string, number>(
+		[...temporalCandidateSet].map((id) => [id, Math.max(minScore, 0.05)]),
+	);
 
 	const expandedQuery = expandRecallKeywordQuery(query);
 	const keywordQuery = sanitizeFtsQuery((params.keywordQuery ?? expandedQuery).trim());
@@ -1296,7 +1315,13 @@ export async function hybridRecall(
 	}
 
 	// --- Flat search: merge BM25 + vector + structured path candidate scores ---
-	const allIds = new Set([...bm25Map.keys(), ...hintMap.keys(), ...vectorMap.keys(), ...structuredCandidateMap.keys()]);
+	const allIds = new Set([
+		...bm25Map.keys(),
+		...hintMap.keys(),
+		...vectorMap.keys(),
+		...structuredCandidateMap.keys(),
+		...temporalCandidateMap.keys(),
+	]);
 	const flatScored: Array<{ id: string; score: number; source: string }> = [];
 
 	timings.time("flat_score_merge", () => {
@@ -1305,6 +1330,7 @@ export async function hybridRecall(
 			const hint = hintMap.get(id) ?? 0;
 			const vec = vectorMap.get(id) ?? 0;
 			const structured = structuredCandidateMap.get(id) ?? 0;
+			const temporalCandidate = temporalCandidateMap.get(id) ?? 0;
 			const topicEvidence = bm25 > 0 || hint > 0 || vec > 0 || structured > 0;
 			const temporalScore = temporalCandidateSet.has(id) && topicEvidence ? 0.85 : 0;
 			let score: number;
@@ -1322,6 +1348,9 @@ export async function hybridRecall(
 			} else if (temporalScore > 0) {
 				score = temporalScore;
 				source = "temporal";
+			} else if (temporalCandidate > 0) {
+				score = temporalCandidate;
+				source = "temporal_candidate";
 			} else {
 				score = structured;
 				source = "structured";
@@ -1609,6 +1638,43 @@ export async function hybridRecall(
 	// Everything below this point may assume `scored` only contains memory IDs
 	// visible to the caller. Keep new content-bearing stages below this line.
 	const structuredEvidenceMap = new Map(structuredCandidateMap);
+	const temporalTopicEvidenceMap = new Map<string, number>();
+	if (temporalCandidateSet.size > 0 && scored.length > 0) {
+		try {
+			const candidateIds = scored.filter((row) => temporalCandidateSet.has(row.id)).map((row) => row.id);
+			if (candidateIds.length > 0) {
+				const placeholders = candidateIds.map(() => "?").join(", ");
+				const contentRows = getDbAccessor().withReadDb(
+					(db) =>
+						db
+							.prepare(
+								`SELECT id, content FROM memories
+								 WHERE id IN (${placeholders})`,
+							)
+							.all(...candidateIds) as Array<{ id: string; content: string }>,
+				);
+				for (const row of contentRows) {
+					const score = scoreTemporalTopicEvidence(query, row.content);
+					if (score <= 0) continue;
+					temporalTopicEvidenceMap.set(row.id, score);
+					semanticEvidenceMap.set(row.id, Math.max(semanticEvidenceMap.get(row.id) ?? 0, score));
+				}
+			}
+		} catch (e) {
+			logger.warn("memory", "Temporal topic evidence failed (non-fatal)", {
+				error: e instanceof Error ? e.message : String(e),
+			});
+		}
+		for (const row of scored) {
+			const topicScore = temporalTopicEvidenceMap.get(row.id) ?? 0;
+			if (topicScore <= 0) continue;
+			if (row.source === "temporal_candidate" || topicScore > row.score) {
+				row.score = topicScore;
+				row.source = row.source === "temporal_candidate" ? "temporal_topic" : "temporal_hybrid";
+			}
+		}
+		scored.sort((a, b) => b.score - a.score);
+	}
 
 	// --- Structured Evidence Convolution (SEC-lite) ---
 	// Keep retrieval channels separate until after traversal/boosting. This
@@ -1643,7 +1709,7 @@ export async function hybridRecall(
 			const evidence: EvidenceCandidateInput[] = candidates.map((row) => ({
 				id: row.id,
 				source: row.source,
-				lexical: bm25Map.get(row.id),
+				lexical: Math.max(bm25Map.get(row.id) ?? 0, temporalTopicEvidenceMap.get(row.id) ?? 0),
 				semantic: semanticEvidenceMap.get(row.id),
 				hint: hintMap.get(row.id),
 				traversal: traversalEvidenceMap.get(row.id),
@@ -1901,7 +1967,16 @@ export async function hybridRecall(
 
 	timings.time("final_rank", () => {
 		if (temporalCandidateSet.size > 0) {
-			scored = scored.filter((row) => temporalCandidateSet.has(row.id));
+			scored = scored.filter((row) => {
+				if (!temporalCandidateSet.has(row.id)) return false;
+				return (
+					(bm25Map.get(row.id) ?? 0) > 0 ||
+					(vectorMap.get(row.id) ?? 0) > 0 ||
+					(hintMap.get(row.id) ?? 0) > 0 ||
+					(structuredEvidenceMap.get(row.id) ?? 0) > 0 ||
+					(temporalTopicEvidenceMap.get(row.id) ?? 0) > 0
+				);
+			});
 		}
 		for (const row of scored) {
 			const hasDirectEvidence =
