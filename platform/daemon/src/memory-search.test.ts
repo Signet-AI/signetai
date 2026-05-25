@@ -548,6 +548,71 @@ describe("hybridRecall", () => {
 		expect(result.results.map((row) => row.id)).not.toContain("mem-later");
 	});
 
+	it("uses scoped temporal edge candidates without lexical prefiltering", async () => {
+		const savedAt = "2026-05-24T18:00:00.000Z";
+		getDbAccessor().withWriteTx((db) => {
+			const agent = db.prepare(
+				`INSERT INTO agents (id, name, read_policy, policy_group, created_at, updated_at)
+				 VALUES (?, ?, 'isolated', ?, ?, ?)
+				 ON CONFLICT(id) DO UPDATE SET policy_group = excluded.policy_group, updated_at = excluded.updated_at`,
+			);
+			agent.run("agent-group", "agent-group", "team-1", savedAt, savedAt);
+			agent.run("agent-alpha", "agent-alpha", "team-1", savedAt, savedAt);
+			agent.run("agent-beta", "agent-beta", "team-2", savedAt, savedAt);
+
+			db.prepare(
+				`INSERT INTO memories (
+					id, content, type, agent_id, visibility, created_at, updated_at, updated_by, is_deleted
+				) VALUES (?, ?, 'fact', ?, 'global', ?, ?, 'test', 0)`,
+			).run("mem-alpha-edge", "Alpha dated memory uses launch checklist wording.", "agent-alpha", savedAt, savedAt);
+			db.prepare(
+				`INSERT INTO memories (
+					id, content, type, agent_id, visibility, created_at, updated_at, updated_by, is_deleted
+				) VALUES (?, ?, 'fact', ?, 'global', ?, ?, 'test', 0)`,
+			).run("mem-beta-edge", "Beta dated memory mentions rollout directly.", "agent-beta", savedAt, savedAt);
+			const edge = db.prepare(
+				`INSERT INTO temporal_edges (
+					id, agent_id, subject_type, subject_id, facet, start_at, end_at,
+					confidence, created_at, updated_at
+				) VALUES (?, ?, 'memory', ?, 'occurred', ?, ?, 1.0, ?, ?)`,
+			);
+			edge.run(
+				"edge-alpha-group",
+				"agent-alpha",
+				"mem-alpha-edge",
+				"2026-05-13T18:00:00.000Z",
+				"2026-05-13T18:00:00.000Z",
+				savedAt,
+				savedAt,
+			);
+			edge.run(
+				"edge-beta-group",
+				"agent-beta",
+				"mem-beta-edge",
+				"2026-05-13T18:00:00.000Z",
+				"2026-05-13T18:00:00.000Z",
+				savedAt,
+				savedAt,
+			);
+		});
+
+		const result = await hybridRecall(
+			{
+				query: "2026/05/13 rollout",
+				keywordQuery: "rollout",
+				limit: 5,
+				agentId: "agent-group",
+				readPolicy: "group",
+				policyGroup: "team-1",
+			},
+			testCfg(),
+			async () => null,
+		);
+
+		expect(result.results.map((row) => row.id)).toContain("mem-alpha-edge");
+		expect(result.results.map((row) => row.id)).not.toContain("mem-beta-edge");
+	});
+
 	it("honors explicit timeline mode even when query text is present", async () => {
 		getDbAccessor().withWriteTx((db) => {
 			db.prepare(

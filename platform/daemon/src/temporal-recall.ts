@@ -384,7 +384,6 @@ function toRecallRow(row: RawTemporalRow): TemporalRecallRow {
 }
 
 function collectTemporalRows(intent: ParsedTemporalIntent, params: TemporalRecallParams): RawTemporalRow[] {
-	const agentId = params.agentId ?? "default";
 	const rows: RawTemporalRow[] = [];
 
 	return getDbAccessor().withReadDb((db) => {
@@ -586,6 +585,7 @@ function collectTemporalRows(intent: ParsedTemporalIntent, params: TemporalRecal
 
 		if (tableExists(db, "temporal_edges")) {
 			const visibility = memoryVisibilitySql(params);
+			const nonMemoryOwner = temporalOwnerSql("te.agent_id", params);
 			const edgeRows = db
 				.prepare(
 					`SELECT te.id, te.subject_type, te.subject_id, te.facet, te.start_at, te.end_at, te.confidence,
@@ -596,14 +596,23 @@ function collectTemporalRows(intent: ParsedTemporalIntent, params: TemporalRecal
 					   ON te.subject_type = 'memory'
 					  AND m.id = te.subject_id
 					  AND m.is_deleted = 0
-					 WHERE te.agent_id = ?
-					   AND te.facet IN (${intent.facets.map(() => "?").join(", ")})
+					 WHERE te.facet IN (${intent.facets.map(() => "?").join(", ")})
 					   AND ${overlapClause("te.start_at", "te.end_at")}
-					   AND (te.subject_type != 'memory' OR (m.id IS NOT NULL AND m.scope IS NULL${visibility.sql}))
+					   AND (
+					     (te.subject_type = 'memory' AND m.id IS NOT NULL AND m.scope IS NULL${visibility.sql})
+					     OR (te.subject_type != 'memory'${nonMemoryOwner.sql})
+					   )
 					 ORDER BY te.start_at DESC
 					 LIMIT ?`,
 				)
-				.all(agentId, ...intent.facets, intent.end, intent.start, ...visibility.args, params.limit * 4) as Array<{
+				.all(
+					...intent.facets,
+					intent.end,
+					intent.start,
+					...visibility.args,
+					...nonMemoryOwner.args,
+					params.limit * 4,
+				) as Array<{
 				id: string;
 				subject_type: string;
 				subject_id: string;
@@ -666,7 +675,10 @@ export function resolveTemporalRecall(params: TemporalRecallParams): TemporalRec
 	};
 
 	const rows = collectTemporalRows(intent, params)
-		.filter((row) => intent.mode !== "filter" || textMatches(row.content, intent.contentQuery))
+		.filter(
+			(row) =>
+				intent.mode !== "filter" || row.subject_type === "memory" || textMatches(row.content, intent.contentQuery),
+		)
 		.sort(
 			(a, b) =>
 				b.source_rank - a.source_rank ||
