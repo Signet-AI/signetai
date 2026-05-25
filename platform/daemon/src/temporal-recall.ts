@@ -216,6 +216,14 @@ function parseTimeRange(time: TemporalTimeOptions | undefined): { start: string;
 	return { start: startDate.toISOString(), end: endDate.toISOString() };
 }
 
+function resolveTemporalMode(
+	mode: TemporalTimeOptions["mode"] | undefined,
+	contentQuery: string,
+): ParsedTemporalIntent["mode"] {
+	if (mode === "timeline" || mode === "filter") return mode;
+	return contentQuery.length > 0 ? "filter" : "timeline";
+}
+
 export function validateTemporalTimeOptions(time: unknown): string | null {
 	if (time === undefined) return null;
 	if (typeof time !== "object" || time === null || Array.isArray(time)) return "time must be an object";
@@ -258,7 +266,7 @@ export function parseTemporalRecallIntent(params: {
 			...requestRange,
 			source: "request",
 			contentQuery,
-			mode: params.time?.mode === "filter" || contentQuery.length > 0 ? "filter" : "timeline",
+			mode: resolveTemporalMode(params.time?.mode, contentQuery),
 			facets: normalizeFacets(params.time?.facets),
 		};
 	}
@@ -270,7 +278,7 @@ export function parseTemporalRecallIntent(params: {
 		...parsed.range,
 		source: "query",
 		contentQuery,
-		mode: params.time?.mode === "filter" || contentQuery.length > 0 ? "filter" : "timeline",
+		mode: resolveTemporalMode(params.time?.mode, contentQuery),
 		facets: normalizeFacets(params.time?.facets),
 	};
 }
@@ -639,7 +647,7 @@ export function resolveTemporalRecall(params: TemporalRecallParams): TemporalRec
 	};
 
 	const rows = collectTemporalRows(intent, params)
-		.filter((row) => textMatches(row.content, intent.contentQuery))
+		.filter((row) => intent.mode !== "filter" || textMatches(row.content, intent.contentQuery))
 		.sort(
 			(a, b) =>
 				b.source_rank - a.source_rank ||

@@ -463,6 +463,46 @@ describe("hybridRecall", () => {
 		expect(result.results.map((row) => row.id)).not.toContain("mem-later");
 	});
 
+	it("honors explicit timeline mode even when query text is present", async () => {
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO session_summaries (
+					id, project, depth, kind, content, earliest_at, latest_at, session_key, harness, agent_id, created_at
+				) VALUES (?, ?, 0, 'session', ?, ?, ?, ?, 'codex', ?, ?)`,
+			).run(
+				"sess-summary-timeline-mode",
+				"/repo",
+				"Worked on dashboard polish.",
+				"2026-05-13T18:00:00.000Z",
+				"2026-05-13T19:00:00.000Z",
+				"sess-timeline-mode",
+				"agent-a",
+				"2026-05-13T19:00:00.000Z",
+			);
+		});
+
+		const result = await hybridRecall(
+			{
+				query: "temporal recall",
+				time: {
+					start: "2026-05-13T00:00:00.000Z",
+					end: "2026-05-14T00:00:00.000Z",
+					mode: "timeline",
+				},
+				limit: 5,
+				agentId: "agent-a",
+				readPolicy: "isolated",
+			},
+			testCfg(),
+			async () => null,
+		);
+
+		expect(result.meta.temporal?.mode).toBe("timeline");
+		expect(result.results.map((row) => row.id)).toContain(
+			"temporal:session_summary:sess-summary-timeline-mode:session",
+		);
+	});
+
 	it("keeps explicit temporal edge recall behind memory visibility rules", async () => {
 		const savedAt = "2026-05-24T18:00:00.000Z";
 		getDbAccessor().withWriteTx((db) => {
