@@ -927,16 +927,19 @@ function sourceHealthLabel(source: SignetSourceEntry): string {
 	if (health.status === "unhealthy") return health.error ?? "Health diagnostics failed";
 	if (health.status === "healthy") {
 		const checkpointLabel =
-			source.kind === "discord" && health.checkpoints.total > 0 ? ` · ${health.checkpoints.total} checkpoints` : "";
-		const semanticLabel = health.semantic.total > 0 ? ` · ${health.semantic.total} graph rows` : "";
+			source.kind === "discord" && (health.checkpoints?.total ?? 0) > 0
+				? ` · ${health.checkpoints?.total ?? 0} checkpoints`
+				: "";
+		const semanticLabel = (health.semantic?.total ?? 0) > 0 ? ` · ${health.semantic?.total ?? 0} graph rows` : "";
 		return `Healthy${checkpointLabel}${semanticLabel}`;
 	}
 	const issues: string[] = [];
-	if (health.failures.total > 0) issues.push(`${health.failures.total} fetch failures`);
-	if (health.checkpoints.partial > 0) issues.push(`${health.checkpoints.partial} partial checkpoints`);
-	if (health.checkpoints.stale > 0) issues.push(`${health.checkpoints.stale} stale checkpoints`);
-	if (health.purge.deletedArtifacts > 0) issues.push(`${health.purge.deletedArtifacts} deleted rows retained`);
-	if (health.purge.orphanChunks > 0) issues.push(`${health.purge.orphanChunks} orphan chunks`);
+	if ((health.failures?.total ?? 0) > 0) issues.push(`${health.failures?.total ?? 0} fetch failures`);
+	if ((health.checkpoints?.partial ?? 0) > 0) issues.push(`${health.checkpoints?.partial ?? 0} partial checkpoints`);
+	if ((health.checkpoints?.stale ?? 0) > 0) issues.push(`${health.checkpoints?.stale ?? 0} stale checkpoints`);
+	if ((health.purge?.deletedArtifacts ?? 0) > 0)
+		issues.push(`${health.purge?.deletedArtifacts ?? 0} deleted rows retained`);
+	if ((health.purge?.orphanChunks ?? 0) > 0) issues.push(`${health.purge?.orphanChunks ?? 0} orphan chunks`);
 	return issues.length > 0 ? issues.join(" · ") : "Needs attention";
 }
 
@@ -1304,7 +1307,7 @@ function discordYesNo(source: SignetSourceEntry, key: string, defaultValue = tru
 								</div>
 								<div class="discord-metric">
 									<span>Graph rows</span>
-									<strong>{(source.health?.semantic.total ?? 0).toLocaleString()}</strong>
+									<strong>{(source.health?.semantic?.total ?? 0).toLocaleString()}</strong>
 								</div>
 							</div>
 
@@ -1402,15 +1405,15 @@ function discordYesNo(source: SignetSourceEntry, key: string, defaultValue = tru
 								</div>
 								<div>
 									<span>Checkpoints</span>
-									<strong>{(source.health?.checkpoints.total ?? 0).toLocaleString()}</strong>
+									<strong>{(source.health?.checkpoints?.total ?? 0).toLocaleString()}</strong>
 								</div>
 								<div>
 									<span>Partial / stale</span>
-									<strong>{source.health?.checkpoints.partial ?? 0} / {source.health?.checkpoints.stale ?? 0}</strong>
+									<strong>{source.health?.checkpoints?.partial ?? 0} / {source.health?.checkpoints?.stale ?? 0}</strong>
 								</div>
 								<div>
 									<span>Fetch failures</span>
-									<strong>{source.health?.failures.recoverable ?? 0} recoverable / {source.health?.failures.total ?? 0} total</strong>
+									<strong>{source.health?.failures?.recoverable ?? 0} recoverable / {source.health?.failures?.total ?? 0} total</strong>
 								</div>
 								<div>
 									<span>Chunk coverage</span>
@@ -1418,7 +1421,7 @@ function discordYesNo(source: SignetSourceEntry, key: string, defaultValue = tru
 								</div>
 								<div>
 									<span>Purge residue</span>
-									<strong>{source.health?.purge.deletedArtifacts ?? 0} deleted / {source.health?.purge.orphanChunks ?? 0} orphan chunks</strong>
+									<strong>{source.health?.purge?.deletedArtifacts ?? 0} deleted / {source.health?.purge?.orphanChunks ?? 0} orphan chunks</strong>
 								</div>
 								<div>
 									<span>Enabled</span>
