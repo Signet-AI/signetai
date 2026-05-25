@@ -180,6 +180,8 @@ export function registerSourcesCommands(program: Command, deps: RegisterSourcesC
 		.option("--include-private-archived-threads", "Include private archived thread discovery")
 		.option("--no-members", "Skip guild member snapshots")
 		.option("--no-attachments", "Skip attachment metadata artifacts")
+		.option("--attachment-text", "Extract bounded text-like Discord attachment contents")
+		.option("--max-attachment-text-bytes <bytes>", "Maximum bytes per text attachment extraction")
 		.option("--no-embeds", "Skip embed metadata artifacts")
 		.option("--no-polls", "Skip poll metadata artifacts")
 		.option("--no-thread-members", "Skip thread member snapshots")

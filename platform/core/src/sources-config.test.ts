@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+	DEFAULT_DISCORD_MAX_ATTACHMENT_TEXT_BYTES,
 	DEFAULT_DISCORD_MAX_MESSAGES_PER_CHANNEL,
 	DEFAULT_GITHUB_RESOURCE_TYPES_NO_TOKEN,
 	DEFAULT_OBSIDIAN_EXCLUDE_GLOBS,
@@ -92,6 +93,8 @@ describe("sources-config", () => {
 				channelFilter: ["general", "323456789012345678", "general"],
 				maxMessagesPerChannel: 250,
 				includePrivateArchivedThreads: true,
+				includeAttachmentText: true,
+				maxAttachmentTextBytes: 4096,
 				since: "2026-01-01",
 				now: "2026-01-02T00:00:00.000Z",
 			},
@@ -113,6 +116,8 @@ describe("sources-config", () => {
 			includePrivateArchivedThreads: true,
 			includeMembers: true,
 			includeAttachments: true,
+			includeAttachmentText: true,
+			maxAttachmentTextBytes: 4096,
 			includeEmbeds: true,
 			includePolls: true,
 			includeThreadMembers: true,
@@ -153,6 +158,8 @@ describe("sources-config", () => {
 			includePrivateArchivedThreads: false,
 			includeMembers: true,
 			includeAttachments: true,
+			includeAttachmentText: false,
+			maxAttachmentTextBytes: DEFAULT_DISCORD_MAX_ATTACHMENT_TEXT_BYTES,
 			includeEmbeds: true,
 			includePolls: true,
 			includeThreadMembers: true,
@@ -251,6 +258,33 @@ describe("sources-config", () => {
 			error: "Discord maxMessagesPerChannel must be an integer between 1 and 10000",
 		});
 		expect(
+			addDiscordSource(
+				{
+					guildIds: ["123456789012345678"],
+					tokenRef: "DISCORD_BOT_TOKEN",
+					maxAttachmentTextBytes: 0,
+				},
+				agentsDir,
+			),
+		).toEqual({
+			ok: false,
+			error: "Discord maxAttachmentTextBytes must be an integer between 1 and 1048576",
+		});
+		expect(
+			addDiscordSource(
+				{
+					guildIds: ["123456789012345678"],
+					tokenRef: "DISCORD_BOT_TOKEN",
+					includeAttachments: false,
+					includeAttachmentText: true,
+				},
+				agentsDir,
+			),
+		).toEqual({
+			ok: false,
+			error: "Discord includeAttachmentText requires includeAttachments",
+		});
+		expect(
 			addDiscordSource({ guildIds: ["123456789012345678"], tokenRef: "DISCORD_BOT_TOKEN", since: "nope" }, agentsDir),
 		).toEqual({ ok: false, error: "Discord since must be a valid ISO date" });
 	});
@@ -274,6 +308,8 @@ describe("sources-config", () => {
 			includePrivateArchivedThreads: false,
 			includeMembers: true,
 			includeAttachments: true,
+			includeAttachmentText: false,
+			maxAttachmentTextBytes: DEFAULT_DISCORD_MAX_ATTACHMENT_TEXT_BYTES,
 			includeEmbeds: true,
 			includePolls: true,
 			includeThreadMembers: true,

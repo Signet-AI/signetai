@@ -81,6 +81,8 @@ export interface AddDiscordSourceOptions {
 	readonly includePrivateArchivedThreads?: boolean;
 	readonly members?: boolean;
 	readonly attachments?: boolean;
+	readonly attachmentText?: boolean;
+	readonly maxAttachmentTextBytes?: string;
 	readonly embeds?: boolean;
 	readonly polls?: boolean;
 	readonly threadMembers?: boolean;
@@ -138,6 +140,15 @@ export async function addDiscordSourceFromCli(options: AddDiscordSourceOptions, 
 		process.exitCode = 1;
 		return;
 	}
+	const maxAttachmentTextBytes = parseIntegerOption(
+		options.maxAttachmentTextBytes,
+		"Discord max-attachment-text-bytes",
+	);
+	if (isParseError(maxAttachmentTextBytes)) {
+		console.error(chalk.red(`✗ ${maxAttachmentTextBytes.error}`));
+		process.exitCode = 1;
+		return;
+	}
 	const input: AddDiscordSourceInput = {
 		guildIds,
 		tokenRef: options.tokenRef ?? "",
@@ -151,6 +162,8 @@ export async function addDiscordSourceFromCli(options: AddDiscordSourceOptions, 
 		includePrivateArchivedThreads: options.includePrivateArchivedThreads,
 		includeMembers: options.members,
 		includeAttachments: options.attachments,
+		includeAttachmentText: options.attachmentText,
+		maxAttachmentTextBytes,
 		includeEmbeds: options.embeds,
 		includePolls: options.polls,
 		includeThreadMembers: options.threadMembers,

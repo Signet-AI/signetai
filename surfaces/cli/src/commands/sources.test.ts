@@ -212,6 +212,9 @@ describe("sources CLI commands", () => {
 			"discord_token",
 			"--name",
 			"Discord CLI",
+			"--attachment-text",
+			"--max-attachment-text-bytes",
+			"2048",
 		]);
 
 		expect(calls).toEqual([
@@ -232,6 +235,8 @@ describe("sources CLI commands", () => {
 					includePrivateArchivedThreads: undefined,
 					includeMembers: true,
 					includeAttachments: true,
+					includeAttachmentText: true,
+					maxAttachmentTextBytes: 2048,
 					includeEmbeds: true,
 					includePolls: true,
 					includeThreadMembers: true,

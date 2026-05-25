@@ -57,6 +57,8 @@ export interface DiscordSourceSettings {
 	readonly includePrivateArchivedThreads: boolean;
 	readonly includeMembers: boolean;
 	readonly includeAttachments: boolean;
+	readonly includeAttachmentText: boolean;
+	readonly maxAttachmentTextBytes: number;
 	readonly includeEmbeds: boolean;
 	readonly includePolls: boolean;
 	readonly includeThreadMembers: boolean;
@@ -77,6 +79,8 @@ export interface AddDiscordSourceInput {
 	readonly includePrivateArchivedThreads?: boolean;
 	readonly includeMembers?: boolean;
 	readonly includeAttachments?: boolean;
+	readonly includeAttachmentText?: boolean;
+	readonly maxAttachmentTextBytes?: number;
 	readonly includeEmbeds?: boolean;
 	readonly includePolls?: boolean;
 	readonly includeThreadMembers?: boolean;
@@ -120,6 +124,8 @@ export type RemoveSourceResult =
 const SOURCES_CONFIG_VERSION = 1;
 export const DEFAULT_DISCORD_MAX_MESSAGES_PER_CHANNEL = 1000;
 export const MAX_DISCORD_MAX_MESSAGES_PER_CHANNEL = 10_000;
+export const DEFAULT_DISCORD_MAX_ATTACHMENT_TEXT_BYTES = 262_144;
+export const MAX_DISCORD_MAX_ATTACHMENT_TEXT_BYTES = 1_048_576;
 export const DEFAULT_DISCORD_DESKTOP_CACHE_PATH = defaultDiscordDesktopCachePath();
 export const DEFAULT_GITHUB_RESOURCE_TYPES = ["issues", "pulls", "discussions", "docs"] as const;
 export const DEFAULT_GITHUB_RESOURCE_TYPES_NO_TOKEN = ["issues", "pulls", "docs"] as const;
@@ -327,6 +333,10 @@ export function parseDiscordSettings(raw?: SignetSourceProviderSettings): Discor
 		includePrivateArchivedThreads: raw?.includePrivateArchivedThreads === true,
 		includeMembers: raw?.includeMembers !== false,
 		includeAttachments: raw?.includeAttachments !== false,
+		includeAttachmentText: raw?.includeAttachmentText === true,
+		maxAttachmentTextBytes:
+			cleanPositiveInteger(raw?.maxAttachmentTextBytes, MAX_DISCORD_MAX_ATTACHMENT_TEXT_BYTES) ??
+			DEFAULT_DISCORD_MAX_ATTACHMENT_TEXT_BYTES,
 		includeEmbeds: raw?.includeEmbeds !== false,
 		includePolls: raw?.includePolls !== false,
 		includeThreadMembers: raw?.includeThreadMembers !== false,
@@ -388,6 +398,16 @@ function buildDiscordSettings(input: AddDiscordSourceInput): DiscordSourceSettin
 			error: `Discord maxMessagesPerChannel must be an integer between 1 and ${MAX_DISCORD_MAX_MESSAGES_PER_CHANNEL}`,
 		};
 	}
+	const maxAttachmentTextBytes =
+		cleanPositiveInteger(input.maxAttachmentTextBytes, MAX_DISCORD_MAX_ATTACHMENT_TEXT_BYTES) ??
+		DEFAULT_DISCORD_MAX_ATTACHMENT_TEXT_BYTES;
+	if (input.maxAttachmentTextBytes !== undefined && maxAttachmentTextBytes !== input.maxAttachmentTextBytes) {
+		return {
+			error: `Discord maxAttachmentTextBytes must be an integer between 1 and ${MAX_DISCORD_MAX_ATTACHMENT_TEXT_BYTES}`,
+		};
+	}
+	if (input.includeAttachmentText === true && input.includeAttachments === false)
+		return { error: "Discord includeAttachmentText requires includeAttachments" };
 	const since = cleanIsoDate(input.since);
 	if (input.since !== undefined && since === undefined) return { error: "Discord since must be a valid ISO date" };
 
@@ -403,6 +423,8 @@ function buildDiscordSettings(input: AddDiscordSourceInput): DiscordSourceSettin
 		includePrivateArchivedThreads: input.includePrivateArchivedThreads ?? false,
 		includeMembers: input.includeMembers ?? true,
 		includeAttachments: input.includeAttachments ?? true,
+		includeAttachmentText: input.includeAttachmentText ?? false,
+		maxAttachmentTextBytes,
 		includeEmbeds: input.includeEmbeds ?? true,
 		includePolls: input.includePolls ?? true,
 		includeThreadMembers: input.includeThreadMembers ?? true,
@@ -497,6 +519,8 @@ function discordSettingsProviderSettings(settings: DiscordSourceSettings): Signe
 		includePrivateArchivedThreads: settings.includePrivateArchivedThreads,
 		includeMembers: settings.includeMembers,
 		includeAttachments: settings.includeAttachments,
+		includeAttachmentText: settings.includeAttachmentText,
+		maxAttachmentTextBytes: settings.maxAttachmentTextBytes,
 		includeEmbeds: settings.includeEmbeds,
 		includePolls: settings.includePolls,
 		includeThreadMembers: settings.includeThreadMembers,
