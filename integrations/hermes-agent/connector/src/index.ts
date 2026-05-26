@@ -21,6 +21,13 @@ function getPluginSourceDir(): string {
 	// In development, hermes-plugin/ is at package root
 	const fromSrc = join(__dirname, "..", "..", "hermes-plugin");
 	if (existsSync(fromSrc)) return fromSrc;
+	// In the native bundle (SIGNET_DIR), hermes-plugin/ lives inside the
+	// connectors directory alongside the connector JS output.
+	const signetDir = process.env.SIGNET_DIR?.trim();
+	if (signetDir) {
+		const fromConnectors = join(signetDir, "runtime", "connectors", "hermes-agent", "hermes-plugin");
+		if (existsSync(fromConnectors)) return fromConnectors;
+	}
 	throw new Error("Cannot find hermes-plugin directory in connector package");
 }
 

@@ -17,6 +17,7 @@ const originalEnv = {
 	SIGNET_AGENT_MEMORY_POLICY: process.env.SIGNET_AGENT_MEMORY_POLICY,
 	SIGNET_AGENT_POLICY_GROUP: process.env.SIGNET_AGENT_POLICY_GROUP,
 	SIGNET_SKIP_AGENT_REGISTER: process.env.SIGNET_SKIP_AGENT_REGISTER,
+	SIGNET_DIR: process.env.SIGNET_DIR,
 };
 
 let tmpRoot = "";
@@ -52,6 +53,8 @@ beforeEach(() => {
 	// biome-ignore lint/performance/noDelete: ensure no stale value from outer env
 	delete process.env.SIGNET_AGENT_POLICY_GROUP;
 	process.env.SIGNET_SKIP_AGENT_REGISTER = "1";
+	// biome-ignore lint/performance/noDelete: ensure no stale value from outer env
+	delete process.env.SIGNET_DIR;
 });
 
 afterEach(() => {
@@ -66,6 +69,7 @@ afterEach(() => {
 	restoreEnv("SIGNET_AGENT_MEMORY_POLICY");
 	restoreEnv("SIGNET_AGENT_POLICY_GROUP");
 	restoreEnv("SIGNET_SKIP_AGENT_REGISTER");
+	restoreEnv("SIGNET_DIR");
 	if (tmpRoot) {
 		rmSync(tmpRoot, { recursive: true, force: true });
 	}
@@ -1131,5 +1135,82 @@ describe("HermesAgentConnector — AGENTS.md legacy block migration", () => {
 		const { readFileSync } = await import("node:fs");
 		expect(readFileSync(agentsPath, "utf-8")).toBe("before\nafter\n");
 		expect(result.filesWritten).toContain(agentsPath);
+	});
+});
+
+describe("HermesAgentConnector — native bundle (SIGNET_DIR) plugin resolution", () => {
+	it("installs successfully when hermes-plugin is in SIGNET_DIR runtime connectors layout", async () => {
+		const signetDir = join(tmpRoot, "signet-bundle");
+		const hermesPluginSource = join(import.meta.dir, "hermes-plugin");
+		const bundlePluginDir = join(signetDir, "runtime", "connectors", "hermes-agent", "hermes-plugin");
+		cpSync(hermesPluginSource, bundlePluginDir, { recursive: true });
+
+		process.env.SIGNET_DIR = signetDir;
+		const hermesHome = join(tmpRoot, ".hermes");
+		process.env.HERMES_HOME = hermesHome;
+		// biome-ignore lint/performance/noDelete: ensure no repo path
+		delete process.env.HERMES_REPO;
+
+		const result = await new HermesAgentConnector().install(tmpRoot);
+
+		expect(result.success).toBe(true);
+		expect(result.filesWritten.length).toBeGreaterThan(0);
+	});
+
+	it("installs into both user and repo dirs when SIGNET_DIR is set and HERMES_REPO is present", async () => {
+		const signetDir = join(tmpRoot, "signet-bundle");
+		const hermesPluginSource = join(import.meta.dir, "hermes-plugin");
+		const bundlePluginDir = join(signetDir, "runtime", "connectors", "hermes-agent", "hermes-plugin");
+		cpSync(hermesPluginSource, bundlePluginDir, { recursive: true });
+
+		const hermesRepo = join(tmpRoot, "hermes-agent");
+		mkdirSync(join(hermesRepo, "plugins", "memory"), { recursive: true });
+		process.env.SIGNET_DIR = signetDir;
+		process.env.HERMES_HOME = join(tmpRoot, ".hermes");
+		process.env.HERMES_REPO = hermesRepo;
+
+		const result = await new HermesAgentConnector().install(tmpRoot);
+
+		expect(result.success).toBe(true);
+		const repoPlugin = join(hermesRepo, "plugins", "memory", "signet", "__init__.py");
+		expect(existsSync(repoPlugin)).toBe(true);
+		const userPlugin = join(process.env.HERMES_HOME, "plugins", "signet", "__init__.py");
+		expect(existsSync(userPlugin)).toBe(true);
+	});
+
+	it("prefers __dirname-relative paths over SIGNET_DIR when both exist", async () => {
+		const signetDir = join(tmpRoot, "signet-bundle");
+		const bundlePluginDir = join(signetDir, "runtime", "connectors", "hermes-agent", "hermes-plugin");
+		mkdirSync(bundlePluginDir, { recursive: true });
+		writeFileSync(join(bundlePluginDir, "__init__.py"), "# wrong plugin\n");
+		writeFileSync(join(bundlePluginDir, "plugin.yaml"), "name: wrong\n");
+
+		process.env.SIGNET_DIR = signetDir;
+		process.env.HERMES_HOME = join(tmpRoot, ".hermes");
+		// biome-ignore lint/performance/noDelete: ensure no repo path
+		delete process.env.HERMES_REPO;
+
+		const result = await new HermesAgentConnector().install(tmpRoot);
+
+		expect(result.success).toBe(true);
+		const installedInit = readFileSync(join(process.env.HERMES_HOME, "plugins", "signet", "__init__.py"), "utf-8");
+		expect(installedInit).not.toContain("# wrong plugin");
+	});
+
+	it("resolves plugin from SIGNET_DIR when __dirname-relative hermes-plugin has stale marker", async () => {
+		const signetDir = join(tmpRoot, "signet-bundle");
+		const hermesPluginSource = join(import.meta.dir, "hermes-plugin");
+		const bundlePluginDir = join(signetDir, "runtime", "connectors", "hermes-agent", "hermes-plugin");
+		cpSync(hermesPluginSource, bundlePluginDir, { recursive: true });
+
+		process.env.SIGNET_DIR = signetDir;
+		process.env.HERMES_HOME = join(tmpRoot, ".hermes");
+		// biome-ignore lint/performance/noDelete: ensure no repo path
+		delete process.env.HERMES_REPO;
+
+		const result = await new HermesAgentConnector().install(tmpRoot);
+
+		expect(result.success).toBe(true);
+		expect(result.filesWritten.some((f) => f.includes("signet.install.json"))).toBe(true);
 	});
 });

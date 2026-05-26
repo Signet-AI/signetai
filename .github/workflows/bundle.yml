@@ -344,6 +344,14 @@ jobs:
             mkdir -p "$STAGE/$name"
             cp -r "$pkg"/* "$STAGE/$name/" 2>/dev/null || true
           done
+          # The hermes-agent connector ships a Python plugin directory alongside
+          # dist/ that the connector copies into the Hermes plugin tree at install
+          # time. Include it in the tarball so the native bundle can find it via
+          # SIGNET_DIR-aware path resolution in getPluginSourceDir().
+          if [ -d "integrations/hermes-agent/connector/hermes-plugin" ]; then
+            mkdir -p "$STAGE/hermes-agent/hermes-plugin"
+            cp -r integrations/hermes-agent/connector/hermes-plugin/* "$STAGE/hermes-agent/hermes-plugin/"
+          fi
           tar czf "$ARTIFACT_DIR/signet-connectors.tar.gz" -C "$STAGE" .
 
       # ── Plugins ──
