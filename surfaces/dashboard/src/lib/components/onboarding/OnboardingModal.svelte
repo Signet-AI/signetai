@@ -1,277 +1,227 @@
 <script lang="ts">
-import { invalidateAll } from "$app/navigation";
-import { type ConfigFile, type DaemonStatus, type Harness, type MemoryStats, saveConfigFileResult } from "$lib/api";
-import { applyRecommendedPipelineSetup, resolveSynthesisEnabled } from "$lib/components/tabs/settings/pipeline-settings";
-import { Button } from "$lib/components/ui/button/index.js";
-import { Checkbox } from "$lib/components/ui/checkbox/index.js";
-import { Input } from "$lib/components/ui/input/index.js";
-import { Textarea } from "$lib/components/ui/textarea/index.js";
-import type { TabId } from "$lib/stores/navigation.svelte";
-import { KNOWN_HARNESSES, st } from "$lib/stores/settings.svelte";
-import { toast } from "$lib/stores/toast.svelte";
-import { type PipelineProviderChoice, defaultPipelineModel } from "@signet/core/pipeline-providers";
-import { onMount, untrack } from "svelte";
-import { stringify } from "yaml";
+	import { invalidateAll } from "$app/navigation";
+	import { type ConfigFile, type DaemonStatus, type Harness, type MemoryStats, saveConfigFileResult } from "$lib/api";
+	import { Button } from "$lib/components/ui/button/index.js";
+	import { applyRecommendedPipelineSetup, resolveSynthesisEnabled } from "$lib/components/tabs/settings/pipeline-settings";
+	import { KNOWN_HARNESSES, st } from "$lib/stores/settings.svelte";
+	import { toast } from "$lib/stores/toast.svelte";
+	import type { TabId } from "$lib/stores/navigation.svelte";
+	import { defaultPipelineModel, type PipelineProviderChoice } from "@signet/core/pipeline-providers";
+	import { onMount, untrack } from "svelte";
+	import { fly } from "svelte/transition";
+	import { stringify } from "yaml";
+	import {
+		type OnboardingState,
+		type EmbeddingProvider,
+		type IdentityPresetName,
+		EMBEDDING_PROVIDER_OPTIONS,
+		EXTRACTION_PROVIDER_OPTIONS,
+		EXTRACTION_MODEL_PRESETS,
+		createDefaultState,
+	} from "./onboarding-state.svelte";
+	import WelcomeStep from "./steps/WelcomeStep.svelte";
+	import IdentityStep from "./steps/IdentityStep.svelte";
+	import EmbeddingStep from "./steps/EmbeddingStep.svelte";
+	import ExtractionStep from "./steps/ExtractionStep.svelte";
+	import ReviewStep from "./steps/ReviewStep.svelte";
 
-interface Props {
-	configFiles: ConfigFile[];
-	memoryStats: MemoryStats;
-	daemonStatus: DaemonStatus | null;
-	harnesses?: Harness[];
-	onnavigate?: (tab: TabId) => void;
-}
-
-type ProviderOption = {
-	value: PipelineProviderChoice;
-	label: string;
-	detail: string;
-	mode: "agent" | "local" | "api" | "off" | "custom";
-	endpointPlaceholder?: string;
-};
-
-const { configFiles, memoryStats, daemonStatus, harnesses = [], onnavigate }: Props = $props();
-
-const PROVIDERS: ProviderOption[] = [
-	{
-		value: "acpx",
-		label: "ACPX",
-		detail: "Route extraction through a selected installed agent harness.",
-		mode: "agent",
-	},
-	{
-		value: "llama-cpp",
-		label: "llama.cpp",
-		detail: "Use a local llama.cpp OpenAI-compatible server.",
-		mode: "local",
-		endpointPlaceholder: "http://127.0.0.1:8080/v1",
-	},
-	{
-		value: "ollama",
-		label: "Ollama",
-		detail: "Use an Ollama daemon running on this machine or LAN.",
-		mode: "local",
-		endpointPlaceholder: "http://127.0.0.1:11434",
-	},
-	{
-		value: "claude-code",
-		label: "Claude Code",
-		detail: "Call the local Claude Code CLI directly for extraction.",
-		mode: "agent",
-	},
-	{
-		value: "codex",
-		label: "Codex",
-		detail: "Call the local Codex CLI directly for extraction.",
-		mode: "agent",
-	},
-	{
-		value: "opencode",
-		label: "OpenCode",
-		detail: "Use OpenCode as the extraction backend.",
-		mode: "agent",
-	},
-	{
-		value: "anthropic",
-		label: "Anthropic API",
-		detail: "Use Anthropic directly with configured secrets.",
-		mode: "api",
-		endpointPlaceholder: "https://api.anthropic.com",
-	},
-	{
-		value: "openrouter",
-		label: "OpenRouter",
-		detail: "Use OpenRouter with configured secrets.",
-		mode: "api",
-		endpointPlaceholder: "https://openrouter.ai/api/v1",
-	},
-	{
-		value: "command",
-		label: "Command",
-		detail: "Use a custom command provider configured in advanced settings.",
-		mode: "custom",
-	},
-	{
-		value: "none",
-		label: "Off",
-		detail: "Leave extraction disabled for now; configure it later.",
-		mode: "off",
-	},
-];
-
-const MODEL_PRESETS: Partial<Record<PipelineProviderChoice, string[]>> = {
-	acpx: ["gpt-5-codex-mini", "gpt-5-codex", "claude-haiku-4-5"],
-	"llama-cpp": ["qwen3.5:4b", "qwen3:8b", "llama-3.1-8b"],
-	ollama: ["qwen3:4b", "qwen3:8b", "glm-4.7-flash"],
-	"claude-code": ["haiku", "sonnet", "opus"],
-	codex: ["gpt-5-codex-mini", "gpt-5-codex", "gpt-5.4"],
-	opencode: ["anthropic/claude-haiku-4-5-20251001", "google/gemini-2.5-flash"],
-	anthropic: ["haiku", "sonnet", "opus"],
-	openrouter: ["openai/gpt-4o-mini", "anthropic/claude-haiku-4-5-20251001"],
-};
-
-let open = $state(false);
-let initialized = $state(false);
-let saving = $state(false);
-let agentName = $state("My Agent");
-let agentDescription = $state("Personal AI assistant");
-let provider = $state<PipelineProviderChoice>("acpx");
-let model = $state("gpt-5-codex-mini");
-let endpoint = $state("");
-let selectedHarness = $state("");
-let selectedHarnesses = $state<string[]>([]);
-let synthesisEnabled = $state(true);
-let showAdvancedProviders = $state(false);
-// biome-ignore lint/style/useConst: Svelte state is mutated by onboarding buttons.
-let afterSaveTab = $state<TabId | "stay" | "sources">("sources");
-let forceOpen = false;
-
-const storageKey = $derived(`signet:onboarding:dismissed:${daemonStatus?.agentsDir ?? "unknown"}`);
-const providerOption = $derived(PROVIDERS.find((option) => option.value === provider) ?? PROVIDERS[0]);
-const harnessOptions = $derived.by(() => {
-	const fromApi = harnesses.map((h) => h.id || h.name).filter(Boolean);
-	const combined = [...new Set([...fromApi, ...KNOWN_HARNESSES])];
-	return combined.map((id) => ({
-		id,
-		meta: harnesses.find((h) => h.id === id || h.name === id),
-	}));
-});
-const selectedProviderModels = $derived(MODEL_PRESETS[provider] ?? []);
-const needsEndpoint = $derived(providerOption.mode === "local" || providerOption.mode === "api");
-
-function readPipelineString(...path: string[]): string {
-	return st.aStr(["memory", "pipelineV2", ...path]);
-}
-
-function currentProvider(): PipelineProviderChoice {
-	const raw = readPipelineString("extractionProvider") || readPipelineString("extraction", "provider");
-	return PROVIDERS.some((option) => option.value === raw) ? (raw as PipelineProviderChoice) : "acpx";
-}
-
-function hydrateFromSettings(): void {
-	st.init(configFiles);
-	agentName = st.aStr(["agent", "name"]) || st.aStr(["name"]) || "My Agent";
-	agentDescription = st.aStr(["agent", "description"]) || st.aStr(["description"]) || "Personal AI assistant";
-	provider = currentProvider();
-	model =
-		readPipelineString("extractionModel") ||
-		readPipelineString("extraction", "model") ||
-		defaultPipelineModel(provider);
-	endpoint =
-		readPipelineString("extraction", "endpoint") ||
-		readPipelineString("extractionEndpoint") ||
-		readPipelineString("extractionBaseUrl") ||
-		"";
-	selectedHarness = readPipelineString("extraction", "harness") || "";
-	selectedHarnesses = st.harnessArray();
-	if (selectedHarnesses.length === 0 && harnessOptions.length > 0) selectedHarnesses = [harnessOptions[0].id];
-	if (!selectedHarness && selectedHarnesses.length > 0) selectedHarness = selectedHarnesses[0];
-	synthesisEnabled = resolveSynthesisEnabled(st.agent);
-	initialized = true;
-}
-
-function isDefaultishWorkspace(): boolean {
-	const name = agentName.trim().toLowerCase();
-	return memoryStats.total === 0 && (name === "my agent" || name.length === 0);
-}
-
-function maybeOpen(): void {
-	if (typeof window === "undefined") return;
-	if (!initialized || !daemonStatus) return;
-	if (forceOpen) {
-		open = true;
-		return;
+	interface Props {
+		configFiles: ConfigFile[];
+		memoryStats: MemoryStats;
+		daemonStatus: DaemonStatus | null;
+		harnesses?: Harness[];
+		onnavigate?: (tab: TabId) => void;
 	}
-	if (localStorage.getItem(storageKey) === "true") return;
-	if (isDefaultishWorkspace()) open = true;
-}
 
-onMount(() => {
-	forceOpen = new URLSearchParams(window.location.search).get("onboarding") === "1";
-	untrack(hydrateFromSettings);
-	maybeOpen();
-});
+	const { configFiles, memoryStats, daemonStatus, harnesses = [], onnavigate }: Props = $props();
 
-$effect(() => {
-	const _configFiles = configFiles;
-	const _harnesses = harnesses;
-	void _configFiles;
-	void _harnesses;
-	untrack(hydrateFromSettings);
-});
+	const STEPS = [
+		{ number: "01", title: "Welcome", subtitle: "Choose an identity preset for your agent." },
+		{ number: "02", title: "Identity", subtitle: "Name your agent and select harnesses." },
+		{ number: "03", title: "Embeddings", subtitle: "Configure vector search for semantic recall." },
+		{ number: "04", title: "Extraction", subtitle: "Pick an extraction route for the memory pipeline." },
+		{ number: "05", title: "Review", subtitle: "Confirm your choices before saving." },
+	];
 
-$effect(() => {
-	const _daemonStatus = daemonStatus;
-	const _memoryTotal = memoryStats.total;
-	void _daemonStatus;
-	void _memoryTotal;
-	maybeOpen();
-});
+	let open = $state(false);
+	let initialized = $state(false);
+	let forceOpen = false;
+	let direction = $state<1 | -1>(1);
+	let obState = $state<OnboardingState>(createDefaultState());
 
-function chooseProvider(next: PipelineProviderChoice): void {
-	provider = next;
-	model = MODEL_PRESETS[next]?.[0] ?? defaultPipelineModel(next);
-	endpoint = PROVIDERS.find((option) => option.value === next)?.endpointPlaceholder ?? "";
-	if (next === "none") endpoint = "";
-}
+	const storageKey = $derived(`signet:onboarding:dismissed:${daemonStatus?.agentsDir ?? "unknown"}`);
 
-function toggleHarness(id: string, checked: boolean | string): void {
-	if (checked) {
-		selectedHarnesses = [...new Set([...selectedHarnesses, id])];
-		if (!selectedHarness) selectedHarness = id;
-		return;
+	function readPipelineString(...path: string[]): string {
+		return st.aStr(["memory", "pipelineV2", ...path]);
 	}
-	selectedHarnesses = selectedHarnesses.filter((h) => h !== id);
-	if (selectedHarness === id) selectedHarness = selectedHarnesses[0] ?? "";
-}
 
-function dismiss(): void {
-	forceOpen = false;
-	localStorage.setItem(storageKey, "true");
-	open = false;
-}
+	function hydrateFromSettings(): void {
+		st.init(configFiles);
+		obState.agentName = st.aStr(["agent", "name"]) || st.aStr(["name"]) || "My Agent";
+		obState.agentDescription = st.aStr(["agent", "description"]) || st.aStr(["description"]) || "Personal AI assistant";
+		obState.identityPreset = (st.aStr(["identity", "preset"]) || "minimal") as IdentityPresetName;
 
-function openSettings(): void {
-	dismiss();
-	onnavigate?.("settings");
-}
+		const harnessFromApi = harnesses.map((h) => h.id || h.name).filter(Boolean);
+		const combined = [...new Set([...harnessFromApi, ...KNOWN_HARNESSES])];
+		obState.selectedHarnesses = st.harnessArray();
+		if (obState.selectedHarnesses.length === 0 && combined.length > 0) {
+			obState.selectedHarnesses = [combined[0]];
+		}
+		obState.selectedHarness = obState.selectedHarnesses[0] ?? "";
 
-async function persistOnboardingConfig(): Promise<void> {
-	if (st.agentFile) {
-		await st.save();
-		return;
+		const embProvider = st.sStr([...st.embPath(), "provider"]) || "native";
+		obState.embeddingProvider = EMBEDDING_PROVIDER_OPTIONS.some((o) => o.value === embProvider) ? embProvider as EmbeddingProvider : "native";
+		obState.embeddingModel =
+			st.sStr([...st.embPath(), "model"]) ||
+			(EMBEDDING_PROVIDER_OPTIONS.find((o) => o.value === obState.embeddingProvider)?.defaultModel ?? "");
+		obState.embeddingEndpoint = st.sStr([...st.embPath(), "base_url"]) || st.sStr([...st.embPath(), "baseurl"]) || "";
+
+		const rawProvider =
+			readPipelineString("extractionProvider") || readPipelineString("extraction", "provider");
+		obState.extractionProvider = EXTRACTION_PROVIDER_OPTIONS.some((o) => o.value === rawProvider)
+			? (rawProvider as PipelineProviderChoice)
+			: "acpx";
+		obState.extractionModel =
+			readPipelineString("extractionModel") ||
+			readPipelineString("extraction", "model") ||
+			defaultPipelineModel(obState.extractionProvider);
+		obState.extractionEndpoint =
+			readPipelineString("extraction", "endpoint") ||
+			readPipelineString("extractionEndpoint") ||
+			readPipelineString("extractionBaseUrl") ||
+			"";
+		obState.synthesisEnabled = resolveSynthesisEnabled(st.agent);
+		initialized = true;
 	}
-	const result = await saveConfigFileResult("agent.yaml", stringify(st.agent));
-	if (!result.ok) throw new Error(result.error ?? `Failed to create agent.yaml (${result.status})`);
-	st.agentSnapshot = JSON.stringify(st.agent);
-}
 
-async function finish(): Promise<void> {
-	if (saving) return;
-	saving = true;
-	try {
-		st.aSetStr(["agent", "name"], agentName.trim() || "My Agent");
-		st.aSetStr(["agent", "description"], agentDescription.trim() || "Personal AI assistant");
-		st.set(st.agent, ["harnesses"], selectedHarnesses);
-		applyRecommendedPipelineSetup(st.agent, {
-			provider,
-			model,
-			endpoint: needsEndpoint ? endpoint : "",
-			acpxHarness: provider === "acpx" ? selectedHarness : "",
-			synthesisEnabled,
-		});
-		st.agent = { ...st.agent };
-		await persistOnboardingConfig();
+	function isDefaultishWorkspace(): boolean {
+		const name = obState.agentName.trim().toLowerCase();
+		return memoryStats.total === 0 && (name === "my agent" || name.length === 0);
+	}
+
+	function maybeOpen(): void {
+		if (typeof window === "undefined") return;
+		if (!initialized || !daemonStatus) return;
+		if (forceOpen) {
+			open = true;
+			return;
+		}
+		if (localStorage.getItem(storageKey) === "true") return;
+		if (isDefaultishWorkspace()) open = true;
+	}
+
+	onMount(() => {
+		forceOpen = new URLSearchParams(window.location.search).get("onboarding") === "1";
+		untrack(hydrateFromSettings);
+		maybeOpen();
+	});
+
+	$effect(() => {
+		const _configFiles = configFiles;
+		const _harnesses = harnesses;
+		void _configFiles;
+		void _harnesses;
+		untrack(hydrateFromSettings);
+	});
+
+	$effect(() => {
+		const _daemonStatus = daemonStatus;
+		const _memoryTotal = memoryStats.total;
+		void _daemonStatus;
+		void _memoryTotal;
+		maybeOpen();
+	});
+
+	function dismiss(): void {
 		forceOpen = false;
 		localStorage.setItem(storageKey, "true");
 		open = false;
-		await invalidateAll();
-		toast("Onboarding saved", "success");
-		if (afterSaveTab === "sources") onnavigate?.("sources");
-		else if (afterSaveTab !== "stay") onnavigate?.(afterSaveTab);
-	} finally {
-		saving = false;
 	}
-}
+
+	function openSettings(): void {
+		dismiss();
+		onnavigate?.("settings");
+	}
+
+	function validateStep(step: number): string[] {
+		if (step === 1) {
+			const errors: string[] = [];
+			if (!obState.agentName.trim()) errors.push("Agent name is required.");
+			if (obState.selectedHarnesses.length === 0) errors.push("Select at least one harness.");
+			return errors;
+		}
+		if (step === 2) {
+			if (obState.embeddingProvider === "none") return [];
+			if (!obState.embeddingModel.trim()) return ["Embedding model is required."];
+			return [];
+		}
+		if (step === 3) {
+			if (obState.extractionProvider === "none") return [];
+			if (!obState.extractionModel.trim()) return ["Extraction model is required."];
+			return [];
+		}
+		return [];
+	}
+
+	function nextStep(): void {
+		const errors = validateStep(obState.currentStep);
+		if (errors.length > 0) {
+			toast(errors[0], "error");
+			return;
+		}
+		direction = 1;
+		obState.currentStep = Math.min(obState.currentStep + 1, STEPS.length - 1);
+	}
+
+	function prevStep(): void {
+		direction = -1;
+		obState.currentStep = Math.max(obState.currentStep - 1, 0);
+	}
+
+	async function persistOnboardingConfig(): Promise<void> {
+		if (st.agentFile) {
+			await st.save();
+			return;
+		}
+		const result = await saveConfigFileResult("agent.yaml", stringify(st.agent));
+		if (!result.ok) throw new Error(result.error ?? `Failed to create agent.yaml (${result.status})`);
+		st.agentSnapshot = JSON.stringify(st.agent);
+	}
+
+	async function finish(): Promise<void> {
+		if (obState.saving) return;
+		obState.saving = true;
+		try {
+			st.aSetStr(["agent", "name"], obState.agentName.trim() || "My Agent");
+			st.aSetStr(["agent", "description"], obState.agentDescription.trim() || "Personal AI assistant");
+			st.aSetStr(["identity", "preset"], obState.identityPreset);
+			st.set(st.agent, ["harnesses"], obState.selectedHarnesses);
+
+			const needsEndpoint = (() => {
+				const mode = EXTRACTION_PROVIDER_OPTIONS.find((o) => o.value === obState.extractionProvider)?.mode;
+				return mode === "local" || mode === "api";
+			})();
+
+			applyRecommendedPipelineSetup(st.agent, {
+				provider: obState.extractionProvider,
+				model: obState.extractionModel,
+				endpoint: needsEndpoint ? obState.extractionEndpoint : "",
+				acpxHarness: obState.extractionProvider === "acpx" ? obState.selectedHarness : "",
+				synthesisEnabled: obState.synthesisEnabled,
+			});
+
+			st.agent = { ...st.agent };
+			await persistOnboardingConfig();
+			forceOpen = false;
+			localStorage.setItem(storageKey, "true");
+			open = false;
+			await invalidateAll();
+			toast("Setup complete", "success");
+			onnavigate?.("sources");
+		} finally {
+			obState.saving = false;
+		}
+	}
 </script>
 
 {#if open}
@@ -281,190 +231,73 @@ async function finish(): Promise<void> {
 				<div class="header-copy">
 					<div class="header-kicker">
 						<span class="signal-dot"></span>
-						<span>FIRST_RUN_SEQUENCE</span>
-						<span class="header-coordinate">AGENT_BOOTSTRAP / 04</span>
+						<span>SETUP_SEQUENCE</span>
+						<span class="header-step">{STEPS[obState.currentStep].number} / {String(STEPS.length).padStart(2, "0")}</span>
 					</div>
 					<h2 id="onboarding-title">Initialize Signet</h2>
-					<p class="lede">Set identity, harness sync, and memory extraction. Everything can change later.</p>
+					<p class="lede">{STEPS[obState.currentStep].subtitle}</p>
 				</div>
-				<button class="icon-button sig-switch" type="button" aria-label="Dismiss onboarding" onclick={dismiss}>×</button>
+
+				<div class="progress-track">
+					{#each STEPS as step, i (i)}
+						<button
+							type="button"
+							class="progress-dot"
+							class:progress-dot-active={i === obState.currentStep}
+							class:progress-dot-done={i < obState.currentStep}
+							disabled={i > obState.currentStep}
+							onclick={() => { if (i < obState.currentStep) { direction = -1; obState.currentStep = i; } }}
+							aria-label="Go to step {i + 1}: {step.title}"
+						>
+							{i + 1}
+						</button>
+						{#if i < STEPS.length - 1}
+							<span class="progress-line" class:progress-line-done={i < obState.currentStep}></span>
+						{/if}
+					{/each}
+				</div>
+
+				<button class="icon-button sig-switch" type="button" aria-label="Dismiss onboarding" onclick={dismiss}>
+					&times;
+				</button>
 			</header>
 
 			<div class="onboarding-body">
-				<aside class="step-nav" aria-label="Onboarding steps">
-					<div class="step-nav-item step-nav-item-active">
-						<span class="step-nav-index">01</span>
-						<div>
-							<strong>Identity</strong>
-							<small>Name and describe your agent</small>
-						</div>
+				{#key obState.currentStep}
+					<div class="step-panel" in:fly={{ x: direction * 60, duration: 180 }}>
+						{#if obState.currentStep === 0}
+							<WelcomeStep state={obState} />
+						{:else if obState.currentStep === 1}
+							<IdentityStep state={obState} {harnesses} />
+						{:else if obState.currentStep === 2}
+							<EmbeddingStep state={obState} />
+						{:else if obState.currentStep === 3}
+							<ExtractionStep state={obState} />
+						{:else}
+							<ReviewStep state={obState} />
+						{/if}
 					</div>
-					<div class="step-nav-item">
-						<span class="step-nav-index">02</span>
-						<div>
-							<strong>Harness sync</strong>
-							<small>Select harnesses to sync with</small>
-						</div>
-					</div>
-					<div class="step-nav-item">
-						<span class="step-nav-index">03</span>
-						<div>
-							<strong>Memory engine</strong>
-							<small>Choose memory extraction routes</small>
-						</div>
-					</div>
-					<div class="step-nav-item">
-						<span class="step-nav-index">04</span>
-						<div>
-							<strong>Sources</strong>
-							<small>Review and continue</small>
-						</div>
-					</div>
-				</aside>
-
-				<main class="setup-main">
-					<section class="setup-panel identity-panel">
-						<div class="section-head">
-							<span class="step">01</span>
-							<div>
-								<h3>Identity</h3>
-								<p>Give the agent a recognizable name before syncing it into tools.</p>
-							</div>
-						</div>
-						<div class="field-grid">
-							<label class="field">
-								<span>Name</span>
-								<Input class="onboarding-input" bind:value={agentName} placeholder="Dot" />
-							</label>
-							<label class="field field-wide">
-								<span>Description</span>
-								<Textarea class="onboarding-input onboarding-textarea" rows={2} bind:value={agentDescription} placeholder="A portable memory agent for..." />
-							</label>
-						</div>
-					</section>
-
-					<section class="setup-panel">
-						<div class="section-head">
-							<span class="step">02</span>
-							<div>
-								<h3>Harness sync</h3>
-								<p>Choose where Signet maintains this identity.</p>
-							</div>
-						</div>
-						<div class="harness-list">
-							{#each harnessOptions as h (h.id)}
-								<label class="harness-row sig-switch" class:harness-row-active={selectedHarnesses.includes(h.id)}>
-									<Checkbox checked={selectedHarnesses.includes(h.id)} onCheckedChange={(checked) => toggleHarness(h.id, checked)} />
-									<span class="status-dot" class:status-dot-installed={h.meta?.exists}></span>
-									<span class="harness-main">
-										<strong>{h.id}</strong>
-										<small>{h.meta?.path ?? "known harness"}</small>
-									</span>
-									<span class="harness-state">{h.meta?.exists ? "installed" : "not found"}</span>
-								</label>
-							{/each}
-						</div>
-					</section>
-
-					<section class="setup-panel memory-panel">
-						<div class="section-head">
-							<span class="step">03</span>
-							<div>
-								<h3>Memory engine</h3>
-								<p>Pick an extraction route. Advanced routes stay available without dominating the flow.</p>
-							</div>
-						</div>
-
-						<div class="provider-grid">
-							<p class="provider-group-title">Recommended routes</p>
-							{#each PROVIDERS as option (option.value)}
-								{#if option.value === "acpx" || option.value === "ollama" || option.value === "codex" || option.value === "claude-code"}
-									<button type="button" class="provider-card sig-switch" class:provider-card-active={provider === option.value} onclick={() => chooseProvider(option.value)} aria-pressed={provider === option.value}>
-										<span class="provider-radio" aria-hidden="true"></span>
-										<span class="provider-mode">{option.mode}</span>
-										{#if provider === option.value}<span class="selected-badge">selected</span>{/if}
-										<strong>{option.label}</strong>
-										<small>{option.detail}</small>
-									</button>
-								{/if}
-							{/each}
-
-							<button type="button" class="advanced-toggle sig-switch" onclick={() => { showAdvancedProviders = !showAdvancedProviders; }} aria-expanded={showAdvancedProviders}>
-								<span>{showAdvancedProviders ? "Hide advanced routes" : "Show advanced routes"}</span>
-							</button>
-
-							{#if showAdvancedProviders}
-								<p class="provider-group-title provider-group-title-secondary">Advanced routes</p>
-								{#each PROVIDERS as option (option.value)}
-									{#if option.value !== "acpx" && option.value !== "ollama" && option.value !== "codex" && option.value !== "claude-code"}
-										<button type="button" class="provider-card provider-card-compact sig-switch" class:provider-card-active={provider === option.value} onclick={() => chooseProvider(option.value)} aria-pressed={provider === option.value}>
-											<span class="provider-radio" aria-hidden="true"></span>
-											<span class="provider-mode">{option.mode}</span>
-											{#if provider === option.value}<span class="selected-badge">selected</span>{/if}
-											<strong>{option.label}</strong>
-											<small>{option.detail}</small>
-										</button>
-									{/if}
-								{/each}
-							{/if}
-						</div>
-
-						<div class="provider-detail">
-							<div class="detail-banner">
-								<span>{providerOption.mode}</span>
-								<p>{providerOption.detail}</p>
-							</div>
-
-							{#if provider === "acpx"}
-								<div class="field field-wide">
-									<span>ACPX harness</span>
-									<div class="choice-row">
-										{#each selectedHarnesses as h (h)}
-											<button type="button" class="choice-pill sig-switch" class:choice-pill-active={selectedHarness === h} onclick={() => { selectedHarness = h; }}>{h}</button>
-										{/each}
-										{#if selectedHarnesses.length === 0}<small class="empty-hint">Select at least one harness above.</small>{/if}
-									</div>
-								</div>
-							{/if}
-
-							<div class="field-grid">
-								<label class="field">
-									<span>Model</span>
-									<Input class="onboarding-input" bind:value={model} placeholder="model id" disabled={provider === "none"} />
-								</label>
-								{#if needsEndpoint}
-									<label class="field">
-										<span>Endpoint URL</span>
-										<Input class="onboarding-input" bind:value={endpoint} placeholder={providerOption.endpointPlaceholder ?? "https://..."} />
-									</label>
-								{/if}
-							</div>
-
-							{#if selectedProviderModels.length > 0 && provider !== "none"}
-								<div class="choice-row preset-row" aria-label="Model presets">
-									{#each selectedProviderModels as preset (preset)}
-										<button type="button" class="choice-pill sig-switch" class:choice-pill-active={model === preset} onclick={() => { model = preset; }}>{preset}</button>
-									{/each}
-								</div>
-							{/if}
-
-							<label class="inline-toggle sig-switch">
-								<Checkbox checked={synthesisEnabled} onCheckedChange={(checked) => { synthesisEnabled = !!checked; }} />
-								<span>Use the same provider for session synthesis</span>
-							</label>
-						</div>
-					</section>
-
-				</main>
+				{/key}
 			</div>
 
 			<footer class="onboarding-actions sig-panel-footer">
 				<div class="secondary-actions">
-					<Button variant="ghost" type="button" onclick={openSettings}>Open full settings</Button>
+					<Button variant="ghost" type="button" onclick={openSettings}>Settings</Button>
 					<Button variant="ghost" type="button" onclick={dismiss}>Skip for now</Button>
 				</div>
 				<div class="action-cluster">
-					<Button type="button" onclick={finish} disabled={saving}>{saving ? "Saving…" : afterSaveTab === "sources" ? "Continue to sources →" : "Save setup"}</Button>
+					{#if obState.currentStep > 0}
+						<Button variant="ghost" type="button" onclick={prevStep}>Back</Button>
+					{/if}
+					{#if obState.currentStep < STEPS.length - 1}
+						<Button type="button" onclick={nextStep}>
+							{obState.currentStep === 0 ? "Get started" : "Continue"}
+						</Button>
+					{:else}
+						<Button type="button" onclick={finish} disabled={obState.saving}>
+							{obState.saving ? "Saving..." : "Save and continue to sources"}
+						</Button>
+					{/if}
 				</div>
 			</footer>
 		</div>
@@ -481,14 +314,15 @@ async function finish(): Promise<void> {
 		padding: 24px;
 		background:
 			radial-gradient(circle at 52% 16%, color-mix(in srgb, var(--sig-highlight), transparent 84%), transparent 32%),
+			radial-gradient(ellipse at 80% 85%, color-mix(in srgb, var(--sig-surface-raised), transparent 60%), transparent 50%),
 			color-mix(in srgb, var(--sig-bg), transparent 10%);
-		backdrop-filter: blur(5px) saturate(0.95);
+		backdrop-filter: blur(8px) saturate(0.9);
 	}
 
 	.onboarding-modal {
 		position: relative;
-		width: min(1180px, 100%);
-		max-height: min(900px, calc(100vh - 32px));
+		width: min(960px, 100%);
+		height: min(720px, calc(100vh - 48px));
 		display: flex;
 		flex-direction: column;
 		background: var(--sig-bg);
@@ -553,19 +387,7 @@ async function finish(): Promise<void> {
 	.header-copy {
 		position: relative;
 		z-index: 1;
-		max-width: 760px;
-	}
-
-	.header-kicker,
-	.field > span,
-	.step,
-	.harness-state,
-	.provider-mode {
-		font-family: var(--font-mono, monospace);
-		font-size: 10px;
-		letter-spacing: 0.1em;
-		text-transform: uppercase;
-		color: var(--sig-text-muted);
+		max-width: 480px;
 	}
 
 	.header-kicker {
@@ -573,6 +395,10 @@ async function finish(): Promise<void> {
 		align-items: center;
 		gap: 10px;
 		margin-bottom: 10px;
+		font-family: var(--font-mono, monospace);
+		font-size: 10px;
+		letter-spacing: 0.1em;
+		text-transform: uppercase;
 		color: var(--sig-highlight-text);
 	}
 
@@ -584,33 +410,81 @@ async function finish(): Promise<void> {
 		box-shadow: 0 0 10px color-mix(in srgb, var(--sig-success), transparent 28%);
 	}
 
-	.header-coordinate {
+	.header-step {
 		color: var(--sig-text-muted);
 	}
 
-	h2,
-	.lede,
-	h3,
-	.section-head p {
-		margin: 0;
-	}
-
 	h2 {
+		margin: 0;
 		font-family: var(--font-display, monospace);
 		font-size: clamp(24px, 3.4vw, 38px);
 		line-height: 0.94;
 		letter-spacing: 0.06em;
 		color: var(--sig-text-bright);
 		text-transform: uppercase;
-		text-wrap: balance;
 	}
 
 	.lede {
-		max-width: 650px;
-		margin-top: 7px;
+		margin: 7px 0 0;
 		font-size: 13px;
 		line-height: 1.35;
 		color: var(--sig-text);
+	}
+
+	.progress-track {
+		position: relative;
+		z-index: 1;
+		display: flex;
+		align-items: center;
+		gap: 0;
+		margin-top: 12px;
+	}
+
+	.progress-dot {
+		width: 28px;
+		height: 28px;
+		display: inline-grid;
+		place-items: center;
+		font-family: var(--font-mono, monospace);
+		font-size: 10px;
+		letter-spacing: 0.05em;
+		color: var(--sig-text-muted);
+		background: var(--sig-bg);
+		border: 1px solid var(--sig-border-strong);
+		cursor: pointer;
+		transition: border-color var(--dur) var(--ease), color var(--dur) var(--ease),
+			background var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
+	}
+
+	.progress-dot:hover:not(:disabled) {
+		border-color: var(--sig-highlight);
+		color: var(--sig-text-bright);
+	}
+
+	.progress-dot:disabled {
+		cursor: default;
+	}
+
+	.progress-dot-active {
+		border-color: var(--sig-highlight);
+		background: var(--sig-highlight);
+		color: var(--sig-bg);
+		box-shadow: 0 0 12px color-mix(in srgb, var(--sig-highlight), transparent 32%);
+	}
+
+	.progress-dot-done {
+		border-color: var(--sig-highlight);
+		color: var(--sig-highlight-text);
+	}
+
+	.progress-line {
+		width: 28px;
+		height: 2px;
+		background: var(--sig-border-strong);
+	}
+
+	.progress-line-done {
+		background: var(--sig-highlight);
 	}
 
 	.icon-button {
@@ -625,383 +499,17 @@ async function finish(): Promise<void> {
 	}
 
 	.onboarding-body {
-		display: grid;
-		grid-template-columns: 196px minmax(0, 1fr);
-		gap: 0;
-		padding: 0;
-		overflow: auto;
+		flex: 1;
+		overflow-y: auto;
+		overflow-x: hidden;
+		padding: 24px 30px;
 		background:
-			radial-gradient(circle at 22% 18%, var(--sig-highlight-dim), transparent 28%),
+			radial-gradient(ellipse at 25% 10%, color-mix(in srgb, var(--sig-highlight), transparent 92%), transparent 40%),
 			var(--sig-bg);
 	}
 
-	.step-nav {
-		display: flex;
-		flex-direction: column;
-		gap: 2px;
-		padding: 18px 16px;
-		border-right: 1px solid var(--sig-border-strong);
-		background: color-mix(in srgb, var(--sig-surface), transparent 18%);
-	}
-
-	.step-nav-item {
+	.step-panel {
 		position: relative;
-		display: grid;
-		grid-template-columns: 28px minmax(0, 1fr);
-		gap: 10px;
-		padding: 11px 0 11px 12px;
-		border-left: 2px solid transparent;
-		color: var(--sig-text-muted);
-	}
-
-	.step-nav-item-active {
-		border-left-color: var(--sig-highlight);
-		color: var(--sig-highlight-text);
-		background: linear-gradient(90deg, var(--sig-highlight-muted), transparent 88%);
-	}
-
-	.step-nav-index,
-	.step-nav-item strong,
-	.step-nav-item small {
-		font-family: var(--font-mono, monospace);
-		text-transform: uppercase;
-	}
-
-	.step-nav-index {
-		font-size: 11px;
-		letter-spacing: 0.1em;
-		color: currentColor;
-	}
-
-	.step-nav-item strong {
-		display: block;
-		font-size: 11px;
-		letter-spacing: 0.11em;
-		color: currentColor;
-	}
-
-	.step-nav-item small {
-		display: block;
-		margin-top: 5px;
-		font-size: 11px;
-		line-height: 1.35;
-		letter-spacing: 0.01em;
-		text-transform: none;
-		color: var(--sig-text-muted);
-	}
-
-	.setup-main {
-		display: grid;
-		grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
-		gap: 14px;
-		align-items: start;
-		padding: 8px 16px 8px;
-	}
-
-	.setup-panel {
-		position: relative;
-		border: 1px solid var(--sig-border-strong);
-		border-radius: var(--sig-radius);
-		background: color-mix(in srgb, var(--sig-surface), transparent 5%);
-		padding: 10px;
-		box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 1px 3px rgba(0, 0, 0, 0.28);
-		overflow: hidden;
-	}
-
-	.setup-panel::before {
-		content: "";
-		position: absolute;
-		inset: 0;
-		pointer-events: none;
-		background: linear-gradient(135deg, rgba(255, 255, 255, 0.035), transparent 42%);
-	}
-
-	.identity-panel {
-		grid-column: 1;
-	}
-
-	.memory-panel {
-		grid-column: 2;
-		grid-row: 1 / span 3;
-	}
-
-	.section-head {
-		position: relative;
-		display: flex;
-		gap: 12px;
-		align-items: flex-start;
-		margin-bottom: 8px;
-	}
-
-	.step {
-		display: inline-grid;
-		place-items: center;
-		width: 32px;
-		height: 32px;
-		border: 1px solid var(--sig-border-strong);
-		background: var(--sig-bg);
-		color: var(--sig-text-bright);
-		box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
-	}
-
-	h3 {
-		font-family: var(--font-display, monospace);
-		font-size: 14px;
-		letter-spacing: 0.09em;
-		color: var(--sig-text-bright);
-		text-transform: uppercase;
-	}
-
-	.section-head p,
-	.provider-card small,
-	.harness-main small,
-	.detail-banner p,
-	.empty-hint {
-		font-size: 12px;
-		line-height: 1.35;
-		color: var(--sig-text-muted);
-	}
-
-	.field-grid {
-		display: grid;
-		grid-template-columns: repeat(2, minmax(0, 1fr));
-		gap: 10px;
-	}
-
-	.field,
-	.harness-main {
-		display: flex;
-		flex-direction: column;
-		gap: 7px;
-	}
-
-	.field-wide {
-		grid-column: 1 / -1;
-	}
-
-	:global(.onboarding-input) {
-		border-radius: var(--sig-radius) !important;
-		border-color: var(--sig-border-strong) !important;
-		background: color-mix(in srgb, var(--sig-bg), transparent 6%) !important;
-		color: var(--sig-text-bright) !important;
-		font-family: var(--font-mono, monospace) !important;
-		box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.28) !important;
-	}
-
-	:global(.onboarding-textarea) {
-		min-height: 48px !important;
-		resize: vertical;
-	}
-
-	.harness-list,
-	.provider-detail {
-		display: flex;
-		flex-direction: column;
-		gap: 8px;
-	}
-
-	.harness-list {
-		max-height: 198px;
-		overflow: auto;
-		padding-right: 2px;
-	}
-
-	.harness-row {
-		display: flex;
-		align-items: center;
-		gap: 10px;
-		padding: 10px;
-		cursor: pointer;
-	}
-
-	.harness-row-active {
-		border-color: var(--sig-highlight-dim);
-		background: var(--sig-highlight-muted);
-		box-shadow: inset 3px 0 0 var(--sig-highlight), inset 0 1px 0 rgba(255, 255, 255, 0.05);
-	}
-
-	.status-dot {
-		width: 8px;
-		height: 8px;
-		border: 1px solid var(--sig-text-muted);
-		background: transparent;
-		flex: 0 0 auto;
-	}
-
-	.status-dot-installed {
-		border-color: var(--sig-success);
-		background: var(--sig-success);
-		box-shadow: 0 0 8px color-mix(in srgb, var(--sig-success), transparent 40%);
-	}
-
-	.harness-main {
-		min-width: 0;
-		flex: 1;
-	}
-
-	.harness-main strong {
-		font-size: 13px;
-		color: var(--sig-text-bright);
-	}
-
-	.harness-main small {
-		overflow: hidden;
-		white-space: nowrap;
-		text-overflow: ellipsis;
-	}
-
-	.provider-grid {
-		display: grid;
-		grid-template-columns: repeat(2, minmax(0, 1fr));
-		gap: 8px;
-		margin-bottom: 10px;
-	}
-
-	.provider-group-title {
-		grid-column: 1 / -1;
-		margin: 2px 0 -2px;
-		font-family: var(--font-mono, monospace);
-		font-size: 10px;
-		letter-spacing: 0.11em;
-		text-transform: uppercase;
-		color: var(--sig-highlight-text);
-	}
-
-	.provider-group-title-secondary {
-		margin-top: 8px;
-		color: var(--sig-text-muted);
-	}
-
-	.provider-card-compact {
-		min-height: 72px;
-	}
-
-	.provider-card-compact small {
-		display: none;
-	}
-
-	.provider-card {
-		position: relative;
-		min-height: 40px;
-		padding: 8px 10px 8px 30px;
-		text-align: left;
-		color: var(--sig-text);
-		cursor: pointer;
-	}
-
-	.provider-radio {
-		position: absolute;
-		top: 13px;
-		left: 12px;
-		width: 12px;
-		height: 12px;
-		border: 1px solid var(--sig-border-strong);
-		background: var(--sig-bg);
-	}
-
-	.provider-card-active .provider-radio {
-		border-color: var(--sig-highlight);
-		background: var(--sig-highlight);
-		box-shadow: inset 0 0 0 3px var(--sig-bg), 0 0 9px color-mix(in srgb, var(--sig-highlight), transparent 36%);
-	}
-
-	.provider-card small {
-		display: none;
-	}
-
-	.provider-card strong {
-		display: block;
-		margin: 4px 0 0;
-		font-family: var(--font-display, monospace);
-		font-size: 13px;
-		letter-spacing: 0.08em;
-		text-transform: uppercase;
-		color: var(--sig-text-bright);
-	}
-
-	.provider-card-active {
-		border-color: var(--sig-highlight);
-		background: color-mix(in srgb, var(--sig-surface-raised), var(--sig-highlight) 10%);
-		box-shadow: var(--sig-glow-highlight), inset 3px 0 0 var(--sig-highlight), inset 0 1px 0 rgba(255, 255, 255, 0.08);
-	}
-
-	.provider-mode {
-		color: var(--sig-highlight-text);
-	}
-
-	.selected-badge {
-		position: absolute;
-		top: 9px;
-		right: 10px;
-		font-family: var(--font-mono, monospace);
-		font-size: 9px;
-		letter-spacing: 0.1em;
-		text-transform: uppercase;
-		color: var(--sig-highlight-text);
-	}
-
-	.advanced-toggle {
-		grid-column: 1 / -1;
-		justify-content: center;
-		min-height: 28px;
-		padding: 6px 10px;
-		font-family: var(--font-mono, monospace);
-		font-size: 11px;
-		letter-spacing: 0.08em;
-		text-transform: uppercase;
-		color: var(--sig-text);
-		cursor: pointer;
-	}
-
-	.detail-banner {
-		display: flex;
-		gap: 12px;
-		align-items: center;
-		padding: 8px 10px;
-		border: 1px solid var(--sig-border-strong);
-		border-radius: var(--sig-radius);
-		background: var(--sig-bg);
-	}
-
-	.detail-banner span {
-		font-family: var(--font-mono, monospace);
-		font-size: 10px;
-		text-transform: uppercase;
-		color: var(--sig-highlight-text);
-	}
-
-	.choice-row {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 8px;
-	}
-
-	.preset-row {
-		padding-top: 2px;
-	}
-
-	.choice-pill {
-		padding: 7px 10px;
-		font-family: var(--font-mono, monospace);
-		font-size: 12px;
-		color: var(--sig-text);
-		cursor: pointer;
-	}
-
-	.choice-pill-active {
-		border-color: var(--sig-highlight);
-		color: var(--sig-text-bright);
-		background: var(--sig-highlight-muted);
-	}
-
-	.inline-toggle {
-		display: flex;
-		align-items: center;
-		gap: 9px;
-		padding: 10px;
-		font-size: 12px;
-		color: var(--sig-text);
-		cursor: pointer;
 	}
 
 	.onboarding-actions {
@@ -1009,8 +517,7 @@ async function finish(): Promise<void> {
 		align-items: center;
 		justify-content: space-between;
 		gap: 12px;
-		padding: 10px 18px;
-		background: var(--sig-surface);
+		padding: 12px 24px;
 	}
 
 	.action-cluster,
@@ -1021,21 +528,8 @@ async function finish(): Promise<void> {
 	}
 
 	@media (max-width: 980px) {
-		.onboarding-body,
-		.setup-main,
-		.field-grid,
-		.provider-grid {
-			grid-template-columns: 1fr;
-		}
-
-		.step-nav {
+		.progress-track {
 			display: none;
-		}
-
-		.identity-panel,
-		.memory-panel {
-			grid-column: auto;
-			grid-row: auto;
 		}
 	}
 
@@ -1045,7 +539,7 @@ async function finish(): Promise<void> {
 		}
 
 		.onboarding-modal {
-			max-height: calc(100dvh - 16px);
+			height: calc(100dvh - 16px);
 		}
 
 		.onboarding-header {
@@ -1065,7 +559,6 @@ async function finish(): Promise<void> {
 
 		.lede {
 			font-size: 13px;
-			line-height: 1.35;
 		}
 
 		.icon-button {
@@ -1074,33 +567,13 @@ async function finish(): Promise<void> {
 			flex: 0 0 auto;
 		}
 
-		.header-coordinate,
-		.step-nav {
+		.header-step,
+		.progress-track {
 			display: none;
 		}
 
 		.onboarding-body {
-			padding: 12px 12px 18px;
-		}
-
-		.setup-panel {
-			padding: 14px;
-		}
-
-		.harness-list {
-			max-height: 242px;
-		}
-
-		.provider-card {
-			min-height: 72px;
-		}
-
-		.provider-card small,
-		.harness-main small,
-		.section-head p,
-		.detail-banner p {
-			font-size: 12px;
-			line-height: 1.35;
+			padding: 16px;
 		}
 
 		.onboarding-actions {
