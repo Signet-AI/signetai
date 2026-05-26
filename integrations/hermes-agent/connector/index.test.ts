@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { HermesAgentConnector, diagnoseHermesIntegration } from "./src/index.js";
 
 const originalEnv = {
@@ -1212,5 +1213,33 @@ describe("HermesAgentConnector — native bundle (SIGNET_DIR) plugin resolution"
 
 		expect(result.success).toBe(true);
 		expect(result.filesWritten.some((f) => f.includes("signet.install.json"))).toBe(true);
+	});
+
+	it("requires SIGNET_DIR fallback when running from isolated built-connector layout", async () => {
+		const signetDir = join(tmpRoot, "signet-bundle");
+		const hermesPluginSource = join(import.meta.dir, "hermes-plugin");
+		const bundlePluginDir = join(signetDir, "runtime", "connectors", "hermes-agent", "hermes-plugin");
+		cpSync(hermesPluginSource, bundlePluginDir, { recursive: true });
+
+		const isolatedRoot = mkdtempSync(join(import.meta.dir, "isolated-connector-"));
+		const isolatedDistDir = join(isolatedRoot, "runtime", "cli", "dist");
+		mkdirSync(isolatedDistDir, { recursive: true });
+		cpSync(join(import.meta.dir, "src", "index.ts"), join(isolatedDistDir, "index.ts"));
+
+		process.env.SIGNET_DIR = signetDir;
+		process.env.HERMES_HOME = join(tmpRoot, ".hermes");
+		// biome-ignore lint/performance/noDelete: ensure no repo path
+		delete process.env.HERMES_REPO;
+
+		try {
+			const isolatedModule = await import(pathToFileURL(join(isolatedDistDir, "index.ts")).href);
+			const isolatedConnector = new isolatedModule.HermesAgentConnector();
+			const result = await isolatedConnector.install(tmpRoot);
+
+			expect(result.success).toBe(true);
+			expect(existsSync(join(process.env.HERMES_HOME, "plugins", "signet", "__init__.py"))).toBe(true);
+		} finally {
+			rmSync(isolatedRoot, { recursive: true, force: true });
+		}
 	});
 });
