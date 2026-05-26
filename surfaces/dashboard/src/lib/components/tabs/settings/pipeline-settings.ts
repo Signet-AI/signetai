@@ -229,7 +229,7 @@ export function applyRecommendedPipelineSetup(
 	targets["background-acpx"] = {
 		executor: "acpx",
 		acpx: {
-			agent: acpxCommandAgent(options.agent),
+			agent: acpxCommandAgent(options.agent ?? "codex"),
 			package: "acpx@0.7.0",
 			version: "0.7.0",
 			mode: "exec",

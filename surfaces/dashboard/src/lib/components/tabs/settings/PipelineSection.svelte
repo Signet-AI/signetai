@@ -16,12 +16,11 @@ import {
 	st,
 } from "$lib/stores/settings.svelte";
 import { modelPresetsForProvider } from "@signet/core/llm-model-catalog";
-import { defaultPipelineModel } from "@signet/core/pipeline-providers";
+import { type PipelineProviderChoice, defaultPipelineModel } from "@signet/core/pipeline-providers";
 import {
 	ACPX_DASHBOARD_AGENT_OPTIONS,
 	type AcpxDashboardAgent,
 	DEFAULT_OPENAI_COMPATIBLE_ENDPOINT,
-	applyAcpxDashboardSetup,
 	applyRecommendedPipelineSetup,
 	defaultAcpxDashboardAgent,
 	defaultAcpxDashboardModel,

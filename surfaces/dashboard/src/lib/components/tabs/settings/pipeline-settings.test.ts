@@ -3,7 +3,6 @@ import { describe, expect, it } from "bun:test";
 import { DEFAULT_PIPELINE_TIMEOUT_MS } from "@signet/core/pipeline-providers";
 import {
 	DEFAULT_OPENAI_COMPATIBLE_ENDPOINT,
-	applyAcpxDashboardSetup,
 	defaultAcpxDashboardAgent,
 	applyRecommendedPipelineSetup,
 	hasExplicitSynthesisConfig,
@@ -91,7 +90,7 @@ describe("pipeline-settings synthesis resolution", () => {
 					extractionModel: "qwen3:4b",
 					synthesis: {
 						provider: "claude-code",
-						model: "haiku",
+						model: "gpt-5-codex-mini",
 						endpoint: "http://127.0.0.1:9999",
 						timeout: 180000,
 					},
@@ -102,7 +101,7 @@ describe("pipeline-settings synthesis resolution", () => {
 		expect(hasExplicitSynthesisConfig(agent)).toBe(true);
 		expect(hasExplicitSynthesisProvider(agent)).toBe(true);
 		expect(resolveSynthesisProvider(agent)).toBe("claude-code");
-		expect(resolveSynthesisModel(agent)).toBe("haiku");
+		expect(resolveSynthesisModel(agent)).toBe("gpt-5-codex-mini");
 		expect(resolveSynthesisEndpoint(agent)).toBe("http://127.0.0.1:9999");
 		expect(resolveSynthesisTimeout(agent)).toBe(180000);
 		expect(resolveSynthesisEnabled(agent)).toBe(true);
@@ -197,14 +196,13 @@ describe("pipeline-settings ACPX dashboard setup", () => {
 				enabled: true,
 				extractionProvider: "acpx",
 				extractionModel: "gpt-5-codex-mini",
-				extraction: {
-					provider: "acpx",
-					model: "gpt-5-codex-mini",
-				},
+				graphEnabled: true,
+				rerankerEnabled: true,
+				semanticContradictionEnabled: true,
 				synthesis: {
 					enabled: true,
 					provider: "acpx",
-					model: "haiku",
+					model: "gpt-5-codex-mini",
 					timeout: 120000,
 				},
 			},
@@ -223,14 +221,20 @@ describe("pipeline-settings ACPX dashboard setup", () => {
 				"background-acpx": {
 					executor: "acpx",
 					acpx: {
-						agent: "claude",
+						agent: "codex",
 						package: "acpx@0.7.0",
+						version: "0.7.0",
+						mode: "exec",
+						terminal: "inherit",
 						permissions: "deny-all",
 						hooks: "disabled",
 					},
 					models: {
 						default: {
-							model: "haiku",
+							model: "gpt-5-codex-mini",
+							reasoning: "medium",
+							toolUse: true,
+							costTier: "medium",
 						},
 					},
 				},
@@ -239,7 +243,12 @@ describe("pipeline-settings ACPX dashboard setup", () => {
 				"background-acpx": {
 					mode: "automatic",
 					defaultTargets: ["background-acpx/default"],
+					fallbackTargets: ["background-acpx/default"],
 				},
+			},
+			taskClasses: {
+				memory_extraction: { reasoning: "medium", toolsRequired: true, privacy: "restricted_remote" },
+				session_synthesis: { reasoning: "medium", toolsRequired: true, privacy: "restricted_remote" },
 			},
 			workloads: {
 				memoryExtraction: { target: "background-acpx/default", taskClass: "memory_extraction" },
