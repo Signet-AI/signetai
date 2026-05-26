@@ -252,9 +252,12 @@ describe("check-publish-manifests", () => {
 
 		expect(workflow).toContain("bundle-layout-check");
 		expect(workflow).toContain('tar xzf "$MERGE_DIR/signet-cli.tar.gz" -C "$CHECK_DIR/runtime/cli"');
+		expect(workflow).toContain('tar xzf "$MERGE_DIR/signet-connectors.tar.gz" -C "$CHECK_DIR/runtime/connectors"');
 		expect(workflow).toContain('"$CHECK_DIR/runtime/cli/cli.js"');
 		expect(workflow).toContain('"$CHECK_DIR/runtime/cli/package.json"');
 		expect(workflow).toContain('"$CHECK_DIR/runtime/daemon-js/index.js"');
+		expect(workflow).toContain('"$CHECK_DIR/runtime/connectors/hermes-agent/hermes-plugin/__init__.py"');
+		expect(workflow).toContain('"$CHECK_DIR/runtime/connectors/hermes-agent/hermes-plugin/plugin.yaml"');
 		expect(workflow).toContain("Bundle artifact layout missing");
 		expect(workflow).toContain("for PLATFORM in darwin-arm64 darwin-x64 linux-x64 linux-arm64; do");
 		expect(workflow).toContain('HELPER_SCRIPT_DIR="/tmp/release-helper-scripts"');
