@@ -78,6 +78,11 @@ export function registerGlobalMiddleware(app: Hono, deps: MiddlewareDeps): void 
 	// MW-5: Shadow divergence logging
 	app.use("*", async (c, next) => {
 		const method = c.req.method;
+		const shadowProcess = deps.getShadowProcess();
+		if (!shadowProcess) {
+			await next();
+			return;
+		}
 		const bodyP = ["POST", "PUT", "PATCH"].includes(method)
 			? c.req.text().catch(() => undefined)
 			: Promise.resolve(undefined);

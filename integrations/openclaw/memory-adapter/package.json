@@ -41,7 +41,12 @@
     "@types/node": "^22.0.0"
   },
   "peerDependencies": {
-    "openclaw": ">=0.1.0"
+    "openclaw": ">=2026.5.22"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
   },
   "publishConfig": {
     "access": "public"

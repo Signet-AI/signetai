@@ -827,12 +827,16 @@ describe("check-publish-manifests", () => {
 		const adapter = JSON.parse(readFileSync(adapterFile, "utf-8")) as {
 			dependencies?: Record<string, string>;
 			devDependencies?: Record<string, string>;
+			peerDependencies?: Record<string, string>;
+			peerDependenciesMeta?: Record<string, { optional?: boolean }>;
 		};
 
 		expect(rootPackage.devDependencies?.["@signet/sdk"]).toBe("workspace:*");
 		expect(rootPackage.scripts?.["build:deps"]).toStartWith("bun run --filter '@signet/sdk' build && ");
 		expect(adapter.dependencies?.["@signet/sdk"]).toBeUndefined();
 		expect(adapter.devDependencies?.["@signet/sdk"]).toBeDefined();
+		expect(adapter.peerDependencies?.openclaw).toBe(">=2026.5.22");
+		expect(adapter.peerDependenciesMeta?.openclaw?.optional).toBe(true);
 
 		const workspacePackages = collectWorkspacePackages([adapterFile, sdkFile, coreFile]);
 
