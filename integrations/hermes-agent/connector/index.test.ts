@@ -1197,7 +1197,7 @@ describe("HermesAgentConnector — native bundle (SIGNET_DIR) plugin resolution"
 		expect(installedInit).not.toContain("# wrong plugin");
 	});
 
-	it("resolves plugin from SIGNET_DIR when __dirname-relative hermes-plugin has stale marker", async () => {
+	it("resolves plugin from SIGNET_DIR and writes install marker", async () => {
 		const signetDir = join(tmpRoot, "signet-bundle");
 		const hermesPluginSource = join(import.meta.dir, "hermes-plugin");
 		const bundlePluginDir = join(signetDir, "runtime", "connectors", "hermes-agent", "hermes-plugin");
