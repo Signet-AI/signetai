@@ -314,6 +314,7 @@ fn load_guarded_transcript_path(
 /// at the byte level before any allocation.  Content exceeding this limit is
 /// truncated with a `[truncated]` marker before artifact / DB writes.
 const MAX_TRANSCRIPT_BYTES: usize = 400_000; // ~100k chars * 4 bytes/char (UTF-8 worst case)
+const MIN_PROMPT_ENTITY_MATCH_CHARS: usize = 3;
 
 /// Normalize a caller-supplied project path so lineage lookups use a
 /// consistent key.  Mirrors session-start project normalization:
@@ -871,7 +872,7 @@ fn normalize_prompt_entity_text(text: &str) -> String {
 fn phrase_appears_in_prompt(prompt: &str, phrase: &str) -> bool {
     let prompt = format!(" {} ", normalize_prompt_entity_text(prompt));
     let phrase = normalize_prompt_entity_text(phrase);
-    !phrase.is_empty() && prompt.contains(&format!(" {phrase} "))
+    phrase.len() >= MIN_PROMPT_ENTITY_MATCH_CHARS && prompt.contains(&format!(" {phrase} "))
 }
 
 fn is_low_signal_prompt(prompt: &str) -> bool {
@@ -3750,6 +3751,76 @@ mod tests {
         assert_eq!(
             body["engine"],
             serde_json::Value::String("no-aspect-hit".to_string())
+        );
+
+        drop(state);
+        let _ = writer.await;
+    }
+
+    #[tokio::test]
+    async fn prompt_submit_short_entity_name_does_not_match_ordinary_token() {
+        let (state, writer, _tmp) = test_state("hooks-prompt-submit-short-entity");
+        state
+            .pool
+            .write(Priority::Low, move |conn| {
+                conn.execute(
+                    "INSERT INTO entities (id, name, canonical_name, entity_type, description, agent_id, mentions, created_at, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, 10, ?7, ?7)",
+                    rusqlite::params![
+                        "entity-ai",
+                        "AI",
+                        "ai",
+                        "concept",
+                        "Short entity name",
+                        "agent-a",
+                        "2026-05-27T00:00:00Z",
+                    ],
+                )?;
+                conn.execute(
+                    "INSERT INTO entity_aspects (id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at)
+                     VALUES ('aspect-ai-architecture', 'entity-ai', 'agent-a', 'architecture', 'architecture', 1.0, ?1, ?1)",
+                    rusqlite::params!["2026-05-27T00:00:00Z"],
+                )?;
+                conn.execute(
+                    "INSERT INTO entity_attributes
+                     (id, aspect_id, agent_id, memory_id, kind, content, normalized_content, confidence, importance,
+                      status, group_key, claim_key, created_at, updated_at)
+                     VALUES ('attr-ai-architecture', 'aspect-ai-architecture', 'agent-a', NULL, 'attribute',
+                      'Short entity names should not match ordinary words.',
+                      'short entity names should not match ordinary words', 0.95, 0.9, 'active',
+                      'runtime', 'short_match_guard', ?1, ?1)",
+                    rusqlite::params!["2026-05-27T00:00:00Z"],
+                )?;
+                Ok(serde_json::Value::Null)
+            })
+            .await
+            .unwrap();
+
+        let resp = prompt_submit(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(PromptSubmitBody {
+                harness: Some("test".to_string()),
+                project: Some("platform/daemon-rs".to_string()),
+                agent_id: Some("agent-a".to_string()),
+                user_message: Some("Can AI architecture be summarized?".to_string()),
+                user_prompt: None,
+                last_assistant_message: None,
+                session_key: Some("sess-prompt-short-entity".to_string()),
+                transcript: None,
+                transcript_path: None,
+                runtime_path: None,
+            }),
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = test_json(resp).await;
+        assert_eq!(body["inject"], serde_json::Value::String(String::new()));
+        assert_eq!(body["memoryCount"], serde_json::Value::Number(0.into()));
+        assert_eq!(
+            body["engine"],
+            serde_json::Value::String("no-entity".to_string())
         );
 
         drop(state);

@@ -244,6 +244,38 @@ describe("handleUserPromptSubmit entity context", () => {
 		expect(result).toMatchObject({ inject: "", memoryCount: 0, engine: "no-aspect-hit" });
 	});
 
+	it("does not match short entity names as ordinary prompt tokens", async () => {
+		getDbAccessor().withWriteTx((db) => {
+			const now = "2026-05-27T00:00:00.000Z";
+			db.prepare(
+				`INSERT INTO entities
+				 (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
+				 VALUES ('entity-ai', 'AI', 'ai', 'concept', 'default', 10, ?, ?)`,
+			).run(now, now);
+			db.prepare(
+				`INSERT INTO entity_aspects
+				 (id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at)
+				 VALUES ('aspect-ai-architecture', 'entity-ai', 'default', 'architecture', 'architecture', 1, ?, ?)`,
+			).run(now, now);
+			db.prepare(
+				`INSERT INTO entity_attributes
+				 (id, aspect_id, agent_id, kind, content, normalized_content, group_key, claim_key,
+				  confidence, importance, status, created_at, updated_at)
+				 VALUES ('attr-ai-architecture', 'aspect-ai-architecture', 'default', 'attribute',
+				  'Short entity names should not match ordinary words.',
+				  'short entity names should not match ordinary words',
+				  'runtime', 'short_match_guard', 0.9, 0.9, 'active', ?, ?)`,
+			).run(now, now);
+		});
+
+		const result = await handleUserPromptSubmit(
+			{ harness: "codex", userMessage: "Can AI architecture be summarized?", sessionKey: "session-short-name" },
+			makeDeps(),
+		);
+
+		expect(result).toMatchObject({ inject: "", memoryCount: 0, engine: "no-entity" });
+	});
+
 	it("stays silent when the entity is known but no aspect clears the gate", async () => {
 		seedEntityContext();
 

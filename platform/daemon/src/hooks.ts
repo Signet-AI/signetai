@@ -732,6 +732,7 @@ const LOW_SIGNAL_PROMPTS = new Set([
 const ENTITY_CONTEXT_MAX_ENTITIES = 2;
 const ENTITY_CONTEXT_MAX_ASPECTS_PER_ENTITY = 3;
 const ENTITY_CONTEXT_MAX_LINES = 8;
+const MIN_PROMPT_ENTITY_MATCH_CHARS = 3;
 
 function normalizePromptEntityText(value: string): string {
 	return value
@@ -744,7 +745,7 @@ function normalizePromptEntityText(value: string): string {
 function phraseAppearsInPrompt(prompt: string, phrase: string): boolean {
 	const normalizedPrompt = ` ${normalizePromptEntityText(prompt)} `;
 	const normalizedPhrase = normalizePromptEntityText(phrase);
-	return normalizedPhrase.length > 0 && normalizedPrompt.includes(` ${normalizedPhrase} `);
+	return normalizedPhrase.length >= MIN_PROMPT_ENTITY_MATCH_CHARS && normalizedPrompt.includes(` ${normalizedPhrase} `);
 }
 
 function isLowSignalPrompt(userMessage: string): boolean {
