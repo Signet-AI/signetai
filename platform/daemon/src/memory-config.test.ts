@@ -110,6 +110,21 @@ describe("loadMemoryConfig", () => {
 		expect(cfg.auth?.mode).toBe("hybrid");
 	});
 
+	it("preserves explicit local auth on tailscale network mode", () => {
+		const agentsDir = makeTempAgentsDir();
+		writeFileSync(
+			join(agentsDir, "agent.yaml"),
+			`network:
+  mode: tailscale
+auth:
+  mode: local
+`,
+		);
+
+		const cfg = loadMemoryConfig(agentsDir);
+		expect(cfg.auth?.mode).toBe("local");
+	});
+
 	it("enables graph extraction writes by default", () => {
 		const agentsDir = makeTempAgentsDir();
 		const cfg = loadMemoryConfig(agentsDir);

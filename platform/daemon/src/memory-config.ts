@@ -1154,8 +1154,9 @@ export function loadMemoryConfig(agentsDir: string): ResolvedMemoryConfig {
 			defaults.pipelineV2 = loadPipelineConfig(yaml);
 			defaults.dreaming = loadDreamingConfig(yaml);
 			const parsedAuth = parseAuthConfig(yaml.auth, agentsDir);
+			const hasExplicitAuthMode = isRecord(yaml.auth) && "mode" in yaml.auth;
 			defaults.auth =
-				readNetworkMode(yaml) === "tailscale" && parsedAuth.mode === "local"
+				readNetworkMode(yaml) === "tailscale" && !hasExplicitAuthMode && parsedAuth.mode === "local"
 					? { ...parsedAuth, mode: "hybrid" }
 					: parsedAuth;
 

@@ -126,4 +126,22 @@ describe("daemon route extraction refactor", () => {
 			rmSync(tmpDir, { recursive: true, force: true });
 		}
 	});
+
+	it("reloadAuthState preserves explicit local auth for tailscale configs", async () => {
+		const state = await import("./routes/state.js");
+
+		const tmpDir = join(tmpdir(), `signet-test-tailscale-local-auth-${Date.now()}`);
+		mkdirSync(join(tmpDir, "memory"), { recursive: true });
+		mkdirSync(join(tmpDir, ".daemon"), { recursive: true });
+		writeFileSync(join(tmpDir, "agent.yaml"), ["network:", "  mode: tailscale", "auth:", "  mode: local"].join("\n"));
+
+		try {
+			state.reloadAuthState(tmpDir);
+			expect(state.authConfig.mode).toBe("local");
+			expect(state.authSecret).toBeNull();
+		} finally {
+			state.reloadAuthState(state.AGENTS_DIR);
+			rmSync(tmpDir, { recursive: true, force: true });
+		}
+	});
 });

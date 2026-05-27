@@ -728,6 +728,24 @@ describe("auth guard co-location", () => {
 			expect(await status(app, "POST", "/api/os/tray/test/reprobe")).toBe(403);
 		});
 
+		it("GET /api/os/tray remains diagnostics-readable for operators", async () => {
+			const app = await makeApp();
+			const state = await import("./routes/state.js");
+			const { createAuthMiddleware, createToken } = await import("./auth");
+			const { mountAppTrayRoutes } = await import("./routes/app-tray");
+			const secret = state.authSecret;
+			if (!secret) throw new Error("expected auth secret for team-mode tray test");
+
+			app.use("*", createAuthMiddleware(state.authConfig, secret));
+			mountAppTrayRoutes(app);
+			const token = createToken(secret, { sub: "tray-operator", role: "operator", scope: {} }, 60);
+
+			const res = await app.request("/api/os/tray", {
+				headers: { authorization: `Bearer ${token}` },
+			});
+			expect(res.status).toBe(200);
+		});
+
 		it("rate limits non-GET requests to the exact tray collection path", async () => {
 			const app = await makeApp();
 			const state = await import("./routes/state.js");

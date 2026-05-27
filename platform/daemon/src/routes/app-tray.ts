@@ -75,9 +75,11 @@ function findFreeGridPosition(
 export function mountAppTrayRoutes(app: Hono): void {
 	app.use("/api/os/*", async (c, next) => {
 		if (!isGuardedOsRoutePath(c.req.path)) return next();
+		if (c.req.method === "GET") {
+			return requirePermission("diagnostics", authConfig)(c, next);
+		}
 		const denied = await requirePermission("admin", authConfig)(c, () => Promise.resolve());
 		if (denied) return denied;
-		if (c.req.method === "GET") return next();
 		return requireRateLimit("admin", authAdminLimiter, authConfig)(c, next);
 	});
 
