@@ -26,7 +26,7 @@ import { getSkillsRunnerCommand, resolvePrimaryPackageManager } from "@signet/co
 import type { Hono } from "hono";
 import type { Entry, ZipFile } from "yauzl";
 import * as yauzl from "yauzl";
-import type { AuthMode } from "../auth/index.js";
+import { type AuthMode, requirePermission } from "../auth/index.js";
 import { type DbAccessor, getDbAccessor } from "../db-accessor.js";
 import { getLlmProvider } from "../llm.js";
 import { logger } from "../logger.js";
@@ -34,6 +34,7 @@ import { type EmbeddingConfig, type PipelineV2Config, loadMemoryConfig } from ".
 import type { LlmProvider } from "../pipeline/provider.js";
 import { parseSkillFile, patchSkillFrontmatter } from "../pipeline/skill-frontmatter.js";
 import { installSkillNode, uninstallSkillNode } from "../pipeline/skill-graph.js";
+import { authConfig } from "./state.js";
 
 function getAgentsDir(): string {
 	return process.env.SIGNET_PATH || join(homedir(), ".agents");
@@ -892,6 +893,14 @@ function onSkillUninstalling(skillName: string): void {
 }
 
 export function mountSkillsRoutes(app: Hono, _authMode: AuthMode = "local"): void {
+	app.use("/api/skills/install", async (c, next) => {
+		return requirePermission("admin", authConfig)(c, next);
+	});
+	app.use("/api/skills/*", async (c, next) => {
+		if (c.req.method === "DELETE") return requirePermission("admin", authConfig)(c, next);
+		return next();
+	});
+
 	// GET /api/skills - list installed skills
 	app.get("/api/skills", (c) => {
 		try {

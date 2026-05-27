@@ -17,6 +17,14 @@ function isValidState(s: string): s is "tray" | "grid" | "dock" {
 	return s === "tray" || s === "grid" || s === "dock";
 }
 
+function isTrayRoutePath(path: string): boolean {
+	return path === "/api/os/tray" || path.startsWith("/api/os/tray/");
+}
+
+function isGuardedOsRoutePath(path: string): boolean {
+	return isTrayRoutePath(path) || path === "/api/os/install";
+}
+
 /** Resolve an icon URL from a marketplace source and catalog ID. */
 function resolveServerIcon(source: string, catalogId?: string): string | null {
 	if (source === "modelcontextprotocol/servers") return "https://github.com/modelcontextprotocol.png?size=40";
@@ -65,21 +73,13 @@ function findFreeGridPosition(
  * Mount app tray routes on the Hono app.
  */
 export function mountAppTrayRoutes(app: Hono): void {
-	app.use("/api/os/tray", async (c, next) => {
-		return requirePermission("admin", authConfig)(c, next);
+	app.use("/api/os/*", async (c, next) => {
+		if (!isGuardedOsRoutePath(c.req.path)) return next();
+		const denied = await requirePermission("admin", authConfig)(c, () => Promise.resolve());
+		if (denied) return denied;
+		if (c.req.method === "GET") return next();
+		return requireRateLimit("admin", authAdminLimiter, authConfig)(c, next);
 	});
-	app.use("/api/os/tray/*", async (c, next) => {
-		return requirePermission("admin", authConfig)(c, next);
-	});
-	app.use("/api/os/install", async (c, next) => {
-		return requirePermission("admin", authConfig)(c, next);
-	});
-	for (const path of ["/api/os/tray/*", "/api/os/install"]) {
-		app.use(path, async (c, next) => {
-			if (c.req.method === "GET") return next();
-			return requireRateLimit("admin", authAdminLimiter, authConfig)(c, next);
-		});
-	}
 
 	/**
 	 * GET /api/os/tray — list all app tray entries.

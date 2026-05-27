@@ -74,7 +74,30 @@ export function registerMiscRoutes(app: Hono): void {
 			}
 			return requirePermission("admin", authConfig)(c, next);
 		}
-		return next();
+		return requirePermission("diagnostics", authConfig)(c, next);
+	});
+	app.use("/api/logs", async (c, next) => {
+		return requirePermission("diagnostics", authConfig)(c, next);
+	});
+	app.use("/api/logs/*", async (c, next) => {
+		return requirePermission("diagnostics", authConfig)(c, next);
+	});
+	app.use("/api/identity", async (c, next) => {
+		return requirePermission("diagnostics", authConfig)(c, next);
+	});
+	app.use("/api/agents", async (c, next) => {
+		if (c.req.method === "GET") return requirePermission("diagnostics", authConfig)(c, next);
+		return requirePermission("admin", authConfig)(c, next);
+	});
+	app.use("/api/agents/*", async (c, next) => {
+		if (c.req.method === "GET") return requirePermission("diagnostics", authConfig)(c, next);
+		return requirePermission("admin", authConfig)(c, next);
+	});
+	app.use("/api/tasks", async (c, next) => {
+		return requirePermission("admin", authConfig)(c, next);
+	});
+	app.use("/api/tasks/*", async (c, next) => {
+		return requirePermission("admin", authConfig)(c, next);
 	});
 
 	app.get("/api/logs", (c) => {

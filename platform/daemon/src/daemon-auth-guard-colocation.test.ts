@@ -171,6 +171,20 @@ describe("auth guard co-location", () => {
 			expect(body.error).toContain("remember");
 		});
 
+		it("GET /api/memories returns 403 without auth", async () => {
+			const app = await makeApp();
+			const { registerMemoryRoutes } = await import("./routes/memory-routes");
+			registerMemoryRoutes(app);
+			expect(await status(app, "GET", "/api/memories")).toBe(403);
+		});
+
+		it("GET /api/embeddings returns 403 without auth", async () => {
+			const app = await makeApp();
+			const { registerMemoryRoutes } = await import("./routes/memory-routes");
+			registerMemoryRoutes(app);
+			expect(await status(app, "GET", "/api/embeddings?vectors=true")).toBe(403);
+		});
+
 		it("POST /api/memory/recall forwards read-only aggregate options", async () => {
 			const app = await makeApp();
 			const state = await import("./routes/state.js");
@@ -344,6 +358,13 @@ describe("auth guard co-location", () => {
 	});
 
 	describe("misc routes have config guards", () => {
+		it("GET /api/config returns 403 without auth", async () => {
+			const app = await makeApp();
+			const { registerMiscRoutes } = await import("./routes/misc-routes");
+			registerMiscRoutes(app);
+			expect(await status(app, "GET", "/api/config")).toBe(403);
+		});
+
 		it("POST /api/config returns 403 without auth", async () => {
 			const app = await makeApp();
 			const { registerMiscRoutes } = await import("./routes/misc-routes");
@@ -360,6 +381,48 @@ describe("auth guard co-location", () => {
 				headers: { "content-length": "1048577" },
 			});
 			expect(res.status).toBe(413);
+		});
+
+		it("GET /api/logs returns 403 without auth", async () => {
+			const app = await makeApp();
+			const { registerMiscRoutes } = await import("./routes/misc-routes");
+			registerMiscRoutes(app);
+			expect(await status(app, "GET", "/api/logs")).toBe(403);
+		});
+
+		it("GET /api/identity returns 403 without auth", async () => {
+			const app = await makeApp();
+			const { registerMiscRoutes } = await import("./routes/misc-routes");
+			registerMiscRoutes(app);
+			expect(await status(app, "GET", "/api/identity")).toBe(403);
+		});
+
+		it("POST /api/agents returns 403 without auth", async () => {
+			const app = await makeApp();
+			const { registerMiscRoutes } = await import("./routes/misc-routes");
+			registerMiscRoutes(app);
+			expect(await status(app, "POST", "/api/agents")).toBe(403);
+		});
+
+		it("DELETE /api/agents/:name returns 403 without auth", async () => {
+			const app = await makeApp();
+			const { registerMiscRoutes } = await import("./routes/misc-routes");
+			registerMiscRoutes(app);
+			expect(await status(app, "DELETE", "/api/agents/other?purge=true")).toBe(403);
+		});
+
+		it("POST /api/tasks returns 403 without auth", async () => {
+			const app = await makeApp();
+			const { registerMiscRoutes } = await import("./routes/misc-routes");
+			registerMiscRoutes(app);
+			expect(await status(app, "POST", "/api/tasks")).toBe(403);
+		});
+
+		it("POST /api/tasks/:id/run returns 403 without auth", async () => {
+			const app = await makeApp();
+			const { registerMiscRoutes } = await import("./routes/misc-routes");
+			registerMiscRoutes(app);
+			expect(await status(app, "POST", "/api/tasks/task-1/run")).toBe(403);
 		});
 	});
 
@@ -587,6 +650,30 @@ describe("auth guard co-location", () => {
 		});
 	});
 
+	describe("skill routes need admin guards", () => {
+		it("POST /api/skills/install returns 403 without auth", async () => {
+			const app = await makeApp();
+			const { mountSkillsRoutes } = await import("./routes/skills");
+			mountSkillsRoutes(app);
+			expect(await status(app, "POST", "/api/skills/install")).toBe(403);
+		});
+	});
+
+	describe("hook lifecycle routes need remember guards", () => {
+		for (const path of [
+			"/api/hooks/session-end",
+			"/api/hooks/session-checkpoint-extract",
+			"/api/hooks/compaction-complete",
+		]) {
+			it(`POST ${path} returns 403 without auth`, async () => {
+				const app = await makeApp();
+				const { registerHooksRoutes } = await import("./routes/hooks-routes");
+				registerHooksRoutes(app);
+				expect(await status(app, "POST", path)).toBe(403);
+			});
+		}
+	});
+
 	describe("marketplace MCP routes need admin guards", () => {
 		it("POST /api/marketplace/mcp/test returns 403 without auth", async () => {
 			const app = await makeApp();
@@ -639,6 +726,30 @@ describe("auth guard co-location", () => {
 			const { mountAppTrayRoutes } = await import("./routes/app-tray");
 			mountAppTrayRoutes(app);
 			expect(await status(app, "POST", "/api/os/tray/test/reprobe")).toBe(403);
+		});
+
+		it("rate limits non-GET requests to the exact tray collection path", async () => {
+			const app = await makeApp();
+			const state = await import("./routes/state.js");
+			const { createAuthMiddleware, createToken } = await import("./auth");
+			const { mountAppTrayRoutes } = await import("./routes/app-tray");
+			const secret = state.authSecret;
+			if (!secret) throw new Error("expected auth secret for team-mode tray test");
+
+			state.authAdminLimiter.reset();
+			app.use("*", createAuthMiddleware(state.authConfig, secret));
+			mountAppTrayRoutes(app);
+			const token = createToken(secret, { sub: "tray-limiter", role: "admin", scope: {} }, 60);
+			const headers = { authorization: `Bearer ${token}` };
+			const limit = state.authConfig.rateLimits.admin.max;
+
+			for (let i = 0; i < limit; i++) {
+				const res = await app.request("/api/os/tray", { method: "POST", headers });
+				expect(res.status).toBe(404);
+			}
+
+			const limited = await app.request("/api/os/tray", { method: "POST", headers });
+			expect(limited.status).toBe(429);
 		});
 	});
 });

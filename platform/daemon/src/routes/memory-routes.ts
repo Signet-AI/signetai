@@ -544,6 +544,18 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 	app.use("/api/memory/timeline", async (c, next) => {
 		return requirePermission("recall", authConfig)(c, next);
 	});
+	app.use("/api/memories", async (c, next) => {
+		return requirePermission("recall", authConfig)(c, next);
+	});
+	app.use("/api/memories/*", async (c, next) => {
+		return requirePermission("recall", authConfig)(c, next);
+	});
+	app.use("/api/embeddings", async (c, next) => {
+		return requirePermission("recall", authConfig)(c, next);
+	});
+	app.use("/api/embeddings/*", async (c, next) => {
+		return requirePermission("recall", authConfig)(c, next);
+	});
 
 	// Modify — with rate limiting
 	app.use("/api/memory/modify", async (c, next) => {

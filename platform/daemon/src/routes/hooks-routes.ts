@@ -1361,6 +1361,17 @@ function registerSynthesis(app: Hono): void {
 }
 
 export function registerHooksRoutes(app: Hono): void {
+	for (const path of [
+		"/api/hooks/session-end",
+		"/api/hooks/session-checkpoint-extract",
+		"/api/hooks/compaction-complete",
+	]) {
+		app.use(path, async (c, next) => {
+			if (isInternalCall(c)) return next();
+			return requirePermission("remember", authConfig)(c, next);
+		});
+	}
+
 	app.use("/api/cross-agent", async (c, next) => {
 		if (c.req.method === "GET") {
 			return requirePermission("recall", authConfig)(c, next);
