@@ -16,9 +16,11 @@
 
 import type { RoutingPrivacyTier } from "@signet/core";
 import type { Hono } from "hono";
+import { requirePermission, requireRateLimit } from "../auth";
 import { getInferenceRouterOrNull } from "../inference-router.js";
 import { getInteractiveLlmProviderOrNull } from "../llm.js";
 import { logger } from "../logger.js";
+import { authAdminLimiter, authConfig } from "./state.js";
 
 // ============================================================================
 // Agent Session State (in-memory)
@@ -429,6 +431,17 @@ function sleep(ms: number): Promise<void> {
 // ============================================================================
 
 export function mountOsAgentRoutes(app: Hono): void {
+	for (const path of ["/api/os/agent-execute", "/api/os/agent-state", "/api/os/agent-events"]) {
+		app.use(path, async (c, next) => {
+			return requirePermission("admin", authConfig)(c, next);
+		});
+	}
+	for (const path of ["/api/os/agent-execute", "/api/os/agent-state"]) {
+		app.use(path, async (c, next) => {
+			return requireRateLimit("admin", authAdminLimiter, authConfig)(c, next);
+		});
+	}
+
 	/**
 	 * POST /api/os/agent-execute — Start an agent execution session.
 	 *

@@ -586,4 +586,59 @@ describe("auth guard co-location", () => {
 			expect(await status(app, "GET", "/api/secrets")).toBe(403);
 		});
 	});
+
+	describe("marketplace MCP routes need admin guards", () => {
+		it("POST /api/marketplace/mcp/test returns 403 without auth", async () => {
+			const app = await makeApp();
+			const { mountMarketplaceRoutes } = await import("./routes/marketplace");
+			mountMarketplaceRoutes(app);
+			expect(await status(app, "POST", "/api/marketplace/mcp/test")).toBe(403);
+		});
+
+		it("POST /api/marketplace/mcp/call returns 403 without auth", async () => {
+			const app = await makeApp();
+			const { mountMarketplaceRoutes } = await import("./routes/marketplace");
+			mountMarketplaceRoutes(app);
+			expect(await status(app, "POST", "/api/marketplace/mcp/call")).toBe(403);
+		});
+	});
+
+	describe("source routes need data and mutation guards", () => {
+		it("GET /api/sources/:id/snapshot returns 403 without auth", async () => {
+			const app = await makeApp();
+			const { registerSourcesRoutes } = await import("./routes/sources-routes");
+			registerSourcesRoutes(app);
+			expect(await status(app, "GET", "/api/sources/source-1/snapshot")).toBe(403);
+		});
+
+		it("POST /api/sources/github returns 403 without auth", async () => {
+			const app = await makeApp();
+			const { registerSourcesRoutes } = await import("./routes/sources-routes");
+			registerSourcesRoutes(app);
+			expect(await status(app, "POST", "/api/sources/github")).toBe(403);
+		});
+	});
+
+	describe("OS control routes need admin guards", () => {
+		it("POST /api/os/chat returns 403 without auth", async () => {
+			const app = await makeApp();
+			const { mountOsChatRoutes } = await import("./routes/os-chat");
+			mountOsChatRoutes(app);
+			expect(await status(app, "POST", "/api/os/chat")).toBe(403);
+		});
+
+		it("POST /api/os/agent-execute returns 403 without auth", async () => {
+			const app = await makeApp();
+			const { mountOsAgentRoutes } = await import("./routes/os-agent");
+			mountOsAgentRoutes(app);
+			expect(await status(app, "POST", "/api/os/agent-execute")).toBe(403);
+		});
+
+		it("POST /api/os/tray/:id/reprobe returns 403 without auth", async () => {
+			const app = await makeApp();
+			const { mountAppTrayRoutes } = await import("./routes/app-tray");
+			mountAppTrayRoutes(app);
+			expect(await status(app, "POST", "/api/os/tray/test/reprobe")).toBe(403);
+		});
+	});
 });

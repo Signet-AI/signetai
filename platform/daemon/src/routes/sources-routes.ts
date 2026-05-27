@@ -17,6 +17,7 @@ import {
 } from "@signet/core";
 import type { Hono } from "hono";
 import { resolveDaemonAgentId } from "../agent-id";
+import { requirePermission } from "../auth";
 import { type ReadDb, getDbAccessor } from "../db-accessor";
 import {
 	type NativeMemoryBridgeHandle,
@@ -40,6 +41,7 @@ import {
 } from "../source-index-progress";
 import { getSourceProvider } from "../source-providers";
 import { exportSourceSnapshot, importSourceSnapshot } from "../source-snapshots";
+import { authConfig } from "./state";
 
 interface SourceIndexJobInput {
 	readonly source: SignetSourceEntry;
@@ -116,6 +118,24 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 	const startBridge = deps.startBridge ?? startNativeMemoryBridge;
 	const purgeNativeSource = deps.purgeNativeSource ?? purgeNativeMemorySourceArtifacts;
 	cleanupSourceDeletionTombstones(agentsDir, purgeNativeSource);
+
+	app.use("/api/sources", async (c, next) => {
+		return requirePermission("documents", authConfig)(c, next);
+	});
+	app.use("/api/sources/pick-directory", async (c, next) => {
+		return requirePermission("admin", authConfig)(c, next);
+	});
+	app.use("/api/sources/*/snapshot", async (c, next) => {
+		return requirePermission("admin", authConfig)(c, next);
+	});
+	app.use("/api/sources/*/snapshot/import", async (c, next) => {
+		return requirePermission("admin", authConfig)(c, next);
+	});
+	app.use("/api/sources/*", async (c, next) => {
+		if (c.req.method === "GET") return requirePermission("documents", authConfig)(c, next);
+		return requirePermission("admin", authConfig)(c, next);
+	});
+
 	app.get("/api/sources", (c) => {
 		const config = loadSourcesConfig(agentsDir);
 		const agentId = resolveDaemonAgentId();

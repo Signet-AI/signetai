@@ -97,6 +97,19 @@ describe("loadMemoryConfig", () => {
 		expect(cfg.embedding.promptSubmitTimeoutMs).toBe(MIN_PROMPT_SUBMIT_EMBEDDING_TIMEOUT_MS);
 	});
 
+	it("defaults tailscale network mode to hybrid auth", () => {
+		const agentsDir = makeTempAgentsDir();
+		writeFileSync(
+			join(agentsDir, "agent.yaml"),
+			`network:
+  mode: tailscale
+`,
+		);
+
+		const cfg = loadMemoryConfig(agentsDir);
+		expect(cfg.auth?.mode).toBe("hybrid");
+	});
+
 	it("enables graph extraction writes by default", () => {
 		const agentsDir = makeTempAgentsDir();
 		const cfg = loadMemoryConfig(agentsDir);

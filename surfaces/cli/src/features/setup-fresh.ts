@@ -106,6 +106,9 @@ export async function runFreshSetup(cfg: FreshSetupConfig, deps: SetupDeps): Pro
 			network: {
 				mode: cfg.networkMode,
 			},
+			auth: {
+				mode: cfg.networkMode === "tailscale" ? "hybrid" : "local",
+			},
 			harnesses: cfg.harnesses,
 			install: {
 				primary_package_manager: packageManager.family,

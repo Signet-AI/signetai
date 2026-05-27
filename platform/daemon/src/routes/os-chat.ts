@@ -8,10 +8,12 @@
 
 import type { RoutingPrivacyTier } from "@signet/core";
 import type { Hono } from "hono";
+import { requirePermission, requireRateLimit } from "../auth";
 import { getInferenceRouterOrNull } from "../inference-router.js";
 import { getInteractiveLlmProviderOrNull } from "../llm.js";
 import { logger } from "../logger.js";
 import { loadProbeResult } from "../mcp-probe.js";
+import { authAdminLimiter, authConfig } from "./state.js";
 
 function buildPrompt(systemPrompt: string, userMessage: string): string {
 	return `${systemPrompt}\n\nUser message:\n${userMessage}`;
@@ -213,6 +215,12 @@ function parseLlmResponse(raw: string): {
  * Mount OS chat routes on the Hono app.
  */
 export function mountOsChatRoutes(app: Hono): void {
+	app.use("/api/os/chat", async (c, next) => {
+		const denied = await requirePermission("admin", authConfig)(c, () => Promise.resolve());
+		if (denied) return denied;
+		return requireRateLimit("admin", authAdminLimiter, authConfig)(c, next);
+	});
+
 	app.post("/api/os/chat", async (c) => {
 		let body: ChatRequest;
 		try {
@@ -284,7 +292,10 @@ export function mountOsChatRoutes(app: Hono): void {
 							`http://127.0.0.1:${process.env.SIGNET_PORT || 3850}/api/marketplace/mcp/call`,
 							{
 								method: "POST",
-								headers: { "Content-Type": "application/json" },
+								headers: {
+									"Content-Type": "application/json",
+									...(c.req.header("authorization") ? { authorization: c.req.header("authorization") ?? "" } : {}),
+								},
 								body: JSON.stringify({
 									serverId: call.serverId,
 									toolName: call.toolName,

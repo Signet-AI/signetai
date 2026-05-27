@@ -6,6 +6,7 @@ import {
 	SIGNET_SECRETS_PLUGIN_ID,
 	type SetupDetection,
 	detectExistingSetup,
+	parseSimpleYaml,
 	readGraphiqState,
 	updateGraphiqActiveProject,
 } from "@signet/core";
@@ -479,5 +480,22 @@ describe("setupWizard non-interactive harness hooks", () => {
 			exitSpy.mockRestore();
 			errorSpy.mockRestore();
 		}
+	});
+
+	it("writes hybrid auth when non-interactive setup enables tailscale hosting", async () => {
+		root = mkdtempSync(join(tmpdir(), "setup-tailscale-auth-"));
+		const basePath = join(root, "agents");
+		const deps = stubDeps({
+			AGENTS_DIR: basePath,
+			normalizeAgentPath: mock((p: string) => p),
+			detectExistingSetup: mock(() => ({ ...fakeDetection(basePath), agentsDir: false })),
+		});
+
+		await setupWizard({ nonInteractive: true, networkMode: "tailscale", skipGit: true }, deps);
+
+		const raw = readFileSync(join(basePath, "agent.yaml"), "utf8");
+		const parsed = parseSimpleYaml(raw) as { auth?: { mode?: string }; network?: { mode?: string } };
+		expect(parsed.network?.mode).toBe("tailscale");
+		expect(parsed.auth?.mode).toBe("hybrid");
 	});
 });

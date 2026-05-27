@@ -1,15 +1,17 @@
 /** App Tray API routes — CRUD for app tray entries and MCP install endpoint. */
 
-import type { Hono } from "hono";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
 import { homedir } from "node:os";
-import type { AutoCardToolAction, AutoCardResource, SignetAppManifest } from "@signet/core";
+import { join } from "node:path";
+import type { AutoCardResource, AutoCardToolAction, SignetAppManifest } from "@signet/core";
+import type { Hono } from "hono";
 
-import { isPrivateHostname } from "../url-validation.js";
-import { loadAppTray, loadProbeResult, probeServer, reprobeServer, storeProbeResult } from "../mcp-probe.js";
+import { requirePermission, requireRateLimit } from "../auth";
 import { logger } from "../logger.js";
+import { loadAppTray, loadProbeResult, probeServer, reprobeServer, storeProbeResult } from "../mcp-probe.js";
+import { isPrivateHostname } from "../url-validation.js";
 import { readInstalledServersPublic } from "./marketplace-helpers.js";
+import { authAdminLimiter, authConfig } from "./state.js";
 
 function isValidState(s: string): s is "tray" | "grid" | "dock" {
 	return s === "tray" || s === "grid" || s === "dock";
@@ -63,6 +65,22 @@ function findFreeGridPosition(
  * Mount app tray routes on the Hono app.
  */
 export function mountAppTrayRoutes(app: Hono): void {
+	app.use("/api/os/tray", async (c, next) => {
+		return requirePermission("admin", authConfig)(c, next);
+	});
+	app.use("/api/os/tray/*", async (c, next) => {
+		return requirePermission("admin", authConfig)(c, next);
+	});
+	app.use("/api/os/install", async (c, next) => {
+		return requirePermission("admin", authConfig)(c, next);
+	});
+	for (const path of ["/api/os/tray/*", "/api/os/install"]) {
+		app.use(path, async (c, next) => {
+			if (c.req.method === "GET") return next();
+			return requireRateLimit("admin", authAdminLimiter, authConfig)(c, next);
+		});
+	}
+
 	/**
 	 * GET /api/os/tray — list all app tray entries.
 	 * Automatically syncs installed MCP servers that are missing

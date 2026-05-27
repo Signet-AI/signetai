@@ -10,6 +10,7 @@ import {
 	defaultPipelineModel,
 	isPipelineProvider,
 	parseSimpleYaml,
+	readNetworkMode,
 } from "@signet/core";
 import { type AuthConfig, parseAuthConfig } from "./auth";
 import { logger } from "./logger";
@@ -1152,7 +1153,11 @@ export function loadMemoryConfig(agentsDir: string): ResolvedMemoryConfig {
 
 			defaults.pipelineV2 = loadPipelineConfig(yaml);
 			defaults.dreaming = loadDreamingConfig(yaml);
-			defaults.auth = parseAuthConfig(yaml.auth, agentsDir);
+			const parsedAuth = parseAuthConfig(yaml.auth, agentsDir);
+			defaults.auth =
+				readNetworkMode(yaml) === "tailscale" && parsedAuth.mode === "local"
+					? { ...parsedAuth, mode: "hybrid" }
+					: parsedAuth;
 
 			break;
 		} catch (error) {

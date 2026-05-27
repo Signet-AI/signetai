@@ -215,6 +215,9 @@ app.use("/api/inference/*", async (c, next) => {
 	if (c.req.method === "GET") return requirePermission("diagnostics", authConfig)(c, next);
 	return requirePermission("admin", authConfig)(c, next);
 });
+app.use("/v1/*", async (c, next) => {
+	return requirePermission("admin", authConfig)(c, next);
+});
 mountInferenceRoutes(app, {
 	getAuthMode: () => authConfig.mode,
 	getTelemetry: () => telemetryRef,

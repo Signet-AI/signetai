@@ -11,6 +11,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Hono } from "hono";
+import { requirePermission } from "../auth";
 import { getDbAccessor } from "../db-accessor.js";
 import { logger } from "../logger.js";
 import { probeServer, removeProbeResult, storeProbeResult } from "../mcp-probe.js";
@@ -1139,6 +1140,13 @@ function recordMcpInvocation(record: McpInvocationRecord): void {
 }
 
 export function mountMarketplaceRoutes(app: Hono): void {
+	app.use("/api/marketplace/mcp", async (c, next) => {
+		return requirePermission("admin", authConfig)(c, next);
+	});
+	app.use("/api/marketplace/mcp/*", async (c, next) => {
+		return requirePermission("admin", authConfig)(c, next);
+	});
+
 	app.get("/api/marketplace/mcp", (c) => {
 		const servers = readInstalledServers();
 		const context = extractContextFromRequest(c);

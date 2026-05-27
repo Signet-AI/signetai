@@ -679,6 +679,40 @@ describe("inference route hardening", () => {
 		}
 	});
 
+	it("blocks OpenAI-compatible gateway routes without admin permission", async () => {
+		const root = mkdtempSync(join(tmpdir(), "signet-inference-gateway-auth-"));
+		writeRoutingFixture(root);
+		try {
+			const { app, secret } = createInferenceTestApp(root);
+			const operatorToken = createToken(secret, { sub: "operator", scope: {}, role: "operator" }, 60);
+
+			const modelsRes = await app.request(
+				new Request("http://localhost/v1/models", {
+					headers: { Authorization: `Bearer ${operatorToken}` },
+				}),
+			);
+			expect(modelsRes.status).toBe(403);
+
+			const completionsRes = await app.request(
+				new Request("http://localhost/v1/chat/completions", {
+					method: "POST",
+					headers: {
+						Authorization: `Bearer ${operatorToken}`,
+						"content-type": "application/json",
+					},
+					body: JSON.stringify({
+						model: "signet:auto",
+						messages: [{ role: "user", content: "hello" }],
+					}),
+				}),
+			);
+			expect(completionsRes.status).toBe(403);
+		} finally {
+			resetInferenceRouterForTests();
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	it("rejects mismatched scoped agent ids on route requests", async () => {
 		const root = mkdtempSync(join(tmpdir(), "signet-inference-scope-"));
 		writeRoutingFixture(root);
