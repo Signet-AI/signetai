@@ -1326,12 +1326,25 @@ pub async fn prompt_submit(
                 let mut selected_aspects = Vec::new();
                 for (aspect_id, aspect_name, canonical_name, weight) in aspects {
                     let attr_texts = match conn.prepare(
-                        "SELECT content, COALESCE(group_key, ''), COALESCE(claim_key, '')
-                         FROM entity_attributes
-                         WHERE aspect_id = ?1
-                           AND agent_id = ?2
-                           AND status = 'active'
-                         ORDER BY importance DESC, updated_at DESC
+                        "SELECT ea.content, COALESCE(ea.group_key, ''), COALESCE(ea.claim_key, '')
+                         FROM entity_attributes ea
+                         WHERE ea.aspect_id = ?1
+                           AND ea.agent_id = ?2
+                           AND ea.status = 'active'
+                           AND ea.superseded_by IS NULL
+                           AND NOT EXISTS (
+                             SELECT 1
+                             FROM entity_attributes newer
+                             WHERE newer.aspect_id = ea.aspect_id
+                               AND newer.agent_id = ea.agent_id
+                               AND newer.kind = ea.kind
+                               AND COALESCE(newer.group_key, 'general') = COALESCE(ea.group_key, 'general')
+                               AND newer.claim_key = ea.claim_key
+                               AND newer.status = 'active'
+                               AND newer.superseded_by IS NULL
+                               AND COALESCE(newer.version, 1) > COALESCE(ea.version, 1)
+                           )
+                         ORDER BY ea.importance DESC, ea.updated_at DESC
                          LIMIT 12",
                     ) {
                         Ok(mut stmt) => stmt
@@ -1375,14 +1388,27 @@ pub async fn prompt_submit(
                 }
                 for (aspect_id, aspect_name) in selected_aspects {
                     let attrs = match conn.prepare(
-                        "SELECT kind, content, COALESCE(group_key, 'general'), COALESCE(claim_key, 'uncategorized'),
-                                COALESCE(source_kind, ''), COALESCE(source_id, ''), COALESCE(memory_id, ''),
-                                COALESCE(version, 1)
-                         FROM entity_attributes
-                         WHERE aspect_id = ?1
-                           AND agent_id = ?2
-                           AND status = 'active'
-                         ORDER BY CASE kind WHEN 'constraint' THEN 0 ELSE 1 END, importance DESC, updated_at DESC
+                        "SELECT ea.kind, ea.content, COALESCE(ea.group_key, 'general'), COALESCE(ea.claim_key, 'uncategorized'),
+                                COALESCE(ea.source_kind, ''), COALESCE(ea.source_id, ''), COALESCE(ea.memory_id, ''),
+                                COALESCE(ea.version, 1)
+                         FROM entity_attributes ea
+                         WHERE ea.aspect_id = ?1
+                           AND ea.agent_id = ?2
+                           AND ea.status = 'active'
+                           AND ea.superseded_by IS NULL
+                           AND NOT EXISTS (
+                             SELECT 1
+                             FROM entity_attributes newer
+                             WHERE newer.aspect_id = ea.aspect_id
+                               AND newer.agent_id = ea.agent_id
+                               AND newer.kind = ea.kind
+                               AND COALESCE(newer.group_key, 'general') = COALESCE(ea.group_key, 'general')
+                               AND newer.claim_key = ea.claim_key
+                               AND newer.status = 'active'
+                               AND newer.superseded_by IS NULL
+                               AND COALESCE(newer.version, 1) > COALESCE(ea.version, 1)
+                           )
+                         ORDER BY CASE ea.kind WHEN 'constraint' THEN 0 ELSE 1 END, ea.importance DESC, ea.updated_at DESC
                          LIMIT 8",
                     ) {
                         Ok(mut stmt) => stmt
@@ -3636,6 +3662,16 @@ mod tests {
                 conn.execute(
                     "INSERT INTO entity_attributes
                      (id, aspect_id, agent_id, memory_id, kind, content, normalized_content, confidence, importance,
+                      status, group_key, claim_key, version, created_at, updated_at)
+                     VALUES ('attr-architecture-stale', 'aspect-architecture', 'agent-a', NULL, 'attribute',
+                      'Stale prompt context should not be injected.',
+                      'stale prompt context should not be injected', 0.5, 2.0, 'active',
+                      'runtime', 'prompt_context', 0, ?1, ?1)",
+                    rusqlite::params!["2026-05-27T00:00:00Z"],
+                )?;
+                conn.execute(
+                    "INSERT INTO entity_attributes
+                     (id, aspect_id, agent_id, memory_id, kind, content, normalized_content, confidence, importance,
                       status, group_key, claim_key, created_at, updated_at)
                      VALUES ('attr-marketing', 'aspect-marketing', 'agent-a', NULL, 'attribute',
                       'Marketing copy should stay secondary.', 'marketing copy', 0.8, 0.3, 'active',
@@ -3675,6 +3711,7 @@ mod tests {
         assert!(inject.contains("## Relevant Entity Context"));
         assert!(inject.contains("Signet / architecture / runtime / prompt_context"));
         assert!(inject.contains("Prompt context should come from entity current views."));
+        assert!(!inject.contains("Stale prompt context should not be injected."));
         assert!(!inject.contains("## Relevant Memory"));
         assert!(!inject.contains("Marketing copy should stay secondary"));
 

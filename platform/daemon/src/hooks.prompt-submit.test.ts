@@ -124,6 +124,25 @@ function seedEntityContext(): void {
 		db.prepare(
 			`INSERT INTO entity_attributes
 			 (id, aspect_id, agent_id, kind, content, normalized_content, group_key, claim_key,
+			  confidence, importance, status, version, created_at, updated_at)
+			 VALUES (?, ?, 'default', ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)`,
+		).run(
+			"attr-architecture-stale",
+			"aspect-architecture",
+			"attribute",
+			"Stale prompt context should not be injected.",
+			"stale prompt context should not be injected",
+			"runtime",
+			"prompt_context",
+			0.5,
+			2,
+			0,
+			now,
+			now,
+		);
+		db.prepare(
+			`INSERT INTO entity_attributes
+			 (id, aspect_id, agent_id, kind, content, normalized_content, group_key, claim_key,
 			  confidence, importance, status, created_at, updated_at)
 			 VALUES (?, ?, 'default', ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)`,
 		).run(
@@ -216,6 +235,7 @@ describe("handleUserPromptSubmit entity context", () => {
 		expect(result.inject).toContain("[constraint] Signet / architecture / runtime / fallback_policy");
 		expect(result.inject).toContain("Do not use generic fallback injection.");
 		expect(result.inject).toContain("[attribute] Signet / architecture / runtime / prompt_context");
+		expect(result.inject).not.toContain("Stale prompt context should not be injected.");
 		expect(result.inject).not.toContain("## Relevant Memory");
 		expect(result.inject).not.toContain("Marketing copy should stay secondary");
 	});

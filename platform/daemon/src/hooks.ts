@@ -899,12 +899,25 @@ function loadEntityContextLines(
 	for (const aspect of aspects) {
 		const rows = db
 			.prepare(
-				`SELECT content, group_key, claim_key
-				 FROM entity_attributes
-				 WHERE aspect_id = ?
-				   AND agent_id = ?
-				   AND status = 'active'
-				 ORDER BY importance DESC, updated_at DESC
+				`SELECT ea.content, ea.group_key, ea.claim_key
+				 FROM entity_attributes ea
+				 WHERE ea.aspect_id = ?
+				   AND ea.agent_id = ?
+				   AND ea.status = 'active'
+				   AND ea.superseded_by IS NULL
+				   AND NOT EXISTS (
+				     SELECT 1
+				     FROM entity_attributes newer
+				     WHERE newer.aspect_id = ea.aspect_id
+				       AND newer.agent_id = ea.agent_id
+				       AND newer.kind = ea.kind
+				       AND COALESCE(newer.group_key, 'general') = COALESCE(ea.group_key, 'general')
+				       AND newer.claim_key = ea.claim_key
+				       AND newer.status = 'active'
+				       AND newer.superseded_by IS NULL
+				       AND COALESCE(newer.version, 1) > COALESCE(ea.version, 1)
+				   )
+				 ORDER BY ea.importance DESC, ea.updated_at DESC
 				 LIMIT 12`,
 			)
 			.all(aspect.id, agentId) as Array<{ content: string; group_key: string | null; claim_key: string | null }>;
@@ -935,6 +948,19 @@ function loadEntityContextLines(
 			 WHERE ea.aspect_id IN (${placeholders})
 			   AND ea.agent_id = ?
 			   AND ea.status = 'active'
+			   AND ea.superseded_by IS NULL
+			   AND NOT EXISTS (
+			     SELECT 1
+			     FROM entity_attributes newer
+			     WHERE newer.aspect_id = ea.aspect_id
+			       AND newer.agent_id = ea.agent_id
+			       AND newer.kind = ea.kind
+			       AND COALESCE(newer.group_key, 'general') = COALESCE(ea.group_key, 'general')
+			       AND newer.claim_key = ea.claim_key
+			       AND newer.status = 'active'
+			       AND newer.superseded_by IS NULL
+			       AND COALESCE(newer.version, 1) > COALESCE(ea.version, 1)
+			   )
 			 ORDER BY
 			   CASE ea.kind WHEN 'constraint' THEN 0 ELSE 1 END,
 			   ea.importance DESC,
