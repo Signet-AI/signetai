@@ -97,4 +97,33 @@ describe("daemon route extraction refactor", () => {
 			rmSync(tmpDir, { recursive: true, force: true });
 		}
 	});
+
+	it("reloadAuthState applies hybrid auth for tailscale configs without explicit auth mode", async () => {
+		const state = await import("./routes/state.js");
+
+		const tmpDir = join(tmpdir(), `signet-test-tailscale-auth-${Date.now()}`);
+		mkdirSync(join(tmpDir, "memory"), { recursive: true });
+		mkdirSync(join(tmpDir, ".daemon"), { recursive: true });
+		writeFileSync(
+			join(tmpDir, "agent.yaml"),
+			[
+				"network:",
+				"  mode: tailscale",
+				"auth:",
+				"  rateLimits:",
+				"    admin:",
+				"      windowMs: 60000",
+				"      max: 10",
+			].join("\n"),
+		);
+
+		try {
+			state.reloadAuthState(tmpDir);
+			expect(state.authConfig.mode).toBe("hybrid");
+			expect(state.authSecret).not.toBeNull();
+		} finally {
+			state.reloadAuthState(state.AGENTS_DIR);
+			rmSync(tmpDir, { recursive: true, force: true });
+		}
+	});
 });
