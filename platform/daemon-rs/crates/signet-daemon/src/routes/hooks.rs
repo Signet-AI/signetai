@@ -1299,7 +1299,6 @@ pub async fn prompt_submit(
                     .filter(|term| !entity_terms.contains(*term))
                     .cloned()
                     .collect::<std::collections::HashSet<_>>();
-                let allow_weight_fallback = context_terms.is_empty();
                 let aspects = match conn.prepare(
                     "SELECT id, name, canonical_name, weight
                      FROM entity_aspects
@@ -1363,8 +1362,6 @@ pub async fn prompt_submit(
                         1.0
                     } else if attr_hit {
                         0.75 + weight.clamp(0.0, 1.0) * 0.25
-                    } else if allow_weight_fallback {
-                        weight.clamp(0.0, 1.0)
                     } else {
                         0.0
                     };
@@ -3685,6 +3682,81 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn prompt_submit_entity_only_alias_without_aspect_hit_stays_silent() {
+        let (state, writer, _tmp) = test_state("hooks-prompt-submit-entity-only");
+        state
+            .pool
+            .write(Priority::Low, move |conn| {
+                conn.execute(
+                    "INSERT INTO entities (id, name, canonical_name, entity_type, description, agent_id, mentions, created_at, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, 10, ?7, ?7)",
+                    rusqlite::params![
+                        "entity-signet",
+                        "Signet",
+                        "signet",
+                        "project",
+                        "Source-backed agent continuity substrate",
+                        "agent-a",
+                        "2026-05-27T00:00:00Z",
+                    ],
+                )?;
+                conn.execute(
+                    "INSERT INTO entity_aliases (id, entity_id, agent_id, alias, canonical_alias, confidence, source, status, created_at, updated_at)
+                     VALUES ('alias-signetai', 'entity-signet', 'agent-a', 'SignetAI', 'signetai', 1.0, 'test', 'active', ?1, ?1)",
+                    rusqlite::params!["2026-05-27T00:00:00Z"],
+                )?;
+                conn.execute(
+                    "INSERT INTO entity_aspects (id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at)
+                     VALUES ('aspect-architecture', 'entity-signet', 'agent-a', 'architecture', 'architecture', 0.95, ?1, ?1)",
+                    rusqlite::params!["2026-05-27T00:00:00Z"],
+                )?;
+                conn.execute(
+                    "INSERT INTO entity_attributes
+                     (id, aspect_id, agent_id, memory_id, kind, content, normalized_content, confidence, importance,
+                      status, group_key, claim_key, created_at, updated_at)
+                     VALUES ('attr-architecture', 'aspect-architecture', 'agent-a', NULL, 'attribute',
+                      'Prompt context should come from entity current views.',
+                      'prompt context should come from entity current views', 0.95, 0.9, 'active',
+                      'runtime', 'prompt_context', ?1, ?1)",
+                    rusqlite::params!["2026-05-27T00:00:00Z"],
+                )?;
+                Ok(serde_json::Value::Null)
+            })
+            .await
+            .unwrap();
+
+        let resp = prompt_submit(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(PromptSubmitBody {
+                harness: Some("test".to_string()),
+                project: Some("platform/daemon-rs".to_string()),
+                agent_id: Some("agent-a".to_string()),
+                user_message: Some("SignetAI".to_string()),
+                user_prompt: None,
+                last_assistant_message: None,
+                session_key: Some("sess-prompt-entity-only".to_string()),
+                transcript: None,
+                transcript_path: None,
+                runtime_path: None,
+            }),
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = test_json(resp).await;
+        assert_eq!(body["inject"], serde_json::Value::String(String::new()));
+        assert_eq!(body["memoryCount"], serde_json::Value::Number(0.into()));
+        assert_eq!(
+            body["engine"],
+            serde_json::Value::String("no-aspect-hit".to_string())
+        );
+
+        drop(state);
+        let _ = writer.await;
+    }
+
+    #[tokio::test]
     async fn prompt_submit_preserves_zero_min_score_config() {
         let (state, writer, _tmp) =
             test_state_with_manifest("hooks-prompt-submit-zero-min-score", |manifest| {
@@ -3726,8 +3798,8 @@ mod tests {
                      (id, aspect_id, agent_id, memory_id, kind, content, normalized_content, confidence, importance,
                       status, group_key, claim_key, created_at, updated_at)
                      VALUES ('attr-low-weight', 'aspect-low-weight', 'agent-a', NULL, 'attribute',
-                      'Entity-only prompts can still opt into low-weight current views.',
-                      'entity only prompts can still opt into low weight current views', 0.8, 0.2, 'active',
+                      'Prompt context can opt into low-weight current views.',
+                      'prompt context can opt into low weight current views', 0.8, 0.2, 'active',
                       'runtime', 'min_score_zero', ?1, ?1)",
                     rusqlite::params!["2026-05-27T00:00:00Z"],
                 )?;
@@ -3743,7 +3815,7 @@ mod tests {
                 harness: Some("test".to_string()),
                 project: Some("platform/daemon-rs".to_string()),
                 agent_id: Some("agent-a".to_string()),
-                user_message: Some("SignetAI".to_string()),
+                user_message: Some("Should SignetAI use current views?".to_string()),
                 user_prompt: None,
                 last_assistant_message: None,
                 session_key: Some("sess-prompt-zero-min-score".to_string()),
@@ -3762,9 +3834,7 @@ mod tests {
             serde_json::Value::String("entity-context".to_string())
         );
         assert!(inject.contains("Signet / low weight / runtime / min_score_zero"));
-        assert!(
-            inject.contains("Entity-only prompts can still opt into low-weight current views.")
-        );
+        assert!(inject.contains("Prompt context can opt into low-weight current views."));
 
         drop(state);
         let _ = writer.await;

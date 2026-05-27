@@ -859,7 +859,6 @@ function scoreAspectForPrompt(
 		readonly claim_key: string | null;
 	}>,
 	promptTerms: ReadonlyArray<string>,
-	allowWeightFallback: boolean,
 ): number {
 	const aspectTerms = extractSubstantiveWords(`${aspect.name} ${aspect.canonical_name}`);
 	const aspectOverlap = aspectTerms.some((term) => promptTerms.includes(term));
@@ -867,7 +866,7 @@ function scoreAspectForPrompt(
 	const attrText = rows.map((row) => `${row.group_key ?? ""} ${row.claim_key ?? ""} ${row.content}`).join(" ");
 	const overlap = countPromptTermOverlap(attrText, promptTerms);
 	if (overlap > 0) return Math.min(1, 0.75 + Math.min(aspect.weight, 1) * 0.25);
-	return allowWeightFallback ? Math.min(Math.max(aspect.weight, 0), 1) : 0;
+	return 0;
 }
 
 function loadEntityContextLines(
@@ -879,7 +878,6 @@ function loadEntityContextLines(
 ): PromptEntityContextLine[] {
 	const entityTerms = new Set(extractSubstantiveWords(`${entity.entityName} ${entity.matchedText}`));
 	const promptTerms = extractSubstantiveWords(userMessage).filter((term) => !entityTerms.has(term));
-	const allowWeightFallback = promptTerms.length === 0;
 	const aspects = db
 		.prepare(
 			`SELECT id, name, canonical_name, weight
@@ -910,7 +908,7 @@ function loadEntityContextLines(
 			)
 			.all(aspect.id, agentId) as Array<{ content: string; group_key: string | null; claim_key: string | null }>;
 		if (rows.length === 0) continue;
-		const score = scoreAspectForPrompt(aspect, rows, promptTerms, allowWeightFallback);
+		const score = scoreAspectForPrompt(aspect, rows, promptTerms);
 		if (score >= minScore) selectedAspectIds.add(aspect.id);
 		if (selectedAspectIds.size >= ENTITY_CONTEXT_MAX_ASPECTS_PER_ENTITY) break;
 	}

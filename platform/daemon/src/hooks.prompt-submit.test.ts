@@ -233,6 +233,17 @@ describe("handleUserPromptSubmit entity context", () => {
 		expect(result.inject).toContain("Prompt context should come from entity current views.");
 	});
 
+	it("stays silent when the prompt only names an entity alias", async () => {
+		seedEntityContext();
+
+		const result = await handleUserPromptSubmit(
+			{ harness: "codex", userMessage: "SignetAI", sessionKey: "session-alias-only" },
+			makeDeps(),
+		);
+
+		expect(result).toMatchObject({ inject: "", memoryCount: 0, engine: "no-aspect-hit" });
+	});
+
 	it("stays silent when the entity is known but no aspect clears the gate", async () => {
 		seedEntityContext();
 
