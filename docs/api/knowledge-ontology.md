@@ -129,6 +129,49 @@ in a memory that is not yet linked. This endpoint does not mutate graph data.
 
 MCP exposes the same report as `knowledge_hygiene_report`.
 
+## Entity aliases
+
+Entity aliases are reviewed ontology metadata used by prompt-submit entity
+detection and navigation tooling. They do not create duplicate entities. Active
+aliases are matched as exact normalized phrases and resolve back to the
+canonical entity current view.
+
+### GET /api/ontology/entities/:id/aliases
+
+List aliases for an entity id. Query parameters: `agent_id` and `status`.
+`status` may be `active`, `archived`, or `all`; it defaults to `active`.
+
+```text
+/api/ontology/entities/entity_signet/aliases?agent_id=ant&status=all
+```
+
+### POST /api/ontology/entities/:id/aliases
+
+Create an active alias for an entity id. Body parameters: `alias`,
+`confidence`, and `source`. `confidence` is clamped to `0..1` and defaults to
+`1.0`.
+
+```json
+{
+  "alias": "SignetAI",
+  "confidence": 0.95,
+  "source": "operator"
+}
+```
+
+### DELETE /api/ontology/entities/:id/aliases/:aliasId
+
+Archive an alias. Archived aliases are retained for inspection but are ignored
+by prompt-submit entity matching.
+
+CLI equivalents:
+
+```bash
+signet ontology entity alias list entity_signet --status all
+signet ontology entity alias add entity_signet SignetAI --confidence 0.95 --source operator
+signet ontology entity alias archive entity_signet alias_123
+```
+
 
 ## Ontology proposal loop
 

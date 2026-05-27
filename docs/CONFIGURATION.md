@@ -206,11 +206,11 @@ Vector embedding configuration for semantic memory search.
 | `dimensions` | number | `768` | Output vector dimensions |
 | `base_url` | string | `"http://localhost:11434"` | Ollama API base URL |
 | `api_key` | string | — | API key or `$secret:NAME` reference |
-| `promptSubmitTimeoutMs` | number | `1000` | Prompt-submit recall embedding timeout, range 1000-300000 ms |
+| `promptSubmitTimeoutMs` | number | `1000` | Explicit recall embedding timeout retained for compatibility, range 1000-300000 ms |
 
-Increase `promptSubmitTimeoutMs` when local embedding models are slow to
+Increase the embedding timeout when local embedding models are slow to
 cold-load. For example, Ollama with `mxbai-embed-large` may need `10000` ms
-to avoid aborted prompt-submit recall embeddings.
+to avoid aborted explicit recall embeddings.
 
 Recommended Ollama models:
 
@@ -1231,14 +1231,14 @@ a pre-compaction summary:
 | `memoryLimit` | `5` | How many recent memories to include |
 | `summaryGuidelines` | built-in | Custom instructions for session summary |
 
-`hooks.userPromptSubmit` controls per-prompt memory injection:
+`hooks.userPromptSubmit` controls per-prompt entity current-view injection:
 
 | Field | Default | Description |
 |-------|---------|-------------|
-| `enabled` | `true` | Enable per-prompt recall injection |
-| `recallLimit` | `10` | Max recall candidates considered |
-| `maxInjectChars` | `500` | Prompt-time injection character budget |
-| `minScore` | `0.8` | Minimum top recall score required before injecting memories |
+| `enabled` | `true` | Enable per-prompt entity context injection |
+| `recallLimit` | `10` | Legacy field retained for config compatibility; prompt-submit no longer runs generic recall |
+| `maxInjectChars` | `500` | Prompt-time entity-context character budget |
+| `minScore` | `0.8` | Minimum aspect score required before injecting current-view attributes |
 
 
 Environment Variables

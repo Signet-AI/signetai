@@ -14,11 +14,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import {
+	archiveEntityAlias,
+	createEntityAlias,
 	getDependenciesFrom,
 	getDependenciesTo,
 	getKnowledgeEntityDetail,
 	getKnowledgeGraphForConstellation,
 	getKnowledgeStats,
+	listEntityAliases,
 	listKnowledgeEntities,
 } from "./knowledge-graph";
 
@@ -311,6 +314,36 @@ describe("listKnowledgeEntities (issue #515)", () => {
 
 		expect(mainScope.map((r) => r.entity.id)).toEqual(["e-main"]);
 		expect(defaultScope.map((r) => r.entity.id)).toEqual(["e-def"]);
+	});
+
+	test("entity alias archive is scoped to the owning entity", () => {
+		dbPath = makeDbPath();
+		initDbAccessor(dbPath);
+
+		seedEntity("e-signet", "Signet");
+		seedEntity("e-other", "Other");
+		const alias = createEntityAlias(getDbAccessor(), {
+			agentId: "default",
+			entityId: "e-signet",
+			alias: "SignetAI",
+			source: "test",
+		});
+
+		const wrongEntity = archiveEntityAlias(getDbAccessor(), {
+			agentId: "default",
+			entityId: "e-other",
+			aliasId: alias.id,
+		});
+		expect(wrongEntity).toBeNull();
+		expect(listEntityAliases(getDbAccessor(), { agentId: "default", entityId: "e-signet" })).toHaveLength(1);
+
+		const archived = archiveEntityAlias(getDbAccessor(), {
+			agentId: "default",
+			entityId: "e-signet",
+			aliasId: alias.id,
+		});
+		expect(archived?.status).toBe("archived");
+		expect(listEntityAliases(getDbAccessor(), { agentId: "default", entityId: "e-signet" })).toHaveLength(0);
 	});
 
 	test("builds a bounded constellation graph without loading every graph row", () => {

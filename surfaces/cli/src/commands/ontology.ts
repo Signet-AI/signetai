@@ -47,6 +47,19 @@ interface OntologyObjectListResponse {
 	readonly items?: readonly OntologyObjectItem[];
 }
 
+interface EntityAliasItem {
+	readonly id?: string;
+	readonly alias?: string;
+	readonly canonicalAlias?: string;
+	readonly confidence?: number;
+	readonly source?: string | null;
+	readonly status?: string;
+}
+
+interface EntityAliasListResponse {
+	readonly items?: readonly EntityAliasItem[];
+}
+
 interface OntologyClaimItem {
 	readonly claimKey?: string;
 	readonly activeCount?: number;
@@ -466,6 +479,15 @@ async function apiPost(deps: OntologyDeps, path: string, body: unknown, timeoutM
 	return data;
 }
 
+async function apiDelete(deps: OntologyDeps, path: string, timeoutMs = 10_000): Promise<unknown> {
+	const { ok, data } = await deps.secretApiCall("DELETE", path, undefined, timeoutMs);
+	if (!ok || typeof asRecord(data).error === "string") {
+		console.error(chalk.red(errorMessage(data, "Ontology request failed")));
+		process.exit(1);
+	}
+	return data;
+}
+
 function printProposalList(data: unknown): void {
 	const items = ((asRecord(data) as ProposalListResponse).items ?? []) as readonly ProposalListItem[];
 	if (items.length === 0) {
@@ -512,6 +534,22 @@ function printOntologyObjects(data: unknown): void {
 			),
 		);
 		if (item.entity?.id) console.log(chalk.dim(`    ${item.entity.id}`));
+	}
+	console.log();
+}
+
+function printEntityAliases(data: unknown): void {
+	const items = ((asRecord(data) as EntityAliasListResponse).items ?? []) as readonly EntityAliasItem[];
+	if (items.length === 0) {
+		console.log(chalk.dim("  No aliases found"));
+		return;
+	}
+	console.log(chalk.bold("\n  Entity Aliases\n"));
+	for (const item of items) {
+		const status = item.status ? chalk.dim(` ${item.status}`) : "";
+		const confidence = typeof item.confidence === "number" ? chalk.dim(` · ${item.confidence.toFixed(2)}`) : "";
+		console.log(`  ${chalk.cyan(item.alias ?? "unknown")} ${chalk.dim(item.id ?? "unknown")}${status}${confidence}`);
+		if (item.source) console.log(chalk.dim(`    source ${item.source}`));
 	}
 	console.log();
 }
@@ -1336,6 +1374,63 @@ export function registerOntologyCommands(program: Command, deps: OntologyDeps): 
 		if (!(await deps.ensureDaemonForSecrets())) return;
 		const data = await postOperation(deps, "archive_entity", { selector, reason: options.reason }, options);
 		printOperationResult(data, options, "entity archive");
+	});
+	const alias = entity.command("alias").description("Manage entity aliases");
+	addCommonOptions(
+		alias
+			.command("list")
+			.description("List aliases for an entity id")
+			.argument("<entity-id>")
+			.option("--status <status>", "Alias status: active, archived, all"),
+	).action(async (entityId: string, options) => {
+		if (!(await deps.ensureDaemonForSecrets())) return;
+		const params = new URLSearchParams();
+		appendAgent(params, options.agent);
+		if (typeof options.status === "string") params.set("status", options.status);
+		const data = await apiGet(deps, `/api/ontology/entities/${encodeURIComponent(entityId)}/aliases`, params);
+		if (options.json) console.log(JSON.stringify(data, null, 2));
+		else printEntityAliases(data);
+	});
+	addCommonOptions(
+		alias
+			.command("add")
+			.description("Add an alias for an entity id")
+			.argument("<entity-id>")
+			.argument("<alias>")
+			.option("--confidence <n>", "Alias confidence 0..1", Number.parseFloat)
+			.option("--source <text>", "Alias source label"),
+	).action(async (entityId: string, aliasValue: string, options) => {
+		if (!(await deps.ensureDaemonForSecrets())) return;
+		const params = new URLSearchParams();
+		appendAgent(params, options.agent);
+		const query = params.toString();
+		const data = await apiPost(
+			deps,
+			`/api/ontology/entities/${encodeURIComponent(entityId)}/aliases${query ? `?${query}` : ""}`,
+			{
+				alias: aliasValue,
+				confidence: options.confidence,
+				source: options.source,
+			},
+		);
+		if (options.json) console.log(JSON.stringify(data, null, 2));
+		else printEntityAliases({ items: [asRecord(data).item] });
+	});
+	addCommonOptions(
+		alias.command("archive").description("Archive an entity alias").argument("<entity-id>").argument("<alias-id>"),
+	).action(async (entityId: string, aliasId: string, options) => {
+		if (!(await deps.ensureDaemonForSecrets())) return;
+		const params = new URLSearchParams();
+		appendAgent(params, options.agent);
+		const query = params.toString();
+		const data = await apiDelete(
+			deps,
+			`/api/ontology/entities/${encodeURIComponent(entityId)}/aliases/${encodeURIComponent(aliasId)}${
+				query ? `?${query}` : ""
+			}`,
+		);
+		if (options.json) console.log(JSON.stringify(data, null, 2));
+		else printEntityAliases({ items: [asRecord(data).item] });
 	});
 
 	const claim = ontology.command("claim").description("Apply audited claim/version operations");

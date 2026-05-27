@@ -334,15 +334,18 @@ linked entities are all in the top-10% by degree (P90 threshold,
 date-anchored memories (1.2x). All three stages are independently
 toggleable via `DampeningConfig`.
 
-**Recall surface parity**: all recall entry points should route through the
-same daemon recall implementation whenever possible. Current daemon HTTP
-recall, search aliases, hook recall, prompt-submit injection, and MCP memory
-search all call `hybridRecall`, so they receive the same structured evidence
-shaping behavior. Any future recall surface, including CLI shortcuts, SDK
-helpers, desktop UI search, connector-specific recall, or daemon-rs parity work,
-must either call the daemon recall API or implement the same evidence-channel
-contract. Do not add a separate recall path that bypasses lexical, semantic,
-prospective hint, and traversal evidence shaping.
+**Recall surface parity**: explicit recall entry points should route through
+the same daemon recall implementation whenever possible. Current daemon HTTP
+recall, search aliases, hook recall, and MCP memory search call `hybridRecall`,
+so they receive the same structured evidence shaping behavior. Prompt-submit is
+intentionally not an explicit recall surface: it listens for known ontology
+entities or active aliases and injects compact current-view attributes only
+when an entity aspect clears the configured confidence gate. Any future recall
+surface, including CLI shortcuts, SDK helpers, desktop UI search,
+connector-specific recall, or daemon-rs parity work, must either call the
+daemon recall API or implement the same evidence-channel contract. Do not add a
+separate recall path that bypasses lexical, semantic, prospective hint, and
+traversal evidence shaping.
 
 **Graph boost fallback** (`graph-search.ts`): `getGraphBoostIds`
 is the legacy graph-augmented search path, used when traversal is
@@ -964,7 +967,7 @@ All endpoints are served by the Hono server on port 3850.
 | `/api/embeddings/health` | GET | recall | Embedding health metrics |
 | `/api/embeddings/projection` | GET | recall | UMAP 2D/3D projection |
 | `/api/hooks/session-start` | POST | remember | Inject context into session |
-| `/api/hooks/user-prompt-submit` | POST | recall | Per-prompt context load |
+| `/api/hooks/user-prompt-submit` | POST | recall | Per-prompt entity context load |
 | `/api/hooks/session-end` | POST | remember | Extract session memories |
 | `/api/hooks/remember` | POST | remember | Save a memory via hook |
 | `/api/hooks/recall` | POST | recall | Search via hook |

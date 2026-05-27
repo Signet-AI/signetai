@@ -1,6 +1,7 @@
 import type { Context, Hono } from "hono";
 import { requirePermission } from "../auth";
 import { getDbAccessor } from "../db-accessor";
+import { archiveEntityAlias, createEntityAlias, listEntityAliases } from "../knowledge-graph";
 import { getInferenceProviderOrNull } from "../llm";
 import {
 	OntologyAssertionError,
@@ -142,6 +143,14 @@ export function registerOntologyRoutes(app: Hono): void {
 		const permission = c.req.method === "GET" ? "recall" : "modify";
 		return requirePermission(permission, authConfig)(c, next);
 	});
+	app.use("/api/ontology/entities/*/aliases", async (c, next) => {
+		const permission = c.req.method === "GET" ? "recall" : "modify";
+		return requirePermission(permission, authConfig)(c, next);
+	});
+	app.use("/api/ontology/entities/*/aliases/*", async (c, next) => {
+		const permission = c.req.method === "GET" ? "recall" : "modify";
+		return requirePermission(permission, authConfig)(c, next);
+	});
 	app.use("/api/ontology/assertions", async (c, next) => {
 		const permission = c.req.method === "GET" ? "recall" : "modify";
 		return requirePermission(permission, authConfig)(c, next);
@@ -166,6 +175,56 @@ export function registerOntologyRoutes(app: Hono): void {
 				offset: parseBoundedInt(c.req.query("offset"), 0, 0, 10_000),
 			}),
 		);
+	});
+
+	app.get("/api/ontology/entities/:id/aliases", (c) => {
+		const scoped = resolveAgent(c, c.req.query("agent_id"));
+		if (scoped.response) return scoped.response;
+		const status = c.req.query("status");
+		const parsedStatus = status === "active" || status === "archived" || status === "all" ? status : undefined;
+		if (status && !parsedStatus) return c.json({ error: "status is invalid" }, 400);
+		return c.json({
+			items: listEntityAliases(getDbAccessor(), {
+				agentId: scoped.agentId,
+				entityId: c.req.param("id"),
+				status: parsedStatus,
+			}),
+		});
+	});
+
+	app.post("/api/ontology/entities/:id/aliases", async (c) => {
+		const scoped = resolveAgent(c, c.req.query("agent_id"));
+		if (scoped.response) return scoped.response;
+		const body = await readJsonRecord(c);
+		const alias = readString(body, "alias");
+		if (!alias) return c.json({ error: "alias is required" }, 400);
+		try {
+			const item = createEntityAlias(getDbAccessor(), {
+				agentId: scoped.agentId,
+				entityId: c.req.param("id"),
+				alias,
+				confidence: readNumber(body, "confidence"),
+				source: readString(body, "source") ?? null,
+			});
+			return c.json({ item }, 201);
+		} catch (err) {
+			const message = messageForError(err);
+			if (message.includes("UNIQUE")) return c.json({ error: "alias already exists" }, 409);
+			if (message === "Entity not found") return c.json({ error: message }, 404);
+			return c.json({ error: message }, 400);
+		}
+	});
+
+	app.delete("/api/ontology/entities/:id/aliases/:aliasId", (c) => {
+		const scoped = resolveAgent(c, c.req.query("agent_id"));
+		if (scoped.response) return scoped.response;
+		const item = archiveEntityAlias(getDbAccessor(), {
+			agentId: scoped.agentId,
+			entityId: c.req.param("id"),
+			aliasId: c.req.param("aliasId"),
+		});
+		if (!item) return c.json({ error: "Alias not found" }, 404);
+		return c.json({ item });
 	});
 
 	app.get("/api/ontology/proposals/conflicts", (c) => {

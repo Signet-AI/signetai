@@ -1211,30 +1211,22 @@ hooks:
 // ============================================================================
 
 describe("handleUserPromptSubmit", () => {
-	test.serial("returns matching memories for prompt", async () => {
-		createMemoryDb([
-			{
-				content: "Use TypeScript as the preferred language for this project",
-				importance: 0.8,
-			},
-		]);
+	test.serial("returns empty inject when no known entity or alias is mentioned", async () => {
+		createMemoryDb([{ content: "Use TypeScript as the preferred language for this project", importance: 0.8 }]);
 
 		const result = await handleUserPromptSubmit({
 			harness: "test",
 			userPrompt: "What TypeScript language should we use?",
 		});
 
-		expect(result.memoryCount).toBeGreaterThan(0);
-		expect(result.inject).toContain("TypeScript");
+		expect(result.memoryCount).toBe(0);
+		expect(result.inject).toBe("");
+		expect(result.engine).toBe("no-entity");
+		expect(result.queryTerms).toContain("typescript");
 	});
 
-	test.serial("strips untrusted metadata block from user prompt", async () => {
-		createMemoryDb([
-			{
-				content: "Reiterate the release checklist before deploy",
-				importance: 0.8,
-			},
-		]);
+	test.serial("strips untrusted metadata block before entity matching and telemetry", async () => {
+		createMemoryDb([]);
 
 		const result = await handleUserPromptSubmit({
 			harness: "test",
@@ -1242,18 +1234,14 @@ describe("handleUserPromptSubmit", () => {
 				'Conversation info (untrusted metadata):\n{"conversation_label":"OpenClaw Session","message_id":"msg_123","sender_id":"user_456"}\n\nCan you reiterate the release checklist?',
 		});
 
-		expect(result.memoryCount).toBeGreaterThan(0);
+		expect(result.memoryCount).toBe(0);
+		expect(result.inject).toBe("");
 		expect(result.queryTerms).toContain("reiterate");
 		expect(result.queryTerms).not.toContain("conversation_label");
 	});
 
 	test.serial("prefers adapter-provided userMessage over raw prompt envelope", async () => {
-		createMemoryDb([
-			{
-				content: "Reiterate the release checklist before deploy",
-				importance: 0.8,
-			},
-		]);
+		createMemoryDb([]);
 
 		const result = await handleUserPromptSubmit({
 			harness: "openclaw",
@@ -1262,81 +1250,27 @@ describe("handleUserPromptSubmit", () => {
 				'Conversation info (untrusted metadata):\n{"agent_path":"/home/user/.agents","channel":"discord"}\n\n<<<EXTERNAL_UNTRUSTED_CONTENT>>>\nSender (untrusted): discord\nEND_EXTERNAL_UNTRUSTED_CONTENT',
 		});
 
-		expect(result.memoryCount).toBeGreaterThan(0);
+		expect(result.memoryCount).toBe(0);
+		expect(result.inject).toBe("");
 		expect(result.queryTerms).toContain("reiterate");
 		expect(result.queryTerms).toContain("release");
 		expect(result.queryTerms).not.toContain("agents");
 		expect(result.queryTerms).not.toContain("discord");
 	});
 
-	test.serial("keeps recall query terms focused on the cleaned user prompt", async () => {
-		createMemoryDb([
-			{
-				content: "Use pgvector in PostgreSQL for semantic embeddings",
-				importance: 0.8,
-			},
-		]);
-
-		const result = await handleUserPromptSubmit({
-			harness: "test",
-			userPrompt: "Can you remind me which embeddings database to use?",
-			lastAssistantMessage: "Earlier I suggested pgvector for embeddings.",
-		});
-
-		expect(result.memoryCount).toBeGreaterThan(0);
-		expect(result.queryTerms).toContain("embeddings database");
-		expect(result.queryTerms).not.toContain("pgvector");
-	});
-
-	test.serial("returns empty for no-match prompt", async () => {
-		createMemoryDb([{ content: "PostgreSQL replication setup guide", importance: 0.8 }]);
-
-		const result = await handleUserPromptSubmit({
-			harness: "test",
-			userPrompt: "quantum entanglement photon wavelength",
-		});
-
-		expect(result.memoryCount).toBe(0);
-		expect(result.inject).toContain("Current Date & Time");
-		expect(result.inject).not.toContain("[signet:recall");
-	});
-
-	test.serial("skips very short prompts with no words >= 3 chars", async () => {
-		createMemoryDb([{ content: "Something important", importance: 0.8 }]);
-
-		const result = await handleUserPromptSubmit({
-			harness: "test",
-			userPrompt: "hi ok",
-		});
-
-		expect(result.memoryCount).toBe(0);
-		expect(result.inject).toContain("Current Date & Time");
-		expect(result.inject).not.toContain("[signet:recall");
-	});
-
-	test.serial("handles missing database gracefully", async () => {
-		const result = await handleUserPromptSubmit({
-			harness: "test",
-			userPrompt: "A reasonable question here",
-		});
-
-		expect(result.memoryCount).toBe(0);
-		expect(result.inject).toContain("Current Date & Time");
-		expect(result.inject).not.toContain("[signet:recall");
-	});
-
-	test.serial("upserts session transcript during prompt flow when provided", async () => {
-		createMemoryDb([{ content: "release checklist", importance: 0.8 }]);
+	test.serial("upserts session transcript during prompt flow even when no context is injected", async () => {
+		createMemoryDb([]);
 		const transcriptPath = join(TEST_DIR, "prompt-transcript.txt");
 		writeFileSync(transcriptPath, "User: review the release checklist\nAssistant: here's the checklist");
 
-		await handleUserPromptSubmit({
+		const result = await handleUserPromptSubmit({
 			harness: "test",
 			userPrompt: "review the release checklist",
 			sessionKey: "sess-prompt",
 			transcriptPath,
 		});
 
+		expect(result.inject).toBe("");
 		const db = openTestDb();
 		const row = db.prepare("SELECT content FROM session_transcripts WHERE session_key = ?").get("sess-prompt") as
 			| { content: string }
@@ -1344,422 +1278,6 @@ describe("handleUserPromptSubmit", () => {
 		db.close();
 
 		expect(row?.content).toContain("review the release checklist");
-	});
-
-	test.serial("does not fall back to transcript excerpts when structured recall is empty", async () => {
-		createMemoryDb([]);
-		const db = openTestDb();
-		db.prepare(
-			`INSERT INTO session_transcripts
-			 (session_key, content, harness, project, agent_id, created_at, updated_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		).run(
-			"sess-older",
-			"User: we decided the temporal index should preserve drill-down handles for MEMORY.md lineage.\nAssistant: yes, the temporal index needs lineage and drill-down handles.",
-			"test",
-			"proj",
-			"default",
-			"2026-03-25T10:00:00.000Z",
-			"2026-03-25T10:05:00.000Z",
-		);
-		db.close();
-
-		const result = await handleUserPromptSubmit({
-			harness: "test",
-			project: "proj",
-			sessionKey: "sess-current",
-			userPrompt: "where did we decide the temporal index drill-down handles should live?",
-		});
-
-		expect(result.memoryCount).toBe(0);
-		expect(result.engine).not.toBe("transcript-fallback");
-		expect(result.inject).not.toContain("temporal index");
-		expect(result.inject).not.toContain("sess-olde");
-	});
-
-	test.serial("uses temporal fallback before transcript fallback when weak hybrid misses anchors", async () => {
-		createMemoryDb([
-			{
-				content: "Locate deployment logs from the latest rollout runbook.",
-				importance: 0.95,
-			},
-		]);
-		const db = openTestDb();
-		db.prepare(
-			`INSERT INTO session_summaries (
-				id, project, depth, kind, content, token_count,
-				earliest_at, latest_at, session_key, harness,
-				agent_id, source_type, source_ref, meta_json, created_at
-			) VALUES (?, ?, 0, 'session', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		).run(
-			"temporal-node-1",
-			"proj",
-			"# Session\n\nultra-needle-transcript-only-5529931 is tracked in temporal summaries.",
-			24,
-			"2026-03-25T09:59:00.000Z",
-			"2026-03-25T10:05:00.000Z",
-			"sess-temporal",
-			"test",
-			"default",
-			"summary",
-			"sess-temporal",
-			JSON.stringify({ source: "summary-worker" }),
-			"2026-03-25T10:05:00.000Z",
-		);
-		db.prepare(
-			`INSERT INTO session_transcripts
-			 (session_key, content, harness, project, agent_id, created_at, updated_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		).run(
-			"sess-anchor",
-			"User: marker lookup\nAssistant: ultra-needle-transcript-only-5529931 is only in transcript history.",
-			"test",
-			"proj",
-			"default",
-			"2026-03-25T10:00:00.000Z",
-			"2026-03-25T10:05:00.000Z",
-		);
-		db.close();
-
-		const result = await handleUserPromptSubmit({
-			harness: "test",
-			project: "proj",
-			sessionKey: "sess-current",
-			userPrompt: "locate ultra-needle-transcript-only-5529931",
-		});
-
-		expect(result.memoryCount).toBeGreaterThan(0);
-		expect(result.engine).toBe("temporal-fallback");
-		expect(result.inject).toContain("temporal-node-1");
-		expect(result.inject).toContain("ultra-needle-transcript-only-5529931");
-	});
-
-	test.serial("uses persisted thread heads for temporal fallback and filters cross-project bleed", async () => {
-		createMemoryDb([]);
-		const db = openTestDb();
-		db.prepare(
-			`INSERT INTO memory_thread_heads (
-				agent_id, thread_key, label, project, session_key, source_type,
-				source_ref, harness, node_id, latest_at, sample, updated_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		).run(
-			"default",
-			"project:/tmp/proj-good",
-			"project:proj-good",
-			"/tmp/proj-good",
-			"sess-good",
-			"summary",
-			"sess-good",
-			"test",
-			"node-good",
-			"2026-03-25T10:05:00.000Z",
-			"deploy rollback checklist and execution notes",
-			"2026-03-25T10:05:00.000Z",
-		);
-		db.prepare(
-			`INSERT INTO memory_thread_heads (
-				agent_id, thread_key, label, project, session_key, source_type,
-				source_ref, harness, node_id, latest_at, sample, updated_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		).run(
-			"default",
-			"project:/tmp/proj-bleed",
-			"project:proj-bleed",
-			"/tmp/proj-bleed",
-			"sess-bleed",
-			"summary",
-			"sess-bleed",
-			"test",
-			"node-bleed",
-			"2026-03-25T10:06:00.000Z",
-			"deploy notes only",
-			"2026-03-25T10:06:00.000Z",
-		);
-		db.close();
-
-		const result = await handleUserPromptSubmit({
-			harness: "test",
-			project: "/tmp/proj-good",
-			sessionKey: "sess-current",
-			userPrompt: "deploy rollback",
-		});
-
-		expect(result.memoryCount).toBeGreaterThan(0);
-		expect(result.engine).toBe("temporal-fallback");
-		expect(result.inject).toContain("node-good");
-		expect(result.inject).not.toContain("node-bleed");
-	});
-
-	test.serial("keeps single-anchor temporal fallback project-scoped", async () => {
-		createMemoryDb([]);
-		const db = openTestDb();
-		db.prepare(
-			`INSERT INTO memory_thread_heads (
-				agent_id, thread_key, label, project, session_key, source_type,
-				source_ref, harness, node_id, latest_at, sample, updated_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		).run(
-			"default",
-			"project:/tmp/proj-good|session:sess-good|harness:test",
-			"project:proj-good#session:sess-good#harness:test",
-			"/tmp/proj-good",
-			"sess-good",
-			"summary",
-			"sess-good",
-			"test",
-			"node-good",
-			"2026-03-25T10:05:00.000Z",
-			"ticket-7711 root cause and fix details",
-			"2026-03-25T10:05:00.000Z",
-		);
-		db.prepare(
-			`INSERT INTO memory_thread_heads (
-				agent_id, thread_key, label, project, session_key, source_type,
-				source_ref, harness, node_id, latest_at, sample, updated_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		).run(
-			"default",
-			"project:/tmp/proj-bleed|session:sess-bleed|harness:test",
-			"project:proj-bleed#session:sess-bleed#harness:test",
-			"/tmp/proj-bleed",
-			"sess-bleed",
-			"summary",
-			"sess-bleed",
-			"test",
-			"node-bleed",
-			"2026-03-25T10:06:00.000Z",
-			"ticket-7711 appears in another project context",
-			"2026-03-25T10:06:00.000Z",
-		);
-		db.close();
-
-		const result = await handleUserPromptSubmit({
-			harness: "test",
-			project: "/tmp/proj-good",
-			sessionKey: "sess-current",
-			userPrompt: "ticket-7711",
-		});
-
-		expect(result.memoryCount).toBeGreaterThan(0);
-		expect(result.engine).toBe("temporal-fallback");
-		expect(result.inject).toContain("node-good");
-		expect(result.inject).not.toContain("node-bleed");
-	});
-
-	test.serial("escapes underscore anchors in temporal fallback matching", async () => {
-		createMemoryDb([]);
-		const db = openTestDb();
-		db.prepare(
-			`INSERT INTO memory_thread_heads (
-				agent_id, thread_key, label, project, session_key, source_type,
-				source_ref, harness, node_id, latest_at, sample, updated_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		).run(
-			"default",
-			"project:/tmp/proj|session:sess-exact|harness:test",
-			"project:proj#session:sess-exact#harness:test",
-			"/tmp/proj",
-			"sess-exact",
-			"summary",
-			"sess-exact",
-			"test",
-			"node-exact",
-			"2026-03-25T10:05:00.000Z",
-			"ticket_7711 is tracked exactly in this lane",
-			"2026-03-25T10:05:00.000Z",
-		);
-		db.prepare(
-			`INSERT INTO memory_thread_heads (
-				agent_id, thread_key, label, project, session_key, source_type,
-				source_ref, harness, node_id, latest_at, sample, updated_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		).run(
-			"default",
-			"project:/tmp/proj|session:sess-wild|harness:test",
-			"project:proj#session:sess-wild#harness:test",
-			"/tmp/proj",
-			"sess-wild",
-			"summary",
-			"sess-wild",
-			"test",
-			"node-wild",
-			"2026-03-25T10:06:00.000Z",
-			"ticketA7711 should stay isolated from the underscored ticket code",
-			"2026-03-25T10:06:00.000Z",
-		);
-		db.close();
-
-		const result = await handleUserPromptSubmit({
-			harness: "test",
-			project: "/tmp/proj",
-			sessionKey: "sess-current",
-			userPrompt: "ticket_7711",
-		});
-
-		expect(result.memoryCount).toBeGreaterThan(0);
-		expect(result.engine).toBe("temporal-fallback");
-		expect(result.inject).toContain("node-exact");
-		expect(result.inject).not.toContain("node-wild");
-	});
-
-	test.serial("does not collapse distinct thread keys that share the same label", async () => {
-		createMemoryDb([]);
-		const db = openTestDb();
-		db.prepare(
-			`INSERT INTO memory_thread_heads (
-				agent_id, thread_key, label, project, session_key, source_type,
-				source_ref, harness, node_id, latest_at, sample, updated_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		).run(
-			"default",
-			"project:/work/foo|session:sess-a",
-			"project:foo",
-			"/work/foo",
-			"sess-a",
-			"summary",
-			null,
-			"test",
-			"node-foo-a",
-			"2026-03-25T10:05:00.000Z",
-			"deploy rollout checklist for foo lane a",
-			"2026-03-25T10:05:00.000Z",
-		);
-		db.prepare(
-			`INSERT INTO memory_thread_heads (
-				agent_id, thread_key, label, project, session_key, source_type,
-				source_ref, harness, node_id, latest_at, sample, updated_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		).run(
-			"default",
-			"project:/tmp/foo|session:sess-b",
-			"project:foo",
-			"/tmp/foo",
-			"sess-b",
-			"summary",
-			null,
-			"test",
-			"node-foo-b",
-			"2026-03-25T10:06:00.000Z",
-			"deploy rollout checklist for foo lane b",
-			"2026-03-25T10:06:00.000Z",
-		);
-		db.close();
-
-		const result = await handleUserPromptSubmit({
-			harness: "test",
-			sessionKey: "sess-current",
-			userPrompt: "deploy rollout checklist",
-		});
-
-		expect(result.memoryCount).toBe(2);
-		expect(result.engine).toBe("temporal-fallback");
-		expect(result.inject).toContain("node-foo-a");
-		expect(result.inject).toContain("node-foo-b");
-	});
-
-	test.serial("does not fall back to transcript excerpts when hybrid top hit misses query anchors", async () => {
-		createMemoryDb([
-			{
-				content: "Locate deployment logs from the latest rollout runbook.",
-				importance: 0.95,
-			},
-		]);
-		const db = openTestDb();
-		db.prepare(
-			`INSERT INTO session_transcripts
-			 (session_key, content, harness, project, agent_id, created_at, updated_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		).run(
-			"sess-anchor",
-			"User: marker lookup\nAssistant: ultra-needle-transcript-only-5529931 is only in transcript history.",
-			"test",
-			"proj",
-			"default",
-			"2026-03-25T10:00:00.000Z",
-			"2026-03-25T10:05:00.000Z",
-		);
-		db.close();
-
-		const result = await handleUserPromptSubmit({
-			harness: "test",
-			project: "proj",
-			sessionKey: "sess-current",
-			userPrompt: "locate ultra-needle-transcript-only-5529931",
-		});
-
-		expect(result.memoryCount).toBe(0);
-		expect(result.engine).not.toBe("transcript-fallback");
-		expect(result.inject).not.toContain("ultra-needle-transcript-only-5529931");
-		expect(result.inject).not.toContain("sess-anch");
-	});
-
-	test.serial("applies character budget", async () => {
-		// Create many memories that would exceed the 500 char budget
-		const mems = Array.from({ length: 20 }, (_, i) => ({
-			content: `Important fact number ${i}: ${"x".repeat(80)}`,
-			importance: 0.9,
-		}));
-		createMemoryDb(mems);
-
-		const result = await handleUserPromptSubmit({
-			harness: "test",
-			userPrompt: "important fact number",
-		});
-
-		// Should be capped by budget, not return all 20
-		if (result.memoryCount > 0) {
-			// Memory budget is 500 chars, but inject also includes metadata header,
-			// recall status line, and optional feedback block
-			expect(result.memoryCount).toBeLessThan(20);
-		}
-	});
-
-	test.serial("skips conversational prompts with too few substantive words", async () => {
-		createMemoryDb([
-			{
-				content: "The payment retry queue should drain before deploy",
-				importance: 0.9,
-			},
-		]);
-
-		const result = await handleUserPromptSubmit({
-			harness: "test",
-			userPrompt: "yeah do that",
-		});
-
-		expect(result.memoryCount).toBe(0);
-		expect(result.inject).toContain("Current Date & Time");
-		expect(result.inject).not.toContain("[signet:recall");
-	});
-
-	test.serial("respects group visibility during prompt recall", async () => {
-		createMemoryDb([
-			{
-				content: "Team alpha uses shard-aware rollout plans",
-				importance: 0.95,
-				agent_id: "agent-alpha",
-				visibility: "global",
-			},
-			{
-				content: "Team beta migration notes",
-				importance: 0.95,
-				agent_id: "agent-beta",
-				visibility: "global",
-			},
-		]);
-		upsertAgent("agent-group", "group", "team-1");
-		upsertAgent("agent-alpha", "isolated", "team-1");
-		upsertAgent("agent-beta", "isolated", "team-2");
-
-		const result = await handleUserPromptSubmit({
-			harness: "test",
-			agentId: "agent-group",
-			userPrompt: "which rollout plans are shard aware?",
-		});
-
-		expect(result.memoryCount).toBeGreaterThan(0);
-		expect(result.inject).toContain("shard-aware rollout plans");
-		expect(result.inject).not.toContain("Team beta migration notes");
 	});
 });
 
@@ -3515,7 +3033,7 @@ describe("session memory recording integration", () => {
 		expect(count.cnt).toBe(0);
 	});
 
-	test.serial("handleUserPromptSubmit tracks FTS hits", async () => {
+	test.serial("handleUserPromptSubmit does not track FTS hits without entity context", async () => {
 		createMemoryDb([
 			{
 				content: "TypeScript is the preferred language for this project",
@@ -3529,7 +3047,6 @@ describe("session memory recording integration", () => {
 			sessionKey: "fts-tracking-session",
 		});
 
-		// Now submit a prompt that will match via hybrid recall
 		await handleUserPromptSubmit({
 			harness: "test",
 			sessionKey: "fts-tracking-session",
@@ -3546,9 +3063,8 @@ describe("session memory recording integration", () => {
 		}>;
 		db.close();
 
-		// Should have at least one row with fts_hit_count > 0
 		const withHits = rows.filter((r) => r.fts_hit_count > 0);
-		expect(withHits.length).toBeGreaterThan(0);
+		expect(withHits).toHaveLength(0);
 	});
 });
 

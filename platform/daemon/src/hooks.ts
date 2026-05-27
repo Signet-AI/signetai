@@ -29,11 +29,11 @@ import {
 	shouldCheckpoint,
 } from "./continuity-state";
 import { listAgentPresence } from "./cross-agent";
-import { getDbAccessor, hasDbAccessor } from "./db-accessor";
+import { type ReadDb, getDbAccessor, hasDbAccessor } from "./db-accessor";
 import { fetchEmbedding } from "./embedding-fetch";
 import { propagateMemoryStatus } from "./knowledge-graph";
 import { logger } from "./logger";
-import { DEFAULT_PROMPT_SUBMIT_EMBEDDING_TIMEOUT_MS, loadMemoryConfig } from "./memory-config";
+import { loadMemoryConfig } from "./memory-config";
 import { writeMemoryHead } from "./memory-head";
 import {
 	NOISE_PURGE_REASON,
@@ -598,34 +598,6 @@ export function appendSynthesisIndexBlock(content: string, indexBlock: string): 
 	return appendRenderedIndexBlock(content, indexBlock);
 }
 
-function buildTemporalFallbackResponse(
-	metadataHeader: string,
-	harness: string,
-	queryTerms: string,
-	charBudget: number,
-	hits: ReadonlyArray<{
-		readonly id: string;
-		readonly latestAt: string;
-		readonly threadLabel: string;
-		readonly excerpt: string;
-	}>,
-	warnings?: string[],
-	pluginContext = "",
-): UserPromptSubmitResponse {
-	const rows = hits.map((hit) => ({
-		content: `- [thread ${hit.id}] ${hit.excerpt} (${formatMemoryDate(hit.latestAt)}, ${hit.threadLabel})`,
-	}));
-	const lines = selectWithBudget(rows, charBudget).map((row) => row.content);
-	const inject = buildPromptRecallInject(metadataHeader, lines, harness, pluginContext);
-	return {
-		inject,
-		memoryCount: lines.length,
-		queryTerms,
-		engine: "temporal-fallback",
-		warnings,
-	};
-}
-
 /** Truncate rows to fit a character budget, preserving the input type */
 export function selectWithBudget<T extends { content: string }>(rows: ReadonlyArray<T>, charBudget: number): T[] {
 	const selected: T[] = [];
@@ -705,129 +677,351 @@ function buildPluginPromptContributionSection(target: PluginPromptTargetV1, log:
 	}
 }
 
-function buildPromptRecallGuidance(harness: string): string {
-	if (harness === "codex") {
-		return "Use the Signet context below as starting context before acting. Codex native memory is already available separately, so run 1-3 targeted Signet recalls with signet_recall only when the task needs cross-harness history, source-backed artifacts, sessions, ontology, or accepted decisions. Ask natural questions with entity + event + timeframe when possible. Avoid bag-of-keywords recall queries. Treat graph expansion as supporting context, not proof.";
-	}
-	if (isPiHarness(harness)) {
-		return "Use the memories below as starting context before acting. If the task depends on prior context and anything is missing, run 1-3 targeted recalls with signet_recall. Ask natural questions with entity + event + timeframe when possible. Avoid bag-of-keywords recall queries. Treat graph expansion as supporting context, not proof.";
-	}
-	return "Use the memories below as starting context before acting. If the task depends on prior context and anything is missing, run 1-3 targeted recalls with /recall or memory_search. Ask natural questions with entity + event + timeframe when possible. Avoid bag-of-keywords recall queries. Expand with lcm_expand or knowledge_expand only when you need deeper lineage or graph context. Treat graph expansion as supporting context, not proof.";
+type PromptEntityMatch = {
+	readonly entityId: string;
+	readonly entityName: string;
+	readonly entityType: string;
+	readonly description: string | null;
+	readonly matchedText: string;
+	readonly matchSource: "name" | "alias";
+	readonly mentions: number;
+};
+
+type PromptEntityContextLine = {
+	readonly entityName: string;
+	readonly aspectName: string;
+	readonly groupKey: string | null;
+	readonly claimKey: string | null;
+	readonly kind: "attribute" | "constraint";
+	readonly content: string;
+	readonly confidence: number;
+	readonly importance: number;
+	readonly sourceKind: string | null;
+	readonly sourceId: string | null;
+	readonly sourcePath: string | null;
+	readonly memoryId: string | null;
+	readonly version: number;
+};
+
+type PromptEntityContextResult = {
+	readonly lines: readonly string[];
+	readonly memoryCount: number;
+	readonly engine: "entity-context" | "low-signal" | "no-entity" | "ambiguous-entity" | "no-aspect-hit";
+};
+
+const LOW_SIGNAL_PROMPTS = new Set([
+	"cool",
+	"got it",
+	"go ahead",
+	"great",
+	"k",
+	"kk",
+	"nice",
+	"ok",
+	"okay",
+	"okay cool",
+	"sounds good",
+	"sure",
+	"thanks",
+	"thank you",
+	"yes",
+	"yes please",
+	"yep",
+]);
+
+const ENTITY_CONTEXT_MAX_ENTITIES = 2;
+const ENTITY_CONTEXT_MAX_ASPECTS_PER_ENTITY = 3;
+const ENTITY_CONTEXT_MAX_LINES = 8;
+
+function normalizePromptEntityText(value: string): string {
+	return value
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, " ")
+		.replace(/\s+/g, " ")
+		.trim();
 }
 
-function buildNoStrongMemoryMatchGuidance(harness: string): string {
-	if (harness === "codex") {
-		return "No strong automatic Signet context was injected for this turn. Codex native memory may already cover ordinary memory needs; if this request depends on cross-harness history, source-backed docs, sessions, ontology, or accepted decisions, run 1-3 targeted Signet recalls with signet_recall before executing commands, editing files, or making decisions.";
+function phraseAppearsInPrompt(prompt: string, phrase: string): boolean {
+	const normalizedPrompt = ` ${normalizePromptEntityText(prompt)} `;
+	const normalizedPhrase = normalizePromptEntityText(phrase);
+	return normalizedPhrase.length > 0 && normalizedPrompt.includes(` ${normalizedPhrase} `);
+}
+
+function isLowSignalPrompt(userMessage: string): boolean {
+	const normalized = normalizePromptEntityText(stripUntrustedMetadata(userMessage));
+	if (normalized.length === 0) return true;
+	if (LOW_SIGNAL_PROMPTS.has(normalized)) return true;
+	const terms = extractSubstantiveWords(normalized);
+	return terms.length === 0;
+}
+
+function entityContextTablesAvailable(db: ReadDb): boolean {
+	const rows = db
+		.prepare(
+			`SELECT name FROM sqlite_master
+			 WHERE type = 'table'
+			   AND name IN ('entities', 'entity_aspects', 'entity_attributes', 'entity_aliases')`,
+		)
+		.all() as Array<{ name: string }>;
+	const names = new Set(rows.map((row) => row.name));
+	return (
+		names.has("entities") &&
+		names.has("entity_aspects") &&
+		names.has("entity_attributes") &&
+		names.has("entity_aliases")
+	);
+}
+
+function resolvePromptEntityMatches(
+	db: ReadDb,
+	agentId: string,
+	userMessage: string,
+): PromptEntityMatch[] | "ambiguous" {
+	if (!entityContextTablesAvailable(db)) return [];
+	const rows = db
+		.prepare(
+			`SELECT
+			   e.id AS entity_id,
+			   e.name AS entity_name,
+			   COALESCE(e.entity_type, 'unknown') AS entity_type,
+			   e.description AS description,
+			   COALESCE(e.canonical_name, LOWER(e.name)) AS matched_text,
+			   'name' AS match_source,
+			   COALESCE(e.mentions, 0) AS mentions
+			 FROM entities e
+			 WHERE e.agent_id = ?
+			   AND COALESCE(e.status, 'active') = 'active'
+			 UNION ALL
+			 SELECT
+			   e.id AS entity_id,
+			   e.name AS entity_name,
+			   COALESCE(e.entity_type, 'unknown') AS entity_type,
+			   e.description AS description,
+			   a.alias AS matched_text,
+			   'alias' AS match_source,
+			   COALESCE(e.mentions, 0) AS mentions
+			 FROM entity_aliases a
+			 JOIN entities e ON e.id = a.entity_id AND e.agent_id = a.agent_id
+			 WHERE a.agent_id = ?
+			   AND a.status = 'active'
+			   AND COALESCE(e.status, 'active') = 'active'`,
+		)
+		.all(agentId, agentId) as Array<{
+		entity_id: string;
+		entity_name: string;
+		entity_type: string;
+		description: string | null;
+		matched_text: string;
+		match_source: "name" | "alias";
+		mentions: number;
+	}>;
+
+	const matched = rows
+		.filter((row) => phraseAppearsInPrompt(userMessage, row.matched_text))
+		.sort((a, b) => {
+			const lengthDelta =
+				normalizePromptEntityText(b.matched_text).length - normalizePromptEntityText(a.matched_text).length;
+			if (lengthDelta !== 0) return lengthDelta;
+			return b.mentions - a.mentions;
+		});
+	const entityIdsByPhrase = new Map<string, Set<string>>();
+	for (const row of matched) {
+		const phrase = normalizePromptEntityText(row.matched_text);
+		if (!entityIdsByPhrase.has(phrase)) entityIdsByPhrase.set(phrase, new Set());
+		entityIdsByPhrase.get(phrase)?.add(row.entity_id);
 	}
-	if (isPiHarness(harness)) {
-		return "No strong automatic memory match was injected for this turn. If the request depends on prior context, preferences, project history, or unresolved work, run 1-3 targeted Signet recalls with signet_recall before executing commands, editing files, or making decisions. Ask natural questions with entity + event + timeframe when possible. Avoid bag-of-keywords recall queries. Treat graph expansion as supporting context, not proof.";
+	if ([...entityIdsByPhrase.values()].some((ids) => ids.size > 1)) return "ambiguous";
+
+	const seen = new Set<string>();
+	const result: PromptEntityMatch[] = [];
+	for (const row of matched) {
+		if (seen.has(row.entity_id)) continue;
+		seen.add(row.entity_id);
+		result.push({
+			entityId: row.entity_id,
+			entityName: row.entity_name,
+			entityType: row.entity_type,
+			description: row.description,
+			matchedText: row.matched_text,
+			matchSource: row.match_source,
+			mentions: row.mentions,
+		});
+		if (result.length >= ENTITY_CONTEXT_MAX_ENTITIES) break;
 	}
-	return "No strong automatic memory match was injected for this turn. If the request depends on prior context, preferences, project history, or unresolved work, run 1-3 targeted Signet recalls before executing commands, editing files, or making decisions. Ask natural questions with entity + event + timeframe when possible. Avoid bag-of-keywords recall queries. Treat graph expansion as supporting context, not proof.";
+	return result;
 }
 
-function buildDurableSaveGuidance(harness: string): string {
-	if (harness === "codex")
-		return "If you learn something explicitly durable for Codex memory, save it with signet_save_note.";
-	if (isPiHarness(harness)) return "If you learn something durable, save it with /remember or signet_remember.";
-	return "If you learn something durable, save it with /remember or memory_store.";
+function scoreAspectForPrompt(
+	aspect: { readonly name: string; readonly canonical_name: string; readonly weight: number },
+	rows: ReadonlyArray<{
+		readonly content: string;
+		readonly group_key: string | null;
+		readonly claim_key: string | null;
+	}>,
+	promptTerms: ReadonlyArray<string>,
+	allowWeightFallback: boolean,
+): number {
+	const aspectTerms = extractSubstantiveWords(`${aspect.name} ${aspect.canonical_name}`);
+	const aspectOverlap = aspectTerms.some((term) => promptTerms.includes(term));
+	if (aspectOverlap) return 1;
+	const attrText = rows.map((row) => `${row.group_key ?? ""} ${row.claim_key ?? ""} ${row.content}`).join(" ");
+	const overlap = countPromptTermOverlap(attrText, promptTerms);
+	if (overlap > 0) return Math.min(1, 0.75 + Math.min(aspect.weight, 1) * 0.25);
+	return allowWeightFallback ? Math.min(Math.max(aspect.weight, 0), 1) : 0;
 }
 
-function codexNativeMemoriesEnabled(): boolean {
-	const override = process.env.SIGNET_CODEX_NATIVE_MEMORY?.trim();
-	if (override === "1" || override === "true") return true;
-	if (override === "0" || override === "false") return false;
-	const home = process.env.CODEX_HOME?.trim() || join(homedir(), ".codex");
-	if (!existsSync(join(home, "memories"))) return false;
-	const configPath = join(home, "config.toml");
-	if (!existsSync(configPath)) return true;
-	try {
-		const config = readFileSync(configPath, "utf-8");
-		return !codexConfigDisablesNativeMemories(config);
-	} catch {
-		return true;
+function loadEntityContextLines(
+	db: ReadDb,
+	entity: PromptEntityMatch,
+	agentId: string,
+	userMessage: string,
+	minScore: number,
+): PromptEntityContextLine[] {
+	const entityTerms = new Set(extractSubstantiveWords(`${entity.entityName} ${entity.matchedText}`));
+	const promptTerms = extractSubstantiveWords(userMessage).filter((term) => !entityTerms.has(term));
+	const allowWeightFallback = promptTerms.length === 0;
+	const aspects = db
+		.prepare(
+			`SELECT id, name, canonical_name, weight
+			 FROM entity_aspects
+			 WHERE entity_id = ?
+			   AND agent_id = ?
+			   AND COALESCE(status, 'active') = 'active'
+			 ORDER BY weight DESC, name ASC
+			 LIMIT 12`,
+		)
+		.all(entity.entityId, agentId) as Array<{
+		id: string;
+		name: string;
+		canonical_name: string;
+		weight: number;
+	}>;
+	const selectedAspectIds = new Set<string>();
+	for (const aspect of aspects) {
+		const rows = db
+			.prepare(
+				`SELECT content, group_key, claim_key
+				 FROM entity_attributes
+				 WHERE aspect_id = ?
+				   AND agent_id = ?
+				   AND status = 'active'
+				 ORDER BY importance DESC, updated_at DESC
+				 LIMIT 12`,
+			)
+			.all(aspect.id, agentId) as Array<{ content: string; group_key: string | null; claim_key: string | null }>;
+		if (rows.length === 0) continue;
+		const score = scoreAspectForPrompt(aspect, rows, promptTerms, allowWeightFallback);
+		if (score >= minScore) selectedAspectIds.add(aspect.id);
+		if (selectedAspectIds.size >= ENTITY_CONTEXT_MAX_ASPECTS_PER_ENTITY) break;
 	}
+	if (selectedAspectIds.size === 0) return [];
+	const placeholders = [...selectedAspectIds].map(() => "?").join(", ");
+	const rows = db
+		.prepare(
+			`SELECT
+			   asp.name AS aspect_name,
+			   ea.kind,
+			   ea.content,
+			   ea.group_key,
+			   ea.claim_key,
+			   ea.confidence,
+			   ea.importance,
+			   ea.source_kind,
+			   ea.source_id,
+			   ea.source_path,
+			   ea.memory_id,
+			   COALESCE(ea.version, 1) AS version
+			 FROM entity_attributes ea
+			 JOIN entity_aspects asp ON asp.id = ea.aspect_id
+			 WHERE ea.aspect_id IN (${placeholders})
+			   AND ea.agent_id = ?
+			   AND ea.status = 'active'
+			 ORDER BY
+			   CASE ea.kind WHEN 'constraint' THEN 0 ELSE 1 END,
+			   ea.importance DESC,
+			   ea.updated_at DESC
+			 LIMIT ?`,
+		)
+		.all(...selectedAspectIds, agentId, ENTITY_CONTEXT_MAX_LINES) as Array<{
+		aspect_name: string;
+		kind: "attribute" | "constraint";
+		content: string;
+		group_key: string | null;
+		claim_key: string | null;
+		confidence: number;
+		importance: number;
+		source_kind: string | null;
+		source_id: string | null;
+		source_path: string | null;
+		memory_id: string | null;
+		version: number;
+	}>;
+	return rows.map((row) => ({
+		entityName: entity.entityName,
+		aspectName: row.aspect_name,
+		groupKey: row.group_key,
+		claimKey: row.claim_key,
+		kind: row.kind,
+		content: row.content,
+		confidence: row.confidence,
+		importance: row.importance,
+		sourceKind: row.source_kind,
+		sourceId: row.source_id,
+		sourcePath: row.source_path,
+		memoryId: row.memory_id,
+		version: row.version,
+	}));
 }
 
-function codexConfigDisablesNativeMemories(config: string): boolean {
-	const lines = config.split(/\r?\n/);
-	let section = "";
-	for (const line of lines) {
-		const trimmed = line.trim();
-		if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
-			section = trimmed;
-			continue;
-		}
-		if (section === "" && /^features\.memories\s*=\s*false\s*(?:#.*)?$/.test(trimmed)) return true;
-		if ((section === "" || section === "[features]") && /^memories\s*=\s*false\s*(?:#.*)?$/.test(trimmed)) {
-			return true;
-		}
-	}
-	return false;
+function formatEntityContextLine(line: PromptEntityContextLine): string {
+	const path = [line.entityName, line.aspectName, line.groupKey ?? "general", line.claimKey ?? "uncategorized"].join(
+		" / ",
+	);
+	const source =
+		line.sourceKind && line.sourceId
+			? `${line.sourceKind}:${line.sourceId}`
+			: line.memoryId
+				? `memory:${line.memoryId}`
+				: line.sourcePath
+					? line.sourcePath
+					: `v${line.version}`;
+	return `- [${line.kind}] ${path}: ${line.content} (${source})`;
 }
 
-function isCodexNativeMemoryRow(row: {
-	readonly source?: string;
-	readonly type?: string;
-	readonly source_id?: string;
-	readonly source_path?: string;
-	readonly tags?: string | null;
-	readonly who?: string;
-}): boolean {
-	const sourceId = row.source_id?.trim().toLowerCase() ?? "";
-	if (sourceId.startsWith("native:codex:") || sourceId.startsWith("codex_native_memory:")) return true;
-	const who = row.who?.trim().toLowerCase();
-	if (who === "codex") return true;
-	const path = row.source_path?.replace(/\\/g, "/");
-	if (!path) return false;
-	const home = (process.env.CODEX_HOME?.trim() || join(homedir(), ".codex")).replace(/\\/g, "/").replace(/\/$/, "");
-	return path === home || path.startsWith(`${home}/`);
-}
-
-function filterCodexNativeMemoryRows<
-	T extends {
-		readonly source?: string;
-		readonly type?: string;
-		readonly source_id?: string;
-		readonly source_path?: string;
-		readonly tags?: string | null;
-		readonly who?: string;
-	},
->(rows: readonly T[]): T[] {
-	if (!codexNativeMemoriesEnabled()) return [...rows];
-	return rows.filter((row) => {
-		const native = row.source === "native_memory" || row.type?.startsWith("native_");
-		return !native || !isCodexNativeMemoryRow(row);
+function buildEntityPromptContext(
+	userMessage: string,
+	agentId: string,
+	minScore: number,
+	injectBudget: number,
+): PromptEntityContextResult {
+	if (isLowSignalPrompt(userMessage)) return { lines: [], memoryCount: 0, engine: "low-signal" };
+	if (!existsSync(getMemoryDbPath())) return { lines: [], memoryCount: 0, engine: "no-entity" };
+	if (!hasDbAccessor()) return { lines: [], memoryCount: 0, engine: "no-entity" };
+	return getDbAccessor().withReadDb((db) => {
+		const matches = resolvePromptEntityMatches(db, agentId, userMessage);
+		if (matches === "ambiguous") return { lines: [], memoryCount: 0, engine: "ambiguous-entity" };
+		if (matches.length === 0) return { lines: [], memoryCount: 0, engine: "no-entity" };
+		const lines = matches.flatMap((entity) => loadEntityContextLines(db, entity, agentId, userMessage, minScore));
+		if (lines.length === 0) return { lines: [], memoryCount: 0, engine: "no-aspect-hit" };
+		const selected = selectWithBudgetSkippingOversized(
+			lines.map((line) => ({ content: formatEntityContextLine(line) })),
+			injectBudget,
+		).slice(0, ENTITY_CONTEXT_MAX_LINES);
+		return {
+			lines: selected.map((line) => line.content),
+			memoryCount: selected.length,
+			engine: selected.length > 0 ? "entity-context" : "no-aspect-hit",
+		};
 	});
 }
 
-function buildPromptRecallInject(
-	metadataHeader: string,
-	lines: ReadonlyArray<string>,
-	harness: string,
-	pluginContext = "",
-): string {
-	// Keep formatting behavior aligned with daemon-rs
-	// `build_prompt_recall_inject()` in `platform/daemon-rs/.../routes/hooks.rs`.
-	const parts = [metadataHeader.trimEnd(), "", "## Memory Check", "", buildPromptRecallGuidance(harness), ""];
+function buildEntityContextInject(metadataHeader: string, lines: ReadonlyArray<string>, pluginContext = ""): string {
+	const parts = [metadataHeader.trimEnd(), "", "## Relevant Entity Context", ""];
 	if (pluginContext.trim().length > 0) {
 		parts.push(pluginContext.trimEnd());
 		parts.push("");
 	}
-	parts.push("## Relevant Memory");
-	parts.push("");
 	parts.push(...lines);
-	parts.push("");
-	parts.push(buildDurableSaveGuidance(harness));
-	return `${parts.join("\n").trimEnd()}\n`;
-}
-
-function buildNoStrongMemoryMatchInject(metadataHeader: string, harness: string, pluginContext = ""): string {
-	const parts = [metadataHeader.trimEnd(), "", "## Memory Check", "", buildNoStrongMemoryMatchGuidance(harness), ""];
-	if (pluginContext.trim().length > 0) {
-		parts.push(pluginContext.trimEnd());
-		parts.push("");
-	}
-	parts.push(buildDurableSaveGuidance(harness));
 	return `${parts.join("\n").trimEnd()}\n`;
 }
 
@@ -2361,86 +2555,6 @@ function countPromptTermOverlap(text: string, promptTerms: ReadonlyArray<string>
 	return overlap;
 }
 
-function chooseCompactPromptSentence(content: string, promptTerms: ReadonlyArray<string>): string {
-	const normalized = content
-		.replace(/\s+/g, " ")
-		.replace(/\s*\[truncated\]\s*$/i, "")
-		.trim();
-	if (!normalized) return "";
-	const sentences = normalized
-		.split(/(?<=[.!?])\s+/)
-		.map((part) => part.trim())
-		.filter(Boolean) || [normalized];
-	const ranked = [...sentences].sort((a, b) => {
-		const overlapDelta = countPromptTermOverlap(b, promptTerms) - countPromptTermOverlap(a, promptTerms);
-		if (overlapDelta !== 0) return overlapDelta;
-		return a.length - b.length;
-	});
-	return ranked[0] ?? normalized;
-}
-
-function compactPromptMemoryLine(
-	content: string,
-	createdAt: string,
-	promptTerms: ReadonlyArray<string>,
-	maxChars = 160,
-): string {
-	const sentence = chooseCompactPromptSentence(content, promptTerms);
-	const compact = sentence.length > maxChars ? `${sentence.slice(0, maxChars - 1).trimEnd()}…` : sentence;
-	return `- [memory] ${compact} (${formatMemoryDate(createdAt)})`;
-}
-
-type PromptInjectCandidate = {
-	readonly id: string;
-	readonly content: string;
-	readonly score?: number;
-	readonly overlap: number;
-	readonly index: number;
-};
-
-function buildPromptInjectCandidates(
-	rows: ReadonlyArray<{
-		readonly id: string;
-		readonly content: string;
-		readonly created_at: string;
-		readonly score?: number;
-	}>,
-	promptTerms: ReadonlyArray<string>,
-): PromptInjectCandidate[] {
-	return rows.map((row, index) => {
-		const content = compactPromptMemoryLine(row.content, row.created_at, promptTerms);
-		return {
-			id: row.id,
-			content,
-			score: row.score,
-			overlap: countPromptTermOverlap(row.content, promptTerms),
-			index,
-		};
-	});
-}
-
-function shouldRescuePromptInjectSelection(
-	selected: ReadonlyArray<PromptInjectCandidate>,
-	all: ReadonlyArray<PromptInjectCandidate>,
-): boolean {
-	if (selected.length === 0) return true;
-	const selectedBest = Math.max(...selected.map((row) => row.overlap), 0);
-	if (selectedBest > 0) return false;
-	return all.some((row) => row.overlap > selectedBest);
-}
-
-function rerankPromptInjectCandidates(rows: ReadonlyArray<PromptInjectCandidate>): PromptInjectCandidate[] {
-	return [...rows].sort((a, b) => {
-		const overlapDelta = b.overlap - a.overlap;
-		if (overlapDelta !== 0) return overlapDelta;
-		const aScore = typeof a.score === "number" ? a.score : Number.NEGATIVE_INFINITY;
-		const bScore = typeof b.score === "number" ? b.score : Number.NEGATIVE_INFINITY;
-		if (aScore !== bScore) return bScore - aScore;
-		if (a.content.length !== b.content.length) return a.content.length - b.content.length;
-		return a.index - b.index;
-	});
-}
-
 export function queryAnchorsMissingFromRecall(query: string, results: ReadonlyArray<{ content: string }>): boolean {
 	const anchors = extractAnchorTerms(stripUntrustedMetadata(query));
 	if (anchors.length === 0) return false;
@@ -2536,30 +2650,6 @@ type UserPromptSubmitDeps = {
 	readonly trackFtsHits: typeof trackFtsHits;
 };
 
-async function fetchPromptSubmitEmbedding(
-	deps: Pick<UserPromptSubmitDeps, "fetchEmbedding" | "logger">,
-	text: string,
-	cfg: Parameters<typeof fetchEmbedding>[1],
-	timeoutMs: number,
-): Promise<number[] | null> {
-	const controller = new AbortController();
-	let timer: ReturnType<typeof setTimeout> | null = null;
-	const request = deps.fetchEmbedding(text, cfg, { signal: controller.signal, timeoutMs });
-	try {
-		return await Promise.race([
-			request,
-			new Promise<null>((resolve) => {
-				timer = setTimeout(() => {
-					controller.abort();
-					resolve(null);
-				}, timeoutMs);
-			}),
-		]);
-	} finally {
-		if (timer) clearTimeout(timer);
-	}
-}
-
 const DEFAULT_USER_PROMPT_SUBMIT_DEPS: UserPromptSubmitDeps = {
 	logger,
 	loadMemoryConfig,
@@ -2589,8 +2679,7 @@ export async function handleUserPromptSubmit(
 	const submitCfg = loadHooksConfig().userPromptSubmit ?? {};
 	const userMessage = resolveRecallUserMessage(req);
 	const agentId = deps.resolveAgentId(req);
-	const agentScope = deps.getAgentScope(agentId);
-	const { keywordTerms, vectorQuery } = buildRecallQueryShape(userMessage);
+	const { keywordTerms } = buildRecallQueryShape(userMessage);
 
 	// -- Parse and accumulate incoming agent feedback (from previous prompt) --
 	const memoryCfg = deps.loadMemoryConfig(getAgentsDir());
@@ -2731,7 +2820,6 @@ export async function handleUserPromptSubmit(
 	const metadataHeader = `# Current Date & Time\n${now} (${tz})\n`;
 	const expiryWarning = req.sessionKey ? deps.getExpiryWarning(req.sessionKey) : null;
 	const warnings = expiryWarning ? [expiryWarning] : undefined;
-	const pluginContext = buildPluginPromptContributionSection("user-prompt-submit", deps.logger);
 
 	if (submitCfg.enabled === false) {
 		return finalizeUserPromptSubmitSuccess(
@@ -2739,7 +2827,7 @@ export async function handleUserPromptSubmit(
 			userMessage,
 			start,
 			{
-				inject: buildNoStrongMemoryMatchInject(metadataHeader, req.harness, pluginContext),
+				inject: "",
 				memoryCount: 0,
 				warnings,
 			},
@@ -2748,220 +2836,40 @@ export async function handleUserPromptSubmit(
 		);
 	}
 
-	if (keywordTerms.length < 1 || vectorQuery.length === 0 || !existsSync(getMemoryDbPath())) {
-		return finalizeUserPromptSubmitSuccess(
-			req,
-			userMessage,
-			start,
-			{
-				inject: buildNoStrongMemoryMatchInject(metadataHeader, req.harness, pluginContext),
-				memoryCount: 0,
-				warnings,
-			},
-			deps.logger,
-			"no-query",
-		);
-	}
-
-	// `metadataHeader` is deliberately built before this try/catch so even
-	// recall failures can return the per-turn Memory Check guidance.
 	try {
 		const cfg = deps.loadMemoryConfig(getAgentsDir());
-		const recallLimit = submitCfg.recallLimit ?? 10;
-		// userPromptSubmit.maxInjectChars already reads from config — no hardcoded fallback here.
-		// Falls back to pipelineV2.guardrails.contextBudgetChars when not set in agent.yaml.
 		const injectBudget = submitCfg.maxInjectChars ?? cfg.pipelineV2.guardrails.contextBudgetChars;
-		const minScore = resolveUserPromptMinScore(submitCfg.minScore);
-		const embeddingTimeoutMs = cfg.embedding.promptSubmitTimeoutMs ?? DEFAULT_PROMPT_SUBMIT_EMBEDDING_TIMEOUT_MS;
-		const queryTerms = vectorQuery.slice(0, 80);
-		const recallStart = Date.now();
-		let embeddingTimedOut = false;
-		const recall = await deps.hybridRecall(
-			{
-				query: vectorQuery,
-				keywordQuery: vectorQuery,
-				limit: recallLimit,
-				importance_min: 0.3,
-				agentId,
-				readPolicy: agentScope.readPolicy,
-				policyGroup: agentScope.policyGroup,
-				project: req.project,
-				sessionKey: req.sessionKey,
-				recallSurface: "api.hooks.user-prompt-submit",
-				recallMode: "automatic",
-				claimRecallResults: false,
-				trackRecallAccess: false,
-			},
-			cfg,
-			async (text, embeddingCfg) => {
-				const startEmbedding = Date.now();
-				const embedding = await fetchPromptSubmitEmbedding(deps, text, embeddingCfg, embeddingTimeoutMs);
-				const embeddingDuration = Date.now() - startEmbedding;
-				if (!embedding && embeddingDuration >= embeddingTimeoutMs - 5) {
-					embeddingTimedOut = true;
-					deps.logger.warn("hooks", "User prompt submit embedding timed out", {
-						harness: req.harness,
-						project: req.project,
-						sessionKey: req.sessionKey,
-						durationMs: embeddingDuration,
-						timeoutMs: embeddingTimeoutMs,
-					});
-				}
-				return embedding;
-			},
+		const entityContext = buildEntityPromptContext(
+			userMessage,
+			agentId,
+			resolveUserPromptMinScore(submitCfg.minScore),
+			injectBudget,
 		);
-		const recallDuration = Date.now() - recallStart;
-		if (recallDuration > 1000) {
-			deps.logger.warn("hooks", "User prompt submit recall was slow", {
-				harness: req.harness,
-				project: req.project,
-				sessionKey: req.sessionKey,
-				durationMs: recallDuration,
-				resultCount: recall.results.length,
-				embeddingTimedOut,
-			});
-		}
-
-		const recallResults = req.harness === "codex" ? filterCodexNativeMemoryRows(recall.results) : recall.results;
-		const topRaw = recallResults[0]?.score;
-		const topScore = typeof topRaw === "number" ? clampScore01(topRaw) : undefined;
-		const noStructured = recallResults.length === 0 || typeof topScore !== "number" || topScore < 0.4;
-		// Anchor checks must be driven by the current user turn text, not any
-		// expanded/derived recall query shape.
-		const anchorsMissed = queryAnchorsMissingFromRecall(userMessage, recallResults);
-		if (noStructured || anchorsMissed) {
-			const temporalHits = deps.searchTemporalFallback({
-				query: vectorQuery,
-				agentId,
-				sessionKey: req.sessionKey,
-				project: req.project,
-				limit: 4,
-			});
-			if (temporalHits.length > 0) {
-				return finalizeUserPromptSubmitSuccess(
-					req,
-					userMessage,
-					start,
-					buildTemporalFallbackResponse(
-						metadataHeader,
-						req.harness,
-						queryTerms,
-						injectBudget,
-						temporalHits,
-						warnings,
-						pluginContext,
-					),
-					deps.logger,
-				);
-			}
-			if (noStructured) {
-				return finalizeUserPromptSubmitSuccess(
-					req,
-					userMessage,
-					start,
-					{
-						inject: buildNoStrongMemoryMatchInject(metadataHeader, req.harness, pluginContext),
-						memoryCount: 0,
-						warnings,
-					},
-					deps.logger,
-					"no-structured",
-				);
-			}
-		}
-		if (typeof topScore !== "number" || topScore < minScore) {
+		if (entityContext.lines.length === 0) {
 			return finalizeUserPromptSubmitSuccess(
 				req,
 				userMessage,
 				start,
 				{
-					inject: buildNoStrongMemoryMatchInject(metadataHeader, req.harness, pluginContext),
+					inject: "",
 					memoryCount: 0,
+					queryTerms: keywordTerms.join(" ") || undefined,
+					engine: entityContext.engine,
 					warnings,
 				},
 				deps.logger,
-				"low-confidence",
 			);
 		}
-
-		const mapped = recallResults.map((result) => ({
-			...result,
-			pinned: result.pinned ? 1 : 0,
-		}));
-		const promptTerms = extractSubstantiveWords(userMessage);
-		const candidates = buildPromptInjectCandidates(mapped, promptTerms);
-		let budgetFiltered = selectWithBudgetSkippingOversized(candidates, injectBudget);
-		if (shouldRescuePromptInjectSelection(budgetFiltered, candidates)) {
-			const reranked = rerankPromptInjectCandidates(candidates);
-			const overlapFirst = reranked.filter((row) => row.overlap > 0);
-			budgetFiltered = selectWithBudgetSkippingOversized(
-				overlapFirst.length > 0 ? overlapFirst : reranked,
-				injectBudget,
-			);
-		}
-		const budgetSelected = budgetFiltered.slice(0, 5);
-		// omitted reflects only budget truncation, not the 5-item display cap,
-		// so the hint correctly directs users to raise contextBudgetChars.
-		const omitted = Math.max(0, recallResults.length - budgetFiltered.length);
-
-		// Track FTS hits for predictive scorer data collection (full results, pre-dedup)
-		const allMatchedIds = recall.results.map((result) => result.id);
-		deps.trackFtsHits(req.sessionKey, allMatchedIds, deps.resolveAgentId(req));
-
-		const selected = req.sessionKey
-			? claimRecallItems({
-					sessionKey: req.sessionKey,
-					agentId,
-					surface: "api.hooks.user-prompt-submit",
-					mode: "automatic",
-					items: budgetSelected,
-				}).items
-			: budgetSelected;
-
-		if (selected.length === 0) {
-			return finalizeUserPromptSubmitSuccess(
-				req,
-				userMessage,
-				start,
-				{
-					inject: buildNoStrongMemoryMatchInject(metadataHeader, req.harness, pluginContext),
-					memoryCount: 0,
-					warnings,
-				},
-				deps.logger,
-				"dedup-empty",
-			);
-		}
-
-		const lines = selected.map((s) => s.content);
-		if (omitted > 0) {
-			lines.push(
-				`[signet:note] ${omitted} additional ${omitted === 1 ? "match was" : "matches were"} omitted to keep this lightweight (raise memory.guardrails.contextBudgetChars to include more).`,
-			);
-		}
-		let inject = buildPromptRecallInject(metadataHeader, lines, req.harness, pluginContext);
-
-		// Append agent feedback request if enabled and there are injected memories
-		const selectedIds = selected.map((s) => s.id);
-		updateAccessTracking(selectedIds);
-		if (feedbackEnabled && selectedIds.length > 0) {
-			const pi = isPiHarness(req.harness);
-			const toolName = pi ? "signet_memory_feedback" : "mcp__signet__memory_feedback";
-			const instruction = pi
-				? `Rate injected memories using the ${toolName} tool. Pass a ratings map of memory ID to score (-1 to 1). 0=unused, 1=directly helpful, -1=harmful.`
-				: `Rate injected memories using the ${toolName} tool. Pass session_key "${req.sessionKey}" and a ratings map of memory ID to score (-1 to 1). 0=unused, 1=directly helpful, -1=harmful.`;
-			inject += `\n<memory-feedback>\n${instruction}\nIDs: ${selectedIds.join(", ")}\n</memory-feedback>`;
-		}
-
+		const pluginContext = buildPluginPromptContributionSection("user-prompt-submit", deps.logger);
 		return finalizeUserPromptSubmitSuccess(
 			req,
 			userMessage,
 			start,
 			{
-				inject,
-				memoryCount: selected.length,
-				queryTerms,
-				engine: "hybrid",
+				inject: buildEntityContextInject(metadataHeader, entityContext.lines, pluginContext),
+				memoryCount: entityContext.memoryCount,
+				queryTerms: keywordTerms.join(" ") || undefined,
+				engine: "entity-context",
 				warnings,
 			},
 			deps.logger,
@@ -2969,7 +2877,7 @@ export async function handleUserPromptSubmit(
 	} catch (e) {
 		deps.logger.error("hooks", "User prompt submit failed", e as Error);
 		return {
-			inject: buildNoStrongMemoryMatchInject(metadataHeader, req.harness, pluginContext),
+			inject: "",
 			memoryCount: 0,
 			warnings,
 		};

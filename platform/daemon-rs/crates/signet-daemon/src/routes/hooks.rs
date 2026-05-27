@@ -834,38 +834,147 @@ fn trim_for_inject(text: &str, limit: usize) -> String {
     format!("{}...", &trimmed[..end])
 }
 
-fn escape_like(text: &str) -> String {
-    text.replace('\\', "\\\\")
-        .replace('%', "\\%")
-        .replace('_', "\\_")
-}
-
-fn extract_anchor_terms(text: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut seen = std::collections::HashSet::new();
-    for token in text.to_lowercase().split(|c: char| {
-        !c.is_ascii_alphanumeric() && c != '_' && c != ':' && c != '/' && c != '.' && c != '-'
-    }) {
-        if token.len() < 6 {
-            continue;
-        }
-        let has_digit = token.chars().any(|c| c.is_ascii_digit());
-        let has_marker = token.contains('_')
-            || token.contains(':')
-            || token.contains('/')
-            || token.contains('.')
-            || token.contains('-');
-        if !has_digit && !has_marker && token.len() < 18 {
-            continue;
-        }
-        if seen.insert(token.to_string()) {
-            out.push(token.to_string());
-            if out.len() >= 8 {
-                break;
-            }
+fn normalize_prompt_entity_text(text: &str) -> String {
+    let mut out = String::new();
+    let mut prev_space = true;
+    for ch in text.to_lowercase().chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch);
+            prev_space = false;
+        } else if !prev_space {
+            out.push(' ');
+            prev_space = true;
         }
     }
-    out
+    out.trim().to_string()
+}
+
+fn phrase_appears_in_prompt(prompt: &str, phrase: &str) -> bool {
+    let prompt = format!(" {} ", normalize_prompt_entity_text(prompt));
+    let phrase = normalize_prompt_entity_text(phrase);
+    !phrase.is_empty() && prompt.contains(&format!(" {phrase} "))
+}
+
+fn is_low_signal_prompt(prompt: &str) -> bool {
+    let normalized = normalize_prompt_entity_text(prompt);
+    if normalized.is_empty() {
+        return true;
+    }
+    matches!(
+        normalized.as_str(),
+        "cool"
+            | "got it"
+            | "go ahead"
+            | "great"
+            | "k"
+            | "kk"
+            | "nice"
+            | "ok"
+            | "okay"
+            | "okay cool"
+            | "sounds good"
+            | "sure"
+            | "thanks"
+            | "thank you"
+            | "yes"
+            | "yes please"
+            | "yep"
+    )
+}
+
+fn is_prompt_context_term(term: &str) -> bool {
+    term.len() >= 3
+        && !matches!(
+            term,
+            "about"
+                | "actually"
+                | "after"
+                | "all"
+                | "also"
+                | "and"
+                | "any"
+                | "are"
+                | "before"
+                | "but"
+                | "can"
+                | "could"
+                | "did"
+                | "does"
+                | "doing"
+                | "done"
+                | "for"
+                | "from"
+                | "get"
+                | "had"
+                | "has"
+                | "have"
+                | "hey"
+                | "how"
+                | "into"
+                | "its"
+                | "just"
+                | "kind"
+                | "like"
+                | "make"
+                | "more"
+                | "need"
+                | "now"
+                | "okay"
+                | "our"
+                | "out"
+                | "please"
+                | "pretty"
+                | "really"
+                | "right"
+                | "say"
+                | "should"
+                | "some"
+                | "something"
+                | "still"
+                | "sure"
+                | "thanks"
+                | "thank"
+                | "that"
+                | "the"
+                | "their"
+                | "them"
+                | "then"
+                | "there"
+                | "these"
+                | "they"
+                | "this"
+                | "too"
+                | "use"
+                | "very"
+                | "want"
+                | "was"
+                | "well"
+                | "were"
+                | "what"
+                | "when"
+                | "which"
+                | "who"
+                | "why"
+                | "will"
+                | "with"
+                | "would"
+                | "yeah"
+                | "yes"
+                | "you"
+                | "your"
+        )
+        && !term.chars().all(|ch| ch.is_ascii_digit())
+}
+
+fn build_entity_context_inject(metadata_header: &str, lines: &[String]) -> String {
+    let mut parts = vec![
+        metadata_header.trim_end().to_string(),
+        String::new(),
+        "## Relevant Entity Context".to_string(),
+        String::new(),
+    ];
+    parts.extend_from_slice(lines);
+    format!("{}\n", parts.join("\n").trim_end())
 }
 
 fn format_metadata_header() -> String {
@@ -874,38 +983,6 @@ fn format_metadata_header() -> String {
         "# Current Date & Time\n{} ({})\n",
         now.format("%A, %B %-d, %Y at %-I:%M %p"),
         now.format("%Z")
-    )
-}
-
-fn build_prompt_recall_inject(metadata_header: &str, sources: &[String]) -> String {
-    // Keep formatting behavior aligned with TypeScript
-    // `buildPromptRecallInject()` in `platform/daemon/src/hooks.ts`.
-    let mut parts = vec![
-        metadata_header.trim_end().to_string(),
-        String::new(),
-        "## Memory Check".to_string(),
-        String::new(),
-        "Use the memories below as starting context before acting. If the task depends on prior context and anything is missing, run 1-3 targeted recalls with /recall or memory_search. Ask natural questions with entity + event + timeframe when possible. Avoid bag-of-keywords recall queries. Expand with lcm_expand or knowledge_expand only when you need deeper lineage or graph context. Treat graph expansion as supporting context, not proof."
-            .to_string(),
-        String::new(),
-        "## Relevant Memory".to_string(),
-        String::new(),
-    ];
-
-    parts.extend_from_slice(sources);
-    parts.push(String::new());
-
-    parts.push(
-        "If you learn something durable, save it with /remember or memory_store.".to_string(),
-    );
-
-    format!("{}\n", parts.join("\n").trim_end())
-}
-
-fn build_no_strong_memory_match_inject(metadata_header: &str) -> String {
-    format!(
-        "{}\n\n## Memory Check\n\nNo strong automatic memory match was injected for this turn. If the request depends on prior context, preferences, project history, or unresolved work, run 1-3 targeted Signet recalls before executing commands, editing files, or making decisions. Ask natural questions with entity + event + timeframe when possible. Avoid bag-of-keywords recall queries. Treat graph expansion as supporting context, not proof.\n\nIf you learn something durable, save it with /remember or memory_store.\n",
-        metadata_header.trim_end()
     )
 }
 
@@ -955,9 +1032,10 @@ pub async fn prompt_submit(
     let cleaned = strip_untrusted_metadata(message);
 
     // Extract simple query terms for search
-    let terms: Vec<&str> = cleaned
+    let terms: Vec<String> = normalize_prompt_entity_text(&cleaned)
         .split_whitespace()
-        .filter(|w| w.len() >= 3)
+        .filter(|w| is_prompt_context_term(w))
+        .map(str::to_string)
         .take(12)
         .collect();
     let query_terms = terms.join(" ");
@@ -1058,251 +1136,75 @@ pub async fn prompt_submit(
         }
     }
 
-    if query_terms.is_empty() {
+    if query_terms.is_empty() || is_low_signal_prompt(&cleaned) {
         return (
             StatusCode::OK,
             Json(serde_json::json!({
-                "inject": build_no_strong_memory_match_inject(&metadata_header),
+                "inject": "",
                 "memoryCount": 0,
                 "queryTerms": query_terms,
+                "engine": if query_terms.is_empty() { "no-entity" } else { "low-signal" },
             })),
         )
             .into_response();
     }
 
-    let project = body.project.clone();
-    let session_key = body.session_key.clone();
     let query_terms_for_resp = query_terms.clone();
-    // Mirror TS hooks.userPromptSubmit.minScore confidence gate. The TS path
-    // uses calibrated hybridRecall + reranker scores; here we use term-coverage
-    // (matched_terms / total_terms) as a query-relevance proxy until the Rust
-    // prompt_submit path integrates full hybrid scoring.
     let min_score = state
         .config
         .manifest
         .hooks
         .as_ref()
         .map(|h| h.user_prompt_submit.min_score)
-        .unwrap_or(0.8)
-        .clamp(0.0, 1.0);
+        .filter(|score| score.is_finite())
+        .map(|score| score.clamp(0.0, 1.0))
+        .unwrap_or(0.8);
 
     let result = state
         .pool
         .read(move |conn| {
-            let mut terms = query_terms
-                .split_whitespace()
-                .map(str::to_string)
-                .collect::<Vec<_>>();
-            if terms.is_empty() {
-                terms.push(cleaned.clone());
-            }
-            let needles = terms
-                .iter()
-                .take(6)
-                .map(|t| t.to_lowercase())
-                .collect::<Vec<_>>();
-            let like_patterns = needles
-                .iter()
-                .map(|t| format!("%{}%", escape_like(&t.to_lowercase())))
-                .collect::<Vec<_>>();
-
-            // 1) Structured recall from memories (best effort parity with TS hybrid-first path).
-            // NOTE: when full hybrid scoring / reranker integration lands, preserve actual
-            // calibrated scores from the reranker — never synthesize from rank position.
-            let mut mem_sql = String::from(
-                "SELECT id, content, created_at
-                 FROM memories
-                 WHERE deleted = 0",
-            );
-            let mut mem_params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
-            let read_policy: String = conn
+            let has_aliases = conn
                 .query_row(
-                    "SELECT read_policy FROM agents WHERE id = ?1",
-                    rusqlite::params![agent_id.clone()],
-                    |row| row.get(0),
+                    "SELECT COUNT(*) FROM sqlite_master
+                     WHERE type = 'table'
+                       AND name IN ('entities', 'entity_aspects', 'entity_attributes', 'entity_aliases')",
+                    [],
+                    |row| row.get::<_, i64>(0),
                 )
-                .unwrap_or_else(|_| "isolated".to_string());
-            match read_policy.as_str() {
-                "shared" => {
-                    mem_sql.push_str(" AND (visibility = 'global' OR agent_id = ?) AND visibility != 'archived'");
-                    mem_params.push(Box::new(agent_id.clone()));
-                }
-                "group" => {
-                    let group: Option<String> = conn
-                        .query_row(
-                            "SELECT policy_group FROM agents WHERE id = ?1",
-                            rusqlite::params![agent_id.clone()],
-                            |row| row.get(0),
-                        )
-                        .ok()
-                        .flatten();
-                    if let Some(g) = group {
-                        mem_sql.push_str(
-                            " AND ((visibility = 'global' AND agent_id IN (SELECT id FROM agents WHERE policy_group = ?)) OR agent_id = ?) AND visibility != 'archived'",
-                        );
-                        mem_params.push(Box::new(g));
-                        mem_params.push(Box::new(agent_id.clone()));
-                    } else {
-                        mem_sql.push_str(" AND agent_id = ? AND visibility != 'archived'");
-                        mem_params.push(Box::new(agent_id.clone()));
-                    }
-                }
-                _ => {
-                    mem_sql.push_str(" AND agent_id = ? AND visibility != 'archived'");
-                    mem_params.push(Box::new(agent_id.clone()));
-                }
-            }
-            if let Some(ref p) = project {
-                mem_sql.push_str(" AND project = ?");
-                mem_params.push(Box::new(p.clone()));
-            }
-            if !like_patterns.is_empty() {
-                let clauses = like_patterns
-                    .iter()
-                    .map(|_| "LOWER(content) LIKE ? ESCAPE '\\'")
-                    .collect::<Vec<_>>()
-                    .join(" OR ");
-                mem_sql.push_str(" AND (");
-                mem_sql.push_str(&clauses);
-                mem_sql.push(')');
-                for pat in &like_patterns {
-                    mem_params.push(Box::new(pat.clone()));
-                }
-            }
-            mem_sql.push_str(" ORDER BY importance DESC, created_at DESC LIMIT 5");
-            let mem_param_refs: Vec<&dyn rusqlite::types::ToSql> =
-                mem_params.iter().map(|p| p.as_ref()).collect();
-            let mem_rows = match conn.prepare(&mem_sql) {
-                Ok(mut stmt) => stmt
-                    .query_map(mem_param_refs.as_slice(), |row| {
-                        Ok((
-                            row.get::<_, String>(0)?,
-                            row.get::<_, String>(1)?,
-                            row.get::<_, String>(2)?,
-                        ))
-                    })
-                    .ok()
-                    .map(|rows| rows.filter_map(|r| r.ok()).collect::<Vec<_>>())
-                    .unwrap_or_default(),
-                Err(_) => vec![],
-            };
-
-            let anchors = extract_anchor_terms(&cleaned);
-            let anchor_missed = !anchors.is_empty()
-                && !mem_rows
-                    .iter()
-                    .take(8)
-                    .map(|(_, content, _)| content.to_lowercase())
-                    .any(|content| anchors.iter().any(|anchor| content.contains(anchor)));
-
-            // Confidence gate: compute term-coverage for the top result as a
-            // query-relevance proxy (matched_needles / total_needles → [0, 1]).
-            // Replaces the TS calibrated hybridRecall score until full hybrid
-            // scoring lands in this path.
-            let coverage = if !mem_rows.is_empty() && !needles.is_empty() {
-                let top = mem_rows[0].1.to_lowercase();
-                let matched = needles.iter().filter(|n| top.contains(n.as_str())).count();
-                matched as f64 / needles.len() as f64
-            } else {
-                0.0
-            };
-
-            if !mem_rows.is_empty() && !anchor_missed && coverage >= min_score {
-                let lines = mem_rows
-                    .iter()
-                    .map(|(_, content, created_at)| {
-                        format!("- [memory] {} ({})", trim_for_inject(content, 300), created_at)
-                    })
-                    .collect::<Vec<_>>();
+                .unwrap_or(0)
+                == 4;
+            if !has_aliases {
                 return Ok(serde_json::json!({
-                    "inject": build_prompt_recall_inject(&metadata_header, &lines),
-                    "memoryCount": lines.len(),
+                    "inject": "",
+                    "memoryCount": 0,
                     "queryTerms": query_terms_for_resp,
-                    "engine": "hybrid",
+                    "engine": "no-entity",
                 }));
             }
 
-            // 2) Temporal fallback from persisted thread heads.
-            if let Ok(mut stmt) = conn.prepare(
-                "SELECT node_id, sample, latest_at, label, project
-                 FROM memory_thread_heads
+            let entity_rows = match conn.prepare(
+                "SELECT id, name, COALESCE(canonical_name, LOWER(name)) AS matched_text,
+                        'name' AS source, COALESCE(mentions, 0) AS mentions
+                 FROM entities
                  WHERE agent_id = ?1
-                 ORDER BY latest_at DESC LIMIT 24",
+                   AND COALESCE(status, 'active') = 'active'
+                 UNION ALL
+                 SELECT e.id, e.name, a.alias AS matched_text,
+                        'alias' AS source, COALESCE(e.mentions, 0) AS mentions
+                 FROM entity_aliases a
+                 JOIN entities e ON e.id = a.entity_id AND e.agent_id = a.agent_id
+                 WHERE a.agent_id = ?1
+                   AND a.status = 'active'
+                   AND COALESCE(e.status, 'active') = 'active'",
             ) {
-                let rows = stmt
+                Ok(mut stmt) => stmt
                     .query_map([agent_id.clone()], |row| {
                         Ok((
                             row.get::<_, String>(0)?,
                             row.get::<_, String>(1)?,
                             row.get::<_, String>(2)?,
                             row.get::<_, String>(3)?,
-                            row.get::<_, Option<String>>(4)?,
-                        ))
-                    })
-                    .ok()
-                    .map(|rows| rows.filter_map(|r| r.ok()).collect::<Vec<_>>())
-                    .unwrap_or_default();
-
-                let mut picked = Vec::new();
-                for (id, sample, latest_at, label, row_project) in rows {
-                    let lower = sample.to_lowercase();
-                    if !needles.iter().any(|needle| !needle.is_empty() && lower.contains(needle)) {
-                        continue;
-                    }
-                    if let Some(ref want) = project {
-                        if row_project.as_deref() != Some(want.as_str()) {
-                            continue;
-                        }
-                    }
-                    picked.push(format!(
-                        "- [thread {}] {} ({}, {})",
-                        id,
-                        trim_for_inject(&sample, 280),
-                        latest_at,
-                        label
-                    ));
-                    if picked.len() >= 4 {
-                        break;
-                    }
-                }
-                if !picked.is_empty() {
-                    return Ok(serde_json::json!({
-                        "inject": build_prompt_recall_inject(&metadata_header, &picked),
-                        "memoryCount": picked.len(),
-                        "queryTerms": query_terms_for_resp,
-                        "engine": "temporal-fallback",
-                    }));
-                }
-            }
-
-            // 3) Transcript fallback.
-            let mut tx_sql = String::from(
-                "SELECT session_key, content, updated_at, project
-                 FROM session_transcripts
-                 WHERE agent_id = ?",
-            );
-            let mut tx_params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
-            tx_params.push(Box::new(agent_id.clone()));
-            if let Some(ref p) = project {
-                tx_sql.push_str(" AND project = ?");
-                tx_params.push(Box::new(p.clone()));
-            }
-            if let Some(ref sk) = session_key {
-                // Prefer other sessions first, but still allow this session if it is all we have.
-                tx_sql.push_str(" ORDER BY (session_key = ?) ASC, updated_at DESC LIMIT 6");
-                tx_params.push(Box::new(sk.clone()));
-            } else {
-                tx_sql.push_str(" ORDER BY updated_at DESC LIMIT 6");
-            }
-            let tx_param_refs: Vec<&dyn rusqlite::types::ToSql> =
-                tx_params.iter().map(|p| p.as_ref()).collect();
-            let tx_rows = match conn.prepare(&tx_sql) {
-                Ok(mut stmt) => stmt
-                    .query_map(tx_param_refs.as_slice(), |row| {
-                        Ok((
-                            row.get::<_, String>(0)?,
-                            row.get::<_, String>(1)?,
-                            row.get::<_, Option<String>>(2)?,
+                            row.get::<_, i64>(4)?,
                         ))
                     })
                     .ok()
@@ -1311,36 +1213,211 @@ pub async fn prompt_submit(
                 Err(_) => vec![],
             };
 
-            let mut tx_lines = Vec::new();
-            for (sk, content, updated_at) in tx_rows {
-                let lower = content.to_lowercase();
-                if !needles.iter().any(|needle| !needle.is_empty() && lower.contains(needle)) {
-                    continue;
+            let mut matches = entity_rows
+                .into_iter()
+                .filter(|(_, _, matched_text, _, _)| {
+                    phrase_appears_in_prompt(&cleaned, matched_text)
+                })
+                .collect::<Vec<_>>();
+            matches.sort_by(|a, b| {
+                normalize_prompt_entity_text(&b.2)
+                    .len()
+                    .cmp(&normalize_prompt_entity_text(&a.2).len())
+                    .then_with(|| b.4.cmp(&a.4))
+            });
+
+            let mut phrase_entities = std::collections::HashMap::<String, std::collections::HashSet<String>>::new();
+            for (id, _, matched_text, _, _) in &matches {
+                phrase_entities
+                    .entry(normalize_prompt_entity_text(matched_text))
+                    .or_default()
+                    .insert(id.clone());
+            }
+            if phrase_entities.values().any(|ids| ids.len() > 1) {
+                return Ok(serde_json::json!({
+                    "inject": "",
+                    "memoryCount": 0,
+                    "queryTerms": query_terms_for_resp,
+                    "engine": "ambiguous-entity",
+                }));
+            }
+
+            let mut seen = std::collections::HashSet::new();
+            let entity_matches = matches
+                .into_iter()
+                .filter(|(id, _, _, _, _)| seen.insert(id.clone()))
+                .take(2)
+                .collect::<Vec<_>>();
+            if entity_matches.is_empty() {
+                return Ok(serde_json::json!({
+                    "inject": "",
+                    "memoryCount": 0,
+                    "queryTerms": query_terms_for_resp,
+                    "engine": "no-entity",
+                }));
+            }
+
+            let prompt_terms = normalize_prompt_entity_text(&cleaned)
+                .split_whitespace()
+                .filter(|term| is_prompt_context_term(term))
+                .map(str::to_string)
+                .collect::<std::collections::HashSet<_>>();
+            let mut lines = Vec::new();
+            for (entity_id, entity_name, matched_text, _, _) in entity_matches {
+                let entity_terms = normalize_prompt_entity_text(&format!("{entity_name} {matched_text}"))
+                    .split_whitespace()
+                    .map(str::to_string)
+                    .collect::<std::collections::HashSet<_>>();
+                let context_terms = prompt_terms
+                    .iter()
+                    .filter(|term| !entity_terms.contains(*term))
+                    .cloned()
+                    .collect::<std::collections::HashSet<_>>();
+                let allow_weight_fallback = context_terms.is_empty();
+                let aspects = match conn.prepare(
+                    "SELECT id, name, canonical_name, weight
+                     FROM entity_aspects
+                     WHERE entity_id = ?1
+                       AND agent_id = ?2
+                       AND COALESCE(status, 'active') = 'active'
+                     ORDER BY weight DESC, name ASC
+                     LIMIT 12",
+                ) {
+                    Ok(mut stmt) => stmt
+                        .query_map(rusqlite::params![entity_id, agent_id.clone()], |row| {
+                            Ok((
+                                row.get::<_, String>(0)?,
+                                row.get::<_, String>(1)?,
+                                row.get::<_, String>(2)?,
+                                row.get::<_, f64>(3)?,
+                            ))
+                        })
+                        .ok()
+                        .map(|rows| rows.filter_map(|r| r.ok()).collect::<Vec<_>>())
+                        .unwrap_or_default(),
+                    Err(_) => vec![],
+                };
+                let mut selected_aspects = Vec::new();
+                for (aspect_id, aspect_name, canonical_name, weight) in aspects {
+                    let attr_texts = match conn.prepare(
+                        "SELECT content, COALESCE(group_key, ''), COALESCE(claim_key, '')
+                         FROM entity_attributes
+                         WHERE aspect_id = ?1
+                           AND agent_id = ?2
+                           AND status = 'active'
+                         ORDER BY importance DESC, updated_at DESC
+                         LIMIT 12",
+                    ) {
+                        Ok(mut stmt) => stmt
+                            .query_map(rusqlite::params![aspect_id, agent_id.clone()], |row| {
+                                Ok(format!(
+                                    "{} {} {}",
+                                    row.get::<_, String>(0)?,
+                                    row.get::<_, String>(1)?,
+                                    row.get::<_, String>(2)?
+                                ))
+                            })
+                            .ok()
+                            .map(|rows| rows.filter_map(|r| r.ok()).collect::<Vec<_>>())
+                            .unwrap_or_default(),
+                        Err(_) => vec![],
+                    };
+                    if attr_texts.is_empty() {
+                        continue;
+                    }
+                    let aspect_text = normalize_prompt_entity_text(&format!("{aspect_name} {canonical_name}"));
+                    let aspect_hit = aspect_text
+                        .split_whitespace()
+                        .any(|term| context_terms.contains(term));
+                    let attr_text = normalize_prompt_entity_text(&attr_texts.join(" "));
+                    let attr_hit = attr_text
+                        .split_whitespace()
+                        .any(|term| context_terms.contains(term));
+                    let score = if aspect_hit {
+                        1.0
+                    } else if attr_hit {
+                        0.75 + weight.clamp(0.0, 1.0) * 0.25
+                    } else if allow_weight_fallback {
+                        weight.clamp(0.0, 1.0)
+                    } else {
+                        0.0
+                    };
+                    if score >= min_score {
+                        selected_aspects.push((aspect_id, aspect_name));
+                    }
+                    if selected_aspects.len() >= 3 {
+                        break;
+                    }
                 }
-                let excerpt = trim_for_inject(&content, 260);
-                tx_lines.push(format!(
-                    "- [transcript {}] {} ({})",
-                    sk,
-                    excerpt,
-                    updated_at.unwrap_or_else(|| "unknown".to_string())
-                ));
-                if tx_lines.len() >= 3 {
+                for (aspect_id, aspect_name) in selected_aspects {
+                    let attrs = match conn.prepare(
+                        "SELECT kind, content, COALESCE(group_key, 'general'), COALESCE(claim_key, 'uncategorized'),
+                                COALESCE(source_kind, ''), COALESCE(source_id, ''), COALESCE(memory_id, ''),
+                                COALESCE(version, 1)
+                         FROM entity_attributes
+                         WHERE aspect_id = ?1
+                           AND agent_id = ?2
+                           AND status = 'active'
+                         ORDER BY CASE kind WHEN 'constraint' THEN 0 ELSE 1 END, importance DESC, updated_at DESC
+                         LIMIT 8",
+                    ) {
+                        Ok(mut stmt) => stmt
+                            .query_map(rusqlite::params![aspect_id, agent_id.clone()], |row| {
+                                Ok((
+                                    row.get::<_, String>(0)?,
+                                    row.get::<_, String>(1)?,
+                                    row.get::<_, String>(2)?,
+                                    row.get::<_, String>(3)?,
+                                    row.get::<_, String>(4)?,
+                                    row.get::<_, String>(5)?,
+                                    row.get::<_, String>(6)?,
+                                    row.get::<_, i64>(7)?,
+                                ))
+                            })
+                            .ok()
+                            .map(|rows| rows.filter_map(|r| r.ok()).collect::<Vec<_>>())
+                            .unwrap_or_default(),
+                        Err(_) => vec![],
+                    };
+                    for (kind, content, group, claim, source_kind, source_id, memory_id, version) in attrs {
+                        let source = if !source_kind.is_empty() && !source_id.is_empty() {
+                            format!("{source_kind}:{source_id}")
+                        } else if !memory_id.is_empty() {
+                            format!("memory:{memory_id}")
+                        } else {
+                            format!("v{version}")
+                        };
+                        lines.push(format!(
+                            "- [{kind}] {entity_name} / {aspect_name} / {group} / {claim}: {} ({source})",
+                            trim_for_inject(&content, 240)
+                        ));
+                        if lines.len() >= 8 {
+                            break;
+                        }
+                    }
+                    if lines.len() >= 8 {
+                        break;
+                    }
+                }
+                if lines.len() >= 8 {
                     break;
                 }
             }
-            if !tx_lines.is_empty() {
+
+            if lines.is_empty() {
                 return Ok(serde_json::json!({
-                    "inject": build_prompt_recall_inject(&metadata_header, &tx_lines),
-                    "memoryCount": tx_lines.len(),
+                    "inject": "",
+                    "memoryCount": 0,
                     "queryTerms": query_terms_for_resp,
-                    "engine": "transcript-fallback",
+                    "engine": "no-aspect-hit",
                 }));
             }
 
             Ok(serde_json::json!({
-                "inject": build_no_strong_memory_match_inject(&metadata_header),
-                "memoryCount": 0,
+                "inject": build_entity_context_inject(&metadata_header, &lines),
+                "memoryCount": lines.len(),
                 "queryTerms": query_terms_for_resp,
+                "engine": "entity-context",
             }))
         })
         .await;
@@ -2886,7 +2963,8 @@ mod tests {
     use serde_json::Value;
     use sha2::{Digest, Sha256};
     use signet_core::config::{
-        AgentManifest, DaemonConfig, MemoryManifestConfig, PipelineV2Config,
+        AgentManifest, DaemonConfig, HooksConfig, MemoryManifestConfig, PipelineV2Config,
+        UserPromptSubmitHookConfig,
     };
     use signet_core::db::{DbPool, Priority};
     use tempfile::TempDir;
@@ -2897,12 +2975,11 @@ mod tests {
 
     use super::{
         CHECKPOINT_MIN_DELTA, CheckpointExtractBody, CompactionCompleteBody, PromptSubmitBody,
-        SessionEndBody, build_no_strong_memory_match_inject, build_signet_system_prompt,
-        compaction_complete, extract_delta, normalize_session_transcript, parse_visibility,
-        prompt_submit, require_session_scope_for_write, resolve_audit_token,
-        resolve_compaction_project, resolve_remember_agent, session_agent_id,
-        session_checkpoint_extract, session_end, session_transcript_content,
-        strip_untrusted_metadata, upsert_session_transcript,
+        SessionEndBody, build_signet_system_prompt, compaction_complete, extract_delta,
+        normalize_session_transcript, parse_visibility, prompt_submit,
+        require_session_scope_for_write, resolve_audit_token, resolve_compaction_project,
+        resolve_remember_agent, session_agent_id, session_checkpoint_extract, session_end,
+        session_transcript_content, strip_untrusted_metadata, upsert_session_transcript,
     };
     use signet_services::session::{RuntimePath, SessionTracker};
 
@@ -2924,17 +3001,10 @@ mod tests {
         })
     }
 
-    #[test]
-    fn no_strong_memory_match_inject_keeps_save_hint() {
-        let inject = build_no_strong_memory_match_inject("# Current Date & Time\nnow\n");
-
-        assert!(inject.contains("## Memory Check"));
-        assert!(inject.contains("No strong automatic memory match was injected"));
-        assert!(inject.contains("run 1-3 targeted Signet recalls before executing commands"));
-        assert!(inject.contains("save it with /remember or memory_store"));
-    }
-
-    fn test_state(name: &str) -> (Arc<AppState>, tokio::task::JoinHandle<()>, TempDir) {
+    fn test_state_with_manifest(
+        name: &str,
+        configure: impl FnOnce(&mut AgentManifest),
+    ) -> (Arc<AppState>, tokio::task::JoinHandle<()>, TempDir) {
         let tmp = tempfile::Builder::new().prefix(name).tempdir().unwrap();
         std::fs::create_dir_all(tmp.path().join("memory")).unwrap();
         std::fs::create_dir_all(tmp.path().join(".daemon/logs")).unwrap();
@@ -2942,6 +3012,7 @@ mod tests {
         let mut memory = MemoryManifestConfig::default();
         memory.pipeline_v2 = Some(PipelineV2Config::default());
         manifest.memory = Some(memory);
+        configure(&mut manifest);
         let cfg = DaemonConfig {
             base_path: tmp.path().to_path_buf(),
             db_path: tmp.path().join("memory").join("memories.db"),
@@ -2963,6 +3034,10 @@ mod tests {
             AuthRateLimiter::from_rules(&default_limits()),
         ));
         (state, writer, tmp)
+    }
+
+    fn test_state(name: &str) -> (Arc<AppState>, tokio::task::JoinHandle<()>, TempDir) {
+        test_state_with_manifest(name, |_| {})
     }
 
     #[tokio::test]
@@ -3490,25 +3565,57 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn prompt_submit_formats_temporal_fallback_as_lightweight_recall_block() {
-        let (state, writer, _tmp) = test_state("hooks-prompt-submit-structured-brief");
+    async fn prompt_submit_injects_entity_context_for_active_alias() {
+        let (state, writer, _tmp) = test_state("hooks-prompt-submit-entity-context");
         state
             .pool
             .write(Priority::Low, move |conn| {
                 conn.execute(
-                    "INSERT INTO memory_thread_heads (agent_id, thread_key, label, project, session_key, source_type, source_ref, harness, node_id, latest_at, sample, updated_at)
-                     VALUES (?1, ?2, ?3, ?4, ?5, 'summary', ?6, 'test', ?7, ?8, ?9, ?8)",
+                    "INSERT INTO entities (id, name, canonical_name, entity_type, description, agent_id, mentions, created_at, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, 10, ?7, ?7)",
                     rusqlite::params![
+                        "entity-signet",
+                        "Signet",
+                        "signet",
+                        "project",
+                        "Source-backed agent continuity substrate",
                         "agent-a",
-                        "thread-prompt-structured",
-                        "recent work",
-                        "platform/daemon-rs",
-                        "sess-prompt-structured",
-                        "summary-node-1",
-                        "node-1",
-                        "2026-04-06T22:39:00Z",
-                        "prompt submit observability review now uses structured recall formatting",
+                        "2026-05-27T00:00:00Z",
                     ],
+                )?;
+                conn.execute(
+                    "INSERT INTO entity_aliases (id, entity_id, agent_id, alias, canonical_alias, confidence, source, status, created_at, updated_at)
+                     VALUES ('alias-signetai', 'entity-signet', 'agent-a', 'SignetAI', 'signetai', 1.0, 'test', 'active', ?1, ?1)",
+                    rusqlite::params!["2026-05-27T00:00:00Z"],
+                )?;
+                conn.execute(
+                    "INSERT INTO entity_aspects (id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at)
+                     VALUES ('aspect-architecture', 'entity-signet', 'agent-a', 'architecture', 'architecture', 0.9, ?1, ?1)",
+                    rusqlite::params!["2026-05-27T00:00:00Z"],
+                )?;
+                conn.execute(
+                    "INSERT INTO entity_aspects (id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at)
+                     VALUES ('aspect-marketing', 'entity-signet', 'agent-a', 'marketing', 'marketing', 0.2, ?1, ?1)",
+                    rusqlite::params!["2026-05-27T00:00:00Z"],
+                )?;
+                conn.execute(
+                    "INSERT INTO entity_attributes
+                     (id, aspect_id, agent_id, memory_id, kind, content, normalized_content, confidence, importance,
+                      status, group_key, claim_key, source_kind, source_id, created_at, updated_at)
+                     VALUES ('attr-architecture', 'aspect-architecture', 'agent-a', NULL, 'attribute',
+                      'Prompt context should come from entity current views.',
+                      'prompt context should come from entity current views', 0.95, 0.9, 'active',
+                      'runtime', 'prompt_context', 'memory', 'mem-architecture', ?1, ?1)",
+                    rusqlite::params!["2026-05-27T00:00:00Z"],
+                )?;
+                conn.execute(
+                    "INSERT INTO entity_attributes
+                     (id, aspect_id, agent_id, memory_id, kind, content, normalized_content, confidence, importance,
+                      status, group_key, claim_key, created_at, updated_at)
+                     VALUES ('attr-marketing', 'aspect-marketing', 'agent-a', NULL, 'attribute',
+                      'Marketing copy should stay secondary.', 'marketing copy', 0.8, 0.3, 'active',
+                      'copy', 'positioning', ?1, ?1)",
+                    rusqlite::params!["2026-05-27T00:00:00Z"],
                 )?;
                 Ok(serde_json::Value::Null)
             })
@@ -3522,10 +3629,10 @@ mod tests {
                 harness: Some("test".to_string()),
                 project: Some("platform/daemon-rs".to_string()),
                 agent_id: Some("agent-a".to_string()),
-                user_message: Some("show prompt submit observability review".to_string()),
+                user_message: Some("Should SignetAI architecture use current views?".to_string()),
                 user_prompt: None,
                 last_assistant_message: None,
-                session_key: Some("sess-prompt-structured".to_string()),
+                session_key: Some("sess-prompt-entity".to_string()),
                 transcript: None,
                 transcript_path: None,
                 runtime_path: None,
@@ -3538,19 +3645,133 @@ mod tests {
         let inject = body["inject"].as_str().unwrap_or_default();
         assert_eq!(
             body["engine"],
-            serde_json::Value::String("temporal-fallback".to_string())
+            serde_json::Value::String("entity-context".to_string())
         );
-        assert!(inject.contains("## Memory Check"));
-        assert!(inject.contains("## Relevant Memory"));
-        assert!(inject.contains("[thread node-1]"));
+        assert!(inject.contains("## Relevant Entity Context"));
+        assert!(inject.contains("Signet / architecture / runtime / prompt_context"));
+        assert!(inject.contains("Prompt context should come from entity current views."));
+        assert!(!inject.contains("## Relevant Memory"));
+        assert!(!inject.contains("Marketing copy should stay secondary"));
+
+        drop(state);
+        let _ = writer.await;
+    }
+
+    #[tokio::test]
+    async fn prompt_submit_preserves_zero_min_score_config() {
+        let (state, writer, _tmp) =
+            test_state_with_manifest("hooks-prompt-submit-zero-min-score", |manifest| {
+                manifest.hooks = Some(HooksConfig {
+                    user_prompt_submit: UserPromptSubmitHookConfig {
+                        min_score: 0.0,
+                        ..Default::default()
+                    },
+                });
+            });
+        state
+            .pool
+            .write(Priority::Low, move |conn| {
+                conn.execute(
+                    "INSERT INTO entities (id, name, canonical_name, entity_type, description, agent_id, mentions, created_at, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, 10, ?7, ?7)",
+                    rusqlite::params![
+                        "entity-signet",
+                        "Signet",
+                        "signet",
+                        "project",
+                        "Source-backed agent continuity substrate",
+                        "agent-a",
+                        "2026-05-27T00:00:00Z",
+                    ],
+                )?;
+                conn.execute(
+                    "INSERT INTO entity_aliases (id, entity_id, agent_id, alias, canonical_alias, confidence, source, status, created_at, updated_at)
+                     VALUES ('alias-signetai', 'entity-signet', 'agent-a', 'SignetAI', 'signetai', 1.0, 'test', 'active', ?1, ?1)",
+                    rusqlite::params!["2026-05-27T00:00:00Z"],
+                )?;
+                conn.execute(
+                    "INSERT INTO entity_aspects (id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at)
+                     VALUES ('aspect-low-weight', 'entity-signet', 'agent-a', 'low weight', 'low weight', 0.2, ?1, ?1)",
+                    rusqlite::params!["2026-05-27T00:00:00Z"],
+                )?;
+                conn.execute(
+                    "INSERT INTO entity_attributes
+                     (id, aspect_id, agent_id, memory_id, kind, content, normalized_content, confidence, importance,
+                      status, group_key, claim_key, created_at, updated_at)
+                     VALUES ('attr-low-weight', 'aspect-low-weight', 'agent-a', NULL, 'attribute',
+                      'Entity-only prompts can still opt into low-weight current views.',
+                      'entity only prompts can still opt into low weight current views', 0.8, 0.2, 'active',
+                      'runtime', 'min_score_zero', ?1, ?1)",
+                    rusqlite::params!["2026-05-27T00:00:00Z"],
+                )?;
+                Ok(serde_json::Value::Null)
+            })
+            .await
+            .unwrap();
+
+        let resp = prompt_submit(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(PromptSubmitBody {
+                harness: Some("test".to_string()),
+                project: Some("platform/daemon-rs".to_string()),
+                agent_id: Some("agent-a".to_string()),
+                user_message: Some("SignetAI".to_string()),
+                user_prompt: None,
+                last_assistant_message: None,
+                session_key: Some("sess-prompt-zero-min-score".to_string()),
+                transcript: None,
+                transcript_path: None,
+                runtime_path: None,
+            }),
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = test_json(resp).await;
+        let inject = body["inject"].as_str().unwrap_or_default();
+        assert_eq!(
+            body["engine"],
+            serde_json::Value::String("entity-context".to_string())
+        );
+        assert!(inject.contains("Signet / low weight / runtime / min_score_zero"));
         assert!(
-            inject.contains(
-                "prompt submit observability review now uses structured recall formatting"
-            )
+            inject.contains("Entity-only prompts can still opt into low-weight current views.")
         );
-        assert!(inject.contains("Use the memories below as starting context before acting"));
-        assert!(inject.contains("run 1-3 targeted recalls with /recall or memory_search"));
-        assert!(!inject.contains("[signet:recall"));
+
+        drop(state);
+        let _ = writer.await;
+    }
+
+    #[tokio::test]
+    async fn prompt_submit_without_known_entity_stays_silent() {
+        let (state, writer, _tmp) = test_state("hooks-prompt-submit-no-entity");
+
+        let resp = prompt_submit(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(PromptSubmitBody {
+                harness: Some("test".to_string()),
+                project: Some("platform/daemon-rs".to_string()),
+                agent_id: Some("agent-a".to_string()),
+                user_message: Some("show prompt submit observability review".to_string()),
+                user_prompt: None,
+                last_assistant_message: None,
+                session_key: Some("sess-prompt-silent".to_string()),
+                transcript: None,
+                transcript_path: None,
+                runtime_path: None,
+            }),
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = test_json(resp).await;
+        assert_eq!(body["inject"], serde_json::Value::String(String::new()));
+        assert_eq!(
+            body["engine"],
+            serde_json::Value::String("no-entity".to_string())
+        );
 
         drop(state);
         let _ = writer.await;

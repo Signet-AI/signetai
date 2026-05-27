@@ -662,6 +662,19 @@ export interface Entity {
 	updatedAt: string;
 }
 
+export interface EntityAlias {
+	readonly id: string;
+	readonly entityId: string;
+	readonly agentId: string;
+	readonly alias: string;
+	readonly canonicalAlias: string;
+	readonly confidence: number;
+	readonly source: string | null;
+	readonly status: OntologyRowStatus;
+	readonly createdAt: string;
+	readonly updatedAt: string;
+}
+
 export interface Relation {
 	id: string;
 	sourceEntityId: string;

@@ -31,7 +31,7 @@ describe("registerOntologyCommands", () => {
 		const names = (parent: Command, name: string): readonly string[] =>
 			parent.commands.find((cmd) => cmd.name() === name)?.commands.map((cmd) => cmd.name()) ?? [];
 		expect(names(ontology, "entity")).toEqual(
-			expect.arrayContaining(["create", "rename", "merge", "merge-plan", "archive"]),
+			expect.arrayContaining(["create", "rename", "merge", "merge-plan", "archive", "alias"]),
 		);
 		expect(names(ontology, "claim")).toEqual(expect.arrayContaining(["set", "versions", "show", "archive", "restore"]));
 		expect(names(ontology, "aspect")).toEqual(expect.arrayContaining(["create", "rename", "archive"]));
@@ -40,6 +40,91 @@ describe("registerOntologyCommands", () => {
 		expect(names(ontology, "assertion")).toEqual(
 			expect.arrayContaining(["show", "create", "link-claim", "archive", "supersede", "import"]),
 		);
+	});
+
+	test("entity alias commands call ontology alias endpoints", async () => {
+		const calls: Array<{ readonly method: string; readonly path: string; readonly body?: unknown }> = [];
+		const lines: string[] = [];
+		console.log = (line?: unknown) => {
+			lines.push(String(line ?? ""));
+		};
+
+		const program = new Command();
+		registerOntologyCommands(program, {
+			ensureDaemonForSecrets: async () => true,
+			secretApiCall: async (method, path, body) => {
+				calls.push({ method, path, body });
+				return {
+					ok: true,
+					data: {
+						item: { id: "alias-1", alias: "SignetAI", status: "active", confidence: 0.9 },
+						items: [{ id: "alias-1", alias: "SignetAI", status: "active", confidence: 0.9 }],
+					},
+				};
+			},
+		});
+
+		await program.parseAsync([
+			"node",
+			"test",
+			"ontology",
+			"entity",
+			"alias",
+			"list",
+			"entity-signet",
+			"--status",
+			"all",
+			"--agent",
+			"ant",
+		]);
+		await program.parseAsync([
+			"node",
+			"test",
+			"ontology",
+			"entity",
+			"alias",
+			"add",
+			"entity-signet",
+			"SignetAI",
+			"--confidence",
+			"0.9",
+			"--source",
+			"operator",
+			"--agent",
+			"ant",
+		]);
+		await program.parseAsync([
+			"node",
+			"test",
+			"ontology",
+			"entity",
+			"alias",
+			"archive",
+			"entity-signet",
+			"alias-1",
+			"--agent",
+			"ant",
+		]);
+
+		expect(calls).toEqual([
+			{
+				method: "GET",
+				path: "/api/ontology/entities/entity-signet/aliases?agent_id=ant&status=all",
+				body: undefined,
+			},
+			{
+				method: "POST",
+				path: "/api/ontology/entities/entity-signet/aliases?agent_id=ant",
+				body: { alias: "SignetAI", confidence: 0.9, source: "operator" },
+			},
+			{
+				method: "DELETE",
+				path: "/api/ontology/entities/entity-signet/aliases/alias-1?agent_id=ant",
+				body: undefined,
+			},
+		]);
+		expect(lines.join("\n")).toContain("Entity Aliases");
+		expect(lines.join("\n")).toContain("SignetAI");
 	});
 
 	test("objects lists ontology objects through knowledge navigation", async () => {

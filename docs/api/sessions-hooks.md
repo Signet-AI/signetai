@@ -56,8 +56,9 @@ Code parent activity in the same project.
 
 ### POST /api/hooks/user-prompt-submit
 
-Called on each user message. Returns memories relevant to the current prompt
-for in-context injection.
+Called on each user message. Returns compact entity current-view context only
+when the prompt mentions a known ontology entity or active alias and at least
+one aspect clears the confidence gate.
 
 **Request body**
 
@@ -78,11 +79,13 @@ for in-context injection.
 `userPrompt`, `lastAssistantMessage`, `transcriptPath`, and inline `transcript`
 are optional.
 
-Prompt-submit retrieval prefers structured memory recall. When structured
-recall is weak or empty, the daemon may attempt temporal-summary fallback
-(session DAG artifacts). Raw transcript search is not injected on
-prompt-submit; use the dedicated `session_search` MCP/API surface when a
-caller needs transcript evidence.
+Prompt-submit does not run generic memory recall and has no fallback injection.
+Low-signal prompts, unknown entities, ambiguous entity mentions, and prompts
+where no aspect clears `hooks.userPromptSubmit.minScore` return `inject: ""`.
+Explicit recall is still available through `/api/memory/recall` and MCP/CLI
+recall tools. Raw transcript search is not injected on prompt-submit; use the
+dedicated `session_search` MCP/API surface when a caller needs transcript
+evidence.
 
 ### POST /api/hooks/session-end
 

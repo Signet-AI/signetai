@@ -131,7 +131,7 @@ CREATE TABLE entities (
 			description TEXT,
 			created_at TEXT NOT NULL,
 			updated_at TEXT NOT NULL
-		, canonical_name TEXT, mentions INTEGER DEFAULT 0, embedding BLOB, agent_id TEXT NOT NULL DEFAULT 'default', pinned INTEGER NOT NULL DEFAULT 0, pinned_at TEXT);
+		, canonical_name TEXT, mentions INTEGER DEFAULT 0, embedding BLOB, agent_id TEXT NOT NULL DEFAULT 'default', pinned INTEGER NOT NULL DEFAULT 0, pinned_at TEXT, status TEXT NOT NULL DEFAULT 'active');
 CREATE TABLE relations (
 			id TEXT PRIMARY KEY,
 			source_entity_id TEXT NOT NULL,
@@ -408,6 +408,7 @@ CREATE TABLE entity_aspects (
 			weight         REAL NOT NULL DEFAULT 0.5,
 			created_at     TEXT NOT NULL DEFAULT (datetime('now')),
 			updated_at     TEXT NOT NULL DEFAULT (datetime('now')),
+			status          TEXT NOT NULL DEFAULT 'active',
 			UNIQUE(entity_id, canonical_name)
 		);
 CREATE INDEX idx_entity_aspects_entity ON entity_aspects(entity_id);
@@ -427,11 +428,31 @@ CREATE TABLE entity_attributes (
 			superseded_by      TEXT,
 			created_at         TEXT NOT NULL DEFAULT (datetime('now')),
 			updated_at         TEXT NOT NULL DEFAULT (datetime('now'))
+		, version INTEGER NOT NULL DEFAULT 1
 		);
 CREATE INDEX idx_entity_attributes_aspect ON entity_attributes(aspect_id);
 CREATE INDEX idx_entity_attributes_agent ON entity_attributes(agent_id);
 CREATE INDEX idx_entity_attributes_kind ON entity_attributes(kind);
 CREATE INDEX idx_entity_attributes_status ON entity_attributes(status);
+CREATE TABLE entity_aliases (
+    id TEXT PRIMARY KEY,
+    entity_id TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+    agent_id TEXT NOT NULL DEFAULT 'default',
+    alias TEXT NOT NULL,
+    canonical_alias TEXT NOT NULL,
+    confidence REAL NOT NULL DEFAULT 1.0,
+    source TEXT,
+    status TEXT NOT NULL DEFAULT 'active',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE UNIQUE INDEX idx_entity_aliases_active_unique
+    ON entity_aliases(agent_id, canonical_alias)
+    WHERE status = 'active';
+CREATE INDEX idx_entity_aliases_entity
+    ON entity_aliases(agent_id, entity_id, status);
+CREATE INDEX idx_entity_aliases_lookup
+    ON entity_aliases(agent_id, canonical_alias, status);
 CREATE TABLE entity_dependencies (
 			id                TEXT PRIMARY KEY,
 			source_entity_id  TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,

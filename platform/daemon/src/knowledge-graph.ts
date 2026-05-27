@@ -13,6 +13,7 @@ import type {
 	AttributeStatus,
 	DependencyType,
 	Entity,
+	EntityAlias,
 	EntityAspect,
 	EntityAttribute,
 	EntityDependency,
@@ -61,6 +62,21 @@ function rowToEntity(r: Record<string, unknown>): Entity {
 		archiveReason: typeof r.archive_reason === "string" ? r.archive_reason : null,
 		proposalId: typeof r.proposal_id === "string" ? r.proposal_id : null,
 		proposalEvidence: parseJsonArray(r.proposal_evidence),
+		createdAt: r.created_at as string,
+		updatedAt: r.updated_at as string,
+	};
+}
+
+function rowToEntityAlias(r: Record<string, unknown>): EntityAlias {
+	return {
+		id: r.id as string,
+		entityId: r.entity_id as string,
+		agentId: r.agent_id as string,
+		alias: r.alias as string,
+		canonicalAlias: r.canonical_alias as string,
+		confidence: typeof r.confidence === "number" ? r.confidence : 1,
+		source: typeof r.source === "string" ? r.source : null,
+		status: r.status === "archived" ? "archived" : "active",
 		createdAt: r.created_at as string,
 		updatedAt: r.updated_at as string,
 	};
@@ -974,6 +990,96 @@ export function getKnowledgeEntityByName(
 ): KnowledgeEntityDetail | null {
 	const resolved = resolveNamedEntity(accessor, params);
 	return resolved ? getKnowledgeEntityDetail(accessor, resolved.id, params.agentId) : null;
+}
+
+export function listEntityAliases(
+	accessor: DbAccessor,
+	params: {
+		readonly agentId: string;
+		readonly entityId: string;
+		readonly status?: "active" | "archived" | "all";
+	},
+): readonly EntityAlias[] {
+	return accessor.withReadDb((db) => {
+		const conditions = ["entity_id = ?", "agent_id = ?"];
+		const args: string[] = [params.entityId, params.agentId];
+		if (params.status && params.status !== "all") {
+			conditions.push("status = ?");
+			args.push(params.status);
+		} else if (!params.status) {
+			conditions.push("status = 'active'");
+		}
+		const rows = db
+			.prepare(
+				`SELECT *
+				 FROM entity_aliases
+				 WHERE ${conditions.join(" AND ")}
+				 ORDER BY status ASC, alias ASC`,
+			)
+			.all(...args) as Array<Record<string, unknown>>;
+		return rows.map(rowToEntityAlias);
+	});
+}
+
+export function createEntityAlias(
+	accessor: DbAccessor,
+	params: {
+		readonly agentId: string;
+		readonly entityId: string;
+		readonly alias: string;
+		readonly confidence?: number;
+		readonly source?: string | null;
+	},
+): EntityAlias {
+	const alias = params.alias.trim();
+	const canonical = toCanonicalName(alias);
+	if (canonical.length === 0) {
+		throw new Error("alias is required");
+	}
+	const confidence =
+		typeof params.confidence === "number" && Number.isFinite(params.confidence)
+			? Math.min(Math.max(params.confidence, 0), 1)
+			: 1;
+	const ts = now();
+	const id = crypto.randomUUID();
+	return accessor.withWriteTx((db) => {
+		const entity = db
+			.prepare("SELECT id FROM entities WHERE id = ? AND agent_id = ? AND COALESCE(status, 'active') = 'active'")
+			.get(params.entityId, params.agentId) as { id: string } | undefined;
+		if (!entity) throw new Error("Entity not found");
+		db.prepare(
+			`INSERT INTO entity_aliases
+			 (id, entity_id, agent_id, alias, canonical_alias, confidence, source, status, created_at, updated_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)`,
+		).run(id, params.entityId, params.agentId, alias, canonical, confidence, params.source ?? null, ts, ts);
+		const row = db.prepare("SELECT * FROM entity_aliases WHERE id = ? AND agent_id = ?").get(id, params.agentId) as
+			| Record<string, unknown>
+			| undefined;
+		if (!row) throw new Error("Alias not found after insert");
+		return rowToEntityAlias(row);
+	});
+}
+
+export function archiveEntityAlias(
+	accessor: DbAccessor,
+	params: {
+		readonly agentId: string;
+		readonly entityId: string;
+		readonly aliasId: string;
+	},
+): EntityAlias | null {
+	const ts = now();
+	return accessor.withWriteTx((db) => {
+		db.prepare(
+			`UPDATE entity_aliases
+			 SET status = 'archived', updated_at = ?
+			 WHERE id = ? AND entity_id = ? AND agent_id = ?`,
+		).run(ts, params.aliasId, params.entityId, params.agentId);
+		const row = db
+			.prepare("SELECT * FROM entity_aliases WHERE id = ? AND entity_id = ? AND agent_id = ?")
+			.get(params.aliasId, params.entityId, params.agentId) as Record<string, unknown> | undefined;
+		return row ? rowToEntityAlias(row) : null;
+	});
 }
 
 export function getEntityAspectsByName(
@@ -1998,9 +2104,9 @@ function placeholders(count: number): string {
 function getConstellationVisibleAgentIds(db: ReadDb, agentId: string): readonly string[] {
 	const ids = new Set<string>([agentId]);
 	try {
-		const rows = db
-			.prepare("SELECT id FROM agents WHERE id = ? OR read_policy = 'shared'")
-			.all(agentId) as Array<Record<string, unknown>>;
+		const rows = db.prepare("SELECT id FROM agents WHERE id = ? OR read_policy = 'shared'").all(agentId) as Array<
+			Record<string, unknown>
+		>;
 		for (const row of rows) {
 			if (typeof row.id === "string" && row.id.trim().length > 0) {
 				ids.add(row.id);

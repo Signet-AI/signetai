@@ -106,8 +106,8 @@ mode expectations across harness paths.
 
 | Harness path | Prompt retrieval order | Thread-head continuity | Compaction artifact persistence | Forced post-event MEMORY refresh |
 |---|---|---|---|---|
-| TS daemon (primary) | hybrid -> temporal-fallback; transcripts via explicit `session_search` | yes | yes | yes (session-summary + compaction-complete) |
-| daemon-rs shadow | hybrid-style scoped recall with temporal fallback | yes (agent-scoped retrieval path) | partial (hook route persistence only) | degraded (full event-driven refresh parity follows rust cutover wave) |
+| TS daemon (primary) | entity current-view injection; transcripts via explicit `session_search` | yes | yes | yes (session-summary + compaction-complete) |
+| daemon-rs shadow | entity current-view injection | yes (agent-scoped retrieval path) | partial (hook route persistence only) | degraded (full event-driven refresh parity follows rust cutover wave) |
 
 Degraded mode rules:
 
@@ -281,7 +281,7 @@ still uses daemon-side dedupe keyed by `session_key`, `agent_id`, and
 2. On supported Codex installs, Signet writes a local plugin marketplace bundle and registers `signet@signet-local` in `~/.codex/config.toml`.
 3. While plugin lifecycle hooks are not available, Codex also reads compatibility hooks from `~/.codex/hooks.json`.
 4. On session start, Codex fires `SessionStart` → calls `signet hook session-start -H codex --codex-json` → Signet returns identity + memories as `hookSpecificOutput.additionalContext` with `suppressOutput: true`, injected into the model's context window without printing the hook payload to the user transcript.
-5. On every user prompt, Codex fires `UserPromptSubmit` → calls `signet hook user-prompt-submit -H codex --codex-json` → Signet returns bounded Signet context as `hookSpecificOutput.additionalContext` with `suppressOutput: true` so the context is model-visible but not printed into the user transcript. This is blocking — Codex waits for the hook before sending to the model.
+5. On every user prompt, Codex fires `UserPromptSubmit` → calls `signet hook user-prompt-submit -H codex --codex-json` → Signet returns bounded entity current-view context only when the prompt mentions a known entity or active alias. Empty matches return no additional context. This is blocking — Codex waits for the hook before sending to the model.
 6. On session end, Codex fires `Stop` → calls `signet hook session-end -H codex` → Signet extracts memories from the transcript.
 7. The MCP server exposes `signet_recall`, `signet_source_search`, `signet_session_search`, `signet_save_note`, and compatibility `memory_*` tools that Codex can invoke directly during sessions.
 
@@ -318,7 +318,7 @@ Claude Code or OpenCode.
 | Hook | Supported |
 |------|-----------|
 | session-start | yes — identity + memories via `hookSpecificOutput.additionalContext` |
-| user-prompt-submit | yes — per-prompt recall via `hookSpecificOutput.additionalContext` |
+| user-prompt-submit | yes — entity current-view context via `hookSpecificOutput.additionalContext` when matched |
 | session-end | yes — transcript extraction via `Stop` hook |
 
 ### MCP tools
@@ -743,8 +743,8 @@ Hermes lifecycle.
    `POST /api/hooks/session-start` to load identity, memories, and system
    prompt injection from the daemon.
 4. On each user turn, `queue_prefetch()` fires
-   `POST /api/hooks/user-prompt-submit` for per-turn hybrid recall
-   (BM25 + vector + KG + predictive scoring).
+   `POST /api/hooks/user-prompt-submit` for entity current-view context when
+   the prompt mentions a known entity or active alias.
 5. At session end, `on_session_end()` sends the accumulated transcript via
    `POST /api/hooks/session-end` for async pipeline extraction.
 
@@ -766,7 +766,7 @@ Hermes lifecycle.
 | Hook | Supported |
 |------|-----------|
 | session-start | yes — identity + memories via `system_prompt_block()` |
-| user-prompt-submit | yes — per-turn recall via `queue_prefetch()` / `prefetch()` |
+| user-prompt-submit | yes — entity current-view context via `queue_prefetch()` / `prefetch()` |
 | pre-compaction | yes — daemon-generated summary guidelines via `on_pre_compress()` |
 | compaction-complete | yes — saves summary as session memory via `on_compaction_complete()` |
 | checkpoint-extract | yes — periodic mid-session delta extraction every 30 turns |

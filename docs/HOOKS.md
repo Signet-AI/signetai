@@ -18,7 +18,7 @@ Hooks are HTTP endpoints exposed by the Signet [[daemon]]. Harnesses call them a
 | Hook | When | Purpose |
 |------|------|---------|
 | `session-start` | New session begins | Inject memories, identity, and the Memory Check Loop into context |
-| `user-prompt-submit` | Before each user turn | Inject lightweight per-turn Memory Check guidance plus structured, temporal, or transcript recall when needed |
+| `user-prompt-submit` | Before each user turn | Inject compact current-view context only when the prompt mentions a known entity or active entity alias |
 | `session-end` | Session finishes | Persist transcript lineage and queue session summary |
 | `pre-compaction` | Before context compaction | Get summary guidelines |
 | `compaction-complete` | After compaction | Save a first-class compaction artifact into the temporal DAG |
@@ -142,28 +142,26 @@ where recency is `1 / (1 + age_in_days)`.
 
 **`POST /api/hooks/user-prompt-submit`**
 
-Called before each user turn is handed to the model. Returns lightweight
-context for the current prompt.
+Called before each user turn is handed to the model. Prompt-submit does not run
+generic memory recall and does not inject fallback guidance when it cannot find
+a confident match.
 
-The hook always includes current date/time metadata and per-turn Memory Check
-guidance unless the session is bypassed. When automatic recall finds useful
-context, the response also includes a `## Relevant Memory` block. When no
-strong automatic match is found, the response says so explicitly and reminds
-the agent to run targeted Signet recall before acting if the request depends
-on prior context, preferences, project history, or unresolved work. Both
-matched and no-strong-match paths also remind the agent to save durable facts
-with `/remember` or `memory_store`.
+The hook listens for known ontology entities and active entity aliases. When a
+prompt names one, Signet scores that entity's aspects against the prompt and
+injects a compact `## Relevant Entity Context` block from the highest-scoring
+current attributes and constraints. `hooks.userPromptSubmit.minScore` gates
+aspect injection; `maxInjectChars` caps the block.
 
-Recall order is:
+When the prompt is low-signal, mentions no known entity or alias, is ambiguous,
+or no aspect clears the confidence gate, the hook returns an empty `inject`
+string. This keeps the active agent loop trustable: absence of injected context
+means Signet chose not to inject, not that the broader source substrate has no
+relevant evidence.
 
-1. structured memory recall,
-2. temporal thread-head fallback.
-
-Raw transcript search is deliberately not injected through this hook. Use
-`session_search` when a caller needs transcript evidence.
-
-The guidance is meant to prevent agents from treating an empty automatic
-inject as proof that no prior context exists.
+Explicit recall remains available through `/api/memory/recall`, `signet_recall`,
+`memory_search`, and related MCP/CLI surfaces. Raw transcript search is
+deliberately not injected through this hook; use `session_search` when a caller
+needs transcript evidence.
 
 ---
 

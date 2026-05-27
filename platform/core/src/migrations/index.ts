@@ -82,6 +82,7 @@ import { up as recallContextDedupe } from "./073-recall-context-dedupe";
 import { up as aggregateMemoryLinks } from "./074-aggregate-memory-links";
 import { up as memoryArtifactSourceProvenance } from "./075-memory-artifact-source-provenance";
 import { up as temporalEdges } from "./076-temporal-edges";
+import { up as entityAliases } from "./077-entity-aliases";
 
 // -- Public interface consumed by Database.init() --
 
@@ -724,6 +725,14 @@ export const MIGRATIONS: readonly Migration[] = [
 		up: temporalEdges,
 		artifacts: {
 			tables: ["temporal_edges"],
+		},
+	},
+	{
+		version: 77,
+		name: "entity-aliases",
+		up: entityAliases,
+		artifacts: {
+			tables: ["entity_aliases"],
 		},
 	},
 ];

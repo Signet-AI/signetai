@@ -21,6 +21,8 @@ const TS_ONTOLOGY_PROPOSALS_VERSION: u32 = 67;
 const TS_ONTOLOGY_PROPOSALS_NAME: &str = "ontology-proposals";
 const TS_AGENT_SCOPED_IDEMPOTENCY_VERSION: u32 = 72;
 const TS_AGENT_SCOPED_IDEMPOTENCY_NAME: &str = "agent-scoped-idempotency-key";
+const TS_ENTITY_ALIASES_VERSION: u32 = 77;
+const TS_ENTITY_ALIASES_NAME: &str = "entity-aliases";
 
 /// Simple checksum matching the TS implementation (hash of "version:name").
 fn checksum(version: u32, name: &str) -> String {
@@ -385,11 +387,13 @@ pub fn run(conn: &Connection) -> Result<(), CoreError> {
 fn ensure_cross_daemon_parity_tables(conn: &Connection) -> Result<(), CoreError> {
     conn.execute_batch(include_str!("sql/040-memory-search-telemetry.sql"))?;
     conn.execute_batch(include_str!("sql/041-ontology-proposals.sql"))?;
+    conn.execute_batch(include_str!("sql/042-entity-aliases.sql"))?;
     stamp_typescript_parity_migration(
         conn,
         TS_MEMORY_SEARCH_TELEMETRY_VERSION,
         TS_MEMORY_SEARCH_TELEMETRY_NAME,
     )?;
+    stamp_typescript_parity_migration(conn, TS_ENTITY_ALIASES_VERSION, TS_ENTITY_ALIASES_NAME)?;
     Ok(())
 }
 
@@ -397,6 +401,7 @@ fn ensure_cross_daemon_parity_columns(conn: &Connection) -> Result<(), CoreError
     add_column_if_missing(conn, "entities", "mentions", "INTEGER NOT NULL DEFAULT 0")?;
     add_column_if_missing(conn, "entities", "pinned", "INTEGER NOT NULL DEFAULT 0")?;
     add_column_if_missing(conn, "entities", "pinned_at", "TEXT")?;
+    add_column_if_missing(conn, "entities", "status", "TEXT NOT NULL DEFAULT 'active'")?;
     add_column_if_missing(conn, "entities", "updated_at", "TEXT")?;
 
     add_column_if_missing(conn, "memories", "agent_id", "TEXT DEFAULT 'default'")?;
@@ -413,6 +418,13 @@ fn ensure_cross_daemon_parity_columns(conn: &Connection) -> Result<(), CoreError
     )?;
     add_column_if_missing(conn, "connectors", "enabled", "INTEGER NOT NULL DEFAULT 1")?;
 
+    add_column_if_missing(
+        conn,
+        "entity_aspects",
+        "status",
+        "TEXT NOT NULL DEFAULT 'active'",
+    )?;
+
     add_column_if_missing(conn, "entity_attributes", "proposal_id", "TEXT")?;
     add_column_if_missing(conn, "entity_attributes", "group_key", "TEXT")?;
     add_column_if_missing(conn, "entity_attributes", "claim_key", "TEXT")?;
@@ -425,6 +437,12 @@ fn ensure_cross_daemon_parity_columns(conn: &Connection) -> Result<(), CoreError
         "entity_attributes",
         "proposal_evidence",
         "TEXT NOT NULL DEFAULT '[]'",
+    )?;
+    add_column_if_missing(
+        conn,
+        "entity_attributes",
+        "version",
+        "INTEGER NOT NULL DEFAULT 1",
     )?;
     add_column_if_missing(conn, "entity_dependencies", "proposal_id", "TEXT")?;
     add_column_if_missing(conn, "entity_dependencies", "confidence", "REAL")?;

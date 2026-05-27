@@ -199,6 +199,11 @@ describe("migration framework", () => {
 
 		// v66 tables (ontology proposal loop)
 		expect(tableNames).toContain("ontology_proposals");
+
+		// v77 tables (entity aliases)
+		expect(tableNames).toContain("entity_aliases");
+		const aliasIndexes = db.query("PRAGMA index_list(entity_aliases)").all() as Array<{ name: string }>;
+		expect(aliasIndexes.map((index) => index.name)).toContain("idx_entity_aliases_active_unique");
 	});
 
 	test("memories table has expected v2 columns", () => {
