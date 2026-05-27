@@ -834,6 +834,25 @@ fn trim_for_inject(text: &str, limit: usize) -> String {
     format!("{}...", &trimmed[..end])
 }
 
+fn cap_prompt_inject(text: &str, limit: usize) -> String {
+    if limit == 0 {
+        return String::new();
+    }
+    if text.len() <= limit {
+        return text.to_string();
+    }
+    let suffix = "...";
+    let keep = limit.saturating_sub(suffix.len());
+    let mut end = keep;
+    while !text.is_char_boundary(end) && end > 0 {
+        end -= 1;
+    }
+    if keep == 0 {
+        return text.chars().take(limit).collect();
+    }
+    format!("{}{}", &text[..end], suffix)
+}
+
 fn normalize_prompt_entity_text(text: &str) -> String {
     let mut out = String::new();
     let mut prev_space = true;
@@ -1159,10 +1178,17 @@ pub async fn prompt_submit(
         .filter(|score| score.is_finite())
         .map(|score| score.clamp(0.0, 1.0))
         .unwrap_or(0.8);
+    let max_inject_chars = state
+        .config
+        .manifest
+        .hooks
+        .as_ref()
+        .map(|h| h.user_prompt_submit.max_inject_chars)
+        .unwrap_or(500);
 
     let result = state
-        .pool
-        .read(move |conn| {
+		.pool
+		.read(move |conn| {
             let has_aliases = conn
                 .query_row(
                     "SELECT COUNT(*) FROM sqlite_master
@@ -1413,12 +1439,13 @@ pub async fn prompt_submit(
                 }));
             }
 
-            Ok(serde_json::json!({
-                "inject": build_entity_context_inject(&metadata_header, &lines),
-                "memoryCount": lines.len(),
-                "queryTerms": query_terms_for_resp,
-                "engine": "entity-context",
-            }))
+			let inject = build_entity_context_inject(&metadata_header, &lines);
+			Ok(serde_json::json!({
+				"inject": cap_prompt_inject(&inject, max_inject_chars),
+				"memoryCount": lines.len(),
+				"queryTerms": query_terms_for_resp,
+				"engine": "entity-context",
+			}))
         })
         .await;
 
@@ -3738,6 +3765,93 @@ mod tests {
         assert!(
             inject.contains("Entity-only prompts can still opt into low-weight current views.")
         );
+
+        drop(state);
+        let _ = writer.await;
+    }
+
+    #[tokio::test]
+    async fn prompt_submit_caps_entity_context_to_max_inject_chars() {
+        let (state, writer, _tmp) =
+            test_state_with_manifest("hooks-prompt-submit-max-inject-chars", |manifest| {
+                manifest.hooks = Some(HooksConfig {
+                    user_prompt_submit: UserPromptSubmitHookConfig {
+                        max_inject_chars: 180,
+                        ..Default::default()
+                    },
+                });
+            });
+        state
+			.pool
+			.write(Priority::Low, move |conn| {
+				conn.execute(
+					"INSERT INTO entities (id, name, canonical_name, entity_type, description, agent_id, mentions, created_at, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, 10, ?7, ?7)",
+					rusqlite::params![
+						"entity-signet",
+						"Signet",
+						"signet",
+						"project",
+						"Source-backed agent continuity substrate",
+						"agent-a",
+						"2026-05-27T00:00:00Z",
+					],
+				)?;
+				conn.execute(
+					"INSERT INTO entity_aliases (id, entity_id, agent_id, alias, canonical_alias, confidence, source, status, created_at, updated_at)
+                     VALUES ('alias-signetai', 'entity-signet', 'agent-a', 'SignetAI', 'signetai', 1.0, 'test', 'active', ?1, ?1)",
+					rusqlite::params!["2026-05-27T00:00:00Z"],
+				)?;
+				conn.execute(
+					"INSERT INTO entity_aspects (id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at)
+                     VALUES ('aspect-architecture', 'entity-signet', 'agent-a', 'architecture', 'architecture', 1.0, ?1, ?1)",
+					rusqlite::params!["2026-05-27T00:00:00Z"],
+				)?;
+				conn.execute(
+					"INSERT INTO entity_attributes
+                     (id, aspect_id, agent_id, memory_id, kind, content, normalized_content, confidence, importance,
+                      status, group_key, claim_key, created_at, updated_at)
+                     VALUES ('attr-architecture', 'aspect-architecture', 'agent-a', NULL, 'attribute',
+                      'Prompt context should include this opening but must not include the reviewer regression tail beyond the configured prompt-submit injection budget.',
+                      'prompt context should include this opening but must not include the reviewer regression tail beyond the configured prompt submit injection budget',
+                      0.95, 0.9, 'active', 'runtime', 'prompt_context_budget', ?1, ?1)",
+					rusqlite::params!["2026-05-27T00:00:00Z"],
+				)?;
+				Ok(serde_json::Value::Null)
+			})
+			.await
+			.unwrap();
+
+        let resp = prompt_submit(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(PromptSubmitBody {
+                harness: Some("test".to_string()),
+                project: Some("platform/daemon-rs".to_string()),
+                agent_id: Some("agent-a".to_string()),
+                user_message: Some("Should SignetAI architecture use current views?".to_string()),
+                user_prompt: None,
+                last_assistant_message: None,
+                session_key: Some("sess-prompt-max-inject-chars".to_string()),
+                transcript: None,
+                transcript_path: None,
+                runtime_path: None,
+            }),
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = test_json(resp).await;
+        let inject = body["inject"].as_str().unwrap_or_default();
+        assert_eq!(
+            body["engine"],
+            serde_json::Value::String("entity-context".to_string())
+        );
+        assert!(inject.len() <= 180);
+        assert!(inject.contains("# Current Date & Time"));
+        assert!(inject.contains("## Relevant Entity Context"));
+        assert!(inject.ends_with("..."));
+        assert!(!inject.contains("reviewer regression tail"));
 
         drop(state);
         let _ = writer.await;
