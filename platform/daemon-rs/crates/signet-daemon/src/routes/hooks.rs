@@ -986,6 +986,62 @@ fn is_prompt_context_term(term: &str) -> bool {
         && !term.chars().all(|ch| ch.is_ascii_digit())
 }
 
+fn f32_vector_from_blob(blob: &[u8]) -> Vec<f32> {
+    blob.chunks_exact(4)
+        .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+        .collect()
+}
+
+fn cosine_similarity(a: &[f32], b: &[f32]) -> f64 {
+    let mut dot = 0.0_f64;
+    let mut norm_a = 0.0_f64;
+    let mut norm_b = 0.0_f64;
+    for (left, right) in a.iter().zip(b.iter()) {
+        let left = f64::from(*left);
+        let right = f64::from(*right);
+        dot += left * right;
+        norm_a += left * left;
+        norm_b += right * right;
+    }
+    let denom = norm_a.sqrt() * norm_b.sqrt();
+    if denom > 0.0 { dot / denom } else { 0.0 }
+}
+
+fn memory_embedding_score(
+    conn: &rusqlite::Connection,
+    memory_id: &str,
+    agent_id: &str,
+    query_vector: Option<&[f32]>,
+) -> f64 {
+    let Some(query_vector) = query_vector else {
+        return 0.0;
+    };
+    let vectors = match conn.prepare(
+        "SELECT vector, dimensions
+         FROM embeddings
+         WHERE source_type = 'memory'
+           AND source_id = ?1
+           AND agent_id = ?2
+           AND vector IS NOT NULL",
+    ) {
+        Ok(mut stmt) => stmt
+            .query_map(rusqlite::params![memory_id, agent_id], |row| {
+                Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, usize>(1)?))
+            })
+            .ok()
+            .map(|rows| rows.filter_map(|r| r.ok()).collect::<Vec<_>>())
+            .unwrap_or_default(),
+        Err(_) => vec![],
+    };
+    vectors
+        .iter()
+        .filter(|(blob, dimensions)| {
+            *dimensions == query_vector.len() && blob.len() == query_vector.len() * 4
+        })
+        .map(|(blob, _)| cosine_similarity(query_vector, &f32_vector_from_blob(blob)))
+        .fold(0.0, f64::max)
+}
+
 fn build_entity_context_inject(metadata_header: &str, lines: &[String]) -> String {
     let mut parts = vec![
         metadata_header.trim_end().to_string(),
@@ -1186,10 +1242,18 @@ pub async fn prompt_submit(
         .as_ref()
         .map(|h| h.user_prompt_submit.max_inject_chars)
         .unwrap_or(500);
+    let semantic_query = query_terms.clone();
+    let embedding_provider = state.embedding.read().await.clone();
+    let query_vector_for_scoring = match embedding_provider {
+        Some(provider) if !semantic_query.trim().is_empty() => {
+            provider.embed(&semantic_query).await
+        }
+        _ => None,
+    };
 
     let result = state
-		.pool
-		.read(move |conn| {
+			.pool
+			.read(move |conn| {
             let has_aliases = conn
                 .query_row(
                     "SELECT COUNT(*) FROM sqlite_master
@@ -1324,9 +1388,9 @@ pub async fn prompt_submit(
                     Err(_) => vec![],
                 };
                 let mut selected_aspects = Vec::new();
-                for (aspect_id, aspect_name, canonical_name, weight) in aspects {
-                    let attr_texts = match conn.prepare(
-                        "SELECT ea.content, COALESCE(ea.group_key, ''), COALESCE(ea.claim_key, '')
+                for (aspect_id, aspect_name, _canonical_name, _weight) in aspects {
+                    let attr_rows = match conn.prepare(
+                        "SELECT ea.content, COALESCE(ea.memory_id, ''), ea.confidence, ea.importance
                          FROM entity_attributes ea
                          WHERE ea.aspect_id = ?1
                            AND ea.agent_id = ?2
@@ -1349,11 +1413,11 @@ pub async fn prompt_submit(
                     ) {
                         Ok(mut stmt) => stmt
                             .query_map(rusqlite::params![aspect_id, agent_id.clone()], |row| {
-                                Ok(format!(
-                                    "{} {} {}",
+                                Ok((
                                     row.get::<_, String>(0)?,
                                     row.get::<_, String>(1)?,
-                                    row.get::<_, String>(2)?
+                                    row.get::<_, f64>(2)?,
+                                    row.get::<_, f64>(3)?,
                                 ))
                             })
                             .ok()
@@ -1361,24 +1425,35 @@ pub async fn prompt_submit(
                             .unwrap_or_default(),
                         Err(_) => vec![],
                     };
-                    if attr_texts.is_empty() {
+                    if attr_rows.is_empty() || context_terms.is_empty() {
                         continue;
                     }
-                    let aspect_text = normalize_prompt_entity_text(&format!("{aspect_name} {canonical_name}"));
-                    let aspect_hit = aspect_text
-                        .split_whitespace()
-                        .any(|term| context_terms.contains(term));
-                    let attr_text = normalize_prompt_entity_text(&attr_texts.join(" "));
-                    let attr_hit = attr_text
-                        .split_whitespace()
-                        .any(|term| context_terms.contains(term));
-                    let score = if aspect_hit {
-                        1.0
-                    } else if attr_hit {
-                        0.75 + weight.clamp(0.0, 1.0) * 0.25
-                    } else {
-                        0.0
-                    };
+                    let score = attr_rows
+                        .iter()
+                        .map(|(content, memory_id, confidence, importance)| {
+                            let attr_text = normalize_prompt_entity_text(content);
+                            let lexical_score = if attr_text
+                                .split_whitespace()
+                                .any(|term| context_terms.contains(term))
+                            {
+                                0.72 + importance.clamp(0.0, 1.0) * 0.18
+                                    + confidence.clamp(0.0, 1.0) * 0.1
+                            } else {
+                                0.0
+                            };
+                            let semantic_score = if memory_id.is_empty() {
+                                0.0
+                            } else {
+                                memory_embedding_score(
+                                    conn,
+                                    memory_id,
+                                    &agent_id,
+                                    query_vector_for_scoring.as_deref(),
+                                )
+                            };
+                            lexical_score.max(semantic_score)
+                        })
+                        .fold(0.0, f64::max);
                     if score >= min_score {
                         selected_aspects.push((aspect_id, aspect_name));
                     }
@@ -3018,6 +3093,7 @@ mod tests {
         UserPromptSubmitHookConfig,
     };
     use signet_core::db::{DbPool, Priority};
+    use signet_pipeline::embedding::EmbeddingProvider;
     use tempfile::TempDir;
 
     use crate::auth::rate_limiter::{AuthRateLimiter, default_limits};
@@ -3027,7 +3103,7 @@ mod tests {
     use super::{
         CHECKPOINT_MIN_DELTA, CheckpointExtractBody, CompactionCompleteBody, PromptSubmitBody,
         SessionEndBody, build_signet_system_prompt, compaction_complete, extract_delta,
-        normalize_session_transcript, parse_visibility, prompt_submit,
+        memory_embedding_score, normalize_session_transcript, parse_visibility, prompt_submit,
         require_session_scope_for_write, resolve_audit_token, resolve_compaction_project,
         resolve_remember_agent, session_agent_id, session_checkpoint_extract, session_end,
         session_transcript_content, strip_untrusted_metadata, upsert_session_transcript,
@@ -3037,6 +3113,36 @@ mod tests {
     async fn test_json(resp: axum::response::Response) -> Value {
         let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         serde_json::from_slice(&body).unwrap()
+    }
+
+    struct TestEmbeddingProvider {
+        vector: Vec<f32>,
+    }
+
+    impl EmbeddingProvider for TestEmbeddingProvider {
+        fn embed(
+            &self,
+            _text: &str,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Option<Vec<f32>>> + Send + '_>>
+        {
+            let vector = self.vector.clone();
+            Box::pin(async move { Some(vector) })
+        }
+
+        fn name(&self) -> &str {
+            "test"
+        }
+
+        fn dimensions(&self) -> usize {
+            self.vector.len()
+        }
+    }
+
+    fn vector_blob(values: &[f32]) -> Vec<u8> {
+        values
+            .iter()
+            .flat_map(|value| value.to_le_bytes())
+            .collect()
     }
 
     fn has_markdown(dir: &Path) -> bool {
@@ -3690,7 +3796,9 @@ mod tests {
                 harness: Some("test".to_string()),
                 project: Some("platform/daemon-rs".to_string()),
                 agent_id: Some("agent-a".to_string()),
-                user_message: Some("Should SignetAI architecture use current views?".to_string()),
+                user_message: Some(
+                    "Should SignetAI prompt context include current views?".to_string(),
+                ),
                 user_prompt: None,
                 last_assistant_message: None,
                 session_key: Some("sess-prompt-entity".to_string()),
@@ -3774,6 +3882,232 @@ mod tests {
                 user_prompt: None,
                 last_assistant_message: None,
                 session_key: Some("sess-prompt-entity-only".to_string()),
+                transcript: None,
+                transcript_path: None,
+                runtime_path: None,
+            }),
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = test_json(resp).await;
+        assert_eq!(body["inject"], serde_json::Value::String(String::new()));
+        assert_eq!(body["memoryCount"], serde_json::Value::Number(0.into()));
+        assert_eq!(
+            body["engine"],
+            serde_json::Value::String("no-aspect-hit".to_string())
+        );
+
+        drop(state);
+        let _ = writer.await;
+    }
+
+    #[tokio::test]
+    async fn prompt_submit_uses_scoped_semantic_attribute_relevance() {
+        let (state, writer, _tmp) = test_state("hooks-prompt-submit-semantic-attribute");
+        *state.embedding.write().await = Some(Arc::new(TestEmbeddingProvider {
+            vector: vec![1.0, 0.0],
+        }));
+        state
+            .pool
+            .write(Priority::Low, move |conn| {
+                conn.execute(
+                    "INSERT INTO entities (id, name, canonical_name, entity_type, description, agent_id, mentions, created_at, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, 10, ?7, ?7)",
+                    rusqlite::params![
+                        "entity-signet",
+                        "Signet",
+                        "signet",
+                        "project",
+                        "Source-backed agent continuity substrate",
+                        "agent-a",
+                        "2026-05-27T00:00:00Z",
+                    ],
+                )?;
+                conn.execute(
+                    "INSERT INTO entity_aliases (id, entity_id, agent_id, alias, canonical_alias, confidence, source, status, created_at, updated_at)
+                     VALUES ('alias-signetai', 'entity-signet', 'agent-a', 'SignetAI', 'signetai', 1.0, 'test', 'active', ?1, ?1)",
+                    rusqlite::params!["2026-05-27T00:00:00Z"],
+                )?;
+                conn.execute(
+                    "INSERT INTO entity_aspects (id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at)
+                     VALUES ('aspect-preferences', 'entity-signet', 'agent-a', 'preferences', 'preferences', 0.8, ?1, ?1)",
+                    rusqlite::params!["2026-05-27T00:00:00Z"],
+                )?;
+                conn.execute(
+                    "INSERT INTO entity_aspects (id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at)
+                     VALUES ('aspect-marketing', 'entity-signet', 'agent-a', 'marketing', 'marketing', 0.2, ?1, ?1)",
+                    rusqlite::params!["2026-05-27T00:00:00Z"],
+                )?;
+                conn.execute(
+                    "INSERT INTO memories (id, type, content, confidence, importance, created_at, updated_at, agent_id)
+                     VALUES ('mem-preferences-pen', 'preference', 'Favorite pen is a Pilot G-2.', 0.95, 0.9, ?1, ?1, 'agent-a')",
+                    rusqlite::params!["2026-05-27T00:00:00Z"],
+                )?;
+                conn.execute(
+                    "INSERT INTO entity_attributes
+                     (id, aspect_id, agent_id, memory_id, kind, content, normalized_content, confidence, importance,
+                      status, group_key, claim_key, created_at, updated_at)
+                     VALUES ('attr-preferences-pen', 'aspect-preferences', 'agent-a', 'mem-preferences-pen', 'attribute',
+                      'Favorite pen is a Pilot G-2.',
+                      'favorite pen is a pilot g 2', 0.95, 0.9, 'active',
+                      'writing', 'favorite_pen', ?1, ?1)",
+                    rusqlite::params!["2026-05-27T00:00:00Z"],
+                )?;
+                conn.execute(
+                    "INSERT INTO entity_attributes
+                     (id, aspect_id, agent_id, memory_id, kind, content, normalized_content, confidence, importance,
+                      status, group_key, claim_key, created_at, updated_at)
+                     VALUES ('attr-marketing', 'aspect-marketing', 'agent-a', NULL, 'attribute',
+                      'Marketing copy should stay secondary.',
+                      'marketing copy should stay secondary', 0.8, 0.3, 'active',
+                      'copy', 'positioning', ?1, ?1)",
+                    rusqlite::params!["2026-05-27T00:00:00Z"],
+                )?;
+                conn.execute(
+                    "INSERT INTO embeddings
+                     (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id)
+                     VALUES ('emb-preferences-pen', 'hash-preferences-pen', ?1, 2, 'memory',
+                      'mem-preferences-pen', 'Favorite pen is a Pilot G-2.', ?2, 'agent-a')",
+                    rusqlite::params![vector_blob(&[1.0, 0.0]), "2026-05-27T00:00:00Z"],
+                )?;
+                Ok(serde_json::Value::Null)
+            })
+            .await
+            .unwrap();
+
+        let resp = prompt_submit(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(PromptSubmitBody {
+                harness: Some("test".to_string()),
+                project: Some("platform/daemon-rs".to_string()),
+                agent_id: Some("agent-a".to_string()),
+                user_message: Some("Signet likes taking notes".to_string()),
+                user_prompt: None,
+                last_assistant_message: None,
+                session_key: Some("sess-prompt-semantic-attribute".to_string()),
+                transcript: None,
+                transcript_path: None,
+                runtime_path: None,
+            }),
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = test_json(resp).await;
+        let inject = body["inject"].as_str().unwrap_or_default();
+        assert_eq!(
+            body["engine"],
+            serde_json::Value::String("entity-context".to_string())
+        );
+        assert!(inject.contains("Signet / preferences / writing / favorite_pen"));
+        assert!(inject.contains("Favorite pen is a Pilot G-2."));
+        assert!(!inject.contains("Marketing copy should stay secondary"));
+
+        drop(state);
+        let _ = writer.await;
+    }
+
+    #[tokio::test]
+    async fn prompt_submit_rejects_mismatched_semantic_embedding_dimensions() {
+        let (state, writer, _tmp) = test_state("hooks-prompt-submit-semantic-dimension");
+        state
+            .pool
+            .write(Priority::Low, move |conn| {
+                conn.execute(
+                    "INSERT INTO memories (id, type, content, confidence, importance, created_at, updated_at, agent_id)
+                     VALUES ('mem-preferences-pen', 'preference', 'Favorite pen is a Pilot G-2.', 0.95, 0.9, ?1, ?1, 'agent-a')",
+                    rusqlite::params!["2026-05-27T00:00:00Z"],
+                )?;
+                conn.execute(
+                    "INSERT INTO embeddings
+                     (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id)
+                     VALUES ('emb-preferences-pen-short', 'hash-preferences-pen-short', ?1, 1, 'memory',
+                      'mem-preferences-pen', 'Favorite pen is a Pilot G-2.', ?2, 'agent-a')",
+                    rusqlite::params![vector_blob(&[1.0]), "2026-05-27T00:00:00Z"],
+                )?;
+                Ok(serde_json::Value::Null)
+            })
+            .await
+            .unwrap();
+
+        let score = state
+            .pool
+            .read(move |conn| {
+                Ok(serde_json::json!(memory_embedding_score(
+                    conn,
+                    "mem-preferences-pen",
+                    "agent-a",
+                    Some(&[1.0, 0.0]),
+                )))
+            })
+            .await
+            .unwrap()
+            .as_f64()
+            .unwrap_or(1.0);
+
+        assert_eq!(score, 0.0);
+
+        drop(state);
+        let _ = writer.await;
+    }
+
+    #[tokio::test]
+    async fn prompt_submit_aspect_name_without_attribute_hit_stays_silent() {
+        let (state, writer, _tmp) = test_state("hooks-prompt-submit-aspect-name-only");
+        state
+            .pool
+            .write(Priority::Low, move |conn| {
+                conn.execute(
+                    "INSERT INTO entities (id, name, canonical_name, entity_type, description, agent_id, mentions, created_at, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, 10, ?7, ?7)",
+                    rusqlite::params![
+                        "entity-signet",
+                        "Signet",
+                        "signet",
+                        "project",
+                        "Source-backed agent continuity substrate",
+                        "agent-a",
+                        "2026-05-27T00:00:00Z",
+                    ],
+                )?;
+                conn.execute(
+                    "INSERT INTO entity_aliases (id, entity_id, agent_id, alias, canonical_alias, confidence, source, status, created_at, updated_at)
+                     VALUES ('alias-signetai', 'entity-signet', 'agent-a', 'SignetAI', 'signetai', 1.0, 'test', 'active', ?1, ?1)",
+                    rusqlite::params!["2026-05-27T00:00:00Z"],
+                )?;
+                conn.execute(
+                    "INSERT INTO entity_aspects (id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at)
+                     VALUES ('aspect-architecture', 'entity-signet', 'agent-a', 'architecture', 'architecture', 0.95, ?1, ?1)",
+                    rusqlite::params!["2026-05-27T00:00:00Z"],
+                )?;
+                conn.execute(
+                    "INSERT INTO entity_attributes
+                     (id, aspect_id, agent_id, memory_id, kind, content, normalized_content, confidence, importance,
+                      status, group_key, claim_key, created_at, updated_at)
+                     VALUES ('attr-architecture', 'aspect-architecture', 'agent-a', NULL, 'attribute',
+                      'Prompt context should come from entity current views.',
+                      'prompt context should come from entity current views', 0.95, 0.9, 'active',
+                      'runtime', 'prompt_context', ?1, ?1)",
+                    rusqlite::params!["2026-05-27T00:00:00Z"],
+                )?;
+                Ok(serde_json::Value::Null)
+            })
+            .await
+            .unwrap();
+
+        let resp = prompt_submit(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(PromptSubmitBody {
+                harness: Some("test".to_string()),
+                project: Some("platform/daemon-rs".to_string()),
+                agent_id: Some("agent-a".to_string()),
+                user_message: Some("SignetAI architecture".to_string()),
+                user_prompt: None,
+                last_assistant_message: None,
+                session_key: Some("sess-prompt-aspect-name-only".to_string()),
                 transcript: None,
                 transcript_path: None,
                 runtime_path: None,
@@ -4007,7 +4341,9 @@ mod tests {
                 harness: Some("test".to_string()),
                 project: Some("platform/daemon-rs".to_string()),
                 agent_id: Some("agent-a".to_string()),
-                user_message: Some("Should SignetAI architecture use current views?".to_string()),
+                user_message: Some(
+                    "Should SignetAI prompt context include current views?".to_string(),
+                ),
                 user_prompt: None,
                 last_assistant_message: None,
                 session_key: Some("sess-prompt-max-inject-chars".to_string()),

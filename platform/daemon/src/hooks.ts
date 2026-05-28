@@ -16,7 +16,7 @@ import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Worker } from "node:worker_threads";
-import { getAgentIdentityFiles, parseSimpleYaml } from "@signet/core";
+import { cosineSimilarity, getAgentIdentityFiles, parseSimpleYaml } from "@signet/core";
 import { ensureAgentRegistered, getAgentScope, resolveAgentId } from "./agent-id";
 import { extractAnchorTerms } from "./anchor-terms";
 import {
@@ -381,11 +381,11 @@ export interface HooksConfig {
 		maxInjectChars?: number;
 	};
 	userPromptSubmit?: {
-		/** Set to false to disable per-prompt memory injection entirely. Default: true. */
+		/** Set to false to disable per-prompt entity-context injection entirely. Default: true. */
 		enabled?: boolean;
 		recallLimit?: number;
 		maxInjectChars?: number;
-		/** Minimum top recall score required before injecting memories. */
+		/** Minimum scoped attribute relevance required before injecting entity context. */
 		minScore?: number;
 	};
 	preCompaction?: {
@@ -852,22 +852,69 @@ function resolvePromptEntityMatches(
 	return result;
 }
 
-function scoreAspectForPrompt(
-	aspect: { readonly name: string; readonly canonical_name: string; readonly weight: number },
-	rows: ReadonlyArray<{
-		readonly content: string;
-		readonly group_key: string | null;
-		readonly claim_key: string | null;
-	}>,
+type PromptAttributeCandidate = PromptEntityContextLine & {
+	readonly attributeId: string;
+	readonly aspectId: string;
+	readonly memoryId: string | null;
+	readonly score: number;
+};
+
+function queryWithoutPromptEntities(userMessage: string, entities: ReadonlyArray<PromptEntityMatch>): string {
+	const entityTerms = new Set(
+		entities.flatMap((entity) => extractSubstantiveWords(`${entity.entityName} ${entity.matchedText}`)),
+	);
+	return extractSubstantiveWords(userMessage)
+		.filter((term) => !entityTerms.has(term))
+		.join(" ");
+}
+
+function scoreAttributeLexically(
+	row: { readonly content: string; readonly confidence: number; readonly importance: number },
 	promptTerms: ReadonlyArray<string>,
 ): number {
-	const aspectTerms = extractSubstantiveWords(`${aspect.name} ${aspect.canonical_name}`);
-	const aspectOverlap = aspectTerms.some((term) => promptTerms.includes(term));
-	if (aspectOverlap) return 1;
-	const attrText = rows.map((row) => `${row.group_key ?? ""} ${row.claim_key ?? ""} ${row.content}`).join(" ");
-	const overlap = countPromptTermOverlap(attrText, promptTerms);
-	if (overlap > 0) return Math.min(1, 0.75 + Math.min(aspect.weight, 1) * 0.25);
-	return 0;
+	if (promptTerms.length === 0) return 0;
+	if (countPromptTermOverlap(row.content, promptTerms) === 0) return 0;
+	return Math.min(1, 0.72 + Math.min(row.importance, 1) * 0.18 + Math.min(row.confidence, 1) * 0.1);
+}
+
+function loadAttributeSemanticScores(
+	db: ReadDb,
+	agentId: string,
+	rows: ReadonlyArray<{ readonly attributeId: string; readonly memoryId: string | null }>,
+	queryVector: Float32Array | null,
+): Map<string, number> {
+	if (!queryVector) return new Map();
+	const memoryIds = [...new Set(rows.map((row) => row.memoryId).filter((id): id is string => !!id))];
+	if (memoryIds.length === 0) return new Map();
+	const placeholders = memoryIds.map(() => "?").join(", ");
+	const embeddings = db
+		.prepare(
+			`SELECT source_id, vector
+			 FROM embeddings
+			 WHERE source_type = 'memory'
+			   AND source_id IN (${placeholders})
+			   AND agent_id = ?
+			   AND dimensions = ?
+			   AND vector IS NOT NULL`,
+		)
+		.all(...memoryIds, agentId, queryVector.length) as Array<{ source_id: string; vector: Buffer }>;
+	const scoreByMemoryId = new Map<string, number>();
+	for (const embedding of embeddings) {
+		const vector = new Float32Array(
+			embedding.vector.buffer,
+			embedding.vector.byteOffset,
+			embedding.vector.byteLength / 4,
+		);
+		scoreByMemoryId.set(
+			embedding.source_id,
+			Math.max(scoreByMemoryId.get(embedding.source_id) ?? 0, cosineSimilarity(queryVector, vector)),
+		);
+	}
+	return new Map(
+		rows
+			.map((row) => [row.attributeId, row.memoryId ? (scoreByMemoryId.get(row.memoryId) ?? 0) : 0] as const)
+			.filter(([, score]) => score > 0),
+	);
 }
 
 function loadEntityContextLines(
@@ -876,54 +923,97 @@ function loadEntityContextLines(
 	agentId: string,
 	userMessage: string,
 	minScore: number,
+	queryVector: Float32Array | null,
 ): PromptEntityContextLine[] {
 	const entityTerms = new Set(extractSubstantiveWords(`${entity.entityName} ${entity.matchedText}`));
 	const promptTerms = extractSubstantiveWords(userMessage).filter((term) => !entityTerms.has(term));
-	const aspects = db
+	if (promptTerms.length === 0) return [];
+	const candidateRows = db
 		.prepare(
-			`SELECT id, name, canonical_name, weight
-			 FROM entity_aspects
-			 WHERE entity_id = ?
-			   AND agent_id = ?
-			   AND COALESCE(status, 'active') = 'active'
-			 ORDER BY weight DESC, name ASC
-			 LIMIT 12`,
+			`SELECT
+			   ea.id AS attribute_id,
+			   asp.id AS aspect_id,
+			   asp.name AS aspect_name,
+			   ea.kind,
+			   ea.content,
+			   ea.group_key,
+			   ea.claim_key,
+			   ea.confidence,
+			   ea.importance,
+			   ea.source_kind,
+			   ea.source_id,
+			   ea.source_path,
+			   ea.memory_id,
+			   COALESCE(ea.version, 1) AS version
+			 FROM entity_aspects asp
+			 JOIN entity_attributes ea ON ea.aspect_id = asp.id
+			 WHERE asp.entity_id = ?
+			   AND asp.agent_id = ?
+			   AND COALESCE(asp.status, 'active') = 'active'
+			   AND ea.agent_id = ?
+			   AND ea.status = 'active'
+			   AND ea.superseded_by IS NULL
+			   AND NOT EXISTS (
+			     SELECT 1
+			     FROM entity_attributes newer
+			     WHERE newer.aspect_id = ea.aspect_id
+			       AND newer.agent_id = ea.agent_id
+			       AND newer.kind = ea.kind
+			       AND COALESCE(newer.group_key, 'general') = COALESCE(ea.group_key, 'general')
+			       AND newer.claim_key = ea.claim_key
+			       AND newer.status = 'active'
+			       AND newer.superseded_by IS NULL
+			       AND COALESCE(newer.version, 1) > COALESCE(ea.version, 1)
+			   )
+			 ORDER BY ea.importance DESC, ea.updated_at DESC
+			 LIMIT 48`,
 		)
-		.all(entity.entityId, agentId) as Array<{
-		id: string;
-		name: string;
-		canonical_name: string;
-		weight: number;
+		.all(entity.entityId, agentId, agentId) as Array<{
+		attribute_id: string;
+		aspect_id: string;
+		aspect_name: string;
+		kind: "attribute" | "constraint";
+		content: string;
+		group_key: string | null;
+		claim_key: string | null;
+		confidence: number;
+		importance: number;
+		source_kind: string | null;
+		source_id: string | null;
+		source_path: string | null;
+		memory_id: string | null;
+		version: number;
 	}>;
+	const semanticScores = loadAttributeSemanticScores(
+		db,
+		agentId,
+		candidateRows.map((row) => ({ attributeId: row.attribute_id, memoryId: row.memory_id })),
+		queryVector,
+	);
+	const candidates: PromptAttributeCandidate[] = candidateRows
+		.map((row) => ({
+			attributeId: row.attribute_id,
+			aspectId: row.aspect_id,
+			entityName: entity.entityName,
+			aspectName: row.aspect_name,
+			groupKey: row.group_key,
+			claimKey: row.claim_key,
+			kind: row.kind,
+			content: row.content,
+			confidence: row.confidence,
+			importance: row.importance,
+			sourceKind: row.source_kind,
+			sourceId: row.source_id,
+			sourcePath: row.source_path,
+			memoryId: row.memory_id,
+			version: row.version,
+			score: Math.max(semanticScores.get(row.attribute_id) ?? 0, scoreAttributeLexically(row, promptTerms)),
+		}))
+		.filter((row) => row.score >= minScore)
+		.sort((a, b) => b.score - a.score || b.importance - a.importance);
 	const selectedAspectIds = new Set<string>();
-	for (const aspect of aspects) {
-		const rows = db
-			.prepare(
-				`SELECT ea.content, ea.group_key, ea.claim_key
-				 FROM entity_attributes ea
-				 WHERE ea.aspect_id = ?
-				   AND ea.agent_id = ?
-				   AND ea.status = 'active'
-				   AND ea.superseded_by IS NULL
-				   AND NOT EXISTS (
-				     SELECT 1
-				     FROM entity_attributes newer
-				     WHERE newer.aspect_id = ea.aspect_id
-				       AND newer.agent_id = ea.agent_id
-				       AND newer.kind = ea.kind
-				       AND COALESCE(newer.group_key, 'general') = COALESCE(ea.group_key, 'general')
-				       AND newer.claim_key = ea.claim_key
-				       AND newer.status = 'active'
-				       AND newer.superseded_by IS NULL
-				       AND COALESCE(newer.version, 1) > COALESCE(ea.version, 1)
-				   )
-				 ORDER BY ea.importance DESC, ea.updated_at DESC
-				 LIMIT 12`,
-			)
-			.all(aspect.id, agentId) as Array<{ content: string; group_key: string | null; claim_key: string | null }>;
-		if (rows.length === 0) continue;
-		const score = scoreAspectForPrompt(aspect, rows, promptTerms);
-		if (score >= minScore) selectedAspectIds.add(aspect.id);
+	for (const candidate of candidates) {
+		selectedAspectIds.add(candidate.aspectId);
 		if (selectedAspectIds.size >= ENTITY_CONTEXT_MAX_ASPECTS_PER_ENTITY) break;
 	}
 	if (selectedAspectIds.size === 0) return [];
@@ -1013,20 +1103,35 @@ function formatEntityContextLine(line: PromptEntityContextLine): string {
 	return `- [${line.kind}] ${path}: ${line.content} (${source})`;
 }
 
-function buildEntityPromptContext(
+async function buildEntityPromptContext(
 	userMessage: string,
 	agentId: string,
 	minScore: number,
 	injectBudget: number,
-): PromptEntityContextResult {
+	embedFn: typeof fetchEmbedding,
+	embeddingCfg: Parameters<typeof fetchEmbedding>[1],
+): Promise<PromptEntityContextResult> {
 	if (isLowSignalPrompt(userMessage)) return { lines: [], memoryCount: 0, engine: "low-signal" };
 	if (!existsSync(getMemoryDbPath())) return { lines: [], memoryCount: 0, engine: "no-entity" };
 	if (!hasDbAccessor()) return { lines: [], memoryCount: 0, engine: "no-entity" };
+	const matches = getDbAccessor().withReadDb((db) => resolvePromptEntityMatches(db, agentId, userMessage));
+	if (matches === "ambiguous") return { lines: [], memoryCount: 0, engine: "ambiguous-entity" };
+	if (matches.length === 0) return { lines: [], memoryCount: 0, engine: "no-entity" };
+	const semanticQuery = queryWithoutPromptEntities(userMessage, matches);
+	if (!semanticQuery) return { lines: [], memoryCount: 0, engine: "no-aspect-hit" };
+	let queryVector: Float32Array | null = null;
+	try {
+		const vector = await embedFn(semanticQuery, embeddingCfg);
+		if (vector) queryVector = new Float32Array(vector);
+	} catch (error) {
+		logger.warn("hooks", "Entity attribute semantic scoring failed; using lexical attribute scoring", {
+			error: error instanceof Error ? error.message : String(error),
+		});
+	}
 	return getDbAccessor().withReadDb((db) => {
-		const matches = resolvePromptEntityMatches(db, agentId, userMessage);
-		if (matches === "ambiguous") return { lines: [], memoryCount: 0, engine: "ambiguous-entity" };
-		if (matches.length === 0) return { lines: [], memoryCount: 0, engine: "no-entity" };
-		const lines = matches.flatMap((entity) => loadEntityContextLines(db, entity, agentId, userMessage, minScore));
+		const lines = matches.flatMap((entity) =>
+			loadEntityContextLines(db, entity, agentId, userMessage, minScore, queryVector),
+		);
 		if (lines.length === 0) return { lines: [], memoryCount: 0, engine: "no-aspect-hit" };
 		const selected = selectWithBudgetSkippingOversized(
 			lines.map((line) => ({ content: formatEntityContextLine(line) })),
@@ -2864,11 +2969,13 @@ export async function handleUserPromptSubmit(
 	try {
 		const cfg = deps.loadMemoryConfig(getAgentsDir());
 		const injectBudget = submitCfg.maxInjectChars ?? cfg.pipelineV2.guardrails.contextBudgetChars;
-		const entityContext = buildEntityPromptContext(
+		const entityContext = await buildEntityPromptContext(
 			userMessage,
 			agentId,
 			resolveUserPromptMinScore(submitCfg.minScore),
 			injectBudget,
+			deps.fetchEmbedding,
+			cfg.embedding,
 		);
 		if (entityContext.lines.length === 0) {
 			return finalizeUserPromptSubmitSuccess(

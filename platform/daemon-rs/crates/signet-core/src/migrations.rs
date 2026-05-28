@@ -409,6 +409,11 @@ fn ensure_cross_daemon_parity_columns(conn: &Connection) -> Result<(), CoreError
     add_column_if_missing(conn, "memories", "scope", "TEXT")?;
     add_column_if_missing(conn, "memories", "idempotency_key", "TEXT")?;
     add_column_if_missing(conn, "memories", "runtime_path", "TEXT")?;
+    add_column_if_missing(conn, "embeddings", "agent_id", "TEXT")?;
+    conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_embeddings_agent_source
+            ON embeddings(agent_id, source_type, source_id);",
+    )?;
 
     add_column_if_missing(
         conn,

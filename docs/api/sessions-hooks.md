@@ -58,7 +58,8 @@ Code parent activity in the same project.
 
 Called on each user message. Returns compact entity current-view context only
 when the prompt mentions a known ontology entity or active alias and at least
-one aspect clears the confidence gate.
+one current attribute clears the confidence gate. The entity mention scopes the
+search; attribute relevance chooses which aspect context to inject.
 
 **Request body**
 
@@ -81,7 +82,7 @@ are optional.
 
 Prompt-submit does not run generic memory recall and has no fallback injection.
 Low-signal prompts, unknown entities, ambiguous entity mentions, and prompts
-where no aspect clears `hooks.userPromptSubmit.minScore` return `inject: ""`.
+where no attribute clears `hooks.userPromptSubmit.minScore` return `inject: ""`.
 Explicit recall is still available through `/api/memory/recall` and MCP/CLI
 recall tools. Raw transcript search is not injected on prompt-submit; use the
 dedicated `session_search` MCP/API surface when a caller needs transcript

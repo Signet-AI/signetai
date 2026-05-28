@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
+import { vectorToBlob } from "./db-helpers";
 import { handleUserPromptSubmit } from "./hooks";
 import { SIGNET_SECRETS_PLUGIN_ID, getDefaultPluginHost, resetDefaultPluginHostForTests } from "./plugins/index";
 
@@ -101,6 +102,11 @@ function seedEntityContext(): void {
 			 VALUES (?, ?, 'default', ?, ?, ?, ?, ?)`,
 		).run("aspect-marketing", "entity-signet", "marketing", "marketing", 0.2, now, now);
 		db.prepare(
+			`INSERT INTO entity_aspects
+			 (id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at)
+			 VALUES (?, ?, 'default', ?, ?, ?, ?, ?)`,
+		).run("aspect-preferences", "entity-signet", "preferences", "preferences", 0.8, now, now);
+		db.prepare(
 			`INSERT INTO entity_attributes
 			 (id, aspect_id, agent_id, kind, content, normalized_content, group_key, claim_key,
 			  confidence, importance, status, memory_id, source_kind, source_id, created_at, updated_at)
@@ -164,6 +170,34 @@ function seedEntityContext(): void {
 			  confidence, importance, status, created_at, updated_at)
 			 VALUES (?, ?, 'default', 'attribute', ?, ?, 'copy', 'positioning', 0.8, 0.3, 'active', ?, ?)`,
 		).run("attr-marketing", "aspect-marketing", "Marketing copy should stay secondary.", "marketing copy", now, now);
+		db.prepare(
+			`INSERT INTO entity_attributes
+			 (id, aspect_id, agent_id, kind, content, normalized_content, group_key, claim_key,
+			  confidence, importance, status, memory_id, source_kind, source_id, created_at, updated_at)
+			 VALUES (?, ?, 'default', 'attribute', ?, ?, 'writing', 'favorite_pen', 0.95, 0.9, 'active', ?, 'memory', ?, ?, ?)`,
+		).run(
+			"attr-preferences-pen",
+			"aspect-preferences",
+			"Favorite pen is a Pilot G-2.",
+			"favorite pen is a pilot g 2",
+			"mem-preferences-pen",
+			"mem-preferences-pen",
+			now,
+			now,
+		);
+		db.prepare(
+			`INSERT INTO embeddings
+			 (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id)
+			 VALUES (?, ?, ?, ?, 'memory', ?, ?, ?, 'default')`,
+		).run(
+			"emb-preferences-pen",
+			"hash-preferences-pen",
+			vectorToBlob([1, 0]),
+			2,
+			"mem-preferences-pen",
+			"Favorite pen is a Pilot G-2.",
+			now,
+		);
 	});
 }
 
@@ -253,6 +287,81 @@ describe("handleUserPromptSubmit entity context", () => {
 		expect(result.inject).toContain("Prompt context should come from entity current views.");
 	});
 
+	it("uses entity match only as the semantic scope for attribute relevance", async () => {
+		seedEntityContext();
+		fetchEmbeddingMock.mockImplementationOnce(async () => [1, 0]);
+
+		const result = await handleUserPromptSubmit(
+			{ harness: "codex", userMessage: "Signet likes taking notes", sessionKey: "session-attribute-semantic" },
+			makeDeps(),
+		);
+
+		expect(fetchEmbeddingMock.mock.calls.at(-1)?.[0]).toBe("likes taking notes");
+		expect(result.engine).toBe("entity-context");
+		expect(result.inject).toContain("Signet / preferences / writing / favorite_pen");
+		expect(result.inject).toContain("Favorite pen is a Pilot G-2.");
+		expect(result.inject).not.toContain("Marketing copy should stay secondary");
+		expect(result.inject).not.toContain("## Relevant Memory");
+	});
+
+	it("keeps semantic attribute scoring scoped to the current agent", async () => {
+		seedEntityContext();
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO embeddings
+				 (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id)
+				 VALUES (?, ?, ?, ?, 'memory', ?, ?, ?, ?)`,
+			).run(
+				"emb-other-agent-preferences-pen",
+				"hash-other-agent-preferences-pen",
+				vectorToBlob([0, 1]),
+				2,
+				"mem-preferences-pen",
+				"Other agent favorite pen evidence.",
+				"2026-05-27T00:00:00.000Z",
+				"other-agent",
+			);
+		});
+		fetchEmbeddingMock.mockImplementationOnce(async () => [0, 1]);
+
+		const result = await handleUserPromptSubmit(
+			{ harness: "codex", userMessage: "Signet likes taking notes", sessionKey: "session-agent-scoped-embedding" },
+			makeDeps(),
+		);
+
+		expect(result).toMatchObject({ inject: "", memoryCount: 0, engine: "no-aspect-hit" });
+		expect(result.inject).not.toContain("Favorite pen is a Pilot G-2.");
+	});
+
+	it("ignores mismatched embedding dimensions for semantic attribute scoring", async () => {
+		seedEntityContext();
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare("DELETE FROM embeddings WHERE id = ?").run("emb-preferences-pen");
+			db.prepare(
+				`INSERT INTO embeddings
+				 (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id)
+				 VALUES (?, ?, ?, ?, 'memory', ?, ?, ?, 'default')`,
+			).run(
+				"emb-preferences-pen-short",
+				"hash-preferences-pen-short",
+				vectorToBlob([1]),
+				1,
+				"mem-preferences-pen",
+				"Favorite pen is a Pilot G-2.",
+				"2026-05-27T00:00:00.000Z",
+			);
+		});
+		fetchEmbeddingMock.mockImplementationOnce(async () => [1, 0]);
+
+		const result = await handleUserPromptSubmit(
+			{ harness: "codex", userMessage: "Signet likes taking notes", sessionKey: "session-dimension-mismatch" },
+			makeDeps(),
+		);
+
+		expect(result).toMatchObject({ inject: "", memoryCount: 0, engine: "no-aspect-hit" });
+		expect(result.inject).not.toContain("Favorite pen is a Pilot G-2.");
+	});
+
 	it("stays silent when the prompt only names an entity alias", async () => {
 		seedEntityContext();
 
@@ -262,6 +371,18 @@ describe("handleUserPromptSubmit entity context", () => {
 		);
 
 		expect(result).toMatchObject({ inject: "", memoryCount: 0, engine: "no-aspect-hit" });
+	});
+
+	it("does not select aspects from literal aspect names without an attribute hit", async () => {
+		seedEntityContext();
+
+		const result = await handleUserPromptSubmit(
+			{ harness: "codex", userMessage: "SignetAI architecture", sessionKey: "session-aspect-name-only" },
+			makeDeps(),
+		);
+
+		expect(result).toMatchObject({ inject: "", memoryCount: 0, engine: "no-aspect-hit" });
+		expect(result.inject).not.toContain("Prompt context should come from entity current views.");
 	});
 
 	it("does not match short entity names as ordinary prompt tokens", async () => {

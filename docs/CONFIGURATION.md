@@ -1238,7 +1238,7 @@ a pre-compaction summary:
 | `enabled` | `true` | Enable per-prompt entity context injection |
 | `recallLimit` | `10` | Legacy field retained for config compatibility; prompt-submit no longer runs generic recall |
 | `maxInjectChars` | `500` | Prompt-time entity-context character budget |
-| `minScore` | `0.8` | Minimum aspect score required before injecting current-view attributes |
+| `minScore` | `0.8` | Minimum attribute relevance score required before injecting current-view aspect context |
 
 
 Environment Variables
