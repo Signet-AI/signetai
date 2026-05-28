@@ -830,6 +830,16 @@ function entityContextTablesAvailable(db: ReadDb): boolean {
 }
 
 const PROMPT_ENTITY_CONTEXT_ALLOWED_TYPES = new Set(["person", "project"]);
+const PROMPT_ROLE_ENTITY_DENY_TERMS = new Set(["assistant", "human", "user"]);
+const PROMPT_GENERIC_CONTEXT_QUERY_TERMS = new Set([
+	"context",
+	"contexts",
+	"current",
+	"prompt",
+	"relevant",
+	"view",
+	"views",
+]);
 
 function isPromptEntityContextTypeAllowed(entityType: string): boolean {
 	return PROMPT_ENTITY_CONTEXT_ALLOWED_TYPES.has(entityType.toLowerCase());
@@ -840,6 +850,35 @@ function isPromptGenericEntityPhrase(phraseTerms: readonly string[]): boolean {
 	const term = phraseTerms[0] ?? "";
 	if (PROMPT_BARE_POSSESSIVE_DENY_TERMS.has(term)) return true;
 	return term.endsWith("s") && PROMPT_BARE_POSSESSIVE_DENY_TERMS.has(term.slice(0, -1));
+}
+
+function isPromptRoleEntity(row: {
+	readonly entity_name: string;
+	readonly matched_text: string;
+	readonly pinned: number;
+}): boolean {
+	if (Math.min(Math.max(0, row.pinned), 1) > 0) return false;
+	const entityTerms = promptEntityTerms(row.entity_name);
+	const matchedTerms = promptEntityTerms(row.matched_text);
+	if (entityTerms.length !== 1 || matchedTerms.length !== 1) return false;
+	return (
+		PROMPT_ROLE_ENTITY_DENY_TERMS.has(entityTerms[0] ?? "") && PROMPT_ROLE_ENTITY_DENY_TERMS.has(matchedTerms[0] ?? "")
+	);
+}
+
+function isPromptBroadUncategorizedAttribute(row: {
+	readonly aspect_name: string;
+	readonly group_key: string | null;
+	readonly claim_key: string | null;
+}): boolean {
+	return (
+		normalizePromptEntityText(row.group_key ?? "general") === "general" &&
+		normalizePromptEntityText(row.claim_key ?? "uncategorized") === "uncategorized"
+	);
+}
+
+function isPromptGenericContextQuery(promptTerms: ReadonlyArray<string>): boolean {
+	return promptTerms.length > 0 && promptTerms.every((term) => PROMPT_GENERIC_CONTEXT_QUERY_TERMS.has(term));
 }
 
 function scorePromptEntityCandidate(row: {
@@ -905,6 +944,7 @@ function resolvePromptEntityMatches(db: ReadDb, agentId: string, userMessage: st
 	const candidatesByPhrase = new Map<string, PromptEntityCandidate[]>();
 	for (const row of rows) {
 		if (!isPromptEntityContextTypeAllowed(row.entity_type)) continue;
+		if (isPromptRoleEntity(row)) continue;
 		if (isPromptGenericEntityPhrase(promptEntityTerms(row.matched_text))) continue;
 		const span = promptPhraseSpan(userMessage, row.matched_text);
 		if (!span) continue;
@@ -1104,37 +1144,48 @@ function loadEntityContextLines(
 	const semanticScores = loadAttributeSemanticScores(
 		db,
 		agentId,
-		candidateRows.map((row) => ({ attributeId: row.attribute_id, memoryId: row.memory_id })),
+		candidateRows
+			.filter((row) => !isPromptBroadUncategorizedAttribute(row))
+			.map((row) => ({ attributeId: row.attribute_id, memoryId: row.memory_id })),
 		queryVector,
 	);
+	const genericContextQuery = isPromptGenericContextQuery(promptTerms);
 	const candidates: PromptAttributeCandidate[] = candidateRows
-		.map((row) => ({
-			attributeId: row.attribute_id,
-			aspectId: row.aspect_id,
-			entityName: entity.entityName,
-			aspectName: row.aspect_name,
-			groupKey: row.group_key,
-			claimKey: row.claim_key,
-			kind: row.kind,
-			content: row.content,
-			confidence: row.confidence,
-			importance: row.importance,
-			sourceKind: row.source_kind,
-			sourceId: row.source_id,
-			sourcePath: row.source_path,
-			memoryId: row.memory_id,
-			version: row.version,
-			score: Math.max(semanticScores.get(row.attribute_id) ?? 0, scoreAttributeLexically(row, promptTerms)),
-		}))
+		.filter((row) => !isPromptBroadUncategorizedAttribute(row))
+		.map((row) => {
+			const lexicalScore = scoreAttributeLexically(row, promptTerms);
+			const semanticScore = semanticScores.get(row.attribute_id) ?? 0;
+			return {
+				attributeId: row.attribute_id,
+				aspectId: row.aspect_id,
+				entityName: entity.entityName,
+				aspectName: row.aspect_name,
+				groupKey: row.group_key,
+				claimKey: row.claim_key,
+				kind: row.kind,
+				content: row.content,
+				confidence: row.confidence,
+				importance: row.importance,
+				sourceKind: row.source_kind,
+				sourceId: row.source_id,
+				sourcePath: row.source_path,
+				memoryId: row.memory_id,
+				version: row.version,
+				score: genericContextQuery && lexicalScore === 0 ? 0 : Math.max(semanticScore, lexicalScore),
+			};
+		})
 		.filter((row) => row.score >= minScore)
 		.sort((a, b) => b.score - a.score || b.importance - a.importance);
 	const selectedAspectIds = new Set<string>();
+	const selectedAttributeIds = new Set<string>();
 	for (const candidate of candidates) {
 		selectedAspectIds.add(candidate.aspectId);
+		selectedAttributeIds.add(candidate.attributeId);
 		if (selectedAspectIds.size >= ENTITY_CONTEXT_MAX_ASPECTS_PER_ENTITY) break;
 	}
 	if (selectedAspectIds.size === 0) return [];
 	const placeholders = [...selectedAspectIds].map(() => "?").join(", ");
+	const attributePlaceholders = [...selectedAttributeIds].map(() => "?").join(", ");
 	const rows = db
 		.prepare(
 			`SELECT
@@ -1153,6 +1204,7 @@ function loadEntityContextLines(
 			 FROM entity_attributes ea
 			 JOIN entity_aspects asp ON asp.id = ea.aspect_id
 			 WHERE ea.aspect_id IN (${placeholders})
+			   AND ea.id IN (${attributePlaceholders})
 			   AND ea.agent_id = ?
 			   AND ea.status = 'active'
 			   AND ea.superseded_by IS NULL
@@ -1174,7 +1226,7 @@ function loadEntityContextLines(
 			   ea.updated_at DESC
 			 LIMIT ?`,
 		)
-		.all(...selectedAspectIds, agentId, ENTITY_CONTEXT_MAX_LINES) as Array<{
+		.all(...selectedAspectIds, ...selectedAttributeIds, agentId, ENTITY_CONTEXT_MAX_LINES) as Array<{
 		aspect_name: string;
 		kind: "attribute" | "constraint";
 		content: string;
@@ -1188,21 +1240,23 @@ function loadEntityContextLines(
 		memory_id: string | null;
 		version: number;
 	}>;
-	return rows.map((row) => ({
-		entityName: entity.entityName,
-		aspectName: row.aspect_name,
-		groupKey: row.group_key,
-		claimKey: row.claim_key,
-		kind: row.kind,
-		content: row.content,
-		confidence: row.confidence,
-		importance: row.importance,
-		sourceKind: row.source_kind,
-		sourceId: row.source_id,
-		sourcePath: row.source_path,
-		memoryId: row.memory_id,
-		version: row.version,
-	}));
+	return rows
+		.filter((row) => !isPromptBroadUncategorizedAttribute(row))
+		.map((row) => ({
+			entityName: entity.entityName,
+			aspectName: row.aspect_name,
+			groupKey: row.group_key,
+			claimKey: row.claim_key,
+			kind: row.kind,
+			content: row.content,
+			confidence: row.confidence,
+			importance: row.importance,
+			sourceKind: row.source_kind,
+			sourceId: row.source_id,
+			sourcePath: row.source_path,
+			memoryId: row.memory_id,
+			version: row.version,
+		}));
 }
 
 function formatEntityContextLine(line: PromptEntityContextLine): string {
@@ -1238,8 +1292,9 @@ async function buildEntityPromptContext(
 		string,
 		{ readonly semanticQuery: string; readonly queryVector: Float32Array | null }
 	>();
+	const sharedSemanticQuery = queryWithoutPromptEntities(userMessage, matches);
 	for (const entity of matches) {
-		const semanticQuery = queryWithoutPromptEntities(userMessage, [entity]);
+		const semanticQuery = sharedSemanticQuery;
 		if (!semanticQuery) continue;
 		let queryVector: Float32Array | null = null;
 		try {

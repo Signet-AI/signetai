@@ -964,6 +964,34 @@ fn prompt_generic_entity_phrase(phrase_terms: &[String]) -> bool {
         .is_some_and(|singular| !prompt_bare_possessive_allowed(singular))
 }
 
+fn prompt_role_entity(row: &PromptEntityRow) -> bool {
+    if row.pinned.clamp(0, 1) > 0 {
+        return false;
+    }
+    let entity_terms = prompt_entity_terms(&row.entity_name);
+    let matched_terms = prompt_entity_terms(&row.matched_text);
+    if entity_terms.len() != 1 || matched_terms.len() != 1 {
+        return false;
+    }
+    matches!(entity_terms[0].as_str(), "assistant" | "human" | "user")
+        && matches!(matched_terms[0].as_str(), "assistant" | "human" | "user")
+}
+
+fn prompt_broad_uncategorized_attribute(group: &str, claim: &str) -> bool {
+    normalize_prompt_entity_text(group) == "general"
+        && normalize_prompt_entity_text(claim) == "uncategorized"
+}
+
+fn prompt_generic_context_query(context_terms: &HashSet<String>) -> bool {
+    !context_terms.is_empty()
+        && context_terms.iter().all(|term| {
+            matches!(
+                term.as_str(),
+                "context" | "contexts" | "current" | "prompt" | "relevant" | "view" | "views"
+            )
+        })
+}
+
 fn score_prompt_entity_candidate(
     match_source: &str,
     matched_text: &str,
@@ -1437,6 +1465,7 @@ pub async fn prompt_submit(
             let mut candidates_by_phrase = HashMap::<String, Vec<PromptEntityCandidate>>::new();
             for row in entity_rows {
                 if !prompt_entity_context_type_allowed(&row.entity_type)
+                    || prompt_role_entity(&row)
                     || prompt_generic_entity_phrase(&prompt_entity_terms(&row.matched_text))
                 {
                     continue;
@@ -1528,19 +1557,24 @@ pub async fn prompt_submit(
                 .filter(|term| is_prompt_context_term(term))
                 .map(str::to_string)
                 .collect::<HashSet<_>>();
-            let mut lines = Vec::new();
-            for entity in entity_matches {
-                let entity_terms = normalize_prompt_entity_text(&format!(
-                    "{} {}",
-                    entity.entity_name, entity.matched_text
-                ))
+            let all_entity_terms = entity_matches
+                .iter()
+                .flat_map(|entity| {
+                    normalize_prompt_entity_text(&format!(
+                        "{} {}",
+                        entity.entity_name, entity.matched_text
+                    ))
                     .split_whitespace()
                     .map(str::to_string)
-                    .collect::<HashSet<_>>();
+                    .collect::<Vec<_>>()
+                })
+                .collect::<HashSet<_>>();
+            let mut lines = Vec::new();
+            for entity in entity_matches {
                 let context_terms = prompt_terms
                     .iter()
                     .filter(|term| {
-                        !entity_terms
+                        !all_entity_terms
                             .iter()
                             .any(|entity_term| prompt_entity_term_matches(term, entity_term))
                     })
@@ -1571,11 +1605,14 @@ pub async fn prompt_submit(
                 };
                 let mut selected_aspects = Vec::new();
                 for (aspect_id, aspect_name, _canonical_name, _weight) in aspects {
+                    let generic_context_query = prompt_generic_context_query(&context_terms);
                     let attr_rows = match conn.prepare(
-                        "SELECT ea.content, COALESCE(ea.memory_id, ''), ea.confidence, ea.importance
+                        "SELECT ea.id, ea.content, COALESCE(ea.memory_id, ''), ea.confidence, ea.importance
                          FROM entity_attributes ea
                          WHERE ea.aspect_id = ?1
                            AND ea.agent_id = ?2
+                           AND NOT (COALESCE(ea.group_key, 'general') = 'general'
+                             AND COALESCE(ea.claim_key, 'uncategorized') = 'uncategorized')
                            AND ea.status = 'active'
                            AND ea.superseded_by IS NULL
                            AND NOT EXISTS (
@@ -1594,14 +1631,21 @@ pub async fn prompt_submit(
                          LIMIT 12",
                     ) {
                         Ok(mut stmt) => stmt
-                            .query_map(rusqlite::params![aspect_id, agent_id.clone()], |row| {
+                            .query_map(
+                                rusqlite::params![
+                                    aspect_id,
+                                    agent_id.clone()
+                                ],
+                                |row| {
                                 Ok((
                                     row.get::<_, String>(0)?,
                                     row.get::<_, String>(1)?,
-                                    row.get::<_, f64>(2)?,
+                                    row.get::<_, String>(2)?,
                                     row.get::<_, f64>(3)?,
+                                    row.get::<_, f64>(4)?,
                                 ))
-                            })
+                                },
+                            )
                             .ok()
                             .map(|rows| rows.filter_map(|r| r.ok()).collect::<Vec<_>>())
                             .unwrap_or_default(),
@@ -1610,9 +1654,9 @@ pub async fn prompt_submit(
                     if attr_rows.is_empty() || context_terms.is_empty() {
                         continue;
                     }
-                    let score = attr_rows
+                    let matched_attr_ids = attr_rows
                         .iter()
-                        .map(|(content, memory_id, confidence, importance)| {
+                        .filter_map(|(attr_id, content, memory_id, confidence, importance)| {
                             let attr_text = normalize_prompt_entity_text(content);
                             let lexical_score = if attr_text
                                 .split_whitespace()
@@ -1633,24 +1677,31 @@ pub async fn prompt_submit(
                                     query_vector_for_scoring.as_deref(),
                                 )
                             };
-                            lexical_score.max(semantic_score)
+                            if generic_context_query && lexical_score == 0.0 {
+                                None
+                            } else {
+                                let score = lexical_score.max(semantic_score);
+                                (score >= min_score).then(|| attr_id.clone())
+                            }
                         })
-                        .fold(0.0, f64::max);
-                    if score >= min_score {
-                        selected_aspects.push((aspect_id, aspect_name));
+                        .collect::<HashSet<_>>();
+                    if !matched_attr_ids.is_empty() {
+                        selected_aspects.push((aspect_id, aspect_name, matched_attr_ids));
                     }
                     if selected_aspects.len() >= 3 {
                         break;
                     }
                 }
-                for (aspect_id, aspect_name) in selected_aspects {
+                for (aspect_id, aspect_name, matched_attr_ids) in selected_aspects {
                     let attrs = match conn.prepare(
-                        "SELECT ea.kind, ea.content, COALESCE(ea.group_key, 'general'), COALESCE(ea.claim_key, 'uncategorized'),
+                        "SELECT ea.id, ea.kind, ea.content, COALESCE(ea.group_key, 'general'), COALESCE(ea.claim_key, 'uncategorized'),
                                 COALESCE(ea.source_kind, ''), COALESCE(ea.source_id, ''), COALESCE(ea.memory_id, ''),
                                 COALESCE(ea.version, 1)
                          FROM entity_attributes ea
                          WHERE ea.aspect_id = ?1
                            AND ea.agent_id = ?2
+                           AND NOT (COALESCE(ea.group_key, 'general') = 'general'
+                             AND COALESCE(ea.claim_key, 'uncategorized') = 'uncategorized')
                            AND ea.status = 'active'
                            AND ea.superseded_by IS NULL
                            AND NOT EXISTS (
@@ -1669,7 +1720,12 @@ pub async fn prompt_submit(
                          LIMIT 8",
                     ) {
                         Ok(mut stmt) => stmt
-                            .query_map(rusqlite::params![aspect_id, agent_id.clone()], |row| {
+                            .query_map(
+                                rusqlite::params![
+                                    aspect_id,
+                                    agent_id.clone()
+                                ],
+                                |row| {
                                 Ok((
                                     row.get::<_, String>(0)?,
                                     row.get::<_, String>(1)?,
@@ -1678,15 +1734,23 @@ pub async fn prompt_submit(
                                     row.get::<_, String>(4)?,
                                     row.get::<_, String>(5)?,
                                     row.get::<_, String>(6)?,
-                                    row.get::<_, i64>(7)?,
+                                    row.get::<_, String>(7)?,
+                                    row.get::<_, i64>(8)?,
                                 ))
-                            })
+                                },
+                            )
                             .ok()
                             .map(|rows| rows.filter_map(|r| r.ok()).collect::<Vec<_>>())
                             .unwrap_or_default(),
                         Err(_) => vec![],
                     };
-                    for (kind, content, group, claim, source_kind, source_id, memory_id, version) in attrs {
+                    for (attr_id, kind, content, group, claim, source_kind, source_id, memory_id, version) in attrs {
+                        if !matched_attr_ids.contains(&attr_id) {
+                            continue;
+                        }
+                        if prompt_broad_uncategorized_attribute(&group, &claim) {
+                            continue;
+                        }
                         let source = if !source_kind.is_empty() && !source_id.is_empty() {
                             format!("{source_kind}:{source_id}")
                         } else if !memory_id.is_empty() {
@@ -3949,6 +4013,21 @@ mod tests {
                     rusqlite::params!["2026-05-27T00:00:00Z"],
                 )?;
                 conn.execute(
+                    "INSERT INTO entity_aspects (id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at)
+                     VALUES ('aspect-general', 'entity-signet', 'agent-a', 'general', 'general', 1.0, ?1, ?1)",
+                    rusqlite::params!["2026-05-27T00:00:00Z"],
+                )?;
+                conn.execute(
+                    "INSERT INTO entity_attributes
+                     (id, aspect_id, agent_id, memory_id, kind, content, normalized_content, confidence, importance,
+                      status, group_key, claim_key, created_at, updated_at)
+                     VALUES ('attr-general-junk', 'aspect-general', 'agent-a', NULL, 'constraint',
+                      'Prompt context junk from general uncategorized should not inject.',
+                      'prompt context junk from general uncategorized should not inject', 0.99, 1.0, 'active',
+                      'general', 'uncategorized', ?1, ?1)",
+                    rusqlite::params!["2026-05-27T00:00:00Z"],
+                )?;
+                conn.execute(
                     "INSERT INTO entity_attributes
                      (id, aspect_id, agent_id, memory_id, kind, content, normalized_content, confidence, importance,
                       status, group_key, claim_key, version, created_at, updated_at)
@@ -4002,6 +4081,8 @@ mod tests {
         assert!(inject.contains("## Relevant Entity Context"));
         assert!(inject.contains("Signet / architecture / runtime / prompt_context"));
         assert!(inject.contains("Prompt context should come from entity current views."));
+        assert!(!inject.contains("Signet / general / general / uncategorized"));
+        assert!(!inject.contains("Prompt context junk from general uncategorized"));
         assert!(!inject.contains("Stale prompt context should not be injected."));
         assert!(!inject.contains("## Relevant Memory"));
         assert!(!inject.contains("Marketing copy should stay secondary"));
@@ -4268,6 +4349,68 @@ mod tests {
                 user_prompt: None,
                 last_assistant_message: None,
                 session_key: Some("sess-prompt-disallowed-entity-type".to_string()),
+                transcript: None,
+                transcript_path: None,
+                runtime_path: None,
+            }),
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = test_json(resp).await;
+        assert_eq!(
+            body["engine"],
+            serde_json::Value::String("no-entity".to_string())
+        );
+        assert_eq!(body["inject"], serde_json::Value::String(String::new()));
+
+        drop(state);
+        let _ = writer.await;
+    }
+
+    #[tokio::test]
+    async fn prompt_submit_ignores_generic_role_label_people() {
+        let (state, writer, _tmp) = test_state("hooks-prompt-submit-role-label-entity");
+        state
+            .pool
+            .write(Priority::Low, move |conn| {
+                let now = "2026-05-27T00:00:00Z";
+                conn.execute(
+                    "INSERT INTO entities (id, name, canonical_name, entity_type, description, agent_id, mentions, created_at, updated_at)
+                     VALUES ('entity-user-role', 'User', 'user', 'person', 'Role label', 'agent-a', 2000, ?1, ?1)",
+                    rusqlite::params![now],
+                )?;
+                conn.execute(
+                    "INSERT INTO entity_aspects (id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at)
+                     VALUES ('aspect-user-general', 'entity-user-role', 'agent-a', 'general', 'general', 1.0, ?1, ?1)",
+                    rusqlite::params![now],
+                )?;
+                conn.execute(
+                    "INSERT INTO entity_attributes
+                     (id, aspect_id, agent_id, memory_id, kind, content, normalized_content, confidence, importance,
+                      status, group_key, claim_key, created_at, updated_at)
+                     VALUES ('attr-user-role-context', 'aspect-user-general', 'agent-a', NULL, 'attribute',
+                      'User prompt context role-label junk should not inject.',
+                      'user prompt context role label junk should not inject',
+                      0.95, 0.9, 'active', 'general', 'uncategorized', ?1, ?1)",
+                    rusqlite::params![now],
+                )?;
+                Ok(serde_json::Value::Null)
+            })
+            .await
+            .unwrap();
+
+        let resp = prompt_submit(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(PromptSubmitBody {
+                harness: Some("test".to_string()),
+                project: Some("platform/daemon-rs".to_string()),
+                agent_id: Some("agent-a".to_string()),
+                user_message: Some("tell the user about prompt context".to_string()),
+                user_prompt: None,
+                last_assistant_message: None,
+                session_key: Some("sess-prompt-role-label-entity".to_string()),
                 transcript: None,
                 transcript_path: None,
                 runtime_path: None,

@@ -266,9 +266,8 @@ describe("handleUserPromptSubmit entity context", () => {
 
 		expect(result.engine).toBe("entity-context");
 		expect(result.inject).toContain("## Relevant Entity Context");
-		expect(result.inject).toContain("[constraint] Signet / architecture / runtime / fallback_policy");
-		expect(result.inject).toContain("Do not use generic fallback injection.");
 		expect(result.inject).toContain("[attribute] Signet / architecture / runtime / prompt_context");
+		expect(result.inject).not.toContain("[constraint] Signet / architecture / runtime / fallback_policy");
 		expect(result.inject).not.toContain("Stale prompt context should not be injected.");
 		expect(result.inject).not.toContain("## Relevant Memory");
 		expect(result.inject).not.toContain("Marketing copy should stay secondary");
@@ -455,6 +454,165 @@ describe("handleUserPromptSubmit entity context", () => {
 
 		expect(result.engine).toBe("no-entity");
 		expect(result.inject).not.toContain("Claude Code connector / runtime");
+	});
+
+	it("ignores generic role-label person entities for prompt context", async () => {
+		getDbAccessor().withWriteTx((db) => {
+			const now = "2026-05-27T00:00:00.000Z";
+			db.prepare(
+				`INSERT INTO entities
+				 (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
+				 VALUES ('entity-user-role', 'User', 'user', 'person', 'default', 2000, ?, ?)`,
+			).run(now, now);
+			db.prepare(
+				`INSERT INTO entity_aspects
+				 (id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at)
+				 VALUES ('aspect-user-general', 'entity-user-role', 'default', 'general', 'general', 1, ?, ?)`,
+			).run(now, now);
+			db.prepare(
+				`INSERT INTO entity_attributes
+				 (id, aspect_id, agent_id, kind, content, normalized_content, group_key, claim_key,
+				  confidence, importance, status, created_at, updated_at)
+				 VALUES ('attr-user-role-context', 'aspect-user-general', 'default', 'attribute',
+				  'User prompt context role-label junk should not inject.',
+				  'user prompt context role label junk should not inject',
+				  'general', 'uncategorized', 0.9, 0.9, 'active', ?, ?)`,
+			).run(now, now);
+		});
+
+		const result = await handleUserPromptSubmit(
+			{
+				harness: "codex",
+				userMessage: "tell the user about prompt context",
+				sessionKey: "session-role-label-entity",
+			},
+			makeDeps(),
+		);
+
+		expect(result.engine).toBe("no-entity");
+		expect(result.inject).not.toContain("User / general");
+	});
+
+	it("does not inject broad general uncategorized entity attributes", async () => {
+		seedEntityContext();
+		getDbAccessor().withWriteTx((db) => {
+			const now = "2026-05-27T00:00:00.000Z";
+			db.prepare(
+				`INSERT INTO entity_aspects
+				 (id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at)
+				 VALUES ('aspect-signet-general', 'entity-signet', 'default', 'general', 'general', 1, ?, ?)`,
+			).run(now, now);
+			db.prepare(
+				`INSERT INTO entity_attributes
+				 (id, aspect_id, agent_id, kind, content, normalized_content, group_key, claim_key,
+				  confidence, importance, status, created_at, updated_at)
+				 VALUES ('attr-signet-general-junk', 'aspect-signet-general', 'default', 'constraint',
+				  'Prompt context junk from general uncategorized should not inject.',
+				  'prompt context junk from general uncategorized should not inject',
+				  'general', 'uncategorized', 0.99, 1, 'active', ?, ?)`,
+			).run(now, now);
+		});
+		fetchEmbeddingMock.mockImplementationOnce(async () => [1, 0]);
+
+		const result = await handleUserPromptSubmit(
+			{
+				harness: "codex",
+				userMessage: "Signet prompt context",
+				sessionKey: "session-general-uncategorized-filter",
+			},
+			makeDeps(),
+		);
+
+		expect(result.engine).toBe("entity-context");
+		expect(result.inject).toContain("Signet / architecture / runtime / prompt_context");
+		expect(result.inject).not.toContain("Signet / general / general / uncategorized");
+		expect(result.inject).not.toContain("Prompt context junk from general uncategorized");
+	});
+
+	it("strips all selected entity terms from semantic attribute queries", async () => {
+		seedEntityContext();
+		getDbAccessor().withWriteTx((db) => {
+			const now = "2026-05-27T00:00:00.000Z";
+			db.prepare(
+				`INSERT INTO entities
+				 (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
+				 VALUES ('entity-nicholai', 'Nicholai', 'nicholai', 'person', 'default', 10, ?, ?)`,
+			).run(now, now);
+			db.prepare(
+				`INSERT INTO entity_aspects
+				 (id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at)
+				 VALUES ('aspect-nicholai-collaboration', 'entity-nicholai', 'default',
+				  'collaboration', 'collaboration', 1, ?, ?)`,
+			).run(now, now);
+			db.prepare(
+				`INSERT INTO entity_attributes
+				 (id, aspect_id, agent_id, kind, content, normalized_content, group_key, claim_key,
+				  confidence, importance, status, created_at, updated_at)
+				 VALUES ('attr-nicholai-collaboration-style', 'aspect-nicholai-collaboration',
+				  'default', 'attribute', 'Collaboration style prefers direct artifact-first work.',
+				  'collaboration style prefers direct artifact first work',
+				  'working_style', 'style_summary', 0.9, 0.9, 'active', ?, ?)`,
+			).run(now, now);
+		});
+		fetchEmbeddingMock.mockImplementation(async () => [0, 0]);
+
+		await handleUserPromptSubmit(
+			{
+				harness: "codex",
+				userMessage: "Signet Nicholai collaboration style",
+				sessionKey: "session-strip-all-entities",
+			},
+			makeDeps(),
+		);
+
+		expect(fetchEmbeddingMock.mock.calls.map((call) => call[0])).toEqual([
+			"collaboration style",
+			"collaboration style",
+		]);
+	});
+
+	it("requires lexical support for generic prompt context semantic hits", async () => {
+		getDbAccessor().withWriteTx((db) => {
+			const now = "2026-05-27T00:00:00.000Z";
+			db.prepare(
+				`INSERT INTO entities
+				 (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
+				 VALUES ('entity-nicholai', 'Nicholai', 'nicholai', 'person', 'default', 10, ?, ?)`,
+			).run(now, now);
+			db.prepare(
+				`INSERT INTO entity_aspects
+				 (id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at)
+				 VALUES ('aspect-nicholai-projects', 'entity-nicholai', 'default', 'projects', 'projects', 1, ?, ?)`,
+			).run(now, now);
+			db.prepare(
+				`INSERT INTO entity_attributes
+				 (id, aspect_id, agent_id, memory_id, kind, content, normalized_content, group_key, claim_key,
+				  confidence, importance, status, created_at, updated_at)
+				 VALUES ('attr-nicholai-compass', 'aspect-nicholai-projects', 'default', 'mem-nicholai-compass',
+				  'attribute', 'Compass is an active client project management tool.',
+				  'compass is an active client project management tool',
+				  'active_projects', 'compass', 0.9, 0.9, 'active', ?, ?)`,
+			).run(now, now);
+			db.prepare(
+				`INSERT INTO embeddings
+				 (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id)
+				 VALUES ('emb-nicholai-compass', 'hash-nicholai-compass', ?, 2, 'memory',
+				  'mem-nicholai-compass', 'Compass is an active client project management tool.', ?, 'default')`,
+			).run(vectorToBlob([1, 0]), now);
+		});
+		fetchEmbeddingMock.mockImplementationOnce(async () => [1, 0]);
+
+		const result = await handleUserPromptSubmit(
+			{
+				harness: "codex",
+				userMessage: "Nicholai prompt context",
+				sessionKey: "session-generic-context-semantic-gate",
+			},
+			makeDeps(),
+		);
+
+		expect(result.engine).toBe("no-aspect-hit");
+		expect(result.inject).not.toContain("Compass is an active client project management tool.");
 	});
 
 	it("ignores low-quality generic entity collisions when a stronger entity is present", async () => {
