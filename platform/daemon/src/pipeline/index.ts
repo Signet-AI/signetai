@@ -31,7 +31,7 @@ import { type SummaryWorkerHandle, startSummaryWorker } from "./summary-worker";
 import { type SynthesisWorkerHandle, startSynthesisWorker } from "./synthesis-worker";
 import { type WorkerHandle, type WorkerProgressStats, type WorkerStats, startWorker } from "./worker";
 
-export { enqueueExtractionJob } from "./worker";
+export { enqueueExtractionJob } from "./extraction-queue";
 export type { WorkerStats } from "./worker";
 export { enqueueDocumentIngestJob } from "./document-worker";
 export {

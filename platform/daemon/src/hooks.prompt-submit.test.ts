@@ -303,6 +303,46 @@ describe("handleUserPromptSubmit entity context", () => {
 		expect(result.inject).not.toContain("## Relevant Memory");
 	});
 
+	it("uses structured path terms to select zero-confidence curated attributes", async () => {
+		getDbAccessor().withWriteTx((db) => {
+			const now = "2026-05-27T00:00:00.000Z";
+			db.prepare(
+				`INSERT INTO entities
+				 (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
+				 VALUES ('entity-nicholai', 'Nicholai', 'nicholai', 'person', 'default', 10, ?, ?)`,
+			).run(now, now);
+			db.prepare(
+				`INSERT INTO entity_aspects
+				 (id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at)
+				 VALUES ('aspect-nicholai-preferences', 'entity-nicholai', 'default',
+				  'preferences', 'preferences', 1, ?, ?)`,
+			).run(now, now);
+			db.prepare(
+				`INSERT INTO entity_attributes
+				 (id, aspect_id, agent_id, kind, content, normalized_content, group_key, claim_key,
+				  confidence, importance, status, created_at, updated_at)
+				 VALUES ('attr-nicholai-favorite-pens', 'aspect-nicholai-preferences',
+				  'default', 'attribute',
+				  'Nicholai prefers Pilot G-2 0.7 mm, Pilot G-TEC-C4, and Pilot Razor Point II pens.',
+				  'nicholai prefers pilot g 2 0 7 mm pilot g tec c4 and pilot razor point ii pens',
+				  'writing_tools', 'favorite_pens', 0, 0, 'active', ?, ?)`,
+			).run(now, now);
+		});
+
+		const result = await handleUserPromptSubmit(
+			{
+				harness: "codex",
+				userMessage: "what are nicholais favorite pens?",
+				sessionKey: "session-structured-path-favorite-pens",
+			},
+			makeDeps(),
+		);
+
+		expect(result.engine).toBe("entity-context");
+		expect(result.inject).toContain("Nicholai / preferences / writing_tools / favorite_pens");
+		expect(result.inject).toContain("Pilot G-2 0.7 mm");
+	});
+
 	it("normalizes possessive entity matches to the dominant canonical entity", async () => {
 		seedEntityContext();
 		getDbAccessor().withWriteTx((db) => {

@@ -739,6 +739,7 @@ const LOW_SIGNAL_PROMPTS = new Set([
 const ENTITY_CONTEXT_MAX_ENTITIES = 2;
 const ENTITY_CONTEXT_MAX_ASPECTS_PER_ENTITY = 3;
 const ENTITY_CONTEXT_MAX_LINES = 8;
+const ENTITY_CONTEXT_MAX_ATTRIBUTE_CANDIDATES = 192;
 const MIN_PROMPT_ENTITY_MATCH_CHARS = 3;
 
 function normalizePromptEntityText(value: string): string {
@@ -1027,12 +1028,25 @@ function queryWithoutPromptEntities(userMessage: string, entities: ReadonlyArray
 }
 
 function scoreAttributeLexically(
-	row: { readonly content: string; readonly confidence: number; readonly importance: number },
+	row: {
+		readonly aspect_name: string;
+		readonly group_key: string | null;
+		readonly claim_key: string | null;
+		readonly content: string;
+		readonly confidence: number;
+		readonly importance: number;
+	},
 	promptTerms: ReadonlyArray<string>,
 ): number {
 	if (promptTerms.length === 0) return 0;
-	if (countPromptTermOverlap(row.content, promptTerms) === 0) return 0;
-	return Math.min(1, 0.72 + Math.min(row.importance, 1) * 0.18 + Math.min(row.confidence, 1) * 0.1);
+	const contentOverlap = countPromptTermOverlap(row.content, promptTerms);
+	const claimOverlap = countPromptTermOverlap(normalizePromptEntityText(row.claim_key ?? ""), promptTerms);
+	const groupOverlap =
+		claimOverlap > 0 ? countPromptTermOverlap(normalizePromptEntityText(row.group_key ?? ""), promptTerms) : 0;
+	const pathOverlap = claimOverlap > 0 ? claimOverlap + groupOverlap : 0;
+	if (contentOverlap === 0 && pathOverlap === 0) return 0;
+	const base = pathOverlap > 0 ? 0.8 : 0.72;
+	return Math.min(1, base + Math.min(row.importance, 1) * 0.18 + Math.min(row.confidence, 1) * 0.1);
 }
 
 function loadAttributeSemanticScores(
@@ -1123,9 +1137,9 @@ function loadEntityContextLines(
 			       AND COALESCE(newer.version, 1) > COALESCE(ea.version, 1)
 			   )
 			 ORDER BY ea.importance DESC, ea.updated_at DESC
-			 LIMIT 48`,
+			 LIMIT ?`,
 		)
-		.all(entity.entityId, agentId, agentId) as Array<{
+		.all(entity.entityId, agentId, agentId, ENTITY_CONTEXT_MAX_ATTRIBUTE_CANDIDATES) as Array<{
 		attribute_id: string;
 		aspect_id: string;
 		aspect_name: string;

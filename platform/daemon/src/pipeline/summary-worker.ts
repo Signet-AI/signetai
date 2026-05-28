@@ -28,10 +28,10 @@ import { isNoiseSession } from "../session-noise";
 import { upsertSessionTranscript } from "../session-transcripts";
 import { upsertThreadHead } from "../thread-heads";
 import { addDreamingTokens } from "./dreaming";
+import { enqueueExtractionJobInTx } from "./extraction-queue";
 import { RateLimitExceededError } from "./provider";
 import { type SignificanceConfig, assessSignificance } from "./significance-gate";
 import { countTokens } from "./tokenizer";
-import { enqueueExtractionJobInTx } from "./worker";
 
 // ---------------------------------------------------------------------------
 // Types

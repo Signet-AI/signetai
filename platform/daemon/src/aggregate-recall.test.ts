@@ -267,13 +267,21 @@ describe("aggregateRecall", () => {
 		]);
 
 		const saved = getDbAccessor().withReadDb((db) =>
-			db.prepare("SELECT source_type, idempotency_key, tags, who, type FROM memories WHERE id = ?").get("aggregate-1"),
+			db
+				.prepare("SELECT source_type, idempotency_key, tags, who, type, extraction_status FROM memories WHERE id = ?")
+				.get("aggregate-1"),
 		) as Record<string, unknown>;
 		expect(saved.source_type).toBe("aggregate-recall");
 		expect(saved.idempotency_key).toStartWith("aggregate-recall:");
 		expect(saved.tags).toBe("aggregate,recall");
 		expect(saved.who).toBe("signet");
 		expect(saved.type).toBe("semantic");
+		expect(saved.extraction_status).toBe("none");
+
+		const extractJob = getDbAccessor().withReadDb((db) =>
+			db.prepare("SELECT job_type, status FROM memory_jobs WHERE memory_id = ?").get("aggregate-1"),
+		) as Record<string, unknown>;
+		expect(extractJob).toEqual({ job_type: "extract", status: "pending" });
 
 		const links = getDbAccessor().withReadDb((db) =>
 			db
@@ -346,8 +354,12 @@ memory:
 			"Aggregate recall can synthesize directly through an OpenAI-compatible API target.",
 		);
 		expect(chatCalls).toBe(2);
-		expect(seen.every((entry) => entry.authorization === "Bearer test-openai-compatible-key")).toBe(true);
-		expect(seen.map((entry) => entry.url)).toEqual([
+		expect(
+			seen
+				.filter((entry) => entry.url.endsWith("/chat/completions"))
+				.every((entry) => entry.authorization === "Bearer test-openai-compatible-key"),
+		).toBe(true);
+		expect(seen.map((entry) => entry.url).filter((url) => url.startsWith("https://gateway.example.test/"))).toEqual([
 			"https://gateway.example.test/v1/models",
 			"https://gateway.example.test/v1/chat/completions",
 			"https://gateway.example.test/v1/chat/completions",
@@ -940,12 +952,14 @@ memory:
 				.prepare(
 					`SELECT
 						(SELECT COUNT(*) FROM memories WHERE id = 'aggregate-loser') AS loser_count,
-						(SELECT COUNT(*) FROM aggregate_memory_sources WHERE aggregate_memory_id = 'aggregate-race-winner') AS link_count`,
+						(SELECT COUNT(*) FROM aggregate_memory_sources WHERE aggregate_memory_id = 'aggregate-race-winner') AS link_count,
+						(SELECT COUNT(*) FROM memory_jobs WHERE memory_id = 'aggregate-race-winner' AND job_type = 'extract' AND status = 'pending') AS pending_extract_count`,
 				)
 				.get(),
-		) as { loser_count: number; link_count: number };
+		) as { loser_count: number; link_count: number; pending_extract_count: number };
 		expect(rows.loser_count).toBe(0);
 		expect(rows.link_count).toBe(1);
+		expect(rows.pending_extract_count).toBe(1);
 	});
 
 	it("returns structured no-hit metadata when synthesis is unavailable", async () => {

@@ -316,6 +316,7 @@ fn load_guarded_transcript_path(
 /// truncated with a `[truncated]` marker before artifact / DB writes.
 const MAX_TRANSCRIPT_BYTES: usize = 400_000; // ~100k chars * 4 bytes/char (UTF-8 worst case)
 const MIN_PROMPT_ENTITY_MATCH_CHARS: usize = 3;
+const ENTITY_CONTEXT_MAX_ATTRIBUTES_PER_ASPECT: i64 = 48;
 
 /// Normalize a caller-supplied project path so lineage lookups use a
 /// consistent key.  Mirrors session-start project normalization:
@@ -1607,7 +1608,9 @@ pub async fn prompt_submit(
                 for (aspect_id, aspect_name, _canonical_name, _weight) in aspects {
                     let generic_context_query = prompt_generic_context_query(&context_terms);
                     let attr_rows = match conn.prepare(
-                        "SELECT ea.id, ea.content, COALESCE(ea.memory_id, ''), ea.confidence, ea.importance
+                        "SELECT ea.id, ea.content, COALESCE(ea.memory_id, ''),
+                                COALESCE(ea.group_key, ''), COALESCE(ea.claim_key, ''),
+                                ea.confidence, ea.importance
                          FROM entity_attributes ea
                          WHERE ea.aspect_id = ?1
                            AND ea.agent_id = ?2
@@ -1628,21 +1631,24 @@ pub async fn prompt_submit(
                                AND COALESCE(newer.version, 1) > COALESCE(ea.version, 1)
                            )
                          ORDER BY ea.importance DESC, ea.updated_at DESC
-                         LIMIT 12",
+                         LIMIT ?3",
                     ) {
                         Ok(mut stmt) => stmt
                             .query_map(
                                 rusqlite::params![
                                     aspect_id,
-                                    agent_id.clone()
+                                    agent_id.clone(),
+                                    ENTITY_CONTEXT_MAX_ATTRIBUTES_PER_ASPECT
                                 ],
                                 |row| {
                                 Ok((
                                     row.get::<_, String>(0)?,
                                     row.get::<_, String>(1)?,
                                     row.get::<_, String>(2)?,
-                                    row.get::<_, f64>(3)?,
-                                    row.get::<_, f64>(4)?,
+                                    row.get::<_, String>(3)?,
+                                    row.get::<_, String>(4)?,
+                                    row.get::<_, f64>(5)?,
+                                    row.get::<_, f64>(6)?,
                                 ))
                                 },
                             )
@@ -1656,13 +1662,29 @@ pub async fn prompt_submit(
                     }
                     let matched_attr_ids = attr_rows
                         .iter()
-                        .filter_map(|(attr_id, content, memory_id, confidence, importance)| {
+                        .filter_map(|(attr_id, content, memory_id, group, claim, confidence, importance)| {
                             let attr_text = normalize_prompt_entity_text(content);
-                            let lexical_score = if attr_text
+                            let group_text = normalize_prompt_entity_text(group);
+                            let claim_text = normalize_prompt_entity_text(claim);
+                            let content_overlap = attr_text
                                 .split_whitespace()
-                                .any(|term| context_terms.contains(term))
-                            {
-                                0.72 + importance.clamp(0.0, 1.0) * 0.18
+                                .any(|term| context_terms.contains(term));
+                            let claim_overlap = claim_text
+                                .split_whitespace()
+                                .filter(|term| context_terms.contains(*term))
+                                .count();
+                            let group_overlap = if claim_overlap > 0 {
+                                group_text
+                                    .split_whitespace()
+                                    .filter(|term| context_terms.contains(*term))
+                                    .count()
+                            } else {
+                                0
+                            };
+                            let path_overlap = claim_overlap + group_overlap > 0;
+                            let lexical_score = if content_overlap || path_overlap {
+                                let base = if path_overlap { 0.8 } else { 0.72 };
+                                base + importance.clamp(0.0, 1.0) * 0.18
                                     + confidence.clamp(0.0, 1.0) * 0.1
                             } else {
                                 0.0
@@ -4425,6 +4447,70 @@ mod tests {
             serde_json::Value::String("no-entity".to_string())
         );
         assert_eq!(body["inject"], serde_json::Value::String(String::new()));
+
+        drop(state);
+        let _ = writer.await;
+    }
+
+    #[tokio::test]
+    async fn prompt_submit_uses_structured_path_terms_for_zero_confidence_attributes() {
+        let (state, writer, _tmp) = test_state("hooks-prompt-submit-path-terms");
+        state
+            .pool
+            .write(Priority::Low, move |conn| {
+                let now = "2026-05-27T00:00:00Z";
+                conn.execute(
+                    "INSERT INTO entities (id, name, canonical_name, entity_type, description, agent_id, mentions, created_at, updated_at)
+                     VALUES ('entity-nicholai', 'Nicholai', 'nicholai', 'person', NULL, 'agent-a', 10, ?1, ?1)",
+                    rusqlite::params![now],
+                )?;
+                conn.execute(
+                    "INSERT INTO entity_aspects (id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at)
+                     VALUES ('aspect-nicholai-preferences', 'entity-nicholai', 'agent-a', 'preferences', 'preferences', 1.0, ?1, ?1)",
+                    rusqlite::params![now],
+                )?;
+                conn.execute(
+                    "INSERT INTO entity_attributes
+                     (id, aspect_id, agent_id, memory_id, kind, content, normalized_content, confidence, importance,
+                      status, group_key, claim_key, created_at, updated_at)
+                     VALUES ('attr-nicholai-favorite-pens', 'aspect-nicholai-preferences', 'agent-a', NULL, 'attribute',
+                      'Nicholai prefers Pilot G-2 0.7 mm, Pilot G-TEC-C4, and Pilot Razor Point II pens.',
+                      'nicholai prefers pilot g 2 0 7 mm pilot g tec c4 and pilot razor point ii pens',
+                      0.0, 0.0, 'active', 'writing_tools', 'favorite_pens', ?1, ?1)",
+                    rusqlite::params![now],
+                )?;
+                Ok(serde_json::Value::Null)
+            })
+            .await
+            .unwrap();
+
+        let resp = prompt_submit(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(PromptSubmitBody {
+                harness: Some("test".to_string()),
+                project: Some("platform/daemon-rs".to_string()),
+                agent_id: Some("agent-a".to_string()),
+                user_message: Some("what are nicholais favorite pens?".to_string()),
+                user_prompt: None,
+                last_assistant_message: None,
+                session_key: Some("sess-prompt-path-terms".to_string()),
+                transcript: None,
+                transcript_path: None,
+                runtime_path: None,
+            }),
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = test_json(resp).await;
+        assert_eq!(
+            body["engine"],
+            serde_json::Value::String("entity-context".to_string())
+        );
+        let inject = body["inject"].as_str().unwrap_or_default();
+        assert!(inject.contains("Nicholai / preferences / writing_tools / favorite_pens"));
+        assert!(inject.contains("Pilot G-2 0.7 mm"));
 
         drop(state);
         let _ = writer.await;
