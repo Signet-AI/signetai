@@ -4,6 +4,7 @@
 //! session lifecycle: session-start, prompt-submit, session-end,
 //! remember, recall, pre-compaction, and compaction-complete.
 
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -855,24 +856,147 @@ fn cap_prompt_inject(text: &str, limit: usize) -> String {
 }
 
 fn normalize_prompt_entity_text(text: &str) -> String {
-    let mut out = String::new();
-    let mut prev_space = true;
-    for ch in text.to_lowercase().chars() {
-        if ch.is_ascii_alphanumeric() {
-            out.push(ch);
-            prev_space = false;
-        } else if !prev_space {
-            out.push(' ');
-            prev_space = true;
+    let mut terms = Vec::new();
+    let mut current = String::new();
+    for ch in text.to_lowercase().replace('’', "'").chars() {
+        if ch.is_ascii_alphanumeric() || ch == '\'' {
+            current.push(ch);
+        } else if !current.is_empty() {
+            push_prompt_entity_term(&mut terms, &current);
+            current.clear();
         }
     }
-    out.trim().to_string()
+    if !current.is_empty() {
+        push_prompt_entity_term(&mut terms, &current);
+    }
+    terms.join(" ")
 }
 
-fn phrase_appears_in_prompt(prompt: &str, phrase: &str) -> bool {
-    let prompt = format!(" {} ", normalize_prompt_entity_text(prompt));
-    let phrase = normalize_prompt_entity_text(phrase);
-    phrase.len() >= MIN_PROMPT_ENTITY_MATCH_CHARS && prompt.contains(&format!(" {phrase} "))
+fn push_prompt_entity_term(terms: &mut Vec<String>, raw: &str) {
+    let token = raw
+        .strip_suffix("'s")
+        .or_else(|| raw.strip_suffix('\''))
+        .unwrap_or(raw);
+    for part in token.split('\'') {
+        if !part.is_empty() {
+            terms.push(part.to_string());
+        }
+    }
+}
+
+fn prompt_entity_terms(text: &str) -> Vec<String> {
+    normalize_prompt_entity_text(text)
+        .split_whitespace()
+        .map(str::to_string)
+        .collect()
+}
+
+fn prompt_bare_possessive_allowed(phrase_term: &str) -> bool {
+    phrase_term.len() >= 4
+        && !matches!(
+            phrase_term,
+            "agent"
+                | "artifact"
+                | "concept"
+                | "connector"
+                | "document"
+                | "event"
+                | "memory"
+                | "policy"
+                | "preference"
+                | "product"
+                | "project"
+                | "skill"
+                | "source"
+                | "system"
+                | "task"
+                | "tool"
+                | "workflow"
+        )
+}
+
+fn prompt_entity_term_matches(prompt_term: &str, phrase_term: &str) -> bool {
+    prompt_term == phrase_term
+        || (prompt_bare_possessive_allowed(phrase_term) && prompt_term == format!("{phrase_term}s"))
+}
+
+fn prompt_phrase_span(prompt: &str, phrase: &str) -> Option<(usize, usize)> {
+    let prompt_terms = prompt_entity_terms(prompt);
+    let phrase_terms = prompt_entity_terms(phrase);
+    if phrase_terms.join(" ").len() < MIN_PROMPT_ENTITY_MATCH_CHARS
+        || phrase_terms.is_empty()
+        || phrase_terms.len() > prompt_terms.len()
+    {
+        return None;
+    }
+    for start in 0..=(prompt_terms.len() - phrase_terms.len()) {
+        if phrase_terms
+            .iter()
+            .enumerate()
+            .all(|(offset, term)| prompt_entity_term_matches(&prompt_terms[start + offset], term))
+        {
+            return Some((start, start + phrase_terms.len()));
+        }
+    }
+    None
+}
+
+fn prompt_spans_overlap(a: (usize, usize), b: (usize, usize)) -> bool {
+    a.0 < b.1 && b.0 < a.1
+}
+
+fn prompt_entity_context_type_allowed(entity_type: &str) -> bool {
+    matches!(
+        entity_type.to_ascii_lowercase().as_str(),
+        "person" | "project"
+    )
+}
+
+fn prompt_generic_entity_phrase(phrase_terms: &[String]) -> bool {
+    if phrase_terms.len() != 1 {
+        return false;
+    }
+    let term = phrase_terms[0].as_str();
+    if !prompt_bare_possessive_allowed(term) {
+        return true;
+    }
+    term.strip_suffix('s')
+        .is_some_and(|singular| !prompt_bare_possessive_allowed(singular))
+}
+
+fn score_prompt_entity_candidate(
+    match_source: &str,
+    matched_text: &str,
+    mentions: i64,
+    pinned: i64,
+) -> f64 {
+    let phrase = normalize_prompt_entity_text(matched_text);
+    let phrase_terms = prompt_entity_terms(matched_text);
+    phrase_terms.len() as f64 * 8.0
+        + phrase.len() as f64 * 0.35
+        + (mentions.max(0) as f64).ln_1p()
+        + pinned.clamp(0, 1) as f64 * 8.0
+        + if match_source == "alias" { -0.25 } else { 0.0 }
+}
+
+#[derive(Clone)]
+struct PromptEntityRow {
+    entity_id: String,
+    entity_name: String,
+    entity_type: String,
+    matched_text: String,
+    match_source: String,
+    mentions: i64,
+    pinned: i64,
+}
+
+#[derive(Clone)]
+struct PromptEntityCandidate {
+    row: PromptEntityRow,
+    normalized_phrase: String,
+    span_start: usize,
+    span_end: usize,
+    score: f64,
 }
 
 fn is_low_signal_prompt(prompt: &str) -> bool {
@@ -1274,14 +1398,18 @@ pub async fn prompt_submit(
             }
 
             let entity_rows = match conn.prepare(
-                "SELECT id, name, COALESCE(canonical_name, LOWER(name)) AS matched_text,
-                        'name' AS source, COALESCE(mentions, 0) AS mentions
+                "SELECT id, name, COALESCE(entity_type, 'unknown') AS entity_type,
+                        COALESCE(canonical_name, LOWER(name)) AS matched_text,
+                        'name' AS source, COALESCE(mentions, 0) AS mentions,
+                        COALESCE(pinned, 0) AS pinned
                  FROM entities
                  WHERE agent_id = ?1
                    AND COALESCE(status, 'active') = 'active'
                  UNION ALL
-                 SELECT e.id, e.name, a.alias AS matched_text,
-                        'alias' AS source, COALESCE(e.mentions, 0) AS mentions
+                 SELECT e.id, e.name, COALESCE(e.entity_type, 'unknown') AS entity_type,
+                        a.alias AS matched_text,
+                        'alias' AS source, COALESCE(e.mentions, 0) AS mentions,
+                        COALESCE(e.pinned, 0) AS pinned
                  FROM entity_aliases a
                  JOIN entities e ON e.id = a.entity_id AND e.agent_id = a.agent_id
                  WHERE a.agent_id = ?1
@@ -1290,13 +1418,15 @@ pub async fn prompt_submit(
             ) {
                 Ok(mut stmt) => stmt
                     .query_map([agent_id.clone()], |row| {
-                        Ok((
-                            row.get::<_, String>(0)?,
-                            row.get::<_, String>(1)?,
-                            row.get::<_, String>(2)?,
-                            row.get::<_, String>(3)?,
-                            row.get::<_, i64>(4)?,
-                        ))
+                        Ok(PromptEntityRow {
+                            entity_id: row.get::<_, String>(0)?,
+                            entity_name: row.get::<_, String>(1)?,
+                            entity_type: row.get::<_, String>(2)?,
+                            matched_text: row.get::<_, String>(3)?,
+                            match_source: row.get::<_, String>(4)?,
+                            mentions: row.get::<_, i64>(5)?,
+                            pinned: row.get::<_, i64>(6)?,
+                        })
                     })
                     .ok()
                     .map(|rows| rows.filter_map(|r| r.ok()).collect::<Vec<_>>())
@@ -1304,41 +1434,86 @@ pub async fn prompt_submit(
                 Err(_) => vec![],
             };
 
-            let mut matches = entity_rows
-                .into_iter()
-                .filter(|(_, _, matched_text, _, _)| {
-                    phrase_appears_in_prompt(&cleaned, matched_text)
+            let mut candidates_by_phrase = HashMap::<String, Vec<PromptEntityCandidate>>::new();
+            for row in entity_rows {
+                if !prompt_entity_context_type_allowed(&row.entity_type)
+                    || prompt_generic_entity_phrase(&prompt_entity_terms(&row.matched_text))
+                {
+                    continue;
+                }
+                let Some((span_start, span_end)) = prompt_phrase_span(&cleaned, &row.matched_text) else {
+                    continue;
+                };
+                let normalized_phrase = normalize_prompt_entity_text(&row.matched_text);
+                let score = score_prompt_entity_candidate(
+                    &row.match_source,
+                    &row.matched_text,
+                    row.mentions,
+                    row.pinned,
+                );
+                candidates_by_phrase
+                    .entry(normalized_phrase.clone())
+                    .or_default()
+                    .push(PromptEntityCandidate {
+                        row,
+                        normalized_phrase,
+                        span_start,
+                        span_end,
+                        score,
+                    });
+            }
+
+            let mut phrase_winners = candidates_by_phrase
+                .into_values()
+                .filter_map(|mut candidates| {
+                    candidates.sort_by(|a, b| {
+                        b.score
+                            .partial_cmp(&a.score)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                            .then_with(|| b.row.mentions.cmp(&a.row.mentions))
+                            .then_with(|| b.normalized_phrase.len().cmp(&a.normalized_phrase.len()))
+                            .then_with(|| a.row.entity_name.cmp(&b.row.entity_name))
+                    });
+                    candidates.into_iter().next()
                 })
                 .collect::<Vec<_>>();
-            matches.sort_by(|a, b| {
-                normalize_prompt_entity_text(&b.2)
-                    .len()
-                    .cmp(&normalize_prompt_entity_text(&a.2).len())
-                    .then_with(|| b.4.cmp(&a.4))
+            let top_score = phrase_winners
+                .iter()
+                .map(|candidate| candidate.score)
+                .fold(0.0, f64::max);
+            let minimum_score = 12.0_f64.max(top_score * 0.45);
+            phrase_winners.retain(|candidate| candidate.score >= minimum_score);
+            phrase_winners.sort_by(|a, b| {
+                b.score
+                    .partial_cmp(&a.score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then_with(|| {
+                        (b.span_end - b.span_start).cmp(&(a.span_end - a.span_start))
+                    })
+                    .then_with(|| b.row.mentions.cmp(&a.row.mentions))
+                    .then_with(|| a.row.entity_name.cmp(&b.row.entity_name))
             });
 
-            let mut phrase_entities = std::collections::HashMap::<String, std::collections::HashSet<String>>::new();
-            for (id, _, matched_text, _, _) in &matches {
-                phrase_entities
-                    .entry(normalize_prompt_entity_text(matched_text))
-                    .or_default()
-                    .insert(id.clone());
+            let mut seen = HashSet::new();
+            let mut selected_spans = Vec::new();
+            let mut entity_matches = Vec::new();
+            for candidate in phrase_winners {
+                if !seen.insert(candidate.row.entity_id.clone()) {
+                    continue;
+                }
+                let span = (candidate.span_start, candidate.span_end);
+                if selected_spans
+                    .iter()
+                    .any(|selected| prompt_spans_overlap(*selected, span))
+                {
+                    continue;
+                }
+                selected_spans.push(span);
+                entity_matches.push(candidate.row);
+                if entity_matches.len() >= 2 {
+                    break;
+                }
             }
-            if phrase_entities.values().any(|ids| ids.len() > 1) {
-                return Ok(serde_json::json!({
-                    "inject": "",
-                    "memoryCount": 0,
-                    "queryTerms": query_terms_for_resp,
-                    "engine": "ambiguous-entity",
-                }));
-            }
-
-            let mut seen = std::collections::HashSet::new();
-            let entity_matches = matches
-                .into_iter()
-                .filter(|(id, _, _, _, _)| seen.insert(id.clone()))
-                .take(2)
-                .collect::<Vec<_>>();
             if entity_matches.is_empty() {
                 return Ok(serde_json::json!({
                     "inject": "",
@@ -1352,18 +1527,25 @@ pub async fn prompt_submit(
                 .split_whitespace()
                 .filter(|term| is_prompt_context_term(term))
                 .map(str::to_string)
-                .collect::<std::collections::HashSet<_>>();
+                .collect::<HashSet<_>>();
             let mut lines = Vec::new();
-            for (entity_id, entity_name, matched_text, _, _) in entity_matches {
-                let entity_terms = normalize_prompt_entity_text(&format!("{entity_name} {matched_text}"))
+            for entity in entity_matches {
+                let entity_terms = normalize_prompt_entity_text(&format!(
+                    "{} {}",
+                    entity.entity_name, entity.matched_text
+                ))
                     .split_whitespace()
                     .map(str::to_string)
-                    .collect::<std::collections::HashSet<_>>();
+                    .collect::<HashSet<_>>();
                 let context_terms = prompt_terms
                     .iter()
-                    .filter(|term| !entity_terms.contains(*term))
+                    .filter(|term| {
+                        !entity_terms
+                            .iter()
+                            .any(|entity_term| prompt_entity_term_matches(term, entity_term))
+                    })
                     .cloned()
-                    .collect::<std::collections::HashSet<_>>();
+                    .collect::<HashSet<_>>();
                 let aspects = match conn.prepare(
                     "SELECT id, name, canonical_name, weight
                      FROM entity_aspects
@@ -1374,7 +1556,7 @@ pub async fn prompt_submit(
                      LIMIT 12",
                 ) {
                     Ok(mut stmt) => stmt
-                        .query_map(rusqlite::params![entity_id, agent_id.clone()], |row| {
+                        .query_map(rusqlite::params![&entity.entity_id, agent_id.clone()], |row| {
                             Ok((
                                 row.get::<_, String>(0)?,
                                 row.get::<_, String>(1)?,
@@ -1513,7 +1695,8 @@ pub async fn prompt_submit(
                             format!("v{version}")
                         };
                         lines.push(format!(
-                            "- [{kind}] {entity_name} / {aspect_name} / {group} / {claim}: {} ({source})",
+                            "- [{kind}] {} / {aspect_name} / {group} / {claim}: {} ({source})",
+                            entity.entity_name,
                             trim_for_inject(&content, 240)
                         ));
                         if lines.len() >= 8 {
@@ -3822,6 +4005,345 @@ mod tests {
         assert!(!inject.contains("Stale prompt context should not be injected."));
         assert!(!inject.contains("## Relevant Memory"));
         assert!(!inject.contains("Marketing copy should stay secondary"));
+
+        drop(state);
+        let _ = writer.await;
+    }
+
+    #[tokio::test]
+    async fn prompt_submit_prefers_canonical_entity_over_possessive_duplicate() {
+        let (state, writer, _tmp) = test_state("hooks-prompt-submit-possessive-entity");
+        state
+            .pool
+            .write(Priority::Low, move |conn| {
+                let now = "2026-05-27T00:00:00Z";
+                conn.execute(
+                    "INSERT INTO entities (id, name, canonical_name, entity_type, description, agent_id, mentions, created_at, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)",
+                    rusqlite::params![
+                        "entity-signet",
+                        "Signet",
+                        "signet",
+                        "project",
+                        "Source-backed agent continuity substrate",
+                        "agent-a",
+                        10_i64,
+                        now,
+                    ],
+                )?;
+                conn.execute(
+                    "INSERT INTO entity_aspects (id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at)
+                     VALUES ('aspect-preferences', 'entity-signet', 'agent-a', 'preferences', 'preferences', 0.9, ?1, ?1)",
+                    rusqlite::params![now],
+                )?;
+                conn.execute(
+                    "INSERT INTO entity_attributes
+                     (id, aspect_id, agent_id, memory_id, kind, content, normalized_content, confidence, importance,
+                      status, group_key, claim_key, created_at, updated_at)
+                     VALUES ('attr-preferences-pen', 'aspect-preferences', 'agent-a', NULL, 'attribute',
+                      'Favorite pen is a Pilot G-2.',
+                      'favorite pen is a pilot g 2', 0.95, 0.9, 'active',
+                      'writing', 'favorite_pen', ?1, ?1)",
+                    rusqlite::params![now],
+                )?;
+                conn.execute(
+                    "INSERT INTO entities (id, name, canonical_name, entity_type, description, agent_id, mentions, created_at, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)",
+                    rusqlite::params![
+                        "entity-signet-possessive",
+                        "Signet's",
+                        "signet's",
+                        "tool",
+                        "Possessive duplicate",
+                        "agent-a",
+                        2_i64,
+                        now,
+                    ],
+                )?;
+                conn.execute(
+                    "INSERT INTO entity_aspects (id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at)
+                     VALUES ('aspect-possessive-noise', 'entity-signet-possessive', 'agent-a', 'noise', 'noise', 1.0, ?1, ?1)",
+                    rusqlite::params![now],
+                )?;
+                conn.execute(
+                    "INSERT INTO entity_attributes
+                     (id, aspect_id, agent_id, memory_id, kind, content, normalized_content, confidence, importance,
+                      status, group_key, claim_key, created_at, updated_at)
+                     VALUES ('attr-possessive-noise', 'aspect-possessive-noise', 'agent-a', NULL, 'attribute',
+                      'Possessive duplicate entity should not win prompt matching.',
+                      'possessive duplicate entity should not win prompt matching', 0.95, 0.9, 'active',
+                      'runtime', 'duplicate_guard', ?1, ?1)",
+                    rusqlite::params![now],
+                )?;
+                Ok(serde_json::Value::Null)
+            })
+            .await
+            .unwrap();
+
+        let resp = prompt_submit(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(PromptSubmitBody {
+                harness: Some("test".to_string()),
+                project: Some("platform/daemon-rs".to_string()),
+                agent_id: Some("agent-a".to_string()),
+                user_message: Some("What are Signet's favorite pens?".to_string()),
+                user_prompt: None,
+                last_assistant_message: None,
+                session_key: Some("sess-prompt-possessive-entity".to_string()),
+                transcript: None,
+                transcript_path: None,
+                runtime_path: None,
+            }),
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = test_json(resp).await;
+        let inject = body["inject"].as_str().unwrap_or_default();
+        assert_eq!(
+            body["engine"],
+            serde_json::Value::String("entity-context".to_string())
+        );
+        assert!(inject.contains("Signet / preferences / writing / favorite_pen"));
+        assert!(!inject.contains("Signet's / noise"));
+        assert!(!inject.contains("Possessive duplicate entity should not win"));
+
+        let bare_resp = prompt_submit(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(PromptSubmitBody {
+                harness: Some("test".to_string()),
+                project: Some("platform/daemon-rs".to_string()),
+                agent_id: Some("agent-a".to_string()),
+                user_message: Some("What are Signets favorite pens?".to_string()),
+                user_prompt: None,
+                last_assistant_message: None,
+                session_key: Some("sess-prompt-bare-possessive-entity".to_string()),
+                transcript: None,
+                transcript_path: None,
+                runtime_path: None,
+            }),
+        )
+        .await;
+
+        assert_eq!(bare_resp.status(), StatusCode::OK);
+        let bare_body = test_json(bare_resp).await;
+        let bare_inject = bare_body["inject"].as_str().unwrap_or_default();
+        assert_eq!(
+            bare_body["engine"],
+            serde_json::Value::String("entity-context".to_string())
+        );
+        assert!(bare_inject.contains("Signet / preferences / writing / favorite_pen"));
+
+        drop(state);
+        let _ = writer.await;
+    }
+
+    #[tokio::test]
+    async fn prompt_submit_prefers_longest_non_overlapping_entity_span() {
+        let (state, writer, _tmp) = test_state("hooks-prompt-submit-longest-entity-span");
+        state
+            .pool
+            .write(Priority::Low, move |conn| {
+                let now = "2026-05-27T00:00:00Z";
+                for (id, name, canonical, mentions) in [
+                    (
+                        "entity-claude-code-connector",
+                        "Claude Code connector",
+                        "claude code connector",
+                        8_i64,
+                    ),
+                    ("entity-claude-code", "Claude Code", "claude code", 135_i64),
+                    ("entity-claude", "Claude", "claude", 113_i64),
+                    ("entity-code", "code", "code", 15_i64),
+                    ("entity-connector", "connector", "connector", 5_i64),
+                ] {
+                    conn.execute(
+                        "INSERT INTO entities (id, name, canonical_name, entity_type, description, agent_id, mentions, created_at, updated_at)
+                         VALUES (?1, ?2, ?3, 'project', 'Prompt test entity', 'agent-a', ?4, ?5, ?5)",
+                        rusqlite::params![id, name, canonical, mentions, now],
+                    )?;
+                    conn.execute(
+                        "INSERT INTO entity_aspects (id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at)
+                         VALUES (?1, ?2, 'agent-a', 'runtime', 'runtime', 1.0, ?3, ?3)",
+                        rusqlite::params![format!("aspect-{id}"), id, now],
+                    )?;
+                    conn.execute(
+                        "INSERT INTO entity_attributes
+                         (id, aspect_id, agent_id, memory_id, kind, content, normalized_content, confidence, importance,
+                          status, group_key, claim_key, created_at, updated_at)
+                         VALUES (?1, ?2, 'agent-a', NULL, 'attribute', ?3, ?4, 0.95, 0.9, 'active',
+                          'setup', 'routing', ?5, ?5)",
+                        rusqlite::params![
+                            format!("attr-{id}"),
+                            format!("aspect-{id}"),
+                            format!("{name} setup context."),
+                            format!("{canonical} setup context"),
+                            now,
+                        ],
+                    )?;
+                }
+                Ok(serde_json::Value::Null)
+            })
+            .await
+            .unwrap();
+
+        let resp = prompt_submit(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(PromptSubmitBody {
+                harness: Some("test".to_string()),
+                project: Some("platform/daemon-rs".to_string()),
+                agent_id: Some("agent-a".to_string()),
+                user_message: Some("Claude Code connector setup".to_string()),
+                user_prompt: None,
+                last_assistant_message: None,
+                session_key: Some("sess-prompt-longest-entity-span".to_string()),
+                transcript: None,
+                transcript_path: None,
+                runtime_path: None,
+            }),
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = test_json(resp).await;
+        let inject = body["inject"].as_str().unwrap_or_default();
+        assert_eq!(
+            body["engine"],
+            serde_json::Value::String("entity-context".to_string())
+        );
+        assert!(inject.contains("Claude Code connector / runtime / setup / routing"));
+        assert!(!inject.contains("- [attribute] Claude Code / runtime"));
+        assert!(!inject.contains("- [attribute] connector / runtime"));
+
+        drop(state);
+        let _ = writer.await;
+    }
+
+    #[tokio::test]
+    async fn prompt_submit_ignores_disallowed_entity_types() {
+        let (state, writer, _tmp) = test_state("hooks-prompt-submit-disallowed-entity-type");
+        state
+            .pool
+            .write(Priority::Low, move |conn| {
+                let now = "2026-05-27T00:00:00Z";
+                conn.execute(
+                    "INSERT INTO entities (id, name, canonical_name, entity_type, description, agent_id, mentions, created_at, updated_at)
+                     VALUES ('entity-claude-code-connector', 'Claude Code connector', 'claude code connector',
+                      'tool', 'Prompt test entity', 'agent-a', 80, ?1, ?1)",
+                    rusqlite::params![now],
+                )?;
+                conn.execute(
+                    "INSERT INTO entity_aspects (id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at)
+                     VALUES ('aspect-claude-code-connector-runtime', 'entity-claude-code-connector',
+                      'agent-a', 'runtime', 'runtime', 1.0, ?1, ?1)",
+                    rusqlite::params![now],
+                )?;
+                conn.execute(
+                    "INSERT INTO entity_attributes
+                     (id, aspect_id, agent_id, memory_id, kind, content, normalized_content, confidence, importance,
+                      status, group_key, claim_key, created_at, updated_at)
+                     VALUES ('attr-claude-code-connector-runtime', 'aspect-claude-code-connector-runtime',
+                      'agent-a', NULL, 'attribute',
+                      'Claude Code connector setup context should not inject.',
+                      'claude code connector setup context should not inject',
+                      0.95, 0.9, 'active', 'setup', 'routing', ?1, ?1)",
+                    rusqlite::params![now],
+                )?;
+                Ok(serde_json::Value::Null)
+            })
+            .await
+            .unwrap();
+
+        let resp = prompt_submit(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(PromptSubmitBody {
+                harness: Some("test".to_string()),
+                project: Some("platform/daemon-rs".to_string()),
+                agent_id: Some("agent-a".to_string()),
+                user_message: Some("Claude Code connector setup".to_string()),
+                user_prompt: None,
+                last_assistant_message: None,
+                session_key: Some("sess-prompt-disallowed-entity-type".to_string()),
+                transcript: None,
+                transcript_path: None,
+                runtime_path: None,
+            }),
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = test_json(resp).await;
+        assert_eq!(
+            body["engine"],
+            serde_json::Value::String("no-entity".to_string())
+        );
+        assert_eq!(body["inject"], serde_json::Value::String(String::new()));
+
+        drop(state);
+        let _ = writer.await;
+    }
+
+    #[tokio::test]
+    async fn prompt_submit_does_not_match_generic_plural_entity_terms() {
+        let (state, writer, _tmp) = test_state("hooks-prompt-submit-generic-plural");
+        state
+            .pool
+            .write(Priority::Low, move |conn| {
+                let now = "2026-05-27T00:00:00Z";
+                conn.execute(
+                    "INSERT INTO entities (id, name, canonical_name, entity_type, description, agent_id, mentions, created_at, updated_at)
+                     VALUES ('entity-project', 'Project', 'project', 'project', 'Generic project entity', 'agent-a', 50, ?1, ?1)",
+                    rusqlite::params![now],
+                )?;
+                conn.execute(
+                    "INSERT INTO entity_aspects (id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at)
+                     VALUES ('aspect-project-roadmap', 'entity-project', 'agent-a', 'roadmap', 'roadmap', 1.0, ?1, ?1)",
+                    rusqlite::params![now],
+                )?;
+                conn.execute(
+                    "INSERT INTO entity_attributes
+                     (id, aspect_id, agent_id, memory_id, kind, content, normalized_content, confidence, importance,
+                      status, group_key, claim_key, created_at, updated_at)
+                     VALUES ('attr-project-roadmap', 'aspect-project-roadmap', 'agent-a', NULL, 'attribute',
+                      'Generic project roadmap context should not inject for plural projects.',
+                      'generic project roadmap context should not inject for plural projects',
+                      0.95, 0.9, 'active', 'general', 'roadmap', ?1, ?1)",
+                    rusqlite::params![now],
+                )?;
+                Ok(serde_json::Value::Null)
+            })
+            .await
+            .unwrap();
+
+        let resp = prompt_submit(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(PromptSubmitBody {
+                harness: Some("test".to_string()),
+                project: Some("platform/daemon-rs".to_string()),
+                agent_id: Some("agent-a".to_string()),
+                user_message: Some("projects roadmap".to_string()),
+                user_prompt: None,
+                last_assistant_message: None,
+                session_key: Some("sess-prompt-generic-plural".to_string()),
+                transcript: None,
+                transcript_path: None,
+                runtime_path: None,
+            }),
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = test_json(resp).await;
+        assert_eq!(
+            body["engine"],
+            serde_json::Value::String("no-entity".to_string())
+        );
+        assert_eq!(body["inject"], serde_json::Value::String(String::new()));
 
         drop(state);
         let _ = writer.await;

@@ -687,6 +687,13 @@ type PromptEntityMatch = {
 	readonly mentions: number;
 };
 
+type PromptEntityCandidate = PromptEntityMatch & {
+	readonly normalizedPhrase: string;
+	readonly spanStart: number;
+	readonly spanEnd: number;
+	readonly score: number;
+};
+
 type PromptEntityContextLine = {
 	readonly entityName: string;
 	readonly aspectName: string;
@@ -706,7 +713,7 @@ type PromptEntityContextLine = {
 type PromptEntityContextResult = {
 	readonly lines: readonly string[];
 	readonly memoryCount: number;
-	readonly engine: "entity-context" | "low-signal" | "no-entity" | "ambiguous-entity" | "no-aspect-hit";
+	readonly engine: "entity-context" | "low-signal" | "no-entity" | "no-aspect-hit";
 };
 
 const LOW_SIGNAL_PROMPTS = new Set([
@@ -737,15 +744,64 @@ const MIN_PROMPT_ENTITY_MATCH_CHARS = 3;
 function normalizePromptEntityText(value: string): string {
 	return value
 		.toLowerCase()
+		.replace(/[’]/g, "'")
+		.replace(/\b([a-z0-9]+)'s\b/g, "$1")
+		.replace(/\b([a-z0-9]+)s'\b/g, "$1s")
 		.replace(/[^a-z0-9]+/g, " ")
 		.replace(/\s+/g, " ")
 		.trim();
 }
 
-function phraseAppearsInPrompt(prompt: string, phrase: string): boolean {
-	const normalizedPrompt = ` ${normalizePromptEntityText(prompt)} `;
-	const normalizedPhrase = normalizePromptEntityText(phrase);
-	return normalizedPhrase.length >= MIN_PROMPT_ENTITY_MATCH_CHARS && normalizedPrompt.includes(` ${normalizedPhrase} `);
+function promptEntityTerms(value: string): string[] {
+	const normalized = normalizePromptEntityText(value);
+	return normalized.length > 0 ? normalized.split(" ") : [];
+}
+
+const PROMPT_BARE_POSSESSIVE_DENY_TERMS = new Set([
+	"agent",
+	"artifact",
+	"concept",
+	"connector",
+	"document",
+	"event",
+	"memory",
+	"policy",
+	"preference",
+	"product",
+	"project",
+	"skill",
+	"source",
+	"system",
+	"task",
+	"tool",
+	"workflow",
+]);
+
+function promptEntityTermMatches(promptTerm: string, phraseTerm: string): boolean {
+	return (
+		promptTerm === phraseTerm ||
+		(phraseTerm.length >= 4 && !PROMPT_BARE_POSSESSIVE_DENY_TERMS.has(phraseTerm) && promptTerm === `${phraseTerm}s`)
+	);
+}
+
+function promptPhraseSpan(prompt: string, phrase: string): { readonly start: number; readonly end: number } | null {
+	const promptTerms = promptEntityTerms(prompt);
+	const phraseTerms = promptEntityTerms(phrase);
+	if (phraseTerms.join(" ").length < MIN_PROMPT_ENTITY_MATCH_CHARS) return null;
+	if (phraseTerms.length === 0 || phraseTerms.length > promptTerms.length) return null;
+	for (let start = 0; start <= promptTerms.length - phraseTerms.length; start += 1) {
+		if (phraseTerms.every((term, offset) => promptEntityTermMatches(promptTerms[start + offset] ?? "", term))) {
+			return { start, end: start + phraseTerms.length };
+		}
+	}
+	return null;
+}
+
+function spansOverlap(
+	a: { readonly start: number; readonly end: number },
+	b: { readonly start: number; readonly end: number },
+): boolean {
+	return a.start < b.end && b.start < a.end;
 }
 
 function isLowSignalPrompt(userMessage: string): boolean {
@@ -773,11 +829,37 @@ function entityContextTablesAvailable(db: ReadDb): boolean {
 	);
 }
 
-function resolvePromptEntityMatches(
-	db: ReadDb,
-	agentId: string,
-	userMessage: string,
-): PromptEntityMatch[] | "ambiguous" {
+const PROMPT_ENTITY_CONTEXT_ALLOWED_TYPES = new Set(["person", "project"]);
+
+function isPromptEntityContextTypeAllowed(entityType: string): boolean {
+	return PROMPT_ENTITY_CONTEXT_ALLOWED_TYPES.has(entityType.toLowerCase());
+}
+
+function isPromptGenericEntityPhrase(phraseTerms: readonly string[]): boolean {
+	if (phraseTerms.length !== 1) return false;
+	const term = phraseTerms[0] ?? "";
+	if (PROMPT_BARE_POSSESSIVE_DENY_TERMS.has(term)) return true;
+	return term.endsWith("s") && PROMPT_BARE_POSSESSIVE_DENY_TERMS.has(term.slice(0, -1));
+}
+
+function scorePromptEntityCandidate(row: {
+	readonly match_source: "name" | "alias";
+	readonly matched_text: string;
+	readonly mentions: number;
+	readonly pinned: number;
+}): number {
+	const phrase = normalizePromptEntityText(row.matched_text);
+	const phraseTerms = promptEntityTerms(row.matched_text);
+	return (
+		phraseTerms.length * 8 +
+		phrase.length * 0.35 +
+		Math.log1p(Math.max(0, row.mentions)) +
+		Math.min(Math.max(0, row.pinned), 1) * 8 +
+		(row.match_source === "alias" ? -0.25 : 0)
+	);
+}
+
+function resolvePromptEntityMatches(db: ReadDb, agentId: string, userMessage: string): PromptEntityMatch[] {
 	if (!entityContextTablesAvailable(db)) return [];
 	const rows = db
 		.prepare(
@@ -788,7 +870,8 @@ function resolvePromptEntityMatches(
 			   e.description AS description,
 			   COALESCE(e.canonical_name, LOWER(e.name)) AS matched_text,
 			   'name' AS match_source,
-			   COALESCE(e.mentions, 0) AS mentions
+			   COALESCE(e.mentions, 0) AS mentions,
+			   COALESCE(e.pinned, 0) AS pinned
 			 FROM entities e
 			 WHERE e.agent_id = ?
 			   AND COALESCE(e.status, 'active') = 'active'
@@ -800,7 +883,8 @@ function resolvePromptEntityMatches(
 			   e.description AS description,
 			   a.alias AS matched_text,
 			   'alias' AS match_source,
-			   COALESCE(e.mentions, 0) AS mentions
+			   COALESCE(e.mentions, 0) AS mentions,
+			   COALESCE(e.pinned, 0) AS pinned
 			 FROM entity_aliases a
 			 JOIN entities e ON e.id = a.entity_id AND e.agent_id = a.agent_id
 			 WHERE a.agent_id = ?
@@ -815,36 +899,70 @@ function resolvePromptEntityMatches(
 		matched_text: string;
 		match_source: "name" | "alias";
 		mentions: number;
+		pinned: number;
 	}>;
 
-	const matched = rows
-		.filter((row) => phraseAppearsInPrompt(userMessage, row.matched_text))
-		.sort((a, b) => {
-			const lengthDelta =
-				normalizePromptEntityText(b.matched_text).length - normalizePromptEntityText(a.matched_text).length;
-			if (lengthDelta !== 0) return lengthDelta;
-			return b.mentions - a.mentions;
-		});
-	const entityIdsByPhrase = new Map<string, Set<string>>();
-	for (const row of matched) {
-		const phrase = normalizePromptEntityText(row.matched_text);
-		if (!entityIdsByPhrase.has(phrase)) entityIdsByPhrase.set(phrase, new Set());
-		entityIdsByPhrase.get(phrase)?.add(row.entity_id);
-	}
-	if ([...entityIdsByPhrase.values()].some((ids) => ids.size > 1)) return "ambiguous";
-
-	const seen = new Set<string>();
-	const result: PromptEntityMatch[] = [];
-	for (const row of matched) {
-		if (seen.has(row.entity_id)) continue;
-		seen.add(row.entity_id);
-		result.push({
+	const candidatesByPhrase = new Map<string, PromptEntityCandidate[]>();
+	for (const row of rows) {
+		if (!isPromptEntityContextTypeAllowed(row.entity_type)) continue;
+		if (isPromptGenericEntityPhrase(promptEntityTerms(row.matched_text))) continue;
+		const span = promptPhraseSpan(userMessage, row.matched_text);
+		if (!span) continue;
+		const normalizedPhrase = normalizePromptEntityText(row.matched_text);
+		const candidate: PromptEntityCandidate = {
 			entityId: row.entity_id,
 			entityName: row.entity_name,
 			entityType: row.entity_type,
 			description: row.description,
 			matchedText: row.matched_text,
 			matchSource: row.match_source,
+			mentions: row.mentions,
+			normalizedPhrase,
+			spanStart: span.start,
+			spanEnd: span.end,
+			score: scorePromptEntityCandidate(row),
+		};
+		candidatesByPhrase.set(normalizedPhrase, [...(candidatesByPhrase.get(normalizedPhrase) ?? []), candidate]);
+	}
+
+	const phraseWinners = [...candidatesByPhrase.values()]
+		.map(
+			(candidates) =>
+				[...candidates].sort(
+					(a, b) =>
+						b.score - a.score ||
+						b.mentions - a.mentions ||
+						b.normalizedPhrase.length - a.normalizedPhrase.length ||
+						a.entityName.localeCompare(b.entityName),
+				)[0],
+		)
+		.filter((candidate): candidate is PromptEntityCandidate => !!candidate);
+	const topScore = phraseWinners.reduce((max, candidate) => Math.max(max, candidate.score), 0);
+	const minimumScore = Math.max(12, topScore * 0.45);
+	const ranked = phraseWinners
+		.filter((candidate) => candidate.score >= minimumScore)
+		.sort(
+			(a, b) =>
+				b.score - a.score ||
+				b.spanEnd - b.spanStart - (a.spanEnd - a.spanStart) ||
+				b.mentions - a.mentions ||
+				a.entityName.localeCompare(b.entityName),
+		);
+	const seen = new Set<string>();
+	const selectedSpans: Array<{ readonly start: number; readonly end: number }> = [];
+	const result: PromptEntityMatch[] = [];
+	for (const row of ranked) {
+		if (seen.has(row.entityId)) continue;
+		if (selectedSpans.some((span) => spansOverlap(span, { start: row.spanStart, end: row.spanEnd }))) continue;
+		seen.add(row.entityId);
+		selectedSpans.push({ start: row.spanStart, end: row.spanEnd });
+		result.push({
+			entityId: row.entityId,
+			entityName: row.entityName,
+			entityType: row.entityType,
+			description: row.description,
+			matchedText: row.matchedText,
+			matchSource: row.matchSource,
 			mentions: row.mentions,
 		});
 		if (result.length >= ENTITY_CONTEXT_MAX_ENTITIES) break;
@@ -864,7 +982,7 @@ function queryWithoutPromptEntities(userMessage: string, entities: ReadonlyArray
 		entities.flatMap((entity) => extractSubstantiveWords(`${entity.entityName} ${entity.matchedText}`)),
 	);
 	return extractSubstantiveWords(userMessage)
-		.filter((term) => !entityTerms.has(term))
+		.filter((term) => ![...entityTerms].some((entityTerm) => promptEntityTermMatches(term, entityTerm)))
 		.join(" ");
 }
 
@@ -921,12 +1039,11 @@ function loadEntityContextLines(
 	db: ReadDb,
 	entity: PromptEntityMatch,
 	agentId: string,
-	userMessage: string,
+	semanticQuery: string,
 	minScore: number,
 	queryVector: Float32Array | null,
 ): PromptEntityContextLine[] {
-	const entityTerms = new Set(extractSubstantiveWords(`${entity.entityName} ${entity.matchedText}`));
-	const promptTerms = extractSubstantiveWords(userMessage).filter((term) => !entityTerms.has(term));
+	const promptTerms = extractSubstantiveWords(semanticQuery);
 	if (promptTerms.length === 0) return [];
 	const candidateRows = db
 		.prepare(
@@ -1115,22 +1232,37 @@ async function buildEntityPromptContext(
 	if (!existsSync(getMemoryDbPath())) return { lines: [], memoryCount: 0, engine: "no-entity" };
 	if (!hasDbAccessor()) return { lines: [], memoryCount: 0, engine: "no-entity" };
 	const matches = getDbAccessor().withReadDb((db) => resolvePromptEntityMatches(db, agentId, userMessage));
-	if (matches === "ambiguous") return { lines: [], memoryCount: 0, engine: "ambiguous-entity" };
 	if (matches.length === 0) return { lines: [], memoryCount: 0, engine: "no-entity" };
-	const semanticQuery = queryWithoutPromptEntities(userMessage, matches);
-	if (!semanticQuery) return { lines: [], memoryCount: 0, engine: "no-aspect-hit" };
-	let queryVector: Float32Array | null = null;
-	try {
-		const vector = await embedFn(semanticQuery, embeddingCfg);
-		if (vector) queryVector = new Float32Array(vector);
-	} catch (error) {
-		logger.warn("hooks", "Entity attribute semantic scoring failed; using lexical attribute scoring", {
-			error: error instanceof Error ? error.message : String(error),
-		});
+
+	const vectorsByEntity = new Map<
+		string,
+		{ readonly semanticQuery: string; readonly queryVector: Float32Array | null }
+	>();
+	for (const entity of matches) {
+		const semanticQuery = queryWithoutPromptEntities(userMessage, [entity]);
+		if (!semanticQuery) continue;
+		let queryVector: Float32Array | null = null;
+		try {
+			const vector = await embedFn(semanticQuery, embeddingCfg);
+			if (vector) queryVector = new Float32Array(vector);
+		} catch (error) {
+			logger.warn("hooks", "Entity attribute semantic scoring failed; using lexical attribute scoring", {
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
+		vectorsByEntity.set(entity.entityId, { semanticQuery, queryVector });
 	}
+	if (vectorsByEntity.size === 0) return { lines: [], memoryCount: 0, engine: "no-aspect-hit" };
 	return getDbAccessor().withReadDb((db) => {
 		const lines = matches.flatMap((entity) =>
-			loadEntityContextLines(db, entity, agentId, userMessage, minScore, queryVector),
+			loadEntityContextLines(
+				db,
+				entity,
+				agentId,
+				vectorsByEntity.get(entity.entityId)?.semanticQuery ?? "",
+				minScore,
+				vectorsByEntity.get(entity.entityId)?.queryVector ?? null,
+			),
 		);
 		if (lines.length === 0) return { lines: [], memoryCount: 0, engine: "no-aspect-hit" };
 		const selected = selectWithBudgetSkippingOversized(

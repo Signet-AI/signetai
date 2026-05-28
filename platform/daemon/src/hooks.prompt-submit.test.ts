@@ -304,6 +304,244 @@ describe("handleUserPromptSubmit entity context", () => {
 		expect(result.inject).not.toContain("## Relevant Memory");
 	});
 
+	it("normalizes possessive entity matches to the dominant canonical entity", async () => {
+		seedEntityContext();
+		getDbAccessor().withWriteTx((db) => {
+			const now = "2026-05-27T00:00:00.000Z";
+			db.prepare(
+				`INSERT INTO entities
+				 (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
+				 VALUES ('entity-signet-possessive', 'Signet''s', 'signet''s', 'tool', 'default', 2, ?, ?)`,
+			).run(now, now);
+			db.prepare(
+				`INSERT INTO entity_aspects
+				 (id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at)
+				 VALUES ('aspect-signet-possessive-noise', 'entity-signet-possessive', 'default',
+				  'noise', 'noise', 1, ?, ?)`,
+			).run(now, now);
+			db.prepare(
+				`INSERT INTO entity_attributes
+				 (id, aspect_id, agent_id, kind, content, normalized_content, group_key, claim_key,
+				  confidence, importance, status, created_at, updated_at)
+				 VALUES ('attr-signet-possessive-noise', 'aspect-signet-possessive-noise', 'default',
+				  'attribute', 'Possessive duplicate entity should not win prompt matching.',
+				  'possessive duplicate entity should not win prompt matching',
+				  'runtime', 'duplicate_guard', 0.9, 0.9, 'active', ?, ?)`,
+			).run(now, now);
+		});
+		fetchEmbeddingMock.mockImplementationOnce(async () => [1, 0]);
+
+		const result = await handleUserPromptSubmit(
+			{
+				harness: "codex",
+				userMessage: "What are Signet's favorite pens?",
+				sessionKey: "session-possessive-entity",
+			},
+			makeDeps(),
+		);
+
+		expect(fetchEmbeddingMock.mock.calls.at(-1)?.[0]).toBe("favorite pens");
+		expect(result.engine).toBe("entity-context");
+		expect(result.inject).toContain("Signet / preferences / writing / favorite_pen");
+		expect(result.inject).not.toContain("Signet's / noise");
+		expect(result.inject).not.toContain("Possessive duplicate entity should not win");
+	});
+
+	it("matches missing-apostrophe possessive entity mentions", async () => {
+		seedEntityContext();
+		fetchEmbeddingMock.mockImplementationOnce(async () => [1, 0]);
+
+		const result = await handleUserPromptSubmit(
+			{
+				harness: "codex",
+				userMessage: "What are Signets favorite pens?",
+				sessionKey: "session-bare-possessive-entity",
+			},
+			makeDeps(),
+		);
+
+		expect(fetchEmbeddingMock.mock.calls.at(-1)?.[0]).toBe("favorite pens");
+		expect(result.engine).toBe("entity-context");
+		expect(result.inject).toContain("Signet / preferences / writing / favorite_pen");
+	});
+
+	it("does not treat generic plural ontology nouns as possessive entity mentions", async () => {
+		getDbAccessor().withWriteTx((db) => {
+			const now = "2026-05-27T00:00:00.000Z";
+			db.prepare(
+				`INSERT INTO entities
+				 (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
+				 VALUES ('entity-project', 'Project', 'project', 'project', 'default', 50, ?, ?)`,
+			).run(now, now);
+			db.prepare(
+				`INSERT INTO entities
+				 (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
+				 VALUES ('entity-agents', 'Agents', 'agents', 'concept', 'default', 200, ?, ?)`,
+			).run(now, now);
+			db.prepare(
+				`INSERT INTO entity_aspects
+				 (id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at)
+				 VALUES ('aspect-project-roadmap', 'entity-project', 'default', 'roadmap', 'roadmap', 1, ?, ?)`,
+			).run(now, now);
+			db.prepare(
+				`INSERT INTO entity_attributes
+				 (id, aspect_id, agent_id, kind, content, normalized_content, group_key, claim_key,
+				  confidence, importance, status, created_at, updated_at)
+				 VALUES ('attr-project-roadmap', 'aspect-project-roadmap', 'default', 'attribute',
+				  'Generic project roadmap context should not inject for plural projects.',
+				  'generic project roadmap context should not inject for plural projects',
+				  'general', 'roadmap', 0.9, 0.9, 'active', ?, ?)`,
+			).run(now, now);
+		});
+
+		const result = await handleUserPromptSubmit(
+			{
+				harness: "codex",
+				userMessage: "projects roadmap",
+				sessionKey: "session-generic-plural-entity",
+			},
+			makeDeps(),
+		);
+
+		expect(result.engine).toBe("no-entity");
+		expect(result.inject).not.toContain("Project / roadmap");
+
+		const pluralResult = await handleUserPromptSubmit(
+			{
+				harness: "codex",
+				userMessage: "agents are useful",
+				sessionKey: "session-generic-plural-entity-exact",
+			},
+			makeDeps(),
+		);
+
+		expect(pluralResult.engine).toBe("no-entity");
+	});
+
+	it("ignores disallowed entity types for prompt context", async () => {
+		getDbAccessor().withWriteTx((db) => {
+			const now = "2026-05-27T00:00:00.000Z";
+			db.prepare(
+				`INSERT INTO entities
+				 (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
+				 VALUES ('entity-claude-code-connector', 'Claude Code connector', 'claude code connector',
+				  'tool', 'default', 80, ?, ?)`,
+			).run(now, now);
+			db.prepare(
+				`INSERT INTO entity_aspects
+				 (id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at)
+				 VALUES ('aspect-claude-code-connector-runtime', 'entity-claude-code-connector', 'default',
+				  'runtime', 'runtime', 1, ?, ?)`,
+			).run(now, now);
+			db.prepare(
+				`INSERT INTO entity_attributes
+				 (id, aspect_id, agent_id, kind, content, normalized_content, group_key, claim_key,
+				  confidence, importance, status, created_at, updated_at)
+				 VALUES ('attr-claude-code-connector-runtime', 'aspect-claude-code-connector-runtime',
+				  'default', 'attribute', 'Claude Code connector setup context should not inject.',
+				  'claude code connector setup context should not inject',
+				  'setup', 'routing', 0.9, 0.9, 'active', ?, ?)`,
+			).run(now, now);
+		});
+
+		const result = await handleUserPromptSubmit(
+			{
+				harness: "codex",
+				userMessage: "Claude Code connector setup",
+				sessionKey: "session-disallowed-entity-type",
+			},
+			makeDeps(),
+		);
+
+		expect(result.engine).toBe("no-entity");
+		expect(result.inject).not.toContain("Claude Code connector / runtime");
+	});
+
+	it("ignores low-quality generic entity collisions when a stronger entity is present", async () => {
+		seedEntityContext();
+		getDbAccessor().withWriteTx((db) => {
+			const now = "2026-05-27T00:00:00.000Z";
+			db.prepare(
+				`INSERT INTO entities
+				 (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
+				 VALUES ('entity-favorite', 'Favorite', 'favorite', 'extracted', 'default', 3, ?, ?)`,
+			).run(now, now);
+			db.prepare(
+				`INSERT INTO entity_aspects
+				 (id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at)
+				 VALUES ('aspect-favorite-noise', 'entity-favorite', 'default', 'noise', 'noise', 1, ?, ?)`,
+			).run(now, now);
+			db.prepare(
+				`INSERT INTO entity_attributes
+				 (id, aspect_id, agent_id, kind, content, normalized_content, group_key, claim_key,
+				  confidence, importance, status, created_at, updated_at)
+				 VALUES ('attr-favorite-noise', 'aspect-favorite-noise', 'default', 'attribute',
+				  'Favorite pens from generic extracted entities should not inject.',
+				  'favorite pens from generic extracted entities should not inject',
+				  'runtime', 'generic_collision', 0.9, 0.9, 'active', ?, ?)`,
+			).run(now, now);
+		});
+		fetchEmbeddingMock.mockImplementationOnce(async () => [1, 0]);
+
+		const result = await handleUserPromptSubmit(
+			{
+				harness: "codex",
+				userMessage: "What are Signet favorite pens?",
+				sessionKey: "session-generic-collision",
+			},
+			makeDeps(),
+		);
+
+		expect(result.engine).toBe("entity-context");
+		expect(result.inject).toContain("Signet / preferences / writing / favorite_pen");
+		expect(result.inject).not.toContain("Favorite / noise");
+		expect(result.inject).not.toContain("generic extracted entities");
+	});
+
+	it("prefers the longest non-overlapping entity span", async () => {
+		getDbAccessor().withWriteTx((db) => {
+			const now = "2026-05-27T00:00:00.000Z";
+			for (const [id, name, canonical, mentions] of [
+				["entity-claude-code-connector", "Claude Code connector", "claude code connector", 8],
+				["entity-claude-code", "Claude Code", "claude code", 135],
+				["entity-claude", "Claude", "claude", 113],
+				["entity-code", "code", "code", 15],
+				["entity-connector", "connector", "connector", 5],
+			] as const) {
+				db.prepare(
+					`INSERT INTO entities
+					 (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
+					 VALUES (?, ?, ?, 'project', 'default', ?, ?, ?)`,
+				).run(id, name, canonical, mentions, now, now);
+				db.prepare(
+					`INSERT INTO entity_aspects
+					 (id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at)
+					 VALUES (?, ?, 'default', 'runtime', 'runtime', 1, ?, ?)`,
+				).run(`aspect-${id}`, id, now, now);
+				db.prepare(
+					`INSERT INTO entity_attributes
+					 (id, aspect_id, agent_id, kind, content, normalized_content, group_key, claim_key,
+					  confidence, importance, status, created_at, updated_at)
+					 VALUES (?, ?, 'default', 'attribute', ?, ?, 'setup', 'routing', 0.9, 0.9, 'active', ?, ?)`,
+				).run(`attr-${id}`, `aspect-${id}`, `${name} setup context.`, `${canonical} setup context`, now, now);
+			}
+		});
+
+		const result = await handleUserPromptSubmit(
+			{
+				harness: "codex",
+				userMessage: "Claude Code connector setup",
+				sessionKey: "session-longest-span",
+			},
+			makeDeps(),
+		);
+
+		expect(result.engine).toBe("entity-context");
+		expect(result.inject).toContain("Claude Code connector / runtime / setup / routing");
+		expect(result.inject).not.toContain("Claude Code / runtime");
+		expect(result.inject).not.toContain("- [attribute] connector / runtime");
+	});
+
 	it("keeps semantic attribute scoring scoped to the current agent", async () => {
 		seedEntityContext();
 		getDbAccessor().withWriteTx((db) => {
