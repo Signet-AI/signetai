@@ -569,7 +569,7 @@ Database Schema
 SQLite with WAL mode. Migrations are numbered sequentially under
 `platform/core/src/migrations/`. Each migration is idempotent — safe
 to re-run against an existing database. Schema version is tracked in
-`schema_migrations`. The latest migration is `076-temporal-edges.ts`.
+`schema_migrations`. The latest migration is `077-entity-aliases.ts`.
 
 **schema_migrations**
 
