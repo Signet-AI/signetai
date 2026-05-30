@@ -1,6 +1,7 @@
-import { readFile, stat } from "node:fs/promises";
+import { stat } from "node:fs/promises";
 import { extname, normalize, relative, sep } from "node:path";
-import { BrowserWindow, Menu, type OpenDialogOptions, app, dialog, ipcMain, protocol, shell } from "electron";
+import { pathToFileURL } from "node:url";
+import { BrowserWindow, Menu, type OpenDialogOptions, app, dialog, ipcMain, net, protocol, shell } from "electron";
 import { DaemonManager } from "./daemon-manager.js";
 import { checkForDesktopUpdate, configureDesktopUpdates } from "./desktop-updates.js";
 import { dashboardRoot, iconPath, preloadPath } from "./paths.js";
@@ -89,8 +90,11 @@ async function registerDashboardProtocol(): Promise<void> {
 		let file = dashboardFile(request.url);
 		const info = await stat(file).catch(() => null);
 		if (!info?.isFile()) file = `${dashboardRoot()}${sep}index.html`;
-		return new Response(await readFile(file), {
+		const response = await net.fetch(pathToFileURL(file).toString());
+		return new Response(response.body, {
 			headers: { "content-type": MIME[extname(file)] ?? "application/octet-stream" },
+			status: response.status,
+			statusText: response.statusText,
 		});
 	});
 }
@@ -120,7 +124,7 @@ function createMainWindow(): BrowserWindow {
 		height: 800,
 		minWidth: 800,
 		minHeight: 600,
-		show: false,
+		show: true,
 		frame: usesNativeWindowFrame(),
 		title: "Signet",
 		backgroundColor: "#0f0f0f",
@@ -140,7 +144,6 @@ function createMainWindow(): BrowserWindow {
 		return { action: "deny" };
 	});
 
-	mainWindow.once("ready-to-show", () => mainWindow?.show());
 	mainWindow.on("maximize", () => mainWindow && emitWindowState(mainWindow));
 	mainWindow.on("unmaximize", () => mainWindow && emitWindowState(mainWindow));
 	mainWindow.on("close", (event) => {
@@ -150,6 +153,7 @@ function createMainWindow(): BrowserWindow {
 	});
 	mainWindow.on("closed", () => {
 		mainWindow = null;
+		loadedMainWindowUrl = null;
 	});
 
 	return mainWindow;
@@ -160,12 +164,13 @@ function showDashboard(): void {
 }
 
 async function showDashboardReady(): Promise<void> {
-	await prepareDaemonForDashboard();
 	const win = createMainWindow();
-	loadMainWindow(win);
+	loadStartupWindow(win);
 	if (win.isMinimized()) win.restore();
 	win.show();
 	win.focus();
+	await prepareDaemonForDashboard();
+	loadMainWindow(win);
 }
 
 async function prepareDaemonForDashboard(): Promise<void> {
@@ -195,6 +200,38 @@ function loadMainWindow(win: BrowserWindow): void {
 	win.loadURL(url).catch((err) => {
 		console.error(daemonStartupError ? "Failed to load startup error" : "Failed to load dashboard", err);
 	});
+}
+
+function loadStartupWindow(win: BrowserWindow): void {
+	if (loadedMainWindowUrl) return;
+	const url = `data:text/html;charset=utf-8,${encodeURIComponent(startupLoadingHtml())}`;
+	loadedMainWindowUrl = url;
+	win.loadURL(url).catch((err) => {
+		console.error("Failed to load startup window", err);
+	});
+}
+
+function startupLoadingHtml(): string {
+	return `<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Signet</title>
+<style>
+body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #0f0f0f; color: #f2f2f2; font: 14px ui-monospace, SFMono-Regular, Menlo, monospace; }
+main { display: grid; gap: 18px; justify-items: center; }
+.mark { width: 84px; height: 84px; border-radius: 24px; background: #151515; display: grid; place-items: center; box-shadow: 0 24px 80px rgba(0,0,0,.45); }
+.dot { width: 10px; height: 10px; border-radius: 999px; background: #fff; box-shadow: 20px 0 #fff, 40px 0 #fff, 0 20px #fff, 20px 20px #fff, 40px 20px #fff; }
+p { margin: 0; color: #cfcfcf; }
+</style>
+</head>
+<body>
+<main>
+<div class="mark"><div class="dot"></div></div>
+<p>Starting Signet...</p>
+</main>
+</body>
+</html>`;
 }
 
 function startupErrorUrl(message: string): string {
@@ -317,12 +354,11 @@ protocol.registerSchemesAsPrivileged([
 
 app.setName("Signet");
 
-if (process.platform === "darwin" && app.dock) {
-	app.dock.setIcon(iconPath("icon.png"));
-}
-
 app.whenReady().then(async () => {
 	Menu.setApplicationMenu(null);
+	if (process.platform === "darwin" && app.dock) {
+		app.dock.setIcon(iconPath("icon.png"));
+	}
 	configureDesktopUpdates();
 	await registerDashboardProtocol();
 	registerIpc();
