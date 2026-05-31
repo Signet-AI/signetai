@@ -49,6 +49,22 @@ describe("check-publish-manifests", () => {
 		expect(metaPackageBuild).toContain('outfile: "./dist/extraction-thread.js"');
 	});
 
+	test("keeps Docker build COPY sources present in the repository", () => {
+		const root = join(import.meta.dir, "..");
+		const dockerfile = readFileSync(join(root, "deploy", "docker", "Dockerfile"), "utf-8");
+		const copySourcePattern = /^COPY (?<source>\S+) \S+$/gm;
+		const missingSources: string[] = [];
+
+		for (const match of dockerfile.matchAll(copySourcePattern)) {
+			const source = match.groups?.source;
+			if (source && !source.startsWith("--from=") && !existsSync(join(root, source))) {
+				missingSources.push(source);
+			}
+		}
+
+		expect(missingSources).toEqual([]);
+	});
+
 	test("keeps Node daemon build banner from colliding with esbuild require helper", () => {
 		const root = join(import.meta.dir, "..");
 		const daemonBuild = readFileSync(join(root, "platform", "daemon", "build.ts"), "utf-8");

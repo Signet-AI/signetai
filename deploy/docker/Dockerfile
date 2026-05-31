@@ -13,7 +13,6 @@ COPY surfaces ./surfaces
 COPY integrations ./integrations
 COPY libs ./libs
 COPY dist ./dist
-COPY runtimes ./runtimes
 COPY plugins ./plugins
 COPY public ./public
 COPY web ./web
