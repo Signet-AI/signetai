@@ -6,6 +6,9 @@ All notable changes to Signet are documented here.
 
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
+### 2026-05-30
+- Bug fixes: show macos window on launch.
+
 ### 2026-05-28
 - Features: gate prompt injection on entity context.
 - Bug fixes: queue aggregate recall extraction; harden prompt entity context filtering; restrict prompt entity injection types; route prompt context through attributes.
@@ -31,10 +34,16 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Bug fixes: route aggregate recall through synthesis; route direct API pipeline providers.
 - Refactoring: improve readability of agents.ts.
 
-### 2026-05-22
-- Bug fixes: throw on unimplemented migration sources instead of silently no-oping.
-
 ## Release Ledger
+
+## [0.138.5] - 2026-05-30
+
+Release summary: 1 bug fix.
+Tag range: `bundle-0.138.3-35f201e270f2b4f7bddc0a3e9bf4d752fa5e8f0a..v0.138.5`.
+
+### Bug Fixes
+
+- **desktop**: show macos window on launch (#800)
 
 ## [0.138.4] - 2026-05-28
 
