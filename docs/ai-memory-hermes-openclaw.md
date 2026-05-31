@@ -15,7 +15,7 @@ memory for Hermes Agent and OpenClaw.
 Signet runs a local daemon, stores memory in SQLite, exposes MCP and HTTP
 APIs, and installs harness-specific adapters so the same agent identity,
 memory, secrets, and skills can follow you across Hermes Agent, OpenClaw,
-Claude Code, OpenCode, Codex, Forge, and other runtimes.
+Claude Code, OpenCode, Codex, Gemini CLI, Pi, Oh My Pi, and other harnesses.
 
 ## Short Answer
 

@@ -271,7 +271,6 @@ Rules:
 | `signet-reviews-worker` | `web/workers/reviews` | Cloudflare review worker | cloudflare |
 | `plugins/core/secrets` | `plugins/core/secrets` | Core Signet-native secrets plugin | bun |
 | `memorybench` | `memorybench` | Benchmark harness, datasets, reports, local UI | node |
-| `runtimes/forge` | `runtimes/forge` | Forge runtime ecosystem | mixed |
 
 `@signet/pi-extension-base` has no standalone build step. The Oh My Pi and Pi
 extension builds consume it directly from workspace source.

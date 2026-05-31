@@ -113,7 +113,6 @@ const surfaces: PluginSurfaceDeclarationsV1 = {
 			summary: "MCP tools via signet-mcp stdio",
 			requiredCapabilities: ["mcp:tool"],
 		},
-		{ id: "forge", title: "Forge", summary: "MCP tools via signet-mcp stdio", requiredCapabilities: ["mcp:tool"] },
 		{
 			id: "hermes-agent",
 			title: "Hermes Agent",

@@ -10,7 +10,6 @@ integrations/  external harness integrations grouped by tool
 plugins/       Signet-native plugins loaded by Signet
 libs/          reusable developer libraries
 dist/          assembled shipping artifacts
-runtimes/      separate runtime ecosystems, currently Forge
 web/           marketing site and Cloudflare workers
 memorybench/   benchmark harness, datasets, providers, reports, and UI
 ```
@@ -48,7 +47,6 @@ setup and `plugin/` for the runtime plugin loaded by OpenCode.
 | external runtime plugins | `integrations/<tool>/plugin/` |
 | Signet-native plugins | `plugins/<scope>/<name>/` |
 | `signetai` | `dist/signetai/` |
-| Forge runtime | `runtimes/forge/` |
 | marketing site | `web/marketing/` |
 | Cloudflare workers | `web/workers/<worker>/` |
 | MemoryBench | `memorybench/` |

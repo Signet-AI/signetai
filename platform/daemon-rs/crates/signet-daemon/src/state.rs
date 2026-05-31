@@ -154,7 +154,6 @@ impl AppState {
             "claude" | "claude-code" => Some("claude-code"),
             "opencode" => Some("opencode"),
             "openclaw" => Some("openclaw"),
-            "forge" => Some("forge"),
             _ => None,
         }
     }

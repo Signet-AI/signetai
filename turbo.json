@@ -38,7 +38,6 @@
 				"@signet/connector-base#build",
 				"@signet/connector-claude-code#build",
 				"@signet/connector-codex#build",
-				"@signet/connector-forge#build",
 				"@signet/connector-hermes-agent#build",
 				"@signet/connector-oh-my-pi#build",
 				"@signet/connector-openclaw#build",

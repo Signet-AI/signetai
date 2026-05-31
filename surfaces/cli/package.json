@@ -15,7 +15,7 @@
   ],
   "scripts": {
     "build": "bun run build:cli",
-    "build:workspace-deps": "cd ../.. && bun run build:core && bun run build:connector-base && bun run build:opencode-plugin && bun run build:oh-my-pi-extension && bun run build:connector-oh-my-pi && bun run build:pi-extension && bun run build:connector-pi && bun run --filter '@signet/connector-claude-code' --filter '@signet/connector-codex' --filter '@signet/connector-forge' --filter '@signet/connector-gemini' --filter '@signet/connector-hermes-agent' --filter '@signet/connector-opencode' --filter '@signet/connector-openclaw' build",
+    "build:workspace-deps": "cd ../.. && bun run build:core && bun run build:connector-base && bun run build:opencode-plugin && bun run build:oh-my-pi-extension && bun run build:connector-oh-my-pi && bun run build:pi-extension && bun run build:connector-pi && bun run --filter '@signet/connector-claude-code' --filter '@signet/connector-codex' --filter '@signet/connector-gemini' --filter '@signet/connector-hermes-agent' --filter '@signet/connector-opencode' --filter '@signet/connector-openclaw' build",
     "build:cli": "bun build ./src/cli.ts --outfile ./dist/cli.js --target node --external better-sqlite3",
     "build:dashboard": "cd ../dashboard && bun install && bun run build",
     "dev": "bun --watch src/cli.ts",
@@ -45,7 +45,6 @@
     "@signet/core": "workspace:*",
     "@signet/connector-claude-code": "workspace:*",
     "@signet/connector-codex": "workspace:*",
-    "@signet/connector-forge": "workspace:*",
     "@signet/connector-gemini": "workspace:*",
     "@signet/connector-hermes-agent": "workspace:*",
     "@signet/connector-opencode": "workspace:*",

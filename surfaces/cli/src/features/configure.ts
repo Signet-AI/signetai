@@ -1,9 +1,8 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { checkbox, confirm, input, select } from "@inquirer/prompts";
-import { findSignetForgeBinary, parseSimpleYaml, readNetworkMode } from "@signet/core";
+import { parseSimpleYaml, readNetworkMode } from "@signet/core";
 import chalk from "chalk";
-import { managedForgeInstallSupportedOnCurrentPlatform } from "./forge.js";
 import {
 	chooseWorkspaceCandidate,
 	listWorkspaceCandidates,
@@ -246,7 +245,6 @@ async function configureNetwork(yaml: string): Promise<string> {
 }
 
 async function configureHarnesses(yaml: string, deps: Deps, dir: string): Promise<string> {
-	const forgeDetected = Boolean(findSignetForgeBinary(dir));
 	const harnesses = await checkbox({
 		message: "Select AI platforms:",
 		choices: [
@@ -254,14 +252,6 @@ async function configureHarnesses(yaml: string, deps: Deps, dir: string): Promis
 			{ value: "codex", name: "Codex" },
 			{ value: "opencode", name: "OpenCode" },
 			{ value: "openclaw", name: "OpenClaw" },
-			{
-				value: "forge",
-				name: "Forge",
-				disabled:
-					!forgeDetected && !managedForgeInstallSupportedOnCurrentPlatform()
-						? "managed install unavailable on this platform; install Forge separately first"
-						: false,
-			},
 			{ value: "hermes-agent", name: "Hermes Agent" },
 			{ value: "gemini", name: "Gemini CLI" },
 			{ value: "cursor", name: "Cursor" },

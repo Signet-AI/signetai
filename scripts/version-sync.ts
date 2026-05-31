@@ -6,8 +6,6 @@ import { dirname, join } from "node:path";
 
 const REFERENCE_FILE = "dist/signetai/package.json";
 const EXCLUDED_FILES = new Set(["surfaces/dashboard/package.json"]);
-const EXCLUDED_CARGO_FILES = new Set(["runtimes/forge/Cargo.toml"]);
-const FORGE_VERSION_FILE = "runtimes/forge/forge-version.json";
 export const VERSION_SYNC_PACKAGE_GLOBS = [
 	"package.json",
 	"platform/**/package.json",
@@ -16,10 +14,6 @@ export const VERSION_SYNC_PACKAGE_GLOBS = [
 	"libs/**/package.json",
 	"dist/**/package.json",
 ] as const;
-const FORGE_MANIFEST_FILES = [
-	"surfaces/cli/templates/forge/manifest.json",
-	"dist/signetai/templates/forge/manifest.json",
-];
 const PUBLISH_RUNTIME_DEPENDENCY_FIELDS = ["dependencies", "optionalDependencies", "peerDependencies"] as const;
 
 function parseSemver(version: string): [number, number, number] {
@@ -72,6 +66,7 @@ function listTargetPackageFiles(): string[] {
 		.split("\n")
 		.map((line) => line.trim())
 		.filter(Boolean)
+		.filter((file) => existsSync(file))
 		.filter((file) => !EXCLUDED_FILES.has(file));
 }
 
@@ -94,15 +89,15 @@ function updateFileVersion(filePath: string, targetVersion: string, checkOnly: b
 }
 
 function listCargoFiles(): string[] {
-	const output = execSync("git ls-files 'platform/**/Cargo.toml' 'runtimes/**/Cargo.toml'", {
+	const output = execSync("git ls-files 'platform/**/Cargo.toml'", {
 		encoding: "utf8",
 	});
 
 	return output
 		.split("\n")
 		.map((line) => line.trim())
-		.filter(Boolean)
-		.filter((file) => !EXCLUDED_CARGO_FILES.has(file));
+		.filter((file) => existsSync(file))
+		.filter(Boolean);
 }
 
 function readCargoVersion(filePath: string): string | null {
@@ -278,20 +273,6 @@ function hasFlag(name: string): boolean {
 	return process.argv.includes(name);
 }
 
-function syncForgeManifestCopies(checkOnly: boolean): string[] {
-	const source = readFileSync(FORGE_VERSION_FILE, "utf8");
-	const updated: string[] = [];
-	for (const file of FORGE_MANIFEST_FILES) {
-		const raw = readFileSync(file, "utf8");
-		if (raw === source) continue;
-		if (!checkOnly) {
-			writeFileSync(file, source);
-		}
-		updated.push(file);
-	}
-	return updated;
-}
-
 function main() {
 	const explicitVersion = getArg("--to");
 	const checkOnly = hasFlag("--check");
@@ -380,22 +361,15 @@ function main() {
 		throw new Error(`Cargo.lock version sync failed. Mismatches:\n- ${cargoLockMismatches.join("\n- ")}`);
 	}
 
-	const forgeManifestUpdated = syncForgeManifestCopies(checkOnly);
-
 	if (
 		checkOnly &&
-		(updated.length > 0 ||
-			cargoUpdated.length > 0 ||
-			cargoLockMismatches.length > 0 ||
-			resolved.length > 0 ||
-			forgeManifestUpdated.length > 0)
+		(updated.length > 0 || cargoUpdated.length > 0 || cargoLockMismatches.length > 0 || resolved.length > 0)
 	) {
 		const drift = [
 			...updated.map((file) => `package version: ${file}`),
 			...cargoUpdated.map((file) => `Cargo version: ${file}`),
 			...cargoLockMismatches.map((file) => `Cargo.lock version: ${file}`),
 			...resolved.map((file) => `workspace protocol: ${file}`),
-			...forgeManifestUpdated.map((file) => `Forge manifest copy: ${file}`),
 		];
 		throw new Error(
 			`Version sync drift detected at ${targetVersion}:\n- ${drift.join("\n- ")}\n\nRun bun scripts/version-sync.ts before merging.`,
@@ -406,8 +380,7 @@ function main() {
 		updated.length === 0 &&
 		cargoUpdated.length === 0 &&
 		cargoLockMismatches.length === 0 &&
-		resolved.length === 0 &&
-		forgeManifestUpdated.length === 0
+		resolved.length === 0
 	) {
 		console.log(`All versions already aligned at ${targetVersion}.`);
 		return;
@@ -434,12 +407,6 @@ function main() {
 		}
 	}
 
-	if (forgeManifestUpdated.length > 0) {
-		console.log(`Synced Forge manifest copies from ${FORGE_VERSION_FILE}:`);
-		for (const file of forgeManifestUpdated) {
-			console.log(`- ${file}`);
-		}
-	}
 }
 
 if (import.meta.main) {

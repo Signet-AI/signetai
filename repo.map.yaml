@@ -41,8 +41,6 @@ areas:
         name: "@signet/connector-claude-code"
       - path: integrations/codex/connector
         name: "@signet/connector-codex"
-      - path: integrations/forge/connector
-        name: "@signet/connector-forge"
       - path: integrations/gemini/connector
         name: "@signet/connector-gemini"
       - path: integrations/hermes-agent/connector
@@ -85,12 +83,6 @@ areas:
     packages:
       - path: dist/signetai
         name: "signetai"
-
-  runtimes:
-    purpose: "Separate runtime ecosystems kept in the monorepo."
-    packages:
-      - path: runtimes/forge
-        name: "forge"
 
   web:
     purpose: "Marketing site and web workers."

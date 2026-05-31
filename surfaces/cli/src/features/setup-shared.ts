@@ -9,7 +9,6 @@ export type HarnessChoice =
 	| "oh-my-pi"
 	| "pi"
 	| "codex"
-	| "forge"
 	| "hermes-agent"
 	| "gemini";
 export type EmbeddingProviderChoice = "native" | "llama-cpp" | "ollama" | "openai" | "none";
@@ -42,7 +41,6 @@ export const SETUP_HARNESS_CHOICES: readonly HarnessChoice[] = [
 	"oh-my-pi",
 	"pi",
 	"codex",
-	"forge",
 	"hermes-agent",
 	"gemini",
 ];
@@ -102,7 +100,6 @@ export function formatDetectionSummary(detection: SetupDetection): string {
 	if (detection.harnesses.codex) harnesses.push("Codex");
 	if (detection.harnesses.hermesAgent) harnesses.push("Hermes Agent");
 	if (detection.harnesses.gemini) harnesses.push("Gemini");
-	if (detection.harnesses.forge) harnesses.push("Forge");
 	if (harnesses.length > 0) {
 		lines.push(`    ✓ Harnesses: ${harnesses.join(", ")}`);
 	}

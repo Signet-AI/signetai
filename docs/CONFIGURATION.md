@@ -83,7 +83,6 @@ owner:
   name: "User Name"
 
 harnesses:
-  - forge
   - claude-code
   - openclaw
   - opencode
@@ -190,9 +189,9 @@ verification.
 
 ### harnesses
 
-List of AI platforms to integrate with. Valid values: `forge`,
-`claude-code`, `opencode`, `openclaw`, and `codex`. Support for
-`cursor`, `windsurf`, `chatgpt`, and `gemini` is planned.
+List of AI platforms to integrate with. Valid values: `claude-code`,
+`opencode`, `openclaw`, `codex`, `gemini`, `oh-my-pi`, `pi`, and
+`hermes-agent`. Support for `cursor`, `windsurf`, and `chatgpt` is planned.
 
 
 ### embedding
@@ -323,7 +322,7 @@ process reads all memories and asks a model to write a coherent summary.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `harness` | string | `"openclaw"` | Which harness runs synthesis (`forge`, `openclaw`, `claude-code`, `codex`, `opencode`) |
+| `harness` | string | `"openclaw"` | Which harness runs synthesis (`openclaw`, `claude-code`, `codex`, `opencode`) |
 | `model` | string | `"sonnet"` | Model identifier |
 | `schedule` | string | `"daily"` | `"daily"`, `"weekly"`, or `"on-demand"` |
 | `max_tokens` | number | `4000` | Max output tokens |

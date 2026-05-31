@@ -61,7 +61,7 @@ export function registerAppCommands(program: Command, deps: AppDeps): void {
 		.option("--network-mode <mode>", "Daemon network mode in non-interactive mode (localhost, tailscale)")
 		.option(
 			"--harness <harness>",
-			"Harness to configure (repeatable or comma-separated: claude-code, codex, opencode, openclaw, oh-my-pi, pi, hermes-agent, forge, gemini)",
+			"Harness to configure (repeatable or comma-separated: claude-code, codex, opencode, openclaw, oh-my-pi, pi, hermes-agent, gemini)",
 			deps.collectListOption,
 			[],
 		)

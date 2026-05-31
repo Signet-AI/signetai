@@ -2,13 +2,7 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import {
-	CONNECTOR_PROVIDERS,
-	type ConnectorConfig,
-	type SyncCursor,
-	findSignetForgeBinary,
-	resolveSignetForgeManagedPath,
-} from "@signet/core";
+import { CONNECTOR_PROVIDERS, type ConnectorConfig, type SyncCursor } from "@signet/core";
 import type { Hono } from "hono";
 import { requirePermission } from "../auth";
 import { createFilesystemConnector } from "../connectors/filesystem.js";
@@ -115,10 +109,6 @@ function startConnectorSync(connectorId: string, mode: "incremental" | "full"): 
 /** Escape LIKE special characters for safe prefix matching. */
 export function escapeLikePrefix(value: string): string {
 	return `${value.replace(/[%_\\]/g, "\\$&")}%`;
-}
-
-function findForgeBinaryPath(): string | null {
-	return findSignetForgeBinary(AGENTS_DIR);
 }
 
 export function registerConnectorRoutes(app: Hono): void {
@@ -354,7 +344,6 @@ export function registerConnectorRoutes(app: Hono): void {
 	// Harnesses API
 
 	app.get("/api/harnesses", async (c) => {
-		const verifiedForgePath = findForgeBinaryPath();
 		const configs = [
 			{
 				name: "Claude Code",
@@ -373,12 +362,6 @@ export function registerConnectorRoutes(app: Hono): void {
 				id: "openclaw",
 				path: join(AGENTS_DIR, "AGENTS.md"),
 				exists: existsSync(join(AGENTS_DIR, "AGENTS.md")),
-			},
-			{
-				name: "Forge",
-				id: "forge",
-				path: verifiedForgePath ?? resolveSignetForgeManagedPath(),
-				exists: Boolean(verifiedForgePath),
 			},
 			{
 				name: "Gemini CLI",

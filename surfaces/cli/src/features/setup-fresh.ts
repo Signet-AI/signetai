@@ -13,7 +13,6 @@ import open from "open";
 import ora from "ora";
 import { daemonAccessLines } from "../lib/network.js";
 import Database from "../sqlite.js";
-import { installForge, managedForgeInstallSupportedOnCurrentPlatform } from "./forge.js";
 import { installGraphiqPlugin } from "./graphiq.js";
 import { applySetupInferenceRoute, buildSetupInference, buildSetupPipeline } from "./setup-pipeline.js";
 import { writeSetupCorePluginRegistry } from "./setup-plugins.js";
@@ -200,24 +199,6 @@ export async function runFreshSetup(cfg: FreshSetupConfig, deps: SetupDeps): Pro
 			createLocalBackup: cfg.createLocalBackup,
 			assumeOpenClawLinked: cfg.configureOpenClawWs && cfg.openclawConfigCount > 0,
 		});
-
-		if (cfg.harnesses.includes("forge") && !deps.detectExistingSetup(cfg.basePath).harnesses.forge) {
-			if (!managedForgeInstallSupportedOnCurrentPlatform()) {
-				throw new Error(
-					`Forge is selected, but Signet-managed Forge binaries are only available on macOS/Linux arm64/x64. Install Forge separately on ${process.platform} ${process.arch}, then rerun ${chalk.cyan("signet setup")}.`,
-				);
-			}
-			spinner.text = "Installing Forge...";
-			await installForge(
-				{},
-				{
-					agentsDir: cfg.basePath,
-					defaultPort: deps.DEFAULT_PORT,
-					getTemplatesDir: deps.getTemplatesDir,
-					isDaemonRunning: deps.isDaemonRunning,
-				},
-			);
-		}
 
 		spinner.text = "Configuring harness hooks...";
 		// Hooks are installed before the daemon starts. This is safe because

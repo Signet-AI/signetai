@@ -7,10 +7,8 @@ section: "Reference"
 
 # Harnesses
 
-Harnesses are the AI platforms and tools that Signet integrates with.
-Some are external platforms reached through connectors. Forge is the
-first-party native harness and the reference runtime implementation for
-the Signet runtime contract.
+Harnesses are the AI platforms and tools that Signet integrates with
+through connectors, plugins, and lifecycle hooks.
 
 > **Path note:** `$SIGNET_WORKSPACE` means your active Signet workspace path.
 > Default is `~/.agents`, configurable via `signet workspace set <path>`.
@@ -52,52 +50,6 @@ curl -X POST http://localhost:3850/api/harnesses/regenerate
 ```
 
 ---
-
-## Forge
-
-Forge is Signet's native terminal harness. Unlike external harness
-integrations, it does not need hook/config patching because it speaks to
-the daemon directly as the host runtime.
-
-### Management surface
-
-Forge remains a separate product command:
-
-```bash
-forge
-```
-
-Signet can also manage Forge installs directly:
-
-```bash
-signet forge install
-signet forge update
-signet forge status
-signet forge doctor
-```
-
-Managed installs place the binary in `~/.config/signet/bin`. Add that directory to your `PATH` if you want `forge` available in a normal shell.
-
-Managed binary downloads currently support macOS arm64, macOS x64, Linux x64, and Linux arm64.
-On other platforms, install Forge from source or use a local standalone build.
-
-Install/update commands prompt for an explicit development warning
-acknowledgement. For automation:
-
-```bash
-signet forge install --yes
-signet forge update --yes
-```
-
-### Runtime role
-
-- first-party native harness
-- reference implementation of the Signet runtime contract
-- direct daemon client for memory, hooks, skills, secrets, and MCP
-
-Forge is still represented as a harness id (`forge`) in Signet config,
-setup detection, and dashboard surfaces.
-
 
 ## Lossless Working Memory Fidelity (Closure Wave)
 

@@ -20,7 +20,6 @@ const NO_HARNESSES = {
 	codex: false,
 	ohMyPi: false,
 	pi: false,
-	forge: false,
 	hermesAgent: false,
 };
 

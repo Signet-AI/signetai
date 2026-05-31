@@ -14,33 +14,6 @@ import { listOhMyPiAgentDirCandidates, resolveOhMyPiAgentDir } from "./oh-my-pi"
 import { listPiAgentDirCandidates, resolvePiAgentDir } from "./pi";
 import { parseSimpleYaml } from "./yaml";
 
-const FORGE_BINARY_NAME = "forge";
-const SIGNET_FORGE_PRIMARY_MARKER = "Signet's native AI terminal";
-const SIGNET_FORGE_FALLBACK_MARKERS = [
-	"Signet daemon URL",
-	"SIGNET_TOKEN",
-	"signet-token",
-	"signet-dark",
-	"Starting Signet daemon",
-	"Signet provides memory, identity, and extraction for Forge",
-];
-const COMPATIBLE_FORGE_MARKER_GROUPS = [
-	[SIGNET_FORGE_PRIMARY_MARKER, "Forge — First Run", "Forge — Provider auth needed", "Forge TUI starting — model:"],
-	[
-		"FORGE_SIGNET_TOKEN",
-		"SIGNET_AUTH_TOKEN",
-		"SIGNET_TOKEN",
-		"Signet daemon URL",
-		"Signet provides memory, identity, and extraction for Forge",
-	],
-	[
-		"signet-dark",
-		"Dashboard (Ctrl+D)",
-		"/forge-usage",
-		"Switch theme (signet-dark, signet-light, midnight, amber)",
-		"Open main dashboard in browser",
-	],
-] as const;
 const OH_MY_PI_MANAGED_EXTENSION_FILENAME = "signet-oh-my-pi.js";
 const OH_MY_PI_LEGACY_MANAGED_EXTENSION_FILENAME = "signet-oh-my-pi.mjs";
 const OH_MY_PI_MANAGED_MARKER = "SIGNET_MANAGED_OH_MY_PI_EXTENSION";
@@ -272,52 +245,9 @@ export interface SetupDetection {
 		codex: boolean;
 		ohMyPi: boolean;
 		pi: boolean;
-		forge: boolean;
 		hermesAgent: boolean;
 		gemini: boolean;
 	};
-}
-
-function forgeBinaryFilename(binaryName = FORGE_BINARY_NAME): string {
-	return process.platform === "win32" ? `${binaryName}.exe` : binaryName;
-}
-
-export function resolveSignetForgeManagedPath(home = homedir()): string {
-	return join(home, ".config", "signet", "bin", forgeBinaryFilename());
-}
-
-function signetForgeCandidatePaths(home: string): string[] {
-	const binary = forgeBinaryFilename();
-	return [
-		resolveSignetForgeManagedPath(home),
-		join(home, ".cargo", "bin", binary),
-		join(home, ".local", "bin", binary),
-		"/usr/local/bin/forge",
-		"/opt/homebrew/bin/forge",
-	];
-}
-
-function workspaceForgeCandidatePaths(agentsDir?: string): string[] {
-	if (!agentsDir) return [];
-	const binary = forgeBinaryFilename();
-	return [
-		join(agentsDir, binary),
-		join(agentsDir, "target", "release", binary),
-		join(agentsDir, "target", "debug", binary),
-		join(agentsDir, "runtimes", "forge", "target", "release", binary),
-		join(agentsDir, "runtimes", "forge", "target", "debug", binary),
-		join(agentsDir, "packages", "forge", "target", "release", binary),
-		join(agentsDir, "packages", "forge", "target", "debug", binary),
-	];
-}
-
-interface SignetForgeInstallRecord {
-	readonly managed?: boolean;
-	readonly binaryPath?: string;
-}
-
-function signetManagedInstallDir(home = homedir()): string {
-	return join(home, ".config", "signet", "bin");
 }
 
 function isSignetManagedOhMyPiInstall(): boolean {
@@ -352,89 +282,6 @@ function isSignetManagedPiInstall(): boolean {
 		}
 	}
 	return false;
-}
-
-function readSignetForgeInstallRecord(home = homedir()): SignetForgeInstallRecord | null {
-	const recordPath = join(signetManagedInstallDir(home), ".forge-install.json");
-	if (!existsSync(recordPath)) return null;
-	try {
-		return JSON.parse(readFileSync(recordPath, "utf8")) as SignetForgeInstallRecord;
-	} catch {
-		return null;
-	}
-}
-
-function isExecutableFile(filePath: string): boolean {
-	try {
-		const stats = statSync(filePath);
-		if (!stats.isFile()) return false;
-		if (process.platform === "win32") return true;
-		return (stats.mode & 0o111) !== 0;
-	} catch {
-		return false;
-	}
-}
-
-export function isSignetForgeBinary(binaryPath: string): boolean {
-	if (!existsSync(binaryPath)) return false;
-	if (!isExecutableFile(binaryPath)) return false;
-	try {
-		const binary = readFileSync(binaryPath);
-		if (binary.includes(Buffer.from(SIGNET_FORGE_PRIMARY_MARKER))) return true;
-		let matches = 0;
-		for (const marker of SIGNET_FORGE_FALLBACK_MARKERS) {
-			if (binary.includes(Buffer.from(marker))) matches += 1;
-			if (matches >= 2) return true;
-		}
-		return false;
-	} catch {
-		return false;
-	}
-}
-
-export function isCompatibleForgeBinary(binaryPath: string): boolean {
-	if (!existsSync(binaryPath)) return false;
-	if (!isExecutableFile(binaryPath)) return false;
-	try {
-		const binary = readFileSync(binaryPath);
-		if (binary.includes(Buffer.from(SIGNET_FORGE_PRIMARY_MARKER))) return true;
-		return COMPATIBLE_FORGE_MARKER_GROUPS.every((group) =>
-			group.some((marker) => binary.includes(Buffer.from(marker))),
-		);
-	} catch {
-		return false;
-	}
-}
-
-export function findSignetForgeBinary(_agentsDir?: string, home = homedir()): string | null {
-	const candidates = [...workspaceForgeCandidatePaths(_agentsDir), ...signetForgeCandidatePaths(home)];
-	const record = readSignetForgeInstallRecord(home);
-	if (record?.binaryPath) {
-		candidates.unshift(record.binaryPath);
-	}
-	for (const candidate of [...new Set(candidates)]) {
-		if (isCompatibleForgeBinary(candidate)) return candidate;
-	}
-	try {
-		const lookup = process.platform === "win32" ? "where" : "which";
-		const output = execFileSync(lookup, [FORGE_BINARY_NAME], {
-			encoding: "utf8",
-			stdio: ["ignore", "pipe", "ignore"],
-		})
-			.split(/\r?\n/)
-			.map((line) => line.trim())
-			.filter(Boolean);
-		for (const candidate of output) {
-			if (isCompatibleForgeBinary(candidate)) return candidate;
-		}
-	} catch {
-		return null;
-	}
-	return null;
-}
-
-function isForgeInstalled(agentsDir: string, home: string): boolean {
-	return findSignetForgeBinary(agentsDir, home) !== null;
 }
 
 function userHome(): string {
@@ -575,7 +422,6 @@ export function detectExistingSetup(basePath: string): SetupDetection {
 				existsSync(join(home, ".codex", "config.toml")) || existsSync(join(home, ".config", "signet", "bin", "codex")),
 			ohMyPi: isSignetManagedOhMyPiInstall() || existsSync(resolveOhMyPiAgentDir()),
 			pi: isSignetManagedPiInstall() || existsSync(resolvePiAgentDir()),
-			forge: isForgeInstalled(basePath, home),
 			hermesAgent: resolveHermesRepoPath() !== null,
 			gemini: existsSync(join(home, ".gemini", "settings.json")),
 		},

@@ -23,7 +23,6 @@ import { dirname, join, resolve as resolvePath, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ClaudeCodeConnector } from "@signet/connector-claude-code";
 import { CodexConnector } from "@signet/connector-codex";
-import { ForgeConnector } from "@signet/connector-forge";
 import { GeminiConnector } from "@signet/connector-gemini";
 import { HermesAgentConnector } from "@signet/connector-hermes-agent";
 import { OhMyPiConnector } from "@signet/connector-oh-my-pi";
@@ -63,7 +62,6 @@ import { registerAppCommands } from "./commands/app.js";
 import { registerDaemonCommands } from "./commands/daemon.js";
 import { registerDesktopCommands } from "./commands/desktop.js";
 import { registerDreamCommands } from "./commands/dream.js";
-import { registerForgeCommands } from "./commands/forge.js";
 import { registerGitCommands } from "./commands/git.js";
 import { registerGraphiqCommands } from "./commands/graphiq.js";
 import { registerHookCommands } from "./commands/hook.js";
@@ -92,7 +90,6 @@ import {
 	showLogs,
 } from "./features/daemon.js";
 import { buildDesktopFromSource, installDesktopFromSource } from "./features/desktop.js";
-import { doctorForge, installForge, showForgeStatus, updateForge } from "./features/forge.js";
 import { getStatusReport, showDoctor, showStatus } from "./features/health.js";
 import { importFromGitHub } from "./features/import.js";
 import { setupWizard } from "./features/setup.js";
@@ -231,14 +228,6 @@ async function configureHarnessHooks(
 						);
 					}
 				}
-			}
-			break;
-		}
-		case "forge": {
-			const connector = new ForgeConnector();
-			const result = await connector.install(basePath);
-			if (!result.success) {
-				console.warn(chalk.yellow(`  Warning: ForgeCode integration setup failed: ${result.message}`));
 			}
 			break;
 		}
@@ -1008,37 +997,6 @@ registerDaemonCommands(program, {
 	doStop: (options) => doStop(options, daemonDeps),
 	showLogs: (options) => showLogs(options, daemonDeps),
 	showStatus: (options) => showStatus(options, healthDeps),
-});
-
-registerForgeCommands(program, {
-	doctorForge: (options) =>
-		doctorForge(options, {
-			agentsDir: AGENTS_DIR,
-			defaultPort: DEFAULT_PORT,
-			getTemplatesDir,
-			isDaemonRunning,
-		}),
-	installForge: (options) =>
-		installForge(options, {
-			agentsDir: AGENTS_DIR,
-			defaultPort: DEFAULT_PORT,
-			getTemplatesDir,
-			isDaemonRunning,
-		}),
-	showForgeStatus: (options) =>
-		showForgeStatus(options, {
-			agentsDir: AGENTS_DIR,
-			defaultPort: DEFAULT_PORT,
-			getTemplatesDir,
-			isDaemonRunning,
-		}),
-	updateForge: (options) =>
-		updateForge(options, {
-			agentsDir: AGENTS_DIR,
-			defaultPort: DEFAULT_PORT,
-			getTemplatesDir,
-			isDaemonRunning,
-		}),
 });
 
 registerGraphiqCommands(program, {

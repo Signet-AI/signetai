@@ -54,7 +54,6 @@ flowchart TD
     CIR[Cryptographic Identity Roadmap]
     CPY[Connector: Py Agent]
     CHA[Connector: Hermes Agent]
-    CFC[Connector: ForgeCode]
     PAPI[Plugin API Ecosystem]
     CUV[Constellation Unified Viewer]
     DIR[Dashboard IA Refactor]
@@ -154,7 +153,6 @@ and market subdirectories). Reference repos live in `references/`.
 | `dogfood-hardening-2026-03-29` | RESEARCH-DOGFOOD-HARDENING-2026-03-29 | Which runtime, MCP, and knowledge-surface regressions from the March 29, 2026 dogfood run need durable hardening? |
 | `marketplace-official-skills` | RESEARCH-MARKETPLACE-OFFICIAL-SKILLS | How should the dashboard marketplace spotlight Signet official skills without hiding the broader community catalog? |
 | `markdown-embedding-normalization-hardening` | RESEARCH-MARKDOWN-EMBEDDING-NORMALIZATION | How should Signet preserve structured markdown for embeddings while preventing repeated poison-pill retries from malformed or provider-sensitive payloads? |
-| `connector-forgecode` | RESEARCH-REFERENCE-REPOS | How should Signet bridge its portable identity, skills, and MCP surfaces into ForgeCode's `~/forge` environment without relying on unavailable lifecycle hooks? |
 | `dreaming-memory-consolidation` | LCM-PATTERNS, memory-pipeline-plan, knowledge-architecture-schema | How should Signet consolidate accumulated session knowledge into a cleaner entity graph during idle periods? |
 | `native-harness-memory-bridge` | RESEARCH-NATIVE-HARNESS-MEMORY-BRIDGE | How should Signet make harness-native memories portable without duplicating each harness's memory pipeline? |
 | `model-provider-router` | RESEARCH-INFERENCE-CONTROL-PLANE, RESEARCH-COMPETITIVE-SYSTEMS | How should Signet centralize inference across harnesses, daemon workloads, and heterogeneous provider backends under one policy surface? |
@@ -793,7 +791,6 @@ Legend:
 | `connector-py-agent` | planning | `docs/specs/planning/connector-py-agent.md` | `signet-runtime` | - | Stub: Py Agent connector |
 | `connector-hermes-agent` | planning | `docs/specs/planning/connector-hermes-agent.md` | `signet-runtime` | - | Stub: Hermes Agent connector |
 | `connector-oh-my-pi` | planning | `docs/specs/planning/connector-oh-my-pi.md` | `signet-runtime` | - | Stub: Oh My Pi managed runtime extension and connector |
-| `connector-forgecode` | complete | `docs/specs/complete/connector-forgecode.md` | `signet-runtime` | - | ForgeCode connector: AGENTS.md, MCP server registration, skills symlink. MCP-only (no external hook API). |
 | `plugin-api-ecosystem` | planning | `docs/specs/planning/plugin-api-ecosystem.md` | `signet-runtime` | `plugin-sdk-core-v1` | Cross-surface plugin SDK/host architecture with TypeScript and Rust support, marketplace-ready manifests, prompt contributions, and Signet Secrets as the reference core plugin/provider model |
 | `plugin-sdk-core-v1` | complete | `docs/specs/complete/plugin-sdk-core-v1.md` | `signet-runtime` | - | PR #518 complete: bundled `signet.secrets` core plugin, daemon plugin host/registry diagnostics, prompt and surface metadata, redacted audit events, SDK helpers, setup-time core plugin selection, and local Secrets provider extraction preserving existing `secrets.enc` without rewrite |
 | `constellation-unified-viewer` | planning | `docs/specs/planning/constellation-unified-viewer.md` | `knowledge-architecture-schema` | - | Stub: realtime unified constellation/embedding/entity viewer |

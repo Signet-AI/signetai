@@ -58,7 +58,6 @@ integrations/           # external harness integrations grouped by tool
 libs/                   # reusable developer libraries: SDK, connector-base
 plugins/                # Signet-native plugins loaded by Signet
 dist/                   # assembled shipping artifacts, including signetai
-runtimes/               # separate runtime ecosystems, currently Forge
 web/                    # marketing site and Cloudflare workers
 memorybench/            # benchmark harness, datasets, reports, and local UI
 ```
@@ -80,7 +79,6 @@ integrations/<tool>/plugin/            # plugins loaded by external tools
 integrations/openclaw/memory-adapter/  # @signetai/signet-memory-openclaw
 plugins/core/secrets/                  # core Signet-native secrets plugin
 dist/signetai/                         # signetai — installable distribution package
-runtimes/forge/                        # Forge runtime ecosystem
 web/marketing/                         # @signet/web — marketing site (Cloudflare Pages)
 web/workers/reviews/                   # Cloudflare Worker for review automation
 memorybench/                           # benchmark harness and benchmark UI

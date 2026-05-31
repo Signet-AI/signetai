@@ -86,8 +86,6 @@ Strategic Stub Backlog (tracked, planning incomplete)
     skills, source metadata, and secrets metadata without tying the standard
     to one harness
 - [stub] Distributed harness and multi-remote orchestration
-- [stub] First-party Signet harness while continuing connector support
-  - reference direction: Hermes Agent and Forge-style native runtime work
 - [stub] Remember/Recall skill parity refresh with current schema
 - [stub] Per-user neural query surface
   - train a disposable small model on a user's artifact history as a future
@@ -124,7 +122,7 @@ Recently Shipped
   - managed source checkout, clean-branch update behavior, and watcher
     ignore coverage
 - [done] Connector expansion and hardening
-  - Hermes Agent integration, Forge connector work, OpenClaw runtime
+  - Hermes Agent integration, OpenClaw runtime
     hardening, and request normalization
 - [done] Recall surface alignment
   - CLI, MCP, SDK, and hook recall paths now share more of the same filter

@@ -1,14 +1,14 @@
 ---
-title: "Signet Native Runtime"
-description: "Spec for the Signet reference agent runtime — a first-class execution harness owned and controlled by Signet"
+title: "Signet Runtime Adapter Contract"
+description: "Spec for the daemon-owned lifecycle contract implemented by external harness adapters"
 informed_by: []
 success_criteria:
-  - "Signet operates as a standalone runtime channel independent of harness-specific connectors"
-scope_boundary: "Runtime scaffold and CLI/HTTP channels — does not replace existing connectors or define memory logic"
+  - "Signet exposes one daemon-owned lifecycle contract across supported harness connectors"
+scope_boundary: "Adapter contract and CLI/HTTP channels — does not define a monorepo-owned native runtime"
 ---
 
-Signet Native Runtime
-=====================
+Signet Runtime Adapter Contract
+===============================
 
 Context
 -------
@@ -24,12 +24,10 @@ The deeper issue is definitional. Every harness integration has to answer
 the question "what does a Signet harness need to implement?" — right now
 there is no canonical answer. Each connector is a bespoke translation layer.
 
-The solution is a reference runtime: a Signet-owned, Signet-controlled
-execution environment that defines what it means to run an agent on Signet.
-Existing harnesses don't become secondary — they copy the pattern. When the
-reference implementation adds a new capability, the harness adapters have a
-clear spec to implement against. The reference runtime is the source of
-truth for what the integration contract is.
+The solution is a daemon-owned adapter contract that defines what it means to
+run a harness on Signet. When the daemon adds a new lifecycle capability, each
+harness adapter has a clear spec to implement against. The daemon API is the
+source of truth for the integration contract.
 
 Key constraints:
 - All actions in the runtime are Daemon API calls first. The runtime is a
@@ -39,9 +37,6 @@ Key constraints:
   Daemon API calls using the same interfaces the reference runtime uses.
 - SDKs for TypeScript, Rust, and Python continue to be first-class. The
   runtime expands what the SDKs expose, not replaces them.
-- Forge is the canonical reference implementation of this runtime
-  contract. The contract is language-agnostic; the implementation is
-  currently Rust, not TypeScript.
 
 
 What the Runtime Is
@@ -157,7 +152,7 @@ platform-specific lifecycle events to daemon API calls.
 
 ```typescript
 interface RuntimeAdapter {
-  harness: string  // 'forge' | 'openclaw' | 'claude-code' | 'opencode' | ...
+  harness: string  // 'openclaw' | 'claude-code' | 'opencode' | ...
 
   onSessionStart(params: SessionStartParams): Promise<SessionStartResult>
   onUserPromptSubmit(params: PromptSubmitParams): Promise<PromptSubmitResult>
@@ -168,9 +163,9 @@ interface RuntimeAdapter {
 ```
 
 All `RuntimeAdapter` implementations are thin clients: every method body is
-a daemon API call. Forge, the reference runtime (`forge` harness), implements
-this interface using the full execution loop. OpenClaw's adapter implements
-the same interface by calling the same daemon endpoints via its plugin system.
+a daemon API call. OpenClaw's adapter implements this interface by calling
+the same daemon endpoints via its plugin system; other adapters translate
+their own lifecycle hooks into the same calls.
 
 A harness adapter is a `RuntimeAdapter` implementation. Nothing more.
 
@@ -178,25 +173,9 @@ A harness adapter is a `RuntimeAdapter` implementation. Nothing more.
 Package Structure
 -----------------
 
-```
-runtimes/forge/
-  Cargo.toml                (Forge Rust workspace root)
-  crates/
-    forge-cli/             (primary `forge` binary)
-    forge-agent/           (execution loop)
-    forge-provider/        (provider registry + clients)
-    forge-tools/           (tool registry + built-in tools)
-    forge-signet/          (daemon client / Signet integration)
-    forge-tui/             (terminal channel / UI)
-```
-
-Forge is the monorepo-owned reference implementation of the runtime
-contract. The public contract stays the same even though the concrete
-implementation lives in `runtimes/forge/`.
-
-`forge` remains the primary end-user command. Signet may additionally
-manage Forge installs through `signet forge ...`, but the runtime itself
-is the Forge product.
+Signet does not maintain a monorepo-owned native runtime package. Runtime
+coverage is provided by connector and plugin packages under `integrations/*`,
+with daemon endpoints as the shared contract.
 
 
 Session Lifecycle
@@ -343,23 +322,21 @@ export default function createPlugin(opts: { daemonUrl?: string }) {
 ```
 
 When Signet adds a new capability, it adds a daemon endpoint and a new
-`RuntimeAdapter` method. The reference runtime calls it. Each harness
-adapter adds one translation. There is no harness-specific logic to reason
-about or diverge.
+`RuntimeAdapter` method. Each harness adapter adds one translation. There is
+no duplicated business logic to reason about or diverge.
 
 
 Build Sequence
 --------------
 
-**Phase 1: monorepo-owned reference runtime**
-- Keep Forge as the canonical runtime implementation in `runtimes/forge/`
+**Phase 1: daemon-owned contract**
 - Preserve the daemon-owned execution contract: memory, hooks, secrets, and session state stay daemon-side
-- Deliverable: `forge` remains the primary native Signet runtime surface
+- Deliverable: supported harnesses share the same lifecycle semantics where their host APIs allow it
 
-**Phase 2: parity for non-Forge harnesses**
+**Phase 2: harness parity**
 - Keep Bun daemon, Rust daemon, and existing harness adapters aligned on the same daemon endpoints
 - Treat external harnesses as thin adapters over the same runtime contract
-- Deliverable: external harnesses share the same lifecycle semantics as Forge where supported
+- Deliverable: integration deltas are explicit and auditable
 
 **Phase 3: SDK adapter ergonomics**
 - Add or refine adapter helpers in the SDKs so external harnesses can implement the runtime contract with less boilerplate
@@ -367,7 +344,7 @@ Build Sequence
 - Deliverable: new harness integrations have a minimal documented path
 
 **Phase 4: optional runtime transport expansion**
-- If Forge exposes a stable local API in the future, document it as an extension of the same runtime contract instead of a separate architecture
+- If a supported harness exposes a stable local API, document it as an extension of the same runtime contract instead of a separate architecture
 - Deliverable: transport choices can evolve without changing the core daemon contract
 
 
@@ -381,19 +358,10 @@ What This Is Not
 - Not breaking for existing harnesses. OpenClaw/Claude Code/OpenCode work
   through their own adapters and remain additive integrations.
 - Not a config system. Config lives in agent.yaml, read by the daemon.
-  Forge consumes that contract; it does not redefine it.
 
 
 Critical Files
 --------------
-
-Reference runtime:
-- `runtimes/forge/crates/forge-cli/`
-- `runtimes/forge/crates/forge-agent/`
-- `runtimes/forge/crates/forge-provider/`
-- `runtimes/forge/crates/forge-tools/`
-- `runtimes/forge/crates/forge-signet/`
-- `runtimes/forge/crates/forge-tui/`
 
 Runtime contract + adapters:
 - `libs/sdk/`
@@ -423,4 +391,4 @@ Open Questions
    Consider stronger isolation only when the third-party tool surface grows.
 
 5. **Session resume** — checkpoints stay daemon-owned; document resume
-   behavior consistently across Forge and external harnesses.
+   behavior consistently across supported harnesses.

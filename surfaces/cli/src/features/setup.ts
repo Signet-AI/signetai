@@ -17,7 +17,6 @@ import {
 import chalk from "chalk";
 import open from "open";
 import ora from "ora";
-import { managedForgeInstallSupportedOnCurrentPlatform } from "./forge.js";
 import { installGraphiqPlugin } from "./graphiq.js";
 import { runFreshSetup } from "./setup-fresh.js";
 import { runExistingSetupWizard } from "./setup-migrate.js";
@@ -576,15 +575,6 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		{ value: "pi", name: "Pi", checked: existingHarnesses.includes("pi") },
 		{ value: "hermes-agent", name: "Hermes Agent", checked: existingHarnesses.includes("hermes-agent") },
 		{ value: "gemini", name: "Gemini CLI (Google)", checked: existingHarnesses.includes("gemini") },
-		{
-			value: "forge",
-			name: "Forge (native Signet harness)",
-			checked: existingHarnesses.includes("forge"),
-			disabled:
-				!existing.harnesses.forge && !managedForgeInstallSupportedOnCurrentPlatform()
-					? "managed install unavailable on this platform; install Forge separately first"
-					: false,
-		},
 	];
 
 	let harnesses: HarnessChoice[] = [];
@@ -603,15 +593,6 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 			choices: harnessChoices,
 		});
 		harnesses = normalizeHarnessList(selectedHarnesses, deps);
-	}
-
-	if (harnesses.includes("forge") && !existing.harnesses.forge && !managedForgeInstallSupportedOnCurrentPlatform()) {
-		const message =
-			"Forge selected, but Signet-managed Forge binaries are only available on macOS/Linux arm64/x64. Install Forge separately first, then rerun setup.";
-		if (nonInteractive) {
-			failNonInteractiveSetup(message);
-		}
-		throw new Error(message);
 	}
 
 	let configureOpenClawWs = false;

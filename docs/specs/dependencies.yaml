@@ -455,22 +455,6 @@ specs:
       - "README/QUICKSTART/CLI docs consistently present built-in native embeddings as recommended"
     decision: null
 
-  - id: connector-forgecode
-    status: complete
-    path: docs/specs/complete/connector-forgecode.md
-    hard_depends_on:
-      - signet-runtime
-    soft_depends_on: []
-    blocks: []
-    informed_by:
-      - docs/research/technical/RESEARCH-REFERENCE-REPOS.md
-    success_criteria:
-      - "ForgeCode reads a Signet-managed global AGENTS.md from `~/forge/AGENTS.md` that preserves Signet identity context"
-      - "ForgeCode loads Signet skills from `~/forge/skills` without copying over user-owned directories"
-      - "ForgeCode exposes Signet's MCP server through `~/forge/.mcp.json` while preserving unrelated MCP entries"
-      - "CLI setup/configure flow treats Forge as a real connector install instead of a no-op after binary installation"
-    decision: null
-
   - id: openclaw-integration-strategy
     status: complete
     path: docs/specs/complete/openclaw-integration-strategy.md

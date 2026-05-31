@@ -37,7 +37,7 @@ change. The agent keeps its footing.
 
 The job is simple: bring your own context to the agents you already use,
 then keep that context inspectable and under your control. Signet runs
-beneath Forge, Claude Code, OpenCode, OpenClaw, Codex, Gemini CLI, Pi,
+beneath Claude Code, OpenCode, OpenClaw, Codex, Gemini CLI, Pi,
 Oh My Pi, Hermes Agent, and other harnesses so the durable layer survives
 the tool of the week.
 
@@ -124,7 +124,7 @@ These are the product surface areas Signet is optimized around:
 | 🗂️ Source-backed context | Raw transcripts and workspace files remain available beneath summaries and recall results |
 | 🎯 Inspectable recall | Hybrid search, graph traversal, provenance, scopes, and ranking signals explain why context surfaced |
 | 🏠 Local-first substrate | Data lives on your machine in SQLite and markdown, portable by default |
-| 🤝 Cross-harness continuity | Forge, Claude Code, OpenCode, OpenClaw, Codex, Gemini CLI, Pi, Oh My Pi, Hermes Agent, one shared context layer |
+| 🤝 Cross-harness continuity | Claude Code, OpenCode, OpenClaw, Codex, Gemini CLI, Pi, Oh My Pi, Hermes Agent, one shared context layer |
 | 🧩 SDK-first extensibility | Typed SDKs, middleware, and plugin surfaces let builders shape Signet around their own agents |
 
 ## Is Signet right for you?
@@ -210,7 +210,6 @@ Signet handles the memory layer underneath it.
 | Harness | Status | Integration |
 |---|---|---|
 | [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | **Supported** | Hooks |
-| Forge | **First-party** | Native runtime / reference harness |
 | [OpenCode](https://github.com/sst/opencode) | **Supported** | Plugin + Hooks |
 | [OpenClaw](https://github.com/openclaw/openclaw) | **Supported** | Runtime plugin + NemoClaw compatible |
 | [Codex](https://github.com/openai/codex) | **Supported** | Hooks + MCP server |
@@ -363,7 +362,7 @@ SDK (@signet/sdk)
 
 Connectors
   claude-code, opencode, openclaw, codex, gemini, oh-my-pi, pi,
-  hermes-agent, forge
+  hermes-agent
 ```
 
 ## Packages
@@ -376,13 +375,11 @@ Connectors
 | [`platform/daemon-rs`](./platform/daemon-rs) | Rust shadow runtime and parity logging |
 | [`signet-dashboard`](./surfaces/dashboard) | Svelte dashboard built to static assets and served by the daemon |
 | [`@signet/sdk`](./libs/sdk) | Typed client, React hooks, Vercel AI SDK middleware |
-| [`runtimes/forge`](./runtimes/forge) | Forge native terminal harness and reference runtime implementation |
 | [`@signet/connector-base`](./libs/connector-base) | Shared connector primitives and utilities |
 | [`@signet/connector-claude-code`](./integrations/claude-code/connector) | Claude Code integration |
 | [`@signet/connector-opencode`](./integrations/opencode/connector) | OpenCode integration |
 | [`@signet/connector-openclaw`](./integrations/openclaw/connector) | OpenClaw integration |
 | [`@signet/connector-codex`](./integrations/codex/connector) | Codex CLI integration |
-| [`@signet/connector-forge`](./integrations/forge/connector) | Forge integration |
 | [`@signet/connector-gemini`](./integrations/gemini/connector) | Gemini CLI integration |
 | [`@signet/connector-oh-my-pi`](./integrations/oh-my-pi/connector) | Oh My Pi integration |
 | [`@signet/connector-hermes-agent`](./integrations/hermes-agent/connector) | Hermes Agent integration |

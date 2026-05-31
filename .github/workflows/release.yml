@@ -31,10 +31,6 @@ jobs:
             'package.json' 'bunfig.toml' 'tsconfig*.json' \
             '.github/workflows/**' \
             | grep -v '\.md$' \
-            | grep -v '^.github/workflows/forge-release.yml$' \
-            | grep -v '^runtimes/forge/' \
-            | grep -v '^surfaces/cli/templates/forge/manifest.json$' \
-            | grep -v '^dist/signetai/templates/forge/manifest.json$' \
             | grep -v '\.jpg$' \
             | grep -v '\.jpeg$' \
             | grep -v '\.png$' \
