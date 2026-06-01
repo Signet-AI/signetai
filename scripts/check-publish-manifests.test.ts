@@ -552,6 +552,12 @@ describe("check-publish-manifests", () => {
 		expect(installer).toContain("curl -fsSL https://signetai.sh/install.sh | bash -s -- --help");
 		expect(installer).toContain("Required setup flags after `--` for agent-driven setup");
 		expect(installer).toContain("--help|-h");
+		expect(installer.indexOf('case "$arg" in')).toBeLessThan(installer.indexOf('if [ "$SIGNET_VERSION" != "latest" ]'));
+		expect(installer.indexOf('case "$arg" in')).toBeLessThan(installer.indexOf('PLATFORM="$(detect_platform)"'));
+		expect(installer.indexOf('case "$arg" in')).toBeLessThan(installer.indexOf("require_cmd curl"));
+		expect(installer.indexOf('case "$arg" in')).toBeLessThan(
+			installer.indexOf('SIGNET_INSTALL_DIR="$(validate_install_dir "$SIGNET_INSTALL_DIR")"'),
+		);
 		expect(installer).toContain("INSTALLER_SETUP_ARGS=()");
 		expect(installer).toContain("parse_installer_args");
 		expect(installer).toContain("Agent-driven setup requires explicit setup choices");

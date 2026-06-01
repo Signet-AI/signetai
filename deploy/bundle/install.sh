@@ -60,6 +60,15 @@ Environment options:
 EOF
 }
 
+for arg in "$@"; do
+  case "$arg" in
+    --help|-h)
+      show_usage
+      exit 0
+      ;;
+  esac
+done
+
 if [ "$SIGNET_VERSION" != "latest" ]; then
   echo "SIGNET_VERSION is not supported by the native bundle installer yet; use SIGNET_VERSION=latest."
   exit 1
