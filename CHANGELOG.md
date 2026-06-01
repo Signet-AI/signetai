@@ -6,6 +6,9 @@ All notable changes to Signet are documented here.
 
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
+### 2026-06-01
+- Bug fixes: repair summary_jobs migration columns.
+
 ### 2026-05-31
 - Refactoring: remove forge runtime.
 - Docs: nitpick; add missing contributors.
@@ -27,13 +30,16 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Features: add Discord source operations panel; extract Discord attachment text; add npc backend prototype; tail Discord gateway events.
 - Bug fixes: scope dreaming triggers by agent; surface graph extraction diagnostics; patch partial Discord gateway updates; avoid duplicate native plugin hooks.
 
-### 2026-05-24
-- Features: resume Discord history backfill; resume Discord history backfill from checkpoints; add dashboard snapshot operations; project provider artifacts into graph; add native plugin memory integration; add source operations diagnostics; add GitHub source provider; add source snapshot operations; import Discord desktop cache; add Discord source adapter.
-- Bug fixes: remove stale MCP before plugin install; rebuild graph during snapshot import; disclose macOS launchagent attribution; surface aggregate usage and credit fallback.
-- Refactoring: unify provider routing factory.
-- Docs: split HTTP reference.
-
 ## Release Ledger
+
+## [0.138.7] - 2026-06-01
+
+Release summary: 1 bug fix.
+Tag range: `bundle-0.138.5-9e824d02fb1f647ee7851284193b64275018aaba..v0.138.7`.
+
+### Bug Fixes
+
+- **daemon-rs**: repair summary_jobs migration columns (#806)
 
 ## [0.138.6] - 2026-05-31
 

@@ -398,6 +398,8 @@ fn ensure_cross_daemon_parity_tables(conn: &Connection) -> Result<(), CoreError>
 }
 
 fn ensure_cross_daemon_parity_columns(conn: &Connection) -> Result<(), CoreError> {
+    ensure_summary_jobs_required_columns(conn)?;
+
     add_column_if_missing(conn, "entities", "mentions", "INTEGER NOT NULL DEFAULT 0")?;
     add_column_if_missing(conn, "entities", "pinned", "INTEGER NOT NULL DEFAULT 0")?;
     add_column_if_missing(conn, "entities", "pinned_at", "TEXT")?;
@@ -516,6 +518,39 @@ fn ensure_cross_daemon_parity_columns(conn: &Connection) -> Result<(), CoreError
         conn,
         TS_AGENT_SCOPED_IDEMPOTENCY_VERSION,
         TS_AGENT_SCOPED_IDEMPOTENCY_NAME,
+    )?;
+
+    Ok(())
+}
+
+fn ensure_summary_jobs_required_columns(conn: &Connection) -> Result<(), CoreError> {
+    for (column, typedef) in [
+        ("session_id", "TEXT"),
+        ("trigger", "TEXT NOT NULL DEFAULT 'session_end'"),
+        ("captured_at", "TEXT"),
+        ("started_at", "TEXT"),
+        ("ended_at", "TEXT"),
+        ("leased_at", "TEXT"),
+        ("updated_at", "TEXT"),
+        ("failed_at", "TEXT"),
+        ("agent_id", "TEXT NOT NULL DEFAULT 'default'"),
+    ] {
+        add_column_if_missing(conn, "summary_jobs", column, typedef)?;
+    }
+
+    conn.execute_batch(
+        "UPDATE summary_jobs
+            SET session_id = COALESCE(session_id, session_key, id),
+                trigger = COALESCE(NULLIF(trigger, ''), 'session_end'),
+                captured_at = COALESCE(captured_at, completed_at, created_at),
+                ended_at = COALESCE(ended_at, completed_at),
+                updated_at = COALESCE(updated_at, completed_at, created_at),
+                agent_id = COALESCE(NULLIF(agent_id, ''), 'default')
+          WHERE 1 = 1;
+         CREATE INDEX IF NOT EXISTS idx_summary_jobs_agent_trigger
+            ON summary_jobs(agent_id, trigger, created_at);
+         CREATE INDEX IF NOT EXISTS idx_summary_jobs_agent_session
+            ON summary_jobs(agent_id, session_key, created_at);",
     )?;
 
     Ok(())
