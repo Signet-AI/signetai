@@ -7,17 +7,14 @@ const rootDir = fileURLToPath(new URL("../../", import.meta.url));
 const unixInstaller = readFileSync(join(rootDir, "web/marketing/public/install.sh"), "utf8");
 const windowsInstaller = readFileSync(join(rootDir, "web/marketing/public/install.ps1"), "utf8");
 
-describe("installer PATH persistence regression guard", () => {
-	it("persists Bun and npm global bins for future Unix shells", () => {
-		expect(unixInstaller).toContain("persist_path_dir");
-		expect(unixInstaller).toContain('persist_path_dir "$BUN_BIN"');
-		expect(unixInstaller).toContain('persist_path_dir "$BUN_INSTALL/bin"');
-		expect(unixInstaller).toContain("npm_global_bin");
-		expect(unixInstaller).toContain('persist_path_dir "$NPM_GLOBAL_BIN"');
-		expect(unixInstaller).toContain("string escape -- $argv[1]");
-		expect(unixInstaller).toContain("fish_add_path -- %s");
-		expect(unixInstaller).toContain("printf -v escaped '%q'");
-		expect(unixInstaller).toContain('export PATH=%s:"$PATH"');
+describe("installer regression guard", () => {
+	it("delegates Unix installs to the native bundle instead of package-manager setup", () => {
+		expect(unixInstaller).toContain("releases/download/bundle-latest/install.sh");
+		expect(unixInstaller).toContain('curl -fsSL "$INSTALLER_URL" | bash');
+		expect(unixInstaller).not.toContain("persist_path_dir");
+		expect(unixInstaller).not.toContain("npm_global_bin");
+		expect(unixInstaller).not.toContain("bun add -g signetai");
+		expect(unixInstaller).not.toContain("npm install -g signetai");
 	});
 
 	it("persists Bun and npm global bins to the Windows user PATH", () => {

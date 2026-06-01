@@ -3,21 +3,62 @@
 #
 # Usage:
 #   curl -fsSL https://signetai.sh/install.sh | bash
+#   curl -fsSL https://signetai.sh/install.sh | bash -s -- -- --name Agent --harness codex --deployment-type local --embedding-provider native --extraction-provider codex
 #   curl -fsSL https://github.com/Signet-AI/signetai/releases/download/bundle-latest/install.sh | bash
 #
 # Environment options:
 #   SIGNET_INSTALL_DIR  — install location (default: ~/.signet)
 #   SIGNET_NO_START     — set to "1" to skip daemon start
-#   SIGNET_NO_SETUP     — set to "1" to skip setup wizard
+#   SIGNET_NO_SETUP     — set to "1" to skip setup (same as SIGNET_SETUP_MODE=skip)
+#   SIGNET_SETUP_MODE   — auto|interactive|noninteractive|skip (default: auto)
+#   SIGNET_SETUP_*      — setup flags for SIGNET_SETUP_MODE=noninteractive
 #   SIGNET_NO_PATH      — set to "1" to skip PATH modification
 
 set -euo pipefail
 
 SIGNET_INSTALL_DIR="${SIGNET_INSTALL_DIR:-$HOME/.signet}"
 SIGNET_AGENTS_DIR="${SIGNET_PATH:-$HOME/.agents}"
+SIGNET_SETUP_MODE="${SIGNET_SETUP_MODE:-auto}"
 SIGNET_VERSION="${SIGNET_VERSION:-latest}"
 SIGNET_REPO="Signet-AI/signetai"
 SIGNET_RELEASE_TAG="bundle-${SIGNET_VERSION}"
+INSTALLER_SETUP_ARGS=()
+
+show_usage() {
+  cat <<'EOF'
+Signet native bundle installer
+
+Usage:
+  curl -fsSL https://signetai.sh/install.sh | bash
+  curl -fsSL https://signetai.sh/install.sh | bash -s -- --help
+  curl -fsSL https://signetai.sh/install.sh | bash -s -- --no-setup
+  curl -fsSL https://signetai.sh/install.sh | bash -s -- -- --name Agent --harness codex --deployment-type local --embedding-provider native --extraction-provider codex
+
+Installer options:
+  --help                         Show this help text and exit.
+  --no-setup                     Install only. Run `signet setup` later.
+  --interactive-setup            Require the interactive setup wizard.
+  --noninteractive-setup         Require non-interactive setup from SIGNET_SETUP_* env vars.
+  --setup-mode <mode>            auto, interactive, noninteractive, or skip.
+  --                             Treat remaining args as `signet setup --non-interactive` flags.
+
+Required setup flags after `--` for agent-driven setup:
+  --name <name>
+  --harness <claude-code|codex|opencode|openclaw|oh-my-pi|pi|hermes-agent|gemini>
+  --deployment-type <local|vps|server>
+  --embedding-provider <native|llama-cpp|ollama|openai|none>
+  --extraction-provider <acpx|claude-code|codex|opencode|ollama|openai|openai-compatible|llama-cpp|none>
+
+Environment options:
+  SIGNET_INSTALL_DIR             Install location. Default: ~/.signet
+  SIGNET_PATH                    Agent data location. Default: ~/.agents
+  SIGNET_NO_START=1              Skip daemon start.
+  SIGNET_NO_SETUP=1              Skip setup. Same as --no-setup.
+  SIGNET_NO_PATH=1               Skip shell PATH modification.
+  SIGNET_SETUP_MODE              auto, interactive, noninteractive, or skip.
+  SIGNET_SETUP_*                 Setup choices for --noninteractive-setup.
+EOF
+}
 
 if [ "$SIGNET_VERSION" != "latest" ]; then
   echo "SIGNET_VERSION is not supported by the native bundle installer yet; use SIGNET_VERSION=latest."
@@ -140,6 +181,53 @@ require_cmd curl
 require_cmd tar
 
 SIGNET_INSTALL_DIR="$(validate_install_dir "$SIGNET_INSTALL_DIR")"
+
+parse_installer_args() {
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --help|-h)
+        show_usage
+        exit 0
+        ;;
+      --setup-mode)
+        shift
+        if [ "$#" -eq 0 ]; then
+          err "--setup-mode requires a value"
+          exit 1
+        fi
+        SIGNET_SETUP_MODE="$1"
+        ;;
+      --setup-mode=*)
+        SIGNET_SETUP_MODE="${1#*=}"
+        ;;
+      --no-setup)
+        SIGNET_SETUP_MODE="skip"
+        ;;
+      --interactive-setup)
+        SIGNET_SETUP_MODE="interactive"
+        ;;
+      --noninteractive-setup|--non-interactive-setup)
+        SIGNET_SETUP_MODE="noninteractive"
+        ;;
+      --)
+        shift
+        INSTALLER_SETUP_ARGS=("$@")
+        if [ "${#INSTALLER_SETUP_ARGS[@]}" -gt 0 ]; then
+          SIGNET_SETUP_MODE="noninteractive"
+        fi
+        return
+        ;;
+      *)
+        err "Unknown installer option: $1"
+        err "Use --no-setup, --setup-mode <mode>, or -- followed by signet setup flags."
+        exit 1
+        ;;
+    esac
+    shift
+  done
+}
+
+parse_installer_args "$@"
 
 # sha256sum or shasum
 SHA256_CMD=""
@@ -697,6 +785,99 @@ verify_entrypoints() {
   fi
 }
 
+append_setup_flag() {
+  local flag="$1" value="$2"
+  if [ -n "$value" ]; then
+    setup_args+=("$flag" "$value")
+  fi
+}
+
+append_setup_bool_flag() {
+  local flag="$1" value="$2"
+  case "$value" in
+    1|true|TRUE|yes|YES) setup_args+=("$flag") ;;
+    ""|0|false|FALSE|no|NO) ;;
+    *)
+      err "$flag expects a boolean env value (1/0, true/false, yes/no)"
+      exit 1
+      ;;
+  esac
+}
+
+append_setup_harnesses() {
+  local raw="$1" old_ifs harness
+  old_ifs="$IFS"
+  IFS=','
+  for harness in $raw; do
+    harness="${harness#"${harness%%[![:space:]]*}"}"
+    harness="${harness%"${harness##*[![:space:]]}"}"
+    if [ -n "$harness" ]; then
+      setup_args+=("--harness" "$harness")
+    fi
+  done
+  IFS="$old_ifs"
+}
+
+setup_args_include_flag() {
+  local flag="$1" arg
+  for arg in "${INSTALLER_SETUP_ARGS[@]}"; do
+    if [ "$arg" = "$flag" ] || [[ "$arg" == "$flag="* ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+require_noninteractive_setup_env() {
+  local missing=""
+  if [ -z "${SIGNET_SETUP_NAME:-}" ] && ! setup_args_include_flag "--name"; then missing="$missing --name"; fi
+  if [ -z "${SIGNET_SETUP_HARNESS:-}" ] && ! setup_args_include_flag "--harness"; then missing="$missing --harness"; fi
+  if [ -z "${SIGNET_SETUP_DEPLOYMENT_TYPE:-}" ] && ! setup_args_include_flag "--deployment-type"; then missing="$missing --deployment-type"; fi
+  if [ -z "${SIGNET_SETUP_EMBEDDING_PROVIDER:-}" ] && ! setup_args_include_flag "--embedding-provider"; then missing="$missing --embedding-provider"; fi
+  if [ -z "${SIGNET_SETUP_EXTRACTION_PROVIDER:-}" ] && ! setup_args_include_flag "--extraction-provider"; then missing="$missing --extraction-provider"; fi
+  if [ -n "$missing" ]; then
+    err "Agent-driven setup requires explicit setup choices:$missing"
+    err "Example:"
+    err "  curl -fsSL https://signetai.sh/install.sh | bash -s -- -- \\"
+    err "    --name Agent --harness codex --deployment-type local \\"
+    err "    --embedding-provider native --extraction-provider codex"
+    exit 1
+  fi
+}
+
+run_noninteractive_setup() {
+  require_noninteractive_setup_env
+
+  setup_args=(setup --non-interactive)
+  if [ "${#INSTALLER_SETUP_ARGS[@]}" -gt 0 ]; then
+    setup_args+=("${INSTALLER_SETUP_ARGS[@]}")
+  else
+    append_setup_flag "--name" "${SIGNET_SETUP_NAME:-}"
+    append_setup_flag "--description" "${SIGNET_SETUP_DESCRIPTION:-}"
+    append_setup_flag "--deployment-type" "${SIGNET_SETUP_DEPLOYMENT_TYPE:-}"
+    append_setup_flag "--network-mode" "${SIGNET_SETUP_NETWORK_MODE:-}"
+    append_setup_harnesses "${SIGNET_SETUP_HARNESS:-}"
+    append_setup_flag "--embedding-provider" "${SIGNET_SETUP_EMBEDDING_PROVIDER:-}"
+    append_setup_flag "--embedding-model" "${SIGNET_SETUP_EMBEDDING_MODEL:-}"
+    append_setup_flag "--extraction-provider" "${SIGNET_SETUP_EXTRACTION_PROVIDER:-}"
+    append_setup_flag "--extraction-model" "${SIGNET_SETUP_EXTRACTION_MODEL:-}"
+    append_setup_flag "--extraction-endpoint" "${SIGNET_SETUP_EXTRACTION_ENDPOINT:-}"
+    append_setup_flag "--search-balance" "${SIGNET_SETUP_SEARCH_BALANCE:-}"
+    append_setup_flag "--openclaw-runtime-path" "${SIGNET_SETUP_OPENCLAW_RUNTIME_PATH:-}"
+    append_setup_flag "--identity-preset" "${SIGNET_SETUP_IDENTITY_PRESET:-}"
+    append_setup_bool_flag "--skip-git" "${SIGNET_SETUP_SKIP_GIT:-}"
+    append_setup_bool_flag "--open-dashboard" "${SIGNET_SETUP_OPEN_DASHBOARD:-}"
+    append_setup_bool_flag "--configure-openclaw-workspace" "${SIGNET_SETUP_CONFIGURE_OPENCLAW_WORKSPACE:-}"
+    append_setup_bool_flag "--allow-unprotected-workspace" "${SIGNET_SETUP_ALLOW_UNPROTECTED_WORKSPACE:-}"
+    append_setup_bool_flag "--create-local-backup" "${SIGNET_SETUP_CREATE_LOCAL_BACKUP:-}"
+    append_setup_bool_flag "--disable-signet-secrets" "${SIGNET_SETUP_DISABLE_SIGNET_SECRETS:-}"
+    append_setup_bool_flag "--with-graphiq" "${SIGNET_SETUP_WITH_GRAPHIQ:-}"
+    append_setup_bool_flag "--disable-graphiq" "${SIGNET_SETUP_DISABLE_GRAPHIQ:-}"
+  fi
+
+  signet "${setup_args[@]}"
+}
+
 # ── Main ──
 
 main() {
@@ -838,25 +1019,70 @@ done
 
   export PATH="$SIGNET_INSTALL_DIR/bin:$PATH"
 
-  SETUP_RC=0
-  if [ "${SIGNET_NO_SETUP:-}" != "1" ]; then
-    info "Running initial setup..."
-    signet setup --non-interactive --embedding-provider none --extraction-provider none 2>/dev/null || SETUP_RC=$?
-    if [ "$SETUP_RC" -ne 0 ]; then
-      warn "Setup had issues — run 'signet setup' manually later"
-    else
-      ok "Setup complete"
-    fi
+  SETUP_DONE=0
+  if [ "${SIGNET_NO_SETUP:-}" = "1" ]; then
+    SIGNET_SETUP_MODE="skip"
   fi
 
+  case "$SIGNET_SETUP_MODE" in
+    auto)
+      if [ -r /dev/tty ] && [ -w /dev/tty ]; then
+        info "Launching setup wizard..."
+        if signet setup < /dev/tty; then
+          SETUP_DONE=1
+          ok "Setup complete"
+        else
+          warn "Setup had issues — run 'signet setup' manually later"
+        fi
+      else
+        warn "No interactive terminal available — run 'signet setup' to finish setup"
+      fi
+      ;;
+    interactive)
+      if [ ! -r /dev/tty ] || [ ! -w /dev/tty ]; then
+        err "SIGNET_SETUP_MODE=interactive requires an interactive terminal"
+        exit 1
+      fi
+      info "Launching setup wizard..."
+      if signet setup < /dev/tty; then
+        SETUP_DONE=1
+        ok "Setup complete"
+      else
+        err "Setup failed"
+        exit 1
+      fi
+      ;;
+    noninteractive|non-interactive)
+      info "Running non-interactive setup..."
+      if run_noninteractive_setup; then
+        SETUP_DONE=1
+        ok "Setup complete"
+      else
+        err "Non-interactive setup failed"
+        exit 1
+      fi
+      ;;
+    skip)
+      ;;
+    *)
+      err "Unknown SIGNET_SETUP_MODE: $SIGNET_SETUP_MODE"
+      err "Expected auto, interactive, noninteractive, or skip"
+      exit 1
+      ;;
+  esac
+
   if [ "${SIGNET_NO_START:-}" != "1" ]; then
-    info "Restarting daemon..."
-    if signet daemon restart --no-sync 2>/dev/null; then
-      ok "Daemon restarted"
-    elif signet daemon start 2>/dev/null; then
-      ok "Daemon started"
+    if [ "$SETUP_DONE" = "1" ] || [ -f "$SIGNET_AGENTS_DIR/agent.yaml" ]; then
+      info "Restarting daemon..."
+      if signet daemon restart --no-sync 2>/dev/null; then
+        ok "Daemon restarted"
+      elif signet daemon start 2>/dev/null; then
+        ok "Daemon started"
+      else
+        warn "Daemon restart failed — run 'signet daemon restart' manually"
+      fi
     else
-      warn "Daemon restart failed — run 'signet daemon restart' manually"
+      warn "Skipping daemon start until setup creates $SIGNET_AGENTS_DIR/agent.yaml"
     fi
   fi
 
@@ -872,8 +1098,13 @@ done
   echo "  signet recall       — Search memories"
   echo "  signet dashboard    — Open web UI"
   echo ""
-  echo "  Dashboard: http://localhost:3850"
   echo "  Config:    $SIGNET_AGENTS_DIR"
+  if [ -f "$SIGNET_AGENTS_DIR/agent.yaml" ]; then
+    echo "  Dashboard: http://localhost:3850"
+  else
+    echo ""
+    echo "  Next step: signet setup"
+  fi
   echo ""
   printf "${DIM}  Run 'source ~/.zshrc' or restart your terminal.${NC}\n"
   echo ""

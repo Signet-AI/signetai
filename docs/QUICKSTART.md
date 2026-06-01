@@ -149,6 +149,23 @@ signet setup --non-interactive \
 defaults when provider flags are omitted. Explicit provider flags always
 override inferred defaults.
 
+Agents can also run install and setup in one command, but only with explicit
+setup choices:
+
+```bash
+curl -fsSL https://signetai.sh/install.sh | bash -s -- --help
+
+curl -fsSL https://signetai.sh/install.sh | bash -s -- -- \
+  --name "My Agent" \
+  --harness claude-code \
+  --deployment-type local \
+  --embedding-provider native \
+  --extraction-provider claude-code
+```
+
+If an agent does not have those choices yet, install first and run
+`signet setup` after asking the user.
+
 Signet Secrets is a bundled core plugin and is enabled by default for existing
 workspaces. New interactive installs include a **Core plugins** step that
 explains what it does before asking whether to enable it. For automation, pass

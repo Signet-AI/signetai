@@ -355,6 +355,22 @@ For non-interactive mode:
 - Add `--openclaw-runtime-path plugin` for OpenClaw
 - Add `--skip-git` if the user does not want git initialized
 
+One-command install + setup for agents is allowed only with explicit
+choices:
+```bash
+curl -fsSL https://signetai.sh/install.sh | bash -s -- --help
+
+curl -fsSL https://signetai.sh/install.sh | bash -s -- -- \
+  --name "Your Agent Name" \
+  --harness claude-code \
+  --deployment-type local \
+  --embedding-provider native \
+  --extraction-provider claude-code
+```
+
+If you do not have those choices, install first, ask the user, then run
+`signet setup`.
+
 The wizard will ask:
 1. **Agent name and description** — the identity for your agent
 2. **Platform selection** — which harnesses to configure (Claude Code,

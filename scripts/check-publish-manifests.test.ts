@@ -525,9 +525,44 @@ describe("check-publish-manifests", () => {
 
 		expect(installer).toContain('if [ "${SIGNET_NO_START:-}" != "1" ]; then');
 		expect(installer).toContain('warn "Daemon restart failed');
-		expect(restart).toBeGreaterThan(installer.indexOf("signet setup --non-interactive"));
+		expect(installer).toContain('[ "$SETUP_DONE" = "1" ] || [ -f "$SIGNET_AGENTS_DIR/agent.yaml" ]');
+		expect(restart).toBeGreaterThan(installer.indexOf("signet setup < /dev/tty"));
 		expect(startFallback).toBeGreaterThan(restart);
 		expect(manifestCopy).toBeGreaterThan(restart);
+	});
+
+	test("preserves interactive setup instead of inventing installer defaults", () => {
+		const root = join(import.meta.dir, "..");
+		const installer = readFileSync(join(root, "deploy", "bundle", "install.sh"), "utf-8");
+
+		expect(installer).toContain('SIGNET_SETUP_MODE="${SIGNET_SETUP_MODE:-auto}"');
+		expect(installer).toContain("Launching setup wizard");
+		expect(installer).toContain("signet setup < /dev/tty");
+		expect(installer).toContain("No interactive terminal available");
+		expect(installer).toContain("Next step: signet setup");
+		expect(installer).not.toContain("signet setup --non-interactive --embedding-provider none");
+		expect(installer).not.toContain("--embedding-provider none --extraction-provider none");
+	});
+
+	test("requires explicit choices for agent-driven installer setup", () => {
+		const root = join(import.meta.dir, "..");
+		const installer = readFileSync(join(root, "deploy", "bundle", "install.sh"), "utf-8");
+
+		expect(installer).toContain("show_usage()");
+		expect(installer).toContain("curl -fsSL https://signetai.sh/install.sh | bash -s -- --help");
+		expect(installer).toContain("Required setup flags after `--` for agent-driven setup");
+		expect(installer).toContain("--help|-h");
+		expect(installer).toContain("INSTALLER_SETUP_ARGS=()");
+		expect(installer).toContain("parse_installer_args");
+		expect(installer).toContain("Agent-driven setup requires explicit setup choices");
+		expect(installer).toContain('! setup_args_include_flag "--name"');
+		expect(installer).toContain('! setup_args_include_flag "--harness"');
+		expect(installer).toContain('! setup_args_include_flag "--deployment-type"');
+		expect(installer).toContain('! setup_args_include_flag "--embedding-provider"');
+		expect(installer).toContain('! setup_args_include_flag "--extraction-provider"');
+		expect(installer).toContain("setup_args=(setup --non-interactive)");
+		expect(installer).toContain('setup_args+=("${INSTALLER_SETUP_ARGS[@]}")');
+		expect(installer).toContain('signet "${setup_args[@]}"');
 	});
 
 	test("requires every expected bundle component during install", () => {
@@ -545,6 +580,9 @@ describe("check-publish-manifests", () => {
 
 		expect(readme).toContain("curl -fsSL https://signetai.sh/install.sh | SIGNET_INSTALL_DIR=/opt/signet bash");
 		expect(readme).toContain("curl -fsSL https://signetai.sh/install.sh | SIGNET_NO_PATH=1 bash");
+		expect(readme).toContain("curl -fsSL https://signetai.sh/install.sh | bash -s -- --help");
+		expect(readme).toContain("curl -fsSL https://signetai.sh/install.sh | bash -s -- --");
+		expect(readme).toContain("--embedding-provider native");
 		expect(readme).not.toContain("SIGNET_INSTALL_DIR=/opt/signet curl");
 		expect(readme).not.toContain("SIGNET_NO_PATH=1 curl");
 	});

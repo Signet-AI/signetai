@@ -14,7 +14,8 @@ curl -fsSL https://signetai.sh/install.sh | bash
 2. Downloads pre-built components (Node.js, CLI, daemon, dashboard, skills)
 3. Installs to `~/.signet/`
 4. Adds `signet` to your PATH
-5. Runs setup wizard and starts the daemon
+5. Launches the interactive setup wizard when a terminal is available
+6. Starts the daemon after setup creates `agent.yaml`
 
 No need to install Node.js or anything else manually.
 
@@ -24,8 +25,19 @@ No need to install Node.js or anything else manually.
 # Skip daemon start
 curl -fsSL https://signetai.sh/install.sh | SIGNET_NO_START=1 bash
 
-# Skip setup wizard
-curl -fsSL https://signetai.sh/install.sh | SIGNET_NO_SETUP=1 bash
+# Show installer and agent setup options
+curl -fsSL https://signetai.sh/install.sh | bash -s -- --help
+
+# Install only; run setup later
+curl -fsSL https://signetai.sh/install.sh | SIGNET_SETUP_MODE=skip bash
+
+# Agent-driven setup with explicit choices
+curl -fsSL https://signetai.sh/install.sh | bash -s -- -- \
+  --name Agent \
+  --harness codex \
+  --deployment-type local \
+  --embedding-provider native \
+  --extraction-provider codex
 
 # Custom install location
 curl -fsSL https://signetai.sh/install.sh | SIGNET_INSTALL_DIR=/opt/signet bash
