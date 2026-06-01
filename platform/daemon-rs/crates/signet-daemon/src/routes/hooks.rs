@@ -2245,6 +2245,12 @@ pub async fn session_end(
             }
             state.dedup.clear_session_start(&session_key);
             state.dedup.clear(&session_key);
+            warn!(
+                session = %session_key,
+                agent_id = %agent_id,
+                error = %e,
+                "session-end: transcript artifact write failed"
+            );
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(

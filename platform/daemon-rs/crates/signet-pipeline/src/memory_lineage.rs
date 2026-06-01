@@ -783,9 +783,16 @@ fn write_immutable_artifact(
         let current = read_string(&existing_frontmatter, "content_sha256");
         let next = read_string(&frontmatter, "content_sha256");
         if current == next {
+            let existing_body = normalize_markdown_body(&existing_body);
+            upsert_artifact_row(conn, root, &path, &existing_frontmatter, &existing_body)?;
             return Ok(path);
         }
         if normalize_markdown_body(&existing_body) != body {
+            if seed.kind == ArtifactKind::Transcript {
+                let existing_body = normalize_markdown_body(&existing_body);
+                upsert_artifact_row(conn, root, &path, &existing_frontmatter, &existing_body)?;
+                return Ok(path);
+            }
             return Err(format!(
                 "refusing to mutate immutable artifact {}",
                 path.display()
