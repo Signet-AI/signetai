@@ -239,8 +239,8 @@ async fn main() -> anyhow::Result<()> {
         Ok(summary) => info!(?summary, "initial workspace sync completed"),
         Err(err) => warn!(error = %err, "initial workspace sync failed"),
     }
-    let file_watcher = watcher::start_file_watcher(config.base_path.clone())
-        .context("failed to start file watcher")?;
+    let file_watcher =
+        watcher::start_file_watcher(state.clone()).context("failed to start file watcher")?;
     info!("file watcher started");
 
     // Build router

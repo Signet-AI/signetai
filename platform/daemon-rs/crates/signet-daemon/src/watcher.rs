@@ -1,11 +1,17 @@
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::sync::Arc;
+use std::time::{Duration, SystemTime};
 
 use notify::{RecursiveMode, Watcher};
 use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, error, info, warn};
 
+use crate::state::AppState;
+
 const SYNC_DEBOUNCE_MS: u64 = 2_000;
+const COMMIT_DEBOUNCE_MS: u64 = 5_000;
+const GIT_AUTOCOMMIT_TIMEOUT_MS: u64 = 30_000;
 const CONFIG_FILES: [&str; 3] = ["agent.yaml", "AGENT.yaml", "config.yaml"];
 const SYNC_TRIGGER_FILES: [&str; 8] = [
     "agent.yaml",
@@ -16,6 +22,24 @@ const SYNC_TRIGGER_FILES: [&str; 8] = [
     "IDENTITY.md",
     "USER.md",
     "MEMORY.md",
+];
+const WATCHED_ROOT_FILES: [&str; 9] = [
+    "agent.yaml",
+    "AGENT.yaml",
+    "config.yaml",
+    "AGENTS.md",
+    "SOUL.md",
+    "IDENTITY.md",
+    "USER.md",
+    "MEMORY.md",
+    "SIGNET-ARCHITECTURE.md",
+];
+const SIGNET_GIT_PROTECTED_PATHS: [&str; 5] = [
+    "memory/memories.db",
+    "memory/memories.db-wal",
+    "memory/memories.db-shm",
+    "memory/memories.db-journal",
+    "signetai/",
 ];
 const SIGNET_BLOCK_START: &str = "<!-- SIGNET:START -->";
 const SIGNET_BLOCK_END: &str = "<!-- SIGNET:END -->";
@@ -46,12 +70,16 @@ pub(crate) async fn sync_harness_configs(base: &Path) -> std::io::Result<SyncSum
     Ok(summary)
 }
 
-pub(crate) fn start_file_watcher(base: PathBuf) -> anyhow::Result<FileWatcherHandle> {
+pub(crate) fn start_file_watcher(state: Arc<AppState>) -> anyhow::Result<FileWatcherHandle> {
+    let base = state.config.base_path.clone();
     let (event_tx, event_rx) = mpsc::unbounded_channel::<PathBuf>();
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
     let mut watcher =
         notify::recommended_watcher(move |result: notify::Result<notify::Event>| match result {
             Ok(event) => {
+                if matches!(event.kind, notify::EventKind::Access(_)) {
+                    return;
+                }
                 for path in event.paths {
                     let _ = event_tx.send(path);
                 }
@@ -65,7 +93,7 @@ pub(crate) fn start_file_watcher(base: PathBuf) -> anyhow::Result<FileWatcherHan
         watcher.watch(&agents_root, RecursiveMode::Recursive)?;
     }
 
-    let task = tokio::spawn(file_watcher_loop(base, event_rx, shutdown_rx));
+    let task = tokio::spawn(file_watcher_loop(state, event_rx, shutdown_rx));
     Ok(FileWatcherHandle {
         shutdown: shutdown_tx,
         task,
@@ -74,16 +102,23 @@ pub(crate) fn start_file_watcher(base: PathBuf) -> anyhow::Result<FileWatcherHan
 }
 
 async fn file_watcher_loop(
-    base: PathBuf,
+    state: Arc<AppState>,
     mut event_rx: mpsc::UnboundedReceiver<PathBuf>,
     mut shutdown_rx: oneshot::Receiver<()>,
 ) {
+    let base = state.config.base_path.clone();
     let mut pending = false;
+    let mut pending_git_changes: Vec<PathBuf> = Vec::new();
+    let mut observed_files = snapshot_watched_files(&base);
     let mut reconcile_interval = tokio::time::interval(Duration::from_millis(SYNC_DEBOUNCE_MS));
     reconcile_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     reconcile_interval.tick().await;
     let mut sleep = Box::pin(tokio::time::sleep(Duration::from_secs(24 * 60 * 60)));
     sleep
+        .as_mut()
+        .reset(tokio::time::Instant::now() + Duration::from_secs(24 * 60 * 60));
+    let mut git_sleep = Box::pin(tokio::time::sleep(Duration::from_secs(24 * 60 * 60)));
+    git_sleep
         .as_mut()
         .reset(tokio::time::Instant::now() + Duration::from_secs(24 * 60 * 60));
 
@@ -92,6 +127,12 @@ async fn file_watcher_loop(
             _ = &mut shutdown_rx => break,
             Some(path) = event_rx.recv() => {
                 info!(path = %path.display(), "file watcher observed workspace change");
+                if is_auto_commit_trigger(&base, &path) && should_auto_commit(&state).await {
+                    pending_git_changes.push(path.clone());
+                    git_sleep
+                        .as_mut()
+                        .reset(tokio::time::Instant::now() + Duration::from_millis(COMMIT_DEBOUNCE_MS));
+                }
                 if is_sync_trigger(&base, &path) {
                     pending = true;
                     sleep
@@ -112,12 +153,30 @@ async fn file_watcher_loop(
                     .as_mut()
                     .reset(tokio::time::Instant::now() + Duration::from_secs(24 * 60 * 60));
             }
+            _ = &mut git_sleep, if !pending_git_changes.is_empty() => {
+                let changes = std::mem::take(&mut pending_git_changes);
+                run_git_auto_commit(state.clone(), changes).await;
+                git_sleep
+                    .as_mut()
+                    .reset(tokio::time::Instant::now() + Duration::from_secs(24 * 60 * 60));
+            }
             _ = reconcile_interval.tick() => {
+                let changed = diff_watched_files(&base, &mut observed_files);
+                if !changed.is_empty() && should_auto_commit(&state).await {
+                    pending_git_changes.extend(changed);
+                    git_sleep
+                        .as_mut()
+                        .reset(tokio::time::Instant::now() + Duration::from_millis(COMMIT_DEBOUNCE_MS));
+                }
                 run_workspace_sync(&base).await;
             }
             else => break,
         }
     }
+}
+
+async fn should_auto_commit(state: &AppState) -> bool {
+    state.git_config.read().await.auto_commit
 }
 
 async fn run_workspace_sync(base: &Path) {
@@ -133,6 +192,318 @@ fn is_sync_trigger(base: &Path, path: &Path) -> bool {
         return true;
     }
     path.starts_with(base.join("agents"))
+}
+
+fn is_auto_commit_trigger(base: &Path, path: &Path) -> bool {
+    let filename = path.file_name().and_then(|name| name.to_str());
+    filename.is_some_and(|name| WATCHED_ROOT_FILES.contains(&name))
+        || path.starts_with(base.join("agents"))
+}
+
+fn collect_watched_files(base: &Path, out: &mut BTreeMap<PathBuf, SystemTime>) {
+    for name in WATCHED_ROOT_FILES {
+        let path = base.join(name);
+        if let Ok(metadata) = std::fs::metadata(&path)
+            && metadata.is_file()
+        {
+            out.insert(path, metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH));
+        }
+    }
+    collect_agent_files(&base.join("agents"), out);
+}
+
+fn collect_agent_files(path: &Path, out: &mut BTreeMap<PathBuf, SystemTime>) {
+    let Ok(entries) = std::fs::read_dir(path) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        if metadata.is_dir() {
+            collect_agent_files(&path, out);
+        } else if metadata.is_file() {
+            out.insert(path, metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH));
+        }
+    }
+}
+
+fn snapshot_watched_files(base: &Path) -> BTreeMap<PathBuf, SystemTime> {
+    let mut snapshot = BTreeMap::new();
+    collect_watched_files(base, &mut snapshot);
+    snapshot
+}
+
+fn diff_watched_files(base: &Path, previous: &mut BTreeMap<PathBuf, SystemTime>) -> Vec<PathBuf> {
+    let current = snapshot_watched_files(base);
+    let mut changed = Vec::new();
+    for (path, modified) in &current {
+        if previous.get(path) != Some(modified) {
+            changed.push(path.clone());
+        }
+    }
+    for path in previous.keys() {
+        if !current.contains_key(path) {
+            changed.push(path.clone());
+        }
+    }
+    *previous = current;
+    changed
+}
+
+#[derive(Debug)]
+struct GitCommandResult {
+    stdout: String,
+    stderr: String,
+    code: i32,
+    timed_out: bool,
+}
+
+async fn run_git_command(base: &Path, args: &[String]) -> std::io::Result<GitCommandResult> {
+    let output = tokio::time::timeout(
+        Duration::from_millis(GIT_AUTOCOMMIT_TIMEOUT_MS),
+        tokio::process::Command::new("git")
+            .args(args)
+            .current_dir(base)
+            .output(),
+    )
+    .await;
+
+    match output {
+        Ok(Ok(output)) => Ok(GitCommandResult {
+            stdout: String::from_utf8_lossy(&output.stdout).trim().to_string(),
+            stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+            code: output.status.code().unwrap_or(1),
+            timed_out: false,
+        }),
+        Ok(Err(err)) => Err(err),
+        Err(_) => Ok(GitCommandResult {
+            stdout: String::new(),
+            stderr: format!("Command timed out after {GIT_AUTOCOMMIT_TIMEOUT_MS}ms"),
+            code: 124,
+            timed_out: true,
+        }),
+    }
+}
+
+fn git_result_message(operation: &str, result: &GitCommandResult) -> String {
+    let detail = if result.stderr.is_empty() {
+        result.stdout.as_str()
+    } else {
+        result.stderr.as_str()
+    };
+    if result.timed_out {
+        format!("{operation} timed out: {detail}")
+    } else if detail.is_empty() {
+        format!("{operation} failed with code {}", result.code)
+    } else {
+        format!("{operation} failed with code {}: {detail}", result.code)
+    }
+}
+
+fn is_git_repo(base: &Path) -> bool {
+    base.join(".git").exists()
+}
+
+fn merge_signet_gitignore_entries(existing: &str) -> String {
+    let normalized = existing.replace("\r\n", "\n");
+    let mut lines = if normalized.is_empty() {
+        Vec::new()
+    } else {
+        normalized
+            .split('\n')
+            .map(ToOwned::to_owned)
+            .collect::<Vec<_>>()
+    };
+    if lines.last().is_some_and(|line| line.is_empty()) {
+        lines.pop();
+    }
+
+    let existing_entries = lines
+        .iter()
+        .filter(|line| !line.trim().is_empty())
+        .map(String::as_str)
+        .collect::<std::collections::HashSet<_>>();
+    let missing = SIGNET_GIT_PROTECTED_PATHS
+        .iter()
+        .filter(|entry| !existing_entries.contains(**entry))
+        .copied()
+        .collect::<Vec<_>>();
+    if missing.is_empty() {
+        return existing.to_string();
+    }
+
+    if !lines.is_empty() {
+        lines.push(String::new());
+    }
+    lines.push("# Signet generated data".to_string());
+    lines.extend(missing.into_iter().map(ToOwned::to_owned));
+    format!("{}\n", lines.join("\n"))
+}
+
+fn ensure_protected_gitignore(base: &Path) -> std::io::Result<()> {
+    let path = base.join(".gitignore");
+    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+    let next = merge_signet_gitignore_entries(&existing);
+    if next != existing {
+        std::fs::write(path, next)?;
+    }
+    Ok(())
+}
+
+async fn git_untrack_protected_files(base: &Path) {
+    let mut args = vec![
+        "rm".to_string(),
+        "--cached".to_string(),
+        "--ignore-unmatch".to_string(),
+        "--quiet".to_string(),
+        "--".to_string(),
+    ];
+    args.extend(
+        SIGNET_GIT_PROTECTED_PATHS
+            .iter()
+            .map(|path| path.to_string()),
+    );
+    if let Ok(result) = run_git_command(base, &args).await
+        && result.code != 0
+    {
+        warn!(
+            error = %git_result_message("Auto-commit protected untrack", &result),
+            "git auto-commit protected untrack failed"
+        );
+    }
+}
+
+fn canonical_path_for_containment(path: &Path) -> PathBuf {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join(path)
+    };
+    if let Ok(canonical) = std::fs::canonicalize(&absolute) {
+        return canonical;
+    }
+    if let (Some(parent), Some(name)) = (absolute.parent(), absolute.file_name())
+        && let Ok(parent) = std::fs::canonicalize(parent)
+    {
+        return parent.join(name);
+    }
+    absolute
+}
+
+fn to_relative_git_path(base: &Path, path: &Path) -> Option<String> {
+    let canonical_base = canonical_path_for_containment(base);
+    let candidate = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        base.join(path)
+    };
+    let canonical_candidate = canonical_path_for_containment(&candidate);
+    let relative = canonical_candidate.strip_prefix(&canonical_base).ok()?;
+    if relative.as_os_str().is_empty() {
+        return None;
+    }
+    Some(relative.to_string_lossy().replace('\\', "/"))
+}
+
+async fn run_git_auto_commit(state: Arc<AppState>, changed_files: Vec<PathBuf>) {
+    let base = state.config.base_path.clone();
+    if !is_git_repo(&base) {
+        return;
+    }
+    if let Err(err) = ensure_protected_gitignore(&base) {
+        warn!(error = %err, "git auto-commit failed to update protected gitignore entries");
+    }
+    git_untrack_protected_files(&base).await;
+
+    let relative_files = changed_files
+        .iter()
+        .filter_map(|path| to_relative_git_path(&base, path))
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let dropped = changed_files.len().saturating_sub(relative_files.len());
+    if dropped > 0 {
+        warn!(
+            dropped,
+            "dropped git auto-commit paths outside the git workspace"
+        );
+    }
+    if relative_files.is_empty() {
+        return;
+    }
+
+    let mut add_args = vec!["add".to_string(), "--".to_string()];
+    add_args.extend(relative_files.iter().cloned());
+    match run_git_command(&base, &add_args).await {
+        Ok(result) if result.code == 0 => {}
+        Ok(result) => {
+            warn!(
+                error = %git_result_message("Auto-commit add", &result),
+                "git auto-commit add failed"
+            );
+            return;
+        }
+        Err(err) => {
+            warn!(error = %err, "git auto-commit add failed");
+            return;
+        }
+    }
+
+    let mut status_args = vec![
+        "status".to_string(),
+        "--porcelain".to_string(),
+        "--".to_string(),
+    ];
+    status_args.extend(relative_files.iter().cloned());
+    let status = match run_git_command(&base, &status_args).await {
+        Ok(result) if result.code == 0 => result,
+        Ok(result) => {
+            warn!(
+                error = %git_result_message("Auto-commit status", &result),
+                "git auto-commit status failed"
+            );
+            return;
+        }
+        Err(err) => {
+            warn!(error = %err, "git auto-commit status failed");
+            return;
+        }
+    };
+    if status.stdout.trim().is_empty() {
+        return;
+    }
+
+    let file_list = relative_files.join(", ");
+    let timestamp = chrono::Utc::now().format("%Y-%m-%dT%H-%M-%S");
+    let preview = file_list.chars().take(50).collect::<String>();
+    let message = format!("{timestamp}_auto_{preview}");
+    let mut commit_args = vec![
+        "commit".to_string(),
+        "-m".to_string(),
+        message.clone(),
+        "--".to_string(),
+    ];
+    commit_args.extend(relative_files.iter().cloned());
+    match run_git_command(&base, &commit_args).await {
+        Ok(result) if result.code == 0 => {
+            info!(
+                message,
+                file_count = relative_files.len(),
+                "git auto-commit completed"
+            );
+        }
+        Ok(result) => {
+            warn!(
+                error = %git_result_message("Auto-commit", &result),
+                "git auto-commit failed"
+            );
+        }
+        Err(err) => warn!(error = %err, "git auto-commit failed"),
+    }
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]

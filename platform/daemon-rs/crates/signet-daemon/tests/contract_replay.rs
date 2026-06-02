@@ -79,6 +79,18 @@ impl TestServer {
         yaml: &str,
         files: &[(&str, &str)],
     ) -> Self {
+        Self::start_with_agent_yaml_files_and_setup(auth_mode, yaml, files, |_| {}).await
+    }
+
+    async fn start_with_agent_yaml_files_and_setup<F>(
+        auth_mode: Option<&str>,
+        yaml: &str,
+        files: &[(&str, &str)],
+        setup: F,
+    ) -> Self
+    where
+        F: FnOnce(&std::path::Path),
+    {
         let tmpdir = tempfile::tempdir().expect("failed to create tmpdir");
         let port = ephemeral_port();
         let base = format!("http://127.0.0.1:{port}");
@@ -102,6 +114,7 @@ impl TestServer {
             }
             std::fs::write(path, content).unwrap();
         }
+        setup(tmpdir.path());
 
         // Spawn daemon in background
         let port_str = port.to_string();
@@ -5649,6 +5662,35 @@ async fn wait_for_file_contains(path: &std::path::Path, needle: &str) -> String 
     }
 }
 
+fn run_git(dir: &std::path::Path, args: &[&str]) -> String {
+    let output = std::process::Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .unwrap_or_else(|err| panic!("failed to run git {args:?}: {err}"));
+    if !output.status.success() {
+        panic!(
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    String::from_utf8_lossy(&output.stdout).to_string()
+}
+
+async fn wait_for_git_log_contains(dir: &std::path::Path, needle: &str) -> String {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        let output = run_git(dir, &["log", "-1", "--name-only", "--pretty=%s"]);
+        if output.contains(needle) {
+            return output;
+        }
+        if tokio::time::Instant::now() > deadline {
+            panic!("timed out waiting for git log to contain {needle}; last log:\n{output}");
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+}
+
 #[tokio::test]
 #[ignore = "requires built daemon binary"]
 async fn watcher_syncs_identity_workspaces_and_architecture_doc() {
@@ -5684,6 +5726,42 @@ async fn watcher_syncs_identity_workspaces_and_architecture_doc() {
         .expect("update root USER.md");
     let updated = wait_for_file_contains(&workspace_agents, "updated root user").await;
     assert!(updated.contains("## USER\n\nupdated root user"));
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn watcher_auto_commits_changed_workspace_paths() {
+    let server = TestServer::start_with_agent_yaml_files_and_setup(
+        None,
+        "agent:\n  name: test-agent\n  version: 1\ngit:\n  autoCommit: true\n",
+        &[("AGENTS.md", "# Root Agent\n")],
+        |dir| {
+            run_git(dir, &["init", "-b", "main"]);
+            run_git(dir, &["config", "user.email", "replay@example.com"]);
+            run_git(dir, &["config", "user.name", "Replay Bot"]);
+            run_git(dir, &["add", "agent.yaml", "AGENTS.md"]);
+            run_git(dir, &["commit", "-m", "initial"]);
+        },
+    )
+    .await;
+
+    let config: serde_json::Value = server.get("/api/git/config").await.json().await.unwrap();
+    assert_eq!(config["autoCommit"], true);
+
+    std::fs::write(server._tmpdir.path().join("USER.md"), "autocommit user")
+        .expect("write USER.md");
+
+    let log = wait_for_git_log_contains(server._tmpdir.path(), "USER.md").await;
+    assert!(log.contains("_auto_"));
+    assert!(log.contains("USER.md"));
+    assert!(
+        run_git(
+            server._tmpdir.path(),
+            &["status", "--porcelain", "--", "USER.md"]
+        )
+        .trim()
+        .is_empty()
+    );
 }
 
 #[tokio::test]
