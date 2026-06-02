@@ -143,9 +143,7 @@ pub trait LlmGenerateFn: Send + Sync {
         prompt: &str,
         timeout_ms: Option<u64>,
         max_tokens: Option<usize>,
-    ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = Result<String, String>> + Send + '_>,
-    >;
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String, String>> + Send + '_>>;
 }
 
 // Internal DB row types
@@ -255,10 +253,7 @@ struct ApplyResult {
 // ---------------------------------------------------------------------------
 
 /// Read the current dreaming state for an agent.
-pub async fn get_dreaming_state(
-    pool: &DbPool,
-    agent_id: &str,
-) -> DreamingState {
+pub async fn get_dreaming_state(pool: &DbPool, agent_id: &str) -> DreamingState {
     let agent_id = agent_id.to_string();
     pool.read(move |conn| {
         let row = conn
@@ -306,11 +301,7 @@ pub async fn get_dreaming_state(
 }
 
 /// Add tokens to the dreaming accumulator for an agent.
-pub async fn add_dreaming_tokens(
-    pool: &DbPool,
-    agent_id: &str,
-    tokens: i64,
-) {
+pub async fn add_dreaming_tokens(pool: &DbPool, agent_id: &str, tokens: i64) {
     let agent_id = agent_id.to_string();
     let result = pool
         .write(Priority::Low, move |conn| {
@@ -345,10 +336,7 @@ pub async fn add_dreaming_tokens(
 }
 
 /// Record a dreaming failure (increments consecutive_failures).
-pub async fn record_dreaming_failure(
-    pool: &DbPool,
-    agent_id: &str,
-) {
+pub async fn record_dreaming_failure(pool: &DbPool, agent_id: &str) {
     let agent_id = agent_id.to_string();
     let result = pool
         .write(Priority::Low, move |conn| {
@@ -383,11 +371,7 @@ pub async fn record_dreaming_failure(
 }
 
 /// Create a new dreaming pass record in 'running' state. Returns the pass ID.
-pub async fn create_dreaming_pass(
-    pool: &DbPool,
-    agent_id: &str,
-    mode: &DreamingMode,
-) -> String {
+pub async fn create_dreaming_pass(pool: &DbPool, agent_id: &str, mode: &DreamingMode) -> String {
     let id = Uuid::new_v4().to_string();
     let agent_id = agent_id.to_string();
     let mode_str = match mode {
@@ -413,11 +397,7 @@ pub async fn create_dreaming_pass(
 
 /// Mark a dreaming pass as failed.
 #[allow(dead_code)]
-async fn fail_dreaming_pass(
-    pool: &DbPool,
-    pass_id: &str,
-    error: &str,
-) {
+async fn fail_dreaming_pass(pool: &DbPool, pass_id: &str, error: &str) {
     let pass_id = pass_id.to_string();
     let error = error.to_string();
     if let Err(e) = pool
@@ -487,21 +467,23 @@ fn fetch_unprocessed_summaries(
     limit: usize,
 ) -> Vec<SessionSummaryRow> {
     let sql = match since {
-        Some(_) =>
+        Some(_) => {
             "SELECT id, content, token_count, session_key, project, latest_at
              FROM session_summaries
              WHERE agent_id = ?1 AND depth = 0
                AND COALESCE(source_type, 'summary') = 'summary'
                AND latest_at > ?2
              ORDER BY latest_at ASC
-             LIMIT ?3",
-        None =>
+             LIMIT ?3"
+        }
+        None => {
             "SELECT id, content, token_count, session_key, project, latest_at
              FROM session_summaries
              WHERE agent_id = ?1 AND depth = 0
                AND COALESCE(source_type, 'summary') = 'summary'
              ORDER BY latest_at ASC
-             LIMIT ?2",
+             LIMIT ?2"
+        }
     };
 
     let result = match since {
@@ -947,9 +929,7 @@ fn is_valid_mutation(value: &serde_json::Value) -> bool {
     match op {
         "create_entity" => obj.get("name").and_then(|v| v.as_str()).is_some(),
         "merge_entities" => {
-            obj.get("source")
-                .and_then(|v| v.as_array())
-                .is_some()
+            obj.get("source").and_then(|v| v.as_array()).is_some()
                 && obj.get("target").and_then(|v| v.as_str()).is_some()
         }
         "delete_entity" => obj.get("name").and_then(|v| v.as_str()).is_some(),
@@ -1061,11 +1041,7 @@ fn canonicalize(name: &str) -> String {
         .join(" ")
 }
 
-fn resolve_entity(
-    conn: &rusqlite::Connection,
-    agent_id: &str,
-    name: &str,
-) -> Option<String> {
+fn resolve_entity(conn: &rusqlite::Connection, agent_id: &str, name: &str) -> Option<String> {
     let canonical = canonicalize(name);
     conn.query_row(
         "SELECT id FROM entities
@@ -1448,11 +1424,7 @@ fn apply_merge_entities(
     }
 }
 
-fn apply_delete_entity(
-    conn: &rusqlite::Connection,
-    agent_id: &str,
-    name: &str,
-) -> MutationOutcome {
+fn apply_delete_entity(conn: &rusqlite::Connection, agent_id: &str, name: &str) -> MutationOutcome {
     if name.is_empty() {
         return MutationOutcome::Skipped;
     }
@@ -1571,7 +1543,16 @@ fn apply_update_aspect(
 
     let aspect_id = resolve_or_create_aspect(conn, &entity_id, agent_id, aspect_name);
     for (content, normalized) in &to_insert {
-        insert_attr(conn, &aspect_id, agent_id, content, normalized, "attribute", 0.8, 0.5);
+        insert_attr(
+            conn,
+            &aspect_id,
+            agent_id,
+            content,
+            normalized,
+            "attribute",
+            0.8,
+            0.5,
+        );
     }
     MutationOutcome::Applied
 }
@@ -1630,7 +1611,11 @@ fn apply_supersede(
     old_content: &str,
     new_content: &str,
 ) -> MutationOutcome {
-    if entity_name.is_empty() || aspect_name.is_empty() || old_content.is_empty() || new_content.is_empty() {
+    if entity_name.is_empty()
+        || aspect_name.is_empty()
+        || old_content.is_empty()
+        || new_content.is_empty()
+    {
         return MutationOutcome::Skipped;
     }
 
@@ -1707,7 +1692,16 @@ fn apply_create_attribute(
         return MutationOutcome::Skipped;
     }
 
-    insert_attr(conn, &aspect_id, agent_id, content.trim(), &normalized, "attribute", 0.8, 0.5);
+    insert_attr(
+        conn,
+        &aspect_id,
+        agent_id,
+        content.trim(),
+        &normalized,
+        "attribute",
+        0.8,
+        0.5,
+    );
     MutationOutcome::Applied
 }
 
@@ -1803,7 +1797,9 @@ fn apply_mutations(
                     entity,
                     aspect,
                     attributes,
-                } => Some(apply_update_aspect(conn, agent_id, entity, aspect, attributes)),
+                } => Some(apply_update_aspect(
+                    conn, agent_id, entity, aspect, attributes,
+                )),
                 DreamingMutation::DeleteAspect { entity, aspect, .. } => {
                     Some(apply_delete_aspect(conn, agent_id, entity, aspect))
                 }
@@ -1817,13 +1813,17 @@ fn apply_mutations(
                     entity,
                     aspect,
                     content,
-                } => Some(apply_create_attribute(conn, agent_id, entity, aspect, content)),
+                } => Some(apply_create_attribute(
+                    conn, agent_id, entity, aspect, content,
+                )),
                 DreamingMutation::DeleteAttribute {
                     entity,
                     aspect,
                     content,
                     ..
-                } => Some(apply_delete_attribute(conn, agent_id, entity, aspect, content)),
+                } => Some(apply_delete_attribute(
+                    conn, agent_id, entity, aspect, content,
+                )),
             }
         }));
 
@@ -1921,10 +1921,7 @@ pub async fn run_dreaming_pass(
     warn_if_truncated(&graph, &graph_limits);
 
     // Early exit for incremental with nothing to process
-    if *mode == DreamingMode::Incremental
-        && summaries.is_empty()
-        && graph.entities.is_empty()
-    {
+    if *mode == DreamingMode::Incremental && summaries.is_empty() && graph.entities.is_empty() {
         let pass_id_clone = pass_id.clone();
         let agent_id_clone = agent_id.to_string();
         let mode_str = match mode {
@@ -1972,7 +1969,7 @@ pub async fn run_dreaming_pass(
 
     let raw = generate
         .generate(&prompt, Some(cfg.timeout_ms), Some(cfg.max_output_tokens))
-        . await
+        .await
         .map_err(|e| format!("LLM generation failed: {e}"))?;
 
     let result = parse_dreaming_result(&raw)?;
@@ -2013,7 +2010,10 @@ pub async fn run_dreaming_pass(
                 )
                 .unwrap_or(0);
             if orphaned > 0 {
-                warn!(count = orphaned, "post-mutation integrity: found orphaned aspects with no parent entity");
+                warn!(
+                    count = orphaned,
+                    "post-mutation integrity: found orphaned aspects with no parent entity"
+                );
             }
 
             // Complete pass record
@@ -2129,11 +2129,7 @@ fn reset_dreaming_tokens(
 const MAX_FAILURE_BACKOFF_MULTIPLIER: u32 = 6;
 
 /// Check whether a dreaming pass should be triggered for the given agent.
-pub async fn should_trigger_dreaming(
-    pool: &DbPool,
-    cfg: &DreamingConfig,
-    agent_id: &str,
-) -> bool {
+pub async fn should_trigger_dreaming(pool: &DbPool, cfg: &DreamingConfig, agent_id: &str) -> bool {
     if !cfg.enabled {
         return false;
     }
@@ -2343,10 +2339,8 @@ mod tests {
 
     #[tokio::test]
     async fn record_failure_increments_counter() {
-        let path = std::env::temp_dir().join(format!(
-            "signet-dreaming-failure-{}.db",
-            Uuid::new_v4()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("signet-dreaming-failure-{}.db", Uuid::new_v4()));
         let (pool, _handle) = DbPool::open(&path).unwrap();
 
         record_dreaming_failure(&pool, "agent-a").await;
@@ -2362,8 +2356,7 @@ mod tests {
             std::env::temp_dir().join(format!("signet-dreaming-passes-{}.db", Uuid::new_v4()));
         let (pool, _handle) = DbPool::open(&path).unwrap();
 
-        let id =
-            create_dreaming_pass(&pool, "agent-a", &DreamingMode::Incremental).await;
+        let id = create_dreaming_pass(&pool, "agent-a", &DreamingMode::Incremental).await;
         assert!(!id.is_empty());
 
         let passes = get_dreaming_passes(&pool, "agent-a", 10).await;
@@ -2375,10 +2368,8 @@ mod tests {
 
     #[tokio::test]
     async fn should_trigger_first_run_backfill() {
-        let path = std::env::temp_dir().join(format!(
-            "signet-dreaming-trigger-{}.db",
-            Uuid::new_v4()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("signet-dreaming-trigger-{}.db", Uuid::new_v4()));
         let (pool, _handle) = DbPool::open(&path).unwrap();
 
         let cfg = DreamingConfig {
@@ -2393,10 +2384,8 @@ mod tests {
 
     #[tokio::test]
     async fn should_trigger_requires_tokens_after_threshold() {
-        let path = std::env::temp_dir().join(format!(
-            "signet-dreaming-threshold-{}.db",
-            Uuid::new_v4()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("signet-dreaming-threshold-{}.db", Uuid::new_v4()));
         let (pool, _handle) = DbPool::open(&path).unwrap();
 
         // Create state with a past pass
@@ -2428,10 +2417,8 @@ mod tests {
 
     #[tokio::test]
     async fn mutation_create_entity_creates_graph() {
-        let path = std::env::temp_dir().join(format!(
-            "signet-dreaming-mutation-{}.db",
-            Uuid::new_v4()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("signet-dreaming-mutation-{}.db", Uuid::new_v4()));
         let (pool, _handle) = DbPool::open(&path).unwrap();
 
         pool.write(Priority::Low, |conn| {
@@ -2440,12 +2427,10 @@ mod tests {
                 "agent-a",
                 "TestEntity",
                 Some("concept"),
-                Some(&[
-                    AspectInput {
-                        name: "general".into(),
-                        attributes: Some(vec!["This is a test attribute that is long enough".into()]),
-                    },
-                ]),
+                Some(&[AspectInput {
+                    name: "general".into(),
+                    attributes: Some(vec!["This is a test attribute that is long enough".into()]),
+                }]),
             );
             assert!(matches!(outcome, MutationOutcome::Applied));
             Ok(serde_json::Value::Null)
@@ -2482,18 +2467,14 @@ mod tests {
 
     #[tokio::test]
     async fn mutation_delete_entity_respects_constraints() {
-        let path = std::env::temp_dir().join(format!(
-            "signet-dreaming-delete-{}.db",
-            Uuid::new_v4()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("signet-dreaming-delete-{}.db", Uuid::new_v4()));
         let (pool, _handle) = DbPool::open(&path).unwrap();
 
         pool.write(Priority::Low, |conn| {
             // Create entity with a constraint attribute
-            let entity_id =
-                resolve_or_create_entity(conn, "agent-a", "ProtectedEntity", "concept");
-            let aspect_id =
-                resolve_or_create_aspect(conn, &entity_id, "agent-a", "rules");
+            let entity_id = resolve_or_create_entity(conn, "agent-a", "ProtectedEntity", "concept");
+            let aspect_id = resolve_or_create_aspect(conn, &entity_id, "agent-a", "rules");
             insert_attr(
                 conn,
                 &aspect_id,
@@ -2516,17 +2497,13 @@ mod tests {
 
     #[tokio::test]
     async fn mutation_supersede_marks_old() {
-        let path = std::env::temp_dir().join(format!(
-            "signet-dreaming-supersede-{}.db",
-            Uuid::new_v4()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("signet-dreaming-supersede-{}.db", Uuid::new_v4()));
         let (pool, _handle) = DbPool::open(&path).unwrap();
 
         pool.write(Priority::Low, |conn| {
-            let entity_id =
-                resolve_or_create_entity(conn, "agent-a", "TestEntity", "concept");
-            let aspect_id =
-                resolve_or_create_aspect(conn, &entity_id, "agent-a", "general");
+            let entity_id = resolve_or_create_entity(conn, "agent-a", "TestEntity", "concept");
+            let aspect_id = resolve_or_create_aspect(conn, &entity_id, "agent-a", "general");
             insert_attr(
                 conn,
                 &aspect_id,

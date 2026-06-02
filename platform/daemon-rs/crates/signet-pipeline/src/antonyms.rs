@@ -8,8 +8,8 @@ use std::sync::LazyLock;
 
 pub static NEGATION_TOKENS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
     [
-        "not", "no", "never", "cannot", "cant", "doesnt", "dont", "isnt",
-        "wasnt", "wont", "without",
+        "not", "no", "never", "cannot", "cant", "doesnt", "dont", "isnt", "wasnt", "wont",
+        "without",
     ]
     .into_iter()
     .collect()
@@ -85,13 +85,17 @@ pub fn tokenize(text: &str) -> Vec<String> {
 
 /// Check if any token is a negation word.
 pub fn has_negation(tokens: &[String]) -> bool {
-    tokens.iter().any(|token| NEGATION_TOKENS.contains(token.as_str()))
+    tokens
+        .iter()
+        .any(|token| NEGATION_TOKENS.contains(token.as_str()))
 }
 
 /// Count token overlap between two token lists.
 pub fn overlap_count(left: &[String], right: &[String]) -> usize {
     let right_set: HashSet<&str> = right.iter().map(|s| s.as_str()).collect();
-    left.iter().filter(|t| right_set.contains(t.as_str())).count()
+    left.iter()
+        .filter(|t| right_set.contains(t.as_str()))
+        .count()
 }
 
 /// Check if two token sets have an antonym conflict.
