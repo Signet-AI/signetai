@@ -298,7 +298,16 @@ pub async fn history(
     Path(id): Path<String>,
     Query(params): Query<HistoryParams>,
 ) -> impl IntoResponse {
+    let memory_id = id.trim().to_string();
+    if memory_id.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "memory id is required"})),
+        )
+            .into_response();
+    }
     let limit = params.limit.unwrap_or(200).min(1000);
+    let missing_memory_id = memory_id.clone();
 
     let result = state
         .pool
@@ -306,7 +315,7 @@ pub async fn history(
             // Check existence
             let exists: bool = conn
                 .prepare_cached("SELECT id FROM memories WHERE id = ?1")?
-                .exists(rusqlite::params![id])?;
+                .exists(rusqlite::params![memory_id])?;
             if !exists {
                 return Ok(None);
             }
@@ -316,32 +325,68 @@ pub async fn history(
                         metadata, created_at, actor_type, session_id, request_id
                  FROM memory_history
                  WHERE memory_id = ?1
-                 ORDER BY created_at DESC
+                 ORDER BY created_at ASC
                  LIMIT ?2",
             )?;
             let rows: Vec<serde_json::Value> = stmt
-                .query_map(rusqlite::params![id, limit], |row| {
-                    Ok(serde_json::json!({
-                        "id": row.get::<_, String>(0)?,
-                        "event": row.get::<_, String>(1)?,
-                        "old_content": row.get::<_, Option<String>>(2)?,
-                        "new_content": row.get::<_, Option<String>>(3)?,
-                        "changed_by": row.get::<_, String>(4)?,
-                        "reason": row.get::<_, Option<String>>(5)?,
-                        "metadata": row.get::<_, Option<String>>(6)?,
-                        "created_at": row.get::<_, String>(7)?,
-                        "actor_type": row.get::<_, Option<String>>(8)?,
-                        "session_id": row.get::<_, Option<String>>(9)?,
-                        "request_id": row.get::<_, Option<String>>(10)?,
-                    }))
+                .query_map(rusqlite::params![memory_id, limit], |row| {
+                    let metadata_raw = row.get::<_, Option<String>>(6)?;
+                    let metadata = metadata_raw
+                        .as_deref()
+                        .map(|raw| {
+                            serde_json::from_str::<Value>(raw)
+                                .unwrap_or_else(|_| Value::String(raw.to_string()))
+                        })
+                        .unwrap_or(Value::Null);
+                    let mut item = serde_json::Map::new();
+                    item.insert(
+                        "id".to_string(),
+                        serde_json::json!(row.get::<_, String>(0)?),
+                    );
+                    item.insert(
+                        "event".to_string(),
+                        serde_json::json!(row.get::<_, String>(1)?),
+                    );
+                    item.insert(
+                        "oldContent".to_string(),
+                        serde_json::json!(row.get::<_, Option<String>>(2)?),
+                    );
+                    item.insert(
+                        "newContent".to_string(),
+                        serde_json::json!(row.get::<_, Option<String>>(3)?),
+                    );
+                    item.insert(
+                        "changedBy".to_string(),
+                        serde_json::json!(row.get::<_, String>(4)?),
+                    );
+                    item.insert(
+                        "reason".to_string(),
+                        serde_json::json!(row.get::<_, Option<String>>(5)?),
+                    );
+                    item.insert("metadata".to_string(), metadata);
+                    item.insert(
+                        "createdAt".to_string(),
+                        serde_json::json!(row.get::<_, String>(7)?),
+                    );
+                    if let Some(actor_type) = row.get::<_, Option<String>>(8)? {
+                        item.insert("actorType".to_string(), serde_json::json!(actor_type));
+                    }
+                    if let Some(session_id) = row.get::<_, Option<String>>(9)? {
+                        item.insert("sessionId".to_string(), serde_json::json!(session_id));
+                    }
+                    if let Some(request_id) = row.get::<_, Option<String>>(10)? {
+                        item.insert("requestId".to_string(), serde_json::json!(request_id));
+                    }
+                    Ok(Value::Object(item))
                 })?
                 .filter_map(|r| r.ok())
                 .collect();
+            let count = rows.len();
 
             Ok(Some(serde_json::json!({
-                "memoryId": id,
+                "memoryId": memory_id,
+                "count": count,
                 "history": rows,
-                "total": rows.len(),
             })))
         })
         .await
@@ -351,7 +396,7 @@ pub async fn history(
         Some(val) => (StatusCode::OK, Json(val)).into_response(),
         None => (
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "Not found"})),
+            Json(serde_json::json!({"error": "Not found", "memoryId": missing_memory_id})),
         )
             .into_response(),
     }

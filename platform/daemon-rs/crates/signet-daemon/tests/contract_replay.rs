@@ -218,6 +218,39 @@ impl TestServer {
         .expect("seed memory job");
     }
 
+    fn seed_memory_history_fixture(&self) {
+        let conn = rusqlite::Connection::open(self.db_path()).expect("open replay db");
+        conn.busy_timeout(Duration::from_secs(5)).unwrap();
+        conn.execute(
+            "INSERT INTO memories
+             (id, type, content, content_hash, confidence, importance, tags, who, project,
+              created_at, updated_at, updated_by, is_deleted, version, agent_id)
+             VALUES
+             ('mem-history-replay', 'fact', 'History replay target.', 'history-replay-hash',
+              1.0, 0.5, 'rust,parity', 'contract-replay', 'signet',
+              '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z',
+              'contract-replay', 1, 3, 'default')",
+            [],
+        )
+        .expect("seed history memory");
+        conn.execute(
+            "INSERT INTO memory_history
+             (id, memory_id, event, old_content, new_content, changed_by, reason,
+              metadata, created_at, actor_type, session_id, request_id)
+             VALUES
+             ('history-replay-updated', 'mem-history-replay', 'updated',
+              'History replay target.', 'History replay target edited.',
+              'contract-replay', 'history test edit', '{\"source\":\"contract\"}',
+              '2026-01-01T00:00:01.000Z', 'agent', 'session-history', 'request-1'),
+             ('history-replay-deleted', 'mem-history-replay', 'deleted',
+              'History replay target edited.', NULL,
+              'contract-replay', 'history test delete', 'plain metadata',
+              '2026-01-01T00:00:02.000Z', NULL, NULL, NULL)",
+            [],
+        )
+        .expect("seed history rows");
+    }
+
     fn seed_deduplicate_fixture(&self) {
         let conn = rusqlite::Connection::open(self.db_path()).expect("open replay db");
         conn.busy_timeout(Duration::from_secs(5)).unwrap();
@@ -1536,6 +1569,50 @@ async fn memory_crud() {
     // List should now have >= 1
     let resp = server.get("/api/memories").await;
     assert_eq!(resp.status(), 200);
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn memory_history_replays_ts_order_and_body_shape() {
+    let server = TestServer::start().await;
+    server.seed_memory_history_fixture();
+
+    let resp = server.get("/api/memory/mem-history-replay/history").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["memoryId"], "mem-history-replay");
+    assert_eq!(body["count"], 2);
+    assert!(body.get("total").is_none());
+    assert_eq!(body["history"][0]["id"], "history-replay-updated");
+    assert_eq!(body["history"][0]["event"], "updated");
+    assert_eq!(body["history"][0]["oldContent"], "History replay target.");
+    assert_eq!(
+        body["history"][0]["newContent"],
+        "History replay target edited."
+    );
+    assert_eq!(body["history"][0]["changedBy"], "contract-replay");
+    assert_eq!(body["history"][0]["reason"], "history test edit");
+    assert_eq!(body["history"][0]["metadata"]["source"], "contract");
+    assert_eq!(body["history"][0]["createdAt"], "2026-01-01T00:00:01.000Z");
+    assert_eq!(body["history"][0]["actorType"], "agent");
+    assert_eq!(body["history"][0]["sessionId"], "session-history");
+    assert_eq!(body["history"][0]["requestId"], "request-1");
+    assert!(body["history"][0].get("old_content").is_none());
+    assert!(body["history"][0].get("changed_by").is_none());
+
+    assert_eq!(body["history"][1]["id"], "history-replay-deleted");
+    assert_eq!(body["history"][1]["event"], "deleted");
+    assert_eq!(body["history"][1]["reason"], "history test delete");
+    assert_eq!(body["history"][1]["metadata"], "plain metadata");
+    assert!(body["history"][1].get("actorType").is_none());
+    assert!(body["history"][1].get("sessionId").is_none());
+    assert!(body["history"][1].get("requestId").is_none());
+
+    let resp = server.get("/api/memory/missing-history/history").await;
+    assert_eq!(resp.status(), 404);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "Not found");
+    assert_eq!(body["memoryId"], "missing-history");
 }
 
 #[tokio::test]
@@ -7206,7 +7283,10 @@ async fn remaining_public_routes_have_contract_replay_coverage() {
         .await;
     assert_status("POST /api/memory/modify", &resp, &[200]);
     let resp = server.get("/api/memory/missing-memory/history").await;
-    assert_status("GET /api/memory/:id/history", &resp, &[200, 404]);
+    assert_eq!(resp.status(), 404);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "Not found");
+    assert_eq!(body["memoryId"], "missing-memory");
     let resp = server
         .post("/api/memory/missing-memory/recover", json!({}))
         .await;
