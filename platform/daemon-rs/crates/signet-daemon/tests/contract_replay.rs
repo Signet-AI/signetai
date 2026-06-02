@@ -530,6 +530,63 @@ impl TestServer {
         .expect("seed knowledge navigation fixture");
     }
 
+    fn seed_knowledge_legacy_route_fixture(&self) {
+        let conn = rusqlite::Connection::open(self.db_path()).expect("open replay db");
+        conn.busy_timeout(Duration::from_secs(5)).unwrap();
+        conn.execute_batch(
+            r#"INSERT INTO entities
+               (id, name, canonical_name, entity_type, agent_id, mentions, pinned,
+                pinned_at, status, created_at, updated_at)
+               VALUES
+               ('entity-nicholai', 'Nicholai', 'nicholai', 'person', 'default', 10, 0,
+                NULL, 'active', '2026-04-19T00:00:00.000Z', '2026-04-19T00:00:00.000Z'),
+               ('entity-target', 'Target', 'target', 'concept', 'default', 3, 0,
+                NULL, 'active', '2026-04-19T00:00:00.000Z', '2026-04-19T00:00:00.000Z'),
+               ('entity-deleted-target', 'Deleted Target', 'deleted target', 'concept', 'default', 3, 0,
+                NULL, 'deleted', '2026-04-19T00:00:00.000Z', '2026-04-19T00:00:00.000Z'),
+               ('entity-deleted-pinned', 'Deleted Pinned', 'deleted pinned', 'concept', 'default', 3, 1,
+                '2026-04-20T00:00:00.000Z', 'deleted', '2026-04-19T00:00:00.000Z', '2026-04-20T00:00:00.000Z'),
+               ('entity-other-agent', 'Other Agent Entity', 'other agent entity', 'concept', 'other', 3, 0,
+                NULL, 'active', '2026-04-19T00:00:00.000Z', '2026-04-19T00:00:00.000Z');
+
+               INSERT INTO entity_aspects
+               (id, entity_id, agent_id, name, canonical_name, weight, status, created_at, updated_at)
+               VALUES
+               ('aspect-food', 'entity-nicholai', 'default', 'food', 'food', 0.8, 'active',
+                '2026-04-19T00:00:00.000Z', '2026-04-19T00:00:00.000Z'),
+               ('aspect-deleted', 'entity-nicholai', 'default', 'deleted', 'deleted', 0.9, 'deleted',
+                '2026-04-19T00:00:00.000Z', '2026-04-19T00:00:00.000Z');
+
+               INSERT INTO entity_attributes
+               (id, aspect_id, agent_id, kind, content, normalized_content,
+                group_key, claim_key, confidence, importance, status, created_at, updated_at)
+               VALUES
+               ('attr-active', 'aspect-food', 'default', 'attribute',
+                'Nicholai currently prefers Temaki Den.', 'nicholai currently prefers temaki den.',
+                'restaurants', 'favorite_restaurant', 0.9, 0.7, 'active',
+                '2026-04-19T00:00:00.000Z', '2026-04-19T00:00:00.000Z'),
+               ('attr-hidden', 'aspect-deleted', 'default', 'attribute',
+                'Deleted aspect attribute.', 'deleted aspect attribute.',
+                'hidden', 'hidden_claim', 0.9, 0.9, 'active',
+                '2026-04-19T00:00:00.000Z', '2026-04-19T00:00:00.000Z');
+
+               INSERT INTO entity_dependencies
+               (id, source_entity_id, target_entity_id, agent_id, aspect_id,
+                dependency_type, strength, reason, status, created_at, updated_at)
+               VALUES
+               ('dep-active', 'entity-nicholai', 'entity-target', 'default', 'aspect-food',
+                'depends_on', 0.83, 'Active dependency.', 'active',
+                '2026-04-19T00:00:00.000Z', '2026-04-19T00:00:00.000Z'),
+               ('dep-deleted', 'entity-nicholai', 'entity-target', 'default', 'aspect-food',
+                'depends_on', 0.99, 'Deleted dependency.', 'deleted',
+                '2026-04-19T00:00:00.000Z', '2026-04-19T00:00:00.000Z'),
+               ('dep-deleted-target', 'entity-nicholai', 'entity-deleted-target', 'default', 'aspect-food',
+                'depends_on', 0.95, 'Dependency to deleted target.', 'active',
+                '2026-04-19T00:00:00.000Z', '2026-04-19T00:00:00.000Z');"#,
+        )
+        .expect("seed legacy knowledge route fixture");
+    }
+
     fn seed_knowledge_health_hygiene_fixture(&self) {
         let conn = rusqlite::Connection::open(self.db_path()).expect("open replay db");
         conn.busy_timeout(Duration::from_secs(5)).unwrap();
@@ -2388,6 +2445,139 @@ async fn knowledge_endpoints() {
     assert_eq!(body["entityName"], "missing-entity");
     assert_eq!(body["direction"], "upstream");
     assert_eq!(body["impact"], json!([]));
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn knowledge_legacy_entity_routes_replay_ts_shape() {
+    let server = TestServer::start().await;
+    server.seed_knowledge_legacy_route_fixture();
+
+    let resp = server.get("/api/knowledge/entities?limit=10").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    let entities = body["items"].as_array().expect("knowledge entity items");
+    assert_eq!(entities.len(), 2);
+    assert_eq!(entities[0]["entity"]["id"], "entity-nicholai");
+    assert_eq!(entities[0]["entity"]["name"], "Nicholai");
+    assert_eq!(entities[0]["aspectCount"], 1);
+    assert_eq!(entities[0]["attributeCount"], 1);
+    assert_eq!(entities[0]["dependencyCount"], 1);
+    assert!(entities[0]["id"].is_null());
+    assert_eq!(entities[1]["entity"]["id"], "entity-target");
+
+    let resp = server.get("/api/knowledge/entities/missing-entity").await;
+    assert_eq!(resp.status(), 404);
+    let body = server.json(resp).await;
+    assert_eq!(body, json!({"error": "Entity not found"}));
+
+    let resp = server.get("/api/knowledge/entities/entity-nicholai").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["entity"]["name"], "Nicholai");
+    assert_eq!(body["aspectCount"], 1);
+    assert_eq!(body["attributeCount"], 1);
+    assert_eq!(body["dependencyCount"], 1);
+    assert_eq!(body["outgoingDependencyCount"], 1);
+    assert_eq!(body["incomingDependencyCount"], 0);
+
+    let resp = server
+        .get("/api/knowledge/entities/missing-entity/aspects")
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body, json!({"items": []}));
+
+    let resp = server
+        .get("/api/knowledge/entities/entity-nicholai/aspects")
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    let aspects = body["items"].as_array().expect("aspect items");
+    assert_eq!(aspects.len(), 1);
+    assert_eq!(aspects[0]["aspect"]["id"], "aspect-food");
+
+    let resp = server
+        .get("/api/knowledge/entities/entity-nicholai/aspects/aspect-deleted/attributes")
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(
+        body,
+        json!({
+            "items": [],
+            "limit": 50,
+            "offset": 0,
+        })
+    );
+
+    let resp = server
+        .get("/api/knowledge/entities/entity-nicholai/aspects/aspect-food/attributes")
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    let attributes = body["items"].as_array().expect("attribute items");
+    assert_eq!(attributes.len(), 1);
+    assert_eq!(attributes[0]["id"], "attr-active");
+
+    let resp = server
+        .get("/api/knowledge/entities/entity-nicholai/dependencies")
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    let dependencies = body["items"].as_array().expect("dependency items");
+    assert_eq!(dependencies.len(), 1);
+    assert_eq!(dependencies[0]["id"], "dep-active");
+
+    let resp = server
+        .get("/api/knowledge/entities/entity-nicholai/dependencies?direction=incoming")
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body, json!({"items": []}));
+
+    let resp = server.get("/api/knowledge/entities/pinned").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body, json!([]));
+
+    let resp = server
+        .post("/api/knowledge/entities/entity-other-agent/pin", json!({}))
+        .await;
+    assert_eq!(resp.status(), 404);
+    let body = server.json(resp).await;
+    assert_eq!(body, json!({"error": "Entity not found"}));
+
+    let resp = server
+        .post("/api/knowledge/entities/entity-nicholai/pin", json!({}))
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["pinned"], true);
+    assert!(body["pinnedAt"].as_str().is_some());
+
+    let resp = server.get("/api/knowledge/entities/pinned").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    let pinned = body.as_array().expect("pinned entity list");
+    assert_eq!(pinned.len(), 1);
+    assert_eq!(pinned[0]["id"], "entity-nicholai");
+    assert_eq!(pinned[0]["name"], "Nicholai");
+    assert!(pinned[0]["pinnedAt"].as_str().is_some());
+
+    let resp = server
+        .delete("/api/knowledge/entities/missing-entity/pin")
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body, json!({"pinned": false}));
+
+    let resp = server
+        .delete("/api/knowledge/entities/entity-nicholai/pin")
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body, json!({"pinned": false}));
 }
 
 #[tokio::test]
@@ -5565,7 +5755,7 @@ async fn knowledge_navigation_routes_replay_ts_shape() {
         .await;
     assert_eq!(resp.status(), 200);
     let body = server.json(resp).await;
-    assert_eq!(body["items"][0]["name"], "Nicholai");
+    assert_eq!(body["items"][0]["entity"]["name"], "Nicholai");
     assert_eq!(body["items"][0]["aspectCount"], 1);
 
     let resp = server
@@ -5582,7 +5772,7 @@ async fn knowledge_navigation_routes_replay_ts_shape() {
     assert_eq!(resp.status(), 200);
     let body = server.json(resp).await;
     assert_eq!(body["entity"]["name"], "Nicholai");
-    assert_eq!(body["items"][0]["canonicalName"], "food");
+    assert_eq!(body["items"][0]["aspect"]["canonicalName"], "food");
 
     let resp = server
         .get("/api/knowledge/navigation/groups?entity=Nicholai&aspect=food")
@@ -7744,40 +7934,47 @@ async fn remaining_public_routes_have_contract_replay_coverage() {
         .await;
     assert_status("POST /api/hooks/compaction-complete", &resp, &[200]);
 
+    let resp = server.get("/api/knowledge/entities/missing-entity").await;
+    assert_eq!(resp.status(), 404);
+    let body = server.json(resp).await;
+    assert_eq!(body, json!({"error": "Entity not found"}));
+
     let resp = server
         .get("/api/knowledge/entities/missing-entity/aspects")
         .await;
-    assert_status(
-        "GET /api/knowledge/entities/:id/aspects",
-        &resp,
-        &[200, 404],
-    );
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body, json!({"items": []}));
+
     let resp = server
         .get("/api/knowledge/entities/missing-entity/aspects/missing-aspect/attributes")
         .await;
-    assert_status(
-        "GET /api/knowledge/entities/:id/aspects/:aspectId/attributes",
-        &resp,
-        &[200, 404],
-    );
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body, json!({"items": [], "limit": 50, "offset": 0}));
+
     let resp = server
         .get("/api/knowledge/entities/missing-entity/dependencies")
         .await;
-    assert_status(
-        "GET /api/knowledge/entities/:id/dependencies",
-        &resp,
-        &[200, 404],
-    );
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body, json!({"items": []}));
+
     let resp = server.get("/api/knowledge/entities/pinned").await;
     assert_status("GET /api/knowledge/entities/pinned", &resp, &[200]);
     let resp = server
         .post("/api/knowledge/entities/missing-entity/pin", json!({}))
         .await;
-    assert_status("POST /api/knowledge/entities/:id/pin", &resp, &[200, 404]);
+    assert_eq!(resp.status(), 404);
+    let body = server.json(resp).await;
+    assert_eq!(body, json!({"error": "Entity not found"}));
+
     let resp = server
         .delete("/api/knowledge/entities/missing-entity/pin")
         .await;
-    assert_status("DELETE /api/knowledge/entities/:id/pin", &resp, &[200, 404]);
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body, json!({"pinned": false}));
 
     let resp = server.get("/api/marketplace/mcp/browse").await;
     assert_status("GET /api/marketplace/mcp/browse", &resp, &[200]);

@@ -10,7 +10,7 @@ use std::time::Instant;
 use rusqlite::{Connection, params};
 use serde::Serialize;
 use signet_core::error::CoreError;
-use signet_core::types::{EntityAspect, EntityAttribute, EntityDependency, TaskMeta};
+use signet_core::types::{Entity, EntityAspect, EntityAttribute, EntityDependency, TaskMeta};
 
 // ---------------------------------------------------------------------------
 // Canonical name helper
@@ -229,7 +229,13 @@ pub fn get_attributes_filtered(
     let mut sql = String::from(
         "SELECT ea.* FROM entity_attributes ea
          JOIN entity_aspects asp ON asp.id = ea.aspect_id
-         WHERE asp.entity_id = ?1 AND asp.id = ?2 AND asp.agent_id = ?3 AND ea.agent_id = ?3",
+         JOIN entities e ON e.id = asp.entity_id AND e.agent_id = asp.agent_id
+         WHERE asp.entity_id = ?1
+           AND asp.id = ?2
+           AND asp.agent_id = ?3
+           AND ea.agent_id = ?3
+           AND COALESCE(e.status, 'active') = 'active'
+           AND COALESCE(asp.status, 'active') = 'active'",
     );
     let mut bound: Vec<Box<dyn rusqlite::types::ToSql>> = vec![
         Box::new(filter.entity_id.to_string()),
@@ -444,7 +450,11 @@ pub fn get_dependencies_detailed(
          FROM entity_dependencies dep
          JOIN entities src ON src.id = dep.source_entity_id
          JOIN entities dst ON dst.id = dep.target_entity_id
-         WHERE dep.agent_id = ?1 AND {filter}
+         WHERE dep.agent_id = ?1
+           AND {filter}
+           AND COALESCE(dep.status, 'active') = 'active'
+           AND COALESCE(src.status, 'active') = 'active'
+           AND COALESCE(dst.status, 'active') = 'active'
          ORDER BY dep.strength DESC, dep.updated_at DESC"
     );
 
@@ -565,12 +575,7 @@ pub fn update_task_status(
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EntityListItem {
-    pub id: String,
-    pub name: String,
-    pub entity_type: String,
-    pub mentions: i64,
-    pub pinned: bool,
-    pub pinned_at: Option<String>,
+    pub entity: Entity,
     pub aspect_count: i64,
     pub attribute_count: i64,
     pub constraint_count: i64,
@@ -586,16 +591,26 @@ pub fn list_knowledge_entities(
     offset: usize,
 ) -> Result<Vec<EntityListItem>, CoreError> {
     let mut sql = String::from(
-        "SELECT e.id, e.name, e.entity_type, e.mentions, e.pinned, e.pinned_at,
+        "SELECT e.*,
                 COUNT(DISTINCT asp.id) as aspect_count,
                 COUNT(DISTINCT CASE WHEN attr.kind='attribute' AND attr.status='active' THEN attr.id END) as attribute_count,
                 COUNT(DISTINCT CASE WHEN attr.kind='constraint' AND attr.status='active' THEN attr.id END) as constraint_count,
-                COUNT(DISTINCT dep.id) as dependency_count
+                COUNT(DISTINCT CASE
+                    WHEN COALESCE(dep.status, 'active') = 'active'
+                     AND COALESCE(src.status, 'active') = 'active'
+                     AND COALESCE(dst.status, 'active') = 'active'
+                    THEN dep.id
+                END) as dependency_count
          FROM entities e
-         LEFT JOIN entity_aspects asp ON asp.entity_id = e.id AND asp.agent_id = e.agent_id
+         LEFT JOIN entity_aspects asp ON asp.entity_id = e.id
+           AND asp.agent_id = e.agent_id
+           AND COALESCE(asp.status, 'active') = 'active'
          LEFT JOIN entity_attributes attr ON attr.aspect_id = asp.id AND attr.agent_id = e.agent_id
          LEFT JOIN entity_dependencies dep ON dep.agent_id = e.agent_id AND (dep.source_entity_id = e.id OR dep.target_entity_id = e.id)
-         WHERE e.agent_id = ?1",
+         LEFT JOIN entities src ON src.id = dep.source_entity_id AND src.agent_id = dep.agent_id
+         LEFT JOIN entities dst ON dst.id = dep.target_entity_id AND dst.agent_id = dep.agent_id
+         WHERE e.agent_id = ?1
+           AND COALESCE(e.status, 'active') = 'active'",
     );
     let mut bound: Vec<Box<dyn rusqlite::types::ToSql>> = vec![Box::new(agent_id.to_string())];
 
@@ -625,12 +640,21 @@ pub fn list_knowledge_entities(
     let params = rusqlite::params_from_iter(bound.iter().map(|b| b.as_ref()));
     let rows = stmt.query_map(params, |row| {
         Ok(EntityListItem {
-            id: row.get("id")?,
-            name: row.get("name")?,
-            entity_type: row.get("entity_type")?,
-            mentions: row.get("mentions")?,
-            pinned: row.get::<_, i64>("pinned")? != 0,
-            pinned_at: row.get("pinned_at")?,
+            entity: Entity {
+                id: row.get("id")?,
+                name: row.get("name")?,
+                canonical_name: row.get("canonical_name")?,
+                entity_type: row.get("entity_type")?,
+                agent_id: row
+                    .get::<_, String>("agent_id")
+                    .unwrap_or_else(|_| "default".into()),
+                description: row.get("description")?,
+                mentions: row.get::<_, i64>("mentions").unwrap_or(0),
+                pinned: row.get::<_, i64>("pinned").unwrap_or(0) != 0,
+                pinned_at: row.get("pinned_at")?,
+                created_at: row.get("created_at")?,
+                updated_at: row.get("updated_at")?,
+            },
             aspect_count: row.get("aspect_count")?,
             attribute_count: row.get("attribute_count")?,
             constraint_count: row.get("constraint_count")?,
@@ -656,7 +680,11 @@ pub fn get_structural_density(
 ) -> Result<StructuralDensity, CoreError> {
     let aspects: i64 = conn
         .query_row(
-            "SELECT COUNT(*) FROM entity_aspects WHERE entity_id = ?1 AND agent_id = ?2",
+            "SELECT COUNT(*)
+             FROM entity_aspects
+             WHERE entity_id = ?1
+               AND agent_id = ?2
+               AND COALESCE(status, 'active') = 'active'",
             params![entity_id, agent_id],
             |r| r.get(0),
         )
@@ -665,7 +693,11 @@ pub fn get_structural_density(
         .query_row(
             "SELECT COUNT(*) FROM entity_attributes ea
              JOIN entity_aspects asp ON asp.id = ea.aspect_id
-             WHERE asp.entity_id = ?1 AND ea.agent_id = ?2 AND ea.kind = 'attribute' AND ea.status = 'active'",
+             WHERE asp.entity_id = ?1
+               AND ea.agent_id = ?2
+               AND COALESCE(asp.status, 'active') = 'active'
+               AND ea.kind = 'attribute'
+               AND ea.status = 'active'",
             params![entity_id, agent_id],
             |r| r.get(0),
         )
@@ -674,15 +706,26 @@ pub fn get_structural_density(
         .query_row(
             "SELECT COUNT(*) FROM entity_attributes ea
              JOIN entity_aspects asp ON asp.id = ea.aspect_id
-             WHERE asp.entity_id = ?1 AND ea.agent_id = ?2 AND ea.kind = 'constraint' AND ea.status = 'active'",
+             WHERE asp.entity_id = ?1
+               AND ea.agent_id = ?2
+               AND COALESCE(asp.status, 'active') = 'active'
+               AND ea.kind = 'constraint'
+               AND ea.status = 'active'",
             params![entity_id, agent_id],
             |r| r.get(0),
         )
         .unwrap_or(0);
     let deps: i64 = conn
         .query_row(
-            "SELECT COUNT(*) FROM entity_dependencies
-             WHERE agent_id = ?1 AND (source_entity_id = ?2 OR target_entity_id = ?2)",
+            "SELECT COUNT(*)
+             FROM entity_dependencies dep
+             JOIN entities src ON src.id = dep.source_entity_id AND src.agent_id = dep.agent_id
+             JOIN entities dst ON dst.id = dep.target_entity_id AND dst.agent_id = dep.agent_id
+             WHERE dep.agent_id = ?1
+               AND (dep.source_entity_id = ?2 OR dep.target_entity_id = ?2)
+               AND COALESCE(dep.status, 'active') = 'active'
+               AND COALESCE(src.status, 'active') = 'active'
+               AND COALESCE(dst.status, 'active') = 'active'",
             params![agent_id, entity_id],
             |r| r.get(0),
         )
@@ -699,7 +742,6 @@ pub fn get_structural_density(
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AspectWithCounts {
-    #[serde(flatten)]
     pub aspect: EntityAspect,
     pub attribute_count: i64,
     pub constraint_count: i64,
@@ -717,6 +759,7 @@ pub fn get_aspects_with_counts(
          FROM entity_aspects asp
          LEFT JOIN entity_attributes attr ON attr.aspect_id = asp.id AND attr.agent_id = asp.agent_id
          WHERE asp.entity_id = ?1 AND asp.agent_id = ?2
+           AND COALESCE(asp.status, 'active') = 'active'
          GROUP BY asp.id
          ORDER BY asp.weight DESC, asp.name ASC",
     )?;

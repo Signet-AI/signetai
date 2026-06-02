@@ -219,7 +219,10 @@ pub fn unpin(conn: &Connection, id: &str, agent_id: &str, now: &str) -> Result<(
 
 pub fn list_pinned(conn: &Connection, agent_id: &str) -> Result<Vec<Entity>, CoreError> {
     let mut stmt = conn.prepare_cached(
-        "SELECT * FROM entities WHERE agent_id = ?1 AND pinned = 1
+        "SELECT * FROM entities
+         WHERE agent_id = ?1
+           AND pinned = 1
+           AND COALESCE(status, 'active') = 'active'
          ORDER BY pinned_at DESC, updated_at DESC, name ASC",
     )?;
     let rows = stmt.query_map(params![agent_id], row_to_entity)?;

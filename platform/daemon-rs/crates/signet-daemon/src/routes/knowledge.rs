@@ -207,22 +207,34 @@ pub async fn get_entity_detail(
     let result = state
         .pool
         .read(move |conn| {
-            let entity = signet_core::queries::entity::get(conn, &id)?;
+            let entity = get_active_entity_by_id(conn, &id, &agent_id)?;
             let Some(entity) = entity else {
                 return Ok(serde_json::json!({"_code": 404}));
             };
             let density = graph::get_structural_density(conn, &id, &agent_id)?;
             let incoming: i64 = conn
                 .query_row(
-                    "SELECT COUNT(*) FROM entity_dependencies WHERE target_entity_id = ?1 AND agent_id = ?2",
-                    rusqlite::params![id, agent_id],
+                    "SELECT COUNT(*)
+                     FROM entity_dependencies dep
+                     JOIN entities src ON src.id = dep.source_entity_id AND src.agent_id = dep.agent_id
+                     WHERE dep.target_entity_id = ?1
+                       AND dep.agent_id = ?2
+                       AND COALESCE(dep.status, 'active') = 'active'
+                       AND COALESCE(src.status, 'active') = 'active'",
+                    rusqlite::params![&id, &agent_id],
                     |r| r.get(0),
                 )
                 .unwrap_or(0);
             let outgoing: i64 = conn
                 .query_row(
-                    "SELECT COUNT(*) FROM entity_dependencies WHERE source_entity_id = ?1 AND agent_id = ?2",
-                    rusqlite::params![id, agent_id],
+                    "SELECT COUNT(*)
+                     FROM entity_dependencies dep
+                     JOIN entities dst ON dst.id = dep.target_entity_id AND dst.agent_id = dep.agent_id
+                     WHERE dep.source_entity_id = ?1
+                       AND dep.agent_id = ?2
+                       AND COALESCE(dep.status, 'active') = 'active'
+                       AND COALESCE(dst.status, 'active') = 'active'",
+                    rusqlite::params![&id, &agent_id],
                     |r| r.get(0),
                 )
                 .unwrap_or(0);
@@ -246,7 +258,7 @@ pub async fn get_entity_detail(
             if code == Some(404) {
                 return (
                     StatusCode::NOT_FOUND,
-                    Json(serde_json::json!({"error": "entity not found"})),
+                    Json(serde_json::json!({"error": "Entity not found"})),
                 )
                     .into_response();
             }
@@ -454,6 +466,41 @@ fn row_to_navigation_attribute(row: &rusqlite::Row<'_>) -> rusqlite::Result<Navi
         created_at: row.get("created_at")?,
         updated_at: row.get("updated_at")?,
     })
+}
+
+fn get_active_entity_by_id(
+    conn: &rusqlite::Connection,
+    id: &str,
+    agent_id: &str,
+) -> Result<Option<Entity>, signet_core::error::CoreError> {
+    conn.query_row(
+        "SELECT *
+         FROM entities
+         WHERE id = ?1
+           AND agent_id = ?2
+           AND COALESCE(status, 'active') = 'active'
+         LIMIT 1",
+        rusqlite::params![id, agent_id],
+        |row| {
+            Ok(Entity {
+                id: row.get("id")?,
+                name: row.get("name")?,
+                canonical_name: row.get("canonical_name")?,
+                entity_type: row.get("entity_type")?,
+                agent_id: row
+                    .get::<_, String>("agent_id")
+                    .unwrap_or_else(|_| "default".into()),
+                description: row.get("description")?,
+                mentions: row.get::<_, i64>("mentions").unwrap_or(0),
+                pinned: row.get::<_, i64>("pinned").unwrap_or(0) != 0,
+                pinned_at: row.get("pinned_at")?,
+                created_at: row.get("created_at")?,
+                updated_at: row.get("updated_at")?,
+            })
+        },
+    )
+    .optional()
+    .map_err(Into::into)
 }
 
 fn resolve_entity_by_name(
@@ -1200,13 +1247,15 @@ pub async fn pin_entity(
     let result = state
         .pool
         .write(signet_core::db::Priority::High, move |conn| {
-            let entity = signet_core::queries::entity::get(conn, &id)?;
-            if entity.is_none() {
-                return Ok(serde_json::json!({"_code": 404}));
-            }
             let ts = chrono::Utc::now().to_rfc3339();
             signet_core::queries::entity::pin(conn, &id, &agent_id, &ts)?;
-            Ok(serde_json::json!({"pinned": true, "pinnedAt": ts}))
+            let Some(entity) = get_active_entity_by_id(conn, &id, &agent_id)? else {
+                return Ok(serde_json::json!({"_code": 404}));
+            };
+            Ok(serde_json::json!({
+                "pinned": true,
+                "pinnedAt": entity.pinned_at,
+            }))
         })
         .await;
 
@@ -1215,7 +1264,7 @@ pub async fn pin_entity(
             if val.get("_code").and_then(|c| c.as_u64()) == Some(404) {
                 return (
                     StatusCode::NOT_FOUND,
-                    Json(serde_json::json!({"error": "entity not found"})),
+                    Json(serde_json::json!({"error": "Entity not found"})),
                 )
                     .into_response();
             }
