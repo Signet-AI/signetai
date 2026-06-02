@@ -20,3 +20,6 @@ sha2 = { workspace = true }
 rusqlite = { workspace = true }
 libc = "0.2"
 tiktoken-rs = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt", "macros"] }

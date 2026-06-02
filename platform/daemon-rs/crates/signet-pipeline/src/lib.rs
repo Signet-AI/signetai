@@ -1,3 +1,4 @@
+pub mod decision;
 pub mod dep_synthesis;
 pub mod document;
 pub mod embedding;
@@ -6,7 +7,9 @@ pub mod maintenance;
 pub mod memory_lineage;
 pub mod provider;
 pub mod retention;
+pub mod significance_gate;
 pub mod structural;
 pub mod summary;
 pub mod synthesis;
 pub mod worker;
+pub mod write_gate;

@@ -14,8 +14,11 @@ use tracing::{info, warn};
 use signet_core::db::DbPool;
 use signet_services::graph;
 
+use crate::decision::{self, DecisionConfig};
 use crate::extraction;
 use crate::provider::{GenerateOpts, LlmProvider, LlmSemaphore};
+use crate::significance_gate::{self, SignificanceConfig};
+use crate::write_gate::{self, WriteGateConfig};
 
 // ---------------------------------------------------------------------------
 // Worker config
@@ -35,6 +38,12 @@ pub struct WorkerConfig {
     pub shadow_mode: bool,
     pub graph_enabled: bool,
     pub structural_enabled: bool,
+    /// Significance gate: skips extraction for trivial sessions.
+    pub significance: SignificanceConfig,
+    /// Decision engine: evaluates extracted facts against existing memories.
+    pub decision: DecisionConfig,
+    /// Write gate: adaptive surprisal threshold for candidate memories.
+    pub write_gate: WriteGateConfig,
 }
 
 impl Default for WorkerConfig {
@@ -51,6 +60,22 @@ impl Default for WorkerConfig {
             shadow_mode: false,
             graph_enabled: true,
             structural_enabled: true,
+            significance: SignificanceConfig {
+                enabled: true,
+                min_turns: 5,
+                min_entity_overlap: 1,
+                novelty_threshold: 0.15,
+            },
+            decision: DecisionConfig {
+                alpha: 0.6,
+                min_score: 0.3,
+                timeout_ms: 30_000,
+            },
+            write_gate: WriteGateConfig {
+                enabled: true,
+                threshold: 0.3,
+                continuity_discount: 0.1,
+            },
         }
     }
 }
@@ -421,20 +446,42 @@ async fn process_extract(
         .to_string();
     let source_memory_id = memory_id.clone();
 
-    let (content, agent_id) = pool
-        .read(move |conn| {
-            let mut stmt = conn.prepare_cached(
-                "SELECT content, COALESCE(agent_id, 'default') FROM memories
-                 WHERE id = ?1 AND COALESCE(is_deleted, 0) = 0",
-            )?;
-            let content: Option<(String, String)> = stmt
-                .query_row(rusqlite::params![memory_id], |r| Ok((r.get(0)?, r.get(1)?)))
-                .ok();
-            Ok(content)
-        })
-        .await
-        .map_err(|e| e.to_string())?
-        .ok_or("memory not found or deleted")?;
+    let (content, agent_id, extraction_status, source_project, source_scope, source_visibility) =
+        pool
+            .read(move |conn| {
+                let mut stmt = conn.prepare_cached(
+                    "SELECT content, COALESCE(agent_id, 'default'),
+                            COALESCE(extraction_status, 'none'),
+                            project, scope, COALESCE(visibility, 'global')
+                     FROM memories
+                     WHERE id = ?1 AND COALESCE(is_deleted, 0) = 0",
+                )?;
+                let row: Option<(String, String, String, Option<String>, Option<String>, String)> =
+                    stmt.query_row(rusqlite::params![memory_id], |r| {
+                        Ok((
+                            r.get(0)?,
+                            r.get(1)?,
+                            r.get(2)?,
+                            r.get(3)?,
+                            r.get(4)?,
+                            r.get(5)?,
+                        ))
+                    })
+                    .ok();
+                Ok(row)
+            })
+            .await
+            .map_err(|e| e.to_string())?
+            .ok_or("memory not found or deleted")?;
+
+    // Controlled-write gate: skip already-extracted memories
+    if extraction_status == "complete" || extraction_status == "completed" {
+        return Ok(JobResult {
+            facts_extracted: 0,
+            entities_extracted: 0,
+            warnings: vec!["already extracted, skipping".into()],
+        });
+    }
 
     if content.trim().len() < 20 {
         return Ok(JobResult {
@@ -444,7 +491,30 @@ async fn process_extract(
         });
     }
 
-    // Build prompt and call LLM (semaphore-guarded)
+    // --- Stage 1: Significance gate ---
+    // Skip extraction for trivial sessions (saves LLM cost).
+    let sig_result = significance_gate::assess_significance(
+        &content,
+        pool,
+        &agent_id,
+        &config.significance,
+    )
+    .await;
+
+    if !sig_result.significant {
+        // Mark memory as extracted (raw transcript is already persisted)
+        mark_extraction_complete(pool, &source_memory_id).await?;
+        return Ok(JobResult {
+            facts_extracted: 0,
+            entities_extracted: 0,
+            warnings: vec![format!(
+                "significance_gate: {}",
+                sig_result.reason
+            )],
+        });
+    }
+
+    // --- Stage 2: LLM extraction ---
     let prompt = extraction::build_prompt(&content);
     let opts = GenerateOpts {
         timeout_ms: Some(config.extraction_timeout_ms),
@@ -467,16 +537,94 @@ async fn process_extract(
         .filter(|f| f.confidence >= config.min_confidence)
         .collect();
 
-    let facts_count = facts.len();
     let entities_count = result.entities.len();
-    let warnings = result.warnings;
+    let mut warnings = result.warnings;
+    let mut facts_written = 0_usize;
 
+    // --- Stage 3: Shadow decisions on extracted facts ---
+    if !config.shadow_mode && !facts.is_empty() {
+        let decisions = decision::run_shadow_decisions(
+            &facts,
+            pool,
+            provider.as_ref(),
+            &config.decision,
+            &agent_id,
+            source_scope.as_deref(),
+            &source_visibility,
+            &std::collections::HashMap::new(), // No pre-computed embeddings yet
+        )
+        .await;
+
+        warnings.extend(decisions.warnings);
+
+        // Process proposals: apply write gate to ADD proposals, persist entities
+        for proposal in &decisions.proposals {
+            match proposal.action {
+                signet_core::types::DecisionAction::Add => {
+                    // Find the source fact for this proposal
+                    let fact = facts
+                        .iter()
+                        .find(|f| {
+                            f.confidence == proposal.confidence
+                                || proposal.reason.contains(&f.content)
+                        })
+                        .or_else(|| facts.first());
+
+                    let Some(fact) = fact else { continue };
+
+                    // --- Stage 4: Write gate ---
+                    let gate_input = write_gate::WriteGateInput {
+                        agent_id: agent_id.clone(),
+                        source_memory_id: source_memory_id.clone(),
+                        source_project: source_project.clone(),
+                        source_scope: source_scope.clone(),
+                        source_visibility: source_visibility.clone(),
+                        fact_type: fact.fact_type.clone(),
+                        content: fact.content.clone(),
+                        vector: None, // Embeddings computed on-demand later
+                    };
+                    let gate_result =
+                        write_gate::assess_write_gate(pool, &config.write_gate, &gate_input)
+                            .await;
+
+                    if !gate_result.pass {
+                        warnings.push(format!(
+                            "write_gate_blocked: surprisal={:?} threshold={}",
+                            gate_result.surprise, gate_result.threshold
+                        ));
+                        continue;
+                    }
+
+                    facts_written += 1;
+                }
+                signet_core::types::DecisionAction::Update => {
+                    // Update proposals are informational in shadow mode
+                    facts_written += 1;
+                }
+                signet_core::types::DecisionAction::Delete | signet_core::types::DecisionAction::None => {
+                    // No write needed
+                }
+            }
+        }
+    } else if config.shadow_mode {
+        // Shadow mode: just log, don't write
+        facts_written = facts.len();
+        warnings.push("shadow_mode: decisions not applied".into());
+    } else {
+        // No facts to decide on
+        facts_written = facts.len();
+    }
+
+    // Persist extracted entities if graph is enabled
     if config.graph_enabled && !config.shadow_mode && !result.entities.is_empty() {
         persist_extracted_entities(pool, &source_memory_id, &agent_id, &result.entities).await?;
     }
 
+    // Mark memory as extracted
+    mark_extraction_complete(pool, &source_memory_id).await?;
+
     Ok(JobResult {
-        facts_extracted: facts_count,
+        facts_extracted: facts_written,
         entities_extracted: entities_count,
         warnings,
     })
@@ -518,6 +666,23 @@ async fn persist_extracted_entities(
     .await
     .map(|_| ())
     .map_err(|error| error.to_string())
+}
+
+/// Mark a memory's extraction status as completed.
+async fn mark_extraction_complete(pool: &DbPool, memory_id: &str) -> Result<(), String> {
+    let mid = memory_id.to_string();
+    pool.write(signet_core::db::Priority::Low, move |conn| {
+        let ts = chrono::Utc::now().to_rfc3339();
+        conn.execute(
+            "UPDATE memories SET extraction_status = 'completed', updated_at = ?1
+             WHERE id = ?2 AND COALESCE(extraction_status, 'none') NOT IN ('complete', 'completed')",
+            rusqlite::params![ts, mid],
+        )?;
+        Ok(serde_json::Value::Null)
+    })
+    .await
+    .map(|_| ())
+    .map_err(|e| format!("failed to mark extraction status: {e}"))
 }
 
 // ---------------------------------------------------------------------------
