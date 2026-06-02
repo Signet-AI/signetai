@@ -840,21 +840,27 @@ pub async fn get(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> 
     let result = state
         .pool
         .read(move |conn| {
-            conn.query_row(
+            let connector = conn
+                .query_row(
                 "SELECT id, provider, display_name, config_json, cursor_json, status, last_sync_at, last_error, created_at, updated_at, settings_json, enabled
                  FROM connectors WHERE id = ?1",
                 [&id],
                 connector_row_json,
-            )
-            .map_err(|_| signet_core::CoreError::NotFound("connector".into()))
+                )
+                .optional()?;
+            connector.ok_or_else(|| signet_core::CoreError::NotFound("connector".into()))
         })
         .await;
 
     match result {
         Ok(val) => (StatusCode::OK, Json(val)),
-        Err(_) => (
+        Err(signet_core::CoreError::NotFound(_)) => (
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "connector not found"})),
+            Json(serde_json::json!({"error": "Connector not found"})),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("{e}")})),
         ),
     }
 }
@@ -919,8 +925,23 @@ pub async fn delete(
     let result = state
         .pool
         .write(signet_core::db::Priority::Low, move |conn| {
+            let Some(record) = connector_sync_record(conn, &id)? else {
+                return Err(CoreError::NotFound("connector".into()));
+            };
             if cascade {
-                conn.execute("DELETE FROM documents WHERE connector_id = ?1", [&id])?;
+                if let Some(root_path) =
+                    connector_root_path(&record).map_err(signet_core::CoreError::Invalid)?
+                {
+                    let now = Utc::now().to_rfc3339();
+                    conn.execute(
+                        "UPDATE documents
+                         SET status = 'deleted',
+                             error = 'Connector removed',
+                             updated_at = ?1
+                         WHERE source_url LIKE ?2 ESCAPE '\\'",
+                        rusqlite::params![now, escape_like_prefix(&root_path)],
+                    )?;
+                }
             }
             let changed = conn.execute("DELETE FROM connectors WHERE id = ?1", [&id])?;
             Ok(serde_json::json!({"deleted": changed > 0}))
@@ -929,9 +950,13 @@ pub async fn delete(
 
     match result {
         Ok(val) => (StatusCode::OK, Json(val)),
-        Err(e) => (
+        Err(signet_core::CoreError::NotFound(_)) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Connector not found"})),
+        ),
+        Err(_) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": format!("{e}")})),
+            Json(serde_json::json!({"error": "Failed to remove connector"})),
         ),
     }
 }

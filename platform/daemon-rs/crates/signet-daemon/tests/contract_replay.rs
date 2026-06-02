@@ -3744,6 +3744,79 @@ async fn connector_health_and_sync_routes_replay_ts_outcomes() {
 
 #[tokio::test]
 #[ignore = "requires built daemon binary"]
+async fn connectors_delete_replays_ts_missing_and_cascade_contract() {
+    let server = TestServer::start().await;
+    server.seed_gdrive_connector_health_fixture();
+
+    let resp = server.get("/api/connectors/missing-connector").await;
+    assert_eq!(resp.status(), 404);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "Connector not found");
+
+    let resp = server.delete("/api/connectors/missing-connector").await;
+    assert_eq!(resp.status(), 404);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "Connector not found");
+
+    let resp = server
+        .delete("/api/connectors/connector-gdrive?cascade=true")
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["deleted"], true);
+
+    let conn = rusqlite::Connection::open(server.db_path()).expect("open replay db");
+    let connector_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM connectors WHERE id = 'connector-gdrive'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("connector count");
+    assert_eq!(connector_count, 0);
+
+    let root_docs: Vec<(String, String, String)> = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, status, error
+                 FROM documents
+                 WHERE id IN ('doc-vault-a', 'doc-vault-b')
+                 ORDER BY id",
+            )
+            .expect("prepare root docs query");
+        stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .expect("query root docs")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("collect root docs")
+    };
+    assert_eq!(
+        root_docs,
+        vec![
+            (
+                "doc-vault-a".to_string(),
+                "deleted".to_string(),
+                "Connector removed".to_string()
+            ),
+            (
+                "doc-vault-b".to_string(),
+                "deleted".to_string(),
+                "Connector removed".to_string()
+            ),
+        ]
+    );
+
+    let other: (String, Option<String>) = conn
+        .query_row(
+            "SELECT status, error FROM documents WHERE id = 'doc-other'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("other document");
+    assert_eq!(other, ("queued".to_string(), None));
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
 async fn filesystem_connector_sync_replays_ts_document_ingest_side_effects() {
     let server = TestServer::start().await;
     let root = server.seed_filesystem_connector_sync_fixture();
@@ -7354,7 +7427,9 @@ async fn remaining_public_routes_have_contract_replay_coverage() {
     let resp = server.post("/api/connectors", json!({})).await;
     assert_status("POST /api/connectors", &resp, &[400]);
     let resp = server.delete("/api/connectors/missing-connector").await;
-    assert_status("DELETE /api/connectors/:id", &resp, &[200, 404]);
+    assert_eq!(resp.status(), 404);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "Connector not found");
 
     let resp = server.post("/api/cross-agent/messages", json!({})).await;
     assert_status("POST /api/cross-agent/messages", &resp, &[400]);
