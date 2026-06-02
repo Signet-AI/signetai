@@ -1,9 +1,12 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use notify::{RecursiveMode, Watcher};
+use sha2::{Digest, Sha256};
+use signet_core::db::Priority;
+use signet_services::transactions;
 use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, error, info, warn};
 
@@ -12,6 +15,7 @@ use crate::state::AppState;
 const SYNC_DEBOUNCE_MS: u64 = 2_000;
 const COMMIT_DEBOUNCE_MS: u64 = 5_000;
 const GIT_AUTOCOMMIT_TIMEOUT_MS: u64 = 30_000;
+const MEMORY_IMPORT_POLL_MS: u64 = 30_000;
 const CONFIG_FILES: [&str; 3] = ["agent.yaml", "AGENT.yaml", "config.yaml"];
 const SYNC_TRIGGER_FILES: [&str; 8] = [
     "agent.yaml",
@@ -43,6 +47,13 @@ const SIGNET_GIT_PROTECTED_PATHS: [&str; 5] = [
 ];
 const SIGNET_BLOCK_START: &str = "<!-- SIGNET:START -->";
 const SIGNET_BLOCK_END: &str = "<!-- SIGNET:END -->";
+const MEMORY_BACKUP_PREFIXES: [&str; 3] = ["MEMORY.backup-", "MEMORY.bak-", "MEMORY.pre-"];
+const MEMORY_ARTIFACT_SUFFIXES: [&str; 4] = [
+    "--summary.md",
+    "--transcript.md",
+    "--compaction.md",
+    "--manifest.md",
+];
 
 pub(crate) struct FileWatcherHandle {
     shutdown: oneshot::Sender<()>,
@@ -110,9 +121,13 @@ async fn file_watcher_loop(
     let mut pending = false;
     let mut pending_git_changes: Vec<PathBuf> = Vec::new();
     let mut observed_files = snapshot_watched_files(&base);
+    let mut ingested_memory_files: HashMap<PathBuf, String> = HashMap::new();
     let mut reconcile_interval = tokio::time::interval(Duration::from_millis(SYNC_DEBOUNCE_MS));
     reconcile_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     reconcile_interval.tick().await;
+    let mut memory_import_interval =
+        tokio::time::interval(Duration::from_millis(memory_import_poll_ms()));
+    memory_import_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut sleep = Box::pin(tokio::time::sleep(Duration::from_secs(24 * 60 * 60)));
     sleep
         .as_mut()
@@ -176,8 +191,422 @@ async fn file_watcher_loop(
                 }
                 run_workspace_sync(&base).await;
             }
+            _ = memory_import_interval.tick() => {
+                import_existing_memory_files(&state, &base, &mut ingested_memory_files).await;
+            }
             else => break,
         }
+    }
+}
+
+fn memory_import_poll_ms() -> u64 {
+    std::env::var("SIGNET_MEMORY_IMPORT_POLL_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(MEMORY_IMPORT_POLL_MS)
+}
+
+async fn import_existing_memory_files(
+    state: &AppState,
+    base: &Path,
+    ingested: &mut HashMap<PathBuf, String>,
+) {
+    if mutations_frozen(state) {
+        debug!("legacy memory markdown import skipped because mutations are frozen");
+        return;
+    }
+
+    let memory_dir = base.join("memory");
+    let entries = match std::fs::read_dir(&memory_dir) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            debug!("memory directory does not exist, skipping initial import");
+            return;
+        }
+        Err(err) => {
+            error!(error = %err, "failed to read memory directory");
+            return;
+        }
+    };
+
+    let mut files = entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| is_memory_import_candidate(&memory_dir, path))
+        .collect::<Vec<_>>();
+    files.sort();
+    if files.is_empty() {
+        debug!("legacy memory markdown import found no importable files");
+        return;
+    }
+
+    let mut total = 0usize;
+    for path in files {
+        total += ingest_memory_markdown(state, &path, ingested).await;
+    }
+    if total > 0 {
+        info!(
+            chunks = total,
+            "imported existing legacy memory markdown files"
+        );
+    }
+}
+
+fn mutations_frozen(state: &AppState) -> bool {
+    state
+        .config
+        .manifest
+        .memory
+        .as_ref()
+        .and_then(|memory| memory.pipeline_v2.as_ref())
+        .map(|pipeline| pipeline.mutations_frozen)
+        .unwrap_or(false)
+}
+
+fn is_memory_import_candidate(memory_dir: &Path, path: &Path) -> bool {
+    if !path.starts_with(memory_dir) || !path.is_file() {
+        return false;
+    }
+    if path.extension().and_then(|ext| ext.to_str()) != Some("md") {
+        return false;
+    }
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    name != "MEMORY.md" && !is_memory_backup_filename(name) && !is_memory_artifact_filename(name)
+}
+
+fn is_memory_backup_filename(name: &str) -> bool {
+    MEMORY_BACKUP_PREFIXES
+        .iter()
+        .any(|prefix| name.starts_with(prefix) && name.ends_with(".md"))
+}
+
+fn is_memory_artifact_filename(name: &str) -> bool {
+    MEMORY_ARTIFACT_SUFFIXES
+        .iter()
+        .any(|suffix| name.ends_with(suffix))
+}
+
+async fn ingest_memory_markdown(
+    state: &AppState,
+    path: &Path,
+    ingested: &mut HashMap<PathBuf, String>,
+) -> usize {
+    if path.file_name().and_then(|name| name.to_str()) == Some("MEMORY.md") {
+        return 0;
+    }
+    let content = match std::fs::read_to_string(path) {
+        Ok(content) => content,
+        Err(err) => {
+            error!(
+                path = %path.display(),
+                error = %err,
+                "failed to read legacy memory markdown file"
+            );
+            return 0;
+        }
+    };
+    if content.trim().is_empty() {
+        return 0;
+    }
+
+    let content_hash = sha256_hex_prefix(&content, 16);
+    if ingested.get(path) == Some(&content_hash) {
+        debug!(path = %path.display(), "legacy memory markdown file unchanged, skipping");
+        return 0;
+    }
+    ingested.insert(path.to_path_buf(), content_hash);
+
+    let filename = path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("memory");
+    let date = filename.get(..10).filter(|value| is_iso_date_prefix(value));
+    let plans = chunk_markdown_hierarchically(&content, 512)
+        .into_iter()
+        .filter_map(|chunk| {
+            let body = if !chunk.header.is_empty() && chunk.text.starts_with(&chunk.header) {
+                chunk.text[chunk.header.len()..].trim()
+            } else {
+                chunk.text.trim()
+            };
+            if body.len() < 80 {
+                return None;
+            }
+            let chunk_key = format!("openclaw:{filename}:{}", sha256_hex_prefix(&chunk.text, 16));
+            let level_tag = match chunk.level {
+                MemoryMarkdownChunkLevel::Section => "hierarchical-section",
+                MemoryMarkdownChunkLevel::Paragraph => "hierarchical-paragraph",
+            };
+            Some(MemoryImportPlan {
+                content: chunk.text,
+                importance: match chunk.level {
+                    MemoryMarkdownChunkLevel::Section => 0.65,
+                    MemoryMarkdownChunkLevel::Paragraph => 0.55,
+                },
+                source_id: chunk_key,
+                tags: vec![
+                    "openclaw".to_string(),
+                    "memory-log".to_string(),
+                    date.unwrap_or("named").to_string(),
+                    filename.to_string(),
+                    level_tag.to_string(),
+                ],
+            })
+        })
+        .collect::<Vec<_>>();
+
+    if plans.is_empty() {
+        return 0;
+    }
+
+    let result = state
+        .pool
+        .write_tx(Priority::High, move |conn| {
+            let mut imported = 0usize;
+            for plan in &plans {
+                transactions::ingest(
+                    conn,
+                    &transactions::IngestInput {
+                        content: &plan.content,
+                        memory_type: "fact",
+                        tags: plan.tags.clone(),
+                        who: Some("openclaw-memory"),
+                        why: None,
+                        project: None,
+                        importance: plan.importance,
+                        pinned: false,
+                        source_type: Some("openclaw-memory-log"),
+                        source_id: Some(&plan.source_id),
+                        source_path: None,
+                        idempotency_key: Some(&plan.source_id),
+                        runtime_path: None,
+                        actor: "api",
+                        agent_id: "default",
+                        visibility: "global",
+                        scope: None,
+                    },
+                )?;
+                imported += 1;
+            }
+            Ok(serde_json::json!({ "imported": imported }))
+        })
+        .await;
+
+    match result {
+        Ok(value) => {
+            let imported = value
+                .get("imported")
+                .and_then(serde_json::Value::as_u64)
+                .and_then(|count| usize::try_from(count).ok())
+                .unwrap_or(0);
+            if imported > 0 {
+                info!(
+                    path = %path.display(),
+                    chunks = imported,
+                    filename,
+                    "ingested legacy memory markdown file"
+                );
+            }
+            imported
+        }
+        Err(err) => {
+            error!(
+                path = %path.display(),
+                error = %err,
+                "failed to ingest legacy memory markdown file"
+            );
+            0
+        }
+    }
+}
+
+#[derive(Clone)]
+struct MemoryImportPlan {
+    content: String,
+    importance: f64,
+    source_id: String,
+    tags: Vec<String>,
+}
+
+#[derive(Clone, Copy)]
+enum MemoryMarkdownChunkLevel {
+    Section,
+    Paragraph,
+}
+
+struct MemoryMarkdownChunk {
+    text: String,
+    header: String,
+    level: MemoryMarkdownChunkLevel,
+}
+
+fn chunk_markdown_hierarchically(content: &str, max_tokens: usize) -> Vec<MemoryMarkdownChunk> {
+    let mut chunks = Vec::new();
+    let mut current_header = String::new();
+    let mut current_content: Vec<String> = Vec::new();
+
+    for line in content.split('\n') {
+        if is_markdown_heading(line) {
+            flush_memory_markdown_section(
+                &mut chunks,
+                &current_header,
+                &current_content,
+                max_tokens,
+            );
+            current_header = line.to_string();
+            current_content.clear();
+        } else {
+            current_content.push(line.to_string());
+        }
+    }
+    flush_memory_markdown_section(&mut chunks, &current_header, &current_content, max_tokens);
+
+    if chunks.is_empty() && !content.trim().is_empty() {
+        chunks.push(MemoryMarkdownChunk {
+            text: content.trim().to_string(),
+            header: String::new(),
+            level: MemoryMarkdownChunkLevel::Section,
+        });
+    }
+    chunks
+}
+
+fn flush_memory_markdown_section(
+    chunks: &mut Vec<MemoryMarkdownChunk>,
+    header: &str,
+    content: &[String],
+    max_tokens: usize,
+) {
+    if content.is_empty() {
+        return;
+    }
+    let section = content.join("\n").trim().to_string();
+    if section.is_empty() {
+        return;
+    }
+    if estimate_tokens(&section) <= max_tokens {
+        chunks.push(MemoryMarkdownChunk {
+            text: if header.is_empty() {
+                section
+            } else {
+                format!("{header}\n\n{section}")
+            },
+            header: header.to_string(),
+            level: MemoryMarkdownChunkLevel::Section,
+        });
+        return;
+    }
+
+    let mut chunk_paragraphs: Vec<String> = Vec::new();
+    let mut chunk_tokens = if header.is_empty() {
+        0
+    } else {
+        estimate_tokens(header)
+    };
+    for paragraph in section.split("\n\n") {
+        let paragraph = paragraph.trim();
+        if paragraph.is_empty() {
+            continue;
+        }
+        let paragraph_tokens = estimate_tokens(paragraph);
+        if paragraph_tokens > max_tokens {
+            flush_memory_markdown_paragraph_chunk(
+                chunks,
+                header,
+                &mut chunk_paragraphs,
+                &mut chunk_tokens,
+            );
+            chunks.push(MemoryMarkdownChunk {
+                text: if header.is_empty() {
+                    paragraph.to_string()
+                } else {
+                    format!("{header}\n\n{paragraph}")
+                },
+                header: header.to_string(),
+                level: MemoryMarkdownChunkLevel::Paragraph,
+            });
+            continue;
+        }
+        if chunk_tokens + paragraph_tokens + 2 > max_tokens && !chunk_paragraphs.is_empty() {
+            flush_memory_markdown_paragraph_chunk(
+                chunks,
+                header,
+                &mut chunk_paragraphs,
+                &mut chunk_tokens,
+            );
+        }
+        chunk_paragraphs.push(paragraph.to_string());
+        chunk_tokens += paragraph_tokens + 2;
+    }
+    flush_memory_markdown_paragraph_chunk(chunks, header, &mut chunk_paragraphs, &mut chunk_tokens);
+}
+
+fn flush_memory_markdown_paragraph_chunk(
+    chunks: &mut Vec<MemoryMarkdownChunk>,
+    header: &str,
+    paragraphs: &mut Vec<String>,
+    tokens: &mut usize,
+) {
+    if paragraphs.is_empty() {
+        return;
+    }
+    chunks.push(MemoryMarkdownChunk {
+        text: if header.is_empty() {
+            paragraphs.join("\n\n")
+        } else {
+            format!("{header}\n\n{}", paragraphs.join("\n\n"))
+        },
+        header: header.to_string(),
+        level: MemoryMarkdownChunkLevel::Paragraph,
+    });
+    paragraphs.clear();
+    *tokens = if header.is_empty() {
+        0
+    } else {
+        estimate_tokens(header)
+    };
+}
+
+fn is_markdown_heading(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    let hashes = trimmed.chars().take_while(|ch| *ch == '#').count();
+    (1..=3).contains(&hashes) && trimmed.chars().nth(hashes).is_some_and(char::is_whitespace)
+}
+
+fn estimate_tokens(text: &str) -> usize {
+    text.len().div_ceil(4)
+}
+
+fn is_iso_date_prefix(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    bytes.len() == 10
+        && bytes[4] == b'-'
+        && bytes[7] == b'-'
+        && bytes[..4].iter().all(u8::is_ascii_digit)
+        && bytes[5..7].iter().all(u8::is_ascii_digit)
+        && bytes[8..10].iter().all(u8::is_ascii_digit)
+}
+
+fn sha256_hex_prefix(value: &str, len: usize) -> String {
+    let digest = Sha256::digest(value.as_bytes());
+    digest
+        .iter()
+        .flat_map(|byte| {
+            let hi = byte >> 4;
+            let lo = byte & 0x0f;
+            [hex_char(hi), hex_char(lo)]
+        })
+        .take(len)
+        .collect()
+}
+
+fn hex_char(nibble: u8) -> char {
+    match nibble {
+        0..=9 => (b'0' + nibble) as char,
+        _ => (b'a' + (nibble - 10)) as char,
     }
 }
 

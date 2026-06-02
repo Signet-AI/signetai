@@ -129,6 +129,7 @@ impl TestServer {
                 env!("CARGO_PKG_VERSION"),
             )
             .env("SIGNET_UPDATE_MOCK_RUN_RESULT", "success")
+            .env("SIGNET_MEMORY_IMPORT_POLL_MS", "200")
             .env("SIGNET_BW_BIN", fake_bw)
             .env("SIGNET_OP_BIN", fake_op)
             .env("RUST_LOG", "warn")
@@ -5688,6 +5689,58 @@ async fn wait_for_http_status(
     }
 }
 
+async fn wait_for_legacy_memory_import(
+    server: &TestServer,
+    source_prefix: &str,
+) -> serde_json::Value {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
+    loop {
+        let conn = rusqlite::Connection::open(server.db_path()).expect("open replay db");
+        let row = conn
+            .query_row(
+                "SELECT id, content, source_type, source_id, tags, who, importance
+                 FROM memories
+                 WHERE source_type = 'openclaw-memory-log'
+                   AND source_id LIKE ?1
+                   AND is_deleted = 0
+                 LIMIT 1",
+                [format!("{source_prefix}%")],
+                |row| {
+                    Ok(serde_json::json!({
+                        "id": row.get::<_, String>(0)?,
+                        "content": row.get::<_, String>(1)?,
+                        "sourceType": row.get::<_, String>(2)?,
+                        "sourceId": row.get::<_, String>(3)?,
+                        "tags": row.get::<_, String>(4)?,
+                        "who": row.get::<_, String>(5)?,
+                        "importance": row.get::<_, f64>(6)?,
+                    }))
+                },
+            )
+            .ok();
+        if let Some(row) = row {
+            return row;
+        }
+        if tokio::time::Instant::now() > deadline {
+            panic!("timed out waiting for legacy memory import with prefix {source_prefix}");
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+fn legacy_memory_import_count(server: &TestServer) -> i64 {
+    let conn = rusqlite::Connection::open(server.db_path()).expect("open replay db");
+    conn.query_row(
+        "SELECT COUNT(*)
+         FROM memories
+         WHERE source_type = 'openclaw-memory-log'
+           AND is_deleted = 0",
+        [],
+        |row| row.get(0),
+    )
+    .expect("count legacy memory imports")
+}
+
 fn run_git(dir: &std::path::Path, args: &[&str]) -> String {
     let output = std::process::Command::new("git")
         .args(args)
@@ -5778,6 +5831,71 @@ async fn watcher_reloads_auth_config_without_restart() {
     .await;
     let body = server.json(resp).await;
     assert_eq!(body["error"], "authentication required");
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn watcher_imports_legacy_memory_markdown_and_skips_generated_files() {
+    let legacy_content = "## Legacy Import\n\nThis chunk contains a meaningful amount of legacy memory log content that should be imported into the Rust daemon memory database with openclaw metadata.";
+    let skipped_content = "## Generated\n\nThis generated memory content is intentionally long enough that it would be imported if the filename filter did not match the TypeScript daemon exclusions.";
+    let server = TestServer::start_with_agent_yaml_and_files(
+        None,
+        "agent:\n  name: test-agent\n  version: 1\n",
+        &[
+            ("memory/2026-02-10-signet.md", legacy_content),
+            ("memory/MEMORY.md", skipped_content),
+            (
+                "memory/MEMORY.backup-2026-03-31T21-17-05.md",
+                skipped_content,
+            ),
+            (
+                "memory/2026-03-01T00-09-52.500Z--abc12345--summary.md",
+                skipped_content,
+            ),
+        ],
+    )
+    .await;
+
+    let row = wait_for_legacy_memory_import(&server, "openclaw:2026-02-10-signet:").await;
+    assert_eq!(row["sourceType"], "openclaw-memory-log");
+    assert_eq!(row["who"], "openclaw-memory");
+    assert_eq!(row["importance"], 0.65);
+    assert!(
+        row["content"]
+            .as_str()
+            .unwrap()
+            .contains("## Legacy Import")
+    );
+    let tags = serde_json::from_str::<Vec<String>>(row["tags"].as_str().unwrap()).unwrap();
+    assert_eq!(
+        tags,
+        vec![
+            "openclaw",
+            "memory-log",
+            "2026-02-10",
+            "2026-02-10-signet",
+            "hierarchical-section"
+        ]
+    );
+    assert_eq!(legacy_memory_import_count(&server), 1);
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn watcher_polls_new_legacy_memory_markdown_files() {
+    let server = TestServer::start().await;
+    assert_eq!(legacy_memory_import_count(&server), 0);
+
+    std::fs::write(
+        server._tmpdir.path().join("memory/2026-03-12-live.md"),
+        "## Live Import\n\nThis live memory markdown file is added after daemon startup and should be picked up by the Rust legacy memory import poller.",
+    )
+    .expect("write live legacy memory markdown file");
+
+    let row = wait_for_legacy_memory_import(&server, "openclaw:2026-03-12-live:").await;
+    assert_eq!(row["sourceType"], "openclaw-memory-log");
+    assert_eq!(row["who"], "openclaw-memory");
+    assert!(row["content"].as_str().unwrap().contains("## Live Import"));
 }
 
 #[tokio::test]
