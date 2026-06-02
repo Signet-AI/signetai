@@ -63,11 +63,21 @@ fn count_substantive_turns(transcript: &str) -> usize {
     for line in transcript.lines() {
         let trimmed_lower = line.trim_start().to_lowercase();
         if trimmed_lower.starts_with("human:") || trimmed_lower.starts_with("user:") {
-            flush_block(current_role, &current_block, &mut user_blocks, &mut assistant_blocks);
+            flush_block(
+                current_role,
+                &current_block,
+                &mut user_blocks,
+                &mut assistant_blocks,
+            );
             current_role = Some("user");
             current_block = strip_role_prefix(line);
         } else if trimmed_lower.starts_with("assistant:") {
-            flush_block(current_role, &current_block, &mut user_blocks, &mut assistant_blocks);
+            flush_block(
+                current_role,
+                &current_block,
+                &mut user_blocks,
+                &mut assistant_blocks,
+            );
             current_role = Some("assistant");
             current_block = strip_role_prefix(line);
         } else {
@@ -75,7 +85,12 @@ fn count_substantive_turns(transcript: &str) -> usize {
             current_block.push_str(line);
         }
     }
-    flush_block(current_role, &current_block, &mut user_blocks, &mut assistant_blocks);
+    flush_block(
+        current_role,
+        &current_block,
+        &mut user_blocks,
+        &mut assistant_blocks,
+    );
 
     let pair_count = user_blocks.len().min(assistant_blocks.len());
     let mut substantive = 0;
@@ -164,11 +179,7 @@ fn tokenize(text: &str) -> HashSet<String> {
 
 /// Compute novelty: 0-1 score where 1.0 = highly novel, 0.0 = highly redundant.
 /// Compares transcript tokens against the last 5 completed session transcripts.
-fn compute_novelty(
-    conn: &rusqlite::Connection,
-    transcript: &str,
-    agent_id: &str,
-) -> f64 {
+fn compute_novelty(conn: &rusqlite::Connection, transcript: &str, agent_id: &str) -> f64 {
     let sql_scoped = "SELECT transcript FROM summary_jobs
                       WHERE status = 'completed' AND agent_id = ?1
                       ORDER BY completed_at DESC LIMIT 5";
@@ -291,10 +302,16 @@ pub async fn assess_significance(
         reasons.push(format!("turns={turn_count}<{}", config.min_turns));
     }
     if !entity_passes {
-        reasons.push(format!("entities={entity_overlap}<{}", config.min_entity_overlap));
+        reasons.push(format!(
+            "entities={entity_overlap}<{}",
+            config.min_entity_overlap
+        ));
     }
     if !novelty_passes {
-        reasons.push(format!("novelty={:.2}<{}", novelty, config.novelty_threshold));
+        reasons.push(format!(
+            "novelty={:.2}<{}",
+            novelty, config.novelty_threshold
+        ));
     }
 
     let reason = if significant {

@@ -15,13 +15,7 @@ use signet_core::db::DbPool;
 // Constants
 // ---------------------------------------------------------------------------
 
-const CONSTRAINT_KEYWORDS: &[&str] = &[
-    "constraint",
-    "must",
-    "never",
-    "always",
-    "required",
-];
+const CONSTRAINT_KEYWORDS: &[&str] = &["constraint", "must", "never", "always", "required"];
 const ERROR_KEYWORDS: &[&str] = &[
     "error",
     "exception",
@@ -400,9 +394,7 @@ fn compute_continuity_signals(
     let recent_stores = count_recent(conn, input, &cutoff) >= CONTINUITY_RECENT_MIN;
 
     // semantic_similarity: high similarity with recent scoped memories
-    let semantic_similarity = query.map_or(false, |q| {
-        check_semantic_continuity(conn, input, q)
-    });
+    let semantic_similarity = query.map_or(false, |q| check_semantic_continuity(conn, input, q));
 
     WriteGateSignals {
         same_directory,
@@ -443,14 +435,27 @@ fn count_recent_scoped(
     if let Some(ref scope) = input.source_scope {
         conn.query_row(
             sql,
-            params![input.agent_id, input.source_visibility, input.source_memory_id, scope, project, cutoff],
+            params![
+                input.agent_id,
+                input.source_visibility,
+                input.source_memory_id,
+                scope,
+                project,
+                cutoff
+            ],
             |row| row.get::<_, i64>(0),
         )
         .unwrap_or(0)
     } else {
         conn.query_row(
             sql,
-            params![input.agent_id, input.source_visibility, input.source_memory_id, project, cutoff],
+            params![
+                input.agent_id,
+                input.source_visibility,
+                input.source_memory_id,
+                project,
+                cutoff
+            ],
             |row| row.get::<_, i64>(0),
         )
         .unwrap_or(0)
@@ -472,14 +477,25 @@ fn count_recent(conn: &rusqlite::Connection, input: &WriteGateInput, cutoff: &st
     if let Some(ref scope) = input.source_scope {
         conn.query_row(
             sql,
-            params![input.agent_id, input.source_visibility, input.source_memory_id, scope, cutoff],
+            params![
+                input.agent_id,
+                input.source_visibility,
+                input.source_memory_id,
+                scope,
+                cutoff
+            ],
             |row| row.get::<_, i64>(0),
         )
         .unwrap_or(0)
     } else {
         conn.query_row(
             sql,
-            params![input.agent_id, input.source_visibility, input.source_memory_id, cutoff],
+            params![
+                input.agent_id,
+                input.source_visibility,
+                input.source_memory_id,
+                cutoff
+            ],
             |row| row.get::<_, i64>(0),
         )
         .unwrap_or(0)
@@ -601,11 +617,9 @@ pub async fn assess_write_gate(
 
     let result = pool
         .read(move |conn| {
-            let signals =
-                compute_continuity_signals(conn, &input_owned, Some(&vector_owned));
-            let continuity_applied = signals.same_directory
-                && signals.recent_stores
-                && signals.semantic_similarity;
+            let signals = compute_continuity_signals(conn, &input_owned, Some(&vector_owned));
+            let continuity_applied =
+                signals.same_directory && signals.recent_stores && signals.semantic_similarity;
             let effective_threshold = clamp_unit(
                 base_threshold
                     - if continuity_applied {
@@ -793,7 +807,12 @@ mod tests {
     async fn gate_disabled_bypasses() {
         let (pool, _db_path) = test_db("disabled");
 
-        let result = assess_write_gate(&pool, &test_cfg(false), &test_input("content", "fact", Some(vec![0.1, 0.2]))).await;
+        let result = assess_write_gate(
+            &pool,
+            &test_cfg(false),
+            &test_input("content", "fact", Some(vec![0.1, 0.2])),
+        )
+        .await;
         assert!(result.pass);
         assert!(result.bypassed);
         assert_eq!(result.reason, WriteGateReason::GateDisabled);
@@ -803,7 +822,12 @@ mod tests {
     async fn decision_type_bypasses() {
         let (pool, _db_path) = test_db("decision_type");
 
-        let result = assess_write_gate(&pool, &test_cfg(true), &test_input("decided to use Rust", "decision", Some(vec![0.1, 0.2]))).await;
+        let result = assess_write_gate(
+            &pool,
+            &test_cfg(true),
+            &test_input("decided to use Rust", "decision", Some(vec![0.1, 0.2])),
+        )
+        .await;
         assert!(result.pass);
         assert!(result.bypassed);
         assert_eq!(result.reason, WriteGateReason::DecisionBypass);
@@ -813,7 +837,12 @@ mod tests {
     async fn decision_content_bypasses() {
         let (pool, _db_path) = test_db("decision_content");
 
-        let result = assess_write_gate(&pool, &test_cfg(true), &test_input("I went with PostgreSQL", "fact", Some(vec![0.1, 0.2]))).await;
+        let result = assess_write_gate(
+            &pool,
+            &test_cfg(true),
+            &test_input("I went with PostgreSQL", "fact", Some(vec![0.1, 0.2])),
+        )
+        .await;
         assert!(result.pass);
         assert!(result.bypassed);
         assert_eq!(result.reason, WriteGateReason::DecisionBypass);
@@ -823,7 +852,12 @@ mod tests {
     async fn constraint_content_bypasses() {
         let (pool, _db_path) = test_db("constraint");
 
-        let result = assess_write_gate(&pool, &test_cfg(true), &test_input("You must always validate", "fact", Some(vec![0.1, 0.2]))).await;
+        let result = assess_write_gate(
+            &pool,
+            &test_cfg(true),
+            &test_input("You must always validate", "fact", Some(vec![0.1, 0.2])),
+        )
+        .await;
         assert!(result.pass);
         assert!(result.bypassed);
         assert_eq!(result.reason, WriteGateReason::ConstraintBypass);
@@ -833,7 +867,16 @@ mod tests {
     async fn error_content_bypasses() {
         let (pool, _db_path) = test_db("error");
 
-        let result = assess_write_gate(&pool, &test_cfg(true), &test_input("The process crashed with an error", "fact", Some(vec![0.1, 0.2]))).await;
+        let result = assess_write_gate(
+            &pool,
+            &test_cfg(true),
+            &test_input(
+                "The process crashed with an error",
+                "fact",
+                Some(vec![0.1, 0.2]),
+            ),
+        )
+        .await;
         assert!(result.pass);
         assert!(result.bypassed);
         assert_eq!(result.reason, WriteGateReason::ErrorBypass);
@@ -843,7 +886,12 @@ mod tests {
     async fn missing_embedding_bypasses() {
         let (pool, _db_path) = test_db("missing_emb");
 
-        let result = assess_write_gate(&pool, &test_cfg(true), &test_input("normal content", "fact", None)).await;
+        let result = assess_write_gate(
+            &pool,
+            &test_cfg(true),
+            &test_input("normal content", "fact", None),
+        )
+        .await;
         assert!(result.pass);
         assert!(result.bypassed);
         assert_eq!(result.reason, WriteGateReason::MissingEmbedding);
@@ -853,7 +901,12 @@ mod tests {
     async fn empty_embedding_bypasses() {
         let (pool, _db_path) = test_db("empty_emb");
 
-        let result = assess_write_gate(&pool, &test_cfg(true), &test_input("normal content", "fact", Some(vec![]))).await;
+        let result = assess_write_gate(
+            &pool,
+            &test_cfg(true),
+            &test_input("normal content", "fact", Some(vec![])),
+        )
+        .await;
         assert!(result.pass);
         assert!(result.bypassed);
         assert_eq!(result.reason, WriteGateReason::MissingEmbedding);
@@ -868,7 +921,11 @@ mod tests {
         let result = assess_write_gate(
             &pool,
             &test_cfg(true),
-            &test_input("completely novel content about quantum physics", "fact", Some(vec![0.5, -0.3, 0.8])),
+            &test_input(
+                "completely novel content about quantum physics",
+                "fact",
+                Some(vec![0.5, -0.3, 0.8]),
+            ),
         )
         .await;
         assert!(result.pass);

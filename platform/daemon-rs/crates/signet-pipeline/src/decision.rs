@@ -95,13 +95,11 @@ fn find_candidates_bm25(
         params.push(Box::new(s.clone()));
     }
     params.push(Box::new(limit));
-    let param_refs: Vec<&dyn rusqlite::types::ToSql> =
-        params.iter().map(|p| p.as_ref()).collect();
+    let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
 
-    let rows_result =
-        stmt.query_map(param_refs.as_slice(), |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))
-        });
+    let rows_result = stmt.query_map(param_refs.as_slice(), |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))
+    });
 
     if let Ok(rows) = rows_result {
         for row in rows.flatten() {
@@ -182,8 +180,7 @@ fn find_candidates_vector(
     if let Some(ref s) = scope.scope {
         params.push(Box::new(s.clone()));
     }
-    let param_refs: Vec<&dyn rusqlite::types::ToSql> =
-        params.iter().map(|p| p.as_ref()).collect();
+    let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
 
     let rows_result = stmt.query_map(param_refs.as_slice(), |row| {
         Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))
@@ -252,8 +249,7 @@ fn fetch_memory_rows(
         params.push(Box::new(s.clone()));
     }
 
-    let param_refs: Vec<&dyn rusqlite::types::ToSql> =
-        params.iter().map(|p| p.as_ref()).collect();
+    let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
 
     let rows = stmt.query_map(param_refs.as_slice(), |row| {
         Ok(CandidateMemory {
@@ -264,8 +260,7 @@ fn fetch_memory_rows(
         })
     });
 
-    rows.map(|r| r.flatten().collect())
-        .unwrap_or_default()
+    rows.map(|r| r.flatten().collect()).unwrap_or_default()
 }
 
 // ---------------------------------------------------------------------------
@@ -449,9 +444,7 @@ fn parse_decision(
         }
         if let Some(ref tid) = target_id {
             if !candidate_ids.contains(tid) {
-                warnings.push(format!(
-                    "Decision references non-candidate ID: \"{tid}\""
-                ));
+                warnings.push(format!("Decision references non-candidate ID: \"{tid}\""));
                 return None;
             }
         }
@@ -573,8 +566,7 @@ pub async fn run_shadow_decisions(
         // Look up pre-computed embedding for this fact
         let embedding = precomputed_embeddings.get(&fact.content).cloned();
 
-        let candidates =
-            find_candidates(pool, &fact.content, cfg, &scope_struct, embedding).await;
+        let candidates = find_candidates(pool, &fact.content, cfg, &scope_struct, embedding).await;
 
         // No candidates -> propose ADD
         if candidates.is_empty() {
@@ -587,8 +579,7 @@ pub async fn run_shadow_decisions(
             continue;
         }
 
-        let candidate_ids: HashSet<String> =
-            candidates.iter().map(|c| c.id.clone()).collect();
+        let candidate_ids: HashSet<String> = candidates.iter().map(|c| c.id.clone()).collect();
         let prompt = build_decision_prompt(fact, &candidates);
 
         let opts = GenerateOpts {
@@ -637,8 +628,7 @@ mod tests {
 
     #[test]
     fn parse_valid_decision() {
-        let raw =
-            r#"{"action": "add", "confidence": 0.85, "reason": "No similar memories exist"}"#;
+        let raw = r#"{"action": "add", "confidence": 0.85, "reason": "No similar memories exist"}"#;
         let mut warnings = vec![];
         let result = parse_decision(raw, &HashSet::new(), &mut warnings);
         assert!(result.is_some());
@@ -653,8 +643,7 @@ mod tests {
     fn parse_update_with_valid_target() {
         let raw = r#"{"action": "update", "targetId": "mem-123", "confidence": 0.9, "reason": "Supersedes old info"}"#;
         let mut warnings = vec![];
-        let candidates: HashSet<String> =
-            ["mem-123".to_string()].into_iter().collect();
+        let candidates: HashSet<String> = ["mem-123".to_string()].into_iter().collect();
         let result = parse_decision(raw, &candidates, &mut warnings);
         assert!(result.is_some());
         let (action, target_id, _, _) = result.unwrap();
@@ -666,8 +655,7 @@ mod tests {
     fn parse_update_rejects_invalid_target() {
         let raw = r#"{"action": "update", "targetId": "nonexistent", "confidence": 0.9, "reason": "Bad target"}"#;
         let mut warnings = vec![];
-        let candidates: HashSet<String> =
-            ["mem-123".to_string()].into_iter().collect();
+        let candidates: HashSet<String> = ["mem-123".to_string()].into_iter().collect();
         let result = parse_decision(raw, &candidates, &mut warnings);
         assert!(result.is_none());
         assert!(warnings.iter().any(|w| w.contains("non-candidate")));
@@ -705,8 +693,7 @@ mod tests {
     fn parse_with_code_fence() {
         let raw = "```json\n{\"action\": \"delete\", \"targetId\": \"m1\", \"confidence\": 0.8, \"reason\": \"Contradicts\"}\n```";
         let mut warnings = vec![];
-        let candidates: HashSet<String> =
-            ["m1".to_string()].into_iter().collect();
+        let candidates: HashSet<String> = ["m1".to_string()].into_iter().collect();
         let result = parse_decision(raw, &candidates, &mut warnings);
         assert!(result.is_some());
         let (action, _, _, _) = result.unwrap();
@@ -743,7 +730,8 @@ mod tests {
 
     #[test]
     fn strip_think_blocks_removes_cot() {
-        let input = "<think\nLet me analyze...\nStep 1: Check candidates\n</think|>\n{\"action\": \"add\"}";
+        let input =
+            "<think\nLet me analyze...\nStep 1: Check candidates\n</think|>\n{\"action\": \"add\"}";
         let stripped = strip_think_blocks(input);
         assert!(!stripped.contains("<think"));
         assert!(!stripped.contains("</think|>"));

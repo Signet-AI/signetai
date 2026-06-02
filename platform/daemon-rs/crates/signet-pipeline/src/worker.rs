@@ -447,32 +447,38 @@ async fn process_extract(
     let source_memory_id = memory_id.clone();
 
     let (content, agent_id, extraction_status, source_project, source_scope, source_visibility) =
-        pool
-            .read(move |conn| {
-                let mut stmt = conn.prepare_cached(
-                    "SELECT content, COALESCE(agent_id, 'default'),
+        pool.read(move |conn| {
+            let mut stmt = conn.prepare_cached(
+                "SELECT content, COALESCE(agent_id, 'default'),
                             COALESCE(extraction_status, 'none'),
                             project, scope, COALESCE(visibility, 'global')
                      FROM memories
                      WHERE id = ?1 AND COALESCE(is_deleted, 0) = 0",
-                )?;
-                let row: Option<(String, String, String, Option<String>, Option<String>, String)> =
-                    stmt.query_row(rusqlite::params![memory_id], |r| {
-                        Ok((
-                            r.get(0)?,
-                            r.get(1)?,
-                            r.get(2)?,
-                            r.get(3)?,
-                            r.get(4)?,
-                            r.get(5)?,
-                        ))
-                    })
-                    .ok();
-                Ok(row)
-            })
-            .await
-            .map_err(|e| e.to_string())?
-            .ok_or("memory not found or deleted")?;
+            )?;
+            let row: Option<(
+                String,
+                String,
+                String,
+                Option<String>,
+                Option<String>,
+                String,
+            )> = stmt
+                .query_row(rusqlite::params![memory_id], |r| {
+                    Ok((
+                        r.get(0)?,
+                        r.get(1)?,
+                        r.get(2)?,
+                        r.get(3)?,
+                        r.get(4)?,
+                        r.get(5)?,
+                    ))
+                })
+                .ok();
+            Ok(row)
+        })
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or("memory not found or deleted")?;
 
     // Controlled-write gate: skip already-extracted memories
     if extraction_status == "complete" || extraction_status == "completed" {
@@ -493,13 +499,9 @@ async fn process_extract(
 
     // --- Stage 1: Significance gate ---
     // Skip extraction for trivial sessions (saves LLM cost).
-    let sig_result = significance_gate::assess_significance(
-        &content,
-        pool,
-        &agent_id,
-        &config.significance,
-    )
-    .await;
+    let sig_result =
+        significance_gate::assess_significance(&content, pool, &agent_id, &config.significance)
+            .await;
 
     if !sig_result.significant {
         // Mark memory as extracted (raw transcript is already persisted)
@@ -507,10 +509,7 @@ async fn process_extract(
         return Ok(JobResult {
             facts_extracted: 0,
             entities_extracted: 0,
-            warnings: vec![format!(
-                "significance_gate: {}",
-                sig_result.reason
-            )],
+            warnings: vec![format!("significance_gate: {}", sig_result.reason)],
         });
     }
 
@@ -584,8 +583,7 @@ async fn process_extract(
                         vector: None, // Embeddings computed on-demand later
                     };
                     let gate_result =
-                        write_gate::assess_write_gate(pool, &config.write_gate, &gate_input)
-                            .await;
+                        write_gate::assess_write_gate(pool, &config.write_gate, &gate_input).await;
 
                     if !gate_result.pass {
                         warnings.push(format!(
@@ -601,7 +599,8 @@ async fn process_extract(
                     // Update proposals are informational in shadow mode
                     facts_written += 1;
                 }
-                signet_core::types::DecisionAction::Delete | signet_core::types::DecisionAction::None => {
+                signet_core::types::DecisionAction::Delete
+                | signet_core::types::DecisionAction::None => {
                     // No write needed
                 }
             }
