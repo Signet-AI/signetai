@@ -51,15 +51,24 @@ const TS_MEMORY_HINTS_VERSION: u32 = 38;
 const TS_MEMORY_HINTS_NAME: &str = "memory-hints";
 const TS_DEDUP_ENTITY_DEPS_VERSION: u32 = 39;
 const TS_DEDUP_ENTITY_DEPS_NAME: &str = "dedup-entity-dependencies";
+// TS versions covered by Rust migrations 32-39 (not stamped separately):
+#[allow(dead_code)]
 const TS_SESSION_MEMORIES_AGENT_VERSION: u32 = 42;
+#[allow(dead_code)]
 const TS_SESSION_MEMORIES_AGENT_NAME: &str = "session-memories-agent-id";
+#[allow(dead_code)]
 const TS_MEMORY_MD_TEMPORAL_HEAD_VERSION: u32 = 44;
+#[allow(dead_code)]
 const TS_MEMORY_MD_TEMPORAL_HEAD_NAME: &str = "memory-md-temporal-head";
+#[allow(dead_code)]
 const TS_LOSSLESS_HARDENING_VERSION: u32 = 45;
+#[allow(dead_code)]
 const TS_LOSSLESS_HARDENING_NAME: &str = "lossless-working-memory-hardening";
 const TS_SESSION_SUMMARY_UNIQUENESS_VERSION: u32 = 46;
 const TS_SESSION_SUMMARY_UNIQUENESS_NAME: &str = "session-summary-uniqueness";
+#[allow(dead_code)]
 const TS_AGENT_TEMPORAL_UNIQUENESS_VERSION: u32 = 47;
+#[allow(dead_code)]
 const TS_AGENT_TEMPORAL_UNIQUENESS_NAME: &str = "agent-scoped-temporal-uniqueness";
 const TS_THREAD_HEADS_VERSION: u32 = 48;
 const TS_THREAD_HEADS_NAME: &str = "thread-heads";
@@ -1623,7 +1632,10 @@ mod tests {
 
         // Versions stamped by parity tables/columns for cross-daemon compatibility
         for version in [
-            41_i64, 42_i64, 44_i64, 46_i64, 48_i64, 50_i64, 58_i64, 71_i64, 73_i64, 74_i64, 76_i64,
+            32_i64, 33_i64, 34_i64, 35_i64, 36_i64, 37_i64, 38_i64, 39_i64,
+            41_i64, 46_i64, 48_i64, 50_i64, 56_i64, 58_i64, 59_i64, 60_i64,
+            61_i64, 62_i64, 63_i64, 64_i64, 65_i64, 70_i64, 71_i64, 73_i64,
+            74_i64, 75_i64, 76_i64,
         ] {
             let stamped: i64 = conn
                 .query_row(
