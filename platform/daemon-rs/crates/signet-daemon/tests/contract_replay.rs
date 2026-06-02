@@ -634,6 +634,57 @@ impl TestServer {
         .expect("seed connector health documents");
     }
 
+    fn seed_filesystem_connector_sync_fixture(&self) -> std::path::PathBuf {
+        let root = self._tmpdir.path().join("connector-root");
+        std::fs::create_dir_all(root.join("notes")).expect("create connector notes dir");
+        std::fs::create_dir_all(root.join("node_modules")).expect("create ignored dir");
+        std::fs::write(
+            root.join("notes/a.md"),
+            "Filesystem connector replay content from a Markdown file.",
+        )
+        .expect("write connector markdown file");
+        std::fs::write(root.join("notes/b.txt"), "Text file excluded by pattern")
+            .expect("write connector text file");
+        std::fs::write(root.join("node_modules/skip.md"), "Ignored markdown file")
+            .expect("write ignored connector file");
+
+        let conn = rusqlite::Connection::open(self.db_path()).expect("open replay db");
+        conn.busy_timeout(Duration::from_secs(5)).unwrap();
+        conn.execute(
+            r#"INSERT INTO connectors
+               (id, provider, display_name, config_json, settings_json, enabled,
+                status, cursor_json, last_sync_at, last_error, created_at, updated_at)
+               VALUES
+               ('connector-fs-row', 'filesystem', 'Filesystem Docs',
+                ?1, ?2, 1, 'idle', NULL, NULL, NULL,
+                '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')"#,
+            rusqlite::params![
+                serde_json::json!({
+                    "id": "connector-fs-config",
+                    "provider": "filesystem",
+                    "displayName": "Filesystem Docs",
+                    "settings": {
+                        "rootPath": root.to_string_lossy(),
+                        "patterns": ["**/*.md"],
+                        "ignorePatterns": ["node_modules"],
+                        "maxFileSize": 1048576
+                    },
+                    "enabled": true
+                })
+                .to_string(),
+                serde_json::json!({
+                    "rootPath": root.to_string_lossy(),
+                    "patterns": ["**/*.md"],
+                    "ignorePatterns": ["node_modules"],
+                    "maxFileSize": 1048576
+                })
+                .to_string()
+            ],
+        )
+        .expect("seed filesystem connector config");
+        root
+    }
+
     fn seed_malformed_connector_row(&self) {
         let conn = rusqlite::Connection::open(self.db_path()).expect("open replay db");
         conn.busy_timeout(Duration::from_secs(5)).unwrap();
@@ -3465,6 +3516,52 @@ async fn connector_health_and_sync_routes_replay_ts_outcomes() {
 
 #[tokio::test]
 #[ignore = "requires built daemon binary"]
+async fn filesystem_connector_sync_replays_ts_document_ingest_side_effects() {
+    let server = TestServer::start().await;
+    let root = server.seed_filesystem_connector_sync_fixture();
+
+    let resp = server
+        .post("/api/connectors/connector-fs-row/sync", json!({}))
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["status"], "syncing");
+
+    let snapshot = wait_for_filesystem_connector_sync(&server).await;
+    assert_eq!(snapshot["connectorStatus"], "idle");
+    assert!(
+        snapshot["cursorJson"]
+            .as_str()
+            .unwrap()
+            .contains("lastSyncAt")
+    );
+    assert!(snapshot["lastSyncAt"].as_str().unwrap().contains('T'));
+    assert_eq!(snapshot["title"], "a.md");
+    assert_eq!(
+        snapshot["rawContent"],
+        "Filesystem connector replay content from a Markdown file."
+    );
+    assert_eq!(snapshot["documentConnectorId"], "connector-fs-config");
+    assert_eq!(snapshot["jobStatus"], "pending");
+    assert_eq!(snapshot["jobType"], "document_ingest");
+    assert_eq!(snapshot["documentCount"], 1);
+    assert_eq!(snapshot["documentIngestJobCount"], 1);
+    assert_eq!(
+        snapshot["sourceUrl"],
+        root.join("notes/a.md").to_string_lossy().to_string()
+    );
+    let payload =
+        serde_json::from_str::<serde_json::Value>(snapshot["jobPayload"].as_str().unwrap())
+            .unwrap();
+    assert_eq!(payload["documentId"], snapshot["documentId"]);
+    assert_eq!(
+        payload["content"],
+        "Filesystem connector replay content from a Markdown file."
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
 async fn connectors_list_surfaces_row_decode_errors() {
     let server = TestServer::start().await;
     server.seed_malformed_connector_row();
@@ -5739,6 +5836,64 @@ fn legacy_memory_import_count(server: &TestServer) -> i64 {
         |row| row.get(0),
     )
     .expect("count legacy memory imports")
+}
+
+async fn wait_for_filesystem_connector_sync(server: &TestServer) -> serde_json::Value {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
+    loop {
+        let conn = rusqlite::Connection::open(server.db_path()).expect("open replay db");
+        conn.busy_timeout(Duration::from_secs(5)).unwrap();
+        let snapshot = conn
+            .query_row(
+                r#"SELECT
+                     c.status,
+                     c.cursor_json,
+                     c.last_sync_at,
+                     d.id,
+                     d.source_url,
+                     d.title,
+                     d.raw_content,
+                     d.connector_id,
+                     j.status,
+                     j.job_type,
+                     j.payload,
+                     (SELECT COUNT(*) FROM documents),
+                     (SELECT COUNT(*) FROM memory_jobs WHERE job_type = 'document_ingest')
+                   FROM connectors c
+                   JOIN documents d ON d.title = 'a.md'
+                   JOIN memory_jobs j ON j.document_id = d.id
+                   WHERE c.id = 'connector-fs-row'
+                   LIMIT 1"#,
+                [],
+                |row| {
+                    Ok(serde_json::json!({
+                        "connectorStatus": row.get::<_, String>(0)?,
+                        "cursorJson": row.get::<_, String>(1)?,
+                        "lastSyncAt": row.get::<_, String>(2)?,
+                        "documentId": row.get::<_, String>(3)?,
+                        "sourceUrl": row.get::<_, String>(4)?,
+                        "title": row.get::<_, String>(5)?,
+                        "rawContent": row.get::<_, String>(6)?,
+                        "documentConnectorId": row.get::<_, String>(7)?,
+                        "jobStatus": row.get::<_, String>(8)?,
+                        "jobType": row.get::<_, String>(9)?,
+                        "jobPayload": row.get::<_, String>(10)?,
+                        "documentCount": row.get::<_, i64>(11)?,
+                        "documentIngestJobCount": row.get::<_, i64>(12)?,
+                    }))
+                },
+            )
+            .ok();
+        if let Some(snapshot) = snapshot
+            && snapshot["connectorStatus"] == "idle"
+        {
+            return snapshot;
+        }
+        if tokio::time::Instant::now() > deadline {
+            panic!("timed out waiting for filesystem connector sync");
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
 }
 
 fn run_git(dir: &std::path::Path, args: &[&str]) -> String {
