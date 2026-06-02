@@ -1,3 +1,4 @@
+pub mod antonyms;
 pub mod decision;
 pub mod dep_synthesis;
 pub mod document;
@@ -9,6 +10,7 @@ pub mod memory_lineage;
 pub mod provider;
 pub mod retention;
 pub mod significance_gate;
+pub mod stop_words;
 pub mod structural;
 pub mod summary;
 pub mod synthesis;
