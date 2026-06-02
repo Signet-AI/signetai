@@ -619,6 +619,112 @@ impl TestServer {
         .expect("seed malformed connector row");
     }
 
+    fn seed_feedback_path_fixture(&self) {
+        let conn = rusqlite::Connection::open(self.db_path()).expect("open replay db");
+        conn.busy_timeout(Duration::from_secs(5)).unwrap();
+        conn.execute_batch(
+            r#"INSERT INTO memories
+               (id, type, content, confidence, importance, created_at, updated_at, agent_id)
+               VALUES
+               ('mem-feedback-a', 'fact', 'Feedback target memory', 1.0, 0.8,
+                '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 'default'),
+               ('mem-feedback-other', 'fact', 'Different memory', 1.0, 0.8,
+                '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 'default');
+
+               INSERT INTO entities
+               (id, name, canonical_name, entity_type, description, agent_id, mentions, created_at, updated_at)
+               VALUES
+               ('entity-feedback-a', 'Feedback A', 'feedback a', 'concept', 'Feedback source entity', 'default', 1,
+                '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
+               ('entity-feedback-b', 'Feedback B', 'feedback b', 'concept', 'Feedback target entity', 'default', 1,
+                '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
+
+               INSERT INTO entity_aspects
+               (id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at)
+               VALUES
+               ('aspect-feedback-a', 'entity-feedback-a', 'default', 'runtime', 'runtime', 0.5,
+                '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
+
+               INSERT INTO entity_attributes
+               (id, aspect_id, agent_id, memory_id, kind, content, normalized_content,
+                confidence, importance, status, created_at, updated_at)
+               VALUES
+               ('attr-feedback-a', 'aspect-feedback-a', 'default', 'mem-feedback-a',
+                'attribute', 'Feedback path attribute', 'feedback path attribute',
+                0.9, 0.9, 'active', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
+
+               INSERT INTO entity_dependencies
+               (id, source_entity_id, target_entity_id, agent_id, aspect_id,
+                dependency_type, strength, confidence, reason, created_at, updated_at)
+               VALUES
+               ('dep-feedback-a', 'entity-feedback-a', 'entity-feedback-b', 'default',
+                'aspect-feedback-a', 'depends_on', 0.5, 0.5, 'single-memory',
+                '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
+
+               INSERT INTO session_memories
+               (id, session_key, memory_id, source, effective_score, predictor_score,
+                final_score, rank, was_injected, relevance_score, created_at, agent_id,
+                path_json)
+               VALUES
+               ('sm-feedback-a', 'sess-feedback', 'mem-feedback-a', 'memory', 0.9, NULL,
+                0.9, 1, 1, 0.9, '2026-01-01T00:00:00Z', 'default',
+                '{"entity_ids":["entity-feedback-a","entity-feedback-b"],"aspect_ids":["aspect-feedback-a"],"dependency_ids":["dep-feedback-a"]}'),
+               ('sm-feedback-agent-b', 'sess-feedback', 'mem-feedback-other', 'memory', 0.9, NULL,
+                0.9, 2, 1, 0.9, '2026-01-01T00:00:00Z', 'agent-b',
+                '{"entity_ids":["entity-feedback-b"],"aspect_ids":[],"dependency_ids":[]}');"#,
+        )
+        .expect("seed path feedback fixture");
+    }
+
+    fn feedback_path_counts(&self) -> serde_json::Value {
+        let conn = rusqlite::Connection::open(self.db_path()).expect("open replay db");
+        conn.busy_timeout(Duration::from_secs(5)).unwrap();
+        let event_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM path_feedback_events WHERE memory_id = 'mem-feedback-a'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count feedback events");
+        let stat_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM path_feedback_stats", [], |row| {
+                row.get(0)
+            })
+            .expect("count feedback stats");
+        let aspect_weight: f64 = conn
+            .query_row(
+                "SELECT weight FROM entity_aspects WHERE id = 'aspect-feedback-a'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("aspect weight");
+        let dep: (f64, f64, String) = conn
+            .query_row(
+                "SELECT strength, confidence, reason FROM entity_dependencies WHERE id = 'dep-feedback-a'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("dependency feedback state");
+        let session_feedback: (f64, i64) = conn
+            .query_row(
+                "SELECT agent_relevance_score, agent_feedback_count
+                 FROM session_memories WHERE id = 'sm-feedback-a'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("session feedback state");
+        serde_json::json!({
+            "eventCount": event_count,
+            "statCount": stat_count,
+            "aspectWeight": aspect_weight,
+            "dependencyStrength": dep.0,
+            "dependencyConfidence": dep.1,
+            "dependencyReason": dep.2,
+            "sessionScore": session_feedback.0,
+            "sessionFeedbackCount": session_feedback.1,
+        })
+    }
+
     fn seed_plugin_audit_fixture(&self) {
         let dir = self._tmpdir.path().join(".daemon/plugins");
         std::fs::create_dir_all(&dir).expect("plugin audit dir");
@@ -1770,6 +1876,7 @@ async fn search_endpoints() {
 #[ignore = "requires built daemon binary"]
 async fn feedback_endpoint() {
     let server = TestServer::start().await;
+    server.seed_feedback_path_fixture();
 
     let bad = server
         .post("/api/memory/feedback", json!({"sessionKey": "sess-1"}))
@@ -1790,6 +1897,46 @@ async fn feedback_endpoint() {
     assert_eq!(body["ok"], true);
     assert_eq!(body["recorded"], 1);
     assert_eq!(body["accepted"], 0);
+
+    let ok = server
+        .post(
+            "/api/memory/feedback",
+            json!({
+                "sessionKey": "sess-feedback",
+                "agentId": "default",
+                "feedback": {
+                    "mem-feedback-a": 1,
+                    "mem-feedback-other": -1
+                },
+                "rewards": {
+                    "mem-feedback-a": { "forward_citation": 1 }
+                }
+            }),
+        )
+        .await;
+    assert_eq!(ok.status(), 200);
+    let body = server.json(ok).await;
+    assert_eq!(body["ok"], true);
+    assert_eq!(body["recorded"], 2);
+    assert_eq!(body["accepted"], 1);
+    assert_eq!(body["rejected"], 1);
+    assert_eq!(body["propagated"], 1);
+    assert_eq!(body["dependenciesUpdated"], 1);
+    assert!(
+        body["acceptanceRule"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("recorded for this session")
+    );
+    let counts = server.feedback_path_counts();
+    assert_eq!(counts["eventCount"], 1);
+    assert_eq!(counts["statCount"], 1);
+    assert_eq!(counts["sessionFeedbackCount"], 1);
+    assert_eq!(counts["sessionScore"], 1.0);
+    assert!(counts["aspectWeight"].as_f64().unwrap() > 0.5);
+    assert!(counts["dependencyStrength"].as_f64().unwrap() > 0.5);
+    assert!(counts["dependencyConfidence"].as_f64().unwrap() > 0.5);
+    assert_eq!(counts["dependencyReason"], "pattern-matched");
 }
 
 #[tokio::test]

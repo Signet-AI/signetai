@@ -92,9 +92,15 @@
 				"ignoreFields": []
 			},
 			"POST /api/memory/feedback": {
-				"deterministic": ["ok", "recorded", "accepted"],
-				"ignoreFields": ["propagated", "cooccurrenceUpdated", "dependenciesUpdated"],
-				"note": "Rust currently applies feedback to session memories; full path propagation parity is pending."
+				"deterministic": [
+					"ok",
+					"recorded",
+					"accepted",
+					"propagated",
+					"cooccurrenceUpdated",
+					"dependenciesUpdated"
+				],
+				"ignoreFields": []
 			},
 			"DELETE /api/memory/:id": {
 				"deterministic": ["deleted"],
