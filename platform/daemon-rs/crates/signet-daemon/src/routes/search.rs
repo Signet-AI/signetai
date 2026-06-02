@@ -86,6 +86,7 @@ pub async fn recall(
     // Rate-limit LLM-enabled recall independently of plain recall.
     // Skipped in local auth mode; active in team/hybrid modes.
     {
+        let auth_runtime = state.auth_snapshot();
         let (reranker_enabled, use_extraction_model) = state
             .config
             .manifest
@@ -94,12 +95,12 @@ pub async fn recall(
             .and_then(|m| m.pipeline_v2.as_ref())
             .map(|p| (p.reranker.enabled, p.reranker.use_extraction_model))
             .unwrap_or((false, false));
-        if reranker_enabled && use_extraction_model && state.auth_mode != AuthMode::Local {
+        if reranker_enabled && use_extraction_model && auth_runtime.mode != AuthMode::Local {
             // authenticate_headers returns Err only for hard auth failures; in local
             // mode we already returned above, so unwrap_or with unauthenticated is safe.
             let auth = authenticate_headers(
-                state.auth_mode,
-                state.auth_secret.as_deref(),
+                auth_runtime.mode,
+                auth_runtime.secret.as_deref(),
                 &headers,
                 is_loopback(&peer),
             )
@@ -109,8 +110,8 @@ pub async fn recall(
             if let Err(resp) = require_rate_limit_guard(
                 &auth,
                 "recallLlm",
-                &state.recall_llm_limiter,
-                state.auth_mode,
+                &auth_runtime.recall_llm_limiter,
+                auth_runtime.mode,
                 None,
             ) {
                 return (*resp).into_response();

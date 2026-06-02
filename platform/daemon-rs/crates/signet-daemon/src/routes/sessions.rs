@@ -31,26 +31,31 @@ pub async fn list(
     headers: HeaderMap,
 ) -> axum::response::Response {
     let is_local = peer.ip().is_loopback();
+    let auth_runtime = state.auth_snapshot();
     let auth = match authenticate_headers(
-        state.auth_mode,
-        state.auth_secret.as_deref(),
+        auth_runtime.mode,
+        auth_runtime.secret.as_deref(),
         &headers,
         is_local,
     ) {
         Ok(a) => a,
         Err(e) => return *e,
     };
-    let agent_id =
-        match resolve_scoped_agent(&auth, state.auth_mode, is_local, params.agent_id.as_deref()) {
-            Ok(id) => id,
-            Err(reason) => {
-                return (
-                    StatusCode::FORBIDDEN,
-                    Json(serde_json::json!({"error": reason})),
-                )
-                    .into_response();
-            }
-        };
+    let agent_id = match resolve_scoped_agent(
+        &auth,
+        auth_runtime.mode,
+        is_local,
+        params.agent_id.as_deref(),
+    ) {
+        Ok(id) => id,
+        Err(reason) => {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({"error": reason})),
+            )
+                .into_response();
+        }
+    };
 
     let tracker_sessions = state.sessions.list_sessions(Some(&agent_id));
     let tracker_keys: std::collections::HashSet<String> =
@@ -232,26 +237,31 @@ pub async fn get(
     headers: HeaderMap,
 ) -> axum::response::Response {
     let is_local = peer.ip().is_loopback();
+    let auth_runtime = state.auth_snapshot();
     let auth = match authenticate_headers(
-        state.auth_mode,
-        state.auth_secret.as_deref(),
+        auth_runtime.mode,
+        auth_runtime.secret.as_deref(),
         &headers,
         is_local,
     ) {
         Ok(a) => a,
         Err(e) => return *e,
     };
-    let agent_id =
-        match resolve_scoped_agent(&auth, state.auth_mode, is_local, params.agent_id.as_deref()) {
-            Ok(id) => id,
-            Err(reason) => {
-                return (
-                    StatusCode::FORBIDDEN,
-                    Json(serde_json::json!({"error": reason})),
-                )
-                    .into_response();
-            }
-        };
+    let agent_id = match resolve_scoped_agent(
+        &auth,
+        auth_runtime.mode,
+        is_local,
+        params.agent_id.as_deref(),
+    ) {
+        Ok(id) => id,
+        Err(reason) => {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({"error": reason})),
+            )
+                .into_response();
+        }
+    };
     // Normalize session: prefix so raw and prefixed keys both resolve.
     let key = key.strip_prefix("session:").unwrap_or(&key).to_string();
 
@@ -297,9 +307,10 @@ pub async fn transcript(
     headers: HeaderMap,
 ) -> axum::response::Response {
     let is_local = peer.ip().is_loopback();
+    let auth_runtime = state.auth_snapshot();
     let auth = match authenticate_headers(
-        state.auth_mode,
-        state.auth_secret.as_deref(),
+        auth_runtime.mode,
+        auth_runtime.secret.as_deref(),
         &headers,
         is_local,
     ) {
@@ -307,17 +318,21 @@ pub async fn transcript(
         Err(e) => return *e,
     };
     let key = key.strip_prefix("session:").unwrap_or(&key).to_string();
-    let agent_id =
-        match resolve_scoped_agent(&auth, state.auth_mode, is_local, params.agent_id.as_deref()) {
-            Ok(id) => id,
-            Err(reason) => {
-                return (
-                    StatusCode::FORBIDDEN,
-                    Json(serde_json::json!({"error": reason})),
-                )
-                    .into_response();
-            }
-        };
+    let agent_id = match resolve_scoped_agent(
+        &auth,
+        auth_runtime.mode,
+        is_local,
+        params.agent_id.as_deref(),
+    ) {
+        Ok(id) => id,
+        Err(reason) => {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({"error": reason})),
+            )
+                .into_response();
+        }
+    };
     let key_for_db = key.clone();
     let agent_for_db = agent_id.clone();
     let result = state
@@ -377,26 +392,31 @@ pub async fn bypass(
     Json(body): Json<BypassBody>,
 ) -> axum::response::Response {
     let is_local = peer.ip().is_loopback();
+    let auth_runtime = state.auth_snapshot();
     let auth = match authenticate_headers(
-        state.auth_mode,
-        state.auth_secret.as_deref(),
+        auth_runtime.mode,
+        auth_runtime.secret.as_deref(),
         &headers,
         is_local,
     ) {
         Ok(a) => a,
         Err(e) => return *e,
     };
-    let agent_id =
-        match resolve_scoped_agent(&auth, state.auth_mode, is_local, params.agent_id.as_deref()) {
-            Ok(id) => id,
-            Err(reason) => {
-                return (
-                    StatusCode::FORBIDDEN,
-                    Json(serde_json::json!({"error": reason})),
-                )
-                    .into_response();
-            }
-        };
+    let agent_id = match resolve_scoped_agent(
+        &auth,
+        auth_runtime.mode,
+        is_local,
+        params.agent_id.as_deref(),
+    ) {
+        Ok(id) => id,
+        Err(reason) => {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({"error": reason})),
+            )
+                .into_response();
+        }
+    };
     let key = key.strip_prefix("session:").unwrap_or(&key).to_string();
 
     // Verify the session exists for this agent (tracker or presence-only).
@@ -437,26 +457,31 @@ pub async fn renew(
     headers: HeaderMap,
 ) -> axum::response::Response {
     let is_local = peer.ip().is_loopback();
+    let auth_runtime = state.auth_snapshot();
     let auth = match authenticate_headers(
-        state.auth_mode,
-        state.auth_secret.as_deref(),
+        auth_runtime.mode,
+        auth_runtime.secret.as_deref(),
         &headers,
         is_local,
     ) {
         Ok(a) => a,
         Err(e) => return *e,
     };
-    let agent_id =
-        match resolve_scoped_agent(&auth, state.auth_mode, is_local, params.agent_id.as_deref()) {
-            Ok(id) => id,
-            Err(reason) => {
-                return (
-                    StatusCode::FORBIDDEN,
-                    Json(serde_json::json!({"error": reason})),
-                )
-                    .into_response();
-            }
-        };
+    let agent_id = match resolve_scoped_agent(
+        &auth,
+        auth_runtime.mode,
+        is_local,
+        params.agent_id.as_deref(),
+    ) {
+        Ok(id) => id,
+        Err(reason) => {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({"error": reason})),
+            )
+                .into_response();
+        }
+    };
     let key = key.strip_prefix("session:").unwrap_or(&key).to_string();
 
     match find_live_session(&state, &key, &agent_id).await {

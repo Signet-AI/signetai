@@ -3704,7 +3704,7 @@ mod tests {
 
     use crate::auth::rate_limiter::{AuthRateLimiter, default_limits};
     use crate::auth::types::AuthMode;
-    use crate::state::AppState;
+    use crate::state::{AppState, AuthRuntimeState};
 
     use super::{
         CHECKPOINT_MIN_DELTA, CheckpointExtractBody, CompactionCompleteBody, PromptSubmitBody,
@@ -3791,10 +3791,12 @@ mod tests {
             None,
             None,
             None,
-            AuthMode::Local,
-            None,
-            AuthRateLimiter::from_rules(&default_limits()),
-            AuthRateLimiter::from_rules(&default_limits()),
+            AuthRuntimeState {
+                mode: AuthMode::Local,
+                secret: None,
+                admin_limiter: AuthRateLimiter::from_rules(&default_limits()),
+                recall_llm_limiter: AuthRateLimiter::from_rules(&default_limits()),
+            },
         ));
         (state, writer, tmp)
     }

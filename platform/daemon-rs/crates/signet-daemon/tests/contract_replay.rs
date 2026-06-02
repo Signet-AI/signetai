@@ -5662,6 +5662,32 @@ async fn wait_for_file_contains(path: &std::path::Path, needle: &str) -> String 
     }
 }
 
+async fn wait_for_http_status(
+    server: &TestServer,
+    path: &str,
+    expected: reqwest::StatusCode,
+) -> reqwest::Response {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
+    let mut last = "none".to_string();
+    loop {
+        if tokio::time::Instant::now() > deadline {
+            panic!("timed out waiting for {path} to return {expected}; last response: {last}");
+        }
+        let resp = server.get(path).await;
+        let status = resp.status();
+        if status == expected {
+            return resp;
+        }
+        last = format!(
+            "{status}: {}",
+            resp.text()
+                .await
+                .unwrap_or_else(|err| format!("failed to read response body: {err}"))
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
 fn run_git(dir: &std::path::Path, args: &[&str]) -> String {
     let output = std::process::Command::new("git")
         .args(args)
@@ -5726,6 +5752,32 @@ async fn watcher_syncs_identity_workspaces_and_architecture_doc() {
         .expect("update root USER.md");
     let updated = wait_for_file_contains(&workspace_agents, "updated root user").await;
     assert!(updated.contains("## USER\n\nupdated root user"));
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn watcher_reloads_auth_config_without_restart() {
+    let server = TestServer::start().await;
+
+    let resp = server.get("/api/auth/whoami").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["mode"], "local");
+
+    std::fs::write(
+        server._tmpdir.path().join("agent.yaml"),
+        "agent:\n  name: test-agent\n  version: 1\nauth:\n  method: token\n  mode: team\n",
+    )
+    .expect("switch auth mode to team");
+
+    let resp = wait_for_http_status(
+        &server,
+        "/api/auth/whoami",
+        reqwest::StatusCode::UNAUTHORIZED,
+    )
+    .await;
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "authentication required");
 }
 
 #[tokio::test]

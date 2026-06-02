@@ -41,9 +41,10 @@ pub async fn whoami(
     headers: HeaderMap,
 ) -> Result<Json<Value>, Response> {
     let is_local = is_loopback(&peer);
+    let auth_runtime = state.auth_snapshot();
     let auth = authenticate_headers(
-        state.auth_mode,
-        state.auth_secret.as_deref(),
+        auth_runtime.mode,
+        auth_runtime.secret.as_deref(),
         &headers,
         is_local,
     )
@@ -52,7 +53,7 @@ pub async fn whoami(
     Ok(Json(json!({
         "authenticated": auth.result.authenticated,
         "claims": auth.result.claims,
-        "mode": state.auth_mode,
+        "mode": auth_runtime.mode,
     })))
 }
 
@@ -87,25 +88,26 @@ pub async fn token(
     Json(body): Json<TokenRequest>,
 ) -> Result<Json<Value>, Response> {
     let is_local = is_loopback(&peer);
+    let auth_runtime = state.auth_snapshot();
     let auth = authenticate_headers(
-        state.auth_mode,
-        state.auth_secret.as_deref(),
+        auth_runtime.mode,
+        auth_runtime.secret.as_deref(),
         &headers,
         is_local,
     )
     .map_err(|resp| *resp)?;
-    require_permission_guard(&auth, Permission::Admin, state.auth_mode, is_local)
+    require_permission_guard(&auth, Permission::Admin, auth_runtime.mode, is_local)
         .map_err(|resp| *resp)?;
     require_rate_limit_guard(
         &auth,
         "admin",
-        &state.auth_admin_limiter,
-        state.auth_mode,
+        &auth_runtime.admin_limiter,
+        auth_runtime.mode,
         headers.get("x-signet-actor").and_then(|v| v.to_str().ok()),
     )
     .map_err(|resp| *resp)?;
 
-    let Some(secret) = state.auth_secret.as_deref() else {
+    let Some(secret) = auth_runtime.secret.as_deref() else {
         return Err((
             StatusCode::BAD_REQUEST,
             Json(json!({"error": "auth secret not available (local mode?)"})),

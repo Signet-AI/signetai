@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -24,45 +23,7 @@ mod state;
 mod watcher;
 mod workspace_paths;
 
-use auth::rate_limiter::{AuthRateLimiter, RateLimitRule, default_limits};
-use auth::tokens::load_or_create_secret;
-use auth::types::AuthMode;
-use state::{AppState, ExtractionRuntimeState, derive_initial_extraction_state};
-
-fn read_auth_mode(config: &DaemonConfig) -> AuthMode {
-    config
-        .manifest
-        .auth
-        .as_ref()
-        .and_then(|auth| auth.mode.as_deref())
-        .map(AuthMode::from_str_lossy)
-        .unwrap_or_default()
-}
-
-fn merge_rate_limits(config: &DaemonConfig) -> HashMap<String, RateLimitRule> {
-    let mut rules = default_limits();
-
-    let Some(auth) = config.manifest.auth.as_ref() else {
-        return rules;
-    };
-    let Some(raw) = auth.rate_limits.as_ref() else {
-        return rules;
-    };
-
-    for (name, cfg) in raw {
-        let Some(rule) = rules.get_mut(name) else {
-            continue;
-        };
-        if let Some(window_ms) = cfg.window_ms.filter(|n| *n > 0) {
-            rule.window_ms = window_ms;
-        }
-        if let Some(max) = cfg.max.filter(|n| *n > 0) {
-            rule.max = max;
-        }
-    }
-
-    rules
-}
+use state::{AppState, AuthRuntimeState, ExtractionRuntimeState, derive_initial_extraction_state};
 
 fn dashboard_dir() -> Option<PathBuf> {
     let candidates = [
@@ -195,19 +156,10 @@ async fn main() -> anyhow::Result<()> {
             })
         });
 
-    let auth_mode = read_auth_mode(&config);
-    let auth_secret = if auth_mode == AuthMode::Local {
+    let auth = AuthRuntimeState::from_config(&config).context("failed to load auth runtime")?;
+    if auth.mode == auth::types::AuthMode::Local {
         info!("auth mode local, admin routes unrestricted on loopback runtime");
-        None
-    } else {
-        let path = config.base_path.join(".daemon").join("auth-secret");
-        Some(load_or_create_secret(&path).context("failed to load auth secret")?)
-    };
-    let merged = merge_rate_limits(&config);
-    let auth_admin_limiter = AuthRateLimiter::from_rules(&merged);
-    // Independent limiter for LLM-enabled recall — separate from admin so
-    // the two buckets don't share state and operators can tune them independently.
-    let recall_llm_limiter = AuthRateLimiter::from_rules(&merged);
+    }
 
     let extraction_worker_stats: Option<signet_pipeline::worker::SharedWorkerRuntimeStats> = None;
 
@@ -218,10 +170,7 @@ async fn main() -> anyhow::Result<()> {
         embedding,
         llm_startup,
         extraction_worker_stats,
-        auth_mode,
-        auth_secret,
-        auth_admin_limiter,
-        recall_llm_limiter,
+        auth,
     ));
 
     // Run extraction preflight synchronously before serving requests.
@@ -2305,7 +2254,7 @@ mod tests {
 
     use crate::auth::rate_limiter::{AuthRateLimiter, default_limits};
     use crate::auth::types::AuthMode;
-    use crate::state::{AppState, ExtractionRuntimeState};
+    use crate::state::{AppState, AuthRuntimeState, ExtractionRuntimeState};
 
     use super::{
         append_api_path, dead_letter_pending_extraction_jobs, host_in_trusted_override_list,
@@ -2392,10 +2341,12 @@ mod tests {
             Some(signet_pipeline::worker::new_runtime_stats_handle(
                 0.8, 30_000,
             )),
-            AuthMode::Local,
-            None,
-            AuthRateLimiter::from_rules(&rules),
-            AuthRateLimiter::from_rules(&rules),
+            AuthRuntimeState {
+                mode: AuthMode::Local,
+                secret: None,
+                admin_limiter: AuthRateLimiter::from_rules(&rules),
+                recall_llm_limiter: AuthRateLimiter::from_rules(&rules),
+            },
         ))
     }
 

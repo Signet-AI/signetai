@@ -127,6 +127,9 @@ async fn file_watcher_loop(
             _ = &mut shutdown_rx => break,
             Some(path) = event_rx.recv() => {
                 info!(path = %path.display(), "file watcher observed workspace change");
+                if is_config_file(&base, &path) {
+                    reload_auth_runtime(&state, &path);
+                }
                 if is_auto_commit_trigger(&base, &path) && should_auto_commit(&state).await {
                     pending_git_changes.push(path.clone());
                     git_sleep
@@ -162,6 +165,9 @@ async fn file_watcher_loop(
             }
             _ = reconcile_interval.tick() => {
                 let changed = diff_watched_files(&base, &mut observed_files);
+                for path in changed.iter().filter(|path| is_config_file(&base, path)) {
+                    reload_auth_runtime(&state, path);
+                }
                 if !changed.is_empty() && should_auto_commit(&state).await {
                     pending_git_changes.extend(changed);
                     git_sleep
@@ -184,6 +190,29 @@ async fn run_workspace_sync(base: &Path) {
         Ok(summary) => debug!(?summary, "workspace sync completed"),
         Err(err) => error!(error = %err, "workspace sync failed"),
     }
+}
+
+fn reload_auth_runtime(state: &AppState, path: &Path) {
+    match state.reload_auth_runtime() {
+        Ok(auth) => info!(
+            path = %path.display(),
+            mode = ?auth.mode,
+            "file watcher reloaded auth runtime"
+        ),
+        Err(err) => error!(
+            path = %path.display(),
+            error = %err,
+            "file watcher failed to reload auth runtime"
+        ),
+    }
+}
+
+fn is_config_file(base: &Path, path: &Path) -> bool {
+    path.strip_prefix(base).ok().is_some_and(|relative| {
+        relative
+            .to_str()
+            .is_some_and(|name| CONFIG_FILES.contains(&name))
+    })
 }
 
 fn is_sync_trigger(base: &Path, path: &Path) -> bool {

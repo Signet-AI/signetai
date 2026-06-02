@@ -235,18 +235,19 @@ fn guard_admin(
     peer: &SocketAddr,
 ) -> Result<(), Box<Response>> {
     let is_local = is_loopback(peer);
+    let auth_runtime = state.auth_snapshot();
     let auth = authenticate_headers(
-        state.auth_mode,
-        state.auth_secret.as_deref(),
+        auth_runtime.mode,
+        auth_runtime.secret.as_deref(),
         headers,
         is_local,
     )?;
-    require_permission_guard(&auth, Permission::Admin, state.auth_mode, is_local)?;
+    require_permission_guard(&auth, Permission::Admin, auth_runtime.mode, is_local)?;
     require_rate_limit_guard(
         &auth,
         "admin",
-        &state.auth_admin_limiter,
-        state.auth_mode,
+        &auth_runtime.admin_limiter,
+        auth_runtime.mode,
         None,
     )?;
     Ok(())
@@ -516,7 +517,7 @@ mod tests {
     use crate::auth::rate_limiter::{AuthRateLimiter, default_limits};
     use crate::auth::tokens::{create_token, generate_secret};
     use crate::auth::types::{AuthMode, TokenRole, TokenScope};
-    use crate::state::AppState;
+    use crate::state::{AppState, AuthRuntimeState};
 
     use super::{
         find_config_file, format_pipeline_mode, pause, read_pipeline_mode, resume,
@@ -621,10 +622,12 @@ mod tests {
             embedding,
             None, // llm provider
             None,
-            mode,
-            secret.clone(),
-            AuthRateLimiter::from_rules(&rules),
-            AuthRateLimiter::from_rules(&rules),
+            AuthRuntimeState {
+                mode,
+                secret: secret.clone(),
+                admin_limiter: AuthRateLimiter::from_rules(&rules),
+                recall_llm_limiter: AuthRateLimiter::from_rules(&rules),
+            },
         ));
 
         TestState {

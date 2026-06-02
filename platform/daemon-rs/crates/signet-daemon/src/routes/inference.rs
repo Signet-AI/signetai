@@ -81,14 +81,15 @@ fn require_access(
     permission: Permission,
 ) -> Result<AuthState, Response> {
     let local = is_local(peer);
+    let auth_runtime = state.auth_snapshot();
     let auth = authenticate_headers(
-        state.auth_mode,
-        state.auth_secret.as_deref(),
+        auth_runtime.mode,
+        auth_runtime.secret.as_deref(),
         headers,
         local,
     )
     .map_err(|resp| *resp)?;
-    require_permission_guard(&auth, permission, state.auth_mode, local).map_err(|resp| *resp)?;
+    require_permission_guard(&auth, permission, auth_runtime.mode, local).map_err(|resp| *resp)?;
     Ok(auth)
 }
 
@@ -414,13 +415,18 @@ fn build_route_request(
     header_agent_id: Option<&str>,
     header_explicit_target: Option<&str>,
 ) -> Result<RouteRequest, Response> {
+    let auth_runtime = state.auth_snapshot();
     let requested = match header_agent_id {
         Some(agent_id) => Some(agent_id.to_string()),
         None => parse_hint(body.get("agentId"), "agentId")?,
     };
-    let agent_id =
-        resolve_scoped_agent(auth, state.auth_mode, is_local(peer), requested.as_deref())
-            .map_err(|reason| error(StatusCode::FORBIDDEN, reason))?;
+    let agent_id = resolve_scoped_agent(
+        auth,
+        auth_runtime.mode,
+        is_local(peer),
+        requested.as_deref(),
+    )
+    .map_err(|reason| error(StatusCode::FORBIDDEN, reason))?;
     let operation = parse_hint(body.get("operation"), "operation")?;
     let privacy = parse_hint(body.get("privacy"), "privacy")?;
     let mut explicit_targets = parse_explicit_targets(body)?;

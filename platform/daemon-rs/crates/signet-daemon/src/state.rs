@@ -1,5 +1,5 @@
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, RwLock as StdRwLock};
 use std::{collections::HashMap, time::SystemTime};
 
 use serde::{Deserialize, Serialize};
@@ -14,7 +14,8 @@ use signet_pipeline::worker::{SharedWorkerRuntimeStats, WorkerHandle};
 use signet_services::session::{ContinuityTracker, DedupState, SessionTracker};
 use tokio::sync::{Mutex, RwLock};
 
-use crate::auth::rate_limiter::AuthRateLimiter;
+use crate::auth::rate_limiter::{AuthRateLimiter, RateLimitRule, default_limits};
+use crate::auth::tokens::load_or_create_secret;
 use crate::auth::types::AuthMode;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -369,6 +370,68 @@ fn detect_git_branch(base_path: &std::path::Path, remote: &str) -> String {
     "main".to_string()
 }
 
+#[derive(Clone)]
+pub struct AuthRuntimeState {
+    pub mode: AuthMode,
+    pub secret: Option<Vec<u8>>,
+    pub admin_limiter: AuthRateLimiter,
+    pub recall_llm_limiter: AuthRateLimiter,
+}
+
+impl AuthRuntimeState {
+    pub fn from_config(config: &DaemonConfig) -> anyhow::Result<Self> {
+        let mode = read_auth_mode(config);
+        let secret = if mode == AuthMode::Local {
+            None
+        } else {
+            let path = config.base_path.join(".daemon").join("auth-secret");
+            Some(load_or_create_secret(&path)?)
+        };
+        let rules = merge_rate_limits(config);
+        Ok(Self {
+            mode,
+            secret,
+            admin_limiter: AuthRateLimiter::from_rules(&rules),
+            recall_llm_limiter: AuthRateLimiter::from_rules(&rules),
+        })
+    }
+}
+
+pub fn read_auth_mode(config: &DaemonConfig) -> AuthMode {
+    config
+        .manifest
+        .auth
+        .as_ref()
+        .and_then(|auth| auth.mode.as_deref())
+        .map(AuthMode::from_str_lossy)
+        .unwrap_or_default()
+}
+
+pub fn merge_rate_limits(config: &DaemonConfig) -> HashMap<String, RateLimitRule> {
+    let mut rules = default_limits();
+
+    let Some(auth) = config.manifest.auth.as_ref() else {
+        return rules;
+    };
+    let Some(raw) = auth.rate_limits.as_ref() else {
+        return rules;
+    };
+
+    for (name, cfg) in raw {
+        let Some(rule) = rules.get_mut(name) else {
+            continue;
+        };
+        if let Some(window_ms) = cfg.window_ms.filter(|n| *n > 0) {
+            rule.window_ms = window_ms;
+        }
+        if let Some(max) = cfg.max.filter(|n| *n > 0) {
+            rule.max = max;
+        }
+    }
+
+    rules
+}
+
 /// Shared application state passed to all route handlers.
 pub struct AppState {
     pub config: DaemonConfig,
@@ -383,11 +446,7 @@ pub struct AppState {
     pub synthesis_worker_handle: Mutex<Option<SynthesisHandle>>,
     pub document_worker_handle: Mutex<Option<DocumentHandle>>,
     pub extraction_worker_stats: RwLock<Option<SharedWorkerRuntimeStats>>,
-    pub auth_mode: AuthMode,
-    pub auth_secret: Option<Vec<u8>>,
-    pub auth_admin_limiter: AuthRateLimiter,
-    /// Independent limiter for the LLM-enabled recall path.
-    pub recall_llm_limiter: AuthRateLimiter,
+    pub auth: StdRwLock<AuthRuntimeState>,
     pub sessions: SessionTracker,
     pub continuity: ContinuityTracker,
     pub dedup: DedupState,
@@ -438,10 +497,7 @@ impl AppState {
         embedding: Option<Arc<dyn EmbeddingProvider>>,
         llm: Option<Arc<dyn LlmProvider>>,
         extraction_worker_stats: Option<SharedWorkerRuntimeStats>,
-        auth_mode: AuthMode,
-        auth_secret: Option<Vec<u8>>,
-        auth_admin_limiter: AuthRateLimiter,
-        recall_llm_limiter: AuthRateLimiter,
+        auth: AuthRuntimeState,
     ) -> Self {
         let paused = config
             .manifest
@@ -483,10 +539,7 @@ impl AppState {
             synthesis_worker_handle: Mutex::new(None),
             document_worker_handle: Mutex::new(None),
             extraction_worker_stats: RwLock::new(extraction_worker_stats),
-            auth_mode,
-            auth_secret,
-            auth_admin_limiter,
-            recall_llm_limiter,
+            auth: StdRwLock::new(auth),
             sessions: SessionTracker::new(),
             continuity: ContinuityTracker::new(),
             dedup: DedupState::new(),
@@ -502,6 +555,23 @@ impl AppState {
 
     pub fn pipeline_paused(&self) -> bool {
         self.pipeline_paused.load(Ordering::SeqCst)
+    }
+
+    pub fn auth_snapshot(&self) -> AuthRuntimeState {
+        match self.auth.read() {
+            Ok(auth) => auth.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        }
+    }
+
+    pub fn reload_auth_runtime(&self) -> anyhow::Result<AuthRuntimeState> {
+        let config = DaemonConfig::from_env().map_err(anyhow::Error::msg)?;
+        let next = AuthRuntimeState::from_config(&config)?;
+        match self.auth.write() {
+            Ok(mut auth) => *auth = next.clone(),
+            Err(poisoned) => *poisoned.into_inner() = next.clone(),
+        }
+        Ok(next)
     }
 
     fn normalize_harness_id(harness: &str) -> Option<&'static str> {

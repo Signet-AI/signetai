@@ -162,15 +162,18 @@ fn resolve_mcp_analytics_agent(
 ) -> Result<String, Box<Response>> {
     let auth = require_telemetry_access(state, headers, peer)?;
     let is_local = is_loopback(peer);
-    resolve_scoped_agent(&auth, state.auth_mode, is_local, requested.as_deref()).map_err(|error| {
-        Box::new(
-            (
-                StatusCode::FORBIDDEN,
-                Json(serde_json::json!({ "error": error })),
+    let auth_runtime = state.auth_snapshot();
+    resolve_scoped_agent(&auth, auth_runtime.mode, is_local, requested.as_deref()).map_err(
+        |error| {
+            Box::new(
+                (
+                    StatusCode::FORBIDDEN,
+                    Json(serde_json::json!({ "error": error })),
+                )
+                    .into_response(),
             )
-                .into_response(),
-        )
-    })
+        },
+    )
 }
 
 fn telemetry_event_rows(
@@ -1030,13 +1033,14 @@ fn require_telemetry_access(
     peer: &SocketAddr,
 ) -> Result<AuthState, Box<Response>> {
     let is_local = is_loopback(peer);
+    let auth_runtime = state.auth_snapshot();
     let auth = authenticate_headers(
-        state.auth_mode,
-        state.auth_secret.as_deref(),
+        auth_runtime.mode,
+        auth_runtime.secret.as_deref(),
         headers,
         is_local,
     )?;
-    require_permission_guard(&auth, Permission::Analytics, state.auth_mode, is_local)?;
+    require_permission_guard(&auth, Permission::Analytics, auth_runtime.mode, is_local)?;
     Ok(auth)
 }
 
@@ -1216,7 +1220,8 @@ pub async fn memory_search(
         Ok(auth) => auth,
         Err(resp) => return *resp,
     };
-    apply_auth_scope(&mut query, &auth, state.auth_mode, is_local);
+    let auth_runtime = state.auth_snapshot();
+    apply_auth_scope(&mut query, &auth, auth_runtime.mode, is_local);
     match load_items(state, query, false).await {
         Ok(items) => (
             StatusCode::OK,
@@ -1243,7 +1248,8 @@ pub async fn memory_search_export(
         Ok(auth) => auth,
         Err(resp) => return *resp,
     };
-    apply_auth_scope(&mut query, &auth, state.auth_mode, is_local);
+    let auth_runtime = state.auth_snapshot();
+    apply_auth_scope(&mut query, &auth, auth_runtime.mode, is_local);
     match load_items(state, query, true).await {
         Ok(items) => {
             let mut headers = HeaderMap::new();

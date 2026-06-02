@@ -936,9 +936,10 @@ fn guard_write_scope(
     peer: &SocketAddr,
     agent_id: &str,
 ) -> Result<(), Box<axum::response::Response>> {
+    let auth_runtime = state.auth_snapshot();
     let auth = authenticate_headers(
-        state.auth_mode,
-        state.auth_secret.as_deref(),
+        auth_runtime.mode,
+        auth_runtime.secret.as_deref(),
         headers,
         is_loopback(peer),
     )?;
@@ -947,7 +948,7 @@ fn guard_write_scope(
         agent: Some(agent_id.to_string()),
         user: None,
     };
-    require_scope_guard(&auth, &target, state.auth_mode, is_loopback(peer))
+    require_scope_guard(&auth, &target, auth_runtime.mode, is_loopback(peer))
 }
 
 fn dead_letter_blocked_extraction_memory(
@@ -1471,7 +1472,7 @@ mod tests {
 
     use crate::auth::rate_limiter::{AuthRateLimiter, default_limits};
     use crate::auth::types::AuthMode;
-    use crate::state::ExtractionRuntimeState;
+    use crate::state::{AuthRuntimeState, ExtractionRuntimeState};
 
     use super::{
         RememberBody, dead_letter_blocked_extraction_memory, normalize_scope, parse_remember_tags,
@@ -1879,10 +1880,12 @@ mod tests {
                 None,
                 None, // llm provider
                 None,
-                AuthMode::Local,
-                None,
-                AuthRateLimiter::from_rules(&rules),
-                AuthRateLimiter::from_rules(&rules),
+                AuthRuntimeState {
+                    mode: AuthMode::Local,
+                    secret: None,
+                    admin_limiter: AuthRateLimiter::from_rules(&rules),
+                    recall_llm_limiter: AuthRateLimiter::from_rules(&rules),
+                },
             )),
             dir,
         )

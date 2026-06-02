@@ -1774,16 +1774,17 @@ fn scoped_agent_or_response(
     requested: Option<&str>,
 ) -> Result<String, Response> {
     let is_local = peer.ip().is_loopback();
+    let auth_runtime = state.auth_snapshot();
     let auth = authenticate_headers(
-        state.auth_mode,
-        state.auth_secret.as_deref(),
+        auth_runtime.mode,
+        auth_runtime.secret.as_deref(),
         headers,
         is_local,
     )
     .map_err(|resp| *resp)?;
-    require_permission_guard(&auth, Permission::Recall, state.auth_mode, is_local)
+    require_permission_guard(&auth, Permission::Recall, auth_runtime.mode, is_local)
         .map_err(|resp| *resp)?;
-    resolve_scoped_agent(&auth, state.auth_mode, is_local, requested).map_err(|reason| {
+    resolve_scoped_agent(&auth, auth_runtime.mode, is_local, requested).map_err(|reason| {
         (
             StatusCode::FORBIDDEN,
             Json(serde_json::json!({"error": reason})),

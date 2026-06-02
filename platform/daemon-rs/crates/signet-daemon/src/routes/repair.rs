@@ -1782,7 +1782,7 @@ mod tests {
 
     use crate::auth::rate_limiter::{AuthRateLimiter, default_limits};
     use crate::auth::types::AuthMode;
-    use crate::state::AppState;
+    use crate::state::{AppState, AuthRuntimeState};
 
     use super::*;
 
@@ -1823,10 +1823,12 @@ mod tests {
                 embedding,
                 None,
                 None,
-                AuthMode::Local,
-                None,
-                AuthRateLimiter::from_rules(&rules),
-                AuthRateLimiter::from_rules(&rules),
+                AuthRuntimeState {
+                    mode: AuthMode::Local,
+                    secret: None,
+                    admin_limiter: AuthRateLimiter::from_rules(&rules),
+                    recall_llm_limiter: AuthRateLimiter::from_rules(&rules),
+                },
             )),
             writer,
         )

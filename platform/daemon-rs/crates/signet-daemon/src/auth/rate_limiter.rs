@@ -2,7 +2,7 @@
 //! Resets on daemon restart — acceptable for v1.
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use super::types::RateLimitCheck;
 
@@ -74,10 +74,11 @@ struct WindowEntry {
     window_start: u64,
 }
 
+#[derive(Clone)]
 pub struct RateLimiter {
     window_ms: u64,
     max: u64,
-    windows: Mutex<HashMap<String, WindowEntry>>,
+    windows: Arc<Mutex<HashMap<String, WindowEntry>>>,
 }
 
 impl RateLimiter {
@@ -85,7 +86,7 @@ impl RateLimiter {
         Self {
             window_ms,
             max,
-            windows: Mutex::new(HashMap::new()),
+            windows: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -161,6 +162,7 @@ impl RateLimiter {
 // Multi-operation limiter
 // ---------------------------------------------------------------------------
 
+#[derive(Clone)]
 pub struct AuthRateLimiter {
     limiters: HashMap<String, RateLimiter>,
 }

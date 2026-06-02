@@ -44,9 +44,10 @@ pub async fn summary(
     headers: HeaderMap,
 ) -> impl IntoResponse {
     let is_local = peer.ip().is_loopback();
+    let auth_runtime = state.auth_snapshot();
     let auth = match authenticate_headers(
-        state.auth_mode,
-        state.auth_secret.as_deref(),
+        auth_runtime.mode,
+        auth_runtime.secret.as_deref(),
         &headers,
         is_local,
     ) {
@@ -54,21 +55,25 @@ pub async fn summary(
         Err(e) => return *e,
     };
     if let Err(e) =
-        require_permission_guard(&auth, Permission::Analytics, state.auth_mode, is_local)
+        require_permission_guard(&auth, Permission::Analytics, auth_runtime.mode, is_local)
     {
         return *e;
     }
-    let agent_id =
-        match resolve_scoped_agent(&auth, state.auth_mode, is_local, params.agent_id.as_deref()) {
-            Ok(id) => id,
-            Err(reason) => {
-                return (
-                    StatusCode::FORBIDDEN,
-                    Json(serde_json::json!({"error": reason})),
-                )
-                    .into_response();
-            }
-        };
+    let agent_id = match resolve_scoped_agent(
+        &auth,
+        auth_runtime.mode,
+        is_local,
+        params.agent_id.as_deref(),
+    ) {
+        Ok(id) => id,
+        Err(reason) => {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({"error": reason})),
+            )
+                .into_response();
+        }
+    };
     let since = params.since;
     let limit = params.limit.unwrap_or(10).clamp(1, 100);
 

@@ -288,14 +288,15 @@ fn require_authenticated_or_response(
     permission: Permission,
 ) -> Result<(), Response> {
     let is_local = peer.ip().is_loopback();
+    let auth_runtime = state.auth_snapshot();
     let auth = authenticate_headers(
-        state.auth_mode,
-        state.auth_secret.as_deref(),
+        auth_runtime.mode,
+        auth_runtime.secret.as_deref(),
         headers,
         is_local,
     )
     .map_err(|resp| *resp)?;
-    require_permission_guard(&auth, permission, state.auth_mode, is_local).map_err(|resp| *resp)
+    require_permission_guard(&auth, permission, auth_runtime.mode, is_local).map_err(|resp| *resp)
 }
 
 /// GET /api/marketplace/reviews
