@@ -95,6 +95,11 @@ impl TestServer {
             .env("SIGNET_HOST", "127.0.0.1")
             .env("SIGNET_BIND", "127.0.0.1")
             .env("CODEX_HOME", tmpdir.path().join("codex"))
+            .env(
+                "SIGNET_UPDATE_MOCK_GITHUB_VERSION",
+                env!("CARGO_PKG_VERSION"),
+            )
+            .env("SIGNET_UPDATE_MOCK_RUN_RESULT", "success")
             .env("RUST_LOG", "warn")
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -3060,7 +3065,13 @@ async fn update_status() {
     let body = server.json(resp).await;
     assert_eq!(body["updateAvailable"], false);
     assert_eq!(body["restartRequired"], false);
+    assert_eq!(body["latestVersion"], env!("CARGO_PKG_VERSION"));
     assert!(body["checkedAt"].as_str().is_some());
+
+    let resp = server.get("/api/update/check").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["cached"], true);
 
     let resp = server.get("/api/update/config").await;
     assert_eq!(resp.status(), 200);
@@ -3089,14 +3100,44 @@ async fn update_status() {
     assert_eq!(resp.status(), 200);
     let body = server.json(resp).await;
     assert_eq!(body["success"], true);
-    assert_eq!(body["persisted"], false);
+    assert_eq!(body["persisted"], true);
+    assert_eq!(body["config"]["autoInstall"], true);
+    assert_eq!(body["config"]["checkInterval"], 300);
     assert_eq!(body["config"]["channel"], "stable");
+    let persisted = std::fs::read_to_string(server._tmpdir.path().join("agent.yaml")).unwrap();
+    assert!(
+        persisted
+            .contains("updates:\n  auto_install: true\n  check_interval: 300\n  channel: stable\n")
+    );
 
     let resp = server.post("/api/update/run", json!({})).await;
     assert_eq!(resp.status(), 200);
     let body = server.json(resp).await;
     assert_eq!(body["success"], true);
     assert_eq!(body["restartRequired"], false);
+
+    let resp = server
+        .post("/api/update/run", json!({"targetVersion": "not-semver"}))
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["success"], false);
+    assert_eq!(body["message"], "Invalid targetVersion 'not-semver'");
+
+    let resp = server
+        .post("/api/update/run", json!({"targetVersion": "v0.139.0"}))
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["success"], true);
+    assert_eq!(body["installedVersion"], "0.139.0");
+    assert_eq!(body["restartRequired"], true);
+
+    let resp = server.get("/api/update").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["restartRequired"], true);
+    assert_eq!(body["pendingVersion"], "0.139.0");
 }
 
 #[tokio::test]

@@ -68,6 +68,150 @@ pub struct OpenClawHeartbeat {
     pub data: OpenClawHeartbeatData,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum UpdateChannel {
+    Stable,
+    Nightly,
+}
+
+impl Default for UpdateChannel {
+    fn default() -> Self {
+        Self::Stable
+    }
+}
+
+impl UpdateChannel {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Stable => "stable",
+            Self::Nightly => "nightly",
+        }
+    }
+
+    pub fn npm_tag(&self) -> &'static str {
+        match self {
+            Self::Stable => "latest",
+            Self::Nightly => "next",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateRuntimeConfig {
+    pub auto_install: bool,
+    pub check_interval: i64,
+    pub channel: UpdateChannel,
+}
+
+impl Default for UpdateRuntimeConfig {
+    fn default() -> Self {
+        Self {
+            auto_install: false,
+            check_interval: 21_600,
+            channel: UpdateChannel::Stable,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateInfo {
+    pub current_version: String,
+    pub latest_version: Option<String>,
+    pub update_available: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub release_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub release_notes: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub published_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub check_error: Option<String>,
+    pub restart_required: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pending_version: Option<String>,
+    pub is_major_upgrade: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct UpdateRuntimeState {
+    pub current_version: String,
+    pub last_check: Option<UpdateInfo>,
+    pub last_check_time: Option<String>,
+    pub check_in_progress: bool,
+    pub install_in_progress: bool,
+    pub pending_restart_version: Option<String>,
+    pub last_auto_update_at: Option<String>,
+    pub last_auto_update_error: Option<String>,
+    pub config: UpdateRuntimeConfig,
+}
+
+impl UpdateRuntimeState {
+    pub fn new(base_path: &std::path::Path, current_version: String) -> Self {
+        Self {
+            current_version,
+            last_check: None,
+            last_check_time: None,
+            check_in_progress: false,
+            install_in_progress: false,
+            pending_restart_version: None,
+            last_auto_update_at: None,
+            last_auto_update_error: None,
+            config: UpdateRuntimeConfig::load(base_path),
+        }
+    }
+}
+
+impl UpdateRuntimeConfig {
+    pub fn load(base_path: &std::path::Path) -> Self {
+        let mut config = Self::default();
+        for name in ["agent.yaml", "AGENT.yaml"] {
+            let path = base_path.join(name);
+            let Ok(content) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            let Ok(value) = serde_yml::from_str::<serde_yml::Value>(&content) else {
+                continue;
+            };
+            let Some(updates) = value
+                .as_mapping()
+                .and_then(|map| {
+                    map.get(yaml_key("updates"))
+                        .or_else(|| map.get(yaml_key("update")))
+                })
+                .and_then(serde_yml::Value::as_mapping)
+            else {
+                continue;
+            };
+
+            if let Some(value) =
+                yaml_bool(updates, "autoInstall").or_else(|| yaml_bool(updates, "auto_install"))
+            {
+                config.auto_install = value;
+            }
+            if let Some(value) = yaml_i64(updates, "checkInterval")
+                .or_else(|| yaml_i64(updates, "check_interval"))
+                .filter(|value| (300..=604_800).contains(value))
+            {
+                config.check_interval = value;
+            }
+            if let Some(channel) = yaml_string(updates, "channel").and_then(|raw| {
+                match raw.trim().to_ascii_lowercase().as_str() {
+                    "stable" | "latest" => Some(UpdateChannel::Stable),
+                    "nightly" | "next" => Some(UpdateChannel::Nightly),
+                    _ => None,
+                }
+            }) {
+                config.channel = channel;
+            }
+            break;
+        }
+        config
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GitRuntimeConfig {
@@ -189,6 +333,11 @@ fn yaml_u64(map: &serde_yml::Mapping, key: &str) -> Option<u64> {
         .and_then(|value| value.as_u64().or_else(|| value.as_str()?.parse().ok()))
 }
 
+fn yaml_i64(map: &serde_yml::Mapping, key: &str) -> Option<i64> {
+    map.get(&yaml_key(key))
+        .and_then(|value| value.as_i64().or_else(|| value.as_str()?.parse().ok()))
+}
+
 fn detect_git_branch(base_path: &std::path::Path, remote: &str) -> String {
     if let Ok(output) = std::process::Command::new("git")
         .args(["symbolic-ref", &format!("refs/remotes/{remote}/HEAD")])
@@ -246,6 +395,7 @@ pub struct AppState {
     pub harness_last_seen: RwLock<HashMap<String, String>>,
     pub openclaw_heartbeat: RwLock<Option<OpenClawHeartbeat>>,
     pub git_config: RwLock<GitRuntimeConfig>,
+    pub update_state: RwLock<UpdateRuntimeState>,
     pub secret_exec_jobs: RwLock<HashMap<String, serde_json::Value>>,
     pub os_agent_sessions: RwLock<HashMap<String, OsAgentSession>>,
 }
@@ -318,6 +468,8 @@ impl AppState {
                 )
             });
         let git_config = GitRuntimeConfig::load(&config.base_path);
+        let update_state =
+            UpdateRuntimeState::new(&config.base_path, env!("CARGO_PKG_VERSION").to_string());
 
         Self {
             config,
@@ -342,6 +494,7 @@ impl AppState {
             harness_last_seen: RwLock::new(HashMap::new()),
             openclaw_heartbeat: RwLock::new(None),
             git_config: RwLock::new(git_config),
+            update_state: RwLock::new(update_state),
             secret_exec_jobs: RwLock::new(HashMap::new()),
             os_agent_sessions: RwLock::new(HashMap::new()),
         }

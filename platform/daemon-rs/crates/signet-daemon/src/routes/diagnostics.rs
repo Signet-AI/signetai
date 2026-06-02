@@ -2,7 +2,7 @@
 //!
 //! Health diagnostics, log listing, and version/update endpoints.
 
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, path::Path as StdPath, sync::Arc, time::Duration};
 
 use axum::{
     Json,
@@ -13,10 +13,13 @@ use axum::{
 };
 use chrono::Timelike;
 use rusqlite::{Connection, types::ValueRef};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use signet_pipeline::provider::GenerateOpts;
 
-use crate::state::{AppState, OpenClawHeartbeat, OpenClawHeartbeatData};
+use crate::state::{
+    AppState, OpenClawHeartbeat, OpenClawHeartbeatData, UpdateChannel, UpdateInfo,
+    UpdateRuntimeConfig,
+};
 
 // ---------------------------------------------------------------------------
 // Route handlers
@@ -816,61 +819,30 @@ pub async fn version() -> Json<serde_json::Value> {
     }))
 }
 
-/// GET /api/update — update status
-pub async fn update_status() -> Json<serde_json::Value> {
-    // Update checking requires npm registry calls — stub
-    Json(serde_json::json!({
-        "available": false,
-        "current": env!("CARGO_PKG_VERSION"),
-    }))
-}
-
 const MIN_UPDATE_INTERVAL_SECONDS: i64 = 300;
 const MAX_UPDATE_INTERVAL_SECONDS: i64 = 604_800;
-const DEFAULT_UPDATE_INTERVAL_SECONDS: i64 = 21_600;
+const UPDATE_CACHE_TTL_SECONDS: i64 = 3_600;
+const UPDATE_HTTP_TIMEOUT_SECONDS: u64 = 10;
+const UPDATE_INSTALL_TIMEOUT_SECONDS: u64 = 15 * 60;
 
-fn update_config_payload() -> serde_json::Value {
+fn update_config_payload(
+    config: &UpdateRuntimeConfig,
+    pending_restart_version: Option<&str>,
+    last_auto_update_at: Option<&str>,
+    last_auto_update_error: Option<&str>,
+    install_in_progress: bool,
+) -> serde_json::Value {
     serde_json::json!({
-        "autoInstall": false,
-        "checkInterval": DEFAULT_UPDATE_INTERVAL_SECONDS,
-        "channel": "stable",
+        "autoInstall": config.auto_install,
+        "checkInterval": config.check_interval,
+        "channel": config.channel.as_str(),
         "minInterval": MIN_UPDATE_INTERVAL_SECONDS,
         "maxInterval": MAX_UPDATE_INTERVAL_SECONDS,
-        "pendingRestartVersion": serde_json::Value::Null,
-        "lastAutoUpdateAt": serde_json::Value::Null,
-        "lastAutoUpdateError": serde_json::Value::Null,
-        "updateInProgress": false,
+        "pendingRestartVersion": pending_restart_version,
+        "lastAutoUpdateAt": last_auto_update_at,
+        "lastAutoUpdateError": last_auto_update_error,
+        "updateInProgress": install_in_progress,
     })
-}
-
-/// GET /api/update/check — explicit update check status.
-pub async fn update_check() -> Json<serde_json::Value> {
-    Json(serde_json::json!({
-        "updateAvailable": false,
-        "currentVersion": env!("CARGO_PKG_VERSION"),
-        "latestVersion": env!("CARGO_PKG_VERSION"),
-        "restartRequired": false,
-        "pendingVersion": serde_json::Value::Null,
-        "cached": false,
-        "checkedAt": chrono::Utc::now().to_rfc3339(),
-    }))
-}
-
-/// GET /api/update/config — update scheduler config.
-pub async fn update_config() -> Json<serde_json::Value> {
-    Json(update_config_payload())
-}
-
-#[derive(Default, Deserialize)]
-#[serde(default)]
-pub struct UpdateConfigBody {
-    auto_install: Option<serde_json::Value>,
-    #[serde(rename = "autoInstall")]
-    auto_install_camel: Option<serde_json::Value>,
-    check_interval: Option<serde_json::Value>,
-    #[serde(rename = "checkInterval")]
-    check_interval_camel: Option<serde_json::Value>,
-    channel: Option<String>,
 }
 
 fn parse_update_bool(value: &serde_json::Value) -> Option<bool> {
@@ -893,8 +865,484 @@ fn parse_update_interval(value: &serde_json::Value) -> Option<i64> {
     }
 }
 
-/// POST /api/update/config — validate update scheduler config.
-pub async fn update_config_save(Json(body): Json<UpdateConfigBody>) -> impl IntoResponse {
+fn parse_update_channel(value: &str) -> Option<UpdateChannel> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "stable" | "latest" => Some(UpdateChannel::Stable),
+        "nightly" | "next" => Some(UpdateChannel::Nightly),
+        _ => None,
+    }
+}
+
+#[derive(Debug)]
+struct ParsedVersion {
+    core: Vec<u64>,
+    prerelease: Vec<String>,
+}
+
+fn parse_version(value: &str) -> Option<ParsedVersion> {
+    let without_prefix = value.trim().trim_start_matches(['v', 'V']);
+    let without_build = without_prefix.split('+').next().unwrap_or_default();
+    if without_build.is_empty() {
+        return None;
+    }
+    let (core_part, prerelease_part) = without_build
+        .split_once('-')
+        .map_or((without_build, ""), |(core, pre)| (core, pre));
+    let mut core = Vec::new();
+    for part in core_part.split('.') {
+        if part.is_empty() || !part.chars().all(|c| c.is_ascii_digit()) {
+            return None;
+        }
+        core.push(part.parse::<u64>().ok()?);
+    }
+    let prerelease = if prerelease_part.is_empty() {
+        Vec::new()
+    } else {
+        let parts = prerelease_part
+            .split('.')
+            .map(ToOwned::to_owned)
+            .collect::<Vec<_>>();
+        if parts.iter().any(|part| {
+            part.is_empty() || !part.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+        }) {
+            return None;
+        }
+        parts
+    };
+    Some(ParsedVersion { core, prerelease })
+}
+
+fn compare_prerelease(left: &[String], right: &[String]) -> std::cmp::Ordering {
+    match (left.is_empty(), right.is_empty()) {
+        (true, true) => return std::cmp::Ordering::Equal,
+        (true, false) => return std::cmp::Ordering::Greater,
+        (false, true) => return std::cmp::Ordering::Less,
+        (false, false) => {}
+    }
+    for index in 0..left.len().max(right.len()) {
+        let Some(left_part) = left.get(index) else {
+            return std::cmp::Ordering::Less;
+        };
+        let Some(right_part) = right.get(index) else {
+            return std::cmp::Ordering::Greater;
+        };
+        let left_numeric = left_part.chars().all(|c| c.is_ascii_digit());
+        let right_numeric = right_part.chars().all(|c| c.is_ascii_digit());
+        match (left_numeric, right_numeric) {
+            (true, true) => {
+                let ordering = left_part
+                    .parse::<u64>()
+                    .unwrap_or(0)
+                    .cmp(&right_part.parse::<u64>().unwrap_or(0));
+                if !ordering.is_eq() {
+                    return ordering;
+                }
+            }
+            (true, false) => return std::cmp::Ordering::Less,
+            (false, true) => return std::cmp::Ordering::Greater,
+            (false, false) => {
+                let ordering = left_part.cmp(right_part);
+                if !ordering.is_eq() {
+                    return ordering;
+                }
+            }
+        }
+    }
+    std::cmp::Ordering::Equal
+}
+
+fn compare_versions(left: &str, right: &str) -> std::cmp::Ordering {
+    let Some(left) = parse_version(left) else {
+        return left
+            .trim()
+            .trim_start_matches(['v', 'V'])
+            .cmp(right.trim().trim_start_matches(['v', 'V']));
+    };
+    let Some(right) = parse_version(right) else {
+        return left
+            .core
+            .iter()
+            .map(u64::to_string)
+            .collect::<Vec<_>>()
+            .join(".")
+            .as_str()
+            .cmp(right.trim().trim_start_matches(['v', 'V']));
+    };
+    for index in 0..left.core.len().max(right.core.len()) {
+        let ordering = left
+            .core
+            .get(index)
+            .copied()
+            .unwrap_or(0)
+            .cmp(&right.core.get(index).copied().unwrap_or(0));
+        if !ordering.is_eq() {
+            return ordering;
+        }
+    }
+    compare_prerelease(&left.prerelease, &right.prerelease)
+}
+
+fn is_version_newer(candidate: &str, current: &str) -> bool {
+    compare_versions(candidate, current).is_gt()
+}
+
+fn is_major_upgrade(current: &str, candidate: &str) -> bool {
+    parse_version(candidate)
+        .and_then(|version| version.core.first().copied())
+        .unwrap_or(0)
+        > parse_version(current)
+            .and_then(|version| version.core.first().copied())
+            .unwrap_or(0)
+}
+
+fn normalize_target_version(raw: Option<&str>) -> Option<String> {
+    let value = raw?.trim().trim_start_matches(['v', 'V']);
+    if value.is_empty() {
+        return None;
+    }
+    let (without_build, build_valid) =
+        value
+            .split_once('+')
+            .map_or((value, true), |(version, build)| {
+                (
+                    version,
+                    !build.is_empty()
+                        && build
+                            .chars()
+                            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.'),
+                )
+            });
+    if !build_valid || parse_version(without_build).is_none() {
+        return None;
+    }
+    Some(value.to_string())
+}
+
+fn config_path(base_path: &StdPath) -> Option<std::path::PathBuf> {
+    ["agent.yaml", "AGENT.yaml"]
+        .into_iter()
+        .map(|name| base_path.join(name))
+        .find(|path| path.exists())
+}
+
+fn format_updates_section(config: &UpdateRuntimeConfig) -> String {
+    format!(
+        "updates:\n  auto_install: {}\n  check_interval: {}\n  channel: {}\n",
+        config.auto_install,
+        config.check_interval,
+        config.channel.as_str()
+    )
+}
+
+fn replace_updates_section(current: &str, config: &UpdateRuntimeConfig) -> String {
+    let replacement = format_updates_section(config);
+    let mut output = Vec::new();
+    let mut inserted = false;
+    let mut skipping_updates = false;
+    for line in current.lines() {
+        if line.trim_start().starts_with("updates:") && !line.starts_with([' ', '\t']) {
+            if !inserted {
+                output.extend(replacement.trim_end().lines().map(ToOwned::to_owned));
+                inserted = true;
+            }
+            skipping_updates = true;
+            continue;
+        }
+        if skipping_updates {
+            if line.starts_with([' ', '\t']) || line.trim().is_empty() {
+                continue;
+            }
+            skipping_updates = false;
+        }
+        output.push(line.to_string());
+    }
+    if !inserted {
+        if !output.is_empty() {
+            output.push(String::new());
+        }
+        output.extend(replacement.trim_end().lines().map(ToOwned::to_owned));
+    }
+    format!("{}\n", output.join("\n"))
+}
+
+fn persist_update_config(base_path: &StdPath, config: &UpdateRuntimeConfig) -> bool {
+    let Some(path) = config_path(base_path) else {
+        return false;
+    };
+    let Ok(current) = std::fs::read_to_string(&path) else {
+        return false;
+    };
+    let updated = replace_updates_section(&current, config);
+    if updated == current {
+        return true;
+    }
+    std::fs::write(path, updated).is_ok()
+}
+
+#[derive(Deserialize)]
+pub struct UpdateCheckQuery {
+    force: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct GitHubReleaseResponse {
+    tag_name: String,
+    html_url: Option<String>,
+    body: Option<String>,
+    published_at: Option<String>,
+    draft: Option<bool>,
+    prerelease: Option<bool>,
+}
+
+#[derive(Deserialize)]
+struct NpmDistTagResponse {
+    version: Option<String>,
+}
+
+async fn fetch_stable_from_github()
+-> Result<(String, Option<String>, Option<String>, Option<String>), String> {
+    if let Ok(version) = std::env::var("SIGNET_UPDATE_MOCK_GITHUB_VERSION") {
+        return Ok((
+            version,
+            std::env::var("SIGNET_UPDATE_MOCK_RELEASE_URL").ok(),
+            std::env::var("SIGNET_UPDATE_MOCK_RELEASE_NOTES").ok(),
+            std::env::var("SIGNET_UPDATE_MOCK_PUBLISHED_AT").ok(),
+        ));
+    }
+    let response = reqwest::Client::new()
+        .get("https://api.github.com/repos/Signet-AI/signetai/releases/latest")
+        .header("Accept", "application/vnd.github.v3+json")
+        .header("User-Agent", "signet-daemon")
+        .timeout(Duration::from_secs(UPDATE_HTTP_TIMEOUT_SECONDS))
+        .send()
+        .await
+        .map_err(|error| error.to_string())?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "GitHub releases lookup failed ({})",
+            response.status()
+        ));
+    }
+    let release = response
+        .json::<GitHubReleaseResponse>()
+        .await
+        .map_err(|error| error.to_string())?;
+    if release.draft.unwrap_or(false) || release.prerelease.unwrap_or(false) {
+        return Err("GitHub latest release is not stable".to_string());
+    }
+    Ok((
+        release.tag_name.trim_start_matches(['v', 'V']).to_string(),
+        release.html_url,
+        release.body.map(|body| body.chars().take(500).collect()),
+        release.published_at,
+    ))
+}
+
+async fn fetch_latest_from_npm(channel: &UpdateChannel) -> Result<String, String> {
+    if let Ok(version) = std::env::var("SIGNET_UPDATE_MOCK_NPM_VERSION") {
+        return Ok(version);
+    }
+    let response = reqwest::Client::new()
+        .get(format!(
+            "https://registry.npmjs.org/signetai/{}",
+            channel.npm_tag()
+        ))
+        .timeout(Duration::from_secs(UPDATE_HTTP_TIMEOUT_SECONDS))
+        .send()
+        .await
+        .map_err(|error| error.to_string())?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "npm registry lookup failed ({})",
+            response.status()
+        ));
+    }
+    response
+        .json::<NpmDistTagResponse>()
+        .await
+        .map_err(|error| error.to_string())?
+        .version
+        .ok_or_else(|| "npm registry response missing version".to_string())
+}
+
+async fn check_for_updates(state: &Arc<AppState>) -> UpdateInfo {
+    {
+        let mut update = state.update_state.write().await;
+        update.check_in_progress = true;
+    }
+
+    let (current_version, channel, pending_restart_version) = {
+        let update = state.update_state.read().await;
+        (
+            update.current_version.clone(),
+            update.config.channel.clone(),
+            update.pending_restart_version.clone(),
+        )
+    };
+
+    let mut result = UpdateInfo {
+        current_version: current_version.clone(),
+        latest_version: None,
+        update_available: false,
+        release_url: None,
+        release_notes: None,
+        published_at: None,
+        check_error: None,
+        restart_required: false,
+        pending_version: None,
+        is_major_upgrade: false,
+    };
+    let mut errors = Vec::new();
+
+    if channel == UpdateChannel::Stable {
+        match fetch_stable_from_github().await {
+            Ok((version, url, notes, published)) => {
+                result.latest_version = Some(version);
+                result.release_url = url;
+                result.release_notes = notes;
+                result.published_at = published;
+            }
+            Err(error) => errors.push(error),
+        }
+    }
+
+    if result.latest_version.is_none() {
+        match fetch_latest_from_npm(&channel).await {
+            Ok(version) => result.latest_version = Some(version),
+            Err(error) => errors.push(error),
+        }
+    }
+
+    if let Some(latest) = result.latest_version.as_deref() {
+        result.update_available = is_version_newer(latest, &current_version);
+        result.is_major_upgrade = is_major_upgrade(&current_version, latest);
+    }
+    if let Some(pending) = pending_restart_version {
+        result.restart_required = true;
+        result.pending_version = Some(pending.clone());
+        if result
+            .latest_version
+            .as_deref()
+            .map(|latest| compare_versions(latest, &pending).is_eq())
+            .unwrap_or(false)
+        {
+            result.update_available = false;
+        }
+    }
+    if result.latest_version.is_none() && !errors.is_empty() {
+        result.check_error = Some(errors.join(" | "));
+    }
+
+    let checked_at = chrono::Utc::now().to_rfc3339();
+    {
+        let mut update = state.update_state.write().await;
+        update.last_check = Some(result.clone());
+        update.last_check_time = Some(checked_at);
+        update.check_in_progress = false;
+    }
+    result
+}
+
+fn update_check_payload(
+    info: &UpdateInfo,
+    cached: bool,
+    checked_at: Option<&str>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "currentVersion": info.current_version,
+        "latestVersion": info.latest_version,
+        "updateAvailable": info.update_available,
+        "releaseUrl": info.release_url,
+        "releaseNotes": info.release_notes,
+        "publishedAt": info.published_at,
+        "checkError": info.check_error,
+        "restartRequired": info.restart_required,
+        "pendingVersion": info.pending_version,
+        "isMajorUpgrade": info.is_major_upgrade,
+        "cached": cached,
+        "checkedAt": checked_at,
+    })
+}
+
+/// GET /api/update — update status
+pub async fn update_status(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+    let update = state.update_state.read().await;
+    Json(serde_json::json!({
+        "available": update
+            .last_check
+            .as_ref()
+            .map(|check| check.update_available)
+            .unwrap_or(false),
+        "current": update.current_version,
+        "latest": update.last_check.as_ref().and_then(|check| check.latest_version.clone()),
+        "restartRequired": update.pending_restart_version.is_some(),
+        "pendingVersion": update.pending_restart_version,
+        "checkInProgress": update.check_in_progress,
+        "installInProgress": update.install_in_progress,
+    }))
+}
+
+/// GET /api/update/check — explicit update check status.
+pub async fn update_check(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<UpdateCheckQuery>,
+) -> Json<serde_json::Value> {
+    let force = query.force.as_deref() == Some("true");
+    if !force {
+        let cached = state.update_state.read().await;
+        if let (Some(last_check), Some(last_check_time)) =
+            (cached.last_check.as_ref(), cached.last_check_time.as_ref())
+            && chrono::DateTime::parse_from_rfc3339(last_check_time)
+                .map(|time| {
+                    chrono::Utc::now()
+                        .signed_duration_since(time.with_timezone(&chrono::Utc))
+                        .num_seconds()
+                        < UPDATE_CACHE_TTL_SECONDS
+                })
+                .unwrap_or(false)
+        {
+            return Json(update_check_payload(
+                last_check,
+                true,
+                Some(last_check_time.as_str()),
+            ));
+        }
+    }
+
+    let info = check_for_updates(&state).await;
+    let checked_at = state.update_state.read().await.last_check_time.clone();
+    Json(update_check_payload(&info, false, checked_at.as_deref()))
+}
+
+/// GET /api/update/config — update scheduler config.
+pub async fn update_config(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+    let update = state.update_state.read().await;
+    Json(update_config_payload(
+        &update.config,
+        update.pending_restart_version.as_deref(),
+        update.last_auto_update_at.as_deref(),
+        update.last_auto_update_error.as_deref(),
+        update.install_in_progress,
+    ))
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default)]
+pub struct UpdateConfigBody {
+    auto_install: Option<serde_json::Value>,
+    #[serde(rename = "autoInstall")]
+    auto_install_camel: Option<serde_json::Value>,
+    check_interval: Option<serde_json::Value>,
+    #[serde(rename = "checkInterval")]
+    check_interval_camel: Option<serde_json::Value>,
+    channel: Option<String>,
+}
+
+/// POST /api/update/config — validate and persist update scheduler config.
+pub async fn update_config_save(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<UpdateConfigBody>,
+) -> impl IntoResponse {
     let auto_install = body.auto_install_camel.or(body.auto_install);
     if let Some(value) = auto_install.as_ref()
         && parse_update_bool(value).is_none()
@@ -909,6 +1357,7 @@ pub async fn update_config_save(Json(body): Json<UpdateConfigBody>) -> impl Into
             .into_response();
     }
 
+    let parsed_auto_install = auto_install.as_ref().and_then(parse_update_bool);
     let check_interval = body.check_interval_camel.or(body.check_interval);
     if let Some(value) = check_interval.as_ref()
         && parse_update_interval(value).is_none()
@@ -924,11 +1373,10 @@ pub async fn update_config_save(Json(body): Json<UpdateConfigBody>) -> impl Into
         )
             .into_response();
     }
+    let parsed_check_interval = check_interval.as_ref().and_then(parse_update_interval);
 
-    if let Some(channel) = body.channel.as_deref()
-        && channel != "stable"
-        && channel != "nightly"
-    {
+    let parsed_channel = body.channel.as_deref().and_then(parse_update_channel);
+    if body.channel.as_deref().is_some() && parsed_channel.is_none() {
         return (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({
@@ -939,30 +1387,249 @@ pub async fn update_config_save(Json(body): Json<UpdateConfigBody>) -> impl Into
             .into_response();
     }
 
+    let mut update = state.update_state.write().await;
+    let changed = parsed_auto_install.is_some()
+        || parsed_check_interval.is_some()
+        || parsed_channel.is_some();
+    if let Some(value) = parsed_auto_install {
+        update.config.auto_install = value;
+    }
+    if let Some(value) = parsed_check_interval {
+        update.config.check_interval = value;
+    }
+    if let Some(value) = parsed_channel {
+        update.config.channel = value;
+    }
+    let persisted = if changed {
+        persist_update_config(&state.config.base_path, &update.config)
+    } else {
+        true
+    };
+
     (
         StatusCode::OK,
         Json(serde_json::json!({
             "success": true,
             "config": {
-                "autoInstall": false,
-                "checkInterval": DEFAULT_UPDATE_INTERVAL_SECONDS,
-                "channel": "stable",
+                "autoInstall": update.config.auto_install,
+                "checkInterval": update.config.check_interval,
+                "channel": update.config.channel.as_str(),
             },
-            "persisted": false,
-            "pendingRestartVersion": serde_json::Value::Null,
-            "lastAutoUpdateAt": serde_json::Value::Null,
-            "lastAutoUpdateError": serde_json::Value::Null,
+            "persisted": persisted,
+            "pendingRestartVersion": update.pending_restart_version,
+            "lastAutoUpdateAt": update.last_auto_update_at,
+            "lastAutoUpdateError": update.last_auto_update_error,
         })),
     )
         .into_response()
 }
 
-/// POST /api/update/run — installer execution placeholder.
-pub async fn update_run() -> Json<serde_json::Value> {
-    Json(serde_json::json!({
-        "success": true,
-        "message": "Already running the latest version.",
-        "installedVersion": env!("CARGO_PKG_VERSION"),
-        "restartRequired": false,
+#[derive(Default, Deserialize)]
+#[serde(default)]
+pub struct UpdateRunBody {
+    #[serde(rename = "targetVersion")]
+    target_version: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateRunResult {
+    success: bool,
+    message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    output: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    installed_version: Option<String>,
+    restart_required: bool,
+}
+
+fn clip_update_output(output: &str) -> Option<String> {
+    let trimmed = output.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if trimmed.len() <= 6_000 {
+        Some(trimmed.to_string())
+    } else {
+        Some(trimmed[trimmed.len() - 6_000..].to_string())
+    }
+}
+
+async fn command_exists(command: &str) -> bool {
+    tokio::process::Command::new(command)
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .await
+        .map(|output| output.status.success())
+        .unwrap_or(false)
+}
+
+async fn run_update_install(target_version: &str) -> UpdateRunResult {
+    if let Ok(result) = std::env::var("SIGNET_UPDATE_MOCK_RUN_RESULT") {
+        return if result == "success" {
+            UpdateRunResult {
+                success: true,
+                message: "Update installed. Restart daemon to apply.".to_string(),
+                output: None,
+                installed_version: Some(target_version.to_string()),
+                restart_required: true,
+            }
+        } else {
+            UpdateRunResult {
+                success: false,
+                message: result,
+                output: None,
+                installed_version: None,
+                restart_required: false,
+            }
+        };
+    }
+
+    let install_package = format!("signetai@{target_version}");
+    let (command, args): (&str, Vec<String>) = if command_exists("bun").await {
+        ("bun", vec!["add".into(), "-g".into(), install_package])
+    } else {
+        ("npm", vec!["install".into(), "-g".into(), install_package])
+    };
+    let output = match tokio::time::timeout(
+        Duration::from_secs(UPDATE_INSTALL_TIMEOUT_SECONDS),
+        tokio::process::Command::new(command).args(&args).output(),
+    )
+    .await
+    {
+        Ok(Ok(output)) => output,
+        Ok(Err(error)) => {
+            return UpdateRunResult {
+                success: false,
+                message: format!("Update failed: {error}"),
+                output: None,
+                installed_version: None,
+                restart_required: false,
+            };
+        }
+        Err(_) => {
+            return UpdateRunResult {
+                success: false,
+                message: "Update failed: install command timed out".to_string(),
+                output: None,
+                installed_version: None,
+                restart_required: false,
+            };
+        }
+    };
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let clipped = clip_update_output(&format!("{stdout}\n{stderr}"));
+    if !output.status.success() {
+        return UpdateRunResult {
+            success: false,
+            message: format!(
+                "Update failed: {}",
+                if stderr.trim().is_empty() {
+                    "Unknown error"
+                } else {
+                    stderr.trim()
+                }
+            ),
+            output: clipped,
+            installed_version: None,
+            restart_required: false,
+        };
+    }
+    UpdateRunResult {
+        success: true,
+        message: "Update installed. Restart daemon to apply.".to_string(),
+        output: clipped,
+        installed_version: Some(target_version.to_string()),
+        restart_required: true,
+    }
+}
+
+/// POST /api/update/run — install an available update or explicit target version.
+pub async fn update_run(
+    State(state): State<Arc<AppState>>,
+    body: Option<Json<UpdateRunBody>>,
+) -> Json<serde_json::Value> {
+    let body_target = body.and_then(|Json(body)| body.target_version);
+    if body_target.is_some() && normalize_target_version(body_target.as_deref()).is_none() {
+        return Json(serde_json::json!({
+            "success": false,
+            "message": format!("Invalid targetVersion '{}'", body_target.unwrap_or_default()),
+            "restartRequired": false,
+        }));
+    }
+
+    {
+        let mut update = state.update_state.write().await;
+        if update.install_in_progress {
+            return Json(serde_json::json!({
+                "success": false,
+                "message": "Update already in progress",
+                "restartRequired": false,
+            }));
+        }
+        update.install_in_progress = true;
+    }
+
+    let mut target_version = normalize_target_version(body_target.as_deref());
+    if target_version.is_none() {
+        let check = check_for_updates(&state).await;
+        if check.restart_required && !check.update_available {
+            let installed = check
+                .pending_version
+                .clone()
+                .or(check.latest_version.clone())
+                .unwrap_or_else(|| "already".to_string());
+            let mut update = state.update_state.write().await;
+            update.install_in_progress = false;
+            return Json(serde_json::json!({
+                "success": true,
+                "message": format!("Update {installed} installed. Restart daemon to apply."),
+                "installedVersion": installed,
+                "restartRequired": true,
+            }));
+        }
+        if !check.update_available {
+            let installed = check.latest_version.unwrap_or(check.current_version);
+            let mut update = state.update_state.write().await;
+            update.install_in_progress = false;
+            return Json(serde_json::json!({
+                "success": true,
+                "message": "Already running the latest version.",
+                "installedVersion": installed,
+                "restartRequired": false,
+            }));
+        }
+        target_version = check.latest_version;
+    }
+
+    let Some(target_version) = target_version else {
+        let mut update = state.update_state.write().await;
+        update.install_in_progress = false;
+        return Json(serde_json::json!({
+            "success": false,
+            "message": "Update failed: no target version available",
+            "restartRequired": false,
+        }));
+    };
+
+    let result = run_update_install(&target_version).await;
+    {
+        let mut update = state.update_state.write().await;
+        update.install_in_progress = false;
+        if result.success {
+            update.pending_restart_version = result.installed_version.clone();
+            update.last_check = None;
+            update.last_check_time = None;
+        }
+    }
+    Json(serde_json::to_value(result).unwrap_or_else(|_| {
+        serde_json::json!({
+            "success": false,
+            "message": "Update failed: could not serialize result",
+            "restartRequired": false,
+        })
     }))
 }
