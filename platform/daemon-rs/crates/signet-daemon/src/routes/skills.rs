@@ -6,6 +6,7 @@
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::{
     Json,
@@ -15,6 +16,7 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::json;
+use tokio::process::Command;
 
 use crate::{
     auth::{
@@ -34,6 +36,12 @@ pub struct SearchQuery {
 pub struct InstallRequest {
     name: Option<String>,
     source: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SkillInstallCommand {
+    command: String,
+    args: Vec<String>,
 }
 
 pub async fn list(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
@@ -185,27 +193,169 @@ pub async fn install(
         )
             .into_response();
     };
-    if validate_skill_name(name).is_err() {
+    if validate_install_name(name).is_err() {
         return (
             StatusCode::BAD_REQUEST,
             Json(json!({"error": "Invalid skill name"})),
         )
             .into_response();
     }
-    // Rust daemon parity: validate and acknowledge the install request without
-    // shelling out from the daemon process. The TS tests assert that valid input
-    // gets past validation; actual marketplace install remains an external CLI concern.
-    (
-        StatusCode::ACCEPTED,
-        Json(json!({
-            "success": false,
-            "queued": false,
+
+    let Some(command) = build_skill_install_command(name, req.source.as_deref()) else {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({
+                "success": false,
+                "error": "ClawHub skill installation is not yet implemented by the Rust daemon"
+            })),
+        )
+            .into_response();
+    };
+
+    match run_skill_install_command(command).await {
+        Ok(output) => Json(json!({
+            "success": true,
             "name": name,
-            "source": req.source,
-            "error": "skill installation is not executed by the Rust daemon"
-        })),
-    )
-        .into_response()
+            "output": output
+        }))
+        .into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({
+                "success": false,
+                "error": error
+            })),
+        )
+            .into_response(),
+    }
+}
+
+fn build_skill_install_command(name: &str, source: Option<&str>) -> Option<SkillInstallCommand> {
+    build_skill_install_command_for_family(name, source, &preferred_package_manager())
+}
+
+fn build_skill_install_command_for_family(
+    name: &str,
+    source: Option<&str>,
+    family: &str,
+) -> Option<SkillInstallCommand> {
+    if source.is_some_and(|value| value.starts_with("clawhub@")) {
+        return None;
+    }
+
+    let pkg = source
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(name);
+    let mut skills_args = vec![
+        "add".to_string(),
+        pkg.to_string(),
+        "--global".to_string(),
+        "--yes".to_string(),
+    ];
+    if source.is_some_and(|value| value != name && is_simple_owner_repo(value)) {
+        skills_args.push("--skill".to_string());
+        skills_args.push(name.to_string());
+    }
+
+    let (command, args) = match family {
+        "bun" => {
+            let mut args = vec!["skills".to_string()];
+            args.extend(skills_args);
+            ("bunx".to_string(), args)
+        }
+        "pnpm" => {
+            let mut args = vec!["dlx".to_string(), "skills".to_string()];
+            args.extend(skills_args);
+            ("pnpm".to_string(), args)
+        }
+        "yarn" => {
+            let mut args = vec!["dlx".to_string(), "skills".to_string()];
+            args.extend(skills_args);
+            ("yarn".to_string(), args)
+        }
+        _ => {
+            let mut args = vec![
+                "exec".to_string(),
+                "--yes".to_string(),
+                "--".to_string(),
+                "skills".to_string(),
+            ];
+            args.extend(skills_args);
+            ("npm".to_string(), args)
+        }
+    };
+
+    Some(SkillInstallCommand { command, args })
+}
+
+fn preferred_package_manager() -> String {
+    if let Ok(user_agent) = std::env::var("npm_config_user_agent") {
+        for family in ["bun", "pnpm", "yarn", "npm"] {
+            if user_agent.starts_with(family) && command_exists(command_for_family(family)) {
+                return family.to_string();
+            }
+        }
+    }
+    for family in ["bun", "pnpm", "yarn", "npm"] {
+        if command_exists(command_for_family(family)) {
+            return family.to_string();
+        }
+    }
+    "npm".to_string()
+}
+
+fn command_for_family(family: &str) -> &str {
+    match family {
+        "bun" => "bunx",
+        "pnpm" => "pnpm",
+        "yarn" => "yarn",
+        _ => "npm",
+    }
+}
+
+fn command_exists(command: &str) -> bool {
+    let Some(path) = std::env::var_os("PATH") else {
+        return false;
+    };
+    std::env::split_paths(&path).any(|dir| dir.join(command).is_file())
+}
+
+async fn run_skill_install_command(command: SkillInstallCommand) -> Result<String, String> {
+    let child = Command::new(&command.command)
+        .args(&command.args)
+        .kill_on_drop(true)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|err| err.to_string())?;
+
+    let output = match tokio::time::timeout(Duration::from_secs(60), child.wait_with_output()).await
+    {
+        Ok(result) => result.map_err(|err| err.to_string())?,
+        Err(_) => return Err("Install timed out".to_string()),
+    };
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    if output.status.success() {
+        Ok(stdout)
+    } else {
+        let message = if !stderr.trim().is_empty() {
+            stderr
+        } else if !stdout.trim().is_empty() {
+            stdout
+        } else {
+            format!(
+                "Install exited with code {}",
+                output
+                    .status
+                    .code()
+                    .map_or_else(|| "unknown".to_string(), |code| code.to_string())
+            )
+        };
+        Err(message)
+    }
 }
 
 fn require_admin_mutation(
@@ -311,4 +461,88 @@ fn validate_skill_name(name: &str) -> Result<String, ()> {
         return Err(());
     }
     Ok(name.to_string())
+}
+
+fn validate_install_name(name: &str) -> Result<(), ()> {
+    if name.contains('\\') || name.contains("..") || name.trim().is_empty() {
+        return Err(());
+    }
+    if !name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '/'))
+    {
+        return Err(());
+    }
+    Ok(())
+}
+
+fn is_simple_owner_repo(value: &str) -> bool {
+    let mut parts = value.split('/');
+    let Some(owner) = parts.next() else {
+        return false;
+    };
+    let Some(repo) = parts.next() else {
+        return false;
+    };
+    parts.next().is_none()
+        && !owner.is_empty()
+        && !repo.is_empty()
+        && owner
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
+        && repo
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn skill_install_command_matches_ts_bun_skills_cli_plan() {
+        let cmd =
+            build_skill_install_command_for_family("web-search", Some("Signet-AI/signetai"), "bun")
+                .unwrap();
+        assert_eq!(cmd.command, "bunx");
+        assert_eq!(
+            cmd.args,
+            vec![
+                "skills",
+                "add",
+                "Signet-AI/signetai",
+                "--global",
+                "--yes",
+                "--skill",
+                "web-search"
+            ]
+        );
+    }
+
+    #[test]
+    fn skill_install_command_keeps_skills_sh_sources_on_package_arg() {
+        let cmd = build_skill_install_command_for_family(
+            "web-search",
+            Some("inference-skills/skills@web-search"),
+            "bun",
+        )
+        .unwrap();
+        assert_eq!(
+            cmd.args,
+            vec![
+                "skills",
+                "add",
+                "inference-skills/skills@web-search",
+                "--global",
+                "--yes"
+            ]
+        );
+    }
+
+    #[test]
+    fn install_name_allows_repo_form_but_blocks_traversal() {
+        assert!(validate_install_name("owner/repo").is_ok());
+        assert!(validate_install_name("../repo").is_err());
+        assert!(validate_install_name("bad\\repo").is_err());
+    }
 }

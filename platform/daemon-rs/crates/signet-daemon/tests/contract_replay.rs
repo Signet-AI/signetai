@@ -1316,6 +1316,7 @@ fn write_fake_provider_bins(
     let bw = bin_dir.join("bw");
     let op = bin_dir.join("op");
     let signet = bin_dir.join("signet");
+    let bunx = bin_dir.join("bunx");
     std::fs::write(
         &bw,
         r#"#!/bin/sh
@@ -1417,6 +1418,45 @@ esac
 "#,
     )
     .expect("write fake signet");
+    std::fs::write(
+        &bunx,
+        r#"#!/bin/sh
+set -eu
+if [ "${1-}" != "skills" ] || [ "${2-}" != "add" ]; then
+  echo "unsupported bunx command: $*" >&2
+  exit 2
+fi
+pkg="${3-}"
+skill=""
+shift 3
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --skill)
+      shift
+      skill="${1-}"
+      ;;
+  esac
+  shift || true
+done
+if [ -z "$skill" ]; then
+  skill="${pkg##*/}"
+  skill="${skill%@*}"
+fi
+target="${SIGNET_PATH}/skills/${skill}"
+mkdir -p "$target"
+cat >"${target}/SKILL.md" <<EOF
+---
+name: ${skill}
+description: Installed by fake skills runner
+version: 1.0.0
+---
+
+# ${skill}
+EOF
+echo "fake skills installed ${skill} from ${pkg}"
+"#,
+    )
+    .expect("write fake bunx");
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -1426,6 +1466,8 @@ esac
             .expect("chmod fake op");
         std::fs::set_permissions(&signet, std::fs::Permissions::from_mode(0o755))
             .expect("chmod fake signet");
+        std::fs::set_permissions(&bunx, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod fake bunx");
     }
     (bw, op, bin_dir)
 }
@@ -5313,7 +5355,24 @@ async fn skills_endpoints() {
             json!({"name": "web-search", "source": "Signet-AI/signetai"}),
         )
         .await;
-    assert_ne!(resp.status(), 400);
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["success"], true);
+    assert_eq!(body["name"], "web-search");
+    assert!(
+        body["output"]
+            .as_str()
+            .unwrap()
+            .contains("fake skills installed web-search from Signet-AI/signetai")
+    );
+    let installed_skill = server._tmpdir.path().join("skills/web-search/SKILL.md");
+    assert!(installed_skill.exists());
+
+    let resp = server.get("/api/skills/web-search").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["name"], "web-search");
+    assert_eq!(body["description"], "Installed by fake skills runner");
 
     let resp = server.delete("/api/skills/test-skill").await;
     assert_eq!(resp.status(), 200);
