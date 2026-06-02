@@ -7380,7 +7380,9 @@ async fn remaining_public_routes_have_contract_replay_coverage() {
     assert_status("DELETE /api/tasks/:id", &resp, &[404]);
 
     let resp = server.post("/v1/chat/completions", json!({})).await;
-    assert_status("POST /v1/chat/completions", &resp, &[400, 404, 501]);
+    assert_eq!(resp.status(), 503);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"]["message"], "inference router not initialized");
 }
 
 #[tokio::test]

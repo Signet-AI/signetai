@@ -901,6 +901,16 @@ pub async fn gateway_chat_completions(
         Ok(auth) => auth,
         Err(resp) => return resp,
     };
+    let config = match load_inference_config(&state) {
+        Ok(config) => config,
+        Err(resp) => return resp,
+    };
+    if !config.enabled {
+        return gateway_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "inference router not initialized",
+        );
+    }
     let body = match read_json_object(bytes, MAX_GATEWAY_BYTES) {
         Ok(body) => body,
         Err(resp) => return gateway_error(resp.status(), "request body must be valid JSON"),
@@ -919,16 +929,6 @@ pub async fn gateway_chat_completions(
         Ok(target) => target,
         Err(resp) => return resp,
     };
-    let config = match load_inference_config(&state) {
-        Ok(config) => config,
-        Err(resp) => return resp,
-    };
-    if !config.enabled {
-        return gateway_error(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "inference router not initialized",
-        );
-    }
     if let Err(resp) = build_route_request(
         &state,
         peer,
