@@ -3,9 +3,12 @@
 //! Provides the filesystem-backed skill read/list/delete API that the TS daemon
 //! exposes for dashboard and harness clients.
 
+use std::collections::HashMap;
+use std::fs::{self, File};
+use std::io;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use axum::{
@@ -17,6 +20,8 @@ use axum::{
 use serde::Deserialize;
 use serde_json::json;
 use tokio::process::Command;
+use uuid::Uuid;
+use zip::ZipArchive;
 
 use crate::{
     auth::{
@@ -43,6 +48,15 @@ struct SkillInstallCommand {
     command: String,
     args: Vec<String>,
 }
+
+const CLAWHUB_DOWNLOAD_BASE_DEFAULT: &str = "https://clawhub.ai/api/v1/download";
+const MAX_CLAWHUB_ZIP_BYTES: u64 = 50 * 1024 * 1024;
+const MAX_CLAWHUB_ZIP_ENTRIES: usize = 500;
+const MAX_CLAWHUB_ENTRY_BYTES: u64 = 25 * 1024 * 1024;
+const MAX_CLAWHUB_UNCOMPRESSED_BYTES: u64 = 100 * 1024 * 1024;
+static CLAWHUB_INSTALL_LOCKS: OnceLock<
+    tokio::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+> = OnceLock::new();
 
 pub async fn list(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
     let skills = skills_dir(&state)
@@ -201,6 +215,38 @@ pub async fn install(
             .into_response();
     }
 
+    match clawhub_install_slug(name, req.source.as_deref()) {
+        Ok(Some(slug)) => {
+            return match install_clawhub_skill(&state, &slug).await {
+                Ok(output) => Json(json!({
+                    "success": true,
+                    "name": slug,
+                    "output": output
+                }))
+                .into_response(),
+                Err(error) => (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({
+                        "success": false,
+                        "error": error
+                    })),
+                )
+                    .into_response(),
+            };
+        }
+        Ok(None) => {}
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({
+                    "success": false,
+                    "error": error
+                })),
+            )
+                .into_response();
+        }
+    }
+
     let Some(command) = build_skill_install_command(name, req.source.as_deref()) else {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -228,6 +274,245 @@ pub async fn install(
         )
             .into_response(),
     }
+}
+
+fn clawhub_install_slug(name: &str, source: Option<&str>) -> Result<Option<String>, String> {
+    let Some(source) = source.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    if !source.starts_with("clawhub@") {
+        return Ok(None);
+    }
+    let slug = source
+        .strip_prefix("clawhub@")
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(name.trim());
+    validate_clawhub_slug(slug)
+        .then(|| Some(slug.to_string()))
+        .ok_or_else(|| "Invalid ClawHub skill slug".to_string())
+}
+
+fn validate_clawhub_slug(slug: &str) -> bool {
+    !slug.is_empty()
+        && slug
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+        && !slug.contains("..")
+}
+
+async fn install_clawhub_skill(state: &AppState, slug: &str) -> Result<String, String> {
+    let base = std::env::var("CLAWHUB_DOWNLOAD_BASE")
+        .unwrap_or_else(|_| CLAWHUB_DOWNLOAD_BASE_DEFAULT.to_string());
+    let mut url = reqwest::Url::parse(&base).map_err(|err| err.to_string())?;
+    url.query_pairs_mut().append_pair("slug", slug);
+
+    let response = reqwest::Client::new()
+        .get(url)
+        .header("User-Agent", "signet-daemon")
+        .send()
+        .await
+        .map_err(|err| err.to_string())?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "ClawHub download failed with HTTP {}",
+            response.status()
+        ));
+    }
+    if response
+        .content_length()
+        .is_some_and(|length| length > MAX_CLAWHUB_ZIP_BYTES)
+    {
+        return Err("ClawHub zip is too large".to_string());
+    }
+    let bytes = response.bytes().await.map_err(|err| err.to_string())?;
+    if bytes.len() as u64 > MAX_CLAWHUB_ZIP_BYTES {
+        return Err("ClawHub zip is too large".to_string());
+    }
+
+    let temp_root = std::env::temp_dir().join(format!(
+        "signet-clawhub-skill-{}-{}",
+        std::process::id(),
+        Uuid::new_v4()
+    ));
+    let result = (|| {
+        fs::create_dir_all(&temp_root).map_err(|err| err.to_string())?;
+        let zip_path = temp_root.join("skill.zip");
+        fs::write(&zip_path, &bytes).map_err(|err| err.to_string())?;
+        let extract_dir = temp_root.join("extract");
+        fs::create_dir_all(&extract_dir).map_err(|err| err.to_string())?;
+        extract_clawhub_zip(&zip_path, &extract_dir)?;
+        validate_extracted_skill_tree(&extract_dir)?;
+        let target_dir = skill_dir(state, slug).map_err(|err| err.to_string())?;
+        Ok((extract_dir, target_dir))
+    })();
+    let result = match result {
+        Ok((extract_dir, target_dir)) => with_clawhub_install_lock(slug, || {
+            replace_skill_directory_atomically(&extract_dir, &target_dir)
+        })
+        .await
+        .map(|()| format!("Installed ClawHub skill {slug}")),
+        Err(error) => Err(error),
+    };
+    let _ = fs::remove_dir_all(&temp_root);
+    result
+}
+
+async fn with_clawhub_install_lock<F, T>(slug: &str, action: F) -> T
+where
+    F: FnOnce() -> T,
+{
+    let lock = {
+        let locks = CLAWHUB_INSTALL_LOCKS.get_or_init(|| tokio::sync::Mutex::new(HashMap::new()));
+        let mut locks = locks.lock().await;
+        locks
+            .entry(slug.to_string())
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+            .clone()
+    };
+    let _guard = lock.lock().await;
+    action()
+}
+
+fn extract_clawhub_zip(zip_path: &Path, extract_dir: &Path) -> Result<(), String> {
+    let file = File::open(zip_path).map_err(|err| err.to_string())?;
+    let mut archive = ZipArchive::new(file).map_err(|err| err.to_string())?;
+    if archive.len() > MAX_CLAWHUB_ZIP_ENTRIES {
+        return Err("ClawHub zip contains too many entries".to_string());
+    }
+
+    let mut total_uncompressed = 0_u64;
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index).map_err(|err| err.to_string())?;
+        let relative = validate_clawhub_entry_path(entry.name())?;
+        if entry.size() > MAX_CLAWHUB_ENTRY_BYTES {
+            return Err("ClawHub zip entry is too large".to_string());
+        }
+        total_uncompressed = total_uncompressed.saturating_add(entry.size());
+        if total_uncompressed > MAX_CLAWHUB_UNCOMPRESSED_BYTES {
+            return Err("ClawHub zip expands to too much data".to_string());
+        }
+        validate_clawhub_entry_type(entry.unix_mode(), entry.is_dir())?;
+
+        let destination = extract_dir.join(relative);
+        if entry.is_dir() {
+            fs::create_dir_all(&destination).map_err(|err| err.to_string())?;
+            continue;
+        }
+        if let Some(parent) = destination.parent() {
+            fs::create_dir_all(parent).map_err(|err| err.to_string())?;
+        }
+        let mut out = File::create(&destination).map_err(|err| err.to_string())?;
+        io::copy(&mut entry, &mut out).map_err(|err| err.to_string())?;
+    }
+
+    Ok(())
+}
+
+fn validate_clawhub_entry_path(name: &str) -> Result<PathBuf, String> {
+    let normalized = name.replace('\\', "/");
+    let trimmed = normalized.trim_end_matches('/');
+    if trimmed.is_empty()
+        || trimmed.starts_with('/')
+        || trimmed.contains('\0')
+        || trimmed.as_bytes().get(1).is_some_and(|byte| *byte == b':')
+    {
+        return Err("ClawHub zip contains invalid paths".to_string());
+    }
+
+    let mut relative = PathBuf::new();
+    for part in trimmed.split('/') {
+        if part.is_empty() || part == "." || part == ".." {
+            return Err("ClawHub zip contains invalid paths".to_string());
+        }
+        relative.push(part);
+    }
+    Ok(relative)
+}
+
+fn validate_clawhub_entry_type(mode: Option<u32>, is_dir: bool) -> Result<(), String> {
+    let Some(mode) = mode else {
+        return Ok(());
+    };
+    let file_type = mode & 0o170000;
+    if is_dir || file_type == 0o040000 || file_type == 0o100000 || file_type == 0 {
+        return Ok(());
+    }
+    Err("ClawHub zip contains unsupported entry types".to_string())
+}
+
+fn validate_extracted_skill_tree(root: &Path) -> Result<(), String> {
+    let skill_file = root.join("SKILL.md");
+    let metadata = fs::symlink_metadata(&skill_file)
+        .map_err(|_| "ClawHub package is missing root SKILL.md".to_string())?;
+    if !metadata.file_type().is_file() {
+        return Err("ClawHub package is missing root SKILL.md".to_string());
+    }
+
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for entry in fs::read_dir(&dir).map_err(|err| err.to_string())? {
+            let entry = entry.map_err(|err| err.to_string())?;
+            let file_type = entry.file_type().map_err(|err| err.to_string())?;
+            if file_type.is_symlink() {
+                return Err("ClawHub package contains symbolic links".to_string());
+            }
+            if file_type.is_dir() {
+                stack.push(entry.path());
+            } else if !file_type.is_file() {
+                return Err("ClawHub package contains non-regular files".to_string());
+            }
+        }
+    }
+    Ok(())
+}
+
+fn replace_skill_directory_atomically(source: &Path, target: &Path) -> Result<(), String> {
+    let parent = target
+        .parent()
+        .ok_or_else(|| "Invalid skill target path".to_string())?;
+    fs::create_dir_all(parent).map_err(|err| err.to_string())?;
+    let suffix = Uuid::new_v4();
+    let staging = parent.join(format!(".install-{}-{suffix}", std::process::id()));
+    let backup = parent.join(format!(".backup-{}-{suffix}", std::process::id()));
+
+    copy_dir_recursive(source, &staging).map_err(|err| err.to_string())?;
+    let had_target = target.exists();
+    if had_target {
+        fs::rename(target, &backup).map_err(|err| err.to_string())?;
+    }
+    match fs::rename(&staging, target) {
+        Ok(()) => {
+            if had_target {
+                let _ = fs::remove_dir_all(&backup);
+            }
+            Ok(())
+        }
+        Err(err) => {
+            let _ = fs::remove_dir_all(&staging);
+            if had_target {
+                let _ = fs::rename(&backup, target);
+            }
+            Err(err.to_string())
+        }
+    }
+}
+
+fn copy_dir_recursive(source: &Path, target: &Path) -> io::Result<()> {
+    fs::create_dir_all(target)?;
+    for entry in fs::read_dir(source)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        let destination = target.join(entry.file_name());
+        if file_type.is_dir() {
+            copy_dir_recursive(&entry.path(), &destination)?;
+        } else if file_type.is_file() {
+            fs::copy(entry.path(), destination)?;
+        } else {
+            return Err(io::Error::other("unsupported ClawHub package entry"));
+        }
+    }
+    Ok(())
 }
 
 fn build_skill_install_command(name: &str, source: Option<&str>) -> Option<SkillInstallCommand> {
@@ -544,5 +829,26 @@ mod tests {
         assert!(validate_install_name("owner/repo").is_ok());
         assert!(validate_install_name("../repo").is_err());
         assert!(validate_install_name("bad\\repo").is_err());
+    }
+
+    #[test]
+    fn clawhub_slug_allows_simple_slug_only() {
+        assert_eq!(
+            clawhub_install_slug("ignored", Some("clawhub@web-search")).unwrap(),
+            Some("web-search".to_string())
+        );
+        assert!(clawhub_install_slug("ignored", Some("clawhub@../bad")).is_err());
+        assert!(clawhub_install_slug("ignored", Some("clawhub@owner/repo")).is_err());
+    }
+
+    #[test]
+    fn clawhub_entry_paths_reject_traversal_and_absolute_paths() {
+        assert_eq!(
+            validate_clawhub_entry_path("nested/SKILL.md").unwrap(),
+            PathBuf::from("nested").join("SKILL.md")
+        );
+        assert!(validate_clawhub_entry_path("../SKILL.md").is_err());
+        assert!(validate_clawhub_entry_path("/tmp/SKILL.md").is_err());
+        assert!(validate_clawhub_entry_path("C:/tmp/SKILL.md").is_err());
     }
 }

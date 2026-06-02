@@ -35,6 +35,7 @@ uuid = { workspace = true }
 reqwest = { workspace = true }
 libc = "0.2"
 notify = { workspace = true }
+zip = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"

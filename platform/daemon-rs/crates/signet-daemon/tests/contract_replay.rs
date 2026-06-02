@@ -8,7 +8,7 @@
 //!   cargo build -p signet-daemon
 //!   cargo test -p signet-daemon --test contract_replay -- --ignored
 
-use std::io::{Read, Write};
+use std::io::{Cursor, Read, Write};
 use std::net::TcpListener;
 use std::time::Duration;
 
@@ -1647,6 +1647,85 @@ impl Drop for MarketplaceCatalogEnvGuard {
             }
         }
     }
+}
+
+struct ClawhubDownloadFixture {
+    base: String,
+    _thread: std::thread::JoinHandle<()>,
+}
+
+impl ClawhubDownloadFixture {
+    fn start(body: Vec<u8>) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind clawhub fixture");
+        listener
+            .set_nonblocking(false)
+            .expect("configure clawhub fixture");
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let thread = std::thread::spawn(move || {
+            for stream in listener.incoming().take(8) {
+                let Ok(mut stream) = stream else {
+                    continue;
+                };
+                let mut buffer = [0_u8; 4096];
+                let _ = stream.read(&mut buffer);
+                let headers = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/zip\r\nContent-Length: {}\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(headers.as_bytes());
+                let _ = stream.write_all(&body);
+            }
+        });
+        Self {
+            base,
+            _thread: thread,
+        }
+    }
+}
+
+struct ClawhubEnvGuard {
+    previous: Option<String>,
+}
+
+impl ClawhubEnvGuard {
+    fn set(base: &str) -> Self {
+        let previous = std::env::var("CLAWHUB_DOWNLOAD_BASE").ok();
+        unsafe {
+            std::env::set_var("CLAWHUB_DOWNLOAD_BASE", format!("{base}/download"));
+        }
+        Self { previous }
+    }
+}
+
+impl Drop for ClawhubEnvGuard {
+    fn drop(&mut self) {
+        unsafe {
+            if let Some(previous) = &self.previous {
+                std::env::set_var("CLAWHUB_DOWNLOAD_BASE", previous);
+            } else {
+                std::env::remove_var("CLAWHUB_DOWNLOAD_BASE");
+            }
+        }
+    }
+}
+
+fn clawhub_skill_archive(name: &str, description: &str) -> Vec<u8> {
+    let mut cursor = Cursor::new(Vec::new());
+    {
+        let mut archive = zip::ZipWriter::new(&mut cursor);
+        let options = zip::write::SimpleFileOptions::default().unix_permissions(0o100644);
+        archive.start_file("SKILL.md", options).unwrap();
+        archive
+            .write_all(
+                format!(
+                    "---\nname: {name}\ndescription: {description}\nversion: 1.0.0\n---\n\n# {name}\n"
+                )
+                .as_bytes(),
+            )
+            .unwrap();
+        archive.finish().unwrap();
+    }
+    cursor.into_inner()
 }
 
 fn daemon_binary() -> String {
@@ -5312,6 +5391,9 @@ async fn hook_recall_and_compaction_endpoints() {
 #[tokio::test]
 #[ignore = "requires built daemon binary"]
 async fn skills_endpoints() {
+    let clawhub_fixture =
+        ClawhubDownloadFixture::start(clawhub_skill_archive("claw-demo", "Installed by ClawHub"));
+    let _clawhub_env = ClawhubEnvGuard::set(&clawhub_fixture.base);
     let server = TestServer::start().await;
     let skills_dir = server._tmpdir.path().join("skills/test-skill");
     std::fs::create_dir_all(&skills_dir).unwrap();
@@ -5373,6 +5455,31 @@ async fn skills_endpoints() {
     let body = server.json(resp).await;
     assert_eq!(body["name"], "web-search");
     assert_eq!(body["description"], "Installed by fake skills runner");
+
+    let resp = server
+        .post(
+            "/api/skills/install",
+            json!({"name": "claw-demo", "source": "clawhub@claw-demo"}),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["success"], true);
+    assert_eq!(body["name"], "claw-demo");
+    assert!(
+        body["output"]
+            .as_str()
+            .unwrap()
+            .contains("Installed ClawHub skill claw-demo")
+    );
+    let installed_skill = server._tmpdir.path().join("skills/claw-demo/SKILL.md");
+    assert!(installed_skill.exists());
+
+    let resp = server.get("/api/skills/claw-demo").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["name"], "claw-demo");
+    assert_eq!(body["description"], "Installed by ClawHub");
 
     let resp = server.delete("/api/skills/test-skill").await;
     assert_eq!(resp.status(), 200);
