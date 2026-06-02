@@ -1056,6 +1056,16 @@ impl TestServer {
             .expect("request failed")
     }
 
+    async fn patch_raw_json(&self, path: &str, body: &str) -> reqwest::Response {
+        self.client
+            .patch(format!("{}{path}", self.base))
+            .header("Content-Type", "application/json")
+            .body(body.to_string())
+            .send()
+            .await
+            .expect("request failed")
+    }
+
     async fn post_bearer(
         &self,
         path: &str,
@@ -2982,6 +2992,58 @@ done
 
     let resp = server.get("/api/marketplace/mcp/policy").await;
     assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["policy"]["mode"], "hybrid");
+    assert_eq!(body["policy"]["maxExpandedTools"], 12);
+    assert_eq!(body["policy"]["maxSearchResults"], 8);
+
+    let resp = server
+        .patch("/api/marketplace/mcp/policy", json!({"mode": "invalid"}))
+        .await;
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "mode must be compact, hybrid, or expanded");
+
+    let resp = server
+        .patch_raw_json("/api/marketplace/mcp/policy", "{")
+        .await;
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "Invalid JSON body");
+
+    let resp = server
+        .patch(
+            "/api/marketplace/mcp/policy",
+            json!({
+                "mode": "expanded",
+                "maxExpandedTools": 151.6,
+                "maxSearchResults": -4.2
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["success"], true);
+    assert_eq!(body["policy"]["mode"], "expanded");
+    assert_eq!(body["policy"]["maxExpandedTools"], 100);
+    assert_eq!(body["policy"]["maxSearchResults"], 1);
+
+    let resp = server
+        .patch(
+            "/api/marketplace/mcp/policy",
+            json!({
+                "mode": "hybrid",
+                "maxExpandedTools": 12,
+                "maxSearchResults": 8
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["success"], true);
+    assert_eq!(body["policy"]["mode"], "hybrid");
+    assert_eq!(body["policy"]["maxExpandedTools"], 12);
+    assert_eq!(body["policy"]["maxSearchResults"], 8);
 
     let resp = server.get("/api/marketplace/mcp/tools").await;
     assert_eq!(resp.status(), 200);
@@ -7617,7 +7679,10 @@ async fn remaining_public_routes_have_contract_replay_coverage() {
     let resp = server
         .patch("/api/marketplace/mcp/policy", json!({"mode": "compact"}))
         .await;
-    assert_status("PATCH /api/marketplace/mcp/policy", &resp, &[200, 400]);
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["success"], true);
+    assert_eq!(body["policy"]["mode"], "compact");
     let resp = server.post("/api/marketplace/mcp/install", json!({})).await;
     assert_status("POST /api/marketplace/mcp/install", &resp, &[400]);
     let resp = server

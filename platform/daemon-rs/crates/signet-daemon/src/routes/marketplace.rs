@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use axum::{
     Json,
+    body::Bytes,
     extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
@@ -69,6 +70,17 @@ pub struct ExposurePolicy {
     pub max_expanded_tools: u32,
     pub max_search_results: u32,
     pub updated_at: String,
+}
+
+fn parse_positive_int(value: Option<&Value>, fallback: u32, min: u32, max: u32) -> u32 {
+    let Some(value) = value else {
+        return fallback;
+    };
+    let Some(number) = value.as_f64().filter(|number| number.is_finite()) else {
+        return fallback;
+    };
+    let rounded = number.round().clamp(min as f64, max as f64);
+    rounded as u32
 }
 
 impl Default for ExposurePolicy {
@@ -1247,29 +1259,43 @@ pub async fn get_policy(State(state): State<Arc<AppState>>) -> Json<serde_json::
 }
 
 /// PATCH /api/marketplace/mcp/policy — update exposure policy
-pub async fn set_policy(
-    State(state): State<Arc<AppState>>,
-    Json(body): Json<serde_json::Value>,
-) -> impl IntoResponse {
+pub async fn set_policy(State(state): State<Arc<AppState>>, bytes: Bytes) -> impl IntoResponse {
+    let body = match serde_json::from_slice::<Value>(&bytes) {
+        Ok(body) => body,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "Invalid JSON body"})),
+            );
+        }
+    };
     let mut policy = load_policy(&state);
 
-    if let Some(mode) = body.get("mode").and_then(|v| v.as_str()) {
-        match mode {
-            "compact" | "hybrid" | "expanded" => policy.mode = mode.into(),
-            _ => {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(serde_json::json!({"error": "invalid mode"})),
-                );
-            }
+    let mode = body
+        .get("mode")
+        .and_then(|value| value.as_str())
+        .unwrap_or(&policy.mode);
+    match mode {
+        "compact" | "hybrid" | "expanded" => policy.mode = mode.into(),
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "mode must be compact, hybrid, or expanded"})),
+            );
         }
     }
-    if let Some(n) = body.get("maxExpandedTools").and_then(|v| v.as_u64()) {
-        policy.max_expanded_tools = n as u32;
-    }
-    if let Some(n) = body.get("maxSearchResults").and_then(|v| v.as_u64()) {
-        policy.max_search_results = n as u32;
-    }
+    policy.max_expanded_tools = parse_positive_int(
+        body.get("maxExpandedTools"),
+        policy.max_expanded_tools,
+        0,
+        100,
+    );
+    policy.max_search_results = parse_positive_int(
+        body.get("maxSearchResults"),
+        policy.max_search_results,
+        1,
+        50,
+    );
     policy.updated_at = chrono::Utc::now().to_rfc3339();
 
     if let Err(e) = save_policy(&state, &policy) {
@@ -1281,7 +1307,7 @@ pub async fn set_policy(
 
     (
         StatusCode::OK,
-        Json(serde_json::json!({ "policy": policy })),
+        Json(serde_json::json!({ "success": true, "policy": policy })),
     )
 }
 
