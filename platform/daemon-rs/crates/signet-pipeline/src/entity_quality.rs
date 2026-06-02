@@ -49,13 +49,63 @@ static ABSTRACT_OR_OPERATIONAL_TYPES: LazyLock<HashSet<&'static str>> = LazyLock
 
 static GENERIC_CANONICAL_NAMES: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
     [
-        "a", "an", "and", "are", "author", "because", "being", "but", "can",
-        "current work", "did", "do", "does", "for", "from", "had", "has",
-        "have", "he", "her", "him", "his", "i", "in", "intent", "is", "it",
-        "its", "let", "of", "on", "or", "pending tasks", "primary request",
-        "read", "recipient", "sender", "she", "someone", "summary", "that",
-        "the", "their", "them", "they", "this", "to", "understand", "want",
-        "was", "we", "we're", "were", "with", "write", "you", "your",
+        "a",
+        "an",
+        "and",
+        "are",
+        "author",
+        "because",
+        "being",
+        "but",
+        "can",
+        "current work",
+        "did",
+        "do",
+        "does",
+        "for",
+        "from",
+        "had",
+        "has",
+        "have",
+        "he",
+        "her",
+        "him",
+        "his",
+        "i",
+        "in",
+        "intent",
+        "is",
+        "it",
+        "its",
+        "let",
+        "of",
+        "on",
+        "or",
+        "pending tasks",
+        "primary request",
+        "read",
+        "recipient",
+        "sender",
+        "she",
+        "someone",
+        "summary",
+        "that",
+        "the",
+        "their",
+        "them",
+        "they",
+        "this",
+        "to",
+        "understand",
+        "want",
+        "was",
+        "we",
+        "we're",
+        "were",
+        "with",
+        "write",
+        "you",
+        "your",
     ]
     .into_iter()
     .collect()
@@ -80,8 +130,16 @@ static METADATA_LABELS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
 
 static DISCOURSE_WORDS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
     [
-        "because", "despite", "however", "let", "once", "read", "summary",
-        "understand", "want", "write",
+        "because",
+        "despite",
+        "however",
+        "let",
+        "once",
+        "read",
+        "summary",
+        "understand",
+        "want",
+        "write",
     ]
     .into_iter()
     .collect()
@@ -127,36 +185,64 @@ pub fn classify_entity_quality(name: &str, etype: Option<&str>) -> EntityQuality
     let has_concrete_type = is_concrete_entity_type(etype);
 
     if canonical.chars().all(|c| c.is_ascii_digit()) {
-        return EntityQualityResult { ok: false, reason: Some("numeric_only") };
+        return EntityQualityResult {
+            ok: false,
+            reason: Some("numeric_only"),
+        };
     }
     if GENERIC_CANONICAL_NAMES.contains(canonical.as_str()) {
-        return EntityQualityResult { ok: false, reason: Some("generic_or_scaffolding_name") };
+        return EntityQualityResult {
+            ok: false,
+            reason: Some("generic_or_scaffolding_name"),
+        };
     }
     if METADATA_LABELS.contains(canonical.as_str()) {
-        return EntityQualityResult { ok: false, reason: Some("metadata_role") };
+        return EntityQualityResult {
+            ok: false,
+            reason: Some("metadata_role"),
+        };
     }
     if DISCOURSE_WORDS.contains(canonical.as_str()) {
-        return EntityQualityResult { ok: false, reason: Some("discourse_fragment") };
+        return EntityQualityResult {
+            ok: false,
+            reason: Some("discourse_fragment"),
+        };
     }
 
     let trimmed = name.trim();
     let lower_trimmed = trimmed.to_lowercase();
-    for prefix in &["user", "assistant", "system", "sender", "recipient", "author"] {
+    for prefix in &[
+        "user",
+        "assistant",
+        "system",
+        "sender",
+        "recipient",
+        "author",
+    ] {
         if lower_trimmed.starts_with(prefix) {
             let rest = &trimmed[prefix.len()..];
             if rest.starts_with(':') || rest.starts_with(' ') || rest.starts_with('-') {
-                return EntityQualityResult { ok: false, reason: Some("role_prefixed_scaffolding") };
+                return EntityQualityResult {
+                    ok: false,
+                    reason: Some("role_prefixed_scaffolding"),
+                };
             }
         }
     }
     for prefix in &["current ", "pending ", "primary "] {
         if canonical.starts_with(prefix) {
-            return EntityQualityResult { ok: false, reason: Some("section_heading") };
+            return EntityQualityResult {
+                ok: false,
+                reason: Some("section_heading"),
+            };
         }
     }
 
     if canonical.len() < 4 && !has_concrete_type {
-        return EntityQualityResult { ok: false, reason: Some("too_short") };
+        return EntityQualityResult {
+            ok: false,
+            reason: Some("too_short"),
+        };
     }
 
     if let Some(t) = etype {
@@ -167,12 +253,18 @@ pub fn classify_entity_quality(name: &str, etype: Option<&str>) -> EntityQuality
                 } else {
                     "unknown_entity_type"
                 };
-                return EntityQualityResult { ok: false, reason: Some(reason) };
+                return EntityQualityResult {
+                    ok: false,
+                    reason: Some(reason),
+                };
             }
         }
     }
 
-    EntityQualityResult { ok: true, reason: None }
+    EntityQualityResult {
+        ok: true,
+        reason: None,
+    }
 }
 
 /// Quick check: should this entity be persisted?

@@ -121,22 +121,25 @@ fn sanitize_entity_ids(ids: &[String]) -> Vec<String> {
     unique
 }
 
-fn get_entity_names(
-    conn: &rusqlite::Connection,
-    ids: &[String],
-) -> Vec<String> {
+fn get_entity_names(conn: &rusqlite::Connection, ids: &[String]) -> Vec<String> {
     let entity_ids = sanitize_entity_ids(ids);
     if entity_ids.is_empty() {
         return Vec::new();
     }
-    let placeholders = entity_ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+    let placeholders = entity_ids
+        .iter()
+        .map(|_| "?")
+        .collect::<Vec<_>>()
+        .join(", ");
     let sql = format!("SELECT id, name FROM entities WHERE id IN ({placeholders})");
     let mut stmt = match conn.prepare(&sql) {
         Ok(s) => s,
         Err(_) => return Vec::new(),
     };
-    let params: Vec<&dyn rusqlite::types::ToSql> =
-        entity_ids.iter().map(|id| id as &dyn rusqlite::types::ToSql).collect();
+    let params: Vec<&dyn rusqlite::types::ToSql> = entity_ids
+        .iter()
+        .map(|id| id as &dyn rusqlite::types::ToSql)
+        .collect();
     let rows: HashMap<String, String> = stmt
         .query_map(params.as_slice(), |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
@@ -151,10 +154,7 @@ fn get_entity_names(
         .collect()
 }
 
-fn get_pinned_entity_ids(
-    conn: &rusqlite::Connection,
-    agent_id: &str,
-) -> Vec<String> {
+fn get_pinned_entity_ids(conn: &rusqlite::Connection, agent_id: &str) -> Vec<String> {
     conn.prepare_cached(
         "SELECT id FROM entities
          WHERE agent_id = ?1 AND pinned = 1
@@ -180,11 +180,18 @@ fn extract_project_tokens(project_path: &str) -> Vec<String> {
     }
     let tail: Vec<String> = parts.into_iter().rev().take(2).collect();
     let mut seen = HashSet::new();
-    tail.into_iter().filter(|t| seen.insert(t.clone())).collect()
+    tail.into_iter()
+        .filter(|t| seen.insert(t.clone()))
+        .collect()
 }
 
 fn has_traversal_tables(conn: &rusqlite::Connection) -> bool {
-    let required = ["entities", "entity_aspects", "entity_attributes", "entity_dependencies"];
+    let required = [
+        "entities",
+        "entity_aspects",
+        "entity_attributes",
+        "entity_dependencies",
+    ];
     for table in &required {
         let exists: bool = conn
             .query_row(
@@ -210,7 +217,10 @@ fn resolve_by_project(
         return Vec::new();
     }
 
-    let clauses: Vec<String> = tokens.iter().map(|_| "(canonical_name LIKE ? OR name LIKE ?)".to_string()).collect();
+    let clauses: Vec<String> = tokens
+        .iter()
+        .map(|_| "(canonical_name LIKE ? OR name LIKE ?)".to_string())
+        .collect();
     let sql = format!(
         "SELECT id FROM entities
          WHERE agent_id = ? AND entity_type = 'project'
@@ -272,7 +282,10 @@ fn resolve_by_query_tokens(
     }
 
     // LIKE fallback
-    let clauses: Vec<String> = tokens.iter().map(|_| "(canonical_name LIKE ? OR name LIKE ?)".to_string()).collect();
+    let clauses: Vec<String> = tokens
+        .iter()
+        .map(|_| "(canonical_name LIKE ? OR name LIKE ?)".to_string())
+        .collect();
     let sql = format!(
         "SELECT id FROM entities
          WHERE agent_id = ? AND ({})
@@ -327,13 +340,16 @@ pub fn resolve_focal_entities(
     };
 
     let mut resolved_entity_ids = Vec::new();
-    let mut source = if project.is_some() { "project" } else { "query" };
+    let mut source = if project.is_some() {
+        "project"
+    } else {
+        "query"
+    };
 
     if let Some(checkpoint_ids) = checkpoint_entity_ids {
         if !checkpoint_ids.is_empty() {
-            resolved_entity_ids = sanitize_entity_ids(
-                &checkpoint_ids.iter().map(|s| s.clone()).collect::<Vec<_>>()
-            );
+            resolved_entity_ids =
+                sanitize_entity_ids(&checkpoint_ids.iter().map(|s| s.clone()).collect::<Vec<_>>());
             source = "checkpoint";
         }
     }
@@ -441,11 +457,15 @@ impl<'a> TraversalState<'a> {
                 _ => vec![entity_id.to_string()],
             },
             aspect_ids: aspect_id.map(|id| vec![id.to_string()]).unwrap_or_default(),
-            dependency_ids: dependency_id.map(|id| vec![id.to_string()]).unwrap_or_default(),
+            dependency_ids: dependency_id
+                .map(|id| vec![id.to_string()])
+                .unwrap_or_default(),
         };
         let next_size = next.entity_ids.len() + next.aspect_ids.len() + next.dependency_ids.len();
         match self.memory_paths.get(memory_id) {
-            Some(prev) if (prev.entity_ids.len() + prev.aspect_ids.len() + prev.dependency_ids.len()) >= next_size => {}
+            Some(prev)
+                if (prev.entity_ids.len() + prev.aspect_ids.len() + prev.dependency_ids.len())
+                    >= next_size => {}
             _ => {
                 self.memory_paths.insert(memory_id.to_string(), next);
             }
@@ -473,7 +493,9 @@ impl<'a> TraversalState<'a> {
         }
         self.visited_entities.insert(entity_id.to_string());
 
-        if self.check_deadline() { return; }
+        if self.check_deadline() {
+            return;
+        }
 
         let agent_id = self.agent_id;
 
@@ -504,48 +526,60 @@ impl<'a> TraversalState<'a> {
             }
         }
 
-        if self.check_deadline() { return; }
+        if self.check_deadline() {
+            return;
+        }
 
         // Collect aspects
-        let (aspect_sql, aspect_params): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = match &self.config.aspect_filter {
-            Some(filter) => (
-                "SELECT id FROM entity_aspects
+        let (aspect_sql, aspect_params): (String, Vec<Box<dyn rusqlite::types::ToSql>>) =
+            match &self.config.aspect_filter {
+                Some(filter) => (
+                    "SELECT id FROM entity_aspects
                  WHERE entity_id = ?1 AND agent_id = ?2 AND canonical_name LIKE ?3
-                 ORDER BY weight DESC LIMIT ?4".into(),
-                vec![
-                    Box::new(entity_id.to_string()),
-                    Box::new(agent_id.to_string()),
-                    Box::new(format!("%{filter}%")),
-                    Box::new(self.config.max_aspects_per_entity as i64),
-                ],
-            ),
-            None => (
-                "SELECT id FROM entity_aspects
+                 ORDER BY weight DESC LIMIT ?4"
+                        .into(),
+                    vec![
+                        Box::new(entity_id.to_string()),
+                        Box::new(agent_id.to_string()),
+                        Box::new(format!("%{filter}%")),
+                        Box::new(self.config.max_aspects_per_entity as i64),
+                    ],
+                ),
+                None => (
+                    "SELECT id FROM entity_aspects
                  WHERE entity_id = ?1 AND agent_id = ?2
-                 ORDER BY weight DESC LIMIT ?3".into(),
-                vec![
-                    Box::new(entity_id.to_string()),
-                    Box::new(agent_id.to_string()),
-                    Box::new(self.config.max_aspects_per_entity as i64),
-                ],
-            ),
-        };
+                 ORDER BY weight DESC LIMIT ?3"
+                        .into(),
+                    vec![
+                        Box::new(entity_id.to_string()),
+                        Box::new(agent_id.to_string()),
+                        Box::new(self.config.max_aspects_per_entity as i64),
+                    ],
+                ),
+            };
 
         if let Ok(mut stmt) = self.conn.prepare(&aspect_sql) {
             let refs: Vec<&dyn rusqlite::types::ToSql> =
                 aspect_params.iter().map(|p| p.as_ref()).collect();
             if let Ok(rows) = stmt.query_map(refs.as_slice(), |row| row.get::<_, String>(0)) {
                 for aspect_row in rows.flatten() {
-                    if self.timed_out || self.at_budget() { break; }
+                    if self.timed_out || self.at_budget() {
+                        break;
+                    }
                     self.active_aspect_ids.insert(aspect_row.clone());
 
-                    let attr_rows: Vec<(Option<String>, f64)> = self
-                        .query_attributes(&aspect_row);
+                    let attr_rows: Vec<(Option<String>, f64)> = self.query_attributes(&aspect_row);
 
                     for (memory_id, importance) in &attr_rows {
                         if let Some(mid) = memory_id {
                             self.record_memory(mid, *importance);
-                            self.record_path(mid, entity_id, source_entity_id, Some(&aspect_row), dependency_id);
+                            self.record_path(
+                                mid,
+                                entity_id,
+                                source_entity_id,
+                                Some(&aspect_row),
+                                dependency_id,
+                            );
                         }
                     }
                 }
@@ -553,12 +587,16 @@ impl<'a> TraversalState<'a> {
         }
 
         // Fallback: collect via memory_entity_mentions
-        if self.timed_out || self.at_budget() { return; }
+        if self.timed_out || self.at_budget() {
+            return;
+        }
         let mention_budget = self
             .config
             .max_attributes_per_aspect
             .min(self.budget.saturating_sub(self.memory_ids.len()));
-        if mention_budget == 0 { return; }
+        if mention_budget == 0 {
+            return;
+        }
 
         let mention_rows: Vec<(String, f64)> = self.query_mentions(entity_id, mention_budget);
 
@@ -578,10 +616,16 @@ impl<'a> TraversalState<'a> {
                      WHERE ea.aspect_id = ?1 AND ea.agent_id = ?2
                        AND ea.status = 'active' AND m.is_deleted = 0 AND m.scope IS NULL
                      ORDER BY ea.importance DESC LIMIT ?3",
-                ) else { return Vec::new(); };
-                let rows: Vec<_> = stmt.query_map(params![aspect_id, self.agent_id, limit], |row| {
-                    Ok((row.get::<_, Option<String>>(0)?, row.get::<_, f64>(1)?))
-                }).ok().map(|r| r.filter_map(|v| v.ok()).collect()).unwrap_or_default();
+                ) else {
+                    return Vec::new();
+                };
+                let rows: Vec<_> = stmt
+                    .query_map(params![aspect_id, self.agent_id, limit], |row| {
+                        Ok((row.get::<_, Option<String>>(0)?, row.get::<_, f64>(1)?))
+                    })
+                    .ok()
+                    .map(|r| r.filter_map(|v| v.ok()).collect())
+                    .unwrap_or_default();
                 rows
             }
             Some(scope_val) => {
@@ -591,10 +635,16 @@ impl<'a> TraversalState<'a> {
                      WHERE ea.aspect_id = ?1 AND ea.agent_id = ?2
                        AND ea.status = 'active' AND m.is_deleted = 0 AND m.scope = ?3
                      ORDER BY ea.importance DESC LIMIT ?4",
-                ) else { return Vec::new(); };
-                let rows: Vec<_> = stmt.query_map(params![aspect_id, self.agent_id, scope_val, limit], |row| {
-                    Ok((row.get::<_, Option<String>>(0)?, row.get::<_, f64>(1)?))
-                }).ok().map(|r| r.filter_map(|v| v.ok()).collect()).unwrap_or_default();
+                ) else {
+                    return Vec::new();
+                };
+                let rows: Vec<_> = stmt
+                    .query_map(params![aspect_id, self.agent_id, scope_val, limit], |row| {
+                        Ok((row.get::<_, Option<String>>(0)?, row.get::<_, f64>(1)?))
+                    })
+                    .ok()
+                    .map(|r| r.filter_map(|v| v.ok()).collect())
+                    .unwrap_or_default();
                 rows
             }
             None => {
@@ -602,10 +652,16 @@ impl<'a> TraversalState<'a> {
                     "SELECT memory_id, importance FROM entity_attributes
                      WHERE aspect_id = ?1 AND agent_id = ?2 AND status = 'active'
                      ORDER BY importance DESC LIMIT ?3",
-                ) else { return Vec::new(); };
-                let rows: Vec<_> = stmt.query_map(params![aspect_id, self.agent_id, limit], |row| {
-                    Ok((row.get::<_, Option<String>>(0)?, row.get::<_, f64>(1)?))
-                }).ok().map(|r| r.filter_map(|v| v.ok()).collect()).unwrap_or_default();
+                ) else {
+                    return Vec::new();
+                };
+                let rows: Vec<_> = stmt
+                    .query_map(params![aspect_id, self.agent_id, limit], |row| {
+                        Ok((row.get::<_, Option<String>>(0)?, row.get::<_, f64>(1)?))
+                    })
+                    .ok()
+                    .map(|r| r.filter_map(|v| v.ok()).collect())
+                    .unwrap_or_default();
                 rows
             }
         }
@@ -620,10 +676,15 @@ impl<'a> TraversalState<'a> {
                      JOIN memories m ON m.id = mem.memory_id
                      WHERE mem.entity_id = ?1 AND m.is_deleted = 0 AND m.scope IS NULL
                      ORDER BY mem.confidence DESC, m.importance DESC LIMIT ?2",
-                ) else { return Vec::new(); };
+                ) else {
+                    return Vec::new();
+                };
                 stmt.query_map(params![entity_id, limit as i64], |row| {
                     Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))
-                }).ok().map(|r| r.filter_map(|v| v.ok()).collect()).unwrap_or_default()
+                })
+                .ok()
+                .map(|r| r.filter_map(|v| v.ok()).collect())
+                .unwrap_or_default()
             }
             Some(scope_val) => {
                 let Ok(mut stmt) = self.conn.prepare(
@@ -632,10 +693,15 @@ impl<'a> TraversalState<'a> {
                      JOIN memories m ON m.id = mem.memory_id
                      WHERE mem.entity_id = ?1 AND m.is_deleted = 0 AND m.scope = ?2
                      ORDER BY mem.confidence DESC, m.importance DESC LIMIT ?3",
-                ) else { return Vec::new(); };
+                ) else {
+                    return Vec::new();
+                };
                 stmt.query_map(params![entity_id, scope_val, limit as i64], |row| {
                     Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))
-                }).ok().map(|r| r.filter_map(|v| v.ok()).collect()).unwrap_or_default()
+                })
+                .ok()
+                .map(|r| r.filter_map(|v| v.ok()).collect())
+                .unwrap_or_default()
             }
             None => {
                 let Ok(mut stmt) = self.conn.prepare(
@@ -644,10 +710,15 @@ impl<'a> TraversalState<'a> {
                      JOIN memories m ON m.id = mem.memory_id
                      WHERE mem.entity_id = ?1 AND m.is_deleted = 0
                      ORDER BY mem.confidence DESC, m.importance DESC LIMIT ?2",
-                ) else { return Vec::new(); };
+                ) else {
+                    return Vec::new();
+                };
                 stmt.query_map(params![entity_id, limit as i64], |row| {
                     Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))
-                }).ok().map(|r| r.filter_map(|v| v.ok()).collect()).unwrap_or_default()
+                })
+                .ok()
+                .map(|r| r.filter_map(|v| v.ok()).collect())
+                .unwrap_or_default()
             }
         }
     }
@@ -678,7 +749,9 @@ pub fn traverse_knowledge_graph(
 
     // Phase 1: Collect from focal entities
     for entity_id in &focal_ids {
-        if state.timed_out || state.at_budget() { break; }
+        if state.timed_out || state.at_budget() {
+            break;
+        }
         state.collect_for_entity(entity_id, None, None);
     }
 
@@ -715,7 +788,9 @@ pub fn traverse_knowledge_graph(
                 ))
             }) {
                 for row in rows.flatten() {
-                    if state.timed_out || state.at_budget() { break; }
+                    if state.timed_out || state.at_budget() {
+                        break;
+                    }
                     state.collect_for_entity(&row.2, Some(&row.1), Some(&row.0));
                 }
             }
@@ -723,7 +798,9 @@ pub fn traverse_knowledge_graph(
     }
 
     state.constraints.sort_by(|a, b| {
-        b.importance.partial_cmp(&a.importance).unwrap_or(std::cmp::Ordering::Equal)
+        b.importance
+            .partial_cmp(&a.importance)
+            .unwrap_or(std::cmp::Ordering::Equal)
     });
 
     debug!(

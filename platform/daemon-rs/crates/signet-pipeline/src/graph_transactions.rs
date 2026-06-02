@@ -10,7 +10,7 @@
 use rusqlite::params;
 use uuid::Uuid;
 
-use crate::entity_quality::{should_persist_entity, normalize_entity_type};
+use crate::entity_quality::{normalize_entity_type, should_persist_entity};
 use crate::write_gate::is_decision_content;
 
 // ---------------------------------------------------------------------------
@@ -96,21 +96,37 @@ fn normalize_group_key(value: Option<&str>) -> Option<String> {
 }
 
 const UPDATE_MARKERS: &[&str] = &[
-    "currently", "now", "recently", "lately", "updated", "changed",
-    "switched", "replaced", "no longer", "not anymore", "instead",
-    "previously", "formerly",
+    "currently",
+    "now",
+    "recently",
+    "lately",
+    "updated",
+    "changed",
+    "switched",
+    "replaced",
+    "no longer",
+    "not anymore",
+    "instead",
+    "previously",
+    "formerly",
 ];
 
 const NUMBER_WORDS: &[&str] = &[
-    "zero", "one", "two", "three", "four", "five", "six", "seven",
-    "eight", "nine", "ten", "eleven", "twelve",
+    "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+    "eleven", "twelve",
 ];
 
 fn tokenize(content: &str) -> Vec<String> {
     content
         .to_lowercase()
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == ' ' { c } else { ' ' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == ' ' {
+                c
+            } else {
+                ' '
+            }
+        })
         .collect::<String>()
         .split_whitespace()
         .filter(|t| t.len() >= 2)
@@ -133,7 +149,9 @@ fn numeric_tokens(tokens: &[String]) -> HashSet<String> {
 
 fn overlap_count(left: &[String], right: &[String]) -> usize {
     let right_set: HashSet<&str> = right.iter().map(|s| s.as_str()).collect();
-    left.iter().filter(|t| right_set.contains(t.as_str())).count()
+    left.iter()
+        .filter(|t| right_set.contains(t.as_str()))
+        .count()
 }
 
 fn has_numeric_conflict(left: &[String], right: &[String]) -> bool {
@@ -329,7 +347,13 @@ fn mark_superseded_siblings(
     };
 
     let siblings: Vec<StoredAttribute> = match stmt.query_map(
-        params![aspect_id, agent_id, attribute.group_key, attribute.claim_key, attribute.id],
+        params![
+            aspect_id,
+            agent_id,
+            attribute.group_key,
+            attribute.claim_key,
+            attribute.id
+        ],
         |row| {
             Ok(StoredAttribute {
                 id: row.get(0)?,
@@ -362,8 +386,16 @@ fn mark_superseded_siblings(
             continue;
         }
 
-        let newer_id = if attr_is_newer { &attribute.id } else { &sibling.id };
-        let older_id = if attr_is_newer { &sibling.id } else { &attribute.id };
+        let newer_id = if attr_is_newer {
+            &attribute.id
+        } else {
+            &sibling.id
+        };
+        let older_id = if attr_is_newer {
+            &sibling.id
+        } else {
+            &attribute.id
+        };
 
         if conn
             .execute(
@@ -481,7 +513,13 @@ pub fn persist_structured(
             .ok();
 
         if entity_id.is_none() {
-            let inserted = upsert_entity(conn, &sa.entity_name, sa.entity_type.as_deref(), agent_id, now);
+            let inserted = upsert_entity(
+                conn,
+                &sa.entity_name,
+                sa.entity_type.as_deref(),
+                agent_id,
+                now,
+            );
             if let Some(ins) = inserted {
                 if ins.inserted {
                     result.entities_inserted += 1;
@@ -602,9 +640,8 @@ pub fn persist_structured(
                     continue;
                 }
                 let dep_id = Uuid::new_v4().to_string();
-                let reason = format!(
-                    "co-occurred in extracted entities for memory {source_memory_id}"
-                );
+                let reason =
+                    format!("co-occurred in extracted entities for memory {source_memory_id}");
                 conn.execute(
                     "INSERT OR IGNORE INTO entity_dependencies
                      (id, source_entity_id, target_entity_id, agent_id,
@@ -671,7 +708,8 @@ pub fn decrement_entity_mentions(
             .ok();
 
             // Delete entity
-            conn.execute("DELETE FROM entities WHERE id = ?1", params![id]).ok();
+            conn.execute("DELETE FROM entities WHERE id = ?1", params![id])
+                .ok();
         }
     }
 
