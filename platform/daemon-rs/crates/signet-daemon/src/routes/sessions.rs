@@ -4,10 +4,12 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::Json;
+use axum::body::Bytes;
 use axum::extract::{ConnectInfo, Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use serde::Deserialize;
+use serde_json::Value;
 
 use crate::auth::middleware::{authenticate_headers, resolve_scoped_agent};
 use crate::state::AppState;
@@ -378,18 +380,13 @@ pub async fn transcript(
 // POST /api/sessions/:key/bypass
 // ---------------------------------------------------------------------------
 
-#[derive(Deserialize)]
-pub struct BypassBody {
-    pub enabled: Option<bool>,
-}
-
 pub async fn bypass(
     State(state): State<Arc<AppState>>,
     Path(key): Path<String>,
     Query(params): Query<AgentScopeParams>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
-    Json(body): Json<BypassBody>,
+    bytes: Bytes,
 ) -> axum::response::Response {
     let is_local = peer.ip().is_loopback();
     let auth_runtime = state.auth_snapshot();
@@ -428,7 +425,16 @@ pub async fn bypass(
             .into_response();
     }
 
-    let enabled = body.enabled.unwrap_or(true);
+    let enabled = match parse_bypass_enabled(&bytes) {
+        Some(enabled) => enabled,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "enabled (boolean) is required"})),
+            )
+                .into_response();
+        }
+    };
     if enabled {
         state.sessions.bypass(&key);
     } else {
@@ -443,6 +449,16 @@ pub async fn bypass(
         })),
     )
         .into_response()
+}
+
+fn parse_bypass_enabled(bytes: &Bytes) -> Option<bool> {
+    if bytes.iter().all(|byte| byte.is_ascii_whitespace()) {
+        return None;
+    }
+    let Ok(value) = serde_json::from_slice::<Value>(bytes) else {
+        return None;
+    };
+    value.get("enabled").and_then(Value::as_bool)
 }
 
 // ---------------------------------------------------------------------------

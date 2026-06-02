@@ -2638,6 +2638,76 @@ async fn session_endpoints() {
 
 #[tokio::test]
 #[ignore = "requires built daemon binary"]
+async fn session_bypass_replays_ts_validation_and_toggle_contract() {
+    let server = TestServer::start().await;
+
+    let resp = server
+        .post("/api/sessions/missing-session/bypass", json!({}))
+        .await;
+    assert_eq!(resp.status(), 404);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "Session not found");
+
+    let resp = server
+        .post(
+            "/api/hooks/session-start",
+            json!({
+                "sessionKey": "bypass-replay",
+                "harness": "contract-replay",
+                "runtimePath": "plugin"
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+
+    let resp = server
+        .post("/api/sessions/bypass-replay/bypass", json!({}))
+        .await;
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "enabled (boolean) is required");
+
+    let resp = server
+        .post(
+            "/api/sessions/bypass-replay/bypass",
+            json!({"enabled": "true"}),
+        )
+        .await;
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "enabled (boolean) is required");
+
+    let resp = server
+        .post(
+            "/api/sessions/bypass-replay/bypass",
+            json!({"enabled": true}),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["key"], "bypass-replay");
+    assert_eq!(body["bypassed"], true);
+
+    let resp = server.get("/api/sessions/bypass-replay").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["key"], "bypass-replay");
+    assert_eq!(body["bypassed"], true);
+
+    let resp = server
+        .post(
+            "/api/sessions/bypass-replay/bypass",
+            json!({"enabled": false}),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["key"], "bypass-replay");
+    assert_eq!(body["bypassed"], false);
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
 async fn checkpoint_extract_queues_summary_and_advances_cursor() {
     let server = TestServer::start().await;
     let session = "agent:ant:checkpoint-replay";
@@ -7739,7 +7809,9 @@ async fn remaining_public_routes_have_contract_replay_coverage() {
             json!({"enabled": true}),
         )
         .await;
-    assert_status("POST /api/sessions/:key/bypass", &resp, &[200, 404]);
+    assert_eq!(resp.status(), 404);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "Session not found");
     let resp = server.get("/api/skills/analytics").await;
     assert_status("GET /api/skills/analytics", &resp, &[200]);
 
