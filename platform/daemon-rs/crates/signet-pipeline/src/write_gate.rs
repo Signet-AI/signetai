@@ -181,7 +181,7 @@ fn is_error_content(content: &str) -> bool {
 
 /// Check whether content text contains decision-indicating language.
 /// Ports DECISION_PATTERNS from TS inline-entity-linker.
-fn is_decision_content(content: &str) -> bool {
+pub fn is_decision_content(content: &str) -> bool {
     let lower = content.to_lowercase();
     // Multi-word patterns that need "over" or "instead"
     if (lower.contains("chose to") || lower.contains("chosen to"))
