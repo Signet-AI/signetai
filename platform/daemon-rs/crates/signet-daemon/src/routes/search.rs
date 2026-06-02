@@ -39,6 +39,8 @@ pub struct RecallBody {
     pub importance_min: Option<f64>,
     pub since: Option<String>,
     pub until: Option<String>,
+    pub scope: Option<String>,
+    pub project: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -46,6 +48,30 @@ pub struct RecallResponse {
     pub results: Vec<RecallHit>,
     pub query: String,
     pub method: String,
+    pub meta: RecallMeta,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecallMeta {
+    pub total_returned: usize,
+    pub has_supplementary: bool,
+    pub no_hits: bool,
+    pub timings: RecallTimings,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecallTimings {
+    pub total_ms: f64,
+    pub stages: Vec<RecallStageTiming>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecallStageTiming {
+    pub name: String,
+    pub duration_ms: f64,
 }
 
 #[derive(Clone, Serialize)]
@@ -63,9 +89,39 @@ pub struct RecallHit {
     pub importance: f64,
     pub who: Option<String>,
     pub project: Option<String>,
+    pub visibility: Option<String>,
+    pub scope: Option<String>,
     pub created_at: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub supplementary: Option<bool>,
+}
+
+fn recall_response(results: Vec<RecallHit>, query: String, method: String) -> RecallResponse {
+    let total_returned = results.len();
+    let has_supplementary = results.iter().any(|hit| hit.supplementary == Some(true));
+    RecallResponse {
+        results,
+        query,
+        method,
+        meta: RecallMeta {
+            total_returned,
+            has_supplementary,
+            no_hits: total_returned == 0,
+            timings: RecallTimings {
+                total_ms: 0.0,
+                stages: Vec::new(),
+            },
+        },
+    }
+}
+
+fn refresh_recall_meta(resp: &mut RecallResponse) {
+    resp.meta.total_returned = resp.results.len();
+    resp.meta.has_supplementary = resp
+        .results
+        .iter()
+        .any(|hit| hit.supplementary == Some(true));
+    resp.meta.no_hits = resp.results.is_empty();
 }
 
 pub async fn recall(
@@ -150,12 +206,45 @@ pub async fn recall(
     let importance_min = body.importance_min;
     let since = body.since.clone();
     let until = body.until.clone();
-    let agent_id = body.agent_id.clone();
+    let agent_id = body
+        .agent_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| "default".to_string());
+    let scope = body
+        .scope
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    let project = body
+        .project
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
     let query_for_response = query.clone();
 
     let result = state
         .pool
         .read(move |conn| {
+            let read_policy: String = conn
+                .query_row(
+                    "SELECT read_policy FROM agents WHERE id = ?1",
+                    rusqlite::params![&agent_id],
+                    |row| row.get(0),
+                )
+                .unwrap_or_else(|_| "isolated".to_string());
+            let policy_group: Option<String> = conn
+                .query_row(
+                    "SELECT policy_group FROM agents WHERE id = ?1",
+                    rusqlite::params![&agent_id],
+                    |row| row.get(0),
+                )
+                .ok()
+                .flatten();
             let filter = RecallFilter {
                 memory_type: mem_type.as_deref(),
                 tags: tags.as_deref(),
@@ -164,6 +253,11 @@ pub async fn recall(
                 importance_min,
                 since: since.as_deref(),
                 until: until.as_deref(),
+                scope: scope.as_deref(),
+                project: project.as_deref(),
+                agent_id: Some(agent_id.as_str()),
+                read_policy: Some(read_policy.as_str()),
+                policy_group: policy_group.as_deref(),
             };
 
             // FTS5 keyword search
@@ -171,7 +265,7 @@ pub async fn recall(
 
             // Vector KNN search
             let vec_hits = match &query_vec {
-                Some(v) => vec_search_scored(conn, v, top_k, mem_type.as_deref()),
+                Some(v) => vec_search_scored(conn, v, top_k, &filter),
                 None => vec![],
             };
 
@@ -180,86 +274,65 @@ pub async fn recall(
             scored.truncate(limit);
 
             if scored.is_empty() {
-                return Ok(RecallResponse {
-                    results: vec![],
-                    query: query_for_response,
-                    method: "hybrid".to_string(),
-                });
+                return Ok(recall_response(
+                    vec![],
+                    query_for_response,
+                    "hybrid".to_string(),
+                ));
             }
 
             // Fetch full rows with agent scope filtering
             let ids: Vec<&str> = scored.iter().map(|s| s.id.as_str()).collect();
-            let id_count = ids.len();
             let placeholders: String = ids
                 .iter()
-                .enumerate()
-                .map(|(i, _)| format!("?{}", i + 1))
+                .map(|_| "?")
                 .collect::<Vec<_>>()
                 .join(",");
 
-            // Build agent scope clause
-            let (agent_clause, agent_params) = if let Some(ref aid) = agent_id {
-                // Look up agent's read_policy
-                let policy: String = conn
-                    .query_row(
-                        "SELECT read_policy FROM agents WHERE id = ?1",
-                        rusqlite::params![aid],
-                        |row| row.get(0),
-                    )
-                    .unwrap_or_else(|_| "isolated".to_string());
-
-                match policy.as_str() {
-                    "shared" => (
-                        format!(
-                            " AND (visibility = 'global' OR agent_id = ?{}) AND visibility != 'archived'",
-                            id_count + 1
-                        ),
-                        vec![aid.clone()],
-                    ),
+            let mut clauses = Vec::new();
+            let mut filter_params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+            if let Some(scope) = &scope {
+                clauses.push("scope = ?");
+                filter_params.push(Box::new(scope.clone()));
+            } else {
+                clauses.push("scope IS NULL");
+            }
+            if let Some(project) = &project {
+                clauses.push("project = ?");
+                filter_params.push(Box::new(project.clone()));
+            }
+            {
+                let aid = &agent_id;
+                match read_policy.as_str() {
+                    "shared" => {
+                        clauses.push("(visibility = 'global' OR agent_id = ?) AND visibility != 'archived'");
+                        filter_params.push(Box::new(aid.clone()));
+                    }
                     "group" => {
-                        let group: Option<String> = conn
-                            .query_row(
-                                "SELECT policy_group FROM agents WHERE id = ?1",
-                                rusqlite::params![aid],
-                                |row| row.get(0),
-                            )
-                            .ok()
-                            .flatten();
-                        if let Some(g) = group {
-                            (
-                                format!(
-                                    " AND ((visibility = 'global' AND agent_id IN (SELECT id FROM agents WHERE policy_group = ?{})) OR agent_id = ?{}) AND visibility != 'archived'",
-                                    id_count + 1,
-                                    id_count + 2,
-                                ),
-                                vec![g, aid.clone()],
-                            )
+                        if let Some(group) = &policy_group {
+                            clauses.push("((visibility = 'global' AND agent_id IN (SELECT id FROM agents WHERE policy_group = ?)) OR agent_id = ?) AND visibility != 'archived'");
+                            filter_params.push(Box::new(group.clone()));
+                            filter_params.push(Box::new(aid.clone()));
                         } else {
-                            // No group configured — fall back to isolated (own memories only)
-                            (
-                                format!(
-                                    " AND agent_id = ?{} AND visibility != 'archived'",
-                                    id_count + 1
-                                ),
-                                vec![aid.clone()],
-                            )
+                            clauses.push("agent_id = ? AND visibility != 'archived'");
+                            filter_params.push(Box::new(aid.clone()));
                         }
                     }
-                    _ => (
-                        format!(
-                            " AND agent_id = ?{} AND visibility != 'archived'",
-                            id_count + 1
-                        ),
-                        vec![aid.clone()],
-                    ),
+                    _ => {
+                        clauses.push("agent_id = ? AND visibility != 'archived'");
+                        filter_params.push(Box::new(aid.clone()));
+                    }
                 }
+            }
+            let filter_sql = if clauses.is_empty() {
+                String::new()
             } else {
-                (String::new(), vec![])
+                format!(" AND {}", clauses.join(" AND "))
             };
 
             let sql = format!(
-                "SELECT id, content, type, tags, pinned, importance, who, project, created_at
-                 FROM memories WHERE id IN ({placeholders}){agent_clause}"
+                "SELECT id, content, type, tags, pinned, importance, who, project, created_at, visibility, scope
+                 FROM memories WHERE id IN ({placeholders}){filter_sql}"
             );
 
             let mut stmt = conn.prepare(&sql)?;
@@ -267,9 +340,7 @@ pub async fn recall(
                 .iter()
                 .map(|s| Box::new(s.to_string()) as Box<dyn rusqlite::types::ToSql>)
                 .collect();
-            for p in &agent_params {
-                refs.push(Box::new(p.clone()));
-            }
+            refs.extend(filter_params);
             let param_refs: Vec<&dyn rusqlite::types::ToSql> =
                 refs.iter().map(|b| b.as_ref()).collect();
 
@@ -302,6 +373,8 @@ pub async fn recall(
                             who: row.get(6)?,
                             project: row.get(7)?,
                             created_at: row.get(8)?,
+                            visibility: row.get(9)?,
+                            scope: row.get(10)?,
                             supplementary: None,
                         },
                     ))
@@ -320,11 +393,7 @@ pub async fn recall(
                 .collect();
 
             let method = if has_vec { "hybrid" } else { "keyword" };
-            Ok(RecallResponse {
-                results,
-                query: query_for_response,
-                method: method.to_string(),
-            })
+            Ok(recall_response(results, query_for_response, method.to_string()))
         })
         .await;
 
@@ -446,6 +515,8 @@ pub async fn recall(
                                     importance: 0.9,
                                     who: None,
                                     project: None,
+                                    visibility: None,
+                                    scope: None,
                                     created_at: chrono::Utc::now().to_rfc3339(),
                                     supplementary: Some(true),
                                 },
@@ -454,6 +525,7 @@ pub async fn recall(
                     }
                 }
             }
+            refresh_recall_meta(&mut resp);
             Ok(resp)
         }
         other => other,
@@ -510,6 +582,8 @@ pub struct SearchParams {
     pub pinned: Option<String>,
     pub importance_min: Option<f64>,
     pub since: Option<String>,
+    pub scope: Option<String>,
+    pub project: Option<String>,
 }
 
 pub async fn search_get(
@@ -541,6 +615,8 @@ pub async fn search_get(
         importance_min: params.importance_min,
         since: params.since,
         until: None,
+        scope: params.scope,
+        project: params.project,
     };
 
     recall(State(state), ConnectInfo(peer), headers, Json(body))
@@ -585,6 +661,8 @@ pub async fn legacy_search(
         importance_min: None,
         since: None,
         until: None,
+        scope: None,
+        project: None,
     };
 
     recall(State(state), ConnectInfo(peer), headers, Json(body))

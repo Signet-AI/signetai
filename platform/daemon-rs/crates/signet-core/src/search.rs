@@ -97,6 +97,11 @@ pub struct RecallFilter<'a> {
     pub importance_min: Option<f64>,
     pub since: Option<&'a str>,
     pub until: Option<&'a str>,
+    pub scope: Option<&'a str>,
+    pub project: Option<&'a str>,
+    pub agent_id: Option<&'a str>,
+    pub read_policy: Option<&'a str>,
+    pub policy_group: Option<&'a str>,
 }
 
 struct FilterClause {
@@ -107,6 +112,13 @@ struct FilterClause {
 fn build_filter(f: &RecallFilter) -> FilterClause {
     let mut parts = Vec::new();
     let mut args: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+
+    if let Some(scope) = f.scope {
+        parts.push("m.scope = ?".to_string());
+        args.push(Box::new(scope.to_string()));
+    } else {
+        parts.push("m.scope IS NULL".to_string());
+    }
 
     if let Some(t) = f.memory_type {
         parts.push("m.type = ?".to_string());
@@ -136,6 +148,37 @@ fn build_filter(f: &RecallFilter) -> FilterClause {
     if let Some(u) = f.until {
         parts.push("m.created_at <= ?".to_string());
         args.push(Box::new(u.to_string()));
+    }
+    if let Some(project) = f.project {
+        parts.push("m.project = ?".to_string());
+        args.push(Box::new(project.to_string()));
+    }
+    if let Some(agent_id) = f.agent_id {
+        match f.read_policy.unwrap_or("isolated") {
+            "shared" => {
+                parts.push(
+                    "(m.visibility = 'global' OR m.agent_id = ?) AND m.visibility != 'archived'"
+                        .to_string(),
+                );
+                args.push(Box::new(agent_id.to_string()));
+            }
+            "group" => {
+                if let Some(group) = f.policy_group {
+                    parts.push(
+                        "((m.visibility = 'global' AND m.agent_id IN (SELECT id FROM agents WHERE policy_group = ?)) OR m.agent_id = ?) AND m.visibility != 'archived'".to_string(),
+                    );
+                    args.push(Box::new(group.to_string()));
+                    args.push(Box::new(agent_id.to_string()));
+                } else {
+                    parts.push("m.agent_id = ? AND m.visibility != 'archived'".to_string());
+                    args.push(Box::new(agent_id.to_string()));
+                }
+            }
+            _ => {
+                parts.push("m.agent_id = ? AND m.visibility != 'archived'".to_string());
+                args.push(Box::new(agent_id.to_string()));
+            }
+        }
     }
 
     let sql = if parts.is_empty() {
@@ -340,16 +383,46 @@ pub fn vec_search_scored(
     conn: &Connection,
     query_vec: &[f32],
     top_k: usize,
-    memory_type: Option<&str>,
+    filter: &RecallFilter,
 ) -> Vec<ScoredHit> {
-    vector_search(conn, query_vec, top_k, memory_type)
-        .into_iter()
-        .map(|(id, score)| ScoredHit {
-            id,
-            score,
-            source: SearchSource::Vector,
-        })
-        .collect()
+    let blob: Vec<u8> = query_vec.iter().flat_map(|f| f.to_le_bytes()).collect();
+    let fc = build_filter(filter);
+    let sql = format!(
+        "SELECT e.source_id, v.distance
+         FROM vec_embeddings v
+         JOIN embeddings e ON v.id = e.id
+         JOIN memories m ON e.source_id = m.id
+         WHERE v.embedding MATCH ? AND k = ?{filter_sql}
+         ORDER BY v.distance",
+        filter_sql = fc.sql,
+    );
+
+    let result = (|| -> Result<Vec<ScoredHit>, rusqlite::Error> {
+        let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+        params.push(Box::new(blob));
+        params.push(Box::new(top_k as i64));
+        params.extend(fc.args);
+        let refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|b| b.as_ref()).collect();
+
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(refs.as_slice(), |row| {
+            let dist = row.get::<_, f64>(1)?;
+            Ok(ScoredHit {
+                id: row.get(0)?,
+                score: (1.0 - dist).max(0.0),
+                source: SearchSource::Vector,
+            })
+        })?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
+    })();
+
+    match result {
+        Ok(v) => v,
+        Err(e) => {
+            warn!(err = %e, "vector search failed");
+            Vec::new()
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

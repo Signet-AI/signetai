@@ -37,13 +37,19 @@
 				"arrayOrdering": "ordered"
 			},
 			"POST /api/memory/recall": {
-				"deterministic": ["results.*.content"],
+				"deterministic": [
+					"results.*.content",
+					"results.*.project",
+					"results.*.scope",
+					"results.*.visibility",
+					"meta.totalReturned",
+					"meta.hasSupplementary",
+					"meta.noHits"
+				],
 				"ignoreFields": [
-					"method",
-					"meta",
+					"meta.timings",
 					"results.*.created_at",
 					"results.*.id",
-					"results.*.scope",
 					"results.*.score"
 				],
 				"tolerance": { "score": 0.05 },

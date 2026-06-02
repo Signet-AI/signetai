@@ -184,6 +184,46 @@ impl TestServer {
         self._tmpdir.path().join("memory/memories.db")
     }
 
+    fn seed_recall_scope_fixture(&self) {
+        let conn = rusqlite::Connection::open(self.db_path()).expect("open replay db");
+        conn.busy_timeout(Duration::from_secs(5)).unwrap();
+        conn.execute(
+            "INSERT OR REPLACE INTO agents (id, name, read_policy, policy_group, created_at, updated_at)
+             VALUES
+               ('default', 'default', 'isolated', NULL, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
+               ('agent-b', 'agent-b', 'isolated', NULL, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+            [],
+        )
+        .expect("seed recall agents");
+        conn.execute(
+            "INSERT INTO memories
+             (id, type, content, content_hash, confidence, importance, tags, who, project,
+              created_at, updated_at, updated_by, is_deleted, pinned, version, agent_id,
+              visibility, scope)
+             VALUES
+             ('mem-recall-visible', 'fact',
+              'Recall parity visible unscoped memory for default agent.',
+              'recall-visible-hash', 1.0, 0.9, 'recall,parity', 'contract',
+              '/workspace/default', '2026-01-01T00:00:00Z',
+              '2026-01-01T00:00:00Z', 'contract', 0, 0, 1, 'default',
+              'global', NULL),
+             ('mem-recall-scoped', 'fact',
+              'Recall parity scoped memory must stay hidden by default.',
+              'recall-scoped-hash', 1.0, 0.95, 'recall,parity', 'contract',
+              '/workspace/default', '2026-01-01T00:00:00Z',
+              '2026-01-01T00:00:00Z', 'contract', 0, 0, 1, 'default',
+              'private', 'private-a'),
+             ('mem-recall-other-agent', 'fact',
+              'Recall parity other agent memory must stay hidden by default.',
+              'recall-other-agent-hash', 1.0, 0.97, 'recall,parity', 'contract',
+              '/workspace/other', '2026-01-01T00:00:00Z',
+              '2026-01-01T00:00:00Z', 'contract', 0, 0, 1, 'agent-b',
+              'global', NULL)",
+            [],
+        )
+        .expect("seed scoped recall memories");
+    }
+
     fn seed_memory_maintenance_fixture(&self) {
         let conn = rusqlite::Connection::open(self.db_path()).expect("open replay db");
         conn.busy_timeout(Duration::from_secs(5)).unwrap();
@@ -2396,10 +2436,50 @@ async fn search_endpoints() {
     assert_eq!(body["error"], "No embedding found for this memory");
     assert_eq!(body["results"], json!([]));
 
+    server.seed_recall_scope_fixture();
+
     let resp = server
-        .post("/api/memory/recall", json!({"query": "test memory"}))
+        .post(
+            "/api/memory/recall",
+            json!({"query": "recall parity", "limit": 10}),
+        )
         .await;
     assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["query"], "recall parity");
+    assert_eq!(body["method"], "keyword");
+    assert_eq!(body["meta"]["totalReturned"], 1);
+    assert_eq!(body["meta"]["hasSupplementary"], false);
+    assert_eq!(body["meta"]["noHits"], false);
+    assert!(body["meta"]["timings"]["totalMs"].is_number());
+    assert_eq!(body["results"][0]["id"], "mem-recall-visible");
+    assert_eq!(
+        body["results"][0]["content"],
+        "Recall parity visible unscoped memory for default agent."
+    );
+    assert_eq!(body["results"][0]["visibility"], "global");
+    assert_eq!(body["results"][0]["scope"], serde_json::Value::Null);
+    assert_eq!(body["results"][0]["project"], "/workspace/default");
+    assert!(
+        body["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|hit| hit["id"] != "mem-recall-scoped" && hit["id"] != "mem-recall-other-agent")
+    );
+
+    let resp = server
+        .post(
+            "/api/memory/recall",
+            json!({"query": "recall parity", "scope": "private-a", "limit": 10}),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["meta"]["totalReturned"], 1);
+    assert_eq!(body["results"][0]["id"], "mem-recall-scoped");
+    assert_eq!(body["results"][0]["visibility"], "private");
+    assert_eq!(body["results"][0]["scope"], "private-a");
 }
 
 #[tokio::test]

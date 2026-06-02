@@ -4,8 +4,7 @@ on:
   pull_request:
     paths:
       - "platform/daemon/src/**"
-      - "platform/daemon-rs/crates/signet-daemon/src/**"
-      - "platform/daemon-rs/crates/signet-daemon/tests/contract_replay.rs"
+      - "platform/daemon-rs/crates/**"
       - "platform/daemon-rs/contracts/parity-rules.json"
       - "platform/daemon-rs/contracts/route-parity.json"
       - "scripts/check-rust-daemon-parity.ts"
@@ -15,8 +14,7 @@ on:
     branches: [main]
     paths:
       - "platform/daemon/src/**"
-      - "platform/daemon-rs/crates/signet-daemon/src/**"
-      - "platform/daemon-rs/crates/signet-daemon/tests/contract_replay.rs"
+      - "platform/daemon-rs/crates/**"
       - "platform/daemon-rs/contracts/parity-rules.json"
       - "platform/daemon-rs/contracts/route-parity.json"
       - "scripts/check-rust-daemon-parity.ts"
