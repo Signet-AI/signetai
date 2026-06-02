@@ -50,9 +50,15 @@
 				"arrayOrdering": "unordered"
 			},
 			"POST /mcp": {
-				"deterministic": ["jsonrpc"],
-				"ignoreFields": ["id", "error", "result"],
-				"note": "Streamable HTTP negotiation and parse-error behavior differs while daemon-rs exposes the native MCP transport."
+				"deterministic": [
+					"jsonrpc",
+					"result.protocolVersion",
+					"result.capabilities.tools.listChanged",
+					"result.serverInfo.name",
+					"error.code",
+					"error.message"
+				],
+				"ignoreFields": ["result.serverInfo.version"]
 			},
 			"GET /api/memory/search": {
 				"deterministic": ["results.*.id"],

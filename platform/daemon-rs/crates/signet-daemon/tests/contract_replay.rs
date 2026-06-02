@@ -774,6 +774,17 @@ impl TestServer {
             .expect("request failed")
     }
 
+    async fn post_mcp_raw(&self, body: &str) -> reqwest::Response {
+        self.client
+            .post(format!("{}/mcp", self.base))
+            .header("Accept", "application/json, text/event-stream")
+            .header("Content-Type", "application/json")
+            .body(body.to_string())
+            .send()
+            .await
+            .expect("request failed")
+    }
+
     async fn post_bearer(
         &self,
         path: &str,
@@ -3496,11 +3507,23 @@ async fn mcp_endpoint() {
     assert_eq!(resp.status(), 400);
     let body = server.json(resp).await;
     assert_eq!(body["error"]["code"], -32700);
+    assert_eq!(
+        body["error"]["message"],
+        "Parse error: Invalid JSON-RPC message"
+    );
+
+    let resp = server.post_mcp_raw("{").await;
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"]["code"], -32700);
+    assert_eq!(body["error"]["message"], "Parse error: Invalid JSON");
 
     let resp = server.post_mcp(initialize).await;
     assert_eq!(resp.status(), 200);
     let body = server.json(resp).await;
-    assert!(body["result"]["serverInfo"]["name"].is_string());
+    assert_eq!(body["result"]["protocolVersion"], "2024-11-05");
+    assert_eq!(body["result"]["capabilities"]["tools"]["listChanged"], true);
+    assert_eq!(body["result"]["serverInfo"]["name"], "signet");
 
     let stored = call_mcp_tool(
         &server,

@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use axum::{
     Json,
+    body::Bytes,
     extract::State,
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
@@ -21,8 +22,25 @@ use crate::state::AppState;
 pub async fn handle(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
-    Json(req): Json<serde_json::Value>,
+    body: Bytes,
 ) -> impl IntoResponse {
+    let parsed: serde_json::Value = match serde_json::from_slice(&body) {
+        Ok(value) => value,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(
+                    serde_json::to_value(JsonRpcResponse::error(
+                        None,
+                        PARSE_ERROR,
+                        "Parse error: Invalid JSON".to_string(),
+                    ))
+                    .unwrap(),
+                ),
+            );
+        }
+    };
+
     if !accepts_streamable_http(&headers) {
         return (
             StatusCode::NOT_ACCEPTABLE,
@@ -39,16 +57,16 @@ pub async fn handle(
     }
 
     // Parse as JSON-RPC request
-    let rpc: JsonRpcRequest = match serde_json::from_value(req) {
+    let rpc: JsonRpcRequest = match serde_json::from_value(parsed) {
         Ok(r) => r,
-        Err(e) => {
+        Err(_) => {
             return (
                 StatusCode::BAD_REQUEST,
                 Json(
                     serde_json::to_value(JsonRpcResponse::error(
                         None,
                         PARSE_ERROR,
-                        format!("invalid JSON-RPC: {e}"),
+                        "Parse error: Invalid JSON-RPC message".to_string(),
                     ))
                     .unwrap(),
                 ),
@@ -98,7 +116,7 @@ fn handle_initialize(req: &JsonRpcRequest) -> JsonRpcResponse {
             "protocolVersion": MCP_PROTOCOL_VERSION,
             "capabilities": {
                 "tools": {
-                    "listChanged": false,
+                    "listChanged": true,
                 },
             },
             "serverInfo": {
