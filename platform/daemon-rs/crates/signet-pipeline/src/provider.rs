@@ -708,12 +708,7 @@ pub struct CliProvider {
 }
 
 impl CliProvider {
-    pub fn new(
-        binary: &str,
-        args: &[&str],
-        timeout_ms: u64,
-        provider_name: &'static str,
-    ) -> Self {
+    pub fn new(binary: &str, args: &[&str], timeout_ms: u64, provider_name: &'static str) -> Self {
         Self {
             binary: binary.to_string(),
             args: args.iter().map(|s| s.to_string()).collect(),
@@ -733,8 +728,7 @@ impl CliProvider {
         opts: &GenerateOpts,
     ) -> Result<GenerateResult, ProviderError> {
         let start = Instant::now();
-        let timeout =
-            Duration::from_millis(opts.timeout_ms.unwrap_or(self.default_timeout_ms));
+        let timeout = Duration::from_millis(opts.timeout_ms.unwrap_or(self.default_timeout_ms));
 
         let mut cmd = tokio::process::Command::new(&self.binary);
         cmd.args(&self.args)
@@ -1129,7 +1123,10 @@ pub fn from_config(cfg: &LlmProviderConfig) -> Arc<dyn LlmProvider> {
                 timeout,
                 "openrouter",
                 vec![
-                    ("HTTP-Referer".to_string(), "https://signetai.sh".to_string()),
+                    (
+                        "HTTP-Referer".to_string(),
+                        "https://signetai.sh".to_string(),
+                    ),
                     ("X-Title".to_string(), "Signet".to_string()),
                 ],
             ))
@@ -1160,21 +1157,11 @@ pub fn from_config(cfg: &LlmProviderConfig) -> Arc<dyn LlmProvider> {
         }
         "codex" => {
             info!(provider = "codex", model = %cfg.model, timeout_ms = timeout, "LLM provider initialized");
-            Arc::new(CliProvider::new(
-                "codex",
-                &["exec"],
-                timeout,
-                "codex",
-            ))
+            Arc::new(CliProvider::new("codex", &["exec"], timeout, "codex"))
         }
         "acpx" => {
             info!(provider = "acpx", model = %cfg.model, timeout_ms = timeout, "LLM provider initialized");
-            Arc::new(CliProvider::new(
-                "acpx",
-                &[],
-                timeout,
-                "acpx",
-            ))
+            Arc::new(CliProvider::new("acpx", &[], timeout, "acpx"))
         }
         "command" => {
             let binary = cfg
@@ -1182,13 +1169,13 @@ pub fn from_config(cfg: &LlmProviderConfig) -> Arc<dyn LlmProvider> {
                 .as_deref()
                 .filter(|s| !s.is_empty())
                 .unwrap_or("echo");
-            info!(provider = "command", binary = binary, timeout_ms = timeout, "LLM provider initialized");
-            Arc::new(CliProvider::new(
-                binary,
-                &[],
-                timeout,
-                "command",
-            ))
+            info!(
+                provider = "command",
+                binary = binary,
+                timeout_ms = timeout,
+                "LLM provider initialized"
+            );
+            Arc::new(CliProvider::new(binary, &[], timeout, "command"))
         }
         "opencode" => {
             let url = cfg

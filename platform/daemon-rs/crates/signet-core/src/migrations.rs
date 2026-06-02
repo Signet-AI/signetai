@@ -1632,10 +1632,9 @@ mod tests {
 
         // Versions stamped by parity tables/columns for cross-daemon compatibility
         for version in [
-            32_i64, 33_i64, 34_i64, 35_i64, 36_i64, 37_i64, 38_i64, 39_i64,
-            41_i64, 46_i64, 48_i64, 50_i64, 56_i64, 58_i64, 59_i64, 60_i64,
-            61_i64, 62_i64, 63_i64, 64_i64, 65_i64, 70_i64, 71_i64, 73_i64,
-            74_i64, 75_i64, 76_i64,
+            32_i64, 33_i64, 34_i64, 35_i64, 36_i64, 37_i64, 38_i64, 39_i64, 41_i64, 46_i64, 48_i64,
+            50_i64, 56_i64, 58_i64, 59_i64, 60_i64, 61_i64, 62_i64, 63_i64, 64_i64, 65_i64, 70_i64,
+            71_i64, 73_i64, 74_i64, 75_i64, 76_i64,
         ] {
             let stamped: i64 = conn
                 .query_row(
