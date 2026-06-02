@@ -7790,7 +7790,6 @@ async fn plugin_ontology_telemetry_compat_endpoints() {
         "/api/telemetry/memory-search/export?agent_id=test-agent",
         "/api/ontology/proposals",
         "/api/ontology/proposals/conflicts",
-        "/api/ontology/proposals/test/evidence",
         "/api/ontology/claims/evidence",
         "/api/ontology/links/link-1/evidence",
         "/api/marketplace/reviews?type=skill&id=skills.sh%2Ffoo",
@@ -7799,6 +7798,11 @@ async fn plugin_ontology_telemetry_compat_endpoints() {
         let resp = server.get(path).await;
         assert_eq!(resp.status(), 200, "GET {path}");
     }
+
+    let resp = server.get("/api/ontology/proposals/test/evidence").await;
+    assert_eq!(resp.status(), 404);
+    let body = server.json(resp).await;
+    assert_eq!(body, json!({"error": "Proposal not found"}));
 
     for path in [
         "/api/ontology/extract",
@@ -7902,9 +7906,15 @@ async fn remaining_public_routes_have_contract_replay_coverage() {
     assert_eq!(body["config"]["syncInterval"], 120);
     assert_eq!(body["config"]["remote"], "upstream");
     let resp = server.post("/api/git/pull", json!({})).await;
-    assert_status("POST /api/git/pull", &resp, &[200, 500]);
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["success"], false);
+    assert_eq!(body["message"], "Not a git repository");
     let resp = server.post("/api/git/push", json!({})).await;
-    assert_status("POST /api/git/push", &resp, &[200, 500]);
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["success"], false);
+    assert_eq!(body["message"], "Not a git repository");
     let resp = server.post("/api/git/sync", json!({})).await;
     assert_status("POST /api/git/sync", &resp, &[200]);
 
@@ -8041,11 +8051,9 @@ async fn remaining_public_routes_have_contract_replay_coverage() {
     let resp = server
         .get("/api/ontology/proposals/missing-proposal/evidence")
         .await;
-    assert_status(
-        "GET /api/ontology/proposals/:id/evidence",
-        &resp,
-        &[200, 404],
-    );
+    assert_eq!(resp.status(), 404);
+    let body = server.json(resp).await;
+    assert_eq!(body, json!({"error": "Proposal not found"}));
     let resp = server.get("/api/ontology/proposals/conflicts").await;
     assert_status("GET /api/ontology/proposals/conflicts", &resp, &[200]);
     let resp = server.post("/api/ontology/extract", json!({})).await;

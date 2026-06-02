@@ -33,6 +33,13 @@ async fn git_cmd(state: &AppState, args: &[&str]) -> Result<String, String> {
     }
 }
 
+async fn is_git_repo(state: &AppState) -> bool {
+    git_cmd(state, &["rev-parse", "--is-inside-work-tree"])
+        .await
+        .map(|output| output == "true")
+        .unwrap_or(false)
+}
+
 // ---------------------------------------------------------------------------
 // Route handlers
 // ---------------------------------------------------------------------------
@@ -67,28 +74,46 @@ pub async fn status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
 
 /// POST /api/git/pull
 pub async fn pull(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    if !is_git_repo(&state).await {
+        return (
+            StatusCode::OK,
+            Json(serde_json::json!({"success": false, "message": "Not a git repository"})),
+        );
+    }
+
     match git_cmd(&state, &["pull", "--rebase"]).await {
         Ok(output) => (
             StatusCode::OK,
-            Json(serde_json::json!({"success": true, "output": output})),
+            Json(serde_json::json!({"success": true, "message": output})),
         ),
         Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"success": false, "error": e})),
+            StatusCode::OK,
+            Json(
+                serde_json::json!({"success": false, "message": format!("Git pull unavailable: {e}")}),
+            ),
         ),
     }
 }
 
 /// POST /api/git/push
 pub async fn push(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    if !is_git_repo(&state).await {
+        return (
+            StatusCode::OK,
+            Json(serde_json::json!({"success": false, "message": "Not a git repository"})),
+        );
+    }
+
     match git_cmd(&state, &["push"]).await {
         Ok(output) => (
             StatusCode::OK,
-            Json(serde_json::json!({"success": true, "output": output})),
+            Json(serde_json::json!({"success": true, "message": output})),
         ),
         Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"success": false, "error": e})),
+            StatusCode::OK,
+            Json(
+                serde_json::json!({"success": false, "message": format!("Git push unavailable: {e}")}),
+            ),
         ),
     }
 }

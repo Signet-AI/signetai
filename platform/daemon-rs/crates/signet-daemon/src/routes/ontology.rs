@@ -1198,8 +1198,8 @@ pub async fn evidence(
                 .into_response()
         }
         Ok(None) => (
-            StatusCode::OK,
-            Json(json!({"proposal": null, "items": [], "count": 0})),
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": "Proposal not found"})),
         )
             .into_response(),
         Err(error) => (
