@@ -251,6 +251,29 @@ impl TestServer {
         .expect("seed history rows");
     }
 
+    fn seed_memory_delete_fixture(&self) {
+        let conn = rusqlite::Connection::open(self.db_path()).expect("open replay db");
+        conn.busy_timeout(Duration::from_secs(5)).unwrap();
+        conn.execute(
+            "INSERT INTO memories
+             (id, type, content, content_hash, confidence, importance, tags, who, project,
+              created_at, updated_at, updated_by, is_deleted, pinned, version, agent_id)
+             VALUES
+             ('mem-delete-replay', 'fact', 'Delete replay target.',
+              'delete-replay-hash', 1.0, 0.5, 'rust,parity', 'contract-replay',
+              'signet', '2026-01-01T00:00:00.000Z',
+              '2026-01-01T00:00:00.000Z', 'contract-replay', 0, 0, 1,
+              'default'),
+             ('mem-delete-pinned-replay', 'fact', 'Pinned delete replay target.',
+              'delete-pinned-replay-hash', 1.0, 0.5, 'rust,parity',
+              'contract-replay', 'signet', '2026-01-01T00:00:00.000Z',
+              '2026-01-01T00:00:00.000Z', 'contract-replay', 0, 1, 1,
+              'default')",
+            [],
+        )
+        .expect("seed delete memories");
+    }
+
     fn seed_document_delete_fixture(&self) {
         let conn = rusqlite::Connection::open(self.db_path()).expect("open replay db");
         conn.busy_timeout(Duration::from_secs(5)).unwrap();
@@ -1110,6 +1133,15 @@ impl TestServer {
             .expect("request failed")
     }
 
+    async fn delete_json(&self, path: &str, body: serde_json::Value) -> reqwest::Response {
+        self.client
+            .delete(format!("{}{path}", self.base))
+            .json(&body)
+            .send()
+            .await
+            .expect("request failed")
+    }
+
     async fn delete_bearer(&self, path: &str, token: &str) -> reqwest::Response {
         self.client
             .delete(format!("{}{path}", self.base))
@@ -1659,6 +1691,79 @@ async fn memory_history_replays_ts_order_and_body_shape() {
     let body = server.json(resp).await;
     assert_eq!(body["error"], "Not found");
     assert_eq!(body["memoryId"], "missing-history");
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn memory_delete_replays_ts_validation_and_body_shape() {
+    let server = TestServer::start().await;
+    server.seed_memory_delete_fixture();
+
+    let resp = server.delete("/api/memory/mem-delete-replay").await;
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "reason is required");
+
+    let resp = server
+        .delete_json("/api/memory/mem-delete-replay", json!("invalid"))
+        .await;
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "Invalid JSON body");
+
+    let resp = server
+        .delete_json(
+            "/api/memory/mem-delete-replay",
+            json!({"reason": "cleanup", "force": "not-bool"}),
+        )
+        .await;
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "force must be a boolean");
+
+    let resp = server
+        .delete("/api/memory/mem-delete-pinned-replay?reason=cleanup")
+        .await;
+    assert_eq!(resp.status(), 409);
+    let body = server.json(resp).await;
+    assert_eq!(body["id"], "mem-delete-pinned-replay");
+    assert_eq!(body["status"], "pinned_requires_force");
+    assert_eq!(body["currentVersion"], 1);
+    assert_eq!(body["error"], "Pinned memories require force=true");
+
+    let resp = server
+        .delete_json(
+            "/api/memory/mem-delete-replay",
+            json!({"reason": "body cleanup", "if_version": 1}),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["id"], "mem-delete-replay");
+    assert_eq!(body["status"], "deleted");
+    assert_eq!(body["currentVersion"], 1);
+    assert_eq!(body["newVersion"], 2);
+
+    let conn = rusqlite::Connection::open(server.db_path()).expect("open replay db");
+    let history: (String, String) = conn
+        .query_row(
+            "SELECT changed_by, reason
+             FROM memory_history
+             WHERE memory_id = 'mem-delete-replay' AND event = 'deleted'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("delete history");
+    assert_eq!(history, ("api".to_string(), "body cleanup".to_string()));
+
+    let resp = server
+        .delete("/api/memory/missing-memory?reason=cleanup")
+        .await;
+    assert_eq!(resp.status(), 404);
+    let body = server.json(resp).await;
+    assert_eq!(body["id"], "missing-memory");
+    assert_eq!(body["status"], "not_found");
+    assert_eq!(body["error"], "Not found");
 }
 
 #[tokio::test]
@@ -7407,7 +7512,9 @@ async fn remaining_public_routes_have_contract_replay_coverage() {
         .await;
     assert_status("POST /api/memory/:id/recover", &resp, &[404]);
     let resp = server.delete("/api/memory/missing-memory").await;
-    assert_status("DELETE /api/memory/:id", &resp, &[200, 404]);
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "reason is required");
 
     let resp = server.get("/api/ontology/claims/evidence").await;
     assert_status("GET /api/ontology/claims/evidence", &resp, &[200]);

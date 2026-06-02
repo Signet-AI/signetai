@@ -9,7 +9,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::Json;
-use axum::extract::{ConnectInfo, Path, State};
+use axum::body::Bytes;
+use axum::extract::{ConnectInfo, Path, RawQuery, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use rusqlite::{OptionalExtension, params};
@@ -2148,11 +2149,11 @@ mod tests {
 // DELETE /api/memory/:id
 // ---------------------------------------------------------------------------
 
-#[derive(Deserialize)]
-pub struct DeleteParams {
-    pub reason: Option<String>,
-    pub force: Option<String>,
-    pub if_version: Option<i64>,
+#[derive(Debug)]
+struct DeletePayload {
+    reason: Option<String>,
+    force: Option<bool>,
+    if_version: Option<i64>,
 }
 
 const MAX_FORGET_BATCH: usize = 200;
@@ -2191,6 +2192,108 @@ fn trim_opt(value: Option<String>) -> Option<String> {
     value
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty())
+}
+
+fn parse_delete_query(raw_query: Option<&str>) -> Result<DeletePayload, &'static str> {
+    let mut payload = DeletePayload {
+        reason: None,
+        force: None,
+        if_version: None,
+    };
+    let Some(raw_query) = raw_query else {
+        return Ok(payload);
+    };
+
+    for pair in raw_query.split('&').filter(|pair| !pair.is_empty()) {
+        let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+        match key {
+            "reason" => {
+                payload.reason = trim_opt(Some(value.replace('+', " ")));
+            }
+            "force" => {
+                payload.force = Some(match value.trim().to_ascii_lowercase().as_str() {
+                    "1" | "true" => true,
+                    "0" | "false" => false,
+                    _ => false,
+                });
+            }
+            "if_version" => {
+                let Ok(version) = value.trim().parse::<i64>() else {
+                    return Err("if_version must be a positive integer");
+                };
+                if version <= 0 {
+                    return Err("if_version must be a positive integer");
+                }
+                payload.if_version = Some(version);
+            }
+            _ => {}
+        }
+    }
+    Ok(payload)
+}
+
+fn parse_delete_body(bytes: &Bytes) -> Result<DeletePayload, &'static str> {
+    if bytes.iter().all(|byte| byte.is_ascii_whitespace()) {
+        return Ok(DeletePayload {
+            reason: None,
+            force: None,
+            if_version: None,
+        });
+    }
+    let Ok(value) = serde_json::from_slice::<Value>(bytes) else {
+        return Err("Invalid JSON body");
+    };
+    let Some(payload) = value.as_object() else {
+        return Err("Invalid JSON body");
+    };
+
+    let reason = payload
+        .get("reason")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+
+    let force = if let Some(value) = payload.get("force") {
+        match value {
+            Value::Bool(value) => Some(*value),
+            Value::Number(value) if value.as_i64() == Some(1) => Some(true),
+            Value::Number(value) if value.as_i64() == Some(0) => Some(false),
+            Value::String(value) => match value.trim().to_ascii_lowercase().as_str() {
+                "1" | "true" => Some(true),
+                "0" | "false" => Some(false),
+                _ => return Err("force must be a boolean"),
+            },
+            _ => return Err("force must be a boolean"),
+        }
+    } else {
+        None
+    };
+
+    let if_version = if let Some(value) = payload.get("if_version") {
+        let version = if let Some(version) = value.as_i64() {
+            version
+        } else if let Some(value) = value.as_str() {
+            let Ok(version) = value.trim().parse::<i64>() else {
+                return Err("if_version must be a positive integer");
+            };
+            version
+        } else {
+            return Err("if_version must be a positive integer");
+        };
+        if version <= 0 {
+            return Err("if_version must be a positive integer");
+        }
+        Some(version)
+    } else {
+        None
+    };
+
+    Ok(DeletePayload {
+        reason,
+        force,
+        if_version,
+    })
 }
 
 fn forget_confirm_token(ids: &[String]) -> String {
@@ -2487,19 +2590,52 @@ pub async fn forget_batch(
 pub async fn delete(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
-    axum::extract::Query(params): axum::extract::Query<DeleteParams>,
+    RawQuery(raw_query): RawQuery,
+    bytes: Bytes,
 ) -> axum::response::Response {
     if let Some(resp) = check_mutations_frozen(&state) {
         return resp;
     }
 
-    let force = params
-        .force
-        .as_deref()
-        .map(|f| f == "1" || f == "true")
-        .unwrap_or(false);
-    let reason = params.reason;
-    let if_version = params.if_version;
+    let id = id.trim().to_string();
+    if id.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "memory id is required"})),
+        )
+            .into_response();
+    }
+
+    let body = match parse_delete_body(&bytes) {
+        Ok(body) => body,
+        Err(message) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": message})),
+            )
+                .into_response();
+        }
+    };
+    let query = match parse_delete_query(raw_query.as_deref()) {
+        Ok(query) => query,
+        Err(message) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": message})),
+            )
+                .into_response();
+        }
+    };
+
+    let Some(reason) = body.reason.or(query.reason) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "reason is required"})),
+        )
+            .into_response();
+    };
+    let force = body.force.or(query.force).unwrap_or(false);
+    let if_version = body.if_version.or(query.if_version);
 
     let result = state
         .pool
@@ -2511,33 +2647,68 @@ pub async fn delete(
                     force,
                     if_version,
                     actor: "api",
-                    reason: reason.as_deref(),
+                    reason: Some(reason.as_str()),
                     actor_type: None,
                 },
             )?;
 
             match r {
                 transactions::ForgetResult::Deleted { new_version } => Ok(serde_json::json!({
+                    "id": id,
                     "status": "deleted",
+                    "currentVersion": new_version - 1,
                     "newVersion": new_version,
                 })),
-                transactions::ForgetResult::NotFound => {
-                    Ok(serde_json::json!({"status": "not_found", "_code": 404}))
-                }
+                transactions::ForgetResult::NotFound => Ok(serde_json::json!({
+                    "id": id,
+                    "status": "not_found",
+                    "error": "Not found",
+                    "_code": 404
+                })),
                 transactions::ForgetResult::AlreadyDeleted => {
-                    Ok(serde_json::json!({"status": "already_deleted"}))
+                    let current: Option<i64> = conn
+                        .query_row(
+                            "SELECT version FROM memories WHERE id = ?",
+                            params![id.as_str()],
+                            |row| row.get(0),
+                        )
+                        .optional()?;
+                    Ok(serde_json::json!({
+                        "id": id,
+                        "status": "already_deleted",
+                        "currentVersion": current,
+                        "_code": 409
+                    }))
                 }
                 transactions::ForgetResult::VersionConflict { current } => Ok(serde_json::json!({
-                    "status": "version_mismatch",
+                    "id": id,
+                    "status": "version_conflict",
                     "currentVersion": current,
+                    "error": "Version conflict",
                     "_code": 409,
                 })),
                 transactions::ForgetResult::PinnedRequiresForce => {
-                    Ok(serde_json::json!({"status": "pinned", "_code": 409}))
+                    let current: Option<i64> = conn
+                        .query_row(
+                            "SELECT version FROM memories WHERE id = ?",
+                            params![id.as_str()],
+                            |row| row.get(0),
+                        )
+                        .optional()?;
+                    Ok(serde_json::json!({
+                        "id": id,
+                        "status": "pinned_requires_force",
+                        "currentVersion": current,
+                        "error": "Pinned memories require force=true",
+                        "_code": 409
+                    }))
                 }
-                transactions::ForgetResult::AutonomousForceDenied => {
-                    Ok(serde_json::json!({"status": "autonomous_force_denied", "_code": 403}))
-                }
+                transactions::ForgetResult::AutonomousForceDenied => Ok(serde_json::json!({
+                    "id": id,
+                    "status": "autonomous_force_denied",
+                    "error": "Autonomous agents cannot force-delete pinned memories",
+                    "_code": 403
+                })),
             }
         })
         .await;
