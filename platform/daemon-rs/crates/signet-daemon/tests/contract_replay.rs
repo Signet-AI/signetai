@@ -251,6 +251,52 @@ impl TestServer {
         .expect("seed history rows");
     }
 
+    fn seed_document_delete_fixture(&self) {
+        let conn = rusqlite::Connection::open(self.db_path()).expect("open replay db");
+        conn.busy_timeout(Duration::from_secs(5)).unwrap();
+        conn.execute(
+            "INSERT INTO documents
+             (id, source_url, source_type, content_type, content_hash, title, raw_content,
+              status, error, connector_id, chunk_count, memory_count, metadata_json,
+              created_at, updated_at, completed_at)
+             VALUES
+             ('doc-delete-replay', 'file:///replay.md', 'markdown', 'text/markdown',
+              'doc-delete-hash', 'Delete replay', '# Delete replay', 'indexed', NULL,
+              'connector-delete', 2, 2, '{}',
+              '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z',
+              '2026-01-01T00:00:00.000Z')",
+            [],
+        )
+        .expect("seed delete document");
+        conn.execute(
+            "INSERT INTO memories
+             (id, type, content, content_hash, confidence, importance, tags, who, project,
+              source_id, source_type, created_at, updated_at, updated_by, is_deleted,
+              deleted_at, version, agent_id)
+             VALUES
+             ('mem-doc-delete-active', 'fact', 'Active linked document memory.',
+              'doc-delete-active-hash', 1.0, 0.5, 'doc', 'contract-replay', 'signet',
+              'doc-delete-replay', 'document',
+              '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z',
+              'contract-replay', 0, NULL, 1, 'default'),
+             ('mem-doc-delete-already', 'fact', 'Already deleted linked document memory.',
+              'doc-delete-already-hash', 1.0, 0.5, 'doc', 'contract-replay', 'signet',
+              'doc-delete-replay', 'document',
+              '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z',
+              'contract-replay', 1, '2026-01-01T00:00:00.000Z', 4, 'default')",
+            [],
+        )
+        .expect("seed delete memories");
+        conn.execute(
+            "INSERT INTO document_memories (document_id, memory_id, chunk_index)
+             VALUES
+             ('doc-delete-replay', 'mem-doc-delete-active', 0),
+             ('doc-delete-replay', 'mem-doc-delete-already', 1)",
+            [],
+        )
+        .expect("seed document memory links");
+    }
+
     fn seed_deduplicate_fixture(&self) {
         let conn = rusqlite::Connection::open(self.db_path()).expect("open replay db");
         conn.busy_timeout(Duration::from_secs(5)).unwrap();
@@ -3661,6 +3707,73 @@ async fn documents_list() {
     let server = TestServer::start().await;
     let resp = server.get("/api/documents").await;
     assert_eq!(resp.status(), 200);
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn documents_delete_replays_ts_soft_delete_contract() {
+    let server = TestServer::start().await;
+    server.seed_document_delete_fixture();
+
+    let resp = server.delete("/api/documents/doc-delete-replay").await;
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "reason query parameter is required");
+
+    let resp = server
+        .delete("/api/documents/missing-document?reason=replay")
+        .await;
+    assert_eq!(resp.status(), 404);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "Document not found");
+
+    let resp = server
+        .delete("/api/documents/doc-delete-replay?reason=replay")
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["deleted"], true);
+    assert_eq!(body["memoriesRemoved"], 1);
+
+    let conn = rusqlite::Connection::open(server.db_path()).expect("open replay db");
+    let doc: (String, String) = conn
+        .query_row(
+            "SELECT status, error FROM documents WHERE id = 'doc-delete-replay'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("document row");
+    assert_eq!(doc, ("deleted".to_string(), "replay".to_string()));
+    let active: (i64, String, String, i64) = conn
+        .query_row(
+            "SELECT is_deleted, deleted_at, updated_by, version
+             FROM memories WHERE id = 'mem-doc-delete-active'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .expect("active linked memory");
+    assert_eq!(active.0, 1);
+    assert!(!active.1.is_empty());
+    assert_eq!(active.2, "document-api");
+    assert_eq!(active.3, 2);
+    let already_deleted_version: i64 = conn
+        .query_row(
+            "SELECT version FROM memories WHERE id = 'mem-doc-delete-already'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("already deleted linked memory");
+    assert_eq!(already_deleted_version, 4);
+    let history: (String, String) = conn
+        .query_row(
+            "SELECT changed_by, reason FROM memory_history
+             WHERE memory_id = 'mem-doc-delete-active' AND event = 'deleted'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("document delete history");
+    assert_eq!(history.0, "document-api");
+    assert_eq!(history.1, "Document deleted: replay");
 }
 
 #[tokio::test]
@@ -7160,7 +7273,9 @@ async fn remaining_public_routes_have_contract_replay_coverage() {
     let resp = server
         .delete("/api/documents/missing-document?reason=replay")
         .await;
-    assert_status("DELETE /api/documents/:id", &resp, &[200, 404]);
+    assert_eq!(resp.status(), 404);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "Document not found");
 
     let resp = server.get("/api/git/config").await;
     assert_status("GET /api/git/config", &resp, &[200]);

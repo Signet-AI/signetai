@@ -199,7 +199,7 @@ pub async fn get(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> 
         Ok(val) => (StatusCode::OK, Json(val)),
         Err(_) => (
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "document not found"})),
+            Json(serde_json::json!({"error": "Document not found"})),
         ),
     }
 }
@@ -259,24 +259,69 @@ pub async fn delete(
     if params.reason.is_none() {
         return (
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "reason is required"})),
+            Json(serde_json::json!({"error": "reason query parameter is required"})),
         );
     }
+    let reason = params.reason.unwrap_or_default();
 
     let result = state
         .pool
         .write(signet_core::db::Priority::Low, move |conn| {
-            // Remove associated memories
-            let removed = conn.execute(
-                "DELETE FROM memories WHERE source_id = ?1 AND source_type = 'document'",
-                [&id],
+            let exists = conn
+                .prepare_cached("SELECT id FROM documents WHERE id = ?1")?
+                .exists([&id])?;
+            if !exists {
+                return Ok(serde_json::json!({"__notFound": true}));
+            }
+
+            let now = chrono::Utc::now().to_rfc3339();
+            let mut stmt =
+                conn.prepare_cached("SELECT memory_id FROM document_memories WHERE document_id = ?1")?;
+            let linked_memories: Vec<String> = stmt
+                .query_map([&id], |row| row.get::<_, String>(0))?
+                .filter_map(|row| row.ok())
+                .collect();
+            drop(stmt);
+
+            let mut removed = 0_i64;
+            for memory_id in linked_memories {
+                let updated = conn.execute(
+                    "UPDATE memories
+                     SET is_deleted = 1, deleted_at = ?1, updated_at = ?1,
+                         updated_by = 'document-api', version = version + 1
+                     WHERE id = ?2 AND COALESCE(is_deleted, 0) = 0",
+                    rusqlite::params![now, memory_id],
+                )?;
+                if updated > 0 {
+                    conn.execute(
+                        "INSERT INTO memory_history
+                         (id, memory_id, event, old_content, new_content,
+                          changed_by, reason, metadata, created_at)
+                         VALUES (?1, ?2, 'deleted', NULL, NULL, 'document-api', ?3, NULL, ?4)",
+                        rusqlite::params![
+                            uuid::Uuid::new_v4().to_string(),
+                            memory_id,
+                            format!("Document deleted: {reason}"),
+                            now,
+                        ],
+                    )?;
+                    removed += 1;
+                }
+            }
+
+            conn.execute(
+                "UPDATE documents SET status = 'deleted', error = ?1, updated_at = ?2 WHERE id = ?3",
+                rusqlite::params![reason, now, id],
             )?;
-            conn.execute("DELETE FROM documents WHERE id = ?1", [&id])?;
             Ok(serde_json::json!({"deleted": true, "memoriesRemoved": removed}))
         })
         .await;
 
     match result {
+        Ok(val) if val.get("__notFound").and_then(|v| v.as_bool()) == Some(true) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Document not found"})),
+        ),
         Ok(val) => (StatusCode::OK, Json(val)),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
