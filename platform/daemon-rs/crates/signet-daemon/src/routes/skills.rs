@@ -17,8 +17,11 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
+use chrono::Utc;
+use rusqlite::{OptionalExtension, params};
 use serde::Deserialize;
 use serde_json::json;
+use signet_core::{config::ProceduralConfig, db::Priority, error::CoreError, queries::embedding};
 use tokio::process::Command;
 use uuid::Uuid;
 use zip::ZipArchive;
@@ -54,6 +57,7 @@ const MAX_CLAWHUB_ZIP_BYTES: u64 = 50 * 1024 * 1024;
 const MAX_CLAWHUB_ZIP_ENTRIES: usize = 500;
 const MAX_CLAWHUB_ENTRY_BYTES: u64 = 25 * 1024 * 1024;
 const MAX_CLAWHUB_UNCOMPRESSED_BYTES: u64 = 100 * 1024 * 1024;
+const DEFAULT_AGENT_ID: &str = "default";
 static CLAWHUB_INSTALL_LOCKS: OnceLock<
     tokio::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
 > = OnceLock::new();
@@ -138,6 +142,7 @@ pub async fn delete(
         )
             .into_response();
     }
+    let _ = uninstall_skill_graph_node(state.clone(), name.clone()).await;
     // lgtm[rust/path-injection] skill_dir is built from a validated skill name and canonical workspace root via workspace_paths::child_path.
     if let Err(err) = std::fs::remove_dir_all(&path) {
         return (
@@ -218,12 +223,15 @@ pub async fn install(
     match clawhub_install_slug(name, req.source.as_deref()) {
         Ok(Some(slug)) => {
             return match install_clawhub_skill(&state, &slug).await {
-                Ok(output) => Json(json!({
-                    "success": true,
-                    "name": slug,
-                    "output": output
-                }))
-                .into_response(),
+                Ok(output) => {
+                    schedule_skill_graph_install(state.clone(), slug.clone());
+                    Json(json!({
+                        "success": true,
+                        "name": slug,
+                        "output": output
+                    }))
+                    .into_response()
+                }
                 Err(error) => (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(json!({
@@ -259,12 +267,15 @@ pub async fn install(
     };
 
     match run_skill_install_command(command).await {
-        Ok(output) => Json(json!({
-            "success": true,
-            "name": name,
-            "output": output
-        }))
-        .into_response(),
+        Ok(output) => {
+            schedule_skill_graph_install(state.clone(), name.to_string());
+            Json(json!({
+                "success": true,
+                "name": name,
+                "output": output
+            }))
+            .into_response()
+        }
         Err(error) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({
@@ -274,6 +285,12 @@ pub async fn install(
         )
             .into_response(),
     }
+}
+
+fn schedule_skill_graph_install(state: Arc<AppState>, name: String) {
+    tokio::spawn(async move {
+        let _ = install_skill_graph_node(state, name).await;
+    });
 }
 
 fn clawhub_install_slug(name: &str, source: Option<&str>) -> Result<Option<String>, String> {
@@ -515,6 +532,176 @@ fn copy_dir_recursive(source: &Path, target: &Path) -> io::Result<()> {
     Ok(())
 }
 
+async fn install_skill_graph_node(state: Arc<AppState>, name: String) -> Result<(), String> {
+    let skill_path = skill_file(&state, &name).map_err(|err| err.to_string())?;
+    let content = fs::read_to_string(&skill_path).map_err(|err| err.to_string())?;
+    let meta = parse_frontmatter(&content);
+    let skill_name = meta
+        .name
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(name);
+    let procedural = procedural_config(&state);
+    if !procedural.enabled {
+        return Ok(());
+    }
+
+    let fs_path = skill_path.to_string_lossy().to_string();
+    state
+        .pool
+        .write_tx(Priority::Low, move |conn| {
+            let now = Utc::now().to_rfc3339();
+            let mut entity_id = format!("skill:{DEFAULT_AGENT_ID}:{skill_name}");
+            let existing: Option<String> = conn
+                .query_row(
+                    "SELECT id FROM entities WHERE id = ?1 OR (name = ?2 AND agent_id = ?3) LIMIT 1",
+                    params![entity_id, skill_name, DEFAULT_AGENT_ID],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            let description = meta.description.unwrap_or_default();
+
+            if let Some(existing_id) = existing {
+                entity_id = existing_id;
+                conn.execute(
+                    "UPDATE entities SET entity_type = 'skill', description = ?1, updated_at = ?2
+                     WHERE id = ?3",
+                    params![description, now, entity_id],
+                )?;
+            } else if conn
+                .execute(
+                    "INSERT INTO entities
+                     (id, name, canonical_name, entity_type, agent_id, description, mentions, created_at, updated_at)
+                     VALUES (?1, ?2, ?3, 'skill', ?4, ?5, 0, ?6, ?6)
+                     ON CONFLICT(name) DO NOTHING",
+                    params![
+                        entity_id,
+                        skill_name,
+                        skill_name.to_ascii_lowercase(),
+                        DEFAULT_AGENT_ID,
+                        description,
+                        now
+                    ],
+                )?
+                == 0
+            {
+                entity_id = conn.query_row(
+                    "SELECT id FROM entities WHERE name = ?1 AND agent_id = ?2 LIMIT 1",
+                    params![skill_name, DEFAULT_AGENT_ID],
+                    |row| row.get(0),
+                )?;
+                conn.execute(
+                    "UPDATE entities SET entity_type = 'skill', description = ?1, updated_at = ?2
+                     WHERE id = ?3",
+                    params![description, now, entity_id],
+                )?;
+            }
+
+            let actual_entity_id: String = conn.query_row(
+                "SELECT id FROM entities WHERE id = ?1 OR (name = ?2 AND agent_id = ?3) LIMIT 1",
+                params![entity_id, skill_name, DEFAULT_AGENT_ID],
+                |row| row.get(0),
+            )?;
+
+            conn.execute(
+                "INSERT INTO skill_meta
+                 (entity_id, agent_id, version, author, license, source,
+                  role, triggers, tags, permissions, enriched,
+                  installed_at, importance, decay_rate, fs_path)
+                 VALUES (?1, ?2, ?3, ?4, ?5, 'installed', ?6, ?7, ?8, ?9, 0, ?10, ?11, ?12, ?13)
+                 ON CONFLICT(entity_id) DO UPDATE SET
+                    version = excluded.version,
+                    author = excluded.author,
+                    license = excluded.license,
+                    source = excluded.source,
+                    role = excluded.role,
+                    triggers = excluded.triggers,
+                    tags = excluded.tags,
+                    permissions = excluded.permissions,
+                    enriched = excluded.enriched,
+                    fs_path = excluded.fs_path,
+                    uninstalled_at = NULL,
+                    updated_at = ?10",
+                params![
+                    actual_entity_id,
+                    DEFAULT_AGENT_ID,
+                    meta.version,
+                    meta.author,
+                    meta.license,
+                    meta.role.unwrap_or_else(|| "utility".to_string()),
+                    json_string(meta.triggers)?,
+                    json_string(meta.tags)?,
+                    json_string(meta.permissions)?,
+                    now,
+                    procedural.importance_on_install,
+                    procedural.decay_rate,
+                    fs_path,
+                ],
+            )?;
+
+            Ok(json!({"entityId": actual_entity_id}))
+        })
+        .await
+        .map(|_| ())
+        .map_err(|err| err.to_string())
+}
+
+async fn uninstall_skill_graph_node(state: Arc<AppState>, name: String) -> Result<(), String> {
+    state
+        .pool
+        .write_tx(Priority::Low, move |conn| {
+            let entity_id = format!("skill:{DEFAULT_AGENT_ID}:{name}");
+            let exists = conn
+                .query_row(
+                    "SELECT id FROM entities WHERE id = ?1",
+                    params![entity_id],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?;
+            let Some(entity_id) = exists else {
+                return Ok(json!({"removed": false}));
+            };
+
+            conn.execute(
+                "DELETE FROM relations WHERE source_entity_id = ?1 OR target_entity_id = ?1",
+                params![entity_id],
+            )?;
+            conn.execute(
+                "DELETE FROM memory_entity_mentions WHERE entity_id = ?1",
+                params![entity_id],
+            )?;
+            embedding::delete_by_source(conn, "skill", &entity_id, None)?;
+            conn.execute(
+                "DELETE FROM skill_meta WHERE entity_id = ?1",
+                params![entity_id],
+            )?;
+            conn.execute("DELETE FROM entities WHERE id = ?1", params![entity_id])?;
+
+            Ok(json!({"removed": true}))
+        })
+        .await
+        .map(|_| ())
+        .map_err(|err| err.to_string())
+}
+
+fn procedural_config(state: &AppState) -> ProceduralConfig {
+    state
+        .config
+        .manifest
+        .memory
+        .as_ref()
+        .and_then(|memory| memory.pipeline_v2.as_ref())
+        .map(|pipeline| pipeline.procedural.clone())
+        .unwrap_or_default()
+}
+
+fn json_string(value: Option<Vec<String>>) -> Result<Option<String>, CoreError> {
+    value
+        .map(|value| serde_json::to_string(&value))
+        .transpose()
+        .map_err(CoreError::from)
+}
+
 fn build_skill_install_command(name: &str, source: Option<&str>) -> Option<SkillInstallCommand> {
     build_skill_install_command_for_family(name, source, &preferred_package_manager())
 }
@@ -709,6 +896,12 @@ struct SkillMeta {
     name: Option<String>,
     description: Option<String>,
     version: Option<String>,
+    author: Option<String>,
+    license: Option<String>,
+    role: Option<String>,
+    triggers: Option<Vec<String>>,
+    tags: Option<Vec<String>>,
+    permissions: Option<Vec<String>>,
 }
 
 fn parse_frontmatter(content: &str) -> SkillMeta {
@@ -729,10 +922,36 @@ fn parse_frontmatter(content: &str) -> SkillMeta {
             "name" => meta.name = Some(value),
             "description" => meta.description = Some(value),
             "version" => meta.version = Some(value),
+            "author" => meta.author = Some(value),
+            "license" => meta.license = Some(value),
+            "role" => meta.role = Some(value),
+            "triggers" => meta.triggers = parse_frontmatter_list(&value),
+            "tags" => meta.tags = parse_frontmatter_list(&value),
+            "permissions" => meta.permissions = parse_frontmatter_list(&value),
             _ => {}
         }
     }
     meta
+}
+
+fn parse_frontmatter_list(value: &str) -> Option<Vec<String>> {
+    let trimmed = value.trim();
+    let content = trimmed
+        .strip_prefix('[')
+        .and_then(|value| value.strip_suffix(']'))
+        .unwrap_or(trimmed);
+    let values = content
+        .split(',')
+        .map(|value| {
+            value
+                .trim()
+                .trim_matches('"')
+                .trim_matches('\'')
+                .to_string()
+        })
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>();
+    (!values.is_empty()).then_some(values)
 }
 
 fn validate_skill_name(name: &str) -> Result<String, ()> {

@@ -15,11 +15,24 @@ use std::time::Duration;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use hmac::{Hmac, Mac};
+use rusqlite::OptionalExtension;
 use serde_json::json;
 use sha2::Sha256;
 
 type HmacSha256 = Hmac<Sha256>;
 const AUTH_SECRET: &[u8] = b"contract-replay-auth-secret-32bytes";
+
+#[derive(Debug)]
+struct SkillGraphRow {
+    name: String,
+    entity_type: String,
+    agent_id: String,
+    description: String,
+    source: String,
+    role: String,
+    fs_path: String,
+    uninstalled_at: Option<String>,
+}
 
 struct TestServer {
     #[allow(dead_code)] // kept for debugging
@@ -5388,6 +5401,65 @@ async fn hook_recall_and_compaction_endpoints() {
     assert_eq!(resp.status(), 200);
 }
 
+async fn wait_for_skill_graph_row(db_path: &std::path::Path, entity_id: &str) -> SkillGraphRow {
+    for _ in 0..80 {
+        let conn = rusqlite::Connection::open(db_path).expect("open replay db");
+        conn.busy_timeout(Duration::from_secs(5)).unwrap();
+        let row = conn
+            .query_row(
+                "SELECT e.name, e.entity_type, e.agent_id, COALESCE(e.description, ''),
+                        sm.source, sm.role, sm.fs_path, sm.uninstalled_at
+                   FROM entities e
+                   JOIN skill_meta sm ON sm.entity_id = e.id
+                  WHERE e.id = ?1",
+                rusqlite::params![entity_id],
+                |row| {
+                    Ok(SkillGraphRow {
+                        name: row.get(0)?,
+                        entity_type: row.get(1)?,
+                        agent_id: row.get(2)?,
+                        description: row.get(3)?,
+                        source: row.get(4)?,
+                        role: row.get(5)?,
+                        fs_path: row.get(6)?,
+                        uninstalled_at: row.get(7)?,
+                    })
+                },
+            )
+            .optional()
+            .expect("query skill graph row");
+        if let Some(row) = row {
+            return row;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    panic!("skill graph row was not created for {entity_id}");
+}
+
+async fn wait_for_skill_graph_removed(db_path: &std::path::Path, entity_id: &str) {
+    for _ in 0..80 {
+        let conn = rusqlite::Connection::open(db_path).expect("open replay db");
+        conn.busy_timeout(Duration::from_secs(5)).unwrap();
+        let counts = conn
+            .query_row(
+                "SELECT
+                    (SELECT COUNT(*) FROM entities WHERE id = ?1),
+                    (SELECT COUNT(*) FROM skill_meta WHERE entity_id = ?1),
+                    (SELECT COUNT(*) FROM embeddings WHERE source_type = 'skill' AND source_id = ?1)",
+                rusqlite::params![entity_id],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?)),
+            )
+            .expect("query skill graph cleanup");
+        if counts == (0, 0, 0) {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    panic!("skill graph row was not removed for {entity_id}");
+}
+
 #[tokio::test]
 #[ignore = "requires built daemon binary"]
 async fn skills_endpoints() {
@@ -5455,6 +5527,27 @@ async fn skills_endpoints() {
     let body = server.json(resp).await;
     assert_eq!(body["name"], "web-search");
     assert_eq!(body["description"], "Installed by fake skills runner");
+    let web_graph = wait_for_skill_graph_row(&server.db_path(), "skill:default:web-search").await;
+    assert_eq!(web_graph.name, "web-search");
+    assert_eq!(web_graph.entity_type, "skill");
+    assert_eq!(web_graph.agent_id, "default");
+    assert_eq!(web_graph.description, "Installed by fake skills runner");
+    assert_eq!(web_graph.source, "installed");
+    assert_eq!(web_graph.role, "utility");
+    assert!(web_graph.fs_path.ends_with("skills/web-search/SKILL.md"));
+    assert_eq!(web_graph.uninstalled_at, None);
+
+    let resp = server
+        .post(
+            "/api/skills/install",
+            json!({"name": "web-search", "source": "Signet-AI/signetai"}),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let web_graph = wait_for_skill_graph_row(&server.db_path(), "skill:default:web-search").await;
+    assert_eq!(web_graph.name, "web-search");
+    assert_eq!(web_graph.description, "Installed by fake skills runner");
+    assert_eq!(web_graph.uninstalled_at, None);
 
     let resp = server
         .post(
@@ -5480,6 +5573,19 @@ async fn skills_endpoints() {
     let body = server.json(resp).await;
     assert_eq!(body["name"], "claw-demo");
     assert_eq!(body["description"], "Installed by ClawHub");
+    let claw_graph = wait_for_skill_graph_row(&server.db_path(), "skill:default:claw-demo").await;
+    assert_eq!(claw_graph.name, "claw-demo");
+    assert_eq!(claw_graph.entity_type, "skill");
+    assert_eq!(claw_graph.agent_id, "default");
+    assert_eq!(claw_graph.description, "Installed by ClawHub");
+    assert_eq!(claw_graph.source, "installed");
+    assert_eq!(claw_graph.role, "utility");
+    assert!(claw_graph.fs_path.ends_with("skills/claw-demo/SKILL.md"));
+    assert_eq!(claw_graph.uninstalled_at, None);
+
+    let resp = server.delete("/api/skills/web-search").await;
+    assert_eq!(resp.status(), 200);
+    wait_for_skill_graph_removed(&server.db_path(), "skill:default:web-search").await;
 
     let resp = server.delete("/api/skills/test-skill").await;
     assert_eq!(resp.status(), 200);
