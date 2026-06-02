@@ -509,6 +509,7 @@ impl AppState {
             "claude" | "claude-code" => Some("claude-code"),
             "opencode" => Some("opencode"),
             "openclaw" => Some("openclaw"),
+            "gemini" | "gemini-cli" => Some("gemini"),
             _ => None,
         }
     }

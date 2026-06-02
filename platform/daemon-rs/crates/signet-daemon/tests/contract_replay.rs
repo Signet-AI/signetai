@@ -5384,11 +5384,78 @@ async fn dashboard_openclaw_and_harness_routes_replay_ts_shapes() {
         2
     );
 
+    let resp = server.get("/api/harnesses").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    let harnesses = body["harnesses"].as_array().expect("harnesses array");
+    assert_eq!(harnesses.len(), 4);
+    assert_eq!(harnesses[0]["name"], "Claude Code");
+    assert_eq!(harnesses[0]["id"], "claude-code");
+    assert!(
+        harnesses[0]["path"]
+            .as_str()
+            .expect("claude path")
+            .ends_with(".claude/settings.json")
+    );
+    assert_eq!(harnesses[0]["lastSeen"], serde_json::Value::Null);
+    assert_eq!(harnesses[1]["name"], "OpenCode");
+    assert_eq!(harnesses[1]["id"], "opencode");
+    assert!(
+        harnesses[1]["path"]
+            .as_str()
+            .expect("opencode path")
+            .ends_with(".config/opencode/AGENTS.md")
+    );
+    assert_eq!(harnesses[1]["lastSeen"], serde_json::Value::Null);
+    assert_eq!(harnesses[2]["name"], "OpenClaw");
+    assert_eq!(harnesses[2]["id"], "openclaw");
+    assert!(
+        harnesses[2]["path"]
+            .as_str()
+            .expect("openclaw path")
+            .ends_with("AGENTS.md")
+    );
+    assert!(
+        harnesses[2]["lastSeen"]
+            .as_str()
+            .expect("openclaw lastSeen")
+            .contains('T')
+    );
+    assert_eq!(harnesses[3]["name"], "Gemini CLI");
+    assert_eq!(harnesses[3]["id"], "gemini");
+    assert!(
+        harnesses[3]["path"]
+            .as_str()
+            .expect("gemini path")
+            .ends_with(".gemini/settings.json")
+    );
+    assert_eq!(harnesses[3]["lastSeen"], serde_json::Value::Null);
+
     let resp = server.post("/api/harnesses/regenerate", json!({})).await;
     assert_eq!(resp.status(), 404);
     let body = server.json(resp).await;
     assert_eq!(body["success"], false);
     assert_eq!(body["error"], "Regeneration script not found");
+
+    let scripts_dir = server._tmpdir.path().join("scripts");
+    std::fs::create_dir_all(&scripts_dir).expect("create harness scripts dir");
+    std::fs::write(
+        scripts_dir.join("generate-harness-configs.py"),
+        "print('regenerated from workspace scripts')\n",
+    )
+    .expect("write harness regeneration script");
+
+    let resp = server.post("/api/harnesses/regenerate", json!({})).await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["success"], true);
+    assert_eq!(body["message"], "Configs regenerated successfully");
+    assert!(
+        body["output"]
+            .as_str()
+            .expect("regeneration output")
+            .contains("regenerated from workspace scripts")
+    );
 }
 
 #[tokio::test]

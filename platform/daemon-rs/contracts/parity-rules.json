@@ -129,9 +129,8 @@
 				"ignoreFields": []
 			},
 			"GET /api/harnesses": {
-				"deterministic": ["harnesses.*.id", "harnesses.*.exists"],
-				"ignoreFields": ["harnesses.*.lastSeen", "harnesses.*.path", "harnesses.*.name"],
-				"note": "daemon-rs shadow currently reports harness file presence but does not own the TS watcher-driven identity sync pipeline (batched propagation, queued reruns, SIGNET-ARCHITECTURE refresh); degraded-mode documentation in docs/HARNESSES.md is the source of truth until the parity wave lands."
+				"deterministic": ["harnesses.*.name", "harnesses.*.id", "harnesses.*.path", "harnesses.*.exists"],
+				"ignoreFields": ["harnesses.*.lastSeen"]
 			},
 			"POST /api/hooks/session-start": {
 				"deterministic": ["injections"],
