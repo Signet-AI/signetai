@@ -104,7 +104,15 @@ impl TestServer {
         if auth_mode.is_some() {
             std::fs::write(tmpdir.path().join(".daemon/auth-secret"), AUTH_SECRET).unwrap();
         }
-        let (fake_bw, fake_op) = write_fake_secret_provider_bins(tmpdir.path());
+        let (fake_bw, fake_op, fake_bin_dir) = write_fake_provider_bins(tmpdir.path());
+        let path_with_fakes = match std::env::var_os("PATH") {
+            Some(path) => {
+                let mut paths = vec![fake_bin_dir];
+                paths.extend(std::env::split_paths(&path));
+                std::env::join_paths(paths).expect("join fake binary PATH")
+            }
+            None => fake_bin_dir.into_os_string(),
+        };
 
         std::fs::write(tmpdir.path().join("agent.yaml"), yaml).unwrap();
         for (relative, content) in files {
@@ -132,6 +140,7 @@ impl TestServer {
             .env("SIGNET_MEMORY_IMPORT_POLL_MS", "200")
             .env("SIGNET_BW_BIN", fake_bw)
             .env("SIGNET_OP_BIN", fake_op)
+            .env("PATH", path_with_fakes)
             .env("RUST_LOG", "warn")
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -1259,13 +1268,14 @@ fn ephemeral_port() -> u16 {
         .port()
 }
 
-fn write_fake_secret_provider_bins(
+fn write_fake_provider_bins(
     root: &std::path::Path,
-) -> (std::path::PathBuf, std::path::PathBuf) {
+) -> (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf) {
     let bin_dir = root.join("fake-bin");
     std::fs::create_dir_all(&bin_dir).expect("create fake provider bin dir");
     let bw = bin_dir.join("bw");
     let op = bin_dir.join("op");
+    let signet = bin_dir.join("signet");
     std::fs::write(
         &bw,
         r#"#!/bin/sh
@@ -1324,6 +1334,49 @@ esac
 "#,
     )
     .expect("write fake op");
+    std::fs::write(
+        &signet,
+        r#"#!/bin/sh
+set -eu
+case "$1 ${2-} ${3-}" in
+  "status  ")
+    echo "fake signet status"
+    ;;
+  "daemon status ")
+    echo "fake daemon status"
+    ;;
+  "daemon logs --lines")
+    echo "fake daemon logs"
+    ;;
+  "embed audit ")
+    echo "fake embed audit"
+    ;;
+  "embed backfill ")
+    echo "fake embed backfill"
+    ;;
+  "sync  ")
+    echo "fake sync"
+    ;;
+  "recall test")
+    echo "fake recall: ${3-}"
+    ;;
+  "skill list ")
+    echo "fake skill list"
+    ;;
+  "secret list ")
+    echo "fake secret list"
+    ;;
+  "update install ")
+    echo "fake update install"
+    ;;
+  *)
+    echo "unsupported signet command: $*" >&2
+    exit 2
+    ;;
+esac
+"#,
+    )
+    .expect("write fake signet");
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -1331,8 +1384,10 @@ esac
             .expect("chmod fake bw");
         std::fs::set_permissions(&op, std::fs::Permissions::from_mode(0o755))
             .expect("chmod fake op");
+        std::fs::set_permissions(&signet, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod fake signet");
     }
-    (bw, op)
+    (bw, op, bin_dir)
 }
 
 struct MarketplaceCatalogFixture {
@@ -4980,11 +5035,18 @@ async fn repair_endpoints() {
     let resp = server
         .post("/api/troubleshoot/exec", json!({"key": "status"}))
         .await;
-    assert!([200, 500].contains(&resp.status().as_u16()));
-    let body = server.json(resp).await;
-    assert_eq!(body["key"], "status");
-    assert_eq!(body["command"], "signet status");
-    assert!(body["type"] == "exit" || body["error"].is_string());
+    assert_eq!(resp.status(), 200);
+    assert_eq!(
+        resp.headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default(),
+        "text/event-stream"
+    );
+    let text = resp.text().await.expect("troubleshoot SSE body");
+    assert!(text.contains(r#"data: {"command":"signet status","key":"status","type":"started"}"#));
+    assert!(text.contains(r#"data: {"data":"fake signet status\n","type":"stdout"}"#));
+    assert!(text.contains(r#"data: {"code":0,"type":"exit"}"#));
 }
 
 #[tokio::test]

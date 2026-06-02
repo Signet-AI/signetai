@@ -1,19 +1,25 @@
 //! Repair action routes: maintenance and recovery endpoints.
 
 use std::collections::HashMap;
+use std::convert::Infallible;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
 
 use axum::{
+    body::{Body, Bytes},
     extract::{Query, State},
-    http::StatusCode,
-    response::{IntoResponse, Json},
+    http::{StatusCode, header},
+    response::{IntoResponse, Json, Response},
 };
 use serde::Deserialize;
 use signet_core::queries::embedding::{self, InsertEmbedding};
 use signet_core::queries::memory;
 use signet_services::normalize::normalize_and_hash;
+use tokio::io::AsyncReadExt;
+use tokio::sync::mpsc;
+use tokio_stream::wrappers::ReceiverStream;
 
 use crate::state::AppState;
 
@@ -69,6 +75,45 @@ pub struct TroubleshootExecRequest {
     key: Option<String>,
 }
 
+fn executable_exists(path: &Path) -> bool {
+    path.metadata()
+        .map(|metadata| metadata.is_file())
+        .unwrap_or(false)
+}
+
+fn resolve_binary(bin: &str) -> Option<PathBuf> {
+    let path = Path::new(bin);
+    if path.components().count() > 1 && executable_exists(path) {
+        return Some(path.to_path_buf());
+    }
+    std::env::var_os("PATH").and_then(|path| {
+        std::env::split_paths(&path)
+            .map(|dir| dir.join(bin))
+            .find(|candidate| executable_exists(candidate))
+    })
+}
+
+fn sse_payload(event: serde_json::Value) -> Result<Bytes, Infallible> {
+    Ok(Bytes::from(format!("data: {event}\n\n")))
+}
+
+async fn send_sse(tx: &mpsc::Sender<Result<Bytes, Infallible>>, event: serde_json::Value) -> bool {
+    tx.send(sse_payload(event)).await.is_ok()
+}
+
+fn sse_response(rx: mpsc::Receiver<Result<Bytes, Infallible>>) -> Response {
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "text/event-stream"),
+            (header::CACHE_CONTROL, "no-cache"),
+            (header::CONNECTION, "keep-alive"),
+        ],
+        Body::from_stream(ReceiverStream::new(rx)),
+    )
+        .into_response()
+}
+
 // ---------------------------------------------------------------------------
 // Repair endpoints
 // ---------------------------------------------------------------------------
@@ -101,76 +146,184 @@ pub async fn troubleshoot_exec(Json(req): Json<TroubleshootExecRequest>) -> impl
     };
 
     let command = format!("{bin} {}", args.join(" "));
-    if key == "daemon-stop" || key == "daemon-restart" {
+    let Some(resolved) = resolve_binary(bin) else {
         return (
-            StatusCode::OK,
-            Json(serde_json::json!({
-                "type": "exit",
-                "key": key,
-                "command": command,
-                "code": 0,
-                "stdout": format!("Daemon {} requested; restart/stop is suppressed by daemon-rs troubleshoot exec", if key == "daemon-stop" { "stop" } else { "restart" }),
-                "stderr": "",
-            })),
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("Binary not found: {bin}")})),
         )
             .into_response();
+    };
+
+    let (tx, rx) = mpsc::channel::<Result<Bytes, Infallible>>(32);
+    if key == "daemon-stop" || key == "daemon-restart" {
+        let action = if key == "daemon-stop" {
+            "stop"
+        } else {
+            "restart"
+        };
+        let key = key.clone();
+        tokio::spawn(async move {
+            if !send_sse(
+                &tx,
+                serde_json::json!({"type": "started", "key": key, "command": command}),
+            )
+            .await
+            {
+                return;
+            }
+            if !send_sse(
+                &tx,
+                serde_json::json!({
+                    "type": "stdout",
+                    "data": format!("Daemon {action} initiated (PID {})\n", std::process::id())
+                }),
+            )
+            .await
+            {
+                return;
+            }
+            if action == "stop"
+                && !send_sse(
+                    &tx,
+                    serde_json::json!({"type": "stdout", "data": "Dashboard will lose connection.\n"}),
+                )
+                .await
+            {
+                return;
+            }
+            let _ = send_sse(&tx, serde_json::json!({"type": "exit", "code": 0})).await;
+
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                if action == "restart" {
+                    let _ = tokio::process::Command::new(resolved)
+                        .args(["daemon", "start"])
+                        .env_remove("CLAUDECODE")
+                        .env("SIGNET_NO_HOOKS", "1")
+                        .stdin(Stdio::null())
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::null())
+                        .spawn();
+                }
+                #[cfg(unix)]
+                unsafe {
+                    libc::kill(std::process::id() as i32, libc::SIGTERM);
+                }
+                #[cfg(not(unix))]
+                std::process::exit(0);
+            });
+        });
+        return sse_response(rx);
     }
 
-    let output = tokio::time::timeout(Duration::from_secs(60), async move {
-        let child = tokio::process::Command::new(bin)
-            .args(*args)
+    let key_for_task = key.clone();
+    let args_for_task: Vec<String> = args.iter().map(|arg| (*arg).to_string()).collect();
+    tokio::spawn(async move {
+        if !send_sse(
+            &tx,
+            serde_json::json!({"type": "started", "key": key_for_task, "command": command}),
+        )
+        .await
+        {
+            return;
+        }
+
+        let mut child = match tokio::process::Command::new(resolved)
+            .args(&args_for_task)
             .env_remove("CLAUDECODE")
             .env("SIGNET_NO_HOOKS", "1")
             .env("FORCE_COLOR", "0")
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .spawn()?;
-        child.wait_with_output().await
-    })
-    .await;
+            .spawn()
+        {
+            Ok(child) => child,
+            Err(error) => {
+                let _ = send_sse(
+                    &tx,
+                    serde_json::json!({"type": "error", "message": error.to_string()}),
+                )
+                .await;
+                return;
+            }
+        };
 
-    match output {
-        Ok(Ok(output)) => (
-            StatusCode::OK,
-            Json(serde_json::json!({
-                "type": "exit",
-                "key": key,
-                "command": command,
-                "code": output.status.code().unwrap_or(1),
-                "stdout": String::from_utf8_lossy(&output.stdout),
-                "stderr": String::from_utf8_lossy(&output.stderr),
-            })),
-        )
-            .into_response(),
-        Ok(Err(error)) if error.kind() == std::io::ErrorKind::NotFound => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({
-                "error": format!("Binary not found: {bin}"),
-                "key": key,
-                "command": command,
-            })),
-        )
-            .into_response(),
-        Ok(Err(error)) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({
-                "error": error.to_string(),
-                "key": key,
-                "command": command,
-            })),
-        )
-            .into_response(),
-        Err(_) => (
-            StatusCode::REQUEST_TIMEOUT,
-            Json(serde_json::json!({
-                "error": "Troubleshoot command timed out",
-                "key": key,
-                "command": command,
-            })),
-        )
-            .into_response(),
-    }
+        if let Some(mut stdout) = child.stdout.take() {
+            let stdout_tx = tx.clone();
+            tokio::spawn(async move {
+                let mut buffer = [0_u8; 8192];
+                loop {
+                    match stdout.read(&mut buffer).await {
+                        Ok(0) => break,
+                        Ok(size) => {
+                            if !send_sse(
+                                &stdout_tx,
+                                serde_json::json!({
+                                    "type": "stdout",
+                                    "data": String::from_utf8_lossy(&buffer[..size]).to_string()
+                                }),
+                            )
+                            .await
+                            {
+                                break;
+                            }
+                        }
+                        Err(_) => break,
+                    }
+                }
+            });
+        }
+
+        if let Some(mut stderr) = child.stderr.take() {
+            let stderr_tx = tx.clone();
+            tokio::spawn(async move {
+                let mut buffer = [0_u8; 8192];
+                loop {
+                    match stderr.read(&mut buffer).await {
+                        Ok(0) => break,
+                        Ok(size) => {
+                            if !send_sse(
+                                &stderr_tx,
+                                serde_json::json!({
+                                    "type": "stderr",
+                                    "data": String::from_utf8_lossy(&buffer[..size]).to_string()
+                                }),
+                            )
+                            .await
+                            {
+                                break;
+                            }
+                        }
+                        Err(_) => break,
+                    }
+                }
+            });
+        }
+
+        match tokio::time::timeout(Duration::from_secs(60), child.wait()).await {
+            Ok(Ok(status)) => {
+                let _ = send_sse(
+                    &tx,
+                    serde_json::json!({"type": "exit", "code": status.code().unwrap_or(1)}),
+                )
+                .await;
+            }
+            Ok(Err(error)) => {
+                let _ = send_sse(
+                    &tx,
+                    serde_json::json!({"type": "error", "message": error.to_string()}),
+                )
+                .await;
+            }
+            Err(_) => {
+                let _ = child.kill().await;
+                let _ = send_sse(&tx, serde_json::json!({"type": "exit", "code": 1})).await;
+            }
+        }
+    });
+
+    sse_response(rx)
 }
 
 /// POST /api/repair/requeue-dead — move dead jobs back to pending.
