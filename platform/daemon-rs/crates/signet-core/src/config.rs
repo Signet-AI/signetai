@@ -583,7 +583,7 @@ pub struct HooksConfig {
 pub struct UserPromptSubmitHookConfig {
     pub enabled: bool,
     pub recall_limit: usize,
-    pub max_inject_chars: usize,
+    pub max_inject_chars: Option<usize>,
     /// Minimum confidence score required to inject memories at prompt time.
     /// Clamped to [0, 1]. Default 0.8 — mirrors TS `hooks.userPromptSubmit.minScore`.
     pub min_score: f64,
@@ -594,7 +594,7 @@ impl Default for UserPromptSubmitHookConfig {
         Self {
             enabled: true,
             recall_limit: 10,
-            max_inject_chars: 500,
+            max_inject_chars: None,
             min_score: 0.8,
         }
     }
@@ -1635,6 +1635,7 @@ pub struct GuardrailsConfig {
     pub max_content_chars: usize,
     pub chunk_target_chars: usize,
     pub recall_truncate_chars: usize,
+    pub context_budget_chars: usize,
 }
 
 impl Default for GuardrailsConfig {
@@ -1643,6 +1644,7 @@ impl Default for GuardrailsConfig {
             max_content_chars: 10_000,
             chunk_target_chars: 2_000,
             recall_truncate_chars: 50_000,
+            context_budget_chars: 4_000,
         }
     }
 }

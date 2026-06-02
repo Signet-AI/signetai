@@ -28,6 +28,7 @@ use signet_pipeline::memory_lineage::{
 use signet_services::session::{ClaimResult, RuntimePath, SessionTracker};
 use signet_services::transactions;
 
+use crate::routes::plugins;
 use crate::state::AppState;
 use crate::workspace_paths;
 
@@ -1446,13 +1447,60 @@ fn memory_embedding_score(
         .fold(0.0, f64::max)
 }
 
-fn build_entity_context_inject(metadata_header: &str, lines: &[String]) -> String {
+fn build_plugin_prompt_contribution_section(state: &AppState) -> String {
+    let contributions = plugins::active_prompt_contributions(state);
+    if contributions.is_empty() {
+        return String::new();
+    }
+
+    let mut parts = vec!["## Plugin Context".to_string(), String::new()];
+    for contribution in contributions {
+        let plugin_id = contribution
+            .get("pluginId")
+            .and_then(|value| value.as_str())
+            .unwrap_or_default();
+        let id = contribution
+            .get("id")
+            .and_then(|value| value.as_str())
+            .unwrap_or_default();
+        let target = contribution
+            .get("target")
+            .and_then(|value| value.as_str())
+            .unwrap_or_default();
+        let content = contribution
+            .get("content")
+            .and_then(|value| value.as_str())
+            .unwrap_or_default()
+            .trim();
+        if plugin_id.is_empty() || id.is_empty() || target.is_empty() || content.is_empty() {
+            continue;
+        }
+        parts.push(format!(
+            "<signet-plugin-context plugin=\"{plugin_id}\" id=\"{id}\" target=\"{target}\">"
+        ));
+        parts.push(content.to_string());
+        parts.push("</signet-plugin-context>".to_string());
+        parts.push(String::new());
+    }
+
+    parts.join("\n").trim_end().to_string()
+}
+
+fn build_entity_context_inject(
+    metadata_header: &str,
+    lines: &[String],
+    plugin_context: &str,
+) -> String {
     let mut parts = vec![
         metadata_header.trim_end().to_string(),
         String::new(),
         "## Relevant Entity Context".to_string(),
         String::new(),
     ];
+    if !plugin_context.trim().is_empty() {
+        parts.push(plugin_context.trim_end().to_string());
+        parts.push(String::new());
+    }
     parts.extend_from_slice(lines);
     format!("{}\n", parts.join("\n").trim_end())
 }
@@ -1616,6 +1664,25 @@ pub async fn prompt_submit(
         }
     }
 
+    if state
+        .config
+        .manifest
+        .hooks
+        .as_ref()
+        .is_some_and(|hooks| !hooks.user_prompt_submit.enabled)
+    {
+        return (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "inject": "",
+                "memoryCount": 0,
+                "queryTerms": query_terms,
+                "engine": "disabled",
+            })),
+        )
+            .into_response();
+    }
+
     if query_terms.is_empty() || is_low_signal_prompt(&cleaned) {
         return (
             StatusCode::OK,
@@ -1639,13 +1706,26 @@ pub async fn prompt_submit(
         .filter(|score| score.is_finite())
         .map(|score| score.clamp(0.0, 1.0))
         .unwrap_or(0.8);
+    let context_budget_chars = state
+        .config
+        .manifest
+        .memory
+        .as_ref()
+        .and_then(|memory| memory.pipeline_v2.as_ref())
+        .map(|pipeline| pipeline.guardrails.context_budget_chars)
+        .unwrap_or(4_000);
     let max_inject_chars = state
         .config
         .manifest
         .hooks
         .as_ref()
-        .map(|h| h.user_prompt_submit.max_inject_chars)
+        .map(|h| {
+            h.user_prompt_submit
+                .max_inject_chars
+                .unwrap_or(context_budget_chars)
+        })
         .unwrap_or(500);
+    let plugin_context = build_plugin_prompt_contribution_section(&state);
     let semantic_query = query_terms.clone();
     let embedding_provider = state.embedding.read().await.clone();
     let query_vector_for_scoring = match embedding_provider {
@@ -2058,7 +2138,7 @@ pub async fn prompt_submit(
                 }));
             }
 
-			let inject = build_entity_context_inject(&metadata_header, &lines);
+			let inject = build_entity_context_inject(&metadata_header, &lines, &plugin_context);
 			Ok(serde_json::json!({
 				"inject": cap_prompt_inject(&inject, max_inject_chars),
 				"memoryCount": lines.len(),
@@ -3720,7 +3800,9 @@ mod tests {
     }
 
     fn test_state(name: &str) -> (Arc<AppState>, tokio::task::JoinHandle<()>, TempDir) {
-        test_state_with_manifest(name, |_| {})
+        test_state_with_manifest(name, |manifest| {
+            manifest.hooks = Some(HooksConfig::default());
+        })
     }
 
     #[tokio::test]
@@ -5296,7 +5378,7 @@ mod tests {
             test_state_with_manifest("hooks-prompt-submit-max-inject-chars", |manifest| {
                 manifest.hooks = Some(HooksConfig {
                     user_prompt_submit: UserPromptSubmitHookConfig {
-                        max_inject_chars: 180,
+                        max_inject_chars: Some(180),
                         ..Default::default()
                     },
                 });

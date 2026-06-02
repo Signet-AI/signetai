@@ -747,6 +747,95 @@ impl TestServer {
             .expect("write plugin audit");
     }
 
+    fn seed_prompt_submit_entity_context_fixture(&self) {
+        let conn = rusqlite::Connection::open(self.db_path()).expect("open replay db");
+        conn.busy_timeout(Duration::from_secs(5)).unwrap();
+        let now = "2026-05-27T00:00:00Z";
+        conn.execute(
+            "INSERT INTO entities
+             (id, name, canonical_name, entity_type, description, agent_id,
+              mentions, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 10, ?7, ?7)",
+            rusqlite::params![
+                "entity-signet",
+                "Signet",
+                "signet",
+                "project",
+                "Source-backed agent continuity substrate",
+                "agent-a",
+                now,
+            ],
+        )
+        .expect("seed prompt entity");
+        conn.execute(
+            "INSERT INTO entity_aliases
+             (id, entity_id, agent_id, alias, canonical_alias, confidence,
+              source, status, created_at, updated_at)
+             VALUES ('alias-signetai', 'entity-signet', 'agent-a',
+              'SignetAI', 'signetai', 1.0, 'test', 'active', ?1, ?1)",
+            rusqlite::params![now],
+        )
+        .expect("seed prompt entity alias");
+        conn.execute(
+            "INSERT INTO entity_aspects
+             (id, entity_id, agent_id, name, canonical_name, weight,
+              created_at, updated_at)
+             VALUES ('aspect-architecture', 'entity-signet', 'agent-a',
+              'architecture', 'architecture', 0.9, ?1, ?1)",
+            rusqlite::params![now],
+        )
+        .expect("seed prompt architecture aspect");
+        conn.execute(
+            "INSERT INTO entity_aspects
+             (id, entity_id, agent_id, name, canonical_name, weight,
+              created_at, updated_at)
+             VALUES ('aspect-general', 'entity-signet', 'agent-a',
+              'general', 'general', 1.0, ?1, ?1)",
+            rusqlite::params![now],
+        )
+        .expect("seed prompt general aspect");
+        conn.execute(
+            "INSERT INTO entity_attributes
+             (id, aspect_id, agent_id, memory_id, kind, content,
+              normalized_content, confidence, importance, status, group_key,
+              claim_key, source_kind, source_id, created_at, updated_at)
+             VALUES ('attr-architecture', 'aspect-architecture', 'agent-a',
+              NULL, 'attribute',
+              'Prompt context should come from entity current views.',
+              'prompt context should come from entity current views',
+              0.95, 0.9, 'active', 'runtime', 'prompt_context', 'memory',
+              'mem-architecture', ?1, ?1)",
+            rusqlite::params![now],
+        )
+        .expect("seed prompt architecture attribute");
+        conn.execute(
+            "INSERT INTO entity_attributes
+             (id, aspect_id, agent_id, memory_id, kind, content,
+              normalized_content, confidence, importance, status, group_key,
+              claim_key, created_at, updated_at)
+             VALUES ('attr-general-junk', 'aspect-general', 'agent-a',
+              NULL, 'constraint',
+              'Prompt context junk from general uncategorized should not inject.',
+              'prompt context junk from general uncategorized should not inject',
+              0.99, 1.0, 'active', 'general', 'uncategorized', ?1, ?1)",
+            rusqlite::params![now],
+        )
+        .expect("seed prompt general junk attribute");
+        conn.execute(
+            "INSERT INTO entity_attributes
+             (id, aspect_id, agent_id, memory_id, kind, content,
+              normalized_content, confidence, importance, status, group_key,
+              claim_key, version, created_at, updated_at)
+             VALUES ('attr-architecture-stale', 'aspect-architecture',
+              'agent-a', NULL, 'attribute',
+              'Stale prompt context should not be injected.',
+              'stale prompt context should not be injected',
+              0.5, 2.0, 'active', 'runtime', 'prompt_context', 0, ?1, ?1)",
+            rusqlite::params![now],
+        )
+        .expect("seed stale prompt attribute");
+    }
+
     async fn get(&self, path: &str) -> reqwest::Response {
         self.client
             .get(format!("{}{path}", self.base))
@@ -3557,10 +3646,28 @@ async fn mcp_endpoint() {
     assert_eq!(fetched["pinned"], true);
 }
 
+const PROMPT_SUBMIT_CONTEXT_BUDGET_YAML: &str = r#"agent:
+  name: test-agent
+  version: 1
+hooks: {}
+memory:
+  pipelineV2:
+    guardrails:
+      contextBudgetChars: 4000
+"#;
+
+const PROMPT_SUBMIT_DISABLED_YAML: &str = r#"agent:
+  name: test-agent
+  version: 1
+hooks:
+  userPromptSubmit:
+    enabled: false
+"#;
+
 #[tokio::test]
 #[ignore = "requires built daemon binary"]
 async fn hook_session_lifecycle() {
-    let server = TestServer::start().await;
+    let server = TestServer::start_with_agent_yaml(None, PROMPT_SUBMIT_CONTEXT_BUDGET_YAML).await;
 
     // session-start
     let resp = server
@@ -3577,6 +3684,8 @@ async fn hook_session_lifecycle() {
     let body = server.json(resp).await;
     assert!(body.get("inject").is_some());
 
+    server.seed_prompt_submit_entity_context_fixture();
+
     // prompt-submit
     let resp = server
         .post(
@@ -3584,11 +3693,36 @@ async fn hook_session_lifecycle() {
             json!({
                 "sessionKey": "test-session-001",
                 "harness": "claude-code",
-                "userMessage": "test prompt"
+                "agentId": "agent-a",
+                "userMessage": "Should SignetAI prompt context include current views?"
             }),
         )
         .await;
     assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["engine"], "entity-context");
+    assert_eq!(body["memoryCount"], 1);
+    assert!(
+        body["queryTerms"]
+            .as_str()
+            .expect("prompt query terms")
+            .contains("prompt context")
+    );
+    let inject = body["inject"].as_str().expect("prompt inject");
+    assert!(inject.contains("## Relevant Entity Context"));
+    assert!(inject.contains("## Plugin Context"));
+    assert!(inject.contains(
+        "<signet-plugin-context plugin=\"signet.secrets\" id=\"signet.secrets.credential-guidance\" target=\"user-prompt-submit\">"
+    ));
+    assert!(inject.contains("prefer storing them in Signet Secrets rather than chat"));
+    assert!(
+        inject.contains("Signet / architecture / runtime / prompt_context"),
+        "inject:\n{inject}"
+    );
+    assert!(inject.contains("Prompt context should come from entity current views."));
+    assert!(!inject.contains("general / uncategorized"));
+    assert!(!inject.contains("Prompt context junk from general uncategorized"));
+    assert!(!inject.contains("Stale prompt context should not be injected."));
 
     // session-end
     let resp = server
@@ -3602,6 +3736,30 @@ async fn hook_session_lifecycle() {
         )
         .await;
     assert_eq!(resp.status(), 200);
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn hook_user_prompt_submit_disabled_respects_config() {
+    let server = TestServer::start_with_agent_yaml(None, PROMPT_SUBMIT_DISABLED_YAML).await;
+    server.seed_prompt_submit_entity_context_fixture();
+
+    let resp = server
+        .post(
+            "/api/hooks/user-prompt-submit",
+            json!({
+                "sessionKey": "test-session-disabled",
+                "harness": "claude-code",
+                "agentId": "agent-a",
+                "userMessage": "Should SignetAI prompt context include current views?"
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["engine"], "disabled");
+    assert_eq!(body["memoryCount"], 0);
+    assert_eq!(body["inject"], "");
 }
 
 #[tokio::test]

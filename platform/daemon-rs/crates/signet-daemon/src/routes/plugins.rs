@@ -352,12 +352,16 @@ pub async fn list(State(state): State<Arc<AppState>>) -> Json<serde_json::Value>
 
 /// GET /api/plugins/prompt-contributions
 pub async fn prompt_contributions(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
-    let contributions = if read_enabled(&state) {
+    let contributions = active_prompt_contributions(&state);
+    Json(serde_json::json!({"activeCount": contributions.len(), "contributions": contributions}))
+}
+
+pub(crate) fn active_prompt_contributions(state: &AppState) -> Vec<serde_json::Value> {
+    if read_enabled(state) {
         vec![prompt_contribution()]
     } else {
         Vec::new()
-    };
-    Json(serde_json::json!({"activeCount": contributions.len(), "contributions": contributions}))
+    }
 }
 
 /// GET /api/plugins/audit
