@@ -3506,19 +3506,48 @@ async fn secrets_list() {
     let body = call_mcp_tool(&server, "secret_list", json!({})).await;
     assert_eq!(body["secrets"], json!(["REPLAY_SECRET"]));
 
+    for body in [
+        json!({}),
+        json!({"command": {}, "secrets": {"REPLAY_SECRET": "REPLAY_SECRET"}}),
+        json!({"command": "   ", "secrets": {"REPLAY_SECRET": "REPLAY_SECRET"}}),
+    ] {
+        let resp = server.post("/api/secrets/exec", body).await;
+        assert_eq!(resp.status(), 400);
+        let body = server.json(resp).await;
+        assert_eq!(body["error"], "command is required");
+    }
+
+    for secrets in [
+        json!({}),
+        json!([]),
+        json!("REPLAY_SECRET"),
+        json!({"REPLAY_SECRET": ""}),
+    ] {
+        let resp = server
+            .post(
+                "/api/secrets/exec",
+                json!({"command": "bun --version", "secrets": secrets}),
+            )
+            .await;
+        assert_eq!(resp.status(), 400);
+        let body = server.json(resp).await;
+        assert_eq!(body["error"], "non-empty secrets map is required");
+    }
+
     let resp = server
         .post(
             "/api/secrets/exec",
             json!({
                 "command": "printf %s \"$REPLAY_SECRET\"",
                 "secrets": {"REPLAY_SECRET": "REPLAY_SECRET"},
-                "timeoutMs": 1000,
+                "timeoutMs": "bad",
             }),
         )
         .await;
     assert_eq!(resp.status(), 202);
     let body = server.json(resp).await;
     let job_id = body["id"].as_str().expect("secret exec job id");
+    assert_eq!(body["timeoutMs"], 300000);
     assert!(matches!(
         body["status"].as_str(),
         Some("queued") | Some("running")
@@ -7866,7 +7895,9 @@ async fn remaining_public_routes_have_contract_replay_coverage() {
     let resp = server.delete("/api/secrets/REPLAY_SECRET").await;
     assert_status("DELETE /api/secrets/:name", &resp, &[200]);
     let resp = server.post("/api/secrets/exec", json!({})).await;
-    assert_status("POST /api/secrets/exec", &resp, &[400, 422]);
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "command is required");
 
     let resp = server
         .post(

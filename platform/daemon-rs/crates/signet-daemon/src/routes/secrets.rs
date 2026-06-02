@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use axum::{
     Json,
+    body::Bytes,
     extract::{Path, State},
     http::StatusCode,
     response::IntoResponse,
@@ -1327,6 +1328,63 @@ fn normalize_secret_exec_timeout_ms(timeout_ms: Option<u64>) -> u64 {
     timeout_ms.unwrap_or(300_000).clamp(1_000, 1_800_000)
 }
 
+fn parse_secret_exec_timeout_ms(value: Option<&serde_json::Value>) -> Option<u64> {
+    let number = value.and_then(serde_json::Value::as_f64)?;
+    if !number.is_finite() {
+        return None;
+    }
+    let truncated = number.trunc().clamp(1_000.0, 1_800_000.0);
+    Some(truncated as u64)
+}
+
+fn parse_exec_body(value: serde_json::Value) -> Result<ExecBody, (StatusCode, serde_json::Value)> {
+    let command = value
+        .get("command")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+        .unwrap_or_default();
+    if command.trim().is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            serde_json::json!({"error": "command is required"}),
+        ));
+    }
+
+    let Some(secret_values) = value.get("secrets").and_then(serde_json::Value::as_object) else {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            serde_json::json!({"error": "non-empty secrets map is required"}),
+        ));
+    };
+    if secret_values.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            serde_json::json!({"error": "non-empty secrets map is required"}),
+        ));
+    }
+
+    let mut secrets = std::collections::HashMap::new();
+    for (name, secret) in secret_values {
+        let Some(secret) = secret.as_str().filter(|value| !value.trim().is_empty()) else {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                serde_json::json!({"error": "non-empty secrets map is required"}),
+            ));
+        };
+        secrets.insert(name.clone(), secret.to_string());
+    }
+
+    Ok(ExecBody {
+        command,
+        secrets,
+        cwd: value
+            .get("cwd")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string),
+        timeout_ms: parse_secret_exec_timeout_ms(value.get("timeoutMs")),
+    })
+}
+
 fn redact_output(text: &str, secret_values: &[String]) -> String {
     let mut redacted = text.to_string();
     for value in secret_values.iter().filter(|value| value.len() > 3) {
@@ -1499,8 +1557,21 @@ pub(crate) async fn secret_exec_status_value(
 /// POST /api/secrets/exec — queue a command with secrets injected as env vars.
 pub async fn run_with_secrets(
     State(state): State<Arc<AppState>>,
-    Json(body): Json<ExecBody>,
+    bytes: Bytes,
 ) -> impl IntoResponse {
+    let value = match serde_json::from_slice::<serde_json::Value>(&bytes) {
+        Ok(value) => value,
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": error.to_string()})),
+            );
+        }
+    };
+    let body = match parse_exec_body(value) {
+        Ok(body) => body,
+        Err((status, body)) => return (status, Json(body)),
+    };
     match queue_secret_exec(state, body).await {
         Ok(job) => (StatusCode::ACCEPTED, Json(job)),
         Err((status, body)) => (status, Json(body)),
