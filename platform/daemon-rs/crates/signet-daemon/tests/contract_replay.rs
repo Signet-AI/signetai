@@ -3773,6 +3773,84 @@ async fn tasks_crud() {
     let resp = server.get("/api/tasks").await;
     assert_eq!(resp.status(), 200);
 
+    let resp = server.post("/api/tasks", json!({})).await;
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert_eq!(
+        body["error"],
+        "name, prompt, cronExpression, and harness are required"
+    );
+
+    let base_task = json!({
+        "name": "Replay task",
+        "prompt": "Run replay",
+        "cronExpression": "*/15 * * * *",
+        "harness": "codex"
+    });
+
+    let mut invalid_cron = base_task.clone();
+    invalid_cron["cronExpression"] = json!("not a cron");
+    let resp = server.post("/api/tasks", invalid_cron).await;
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "Invalid cron expression");
+
+    let mut invalid_harness = base_task.clone();
+    invalid_harness["harness"] = json!("unknown");
+    let resp = server.post("/api/tasks", invalid_harness).await;
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert_eq!(
+        body["error"],
+        "harness must be 'claude-code', 'codex', or 'opencode'"
+    );
+
+    let mut invalid_skill = base_task.clone();
+    invalid_skill["skillName"] = json!("../bad");
+    invalid_skill["skillMode"] = json!("inject");
+    let resp = server.post("/api/tasks", invalid_skill).await;
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "Invalid skill name");
+
+    let mut invalid_skill_mode = base_task.clone();
+    invalid_skill_mode["skillName"] = json!("good-skill");
+    invalid_skill_mode["skillMode"] = json!("bad");
+    let resp = server.post("/api/tasks", invalid_skill_mode).await;
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert_eq!(
+        body["error"],
+        "skillMode must be 'inject' or 'slash' when skillName is set"
+    );
+
+    let resp = server.get("/api/tasks/missing-task").await;
+    assert_eq!(resp.status(), 404);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "Task not found");
+
+    let resp = server.patch("/api/tasks/missing-task", json!({})).await;
+    assert_eq!(resp.status(), 404);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "Task not found");
+
+    let resp = server.post("/api/tasks/missing-task/run", json!({})).await;
+    assert_eq!(resp.status(), 404);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "Task not found");
+
+    let resp = server.get("/api/tasks/missing-task/runs").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["runs"], json!([]));
+    assert_eq!(body["total"], 0);
+    assert_eq!(body["hasMore"], false);
+
+    let resp = server.delete("/api/tasks/missing-task").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["success"], true);
+
     let resp = server.get("/api/tasks/missing-task/stream").await;
     assert_eq!(resp.status(), 404);
     let body = server.json(resp).await;
@@ -7912,17 +7990,34 @@ async fn remaining_public_routes_have_contract_replay_coverage() {
     assert_status("GET /api/skills/analytics", &resp, &[200]);
 
     let resp = server.post("/api/tasks", json!({})).await;
-    assert_status("POST /api/tasks", &resp, &[400, 422]);
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert_eq!(
+        body["error"],
+        "name, prompt, cronExpression, and harness are required"
+    );
     let resp = server.get("/api/tasks/missing-task").await;
-    assert_status("GET /api/tasks/:id", &resp, &[404]);
+    assert_eq!(resp.status(), 404);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "Task not found");
     let resp = server.patch("/api/tasks/missing-task", json!({})).await;
-    assert_status("PATCH /api/tasks/:id", &resp, &[404]);
+    assert_eq!(resp.status(), 404);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "Task not found");
     let resp = server.post("/api/tasks/missing-task/run", json!({})).await;
-    assert_status("POST /api/tasks/:id/run", &resp, &[404]);
+    assert_eq!(resp.status(), 404);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "Task not found");
     let resp = server.get("/api/tasks/missing-task/runs").await;
-    assert_status("GET /api/tasks/:id/runs", &resp, &[200, 404]);
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["runs"], json!([]));
+    assert_eq!(body["total"], 0);
+    assert_eq!(body["hasMore"], false);
     let resp = server.delete("/api/tasks/missing-task").await;
-    assert_status("DELETE /api/tasks/:id", &resp, &[404]);
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["success"], true);
 
     let resp = server.post("/v1/chat/completions", json!({})).await;
     assert_eq!(resp.status(), 503);

@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use axum::{
     Json,
+    body::Bytes,
     extract::{ConnectInfo, Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
@@ -150,13 +151,135 @@ pub struct AgentScopeParams {
     pub agent_id: Option<String>,
 }
 
+fn string_field(value: &serde_json::Value, key: &str) -> Option<String> {
+    value
+        .get(key)
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn optional_string_field(value: &serde_json::Value, key: &str) -> Option<String> {
+    value
+        .get(key)
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+}
+
+fn parse_cron_number(value: &str, min: u32, max: u32) -> bool {
+    value
+        .parse::<u32>()
+        .map(|number| number >= min && number <= max)
+        .unwrap_or(false)
+}
+
+fn validate_cron_part(part: &str, min: u32, max: u32) -> bool {
+    if part == "*" {
+        return true;
+    }
+    part.split(',').all(|segment| {
+        let Some((base, step)) = segment.split_once('/') else {
+            return segment
+                .split_once('-')
+                .map(|(start, end)| {
+                    parse_cron_number(start, min, max)
+                        && parse_cron_number(end, min, max)
+                        && start.parse::<u32>().ok() <= end.parse::<u32>().ok()
+                })
+                .unwrap_or_else(|| parse_cron_number(segment, min, max));
+        };
+        !step.is_empty()
+            && step.parse::<u32>().map(|value| value > 0).unwrap_or(false)
+            && (base == "*" || validate_cron_part(base, min, max))
+    })
+}
+
+fn validate_cron_expression(expression: &str) -> bool {
+    let fields = expression.split_whitespace().collect::<Vec<_>>();
+    fields.len() == 5
+        && validate_cron_part(fields[0], 0, 59)
+        && validate_cron_part(fields[1], 0, 23)
+        && validate_cron_part(fields[2], 1, 31)
+        && validate_cron_part(fields[3], 1, 12)
+        && validate_cron_part(fields[4], 0, 7)
+}
+
+fn parse_create_task(
+    value: serde_json::Value,
+) -> Result<CreateTask, (StatusCode, serde_json::Value)> {
+    let Some(name) = string_field(&value, "name") else {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            serde_json::json!({"error": "name, prompt, cronExpression, and harness are required"}),
+        ));
+    };
+    let Some(prompt) = string_field(&value, "prompt") else {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            serde_json::json!({"error": "name, prompt, cronExpression, and harness are required"}),
+        ));
+    };
+    let Some(cron_expression) = string_field(&value, "cronExpression") else {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            serde_json::json!({"error": "name, prompt, cronExpression, and harness are required"}),
+        ));
+    };
+    let Some(harness) = string_field(&value, "harness") else {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            serde_json::json!({"error": "name, prompt, cronExpression, and harness are required"}),
+        ));
+    };
+
+    if !validate_cron_expression(&cron_expression) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            serde_json::json!({"error": "Invalid cron expression"}),
+        ));
+    }
+    if !VALID_HARNESSES.contains(&harness.as_str()) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            serde_json::json!({"error": "harness must be 'claude-code', 'codex', or 'opencode'"}),
+        ));
+    }
+
+    let skill_name = optional_string_field(&value, "skillName").filter(|value| !value.is_empty());
+    let skill_mode = optional_string_field(&value, "skillMode").filter(|value| !value.is_empty());
+    if let Some(skill) = &skill_name
+        && (skill.contains('/') || skill.contains(".."))
+    {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            serde_json::json!({"error": "Invalid skill name"}),
+        ));
+    }
+    if skill_name.is_some() && !matches!(skill_mode.as_deref(), Some("inject" | "slash")) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            serde_json::json!({"error": "skillMode must be 'inject' or 'slash' when skillName is set"}),
+        ));
+    }
+
+    Ok(CreateTask {
+        name,
+        prompt,
+        cron_expression,
+        harness,
+        working_directory: optional_string_field(&value, "workingDirectory"),
+        skill_name,
+        skill_mode,
+    })
+}
+
 /// POST /api/tasks — create a scheduled task
 pub async fn create(
     State(state): State<Arc<AppState>>,
     Query(params): Query<AgentScopeParams>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
-    Json(body): Json<CreateTask>,
+    bytes: Bytes,
 ) -> impl IntoResponse {
     let is_local = peer.ip().is_loopback();
     let auth_runtime = state.auth_snapshot();
@@ -184,33 +307,18 @@ pub async fn create(
                 .into_response();
         }
     };
-
-    if !VALID_HARNESSES.contains(&body.harness.as_str()) {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": format!("invalid harness: {}", body.harness)})),
-        )
-            .into_response();
-    }
-
-    if body.name.is_empty() || body.prompt.is_empty() || body.cron_expression.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "name, prompt, and cronExpression are required"})),
-        )
-            .into_response();
-    }
-
-    // Validate skill_name (no path traversal)
-    if let Some(ref skill) = body.skill_name
-        && (skill.contains('/') || skill.contains(".."))
+    let body = match serde_json::from_slice::<serde_json::Value>(&bytes)
+        .map_err(|error| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                serde_json::json!({"error": error.to_string()}),
+            )
+        })
+        .and_then(parse_create_task)
     {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "invalid skill name"})),
-        )
-            .into_response();
-    }
+        Ok(body) => body,
+        Err((status, body)) => return (status, Json(body)).into_response(),
+    };
 
     let id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Utc::now().to_rfc3339();
@@ -325,7 +433,7 @@ pub async fn get(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> 
         ),
         Ok((None, _)) => (
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "task not found"})),
+            Json(serde_json::json!({"error": "Task not found"})),
         ),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -356,7 +464,7 @@ pub async fn update(
                 .unwrap_or(false);
 
             if !exists {
-                return Ok(serde_json::json!({"error": "not_found"}));
+                return Ok(serde_json::json!({"error": "Task not found"}));
             }
 
             // Build dynamic update
@@ -419,24 +527,13 @@ pub async fn delete(
     let result = state
         .pool
         .write(signet_core::db::Priority::High, move |conn| {
-            let changed = conn.execute("DELETE FROM scheduled_tasks WHERE id = ?1", [&id])?;
-            Ok(serde_json::json!({"success": changed > 0}))
+            conn.execute("DELETE FROM scheduled_tasks WHERE id = ?1", [&id])?;
+            Ok(serde_json::json!({"success": true}))
         })
         .await;
 
     match result {
-        Ok(val) => {
-            let success = val
-                .get("success")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
-            let status = if success {
-                StatusCode::OK
-            } else {
-                StatusCode::NOT_FOUND
-            };
-            (status, Json(val))
-        }
+        Ok(val) => (StatusCode::OK, Json(val)),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": format!("{e}")})),
@@ -512,7 +609,7 @@ pub async fn trigger(
                 };
 
                 let Some((skill_name, task_agent)) = task else {
-                    return Ok(serde_json::json!({"error": "not_found"}));
+                    return Ok(serde_json::json!({"error": "Task not found"}));
                 };
 
                 conn.execute(
@@ -589,7 +686,11 @@ pub async fn runs(
                 .filter_map(|r| r.ok())
                 .collect();
 
-            Ok(serde_json::json!({"runs": rows, "total": total}))
+            Ok(serde_json::json!({
+                "runs": rows,
+                "total": total,
+                "hasMore": (offset as i64 + limit as i64) < total,
+            }))
         })
         .await;
 
