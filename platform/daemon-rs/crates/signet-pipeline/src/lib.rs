@@ -1,6 +1,7 @@
 pub mod decision;
 pub mod dep_synthesis;
 pub mod document;
+pub mod dreaming;
 pub mod embedding;
 pub mod extraction;
 pub mod maintenance;
