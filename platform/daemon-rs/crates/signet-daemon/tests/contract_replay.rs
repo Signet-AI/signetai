@@ -71,6 +71,14 @@ impl TestServer {
     }
 
     async fn start_with_agent_yaml(auth_mode: Option<&str>, yaml: &str) -> Self {
+        Self::start_with_agent_yaml_and_files(auth_mode, yaml, &[]).await
+    }
+
+    async fn start_with_agent_yaml_and_files(
+        auth_mode: Option<&str>,
+        yaml: &str,
+        files: &[(&str, &str)],
+    ) -> Self {
         let tmpdir = tempfile::tempdir().expect("failed to create tmpdir");
         let port = ephemeral_port();
         let base = format!("http://127.0.0.1:{port}");
@@ -87,6 +95,13 @@ impl TestServer {
         let (fake_bw, fake_op) = write_fake_secret_provider_bins(tmpdir.path());
 
         std::fs::write(tmpdir.path().join("agent.yaml"), yaml).unwrap();
+        for (relative, content) in files {
+            let path = tmpdir.path().join(relative);
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).unwrap();
+            }
+            std::fs::write(path, content).unwrap();
+        }
 
         // Spawn daemon in background
         let port_str = port.to_string();
@@ -5614,6 +5629,61 @@ async fn dashboard_openclaw_and_harness_routes_replay_ts_shapes() {
             .expect("regeneration output")
             .contains("regenerated from workspace scripts")
     );
+}
+
+async fn wait_for_file_contains(path: &std::path::Path, needle: &str) -> String {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
+    loop {
+        if let Ok(content) = std::fs::read_to_string(path)
+            && content.contains(needle)
+        {
+            return content;
+        }
+        if tokio::time::Instant::now() > deadline {
+            panic!(
+                "timed out waiting for {} to contain {needle}",
+                path.display()
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn watcher_syncs_identity_workspaces_and_architecture_doc() {
+    let server = TestServer::start_with_agent_yaml_and_files(
+        None,
+        "agent:\n  name: test-agent\n  version: 1\n",
+        &[
+            ("AGENTS.md", "# Root Agent\n"),
+            ("SOUL.md", "root soul"),
+            ("IDENTITY.md", "root identity"),
+            ("USER.md", "root user"),
+            ("MEMORY.md", "root memory"),
+            ("agents/writer/SOUL.md", "agent soul"),
+        ],
+    )
+    .await;
+
+    let workspace_agents = server
+        ._tmpdir
+        .path()
+        .join("agents/writer/workspace/AGENTS.md");
+    let architecture_doc = server._tmpdir.path().join("SIGNET-ARCHITECTURE.md");
+    let content = wait_for_file_contains(&workspace_agents, "## USER\n\nroot user").await;
+    assert!(content.contains("# Root Agent"));
+    assert!(content.contains("## SOUL\n\nagent soul"));
+    assert!(content.contains("## IDENTITY\n\nroot identity"));
+    assert!(content.contains("## MEMORY\n\nroot memory"));
+
+    let architecture = wait_for_file_contains(&architecture_doc, "Do not edit").await;
+    assert!(architecture.contains("Identity files are your durable substrate"));
+
+    std::fs::write(server._tmpdir.path().join("USER.md"), "updated root user")
+        .expect("update root USER.md");
+    let updated = wait_for_file_contains(&workspace_agents, "updated root user").await;
+    assert!(updated.contains("## USER\n\nupdated root user"));
 }
 
 #[tokio::test]

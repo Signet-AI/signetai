@@ -21,6 +21,7 @@ mod reranker;
 mod routes;
 mod service;
 mod state;
+mod watcher;
 mod workspace_paths;
 
 use auth::rate_limiter::{AuthRateLimiter, RateLimitRule, default_limits};
@@ -233,6 +234,14 @@ async fn main() -> anyhow::Result<()> {
     let _ = start_document_worker(state.as_ref()).await;
     let _ = start_summary_worker(state.as_ref()).await;
     let _ = start_synthesis_worker(state.as_ref()).await;
+
+    match watcher::sync_harness_configs(&config.base_path).await {
+        Ok(summary) => info!(?summary, "initial workspace sync completed"),
+        Err(err) => warn!(error = %err, "initial workspace sync failed"),
+    }
+    let file_watcher = watcher::start_file_watcher(config.base_path.clone())
+        .context("failed to start file watcher")?;
+    info!("file watcher started");
 
     // Build router
     let app = Router::new()
@@ -1202,6 +1211,7 @@ async fn main() -> anyhow::Result<()> {
 
     info!("shutting down");
 
+    file_watcher.stop().await;
     stop_synthesis_worker(state.as_ref()).await;
     stop_summary_worker(state.as_ref()).await;
     stop_document_worker(state.as_ref()).await;

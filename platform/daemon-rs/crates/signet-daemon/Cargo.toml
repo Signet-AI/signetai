@@ -33,6 +33,7 @@ getrandom = { workspace = true }
 uuid = { workspace = true }
 reqwest = { workspace = true }
 libc = "0.2"
+notify = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"

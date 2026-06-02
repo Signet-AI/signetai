@@ -1,0 +1,493 @@
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+use notify::{RecursiveMode, Watcher};
+use tokio::sync::{mpsc, oneshot};
+use tracing::{debug, error, info, warn};
+
+const SYNC_DEBOUNCE_MS: u64 = 2_000;
+const CONFIG_FILES: [&str; 3] = ["agent.yaml", "AGENT.yaml", "config.yaml"];
+const SYNC_TRIGGER_FILES: [&str; 8] = [
+    "agent.yaml",
+    "AGENT.yaml",
+    "config.yaml",
+    "AGENTS.md",
+    "SOUL.md",
+    "IDENTITY.md",
+    "USER.md",
+    "MEMORY.md",
+];
+const SIGNET_BLOCK_START: &str = "<!-- SIGNET:START -->";
+const SIGNET_BLOCK_END: &str = "<!-- SIGNET:END -->";
+
+pub(crate) struct FileWatcherHandle {
+    shutdown: oneshot::Sender<()>,
+    task: tokio::task::JoinHandle<()>,
+    watcher: notify::RecommendedWatcher,
+}
+
+impl FileWatcherHandle {
+    pub(crate) async fn stop(self) {
+        let Self {
+            shutdown,
+            task,
+            watcher,
+        } = self;
+        let _ = shutdown.send(());
+        let _ = task.await;
+        drop(watcher);
+    }
+}
+
+pub(crate) async fn sync_harness_configs(base: &Path) -> std::io::Result<SyncSummary> {
+    let mut summary = SyncSummary::default();
+    sync_harness_configs_inner(base, &mut summary).await?;
+    ensure_architecture_doc(base, &mut summary)?;
+    Ok(summary)
+}
+
+pub(crate) fn start_file_watcher(base: PathBuf) -> anyhow::Result<FileWatcherHandle> {
+    let (event_tx, event_rx) = mpsc::unbounded_channel::<PathBuf>();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+    let mut watcher =
+        notify::recommended_watcher(move |result: notify::Result<notify::Event>| match result {
+            Ok(event) => {
+                for path in event.paths {
+                    let _ = event_tx.send(path);
+                }
+            }
+            Err(err) => warn!(error = %err, "file watcher event failed"),
+        })?;
+
+    watcher.watch(&base, RecursiveMode::NonRecursive)?;
+    let agents_root = base.join("agents");
+    if agents_root.exists() {
+        watcher.watch(&agents_root, RecursiveMode::Recursive)?;
+    }
+
+    let task = tokio::spawn(file_watcher_loop(base, event_rx, shutdown_rx));
+    Ok(FileWatcherHandle {
+        shutdown: shutdown_tx,
+        task,
+        watcher,
+    })
+}
+
+async fn file_watcher_loop(
+    base: PathBuf,
+    mut event_rx: mpsc::UnboundedReceiver<PathBuf>,
+    mut shutdown_rx: oneshot::Receiver<()>,
+) {
+    let mut pending = false;
+    let mut reconcile_interval = tokio::time::interval(Duration::from_millis(SYNC_DEBOUNCE_MS));
+    reconcile_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    reconcile_interval.tick().await;
+    let mut sleep = Box::pin(tokio::time::sleep(Duration::from_secs(24 * 60 * 60)));
+    sleep
+        .as_mut()
+        .reset(tokio::time::Instant::now() + Duration::from_secs(24 * 60 * 60));
+
+    loop {
+        tokio::select! {
+            _ = &mut shutdown_rx => break,
+            Some(path) = event_rx.recv() => {
+                info!(path = %path.display(), "file watcher observed workspace change");
+                if is_sync_trigger(&base, &path) {
+                    pending = true;
+                    sleep
+                        .as_mut()
+                        .reset(tokio::time::Instant::now() + Duration::from_millis(SYNC_DEBOUNCE_MS));
+                }
+                if path.file_name().and_then(|name| name.to_str()) == Some("SIGNET-ARCHITECTURE.md") && !path.exists() {
+                    pending = true;
+                    sleep
+                        .as_mut()
+                        .reset(tokio::time::Instant::now() + Duration::from_millis(SYNC_DEBOUNCE_MS));
+                }
+            }
+            _ = &mut sleep, if pending => {
+                pending = false;
+                run_workspace_sync(&base).await;
+                sleep
+                    .as_mut()
+                    .reset(tokio::time::Instant::now() + Duration::from_secs(24 * 60 * 60));
+            }
+            _ = reconcile_interval.tick() => {
+                run_workspace_sync(&base).await;
+            }
+            else => break,
+        }
+    }
+}
+
+async fn run_workspace_sync(base: &Path) {
+    match sync_harness_configs(base).await {
+        Ok(summary) => debug!(?summary, "workspace sync completed"),
+        Err(err) => error!(error = %err, "workspace sync failed"),
+    }
+}
+
+fn is_sync_trigger(base: &Path, path: &Path) -> bool {
+    let filename = path.file_name().and_then(|name| name.to_str());
+    if filename.is_some_and(|name| SYNC_TRIGGER_FILES.contains(&name)) {
+        return true;
+    }
+    path.starts_with(base.join("agents"))
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub(crate) struct SyncSummary {
+    pub opencode_written: bool,
+    pub agent_workspaces_written: usize,
+    pub architecture_written: bool,
+}
+
+async fn sync_harness_configs_inner(base: &Path, summary: &mut SyncSummary) -> std::io::Result<()> {
+    let agents_md_path = base.join("AGENTS.md");
+    let raw = match std::fs::read_to_string(&agents_md_path) {
+        Ok(raw) => raw,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => return Err(err),
+    };
+    let content = strip_signet_block(&raw);
+    let identity_extras = compose_identity_sections(
+        &["SOUL.md", "IDENTITY.md", "USER.md", "MEMORY.md"].map(|name| base.join(name)),
+    );
+    let composed = format!("{content}{identity_extras}");
+    let active_harnesses = load_configured_harnesses(base);
+
+    if active_harnesses.iter().any(|harness| harness == "opencode") {
+        let opencode_dir = home_dir().join(".config").join("opencode");
+        if opencode_dir.exists() {
+            let target = opencode_dir.join("AGENTS.md");
+            summary.opencode_written =
+                write_file_if_changed(&target, &(build_header(base, "AGENTS.md") + &composed))?;
+        }
+    }
+
+    summary.agent_workspaces_written = sync_agent_workspaces(base, &content)?;
+    Ok(())
+}
+
+fn sync_agent_workspaces(base: &Path, root_agents_md: &str) -> std::io::Result<usize> {
+    let agents_root = base.join("agents");
+    if !agents_root.exists() {
+        return Ok(0);
+    }
+
+    let shared_identity =
+        compose_identity_sections(&[base.join("USER.md"), base.join("MEMORY.md")]);
+    let mut written = 0;
+    for entry in std::fs::read_dir(agents_root)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
+        let agent_dir = entry.path();
+        let workspace_dir = agent_dir.join("workspace");
+        let soul_path = if agent_dir.join("SOUL.md").exists() {
+            agent_dir.join("SOUL.md")
+        } else {
+            base.join("SOUL.md")
+        };
+        let identity_path = if agent_dir.join("IDENTITY.md").exists() {
+            agent_dir.join("IDENTITY.md")
+        } else {
+            base.join("IDENTITY.md")
+        };
+        let agent_identity = compose_identity_sections(&[soul_path, identity_path]);
+        let composed = format!("{root_agents_md}{agent_identity}{shared_identity}");
+        std::fs::create_dir_all(&workspace_dir)?;
+        if write_file_if_changed(&workspace_dir.join("AGENTS.md"), &composed)? {
+            written += 1;
+        }
+    }
+    Ok(written)
+}
+
+fn ensure_architecture_doc(base: &Path, summary: &mut SyncSummary) -> std::io::Result<()> {
+    summary.architecture_written = write_file_if_changed(
+        &base.join("SIGNET-ARCHITECTURE.md"),
+        &build_architecture_doc(&base.to_string_lossy()),
+    )?;
+    Ok(())
+}
+
+fn write_file_if_changed(path: &Path, content: &str) -> std::io::Result<bool> {
+    if let Ok(existing) = std::fs::read_to_string(path)
+        && existing == content
+    {
+        return Ok(false);
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, content)?;
+    Ok(true)
+}
+
+fn compose_identity_sections<const N: usize>(paths: &[PathBuf; N]) -> String {
+    paths
+        .iter()
+        .filter_map(|path| {
+            let content = std::fs::read_to_string(path).ok()?;
+            let trimmed = content.trim();
+            if trimmed.is_empty() {
+                return None;
+            }
+            let filename = path.file_stem()?.to_str()?;
+            Some(format!("\n## {filename}\n\n{trimmed}"))
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn load_configured_harnesses(base: &Path) -> Vec<String> {
+    for name in CONFIG_FILES {
+        let path = base.join(name);
+        let Ok(content) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        let Ok(value) = serde_yml::from_str::<serde_yml::Value>(&content) else {
+            return Vec::new();
+        };
+        let Some(harnesses) = value
+            .as_mapping()
+            .and_then(|map| map.get(serde_yml::Value::String("harnesses".to_string())))
+        else {
+            return Vec::new();
+        };
+        return parse_harness_list(harnesses);
+    }
+    Vec::new()
+}
+
+fn parse_harness_list(value: &serde_yml::Value) -> Vec<String> {
+    if let Some(items) = value.as_sequence() {
+        return items
+            .iter()
+            .filter_map(|item| item.as_str())
+            .map(str::trim)
+            .filter(|item| !item.is_empty())
+            .map(ToOwned::to_owned)
+            .collect();
+    }
+    if let Some(raw) = value.as_str() {
+        return raw
+            .split(',')
+            .map(str::trim)
+            .filter(|item| !item.is_empty())
+            .map(ToOwned::to_owned)
+            .collect();
+    }
+    Vec::new()
+}
+
+fn strip_signet_block(content: &str) -> String {
+    let mut out = content.to_string();
+    while let Some(start) = out.find(SIGNET_BLOCK_START) {
+        let Some(end_rel) = out[start..].find(SIGNET_BLOCK_END) else {
+            break;
+        };
+        let mut end = start + end_rel + SIGNET_BLOCK_END.len();
+        if out[end..].starts_with("\r\n") {
+            end += 2;
+        } else if out[end..].starts_with('\n') {
+            end += 1;
+        }
+        out.replace_range(start..end, "");
+    }
+    out
+}
+
+fn build_header(base: &Path, target_name: &str) -> String {
+    let agents_md_path = base.join("AGENTS.md");
+    let files = [
+        ("SOUL.md", "Personality & tone"),
+        ("IDENTITY.md", "Agent identity"),
+        ("USER.md", "User profile & preferences"),
+        ("MEMORY.md", "Working memory context"),
+        ("agent.yaml", "Configuration & settings"),
+    ];
+    let file_list = files
+        .iter()
+        .filter_map(|(name, desc)| {
+            let path = base.join(name);
+            path.exists()
+                .then(|| format!("#   - {} ({desc})", sanitize_path(&path)))
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!(
+        "# {target_name}\n# ============================================================================\n# AUTO-GENERATED from {} by Signet\n# Generated: {}\n#\n# DO NOT EDIT THIS FILE - changes will be overwritten\n# Edit the source file instead: {}\n#\n# Signet Agent Home: {}\n# Dashboard: http://localhost:3850\n# CLI: signet --help\n#\n# Related documents:\n{file_list}\n#\n# Memory commands: /remember <content> | /recall <query>\n# ============================================================================\n\n",
+        sanitize_path(&agents_md_path),
+        chrono::Utc::now().to_rfc3339(),
+        sanitize_path(&agents_md_path),
+        sanitize_path(base),
+    )
+}
+
+fn sanitize_path(path: &Path) -> String {
+    path.to_string_lossy().replace(['\n', '\r'], "")
+}
+
+fn home_dir() -> PathBuf {
+    std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("."))
+}
+
+fn build_architecture_doc(workspace: &str) -> String {
+    let root = normalize_workspace(workspace);
+    format!(
+        r#"# How Signet Works (for the agent reading this)
+
+You are operating inside a system you cannot fully observe. The markdown
+files in your context are prompt surfaces over deeper runtime state. Do
+not make architectural claims based solely on what appears in your
+context window - you are seeing rendered summaries and projections, not
+the entire system.
+
+## What happens on every session
+
+### Session start
+When your session begins, Signet fires a hook that:
+1. Loads your identity files (AGENTS.md, SOUL.md, IDENTITY.md, USER.md)
+2. Loads your rendered working-memory head (MEMORY.md)
+3. Injects relevant context for continuity before generation starts
+4. Preserves agent and session scoping on the state it loads
+
+### Every user message
+On each prompt from the user, Signet:
+1. May retrieve context through hybrid recall before generation
+2. Prefers structured distillation surfaces when available
+3. Can also use thread heads and temporal summaries
+4. Falls back to transcript retrieval when structured state has not
+   caught up yet or transcript-specific lookup is needed
+
+Prompt-time context is layered. `MEMORY.md` is only one visible surface.
+Not every important state appears directly inside it.
+
+### Session end
+When the session closes, Signet:
+1. Persists transcript and session state with agent and session scoping
+2. Produces temporal artifacts such as summaries, and compaction artifacts
+   when the harness supports them
+3. Distills durable structure into deeper memory state
+4. Refreshes rendered working-memory surfaces from that state
+
+You never see this happen - it runs after you're gone.
+
+## Your role in the memory system
+
+Auto-capture handles most episodic and operational memory work. Your job
+is to actively maintain the durable identity substrate:
+
+- `{root}/AGENTS.md`
+- `{root}/SOUL.md`
+- `{root}/IDENTITY.md`
+- `{root}/USER.md`
+
+Update those files when you learn stable truths about how you operate,
+who you are, who the user is, or how you should relate to the world.
+
+Use `signet remember` (or `/remember`) for exceptionally important
+things the system might otherwise underweight or miss. Use
+`signet recall` (or `/recall`) when you need specific context that
+was not automatically surfaced.
+
+## Identity files are your durable substrate
+
+You should maintain:
+
+- `{root}/AGENTS.md`
+- `{root}/SOUL.md`
+- `{root}/IDENTITY.md`
+- `{root}/USER.md`
+
+Use them for durable truths about how you operate, who you are, who the
+user is, and how you should relate to the world. Prefer additive,
+intentional refinements over full rewrites unless the user asks for a
+deeper identity change.
+
+Do not edit `{root}/MEMORY.md` manually. It is a derived operational
+summary and rendered temporal head regenerated by Signet from the memory
+system.
+
+## When users ask about your memory
+
+You can explain truthfully:
+
+"I have a persistent memory and identity system called Signet. It keeps
+durable identity files, renders a working-memory head for continuity,
+and can surface deeper context through hybrid retrieval across
+structured memory, temporal summaries, and transcript fallback when
+needed."
+
+Do not speculate about implementation details beyond what's described
+here. If pressed for specifics, suggest the user check the Signet
+dashboard at http://localhost:3850.
+"#
+    )
+}
+
+fn normalize_workspace(workspace: &str) -> String {
+    let root = workspace.trim().replace(['`', '\n', '\r'], "");
+    if root.is_empty() {
+        "$SIGNET_WORKSPACE".to_string()
+    } else {
+        root.trim_end_matches('/').to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn strip_signet_block_removes_multiple_blocks() {
+        let input = format!(
+            "a\n{SIGNET_BLOCK_START}\nb\n{SIGNET_BLOCK_END}\nc\n{SIGNET_BLOCK_START}\nd\n{SIGNET_BLOCK_END}\ne"
+        );
+        assert_eq!(strip_signet_block(&input), "a\nc\ne");
+    }
+
+    #[test]
+    fn parse_harness_list_normalizes_array_and_comma_string() {
+        let array = serde_yml::from_str::<serde_yml::Value>("[pi, ' codex ', '', 42]").unwrap();
+        assert_eq!(parse_harness_list(&array), vec!["pi", "codex"]);
+        let string = serde_yml::Value::String("pi, codex,,opencode".to_string());
+        assert_eq!(parse_harness_list(&string), vec!["pi", "codex", "opencode"]);
+    }
+
+    #[tokio::test]
+    async fn sync_agent_workspaces_writes_overrides_and_shared_identity() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+        std::fs::create_dir_all(base.join("agents/writer/workspace")).unwrap();
+        std::fs::write(base.join("AGENTS.md"), "# Root Agent\n").unwrap();
+        std::fs::write(base.join("SOUL.md"), "root soul").unwrap();
+        std::fs::write(base.join("IDENTITY.md"), "root identity").unwrap();
+        std::fs::write(base.join("USER.md"), "root user").unwrap();
+        std::fs::write(base.join("MEMORY.md"), "root memory").unwrap();
+        std::fs::write(base.join("agents/writer/SOUL.md"), "agent soul").unwrap();
+
+        let summary = sync_harness_configs(base).await.unwrap();
+        assert_eq!(summary.agent_workspaces_written, 1);
+        assert!(summary.architecture_written);
+
+        let output =
+            std::fs::read_to_string(base.join("agents/writer/workspace/AGENTS.md")).unwrap();
+        assert!(output.contains("# Root Agent"));
+        assert!(output.contains("## SOUL\n\nagent soul"));
+        assert!(output.contains("## IDENTITY\n\nroot identity"));
+        assert!(output.contains("## USER\n\nroot user"));
+        assert!(output.contains("## MEMORY\n\nroot memory"));
+        assert!(
+            std::fs::read_to_string(base.join("SIGNET-ARCHITECTURE.md"))
+                .unwrap()
+                .contains("Do not edit")
+        );
+    }
+}
