@@ -13,7 +13,7 @@ use signet_core::db::DbPool;
 use signet_core::types::{DecisionAction, DecisionProposal, DecisionResult};
 
 use crate::extraction::ExtractedFact;
-use crate::provider::{GenerateOpts, GenerateResult, LlmProvider};
+use crate::provider::{GenerateOpts, LlmProvider};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -30,7 +30,6 @@ struct CandidateMemory {
     id: String,
     content: String,
     memory_type: String,
-    importance: f64,
 }
 
 struct DecisionScope {
@@ -256,7 +255,6 @@ fn fetch_memory_rows(
             id: row.get(0)?,
             content: row.get(1)?,
             memory_type: row.get(2)?,
-            importance: row.get(3)?,
         })
     });
 

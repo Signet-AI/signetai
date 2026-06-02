@@ -1415,6 +1415,7 @@ async fn start_extraction_worker_inner(state: &AppState, dead_letter_on_blocked:
         shadow_mode: pipeline.shadow_mode,
         graph_enabled: pipeline.graph.enabled,
         structural_enabled: pipeline.structural.enabled,
+        ..signet_pipeline::worker::WorkerConfig::default()
     };
 
     let handle =
