@@ -1,7 +1,5 @@
-//! LLM provider trait and implementations (Ollama HTTP, Anthropic HTTP).
-//!
-//! Providers are used by pipeline workers for text generation tasks
-//! like extraction, decision-making, and summarization.
+//! LLM provider trait and implementations (Ollama HTTP, Anthropic HTTP,
+//! OpenAI-compatible HTTP, CLI subprocess, OpenCode HTTP).
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -496,6 +494,499 @@ impl LlmProvider for AnthropicProvider {
 }
 
 // ---------------------------------------------------------------------------
+// OpenAI-compatible provider (covers llama-cpp, openrouter, generic)
+// ---------------------------------------------------------------------------
+
+/// OpenAI-compatible LLM provider via HTTP POST /v1/chat/completions.
+///
+/// Used by: `openai-compatible`, `llama-cpp`, `openrouter`.
+pub struct OpenAiCompatProvider {
+    client: reqwest::Client,
+    base_url: String,
+    api_key: Option<String>,
+    model: String,
+    provider_name: &'static str,
+    default_timeout_ms: u64,
+    extra_headers: Vec<(String, String)>,
+    health: Mutex<HealthTracker>,
+}
+
+#[derive(Serialize)]
+struct ChatCompletionRequest<'a> {
+    model: &'a str,
+    messages: Vec<ChatMessage<'a>>,
+    max_tokens: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    temperature: Option<f32>,
+}
+
+#[derive(Serialize)]
+struct ChatMessage<'a> {
+    role: &'a str,
+    content: &'a str,
+}
+
+#[derive(Deserialize)]
+struct ChatCompletionResponse {
+    choices: Option<Vec<ChatChoice>>,
+    usage: Option<ChatUsage>,
+}
+
+#[derive(Deserialize)]
+struct ChatChoice {
+    message: Option<ChatChoiceMessage>,
+}
+
+#[derive(Deserialize)]
+struct ChatChoiceMessage {
+    content: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ChatUsage {
+    prompt_tokens: Option<u64>,
+    completion_tokens: Option<u64>,
+}
+
+impl OpenAiCompatProvider {
+    pub fn new(
+        base_url: &str,
+        model: &str,
+        api_key: Option<&str>,
+        timeout_ms: u64,
+        provider_name: &'static str,
+    ) -> Self {
+        Self::with_extra_headers(base_url, model, api_key, timeout_ms, provider_name, vec![])
+    }
+
+    pub fn with_extra_headers(
+        base_url: &str,
+        model: &str,
+        api_key: Option<&str>,
+        timeout_ms: u64,
+        provider_name: &'static str,
+        extra_headers: Vec<(String, String)>,
+    ) -> Self {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_millis(timeout_ms.max(5000)))
+            .build()
+            .unwrap_or_default();
+
+        Self {
+            client,
+            base_url: base_url.trim_end_matches('/').to_string(),
+            api_key: api_key.map(|s| s.to_string()),
+            model: model.to_string(),
+            provider_name,
+            default_timeout_ms: timeout_ms,
+            extra_headers,
+            health: Mutex::new(HealthTracker::new()),
+        }
+    }
+
+    pub async fn health(&self) -> ProviderHealth {
+        self.health.lock().await.snapshot()
+    }
+
+    async fn generate_inner(
+        &self,
+        prompt: &str,
+        opts: &GenerateOpts,
+    ) -> Result<GenerateResult, ProviderError> {
+        let start = Instant::now();
+        let timeout = Duration::from_millis(opts.timeout_ms.unwrap_or(self.default_timeout_ms));
+        let max_tokens = opts.max_tokens.unwrap_or(4096);
+
+        let body = ChatCompletionRequest {
+            model: &self.model,
+            messages: vec![ChatMessage {
+                role: "user",
+                content: prompt,
+            }],
+            max_tokens,
+            temperature: None,
+        };
+
+        let url = format!("{}/v1/chat/completions", self.base_url);
+
+        let mut req = self
+            .client
+            .post(&url)
+            .header("content-type", "application/json")
+            .timeout(timeout);
+
+        if let Some(ref key) = self.api_key {
+            req = req.header("authorization", format!("Bearer {key}"));
+        }
+
+        for (k, v) in &self.extra_headers {
+            req = req.header(k.as_str(), v.as_str());
+        }
+
+        let res = req.json(&body).send().await.map_err(|e| {
+            if let Ok(mut h) = self.health.try_lock() {
+                h.record_error();
+            }
+            if e.is_timeout() {
+                ProviderError::Timeout(timeout.as_millis() as u64)
+            } else {
+                ProviderError::Other(e.to_string())
+            }
+        })?;
+
+        if !res.status().is_success() {
+            let status = res.status().as_u16();
+            let body = res.text().await.unwrap_or_default();
+            if let Ok(mut h) = self.health.try_lock() {
+                h.record_error();
+            }
+            return Err(ProviderError::Http { status, body });
+        }
+
+        let data: ChatCompletionResponse = res.json().await.map_err(|e| {
+            if let Ok(mut h) = self.health.try_lock() {
+                h.record_error();
+            }
+            ProviderError::Parse(e.to_string())
+        })?;
+
+        let text = data
+            .choices
+            .and_then(|c| c.into_iter().next())
+            .and_then(|c| c.message)
+            .and_then(|m| m.content)
+            .unwrap_or_default();
+
+        let latency = start.elapsed().as_millis() as u64;
+        {
+            let mut h = self.health.lock().await;
+            h.record_success(latency);
+        }
+
+        Ok(GenerateResult {
+            text,
+            usage: data.usage.map(|u| LlmUsage {
+                input_tokens: u.prompt_tokens,
+                output_tokens: u.completion_tokens,
+                total_duration_ms: Some(latency),
+                ..Default::default()
+            }),
+        })
+    }
+}
+
+impl LlmProvider for OpenAiCompatProvider {
+    fn generate(
+        &self,
+        prompt: &str,
+        opts: &GenerateOpts,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<GenerateResult, ProviderError>> + Send + '_>,
+    > {
+        let prompt = prompt.to_string();
+        let opts = opts.clone();
+        Box::pin(async move { self.generate_inner(&prompt, &opts).await })
+    }
+
+    fn name(&self) -> &str {
+        self.provider_name
+    }
+}
+
+// ---------------------------------------------------------------------------
+// CLI subprocess provider (covers claude-code, codex, acpx, command)
+// ---------------------------------------------------------------------------
+
+/// LLM provider that spawns a CLI subprocess, pipes the prompt to stdin,
+/// and reads the response from stdout.
+pub struct CliProvider {
+    binary: String,
+    args: Vec<String>,
+    provider_name: &'static str,
+    default_timeout_ms: u64,
+    health: Mutex<HealthTracker>,
+}
+
+impl CliProvider {
+    pub fn new(
+        binary: &str,
+        args: &[&str],
+        timeout_ms: u64,
+        provider_name: &'static str,
+    ) -> Self {
+        Self {
+            binary: binary.to_string(),
+            args: args.iter().map(|s| s.to_string()).collect(),
+            provider_name,
+            default_timeout_ms: timeout_ms,
+            health: Mutex::new(HealthTracker::new()),
+        }
+    }
+
+    pub async fn health(&self) -> ProviderHealth {
+        self.health.lock().await.snapshot()
+    }
+
+    async fn generate_inner(
+        &self,
+        prompt: &str,
+        opts: &GenerateOpts,
+    ) -> Result<GenerateResult, ProviderError> {
+        let start = Instant::now();
+        let timeout =
+            Duration::from_millis(opts.timeout_ms.unwrap_or(self.default_timeout_ms));
+
+        let mut cmd = tokio::process::Command::new(&self.binary);
+        cmd.args(&self.args)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+
+        let mut child = cmd.spawn().map_err(|e| {
+            if let Ok(mut h) = self.health.try_lock() {
+                h.record_error();
+            }
+            ProviderError::Unavailable(format!("failed to spawn {}: {}", self.binary, e))
+        })?;
+
+        // Write prompt to stdin
+        use tokio::io::AsyncWriteExt;
+        if let Some(mut stdin) = child.stdin.take() {
+            let _ = stdin.write_all(prompt.as_bytes()).await;
+            drop(stdin); // close stdin to signal EOF
+        }
+
+        // Wait with timeout
+        match tokio::time::timeout(timeout, child.wait_with_output()).await {
+            Ok(Ok(output)) => {
+                let text = String::from_utf8_lossy(&output.stdout).to_string();
+
+                if !output.status.success() {
+                    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                    if let Ok(mut h) = self.health.try_lock() {
+                        h.record_error();
+                    }
+                    return Err(ProviderError::Other(format!(
+                        "{} exited with {}: {}",
+                        self.binary,
+                        output.status.code().unwrap_or(-1),
+                        stderr.trim()
+                    )));
+                }
+
+                let latency = start.elapsed().as_millis() as u64;
+                {
+                    let mut h = self.health.lock().await;
+                    h.record_success(latency);
+                }
+
+                Ok(GenerateResult {
+                    text,
+                    usage: Some(LlmUsage {
+                        total_duration_ms: Some(latency),
+                        ..Default::default()
+                    }),
+                })
+            }
+            Ok(Err(e)) => {
+                if let Ok(mut h) = self.health.try_lock() {
+                    h.record_error();
+                }
+                Err(ProviderError::Other(format!(
+                    "failed to wait for {}: {}",
+                    self.binary, e
+                )))
+            }
+            Err(_) => {
+                // Timeout -- child was moved into the timeout future,
+                // so we can't kill it here. It will be killed when dropped.
+                if let Ok(mut h) = self.health.try_lock() {
+                    h.record_error();
+                }
+                Err(ProviderError::Timeout(timeout.as_millis() as u64))
+            }
+        }
+    }
+}
+
+impl LlmProvider for CliProvider {
+    fn generate(
+        &self,
+        prompt: &str,
+        opts: &GenerateOpts,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<GenerateResult, ProviderError>> + Send + '_>,
+    > {
+        let prompt = prompt.to_string();
+        let opts = opts.clone();
+        Box::pin(async move { self.generate_inner(&prompt, &opts).await })
+    }
+
+    fn name(&self) -> &str {
+        self.provider_name
+    }
+}
+
+// ---------------------------------------------------------------------------
+// OpenCode provider
+// ---------------------------------------------------------------------------
+
+/// OpenCode LLM provider via HTTP session API.
+pub struct OpenCodeProvider {
+    client: reqwest::Client,
+    base_url: String,
+    model: String,
+    default_timeout_ms: u64,
+    health: Mutex<HealthTracker>,
+}
+
+#[derive(Serialize)]
+struct OpenCodeMessageRequest<'a> {
+    message: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    model: Option<&'a str>,
+}
+
+#[derive(Deserialize)]
+struct OpenCodeSessionResponse {
+    session_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct OpenCodeMessageResponse {
+    response: Option<String>,
+}
+
+impl OpenCodeProvider {
+    pub fn new(base_url: &str, model: &str, timeout_ms: u64) -> Self {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_millis(timeout_ms.max(5000)))
+            .build()
+            .unwrap_or_default();
+
+        Self {
+            client,
+            base_url: base_url.trim_end_matches('/').to_string(),
+            model: model.to_string(),
+            default_timeout_ms: timeout_ms,
+            health: Mutex::new(HealthTracker::new()),
+        }
+    }
+
+    pub async fn health(&self) -> ProviderHealth {
+        self.health.lock().await.snapshot()
+    }
+
+    async fn generate_inner(
+        &self,
+        prompt: &str,
+        opts: &GenerateOpts,
+    ) -> Result<GenerateResult, ProviderError> {
+        let start = Instant::now();
+        let timeout = Duration::from_millis(opts.timeout_ms.unwrap_or(self.default_timeout_ms));
+
+        // Create a session
+        let session_url = format!("{}/session", self.base_url);
+        let session_res = self
+            .client
+            .post(&session_url)
+            .timeout(timeout)
+            .send()
+            .await
+            .map_err(|e| ProviderError::Other(format!("opencode session create: {e}")))?;
+
+        if !session_res.status().is_success() {
+            let status = session_res.status().as_u16();
+            let body = session_res.text().await.unwrap_or_default();
+            return Err(ProviderError::Http { status, body });
+        }
+
+        let session_data: OpenCodeSessionResponse = session_res
+            .json()
+            .await
+            .map_err(|e| ProviderError::Parse(format!("opencode session parse: {e}")))?;
+
+        let session_id = session_data
+            .session_id
+            .ok_or_else(|| ProviderError::Parse("opencode: no session_id".into()))?;
+
+        // Send message to session
+        let msg_url = format!("{}/session/{session_id}/message", self.base_url);
+        let remaining = timeout.saturating_sub(start.elapsed());
+
+        let msg_body = OpenCodeMessageRequest {
+            message: prompt,
+            model: Some(&self.model),
+        };
+
+        let msg_res = self
+            .client
+            .post(&msg_url)
+            .header("content-type", "application/json")
+            .timeout(remaining)
+            .json(&msg_body)
+            .send()
+            .await
+            .map_err(|e| {
+                if e.is_timeout() {
+                    ProviderError::Timeout(timeout.as_millis() as u64)
+                } else {
+                    ProviderError::Other(format!("opencode message send: {e}"))
+                }
+            })?;
+
+        if !msg_res.status().is_success() {
+            let status = msg_res.status().as_u16();
+            let body = msg_res.text().await.unwrap_or_default();
+            if let Ok(mut h) = self.health.try_lock() {
+                h.record_error();
+            }
+            return Err(ProviderError::Http { status, body });
+        }
+
+        let msg_data: OpenCodeMessageResponse = msg_res.json().await.map_err(|e| {
+            if let Ok(mut h) = self.health.try_lock() {
+                h.record_error();
+            }
+            ProviderError::Parse(format!("opencode response parse: {e}"))
+        })?;
+
+        let text = msg_data.response.unwrap_or_default();
+        let latency = start.elapsed().as_millis() as u64;
+        {
+            let mut h = self.health.lock().await;
+            h.record_success(latency);
+        }
+
+        Ok(GenerateResult {
+            text,
+            usage: Some(LlmUsage {
+                total_duration_ms: Some(latency),
+                ..Default::default()
+            }),
+        })
+    }
+}
+
+impl LlmProvider for OpenCodeProvider {
+    fn generate(
+        &self,
+        prompt: &str,
+        opts: &GenerateOpts,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<GenerateResult, ProviderError>> + Send + '_>,
+    > {
+        let prompt = prompt.to_string();
+        let opts = opts.clone();
+        Box::pin(async move { self.generate_inner(&prompt, &opts).await })
+    }
+
+    fn name(&self) -> &str {
+        "opencode"
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Health tracking (shared with embedding providers)
 // ---------------------------------------------------------------------------
 
@@ -606,6 +1097,107 @@ pub fn from_config(cfg: &LlmProviderConfig) -> Arc<dyn LlmProvider> {
             let key = cfg.api_key.as_deref().unwrap_or("");
             info!(provider = "anthropic", model = %cfg.model, timeout_ms = timeout, "LLM provider initialized");
             Arc::new(AnthropicProvider::new(key, &cfg.model, timeout))
+        }
+        "llama-cpp" => {
+            let url = cfg
+                .base_url
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .unwrap_or("http://127.0.0.1:8080");
+            info!(provider = "llama-cpp", model = %cfg.model, url, timeout_ms = timeout, "LLM provider initialized");
+            Arc::new(OpenAiCompatProvider::new(
+                url,
+                &cfg.model,
+                None,
+                timeout,
+                "llama-cpp",
+            ))
+        }
+        "openrouter" => {
+            let url = cfg
+                .base_url
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .unwrap_or("https://openrouter.ai/api/v1");
+            let env_key = std::env::var("OPENROUTER_API_KEY").ok();
+            let key = cfg.api_key.as_deref().or(env_key.as_deref());
+            info!(provider = "openrouter", model = %cfg.model, timeout_ms = timeout, "LLM provider initialized");
+            Arc::new(OpenAiCompatProvider::with_extra_headers(
+                url,
+                &cfg.model,
+                key,
+                timeout,
+                "openrouter",
+                vec![
+                    ("HTTP-Referer".to_string(), "https://signetai.sh".to_string()),
+                    ("X-Title".to_string(), "Signet".to_string()),
+                ],
+            ))
+        }
+        "openai-compatible" => {
+            let url = cfg
+                .base_url
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .unwrap_or("http://localhost:8000");
+            info!(provider = "openai-compatible", model = %cfg.model, url, timeout_ms = timeout, "LLM provider initialized");
+            Arc::new(OpenAiCompatProvider::new(
+                url,
+                &cfg.model,
+                cfg.api_key.as_deref(),
+                timeout,
+                "openai-compatible",
+            ))
+        }
+        "claude-code" => {
+            info!(provider = "claude-code", model = %cfg.model, timeout_ms = timeout, "LLM provider initialized");
+            Arc::new(CliProvider::new(
+                "claude",
+                &["--print"],
+                timeout,
+                "claude-code",
+            ))
+        }
+        "codex" => {
+            info!(provider = "codex", model = %cfg.model, timeout_ms = timeout, "LLM provider initialized");
+            Arc::new(CliProvider::new(
+                "codex",
+                &["exec"],
+                timeout,
+                "codex",
+            ))
+        }
+        "acpx" => {
+            info!(provider = "acpx", model = %cfg.model, timeout_ms = timeout, "LLM provider initialized");
+            Arc::new(CliProvider::new(
+                "acpx",
+                &[],
+                timeout,
+                "acpx",
+            ))
+        }
+        "command" => {
+            let binary = cfg
+                .base_url
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .unwrap_or("echo");
+            info!(provider = "command", binary = binary, timeout_ms = timeout, "LLM provider initialized");
+            Arc::new(CliProvider::new(
+                binary,
+                &[],
+                timeout,
+                "command",
+            ))
+        }
+        "opencode" => {
+            let url = cfg
+                .base_url
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .unwrap_or("http://localhost:13284");
+            info!(provider = "opencode", model = %cfg.model, url, timeout_ms = timeout, "LLM provider initialized");
+            Arc::new(OpenCodeProvider::new(url, &cfg.model, timeout))
         }
         other => {
             warn!(
