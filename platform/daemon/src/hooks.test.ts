@@ -1935,6 +1935,51 @@ memory:
 		expect(second).toMatch(/^session-end:agent:main:main:[0-9a-f-]{36}$/);
 		expect(first).not.toBe(second);
 	});
+
+	test.serial("enqueues summary job when only dreaming is enabled (pipelineV2 disabled)", async () => {
+		writeAgentYaml(`memory:
+  pipelineV2:
+    enabled: false
+  dreaming:
+    enabled: true
+`);
+		createMemoryDb([]);
+		const transcriptPath = join(TEST_DIR, "transcript.txt");
+		writeFileSync(transcriptPath, "x".repeat(1000));
+
+		const result = await handleSessionEnd({
+			harness: "test",
+			transcriptPath,
+			sessionKey: "sess-dreaming",
+			sessionId: "sess-dreaming",
+			cwd: "/home/user/signetai",
+		});
+
+		expect(result.queued).toBe(true);
+		expect(typeof result.jobId).toBe("string");
+	});
+
+	test.serial("skips enqueueing when neither pipelineV2 nor dreaming is enabled", async () => {
+		writeAgentYaml(`memory:
+  pipelineV2:
+    enabled: false
+  dreaming:
+    enabled: false
+`);
+		createMemoryDb([]);
+		const transcriptPath = join(TEST_DIR, "transcript.txt");
+		writeFileSync(transcriptPath, "x".repeat(1000));
+
+		const result = await handleSessionEnd({
+			harness: "test",
+			transcriptPath,
+			sessionKey: "sess-both-disabled",
+			sessionId: "sess-both-disabled",
+			cwd: "/home/user/signetai",
+		});
+
+		expect(result.queued).toBe(false);
+	});
 });
 
 // ============================================================================
@@ -3191,9 +3236,45 @@ describe("handleCheckpointExtract", () => {
 			sessionKey: "ckpt-nopath",
 			transcriptPath: "/nonexistent/path/transcript.jsonl",
 		});
-
 		expect(result.skipped).toBe(true);
 		expect(result.queued).toBeUndefined();
+	});
+
+	test.serial("enqueues checkpoint when only dreaming is enabled", () => {
+		writeAgentYaml(`memory:
+  pipelineV2:
+    enabled: false
+  dreaming:
+    enabled: true
+`);
+		createMemoryDb([]);
+
+		const result = handleCheckpointExtract({
+			harness: "test",
+			sessionKey: "ckpt-dreaming",
+			transcript: "x".repeat(600),
+		});
+
+		expect(result.queued).toBe(true);
+		expect(typeof result.jobId).toBe("string");
+	});
+
+	test.serial("skips checkpoint when neither pipelineV2 nor dreaming is enabled", () => {
+		writeAgentYaml(`memory:
+  pipelineV2:
+    enabled: false
+  dreaming:
+    enabled: false
+`);
+		createMemoryDb([]);
+
+		const result = handleCheckpointExtract({
+			harness: "test",
+			sessionKey: "ckpt-both-disabled",
+			transcript: "x".repeat(600),
+		});
+
+		expect(result.skipped).toBe(true);
 	});
 });
 
