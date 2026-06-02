@@ -19,6 +19,7 @@ import {
 	createCodexProvider,
 	createLlamaCppProvider,
 	createOllamaProvider,
+	createOpenAiCompatibleProvider,
 	createOpenCodeProvider,
 	createOpenRouterProvider,
 	resolveDefaultOllamaFallbackMaxContextTokens,
@@ -2315,6 +2316,86 @@ describe("createOpenCodeProvider", () => {
 		expect(uniqueDeleted).toContain("ses_leak_2");
 		expect(uniqueDeleted).toContain("ses_leak_3");
 	}, 15000);
+});
+
+describe("createOpenAiCompatibleProvider", () => {
+	afterEach(() => restoreFetch());
+
+	it("disables DeepSeek thinking for non-streaming chat completions", async () => {
+		let requestBody: Record<string, unknown> | null = null;
+		mockFetch(async (_url, init) => {
+			requestBody = parseJsonObjectBody(init?.body);
+			return Response.json({
+				choices: [{ message: { content: "deepseek answer" } }],
+			});
+		});
+
+		const provider = createOpenAiCompatibleProvider({
+			name: "openai-compatible:deepseek-v4-flash",
+			model: "deepseek-v4-flash",
+			baseUrl: "https://api.deepseek.com/v1",
+			apiKey: "sk-deepseek",
+			defaultTimeoutMs: 1000,
+		});
+
+		await expect(provider.generate("extract one fact")).resolves.toBe("deepseek answer");
+		expect(requestBody?.thinking).toEqual({ type: "disabled" });
+	});
+
+	it("disables DeepSeek thinking for streaming chat completions", async () => {
+		let requestBody: Record<string, unknown> | null = null;
+		mockFetch(async (_url, init) => {
+			requestBody = parseJsonObjectBody(init?.body);
+			return new Response(
+				streamFromString(
+					[
+						`data: ${JSON.stringify({ choices: [{ delta: { content: "streamed answer" } }] })}`,
+						"data: [DONE]",
+						"",
+					].join("\n\n"),
+				),
+				{ status: 200 },
+			);
+		});
+
+		const provider = createOpenAiCompatibleProvider({
+			name: "openai-compatible:deepseek-reasoner",
+			model: "deepseek-reasoner",
+			baseUrl: "https://api.deepseek.com/v1/",
+			apiKey: "sk-deepseek",
+			defaultTimeoutMs: 1000,
+		});
+
+		const result = await provider.streamWithUsage?.("extract one fact", { maxTokens: 64 });
+		expect(result).toBeDefined();
+		const reader = result?.stream.getReader();
+		await reader?.read();
+		await reader?.read();
+		expect(requestBody?.thinking).toEqual({ type: "disabled" });
+		expect(requestBody?.stream).toBe(true);
+		expect(requestBody?.max_tokens).toBe(64);
+	});
+
+	it("does not send DeepSeek-only thinking controls to other gateways", async () => {
+		let requestBody: Record<string, unknown> | null = null;
+		mockFetch(async (_url, init) => {
+			requestBody = parseJsonObjectBody(init?.body);
+			return Response.json({
+				choices: [{ message: { content: "gateway answer" } }],
+			});
+		});
+
+		const provider = createOpenAiCompatibleProvider({
+			name: "openai-compatible:gpt-4o-mini",
+			model: "gpt-4o-mini",
+			baseUrl: "https://gateway.example.test/v1",
+			apiKey: "sk-gateway",
+			defaultTimeoutMs: 1000,
+		});
+
+		await expect(provider.generate("extract one fact")).resolves.toBe("gateway answer");
+		expect(requestBody).not.toHaveProperty("thinking");
+	});
 });
 
 describe("createOpenRouterProvider", () => {

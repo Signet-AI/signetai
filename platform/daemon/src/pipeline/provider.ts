@@ -806,6 +806,14 @@ function extractOpenAiLikeText(content: unknown): string {
 		.join("");
 }
 
+function isDeepSeekOpenAiCompatibleEndpoint(baseUrl: string): boolean {
+	try {
+		return new URL(baseUrl).hostname.toLowerCase() === "api.deepseek.com";
+	} catch {
+		return /api\.deepseek\.com/i.test(baseUrl);
+	}
+}
+
 function createOpenAiLikeStreamResult(res: Response, cancel: () => void): LlmProviderStreamResult {
 	if (!res.body) {
 		throw new Error("streaming response body was missing");
@@ -1398,6 +1406,7 @@ export interface OpenAiCompatibleProviderConfig {
 
 export function createOpenAiCompatibleProvider(config: OpenAiCompatibleProviderConfig): StreamCapableLlmProvider {
 	const baseUrl = trimTrailingSlash(config.baseUrl);
+	const extraRequestBody = isDeepSeekOpenAiCompatibleEndpoint(baseUrl) ? { thinking: { type: "disabled" } } : {};
 	const headers = (): Record<string, string> => ({
 		"Content-Type": "application/json",
 		...(config.apiKey ? { Authorization: `Bearer ${config.apiKey}` } : {}),
@@ -1414,6 +1423,7 @@ export function createOpenAiCompatibleProvider(config: OpenAiCompatibleProviderC
 					model: config.model,
 					messages: [{ role: "user", content: prompt }],
 					max_tokens: opts?.maxTokens ?? 4096,
+					...extraRequestBody,
 				}),
 				signal: abort.signal,
 			});
@@ -1479,6 +1489,7 @@ export function createOpenAiCompatibleProvider(config: OpenAiCompatibleProviderC
 						max_tokens: opts?.maxTokens ?? 4096,
 						stream: true,
 						stream_options: { include_usage: true },
+						...extraRequestBody,
 					}),
 					signal: abort.signal,
 				});
