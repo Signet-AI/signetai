@@ -151,6 +151,21 @@ pub async fn ingest(
                      VALUES (?1, ?2, ?3, 'text/plain', ?4, ?5, 'queued', ?6, 0, ?7, ?7)",
                     rusqlite::params![id, url, source_type, title, content, connector_id, now],
                 )?;
+                conn.execute(
+                    "INSERT INTO memory_jobs
+                     (id, memory_id, document_id, job_type, status, payload, created_at, updated_at)
+                     VALUES (?1, NULL, ?2, 'document_ingest', 'pending', ?3, ?4, ?4)",
+                    rusqlite::params![
+                        uuid::Uuid::new_v4().to_string(),
+                        id,
+                        serde_json::json!({
+                            "documentId": id,
+                            "content": content,
+                        })
+                        .to_string(),
+                        now
+                    ],
+                )?;
                 Ok(serde_json::json!({"id": id, "status": "queued"}))
             }
         })
@@ -198,10 +213,11 @@ pub async fn chunks(
         .pool
         .read(move |conn| {
             let mut stmt = conn.prepare_cached(
-                "SELECT m.id, m.content, m.type, m.created_at, m.chunk_index
-                 FROM memories m
-                 WHERE m.source_id = ?1 AND m.source_type = 'document'
-                 ORDER BY m.chunk_index",
+                "SELECT m.id, m.content, m.type, m.created_at, dm.chunk_index
+                 FROM document_memories dm
+                 JOIN memories m ON m.id = dm.memory_id
+                 WHERE dm.document_id = ?1 AND m.is_deleted = 0
+                 ORDER BY dm.chunk_index ASC",
             )?;
             let rows: Vec<serde_json::Value> = stmt
                 .query_map([&id], |r| {
@@ -215,7 +231,8 @@ pub async fn chunks(
                 })?
                 .filter_map(|r| r.ok())
                 .collect();
-            Ok(serde_json::json!(rows))
+            let count = rows.len();
+            Ok(serde_json::json!({"chunks": rows, "count": count}))
         })
         .await;
 

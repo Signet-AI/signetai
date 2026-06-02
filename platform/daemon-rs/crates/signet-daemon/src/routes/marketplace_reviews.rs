@@ -13,7 +13,7 @@ use std::{
 
 use axum::{
     Json,
-    extract::{ConnectInfo, Query, State},
+    extract::{ConnectInfo, Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
@@ -92,6 +92,15 @@ pub struct CreateReviewBody {
 pub struct PatchConfigBody {
     enabled: Option<bool>,
     endpoint_url: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PatchReviewBody {
+    display_name: Option<String>,
+    rating: Option<f64>,
+    title: Option<String>,
+    body: Option<String>,
 }
 
 fn reviews_path(state: &AppState) -> std::io::Result<std::path::PathBuf> {
@@ -508,4 +517,292 @@ pub async fn patch_config(
         Json(serde_json::json!({"success": true, "config": next})),
     )
         .into_response()
+}
+
+/// PATCH /api/marketplace/reviews/:id
+pub async fn patch_review(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(body): Json<PatchReviewBody>,
+) -> Response {
+    if let Err(resp) = require_authenticated_or_response(&state, peer, &headers, Permission::Modify)
+    {
+        return resp;
+    }
+
+    let _guard = match REVIEWS_FILE_LOCK.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    let reviews = match read_reviews(&state) {
+        Ok(reviews) => reviews,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e})),
+            )
+                .into_response();
+        }
+    };
+    let Some(existing) = reviews.iter().find(|item| item.id == id).cloned() else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Review not found"})),
+        )
+            .into_response();
+    };
+
+    let display_name = if body.display_name.is_some() {
+        parse_text(body.display_name)
+    } else {
+        Some(existing.display_name.clone())
+    };
+    let rating = if body.rating.is_some() {
+        parse_rating(body.rating)
+    } else {
+        Some(existing.rating)
+    };
+    let title = if body.title.is_some() {
+        parse_text(body.title)
+    } else {
+        Some(existing.title.clone())
+    };
+    let review_body = if body.body.is_some() {
+        parse_text(body.body)
+    } else {
+        Some(existing.body.clone())
+    };
+
+    let (Some(display_name), Some(rating), Some(title), Some(review_body)) =
+        (display_name, rating, title, review_body)
+    else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(
+                serde_json::json!({"error": "displayName, rating, title, and body must be valid when provided"}),
+            ),
+        )
+            .into_response();
+    };
+
+    let updated = MarketplaceReview {
+        display_name,
+        rating,
+        title,
+        body: review_body,
+        updated_at: chrono::Utc::now().to_rfc3339(),
+        synced_at: None,
+        ..existing
+    };
+    let next: Vec<MarketplaceReview> = reviews
+        .into_iter()
+        .map(|item| if item.id == id { updated.clone() } else { item })
+        .collect();
+    if let Err(e) = write_reviews(&state, &next) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e})),
+        )
+            .into_response();
+    }
+    Json(serde_json::json!({"success": true, "review": updated})).into_response()
+}
+
+/// DELETE /api/marketplace/reviews/:id
+pub async fn delete_review(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    if let Err(resp) = require_authenticated_or_response(&state, peer, &headers, Permission::Modify)
+    {
+        return resp;
+    }
+
+    let _guard = match REVIEWS_FILE_LOCK.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    let reviews = match read_reviews(&state) {
+        Ok(reviews) => reviews,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e})),
+            )
+                .into_response();
+        }
+    };
+    if !reviews.iter().any(|item| item.id == id) {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Review not found"})),
+        )
+            .into_response();
+    }
+    let next: Vec<MarketplaceReview> = reviews.into_iter().filter(|item| item.id != id).collect();
+    if let Err(e) = write_reviews(&state, &next) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e})),
+        )
+            .into_response();
+    }
+    Json(serde_json::json!({"success": true, "id": id})).into_response()
+}
+
+/// POST /api/marketplace/reviews/sync
+pub async fn sync_reviews(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(resp) = require_authenticated_or_response(&state, peer, &headers, Permission::Modify)
+    {
+        return resp;
+    }
+
+    let config = read_config(&state);
+    if !config.enabled || config.endpoint_url.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(
+                serde_json::json!({"success": false, "error": "Review sync endpoint is not configured"}),
+            ),
+        )
+            .into_response();
+    }
+
+    let reviews = match read_reviews(&state) {
+        Ok(reviews) => reviews,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e})),
+            )
+                .into_response();
+        }
+    };
+    let pending: Vec<MarketplaceReview> = reviews
+        .iter()
+        .filter(|item| {
+            item.synced_at
+                .as_ref()
+                .map(|synced| item.updated_at > *synced)
+                .unwrap_or(true)
+        })
+        .cloned()
+        .collect();
+    if pending.is_empty() {
+        return Json(serde_json::json!({
+            "success": true,
+            "sent": 0,
+            "synced": 0,
+            "message": "No pending reviews"
+        }))
+        .into_response();
+    }
+
+    let response = reqwest::Client::new()
+        .post(&config.endpoint_url)
+        .header("Content-Type", "application/json")
+        .header("X-Signet-Sync", "1")
+        .json(&serde_json::json!({
+            "source": "signet-marketplace",
+            "type": "reviews-sync",
+            "sentAt": chrono::Utc::now().to_rfc3339(),
+            "reviews": pending,
+        }))
+        .send()
+        .await;
+
+    let response = match response {
+        Ok(response) => response,
+        Err(error) => {
+            let message = error.to_string();
+            let _ = write_config(
+                &state,
+                &ReviewsSyncConfig {
+                    last_sync_error: Some(message.clone()),
+                    ..config
+                },
+            );
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({"success": false, "error": message})),
+            )
+                .into_response();
+        }
+    };
+
+    if !response.status().is_success() {
+        let error_text = format!("Sync endpoint returned HTTP {}", response.status().as_u16());
+        let _ = write_config(
+            &state,
+            &ReviewsSyncConfig {
+                last_sync_error: Some(error_text.clone()),
+                ..config
+            },
+        );
+        return (
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({"success": false, "error": error_text})),
+        )
+            .into_response();
+    }
+
+    let synced_at = chrono::Utc::now().to_rfc3339();
+    let pending_ids: std::collections::HashSet<String> =
+        pending.iter().map(|item| item.id.clone()).collect();
+    let _guard = match REVIEWS_FILE_LOCK.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    let latest = read_reviews(&state).unwrap_or_default();
+    let next: Vec<MarketplaceReview> = latest
+        .into_iter()
+        .map(|item| {
+            if pending_ids.contains(&item.id) {
+                MarketplaceReview {
+                    source: "synced".to_string(),
+                    synced_at: Some(synced_at.clone()),
+                    ..item
+                }
+            } else {
+                item
+            }
+        })
+        .collect();
+    if let Err(e) = write_reviews(&state, &next) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e})),
+        )
+            .into_response();
+    }
+    if let Err(e) = write_config(
+        &state,
+        &ReviewsSyncConfig {
+            last_sync_at: Some(synced_at.clone()),
+            last_sync_error: None,
+            ..config
+        },
+    ) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e})),
+        )
+            .into_response();
+    }
+
+    Json(serde_json::json!({
+        "success": true,
+        "sent": pending_ids.len(),
+        "synced": pending_ids.len(),
+        "syncedAt": synced_at,
+    }))
+    .into_response()
 }

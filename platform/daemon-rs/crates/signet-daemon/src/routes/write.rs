@@ -1,7 +1,11 @@
 //! Memory write route handlers (remember, modify, forget, recover).
 
 use std::collections::HashSet;
+use std::env;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
 use std::net::{IpAddr, SocketAddr};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::Json;
@@ -49,6 +53,448 @@ fn check_mutations_frozen(state: &AppState) -> Option<axum::response::Response> 
         )
     } else {
         None
+    }
+}
+
+fn parse_body_string(payload: &Value, field: &str) -> Result<Option<String>, &'static str> {
+    let Some(value) = payload.get(field) else {
+        return Ok(None);
+    };
+    let Some(value) = value.as_str() else {
+        return Err("field must be a string");
+    };
+    let value = value.trim();
+    if value.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(value.to_string()))
+}
+
+fn parse_patch_tags(value: &Value) -> Result<Option<Vec<String>>, &'static str> {
+    if value.is_null() {
+        return Ok(Some(Vec::new()));
+    }
+    if let Some(tags) = value.as_str() {
+        return Ok(Some(
+            tags.split(',')
+                .map(str::trim)
+                .filter(|tag| !tag.is_empty())
+                .map(str::to_string)
+                .collect(),
+        ));
+    }
+    if let Some(tags) = value.as_array() {
+        let mut parsed = Vec::new();
+        for tag in tags {
+            let Some(tag) = tag.as_str() else {
+                return Err("tags must be a string, string array, or null");
+            };
+            let tag = tag.trim();
+            if !tag.is_empty() {
+                parsed.push(tag.to_string());
+            }
+        }
+        return Ok(Some(parsed));
+    }
+    Err("tags must be a string, string array, or null")
+}
+
+fn parse_patch_importance(value: &Value) -> Result<Option<f64>, &'static str> {
+    let Some(value) = value.as_f64() else {
+        return Err("importance must be a finite number between 0 and 1");
+    };
+    if !(0.0..=1.0).contains(&value) || !value.is_finite() {
+        return Err("importance must be a finite number between 0 and 1");
+    }
+    Ok(Some(value))
+}
+
+fn parse_patch_if_version(payload: &Value) -> Result<Option<i64>, &'static str> {
+    let Some(value) = payload.get("if_version") else {
+        return Ok(None);
+    };
+    let Some(version) = value.as_i64() else {
+        return Err("if_version must be a positive integer");
+    };
+    if version <= 0 {
+        return Err("if_version must be a positive integer");
+    }
+    Ok(Some(version))
+}
+
+fn codex_notes_dir() -> PathBuf {
+    if let Ok(home) = env::var("CODEX_HOME") {
+        return PathBuf::from(home)
+            .join("memories")
+            .join("extensions")
+            .join("ad_hoc")
+            .join("notes");
+    }
+    env::var("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join(".codex")
+        .join("memories")
+        .join("extensions")
+        .join("ad_hoc")
+        .join("notes")
+}
+
+fn codex_note_slug(title: Option<&str>, content: &str) -> String {
+    let raw = title.unwrap_or(content).to_ascii_lowercase();
+    let mut slug = String::new();
+    let mut last_was_dash = false;
+    for ch in raw.chars() {
+        if ch.is_ascii_alphanumeric() {
+            slug.push(ch);
+            last_was_dash = false;
+        } else if !last_was_dash && !slug.is_empty() {
+            slug.push('-');
+            last_was_dash = true;
+        }
+        if slug.len() >= 48 {
+            break;
+        }
+    }
+    let slug = slug.trim_matches('-').to_string();
+    if !slug.is_empty() {
+        return slug;
+    }
+    let mut hasher = Sha256::new();
+    hasher.update(content.as_bytes());
+    format!("{:x}", hasher.finalize())[..12].to_string()
+}
+
+// ---------------------------------------------------------------------------
+// POST /api/memory/codex-native-note
+// ---------------------------------------------------------------------------
+
+pub async fn codex_native_note(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<Value>,
+) -> axum::response::Response {
+    let Some(obj) = payload.as_object() else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "JSON object body is required"})),
+        )
+            .into_response();
+    };
+    let content = obj
+        .get("content")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default();
+    if content.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "content is required"})),
+        )
+            .into_response();
+    }
+    if content.chars().count() > 8000 {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "content must be 8000 characters or fewer"})),
+        )
+            .into_response();
+    }
+    if let Some(resp) = check_mutations_frozen(&state) {
+        return resp;
+    }
+
+    let title = obj.get("title").and_then(Value::as_str).map(str::trim);
+    let title = title.filter(|value| !value.is_empty());
+    let tags = obj.get("tags").and_then(Value::as_str).map(str::trim);
+    let tags = tags.filter(|value| !value.is_empty());
+    let notes_dir = codex_notes_dir();
+    let created_at = chrono::Utc::now().to_rfc3339();
+    let timestamp = created_at.replace(':', "-").replace('.', "-");
+    let slug = codex_note_slug(title, content);
+    let mut body = String::new();
+    body.push_str("---\nsource: signet_save_note\ncreated_at: ");
+    body.push_str(&serde_json::to_string(&created_at).unwrap_or_else(|_| "\"\"".to_string()));
+    body.push('\n');
+    if let Some(title) = title {
+        body.push_str("title: ");
+        body.push_str(&serde_json::to_string(title).unwrap_or_else(|_| "\"\"".to_string()));
+        body.push('\n');
+    }
+    if let Some(tags) = tags {
+        body.push_str("tags: ");
+        body.push_str(&serde_json::to_string(tags).unwrap_or_else(|_| "\"\"".to_string()));
+        body.push('\n');
+    }
+    body.push_str("---\n\n");
+    body.push_str(content);
+    body.push('\n');
+
+    let result = tokio::task::spawn_blocking(move || -> std::io::Result<PathBuf> {
+        fs::create_dir_all(&notes_dir)?;
+        for attempt in 0..8 {
+            let suffix = if attempt == 0 {
+                String::new()
+            } else {
+                format!("-{}", uuid::Uuid::new_v4().simple())
+                    .chars()
+                    .take(9)
+                    .collect()
+            };
+            let path = notes_dir.join(format!("{timestamp}-{slug}{suffix}.md"));
+            match OpenOptions::new().write(true).create_new(true).open(&path) {
+                Ok(mut file) => {
+                    file.write_all(body.as_bytes())?;
+                    return Ok(path);
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(err) => return Err(err),
+            }
+        }
+        let path = notes_dir.join(format!("{timestamp}-{slug}-{}.md", uuid::Uuid::new_v4()));
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)?;
+        file.write_all(body.as_bytes())?;
+        Ok(path)
+    })
+    .await;
+
+    match result {
+        Ok(Ok(path)) => {
+            Json(serde_json::json!({"ok": true, "path": path.to_string_lossy()})).into_response()
+        }
+        Ok(Err(err)) => {
+            warn!(err = %err, "failed to save Codex native memory note");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "Failed to save Codex native memory note"})),
+            )
+                .into_response()
+        }
+        Err(err) => {
+            warn!(err = %err, "Codex native memory note task failed");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "Failed to save Codex native memory note"})),
+            )
+                .into_response()
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PATCH /api/memory/:id
+// ---------------------------------------------------------------------------
+
+pub async fn patch(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(payload): Json<Value>,
+) -> axum::response::Response {
+    let Some(obj) = payload.as_object() else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "JSON object body is required"})),
+        )
+            .into_response();
+    };
+    let reason = match obj.get("reason").and_then(Value::as_str).map(str::trim) {
+        Some(reason) if !reason.is_empty() => reason.to_string(),
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "reason is required"})),
+            )
+                .into_response();
+        }
+    };
+    let if_version = match parse_patch_if_version(&payload) {
+        Ok(version) => version,
+        Err(error) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": error})),
+            )
+                .into_response();
+        }
+    };
+
+    let content = match payload.get("content") {
+        Some(Value::String(content)) => {
+            let normalized = normalize_and_hash(content);
+            if normalized.storage.is_empty() {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({"error": "content must not be empty"})),
+                )
+                    .into_response();
+            }
+            Some(normalized.storage)
+        }
+        Some(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "content must be a string"})),
+            )
+                .into_response();
+        }
+        None => None,
+    };
+    let memory_type = match parse_body_string(&payload, "type") {
+        Ok(value) => value,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "type must be a non-empty string"})),
+            )
+                .into_response();
+        }
+    };
+    if obj.contains_key("type") && memory_type.is_none() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "type must be a non-empty string"})),
+        )
+            .into_response();
+    }
+    let tags = match payload.get("tags") {
+        Some(value) => match parse_patch_tags(value) {
+            Ok(value) => value,
+            Err(error) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({"error": error})),
+                )
+                    .into_response();
+            }
+        },
+        None => None,
+    };
+    let importance = match payload.get("importance") {
+        Some(value) => match parse_patch_importance(value) {
+            Ok(value) => value,
+            Err(error) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({"error": error})),
+                )
+                    .into_response();
+            }
+        },
+        None => None,
+    };
+    let pinned = match payload.get("pinned") {
+        Some(value) => match value.as_bool() {
+            Some(value) => Some(value),
+            None => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({"error": "pinned must be a boolean"})),
+                )
+                    .into_response();
+            }
+        },
+        None => None,
+    };
+    if content.is_none()
+        && memory_type.is_none()
+        && tags.is_none()
+        && importance.is_none()
+        && pinned.is_none()
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "at least one of content, type, tags, importance, pinned is required"
+            })),
+        )
+            .into_response();
+    }
+    if let Some(resp) = check_mutations_frozen(&state) {
+        return resp;
+    }
+
+    let memory_id = id.clone();
+    let content_changed = content.is_some();
+    let result = state
+        .pool
+        .write(Priority::High, move |conn| {
+            let result = transactions::modify(
+                conn,
+                &transactions::ModifyInput {
+                    id: &memory_id,
+                    content: content.as_deref(),
+                    memory_type: memory_type.as_deref(),
+                    tags,
+                    importance,
+                    pinned,
+                    if_version,
+                    actor: "api",
+                    reason: Some(reason.as_str()),
+                },
+            )?;
+            match result {
+                transactions::ModifyResult::Updated { new_version } => Ok(serde_json::json!({
+                    "id": memory_id,
+                    "status": "updated",
+                    "currentVersion": new_version - 1,
+                    "newVersion": new_version,
+                    "contentChanged": content_changed,
+                })),
+                transactions::ModifyResult::NoChanges => Ok(serde_json::json!({
+                    "id": memory_id,
+                    "status": "no_changes",
+                })),
+                transactions::ModifyResult::NotFound => Ok(serde_json::json!({
+                    "id": memory_id,
+                    "status": "not_found",
+                    "error": "Not found",
+                    "_code": 404,
+                })),
+                transactions::ModifyResult::Deleted => Ok(serde_json::json!({
+                    "id": memory_id,
+                    "status": "deleted",
+                    "error": "Cannot modify deleted memory",
+                    "_code": 409,
+                })),
+                transactions::ModifyResult::VersionConflict { current } => Ok(serde_json::json!({
+                    "id": memory_id,
+                    "status": "version_conflict",
+                    "currentVersion": current,
+                    "error": "Version conflict",
+                    "_code": 409,
+                })),
+                transactions::ModifyResult::DuplicateHash { existing_id } => {
+                    Ok(serde_json::json!({
+                        "id": memory_id,
+                        "status": "duplicate_content_hash",
+                        "duplicateMemoryId": existing_id,
+                        "error": "Duplicate content hash",
+                        "_code": 409,
+                    }))
+                }
+            }
+        })
+        .await;
+
+    match result {
+        Ok(value) => {
+            let code = value
+                .get("_code")
+                .and_then(Value::as_u64)
+                .and_then(|code| StatusCode::from_u16(code as u16).ok())
+                .unwrap_or(StatusCode::OK);
+            (code, Json(value)).into_response()
+        }
+        Err(err) => {
+            warn!(err = %err, "memory patch failed");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "Modify failed"})),
+            )
+                .into_response()
+        }
     }
 }
 

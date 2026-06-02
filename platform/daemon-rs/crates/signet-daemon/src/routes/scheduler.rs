@@ -592,6 +592,39 @@ pub async fn runs(
     }
 }
 
+/// GET /api/tasks/:id/stream — SSE stream for task run events.
+pub async fn stream(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let exists = state
+        .pool
+        .read(move |conn| {
+            Ok(conn
+                .prepare_cached("SELECT 1 FROM scheduled_tasks WHERE id = ?1")?
+                .exists(rusqlite::params![id])?)
+        })
+        .await
+        .unwrap_or(false);
+    if !exists {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Task not found"})),
+        )
+            .into_response();
+    }
+
+    (
+        [
+            ("content-type", "text/event-stream"),
+            ("cache-control", "no-cache"),
+            ("connection", "keep-alive"),
+        ],
+        "data: {\"type\":\"connected\"}\n\n",
+    )
+        .into_response()
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------

@@ -199,6 +199,7 @@ async fn apply_pause_state(state: &AppState, paused: bool) {
     // mirroring the JS daemon's restartPipelineRuntime behavior.
     if paused {
         crate::stop_extraction_worker(state).await;
+        crate::stop_document_worker(state).await;
         crate::stop_summary_worker(state).await;
         crate::stop_synthesis_worker(state).await;
 
@@ -222,6 +223,7 @@ async fn apply_pause_state(state: &AppState, paused: bool) {
         // an intentional pause should be preserved for draining.
         crate::resume_extraction_check(state).await;
         let _ = crate::start_extraction_worker(state).await;
+        let _ = crate::start_document_worker(state).await;
         let _ = crate::start_summary_worker(state).await;
         let _ = crate::start_synthesis_worker(state).await;
     }
@@ -340,6 +342,18 @@ pub async fn status(State(state): State<Arc<AppState>>) -> Json<serde_json::Valu
             "coldStartExited": false,
         },
     }))
+}
+
+/// POST /api/pipeline/nudge — wake the extraction worker if it is running.
+pub async fn nudge(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    if state.extraction_worker_handle.lock().await.is_none() {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({"error": "Extraction worker not running"})),
+        );
+    }
+
+    (StatusCode::OK, Json(serde_json::json!({"nudged": true})))
 }
 
 /// GET /api/pipeline/models — list available LLM models.

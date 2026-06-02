@@ -151,6 +151,7 @@ pub async fn list(
 
 #[derive(Deserialize)]
 pub struct AgentScopeParams {
+    #[serde(alias = "agentId")]
     pub agent_id: Option<String>,
 }
 
@@ -285,6 +286,80 @@ pub async fn get(
 }
 
 // ---------------------------------------------------------------------------
+// GET /api/sessions/:key/transcript
+// ---------------------------------------------------------------------------
+
+pub async fn transcript(
+    State(state): State<Arc<AppState>>,
+    Path(key): Path<String>,
+    Query(params): Query<AgentScopeParams>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> axum::response::Response {
+    let is_local = peer.ip().is_loopback();
+    let auth = match authenticate_headers(
+        state.auth_mode,
+        state.auth_secret.as_deref(),
+        &headers,
+        is_local,
+    ) {
+        Ok(a) => a,
+        Err(e) => return *e,
+    };
+    let key = key.strip_prefix("session:").unwrap_or(&key).to_string();
+    let agent_id =
+        match resolve_scoped_agent(&auth, state.auth_mode, is_local, params.agent_id.as_deref()) {
+            Ok(id) => id,
+            Err(reason) => {
+                return (
+                    StatusCode::FORBIDDEN,
+                    Json(serde_json::json!({"error": reason})),
+                )
+                    .into_response();
+            }
+        };
+    let key_for_db = key.clone();
+    let agent_for_db = agent_id.clone();
+    let result = state
+        .pool
+        .read(move |conn| {
+            let prefixed_key = format!("session:{key_for_db}");
+            Ok(conn
+                .query_row(
+                    "SELECT content FROM session_transcripts
+                     WHERE (session_key = ?1 OR session_key = ?2) AND agent_id = ?3
+                     LIMIT 1",
+                    rusqlite::params![key_for_db, prefixed_key, agent_for_db],
+                    |row| row.get::<_, String>(0),
+                )
+                .ok())
+        })
+        .await;
+
+    match result {
+        Ok(Some(content)) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "sessionKey": key,
+                "agentId": agent_id,
+                "content": content,
+            })),
+        )
+            .into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Transcript not found"})),
+        )
+            .into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": error.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // POST /api/sessions/:key/bypass
 // ---------------------------------------------------------------------------
 
@@ -351,6 +426,81 @@ pub async fn bypass(
 }
 
 // ---------------------------------------------------------------------------
+// POST /api/sessions/:key/renew
+// ---------------------------------------------------------------------------
+
+pub async fn renew(
+    State(state): State<Arc<AppState>>,
+    Path(key): Path<String>,
+    Query(params): Query<AgentScopeParams>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> axum::response::Response {
+    let is_local = peer.ip().is_loopback();
+    let auth = match authenticate_headers(
+        state.auth_mode,
+        state.auth_secret.as_deref(),
+        &headers,
+        is_local,
+    ) {
+        Ok(a) => a,
+        Err(e) => return *e,
+    };
+    let agent_id =
+        match resolve_scoped_agent(&auth, state.auth_mode, is_local, params.agent_id.as_deref()) {
+            Ok(id) => id,
+            Err(reason) => {
+                return (
+                    StatusCode::FORBIDDEN,
+                    Json(serde_json::json!({"error": reason})),
+                )
+                    .into_response();
+            }
+        };
+    let key = key.strip_prefix("session:").unwrap_or(&key).to_string();
+
+    match find_live_session(&state, &key, &agent_id).await {
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Session not found"})),
+        )
+            .into_response(),
+        Some(Some(_presence_row)) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "key": key,
+                "renewed": true,
+            })),
+        )
+            .into_response(),
+        Some(None) => {
+            if !state.sessions.renew(&key) {
+                return (
+                    StatusCode::NOT_FOUND,
+                    Json(serde_json::json!({"error": "Session not found or expired"})),
+                )
+                    .into_response();
+            }
+
+            let expires_at = state
+                .sessions
+                .list_sessions(Some(&agent_id))
+                .into_iter()
+                .find(|session| session.key == key)
+                .map(|session| session.expires_at);
+            let mut body = serde_json::json!({
+                "key": key,
+                "renewed": true,
+            });
+            if let (Some(expires_at), Some(object)) = (expires_at, body.as_object_mut()) {
+                object.insert("expiresAt".to_string(), expires_at.into());
+            }
+            (StatusCode::OK, Json(body)).into_response()
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // GET /api/sessions/summaries
 // ---------------------------------------------------------------------------
 
@@ -360,6 +510,171 @@ pub struct SummaryParams {
     pub depth: Option<i64>,
     pub limit: Option<usize>,
     pub offset: Option<usize>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default)]
+pub struct SessionSearchBody {
+    query: Option<String>,
+    limit: Option<i64>,
+}
+
+pub async fn search(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<SessionSearchBody>,
+) -> axum::response::Response {
+    let query = body.query.unwrap_or_default().trim().to_string();
+    if query.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "query is required" })),
+        )
+            .into_response();
+    }
+    let limit = body.limit.unwrap_or(10).clamp(1, 20);
+    let query_for_db = query.clone();
+    let result = state
+        .pool
+        .read(move |conn| {
+            let like = format!("%{}%", query_for_db.replace('%', "\\%"));
+            let mut stmt = conn.prepare(
+                "SELECT session_key, project, harness, created_at, substr(content, 1, 500)
+                 FROM session_transcripts
+                 WHERE content LIKE ?1
+                 ORDER BY created_at DESC
+                 LIMIT ?2",
+            )?;
+            let rows = stmt.query_map(rusqlite::params![like, limit], |row| {
+                Ok(serde_json::json!({
+                    "sessionKey": row.get::<_, Option<String>>(0)?,
+                    "project": row.get::<_, Option<String>>(1)?,
+                    "harness": row.get::<_, Option<String>>(2)?,
+                    "capturedAt": row.get::<_, String>(3)?,
+                    "snippet": row.get::<_, String>(4)?,
+                }))
+            })?;
+            Ok(rows.filter_map(Result::ok).collect::<Vec<_>>())
+        })
+        .await;
+
+    match result {
+        Ok(hits) => {
+            let count = hits.len();
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "query": query,
+                    "hits": hits,
+                    "count": count,
+                })),
+            )
+                .into_response()
+        }
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": error.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct SummaryExpandBody {
+    id: Option<String>,
+    include_transcript: Option<bool>,
+    transcript_char_limit: Option<i64>,
+}
+
+pub async fn summary_expand(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<SummaryExpandBody>,
+) -> axum::response::Response {
+    let id = body.id.unwrap_or_default().trim().to_string();
+    if id.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "id is required" })),
+        )
+            .into_response();
+    }
+    let include_transcript = body.include_transcript.unwrap_or(true);
+    let transcript_limit = body
+        .transcript_char_limit
+        .unwrap_or(2_000)
+        .clamp(200, 12_000);
+    let result = state
+        .pool
+        .read(move |conn| {
+            let summary = conn
+                .query_row(
+                    "SELECT id, project, depth, kind, content, token_count,
+                            earliest_at, latest_at, session_key, harness, agent_id, created_at
+                     FROM session_summaries
+                     WHERE id = ?1
+                     LIMIT 1",
+                    [&id],
+                    |row| {
+                        Ok(serde_json::json!({
+                            "id": row.get::<_, String>(0)?,
+                            "project": row.get::<_, Option<String>>(1)?,
+                            "depth": row.get::<_, i64>(2)?,
+                            "kind": row.get::<_, String>(3)?,
+                            "content": row.get::<_, String>(4)?,
+                            "tokenCount": row.get::<_, Option<i64>>(5)?,
+                            "earliestAt": row.get::<_, String>(6)?,
+                            "latestAt": row.get::<_, String>(7)?,
+                            "sessionKey": row.get::<_, Option<String>>(8)?,
+                            "harness": row.get::<_, Option<String>>(9)?,
+                            "agentId": row.get::<_, String>(10)?,
+                            "createdAt": row.get::<_, String>(11)?,
+                        }))
+                    },
+                )
+                .ok();
+            let Some(summary) = summary else {
+                return Ok(None);
+            };
+            let transcript = if include_transcript {
+                summary
+                    .get("sessionKey")
+                    .and_then(|value| value.as_str())
+                    .and_then(|session_key| {
+                        conn.query_row(
+                            "SELECT substr(content, 1, ?1)
+                             FROM session_transcripts
+                             WHERE session_key = ?2
+                             LIMIT 1",
+                            rusqlite::params![transcript_limit, session_key],
+                            |row| row.get::<_, String>(0),
+                        )
+                        .ok()
+                    })
+            } else {
+                None
+            };
+            Ok(Some(serde_json::json!({
+                "summary": summary,
+                "parents": [],
+                "children": [],
+                "transcript": transcript,
+            })))
+        })
+        .await;
+
+    match result {
+        Ok(Some(body)) => (StatusCode::OK, Json(body)).into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "summary node not found" })),
+        )
+            .into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": error.to_string() })),
+        )
+            .into_response(),
+    }
 }
 
 pub async fn summaries(

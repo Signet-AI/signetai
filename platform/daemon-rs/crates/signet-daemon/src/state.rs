@@ -2,8 +2,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::{collections::HashMap, time::SystemTime};
 
+use serde::{Deserialize, Serialize};
 use signet_core::config::DaemonConfig;
 use signet_core::db::DbPool;
+use signet_pipeline::document::DocumentHandle;
 use signet_pipeline::embedding::EmbeddingProvider;
 use signet_pipeline::provider::LlmProvider;
 use signet_pipeline::summary::SummaryHandle;
@@ -14,6 +16,27 @@ use tokio::sync::{Mutex, RwLock};
 
 use crate::auth::rate_limiter::AuthRateLimiter;
 use crate::auth::types::AuthMode;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OsAgentSession {
+    pub id: String,
+    pub server_id: String,
+    pub task: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub task_class: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub privacy: Option<String>,
+    pub status: String,
+    pub step: u32,
+    pub max_steps: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
 
 /// Runtime extraction provider resolution state, matching the JS daemon contract.
 #[derive(Debug, Clone)]
@@ -29,6 +52,174 @@ pub struct ExtractionRuntimeState {
     pub since: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct OpenClawHeartbeatData {
+    pub plugin_version: String,
+    pub hooks_registered: Vec<String>,
+    pub last_error: Option<String>,
+    pub latency_ms: f64,
+    pub total_succeeded: i64,
+    pub total_failed: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct OpenClawHeartbeat {
+    pub timestamp: String,
+    pub data: OpenClawHeartbeatData,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitRuntimeConfig {
+    pub enabled: bool,
+    pub auto_commit: bool,
+    pub auto_sync: bool,
+    pub sync_interval: u64,
+    pub remote: String,
+    pub branch: String,
+}
+
+impl GitRuntimeConfig {
+    pub fn load(base_path: &std::path::Path) -> Self {
+        let mut config = Self::default();
+        for name in ["agent.yaml", "AGENT.yaml"] {
+            let path = base_path.join(name);
+            let Ok(content) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            let Ok(value) = serde_yml::from_str::<serde_yml::Value>(&content) else {
+                continue;
+            };
+            let Some(git) = value
+                .as_mapping()
+                .and_then(|map| map.get(serde_yml::Value::String("git".into())))
+                .and_then(serde_yml::Value::as_mapping)
+            else {
+                continue;
+            };
+
+            if let Some(value) = yaml_bool(git, "enabled") {
+                config.enabled = value;
+            }
+            if let Some(value) = yaml_bool(git, "autoCommit") {
+                config.auto_commit = value;
+            }
+            if let Some(value) = yaml_bool(git, "autoSync") {
+                config.auto_sync = value;
+            }
+            if let Some(value) = yaml_u64(git, "syncInterval") {
+                config.sync_interval = value;
+            }
+            if let Some(value) = yaml_string(git, "remote").filter(|value| !value.is_empty()) {
+                config.remote = value;
+            }
+            if let Some(value) = yaml_string(git, "branch").filter(|value| !value.is_empty()) {
+                config.branch = value;
+            }
+            break;
+        }
+
+        if config.branch.is_empty() {
+            config.branch = detect_git_branch(base_path, &config.remote);
+        }
+        config
+    }
+
+    pub fn apply_patch(&mut self, body: &serde_json::Value) {
+        if let Some(value) = body.get("autoCommit").and_then(serde_json::Value::as_bool) {
+            self.auto_commit = value;
+        }
+        if let Some(value) = body.get("autoSync").and_then(serde_json::Value::as_bool) {
+            self.auto_sync = value;
+        }
+        if let Some(value) = body.get("syncInterval").and_then(serde_json::Value::as_u64) {
+            self.sync_interval = value;
+        }
+        if let Some(value) = body
+            .get("remote")
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.is_empty())
+        {
+            self.remote = value.to_string();
+        }
+        if let Some(value) = body
+            .get("branch")
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.is_empty())
+        {
+            self.branch = value.to_string();
+        }
+    }
+}
+
+impl Default for GitRuntimeConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            auto_commit: false,
+            auto_sync: false,
+            sync_interval: 300,
+            remote: "origin".to_string(),
+            branch: String::new(),
+        }
+    }
+}
+
+fn yaml_key(key: &str) -> serde_yml::Value {
+    serde_yml::Value::String(key.to_string())
+}
+
+fn yaml_string(map: &serde_yml::Mapping, key: &str) -> Option<String> {
+    map.get(&yaml_key(key))
+        .and_then(serde_yml::Value::as_str)
+        .map(ToOwned::to_owned)
+}
+
+fn yaml_bool(map: &serde_yml::Mapping, key: &str) -> Option<bool> {
+    match map.get(&yaml_key(key)) {
+        Some(value) => value
+            .as_bool()
+            .or_else(|| value.as_str().map(|raw| raw == "true")),
+        None => None,
+    }
+}
+
+fn yaml_u64(map: &serde_yml::Mapping, key: &str) -> Option<u64> {
+    map.get(&yaml_key(key))
+        .and_then(|value| value.as_u64().or_else(|| value.as_str()?.parse().ok()))
+}
+
+fn detect_git_branch(base_path: &std::path::Path, remote: &str) -> String {
+    if let Ok(output) = std::process::Command::new("git")
+        .args(["symbolic-ref", &format!("refs/remotes/{remote}/HEAD")])
+        .current_dir(base_path)
+        .output()
+    {
+        if output.status.success() {
+            let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            let prefix = format!("refs/remotes/{remote}/");
+            if let Some(branch) = raw.strip_prefix(&prefix) {
+                return branch.to_string();
+            }
+        }
+    }
+
+    if let Ok(output) = std::process::Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .current_dir(base_path)
+        .output()
+    {
+        if output.status.success() {
+            let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !branch.is_empty() && branch != "HEAD" {
+                return branch;
+            }
+        }
+    }
+
+    "main".to_string()
+}
+
 /// Shared application state passed to all route handlers.
 pub struct AppState {
     pub config: DaemonConfig,
@@ -41,6 +232,7 @@ pub struct AppState {
     pub extraction_worker_handle: Mutex<Option<WorkerHandle>>,
     pub summary_worker_handle: Mutex<Option<SummaryHandle>>,
     pub synthesis_worker_handle: Mutex<Option<SynthesisHandle>>,
+    pub document_worker_handle: Mutex<Option<DocumentHandle>>,
     pub extraction_worker_stats: RwLock<Option<SharedWorkerRuntimeStats>>,
     pub auth_mode: AuthMode,
     pub auth_secret: Option<Vec<u8>>,
@@ -52,6 +244,10 @@ pub struct AppState {
     pub dedup: DedupState,
     pub extraction_state: RwLock<Option<ExtractionRuntimeState>>,
     pub harness_last_seen: RwLock<HashMap<String, String>>,
+    pub openclaw_heartbeat: RwLock<Option<OpenClawHeartbeat>>,
+    pub git_config: RwLock<GitRuntimeConfig>,
+    pub secret_exec_jobs: RwLock<HashMap<String, serde_json::Value>>,
+    pub os_agent_sessions: RwLock<HashMap<String, OsAgentSession>>,
 }
 
 pub(crate) fn derive_initial_extraction_state(
@@ -121,6 +317,7 @@ impl AppState {
                     paused,
                 )
             });
+        let git_config = GitRuntimeConfig::load(&config.base_path);
 
         Self {
             config,
@@ -132,6 +329,7 @@ impl AppState {
             extraction_worker_handle: Mutex::new(None),
             summary_worker_handle: Mutex::new(None),
             synthesis_worker_handle: Mutex::new(None),
+            document_worker_handle: Mutex::new(None),
             extraction_worker_stats: RwLock::new(extraction_worker_stats),
             auth_mode,
             auth_secret,
@@ -142,6 +340,10 @@ impl AppState {
             dedup: DedupState::new(),
             extraction_state: RwLock::new(extraction_state),
             harness_last_seen: RwLock::new(HashMap::new()),
+            openclaw_heartbeat: RwLock::new(None),
+            git_config: RwLock::new(git_config),
+            secret_exec_jobs: RwLock::new(HashMap::new()),
+            os_agent_sessions: RwLock::new(HashMap::new()),
         }
     }
 

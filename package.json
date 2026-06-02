@@ -53,6 +53,7 @@
     "build:turbo": "turbo run build",
     "test:turbo": "turbo run test",
     "typecheck:turbo": "turbo run typecheck",
+    "check:rust-parity": "bun scripts/check-rust-daemon-parity.ts",
     "bench": "bun scripts/bench-memory.ts",
     "bench:ingest": "bun scripts/bench-memory.ts ingest",
     "bench:evaluate": "bun scripts/bench-memory.ts --resume run --from-phase search"

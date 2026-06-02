@@ -29,6 +29,14 @@ pub struct MostUsedParams {
     limit: Option<usize>,
 }
 
+#[derive(Deserialize)]
+pub struct SimilarParams {
+    id: Option<String>,
+    k: Option<usize>,
+    #[allow(dead_code)]
+    r#type: Option<String>,
+}
+
 #[derive(Serialize)]
 pub struct ListResponse {
     memories: Vec<serde_json::Value>,
@@ -150,6 +158,66 @@ pub async fn most_used(
         .unwrap_or_default();
 
     Json(serde_json::json!({ "memories": memories }))
+}
+
+// ---------------------------------------------------------------------------
+// GET /memory/similar
+// ---------------------------------------------------------------------------
+
+pub async fn similar(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<SimilarParams>,
+) -> impl IntoResponse {
+    let Some(id) = params.id.map(|id| id.trim().to_string()) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "id is required", "results": []})),
+        )
+            .into_response();
+    };
+    if id.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "id is required", "results": []})),
+        )
+            .into_response();
+    }
+    let _limit = params.k.unwrap_or(10).clamp(1, 100);
+
+    let has_embedding = state
+        .pool
+        .read(move |conn| {
+            Ok(conn
+                .prepare_cached(
+                    "SELECT 1
+                   FROM embeddings
+                  WHERE source_type = 'memory'
+                    AND source_id = ?1
+                  LIMIT 1",
+                )?
+                .exists(rusqlite::params![id])?)
+        })
+        .await;
+
+    match has_embedding {
+        Ok(true) => Json(serde_json::json!({"results": []})).into_response(),
+        Ok(false) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "error": "No embedding found for this memory",
+                "results": [],
+            })),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": format!("Similarity search failed: {err}"),
+                "results": [],
+            })),
+        )
+            .into_response(),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -283,6 +351,114 @@ pub async fn history(
             Json(serde_json::json!({"error": "Not found"})),
         )
             .into_response(),
+    }
+}
+
+/// GET /api/memory/review-queue
+pub async fn review_queue(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let result = state
+        .pool
+        .read(|conn| {
+            let mut stmt = conn.prepare_cached(
+                "SELECT h.id, h.memory_id, h.event, h.old_content, h.new_content,
+                        h.reason, h.metadata, h.created_at, h.session_id,
+                        m.content AS current_content, m.type AS memory_type,
+                        m.importance
+                 FROM memory_history h
+                 LEFT JOIN memories m ON m.id = h.memory_id
+                 WHERE h.event IN ('DEDUP', 'REVIEW_NEEDED', 'BLOCKED_DESTRUCTIVE')
+                   AND h.created_at > datetime('now', '-30 days')
+                 ORDER BY h.created_at DESC
+                 LIMIT 200",
+            )?;
+            let items = stmt
+                .query_map([], |row| {
+                    Ok(serde_json::json!({
+                        "id": row.get::<_, String>(0)?,
+                        "memory_id": row.get::<_, String>(1)?,
+                        "event": row.get::<_, String>(2)?,
+                        "old_content": row.get::<_, Option<String>>(3)?,
+                        "new_content": row.get::<_, Option<String>>(4)?,
+                        "reason": row.get::<_, Option<String>>(5)?,
+                        "metadata": row.get::<_, Option<String>>(6)?,
+                        "created_at": row.get::<_, String>(7)?,
+                        "session_id": row.get::<_, Option<String>>(8)?,
+                        "current_content": row.get::<_, Option<String>>(9)?,
+                        "memory_type": row.get::<_, Option<String>>(10)?,
+                        "importance": row.get::<_, Option<f64>>(11)?,
+                    }))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(serde_json::json!({"items": items}))
+        })
+        .await;
+
+    match result {
+        Ok(body) => (StatusCode::OK, Json(body)),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("{e}"), "items": []})),
+        ),
+    }
+}
+
+/// GET /api/memory/jobs/:id
+pub async fn job(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> impl IntoResponse {
+    let id = id.trim().to_string();
+    if id.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "job id is required"})),
+        );
+    }
+
+    let result = state
+        .pool
+        .read(move |conn| {
+            conn.query_row(
+                "SELECT id, memory_id, document_id, job_type, status,
+                        attempts, max_attempts, leased_at, completed_at,
+                        failed_at, error, created_at, updated_at
+                 FROM memory_jobs
+                 WHERE id = ?1
+                 LIMIT 1",
+                rusqlite::params![id],
+                |row| {
+                    Ok(serde_json::json!({
+                        "id": row.get::<_, String>(0)?,
+                        "memory_id": row.get::<_, Option<String>>(1)?,
+                        "document_id": row.get::<_, Option<String>>(2)?,
+                        "job_type": row.get::<_, String>(3)?,
+                        "status": row.get::<_, String>(4)?,
+                        "attempt_count": row.get::<_, i64>(5)?,
+                        "attempts": row.get::<_, i64>(5)?,
+                        "max_attempts": row.get::<_, i64>(6)?,
+                        "next_attempt_at": serde_json::Value::Null,
+                        "last_error": row.get::<_, Option<String>>(10)?,
+                        "last_error_code": serde_json::Value::Null,
+                        "error": row.get::<_, Option<String>>(10)?,
+                        "leased_at": row.get::<_, Option<String>>(7)?,
+                        "completed_at": row.get::<_, Option<String>>(8)?,
+                        "failed_at": row.get::<_, Option<String>>(9)?,
+                        "created_at": row.get::<_, String>(11)?,
+                        "updated_at": row.get::<_, String>(12)?,
+                    }))
+                },
+            )
+            .map_err(signet_core::CoreError::from)
+        })
+        .await;
+
+    match result {
+        Ok(body) => (StatusCode::OK, Json(body)),
+        Err(signet_core::CoreError::Db(rusqlite::Error::QueryReturnedNoRows)) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Job not found"})),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("{e}")})),
+        ),
     }
 }
 

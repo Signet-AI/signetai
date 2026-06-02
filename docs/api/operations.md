@@ -331,17 +331,24 @@ recreating `memories_fts` with the canonical `unicode61` tokenizer.
 
 ### POST /api/repair/retention-sweep
 
-Trigger a manual retention decay sweep. This endpoint is currently not wired
-to the pipeline worker and returns `501`.
+Trigger a bounded retention cleanup sweep immediately. This purges expired
+tombstones, old history rows, expired completed/dead jobs, orphaned graph links,
+and orphaned embeddings without waiting for the retention worker interval.
+Requires `admin` permission.
 
 **Response**
 
 ```json
 {
-  "action": "triggerRetentionSweep",
-  "success": false,
-  "affected": 0,
-  "message": "Use the maintenance worker for automated sweeps..."
+  "action": "retention_sweep",
+  "success": true,
+  "affected": 3,
+  "message": "retention sweep completed; 3 row(s) purged",
+  "details": {
+    "tombstones": 1,
+    "history": 1,
+    "completedJobs": 1
+  }
 }
 ```
 

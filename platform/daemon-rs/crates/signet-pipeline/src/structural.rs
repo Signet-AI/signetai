@@ -93,6 +93,19 @@ struct StructuralJob {
     attempts: i64,
 }
 
+#[derive(Debug, Clone)]
+struct EntityContext {
+    name: String,
+    agent_id: String,
+    aspects: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+struct MemoryFact {
+    id: String,
+    content: String,
+}
+
 /// Result of structural processing.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -228,25 +241,31 @@ async fn process_classify(
     for (entity_id, entity_jobs) in by_entity {
         // Load entity context and existing aspects
         let eid = entity_id.clone();
+        let aspect_entity_id = entity_id.clone();
         let context = pool
             .read(move |conn| {
-                let name: String = conn
+                let (name, agent_id): (String, String) = conn
                     .query_row(
-                        "SELECT name FROM entities WHERE id = ?1",
+                        "SELECT name, COALESCE(agent_id, 'default') FROM entities WHERE id = ?1",
                         rusqlite::params![eid],
-                        |r| r.get(0),
+                        |r| Ok((r.get(0)?, r.get(1)?)),
                     )
-                    .unwrap_or_default();
+                    .unwrap_or_else(|_| (String::new(), "default".to_string()));
 
-                let mut stmt =
-                    conn.prepare_cached("SELECT name FROM entity_aspects WHERE entity_id = ?1")?;
-                let eid2 = entity_id;
+                let mut stmt = conn.prepare_cached(
+                    "SELECT canonical_name FROM entity_aspects WHERE entity_id = ?1",
+                )?;
+                let eid2 = aspect_entity_id;
                 let aspects: Vec<String> = stmt
                     .query_map(rusqlite::params![eid2], |r| r.get(0))?
                     .filter_map(|r| r.ok())
                     .collect();
 
-                Ok((name, aspects))
+                Ok(EntityContext {
+                    name,
+                    agent_id,
+                    aspects,
+                })
             })
             .await
             .map_err(|e| e.to_string())?;
@@ -261,7 +280,7 @@ async fn process_classify(
             continue;
         }
 
-        let facts = load_memory_content(pool, &memory_ids).await?;
+        let facts = load_memory_facts(pool, &memory_ids).await?;
 
         if facts.is_empty() {
             for job in &entity_jobs {
@@ -271,7 +290,11 @@ async fn process_classify(
         }
 
         // Call LLM for classification
-        let prompt = build_classify_prompt(&context.0, &context.1, &facts);
+        let fact_contents = facts
+            .iter()
+            .map(|fact| fact.content.clone())
+            .collect::<Vec<_>>();
+        let prompt = build_classify_prompt(&context.name, &context.aspects, &fact_contents);
         let opts = GenerateOpts {
             timeout_ms: Some(config.timeout_ms),
             max_tokens: Some(config.max_tokens),
@@ -284,9 +307,8 @@ async fn process_classify(
             .map_err(|e| format!("LLM classify failed: {e}"))?;
 
         let parsed = parse_classify_output(&raw.text);
-        aspects_created += parsed.len();
-
-        // TODO: Create/update entity_aspects rows, update entity_attributes
+        aspects_created +=
+            persist_classify_results(pool, &entity_id, &context, &facts, &parsed).await?;
 
         for job in &entity_jobs {
             let _ = complete_structural_job(pool, &job.id, "classified").await;
@@ -301,27 +323,139 @@ async fn process_classify(
 }
 
 /// Load memory content for a set of memory IDs.
-async fn load_memory_content(pool: &DbPool, ids: &[String]) -> Result<Vec<String>, String> {
+async fn load_memory_facts(pool: &DbPool, ids: &[String]) -> Result<Vec<MemoryFact>, String> {
     let mids: Vec<String> = ids.to_vec();
     pool.read(move |conn| {
-        let placeholders: Vec<String> = (0..mids.len()).map(|i| format!("?{}", i + 1)).collect();
-        let sql = format!(
-            "SELECT content FROM memories WHERE id IN ({}) AND deleted = 0",
-            placeholders.join(",")
-        );
-        let mut stmt = conn.prepare(&sql)?;
-        let params: Vec<&dyn rusqlite::types::ToSql> = mids
-            .iter()
-            .map(|s| s as &dyn rusqlite::types::ToSql)
-            .collect();
-        let facts: Vec<String> = stmt
-            .query_map(params.as_slice(), |r| r.get(0))?
-            .filter_map(|r| r.ok())
-            .collect();
+        let mut facts = Vec::new();
+        let mut stmt = conn.prepare_cached(
+            "SELECT id, content FROM memories
+             WHERE id = ?1 AND COALESCE(is_deleted, 0) = 0",
+        )?;
+        for id in mids {
+            if let Ok(fact) = stmt.query_row(rusqlite::params![id], |row| {
+                Ok(MemoryFact {
+                    id: row.get(0)?,
+                    content: row.get(1)?,
+                })
+            }) {
+                facts.push(fact);
+            }
+        }
         Ok(facts)
     })
     .await
     .map_err(|e| e.to_string())
+}
+
+fn canonical_name(value: &str) -> String {
+    value
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_lowercase()
+}
+
+fn normalized_content(value: &str) -> String {
+    canonical_name(value)
+}
+
+async fn persist_classify_results(
+    pool: &DbPool,
+    entity_id: &str,
+    context: &EntityContext,
+    facts: &[MemoryFact],
+    items: &[ClassifyItem],
+) -> Result<usize, String> {
+    let entity_id = entity_id.to_string();
+    let agent_id = context.agent_id.clone();
+    let facts = facts.to_vec();
+    let items = items.to_vec();
+    pool.write(signet_core::db::Priority::Low, move |conn| {
+        let ts = chrono::Utc::now().to_rfc3339();
+        let mut written = 0usize;
+        for item in items {
+            let aspect_name = item.aspect.trim();
+            if aspect_name.is_empty() {
+                continue;
+            }
+            let Some(fact) = item
+                .fact_index
+                .checked_sub(1)
+                .and_then(|index| facts.get(index))
+            else {
+                continue;
+            };
+            let canonical = canonical_name(aspect_name);
+            let aspect_id = match conn.query_row(
+                "SELECT id FROM entity_aspects WHERE entity_id = ?1 AND canonical_name = ?2",
+                rusqlite::params![entity_id, canonical],
+                |row| row.get::<_, String>(0),
+            ) {
+                Ok(id) => id,
+                Err(rusqlite::Error::QueryReturnedNoRows) => {
+                    let id = uuid::Uuid::new_v4().to_string();
+                    conn.execute(
+                        "INSERT INTO entity_aspects
+                         (id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at)
+                         VALUES (?1, ?2, ?3, ?4, ?5, 0.6, ?6, ?6)",
+                        rusqlite::params![id, entity_id, agent_id, aspect_name, canonical, ts],
+                    )?;
+                    id
+                }
+                Err(error) => return Err(error.into()),
+            };
+            conn.execute(
+                "UPDATE entity_aspects SET name = ?1, updated_at = ?2
+                 WHERE id = ?3",
+                rusqlite::params![aspect_name, ts, aspect_id],
+            )?;
+            let kind = if item.kind.trim().eq_ignore_ascii_case("constraint") {
+                "constraint"
+            } else {
+                "attribute"
+            };
+            let normalized = normalized_content(&fact.content);
+            let exists: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM entity_attributes
+                 WHERE aspect_id = ?1
+                   AND memory_id = ?2
+                   AND normalized_content = ?3
+                   AND status = 'active'",
+                rusqlite::params![aspect_id, fact.id, normalized],
+                |row| row.get(0),
+            )?;
+            if exists > 0 {
+                continue;
+            }
+            conn.execute(
+                "INSERT INTO entity_attributes
+                 (id, aspect_id, agent_id, memory_id, kind, content, normalized_content,
+                  confidence, importance, status, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0.7, 0.5, 'active', ?8, ?8)",
+                rusqlite::params![
+                    uuid::Uuid::new_v4().to_string(),
+                    aspect_id,
+                    agent_id,
+                    fact.id,
+                    kind,
+                    fact.content,
+                    normalized,
+                    ts
+                ],
+            )?;
+            written += 1;
+        }
+        Ok(serde_json::json!({ "written": written }))
+    })
+    .await
+    .map_err(|e| e.to_string())
+    .and_then(|value| {
+        value
+            .get("written")
+            .and_then(|value| value.as_u64())
+            .map(|value| value as usize)
+            .ok_or_else(|| "classify persistence result missing written count".to_string())
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -470,10 +604,14 @@ async fn process_dependency(
             continue;
         }
 
-        let facts = load_memory_content(pool, &memory_ids).await?;
+        let facts = load_memory_facts(pool, &memory_ids).await?;
+        let fact_contents = facts
+            .iter()
+            .map(|fact| fact.content.clone())
+            .collect::<Vec<_>>();
 
         // Call LLM for dependency extraction
-        let prompt = build_dependency_prompt(&entity_name, &facts);
+        let prompt = build_dependency_prompt(&entity_name, &fact_contents);
         let opts = GenerateOpts {
             timeout_ms: Some(config.timeout_ms),
             max_tokens: Some(config.max_tokens),
@@ -486,9 +624,7 @@ async fn process_dependency(
             .map_err(|e| format!("LLM dependency failed: {e}"))?;
 
         let parsed = parse_dependency_output(&raw.text);
-        deps_created += parsed.len();
-
-        // TODO: Create entity_dependencies rows with validated types
+        deps_created += persist_dependency_results(pool, &entity_id, &parsed).await?;
 
         for job in &entity_jobs {
             let _ = complete_structural_job(pool, &job.id, "dependencies extracted").await;
@@ -499,6 +635,119 @@ async fn process_dependency(
         aspects_created: 0,
         dependencies_created: deps_created,
         jobs_processed: job_count,
+    })
+}
+
+async fn persist_dependency_results(
+    pool: &DbPool,
+    entity_id: &str,
+    items: &[DependencyItem],
+) -> Result<usize, String> {
+    let entity_id = entity_id.to_string();
+    let items = items.to_vec();
+    pool.write(signet_core::db::Priority::Low, move |conn| {
+        let ts = chrono::Utc::now().to_rfc3339();
+        let (source_name, agent_id): (String, String) = conn.query_row(
+            "SELECT name, COALESCE(agent_id, 'default') FROM entities WHERE id = ?1",
+            rusqlite::params![entity_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        let mut written = 0usize;
+        for item in items {
+            let relationship = item.relationship.trim();
+            if !DEPENDENCY_TYPES.contains(&relationship) {
+                continue;
+            }
+            let target_name = item.target.trim();
+            if target_name.is_empty() || target_name.eq_ignore_ascii_case(&source_name) {
+                continue;
+            }
+            let target_canonical = canonical_name(target_name);
+            let target_id = match conn.query_row(
+                "SELECT id FROM entities WHERE name = ?1 OR canonical_name = ?2 LIMIT 1",
+                rusqlite::params![target_name, target_canonical],
+                |row| row.get::<_, String>(0),
+            ) {
+                Ok(id) => id,
+                Err(rusqlite::Error::QueryReturnedNoRows) => {
+                    let id = uuid::Uuid::new_v4().to_string();
+                    conn.execute(
+                        "INSERT INTO entities
+                         (id, name, entity_type, description, created_at, updated_at,
+                          agent_id, canonical_name)
+                         VALUES (?1, ?2, 'unknown', NULL, ?3, ?3, ?4, ?5)",
+                        rusqlite::params![id, target_name, ts, agent_id, target_canonical],
+                    )?;
+                    id
+                }
+                Err(error) => return Err(error.into()),
+            };
+            let incoming = item
+                .direction
+                .as_deref()
+                .is_some_and(|direction| direction.eq_ignore_ascii_case("incoming"));
+            let (source_entity_id, target_entity_id) = if incoming {
+                (target_id, entity_id.clone())
+            } else {
+                (entity_id.clone(), target_id)
+            };
+            let exists: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM entity_dependencies
+                 WHERE source_entity_id = ?1
+                   AND target_entity_id = ?2
+                   AND agent_id = ?3
+                   AND dependency_type = ?4",
+                rusqlite::params![source_entity_id, target_entity_id, agent_id, relationship],
+                |row| row.get(0),
+            )?;
+            if exists > 0 {
+                conn.execute(
+                    "UPDATE entity_dependencies
+                     SET reason = COALESCE(?1, reason),
+                         confidence = COALESCE(confidence, 0.7),
+                         updated_at = ?2
+                     WHERE source_entity_id = ?3
+                       AND target_entity_id = ?4
+                       AND agent_id = ?5
+                       AND dependency_type = ?6",
+                    rusqlite::params![
+                        item.reason.as_deref(),
+                        ts,
+                        source_entity_id,
+                        target_entity_id,
+                        agent_id,
+                        relationship
+                    ],
+                )?;
+                continue;
+            }
+            conn.execute(
+                "INSERT INTO entity_dependencies
+                 (id, source_entity_id, target_entity_id, agent_id, dependency_type,
+                  strength, confidence, reason, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, 0.7, 0.7, ?6, ?7, ?7)",
+                rusqlite::params![
+                    uuid::Uuid::new_v4().to_string(),
+                    source_entity_id,
+                    target_entity_id,
+                    agent_id,
+                    relationship,
+                    item.reason.as_deref(),
+                    ts
+                ],
+            )?;
+            written += 1;
+        }
+        Ok(serde_json::json!({ "written": written }))
+    })
+    .await
+    .map_err(|e| e.to_string())
+    .and_then(|value| {
+        value
+            .get("written")
+            .and_then(|value| value.as_u64())
+            .map(|value| value as usize)
+            .ok_or_else(|| "dependency persistence result missing written count".to_string())
     })
 }
 
@@ -580,25 +829,18 @@ Only extract clear, explicit relationships. Respond with only the JSON array."#
 // Output parsing
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 struct ClassifyItem {
-    #[allow(dead_code)]
     fact_index: usize,
-    #[allow(dead_code)]
     aspect: String,
-    #[allow(dead_code)]
     kind: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 struct DependencyItem {
-    #[allow(dead_code)]
     target: String,
-    #[allow(dead_code)]
     relationship: String,
-    #[allow(dead_code)]
     direction: Option<String>,
-    #[allow(dead_code)]
     reason: Option<String>,
 }
 
@@ -683,6 +925,7 @@ async fn complete_structural_job(pool: &DbPool, job_id: &str, result: &str) -> R
 #[cfg(test)]
 mod tests {
     use super::*;
+    use signet_core::db::Priority;
 
     #[test]
     fn valid_dependency_types() {
@@ -709,5 +952,188 @@ mod tests {
         assert!(prompt.contains("Database"));
         assert!(prompt.contains("uses"));
         assert!(prompt.contains("requires"));
+    }
+
+    fn open_test_pool() -> (DbPool, tokio::task::JoinHandle<()>) {
+        let path =
+            std::env::temp_dir().join(format!("signet-structural-{}.db", uuid::Uuid::new_v4()));
+        DbPool::open(&path).expect("open test db")
+    }
+
+    #[tokio::test]
+    async fn classify_persistence_writes_aspects_and_attributes() {
+        let (pool, handle) = open_test_pool();
+        pool.write(Priority::High, |conn| {
+            let now = chrono::Utc::now().to_rfc3339();
+            conn.execute(
+                "INSERT INTO entities
+                 (id, name, entity_type, created_at, updated_at, agent_id, canonical_name)
+                 VALUES ('entity-user', 'User', 'person', ?1, ?1, 'agent-a', 'user')",
+                rusqlite::params![now],
+            )?;
+            conn.execute(
+                "INSERT INTO memories
+                 (id, type, content, created_at, updated_at, updated_by, vector_clock,
+                  agent_id, is_deleted)
+                 VALUES ('memory-preference', 'fact', 'User prefers quiet tools.', ?1, ?1,
+                         'test', '{}', 'agent-a', 0)",
+                rusqlite::params![now],
+            )?;
+            Ok(serde_json::Value::Null)
+        })
+        .await
+        .expect("seed classify fixtures");
+
+        let count = persist_classify_results(
+            &pool,
+            "entity-user",
+            &EntityContext {
+                name: "User".to_string(),
+                agent_id: "agent-a".to_string(),
+                aspects: vec![],
+            },
+            &[MemoryFact {
+                id: "memory-preference".to_string(),
+                content: "User prefers quiet tools.".to_string(),
+            }],
+            &[ClassifyItem {
+                fact_index: 1,
+                aspect: "Preferences".to_string(),
+                kind: "attribute".to_string(),
+            }],
+        )
+        .await
+        .expect("persist classify results");
+        assert_eq!(count, 1);
+
+        let counts = pool
+            .read(|conn| {
+                let aspects: i64 =
+                    conn.query_row("SELECT COUNT(*) FROM entity_aspects", [], |row| row.get(0))?;
+                let attrs: i64 =
+                    conn.query_row("SELECT COUNT(*) FROM entity_attributes", [], |row| {
+                        row.get(0)
+                    })?;
+                let kind: String =
+                    conn.query_row("SELECT kind FROM entity_attributes", [], |row| row.get(0))?;
+                Ok(serde_json::json!({
+                    "aspects": aspects,
+                    "attrs": attrs,
+                    "kind": kind,
+                }))
+            })
+            .await
+            .expect("read classify rows");
+        assert_eq!(counts["aspects"], 1);
+        assert_eq!(counts["attrs"], 1);
+        assert_eq!(counts["kind"], "attribute");
+
+        let duplicate_count = persist_classify_results(
+            &pool,
+            "entity-user",
+            &EntityContext {
+                name: "User".to_string(),
+                agent_id: "agent-a".to_string(),
+                aspects: vec!["preferences".to_string()],
+            },
+            &[MemoryFact {
+                id: "memory-preference".to_string(),
+                content: "User prefers quiet tools.".to_string(),
+            }],
+            &[ClassifyItem {
+                fact_index: 1,
+                aspect: "Preferences".to_string(),
+                kind: "attribute".to_string(),
+            }],
+        )
+        .await
+        .expect("persist duplicate classify results");
+        assert_eq!(duplicate_count, 0);
+
+        drop(pool);
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn dependency_persistence_writes_target_and_upserts_edge() {
+        let (pool, handle) = open_test_pool();
+        pool.write(Priority::High, |conn| {
+            let now = chrono::Utc::now().to_rfc3339();
+            conn.execute(
+                "INSERT INTO entities
+                 (id, name, entity_type, created_at, updated_at, agent_id, canonical_name)
+                 VALUES ('entity-service', 'Service', 'system', ?1, ?1, 'agent-a', 'service')",
+                rusqlite::params![now],
+            )?;
+            Ok(serde_json::Value::Null)
+        })
+        .await
+        .expect("seed dependency fixtures");
+
+        let count = persist_dependency_results(
+            &pool,
+            "entity-service",
+            &[DependencyItem {
+                target: "Database".to_string(),
+                relationship: "requires".to_string(),
+                direction: Some("outgoing".to_string()),
+                reason: Some("Service reads stored state.".to_string()),
+            }],
+        )
+        .await
+        .expect("persist dependency results");
+        assert_eq!(count, 1);
+
+        let rows = pool
+            .read(|conn| {
+                let target_name: String = conn.query_row(
+                    "SELECT e.name FROM entity_dependencies d
+                     JOIN entities e ON e.id = d.target_entity_id
+                     WHERE d.source_entity_id = 'entity-service'",
+                    [],
+                    |row| row.get(0),
+                )?;
+                let reason: String =
+                    conn.query_row("SELECT reason FROM entity_dependencies", [], |row| {
+                        row.get(0)
+                    })?;
+                Ok(serde_json::json!({
+                    "target": target_name,
+                    "reason": reason,
+                }))
+            })
+            .await
+            .expect("read dependency rows");
+        assert_eq!(rows["target"], "Database");
+        assert_eq!(rows["reason"], "Service reads stored state.");
+
+        let duplicate_count = persist_dependency_results(
+            &pool,
+            "entity-service",
+            &[DependencyItem {
+                target: "Database".to_string(),
+                relationship: "requires".to_string(),
+                direction: Some("outgoing".to_string()),
+                reason: Some("Updated reason.".to_string()),
+            }],
+        )
+        .await
+        .expect("persist duplicate dependency results");
+        assert_eq!(duplicate_count, 0);
+
+        let reason = pool
+            .read(|conn| {
+                let reason: String =
+                    conn.query_row("SELECT reason FROM entity_dependencies", [], |row| {
+                        row.get(0)
+                    })?;
+                Ok(serde_json::json!(reason))
+            })
+            .await
+            .expect("read updated dependency");
+        assert_eq!(reason, "Updated reason.");
+
+        drop(pool);
+        handle.abort();
     }
 }

@@ -23,6 +23,9 @@ RUST_DAEMON="$DAEMON_RS_DIR/target/release/signet-daemon"
 RUST_SHADOW="$DAEMON_RS_DIR/target/release/signet-shadow"
 
 PID_DIR="$AGENTS_DIR/.daemon"
+PROXY_PORT="${SIGNET_SHADOW_PROXY_PORT:-3849}"
+PRIMARY_PORT="${SIGNET_SHADOW_PRIMARY_PORT:-3850}"
+SHADOW_PORT="${SIGNET_SHADOW_RUST_PORT:-3851}"
 
 case "${1:-help}" in
   start)
@@ -37,6 +40,7 @@ case "${1:-help}" in
     echo "Setting up isolated shadow DB..."
     mkdir -p "$SHADOW_DB_DIR/memory"
     mkdir -p "$SHADOW_DB_DIR/.daemon/logs"
+    mkdir -p "$PID_DIR"
 
     # Copy live DB to shadow (isolated copy)
     if [ -f "$LIVE_DB" ]; then
@@ -52,57 +56,61 @@ case "${1:-help}" in
     # Copy agent.yaml to shadow
     [ -f "$AGENTS_DIR/agent.yaml" ] && cp "$AGENTS_DIR/agent.yaml" "$SHADOW_DB_DIR/" || true
 
-    # Start TS daemon on :3850 (if not already running)
-    if curl -s http://localhost:3850/health | grep -q '"ok"' 2>/dev/null; then
-      echo "TS daemon already running on :3850"
+    # Start TS daemon on the primary port (if not already running)
+    if curl -s "http://localhost:$PRIMARY_PORT/health" | grep -q '"ok"' 2>/dev/null; then
+      echo "TS daemon already running on :$PRIMARY_PORT"
     else
-      echo "Starting TS daemon on :3850..."
-      (cd "$REPO_ROOT/platform/daemon" && bun src/daemon.ts &) 2>/dev/null
-      echo $! > "$PID_DIR/ts-daemon.pid"
+      echo "Starting TS daemon on :$PRIMARY_PORT..."
+      (
+        cd "$REPO_ROOT/platform/daemon"
+        nohup env SIGNET_PATH="$AGENTS_DIR" SIGNET_PORT="$PRIMARY_PORT" SIGNET_BIND=127.0.0.1 \
+          bun src/daemon.ts >"$PID_DIR/ts-daemon.log" 2>&1 &
+        echo $! > "$PID_DIR/ts-daemon.pid"
+      )
       sleep 3
     fi
 
-    # Start Rust daemon on :3851 (shadow, isolated DB)
-    echo "Starting Rust daemon on :3851 (shadow)..."
-    SIGNET_PATH="$SHADOW_DB_DIR" SIGNET_PORT=3851 SIGNET_BIND=127.0.0.1 \
-      "$RUST_DAEMON" &
+    # Start Rust daemon on the shadow port (shadow, isolated DB)
+    echo "Starting Rust daemon on :$SHADOW_PORT (shadow)..."
+    nohup env SIGNET_PATH="$SHADOW_DB_DIR" SIGNET_PORT="$SHADOW_PORT" SIGNET_BIND=127.0.0.1 \
+      "$RUST_DAEMON" >"$PID_DIR/rust-shadow.log" 2>&1 &
     echo $! > "$PID_DIR/rust-shadow.pid"
     sleep 2
 
     # Verify both daemons
     echo ""
     echo "Verifying daemons..."
-    echo -n "  TS  (:3850): "
-    curl -s http://localhost:3850/health | head -c 100
+    echo -n "  TS  (:$PRIMARY_PORT): "
+    curl -s "http://localhost:$PRIMARY_PORT/health" | head -c 100
     echo ""
-    echo -n "  Rust (:3851): "
-    curl -s http://localhost:3851/health | head -c 100
+    echo -n "  Rust (:$SHADOW_PORT): "
+    curl -s "http://localhost:$SHADOW_PORT/health" | head -c 100
     echo ""
 
-    # Start shadow proxy on :3849
+    # Start shadow proxy on the proxy port
     echo ""
-    echo "Starting shadow proxy on :3849..."
-    SIGNET_PARITY_RULES="$DAEMON_RS_DIR/contracts/parity-rules.json" \
+    echo "Starting shadow proxy on :$PROXY_PORT..."
+    nohup env SIGNET_PATH="$AGENTS_DIR" SIGNET_PARITY_RULES="$DAEMON_RS_DIR/contracts/parity-rules.json" \
       "$RUST_SHADOW" \
-        --proxy-port 3849 \
-        --primary-port 3850 \
-        --shadow-port 3851 &
+        --proxy-port "$PROXY_PORT" \
+        --primary-port "$PRIMARY_PORT" \
+        --shadow-port "$SHADOW_PORT" >"$PID_DIR/shadow-proxy.log" 2>&1 &
     echo $! > "$PID_DIR/shadow-proxy.pid"
     sleep 1
 
     echo ""
     echo "=== Shadow Replay Running ==="
     echo ""
-    echo "  Proxy (use this):  http://localhost:3849"
-    echo "  Primary (TS):      http://localhost:3850"
-    echo "  Shadow (Rust):     http://localhost:3851"
+    echo "  Proxy (use this):  http://localhost:$PROXY_PORT"
+    echo "  Primary (TS):      http://localhost:$PRIMARY_PORT"
+    echo "  Shadow (Rust):     http://localhost:$SHADOW_PORT"
     echo ""
     echo "  Divergence log:    $AGENTS_DIR/.daemon/logs/shadow-divergences.jsonl"
     echo ""
     echo "  To stop:    $0 stop"
     echo "  To analyze: $0 analyze"
     echo ""
-    echo "Point your connectors/tools at port 3849 instead of 3850 to"
+    echo "Point your connectors/tools at port $PROXY_PORT instead of $PRIMARY_PORT to"
     echo "exercise shadow comparison during normal usage."
     ;;
 

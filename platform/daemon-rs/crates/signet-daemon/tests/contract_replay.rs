@@ -8,6 +8,7 @@
 //!   cargo build -p signet-daemon
 //!   cargo test -p signet-daemon --test contract_replay -- --ignored
 
+use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::time::Duration;
 
@@ -93,6 +94,7 @@ impl TestServer {
             .env("SIGNET_PORT", &port_str)
             .env("SIGNET_HOST", "127.0.0.1")
             .env("SIGNET_BIND", "127.0.0.1")
+            .env("CODEX_HOME", tmpdir.path().join("codex"))
             .env("RUST_LOG", "warn")
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -136,6 +138,178 @@ impl TestServer {
         self._tmpdir.path().join("memory/memories.db")
     }
 
+    fn seed_memory_maintenance_fixture(&self) {
+        let conn = rusqlite::Connection::open(self.db_path()).expect("open replay db");
+        conn.busy_timeout(Duration::from_secs(5)).unwrap();
+        let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
+        conn.execute(
+            "INSERT INTO memories
+             (id, type, content, content_hash, confidence, importance, tags, who, project,
+              created_at, updated_at, updated_by, is_deleted, version, agent_id)
+             VALUES
+             (?1, 'fact', ?2, ?3, 1.0, 0.5, 'rust,parity', 'contract-replay', 'signet',
+              ?4, ?4, 'contract-replay', 0, 1, 'default')",
+            rusqlite::params![
+                "mem-maintenance-replay",
+                "Memory maintenance replay starts here.",
+                "memory-maintenance-replay-hash",
+                now,
+            ],
+        )
+        .expect("seed maintenance memory");
+        conn.execute(
+            "INSERT INTO memory_history
+             (id, memory_id, event, old_content, new_content, changed_by, reason,
+              metadata, created_at, session_id)
+             VALUES
+             ('history-maintenance-review', 'mem-maintenance-replay',
+              'REVIEW_NEEDED', NULL, 'Memory maintenance replay starts here.',
+              'contract-replay', 'needs review', '{\"source\":\"contract\"}', ?1,
+              'session-maintenance')",
+            rusqlite::params![now],
+        )
+        .expect("seed review queue history");
+        conn.execute(
+            "INSERT INTO memory_jobs
+             (id, memory_id, document_id, job_type, status, attempts, max_attempts,
+              error, created_at, updated_at)
+             VALUES
+             ('job-maintenance-replay', 'mem-maintenance-replay', NULL,
+              'extract', 'failed', 2, 3, 'provider unavailable', ?1, ?1)",
+            rusqlite::params![now],
+        )
+        .expect("seed memory job");
+    }
+
+    fn seed_deduplicate_fixture(&self) {
+        let conn = rusqlite::Connection::open(self.db_path()).expect("open replay db");
+        conn.busy_timeout(Duration::from_secs(5)).unwrap();
+        conn.execute("DROP INDEX IF EXISTS idx_memories_content_hash_unique", [])
+            .expect("drop unique content hash index for legacy duplicate fixture");
+        let now = chrono::Utc::now().to_rfc3339();
+        let rows = [
+            (
+                "mem-dedup-keeper",
+                "Duplicate replay content.",
+                "dedup-replay-hash",
+                "alpha",
+                0.9_f64,
+                4_i64,
+                "default",
+            ),
+            (
+                "mem-dedup-loser",
+                "Duplicate replay content.",
+                "dedup-replay-hash",
+                "beta",
+                0.2_f64,
+                0_i64,
+                "default",
+            ),
+            (
+                "mem-dedup-other-agent",
+                "Duplicate replay content.",
+                "dedup-replay-hash",
+                "gamma",
+                0.8_f64,
+                5_i64,
+                "other-agent",
+            ),
+        ];
+        for row in rows {
+            conn.execute(
+                "INSERT INTO memories
+                 (id, type, content, normalized_content, content_hash, confidence, importance,
+                  tags, who, project, created_at, updated_at, updated_by, is_deleted, pinned,
+                  manual_override, access_count, update_count, version, agent_id, visibility)
+                 VALUES
+                 (?1, 'fact', ?2, ?2, ?3, 1.0, ?5, ?4, 'contract-replay', 'signet',
+                  ?6, ?6, 'contract-replay', 0, 0, 0, ?7, 0, 1, ?8, 'global')",
+                rusqlite::params![row.0, row.1, row.2, row.3, row.4, now, row.5, row.6],
+            )
+            .expect("seed dedupe memory");
+        }
+    }
+
+    fn seed_mcp_analytics_fixture(&self) {
+        let conn = rusqlite::Connection::open(self.db_path()).expect("open replay db");
+        conn.busy_timeout(Duration::from_secs(5)).unwrap();
+        let now = chrono::Utc::now().to_rfc3339();
+        let rows = [
+            (
+                "inv-mcp-1",
+                "srv-a",
+                "search",
+                "default",
+                "mcp",
+                100,
+                1,
+                None,
+            ),
+            (
+                "inv-mcp-2",
+                "srv-a",
+                "search",
+                "default",
+                "agent",
+                200,
+                1,
+                None,
+            ),
+            (
+                "inv-mcp-3",
+                "srv-a",
+                "create",
+                "default",
+                "mcp",
+                300,
+                0,
+                Some("timeout"),
+            ),
+            ("inv-mcp-4", "srv-b", "list", "default", "cli", 50, 1, None),
+            (
+                "inv-mcp-other",
+                "srv-a",
+                "search",
+                "agent-b",
+                "mcp",
+                500,
+                1,
+                None,
+            ),
+        ];
+        for row in rows {
+            conn.execute(
+                "INSERT INTO mcp_invocations
+                 (id, server_id, tool_name, agent_id, source, latency_ms, success, error_text, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                rusqlite::params![row.0, row.1, row.2, row.3, row.4, row.5, row.6, row.7, now],
+            )
+            .expect("seed MCP invocation");
+        }
+    }
+
+    fn seed_reflection_fixture(&self) {
+        let conn = rusqlite::Connection::open(self.db_path()).expect("open replay db");
+        conn.busy_timeout(Duration::from_secs(5)).unwrap();
+        let now = chrono::Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO daily_reflections
+             (id, agent_id, date, summary, patterns, question, memory_ids, summary_ids, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, '[]', '[]', ?7)",
+            rusqlite::params![
+                "reflection-answer-replay",
+                "agent-r",
+                "2026-06-02",
+                "Reflection replay summary",
+                "[\"parity\"]",
+                "What did the replay prove?",
+                now,
+            ],
+        )
+        .expect("seed reflection");
+    }
+
     fn seed_knowledge_expand_fixture(&self) {
         let conn = rusqlite::Connection::open(self.db_path()).expect("open replay db");
         conn.busy_timeout(Duration::from_secs(5)).unwrap();
@@ -177,6 +351,134 @@ impl TestServer {
         ).expect("seed session summary");
     }
 
+    fn seed_knowledge_navigation_fixture(&self) {
+        let conn = rusqlite::Connection::open(self.db_path()).expect("open replay db");
+        conn.busy_timeout(Duration::from_secs(5)).unwrap();
+        conn.execute_batch(
+            r#"INSERT INTO entities
+               (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
+               VALUES
+               ('entity-nicholai', 'Nicholai', 'nicholai', 'person', 'default', 10,
+                '2026-04-19T00:00:00.000Z', '2026-04-19T00:00:00.000Z');
+
+               INSERT INTO entity_aspects
+               (id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at)
+               VALUES
+               ('aspect-food', 'entity-nicholai', 'default', 'food', 'food', 0.8,
+                '2026-04-19T00:00:00.000Z', '2026-04-19T00:00:00.000Z');
+
+               INSERT INTO entity_attributes
+               (id, aspect_id, agent_id, kind, content, normalized_content,
+                group_key, claim_key, confidence, importance, status, created_at, updated_at)
+               VALUES
+               ('attr-fav-old', 'aspect-food', 'default', 'attribute',
+                'Nicholai used to like Sushi Den.', 'nicholai used to like sushi den.',
+                'restaurants', 'favorite_restaurant', 0.9, 0.7, 'superseded',
+                '2025-01-01T00:00:00.000Z', '2025-01-01T00:00:00.000Z'),
+               ('attr-fav-new', 'aspect-food', 'default', 'attribute',
+                'Nicholai currently prefers Temaki Den.', 'nicholai currently prefers temaki den.',
+                'restaurants', 'favorite_restaurant', 0.9, 0.7, 'active',
+                '2026-04-19T00:00:00.000Z', '2026-04-19T00:00:00.000Z'),
+               ('attr-count', 'aspect-food', 'default', 'attribute',
+                'Nicholai has tried four Korean restaurants.', 'nicholai has tried four korean restaurants.',
+                'restaurants', 'korean_restaurants_tried_count', 0.9, 0.7, 'active',
+                '2026-04-19T00:00:00.000Z', '2026-04-19T00:00:00.000Z'),
+               ('attr-allergy', 'aspect-food', 'default', 'attribute',
+                'Nicholai has no known shellfish allergy.', 'nicholai has no known shellfish allergy.',
+                'dietary_constraints', 'shellfish_allergy', 0.9, 0.7, 'active',
+                '2026-04-19T00:00:00.000Z', '2026-04-19T00:00:00.000Z');"#,
+        )
+        .expect("seed knowledge navigation fixture");
+    }
+
+    fn seed_knowledge_health_hygiene_fixture(&self) {
+        let conn = rusqlite::Connection::open(self.db_path()).expect("open replay db");
+        conn.busy_timeout(Duration::from_secs(5)).unwrap();
+        conn.execute_batch(
+            r#"CREATE TABLE IF NOT EXISTS entity_communities (
+                   id TEXT PRIMARY KEY,
+                   agent_id TEXT NOT NULL,
+                   name TEXT,
+                   cohesion REAL DEFAULT 0.0,
+                   member_count INTEGER DEFAULT 0,
+                   created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+               );
+
+               CREATE TABLE IF NOT EXISTS predictor_comparisons (
+                   id TEXT PRIMARY KEY,
+                   session_key TEXT NOT NULL,
+                   agent_id TEXT NOT NULL DEFAULT 'default',
+                   predictor_ndcg REAL NOT NULL,
+                   baseline_ndcg REAL NOT NULL,
+                   predictor_won INTEGER NOT NULL,
+                   margin REAL NOT NULL,
+                   alpha REAL NOT NULL,
+                   ema_updated INTEGER NOT NULL DEFAULT 0,
+                   focal_entity_id TEXT,
+                   focal_entity_name TEXT,
+                   project TEXT,
+                   candidate_count INTEGER NOT NULL,
+                   traversal_count INTEGER NOT NULL DEFAULT 0,
+                   constraint_count INTEGER NOT NULL DEFAULT 0,
+                   created_at TEXT NOT NULL DEFAULT (datetime('now'))
+               );
+
+               INSERT INTO entities
+               (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
+               VALUES
+               ('entity-signet-hygiene', 'Signet', 'signet', 'project', 'default', 5,
+                '2026-04-19T00:00:00.000Z', '2026-04-19T00:00:00.000Z'),
+               ('entity-the-hygiene', 'The', 'the', 'concept', 'default', 1,
+                '2026-04-19T00:00:00.000Z', '2026-04-19T00:00:00.000Z'),
+               ('entity-duplicate-a', 'Duplicate One', 'duplicate', 'concept', 'default', 1,
+                '2026-04-19T00:00:00.000Z', '2026-04-19T00:00:00.000Z'),
+               ('entity-duplicate-b', 'Duplicate Two', 'duplicate', 'concept', 'default', 1,
+                '2026-04-19T00:00:00.000Z', '2026-04-19T00:00:00.000Z');
+
+               INSERT INTO memories
+               (id, content, type, agent_id, updated_by, created_at, updated_at, is_deleted)
+               VALUES
+               ('mem-hygiene-signet', 'Signet should keep graph repair mechanical.',
+                'fact', 'default', 'contract-replay',
+                '2026-04-19T00:00:00.000Z', '2026-04-19T00:00:00.000Z', 0);
+
+               INSERT INTO entity_aspects
+               (id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at)
+               VALUES
+               ('aspect-hygiene', 'entity-signet-hygiene', 'default', 'identity', 'identity', 0.7,
+                '2026-04-19T00:00:00.000Z', '2026-04-19T00:00:00.000Z');
+
+               INSERT INTO entity_attributes
+               (id, aspect_id, agent_id, kind, content, normalized_content,
+                confidence, importance, status, created_at, updated_at)
+               VALUES
+               ('attr-missing-slots', 'aspect-hygiene', 'default', 'attribute',
+                'Signet attribute without navigation slots.', 'signet attribute without navigation slots.',
+                0.8, 0.6, 'active', '2026-04-19T00:00:00.000Z', '2026-04-19T00:00:00.000Z');
+
+               INSERT INTO entity_communities
+               (id, agent_id, name, cohesion, member_count, created_at, updated_at)
+               VALUES
+               ('community-signet', 'default', 'Signet graph', 0.82, 4,
+                '2026-04-19T00:00:00.000Z', '2026-04-19T00:00:00.000Z');
+
+               INSERT INTO predictor_comparisons
+               (id, session_key, agent_id, predictor_ndcg, baseline_ndcg,
+                predictor_won, margin, alpha, ema_updated, focal_entity_id,
+                focal_entity_name, project, candidate_count, traversal_count,
+                constraint_count, created_at)
+               VALUES
+               ('pc-1', 'session-health', 'default', 0.2, 0.4, 0, -0.2, 0.1, 0,
+                'entity-signet-hygiene', 'Signet', 'signet', 5, 1, 0, '2026-04-19T00:00:00.000Z'),
+               ('pc-2', 'session-health', 'default', 0.8, 0.5, 1, 0.3, 0.1, 0,
+                'entity-signet-hygiene', 'Signet', 'signet', 5, 1, 0, '2026-04-20T00:00:00.000Z'),
+               ('pc-3', 'session-health', 'default', 0.9, 0.5, 1, 0.4, 0.1, 0,
+                'entity-signet-hygiene', 'Signet', 'signet', 5, 1, 0, '2026-04-21T00:00:00.000Z');"#,
+        )
+        .expect("seed knowledge health and hygiene fixture");
+    }
+
     fn seed_memory_search_telemetry_fixture(&self) {
         let conn = rusqlite::Connection::open(self.db_path()).expect("open replay db");
         conn.busy_timeout(Duration::from_secs(5)).unwrap();
@@ -201,6 +503,49 @@ impl TestServer {
         .expect("seed memory search telemetry");
     }
 
+    fn seed_continuity_and_checkpoint_fixture(&self) -> String {
+        let conn = rusqlite::Connection::open(self.db_path()).expect("open replay db");
+        conn.busy_timeout(Duration::from_secs(5)).unwrap();
+        let project = self._tmpdir.path().join("workspace-a");
+        std::fs::create_dir_all(&project).expect("workspace fixture dir");
+        let project = project.to_string_lossy().to_string();
+        conn.execute(
+            r#"INSERT INTO session_scores
+               (id, session_key, project, harness, score,
+                memories_recalled, memories_used, novel_context_count,
+                reasoning, created_at)
+               VALUES
+               ('score-old', 'session-continuity-a', ?1, 'codex', 0.4, 5, 2, 1,
+                'Older continuity score', '2026-01-01T00:00:00Z'),
+               ('score-new', 'session-continuity-a', ?1, 'codex', 0.9, 7, 4, 2,
+                'Newer continuity score', '2026-01-02T00:00:00Z'),
+               ('score-other', 'session-continuity-b', '/workspace-b', 'codex', 0.7, 3, 2, 0,
+                'Other project score', '2026-01-03T00:00:00Z')"#,
+            [&project],
+        )
+        .expect("seed session scores");
+        conn.execute(
+            r#"INSERT INTO session_checkpoints
+               (id, session_key, harness, project, project_normalized,
+                trigger, digest, prompt_count, memory_queries, recent_remembers,
+                focal_entity_ids, focal_entity_names, active_aspect_ids,
+                surfaced_constraint_count, traversal_memory_count, created_at)
+               VALUES
+               ('checkpoint-new', 'session-continuity-a', 'codex', ?1, ?1,
+                'periodic', 'Digest with token=super-secret-value', 4,
+                '["continuity"]', '["remembered sk-test-secret-value"]',
+                '["entity-a"]', '["Signet"]', '["aspect-a"]', 1, 2,
+                '2026-01-02T00:05:00Z'),
+               ('checkpoint-old', 'session-continuity-a', 'codex', ?1, ?1,
+                'session_end', 'Older digest', 2, NULL, NULL,
+                NULL, NULL, NULL, NULL, NULL,
+                '2026-01-01T00:05:00Z')"#,
+            [&project],
+        )
+        .expect("seed session checkpoints");
+        project
+    }
+
     fn seed_ts_style_connector_with_nested_settings(&self) {
         let conn = rusqlite::Connection::open(self.db_path()).expect("open replay db");
         conn.busy_timeout(Duration::from_secs(5)).unwrap();
@@ -215,6 +560,41 @@ impl TestServer {
             [],
         )
         .expect("seed TS-style connector config");
+    }
+
+    fn seed_gdrive_connector_health_fixture(&self) {
+        let conn = rusqlite::Connection::open(self.db_path()).expect("open replay db");
+        conn.busy_timeout(Duration::from_secs(5)).unwrap();
+        conn.execute(
+            r#"INSERT INTO connectors
+               (id, provider, display_name, config_json, settings_json, enabled, status, last_sync_at, last_error, created_at, updated_at)
+               VALUES
+               ('connector-gdrive', 'gdrive', 'Drive Docs',
+                '{"id":"connector-gdrive","provider":"gdrive","settings":{"rootPath":"/tmp/vault","indexHidden":true},"enabled":true}',
+                '{"rootPath":"/tmp/vault","indexHidden":true}',
+                1, 'idle', '2026-01-01T00:00:00Z', NULL,
+                '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')"#,
+            [],
+        )
+        .expect("seed gdrive connector config");
+        conn.execute(
+            r#"INSERT INTO documents
+               (id, source_url, source_type, content_type, title, raw_content,
+                status, error, connector_id, chunk_count, memory_count,
+                metadata_json, created_at, updated_at, completed_at)
+               VALUES
+               ('doc-vault-a', '/tmp/vault/a.md', 'file', 'text/plain', 'a.md', 'A',
+                'completed', NULL, 'connector-gdrive', 1, 1, NULL,
+                '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
+               ('doc-vault-b', '/tmp/vault/nested/b.md', 'file', 'text/plain', 'b.md', 'B',
+                'queued', NULL, 'connector-gdrive', 0, 0, NULL,
+                '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', NULL),
+               ('doc-other', '/tmp/other/c.md', 'file', 'text/plain', 'c.md', 'C',
+                'queued', NULL, 'connector-gdrive', 0, 0, NULL,
+                '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', NULL)"#,
+            [],
+        )
+        .expect("seed connector health documents");
     }
 
     fn seed_malformed_connector_row(&self) {
@@ -264,6 +644,16 @@ impl TestServer {
     async fn post(&self, path: &str, body: serde_json::Value) -> reqwest::Response {
         self.client
             .post(format!("{}{path}", self.base))
+            .json(&body)
+            .send()
+            .await
+            .expect("request failed")
+    }
+
+    async fn post_mcp(&self, body: serde_json::Value) -> reqwest::Response {
+        self.client
+            .post(format!("{}/mcp", self.base))
+            .header("Accept", "application/json, text/event-stream")
             .json(&body)
             .send()
             .await
@@ -361,6 +751,34 @@ impl TestServer {
     }
 }
 
+async fn call_mcp_tool(
+    server: &TestServer,
+    name: &str,
+    args: serde_json::Value,
+) -> serde_json::Value {
+    let resp = server
+        .post_mcp(json!({
+            "jsonrpc": "2.0",
+            "id": format!("call-{name}"),
+            "method": "tools/call",
+            "params": {
+                "name": name,
+                "arguments": args,
+            }
+        }))
+        .await;
+    assert_eq!(resp.status(), 200, "MCP tool {name} HTTP status");
+    let rpc = server.json(resp).await;
+    assert!(
+        rpc["error"].is_null(),
+        "MCP tool {name} JSON-RPC error: {rpc}"
+    );
+    let text = rpc["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or_else(|| panic!("MCP tool {name} returned no text content: {rpc}"));
+    serde_json::from_str(text).unwrap_or_else(|_| json!({"text": text}))
+}
+
 fn ephemeral_port() -> u16 {
     TcpListener::bind("127.0.0.1:0")
         .unwrap()
@@ -369,7 +787,195 @@ fn ephemeral_port() -> u16 {
         .port()
 }
 
+struct MarketplaceCatalogFixture {
+    base: String,
+    _thread: std::thread::JoinHandle<()>,
+}
+
+impl MarketplaceCatalogFixture {
+    fn start() -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind marketplace fixture");
+        listener
+            .set_nonblocking(false)
+            .expect("configure marketplace fixture");
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let thread = std::thread::spawn(move || {
+            for stream in listener.incoming().take(32) {
+                let Ok(mut stream) = stream else {
+                    continue;
+                };
+                let mut buffer = [0_u8; 4096];
+                let read = stream.read(&mut buffer).unwrap_or(0);
+                let request = String::from_utf8_lossy(&buffer[..read]);
+                let path = request
+                    .lines()
+                    .next()
+                    .and_then(|line| line.split_whitespace().nth(1))
+                    .unwrap_or("/");
+                let body = marketplace_fixture_body(path);
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/markdown; charset=utf-8\r\nContent-Length: {}\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = stream.write_all(response.as_bytes());
+            }
+        });
+        Self {
+            base,
+            _thread: thread,
+        }
+    }
+}
+
+fn marketplace_fixture_body(path: &str) -> &'static str {
+    if path.starts_with("/reference-catalog") {
+        return r#"# Model Context Protocol Servers
+
+## Reference Servers
+
+- **[Fetch](src/fetch)** - Web content fetching and conversion.
+
+## Third-Party Servers
+
+- **[Dogfood](https://github.com/signet/fixture-mcp)** - Dogfood MCP server.
+"#;
+    }
+    if path.starts_with("/catalog") {
+        return r#"Showing 1-1 of 1 servers
+
+[Official Web Fetch](https://mcpservers.org/en/servers/web-fetch)
+"#;
+    }
+    if path.starts_with("/github/signet/catalog-mcp") {
+        return r#"Catalog MCP
+===========
+
+Catalog detail description.
+
+[GitHub](https://github.com/signet/catalog-mcp)
+
+Standard Config
+
+```json
+{
+  "mcpServers": {
+    "catalog": {
+      "command": "uvx",
+      "args": ["catalog-mcp"]
+    }
+  }
+}
+```
+"#;
+    }
+    if path.starts_with("/reference/fetch") {
+        return r#"Fetch
+=====
+
+Reference fetch description.
+
+Standard Config
+
+```json
+{
+  "mcpServers": {
+    "fetch": {
+      "command": "uvx",
+      "args": ["mcp-server-fetch"]
+    }
+  }
+}
+```
+"#;
+    }
+    r#"Web Fetch
+=========
+
+Web fetch description.
+
+Standard Config
+
+```json
+{
+  "mcpServers": {
+    "web-fetch": {
+      "command": "uvx",
+      "args": ["web-fetch"]
+    }
+  }
+}
+```
+"#
+}
+
+struct MarketplaceCatalogEnvGuard {
+    previous: Vec<(&'static str, Option<String>)>,
+}
+
+impl MarketplaceCatalogEnvGuard {
+    fn set(base: &str) -> Self {
+        let values = [
+            (
+                "SIGNET_MCP_MARKETPLACE_REFERENCE_CATALOG_URL",
+                format!("{base}/reference-catalog"),
+            ),
+            (
+                "SIGNET_MCP_MARKETPLACE_CATALOG_PAGE_URL",
+                format!("{base}/catalog?page={{page}}"),
+            ),
+            (
+                "SIGNET_MCP_MARKETPLACE_MCPSERVERS_DETAIL_URL",
+                format!("{base}/mcpservers/{{catalogId}}"),
+            ),
+            (
+                "SIGNET_MCP_MARKETPLACE_REFERENCE_DETAIL_URL",
+                format!("{base}/reference/{{catalogId}}"),
+            ),
+            (
+                "SIGNET_MCP_MARKETPLACE_GITHUB_DETAIL_URL",
+                format!("{base}/github/{{catalogId}}"),
+            ),
+        ];
+        let previous = values
+            .iter()
+            .map(|(key, _)| (*key, std::env::var(key).ok()))
+            .collect::<Vec<_>>();
+        for (key, value) in values {
+            unsafe {
+                std::env::set_var(key, value);
+            }
+        }
+        Self { previous }
+    }
+}
+
+impl Drop for MarketplaceCatalogEnvGuard {
+    fn drop(&mut self) {
+        for (key, value) in &self.previous {
+            unsafe {
+                if let Some(value) = value {
+                    std::env::set_var(key, value);
+                } else {
+                    std::env::remove_var(key);
+                }
+            }
+        }
+    }
+}
+
 fn daemon_binary() -> String {
+    if let Ok(path) = std::env::var("CARGO_BIN_EXE_signet-daemon") {
+        if std::path::Path::new(&path).exists() {
+            return path;
+        }
+    }
+    if let Ok(target_dir) = std::env::var("CARGO_TARGET_DIR") {
+        let path = std::path::PathBuf::from(target_dir).join("debug/signet-daemon");
+        if path.exists() {
+            return path.to_string_lossy().to_string();
+        }
+    }
     // Look for the debug binary in target/
     let candidates = ["target/debug/signet-daemon", "target/release/signet-daemon"];
     for c in &candidates {
@@ -517,7 +1123,7 @@ async fn health_returns_ok() {
     let resp = server.get("/health").await;
     assert_eq!(resp.status(), 200);
     let body = server.json(resp).await;
-    assert_eq!(body["status"], "ok");
+    assert_eq!(body["status"], "healthy");
 }
 
 #[tokio::test]
@@ -527,7 +1133,7 @@ async fn status_returns_db_info() {
     let resp = server.get("/api/status").await;
     assert_eq!(resp.status(), 200);
     let body = server.json(resp).await;
-    assert_eq!(body["status"], "ok");
+    assert_eq!(body["status"], "running");
     assert!(body["db"]["memories"].is_number());
     assert!(body["db"]["entities"].is_number());
 }
@@ -560,6 +1166,132 @@ async fn memory_crud() {
     // List should now have >= 1
     let resp = server.get("/api/memories").await;
     assert_eq!(resp.status(), 200);
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn memory_maintenance_routes_replay_ts_shapes() {
+    let server = TestServer::start().await;
+    server.seed_memory_maintenance_fixture();
+
+    let resp = server.get("/api/memory/review-queue").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["items"][0]["id"], "history-maintenance-review");
+    assert_eq!(body["items"][0]["memory_id"], "mem-maintenance-replay");
+    assert_eq!(body["items"][0]["event"], "REVIEW_NEEDED");
+    assert_eq!(
+        body["items"][0]["current_content"],
+        "Memory maintenance replay starts here."
+    );
+
+    let resp = server.get("/api/memory/jobs/job-maintenance-replay").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["id"], "job-maintenance-replay");
+    assert_eq!(body["memory_id"], "mem-maintenance-replay");
+    assert_eq!(body["job_type"], "extract");
+    assert_eq!(body["status"], "failed");
+    assert_eq!(body["attempt_count"], 2);
+    assert_eq!(body["attempts"], 2);
+    assert_eq!(body["last_error"], "provider unavailable");
+    assert_eq!(body["last_error_code"], serde_json::Value::Null);
+
+    let resp = server.get("/api/memory/jobs/missing-job").await;
+    assert_eq!(resp.status(), 404);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "Job not found");
+
+    let resp = server
+        .post("/api/memory/codex-native-note", json!({}))
+        .await;
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "content is required");
+
+    let resp = server
+        .post(
+            "/api/memory/codex-native-note",
+            json!({
+                "content": "Codex native note replay content.",
+                "title": "Replay Note",
+                "tags": "rust,parity"
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["ok"], true);
+    let note_path = body["path"].as_str().expect("note path");
+    assert!(
+        std::fs::read_to_string(note_path)
+            .expect("read saved note")
+            .contains("Codex native note replay content.")
+    );
+
+    let resp = server
+        .patch(
+            "/api/memory/mem-maintenance-replay",
+            json!({
+                "reason": "contract replay update",
+                "content": "Memory maintenance replay was updated.",
+                "importance": 0.8,
+                "tags": ["rust", "maintenance"]
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["id"], "mem-maintenance-replay");
+    assert_eq!(body["status"], "updated");
+    assert_eq!(body["currentVersion"], 1);
+    assert_eq!(body["newVersion"], 2);
+    assert_eq!(body["contentChanged"], true);
+
+    let conn = rusqlite::Connection::open(server.db_path()).expect("open replay db");
+    let row: (String, f64, i64) = conn
+        .query_row(
+            "SELECT content, importance, version
+             FROM memories
+             WHERE id = 'mem-maintenance-replay'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .expect("patched memory row");
+    assert_eq!(row.0, "Memory maintenance replay was updated.");
+    assert_eq!(row.1, 0.8);
+    assert_eq!(row.2, 2);
+
+    let resp = server
+        .patch(
+            "/api/memory/mem-maintenance-replay",
+            json!({"content": "missing reason"}),
+        )
+        .await;
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "reason is required");
+
+    let resp = server
+        .patch(
+            "/api/memory/mem-maintenance-replay",
+            json!({"reason": "bad version", "if_version": 1, "importance": 0.7}),
+        )
+        .await;
+    assert_eq!(resp.status(), 409);
+    let body = server.json(resp).await;
+    assert_eq!(body["status"], "version_conflict");
+    assert_eq!(body["currentVersion"], 2);
+
+    let resp = server
+        .patch(
+            "/api/memory/missing-memory",
+            json!({"reason": "contract replay", "importance": 0.7}),
+        )
+        .await;
+    assert_eq!(resp.status(), 404);
+    let body = server.json(resp).await;
+    assert_eq!(body["status"], "not_found");
 }
 
 #[tokio::test]
@@ -932,6 +1664,18 @@ async fn search_endpoints() {
     let resp = server.get("/memory/search?q=test&limit=10").await;
     assert_eq!(resp.status(), 200);
 
+    let resp = server.get("/memory/similar").await;
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "id is required");
+    assert_eq!(body["results"], json!([]));
+
+    let resp = server.get("/memory/similar?id=missing-memory").await;
+    assert_eq!(resp.status(), 404);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "No embedding found for this memory");
+    assert_eq!(body["results"], json!([]));
+
     let resp = server
         .post("/api/memory/recall", json!({"query": "test memory"}))
         .await;
@@ -977,6 +1721,168 @@ async fn knowledge_endpoints() {
 
     let resp = server.get("/api/knowledge/constellation").await;
     assert_eq!(resp.status(), 200);
+
+    let resp = server.post("/api/graph/impact", json!({})).await;
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "entityId is required");
+
+    let resp = server
+        .post(
+            "/api/graph/impact",
+            json!({"entityId": "missing-entity", "direction": "upstream", "maxDepth": 99}),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["entityId"], "missing-entity");
+    assert_eq!(body["entityName"], "missing-entity");
+    assert_eq!(body["direction"], "upstream");
+    assert_eq!(body["impact"], json!([]));
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn graphiq_routes_replay_validation_and_status_shapes() {
+    let fake_dir = tempfile::tempdir().expect("fake graphiq dir");
+    let fake_bin_dir = fake_dir.path().join("bin");
+    std::fs::create_dir_all(&fake_bin_dir).unwrap();
+    let fake_graphiq = fake_bin_dir.join("graphiq");
+    std::fs::write(
+        &fake_graphiq,
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+if [ "${1:-}" = "index" ]; then
+  db=""
+  prev=""
+  for arg in "$@"; do
+    if [ "$prev" = "--db" ]; then db="$arg"; fi
+    prev="$arg"
+  done
+  if [ -n "$db" ]; then
+    mkdir -p "$(dirname "$db")"
+    : > "$db"
+  fi
+  echo "Files: 3 Symbols: 4 Edges: 5"
+  exit 0
+fi
+echo "graphiq fixture"
+"#,
+    )
+    .unwrap();
+    let fake_installer = fake_dir.path().join("install-graphiq.sh");
+    std::fs::write(
+        &fake_installer,
+        "#!/usr/bin/env bash\necho \"fixture install $1\"\nexit 0\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&fake_graphiq, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::set_permissions(&fake_installer, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let original_path = std::env::var_os("PATH");
+    let original_script = std::env::var_os("SIGNET_GRAPHIQ_INSTALL_SCRIPT");
+    let next_path = match original_path.as_ref() {
+        Some(path) => {
+            let mut paths = vec![fake_bin_dir.clone()];
+            paths.extend(std::env::split_paths(path));
+            std::env::join_paths(paths).unwrap()
+        }
+        None => fake_bin_dir.clone().into_os_string(),
+    };
+    unsafe {
+        std::env::set_var("PATH", next_path);
+        std::env::set_var("SIGNET_GRAPHIQ_INSTALL_SCRIPT", &fake_installer);
+    }
+    let server = TestServer::start().await;
+
+    let resp = server.get("/api/graphiq/status").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["installed"], true);
+    assert_eq!(body["pluginEnabled"], false);
+    assert_eq!(body["pluginState"], "not-registered");
+    assert!(body["indexedProjects"].as_array().unwrap().is_empty());
+    assert_eq!(body["installSource"], serde_json::Value::Null);
+
+    let resp = server.post("/api/graphiq/index", json!({})).await;
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert_eq!(body["success"], false);
+    assert_eq!(body["error"], "path is required");
+
+    let resp = server
+        .post(
+            "/api/graphiq/index",
+            json!({"path": "/definitely/missing/graphiq-project"}),
+        )
+        .await;
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert_eq!(body["success"], false);
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Project path does not exist")
+    );
+
+    let resp = server.post("/api/graphiq/uninstall", json!({})).await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["success"], true);
+    assert_eq!(body["message"], "GraphIQ plugin disabled");
+
+    let resp = server.post("/api/graphiq/install", json!({})).await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["success"], true);
+    assert_eq!(body["message"], "GraphIQ already installed, plugin enabled");
+
+    let project = server._tmpdir.path().join("graphiq-project");
+    std::fs::create_dir_all(&project).unwrap();
+    let resp = server
+        .post(
+            "/api/graphiq/index",
+            json!({"path": project.display().to_string()}),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["success"], true);
+    assert_eq!(body["project"], project.display().to_string());
+    assert_eq!(body["stats"]["files"], 3);
+    assert_eq!(body["stats"]["symbols"], 4);
+    assert_eq!(body["stats"]["edges"], 5);
+    assert!(project.join(".graphiq/graphiq.db").exists());
+    let state: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(server._tmpdir.path().join(".daemon/graphiq/state.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(state["enabled"], true);
+    assert_eq!(state["activeProject"], project.display().to_string());
+    assert_eq!(state["indexedProjects"][0]["files"], 3);
+
+    let resp = server.post("/api/graphiq/update", json!({})).await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["success"], true);
+    assert_eq!(body["message"], "GraphIQ updated via script");
+
+    unsafe {
+        if let Some(path) = original_path {
+            std::env::set_var("PATH", path);
+        } else {
+            std::env::remove_var("PATH");
+        }
+        if let Some(script) = original_script {
+            std::env::set_var("SIGNET_GRAPHIQ_INSTALL_SCRIPT", script);
+        } else {
+            std::env::remove_var("SIGNET_GRAPHIQ_INSTALL_SCRIPT");
+        }
+    }
 }
 
 #[tokio::test]
@@ -1002,6 +1908,11 @@ async fn pipeline_endpoints() {
     let body = server.json(resp).await;
     assert_eq!(body["success"], true);
     assert_eq!(body["paused"], false);
+
+    let resp = server.post("/api/pipeline/nudge", json!({})).await;
+    assert_eq!(resp.status(), 503);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "Extraction worker not running");
 }
 
 #[tokio::test]
@@ -1012,11 +1923,78 @@ async fn session_endpoints() {
     let resp = server.get("/api/sessions").await;
     assert_eq!(resp.status(), 200);
 
+    let resp = server.get("/api/sessions/missing-session/transcript").await;
+    assert_eq!(resp.status(), 404);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "Transcript not found");
+
+    {
+        let conn = rusqlite::Connection::open(server.db_path()).expect("open replay db");
+        conn.execute(
+            "INSERT INTO session_transcripts
+             (session_key, agent_id, content, harness, project, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![
+                "seeded-session",
+                "default",
+                "seeded transcript body",
+                "contract-replay",
+                "session-test",
+                "2026-06-02T00:00:00Z"
+            ],
+        )
+        .expect("seed transcript");
+    }
+    let resp = server.get("/api/sessions/seeded-session/transcript").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["sessionKey"], "seeded-session");
+    assert_eq!(body["agentId"], "default");
+    assert_eq!(body["content"], "seeded transcript body");
+
+    let resp = server.post("/api/sessions/search", json!({})).await;
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "query is required");
+
+    let resp = server
+        .post("/api/sessions/search", json!({"query": "missing query"}))
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["query"], "missing query");
+    assert_eq!(body["count"], 0);
+    assert!(body["hits"].as_array().expect("session hits").is_empty());
+
     let resp = server.get("/api/sessions/summaries").await;
     assert_eq!(resp.status(), 200);
 
+    let resp = server
+        .post("/api/sessions/summaries/expand", json!({}))
+        .await;
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "id is required");
+
+    let resp = server
+        .post(
+            "/api/sessions/summaries/expand",
+            json!({"id": "missing-node"}),
+        )
+        .await;
+    assert_eq!(resp.status(), 404);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "summary node not found");
+
     let resp = server.get("/api/sessions/checkpoints").await;
     assert_eq!(resp.status(), 200);
+
+    let resp = server
+        .post("/api/sessions/missing-session/renew", json!({}))
+        .await;
+    assert_eq!(resp.status(), 404);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "Session not found");
 }
 
 #[tokio::test]
@@ -1209,8 +2187,86 @@ async fn diagnostics_endpoints() {
 
 #[tokio::test]
 #[ignore = "requires built daemon binary"]
-async fn marketplace_endpoints() {
+async fn mcp_analytics_routes_replay_ts_shapes() {
     let server = TestServer::start().await;
+
+    let resp = server.get("/api/mcp/analytics").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["totalCalls"], 0);
+    assert_eq!(body["successRate"], 0.0);
+    assert_eq!(body["topServers"], json!([]));
+    assert_eq!(body["topTools"], json!([]));
+    assert_eq!(body["latency"]["p50"], 0);
+    assert_eq!(body["latency"]["p95"], 0);
+
+    server.seed_mcp_analytics_fixture();
+
+    let resp = server.get("/api/mcp/analytics?limit=1").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["totalCalls"], 4);
+    assert_eq!(body["successRate"], 0.75);
+    assert_eq!(body["topServers"].as_array().unwrap().len(), 1);
+    assert_eq!(body["topServers"][0]["serverId"], "srv-a");
+    assert_eq!(body["topServers"][0]["count"], 3);
+    assert_eq!(body["topServers"][0]["successCount"], 2);
+    assert_eq!(body["topServers"][0]["avgLatencyMs"], 200);
+    assert_eq!(body["topTools"][0]["toolName"], "search");
+    assert_eq!(body["topTools"][0]["count"], 2);
+    assert_eq!(body["latency"]["p50"], 100);
+    assert_eq!(body["latency"]["p95"], 300);
+
+    let resp = server.get("/api/mcp/analytics?agent_id=agent-b").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["totalCalls"], 1);
+    assert_eq!(body["topServers"][0]["serverId"], "srv-a");
+    assert_eq!(body["topTools"][0]["toolName"], "search");
+
+    let resp = server.get("/api/mcp/analytics/srv-a").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["serverId"], "srv-a");
+    assert_eq!(body["totalCalls"], 3);
+    assert_eq!(body["successRate"], 0.667);
+    assert_eq!(body["tools"][0]["toolName"], "search");
+    assert_eq!(body["tools"][0]["count"], 2);
+    assert_eq!(body["tools"][1]["toolName"], "create");
+    assert_eq!(body["tools"][1]["successCount"], 0);
+    assert!(
+        body["timeline"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["count"] == 3)
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn marketplace_endpoints() {
+    let catalog_fixture = MarketplaceCatalogFixture::start();
+    let _catalog_env = MarketplaceCatalogEnvGuard::set(&catalog_fixture.base);
+    let server = TestServer::start().await;
+    let fixture_script = server._tmpdir.path().join("mcp-fixture.sh");
+    std::fs::write(
+        &fixture_script,
+        r#"#!/usr/bin/env bash
+while IFS= read -r line; do
+  if [[ "$line" == *'"id":1'* ]]; then
+    echo '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05","capabilities":{},"serverInfo":{"name":"fixture","version":"1"}}}'
+  elif [[ "$line" == *'"method":"tools/list"'* ]]; then
+    echo '{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"time_now","description":"Return current time","inputSchema":{"type":"object"},"annotations":{"readOnlyHint":true}}]}}'
+  elif [[ "$line" == *'"method":"tools/call"'* ]]; then
+    echo '{"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"called time_now"}]}}'
+  elif [[ "$line" == *'"method":"resources/read"'* ]]; then
+    echo '{"jsonrpc":"2.0","id":2,"result":{"contents":[{"uri":"file:///tmp/example","text":"resource text"}]}}'
+  fi
+done
+"#,
+    )
+    .expect("write MCP fixture script");
 
     let resp = server.get("/api/marketplace/mcp").await;
     assert_eq!(resp.status(), 200);
@@ -1222,10 +2278,222 @@ async fn marketplace_endpoints() {
     assert_eq!(resp.status(), 200);
 
     let resp = server.get("/api/marketplace/mcp/search").await;
-    assert_eq!(resp.status(), 200);
+    assert_eq!(resp.status(), 400);
 
     let resp = server.get("/api/marketplace/mcp/search?q=time").await;
     assert_eq!(resp.status(), 200);
+
+    let resp = server.get("/api/marketplace/mcp/browse?pages=1").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["total"], 3);
+    assert_eq!(body["shown"], 3);
+    assert_eq!(body["pageSize"], 30);
+    assert_eq!(body["pages"], 1);
+    assert_eq!(body["results"][0]["source"], "modelcontextprotocol/servers");
+    assert_eq!(body["results"][0]["catalogId"], "fetch");
+    assert_eq!(body["results"][0]["installed"], false);
+    assert!(
+        body["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["catalogId"] == "web-fetch")
+    );
+
+    let resp = server
+        .get("/api/marketplace/mcp/detail?id=github:signet/catalog-mcp")
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["source"], "github");
+    assert_eq!(body["id"], "signet/catalog-mcp");
+    assert_eq!(body["name"], "catalog");
+    assert_eq!(body["description"], "Catalog detail description.");
+    assert_eq!(body["githubUrl"], "https://github.com/signet/catalog-mcp");
+    assert_eq!(body["defaultConfig"]["transport"], "stdio");
+    assert_eq!(body["defaultConfig"]["command"], "uvx");
+    assert_eq!(body["defaultConfig"]["args"][0], "catalog-mcp");
+
+    let resp = server
+        .post(
+            "/api/marketplace/mcp/install",
+            json!({
+                "id": "github:signet/catalog-mcp",
+                "scope": {"harnesses": ["catalog-replay"]}
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["success"], true);
+    assert_eq!(body["updated"], false);
+    assert_eq!(body["server"]["id"], "catalog");
+    assert_eq!(body["server"]["description"], "Catalog detail description.");
+    assert_eq!(body["server"]["config"]["command"], "uvx");
+
+    let install_body = json!({
+        "id": "github:signet/fixture-mcp",
+        "alias": "Fixture MCP",
+        "config": {
+            "command": ["bash", fixture_script.display().to_string()],
+            "args": [],
+            "env": {"FIXTURE_ENV": "1"}
+        },
+        "scope": {"harnesses": ["contract-replay"]}
+    });
+    let resp = server
+        .post("/api/marketplace/mcp/install", install_body)
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["success"], true);
+    assert_eq!(body["updated"], false);
+    assert_eq!(body["server"]["id"], "fixture-mcp");
+    assert_eq!(body["server"]["source"], "github");
+    assert_eq!(body["server"]["catalogId"], "signet/fixture-mcp");
+    assert_eq!(body["server"]["config"]["transport"], "stdio");
+    assert_eq!(body["server"]["config"]["command"], "bash");
+    assert_eq!(
+        body["server"]["config"]["args"][0],
+        fixture_script.display().to_string()
+    );
+    let installed_path = server._tmpdir.path().join("marketplace/mcp-servers.json");
+    let installed: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(installed_path).unwrap()).unwrap();
+    let fixture_server = installed
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|server| server["id"] == "fixture-mcp")
+        .expect("fixture MCP server persisted");
+    assert_eq!(fixture_server["scope"]["harnesses"][0], "contract-replay");
+
+    let resp = server
+        .get("/api/marketplace/mcp/tools?harness=contract-replay")
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["count"], 1);
+    assert_eq!(body["tools"][0]["serverId"], "fixture-mcp");
+    assert_eq!(body["tools"][0]["toolName"], "time_now");
+    assert_eq!(body["tools"][0]["readOnly"], true);
+    assert_eq!(body["servers"][0]["ok"], true);
+
+    let resp = server
+        .get("/api/marketplace/mcp/search?q=time&harness=contract-replay")
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["count"], 1);
+    assert_eq!(body["results"][0]["toolName"], "time_now");
+
+    let resp = server
+        .post(
+            "/api/marketplace/mcp/test",
+            json!({"config": {"command": ["bash", fixture_script.display().to_string()]}}),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["success"], true);
+    assert_eq!(body["toolCount"], 1);
+    assert_eq!(body["tools"][0], "time_now");
+
+    let resp = server
+        .post(
+            "/api/marketplace/mcp/call?harness=contract-replay",
+            json!({"serverId": "fixture-mcp", "toolName": "time_now", "args": {}}),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["success"], true);
+    assert_eq!(body["result"]["content"][0]["text"], "called time_now");
+
+    let resp = server
+        .post(
+            "/api/marketplace/mcp/read-resource?harness=contract-replay",
+            json!({"serverId": "fixture-mcp", "uri": "file:///tmp/example"}),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["success"], true);
+    assert_eq!(body["contents"]["contents"][0]["text"], "resource text");
+
+    let body = call_mcp_tool(&server, "mcp_server_list", json!({})).await;
+    assert_eq!(body["count"], 1);
+    assert!(
+        body["servers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|server| server["serverId"] == "fixture-mcp" && server["ok"] == true)
+    );
+
+    let body = call_mcp_tool(
+        &server,
+        "mcp_server_search",
+        json!({"query": "time", "limit": 3}),
+    )
+    .await;
+    assert_eq!(body["query"], "time");
+    assert_eq!(body["count"], 1);
+    assert_eq!(body["results"][0]["toolName"], "time_now");
+
+    let body = call_mcp_tool(
+        &server,
+        "mcp_server_call",
+        json!({"server_id": "fixture-mcp", "tool": "time_now", "args": {}}),
+    )
+    .await;
+    assert_eq!(body["content"][0]["text"], "called time_now");
+
+    let body = call_mcp_tool(&server, "mcp_server_policy_get", json!({})).await;
+    assert_eq!(body["policy"]["mode"], "hybrid");
+    let body = call_mcp_tool(
+        &server,
+        "mcp_server_policy_set",
+        json!({"mode": "compact", "max_search_results": 4}),
+    )
+    .await;
+    assert_eq!(body["success"], true);
+    assert_eq!(body["policy"]["mode"], "compact");
+    assert_eq!(body["policy"]["maxSearchResults"], 4);
+
+    let body = call_mcp_tool(
+        &server,
+        "mcp_server_scope_set",
+        json!({"server_id": "fixture-mcp", "harnesses": ["contract-replay", "mcp-tool"]}),
+    )
+    .await;
+    assert_eq!(body["success"], true);
+    assert_eq!(body["server"]["scope"]["harnesses"][1], "mcp-tool");
+    let body = call_mcp_tool(
+        &server,
+        "mcp_server_scope_get",
+        json!({"server_id": "fixture-mcp"}),
+    )
+    .await;
+    assert_eq!(body["server"]["scope"]["harnesses"][1], "mcp-tool");
+
+    let body = call_mcp_tool(
+        &server,
+        "mcp_server_disable",
+        json!({"server_id": "fixture-mcp"}),
+    )
+    .await;
+    assert_eq!(body["success"], true);
+    assert_eq!(body["server"]["enabled"], false);
+    let body = call_mcp_tool(
+        &server,
+        "mcp_server_enable",
+        json!({"server_id": "fixture-mcp"}),
+    )
+    .await;
+    assert_eq!(body["success"], true);
+    assert_eq!(body["server"]["enabled"], true);
 
     let resp = server.get("/api/marketplace/mcp/dogfood-everything").await;
     assert_eq!(resp.status(), 404);
@@ -1236,15 +2504,302 @@ async fn marketplace_endpoints() {
             json!({"serverId": "missing", "toolName": "missing", "args": {}}),
         )
         .await;
-    assert_ne!(resp.status(), 404);
+    assert_eq!(resp.status(), 404);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "Server not found, disabled, or out of scope");
+
+    let resp = server
+        .post("/api/marketplace/mcp/read-resource", json!({}))
+        .await;
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "serverId and uri are required");
+
+    let resp = server
+        .post(
+            "/api/marketplace/mcp/read-resource",
+            json!({"serverId": "missing", "uri": "file:///tmp/example"}),
+        )
+        .await;
+    assert_eq!(resp.status(), 404);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "Server not found, disabled, or out of scope");
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn os_routes_replay_empty_state_and_validation_shapes() {
+    let server = TestServer::start().await;
+
+    let resp = server.get("/api/os/events?limit=999&windowMs=1").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["events"], json!([]));
+    assert_eq!(body["count"], 0);
+    assert_eq!(body["query"]["limit"], 500);
+    assert_eq!(body["query"]["windowMs"], 1000);
+
+    let resp = server
+        .get("/api/os/events/stream?type=browser.navigate")
+        .await;
+    assert_eq!(resp.status(), 200);
+    let text = resp.text().await.expect("os events stream body");
+    assert!(text.contains("\"type\":\"connected\""));
+    assert!(text.contains("\"subscribedTo\":\"browser.navigate\""));
+
+    let resp = server.get("/api/os/context").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["events"], json!([]));
+
+    let resp = server.get("/api/os/events/stats").await;
+    assert_eq!(resp.status(), 200);
+
+    let resp = server.get("/api/os/agent-sessions").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["sessions"], json!([]));
+    assert_eq!(body["count"], 0);
+
+    let resp = server.get("/api/os/agent-events").await;
+    assert_eq!(resp.status(), 200);
+    let text = resp.text().await.expect("os agent stream body");
+    assert!(text.contains("\"type\":\"connected\""));
+
+    let resp = server.post("/api/os/agent-execute", json!({})).await;
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "serverId and task are required");
+
+    let resp = server
+        .post(
+            "/api/os/agent-execute",
+            json!({"serverId": "browser", "task": "Open the settings panel"}),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    let session_id = body["sessionId"].as_str().expect("session id");
+    assert!(session_id.starts_with("agent-"));
+    assert_eq!(body["serverId"], "browser");
+
+    let resp = server
+        .post(
+            "/api/os/agent-execute",
+            json!({"serverId": "browser", "task": "Start another task"}),
+        )
+        .await;
+    assert_eq!(resp.status(), 409);
+    let body = server.json(resp).await;
+    assert_eq!(
+        body["error"],
+        "An agent session is already running for this server"
+    );
+
+    let resp = server.get("/api/os/agent-sessions").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["count"], 1);
+    assert_eq!(body["sessions"][0]["id"], session_id);
+    assert_eq!(body["sessions"][0]["serverId"], "browser");
+    assert_eq!(body["sessions"][0]["task"], "Open the settings panel");
+    assert_eq!(body["sessions"][0]["status"], "running");
+
+    let resp = server.post("/api/os/agent-state", json!({})).await;
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "sessionId is required");
+
+    let resp = server
+        .post(
+            "/api/os/agent-state",
+            json!({"sessionId": session_id, "domState": {"url": "http://localhost"}}),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["success"], true);
+
+    let resp = server
+        .post("/api/os/agent-state", json!({"sessionId": "missing"}))
+        .await;
+    assert_eq!(resp.status(), 404);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "Session not found");
+
+    let resp = server.post("/api/os/chat", json!({})).await;
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "Message is required");
+
+    let resp = server.get("/api/os/tray").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["entries"], json!([]));
+    assert_eq!(body["count"], 0);
+
+    let resp = server.get("/api/os/tray/missing").await;
+    assert_eq!(resp.status(), 404);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "App not found in tray");
+
+    let resp = server.get("/api/os/tray/missing/probe").await;
+    assert_eq!(resp.status(), 404);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "No probe result found");
+
+    let resp = server.post("/api/os/tray/missing/reprobe", json!({})).await;
+    assert_eq!(resp.status(), 404);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "Server not found in installed servers");
+
+    let resp = server
+        .patch("/api/os/tray/missing", json!({"state": "bad"}))
+        .await;
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "state must be tray, grid, or dock");
+
+    let resp = server.post("/api/os/install", json!({})).await;
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert_eq!(body["ok"], false);
+    assert_eq!(body["error"], "url is required");
+
+    let resp = server
+        .post(
+            "/api/os/install",
+            json!({"url": "http://127.0.0.1:3850/mcp"}),
+        )
+        .await;
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert_eq!(body["ok"], false);
+    assert_eq!(body["error"], "Private/loopback addresses are not allowed");
+
+    let resp = server
+        .post(
+            "/api/os/install",
+            json!({"url": "https://example.com/mcp", "name": "Example MCP"}),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["ok"], true);
+    assert_eq!(body["widgetId"], "example-mcp");
+    assert_eq!(body["manifest"], serde_json::Value::Null);
+    let installed: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(server._tmpdir.path().join("marketplace/mcp-servers.json"))
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(installed[0]["id"], "example-mcp");
+    assert_eq!(installed[0]["source"], "manual");
+    assert_eq!(installed[0]["config"]["transport"], "http");
+    assert_eq!(installed[0]["config"]["url"], "https://example.com/mcp");
+
+    let resp = server.post("/api/os/widget/generate", json!({})).await;
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "serverId is required");
+
+    let resp = server.get("/api/os/widget/missing").await;
+    assert_eq!(resp.status(), 404);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "Widget not found");
+
+    let resp = server.delete("/api/os/widget/missing").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["success"], true);
 }
 
 #[tokio::test]
 #[ignore = "requires built daemon binary"]
 async fn secrets_list() {
     let server = TestServer::start().await;
+
+    let resp = server
+        .post(
+            "/api/secrets/REPLAY_SECRET",
+            json!({"value": "replay-value"}),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+
     let resp = server.get("/api/secrets").await;
     assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["secrets"], json!(["REPLAY_SECRET"]));
+
+    let body = call_mcp_tool(&server, "secret_list", json!({})).await;
+    assert_eq!(body["secrets"], json!(["REPLAY_SECRET"]));
+
+    let resp = server
+        .post(
+            "/api/secrets/exec",
+            json!({
+                "command": "printf %s \"$REPLAY_SECRET\"",
+                "secrets": {"REPLAY_SECRET": "REPLAY_SECRET"},
+                "timeoutMs": 1000,
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 202);
+    let body = server.json(resp).await;
+    let job_id = body["id"].as_str().expect("secret exec job id");
+    assert!(matches!(
+        body["status"].as_str(),
+        Some("queued") | Some("running")
+    ));
+
+    let mut completed = serde_json::Value::Null;
+    for _ in 0..20 {
+        tokio::time::sleep(Duration::from_millis(25)).await;
+        let resp = server.get(&format!("/api/secrets/exec/{job_id}")).await;
+        assert_eq!(resp.status(), 200);
+        completed = server.json(resp).await;
+        if completed["status"] == "completed" {
+            break;
+        }
+    }
+    assert_eq!(completed["status"], "completed");
+    assert_eq!(completed["result"]["code"], 0);
+    assert_eq!(completed["result"]["stdout"], "[REDACTED]");
+    assert!(
+        !completed["result"]["stdout"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("replay-value")
+    );
+
+    let body = call_mcp_tool(
+        &server,
+        "secret_exec",
+        json!({
+            "command": "printf %s \"$REPLAY_SECRET\"",
+            "secrets": {"REPLAY_SECRET": "REPLAY_SECRET"},
+            "timeoutSeconds": 1,
+        }),
+    )
+    .await;
+    let mcp_job_id = body["id"].as_str().expect("MCP secret exec job id");
+    assert!(matches!(
+        body["status"].as_str(),
+        Some("queued") | Some("running")
+    ));
+    let mut mcp_completed = serde_json::Value::Null;
+    for _ in 0..20 {
+        tokio::time::sleep(Duration::from_millis(25)).await;
+        mcp_completed =
+            call_mcp_tool(&server, "secret_exec_status", json!({"jobId": mcp_job_id})).await;
+        if mcp_completed["status"] == "completed" {
+            break;
+        }
+    }
+    assert_eq!(mcp_completed["status"], "completed");
+    assert_eq!(mcp_completed["result"]["code"], 0);
+    assert_eq!(mcp_completed["result"]["stdout"], "[REDACTED]");
 
     let resp = server.get("/api/secrets/1password/status").await;
     assert_eq!(resp.status(), 200);
@@ -1252,6 +2807,79 @@ async fn secrets_list() {
     assert_eq!(body["configured"], false);
     assert_eq!(body["connected"], false);
     assert_eq!(body["vaults"], json!([]));
+
+    let resp = server.get("/api/secrets/bitwarden/status").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["configured"], false);
+    assert_eq!(body["connected"], false);
+    assert_eq!(body["activeProvider"], false);
+
+    let resp = server
+        .post("/api/secrets/bitwarden/connect", json!({}))
+        .await;
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "session is required");
+
+    let resp = server
+        .post(
+            "/api/secrets/bitwarden/provider",
+            json!({"provider": "bad"}),
+        )
+        .await;
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "provider must be local or bitwarden");
+
+    let resp = server.get("/api/secrets/bitwarden/folders").await;
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "Bitwarden is not connected");
+
+    let resp = server
+        .post("/api/secrets/bitwarden/migrate", json!({}))
+        .await;
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "Bitwarden is not connected");
+
+    let resp = server.delete("/api/secrets/bitwarden/connect").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["success"], true);
+    assert_eq!(body["disconnected"], true);
+
+    let resp = server
+        .post("/api/secrets/1password/connect", json!({}))
+        .await;
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "token is required");
+
+    let resp = server.get("/api/secrets/1password/vaults").await;
+    assert_eq!(resp.status(), 400);
+
+    let resp = server
+        .post("/api/secrets/1password/import", json!({}))
+        .await;
+    assert_eq!(resp.status(), 400);
+
+    let resp = server.delete("/api/secrets/1password/connect").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["success"], true);
+    assert_eq!(body["disconnected"], true);
+
+    let resp = server.get("/api/secrets/exec/missing-job").await;
+    assert_eq!(resp.status(), 404);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "secret exec job not found");
+
+    let resp = server.post("/api/secrets/API_KEY/exec", json!({})).await;
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "command is required");
 }
 
 #[tokio::test]
@@ -1261,6 +2889,11 @@ async fn tasks_crud() {
 
     let resp = server.get("/api/tasks").await;
     assert_eq!(resp.status(), 200);
+
+    let resp = server.get("/api/tasks/missing-task/stream").await;
+    assert_eq!(resp.status(), 404);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "Task not found");
 }
 
 #[tokio::test]
@@ -1334,6 +2967,61 @@ async fn connectors_unwrap_ts_style_config_settings() {
 
 #[tokio::test]
 #[ignore = "requires built daemon binary"]
+async fn connector_health_and_sync_routes_replay_ts_outcomes() {
+    let server = TestServer::start().await;
+    server.seed_gdrive_connector_health_fixture();
+
+    let resp = server.get("/api/connectors/connector-gdrive/health").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["id"], "connector-gdrive");
+    assert_eq!(body["status"], "idle");
+    assert_eq!(body["lastSyncAt"], "2026-01-01T00:00:00Z");
+    assert_eq!(body["lastError"], serde_json::Value::Null);
+    assert_eq!(body["documentCount"], 2);
+
+    let resp = server.get("/api/connectors/missing/health").await;
+    assert_eq!(resp.status(), 404);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "Connector not found");
+
+    let resp = server
+        .post("/api/connectors/connector-gdrive/sync", json!({}))
+        .await;
+    assert_eq!(resp.status(), 501);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "Provider gdrive not yet supported");
+
+    let resp = server
+        .post("/api/connectors/connector-gdrive/sync/full", json!({}))
+        .await;
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "Full resync requires ?confirm=true");
+
+    let resp = server
+        .post(
+            "/api/connectors/connector-gdrive/sync/full?confirm=true",
+            json!({}),
+        )
+        .await;
+    assert_eq!(resp.status(), 501);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "Provider gdrive not yet supported");
+
+    let resp = server.post("/api/connectors/resync", json!({})).await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["status"], "ok");
+    assert_eq!(body["total"], 1);
+    assert_eq!(body["started"], 0);
+    assert_eq!(body["alreadySyncing"], 0);
+    assert_eq!(body["unsupported"], 1);
+    assert_eq!(body["failed"], 0);
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
 async fn connectors_list_surfaces_row_decode_errors() {
     let server = TestServer::start().await;
     server.seed_malformed_connector_row();
@@ -1366,6 +3054,49 @@ async fn update_status() {
     assert_eq!(resp.status(), 200);
     let body = server.json(resp).await;
     assert_eq!(body["available"], false);
+
+    let resp = server.get("/api/update/check").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["updateAvailable"], false);
+    assert_eq!(body["restartRequired"], false);
+    assert!(body["checkedAt"].as_str().is_some());
+
+    let resp = server.get("/api/update/config").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["autoInstall"], false);
+    assert_eq!(body["checkInterval"], 21600);
+    assert_eq!(body["channel"], "stable");
+    assert_eq!(body["minInterval"], 300);
+    assert_eq!(body["maxInterval"], 604800);
+    assert_eq!(body["updateInProgress"], false);
+
+    let resp = server
+        .post("/api/update/config", json!({"channel": "beta"}))
+        .await;
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert_eq!(body["success"], false);
+    assert_eq!(body["error"], "channel must be stable or nightly");
+
+    let resp = server
+        .post(
+            "/api/update/config",
+            json!({"autoInstall": true, "checkInterval": 300, "channel": "stable"}),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["success"], true);
+    assert_eq!(body["persisted"], false);
+    assert_eq!(body["config"]["channel"], "stable");
+
+    let resp = server.post("/api/update/run", json!({})).await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["success"], true);
+    assert_eq!(body["restartRequired"], false);
 }
 
 #[tokio::test]
@@ -1374,30 +3105,83 @@ async fn logs_endpoint() {
     let server = TestServer::start().await;
     let resp = server.get("/api/logs").await;
     assert_eq!(resp.status(), 200);
+
+    let resp = server.get("/api/logs/stream").await;
+    assert_eq!(resp.status(), 200);
+    assert_eq!(
+        resp.headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default(),
+        "text/event-stream"
+    );
+    let text = resp.text().await.expect("logs stream body");
+    assert!(text.contains("\"type\":\"connected\""));
 }
 
 #[tokio::test]
 #[ignore = "requires built daemon binary"]
 async fn mcp_endpoint() {
     let server = TestServer::start().await;
-    let resp = server
-        .post(
-            "/mcp",
-            json!({
-                "jsonrpc": "2.0",
-                "method": "initialize",
-                "id": 1,
-                "params": {
-                    "protocolVersion": "2024-11-05",
-                    "capabilities": {},
-                    "clientInfo": {"name": "test", "version": "0.1.0"}
-                }
-            }),
-        )
-        .await;
+    let initialize = json!({
+        "jsonrpc": "2.0",
+        "method": "initialize",
+        "id": 1,
+        "params": {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {},
+            "clientInfo": {"name": "test", "version": "0.1.0"}
+        }
+    });
+
+    let resp = server.post("/mcp", initialize.clone()).await;
+    assert_eq!(resp.status(), 406);
+    let body = server.json(resp).await;
+    assert_eq!(
+        body["error"]["message"],
+        "Not Acceptable: Client must accept both application/json and text/event-stream"
+    );
+
+    let resp = server.post_mcp(json!({ "jsonrpc": "2.0", "id": 1 })).await;
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"]["code"], -32700);
+
+    let resp = server.post_mcp(initialize).await;
     assert_eq!(resp.status(), 200);
     let body = server.json(resp).await;
     assert!(body["result"]["serverInfo"]["name"].is_string());
+
+    let stored = call_mcp_tool(
+        &server,
+        "memory_store",
+        json!({
+            "content": "MCP modify replay original content.",
+            "type": "fact",
+            "importance": 0.4
+        }),
+    )
+    .await;
+    let memory_id = stored["id"].as_str().expect("stored memory id").to_string();
+    let modified = call_mcp_tool(
+        &server,
+        "memory_modify",
+        json!({
+            "id": memory_id,
+            "content": "MCP modify replay updated content.",
+            "importance": 0.8,
+            "pinned": true,
+            "reason": "contract replay update"
+        }),
+    )
+    .await;
+    assert_eq!(modified["status"], "updated");
+    assert_eq!(modified["contentChanged"], true);
+
+    let fetched = call_mcp_tool(&server, "memory_get", json!({"id": memory_id})).await;
+    assert_eq!(fetched["content"], "MCP modify replay updated content.");
+    assert_eq!(fetched["importance"], 0.8);
+    assert_eq!(fetched["pinned"], true);
 }
 
 #[tokio::test]
@@ -1449,6 +3233,183 @@ async fn hook_session_lifecycle() {
 
 #[tokio::test]
 #[ignore = "requires built daemon binary"]
+async fn synthesis_hooks_replay_projection_and_status_shapes() {
+    let server = TestServer::start().await;
+
+    let resp = server.get("/api/hooks/synthesis/config").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert!(body["enabled"].is_boolean());
+    assert!(body["provider"].is_string());
+    assert!(body["model"].is_string());
+
+    let resp = server.get("/api/synthesis/status").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert!(body["running"].is_boolean());
+    assert_eq!(body["lastRunAt"], serde_json::Value::Null);
+    assert!(body["config"].is_object());
+
+    let resp = server
+        .post("/api/hooks/synthesis", json!({"trigger": "manual"}))
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["harness"], "daemon");
+    assert_eq!(body["model"], "projection");
+    assert!(body["prompt"].is_string());
+    assert!(body["fileCount"].is_number());
+    assert!(body["indexBlock"].is_string());
+
+    let resp = server
+        .post("/api/hooks/synthesis/complete", json!({}))
+        .await;
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "content is required");
+
+    let resp = server
+        .post(
+            "/api/hooks/synthesis/complete",
+            json!({"content": "# MEMORY\n"}),
+        )
+        .await;
+    assert_eq!(resp.status(), 503);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "Synthesis worker not running");
+
+    let resp = server.post("/api/synthesis/trigger", json!({})).await;
+    assert_eq!(resp.status(), 503);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "Synthesis worker not running");
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn dream_routes_replay_status_and_inactive_worker_shapes() {
+    let server = TestServer::start().await;
+
+    let resp = server.get("/api/dream/status?agentId=agent-dream").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["enabled"], false);
+    assert_eq!(body["worker"]["running"], false);
+    assert_eq!(body["worker"]["active"], false);
+    assert_eq!(body["worker"]["activeAgentId"], serde_json::Value::Null);
+    assert_eq!(body["state"]["tokensSinceLastPass"], 0);
+    assert_eq!(body["state"]["consecutiveFailures"], 0);
+    assert_eq!(body["state"]["lastPassAt"], serde_json::Value::Null);
+    assert_eq!(body["config"]["tokenThreshold"], 100000);
+    assert_eq!(body["config"]["backfillOnFirstRun"], true);
+    assert!(
+        body["passes"]
+            .as_array()
+            .expect("dreaming passes")
+            .is_empty()
+    );
+
+    let resp = server.post("/api/dream/trigger", json!({})).await;
+    assert_eq!(resp.status(), 503);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "Dreaming worker not running");
+
+    let resp = server.post("/api/dream/promote", json!({})).await;
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "from is required");
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn dream_promote_replays_native_preference_preview_and_apply() {
+    let server = TestServer::start().await;
+    let conn = rusqlite::Connection::open(server.db_path()).expect("open replay db");
+    conn.busy_timeout(Duration::from_secs(5)).unwrap();
+    conn.execute(
+        "INSERT INTO memories
+         (id, type, content, confidence, importance, project, created_at, updated_at,
+          updated_by, is_deleted, version, agent_id)
+         VALUES (?1, 'preference', ?2, 0.9, 0.8, '/tmp/signet',
+                 '2026-05-16T10:00:00Z', '2026-05-16T10:00:00Z',
+                 'contract-replay', 0, 1, 'ant')",
+        rusqlite::params![
+            "mem-dream-pref",
+            "Nicholai prefers xyz to be like this when we're doing that.",
+        ],
+    )
+    .expect("seed dream promotion memory");
+    drop(conn);
+
+    let resp = server
+        .post(
+            "/api/dream/promote?agentId=ant",
+            json!({"from": "memory:mem-dream-pref"}),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["dryRun"], true);
+    assert_eq!(body["count"], 1);
+    assert_eq!(body["appliedCount"], 0);
+    assert_eq!(body["sources"][0]["kind"], "memory");
+    assert_eq!(body["operations"][0]["operation"], "set_claim_value");
+    assert_eq!(body["operations"][0]["payload"]["entity"], "Nicholai");
+    assert_eq!(body["operations"][0]["payload"]["aspect"], "preferences");
+    assert_eq!(body["operations"][0]["payload"]["group_key"], "workflow");
+    assert_eq!(
+        body["operations"][0]["payload"]["claim_key"],
+        "prefers_xyz_when_we_re_doing_that"
+    );
+
+    let resp = server
+        .post(
+            "/api/dream/promote?agentId=ant",
+            json!({"from": "memory:mem-dream-pref", "apply": true}),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["dryRun"], false);
+    assert_eq!(body["appliedCount"], 1);
+
+    let conn = rusqlite::Connection::open(server.db_path()).expect("open replay db");
+    conn.busy_timeout(Duration::from_secs(5)).unwrap();
+    let row: (String, String, i64, String, String) = conn
+        .query_row(
+            "SELECT attr.content, attr.status, attr.version, attr.source_kind, attr.source_id
+             FROM entity_attributes attr
+             JOIN entity_aspects asp ON asp.id = attr.aspect_id
+             JOIN entities e ON e.id = asp.entity_id
+             WHERE e.agent_id = 'ant'
+               AND e.name = 'Nicholai'
+               AND asp.name = 'preferences'
+               AND attr.group_key = 'workflow'
+               AND attr.claim_key = 'prefers_xyz_when_we_re_doing_that'
+               AND attr.kind = 'attribute'",
+            [],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
+        )
+        .expect("dream promotion attribute");
+    assert_eq!(
+        row.0,
+        "Nicholai prefers xyz to be like this when we're doing that."
+    );
+    assert_eq!(row.1, "active");
+    assert_eq!(row.2, 1);
+    assert_eq!(row.3, "memory");
+    assert_eq!(row.4, "mem-dream-pref");
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
 async fn repair_endpoints() {
     let server = TestServer::start().await;
 
@@ -1460,6 +3421,116 @@ async fn repair_endpoints() {
 
     let resp = server.get("/api/repair/cold-stats").await;
     assert_eq!(resp.status(), 200);
+
+    let resp = server
+        .post("/api/repair/prune-generic-entities", json!({}))
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["action"], "prune-generic-entities");
+    assert_eq!(body["pruned"], 0);
+
+    let resp = server.post("/api/repair/cluster-entities", json!({})).await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["action"], "cluster-entities");
+    assert_eq!(body["clusters"], 0);
+
+    let resp = server.post("/api/repair/relink-entities", json!({})).await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["action"], "relink-entities");
+    assert_eq!(body["remaining"], 0);
+    assert_eq!(body["message"], "all memories linked");
+
+    let resp = server.post("/api/repair/backfill-hints", json!({})).await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["action"], "backfill-hints");
+    assert_eq!(body["enqueued"], 0);
+    assert_eq!(body["message"], "all unscoped memories have hints");
+
+    let resp = server.post("/api/repair/re-embed", json!({})).await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["action"], "reembedMissingMemories");
+
+    let resp = server
+        .post("/api/repair/reclassify-entities", json!({}))
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["action"], "reclassify_entities");
+
+    let resp = server
+        .post("/api/repair/structural-backfill", json!({}))
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["action"], "structural_backfill");
+
+    let resp = server
+        .get("/api/repair/dead-memories?maxConfidence=2")
+        .await;
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert_eq!(
+        body["error"],
+        "maxConfidence must be 0–1, maxAccessDays and limit must be non-negative"
+    );
+
+    let resp = server.get("/api/repair/dead-memories").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["count"], 0);
+    assert!(
+        body["memories"]
+            .as_array()
+            .expect("dead memories")
+            .is_empty()
+    );
+
+    let resp = server
+        .post("/api/repair/dead-memories/forget", json!({}))
+        .await;
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "ids must be a non-empty array");
+
+    let resp = server
+        .post(
+            "/api/repair/dead-memories/forget",
+            json!({"ids": ["dead-memory-a"]}),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["forgotten"], 0);
+
+    let resp = server.get("/api/troubleshoot/commands").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    let commands = body["commands"].as_array().expect("commands");
+    assert!(commands.iter().any(|command| command["key"] == "status"));
+    assert!(
+        commands
+            .iter()
+            .any(|command| command["display"] == "signet daemon status")
+    );
+
+    let resp = server.post("/api/troubleshoot/exec", json!({})).await;
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "Unknown command: ");
+
+    let resp = server
+        .post("/api/troubleshoot/exec", json!({"key": "status"}))
+        .await;
+    assert!([200, 500].contains(&resp.status().as_u16()));
+    let body = server.json(resp).await;
+    assert_eq!(body["key"], "status");
+    assert_eq!(body["command"], "signet status");
+    assert!(body["type"] == "exit" || body["error"].is_string());
 }
 
 #[tokio::test]
@@ -1475,11 +3546,90 @@ async fn timeline_endpoint() {
 async fn cross_agent_endpoints() {
     let server = TestServer::start().await;
 
+    let resp = server
+        .post(
+            "/api/cross-agent/presence",
+            json!({
+                "sessionKey": "agent:alpha:peer-one",
+                "agentId": "alpha",
+                "harness": "codex",
+                "project": "/workspace/replay",
+                "runtimePath": "plugin",
+                "provider": "codex"
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+
     let resp = server.get("/api/cross-agent/presence").await;
     assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["count"], 1);
+
+    let peers = call_mcp_tool(
+        &server,
+        "agent_peers",
+        json!({
+            "agent_id": "default",
+            "project": "/workspace/replay",
+            "limit": 10
+        }),
+    )
+    .await;
+    assert_eq!(peers["count"], 1);
+    assert_eq!(peers["sessions"][0]["agentId"], "alpha");
+    assert_eq!(peers["sessions"][0]["sessionKey"], "agent:alpha:peer-one");
+
+    let sent = call_mcp_tool(
+        &server,
+        "agent_message_send",
+        json!({
+            "from_agent_id": "default",
+            "from_session_key": "agent:default:sender",
+            "to_agent_id": "alpha",
+            "to_session_key": "agent:alpha:peer-one",
+            "type": "question",
+            "content": "Cross-agent MCP replay message"
+        }),
+    )
+    .await;
+    assert_eq!(sent["fromAgentId"], "default");
+    assert_eq!(sent["toAgentId"], "alpha");
+    assert_eq!(sent["type"], "question");
 
     let resp = server.get("/api/cross-agent/messages").await;
     assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["count"], 1);
+
+    let inbox = call_mcp_tool(
+        &server,
+        "agent_message_inbox",
+        json!({
+            "agent_id": "alpha",
+            "session_key": "agent:alpha:peer-one",
+            "limit": 10
+        }),
+    )
+    .await;
+    assert_eq!(inbox["count"], 1);
+    assert_eq!(
+        inbox["items"][0]["content"],
+        "Cross-agent MCP replay message"
+    );
+    assert_eq!(inbox["items"][0]["toSessionKey"], "agent:alpha:peer-one");
+
+    let resp = server.get("/api/cross-agent/stream").await;
+    assert_eq!(resp.status(), 200);
+    assert_eq!(
+        resp.headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default(),
+        "text/event-stream"
+    );
+    let text = resp.text().await.expect("cross-agent stream body");
+    assert!(text.contains("\"type\":\"connected\""));
 }
 
 #[tokio::test]
@@ -1576,12 +3726,75 @@ async fn skills_endpoints() {
 #[tokio::test]
 #[ignore = "requires built daemon binary"]
 async fn sources_endpoints() {
+    let picker_dir = tempfile::tempdir().expect("picker fixture dir");
+    let picked_dir = picker_dir.path().join("picked");
+    std::fs::create_dir_all(&picked_dir).unwrap();
+    let picker = picker_dir.path().join("pick-directory.sh");
+    std::fs::write(
+        &picker,
+        format!(
+            "#!/usr/bin/env bash\nprintf '%s\\n' '{}'\n",
+            picked_dir.display()
+        ),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&picker, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let original_picker = std::env::var_os("SIGNET_DIRECTORY_PICKER");
+    unsafe {
+        std::env::set_var("SIGNET_DIRECTORY_PICKER", &picker);
+    }
     let server = TestServer::start().await;
 
     let resp = server.get("/api/sources").await;
     assert_eq!(resp.status(), 200);
     let body = server.json(resp).await;
     assert_eq!(body, json!({"version": 1, "sources": []}));
+
+    let resp = server.post("/api/sources/pick-directory", json!({})).await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["path"], picked_dir.display().to_string());
+    unsafe {
+        if let Some(value) = original_picker {
+            std::env::set_var("SIGNET_DIRECTORY_PICKER", value);
+        } else {
+            std::env::remove_var("SIGNET_DIRECTORY_PICKER");
+        }
+    }
+
+    let resp = server.post("/api/sources/discord", json!({})).await;
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "At least one Discord guild ID is required");
+
+    let resp = server.post("/api/sources/github", json!({})).await;
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert_eq!(
+        body["error"],
+        "At least one GitHub repo pattern is required"
+    );
+
+    let resp = server.get("/api/sources/missing/snapshot").await;
+    assert_eq!(resp.status(), 404);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "Source not found");
+
+    let resp = server.get("/api/sources/missing/health").await;
+    assert_eq!(resp.status(), 404);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "Source not found");
+
+    let resp = server
+        .post("/api/sources/missing/snapshot/import", json!({}))
+        .await;
+    assert_eq!(resp.status(), 404);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "Source not found");
 
     let vault = server._tmpdir.path().join("vault");
     std::fs::create_dir_all(&vault).unwrap();
@@ -1597,6 +3810,33 @@ async fn sources_endpoints() {
     assert_eq!(body["source"]["kind"], "obsidian");
     let id = body["source"]["id"].as_str().unwrap().to_string();
 
+    let resp = server.get(&format!("/api/sources/{id}/snapshot")).await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["version"], 1);
+    assert_eq!(body["source"]["id"], id);
+    assert_eq!(body["artifacts"], json!([]));
+
+    let resp = server.get(&format!("/api/sources/{id}/health")).await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["source"]["id"], id);
+    assert_eq!(
+        body["stats"],
+        json!({"artifacts": 0, "chunks": 0, "indexed": 0})
+    );
+    assert_eq!(body["health"]["status"], "empty");
+
+    let resp = server
+        .post(
+            &format!("/api/sources/{id}/snapshot/import"),
+            json!({"source": {"id": "other"}}),
+        )
+        .await;
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert!(body["error"].as_str().unwrap().contains("does not match"));
+
     let resp = server.delete(&format!("/api/sources/{id}")).await;
     assert_eq!(resp.status(), 200);
 
@@ -1608,6 +3848,55 @@ async fn sources_endpoints() {
             .as_str()
             .unwrap_or_default()
             .contains("Source not found")
+    );
+
+    let resp = server
+        .post(
+            "/api/sources/discord",
+            json!({
+                "guildIds": ["123456789012345678"],
+                "tokenRef": "DISCORD_BOT_TOKEN",
+                "name": "Replay Discord",
+                "includeAttachmentText": true,
+                "maxAttachmentTextBytes": 2048
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 202);
+    let body = server.json(resp).await;
+    assert_eq!(body["queued"], true);
+    assert_eq!(body["source"]["kind"], "discord");
+    assert_eq!(
+        body["source"]["providerSettings"]["tokenRef"],
+        "DISCORD_BOT_TOKEN"
+    );
+    assert_eq!(
+        body["source"]["providerSettings"]["includeAttachmentText"],
+        true
+    );
+    assert_eq!(
+        body["source"]["providerSettings"]["maxAttachmentTextBytes"],
+        2048
+    );
+
+    let resp = server
+        .post(
+            "/api/sources/github",
+            json!({
+                "repos": ["Signet-AI/signetai"],
+                "name": "Replay GitHub",
+                "resourceTypes": ["issues", "docs"],
+                "maxItemsPerRepo": 5
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 202);
+    let body = server.json(resp).await;
+    assert_eq!(body["queued"], true);
+    assert_eq!(body["source"]["kind"], "github");
+    assert_eq!(
+        body["source"]["providerSettings"]["repos"],
+        json!(["Signet-AI/signetai"])
     );
 }
 
@@ -1957,6 +4246,18 @@ async fn knowledge_expand_native_graph_data() {
     assert_eq!(body["aspects"][0]["name"], "identity");
     assert_eq!(body["dependencies"][0]["target"], "Provenance");
 
+    let body = call_mcp_tool(
+        &server,
+        "knowledge_expand",
+        json!({"entity_name": "Signet", "aspect_filter": "identity", "max_tokens": 200}),
+    )
+    .await;
+    assert_eq!(body["entity"]["name"], "Signet");
+    assert_eq!(body["memoryCount"], 1);
+    assert_eq!(body["memories"][0]["id"], "mem-signet-context");
+    assert_eq!(body["aspects"][0]["name"], "identity");
+    assert_eq!(body["dependencies"][0]["target"], "Provenance");
+
     let resp = server
         .post(
             "/api/knowledge/expand",
@@ -1987,6 +4288,156 @@ async fn knowledge_expand_native_graph_data() {
     let body = server.json(resp).await;
     assert_eq!(body["entityName"], "%");
     assert_eq!(body["total"], 0);
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn knowledge_navigation_routes_replay_ts_shape() {
+    let server = TestServer::start().await;
+    server.seed_knowledge_navigation_fixture();
+
+    let resp = server
+        .get("/api/knowledge/navigation/entities?limit=10")
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["items"][0]["name"], "Nicholai");
+    assert_eq!(body["items"][0]["aspectCount"], 1);
+
+    let resp = server
+        .get("/api/knowledge/navigation/entity?name=Nicholai")
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["entity"]["name"], "Nicholai");
+    assert_eq!(body["aspectCount"], 1);
+
+    let resp = server
+        .get("/api/knowledge/navigation/aspects?entity=Nicholai")
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["entity"]["name"], "Nicholai");
+    assert_eq!(body["items"][0]["canonicalName"], "food");
+
+    let resp = server
+        .get("/api/knowledge/navigation/groups?entity=Nicholai&aspect=food")
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    let groups = body["items"].as_array().expect("group items");
+    assert_eq!(groups[0]["groupKey"], "restaurants");
+    assert_eq!(groups[0]["claimCount"], 2);
+    assert_eq!(groups[1]["groupKey"], "dietary_constraints");
+
+    let resp = server
+        .get("/api/knowledge/navigation/claims?entity=Nicholai&aspect=food&group=restaurants")
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    let claims = body["items"].as_array().expect("claim items");
+    assert_eq!(claims[0]["claimKey"], "favorite_restaurant");
+    assert_eq!(claims[0]["activeCount"], 1);
+    assert_eq!(claims[0]["supersededCount"], 1);
+    assert_eq!(
+        claims[0]["preview"],
+        "Nicholai currently prefers Temaki Den."
+    );
+    assert_eq!(claims[1]["claimKey"], "korean_restaurants_tried_count");
+
+    let resp = server
+        .get("/api/knowledge/navigation/attributes?entity=Nicholai&aspect=food&group=restaurants&claim=favorite_restaurant")
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    let active = body["items"].as_array().expect("active attributes");
+    assert_eq!(active.len(), 1);
+    assert_eq!(
+        active[0]["content"],
+        "Nicholai currently prefers Temaki Den."
+    );
+    assert_eq!(active[0]["groupKey"], "restaurants");
+    assert_eq!(active[0]["claimKey"], "favorite_restaurant");
+
+    let resp = server
+        .get("/api/knowledge/navigation/attributes?entity=Nicholai&aspect=food&group=restaurants&claim=favorite_restaurant&status=all")
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    let all = body["items"].as_array().expect("all attributes");
+    assert_eq!(all.len(), 2);
+    assert_eq!(all[0]["status"], "active");
+    assert_eq!(all[1]["status"], "superseded");
+
+    let resp = server
+        .get("/api/knowledge/navigation/tree?entity=Nicholai&depth=3")
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["entity"]["name"], "Nicholai");
+    assert_eq!(body["limits"]["depth"], 3);
+    assert_eq!(body["items"][0]["aspect"]["canonicalName"], "food");
+    assert_eq!(body["items"][0]["groups"][0]["groupKey"], "restaurants");
+    assert_eq!(
+        body["items"][0]["groups"][0]["claims"][0]["preview"],
+        "Nicholai currently prefers Temaki Den."
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn knowledge_health_hygiene_and_communities_replay_ts_shape() {
+    let server = TestServer::start().await;
+    server.seed_knowledge_health_hygiene_fixture();
+
+    let resp = server
+        .get("/api/knowledge/entities/health?min_comparisons=3")
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    let health = body.as_array().expect("health array");
+    assert_eq!(health[0]["entityId"], "entity-signet-hygiene");
+    assert_eq!(health[0]["entityName"], "Signet");
+    assert_eq!(health[0]["comparisonCount"], 3);
+    assert_eq!(health[0]["trend"], "improving");
+
+    let resp = server
+        .get("/api/knowledge/hygiene?limit=10&memory_limit=10")
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["agentId"], "default");
+    assert!(
+        body["suspiciousEntities"]
+            .as_array()
+            .expect("suspicious entities")
+            .iter()
+            .any(
+                |entity| entity["id"] == "entity-the-hygiene" && entity["reason"] == "generic_word"
+            )
+    );
+    assert_eq!(body["duplicateEntities"][0]["canonicalName"], "duplicate");
+    assert_eq!(body["attributeSummary"]["missingGroupKey"], 1);
+    assert_eq!(
+        body["safeMentionCandidates"][0]["memoryId"],
+        "mem-hygiene-signet"
+    );
+    assert_eq!(
+        body["safeMentionCandidates"][0]["snippet"],
+        "Signet should keep graph repair mechanical."
+    );
+
+    let resp = server.get("/api/knowledge/communities").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["count"], 1);
+    assert_eq!(body["items"][0]["id"], "community-signet");
+    assert_eq!(body["items"][0]["member_count"], 4);
+
+    let resp = server.get("/api/knowledge/traversal/status").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert!(body["status"].is_null());
 }
 
 #[tokio::test]
@@ -2086,6 +4537,81 @@ async fn marketplace_reviews_native_roundtrip() {
     assert_eq!(body["summary"]["count"], 1);
     assert_eq!(body["summary"]["avgRating"], 5.0);
 
+    let marketplace_dir = server._tmpdir.path().join("marketplace");
+    std::fs::create_dir_all(&marketplace_dir).expect("marketplace dir");
+    std::fs::write(
+        marketplace_dir.join("reviews.json"),
+        serde_json::to_string_pretty(&json!([{
+            "id": "review-replay",
+            "targetType": "skill",
+            "targetId": "skills.sh/foo",
+            "displayName": "avery",
+            "rating": 4,
+            "title": "Initial",
+            "body": "Initial review body",
+            "source": "local",
+            "createdAt": "2026-01-01T00:00:00Z",
+            "updatedAt": "2026-01-01T00:00:00Z",
+            "syncedAt": "2026-01-01T00:00:00Z"
+        }]))
+        .unwrap(),
+    )
+    .expect("write review fixture");
+
+    let resp = server
+        .patch(
+            "/api/marketplace/reviews/review-replay",
+            json!({
+                "displayName": "riley",
+                "rating": 3,
+                "title": "Updated",
+                "body": "Updated review body"
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["success"], true);
+    assert_eq!(body["review"]["displayName"], "riley");
+    assert_eq!(body["review"]["rating"], 3);
+    assert_eq!(body["review"]["syncedAt"], serde_json::Value::Null);
+
+    let resp = server
+        .patch(
+            "/api/marketplace/reviews/review-replay",
+            json!({"rating": 8}),
+        )
+        .await;
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert_eq!(
+        body["error"],
+        "displayName, rating, title, and body must be valid when provided"
+    );
+
+    let resp = server
+        .delete("/api/marketplace/reviews/review-replay")
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["success"], true);
+    assert_eq!(body["id"], "review-replay");
+
+    let resp = server
+        .delete("/api/marketplace/reviews/review-replay")
+        .await;
+    assert_eq!(resp.status(), 404);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "Review not found");
+
+    let resp = server
+        .post("/api/marketplace/reviews/sync", json!({}))
+        .await;
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert_eq!(body["success"], false);
+    assert_eq!(body["error"], "Review sync endpoint is not configured");
+
     let resp = server
         .patch(
             "/api/marketplace/reviews/config",
@@ -2100,6 +4626,16 @@ async fn marketplace_reviews_native_roundtrip() {
         body["config"]["endpointUrl"],
         "https://reviews.signetai.sh/reviews"
     );
+
+    let resp = server
+        .post("/api/marketplace/reviews/sync", json!({}))
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["success"], true);
+    assert_eq!(body["sent"], 0);
+    assert_eq!(body["synced"], 0);
+    assert_eq!(body["message"], "No pending reviews");
 
     let resp = server
         .patch(
@@ -2129,7 +4665,6 @@ async fn marketplace_reviews_native_roundtrip() {
     let body = server.json(resp).await;
     assert_eq!(body["endpointUrl"], "https://reviews.signetai.sh/reviews");
 
-    let marketplace_dir = server._tmpdir.path().join("marketplace");
     let mut entries: Vec<String> = std::fs::read_dir(&marketplace_dir)
         .expect("marketplace dir exists")
         .map(|entry| {
@@ -2364,8 +4899,488 @@ async fn existing_documented_routes_remain_mounted() {
     assert!(body.get("available").is_some());
     assert!(body.get("tracker").is_some());
 
+    let resp = server.get("/api/embeddings/health").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert!(body.get("status").is_some());
+    assert!(body.get("score").is_some());
+    assert!(body.get("checkedAt").is_some());
+    assert!(body.get("config").is_some());
+    let checks = body["checks"].as_array().expect("health checks array");
+    let check_names: Vec<&str> = checks
+        .iter()
+        .filter_map(|check| check.get("name").and_then(|name| name.as_str()))
+        .collect();
+    assert!(check_names.contains(&"provider-available"));
+    assert!(check_names.contains(&"coverage"));
+    assert!(check_names.contains(&"dimension-mismatch"));
+    assert!(check_names.contains(&"model-drift"));
+    assert!(check_names.contains(&"null-vectors"));
+    assert!(check_names.contains(&"vec-table-sync"));
+    assert!(check_names.contains(&"orphaned-embeddings"));
+
+    let resp = server
+        .get("/api/embeddings/projection?dimensions=3&limit=5")
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["status"], "ready");
+    assert_eq!(body["dimensions"], 3);
+    assert_eq!(body["count"], 0);
+    assert_eq!(body["limit"], 5);
+    assert!(
+        body["nodes"]
+            .as_array()
+            .expect("projection nodes")
+            .is_empty()
+    );
+    assert!(
+        body["edges"]
+            .as_array()
+            .expect("projection edges")
+            .is_empty()
+    );
+
     let resp = server.post("/api/memory/forget", json!({})).await;
     assert_eq!(resp.status(), 400);
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn dashboard_openclaw_and_harness_routes_replay_ts_shapes() {
+    let server = TestServer::start().await;
+
+    let resp = server.get("/").await;
+    assert_eq!(resp.status(), 200);
+    let body = resp.text().await.expect("root dashboard fallback body");
+    assert!(body.contains("Signet Daemon"));
+    assert!(body.contains("dashboard is not installed"));
+
+    let resp = server.get("/api/home/greeting").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert!(
+        body["greeting"]
+            .as_str()
+            .unwrap_or_default()
+            .starts_with("good ")
+    );
+    assert!(body.get("cachedAt").is_some());
+
+    let resp = server.get("/api/diagnostics/openclaw").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["status"], "never-seen");
+    assert_eq!(body["lastHeartbeat"], serde_json::Value::Null);
+    assert_eq!(body["pluginVersion"], serde_json::Value::Null);
+    assert_eq!(body["hooksSucceeded"], 0);
+    assert_eq!(body["hooksFailed"], 0);
+
+    let resp = server
+        .post(
+            "/api/diagnostics/openclaw/heartbeat",
+            json!({
+                "pluginVersion": "0.1.0",
+                "hooksRegistered": ["prompt-submit", "session-end"],
+                "lastHookCall": "prompt-submit",
+                "lastError": null,
+                "latencyMs": 12.5,
+                "hooksSucceeded": 3,
+                "hooksFailed": 1,
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["ok"], true);
+
+    let resp = server.get("/api/diagnostics/openclaw").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["status"], "connected");
+    assert_eq!(body["pluginVersion"], "0.1.0");
+    assert_eq!(body["hooksSucceeded"], 3);
+    assert_eq!(body["hooksFailed"], 1);
+    assert_eq!(body["lastLatencyMs"], 12.5);
+    assert_eq!(body["lastError"], serde_json::Value::Null);
+    assert_eq!(
+        body["hooksRegistered"]
+            .as_array()
+            .expect("hooks registered")
+            .len(),
+        2
+    );
+
+    let resp = server.post("/api/harnesses/regenerate", json!({})).await;
+    assert_eq!(resp.status(), 404);
+    let body = server.json(resp).await;
+    assert_eq!(body["success"], false);
+    assert_eq!(body["error"], "Regeneration script not found");
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn provider_safety_routes_replay_empty_audit_and_validation() {
+    let server = TestServer::start().await;
+
+    let resp = server.get("/api/config/provider-safety").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert!(body.get("snapshot").is_some());
+    assert!(
+        body["transitions"]
+            .as_array()
+            .expect("provider transitions")
+            .is_empty()
+    );
+    assert_eq!(body["latestRiskyTransition"], serde_json::Value::Null);
+
+    let resp = server
+        .post(
+            "/api/config/provider-safety/rollback",
+            json!({"role": "memory"}),
+        )
+        .await;
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "role must be 'extraction' or 'synthesis'");
+
+    let resp = server
+        .post("/api/config/provider-safety/rollback", json!({}))
+        .await;
+    assert_eq!(resp.status(), 404);
+    let body = server.json(resp).await;
+    assert_eq!(
+        body["error"],
+        "No provider transition with rollback target found"
+    );
+
+    std::fs::write(
+        server._tmpdir.path().join("agent.yaml"),
+        "agent:\n  name: test-agent\n  version: 1\nmemory:\n  pipelineV2:\n    extractionProvider: anthropic\n    extractionModel: claude-3-haiku\n    extractionEndpoint: https://api.anthropic.com\n    extraction:\n      provider: anthropic\n      model: claude-3-haiku\n      endpoint: https://api.anthropic.com\n",
+    )
+    .expect("write provider rollback config");
+    std::fs::write(
+        server
+            ._tmpdir
+            .path()
+            .join(".daemon/provider-transitions.json"),
+        serde_json::to_string_pretty(&json!([
+            {
+                "role": "extraction",
+                "from": "ollama",
+                "to": "anthropic",
+                "timestamp": "2026-06-02T00:00:00.000Z",
+                "source": "agent.yaml",
+                "risky": true
+            }
+        ]))
+        .expect("provider transitions json"),
+    )
+    .expect("write provider transitions");
+
+    let resp = server
+        .post(
+            "/api/config/provider-safety/rollback",
+            json!({"role": "extraction"}),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["success"], true);
+    assert_eq!(body["file"], "agent.yaml");
+    assert_eq!(body["rolledBack"]["from"], "ollama");
+    assert_eq!(body["rolledBack"]["to"], "anthropic");
+    assert_eq!(body["rolledBack"]["rolledBack"], true);
+
+    let config = std::fs::read_to_string(server._tmpdir.path().join("agent.yaml"))
+        .expect("read rolled back config");
+    assert!(config.contains("extractionProvider: ollama"));
+    assert!(config.contains("provider: ollama"));
+    assert!(!config.contains("claude-3-haiku"));
+    assert!(!config.contains("anthropic.com"));
+
+    let transitions: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(
+            server
+                ._tmpdir
+                .path()
+                .join(".daemon/provider-transitions.json"),
+        )
+        .expect("read provider transitions"),
+    )
+    .expect("parse provider transitions");
+    assert_eq!(transitions[0]["rolledBack"], true);
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn reflection_routes_replay_empty_and_validation_shapes() {
+    let server = TestServer::start().await;
+
+    let resp = server.get("/api/reflections/today?agentId=agent-r").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["reflection"], serde_json::Value::Null);
+    assert!(
+        body["reflections"]
+            .as_array()
+            .expect("today reflections")
+            .is_empty()
+    );
+
+    let resp = server
+        .get("/api/reflections?agentId=agent-r&limit=-1")
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert!(
+        body["reflections"]
+            .as_array()
+            .expect("reflection list")
+            .is_empty()
+    );
+
+    let resp = server
+        .post(
+            "/api/reflections/generate?agentId=agent-r&count=2",
+            json!({}),
+        )
+        .await;
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "Reflections are disabled in pipeline config");
+
+    let resp = server
+        .post("/api/reflections/reflection-missing/answer", json!({}))
+        .await;
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "answer is required");
+
+    let resp = server
+        .post(
+            "/api/reflections/reflection-missing/answer?agentId=agent-r",
+            json!({"answer": "Keep this insight"}),
+        )
+        .await;
+    assert_eq!(resp.status(), 404);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "Reflection not found");
+
+    server.seed_reflection_fixture();
+    let resp = server
+        .post(
+            "/api/reflections/reflection-answer-replay/answer?agentId=agent-r",
+            json!({"answer": "  Ship the reflection parity fix.  "}),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["success"], true);
+    let memory_id = body["memoryId"].as_str().expect("memory id");
+
+    let conn = rusqlite::Connection::open(server.db_path()).expect("open replay db");
+    conn.busy_timeout(Duration::from_secs(5)).unwrap();
+    let stored = conn
+        .query_row(
+            "SELECT r.answer, r.answer_memory_id, m.content, m.agent_id, m.source_type, m.source_id, m.content_hash
+             FROM daily_reflections r
+             JOIN memories m ON m.id = r.answer_memory_id
+             WHERE r.id = 'reflection-answer-replay'",
+            [],
+            |row| {
+                Ok(serde_json::json!({
+                    "answer": row.get::<_, String>(0)?,
+                    "answerMemoryId": row.get::<_, String>(1)?,
+                    "content": row.get::<_, String>(2)?,
+                    "agentId": row.get::<_, String>(3)?,
+                    "sourceType": row.get::<_, String>(4)?,
+                    "sourceId": row.get::<_, String>(5)?,
+                    "contentHash": row.get::<_, String>(6)?,
+                }))
+            },
+        )
+        .expect("reflection answer row");
+    assert_eq!(stored["answer"], "Ship the reflection parity fix.");
+    assert_eq!(stored["answerMemoryId"], memory_id);
+    assert_eq!(stored["content"], "Ship the reflection parity fix.");
+    assert_eq!(stored["agentId"], "agent-r");
+    assert_eq!(stored["sourceType"], "reflection-answer");
+    assert_eq!(stored["sourceId"], "reflection-answer-replay");
+    assert_eq!(
+        stored["contentHash"],
+        "reflection-a-reflection-answer-replay"
+    );
+
+    let resp = server
+        .post(
+            "/api/reflections/reflection-answer-replay/answer?agentId=agent-r",
+            json!({"answer": "Second answer."}),
+        )
+        .await;
+    assert_eq!(resp.status(), 409);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "Already answered");
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn analytics_collector_routes_return_ts_compatible_empty_snapshots() {
+    let server = TestServer::start().await;
+
+    let resp = server.get("/api/analytics/usage").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert!(body["endpoints"].is_object());
+    assert!(body["actors"].is_object());
+    assert!(body["providers"].is_object());
+    assert!(body["connectors"].is_object());
+
+    let resp = server
+        .get("/api/analytics/errors?stage=mutation&limit=5")
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert!(body["errors"].as_array().expect("errors").is_empty());
+    assert!(body["summary"].is_object());
+
+    let resp = server.get("/api/analytics/latency").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["remember"]["count"], 0);
+    assert_eq!(body["predictor_train"]["p95"], 0);
+
+    let resp = server.get("/api/analytics/logs?limit=5&level=error").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["count"], 0);
+    assert!(body["logs"].as_array().expect("logs").is_empty());
+
+    let resp = server.get("/api/analytics/memory-safety").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert!(body["mutation"].is_object());
+    assert!(
+        body["recentErrors"]
+            .as_array()
+            .expect("recent errors")
+            .is_empty()
+    );
+    assert!(body["errorSummary"].is_object());
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn auth_token_route_mints_scoped_tokens_and_whoami_reads_bearer() {
+    let server = TestServer::start_team_auth().await;
+    let admin_token = TestServer::scoped_role_token("default", "admin");
+
+    let resp = server
+        .post_bearer(
+            "/api/auth/token",
+            json!({
+                "role": "agent",
+                "scope": {"agent": "worker-a"},
+                "ttlSeconds": 60
+            }),
+            &admin_token,
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    let minted = body["token"].as_str().expect("token");
+    assert!(body["expiresAt"].as_str().is_some_and(|s| s.ends_with('Z')));
+
+    let resp = server.get_bearer("/api/auth/whoami", minted).await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["authenticated"], true);
+    assert_eq!(body["claims"]["role"], "agent");
+    assert_eq!(body["claims"]["scope"]["agent"], "worker-a");
+
+    let resp = server
+        .post_bearer("/api/auth/token", json!({"role": "readonly"}), minted)
+        .await;
+    assert_eq!(resp.status(), 403);
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn database_diagnostics_schema_and_samples_replay_ts_shape() {
+    let server = TestServer::start().await;
+
+    let resp = server.get("/api/diagnostics/database/schema").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert!(body["generatedAt"].as_str().is_some());
+    assert!(body["groups"]["core"].as_i64().is_some_and(|n| n > 0));
+    let tables = body["tables"].as_array().expect("tables");
+    let memories = tables
+        .iter()
+        .find(|table| table["name"] == "memories")
+        .expect("memories table");
+    assert_eq!(memories["group"], "core");
+    assert_eq!(memories["sampleAllowed"], true);
+    assert!(
+        memories["columns"]
+            .as_array()
+            .is_some_and(|cols| !cols.is_empty())
+    );
+    assert!(memories["indexes"].as_array().is_some());
+    assert!(memories["foreignKeys"].as_array().is_some());
+
+    let resp = server
+        .get("/api/diagnostics/database/tables/memories/sample?limit=2&offset=0")
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["table"], "memories");
+    assert_eq!(body["limit"], 2);
+    assert_eq!(body["offset"], 0);
+    assert!(
+        body["columns"]
+            .as_array()
+            .is_some_and(|cols| cols.iter().any(|col| col == "id"))
+    );
+    assert!(body["rows"].as_array().is_some());
+    assert!(body["hasMore"].as_bool().is_some());
+
+    let resp = server
+        .get("/api/diagnostics/database/tables/not_a_table/sample")
+        .await;
+    assert_eq!(resp.status(), 404);
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn changelog_roadmap_and_readme_routes_render_local_docs() {
+    let server = TestServer::start().await;
+
+    let resp = server.get("/api/changelog").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["source"], "local");
+    assert!(body["cachedAt"].as_i64().is_some());
+    let html = body["html"].as_str().expect("changelog html");
+    assert!(html.contains("<h1>Changelog</h1>"));
+    assert!(html.contains("<h2>[0.138."));
+
+    let resp = server.get("/api/roadmap").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["source"], "local");
+    let html = body["html"].as_str().expect("roadmap html");
+    assert!(html.contains("<h1>Roadmap</h1>"));
+    assert!(html.contains("Rust daemon parity"));
+
+    let resp = server.get("/api/readme").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["source"], "local");
+    let html = body["html"].as_str().expect("readme html");
+    assert!(html.contains("Signet"));
+    assert!(html.contains("Bring your own context"));
 }
 
 #[tokio::test]
@@ -2373,6 +5388,31 @@ async fn existing_documented_routes_remain_mounted() {
 async fn telemetry_memory_search_native_list_and_export() {
     let server = TestServer::start().await;
     server.seed_memory_search_telemetry_fixture();
+
+    let resp = server.get("/api/telemetry/events?limit=5").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["enabled"], true);
+    assert!(body["events"].as_array().expect("events").is_empty());
+
+    let resp = server.get("/api/telemetry/stats").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["enabled"], true);
+    assert_eq!(body["totalEvents"], 0);
+    assert_eq!(body["llm"]["calls"], 0);
+    assert_eq!(body["llm"]["p50"], 0);
+    assert_eq!(body["pipelineErrors"], 0);
+
+    let resp = server.get("/api/telemetry/export?limit=5").await;
+    assert_eq!(resp.status(), 200);
+    assert_eq!(
+        resp.headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok()),
+        Some("application/x-ndjson")
+    );
+    assert_eq!(resp.text().await.expect("telemetry export body"), "");
 
     let resp = server
         .get("/api/telemetry/memory-search?agent_id=ant&project=/workspace/a&limit=10")
@@ -2410,6 +5450,70 @@ async fn telemetry_memory_search_native_list_and_export() {
     assert!(content_type.contains("application/x-ndjson"));
     assert!(text.contains("telemetry-hit"));
     assert!(!text.contains("telemetry-miss"));
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn continuity_analytics_and_checkpoint_routes_replay_ts_shape() {
+    let server = TestServer::start().await;
+    let project = server.seed_continuity_and_checkpoint_fixture();
+
+    let resp = server.get("/api/analytics/continuity?limit=10").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["summary"]["count"], 3);
+
+    let resp = server
+        .get(&format!(
+            "/api/analytics/continuity?project={project}&limit=10"
+        ))
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["summary"]["count"], 2);
+    assert_eq!(body["summary"]["average"], 0.65);
+    assert_eq!(body["summary"]["trend"], 0.5);
+    assert_eq!(body["summary"]["latest"], 0.9);
+    assert_eq!(body["scores"][0]["id"], "score-new");
+
+    let resp = server.get("/api/analytics/continuity/latest").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert!(
+        body["scores"]
+            .as_array()
+            .is_some_and(|scores| scores.iter().any(|score| score["project"] == project))
+    );
+
+    let resp = server.get("/api/checkpoints").await;
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "project query parameter required");
+
+    let resp = server
+        .get(&format!("/api/checkpoints?project={project}&limit=5"))
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["count"], 2);
+    assert_eq!(body["checkpoints"][0]["id"], "checkpoint-new");
+    assert_eq!(body["checkpoints"][0]["focal_entity_names"], "[\"Signet\"]");
+    assert!(body["checkpoints"][0]["digest"]
+        .as_str()
+        .is_some_and(|digest| digest.contains("[REDACTED]") && !digest.contains("super-secret")));
+    assert!(
+        body["checkpoints"][0]["recent_remembers"]
+            .as_str()
+            .is_some_and(
+                |remember| remember.contains("[REDACTED]") && !remember.contains("sk-test")
+            )
+    );
+
+    let resp = server.get("/api/checkpoints/session-continuity-a").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["count"], 2);
+    assert_eq!(body["checkpoints"][1]["id"], "checkpoint-old");
 }
 
 #[tokio::test]
@@ -2846,4 +5950,472 @@ async fn plugin_ontology_telemetry_compat_endpoints() {
         let resp = server.post(path, body).await;
         assert_eq!(resp.status(), 200, "POST {path}");
     }
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn remaining_public_routes_have_contract_replay_coverage() {
+    let catalog_fixture = MarketplaceCatalogFixture::start();
+    let _catalog_env = MarketplaceCatalogEnvGuard::set(&catalog_fixture.base);
+    let server = TestServer::start().await;
+    let assert_status = |label: &str, resp: &reqwest::Response, expected: &[u16]| {
+        let status = resp.status().as_u16();
+        assert!(
+            expected.contains(&status),
+            "{label} returned {status}, expected one of {expected:?}"
+        );
+    };
+
+    let resp = server.get("/api/agents").await;
+    assert_status("GET /api/agents", &resp, &[200]);
+    let resp = server.post("/api/agents", json!({})).await;
+    assert_status("POST /api/agents", &resp, &[400]);
+    let resp = server.get("/api/agents/missing-agent").await;
+    assert_status("GET /api/agents/:name", &resp, &[404]);
+    let resp = server.delete("/api/agents/missing-agent").await;
+    assert_status("DELETE /api/agents/:name", &resp, &[404]);
+
+    let resp = server
+        .post(
+            "/api/config",
+            json!({"file": "AGENTS.md", "content": "# Replay\n"}),
+        )
+        .await;
+    assert_status("POST /api/config", &resp, &[200]);
+    let resp = server.get("/api/harnesses").await;
+    assert_status("GET /api/harnesses", &resp, &[200]);
+
+    let resp = server.post("/api/connectors", json!({})).await;
+    assert_status("POST /api/connectors", &resp, &[400]);
+    let resp = server.delete("/api/connectors/missing-connector").await;
+    assert_status("DELETE /api/connectors/:id", &resp, &[200, 404]);
+
+    let resp = server.post("/api/cross-agent/messages", json!({})).await;
+    assert_status("POST /api/cross-agent/messages", &resp, &[400]);
+    let resp = server.post("/api/cross-agent/presence", json!({})).await;
+    assert_status("POST /api/cross-agent/presence", &resp, &[200]);
+    let resp = server
+        .delete("/api/cross-agent/presence/missing-session")
+        .await;
+    assert_status(
+        "DELETE /api/cross-agent/presence/:sessionKey",
+        &resp,
+        &[200],
+    );
+
+    let resp = server.post("/api/documents", json!({})).await;
+    assert_status("POST /api/documents", &resp, &[201]);
+    let resp = server.get("/api/documents/missing-document").await;
+    assert_status("GET /api/documents/:id", &resp, &[404]);
+    let resp = server.get("/api/documents/missing-document/chunks").await;
+    assert_status("GET /api/documents/:id/chunks", &resp, &[200]);
+    let resp = server
+        .delete("/api/documents/missing-document?reason=replay")
+        .await;
+    assert_status("DELETE /api/documents/:id", &resp, &[200, 404]);
+
+    let resp = server.get("/api/git/config").await;
+    assert_status("GET /api/git/config", &resp, &[200]);
+    let resp = server
+        .post(
+            "/api/git/config",
+            json!({"autoCommit": true, "autoSync": true, "syncInterval": 120, "remote": "upstream", "branch": "main"}),
+        )
+        .await;
+    assert_status("POST /api/git/config", &resp, &[200]);
+    let body = server.json(resp).await;
+    assert_eq!(body["success"], true);
+    assert_eq!(body["config"]["autoCommit"], true);
+    assert_eq!(body["config"]["autoSync"], true);
+    assert_eq!(body["config"]["syncInterval"], 120);
+    assert_eq!(body["config"]["remote"], "upstream");
+    let resp = server.post("/api/git/pull", json!({})).await;
+    assert_status("POST /api/git/pull", &resp, &[200, 500]);
+    let resp = server.post("/api/git/push", json!({})).await;
+    assert_status("POST /api/git/push", &resp, &[200, 500]);
+    let resp = server.post("/api/git/sync", json!({})).await;
+    assert_status("POST /api/git/sync", &resp, &[200]);
+
+    let resp = server
+        .post(
+            "/api/hook/remember",
+            json!({"harness": "contract-replay", "content": "remember replay"}),
+        )
+        .await;
+    assert_status("POST /api/hook/remember", &resp, &[200]);
+    let resp = server
+        .post(
+            "/api/hooks/remember",
+            json!({"harness": "contract-replay", "content": "remember replay"}),
+        )
+        .await;
+    assert_status("POST /api/hooks/remember", &resp, &[200]);
+    let resp = server
+        .post(
+            "/api/hooks/compaction-complete",
+            json!({
+                "harness": "contract-replay",
+                "sessionKey": "replay-session",
+                "summary": "# Replay\n\nCompaction route replay."
+            }),
+        )
+        .await;
+    assert_status("POST /api/hooks/compaction-complete", &resp, &[200]);
+
+    let resp = server
+        .get("/api/knowledge/entities/missing-entity/aspects")
+        .await;
+    assert_status(
+        "GET /api/knowledge/entities/:id/aspects",
+        &resp,
+        &[200, 404],
+    );
+    let resp = server
+        .get("/api/knowledge/entities/missing-entity/aspects/missing-aspect/attributes")
+        .await;
+    assert_status(
+        "GET /api/knowledge/entities/:id/aspects/:aspectId/attributes",
+        &resp,
+        &[200, 404],
+    );
+    let resp = server
+        .get("/api/knowledge/entities/missing-entity/dependencies")
+        .await;
+    assert_status(
+        "GET /api/knowledge/entities/:id/dependencies",
+        &resp,
+        &[200, 404],
+    );
+    let resp = server.get("/api/knowledge/entities/pinned").await;
+    assert_status("GET /api/knowledge/entities/pinned", &resp, &[200]);
+    let resp = server
+        .post("/api/knowledge/entities/missing-entity/pin", json!({}))
+        .await;
+    assert_status("POST /api/knowledge/entities/:id/pin", &resp, &[200, 404]);
+    let resp = server
+        .delete("/api/knowledge/entities/missing-entity/pin")
+        .await;
+    assert_status("DELETE /api/knowledge/entities/:id/pin", &resp, &[200, 404]);
+
+    let resp = server.get("/api/marketplace/mcp/browse").await;
+    assert_status("GET /api/marketplace/mcp/browse", &resp, &[200]);
+    let resp = server.get("/api/marketplace/mcp/detail").await;
+    assert_status("GET /api/marketplace/mcp/detail", &resp, &[400]);
+    let resp = server
+        .patch("/api/marketplace/mcp/policy", json!({"mode": "compact"}))
+        .await;
+    assert_status("PATCH /api/marketplace/mcp/policy", &resp, &[200, 400]);
+    let resp = server.post("/api/marketplace/mcp/install", json!({})).await;
+    assert_status("POST /api/marketplace/mcp/install", &resp, &[400]);
+    let resp = server
+        .post("/api/marketplace/mcp/register", json!({}))
+        .await;
+    assert_status("POST /api/marketplace/mcp/register", &resp, &[400]);
+    let resp = server.post("/api/marketplace/mcp/test", json!({})).await;
+    assert_status("POST /api/marketplace/mcp/test", &resp, &[400]);
+    let resp = server
+        .patch(
+            "/api/marketplace/mcp/missing-server",
+            json!({"enabled": false}),
+        )
+        .await;
+    assert_status("PATCH /api/marketplace/mcp/:id", &resp, &[404]);
+    let resp = server.delete("/api/marketplace/mcp/missing-server").await;
+    assert_status("DELETE /api/marketplace/mcp/:id", &resp, &[404]);
+
+    let resp = server
+        .post("/api/memory/save", json!({"content": "save replay"}))
+        .await;
+    assert_status("POST /api/memory/save", &resp, &[200]);
+    let resp = server
+        .post(
+            "/api/memory/modify",
+            json!({"patches": [{"id": "missing-memory", "patch": {"content": "updated"}}]}),
+        )
+        .await;
+    assert_status("POST /api/memory/modify", &resp, &[200]);
+    let resp = server.get("/api/memory/missing-memory/history").await;
+    assert_status("GET /api/memory/:id/history", &resp, &[200, 404]);
+    let resp = server
+        .post("/api/memory/missing-memory/recover", json!({}))
+        .await;
+    assert_status("POST /api/memory/:id/recover", &resp, &[404]);
+    let resp = server.delete("/api/memory/missing-memory").await;
+    assert_status("DELETE /api/memory/:id", &resp, &[200, 404]);
+
+    let resp = server.get("/api/ontology/claims/evidence").await;
+    assert_status("GET /api/ontology/claims/evidence", &resp, &[200]);
+    let resp = server
+        .get("/api/ontology/links/missing-link/evidence")
+        .await;
+    assert_status("GET /api/ontology/links/:id/evidence", &resp, &[200]);
+    let resp = server.get("/api/ontology/proposals/missing-proposal").await;
+    assert_status("GET /api/ontology/proposals/:id", &resp, &[404]);
+    let resp = server
+        .get("/api/ontology/proposals/missing-proposal/evidence")
+        .await;
+    assert_status(
+        "GET /api/ontology/proposals/:id/evidence",
+        &resp,
+        &[200, 404],
+    );
+    let resp = server.get("/api/ontology/proposals/conflicts").await;
+    assert_status("GET /api/ontology/proposals/conflicts", &resp, &[200]);
+    let resp = server.post("/api/ontology/extract", json!({})).await;
+    assert_status("POST /api/ontology/extract", &resp, &[200]);
+    let resp = server.post("/api/ontology/consolidate", json!({})).await;
+    assert_status("POST /api/ontology/consolidate", &resp, &[200]);
+    let resp = server
+        .post("/api/ontology/proposals/missing-proposal/apply", json!({}))
+        .await;
+    assert_status("POST /api/ontology/proposals/:id/apply", &resp, &[404]);
+    let resp = server
+        .post("/api/ontology/proposals/missing-proposal/reject", json!({}))
+        .await;
+    assert_status("POST /api/ontology/proposals/:id/reject", &resp, &[404]);
+    let resp = server
+        .post("/api/ontology/proposals/repair/duplicates", json!({}))
+        .await;
+    assert_status(
+        "POST /api/ontology/proposals/repair/duplicates",
+        &resp,
+        &[200],
+    );
+
+    let resp = server.get("/api/pipeline/models").await;
+    assert_status("GET /api/pipeline/models", &resp, &[200]);
+    let resp = server.get("/api/pipeline/models/by-provider").await;
+    assert_status("GET /api/pipeline/models/by-provider", &resp, &[200]);
+    let resp = server.post("/api/pipeline/models/refresh", json!({})).await;
+    assert_status("POST /api/pipeline/models/refresh", &resp, &[200]);
+
+    let resp = server.post("/api/repair/backfill-skipped", json!({})).await;
+    assert_status("POST /api/repair/backfill-skipped", &resp, &[200]);
+    let resp = server.post("/api/repair/check-fts", json!({})).await;
+    assert_status("POST /api/repair/check-fts", &resp, &[200]);
+    let resp = server.post("/api/repair/clean-orphans", json!({})).await;
+    assert_status("POST /api/repair/clean-orphans", &resp, &[200]);
+    server.seed_deduplicate_fixture();
+    let resp = server
+        .post("/api/repair/deduplicate", json!({"dryRun": true}))
+        .await;
+    assert_status("POST /api/repair/deduplicate dry-run", &resp, &[200]);
+    let body = server.json(resp).await;
+    assert_eq!(body["success"], true);
+    assert_eq!(body["affected"], 0);
+    assert_eq!(body["clusters"], 1);
+
+    let resp = server.post("/api/repair/deduplicate", json!({})).await;
+    assert_status("POST /api/repair/deduplicate", &resp, &[200]);
+    let body = server.json(resp).await;
+    assert_eq!(body["success"], true);
+    assert_eq!(body["affected"], 1);
+    assert_eq!(body["clusters"], 1);
+
+    let conn = rusqlite::Connection::open(server.db_path()).expect("open replay db");
+    let keeper: (i64, String) = conn
+        .query_row(
+            "SELECT is_deleted, tags FROM memories WHERE id = 'mem-dedup-keeper'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("keeper row");
+    assert_eq!(keeper.0, 0);
+    assert!(keeper.1.split(',').any(|tag| tag == "alpha"));
+    assert!(keeper.1.split(',').any(|tag| tag == "beta"));
+    let loser_deleted: i64 = conn
+        .query_row(
+            "SELECT is_deleted FROM memories WHERE id = 'mem-dedup-loser'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("loser row");
+    assert_eq!(loser_deleted, 1);
+    let other_agent_deleted: i64 = conn
+        .query_row(
+            "SELECT is_deleted FROM memories WHERE id = 'mem-dedup-other-agent'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("other agent row");
+    assert_eq!(other_agent_deleted, 0);
+    let history: (i64, i64) = conn
+        .query_row(
+            "SELECT
+               SUM(CASE WHEN memory_id = 'mem-dedup-keeper' AND event = 'merged' THEN 1 ELSE 0 END),
+               SUM(CASE WHEN memory_id = 'mem-dedup-loser' AND event = 'deleted' THEN 1 ELSE 0 END)
+             FROM memory_history
+             WHERE memory_id IN ('mem-dedup-keeper', 'mem-dedup-loser')",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("dedupe history rows");
+    assert_eq!(history, (1, 1));
+    let resp = server
+        .post("/api/repair/prune-chunk-groups", json!({}))
+        .await;
+    assert_status("POST /api/repair/prune-chunk-groups", &resp, &[200]);
+    let resp = server
+        .post("/api/repair/prune-singleton-entities", json!({}))
+        .await;
+    assert_status("POST /api/repair/prune-singleton-entities", &resp, &[200]);
+    let resp = server.post("/api/repair/re-embed", json!({})).await;
+    assert_status("POST /api/repair/re-embed", &resp, &[200]);
+    let resp = server
+        .post("/api/repair/reclassify-entities", json!({}))
+        .await;
+    assert_status("POST /api/repair/reclassify-entities", &resp, &[200]);
+    let resp = server.post("/api/repair/release-leases", json!({})).await;
+    assert_status("POST /api/repair/release-leases", &resp, &[200]);
+    let resp = server.post("/api/repair/requeue-dead", json!({})).await;
+    assert_status("POST /api/repair/requeue-dead", &resp, &[200]);
+    let resp = server.post("/api/repair/resync-vec", json!({})).await;
+    assert_status("POST /api/repair/resync-vec", &resp, &[200]);
+    let resp = server.post("/api/repair/retention-sweep", json!({})).await;
+    assert_status("POST /api/repair/retention-sweep", &resp, &[200]);
+    let resp = server
+        .post("/api/repair/structural-backfill", json!({}))
+        .await;
+    assert_status("POST /api/repair/structural-backfill", &resp, &[200]);
+
+    let resp = server.post("/api/secrets/REPLAY_SECRET", json!({})).await;
+    assert_status("POST /api/secrets/:name", &resp, &[400]);
+    let resp = server.delete("/api/secrets/REPLAY_SECRET").await;
+    assert_status("DELETE /api/secrets/:name", &resp, &[200]);
+    let resp = server.post("/api/secrets/exec", json!({})).await;
+    assert_status("POST /api/secrets/exec", &resp, &[400, 422]);
+
+    let resp = server
+        .post(
+            "/api/sessions/replay-session/bypass",
+            json!({"enabled": true}),
+        )
+        .await;
+    assert_status("POST /api/sessions/:key/bypass", &resp, &[200, 404]);
+    let resp = server.get("/api/skills/analytics").await;
+    assert_status("GET /api/skills/analytics", &resp, &[200]);
+
+    let resp = server.post("/api/tasks", json!({})).await;
+    assert_status("POST /api/tasks", &resp, &[400, 422]);
+    let resp = server.get("/api/tasks/missing-task").await;
+    assert_status("GET /api/tasks/:id", &resp, &[404]);
+    let resp = server.patch("/api/tasks/missing-task", json!({})).await;
+    assert_status("PATCH /api/tasks/:id", &resp, &[404]);
+    let resp = server.post("/api/tasks/missing-task/run", json!({})).await;
+    assert_status("POST /api/tasks/:id/run", &resp, &[404]);
+    let resp = server.get("/api/tasks/missing-task/runs").await;
+    assert_status("GET /api/tasks/:id/runs", &resp, &[200, 404]);
+    let resp = server.delete("/api/tasks/missing-task").await;
+    assert_status("DELETE /api/tasks/:id", &resp, &[404]);
+
+    let resp = server.post("/v1/chat/completions", json!({})).await;
+    assert_status("POST /v1/chat/completions", &resp, &[400, 404, 501]);
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn ontology_assertions_aliases_operations_replay_missing_cluster() {
+    let server = TestServer::start().await;
+
+    let resp = server.get("/api/ontology/assertions").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["items"], json!([]));
+    assert_eq!(body["count"], 0);
+
+    let resp = server.get("/api/ontology/assertions?status=bad").await;
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "status is invalid");
+
+    let resp = server.post("/api/ontology/assertions", json!({})).await;
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "predicate is required");
+
+    let resp = server.get("/api/ontology/assertions/missing").await;
+    assert_eq!(resp.status(), 404);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "Assertion not found");
+
+    let resp = server
+        .post("/api/ontology/assertions/missing/link-claim", json!({}))
+        .await;
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "attribute_id is required");
+
+    let resp = server
+        .post("/api/ontology/assertions/missing/archive", json!({}))
+        .await;
+    assert_eq!(resp.status(), 404);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "Assertion not found");
+
+    let resp = server
+        .post("/api/ontology/assertions/missing/supersede", json!({}))
+        .await;
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "predicate is required");
+
+    let resp = server.get("/api/ontology/claims/versions").await;
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "entity is required");
+
+    let resp = server
+        .get("/api/ontology/claims/versions?entity=A&aspect=B&group=C&claim=D")
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["items"], json!([]));
+    assert_eq!(body["count"], 0);
+
+    let resp = server
+        .get("/api/ontology/claims/version?entity=A&aspect=B&group=C&claim=D")
+        .await;
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "version is required");
+
+    let resp = server.get("/api/ontology/entities/missing/aliases").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["items"], json!([]));
+
+    let resp = server
+        .post("/api/ontology/entities/missing/aliases", json!({}))
+        .await;
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "alias is required");
+
+    let resp = server
+        .delete("/api/ontology/entities/missing/aliases/missing-alias")
+        .await;
+    assert_eq!(resp.status(), 404);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "Alias not found");
+
+    let resp = server
+        .post("/api/ontology/operations/apply", json!({}))
+        .await;
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "operation is required");
+
+    let resp = server
+        .post("/api/ontology/operations/batch", json!({}))
+        .await;
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "operations are required");
+
+    let resp = server
+        .post("/api/ontology/proposals/repair/merge-plan", json!({}))
+        .await;
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "target entity is required");
 }

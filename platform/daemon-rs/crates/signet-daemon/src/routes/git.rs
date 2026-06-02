@@ -5,23 +5,8 @@
 use std::sync::Arc;
 
 use axum::{Json, extract::State, http::StatusCode, response::IntoResponse};
-use serde::{Deserialize, Serialize};
 
 use crate::state::AppState;
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
-#[allow(dead_code)] // Used when git config persistence is implemented
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct GitConfig {
-    pub auto_sync: bool,
-    pub sync_interval: u64,
-    pub remote: String,
-    pub branch: String,
-}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -129,26 +114,32 @@ pub async fn sync(State(state): State<Arc<AppState>>) -> impl IntoResponse {
 }
 
 /// GET /api/git/config
-pub async fn get_config(State(_state): State<Arc<AppState>>) -> Json<serde_json::Value> {
-    // Git config stored in agent.yaml — not yet parsed into a separate struct
-    Json(serde_json::json!({
-        "autoSync": false,
-        "syncInterval": 300,
-        "remote": "",
-        "branch": "main",
-    }))
+pub async fn get_config(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+    Json(
+        serde_json::to_value(state.git_config.read().await.clone()).unwrap_or_else(|_| {
+            serde_json::json!({
+                "enabled": true,
+                "autoCommit": false,
+                "autoSync": false,
+                "syncInterval": 300,
+                "remote": "origin",
+                "branch": "main",
+            })
+        }),
+    )
 }
 
 /// POST /api/git/config — update git config
 pub async fn set_config(
-    State(_state): State<Arc<AppState>>,
-    Json(_body): Json<serde_json::Value>,
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
-    // Config updates require writing to agent.yaml and reloading
-    // Stub for now — full config hot-reload in Phase 8
+    let mut config = state.git_config.write().await;
+    config.apply_patch(&body);
+    let body = serde_json::to_value(config.clone()).unwrap_or_else(|_| serde_json::json!({}));
     (
-        StatusCode::NOT_IMPLEMENTED,
-        Json(serde_json::json!({"error": "git config update not yet implemented"})),
+        StatusCode::OK,
+        Json(serde_json::json!({"success": true, "config": body})),
     )
 }
 
@@ -158,12 +149,10 @@ pub async fn set_config(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     fn default_git_config() {
-        let config = GitConfig::default();
+        let config = crate::state::GitRuntimeConfig::default();
         assert!(!config.auto_sync);
-        assert!(config.remote.is_empty());
+        assert_eq!(config.remote, "origin");
     }
 }

@@ -147,8 +147,14 @@ async fn worker_loop(pool: DbPool, config: MaintenanceConfig, mut shutdown: watc
                     );
 
                     if config.auto_repair {
-                        // TODO: Execute repair actions, track failures,
-                        // halt after max_repair_failures
+                        match run_recommended_repairs(&pool, &diag, &config).await {
+                            Ok((attempted, succeeded)) => {
+                                info!(attempted, succeeded, "maintenance repairs completed");
+                            }
+                            Err(error) => {
+                                warn!(err = %error, "maintenance repairs failed");
+                            }
+                        }
                     }
                 }
             }
@@ -157,6 +163,64 @@ async fn worker_loop(pool: DbPool, config: MaintenanceConfig, mut shutdown: watc
             }
         }
     }
+}
+
+pub async fn run_recommended_repairs(
+    pool: &DbPool,
+    diagnostics: &Diagnostics,
+    config: &MaintenanceConfig,
+) -> Result<(usize, usize), String> {
+    let stale_timeout = config.stale_lease_timeout_secs;
+    let max_repairs = config.max_repair_failures.max(1) as usize;
+    let actions = diagnostics
+        .recommendations
+        .iter()
+        .map(|recommendation| recommendation.action.clone())
+        .filter(|action| matches!(action.as_str(), "release_leases" | "requeue_dead"))
+        .take(max_repairs)
+        .collect::<Vec<_>>();
+    let attempted = actions.len();
+    if actions.is_empty() {
+        return Ok((0, 0));
+    }
+    let succeeded = pool
+        .write(signet_core::db::Priority::Low, move |conn| {
+            let mut succeeded = 0usize;
+            for action in actions {
+                let ts = chrono::Utc::now().to_rfc3339();
+                let changed = match action.as_str() {
+                    "release_leases" => conn.execute(
+                        "UPDATE memory_jobs
+                         SET status = 'pending',
+                             leased_at = NULL,
+                             updated_at = ?1
+                         WHERE status = 'leased'
+                           AND leased_at < datetime('now', ?2)",
+                        rusqlite::params![ts, format!("-{stale_timeout} seconds")],
+                    )?,
+                    "requeue_dead" => conn.execute(
+                        "UPDATE memory_jobs
+                         SET status = 'pending',
+                             error = NULL,
+                             failed_at = NULL,
+                             updated_at = ?1
+                         WHERE status = 'dead'",
+                        rusqlite::params![ts],
+                    )?,
+                    _ => 0,
+                };
+                if changed > 0 {
+                    succeeded += 1;
+                }
+            }
+            Ok(serde_json::json!({ "succeeded": succeeded }))
+        })
+        .await
+        .map_err(|error| error.to_string())?
+        .get("succeeded")
+        .and_then(|value| value.as_u64())
+        .unwrap_or(0) as usize;
+    Ok((attempted, succeeded))
 }
 
 // ---------------------------------------------------------------------------
@@ -179,7 +243,7 @@ pub async fn run_diagnostics(
             .unwrap_or(0);
         let deleted_memories: usize = conn
             .query_row(
-                "SELECT COUNT(*) FROM memories WHERE deleted = 1",
+                "SELECT COUNT(*) FROM memories WHERE COALESCE(is_deleted, 0) = 1",
                 [],
                 |r| r.get(0),
             )
@@ -248,7 +312,7 @@ pub async fn run_diagnostics(
             .unwrap_or(0);
         let active_count: usize = conn
             .query_row(
-                "SELECT COUNT(*) FROM memories WHERE deleted = 0",
+                "SELECT COUNT(*) FROM memories WHERE COALESCE(is_deleted, 0) = 0",
                 [],
                 |r| r.get(0),
             )
@@ -258,7 +322,9 @@ pub async fn run_diagnostics(
         // Embedding gaps
         let embedding_gaps: usize = conn
             .query_row(
-                "SELECT COUNT(*) FROM memories m LEFT JOIN memory_embeddings e ON e.memory_id = m.id WHERE m.deleted = 0 AND e.memory_id IS NULL",
+                "SELECT COUNT(*) FROM memories m
+                 LEFT JOIN embeddings e ON e.source_type = 'memory' AND e.source_id = m.id
+                 WHERE COALESCE(m.is_deleted, 0) = 0 AND e.id IS NULL",
                 [],
                 |r| r.get(0),
             )
@@ -336,4 +402,113 @@ pub async fn run_diagnostics(
     })
     .await
     .map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use signet_core::db::Priority;
+
+    fn open_test_pool() -> (DbPool, tokio::task::JoinHandle<()>) {
+        let path =
+            std::env::temp_dir().join(format!("signet-maintenance-{}.db", uuid::Uuid::new_v4()));
+        DbPool::open(&path).expect("open maintenance test db")
+    }
+
+    #[tokio::test]
+    async fn recommended_repairs_release_leases_and_requeue_dead_jobs() {
+        let (pool, handle) = open_test_pool();
+        pool.write(Priority::High, |conn| {
+            let now = chrono::Utc::now().to_rfc3339();
+            let old_lease: String =
+                conn.query_row("SELECT datetime('now', '-600 seconds')", [], |row| {
+                    row.get(0)
+                })?;
+            conn.execute(
+                "INSERT INTO memories
+                 (id, type, content, created_at, updated_at, updated_by, vector_clock,
+                  is_deleted)
+                 VALUES ('memory-maintenance', 'fact', 'maintenance fixture', ?1, ?1,
+                         'test', '{}', 0)",
+                rusqlite::params![now],
+            )?;
+            conn.execute(
+                "INSERT INTO memory_jobs
+                 (id, memory_id, job_type, status, attempts, leased_at, created_at, updated_at)
+                 VALUES ('job-stale', 'memory-maintenance', 'extract', 'leased', 1,
+                         ?1, ?2, ?2)",
+                rusqlite::params![old_lease, now],
+            )?;
+            conn.execute(
+                "INSERT INTO memory_jobs
+                 (id, memory_id, job_type, status, attempts, error, failed_at, created_at, updated_at)
+                 VALUES ('job-dead', 'memory-maintenance', 'extract', 'dead', 3,
+                         'failed', ?1, ?1, ?1)",
+                rusqlite::params![now],
+            )?;
+            Ok(serde_json::Value::Null)
+        })
+        .await
+        .expect("seed maintenance rows");
+
+        let config = MaintenanceConfig {
+            auto_repair: true,
+            dead_job_threshold_pct: 1.0,
+            stale_lease_timeout_secs: 300,
+            ..MaintenanceConfig::default()
+        };
+        let diagnostics = run_diagnostics(&pool, &config)
+            .await
+            .expect("run diagnostics");
+        assert!(
+            diagnostics
+                .recommendations
+                .iter()
+                .any(|recommendation| recommendation.action == "release_leases")
+        );
+        assert!(
+            diagnostics
+                .recommendations
+                .iter()
+                .any(|recommendation| recommendation.action == "requeue_dead")
+        );
+
+        let (attempted, succeeded) = run_recommended_repairs(&pool, &diagnostics, &config)
+            .await
+            .expect("run repairs");
+        assert_eq!(attempted, 2);
+        assert_eq!(succeeded, 2);
+
+        let statuses = pool
+            .read(|conn| {
+                let stale: String = conn.query_row(
+                    "SELECT status FROM memory_jobs WHERE id = 'job-stale'",
+                    [],
+                    |row| row.get(0),
+                )?;
+                let dead: String = conn.query_row(
+                    "SELECT status FROM memory_jobs WHERE id = 'job-dead'",
+                    [],
+                    |row| row.get(0),
+                )?;
+                let stale_lease: Option<String> = conn.query_row(
+                    "SELECT leased_at FROM memory_jobs WHERE id = 'job-stale'",
+                    [],
+                    |row| row.get(0),
+                )?;
+                Ok(serde_json::json!({
+                    "stale": stale,
+                    "dead": dead,
+                    "staleLease": stale_lease,
+                }))
+            })
+            .await
+            .expect("read repaired jobs");
+        assert_eq!(statuses["stale"], "pending");
+        assert_eq!(statuses["dead"], "pending");
+        assert!(statuses["staleLease"].is_null());
+
+        drop(pool);
+        handle.abort();
+    }
 }

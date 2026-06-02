@@ -299,7 +299,7 @@ function purgeDeadJobs(db: WriteDb, cutoff: string, limit: number): number {
 	return countChanges(result);
 }
 
-function runSweep(accessor: DbAccessor, cfg: RetentionConfig): RetentionSweepResult {
+export function runRetentionSweepOnce(accessor: DbAccessor, cfg: RetentionConfig = DEFAULT_RETENTION): RetentionSweepResult {
 	const now = Date.now();
 	const tombstoneCutoff = new Date(now - cfg.tombstoneRetentionMs).toISOString();
 	const historyCutoff = new Date(now - cfg.historyRetentionMs).toISOString();
@@ -346,7 +346,7 @@ export function startRetentionWorker(accessor: DbAccessor, cfg: RetentionConfig 
 	let timer: ReturnType<typeof setInterval> | null = null;
 
 	function doSweep(): RetentionSweepResult {
-		const result = runSweep(accessor, cfg);
+		const result = runRetentionSweepOnce(accessor, cfg);
 		const total =
 			result.graphLinksPurged +
 			result.entitiesOrphaned +

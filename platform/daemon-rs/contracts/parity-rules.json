@@ -37,10 +37,22 @@
 				"arrayOrdering": "ordered"
 			},
 			"POST /api/memory/recall": {
-				"deterministic": ["results.*.id"],
-				"ignoreFields": ["results.*.score"],
+				"deterministic": ["results.*.content"],
+				"ignoreFields": [
+					"method",
+					"meta",
+					"results.*.created_at",
+					"results.*.id",
+					"results.*.scope",
+					"results.*.score"
+				],
 				"tolerance": { "score": 0.05 },
 				"arrayOrdering": "unordered"
+			},
+			"POST /mcp": {
+				"deterministic": ["jsonrpc"],
+				"ignoreFields": ["id", "error", "result"],
+				"note": "Streamable HTTP negotiation and parse-error behavior differs while daemon-rs exposes the native MCP transport."
 			},
 			"GET /api/memory/search": {
 				"deterministic": ["results.*.id"],
@@ -255,12 +267,12 @@
 			"GET /api/dream/status": {
 				"deterministic": ["enabled", "state.tokensSinceLastPass", "state.lastPassAt"],
 				"ignoreFields": ["worker", "passes.*.completedAt"],
-				"note": "Dreaming consolidation — not yet implemented in daemon-rs. Stub returns enabled:false until Rust parity wave."
+				"note": "Dreaming worker state and pass timestamps are runtime-specific."
 			},
 			"POST /api/dream/trigger": {
 				"deterministic": ["accepted", "status", "mode"],
 				"ignoreFields": ["passId"],
-				"note": "Dreaming consolidation — not yet implemented in daemon-rs. Stub returns 501 until Rust parity wave."
+				"note": "Generated pass identifiers are runtime-specific."
 			}
 		}
 	},

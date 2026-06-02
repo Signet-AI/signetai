@@ -19,10 +19,20 @@ const TS_MEMORY_SEARCH_TELEMETRY_VERSION: u32 = 66;
 const TS_MEMORY_SEARCH_TELEMETRY_NAME: &str = "memory-search-telemetry";
 const TS_ONTOLOGY_PROPOSALS_VERSION: u32 = 67;
 const TS_ONTOLOGY_PROPOSALS_NAME: &str = "ontology-proposals";
+const TS_AGENTS_TABLE_VERSION: u32 = 43;
+const TS_AGENTS_TABLE_NAME: &str = "agents-table";
+const TS_MCP_INVOCATIONS_VERSION: u32 = 52;
+const TS_MCP_INVOCATIONS_NAME: &str = "mcp-invocations";
+const TS_DREAMING_STATE_VERSION: u32 = 55;
+const TS_DREAMING_STATE_NAME: &str = "dreaming-state";
 const TS_AGENT_SCOPED_IDEMPOTENCY_VERSION: u32 = 72;
 const TS_AGENT_SCOPED_IDEMPOTENCY_NAME: &str = "agent-scoped-idempotency-key";
 const TS_ENTITY_ALIASES_VERSION: u32 = 77;
 const TS_ENTITY_ALIASES_NAME: &str = "entity-aliases";
+const TS_DAILY_REFLECTIONS_VERSION: u32 = 68;
+const TS_DAILY_REFLECTIONS_NAME: &str = "daily-reflections";
+const TS_DAILY_REFLECTIONS_MULTI_VERSION: u32 = 69;
+const TS_DAILY_REFLECTIONS_MULTI_NAME: &str = "daily-reflections-multiple-insights";
 
 /// Simple checksum matching the TS implementation (hash of "version:name").
 fn checksum(version: u32, name: &str) -> String {
@@ -60,10 +70,29 @@ fn add_column_if_missing(
     Ok(())
 }
 
+fn table_exists(conn: &Connection, table: &str) -> Result<bool, CoreError> {
+    Ok(conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)",
+        [table],
+        |row| row.get::<_, i64>(0),
+    )? != 0)
+}
+
 /// Historical per-migration compatibility shims are best-effort because some
 /// older SQL files can legitimately skip the target table. Required runtime
 /// parity repair uses `add_column_if_missing` directly and fails startup.
 fn add_column_if_missing_best_effort(conn: &Connection, table: &str, column: &str, typedef: &str) {
+    match table_exists(conn, table) {
+        Ok(true) => {}
+        Ok(false) => {
+            warn!(%table, %column, %typedef, "skipping optional migration column repair for missing table");
+            return;
+        }
+        Err(err) => {
+            warn!(%table, %column, %typedef, err = %err, "skipping optional migration column repair after table lookup failed");
+            return;
+        }
+    }
     if let Err(err) = add_column_if_missing(conn, table, column, typedef) {
         warn!(%table, %column, %typedef, err = %err, "skipping optional migration column repair");
     }
@@ -388,10 +417,28 @@ fn ensure_cross_daemon_parity_tables(conn: &Connection) -> Result<(), CoreError>
     conn.execute_batch(include_str!("sql/040-memory-search-telemetry.sql"))?;
     conn.execute_batch(include_str!("sql/041-ontology-proposals.sql"))?;
     conn.execute_batch(include_str!("sql/042-entity-aliases.sql"))?;
+    conn.execute_batch(include_str!("sql/043-mcp-invocations.sql"))?;
+    conn.execute_batch(include_str!("sql/044-dreaming-state.sql"))?;
+    conn.execute_batch(include_str!("sql/045-agents-table.sql"))?;
+    conn.execute_batch(include_str!("sql/046-cross-agent-runtime.sql"))?;
+    conn.execute_batch(include_str!("sql/047-daily-reflections.sql"))?;
+    stamp_typescript_parity_migration(conn, TS_AGENTS_TABLE_VERSION, TS_AGENTS_TABLE_NAME)?;
     stamp_typescript_parity_migration(
         conn,
         TS_MEMORY_SEARCH_TELEMETRY_VERSION,
         TS_MEMORY_SEARCH_TELEMETRY_NAME,
+    )?;
+    stamp_typescript_parity_migration(conn, TS_MCP_INVOCATIONS_VERSION, TS_MCP_INVOCATIONS_NAME)?;
+    stamp_typescript_parity_migration(conn, TS_DREAMING_STATE_VERSION, TS_DREAMING_STATE_NAME)?;
+    stamp_typescript_parity_migration(
+        conn,
+        TS_DAILY_REFLECTIONS_VERSION,
+        TS_DAILY_REFLECTIONS_NAME,
+    )?;
+    stamp_typescript_parity_migration(
+        conn,
+        TS_DAILY_REFLECTIONS_MULTI_VERSION,
+        TS_DAILY_REFLECTIONS_MULTI_NAME,
     )?;
     stamp_typescript_parity_migration(conn, TS_ENTITY_ALIASES_VERSION, TS_ENTITY_ALIASES_NAME)?;
     Ok(())
@@ -1129,8 +1176,14 @@ mod tests {
         run(&conn).expect("initial migrations run");
 
         for (version, table) in [
+            (43_i64, "agents"),
+            (52_i64, "mcp_invocations"),
+            (55_i64, "dreaming_state"),
             (66_i64, "memory_search_telemetry"),
             (67_i64, "ontology_proposals"),
+            (68_i64, "daily_reflections"),
+            (69_i64, "daily_reflections"),
+            (77_i64, "entity_aliases"),
         ] {
             let exists: i64 = conn
                 .query_row(
@@ -1169,7 +1222,7 @@ mod tests {
             "migration 72 should be recorded in schema_migrations"
         );
 
-        for version in [40_i64, 41_i64] {
+        for version in [40_i64, 41_i64, 42_i64, 44_i64] {
             let stamped: i64 = conn
                 .query_row(
                     "SELECT COUNT(*) FROM schema_migrations WHERE version = ?1",

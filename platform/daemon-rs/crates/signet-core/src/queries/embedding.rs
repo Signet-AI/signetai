@@ -66,8 +66,14 @@ pub fn upsert(conn: &Connection, e: &InsertEmbedding) -> Result<(), CoreError> {
         ],
     )?;
 
-    // Sync to vec table
-    sync_vec_insert(conn, e.id, e.vector);
+    // Sync to vec table. On conflict, SQLite keeps the existing row id, so
+    // resolve the canonical embedding id before updating the vector index.
+    let actual_id: String = conn.query_row(
+        "SELECT id FROM embeddings WHERE content_hash = ?1",
+        params![e.content_hash],
+        |row| row.get(0),
+    )?;
+    sync_vec_insert(conn, &actual_id, e.vector);
 
     Ok(())
 }

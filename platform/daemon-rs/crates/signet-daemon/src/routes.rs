@@ -2,12 +2,15 @@
 
 pub mod agents;
 pub mod auth;
+pub mod changelog;
 pub mod config;
 pub mod connectors;
 pub mod crossagent;
 pub mod diagnostics;
 pub mod documents;
+pub mod dream;
 pub mod git;
+pub mod graphiq;
 pub mod harnesses;
 pub mod hooks;
 pub mod inference;
@@ -16,8 +19,10 @@ pub mod marketplace;
 pub mod marketplace_reviews;
 pub mod memory;
 pub mod ontology;
+pub mod os;
 pub mod pipeline;
 pub mod plugins;
+pub mod reflections;
 pub mod repair;
 pub mod scheduler;
 pub mod search;

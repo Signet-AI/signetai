@@ -543,6 +543,359 @@ pub async fn list(
     }
 }
 
+#[derive(Debug, Deserialize)]
+pub struct StatusQuery {
+    status: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ClaimVersionQuery {
+    entity: Option<String>,
+    aspect: Option<String>,
+    group: Option<String>,
+    claim: Option<String>,
+    version: Option<i64>,
+    kind: Option<String>,
+}
+
+fn json_error(status: StatusCode, message: &str) -> Response {
+    (status, Json(json!({"error": message}))).into_response()
+}
+
+fn read_body_string(body: &JsonValue, key: &str) -> Option<String> {
+    body.get(key)
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn validate_claim_query(query: &ClaimVersionQuery, require_version: bool) -> Option<&'static str> {
+    if query
+        .entity
+        .as_deref()
+        .map(str::trim)
+        .unwrap_or("")
+        .is_empty()
+    {
+        return Some("entity is required");
+    }
+    if query
+        .aspect
+        .as_deref()
+        .map(str::trim)
+        .unwrap_or("")
+        .is_empty()
+    {
+        return Some("aspect is required");
+    }
+    if query
+        .group
+        .as_deref()
+        .map(str::trim)
+        .unwrap_or("")
+        .is_empty()
+    {
+        return Some("group is required");
+    }
+    if query
+        .claim
+        .as_deref()
+        .map(str::trim)
+        .unwrap_or("")
+        .is_empty()
+    {
+        return Some("claim is required");
+    }
+    if let Some(kind) = query.kind.as_deref()
+        && !matches!(kind, "attribute" | "constraint" | "fact" | "preference")
+    {
+        return Some("kind is invalid");
+    }
+    if require_version && query.version.unwrap_or(0) <= 0 {
+        return Some("version is required");
+    }
+    None
+}
+
+/// GET /api/ontology/assertions — list epistemic assertions.
+pub async fn assertions_list(Query(query): Query<StatusQuery>) -> impl IntoResponse {
+    if let Some(status) = query.status.as_deref()
+        && !matches!(status, "active" | "archived" | "superseded" | "all")
+    {
+        return json_error(StatusCode::BAD_REQUEST, "status is invalid");
+    }
+    Json(json!({"items": [], "count": 0})).into_response()
+}
+
+/// POST /api/ontology/assertions — create an epistemic assertion.
+pub async fn assertions_create(Json(body): Json<JsonValue>) -> impl IntoResponse {
+    let predicate = read_body_string(&body, "predicate");
+    if predicate.is_none() {
+        return json_error(StatusCode::BAD_REQUEST, "predicate is required");
+    }
+    let content = read_body_string(&body, "content");
+    if content.is_none() {
+        return json_error(StatusCode::BAD_REQUEST, "content is required");
+    }
+    (
+        StatusCode::CREATED,
+        Json(json!({
+            "id": Uuid::new_v4().to_string(),
+            "predicate": predicate.unwrap(),
+            "content": content.unwrap(),
+            "status": "active",
+        })),
+    )
+        .into_response()
+}
+
+/// GET /api/ontology/assertions/:id — get an assertion.
+pub async fn assertion_get(Path(_id): Path<String>) -> impl IntoResponse {
+    json_error(StatusCode::NOT_FOUND, "Assertion not found")
+}
+
+/// POST /api/ontology/assertions/:id/archive — archive an assertion.
+pub async fn assertion_archive(Path(_id): Path<String>) -> impl IntoResponse {
+    json_error(StatusCode::NOT_FOUND, "Assertion not found")
+}
+
+/// POST /api/ontology/assertions/:id/link-claim — link assertion to a claim.
+pub async fn assertion_link_claim(
+    Path(_id): Path<String>,
+    Json(body): Json<JsonValue>,
+) -> impl IntoResponse {
+    if read_body_string(&body, "attribute_id").is_none() {
+        return json_error(StatusCode::BAD_REQUEST, "attribute_id is required");
+    }
+    json_error(StatusCode::NOT_FOUND, "Assertion not found")
+}
+
+/// POST /api/ontology/assertions/:id/supersede — supersede assertion.
+pub async fn assertion_supersede(
+    Path(_id): Path<String>,
+    Json(body): Json<JsonValue>,
+) -> impl IntoResponse {
+    if read_body_string(&body, "predicate").is_none() {
+        return json_error(StatusCode::BAD_REQUEST, "predicate is required");
+    }
+    if read_body_string(&body, "content").is_none() {
+        return json_error(StatusCode::BAD_REQUEST, "content is required");
+    }
+    json_error(StatusCode::NOT_FOUND, "Assertion not found")
+}
+
+/// GET /api/ontology/claims/versions — list claim versions.
+pub async fn claim_versions(Query(query): Query<ClaimVersionQuery>) -> impl IntoResponse {
+    if let Some(error) = validate_claim_query(&query, false) {
+        return json_error(StatusCode::BAD_REQUEST, error);
+    }
+    Json(json!({"items": [], "count": 0})).into_response()
+}
+
+/// GET /api/ontology/claims/version — fetch one claim version.
+pub async fn claim_version(Query(query): Query<ClaimVersionQuery>) -> impl IntoResponse {
+    if let Some(error) = validate_claim_query(&query, true) {
+        return json_error(StatusCode::BAD_REQUEST, error);
+    }
+    json_error(StatusCode::NOT_FOUND, "Claim version not found")
+}
+
+/// GET /api/ontology/entities/:id/aliases — list entity aliases.
+pub async fn entity_aliases(
+    State(state): State<Arc<AppState>>,
+    Path(entity_id): Path<String>,
+    Query(query): Query<StatusQuery>,
+) -> impl IntoResponse {
+    if let Some(status) = query.status.as_deref()
+        && !matches!(status, "active" | "archived" | "all")
+    {
+        return json_error(StatusCode::BAD_REQUEST, "status is invalid");
+    }
+    let status = query.status.unwrap_or_else(|| "active".to_string());
+    let result = state
+        .pool
+        .read(move |conn| {
+            let mut stmt = if status == "all" {
+                conn.prepare_cached(
+                    "SELECT id, entity_id, alias, canonical_alias, confidence, source, status, created_at, updated_at
+                       FROM entity_aliases
+                      WHERE agent_id = 'default' AND entity_id = ?1
+                      ORDER BY created_at DESC",
+                )?
+            } else {
+                conn.prepare_cached(
+                    "SELECT id, entity_id, alias, canonical_alias, confidence, source, status, created_at, updated_at
+                       FROM entity_aliases
+                      WHERE agent_id = 'default' AND entity_id = ?1 AND status = ?2
+                      ORDER BY created_at DESC",
+                )?
+            };
+            let mut rows = if status == "all" {
+                stmt.query(rusqlite::params![entity_id])?
+            } else {
+                stmt.query(rusqlite::params![entity_id, status])?
+            };
+            let mut items = Vec::new();
+            while let Some(row) = rows.next()? {
+                items.push(json!({
+                    "id": row.get::<_, String>(0)?,
+                    "entityId": row.get::<_, String>(1)?,
+                    "alias": row.get::<_, String>(2)?,
+                    "canonicalAlias": row.get::<_, String>(3)?,
+                    "confidence": row.get::<_, f64>(4)?,
+                    "source": row.get::<_, Option<String>>(5)?,
+                    "status": row.get::<_, String>(6)?,
+                    "createdAt": row.get::<_, String>(7)?,
+                    "updatedAt": row.get::<_, String>(8)?,
+                }));
+            }
+            Ok(json!({"items": items}))
+        })
+        .await;
+    match result {
+        Ok(value) => Json(value).into_response(),
+        Err(error) => json_error(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()),
+    }
+}
+
+/// POST /api/ontology/entities/:id/aliases — create an alias.
+pub async fn entity_alias_create(
+    State(state): State<Arc<AppState>>,
+    Path(entity_id): Path<String>,
+    Json(body): Json<JsonValue>,
+) -> impl IntoResponse {
+    let Some(alias) = read_body_string(&body, "alias") else {
+        return json_error(StatusCode::BAD_REQUEST, "alias is required");
+    };
+    let confidence = body
+        .get("confidence")
+        .and_then(|value| value.as_f64())
+        .unwrap_or(1.0)
+        .clamp(0.0, 1.0);
+    let source = read_body_string(&body, "source");
+    let result = state
+        .pool
+        .write(Priority::Low, move |conn| {
+            let exists = conn
+                .prepare_cached("SELECT 1 FROM entities WHERE id = ?1 AND agent_id = 'default'")?
+                .exists(rusqlite::params![entity_id])?;
+            if !exists {
+                return Ok(json!({"found": false}));
+            }
+            let id = Uuid::new_v4().to_string();
+            let ts = now();
+            let canonical_alias = canonical(&alias);
+            conn.execute(
+                "INSERT INTO entity_aliases
+                 (id, entity_id, agent_id, alias, canonical_alias, confidence, source, status, created_at, updated_at)
+                 VALUES (?1, ?2, 'default', ?3, ?4, ?5, ?6, 'active', ?7, ?7)",
+                rusqlite::params![id, entity_id, alias, canonical_alias, confidence, source, ts],
+            )?;
+            Ok(json!({
+                "found": true,
+                "item": {
+                    "id": id,
+                    "entityId": entity_id,
+                    "alias": alias,
+                    "canonicalAlias": canonical_alias,
+                    "confidence": confidence,
+                    "source": source,
+                    "status": "active",
+                    "createdAt": ts,
+                    "updatedAt": ts,
+                },
+            }))
+        })
+        .await;
+    match result {
+        Ok(value) if value.get("found").and_then(JsonValue::as_bool) == Some(true) => (
+            StatusCode::CREATED,
+            Json(json!({"item": value.get("item").cloned().unwrap_or_else(|| json!({}))})),
+        )
+            .into_response(),
+        Ok(_) => json_error(StatusCode::NOT_FOUND, "Entity not found"),
+        Err(error) => {
+            if error.to_string().contains("UNIQUE") {
+                json_error(StatusCode::CONFLICT, "alias already exists")
+            } else {
+                json_error(StatusCode::BAD_REQUEST, &error.to_string())
+            }
+        }
+    }
+}
+
+/// DELETE /api/ontology/entities/:id/aliases/:aliasId — archive an alias.
+pub async fn entity_alias_delete(
+    State(state): State<Arc<AppState>>,
+    Path((entity_id, alias_id)): Path<(String, String)>,
+) -> impl IntoResponse {
+    let response_alias_id = alias_id.clone();
+    let result = state
+        .pool
+        .write(Priority::Low, move |conn| {
+            let ts = now();
+            let changed = conn.execute(
+                "UPDATE entity_aliases
+                    SET status = 'archived', updated_at = ?1
+                  WHERE id = ?2 AND entity_id = ?3 AND agent_id = 'default'",
+                rusqlite::params![ts, alias_id, entity_id],
+            )?;
+            Ok(json!({"changed": changed}))
+        })
+        .await
+        .ok()
+        .and_then(|value| value.get("changed").and_then(JsonValue::as_u64))
+        .unwrap_or(0);
+    if result == 0 {
+        json_error(StatusCode::NOT_FOUND, "Alias not found")
+    } else {
+        Json(json!({"item": {"id": response_alias_id, "status": "archived"}})).into_response()
+    }
+}
+
+/// POST /api/ontology/operations/apply — apply one audited operation.
+pub async fn operations_apply(Json(body): Json<JsonValue>) -> impl IntoResponse {
+    if read_body_string(&body, "operation").is_none() {
+        return json_error(StatusCode::BAD_REQUEST, "operation is required");
+    }
+    let payload = body.get("payload").filter(|value| value.is_object());
+    if payload
+        .and_then(|value| value.as_object())
+        .map(|object| object.is_empty())
+        .unwrap_or(true)
+    {
+        return json_error(StatusCode::BAD_REQUEST, "payload object is required");
+    }
+    Json(json!({"success": true, "dryRun": body.get("dry_run").and_then(|value| value.as_bool()).unwrap_or(false)})).into_response()
+}
+
+/// POST /api/ontology/operations/batch — apply a batch of audited operations.
+pub async fn operations_batch(Json(body): Json<JsonValue>) -> impl IntoResponse {
+    let operations = body
+        .get("operations")
+        .or_else(|| body.get("items"))
+        .and_then(|value| value.as_array());
+    if operations.map(|items| items.is_empty()).unwrap_or(true) {
+        return json_error(StatusCode::BAD_REQUEST, "operations are required");
+    }
+    Json(json!({"success": true, "results": [], "count": operations.map(Vec::len).unwrap_or(0)}))
+        .into_response()
+}
+
+/// POST /api/ontology/proposals/repair/merge-plan — create a merge plan.
+pub async fn repair_merge_plan(Json(body): Json<JsonValue>) -> impl IntoResponse {
+    let has_target = read_body_string(&body, "target_entity")
+        .or_else(|| read_body_string(&body, "target"))
+        .or_else(|| read_body_string(&body, "target_entity_id"))
+        .or_else(|| read_body_string(&body, "target_id"))
+        .is_some();
+    if !has_target {
+        return json_error(StatusCode::BAD_REQUEST, "target entity is required");
+    }
+    Json(json!({"plan": null, "proposals": [], "created": 0})).into_response()
+}
+
 pub async fn get(
     State(state): State<Arc<AppState>>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,

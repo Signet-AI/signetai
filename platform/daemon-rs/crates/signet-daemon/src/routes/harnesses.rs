@@ -1,8 +1,9 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use axum::{Json, extract::State};
+use axum::{Json, extract::State, http::StatusCode, response::IntoResponse};
 use serde_json::json;
+use tokio::process::Command;
 
 use crate::state::AppState;
 
@@ -57,4 +58,62 @@ pub async fn list(State(state): State<Arc<AppState>>) -> Json<serde_json::Value>
     ];
 
     Json(json!({ "harnesses": harnesses }))
+}
+
+pub async fn regenerate(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let script = state
+        .config
+        .base_path
+        .join("memory")
+        .join("scripts")
+        .join("generate-harness-configs.py");
+
+    if !script.exists() {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({"success": false, "error": "Regeneration script not found"})),
+        );
+    }
+
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        Command::new("python3")
+            .arg(&script)
+            .current_dir(&state.config.base_path)
+            .output(),
+    )
+    .await;
+
+    match result {
+        Ok(Ok(output)) if output.status.success() => (
+            StatusCode::OK,
+            Json(json!({
+                "success": true,
+                "message": "Configs regenerated successfully",
+                "output": String::from_utf8_lossy(&output.stdout).to_string(),
+            })),
+        ),
+        Ok(Ok(output)) => {
+            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({
+                    "success": false,
+                    "error": if stderr.is_empty() {
+                        format!("Script exited with code {}", output.status.code().unwrap_or(-1))
+                    } else {
+                        stderr
+                    },
+                })),
+            )
+        }
+        Ok(Err(e)) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"success": false, "error": e.to_string()})),
+        ),
+        Err(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"success": false, "error": "Script exited with code -1"})),
+        ),
+    }
 }

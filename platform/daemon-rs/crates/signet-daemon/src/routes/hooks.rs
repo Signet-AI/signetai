@@ -8,6 +8,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use sha2::{Digest, Sha256};
 
@@ -21,8 +22,8 @@ use tracing::{info, warn};
 use signet_core::db::Priority;
 use signet_pipeline::memory_lineage::{
     ArtifactKind, SummaryArtifactInput, TranscriptArtifactInput, is_noise_session,
-    resolve_memory_sentence, upsert_thread_head, write_compaction_artifact,
-    write_memory_projection, write_transcript_artifact,
+    render_memory_projection, resolve_memory_sentence, upsert_thread_head,
+    write_compaction_artifact, write_memory_projection, write_transcript_artifact,
 };
 use signet_services::session::{ClaimResult, RuntimePath, SessionTracker};
 use signet_services::transactions;
@@ -108,6 +109,15 @@ fn normalize_agent_id(value: Option<&str>) -> Option<String> {
         .map(str::to_string)
 }
 
+fn header_text(headers: &HeaderMap, key: &str) -> Option<String> {
+    headers
+        .get(key)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
 fn build_signet_system_prompt() -> &'static str {
     "[signet active]\n\
 You have persistent memory managed by Signet.\n\
@@ -167,6 +177,247 @@ fn resolve_remember_agent(
         .or(header_agent)
         .or(bound)
         .unwrap_or_else(|| "default".to_string()))
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default)]
+pub struct SynthesisRequestBody {
+    #[serde(rename = "agentId")]
+    agent_id_camel: Option<String>,
+    agent_id: Option<String>,
+    #[serde(rename = "sessionKey")]
+    session_key_camel: Option<String>,
+    session_key: Option<String>,
+}
+
+impl SynthesisRequestBody {
+    fn agent_id(&self) -> Option<&str> {
+        self.agent_id.as_deref().or(self.agent_id_camel.as_deref())
+    }
+
+    fn session_key(&self) -> Option<&str> {
+        self.session_key
+            .as_deref()
+            .or(self.session_key_camel.as_deref())
+    }
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default)]
+pub struct SynthesisCompleteBody {
+    content: Option<String>,
+    #[serde(rename = "agentId")]
+    agent_id_camel: Option<String>,
+    agent_id: Option<String>,
+    #[serde(rename = "sessionKey")]
+    session_key_camel: Option<String>,
+    session_key: Option<String>,
+}
+
+impl SynthesisCompleteBody {
+    fn agent_id(&self) -> Option<&str> {
+        self.agent_id.as_deref().or(self.agent_id_camel.as_deref())
+    }
+
+    fn session_key(&self) -> Option<&str> {
+        self.session_key
+            .as_deref()
+            .or(self.session_key_camel.as_deref())
+    }
+}
+
+fn resolve_synthesis_agent(
+    headers: &HeaderMap,
+    explicit: Option<&str>,
+    session_key: Option<&str>,
+) -> Result<String, &'static str> {
+    let header_agent = header_text(headers, "x-signet-agent-id");
+    let header_session_key = header_text(headers, "x-signet-session-key");
+    resolve_remember_agent(
+        explicit,
+        header_agent.as_deref(),
+        session_key.or(header_session_key.as_deref()),
+    )
+}
+
+fn synthesis_config_payload(state: &AppState) -> serde_json::Value {
+    state
+        .config
+        .manifest
+        .memory
+        .as_ref()
+        .and_then(|memory| memory.pipeline_v2.as_ref())
+        .and_then(|pipeline| serde_json::to_value(&pipeline.synthesis).ok())
+        .unwrap_or_else(|| {
+            serde_json::to_value(signet_core::config::SynthesisConfig::default())
+                .unwrap_or_else(|_| serde_json::json!({}))
+        })
+}
+
+pub async fn synthesis_config(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    Json(synthesis_config_payload(&state))
+}
+
+pub async fn synthesis_status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let running = state.synthesis_worker_handle.lock().await.is_some();
+    Json(serde_json::json!({
+        "running": running,
+        "lastRunAt": serde_json::Value::Null,
+        "config": synthesis_config_payload(&state),
+    }))
+}
+
+pub async fn synthesis_trigger(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    if state.synthesis_worker_handle.lock().await.is_none() {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({ "error": "Synthesis worker not running" })),
+        )
+            .into_response();
+    }
+    let root = state.config.base_path.clone();
+    match state
+        .pool
+        .write(Priority::Low, move |conn| {
+            let count: usize = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM session_summaries WHERE agent_id = ?1",
+                    ["default"],
+                    |row| row.get(0),
+                )
+                .unwrap_or(0);
+            if count == 0 {
+                return Ok(serde_json::json!({
+                    "success": false,
+                    "skipped": true,
+                    "reason": "No session summaries to synthesize"
+                }));
+            }
+            write_memory_projection(conn, &root, "default")
+                .map_err(signet_core::error::CoreError::Migration)?;
+            Ok(serde_json::json!({
+                "success": true,
+                "skipped": false
+            }))
+        })
+        .await
+    {
+        Ok(body) => Json(body).into_response(),
+        Err(error) => {
+            warn!(err = %error, "synthesis trigger failed");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "Synthesis trigger failed" })),
+            )
+                .into_response()
+        }
+    }
+}
+
+pub async fn synthesis(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(body): Json<SynthesisRequestBody>,
+) -> impl IntoResponse {
+    let agent_id = match resolve_synthesis_agent(&headers, body.agent_id(), body.session_key()) {
+        Ok(agent_id) => agent_id,
+        Err(error) => {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({ "error": error })),
+            )
+                .into_response();
+        }
+    };
+    let root = state.config.base_path.clone();
+
+    match state
+        .pool
+        .write(Priority::Low, move |conn| {
+            let rendered = render_memory_projection(conn, &root, &agent_id)
+                .map_err(signet_core::error::CoreError::Migration)?;
+            Ok(serde_json::json!({
+                "harness": "daemon",
+                "model": "projection",
+                "prompt": rendered.content,
+                "fileCount": rendered.file_count,
+                "indexBlock": rendered.index_block,
+            }))
+        })
+        .await
+    {
+        Ok(body) => Json(body).into_response(),
+        Err(error) => {
+            warn!(err = %error, "synthesis request failed");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "Synthesis request failed" })),
+            )
+                .into_response()
+        }
+    }
+}
+
+pub async fn synthesis_complete(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(body): Json<SynthesisCompleteBody>,
+) -> impl IntoResponse {
+    if body.content.as_deref().unwrap_or("").is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "content is required" })),
+        )
+            .into_response();
+    }
+    if let Err(error) = resolve_synthesis_agent(&headers, body.agent_id(), body.session_key()) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": error })),
+        )
+            .into_response();
+    }
+    if state.synthesis_worker_handle.lock().await.is_none() {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({ "error": "Synthesis worker not running" })),
+        )
+            .into_response();
+    }
+    let root = state.config.base_path.clone();
+    let Some(content) = body.content else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "content is required" })),
+        )
+            .into_response();
+    };
+    match write_memory_md_atomic(&root, &content) {
+        Ok(()) => Json(serde_json::json!({ "success": true })).into_response(),
+        Err(error) => {
+            warn!(err = %error, "synthesis complete failed");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "Failed to save MEMORY.md" })),
+            )
+                .into_response()
+        }
+    }
+}
+
+fn write_memory_md_atomic(root: &Path, content: &str) -> Result<(), String> {
+    fs::create_dir_all(root).map_err(|err| err.to_string())?;
+    let path = root.join("MEMORY.md");
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|err| err.to_string())?
+        .as_nanos();
+    let tmp = root.join(format!(".MEMORY.md.{nanos}.tmp"));
+    fs::write(&tmp, content).map_err(|err| err.to_string())?;
+    fs::rename(&tmp, &path).map_err(|err| {
+        let _ = fs::remove_file(&tmp);
+        err.to_string()
+    })
 }
 
 fn parse_visibility(value: Option<&str>) -> Result<String, &'static str> {

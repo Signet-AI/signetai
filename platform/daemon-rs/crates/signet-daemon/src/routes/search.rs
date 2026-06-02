@@ -650,6 +650,410 @@ pub async fn embeddings_status(State(state): State<Arc<AppState>>) -> Json<serde
     Json(status)
 }
 
+fn embedding_check_score(status: &str) -> f64 {
+    match status {
+        "ok" => 1.0,
+        "warn" => 0.5,
+        _ => 0.0,
+    }
+}
+
+fn embedding_score_status(score: f64) -> &'static str {
+    if score >= 0.8 {
+        "healthy"
+    } else if score >= 0.5 {
+        "degraded"
+    } else {
+        "unhealthy"
+    }
+}
+
+fn round_health_score(score: f64) -> f64 {
+    (score.clamp(0.0, 1.0) * 1000.0).round() / 1000.0
+}
+
+fn vec_runtime_detail(error: &str) -> serde_json::Value {
+    serde_json::json!({
+        "sqlite": serde_json::Value::Null,
+        "sqliteAttempt": serde_json::Value::Null,
+        "sqliteWarning": serde_json::Value::Null,
+        "extensionPath": serde_json::Value::Null,
+        "extensionLoaded": false,
+        "extensionLoadError": serde_json::Value::Null,
+        "error": error,
+    })
+}
+
+fn missing_vec_table(error: &str) -> bool {
+    error.contains("no such table: vec_embeddings")
+        || error.contains("no such table: main.vec_embeddings")
+}
+
+pub async fn embeddings_health(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+    let cfg = state.config.manifest.embedding.clone().unwrap_or_default();
+    let base_url = resolve_embedding_base_url(&cfg.provider, cfg.base_url.as_deref());
+    let provider_available = state.embedding.read().await.is_some();
+    let provider_error = if cfg.provider == "none" {
+        Some("Embedding provider set to 'none' — vector search disabled".to_string())
+    } else if provider_available {
+        None
+    } else {
+        Some("Embedding provider unavailable".to_string())
+    };
+
+    let report = state
+        .pool
+        .read({
+            let cfg = cfg.clone();
+            let base_url = base_url.clone();
+            move |conn| {
+                let provider_status = if provider_available { "ok" } else { "fail" };
+                let mut checks = vec![serde_json::json!({
+                    "name": "provider-available",
+                    "status": provider_status,
+                    "message": provider_error
+                        .clone()
+                        .unwrap_or_else(|| format!("{} ({}) is reachable", cfg.provider, cfg.model)),
+                    "detail": if provider_available {
+                        serde_json::Value::Null
+                    } else {
+                        serde_json::json!({
+                            "provider": cfg.provider,
+                            "base_url": base_url,
+                            "error": provider_error,
+                        })
+                    },
+                    "fix": if provider_available {
+                        serde_json::Value::Null
+                    } else {
+                        serde_json::json!("Verify embedding provider configuration and connectivity")
+                    },
+                })];
+
+                let total: i64 = conn
+                    .query_row(
+                        "SELECT COUNT(*) FROM memories WHERE COALESCE(is_deleted, 0) = 0",
+                        [],
+                        |r| r.get(0),
+                    )
+                    .unwrap_or(0);
+                let embedded: i64 = if total == 0 {
+                    0
+                } else {
+                    conn.query_row(
+                        "SELECT COUNT(*) FROM memories m
+                         INNER JOIN embeddings e
+                           ON e.source_type = 'memory' AND e.source_id = m.id
+                         WHERE COALESCE(m.is_deleted, 0) = 0",
+                        [],
+                        |r| r.get(0),
+                    )
+                    .unwrap_or(0)
+                };
+                let coverage = if total == 0 {
+                    1.0
+                } else {
+                    embedded as f64 / total as f64
+                };
+                let coverage_percent = (coverage * 1000.0).round() / 10.0;
+                let coverage_status = if coverage >= 0.95 {
+                    "ok"
+                } else if coverage >= 0.8 {
+                    "warn"
+                } else {
+                    "fail"
+                };
+                checks.push(serde_json::json!({
+                    "name": "coverage",
+                    "status": coverage_status,
+                    "message": if total == 0 {
+                        "No active memories to embed".to_string()
+                    } else if coverage_status == "ok" {
+                        format!("{coverage_percent}% of memories have embeddings")
+                    } else {
+                        format!(
+                            "{coverage_percent}% coverage — {} memories missing embeddings",
+                            total - embedded
+                        )
+                    },
+                    "detail": {
+                        "total": total,
+                        "embedded": embedded,
+                        "unembedded": total - embedded,
+                        "coverage": coverage_percent,
+                    },
+                }));
+
+                let dims = {
+                    let mut stmt = conn.prepare("SELECT DISTINCT dimensions FROM embeddings")?;
+                    stmt.query_map([], |r| r.get::<_, i64>(0))?
+                        .collect::<rusqlite::Result<Vec<_>>>()?
+                };
+                let mismatched: Vec<i64> = dims
+                    .iter()
+                    .copied()
+                    .filter(|dim| *dim != cfg.dimensions as i64)
+                    .collect();
+                checks.push(if dims.is_empty() {
+                    serde_json::json!({
+                        "name": "dimension-mismatch",
+                        "status": "ok",
+                        "message": "No embeddings to check",
+                    })
+                } else if mismatched.is_empty() {
+                    serde_json::json!({
+                        "name": "dimension-mismatch",
+                        "status": "ok",
+                        "message": format!("All embeddings are {}-dimensional", cfg.dimensions),
+                    })
+                } else {
+                    serde_json::json!({
+                        "name": "dimension-mismatch",
+                        "status": "fail",
+                        "message": format!(
+                            "Found dimensions [{}] but config expects {}",
+                            dims.iter().map(ToString::to_string).collect::<Vec<_>>().join(", "),
+                            cfg.dimensions
+                        ),
+                        "detail": {"expected": cfg.dimensions, "found": dims},
+                        "fix": "Re-embed affected memories with the correct model/dimensions",
+                    })
+                });
+
+                let models = {
+                    let mut stmt = conn.prepare(
+                        "SELECT DISTINCT embedding_model FROM memories WHERE embedding_model IS NOT NULL",
+                    )?;
+                    stmt.query_map([], |r| r.get::<_, String>(0))?
+                        .collect::<rusqlite::Result<Vec<_>>>()?
+                };
+                checks.push(if models.len() <= 1 {
+                    serde_json::json!({
+                        "name": "model-drift",
+                        "status": "ok",
+                        "message": if let Some(model) = models.first() {
+                            format!("All memories use {model}")
+                        } else {
+                            "No embedding models recorded".to_string()
+                        },
+                    })
+                } else {
+                    serde_json::json!({
+                        "name": "model-drift",
+                        "status": "warn",
+                        "message": format!("Mixed embedding models: {}", models.join(", ")),
+                        "detail": {"models": models},
+                        "fix": "Re-embed older memories to unify to the current model",
+                    })
+                });
+
+                match conn.query_row(
+                    "SELECT COUNT(*) FROM embeddings e LEFT JOIN vec_embeddings v ON v.id = e.id WHERE v.id IS NULL",
+                    [],
+                    |r| r.get::<_, i64>(0),
+                ) {
+                    Ok(0) => checks.push(serde_json::json!({
+                        "name": "null-vectors",
+                        "status": "ok",
+                        "message": "No null or empty vectors found",
+                    })),
+                    Ok(count) => checks.push(serde_json::json!({
+                        "name": "null-vectors",
+                        "status": "fail",
+                        "message": format!("{count} embedding(s) have null or empty vectors"),
+                        "detail": {"count": count},
+                        "fix": "Run re-embed repair to regenerate these vectors",
+                    })),
+                    Err(e) if missing_vec_table(&e.to_string()) => checks.push(serde_json::json!({
+                        "name": "null-vectors",
+                        "status": "warn",
+                        "message": "Cannot verify null vectors because vec_embeddings is unavailable",
+                        "detail": vec_runtime_detail(&e.to_string()),
+                        "fix": "Install sqlite-vec or restart daemon to initialize the vector table",
+                    })),
+                    Err(e) => checks.push(serde_json::json!({
+                        "name": "null-vectors",
+                        "status": "fail",
+                        "message": "Failed to verify vector row coverage",
+                        "detail": vec_runtime_detail(&e.to_string()),
+                        "fix": "Inspect SQLite schema integrity and repair the underlying query failure",
+                    })),
+                }
+
+                let emb_count: i64 = conn
+                    .query_row("SELECT COUNT(*) FROM embeddings", [], |r| r.get(0))
+                    .unwrap_or(0);
+                match conn.query_row("SELECT COUNT(*) FROM vec_embeddings", [], |r| {
+                    r.get::<_, i64>(0)
+                }) {
+                    Ok(vec_count) if emb_count == vec_count => checks.push(serde_json::json!({
+                        "name": "vec-table-sync",
+                        "status": "ok",
+                        "message": format!("embeddings ({emb_count}) and vec_embeddings ({vec_count}) are in sync"),
+                    })),
+                    Ok(vec_count) => checks.push(serde_json::json!({
+                        "name": "vec-table-sync",
+                        "status": "warn",
+                        "message": format!("embeddings has {emb_count} rows but vec_embeddings has {vec_count}"),
+                        "detail": {"embeddings": emb_count, "vecEmbeddings": vec_count},
+                        "fix": "Run embedding repair to resync the vector index",
+                    })),
+                    Err(e) if missing_vec_table(&e.to_string()) => checks.push(serde_json::json!({
+                        "name": "vec-table-sync",
+                        "status": "warn",
+                        "message": "vec_embeddings table not found",
+                        "detail": vec_runtime_detail(&e.to_string()),
+                        "fix": "Install sqlite-vec or restart daemon to initialize the vector table",
+                    })),
+                    Err(e) => checks.push(serde_json::json!({
+                        "name": "vec-table-sync",
+                        "status": "fail",
+                        "message": "Failed to inspect vec_embeddings health",
+                        "detail": vec_runtime_detail(&e.to_string()),
+                        "fix": "Inspect SQLite schema integrity and repair the underlying query failure",
+                    })),
+                }
+
+                let orphaned: i64 = conn
+                    .query_row(
+                        "SELECT COUNT(*) FROM embeddings e
+                         LEFT JOIN memories m ON e.source_type = 'memory' AND e.source_id = m.id
+                         WHERE e.source_type = 'memory'
+                           AND (m.id IS NULL OR COALESCE(m.is_deleted, 0) = 1)",
+                        [],
+                        |r| r.get(0),
+                    )
+                    .unwrap_or(0);
+                checks.push(if orphaned == 0 {
+                    serde_json::json!({
+                        "name": "orphaned-embeddings",
+                        "status": "ok",
+                        "message": "No orphaned embeddings found",
+                    })
+                } else {
+                    serde_json::json!({
+                        "name": "orphaned-embeddings",
+                        "status": "warn",
+                        "message": format!("{orphaned} embedding(s) point to deleted or missing memories"),
+                        "detail": {"count": orphaned},
+                        "fix": "Clean orphaned embeddings to reclaim space",
+                    })
+                });
+
+                let weights = [
+                    ("provider-available", 0.3),
+                    ("coverage", 0.25),
+                    ("dimension-mismatch", 0.15),
+                    ("model-drift", 0.1),
+                    ("null-vectors", 0.08),
+                    ("vec-table-sync", 0.07),
+                    ("orphaned-embeddings", 0.05),
+                ];
+                let score = weights
+                    .iter()
+                    .map(|(name, weight)| {
+                        checks
+                            .iter()
+                            .find(|check| check.get("name").and_then(|v| v.as_str()) == Some(*name))
+                            .and_then(|check| check.get("status").and_then(|v| v.as_str()))
+                            .map(|status| embedding_check_score(status) * weight)
+                            .unwrap_or(0.0)
+                    })
+                    .sum::<f64>();
+                let score = round_health_score(score);
+
+                Ok(serde_json::json!({
+                    "status": embedding_score_status(score),
+                    "score": score,
+                    "checkedAt": chrono::Utc::now().to_rfc3339(),
+                    "config": {
+                        "provider": cfg.provider,
+                        "model": cfg.model,
+                        "dimensions": cfg.dimensions,
+                    },
+                    "checks": checks,
+                }))
+            }
+        })
+        .await
+        .unwrap_or_else(|e| {
+            serde_json::json!({
+                "status": "unhealthy",
+                "score": 0,
+                "checkedAt": chrono::Utc::now().to_rfc3339(),
+                "config": {
+                    "provider": cfg.provider,
+                    "model": cfg.model,
+                    "dimensions": cfg.dimensions,
+                },
+                "checks": [{
+                    "name": "database",
+                    "status": "fail",
+                    "message": format!("{e}"),
+                }],
+            })
+        });
+
+    Json(report)
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ProjectionQuery {
+    pub dimensions: Option<String>,
+    pub limit: Option<i64>,
+    pub offset: Option<i64>,
+}
+
+fn bounded_i64(value: Option<i64>, min: i64, max: i64) -> Option<i64> {
+    value.map(|n| n.clamp(min, max))
+}
+
+pub async fn embeddings_projection(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<ProjectionQuery>,
+) -> impl IntoResponse {
+    let dimensions = if query.dimensions.as_deref() == Some("3") {
+        3
+    } else {
+        2
+    };
+    let offset = bounded_i64(query.offset, 0, 100_000).unwrap_or(0);
+    let limit = bounded_i64(query.limit, 1, 5_000);
+
+    let result = state
+        .pool
+        .read(move |conn| {
+            let total: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM embeddings WHERE source_type = 'memory'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap_or(0);
+            let effective_limit = limit.unwrap_or(total).max(0);
+            Ok(serde_json::json!({
+                "status": "ready",
+                "dimensions": dimensions,
+                "count": 0,
+                "total": total,
+                "limit": effective_limit,
+                "offset": offset,
+                "hasMore": offset + effective_limit < total,
+                "nodes": [],
+                "edges": [],
+            }))
+        })
+        .await;
+
+    match result {
+        Ok(body) => (StatusCode::OK, Json(body)),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"status": "error", "message": format!("{e}")})),
+        ),
+    }
+}
+
 fn resolve_embedding_base_url(provider: &str, configured: Option<&str>) -> String {
     let trimmed = configured.map(str::trim).filter(|value| !value.is_empty());
     match provider {

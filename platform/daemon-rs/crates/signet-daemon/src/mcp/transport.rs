@@ -4,7 +4,12 @@
 
 use std::sync::Arc;
 
-use axum::{Json, extract::State, http::StatusCode, response::IntoResponse};
+use axum::{
+    Json,
+    extract::State,
+    http::{HeaderMap, StatusCode},
+    response::IntoResponse,
+};
 
 use super::protocol::{
     JsonRpcRequest, JsonRpcResponse, MCP_PROTOCOL_VERSION, PARSE_ERROR, SERVER_NAME,
@@ -15,14 +20,30 @@ use crate::state::AppState;
 /// POST /mcp — handle MCP JSON-RPC requests.
 pub async fn handle(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Json(req): Json<serde_json::Value>,
 ) -> impl IntoResponse {
+    if !accepts_streamable_http(&headers) {
+        return (
+            StatusCode::NOT_ACCEPTABLE,
+            Json(
+                serde_json::to_value(JsonRpcResponse::error(
+                    None,
+                    -32000,
+                    "Not Acceptable: Client must accept both application/json and text/event-stream"
+                        .to_string(),
+                ))
+                .unwrap(),
+            ),
+        );
+    }
+
     // Parse as JSON-RPC request
     let rpc: JsonRpcRequest = match serde_json::from_value(req) {
         Ok(r) => r,
         Err(e) => {
             return (
-                StatusCode::OK,
+                StatusCode::BAD_REQUEST,
                 Json(
                     serde_json::to_value(JsonRpcResponse::error(
                         None,
@@ -40,6 +61,20 @@ pub async fn handle(
         StatusCode::OK,
         Json(serde_json::to_value(response).unwrap()),
     )
+}
+
+fn accepts_streamable_http(headers: &HeaderMap) -> bool {
+    let Some(accept) = headers.get("accept").and_then(|value| value.to_str().ok()) else {
+        return false;
+    };
+    let values = accept
+        .split(',')
+        .filter_map(|part| part.split(';').next())
+        .map(str::trim)
+        .map(str::to_ascii_lowercase)
+        .collect::<Vec<_>>();
+    values.iter().any(|value| value == "application/json")
+        && values.iter().any(|value| value == "text/event-stream")
 }
 
 async fn dispatch(state: &Arc<AppState>, req: &JsonRpcRequest) -> JsonRpcResponse {
@@ -156,6 +191,6 @@ mod tests {
         let resp = handle_tools_list(&req);
         let result = resp.result.unwrap();
         let tools = result["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 23);
+        assert_eq!(tools.len(), 24);
     }
 }

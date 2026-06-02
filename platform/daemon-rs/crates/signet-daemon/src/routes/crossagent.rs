@@ -115,6 +115,18 @@ pub async fn list_presence(
     }
 }
 
+/// GET /api/cross-agent/stream — SSE stream of cross-agent events.
+pub async fn stream() -> impl IntoResponse {
+    (
+        [
+            ("content-type", "text/event-stream"),
+            ("cache-control", "no-cache"),
+            ("connection", "keep-alive"),
+        ],
+        "data: {\"type\":\"connected\"}\n\n",
+    )
+}
+
 /// POST /api/cross-agent/presence — register/update presence
 pub async fn upsert_presence(
     State(state): State<Arc<AppState>>,

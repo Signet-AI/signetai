@@ -315,8 +315,10 @@ fn field_severity(rule: Option<&EndpointRule>, path: &str) -> Severity {
                     return Severity::Expected;
                 }
             }
-            // Default to critical for unclassified fields
-            Severity::Critical
+            // Endpoint rules intentionally list deterministic fields that
+            // block cutover. Other observed differences are still logged, but
+            // are expected until the rule declares them deterministic.
+            Severity::Expected
         }
         None => Severity::Critical,
     }
@@ -390,6 +392,34 @@ mod tests {
         let divs = rules.compare("GET /health", &primary, &shadow);
         assert_eq!(divs.len(), 1);
         assert!(matches!(divs[0].severity, Severity::Critical));
+    }
+
+    #[test]
+    fn ruled_endpoint_only_marks_deterministic_fields_critical() {
+        let rule = EndpointRule {
+            deterministic: vec!["status".to_string()],
+            ignore_fields: vec!["version".to_string()],
+            tolerance: None,
+            array_ordering: None,
+            note: None,
+        };
+
+        assert!(matches!(
+            field_severity(Some(&rule), "status"),
+            Severity::Critical
+        ));
+        assert!(matches!(
+            field_severity(Some(&rule), "version"),
+            Severity::Expected
+        ));
+        assert!(matches!(
+            field_severity(Some(&rule), "runtimeOnlyField"),
+            Severity::Expected
+        ));
+        assert!(matches!(
+            field_severity(None, "runtimeOnlyField"),
+            Severity::Critical
+        ));
     }
 
     #[test]

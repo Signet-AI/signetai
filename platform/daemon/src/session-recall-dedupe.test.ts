@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, mock } from "bun:test";
+import { afterAll, beforeEach, describe, expect, it, spyOn } from "bun:test";
+import * as dbAccessor from "./db-accessor";
 
 type EventRow = {
 	readonly sessionKey: string;
@@ -116,22 +117,18 @@ const fakeDb = {
 	},
 };
 
-mock.module("./db-accessor", () => ({
-	getDbAccessor: () => ({
-		withWriteTx: <T>(fn: (db: typeof fakeDb) => T): T => fn(fakeDb),
-	}),
-}));
-
-mock.module("./logger", () => ({
-	logger: {
-		debug: () => undefined,
-		info: () => undefined,
-		warn: () => undefined,
-		error: () => undefined,
-	},
-}));
+const getDbAccessorSpy = spyOn(dbAccessor, "getDbAccessor").mockImplementation(
+	() =>
+		({
+			withWriteTx: <T>(fn: (db: typeof fakeDb) => T): T => fn(fakeDb),
+		}) as ReturnType<typeof dbAccessor.getDbAccessor>,
+);
 
 const { advanceRecallContextEpoch, applyRecallDedupe, claimRecallItems } = await import("./session-recall-dedupe");
+
+afterAll(() => {
+	getDbAccessorSpy.mockRestore();
+});
 
 beforeEach(() => {
 	events.clear();

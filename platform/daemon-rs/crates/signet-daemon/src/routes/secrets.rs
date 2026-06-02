@@ -5,6 +5,7 @@
 //! machine identity.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::{
     Json,
@@ -33,6 +34,10 @@ struct SecretsStore {
     version: u32,
     secrets: std::collections::HashMap<String, SecretEntry>,
 }
+
+const BITWARDEN_SESSION_SECRET: &str = "BITWARDEN_SESSION";
+const BITWARDEN_MANAGED_FOLDER_SECRET: &str = "BITWARDEN_MANAGED_FOLDER_ID";
+const ONEPASSWORD_SERVICE_ACCOUNT_SECRET: &str = "ONEPASSWORD_SERVICE_ACCOUNT_TOKEN";
 
 impl Default for SecretsStore {
     fn default() -> Self {
@@ -86,15 +91,20 @@ fn valid_name(name: &str) -> bool {
         && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
+pub(crate) fn secret_names(state: &AppState) -> Vec<String> {
+    let store = load_store(state);
+    let mut names = store.secrets.keys().cloned().collect::<Vec<_>>();
+    names.sort();
+    names
+}
+
 // ---------------------------------------------------------------------------
 // Route handlers
 // ---------------------------------------------------------------------------
 
 /// GET /api/secrets — list secret names
 pub async fn list(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
-    let store = load_store(&state);
-    let names: Vec<&String> = store.secrets.keys().collect();
-    Json(serde_json::json!({ "secrets": names }))
+    Json(serde_json::json!({ "secrets": secret_names(&state) }))
 }
 
 /// GET /api/secrets/1password/status — 1Password provider status.
@@ -124,6 +134,181 @@ pub async fn onepassword_status(State(state): State<Arc<AppState>>) -> Json<serd
             "vaults": []
         }))
     }
+}
+
+/// GET /api/secrets/bitwarden/status — Bitwarden provider status.
+pub async fn bitwarden_status(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+    let store = load_store(&state);
+    let configured = store.secrets.contains_key(BITWARDEN_SESSION_SECRET);
+    Json(serde_json::json!({
+        "configured": configured,
+        "connected": false,
+        "activeProvider": false,
+        "vaults": [],
+        "folders": [],
+        "error": if configured { Some("Bitwarden provider is configured but native Rust session validation is not available yet") } else { None::<&str> },
+    }))
+}
+
+/// POST /api/secrets/bitwarden/connect — configure Bitwarden session.
+pub async fn bitwarden_connect(Json(body): Json<serde_json::Value>) -> impl IntoResponse {
+    let session = body
+        .get("session")
+        .or_else(|| body.get("token"))
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if session.is_none() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "session is required"})),
+        );
+    }
+    (
+        StatusCode::BAD_REQUEST,
+        Json(serde_json::json!({
+            "success": false,
+            "configured": true,
+            "connected": false,
+            "activeProvider": false,
+            "error": "Bitwarden session validation is not available in the Rust daemon",
+        })),
+    )
+}
+
+/// DELETE /api/secrets/bitwarden/connect — disconnect Bitwarden provider.
+pub async fn bitwarden_disconnect(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let mut store = load_store(&state);
+    let session_deleted = store.secrets.remove(BITWARDEN_SESSION_SECRET).is_some();
+    let folder_deleted = store
+        .secrets
+        .remove(BITWARDEN_MANAGED_FOLDER_SECRET)
+        .is_some();
+    if let Err(err) = save_store(&state, &store) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": err})),
+        );
+    }
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "success": true,
+            "disconnected": true,
+            "existed": session_deleted || folder_deleted,
+            "activeProvider": false,
+        })),
+    )
+}
+
+/// POST /api/secrets/bitwarden/provider — select local or Bitwarden provider.
+pub async fn bitwarden_provider(Json(body): Json<serde_json::Value>) -> impl IntoResponse {
+    let provider = body
+        .get("provider")
+        .and_then(|value| value.as_str())
+        .map(str::trim);
+    match provider {
+        Some("local") => (
+            StatusCode::OK,
+            Json(serde_json::json!({"success": true, "provider": "local"})),
+        ),
+        Some("bitwarden") => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Bitwarden is not connected"})),
+        ),
+        _ => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "provider must be local or bitwarden"})),
+        ),
+    }
+}
+
+/// GET /api/secrets/bitwarden/folders — list Bitwarden folders.
+pub async fn bitwarden_folders() -> impl IntoResponse {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(serde_json::json!({"error": "Bitwarden is not connected"})),
+    )
+}
+
+/// POST /api/secrets/bitwarden/migrate — migrate local secrets to Bitwarden.
+pub async fn bitwarden_migrate(Json(body): Json<serde_json::Value>) -> impl IntoResponse {
+    if !body.is_object() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Invalid JSON body"})),
+        );
+    }
+    (
+        StatusCode::BAD_REQUEST,
+        Json(serde_json::json!({"error": "Bitwarden is not connected"})),
+    )
+}
+
+/// POST /api/secrets/1password/connect — configure 1Password token.
+pub async fn onepassword_connect(Json(body): Json<serde_json::Value>) -> impl IntoResponse {
+    let token = body
+        .get("token")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if token.is_none() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "token is required"})),
+        );
+    }
+    (
+        StatusCode::BAD_REQUEST,
+        Json(
+            serde_json::json!({"error": "1Password vault listing is not available in the Rust daemon"}),
+        ),
+    )
+}
+
+/// DELETE /api/secrets/1password/connect — disconnect 1Password provider.
+pub async fn onepassword_disconnect(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let mut store = load_store(&state);
+    let existed = store
+        .secrets
+        .remove(ONEPASSWORD_SERVICE_ACCOUNT_SECRET)
+        .is_some();
+    if let Err(err) = save_store(&state, &store) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": err})),
+        );
+    }
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "success": true,
+            "disconnected": true,
+            "existed": existed,
+        })),
+    )
+}
+
+/// GET /api/secrets/1password/vaults — list 1Password vaults.
+pub async fn onepassword_vaults() -> impl IntoResponse {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(serde_json::json!({"error": "1Password service account token not configured"})),
+    )
+}
+
+/// POST /api/secrets/1password/import — import 1Password items.
+pub async fn onepassword_import(Json(body): Json<serde_json::Value>) -> impl IntoResponse {
+    if !body.is_object() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Invalid JSON body"})),
+        );
+    }
+    (
+        StatusCode::BAD_REQUEST,
+        Json(serde_json::json!({"error": "1Password service account token not configured"})),
+    )
 }
 
 /// POST /api/secrets/:name — store a secret
@@ -209,18 +394,26 @@ pub struct ExecBody {
     pub command: String,
     pub secrets: std::collections::HashMap<String, String>,
     pub cwd: Option<String>,
+    pub timeout_ms: Option<u64>,
 }
 
-/// POST /api/secrets/exec — run a command with secrets injected as env vars.
-///
-/// This is an intentional subprocess spawn — the API allows agents to
-/// run commands with secret values injected safely via environment
-/// variables (never on the command line). The command string comes
-/// from authenticated API callers, not untrusted user input.
-pub async fn run_with_secrets(
-    State(state): State<Arc<AppState>>,
-    Json(body): Json<ExecBody>,
-) -> impl IntoResponse {
+fn normalize_secret_exec_timeout_ms(timeout_ms: Option<u64>) -> u64 {
+    timeout_ms.unwrap_or(300_000).clamp(1_000, 1_800_000)
+}
+
+fn redact_output(text: &str, secret_values: &[String]) -> String {
+    let mut redacted = text.to_string();
+    for value in secret_values.iter().filter(|value| value.len() > 3) {
+        redacted = redacted.replace(value, "[REDACTED]");
+    }
+    redacted
+}
+
+async fn run_secret_command(
+    state: Arc<AppState>,
+    body: ExecBody,
+    timeout_ms: u64,
+) -> Result<serde_json::Value, String> {
     let store = load_store(&state);
 
     // Resolve secrets to env vars
@@ -238,15 +431,11 @@ pub async fn run_with_secrets(
                 env.insert(env_name.clone(), decoded);
             }
             None => {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(serde_json::json!({
-                        "error": format!("secret not found: {secret_name}")
-                    })),
-                );
+                return Err(format!("secret not found: {secret_name}"));
             }
         }
     }
+    let secret_values = env.values().cloned().collect::<Vec<_>>();
 
     // Run command with secrets as env vars. Uses execFile-style
     // argument passing to avoid shell expansion of secret values.
@@ -259,36 +448,213 @@ pub async fn run_with_secrets(
     let mut cmd = tokio::process::Command::new("cmd");
     #[cfg(windows)]
     cmd.args(["/C", &body.command]);
-    let output = cmd
-        .current_dir(cwd)
-        .envs(&env)
-        .env("SIGNET_NO_HOOKS", "1")
-        .output()
-        .await;
+    let output = tokio::time::timeout(
+        Duration::from_millis(timeout_ms),
+        cmd.current_dir(cwd)
+            .envs(&env)
+            .env("SIGNET_NO_HOOKS", "1")
+            .output(),
+    )
+    .await;
 
     match output {
-        Ok(out) => {
-            let stdout = String::from_utf8_lossy(&out.stdout).to_string();
-            let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+        Ok(Ok(out)) => {
+            let stdout = redact_output(&String::from_utf8_lossy(&out.stdout), &secret_values);
+            let stderr = redact_output(&String::from_utf8_lossy(&out.stderr), &secret_values);
             let code = out.status.code().unwrap_or(-1);
-            (
-                StatusCode::OK,
-                Json(serde_json::json!({
-                    "stdout": stdout,
-                    "stderr": stderr,
-                    "code": code,
-                })),
-            )
+            Ok(serde_json::json!({
+                "stdout": stdout,
+                "stderr": stderr,
+                "code": code,
+            }))
         }
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
+        Ok(Err(e)) => Err(format!("subprocess failed: {e}")),
+        Err(_) => Ok(serde_json::json!({
+            "stdout": "",
+            "stderr": format!("\n[signet secret exec: timed out after {timeout_ms}ms]\n"),
+            "code": 124,
+            "timedOut": true,
+        })),
+    }
+}
+
+async fn set_secret_exec_job(state: &AppState, job_id: &str, fields: serde_json::Value) {
+    let mut jobs = state.secret_exec_jobs.write().await;
+    let Some(job) = jobs.get_mut(job_id).and_then(|value| value.as_object_mut()) else {
+        return;
+    };
+    if let Some(fields) = fields.as_object() {
+        for (key, value) in fields {
+            job.insert(key.clone(), value.clone());
+        }
+    }
+}
+
+pub(crate) async fn queue_secret_exec(
+    state: Arc<AppState>,
+    body: ExecBody,
+) -> Result<serde_json::Value, (StatusCode, serde_json::Value)> {
+    if body.command.trim().is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            serde_json::json!({"error": "command is required"}),
+        ));
+    }
+    if body.secrets.is_empty() || body.secrets.values().any(|value| value.trim().is_empty()) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            serde_json::json!({"error": "non-empty secrets map is required"}),
+        ));
+    }
+
+    let id = uuid::Uuid::new_v4().to_string();
+    let timeout_ms = normalize_secret_exec_timeout_ms(body.timeout_ms);
+    let job = serde_json::json!({
+        "id": id,
+        "status": "queued",
+        "createdAt": chrono::Utc::now().to_rfc3339(),
+        "timeoutMs": timeout_ms,
+    });
+    state
+        .secret_exec_jobs
+        .write()
+        .await
+        .insert(id.clone(), job.clone());
+
+    let worker_state = state.clone();
+    tokio::spawn(async move {
+        set_secret_exec_job(
+            &worker_state,
+            &id,
+            serde_json::json!({
+                "status": "running",
+                "startedAt": chrono::Utc::now().to_rfc3339(),
+            }),
+        )
+        .await;
+        match run_secret_command(worker_state.clone(), body, timeout_ms).await {
+            Ok(result) => {
+                set_secret_exec_job(
+                    &worker_state,
+                    &id,
+                    serde_json::json!({
+                        "status": "completed",
+                        "completedAt": chrono::Utc::now().to_rfc3339(),
+                        "result": result,
+                    }),
+                )
+                .await;
+            }
+            Err(error) => {
+                set_secret_exec_job(
+                    &worker_state,
+                    &id,
+                    serde_json::json!({
+                        "status": "failed",
+                        "completedAt": chrono::Utc::now().to_rfc3339(),
+                        "error": error,
+                    }),
+                )
+                .await;
+            }
+        }
+    });
+
+    Ok(job)
+}
+
+pub(crate) async fn secret_exec_status_value(
+    state: &AppState,
+    job_id: &str,
+) -> Option<serde_json::Value> {
+    state.secret_exec_jobs.read().await.get(job_id).cloned()
+}
+
+/// POST /api/secrets/exec — queue a command with secrets injected as env vars.
+pub async fn run_with_secrets(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<ExecBody>,
+) -> impl IntoResponse {
+    match queue_secret_exec(state, body).await {
+        Ok(job) => (StatusCode::ACCEPTED, Json(job)),
+        Err((status, body)) => (status, Json(body)),
+    }
+}
+
+/// GET /api/secrets/exec/:jobId — inspect queued secret exec job status.
+pub async fn exec_status(
+    State(state): State<Arc<AppState>>,
+    Path(job_id): Path<String>,
+) -> impl IntoResponse {
+    match secret_exec_status_value(&state, &job_id).await {
+        Some(job) => (StatusCode::OK, Json(job)),
+        None => (
+            StatusCode::NOT_FOUND,
             Json(serde_json::json!({
-                "error": format!("subprocess failed: {e}"),
-                "stdout": "",
-                "stderr": "",
-                "code": -1,
+                "error": "secret exec job not found",
+                "id": job_id,
             })),
         ),
+    }
+}
+
+/// POST /api/secrets/:name/exec — queue command using a default secret mapping.
+pub async fn run_named_secret(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+    Json(body): Json<serde_json::Value>,
+) -> axum::response::Response {
+    let command = body
+        .get("command")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let Some(command) = command else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "command is required"})),
+        )
+            .into_response();
+    };
+    let secrets = match body.get("secrets") {
+        None => std::collections::HashMap::from([(name.clone(), name)]),
+        Some(value) if value.is_object() => value
+            .as_object()
+            .unwrap()
+            .iter()
+            .filter_map(|(key, value)| {
+                value
+                    .as_str()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(|value| (key.clone(), value.to_string()))
+            })
+            .collect::<std::collections::HashMap<_, _>>(),
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "non-empty secrets map is required"})),
+            )
+                .into_response();
+        }
+    };
+
+    match queue_secret_exec(
+        state,
+        ExecBody {
+            command: command.to_string(),
+            secrets,
+            cwd: body
+                .get("cwd")
+                .and_then(|value| value.as_str())
+                .map(ToOwned::to_owned),
+            timeout_ms: body.get("timeoutMs").and_then(|value| value.as_u64()),
+        },
+    )
+    .await
+    {
+        Ok(job) => (StatusCode::ACCEPTED, Json(job)).into_response(),
+        Err((status, body)) => (status, Json(body)).into_response(),
     }
 }
 

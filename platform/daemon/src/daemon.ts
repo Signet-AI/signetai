@@ -82,6 +82,7 @@ import {
 	analyticsCollector,
 	authConfig,
 	bindAbort,
+	embeddingTrackerHandle as sharedEmbeddingTrackerHandle,
 	invalidateDiagnosticsCache,
 	providerRuntimeResolution,
 	providerTracker,
@@ -883,6 +884,12 @@ async function stopPipelineRuntime(): Promise<void> {
 		embeddingTrackerHandle = null;
 		setEmbeddingTrackerHandle(null);
 	}
+	if (sharedEmbeddingTrackerHandle) {
+		try {
+			await sharedEmbeddingTrackerHandle.stop();
+		} catch {}
+		setEmbeddingTrackerHandle(null);
+	}
 
 	if (dreamingWorkerHandle) {
 		dreamingWorkerHandle.stop();
@@ -914,6 +921,10 @@ async function stopPipelineRuntime(): Promise<void> {
 async function restartPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?: TelemetryCollector): Promise<void> {
 	await stopPipelineRuntime();
 	await startPipelineRuntime(memoryCfg, telemetry);
+}
+
+export async function stopDaemonRuntimeForTests(): Promise<void> {
+	await stopPipelineRuntime();
 }
 
 type RouterHandle = ReturnType<typeof getOrCreateInferenceRouter>;

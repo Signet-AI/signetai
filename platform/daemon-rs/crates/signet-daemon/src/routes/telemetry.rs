@@ -4,25 +4,65 @@
 //! ledger API. It intentionally reads `memory_search_telemetry` from SQLite and
 //! returns the same item/export shapes used by the TS daemon.
 
-use std::{net::SocketAddr, sync::Arc};
+use std::{collections::BTreeMap, net::SocketAddr, sync::Arc};
 
 use axum::{
     Json,
-    extract::{ConnectInfo, Query, State},
+    extract::{ConnectInfo, Path, Query, State},
     http::{HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
 };
+use chrono::{Duration, Utc};
 use rusqlite::{ToSql, types::Value};
 use serde::Deserialize;
 
 use crate::{
     auth::{
-        middleware::{AuthState, authenticate_headers, require_permission_guard},
+        middleware::{
+            AuthState, authenticate_headers, require_permission_guard, resolve_scoped_agent,
+        },
         types::{AuthMode, Permission},
     },
     routes::pipeline::is_loopback,
     state::AppState,
 };
+
+#[derive(Debug, Deserialize)]
+pub struct ContinuityQuery {
+    project: Option<String>,
+    limit: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AnalyticsErrorsQuery {
+    stage: Option<String>,
+    since: Option<String>,
+    limit: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AnalyticsLogsQuery {
+    limit: Option<String>,
+    level: Option<String>,
+    category: Option<String>,
+    since: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct McpAnalyticsQuery {
+    agent_id: Option<String>,
+    #[serde(rename = "agentId")]
+    agent_id_camel: Option<String>,
+    server: Option<String>,
+    since: Option<String>,
+    limit: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CheckpointProjectQuery {
+    project: Option<String>,
+    limit: Option<String>,
+}
 
 #[derive(Debug, Deserialize)]
 pub struct MemorySearchQuery {
@@ -41,6 +81,904 @@ pub struct MemorySearchQuery {
     offset: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct TelemetryEventsQuery {
+    event: Option<String>,
+    since: Option<String>,
+    until: Option<String>,
+    limit: Option<String>,
+}
+
+fn redact_secrets(text: &str) -> String {
+    text.split_whitespace()
+        .map(|word| {
+            let lower = word.to_ascii_lowercase();
+            if word.starts_with("Bearer ")
+                || lower.starts_with("sk-")
+                || lower.starts_with("pk-")
+                || lower.contains("api_key=")
+                || lower.contains("api-key=")
+                || lower.contains("token=")
+                || lower.contains("secret=")
+                || lower.contains("password=")
+                || lower.contains("credential=")
+                || lower.starts_with("openai_api_key=")
+                || lower.starts_with("anthropic_api_key=")
+                || lower.starts_with("github_token=")
+                || lower.starts_with("npm_token=")
+                || lower.starts_with("aws_secret=")
+            {
+                "[REDACTED]"
+            } else {
+                word
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn redact_recent_remembers(raw: Option<String>) -> Option<String> {
+    let raw = raw?;
+    let parsed = serde_json::from_str::<Vec<String>>(&raw).ok()?;
+    serde_json::to_string(
+        &parsed
+            .into_iter()
+            .map(|value| redact_secrets(&value))
+            .collect::<Vec<_>>(),
+    )
+    .ok()
+}
+
+fn empty_latency_snapshot() -> serde_json::Value {
+    serde_json::json!({
+        "p50": 0,
+        "p95": 0,
+        "p99": 0,
+        "count": 0,
+        "mean": 0,
+    })
+}
+
+fn percentile(sorted: &[i64], p: i64) -> i64 {
+    if sorted.is_empty() {
+        return 0;
+    }
+    let idx = (((p as f64 / 100.0) * sorted.len() as f64).ceil() as isize - 1).max(0) as usize;
+    sorted[idx.min(sorted.len() - 1)]
+}
+
+fn rounded_rate(successes: i64, total: i64) -> f64 {
+    if total <= 0 {
+        return 0.0;
+    }
+    ((successes as f64 / total as f64) * 1000.0).round() / 1000.0
+}
+
+fn resolve_mcp_analytics_agent(
+    state: &AppState,
+    headers: &HeaderMap,
+    peer: &SocketAddr,
+    requested: Option<String>,
+) -> Result<String, Box<Response>> {
+    let auth = require_telemetry_access(state, headers, peer)?;
+    let is_local = is_loopback(peer);
+    resolve_scoped_agent(&auth, state.auth_mode, is_local, requested.as_deref()).map_err(|error| {
+        Box::new(
+            (
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({ "error": error })),
+            )
+                .into_response(),
+        )
+    })
+}
+
+fn telemetry_event_rows(
+    conn: &rusqlite::Connection,
+    event: Option<String>,
+    since: Option<String>,
+    until: Option<String>,
+    limit: i64,
+) -> Result<Vec<serde_json::Value>, signet_core::error::CoreError> {
+    let mut conditions = Vec::<String>::new();
+    let mut args = Vec::<Value>::new();
+    if let Some(event) = event {
+        conditions.push("event = ?".to_string());
+        args.push(Value::Text(event));
+    }
+    if let Some(since) = since {
+        conditions.push("timestamp >= ?".to_string());
+        args.push(Value::Text(since));
+    }
+    if let Some(until) = until {
+        conditions.push("timestamp <= ?".to_string());
+        args.push(Value::Text(until));
+    }
+    args.push(Value::Integer(limit));
+    let where_sql = if conditions.is_empty() {
+        String::new()
+    } else {
+        format!("WHERE {}", conditions.join(" AND "))
+    };
+    let sql = format!(
+        "SELECT id, event, timestamp, properties, sent_to_posthog
+         FROM telemetry_events
+         {where_sql}
+         ORDER BY timestamp DESC
+         LIMIT ?"
+    );
+    let refs = args
+        .iter()
+        .map(|value| value as &dyn ToSql)
+        .collect::<Vec<_>>();
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(refs.as_slice(), |row| {
+        let properties = row.get::<_, String>(3)?;
+        Ok(serde_json::json!({
+            "id": row.get::<_, String>(0)?,
+            "event": row.get::<_, String>(1)?,
+            "timestamp": row.get::<_, String>(2)?,
+            "properties": serde_json::from_str::<serde_json::Value>(&properties)
+                .unwrap_or_else(|_| serde_json::json!({})),
+            "sentToPosthog": row.get::<_, i64>(4)? != 0,
+        }))
+    })?;
+    Ok(rows.filter_map(Result::ok).collect())
+}
+
+/// GET /api/telemetry/events
+pub async fn events(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<TelemetryEventsQuery>,
+) -> impl IntoResponse {
+    let event = optional_text(query.event);
+    let since = optional_text(query.since);
+    let until = optional_text(query.until);
+    let limit = parse_limit(query.limit.as_deref(), 100, 10_000);
+    match state
+        .pool
+        .read(move |conn| telemetry_event_rows(conn, event, since, until, limit))
+        .await
+    {
+        Ok(events) => {
+            Json(serde_json::json!({ "events": events, "enabled": true })).into_response()
+        }
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": error.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+/// GET /api/telemetry/stats
+pub async fn stats(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<TelemetryEventsQuery>,
+) -> impl IntoResponse {
+    let since = optional_text(query.since);
+    match state
+        .pool
+        .read(move |conn| telemetry_event_rows(conn, None, since, None, 10_000))
+        .await
+    {
+        Ok(events) => {
+            let mut total_input_tokens = 0i64;
+            let mut total_output_tokens = 0i64;
+            let mut total_cost = 0.0f64;
+            let mut llm_calls = 0i64;
+            let mut llm_errors = 0i64;
+            let mut pipeline_errors = 0i64;
+            let mut latencies = Vec::<i64>::new();
+            for event in &events {
+                if event["event"] == "llm.generate" {
+                    llm_calls += 1;
+                    let properties = &event["properties"];
+                    total_input_tokens += properties["inputTokens"].as_i64().unwrap_or(0);
+                    total_output_tokens += properties["outputTokens"].as_i64().unwrap_or(0);
+                    total_cost += properties["totalCost"].as_f64().unwrap_or(0.0);
+                    if properties["success"].as_bool() == Some(false) {
+                        llm_errors += 1;
+                    }
+                    if let Some(duration) = properties["durationMs"].as_i64() {
+                        latencies.push(duration);
+                    }
+                }
+                if event["event"] == "pipeline.error" {
+                    pipeline_errors += 1;
+                }
+            }
+            latencies.sort_unstable();
+            let p50 = percentile(&latencies, 50);
+            let p95 = percentile(&latencies, 95);
+            Json(serde_json::json!({
+                "enabled": true,
+                "totalEvents": events.len(),
+                "llm": {
+                    "calls": llm_calls,
+                    "errors": llm_errors,
+                    "totalInputTokens": total_input_tokens,
+                    "totalOutputTokens": total_output_tokens,
+                    "totalCost": total_cost,
+                    "p50": p50,
+                    "p95": p95,
+                },
+                "pipelineErrors": pipeline_errors,
+            }))
+            .into_response()
+        }
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": error.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+/// GET /api/telemetry/export
+pub async fn export(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<TelemetryEventsQuery>,
+) -> impl IntoResponse {
+    let since = optional_text(query.since);
+    let limit = parse_limit(query.limit.as_deref(), 10_000, 50_000);
+    match state
+        .pool
+        .read(move |conn| telemetry_event_rows(conn, None, since, None, limit))
+        .await
+    {
+        Ok(events) => {
+            let body = events
+                .into_iter()
+                .map(|event| event.to_string())
+                .collect::<Vec<_>>()
+                .join("\n");
+            let mut response = (StatusCode::OK, body).into_response();
+            response.headers_mut().insert(
+                axum::http::header::CONTENT_TYPE,
+                HeaderValue::from_static("application/x-ndjson"),
+            );
+            response
+        }
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": error.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+/// GET /api/analytics/usage
+pub async fn usage(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if let Err(resp) = require_telemetry_access(&state, &headers, &peer) {
+        return *resp;
+    }
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "endpoints": {},
+            "actors": {},
+            "providers": {},
+            "connectors": {},
+        })),
+    )
+        .into_response()
+}
+
+/// GET /api/analytics/errors
+pub async fn errors(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Query(query): Query<AnalyticsErrorsQuery>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_telemetry_access(&state, &headers, &peer) {
+        return *resp;
+    }
+    let _stage = optional_text(query.stage);
+    let _since = optional_text(query.since);
+    let _limit = parse_limit(query.limit.as_deref(), 50, 500);
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "errors": [],
+            "summary": {},
+        })),
+    )
+        .into_response()
+}
+
+/// GET /api/analytics/latency
+pub async fn latency(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if let Err(resp) = require_telemetry_access(&state, &headers, &peer) {
+        return *resp;
+    }
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "remember": empty_latency_snapshot(),
+            "recall": empty_latency_snapshot(),
+            "mutate": empty_latency_snapshot(),
+            "jobs": empty_latency_snapshot(),
+            "predictor_score": empty_latency_snapshot(),
+            "predictor_train": empty_latency_snapshot(),
+        })),
+    )
+        .into_response()
+}
+
+/// GET /api/mcp/analytics
+pub async fn mcp_analytics(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Query(query): Query<McpAnalyticsQuery>,
+) -> impl IntoResponse {
+    let requested_agent =
+        optional_text(query.agent_id).or_else(|| optional_text(query.agent_id_camel));
+    let agent_id = match resolve_mcp_analytics_agent(&state, &headers, &peer, requested_agent) {
+        Ok(agent_id) => agent_id,
+        Err(resp) => return *resp,
+    };
+    let server = optional_text(query.server);
+    let since = optional_text(query.since);
+    let limit = parse_limit(query.limit.as_deref(), 10, 100);
+
+    let result = state
+        .pool
+        .read(move |conn| {
+            let mut conditions = vec!["agent_id = ?".to_string()];
+            let mut args = vec![Value::Text(agent_id)];
+            if let Some(server) = server {
+                conditions.push("server_id = ?".to_string());
+                args.push(Value::Text(server));
+            }
+            if let Some(since) = since {
+                conditions.push("created_at >= datetime(?)".to_string());
+                args.push(Value::Text(since));
+            }
+            let where_sql = conditions.join(" AND ");
+
+            let totals_sql = format!(
+                "SELECT COUNT(*) as total,
+                        COALESCE(SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END), 0) as successes
+                 FROM mcp_invocations WHERE {where_sql}"
+            );
+            let (total_calls, successes): (i64, i64) = conn.query_row(
+                &totals_sql,
+                rusqlite::params_from_iter(args.iter()),
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )?;
+
+            let mut limited_args = args.clone();
+            limited_args.push(Value::Integer(limit));
+            let top_servers_sql = format!(
+                "SELECT server_id, COUNT(*) as count,
+                        COALESCE(SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END), 0) as success_count,
+                        COALESCE(CAST(AVG(latency_ms) AS INTEGER), 0) as avg_latency_ms
+                 FROM mcp_invocations WHERE {where_sql}
+                 GROUP BY server_id ORDER BY count DESC LIMIT ?"
+            );
+            let top_servers = conn
+                .prepare_cached(&top_servers_sql)?
+                .query_map(rusqlite::params_from_iter(limited_args.iter()), |row| {
+                    Ok(serde_json::json!({
+                        "serverId": row.get::<_, String>(0)?,
+                        "count": row.get::<_, i64>(1)?,
+                        "successCount": row.get::<_, i64>(2)?,
+                        "avgLatencyMs": row.get::<_, i64>(3)?,
+                    }))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+
+            let top_tools_sql = format!(
+                "SELECT tool_name, COUNT(*) as count,
+                        COALESCE(SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END), 0) as success_count,
+                        COALESCE(CAST(AVG(latency_ms) AS INTEGER), 0) as avg_latency_ms
+                 FROM mcp_invocations WHERE {where_sql}
+                 GROUP BY tool_name ORDER BY count DESC LIMIT ?"
+            );
+            let top_tools = conn
+                .prepare_cached(&top_tools_sql)?
+                .query_map(rusqlite::params_from_iter(limited_args.iter()), |row| {
+                    Ok(serde_json::json!({
+                        "toolName": row.get::<_, String>(0)?,
+                        "count": row.get::<_, i64>(1)?,
+                        "successCount": row.get::<_, i64>(2)?,
+                        "avgLatencyMs": row.get::<_, i64>(3)?,
+                    }))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+
+            let latency_sql = format!(
+                "SELECT latency_ms FROM mcp_invocations WHERE {where_sql} ORDER BY latency_ms"
+            );
+            let latencies = conn
+                .prepare_cached(&latency_sql)?
+                .query_map(rusqlite::params_from_iter(args.iter()), |row| {
+                    row.get::<_, i64>(0)
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+
+            Ok(serde_json::json!({
+                "totalCalls": total_calls,
+                "successRate": rounded_rate(successes, total_calls),
+                "topServers": top_servers,
+                "topTools": top_tools,
+                "latency": {
+                    "p50": percentile(&latencies, 50),
+                    "p95": percentile(&latencies, 95),
+                },
+            }))
+        })
+        .await;
+
+    match result {
+        Ok(body) => (StatusCode::OK, Json(body)).into_response(),
+        Err(err) => {
+            tracing::warn!(err = %err, "failed to query MCP analytics");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "Failed to query analytics"})),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// GET /api/mcp/analytics/:server
+pub async fn mcp_server_analytics(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Path(server_id): Path<String>,
+    Query(query): Query<McpAnalyticsQuery>,
+) -> impl IntoResponse {
+    let requested_agent =
+        optional_text(query.agent_id).or_else(|| optional_text(query.agent_id_camel));
+    let agent_id = match resolve_mcp_analytics_agent(&state, &headers, &peer, requested_agent) {
+        Ok(agent_id) => agent_id,
+        Err(resp) => return *resp,
+    };
+    let since = optional_text(query.since);
+
+    let result = state
+        .pool
+        .read({
+            let server_id = server_id.clone();
+            move |conn| {
+                let mut conditions = vec!["agent_id = ?".to_string(), "server_id = ?".to_string()];
+                let mut args = vec![Value::Text(agent_id), Value::Text(server_id.clone())];
+                if let Some(since) = since.clone() {
+                    conditions.push("created_at >= datetime(?)".to_string());
+                    args.push(Value::Text(since));
+                }
+                let where_sql = conditions.join(" AND ");
+
+                let totals_sql = format!(
+                    "SELECT COUNT(*) as total,
+                            COALESCE(SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END), 0) as successes
+                     FROM mcp_invocations WHERE {where_sql}"
+                );
+                let (total_calls, successes): (i64, i64) = conn.query_row(
+                    &totals_sql,
+                    rusqlite::params_from_iter(args.iter()),
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )?;
+
+                let tools_sql = format!(
+                    "SELECT tool_name, COUNT(*) as count,
+                            COALESCE(SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END), 0) as success_count,
+                            COALESCE(CAST(AVG(latency_ms) AS INTEGER), 0) as avg_latency_ms
+                     FROM mcp_invocations WHERE {where_sql}
+                     GROUP BY tool_name ORDER BY count DESC"
+                );
+                let tools = conn
+                    .prepare_cached(&tools_sql)?
+                    .query_map(rusqlite::params_from_iter(args.iter()), |row| {
+                        Ok(serde_json::json!({
+                            "toolName": row.get::<_, String>(0)?,
+                            "count": row.get::<_, i64>(1)?,
+                            "successCount": row.get::<_, i64>(2)?,
+                            "avgLatencyMs": row.get::<_, i64>(3)?,
+                        }))
+                    })?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+
+                let timeline_sql = if since.is_some() {
+                    format!(
+                        "SELECT DATE(created_at) as date, COUNT(*) as count
+                         FROM mcp_invocations WHERE {where_sql} AND created_at >= datetime(?)
+                         GROUP BY DATE(created_at) ORDER BY date"
+                    )
+                } else {
+                    format!(
+                        "SELECT DATE(created_at) as date, COUNT(*) as count
+                         FROM mcp_invocations WHERE {where_sql} AND created_at >= datetime('now', '-7 days')
+                         GROUP BY DATE(created_at) ORDER BY date"
+                    )
+                };
+                let mut timeline_args = args.clone();
+                if let Some(since) = since.clone() {
+                    timeline_args.push(Value::Text(since));
+                }
+                let sparse = conn
+                    .prepare_cached(&timeline_sql)?
+                    .query_map(rusqlite::params_from_iter(timeline_args.iter()), |row| {
+                        Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+                    })?
+                    .collect::<rusqlite::Result<BTreeMap<_, _>>>()?;
+
+                let start = since
+                    .as_deref()
+                    .and_then(|value| {
+                        chrono::DateTime::parse_from_rfc3339(value)
+                            .ok()
+                            .map(|dt| dt.date_naive())
+                            .or_else(|| chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d").ok())
+                    })
+                    .unwrap_or_else(|| (Utc::now() - Duration::days(6)).date_naive());
+                let today = Utc::now().date_naive();
+                let mut timeline = Vec::new();
+                let mut day = start;
+                while day <= today {
+                    let key = day.format("%Y-%m-%d").to_string();
+                    timeline.push(serde_json::json!({
+                        "date": key,
+                        "count": sparse.get(&key).copied().unwrap_or(0),
+                    }));
+                    let Some(next) = day.succ_opt() else {
+                        break;
+                    };
+                    day = next;
+                }
+
+                Ok(serde_json::json!({
+                    "serverId": server_id,
+                    "totalCalls": total_calls,
+                    "successRate": rounded_rate(successes, total_calls),
+                    "tools": tools,
+                    "timeline": timeline,
+                }))
+            }
+        })
+        .await;
+
+    match result {
+        Ok(body) => (StatusCode::OK, Json(body)).into_response(),
+        Err(err) => {
+            tracing::warn!(err = %err, "failed to query MCP server analytics");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "Failed to query server analytics"})),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// GET /api/analytics/logs
+pub async fn logs(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Query(query): Query<AnalyticsLogsQuery>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_telemetry_access(&state, &headers, &peer) {
+        return *resp;
+    }
+    let _limit = parse_limit(query.limit.as_deref(), 100, 500);
+    let _level = optional_text(query.level);
+    let _category = optional_text(query.category);
+    let _since = optional_text(query.since);
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "logs": [],
+            "count": 0,
+        })),
+    )
+        .into_response()
+}
+
+/// GET /api/analytics/memory-safety
+pub async fn memory_safety(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if let Err(resp) = require_telemetry_access(&state, &headers, &peer) {
+        return *resp;
+    }
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "mutation": {
+                "queueDepth": 0,
+                "deadJobs": 0,
+                "recentFailures": 0,
+            },
+            "recentErrors": [],
+            "errorSummary": {},
+        })),
+    )
+        .into_response()
+}
+
+/// GET /api/analytics/continuity
+pub async fn continuity(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Query(query): Query<ContinuityQuery>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_telemetry_access(&state, &headers, &peer) {
+        return *resp;
+    }
+    let limit = parse_limit(query.limit.as_deref(), 50, 500);
+    let project = optional_text(query.project);
+    let result = state
+        .pool
+        .read(move |conn| {
+            let rows = if let Some(project) = project {
+                let mut stmt = conn.prepare(
+                    "SELECT id, session_key, project, harness, score,
+                            memories_recalled, memories_used, novel_context_count,
+                            reasoning, created_at
+                     FROM session_scores
+                     WHERE project = ?
+                     ORDER BY created_at DESC
+                     LIMIT ?",
+                )?;
+                stmt.query_map(rusqlite::params![project, limit], |row| {
+                    Ok(serde_json::json!({
+                        "id": row.get::<_, String>(0)?,
+                        "session_key": row.get::<_, String>(1)?,
+                        "project": row.get::<_, Option<String>>(2)?,
+                        "harness": row.get::<_, Option<String>>(3)?,
+                        "score": row.get::<_, f64>(4)?,
+                        "memories_recalled": row.get::<_, Option<i64>>(5)?,
+                        "memories_used": row.get::<_, Option<i64>>(6)?,
+                        "novel_context_count": row.get::<_, Option<i64>>(7)?,
+                        "reasoning": row.get::<_, Option<String>>(8)?,
+                        "created_at": row.get::<_, String>(9)?,
+                    }))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?
+            } else {
+                let mut stmt = conn.prepare(
+                    "SELECT id, session_key, project, harness, score,
+                            memories_recalled, memories_used, novel_context_count,
+                            reasoning, created_at
+                     FROM session_scores
+                     ORDER BY created_at DESC
+                     LIMIT ?",
+                )?;
+                stmt.query_map([limit], |row| {
+                    Ok(serde_json::json!({
+                        "id": row.get::<_, String>(0)?,
+                        "session_key": row.get::<_, String>(1)?,
+                        "project": row.get::<_, Option<String>>(2)?,
+                        "harness": row.get::<_, Option<String>>(3)?,
+                        "score": row.get::<_, f64>(4)?,
+                        "memories_recalled": row.get::<_, Option<i64>>(5)?,
+                        "memories_used": row.get::<_, Option<i64>>(6)?,
+                        "novel_context_count": row.get::<_, Option<i64>>(7)?,
+                        "reasoning": row.get::<_, Option<String>>(8)?,
+                        "created_at": row.get::<_, String>(9)?,
+                    }))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?
+            };
+            let mut scores = rows
+                .iter()
+                .filter_map(|row| row.get("score").and_then(|value| value.as_f64()))
+                .collect::<Vec<_>>();
+            scores.reverse();
+            let trend = match (scores.first(), scores.last()) {
+                (Some(first), Some(last)) if scores.len() >= 2 => last - first,
+                _ => 0.0,
+            };
+            let average = if scores.is_empty() {
+                0.0
+            } else {
+                scores.iter().sum::<f64>() / scores.len() as f64
+            };
+            let round2 = |value: f64| (value * 100.0).round() / 100.0;
+            let latest = rows
+                .first()
+                .and_then(|row| row.get("score"))
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            Ok(serde_json::json!({
+                "scores": rows,
+                "summary": {
+                    "count": scores.len(),
+                    "average": round2(average),
+                    "trend": round2(trend),
+                    "latest": latest,
+                },
+            }))
+        })
+        .await;
+    match result {
+        Ok(value) => (StatusCode::OK, Json(value)).into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": error.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+/// GET /api/analytics/continuity/latest
+pub async fn continuity_latest(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if let Err(resp) = require_telemetry_access(&state, &headers, &peer) {
+        return *resp;
+    }
+    let result = state
+        .pool
+        .read(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT project, score, created_at
+                 FROM session_scores
+                 WHERE id IN (
+                   SELECT id FROM session_scores s2
+                   WHERE s2.project = session_scores.project
+                   ORDER BY s2.created_at DESC
+                   LIMIT 1
+                 )
+                 ORDER BY created_at DESC",
+            )?;
+            Ok(stmt
+                .query_map([], |row| {
+                    Ok(serde_json::json!({
+                        "project": row.get::<_, Option<String>>(0)?,
+                        "score": row.get::<_, f64>(1)?,
+                        "created_at": row.get::<_, String>(2)?,
+                    }))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?)
+        })
+        .await;
+    match result {
+        Ok(scores) => (StatusCode::OK, Json(serde_json::json!({"scores": scores}))).into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": error.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+fn checkpoint_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<serde_json::Value> {
+    let recent_remembers = redact_recent_remembers(row.get::<_, Option<String>>(9)?);
+    Ok(serde_json::json!({
+        "id": row.get::<_, String>(0)?,
+        "session_key": row.get::<_, String>(1)?,
+        "harness": row.get::<_, String>(2)?,
+        "project": row.get::<_, Option<String>>(3)?,
+        "project_normalized": row.get::<_, Option<String>>(4)?,
+        "trigger": row.get::<_, String>(5)?,
+        "digest": redact_secrets(&row.get::<_, String>(6)?),
+        "prompt_count": row.get::<_, i64>(7)?,
+        "memory_queries": row.get::<_, Option<String>>(8)?,
+        "recent_remembers": recent_remembers,
+        "focal_entity_ids": row.get::<_, Option<String>>(10)?,
+        "focal_entity_names": row.get::<_, Option<String>>(11)?,
+        "active_aspect_ids": row.get::<_, Option<String>>(12)?,
+        "surfaced_constraint_count": row.get::<_, Option<i64>>(13)?,
+        "traversal_memory_count": row.get::<_, Option<i64>>(14)?,
+        "created_at": row.get::<_, String>(15)?,
+    }))
+}
+
+/// GET /api/checkpoints
+pub async fn checkpoints_by_project(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Query(query): Query<CheckpointProjectQuery>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_telemetry_access(&state, &headers, &peer) {
+        return *resp;
+    }
+    let Some(project) = optional_text(query.project) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "project query parameter required"})),
+        )
+            .into_response();
+    };
+    let project = std::fs::canonicalize(&project)
+        .ok()
+        .map(|path| path.to_string_lossy().to_string())
+        .unwrap_or(project);
+    let limit = parse_limit(query.limit.as_deref(), 10, 100);
+    let result = state
+        .pool
+        .read(move |conn| {
+            let mut stmt = conn.prepare(
+                "SELECT id, session_key, harness, project, project_normalized,
+                        trigger, digest, prompt_count, memory_queries, recent_remembers,
+                        focal_entity_ids, focal_entity_names, active_aspect_ids,
+                        surfaced_constraint_count, traversal_memory_count, created_at
+                 FROM session_checkpoints
+                 WHERE project_normalized = ?
+                 ORDER BY created_at DESC, rowid DESC
+                 LIMIT ?",
+            )?;
+            Ok(stmt
+                .query_map(rusqlite::params![project, limit], checkpoint_row)?
+                .collect::<rusqlite::Result<Vec<_>>>()?)
+        })
+        .await;
+    match result {
+        Ok(checkpoints) => (
+            StatusCode::OK,
+            Json(serde_json::json!({"count": checkpoints.len(), "checkpoints": checkpoints})),
+        )
+            .into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": error.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+/// GET /api/checkpoints/:sessionKey
+pub async fn checkpoints_by_session(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Path(session_key): Path<String>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_telemetry_access(&state, &headers, &peer) {
+        return *resp;
+    }
+    let result = state
+        .pool
+        .read(move |conn| {
+            let mut stmt = conn.prepare(
+                "SELECT id, session_key, harness, project, project_normalized,
+                        trigger, digest, prompt_count, memory_queries, recent_remembers,
+                        focal_entity_ids, focal_entity_names, active_aspect_ids,
+                        surfaced_constraint_count, traversal_memory_count, created_at
+                 FROM session_checkpoints
+                 WHERE session_key = ?
+                 ORDER BY created_at DESC, rowid DESC",
+            )?;
+            Ok(stmt
+                .query_map([session_key], checkpoint_row)?
+                .collect::<rusqlite::Result<Vec<_>>>()?)
+        })
+        .await;
+    match result {
+        Ok(checkpoints) => (
+            StatusCode::OK,
+            Json(serde_json::json!({"count": checkpoints.len(), "checkpoints": checkpoints})),
+        )
+            .into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": error.to_string()})),
+        )
+            .into_response(),
+    }
+}
 #[derive(Debug)]
 struct TelemetryRow {
     id: String,

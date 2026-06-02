@@ -7,6 +7,7 @@ import { linkMemoryToEntities } from "../inline-entity-linker.js";
 import { getLlmProvider } from "../llm.js";
 import { loadMemoryConfig } from "../memory-config.js";
 import { clusterEntities } from "../pipeline/community-detection.js";
+import { DEFAULT_RETENTION, runRetentionSweepOnce } from "../pipeline/retention-worker.js";
 import {
 	type RepairContext,
 	type RepairResult,
@@ -113,17 +114,22 @@ export function registerRepairRoutes(app: Hono): void {
 	});
 
 	app.post("/api/repair/retention-sweep", (c) => {
-		const cfg = loadMemoryConfig(AGENTS_DIR);
-		const ctx = resolveRepairContext(c);
-		return c.json(
-			{
-				action: "triggerRetentionSweep",
-				success: false,
-				affected: 0,
-				message: "Use the maintenance worker for automated sweeps; manual sweep via this endpoint is not yet wired",
-			},
-			501,
-		);
+		const details = runRetentionSweepOnce(getDbAccessor(), DEFAULT_RETENTION);
+		const affected =
+			details.graphLinksPurged +
+			details.entitiesOrphaned +
+			details.embeddingsPurged +
+			details.tombstonesPurged +
+			details.historyPurged +
+			details.completedJobsPurged +
+			details.deadJobsPurged;
+		return c.json({
+			action: "retention_sweep",
+			success: true,
+			affected,
+			message: `retention sweep completed; ${affected} row(s) purged`,
+			details,
+		});
 	});
 
 	app.get("/api/repair/embedding-gaps", (c) => {

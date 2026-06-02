@@ -12,6 +12,7 @@ use tokio::sync::{Mutex, watch};
 use tracing::{info, warn};
 
 use signet_core::db::DbPool;
+use signet_services::graph;
 
 use crate::extraction;
 use crate::provider::{GenerateOpts, LlmProvider, LlmSemaphore};
@@ -418,13 +419,16 @@ async fn process_extract(
         .as_deref()
         .ok_or("extract job missing memory_id")?
         .to_string();
+    let source_memory_id = memory_id.clone();
 
-    let content = pool
+    let (content, agent_id) = pool
         .read(move |conn| {
-            let mut stmt =
-                conn.prepare_cached("SELECT content FROM memories WHERE id = ?1 AND deleted = 0")?;
-            let content: Option<String> = stmt
-                .query_row(rusqlite::params![memory_id], |r| r.get(0))
+            let mut stmt = conn.prepare_cached(
+                "SELECT content, COALESCE(agent_id, 'default') FROM memories
+                 WHERE id = ?1 AND COALESCE(is_deleted, 0) = 0",
+            )?;
+            let content: Option<(String, String)> = stmt
+                .query_row(rusqlite::params![memory_id], |r| Ok((r.get(0)?, r.get(1)?)))
                 .ok();
             Ok(content)
         })
@@ -467,13 +471,53 @@ async fn process_extract(
     let entities_count = result.entities.len();
     let warnings = result.warnings;
 
-    // TODO: Phase 5.3 — integrate decision application stages.
+    if config.graph_enabled && !config.shadow_mode && !result.entities.is_empty() {
+        persist_extracted_entities(pool, &source_memory_id, &agent_id, &result.entities).await?;
+    }
 
     Ok(JobResult {
         facts_extracted: facts_count,
         entities_extracted: entities_count,
         warnings,
     })
+}
+
+async fn persist_extracted_entities(
+    pool: &DbPool,
+    memory_id: &str,
+    agent_id: &str,
+    entities: &[extraction::ExtractedEntity],
+) -> Result<(), String> {
+    let memory_id = memory_id.to_string();
+    let agent_id = agent_id.to_string();
+    let entities = entities
+        .iter()
+        .map(|entity| signet_core::types::ExtractedEntity {
+            source: entity.source.clone(),
+            source_type: entity.source_type.clone(),
+            relationship: entity
+                .relationship
+                .clone()
+                .unwrap_or_else(|| "related_to".to_string()),
+            target: entity.target.clone(),
+            target_type: entity.target_type.clone(),
+            confidence: 0.7,
+        })
+        .collect::<Vec<_>>();
+    pool.write(signet_core::db::Priority::Low, move |conn| {
+        graph::persist_entities(
+            conn,
+            &graph::PersistEntitiesInput {
+                entities: &entities,
+                source_memory_id: &memory_id,
+                agent_id: &agent_id,
+            },
+        )?;
+        Ok(serde_json::Value::Null)
+    })
+    .await
+    .map(|_| ())
+    .map_err(|error| error.to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -551,7 +595,36 @@ async fn fail_job(pool: &DbPool, job_id: &str, error: &str) -> Result<(), String
 
 #[cfg(test)]
 mod tests {
-    use super::{WorkerRuntimeStats, new_runtime_stats_handle};
+    use std::sync::Arc;
+
+    use super::{
+        LeasedJob, WorkerConfig, WorkerRuntimeStats, new_runtime_stats_handle, process_extract,
+    };
+    use crate::provider::{GenerateOpts, GenerateResult, LlmProvider, LlmSemaphore, ProviderError};
+    use signet_core::db::{DbPool, Priority};
+
+    struct StaticProvider {
+        text: String,
+    }
+
+    impl LlmProvider for StaticProvider {
+        fn generate(
+            &self,
+            _prompt: &str,
+            _opts: &GenerateOpts,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<Output = Result<GenerateResult, ProviderError>> + Send + '_,
+            >,
+        > {
+            let text = self.text.clone();
+            Box::pin(async move { Ok(GenerateResult { text, usage: None }) })
+        }
+
+        fn name(&self) -> &str {
+            "static"
+        }
+    }
 
     #[test]
     fn runtime_stats_preserve_overload_since_and_countdown() {
@@ -600,5 +673,93 @@ mod tests {
         assert_eq!(snap.overload_backoff_ms, 42_000);
         assert!(!snap.running);
         assert!(!snap.overloaded);
+    }
+
+    fn open_test_pool() -> (DbPool, tokio::task::JoinHandle<()>) {
+        let path = std::env::temp_dir().join(format!("signet-worker-{}.db", uuid::Uuid::new_v4()));
+        DbPool::open(&path).expect("open worker test db")
+    }
+
+    #[tokio::test]
+    async fn process_extract_persists_graph_entities_when_enabled() {
+        let (pool, handle) = open_test_pool();
+        pool.write(Priority::High, |conn| {
+            let now = chrono::Utc::now().to_rfc3339();
+            conn.execute(
+                "INSERT INTO memories
+                 (id, type, content, created_at, updated_at, updated_by, vector_clock,
+                  agent_id, is_deleted)
+                 VALUES ('memory-graph', 'fact',
+                         'This memory is intentionally long enough to pass extraction gating.',
+                         ?1, ?1, 'test', '{}', 'agent-a', 0)",
+                rusqlite::params![now],
+            )?;
+            Ok(serde_json::Value::Null)
+        })
+        .await
+        .expect("seed worker memory");
+
+        let provider: Arc<dyn LlmProvider> = Arc::new(StaticProvider {
+            text: serde_json::json!({
+                "facts": [],
+                "entities": [{
+                    "source": "Signet Daemon",
+                    "target": "SQLite Store",
+                    "relationship": "uses",
+                    "source_type": "system",
+                    "target_type": "database"
+                }]
+            })
+            .to_string(),
+        });
+        let result = process_extract(
+            &pool,
+            &LeasedJob {
+                id: "job-graph".to_string(),
+                memory_id: Some("memory-graph".to_string()),
+                job_type: "extract".to_string(),
+                payload: None,
+                attempts: 1,
+            },
+            &provider,
+            &Arc::new(LlmSemaphore::new(1)),
+            &WorkerConfig {
+                graph_enabled: true,
+                shadow_mode: false,
+                ..WorkerConfig::default()
+            },
+        )
+        .await
+        .expect("process extract");
+        assert_eq!(result.entities_extracted, 1);
+
+        let graph_counts = pool
+            .read(|conn| {
+                let entities: i64 = conn.query_row(
+                    "SELECT COUNT(*) FROM entities WHERE agent_id = 'agent-a'",
+                    [],
+                    |row| row.get(0),
+                )?;
+                let relations: i64 =
+                    conn.query_row("SELECT COUNT(*) FROM relations", [], |row| row.get(0))?;
+                let mentions: i64 = conn.query_row(
+                    "SELECT COUNT(*) FROM memory_entity_mentions WHERE memory_id = 'memory-graph'",
+                    [],
+                    |row| row.get(0),
+                )?;
+                Ok(serde_json::json!({
+                    "entities": entities,
+                    "relations": relations,
+                    "mentions": mentions,
+                }))
+            })
+            .await
+            .expect("read graph rows");
+        assert_eq!(graph_counts["entities"], 2);
+        assert_eq!(graph_counts["relations"], 1);
+        assert_eq!(graph_counts["mentions"], 2);
+
+        drop(pool);
+        handle.abort();
     }
 }

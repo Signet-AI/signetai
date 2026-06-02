@@ -82,7 +82,7 @@ import {
 	trackFtsHits,
 } from "./session-memories";
 import { isNoiseSession } from "./session-noise";
-import { claimRecallItems } from "./session-recall-dedupe";
+import { advanceRecallContextEpoch, claimRecallItems } from "./session-recall-dedupe";
 import { getExpiryWarning } from "./session-tracker";
 import {
 	ensureCanonicalTranscriptHistory,
@@ -203,6 +203,18 @@ function sessionStartDedupeKey(req: {
 		req.project ?? req.cwd ?? "",
 		sessionKey,
 	].join("\0");
+}
+
+function sessionStartRecallKey(req: {
+	readonly harness?: string;
+	readonly project?: string;
+	readonly cwd?: string;
+	readonly sessionKey?: string;
+	readonly sessionId?: string;
+}): string | null {
+	const sessionKey = req.sessionKey || req.sessionId;
+	if (!sessionKey) return null;
+	return [req.harness ?? "", req.project ?? req.cwd ?? "", sessionKey].join("\0");
 }
 
 function pruneSessionStartSeen(now = Date.now()): void {
@@ -2299,9 +2311,10 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 		memories.push(...predictedMemories);
 	}
 
-	if (req.sessionKey && memories.length > 0) {
+	const sessionStartRecallSessionKey = sessionStartRecallKey(req);
+	if (sessionStartRecallSessionKey && memories.length > 0) {
 		memories = claimRecallItems({
-			sessionKey: req.sessionKey,
+			sessionKey: sessionStartRecallSessionKey,
 			agentId,
 			surface: "api.hooks.session-start",
 			mode: "automatic",
@@ -3282,6 +3295,12 @@ export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionE
 		const dedupeKey = sessionStartDedupeKey(req);
 		if (dedupeKey) sessionStartSeen.delete(dedupeKey);
 		if (sessionKey) sessionStartSeen.delete(sessionKey);
+		advanceRecallContextEpoch({
+			sessionKey: sessionStartRecallKey(req),
+			agentId,
+			reason: "session-clear",
+			sourceRef: sessionKey ?? null,
+		});
 		clearContinuity(sessionKey);
 		return { memoriesSaved: 0 };
 	}

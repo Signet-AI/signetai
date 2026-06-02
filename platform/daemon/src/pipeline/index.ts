@@ -125,6 +125,10 @@ export function ensureRetentionWorker(accessor: DbAccessor, cfg: RetentionConfig
 	retentionHandle = startRetentionWorker(accessor, cfg);
 }
 
+export function getRetentionWorker(): RetentionHandle | null {
+	return retentionHandle;
+}
+
 // ---------------------------------------------------------------------------
 // Start / Stop
 // ---------------------------------------------------------------------------
