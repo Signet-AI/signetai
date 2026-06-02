@@ -7,6 +7,7 @@ pub mod embedding;
 pub mod entity_quality;
 pub mod extraction;
 pub mod graph_transactions;
+pub mod graph_traversal;
 pub mod maintenance;
 pub mod memory_lineage;
 pub mod provider;
