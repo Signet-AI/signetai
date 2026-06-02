@@ -84,6 +84,7 @@ impl TestServer {
         if auth_mode.is_some() {
             std::fs::write(tmpdir.path().join(".daemon/auth-secret"), AUTH_SECRET).unwrap();
         }
+        let (fake_bw, fake_op) = write_fake_secret_provider_bins(tmpdir.path());
 
         std::fs::write(tmpdir.path().join("agent.yaml"), yaml).unwrap();
 
@@ -100,6 +101,8 @@ impl TestServer {
                 env!("CARGO_PKG_VERSION"),
             )
             .env("SIGNET_UPDATE_MOCK_RUN_RESULT", "success")
+            .env("SIGNET_BW_BIN", fake_bw)
+            .env("SIGNET_OP_BIN", fake_op)
             .env("RUST_LOG", "warn")
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -790,6 +793,82 @@ fn ephemeral_port() -> u16 {
         .local_addr()
         .unwrap()
         .port()
+}
+
+fn write_fake_secret_provider_bins(
+    root: &std::path::Path,
+) -> (std::path::PathBuf, std::path::PathBuf) {
+    let bin_dir = root.join("fake-bin");
+    std::fs::create_dir_all(&bin_dir).expect("create fake provider bin dir");
+    let bw = bin_dir.join("bw");
+    let op = bin_dir.join("op");
+    std::fs::write(
+        &bw,
+        r#"#!/bin/sh
+set -eu
+case "$1 ${2-}" in
+  "status ")
+    printf '{"status":"unlocked","userEmail":"replay@example.com","serverUrl":"https://vault.bitwarden.test"}'
+    ;;
+  "list folders")
+    printf '[{"id":"folder-1","name":"Replay Folder"}]'
+    ;;
+  "list items")
+    printf '[{"id":"item-1","name":"REPLAY_SECRET","folderId":"folder-1"}]'
+    ;;
+  "get item")
+    printf '{"id":"%s","name":"REPLAY_SECRET","folderId":"folder-1","login":{"username":"signet","password":"bitwarden-secret"},"notes":"Managed by Signet secrets"}' "$3"
+    ;;
+  "encode ")
+    cat
+    ;;
+  "create item")
+    cat >/dev/null
+    printf '{"id":"created-item","name":"CREATED_SECRET","folderId":"folder-1","login":{"username":"signet","password":"stored"}}'
+    ;;
+  "edit item")
+    cat >/dev/null
+    printf '{"id":"%s","name":"REPLAY_SECRET","folderId":"folder-1","login":{"username":"signet","password":"stored"}}' "$3"
+    ;;
+  *)
+    echo "unsupported bw command: $*" >&2
+    exit 2
+    ;;
+esac
+"#,
+    )
+    .expect("write fake bw");
+    std::fs::write(
+        &op,
+        r#"#!/bin/sh
+set -eu
+case "$1 ${2-} ${3-} ${4-}" in
+  "vault list --format json")
+    printf '[{"id":"vault-1","name":"Replay Vault"}]'
+    ;;
+  "item list --vault vault-1")
+    printf '[{"id":"op-item-1","title":"Database","vaultId":"vault-1"}]'
+    ;;
+  "item get op-item-1 --vault")
+    printf '{"id":"op-item-1","title":"Database","fields":[{"id":"password","label":"password","value":"op-secret","type":"CONCEALED","purpose":"PASSWORD"}]}'
+    ;;
+  *)
+    echo "unsupported op command: $*" >&2
+    exit 2
+    ;;
+esac
+"#,
+    )
+    .expect("write fake op");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&bw, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod fake bw");
+        std::fs::set_permissions(&op, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod fake op");
+    }
+    (bw, op)
 }
 
 struct MarketplaceCatalogFixture {
@@ -2829,6 +2908,27 @@ async fn secrets_list() {
 
     let resp = server
         .post(
+            "/api/secrets/bitwarden/connect",
+            json!({"session": "fake-bw-session", "activate": true, "folderId": "folder-1"}),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["success"], true);
+    assert_eq!(body["connected"], true);
+    assert_eq!(body["activeProvider"], true);
+    assert_eq!(body["userEmail"], "replay@example.com");
+
+    let resp = server.get("/api/secrets/bitwarden/status").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["configured"], true);
+    assert_eq!(body["connected"], true);
+    assert_eq!(body["activeProvider"], true);
+    assert_eq!(body["folders"][0]["name"], "Replay Folder");
+
+    let resp = server
+        .post(
             "/api/secrets/bitwarden/provider",
             json!({"provider": "bad"}),
         )
@@ -2837,17 +2937,45 @@ async fn secrets_list() {
     let body = server.json(resp).await;
     assert_eq!(body["error"], "provider must be local or bitwarden");
 
-    let resp = server.get("/api/secrets/bitwarden/folders").await;
-    assert_eq!(resp.status(), 400);
+    let resp = server
+        .post(
+            "/api/secrets/bitwarden/provider",
+            json!({"provider": "local"}),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
     let body = server.json(resp).await;
-    assert_eq!(body["error"], "Bitwarden is not connected");
+    assert_eq!(body["success"], true);
+    assert_eq!(body["provider"], "local");
 
     let resp = server
-        .post("/api/secrets/bitwarden/migrate", json!({}))
+        .post(
+            "/api/secrets/bitwarden/provider",
+            json!({"provider": "bitwarden"}),
+        )
         .await;
-    assert_eq!(resp.status(), 400);
+    assert_eq!(resp.status(), 200);
     let body = server.json(resp).await;
-    assert_eq!(body["error"], "Bitwarden is not connected");
+    assert_eq!(body["success"], true);
+    assert_eq!(body["provider"], "bitwarden");
+
+    let resp = server.get("/api/secrets/bitwarden/folders").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["count"], 1);
+    assert_eq!(body["folders"][0]["id"], "folder-1");
+
+    let resp = server
+        .post(
+            "/api/secrets/bitwarden/migrate",
+            json!({"dryRun": true, "folderId": "folder-1"}),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["success"], true);
+    assert_eq!(body["dryRun"], true);
+    assert!(body["skippedCount"].as_i64().unwrap_or_default() >= 1);
 
     let resp = server.delete("/api/secrets/bitwarden/connect").await;
     assert_eq!(resp.status(), 200);
@@ -2862,13 +2990,47 @@ async fn secrets_list() {
     let body = server.json(resp).await;
     assert_eq!(body["error"], "token is required");
 
+    let resp = server
+        .post(
+            "/api/secrets/1password/connect",
+            json!({"token": "fake-op-token"}),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["success"], true);
+    assert_eq!(body["connected"], true);
+    assert_eq!(body["vaultCount"], 1);
+    assert_eq!(body["vaults"][0]["name"], "Replay Vault");
+
+    let resp = server.get("/api/secrets/1password/status").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["configured"], true);
+    assert_eq!(body["connected"], true);
+
     let resp = server.get("/api/secrets/1password/vaults").await;
-    assert_eq!(resp.status(), 400);
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["count"], 1);
+    assert_eq!(body["vaults"][0]["id"], "vault-1");
 
     let resp = server
-        .post("/api/secrets/1password/import", json!({}))
+        .post(
+            "/api/secrets/1password/import",
+            json!({"vaults": ["vault-1"], "prefix": "OP", "overwrite": true}),
+        )
         .await;
-    assert_eq!(resp.status(), 400);
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["success"], true);
+    assert_eq!(body["vaultsScanned"], 1);
+    assert_eq!(body["itemsScanned"], 1);
+    assert_eq!(body["importedCount"], 1);
+    assert_eq!(
+        body["imported"][0]["secretName"],
+        "OP_REPLAY_VAULT_DATABASE_PASSWORD"
+    );
 
     let resp = server.delete("/api/secrets/1password/connect").await;
     assert_eq!(resp.status(), 200);
