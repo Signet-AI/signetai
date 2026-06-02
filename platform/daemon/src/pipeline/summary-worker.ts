@@ -1347,7 +1347,7 @@ export function startSummaryWorker(accessor: DbAccessor): SummaryWorkerHandle {
 
 		// Re-check config each tick — respect runtime config changes
 		const cfg = loadMemoryConfig(AGENTS_DIR);
-		if (!cfg.pipelineV2.enabled || cfg.pipelineV2.shadowMode) {
+		if ((!cfg.pipelineV2.enabled && !cfg.dreaming.enabled) || cfg.pipelineV2.shadowMode) {
 			scheduleTick(POLL_INTERVAL_MS);
 			return;
 		}

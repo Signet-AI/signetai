@@ -66,6 +66,14 @@ export function setDreamingWorker(handle: DreamingWorkerHandle | null): void {
 	dreamingWorkerHandle = handle;
 }
 
+/** Start the summary worker if not already running (used when dreaming
+ *  is enabled but pipelineV2 is disabled — dreaming needs summaries). */
+export function ensureSummaryWorker(accessor: DbAccessor): void {
+	if (!summaryWorkerHandle) {
+		summaryWorkerHandle = startSummaryWorker(accessor);
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Singleton state
 // ---------------------------------------------------------------------------
@@ -160,9 +168,6 @@ export function startPipeline(
 				pipelineCfg,
 			});
 		}
-		if (!summaryWorkerHandle) {
-			summaryWorkerHandle = startSummaryWorker(accessor);
-		}
 		if (!synthesisWorkerHandle && pipelineCfg.synthesis.enabled && pipelineCfg.synthesis.provider !== "none") {
 			synthesisWorkerHandle = startSynthesisWorker(pipelineCfg.synthesis);
 		}
@@ -218,11 +223,6 @@ export function startPipeline(
 			fetchEmbedding,
 			pipelineCfg,
 		});
-	}
-
-	// Summary worker — async session-end processing
-	if (!summaryWorkerHandle) {
-		summaryWorkerHandle = startSummaryWorker(accessor);
 	}
 
 	// Synthesis worker — session-activity-based MEMORY.md regeneration
