@@ -2332,7 +2332,7 @@ mod tests {
                 pipeline_v2: Some(pipeline),
             }),
             auth: Some(ManifestAuthConfig {
-                method: "token".to_string(),
+                method: Some("token".to_string()),
                 chain_id: None,
                 mode: Some("local".to_string()),
                 rate_limits: Some(limits),

@@ -605,7 +605,9 @@ impl AppState {
 
 #[cfg(test)]
 mod tests {
-    use super::derive_initial_extraction_state;
+    use super::{AuthRuntimeState, derive_initial_extraction_state};
+    use crate::auth::types::AuthMode;
+    use signet_core::config::{AgentManifest, AuthConfig, DaemonConfig};
 
     #[test]
     fn paused_starts_with_effective_none() {
@@ -637,5 +639,34 @@ mod tests {
         assert_eq!(state.status, "active");
         assert_eq!(state.resolved, "claude-code");
         assert_eq!(state.effective, "claude-code");
+    }
+
+    #[test]
+    fn team_auth_without_legacy_method_creates_healthcheck_secret() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config = DaemonConfig {
+            base_path: dir.path().to_path_buf(),
+            db_path: dir.path().join("memory").join("memories.db"),
+            port: 3850,
+            host: "127.0.0.1".to_string(),
+            bind: Some("127.0.0.1".to_string()),
+            manifest: AgentManifest {
+                auth: Some(AuthConfig {
+                    method: None,
+                    chain_id: None,
+                    mode: Some("team".to_string()),
+                    rate_limits: None,
+                }),
+                ..Default::default()
+            },
+        };
+
+        let auth = AuthRuntimeState::from_config(&config).expect("auth runtime");
+
+        assert_eq!(auth.mode, AuthMode::Team);
+        assert_eq!(auth.secret.as_deref().map(<[u8]>::len), Some(32));
+        let secret = std::fs::read(dir.path().join(".daemon").join("auth-secret"))
+            .expect("auth secret file");
+        assert_eq!(secret.len(), 32);
     }
 }

@@ -676,6 +676,21 @@ mod tests {
     }
 
     #[test]
+    fn auth_mode_parses_without_legacy_method() {
+        let manifest = parse_manifest(
+            r#"
+auth:
+  mode: team
+"#,
+        )
+        .expect("parse manifest");
+
+        let auth = manifest.auth.expect("auth config");
+        assert_eq!(auth.method, None);
+        assert_eq!(auth.mode.as_deref(), Some("team"));
+    }
+
+    #[test]
     fn synthesis_defaults_stay_local_when_pipeline_block_omits_them() {
         let manifest = parse_manifest(
             r#"
@@ -1341,7 +1356,7 @@ pub struct HomeConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthConfig {
-    pub method: String,
+    pub method: Option<String>,
     #[serde(rename = "chainId")]
     pub chain_id: Option<u64>,
     pub mode: Option<String>,

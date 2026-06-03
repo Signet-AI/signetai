@@ -582,7 +582,7 @@ mod tests {
                 }),
             }),
             auth: Some(ManifestAuthConfig {
-                method: "token".to_string(),
+                method: Some("token".to_string()),
                 chain_id: None,
                 mode: Some(mode_name(mode)),
                 rate_limits: Some(limits),

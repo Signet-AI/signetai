@@ -1896,7 +1896,7 @@ mod tests {
                 }),
             }),
             auth: Some(AuthConfig {
-                method: "token".to_string(),
+                method: Some("token".to_string()),
                 chain_id: None,
                 mode: Some("local".to_string()),
                 rate_limits: Some(HashMap::new()),
