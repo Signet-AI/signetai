@@ -22,11 +22,11 @@
     "postinstall": "node scripts/install-native.js"
   },
   "optionalDependencies": {
-    "@signetai/signetai-linux-x64": "0.138.12",
-    "@signetai/signetai-linux-arm64": "0.138.12",
-    "@signetai/signetai-darwin-x64": "0.138.12",
-    "@signetai/signetai-darwin-arm64": "0.138.12",
-    "@signetai/signetai-win32-x64": "0.138.12"
+    "signetai-linux-x64": "0.138.12",
+    "signetai-linux-arm64": "0.138.12",
+    "signetai-darwin-x64": "0.138.12",
+    "signetai-darwin-arm64": "0.138.12",
+    "signetai-win32-x64": "0.138.12"
   },
   "keywords": [
     "ai",

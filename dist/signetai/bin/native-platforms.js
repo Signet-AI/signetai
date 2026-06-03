@@ -1,22 +1,22 @@
 export const nativePlatforms = {
 	"linux-x64": {
-		packageName: "@signetai/signetai-linux-x64",
+		packageName: "signetai-linux-x64",
 		binaryName: "signet",
 	},
 	"linux-arm64": {
-		packageName: "@signetai/signetai-linux-arm64",
+		packageName: "signetai-linux-arm64",
 		binaryName: "signet",
 	},
 	"darwin-x64": {
-		packageName: "@signetai/signetai-darwin-x64",
+		packageName: "signetai-darwin-x64",
 		binaryName: "signet",
 	},
 	"darwin-arm64": {
-		packageName: "@signetai/signetai-darwin-arm64",
+		packageName: "signetai-darwin-arm64",
 		binaryName: "signet",
 	},
 	"win32-x64": {
-		packageName: "@signetai/signetai-win32-x64",
+		packageName: "signetai-win32-x64",
 		binaryName: "signet.exe",
 	},
 };

@@ -1,5 +1,5 @@
 {
-  "name": "@signetai/signetai-linux-arm64",
+  "name": "signetai-linux-arm64",
   "version": "0.138.12",
   "description": "Signet native binary for Linux arm64",
   "os": [

@@ -21,11 +21,11 @@ jobs:
           test -n "$NODE_AUTH_TOKEN"
           npm config set //registry.npmjs.org/:_authToken "$NODE_AUTH_TOKEN"
           required_packages=(
-            "@signetai/signetai-linux-x64"
-            "@signetai/signetai-linux-arm64"
-            "@signetai/signetai-darwin-x64"
-            "@signetai/signetai-darwin-arm64"
-            "@signetai/signetai-win32-x64"
+            "signetai-linux-x64"
+            "signetai-linux-arm64"
+            "signetai-darwin-x64"
+            "signetai-darwin-arm64"
+            "signetai-win32-x64"
             "signetai"
           )
           for package in "${required_packages[@]}"; do

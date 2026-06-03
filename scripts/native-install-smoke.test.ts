@@ -189,7 +189,7 @@ describe("native install smoke", () => {
 		const dir = tempDir();
 		const packageDir = join(dir, "signetai");
 		const platform = platformKey();
-		const nativePackageDir = join(packageDir, "node_modules", "@signetai", `signetai-${platform}`);
+		const nativePackageDir = join(packageDir, "node_modules", `signetai-${platform}`);
 		const nativePackageBin = join(nativePackageDir, "bin", "signet");
 		mkdirSync(packageDir, { recursive: true });
 		mkdirSync(join(nativePackageDir, "bin"), { recursive: true });
@@ -198,7 +198,7 @@ describe("native install smoke", () => {
 		writeFileSync(join(packageDir, "package.json"), readFileSync(join(root, "dist", "signetai", "package.json")));
 		writeFileSync(
 			join(nativePackageDir, "package.json"),
-			JSON.stringify({ name: `@signetai/signetai-${platform}`, version: "0.0.0-test", type: "module" }, null, 2),
+			JSON.stringify({ name: `signetai-${platform}`, version: "0.0.0-test", type: "module" }, null, 2),
 		);
 		writeFileSync(nativePackageBin, fakeNativeBinary());
 		chmodSync(nativePackageBin, 0o755);

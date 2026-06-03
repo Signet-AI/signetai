@@ -67,21 +67,21 @@ describe("install copy", () => {
 		expect(manifest.scripts?.postinstall).toContain("scripts/install-native.js");
 		expect(manifest.dependencies).toBeUndefined();
 		expect(manifest.optionalDependencies).toEqual({
-			"@signetai/signetai-linux-x64": "0.138.11",
-			"@signetai/signetai-linux-arm64": "0.138.11",
-			"@signetai/signetai-darwin-x64": "0.138.11",
-			"@signetai/signetai-darwin-arm64": "0.138.11",
-			"@signetai/signetai-win32-x64": "0.138.11",
+			"signetai-linux-x64": "0.138.12",
+			"signetai-linux-arm64": "0.138.12",
+			"signetai-darwin-x64": "0.138.12",
+			"signetai-darwin-arm64": "0.138.12",
+			"signetai-win32-x64": "0.138.12",
 		});
 		expect(manifest.bin?.signet).toBe("bin/signet.js");
 		expect(manifest.bin?.["signet-mcp"]).toBe("bin/signet-mcp.js");
 		expect(launcher).toContain('join(packageDir, "native"');
 		expect(launcher).toContain("require.resolve");
-		expect(nativePlatforms).toContain("@signetai/signetai-linux-x64");
-		expect(nativePlatforms).toContain("@signetai/signetai-linux-arm64");
-		expect(nativePlatforms).toContain("@signetai/signetai-darwin-x64");
-		expect(nativePlatforms).toContain("@signetai/signetai-darwin-arm64");
-		expect(nativePlatforms).toContain("@signetai/signetai-win32-x64");
+		expect(nativePlatforms).toContain("signetai-linux-x64");
+		expect(nativePlatforms).toContain("signetai-linux-arm64");
+		expect(nativePlatforms).toContain("signetai-darwin-x64");
+		expect(nativePlatforms).toContain("signetai-darwin-arm64");
+		expect(nativePlatforms).toContain("signetai-win32-x64");
 		expect(mcpWrapper).toContain("forceMcp: true");
 		expect(installer).toContain("linkSync");
 		expect(installer).toContain("require.resolve");

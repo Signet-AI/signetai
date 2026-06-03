@@ -175,11 +175,11 @@ describe("check-publish-manifests", () => {
 		expect(workflow).not.toContain("npm publish --access public");
 		expect(workflow).not.toContain("bundle-latest");
 		expect(workflow).not.toContain("deploy/bundle");
-		expect(promoteWorkflow).toContain('"@signetai/signetai-linux-x64"');
-		expect(promoteWorkflow).toContain('"@signetai/signetai-linux-arm64"');
-		expect(promoteWorkflow).toContain('"@signetai/signetai-darwin-x64"');
-		expect(promoteWorkflow).toContain('"@signetai/signetai-darwin-arm64"');
-		expect(promoteWorkflow).toContain('"@signetai/signetai-win32-x64"');
+		expect(promoteWorkflow).toContain('"signetai-linux-x64"');
+		expect(promoteWorkflow).toContain('"signetai-linux-arm64"');
+		expect(promoteWorkflow).toContain('"signetai-darwin-x64"');
+		expect(promoteWorkflow).toContain('"signetai-darwin-arm64"');
+		expect(promoteWorkflow).toContain('"signetai-win32-x64"');
 		expect(promoteWorkflow).toContain('"signetai"');
 		expect(promoteWorkflow).toContain('npm view "${package}@${VERSION}" version >/dev/null');
 		expect(promoteWorkflow).toContain('npm dist-tag add "${package}@${VERSION}" latest');
@@ -248,7 +248,7 @@ describe("check-publish-manifests", () => {
 			const packageFile = join(root, "dist", "signetai-linux-x64", "package.json");
 			mkdirSync(dirname(packageFile), { recursive: true });
 			writeJson(packageFile, {
-				name: "@signetai/signetai-linux-x64",
+				name: "signetai-linux-x64",
 				version: "0.1.0",
 				publishConfig: { access: "public" },
 			});
@@ -302,22 +302,22 @@ describe("check-publish-manifests", () => {
 		expect(manifest.publishConfig).toEqual({ access: "public" });
 		expect(manifest.dependencies).toBeUndefined();
 		expect(manifest.optionalDependencies).toEqual({
-			"@signetai/signetai-linux-x64": manifest.version,
-			"@signetai/signetai-linux-arm64": manifest.version,
-			"@signetai/signetai-darwin-x64": manifest.version,
-			"@signetai/signetai-darwin-arm64": manifest.version,
-			"@signetai/signetai-win32-x64": manifest.version,
+			"signetai-linux-x64": manifest.version,
+			"signetai-linux-arm64": manifest.version,
+			"signetai-darwin-x64": manifest.version,
+			"signetai-darwin-arm64": manifest.version,
+			"signetai-win32-x64": manifest.version,
 		});
 		expect(manifest.scripts?.postinstall).toContain("scripts/install-native.js");
 		expect(manifest.bin?.signet).toBe("bin/signet.js");
 		expect(manifest.bin?.["signet-mcp"]).toBe("bin/signet-mcp.js");
 		expect(launcher).toContain('join(packageDir, "native"');
 		expect(launcher).toContain("require.resolve");
-		expect(nativePlatforms).toContain("@signetai/signetai-linux-x64");
-		expect(nativePlatforms).toContain("@signetai/signetai-linux-arm64");
-		expect(nativePlatforms).toContain("@signetai/signetai-darwin-x64");
-		expect(nativePlatforms).toContain("@signetai/signetai-darwin-arm64");
-		expect(nativePlatforms).toContain("@signetai/signetai-win32-x64");
+		expect(nativePlatforms).toContain("signetai-linux-x64");
+		expect(nativePlatforms).toContain("signetai-linux-arm64");
+		expect(nativePlatforms).toContain("signetai-darwin-x64");
+		expect(nativePlatforms).toContain("signetai-darwin-arm64");
+		expect(nativePlatforms).toContain("signetai-win32-x64");
 		expect(mcpBin).toContain("forceMcp: true");
 		expect(installer).toContain("linkSync");
 		expect(installer).toContain("require.resolve");

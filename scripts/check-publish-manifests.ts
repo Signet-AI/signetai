@@ -244,7 +244,7 @@ export function collectNativeManifestIssues(
 }
 
 function packageNameToNativePlatform(packageName: string): string | null {
-	const prefix = "@signetai/signetai-";
+	const prefix = "signetai-";
 	return packageName.startsWith(prefix) ? packageName.slice(prefix.length) : null;
 }
 

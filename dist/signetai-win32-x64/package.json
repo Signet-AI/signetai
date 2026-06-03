@@ -1,5 +1,5 @@
 {
-  "name": "@signetai/signetai-win32-x64",
+  "name": "signetai-win32-x64",
   "version": "0.138.12",
   "description": "Signet native binary for Windows x64",
   "os": [

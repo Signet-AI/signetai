@@ -274,7 +274,7 @@ export function syncSignetNativeOptionalDependencies(
 
 	let changed = false;
 	for (const name of Object.keys(optionalDependencies)) {
-		if (!name.startsWith("@signetai/signetai-")) continue;
+		if (!name.startsWith("signetai-")) continue;
 		if (optionalDependencies[name] === version) continue;
 		optionalDependencies[name] = version;
 		changed = true;
