@@ -70,12 +70,14 @@ if (!existsSync(join(dashboardDir, "index.html"))) {
 		`Dashboard build is missing at ${dashboardDir}. Run bun run build:dashboard before build:native-bun.`,
 	);
 }
+const templatesDir = join(root, "surfaces", "cli", "templates");
+const skillsDir = join(root, "skills");
 
 const workerEntries = [
 	["synthesis-render-worker", "platform/daemon/src/synthesis-render-worker.ts"],
 	["extraction-thread", "platform/daemon/src/pipeline/extraction-thread.ts"],
 ] as const;
-const nativeExternalArgs = ["--external", "better-sqlite3", "--external", "@1password/sdk"] as const;
+const nativeExternalArgs = ["--external", "better-sqlite3"] as const;
 
 for (const [name, entry] of workerEntries) {
 	runBunBuild([
@@ -96,6 +98,17 @@ const dashboardAssets = walkFiles(dashboardDir).map((path) => {
 		contentBase64: readFileSync(path).toString("base64"),
 	};
 });
+const fileAssetsFor = (dir: string) =>
+	walkFiles(dir).map((path) => {
+		const relative = path.slice(dir.length).replaceAll("\\", "/");
+		return {
+			path: relative.startsWith("/") ? relative.slice(1) : relative,
+			contentBase64: readFileSync(path).toString("base64"),
+			mode: statSync(path).mode & 0o777,
+		};
+	});
+const templateAssets = fileAssetsFor(templatesDir);
+const skillAssets = fileAssetsFor(skillsDir);
 
 const workerAssets = workerEntries.map(([name]) => ({
 	name,
@@ -112,6 +125,8 @@ const wasmAssets = ["ort-wasm-simd-threaded.jsep.wasm"].map((name) => ({
 writeFileSync(
 	join(buildDir, "native-assets.ts"),
 	`export const dashboardAssets = ${JSON.stringify(dashboardAssets)} as const;\n` +
+		`export const skillAssets = ${JSON.stringify(skillAssets)} as const;\n` +
+		`export const templateAssets = ${JSON.stringify(templateAssets)} as const;\n` +
 		`export const workerAssets = ${JSON.stringify(workerAssets)} as const;\n` +
 		`export const wasmAssets = ${JSON.stringify(wasmAssets)} as const;\n`,
 );
@@ -123,11 +138,13 @@ writeFileSync(
 
 writeFileSync(
 	join(buildDir, "cli-native.ts"),
-	`import { registerNativeAssets, registerNativeTransformersBindings } from "../platform/daemon/src/native-runtime-assets";\n` +
-		`import { dashboardAssets, wasmAssets, workerAssets } from "./native-assets";\n` +
+	`import { materializeEmbeddedAssetTree, registerNativeAssets, registerNativeTransformersBindings } from "../platform/daemon/src/native-runtime-assets";\n` +
+		`import { dashboardAssets, skillAssets, templateAssets, wasmAssets, workerAssets } from "./native-assets";\n` +
 		`import * as transformersWebRuntime from "./transformers-web-runtime";\n\n` +
-		"registerNativeAssets({ dashboard: dashboardAssets, workers: workerAssets, wasm: wasmAssets });\n" +
+		"registerNativeAssets({ dashboard: dashboardAssets, skills: skillAssets, templates: templateAssets, workers: workerAssets, wasm: wasmAssets });\n" +
 		"registerNativeTransformersBindings(transformersWebRuntime);\n" +
+		'process.env.SIGNET_TEMPLATES_DIR ??= materializeEmbeddedAssetTree("templates") ?? "";\n' +
+		'process.env.SIGNET_SKILLS_SOURCE ??= materializeEmbeddedAssetTree("skills") ?? "";\n' +
 		`await import("../surfaces/cli/src/cli.ts");\n`,
 );
 

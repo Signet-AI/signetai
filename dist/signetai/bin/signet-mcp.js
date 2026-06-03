@@ -2,4 +2,4 @@
 
 import { launchSignet } from "./launch.js";
 
-launchSignet();
+launchSignet({ forceMcp: true });

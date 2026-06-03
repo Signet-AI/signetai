@@ -2,8 +2,9 @@
 set -euo pipefail
 
 REPO="${SIGNET_RELEASE_REPO:-Signet-AI/signetai}"
-DOWNLOAD_BASE="${SIGNET_DOWNLOAD_BASE:-https://github.com/${REPO}/releases/latest/download}"
 DOWNLOAD_DIR="${SIGNET_DOWNLOAD_DIR:-$HOME/.signet/downloads}"
+RELEASES_API_BASE="${SIGNET_RELEASES_API_BASE:-https://api.github.com/repos/${REPO}/releases}"
+RELEASES_DOWNLOAD_BASE="${SIGNET_RELEASES_DOWNLOAD_BASE:-https://github.com/${REPO}/releases/download}"
 
 if command -v curl >/dev/null 2>&1; then
 	DOWNLOAD=(curl -fsSL)
@@ -22,6 +23,40 @@ download_to() {
 	else
 		wget -q -O "$out" "$url"
 	fi
+}
+
+download_text() {
+	local url="$1"
+	"${DOWNLOAD[@]}" "$url"
+}
+
+resolve_download_base() {
+	if [ -n "${SIGNET_DOWNLOAD_BASE:-}" ]; then
+		printf '%s\n' "$SIGNET_DOWNLOAD_BASE"
+		return
+	fi
+	if [ -n "${SIGNET_RELEASE_TAG:-}" ]; then
+		printf '%s/%s\n' "$RELEASES_DOWNLOAD_BASE" "$SIGNET_RELEASE_TAG"
+		return
+	fi
+	if [ -n "${SIGNET_VERSION:-}" ]; then
+		printf '%s/v%s\n' "$RELEASES_DOWNLOAD_BASE" "$SIGNET_VERSION"
+		return
+	fi
+
+	local releases_json
+	local release_tag
+	releases_json="$(download_text "$RELEASES_API_BASE")"
+	if command -v jq >/dev/null 2>&1; then
+		release_tag="$(printf '%s' "$releases_json" | jq -r '[.[] | select(.draft | not)][0].tag_name // empty')"
+	else
+		release_tag="$(printf '%s\n' "$releases_json" | tr '{' '\n' | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
+	fi
+	if [ -z "$release_tag" ]; then
+		echo "Could not resolve latest Signet release, including prereleases" >&2
+		exit 1
+	fi
+	printf '%s/%s\n' "$RELEASES_DOWNLOAD_BASE" "$release_tag"
 }
 
 case "$(uname -s)" in
@@ -50,6 +85,7 @@ asset="signet-${platform}"
 [ "$os" = "win32" ] && asset="${asset}.exe"
 
 mkdir -p "$DOWNLOAD_DIR"
+DOWNLOAD_BASE="$(resolve_download_base)"
 manifest_path="$DOWNLOAD_DIR/native-manifest.json"
 binary_path="$DOWNLOAD_DIR/$asset"
 

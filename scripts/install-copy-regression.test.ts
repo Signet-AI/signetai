@@ -37,9 +37,12 @@ describe("install copy", () => {
 		const installer = read("web/marketing/public/install.sh");
 
 		expect(installer).toContain("native-manifest.json");
+		expect(installer).toContain("SIGNET_RELEASES_API_BASE");
+		expect(installer).toContain("SIGNET_RELEASE_TAG");
 		expect(installer).toContain('"$binary_path" install "$@"');
 		expect(installer).toContain("Published Signet native binaries: linux-x64, darwin-x64, darwin-arm64, win32-x64");
 		expect(installer).toContain("sha256sum");
+		expect(installer).not.toContain("releases/latest/download");
 		expect(installer).not.toContain("releases/download/bundle-latest");
 		expect(installer).not.toContain("bun add -g signetai");
 		expect(installer).not.toContain("npm install -g signetai");
@@ -51,14 +54,19 @@ describe("install copy", () => {
 			dependencies?: Record<string, string>;
 			optionalDependencies?: Record<string, string>;
 			scripts?: Record<string, string>;
+			bin?: Record<string, string>;
 		};
-		const wrapper = read("dist/signetai/bin/signet.js");
+		const launcher = read("dist/signetai/bin/launch.js");
+		const mcpWrapper = read("dist/signetai/bin/signet-mcp.js");
 		const installer = read("dist/signetai/scripts/install-native.js");
 
 		expect(manifest.scripts?.postinstall).toContain("scripts/install-native.js");
 		expect(manifest.dependencies).toBeUndefined();
 		expect(manifest.optionalDependencies).toBeUndefined();
-		expect(wrapper).toContain('join(packageDir, "native"');
+		expect(manifest.bin?.signet).toBe("bin/signet.js");
+		expect(manifest.bin?.["signet-mcp"]).toBe("bin/signet-mcp.js");
+		expect(launcher).toContain('join(packageDir, "native"');
+		expect(mcpWrapper).toContain("forceMcp: true");
 		expect(installer).toContain("native-manifest.json");
 		expect(installer).toContain("createHash");
 		expect(installer).toContain('"linux-x64", "darwin-x64", "darwin-arm64", "win32-x64"');

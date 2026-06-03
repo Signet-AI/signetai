@@ -104,6 +104,13 @@ describe("check-publish-manifests", () => {
 		expect(buildScript).toContain("--compile");
 		expect(buildScript).toContain('createRequire(join(root, "platform", "daemon", "package.json"))');
 		expect(buildScript).toContain("surfaces/cli/src/cli.ts");
+		expect(buildScript).toContain('join(root, "surfaces", "cli", "templates")');
+		expect(buildScript).toContain('join(root, "skills")');
+		expect(buildScript).toContain("templateAssets");
+		expect(buildScript).toContain("skillAssets");
+		expect(buildScript).toContain("SIGNET_TEMPLATES_DIR");
+		expect(buildScript).toContain("SIGNET_SKILLS_SOURCE");
+		expect(buildScript).not.toContain('"@1password/sdk"');
 		expect(workflow).toContain("build-native:");
 		expect(workflow).toContain("platform: linux-x64");
 		expect(workflow).toContain("asset: signet-linux-x64");
@@ -149,6 +156,8 @@ describe("check-publish-manifests", () => {
 		const installer = readFileSync(join(root, "web", "marketing", "public", "install.sh"), "utf-8");
 
 		expect(installer).toContain("native-manifest.json");
+		expect(installer).toContain("SIGNET_RELEASES_API_BASE");
+		expect(installer).toContain("SIGNET_RELEASE_TAG");
 		expect(installer).toContain("sha256sum");
 		expect(installer).toContain("shasum -a 256");
 		expect(installer).toContain("Published Signet native binaries: linux-x64, darwin-x64, darwin-arm64, win32-x64");
@@ -157,6 +166,7 @@ describe("check-publish-manifests", () => {
 		expect(installer).not.toContain("npm install -g signetai");
 		expect(installer).not.toContain("bun.sh/install");
 		expect(installer).not.toContain("better-sqlite3");
+		expect(installer).not.toContain("releases/latest/download");
 		expect(installer).not.toContain("releases/download/bundle-latest");
 	});
 
@@ -168,8 +178,10 @@ describe("check-publish-manifests", () => {
 			optionalDependencies?: Record<string, string>;
 			publishConfig?: unknown;
 			scripts?: Record<string, string>;
+			bin?: Record<string, string>;
 		};
-		const bin = readFileSync(join(root, "dist", "signetai", "bin", "signet.js"), "utf-8");
+		const launcher = readFileSync(join(root, "dist", "signetai", "bin", "launch.js"), "utf-8");
+		const mcpBin = readFileSync(join(root, "dist", "signetai", "bin", "signet-mcp.js"), "utf-8");
 		const installer = readFileSync(join(root, "dist", "signetai", "scripts", "install-native.js"), "utf-8");
 
 		expect(manifest.name).toBe("signetai");
@@ -177,7 +189,10 @@ describe("check-publish-manifests", () => {
 		expect(manifest.dependencies).toBeUndefined();
 		expect(manifest.optionalDependencies).toBeUndefined();
 		expect(manifest.scripts?.postinstall).toContain("scripts/install-native.js");
-		expect(bin).toContain('join(packageDir, "native"');
+		expect(manifest.bin?.signet).toBe("bin/signet.js");
+		expect(manifest.bin?.["signet-mcp"]).toBe("bin/signet-mcp.js");
+		expect(launcher).toContain('join(packageDir, "native"');
+		expect(mcpBin).toContain("forceMcp: true");
 		expect(installer).toContain("native-manifest.json");
 		expect(installer).toContain("createHash");
 		expect(installer).toContain('"linux-x64", "darwin-x64", "darwin-arm64", "win32-x64"');

@@ -82,12 +82,18 @@ function runCommand(command: string, args: readonly string[], env: NodeJS.Proces
 	});
 }
 
-async function serveNativeRelease(binary: Buffer): Promise<string> {
+interface NativeReleaseServer {
+	readonly downloadBase: string;
+	readonly releasesApiBase: string;
+}
+
+async function serveNativeRelease(binary: Buffer): Promise<NativeReleaseServer> {
 	const platform = platformKey();
 	const assetName = process.platform === "win32" ? `signet-${platform}.exe` : `signet-${platform}`;
+	const tag = "v0.0.0-test";
 	const manifest = JSON.stringify({
 		schemaVersion: 1,
-		version: "0.0.0-test",
+		version: tag.slice(1),
 		assets: [
 			{
 				name: assetName,
@@ -99,12 +105,17 @@ async function serveNativeRelease(binary: Buffer): Promise<string> {
 	});
 
 	const server = createServer((req, res) => {
-		if (req.url === "/native-manifest.json") {
+		if (req.url === "/releases") {
+			res.writeHead(200, { "Content-Type": "application/json" });
+			res.end(JSON.stringify([{ tag_name: tag, draft: false, prerelease: true }]));
+			return;
+		}
+		if (req.url === "/download/native-manifest.json" || req.url === `/download/${tag}/native-manifest.json`) {
 			res.writeHead(200, { "Content-Type": "application/json" });
 			res.end(manifest);
 			return;
 		}
-		if (req.url === `/${assetName}`) {
+		if (req.url === `/download/${assetName}` || req.url === `/download/${tag}/${assetName}`) {
 			res.writeHead(200, { "Content-Type": "application/octet-stream" });
 			res.end(binary);
 			return;
@@ -120,7 +131,11 @@ async function serveNativeRelease(binary: Buffer): Promise<string> {
 	if (address === null || typeof address === "string") {
 		throw new Error("native release smoke server did not bind to a TCP port");
 	}
-	return `http://127.0.0.1:${address.port}`;
+	const origin = `http://127.0.0.1:${address.port}`;
+	return {
+		downloadBase: `${origin}/download`,
+		releasesApiBase: `${origin}/releases`,
+	};
 }
 
 describe("native install smoke", () => {
@@ -130,12 +145,37 @@ describe("native install smoke", () => {
 		const dir = tempDir();
 		const binDir = join(dir, "bin");
 		const downloadDir = join(dir, "downloads");
-		const downloadBase = await serveNativeRelease(fakeNativeBinary());
+		const release = await serveNativeRelease(fakeNativeBinary());
 
 		const result = await runCommand(
 			"bash",
 			[join(root, "web", "marketing", "public", "install.sh"), "--bin-dir", binDir, "--force", "--json"],
-			{ ...process.env, HOME: dir, SIGNET_DOWNLOAD_BASE: downloadBase, SIGNET_DOWNLOAD_DIR: downloadDir },
+			{ ...process.env, HOME: dir, SIGNET_DOWNLOAD_BASE: release.downloadBase, SIGNET_DOWNLOAD_DIR: downloadDir },
+		);
+
+		expect(result.status).toBe(0);
+		expect(result.stdout).toContain('"installed":true');
+		expect(existsSync(join(binDir, "signet"))).toBe(true);
+	});
+
+	test("curl installer resolves prerelease native assets without releases/latest", async () => {
+		if (process.platform === "win32") return;
+
+		const dir = tempDir();
+		const binDir = join(dir, "bin");
+		const downloadDir = join(dir, "downloads");
+		const release = await serveNativeRelease(fakeNativeBinary());
+
+		const result = await runCommand(
+			"bash",
+			[join(root, "web", "marketing", "public", "install.sh"), "--bin-dir", binDir, "--force", "--json"],
+			{
+				...process.env,
+				HOME: dir,
+				SIGNET_DOWNLOAD_DIR: downloadDir,
+				SIGNET_RELEASES_API_BASE: release.releasesApiBase,
+				SIGNET_RELEASES_DOWNLOAD_BASE: release.downloadBase,
+			},
 		);
 
 		expect(result.status).toBe(0);
@@ -153,10 +193,10 @@ describe("native install smoke", () => {
 		cpSync(join(root, "dist", "signetai", "bin"), join(packageDir, "bin"), { recursive: true });
 		writeFileSync(join(packageDir, "package.json"), readFileSync(join(root, "dist", "signetai", "package.json")));
 
-		const downloadBase = await serveNativeRelease(fakeNativeBinary());
+		const release = await serveNativeRelease(fakeNativeBinary());
 		const install = await runCommand("node", [join(packageDir, "scripts", "install-native.js")], {
 			...process.env,
-			SIGNET_DOWNLOAD_BASE: downloadBase,
+			SIGNET_DOWNLOAD_BASE: release.downloadBase,
 		});
 
 		expect(install.status).toBe(0);
@@ -167,5 +207,9 @@ describe("native install smoke", () => {
 		const wrapper = await runCommand("node", [join(packageDir, "bin", "signet.js"), "--version"], process.env);
 		expect(wrapper.status).toBe(0);
 		expect(wrapper.stdout).toContain("fake native signet --version");
+
+		const mcpWrapper = await runCommand("node", [join(packageDir, "bin", "signet-mcp.js"), "--inspect"], process.env);
+		expect(mcpWrapper.status).toBe(0);
+		expect(mcpWrapper.stdout).toContain("fake native signet mcp --inspect");
 	});
 });

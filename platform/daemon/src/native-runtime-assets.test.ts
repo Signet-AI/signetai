@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import {
 	getNativeTransformersBindings,
+	materializeEmbeddedAssetTree,
 	materializeEmbeddedWasmAssets,
 	registerNativeAssets,
 	registerNativeTransformersBindings,
@@ -50,6 +51,30 @@ describe("native-runtime-assets", () => {
 		const wasmDir = materializeEmbeddedWasmAssets();
 		expect(wasmDir).toBeTruthy();
 		expect(wasmDir ? existsSync(`${wasmDir}/example.wasm`) : false).toBe(true);
+	});
+
+	test("materializes embedded setup asset trees", () => {
+		registerNativeAssets({
+			templates: [
+				{
+					path: "memory/scripts/memory.py",
+					contentBase64: Buffer.from("print('memory')\n").toString("base64"),
+					mode: 0o644,
+				},
+			],
+			skills: [
+				{
+					path: "signet/SKILL.md",
+					contentBase64: Buffer.from("# Signet\n").toString("base64"),
+					mode: 0o644,
+				},
+			],
+		});
+
+		const templatesDir = materializeEmbeddedAssetTree("templates");
+		const skillsDir = materializeEmbeddedAssetTree("skills");
+		expect(templatesDir ? readFileSync(`${templatesDir}/memory/scripts/memory.py`, "utf8") : "").toContain("memory");
+		expect(skillsDir ? readFileSync(`${skillsDir}/signet/SKILL.md`, "utf8") : "").toContain("Signet");
 	});
 
 	test("stores pre-resolved transformers bindings for compiled runtime", () => {

@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 export interface EmbeddedDashboardAsset {
 	readonly path: string;
@@ -19,8 +19,16 @@ export interface EmbeddedWasmAsset {
 	readonly contentBase64: string;
 }
 
+export interface EmbeddedFileAsset {
+	readonly path: string;
+	readonly contentBase64: string;
+	readonly mode?: number;
+}
+
 export interface NativeRuntimeAssets {
 	readonly dashboard?: readonly EmbeddedDashboardAsset[];
+	readonly skills?: readonly EmbeddedFileAsset[];
+	readonly templates?: readonly EmbeddedFileAsset[];
 	readonly workers?: readonly EmbeddedWorkerAsset[];
 	readonly wasm?: readonly EmbeddedWasmAsset[];
 }
@@ -89,4 +97,27 @@ export function materializeEmbeddedWasmAssets(): string | null {
 		}
 	}
 	return dir;
+}
+
+export function materializeEmbeddedAssetTree(kind: "skills" | "templates"): string | null {
+	const assets = nativeRuntimeAssets()[kind] ?? [];
+	if (assets.length === 0) return null;
+
+	const hash = createHash("sha256")
+		.update(assets.map((asset) => `${asset.path}:${asset.contentBase64}:${asset.mode ?? ""}`).join("\n"))
+		.digest("hex")
+		.slice(0, 16);
+	const root = join(tmpdir(), `signet-native-${kind}`, hash);
+	mkdirSync(root, { recursive: true });
+	for (const asset of assets) {
+		const parts = asset.path.split(/[\\/]+/).filter(Boolean);
+		if (parts.length === 0 || parts.includes("..")) continue;
+		const path = join(root, ...parts);
+		mkdirSync(dirname(path), { recursive: true });
+		if (!existsSync(path)) {
+			writeFileSync(path, Buffer.from(asset.contentBase64, "base64"));
+			if (asset.mode !== undefined) chmodSync(path, asset.mode);
+		}
+	}
+	return root;
 }
