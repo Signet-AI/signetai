@@ -3126,6 +3126,8 @@ pub struct AssertionQuery {
 
 #[derive(Debug, Deserialize)]
 pub struct ClaimVersionQuery {
+    #[serde(alias = "agent_id")]
+    agent_id: Option<String>,
     entity: Option<String>,
     aspect: Option<String>,
     group: Option<String>,
@@ -3184,7 +3186,7 @@ fn validate_claim_query(query: &ClaimVersionQuery, require_version: bool) -> Opt
         return Some("claim is required");
     }
     if let Some(kind) = query.kind.as_deref()
-        && !matches!(kind, "attribute" | "constraint" | "fact" | "preference")
+        && !matches!(kind, "attribute" | "constraint")
     {
         return Some("kind is invalid");
     }
@@ -3192,6 +3194,166 @@ fn validate_claim_query(query: &ClaimVersionQuery, require_version: bool) -> Opt
         return Some("version is required");
     }
     None
+}
+
+fn claim_version_row_to_value(row: &rusqlite::Row<'_>) -> rusqlite::Result<JsonValue> {
+    let id = row.get::<_, String>("id")?;
+    Ok(json!({
+        "id": id,
+        "version": row.get::<_, Option<i64>>("version")?.unwrap_or(1),
+        "versionRootId": row.get::<_, Option<String>>("version_root_id")?.unwrap_or_else(|| id.clone()),
+        "previousAttributeId": row.get::<_, Option<String>>("previous_attribute_id")?,
+        "content": row.get::<_, String>("content")?,
+        "status": row.get::<_, String>("status")?,
+        "confidence": row.get::<_, Option<f64>>("confidence")?.unwrap_or(0.0),
+        "proposalId": row.get::<_, Option<String>>("proposal_id")?,
+        "sourceKind": row.get::<_, Option<String>>("source_kind")?,
+        "sourceId": row.get::<_, Option<String>>("source_id")?,
+        "sourcePath": row.get::<_, Option<String>>("source_path")?,
+        "createdAt": row.get::<_, String>("created_at")?,
+        "updatedAt": row.get::<_, String>("updated_at")?,
+    }))
+}
+
+fn resolve_claim_versions_entity(
+    conn: &rusqlite::Connection,
+    agent_id: &str,
+    selector: &str,
+) -> Result<String, CoreError> {
+    if let Some(id) = conn
+        .query_row(
+            "SELECT id FROM entities WHERE agent_id = ?1 AND id = ?2 LIMIT 1",
+            rusqlite::params![agent_id, selector],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+    {
+        return Ok(id);
+    }
+    let key = canonical(selector);
+    let rows = conn
+        .prepare(
+            "SELECT id FROM entities
+             WHERE agent_id = ?1
+               AND (COALESCE(canonical_name, LOWER(name)) = ?2 OR LOWER(name) = ?3)
+             ORDER BY updated_at DESC, name ASC",
+        )?
+        .query_map(rusqlite::params![agent_id, key, key], |row| {
+            row.get::<_, String>(0)
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    match rows.len() {
+        0 => Err(CoreError::NotFound(format!("Entity not found: {selector}"))),
+        1 => Ok(rows.into_iter().next().expect("one entity id")),
+        _ => Err(CoreError::Conflict(format!(
+            "Entity selector is ambiguous: {selector}. Use an id."
+        ))),
+    }
+}
+
+fn resolve_claim_versions_aspect(
+    conn: &rusqlite::Connection,
+    agent_id: &str,
+    entity_id: &str,
+    selector: &str,
+) -> Result<String, CoreError> {
+    if let Some(id) = conn
+        .query_row(
+            "SELECT id
+             FROM entity_aspects
+             WHERE entity_id = ?1 AND agent_id = ?2 AND id = ?3
+             LIMIT 1",
+            rusqlite::params![entity_id, agent_id, selector],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+    {
+        return Ok(id);
+    }
+    let key = canonical(selector);
+    let rows = conn
+        .prepare(
+            "SELECT id FROM entity_aspects
+             WHERE entity_id = ?1
+               AND agent_id = ?2
+               AND (canonical_name = ?3 OR LOWER(name) = ?4)
+             ORDER BY updated_at DESC, name ASC",
+        )?
+        .query_map(rusqlite::params![entity_id, agent_id, key, key], |row| {
+            row.get::<_, String>(0)
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    match rows.len() {
+        0 => Err(CoreError::NotFound(format!("Aspect not found: {selector}"))),
+        1 => Ok(rows.into_iter().next().expect("one aspect id")),
+        _ => Err(CoreError::Conflict(format!(
+            "Aspect selector is ambiguous: {selector}. Use an id."
+        ))),
+    }
+}
+
+fn list_claim_version_values(
+    conn: &rusqlite::Connection,
+    agent_id: &str,
+    query: &ClaimVersionQuery,
+) -> Result<JsonValue, CoreError> {
+    let entity = clean(query.entity.clone())
+        .ok_or_else(|| CoreError::Invalid("entity is required".to_string()))?;
+    let aspect = clean(query.aspect.clone())
+        .ok_or_else(|| CoreError::Invalid("aspect is required".to_string()))?;
+    let group = clean(query.group.clone())
+        .ok_or_else(|| CoreError::Invalid("group is required".to_string()))?;
+    let claim = clean(query.claim.clone())
+        .ok_or_else(|| CoreError::Invalid("claim is required".to_string()))?;
+    let kind = clean(query.kind.clone()).unwrap_or_else(|| "attribute".to_string());
+    if !matches!(kind.as_str(), "attribute" | "constraint") {
+        return Err(CoreError::Invalid("kind is invalid".to_string()));
+    }
+    let entity_id = resolve_claim_versions_entity(conn, agent_id, &entity)?;
+    let aspect_id = resolve_claim_versions_aspect(conn, agent_id, &entity_id, &aspect)?;
+    let group_key = {
+        let key = canonical_path_key(&group);
+        if key.is_empty() {
+            "general".to_string()
+        } else {
+            key
+        }
+    };
+    let claim_key = canonical_path_key(&claim);
+    let items = conn
+        .prepare(
+            "SELECT id, version, version_root_id, previous_attribute_id, content,
+                    status, confidence, proposal_id, source_kind, source_id,
+                    source_path, created_at, updated_at
+             FROM entity_attributes
+             WHERE agent_id = ?1
+               AND aspect_id = ?2
+               AND COALESCE(group_key, 'general') = ?3
+               AND claim_key = ?4
+               AND kind = ?5
+             ORDER BY version DESC, updated_at DESC",
+        )?
+        .query_map(
+            rusqlite::params![agent_id, aspect_id, group_key, claim_key, kind],
+            claim_version_row_to_value,
+        )?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(json!({"items": items, "count": items.len()}))
+}
+
+fn get_claim_version_value(
+    conn: &rusqlite::Connection,
+    agent_id: &str,
+    query: &ClaimVersionQuery,
+) -> Result<Option<JsonValue>, CoreError> {
+    let version = query.version.unwrap_or(0);
+    let items = list_claim_version_values(conn, agent_id, query)?;
+    Ok(items["items"].as_array().and_then(|items| {
+        items
+            .iter()
+            .find(|item| item["version"].as_i64() == Some(version))
+            .cloned()
+    }))
 }
 
 /// GET /api/ontology/assertions — list epistemic assertions.
@@ -3424,19 +3586,64 @@ pub async fn assertion_supersede(
 }
 
 /// GET /api/ontology/claims/versions — list claim versions.
-pub async fn claim_versions(Query(query): Query<ClaimVersionQuery>) -> impl IntoResponse {
+pub async fn claim_versions(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Query(query): Query<ClaimVersionQuery>,
+) -> Response {
     if let Some(error) = validate_claim_query(&query, false) {
         return json_error(StatusCode::BAD_REQUEST, error);
     }
-    Json(json!({"items": [], "count": 0})).into_response()
+    let agent = match scoped_agent_or_response(
+        &state,
+        peer,
+        &headers,
+        query.agent_id.as_deref(),
+        Permission::Recall,
+    ) {
+        Ok(agent) => agent,
+        Err(resp) => return resp,
+    };
+    let result = state
+        .pool
+        .read(move |conn| list_claim_version_values(conn, &agent, &query))
+        .await;
+    match result {
+        Ok(value) => (StatusCode::OK, Json(value)).into_response(),
+        Err(error) => assertion_error(error),
+    }
 }
 
 /// GET /api/ontology/claims/version — fetch one claim version.
-pub async fn claim_version(Query(query): Query<ClaimVersionQuery>) -> impl IntoResponse {
+pub async fn claim_version(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Query(query): Query<ClaimVersionQuery>,
+) -> Response {
     if let Some(error) = validate_claim_query(&query, true) {
         return json_error(StatusCode::BAD_REQUEST, error);
     }
-    json_error(StatusCode::NOT_FOUND, "Claim version not found")
+    let agent = match scoped_agent_or_response(
+        &state,
+        peer,
+        &headers,
+        query.agent_id.as_deref(),
+        Permission::Recall,
+    ) {
+        Ok(agent) => agent,
+        Err(resp) => return resp,
+    };
+    let result = state
+        .pool
+        .read(move |conn| get_claim_version_value(conn, &agent, &query))
+        .await;
+    match result {
+        Ok(Some(value)) => (StatusCode::OK, Json(value)).into_response(),
+        Ok(None) => json_error(StatusCode::NOT_FOUND, "Claim version not found"),
+        Err(error) => assertion_error(error),
+    }
 }
 
 /// GET /api/ontology/entities/:id/aliases — list entity aliases.

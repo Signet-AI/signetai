@@ -9948,10 +9948,9 @@ async fn ontology_assertions_aliases_operations_replay_missing_cluster() {
     let resp = server
         .get("/api/ontology/claims/versions?entity=A&aspect=B&group=C&claim=D")
         .await;
-    assert_eq!(resp.status(), 200);
+    assert_eq!(resp.status(), 404);
     let body = server.json(resp).await;
-    assert_eq!(body["items"], json!([]));
-    assert_eq!(body["count"], 0);
+    assert_eq!(body["error"], "Entity not found: A");
 
     let resp = server
         .get("/api/ontology/claims/version?entity=A&aspect=B&group=C&claim=D")
@@ -10180,4 +10179,142 @@ async fn ontology_assertion_routes_create_link_supersede_and_archive() {
     assert_eq!(resp.status(), 200);
     let body = server.json(resp).await;
     assert_eq!(body["count"], 2);
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn ontology_claim_version_routes_list_and_get_persisted_versions() {
+    let server = TestServer::start().await;
+    {
+        let conn = rusqlite::Connection::open(server.db_path()).expect("open replay db");
+        conn.busy_timeout(Duration::from_secs(5)).unwrap();
+        conn.execute_batch(
+            r#"INSERT INTO entities
+               (id, name, canonical_name, entity_type, agent_id, mentions, status,
+                created_at, updated_at)
+               VALUES
+               ('entity-claim-signet', 'Signet', 'signet', 'project', 'default',
+                1, 'active', '2026-06-02T00:00:00.000Z',
+                '2026-06-02T00:00:00.000Z');
+
+               INSERT INTO entity_aspects
+               (id, entity_id, agent_id, name, canonical_name, weight, status,
+                created_at, updated_at)
+               VALUES
+               ('aspect-claim-pricing', 'entity-claim-signet', 'default',
+                'Pricing', 'pricing', 0.7, 'active',
+                '2026-06-02T00:00:00.000Z',
+                '2026-06-02T00:00:00.000Z');
+
+               INSERT INTO entity_attributes
+               (id, aspect_id, agent_id, kind, content, normalized_content,
+                confidence, importance, status, group_key, claim_key,
+                source_kind, source_id, proposal_id, version, version_root_id,
+                previous_attribute_id, created_at, updated_at)
+               VALUES
+               ('attr-claim-v1', 'aspect-claim-pricing', 'default',
+                'attribute', '$8/mo', '$8/mo', 0.7, 0.5, 'superseded',
+                'plans', 'monthly_cost', 'manual', 'seed', 'proposal-v1',
+                1, 'attr-claim-v1', NULL, '2026-06-02T00:00:00.000Z',
+                '2026-06-02T00:00:00.000Z'),
+               ('attr-claim-v2', 'aspect-claim-pricing', 'default',
+                'attribute', '$10/mo', '$10/mo', 0.8, 0.6, 'superseded',
+                'plans', 'monthly_cost', 'manual', 'seed', 'proposal-v2',
+                2, 'attr-claim-v1', 'attr-claim-v1',
+                '2026-06-02T00:01:00.000Z',
+                '2026-06-02T00:01:00.000Z'),
+               ('attr-claim-v3', 'aspect-claim-pricing', 'default',
+                'attribute', '$12/mo', '$12/mo', 0.9, 0.7, 'active',
+                'plans', 'monthly_cost', 'manual', 'seed', 'proposal-v3',
+                3, 'attr-claim-v1', 'attr-claim-v2',
+                '2026-06-02T00:02:00.000Z',
+                '2026-06-02T00:02:00.000Z'),
+               ('attr-claim-constraint', 'aspect-claim-pricing', 'default',
+                'constraint', 'must stay under $20/mo',
+                'must stay under $20/mo', 0.9, 0.7, 'active',
+                'plans', 'monthly_cost', 'manual', 'seed', 'proposal-c1',
+                1, 'attr-claim-constraint', NULL,
+                '2026-06-02T00:03:00.000Z',
+                '2026-06-02T00:03:00.000Z');"#,
+        )
+        .expect("seed claim version fixture");
+    }
+
+    let resp = server
+        .get("/api/ontology/claims/versions?entity=Signet&aspect=pricing&group=plans&claim=monthly%20cost")
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["count"], 3);
+    assert_eq!(body["items"][0]["id"], "attr-claim-v3");
+    assert_eq!(body["items"][0]["version"], 3);
+    assert_eq!(body["items"][0]["versionRootId"], "attr-claim-v1");
+    assert_eq!(body["items"][0]["previousAttributeId"], "attr-claim-v2");
+    assert_eq!(body["items"][0]["sourceKind"], "manual");
+    assert_eq!(body["items"][1]["version"], 2);
+    assert_eq!(body["items"][2]["version"], 1);
+
+    let resp = server
+        .get("/api/ontology/claims/version?entity=entity-claim-signet&aspect=aspect-claim-pricing&group=plans&claim=monthly_cost&version=2")
+        .await;
+    assert_eq!(resp.status(), 200);
+    let version = server.json(resp).await;
+    assert_eq!(version["id"], "attr-claim-v2");
+    assert_eq!(version["content"], "$10/mo");
+    assert_eq!(version["proposalId"], "proposal-v2");
+
+    let resp = server
+        .get("/api/ontology/claims/versions?entity=Signet&aspect=pricing&group=plans&claim=monthly_cost&kind=constraint")
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["count"], 1);
+    assert_eq!(body["items"][0]["id"], "attr-claim-constraint");
+
+    let resp = server
+        .get("/api/ontology/claims/versions?entity=Signet&aspect=pricing&group=plans&claim=monthly_cost&kind=fact")
+        .await;
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "kind is invalid");
+
+    let resp = server
+        .get("/api/ontology/claims/version?entity=Signet&aspect=pricing&group=plans&claim=monthly_cost&version=99")
+        .await;
+    assert_eq!(resp.status(), 404);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "Claim version not found");
+
+    let resp = server
+        .get("/api/ontology/claims/versions?entity=Missing&aspect=pricing&group=plans&claim=monthly_cost")
+        .await;
+    assert_eq!(resp.status(), 404);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "Entity not found: Missing");
+
+    {
+        let conn = rusqlite::Connection::open(server.db_path()).expect("open replay db");
+        conn.busy_timeout(Duration::from_secs(5)).unwrap();
+        conn.execute(
+            "INSERT INTO entities
+             (id, name, canonical_name, entity_type, agent_id, mentions, status,
+              created_at, updated_at)
+             VALUES
+             ('entity-claim-signet-duplicate', 'Signet Duplicate', 'signet', 'project',
+              'default', 1, 'active', '2026-06-02T00:04:00.000Z',
+              '2026-06-02T00:04:00.000Z')",
+            [],
+        )
+        .expect("seed ambiguous entity");
+    }
+
+    let resp = server
+        .get("/api/ontology/claims/versions?entity=Signet&aspect=pricing&group=plans&claim=monthly_cost")
+        .await;
+    assert_eq!(resp.status(), 409);
+    let body = server.json(resp).await;
+    assert_eq!(
+        body["error"],
+        "Entity selector is ambiguous: Signet. Use an id."
+    );
 }
