@@ -51,6 +51,21 @@ pub struct UsageCounters {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ErrorEntry {
+    pub timestamp: String,
+    pub stage: String,
+    pub code: String,
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memory_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub actor: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct LatencySnapshot {
     pub p50: i64,
     pub p95: i64,
@@ -132,6 +147,7 @@ struct AnalyticsInner {
     actors: HashMap<String, ActorStats>,
     providers: HashMap<String, ProviderStats>,
     connectors: HashMap<String, ConnectorStats>,
+    errors: VecDeque<ErrorEntry>,
     latencies: HashMap<LatencyOperation, LatencyHistogram>,
 }
 
@@ -153,6 +169,7 @@ impl AnalyticsInner {
             actors: HashMap::new(),
             providers: HashMap::new(),
             connectors: HashMap::new(),
+            errors: VecDeque::new(),
             latencies,
         }
     }
@@ -162,6 +179,8 @@ impl AnalyticsInner {
 pub struct AnalyticsCollector {
     inner: Mutex<AnalyticsInner>,
 }
+
+const ERROR_CAPACITY: usize = 500;
 
 impl Default for AnalyticsCollector {
     fn default() -> Self {
@@ -211,6 +230,52 @@ impl AnalyticsCollector {
                 .or_insert_with(LatencyHistogram::new)
                 .record(duration_ms);
         }
+    }
+
+    pub fn record_error(&self, entry: ErrorEntry) {
+        let mut inner = match self.inner.lock() {
+            Ok(inner) => inner,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if inner.errors.len() >= ERROR_CAPACITY {
+            inner.errors.pop_front();
+        }
+        inner.errors.push_back(entry);
+    }
+
+    pub fn errors(
+        &self,
+        stage: Option<&str>,
+        since: Option<&str>,
+        limit: usize,
+    ) -> Vec<ErrorEntry> {
+        let inner = match self.inner.lock() {
+            Ok(inner) => inner,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let mut filtered = inner
+            .errors
+            .iter()
+            .filter(|entry| stage.is_none_or(|stage| entry.stage == stage))
+            .filter(|entry| since.is_none_or(|since| entry.timestamp.as_str() >= since))
+            .cloned()
+            .collect::<Vec<_>>();
+        if filtered.len() > limit {
+            filtered.drain(0..filtered.len() - limit);
+        }
+        filtered
+    }
+
+    pub fn error_summary(&self) -> HashMap<String, i64> {
+        let inner = match self.inner.lock() {
+            Ok(inner) => inner,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let mut summary = HashMap::new();
+        for entry in &inner.errors {
+            *summary.entry(entry.code.clone()).or_insert(0) += 1;
+        }
+        summary
     }
 
     pub fn usage(&self) -> UsageCounters {

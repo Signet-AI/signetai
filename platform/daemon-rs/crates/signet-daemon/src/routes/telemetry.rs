@@ -363,14 +363,14 @@ pub async fn errors(
     if let Err(resp) = require_telemetry_access(&state, &headers, &peer) {
         return *resp;
     }
-    let _stage = optional_text(query.stage);
-    let _since = optional_text(query.since);
-    let _limit = parse_limit(query.limit.as_deref(), 50, 500);
+    let stage = optional_text(query.stage);
+    let since = optional_text(query.since);
+    let limit = parse_limit(query.limit.as_deref(), 50, 500) as usize;
     (
         StatusCode::OK,
         Json(serde_json::json!({
-            "errors": [],
-            "summary": {},
+            "errors": state.analytics.errors(stage.as_deref(), since.as_deref(), limit),
+            "summary": state.analytics.error_summary(),
         })),
     )
         .into_response()
@@ -685,16 +685,52 @@ pub async fn memory_safety(
     if let Err(resp) = require_telemetry_access(&state, &headers, &peer) {
         return *resp;
     }
+    let since = (Utc::now() - Duration::days(7)).to_rfc3339();
+    let mutation = state
+        .pool
+        .read(move |conn| {
+            let (recent_recovers, recent_deletes): (Option<i64>, Option<i64>) = conn.query_row(
+                "SELECT
+                    SUM(CASE WHEN event = 'recovered' THEN 1 ELSE 0 END),
+                    SUM(CASE WHEN event = 'deleted' THEN 1 ELSE 0 END)
+                 FROM memory_history
+                 WHERE created_at >= ?1",
+                [since],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )?;
+            let recent_recovers = recent_recovers.unwrap_or(0);
+            let recent_deletes = recent_deletes.unwrap_or(0);
+            let score = if recent_recovers > 5 { 0.7 } else { 1.0 };
+            let status = if score >= 0.8 {
+                "healthy"
+            } else if score >= 0.5 {
+                "degraded"
+            } else {
+                "unhealthy"
+            };
+            Ok(serde_json::json!({
+                "score": score,
+                "status": status,
+                "recentRecovers": recent_recovers,
+                "recentDeletes": recent_deletes,
+            }))
+        })
+        .await
+        .unwrap_or_else(|err| {
+            tracing::warn!(err = %err, "failed to query mutation health");
+            serde_json::json!({
+                "score": 1.0,
+                "status": "healthy",
+                "recentRecovers": 0,
+                "recentDeletes": 0,
+            })
+        });
     (
         StatusCode::OK,
         Json(serde_json::json!({
-            "mutation": {
-                "queueDepth": 0,
-                "deadJobs": 0,
-                "recentFailures": 0,
-            },
-            "recentErrors": [],
-            "errorSummary": {},
+            "mutation": mutation,
+            "recentErrors": state.analytics.errors(Some("mutation"), None, 50),
+            "errorSummary": state.analytics.error_summary(),
         })),
     )
         .into_response()

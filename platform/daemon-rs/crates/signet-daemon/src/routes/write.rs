@@ -26,6 +26,7 @@ use signet_services::normalize::normalize_and_hash;
 use signet_services::session::SessionTracker;
 use signet_services::transactions;
 
+use crate::analytics::ErrorEntry;
 use crate::auth::middleware::{authenticate_headers, require_scope_guard};
 use crate::auth::types::TokenScope;
 use crate::state::AppState;
@@ -1422,6 +1423,19 @@ pub async fn remember(
                 {
                     obj.insert("deduped".to_string(), Value::Bool(true));
                 }
+                if r.duplicate_of.is_none()
+                    && let Some(reason) = blocked_reason
+                    && let Some(obj) = response.as_object_mut()
+                {
+                    obj.insert(
+                        "__blockedExtractionReason".to_string(),
+                        Value::String(reason),
+                    );
+                    obj.insert(
+                        "__blockedExtractionMemoryId".to_string(),
+                        Value::String(r.id),
+                    );
+                }
                 Ok(response)
             }
         })
@@ -1429,6 +1443,14 @@ pub async fn remember(
 
     match result {
         Ok(mut val) => {
+            let blocked_reason = val
+                .get("__blockedExtractionReason")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            let blocked_memory_id = val
+                .get("__blockedExtractionMemoryId")
+                .and_then(Value::as_str)
+                .map(str::to_string);
             let status = val
                 .get("__status")
                 .and_then(Value::as_u64)
@@ -1436,6 +1458,21 @@ pub async fn remember(
                 .unwrap_or(StatusCode::OK);
             if let Some(obj) = val.as_object_mut() {
                 obj.remove("__status");
+                obj.remove("__blockedExtractionReason");
+                obj.remove("__blockedExtractionMemoryId");
+            }
+            if status.is_success()
+                && let (Some(message), Some(memory_id)) = (blocked_reason, blocked_memory_id)
+            {
+                state.analytics.record_error(ErrorEntry {
+                    timestamp: chrono::Utc::now().to_rfc3339(),
+                    stage: "extraction".to_string(),
+                    code: "EXTRACTION_PROVIDER_BLOCKED".to_string(),
+                    message,
+                    request_id: None,
+                    memory_id: Some(memory_id),
+                    actor: Some("api".to_string()),
+                });
             }
             (status, Json(val)).into_response()
         }

@@ -332,6 +332,46 @@ impl TestServer {
         .expect("seed history rows");
     }
 
+    fn seed_memory_safety_history_fixture(&self) {
+        let conn = rusqlite::Connection::open(self.db_path()).expect("open replay db");
+        conn.busy_timeout(Duration::from_secs(5)).unwrap();
+        let now = chrono::Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO memories
+             (id, type, content, content_hash, confidence, importance, tags, who, project,
+              created_at, updated_at, updated_by, is_deleted, version, agent_id)
+             VALUES
+             ('mem-memory-safety-replay', 'fact', 'Memory safety replay target.',
+              'memory-safety-replay-hash', 1.0, 0.5, 'rust,parity',
+              'contract-replay', 'signet', ?1, ?1, 'contract-replay', 0, 1,
+              'default')",
+            [&now],
+        )
+        .expect("seed memory safety memory");
+        for index in 0..6 {
+            conn.execute(
+                "INSERT INTO memory_history
+                 (id, memory_id, event, old_content, new_content, changed_by,
+                  reason, metadata, created_at)
+                 VALUES (?1, 'mem-memory-safety-replay', 'recovered', NULL,
+                  'Memory safety replay target.', 'contract-replay',
+                  'memory safety replay recovery', '{}', ?2)",
+                rusqlite::params![format!("history-memory-safety-recovered-{index}"), now],
+            )
+            .expect("seed recovered history");
+        }
+        conn.execute(
+            "INSERT INTO memory_history
+             (id, memory_id, event, old_content, new_content, changed_by,
+              reason, metadata, created_at)
+             VALUES ('history-memory-safety-deleted', 'mem-memory-safety-replay',
+              'deleted', 'Memory safety replay target.', NULL,
+              'contract-replay', 'memory safety replay delete', '{}', ?1)",
+            [&now],
+        )
+        .expect("seed deleted history");
+    }
+
     fn seed_memory_delete_fixture(&self) {
         let conn = rusqlite::Connection::open(self.db_path()).expect("open replay db");
         conn.busy_timeout(Duration::from_secs(5)).unwrap();
@@ -7798,10 +7838,22 @@ async fn reflection_routes_replay_empty_and_validation_shapes() {
     assert_eq!(body["error"], "Already answered");
 }
 
+const ANALYTICS_REPLAY_YAML: &str = r#"agent:
+  name: test-agent
+  version: 1
+memory:
+  pipelineV2:
+    enabled: true
+    extraction:
+      provider: openrouter
+      fallbackProvider: none
+"#;
+
 #[tokio::test]
 #[ignore = "requires built daemon binary"]
 async fn analytics_collector_routes_record_request_counters_and_latency() {
-    let server = TestServer::start().await;
+    let server = TestServer::start_with_agent_yaml(None, ANALYTICS_REPLAY_YAML).await;
+    server.seed_memory_safety_history_fixture();
 
     let resp = server
         .get_with_actor("/api/status", "analytics-actor")
@@ -7844,12 +7896,35 @@ async fn analytics_collector_routes_record_request_counters_and_latency() {
     assert!(body["connectors"].is_object());
 
     let resp = server
+        .get("/api/analytics/errors?stage=extraction&limit=5")
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    let errors = body["errors"].as_array().expect("errors");
+    assert_eq!(errors.len(), 1);
+    assert_eq!(errors[0]["stage"], "extraction");
+    assert_eq!(errors[0]["code"], "EXTRACTION_PROVIDER_BLOCKED");
+    assert_eq!(errors[0]["actor"], "api");
+    assert!(
+        errors[0]["message"]
+            .as_str()
+            .expect("error message")
+            .contains("openrouter is not supported by daemon-rs extraction worker")
+    );
+    assert!(errors[0]["memoryId"].as_str().is_some());
+    assert_eq!(body["summary"]["EXTRACTION_PROVIDER_BLOCKED"], 1);
+
+    let resp = server
         .get("/api/analytics/errors?stage=mutation&limit=5")
         .await;
     assert_eq!(resp.status(), 200);
     let body = server.json(resp).await;
-    assert!(body["errors"].as_array().expect("errors").is_empty());
-    assert!(body["summary"].is_object());
+    assert!(
+        body["errors"]
+            .as_array()
+            .expect("mutation errors")
+            .is_empty()
+    );
 
     let resp = server.get("/api/analytics/latency").await;
     assert_eq!(resp.status(), 200);
@@ -7888,14 +7963,17 @@ async fn analytics_collector_routes_record_request_counters_and_latency() {
     let resp = server.get("/api/analytics/memory-safety").await;
     assert_eq!(resp.status(), 200);
     let body = server.json(resp).await;
-    assert!(body["mutation"].is_object());
+    assert_eq!(body["mutation"]["status"], "degraded");
+    assert_eq!(body["mutation"]["score"], 0.7);
+    assert_eq!(body["mutation"]["recentRecovers"], 6);
+    assert_eq!(body["mutation"]["recentDeletes"], 1);
     assert!(
         body["recentErrors"]
             .as_array()
             .expect("recent errors")
             .is_empty()
     );
-    assert!(body["errorSummary"].is_object());
+    assert_eq!(body["errorSummary"]["EXTRACTION_PROVIDER_BLOCKED"], 1);
 }
 
 #[tokio::test]
