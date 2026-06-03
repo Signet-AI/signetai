@@ -60,6 +60,7 @@ describe("install copy", () => {
 		expect(wrapper).toContain('join(packageDir, "native"');
 		expect(installer).toContain("native-manifest.json");
 		expect(installer).toContain("createHash");
+		expect(installer).toContain("Skipping Signet native binary download in workspace install");
 		expect(installer).not.toContain("bun.sh/install");
 		expect(installer).not.toContain("better-sqlite3");
 	});

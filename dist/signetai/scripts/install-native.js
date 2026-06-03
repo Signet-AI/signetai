@@ -16,6 +16,23 @@ const version = process.env.SIGNET_VERSION ?? packageJson.version;
 const downloadBase =
 	process.env.SIGNET_DOWNLOAD_BASE ?? `https://github.com/${repo}/releases/download/v${version}`;
 
+function isWorkspacePackage() {
+	const workspaceRoot = dirname(dirname(packageDir));
+	if (basename(dirname(packageDir)) !== "dist") return false;
+	try {
+		const rootPackageJson = JSON.parse(readFileSync(join(workspaceRoot, "package.json"), "utf8"));
+		const workspaces = rootPackageJson.workspaces;
+		return Array.isArray(workspaces) && workspaces.includes("dist/*");
+	} catch {
+		return false;
+	}
+}
+
+if (process.env.SIGNET_SKIP_NATIVE_POSTINSTALL === "1" || isWorkspacePackage()) {
+	console.log("Skipping Signet native binary download in workspace install.");
+	process.exit(0);
+}
+
 function platformKey() {
 	const os =
 		process.platform === "darwin"

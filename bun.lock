@@ -1426,8 +1426,6 @@
 
     "@signet/extension": ["@signet/extension@workspace:surfaces/browser-extension"],
 
-    "@signet/internal-runtime-bundle": ["@signet/internal-runtime-bundle@workspace:dist/signetai"],
-
     "@signet/native": ["@signet/native@workspace:platform/native"],
 
     "@signet/oh-my-pi-extension": ["@signet/oh-my-pi-extension@workspace:integrations/oh-my-pi/extension"],
@@ -3393,6 +3391,8 @@
     "signet-dashboard": ["signet-dashboard@workspace:surfaces/dashboard"],
 
     "signet-reviews-worker": ["signet-reviews-worker@workspace:web/workers/reviews"],
+
+    "signetai": ["signetai@workspace:dist/signetai"],
 
     "simple-concat": ["simple-concat@1.0.1", "", {}, "sha512-cSFtAPtRhljv69IK0hTVZQ+OfE9nePi/rtJmw5UjHeVyVroEqJXP1sFztKUy1qU+xvz3u/sfYJLa947b7nAN2Q=="],
 
