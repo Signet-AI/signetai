@@ -144,8 +144,8 @@
 				"note": "Injections content must match semantically"
 			},
 			"POST /api/hooks/user-prompt-submit": {
-				"deterministic": ["engine", "memoryCount", "queryTerms"],
-				"ignoreFields": ["inject"]
+				"deterministic": ["engine", "memoryCount", "queryTerms", "inject"],
+				"ignoreFields": []
 			},
 			"POST /api/hooks/session-end": {
 				"deterministic": ["status"],

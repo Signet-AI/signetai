@@ -162,8 +162,7 @@ run "$RUST_DAEMON_BIN" --install-service
 sleep 2
 if ! $DRY_RUN; then
   HEALTH=$(curl -s http://localhost:3850/health 2>/dev/null || echo '{"status":"error"}')
-  STATUS=$(echo "$HEALTH" | grep -o '"status":"[^"]*"' | head -1)
-  if echo "$STATUS" | grep -q "ok"; then
+  if echo "$HEALTH" | grep -q '"status"[[:space:]]*:[[:space:]]*"healthy"'; then
     log "Health check: PASS"
   else
     echo "ERROR: Health check failed after cutover: $HEALTH"

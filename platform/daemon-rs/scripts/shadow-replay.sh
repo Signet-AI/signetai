@@ -57,7 +57,7 @@ case "${1:-help}" in
     [ -f "$AGENTS_DIR/agent.yaml" ] && cp "$AGENTS_DIR/agent.yaml" "$SHADOW_DB_DIR/" || true
 
     # Start TS daemon on the primary port (if not already running)
-    if curl -s "http://localhost:$PRIMARY_PORT/health" | grep -q '"ok"' 2>/dev/null; then
+    if curl -s "http://localhost:$PRIMARY_PORT/health" | grep -q '"status"[[:space:]]*:[[:space:]]*"healthy"' 2>/dev/null; then
       echo "TS daemon already running on :$PRIMARY_PORT"
     else
       echo "Starting TS daemon on :$PRIMARY_PORT..."
