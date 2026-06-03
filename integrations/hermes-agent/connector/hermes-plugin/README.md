@@ -24,6 +24,8 @@ signet start   # ensure daemon is running
 Environment variables:
 - `SIGNET_DAEMON_URL` — Full daemon URL (default: `http://localhost:3850`)
 - `SIGNET_HOST` / `SIGNET_PORT` — Host and port separately
+- `SIGNET_TOKEN` — Optional daemon bearer token; sent to loopback daemon URLs by default
+- `SIGNET_TRUSTED_DAEMON_ORIGINS` — Comma-separated remote daemon origins allowed to receive `SIGNET_TOKEN`
 - `SIGNET_AGENT_ID` — Agent scope identifier (default: `hermes-agent`)
 - `SIGNET_AGENT_WORKSPACE` — Optional named-agent workspace path (for example `~/.agents/agents/dot`)
 - `SIGNET_AGENT_READ_POLICY` — Optional named-agent memory policy for first registration: `shared` (default), `isolated`, or `group`

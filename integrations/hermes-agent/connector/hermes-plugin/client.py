@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import ipaddress
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -26,6 +27,7 @@ _DEFAULT_PORT = 3850
 _TIMEOUT_SECS = 5
 _LONG_TIMEOUT_SECS = 15
 _RECALL_TIMEOUT_SECS = 30
+_TRUSTED_ORIGINS_ENV = "SIGNET_TRUSTED_DAEMON_ORIGINS"
 
 
 def _sanitize(value: str) -> str:
@@ -33,14 +35,60 @@ def _sanitize(value: str) -> str:
     return value.strip().replace("\r", "").replace("\n", "")
 
 
+def _normalize_base_url(raw: str, source: str) -> str:
+    """Normalize a daemon URL to an origin string."""
+    parsed = urllib.parse.urlparse(raw)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise ValueError(f"{source} must be an http(s) URL")
+    if parsed.username or parsed.password:
+        raise ValueError(f"{source} must not include username or password")
+    if parsed.query or parsed.fragment:
+        raise ValueError(f"{source} must not include query strings or fragments")
+    if parsed.path not in ("", "/"):
+        raise ValueError(f"{source} must point at the daemon origin, not a path")
+    return urllib.parse.urlunparse((parsed.scheme, parsed.netloc, "", "", "", ""))
+
+
 def _resolve_base_url() -> str:
     """Resolve the Signet daemon base URL."""
     explicit = _sanitize(os.environ.get("SIGNET_DAEMON_URL", ""))
     if explicit:
-        return explicit.rstrip("/")
+        return _normalize_base_url(explicit, "SIGNET_DAEMON_URL")
     host = _sanitize(os.environ.get("SIGNET_HOST", _DEFAULT_HOST))
     port = _sanitize(os.environ.get("SIGNET_PORT", str(_DEFAULT_PORT)))
-    return f"http://{host}:{port}"
+    return _normalize_base_url(f"http://{host}:{port}", "SIGNET_HOST/SIGNET_PORT")
+
+
+def _is_loopback_host(host: str) -> bool:
+    """Return true for localhost and loopback IP literals."""
+    if host.lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _trusted_daemon_origins() -> List[str]:
+    """Read the exact remote daemon origins trusted to receive SIGNET_TOKEN."""
+    raw = _sanitize(os.environ.get(_TRUSTED_ORIGINS_ENV, ""))
+    origins: List[str] = []
+    for part in raw.split(","):
+        candidate = part.strip()
+        if not candidate:
+            continue
+        try:
+            origins.append(_normalize_base_url(candidate, _TRUSTED_ORIGINS_ENV))
+        except ValueError:
+            continue
+    return origins
+
+
+def _should_send_auth_token(base_url: str) -> bool:
+    """Only send bearer tokens to loopback or explicitly trusted daemon origins."""
+    parsed = urllib.parse.urlparse(base_url)
+    host = parsed.hostname or ""
+    return _is_loopback_host(host) or base_url in _trusted_daemon_origins()
 
 
 def _read_json_response(resp) -> Dict[str, Any]:
@@ -78,11 +126,9 @@ class SignetClient:
             "x-signet-agent-id": self._agent_id,
             "x-signet-actor": "hermes-memory-plugin",
         }
-        # Include auth token when present (required for remote/non-localhost mode).
-        # In the default hybrid mode the daemon allows unauthenticated localhost
-        # requests, so this is optional but included when available.
+        # Include auth token only for loopback or explicitly trusted origins.
         token = _sanitize(os.environ.get("SIGNET_TOKEN", ""))
-        if token:
+        if token and _should_send_auth_token(self._base_url):
             h["Authorization"] = f"Bearer {token}"
         if extra:
             h.update(extra)

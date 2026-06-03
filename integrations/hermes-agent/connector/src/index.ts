@@ -778,6 +778,9 @@ export class HermesAgentConnector extends BaseConnector {
 			if (process.env.SIGNET_DAEMON_URL) {
 				signetVars.SIGNET_DAEMON_URL = sanitizedEnv("SIGNET_DAEMON_URL");
 			}
+			if (process.env.SIGNET_TRUSTED_DAEMON_ORIGINS) {
+				signetVars.SIGNET_TRUSTED_DAEMON_ORIGINS = sanitizedEnv("SIGNET_TRUSTED_DAEMON_ORIGINS");
+			}
 			// Always write SIGNET_AGENT_ID — never allow the plugin to fall back to the
 			// shared "default" scope (AGENTS.md: never hardcode "default" for scoped paths).
 			const signetAgentId = sanitizedEnv("SIGNET_AGENT_ID") || "hermes-agent";
@@ -902,7 +905,13 @@ export class HermesAgentConnector extends BaseConnector {
 			try {
 				let envContent = readFileSync(envPath, "utf-8");
 				let changed = false;
-				for (const key of ["SIGNET_DAEMON_URL", "SIGNET_AGENT_ID", "SIGNET_AGENT_WORKSPACE", "SIGNET_TOKEN"]) {
+				for (const key of [
+					"SIGNET_DAEMON_URL",
+					"SIGNET_TRUSTED_DAEMON_ORIGINS",
+					"SIGNET_AGENT_ID",
+					"SIGNET_AGENT_WORKSPACE",
+					"SIGNET_TOKEN",
+				]) {
 					const pattern = new RegExp(`^${key}=.*\n?`, "gm");
 					if (pattern.test(envContent)) {
 						envContent = envContent.replace(pattern, "");
