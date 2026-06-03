@@ -51,24 +51,17 @@ const TS_MEMORY_HINTS_VERSION: u32 = 38;
 const TS_MEMORY_HINTS_NAME: &str = "memory-hints";
 const TS_DEDUP_ENTITY_DEPS_VERSION: u32 = 39;
 const TS_DEDUP_ENTITY_DEPS_NAME: &str = "dedup-entity-dependencies";
-// TS versions covered by Rust migrations 32-39 (not stamped separately):
-#[allow(dead_code)]
+const TS_SESSION_TRANSCRIPTS_VERSION: u32 = 40;
+const TS_SESSION_TRANSCRIPTS_NAME: &str = "session-transcripts";
 const TS_SESSION_MEMORIES_AGENT_VERSION: u32 = 42;
-#[allow(dead_code)]
 const TS_SESSION_MEMORIES_AGENT_NAME: &str = "session-memories-agent-id";
-#[allow(dead_code)]
 const TS_MEMORY_MD_TEMPORAL_HEAD_VERSION: u32 = 44;
-#[allow(dead_code)]
 const TS_MEMORY_MD_TEMPORAL_HEAD_NAME: &str = "memory-md-temporal-head";
-#[allow(dead_code)]
 const TS_LOSSLESS_HARDENING_VERSION: u32 = 45;
-#[allow(dead_code)]
 const TS_LOSSLESS_HARDENING_NAME: &str = "lossless-working-memory-hardening";
 const TS_SESSION_SUMMARY_UNIQUENESS_VERSION: u32 = 46;
 const TS_SESSION_SUMMARY_UNIQUENESS_NAME: &str = "session-summary-uniqueness";
-#[allow(dead_code)]
 const TS_AGENT_TEMPORAL_UNIQUENESS_VERSION: u32 = 47;
-#[allow(dead_code)]
 const TS_AGENT_TEMPORAL_UNIQUENESS_NAME: &str = "agent-scoped-temporal-uniqueness";
 const TS_THREAD_HEADS_VERSION: u32 = 48;
 const TS_THREAD_HEADS_NAME: &str = "thread-heads";
@@ -516,10 +509,11 @@ fn ensure_cross_daemon_parity_tables(conn: &Connection) -> Result<(), CoreError>
     conn.execute_batch(include_str!("sql/056-entity-fts.sql"))?;
     conn.execute_batch(include_str!("sql/057-session-summary-uniqueness.sql"))?;
 
-    // Stamp all TS migration versions whose DDL is covered by Rust migrations
-    // or parity SQL files. TS versions 1-31 are stamped by Rust migrations 1-31.
-    // TS versions 40, 44-45, 47, 49-51, 53-54 are stamped by Rust migrations 32-39.
-    // The remaining stamps ensure the TS daemon sees them as applied.
+    // Stamp all TS migration versions whose artifacts are already present in a
+    // Rust-created database. The TS migration runner skips by version and then
+    // uses phantom-artifact detection before applying anything; compatibility
+    // depends on the artifact contract below, not on matching Rust migration
+    // names/checksums for version slots that predate TS/Rust divergence.
     stamp_typescript_parity_migration(conn, TS_AGENTS_TABLE_VERSION, TS_AGENTS_TABLE_NAME)?;
     stamp_typescript_parity_migration(
         conn,
@@ -539,7 +533,9 @@ fn ensure_cross_daemon_parity_tables(conn: &Connection) -> Result<(), CoreError>
         TS_DAILY_REFLECTIONS_MULTI_NAME,
     )?;
     stamp_typescript_parity_migration(conn, TS_ENTITY_ALIASES_VERSION, TS_ENTITY_ALIASES_NAME)?;
-    // TS 32-39 (DDL differs from Rust 32-39 but covered by parity columns)
+    // TS 32-39 share version slots with Rust 32-39. Do not overwrite Rust's
+    // local rows; the compatibility invariant is that the TS-declared
+    // artifacts for those versions exist before the TS daemon opens the DB.
     stamp_typescript_parity_migration(
         conn,
         TS_EMBEDDINGS_VECTOR_VERSION,
@@ -568,14 +564,37 @@ fn ensure_cross_daemon_parity_tables(conn: &Connection) -> Result<(), CoreError>
         TS_DEDUP_ENTITY_DEPS_VERSION,
         TS_DEDUP_ENTITY_DEPS_NAME,
     )?;
-    // TS 41-42, 44-51, 53-54, 56-65, 70-76
+    // TS 40-42, 44-51, 53-54, 56-65, 70-76
+    stamp_typescript_parity_migration(
+        conn,
+        TS_SESSION_TRANSCRIPTS_VERSION,
+        TS_SESSION_TRANSCRIPTS_NAME,
+    )?;
     stamp_typescript_parity_migration(conn, TS_PATH_FEEDBACK_VERSION, TS_PATH_FEEDBACK_NAME)?;
-    // TS 42, 44, 45, 47 are covered by Rust migrations 32-39 internally,
-    // so we don't stamp them to avoid collisions with Rust's own versioning.
+    stamp_typescript_parity_migration(
+        conn,
+        TS_SESSION_MEMORIES_AGENT_VERSION,
+        TS_SESSION_MEMORIES_AGENT_NAME,
+    )?;
+    stamp_typescript_parity_migration(
+        conn,
+        TS_MEMORY_MD_TEMPORAL_HEAD_VERSION,
+        TS_MEMORY_MD_TEMPORAL_HEAD_NAME,
+    )?;
+    stamp_typescript_parity_migration(
+        conn,
+        TS_LOSSLESS_HARDENING_VERSION,
+        TS_LOSSLESS_HARDENING_NAME,
+    )?;
     stamp_typescript_parity_migration(
         conn,
         TS_SESSION_SUMMARY_UNIQUENESS_VERSION,
         TS_SESSION_SUMMARY_UNIQUENESS_NAME,
+    )?;
+    stamp_typescript_parity_migration(
+        conn,
+        TS_AGENT_TEMPORAL_UNIQUENESS_VERSION,
+        TS_AGENT_TEMPORAL_UNIQUENESS_NAME,
     )?;
     stamp_typescript_parity_migration(conn, TS_THREAD_HEADS_VERSION, TS_THREAD_HEADS_NAME)?;
     stamp_typescript_parity_migration(
@@ -1447,6 +1466,42 @@ fn repair_bogus_version(conn: &Connection) -> Result<(), CoreError> {
 mod tests {
     use super::*;
 
+    fn assert_table_exists(conn: &Connection, table: &str) {
+        let exists: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                [table],
+                |row| row.get(0),
+            )
+            .expect("query sqlite_master");
+        assert_eq!(exists, 1, "{table} should exist");
+    }
+
+    fn assert_column_exists(conn: &Connection, table: &str, column: &str) {
+        let exists = conn
+            .prepare(&format!("PRAGMA table_info(\"{table}\")"))
+            .expect("prepare table_info")
+            .query_map([], |row| row.get::<_, String>(1))
+            .expect("query table_info")
+            .filter_map(Result::ok)
+            .any(|name| name == column);
+        assert!(exists, "{table}.{column} should exist");
+    }
+
+    fn assert_migration_stamped(conn: &Connection, version: i64) {
+        let stamped: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM schema_migrations WHERE version = ?1",
+                [version],
+                |row| row.get(0),
+            )
+            .expect("query schema_migrations");
+        assert_eq!(
+            stamped, 1,
+            "TS migration {version} should be recorded in schema_migrations"
+        );
+    }
+
     #[test]
     fn backfills_connector_settings_from_config_json_when_default_empty_object_exists() {
         let conn = Connection::open_in_memory().expect("open in-memory db");
@@ -1565,7 +1620,7 @@ mod tests {
     }
 
     #[test]
-    fn records_ts_parity_migrations_without_colliding_rust_versions() {
+    fn records_ts_parity_migrations_with_artifact_backing() {
         let conn = Connection::open_in_memory().expect("open in-memory db");
         run(&conn).expect("initial migrations run");
 
@@ -1579,74 +1634,111 @@ mod tests {
             (69_i64, "daily_reflections"),
             (77_i64, "entity_aliases"),
         ] {
-            let exists: i64 = conn
-                .query_row(
-                    "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
-                    [table],
-                    |row| row.get(0),
-                )
-                .expect("query sqlite_master");
-            assert_eq!(
-                exists, 1,
-                "{table} should be created by migration {version}"
-            );
-
-            let stamped: i64 = conn
-                .query_row(
-                    "SELECT COUNT(*) FROM schema_migrations WHERE version = ?1",
-                    [version],
-                    |row| row.get(0),
-                )
-                .expect("query schema_migrations");
-            assert_eq!(
-                stamped, 1,
-                "migration {version} should be recorded in schema_migrations"
-            );
+            assert_table_exists(&conn, table);
+            assert_migration_stamped(&conn, version);
         }
 
-        let idempotency_stamped: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM schema_migrations WHERE version = 72",
-                [],
-                |row| row.get(0),
-            )
-            .expect("query schema_migrations");
-        assert_eq!(
-            idempotency_stamped, 1,
-            "migration 72 should be recorded in schema_migrations"
-        );
+        assert_migration_stamped(&conn, 72);
 
-        for version in [40_i64] {
-            let stamped: i64 = conn
-                .query_row(
-                    "SELECT COUNT(*) FROM schema_migrations WHERE version = ?1",
-                    [version],
-                    |row| row.get(0),
-                )
-                .expect("query schema_migrations");
-            assert_eq!(
-                stamped, 0,
-                "Rust must not stamp local parity DDL as TS migration {version}"
-            );
+        // Rust-created databases should present a complete TS migration ledger
+        // through the current TS schema when every TS-declared artifact exists.
+        for version in 32_i64..=77_i64 {
+            assert_migration_stamped(&conn, version);
         }
+    }
 
-        // Versions stamped by parity tables/columns for cross-daemon compatibility
-        for version in [
-            32_i64, 33_i64, 34_i64, 35_i64, 36_i64, 37_i64, 38_i64, 39_i64, 41_i64, 46_i64, 48_i64,
-            50_i64, 56_i64, 58_i64, 59_i64, 60_i64, 61_i64, 62_i64, 63_i64, 64_i64, 65_i64, 70_i64,
-            71_i64, 73_i64, 74_i64, 75_i64, 76_i64,
+    #[test]
+    fn rust_created_schema_satisfies_typescript_migration_artifacts() {
+        let conn = Connection::open_in_memory().expect("open in-memory db");
+        run(&conn).expect("initial migrations run");
+
+        for table in [
+            "entity_communities",
+            "memory_hints",
+            "session_transcripts",
+            "path_feedback_events",
+            "path_feedback_stats",
+            "entity_retrieval_stats",
+            "entity_cooccurrence",
+            "path_feedback_sessions",
+            "agents",
+            "memory_thread_heads",
+            "session_extract_cursors",
+            "entity_dependency_history",
+            "memory_artifacts",
+            "memory_artifact_tombstones",
+            "memory_artifacts_fts",
+            "mcp_invocations",
+            "skill_invocations",
+            "task_scope_hints",
+            "dreaming_state",
+            "dreaming_passes",
+            "memory_search_telemetry",
+            "ontology_proposals",
+            "daily_reflections",
+            "epistemic_assertions",
+            "session_context_epochs",
+            "session_recall_events",
+            "aggregate_memory_sources",
+            "temporal_edges",
+            "entity_aliases",
         ] {
-            let stamped: i64 = conn
-                .query_row(
-                    "SELECT COUNT(*) FROM schema_migrations WHERE version = ?1",
-                    [version],
-                    |row| row.get(0),
-                )
-                .expect("query schema_migrations");
-            assert_eq!(
-                stamped, 1,
-                "parity TS migration {version} should be recorded in schema_migrations"
-            );
+            assert_table_exists(&conn, table);
+        }
+
+        for (table, column) in [
+            ("embeddings", "vector"),
+            ("memories", "scope"),
+            ("entity_dependencies", "confidence"),
+            ("entities", "community_id"),
+            ("session_memories", "path_json"),
+            ("session_memories", "agent_id"),
+            ("memories", "agent_id"),
+            ("memories", "visibility"),
+            ("session_summaries", "source_type"),
+            ("session_summaries", "source_ref"),
+            ("session_summaries", "meta_json"),
+            ("session_transcripts", "updated_at"),
+            ("summary_jobs", "agent_id"),
+            ("session_scores", "agent_id"),
+            ("summary_jobs", "session_id"),
+            ("summary_jobs", "trigger"),
+            ("summary_jobs", "captured_at"),
+            ("summary_jobs", "started_at"),
+            ("summary_jobs", "ended_at"),
+            ("entity_attributes", "claim_key"),
+            ("entity_attributes", "group_key"),
+            ("memory_artifacts", "source_mtime_ms"),
+            ("memory_artifacts", "is_deleted"),
+            ("memory_artifacts", "deleted_at"),
+            ("entities", "source_path"),
+            ("entity_communities", "source_path"),
+            ("entity_attributes", "source_path"),
+            ("entity_dependencies", "source_path"),
+            ("embeddings", "agent_id"),
+            ("entity_attributes", "proposal_id"),
+            ("entity_attributes", "proposal_evidence"),
+            ("entity_dependencies", "proposal_id"),
+            ("entity_dependencies", "proposal_evidence"),
+            ("entities", "status"),
+            ("entity_aspects", "status"),
+            ("entity_attributes", "version"),
+            ("entity_attributes", "version_root_id"),
+            ("entity_attributes", "previous_attribute_id"),
+            ("entity_dependencies", "status"),
+            ("memories", "idempotency_key"),
+            ("memories", "runtime_path"),
+            ("memory_artifacts", "source_id"),
+            ("memory_artifacts", "source_root"),
+            ("memory_artifacts", "source_external_id"),
+            ("memory_artifacts", "source_parent_path"),
+            ("memory_artifacts", "source_meta_json"),
+        ] {
+            assert_column_exists(&conn, table, column);
+        }
+
+        for version in 32_i64..=77_i64 {
+            assert_migration_stamped(&conn, version);
         }
     }
 
