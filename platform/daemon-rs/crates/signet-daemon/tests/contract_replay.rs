@@ -10360,6 +10360,128 @@ async fn ontology_assertions_aliases_operations_replay_missing_cluster() {
 
 #[tokio::test]
 #[ignore = "requires built daemon binary"]
+async fn ontology_operation_endpoints_apply_dry_run_and_batch_errors() {
+    let server = TestServer::start().await;
+
+    let resp = server
+        .post(
+            "/api/ontology/operations/apply",
+            json!({
+                "operation": "create_entity",
+                "payload": {"name": "Dry Run Entity", "entity_type": "project"},
+                "dry_run": true,
+                "reason": "replay dry run"
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["dryRun"], true);
+    assert_eq!(body["proposed"], false);
+    assert_eq!(body["proposal"]["status"], "applied");
+    assert_eq!(body["proposal"]["operation"], "create_entity");
+    assert_eq!(body["result"]["entity"], "Dry Run Entity");
+    assert_eq!(body["result"]["applied"], true);
+
+    {
+        let conn = rusqlite::Connection::open(server.db_path()).expect("open replay db");
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM entities WHERE name = 'Dry Run Entity'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("dry run entity count");
+        assert_eq!(count, 0);
+    }
+
+    let resp = server
+        .post(
+            "/api/ontology/operations/apply",
+            json!({
+                "operation": "create_entity",
+                "payload": {"name": "Applied Entity", "entity_type": "project"},
+                "actor": "operation-replay"
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["dryRun"], false);
+    assert_eq!(body["proposal"]["status"], "applied");
+    assert_eq!(body["proposal"]["appliedBy"], "operation-replay");
+    assert_eq!(body["result"]["entity"], "Applied Entity");
+
+    let resp = server
+        .post(
+            "/api/ontology/operations/apply",
+            json!({
+                "operation": "create_entity",
+                "payload": {"name": "Proposed Entity", "entity_type": "project"},
+                "propose": true
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["dryRun"], false);
+    assert_eq!(body["proposed"], true);
+    assert_eq!(body["result"], serde_json::Value::Null);
+    assert_eq!(body["proposal"]["status"], "pending");
+
+    let resp = server
+        .post(
+            "/api/ontology/operations/batch",
+            json!({
+                "dry_run": true,
+                "operations": [
+                    {
+                        "operation": "create_entity",
+                        "payload": {"name": "Batch Preview", "entity_type": "project"}
+                    },
+                    {
+                        "operation": "rename_entity",
+                        "payload": {"selector": "Missing", "new_name": "Nope"}
+                    }
+                ]
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["dryRun"], true);
+    assert_eq!(body["proposed"], false);
+    assert_eq!(body["count"], 1);
+    assert_eq!(body["items"][0]["proposal"]["status"], "applied");
+    assert_eq!(body["items"][0]["result"]["entity"], "Batch Preview");
+    assert_eq!(body["errors"][0]["index"], 1);
+    assert_eq!(body["errors"][0]["line"], 2);
+    assert_eq!(body["errors"][0]["operation"], "rename_entity");
+    assert_eq!(body["errors"][0]["status"], 400);
+    assert!(
+        body["errors"][0]["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("unsupported ontology operation")
+    );
+
+    let conn = rusqlite::Connection::open(server.db_path()).expect("open replay db");
+    let counts: (i64, i64, i64) = conn
+        .query_row(
+            "SELECT
+               SUM(CASE WHEN name = 'Applied Entity' THEN 1 ELSE 0 END),
+               SUM(CASE WHEN name = 'Proposed Entity' THEN 1 ELSE 0 END),
+               SUM(CASE WHEN name = 'Batch Preview' THEN 1 ELSE 0 END)
+             FROM entities",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .expect("operation entity counts");
+    assert_eq!(counts, (1, 0, 0));
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
 async fn ontology_assertion_routes_create_link_supersede_and_archive() {
     let server = TestServer::start().await;
     {

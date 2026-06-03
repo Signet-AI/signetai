@@ -3158,8 +3158,43 @@ fn apply_operation(conn: &rusqlite::Connection, row: &ProposalRow) -> Result<Jso
         "create_entity" => apply_create_entity(conn, row, &payload),
         "add_claim_value" | "add_claim" => apply_add_claim_value(conn, row, &payload),
         "create_link" => apply_create_link(conn, row, &payload),
-        _ => Err(rusqlite::Error::InvalidQuery.into()),
+        _ => Err(CoreError::Invalid(format!(
+            "unsupported ontology operation: {}",
+            row.operation
+        ))),
     }
+}
+
+fn load_proposal_row(
+    conn: &rusqlite::Connection,
+    id: &str,
+    agent_id: &str,
+) -> Result<ProposalRow, CoreError> {
+    Ok(conn
+        .prepare(&format!(
+            "{SELECT_PROPOSAL} WHERE id = ?1 AND agent_id = ?2"
+        ))?
+        .query_row(rusqlite::params![id, agent_id], read_row)?)
+}
+
+fn mark_applied_value(
+    conn: &rusqlite::Connection,
+    row: &ProposalRow,
+    actor: &str,
+    result: &JsonValue,
+) -> Result<JsonValue, CoreError> {
+    let ts = now();
+    conn.execute(
+        "UPDATE ontology_proposals
+         SET status='applied', applied_by=?1, result=?2, updated_at=?3, applied_at=?3
+         WHERE id=?4 AND agent_id=?5",
+        rusqlite::params![actor, result.to_string(), ts, row.id, row.agent_id],
+    )?;
+    Ok(row_to_value(load_proposal_row(
+        conn,
+        &row.id,
+        &row.agent_id,
+    )?))
 }
 
 fn insert_proposal(
@@ -4001,7 +4036,28 @@ pub async fn entity_alias_delete(
 }
 
 /// POST /api/ontology/operations/apply — apply one audited operation.
-pub async fn operations_apply(Json(body): Json<JsonValue>) -> impl IntoResponse {
+pub async fn operations_apply(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Query(query): Query<ProposalQuery>,
+    Json(body): Json<JsonValue>,
+) -> impl IntoResponse {
+    let requested_agent = query
+        .agent_id
+        .clone()
+        .or_else(|| read_body_string(&body, "agent_id"))
+        .or_else(|| read_body_string(&body, "agentId"));
+    let agent = match scoped_agent_or_response(
+        &state,
+        peer,
+        &headers,
+        requested_agent.as_deref(),
+        Permission::Modify,
+    ) {
+        Ok(id) => id,
+        Err(resp) => return resp,
+    };
     if read_body_string(&body, "operation").is_none() {
         return json_error(StatusCode::BAD_REQUEST, "operation is required");
     }
@@ -4013,11 +4069,65 @@ pub async fn operations_apply(Json(body): Json<JsonValue>) -> impl IntoResponse 
     {
         return json_error(StatusCode::BAD_REQUEST, "payload object is required");
     }
-    Json(json!({"success": true, "dryRun": body.get("dry_run").and_then(|value| value.as_bool()).unwrap_or(false)})).into_response()
+    let dry_run = read_body_bool(&body, "dry_run")
+        .or_else(|| read_body_bool(&body, "dryRun"))
+        .unwrap_or(false);
+    let propose = read_body_bool(&body, "propose").unwrap_or(false);
+    if dry_run && propose {
+        return json_error(
+            StatusCode::BAD_REQUEST,
+            "--dry-run and --propose cannot be used together",
+        );
+    }
+    let actor = read_body_string(&body, "actor")
+        .or_else(|| {
+            headers
+                .get("x-signet-actor")
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| "operator".to_string());
+    let proposal = match proposal_body_from_operation(&body, &agent, &actor, &body) {
+        Ok(value) => value,
+        Err(error) => return core_error_response(error),
+    };
+    let result = state
+        .pool
+        .write(Priority::High, move |conn| {
+            run_operation_transaction(conn, dry_run, || {
+                apply_operation_item(conn, proposal, &agent, &actor, dry_run, propose)
+            })
+        })
+        .await;
+    match result {
+        Ok(value) => Json(value).into_response(),
+        Err(error) => core_error_response(error),
+    }
 }
 
 /// POST /api/ontology/operations/batch — apply a batch of audited operations.
-pub async fn operations_batch(Json(body): Json<JsonValue>) -> impl IntoResponse {
+pub async fn operations_batch(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Query(query): Query<ProposalQuery>,
+    Json(body): Json<JsonValue>,
+) -> impl IntoResponse {
+    let requested_agent = query
+        .agent_id
+        .clone()
+        .or_else(|| read_body_string(&body, "agent_id"))
+        .or_else(|| read_body_string(&body, "agentId"));
+    let agent = match scoped_agent_or_response(
+        &state,
+        peer,
+        &headers,
+        requested_agent.as_deref(),
+        Permission::Modify,
+    ) {
+        Ok(id) => id,
+        Err(resp) => return resp,
+    };
     let operations = body
         .get("operations")
         .or_else(|| body.get("items"))
@@ -4025,8 +4135,189 @@ pub async fn operations_batch(Json(body): Json<JsonValue>) -> impl IntoResponse 
     if operations.map(|items| items.is_empty()).unwrap_or(true) {
         return json_error(StatusCode::BAD_REQUEST, "operations are required");
     }
-    Json(json!({"success": true, "results": [], "count": operations.map(Vec::len).unwrap_or(0)}))
-        .into_response()
+    let operations = operations.cloned().unwrap_or_default();
+    if operations.len() > 500 {
+        return json_error(
+            StatusCode::BAD_REQUEST,
+            "cannot apply more than 500 operations at once",
+        );
+    }
+    let dry_run = read_body_bool(&body, "dry_run")
+        .or_else(|| read_body_bool(&body, "dryRun"))
+        .unwrap_or(false);
+    let propose = read_body_bool(&body, "propose").unwrap_or(false);
+    if dry_run && propose {
+        return json_error(
+            StatusCode::BAD_REQUEST,
+            "--dry-run and --propose cannot be used together",
+        );
+    }
+    let actor = read_body_string(&body, "actor")
+        .or_else(|| {
+            headers
+                .get("x-signet-actor")
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| "operator".to_string());
+    let result = state
+        .pool
+        .write(Priority::High, move |conn| {
+            run_operation_transaction(conn, dry_run, || {
+                let mut items = Vec::new();
+                let mut errors = Vec::new();
+                for (index, raw) in operations.iter().enumerate() {
+                    let proposal = proposal_body_from_operation(raw, &agent, &actor, &body);
+                    let item = proposal.and_then(|proposal| {
+                        apply_operation_item(conn, proposal, &agent, &actor, dry_run, propose)
+                    });
+                    match item {
+                        Ok(value) => items.push(value),
+                        Err(error) if dry_run => errors.push(json!({
+                            "index": index,
+                            "line": index + 1,
+                            "operation": read_body_string(raw, "operation").unwrap_or_default(),
+                            "error": error.to_string(),
+                            "status": status_code_for_core_error(&error).as_u16(),
+                        })),
+                        Err(error) => return Err(error),
+                    }
+                }
+                let mut output = json!({
+                    "items": items,
+                    "count": items.len(),
+                    "dryRun": dry_run,
+                    "proposed": propose,
+                });
+                if !errors.is_empty() {
+                    output["errors"] = JsonValue::Array(errors);
+                }
+                Ok(output)
+            })
+        })
+        .await;
+    match result {
+        Ok(value) => Json(value).into_response(),
+        Err(error) => core_error_response(error),
+    }
+}
+
+fn proposal_body_from_operation(
+    raw: &JsonValue,
+    agent: &str,
+    actor: &str,
+    defaults: &JsonValue,
+) -> Result<ProposalBody, CoreError> {
+    let mut proposal = serde_json::from_value::<ProposalBody>(raw.clone())
+        .map_err(|error| CoreError::Invalid(format!("invalid operation body: {error}")))?;
+    proposal.agent_id = Some(agent.to_string());
+    if proposal.rationale.is_none() {
+        proposal.rationale = proposal.reason.clone();
+    }
+    if proposal.created_by.is_none() {
+        proposal.created_by = read_body_string(raw, "created_by")
+            .or_else(|| read_body_string(raw, "createdBy"))
+            .or_else(|| read_body_string(defaults, "created_by"))
+            .or_else(|| read_body_string(defaults, "createdBy"))
+            .or_else(|| Some(actor.to_string()));
+    }
+    if proposal.source_kind.is_none() {
+        proposal.source_kind = read_body_string(raw, "source_kind")
+            .or_else(|| read_body_string(defaults, "source_kind"));
+    }
+    if proposal.source_id.is_none() {
+        proposal.source_id =
+            read_body_string(raw, "source_id").or_else(|| read_body_string(defaults, "source_id"));
+    }
+    if proposal.source_path.is_none() {
+        proposal.source_path = read_body_string(raw, "source_path")
+            .or_else(|| read_body_string(defaults, "source_path"));
+    }
+    if proposal.source_root.is_none() {
+        proposal.source_root = read_body_string(raw, "source_root")
+            .or_else(|| read_body_string(defaults, "source_root"));
+    }
+    Ok(proposal)
+}
+
+fn run_operation_transaction<F>(
+    conn: &rusqlite::Connection,
+    rollback: bool,
+    operation: F,
+) -> Result<JsonValue, CoreError>
+where
+    F: FnOnce() -> Result<JsonValue, CoreError>,
+{
+    conn.execute_batch("BEGIN IMMEDIATE")?;
+    match operation() {
+        Ok(value) => {
+            if rollback {
+                conn.execute_batch("ROLLBACK")?;
+            } else {
+                conn.execute_batch("COMMIT")?;
+            }
+            Ok(value)
+        }
+        Err(error) => {
+            let _ = conn.execute_batch("ROLLBACK");
+            Err(error)
+        }
+    }
+}
+
+fn apply_operation_item(
+    conn: &rusqlite::Connection,
+    proposal: ProposalBody,
+    agent: &str,
+    actor: &str,
+    dry_run: bool,
+    propose: bool,
+) -> Result<JsonValue, CoreError> {
+    if propose {
+        let proposal = insert_proposal(conn, proposal, agent)?;
+        return Ok(json!({
+            "proposal": proposal,
+            "result": null,
+            "dryRun": false,
+            "proposed": true,
+        }));
+    }
+    let proposal = insert_proposal(conn, proposal, agent)?;
+    let id = proposal
+        .get("id")
+        .and_then(JsonValue::as_str)
+        .ok_or_else(|| CoreError::Invalid("proposal id is missing".to_string()))?;
+    let agent_id = proposal
+        .get("agentId")
+        .and_then(JsonValue::as_str)
+        .ok_or_else(|| CoreError::Invalid("proposal agentId is missing".to_string()))?;
+    let row = load_proposal_row(conn, id, agent_id)?;
+    let result = apply_operation(conn, &row)?;
+    let proposal = mark_applied_value(conn, &row, actor, &result)?;
+    Ok(json!({
+        "proposal": proposal,
+        "result": result,
+        "dryRun": dry_run,
+        "proposed": false,
+    }))
+}
+
+fn status_code_for_core_error(error: &CoreError) -> StatusCode {
+    match error {
+        CoreError::Invalid(_) => StatusCode::BAD_REQUEST,
+        CoreError::NotFound(_) => StatusCode::NOT_FOUND,
+        CoreError::Conflict(_) => StatusCode::CONFLICT,
+        _ => StatusCode::INTERNAL_SERVER_ERROR,
+    }
+}
+
+fn core_error_response(error: CoreError) -> Response {
+    match error {
+        CoreError::Invalid(message) => json_error(StatusCode::BAD_REQUEST, &message),
+        CoreError::NotFound(message) => json_error(StatusCode::NOT_FOUND, &message),
+        CoreError::Conflict(message) => json_error(StatusCode::CONFLICT, &message),
+        other => json_error(StatusCode::INTERNAL_SERVER_ERROR, &other.to_string()),
+    }
 }
 
 /// POST /api/ontology/proposals/repair/merge-plan — create a merge plan.
