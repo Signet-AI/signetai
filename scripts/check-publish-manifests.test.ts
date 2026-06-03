@@ -181,7 +181,9 @@ describe("check-publish-manifests", () => {
 		expect(promoteWorkflow).toContain('"@signetai/signetai-darwin-arm64"');
 		expect(promoteWorkflow).toContain('"@signetai/signetai-win32-x64"');
 		expect(promoteWorkflow).toContain('"signetai"');
-		expect(promoteWorkflow).toContain('npm dist-tag add "${package}@${VERSION}" latest || true');
+		expect(promoteWorkflow).toContain('npm view "${package}@${VERSION}" version >/dev/null');
+		expect(promoteWorkflow).toContain('npm dist-tag add "${package}@${VERSION}" latest');
+		expect(promoteWorkflow).toContain('npm dist-tag add "@signetai/signet-memory-openclaw@${VERSION}" latest || true');
 		expect(promoteWorkflow).toContain("NPM_CONFIG_USERCONFIG: ${{ runner.temp }}/.npmrc");
 		expect(manifestScript).toContain('name.endsWith(".sha256")');
 		expect(manifestScript).toContain("native-manifest.json");
