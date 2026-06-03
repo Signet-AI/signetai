@@ -73,16 +73,22 @@ function pidFile(agentsDir: string): string {
 	return join(agentsDir, ".daemon", "pid");
 }
 
+function rustDaemonRuntimeEnabled(env: NodeJS.ProcessEnv): boolean {
+	return env.SIGNET_DAEMON_RUNTIME?.trim().toLowerCase() === "rust";
+}
+
 export function resolveDaemonPaths(env: NodeJS.ProcessEnv = process.env): string[] {
 	const currentNativeExecutable = currentNativeExecutablePath();
 	const bundledNativeDaemon = env.SIGNET_DIR
 		? join(env.SIGNET_DIR, "runtime", "daemon-rs", process.platform === "win32" ? "signet-daemon.exe" : "signet-daemon")
 		: null;
 	const bundledJsDaemon = env.SIGNET_DIR ? join(env.SIGNET_DIR, "runtime", "daemon-js", "daemon.js") : null;
+	const bundledRuntimePaths = rustDaemonRuntimeEnabled(env)
+		? [bundledNativeDaemon, bundledJsDaemon]
+		: [bundledJsDaemon];
 	return [
 		currentNativeExecutable,
-		bundledNativeDaemon,
-		bundledJsDaemon,
+		...bundledRuntimePaths,
 		join(__dirname, "daemon.js"),
 		join(cliDir, "daemon.js"),
 		join(pkgDir, "..", "daemon", "dist", "daemon.js"),
@@ -630,6 +636,7 @@ export function buildLaunchdDaemonPlist(input: LaunchdDaemonPlistInput): string 
 		SIGNET_PATH: input.agentsDir,
 		SIGNET_DAEMON_ENTRYPOINT: "1",
 		...(process.env.SIGNET_DIR ? { SIGNET_DIR: process.env.SIGNET_DIR } : {}),
+		...(process.env.SIGNET_DAEMON_RUNTIME ? { SIGNET_DAEMON_RUNTIME: process.env.SIGNET_DAEMON_RUNTIME } : {}),
 		...(process.env.SIGNET_DASHBOARD_DIR ? { SIGNET_DASHBOARD_DIR: process.env.SIGNET_DASHBOARD_DIR } : {}),
 		HOME: process.env.HOME ?? homedir(),
 		PATH: process.env.PATH ?? "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",

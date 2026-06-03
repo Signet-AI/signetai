@@ -26,10 +26,16 @@ afterEach(() => {
 });
 
 describe("resolveDaemonPaths", () => {
-	it("prefers the native bundle daemon path when SIGNET_DIR is set", () => {
+	it("keeps the JavaScript daemon bundle as the default when SIGNET_DIR is set", () => {
 		const paths = resolveDaemonPaths({ SIGNET_DIR: "/opt/signet" });
+		expect(paths[0]).toBe("/opt/signet/runtime/daemon-js/daemon.js");
+		expect(paths).not.toContain("/opt/signet/runtime/daemon-rs/signet-daemon");
+	});
+
+	it("uses the Rust daemon bundle only when explicitly requested", () => {
+		const paths = resolveDaemonPaths({ SIGNET_DIR: "/opt/signet", SIGNET_DAEMON_RUNTIME: " Rust " });
 		expect(paths[0]).toBe("/opt/signet/runtime/daemon-rs/signet-daemon");
-		expect(paths).toContain("/opt/signet/runtime/daemon-js/daemon.js");
+		expect(paths[1]).toBe("/opt/signet/runtime/daemon-js/daemon.js");
 	});
 });
 
@@ -185,6 +191,30 @@ describe("buildLaunchdDaemonPlist", () => {
 		expect(launchdDaemonPlistPath("/Users/user/.agents", "/Users/user")).toBe(
 			"/Users/user/Library/LaunchAgents/ai.signet.daemon.plist",
 		);
+	});
+
+	it("preserves explicit Rust runtime opt-in in LaunchAgent environment", () => {
+		const original = process.env.SIGNET_DAEMON_RUNTIME;
+		process.env.SIGNET_DAEMON_RUNTIME = "rust";
+		try {
+			const plist = buildLaunchdDaemonPlist({
+				daemonPath: "/opt/signet/runtime/daemon-rs/signet-daemon",
+				agentsDir: "/Users/user/.agents",
+				port: 3850,
+				host: "127.0.0.1",
+				bind: "0.0.0.0",
+				startupLogPath: "/Users/user/.agents/.daemon/logs/startup.log",
+			});
+
+			expect(plist).toContain("<key>SIGNET_DAEMON_RUNTIME</key>");
+			expect(plist).toContain("<string>rust</string>");
+		} finally {
+			if (original === undefined) {
+				Reflect.deleteProperty(process.env, "SIGNET_DAEMON_RUNTIME");
+			} else {
+				process.env.SIGNET_DAEMON_RUNTIME = original;
+			}
+		}
 	});
 
 	it("uses launchctl bootstrap against the current user launchd domain", () => {

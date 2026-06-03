@@ -72,6 +72,19 @@ Configuration
 | `SIGNET_LOG_FILE` | — | Optional explicit log file path |
 | `SIGNET_LOG_DIR` | `$SIGNET_WORKSPACE/.daemon/logs` | Optional log directory override |
 | `SIGNET_SQLITE_PATH` | — | macOS explicit SQLite dylib override used before Bun opens the database |
+| `SIGNET_DAEMON_RUNTIME` | `typescript` | Installed runtime selector. Set to `rust` only for explicit daemon-rs parity testing; the TypeScript/Bun daemon remains the default runtime. |
+
+### Runtime Selection
+
+The Rust daemon in `platform/daemon-rs` is a parity runtime, not the default
+production daemon. `signet daemon start` uses the TypeScript/Bun daemon unless
+`SIGNET_DAEMON_RUNTIME=rust` is set and the installed bundle contains
+`runtime/daemon-rs/signet-daemon`.
+
+Do not treat route-parity or contract-replay success as a cutover signal by
+itself. Runtime replacement also requires stateful subsystem proof for file
+watching, pipeline workers, source indexing, schema round-trips, installed
+launcher behavior, rollback, and daemon-managed side effects.
 
 ### Files
 

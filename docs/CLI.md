@@ -1041,6 +1041,7 @@ Environment Variables
 | `SIGNET_LOG_FILE` | Explicit daemon log file path | unset |
 | `SIGNET_LOG_DIR` | Daemon log directory override | `$SIGNET_WORKSPACE/.daemon/logs` |
 | `SIGNET_SQLITE_PATH` | macOS explicit SQLite dylib override used by the daemon before opening the database | unset |
+| `SIGNET_DAEMON_RUNTIME` | Installed daemon runtime selector. Set to `rust` only for explicit daemon-rs parity testing; default uses the TypeScript/Bun daemon | `typescript` |
 | `SIGNET_SESSION_START_TIMEOUT` | Session-start daemon wait budget in ms for Signet-managed clients. Generated Claude Code hook config writes this value directly. Generated Codex hook config rounds up to seconds and adds 5 seconds of harness grace | `15000` |
 | `SIGNET_FETCH_TIMEOUT` | Legacy fallback for session-start timeout in ms when `SIGNET_SESSION_START_TIMEOUT` is unset | `15000` |
 | `SIGNET_PROMPT_SUBMIT_TIMEOUT` | Prompt-submit daemon wait budget in ms; OpenCode uses this value directly, generated Claude Code hook config writes this value + 2000 ms grace, and generated Codex hook config rounds up to seconds and adds 2 seconds of harness grace | `5000` |
