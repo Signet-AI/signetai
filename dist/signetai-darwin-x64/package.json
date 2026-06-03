@@ -1,0 +1,20 @@
+{
+  "name": "@signetai/signetai-darwin-x64",
+  "version": "0.138.11",
+  "description": "Signet native binary for macOS x64",
+  "os": [
+    "darwin"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "files": [
+    "bin/signet",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "license": "Apache-2.0"
+}

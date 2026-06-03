@@ -28,6 +28,7 @@ describe("install copy", () => {
 		for (const path of ["README.md", "docs/QUICKSTART.md", "docs/CLI.md", "dist/signetai/README.md"]) {
 			const content = read(path);
 			expect(content).toContain("same compiled Signet binary");
+			expect(content).toContain("optional native packages");
 			expect(content).toContain("npm install -g signetai");
 			expect(content).toContain("bun add -g signetai");
 		}
@@ -59,24 +60,34 @@ describe("install copy", () => {
 			bin?: Record<string, string>;
 		};
 		const launcher = read("dist/signetai/bin/launch.js");
+		const nativePlatforms = read("dist/signetai/bin/native-platforms.js");
 		const mcpWrapper = read("dist/signetai/bin/signet-mcp.js");
 		const installer = read("dist/signetai/scripts/install-native.js");
 
 		expect(manifest.scripts?.postinstall).toContain("scripts/install-native.js");
 		expect(manifest.dependencies).toBeUndefined();
-		expect(manifest.optionalDependencies).toBeUndefined();
+		expect(manifest.optionalDependencies).toEqual({
+			"@signetai/signetai-linux-x64": "0.138.11",
+			"@signetai/signetai-linux-arm64": "0.138.11",
+			"@signetai/signetai-darwin-x64": "0.138.11",
+			"@signetai/signetai-darwin-arm64": "0.138.11",
+			"@signetai/signetai-win32-x64": "0.138.11",
+		});
 		expect(manifest.bin?.signet).toBe("bin/signet.js");
 		expect(manifest.bin?.["signet-mcp"]).toBe("bin/signet-mcp.js");
 		expect(launcher).toContain('join(packageDir, "native"');
+		expect(launcher).toContain("require.resolve");
+		expect(nativePlatforms).toContain("@signetai/signetai-linux-x64");
+		expect(nativePlatforms).toContain("@signetai/signetai-linux-arm64");
+		expect(nativePlatforms).toContain("@signetai/signetai-darwin-x64");
+		expect(nativePlatforms).toContain("@signetai/signetai-darwin-arm64");
+		expect(nativePlatforms).toContain("@signetai/signetai-win32-x64");
 		expect(mcpWrapper).toContain("forceMcp: true");
-		expect(installer).toContain("native-manifest.json");
-		expect(installer).toContain("createHash");
-		expect(installer).toContain('"linux-x64"');
-		expect(installer).toContain('"linux-arm64"');
-		expect(installer).toContain('"darwin-x64"');
-		expect(installer).toContain('"darwin-arm64"');
-		expect(installer).toContain('"win32-x64"');
-		expect(installer).toContain("Skipping Signet native binary download in workspace install");
+		expect(installer).toContain("linkSync");
+		expect(installer).toContain("require.resolve");
+		expect(installer).toContain("Skipping Signet native binary linking in workspace install");
+		expect(installer).not.toContain("native-manifest.json");
+		expect(installer).not.toContain("https");
 		expect(installer).not.toContain("bun.sh/install");
 		expect(installer).not.toContain("better-sqlite3");
 	});

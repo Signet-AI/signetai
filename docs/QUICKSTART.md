@@ -128,8 +128,9 @@ Running `signet setup` launches an interactive wizard that walks you through
 the full setup. You don't need to read anything else first.
 
 All three install paths install the same compiled Signet binary. The npm and
-Bun paths are package-manager wrappers around the native binary installer; they
-do not install Bun, rebuild Signet, or install daemon dependencies.
+Bun paths use optional native packages for the current platform; install scripts
+only link the already-installed binary into place. They do not install Bun,
+rebuild Signet, or install daemon dependencies.
 Published native binaries currently cover Linux x64, Linux arm64, macOS x64,
 macOS arm64, and Windows x64. Windows direct installs should use
 `npm install -g signetai`; the old PowerShell `install.ps1` path has been

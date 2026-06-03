@@ -8,6 +8,7 @@ import {
 	collectCargoLockMismatches,
 	findCargoLockPackageVersion,
 	resolveWorkspaceProtocols,
+	syncSignetNativeOptionalDependencies,
 } from "./version-sync";
 
 describe("version-sync", () => {
@@ -69,6 +70,40 @@ dependencies = [
 			expect(updated.peerDependencies["@signet/peer"]).toBe("~0.115.2");
 			expect(updated.devDependencies["@signet/core"]).toBe("workspace:*");
 			expect(updated.devDependencies["@signet/sdk"]).toBe("workspace:*");
+		} finally {
+			rmSync(root, { force: true, recursive: true });
+		}
+	});
+
+	test("syncs exact native optional package versions for the Signet wrapper", () => {
+		const root = mkdtempSync(join(tmpdir(), "signet-version-sync-native-"));
+		try {
+			const manifest = join(root, "package.json");
+			writeFileSync(
+				manifest,
+				JSON.stringify(
+					{
+						name: "signetai",
+						version: "0.1.0",
+						optionalDependencies: {
+							"@signetai/signetai-linux-x64": "0.1.0",
+							"@signetai/signetai-darwin-arm64": "0.1.0",
+							"@other/package": "1.0.0",
+						},
+						publishConfig: { access: "public" },
+					},
+					null,
+					2,
+				),
+			);
+
+			expect(syncSignetNativeOptionalDependencies("0.115.2", false, manifest)).toEqual([manifest]);
+			const updated = JSON.parse(readFileSync(manifest, "utf8")) as {
+				optionalDependencies: Record<string, string>;
+			};
+			expect(updated.optionalDependencies["@signetai/signetai-linux-x64"]).toBe("0.115.2");
+			expect(updated.optionalDependencies["@signetai/signetai-darwin-arm64"]).toBe("0.115.2");
+			expect(updated.optionalDependencies["@other/package"]).toBe("1.0.0");
 		} finally {
 			rmSync(root, { force: true, recursive: true });
 		}

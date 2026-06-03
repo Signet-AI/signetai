@@ -260,6 +260,33 @@ export function resolveWorkspaceProtocols(files: readonly string[], version: str
 	return patched;
 }
 
+export function syncSignetNativeOptionalDependencies(
+	version: string,
+	checkOnly: boolean,
+	file = "dist/signetai/package.json",
+): string[] {
+	if (!existsSync(file)) return [];
+
+	const raw = readFileSync(file, "utf8");
+	const pkg = JSON.parse(raw) as { optionalDependencies?: Record<string, string> };
+	const optionalDependencies = pkg.optionalDependencies;
+	if (!optionalDependencies) return [];
+
+	let changed = false;
+	for (const name of Object.keys(optionalDependencies)) {
+		if (!name.startsWith("@signetai/signetai-")) continue;
+		if (optionalDependencies[name] === version) continue;
+		optionalDependencies[name] = version;
+		changed = true;
+	}
+
+	if (!changed) return [];
+	if (!checkOnly) {
+		writeFileSync(file, `${JSON.stringify(pkg, null, 2)}\n`);
+	}
+	return [file];
+}
+
 function getArg(name: string): string | null {
 	const index = process.argv.indexOf(name);
 	if (index === -1) {
@@ -323,6 +350,7 @@ function main() {
 	// Resolve workspace: protocols in publishable packages so npm publish
 	// ships real version strings instead of "workspace:*".
 	const resolved = resolveWorkspaceProtocols(packageFiles, targetVersion, checkOnly);
+	const nativeOptionalDepsUpdated = syncSignetNativeOptionalDependencies(targetVersion, checkOnly);
 
 	// Sync Cargo.toml files under platform/ and runtimes/
 	const cargoUpdated: string[] = [];
@@ -363,13 +391,18 @@ function main() {
 
 	if (
 		checkOnly &&
-		(updated.length > 0 || cargoUpdated.length > 0 || cargoLockMismatches.length > 0 || resolved.length > 0)
+		(updated.length > 0 ||
+			cargoUpdated.length > 0 ||
+			cargoLockMismatches.length > 0 ||
+			resolved.length > 0 ||
+			nativeOptionalDepsUpdated.length > 0)
 	) {
 		const drift = [
 			...updated.map((file) => `package version: ${file}`),
 			...cargoUpdated.map((file) => `Cargo version: ${file}`),
 			...cargoLockMismatches.map((file) => `Cargo.lock version: ${file}`),
 			...resolved.map((file) => `workspace protocol: ${file}`),
+			...nativeOptionalDepsUpdated.map((file) => `native optional dependency version: ${file}`),
 		];
 		throw new Error(
 			`Version sync drift detected at ${targetVersion}:\n- ${drift.join("\n- ")}\n\nRun bun scripts/version-sync.ts before merging.`,
@@ -380,7 +413,8 @@ function main() {
 		updated.length === 0 &&
 		cargoUpdated.length === 0 &&
 		cargoLockMismatches.length === 0 &&
-		resolved.length === 0
+		resolved.length === 0 &&
+		nativeOptionalDepsUpdated.length === 0
 	) {
 		console.log(`All versions already aligned at ${targetVersion}.`);
 		return;
@@ -407,6 +441,12 @@ function main() {
 		}
 	}
 
+	if (nativeOptionalDepsUpdated.length > 0) {
+		console.log("Aligned Signet native optional dependency versions:");
+		for (const file of nativeOptionalDepsUpdated) {
+			console.log(`- ${file}`);
+		}
+	}
 }
 
 if (import.meta.main) {

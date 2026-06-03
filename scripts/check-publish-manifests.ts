@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 
 import { execSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 
 const RUNTIME_FIELDS = ["dependencies", "optionalDependencies", "peerDependencies"] as const;
 
@@ -169,10 +169,10 @@ function formatNativeManifestIssues(issues: readonly NativeManifestIssue[]): str
 }
 
 export function parseSupportedNativePlatforms(installerSource: string): string[] {
-	const match = installerSource.match(/const supportedPlatforms = new Set\(\[([\s\S]*?)\]\);/);
+	const match = installerSource.match(/export const nativePlatforms = \{([\s\S]*?)\n\s*\};/);
 	if (!match) return [];
 
-	return Array.from(match[1].matchAll(/"([^"]+)"/g), ([, platform]) => platform).sort();
+	return Array.from(match[1].matchAll(/^\s*"([^"]+)":/gm), ([, platform]) => platform).sort();
 }
 
 export function collectNativeManifestIssues(
@@ -243,6 +243,33 @@ export function collectNativeManifestIssues(
 	return issues;
 }
 
+function packageNameToNativePlatform(packageName: string): string | null {
+	const prefix = "@signetai/signetai-";
+	return packageName.startsWith(prefix) ? packageName.slice(prefix.length) : null;
+}
+
+export function collectNativePackageIssues(targets: readonly string[]): NativeManifestIssue[] {
+	const issues: NativeManifestIssue[] = [];
+	for (const file of targets) {
+		const pkg = readPackageJson(file);
+		const packageName = getPackageName(file, pkg);
+		const platform = packageNameToNativePlatform(packageName);
+		if (!platform) continue;
+
+		const binaryName = platform.startsWith("win32-") ? "signet.exe" : "signet";
+		const binaryFile = file.replace(/package\.json$/, `bin/${binaryName}`);
+		if (!existsSync(binaryFile)) {
+			issues.push({ file, reason: `missing staged native binary ${binaryFile}` });
+			continue;
+		}
+		if (!statSync(binaryFile).isFile()) {
+			issues.push({ file, reason: `staged native binary is not a file: ${binaryFile}` });
+		}
+	}
+
+	return issues;
+}
+
 export function getManifestTargets(argv: readonly string[]): string[] {
 	return argv.length > 0 ? [...argv] : listPublishableManifestTargets();
 }
@@ -257,13 +284,15 @@ function main(): void {
 					existsSync("dist/native/native-manifest.json")
 						? JSON.parse(readFileSync("dist/native/native-manifest.json", "utf8"))
 						: null,
-					parseSupportedNativePlatforms(readFileSync("dist/signetai/scripts/install-native.js", "utf8")),
+					parseSupportedNativePlatforms(readFileSync("dist/signetai/bin/native-platforms.js", "utf8")),
 				)
 			: [];
+	const nativePackageIssues = collectNativePackageIssues(targets);
 
-	if (issues.length > 0 || nativeManifestIssues.length > 0) {
+	if (issues.length > 0 || nativeManifestIssues.length > 0 || nativePackageIssues.length > 0) {
 		if (issues.length > 0) console.error(formatIssues(issues));
 		if (nativeManifestIssues.length > 0) console.error(formatNativeManifestIssues(nativeManifestIssues));
+		if (nativePackageIssues.length > 0) console.error(formatNativeManifestIssues(nativePackageIssues));
 		process.exit(1);
 	}
 

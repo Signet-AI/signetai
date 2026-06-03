@@ -21,6 +21,33 @@
         "signet": "bin/signet.js",
         "signet-mcp": "bin/signet-mcp.js",
       },
+      "optionalDependencies": {
+        "@signetai/signetai-darwin-arm64": "0.138.11",
+        "@signetai/signetai-darwin-x64": "0.138.11",
+        "@signetai/signetai-linux-arm64": "0.138.11",
+        "@signetai/signetai-linux-x64": "0.138.11",
+        "@signetai/signetai-win32-x64": "0.138.11",
+      },
+    },
+    "dist/signetai-darwin-arm64": {
+      "name": "@signetai/signetai-darwin-arm64",
+      "version": "0.138.11",
+    },
+    "dist/signetai-darwin-x64": {
+      "name": "@signetai/signetai-darwin-x64",
+      "version": "0.138.11",
+    },
+    "dist/signetai-linux-arm64": {
+      "name": "@signetai/signetai-linux-arm64",
+      "version": "0.138.11",
+    },
+    "dist/signetai-linux-x64": {
+      "name": "@signetai/signetai-linux-x64",
+      "version": "0.138.11",
+    },
+    "dist/signetai-win32-x64": {
+      "name": "@signetai/signetai-win32-x64",
+      "version": "0.138.11",
     },
     "integrations/claude-code/connector": {
       "name": "@signet/connector-claude-code",
@@ -1445,6 +1472,16 @@
     "@signet/web": ["@signet/web@workspace:web/marketing"],
 
     "@signetai/signet-memory-openclaw": ["@signetai/signet-memory-openclaw@workspace:integrations/openclaw/memory-adapter"],
+
+    "@signetai/signetai-darwin-arm64": ["@signetai/signetai-darwin-arm64@workspace:dist/signetai-darwin-arm64"],
+
+    "@signetai/signetai-darwin-x64": ["@signetai/signetai-darwin-x64@workspace:dist/signetai-darwin-x64"],
+
+    "@signetai/signetai-linux-arm64": ["@signetai/signetai-linux-arm64@workspace:dist/signetai-linux-arm64"],
+
+    "@signetai/signetai-linux-x64": ["@signetai/signetai-linux-x64@workspace:dist/signetai-linux-x64"],
+
+    "@signetai/signetai-win32-x64": ["@signetai/signetai-win32-x64@workspace:dist/signetai-win32-x64"],
 
     "@silvia-odwyer/photon-node": ["@silvia-odwyer/photon-node@0.3.4", "", {}, "sha512-bnly4BKB3KDTFxrUIcgCLbaeVVS8lrAkri1pEzskpmxu9MdfGQTy8b8EgcD83ywD3RPMsIulY8xJH5Awa+t9fA=="],
 

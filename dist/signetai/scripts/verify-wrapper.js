@@ -3,7 +3,13 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 
-const required = ["bin/launch.js", "bin/signet.js", "bin/signet-mcp.js", "scripts/install-native.js"];
+const required = [
+	"bin/launch.js",
+	"bin/native-platforms.js",
+	"bin/signet.js",
+	"bin/signet-mcp.js",
+	"scripts/install-native.js",
+];
 const missing = required.filter((path) => !existsSync(join(process.cwd(), path)));
 
 if (missing.length > 0) {

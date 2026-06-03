@@ -9,6 +9,7 @@
   },
   "files": [
     "bin/launch.js",
+    "bin/native-platforms.js",
     "bin/signet.js",
     "bin/signet-mcp.js",
     "scripts/install-native.js",
@@ -18,7 +19,14 @@
   ],
   "scripts": {
     "build": "node scripts/verify-wrapper.js",
-    "postinstall": "node scripts/install-native.js || bun scripts/install-native.js"
+    "postinstall": "node scripts/install-native.js"
+  },
+  "optionalDependencies": {
+    "@signetai/signetai-linux-x64": "0.138.11",
+    "@signetai/signetai-linux-arm64": "0.138.11",
+    "@signetai/signetai-darwin-x64": "0.138.11",
+    "@signetai/signetai-darwin-arm64": "0.138.11",
+    "@signetai/signetai-win32-x64": "0.138.11"
   },
   "keywords": [
     "ai",

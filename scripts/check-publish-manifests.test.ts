@@ -1,11 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import {
 	collectManifestIssues,
 	collectNativeManifestIssues,
+	collectNativePackageIssues,
 	collectWorkspacePackages,
 	isPublishableWorkspacePackage,
 	listPublishableManifestTargets,
@@ -119,6 +120,7 @@ describe("check-publish-manifests", () => {
 		expect(workflow).toContain("asset: signet-linux-x64");
 		expect(workflow).toContain("platform: linux-arm64");
 		expect(workflow).toContain("asset: signet-linux-arm64");
+		expect(workflow).toContain("os: ubuntu-24.04-arm");
 		expect(workflow).toContain("platform: darwin-x64");
 		expect(workflow).toContain("asset: signet-darwin-x64");
 		expect(workflow).toContain("os: macos-15-intel");
@@ -132,10 +134,10 @@ describe("check-publish-manifests", () => {
 		);
 		expect(workflow).toContain("bun run build:native-bun");
 		expect(workflow).toContain('./dist/native/"$RELEASE_ASSET" --help');
-		expect(workflow).toContain("if: matrix.platform != 'linux-arm64'");
+		expect(workflow).not.toContain("if: matrix.platform != 'linux-arm64'");
 	});
 
-	test("publishes only native release assets and the native manifest", () => {
+	test("publishes native release assets, platform packages, and the native manifest", () => {
 		const root = join(import.meta.dir, "..");
 		const workflow = readFileSync(join(root, ".github", "workflows", "release.yml"), "utf-8");
 		const promoteWorkflow = readFileSync(join(root, ".github", "workflows", "promote-release.yml"), "utf-8");
@@ -150,22 +152,36 @@ describe("check-publish-manifests", () => {
 		expect(workflow.indexOf("bun scripts/check-publish-manifests.ts")).toBeLessThan(
 			workflow.indexOf('gh release edit "v${NEW_VERSION}" --draft=false'),
 		);
-		expect(workflow).toContain('CURRENT=$(npm view "signetai@${NEW_VERSION}" version 2>/dev/null || echo "0.0.0")');
-		expect(workflow).toContain('npm dist-tag add "signetai@${NEW_VERSION}" next');
-		expect(workflow).toContain('npm dist-tag add "@signetai/signet-memory-openclaw@${NEW_VERSION}" next || true');
+		expect(workflow).toContain('stage_platform_package "linux-x64" "signet-linux-x64" "signet"');
+		expect(workflow).toContain('stage_platform_package "linux-arm64" "signet-linux-arm64" "signet"');
+		expect(workflow).toContain('stage_platform_package "darwin-x64" "signet-darwin-x64" "signet"');
+		expect(workflow).toContain('stage_platform_package "darwin-arm64" "signet-darwin-arm64" "signet"');
+		expect(workflow).toContain('stage_platform_package "win32-x64" "signet-win32-x64.exe" "signet.exe"');
+		expect(workflow).toContain("publish_npm_package dist/signetai-linux-x64");
+		expect(workflow).toContain("publish_npm_package dist/signetai-linux-arm64");
+		expect(workflow).toContain("publish_npm_package dist/signetai-darwin-x64");
+		expect(workflow).toContain("publish_npm_package dist/signetai-darwin-arm64");
+		expect(workflow).toContain("publish_npm_package dist/signetai-win32-x64");
+		expect(workflow.indexOf("publish_npm_package dist/signetai-win32-x64")).toBeLessThan(
+			workflow.indexOf("publish_npm_package dist/signetai\n"),
+		);
+		expect(workflow).toContain('npm dist-tag add "${package_name}@${NEW_VERSION}" next');
 		expect(workflow).toContain("NPM_CONFIG_USERCONFIG: ${{ runner.temp }}/.npmrc");
-		expect(workflow).toContain("cd dist/signetai");
 		expect(workflow).toContain("npm publish --tag next --access public");
-		expect(workflow).toContain("cd ../../integrations/openclaw/memory-adapter");
 		expect(workflow).toContain('gh release edit "v${NEW_VERSION}" --draft=false');
 		expect(workflow.indexOf('gh release edit "v${NEW_VERSION}" --draft=false')).toBeLessThan(
-			workflow.indexOf("cd dist/signetai"),
+			workflow.indexOf("publish_npm_package dist/signetai-linux-x64"),
 		);
 		expect(workflow).not.toContain("npm publish --access public");
 		expect(workflow).not.toContain("bundle-latest");
 		expect(workflow).not.toContain("deploy/bundle");
-		expect(promoteWorkflow).toContain('npm dist-tag add "signetai@${VERSION}" latest');
-		expect(promoteWorkflow).toContain('npm dist-tag add "@signetai/signet-memory-openclaw@${VERSION}" latest || true');
+		expect(promoteWorkflow).toContain('"@signetai/signetai-linux-x64"');
+		expect(promoteWorkflow).toContain('"@signetai/signetai-linux-arm64"');
+		expect(promoteWorkflow).toContain('"@signetai/signetai-darwin-x64"');
+		expect(promoteWorkflow).toContain('"@signetai/signetai-darwin-arm64"');
+		expect(promoteWorkflow).toContain('"@signetai/signetai-win32-x64"');
+		expect(promoteWorkflow).toContain('"signetai"');
+		expect(promoteWorkflow).toContain('npm dist-tag add "${package}@${VERSION}" latest || true');
 		expect(promoteWorkflow).toContain("NPM_CONFIG_USERCONFIG: ${{ runner.temp }}/.npmrc");
 		expect(manifestScript).toContain('name.endsWith(".sha256")');
 		expect(manifestScript).toContain("native-manifest.json");
@@ -173,13 +189,13 @@ describe("check-publish-manifests", () => {
 
 	test("validates generated native manifest coverage against the npm wrapper", () => {
 		const installerSource = `
-			const supportedPlatforms = new Set([
-				"linux-x64",
-				"linux-arm64",
-				"darwin-x64",
-				"darwin-arm64",
-				"win32-x64",
-			]);
+			export const nativePlatforms = {
+				"linux-x64": {},
+				"linux-arm64": {},
+				"darwin-x64": {},
+				"darwin-arm64": {},
+				"win32-x64": {},
+			};
 		`;
 		const supportedPlatforms = parseSupportedNativePlatforms(installerSource);
 		const validSha = "a".repeat(64);
@@ -224,6 +240,26 @@ describe("check-publish-manifests", () => {
 		});
 	});
 
+	test("validates staged native platform package binaries", () => {
+		const root = mkdtempSync(join(tmpdir(), "signet-native-packages-"));
+		try {
+			const packageFile = join(root, "dist", "signetai-linux-x64", "package.json");
+			mkdirSync(dirname(packageFile), { recursive: true });
+			writeJson(packageFile, {
+				name: "@signetai/signetai-linux-x64",
+				version: "0.1.0",
+				publishConfig: { access: "public" },
+			});
+
+			expect(collectNativePackageIssues([packageFile])).toContainEqual({
+				file: packageFile,
+				reason: `missing staged native binary ${join(root, "dist", "signetai-linux-x64", "bin", "signet")}`,
+			});
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	test("keeps curl install as a thin verified native-binary downloader", () => {
 		const root = join(import.meta.dir, "..");
 		const installer = readFileSync(join(root, "web", "marketing", "public", "install.sh"), "utf-8");
@@ -256,25 +292,35 @@ describe("check-publish-manifests", () => {
 			bin?: Record<string, string>;
 		};
 		const launcher = readFileSync(join(root, "dist", "signetai", "bin", "launch.js"), "utf-8");
+		const nativePlatforms = readFileSync(join(root, "dist", "signetai", "bin", "native-platforms.js"), "utf-8");
 		const mcpBin = readFileSync(join(root, "dist", "signetai", "bin", "signet-mcp.js"), "utf-8");
 		const installer = readFileSync(join(root, "dist", "signetai", "scripts", "install-native.js"), "utf-8");
 
 		expect(manifest.name).toBe("signetai");
 		expect(manifest.publishConfig).toEqual({ access: "public" });
 		expect(manifest.dependencies).toBeUndefined();
-		expect(manifest.optionalDependencies).toBeUndefined();
+		expect(manifest.optionalDependencies).toEqual({
+			"@signetai/signetai-linux-x64": manifest.version,
+			"@signetai/signetai-linux-arm64": manifest.version,
+			"@signetai/signetai-darwin-x64": manifest.version,
+			"@signetai/signetai-darwin-arm64": manifest.version,
+			"@signetai/signetai-win32-x64": manifest.version,
+		});
 		expect(manifest.scripts?.postinstall).toContain("scripts/install-native.js");
 		expect(manifest.bin?.signet).toBe("bin/signet.js");
 		expect(manifest.bin?.["signet-mcp"]).toBe("bin/signet-mcp.js");
 		expect(launcher).toContain('join(packageDir, "native"');
+		expect(launcher).toContain("require.resolve");
+		expect(nativePlatforms).toContain("@signetai/signetai-linux-x64");
+		expect(nativePlatforms).toContain("@signetai/signetai-linux-arm64");
+		expect(nativePlatforms).toContain("@signetai/signetai-darwin-x64");
+		expect(nativePlatforms).toContain("@signetai/signetai-darwin-arm64");
+		expect(nativePlatforms).toContain("@signetai/signetai-win32-x64");
 		expect(mcpBin).toContain("forceMcp: true");
-		expect(installer).toContain("native-manifest.json");
-		expect(installer).toContain("createHash");
-		expect(installer).toContain('"linux-x64"');
-		expect(installer).toContain('"linux-arm64"');
-		expect(installer).toContain('"darwin-x64"');
-		expect(installer).toContain('"darwin-arm64"');
-		expect(installer).toContain('"win32-x64"');
+		expect(installer).toContain("linkSync");
+		expect(installer).toContain("require.resolve");
+		expect(installer).not.toContain("native-manifest.json");
+		expect(installer).not.toContain("https");
 		expect(installer).not.toContain("better-sqlite3");
 	});
 

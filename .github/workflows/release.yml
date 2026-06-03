@@ -168,7 +168,7 @@ jobs:
           - os: ubuntu-latest
             platform: linux-x64
             asset: signet-linux-x64
-          - os: ubuntu-latest
+          - os: ubuntu-24.04-arm
             platform: linux-arm64
             asset: signet-linux-arm64
           - os: macos-15-intel
@@ -205,7 +205,6 @@ jobs:
         run: bun run build:native-bun
 
       - name: Smoke native binary
-        if: matrix.platform != 'linux-arm64'
         shell: bash
         run: ./dist/native/"$RELEASE_ASSET" --help > /dev/null
 
@@ -288,31 +287,66 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Stage native npm platform packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          stage_platform_package() {
+            local platform="$1"
+            local asset="$2"
+            local binary="$3"
+            local package_dir="dist/signetai-${platform}"
+            mkdir -p "${package_dir}/bin"
+            cp "dist/native/${asset}" "${package_dir}/bin/${binary}"
+            chmod 755 "${package_dir}/bin/${binary}"
+          }
+
+          stage_platform_package "linux-x64" "signet-linux-x64" "signet"
+          stage_platform_package "linux-arm64" "signet-linux-arm64" "signet"
+          stage_platform_package "darwin-x64" "signet-darwin-x64" "signet"
+          stage_platform_package "darwin-arm64" "signet-darwin-arm64" "signet"
+          stage_platform_package "win32-x64" "signet-win32-x64.exe" "signet.exe"
+
       - name: Validate publish manifests
         run: bun scripts/check-publish-manifests.ts
 
       - name: Publish release
         # Undraft after release assets and manifest checks pass. The npm
-        # wrapper postinstall downloads from this public GitHub release.
+        # wrapper optional dependencies resolve to the same native binaries.
         run: gh release edit "v${NEW_VERSION}" --draft=false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Publish npm wrapper
+      - name: Publish npm packages
         run: |
           test -n "$NODE_AUTH_TOKEN"
           npm config set //registry.npmjs.org/:_authToken "$NODE_AUTH_TOKEN"
-          CURRENT=$(npm view "signetai@${NEW_VERSION}" version 2>/dev/null || echo "0.0.0")
-          if [ "$CURRENT" = "$NEW_VERSION" ]; then
-            echo "signetai@$NEW_VERSION already published, refreshing next tag"
-            npm dist-tag add "signetai@${NEW_VERSION}" next
-            npm dist-tag add "@signetai/signet-memory-openclaw@${NEW_VERSION}" next || true
-          else
-            cd dist/signetai
-            npm publish --tag next --access public
-            cd ../../integrations/openclaw/memory-adapter
-            npm publish --tag next --access public || true
-          fi
+          publish_npm_package() {
+            local package_dir="$1"
+            local optional="${2:-false}"
+            local package_name
+            package_name=$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).name)' "${package_dir}/package.json")
+            local current
+            current=$(npm view "${package_name}@${NEW_VERSION}" version 2>/dev/null || echo "0.0.0")
+            if [ "$current" = "$NEW_VERSION" ]; then
+              echo "${package_name}@${NEW_VERSION} already published, refreshing next tag"
+              npm dist-tag add "${package_name}@${NEW_VERSION}" next
+              return
+            fi
+            if [ "$optional" = "true" ]; then
+              (cd "$package_dir" && npm publish --tag next --access public) || true
+              return
+            fi
+            (cd "$package_dir" && npm publish --tag next --access public)
+          }
+
+          publish_npm_package dist/signetai-linux-x64
+          publish_npm_package dist/signetai-linux-arm64
+          publish_npm_package dist/signetai-darwin-x64
+          publish_npm_package dist/signetai-darwin-arm64
+          publish_npm_package dist/signetai-win32-x64
+          publish_npm_package dist/signetai
+          publish_npm_package integrations/openclaw/memory-adapter true
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_USERCONFIG: ${{ runner.temp }}/.npmrc

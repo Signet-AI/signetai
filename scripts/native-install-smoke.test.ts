@@ -183,23 +183,34 @@ describe("native install smoke", () => {
 		expect(existsSync(join(binDir, "signet"))).toBe(true);
 	});
 
-	test("npm wrapper postinstall downloads and launches the same native binary", async () => {
+	test("npm wrapper launches optional package binary with or without postinstall", async () => {
 		if (process.platform === "win32") return;
 
 		const dir = tempDir();
 		const packageDir = join(dir, "signetai");
+		const platform = platformKey();
+		const nativePackageDir = join(packageDir, "node_modules", "@signetai", `signetai-${platform}`);
+		const nativePackageBin = join(nativePackageDir, "bin", "signet");
 		mkdirSync(packageDir, { recursive: true });
+		mkdirSync(join(nativePackageDir, "bin"), { recursive: true });
 		cpSync(join(root, "dist", "signetai", "scripts"), join(packageDir, "scripts"), { recursive: true });
 		cpSync(join(root, "dist", "signetai", "bin"), join(packageDir, "bin"), { recursive: true });
 		writeFileSync(join(packageDir, "package.json"), readFileSync(join(root, "dist", "signetai", "package.json")));
+		writeFileSync(
+			join(nativePackageDir, "package.json"),
+			JSON.stringify({ name: `@signetai/signetai-${platform}`, version: "0.0.0-test", type: "module" }, null, 2),
+		);
+		writeFileSync(nativePackageBin, fakeNativeBinary());
+		chmodSync(nativePackageBin, 0o755);
 
-		const release = await serveNativeRelease(fakeNativeBinary());
-		const install = await runCommand("node", [join(packageDir, "scripts", "install-native.js")], {
-			...process.env,
-			SIGNET_DOWNLOAD_BASE: release.downloadBase,
-		});
+		const directWrapper = await runCommand("node", [join(packageDir, "bin", "signet.js"), "--version"], process.env);
+		expect(directWrapper.status).toBe(0);
+		expect(directWrapper.stdout).toContain("fake native signet --version");
+
+		const install = await runCommand("node", [join(packageDir, "scripts", "install-native.js")], process.env);
 
 		expect(install.status).toBe(0);
+		expect(install.stdout).toContain(`Linked Signet native binary for ${platform}`);
 		const installedBinary = join(packageDir, "native", "signet");
 		expect(existsSync(installedBinary)).toBe(true);
 		chmodSync(installedBinary, 0o755);

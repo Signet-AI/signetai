@@ -1,17 +1,17 @@
 # Signet
 
-This npm package is a thin installer wrapper for the same compiled Signet
-binary used by the curl installer and Bun global installs.
+This npm package is a thin wrapper for the same compiled Signet binary used by
+the curl installer and Bun global installs.
 
 ```bash
 npm install -g signetai
 bun add -g signetai
 ```
 
-During package installation, `postinstall` downloads Signet's release
-`native-manifest.json`, selects the native binary for your platform, verifies
-its SHA-256 checksum, and installs it under the package directory. The `signet`
-command then execs that binary directly.
+The package uses optional native packages to install the binary for your
+platform. `postinstall` only links or copies that already-installed binary into
+the package directory; if install scripts are disabled, the `signet` command can
+still resolve and execute the optional native package directly.
 
 The package does not install Bun, does not build Signet from source, and does
 not install runtime dependencies such as `better-sqlite3`.

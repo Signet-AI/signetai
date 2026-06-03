@@ -20,9 +20,19 @@ jobs:
           set -euo pipefail
           test -n "$NODE_AUTH_TOKEN"
           npm config set //registry.npmjs.org/:_authToken "$NODE_AUTH_TOKEN"
+          packages=(
+            "@signetai/signetai-linux-x64"
+            "@signetai/signetai-linux-arm64"
+            "@signetai/signetai-darwin-x64"
+            "@signetai/signetai-darwin-arm64"
+            "@signetai/signetai-win32-x64"
+            "signetai"
+            "@signetai/signet-memory-openclaw"
+          )
           npm view "signetai@${VERSION}" version >/dev/null
-          npm dist-tag add "signetai@${VERSION}" latest
-          npm dist-tag add "@signetai/signet-memory-openclaw@${VERSION}" latest || true
+          for package in "${packages[@]}"; do
+            npm dist-tag add "${package}@${VERSION}" latest || true
+          done
           gh release edit "v${VERSION}" --repo "$GITHUB_REPOSITORY" --prerelease=false --latest
           echo "Promoted v${VERSION} to stable/latest"
         env:

@@ -1,0 +1,20 @@
+{
+  "name": "@signetai/signetai-linux-arm64",
+  "version": "0.138.11",
+  "description": "Signet native binary for Linux arm64",
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "arm64"
+  ],
+  "files": [
+    "bin/signet",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "license": "Apache-2.0"
+}
