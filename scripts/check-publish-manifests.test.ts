@@ -47,6 +47,11 @@ describe("check-publish-manifests", () => {
 		}
 
 		expect(missingSources).toEqual([]);
+		expect(dockerfile).toContain("RUN bun run build:native-bun");
+		expect(dockerfile).toContain("COPY --from=build /app/dist/native/signet ./bin/signet");
+		expect(dockerfile).not.toContain("/app/dist/signetai/dist");
+		expect(dockerfile).not.toContain("/app/dist/signetai/dashboard");
+		expect(dockerfile).not.toContain("/app/dist/signetai/skills");
 	});
 
 	test("keeps Node daemon build banner from colliding with esbuild require helper", () => {
@@ -97,6 +102,7 @@ describe("check-publish-manifests", () => {
 		expect(buildScript).toContain("bun");
 		expect(buildScript).toContain("build");
 		expect(buildScript).toContain("--compile");
+		expect(buildScript).toContain('createRequire(join(root, "platform", "daemon", "package.json"))');
 		expect(buildScript).toContain("surfaces/cli/src/cli.ts");
 		expect(workflow).toContain("build-native:");
 		expect(workflow).toContain("platform: linux-x64");
@@ -142,6 +148,7 @@ describe("check-publish-manifests", () => {
 		expect(installer).toContain("native-manifest.json");
 		expect(installer).toContain("sha256sum");
 		expect(installer).toContain("shasum -a 256");
+		expect(installer).toContain("Published Signet native binaries: linux-x64, darwin-x64, darwin-arm64, win32-x64");
 		expect(installer).toContain('"$binary_path" install "$@"');
 		expect(installer).not.toContain("bun add -g signetai");
 		expect(installer).not.toContain("npm install -g signetai");
@@ -170,6 +177,7 @@ describe("check-publish-manifests", () => {
 		expect(bin).toContain('join(packageDir, "native"');
 		expect(installer).toContain("native-manifest.json");
 		expect(installer).toContain("createHash");
+		expect(installer).toContain('"linux-x64", "darwin-x64", "darwin-arm64", "win32-x64"');
 		expect(installer).not.toContain("better-sqlite3");
 	});
 

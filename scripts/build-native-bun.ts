@@ -12,9 +12,9 @@ import {
 	statSync,
 	writeFileSync,
 } from "node:fs";
+import { createRequire } from "node:module";
 import { arch, platform } from "node:os";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 
 const root = join(import.meta.dir, "..");
 const outDir = join(root, "dist", "native");
@@ -23,6 +23,7 @@ const workerDir = join(buildDir, "workers");
 const platformKey = process.env.SIGNET_NATIVE_PLATFORM ?? `${platform()}-${arch()}`;
 const binaryName = platform() === "win32" ? `signet-${platformKey}.exe` : `signet-${platformKey}`;
 const outfile = join(outDir, binaryName);
+const daemonRequire = createRequire(join(root, "platform", "daemon", "package.json"));
 
 mkdirSync(outDir, { recursive: true });
 rmSync(buildDir, { recursive: true, force: true });
@@ -100,7 +101,7 @@ const workerAssets = workerEntries.map(([name]) => ({
 	name,
 	contentBase64: readFileSync(join(workerDir, `${name}.cjs`)).toString("base64"),
 }));
-const transformersPackageJson = fileURLToPath(import.meta.resolve("@huggingface/transformers/package.json"));
+const transformersPackageJson = daemonRequire.resolve("@huggingface/transformers/package.json");
 const transformersDir = dirname(transformersPackageJson);
 const transformersWebRuntimePath = join(transformersDir, "dist", "transformers.web.js");
 const wasmAssets = ["ort-wasm-simd-threaded.jsep.wasm"].map((name) => ({

@@ -29,6 +29,7 @@ RUN bun run build:connector-pi
 RUN bun run build:deps
 RUN bun run build:dashboard
 RUN bun run build:signetai
+RUN bun run build:native-bun
 
 FROM oven/bun:1 AS runtime
 WORKDIR /app
@@ -37,17 +38,14 @@ ENV NODE_ENV=production
 ENV SIGNET_PATH=/data/agents
 ENV SIGNET_BIND=0.0.0.0
 ENV SIGNET_PORT=3850
+ENV SIGNET_DAEMON_ENTRYPOINT=1
 
-COPY --from=build /app/dist/signetai/package.json ./dist/signetai/package.json
-RUN cd /app/dist/signetai && bun install --production
-
-COPY --from=build /app/dist/signetai/dist ./dist/signetai/dist
-COPY --from=build /app/dist/signetai/dashboard ./dist/signetai/dashboard
-COPY --from=build /app/dist/signetai/skills ./dist/signetai/skills
+COPY --from=build /app/dist/native/signet ./bin/signet
+COPY --from=build /app/dist/signetai/templates ./dist/signetai/templates
 COPY deploy/docker/entrypoint.sh ./deploy/docker/entrypoint.sh
 COPY deploy/docker/scripts ./deploy/docker/scripts
 
-RUN chmod +x ./deploy/docker/entrypoint.sh ./deploy/docker/scripts/create-token.mjs ./deploy/docker/scripts/healthcheck.mjs
+RUN chmod +x ./bin/signet ./deploy/docker/entrypoint.sh ./deploy/docker/scripts/create-token.mjs ./deploy/docker/scripts/healthcheck.mjs
 
 EXPOSE 3850
 

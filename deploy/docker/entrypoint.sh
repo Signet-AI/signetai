@@ -27,4 +27,4 @@ if [ -d "$tpl/skills" ] && [ ! -d "$root/skills" ]; then
 	cp -R "$tpl/skills/." "$root/skills/"
 fi
 
-exec bun /app/dist/signetai/dist/daemon.js
+exec /app/bin/signet

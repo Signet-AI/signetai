@@ -247,6 +247,10 @@ signet setup               # interactive setup wizard
 curl, npm, and Bun all install the same compiled Signet binary. The npm and
 Bun package-manager paths are thin wrappers around the native binary installer;
 they do not install Bun, rebuild Signet, or install daemon dependencies.
+Published native binaries currently cover Linux x64, macOS x64, macOS arm64,
+and Windows x64. Windows direct installs should use `npm install -g signetai`;
+the old PowerShell `install.ps1` path has been removed until a native Windows
+direct installer ships.
 
 The wizard initializes `$SIGNET_WORKSPACE/`, configures your harnesses, sets up
 an embedding provider, creates the database, and starts the daemon.

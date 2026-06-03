@@ -42,6 +42,10 @@ if [ "$os" = "darwin" ] && [ "$cpu" = "x64" ] && [ "$(sysctl -n sysctl.proc_tran
 fi
 
 platform="${os}-${cpu}"
+case "$platform" in
+	linux-x64 | darwin-x64 | darwin-arm64 | win32-x64) ;;
+	*) echo "Unsupported platform: $platform. Published Signet native binaries: linux-x64, darwin-x64, darwin-arm64, win32-x64" >&2; exit 1 ;;
+esac
 asset="signet-${platform}"
 [ "$os" = "win32" ] && asset="${asset}.exe"
 

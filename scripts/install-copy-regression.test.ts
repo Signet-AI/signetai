@@ -38,6 +38,7 @@ describe("install copy", () => {
 
 		expect(installer).toContain("native-manifest.json");
 		expect(installer).toContain('"$binary_path" install "$@"');
+		expect(installer).toContain("Published Signet native binaries: linux-x64, darwin-x64, darwin-arm64, win32-x64");
 		expect(installer).toContain("sha256sum");
 		expect(installer).not.toContain("releases/download/bundle-latest");
 		expect(installer).not.toContain("bun add -g signetai");
@@ -60,6 +61,7 @@ describe("install copy", () => {
 		expect(wrapper).toContain('join(packageDir, "native"');
 		expect(installer).toContain("native-manifest.json");
 		expect(installer).toContain("createHash");
+		expect(installer).toContain('"linux-x64", "darwin-x64", "darwin-arm64", "win32-x64"');
 		expect(installer).toContain("Skipping Signet native binary download in workspace install");
 		expect(installer).not.toContain("bun.sh/install");
 		expect(installer).not.toContain("better-sqlite3");
