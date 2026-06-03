@@ -825,6 +825,8 @@ function createOpenAiLikeStreamResult(res: Response, cancel: () => void): LlmPro
 
 			const decoder = new TextDecoder();
 			let buffer = "";
+			let reasoningText = "";
+			let emittedContent = false;
 
 			try {
 				while (true) {
@@ -845,6 +847,10 @@ function createOpenAiLikeStreamResult(res: Response, cancel: () => void): LlmPro
 
 						const payload = dataLines.join("\n");
 						if (payload === "[DONE]") {
+							if (!emittedContent && reasoningText.length > 0) {
+								fullText = reasoningText;
+								controller.enqueue({ type: "text-delta", text: reasoningText });
+							}
 							finished = true;
 							controller.enqueue({ type: "done", text: fullText, usage });
 							controller.close();
@@ -864,11 +870,14 @@ function createOpenAiLikeStreamResult(res: Response, cancel: () => void): LlmPro
 						const first = choices[0];
 						if (typeof first === "object" && first !== null && "delta" in first) {
 							const delta = first.delta;
-							if (typeof delta === "object" && delta !== null && "content" in delta) {
-								const text = extractOpenAiLikeText(delta.content);
-								if (text.length > 0) {
-									fullText += text;
-									controller.enqueue({ type: "text-delta", text });
+							if (typeof delta === "object" && delta !== null) {
+								const deltaText = "content" in delta ? extractOpenAiLikeText(delta.content) : "";
+								if (deltaText.length > 0) {
+									emittedContent = true;
+									fullText += deltaText;
+									controller.enqueue({ type: "text-delta", text: deltaText });
+								} else if (!emittedContent && "reasoning_content" in delta) {
+									reasoningText += typeof delta.reasoning_content === "string" ? delta.reasoning_content : "";
 								}
 							}
 						}
@@ -1394,6 +1403,9 @@ export interface OpenAiCompatibleProviderConfig {
 	readonly baseUrl: string;
 	readonly apiKey?: string;
 	readonly defaultTimeoutMs: number;
+	/** When true, sends thinking: { type: "disabled" } to suppress reasoning
+	 *  token spend on models that support it (DeepSeek V4, Qwen3, etc.). */
+	readonly disableThinking?: boolean;
 }
 
 export function createOpenAiCompatibleProvider(config: OpenAiCompatibleProviderConfig): StreamCapableLlmProvider {
@@ -1407,14 +1419,18 @@ export function createOpenAiCompatibleProvider(config: OpenAiCompatibleProviderC
 		const timeoutMs = opts?.timeoutMs ?? config.defaultTimeoutMs;
 		const abort = createAbortBundle(timeoutMs, opts?.abortSignal);
 		try {
+			const bodyObj: Record<string, unknown> = {
+				model: config.model,
+				messages: [{ role: "user", content: prompt }],
+				max_tokens: opts?.maxTokens ?? 4096,
+			};
+			if (config.disableThinking) {
+				bodyObj.thinking = { type: "disabled" };
+			}
 			const res = await fetch(`${baseUrl}/chat/completions`, {
 				method: "POST",
 				headers: headers(),
-				body: JSON.stringify({
-					model: config.model,
-					messages: [{ role: "user", content: prompt }],
-					max_tokens: opts?.maxTokens ?? 4096,
-				}),
+				body: JSON.stringify(bodyObj),
 				signal: abort.signal,
 			});
 			if (!res.ok) {
@@ -1422,7 +1438,12 @@ export function createOpenAiCompatibleProvider(config: OpenAiCompatibleProviderC
 				throw new Error(`${config.name} HTTP ${res.status}: ${detail}`);
 			}
 			const body = (await res.json()) as {
-				choices?: Array<{ message?: { content?: string | Array<{ text?: string; type?: string }> } }>;
+				choices?: Array<{
+					message?: {
+						content?: string | Array<{ text?: string; type?: string }>;
+						reasoning_content?: string;
+					};
+				}>;
 				usage?: {
 					prompt_tokens?: number;
 					completion_tokens?: number;
@@ -1430,9 +1451,14 @@ export function createOpenAiCompatibleProvider(config: OpenAiCompatibleProviderC
 					cached_tokens?: number;
 				};
 			};
-			const text = extractOpenAiLikeText(body.choices?.[0]?.message?.content);
+			let text = extractOpenAiLikeText(body.choices?.[0]?.message?.content);
 			if (!text.trim()) {
-				throw new Error(`${config.name} returned empty response`);
+				// Reasoning models may exhaust the max_tokens budget on
+				// reasoning_content before emitting content. Fall back to
+				// reasoning_content so the caller gets usable output instead
+				// of "returned empty response".
+				text = (body.choices?.[0]?.message?.reasoning_content ?? "").trim();
+				if (!text) throw new Error(`${config.name} returned empty response`);
 			}
 			return {
 				text,
@@ -1470,16 +1496,20 @@ export function createOpenAiCompatibleProvider(config: OpenAiCompatibleProviderC
 			const timeoutMs = opts?.timeoutMs ?? config.defaultTimeoutMs;
 			const abort = createAbortBundle(timeoutMs, opts?.abortSignal);
 			try {
+				const streamBody: Record<string, unknown> = {
+					model: config.model,
+					messages: [{ role: "user", content: prompt }],
+					max_tokens: opts?.maxTokens ?? 4096,
+					stream: true,
+					stream_options: { include_usage: true },
+				};
+				if (config.disableThinking) {
+					streamBody.thinking = { type: "disabled" };
+				}
 				const res = await fetch(`${baseUrl}/chat/completions`, {
 					method: "POST",
 					headers: headers(),
-					body: JSON.stringify({
-						model: config.model,
-						messages: [{ role: "user", content: prompt }],
-						max_tokens: opts?.maxTokens ?? 4096,
-						stream: true,
-						stream_options: { include_usage: true },
-					}),
+					body: JSON.stringify(streamBody),
 					signal: abort.signal,
 				});
 				if (!res.ok) {

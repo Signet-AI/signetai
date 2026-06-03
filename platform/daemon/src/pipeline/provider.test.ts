@@ -12,6 +12,7 @@ import { getBypassedSessionKeys, resetSessions } from "../session-tracker";
 import {
 	DEFAULT_OLLAMA_FALLBACK_MAX_CONTEXT_TOKENS,
 	LlmConcurrencySemaphore,
+	type LlmProviderStreamEvent,
 	SemaphoreTimeoutError,
 	awaitSubprocessWithDeadline,
 	createAcpxProvider,
@@ -19,6 +20,7 @@ import {
 	createCodexProvider,
 	createLlamaCppProvider,
 	createOllamaProvider,
+	createOpenAiCompatibleProvider,
 	createOpenCodeProvider,
 	createOpenRouterProvider,
 	resolveDefaultOllamaFallbackMaxContextTokens,
@@ -51,6 +53,21 @@ function streamFromString(value: string): ReadableStream<Uint8Array> {
 			controller.close();
 		},
 	});
+}
+
+async function collectStreamEvents(stream: ReadableStream<LlmProviderStreamEvent>): Promise<LlmProviderStreamEvent[]> {
+	const reader = stream.getReader();
+	const events: LlmProviderStreamEvent[] = [];
+	try {
+		while (true) {
+			const next = await reader.read();
+			if (next.done) break;
+			events.push(next.value);
+		}
+	} finally {
+		reader.releaseLock();
+	}
+	return events;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -717,6 +734,117 @@ describe("createOllamaProvider", () => {
 });
 
 // ---------------------------------------------------------------------------
+// OpenAI-compatible provider
+// ---------------------------------------------------------------------------
+
+describe("createOpenAiCompatibleProvider", () => {
+	afterEach(() => restoreFetch());
+
+	it("buffers streaming reasoning_content when content arrives later", async () => {
+		mockFetch(async (_url, init) => {
+			const body = parseJsonObjectBody(init?.body);
+			expect(body.stream).toBe(true);
+			return new Response(
+				streamFromString(
+					[
+						'data: {"choices":[{"delta":{"reasoning_content":"scratchpad "}}]}',
+						"",
+						'data: {"choices":[{"delta":{"reasoning_content":"thinking"}}]}',
+						"",
+						'data: {"choices":[{"delta":{"content":"final answer"}}]}',
+						"",
+						'data: {"choices":[],"usage":{"prompt_tokens":3,"completion_tokens":4}}',
+						"",
+						"data: [DONE]",
+						"",
+						"",
+					].join("\n"),
+				),
+			);
+		});
+
+		const provider = createOpenAiCompatibleProvider({
+			name: "test-compatible",
+			model: "reasoner",
+			baseUrl: "https://example.test/v1",
+			defaultTimeoutMs: 1_000,
+		});
+		if (!provider.streamWithUsage) {
+			throw new Error("expected streamWithUsage on OpenAI-compatible provider");
+		}
+
+		const result = await provider.streamWithUsage("test");
+		const events = await collectStreamEvents(result.stream);
+
+		expect(events).toEqual([
+			{ type: "text-delta", text: "final answer" },
+			{
+				type: "done",
+				text: "final answer",
+				usage: {
+					inputTokens: 3,
+					outputTokens: 4,
+					cacheReadTokens: null,
+					cacheCreationTokens: null,
+					totalCost: null,
+					totalDurationMs: null,
+				},
+			},
+		]);
+	});
+
+	it("falls back to buffered streaming reasoning_content when no content arrives", async () => {
+		mockFetch(
+			async () =>
+				new Response(
+					streamFromString(
+						[
+							'data: {"choices":[{"delta":{"reasoning_content":"reasoned "}}]}',
+							"",
+							'data: {"choices":[{"delta":{"reasoning_content":"fallback"}}]}',
+							"",
+							'data: {"choices":[],"usage":{"prompt_tokens":5,"completion_tokens":6}}',
+							"",
+							"data: [DONE]",
+							"",
+							"",
+						].join("\n"),
+					),
+				),
+		);
+
+		const provider = createOpenAiCompatibleProvider({
+			name: "test-compatible",
+			model: "reasoner",
+			baseUrl: "https://example.test/v1",
+			defaultTimeoutMs: 1_000,
+		});
+		if (!provider.streamWithUsage) {
+			throw new Error("expected streamWithUsage on OpenAI-compatible provider");
+		}
+
+		const result = await provider.streamWithUsage("test");
+		const events = await collectStreamEvents(result.stream);
+
+		expect(events).toEqual([
+			{ type: "text-delta", text: "reasoned fallback" },
+			{
+				type: "done",
+				text: "reasoned fallback",
+				usage: {
+					inputTokens: 5,
+					outputTokens: 6,
+					cacheReadTokens: null,
+					cacheCreationTokens: null,
+					totalCost: null,
+					totalDurationMs: null,
+				},
+			},
+		]);
+	});
+});
+
+// ---------------------------------------------------------------------------
 // Claude Code provider
 // ---------------------------------------------------------------------------
 
@@ -1272,12 +1400,15 @@ describe("createOpenCodeProvider", () => {
 		);
 
 		const provider = createOpenCodeProvider({ baseUrl: "http://localhost:9999" });
-		const result = await provider.generateWithUsage!("test");
+		if (!provider.generateWithUsage) {
+			throw new Error("expected generateWithUsage on OpenCode provider");
+		}
+		const result = await provider.generateWithUsage("test");
 		expect(result.text).toBe("result");
 		expect(result.usage).not.toBeNull();
-		expect(result.usage!.inputTokens).toBe(100);
-		expect(result.usage!.outputTokens).toBe(25);
-		expect(result.usage!.totalCost).toBe(0.0042);
+		expect(result.usage?.inputTokens).toBe(100);
+		expect(result.usage?.outputTokens).toBe(25);
+		expect(result.usage?.totalCost).toBe(0.0042);
 	});
 
 	it("generate() throws on non-200 non-retryable status", async () => {
@@ -2811,44 +2942,44 @@ describe("createOpenCodeProvider — nested semaphore deadlock in fallback", () 
 		const N = 4; // matches DEFAULT_MAX_LLM_CONCURRENCY
 		let postCount = 0;
 
-
-		mockFetch(withParentSession(async (url, init) => {
-			// Session creation
-			if (url.includes("/session") && !url.includes("/message")) {
-				return Response.json({
-					id: `ses_deadlock_${postCount}`,
-					slug: "test",
-					projectID: "p",
-					directory: "/tmp",
-					title: "test",
-					version: "1",
-				});
-			}
-			// Ollama availability check
-			if (url.includes("/api/tags")) {
-				return Response.json({ models: [{ name: "qwen3:4b" }] });
-			}
-			// Ollama fallback generate
-			if (url.includes("/api/generate")) {
-				await new Promise((r) => setTimeout(r, 20));
-				return Response.json({
-					response: JSON.stringify({ result: "fallback-ok" }),
-					prompt_eval_count: 10,
-					eval_count: 5,
-				});
-			}
-			// OpenCode message POST — always return malformed (empty body)
-			if (init?.method === "POST" && url.includes("/message")) {
-				postCount++;
-				return new Response("", {
-					status: 200,
-					headers: { "Content-Type": "application/json" },
-				});
-			}
-			// GET polls — empty array to trigger malformed path
-			return Response.json([]);
-		}));
-
+		mockFetch(
+			withParentSession(async (url, init) => {
+				// Session creation
+				if (url.includes("/session") && !url.includes("/message")) {
+					return Response.json({
+						id: `ses_deadlock_${postCount}`,
+						slug: "test",
+						projectID: "p",
+						directory: "/tmp",
+						title: "test",
+						version: "1",
+					});
+				}
+				// Ollama availability check
+				if (url.includes("/api/tags")) {
+					return Response.json({ models: [{ name: "qwen3:4b" }] });
+				}
+				// Ollama fallback generate
+				if (url.includes("/api/generate")) {
+					await new Promise((r) => setTimeout(r, 20));
+					return Response.json({
+						response: JSON.stringify({ result: "fallback-ok" }),
+						prompt_eval_count: 10,
+						eval_count: 5,
+					});
+				}
+				// OpenCode message POST — always return malformed (empty body)
+				if (init?.method === "POST" && url.includes("/message")) {
+					postCount++;
+					return new Response("", {
+						status: 200,
+						headers: { "Content-Type": "application/json" },
+					});
+				}
+				// GET polls — empty array to trigger malformed path
+				return Response.json([]);
+			}),
+		);
 
 		const providers = Array.from({ length: N }, () =>
 			createOpenCodeProvider({
