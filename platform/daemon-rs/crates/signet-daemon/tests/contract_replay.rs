@@ -10,6 +10,7 @@
 
 use std::io::{Cursor, Read, Write};
 use std::net::TcpListener;
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use base64::Engine;
@@ -22,6 +23,7 @@ use signet_core::db::register_vec_extension;
 
 type HmacSha256 = Hmac<Sha256>;
 const AUTH_SECRET: &[u8] = b"contract-replay-auth-secret-32bytes";
+static TEST_SERVER_START_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
 
 #[derive(Debug)]
 struct SkillGraphRow {
@@ -123,6 +125,7 @@ impl TestServer {
     where
         F: FnOnce(&std::path::Path),
     {
+        let _start_guard = test_server_start_lock().lock().await;
         let tmpdir = tempfile::tempdir().expect("failed to create tmpdir");
         let port = ephemeral_port();
         let base = format!("http://127.0.0.1:{port}");
@@ -1587,6 +1590,10 @@ fn ephemeral_port() -> u16 {
         .local_addr()
         .unwrap()
         .port()
+}
+
+fn test_server_start_lock() -> &'static tokio::sync::Mutex<()> {
+    TEST_SERVER_START_LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
 }
 
 fn write_fake_provider_bins(
