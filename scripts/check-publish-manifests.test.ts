@@ -150,7 +150,7 @@ describe("check-publish-manifests", () => {
 			workflow.indexOf("bun scripts/check-publish-manifests.ts"),
 		);
 		expect(workflow.indexOf("bun scripts/check-publish-manifests.ts")).toBeLessThan(
-			workflow.indexOf('gh release edit "v${NEW_VERSION}" --draft=false'),
+			workflow.indexOf("publish_npm_package dist/signetai-linux-x64"),
 		);
 		expect(workflow).toContain('stage_platform_package "linux-x64" "signet-linux-x64" "signet"');
 		expect(workflow).toContain('stage_platform_package "linux-arm64" "signet-linux-arm64" "signet"');
@@ -169,8 +169,8 @@ describe("check-publish-manifests", () => {
 		expect(workflow).toContain("NPM_CONFIG_USERCONFIG: ${{ runner.temp }}/.npmrc");
 		expect(workflow).toContain("npm publish --tag next --access public");
 		expect(workflow).toContain('gh release edit "v${NEW_VERSION}" --draft=false');
-		expect(workflow.indexOf('gh release edit "v${NEW_VERSION}" --draft=false')).toBeLessThan(
-			workflow.indexOf("publish_npm_package dist/signetai-linux-x64"),
+		expect(workflow.indexOf("publish_npm_package dist/signetai\n")).toBeLessThan(
+			workflow.indexOf('gh release edit "v${NEW_VERSION}" --draft=false'),
 		);
 		expect(workflow).not.toContain("npm publish --access public");
 		expect(workflow).not.toContain("bundle-latest");
