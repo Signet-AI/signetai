@@ -5,9 +5,11 @@ import { join } from "node:path";
 
 import {
 	collectManifestIssues,
+	collectNativeManifestIssues,
 	collectWorkspacePackages,
 	isPublishableWorkspacePackage,
 	listPublishableManifestTargets,
+	parseSupportedNativePlatforms,
 } from "./check-publish-manifests";
 
 function writeJson(file: string, value: unknown): void {
@@ -119,6 +121,8 @@ describe("check-publish-manifests", () => {
 		expect(workflow).toContain("asset: signet-linux-arm64");
 		expect(workflow).toContain("platform: darwin-x64");
 		expect(workflow).toContain("asset: signet-darwin-x64");
+		expect(workflow).toContain("os: macos-15-intel");
+		expect(workflow).not.toContain("os: macos-13");
 		expect(workflow).toContain("platform: darwin-arm64");
 		expect(workflow).toContain("asset: signet-darwin-arm64");
 		expect(workflow).toContain("platform: win32-x64");
@@ -140,6 +144,12 @@ describe("check-publish-manifests", () => {
 		expect(workflow).toContain('gh release download "v${NEW_VERSION}" --pattern "signet-*"');
 		expect(workflow).toContain('SIGNET_VERSION="$NEW_VERSION" bun scripts/generate-native-manifest.ts');
 		expect(workflow).toContain("dist/native/native-manifest.json");
+		expect(workflow.indexOf('SIGNET_VERSION="$NEW_VERSION" bun scripts/generate-native-manifest.ts')).toBeLessThan(
+			workflow.indexOf("bun scripts/check-publish-manifests.ts"),
+		);
+		expect(workflow.indexOf("bun scripts/check-publish-manifests.ts")).toBeLessThan(
+			workflow.indexOf('gh release edit "v${NEW_VERSION}" --draft=false'),
+		);
 		expect(workflow).toContain('CURRENT=$(npm view "signetai@${NEW_VERSION}" version 2>/dev/null || echo "0.0.0")');
 		expect(workflow).toContain('npm dist-tag add "signetai@${NEW_VERSION}" next');
 		expect(workflow).toContain('npm dist-tag add "@signetai/signet-memory-openclaw@${NEW_VERSION}" next || true');
@@ -159,6 +169,59 @@ describe("check-publish-manifests", () => {
 		expect(promoteWorkflow).toContain("NPM_CONFIG_USERCONFIG: ${{ runner.temp }}/.npmrc");
 		expect(manifestScript).toContain('name.endsWith(".sha256")');
 		expect(manifestScript).toContain("native-manifest.json");
+	});
+
+	test("validates generated native manifest coverage against the npm wrapper", () => {
+		const installerSource = `
+			const supportedPlatforms = new Set([
+				"linux-x64",
+				"linux-arm64",
+				"darwin-x64",
+				"darwin-arm64",
+				"win32-x64",
+			]);
+		`;
+		const supportedPlatforms = parseSupportedNativePlatforms(installerSource);
+		const validSha = "a".repeat(64);
+
+		expect(supportedPlatforms).toEqual(["darwin-arm64", "darwin-x64", "linux-arm64", "linux-x64", "win32-x64"]);
+		expect(
+			collectNativeManifestIssues(
+				{
+					schemaVersion: 1,
+					version: "0.1.0",
+					assets: supportedPlatforms.map((platform) => ({
+						name: platform.startsWith("win32-") ? `signet-${platform}.exe` : `signet-${platform}`,
+						platform,
+						sha256: validSha,
+						size: 1,
+					})),
+				},
+				supportedPlatforms,
+			),
+		).toEqual([]);
+
+		expect(
+			collectNativeManifestIssues(
+				{
+					schemaVersion: 1,
+					version: "0.1.0",
+					assets: [
+						{
+							name: "signet-linux-x64",
+							platform: "linux-x64",
+							sha256: validSha,
+							size: 1,
+						},
+					],
+				},
+				supportedPlatforms,
+			),
+		).toContainEqual({
+			file: "dist/native/native-manifest.json",
+			reason:
+				"platforms must match npm wrapper support: expected darwin-arm64, darwin-x64, linux-arm64, linux-x64, win32-x64, got linux-x64",
+		});
 	});
 
 	test("keeps curl install as a thin verified native-binary downloader", () => {

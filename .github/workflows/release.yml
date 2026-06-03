@@ -171,7 +171,7 @@ jobs:
           - os: ubuntu-latest
             platform: linux-arm64
             asset: signet-linux-arm64
-          - os: macos-13
+          - os: macos-15-intel
             platform: darwin-x64
             asset: signet-darwin-x64
           - os: macos-14
@@ -248,9 +248,6 @@ jobs:
       - name: Build
         run: bun run build
 
-      - name: Validate publish manifests
-        run: bun scripts/check-publish-manifests.ts
-
       - name: Download native release assets
         run: |
           mkdir -p dist/native
@@ -290,6 +287,9 @@ jobs:
           gh release upload "v${NEW_VERSION}" dist/native/native-manifest.json --clobber
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Validate publish manifests
+        run: bun scripts/check-publish-manifests.ts
 
       - name: Publish release
         # Undraft after release assets and manifest checks pass. The npm
