@@ -9010,6 +9010,101 @@ async fn ontology_duplicate_repair_builds_and_writes_merge_candidates() {
 
 #[tokio::test]
 #[ignore = "requires built daemon binary"]
+async fn ontology_merge_plan_previews_writes_and_blocks_seeded_merges() {
+    let server = TestServer::start().await;
+    server.seed_ontology_duplicate_repair_fixture();
+
+    let resp = server
+        .post(
+            "/api/ontology/proposals/repair/merge-plan",
+            json!({
+                "target_entity_id": "entity-dup-signet",
+                "source_entity_ids": ["entity-dup-signet-upper"]
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["dryRun"], true);
+    assert_eq!(body["operation"], "merge_entities");
+    assert_eq!(body["target"]["name"], "Signet");
+    assert_eq!(body["sources"][0]["name"], "SIGNET");
+    assert_eq!(body["payload"]["repair_kind"], "manual_entity_merge");
+    assert_eq!(body["payload"]["target_entity_id"], "entity-dup-signet");
+    assert_eq!(
+        body["payload"]["source_entity_ids"],
+        json!(["entity-dup-signet-upper"])
+    );
+    assert_eq!(body["impact"]["aspects"], 1);
+    assert!(body.get("proposal").is_none());
+
+    let resp = server
+        .post(
+            "/api/ontology/proposals/repair/merge-plan",
+            json!({
+                "target_entity_id": "entity-dup-signet",
+                "source_entity_ids": ["entity-dup-signet-ai"],
+                "write_proposal": true,
+                "created_by": "merge-plan-test"
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["dryRun"], false);
+    assert_eq!(body["proposal"]["operation"], "merge_entities");
+    assert_eq!(body["proposal"]["createdBy"], "merge-plan-test");
+    assert_eq!(
+        body["proposal"]["payload"]["target_entity_id"],
+        "entity-dup-signet"
+    );
+    assert_eq!(
+        body["proposal"]["payload"]["source_entity_ids"],
+        json!(["entity-dup-signet-ai"])
+    );
+
+    let resp = server
+        .post(
+            "/api/ontology/proposals/repair/merge-plan",
+            json!({
+                "target_entity_id": "entity-dup-mixed-project",
+                "source_entity_ids": ["entity-dup-mixed-skill"],
+                "write_proposal": true,
+                "created_by": "merge-plan-test"
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["blocked"], true);
+    assert_eq!(body["dryRun"], true);
+    assert!(body.get("proposal").is_none());
+    assert!(
+        body["warnings"][0]
+            .as_str()
+            .unwrap_or_default()
+            .contains("differs from target type")
+    );
+
+    let resp = server
+        .post(
+            "/api/ontology/proposals/repair/merge-plan?agent_id=other-agent",
+            json!({
+                "target_entity_id": "entity-dup-signet",
+                "source_entity_ids": ["entity-dup-signet-upper"]
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 404);
+    let body = server.json(resp).await;
+    assert_eq!(
+        body["error"],
+        "payload.target_entity_id was not found: entity-dup-signet"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
 async fn plugin_ontology_telemetry_compat_endpoints() {
     let server = TestServer::start().await;
 
@@ -9574,5 +9669,5 @@ async fn ontology_assertions_aliases_operations_replay_missing_cluster() {
         .await;
     assert_eq!(resp.status(), 400);
     let body = server.json(resp).await;
-    assert_eq!(body["error"], "target entity is required");
+    assert_eq!(body["error"], "payload.target_entity is required");
 }

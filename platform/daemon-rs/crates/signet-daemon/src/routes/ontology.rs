@@ -678,6 +678,115 @@ fn read_duplicate_entity_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Duplic
     })
 }
 
+fn entity_ref_by_id(
+    conn: &rusqlite::Connection,
+    agent_id: &str,
+    id: &str,
+) -> Result<Option<DuplicateEntityRow>, CoreError> {
+    conn.query_row(
+        "SELECT id, name, canonical_name, entity_type,
+                COALESCE(mentions, 0) AS mentions,
+                COALESCE(pinned, 0) AS pinned,
+                updated_at
+         FROM entities
+         WHERE agent_id = ?1
+           AND COALESCE(status, 'active') = 'active'
+           AND id = ?2
+         LIMIT 1",
+        rusqlite::params![agent_id, id],
+        read_duplicate_entity_row,
+    )
+    .optional()
+    .map_err(Into::into)
+}
+
+fn resolve_entity_ref_strict(
+    conn: &rusqlite::Connection,
+    agent_id: &str,
+    selector: &str,
+) -> Result<DuplicateEntityRow, CoreError> {
+    let key = canonical(selector);
+    let rows = conn
+        .prepare(
+            "SELECT id, name, canonical_name, entity_type,
+                    COALESCE(mentions, 0) AS mentions,
+                    COALESCE(pinned, 0) AS pinned,
+                    updated_at
+             FROM entities
+             WHERE agent_id = ?1
+               AND COALESCE(status, 'active') = 'active'
+               AND (id = ?2 OR COALESCE(canonical_name, LOWER(name)) = ?3 OR LOWER(name) = ?4)
+             ORDER BY CASE WHEN id = ?5 THEN 0 ELSE 1 END, updated_at DESC, name ASC",
+        )?
+        .query_map(
+            rusqlite::params![agent_id, selector, key, key, selector],
+            read_duplicate_entity_row,
+        )?
+        .collect::<Result<Vec<_>, _>>()?;
+    match rows.len() {
+        0 => Err(CoreError::NotFound(format!("Entity not found: {selector}"))),
+        1 => Ok(rows.into_iter().next().expect("one entity row")),
+        _ => Err(CoreError::Conflict(format!(
+            "Entity selector is ambiguous: {selector}. Use an id."
+        ))),
+    }
+}
+
+fn selector_matches_entity_ref(selector: &str, entity: &DuplicateEntityRow) -> bool {
+    let key = canonical(selector);
+    selector == entity.id
+        || key == canonical(&entity.name)
+        || key == canonical(entity.canonical_name.as_deref().unwrap_or(&entity.name))
+}
+
+fn resolve_merge_entity_ref(
+    conn: &rusqlite::Connection,
+    agent_id: &str,
+    field: &str,
+    selector: Option<String>,
+    id: Option<String>,
+) -> Result<DuplicateEntityRow, CoreError> {
+    match id {
+        Some(id) => {
+            let entity = entity_ref_by_id(conn, agent_id, &id)?
+                .ok_or_else(|| CoreError::NotFound(format!("{field}_id was not found: {id}")))?;
+            if selector
+                .as_deref()
+                .is_some_and(|value| !selector_matches_entity_ref(value, &entity))
+            {
+                return Err(CoreError::Conflict(format!(
+                    "{field}_id does not match {field}"
+                )));
+            }
+            Ok(entity)
+        }
+        None => {
+            let selector =
+                selector.ok_or_else(|| CoreError::Invalid(format!("{field} is required")))?;
+            resolve_entity_ref_strict(conn, agent_id, &selector)
+        }
+    }
+}
+
+fn read_body_string_array(body: &JsonValue, key: &str) -> Vec<String> {
+    body.get(key)
+        .and_then(JsonValue::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(JsonValue::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
+fn read_body_bool(body: &JsonValue, key: &str) -> Option<bool> {
+    body.get(key).and_then(JsonValue::as_bool)
+}
+
 fn read_payload_string(payload: &JsonValue, key: &str) -> Option<String> {
     payload
         .get(key)
@@ -1196,6 +1305,174 @@ fn duplicate_merge_impact(
         "attributes": attributes,
         "dependencies": dependencies,
         "relations": relations,
+    }))
+}
+
+fn merge_warnings(
+    target: &DuplicateEntityRow,
+    sources: &[DuplicateEntityRow],
+    force: bool,
+) -> (Vec<String>, bool, &'static str) {
+    let mut warnings = Vec::new();
+    for source in sources {
+        if source.pinned {
+            warnings.push(format!("source entity \"{}\" is pinned", source.name));
+        }
+        if source.entity_type != target.entity_type {
+            warnings.push(format!(
+                "source entity \"{}\" type {} differs from target type {}",
+                source.name, source.entity_type, target.entity_type
+            ));
+        }
+    }
+    if warnings.is_empty() {
+        (warnings, false, "low")
+    } else {
+        (
+            warnings,
+            !force,
+            if force { "review_required" } else { "blocked" },
+        )
+    }
+}
+
+fn merge_plan_payload(
+    target: &DuplicateEntityRow,
+    sources: &[DuplicateEntityRow],
+    force: bool,
+    repair_kind: &str,
+) -> JsonValue {
+    let mut payload = json!({
+        "repair_kind": repair_kind,
+        "target_entity": target.name,
+        "target_entity_id": target.id,
+        "source_entities": sources.iter().map(|source| source.name.clone()).collect::<Vec<_>>(),
+        "source_entity_ids": sources.iter().map(|source| source.id.clone()).collect::<Vec<_>>(),
+    });
+    if force {
+        payload["force"] = JsonValue::Bool(true);
+    }
+    payload
+}
+
+fn build_entity_merge_plan(
+    conn: &rusqlite::Connection,
+    agent_id: &str,
+    body: &JsonValue,
+    repair_kind: &str,
+) -> Result<JsonValue, CoreError> {
+    let target_selector =
+        read_body_string(body, "target_entity").or_else(|| read_body_string(body, "target"));
+    let target_id =
+        read_body_string(body, "target_entity_id").or_else(|| read_body_string(body, "target_id"));
+    let target = resolve_merge_entity_ref(
+        conn,
+        agent_id,
+        "payload.target_entity",
+        target_selector,
+        target_id,
+    )?;
+
+    let source_entities = {
+        let values = read_body_string_array(body, "source_entities");
+        if values.is_empty() {
+            read_body_string_array(body, "sources")
+        } else {
+            values
+        }
+    };
+    let source_entity_ids = {
+        let values = read_body_string_array(body, "source_entity_ids");
+        if values.is_empty() {
+            read_body_string_array(body, "source_ids")
+        } else {
+            values
+        }
+    };
+    if !source_entity_ids.is_empty() && source_entities.len() > source_entity_ids.len() {
+        return Err(CoreError::Invalid(
+            "sourceEntities and sourceEntityIds must match".to_string(),
+        ));
+    }
+    let specs = if source_entity_ids.is_empty() {
+        source_entities
+            .into_iter()
+            .map(|selector| (Some(selector), None))
+            .collect::<Vec<_>>()
+    } else {
+        source_entity_ids
+            .into_iter()
+            .enumerate()
+            .map(|(idx, id)| (source_entities.get(idx).cloned(), Some(id)))
+            .collect::<Vec<_>>()
+    };
+    if specs.is_empty() {
+        return Err(CoreError::Invalid(
+            "source entities are required".to_string(),
+        ));
+    }
+
+    let resolved = specs
+        .into_iter()
+        .map(|(selector, id)| {
+            resolve_merge_entity_ref(conn, agent_id, "payload.source_entity", selector, id)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut seen = std::collections::HashSet::new();
+    let sources = resolved
+        .into_iter()
+        .filter(|source| source.id != target.id)
+        .filter(|source| seen.insert(source.id.clone()))
+        .collect::<Vec<_>>();
+    if sources.is_empty() {
+        return Err(CoreError::Invalid(
+            "No distinct source entities to merge".to_string(),
+        ));
+    }
+
+    let force = read_body_bool(body, "force").unwrap_or(false);
+    let (warnings, blocked, risk) = merge_warnings(&target, &sources, force);
+    let target_key = duplicate_entity_key(&target);
+    let evidence = body
+        .get("evidence")
+        .and_then(JsonValue::as_array)
+        .cloned()
+        .unwrap_or_else(|| {
+            vec![json!({
+                "source_kind": "ontology_index",
+                "source_id": format!("entities:{target_key}"),
+                "quote": format!(
+                    "Merge {} into {}.",
+                    sources.iter().map(|source| source.name.as_str()).collect::<Vec<_>>().join(", "),
+                    target.name
+                ),
+            })]
+        });
+    let rationale = read_body_string(body, "rationale")
+        .or_else(|| read_body_string(body, "reason"))
+        .unwrap_or_else(|| {
+            format!(
+                "Merge {} into \"{}\".",
+                sources
+                    .iter()
+                    .map(|source| format!("\"{}\"", source.name))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                target.name
+            )
+        });
+    Ok(json!({
+        "operation": "merge_entities",
+        "target": duplicate_entity_ref(&target, &target_key),
+        "sources": sources.iter().map(|source| duplicate_entity_ref(source, &duplicate_entity_key(source))).collect::<Vec<_>>(),
+        "payload": merge_plan_payload(&target, &sources, force, repair_kind),
+        "impact": duplicate_merge_impact(conn, agent_id, &sources)?,
+        "warnings": warnings,
+        "blocked": blocked,
+        "confidence": if risk == "low" { 0.86 } else { 0.72 },
+        "rationale": rationale,
+        "evidence": evidence,
+        "risk": risk,
     }))
 }
 
@@ -2004,16 +2281,108 @@ pub async fn operations_batch(Json(body): Json<JsonValue>) -> impl IntoResponse 
 }
 
 /// POST /api/ontology/proposals/repair/merge-plan — create a merge plan.
-pub async fn repair_merge_plan(Json(body): Json<JsonValue>) -> impl IntoResponse {
-    let has_target = read_body_string(&body, "target_entity")
-        .or_else(|| read_body_string(&body, "target"))
-        .or_else(|| read_body_string(&body, "target_entity_id"))
-        .or_else(|| read_body_string(&body, "target_id"))
-        .is_some();
-    if !has_target {
-        return json_error(StatusCode::BAD_REQUEST, "target entity is required");
+pub async fn repair_merge_plan(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Query(query): Query<ProposalQuery>,
+    Json(body): Json<JsonValue>,
+) -> Response {
+    let requested_agent = query
+        .agent_id
+        .clone()
+        .or_else(|| read_body_string(&body, "agent_id"));
+    let agent = match scoped_agent_or_response(
+        &state,
+        peer,
+        &headers,
+        requested_agent.as_deref(),
+        Permission::Modify,
+    ) {
+        Ok(id) => id,
+        Err(resp) => return resp,
+    };
+    let write_proposal = read_body_bool(&body, "write_proposal")
+        .or_else(|| read_body_bool(&body, "write_proposals"))
+        .unwrap_or(false);
+    let created_by = read_body_string(&body, "created_by")
+        .or_else(|| {
+            headers
+                .get("x-signet-actor")
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| "ontology-merge-plan".to_string());
+    let result = state
+        .pool
+        .write_tx(
+            Priority::High,
+            move |conn| -> Result<JsonValue, CoreError> {
+                let plan = build_entity_merge_plan(conn, &agent, &body, "manual_entity_merge")?;
+                let blocked = plan
+                    .get("blocked")
+                    .and_then(JsonValue::as_bool)
+                    .unwrap_or(false);
+                if !write_proposal || blocked {
+                    let mut output = plan;
+                    if let Some(object) = output.as_object_mut() {
+                        object.insert("dryRun".to_string(), JsonValue::Bool(true));
+                    }
+                    return Ok(output);
+                }
+                let target_id = plan
+                    .get("target")
+                    .and_then(|target| target.get("id"))
+                    .and_then(JsonValue::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                let proposal = insert_proposal(
+                    conn,
+                    ProposalBody {
+                        agent_id: Some(agent.clone()),
+                        operation: Some("merge_entities".to_string()),
+                        payload: plan.get("payload").cloned(),
+                        confidence: plan.get("confidence").and_then(JsonValue::as_f64),
+                        rationale: plan
+                            .get("rationale")
+                            .and_then(JsonValue::as_str)
+                            .map(str::to_string),
+                        evidence: plan.get("evidence").and_then(JsonValue::as_array).cloned(),
+                        risk: plan
+                            .get("risk")
+                            .and_then(JsonValue::as_str)
+                            .map(str::to_string),
+                        source_kind: Some("ontology_index".to_string()),
+                        source_id: Some(format!("entities:{target_id}")),
+                        source_path: None,
+                        source_root: None,
+                        created_by: Some(created_by),
+                        actor: None,
+                        reason: None,
+                        proposals: None,
+                        write_proposals: None,
+                        use_provider: None,
+                        status: None,
+                        limit: None,
+                    },
+                    &agent,
+                )?;
+                let mut output = plan;
+                if let Some(object) = output.as_object_mut() {
+                    object.insert("dryRun".to_string(), JsonValue::Bool(false));
+                    object.insert("proposal".to_string(), proposal);
+                }
+                Ok(output)
+            },
+        )
+        .await;
+    match result {
+        Ok(value) => (StatusCode::OK, Json(value)).into_response(),
+        Err(CoreError::Invalid(message)) => json_error(StatusCode::BAD_REQUEST, &message),
+        Err(CoreError::NotFound(message)) => json_error(StatusCode::NOT_FOUND, &message),
+        Err(CoreError::Conflict(message)) => json_error(StatusCode::CONFLICT, &message),
+        Err(error) => json_error(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()),
     }
-    Json(json!({"plan": null, "proposals": [], "created": 0})).into_response()
 }
 
 pub async fn get(
