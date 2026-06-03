@@ -46,6 +46,13 @@ struct SkillEmbeddingRow {
     vec_rows: i64,
 }
 
+#[derive(Debug)]
+struct SkillExtractionRows {
+    source_name: String,
+    target_name: String,
+    relation_type: String,
+}
+
 struct TestServer {
     #[allow(dead_code)] // kept for debugging
     port: u16,
@@ -1477,6 +1484,10 @@ version: 1.0.0
 ---
 
 # ${skill}
+
+This replay skill teaches agents to query SearchProvider through WebSearchSkill
+for grounded web research, source attribution, and online fact lookup workflows
+inside the Signet runtime.
 EOF
 echo "fake skills installed ${skill} from ${pkg}"
 "#,
@@ -1682,6 +1693,7 @@ struct ClawhubDownloadFixture {
 struct EmbeddingFixture {
     base: String,
     llm_requests: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    extraction_requests: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     _thread: std::thread::JoinHandle<()>,
 }
 
@@ -1693,7 +1705,9 @@ impl EmbeddingFixture {
             .expect("configure embedding fixture");
         let base = format!("http://{}", listener.local_addr().unwrap());
         let llm_requests = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let extraction_requests = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let thread_llm_requests = llm_requests.clone();
+        let thread_extraction_requests = extraction_requests.clone();
         let thread = std::thread::spawn(move || {
             for stream in listener.incoming().take(16) {
                 let Ok(mut stream) = stream else {
@@ -1704,32 +1718,54 @@ impl EmbeddingFixture {
                 let request = String::from_utf8_lossy(&buffer[..read]);
                 let body = if request.starts_with("POST /v1/chat/completions ") {
                     thread_llm_requests.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                    let (description, triggers, tags) = if request.contains("Skill name: claw-demo")
-                    {
-                        (
-                            "Enriched claw-demo discovery metadata for replay.",
-                            vec!["install claw demo", "use clawhub skill"],
-                            vec!["clawhub", "demo"],
-                        )
+                    if request.contains("Extract key facts and entity relationships") {
+                        thread_extraction_requests
+                            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        json!({
+                            "choices": [{
+                                "message": {
+                                    "content": serde_json::json!({
+                                        "facts": [],
+                                        "entities": [{
+                                            "source": "WebSearchSkill",
+                                            "target": "SearchProvider",
+                                            "relationship": "uses",
+                                            "source_type": "skill",
+                                            "target_type": "service"
+                                        }]
+                                    }).to_string()
+                                }
+                            }]
+                        })
+                        .to_string()
                     } else {
-                        (
-                            "Enriched web-search discovery metadata for replay.",
-                            vec!["look up web facts", "search online"],
-                            vec!["research", "web"],
-                        )
-                    };
-                    json!({
-                        "choices": [{
-                            "message": {
-                                "content": serde_json::json!({
-                                    "description": description,
-                                    "triggers": triggers,
-                                    "tags": tags,
-                                }).to_string()
-                            }
-                        }]
-                    })
-                    .to_string()
+                        let (description, triggers, tags) =
+                            if request.contains("Skill name: claw-demo") {
+                                (
+                                    "Enriched claw-demo discovery metadata for replay.",
+                                    vec!["install claw demo", "use clawhub skill"],
+                                    vec!["clawhub", "demo"],
+                                )
+                            } else {
+                                (
+                                    "Enriched web-search discovery metadata for replay.",
+                                    vec!["look up web facts", "search online"],
+                                    vec!["research", "web"],
+                                )
+                            };
+                        json!({
+                            "choices": [{
+                                "message": {
+                                    "content": serde_json::json!({
+                                        "description": description,
+                                        "triggers": triggers,
+                                        "tags": tags,
+                                    }).to_string()
+                                }
+                            }]
+                        })
+                        .to_string()
+                    }
                 } else {
                     r#"{"data":[{"embedding":[0.25,0.5,0.75]}]}"#.to_string()
                 };
@@ -1744,6 +1780,7 @@ impl EmbeddingFixture {
         Self {
             base,
             llm_requests,
+            extraction_requests,
             _thread: thread,
         }
     }
@@ -5579,6 +5616,42 @@ async fn wait_for_skill_embedding_row(
     panic!("skill embedding row was not created for {entity_id}");
 }
 
+async fn wait_for_skill_extraction_rows(
+    db_path: &std::path::Path,
+    entity_id: &str,
+) -> SkillExtractionRows {
+    for _ in 0..80 {
+        let conn = rusqlite::Connection::open(db_path).expect("open replay db");
+        conn.busy_timeout(Duration::from_secs(5)).unwrap();
+        let row = conn
+            .query_row(
+                "SELECT src.name, tgt.name, r.relation_type
+                   FROM relations r
+                   JOIN entities src ON src.id = r.source_entity_id
+                   JOIN entities tgt ON tgt.id = r.target_entity_id
+                  WHERE src.name = 'WebSearchSkill'
+                    AND tgt.name = 'SearchProvider'
+                    AND r.relation_type = 'uses'",
+                [],
+                |row| {
+                    Ok(SkillExtractionRows {
+                        source_name: row.get(0)?,
+                        target_name: row.get(1)?,
+                        relation_type: row.get(2)?,
+                    })
+                },
+            )
+            .optional()
+            .expect("query skill body extraction rows");
+        if let Some(row) = row {
+            return row;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    panic!("skill body extraction rows were not created for {entity_id}");
+}
+
 fn count_skill_embeddings(db_path: &std::path::Path, entity_id: &str) -> i64 {
     let conn = open_replay_db_with_vec(db_path);
     conn.query_row(
@@ -5707,6 +5780,18 @@ async fn skills_endpoints() {
         "web-search — Enriched web-search discovery metadata for replay. — look up web facts, search online"
     );
     assert_eq!(web_embedding.vec_rows, 1);
+    let web_extraction =
+        wait_for_skill_extraction_rows(&server.db_path(), "skill:default:web-search").await;
+    assert!(
+        embedding_fixture
+            .extraction_requests
+            .load(std::sync::atomic::Ordering::SeqCst)
+            > 0,
+        "skill body extraction did not call the LLM fixture"
+    );
+    assert_eq!(web_extraction.source_name, "WebSearchSkill");
+    assert_eq!(web_extraction.target_name, "SearchProvider");
+    assert_eq!(web_extraction.relation_type, "uses");
 
     let resp = server
         .post(

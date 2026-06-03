@@ -23,7 +23,8 @@ use serde::Deserialize;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use signet_core::{config::ProceduralConfig, db::Priority, error::CoreError, queries::embedding};
-use signet_pipeline::provider::GenerateOpts;
+use signet_pipeline::{extraction, provider::GenerateOpts};
+use signet_services::graph;
 use tokio::process::Command;
 use tracing::warn;
 use uuid::Uuid;
@@ -550,7 +551,7 @@ async fn install_skill_graph_node(state: Arc<AppState>, name: String) -> Result<
     }
 
     let mut meta = original_meta.clone();
-    let llm_provider = skill_enrichment_provider(&state).await;
+    let llm_provider = skill_llm_provider(&state).await;
     let mut description = meta.description.clone().unwrap_or_default();
     let needs_enrichment = description.len() < procedural.enrich_min_description
         || meta
@@ -558,8 +559,8 @@ async fn install_skill_graph_node(state: Arc<AppState>, name: String) -> Result<
             .as_ref()
             .is_none_or(|triggers| triggers.is_empty());
     let enriched = if procedural.enrich_on_install && needs_enrichment {
-        if let Some(provider) = llm_provider {
-            match enrich_skill_frontmatter(&provider, &skill_name, &description, &content).await {
+        if let Some(provider) = llm_provider.as_ref() {
+            match enrich_skill_frontmatter(provider, &skill_name, &description, &content).await {
                 Ok(Some(enrichment)) => {
                     if !enrichment.description.is_empty() {
                         meta.description = Some(enrichment.description);
@@ -712,11 +713,12 @@ async fn install_skill_graph_node(state: Arc<AppState>, name: String) -> Result<
                 &original_description,
             );
             let embedding_id = Uuid::new_v4().to_string();
+            let embedding_source_id = entity_id.clone();
             state
                 .pool
                 .write_tx(Priority::Low, move |conn| {
                     let now = Utc::now().to_rfc3339();
-                    embedding::delete_by_source(conn, "skill", &entity_id, None)?;
+                    embedding::delete_by_source(conn, "skill", &embedding_source_id, None)?;
                     embedding::upsert(
                         conn,
                         &embedding::InsertEmbedding {
@@ -724,7 +726,7 @@ async fn install_skill_graph_node(state: Arc<AppState>, name: String) -> Result<
                             content_hash: &embedding_hash,
                             vector: &vector,
                             source_type: "skill",
-                            source_id: &entity_id,
+                            source_id: &embedding_source_id,
                             chunk_text: &embedding_text,
                             now: &now,
                         },
@@ -733,6 +735,18 @@ async fn install_skill_graph_node(state: Arc<AppState>, name: String) -> Result<
                 })
                 .await
                 .map_err(|err| err.to_string())?;
+        }
+    }
+
+    if let Some(provider) = llm_provider.as_ref() {
+        if let Err(error) =
+            extract_skill_body_entities(&state, provider, &entity_id, &content).await
+        {
+            warn!(
+                skill = %skill_name,
+                error = %error,
+                "skill body extraction failed"
+            );
         }
     }
 
@@ -841,7 +855,7 @@ async fn enrich_skill_frontmatter(
     Ok(parse_skill_enrichment_output(&raw))
 }
 
-async fn skill_enrichment_provider(
+async fn skill_llm_provider(
     state: &Arc<AppState>,
 ) -> Option<Arc<dyn signet_pipeline::provider::LlmProvider>> {
     let pipeline = state
@@ -850,9 +864,6 @@ async fn skill_enrichment_provider(
         .memory
         .as_ref()
         .and_then(|memory| memory.pipeline_v2.as_ref())?;
-    if !pipeline.procedural.enabled || !pipeline.procedural.enrich_on_install {
-        return None;
-    }
     if pipeline.extraction.provider == "none" {
         return None;
     }
@@ -872,6 +883,86 @@ async fn skill_enrichment_provider(
             max_context_tokens: None,
         });
     Some(provider)
+}
+
+async fn extract_skill_body_entities(
+    state: &Arc<AppState>,
+    provider: &Arc<dyn signet_pipeline::provider::LlmProvider>,
+    entity_id: &str,
+    body: &str,
+) -> Result<usize, String> {
+    let Some(pipeline) = state
+        .config
+        .manifest
+        .memory
+        .as_ref()
+        .and_then(|memory| memory.pipeline_v2.as_ref())
+    else {
+        return Ok(0);
+    };
+    if !pipeline.graph.enabled {
+        return Ok(0);
+    }
+
+    let normalized_body = body.split_whitespace().collect::<Vec<_>>().join(" ");
+    if normalized_body.len() < 80 {
+        return Ok(0);
+    }
+
+    let raw = provider
+        .generate(
+            &extraction::build_prompt(&normalized_body),
+            &GenerateOpts::default(),
+        )
+        .await
+        .map_err(|err| err.to_string())?
+        .text;
+    let extracted = extraction::parse(&raw);
+    if extracted.entities.is_empty() {
+        return Ok(0);
+    }
+
+    let entities = extracted
+        .entities
+        .into_iter()
+        .map(|entity| signet_core::types::ExtractedEntity {
+            source: entity.source,
+            source_type: entity.source_type,
+            relationship: entity
+                .relationship
+                .unwrap_or_else(|| "related_to".to_string()),
+            target: entity.target,
+            target_type: entity.target_type,
+            confidence: 0.7,
+        })
+        .collect::<Vec<_>>();
+    let source_memory_id = entity_id.to_string();
+    state
+        .pool
+        .write_tx(Priority::Low, move |conn| {
+            let result = graph::persist_entities(
+                conn,
+                &graph::PersistEntitiesInput {
+                    entities: &entities,
+                    source_memory_id: &source_memory_id,
+                    agent_id: DEFAULT_AGENT_ID,
+                },
+            )?;
+            Ok(json!({
+                "entitiesExtracted": result.entities_inserted + result.entities_updated,
+                "relationsInserted": result.relations_inserted,
+                "relationsUpdated": result.relations_updated,
+                "mentionsLinked": result.mentions_linked,
+            }))
+        })
+        .await
+        .map_err(|err| err.to_string())
+        .map(|value| {
+            value
+                .get("entitiesExtracted")
+                .and_then(|value| value.as_u64())
+                .unwrap_or(0) as usize
+        })
 }
 
 fn skill_enrichment_api_key(provider: &str) -> Option<String> {
