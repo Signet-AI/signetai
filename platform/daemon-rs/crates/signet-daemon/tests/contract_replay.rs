@@ -7859,11 +7859,31 @@ async fn analytics_collector_routes_record_request_counters_and_latency() {
     assert!(body["remember"]["p50"].as_i64().is_some());
     assert_eq!(body["predictor_train"]["p95"], 0);
 
-    let resp = server.get("/api/analytics/logs?limit=5&level=error").await;
+    let log_path = server
+        ._tmpdir
+        .path()
+        .join(".daemon/logs/analytics-replay.jsonl");
+    std::fs::write(
+        &log_path,
+        [
+            r#"{"timestamp":"2026-01-01T00:00:00.000Z","level":"error","category":"analytics","message":"old analytics error"}"#,
+            r#"{"timestamp":"2026-01-02T00:00:00.000Z","level":"warn","category":"analytics","message":"wrong level"}"#,
+            r#"{"timestamp":"2026-01-03T00:00:00.000Z","level":"error","category":"pipeline","message":"wrong category"}"#,
+            r#"{"timestamp":"2026-01-04T00:00:00.000Z","level":"error","category":"analytics","message":"live analytics error"}"#,
+        ]
+        .join("\n"),
+    )
+    .expect("write analytics log fixture");
+
+    let resp = server
+        .get("/api/analytics/logs?limit=5&level=error&category=analytics&since=2026-01-02T00:00:00.000Z")
+        .await;
     assert_eq!(resp.status(), 200);
     let body = server.json(resp).await;
-    assert_eq!(body["count"], 0);
-    assert!(body["logs"].as_array().expect("logs").is_empty());
+    assert_eq!(body["count"], 1);
+    assert_eq!(body["logs"][0]["message"], "live analytics error");
+    assert_eq!(body["logs"][0]["level"], "error");
+    assert_eq!(body["logs"][0]["category"], "analytics");
 
     let resp = server.get("/api/analytics/memory-safety").await;
     assert_eq!(resp.status(), 200);

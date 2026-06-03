@@ -648,16 +648,30 @@ pub async fn logs(
     if let Err(resp) = require_telemetry_access(&state, &headers, &peer) {
         return *resp;
     }
-    let _limit = parse_limit(query.limit.as_deref(), 100, 500);
-    let _level = optional_text(query.level);
-    let _category = optional_text(query.category);
-    let _since = optional_text(query.since);
+    let limit = parse_limit(query.limit.as_deref(), 100, 500) as usize;
+    let level = optional_text(query.level).map(|value| value.to_ascii_lowercase());
+    let category = optional_text(query.category).map(|value| value.to_ascii_lowercase());
+    let since = optional_text(query.since).and_then(|value| {
+        chrono::DateTime::parse_from_rfc3339(&value)
+            .ok()
+            .map(|dt| dt.with_timezone(&Utc))
+    });
+    let log_dir = state.config.logs_dir();
+    let logs = tokio::task::spawn_blocking(move || {
+        analytics_log_entries(
+            &log_dir,
+            limit,
+            level.as_deref(),
+            category.as_deref(),
+            since,
+        )
+    })
+    .await
+    .unwrap_or_default();
+    let count = logs.len();
     (
         StatusCode::OK,
-        Json(serde_json::json!({
-            "logs": [],
-            "count": 0,
-        })),
+        Json(serde_json::json!({ "logs": logs, "count": count })),
     )
         .into_response()
 }
@@ -977,6 +991,99 @@ fn optional_text(value: Option<String>) -> Option<String> {
     value
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
+}
+
+fn analytics_log_entries(
+    log_dir: &std::path::Path,
+    limit: usize,
+    level: Option<&str>,
+    category: Option<&str>,
+    since: Option<chrono::DateTime<Utc>>,
+) -> Vec<serde_json::Value> {
+    let mut files = std::fs::read_dir(log_dir)
+        .ok()
+        .into_iter()
+        .flat_map(|entries| entries.filter_map(Result::ok))
+        .filter(|entry| {
+            entry
+                .path()
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .is_some_and(|ext| {
+                    ext.eq_ignore_ascii_case("log") || ext.eq_ignore_ascii_case("jsonl")
+                })
+        })
+        .collect::<Vec<_>>();
+    files.sort_by(|a, b| {
+        b.metadata()
+            .and_then(|m| m.modified())
+            .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
+            .cmp(
+                &a.metadata()
+                    .and_then(|m| m.modified())
+                    .unwrap_or(std::time::SystemTime::UNIX_EPOCH),
+            )
+    });
+
+    let mut logs = Vec::new();
+    for file in files {
+        let Ok(content) = std::fs::read_to_string(file.path()) else {
+            continue;
+        };
+        for line in content.lines().rev() {
+            let Ok(entry) = serde_json::from_str::<serde_json::Value>(line) else {
+                continue;
+            };
+            if !log_entry_matches(&entry, level, category, since) {
+                continue;
+            }
+            logs.push(entry);
+            if logs.len() >= limit {
+                return logs;
+            }
+        }
+    }
+    logs
+}
+
+fn log_entry_matches(
+    entry: &serde_json::Value,
+    level: Option<&str>,
+    category: Option<&str>,
+    since: Option<chrono::DateTime<Utc>>,
+) -> bool {
+    if let Some(level) = level
+        && entry
+            .get("level")
+            .and_then(serde_json::Value::as_str)
+            .map(|entry_level| !entry_level.eq_ignore_ascii_case(level))
+            .unwrap_or(true)
+    {
+        return false;
+    }
+    if let Some(category) = category
+        && entry
+            .get("category")
+            .and_then(serde_json::Value::as_str)
+            .map(|entry_category| !entry_category.eq_ignore_ascii_case(category))
+            .unwrap_or(true)
+    {
+        return false;
+    }
+    if let Some(since) = since {
+        let Some(timestamp) = entry
+            .get("timestamp")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+            .map(|dt| dt.with_timezone(&Utc))
+        else {
+            return false;
+        };
+        if timestamp < since {
+            return false;
+        }
+    }
+    true
 }
 
 fn parse_limit(raw: Option<&str>, default: i64, max: i64) -> i64 {
