@@ -2367,7 +2367,7 @@ fn assertion_row_to_value(row: &rusqlite::Row<'_>) -> rusqlite::Result<JsonValue
 fn insert_assertion(
     conn: &rusqlite::Connection,
     agent_id: &str,
-    source: &ExtractionSource,
+    source: Option<&ExtractionSource>,
     assertion: &JsonValue,
     created_by: &str,
 ) -> Result<JsonValue, CoreError> {
@@ -2391,18 +2391,30 @@ fn insert_assertion(
     let evidence = {
         let evidence = read_json_array(assertion, "evidence");
         if evidence.is_empty() {
-            source_evidence(source, &content)
+            source
+                .map(|source| source_evidence(source, &content))
+                .unwrap_or_default()
         } else {
             evidence
         }
     };
-    let source_kind =
-        read_json_string(assertion, "source_kind").or_else(|| Some(source.source_kind.clone()));
-    let source_id =
-        read_json_string(assertion, "source_id").or_else(|| Some(source.source_id.clone()));
-    let source_path =
-        read_json_string(assertion, "source_path").or_else(|| source.source_path.clone());
+    let source_kind = read_json_string(assertion, "source_kind")
+        .or_else(|| source.map(|source| source.source_kind.clone()));
+    let source_id = read_json_string(assertion, "source_id")
+        .or_else(|| source.map(|source| source.source_id.clone()));
+    let source_path = read_json_string(assertion, "source_path")
+        .or_else(|| source.and_then(|source| source.source_path.clone()));
     let source_root = read_json_string(assertion, "source_root");
+    if evidence.is_empty()
+        && source_kind.is_none()
+        && source_id.is_none()
+        && source_path.is_none()
+        && source_root.is_none()
+    {
+        return Err(CoreError::Invalid(
+            "evidence or source provenance is required".to_string(),
+        ));
+    }
     let asserted_at = match read_json_string(assertion, "asserted_at") {
         Some(raw) => chrono::DateTime::parse_from_rfc3339(&raw)
             .map_err(|_| CoreError::Invalid("asserted_at is invalid".to_string()))?
@@ -2483,6 +2495,277 @@ fn insert_assertion(
         assertion_row_to_value,
     )
     .map_err(Into::into)
+}
+
+fn assertion_error(error: CoreError) -> Response {
+    match error {
+        CoreError::Invalid(message) => json_error(StatusCode::BAD_REQUEST, &message),
+        CoreError::NotFound(message) => json_error(StatusCode::NOT_FOUND, &message),
+        CoreError::Conflict(message) => json_error(StatusCode::CONFLICT, &message),
+        other => json_error(StatusCode::INTERNAL_SERVER_ERROR, &other.to_string()),
+    }
+}
+
+fn valid_assertion_predicate(predicate: &str) -> bool {
+    matches!(
+        predicate,
+        "claims" | "believes" | "observed" | "decided" | "prefers" | "denies" | "questions"
+    )
+}
+
+fn valid_assertion_status(status: &str) -> bool {
+    matches!(status, "active" | "archived" | "superseded" | "all")
+}
+
+fn normalized_content(value: &str) -> String {
+    value
+        .to_ascii_lowercase()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn get_assertion_value(
+    conn: &rusqlite::Connection,
+    agent_id: &str,
+    id: &str,
+) -> Result<Option<JsonValue>, CoreError> {
+    conn.query_row(
+        "SELECT a.*, e.name AS subject_entity_name
+         FROM epistemic_assertions a
+         JOIN entities e ON e.id = a.subject_entity_id AND e.agent_id = a.agent_id
+         WHERE a.id = ?1 AND a.agent_id = ?2",
+        rusqlite::params![id, agent_id],
+        assertion_row_to_value,
+    )
+    .optional()
+    .map_err(Into::into)
+}
+
+fn list_assertion_values(
+    conn: &rusqlite::Connection,
+    agent_id: &str,
+    query: AssertionQuery,
+) -> Result<JsonValue, CoreError> {
+    if let Some(predicate) = query.predicate.as_deref().map(str::trim)
+        && !predicate.is_empty()
+        && !valid_assertion_predicate(predicate)
+    {
+        return Err(CoreError::Invalid("predicate is invalid".to_string()));
+    }
+    if let Some(status) = query.status.as_deref().map(str::trim)
+        && !status.is_empty()
+        && !valid_assertion_status(status)
+    {
+        return Err(CoreError::Invalid("status is invalid".to_string()));
+    }
+
+    let mut where_parts = vec!["a.agent_id = ?".to_string()];
+    let mut args = vec![Value::Text(agent_id.to_string())];
+    if let Some(entity_id) = clean(query.entity_id) {
+        where_parts.push("a.subject_entity_id = ?".to_string());
+        args.push(Value::Text(entity_id));
+    } else if let Some(entity) = clean(query.entity) {
+        let Some(entity_id) = resolve_entity(conn, agent_id, &entity)? else {
+            return Ok(json!({"items": [], "count": 0}));
+        };
+        where_parts.push("a.subject_entity_id = ?".to_string());
+        args.push(Value::Text(entity_id));
+    }
+    if query.status.as_deref().map(str::trim) != Some("all") {
+        where_parts.push("a.status = ?".to_string());
+        args.push(Value::Text(
+            clean(query.status).unwrap_or_else(|| "active".to_string()),
+        ));
+    }
+    if let Some(predicate) = clean(query.predicate) {
+        where_parts.push("a.predicate = ?".to_string());
+        args.push(Value::Text(predicate));
+    }
+    if let Some(speaker) = clean(query.speaker) {
+        where_parts.push("a.speaker = ?".to_string());
+        args.push(Value::Text(speaker));
+    }
+    if let Some(source_kind) = clean(query.source_kind) {
+        where_parts.push("a.source_kind = ?".to_string());
+        args.push(Value::Text(source_kind));
+    }
+    if let Some(source_id) = clean(query.source_id) {
+        where_parts.push("a.source_id = ?".to_string());
+        args.push(Value::Text(source_id));
+    }
+    if let Some(text_query) = clean(query.query) {
+        where_parts.push("a.normalized_content LIKE ?".to_string());
+        args.push(Value::Text(format!(
+            "%{}%",
+            normalized_content(&text_query)
+        )));
+    }
+    let clause = where_parts.join(" AND ");
+    let count_sql = format!(
+        "SELECT COUNT(*) FROM epistemic_assertions a
+         JOIN entities e ON e.id = a.subject_entity_id AND e.agent_id = a.agent_id
+         WHERE {clause}"
+    );
+    let params = args.iter().map(|v| v as &dyn ToSql).collect::<Vec<_>>();
+    let count: i64 = conn.query_row(&count_sql, params.as_slice(), |row| row.get(0))?;
+
+    let limit = parse_limit(query.limit.as_deref(), 50, 200);
+    let offset = parse_offset(query.offset.as_deref());
+    let mut select_args = args.clone();
+    select_args.push(Value::Integer(limit));
+    select_args.push(Value::Integer(offset));
+    let select_params = select_args
+        .iter()
+        .map(|v| v as &dyn ToSql)
+        .collect::<Vec<_>>();
+    let select_sql = format!(
+        "SELECT a.*, e.name AS subject_entity_name
+         FROM epistemic_assertions a
+         JOIN entities e ON e.id = a.subject_entity_id AND e.agent_id = a.agent_id
+         WHERE {clause}
+         ORDER BY a.asserted_at DESC, a.created_at DESC
+         LIMIT ? OFFSET ?"
+    );
+    let rows = conn
+        .prepare(&select_sql)?
+        .query_map(select_params.as_slice(), assertion_row_to_value)?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(json!({"items": rows, "count": count}))
+}
+
+fn archive_assertion_value(
+    conn: &rusqlite::Connection,
+    agent_id: &str,
+    id: &str,
+    actor: &str,
+    reason: Option<String>,
+) -> Result<JsonValue, CoreError> {
+    if get_assertion_value(conn, agent_id, id)?.is_none() {
+        return Err(CoreError::NotFound("assertion was not found".to_string()));
+    }
+    let ts = now();
+    conn.execute(
+        "UPDATE epistemic_assertions
+         SET status = 'archived', archived_at = ?1, archived_by = ?2,
+             archive_reason = ?3, updated_at = ?1
+         WHERE id = ?4 AND agent_id = ?5",
+        rusqlite::params![ts, actor, reason, id, agent_id],
+    )?;
+    get_assertion_value(conn, agent_id, id)?
+        .ok_or_else(|| CoreError::NotFound("assertion was not found".to_string()))
+}
+
+fn link_assertion_claim_value(
+    conn: &rusqlite::Connection,
+    agent_id: &str,
+    id: &str,
+    attribute_id: &str,
+) -> Result<JsonValue, CoreError> {
+    let subject_id = conn
+        .query_row(
+            "SELECT subject_entity_id FROM epistemic_assertions WHERE id = ?1 AND agent_id = ?2",
+            rusqlite::params![id, agent_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+        .ok_or_else(|| CoreError::NotFound("assertion was not found".to_string()))?;
+    let attribute_entity = conn
+        .query_row(
+            "SELECT asp.entity_id
+             FROM entity_attributes attr
+             JOIN entity_aspects asp ON asp.id = attr.aspect_id AND asp.agent_id = attr.agent_id
+             WHERE attr.id = ?1 AND attr.agent_id = ?2 AND attr.status = 'active'",
+            rusqlite::params![attribute_id, agent_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+        .ok_or_else(|| CoreError::NotFound("claim attribute was not found".to_string()))?;
+    if attribute_entity != subject_id {
+        return Err(CoreError::Conflict(
+            "claim attribute belongs to a different entity".to_string(),
+        ));
+    }
+    conn.execute(
+        "UPDATE epistemic_assertions
+         SET claim_attribute_id = ?1, updated_at = ?2
+         WHERE id = ?3 AND agent_id = ?4",
+        rusqlite::params![attribute_id, now(), id, agent_id],
+    )?;
+    get_assertion_value(conn, agent_id, id)?
+        .ok_or_else(|| CoreError::NotFound("assertion was not found".to_string()))
+}
+
+fn body_with_string(body: &JsonValue, key: &str, value: String) -> JsonValue {
+    let mut object = body.as_object().cloned().unwrap_or_default();
+    object.insert(key.to_string(), JsonValue::String(value));
+    JsonValue::Object(object)
+}
+
+fn supersede_assertion_value(
+    conn: &rusqlite::Connection,
+    agent_id: &str,
+    id: &str,
+    body: JsonValue,
+    created_by: &str,
+) -> Result<JsonValue, CoreError> {
+    let old = conn
+        .query_row(
+            "SELECT a.*, e.name AS subject_entity_name
+             FROM epistemic_assertions a
+             JOIN entities e ON e.id = a.subject_entity_id AND e.agent_id = a.agent_id
+             WHERE a.id = ?1 AND a.agent_id = ?2",
+            rusqlite::params![id, agent_id],
+            assertion_row_to_value,
+        )
+        .optional()?
+        .ok_or_else(|| CoreError::NotFound("assertion was not found".to_string()))?;
+    if read_json_string(&body, "entity").is_some() || read_json_string(&body, "entity_id").is_some()
+    {
+        let (subject_id, _) = resolve_assertion_subject(conn, agent_id, &body)?;
+        if Some(subject_id.as_str()) != old["subjectEntityId"].as_str() {
+            return Err(CoreError::Conflict(
+                "supersede cannot change assertion subject entity".to_string(),
+            ));
+        }
+    }
+    let mut next = body_with_string(
+        &body,
+        "entity_id",
+        old["subjectEntityId"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string(),
+    );
+    if read_json_string(&next, "predicate").is_none() {
+        next = body_with_string(
+            &next,
+            "predicate",
+            old["predicate"].as_str().unwrap_or("claims").to_string(),
+        );
+    }
+    for (snake, camel) in [
+        ("speaker", "speaker"),
+        ("source_kind", "sourceKind"),
+        ("source_id", "sourceId"),
+        ("source_path", "sourcePath"),
+        ("source_root", "sourceRoot"),
+    ] {
+        if read_json_string(&next, snake).is_none()
+            && let Some(value) = old.get(camel).and_then(JsonValue::as_str)
+        {
+            next = body_with_string(&next, snake, value.to_string());
+        }
+    }
+    next = body_with_string(&next, "supersedes_assertion_id", id.to_string());
+    let created = insert_assertion(conn, agent_id, None, &next, created_by)?;
+    conn.execute(
+        "UPDATE epistemic_assertions
+         SET status = 'superseded', updated_at = ?1
+         WHERE id = ?2 AND agent_id = ?3",
+        rusqlite::params![now(), id, agent_id],
+    )?;
+    Ok(created)
 }
 
 fn proposal_audit_evidence(row: &ProposalRow) -> String {
@@ -2816,7 +3099,29 @@ pub async fn list(
 
 #[derive(Debug, Deserialize)]
 pub struct StatusQuery {
+    #[serde(alias = "agent_id")]
+    agent_id: Option<String>,
     status: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssertionQuery {
+    #[serde(alias = "agent_id")]
+    agent_id: Option<String>,
+    entity: Option<String>,
+    #[serde(alias = "entity_id")]
+    entity_id: Option<String>,
+    predicate: Option<String>,
+    status: Option<String>,
+    speaker: Option<String>,
+    #[serde(alias = "source_kind")]
+    source_kind: Option<String>,
+    #[serde(alias = "source_id")]
+    source_id: Option<String>,
+    query: Option<String>,
+    limit: Option<String>,
+    offset: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2890,70 +3195,232 @@ fn validate_claim_query(query: &ClaimVersionQuery, require_version: bool) -> Opt
 }
 
 /// GET /api/ontology/assertions — list epistemic assertions.
-pub async fn assertions_list(Query(query): Query<StatusQuery>) -> impl IntoResponse {
-    if let Some(status) = query.status.as_deref()
-        && !matches!(status, "active" | "archived" | "superseded" | "all")
-    {
-        return json_error(StatusCode::BAD_REQUEST, "status is invalid");
+pub async fn assertions_list(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Query(query): Query<AssertionQuery>,
+) -> Response {
+    let agent = match scoped_agent_or_response(
+        &state,
+        peer,
+        &headers,
+        query.agent_id.as_deref(),
+        Permission::Recall,
+    ) {
+        Ok(agent) => agent,
+        Err(resp) => return resp,
+    };
+    let result = state
+        .pool
+        .read(move |conn| list_assertion_values(conn, &agent, query))
+        .await;
+    match result {
+        Ok(value) => (StatusCode::OK, Json(value)).into_response(),
+        Err(error) => assertion_error(error),
     }
-    Json(json!({"items": [], "count": 0})).into_response()
 }
 
 /// POST /api/ontology/assertions — create an epistemic assertion.
-pub async fn assertions_create(Json(body): Json<JsonValue>) -> impl IntoResponse {
-    let predicate = read_body_string(&body, "predicate");
-    if predicate.is_none() {
-        return json_error(StatusCode::BAD_REQUEST, "predicate is required");
+pub async fn assertions_create(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Query(query): Query<ProposalQuery>,
+    Json(body): Json<JsonValue>,
+) -> Response {
+    let requested_agent = query
+        .agent_id
+        .clone()
+        .or_else(|| read_json_string(&body, "agent_id"));
+    let agent = match scoped_agent_or_response(
+        &state,
+        peer,
+        &headers,
+        requested_agent.as_deref(),
+        Permission::Modify,
+    ) {
+        Ok(agent) => agent,
+        Err(resp) => return resp,
+    };
+    let created_by = read_json_string(&body, "created_by")
+        .or_else(|| {
+            headers
+                .get("x-signet-actor")
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| "operator".to_string());
+    if read_json_string(&body, "predicate")
+        .as_deref()
+        .is_none_or(|predicate| !valid_assertion_predicate(predicate))
+    {
+        return json_error(StatusCode::BAD_REQUEST, "predicate is invalid");
     }
-    let content = read_body_string(&body, "content");
-    if content.is_none() {
-        return json_error(StatusCode::BAD_REQUEST, "content is required");
+    let result = state
+        .pool
+        .write_tx(Priority::High, move |conn| {
+            insert_assertion(conn, &agent, None, &body, &created_by)
+        })
+        .await;
+    match result {
+        Ok(value) => (StatusCode::CREATED, Json(value)).into_response(),
+        Err(error) => assertion_error(error),
     }
-    (
-        StatusCode::CREATED,
-        Json(json!({
-            "id": Uuid::new_v4().to_string(),
-            "predicate": predicate.unwrap(),
-            "content": content.unwrap(),
-            "status": "active",
-        })),
-    )
-        .into_response()
 }
 
 /// GET /api/ontology/assertions/:id — get an assertion.
-pub async fn assertion_get(Path(_id): Path<String>) -> impl IntoResponse {
-    json_error(StatusCode::NOT_FOUND, "Assertion not found")
+pub async fn assertion_get(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Query(query): Query<StatusQuery>,
+) -> Response {
+    let agent = match scoped_agent_or_response(
+        &state,
+        peer,
+        &headers,
+        query.agent_id.as_deref(),
+        Permission::Recall,
+    ) {
+        Ok(agent) => agent,
+        Err(resp) => return resp,
+    };
+    let result = state
+        .pool
+        .read(move |conn| get_assertion_value(conn, &agent, &id))
+        .await;
+    match result {
+        Ok(Some(value)) => (StatusCode::OK, Json(value)).into_response(),
+        Ok(None) => json_error(StatusCode::NOT_FOUND, "Assertion not found"),
+        Err(error) => assertion_error(error),
+    }
 }
 
 /// POST /api/ontology/assertions/:id/archive — archive an assertion.
-pub async fn assertion_archive(Path(_id): Path<String>) -> impl IntoResponse {
-    json_error(StatusCode::NOT_FOUND, "Assertion not found")
+pub async fn assertion_archive(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Query(query): Query<ProposalQuery>,
+    Json(body): Json<JsonValue>,
+) -> Response {
+    let requested_agent = query
+        .agent_id
+        .clone()
+        .or_else(|| read_json_string(&body, "agent_id"));
+    let agent = match scoped_agent_or_response(
+        &state,
+        peer,
+        &headers,
+        requested_agent.as_deref(),
+        Permission::Modify,
+    ) {
+        Ok(agent) => agent,
+        Err(resp) => return resp,
+    };
+    let actor = read_json_string(&body, "actor")
+        .or_else(|| {
+            headers
+                .get("x-signet-actor")
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| "operator".to_string());
+    let reason = read_json_string(&body, "reason");
+    let result = state
+        .pool
+        .write_tx(Priority::High, move |conn| {
+            archive_assertion_value(conn, &agent, &id, &actor, reason)
+        })
+        .await;
+    match result {
+        Ok(value) => (StatusCode::OK, Json(value)).into_response(),
+        Err(error) => assertion_error(error),
+    }
 }
 
 /// POST /api/ontology/assertions/:id/link-claim — link assertion to a claim.
 pub async fn assertion_link_claim(
-    Path(_id): Path<String>,
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Query(query): Query<ProposalQuery>,
     Json(body): Json<JsonValue>,
-) -> impl IntoResponse {
-    if read_body_string(&body, "attribute_id").is_none() {
+) -> Response {
+    let requested_agent = query
+        .agent_id
+        .clone()
+        .or_else(|| read_json_string(&body, "agent_id"));
+    let agent = match scoped_agent_or_response(
+        &state,
+        peer,
+        &headers,
+        requested_agent.as_deref(),
+        Permission::Modify,
+    ) {
+        Ok(agent) => agent,
+        Err(resp) => return resp,
+    };
+    let Some(attribute_id) = read_json_string(&body, "attribute_id") else {
         return json_error(StatusCode::BAD_REQUEST, "attribute_id is required");
+    };
+    let result = state
+        .pool
+        .write_tx(Priority::High, move |conn| {
+            link_assertion_claim_value(conn, &agent, &id, &attribute_id)
+        })
+        .await;
+    match result {
+        Ok(value) => (StatusCode::OK, Json(value)).into_response(),
+        Err(error) => assertion_error(error),
     }
-    json_error(StatusCode::NOT_FOUND, "Assertion not found")
 }
 
 /// POST /api/ontology/assertions/:id/supersede — supersede assertion.
 pub async fn assertion_supersede(
-    Path(_id): Path<String>,
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Query(query): Query<ProposalQuery>,
     Json(body): Json<JsonValue>,
-) -> impl IntoResponse {
-    if read_body_string(&body, "predicate").is_none() {
-        return json_error(StatusCode::BAD_REQUEST, "predicate is required");
+) -> Response {
+    let requested_agent = query
+        .agent_id
+        .clone()
+        .or_else(|| read_json_string(&body, "agent_id"));
+    let agent = match scoped_agent_or_response(
+        &state,
+        peer,
+        &headers,
+        requested_agent.as_deref(),
+        Permission::Modify,
+    ) {
+        Ok(agent) => agent,
+        Err(resp) => return resp,
+    };
+    let created_by = read_json_string(&body, "created_by")
+        .or_else(|| {
+            headers
+                .get("x-signet-actor")
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| "operator".to_string());
+    let result = state
+        .pool
+        .write_tx(Priority::High, move |conn| {
+            supersede_assertion_value(conn, &agent, &id, body, &created_by)
+        })
+        .await;
+    match result {
+        Ok(value) => (StatusCode::OK, Json(value)).into_response(),
+        Err(error) => assertion_error(error),
     }
-    if read_body_string(&body, "content").is_none() {
-        return json_error(StatusCode::BAD_REQUEST, "content is required");
-    }
-    json_error(StatusCode::NOT_FOUND, "Assertion not found")
 }
 
 /// GET /api/ontology/claims/versions — list claim versions.
@@ -3890,7 +4357,7 @@ pub async fn extract(
                         assertion_items.push(insert_assertion(
                             conn,
                             &agent,
-                            &source,
+                            Some(&source),
                             assertion,
                             &created_by,
                         )?);

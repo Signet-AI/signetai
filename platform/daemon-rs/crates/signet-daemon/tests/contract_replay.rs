@@ -9912,7 +9912,7 @@ async fn ontology_assertions_aliases_operations_replay_missing_cluster() {
     let resp = server.post("/api/ontology/assertions", json!({})).await;
     assert_eq!(resp.status(), 400);
     let body = server.json(resp).await;
-    assert_eq!(body["error"], "predicate is required");
+    assert_eq!(body["error"], "predicate is invalid");
 
     let resp = server.get("/api/ontology/assertions/missing").await;
     assert_eq!(resp.status(), 404);
@@ -9931,14 +9931,14 @@ async fn ontology_assertions_aliases_operations_replay_missing_cluster() {
         .await;
     assert_eq!(resp.status(), 404);
     let body = server.json(resp).await;
-    assert_eq!(body["error"], "Assertion not found");
+    assert_eq!(body["error"], "assertion was not found");
 
     let resp = server
         .post("/api/ontology/assertions/missing/supersede", json!({}))
         .await;
-    assert_eq!(resp.status(), 400);
+    assert_eq!(resp.status(), 404);
     let body = server.json(resp).await;
-    assert_eq!(body["error"], "predicate is required");
+    assert_eq!(body["error"], "assertion was not found");
 
     let resp = server.get("/api/ontology/claims/versions").await;
     assert_eq!(resp.status(), 400);
@@ -9999,4 +9999,185 @@ async fn ontology_assertions_aliases_operations_replay_missing_cluster() {
     assert_eq!(resp.status(), 400);
     let body = server.json(resp).await;
     assert_eq!(body["error"], "payload.target_entity is required");
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn ontology_assertion_routes_create_link_supersede_and_archive() {
+    let server = TestServer::start().await;
+    {
+        let conn = rusqlite::Connection::open(server.db_path()).expect("open replay db");
+        conn.busy_timeout(Duration::from_secs(5)).unwrap();
+        conn.execute_batch(
+            r#"INSERT INTO entities
+               (id, name, canonical_name, entity_type, agent_id, mentions, status,
+                created_at, updated_at)
+               VALUES
+               ('entity-assert-signet', 'Signet', 'signet', 'project', 'default',
+                1, 'active', '2026-06-02T00:00:00.000Z',
+                '2026-06-02T00:00:00.000Z'),
+               ('entity-assert-rival', 'Rival', 'rival', 'project', 'default',
+                1, 'active', '2026-06-02T00:00:00.000Z',
+                '2026-06-02T00:00:00.000Z');
+
+               INSERT INTO entity_aspects
+               (id, entity_id, agent_id, name, canonical_name, weight, status,
+                created_at, updated_at)
+               VALUES
+               ('aspect-assert-signet', 'entity-assert-signet', 'default',
+                'architecture', 'architecture', 0.7, 'active',
+                '2026-06-02T00:00:00.000Z',
+                '2026-06-02T00:00:00.000Z');
+
+               INSERT INTO entity_attributes
+               (id, aspect_id, agent_id, kind, content, normalized_content,
+                confidence, importance, status, group_key, claim_key,
+                created_at, updated_at)
+               VALUES
+               ('attr-assert-signet', 'aspect-assert-signet', 'default',
+                'attribute', 'Signet has epistemic assertions.',
+                'signet has epistemic assertions.', 0.9, 0.8, 'active',
+                'ontology', 'epistemic_assertions',
+                '2026-06-02T00:00:00.000Z',
+                '2026-06-02T00:00:00.000Z');"#,
+        )
+        .expect("seed assertion lifecycle fixture");
+    }
+
+    let resp = server
+        .post(
+            "/api/ontology/assertions",
+            json!({
+                "entity": "Signet",
+                "predicate": "maybe",
+                "content": "Invalid predicate.",
+                "evidence": [{"quote": "invalid"}]
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "predicate is invalid");
+
+    let resp = server
+        .post(
+            "/api/ontology/assertions",
+            json!({
+                "entity": "Signet",
+                "predicate": "claims",
+                "content": "No provenance."
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "evidence or source provenance is required");
+
+    let resp = server
+        .post_with_actor(
+            "/api/ontology/assertions",
+            json!({
+                "entity": "Signet",
+                "predicate": "believes",
+                "content": "Signet should model who believes what over time.",
+                "speaker": "Nicholai",
+                "asserted_at": "2026-06-02T01:00:00.000Z",
+                "confidence": 0.91,
+                "evidence": [{"quote": "who believes what"}],
+                "source_kind": "transcript",
+                "source_id": "assertion-session"
+            }),
+            "assertion-test",
+        )
+        .await;
+    assert_eq!(resp.status(), 201);
+    let created = server.json(resp).await;
+    let assertion_id = created["id"]
+        .as_str()
+        .expect("created assertion id")
+        .to_string();
+    assert_eq!(created["subjectEntityName"], "Signet");
+    assert_eq!(created["predicate"], "believes");
+    assert_eq!(created["createdBy"], "assertion-test");
+
+    let resp = server
+        .get("/api/ontology/assertions?speaker=Nicholai&predicate=believes")
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["count"], 1);
+    assert_eq!(body["items"][0]["id"], assertion_id);
+
+    let resp = server
+        .get(&format!("/api/ontology/assertions/{assertion_id}"))
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(
+        body["content"],
+        "Signet should model who believes what over time."
+    );
+
+    let resp = server
+        .post(
+            &format!("/api/ontology/assertions/{assertion_id}/link-claim"),
+            json!({"attribute_id": "attr-assert-signet"}),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let linked = server.json(resp).await;
+    assert_eq!(linked["claimAttributeId"], "attr-assert-signet");
+
+    let resp = server
+        .post(
+            &format!("/api/ontology/assertions/{assertion_id}/supersede"),
+            json!({
+                "content": "Signet keeps attributed assertions alongside similarity.",
+                "evidence": [{"quote": "attributed assertions"}]
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let superseding = server.json(resp).await;
+    let superseding_id = superseding["id"]
+        .as_str()
+        .expect("superseding assertion id")
+        .to_string();
+    assert_eq!(superseding["predicate"], "believes");
+    assert_eq!(superseding["supersedesAssertionId"], assertion_id);
+
+    let resp = server
+        .post(
+            &format!("/api/ontology/assertions/{superseding_id}/supersede"),
+            json!({
+                "entity_id": "entity-assert-rival",
+                "content": "Rival should not enter Signet assertion history.",
+                "evidence": [{"quote": "different entity"}]
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 409);
+    let body = server.json(resp).await;
+    assert_eq!(
+        body["error"],
+        "supersede cannot change assertion subject entity"
+    );
+
+    let resp = server
+        .post(
+            &format!("/api/ontology/assertions/{superseding_id}/archive"),
+            json!({"actor": "assertion-test", "reason": "replaced by claim"}),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let archived = server.json(resp).await;
+    assert_eq!(archived["status"], "archived");
+    assert_eq!(archived["archiveReason"], "replaced by claim");
+
+    let resp = server
+        .get("/api/ontology/assertions?status=all&query=signet")
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["count"], 2);
 }
