@@ -15,7 +15,7 @@
 			"method": "GET",
 			"path": "/",
 			"file": "platform/daemon/src/routes/dashboard.ts",
-			"line": 58,
+			"line": 73,
 			"status": "native-rust-replay-proven",
 			"rustMounted": true,
 			"contractReplay": true,

@@ -8569,7 +8569,7 @@ async fn changelog_roadmap_and_readme_routes_render_local_docs() {
     assert_eq!(body["source"], "local");
     let html = body["html"].as_str().expect("readme html");
     assert!(html.contains("Signet"));
-    assert!(html.contains("Bring your own context"));
+    assert!(html.contains("Own your agent's context"));
 }
 
 #[tokio::test]
