@@ -292,9 +292,16 @@ jobs:
         run: |
           test -n "$NODE_AUTH_TOKEN"
           npm config set //registry.npmjs.org/:_authToken "$NODE_AUTH_TOKEN"
-          cd dist/signetai
-          npm publish --tag next --access public
-          cd ../../integrations/openclaw/memory-adapter
-          npm publish --tag next --access public || true
+          CURRENT=$(npm view "signetai@${NEW_VERSION}" version 2>/dev/null || echo "0.0.0")
+          if [ "$CURRENT" = "$NEW_VERSION" ]; then
+            echo "signetai@$NEW_VERSION already published, refreshing next tag"
+            npm dist-tag add "signetai@${NEW_VERSION}" next
+            npm dist-tag add "@signetai/signet-memory-openclaw@${NEW_VERSION}" next || true
+          else
+            cd dist/signetai
+            npm publish --tag next --access public
+            cd ../../integrations/openclaw/memory-adapter
+            npm publish --tag next --access public || true
+          fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

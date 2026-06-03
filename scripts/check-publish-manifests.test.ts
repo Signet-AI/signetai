@@ -136,6 +136,9 @@ describe("check-publish-manifests", () => {
 		expect(workflow).toContain('gh release download "v${NEW_VERSION}" --pattern "signet-*"');
 		expect(workflow).toContain('SIGNET_VERSION="$NEW_VERSION" bun scripts/generate-native-manifest.ts');
 		expect(workflow).toContain("dist/native/native-manifest.json");
+		expect(workflow).toContain('CURRENT=$(npm view "signetai@${NEW_VERSION}" version 2>/dev/null || echo "0.0.0")');
+		expect(workflow).toContain('npm dist-tag add "signetai@${NEW_VERSION}" next');
+		expect(workflow).toContain('npm dist-tag add "@signetai/signet-memory-openclaw@${NEW_VERSION}" next || true');
 		expect(workflow).toContain("cd dist/signetai");
 		expect(workflow).toContain("npm publish --tag next --access public");
 		expect(workflow).toContain("cd ../../integrations/openclaw/memory-adapter");
