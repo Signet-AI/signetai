@@ -729,6 +729,7 @@ async fn install_skill_graph_node(state: Arc<AppState>, name: String) -> Result<
                             source_id: &embedding_source_id,
                             chunk_text: &embedding_text,
                             now: &now,
+                            agent_id: None,
                         },
                     )?;
                     Ok(json!({"embeddingCreated": true}))

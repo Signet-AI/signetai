@@ -909,6 +909,7 @@ mod tests {
             source_id: "m1",
             chunk_text: "Rust programming",
             now: "2024-01-01T00:00:00Z",
+            agent_id: Some("default"),
         };
         crate::queries::embedding::upsert(&conn, &emb).unwrap();
 

@@ -247,6 +247,7 @@ async fn process_document(
     let text = payload["content"]
         .as_str()
         .ok_or("payload missing 'content' field")?;
+    let agent_id = document_payload_agent_id(&payload);
     let document_id = job.document_id.clone().or_else(|| {
         payload["documentId"]
             .as_str()
@@ -298,7 +299,7 @@ async fn process_document(
 
     if let Some(document_id) = document_id {
         update_document_status(pool, &document_id, "indexing", None).await?;
-        persist_document_chunks(pool, &document_id, &embedded_chunks, config).await?;
+        persist_document_chunks(pool, &document_id, &agent_id, &embedded_chunks, config).await?;
     }
 
     Ok(DocumentResult {
@@ -318,6 +319,21 @@ struct DocumentJob {
     document_id: Option<String>,
     payload: Option<String>,
     attempts: i64,
+}
+
+fn document_payload_agent_id(payload: &serde_json::Value) -> String {
+    payload
+        .get("agentId")
+        .or_else(|| payload.get("agent_id"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("default")
+        .to_string()
+}
+
+fn document_memory_embedding_hash(agent_id: &str, memory_id: &str, memory_hash: &str) -> String {
+    format!("memory:{agent_id}:{memory_id}:{memory_hash}")
 }
 
 async fn update_document_status(
@@ -375,10 +391,12 @@ async fn mark_document_done(
 async fn persist_document_chunks(
     pool: &DbPool,
     document_id: &str,
+    agent_id: &str,
     chunks: &[EmbeddedChunk],
     config: &DocumentConfig,
 ) -> Result<(), String> {
     let document_id = document_id.to_string();
+    let agent_id = agent_id.to_string();
     let chunks = chunks.to_vec();
     let embedding_model = config.embedding_model.clone();
     pool.write(signet_core::db::Priority::Low, move |conn| {
@@ -413,11 +431,11 @@ async fn persist_document_chunks(
                     "SELECT id FROM memories
                      WHERE content_hash = ?1
                        AND COALESCE(is_deleted, 0) = 0
-                       AND agent_id = 'default'
+                       AND agent_id = ?2
                        AND visibility = 'private'
                        AND IFNULL(scope, '') = ''
                      LIMIT 1",
-                    rusqlite::params![normalized.hash],
+                    rusqlite::params![normalized.hash, agent_id],
                     |row| row.get::<_, String>(0),
                 )
                 .ok();
@@ -429,12 +447,12 @@ async fn persist_document_chunks(
                     "INSERT INTO memories
                      (id, type, category, content, normalized_content, content_hash,
                       confidence, importance, source_id, source_type, tags, created_at,
-                      updated_at, updated_by, vector_clock, agent_id, visibility,
-                      is_deleted, extraction_status, embedding_model)
+                     updated_at, updated_by, vector_clock, agent_id, visibility,
+                     is_deleted, extraction_status, embedding_model)
                      VALUES (?1, 'document_chunk', 'document_chunk', ?2, ?3, ?4,
                              1.0, 0.3, ?5, 'document', ?6, ?7,
-                             ?7, 'document-worker', '{}', 'default', 'private',
-                             0, 'none', ?8)",
+                             ?7, 'document-worker', '{}', ?8, 'private',
+                             0, 'none', ?9)",
                     rusqlite::params![
                         memory_id,
                         normalized.storage,
@@ -443,6 +461,7 @@ async fn persist_document_chunks(
                         document_id,
                         format!("document,chunk:{}", chunk.chunk.index),
                         ts,
+                        agent_id,
                         chunk.vector.as_ref().and(embedding_model.as_deref()),
                     ],
                 )?;
@@ -455,16 +474,29 @@ async fn persist_document_chunks(
             )?;
 
             if let Some(vector) = chunk.vector.as_ref() {
+                let linked_agent_id: String = conn.query_row(
+                    "SELECT COALESCE(NULLIF(agent_id, ''), 'default')
+                     FROM memories
+                     WHERE id = ?1",
+                    rusqlite::params![linked_memory_id],
+                    |row| row.get(0),
+                )?;
+                let embedding_hash = document_memory_embedding_hash(
+                    &linked_agent_id,
+                    &linked_memory_id,
+                    &normalized.hash,
+                );
                 embedding::upsert(
                     conn,
                     &InsertEmbedding {
                         id: &uuid::Uuid::new_v4().to_string(),
-                        content_hash: &normalized.hash,
+                        content_hash: &embedding_hash,
                         vector,
                         source_type: "memory",
                         source_id: &linked_memory_id,
                         chunk_text: &chunk.chunk.text,
                         now: &ts,
+                        agent_id: Some(&linked_agent_id),
                     },
                 )?;
             }
@@ -635,7 +667,13 @@ mod tests {
             &DocumentJob {
                 id: "job-document".to_string(),
                 document_id: Some("doc-replay".to_string()),
-                payload: Some(serde_json::json!({"content": "abcdefghi"}).to_string()),
+                payload: Some(
+                    serde_json::json!({
+                        "content": "abcdefghi",
+                        "agentId": "agent-doc"
+                    })
+                    .to_string(),
+                ),
                 attempts: 1,
             },
             &DocumentConfig {
@@ -687,6 +725,22 @@ mod tests {
                     [],
                     |row| row.get(0),
                 )?;
+                let memory_agents: i64 = conn.query_row(
+                    "SELECT COUNT(*) FROM memories
+                     WHERE source_id = 'doc-replay'
+                       AND is_deleted = 0
+                       AND agent_id = 'agent-doc'",
+                    [],
+                    |row| row.get(0),
+                )?;
+                let embedding_agents: i64 = conn.query_row(
+                    "SELECT COUNT(*) FROM embeddings e
+                     JOIN document_memories dm ON dm.memory_id = e.source_id
+                     WHERE dm.document_id = 'doc-replay'
+                       AND e.agent_id = 'agent-doc'",
+                    [],
+                    |row| row.get(0),
+                )?;
                 Ok(serde_json::json!({
                     "status": status,
                     "chunkCount": chunk_count,
@@ -695,6 +749,8 @@ mod tests {
                     "embeddings": embeddings,
                     "vecEmbeddings": vec_embeddings,
                     "embeddingModel": embedding_model,
+                    "memoryAgents": memory_agents,
+                    "embeddingAgents": embedding_agents,
                 }))
             })
             .await
@@ -706,6 +762,111 @@ mod tests {
         assert_eq!(persisted["embeddings"], 3);
         assert_eq!(persisted["vecEmbeddings"], 3);
         assert_eq!(persisted["embeddingModel"], "fake-embedding");
+        assert_eq!(persisted["memoryAgents"], 3);
+        assert_eq!(persisted["embeddingAgents"], 3);
+
+        drop(pool);
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn process_document_scopes_embedding_hash_by_agent_and_memory() {
+        let (pool, handle) = open_test_pool();
+        pool.write(Priority::High, |conn| {
+            let now = chrono::Utc::now().to_rfc3339();
+            conn.execute(
+                "INSERT INTO documents
+                 (id, source_type, content_type, title, raw_content, status,
+                  chunk_count, memory_count, created_at, updated_at)
+                 VALUES
+                 ('doc-agent-a', 'text', 'text/plain', 'Agent A', 'same chunk',
+                  'queued', 0, 0, ?1, ?1),
+                 ('doc-agent-b', 'text', 'text/plain', 'Agent B', 'same chunk',
+                  'queued', 0, 0, ?1, ?1)",
+                rusqlite::params![now],
+            )?;
+            Ok(serde_json::Value::Null)
+        })
+        .await
+        .expect("seed document rows");
+
+        let config = DocumentConfig {
+            chunk_size: 64,
+            chunk_overlap: 0,
+            max_chunks: 10,
+            embedding_model: Some("fake-embedding".to_string()),
+            ..DocumentConfig::default()
+        };
+        for (document_id, agent_id) in [("doc-agent-a", "agent-a"), ("doc-agent-b", "agent-b")] {
+            process_document(
+                &pool,
+                &FakeEmbeddingProvider { dims: 768 },
+                &DocumentJob {
+                    id: format!("job-{document_id}"),
+                    document_id: Some(document_id.to_string()),
+                    payload: Some(
+                        serde_json::json!({
+                            "content": "same chunk",
+                            "agentId": agent_id,
+                        })
+                        .to_string(),
+                    ),
+                    attempts: 1,
+                },
+                &config,
+            )
+            .await
+            .expect("process scoped document");
+        }
+
+        let raw_hash = normalize_and_hash("same chunk").hash;
+        let query_hash = raw_hash.clone();
+        let persisted = pool
+            .read(move |conn| {
+                Ok(serde_json::json!({
+                    "embeddingCount": conn.query_row(
+                        "SELECT COUNT(*) FROM embeddings WHERE source_type = 'memory'",
+                        [],
+                        |row| row.get::<_, i64>(0),
+                    )?,
+                    "distinctHashes": conn.query_row(
+                        "SELECT COUNT(DISTINCT content_hash) FROM embeddings WHERE source_type = 'memory'",
+                        [],
+                        |row| row.get::<_, i64>(0),
+                    )?,
+                    "rawHashRows": conn.query_row(
+                        "SELECT COUNT(*) FROM embeddings WHERE content_hash = ?1",
+                        [&query_hash],
+                        |row| row.get::<_, i64>(0),
+                    )?,
+                    "agentA": conn.query_row(
+                        "SELECT COUNT(*) FROM embeddings WHERE source_type = 'memory' AND agent_id = 'agent-a'",
+                        [],
+                        |row| row.get::<_, i64>(0),
+                    )?,
+                    "agentB": conn.query_row(
+                        "SELECT COUNT(*) FROM embeddings WHERE source_type = 'memory' AND agent_id = 'agent-b'",
+                        [],
+                        |row| row.get::<_, i64>(0),
+                    )?,
+                    "scopedHashes": conn.query_row(
+                        "SELECT COUNT(*) FROM embeddings e
+                         JOIN memories m ON m.id = e.source_id
+                         WHERE e.content_hash = 'memory:' || m.agent_id || ':' || m.id || ':' || m.content_hash",
+                        [],
+                        |row| row.get::<_, i64>(0),
+                    )?,
+                }))
+            })
+            .await
+            .expect("read scoped document embeddings");
+
+        assert_eq!(persisted["embeddingCount"], 2);
+        assert_eq!(persisted["distinctHashes"], 2);
+        assert_eq!(persisted["rawHashRows"], 0);
+        assert_eq!(persisted["agentA"], 1);
+        assert_eq!(persisted["agentB"], 1);
+        assert_eq!(persisted["scopedHashes"], 2);
 
         drop(pool);
         handle.abort();

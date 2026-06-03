@@ -29,6 +29,9 @@ use signet_services::transactions;
 use crate::analytics::ErrorEntry;
 use crate::auth::middleware::{authenticate_headers, require_scope_guard};
 use crate::auth::types::TokenScope;
+use crate::routes::memory_embeddings::{
+    memory_has_embedding, prepare_memory_embedding, upsert_memory_embedding,
+};
 use crate::state::AppState;
 
 // ---------------------------------------------------------------------------
@@ -1872,6 +1875,14 @@ pub async fn remember(
                 .into_response();
         }
 
+        let chunk_embeddings = {
+            let mut embeddings = Vec::with_capacity(chunk_plans.len());
+            for plan in &chunk_plans {
+                embeddings.push(prepare_memory_embedding(&state, &plan.content).await);
+            }
+            embeddings
+        };
+
         let result = state
             .pool
             .write_tx(Priority::High, {
@@ -1967,7 +1978,8 @@ pub async fn remember(
 
                     let blocked_reason = blocked_extraction_reason_blocking(&state);
                     let mut ids = Vec::with_capacity(chunk_plans.len());
-                    for plan in &chunk_plans {
+                    let mut embedded_count = 0usize;
+                    for (index, plan) in chunk_plans.iter().enumerate() {
                         let r = ingest_remember_with_blocked_guard(
                             conn,
                             &transactions::IngestInput {
@@ -2003,12 +2015,23 @@ pub async fn remember(
                              VALUES (?1, ?2, 'chunk', 1.0, ?3)",
                             params![r.id, group_id, now],
                         )?;
+                        if upsert_memory_embedding(
+                            conn,
+                            &r.id,
+                            &r.hash,
+                            &plan.content,
+                            &agent_id,
+                            chunk_embeddings.get(index).and_then(Option::as_ref),
+                        )? {
+                            embedded_count += 1;
+                        }
                         ids.push(r.id);
                     }
 
                     Ok(serde_json::json!({
                         "chunked": true,
                         "chunk_count": ids.len(),
+                        "embedded_count": embedded_count,
                         "ids": ids,
                         "group_id": group_id
                     }))
@@ -2044,6 +2067,8 @@ pub async fn remember(
         };
     }
 
+    let prepared_embedding = prepare_memory_embedding(&state, &content).await;
+
     let result = state
         .pool
         .write_tx(Priority::High, {
@@ -2074,7 +2099,7 @@ pub async fn remember(
                         "pinned": row.pinned,
                         "importance": row.importance,
                         "content": row.content,
-                        "embedded": true,
+                        "embedded": memory_has_embedding(conn, &row.id)?,
                         "deduped": true,
                     }));
                 }
@@ -2155,6 +2180,18 @@ pub async fn remember(
                 } else {
                     "created"
                 };
+                let embedded = if r.duplicate_of.is_some() {
+                    memory_has_embedding(conn, &r.id)?
+                } else {
+                    upsert_memory_embedding(
+                        conn,
+                        &r.id,
+                        &r.hash,
+                        &content,
+                        &agent_id,
+                        prepared_embedding.as_ref(),
+                    )?
+                };
                 let mut response = serde_json::json!({
                     "id": r.id,
                     "status": status,
@@ -2165,7 +2202,7 @@ pub async fn remember(
                     "pinned": pinned,
                     "importance": importance,
                     "content": content,
-                    "embedded": false,
+                    "embedded": embedded,
                     "entities_linked": entities_linked,
                     "hints_written": hints_written,
                     "structured": has_structured,
@@ -2242,7 +2279,9 @@ pub async fn remember(
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::future::Future;
     use std::net::SocketAddr;
+    use std::pin::Pin;
     use std::sync::Arc;
 
     use axum::Json;
@@ -2258,6 +2297,7 @@ mod tests {
         PipelineV2Config,
     };
     use signet_core::db::{DbPool, Priority};
+    use signet_pipeline::embedding::EmbeddingProvider;
     use signet_services::session::{RuntimePath, SessionTracker};
 
     use crate::auth::rate_limiter::{AuthRateLimiter, default_limits};
@@ -2268,6 +2308,28 @@ mod tests {
         RememberBody, dead_letter_blocked_extraction_memory, normalize_scope, parse_remember_tags,
         parse_visibility, remember, require_session_scope_for_write, resolve_remember_agent,
     };
+
+    struct TestEmbeddingProvider {
+        vector: Vec<f32>,
+    }
+
+    impl EmbeddingProvider for TestEmbeddingProvider {
+        fn embed(
+            &self,
+            _text: &str,
+        ) -> Pin<Box<dyn Future<Output = Option<Vec<f32>>> + Send + '_>> {
+            let vector = self.vector.clone();
+            Box::pin(async move { Some(vector) })
+        }
+
+        fn name(&self) -> &str {
+            "test-embedding"
+        }
+
+        fn dimensions(&self) -> usize {
+            self.vector.len()
+        }
+    }
 
     #[test]
     fn remember_tags_accepts_comma_separated_strings() {
@@ -2686,6 +2748,140 @@ mod tests {
             .await
             .expect("body bytes");
         serde_json::from_slice(&bytes).expect("json body")
+    }
+
+    #[tokio::test]
+    async fn remember_embeds_created_memory_rows() {
+        let (state, _dir) = build_test_state().await;
+        *state.embedding.write().await = Some(Arc::new(TestEmbeddingProvider {
+            vector: (0..768).map(|i| (i as f32) / 768.0).collect(),
+        }));
+
+        let response = remember(
+            State(state.clone()),
+            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 3850))),
+            HeaderMap::new(),
+            Json(RememberBody {
+                content: Some("Rust daemon should embed memory writes".to_string()),
+                who: None,
+                project: None,
+                importance: None,
+                tags: None,
+                pinned: None,
+                source_type: None,
+                source_id: None,
+                created_at: None,
+                source_path: None,
+                runtime_path: None,
+                idempotency_key: None,
+                metadata: None,
+                memory_type: None,
+                agent_id: None,
+                visibility: None,
+                scope: None,
+                session_key: None,
+                hints: None,
+                structured: None,
+            }),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = read_json_body(response).await;
+        assert_eq!(body["status"], "created");
+        assert_eq!(body["embedded"], true);
+        let memory_id = body["id"].as_str().expect("memory id").to_string();
+
+        let embedding = state
+            .pool
+            .read(move |conn| {
+                Ok(conn.query_row(
+                    "SELECT e.source_type, e.agent_id, e.dimensions, m.embedding_model
+                     FROM embeddings e
+                     JOIN memories m ON m.id = e.source_id
+                     WHERE e.source_id = ?1",
+                    rusqlite::params![memory_id],
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, i64>(2)?,
+                            row.get::<_, Option<String>>(3)?,
+                        ))
+                    },
+                )?)
+            })
+            .await
+            .expect("read embedding");
+
+        assert_eq!(embedding.0, "memory");
+        assert_eq!(embedding.1, "default");
+        assert_eq!(embedding.2, 768);
+        assert_eq!(embedding.3.as_deref(), Some("test-embedding"));
+    }
+
+    #[tokio::test]
+    async fn remember_structured_payload_embeds_resulting_memory_row() {
+        let (state, _dir) = build_test_state().await;
+        *state.embedding.write().await = Some(Arc::new(TestEmbeddingProvider {
+            vector: vec![0.25; 768],
+        }));
+
+        let response = remember(
+            State(state.clone()),
+            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 3850))),
+            HeaderMap::new(),
+            Json(RememberBody {
+                content: Some("Structured writes keep passthrough and get embeddings".to_string()),
+                who: None,
+                project: None,
+                importance: None,
+                tags: None,
+                pinned: None,
+                source_type: None,
+                source_id: None,
+                created_at: None,
+                source_path: None,
+                runtime_path: None,
+                idempotency_key: None,
+                metadata: None,
+                memory_type: None,
+                agent_id: None,
+                visibility: None,
+                scope: None,
+                session_key: None,
+                hints: None,
+                structured: Some(json!({"hints": ["structured"]})),
+            }),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = read_json_body(response).await;
+        assert_eq!(body["structured"], true);
+        assert_eq!(body["embedded"], true);
+        let memory_id = body["id"].as_str().expect("memory id").to_string();
+
+        let stored = state
+            .pool
+            .read(move |conn| {
+                Ok(conn.query_row(
+                    "SELECT m.extraction_model, COUNT(e.id)
+                     FROM memories m
+                     LEFT JOIN embeddings e
+                       ON e.source_type = 'memory'
+                      AND e.source_id = m.id
+                     WHERE m.id = ?1
+                     GROUP BY m.id",
+                    rusqlite::params![memory_id],
+                    |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, i64>(1)?)),
+                )?)
+            })
+            .await
+            .expect("read structured embedding");
+
+        assert_eq!(stored.0.as_deref(), Some("structured-passthrough"));
+        assert_eq!(stored.1, 1);
     }
 
     #[tokio::test]

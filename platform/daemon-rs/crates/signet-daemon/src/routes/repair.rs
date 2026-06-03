@@ -13,6 +13,7 @@ use axum::{
     http::{StatusCode, header},
     response::{IntoResponse, Json, Response},
 };
+use rusqlite::OptionalExtension;
 use serde::Deserialize;
 use signet_core::queries::embedding::{self, InsertEmbedding};
 use signet_core::queries::memory;
@@ -21,6 +22,7 @@ use tokio::io::AsyncReadExt;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 
+use crate::routes::memory_embeddings::memory_embedding_hash;
 use crate::state::AppState;
 
 // ---------------------------------------------------------------------------
@@ -675,6 +677,13 @@ struct UnembeddedMemory {
     content_hash: Option<String>,
 }
 
+struct FreshMemoryForEmbedding {
+    content: String,
+    normalized_content: String,
+    content_hash: String,
+    agent_id: String,
+}
+
 fn count_active_memories(conn: &rusqlite::Connection) -> rusqlite::Result<i64> {
     conn.query_row(
         "SELECT COUNT(*) FROM memories WHERE COALESCE(is_deleted, 0) = 0",
@@ -690,12 +699,6 @@ fn count_unembedded_memories(conn: &rusqlite::Connection) -> rusqlite::Result<i6
            AND NOT EXISTS (
              SELECT 1 FROM embeddings e
              WHERE e.source_type = 'memory' AND e.source_id = m.id
-           )
-           AND NOT EXISTS (
-             SELECT 1 FROM embeddings e
-             WHERE e.source_type = 'memory'
-               AND m.content_hash IS NOT NULL
-               AND e.content_hash = m.content_hash
            )",
         [],
         |row| row.get(0),
@@ -714,12 +717,6 @@ fn list_unembedded_memories(
              SELECT 1 FROM embeddings e
              WHERE e.source_type = 'memory' AND e.source_id = m.id
            )
-           AND NOT EXISTS (
-             SELECT 1 FROM embeddings e
-             WHERE e.source_type = 'memory'
-               AND m.content_hash IS NOT NULL
-               AND e.content_hash = m.content_hash
-           )
          ORDER BY m.created_at ASC
          LIMIT ?1",
     )?;
@@ -733,6 +730,56 @@ fn list_unembedded_memories(
     .collect()
 }
 
+fn fresh_memory_for_embedding(
+    conn: &rusqlite::Connection,
+    memory: &UnembeddedMemory,
+) -> Result<Option<FreshMemoryForEmbedding>, signet_core::CoreError> {
+    let candidate_normalized = normalize_and_hash(&memory.content);
+    let candidate_hash = memory
+        .content_hash
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(&candidate_normalized.hash);
+    let row = conn
+        .query_row(
+            "SELECT content,
+                    content_hash,
+                    COALESCE(NULLIF(agent_id, ''), 'default') AS agent_id
+             FROM memories
+             WHERE id = ?1
+               AND COALESCE(is_deleted, 0) = 0",
+            rusqlite::params![memory.id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            },
+        )
+        .optional()?;
+
+    let Some((content, content_hash, agent_id)) = row else {
+        return Ok(None);
+    };
+    let current_normalized = normalize_and_hash(&content);
+    let current_hash = content_hash
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(&current_normalized.hash);
+    if current_hash != candidate_hash {
+        return Ok(None);
+    }
+    let content_hash = current_hash.to_string();
+
+    Ok(Some(FreshMemoryForEmbedding {
+        content,
+        normalized_content: current_normalized.normalized,
+        content_hash,
+        agent_id,
+    }))
+}
+
 fn write_embedding_batch(
     conn: &rusqlite::Connection,
     results: &[(UnembeddedMemory, Vec<f32>)],
@@ -741,12 +788,9 @@ fn write_embedding_batch(
     let now = chrono::Utc::now().to_rfc3339();
     let mut written = 0;
     for (memory, vector) in results {
-        let normalized = normalize_and_hash(&memory.content);
-        let content_hash = memory
-            .content_hash
-            .as_deref()
-            .filter(|value| !value.trim().is_empty())
-            .unwrap_or(&normalized.hash);
+        let Some(fresh) = fresh_memory_for_embedding(conn, memory)? else {
+            continue;
+        };
 
         if memory
             .content_hash
@@ -761,7 +805,7 @@ fn write_embedding_batch(
                        AND COALESCE(is_deleted, 0) = 0
                        AND id <> ?2
                      LIMIT 1",
-                    rusqlite::params![content_hash, memory.id],
+                    rusqlite::params![fresh.content_hash, memory.id],
                     |row| row.get::<_, String>(0),
                 )
                 .ok();
@@ -771,22 +815,25 @@ fn write_embedding_batch(
                      SET content_hash = ?1,
                          normalized_content = COALESCE(normalized_content, ?2)
                      WHERE id = ?3 AND content_hash IS NULL",
-                    rusqlite::params![content_hash, normalized.normalized, memory.id],
+                    rusqlite::params![fresh.content_hash, fresh.normalized_content, memory.id],
                 )?;
             }
         }
 
-        embedding::delete_by_source(conn, "memory", &memory.id, Some(content_hash))?;
+        let embedding_hash =
+            memory_embedding_hash(&fresh.agent_id, &memory.id, &fresh.content_hash);
+        embedding::delete_by_source(conn, "memory", &memory.id, Some(&embedding_hash))?;
         embedding::upsert(
             conn,
             &InsertEmbedding {
                 id: &uuid::Uuid::new_v4().to_string(),
-                content_hash,
+                content_hash: &embedding_hash,
                 vector,
                 source_type: "memory",
                 source_id: &memory.id,
-                chunk_text: &memory.content,
+                chunk_text: &fresh.content,
                 now: &now,
+                agent_id: Some(&fresh.agent_id),
             },
         )?;
         if let Some(model) = embedding_model {
@@ -1270,9 +1317,7 @@ pub async fn resync_vec(State(state): State<Arc<AppState>>) -> impl IntoResponse
             conn.execute("DELETE FROM vec_embeddings", [])?;
             let count = conn.execute(
                 "INSERT INTO vec_embeddings(id, embedding)
-                 SELECT e.id, e.vector FROM embeddings e
-                 JOIN memories m ON m.id = e.source_id
-                 WHERE e.source_type = 'memory' AND m.is_deleted = 0",
+                 SELECT e.id, e.vector FROM embeddings e",
                 [],
             )?;
             Ok(serde_json::json!(count))
@@ -2165,6 +2210,325 @@ mod tests {
 
         drop(state);
         writer.abort();
+    }
+
+    #[tokio::test]
+    async fn re_embed_skips_stale_candidates_after_modify_or_delete() {
+        let (state, writer) = test_state_with_embedding(None);
+        let old_a = normalize_and_hash("Old modified content");
+        let old_b = normalize_and_hash("Old deleted content");
+        let new_a = normalize_and_hash("New modified content");
+        state
+            .pool
+            .write(signet_core::db::Priority::High, move |conn| {
+                conn.execute(
+                    "INSERT INTO memories
+                     (id, type, content, content_hash, confidence, importance, created_at,
+                      updated_at, updated_by, is_deleted, agent_id, visibility)
+                     VALUES
+                     ('mem-stale-modified', 'fact', 'Old modified content', ?1, 1.0, 0.5,
+                      '2026-06-01T00:00:00Z', '2026-06-01T00:00:00Z', 'test', 0, 'agent-a', 'private'),
+                     ('mem-stale-deleted', 'fact', 'Old deleted content', ?2, 1.0, 0.5,
+                      '2026-06-01T00:00:00Z', '2026-06-01T00:00:00Z', 'test', 0, 'agent-a', 'private')",
+                    rusqlite::params![old_a.hash, old_b.hash],
+                )?;
+                Ok(serde_json::Value::Null)
+            })
+            .await
+            .expect("seed stale memories");
+
+        let candidates = state
+            .pool
+            .read(|conn| Ok(list_unembedded_memories(conn, 10)?))
+            .await
+            .expect("list candidates");
+        assert_eq!(candidates.len(), 2);
+
+        state
+            .pool
+            .write(signet_core::db::Priority::High, move |conn| {
+                conn.execute(
+                    "UPDATE memories
+                     SET content = ?1,
+                         normalized_content = ?2,
+                         content_hash = ?3
+                     WHERE id = 'mem-stale-modified'",
+                    rusqlite::params![new_a.storage, new_a.normalized, new_a.hash],
+                )?;
+                conn.execute(
+                    "UPDATE memories SET is_deleted = 1 WHERE id = 'mem-stale-deleted'",
+                    [],
+                )?;
+                Ok(serde_json::Value::Null)
+            })
+            .await
+            .expect("make candidates stale");
+
+        state
+            .pool
+            .write(signet_core::db::Priority::High, move |conn| {
+                let vectors = candidates
+                    .into_iter()
+                    .map(|candidate| (candidate, vec![0.5; 768]))
+                    .collect::<Vec<_>>();
+                Ok(serde_json::json!(write_embedding_batch(
+                    conn,
+                    &vectors,
+                    Some("fake-embedding")
+                )?))
+            })
+            .await
+            .expect("write stale candidates");
+
+        let embeddings = state
+            .pool
+            .read(|conn| {
+                Ok(
+                    conn.query_row("SELECT COUNT(*) FROM embeddings", [], |row| {
+                        row.get::<_, i64>(0)
+                    })?,
+                )
+            })
+            .await
+            .expect("count embeddings");
+        assert_eq!(embeddings, 0);
+
+        drop(state);
+        writer.abort();
+    }
+
+    #[tokio::test]
+    async fn re_embed_scopes_embedding_hash_by_agent_and_memory() {
+        let (state, writer) = test_state_with_embedding(None);
+        let normalized = normalize_and_hash("Shared normalized content");
+        let expected_hash = normalized.hash.clone();
+        let normalized_content = normalized.normalized.clone();
+        let memory_hash = normalized.hash.clone();
+        state
+            .pool
+            .write(signet_core::db::Priority::High, move |conn| {
+                conn.execute(
+                    "INSERT INTO memories
+                     (id, type, content, normalized_content, content_hash, confidence, importance,
+                      created_at, updated_at, updated_by, is_deleted, agent_id, visibility)
+                     VALUES
+                     ('mem-scope-a', 'fact', 'Shared normalized content', ?1, ?2, 1.0, 0.5,
+                      '2026-06-01T00:00:00Z', '2026-06-01T00:00:00Z', 'test', 0, 'agent-a', 'private'),
+                     ('mem-scope-b', 'fact', 'Shared normalized content', ?1, ?2, 1.0, 0.5,
+                      '2026-06-01T00:00:00Z', '2026-06-01T00:00:00Z', 'test', 0, 'agent-b', 'private')",
+                    rusqlite::params![normalized_content, memory_hash],
+                )?;
+                Ok(serde_json::Value::Null)
+            })
+            .await
+            .expect("seed scoped memories");
+
+        let candidates = state
+            .pool
+            .read(|conn| Ok(list_unembedded_memories(conn, 10)?))
+            .await
+            .expect("list scoped candidates");
+        assert_eq!(candidates.len(), 2);
+
+        state
+            .pool
+            .write(signet_core::db::Priority::High, move |conn| {
+                let vectors = candidates
+                    .into_iter()
+                    .map(|candidate| (candidate, vec![0.5; 768]))
+                    .collect::<Vec<_>>();
+                Ok(serde_json::json!(write_embedding_batch(
+                    conn,
+                    &vectors,
+                    Some("fake-embedding")
+                )?))
+            })
+            .await
+            .expect("write scoped embeddings");
+
+        let query_hash = expected_hash.clone();
+        let embeddings = state
+            .pool
+            .read(move |conn| {
+                Ok(serde_json::json!({
+                    "count": conn.query_row("SELECT COUNT(*) FROM embeddings", [], |row| row.get::<_, i64>(0))?,
+                    "agentA": conn.query_row(
+                        "SELECT content_hash FROM embeddings
+                         WHERE source_type = 'memory' AND source_id = 'mem-scope-a'",
+                        [],
+                        |row| row.get::<_, String>(0),
+                    )?,
+                    "agentB": conn.query_row(
+                        "SELECT content_hash FROM embeddings
+                         WHERE source_type = 'memory' AND source_id = 'mem-scope-b'",
+                        [],
+                        |row| row.get::<_, String>(0),
+                    )?,
+                    "rawHashRows": conn.query_row(
+                        "SELECT COUNT(*) FROM embeddings WHERE content_hash = ?1",
+                        [&query_hash],
+                        |row| row.get::<_, i64>(0),
+                    )?,
+                }))
+            })
+            .await
+            .expect("read scoped embeddings");
+
+        assert_eq!(embeddings["count"], 2);
+        assert_eq!(
+            embeddings["agentA"],
+            format!("memory:agent-a:mem-scope-a:{expected_hash}")
+        );
+        assert_eq!(
+            embeddings["agentB"],
+            format!("memory:agent-b:mem-scope-b:{expected_hash}")
+        );
+        assert_eq!(embeddings["rawHashRows"], 0);
+
+        drop(state);
+        writer.abort();
+    }
+
+    #[tokio::test]
+    async fn re_embed_gap_detection_ignores_legacy_raw_hash_for_other_memories() {
+        let (state, writer) = test_state_with_embedding(None);
+        let normalized = normalize_and_hash("Legacy shared content");
+        state
+            .pool
+            .write(signet_core::db::Priority::High, move |conn| {
+                let vector = signet_core::queries::embedding::vector_to_blob(&vec![0.25; 768]);
+                conn.execute(
+                    "INSERT INTO memories
+                     (id, type, content, normalized_content, content_hash, confidence, importance,
+                      created_at, updated_at, updated_by, is_deleted, agent_id, visibility)
+                     VALUES
+                     ('mem-legacy-a', 'fact', 'Legacy shared content', ?1, ?2, 1.0, 0.5,
+                      '2026-06-01T00:00:00Z', '2026-06-01T00:00:00Z', 'test', 0, 'agent-a', 'private'),
+                     ('mem-legacy-b', 'fact', 'Legacy shared content', ?1, ?2, 1.0, 0.5,
+                      '2026-06-01T00:00:01Z', '2026-06-01T00:00:01Z', 'test', 0, 'agent-b', 'private')",
+                    rusqlite::params![normalized.normalized, normalized.hash],
+                )?;
+                conn.execute(
+                    "INSERT INTO embeddings
+                     (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id)
+                     VALUES ('emb-legacy-a', ?1, ?2, 768, 'memory', 'mem-legacy-a',
+                             'Legacy shared content', '2026-06-01T00:00:00Z', 'agent-a')",
+                    rusqlite::params![normalized.hash, vector],
+                )?;
+                Ok(serde_json::Value::Null)
+            })
+            .await
+            .expect("seed legacy raw embedding");
+
+        let gaps = state
+            .pool
+            .read(|conn| {
+                let rows = list_unembedded_memories(conn, 10)?;
+                Ok(serde_json::json!({
+                    "count": count_unembedded_memories(conn)?,
+                    "ids": rows.into_iter().map(|row| row.id).collect::<Vec<_>>(),
+                }))
+            })
+            .await
+            .expect("read embedding gaps");
+
+        assert_eq!(gaps["count"], 1);
+        assert_eq!(gaps["ids"], serde_json::json!(["mem-legacy-b"]));
+
+        drop(state);
+        writer.abort();
+    }
+
+    #[tokio::test]
+    async fn resync_vec_preserves_non_memory_embeddings() {
+        let state = test_state();
+        state
+            .pool
+            .write(signet_core::db::Priority::High, |conn| {
+                let memory_vector =
+                    signet_core::queries::embedding::vector_to_blob(&vec![0.25; 768]);
+                let document_vector =
+                    signet_core::queries::embedding::vector_to_blob(&vec![0.5; 768]);
+                conn.execute(
+                    "INSERT INTO memories
+                     (id, content, normalized_content, content_hash, type, agent_id, created_at, updated_at, updated_by, importance)
+                     VALUES (?1, ?2, ?2, ?3, 'fact', ?4, ?5, ?5, 'test', 0.5)",
+                    rusqlite::params![
+                        "mem-resync",
+                        "Memory vector row",
+                        "mem-resync-hash",
+                        "agent-a",
+                        "2026-06-01T00:00:00Z"
+                    ],
+                )?;
+                conn.execute(
+                    "INSERT INTO embeddings
+                     (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id)
+                     VALUES (?1, ?2, ?3, 768, 'memory', ?4, ?5, ?6, ?7)",
+                    rusqlite::params![
+                        "emb-memory-resync",
+                        "emb-memory-hash",
+                        memory_vector,
+                        "mem-resync",
+                        "Memory vector row",
+                        "2026-06-01T00:00:00Z",
+                        "agent-a"
+                    ],
+                )?;
+                conn.execute(
+                    "INSERT INTO embeddings
+                     (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id)
+                     VALUES (?1, ?2, ?3, 768, 'document', ?4, ?5, ?6, ?7)",
+                    rusqlite::params![
+                        "emb-document-resync",
+                        "emb-document-hash",
+                        document_vector,
+                        "doc-resync",
+                        "Document vector row",
+                        "2026-06-01T00:00:00Z",
+                        "agent-a"
+                    ],
+                )?;
+                Ok(serde_json::Value::Null)
+            })
+            .await
+            .expect("seed embeddings");
+
+        let app = Router::new()
+            .route("/api/repair/resync-vec", post(resync_vec))
+            .with_state(state.clone());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/repair/resync-vec")
+                    .body(Body::empty())
+                    .expect("build request"),
+            )
+            .await
+            .expect("send request");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("read body");
+        let json: serde_json::Value = serde_json::from_slice(&body).expect("json body");
+        assert_eq!(json["success"], true);
+        assert_eq!(json["affected"], 2);
+
+        let document_vec_count = state
+            .pool
+            .read(|conn| {
+                Ok(conn.query_row(
+                    "SELECT COUNT(*) FROM vec_embeddings WHERE id = 'emb-document-resync'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )?)
+            })
+            .await
+            .expect("read document vec count");
+
+        assert_eq!(document_vec_count, 1);
     }
 
     struct FakeEmbeddingProvider;

@@ -36,6 +36,7 @@ pub struct InsertEmbedding<'a> {
     pub source_id: &'a str,
     pub chunk_text: &'a str,
     pub now: &'a str,
+    pub agent_id: Option<&'a str>,
 }
 
 /// Upsert an embedding row (idempotent via ON CONFLICT on content_hash).
@@ -45,15 +46,16 @@ pub fn upsert(conn: &Connection, e: &InsertEmbedding) -> Result<(), CoreError> {
 
     conn.execute(
         "INSERT INTO embeddings
-         (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8)
+         (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)
          ON CONFLICT(content_hash) DO UPDATE SET
            vector = excluded.vector,
            dimensions = excluded.dimensions,
            source_type = excluded.source_type,
            source_id = excluded.source_id,
            chunk_text = excluded.chunk_text,
-           created_at = excluded.created_at",
+           created_at = excluded.created_at,
+           agent_id = excluded.agent_id",
         params![
             e.id,
             e.content_hash,
@@ -62,7 +64,8 @@ pub fn upsert(conn: &Connection, e: &InsertEmbedding) -> Result<(), CoreError> {
             e.source_type,
             e.source_id,
             e.chunk_text,
-            e.now
+            e.now,
+            e.agent_id
         ],
     )?;
 

@@ -18,6 +18,7 @@ pub mod knowledge;
 pub mod marketplace;
 pub mod marketplace_reviews;
 pub mod memory;
+pub mod memory_embeddings;
 pub mod ontology;
 pub mod os;
 pub mod pipeline;
