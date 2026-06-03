@@ -334,6 +334,11 @@ export function queueExtractionJob(memoryId: string): void {
 
 // Version
 function getDaemonVersion(): string {
+	const envVersion = readEnvTrimmed("SIGNET_VERSION");
+	if (envVersion) {
+		return envVersion;
+	}
+
 	const __filename = fileURLToPath(import.meta.url);
 	const __dirname = join(__filename, "..");
 

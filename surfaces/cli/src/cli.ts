@@ -297,6 +297,11 @@ function getVersionFromPackageJson(packageJsonPath: string): string | null {
 }
 
 function getCliVersion(): string {
+	const envVersion = process.env.SIGNET_VERSION?.trim();
+	if (envVersion) {
+		return envVersion;
+	}
+
 	const candidates = [
 		join(__dirname, "..", "package.json"),
 		join(__dirname, "..", "..", "signetai", "package.json"),

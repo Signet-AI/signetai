@@ -24,6 +24,8 @@ const platformKey = process.env.SIGNET_NATIVE_PLATFORM ?? `${platform()}-${arch(
 const binaryName = platformKey.startsWith("win32-") ? `signet-${platformKey}.exe` : `signet-${platformKey}`;
 const outfile = join(outDir, binaryName);
 const daemonRequire = createRequire(join(root, "platform", "daemon", "package.json"));
+const rootPackage = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as { version?: unknown };
+const nativeVersion = typeof rootPackage.version === "string" ? rootPackage.version : "0.0.0";
 
 mkdirSync(outDir, { recursive: true });
 rmSync(buildDir, { recursive: true, force: true });
@@ -155,14 +157,17 @@ writeFileSync(
 
 writeFileSync(
 	join(buildDir, "cli-native.ts"),
-	`import { materializeEmbeddedAssetTree, registerNativeAssets, registerNativeTransformersBindings } from "../platform/daemon/src/native-runtime-assets";\n` +
-		`import { dashboardAssets, skillAssets, templateAssets, wasmAssets, workerAssets } from "./native-assets";\n` +
-		`import * as transformersWebRuntime from "./transformers-web-runtime";\n\n` +
-		"registerNativeAssets({ dashboard: dashboardAssets, skills: skillAssets, templates: templateAssets, workers: workerAssets, wasm: wasmAssets });\n" +
-		"registerNativeTransformersBindings(transformersWebRuntime);\n" +
-		'process.env.SIGNET_TEMPLATES_DIR ??= materializeEmbeddedAssetTree("templates") ?? "";\n' +
-		'process.env.SIGNET_SKILLS_SOURCE ??= materializeEmbeddedAssetTree("skills") ?? "";\n' +
-		`await import("../surfaces/cli/src/cli.ts");\n`,
+	`import { materializeEmbeddedAssetTree, registerNativeAssets, registerNativeTransformersBindings } from "../platform/daemon/src/native-runtime-assets";
+import { dashboardAssets, skillAssets, templateAssets, wasmAssets, workerAssets } from "./native-assets";
+import * as transformersWebRuntime from "./transformers-web-runtime";
+
+registerNativeAssets({ dashboard: dashboardAssets, skills: skillAssets, templates: templateAssets, workers: workerAssets, wasm: wasmAssets });
+registerNativeTransformersBindings(transformersWebRuntime);
+process.env.SIGNET_VERSION = process.env.SIGNET_VERSION?.trim() || ${JSON.stringify(nativeVersion)};
+process.env.SIGNET_TEMPLATES_DIR ??= materializeEmbeddedAssetTree("templates") ?? "";
+process.env.SIGNET_SKILLS_SOURCE ??= materializeEmbeddedAssetTree("skills") ?? "";
+await import("../surfaces/cli/src/cli.ts");
+`,
 );
 
 runBunBuild([

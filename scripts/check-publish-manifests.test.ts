@@ -113,6 +113,8 @@ describe("check-publish-manifests", () => {
 		expect(buildScript).toContain('join(root, "skills")');
 		expect(buildScript).toContain("templateAssets");
 		expect(buildScript).toContain("skillAssets");
+		expect(buildScript).toContain("process.env.SIGNET_VERSION");
+		expect(buildScript).toContain("process.env.SIGNET_VERSION?.trim()");
 		expect(buildScript).toContain("SIGNET_TEMPLATES_DIR");
 		expect(buildScript).toContain("SIGNET_SKILLS_SOURCE");
 		expect(buildScript).not.toContain('"@1password/sdk"');
@@ -136,6 +138,17 @@ describe("check-publish-manifests", () => {
 		expect(workflow).toContain("bun run build:native-bun");
 		expect(workflow).toContain('./dist/native/"$RELEASE_ASSET" --help');
 		expect(workflow).not.toContain("if: matrix.platform != 'linux-arm64'");
+	});
+
+	test("trims native Signet version overrides before package metadata fallback", () => {
+		const root = join(import.meta.dir, "..");
+		const cliSource = readFileSync(join(root, "surfaces", "cli", "src", "cli.ts"), "utf-8");
+		const stateSource = readFileSync(join(root, "platform", "daemon", "src", "routes", "state.ts"), "utf-8");
+
+		expect(cliSource).toContain("process.env.SIGNET_VERSION?.trim()");
+		expect(cliSource).not.toContain("return process.env.SIGNET_VERSION;");
+		expect(stateSource).toContain('readEnvTrimmed("SIGNET_VERSION")');
+		expect(stateSource).not.toContain("return process.env.SIGNET_VERSION;");
 	});
 
 	test("publishes native release assets, native package tarballs, and the native manifest", () => {
