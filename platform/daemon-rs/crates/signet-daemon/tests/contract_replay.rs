@@ -1695,10 +1695,7 @@ impl EmbeddingFixture {
                 };
                 let mut buffer = [0_u8; 4096];
                 let _ = stream.read(&mut buffer);
-                let embedding = std::iter::repeat("0.25")
-                    .take(768)
-                    .collect::<Vec<_>>()
-                    .join(",");
+                let embedding = "0.25,0.5,0.75";
                 let body = format!(r#"{{"data":[{{"embedding":[{embedding}]}}]}}"#);
                 let headers = format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
@@ -5568,7 +5565,7 @@ async fn skills_endpoints() {
     let server = TestServer::start_with_agent_yaml(
         None,
         &format!(
-            "agent:\n  name: test-agent\n  version: 1\nembedding:\n  provider: openai\n  model: replay-embedding\n  dimensions: 768\n  base_url: {}\nmemory:\n  pipelineV2:\n    procedural:\n      enabled: true\n",
+            "agent:\n  name: test-agent\n  version: 1\nembedding:\n  provider: openai\n  model: replay-embedding\n  dimensions: 3\n  base_url: {}\nmemory:\n  pipelineV2:\n    procedural:\n      enabled: true\n",
             embedding_fixture.base
         ),
     )
@@ -5645,7 +5642,7 @@ async fn skills_endpoints() {
     let web_embedding =
         wait_for_skill_embedding_row(&server.db_path(), "skill:default:web-search").await;
     assert_eq!(web_embedding.content_hash, "6c5291356681c1e6");
-    assert_eq!(web_embedding.dimensions, 768);
+    assert_eq!(web_embedding.dimensions, 3);
     assert_eq!(
         web_embedding.chunk_text,
         "web-search — Installed by fake skills runner"

@@ -78,6 +78,15 @@ impl DbPool {
     /// Open the database, run migrations, start the writer task.
     /// Returns `DbPool` and a `JoinHandle` for the writer task.
     pub fn open(path: &Path) -> Result<(Self, tokio::task::JoinHandle<()>), CoreError> {
+        Self::open_with_embedding_dimensions(path, crate::constants::DEFAULT_EMBEDDING_DIMENSIONS)
+    }
+
+    /// Open the database using the configured embedding dimensionality for a
+    /// newly-created vec table.
+    pub fn open_with_embedding_dimensions(
+        path: &Path,
+        embedding_dimensions: usize,
+    ) -> Result<(Self, tokio::task::JoinHandle<()>), CoreError> {
         // Ensure parent directory exists
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
@@ -96,7 +105,7 @@ impl DbPool {
 
         // Ensure FTS and vec tables
         ensure_fts(&write_conn)?;
-        ensure_vec_table(&write_conn)?;
+        ensure_vec_table(&write_conn, embedding_dimensions)?;
 
         // Build read pool
         let manager = SqliteConnectionManager::file(path).with_flags(
@@ -314,14 +323,25 @@ fn ensure_fts(conn: &Connection) -> Result<(), CoreError> {
     Ok(())
 }
 
-fn ensure_vec_table(conn: &Connection) -> Result<(), CoreError> {
+fn ensure_vec_table(conn: &Connection, default_dimensions: usize) -> Result<(), CoreError> {
     let existing: Option<String> = conn
         .prepare("SELECT sql FROM sqlite_master WHERE name = 'vec_embeddings' AND type = 'table'")?
         .query_row([], |r| r.get(0))
         .ok();
 
     match existing {
-        Some(sql) if sql.contains("id TEXT") => return Ok(()),
+        Some(sql) if sql.contains("id TEXT") => {
+            if vec_table_dimensions(&sql) == Some(default_dimensions)
+                || !can_recreate_empty_vec_table(conn)?
+            {
+                return Ok(());
+            }
+            warn!(
+                dimensions = default_dimensions,
+                "empty vec_embeddings table has stale dimensions — dropping and recreating"
+            );
+            conn.execute_batch("DROP TABLE vec_embeddings")?;
+        }
         Some(_) => {
             warn!("vec_embeddings has old schema — dropping and recreating");
             conn.execute_batch("DROP TABLE vec_embeddings")?;
@@ -334,7 +354,7 @@ fn ensure_vec_table(conn: &Connection) -> Result<(), CoreError> {
         .query_row("SELECT dimensions FROM embeddings LIMIT 1", [], |r| {
             r.get::<_, usize>(0)
         })
-        .unwrap_or(crate::constants::DEFAULT_EMBEDDING_DIMENSIONS);
+        .unwrap_or(default_dimensions);
 
     conn.execute_batch(&format!(
         "CREATE VIRTUAL TABLE vec_embeddings USING vec0(
@@ -433,7 +453,24 @@ pub fn ensure_fts_pub(conn: &Connection) -> Result<(), CoreError> {
 
 #[doc(hidden)]
 pub fn ensure_vec_table_pub(conn: &Connection) -> Result<(), CoreError> {
-    ensure_vec_table(conn)
+    ensure_vec_table(conn, crate::constants::DEFAULT_EMBEDDING_DIMENSIONS)
+}
+
+fn vec_table_dimensions(sql: &str) -> Option<usize> {
+    let start = sql.find("FLOAT[")? + "FLOAT[".len();
+    let end = sql[start..].find(']')? + start;
+    sql[start..end].parse().ok()
+}
+
+fn can_recreate_empty_vec_table(conn: &Connection) -> Result<bool, CoreError> {
+    let embeddings: i64 = conn.query_row("SELECT COUNT(*) FROM embeddings", [], |r| r.get(0))?;
+    if embeddings > 0 {
+        return Ok(false);
+    }
+    let vec_rows: i64 = conn
+        .query_row("SELECT COUNT(*) FROM vec_embeddings", [], |r| r.get(0))
+        .unwrap_or(0);
+    Ok(vec_rows == 0)
 }
 
 // ---------------------------------------------------------------------------
@@ -481,6 +518,28 @@ mod tests {
         assert_eq!(content, "hello world");
 
         // Cleanup
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[tokio::test]
+    async fn open_uses_configured_embedding_dimensions_for_empty_vec_table() {
+        let tmp = std::env::temp_dir().join("signet_db_dimensions_test.db");
+        let _ = std::fs::remove_file(&tmp);
+
+        let (_pool, _handle) =
+            DbPool::open_with_embedding_dimensions(&tmp, 3).expect("failed to open DB");
+
+        register_vec_extension();
+        let conn = Connection::open(&tmp).expect("open dimension test db");
+        let sql: String = conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE name = 'vec_embeddings'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("vec_embeddings schema");
+        assert_eq!(vec_table_dimensions(&sql), Some(3));
+
         let _ = std::fs::remove_file(&tmp);
     }
 

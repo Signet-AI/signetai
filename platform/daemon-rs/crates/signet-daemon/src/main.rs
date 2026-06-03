@@ -7,6 +7,7 @@ use anyhow::Context;
 use axum::{Router, extract::State, response::Json, routing::get};
 use chrono::{SecondsFormat, Utc};
 use signet_core::config::{DaemonConfig, network_mode_from_bind};
+use signet_core::constants::DEFAULT_EMBEDDING_DIMENSIONS;
 use signet_core::db::DbPool;
 use tokio::signal;
 use tower_http::services::{ServeDir, ServeFile};
@@ -86,7 +87,9 @@ async fn main() -> anyhow::Result<()> {
     if args.iter().any(|a| a == "--check-migrations") {
         let start = Instant::now();
         std::fs::create_dir_all(config.memory_dir())?;
-        let (_pool, _handle) = DbPool::open(&config.db_path).context("failed to open database")?;
+        let (_pool, _handle) =
+            DbPool::open_with_embedding_dimensions(&config.db_path, embedding_dimensions(&config))
+                .context("failed to open database")?;
         let elapsed = start.elapsed();
         info!(
             elapsed_ms = elapsed.as_millis(),
@@ -110,7 +113,9 @@ async fn main() -> anyhow::Result<()> {
     std::fs::create_dir_all(config.logs_dir())?;
 
     // Open database (runs migrations, starts writer task)
-    let (pool, writer_handle) = DbPool::open(&config.db_path).context("failed to open database")?;
+    let (pool, writer_handle) =
+        DbPool::open_with_embedding_dimensions(&config.db_path, embedding_dimensions(&config))
+            .context("failed to open database")?;
 
     // Initialize embedding and LLM providers
     let pipeline_paused = config
@@ -1172,6 +1177,15 @@ async fn main() -> anyhow::Result<()> {
 
     info!("shutdown complete");
     Ok(())
+}
+
+fn embedding_dimensions(config: &DaemonConfig) -> usize {
+    config
+        .manifest
+        .embedding
+        .as_ref()
+        .map(|embedding| embedding.dimensions)
+        .unwrap_or(DEFAULT_EMBEDDING_DIMENSIONS)
 }
 
 async fn shutdown_signal() {
