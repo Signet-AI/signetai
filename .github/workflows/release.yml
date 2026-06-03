@@ -293,8 +293,8 @@ jobs:
           test -n "$NODE_AUTH_TOKEN"
           npm config set //registry.npmjs.org/:_authToken "$NODE_AUTH_TOKEN"
           cd dist/signetai
-          npm publish --access public
+          npm publish --tag next --access public
           cd ../../integrations/openclaw/memory-adapter
-          npm publish --access public || true
+          npm publish --tag next --access public || true
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

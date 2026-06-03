@@ -137,16 +137,17 @@ describe("check-publish-manifests", () => {
 		expect(workflow).toContain('SIGNET_VERSION="$NEW_VERSION" bun scripts/generate-native-manifest.ts');
 		expect(workflow).toContain("dist/native/native-manifest.json");
 		expect(workflow).toContain("cd dist/signetai");
-		expect(workflow).toContain("npm publish --access public");
+		expect(workflow).toContain("npm publish --tag next --access public");
 		expect(workflow).toContain("cd ../../integrations/openclaw/memory-adapter");
 		expect(workflow).toContain('gh release edit "v${NEW_VERSION}" --draft=false');
 		expect(workflow.indexOf('gh release edit "v${NEW_VERSION}" --draft=false')).toBeLessThan(
 			workflow.indexOf("cd dist/signetai"),
 		);
-		expect(workflow).not.toContain("npm dist-tag");
+		expect(workflow).not.toContain("npm publish --access public");
 		expect(workflow).not.toContain("bundle-latest");
 		expect(workflow).not.toContain("deploy/bundle");
-		expect(promoteWorkflow).not.toContain("npm dist-tag");
+		expect(promoteWorkflow).toContain('npm dist-tag add "signetai@${VERSION}" latest');
+		expect(promoteWorkflow).toContain('npm dist-tag add "@signetai/signet-memory-openclaw@${VERSION}" latest || true');
 		expect(manifestScript).toContain('name.endsWith(".sha256")');
 		expect(manifestScript).toContain("native-manifest.json");
 	});
