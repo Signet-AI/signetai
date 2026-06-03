@@ -31,6 +31,9 @@ struct SkillGraphRow {
     description: String,
     source: String,
     role: String,
+    triggers: Option<String>,
+    tags: Option<String>,
+    enriched: i64,
     fs_path: String,
     uninstalled_at: Option<String>,
 }
@@ -1678,6 +1681,7 @@ struct ClawhubDownloadFixture {
 
 struct EmbeddingFixture {
     base: String,
+    llm_requests: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     _thread: std::thread::JoinHandle<()>,
 }
 
@@ -1688,15 +1692,47 @@ impl EmbeddingFixture {
             .set_nonblocking(false)
             .expect("configure embedding fixture");
         let base = format!("http://{}", listener.local_addr().unwrap());
+        let llm_requests = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let thread_llm_requests = llm_requests.clone();
         let thread = std::thread::spawn(move || {
             for stream in listener.incoming().take(16) {
                 let Ok(mut stream) = stream else {
                     continue;
                 };
                 let mut buffer = [0_u8; 4096];
-                let _ = stream.read(&mut buffer);
-                let embedding = "0.25,0.5,0.75";
-                let body = format!(r#"{{"data":[{{"embedding":[{embedding}]}}]}}"#);
+                let read = stream.read(&mut buffer).unwrap_or(0);
+                let request = String::from_utf8_lossy(&buffer[..read]);
+                let body = if request.starts_with("POST /v1/chat/completions ") {
+                    thread_llm_requests.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    let (description, triggers, tags) = if request.contains("Skill name: claw-demo")
+                    {
+                        (
+                            "Enriched claw-demo discovery metadata for replay.",
+                            vec!["install claw demo", "use clawhub skill"],
+                            vec!["clawhub", "demo"],
+                        )
+                    } else {
+                        (
+                            "Enriched web-search discovery metadata for replay.",
+                            vec!["look up web facts", "search online"],
+                            vec!["research", "web"],
+                        )
+                    };
+                    json!({
+                        "choices": [{
+                            "message": {
+                                "content": serde_json::json!({
+                                    "description": description,
+                                    "triggers": triggers,
+                                    "tags": tags,
+                                }).to_string()
+                            }
+                        }]
+                    })
+                    .to_string()
+                } else {
+                    r#"{"data":[{"embedding":[0.25,0.5,0.75]}]}"#.to_string()
+                };
                 let headers = format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
                     body.len()
@@ -1707,6 +1743,7 @@ impl EmbeddingFixture {
         });
         Self {
             base,
+            llm_requests,
             _thread: thread,
         }
     }
@@ -5453,7 +5490,8 @@ async fn wait_for_skill_graph_row(db_path: &std::path::Path, entity_id: &str) ->
         let row = conn
             .query_row(
                 "SELECT e.name, e.entity_type, e.agent_id, COALESCE(e.description, ''),
-                        sm.source, sm.role, sm.fs_path, sm.uninstalled_at
+                        sm.source, sm.role, sm.triggers, sm.tags, sm.enriched,
+                        sm.fs_path, sm.uninstalled_at
                    FROM entities e
                    JOIN skill_meta sm ON sm.entity_id = e.id
                   WHERE e.id = ?1",
@@ -5466,8 +5504,11 @@ async fn wait_for_skill_graph_row(db_path: &std::path::Path, entity_id: &str) ->
                         description: row.get(3)?,
                         source: row.get(4)?,
                         role: row.get(5)?,
-                        fs_path: row.get(6)?,
-                        uninstalled_at: row.get(7)?,
+                        triggers: row.get(6)?,
+                        tags: row.get(7)?,
+                        enriched: row.get(8)?,
+                        fs_path: row.get(9)?,
+                        uninstalled_at: row.get(10)?,
                     })
                 },
             )
@@ -5565,7 +5606,9 @@ async fn skills_endpoints() {
     let server = TestServer::start_with_agent_yaml(
         None,
         &format!(
-            "agent:\n  name: test-agent\n  version: 1\nembedding:\n  provider: openai\n  model: replay-embedding\n  dimensions: 3\n  base_url: {}\nmemory:\n  pipelineV2:\n    procedural:\n      enabled: true\n",
+            "agent:\n  name: test-agent\n  version: 1\nembedding:\n  provider: openai\n  model: replay-embedding\n  dimensions: 3\n  base_url: {}\nmemory:\n  pipelineV2:\n    extractionProvider: openai-compatible\n    extractionModel: replay-llm\n    extractionEndpoint: {}\n    rerankerUseExtractionModel: true\n    extraction:\n      provider: openai-compatible\n      model: replay-llm\n      endpoint: {}\n      timeout: 5000\n    reranker:\n      enabled: true\n      useExtractionModel: true\n    procedural:\n      enabled: true\n      enrichOnInstall: true\n      enrichMinDescription: 50\n",
+            embedding_fixture.base,
+            embedding_fixture.base,
             embedding_fixture.base
         ),
     )
@@ -5634,9 +5677,25 @@ async fn skills_endpoints() {
     assert_eq!(web_graph.name, "web-search");
     assert_eq!(web_graph.entity_type, "skill");
     assert_eq!(web_graph.agent_id, "default");
-    assert_eq!(web_graph.description, "Installed by fake skills runner");
+    assert!(
+        embedding_fixture
+            .llm_requests
+            .load(std::sync::atomic::Ordering::SeqCst)
+            > 0,
+        "skill enrichment did not call the LLM fixture"
+    );
+    assert_eq!(
+        web_graph.description,
+        "Enriched web-search discovery metadata for replay."
+    );
     assert_eq!(web_graph.source, "installed");
     assert_eq!(web_graph.role, "utility");
+    assert_eq!(web_graph.enriched, 1);
+    assert_eq!(
+        web_graph.triggers.as_deref(),
+        Some("[\"look up web facts\",\"search online\"]")
+    );
+    assert_eq!(web_graph.tags.as_deref(), Some("[\"research\",\"web\"]"));
     assert!(web_graph.fs_path.ends_with("skills/web-search/SKILL.md"));
     assert_eq!(web_graph.uninstalled_at, None);
     let web_embedding =
@@ -5645,7 +5704,7 @@ async fn skills_endpoints() {
     assert_eq!(web_embedding.dimensions, 3);
     assert_eq!(
         web_embedding.chunk_text,
-        "web-search — Installed by fake skills runner"
+        "web-search — Enriched web-search discovery metadata for replay. — look up web facts, search online"
     );
     assert_eq!(web_embedding.vec_rows, 1);
 
@@ -5658,7 +5717,11 @@ async fn skills_endpoints() {
     assert_eq!(resp.status(), 200);
     let web_graph = wait_for_skill_graph_row(&server.db_path(), "skill:default:web-search").await;
     assert_eq!(web_graph.name, "web-search");
-    assert_eq!(web_graph.description, "Installed by fake skills runner");
+    assert_eq!(
+        web_graph.description,
+        "Enriched web-search discovery metadata for replay."
+    );
+    assert_eq!(web_graph.enriched, 1);
     assert_eq!(web_graph.uninstalled_at, None);
     assert_eq!(
         count_skill_embeddings(&server.db_path(), "skill:default:web-search"),
@@ -5693,9 +5756,13 @@ async fn skills_endpoints() {
     assert_eq!(claw_graph.name, "claw-demo");
     assert_eq!(claw_graph.entity_type, "skill");
     assert_eq!(claw_graph.agent_id, "default");
-    assert_eq!(claw_graph.description, "Installed by ClawHub");
+    assert_eq!(
+        claw_graph.description,
+        "Enriched claw-demo discovery metadata for replay."
+    );
     assert_eq!(claw_graph.source, "installed");
     assert_eq!(claw_graph.role, "utility");
+    assert_eq!(claw_graph.enriched, 1);
     assert!(claw_graph.fs_path.ends_with("skills/claw-demo/SKILL.md"));
     assert_eq!(claw_graph.uninstalled_at, None);
 

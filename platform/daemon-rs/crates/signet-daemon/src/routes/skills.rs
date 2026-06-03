@@ -23,7 +23,9 @@ use serde::Deserialize;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use signet_core::{config::ProceduralConfig, db::Priority, error::CoreError, queries::embedding};
+use signet_pipeline::provider::GenerateOpts;
 use tokio::process::Command;
+use tracing::warn;
 use uuid::Uuid;
 use zip::ZipArchive;
 
@@ -536,8 +538,8 @@ fn copy_dir_recursive(source: &Path, target: &Path) -> io::Result<()> {
 async fn install_skill_graph_node(state: Arc<AppState>, name: String) -> Result<(), String> {
     let skill_path = skill_file(&state, &name).map_err(|err| err.to_string())?;
     let content = fs::read_to_string(&skill_path).map_err(|err| err.to_string())?;
-    let meta = parse_frontmatter(&content);
-    let skill_name = meta
+    let original_meta = parse_frontmatter(&content);
+    let skill_name = original_meta
         .name
         .clone()
         .filter(|value| !value.trim().is_empty())
@@ -547,8 +549,48 @@ async fn install_skill_graph_node(state: Arc<AppState>, name: String) -> Result<
         return Ok(());
     }
 
+    let mut meta = original_meta.clone();
+    let llm_provider = skill_enrichment_provider(&state).await;
+    let mut description = meta.description.clone().unwrap_or_default();
+    let needs_enrichment = description.len() < procedural.enrich_min_description
+        || meta
+            .triggers
+            .as_ref()
+            .is_none_or(|triggers| triggers.is_empty());
+    let enriched = if procedural.enrich_on_install && needs_enrichment {
+        if let Some(provider) = llm_provider {
+            match enrich_skill_frontmatter(&provider, &skill_name, &description, &content).await {
+                Ok(Some(enrichment)) => {
+                    if !enrichment.description.is_empty() {
+                        meta.description = Some(enrichment.description);
+                        description = meta.description.clone().unwrap_or_default();
+                    }
+                    if !enrichment.triggers.is_empty() {
+                        meta.triggers = Some(enrichment.triggers);
+                    }
+                    if !enrichment.tags.is_empty() {
+                        meta.tags = Some(enrichment.tags);
+                    }
+                    true
+                }
+                Ok(None) => false,
+                Err(error) => {
+                    warn!(
+                        skill = %skill_name,
+                        error = %error,
+                        "skill enrichment LLM call failed"
+                    );
+                    false
+                }
+            }
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+
     let fs_path = skill_path.to_string_lossy().to_string();
-    let description = meta.description.clone().unwrap_or_default();
     let role = meta.role.clone().unwrap_or_else(|| "utility".to_string());
     let embedding_provider = state.embedding.read().await.clone();
     let db_meta = meta.clone();
@@ -614,7 +656,7 @@ async fn install_skill_graph_node(state: Arc<AppState>, name: String) -> Result<
                  (entity_id, agent_id, version, author, license, source,
                   role, triggers, tags, permissions, enriched,
                   installed_at, importance, decay_rate, fs_path)
-                 VALUES (?1, ?2, ?3, ?4, ?5, 'installed', ?6, ?7, ?8, ?9, 0, ?10, ?11, ?12, ?13)
+                 VALUES (?1, ?2, ?3, ?4, ?5, 'installed', ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
                  ON CONFLICT(entity_id) DO UPDATE SET
                     version = excluded.version,
                     author = excluded.author,
@@ -627,7 +669,7 @@ async fn install_skill_graph_node(state: Arc<AppState>, name: String) -> Result<
                     enriched = excluded.enriched,
                     fs_path = excluded.fs_path,
                     uninstalled_at = NULL,
-                    updated_at = ?10",
+                    updated_at = ?11",
                 params![
                     actual_entity_id,
                     DEFAULT_AGENT_ID,
@@ -638,6 +680,7 @@ async fn install_skill_graph_node(state: Arc<AppState>, name: String) -> Result<
                     json_string(db_meta.triggers)?,
                     json_string(db_meta.tags)?,
                     json_string(db_meta.permissions)?,
+                    if enriched { 1_i64 } else { 0_i64 },
                     now,
                     procedural.importance_on_install,
                     procedural.decay_rate,
@@ -661,7 +704,13 @@ async fn install_skill_graph_node(state: Arc<AppState>, name: String) -> Result<
             .await
             .filter(|v| !v.is_empty())
         {
-            let embedding_hash = skill_embedding_hash(&entity_id, &meta, &skill_name, &description);
+            let original_description = original_meta.description.clone().unwrap_or_default();
+            let embedding_hash = skill_embedding_hash(
+                &entity_id,
+                &original_meta,
+                &skill_name,
+                &original_description,
+            );
             let embedding_id = Uuid::new_v4().to_string();
             state
                 .pool
@@ -759,6 +808,188 @@ fn build_skill_embedding_text(meta: &SkillMeta, name: &str, description: &str) -
         parts.push(triggers.join(", "));
     }
     parts.join(" \u{2014} ")
+}
+
+#[derive(Debug, Deserialize)]
+struct SkillEnrichmentResult {
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
+    triggers: Vec<String>,
+    #[serde(default)]
+    tags: Vec<String>,
+}
+
+async fn enrich_skill_frontmatter(
+    provider: &Arc<dyn signet_pipeline::provider::LlmProvider>,
+    name: &str,
+    description: &str,
+    body: &str,
+) -> Result<Option<SkillEnrichmentResult>, String> {
+    let prompt = build_skill_enrichment_prompt(name, description, body);
+    let raw = provider
+        .generate(
+            &prompt,
+            &GenerateOpts {
+                max_tokens: Some(512),
+                ..Default::default()
+            },
+        )
+        .await
+        .map_err(|err| err.to_string())?
+        .text;
+    Ok(parse_skill_enrichment_output(&raw))
+}
+
+async fn skill_enrichment_provider(
+    state: &Arc<AppState>,
+) -> Option<Arc<dyn signet_pipeline::provider::LlmProvider>> {
+    let pipeline = state
+        .config
+        .manifest
+        .memory
+        .as_ref()
+        .and_then(|memory| memory.pipeline_v2.as_ref())?;
+    if !pipeline.procedural.enabled || !pipeline.procedural.enrich_on_install {
+        return None;
+    }
+    if pipeline.extraction.provider == "none" {
+        return None;
+    }
+    if let Some(provider) = state.llm.read().await.clone()
+        && provider.name() == pipeline.extraction.provider
+    {
+        return Some(provider);
+    }
+
+    let provider =
+        signet_pipeline::provider::from_config(&signet_pipeline::provider::LlmProviderConfig {
+            provider: pipeline.extraction.provider.clone(),
+            model: pipeline.extraction.model.clone(),
+            base_url: pipeline.extraction.endpoint.clone(),
+            api_key: skill_enrichment_api_key(&pipeline.extraction.provider),
+            timeout_ms: Some(pipeline.extraction.timeout),
+            max_context_tokens: None,
+        });
+    Some(provider)
+}
+
+fn skill_enrichment_api_key(provider: &str) -> Option<String> {
+    let var = match provider {
+        "anthropic" => "ANTHROPIC_API_KEY",
+        "openrouter" => "OPENROUTER_API_KEY",
+        _ => return None,
+    };
+    std::env::var(var)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+}
+
+fn build_skill_enrichment_prompt(name: &str, description: &str, body: &str) -> String {
+    let body_preview = if body.len() > 3000 {
+        let end = body
+            .char_indices()
+            .map(|(idx, _)| idx)
+            .take_while(|idx| *idx <= 3000)
+            .last()
+            .unwrap_or(0);
+        format!("{}\n[truncated]", &body[..end])
+    } else {
+        body.to_string()
+    };
+    format!(
+        r#"You are analyzing an AI agent skill to generate discovery metadata.
+
+Skill name: {name}
+Current description: {}
+
+Skill content:
+{body_preview}
+
+Generate:
+1. "description": A rich 1-2 sentence description explaining what this skill does and when to use it. Focus on mechanism and use-case.
+2. "triggers": A list of 3-8 short phrases a user might say when they need this skill. These are discovery keywords, not commands. Examples: "help me write tests", "optimize database queries", "create a new component".
+3. "tags": A list of 2-5 domain tags for grouping. Use lowercase, single words or hyphenated compounds. Examples: "testing", "database", "ui", "code-review", "deployment".
+
+Return ONLY a JSON object with these three keys. No other text.
+{{"description": "...", "triggers": ["...", "..."], "tags": ["...", "..."]}}"#,
+        if description.is_empty() {
+            "(none)"
+        } else {
+            description
+        },
+    )
+}
+
+fn parse_skill_enrichment_output(raw: &str) -> Option<SkillEnrichmentResult> {
+    let mut candidates = vec![raw.trim().to_string(), strip_json_fence(raw)];
+    candidates.extend(extract_balanced_json_objects(raw));
+
+    for candidate in candidates {
+        let text = candidate.trim();
+        if text.is_empty() {
+            continue;
+        }
+        let Ok(mut parsed) = serde_json::from_str::<SkillEnrichmentResult>(text) else {
+            continue;
+        };
+        parsed.description = parsed.description.trim().to_string();
+        parsed.triggers.retain(|value| !value.trim().is_empty());
+        parsed.tags.retain(|value| !value.trim().is_empty());
+        if parsed.description.is_empty() && parsed.triggers.is_empty() {
+            continue;
+        }
+        return Some(parsed);
+    }
+    None
+}
+
+fn strip_json_fence(raw: &str) -> String {
+    let trimmed = raw.trim();
+    let Some(rest) = trimmed.strip_prefix("```") else {
+        return trimmed.to_string();
+    };
+    let rest = rest.strip_prefix("json").unwrap_or(rest);
+    rest.strip_suffix("```")
+        .map(str::trim)
+        .unwrap_or(trimmed)
+        .to_string()
+}
+
+fn extract_balanced_json_objects(raw: &str) -> Vec<String> {
+    let bytes = raw.as_bytes();
+    let mut out = Vec::new();
+    let mut depth = 0_i32;
+    let mut start = None;
+    let mut in_string = false;
+    let mut escaped = false;
+
+    for (idx, byte) in bytes.iter().enumerate() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match byte {
+            b'\\' if in_string => escaped = true,
+            b'"' => in_string = !in_string,
+            b'{' if !in_string => {
+                if depth == 0 {
+                    start = Some(idx);
+                }
+                depth += 1;
+            }
+            b'}' if !in_string => {
+                depth -= 1;
+                if depth == 0
+                    && let Some(start) = start.take()
+                {
+                    out.push(raw[start..=idx].to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+    out
 }
 
 fn skill_embedding_hash(

@@ -144,7 +144,10 @@ async fn main() -> anyhow::Result<()> {
         .memory
         .as_ref()
         .and_then(|m| m.pipeline_v2.as_ref())
-        .filter(|p| p.reranker.enabled && p.reranker.use_extraction_model)
+        .filter(|p| {
+            (p.reranker.enabled && p.reranker.use_extraction_model)
+                || (p.procedural.enabled && p.procedural.enrich_on_install)
+        })
         .map(|p| {
             let provider = p.extraction.provider.clone();
             let endpoint = p.extraction.endpoint.clone();

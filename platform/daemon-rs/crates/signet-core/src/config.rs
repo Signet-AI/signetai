@@ -978,6 +978,53 @@ memory:
     }
 
     #[test]
+    fn skill_enrichment_manifest_fields_load_from_nested_config() {
+        let manifest = parse_manifest(
+            r#"
+agent:
+  name: test-agent
+  version: 1
+memory:
+  pipelineV2:
+    extractionProvider: openai-compatible
+    extractionModel: replay-llm
+    extractionEndpoint: http://127.0.0.1:43210
+    rerankerUseExtractionModel: true
+    extraction:
+      provider: openai-compatible
+      model: replay-llm
+      endpoint: http://127.0.0.1:43210
+      timeout: 5000
+    reranker:
+      enabled: true
+      useExtractionModel: true
+    procedural:
+      enabled: true
+      enrichOnInstall: true
+      enrichMinDescription: 50
+"#,
+        )
+        .expect("parse manifest");
+
+        let pipeline = manifest
+            .memory
+            .and_then(|memory| memory.pipeline_v2)
+            .expect("pipeline config");
+        assert_eq!(pipeline.extraction.provider, "openai-compatible");
+        assert_eq!(pipeline.extraction.model, "replay-llm");
+        assert_eq!(
+            pipeline.extraction.endpoint.as_deref(),
+            Some("http://127.0.0.1:43210")
+        );
+        assert_eq!(pipeline.extraction.timeout, 5000);
+        assert!(pipeline.reranker.enabled);
+        assert!(pipeline.reranker.use_extraction_model);
+        assert!(pipeline.procedural.enabled);
+        assert!(pipeline.procedural.enrich_on_install);
+        assert_eq!(pipeline.procedural.enrich_min_description, 50);
+    }
+
+    #[test]
     fn worker_load_shedding_fields_load_from_nested_or_flat_keys() {
         let nested = parse_manifest(
             r#"
