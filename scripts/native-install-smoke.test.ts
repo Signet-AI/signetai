@@ -183,23 +183,19 @@ describe("native install smoke", () => {
 		expect(existsSync(join(binDir, "signet"))).toBe(true);
 	});
 
-	test("npm wrapper launches optional package binary with or without postinstall", async () => {
+	test("npm wrapper launches bundled binary with or without postinstall", async () => {
 		if (process.platform === "win32") return;
 
 		const dir = tempDir();
 		const packageDir = join(dir, "signetai");
 		const platform = platformKey();
-		const nativePackageDir = join(packageDir, "node_modules", `signetai-${platform}`);
-		const nativePackageBin = join(nativePackageDir, "bin", "signet");
+		const nativePackageDir = join(packageDir, "native", platform);
+		const nativePackageBin = join(nativePackageDir, "signet");
 		mkdirSync(packageDir, { recursive: true });
-		mkdirSync(join(nativePackageDir, "bin"), { recursive: true });
+		mkdirSync(nativePackageDir, { recursive: true });
 		cpSync(join(root, "dist", "signetai", "scripts"), join(packageDir, "scripts"), { recursive: true });
 		cpSync(join(root, "dist", "signetai", "bin"), join(packageDir, "bin"), { recursive: true });
 		writeFileSync(join(packageDir, "package.json"), readFileSync(join(root, "dist", "signetai", "package.json")));
-		writeFileSync(
-			join(nativePackageDir, "package.json"),
-			JSON.stringify({ name: `signetai-${platform}`, version: "0.0.0-test", type: "module" }, null, 2),
-		);
 		writeFileSync(nativePackageBin, fakeNativeBinary());
 		chmodSync(nativePackageBin, 0o755);
 
@@ -210,7 +206,7 @@ describe("native install smoke", () => {
 		const install = await runCommand("node", [join(packageDir, "scripts", "install-native.js")], process.env);
 
 		expect(install.status).toBe(0);
-		expect(install.stdout).toContain(`Linked Signet native binary for ${platform}`);
+		expect(install.stdout).toContain(`Linked bundled Signet native binary for ${platform}`);
 		const installedBinary = join(packageDir, "native", "signet");
 		expect(existsSync(installedBinary)).toBe(true);
 		chmodSync(installedBinary, 0o755);

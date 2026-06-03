@@ -28,7 +28,7 @@ describe("install copy", () => {
 		for (const path of ["README.md", "docs/QUICKSTART.md", "docs/CLI.md", "dist/signetai/README.md"]) {
 			const content = read(path);
 			expect(content).toContain("same compiled Signet binary");
-			expect(content).toContain("optional native packages");
+			expect(content).toContain("bundled native");
 			expect(content).toContain("npm install -g signetai");
 			expect(content).toContain("bun add -g signetai");
 		}
@@ -66,25 +66,20 @@ describe("install copy", () => {
 
 		expect(manifest.scripts?.postinstall).toContain("scripts/install-native.js");
 		expect(manifest.dependencies).toBeUndefined();
-		expect(manifest.optionalDependencies).toEqual({
-			"signetai-linux-x64": "0.138.12",
-			"signetai-linux-arm64": "0.138.12",
-			"signetai-darwin-x64": "0.138.12",
-			"signetai-darwin-arm64": "0.138.12",
-			"signetai-win32-x64": "0.138.12",
-		});
+		expect(manifest.optionalDependencies).toBeUndefined();
 		expect(manifest.bin?.signet).toBe("bin/signet.js");
 		expect(manifest.bin?.["signet-mcp"]).toBe("bin/signet-mcp.js");
 		expect(launcher).toContain('join(packageDir, "native"');
-		expect(launcher).toContain("require.resolve");
-		expect(nativePlatforms).toContain("signetai-linux-x64");
-		expect(nativePlatforms).toContain("signetai-linux-arm64");
-		expect(nativePlatforms).toContain("signetai-darwin-x64");
-		expect(nativePlatforms).toContain("signetai-darwin-arm64");
-		expect(nativePlatforms).toContain("signetai-win32-x64");
+		expect(launcher).toContain("resolveBundledBinaryPath");
+		expect(launcher).not.toContain("require.resolve");
+		expect(nativePlatforms).toContain('"linux-x64"');
+		expect(nativePlatforms).toContain('"linux-arm64"');
+		expect(nativePlatforms).toContain('"darwin-x64"');
+		expect(nativePlatforms).toContain('"darwin-arm64"');
+		expect(nativePlatforms).toContain('"win32-x64"');
 		expect(mcpWrapper).toContain("forceMcp: true");
 		expect(installer).toContain("linkSync");
-		expect(installer).toContain("require.resolve");
+		expect(installer).not.toContain("require.resolve");
 		expect(installer).toContain("Skipping Signet native binary linking in workspace install");
 		expect(installer).not.toContain("native-manifest.json");
 		expect(installer).not.toContain("https");

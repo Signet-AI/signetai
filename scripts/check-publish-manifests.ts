@@ -243,27 +243,23 @@ export function collectNativeManifestIssues(
 	return issues;
 }
 
-function packageNameToNativePlatform(packageName: string): string | null {
-	const prefix = "signetai-";
-	return packageName.startsWith(prefix) ? packageName.slice(prefix.length) : null;
-}
-
-export function collectNativePackageIssues(targets: readonly string[]): NativeManifestIssue[] {
+export function collectBundledNativePackageIssues(targets: readonly string[]): NativeManifestIssue[] {
 	const issues: NativeManifestIssue[] = [];
 	for (const file of targets) {
-		const pkg = readPackageJson(file);
-		const packageName = getPackageName(file, pkg);
-		const platform = packageNameToNativePlatform(packageName);
-		if (!platform) continue;
+		if (!file.endsWith("dist/signetai/package.json")) continue;
 
-		const binaryName = platform.startsWith("win32-") ? "signet.exe" : "signet";
-		const binaryFile = file.replace(/package\.json$/, `bin/${binaryName}`);
-		if (!existsSync(binaryFile)) {
-			issues.push({ file, reason: `missing staged native binary ${binaryFile}` });
-			continue;
-		}
-		if (!statSync(binaryFile).isFile()) {
-			issues.push({ file, reason: `staged native binary is not a file: ${binaryFile}` });
+		const nativePlatformsFile = file.replace(/package\.json$/, "bin/native-platforms.js");
+		const supportedPlatforms = parseSupportedNativePlatforms(readFileSync(nativePlatformsFile, "utf8"));
+		for (const platform of supportedPlatforms) {
+			const binaryName = platform.startsWith("win32-") ? "signet.exe" : "signet";
+			const binaryFile = file.replace(/package\.json$/, `native/${platform}/${binaryName}`);
+			if (!existsSync(binaryFile)) {
+				issues.push({ file, reason: `missing bundled native binary ${binaryFile}` });
+				continue;
+			}
+			if (!statSync(binaryFile).isFile()) {
+				issues.push({ file, reason: `bundled native binary is not a file: ${binaryFile}` });
+			}
 		}
 	}
 
@@ -287,7 +283,7 @@ function main(): void {
 					parseSupportedNativePlatforms(readFileSync("dist/signetai/bin/native-platforms.js", "utf8")),
 				)
 			: [];
-	const nativePackageIssues = collectNativePackageIssues(targets);
+	const nativePackageIssues = collectBundledNativePackageIssues(targets);
 
 	if (issues.length > 0 || nativeManifestIssues.length > 0 || nativePackageIssues.length > 0) {
 		if (issues.length > 0) console.error(formatIssues(issues));

@@ -12,6 +12,7 @@
     "bin/native-platforms.js",
     "bin/signet.js",
     "bin/signet-mcp.js",
+    "native/**",
     "scripts/install-native.js",
     "scripts/verify-wrapper.js",
     "README.md",
@@ -20,13 +21,6 @@
   "scripts": {
     "build": "node scripts/verify-wrapper.js",
     "postinstall": "node scripts/install-native.js"
-  },
-  "optionalDependencies": {
-    "signetai-linux-x64": "0.138.13",
-    "signetai-linux-arm64": "0.138.13",
-    "signetai-darwin-x64": "0.138.13",
-    "signetai-darwin-arm64": "0.138.13",
-    "signetai-win32-x64": "0.138.13"
   },
   "keywords": [
     "ai",

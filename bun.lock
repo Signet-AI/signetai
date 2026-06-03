@@ -21,13 +21,6 @@
         "signet": "bin/signet.js",
         "signet-mcp": "bin/signet-mcp.js",
       },
-      "optionalDependencies": {
-        "signetai-darwin-arm64": "0.138.13",
-        "signetai-darwin-x64": "0.138.13",
-        "signetai-linux-arm64": "0.138.13",
-        "signetai-linux-x64": "0.138.13",
-        "signetai-win32-x64": "0.138.13",
-      },
     },
     "dist/signetai-darwin-arm64": {
       "name": "signetai-darwin-arm64",

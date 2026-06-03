@@ -287,25 +287,25 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Stage native npm platform packages
+      - name: Stage native npm package assets
         shell: bash
         run: |
           set -euo pipefail
-          stage_platform_package() {
+          stage_bundled_binary() {
             local platform="$1"
             local asset="$2"
             local binary="$3"
-            local package_dir="dist/signetai-${platform}"
-            mkdir -p "${package_dir}/bin"
-            cp "dist/native/${asset}" "${package_dir}/bin/${binary}"
-            chmod 755 "${package_dir}/bin/${binary}"
+            local native_dir="dist/signetai/native/${platform}"
+            mkdir -p "${native_dir}"
+            cp "dist/native/${asset}" "${native_dir}/${binary}"
+            chmod 755 "${native_dir}/${binary}"
           }
 
-          stage_platform_package "linux-x64" "signet-linux-x64" "signet"
-          stage_platform_package "linux-arm64" "signet-linux-arm64" "signet"
-          stage_platform_package "darwin-x64" "signet-darwin-x64" "signet"
-          stage_platform_package "darwin-arm64" "signet-darwin-arm64" "signet"
-          stage_platform_package "win32-x64" "signet-win32-x64.exe" "signet.exe"
+          stage_bundled_binary "linux-x64" "signet-linux-x64" "signet"
+          stage_bundled_binary "linux-arm64" "signet-linux-arm64" "signet"
+          stage_bundled_binary "darwin-x64" "signet-darwin-x64" "signet"
+          stage_bundled_binary "darwin-arm64" "signet-darwin-arm64" "signet"
+          stage_bundled_binary "win32-x64" "signet-win32-x64.exe" "signet.exe"
 
       - name: Validate publish manifests
         run: bun scripts/check-publish-manifests.ts
@@ -333,11 +333,6 @@ jobs:
             (cd "$package_dir" && npm publish --tag next --access public)
           }
 
-          publish_npm_package dist/signetai-linux-x64
-          publish_npm_package dist/signetai-linux-arm64
-          publish_npm_package dist/signetai-darwin-x64
-          publish_npm_package dist/signetai-darwin-arm64
-          publish_npm_package dist/signetai-win32-x64
           publish_npm_package dist/signetai
           publish_npm_package integrations/openclaw/memory-adapter true
         env:

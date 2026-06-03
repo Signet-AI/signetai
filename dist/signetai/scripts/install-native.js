@@ -2,14 +2,12 @@
 
 import { copyFileSync, existsSync, linkSync, mkdirSync, readFileSync, rmSync, unlinkSync } from "node:fs";
 import { chmod } from "node:fs/promises";
-import { createRequire } from "node:module";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { detectNativePlatform, nativePlatforms } from "../bin/native-platforms.js";
 
 const packageDir = dirname(dirname(fileURLToPath(import.meta.url)));
-const require = createRequire(import.meta.url);
 
 function isWorkspacePackage() {
 	const workspaceRoot = dirname(dirname(packageDir));
@@ -54,18 +52,10 @@ async function main() {
 
 	const platform = detectNativePlatform();
 	const nativePackage = nativePlatforms[platform];
-	let source;
-	try {
-		source = join(dirname(require.resolve(`${nativePackage.packageName}/package.json`)), "bin", nativePackage.binaryName);
-	} catch {
-		console.error(`Signet native package ${nativePackage.packageName} was not installed.`);
-		console.error("This usually means optional dependencies were disabled with --omit=optional.");
-		console.error("The signet wrapper will try to resolve the optional native package at runtime.");
-		return;
-	}
+	const source = join(packageDir, "native", platform, nativePackage.binaryName);
 
 	if (!existsSync(source)) {
-		console.error(`Signet native binary is missing from ${nativePackage.packageName}: ${source}`);
+		console.error(`Signet native binary is missing from the npm package: ${source}`);
 		return;
 	}
 
@@ -77,7 +67,7 @@ async function main() {
 		if (process.platform !== "win32") {
 			await chmod(destination, 0o755);
 		}
-		console.log(`Linked Signet native binary for ${platform}`);
+		console.log(`Linked bundled Signet native binary for ${platform}`);
 	} catch (err) {
 		rmSync(destination, { force: true });
 		throw err;
