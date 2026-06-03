@@ -4,6 +4,8 @@ on:
   pull_request:
     paths:
       - "platform/daemon/src/**"
+      - "platform/daemon-rs/Cargo.lock"
+      - "platform/daemon-rs/Cargo.toml"
       - "platform/daemon-rs/crates/**"
       - "platform/daemon-rs/contracts/parity-rules.json"
       - "platform/daemon-rs/contracts/route-parity.json"
@@ -14,6 +16,8 @@ on:
     branches: [main]
     paths:
       - "platform/daemon/src/**"
+      - "platform/daemon-rs/Cargo.lock"
+      - "platform/daemon-rs/Cargo.toml"
       - "platform/daemon-rs/crates/**"
       - "platform/daemon-rs/contracts/parity-rules.json"
       - "platform/daemon-rs/contracts/route-parity.json"

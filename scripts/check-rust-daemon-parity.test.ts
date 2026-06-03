@@ -32,4 +32,14 @@ describe("rust daemon route parity manifest", () => {
 		expect(missing.map((route) => `${route.method} ${route.path}`)).toEqual([]);
 		expect(malformed.map((route) => `${route.method} ${route.path}`)).toEqual([]);
 	});
+
+	test("workflow runs for Rust daemon dependency changes", () => {
+		const workflow = readFileSync(".github/workflows/rust-daemon-parity.yml", "utf8");
+
+		expect(workflow).toContain('"platform/daemon-rs/Cargo.lock"');
+		expect(workflow).toContain('"platform/daemon-rs/Cargo.toml"');
+		expect(workflow).toContain('"platform/daemon-rs/crates/**"');
+		expect(workflow).toContain("bun test scripts/check-rust-daemon-parity.test.ts");
+		expect(workflow).toContain("bun scripts/check-rust-daemon-parity.ts");
+	});
 });
