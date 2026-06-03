@@ -29,6 +29,7 @@
 .gitnexus/
 .graphiq/
 .idea/
+.native-build/
 .playwright-mcp/
 .pnpm-store/
 .ruff_cache/

@@ -14,6 +14,7 @@ import { Worker } from "node:worker_threads";
 import type { AnalyticsCollector } from "../analytics";
 import { logger } from "../logger";
 import type { LogCategory } from "../logger";
+import { resolveEmbeddedWorkerPath } from "../native-runtime-assets";
 import type { TelemetryCollector, TelemetryEventType, TelemetryProperties } from "../telemetry";
 import type { MainToWorkerMessage, WorkerInit, WorkerToMainMessage } from "./extraction-thread-protocol";
 import type { WorkerHandle, WorkerStats } from "./worker";
@@ -45,7 +46,9 @@ export function startExtractionThread(opts: ExtractionThreadOpts): Promise<Worke
 	const __dirname = dirname(fileURLToPath(import.meta.url));
 	return new Promise<WorkerHandle>((resolve, reject) => {
 		const bundled = join(__dirname, "extraction-thread.js");
-		const workerPath = existsSync(bundled) ? bundled : join(__dirname, "extraction-thread.ts");
+		const workerPath = existsSync(bundled)
+			? bundled
+			: (resolveEmbeddedWorkerPath("extraction-thread") ?? join(__dirname, "extraction-thread.ts"));
 		const worker = (opts.workerFactory ?? createNodeWorker)(workerPath, init);
 
 		let running = true;

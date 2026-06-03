@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { serveStatic } from "@hono/node-server/serve-static";
 import type { Hono } from "hono";
 import { logger } from "../logger";
+import { getEmbeddedDashboardAssets, resolveEmbeddedDashboardAsset } from "../native-runtime-assets";
 
 function getDashboardCandidates(): string[] {
 	const __filename = fileURLToPath(import.meta.url);
@@ -34,6 +35,7 @@ function getDashboardPath(): string | null {
 
 export function setupDashboardRoutes(app: Hono): void {
 	const dashboardPath = getDashboardPath();
+	const embeddedDashboardAssets = getEmbeddedDashboardAssets();
 
 	if (dashboardPath) {
 		app.use("/*", async (c, next) => {
@@ -50,6 +52,19 @@ export function setupDashboardRoutes(app: Hono): void {
 					return p;
 				},
 			})(c, next);
+		});
+	} else if (embeddedDashboardAssets.length > 0) {
+		app.use("/*", async (c, next) => {
+			const path = c.req.path;
+			if (path.startsWith("/api/") || path === "/health" || path === "/sse") {
+				return next();
+			}
+			const asset = resolveEmbeddedDashboardAsset(path);
+			if (!asset) return next();
+			return c.body(Buffer.from(asset.contentBase64, "base64"), 200, {
+				"Cache-Control": asset.path === "/index.html" ? "no-cache" : "public, max-age=31536000, immutable",
+				"Content-Type": asset.contentType,
+			});
 		});
 	} else {
 		logger.warn("daemon", "Dashboard not found - API-only mode", {

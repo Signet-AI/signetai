@@ -11,6 +11,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { logger } from "./logger";
+import { getNativeTransformersBindings, materializeEmbeddedWasmAssets } from "./native-runtime-assets";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -107,6 +108,10 @@ async function loadTransformersBindings(): Promise<TransformersBindings> {
 		readonly source: string;
 		readonly load: () => Promise<unknown>;
 	}> = [
+		{
+			source: "compiled native runtime",
+			load: () => Promise.resolve(getNativeTransformersBindings()),
+		},
 		{
 			source: "bundled runtime",
 			load: () => import("./transformers-runtime"),
@@ -223,6 +228,15 @@ async function doInit(): Promise<void> {
 		// Configure cache directory
 		transformers.env.cacheDir = cacheDir;
 		transformers.env.allowLocalModels = true;
+		const wasmDir = materializeEmbeddedWasmAssets();
+		if (wasmDir) {
+			const backends = transformers.env.backends;
+			const onnx = isRecord(backends) ? backends.onnx : null;
+			const wasm = isRecord(onnx) ? onnx.wasm : null;
+			if (isRecord(wasm)) {
+				wasm.wasmPaths = `${wasmDir}/`;
+			}
+		}
 
 		logger.info("native-embedding", `Initializing ${MODEL_ID} (q8 quantization)`);
 		logger.info("native-embedding", `Model cache: ${cacheDir}`);

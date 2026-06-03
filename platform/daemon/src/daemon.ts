@@ -49,7 +49,15 @@ import { logger } from "./logger";
 import { type ResolvedMemoryConfig, loadMemoryConfig, shouldWarnGraphExtractionWritesDisabled } from "./memory-config";
 import { registerGlobalMiddleware } from "./middleware";
 import { type NativeMemoryBridgeHandle, startNativeMemoryBridge } from "./native-memory-sources";
-import { DEFAULT_RETENTION, ensureRetentionWorker, ensureSummaryWorker, setDreamingWorker, startPipeline, stopPipeline } from "./pipeline";
+import { resolveEmbeddedWorkerPath } from "./native-runtime-assets";
+import {
+	DEFAULT_RETENTION,
+	ensureRetentionWorker,
+	ensureSummaryWorker,
+	setDreamingWorker,
+	startPipeline,
+	stopPipeline,
+} from "./pipeline";
 import { type DreamingWorkerHandle, startDreamingWorker } from "./pipeline/dreaming-worker";
 import type { WorkerInit } from "./pipeline/extraction-thread-protocol";
 import { invalidateTraversalCache } from "./pipeline/graph-traversal";
@@ -1374,7 +1382,9 @@ async function main() {
 
 	const { extensionPath } = getVectorRuntimeStatus();
 	const bundled = join(__dirname, "synthesis-render-worker.js");
-	const workerPath = existsSync(bundled) ? bundled : join(__dirname, "synthesis-render-worker.ts");
+	const workerPath = existsSync(bundled)
+		? bundled
+		: (resolveEmbeddedWorkerPath("synthesis-render-worker") ?? join(__dirname, "synthesis-render-worker.ts"));
 	let synthWorker: Worker | null = null;
 	try {
 		synthWorker = new Worker(workerPath);
