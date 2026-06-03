@@ -2715,25 +2715,94 @@ pub async fn conflicts(
     };
     let limit = parse_limit(query.limit.as_deref(), 500, 1000);
     let result = state.pool.read(move |conn| {
-        let mut stmt = conn.prepare(
-            "SELECT payload, GROUP_CONCAT(id), COUNT(*) FROM ontology_proposals
-             WHERE agent_id = ?1 AND status = 'pending'
-             GROUP BY operation, payload HAVING COUNT(*) > 1 LIMIT ?2",
-        )?;
-        let rows = stmt.query_map(rusqlite::params![agent, limit], |row| {
-            let payload: String = row.get(0)?;
-            let ids: String = row.get(1)?;
-            let count: i64 = row.get(2)?;
-            Ok(json!({"payload": parse_json(&payload, json!({})), "proposalIds": ids.split(',').collect::<Vec<_>>(), "count": count}))
-        })?;
-        let mut items = Vec::new();
-        for row in rows { items.push(row?); }
+        let rows = conn
+            .prepare(&format!(
+                "{SELECT_PROPOSAL}
+                 WHERE agent_id = ?1 AND status = 'pending' AND operation = 'add_claim_value'
+                 ORDER BY updated_at DESC
+                 LIMIT ?2"
+            ))?
+            .query_map(rusqlite::params![agent, limit], read_row)?
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut groups = std::collections::BTreeMap::<String, JsonValue>::new();
+        for row in rows {
+            let payload = parse_json(&row.payload, json!({}));
+            let Some(entity) = read_payload_string(&payload, "entity") else {
+                continue;
+            };
+            let Some(aspect) = read_payload_string(&payload, "aspect") else {
+                continue;
+            };
+            let Some(claim_key) = read_payload_string(&payload, "claim_key") else {
+                continue;
+            };
+            let Some(value) = read_payload_string(&payload, "value") else {
+                continue;
+            };
+            let group_key =
+                read_payload_string(&payload, "group_key").unwrap_or_else(|| "general".to_string());
+            let key = [
+                canonical(&entity),
+                canonical(&aspect),
+                canonical(&group_key),
+                canonical(&claim_key),
+            ]
+            .join("\0");
+            let entry = groups.entry(key).or_insert_with(|| {
+                json!({
+                    "entity": entity,
+                    "aspect": aspect,
+                    "groupKey": group_key,
+                    "claimKey": claim_key,
+                    "values": [],
+                    "proposalIds": [],
+                    "count": 0,
+                })
+            });
+            if let Some(values) = entry.get_mut("values").and_then(JsonValue::as_array_mut) {
+                values.push(json!({
+                    "proposalId": row.id.clone(),
+                    "value": value,
+                    "confidence": row.confidence,
+                    "rationale": row.rationale,
+                    "evidenceCount": parse_json(&row.evidence, json!([])).as_array().map_or(0, Vec::len),
+                }));
+            }
+            if let Some(ids) = entry
+                .get_mut("proposalIds")
+                .and_then(JsonValue::as_array_mut)
+            {
+                ids.push(JsonValue::String(row.id));
+            }
+            let count = entry.get("count").and_then(JsonValue::as_i64).unwrap_or(0) + 1;
+            entry["count"] = JsonValue::Number(count.into());
+        }
+        let items = groups
+            .into_values()
+            .filter(|group| {
+                let values = group
+                    .get("values")
+                    .and_then(JsonValue::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                values
+                    .into_iter()
+                    .filter_map(|item| {
+                        item.get("value")
+                            .and_then(JsonValue::as_str)
+                            .map(canonical)
+                    })
+                    .collect::<std::collections::HashSet<_>>()
+                    .len()
+                    > 1
+            })
+            .collect::<Vec<_>>();
         Ok(items)
     }).await;
     match result {
         Ok(items) => (
             StatusCode::OK,
-            Json(json!({"items": items, "conflicts": items, "count": items.len()})),
+            Json(json!({"items": items, "count": items.len()})),
         )
             .into_response(),
         Err(error) => (

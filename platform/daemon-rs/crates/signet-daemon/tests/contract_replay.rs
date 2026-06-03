@@ -9105,6 +9105,82 @@ async fn ontology_merge_plan_previews_writes_and_blocks_seeded_merges() {
 
 #[tokio::test]
 #[ignore = "requires built daemon binary"]
+async fn ontology_proposal_conflicts_group_pending_claim_slot_values() {
+    let server = TestServer::start().await;
+
+    for payload in [
+        json!({
+            "entity": "Signet",
+            "aspect": "architecture",
+            "group_key": "ontology",
+            "claim_key": "mutation_policy",
+            "value": "Extraction writes directly into the graph."
+        }),
+        json!({
+            "entity": "Signet",
+            "aspect": "architecture",
+            "group_key": "ontology",
+            "claim_key": "mutation_policy",
+            "value": "Extraction writes provenance-backed operations before graph mutation."
+        }),
+    ] {
+        let resp = server
+            .post(
+                "/api/ontology/proposals",
+                json!({
+                    "operation": "add_claim_value",
+                    "payload": payload,
+                    "confidence": 0.8,
+                    "rationale": "Seed conflict.",
+                    "evidence": [{"quote": "seeded conflict"}]
+                }),
+            )
+            .await;
+        assert_eq!(resp.status(), 201);
+    }
+    let resp = server
+        .post(
+            "/api/ontology/proposals",
+            json!({
+                "agent_id": "other-agent",
+                "operation": "add_claim_value",
+                "payload": {
+                    "entity": "Signet",
+                    "aspect": "architecture",
+                    "group_key": "ontology",
+                    "claim_key": "mutation_policy",
+                    "value": "Different agent scope should not join conflicts."
+                },
+                "confidence": 0.8
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 201);
+
+    let resp = server.get("/api/ontology/proposals/conflicts").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["count"], 1);
+    assert!(body.get("conflicts").is_none());
+    let item = &body["items"][0];
+    assert_eq!(item["entity"], "Signet");
+    assert_eq!(item["aspect"], "architecture");
+    assert_eq!(item["groupKey"], "ontology");
+    assert_eq!(item["claimKey"], "mutation_policy");
+    assert_eq!(item["values"].as_array().unwrap().len(), 2);
+    assert_eq!(item["proposalIds"].as_array().unwrap().len(), 2);
+    assert_eq!(item["values"][0]["evidenceCount"], 1);
+
+    let resp = server
+        .get("/api/ontology/proposals/conflicts?agent_id=other-agent")
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["count"], 0);
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
 async fn plugin_ontology_telemetry_compat_endpoints() {
     let server = TestServer::start().await;
 
