@@ -41,6 +41,7 @@ pub struct ProposalQuery {
 #[derive(Debug, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct ProposalBody {
+    #[serde(alias = "agent_id")]
     agent_id: Option<String>,
     operation: Option<String>,
     payload: Option<JsonValue>,
@@ -52,11 +53,16 @@ pub struct ProposalBody {
     source_id: Option<String>,
     source_path: Option<String>,
     source_root: Option<String>,
+    #[serde(alias = "created_by")]
     created_by: Option<String>,
     actor: Option<String>,
     reason: Option<String>,
     proposals: Option<Vec<ProposalBody>>,
+    #[serde(alias = "write_proposals")]
     write_proposals: Option<bool>,
+    #[serde(alias = "use_provider")]
+    use_provider: Option<bool>,
+    status: Option<String>,
     limit: Option<i64>,
 }
 
@@ -2138,7 +2144,60 @@ pub async fn consolidate(
         )
             .into_response();
     }
-    (StatusCode::OK, Json(json!({"items": [], "proposals": [], "applied": 0, "count": 0, "writtenCount": 0, "dryRun": !body.write_proposals.unwrap_or(false)}))).into_response()
+    let status = clean(body.status).unwrap_or_else(|| "pending".to_string());
+    if !valid_status(&status) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error":"status is invalid"})),
+        )
+            .into_response();
+    }
+    let limit = body.limit.unwrap_or(50).clamp(1, 200);
+    let use_provider = body.use_provider.unwrap_or(false);
+    let agent = agent_id(body.agent_id);
+    let result = state
+        .pool
+        .read(move |conn| {
+            let mut stmt = conn.prepare(
+                "SELECT id FROM ontology_proposals
+                 WHERE agent_id = ?1 AND status = ?2
+                 ORDER BY updated_at DESC, created_at DESC
+                 LIMIT ?3",
+            )?;
+            let source_ids = stmt
+                .query_map(rusqlite::params![agent, status, limit], |row| {
+                    row.get::<_, String>(0)
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok::<JsonValue, CoreError>(json!({
+                "sourceProposalCount": source_ids.len(),
+                "proposals": [],
+                "items": [],
+                "count": 0,
+                "writtenCount": 0,
+                "dryRun": true,
+                "consolidationMode": "noop",
+                "providerName": null,
+                "summary": null,
+                "rejections": [],
+                "conflicts": [],
+                "maintenance": [],
+                "warnings": [if use_provider {
+                    "Provider consolidation requested but no inference provider is configured."
+                } else {
+                    "Consolidation is provider-backed; pass use_provider to run the configured inference workload."
+                }],
+            }))
+        })
+        .await;
+    match result {
+        Ok(value) => (StatusCode::OK, Json(value)).into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": error.to_string()})),
+        )
+            .into_response(),
+    }
 }
 
 pub async fn claim_evidence(

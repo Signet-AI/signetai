@@ -747,6 +747,36 @@ impl TestServer {
         .expect("seed ontology evidence fixture");
     }
 
+    fn seed_ontology_consolidation_fixture(&self) {
+        let conn = rusqlite::Connection::open(self.db_path()).expect("open replay db");
+        conn.busy_timeout(Duration::from_secs(5)).unwrap();
+        conn.execute_batch(
+            r#"INSERT INTO ontology_proposals
+               (id, agent_id, operation, status, payload, confidence, rationale,
+                evidence, created_by, created_at, updated_at)
+               VALUES
+               ('proposal-consolidate-pending-a', 'default', 'add_claim_value',
+                'pending',
+                '{"entity":"Signet","aspect":"architecture","claim_key":"proposal_loop","value":"A"}',
+                0.8, 'Pending proposal A.', '[]', 'contract-replay',
+                '2026-01-03T00:00:00.000Z', '2026-01-03T00:00:00.000Z'),
+               ('proposal-consolidate-pending-b', 'default', 'add_claim_value',
+                'pending',
+                '{"entity":"Signet","aspect":"architecture","claim_key":"proposal_loop","value":"B"}',
+                0.7, 'Pending proposal B.', '[]', 'contract-replay',
+                '2026-01-03T00:00:01.000Z', '2026-01-03T00:00:01.000Z'),
+               ('proposal-consolidate-applied', 'default', 'create_entity',
+                'applied', '{"name":"Already Applied"}', 0.9,
+                'Applied proposal.', '[]', 'contract-replay',
+                '2026-01-03T00:00:02.000Z', '2026-01-03T00:00:02.000Z'),
+               ('proposal-consolidate-other-agent', 'other-agent',
+                'create_entity', 'pending', '{"name":"Hidden"}', 0.9,
+                'Other agent proposal.', '[]', 'contract-replay',
+                '2026-01-03T00:00:03.000Z', '2026-01-03T00:00:03.000Z');"#,
+        )
+        .expect("seed ontology consolidation fixture");
+    }
+
     fn seed_knowledge_legacy_route_fixture(&self) {
         let conn = rusqlite::Connection::open(self.db_path()).expect("open replay db");
         conn.busy_timeout(Duration::from_secs(5)).unwrap();
@@ -8786,6 +8816,53 @@ async fn ontology_evidence_routes_resolve_seeded_claim_and_link_evidence() {
     assert!(link_evidence_kinds.contains(&"ontology_proposal"));
     assert!(link_evidence_kinds.contains(&"memory_artifact"));
     assert!(link_evidence_kinds.contains(&"provided_quote"));
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn ontology_consolidate_reports_source_counts_and_noop_mode() {
+    let server = TestServer::start().await;
+    server.seed_ontology_consolidation_fixture();
+
+    let resp = server
+        .post("/api/ontology/consolidate", json!({"status": "missing"}))
+        .await;
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert_eq!(body, json!({"error": "status is invalid"}));
+
+    let resp = server.post("/api/ontology/consolidate", json!({})).await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["sourceProposalCount"], 2);
+    assert_eq!(body["count"], 0);
+    assert_eq!(body["writtenCount"], 0);
+    assert_eq!(body["dryRun"], true);
+    assert_eq!(body["consolidationMode"], "noop");
+    assert_eq!(body["providerName"], serde_json::Value::Null);
+    assert_eq!(
+        body["warnings"][0],
+        "Consolidation is provider-backed; pass use_provider to run the configured inference workload."
+    );
+
+    let resp = server
+        .post("/api/ontology/consolidate", json!({"status": "applied"}))
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["sourceProposalCount"], 1);
+
+    let resp = server
+        .post("/api/ontology/consolidate", json!({"use_provider": true}))
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["sourceProposalCount"], 2);
+    assert_eq!(body["consolidationMode"], "noop");
+    assert_eq!(
+        body["warnings"][0],
+        "Provider consolidation requested but no inference provider is configured."
+    );
 }
 
 #[tokio::test]
