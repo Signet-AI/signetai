@@ -2683,6 +2683,172 @@ async fn memory_remember_replays_ts_provenance_and_idempotency_contract() {
     assert_eq!(retry_body["tags"], "alpha,beta");
 }
 
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn memory_remember_persists_structured_graph_hints_and_claim_supersession() {
+    let server = TestServer::start().await;
+
+    let resp = server
+        .post(
+            "/api/memory/remember",
+            json!({
+                "content": "Nicholai uses Signet for benchmark memory.",
+                "structured": {
+                    "entities": [{
+                        "source": "Nicholai",
+                        "sourceType": "person",
+                        "relationship": "uses",
+                        "target": "Signet",
+                        "targetType": "system",
+                        "confidence": 0.95
+                    }],
+                    "aspects": [{
+                        "entityName": "Nicholai",
+                        "aspect": "tools",
+                        "attributes": [{
+                            "content": "Nicholai uses Signet for benchmark memory.",
+                            "confidence": 0.95
+                        }]
+                    }],
+                    "hints": ["What does Nicholai use for benchmark memory?"]
+                }
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    let id = body["id"].as_str().expect("structured memory id");
+    assert_eq!(body["structured"], true);
+    assert_eq!(body["hints_written"], 1);
+    assert!(
+        body["entities_linked"]
+            .as_i64()
+            .expect("entities_linked count")
+            > 0
+    );
+
+    let conn = rusqlite::Connection::open(server.db_path()).expect("open replay db");
+    let attribute: String = conn
+        .query_row(
+            "SELECT ea.content
+             FROM entities e
+             JOIN entity_aspects asp ON asp.entity_id = e.id
+             JOIN entity_attributes ea ON ea.aspect_id = asp.id
+             WHERE e.agent_id = 'default' AND e.canonical_name = 'nicholai'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("structured attribute row");
+    assert_eq!(attribute, "Nicholai uses Signet for benchmark memory.");
+
+    let (hint, extraction_status, extraction_model): (String, String, String) = conn
+        .query_row(
+            "SELECT mh.hint, m.extraction_status, m.extraction_model
+             FROM memory_hints mh
+             JOIN memories m ON m.id = mh.memory_id
+             WHERE mh.memory_id = ?1 AND mh.agent_id = 'default'",
+            [id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .expect("structured hint row");
+    assert_eq!(hint, "What does Nicholai use for benchmark memory?");
+    assert_eq!(extraction_status, "complete");
+    assert_eq!(extraction_model, "structured-passthrough");
+
+    for payload in [
+        json!({
+            "content": "The benchmark user had tried three Korean restaurants.",
+            "createdAt": "2023-05-01T12:00:00.000Z",
+            "structured": {
+                "aspects": [{
+                    "entityName": "MemoryBench User restaurants",
+                    "entityType": "person",
+                    "aspect": "dining history",
+                    "attributes": [{
+                        "claimKey": "korean_restaurants_tried_count",
+                        "content": "MemoryBench User restaurants has tried three Korean restaurants.",
+                        "confidence": 0.9,
+                        "importance": 0.8
+                    }]
+                }]
+            }
+        }),
+        json!({
+            "content": "The benchmark user has now tried four Korean restaurants.",
+            "createdAt": "2023-06-01T12:00:00.000Z",
+            "structured": {
+                "aspects": [{
+                    "entityName": "MemoryBench User restaurants",
+                    "entityType": "person",
+                    "aspect": "dining history",
+                    "attributes": [{
+                        "claimKey": "korean_restaurants_tried_count",
+                        "content": "MemoryBench User restaurants has now tried four Korean restaurants.",
+                        "confidence": 0.9,
+                        "importance": 0.8
+                    }]
+                }]
+            }
+        }),
+    ] {
+        let resp = server.post("/api/memory/remember", payload).await;
+        assert_eq!(resp.status(), 200);
+    }
+
+    let rows = conn
+        .prepare(
+            "SELECT ea.content, ea.status, replacement.content AS replacement
+             FROM entities e
+             JOIN entity_aspects asp ON asp.entity_id = e.id
+             JOIN entity_attributes ea ON ea.aspect_id = asp.id
+             LEFT JOIN entity_attributes replacement ON replacement.id = ea.superseded_by
+             WHERE e.agent_id = 'default' AND e.canonical_name = 'memorybench user restaurants'
+             ORDER BY ea.created_at",
+        )
+        .expect("prepare structured supersession query")
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+            ))
+        })
+        .expect("query structured supersession rows")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("collect structured supersession rows");
+    assert_eq!(
+        rows,
+        vec![
+            (
+                "MemoryBench User restaurants has tried three Korean restaurants.".to_string(),
+                "superseded".to_string(),
+                Some(
+                    "MemoryBench User restaurants has now tried four Korean restaurants."
+                        .to_string()
+                )
+            ),
+            (
+                "MemoryBench User restaurants has now tried four Korean restaurants.".to_string(),
+                "active".to_string(),
+                None
+            )
+        ]
+    );
+
+    let invalid = server
+        .post(
+            "/api/memory/remember",
+            json!({"content": "Invalid timestamp memory.", "createdAt": "not-a-date"}),
+        )
+        .await;
+    assert_eq!(invalid.status(), 400);
+    let invalid_body = server.json(invalid).await;
+    assert_eq!(
+        invalid_body["error"],
+        "createdAt must be a valid ISO timestamp"
+    );
+}
+
 const CHUNK_REPLAY_YAML: &str = r#"agent:
   name: test-agent
   version: 1

@@ -515,6 +515,7 @@ pub struct RememberBody {
     pub pinned: Option<bool>,
     pub source_type: Option<String>,
     pub source_id: Option<String>,
+    pub created_at: Option<String>,
     #[serde(alias = "source_path", alias = "source")]
     pub source_path: Option<String>,
     #[serde(alias = "runtime_path")]
@@ -528,7 +529,84 @@ pub struct RememberBody {
     pub visibility: Option<String>,
     pub scope: Option<String>,
     pub session_key: Option<String>,
+    pub hints: Option<Vec<String>>,
     pub structured: Option<Value>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StructuredPayload {
+    #[serde(default)]
+    entities: Vec<StructuredEntity>,
+    #[serde(default)]
+    aspects: Vec<StructuredAspect>,
+    #[serde(default)]
+    hints: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StructuredEntity {
+    source: String,
+    #[serde(alias = "source_type")]
+    source_type: Option<String>,
+    relationship: String,
+    target: String,
+    #[serde(alias = "target_type")]
+    target_type: Option<String>,
+    confidence: Option<f64>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StructuredAspect {
+    #[serde(alias = "entity")]
+    entity_name: String,
+    #[serde(alias = "entity_type")]
+    entity_type: Option<String>,
+    aspect: String,
+    #[serde(default)]
+    attributes: Vec<StructuredAttribute>,
+    value: Option<String>,
+    #[serde(alias = "group_key")]
+    group_key: Option<String>,
+    #[serde(alias = "claim_key")]
+    claim_key: Option<String>,
+    confidence: Option<f64>,
+    importance: Option<f64>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StructuredAttribute {
+    #[serde(alias = "group_key")]
+    group_key: Option<String>,
+    #[serde(alias = "claim_key")]
+    claim_key: Option<String>,
+    content: String,
+    confidence: Option<f64>,
+    importance: Option<f64>,
+}
+
+#[derive(Default)]
+struct StructuredPersistResult {
+    entities_inserted: usize,
+    entities_updated: usize,
+    relations_inserted: usize,
+    relations_updated: usize,
+    mentions_linked: usize,
+    aspects_created: usize,
+    attributes_created: usize,
+    attributes_superseded: usize,
+}
+
+#[derive(Clone)]
+struct StoredStructuredAttribute {
+    id: String,
+    normalized_content: String,
+    group_key: Option<String>,
+    claim_key: String,
+    created_at: String,
 }
 
 fn parse_remember_tags(value: Option<Value>) -> Result<Vec<String>, &'static str> {
@@ -560,6 +638,156 @@ fn parse_remember_tags(value: Option<Value>) -> Result<Vec<String>, &'static str
         }
         _ => Err("tags must be a string, string array, or null"),
     }
+}
+
+fn canonical_name(value: &str) -> String {
+    value
+        .trim()
+        .to_ascii_lowercase()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn normalize_path_key(value: Option<&str>) -> Option<String> {
+    let normalized = value
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase()
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
+        .collect::<String>()
+        .split('_')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("_");
+    if normalized.len() < 3 {
+        return None;
+    }
+    Some(normalized.chars().take(120).collect())
+}
+
+fn normalize_entity_type(value: Option<&str>) -> String {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| {
+            value
+                .to_ascii_lowercase()
+                .chars()
+                .map(|ch| {
+                    if ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' {
+                        ch
+                    } else {
+                        '_'
+                    }
+                })
+                .collect::<String>()
+        })
+        .unwrap_or_else(|| "extracted".to_string())
+}
+
+fn tokenize_structured_content(content: &str) -> Vec<String> {
+    content
+        .to_ascii_lowercase()
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' {
+                ch
+            } else {
+                ' '
+            }
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .filter(|token| token.len() >= 2)
+        .map(str::to_string)
+        .collect()
+}
+
+fn has_update_marker(content: &str) -> bool {
+    let content = content.to_ascii_lowercase();
+    [
+        "currently",
+        "now",
+        "recently",
+        "lately",
+        "updated",
+        "changed",
+        "switched",
+        "replaced",
+        "no longer",
+        "not anymore",
+        "instead",
+        "previously",
+        "formerly",
+    ]
+    .iter()
+    .any(|marker| content.contains(marker))
+}
+
+fn numeric_tokens(tokens: &[String]) -> HashSet<&str> {
+    const NUMBER_WORDS: &[&str] = &[
+        "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+        "eleven", "twelve",
+    ];
+    tokens
+        .iter()
+        .filter_map(|token| {
+            if token.chars().all(|ch| ch.is_ascii_digit()) || NUMBER_WORDS.contains(&token.as_str())
+            {
+                Some(token.as_str())
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+fn has_numeric_conflict(left: &[String], right: &[String]) -> bool {
+    let left_numbers = numeric_tokens(left);
+    let right_numbers = numeric_tokens(right);
+    if left_numbers.is_empty() || right_numbers.is_empty() {
+        return false;
+    }
+    left_numbers != right_numbers
+}
+
+fn is_likely_supersession(new_content: &str, old_content: &str) -> bool {
+    let newer = tokenize_structured_content(new_content);
+    let older = tokenize_structured_content(old_content);
+    if newer.is_empty() || older.is_empty() {
+        return false;
+    }
+    let older_set = older.iter().map(String::as_str).collect::<HashSet<_>>();
+    let overlap = newer
+        .iter()
+        .filter(|token| older_set.contains(token.as_str()))
+        .count();
+    if overlap < 3 {
+        return false;
+    }
+    has_numeric_conflict(&newer, &older) || (has_update_marker(new_content) && overlap >= 4)
+}
+
+fn is_decision_content(content: &str) -> bool {
+    let content = content.to_ascii_lowercase();
+    [
+        "decided to",
+        "decided on",
+        "decided against",
+        "switched from",
+        "switched to",
+        "went with",
+        "sticking with",
+        "committed to",
+        "settled on",
+        "adopted",
+        "architecture decision",
+        "design decision",
+    ]
+    .iter()
+    .any(|marker| content.contains(marker))
 }
 
 fn normalize_scope(value: Option<String>) -> Option<String> {
@@ -1023,6 +1251,453 @@ fn dead_letter_blocked_extraction_memory(
     Ok(())
 }
 
+fn upsert_structured_entity(
+    conn: &rusqlite::Connection,
+    name: &str,
+    entity_type: Option<&str>,
+    agent_id: &str,
+    now: &str,
+) -> Result<(String, bool), rusqlite::Error> {
+    let name = name.trim();
+    if name.len() < 2 {
+        return Err(rusqlite::Error::InvalidQuery);
+    }
+    let canonical = canonical_name(name);
+    if let Some((id, existing_type)) = conn
+        .query_row(
+            "SELECT id, entity_type FROM entities
+             WHERE (canonical_name = ?1 AND agent_id = ?2) OR name = ?3
+             LIMIT 1",
+            params![canonical, agent_id, name],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()?
+    {
+        conn.execute(
+            "UPDATE entities SET mentions = COALESCE(mentions, 0) + 1, updated_at = ?1 WHERE id = ?2",
+            params![now, id],
+        )?;
+        let normalized_type = normalize_entity_type(entity_type);
+        if normalized_type != "extracted" && existing_type == "extracted" {
+            conn.execute(
+                "UPDATE entities SET entity_type = ?1 WHERE id = ?2 AND entity_type = 'extracted'",
+                params![normalized_type, id],
+            )?;
+        }
+        return Ok((id, false));
+    }
+
+    let id = uuid::Uuid::new_v4().to_string();
+    let entity_type = normalize_entity_type(entity_type);
+    match conn.execute(
+        "INSERT INTO entities
+         (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, 1, ?6, ?6)",
+        params![id, name, canonical, entity_type, agent_id, now],
+    ) {
+        Ok(_) => Ok((id, true)),
+        Err(err) => {
+            if !err.to_string().contains("UNIQUE constraint") {
+                return Err(err);
+            }
+            let fallback = conn
+                .query_row(
+                    "SELECT id FROM entities WHERE name = ?1 LIMIT 1",
+                    params![name],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?;
+            let Some(fallback) = fallback else {
+                return Err(err);
+            };
+            conn.execute(
+                "UPDATE entities
+                 SET mentions = COALESCE(mentions, 0) + 1,
+                     canonical_name = COALESCE(canonical_name, ?1),
+                     updated_at = ?2
+                 WHERE id = ?3",
+                params![canonical, now, fallback],
+            )?;
+            Ok((fallback, false))
+        }
+    }
+}
+
+fn upsert_structured_relation(
+    conn: &rusqlite::Connection,
+    source_id: &str,
+    target_id: &str,
+    relationship: &str,
+    confidence: f64,
+    now: &str,
+) -> Result<bool, rusqlite::Error> {
+    if let Some((id, mentions, existing_confidence)) = conn
+        .query_row(
+            "SELECT id, COALESCE(mentions, 1), COALESCE(confidence, 0.5)
+             FROM relations
+             WHERE source_entity_id = ?1 AND target_entity_id = ?2 AND relation_type = ?3
+             LIMIT 1",
+            params![source_id, target_id, relationship],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, f64>(2)?,
+                ))
+            },
+        )
+        .optional()?
+    {
+        let next_mentions = mentions + 1;
+        let next_confidence =
+            ((existing_confidence * mentions as f64) + confidence) / next_mentions as f64;
+        conn.execute(
+            "UPDATE relations SET mentions = ?1, confidence = ?2, updated_at = ?3 WHERE id = ?4",
+            params![next_mentions, next_confidence, now, id],
+        )?;
+        return Ok(false);
+    }
+
+    conn.execute(
+        "INSERT INTO relations
+         (id, source_entity_id, target_entity_id, relation_type, strength, mentions, confidence, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, 1.0, 1, ?5, ?6, ?6)",
+        params![
+            uuid::Uuid::new_v4().to_string(),
+            source_id,
+            target_id,
+            relationship,
+            confidence,
+            now
+        ],
+    )?;
+    Ok(true)
+}
+
+fn mark_structured_superseded_siblings(
+    conn: &rusqlite::Connection,
+    attribute: &StoredStructuredAttribute,
+    aspect_id: &str,
+    agent_id: &str,
+    now: &str,
+) -> Result<usize, rusqlite::Error> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT id, normalized_content, group_key, claim_key, created_at
+         FROM entity_attributes
+         WHERE aspect_id = ?1 AND agent_id = ?2
+           AND (group_key = ?3 OR (group_key IS NULL AND ?3 IS NULL))
+           AND claim_key = ?4
+           AND id != ?5
+           AND kind = 'attribute'
+           AND status = 'active'",
+    )?;
+    let siblings = stmt
+        .query_map(
+            params![
+                aspect_id,
+                agent_id,
+                attribute.group_key.as_deref(),
+                attribute.claim_key,
+                attribute.id
+            ],
+            |row| {
+                Ok(StoredStructuredAttribute {
+                    id: row.get(0)?,
+                    normalized_content: row.get(1)?,
+                    group_key: row.get(2)?,
+                    claim_key: row.get(3)?,
+                    created_at: row.get(4)?,
+                })
+            },
+        )?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let mut count = 0usize;
+    for sibling in siblings {
+        let left = chrono::DateTime::parse_from_rfc3339(&attribute.created_at).ok();
+        let right = chrono::DateTime::parse_from_rfc3339(&sibling.created_at).ok();
+        let attribute_is_newer = match (left, right) {
+            (Some(left), Some(right)) => left >= right,
+            _ => true,
+        };
+        let (newer, older) = if attribute_is_newer {
+            (attribute, &sibling)
+        } else {
+            (&sibling, attribute)
+        };
+        if !is_likely_supersession(&newer.normalized_content, &older.normalized_content) {
+            continue;
+        }
+        count += conn.execute(
+            "UPDATE entity_attributes
+             SET status = 'superseded', superseded_by = ?1, updated_at = ?2
+             WHERE id = ?3 AND agent_id = ?4 AND status = 'active'",
+            params![newer.id, now, older.id, agent_id],
+        )?;
+    }
+    Ok(count)
+}
+
+fn persist_structured_payload(
+    conn: &rusqlite::Connection,
+    payload: &StructuredPayload,
+    source_memory_id: &str,
+    content: &str,
+    agent_id: &str,
+    now: &str,
+) -> Result<StructuredPersistResult, rusqlite::Error> {
+    let mut result = StructuredPersistResult::default();
+
+    for entity in &payload.entities {
+        let confidence = entity.confidence.unwrap_or(0.7);
+        let (source_id, source_inserted) = upsert_structured_entity(
+            conn,
+            &entity.source,
+            entity.source_type.as_deref(),
+            agent_id,
+            now,
+        )?;
+        if source_inserted {
+            result.entities_inserted += 1;
+        } else {
+            result.entities_updated += 1;
+        }
+        let (target_id, target_inserted) = upsert_structured_entity(
+            conn,
+            &entity.target,
+            entity.target_type.as_deref(),
+            agent_id,
+            now,
+        )?;
+        if target_inserted {
+            result.entities_inserted += 1;
+        } else {
+            result.entities_updated += 1;
+        }
+        if upsert_structured_relation(
+            conn,
+            &source_id,
+            &target_id,
+            &entity.relationship,
+            confidence,
+            now,
+        )? {
+            result.relations_inserted += 1;
+        } else {
+            result.relations_updated += 1;
+        }
+        for (entity_id, mention_text) in [
+            (source_id.as_str(), entity.source.as_str()),
+            (target_id.as_str(), entity.target.as_str()),
+        ] {
+            result.mentions_linked += conn.execute(
+                "INSERT OR IGNORE INTO memory_entity_mentions
+                 (memory_id, entity_id, mention_text, confidence, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![source_memory_id, entity_id, mention_text, confidence, now],
+            )?;
+        }
+    }
+
+    let kind = if is_decision_content(content) {
+        "constraint"
+    } else {
+        "attribute"
+    };
+    let base_importance = if kind == "constraint" { 0.85 } else { 0.5 };
+    let mut resolved_entities = Vec::new();
+
+    for aspect in &payload.aspects {
+        let (entity_id, inserted) = upsert_structured_entity(
+            conn,
+            &aspect.entity_name,
+            aspect.entity_type.as_deref(),
+            agent_id,
+            now,
+        )?;
+        if inserted {
+            result.entities_inserted += 1;
+        } else {
+            result.entities_updated += 1;
+        }
+        result.mentions_linked += conn.execute(
+            "INSERT OR IGNORE INTO memory_entity_mentions
+             (memory_id, entity_id, mention_text, confidence, created_at)
+             VALUES (?1, ?2, ?3, 0.7, ?4)",
+            params![source_memory_id, entity_id, aspect.entity_name, now],
+        )?;
+        resolved_entities.push(entity_id.clone());
+
+        let aspect_id = uuid::Uuid::new_v4().to_string();
+        let aspect_canonical = canonical_name(&aspect.aspect);
+        conn.execute(
+            "INSERT INTO entity_aspects
+             (id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, 0.5, ?6, ?6)
+             ON CONFLICT(entity_id, canonical_name) DO UPDATE SET updated_at = excluded.updated_at",
+            params![
+                aspect_id,
+                entity_id,
+                agent_id,
+                aspect.aspect,
+                aspect_canonical,
+                now
+            ],
+        )?;
+        let stored_aspect_id = conn.query_row(
+            "SELECT id FROM entity_aspects
+             WHERE entity_id = ?1 AND canonical_name = ?2
+             LIMIT 1",
+            params![entity_id, aspect_canonical],
+            |row| row.get::<_, String>(0),
+        )?;
+        result.aspects_created += 1;
+
+        let mut attributes = aspect.attributes.clone();
+        if let Some(value) = aspect.value.as_ref().map(String::as_str).map(str::trim)
+            && !value.is_empty()
+        {
+            attributes.push(StructuredAttribute {
+                group_key: aspect.group_key.clone(),
+                claim_key: aspect.claim_key.clone(),
+                content: value.to_string(),
+                confidence: aspect.confidence,
+                importance: aspect.importance,
+            });
+        }
+
+        for attr in attributes {
+            let normalized = canonical_name(&attr.content);
+            if normalized.is_empty() {
+                continue;
+            }
+            let duplicate = conn
+                .query_row(
+                    "SELECT id FROM entity_attributes
+                     WHERE aspect_id = ?1 AND agent_id = ?2 AND normalized_content = ?3
+                       AND status = 'active'
+                     LIMIT 1",
+                    params![stored_aspect_id, agent_id, normalized],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?;
+            if duplicate.is_some() {
+                continue;
+            }
+
+            let attribute_id = uuid::Uuid::new_v4().to_string();
+            let group_key = normalize_path_key(attr.group_key.as_deref());
+            let claim_key = normalize_path_key(attr.claim_key.as_deref());
+            conn.execute(
+                "INSERT INTO entity_attributes
+                 (id, aspect_id, agent_id, memory_id, kind, content, normalized_content,
+                  group_key, claim_key, confidence, importance, status, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'active', ?12, ?12)",
+                params![
+                    attribute_id,
+                    stored_aspect_id,
+                    agent_id,
+                    source_memory_id,
+                    kind,
+                    attr.content,
+                    normalized,
+                    group_key.as_deref(),
+                    claim_key.as_deref(),
+                    attr.confidence.unwrap_or(0.7),
+                    attr.importance.unwrap_or(base_importance),
+                    now
+                ],
+            )?;
+            result.attributes_created += 1;
+            if kind == "attribute"
+                && let Some(claim_key) = claim_key
+            {
+                result.attributes_superseded += mark_structured_superseded_siblings(
+                    conn,
+                    &StoredStructuredAttribute {
+                        id: attribute_id,
+                        normalized_content: normalized,
+                        group_key,
+                        claim_key,
+                        created_at: now.to_string(),
+                    },
+                    &stored_aspect_id,
+                    agent_id,
+                    now,
+                )?;
+            }
+        }
+    }
+
+    if resolved_entities.len() >= 2 {
+        for left in 0..resolved_entities.len() - 1 {
+            for right in left + 1..resolved_entities.len() {
+                if resolved_entities[left] == resolved_entities[right] {
+                    continue;
+                }
+                let exists = conn
+                    .query_row(
+                        "SELECT id FROM entity_dependencies
+                         WHERE source_entity_id = ?1 AND target_entity_id = ?2
+                           AND dependency_type = 'related_to' AND agent_id = ?3
+                         LIMIT 1",
+                        params![resolved_entities[left], resolved_entities[right], agent_id],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .optional()?;
+                if exists.is_some() {
+                    continue;
+                }
+                conn.execute(
+                    "INSERT INTO entity_dependencies
+                     (id, source_entity_id, target_entity_id, agent_id, dependency_type,
+                      strength, confidence, reason, created_at, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, 'related_to', 0.3, 0.5, ?5, ?6, ?6)",
+                    params![
+                        uuid::Uuid::new_v4().to_string(),
+                        resolved_entities[left],
+                        resolved_entities[right],
+                        agent_id,
+                        format!("co-occurred in extracted entities for memory {source_memory_id}"),
+                        now
+                    ],
+                )?;
+            }
+        }
+    }
+
+    Ok(result)
+}
+
+fn write_memory_hints(
+    conn: &rusqlite::Connection,
+    memory_id: &str,
+    agent_id: &str,
+    hints: &[String],
+    now: &str,
+) -> Result<usize, rusqlite::Error> {
+    let mut written = 0usize;
+    for hint in hints {
+        let hint = hint.trim();
+        if !(5..=300).contains(&hint.len()) {
+            continue;
+        }
+        conn.execute(
+            "INSERT OR IGNORE INTO memory_hints (id, memory_id, agent_id, hint, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                uuid::Uuid::new_v4().to_string(),
+                memory_id,
+                agent_id,
+                hint,
+                now
+            ],
+        )?;
+        written += 1;
+    }
+    Ok(written)
+}
+
 fn blocked_extraction_reason_blocking(state: &AppState) -> Option<String> {
     let guard = state.extraction_state.blocking_read();
     guard.as_ref().and_then(|es| {
@@ -1083,6 +1758,32 @@ pub async fn remember(
                 .into_response();
         }
     };
+    let requested_created_at = match body.created_at.as_deref() {
+        Some(value) if chrono::DateTime::parse_from_rfc3339(value).is_err() => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": "createdAt must be a valid ISO timestamp" })),
+            )
+                .into_response();
+        }
+        Some(value) => Some(value.to_string()),
+        None => None,
+    };
+    let structured_payload = match body.structured.as_ref() {
+        Some(value) if !value.is_null() => {
+            match serde_json::from_value::<StructuredPayload>(value.clone()) {
+                Ok(payload) => Some(payload),
+                Err(_) => {
+                    let body = serde_json::json!({
+                        "error": "structured must be a valid structured payload"
+                    });
+                    return (StatusCode::BAD_REQUEST, Json(body)).into_response();
+                }
+            }
+        }
+        _ => None,
+    };
+    let client_hints = body.hints.clone().unwrap_or_default();
 
     let metadata = body.metadata.clone();
     let who = normalize_optional_string(body.who).or_else(|| Some("daemon".to_string()));
@@ -1159,10 +1860,7 @@ pub async fn remember(
         .and_then(|memory| memory.pipeline_v2.as_ref())
         .map(|pipeline| pipeline.guardrails.clone())
         .unwrap_or_default();
-    let has_structured = body
-        .structured
-        .as_ref()
-        .is_some_and(|value| !value.is_null());
+    let has_structured = structured_payload.is_some();
 
     if !has_structured && content.chars().count() > guardrails.max_content_chars {
         let chunk_plans = plan_chunks(&content, &guardrails, idempotency_key.as_deref());
@@ -1381,7 +2079,11 @@ pub async fn remember(
                     }));
                 }
 
-                let blocked_reason = blocked_extraction_reason_blocking(&state);
+                let blocked_reason = if has_structured {
+                    None
+                } else {
+                    blocked_extraction_reason_blocking(&state)
+                };
                 let r = ingest_remember_with_blocked_guard(
                     conn,
                     &transactions::IngestInput {
@@ -1406,6 +2108,48 @@ pub async fn remember(
                     blocked_reason.as_deref(),
                     extraction_max_attempts,
                 )?;
+                let created_at = requested_created_at
+                    .as_deref()
+                    .map(str::to_string)
+                    .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
+                let mut entities_linked = 0usize;
+                let mut hints_written = 0usize;
+                if r.duplicate_of.is_none() {
+                    if has_structured {
+                        conn.execute(
+                            "UPDATE memories
+                             SET extraction_status = 'complete',
+                                 extraction_model = 'structured-passthrough',
+                                 created_at = ?1,
+                                 updated_at = ?1
+                             WHERE id = ?2",
+                            params![created_at, r.id],
+                        )?;
+                    } else if requested_created_at.is_some() {
+                        conn.execute(
+                            "UPDATE memories SET created_at = ?1, updated_at = ?1 WHERE id = ?2",
+                            params![created_at, r.id],
+                        )?;
+                    }
+                    if let Some(payload) = structured_payload.as_ref() {
+                        let structured = persist_structured_payload(
+                            conn,
+                            payload,
+                            &r.id,
+                            &content,
+                            &agent_id,
+                            &created_at,
+                        )?;
+                        entities_linked = structured.mentions_linked;
+                        let mut hints = payload.hints.clone();
+                        hints.extend(client_hints.iter().cloned());
+                        hints_written =
+                            write_memory_hints(conn, &r.id, &agent_id, &hints, &created_at)?;
+                    } else if !client_hints.is_empty() {
+                        hints_written =
+                            write_memory_hints(conn, &r.id, &agent_id, &client_hints, &created_at)?;
+                    }
+                }
                 let status = if r.duplicate_of.is_some() {
                     "duplicate"
                 } else {
@@ -1417,6 +2161,14 @@ pub async fn remember(
                     "hash": r.hash,
                     "duplicateOf": r.duplicate_of,
                     "tags": tags_response,
+                    "type": memory_type,
+                    "pinned": pinned,
+                    "importance": importance,
+                    "content": content,
+                    "embedded": false,
+                    "entities_linked": entities_linked,
+                    "hints_written": hints_written,
+                    "structured": has_structured,
                 });
                 if r.duplicate_of.is_some()
                     && let Some(obj) = response.as_object_mut()
@@ -1967,6 +2719,7 @@ mod tests {
                 pinned: None,
                 source_type: None,
                 source_id: None,
+                created_at: None,
                 source_path: None,
                 runtime_path: None,
                 idempotency_key: None,
@@ -1976,6 +2729,7 @@ mod tests {
                 visibility: None,
                 scope: None,
                 session_key: None,
+                hints: None,
                 structured: None,
             }),
         )
@@ -2056,6 +2810,7 @@ mod tests {
                 pinned: None,
                 source_type: None,
                 source_id: None,
+                created_at: None,
                 source_path: None,
                 runtime_path: None,
                 idempotency_key: None,
@@ -2065,6 +2820,7 @@ mod tests {
                 visibility: None,
                 scope: None,
                 session_key: None,
+                hints: None,
                 structured: None,
             }),
         )
@@ -2148,6 +2904,7 @@ mod tests {
                 pinned: None,
                 source_type: None,
                 source_id: None,
+                created_at: None,
                 source_path: None,
                 runtime_path: None,
                 idempotency_key: None,
@@ -2157,6 +2914,7 @@ mod tests {
                 visibility: None,
                 scope: None,
                 session_key: None,
+                hints: None,
                 structured: None,
             }),
         )
