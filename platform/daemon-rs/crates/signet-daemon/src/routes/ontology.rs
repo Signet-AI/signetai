@@ -44,6 +44,8 @@ pub struct ProposalQuery {
 pub struct ProposalBody {
     #[serde(alias = "agent_id")]
     agent_id: Option<String>,
+    #[serde(rename = "from")]
+    from_source: Option<String>,
     operation: Option<String>,
     payload: Option<JsonValue>,
     confidence: Option<f64>,
@@ -61,6 +63,8 @@ pub struct ProposalBody {
     proposals: Option<Vec<ProposalBody>>,
     #[serde(alias = "write_proposals")]
     write_proposals: Option<bool>,
+    #[serde(alias = "write_assertions")]
+    write_assertions: Option<bool>,
     #[serde(alias = "use_provider")]
     use_provider: Option<bool>,
     status: Option<String>,
@@ -1611,6 +1615,876 @@ fn duplicate_merge_candidates(
     Ok(candidates.into_iter().take(limit as usize).collect())
 }
 
+#[derive(Clone, Debug)]
+struct ExtractionSource {
+    kind: String,
+    id: String,
+    content: String,
+    source_kind: String,
+    source_id: String,
+    source_path: Option<String>,
+    project: Option<String>,
+    harness: Option<String>,
+}
+
+fn bounded_limit(raw: Option<i64>, default: i64, min: i64, max: i64) -> i64 {
+    raw.unwrap_or(default).clamp(min, max)
+}
+
+fn extraction_source_id_candidates(value: &str) -> Vec<String> {
+    let trimmed = value.trim();
+    let stripped = trimmed
+        .strip_prefix("transcript:")
+        .or_else(|| trimmed.strip_prefix("session:"))
+        .unwrap_or(trimmed);
+    let mut seen = std::collections::HashSet::new();
+    [
+        trimmed,
+        stripped,
+        &format!("transcript:{stripped}"),
+        &format!("session:{stripped}"),
+    ]
+    .into_iter()
+    .filter(|item| !item.trim().is_empty())
+    .filter(|item| seen.insert((*item).to_string()))
+    .map(ToOwned::to_owned)
+    .collect()
+}
+
+fn read_transcript_source(
+    conn: &rusqlite::Connection,
+    agent_id: &str,
+    id: &str,
+) -> Result<Option<ExtractionSource>, CoreError> {
+    if !table_exists(conn, "session_transcripts")? {
+        return Ok(None);
+    }
+    let candidates = extraction_source_id_candidates(id);
+    let placeholders = vec!["?"; candidates.len()].join(", ");
+    let sql = format!(
+        "SELECT session_key, content, harness, project
+         FROM session_transcripts
+         WHERE agent_id = ?1 AND session_key IN ({placeholders})
+         ORDER BY created_at DESC
+         LIMIT 1"
+    );
+    let mut values = vec![Value::Text(agent_id.to_string())];
+    values.extend(candidates.into_iter().map(Value::Text));
+    let params = values.iter().map(|v| v as &dyn ToSql).collect::<Vec<_>>();
+    conn.prepare(&sql)?
+        .query_row(params.as_slice(), |row| {
+            let session_key = row.get::<_, String>(0)?;
+            Ok(ExtractionSource {
+                kind: "transcript".to_string(),
+                id: session_key.clone(),
+                content: row.get::<_, String>(1)?,
+                harness: row.get::<_, Option<String>>(2)?,
+                project: row.get::<_, Option<String>>(3)?,
+                source_kind: "transcript".to_string(),
+                source_id: session_key,
+                source_path: None,
+            })
+        })
+        .optional()
+        .map_err(Into::into)
+}
+
+fn read_artifact_source(
+    conn: &rusqlite::Connection,
+    agent_id: &str,
+    id: &str,
+) -> Result<Option<ExtractionSource>, CoreError> {
+    if !table_exists(conn, "memory_artifacts")? {
+        return Ok(None);
+    }
+    let candidates = extraction_source_id_candidates(id);
+    let placeholders = vec!["?"; candidates.len()].join(", ");
+    let sql = format!(
+        "SELECT source_path, source_kind, source_node_id, session_id, session_key,
+                session_token, project, harness, content
+         FROM memory_artifacts
+         WHERE agent_id = ?1
+           AND COALESCE(is_deleted, 0) = 0
+           AND (
+             source_path = ?2
+             OR source_node_id IN ({placeholders})
+             OR session_id IN ({placeholders})
+             OR session_key IN ({placeholders})
+             OR session_token IN ({placeholders})
+           )
+         ORDER BY captured_at DESC
+         LIMIT 1"
+    );
+    let mut values = vec![
+        Value::Text(agent_id.to_string()),
+        Value::Text(id.to_string()),
+    ];
+    for _ in 0..4 {
+        values.extend(candidates.iter().cloned().map(Value::Text));
+    }
+    let params = values.iter().map(|v| v as &dyn ToSql).collect::<Vec<_>>();
+    conn.prepare(&sql)?
+        .query_row(params.as_slice(), |row| {
+            let source_path = row.get::<_, String>(0)?;
+            let source_node_id = row.get::<_, Option<String>>(2)?;
+            let session_id = row.get::<_, String>(3)?;
+            let session_key = row.get::<_, Option<String>>(4)?;
+            let session_token = row.get::<_, String>(5)?;
+            Ok(ExtractionSource {
+                kind: "artifact".to_string(),
+                id: source_path.clone(),
+                source_path: Some(source_path),
+                source_kind: row.get::<_, String>(1)?,
+                source_id: source_node_id.or(session_key).unwrap_or_else(|| {
+                    if session_id.is_empty() {
+                        session_token
+                    } else {
+                        session_id
+                    }
+                }),
+                project: row.get::<_, Option<String>>(6)?,
+                harness: row.get::<_, Option<String>>(7)?,
+                content: row.get::<_, String>(8)?,
+            })
+        })
+        .optional()
+        .map_err(Into::into)
+}
+
+fn read_extraction_source(
+    conn: &rusqlite::Connection,
+    agent_id: &str,
+    from: &str,
+) -> Result<ExtractionSource, CoreError> {
+    let trimmed = from.trim();
+    if trimmed.is_empty() {
+        return Err(CoreError::Invalid("from is required".to_string()));
+    }
+    if (trimmed.starts_with("transcript:") || trimmed.starts_with("session:"))
+        && let Some(source) = read_transcript_source(conn, agent_id, trimmed)?
+    {
+        return Ok(source);
+    }
+    let artifact_id = trimmed
+        .strip_prefix("artifact:")
+        .or_else(|| trimmed.strip_prefix("source:"))
+        .unwrap_or(trimmed);
+    if let Some(source) = read_artifact_source(conn, agent_id, artifact_id)? {
+        return Ok(source);
+    }
+    if let Some(source) = read_transcript_source(conn, agent_id, trimmed)? {
+        return Ok(source);
+    }
+    Err(CoreError::NotFound(
+        "Extraction source not found".to_string(),
+    ))
+}
+
+fn read_json_string(record: &JsonValue, key: &str) -> Option<String> {
+    record
+        .get(key)
+        .and_then(JsonValue::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn read_json_number(record: &JsonValue, key: &str) -> Option<f64> {
+    record.get(key).and_then(JsonValue::as_f64)
+}
+
+fn read_json_array(record: &JsonValue, key: &str) -> Vec<JsonValue> {
+    record
+        .get(key)
+        .and_then(JsonValue::as_array)
+        .cloned()
+        .unwrap_or_default()
+}
+
+fn compact_json(value: JsonValue) -> JsonValue {
+    match value {
+        JsonValue::Object(map) => JsonValue::Object(
+            map.into_iter()
+                .filter_map(|(key, value)| {
+                    let value = compact_json(value);
+                    (!value.is_null()).then_some((key, value))
+                })
+                .collect(),
+        ),
+        JsonValue::Array(items) => JsonValue::Array(items.into_iter().map(compact_json).collect()),
+        other => other,
+    }
+}
+
+fn proposal_draft(
+    operation: &str,
+    payload: JsonValue,
+    src: &JsonValue,
+    fallback_rationale: &str,
+) -> Option<JsonValue> {
+    let payload = compact_json(payload);
+    if !payload.is_object() || payload.as_object().is_none_or(serde_json::Map::is_empty) {
+        return None;
+    }
+    let mut draft = serde_json::Map::new();
+    draft.insert(
+        "operation".to_string(),
+        JsonValue::String(operation.to_string()),
+    );
+    draft.insert("payload".to_string(), payload);
+    if let Some(confidence) = read_json_number(src, "confidence") {
+        draft.insert("confidence".to_string(), json!(confidence));
+    }
+    draft.insert(
+        "rationale".to_string(),
+        JsonValue::String(
+            read_json_string(src, "rationale")
+                .or_else(|| read_json_string(src, "reason"))
+                .unwrap_or_else(|| fallback_rationale.to_string()),
+        ),
+    );
+    draft.insert(
+        "evidence".to_string(),
+        JsonValue::Array(read_json_array(src, "evidence")),
+    );
+    if let Some(risk) = read_json_string(src, "risk") {
+        draft.insert("risk".to_string(), JsonValue::String(risk));
+    }
+    Some(JsonValue::Object(draft))
+}
+
+fn normalize_extraction_proposals(root: &JsonValue) -> Vec<JsonValue> {
+    let mut proposals = Vec::new();
+    for item in read_json_array(root, "entities") {
+        if let Some(name) = read_json_string(&item, "name") {
+            proposals.push(proposal_draft(
+                "create_entity",
+                json!({
+                    "name": name,
+                    "entity_type": read_json_string(&item, "type")
+                        .or_else(|| read_json_string(&item, "entity_type")),
+                }),
+                &item,
+                "Extracted entity candidate from source evidence.",
+            ));
+        }
+    }
+    for item in read_json_array(root, "claim_values") {
+        if let (Some(entity), Some(aspect), Some(claim_key), Some(value)) = (
+            read_json_string(&item, "entity"),
+            read_json_string(&item, "aspect"),
+            read_json_string(&item, "claim_key"),
+            read_json_string(&item, "value"),
+        ) {
+            proposals.push(proposal_draft(
+                "add_claim_value",
+                json!({
+                    "entity": entity,
+                    "entity_type": read_json_string(&item, "entity_type"),
+                    "aspect": aspect,
+                    "group_key": read_json_string(&item, "group_key"),
+                    "claim_key": claim_key,
+                    "value": value,
+                    "visibility": read_json_string(&item, "visibility"),
+                    "reducer_hint": read_json_string(&item, "reducer_hint"),
+                    "confidence": read_json_number(&item, "confidence"),
+                }),
+                &item,
+                "Extracted claim value candidate from source evidence.",
+            ));
+        }
+    }
+    for item in read_json_array(root, "links") {
+        if let (Some(source_entity), Some(target_entity), Some(link_type)) = (
+            read_json_string(&item, "source_entity"),
+            read_json_string(&item, "target_entity"),
+            read_json_string(&item, "link_type"),
+        ) {
+            proposals.push(proposal_draft(
+                "create_link",
+                json!({
+                    "source_entity": source_entity,
+                    "source_type": read_json_string(&item, "source_type"),
+                    "link_type": link_type,
+                    "target_entity": target_entity,
+                    "target_type": read_json_string(&item, "target_type"),
+                    "properties": item.get("properties").cloned(),
+                    "reason": read_json_string(&item, "reason"),
+                    "confidence": read_json_number(&item, "confidence"),
+                }),
+                &item,
+                "Extracted typed link candidate from source evidence.",
+            ));
+        }
+    }
+    for item in read_json_array(root, "actions_or_policies") {
+        if let (Some(target), Some(kind), Some(content)) = (
+            read_json_string(&item, "target_entity"),
+            read_json_string(&item, "kind"),
+            read_json_string(&item, "content"),
+        ) {
+            proposals.push(proposal_draft(
+                "create_policy",
+                json!({"target_entity": target, "kind": kind, "content": content}),
+                &item,
+                "Extracted action or policy candidate from source evidence.",
+            ));
+        }
+    }
+    proposals.into_iter().flatten().collect()
+}
+
+fn normalize_extraction_assertions(root: &JsonValue) -> Vec<JsonValue> {
+    read_json_array(root, "assertions")
+        .into_iter()
+        .filter_map(|item| {
+            let entity = read_json_string(&item, "entity");
+            let entity_id = read_json_string(&item, "entity_id");
+            let content =
+                read_json_string(&item, "content").or_else(|| read_json_string(&item, "value"))?;
+            if entity.is_none() && entity_id.is_none() {
+                return None;
+            }
+            Some(json!({
+                "entity": entity,
+                "entity_id": entity_id,
+                "predicate": read_json_string(&item, "predicate").unwrap_or_else(|| "claims".to_string()),
+                "content": content,
+                "speaker": read_json_string(&item, "speaker"),
+                "asserted_at": read_json_string(&item, "asserted_at").or_else(|| read_json_string(&item, "when")),
+                "confidence": read_json_number(&item, "confidence"),
+                "evidence": read_json_array(&item, "evidence"),
+                "source_kind": read_json_string(&item, "source_kind"),
+                "source_id": read_json_string(&item, "source_id"),
+                "source_path": read_json_string(&item, "source_path"),
+                "source_root": read_json_string(&item, "source_root"),
+                "claim_attribute_id": read_json_string(&item, "claim_attribute_id"),
+            }))
+        })
+        .collect()
+}
+
+fn normalize_proposal_json(raw: &JsonValue) -> (Vec<JsonValue>, Vec<JsonValue>, Vec<String>) {
+    if let Some(items) = raw.as_array() {
+        return (
+            items
+                .iter()
+                .filter_map(|item| {
+                    proposal_draft(
+                        &read_json_string(item, "operation")?,
+                        item.get("payload").cloned().unwrap_or_else(|| json!({})),
+                        item,
+                        "Imported ontology proposal.",
+                    )
+                })
+                .collect(),
+            Vec::new(),
+            Vec::new(),
+        );
+    }
+    if !raw.is_object() {
+        return (Vec::new(), Vec::new(), Vec::new());
+    }
+    let explicit = read_json_array(raw, "proposals");
+    let proposals = if explicit.is_empty() {
+        normalize_extraction_proposals(raw)
+    } else {
+        explicit
+            .iter()
+            .filter_map(|item| {
+                proposal_draft(
+                    &read_json_string(item, "operation")?,
+                    item.get("payload").cloned().unwrap_or_else(|| json!({})),
+                    item,
+                    "Imported ontology proposal.",
+                )
+            })
+            .collect()
+    };
+    let questions = read_json_array(raw, "questions")
+        .into_iter()
+        .filter_map(|item| item.as_str().map(str::trim).map(ToOwned::to_owned))
+        .filter(|item| !item.is_empty())
+        .collect();
+    (proposals, normalize_extraction_assertions(raw), questions)
+}
+
+fn json_blocks(content: &str) -> Vec<JsonValue> {
+    if let Ok(parsed) = serde_json::from_str::<JsonValue>(content) {
+        return vec![parsed];
+    }
+    let mut items = Vec::new();
+    let mut rest = content;
+    while let Some(start) = rest.find("```") {
+        rest = &rest[start + 3..];
+        let Some(newline) = rest.find('\n') else {
+            break;
+        };
+        let label = rest[..newline].trim();
+        rest = &rest[newline + 1..];
+        let Some(end) = rest.find("```") else {
+            break;
+        };
+        let block = rest[..end].trim();
+        if (label.is_empty() || label.eq_ignore_ascii_case("json"))
+            && let Ok(parsed) = serde_json::from_str::<JsonValue>(block)
+        {
+            items.push(parsed);
+        }
+        rest = &rest[end + 3..];
+    }
+    items
+}
+
+fn source_evidence(source: &ExtractionSource, quote: &str) -> Vec<JsonValue> {
+    vec![json!({
+        "source_kind": source.source_kind,
+        "source_id": source.source_id,
+        "source_path": source.source_path,
+        "quote": quote,
+    })]
+}
+
+fn claim_key_for(value: &str) -> String {
+    let words = value
+        .to_ascii_lowercase()
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' {
+                ch
+            } else {
+                ' '
+            }
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .take(6)
+        .collect::<Vec<_>>()
+        .join("_");
+    if words.is_empty() {
+        "extracted_claim".to_string()
+    } else {
+        words
+    }
+}
+
+fn normalize_name(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn mechanical_entity_proposals(source: &ExtractionSource) -> Vec<JsonValue> {
+    let mut seen = std::collections::HashSet::new();
+    let mut proposals = Vec::new();
+    let mut rest = source.content.as_str();
+    while let Some(start) = rest.find("[[") {
+        rest = &rest[start + 2..];
+        let Some(end) = rest.find("]]") else {
+            break;
+        };
+        let raw = &rest[..end];
+        let name = normalize_name(raw.split(['|', '#']).next().unwrap_or_default().trim());
+        rest = &rest[end + 2..];
+        if name.len() < 2 || !seen.insert(canonical(&name)) {
+            continue;
+        }
+        proposals.push(json!({
+            "operation": "create_entity",
+            "payload": {"name": name, "entity_type": "concept"},
+            "confidence": 0.7,
+            "rationale": "Detected explicit wikilink entity in source text.",
+            "evidence": source_evidence(source, &format!("[[{name}]]")),
+            "risk": "low",
+        }));
+        if proposals.len() >= 50 {
+            break;
+        }
+    }
+    proposals
+}
+
+fn mechanical_claim_proposals(source: &ExtractionSource) -> Vec<JsonValue> {
+    let blocked = ["User", "Assistant", "The", "This", "That", "It", "I", "We"];
+    let text = source
+        .content
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let mut seen = std::collections::HashSet::new();
+    let mut proposals = Vec::new();
+    for sentence in text.split(['.', '!', '?']) {
+        let sentence = normalize_name(sentence);
+        let Some((verb, pos)) = [" should ", " must ", " needs to ", " is ", " are "]
+            .iter()
+            .find_map(|verb| sentence.find(verb).map(|pos| (*verb, pos)))
+        else {
+            continue;
+        };
+        let entity = normalize_name(&sentence[..pos]);
+        let rest = normalize_name(&sentence[pos + verb.len()..]);
+        let first = entity.split_whitespace().next().unwrap_or_default();
+        if blocked.contains(&first)
+            || entity.len() < 2
+            || !entity
+                .chars()
+                .next()
+                .is_some_and(|ch| ch.is_ascii_uppercase())
+            || rest.len() < 12
+        {
+            continue;
+        }
+        let verb_clean = verb.trim();
+        let value = format!("{entity} {verb_clean} {rest}.");
+        let key = format!("{}:{}", canonical(&entity), canonical(&value));
+        if !seen.insert(key) {
+            continue;
+        }
+        proposals.push(json!({
+            "operation": "add_claim_value",
+            "payload": {
+                "entity": entity,
+                "entity_type": "concept",
+                "aspect": "extracted",
+                "group_key": "transcript",
+                "claim_key": claim_key_for(&format!("{verb_clean} {rest}")),
+                "value": value,
+            },
+            "confidence": 0.55,
+            "rationale": "Detected explicit sentence-level claim in source text.",
+            "evidence": source_evidence(source, &value),
+            "risk": "medium",
+        }));
+        if proposals.len() >= 50 {
+            break;
+        }
+    }
+    proposals
+}
+
+fn mechanical_link_proposals(source: &ExtractionSource) -> Vec<JsonValue> {
+    let text = source
+        .content
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let link_types = [
+        " supports ",
+        " requires ",
+        " blocks ",
+        " uses ",
+        " contains ",
+        " implements ",
+        " maintains ",
+        " informs ",
+    ];
+    let mut seen = std::collections::HashSet::new();
+    let mut proposals = Vec::new();
+    for sentence in text.split(['.', '!', '?', ',']) {
+        let sentence = normalize_name(sentence);
+        let Some((link, pos)) = link_types
+            .iter()
+            .find_map(|link| sentence.find(link).map(|pos| (*link, pos)))
+        else {
+            continue;
+        };
+        let source_entity = normalize_name(&sentence[..pos]);
+        let target_entity = normalize_name(&sentence[pos + link.len()..]);
+        if source_entity.len() < 2
+            || target_entity.len() < 2
+            || !source_entity
+                .chars()
+                .next()
+                .is_some_and(|ch| ch.is_ascii_uppercase())
+            || !target_entity
+                .chars()
+                .next()
+                .is_some_and(|ch| ch.is_ascii_uppercase())
+        {
+            continue;
+        }
+        let link_clean = link.trim();
+        let key = format!(
+            "{}:{link_clean}:{}",
+            canonical(&source_entity),
+            canonical(&target_entity)
+        );
+        if !seen.insert(key) {
+            continue;
+        }
+        let link_type = if link_clean == "supports" {
+            "supports_claim"
+        } else {
+            link_clean
+        };
+        let quote = format!("{source_entity} {link_clean} {target_entity}");
+        proposals.push(json!({
+            "operation": "create_link",
+            "payload": {
+                "source_entity": source_entity,
+                "source_type": "concept",
+                "link_type": link_type,
+                "target_entity": target_entity,
+                "target_type": "concept",
+                "reason": "Detected explicit relationship statement in source text.",
+            },
+            "confidence": 0.58,
+            "rationale": "Detected explicit relationship statement in source text.",
+            "evidence": source_evidence(source, &quote),
+            "risk": "medium",
+        }));
+        if proposals.len() >= 50 {
+            break;
+        }
+    }
+    proposals
+}
+
+fn dedupe_proposals(proposals: Vec<JsonValue>, limit: usize) -> Vec<JsonValue> {
+    let mut seen = std::collections::HashSet::new();
+    proposals
+        .into_iter()
+        .filter(|proposal| {
+            let key = json!([proposal.get("operation"), proposal.get("payload")]).to_string();
+            seen.insert(key)
+        })
+        .take(limit)
+        .collect()
+}
+
+fn extracted_proposals_and_assertions(
+    source: &ExtractionSource,
+    limit: usize,
+) -> (Vec<JsonValue>, Vec<JsonValue>, Vec<String>) {
+    let parsed = json_blocks(&source.content)
+        .iter()
+        .map(normalize_proposal_json)
+        .collect::<Vec<_>>();
+    let mut explicit_proposals = Vec::new();
+    let mut explicit_assertions = Vec::new();
+    let mut questions = Vec::new();
+    for (proposals, assertions, parsed_questions) in parsed {
+        explicit_proposals.extend(proposals);
+        explicit_assertions.extend(assertions);
+        questions.extend(parsed_questions);
+    }
+    let proposals = dedupe_proposals(
+        [
+            explicit_proposals,
+            mechanical_entity_proposals(source),
+            mechanical_claim_proposals(source),
+            mechanical_link_proposals(source),
+        ]
+        .concat(),
+        limit,
+    )
+    .into_iter()
+    .map(|mut proposal| {
+        if proposal
+            .get("evidence")
+            .and_then(JsonValue::as_array)
+            .is_none_or(Vec::is_empty)
+            && let Some(object) = proposal.as_object_mut()
+        {
+            object.insert(
+                "evidence".to_string(),
+                JsonValue::Array(source_evidence(source, &source.id)),
+            );
+        }
+        proposal
+    })
+    .collect();
+    questions.sort();
+    questions.dedup();
+    (
+        proposals,
+        explicit_assertions.into_iter().take(limit).collect(),
+        questions,
+    )
+}
+
+fn resolve_assertion_subject(
+    conn: &rusqlite::Connection,
+    agent_id: &str,
+    assertion: &JsonValue,
+) -> Result<(String, String), CoreError> {
+    if let Some(id) = read_json_string(assertion, "entity_id") {
+        return conn
+            .query_row(
+                "SELECT id, name FROM entities
+                 WHERE id = ?1 AND agent_id = ?2 AND COALESCE(status, 'active') = 'active'",
+                rusqlite::params![id, agent_id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()?
+            .ok_or_else(|| CoreError::NotFound("entity_id was not found".to_string()));
+    }
+    let entity = read_json_string(assertion, "entity")
+        .ok_or_else(|| CoreError::Invalid("entity or entity_id is required".to_string()))?;
+    let key = canonical(&entity);
+    conn.query_row(
+        "SELECT id, name FROM entities
+         WHERE agent_id = ?1
+           AND COALESCE(status, 'active') = 'active'
+           AND (COALESCE(canonical_name, LOWER(name)) = ?2 OR LOWER(name) = ?3)
+         ORDER BY updated_at DESC
+         LIMIT 1",
+        rusqlite::params![agent_id, key, key],
+        |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+    )
+    .optional()?
+    .ok_or_else(|| CoreError::NotFound("entity was not found".to_string()))
+}
+
+fn assertion_row_to_value(row: &rusqlite::Row<'_>) -> rusqlite::Result<JsonValue> {
+    let evidence: String = row.get("evidence")?;
+    Ok(json!({
+        "id": row.get::<_, String>("id")?,
+        "agentId": row.get::<_, String>("agent_id")?,
+        "subjectEntityId": row.get::<_, String>("subject_entity_id")?,
+        "subjectEntityName": row.get::<_, Option<String>>("subject_entity_name")?,
+        "claimAttributeId": row.get::<_, Option<String>>("claim_attribute_id")?,
+        "predicate": row.get::<_, String>("predicate")?,
+        "content": row.get::<_, String>("content")?,
+        "normalizedContent": row.get::<_, String>("normalized_content")?,
+        "speaker": row.get::<_, Option<String>>("speaker")?,
+        "assertedAt": row.get::<_, String>("asserted_at")?,
+        "confidence": row.get::<_, f64>("confidence")?,
+        "evidence": parse_json(&evidence, json!([])),
+        "sourceKind": row.get::<_, Option<String>>("source_kind")?,
+        "sourceId": row.get::<_, Option<String>>("source_id")?,
+        "sourcePath": row.get::<_, Option<String>>("source_path")?,
+        "sourceRoot": row.get::<_, Option<String>>("source_root")?,
+        "status": row.get::<_, String>("status")?,
+        "supersedesAssertionId": row.get::<_, Option<String>>("supersedes_assertion_id")?,
+        "archivedAt": row.get::<_, Option<String>>("archived_at")?,
+        "archivedBy": row.get::<_, Option<String>>("archived_by")?,
+        "archiveReason": row.get::<_, Option<String>>("archive_reason")?,
+        "createdBy": row.get::<_, String>("created_by")?,
+        "createdAt": row.get::<_, String>("created_at")?,
+        "updatedAt": row.get::<_, String>("updated_at")?,
+    }))
+}
+
+fn insert_assertion(
+    conn: &rusqlite::Connection,
+    agent_id: &str,
+    source: &ExtractionSource,
+    assertion: &JsonValue,
+    created_by: &str,
+) -> Result<JsonValue, CoreError> {
+    let predicates = [
+        "claims",
+        "believes",
+        "observed",
+        "decided",
+        "prefers",
+        "denies",
+        "questions",
+    ];
+    let predicate =
+        read_json_string(assertion, "predicate").unwrap_or_else(|| "claims".to_string());
+    if !predicates.contains(&predicate.as_str()) {
+        return Err(CoreError::Invalid("predicate is invalid".to_string()));
+    }
+    let content = read_json_string(assertion, "content")
+        .ok_or_else(|| CoreError::Invalid("content is required".to_string()))?;
+    let (subject_id, _) = resolve_assertion_subject(conn, agent_id, assertion)?;
+    let evidence = {
+        let evidence = read_json_array(assertion, "evidence");
+        if evidence.is_empty() {
+            source_evidence(source, &content)
+        } else {
+            evidence
+        }
+    };
+    let source_kind =
+        read_json_string(assertion, "source_kind").or_else(|| Some(source.source_kind.clone()));
+    let source_id =
+        read_json_string(assertion, "source_id").or_else(|| Some(source.source_id.clone()));
+    let source_path =
+        read_json_string(assertion, "source_path").or_else(|| source.source_path.clone());
+    let source_root = read_json_string(assertion, "source_root");
+    let asserted_at = match read_json_string(assertion, "asserted_at") {
+        Some(raw) => chrono::DateTime::parse_from_rfc3339(&raw)
+            .map_err(|_| CoreError::Invalid("asserted_at is invalid".to_string()))?
+            .to_rfc3339_opts(SecondsFormat::Millis, true),
+        None => now(),
+    };
+    let claim_attribute_id = read_json_string(assertion, "claim_attribute_id");
+    if let Some(attribute_id) = claim_attribute_id.as_deref() {
+        let matches_subject = conn
+            .query_row(
+                "SELECT asp.entity_id
+                 FROM entity_attributes attr
+                 JOIN entity_aspects asp ON asp.id = attr.aspect_id AND asp.agent_id = attr.agent_id
+                 WHERE attr.id = ?1 AND attr.agent_id = ?2 AND attr.status = 'active'",
+                rusqlite::params![attribute_id, agent_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        match matches_subject {
+            Some(entity_id) if entity_id == subject_id => {}
+            Some(_) => {
+                return Err(CoreError::Conflict(
+                    "claim attribute belongs to a different entity".to_string(),
+                ));
+            }
+            None => {
+                return Err(CoreError::NotFound(
+                    "claim attribute was not found".to_string(),
+                ));
+            }
+        }
+    }
+    let id = Uuid::new_v4().to_string();
+    let ts = now();
+    let normalized = content
+        .to_ascii_lowercase()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let confidence = read_json_number(assertion, "confidence")
+        .unwrap_or(0.7)
+        .clamp(0.0, 1.0);
+    conn.execute(
+        "INSERT INTO epistemic_assertions
+         (id, agent_id, subject_entity_id, claim_attribute_id, predicate,
+          content, normalized_content, speaker, asserted_at, confidence, evidence,
+          source_kind, source_id, source_path, source_root, status,
+          supersedes_assertion_id, created_by, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15,
+                 'active', ?16, ?17, ?18, ?18)",
+        rusqlite::params![
+            id,
+            agent_id,
+            subject_id,
+            claim_attribute_id,
+            predicate,
+            content,
+            normalized,
+            read_json_string(assertion, "speaker"),
+            asserted_at,
+            confidence,
+            serde_json::to_string(&evidence)?,
+            source_kind,
+            source_id,
+            source_path,
+            source_root,
+            read_json_string(assertion, "supersedes_assertion_id"),
+            created_by,
+            ts,
+        ],
+    )?;
+    conn.query_row(
+        "SELECT a.*, e.name AS subject_entity_name
+         FROM epistemic_assertions a
+         JOIN entities e ON e.id = a.subject_entity_id AND e.agent_id = a.agent_id
+         WHERE a.id = ?1 AND a.agent_id = ?2",
+        rusqlite::params![id, agent_id],
+        assertion_row_to_value,
+    )
+    .map_err(Into::into)
+}
+
 fn proposal_audit_evidence(row: &ProposalRow) -> String {
     row.evidence.clone()
 }
@@ -2340,6 +3214,7 @@ pub async fn repair_merge_plan(
                     conn,
                     ProposalBody {
                         agent_id: Some(agent.clone()),
+                        from_source: None,
                         operation: Some("merge_entities".to_string()),
                         payload: plan.get("payload").cloned(),
                         confidence: plan.get("confidence").and_then(JsonValue::as_f64),
@@ -2361,6 +3236,7 @@ pub async fn repair_merge_plan(
                         reason: None,
                         proposals: None,
                         write_proposals: None,
+                        write_assertions: None,
                         use_provider: None,
                         status: None,
                         limit: None,
@@ -2876,6 +3752,7 @@ pub async fn repair_duplicates(
                     conn,
                     ProposalBody {
                         agent_id: Some(agent.clone()),
+                        from_source: None,
                         operation: Some("merge_entities".to_string()),
                         payload: item.get("payload").cloned(),
                         confidence: item.get("confidence").and_then(|v| v.as_f64()),
@@ -2897,6 +3774,7 @@ pub async fn repair_duplicates(
                         reason: None,
                         proposals: None,
                         write_proposals: None,
+                        write_assertions: None,
                         use_provider: None,
                         status: None,
                         limit: None,
@@ -2928,18 +3806,130 @@ pub async fn extract(
     State(state): State<Arc<AppState>>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
+    Query(query): Query<ProposalQuery>,
     Json(body): Json<ProposalBody>,
 ) -> Response {
-    if let Err(resp) = scoped_agent_or_response(
+    let requested_agent = query.agent_id.clone().or_else(|| body.agent_id.clone());
+    let agent = match scoped_agent_or_response(
         &state,
         peer,
         &headers,
-        body.agent_id.as_deref(),
+        requested_agent.as_deref(),
         Permission::Modify,
     ) {
-        return resp;
+        Ok(agent) => agent,
+        Err(resp) => return resp,
+    };
+    let Some(from) = clean(body.from_source.clone()) else {
+        return json_error(StatusCode::BAD_REQUEST, "from is required");
+    };
+    let created_by = clean(body.created_by.clone())
+        .or_else(|| {
+            headers
+                .get("x-signet-actor")
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| "ontology-extract".to_string());
+    let write_proposals = body.write_proposals.unwrap_or(false);
+    let write_assertions = body.write_assertions.unwrap_or(false);
+    let use_provider = body.use_provider.unwrap_or(false);
+    let limit = bounded_limit(body.limit, 100, 1, 500) as usize;
+    let result = state
+        .pool
+        .write_tx(
+            Priority::High,
+            move |conn| -> Result<JsonValue, CoreError> {
+                let source = read_extraction_source(conn, &agent, &from)?;
+                let (proposals, assertions, questions) =
+                    extracted_proposals_and_assertions(&source, limit);
+                let mut warnings = Vec::new();
+                if use_provider {
+                    warnings.push(
+                        "Provider extraction requested but no inference provider is configured."
+                            .to_string(),
+                    );
+                }
+                let should_write_proposals = write_proposals && !proposals.is_empty();
+                let should_write_assertions = write_assertions && !assertions.is_empty();
+                let mut items = Vec::new();
+                let mut assertion_items = Vec::new();
+                if should_write_proposals {
+                    for proposal in &proposals {
+                        items.push(insert_proposal(
+                            conn,
+                            ProposalBody {
+                                agent_id: Some(agent.clone()),
+                                from_source: None,
+                                operation: read_json_string(proposal, "operation"),
+                                payload: proposal.get("payload").cloned(),
+                                confidence: read_json_number(proposal, "confidence"),
+                                rationale: read_json_string(proposal, "rationale"),
+                                evidence: Some(read_json_array(proposal, "evidence")),
+                                risk: read_json_string(proposal, "risk"),
+                                source_kind: Some(source.source_kind.clone()),
+                                source_id: Some(source.source_id.clone()),
+                                source_path: source.source_path.clone(),
+                                source_root: None,
+                                created_by: Some(created_by.clone()),
+                                actor: None,
+                                reason: None,
+                                proposals: None,
+                                write_proposals: None,
+                                write_assertions: None,
+                                use_provider: None,
+                                status: None,
+                                limit: None,
+                            },
+                            &agent,
+                        )?);
+                    }
+                }
+                if should_write_assertions {
+                    for assertion in &assertions {
+                        assertion_items.push(insert_assertion(
+                            conn,
+                            &agent,
+                            &source,
+                            assertion,
+                            &created_by,
+                        )?);
+                    }
+                }
+                Ok(json!({
+                    "source": {
+                        "kind": source.kind,
+                        "id": source.id,
+                        "sourceKind": source.source_kind,
+                        "sourceId": source.source_id,
+                        "sourcePath": source.source_path,
+                        "project": source.project,
+                        "harness": source.harness,
+                    },
+                    "proposals": proposals,
+                    "items": items,
+                    "assertions": assertions,
+                    "assertionItems": assertion_items,
+                    "count": proposals.len(),
+                    "writtenCount": items.len(),
+                    "assertionCount": assertions.len(),
+                    "writtenAssertionCount": assertion_items.len(),
+                    "dryRun": !(should_write_proposals || should_write_assertions),
+                    "extractionMode": "mechanical",
+                    "providerName": JsonValue::Null,
+                    "questions": questions,
+                    "warnings": warnings,
+                }))
+            },
+        )
+        .await;
+    match result {
+        Ok(value) => (StatusCode::OK, Json(value)).into_response(),
+        Err(CoreError::Invalid(message)) => json_error(StatusCode::BAD_REQUEST, &message),
+        Err(CoreError::NotFound(message)) => json_error(StatusCode::NOT_FOUND, &message),
+        Err(CoreError::Conflict(message)) => json_error(StatusCode::CONFLICT, &message),
+        Err(error) => json_error(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()),
     }
-    (StatusCode::OK, Json(json!({"items": [], "proposals": [], "count": 0, "writtenCount": 0, "dryRun": !body.write_proposals.unwrap_or(false)}))).into_response()
 }
 
 pub async fn consolidate(

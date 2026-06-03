@@ -9181,6 +9181,253 @@ async fn ontology_proposal_conflicts_group_pending_claim_slot_values() {
 
 #[tokio::test]
 #[ignore = "requires built daemon binary"]
+async fn ontology_extract_reads_sources_and_writes_candidates_transactionally() {
+    let server = TestServer::start().await;
+    {
+        let conn = rusqlite::Connection::open(server.db_path()).expect("open replay db");
+        conn.busy_timeout(Duration::from_secs(5)).unwrap();
+        conn.execute_batch(
+            r#"INSERT INTO entities
+               (id, name, canonical_name, entity_type, agent_id, mentions, status,
+                created_at, updated_at)
+               VALUES
+               ('entity-extract-signet', 'Signet', 'signet', 'project', 'default',
+                1, 'active', '2026-06-02T00:00:00.000Z',
+                '2026-06-02T00:00:00.000Z');"#,
+        )
+        .expect("seed extract entity");
+        conn.execute(
+            "INSERT INTO session_transcripts
+             (session_key, content, harness, project, agent_id, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            rusqlite::params![
+                "extract-json",
+                json!({
+                    "claim_values": [{
+                        "entity": "Signet",
+                        "aspect": "architecture",
+                        "group_key": "ontology",
+                        "claim_key": "proposal_loop",
+                        "value": "Extraction emits pending proposals.",
+                        "confidence": 0.91,
+                        "evidence": [{"quote": "Extraction emits pending proposals."}]
+                    }],
+                    "links": [{
+                        "source_entity": "Transcript artifact",
+                        "link_type": "supports_claim",
+                        "target_entity": "Signet",
+                        "reason": "The transcript explicitly supports the claim."
+                    }]
+                })
+                .to_string(),
+                "codex",
+                "/tmp/signet",
+                "default",
+                "2026-06-02T00:00:00.000Z",
+                "2026-06-02T00:01:00.000Z",
+            ],
+        )
+        .expect("seed explicit extraction transcript");
+        conn.execute(
+            "INSERT INTO session_transcripts
+             (session_key, content, harness, project, agent_id, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            rusqlite::params![
+                "assertion-extract",
+                json!({
+                    "assertions": [{
+                        "entity": "Signet",
+                        "predicate": "believes",
+                        "content": "Signet models attributed beliefs over time.",
+                        "speaker": "Nicholai",
+                        "confidence": 0.91,
+                        "evidence": [{"quote": "attributed beliefs"}]
+                    }]
+                })
+                .to_string(),
+                "codex",
+                "/tmp/signet",
+                "default",
+                "2026-06-02T00:01:10.000Z",
+                "2026-06-02T00:01:20.000Z",
+            ],
+        )
+        .expect("seed assertion extraction transcript");
+        conn.execute(
+            "INSERT INTO session_transcripts
+             (session_key, content, harness, project, agent_id, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            rusqlite::params![
+                "plain-extract",
+                "Signet should become an agent-first ontology. [[Hermes Agent]] is relevant. Hermes Agent supports Signet proposal loop.",
+                "codex",
+                "/tmp/signet",
+                "default",
+                "2026-06-02T00:02:00.000Z",
+                "2026-06-02T00:03:00.000Z",
+            ],
+        )
+        .expect("seed plain extraction transcript");
+        conn.execute(
+            "INSERT INTO session_transcripts
+             (session_key, content, harness, project, agent_id, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            rusqlite::params![
+                "invalid-extract",
+                json!({
+                    "proposals": [{
+                        "operation": "create_entity",
+                        "payload": {"name": "Rollback Candidate", "entity_type": "concept"}
+                    }],
+                    "assertions": [{
+                        "entity": "Signet",
+                        "predicate": "claims",
+                        "content": "Signet keeps attributed assertions.",
+                        "evidence": [{"quote": "attributed assertions"}]
+                    }, {
+                        "entity": "Signet",
+                        "predicate": "maybe",
+                        "content": "This invalid assertion should roll back the batch.",
+                        "evidence": [{"quote": "invalid assertion"}]
+                    }]
+                })
+                .to_string(),
+                "codex",
+                "/tmp/signet",
+                "default",
+                "2026-06-02T00:04:00.000Z",
+                "2026-06-02T00:05:00.000Z",
+            ],
+        )
+        .expect("seed invalid extraction transcript");
+    }
+
+    let resp = server.post("/api/ontology/extract", json!({})).await;
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "from is required");
+
+    let resp = server
+        .post(
+            "/api/ontology/extract?agent_id=other-agent",
+            json!({"from": "transcript:extract-json"}),
+        )
+        .await;
+    assert_eq!(resp.status(), 404);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "Extraction source not found");
+
+    let resp = server
+        .post(
+            "/api/ontology/extract",
+            json!({"from": "transcript:extract-json"}),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["dryRun"], true);
+    assert_eq!(body["source"]["sourceKind"], "transcript");
+    assert_eq!(body["source"]["sourceId"], "extract-json");
+    assert_eq!(body["count"], 2);
+    assert_eq!(body["assertionCount"], 0);
+    assert_eq!(body["writtenCount"], 0);
+    assert_eq!(body["writtenAssertionCount"], 0);
+    assert_eq!(body["proposals"][0]["operation"], json!("add_claim_value"));
+
+    let resp = server
+        .post(
+            "/api/ontology/extract",
+            json!({
+                "from": "transcript:extract-json",
+                "writeProposals": true,
+                "writeAssertions": true,
+                "createdBy": "extract-replay"
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["dryRun"], false);
+    assert_eq!(body["writtenCount"], 2);
+    assert_eq!(body["writtenAssertionCount"], 0);
+    assert_eq!(body["items"][0]["createdBy"], "extract-replay");
+
+    let resp = server
+        .post(
+            "/api/ontology/extract",
+            json!({
+                "from": "assertion-extract",
+                "writeAssertions": true,
+                "createdBy": "assertion-replay"
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["dryRun"], false);
+    assert_eq!(body["writtenCount"], 0);
+    assert_eq!(body["writtenAssertionCount"], 1);
+    assert_eq!(body["assertionItems"][0]["createdBy"], "assertion-replay");
+    assert_eq!(body["assertionItems"][0]["predicate"], "believes");
+
+    let resp = server
+        .post("/api/ontology/extract", json!({"from": "plain-extract"}))
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    let operations = body["proposals"]
+        .as_array()
+        .expect("plain proposals")
+        .iter()
+        .filter_map(|item| item["operation"].as_str())
+        .collect::<Vec<_>>();
+    assert!(operations.contains(&"create_entity"));
+    assert!(operations.contains(&"add_claim_value"));
+    assert!(operations.contains(&"create_link"));
+    assert!(
+        body["proposals"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|proposal| !proposal["evidence"].as_array().unwrap().is_empty())
+    );
+
+    let resp = server
+        .post(
+            "/api/ontology/extract",
+            json!({
+                "from": "invalid-extract",
+                "writeProposals": true,
+                "writeAssertions": true
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "predicate is invalid");
+
+    let conn = rusqlite::Connection::open(server.db_path()).expect("open replay db");
+    let rollback_candidate_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM ontology_proposals
+             WHERE payload LIKE '%Rollback Candidate%'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("rollback proposal count");
+    assert_eq!(rollback_candidate_count, 0);
+    let assertion_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM epistemic_assertions WHERE agent_id = 'default'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("assertion count");
+    assert_eq!(assertion_count, 1);
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
 async fn plugin_ontology_telemetry_compat_endpoints() {
     let server = TestServer::start().await;
 
@@ -9215,7 +9462,6 @@ async fn plugin_ontology_telemetry_compat_endpoints() {
     assert_eq!(body, json!({"error": "Proposal not found"}));
 
     for path in [
-        "/api/ontology/extract",
         "/api/ontology/consolidate",
         "/api/ontology/proposals/batch",
         "/api/ontology/proposals/repair/duplicates",
@@ -9232,6 +9478,11 @@ async fn plugin_ontology_telemetry_compat_endpoints() {
         let resp = server.post(path, body).await;
         assert_eq!(resp.status(), 200, "POST {path}");
     }
+
+    let resp = server.post("/api/ontology/extract", json!({})).await;
+    assert_eq!(resp.status(), 400, "POST /api/ontology/extract");
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "from is required");
 }
 
 #[tokio::test]
@@ -9467,7 +9718,9 @@ async fn remaining_public_routes_have_contract_replay_coverage() {
     let resp = server.get("/api/ontology/proposals/conflicts").await;
     assert_status("GET /api/ontology/proposals/conflicts", &resp, &[200]);
     let resp = server.post("/api/ontology/extract", json!({})).await;
-    assert_status("POST /api/ontology/extract", &resp, &[200]);
+    assert_status("POST /api/ontology/extract", &resp, &[400]);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "from is required");
     let resp = server.post("/api/ontology/consolidate", json!({})).await;
     assert_status("POST /api/ontology/consolidate", &resp, &[200]);
     let resp = server
