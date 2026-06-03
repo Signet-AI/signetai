@@ -1266,7 +1266,7 @@ fn resolve_runtime_extraction_endpoint(
 }
 
 fn worker_supports_extraction_provider(provider: &str) -> bool {
-    matches!(provider, "ollama" | "anthropic")
+    matches!(provider, "ollama" | "anthropic" | "openai-compatible")
 }
 
 fn provider_is_unsupported_for_daemon_startup_preflight(provider: &str) -> bool {
@@ -2716,6 +2716,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn openai_compatible_active_provider_starts_without_fallback() {
+        let state =
+            test_state_with_extraction("openai-compatible", "none", Some("http://127.0.0.1:9"));
+
+        let started = start_extraction_worker(state.as_ref()).await;
+        assert!(started);
+
+        let provider = state.llm.read().await.clone().expect("llm provider");
+        assert_eq!(provider.name(), "openai-compatible");
+
+        stop_synthesis_worker(state.as_ref()).await;
+        stop_summary_worker(state.as_ref()).await;
+        stop_extraction_worker(state.as_ref()).await;
+    }
+
+    #[tokio::test]
     async fn startup_worker_block_dead_letters_pending_jobs_when_provider_becomes_blocked() {
         let state = test_state_with_extraction("claude-code", "none", None);
 
@@ -2972,9 +2988,10 @@ mod tests {
     }
 
     #[test]
-    fn worker_supports_only_ollama_and_anthropic_providers() {
+    fn worker_supports_http_and_anthropic_extraction_providers() {
         assert!(worker_supports_extraction_provider("ollama"));
         assert!(worker_supports_extraction_provider("anthropic"));
+        assert!(worker_supports_extraction_provider("openai-compatible"));
         assert!(!worker_supports_extraction_provider("claude-code"));
         assert!(!worker_supports_extraction_provider("codex"));
         assert!(!worker_supports_extraction_provider("opencode"));
