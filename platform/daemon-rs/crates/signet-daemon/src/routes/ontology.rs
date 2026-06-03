@@ -3162,6 +3162,59 @@ fn load_claim_slot(
         .collect::<Result<Vec<_>, _>>()?)
 }
 
+fn push_unique(values: &mut Vec<String>, value: String) {
+    if !values.contains(&value) {
+        values.push(value);
+    }
+}
+
+fn source_merge_specs(
+    payload: &JsonValue,
+) -> Result<Vec<(Option<String>, Option<String>)>, CoreError> {
+    let mut selectors = Vec::new();
+    for value in read_body_string_array(payload, "source_entities") {
+        push_unique(&mut selectors, value);
+    }
+    for value in read_body_string_array(payload, "sources") {
+        push_unique(&mut selectors, value);
+    }
+    if let Some(source) = read_payload_string(payload, "source_entity") {
+        push_unique(&mut selectors, source);
+    }
+    if let Some(source) = read_payload_string(payload, "source") {
+        push_unique(&mut selectors, source);
+    }
+    let mut ids = Vec::new();
+    for value in read_body_string_array(payload, "source_entity_ids") {
+        push_unique(&mut ids, value);
+    }
+    for value in read_body_string_array(payload, "source_ids") {
+        push_unique(&mut ids, value);
+    }
+    if let Some(id) = read_payload_string(payload, "source_entity_id") {
+        push_unique(&mut ids, id);
+    }
+    if let Some(id) = read_payload_string(payload, "source_id") {
+        push_unique(&mut ids, id);
+    }
+    if !ids.is_empty() {
+        if selectors.len() > ids.len() {
+            return Err(CoreError::Invalid(
+                "payload.source_entities and payload.source_entity_ids must match".to_string(),
+            ));
+        }
+        return Ok(ids
+            .into_iter()
+            .enumerate()
+            .map(|(index, id)| (selectors.get(index).cloned(), Some(id)))
+            .collect());
+    }
+    Ok(selectors
+        .into_iter()
+        .map(|selector| (Some(selector), None))
+        .collect())
+}
+
 fn apply_create_entity(
     conn: &rusqlite::Connection,
     row: &ProposalRow,
@@ -3791,6 +3844,183 @@ fn apply_restore_claim_version(
     }))
 }
 
+fn merge_entity_aspects(
+    conn: &rusqlite::Connection,
+    agent_id: &str,
+    source_id: &str,
+    target_id: &str,
+) -> Result<usize, CoreError> {
+    let aspects = conn
+        .prepare(
+            "SELECT id, canonical_name
+             FROM entity_aspects
+             WHERE entity_id = ?1 AND agent_id = ?2",
+        )?
+        .query_map(rusqlite::params![source_id, agent_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    for (aspect_id, canonical_name) in &aspects {
+        if let Some(target_aspect_id) = conn
+            .query_row(
+                "SELECT id
+                 FROM entity_aspects
+                 WHERE entity_id = ?1 AND agent_id = ?2 AND canonical_name = ?3
+                 LIMIT 1",
+                rusqlite::params![target_id, agent_id, canonical_name],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+        {
+            conn.execute(
+                "UPDATE entity_attributes
+                 SET aspect_id = ?1
+                 WHERE aspect_id = ?2 AND agent_id = ?3",
+                rusqlite::params![target_aspect_id, aspect_id, agent_id],
+            )?;
+            conn.execute(
+                "DELETE FROM entity_aspects WHERE id = ?1 AND agent_id = ?2",
+                rusqlite::params![aspect_id, agent_id],
+            )?;
+        } else {
+            conn.execute(
+                "UPDATE entity_aspects
+                 SET entity_id = ?1, updated_at = ?2
+                 WHERE id = ?3 AND agent_id = ?4",
+                rusqlite::params![target_id, now(), aspect_id, agent_id],
+            )?;
+        }
+    }
+    Ok(aspects.len())
+}
+
+fn merge_entity_edges(
+    conn: &rusqlite::Connection,
+    agent_id: &str,
+    source_id: &str,
+    target_id: &str,
+) -> Result<(), CoreError> {
+    conn.execute(
+        "UPDATE entity_dependencies
+         SET source_entity_id = ?1
+         WHERE source_entity_id = ?2 AND agent_id = ?3",
+        rusqlite::params![target_id, source_id, agent_id],
+    )?;
+    conn.execute(
+        "UPDATE entity_dependencies
+         SET target_entity_id = ?1
+         WHERE target_entity_id = ?2 AND agent_id = ?3",
+        rusqlite::params![target_id, source_id, agent_id],
+    )?;
+    conn.execute(
+        "DELETE FROM entity_dependencies
+         WHERE source_entity_id = target_entity_id AND agent_id = ?1",
+        rusqlite::params![agent_id],
+    )?;
+    conn.execute(
+        "UPDATE relations
+         SET source_entity_id = ?1
+         WHERE source_entity_id = ?2",
+        rusqlite::params![target_id, source_id],
+    )?;
+    conn.execute(
+        "UPDATE relations
+         SET target_entity_id = ?1
+         WHERE target_entity_id = ?2",
+        rusqlite::params![target_id, source_id],
+    )?;
+    conn.execute(
+        "DELETE FROM relations WHERE source_entity_id = target_entity_id",
+        [],
+    )?;
+    conn.execute(
+        "INSERT OR IGNORE INTO memory_entity_mentions (memory_id, entity_id)
+         SELECT memory_id, ?1 FROM memory_entity_mentions WHERE entity_id = ?2",
+        rusqlite::params![target_id, source_id],
+    )?;
+    conn.execute(
+        "DELETE FROM memory_entity_mentions WHERE entity_id = ?1",
+        rusqlite::params![source_id],
+    )?;
+    Ok(())
+}
+
+fn apply_merge_entities(
+    conn: &rusqlite::Connection,
+    row: &ProposalRow,
+    payload: &JsonValue,
+) -> Result<JsonValue, CoreError> {
+    let target_selector = read_payload_string(payload, "target_entity")
+        .or_else(|| read_payload_string(payload, "target"));
+    let target_id = read_payload_string(payload, "target_entity_id")
+        .or_else(|| read_payload_string(payload, "target_id"));
+    let target = resolve_merge_entity_ref(
+        conn,
+        &row.agent_id,
+        "payload.target_entity",
+        target_selector,
+        target_id,
+    )?;
+    let specs = source_merge_specs(payload)?;
+    if specs.is_empty() {
+        return Err(CoreError::Invalid(
+            "source entities are required".to_string(),
+        ));
+    }
+    let resolved = specs
+        .into_iter()
+        .map(|(selector, id)| {
+            resolve_merge_entity_ref(conn, &row.agent_id, "payload.source_entity", selector, id)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut seen = std::collections::HashSet::new();
+    let sources = resolved
+        .into_iter()
+        .filter(|source| source.id != target.id)
+        .filter(|source| seen.insert(source.id.clone()))
+        .collect::<Vec<_>>();
+    if sources.is_empty() {
+        return Err(CoreError::Invalid(
+            "No distinct source entities to merge".to_string(),
+        ));
+    }
+    let force = force_payload(payload);
+    let (warnings, blocked, _) = merge_warnings(&target, &sources, force);
+    if blocked {
+        return Err(CoreError::Conflict(format!(
+            "Merge blocked: {}",
+            warnings.join("; ")
+        )));
+    }
+    let mut merged = Vec::new();
+    for source in &sources {
+        let moved_aspects = merge_entity_aspects(conn, &row.agent_id, &source.id, &target.id)?;
+        merge_entity_edges(conn, &row.agent_id, &source.id, &target.id)?;
+        conn.execute(
+            "UPDATE entities
+             SET mentions = COALESCE(mentions, 0) + COALESCE((SELECT mentions FROM entities WHERE id = ?1), 0),
+                 updated_at = ?2
+             WHERE id = ?3 AND agent_id = ?4",
+            rusqlite::params![source.id, now(), target.id, row.agent_id],
+        )?;
+        conn.execute(
+            "DELETE FROM entities WHERE id = ?1 AND agent_id = ?2",
+            rusqlite::params![source.id, row.agent_id],
+        )?;
+        merged.push(json!({
+            "name": source.name,
+            "entityId": source.id,
+            "movedAspects": moved_aspects,
+        }));
+    }
+    Ok(json!({
+        "targetEntityId": target.id,
+        "targetEntityName": target.name,
+        "mergedEntities": merged,
+        "warnings": warnings,
+    }))
+}
+
 fn apply_create_link(
     conn: &rusqlite::Connection,
     row: &ProposalRow,
@@ -3951,6 +4181,7 @@ fn apply_operation(
         "supersede_claim_value" => apply_supersede_claim_value(conn, row, &payload),
         "archive_claim_value" => apply_archive_claim_value(conn, row, &payload, actor),
         "restore_claim_version" => apply_restore_claim_version(conn, row, &payload),
+        "merge_entities" => apply_merge_entities(conn, row, &payload),
         "create_link" => apply_create_link(conn, row, &payload),
         "update_link" => apply_update_link(conn, row, &payload),
         "archive_link" => apply_archive_link(conn, row, &payload, actor),

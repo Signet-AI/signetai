@@ -10767,6 +10767,194 @@ async fn ontology_operation_endpoints_apply_dry_run_and_batch_errors() {
 
 #[tokio::test]
 #[ignore = "requires built daemon binary"]
+async fn ontology_operation_merge_entities_rewires_graph_rows() {
+    let server = TestServer::start().await;
+    {
+        let conn = rusqlite::Connection::open(server.db_path()).expect("open replay db");
+        conn.busy_timeout(Duration::from_secs(5)).unwrap();
+        conn.execute_batch(
+            r#"INSERT INTO memories
+               (id, type, content, confidence, importance, tags, who, project,
+                created_at, updated_at, updated_by)
+               VALUES
+               ('mem-merge-source', 'fact', 'Merge source memory.', 1.0, 0.8,
+                'merge', 'test', 'signet', '2026-06-02T00:00:00.000Z',
+                '2026-06-02T00:00:00.000Z', 'contract-replay');
+
+               INSERT INTO entities
+               (id, name, canonical_name, entity_type, agent_id, mentions, status,
+                created_at, updated_at)
+               VALUES
+               ('entity-merge-target', 'Merge Target', 'merge target',
+                'project', 'default', 3, 'active',
+                '2026-06-02T00:00:00.000Z',
+                '2026-06-02T00:00:00.000Z'),
+               ('entity-merge-source', 'Merge Source', 'merge source',
+                'project', 'default', 2, 'active',
+                '2026-06-02T00:00:00.000Z',
+                '2026-06-02T00:00:00.000Z'),
+               ('entity-merge-other', 'Merge Other', 'merge other',
+                'project', 'default', 1, 'active',
+                '2026-06-02T00:00:00.000Z',
+                '2026-06-02T00:00:00.000Z');
+
+               INSERT INTO entity_aspects
+               (id, entity_id, agent_id, name, canonical_name, weight, status,
+                created_at, updated_at)
+               VALUES
+               ('aspect-merge-target-shared', 'entity-merge-target', 'default',
+                'Shared', 'shared', 0.7, 'active',
+                '2026-06-02T00:00:00.000Z',
+                '2026-06-02T00:00:00.000Z'),
+               ('aspect-merge-source-shared', 'entity-merge-source', 'default',
+                'Shared', 'shared', 0.7, 'active',
+                '2026-06-02T00:00:00.000Z',
+                '2026-06-02T00:00:00.000Z'),
+               ('aspect-merge-source-unique', 'entity-merge-source', 'default',
+                'Source Only', 'source only', 0.7, 'active',
+                '2026-06-02T00:00:00.000Z',
+                '2026-06-02T00:00:00.000Z');
+
+               INSERT INTO entity_attributes
+               (id, aspect_id, agent_id, kind, content, normalized_content,
+                confidence, importance, status, group_key, claim_key,
+                created_at, updated_at)
+               VALUES
+               ('attr-merge-shared', 'aspect-merge-source-shared', 'default',
+                'attribute', 'Shared source claim.', 'shared source claim',
+                0.9, 0.8, 'active', 'merge', 'shared',
+                '2026-06-02T00:00:00.000Z',
+                '2026-06-02T00:00:00.000Z'),
+               ('attr-merge-unique', 'aspect-merge-source-unique', 'default',
+                'attribute', 'Unique source claim.', 'unique source claim',
+                0.9, 0.8, 'active', 'merge', 'unique',
+                '2026-06-02T00:00:00.000Z',
+                '2026-06-02T00:00:00.000Z');
+
+               INSERT INTO entity_dependencies
+               (id, source_entity_id, target_entity_id, agent_id,
+                dependency_type, strength, confidence, reason, status,
+                created_at, updated_at)
+               VALUES
+               ('dep-merge-out', 'entity-merge-source', 'entity-merge-other',
+                'default', 'supports', 0.6, 0.7, 'outgoing', 'active',
+                '2026-06-02T00:00:00.000Z',
+                '2026-06-02T00:00:00.000Z'),
+               ('dep-merge-in', 'entity-merge-other', 'entity-merge-source',
+                'default', 'supports', 0.6, 0.7, 'incoming', 'active',
+                '2026-06-02T00:00:00.000Z',
+                '2026-06-02T00:00:00.000Z'),
+               ('dep-merge-self', 'entity-merge-source', 'entity-merge-target',
+                'default', 'supports', 0.6, 0.7, 'self after merge', 'active',
+                '2026-06-02T00:00:00.000Z',
+                '2026-06-02T00:00:00.000Z');
+
+               INSERT INTO relations
+               (id, source_entity_id, target_entity_id, relation_type, strength,
+                metadata, created_at)
+               VALUES
+               ('rel-merge-out', 'entity-merge-source', 'entity-merge-other',
+                'related_to', 0.5, '{}', '2026-06-02T00:00:00.000Z'),
+               ('rel-merge-in', 'entity-merge-other', 'entity-merge-source',
+                'related_to', 0.5, '{}', '2026-06-02T00:00:00.000Z'),
+               ('rel-merge-self', 'entity-merge-source', 'entity-merge-target',
+                'related_to', 0.5, '{}', '2026-06-02T00:00:00.000Z');
+
+               INSERT INTO memory_entity_mentions (memory_id, entity_id)
+               VALUES ('mem-merge-source', 'entity-merge-source');"#,
+        )
+        .expect("seed merge fixture");
+    }
+
+    let resp = server
+        .post(
+            "/api/ontology/operations/apply",
+            json!({
+                "operation": "merge_entities",
+                "payload": {
+                    "target_entity_id": "entity-merge-target",
+                    "source_entity_ids": ["entity-merge-source"]
+                },
+                "actor": "operation-replay"
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["result"]["targetEntityId"], "entity-merge-target");
+    assert_eq!(
+        body["result"]["mergedEntities"][0]["entityId"],
+        "entity-merge-source"
+    );
+    assert_eq!(body["result"]["mergedEntities"][0]["movedAspects"], 2);
+
+    let conn = rusqlite::Connection::open(server.db_path()).expect("open replay db");
+    let counts: (i64, i64, i64, i64, i64) = conn
+        .query_row(
+            "SELECT
+               (SELECT COUNT(*) FROM entities WHERE id = 'entity-merge-source'),
+               (SELECT mentions FROM entities WHERE id = 'entity-merge-target'),
+               (SELECT COUNT(*) FROM entity_aspects
+                WHERE id = 'aspect-merge-source-shared'),
+               (SELECT COUNT(*) FROM entity_dependencies
+                WHERE source_entity_id = target_entity_id),
+               (SELECT COUNT(*) FROM relations
+                WHERE source_entity_id = target_entity_id)",
+            [],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
+        )
+        .expect("merge counts");
+    assert_eq!(counts, (0, 5, 0, 0, 0));
+
+    let moved: (String, String, String, String, i64, i64) = conn
+        .query_row(
+            "SELECT
+               (SELECT aspect_id FROM entity_attributes WHERE id = 'attr-merge-shared'),
+               (SELECT entity_id FROM entity_aspects WHERE id = 'aspect-merge-source-unique'),
+               (SELECT source_entity_id FROM entity_dependencies WHERE id = 'dep-merge-out'),
+               (SELECT target_entity_id FROM entity_dependencies WHERE id = 'dep-merge-in'),
+               (SELECT COUNT(*) FROM memory_entity_mentions
+                WHERE memory_id = 'mem-merge-source'
+                  AND entity_id = 'entity-merge-target'),
+               (SELECT COUNT(*) FROM memory_entity_mentions
+                WHERE memory_id = 'mem-merge-source'
+                  AND entity_id = 'entity-merge-source')",
+            [],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                ))
+            },
+        )
+        .expect("merge moved rows");
+    assert_eq!(
+        moved,
+        (
+            "aspect-merge-target-shared".to_string(),
+            "entity-merge-target".to_string(),
+            "entity-merge-target".to_string(),
+            "entity-merge-target".to_string(),
+            1,
+            0,
+        )
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
 async fn ontology_assertion_routes_create_link_supersede_and_archive() {
     let server = TestServer::start().await;
     {
