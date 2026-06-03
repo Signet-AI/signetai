@@ -93,6 +93,7 @@ describe("Docker build pipeline regression guard", () => {
 			"build:deps",
 			"build:dashboard",
 			"build:signetai",
+			"build:native-bun",
 		]);
 	});
 
