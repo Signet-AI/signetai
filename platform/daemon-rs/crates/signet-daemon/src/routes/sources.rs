@@ -19,7 +19,7 @@ use axum::{
 };
 use chrono::{SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::{
@@ -125,7 +125,10 @@ pub struct AddGitHubSourceRequest {
 
 pub async fn list(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
     let cfg = load_sources_config(&state);
-    Json(json!({ "version": 1, "sources": cfg.sources }))
+    Json(json!({
+        "version": cfg.version,
+        "sources": cfg.sources.iter().map(source_list_payload).collect::<Vec<_>>(),
+    }))
 }
 
 pub async fn add_obsidian(
@@ -168,6 +171,8 @@ pub async fn add_obsidian(
 
     let root = root_path.to_string_lossy().to_string();
     let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+    let id = format!("obsidian:{}", sha256_prefix(&root, 16));
+    let job = source_index_job(&id, &now);
     let mut cfg = load_sources_config(&state);
     let mut created = true;
     let source = if let Some(existing) = cfg
@@ -179,11 +184,12 @@ pub async fn add_obsidian(
         existing.exclude_globs = Some(merge_default_excludes(req.exclude_globs));
         existing.enabled = true;
         existing.updated_at = now.clone();
+        existing.index_job = Some(job.clone());
         created = false;
         existing.clone()
     } else {
         let source = SourceEntry {
-            id: format!("obsidian:{}", sha256_prefix(&root, 16)),
+            id,
             kind: "obsidian".to_string(),
             name: clean_name(req.name.as_deref()).unwrap_or_else(|| "Obsidian Vault".to_string()),
             root: root.clone(),
@@ -193,7 +199,7 @@ pub async fn add_obsidian(
             updated_at: now.clone(),
             last_indexed_at: Some(now.clone()),
             exclude_globs: Some(merge_default_excludes(req.exclude_globs)),
-            index_job: Some(json!({"status": "complete", "indexed": 0, "queued": false})),
+            index_job: Some(job.clone()),
             provider_settings: None,
         };
         cfg.sources.push(source.clone());
@@ -213,8 +219,9 @@ pub async fn add_obsidian(
         Json(json!({
             "created": created,
             "indexed": 0,
+            "job": job,
             "queued": true,
-            "source": source,
+            "source": source_payload(&source),
         })),
     )
         .into_response()
@@ -376,6 +383,7 @@ pub async fn add_discord(
     let root = format!("discord://guilds/{}", sorted_guild_ids.join(","));
     let id = format!("discord:{}", sha256_prefix(&sorted_guild_ids.join(","), 16));
     let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+    let job = source_index_job(&id, &now);
     let settings = json!({
         "guildIds": sorted_guild_ids,
         "tokenRef": clean_name(req.token_ref.as_deref()).unwrap_or_default(),
@@ -409,7 +417,7 @@ pub async fn add_discord(
             updated_at: now,
             last_indexed_at: None,
             exclude_globs: None,
-            index_job: Some(json!({"status": "queued", "indexed": 0, "queued": true})),
+            index_job: Some(job),
             provider_settings: Some(settings),
         },
     )
@@ -460,6 +468,7 @@ pub async fn add_github(
     let id = format!("github:{}", sha256_prefix(&sorted_repos.join(","), 16));
     let name = clean_name(req.name.as_deref()).unwrap_or_else(|| sorted_repos[0].clone());
     let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+    let job = source_index_job(&id, &now);
     let settings = json!({
         "repos": sorted_repos,
         "tokenRef": clean_name(req.token_ref.as_deref()),
@@ -485,7 +494,7 @@ pub async fn add_github(
             updated_at: now,
             last_indexed_at: None,
             exclude_globs: None,
-            index_job: Some(json!({"status": "queued", "indexed": 0, "queued": true})),
+            index_job: Some(job),
             provider_settings: Some(settings),
         },
     )
@@ -532,19 +541,9 @@ pub async fn health(
     };
     let stats = json!({"artifacts": 0, "chunks": 0, "indexed": 0});
     Json(json!({
-        "source": source,
+        "source": source_payload(&source),
         "stats": stats,
-        "health": {
-            "status": "empty",
-            "generatedAt": Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
-            "latestArtifactAt": null,
-            "latestCheckpointAt": null,
-            "chunkCoverage": 0,
-            "failures": { "total": 0, "recent": 0, "byType": {} },
-            "checkpoints": { "total": 0, "complete": 0, "partial": 0, "failed": 0, "stale": 0 },
-            "purge": { "deletedArtifacts": 0, "orphanChunks": 0 },
-            "semantic": { "orphans": 0, "ambiguous": 0 },
-        },
+        "health": source_health_payload(),
     }))
     .into_response()
 }
@@ -663,11 +662,60 @@ fn add_configured_source(state: &AppState, source: SourceEntry) -> Response {
             "created": created,
             "indexed": 0,
             "queued": true,
-            "source": source,
-            "job": { "status": "queued", "queued": true },
+            "source": source_payload(&source),
+            "job": source.index_job.clone().unwrap_or_else(|| {
+                source_index_job(&source.id, &Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true))
+            }),
         })),
     )
         .into_response()
+}
+
+fn source_payload(source: &SourceEntry) -> Value {
+    let mut value = serde_json::to_value(source).unwrap_or_else(|_| json!({}));
+    if let Some(object) = value.as_object_mut() {
+        object.remove("indexJob");
+    }
+    value
+}
+
+fn source_list_payload(source: &SourceEntry) -> Value {
+    let mut value = source_payload(source);
+    if let Some(object) = value.as_object_mut() {
+        object.insert("stats".to_string(), source_stats_payload());
+        object.insert("health".to_string(), source_health_payload());
+        if let Some(job) = source.index_job.clone() {
+            object.insert("indexJob".to_string(), job);
+        }
+    }
+    value
+}
+
+fn source_stats_payload() -> Value {
+    json!({"artifacts": 0, "chunks": 0, "indexed": 0})
+}
+
+fn source_health_payload() -> Value {
+    json!({
+        "status": "empty",
+        "generatedAt": Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
+        "latestArtifactAt": null,
+        "latestCheckpointAt": null,
+        "chunkCoverage": 0,
+        "failures": { "total": 0, "recoverable": 0 },
+        "checkpoints": { "total": 0, "partial": 0, "stale": 0 },
+        "purge": { "deletedArtifacts": 0, "orphanChunks": 0 },
+        "semantic": { "entities": 0, "attributes": 0, "dependencies": 0, "communities": 0, "total": 0 },
+    })
+}
+
+fn source_index_job(source_id: &str, queued_at: &str) -> Value {
+    json!({
+        "id": format!("source-index:{source_id}:{}", Utc::now().timestamp_millis()),
+        "sourceId": source_id,
+        "status": "queued",
+        "queuedAt": queued_at,
+    })
 }
 
 fn find_source(state: &AppState, source_id: &str) -> Option<SourceEntry> {

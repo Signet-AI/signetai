@@ -6413,7 +6413,42 @@ async fn sources_endpoints() {
     let body = server.json(resp).await;
     assert_eq!(body["created"], true);
     assert_eq!(body["source"]["kind"], "obsidian");
+    assert!(body["source"].get("indexJob").is_none());
     let id = body["source"]["id"].as_str().unwrap().to_string();
+    assert_eq!(body["job"]["sourceId"], id);
+    assert_eq!(body["job"]["status"], "queued");
+    assert!(body["job"]["queuedAt"].as_str().is_some());
+    assert!(
+        body["job"]["id"]
+            .as_str()
+            .unwrap_or_default()
+            .starts_with(&format!("source-index:{id}:"))
+    );
+
+    let resp = server.get("/api/sources").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    let source = &body["sources"][0];
+    assert_eq!(source["id"], id);
+    assert_eq!(
+        source["stats"],
+        json!({"artifacts": 0, "chunks": 0, "indexed": 0})
+    );
+    assert_eq!(source["health"]["status"], "empty");
+    assert_eq!(
+        source["health"]["failures"],
+        json!({"total": 0, "recoverable": 0})
+    );
+    assert_eq!(
+        source["health"]["checkpoints"],
+        json!({"total": 0, "partial": 0, "stale": 0})
+    );
+    assert_eq!(
+        source["health"]["semantic"],
+        json!({"entities": 0, "attributes": 0, "dependencies": 0, "communities": 0, "total": 0})
+    );
+    assert_eq!(source["indexJob"]["sourceId"], id);
+    assert_eq!(source["indexJob"]["status"], "queued");
 
     let resp = server.get(&format!("/api/sources/{id}/snapshot")).await;
     assert_eq!(resp.status(), 200);
@@ -6431,6 +6466,18 @@ async fn sources_endpoints() {
         json!({"artifacts": 0, "chunks": 0, "indexed": 0})
     );
     assert_eq!(body["health"]["status"], "empty");
+    assert_eq!(
+        body["health"]["failures"],
+        json!({"total": 0, "recoverable": 0})
+    );
+    assert_eq!(
+        body["health"]["checkpoints"],
+        json!({"total": 0, "partial": 0, "stale": 0})
+    );
+    assert_eq!(
+        body["health"]["semantic"],
+        json!({"entities": 0, "attributes": 0, "dependencies": 0, "communities": 0, "total": 0})
+    );
 
     let resp = server
         .post(
@@ -6471,6 +6518,18 @@ async fn sources_endpoints() {
     let body = server.json(resp).await;
     assert_eq!(body["queued"], true);
     assert_eq!(body["source"]["kind"], "discord");
+    assert!(body["source"].get("indexJob").is_none());
+    assert_eq!(body["job"]["sourceId"], body["source"]["id"]);
+    assert_eq!(body["job"]["status"], "queued");
+    assert!(
+        body["job"]["id"]
+            .as_str()
+            .unwrap_or_default()
+            .starts_with(&format!(
+                "source-index:{}:",
+                body["source"]["id"].as_str().unwrap()
+            ))
+    );
     assert_eq!(
         body["source"]["providerSettings"]["tokenRef"],
         "DISCORD_BOT_TOKEN"
@@ -6499,6 +6558,18 @@ async fn sources_endpoints() {
     let body = server.json(resp).await;
     assert_eq!(body["queued"], true);
     assert_eq!(body["source"]["kind"], "github");
+    assert!(body["source"].get("indexJob").is_none());
+    assert_eq!(body["job"]["sourceId"], body["source"]["id"]);
+    assert_eq!(body["job"]["status"], "queued");
+    assert!(
+        body["job"]["id"]
+            .as_str()
+            .unwrap_or_default()
+            .starts_with(&format!(
+                "source-index:{}:",
+                body["source"]["id"].as_str().unwrap()
+            ))
+    );
     assert_eq!(
         body["source"]["providerSettings"]["repos"],
         json!(["Signet-AI/signetai"])
