@@ -42,6 +42,7 @@
 Thumbs.db
 coverage/
 dogfood-output/
+dist/native/
 email*
 node_modules/
 npm-debug.log*

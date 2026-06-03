@@ -5,7 +5,7 @@ Persistent cross-session memory powered by the [Signet](https://github.com/signe
 ## Requirements
 
 - Signet daemon running on localhost:3850 (default)
-- Install: `npm install -g signetai` or `bun install -g signetai`
+- Install: `curl -fsSL https://signetai.sh/install.sh | bash`, `npm install -g signetai`, or `bun add -g signetai`
 
 ## Setup
 

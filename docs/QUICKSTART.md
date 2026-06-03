@@ -101,8 +101,8 @@ Prerequisites
   - Built-in (recommended, no extra setup)
   - Ollama (local)
   - OpenAI API key
-- Node.js 18+ or Bun 1.0+ only if you choose the npm package path instead
-  of the native bundle installer
+- Node.js 18+ or Bun 1.0+ only if you choose the npm or Bun wrapper instead
+  of the direct native binary installer
 
 ---
 
@@ -114,26 +114,22 @@ Signet itself from source, use the contributor workflow in
 [Contributing](./CONTRIBUTING.md) instead of the install paths below.
 
 ```bash
-# native bundle (recommended)
+# direct native binary
 curl -fsSL https://signetai.sh/install.sh | bash
 
-# npm package
+# npm wrapper for the same compiled Signet binary
 npm install -g signetai
 
-# Bun package
+# Bun wrapper for the same compiled Signet binary
 bun add -g signetai
 ```
 
 Running `signet setup` launches an interactive wizard that walks you through
-the full setup. You don't need to read anything else first. Package-manager
-installs record the selected manager during setup and reuse it for skill
-installs and update commands; native bundle installs use the bundled updater.
+the full setup. You don't need to read anything else first.
 
-On macOS, the native bundle installer is preferred because it can start
-Signet through the bundled daemon binary. Package-manager installs run the
-JavaScript daemon through Bun or Node.js, so macOS may attribute the Login
-Items / Background Activity notification to that runtime's signer instead
-of Signet.
+All three install paths install the same compiled Signet binary. The npm and
+Bun paths are package-manager wrappers around the native binary installer; they
+do not install Bun, rebuild Signet, or install daemon dependencies.
 
 For agent-driven onboarding, use non-interactive mode:
 

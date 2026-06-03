@@ -4,7 +4,7 @@ import { execSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
-const REFERENCE_FILE = "dist/signetai/package.json";
+const REFERENCE_FILE = "package.json";
 const EXCLUDED_FILES = new Set(["surfaces/dashboard/package.json"]);
 export const VERSION_SYNC_PACKAGE_GLOBS = [
 	"package.json",

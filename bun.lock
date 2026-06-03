@@ -19,30 +19,7 @@
       "version": "0.138.11",
       "bin": {
         "signet": "bin/signet.js",
-        "signet-mcp": "dist/mcp-stdio.js",
-      },
-      "dependencies": {
-        "@hono/node-server": "^1.14.0",
-        "@huggingface/transformers": "^3.4.0",
-        "@inquirer/prompts": "^7.0.0",
-        "chalk": "^5.3.0",
-        "chokidar": "^4.0.0",
-        "commander": "^12.0.0",
-        "hono": "^4.8.0",
-        "libsodium-wrappers": "^0.8.2",
-        "onnxruntime-node": "1.21.0",
-        "open": "^10.0.0",
-        "ora": "^8.0.0",
-        "sqlite-vec": "^0.1.7-alpha.2",
-      },
-      "devDependencies": {
-        "@types/better-sqlite3": "^7.6.0",
-        "@types/libsodium-wrappers": "^0.8.2",
-      },
-      "optionalDependencies": {
-        "@1password/sdk": "^0.3.0",
-        "better-sqlite3": "^12.0.0",
-        "sharp": "^0.34.1",
+        "signet-mcp": "bin/signet-mcp.js",
       },
     },
     "integrations/claude-code/connector": {
@@ -1448,6 +1425,8 @@
     "@signet/desktop": ["@signet/desktop@workspace:surfaces/desktop"],
 
     "@signet/extension": ["@signet/extension@workspace:surfaces/browser-extension"],
+
+    "@signet/internal-runtime-bundle": ["@signet/internal-runtime-bundle@workspace:dist/signetai"],
 
     "@signet/native": ["@signet/native@workspace:platform/native"],
 
@@ -3414,8 +3393,6 @@
     "signet-dashboard": ["signet-dashboard@workspace:surfaces/dashboard"],
 
     "signet-reviews-worker": ["signet-reviews-worker@workspace:web/workers/reviews"],
-
-    "signetai": ["signetai@workspace:dist/signetai"],
 
     "simple-concat": ["simple-concat@1.0.1", "", {}, "sha512-cSFtAPtRhljv69IK0hTVZQ+OfE9nePi/rtJmw5UjHeVyVroEqJXP1sFztKUy1qU+xvz3u/sfYJLa947b7nAN2Q=="],
 

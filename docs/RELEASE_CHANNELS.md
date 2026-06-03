@@ -25,6 +25,9 @@ Install explicitly:
 npm install -g signetai@next
 ```
 
+The npm package is a wrapper around the same compiled Signet binary published
+to the GitHub release for that version.
+
 Or switch an existing install's update checks:
 
 ```bash

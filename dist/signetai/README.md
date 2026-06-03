@@ -1,105 +1,36 @@
 # Signet
 
-**Local-first identity, memory, and secrets for AI agents.**
-
-Signet keeps an agent's identity, memory, secrets, and skills outside
-any single model or harness. Claude Code, OpenCode, OpenClaw, Codex,
-Hermes Agent, and other tools can change while the agent keeps its
-state.
-
-## Install
+This npm package is a thin installer wrapper for the same compiled Signet
+binary used by the curl installer and Bun global installs.
 
 ```bash
-# native bundle (recommended)
-curl -fsSL https://signetai.sh/install.sh | bash
-
-# npm package
 npm install -g signetai
-
-# Bun package
 bun add -g signetai
 ```
 
-On macOS, the native bundle installer is preferred because package-manager
-installs run the background daemon through Bun or Node.js. macOS may attribute
-Login Items / Background Activity to that runtime's signer instead of Signet.
+During package installation, `postinstall` downloads Signet's release
+`native-manifest.json`, selects the native binary for your platform, verifies
+its SHA-256 checksum, and installs it under the package directory. The `signet`
+command then execs that binary directly.
 
-## Quick Start
+The package does not install Bun, does not build Signet from source, and does
+not install runtime dependencies such as `better-sqlite3`.
 
-```bash
-# Run the setup wizard
-signet setup
-
-# Or start immediately
-signet daemon start
-signet dashboard
-```
-
-## Features
-
-- **Ambient Memory** - context is captured and recalled across sessions
-- **Portable Identity** - identity files sync across connected harnesses
-- **Background Daemon** - Always-on API at localhost:3850
-- **Web Dashboard** - Visual memory browser and config editor
-- **Agent-Blind Secrets** - credentials stay out of model context
-- **Git Sync** - Auto-commit and push to GitHub
-- **Skills System** - Extend capabilities from skills.sh
-
-## Commands
+Direct curl installs use the same compiled Signet binary:
 
 ```bash
-signet                  # Show help and command map
-signet setup            # Setup wizard
-signet status           # Daemon status
-signet dashboard        # Open web dashboard
-signet daemon start     # Start daemon
-signet daemon stop      # Stop daemon
-
-# Memory
-signet remember <text>  # Save a memory
-signet recall <query>   # Search memories
-
-# Secrets
-signet secret put KEY   # Store a secret
-signet secret list      # List secrets
-
-# Skills
-signet skill list       # List installed skills
-signet skill install X  # Install from skills.sh
-
-# Git sync
-signet git status       # Sync status
-signet git sync         # Pull + push
-signet git enable       # Enable auto-sync
-
-# Updates
-signet update check     # Check for updates
-signet update install   # Install latest
-signet update enable    # Enable unattended installs
+curl -fsSL https://signetai.sh/install.sh | bash
 ```
-
-## How It Works
-
-1. **Setup** creates `~/.agents/` with your agent config
-2. **Daemon** runs in background, serves API and dashboard
-3. **Harnesses** connect through hooks or plugins
-4. **Memories** persist in SQLite, markdown, transcripts, and semantic indexes
-5. **Identity files** sync without moving ownership out of your workspace
 
 ## Requirements
 
-- **Node.js 18+** for CLI commands (setup, configure, status, recall, etc.)
-- **Bun 1.0+** required for the daemon (`signet daemon start`) — uses `bun:sqlite`
+- Node.js for the npm wrapper, or Bun for the Bun wrapper
+- macOS, Linux, or Windows on x64 or arm64 where Signet publishes a native
+  binary
 
 ## Documentation
 
-Full docs at [signetai.sh/docs](https://signetai.sh/docs)
-
-- [Quick Start](https://signetai.sh/docs/quickstart)
-- [Configuration](https://signetai.sh/docs/configuration)
-- [Memory System](https://signetai.sh/docs/memory)
-- [Hooks API](https://signetai.sh/docs/hooks)
-- [Secrets](https://signetai.sh/docs/secrets)
+Full docs: [signetai.sh/docs](https://signetai.sh/docs)
 
 ## License
 

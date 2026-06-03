@@ -46,7 +46,7 @@ setup and `plugin/` for the runtime plugin loaded by OpenCode.
 | `@signet/connector-*` | `integrations/<tool>/connector/` |
 | external runtime plugins | `integrations/<tool>/plugin/` |
 | Signet-native plugins | `plugins/<scope>/<name>/` |
-| `signetai` | `dist/signetai/` |
+| `signetai` | `dist/signetai/` npm/Bun wrapper for the compiled Signet binary |
 | marketing site | `web/marketing/` |
 | Cloudflare workers | `web/workers/<worker>/` |
 | MemoryBench | `memorybench/` |

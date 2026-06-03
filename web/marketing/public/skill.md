@@ -244,8 +244,8 @@ Signet only writes to these locations inside the home directory:
 
 > GATE: Before proceeding, tell your user:
 > "I'm going to install Signet, which will give me persistent memory,
-> an identity system, and a secrets vault. The recommended installer uses
-> Signet's native bundle and runs a small background daemon on port 3850. It only
+> an identity system, and a secrets vault. The installer uses the compiled
+> Signet binary and runs a small background daemon on port 3850. It only
 > writes to directories inside your home folder — never system files,
 > never with sudo. Ready to proceed?"
 >
@@ -281,17 +281,17 @@ Check the operating system:
 
 ### Step 2: Install Signet
 
-Using the native bundle installer (preferred on macOS and Linux):
+Using the direct native binary installer:
 ```bash
 curl -fsSL https://signetai.sh/install.sh | bash
 ```
 
-Using bun:
+Using Bun's package-manager wrapper for the same compiled Signet binary:
 ```bash
 bun add -g signetai
 ```
 
-Using npm (alternative):
+Using npm's package-manager wrapper for the same compiled Signet binary:
 ```bash
 npm install -g signetai
 ```
@@ -698,7 +698,7 @@ signet setup
 
 ```bash
 # Prereqs
-curl --version                 # Required for native bundle installer
+curl --version                 # Required for direct native binary install
 bun --version                  # Only needed for Bun package install
 node --version                 # Only needed for npm package install
 

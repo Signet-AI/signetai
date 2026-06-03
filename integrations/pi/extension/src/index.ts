@@ -241,7 +241,7 @@ function registerSessionLifecycleHandlers(pi: PiExtensionApi, deps: LifecycleDep
 			updateStatus(ctx);
 		} else {
 			ctx.ui.notify("SignetAI daemon not running. Memory features disabled.", "warning");
-			ctx.ui.notify("Install: npm install -g signetai && signet setup", "info");
+			ctx.ui.notify("Install: curl -fsSL https://signetai.sh/install.sh | bash && signet setup", "info");
 		}
 
 		await refreshSessionStart(deps, ctx);
@@ -461,7 +461,7 @@ function registerCommandsAndTools(pi: PiExtensionApi, daemonUrl: string, agentId
 				}
 			} else {
 				ctx.ui.notify(
-					"Signet daemon not responding.\nInstall: npm install -g signetai && signet setup\nStart: signet daemon start",
+					"Signet daemon not responding.\nInstall: curl -fsSL https://signetai.sh/install.sh | bash && signet setup\nStart: signet daemon start",
 					"error",
 				);
 			}

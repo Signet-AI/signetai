@@ -63,16 +63,24 @@ const __dirname = dirname(__filename);
 const cliDir = dirname(__dirname);
 const pkgDir = dirname(cliDir);
 
+function currentNativeExecutablePath(execPath: string = process.execPath): string | null {
+	const name = basename(execPath).toLowerCase();
+	if (name === "bun" || name === "bun.exe" || name === "node" || name === "node.exe") return null;
+	return execPath;
+}
+
 function pidFile(agentsDir: string): string {
 	return join(agentsDir, ".daemon", "pid");
 }
 
 export function resolveDaemonPaths(env: NodeJS.ProcessEnv = process.env): string[] {
+	const currentNativeExecutable = currentNativeExecutablePath();
 	const bundledNativeDaemon = env.SIGNET_DIR
 		? join(env.SIGNET_DIR, "runtime", "daemon-rs", process.platform === "win32" ? "signet-daemon.exe" : "signet-daemon")
 		: null;
 	const bundledJsDaemon = env.SIGNET_DIR ? join(env.SIGNET_DIR, "runtime", "daemon-js", "daemon.js") : null;
 	return [
+		currentNativeExecutable,
 		bundledNativeDaemon,
 		bundledJsDaemon,
 		join(__dirname, "daemon.js"),
@@ -584,7 +592,7 @@ export function macOSLaunchAgentAttributionNotice(
 			? "Node.js"
 			: basename(runtime);
 	const signer = runtimeName === "Bun" ? "Bun's signer (for example, Jarred Sumner)" : `${runtimeName}'s signer`;
-	return `macOS may show a Login Items / Background Activity notification naming ${signer} instead of Signet. This is expected when Signet is installed as a JavaScript-runtime LaunchAgent. For the native daemon install path, use: curl -fsSL https://signetai.sh/install.sh | bash`;
+	return `macOS may show a Login Items / Background Activity notification naming ${signer} instead of Signet. This is expected when Signet is started from a source checkout or JavaScript daemon path. The public curl, npm, and Bun installers use the compiled Signet binary instead.`;
 }
 
 function xmlEscape(value: string): string {

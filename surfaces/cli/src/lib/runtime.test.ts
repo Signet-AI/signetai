@@ -72,7 +72,7 @@ describe("macOSLaunchAgentAttributionNotice", () => {
 
 		expect(notice).toContain("Background Activity");
 		expect(notice).toContain("Jarred Sumner");
-		expect(notice).toContain("https://signetai.sh/install.sh");
+		expect(notice).toContain("compiled Signet binary");
 	});
 
 	it("does not warn for native daemon binaries", () => {

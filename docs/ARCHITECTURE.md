@@ -98,8 +98,9 @@ the current tree.
 (cosine similarity, normalization) used by the daemon for fast
 embedding math. Targets bun/node.
 
-`signetai` lives in `dist/signetai/`. It is the assembled installable
-meta-package that exposes the `signet` binary.
+`signetai` lives in `dist/signetai/`. It is the npm/Bun wrapper that downloads,
+verifies, and exposes the same compiled Signet binary used by the curl
+installer.
 
 `@signet/web` lives in `web/marketing/`. It is the Astro marketing site
 deployed to Cloudflare Pages. Web workers live under `web/workers/<worker>/`.

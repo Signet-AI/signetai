@@ -57,7 +57,7 @@ jobs:
 
       - name: CLI runtime smoke check
         if: steps.changes.outputs.skip != 'true'
-        run: node dist/signetai/bin/signet.js --help > /dev/null
+        run: bun surfaces/cli/src/cli.ts --help > /dev/null
 
       - name: Configure Git
         if: steps.changes.outputs.skip != 'true'
@@ -82,8 +82,8 @@ jobs:
         run: |
           set -euo pipefail
 
-          LOCAL_VERSION=$(jq -r '.version' dist/signetai/package.json)
-          REMOTE_VERSION_JSON=$(git show 'origin/main:dist/signetai/package.json' 2>/dev/null || true)
+          LOCAL_VERSION=$(jq -r '.version' package.json)
+          REMOTE_VERSION_JSON=$(git show 'origin/main:package.json' 2>/dev/null || true)
 
           if [ -n "$REMOTE_VERSION_JSON" ]; then
             REMOTE_VERSION=$(printf '%s' "$REMOTE_VERSION_JSON" | jq -r '.version')
@@ -142,9 +142,9 @@ jobs:
             echo "::error::Missing CHANGELOG.md section for v$NEW_VERSION"
             exit 1
           fi
-          # Create as a draft prerelease — daemon assets are uploaded by build-daemon before
-          # the publish job verifies asset completeness, undrafts the release,
-          # and publishes npm packages to the nightly channel.
+          # Create as a draft prerelease. Native Signet binaries are uploaded
+          # before the publish job generates the manifest and undrafts the
+          # GitHub release.
           gh release create "v$NEW_VERSION" --draft --prerelease --title "v$NEW_VERSION" --notes "$NOTES"
           echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
         env:
@@ -156,7 +156,7 @@ jobs:
       bump_level: ${{ steps.bump_version.outputs.bump_level }}
 
 
-  build-daemon:
+  build-native:
     needs: release
     if: needs.release.outputs.skip != 'true' && needs.release.outputs.version != ''
     permissions:
@@ -166,58 +166,48 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            asset: signet-daemon-linux-x64
-          - os: macos-latest
-            target: aarch64-apple-darwin
-            asset: signet-daemon-darwin-arm64
-          - os: macos-latest
-            target: x86_64-apple-darwin
-            asset: signet-daemon-darwin-x64
+            platform: linux-x64
+            asset: signet-linux-x64
+          - os: macos-13
+            platform: darwin-x64
+            asset: signet-darwin-x64
+          - os: macos-14
+            platform: darwin-arm64
+            asset: signet-darwin-arm64
           - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            asset: signet-daemon-win32-x64.exe
-          - os: windows-latest
-            target: aarch64-pc-windows-msvc
-            asset: signet-daemon-win32-arm64.exe
+            platform: win32-x64
+            asset: signet-win32-x64.exe
     runs-on: ${{ matrix.os }}
     env:
       RELEASE_VERSION: ${{ needs.release.outputs.version }}
-      RELEASE_TARGET: ${{ matrix.target }}
+      SIGNET_NATIVE_PLATFORM: ${{ matrix.platform }}
       RELEASE_ASSET: ${{ matrix.asset }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: v${{ needs.release.outputs.version }}
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
 
-      - name: Install MSVC ARM64 toolchain
-        if: matrix.target == 'aarch64-pc-windows-msvc'
-        shell: pwsh
-        run: |
-          & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vs_installer.exe" `
-            modify --installPath "${env:ProgramFiles}\Microsoft Visual Studio\2022\Enterprise" `
-            --add Microsoft.VisualStudio.Component.VC.Tools.ARM64 --quiet --norestart | Out-Null
-          if ($LASTEXITCODE -notin @(0, 3010)) { exit $LASTEXITCODE }
+      - uses: oven-sh/setup-bun@v2
 
-      - name: Build daemon
+      - name: Install dependencies
+        run: bun install
+
+      - name: Build workspace dependencies
+        run: bun run build
+
+      - name: Build native Signet binary
+        run: bun run build:native-bun
+
+      - name: Smoke native binary
         shell: bash
-        run: cargo build --release --target "$RELEASE_TARGET" -p signet-daemon
-        working-directory: platform/daemon-rs
+        run: ./dist/native/"$RELEASE_ASSET" --help > /dev/null
+
       - name: Upload to release
         shell: bash
         run: |
-          EXT=""
-          [ "$RUNNER_OS" = "Windows" ] && EXT=".exe"
-          BINARY="platform/daemon-rs/target/${RELEASE_TARGET}/release/signet-daemon${EXT}"
-          # Copy binary with the platform-specific asset name into a temp
-          # directory so gh uploads it under the correct name (not just as a
-          # label) and we don't leave artifacts in the repo root.
           STAGING="${RUNNER_TEMP}/upload"
           mkdir -p "${STAGING}"
-          cp "${BINARY}" "${STAGING}/${RELEASE_ASSET}"
+          cp "dist/native/${RELEASE_ASSET}" "${STAGING}/${RELEASE_ASSET}"
           openssl dgst -sha256 -hex "${STAGING}/${RELEASE_ASSET}" | awk '{print $NF}' > "${STAGING}/${RELEASE_ASSET}.sha256"
           gh release upload "v${RELEASE_VERSION}" "${STAGING}/${RELEASE_ASSET}" --clobber
           gh release upload "v${RELEASE_VERSION}" "${STAGING}/${RELEASE_ASSET}.sha256" --clobber
@@ -225,12 +215,11 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   publish:
-    needs: [release, build-daemon]
+    needs: [release, build-native]
     runs-on: ubuntu-latest
-    # The npm package postinstall path downloads native daemon assets from the
-    # GitHub release. Do not undraft or publish npm unless every daemon matrix
-    # leg completed and uploaded its binary/checksum pair.
-    if: always() && needs.release.result == 'success' && needs.build-daemon.result == 'success' && needs.release.outputs.skip != 'true' && needs.release.outputs.version != ''
+    # Do not undraft the GitHub release unless every native binary matrix leg
+    # completed and uploaded its binary/checksum pair.
+    if: always() && needs.release.result == 'success' && needs.build-native.result == 'success' && needs.release.outputs.skip != 'true' && needs.release.outputs.version != ''
     permissions:
       contents: write
     env:
@@ -248,28 +237,30 @@ jobs:
       - name: Build
         run: bun run build
 
-      - name: Resolve workspace protocols
-        run: bun scripts/version-sync.ts --to "$NEW_VERSION"
-
       - name: Validate publish manifests
         run: bun scripts/check-publish-manifests.ts
 
-      - name: Verify daemon release assets
+      - name: Download native release assets
+        run: |
+          mkdir -p dist/native
+          gh release download "v${NEW_VERSION}" --pattern "signet-*" --dir dist/native --repo "$GITHUB_REPOSITORY"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify native release assets
         shell: bash
         run: |
           set -euo pipefail
           mapfile -t ASSETS < <(gh release view "v${NEW_VERSION}" --json assets --jq '.assets[].name')
           expected=(
-            signet-daemon-linux-x64
-            signet-daemon-linux-x64.sha256
-            signet-daemon-darwin-arm64
-            signet-daemon-darwin-arm64.sha256
-            signet-daemon-darwin-x64
-            signet-daemon-darwin-x64.sha256
-            signet-daemon-win32-x64.exe
-            signet-daemon-win32-x64.exe.sha256
-            signet-daemon-win32-arm64.exe
-            signet-daemon-win32-arm64.exe.sha256
+            signet-linux-x64
+            signet-linux-x64.sha256
+            signet-darwin-arm64
+            signet-darwin-arm64.sha256
+            signet-darwin-x64
+            signet-darwin-x64.sha256
+            signet-win32-x64.exe
+            signet-win32-x64.exe.sha256
           )
           for asset in "${expected[@]}"; do
             if ! printf '%s\n' "${ASSETS[@]}" | grep -Fxq "$asset"; then
@@ -280,27 +271,27 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Generate and upload native manifest
+        run: |
+          SIGNET_VERSION="$NEW_VERSION" bun scripts/generate-native-manifest.ts
+          gh release upload "v${NEW_VERSION}" dist/native/native-manifest.json --clobber
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Publish release
-        # Undraft only after publish manifests pass, so a broken npm package
-        # cannot slip through behind a green release job.
-        # Assets must still be public before npm publish can expose any
-        # postinstall downloader paths to users.
+        # Undraft after release assets and manifest checks pass. The npm
+        # wrapper postinstall downloads from this public GitHub release.
         run: gh release edit "v${NEW_VERSION}" --draft=false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Publish to npm nightly channel
+      - name: Publish npm wrapper
         run: |
-          echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > "$NPM_CONFIG_USERCONFIG"
-          CURRENT=$(npm view "signetai@${NEW_VERSION}" version 2>/dev/null || echo "0.0.0")
-          if [ "$CURRENT" = "$NEW_VERSION" ]; then
-            echo "signetai@$NEW_VERSION already published, refreshing next tag"
-            npm dist-tag add "signetai@${NEW_VERSION}" next
-            npm dist-tag add "@signetai/signet-memory-openclaw@${NEW_VERSION}" next || true
-          else
-            cd dist/signetai && npm publish --tag next --access public
-            cd ../../integrations/openclaw/memory-adapter && npm publish --tag next --access public || true
-          fi
+          test -n "$NODE_AUTH_TOKEN"
+          npm config set //registry.npmjs.org/:_authToken "$NODE_AUTH_TOKEN"
+          cd dist/signetai
+          npm publish --access public
+          cd ../../integrations/openclaw/memory-adapter
+          npm publish --access public || true
         env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-          NPM_CONFIG_USERCONFIG: ${{ runner.temp }}/.npmrc
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

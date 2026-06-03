@@ -5,7 +5,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { type BumpLevel, computeBumpLevel } from "./bump-level";
 
 const CHANGELOG_PATH = "CHANGELOG.md";
-const PACKAGE_JSON_PATH = "dist/signetai/package.json";
+const PACKAGE_JSON_PATH = "package.json";
 const BUMP_LEVEL_PATH = ".bump-level";
 const CHANGELOG_HEADER = "# Changelog\n\nAll notable changes to Signet are documented here.";
 const HIGHLIGHT_DATE_LIMIT = 7;

@@ -35,9 +35,16 @@ interface StatusOptions extends PathOptions {
 	target?: string;
 }
 
+interface InstallOptions {
+	binDir?: string;
+	force?: boolean;
+	json?: boolean;
+}
+
 interface AppDeps {
 	readonly collectListOption: (value: string, previous: string[]) => string[];
 	readonly configureAgent: () => Promise<void>;
+	readonly installNative: (options: InstallOptions) => Promise<void>;
 	readonly launchDashboard: (options: PathOptions) => Promise<void>;
 	readonly migrateSchema: (options: PathOptions) => Promise<void>;
 	readonly setupWizard: (options: SetupOptions) => Promise<void>;
@@ -47,6 +54,14 @@ interface AppDeps {
 }
 
 export function registerAppCommands(program: Command, deps: AppDeps): void {
+	program
+		.command("install")
+		.description("Install the compiled Signet binary on PATH")
+		.option("--bin-dir <path>", "Directory where the signet binary should be installed")
+		.option("--force", "Replace an existing signet binary")
+		.option("--json", "Output install result as JSON")
+		.action(deps.installNative);
+
 	program
 		.command("setup")
 		.description("Setup wizard (interactive by default)")

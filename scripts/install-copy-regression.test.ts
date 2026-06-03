@@ -10,7 +10,7 @@ function read(path: string): string {
 }
 
 describe("install copy", () => {
-	test("uses the native bundle as the primary public install path", () => {
+	test("uses the native binary policy across public install paths", () => {
 		const primarySurfaces = [
 			"README.md",
 			"docs/QUICKSTART.md",
@@ -19,34 +19,48 @@ describe("install copy", () => {
 			"web/marketing/src/components/landing/InstallCta.astro",
 			"web/marketing/src/components/landing/Quickstart.astro",
 			"web/marketing/public/skill.md",
-			"dist/signetai/README.md",
 		];
 
 		for (const path of primarySurfaces) {
 			expect(read(path)).toContain(nativeInstallCommand);
 		}
 
-		expect(read("docs/QUICKSTART.md")).not.toContain("# bun (recommended)");
-		expect(read("docs/CLI.md")).not.toContain("# bun (recommended)");
+		for (const path of ["README.md", "docs/QUICKSTART.md", "docs/CLI.md", "dist/signetai/README.md"]) {
+			const content = read(path);
+			expect(content).toContain("same compiled Signet binary");
+			expect(content).toContain("npm install -g signetai");
+			expect(content).toContain("bun add -g signetai");
+		}
 	});
 
-	test("serves the website install script as a native bundle shim", () => {
+	test("serves the website install script as a native binary downloader", () => {
 		const installer = read("web/marketing/public/install.sh");
 
-		expect(installer).toContain("releases/download/bundle-latest/install.sh");
-		expect(installer).not.toContain("SIGNET_INSTALLER_URL");
-		expect(installer).toContain('curl -fsSL "$INSTALLER_URL" | bash');
-		expect(installer).not.toContain("bash -c");
+		expect(installer).toContain("native-manifest.json");
+		expect(installer).toContain('"$binary_path" install "$@"');
+		expect(installer).toContain("sha256sum");
+		expect(installer).not.toContain("releases/download/bundle-latest");
 		expect(installer).not.toContain("bun add -g signetai");
 		expect(installer).not.toContain("npm install -g signetai");
+		expect(installer).not.toContain("better-sqlite3");
 	});
 
-	test("documents macOS package-manager attribution behavior", () => {
-		for (const path of ["docs/QUICKSTART.md", "docs/CLI.md"]) {
-			const content = read(path);
-			expect(content).toContain("Background Activity");
-			expect(content).toContain("runtime");
-			expect(content).toContain("native bundle");
-		}
+	test("keeps the npm package as a native binary wrapper", () => {
+		const manifest = JSON.parse(read("dist/signetai/package.json")) as {
+			dependencies?: Record<string, string>;
+			optionalDependencies?: Record<string, string>;
+			scripts?: Record<string, string>;
+		};
+		const wrapper = read("dist/signetai/bin/signet.js");
+		const installer = read("dist/signetai/scripts/install-native.js");
+
+		expect(manifest.scripts?.postinstall).toContain("scripts/install-native.js");
+		expect(manifest.dependencies).toBeUndefined();
+		expect(manifest.optionalDependencies).toBeUndefined();
+		expect(wrapper).toContain('join(packageDir, "native"');
+		expect(installer).toContain("native-manifest.json");
+		expect(installer).toContain("createHash");
+		expect(installer).not.toContain("bun.sh/install");
+		expect(installer).not.toContain("better-sqlite3");
 	});
 });

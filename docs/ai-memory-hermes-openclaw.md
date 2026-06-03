@@ -140,7 +140,7 @@ layer to be self-hosted, inspectable, and shared across both tools.
 Install Signet, start the daemon, then enable the harnesses you use:
 
 ```bash
-npm install -g signetai
+curl -fsSL https://signetai.sh/install.sh | bash
 signet setup
 signet start
 signet status
