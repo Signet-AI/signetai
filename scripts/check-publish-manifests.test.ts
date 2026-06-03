@@ -167,7 +167,8 @@ describe("check-publish-manifests", () => {
 		expect(workflow).toContain('stage_native_package "darwin-x64" "signet-darwin-x64" "signet"');
 		expect(workflow).toContain('stage_native_package "darwin-arm64" "signet-darwin-arm64" "signet"');
 		expect(workflow).toContain('stage_native_package "win32-x64" "signet-win32-x64.exe" "signet.exe"');
-		expect(workflow).toContain('npm pack "${package_dir}" --pack-destination dist/native-packages');
+		expect(workflow).toContain('npm pack "./${package_dir}" --pack-destination dist/native-packages');
+		expect(workflow).not.toContain('npm pack "${package_dir}"');
 		expect(workflow).toContain('gh release upload "v${NEW_VERSION}" dist/native-packages/*.tgz --clobber');
 		expect(workflow).toContain(
 			'"optionalDependencies.signetai-linux-x64=${release_url}/signetai-linux-x64-${NEW_VERSION}.tgz"',

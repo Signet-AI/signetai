@@ -300,7 +300,7 @@ jobs:
             mkdir -p "${package_dir}/bin"
             cp "dist/native/${asset}" "${package_dir}/bin/${binary}"
             chmod 755 "${package_dir}/bin/${binary}"
-            npm pack "${package_dir}" --pack-destination dist/native-packages
+            npm pack "./${package_dir}" --pack-destination dist/native-packages
           }
 
           stage_native_package "linux-x64" "signet-linux-x64" "signet"
