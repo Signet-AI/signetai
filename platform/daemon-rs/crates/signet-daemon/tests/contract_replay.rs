@@ -651,6 +651,102 @@ impl TestServer {
         .expect("seed knowledge navigation fixture");
     }
 
+    fn seed_ontology_evidence_fixture(&self) {
+        let conn = rusqlite::Connection::open(self.db_path()).expect("open replay db");
+        conn.busy_timeout(Duration::from_secs(5)).unwrap();
+        conn.execute_batch(
+            r#"INSERT INTO memories
+               (id, type, content, confidence, importance, source_id, source_type,
+                source_path, tags, who, project, created_at, updated_at, updated_by,
+                agent_id)
+               VALUES
+               ('mem-ontology-evidence', 'fact',
+                'Memory evidence says Signet claim evidence resolves source provenance.',
+                1.0, 0.9, 'memory-source-1', 'manual',
+                '/sources/memory-evidence.md', 'ontology', 'contract-replay',
+                'signet', '2026-01-02T00:00:00.000Z',
+                '2026-01-02T00:00:00.000Z', 'contract-replay', 'default');
+
+               INSERT INTO memory_artifacts
+               (agent_id, source_path, source_sha256, source_kind, session_id,
+                session_key, session_token, project, harness, captured_at,
+                source_node_id, content, updated_at, source_id, source_root)
+               VALUES
+               ('default', '/sources/ontology-evidence.md', 'sha-ontology-evidence',
+                'obsidian', 'session-ontology-evidence', 'session-ontology-evidence',
+                'token-ontology-evidence', 'signet', 'contract-replay',
+                '2026-01-02T00:00:00.000Z', 'artifact-node-1',
+                'Artifact evidence explains the seeded ontology claim and link.',
+                '2026-01-02T00:00:00.000Z', 'artifact-node-1', '/sources');
+
+               INSERT INTO ontology_proposals
+               (id, agent_id, operation, status, payload, confidence, rationale,
+                evidence, source_kind, source_id, source_path, source_root,
+                created_by, created_at, updated_at)
+               VALUES
+               ('proposal-ontology-evidence', 'default', 'upsert_attribute',
+                'applied', '{"entityName":"Signet"}', 0.91,
+                'Proposal rationale for ontology evidence replay.',
+                '[{"source_kind":"transcript","session_key":"session-ontology-evidence","quote":"Transcript quote evidence."}]',
+                'manual', 'proposal-source-1', '/sources/proposal.md', '/sources',
+                'contract-replay', '2026-01-02T00:00:00.000Z',
+                '2026-01-02T00:00:00.000Z');
+
+               INSERT INTO entities
+               (id, name, canonical_name, entity_type, agent_id, mentions, status,
+                created_at, updated_at)
+               VALUES
+               ('entity-ontology-signet', 'Signet Evidence', 'signet evidence',
+                'project', 'default', 4, 'active',
+                '2026-01-02T00:00:00.000Z', '2026-01-02T00:00:00.000Z'),
+               ('entity-ontology-provenance', 'Provenance Evidence',
+                'provenance evidence', 'concept', 'default', 2, 'active',
+                '2026-01-02T00:00:00.000Z', '2026-01-02T00:00:00.000Z');
+
+               INSERT INTO entity_aspects
+               (id, entity_id, agent_id, name, canonical_name, weight, status,
+                created_at, updated_at)
+               VALUES
+               ('aspect-ontology-evidence', 'entity-ontology-signet', 'default',
+                'source truth', 'source truth', 0.9, 'active',
+                '2026-01-02T00:00:00.000Z', '2026-01-02T00:00:00.000Z');
+
+               INSERT INTO entity_attributes
+               (id, aspect_id, agent_id, memory_id, kind, content,
+                normalized_content, group_key, claim_key, confidence, importance,
+                status, source_kind, source_id, source_path, source_root,
+                proposal_id, proposal_evidence, version, version_root_id,
+                created_at, updated_at)
+               VALUES
+               ('attr-ontology-evidence', 'aspect-ontology-evidence', 'default',
+                'mem-ontology-evidence', 'attribute',
+                'Signet claim evidence resolves source-backed provenance.',
+                'signet claim evidence resolves source-backed provenance.',
+                'source_truth', 'evidence_claim', 0.93, 0.88, 'active',
+                'obsidian', 'artifact-node-1', '/sources/ontology-evidence.md',
+                '/sources', 'proposal-ontology-evidence',
+                '[{"source_kind":"manual","source_id":"inline-ref","quote":"Inline quote evidence."}]',
+                1, 'attr-ontology-evidence',
+                '2026-01-02T00:00:00.000Z', '2026-01-02T00:00:00.000Z');
+
+               INSERT INTO entity_dependencies
+               (id, source_entity_id, target_entity_id, agent_id, aspect_id,
+                dependency_type, strength, confidence, reason, status,
+                source_kind, source_id, source_path, source_root, proposal_id,
+                proposal_evidence, created_at, updated_at)
+               VALUES
+               ('dep-ontology-evidence', 'entity-ontology-signet',
+                'entity-ontology-provenance', 'default',
+                'aspect-ontology-evidence', 'supports_claim', 0.84, 0.87,
+                'Evidence links Signet to provenance.', 'active', 'obsidian',
+                'artifact-node-1', '/sources/ontology-evidence.md', '/sources',
+                'proposal-ontology-evidence',
+                '[{"source_kind":"manual","source_id":"link-inline","quote":"Link quote evidence."}]',
+                '2026-01-02T00:00:00.000Z', '2026-01-02T00:00:00.000Z');"#,
+        )
+        .expect("seed ontology evidence fixture");
+    }
+
     fn seed_knowledge_legacy_route_fixture(&self) {
         let conn = rusqlite::Connection::open(self.db_path()).expect("open replay db");
         conn.busy_timeout(Duration::from_secs(5)).unwrap();
@@ -8617,6 +8713,83 @@ async fn ontology_proposals_require_modify_permission_for_mutations() {
 
 #[tokio::test]
 #[ignore = "requires built daemon binary"]
+async fn ontology_evidence_routes_resolve_seeded_claim_and_link_evidence() {
+    let server = TestServer::start().await;
+    server.seed_ontology_evidence_fixture();
+
+    let resp = server.get("/api/ontology/claims/evidence").await;
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert_eq!(body, json!({"error": "entity is required"}));
+
+    let resp = server
+        .get("/api/ontology/claims/evidence?entity=Signet%20Evidence&aspect=source%20truth&group=source%20truth&claim=evidence%20claim&kind=preference")
+        .await;
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert_eq!(body, json!({"error": "kind is invalid"}));
+
+    let resp = server
+        .get("/api/ontology/claims/evidence?entity=Missing&aspect=source%20truth&group=source%20truth&claim=evidence%20claim")
+        .await;
+    assert_eq!(resp.status(), 404);
+    let body = server.json(resp).await;
+    assert_eq!(body, json!({"error": "Claim path not found"}));
+
+    let resp = server
+        .get("/api/ontology/claims/evidence?entity=Signet%20Evidence&aspect=source%20truth&group=source%20truth&claim=evidence%20claim&status=all")
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["entity"]["id"], "entity-ontology-signet");
+    assert_eq!(body["aspect"]["id"], "aspect-ontology-evidence");
+    assert_eq!(body["groupKey"], "source_truth");
+    assert_eq!(body["claimKey"], "evidence_claim");
+    assert_eq!(body["count"], 1);
+    assert_eq!(
+        body["items"][0]["attribute"]["id"],
+        "attr-ontology-evidence"
+    );
+    assert!(body["items"][0]["evidenceCount"].as_u64().unwrap_or(0) >= 4);
+    let evidence_kinds = body["items"][0]["evidence"]
+        .as_array()
+        .expect("claim evidence array")
+        .iter()
+        .map(|item| item["kind"].as_str().unwrap_or_default())
+        .collect::<Vec<_>>();
+    assert!(evidence_kinds.contains(&"ontology_proposal"));
+    assert!(evidence_kinds.contains(&"memory_artifact"));
+    assert!(evidence_kinds.contains(&"memory"));
+    assert!(evidence_kinds.contains(&"provided_quote"));
+
+    let resp = server
+        .get("/api/ontology/links/missing-link/evidence")
+        .await;
+    assert_eq!(resp.status(), 404);
+    let body = server.json(resp).await;
+    assert_eq!(body, json!({"error": "Link not found"}));
+
+    let resp = server
+        .get("/api/ontology/links/dep-ontology-evidence/evidence")
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["dependency"]["id"], "dep-ontology-evidence");
+    assert_eq!(body["dependency"]["dependencyType"], "supports_claim");
+    assert!(body["count"].as_u64().unwrap_or(0) >= 3);
+    let link_evidence_kinds = body["items"]
+        .as_array()
+        .expect("link evidence array")
+        .iter()
+        .map(|item| item["kind"].as_str().unwrap_or_default())
+        .collect::<Vec<_>>();
+    assert!(link_evidence_kinds.contains(&"ontology_proposal"));
+    assert!(link_evidence_kinds.contains(&"memory_artifact"));
+    assert!(link_evidence_kinds.contains(&"provided_quote"));
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
 async fn plugin_ontology_telemetry_compat_endpoints() {
     let server = TestServer::start().await;
 
@@ -8628,14 +8801,22 @@ async fn plugin_ontology_telemetry_compat_endpoints() {
         "/api/telemetry/memory-search/export?agent_id=test-agent",
         "/api/ontology/proposals",
         "/api/ontology/proposals/conflicts",
-        "/api/ontology/claims/evidence",
-        "/api/ontology/links/link-1/evidence",
         "/api/marketplace/reviews?type=skill&id=skills.sh%2Ffoo",
         "/api/marketplace/reviews/config",
     ] {
         let resp = server.get(path).await;
         assert_eq!(resp.status(), 200, "GET {path}");
     }
+
+    let resp = server.get("/api/ontology/claims/evidence").await;
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert_eq!(body, json!({"error": "entity is required"}));
+
+    let resp = server.get("/api/ontology/links/link-1/evidence").await;
+    assert_eq!(resp.status(), 404);
+    let body = server.json(resp).await;
+    assert_eq!(body, json!({"error": "Link not found"}));
 
     let resp = server.get("/api/ontology/proposals/test/evidence").await;
     assert_eq!(resp.status(), 404);
@@ -8879,11 +9060,11 @@ async fn remaining_public_routes_have_contract_replay_coverage() {
     assert_eq!(body["error"], "reason is required");
 
     let resp = server.get("/api/ontology/claims/evidence").await;
-    assert_status("GET /api/ontology/claims/evidence", &resp, &[200]);
+    assert_status("GET /api/ontology/claims/evidence", &resp, &[400]);
     let resp = server
         .get("/api/ontology/links/missing-link/evidence")
         .await;
-    assert_status("GET /api/ontology/links/:id/evidence", &resp, &[200]);
+    assert_status("GET /api/ontology/links/:id/evidence", &resp, &[404]);
     let resp = server.get("/api/ontology/proposals/missing-proposal").await;
     assert_status("GET /api/ontology/proposals/:id", &resp, &[404]);
     let resp = server

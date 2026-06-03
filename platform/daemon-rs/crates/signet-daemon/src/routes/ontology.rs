@@ -60,6 +60,26 @@ pub struct ProposalBody {
     limit: Option<i64>,
 }
 
+#[derive(Debug, Deserialize, Clone)]
+pub struct ClaimEvidenceQuery {
+    #[serde(alias = "agentId")]
+    agent_id: Option<String>,
+    entity: Option<String>,
+    aspect: Option<String>,
+    group: Option<String>,
+    claim: Option<String>,
+    kind: Option<String>,
+    status: Option<String>,
+    limit: Option<String>,
+    offset: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct LinkEvidenceQuery {
+    #[serde(alias = "agentId")]
+    agent_id: Option<String>,
+}
+
 #[derive(Debug)]
 struct ProposalRow {
     id: String,
@@ -83,6 +103,111 @@ struct ProposalRow {
     updated_at: String,
     applied_at: Option<String>,
     rejected_at: Option<String>,
+}
+
+#[derive(Debug)]
+struct EntityRow {
+    id: String,
+    name: String,
+    canonical_name: Option<String>,
+    entity_type: String,
+    agent_id: String,
+    description: Option<String>,
+    mentions: i64,
+    pinned: bool,
+    pinned_at: Option<String>,
+    status: String,
+    archived_at: Option<String>,
+    archived_by: Option<String>,
+    archive_reason: Option<String>,
+    proposal_id: Option<String>,
+    proposal_evidence: String,
+    created_at: String,
+    updated_at: String,
+}
+
+#[derive(Debug)]
+struct AspectRow {
+    id: String,
+    entity_id: String,
+    agent_id: String,
+    name: String,
+    canonical_name: String,
+    weight: f64,
+    status: String,
+    archived_at: Option<String>,
+    archived_by: Option<String>,
+    archive_reason: Option<String>,
+    proposal_id: Option<String>,
+    proposal_evidence: String,
+    created_at: String,
+    updated_at: String,
+}
+
+#[derive(Debug)]
+struct AttributeEvidenceRow {
+    id: String,
+    aspect_id: String,
+    agent_id: String,
+    memory_id: Option<String>,
+    kind: String,
+    content: String,
+    normalized_content: String,
+    group_key: Option<String>,
+    claim_key: Option<String>,
+    confidence: f64,
+    importance: f64,
+    status: String,
+    superseded_by: Option<String>,
+    version: i64,
+    version_root_id: Option<String>,
+    previous_attribute_id: Option<String>,
+    archived_at: Option<String>,
+    archived_by: Option<String>,
+    archive_reason: Option<String>,
+    source_kind: Option<String>,
+    source_id: Option<String>,
+    source_path: Option<String>,
+    source_root: Option<String>,
+    proposal_id: Option<String>,
+    proposal_evidence: String,
+    created_at: String,
+    updated_at: String,
+}
+
+#[derive(Debug)]
+struct DependencyEvidenceRow {
+    id: String,
+    source_entity_id: String,
+    target_entity_id: String,
+    agent_id: String,
+    aspect_id: Option<String>,
+    dependency_type: String,
+    strength: f64,
+    confidence: f64,
+    reason: Option<String>,
+    status: String,
+    archived_at: Option<String>,
+    archived_by: Option<String>,
+    archive_reason: Option<String>,
+    source_kind: Option<String>,
+    source_id: Option<String>,
+    source_path: Option<String>,
+    source_root: Option<String>,
+    proposal_id: Option<String>,
+    proposal_evidence: String,
+    created_at: String,
+    updated_at: String,
+}
+
+#[derive(Clone, Debug)]
+struct EvidenceRef {
+    source_kind: Option<String>,
+    source_id: Option<String>,
+    source_path: Option<String>,
+    memory_id: Option<String>,
+    quote: Option<String>,
+    reference: JsonValue,
 }
 
 fn now() -> String {
@@ -117,6 +242,96 @@ fn parse_json(raw: &str, fallback: JsonValue) -> JsonValue {
     serde_json::from_str(raw).unwrap_or(fallback)
 }
 
+fn json_array(raw: &str) -> Vec<JsonValue> {
+    parse_json(raw, json!([]))
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+}
+
+fn compact_excerpt(content: &str, quote: Option<&str>) -> String {
+    let text = content.split_whitespace().collect::<Vec<_>>().join(" ");
+    if text.len() <= 1200 {
+        return text;
+    }
+    if let Some(quote) = quote.map(str::trim).filter(|q| !q.is_empty()) {
+        if quote.len() <= 1200 {
+            return quote.to_string();
+        }
+    }
+    format!("{}...", text.chars().take(1197).collect::<String>().trim())
+}
+
+fn read_ref_string(record: &JsonValue, key: &str) -> Option<String> {
+    record
+        .get(key)
+        .and_then(|v| v.as_str())
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+}
+
+fn read_evidence_ref(value: JsonValue) -> Option<EvidenceRef> {
+    match &value {
+        JsonValue::String(raw) => {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                return None;
+            }
+            Some(EvidenceRef {
+                source_kind: None,
+                source_id: Some(trimmed.to_string()),
+                source_path: None,
+                memory_id: None,
+                quote: None,
+                reference: value,
+            })
+        }
+        JsonValue::Object(_) => {
+            let transcript_id = read_ref_string(&value, "transcript_id");
+            let session_key = read_ref_string(&value, "session_key");
+            let proposal_id = read_ref_string(&value, "proposal_id");
+            let source_kind = read_ref_string(&value, "source_kind").or_else(|| {
+                if proposal_id.is_some() {
+                    Some("ontology_proposal".to_string())
+                } else if transcript_id.is_some() || session_key.is_some() {
+                    Some("transcript".to_string())
+                } else {
+                    None
+                }
+            });
+            Some(EvidenceRef {
+                source_kind,
+                source_id: read_ref_string(&value, "source_id")
+                    .or_else(|| proposal_id.clone())
+                    .or_else(|| transcript_id.clone())
+                    .or(session_key.clone())
+                    .or_else(|| read_ref_string(&value, "session_id"))
+                    .or_else(|| read_ref_string(&value, "source")),
+                source_path: read_ref_string(&value, "source_path"),
+                memory_id: read_ref_string(&value, "memory_id"),
+                quote: read_ref_string(&value, "quote"),
+                reference: value,
+            })
+        }
+        _ => None,
+    }
+}
+
+fn unique_evidence_refs(refs: Vec<EvidenceRef>) -> Vec<EvidenceRef> {
+    let mut seen = std::collections::HashSet::new();
+    refs.into_iter()
+        .filter(|r| {
+            seen.insert((
+                r.source_kind.clone(),
+                r.source_id.clone(),
+                r.source_path.clone(),
+                r.memory_id.clone(),
+                r.quote.clone(),
+            ))
+        })
+        .collect()
+}
+
 fn row_to_value(row: ProposalRow) -> JsonValue {
     json!({
         "id": row.id,
@@ -140,6 +355,105 @@ fn row_to_value(row: ProposalRow) -> JsonValue {
         "updatedAt": row.updated_at,
         "appliedAt": row.applied_at,
         "rejectedAt": row.rejected_at,
+    })
+}
+
+fn entity_to_value(row: &EntityRow) -> JsonValue {
+    json!({
+        "id": row.id,
+        "name": row.name,
+        "canonicalName": row.canonical_name,
+        "entityType": row.entity_type,
+        "agentId": row.agent_id,
+        "description": row.description,
+        "mentions": row.mentions,
+        "pinned": row.pinned,
+        "pinnedAt": row.pinned_at,
+        "status": row.status,
+        "archivedAt": row.archived_at,
+        "archivedBy": row.archived_by,
+        "archiveReason": row.archive_reason,
+        "proposalId": row.proposal_id,
+        "proposalEvidence": parse_json(&row.proposal_evidence, json!([])),
+        "createdAt": row.created_at,
+        "updatedAt": row.updated_at,
+    })
+}
+
+fn aspect_to_value(row: &AspectRow) -> JsonValue {
+    json!({
+        "id": row.id,
+        "entityId": row.entity_id,
+        "agentId": row.agent_id,
+        "name": row.name,
+        "canonicalName": row.canonical_name,
+        "weight": row.weight,
+        "status": row.status,
+        "archivedAt": row.archived_at,
+        "archivedBy": row.archived_by,
+        "archiveReason": row.archive_reason,
+        "proposalId": row.proposal_id,
+        "proposalEvidence": parse_json(&row.proposal_evidence, json!([])),
+        "createdAt": row.created_at,
+        "updatedAt": row.updated_at,
+    })
+}
+
+fn attribute_to_value(row: &AttributeEvidenceRow) -> JsonValue {
+    json!({
+        "id": row.id,
+        "aspectId": row.aspect_id,
+        "agentId": row.agent_id,
+        "memoryId": row.memory_id,
+        "kind": row.kind,
+        "content": row.content,
+        "normalizedContent": row.normalized_content,
+        "groupKey": row.group_key,
+        "claimKey": row.claim_key,
+        "confidence": row.confidence,
+        "importance": row.importance,
+        "status": row.status,
+        "supersededBy": row.superseded_by,
+        "version": row.version,
+        "versionRootId": row.version_root_id,
+        "previousAttributeId": row.previous_attribute_id,
+        "archivedAt": row.archived_at,
+        "archivedBy": row.archived_by,
+        "archiveReason": row.archive_reason,
+        "sourceKind": row.source_kind,
+        "sourceId": row.source_id,
+        "sourcePath": row.source_path,
+        "sourceRoot": row.source_root,
+        "proposalId": row.proposal_id,
+        "proposalEvidence": parse_json(&row.proposal_evidence, json!([])),
+        "createdAt": row.created_at,
+        "updatedAt": row.updated_at,
+    })
+}
+
+fn dependency_to_value(row: &DependencyEvidenceRow) -> JsonValue {
+    json!({
+        "id": row.id,
+        "sourceEntityId": row.source_entity_id,
+        "targetEntityId": row.target_entity_id,
+        "agentId": row.agent_id,
+        "aspectId": row.aspect_id,
+        "dependencyType": row.dependency_type,
+        "strength": row.strength,
+        "confidence": row.confidence,
+        "reason": row.reason,
+        "status": row.status,
+        "archivedAt": row.archived_at,
+        "archivedBy": row.archived_by,
+        "archiveReason": row.archive_reason,
+        "sourceKind": row.source_kind,
+        "sourceId": row.source_id,
+        "sourcePath": row.source_path,
+        "sourceRoot": row.source_root,
+        "proposalId": row.proposal_id,
+        "proposalEvidence": parse_json(&row.proposal_evidence, json!([])),
+        "createdAt": row.created_at,
+        "updatedAt": row.updated_at,
     })
 }
 
@@ -169,6 +483,121 @@ fn read_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProposalRow> {
     })
 }
 
+fn read_entity_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<EntityRow> {
+    Ok(EntityRow {
+        id: row.get("id")?,
+        name: row.get("name")?,
+        canonical_name: row.get("canonical_name")?,
+        entity_type: row.get("entity_type")?,
+        agent_id: row.get("agent_id")?,
+        description: row.get("description")?,
+        mentions: row.get::<_, Option<i64>>("mentions")?.unwrap_or(0),
+        pinned: row.get::<_, Option<i64>>("pinned")?.unwrap_or(0) != 0,
+        pinned_at: row.get("pinned_at")?,
+        status: row
+            .get::<_, Option<String>>("status")?
+            .unwrap_or_else(|| "active".to_string()),
+        archived_at: row.get("archived_at")?,
+        archived_by: row.get("archived_by")?,
+        archive_reason: row.get("archive_reason")?,
+        proposal_id: row.get("proposal_id")?,
+        proposal_evidence: row
+            .get::<_, Option<String>>("proposal_evidence")?
+            .unwrap_or_else(|| "[]".to_string()),
+        created_at: row.get("created_at")?,
+        updated_at: row.get("updated_at")?,
+    })
+}
+
+fn read_aspect_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AspectRow> {
+    Ok(AspectRow {
+        id: row.get("id")?,
+        entity_id: row.get("entity_id")?,
+        agent_id: row.get("agent_id")?,
+        name: row.get("name")?,
+        canonical_name: row.get("canonical_name")?,
+        weight: row.get::<_, Option<f64>>("weight")?.unwrap_or(0.5),
+        status: row
+            .get::<_, Option<String>>("status")?
+            .unwrap_or_else(|| "active".to_string()),
+        archived_at: row.get("archived_at")?,
+        archived_by: row.get("archived_by")?,
+        archive_reason: row.get("archive_reason")?,
+        proposal_id: row.get("proposal_id")?,
+        proposal_evidence: row
+            .get::<_, Option<String>>("proposal_evidence")?
+            .unwrap_or_else(|| "[]".to_string()),
+        created_at: row.get("created_at")?,
+        updated_at: row.get("updated_at")?,
+    })
+}
+
+fn read_attribute_evidence_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AttributeEvidenceRow> {
+    Ok(AttributeEvidenceRow {
+        id: row.get("id")?,
+        aspect_id: row.get("aspect_id")?,
+        agent_id: row.get("agent_id")?,
+        memory_id: row.get("memory_id")?,
+        kind: row.get("kind")?,
+        content: row.get("content")?,
+        normalized_content: row.get("normalized_content")?,
+        group_key: row.get("group_key")?,
+        claim_key: row.get("claim_key")?,
+        confidence: row.get::<_, Option<f64>>("confidence")?.unwrap_or(0.0),
+        importance: row.get::<_, Option<f64>>("importance")?.unwrap_or(0.5),
+        status: row.get("status")?,
+        superseded_by: row.get("superseded_by")?,
+        version: row.get::<_, Option<i64>>("version")?.unwrap_or(1),
+        version_root_id: row.get("version_root_id")?,
+        previous_attribute_id: row.get("previous_attribute_id")?,
+        archived_at: row.get("archived_at")?,
+        archived_by: row.get("archived_by")?,
+        archive_reason: row.get("archive_reason")?,
+        source_kind: row.get("source_kind")?,
+        source_id: row.get("source_id")?,
+        source_path: row.get("source_path")?,
+        source_root: row.get("source_root")?,
+        proposal_id: row.get("proposal_id")?,
+        proposal_evidence: row
+            .get::<_, Option<String>>("proposal_evidence")?
+            .unwrap_or_else(|| "[]".to_string()),
+        created_at: row.get("created_at")?,
+        updated_at: row.get("updated_at")?,
+    })
+}
+
+fn read_dependency_evidence_row(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<DependencyEvidenceRow> {
+    Ok(DependencyEvidenceRow {
+        id: row.get("id")?,
+        source_entity_id: row.get("source_entity_id")?,
+        target_entity_id: row.get("target_entity_id")?,
+        agent_id: row.get("agent_id")?,
+        aspect_id: row.get("aspect_id")?,
+        dependency_type: row.get("dependency_type")?,
+        strength: row.get::<_, Option<f64>>("strength")?.unwrap_or(0.5),
+        confidence: row.get::<_, Option<f64>>("confidence")?.unwrap_or(0.7),
+        reason: row.get("reason")?,
+        status: row
+            .get::<_, Option<String>>("status")?
+            .unwrap_or_else(|| "active".to_string()),
+        archived_at: row.get("archived_at")?,
+        archived_by: row.get("archived_by")?,
+        archive_reason: row.get("archive_reason")?,
+        source_kind: row.get("source_kind")?,
+        source_id: row.get("source_id")?,
+        source_path: row.get("source_path")?,
+        source_root: row.get("source_root")?,
+        proposal_id: row.get("proposal_id")?,
+        proposal_evidence: row
+            .get::<_, Option<String>>("proposal_evidence")?
+            .unwrap_or_else(|| "[]".to_string()),
+        created_at: row.get("created_at")?,
+        updated_at: row.get("updated_at")?,
+    })
+}
+
 const SELECT_PROPOSAL: &str =
     "SELECT id, agent_id, operation, status, payload, confidence, rationale,
     evidence, risk, source_kind, source_id, source_path, source_root, created_by,
@@ -182,6 +611,10 @@ fn canonical(value: &str) -> String {
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+fn canonical_path_key(value: &str) -> String {
+    canonical(value).replace(' ', "_")
 }
 
 fn read_payload_string(payload: &JsonValue, key: &str) -> Option<String> {
@@ -214,6 +647,399 @@ fn normalize_attribute_kind(raw: Option<String>) -> String {
 
 fn normalize_dependency_type(raw: Option<String>) -> String {
     raw.unwrap_or_else(|| "related_to".to_string())
+}
+
+fn table_exists(conn: &rusqlite::Connection, table: &str) -> Result<bool, CoreError> {
+    conn.query_row(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1 LIMIT 1",
+        rusqlite::params![table],
+        |_| Ok(()),
+    )
+    .optional()
+    .map(|row| row.is_some())
+    .map_err(Into::into)
+}
+
+fn source_id_candidates(value: Option<&str>) -> Vec<String> {
+    let Some(value) = value.map(str::trim).filter(|v| !v.is_empty()) else {
+        return Vec::new();
+    };
+    let mut candidates = Vec::new();
+    for candidate in [
+        Some(value.to_string()),
+        value
+            .strip_prefix("transcript:")
+            .map(std::string::ToString::to_string),
+        value
+            .strip_prefix("session:")
+            .map(std::string::ToString::to_string),
+        (!value.starts_with("transcript:")).then(|| format!("transcript:{value}")),
+        (!value.starts_with("session:")).then(|| format!("session:{value}")),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if !candidates.contains(&candidate) {
+            candidates.push(candidate);
+        }
+    }
+    candidates
+}
+
+fn source_looks_like_transcript(reference: &EvidenceRef) -> bool {
+    matches!(
+        reference.source_kind.as_deref(),
+        Some("transcript" | "session_transcript")
+    ) || reference
+        .source_id
+        .as_deref()
+        .is_some_and(|id| id.starts_with("transcript:") || id.starts_with("session:"))
+}
+
+fn resolve_ontology_evidence_ref(
+    conn: &rusqlite::Connection,
+    agent_id: &str,
+    reference: &EvidenceRef,
+) -> Result<JsonValue, CoreError> {
+    if reference.source_kind.as_deref() == Some("ontology_proposal") {
+        if let Some(source_id) = reference.source_id.as_deref() {
+            let proposal = conn
+                .query_row(
+                    &format!("{SELECT_PROPOSAL} WHERE id = ?1 AND agent_id = ?2 LIMIT 1"),
+                    rusqlite::params![source_id, agent_id],
+                    read_row,
+                )
+                .optional()?;
+            if let Some(proposal) = proposal {
+                let excerpt_source =
+                    reference
+                        .quote
+                        .as_deref()
+                        .unwrap_or(if proposal.rationale.is_empty() {
+                            &proposal.evidence
+                        } else {
+                            &proposal.rationale
+                        });
+                return Ok(json!({
+                    "kind": "ontology_proposal",
+                    "found": true,
+                    "sourceKind": "ontology_proposal",
+                    "sourceId": proposal.id,
+                    "sourcePath": reference.source_path,
+                    "label": format!("proposal:{}", proposal.id),
+                    "excerpt": compact_excerpt(excerpt_source, None),
+                    "reference": reference.reference,
+                }));
+            }
+        }
+    }
+
+    if let Some(source_path) = reference.source_path.as_deref() {
+        if table_exists(conn, "memory_artifacts")? {
+            let artifact = conn
+                .query_row(
+                    "SELECT source_path, source_kind, session_id, session_key, session_token, content
+                     FROM memory_artifacts
+                     WHERE agent_id = ?1 AND COALESCE(is_deleted, 0) = 0 AND source_path = ?2
+                     ORDER BY captured_at DESC
+                     LIMIT 1",
+                    rusqlite::params![agent_id, source_path],
+                    |row| {
+                        Ok((
+                            row.get::<_, String>("source_path")?,
+                            row.get::<_, String>("source_kind")?,
+                            row.get::<_, String>("session_id")?,
+                            row.get::<_, Option<String>>("session_key")?,
+                            row.get::<_, String>("session_token")?,
+                            row.get::<_, String>("content")?,
+                        ))
+                    },
+                )
+                .optional()?;
+            if let Some((path, kind, session_id, session_key, session_token, content)) = artifact {
+                return Ok(json!({
+                    "kind": "memory_artifact",
+                    "found": true,
+                    "sourceKind": kind,
+                    "sourceId": session_key.or(Some(session_id)).unwrap_or(session_token),
+                    "sourcePath": path,
+                    "label": path,
+                    "excerpt": compact_excerpt(&content, reference.quote.as_deref()),
+                    "reference": reference.reference,
+                }));
+            }
+        }
+    }
+
+    if source_looks_like_transcript(reference) && table_exists(conn, "session_transcripts")? {
+        let ids = source_id_candidates(reference.source_id.as_deref());
+        if !ids.is_empty() {
+            let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+            let sql = format!(
+                "SELECT session_key, content, COALESCE(updated_at, created_at) AS seen_at
+                 FROM session_transcripts
+                 WHERE agent_id = ? AND session_key IN ({placeholders})
+                 ORDER BY seen_at DESC
+                 LIMIT 1"
+            );
+            let mut args = vec![Value::Text(agent_id.to_string())];
+            args.extend(ids.into_iter().map(Value::Text));
+            let params: Vec<&dyn ToSql> = args.iter().map(|v| v as &dyn ToSql).collect();
+            let transcript = conn
+                .query_row(&sql, params.as_slice(), |row| {
+                    Ok((
+                        row.get::<_, String>("session_key")?,
+                        row.get::<_, String>("content")?,
+                    ))
+                })
+                .optional()?;
+            if let Some((session_key, content)) = transcript {
+                return Ok(json!({
+                    "kind": "session_transcript",
+                    "found": true,
+                    "sourceKind": reference.source_kind.clone().unwrap_or_else(|| "transcript".to_string()),
+                    "sourceId": session_key,
+                    "sourcePath": reference.source_path,
+                    "label": format!("transcript:{session_key}"),
+                    "excerpt": compact_excerpt(&content, reference.quote.as_deref()),
+                    "reference": reference.reference,
+                }));
+            }
+        }
+    }
+
+    if reference.source_path.is_none() && table_exists(conn, "memory_artifacts")? {
+        let ids = source_id_candidates(reference.source_id.as_deref());
+        if !ids.is_empty() {
+            let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+            let sql = format!(
+                "SELECT source_path, source_kind, session_id, session_key, session_token, content
+                 FROM memory_artifacts
+                 WHERE agent_id = ? AND COALESCE(is_deleted, 0) = 0
+                   AND (
+                     source_node_id IN ({placeholders})
+                     OR session_id IN ({placeholders})
+                     OR session_key IN ({placeholders})
+                     OR session_token IN ({placeholders})
+                     OR source_path IN ({placeholders})
+                   )
+                 ORDER BY captured_at DESC
+                 LIMIT 1"
+            );
+            let mut args = vec![Value::Text(agent_id.to_string())];
+            for _ in 0..5 {
+                args.extend(ids.iter().cloned().map(Value::Text));
+            }
+            let params: Vec<&dyn ToSql> = args.iter().map(|v| v as &dyn ToSql).collect();
+            let artifact = conn
+                .query_row(&sql, params.as_slice(), |row| {
+                    Ok((
+                        row.get::<_, String>("source_path")?,
+                        row.get::<_, String>("source_kind")?,
+                        row.get::<_, String>("session_id")?,
+                        row.get::<_, Option<String>>("session_key")?,
+                        row.get::<_, String>("session_token")?,
+                        row.get::<_, String>("content")?,
+                    ))
+                })
+                .optional()?;
+            if let Some((path, kind, session_id, session_key, session_token, content)) = artifact {
+                return Ok(json!({
+                    "kind": "memory_artifact",
+                    "found": true,
+                    "sourceKind": kind,
+                    "sourceId": session_key.or(Some(session_id)).unwrap_or(session_token),
+                    "sourcePath": path,
+                    "label": path,
+                    "excerpt": compact_excerpt(&content, reference.quote.as_deref()),
+                    "reference": reference.reference,
+                }));
+            }
+        }
+    }
+
+    if let Some(memory_id) = reference.memory_id.as_deref() {
+        if table_exists(conn, "memories")? {
+            let memory = conn
+                .query_row(
+                    "SELECT id, source_id, source_type, source_path, content
+                     FROM memories
+                     WHERE id = ?1 AND agent_id = ?2 AND COALESCE(is_deleted, 0) = 0
+                     LIMIT 1",
+                    rusqlite::params![memory_id, agent_id],
+                    |row| {
+                        Ok((
+                            row.get::<_, String>("id")?,
+                            row.get::<_, Option<String>>("source_id")?,
+                            row.get::<_, Option<String>>("source_type")?,
+                            row.get::<_, Option<String>>("source_path")?,
+                            row.get::<_, String>("content")?,
+                        ))
+                    },
+                )
+                .optional()?;
+            if let Some((id, source_id, source_type, source_path, content)) = memory {
+                return Ok(json!({
+                    "kind": "memory",
+                    "found": true,
+                    "sourceKind": source_type,
+                    "sourceId": source_id.unwrap_or_else(|| id.clone()),
+                    "sourcePath": source_path,
+                    "label": format!("memory:{id}"),
+                    "excerpt": compact_excerpt(&content, reference.quote.as_deref()),
+                    "reference": reference.reference,
+                }));
+            }
+        }
+    }
+
+    if let Some(quote) = reference.quote.as_deref() {
+        return Ok(json!({
+            "kind": "provided_quote",
+            "found": true,
+            "sourceKind": reference.source_kind,
+            "sourceId": reference.source_id,
+            "sourcePath": reference.source_path,
+            "label": "embedded quote",
+            "excerpt": compact_excerpt(quote, None),
+            "reference": reference.reference,
+        }));
+    }
+
+    Ok(json!({
+        "kind": "unresolved",
+        "found": false,
+        "sourceKind": reference.source_kind,
+        "sourceId": reference.source_id,
+        "sourcePath": reference.source_path,
+        "label": reference
+            .source_path
+            .clone()
+            .or_else(|| reference.source_id.clone())
+            .or_else(|| reference.memory_id.clone())
+            .unwrap_or_else(|| "unknown evidence".to_string()),
+        "excerpt": "",
+        "reference": reference.reference,
+    }))
+}
+
+fn attribute_evidence_refs(attribute: &AttributeEvidenceRow) -> Vec<EvidenceRef> {
+    let mut refs = Vec::new();
+    if let Some(proposal_id) = attribute.proposal_id.clone() {
+        refs.push(EvidenceRef {
+            source_kind: Some("ontology_proposal".to_string()),
+            source_id: Some(proposal_id.clone()),
+            source_path: None,
+            memory_id: None,
+            quote: None,
+            reference: json!({
+                "attribute_id": attribute.id,
+                "proposal_id": proposal_id,
+            }),
+        });
+    }
+    refs.extend(
+        json_array(&attribute.proposal_evidence)
+            .into_iter()
+            .filter_map(read_evidence_ref),
+    );
+    if attribute.source_kind.is_some() || attribute.source_id.is_some() {
+        refs.push(EvidenceRef {
+            source_kind: attribute.source_kind.clone(),
+            source_id: attribute.source_id.clone(),
+            source_path: None,
+            memory_id: None,
+            quote: None,
+            reference: json!({
+                "attribute_id": attribute.id,
+                "source_kind": attribute.source_kind,
+                "source_id": attribute.source_id,
+            }),
+        });
+    }
+    if attribute.source_path.is_some() {
+        refs.push(EvidenceRef {
+            source_kind: attribute.source_kind.clone(),
+            source_id: attribute.source_id.clone(),
+            source_path: attribute.source_path.clone(),
+            memory_id: None,
+            quote: None,
+            reference: json!({
+                "attribute_id": attribute.id,
+                "source_kind": attribute.source_kind,
+                "source_id": attribute.source_id,
+                "source_path": attribute.source_path,
+                "source_root": attribute.source_root,
+            }),
+        });
+    }
+    if let Some(memory_id) = attribute.memory_id.clone() {
+        refs.push(EvidenceRef {
+            source_kind: None,
+            source_id: None,
+            source_path: None,
+            memory_id: Some(memory_id.clone()),
+            quote: None,
+            reference: json!({
+                "attribute_id": attribute.id,
+                "memory_id": memory_id,
+            }),
+        });
+    }
+    unique_evidence_refs(refs)
+}
+
+fn link_evidence_refs(dependency: &DependencyEvidenceRow) -> Vec<EvidenceRef> {
+    let mut refs = Vec::new();
+    if let Some(proposal_id) = dependency.proposal_id.clone() {
+        refs.push(EvidenceRef {
+            source_kind: Some("ontology_proposal".to_string()),
+            source_id: Some(proposal_id.clone()),
+            source_path: None,
+            memory_id: None,
+            quote: None,
+            reference: json!({
+                "dependency_id": dependency.id,
+                "proposal_id": proposal_id,
+            }),
+        });
+    }
+    refs.extend(
+        json_array(&dependency.proposal_evidence)
+            .into_iter()
+            .filter_map(read_evidence_ref),
+    );
+    if dependency.source_kind.is_some() || dependency.source_id.is_some() {
+        refs.push(EvidenceRef {
+            source_kind: dependency.source_kind.clone(),
+            source_id: dependency.source_id.clone(),
+            source_path: None,
+            memory_id: None,
+            quote: None,
+            reference: json!({
+                "dependency_id": dependency.id,
+                "source_kind": dependency.source_kind,
+                "source_id": dependency.source_id,
+            }),
+        });
+    }
+    if dependency.source_path.is_some() {
+        refs.push(EvidenceRef {
+            source_kind: dependency.source_kind.clone(),
+            source_id: dependency.source_id.clone(),
+            source_path: dependency.source_path.clone(),
+            memory_id: None,
+            quote: None,
+            reference: json!({
+                "dependency_id": dependency.id,
+                "source_kind": dependency.source_kind,
+                "source_id": dependency.source_id,
+                "source_path": dependency.source_path,
+                "source_root": dependency.source_root,
+            }),
+        });
+    }
+    unique_evidence_refs(refs)
 }
 
 fn proposal_audit_evidence(row: &ProposalRow) -> String {
@@ -1319,20 +2145,259 @@ pub async fn claim_evidence(
     State(state): State<Arc<AppState>>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
+    Query(query): Query<ClaimEvidenceQuery>,
 ) -> Response {
-    if let Err(resp) = scoped_agent_or_response(&state, peer, &headers, None, Permission::Recall) {
-        return resp;
+    let agent = match scoped_agent_or_response(
+        &state,
+        peer,
+        &headers,
+        query.agent_id.as_deref(),
+        Permission::Recall,
+    ) {
+        Ok(id) => id,
+        Err(resp) => return resp,
+    };
+    let Some(entity_name) = clean(query.entity) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "entity is required"})),
+        )
+            .into_response();
+    };
+    let Some(aspect_name) = clean(query.aspect) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "aspect is required"})),
+        )
+            .into_response();
+    };
+    let Some(group) = clean(query.group) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "group is required"})),
+        )
+            .into_response();
+    };
+    let Some(claim) = clean(query.claim) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "claim is required"})),
+        )
+            .into_response();
+    };
+    if query
+        .kind
+        .as_deref()
+        .is_some_and(|kind| !matches!(kind, "attribute" | "constraint"))
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "kind is invalid"})),
+        )
+            .into_response();
     }
-    (StatusCode::OK, Json(json!({"items": [], "count": 0}))).into_response()
+    if query
+        .status
+        .as_deref()
+        .is_some_and(|status| !matches!(status, "active" | "superseded" | "deleted" | "all"))
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "status is invalid"})),
+        )
+            .into_response();
+    }
+
+    let kind = query.kind;
+    let status = query.status;
+    let limit = parse_limit(query.limit.as_deref(), 20, 200);
+    let offset = parse_offset(query.offset.as_deref());
+    let group_key = {
+        let normalized = canonical_path_key(&group);
+        if normalized.is_empty() {
+            "general".to_string()
+        } else {
+            normalized
+        }
+    };
+    let claim_key = canonical_path_key(&claim);
+
+    let response = state
+        .pool
+        .read(move |conn| {
+            let entity_canonical = canonical(&entity_name);
+            let entity = conn
+                .query_row(
+                    "SELECT *
+                     FROM entities
+                     WHERE agent_id = ?1
+                       AND COALESCE(status, 'active') = 'active'
+                       AND (COALESCE(canonical_name, LOWER(name)) = ?2 OR LOWER(name) = ?2 OR id = ?3)
+                     ORDER BY mentions DESC, updated_at DESC, name ASC
+                     LIMIT 1",
+                    rusqlite::params![agent, entity_canonical, entity_name],
+                    read_entity_row,
+                )
+                .optional()?;
+            let Some(entity) = entity else {
+                return Ok::<JsonValue, CoreError>(json!({"_code": 404}));
+            };
+            let aspect_canonical = canonical(&aspect_name);
+            let aspect = conn
+                .query_row(
+                    "SELECT *
+                     FROM entity_aspects
+                     WHERE entity_id = ?1
+                       AND agent_id = ?2
+                       AND COALESCE(status, 'active') = 'active'
+                       AND (canonical_name = ?3 OR LOWER(name) = ?3 OR id = ?4)
+                     ORDER BY weight DESC, updated_at DESC
+                     LIMIT 1",
+                    rusqlite::params![entity.id, agent, aspect_canonical, aspect_name],
+                    read_aspect_row,
+                )
+                .optional()?;
+            let Some(aspect) = aspect else {
+                return Ok(json!({"_code": 404}));
+            };
+
+            let mut conditions = vec![
+                "ea.aspect_id = ?1".to_string(),
+                "ea.agent_id = ?2".to_string(),
+                "COALESCE(ea.group_key, 'general') = ?3".to_string(),
+                "ea.claim_key = ?4".to_string(),
+            ];
+            let mut args = vec![
+                Value::Text(aspect.id.clone()),
+                Value::Text(agent.clone()),
+                Value::Text(group_key.clone()),
+                Value::Text(claim_key.clone()),
+            ];
+            if let Some(kind) = kind {
+                conditions.push(format!("ea.kind = ?{}", args.len() + 1));
+                args.push(Value::Text(kind));
+            }
+            match status.as_deref() {
+                Some("all") => {}
+                Some(status) => {
+                    conditions.push(format!("ea.status = ?{}", args.len() + 1));
+                    args.push(Value::Text(status.to_string()));
+                }
+                None => conditions.push("ea.status = 'active'".to_string()),
+            }
+            let limit_idx = args.len() + 1;
+            let offset_idx = args.len() + 2;
+            let sql = format!(
+                "SELECT ea.*
+                 FROM entity_attributes ea
+                 WHERE {}
+                 ORDER BY ea.created_at DESC, ea.importance DESC
+                 LIMIT ?{limit_idx} OFFSET ?{offset_idx}",
+                conditions.join(" AND ")
+            );
+            args.push(Value::Integer(limit));
+            args.push(Value::Integer(offset));
+            let params: Vec<&dyn ToSql> = args.iter().map(|v| v as &dyn ToSql).collect();
+            let mut stmt = conn.prepare(&sql)?;
+            let attributes = stmt
+                .query_map(params.as_slice(), read_attribute_evidence_row)?
+                .collect::<Result<Vec<_>, _>>()?;
+            let items = attributes
+                .into_iter()
+                .map(|attribute| {
+                    let evidence = attribute_evidence_refs(&attribute)
+                        .into_iter()
+                        .map(|reference| resolve_ontology_evidence_ref(conn, &agent, &reference))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    Ok::<JsonValue, CoreError>(json!({
+                        "attribute": attribute_to_value(&attribute),
+                        "evidence": evidence,
+                        "evidenceCount": evidence.len(),
+                    }))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(json!({
+                "entity": entity_to_value(&entity),
+                "aspect": aspect_to_value(&aspect),
+                "groupKey": group_key,
+                "claimKey": claim_key,
+                "items": items,
+                "count": items.len(),
+            }))
+        })
+        .await;
+
+    match response {
+        Ok(value) if value.get("_code").and_then(|code| code.as_i64()) == Some(404) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": "Claim path not found"})),
+        )
+            .into_response(),
+        Ok(value) => (StatusCode::OK, Json(value)).into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": error.to_string()})),
+        )
+            .into_response(),
+    }
 }
 
 pub async fn link_evidence(
     State(state): State<Arc<AppState>>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
+    Path(id): Path<String>,
+    Query(query): Query<LinkEvidenceQuery>,
 ) -> Response {
-    if let Err(resp) = scoped_agent_or_response(&state, peer, &headers, None, Permission::Recall) {
-        return resp;
+    let agent = match scoped_agent_or_response(
+        &state,
+        peer,
+        &headers,
+        query.agent_id.as_deref(),
+        Permission::Recall,
+    ) {
+        Ok(id) => id,
+        Err(resp) => return resp,
+    };
+    let result = state
+        .pool
+        .read(move |conn| {
+            let dependency = conn
+                .query_row(
+                    "SELECT *
+                     FROM entity_dependencies
+                     WHERE id = ?1 AND agent_id = ?2
+                     LIMIT 1",
+                    rusqlite::params![id, agent],
+                    read_dependency_evidence_row,
+                )
+                .optional()?;
+            let Some(dependency) = dependency else {
+                return Ok::<JsonValue, CoreError>(json!({"_code": 404}));
+            };
+            let items = link_evidence_refs(&dependency)
+                .into_iter()
+                .map(|reference| resolve_ontology_evidence_ref(conn, &agent, &reference))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(json!({
+                "dependency": dependency_to_value(&dependency),
+                "items": items,
+                "count": items.len(),
+            }))
+        })
+        .await;
+
+    match result {
+        Ok(value) if value.get("_code").and_then(|code| code.as_i64()) == Some(404) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": "Link not found"})),
+        )
+            .into_response(),
+        Ok(value) => (StatusCode::OK, Json(value)).into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": error.to_string()})),
+        )
+            .into_response(),
     }
-    (StatusCode::OK, Json(json!({"items": [], "count": 0}))).into_response()
 }
