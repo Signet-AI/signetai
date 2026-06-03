@@ -28,7 +28,7 @@ describe("install copy", () => {
 		for (const path of ["README.md", "docs/QUICKSTART.md", "docs/CLI.md", "dist/signetai/README.md"]) {
 			const content = read(path);
 			expect(content).toContain("same compiled Signet binary");
-			expect(content).toContain("bundled native");
+			expect(content).toContain("native package");
 			expect(content).toContain("npm install -g signetai");
 			expect(content).toContain("bun add -g signetai");
 		}
@@ -70,8 +70,8 @@ describe("install copy", () => {
 		expect(manifest.bin?.signet).toBe("bin/signet.js");
 		expect(manifest.bin?.["signet-mcp"]).toBe("bin/signet-mcp.js");
 		expect(launcher).toContain('join(packageDir, "native"');
-		expect(launcher).toContain("resolveBundledBinaryPath");
-		expect(launcher).not.toContain("require.resolve");
+		expect(launcher).toContain("resolveNativePackageBinaryPath");
+		expect(launcher).toContain("require.resolve");
 		expect(nativePlatforms).toContain('"linux-x64"');
 		expect(nativePlatforms).toContain('"linux-arm64"');
 		expect(nativePlatforms).toContain('"darwin-x64"');
@@ -79,7 +79,7 @@ describe("install copy", () => {
 		expect(nativePlatforms).toContain('"win32-x64"');
 		expect(mcpWrapper).toContain("forceMcp: true");
 		expect(installer).toContain("linkSync");
-		expect(installer).not.toContain("require.resolve");
+		expect(installer).toContain("require.resolve");
 		expect(installer).toContain("Skipping Signet native binary linking in workspace install");
 		expect(installer).not.toContain("native-manifest.json");
 		expect(installer).not.toContain("https");

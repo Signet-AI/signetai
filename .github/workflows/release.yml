@@ -287,28 +287,48 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Stage native npm package assets
+      - name: Pack native npm release assets
         shell: bash
         run: |
           set -euo pipefail
-          stage_bundled_binary() {
+          mkdir -p dist/native-packages
+          stage_native_package() {
             local platform="$1"
             local asset="$2"
             local binary="$3"
-            local native_dir="dist/signetai/native/${platform}"
-            mkdir -p "${native_dir}"
-            cp "dist/native/${asset}" "${native_dir}/${binary}"
-            chmod 755 "${native_dir}/${binary}"
+            local package_dir="dist/signetai-${platform}"
+            mkdir -p "${package_dir}/bin"
+            cp "dist/native/${asset}" "${package_dir}/bin/${binary}"
+            chmod 755 "${package_dir}/bin/${binary}"
+            npm pack "${package_dir}" --pack-destination dist/native-packages
           }
 
-          stage_bundled_binary "linux-x64" "signet-linux-x64" "signet"
-          stage_bundled_binary "linux-arm64" "signet-linux-arm64" "signet"
-          stage_bundled_binary "darwin-x64" "signet-darwin-x64" "signet"
-          stage_bundled_binary "darwin-arm64" "signet-darwin-arm64" "signet"
-          stage_bundled_binary "win32-x64" "signet-win32-x64.exe" "signet.exe"
+          stage_native_package "linux-x64" "signet-linux-x64" "signet"
+          stage_native_package "linux-arm64" "signet-linux-arm64" "signet"
+          stage_native_package "darwin-x64" "signet-darwin-x64" "signet"
+          stage_native_package "darwin-arm64" "signet-darwin-arm64" "signet"
+          stage_native_package "win32-x64" "signet-win32-x64.exe" "signet.exe"
+
+          gh release upload "v${NEW_VERSION}" dist/native-packages/*.tgz --clobber
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Point npm wrapper at native release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/v${NEW_VERSION}"
+          npm pkg set --prefix dist/signetai \
+            "optionalDependencies.signetai-linux-x64=${release_url}/signetai-linux-x64-${NEW_VERSION}.tgz" \
+            "optionalDependencies.signetai-linux-arm64=${release_url}/signetai-linux-arm64-${NEW_VERSION}.tgz" \
+            "optionalDependencies.signetai-darwin-x64=${release_url}/signetai-darwin-x64-${NEW_VERSION}.tgz" \
+            "optionalDependencies.signetai-darwin-arm64=${release_url}/signetai-darwin-arm64-${NEW_VERSION}.tgz" \
+            "optionalDependencies.signetai-win32-x64=${release_url}/signetai-win32-x64-${NEW_VERSION}.tgz"
 
       - name: Validate publish manifests
         run: bun scripts/check-publish-manifests.ts
+        env:
+          SIGNET_EXPECT_NATIVE_OPTIONAL_DEPS: "1"
 
       - name: Publish npm packages
         run: |

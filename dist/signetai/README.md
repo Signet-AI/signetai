@@ -8,10 +8,10 @@ npm install -g signetai
 bun add -g signetai
 ```
 
-The package includes bundled native assets for the supported platforms.
-`postinstall` only links or copies the bundled binary into the package directory;
-if install scripts are disabled, the `signet` command resolves and executes the
-bundled native binary directly.
+The package installs a platform native package tarball from the same GitHub
+release. `postinstall` only links or copies that binary into the package
+directory; if install scripts are disabled, the `signet` command resolves and
+executes the native package directly.
 
 The package does not install Bun, does not build Signet from source, and does
 not install runtime dependencies such as `better-sqlite3`.

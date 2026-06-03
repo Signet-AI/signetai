@@ -36,6 +36,12 @@ type NativeManifestIssue = {
 	readonly reason: string;
 };
 
+type NativePlatformPackage = {
+	readonly platform: string;
+	readonly packageName: string;
+	readonly binaryName: string;
+};
+
 type NativeManifestAsset = {
 	readonly name?: unknown;
 	readonly platform?: unknown;
@@ -113,6 +119,15 @@ function getRuntimeDependencies(pkg: PackageJson, field: RuntimeField): Array<re
 	return Object.entries(value).flatMap(([name, spec]) => (typeof spec === "string" ? ([[name, spec]] as const) : []));
 }
 
+function isNativeReleaseTarballSpec(dep: string, spec: string): boolean {
+	return (
+		/^signetai-(linux|darwin|win32)-(x64|arm64)$/.test(dep) &&
+		/^https:\/\/github\.com\/[^/]+\/[^/]+\/releases\/download\/v[^/]+\/signetai-(linux|darwin|win32)-(x64|arm64)-[^/]+\.tgz$/.test(
+			spec,
+		)
+	);
+}
+
 export function collectManifestIssues(
 	targets: readonly string[],
 	workspacePackages: ReadonlyMap<string, WorkspacePackage>,
@@ -139,6 +154,10 @@ export function collectManifestIssues(
 
 				const workspaceDep = workspacePackages.get(dep);
 				if (workspaceDep && !workspaceDep.publishable) {
+					if (packageName === "signetai" && field === "optionalDependencies" && isNativeReleaseTarballSpec(dep, spec)) {
+						continue;
+					}
+
 					issues.push({
 						file,
 						packageName,
@@ -173,6 +192,19 @@ export function parseSupportedNativePlatforms(installerSource: string): string[]
 	if (!match) return [];
 
 	return Array.from(match[1].matchAll(/^\s*"([^"]+)":/gm), ([, platform]) => platform).sort();
+}
+
+export function parseNativePlatformPackages(installerSource: string): NativePlatformPackage[] {
+	return Array.from(
+		installerSource.matchAll(
+			/^\s*"([^"]+)":\s*\{\s*[\s\S]*?binaryName:\s*"([^"]+)"\s*,\s*packageName:\s*"([^"]+)"\s*,?\s*\}/gm,
+		),
+		([, platform, binaryName, packageName]) => ({
+			platform,
+			binaryName,
+			packageName,
+		}),
+	).sort((a, b) => a.platform.localeCompare(b.platform));
 }
 
 export function collectNativeManifestIssues(
@@ -243,22 +275,35 @@ export function collectNativeManifestIssues(
 	return issues;
 }
 
-export function collectBundledNativePackageIssues(targets: readonly string[]): NativeManifestIssue[] {
+export function collectNativeReleasePackageIssues(targets: readonly string[]): NativeManifestIssue[] {
 	const issues: NativeManifestIssue[] = [];
 	for (const file of targets) {
 		if (!file.endsWith("dist/signetai/package.json")) continue;
+		if (process.env.SIGNET_EXPECT_NATIVE_OPTIONAL_DEPS !== "1") continue;
 
+		const pkg = readPackageJson(file);
 		const nativePlatformsFile = file.replace(/package\.json$/, "bin/native-platforms.js");
-		const supportedPlatforms = parseSupportedNativePlatforms(readFileSync(nativePlatformsFile, "utf8"));
-		for (const platform of supportedPlatforms) {
-			const binaryName = platform.startsWith("win32-") ? "signet.exe" : "signet";
-			const binaryFile = file.replace(/package\.json$/, `native/${platform}/${binaryName}`);
+		const platformPackages = parseNativePlatformPackages(readFileSync(nativePlatformsFile, "utf8"));
+		const optionalDependencies = isRecord(pkg.optionalDependencies) ? pkg.optionalDependencies : {};
+		for (const platformPackage of platformPackages) {
+			const spec = optionalDependencies[platformPackage.packageName];
+			if (typeof spec !== "string" || !isNativeReleaseTarballSpec(platformPackage.packageName, spec)) {
+				issues.push({
+					file,
+					reason: `missing native release tarball optional dependency for ${platformPackage.packageName}`,
+				});
+			}
+
+			const binaryFile = file.replace(
+				"dist/signetai/package.json",
+				`dist/${platformPackage.packageName}/bin/${platformPackage.binaryName}`,
+			);
 			if (!existsSync(binaryFile)) {
-				issues.push({ file, reason: `missing bundled native binary ${binaryFile}` });
+				issues.push({ file, reason: `missing native package binary ${binaryFile}` });
 				continue;
 			}
 			if (!statSync(binaryFile).isFile()) {
-				issues.push({ file, reason: `bundled native binary is not a file: ${binaryFile}` });
+				issues.push({ file, reason: `native package binary is not a file: ${binaryFile}` });
 			}
 		}
 	}
@@ -283,7 +328,7 @@ function main(): void {
 					parseSupportedNativePlatforms(readFileSync("dist/signetai/bin/native-platforms.js", "utf8")),
 				)
 			: [];
-	const nativePackageIssues = collectBundledNativePackageIssues(targets);
+	const nativePackageIssues = collectNativeReleasePackageIssues(targets);
 
 	if (issues.length > 0 || nativeManifestIssues.length > 0 || nativePackageIssues.length > 0) {
 		if (issues.length > 0) console.error(formatIssues(issues));
