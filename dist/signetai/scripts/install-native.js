@@ -15,7 +15,13 @@ const repo = process.env.SIGNET_RELEASE_REPO ?? "Signet-AI/signetai";
 const version = process.env.SIGNET_VERSION ?? packageJson.version;
 const downloadBase =
 	process.env.SIGNET_DOWNLOAD_BASE ?? `https://github.com/${repo}/releases/download/v${version}`;
-const supportedPlatforms = new Set(["linux-x64", "darwin-x64", "darwin-arm64", "win32-x64"]);
+const supportedPlatforms = new Set([
+	"linux-x64",
+	"linux-arm64",
+	"darwin-x64",
+	"darwin-arm64",
+	"win32-x64",
+]);
 
 function isWorkspacePackage() {
 	const workspaceRoot = dirname(dirname(packageDir));

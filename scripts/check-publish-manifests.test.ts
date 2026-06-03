@@ -102,6 +102,7 @@ describe("check-publish-manifests", () => {
 		expect(buildScript).toContain("bun");
 		expect(buildScript).toContain("build");
 		expect(buildScript).toContain("--compile");
+		expect(buildScript).toContain("bun-linux-arm64");
 		expect(buildScript).toContain('createRequire(join(root, "platform", "daemon", "package.json"))');
 		expect(buildScript).toContain("surfaces/cli/src/cli.ts");
 		expect(buildScript).toContain('join(root, "surfaces", "cli", "templates")');
@@ -114,6 +115,8 @@ describe("check-publish-manifests", () => {
 		expect(workflow).toContain("build-native:");
 		expect(workflow).toContain("platform: linux-x64");
 		expect(workflow).toContain("asset: signet-linux-x64");
+		expect(workflow).toContain("platform: linux-arm64");
+		expect(workflow).toContain("asset: signet-linux-arm64");
 		expect(workflow).toContain("platform: darwin-x64");
 		expect(workflow).toContain("asset: signet-darwin-x64");
 		expect(workflow).toContain("platform: darwin-arm64");
@@ -125,6 +128,7 @@ describe("check-publish-manifests", () => {
 		);
 		expect(workflow).toContain("bun run build:native-bun");
 		expect(workflow).toContain('./dist/native/"$RELEASE_ASSET" --help');
+		expect(workflow).toContain("if: matrix.platform != 'linux-arm64'");
 	});
 
 	test("publishes only native release assets and the native manifest", () => {
@@ -139,6 +143,7 @@ describe("check-publish-manifests", () => {
 		expect(workflow).toContain('CURRENT=$(npm view "signetai@${NEW_VERSION}" version 2>/dev/null || echo "0.0.0")');
 		expect(workflow).toContain('npm dist-tag add "signetai@${NEW_VERSION}" next');
 		expect(workflow).toContain('npm dist-tag add "@signetai/signet-memory-openclaw@${NEW_VERSION}" next || true');
+		expect(workflow).toContain("NPM_CONFIG_USERCONFIG: ${{ runner.temp }}/.npmrc");
 		expect(workflow).toContain("cd dist/signetai");
 		expect(workflow).toContain("npm publish --tag next --access public");
 		expect(workflow).toContain("cd ../../integrations/openclaw/memory-adapter");
@@ -151,6 +156,7 @@ describe("check-publish-manifests", () => {
 		expect(workflow).not.toContain("deploy/bundle");
 		expect(promoteWorkflow).toContain('npm dist-tag add "signetai@${VERSION}" latest');
 		expect(promoteWorkflow).toContain('npm dist-tag add "@signetai/signet-memory-openclaw@${VERSION}" latest || true');
+		expect(promoteWorkflow).toContain("NPM_CONFIG_USERCONFIG: ${{ runner.temp }}/.npmrc");
 		expect(manifestScript).toContain('name.endsWith(".sha256")');
 		expect(manifestScript).toContain("native-manifest.json");
 	});
@@ -164,7 +170,9 @@ describe("check-publish-manifests", () => {
 		expect(installer).toContain("SIGNET_RELEASE_TAG");
 		expect(installer).toContain("sha256sum");
 		expect(installer).toContain("shasum -a 256");
-		expect(installer).toContain("Published Signet native binaries: linux-x64, darwin-x64, darwin-arm64, win32-x64");
+		expect(installer).toContain(
+			"Published Signet native binaries: linux-x64, linux-arm64, darwin-x64, darwin-arm64, win32-x64",
+		);
 		expect(installer).toContain('"$binary_path" install "$@"');
 		expect(installer).not.toContain("bun add -g signetai");
 		expect(installer).not.toContain("npm install -g signetai");
@@ -199,7 +207,11 @@ describe("check-publish-manifests", () => {
 		expect(mcpBin).toContain("forceMcp: true");
 		expect(installer).toContain("native-manifest.json");
 		expect(installer).toContain("createHash");
-		expect(installer).toContain('"linux-x64", "darwin-x64", "darwin-arm64", "win32-x64"');
+		expect(installer).toContain('"linux-x64"');
+		expect(installer).toContain('"linux-arm64"');
+		expect(installer).toContain('"darwin-x64"');
+		expect(installer).toContain('"darwin-arm64"');
+		expect(installer).toContain('"win32-x64"');
 		expect(installer).not.toContain("better-sqlite3");
 	});
 

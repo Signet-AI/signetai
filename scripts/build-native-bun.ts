@@ -21,7 +21,7 @@ const outDir = join(root, "dist", "native");
 const buildDir = join(root, ".native-build");
 const workerDir = join(buildDir, "workers");
 const platformKey = process.env.SIGNET_NATIVE_PLATFORM ?? `${platform()}-${arch()}`;
-const binaryName = platform() === "win32" ? `signet-${platformKey}.exe` : `signet-${platformKey}`;
+const binaryName = platformKey.startsWith("win32-") ? `signet-${platformKey}.exe` : `signet-${platformKey}`;
 const outfile = join(outDir, binaryName);
 const daemonRequire = createRequire(join(root, "platform", "daemon", "package.json"));
 
@@ -37,6 +37,23 @@ function runBunBuild(args: readonly string[]): void {
 	});
 	if (result.status !== 0) {
 		process.exit(result.status ?? 1);
+	}
+}
+
+function compileTargetFor(targetPlatform: string): string {
+	switch (targetPlatform) {
+		case "linux-x64":
+			return "bun-linux-x64";
+		case "linux-arm64":
+			return "bun-linux-arm64";
+		case "darwin-x64":
+			return "bun-darwin-x64";
+		case "darwin-arm64":
+			return "bun-darwin-arm64";
+		case "win32-x64":
+			return "bun-windows-x64";
+		default:
+			throw new Error(`Unsupported native compile platform: ${targetPlatform}`);
 	}
 }
 
@@ -148,7 +165,14 @@ writeFileSync(
 		`await import("../surfaces/cli/src/cli.ts");\n`,
 );
 
-runBunBuild(["--compile", "--target=bun", "--outfile", outfile, ...nativeExternalArgs, ".native-build/cli-native.ts"]);
+runBunBuild([
+	"--compile",
+	`--target=${compileTargetFor(platformKey)}`,
+	"--outfile",
+	outfile,
+	...nativeExternalArgs,
+	".native-build/cli-native.ts",
+]);
 
 console.log(`Built native Bun executable: ${outfile}`);
 

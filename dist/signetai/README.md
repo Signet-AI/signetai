@@ -25,8 +25,8 @@ curl -fsSL https://signetai.sh/install.sh | bash
 ## Requirements
 
 - Node.js for the npm wrapper, or Bun for the Bun wrapper
-- Published native binary platform: Linux x64, macOS x64, macOS arm64, or
-  Windows x64
+- Published native binary platform: Linux x64, Linux arm64, macOS x64,
+  macOS arm64, or Windows x64
 
 Windows direct installs should use the npm wrapper. The old PowerShell
 `install.ps1` path has been removed until a native Windows direct installer

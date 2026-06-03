@@ -168,6 +168,9 @@ jobs:
           - os: ubuntu-latest
             platform: linux-x64
             asset: signet-linux-x64
+          - os: ubuntu-latest
+            platform: linux-arm64
+            asset: signet-linux-arm64
           - os: macos-13
             platform: darwin-x64
             asset: signet-darwin-x64
@@ -202,8 +205,13 @@ jobs:
         run: bun run build:native-bun
 
       - name: Smoke native binary
+        if: matrix.platform != 'linux-arm64'
         shell: bash
         run: ./dist/native/"$RELEASE_ASSET" --help > /dev/null
+
+      - name: Verify native binary artifact
+        shell: bash
+        run: test -s ./dist/native/"$RELEASE_ASSET"
 
       - name: Upload to release
         shell: bash
@@ -258,6 +266,8 @@ jobs:
           expected=(
             signet-linux-x64
             signet-linux-x64.sha256
+            signet-linux-arm64
+            signet-linux-arm64.sha256
             signet-darwin-arm64
             signet-darwin-arm64.sha256
             signet-darwin-x64
@@ -305,3 +315,4 @@ jobs:
           fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_USERCONFIG: ${{ runner.temp }}/.npmrc

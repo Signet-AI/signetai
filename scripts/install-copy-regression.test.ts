@@ -40,7 +40,9 @@ describe("install copy", () => {
 		expect(installer).toContain("SIGNET_RELEASES_API_BASE");
 		expect(installer).toContain("SIGNET_RELEASE_TAG");
 		expect(installer).toContain('"$binary_path" install "$@"');
-		expect(installer).toContain("Published Signet native binaries: linux-x64, darwin-x64, darwin-arm64, win32-x64");
+		expect(installer).toContain(
+			"Published Signet native binaries: linux-x64, linux-arm64, darwin-x64, darwin-arm64, win32-x64",
+		);
 		expect(installer).toContain("sha256sum");
 		expect(installer).not.toContain("releases/latest/download");
 		expect(installer).not.toContain("releases/download/bundle-latest");
@@ -69,7 +71,11 @@ describe("install copy", () => {
 		expect(mcpWrapper).toContain("forceMcp: true");
 		expect(installer).toContain("native-manifest.json");
 		expect(installer).toContain("createHash");
-		expect(installer).toContain('"linux-x64", "darwin-x64", "darwin-arm64", "win32-x64"');
+		expect(installer).toContain('"linux-x64"');
+		expect(installer).toContain('"linux-arm64"');
+		expect(installer).toContain('"darwin-x64"');
+		expect(installer).toContain('"darwin-arm64"');
+		expect(installer).toContain('"win32-x64"');
 		expect(installer).toContain("Skipping Signet native binary download in workspace install");
 		expect(installer).not.toContain("bun.sh/install");
 		expect(installer).not.toContain("better-sqlite3");
