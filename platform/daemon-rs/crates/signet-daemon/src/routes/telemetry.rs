@@ -129,16 +129,6 @@ fn redact_recent_remembers(raw: Option<String>) -> Option<String> {
     .ok()
 }
 
-fn empty_latency_snapshot() -> serde_json::Value {
-    serde_json::json!({
-        "p50": 0,
-        "p95": 0,
-        "p99": 0,
-        "count": 0,
-        "mean": 0,
-    })
-}
-
 fn percentile(sorted: &[i64], p: i64) -> i64 {
     if sorted.is_empty() {
         return 0;
@@ -360,16 +350,7 @@ pub async fn usage(
     if let Err(resp) = require_telemetry_access(&state, &headers, &peer) {
         return *resp;
     }
-    (
-        StatusCode::OK,
-        Json(serde_json::json!({
-            "endpoints": {},
-            "actors": {},
-            "providers": {},
-            "connectors": {},
-        })),
-    )
-        .into_response()
+    (StatusCode::OK, Json(state.analytics.usage())).into_response()
 }
 
 /// GET /api/analytics/errors
@@ -404,18 +385,7 @@ pub async fn latency(
     if let Err(resp) = require_telemetry_access(&state, &headers, &peer) {
         return *resp;
     }
-    (
-        StatusCode::OK,
-        Json(serde_json::json!({
-            "remember": empty_latency_snapshot(),
-            "recall": empty_latency_snapshot(),
-            "mutate": empty_latency_snapshot(),
-            "jobs": empty_latency_snapshot(),
-            "predictor_score": empty_latency_snapshot(),
-            "predictor_train": empty_latency_snapshot(),
-        })),
-    )
-        .into_response()
+    (StatusCode::OK, Json(state.analytics.latency())).into_response()
 }
 
 /// GET /api/mcp/analytics

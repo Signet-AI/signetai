@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::Context;
-use axum::{Router, extract::State, response::Json, routing::get};
+use axum::{Router, extract::State, middleware, response::Json, routing::get};
 use chrono::{SecondsFormat, Utc};
 use signet_core::config::{DaemonConfig, network_mode_from_bind};
 use signet_core::constants::DEFAULT_EMBEDDING_DIMENSIONS;
@@ -13,6 +13,7 @@ use tokio::signal;
 use tower_http::services::{ServeDir, ServeFile};
 use tracing::{info, warn};
 
+mod analytics;
 #[allow(dead_code)] // Auth module built but not wired into routes until later phases
 mod auth;
 mod feedback;
@@ -1145,6 +1146,10 @@ async fn main() -> anyhow::Result<()> {
         app.route("/", get(routes::diagnostics::dashboard_unavailable))
     }
     .with_state(state.clone());
+    let app = app.layer(middleware::from_fn_with_state(
+        state.clone(),
+        analytics::analytics_middleware,
+    ));
 
     // Bind — use string form so "localhost" resolves via DNS
     let bind_host = config.bind.as_deref().unwrap_or(&config.host);

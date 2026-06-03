@@ -1164,9 +1164,33 @@ impl TestServer {
             .expect("request failed")
     }
 
+    async fn get_with_actor(&self, path: &str, actor: &str) -> reqwest::Response {
+        self.client
+            .get(format!("{}{path}", self.base))
+            .header("x-signet-actor", actor)
+            .send()
+            .await
+            .expect("request failed")
+    }
+
     async fn post(&self, path: &str, body: serde_json::Value) -> reqwest::Response {
         self.client
             .post(format!("{}{path}", self.base))
+            .json(&body)
+            .send()
+            .await
+            .expect("request failed")
+    }
+
+    async fn post_with_actor(
+        &self,
+        path: &str,
+        body: serde_json::Value,
+        actor: &str,
+    ) -> reqwest::Response {
+        self.client
+            .post(format!("{}{path}", self.base))
+            .header("x-signet-actor", actor)
             .json(&body)
             .send()
             .await
@@ -7776,14 +7800,46 @@ async fn reflection_routes_replay_empty_and_validation_shapes() {
 
 #[tokio::test]
 #[ignore = "requires built daemon binary"]
-async fn analytics_collector_routes_return_ts_compatible_empty_snapshots() {
+async fn analytics_collector_routes_record_request_counters_and_latency() {
     let server = TestServer::start().await;
+
+    let resp = server
+        .get_with_actor("/api/status", "analytics-actor")
+        .await;
+    assert_eq!(resp.status(), 200);
+    let resp = server
+        .post_with_actor(
+            "/api/memory/remember",
+            json!({"content": "Analytics parity memory", "type": "fact"}),
+            "analytics-actor",
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let resp = server
+        .post_with_actor(
+            "/api/memory/recall",
+            json!({"query": "Analytics parity memory", "limit": 1}),
+            "analytics-actor",
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
 
     let resp = server.get("/api/analytics/usage").await;
     assert_eq!(resp.status(), 200);
     let body = server.json(resp).await;
-    assert!(body["endpoints"].is_object());
-    assert!(body["actors"].is_object());
+    assert_eq!(body["endpoints"]["GET /api/status"]["count"], 1);
+    assert_eq!(body["endpoints"]["GET /api/status"]["errors"], 0);
+    assert!(
+        body["endpoints"]["GET /api/status"]["totalLatencyMs"]
+            .as_i64()
+            .is_some()
+    );
+    assert_eq!(body["endpoints"]["POST /api/memory/remember"]["count"], 1);
+    assert_eq!(body["endpoints"]["POST /api/memory/recall"]["count"], 1);
+    assert_eq!(body["actors"]["analytics-actor"]["requests"], 1);
+    assert_eq!(body["actors"]["analytics-actor"]["remembers"], 1);
+    assert_eq!(body["actors"]["analytics-actor"]["recalls"], 1);
+    assert_eq!(body["actors"]["analytics-actor"]["mutations"], 0);
     assert!(body["providers"].is_object());
     assert!(body["connectors"].is_object());
 
@@ -7798,7 +7854,9 @@ async fn analytics_collector_routes_return_ts_compatible_empty_snapshots() {
     let resp = server.get("/api/analytics/latency").await;
     assert_eq!(resp.status(), 200);
     let body = server.json(resp).await;
-    assert_eq!(body["remember"]["count"], 0);
+    assert_eq!(body["remember"]["count"], 1);
+    assert_eq!(body["recall"]["count"], 1);
+    assert!(body["remember"]["p50"].as_i64().is_some());
     assert_eq!(body["predictor_train"]["p95"], 0);
 
     let resp = server.get("/api/analytics/logs?limit=5&level=error").await;

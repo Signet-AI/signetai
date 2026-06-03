@@ -14,6 +14,7 @@ use signet_pipeline::worker::{SharedWorkerRuntimeStats, WorkerHandle};
 use signet_services::session::{ContinuityTracker, DedupState, SessionTracker};
 use tokio::sync::{Mutex, RwLock};
 
+use crate::analytics::AnalyticsCollector;
 use crate::auth::rate_limiter::{AuthRateLimiter, RateLimitRule, default_limits};
 use crate::auth::tokens::load_or_create_secret;
 use crate::auth::types::AuthMode;
@@ -455,6 +456,7 @@ pub struct AppState {
     pub openclaw_heartbeat: RwLock<Option<OpenClawHeartbeat>>,
     pub git_config: RwLock<GitRuntimeConfig>,
     pub update_state: RwLock<UpdateRuntimeState>,
+    pub analytics: AnalyticsCollector,
     pub secret_exec_jobs: RwLock<HashMap<String, serde_json::Value>>,
     pub os_agent_sessions: RwLock<HashMap<String, OsAgentSession>>,
 }
@@ -548,6 +550,7 @@ impl AppState {
             openclaw_heartbeat: RwLock::new(None),
             git_config: RwLock::new(git_config),
             update_state: RwLock::new(update_state),
+            analytics: AnalyticsCollector::default(),
             secret_exec_jobs: RwLock::new(HashMap::new()),
             os_agent_sessions: RwLock::new(HashMap::new()),
         }
