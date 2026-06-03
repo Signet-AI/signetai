@@ -31,6 +31,7 @@ use crate::{
 #[derive(Debug, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct ProposalQuery {
+    #[serde(alias = "agent_id")]
     agent_id: Option<String>,
     status: Option<String>,
     operation: Option<String>,
@@ -129,6 +130,17 @@ struct EntityRow {
     proposal_id: Option<String>,
     proposal_evidence: String,
     created_at: String,
+    updated_at: String,
+}
+
+#[derive(Clone, Debug)]
+struct DuplicateEntityRow {
+    id: String,
+    name: String,
+    canonical_name: Option<String>,
+    entity_type: String,
+    mentions: i64,
+    pinned: bool,
     updated_at: String,
 }
 
@@ -623,6 +635,49 @@ fn canonical_path_key(value: &str) -> String {
     canonical(value).replace(' ', "_")
 }
 
+fn duplicate_entity_key(row: &DuplicateEntityRow) -> String {
+    canonical(row.canonical_name.as_deref().unwrap_or(&row.name))
+}
+
+fn duplicate_entity_ref(row: &DuplicateEntityRow, key: &str) -> JsonValue {
+    json!({
+        "id": row.id,
+        "name": row.name,
+        "canonicalName": key,
+        "entityType": row.entity_type,
+        "mentions": row.mentions,
+        "pinned": row.pinned,
+        "updatedAt": row.updated_at,
+    })
+}
+
+fn time_rank(value: &str) -> i64 {
+    chrono::DateTime::parse_from_rfc3339(value)
+        .map(|dt| dt.timestamp_millis())
+        .unwrap_or(0)
+}
+
+fn compare_duplicate_targets(a: &DuplicateEntityRow, b: &DuplicateEntityRow) -> std::cmp::Ordering {
+    b.pinned
+        .cmp(&a.pinned)
+        .then_with(|| b.mentions.cmp(&a.mentions))
+        .then_with(|| time_rank(&b.updated_at).cmp(&time_rank(&a.updated_at)))
+        .then_with(|| a.name.len().cmp(&b.name.len()))
+        .then_with(|| a.name.cmp(&b.name))
+}
+
+fn read_duplicate_entity_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DuplicateEntityRow> {
+    Ok(DuplicateEntityRow {
+        id: row.get("id")?,
+        name: row.get("name")?,
+        canonical_name: row.get("canonical_name")?,
+        entity_type: row.get("entity_type")?,
+        mentions: row.get::<_, Option<i64>>("mentions")?.unwrap_or(0),
+        pinned: row.get::<_, Option<i64>>("pinned")?.unwrap_or(0) != 0,
+        updated_at: row.get("updated_at")?,
+    })
+}
+
 fn read_payload_string(payload: &JsonValue, key: &str) -> Option<String> {
     payload
         .get(key)
@@ -1046,6 +1101,237 @@ fn link_evidence_refs(dependency: &DependencyEvidenceRow) -> Vec<EvidenceRef> {
         });
     }
     unique_evidence_refs(refs)
+}
+
+fn count_for_source_ids(
+    conn: &rusqlite::Connection,
+    sql_template: &str,
+    agent_id: Option<&str>,
+    ids: &[String],
+    repeat_ids: usize,
+) -> Result<i64, CoreError> {
+    if ids.is_empty() {
+        return Ok(0);
+    }
+    let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+    let sql = sql_template.replace("{ids}", &placeholders);
+    let mut args = Vec::new();
+    if let Some(agent_id) = agent_id {
+        args.push(Value::Text(agent_id.to_string()));
+    }
+    for _ in 0..repeat_ids {
+        args.extend(ids.iter().cloned().map(Value::Text));
+    }
+    let params: Vec<&dyn ToSql> = args.iter().map(|v| v as &dyn ToSql).collect();
+    conn.query_row(&sql, params.as_slice(), |row| row.get::<_, i64>(0))
+        .map_err(Into::into)
+}
+
+fn duplicate_merge_impact(
+    conn: &rusqlite::Connection,
+    agent_id: &str,
+    sources: &[DuplicateEntityRow],
+) -> Result<JsonValue, CoreError> {
+    let ids = sources
+        .iter()
+        .map(|source| source.id.clone())
+        .collect::<Vec<_>>();
+    if ids.is_empty() {
+        return Ok(json!({
+            "sourceMentions": 0,
+            "memoryMentions": 0,
+            "aspects": 0,
+            "attributes": 0,
+            "dependencies": 0,
+            "relations": 0,
+        }));
+    }
+    let source_mentions = sources.iter().map(|source| source.mentions).sum::<i64>();
+    let aspects = count_for_source_ids(
+        conn,
+        "SELECT COUNT(*) FROM entity_aspects WHERE agent_id = ? AND entity_id IN ({ids})",
+        Some(agent_id),
+        &ids,
+        1,
+    )?;
+    let attributes = count_for_source_ids(
+        conn,
+        "SELECT COUNT(*)
+         FROM entity_attributes attr
+         JOIN entity_aspects asp ON asp.id = attr.aspect_id
+         WHERE attr.agent_id = ? AND asp.entity_id IN ({ids})",
+        Some(agent_id),
+        &ids,
+        1,
+    )?;
+    let dependencies = count_for_source_ids(
+        conn,
+        "SELECT COUNT(*)
+         FROM entity_dependencies
+         WHERE agent_id = ? AND (source_entity_id IN ({ids}) OR target_entity_id IN ({ids}))",
+        Some(agent_id),
+        &ids,
+        2,
+    )?;
+    let relations = count_for_source_ids(
+        conn,
+        "SELECT COUNT(*)
+         FROM relations
+         WHERE source_entity_id IN ({ids}) OR target_entity_id IN ({ids})",
+        None,
+        &ids,
+        2,
+    )?;
+    let memory_mentions = count_for_source_ids(
+        conn,
+        "SELECT COUNT(*) FROM memory_entity_mentions WHERE entity_id IN ({ids})",
+        None,
+        &ids,
+        1,
+    )?;
+    Ok(json!({
+        "sourceMentions": source_mentions,
+        "memoryMentions": memory_mentions,
+        "aspects": aspects,
+        "attributes": attributes,
+        "dependencies": dependencies,
+        "relations": relations,
+    }))
+}
+
+fn pending_duplicate_repair_keys(
+    conn: &rusqlite::Connection,
+    agent_id: &str,
+) -> Result<std::collections::HashSet<String>, CoreError> {
+    let mut stmt = conn.prepare(
+        "SELECT payload FROM ontology_proposals
+         WHERE agent_id = ?1 AND status = 'pending' AND operation = 'merge_entities'
+         ORDER BY updated_at DESC
+         LIMIT 1000",
+    )?;
+    let rows = stmt
+        .query_map(rusqlite::params![agent_id], |row| {
+            row.get::<_, String>("payload")
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|payload| {
+            let payload = parse_json(&payload, json!({}));
+            (payload.get("repair_kind").and_then(|v| v.as_str()) == Some("duplicate_entities"))
+                .then(|| {
+                    payload
+                        .get("canonical_name")
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string)
+                })
+                .flatten()
+        })
+        .collect())
+}
+
+fn duplicate_merge_candidates(
+    conn: &rusqlite::Connection,
+    agent_id: &str,
+    limit: i64,
+) -> Result<Vec<JsonValue>, CoreError> {
+    let existing = pending_duplicate_repair_keys(conn, agent_id)?;
+    let mut stmt = conn.prepare(
+        "SELECT id, name, canonical_name, entity_type,
+                COALESCE(mentions, 0) AS mentions,
+                COALESCE(pinned, 0) AS pinned,
+                updated_at
+         FROM entities
+         WHERE agent_id = ?1
+           AND COALESCE(status, 'active') = 'active'
+         ORDER BY COALESCE(canonical_name, LOWER(name)), COALESCE(mentions, 0) DESC, updated_at DESC",
+    )?;
+    let rows = stmt
+        .query_map(rusqlite::params![agent_id], read_duplicate_entity_row)?
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut groups: std::collections::BTreeMap<String, Vec<DuplicateEntityRow>> =
+        std::collections::BTreeMap::new();
+    for row in rows {
+        let key = duplicate_entity_key(&row);
+        groups.entry(key).or_default().push(row);
+    }
+
+    let mut candidates = Vec::new();
+    for (key, mut group) in groups {
+        if key.is_empty() || group.len() < 2 || existing.contains(&key) {
+            continue;
+        }
+        group.sort_by(compare_duplicate_targets);
+        let target = group[0].clone();
+        let sources = group[1..].to_vec();
+        let mut warnings = Vec::new();
+        for source in &sources {
+            if source.pinned {
+                warnings.push(format!("source entity \"{}\" is pinned", source.name));
+            }
+            if source.entity_type != target.entity_type {
+                warnings.push(format!(
+                    "source entity \"{}\" type {} differs from target type {}",
+                    source.name, source.entity_type, target.entity_type
+                ));
+            }
+        }
+        let blocked = !warnings.is_empty();
+        let risk = if blocked { "blocked" } else { "low" };
+        let evidence = vec![json!({
+            "source_kind": "ontology_index",
+            "source_id": format!("entities:{key}"),
+            "quote": format!(
+                "Duplicate canonical_name \"{key}\" appears on {}.",
+                group.iter().map(|row| row.name.as_str()).collect::<Vec<_>>().join(", ")
+            ),
+        })];
+        let payload = json!({
+            "repair_kind": "duplicate_entities",
+            "target_entity": target.name,
+            "target_entity_id": target.id,
+            "source_entities": sources.iter().map(|source| source.name.clone()).collect::<Vec<_>>(),
+            "source_entity_ids": sources.iter().map(|source| source.id.clone()).collect::<Vec<_>>(),
+            "canonical_name": key,
+        });
+        candidates.push(json!({
+            "operation": "merge_entities",
+            "canonicalName": key,
+            "target": duplicate_entity_ref(&target, &key),
+            "sources": sources.iter().map(|source| duplicate_entity_ref(source, &key)).collect::<Vec<_>>(),
+            "payload": payload,
+            "impact": duplicate_merge_impact(conn, agent_id, &sources)?,
+            "warnings": warnings,
+            "blocked": blocked,
+            "confidence": if blocked { 0.72 } else { 0.86 },
+            "rationale": format!(
+                "Entities share canonical_name \"{key}\" in the same agent scope."
+            ),
+            "evidence": evidence,
+            "risk": risk,
+        }));
+    }
+    candidates.sort_by(|a, b| {
+        let a_sources = a
+            .get("sources")
+            .and_then(|v| v.as_array())
+            .map_or(0, Vec::len);
+        let b_sources = b
+            .get("sources")
+            .and_then(|v| v.as_array())
+            .map_or(0, Vec::len);
+        b_sources.cmp(&a_sources).then_with(|| {
+            a.get("canonicalName")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .cmp(
+                    b.get("canonicalName")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default(),
+                )
+        })
+    });
+    Ok(candidates.into_iter().take(limit as usize).collect())
 }
 
 fn proposal_audit_evidence(row: &ProposalRow) -> String {
@@ -2093,15 +2379,111 @@ pub async fn repair_duplicates(
     State(state): State<Arc<AppState>>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
+    Query(query): Query<ProposalQuery>,
+    Json(body): Json<ProposalBody>,
 ) -> Response {
-    if let Err(resp) = scoped_agent_or_response(&state, peer, &headers, None, Permission::Modify) {
-        return resp;
+    let requested_agent = query.agent_id.as_deref().or(body.agent_id.as_deref());
+    let agent =
+        match scoped_agent_or_response(&state, peer, &headers, requested_agent, Permission::Modify)
+        {
+            Ok(id) => id,
+            Err(resp) => return resp,
+        };
+    let limit = body.limit.unwrap_or(25).clamp(1, 100);
+    let write_proposals = body.write_proposals.unwrap_or(false);
+    let created_by = clean(body.created_by)
+        .or_else(|| {
+            headers
+                .get("x-signet-actor")
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| "operator".to_string());
+    let result = state
+        .pool
+        .write(Priority::Low, move |conn| {
+            let items = duplicate_merge_candidates(conn, &agent, limit)?;
+            let dry_run = !write_proposals;
+            let writable = items
+                .iter()
+                .filter(|item| {
+                    !item
+                        .get("blocked")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false)
+                })
+                .collect::<Vec<_>>();
+            if dry_run || writable.is_empty() {
+                return Ok::<JsonValue, CoreError>(json!({
+                    "items": items,
+                    "proposals": [],
+                    "count": items.len(),
+                    "writtenCount": 0,
+                    "skippedCount": items.len() - writable.len(),
+                    "dryRun": dry_run,
+                }));
+            }
+            let mut proposals = Vec::new();
+            for item in writable {
+                let canonical_name = item
+                    .get("canonicalName")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default();
+                let evidence = item
+                    .get("evidence")
+                    .and_then(|v| v.as_array())
+                    .cloned()
+                    .unwrap_or_default();
+                proposals.push(insert_proposal(
+                    conn,
+                    ProposalBody {
+                        agent_id: Some(agent.clone()),
+                        operation: Some("merge_entities".to_string()),
+                        payload: item.get("payload").cloned(),
+                        confidence: item.get("confidence").and_then(|v| v.as_f64()),
+                        rationale: item
+                            .get("rationale")
+                            .and_then(|v| v.as_str())
+                            .map(str::to_string),
+                        evidence: Some(evidence),
+                        risk: item
+                            .get("risk")
+                            .and_then(|v| v.as_str())
+                            .map(str::to_string),
+                        source_kind: Some("ontology_index".to_string()),
+                        source_id: Some(format!("entities:{canonical_name}")),
+                        source_path: None,
+                        source_root: None,
+                        created_by: Some(created_by.clone()),
+                        actor: None,
+                        reason: None,
+                        proposals: None,
+                        write_proposals: None,
+                        use_provider: None,
+                        status: None,
+                        limit: None,
+                    },
+                    &agent,
+                )?);
+            }
+            Ok(json!({
+                "items": items,
+                "proposals": proposals,
+                "count": items.len(),
+                "writtenCount": proposals.len(),
+                "skippedCount": items.len() - proposals.len(),
+                "dryRun": false,
+            }))
+        })
+        .await;
+    match result {
+        Ok(value) => (StatusCode::OK, Json(value)).into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": error.to_string()})),
+        )
+            .into_response(),
     }
-    (
-        StatusCode::OK,
-        Json(json!({"items": [], "proposals": [], "count": 0, "writtenCount": 0, "dryRun": true})),
-    )
-        .into_response()
 }
 
 pub async fn extract(

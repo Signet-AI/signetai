@@ -777,6 +777,65 @@ impl TestServer {
         .expect("seed ontology consolidation fixture");
     }
 
+    fn seed_ontology_duplicate_repair_fixture(&self) {
+        let conn = rusqlite::Connection::open(self.db_path()).expect("open replay db");
+        conn.busy_timeout(Duration::from_secs(5)).unwrap();
+        conn.execute_batch(
+            r#"INSERT INTO entities
+               (id, name, canonical_name, entity_type, agent_id, mentions, pinned,
+                status, created_at, updated_at)
+               VALUES
+               ('entity-dup-signet', 'Signet', 'signet', 'project', 'default',
+                8, 1, 'active', '2026-01-04T00:00:00.000Z',
+                '2026-01-04T00:00:00.000Z'),
+               ('entity-dup-signet-upper', 'SIGNET', 'signet', 'project',
+                'default', 3, 0, 'active', '2026-01-04T00:00:00.000Z',
+                '2026-01-04T00:00:00.000Z'),
+               ('entity-dup-signet-ai', 'signet.ai', 'signet', 'project',
+                'default', 1, 0, 'active', '2026-01-04T00:00:00.000Z',
+                '2026-01-04T00:00:00.000Z'),
+               ('entity-dup-mixed-project', 'Mixed', 'mixed', 'project',
+                'default', 8, 0, 'active', '2026-01-04T00:00:00.000Z',
+                '2026-01-04T00:00:00.000Z'),
+               ('entity-dup-mixed-skill', 'mixed', 'mixed', 'skill',
+                'default', 3, 0, 'active', '2026-01-04T00:00:00.000Z',
+                '2026-01-04T00:00:00.000Z'),
+               ('entity-dup-other-agent', 'Signet Other', 'signet', 'project',
+                'other-agent', 5, 0, 'active', '2026-01-04T00:00:00.000Z',
+                '2026-01-04T00:00:00.000Z');
+
+               INSERT INTO entity_aspects
+               (id, entity_id, agent_id, name, canonical_name, weight, status,
+                created_at, updated_at)
+               VALUES
+               ('aspect-dup-signet-upper', 'entity-dup-signet-upper', 'default',
+                'identity', 'identity', 0.8, 'active',
+                '2026-01-04T00:00:00.000Z', '2026-01-04T00:00:00.000Z');
+
+               INSERT INTO entity_attributes
+               (id, aspect_id, agent_id, kind, content, normalized_content,
+                confidence, importance, status, created_at, updated_at)
+               VALUES
+               ('attr-dup-signet-upper', 'aspect-dup-signet-upper', 'default',
+                'attribute', 'Duplicate source attribute.',
+                'duplicate source attribute.', 0.8, 0.8, 'active',
+                '2026-01-04T00:00:00.000Z', '2026-01-04T00:00:00.000Z');
+
+               INSERT INTO memories
+               (id, type, content, confidence, importance, tags, who, project,
+                created_at, updated_at, updated_by, agent_id)
+               VALUES
+               ('memory-dup-source', 'fact', 'Duplicate source memory.',
+                1.0, 0.8, 'ontology', 'test', 'signet',
+                '2026-01-04T00:00:00.000Z', '2026-01-04T00:00:00.000Z',
+                'contract-replay', 'default');
+
+               INSERT INTO memory_entity_mentions (memory_id, entity_id)
+               VALUES ('memory-dup-source', 'entity-dup-signet-upper');"#,
+        )
+        .expect("seed ontology duplicate repair fixture");
+    }
+
     fn seed_knowledge_legacy_route_fixture(&self) {
         let conn = rusqlite::Connection::open(self.db_path()).expect("open replay db");
         conn.busy_timeout(Duration::from_secs(5)).unwrap();
@@ -8863,6 +8922,90 @@ async fn ontology_consolidate_reports_source_counts_and_noop_mode() {
         body["warnings"][0],
         "Provider consolidation requested but no inference provider is configured."
     );
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn ontology_duplicate_repair_builds_and_writes_merge_candidates() {
+    let server = TestServer::start().await;
+    server.seed_ontology_duplicate_repair_fixture();
+
+    let resp = server
+        .post(
+            "/api/ontology/proposals/repair/duplicates",
+            json!({"limit": 10}),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["dryRun"], true);
+    assert_eq!(body["writtenCount"], 0);
+    assert_eq!(body["count"], 2);
+    let items = body["items"].as_array().expect("repair items");
+    let signet = items
+        .iter()
+        .find(|item| item["canonicalName"] == "signet")
+        .expect("signet duplicate candidate");
+    assert_eq!(signet["operation"], "merge_entities");
+    assert_eq!(signet["target"]["name"], "Signet");
+    assert_eq!(signet["sources"].as_array().unwrap().len(), 2);
+    assert_eq!(signet["blocked"], false);
+    assert_eq!(signet["payload"]["repair_kind"], "duplicate_entities");
+    assert_eq!(
+        signet["payload"]["source_entities"],
+        json!(["SIGNET", "signet.ai"])
+    );
+    assert_eq!(signet["impact"]["aspects"], 1);
+    assert_eq!(signet["impact"]["attributes"], 1);
+    assert_eq!(signet["impact"]["memoryMentions"], 1);
+    let mixed = items
+        .iter()
+        .find(|item| item["canonicalName"] == "mixed")
+        .expect("mixed duplicate candidate");
+    assert_eq!(mixed["blocked"], true);
+    assert!(
+        mixed["warnings"][0]
+            .as_str()
+            .unwrap_or_default()
+            .contains("differs from target type")
+    );
+
+    let resp = server
+        .post(
+            "/api/ontology/proposals/repair/duplicates?agent_id=other-agent",
+            json!({"limit": 10}),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["count"], 0);
+
+    let resp = server
+        .post(
+            "/api/ontology/proposals/repair/duplicates",
+            json!({"limit": 10, "write_proposals": true, "created_by": "repair-test"}),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["dryRun"], false);
+    assert_eq!(body["writtenCount"], 1);
+    assert_eq!(body["skippedCount"], 1);
+    assert_eq!(body["proposals"][0]["operation"], "merge_entities");
+    assert_eq!(body["proposals"][0]["createdBy"], "repair-test");
+    assert_eq!(body["proposals"][0]["payload"]["canonical_name"], "signet");
+
+    let resp = server
+        .post(
+            "/api/ontology/proposals/repair/duplicates",
+            json!({"limit": 10, "write_proposals": true, "created_by": "repair-test"}),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["writtenCount"], 0);
+    assert_eq!(body["skippedCount"], 1);
+    assert_eq!(body["items"][0]["canonicalName"], "mixed");
 }
 
 #[tokio::test]
