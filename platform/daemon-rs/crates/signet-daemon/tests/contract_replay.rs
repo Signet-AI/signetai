@@ -1965,7 +1965,61 @@ impl EmbeddingFixture {
                 let mut buffer = [0_u8; 4096];
                 let read = stream.read(&mut buffer).unwrap_or(0);
                 let request = String::from_utf8_lossy(&buffer[..read]);
-                let body = if request.starts_with("POST /v1/chat/completions ") {
+                let body = if request.starts_with("POST /api/generate ") {
+                    thread_llm_requests.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    let response = if request.contains("Signet ontology consolidation") {
+                        serde_json::json!({
+                            "summary": "Merged duplicate Signet proposal candidates into one durable claim.",
+                            "proposals": [{
+                                "operation": "add_claim_value",
+                                "payload": {
+                                    "entity": "Signet",
+                                    "aspect": "architecture",
+                                    "claim_key": "proposal_loop",
+                                    "value": "A"
+                                },
+                                "confidence": 0.91,
+                                "rationale": "Pending candidates describe the same claim slot.",
+                                "evidence": [{
+                                    "source_kind": "ontology_proposal",
+                                    "source_id": "proposal-consolidate-pending-a",
+                                    "quote": "Pending proposal A."
+                                }],
+                                "risk": "low"
+                            }],
+                            "rejections": [{
+                                "candidate_id": "proposal-consolidate-pending-b",
+                                "reason": "duplicate"
+                            }],
+                            "conflicts": [{
+                                "claim_slot": "architecture/proposal_loop",
+                                "values": ["A", "B"],
+                                "recommended_reducer": "prefer stable sourced value",
+                                "needs_review": true
+                            }],
+                            "maintenance": [{
+                                "operation": "request_review",
+                                "target": "proposal-consolidate-pending-b",
+                                "reason": "duplicate candidate"
+                            }]
+                        })
+                        .to_string()
+                    } else {
+                        serde_json::json!({
+                            "description": "Generated ollama replay metadata.",
+                            "triggers": ["run ollama replay"],
+                            "tags": ["replay"]
+                        })
+                        .to_string()
+                    };
+                    json!({
+                        "response": response,
+                        "eval_count": 1,
+                        "prompt_eval_count": 1,
+                        "total_duration": 1
+                    })
+                    .to_string()
+                } else if request.starts_with("POST /v1/chat/completions ") {
                     thread_llm_requests.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                     if request.contains("Extract key facts and entity relationships") {
                         thread_extraction_requests
@@ -8922,6 +8976,73 @@ async fn ontology_consolidate_reports_source_counts_and_noop_mode() {
         body["warnings"][0],
         "Provider consolidation requested but no inference provider is configured."
     );
+
+    let fixture = EmbeddingFixture::start();
+    let provider_server = TestServer::start_with_agent_yaml(
+        None,
+        &format!(
+            "agent:\n  name: test-agent\n  version: 1\nmemory:\n  pipelineV2:\n    extractionProvider: ollama\n    extractionModel: replay-llm\n    extractionEndpoint: {}\n    extraction:\n      provider: ollama\n      model: replay-llm\n      endpoint: {}\n      timeout: 5000\n",
+            fixture.base, fixture.base
+        ),
+    )
+    .await;
+    provider_server.seed_ontology_consolidation_fixture();
+
+    let resp = provider_server
+        .post("/api/ontology/consolidate", json!({"use_provider": true}))
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = provider_server.json(resp).await;
+    assert_eq!(body["sourceProposalCount"], 2);
+    assert_eq!(body["consolidationMode"], "provider");
+    assert_eq!(body["providerName"], "ollama");
+    assert_eq!(
+        body["summary"],
+        "Merged duplicate Signet proposal candidates into one durable claim."
+    );
+    assert_eq!(body["count"], 1);
+    assert_eq!(body["writtenCount"], 0);
+    assert_eq!(body["dryRun"], true);
+    assert_eq!(body["proposals"][0]["operation"], "add_claim_value");
+    assert_eq!(body["proposals"][0]["payload"]["entity"], "Signet");
+    assert_eq!(
+        body["rejections"][0]["candidate_id"],
+        "proposal-consolidate-pending-b"
+    );
+    assert_eq!(
+        body["conflicts"][0]["claim_slot"],
+        "architecture/proposal_loop"
+    );
+    assert_eq!(body["maintenance"][0]["operation"], "request_review");
+
+    let resp = provider_server
+        .post_with_actor(
+            "/api/ontology/consolidate",
+            json!({"use_provider": true, "write_proposals": true}),
+            "consolidate-test",
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = provider_server.json(resp).await;
+    assert_eq!(body["consolidationMode"], "provider");
+    assert_eq!(body["count"], 1);
+    assert_eq!(body["writtenCount"], 1);
+    assert_eq!(body["dryRun"], false);
+    assert_eq!(body["items"][0]["createdBy"], "consolidate-test");
+    assert_eq!(body["items"][0]["sourceKind"], "ontology_consolidation");
+    assert_eq!(body["items"][0]["sourceId"], "proposals:2");
+
+    let conn = rusqlite::Connection::open(provider_server.db_path()).expect("open replay db");
+    let original_pending_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM ontology_proposals
+             WHERE id IN ('proposal-consolidate-pending-a', 'proposal-consolidate-pending-b')
+               AND status = 'pending'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("count original consolidation proposals");
+    assert_eq!(original_pending_count, 2);
 }
 
 #[tokio::test]

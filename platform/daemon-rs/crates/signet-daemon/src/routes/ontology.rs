@@ -18,6 +18,7 @@ use rusqlite::{OptionalExtension, ToSql, types::Value};
 use serde::Deserialize;
 use serde_json::{Value as JsonValue, json};
 use signet_core::{db::Priority, error::CoreError};
+use signet_pipeline::provider::GenerateOpts;
 use uuid::Uuid;
 
 use crate::{
@@ -67,6 +68,10 @@ pub struct ProposalBody {
     write_assertions: Option<bool>,
     #[serde(alias = "use_provider")]
     use_provider: Option<bool>,
+    #[serde(alias = "provider_timeout_ms")]
+    provider_timeout_ms: Option<i64>,
+    #[serde(alias = "provider_max_tokens")]
+    provider_max_tokens: Option<i64>,
     status: Option<String>,
     limit: Option<i64>,
 }
@@ -2250,6 +2255,202 @@ fn dedupe_proposals(proposals: Vec<JsonValue>, limit: usize) -> Vec<JsonValue> {
         .collect()
 }
 
+fn proposal_prompt_value(row: &ProposalRow) -> JsonValue {
+    json!({
+        "id": row.id,
+        "operation": row.operation,
+        "payload": parse_json(&row.payload, json!({})),
+        "confidence": row.confidence,
+        "rationale": row.rationale,
+        "evidence": parse_json(&row.evidence, json!([])),
+        "risk": row.risk,
+        "sourceKind": row.source_kind,
+        "sourceId": row.source_id,
+        "sourcePath": row.source_path,
+        "createdAt": row.created_at,
+    })
+}
+
+fn consolidation_prompt(source: &[JsonValue], conflicts: &[JsonValue]) -> String {
+    format!(
+        r#"You are performing Signet ontology consolidation.
+
+Goal:
+Turn noisy pending ontology proposals into a compact set of stable ontology proposals.
+Do not mutate the ontology. Output proposals only.
+
+Rules:
+1. Contact is not meaning. Do not preserve every mention.
+2. Prefer existing proposal operations: create_entity, add_claim_value, supersede_claim_value, create_link, merge_entities.
+3. Prefer claim slots with multiple values over destructive overwrites.
+4. Preserve provenance for every promoted value.
+5. Mark weak, temporary, duplicate, or ambiguous candidates as rejections instead of promoting them.
+6. Return ONLY JSON.
+
+Return JSON:
+{{
+  "summary": "what changed and why",
+  "proposals": [
+    {{
+      "operation": "create_entity|add_claim_value|supersede_claim_value|create_link|merge_entities",
+      "payload": {{}},
+      "confidence": 0.0,
+      "rationale": "string",
+      "evidence": [{{ "source_kind": "ontology_proposal", "source_id": "proposal-id", "quote": "why this proposal was used" }}],
+      "risk": "low|medium|high"
+    }}
+  ],
+  "rejections": [
+    {{ "candidate_id": "string", "reason": "duplicate|weak_evidence|temporary_task|not_durable|ambiguous|contradicted" }}
+  ],
+  "conflicts": [
+    {{ "claim_slot": "string", "values": ["..."], "recommended_reducer": "string", "needs_review": true }}
+  ],
+  "maintenance": [
+    {{ "operation": "request_review|mark_stale|merge_duplicate", "target": "string", "reason": "string" }}
+  ]
+}}
+
+Pending proposals:
+{}
+
+Current conflicts:
+{}"#,
+        serde_json::to_string_pretty(source).unwrap_or_else(|_| "[]".to_string()),
+        serde_json::to_string_pretty(conflicts).unwrap_or_else(|_| "[]".to_string())
+    )
+}
+
+fn normalize_consolidation_promotions(root: &JsonValue) -> Vec<JsonValue> {
+    read_json_array(root, "promotions")
+        .into_iter()
+        .filter_map(|item| {
+            proposal_draft(
+                &read_json_string(&item, "operation")?,
+                item.get("payload")
+                    .or_else(|| item.get("target"))
+                    .cloned()
+                    .unwrap_or_else(|| json!({})),
+                &item,
+                "Consolidated noisy candidates into a stable ontology proposal.",
+            )
+        })
+        .collect()
+}
+
+fn parse_consolidation_output(
+    raw: &str,
+    limit: usize,
+) -> (
+    Vec<JsonValue>,
+    Option<String>,
+    Vec<JsonValue>,
+    Vec<JsonValue>,
+    Vec<JsonValue>,
+) {
+    for root in json_blocks(raw) {
+        if !root.is_object() {
+            continue;
+        }
+        let (explicit, _, _) = normalize_proposal_json(&root);
+        let mut proposals = explicit;
+        proposals.extend(normalize_consolidation_promotions(&root));
+        return (
+            dedupe_proposals(proposals, limit),
+            read_json_string(&root, "summary"),
+            read_json_array(&root, "rejections"),
+            read_json_array(&root, "conflicts"),
+            read_json_array(&root, "maintenance"),
+        );
+    }
+    (Vec::new(), None, Vec::new(), Vec::new(), Vec::new())
+}
+
+fn claim_conflict_values(
+    conn: &rusqlite::Connection,
+    agent_id: &str,
+    limit: i64,
+) -> Result<Vec<JsonValue>, CoreError> {
+    let rows = conn
+        .prepare(&format!(
+            "{SELECT_PROPOSAL}
+             WHERE agent_id = ?1 AND status = 'pending' AND operation = 'add_claim_value'
+             ORDER BY updated_at DESC
+             LIMIT ?2"
+        ))?
+        .query_map(rusqlite::params![agent_id, limit], read_row)?
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut groups = std::collections::BTreeMap::<String, JsonValue>::new();
+    for row in rows {
+        let payload = parse_json(&row.payload, json!({}));
+        let Some(entity) = read_payload_string(&payload, "entity") else {
+            continue;
+        };
+        let Some(aspect) = read_payload_string(&payload, "aspect") else {
+            continue;
+        };
+        let Some(claim_key) = read_payload_string(&payload, "claim_key") else {
+            continue;
+        };
+        let Some(value) = read_payload_string(&payload, "value") else {
+            continue;
+        };
+        let group_key =
+            read_payload_string(&payload, "group_key").unwrap_or_else(|| "general".to_string());
+        let key = [
+            canonical(&entity),
+            canonical(&aspect),
+            canonical(&group_key),
+            canonical(&claim_key),
+        ]
+        .join("\0");
+        let entry = groups.entry(key).or_insert_with(|| {
+            json!({
+                "entity": entity,
+                "aspect": aspect,
+                "groupKey": group_key,
+                "claimKey": claim_key,
+                "values": [],
+                "proposalIds": [],
+                "count": 0,
+            })
+        });
+        if let Some(values) = entry.get_mut("values").and_then(JsonValue::as_array_mut) {
+            values.push(json!({
+                "proposalId": row.id.clone(),
+                "value": value,
+                "confidence": row.confidence,
+                "rationale": row.rationale,
+                "evidenceCount": parse_json(&row.evidence, json!([])).as_array().map_or(0, Vec::len),
+            }));
+        }
+        if let Some(ids) = entry
+            .get_mut("proposalIds")
+            .and_then(JsonValue::as_array_mut)
+        {
+            ids.push(JsonValue::String(row.id));
+        }
+        let count = entry.get("count").and_then(JsonValue::as_i64).unwrap_or(0) + 1;
+        entry["count"] = JsonValue::Number(count.into());
+    }
+    Ok(groups
+        .into_values()
+        .filter(|group| {
+            let values = group
+                .get("values")
+                .and_then(JsonValue::as_array)
+                .cloned()
+                .unwrap_or_default();
+            values
+                .into_iter()
+                .filter_map(|item| item.get("value").and_then(JsonValue::as_str).map(canonical))
+                .collect::<std::collections::HashSet<_>>()
+                .len()
+                > 1
+        })
+        .collect())
+}
+
 fn extracted_proposals_and_assertions(
     source: &ExtractionSource,
     limit: usize,
@@ -3912,6 +4113,8 @@ pub async fn repair_merge_plan(
                         write_proposals: None,
                         write_assertions: None,
                         use_provider: None,
+                        provider_timeout_ms: None,
+                        provider_max_tokens: None,
                         status: None,
                         limit: None,
                     },
@@ -4450,6 +4653,8 @@ pub async fn repair_duplicates(
                         write_proposals: None,
                         write_assertions: None,
                         use_provider: None,
+                        provider_timeout_ms: None,
+                        provider_max_tokens: None,
                         status: None,
                         limit: None,
                     },
@@ -4552,6 +4757,8 @@ pub async fn extract(
                                 write_proposals: None,
                                 write_assertions: None,
                                 use_provider: None,
+                                provider_timeout_ms: None,
+                                provider_max_tokens: None,
                                 status: None,
                                 limit: None,
                             },
@@ -4612,15 +4819,16 @@ pub async fn consolidate(
     headers: HeaderMap,
     Json(body): Json<ProposalBody>,
 ) -> Response {
-    if let Err(resp) = scoped_agent_or_response(
+    let agent = match scoped_agent_or_response(
         &state,
         peer,
         &headers,
         body.agent_id.as_deref(),
         Permission::Modify,
     ) {
-        return resp;
-    }
+        Ok(agent) => agent,
+        Err(resp) => return resp,
+    };
     if body.limit.is_some_and(|l| l < 0) {
         return (
             StatusCode::BAD_REQUEST,
@@ -4638,50 +4846,197 @@ pub async fn consolidate(
     }
     let limit = body.limit.unwrap_or(50).clamp(1, 200);
     let use_provider = body.use_provider.unwrap_or(false);
-    let agent = agent_id(body.agent_id);
-    let result = state
+    let write_proposals = body.write_proposals.unwrap_or(false);
+    let created_by = clean(body.created_by.clone())
+        .or_else(|| {
+            headers
+                .get("x-signet-actor")
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| "ontology-consolidate".to_string());
+    let provider_timeout_ms = body
+        .provider_timeout_ms
+        .unwrap_or(120_000)
+        .clamp(1_000, 10 * 60_000) as u64;
+    let provider_max_tokens = body.provider_max_tokens.unwrap_or(4096).clamp(1, 16_000) as u32;
+
+    let read_agent = agent.clone();
+    let source_result = state
         .pool
         .read(move |conn| {
-            let mut stmt = conn.prepare(
-                "SELECT id FROM ontology_proposals
+            let mut stmt = conn.prepare(&format!(
+                "{SELECT_PROPOSAL}
                  WHERE agent_id = ?1 AND status = ?2
                  ORDER BY updated_at DESC, created_at DESC
-                 LIMIT ?3",
-            )?;
-            let source_ids = stmt
-                .query_map(rusqlite::params![agent, status, limit], |row| {
-                    row.get::<_, String>(0)
-                })?
+                 LIMIT ?3"
+            ))?;
+            let source_rows = stmt
+                .query_map(
+                    rusqlite::params![read_agent.as_str(), status, limit],
+                    read_row,
+                )?
                 .collect::<Result<Vec<_>, _>>()?;
-            Ok::<JsonValue, CoreError>(json!({
-                "sourceProposalCount": source_ids.len(),
-                "proposals": [],
-                "items": [],
-                "count": 0,
-                "writtenCount": 0,
-                "dryRun": true,
-                "consolidationMode": "noop",
-                "providerName": null,
-                "summary": null,
-                "rejections": [],
-                "conflicts": [],
-                "maintenance": [],
-                "warnings": [if use_provider {
-                    "Provider consolidation requested but no inference provider is configured."
-                } else {
-                    "Consolidation is provider-backed; pass use_provider to run the configured inference workload."
-                }],
-            }))
+            let source = source_rows
+                .iter()
+                .map(proposal_prompt_value)
+                .collect::<Vec<_>>();
+            let conflicts = claim_conflict_values(conn, &read_agent, limit.max(50))?;
+            Ok::<(Vec<JsonValue>, Vec<JsonValue>), CoreError>((source, conflicts))
         })
         .await;
-    match result {
-        Ok(value) => (StatusCode::OK, Json(value)).into_response(),
-        Err(error) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"error": error.to_string()})),
-        )
-            .into_response(),
-    }
+    let (source, conflict_items) = match source_result {
+        Ok(value) => value,
+        Err(error) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()),
+    };
+
+    let provider = if use_provider {
+        state.llm.read().await.clone()
+    } else {
+        None
+    };
+    let provider_name = provider
+        .as_ref()
+        .map(|provider| provider.name().to_string());
+    let mut warnings = Vec::<String>::new();
+    let mut summary = None;
+    let mut rejections = Vec::new();
+    let mut result_conflicts = Vec::new();
+    let mut maintenance = Vec::new();
+    let proposals = if use_provider {
+        if let Some(provider) = provider.as_ref() {
+            let prompt = consolidation_prompt(&source, &conflict_items);
+            match provider
+                .generate(
+                    &prompt,
+                    &GenerateOpts {
+                        timeout_ms: Some(provider_timeout_ms),
+                        max_tokens: Some(provider_max_tokens),
+                    },
+                )
+                .await
+            {
+                Ok(result) => {
+                    let (
+                        proposals,
+                        parsed_summary,
+                        parsed_rejections,
+                        parsed_conflicts,
+                        parsed_maintenance,
+                    ) = parse_consolidation_output(&result.text, limit as usize);
+                    summary = parsed_summary;
+                    rejections = parsed_rejections;
+                    result_conflicts = parsed_conflicts;
+                    maintenance = parsed_maintenance;
+                    if proposals.is_empty() && rejections.is_empty() && result_conflicts.is_empty()
+                    {
+                        warnings.push(format!(
+                            "Provider {} returned no valid consolidation output.",
+                            provider.name()
+                        ));
+                    }
+                    proposals
+                }
+                Err(error) => {
+                    warnings.push(format!(
+                        "Provider {} consolidation failed: {error}",
+                        provider.name()
+                    ));
+                    Vec::new()
+                }
+            }
+        } else {
+            warnings.push(
+                "Provider consolidation requested but no inference provider is configured."
+                    .to_string(),
+            );
+            Vec::new()
+        }
+    } else {
+        warnings.push(
+            "Consolidation is provider-backed; pass use_provider to run the configured inference workload."
+                .to_string(),
+        );
+        Vec::new()
+    };
+
+    let should_write = write_proposals && !proposals.is_empty();
+    let written = if should_write {
+        let write_agent = agent.clone();
+        let write_created_by = created_by.clone();
+        let write_proposals = proposals.clone();
+        let source_count = source.len();
+        let result = state
+            .pool
+            .write_tx(
+                Priority::High,
+                move |conn| -> Result<JsonValue, CoreError> {
+                    let items = write_proposals
+                        .into_iter()
+                        .map(|proposal| {
+                            insert_proposal(
+                                conn,
+                                ProposalBody {
+                                    agent_id: Some(write_agent.clone()),
+                                    from_source: None,
+                                    operation: read_json_string(&proposal, "operation"),
+                                    payload: proposal.get("payload").cloned(),
+                                    confidence: read_json_number(&proposal, "confidence"),
+                                    rationale: read_json_string(&proposal, "rationale"),
+                                    evidence: Some(read_json_array(&proposal, "evidence")),
+                                    risk: read_json_string(&proposal, "risk"),
+                                    source_kind: Some("ontology_consolidation".to_string()),
+                                    source_id: Some(format!("proposals:{source_count}")),
+                                    source_path: None,
+                                    source_root: None,
+                                    created_by: Some(write_created_by.clone()),
+                                    actor: None,
+                                    reason: None,
+                                    proposals: None,
+                                    write_proposals: None,
+                                    write_assertions: None,
+                                    use_provider: None,
+                                    provider_timeout_ms: None,
+                                    provider_max_tokens: None,
+                                    status: None,
+                                    limit: None,
+                                },
+                                &write_agent,
+                            )
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
+                    Ok(JsonValue::Array(items))
+                },
+            )
+            .await;
+        match result {
+            Ok(JsonValue::Array(items)) => items,
+            Ok(_) => Vec::new(),
+            Err(error) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()),
+        }
+    } else {
+        Vec::new()
+    };
+
+    (
+        StatusCode::OK,
+        Json(json!({
+            "sourceProposalCount": source.len(),
+            "proposals": proposals,
+            "items": written,
+            "count": proposals.len(),
+            "writtenCount": written.len(),
+            "dryRun": !should_write,
+            "consolidationMode": if use_provider && (!proposals.is_empty() || provider.is_some()) { "provider" } else { "noop" },
+            "providerName": provider_name,
+            "summary": summary,
+            "rejections": rejections,
+            "conflicts": result_conflicts,
+            "maintenance": maintenance,
+            "warnings": warnings,
+        })),
+    )
+    .into_response()
 }
 
 pub async fn claim_evidence(
