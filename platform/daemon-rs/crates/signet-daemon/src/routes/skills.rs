@@ -21,6 +21,7 @@ use chrono::Utc;
 use rusqlite::{OptionalExtension, params};
 use serde::Deserialize;
 use serde_json::json;
+use sha2::{Digest, Sha256};
 use signet_core::{config::ProceduralConfig, db::Priority, error::CoreError, queries::embedding};
 use tokio::process::Command;
 use uuid::Uuid;
@@ -547,26 +548,31 @@ async fn install_skill_graph_node(state: Arc<AppState>, name: String) -> Result<
     }
 
     let fs_path = skill_path.to_string_lossy().to_string();
-    state
+    let description = meta.description.clone().unwrap_or_default();
+    let role = meta.role.clone().unwrap_or_else(|| "utility".to_string());
+    let embedding_provider = state.embedding.read().await.clone();
+    let db_meta = meta.clone();
+    let db_skill_name = skill_name.clone();
+    let db_description = description.clone();
+    let entity_id = state
         .pool
         .write_tx(Priority::Low, move |conn| {
             let now = Utc::now().to_rfc3339();
-            let mut entity_id = format!("skill:{DEFAULT_AGENT_ID}:{skill_name}");
+            let mut entity_id = skill_entity_id(DEFAULT_AGENT_ID, &db_skill_name);
             let existing: Option<String> = conn
                 .query_row(
                     "SELECT id FROM entities WHERE id = ?1 OR (name = ?2 AND agent_id = ?3) LIMIT 1",
-                    params![entity_id, skill_name, DEFAULT_AGENT_ID],
+                    params![entity_id, db_skill_name, DEFAULT_AGENT_ID],
                     |row| row.get(0),
                 )
                 .optional()?;
-            let description = meta.description.unwrap_or_default();
 
             if let Some(existing_id) = existing {
                 entity_id = existing_id;
                 conn.execute(
                     "UPDATE entities SET entity_type = 'skill', description = ?1, updated_at = ?2
                      WHERE id = ?3",
-                    params![description, now, entity_id],
+                    params![db_description, now, entity_id],
                 )?;
             } else if conn
                 .execute(
@@ -576,10 +582,10 @@ async fn install_skill_graph_node(state: Arc<AppState>, name: String) -> Result<
                      ON CONFLICT(name) DO NOTHING",
                     params![
                         entity_id,
-                        skill_name,
-                        skill_name.to_ascii_lowercase(),
+                        db_skill_name,
+                        db_skill_name.to_ascii_lowercase(),
                         DEFAULT_AGENT_ID,
-                        description,
+                        db_description,
                         now
                     ],
                 )?
@@ -587,19 +593,19 @@ async fn install_skill_graph_node(state: Arc<AppState>, name: String) -> Result<
             {
                 entity_id = conn.query_row(
                     "SELECT id FROM entities WHERE name = ?1 AND agent_id = ?2 LIMIT 1",
-                    params![skill_name, DEFAULT_AGENT_ID],
+                    params![db_skill_name, DEFAULT_AGENT_ID],
                     |row| row.get(0),
                 )?;
                 conn.execute(
                     "UPDATE entities SET entity_type = 'skill', description = ?1, updated_at = ?2
                      WHERE id = ?3",
-                    params![description, now, entity_id],
+                    params![db_description, now, entity_id],
                 )?;
             }
 
             let actual_entity_id: String = conn.query_row(
                 "SELECT id FROM entities WHERE id = ?1 OR (name = ?2 AND agent_id = ?3) LIMIT 1",
-                params![entity_id, skill_name, DEFAULT_AGENT_ID],
+                params![entity_id, db_skill_name, DEFAULT_AGENT_ID],
                 |row| row.get(0),
             )?;
 
@@ -625,13 +631,13 @@ async fn install_skill_graph_node(state: Arc<AppState>, name: String) -> Result<
                 params![
                     actual_entity_id,
                     DEFAULT_AGENT_ID,
-                    meta.version,
-                    meta.author,
-                    meta.license,
-                    meta.role.unwrap_or_else(|| "utility".to_string()),
-                    json_string(meta.triggers)?,
-                    json_string(meta.tags)?,
-                    json_string(meta.permissions)?,
+                    db_meta.version,
+                    db_meta.author,
+                    db_meta.license,
+                    role,
+                    json_string(db_meta.triggers)?,
+                    json_string(db_meta.tags)?,
+                    json_string(db_meta.permissions)?,
                     now,
                     procedural.importance_on_install,
                     procedural.decay_rate,
@@ -642,8 +648,46 @@ async fn install_skill_graph_node(state: Arc<AppState>, name: String) -> Result<
             Ok(json!({"entityId": actual_entity_id}))
         })
         .await
-        .map(|_| ())
-        .map_err(|err| err.to_string())
+        .map_err(|err| err.to_string())?
+        .get("entityId")
+        .and_then(|value| value.as_str())
+        .ok_or_else(|| "Skill graph entity id was not returned".to_string())?
+        .to_string();
+
+    if let Some(provider) = embedding_provider {
+        let embedding_text = build_skill_embedding_text(&meta, &skill_name, &description);
+        if let Some(vector) = provider
+            .embed(&embedding_text)
+            .await
+            .filter(|v| !v.is_empty())
+        {
+            let embedding_hash = skill_embedding_hash(&entity_id, &meta, &skill_name, &description);
+            let embedding_id = Uuid::new_v4().to_string();
+            state
+                .pool
+                .write_tx(Priority::Low, move |conn| {
+                    let now = Utc::now().to_rfc3339();
+                    embedding::delete_by_source(conn, "skill", &entity_id, None)?;
+                    embedding::upsert(
+                        conn,
+                        &embedding::InsertEmbedding {
+                            id: &embedding_id,
+                            content_hash: &embedding_hash,
+                            vector: &vector,
+                            source_type: "skill",
+                            source_id: &entity_id,
+                            chunk_text: &embedding_text,
+                            now: &now,
+                        },
+                    )?;
+                    Ok(json!({"embeddingCreated": true}))
+                })
+                .await
+                .map_err(|err| err.to_string())?;
+        }
+    }
+
+    Ok(())
 }
 
 async fn uninstall_skill_graph_node(state: Arc<AppState>, name: String) -> Result<(), String> {
@@ -700,6 +744,71 @@ fn json_string(value: Option<Vec<String>>) -> Result<Option<String>, CoreError> 
         .map(|value| serde_json::to_string(&value))
         .transpose()
         .map_err(CoreError::from)
+}
+
+fn skill_entity_id(agent_id: &str, name: &str) -> String {
+    format!("skill:{agent_id}:{name}")
+}
+
+fn build_skill_embedding_text(meta: &SkillMeta, name: &str, description: &str) -> String {
+    let mut parts = vec![name.to_string()];
+    if !description.is_empty() {
+        parts.push(description.to_string());
+    }
+    if let Some(triggers) = meta.triggers.as_ref().filter(|values| !values.is_empty()) {
+        parts.push(triggers.join(", "));
+    }
+    parts.join(" \u{2014} ")
+}
+
+fn skill_embedding_hash(
+    entity_id: &str,
+    meta: &SkillMeta,
+    name: &str,
+    description: &str,
+) -> String {
+    content_hash(&format!(
+        "{}\n{}",
+        entity_id,
+        skill_fingerprint(meta, name, description)
+    ))
+}
+
+fn skill_fingerprint(meta: &SkillMeta, name: &str, description: &str) -> String {
+    format!(
+        "{{\"name\":{},\"description\":{},\"version\":{},\"author\":{},\"license\":{},\"triggers\":{},\"tags\":{},\"permissions\":{},\"role\":{}}}",
+        json_value(name),
+        json_value(description),
+        optional_json_value(meta.version.as_deref()),
+        optional_json_value(meta.author.as_deref()),
+        optional_json_value(meta.license.as_deref()),
+        json_list(meta.triggers.as_deref()),
+        json_list(meta.tags.as_deref()),
+        json_list(meta.permissions.as_deref()),
+        optional_json_value(meta.role.as_deref()),
+    )
+}
+
+fn content_hash(text: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(text.as_bytes());
+    let digest = hasher.finalize();
+    format!("{digest:x}")[..16].to_string()
+}
+
+fn json_value(value: &str) -> String {
+    serde_json::to_string(value).expect("serialize JSON string")
+}
+
+fn optional_json_value(value: Option<&str>) -> String {
+    value.map_or_else(|| "null".to_string(), json_value)
+}
+
+fn json_list(value: Option<&[String]>) -> String {
+    value.map_or_else(
+        || "[]".to_string(),
+        |values| serde_json::to_string(values).expect("serialize JSON list"),
+    )
 }
 
 fn build_skill_install_command(name: &str, source: Option<&str>) -> Option<SkillInstallCommand> {
@@ -891,7 +1000,7 @@ fn discover_skills(dir: &Path) -> Vec<serde_json::Value> {
     out
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct SkillMeta {
     name: Option<String>,
     description: Option<String>,

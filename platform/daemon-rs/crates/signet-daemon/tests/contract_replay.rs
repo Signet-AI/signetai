@@ -18,6 +18,7 @@ use hmac::{Hmac, Mac};
 use rusqlite::OptionalExtension;
 use serde_json::json;
 use sha2::Sha256;
+use signet_core::db::register_vec_extension;
 
 type HmacSha256 = Hmac<Sha256>;
 const AUTH_SECRET: &[u8] = b"contract-replay-auth-secret-32bytes";
@@ -32,6 +33,14 @@ struct SkillGraphRow {
     role: String,
     fs_path: String,
     uninstalled_at: Option<String>,
+}
+
+#[derive(Debug)]
+struct SkillEmbeddingRow {
+    content_hash: String,
+    dimensions: i64,
+    chunk_text: String,
+    vec_rows: i64,
 }
 
 struct TestServer {
@@ -1665,6 +1674,45 @@ impl Drop for MarketplaceCatalogEnvGuard {
 struct ClawhubDownloadFixture {
     base: String,
     _thread: std::thread::JoinHandle<()>,
+}
+
+struct EmbeddingFixture {
+    base: String,
+    _thread: std::thread::JoinHandle<()>,
+}
+
+impl EmbeddingFixture {
+    fn start() -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind embedding fixture");
+        listener
+            .set_nonblocking(false)
+            .expect("configure embedding fixture");
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let thread = std::thread::spawn(move || {
+            for stream in listener.incoming().take(16) {
+                let Ok(mut stream) = stream else {
+                    continue;
+                };
+                let mut buffer = [0_u8; 4096];
+                let _ = stream.read(&mut buffer);
+                let embedding = std::iter::repeat("0.25")
+                    .take(768)
+                    .collect::<Vec<_>>()
+                    .join(",");
+                let body = format!(r#"{{"data":[{{"embedding":[{embedding}]}}]}}"#);
+                let headers = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(headers.as_bytes());
+                let _ = stream.write_all(body.as_bytes());
+            }
+        });
+        Self {
+            base,
+            _thread: thread,
+        }
+    }
 }
 
 impl ClawhubDownloadFixture {
@@ -5460,13 +5508,71 @@ async fn wait_for_skill_graph_removed(db_path: &std::path::Path, entity_id: &str
     panic!("skill graph row was not removed for {entity_id}");
 }
 
+async fn wait_for_skill_embedding_row(
+    db_path: &std::path::Path,
+    entity_id: &str,
+) -> SkillEmbeddingRow {
+    for _ in 0..80 {
+        let conn = open_replay_db_with_vec(db_path);
+        let row = conn
+            .query_row(
+                "SELECT e.content_hash, e.dimensions, e.chunk_text,
+                        (SELECT COUNT(*) FROM vec_embeddings WHERE id = e.id)
+                   FROM embeddings e
+                  WHERE e.source_type = 'skill' AND e.source_id = ?1",
+                rusqlite::params![entity_id],
+                |row| {
+                    Ok(SkillEmbeddingRow {
+                        content_hash: row.get(0)?,
+                        dimensions: row.get(1)?,
+                        chunk_text: row.get(2)?,
+                        vec_rows: row.get(3)?,
+                    })
+                },
+            )
+            .optional()
+            .expect("query skill embedding row");
+        if let Some(row) = row {
+            return row;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    panic!("skill embedding row was not created for {entity_id}");
+}
+
+fn count_skill_embeddings(db_path: &std::path::Path, entity_id: &str) -> i64 {
+    let conn = open_replay_db_with_vec(db_path);
+    conn.query_row(
+        "SELECT COUNT(*) FROM embeddings WHERE source_type = 'skill' AND source_id = ?1",
+        rusqlite::params![entity_id],
+        |row| row.get(0),
+    )
+    .expect("count skill embeddings")
+}
+
+fn open_replay_db_with_vec(db_path: &std::path::Path) -> rusqlite::Connection {
+    register_vec_extension();
+    let conn = rusqlite::Connection::open(db_path).expect("open replay db");
+    conn.busy_timeout(Duration::from_secs(5)).unwrap();
+    conn
+}
+
 #[tokio::test]
 #[ignore = "requires built daemon binary"]
 async fn skills_endpoints() {
     let clawhub_fixture =
         ClawhubDownloadFixture::start(clawhub_skill_archive("claw-demo", "Installed by ClawHub"));
     let _clawhub_env = ClawhubEnvGuard::set(&clawhub_fixture.base);
-    let server = TestServer::start().await;
+    let embedding_fixture = EmbeddingFixture::start();
+    let server = TestServer::start_with_agent_yaml(
+        None,
+        &format!(
+            "agent:\n  name: test-agent\n  version: 1\nembedding:\n  provider: openai\n  model: replay-embedding\n  dimensions: 768\n  base_url: {}\nmemory:\n  pipelineV2:\n    procedural:\n      enabled: true\n",
+            embedding_fixture.base
+        ),
+    )
+    .await;
     let skills_dir = server._tmpdir.path().join("skills/test-skill");
     std::fs::create_dir_all(&skills_dir).unwrap();
     std::fs::write(
@@ -5536,6 +5642,15 @@ async fn skills_endpoints() {
     assert_eq!(web_graph.role, "utility");
     assert!(web_graph.fs_path.ends_with("skills/web-search/SKILL.md"));
     assert_eq!(web_graph.uninstalled_at, None);
+    let web_embedding =
+        wait_for_skill_embedding_row(&server.db_path(), "skill:default:web-search").await;
+    assert_eq!(web_embedding.content_hash, "6c5291356681c1e6");
+    assert_eq!(web_embedding.dimensions, 768);
+    assert_eq!(
+        web_embedding.chunk_text,
+        "web-search — Installed by fake skills runner"
+    );
+    assert_eq!(web_embedding.vec_rows, 1);
 
     let resp = server
         .post(
@@ -5548,6 +5663,10 @@ async fn skills_endpoints() {
     assert_eq!(web_graph.name, "web-search");
     assert_eq!(web_graph.description, "Installed by fake skills runner");
     assert_eq!(web_graph.uninstalled_at, None);
+    assert_eq!(
+        count_skill_embeddings(&server.db_path(), "skill:default:web-search"),
+        1
+    );
 
     let resp = server
         .post(
