@@ -113,6 +113,9 @@ describe("check-publish-manifests", () => {
 		expect(workflow).toContain("asset: signet-darwin-arm64");
 		expect(workflow).toContain("platform: win32-x64");
 		expect(workflow).toContain("asset: signet-win32-x64.exe");
+		expect(workflow.indexOf("run: bun run build:dashboard")).toBeLessThan(
+			workflow.indexOf("run: bun run build:native-bun"),
+		);
 		expect(workflow).toContain("bun run build:native-bun");
 		expect(workflow).toContain('./dist/native/"$RELEASE_ASSET" --help');
 	});

@@ -195,6 +195,9 @@ jobs:
       - name: Build workspace dependencies
         run: bun run build
 
+      - name: Build dashboard assets
+        run: bun run build:dashboard
+
       - name: Build native Signet binary
         run: bun run build:native-bun
 
