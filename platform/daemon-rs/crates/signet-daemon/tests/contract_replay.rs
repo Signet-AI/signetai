@@ -10411,6 +10411,10 @@ async fn ontology_operation_endpoints_apply_dry_run_and_batch_errors() {
     assert_eq!(body["proposal"]["status"], "applied");
     assert_eq!(body["proposal"]["appliedBy"], "operation-replay");
     assert_eq!(body["result"]["entity"], "Applied Entity");
+    let applied_entity_id = body["result"]["entityId"]
+        .as_str()
+        .expect("applied entity id")
+        .to_string();
 
     let resp = server
         .post(
@@ -10428,6 +10432,260 @@ async fn ontology_operation_endpoints_apply_dry_run_and_batch_errors() {
     assert_eq!(body["proposed"], true);
     assert_eq!(body["result"], serde_json::Value::Null);
     assert_eq!(body["proposal"]["status"], "pending");
+
+    let resp = server
+        .post(
+            "/api/ontology/operations/apply",
+            json!({
+                "operation": "rename_entity",
+                "payload": {
+                    "selector": "Applied Entity",
+                    "new_name": "Applied Entity Renamed"
+                },
+                "actor": "operation-replay"
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["result"]["entityId"], applied_entity_id);
+    assert_eq!(body["result"]["oldName"], "Applied Entity");
+    assert_eq!(body["result"]["newName"], "Applied Entity Renamed");
+
+    let resp = server
+        .post(
+            "/api/ontology/operations/apply",
+            json!({
+                "operation": "create_aspect",
+                "payload": {
+                    "entity": "Applied Entity Renamed",
+                    "name": "Profile"
+                }
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    let aspect_id = body["result"]["aspectId"]
+        .as_str()
+        .expect("created aspect id")
+        .to_string();
+
+    let resp = server
+        .post(
+            "/api/ontology/operations/apply",
+            json!({
+                "operation": "rename_aspect",
+                "payload": {
+                    "entity": "Applied Entity Renamed",
+                    "selector": "Profile",
+                    "new_name": "Details"
+                }
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["result"]["aspectId"], aspect_id);
+    assert_eq!(body["result"]["oldName"], "Profile");
+    assert_eq!(body["result"]["newName"], "Details");
+
+    let resp = server
+        .post(
+            "/api/ontology/operations/apply",
+            json!({
+                "operation": "set_claim_value",
+                "payload": {
+                    "entity": "Applied Entity Renamed",
+                    "aspect": "Details",
+                    "group_key": "state",
+                    "claim_key": "status",
+                    "value": "first"
+                }
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    let first_attribute_id = body["result"]["attributeId"]
+        .as_str()
+        .expect("first claim id")
+        .to_string();
+    assert_eq!(body["result"]["version"], 1);
+
+    let resp = server
+        .post(
+            "/api/ontology/operations/apply",
+            json!({
+                "operation": "set_claim_value",
+                "payload": {
+                    "entity": "Applied Entity Renamed",
+                    "aspect": "Details",
+                    "group_key": "state",
+                    "claim_key": "status",
+                    "value": "second"
+                }
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    let second_attribute_id = body["result"]["attributeId"]
+        .as_str()
+        .expect("second claim id")
+        .to_string();
+    assert_eq!(body["result"]["version"], 2);
+    assert_eq!(body["result"]["previousAttributeId"], first_attribute_id);
+
+    let resp = server
+        .post(
+            "/api/ontology/operations/apply",
+            json!({
+                "operation": "supersede_claim_value",
+                "payload": {
+                    "entity": "Applied Entity Renamed",
+                    "aspect": "Details",
+                    "group_key": "state",
+                    "claim_key": "status",
+                    "old_value": "second",
+                    "new_value": "third"
+                }
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    let third_attribute_id = body["result"]["replacementAttributeId"]
+        .as_str()
+        .expect("replacement claim id")
+        .to_string();
+    assert_eq!(
+        body["result"]["supersededAttributeIds"][0],
+        second_attribute_id
+    );
+
+    let resp = server
+        .post(
+            "/api/ontology/operations/apply",
+            json!({
+                "operation": "archive_claim_value",
+                "payload": {
+                    "attribute_id": third_attribute_id,
+                    "reason": "replay archive"
+                },
+                "actor": "operation-replay"
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["result"]["archived"], true);
+
+    let resp = server
+        .post(
+            "/api/ontology/operations/apply",
+            json!({
+                "operation": "restore_claim_version",
+                "payload": {"attribute_id": first_attribute_id}
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["result"]["restored"], true);
+
+    let resp = server
+        .post(
+            "/api/ontology/operations/apply",
+            json!({
+                "operation": "create_link",
+                "payload": {
+                    "source_entity": "Applied Entity Renamed",
+                    "target_entity": "Linked Target",
+                    "link_type": "references",
+                    "strength": 0.4,
+                    "reason": "initial link"
+                }
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    let dependency_id = body["result"]["dependencyId"]
+        .as_str()
+        .expect("dependency id")
+        .to_string();
+
+    let resp = server
+        .post(
+            "/api/ontology/operations/apply",
+            json!({
+                "operation": "update_link",
+                "payload": {
+                    "dependency_id": dependency_id,
+                    "link_type": "supports",
+                    "strength": 0.9,
+                    "confidence": 0.8,
+                    "reason": "updated link"
+                }
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["result"]["updated"], true);
+
+    let resp = server
+        .post(
+            "/api/ontology/operations/apply",
+            json!({
+                "operation": "archive_link",
+                "payload": {
+                    "dependency_id": dependency_id,
+                    "reason": "retired"
+                },
+                "actor": "operation-replay"
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["result"]["archived"], true);
+
+    let resp = server
+        .post(
+            "/api/ontology/operations/apply",
+            json!({
+                "operation": "archive_aspect",
+                "payload": {
+                    "entity": "Applied Entity Renamed",
+                    "selector": "Details",
+                    "reason": "retired"
+                },
+                "actor": "operation-replay"
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["result"]["archived"], true);
+
+    let resp = server
+        .post(
+            "/api/ontology/operations/apply",
+            json!({
+                "operation": "archive_entity",
+                "payload": {
+                    "selector": "Applied Entity Renamed",
+                    "reason": "retired"
+                },
+                "actor": "operation-replay"
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["result"]["archived"], true);
 
     let resp = server
         .post(
@@ -10457,27 +10715,54 @@ async fn ontology_operation_endpoints_apply_dry_run_and_batch_errors() {
     assert_eq!(body["errors"][0]["index"], 1);
     assert_eq!(body["errors"][0]["line"], 2);
     assert_eq!(body["errors"][0]["operation"], "rename_entity");
-    assert_eq!(body["errors"][0]["status"], 400);
+    assert_eq!(body["errors"][0]["status"], 404);
     assert!(
         body["errors"][0]["error"]
             .as_str()
             .unwrap_or_default()
-            .contains("unsupported ontology operation")
+            .contains("Entity not found")
     );
 
     let conn = rusqlite::Connection::open(server.db_path()).expect("open replay db");
-    let counts: (i64, i64, i64) = conn
+    let counts: (i64, i64, i64, i64, i64) = conn
         .query_row(
             "SELECT
                SUM(CASE WHEN name = 'Applied Entity' THEN 1 ELSE 0 END),
                SUM(CASE WHEN name = 'Proposed Entity' THEN 1 ELSE 0 END),
-               SUM(CASE WHEN name = 'Batch Preview' THEN 1 ELSE 0 END)
+               SUM(CASE WHEN name = 'Batch Preview' THEN 1 ELSE 0 END),
+               SUM(CASE WHEN name = 'Applied Entity Renamed' AND status = 'archived' THEN 1 ELSE 0 END),
+               SUM(CASE WHEN name = 'Linked Target' THEN 1 ELSE 0 END)
              FROM entities",
             [],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
         )
         .expect("operation entity counts");
-    assert_eq!(counts, (1, 0, 0));
+    assert_eq!(counts, (0, 0, 0, 1, 1));
+    let statuses: (String, String, String, String) = conn
+        .query_row(
+            "SELECT
+               (SELECT status FROM entity_aspects WHERE id = ?1),
+               (SELECT status FROM entity_attributes WHERE id = ?2),
+               (SELECT status FROM entity_attributes WHERE id = ?3),
+               (SELECT status FROM entity_dependencies WHERE id = ?4)",
+            rusqlite::params![
+                aspect_id,
+                first_attribute_id,
+                second_attribute_id,
+                dependency_id
+            ],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .expect("operation row statuses");
+    assert_eq!(
+        statuses,
+        (
+            "archived".to_string(),
+            "deleted".to_string(),
+            "superseded".to_string(),
+            "archived".to_string(),
+        )
+    );
 }
 
 #[tokio::test]

@@ -3034,6 +3034,134 @@ fn resolve_or_create_aspect(
     Ok(id)
 }
 
+fn payload_selector(payload: &JsonValue, keys: &[&str]) -> Option<String> {
+    keys.iter()
+        .find_map(|key| read_payload_string(payload, key))
+}
+
+fn proposal_evidence_json(row: &ProposalRow) -> String {
+    proposal_audit_evidence(row)
+}
+
+fn force_payload(payload: &JsonValue) -> bool {
+    payload.get("force").and_then(JsonValue::as_bool) == Some(true)
+}
+
+fn optional_payload_string(payload: &JsonValue, key: &str) -> Option<String> {
+    payload.get(key).and_then(|value| {
+        value.as_str().map(|value| value.to_string()).or_else(|| {
+            if value.is_null() {
+                None
+            } else {
+                Some(value.to_string())
+            }
+        })
+    })
+}
+
+fn resolve_entity_row_strict(
+    conn: &rusqlite::Connection,
+    agent_id: &str,
+    selector: &str,
+) -> Result<EntityRow, CoreError> {
+    let key = canonical(selector);
+    let rows = conn
+        .prepare(
+            "SELECT *
+             FROM entities
+             WHERE agent_id = ?1
+               AND COALESCE(status, 'active') = 'active'
+               AND (id = ?2 OR COALESCE(canonical_name, LOWER(name)) = ?3 OR LOWER(name) = ?4)
+             ORDER BY CASE WHEN id = ?5 THEN 0 ELSE 1 END, updated_at DESC, name ASC",
+        )?
+        .query_map(
+            rusqlite::params![agent_id, selector, key, key, selector],
+            read_entity_row,
+        )?
+        .collect::<Result<Vec<_>, _>>()?;
+    match rows.len() {
+        0 => Err(CoreError::NotFound(format!("Entity not found: {selector}"))),
+        1 => Ok(rows.into_iter().next().expect("one entity row")),
+        _ => Err(CoreError::Conflict(format!(
+            "Entity selector is ambiguous: {selector}. Use an id."
+        ))),
+    }
+}
+
+fn resolve_aspect_row_strict(
+    conn: &rusqlite::Connection,
+    agent_id: &str,
+    entity_id: &str,
+    selector: &str,
+) -> Result<AspectRow, CoreError> {
+    let key = canonical(selector);
+    let rows = conn
+        .prepare(
+            "SELECT *
+             FROM entity_aspects
+             WHERE entity_id = ?1
+               AND agent_id = ?2
+               AND COALESCE(status, 'active') = 'active'
+               AND (id = ?3 OR canonical_name = ?4 OR LOWER(name) = ?5)
+             ORDER BY CASE WHEN id = ?6 THEN 0 ELSE 1 END, updated_at DESC, name ASC",
+        )?
+        .query_map(
+            rusqlite::params![entity_id, agent_id, selector, key, key, selector],
+            read_aspect_row,
+        )?
+        .collect::<Result<Vec<_>, _>>()?;
+    match rows.len() {
+        0 => Err(CoreError::NotFound(format!("Aspect not found: {selector}"))),
+        1 => Ok(rows.into_iter().next().expect("one aspect row")),
+        _ => Err(CoreError::Conflict(format!(
+            "Aspect selector is ambiguous: {selector}. Use an id."
+        ))),
+    }
+}
+
+#[derive(Clone)]
+struct ClaimSlotRow {
+    id: String,
+    normalized_content: String,
+    version: i64,
+    version_root_id: Option<String>,
+    status: String,
+}
+
+fn load_claim_slot(
+    conn: &rusqlite::Connection,
+    agent_id: &str,
+    aspect_id: &str,
+    kind: &str,
+    group_key: &str,
+    claim_key: &str,
+) -> Result<Vec<ClaimSlotRow>, CoreError> {
+    Ok(conn
+        .prepare(
+            "SELECT id, normalized_content, version, version_root_id, status
+             FROM entity_attributes
+             WHERE aspect_id = ?1
+               AND agent_id = ?2
+               AND kind = ?3
+               AND COALESCE(group_key, 'general') = ?4
+               AND claim_key = ?5
+             ORDER BY version DESC, updated_at DESC",
+        )?
+        .query_map(
+            rusqlite::params![aspect_id, agent_id, kind, group_key, claim_key],
+            |r| {
+                Ok(ClaimSlotRow {
+                    id: r.get::<_, String>(0)?,
+                    normalized_content: r.get::<_, String>(1)?,
+                    version: r.get::<_, Option<i64>>(2)?.unwrap_or(1),
+                    version_root_id: r.get::<_, Option<String>>(3)?,
+                    status: r.get::<_, String>(4)?,
+                })
+            },
+        )?
+        .collect::<Result<Vec<_>, _>>()?)
+}
+
 fn apply_create_entity(
     conn: &rusqlite::Connection,
     row: &ProposalRow,
@@ -3105,6 +3233,564 @@ fn apply_add_claim_value(
     )
 }
 
+fn apply_rename_entity(
+    conn: &rusqlite::Connection,
+    row: &ProposalRow,
+    payload: &JsonValue,
+) -> Result<JsonValue, CoreError> {
+    let selector = payload_selector(payload, &["selector", "entity", "entity_id", "name"])
+        .ok_or_else(|| CoreError::Invalid("payload.selector is required".to_string()))?;
+    let name = read_payload_string(payload, "new_name")
+        .ok_or_else(|| CoreError::Invalid("payload.new_name is required".to_string()))?;
+    let entity = resolve_entity_row_strict(conn, &row.agent_id, &selector)?;
+    let key = canonical(&name);
+    if let Some(collision) = conn
+        .query_row(
+            "SELECT name
+             FROM entities
+             WHERE agent_id = ?1
+               AND id != ?2
+               AND COALESCE(status, 'active') = 'active'
+               AND (COALESCE(canonical_name, LOWER(name)) = ?3 OR LOWER(name) = ?4)
+             LIMIT 1",
+            rusqlite::params![row.agent_id, entity.id, key, key],
+            |r| r.get::<_, String>(0),
+        )
+        .optional()?
+    {
+        return Err(CoreError::Conflict(format!(
+            "Entity canonical name collides with \"{collision}\". Use merge_entities instead."
+        )));
+    }
+    conn.execute(
+        "UPDATE entities
+         SET name = ?1, canonical_name = ?2, proposal_id = ?3, proposal_evidence = ?4, updated_at = ?5
+         WHERE id = ?6 AND agent_id = ?7",
+        rusqlite::params![
+            name,
+            key,
+            row.id,
+            proposal_evidence_json(row),
+            now(),
+            entity.id,
+            row.agent_id
+        ],
+    )?;
+    Ok(json!({"entityId": entity.id, "oldName": entity.name, "newName": name}))
+}
+
+fn apply_archive_entity(
+    conn: &rusqlite::Connection,
+    row: &ProposalRow,
+    payload: &JsonValue,
+    actor: &str,
+) -> Result<JsonValue, CoreError> {
+    let selector = payload_selector(payload, &["selector", "entity", "entity_id", "name"])
+        .ok_or_else(|| CoreError::Invalid("payload.selector is required".to_string()))?;
+    let entity = resolve_entity_row_strict(conn, &row.agent_id, &selector)?;
+    if entity.pinned && !force_payload(payload) {
+        return Err(CoreError::Conflict(
+            "Refusing to archive pinned entity without force".to_string(),
+        ));
+    }
+    conn.execute(
+        "UPDATE entities
+         SET status = 'archived', archived_at = ?1, archived_by = ?2,
+             archive_reason = ?3, proposal_id = ?4, proposal_evidence = ?5, updated_at = ?1
+         WHERE id = ?6 AND agent_id = ?7",
+        rusqlite::params![
+            now(),
+            actor,
+            read_payload_string(payload, "reason").unwrap_or_else(|| row.rationale.clone()),
+            row.id,
+            proposal_evidence_json(row),
+            entity.id,
+            row.agent_id
+        ],
+    )?;
+    Ok(json!({"entityId": entity.id, "archived": true}))
+}
+
+fn apply_create_aspect(
+    conn: &rusqlite::Connection,
+    row: &ProposalRow,
+    payload: &JsonValue,
+) -> Result<JsonValue, CoreError> {
+    let entity_selector = payload_selector(payload, &["entity", "entity_id"])
+        .ok_or_else(|| CoreError::Invalid("payload.entity is required".to_string()))?;
+    let name = read_payload_string(payload, "name")
+        .or_else(|| read_payload_string(payload, "aspect"))
+        .ok_or_else(|| CoreError::Invalid("payload.name is required".to_string()))?;
+    let entity = resolve_entity_row_strict(conn, &row.agent_id, &entity_selector)?;
+    let aspect_id = resolve_or_create_aspect(conn, &entity.id, &row.agent_id, &name)?;
+    conn.execute(
+        "UPDATE entity_aspects
+         SET proposal_id = ?1, proposal_evidence = ?2, updated_at = ?3
+         WHERE id = ?4 AND agent_id = ?5",
+        rusqlite::params![
+            row.id,
+            proposal_evidence_json(row),
+            now(),
+            aspect_id,
+            row.agent_id
+        ],
+    )?;
+    Ok(json!({"entityId": entity.id, "aspectId": aspect_id, "aspect": name}))
+}
+
+fn apply_rename_aspect(
+    conn: &rusqlite::Connection,
+    row: &ProposalRow,
+    payload: &JsonValue,
+) -> Result<JsonValue, CoreError> {
+    let entity_selector = payload_selector(payload, &["entity", "entity_id"])
+        .ok_or_else(|| CoreError::Invalid("payload.entity is required".to_string()))?;
+    let aspect_selector =
+        payload_selector(payload, &["selector", "aspect", "aspect_id", "name"])
+            .ok_or_else(|| CoreError::Invalid("payload.selector is required".to_string()))?;
+    let name = read_payload_string(payload, "new_name")
+        .ok_or_else(|| CoreError::Invalid("payload.new_name is required".to_string()))?;
+    let entity = resolve_entity_row_strict(conn, &row.agent_id, &entity_selector)?;
+    let aspect = resolve_aspect_row_strict(conn, &row.agent_id, &entity.id, &aspect_selector)?;
+    let key = canonical(&name);
+    if let Some(collision) = conn
+        .query_row(
+            "SELECT name
+             FROM entity_aspects
+             WHERE entity_id = ?1 AND agent_id = ?2 AND id != ?3
+               AND COALESCE(status, 'active') = 'active'
+               AND (canonical_name = ?4 OR LOWER(name) = ?5)
+             LIMIT 1",
+            rusqlite::params![entity.id, row.agent_id, aspect.id, key, key],
+            |r| r.get::<_, String>(0),
+        )
+        .optional()?
+    {
+        return Err(CoreError::Conflict(format!(
+            "Aspect collides with \"{collision}\""
+        )));
+    }
+    conn.execute(
+        "UPDATE entity_aspects
+         SET name = ?1, canonical_name = ?2, proposal_id = ?3, proposal_evidence = ?4, updated_at = ?5
+         WHERE id = ?6 AND agent_id = ?7",
+        rusqlite::params![
+            name,
+            key,
+            row.id,
+            proposal_evidence_json(row),
+            now(),
+            aspect.id,
+            row.agent_id
+        ],
+    )?;
+    Ok(
+        json!({"entityId": entity.id, "aspectId": aspect.id, "oldName": aspect.name, "newName": name}),
+    )
+}
+
+fn apply_archive_aspect(
+    conn: &rusqlite::Connection,
+    row: &ProposalRow,
+    payload: &JsonValue,
+    actor: &str,
+) -> Result<JsonValue, CoreError> {
+    let entity_selector = payload_selector(payload, &["entity", "entity_id"])
+        .ok_or_else(|| CoreError::Invalid("payload.entity is required".to_string()))?;
+    let aspect_selector =
+        payload_selector(payload, &["selector", "aspect", "aspect_id", "name"])
+            .ok_or_else(|| CoreError::Invalid("payload.selector is required".to_string()))?;
+    let entity = resolve_entity_row_strict(conn, &row.agent_id, &entity_selector)?;
+    let aspect = resolve_aspect_row_strict(conn, &row.agent_id, &entity.id, &aspect_selector)?;
+    let ts = now();
+    let reason = read_payload_string(payload, "reason").unwrap_or_else(|| row.rationale.clone());
+    conn.execute(
+        "UPDATE entity_aspects
+         SET status = 'archived', archived_at = ?1, archived_by = ?2,
+             archive_reason = ?3, proposal_id = ?4, proposal_evidence = ?5, updated_at = ?1
+         WHERE id = ?6 AND agent_id = ?7",
+        rusqlite::params![
+            ts,
+            actor,
+            reason,
+            row.id,
+            proposal_evidence_json(row),
+            aspect.id,
+            row.agent_id
+        ],
+    )?;
+    conn.execute(
+        "UPDATE entity_attributes
+         SET status = 'deleted', archived_at = ?1, archived_by = ?2,
+             archive_reason = ?3, updated_at = ?1
+         WHERE aspect_id = ?4 AND agent_id = ?5 AND status = 'active'",
+        rusqlite::params![ts, actor, reason, aspect.id, row.agent_id],
+    )?;
+    Ok(json!({"entityId": entity.id, "aspectId": aspect.id, "archived": true}))
+}
+
+fn apply_set_claim_value(
+    conn: &rusqlite::Connection,
+    row: &ProposalRow,
+    payload: &JsonValue,
+) -> Result<JsonValue, CoreError> {
+    let entity = read_payload_string(payload, "entity")
+        .ok_or_else(|| CoreError::Invalid("payload.entity is required".to_string()))?;
+    let aspect = read_payload_string(payload, "aspect")
+        .ok_or_else(|| CoreError::Invalid("payload.aspect is required".to_string()))?;
+    let claim_key = read_payload_string(payload, "claim_key")
+        .or_else(|| read_payload_string(payload, "claim"))
+        .ok_or_else(|| CoreError::Invalid("payload.claim_key is required".to_string()))?;
+    let value = read_payload_string(payload, "value")
+        .ok_or_else(|| CoreError::Invalid("payload.value is required".to_string()))?;
+    let entity_type = normalize_entity_type(read_payload_string(payload, "entity_type"));
+    let entity_id = resolve_or_create_entity(conn, &row.agent_id, &entity, &entity_type)?;
+    let aspect_id = resolve_or_create_aspect(conn, &entity_id, &row.agent_id, &aspect)?;
+    let group_key =
+        read_payload_string(payload, "group_key").unwrap_or_else(|| "general".to_string());
+    let kind = normalize_attribute_kind(read_payload_string(payload, "kind"));
+    let slot = load_claim_slot(
+        conn,
+        &row.agent_id,
+        &aspect_id,
+        &kind,
+        &group_key,
+        &claim_key,
+    )?;
+    let active = slot
+        .iter()
+        .filter(|entry| entry.status == "active")
+        .collect::<Vec<_>>();
+    let normalized = canonical(&value);
+    if let Some(existing) = active
+        .iter()
+        .find(|entry| entry.normalized_content == normalized)
+        && active.len() == 1
+    {
+        return Ok(json!({
+            "entityId": entity_id,
+            "aspectId": aspect_id,
+            "attributeId": existing.id,
+            "version": existing.version,
+            "versionRootId": existing.version_root_id.clone().unwrap_or_else(|| existing.id.clone()),
+            "deduped": true,
+        }));
+    }
+    if kind == "constraint" && !active.is_empty() && !force_payload(payload) {
+        return Err(CoreError::Conflict(
+            "Refusing to replace active constraint claim without force".to_string(),
+        ));
+    }
+    let previous = active.first().copied().or_else(|| slot.first());
+    let version = slot.iter().map(|entry| entry.version).max().unwrap_or(0) + 1;
+    let root_id = previous
+        .and_then(|entry| {
+            entry
+                .version_root_id
+                .clone()
+                .or_else(|| Some(entry.id.clone()))
+        })
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
+    let id = if version == 1 {
+        root_id.clone()
+    } else {
+        Uuid::new_v4().to_string()
+    };
+    let ts = now();
+    let confidence = read_payload_f64(payload, "confidence").unwrap_or(row.confidence);
+    let importance = read_payload_f64(payload, "importance").unwrap_or(confidence);
+    conn.execute(
+        "INSERT INTO entity_attributes
+         (id, aspect_id, agent_id, kind, content, normalized_content, confidence, importance, status,
+          group_key, claim_key, version, version_root_id, previous_attribute_id,
+          created_at, updated_at, source_id, source_kind, source_path, source_root,
+          proposal_id, proposal_evidence)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'active', ?9, ?10, ?11, ?12, ?13,
+                 ?14, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
+        rusqlite::params![
+            id,
+            aspect_id,
+            row.agent_id,
+            kind,
+            value,
+            normalized,
+            confidence,
+            importance,
+            group_key,
+            claim_key,
+            version,
+            root_id,
+            previous.map(|entry| entry.id.clone()),
+            ts,
+            row.source_id,
+            row.source_kind,
+            row.source_path,
+            row.source_root,
+            row.id,
+            proposal_evidence_json(row)
+        ],
+    )?;
+    if !active.is_empty() {
+        conn.execute(
+            "UPDATE entity_attributes
+             SET status = 'superseded', superseded_by = ?1, updated_at = ?2
+             WHERE agent_id = ?3
+               AND aspect_id = ?4
+               AND kind = ?5
+               AND COALESCE(group_key, 'general') = ?6
+               AND claim_key = ?7
+               AND status = 'active'
+               AND id != ?1",
+            rusqlite::params![id, ts, row.agent_id, aspect_id, kind, group_key, claim_key],
+        )?;
+    }
+    Ok(json!({
+        "entityId": entity_id,
+        "aspectId": aspect_id,
+        "attributeId": id,
+        "version": version,
+        "versionRootId": root_id,
+        "previousAttributeId": previous.map(|entry| entry.id.clone()),
+    }))
+}
+
+fn apply_supersede_claim_value(
+    conn: &rusqlite::Connection,
+    row: &ProposalRow,
+    payload: &JsonValue,
+) -> Result<JsonValue, CoreError> {
+    let entity = read_payload_string(payload, "entity")
+        .ok_or_else(|| CoreError::Invalid("payload.entity is required".to_string()))?;
+    let aspect = read_payload_string(payload, "aspect")
+        .ok_or_else(|| CoreError::Invalid("payload.aspect is required".to_string()))?;
+    let claim_key = read_payload_string(payload, "claim_key")
+        .or_else(|| read_payload_string(payload, "claim"))
+        .ok_or_else(|| CoreError::Invalid("payload.claim_key is required".to_string()))?;
+    let attribute_id = read_payload_string(payload, "attribute_id");
+    let old_value = read_payload_string(payload, "old_value");
+    if attribute_id.is_none() && old_value.is_none() {
+        return Err(CoreError::Invalid(
+            "payload.attribute_id or payload.old_value is required".to_string(),
+        ));
+    }
+    let group_key =
+        read_payload_string(payload, "group_key").unwrap_or_else(|| "general".to_string());
+    let kind = normalize_attribute_kind(read_payload_string(payload, "kind"));
+    let entity_row = resolve_entity_row_strict(conn, &row.agent_id, &entity)?;
+    let aspect_row = resolve_aspect_row_strict(conn, &row.agent_id, &entity_row.id, &aspect)?;
+    let mut matched = Vec::new();
+    if let Some(id) = &attribute_id {
+        if let Some(found) = conn
+            .query_row(
+                "SELECT id
+                 FROM entity_attributes
+                 WHERE id = ?1
+                   AND agent_id = ?2
+                   AND aspect_id = ?3
+                   AND kind = ?4
+                   AND COALESCE(group_key, 'general') = ?5
+                   AND claim_key = ?6
+                   AND status = 'active'
+                 LIMIT 1",
+                rusqlite::params![id, row.agent_id, aspect_row.id, kind, group_key, claim_key],
+                |r| r.get::<_, String>(0),
+            )
+            .optional()?
+        {
+            matched.push(found);
+        }
+    } else if let Some(value) = &old_value {
+        matched = conn
+            .prepare(
+                "SELECT id
+                 FROM entity_attributes
+                 WHERE agent_id = ?1
+                   AND aspect_id = ?2
+                   AND kind = ?3
+                   AND COALESCE(group_key, 'general') = ?4
+                   AND claim_key = ?5
+                   AND normalized_content = ?6
+                   AND status = 'active'",
+            )?
+            .query_map(
+                rusqlite::params![
+                    row.agent_id,
+                    aspect_row.id,
+                    kind,
+                    group_key,
+                    claim_key,
+                    canonical(value)
+                ],
+                |r| r.get::<_, String>(0),
+            )?
+            .collect::<Result<Vec<_>, _>>()?;
+    }
+    if matched.is_empty() {
+        return Err(CoreError::Invalid(
+            "No active claim values matched supersession payload".to_string(),
+        ));
+    }
+    let replacement_id = if let Some(new_value) = read_payload_string(payload, "new_value") {
+        let mut next = payload.clone();
+        if let Some(object) = next.as_object_mut() {
+            object.insert("value".to_string(), JsonValue::String(new_value));
+            object.insert(
+                "claim_key".to_string(),
+                JsonValue::String(claim_key.clone()),
+            );
+            object.insert(
+                "group_key".to_string(),
+                JsonValue::String(group_key.clone()),
+            );
+        }
+        let result = apply_set_claim_value(conn, row, &next)?;
+        result
+            .get("attributeId")
+            .and_then(JsonValue::as_str)
+            .map(|value| value.to_string())
+    } else {
+        read_payload_string(payload, "superseded_by")
+    };
+    let ts = now();
+    for id in &matched {
+        conn.execute(
+            "UPDATE entity_attributes
+             SET status = 'superseded', superseded_by = ?1,
+                 proposal_id = ?2, proposal_evidence = ?3, updated_at = ?4
+             WHERE id = ?5 AND agent_id = ?6",
+            rusqlite::params![
+                replacement_id,
+                row.id,
+                proposal_evidence_json(row),
+                ts,
+                id,
+                row.agent_id
+            ],
+        )?;
+    }
+    Ok(json!({
+        "entityId": entity_row.id,
+        "aspectId": aspect_row.id,
+        "supersededAttributeIds": matched,
+        "replacementAttributeId": replacement_id,
+    }))
+}
+
+fn apply_archive_claim_value(
+    conn: &rusqlite::Connection,
+    row: &ProposalRow,
+    payload: &JsonValue,
+    actor: &str,
+) -> Result<JsonValue, CoreError> {
+    let attribute_id = read_payload_string(payload, "attribute_id")
+        .ok_or_else(|| CoreError::Invalid("payload.attribute_id is required".to_string()))?;
+    let kind = conn
+        .query_row(
+            "SELECT kind
+             FROM entity_attributes
+             WHERE id = ?1 AND agent_id = ?2",
+            rusqlite::params![attribute_id, row.agent_id],
+            |r| r.get::<_, String>(0),
+        )
+        .optional()?
+        .ok_or_else(|| CoreError::NotFound("Attribute not found".to_string()))?;
+    if kind == "constraint" && !force_payload(payload) {
+        return Err(CoreError::Conflict(
+            "Refusing to archive constraint attribute without force".to_string(),
+        ));
+    }
+    let ts = now();
+    conn.execute(
+        "UPDATE entity_attributes
+         SET status = 'deleted', archived_at = ?1, archived_by = ?2,
+             archive_reason = ?3, proposal_id = ?4, proposal_evidence = ?5, updated_at = ?1
+         WHERE id = ?6 AND agent_id = ?7",
+        rusqlite::params![
+            ts,
+            actor,
+            read_payload_string(payload, "reason").unwrap_or_else(|| row.rationale.clone()),
+            row.id,
+            proposal_evidence_json(row),
+            attribute_id,
+            row.agent_id
+        ],
+    )?;
+    Ok(json!({"attributeId": attribute_id, "archived": true}))
+}
+
+fn apply_restore_claim_version(
+    conn: &rusqlite::Connection,
+    row: &ProposalRow,
+    payload: &JsonValue,
+) -> Result<JsonValue, CoreError> {
+    let attribute_id = read_payload_string(payload, "attribute_id")
+        .ok_or_else(|| CoreError::Invalid("payload.attribute_id is required".to_string()))?;
+    let attribute = conn
+        .query_row(
+            "SELECT *
+             FROM entity_attributes
+             WHERE id = ?1 AND agent_id = ?2",
+            rusqlite::params![attribute_id, row.agent_id],
+            read_attribute_evidence_row,
+        )
+        .optional()?
+        .ok_or_else(|| CoreError::NotFound(format!("Attribute not found: {attribute_id}")))?;
+    let group_key = attribute
+        .group_key
+        .clone()
+        .unwrap_or_else(|| "general".to_string());
+    let claim_key = attribute
+        .claim_key
+        .clone()
+        .unwrap_or_else(|| "general".to_string());
+    let root_id = attribute
+        .version_root_id
+        .clone()
+        .unwrap_or_else(|| attribute.id.clone());
+    let ts = now();
+    conn.execute(
+        "UPDATE entity_attributes
+         SET status = 'superseded', superseded_by = ?1, updated_at = ?2
+         WHERE agent_id = ?3
+           AND aspect_id = ?4
+           AND kind = ?5
+           AND COALESCE(group_key, 'general') = ?6
+           AND claim_key = ?7
+           AND COALESCE(version_root_id, id) = ?8
+           AND status = 'active'
+           AND id != ?1",
+        rusqlite::params![
+            attribute.id,
+            ts,
+            row.agent_id,
+            attribute.aspect_id,
+            attribute.kind,
+            group_key,
+            claim_key,
+            root_id
+        ],
+    )?;
+    conn.execute(
+        "UPDATE entity_attributes
+         SET status = 'active', superseded_by = NULL, archived_at = NULL,
+             archived_by = NULL, archive_reason = NULL,
+             proposal_id = ?1, proposal_evidence = ?2, updated_at = ?3
+         WHERE id = ?4 AND agent_id = ?5",
+        rusqlite::params![
+            row.id,
+            proposal_evidence_json(row),
+            ts,
+            attribute.id,
+            row.agent_id
+        ],
+    )?;
+    Ok(json!({
+        "attributeId": attribute.id,
+        "versionRootId": root_id,
+        "restored": true,
+    }))
+}
+
 fn apply_create_link(
     conn: &rusqlite::Connection,
     row: &ProposalRow,
@@ -3152,12 +3838,122 @@ fn apply_create_link(
     )
 }
 
-fn apply_operation(conn: &rusqlite::Connection, row: &ProposalRow) -> Result<JsonValue, CoreError> {
+fn apply_update_link(
+    conn: &rusqlite::Connection,
+    row: &ProposalRow,
+    payload: &JsonValue,
+) -> Result<JsonValue, CoreError> {
+    let dependency_id = payload_selector(payload, &["id", "dependency_id", "link_id"])
+        .ok_or_else(|| CoreError::Invalid("payload.id is required".to_string()))?;
+    let current = conn
+        .query_row(
+            "SELECT *
+             FROM entity_dependencies
+             WHERE id = ?1 AND agent_id = ?2",
+            rusqlite::params![dependency_id, row.agent_id],
+            read_dependency_evidence_row,
+        )
+        .optional()?
+        .ok_or_else(|| CoreError::NotFound("Link not found".to_string()))?;
+    let dependency_type = read_payload_string(payload, "link_type")
+        .or_else(|| read_payload_string(payload, "dependency_type"))
+        .map(|value| normalize_dependency_type(Some(value)))
+        .unwrap_or(current.dependency_type);
+    let strength = read_payload_f64(payload, "strength").unwrap_or(current.strength);
+    let confidence = read_payload_f64(payload, "confidence").unwrap_or(current.confidence);
+    let reason = optional_payload_string(payload, "reason").or(current.reason);
+    conn.execute(
+        "UPDATE entity_dependencies
+         SET dependency_type = ?1, strength = ?2, confidence = ?3, reason = ?4,
+             source_id = COALESCE(?5, source_id),
+             source_kind = COALESCE(?6, source_kind),
+             source_path = COALESCE(?7, source_path),
+             source_root = COALESCE(?8, source_root),
+             proposal_id = ?9, proposal_evidence = ?10, updated_at = ?11
+         WHERE id = ?12 AND agent_id = ?13",
+        rusqlite::params![
+            dependency_type,
+            strength,
+            confidence,
+            reason,
+            row.source_id,
+            row.source_kind,
+            row.source_path,
+            row.source_root,
+            row.id,
+            proposal_evidence_json(row),
+            now(),
+            dependency_id,
+            row.agent_id
+        ],
+    )?;
+    Ok(json!({
+        "dependencyId": dependency_id,
+        "updated": true,
+    }))
+}
+
+fn apply_archive_link(
+    conn: &rusqlite::Connection,
+    row: &ProposalRow,
+    payload: &JsonValue,
+    actor: &str,
+) -> Result<JsonValue, CoreError> {
+    let dependency_id = payload_selector(payload, &["id", "dependency_id", "link_id"])
+        .ok_or_else(|| CoreError::Invalid("payload.id is required".to_string()))?;
+    let exists = conn
+        .query_row(
+            "SELECT 1
+             FROM entity_dependencies
+             WHERE id = ?1 AND agent_id = ?2",
+            rusqlite::params![dependency_id, row.agent_id],
+            |r| r.get::<_, i64>(0),
+        )
+        .optional()?
+        .is_some();
+    if !exists {
+        return Err(CoreError::NotFound("Link not found".to_string()));
+    }
+    let ts = now();
+    conn.execute(
+        "UPDATE entity_dependencies
+         SET status = 'archived', archived_at = ?1, archived_by = ?2,
+             archive_reason = ?3, proposal_id = ?4, proposal_evidence = ?5, updated_at = ?1
+         WHERE id = ?6 AND agent_id = ?7",
+        rusqlite::params![
+            ts,
+            actor,
+            read_payload_string(payload, "reason").unwrap_or_else(|| row.rationale.clone()),
+            row.id,
+            proposal_evidence_json(row),
+            dependency_id,
+            row.agent_id
+        ],
+    )?;
+    Ok(json!({"dependencyId": dependency_id, "archived": true}))
+}
+
+fn apply_operation(
+    conn: &rusqlite::Connection,
+    row: &ProposalRow,
+    actor: &str,
+) -> Result<JsonValue, CoreError> {
     let payload = parse_json(&row.payload, json!({}));
     match row.operation.as_str() {
         "create_entity" => apply_create_entity(conn, row, &payload),
+        "rename_entity" => apply_rename_entity(conn, row, &payload),
+        "archive_entity" => apply_archive_entity(conn, row, &payload, actor),
+        "create_aspect" => apply_create_aspect(conn, row, &payload),
+        "rename_aspect" => apply_rename_aspect(conn, row, &payload),
+        "archive_aspect" => apply_archive_aspect(conn, row, &payload, actor),
         "add_claim_value" | "add_claim" => apply_add_claim_value(conn, row, &payload),
+        "set_claim_value" => apply_set_claim_value(conn, row, &payload),
+        "supersede_claim_value" => apply_supersede_claim_value(conn, row, &payload),
+        "archive_claim_value" => apply_archive_claim_value(conn, row, &payload, actor),
+        "restore_claim_version" => apply_restore_claim_version(conn, row, &payload),
         "create_link" => apply_create_link(conn, row, &payload),
+        "update_link" => apply_update_link(conn, row, &payload),
+        "archive_link" => apply_archive_link(conn, row, &payload, actor),
         _ => Err(CoreError::Invalid(format!(
             "unsupported ontology operation: {}",
             row.operation
@@ -4292,7 +5088,7 @@ fn apply_operation_item(
         .and_then(JsonValue::as_str)
         .ok_or_else(|| CoreError::Invalid("proposal agentId is missing".to_string()))?;
     let row = load_proposal_row(conn, id, agent_id)?;
-    let result = apply_operation(conn, &row)?;
+    let result = apply_operation(conn, &row, actor)?;
     let proposal = mark_applied_value(conn, &row, actor, &result)?;
     Ok(json!({
         "proposal": proposal,
@@ -4598,7 +5394,7 @@ async fn transition(
         }
         let ts = now();
         let result_json = if status == "applied" {
-            apply_operation(conn, &row)?
+            apply_operation(conn, &row, &actor)?
         } else {
             json!({"reason": reason})
         };
