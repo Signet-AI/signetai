@@ -3,7 +3,8 @@
 import { createHash } from "node:crypto";
 import { createWriteStream, mkdirSync, readFileSync, renameSync, rmSync } from "node:fs";
 import { chmod, mkdtemp } from "node:fs/promises";
-import { get } from "node:https";
+import { get as httpGet } from "node:http";
+import { get as httpsGet } from "node:https";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -33,6 +34,11 @@ function platformKey() {
 
 function request(url, redirectCount = 0) {
 	return new Promise((resolve, reject) => {
+		const get = url.startsWith("http:") ? httpGet : url.startsWith("https:") ? httpsGet : null;
+		if (!get) {
+			reject(new Error(`Unsupported download URL: ${url}`));
+			return;
+		}
 		const req = get(url, (res) => {
 			const location = res.headers.location;
 			if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && location) {
