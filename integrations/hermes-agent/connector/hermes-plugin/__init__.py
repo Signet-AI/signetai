@@ -497,10 +497,13 @@ class SignetMemoryProvider(MemoryProvider):
         # data races: sync_turn() can update _last_assistant_message
         # concurrently, and shutdown() can null _client.
         client = self._client
-        session_key = self._session_key
-        project = self._project
         last_assistant = self._last_assistant_message
-        prefetch_generation = self._prefetch_generation
+        with self._prefetch_lock:
+            self._prefetch_generation += 1
+            self._prefetch_result = ""
+            session_key = self._session_key
+            project = self._project
+            prefetch_generation = self._prefetch_generation
 
         def _run():
             try:
@@ -791,6 +794,7 @@ class SignetMemoryProvider(MemoryProvider):
         client = self._client
         if not client or not result:
             return
+        project = self._project
 
         content = f"Delegated task: {task[:200]}\nResult: {result[:500]}"
 
@@ -800,6 +804,7 @@ class SignetMemoryProvider(MemoryProvider):
                     content,
                     importance=0.6,
                     tags=["delegation", "subagent"],
+                    project=project,
                 )
             except Exception as e:
                 logger.debug("Signet delegation memory failed: %s", e)

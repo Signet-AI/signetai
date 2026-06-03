@@ -796,6 +796,17 @@ describe("Hermes Agent bundled plugin", () => {
 		expect(plugin).toContain("self._prefetch_generation += 1");
 	});
 
+	it("invalidates stale prefetch results for every queued recall", () => {
+		const plugin = readFileSync(join(import.meta.dir, "hermes-plugin", "__init__.py"), "utf-8");
+		const queuePrefetchFn = plugin.slice(plugin.indexOf("def queue_prefetch"), plugin.indexOf("def on_turn_start"));
+		const generationIncrement = queuePrefetchFn.indexOf("self._prefetch_generation += 1");
+
+		expect(queuePrefetchFn).toContain("with self._prefetch_lock:");
+		expect(queuePrefetchFn).toContain('self._prefetch_result = ""');
+		expect(generationIncrement).toBeGreaterThan(-1);
+		expect(generationIncrement).toBeLessThan(queuePrefetchFn.indexOf("def _run"));
+	});
+
 	it("accepts latest Hermes lifecycle calls with the daemon offline", () => {
 		const fixture = join(tmpRoot, "python-lifecycle-fixture");
 		cpSync(join(import.meta.dir, "hermes-plugin"), join(fixture, "plugins", "memory", "signet"), { recursive: true });
@@ -870,6 +881,44 @@ describe("Hermes Agent bundled plugin", () => {
 		expect(result.stdout).toContain('"context:foreground"');
 		expect(result.stdout).toContain('"platform:cli"');
 		expect(result.stdout).toContain('"session:session-a"');
+	});
+
+	it("stores Hermes delegation memories with project scope", () => {
+		const fixture = join(tmpRoot, "python-delegation-fixture");
+		cpSync(join(import.meta.dir, "hermes-plugin"), join(fixture, "plugins", "memory", "signet"), { recursive: true });
+		mkdirSync(join(fixture, "agent"), { recursive: true });
+		writeFileSync(join(fixture, "agent", "__init__.py"), "");
+		writeFileSync(join(fixture, "plugins", "__init__.py"), "");
+		writeFileSync(join(fixture, "plugins", "memory", "__init__.py"), "");
+		writeFileSync(join(fixture, "agent", "memory_provider.py"), "class MemoryProvider:\n    pass\n");
+
+		const result = spawnSync(
+			"python",
+			[
+				"-c",
+				[
+					"import json, time",
+					"from plugins.memory.signet import SignetMemoryProvider",
+					"class FakeClient:",
+					"    def __init__(self): self.calls = []",
+					"    def remember(self, content, **kwargs): self.calls.append({'content': content, **kwargs})",
+					"provider = SignetMemoryProvider()",
+					"provider._client = FakeClient()",
+					"provider._project = '/tmp/delegated-project'",
+					"provider.on_delegation('inspect branch', 'found the issue')",
+					"for _ in range(50):",
+					"    if provider._client.calls: break",
+					"    time.sleep(0.02)",
+					"provider._client.calls and print(json.dumps(provider._client.calls[0], sort_keys=True))",
+				].join("\n"),
+			],
+			{ env: { ...process.env, PYTHONPATH: fixture }, encoding: "utf-8" },
+		);
+
+		expect(result.status).toBe(0);
+		expect(result.stdout).toContain('"project": "/tmp/delegated-project"');
+		expect(result.stdout).toContain('"delegation"');
+		expect(result.stdout).toContain('"subagent"');
 	});
 
 	it("registers Signet tools with a Hermes-style memory manager before daemon initialization", () => {
