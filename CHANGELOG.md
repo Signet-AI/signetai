@@ -6,6 +6,9 @@ All notable changes to Signet are documented here.
 
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
+### 2026-06-02
+- Bug fixes: decouple summary worker from pipelineV2 so dreaming gets summaries.
+
 ### 2026-06-01
 - Bug fixes: make transcript recapture idempotent; preserve setup onboarding; repair summary_jobs migration columns.
 
@@ -26,11 +29,16 @@ Surface summary of the most recent release dates. See the release ledger below f
 ### 2026-05-26
 - Bug fixes: resolve hermes-plugin from native bundle SIGNET_DIR; accept empty check-fts posts; respect Signet path for dashboard logs.
 
-### 2026-05-25
-- Features: add Discord source operations panel; extract Discord attachment text; add npc backend prototype; tail Discord gateway events.
-- Bug fixes: scope dreaming triggers by agent; surface graph extraction diagnostics; patch partial Discord gateway updates; avoid duplicate native plugin hooks.
-
 ## Release Ledger
+
+## [0.138.10] - 2026-06-02
+
+Release summary: 1 bug fix.
+Tag range: `bundle-0.138.8-4ea27bc9daa7fb81b9cfd989b2ac208969702e95..v0.138.10`.
+
+### Bug Fixes
+
+- **daemon**: decouple summary worker from pipelineV2 so dreaming gets summaries (#814)
 
 ## [0.138.9] - 2026-06-01
 
