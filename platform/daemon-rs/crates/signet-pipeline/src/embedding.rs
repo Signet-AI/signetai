@@ -402,6 +402,22 @@ pub fn from_config(cfg: &EmbeddingConfig, api_key: Option<&str>) -> Arc<dyn Embe
             info!("embedding provider disabled");
             Arc::new(NoopProvider::new(cfg.dimensions))
         }
+        "native" => {
+            let url = cfg
+                .base_url
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .unwrap_or(DEFAULT_OLLAMA_URL);
+            info!(
+                provider = "native",
+                fallback = "ollama",
+                model = %cfg.model,
+                url,
+                dims = cfg.dimensions,
+                "native embedding not available in daemon-rs; falling back to ollama"
+            );
+            Arc::new(OllamaProvider::new(url, &cfg.model, cfg.dimensions))
+        }
         other => {
             warn!(provider = other, "unknown embedding provider, using noop");
             Arc::new(NoopProvider::new(cfg.dimensions))

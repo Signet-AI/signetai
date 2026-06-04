@@ -1266,7 +1266,10 @@ fn resolve_runtime_extraction_endpoint(
 }
 
 fn worker_supports_extraction_provider(provider: &str) -> bool {
-    matches!(provider, "ollama" | "anthropic" | "openai-compatible")
+    matches!(
+        provider,
+        "ollama" | "anthropic" | "openai-compatible" | "acpx" | "claude-code" | "codex" | "command"
+    )
 }
 
 fn provider_is_unsupported_for_daemon_startup_preflight(provider: &str) -> bool {

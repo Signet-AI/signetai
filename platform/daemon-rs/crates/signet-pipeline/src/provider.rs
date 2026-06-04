@@ -699,6 +699,8 @@ impl LlmProvider for OpenAiCompatProvider {
 
 /// LLM provider that spawns a CLI subprocess, pipes the prompt to stdin,
 /// and reads the response from stdout.
+const DEFAULT_ACPX_VERSION: &str = "0.10.0";
+
 pub struct CliProvider {
     binary: String,
     args: Vec<String>,
@@ -713,6 +715,28 @@ impl CliProvider {
             binary: binary.to_string(),
             args: args.iter().map(|s| s.to_string()).collect(),
             provider_name,
+            default_timeout_ms: timeout_ms,
+            health: Mutex::new(HealthTracker::new()),
+        }
+    }
+
+    pub fn new_acpx(model: &str, timeout_ms: u64) -> Self {
+        let timeout_secs = std::cmp::max(1, timeout_ms / 1000);
+        let args: Vec<String> = [
+            "-y",
+            &format!("acpx@{DEFAULT_ACPX_VERSION}"),
+            "--format", "quiet",
+            "--timeout", &timeout_secs.to_string(),
+            "--model", model,
+            "--deny-all",
+            "--no-terminal",
+            "codex",
+            "exec", "--file", "-",
+        ].iter().map(|s| s.to_string()).collect();
+        Self {
+            binary: "npx".to_string(),
+            args,
+            provider_name: "acpx",
             default_timeout_ms: timeout_ms,
             health: Mutex::new(HealthTracker::new()),
         }
@@ -1161,7 +1185,7 @@ pub fn from_config(cfg: &LlmProviderConfig) -> Arc<dyn LlmProvider> {
         }
         "acpx" => {
             info!(provider = "acpx", model = %cfg.model, timeout_ms = timeout, "LLM provider initialized");
-            Arc::new(CliProvider::new("acpx", &[], timeout, "acpx"))
+            Arc::new(CliProvider::new_acpx(&cfg.model, timeout))
         }
         "command" => {
             let binary = cfg
