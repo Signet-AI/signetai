@@ -756,7 +756,7 @@ async function waitForLaunchdDaemonUnload(label: string = LAUNCHD_DAEMON_LABEL):
 				`  launchd service ${label} did not unload within 5 seconds. The daemon may still be running.`,
 			),
 		);
-		console.warn(chalk.dim("  Run `launchctl bootout gui/$(id -u)/${label}` manually if the daemon does not stop."));
+		console.warn(chalk.dim(`  Run \`launchctl bootout gui/$(id -u)/${label}\` manually if the daemon does not stop.`));
 	}
 	return !stillLoaded;
 }
