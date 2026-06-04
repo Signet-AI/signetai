@@ -286,8 +286,9 @@ jobs:
     needs: [release, build-native, build-rust-daemon]
     runs-on: ubuntu-latest
     # Do not undraft the GitHub release unless every native binary matrix leg
-    # and opt-in Rust daemon matrix leg completed and uploaded binary/checksum pairs.
-    if: always() && needs.release.result == 'success' && needs.build-native.result == 'success' && needs.build-rust-daemon.result == 'success' && needs.release.outputs.skip != 'true' && needs.release.outputs.version != ''
+    # completed and uploaded its binary/checksum pair. The opt-in Rust daemon
+    # is allowed to fail without blocking the publish pipeline.
+    if: always() && needs.release.result == 'success' && needs.build-native.result == 'success' && needs.release.outputs.skip != 'true' && needs.release.outputs.version != ''
     permissions:
       contents: write
     env:
@@ -322,7 +323,7 @@ jobs:
         run: |
           set -euo pipefail
           mapfile -t ASSETS < <(gh release view "v${NEW_VERSION}" --json assets --jq '.assets[].name')
-          expected=(
+          required=(
             signet-linux-x64
             signet-linux-x64.sha256
             signet-linux-arm64
@@ -333,6 +334,8 @@ jobs:
             signet-darwin-x64.sha256
             signet-win32-x64.exe
             signet-win32-x64.exe.sha256
+          )
+          optional=(
             signet-daemon-linux-x64
             signet-daemon-linux-x64.sha256
             signet-daemon-linux-arm64
@@ -344,12 +347,21 @@ jobs:
             signet-daemon-win32-x64.exe
             signet-daemon-win32-x64.exe.sha256
           )
-          for asset in "${expected[@]}"; do
+          for asset in "${required[@]}"; do
             if ! printf '%s\n' "${ASSETS[@]}" | grep -Fxq "$asset"; then
               echo "::error::Missing release asset: $asset"
               exit 1
             fi
           done
+          missing_optional=()
+          for asset in "${optional[@]}"; do
+            if ! printf '%s\n' "${ASSETS[@]}" | grep -Fxq "$asset"; then
+              missing_optional+=("$asset")
+            fi
+          done
+          if [ ${#missing_optional[@]} -gt 0 ]; then
+            echo "::warning::Missing opt-in Rust daemon assets: ${missing_optional[*]}"
+          fi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

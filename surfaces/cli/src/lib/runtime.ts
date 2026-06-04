@@ -98,7 +98,8 @@ export function isRustDaemonPath(path: string): boolean {
 	return (
 		normalized.includes("/runtime/daemon-rs/signet-daemon") ||
 		normalized.includes("\\runtime\\daemon-rs\\signet-daemon.exe") ||
-		/bin\/signet-daemon-(darwin|linux|win32)-(x64|arm64)(\.exe)?$/.test(normalized)
+		/bin\/signet-daemon-(darwin|linux|win32)-(x64|arm64)(\.exe)?$/.test(normalized) ||
+		/signet-daemon-(darwin|linux|win32)-(x64|arm64)(\.exe)?$/.test(normalized)
 	);
 }
 
@@ -748,7 +749,16 @@ async function waitForLaunchdDaemonUnload(label: string = LAUNCHD_DAEMON_LABEL):
 		}
 		await sleep(250);
 	}
-	return !isLaunchdDaemonLoaded(label);
+	const stillLoaded = isLaunchdDaemonLoaded(label);
+	if (stillLoaded) {
+		console.warn(
+			chalk.yellow(
+				`  launchd service ${label} did not unload within 5 seconds. The daemon may still be running.`,
+			),
+		);
+		console.warn(chalk.dim("  Run `launchctl bootout gui/$(id -u)/${label}` manually if the daemon does not stop."));
+	}
+	return !stillLoaded;
 }
 
 export function didSystemdDaemonStart(result: Pick<SpawnSyncReturns<Buffer>, "status" | "signal" | "error">): boolean {
@@ -804,12 +814,16 @@ export async function startDaemon(agentsDir: string = AGENTS_DIR): Promise<boole
 	}
 
 	if (daemonPath && wantsRustRuntime && !isRustDaemonPath(daemonPath)) {
-		console.error(
-			chalk.red(
-				"Rust daemon runtime requested, but no Rust daemon binary was found. Reinstall Signet, unset SIGNET_DAEMON_RUNTIME, or make the release asset available.",
+		console.warn(
+			chalk.yellow(
+				"Rust daemon runtime requested, but no Rust daemon binary was found. Falling back to the JavaScript daemon.",
 			),
 		);
-		return false;
+		console.warn(
+			chalk.dim(
+				"  Set SIGNET_DAEMON_RUNTIME= (unset) to suppress this warning, or install the Rust daemon release asset.",
+			),
+		);
 	}
 
 	if (!daemonPath) {

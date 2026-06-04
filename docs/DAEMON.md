@@ -81,7 +81,12 @@ production daemon. `signet daemon start` uses the TypeScript/Bun daemon unless
 `SIGNET_DAEMON_RUNTIME=rust` is set and the installed bundle contains
 `runtime/daemon-rs/signet-daemon` or the CLI can download the matching
 `signet-daemon-<platform>-<arch>` release asset into
-`$SIGNET_WORKSPACE/.daemon/bin/`.
+`$SIGNET_WORKSPACE/.daemon/bin/`. The downloaded binary can be removed
+with:
+
+```bash
+rm "$SIGNET_WORKSPACE/.daemon/bin/signet-daemon-$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m)"
+```
 
 Do not treat route-parity or contract-replay success as a cutover signal by
 itself. Runtime replacement also requires stateful subsystem proof for file

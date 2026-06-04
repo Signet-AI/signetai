@@ -10,6 +10,7 @@ import {
 	didLaunchdDaemonStart,
 	didSystemdDaemonStart,
 	getDaemonStatus,
+	isRustDaemonPath,
 	launchdDaemonPlistPath,
 	macOSLaunchAgentAttributionNotice,
 	readDaemonStartFailureDiagnostics,
@@ -51,6 +52,14 @@ describe("resolveDaemonPaths", () => {
 		expect(workspaceRustDaemonBinaryPath("/Users/user/.agents", "darwin", "arm64")).toBe(
 			"/Users/user/.agents/.daemon/bin/signet-daemon-darwin-arm64",
 		);
+	});
+
+	it("detects workspace Rust daemon paths regardless of parent directory depth", () => {
+		expect(isRustDaemonPath("/Users/user/.agents/.daemon/bin/signet-daemon-darwin-arm64")).toBe(true);
+		expect(isRustDaemonPath("/home/user/.agents/.daemon/bin/signet-daemon-linux-x64")).toBe(true);
+		expect(isRustDaemonPath("C:\\Users\\user\\.agents\\.daemon\\bin\\signet-daemon-win32-x64.exe")).toBe(true);
+		expect(isRustDaemonPath("/opt/signet/runtime/daemon-rs/signet-daemon")).toBe(true);
+		expect(isRustDaemonPath("/opt/signet/runtime/daemon-js/daemon.js")).toBe(false);
 	});
 });
 

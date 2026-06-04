@@ -231,11 +231,11 @@ describe("check-publish-manifests", () => {
 		expect(workflow).toContain("asset: signet-daemon-darwin-arm64");
 		expect(workflow).toContain("asset: signet-daemon-win32-x64.exe");
 		expect(workflow).toContain("needs: [release, build-native, build-rust-daemon]");
-		expect(workflow).toContain("needs.build-rust-daemon.result == 'success'");
 		expect(workflow).toContain("signet-daemon-darwin-arm64");
 		expect(workflow).toContain("signet-daemon-darwin-arm64.sha256");
 		expect(workflow).toContain("signet-daemon-darwin-x64");
 		expect(workflow).toContain("signet-daemon-darwin-x64.sha256");
+		expect(workflow).toContain("Missing opt-in Rust daemon assets");
 	});
 
 	test("validates generated native manifest coverage against the npm wrapper", () => {
