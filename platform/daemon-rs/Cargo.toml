@@ -24,7 +24,7 @@ tokio = { version = "1", features = ["full"] }
 axum = { version = "0.8", features = ["macros"] }
 tower = "0.5"
 tower-http = { version = "0.6", features = ["fs", "cors", "trace"] }
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.12", features = ["json", "blocking"] }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
@@ -75,6 +75,10 @@ regex-lite = "0.1"
 bytes = "1"
 tiktoken-rs = "0.9.1"
 zip = { version = "2", default-features = false, features = ["deflate"] }
+
+# ML / ONNX
+ort = { version = "2.0.0-rc.12", features = ["download-binaries"] }
+tokenizers = "0.23"
 
 # Internal crates
 signet-core = { path = "crates/signet-core" }
