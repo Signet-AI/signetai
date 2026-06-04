@@ -77,17 +77,48 @@ function rustDaemonRuntimeEnabled(env: NodeJS.ProcessEnv): boolean {
 	return env.SIGNET_DAEMON_RUNTIME?.trim().toLowerCase() === "rust";
 }
 
-export function resolveDaemonPaths(env: NodeJS.ProcessEnv = process.env): string[] {
+export function rustDaemonBinaryName(
+	platform: NodeJS.Platform = process.platform,
+	arch: NodeJS.Architecture = process.arch,
+): string {
+	const ext = platform === "win32" ? ".exe" : "";
+	return `signet-daemon-${platform}-${arch}${ext}`;
+}
+
+export function workspaceRustDaemonBinaryPath(
+	agentsDir: string,
+	platform: NodeJS.Platform = process.platform,
+	arch: NodeJS.Architecture = process.arch,
+): string {
+	return join(agentsDir, ".daemon", "bin", rustDaemonBinaryName(platform, arch));
+}
+
+export function isRustDaemonPath(path: string): boolean {
+	const normalized = normalizeCmd(path);
+	return (
+		normalized.includes("/runtime/daemon-rs/signet-daemon") ||
+		normalized.includes("\\runtime\\daemon-rs\\signet-daemon.exe") ||
+		/bin\/signet-daemon-(darwin|linux|win32)-(x64|arm64)(\.exe)?$/.test(normalized)
+	);
+}
+
+export function resolveDaemonPaths(
+	env: NodeJS.ProcessEnv = process.env,
+	options: { readonly agentsDir?: string } = {},
+): string[] {
 	const currentNativeExecutable = currentNativeExecutablePath();
 	const bundledNativeDaemon = env.SIGNET_DIR
 		? join(env.SIGNET_DIR, "runtime", "daemon-rs", process.platform === "win32" ? "signet-daemon.exe" : "signet-daemon")
 		: null;
 	const bundledJsDaemon = env.SIGNET_DIR ? join(env.SIGNET_DIR, "runtime", "daemon-js", "daemon.js") : null;
-	const bundledRuntimePaths = rustDaemonRuntimeEnabled(env)
-		? [bundledNativeDaemon, bundledJsDaemon]
+	const workspaceRustDaemon = options.agentsDir ? workspaceRustDaemonBinaryPath(options.agentsDir) : null;
+	const wantsRustRuntime = rustDaemonRuntimeEnabled(env);
+	const nativeCliRuntimePaths = wantsRustRuntime ? [] : [currentNativeExecutable];
+	const bundledRuntimePaths = wantsRustRuntime
+		? [bundledNativeDaemon, workspaceRustDaemon, bundledJsDaemon]
 		: [bundledJsDaemon];
 	return [
-		currentNativeExecutable,
+		...nativeCliRuntimePaths,
 		...bundledRuntimePaths,
 		join(__dirname, "daemon.js"),
 		join(cliDir, "daemon.js"),
@@ -367,26 +398,26 @@ export async function getDaemonStatus(): Promise<{
 	};
 }
 
-async function downloadDaemonBinary(): Promise<void> {
-	let version: string | undefined;
+async function downloadDaemonBinary(agentsDir: string): Promise<string | null> {
+	let version = process.env.SIGNET_VERSION?.trim();
 	try {
-		const raw = readFileSync(join(pkgDir, "package.json"), "utf8");
-		version = (JSON.parse(raw) as { version?: string }).version;
+		if (!version) {
+			const raw = readFileSync(join(pkgDir, "package.json"), "utf8");
+			version = (JSON.parse(raw) as { version?: string }).version;
+		}
 	} catch {
-		return;
+		return null;
 	}
-	if (!version) return;
+	if (!version) return null;
 
 	const plat = process.platform;
 	const arch = process.arch;
 	const supported = new Set(["linux:x64", "darwin:x64", "darwin:arm64", "win32:x64", "win32:arm64"]);
-	if (!supported.has(`${plat}:${arch}`)) return;
+	if (!supported.has(`${plat}:${arch}`)) return null;
 
-	const ext = plat === "win32" ? ".exe" : "";
-	const name = `signet-daemon-${plat}-${arch}${ext}`;
-	const binDir = join(pkgDir, "bin");
-	const dest = join(binDir, name);
-	if (existsSync(dest)) return;
+	const name = rustDaemonBinaryName(plat, arch);
+	const dest = workspaceRustDaemonBinaryPath(agentsDir, plat, arch);
+	if (existsSync(dest)) return dest;
 
 	const base = `https://github.com/Signet-AI/signetai/releases/download/v${version}`;
 	process.stdout.write(`  Downloading Rust daemon binary (${name})...`);
@@ -398,27 +429,28 @@ async function downloadDaemonBinary(): Promise<void> {
 		});
 		if (!checksumRes.ok) {
 			process.stdout.write(` skipped (checksum unavailable: ${checksumRes.status})\n`);
-			return;
+			return null;
 		}
 		const expectedHash = (await checksumRes.text()).trim().split(/\s+/)[0];
 
 		const res = await fetch(`${base}/${name}`, { redirect: "follow", signal: AbortSignal.timeout(30_000) });
 		if (!res.ok) {
 			process.stdout.write(` skipped (${res.status})\n`);
-			return;
+			return null;
 		}
-		mkdirSync(binDir, { recursive: true });
+		mkdirSync(dirname(dest), { recursive: true });
 		const bytes = await res.arrayBuffer();
 		const buf = Buffer.from(bytes);
 		const actualHash = sha256(buf);
 		if (actualHash !== expectedHash) {
 			process.stdout.write(" skipped (checksum mismatch — possible tampering)\n");
-			return;
+			return null;
 		}
 
 		writeFileSync(dest, buf);
 		if (plat !== "win32") chmodSync(dest, 0o755);
 		process.stdout.write(" done\n");
+		return dest;
 	} catch {
 		process.stdout.write(" skipped (download failed)\n");
 		try {
@@ -426,6 +458,7 @@ async function downloadDaemonBinary(): Promise<void> {
 		} catch {
 			// Ignore.
 		}
+		return null;
 	}
 }
 
@@ -736,15 +769,19 @@ export async function startDaemon(agentsDir: string = AGENTS_DIR): Promise<boole
 		}
 	}
 
+	const wantsRustRuntime = rustDaemonRuntimeEnabled(process.env);
+	let wantsNativeShadow = false;
 	try {
 		const raw = parseSimpleYaml(readFileSync(join(agentsDir, "agent.yaml"), "utf8"));
 		const mem = raw?.memory as Record<string, unknown> | undefined;
 		const p2 = mem?.pipelineV2 as Record<string, unknown> | undefined;
-		if (p2?.nativeShadowEnabled === true) {
-			await downloadDaemonBinary();
-		}
+		wantsNativeShadow = p2?.nativeShadowEnabled === true;
 	} catch {
 		// Non-fatal — agent.yaml may not exist yet.
+	}
+
+	if (wantsRustRuntime || wantsNativeShadow) {
+		await downloadDaemonBinary(agentsDir);
 	}
 
 	const net = resolveDaemonNetwork(agentsDir, process.env);
@@ -759,11 +796,20 @@ export async function startDaemon(agentsDir: string = AGENTS_DIR): Promise<boole
 	// __dirname already points at dist/ — check it first to handle the
 	// bundled layout where cliDir overshoots to the package root.
 	let daemonPath: string | null = null;
-	for (const loc of daemonPaths()) {
+	for (const loc of resolveDaemonPaths(process.env, { agentsDir })) {
 		if (existsSync(loc)) {
 			daemonPath = loc;
 			break;
 		}
+	}
+
+	if (daemonPath && wantsRustRuntime && !isRustDaemonPath(daemonPath)) {
+		console.error(
+			chalk.red(
+				"Rust daemon runtime requested, but no Rust daemon binary was found. Reinstall Signet, unset SIGNET_DAEMON_RUNTIME, or make the release asset available.",
+			),
+		);
+		return false;
 	}
 
 	if (!daemonPath) {

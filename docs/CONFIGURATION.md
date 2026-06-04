@@ -1277,10 +1277,12 @@ it is unset, Signet checks `$SIGNET_WORKSPACE/libsqlite3.dylib`, where
 trying standard Homebrew SQLite locations and finally falling back to
 Apple's system SQLite.
 
-`SIGNET_DAEMON_RUNTIME=rust` is an explicit test opt-in for installed bundles
-that include `runtime/daemon-rs/signet-daemon`. Leave it unset for normal
-operation; the TypeScript/Bun daemon remains the default until daemon-rs has
-stateful subsystem and rollback proof, not just endpoint-shape parity.
+`SIGNET_DAEMON_RUNTIME=rust` is an explicit test opt-in. Installed bundles can
+provide `runtime/daemon-rs/signet-daemon`; curl/npm/native installs can also
+download the matching `signet-daemon-<platform>-<arch>` release asset into
+`$SIGNET_WORKSPACE/.daemon/bin/`. Leave it unset for normal operation; the
+TypeScript/Bun daemon remains the default until daemon-rs has stateful
+subsystem and rollback proof, not just endpoint-shape parity.
 
 For non-loopback Anthropic endpoint overrides, daemon-rs
 only sends provider credentials during startup preflight when the host

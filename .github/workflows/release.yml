@@ -224,12 +224,70 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  build-rust-daemon:
+    needs: release
+    if: needs.release.outputs.skip != 'true' && needs.release.outputs.version != ''
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux-x64
+            asset: signet-daemon-linux-x64
+          - os: ubuntu-24.04-arm
+            platform: linux-arm64
+            asset: signet-daemon-linux-arm64
+          - os: macos-15-intel
+            platform: darwin-x64
+            asset: signet-daemon-darwin-x64
+          - os: macos-14
+            platform: darwin-arm64
+            asset: signet-daemon-darwin-arm64
+          - os: windows-latest
+            platform: win32-x64
+            asset: signet-daemon-win32-x64.exe
+    runs-on: ${{ matrix.os }}
+    env:
+      RELEASE_VERSION: ${{ needs.release.outputs.version }}
+      RELEASE_ASSET: ${{ matrix.asset }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v${{ needs.release.outputs.version }}
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Build Rust daemon
+        shell: bash
+        run: cargo build --manifest-path platform/daemon-rs/Cargo.toml --release -p signet-daemon
+
+      - name: Stage Rust daemon asset
+        shell: bash
+        run: |
+          set -euo pipefail
+          STAGING="${RUNNER_TEMP}/upload"
+          mkdir -p "${STAGING}"
+          src="platform/daemon-rs/target/release/signet-daemon"
+          if [[ "${RELEASE_ASSET}" == *.exe ]]; then
+            src="${src}.exe"
+          fi
+          cp "${src}" "${STAGING}/${RELEASE_ASSET}"
+          chmod 755 "${STAGING}/${RELEASE_ASSET}"
+          openssl dgst -sha256 -hex "${STAGING}/${RELEASE_ASSET}" | awk '{print $NF}' > "${STAGING}/${RELEASE_ASSET}.sha256"
+          test -s "${STAGING}/${RELEASE_ASSET}"
+          gh release upload "v${RELEASE_VERSION}" "${STAGING}/${RELEASE_ASSET}" --clobber
+          gh release upload "v${RELEASE_VERSION}" "${STAGING}/${RELEASE_ASSET}.sha256" --clobber
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   publish:
-    needs: [release, build-native]
+    needs: [release, build-native, build-rust-daemon]
     runs-on: ubuntu-latest
     # Do not undraft the GitHub release unless every native binary matrix leg
-    # completed and uploaded its binary/checksum pair.
-    if: always() && needs.release.result == 'success' && needs.build-native.result == 'success' && needs.release.outputs.skip != 'true' && needs.release.outputs.version != ''
+    # and opt-in Rust daemon matrix leg completed and uploaded binary/checksum pairs.
+    if: always() && needs.release.result == 'success' && needs.build-native.result == 'success' && needs.build-rust-daemon.result == 'success' && needs.release.outputs.skip != 'true' && needs.release.outputs.version != ''
     permissions:
       contents: write
     env:
@@ -250,7 +308,12 @@ jobs:
       - name: Download native release assets
         run: |
           mkdir -p dist/native
-          gh release download "v${NEW_VERSION}" --pattern "signet-*" --dir dist/native --repo "$GITHUB_REPOSITORY"
+          gh release download "v${NEW_VERSION}" \
+            --pattern "signet-linux-*" \
+            --pattern "signet-darwin-*" \
+            --pattern "signet-win32-*" \
+            --dir dist/native \
+            --repo "$GITHUB_REPOSITORY"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -270,6 +333,16 @@ jobs:
             signet-darwin-x64.sha256
             signet-win32-x64.exe
             signet-win32-x64.exe.sha256
+            signet-daemon-linux-x64
+            signet-daemon-linux-x64.sha256
+            signet-daemon-linux-arm64
+            signet-daemon-linux-arm64.sha256
+            signet-daemon-darwin-arm64
+            signet-daemon-darwin-arm64.sha256
+            signet-daemon-darwin-x64
+            signet-daemon-darwin-x64.sha256
+            signet-daemon-win32-x64.exe
+            signet-daemon-win32-x64.exe.sha256
           )
           for asset in "${expected[@]}"; do
             if ! printf '%s\n' "${ASSETS[@]}" | grep -Fxq "$asset"; then

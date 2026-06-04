@@ -34,6 +34,16 @@ export function configureDesktopUpdates(): void {
 	configured = true;
 	autoUpdater.autoDownload = false;
 	autoUpdater.autoInstallOnAppQuit = true;
+	const channel = desktopUpdateChannel();
+	if (channel) autoUpdater.channel = channel;
+}
+
+export function desktopUpdateChannel(
+	platform: NodeJS.Platform = process.platform,
+	arch: NodeJS.Architecture = process.arch,
+): string | null {
+	if (platform !== "darwin") return null;
+	return arch === "arm64" ? "latest-arm64" : "latest-x64";
 }
 
 export function desktopUpdatesSupported():

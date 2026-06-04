@@ -35,6 +35,14 @@ describe("desktop update packaging", () => {
 		expect(updateSource).not.toContain('autoUpdater } from "electron-updater"');
 	});
 
+	test("uses architecture-specific macOS update channels", () => {
+		const updateSource = readFileSync(join(import.meta.dir, "desktop-updates.ts"), "utf8");
+
+		expect(updateSource).toContain("autoUpdater.channel = channel");
+		expect(updateSource).toContain('if (platform !== "darwin") return null;');
+		expect(updateSource).toContain('return arch === "arm64" ? "latest-arm64" : "latest-x64";');
+	});
+
 	test("publishes metadata and mac zip artifacts required by electron-updater", () => {
 		const packageJson = JSON.parse(readFileSync(join(desktopRoot, "package.json"), "utf8"));
 		expect(packageJson.dependencies["electron-updater"]).toBeString();
@@ -44,6 +52,8 @@ describe("desktop update packaging", () => {
 		const workflow = readFileSync(join(desktopRoot, "..", "..", ".github", "workflows", "desktop-build.yml"), "utf8");
 		expect(workflow).toContain("surfaces/desktop/release/*.zip");
 		expect(workflow).toContain("surfaces/desktop/release/latest*.yml");
+		expect(workflow).toContain("Normalize macOS updater metadata");
+		expect(workflow).toContain('mv latest-mac.yml "latest-${{ matrix.arch }}-mac.yml"');
 	});
 
 	test("requires official signing for public desktop tag releases", () => {

@@ -177,6 +177,17 @@ jobs:
           echo "::error::Electron desktop build failed after 3 attempts"
           exit 1
 
+      - name: Normalize macOS updater metadata
+        if: startsWith(matrix.runner, 'macos-')
+        run: |
+          set -euo pipefail
+          cd surfaces/desktop/release
+          if [ ! -f latest-mac.yml ]; then
+            echo "::error::Missing latest-mac.yml from macOS desktop build"
+            exit 1
+          fi
+          mv latest-mac.yml "latest-${{ matrix.arch }}-mac.yml"
+
       - name: Generate AUR metadata
         if: matrix.runner == 'ubuntu-22.04' && startsWith(github.ref, 'refs/tags/')
         run: |

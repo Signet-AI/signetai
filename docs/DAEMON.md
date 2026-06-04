@@ -79,7 +79,9 @@ Configuration
 The Rust daemon in `platform/daemon-rs` is a parity runtime, not the default
 production daemon. `signet daemon start` uses the TypeScript/Bun daemon unless
 `SIGNET_DAEMON_RUNTIME=rust` is set and the installed bundle contains
-`runtime/daemon-rs/signet-daemon`.
+`runtime/daemon-rs/signet-daemon` or the CLI can download the matching
+`signet-daemon-<platform>-<arch>` release asset into
+`$SIGNET_WORKSPACE/.daemon/bin/`.
 
 Do not treat route-parity or contract-replay success as a cutover signal by
 itself. Runtime replacement also requires stateful subsystem proof for file

@@ -17,6 +17,8 @@ import {
 	resolveDaemonLaunchCommand,
 	resolveDaemonPaths,
 	resolveDaemonRuntimeCommand,
+	rustDaemonBinaryName,
+	workspaceRustDaemonBinaryPath,
 } from "./runtime.js";
 
 const originalFetch = globalThis.fetch;
@@ -32,10 +34,23 @@ describe("resolveDaemonPaths", () => {
 		expect(paths).not.toContain("/opt/signet/runtime/daemon-rs/signet-daemon");
 	});
 
-	it("uses the Rust daemon bundle only when explicitly requested", () => {
-		const paths = resolveDaemonPaths({ SIGNET_DIR: "/opt/signet", SIGNET_DAEMON_RUNTIME: " Rust " });
+	it("uses Rust daemon candidates before JavaScript fallback when explicitly requested", () => {
+		const paths = resolveDaemonPaths(
+			{ SIGNET_DIR: "/opt/signet", SIGNET_DAEMON_RUNTIME: " Rust " },
+			{ agentsDir: "/Users/user/.agents" },
+		);
 		expect(paths[0]).toBe("/opt/signet/runtime/daemon-rs/signet-daemon");
-		expect(paths[1]).toBe("/opt/signet/runtime/daemon-js/daemon.js");
+		expect(paths[1]).toBe(workspaceRustDaemonBinaryPath("/Users/user/.agents"));
+		expect(paths[2]).toBe("/opt/signet/runtime/daemon-js/daemon.js");
+		expect(paths).not.toContain(process.execPath);
+	});
+
+	it("uses the workspace Rust daemon cache path for native installs", () => {
+		expect(rustDaemonBinaryName("darwin", "arm64")).toBe("signet-daemon-darwin-arm64");
+		expect(rustDaemonBinaryName("win32", "x64")).toBe("signet-daemon-win32-x64.exe");
+		expect(workspaceRustDaemonBinaryPath("/Users/user/.agents", "darwin", "arm64")).toBe(
+			"/Users/user/.agents/.daemon/bin/signet-daemon-darwin-arm64",
+		);
 	});
 });
 

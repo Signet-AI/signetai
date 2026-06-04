@@ -157,7 +157,10 @@ describe("check-publish-manifests", () => {
 		const promoteWorkflow = readFileSync(join(root, ".github", "workflows", "promote-release.yml"), "utf-8");
 		const manifestScript = readFileSync(join(root, "scripts", "generate-native-manifest.ts"), "utf-8");
 
-		expect(workflow).toContain('gh release download "v${NEW_VERSION}" --pattern "signet-*"');
+		expect(workflow).toContain('--pattern "signet-linux-*"');
+		expect(workflow).toContain('--pattern "signet-darwin-*"');
+		expect(workflow).toContain('--pattern "signet-win32-*"');
+		expect(workflow).not.toContain('--pattern "signet-*" --dir dist/native');
 		expect(workflow).toContain('SIGNET_VERSION="$NEW_VERSION" bun scripts/generate-native-manifest.ts');
 		expect(workflow).toContain("dist/native/native-manifest.json");
 		expect(workflow.indexOf('SIGNET_VERSION="$NEW_VERSION" bun scripts/generate-native-manifest.ts')).toBeLessThan(
@@ -214,6 +217,25 @@ describe("check-publish-manifests", () => {
 		expect(promoteWorkflow).toContain("NPM_CONFIG_USERCONFIG: ${{ runner.temp }}/.npmrc");
 		expect(manifestScript).toContain('name.endsWith(".sha256")');
 		expect(manifestScript).toContain("native-manifest.json");
+	});
+
+	test("publishes opt-in Rust daemon release assets", () => {
+		const root = join(import.meta.dir, "..");
+		const workflow = readFileSync(join(root, ".github", "workflows", "release.yml"), "utf-8");
+
+		expect(workflow).toContain("build-rust-daemon:");
+		expect(workflow).toContain("cargo build --manifest-path platform/daemon-rs/Cargo.toml --release -p signet-daemon");
+		expect(workflow).toContain("asset: signet-daemon-linux-x64");
+		expect(workflow).toContain("asset: signet-daemon-linux-arm64");
+		expect(workflow).toContain("asset: signet-daemon-darwin-x64");
+		expect(workflow).toContain("asset: signet-daemon-darwin-arm64");
+		expect(workflow).toContain("asset: signet-daemon-win32-x64.exe");
+		expect(workflow).toContain("needs: [release, build-native, build-rust-daemon]");
+		expect(workflow).toContain("needs.build-rust-daemon.result == 'success'");
+		expect(workflow).toContain("signet-daemon-darwin-arm64");
+		expect(workflow).toContain("signet-daemon-darwin-arm64.sha256");
+		expect(workflow).toContain("signet-daemon-darwin-x64");
+		expect(workflow).toContain("signet-daemon-darwin-x64.sha256");
 	});
 
 	test("validates generated native manifest coverage against the npm wrapper", () => {
