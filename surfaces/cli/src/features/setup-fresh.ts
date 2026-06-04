@@ -12,6 +12,7 @@ import chalk from "chalk";
 import open from "open";
 import ora from "ora";
 import { daemonAccessLines } from "../lib/network.js";
+import { writeConfiguredWorkspacePath } from "../lib/workspace.js";
 import Database from "../sqlite.js";
 import { installGraphiqPlugin } from "./graphiq.js";
 import { applySetupInferenceRoute, buildSetupInference, buildSetupPipeline } from "./setup-pipeline.js";
@@ -129,13 +130,14 @@ export async function runFreshSetup(cfg: FreshSetupConfig, deps: SetupDeps): Pro
 			},
 		};
 
-		if (cfg.embeddingProvider !== "none") {
-			config.embedding = {
-				provider: cfg.embeddingProvider,
-				model: cfg.embeddingModel,
-				dimensions: cfg.embeddingDimensions,
-			};
-		}
+		config.embedding =
+			cfg.embeddingProvider === "none"
+				? { provider: "none" }
+				: {
+						provider: cfg.embeddingProvider,
+						model: cfg.embeddingModel,
+						dimensions: cfg.embeddingDimensions,
+					};
 
 		const memory = readRecord(config.memory);
 		memory.pipelineV2 = buildSetupPipeline(cfg.extractionProvider, cfg.extractionModel, cfg.extractionEndpoint);
@@ -191,6 +193,8 @@ export async function runFreshSetup(cfg: FreshSetupConfig, deps: SetupDeps): Pro
 		} finally {
 			db.close();
 		}
+
+		writeConfiguredWorkspacePath(cfg.basePath);
 
 		let protection = await enforceSetupProtection({
 			basePath: cfg.basePath,

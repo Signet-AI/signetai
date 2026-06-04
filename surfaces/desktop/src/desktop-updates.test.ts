@@ -46,6 +46,19 @@ describe("desktop update packaging", () => {
 		expect(workflow).toContain("surfaces/desktop/release/latest*.yml");
 	});
 
+	test("requires official signing for public desktop tag releases", () => {
+		const workflow = readFileSync(join(desktopRoot, "..", "..", ".github", "workflows", "desktop-build.yml"), "utf8");
+
+		expect(workflow).toContain("IS_TAG_RELEASE: ${{ startsWith(github.ref, 'refs/tags/v') && '1' || '0' }}");
+		expect(workflow).toContain(
+			'if [ "${IS_TAG_RELEASE}" = "1" ] && [ "${requires_signing}" -eq 1 ] && [ "${has_official}" -ne 1 ]; then',
+		);
+		expect(workflow).toContain("Public desktop tag releases require official signing secrets");
+		expect(workflow.indexOf('if [ "${IS_TAG_RELEASE}" = "1" ]')).toBeLessThan(
+			workflow.indexOf('if [ "${mode}" = "official" ] && [ "${requires_signing}" -eq 0 ]; then'),
+		);
+	});
+
 	test("ships a full macOS app iconset", () => {
 		if (process.platform !== "darwin") return;
 

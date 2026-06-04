@@ -687,6 +687,37 @@ export function buildLaunchdDaemonStopArgs(label: string = LAUNCHD_DAEMON_LABEL)
 	return ["bootout", `${currentLaunchdDomain()}/${label}`];
 }
 
+function launchdDaemonTarget(label: string = LAUNCHD_DAEMON_LABEL): string {
+	return `${currentLaunchdDomain()}/${label}`;
+}
+
+function requestLaunchdDaemonStop(label: string = LAUNCHD_DAEMON_LABEL): void {
+	spawnSync("launchctl", ["bootout", launchdDaemonTarget(label)], {
+		stdio: "ignore",
+		windowsHide: true,
+		timeout: 5000,
+	});
+}
+
+function isLaunchdDaemonLoaded(label: string = LAUNCHD_DAEMON_LABEL): boolean {
+	const result = spawnSync("launchctl", ["print", launchdDaemonTarget(label)], {
+		stdio: "ignore",
+		windowsHide: true,
+		timeout: 5000,
+	});
+	return result.status === 0 && result.signal === null && result.error === undefined;
+}
+
+async function waitForLaunchdDaemonUnload(label: string = LAUNCHD_DAEMON_LABEL): Promise<boolean> {
+	for (let i = 0; i < 20; i += 1) {
+		if (!isLaunchdDaemonLoaded(label)) {
+			return true;
+		}
+		await sleep(250);
+	}
+	return !isLaunchdDaemonLoaded(label);
+}
+
 export function didSystemdDaemonStart(result: Pick<SpawnSyncReturns<Buffer>, "status" | "signal" | "error">): boolean {
 	return result.status === 0 && result.signal === null && result.error === undefined;
 }
@@ -902,6 +933,10 @@ export async function startDaemon(agentsDir: string = AGENTS_DIR): Promise<boole
 	}
 
 	try {
+		if (process.platform === "darwin") {
+			requestLaunchdDaemonStop();
+			await waitForLaunchdDaemonUnload();
+		}
 		const diagnostics = readDaemonStartFailureDiagnostics({
 			startupLogPath,
 			systemdUnitName: process.platform === "linux" ? systemdUnitName : undefined,
@@ -921,11 +956,7 @@ export async function startDaemon(agentsDir: string = AGENTS_DIR): Promise<boole
 
 export async function stopDaemon(agentsDir: string = AGENTS_DIR): Promise<boolean> {
 	if (process.platform === "darwin") {
-		spawnSync("launchctl", buildLaunchdDaemonStopArgs(), {
-			stdio: "ignore",
-			windowsHide: true,
-			timeout: 5000,
-		});
+		requestLaunchdDaemonStop();
 	}
 
 	const pids = new Set<number>();
@@ -975,7 +1006,8 @@ export async function stopDaemon(agentsDir: string = AGENTS_DIR): Promise<boolea
 		}
 	}
 
-	return !(await isDaemonRunning());
+	const launchdStopped = process.platform === "darwin" ? await waitForLaunchdDaemonUnload() : true;
+	return launchdStopped && !(await isDaemonRunning());
 }
 
 export function formatUptime(seconds: number): string {

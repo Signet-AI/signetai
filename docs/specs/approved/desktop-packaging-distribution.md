@@ -9,7 +9,7 @@ success_criteria:
   - "Ubuntu outputs include both .deb and .AppImage artifacts per release"
   - "Arch package metadata (PKGBUILD and .SRCINFO) is generated from release AppImage + checksum"
   - "Arch CI validates generated PKGBUILD by building a .pkg.tar.* artifact in an Arch Linux environment"
-  - "Desktop release jobs resolve a signing mode (official or self-signed) before publish"
+  - "Desktop release jobs resolve a signing mode before publish, and public macOS/Windows tag releases fail rather than shipping self-signed artifacts"
   - "Desktop releases publish electron-updater metadata and app artifacts so packaged installs can self-update"
   - "The supported source-build path is exposed through `signet desktop build` and `signet desktop install`"
 scope_boundary: "Desktop packaging, runtime bundling preference, CI workflows, and Arch metadata generation. Does not replace npm package publishing flows."
@@ -40,7 +40,8 @@ Arch.
    fallback path when system runtimes are unavailable.
 3. Release workflows must resolve signing mode before publish:
    - official signing when certificate secrets are present
-   - self-signed fallback when official signing is unavailable
+   - public macOS and Windows tag releases fail when official signing is unavailable
+   - self-signed fallback remains available for manual non-tag validation builds
 4. AUR metadata generation must be deterministic from version, AppImage
    URL, and checksum.
 5. Arch packaging must be validated in CI by building from the generated

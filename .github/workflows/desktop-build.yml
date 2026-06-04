@@ -53,6 +53,7 @@ jobs:
         shell: bash
         env:
           SIGNING_MODE_INPUT: ${{ github.event_name == 'workflow_dispatch' && inputs.signing_mode || 'auto' }}
+          IS_TAG_RELEASE: ${{ startsWith(github.ref, 'refs/tags/v') && '1' || '0' }}
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
@@ -87,6 +88,11 @@ jobs:
 
           if [ "${requires_signing}" -eq 1 ] && [ "${#missing[@]}" -eq 0 ]; then
             has_official=1
+          fi
+
+          if [ "${IS_TAG_RELEASE}" = "1" ] && [ "${requires_signing}" -eq 1 ] && [ "${has_official}" -ne 1 ]; then
+            printf '::error::Public desktop tag releases require official signing secrets: %s\n' "${missing[*]}"
+            exit 1
           fi
 
           if [ "${mode}" = "official" ] && [ "${requires_signing}" -eq 0 ]; then

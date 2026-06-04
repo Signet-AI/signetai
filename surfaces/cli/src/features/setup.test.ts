@@ -24,6 +24,7 @@ const NO_HARNESSES = {
 };
 
 const ORIGINAL_HOME = process.env.HOME;
+const ORIGINAL_XDG_CONFIG_HOME = process.env.XDG_CONFIG_HOME;
 const ORIGINAL_HERMES_REPO = process.env.HERMES_REPO;
 const ORIGINAL_HERMES_HOME = process.env.HERMES_HOME;
 
@@ -108,6 +109,12 @@ describe("setupWizard non-interactive harness hooks", () => {
 			delete process.env.HOME;
 		} else {
 			process.env.HOME = ORIGINAL_HOME;
+		}
+		if (ORIGINAL_XDG_CONFIG_HOME === undefined) {
+			// biome-ignore lint/performance/noDelete: assigning undefined stores the string "undefined"
+			delete process.env.XDG_CONFIG_HOME;
+		} else {
+			process.env.XDG_CONFIG_HOME = ORIGINAL_XDG_CONFIG_HOME;
 		}
 		if (ORIGINAL_HERMES_REPO === undefined) {
 			// biome-ignore lint/performance/noDelete: assigning undefined stores the string "undefined"
@@ -228,6 +235,41 @@ describe("setupWizard non-interactive harness hooks", () => {
 		await setupWizard({ nonInteractive: true }, deps);
 
 		expect(configureHarnessHooks).not.toHaveBeenCalled();
+	});
+
+	it("persists the explicit setup path as the default workspace", async () => {
+		root = mkdtempSync(join(tmpdir(), "setup-workspace-config-"));
+		const basePath = join(root, "agents");
+		const templatesPath = join(root, "templates");
+		const configHome = join(root, "config");
+		process.env.XDG_CONFIG_HOME = configHome;
+		mkdirSync(templatesPath, { recursive: true });
+
+		const deps = stubDeps({
+			AGENTS_DIR: join(root, "home", ".agents"),
+			getTemplatesDir: mock(() => templatesPath),
+			normalizeAgentPath: mock((p: string) => p),
+			detectExistingSetup: mock(() => ({
+				...fakeDetection(basePath),
+				agentsDir: false,
+				memoryDb: false,
+				hasMemoryDir: false,
+			})),
+		});
+
+		await setupWizard({
+			path: basePath,
+			nonInteractive: true,
+			embeddingProvider: "none",
+			extractionProvider: "none",
+			skipGit: true,
+		}, deps);
+
+		const workspaceConfig = JSON.parse(readFileSync(join(configHome, "signet", "workspace.json"), "utf-8")) as {
+			workspace?: string;
+		};
+		expect(workspaceConfig.workspace).toBe(basePath);
+		expect(readFileSync(join(basePath, "agent.yaml"), "utf-8")).toContain("embedding:\n  provider: none");
 	});
 
 	it("writes OpenAI-compatible endpoint during non-interactive setup", async () => {
