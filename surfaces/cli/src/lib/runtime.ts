@@ -103,6 +103,19 @@ export function isRustDaemonPath(path: string): boolean {
 	);
 }
 
+function resolveSignetDirFromDaemonPath(daemonPath: string): string | null {
+	if (isRustDaemonPath(daemonPath)) {
+		const marker = `${process.platform === "win32" ? "\\" : "/"}runtime${process.platform === "win32" ? "\\" : "/"}daemon-rs${process.platform === "win32" ? "\\" : "/"}signet-daemon${process.platform === "win32" ? ".exe" : ""}`;
+		const idx = daemonPath.lastIndexOf(marker);
+		if (idx !== -1) return daemonPath.slice(0, idx);
+	}
+	const binDir = dirname(daemonPath);
+	if (basename(binDir) === "bin" && existsSync(join(binDir, "..", "VERSION"))) {
+		return join(binDir, "..");
+	}
+	return null;
+}
+
 export function resolveDaemonPaths(
 	env: NodeJS.ProcessEnv = process.env,
 	options: { readonly agentsDir?: string } = {},
@@ -114,10 +127,12 @@ export function resolveDaemonPaths(
 	const bundledJsDaemon = env.SIGNET_DIR ? join(env.SIGNET_DIR, "runtime", "daemon-js", "daemon.js") : null;
 	const workspaceRustDaemon = options.agentsDir ? workspaceRustDaemonBinaryPath(options.agentsDir) : null;
 	const wantsRustRuntime = rustDaemonRuntimeEnabled(env);
-	const nativeCliRuntimePaths = wantsRustRuntime ? [] : [currentNativeExecutable];
-	const bundledRuntimePaths = wantsRustRuntime
-		? [bundledNativeDaemon, workspaceRustDaemon, bundledJsDaemon]
-		: [bundledJsDaemon];
+	const rustDaemonAvailable = [bundledNativeDaemon, workspaceRustDaemon].some((p) => p !== null && existsSync(p));
+	const nativeCliRuntimePaths = wantsRustRuntime || rustDaemonAvailable ? [] : [currentNativeExecutable];
+	const bundledRuntimePaths =
+		wantsRustRuntime || rustDaemonAvailable
+			? [bundledNativeDaemon, workspaceRustDaemon, bundledJsDaemon]
+			: [bundledJsDaemon];
 	return [
 		...nativeCliRuntimePaths,
 		...bundledRuntimePaths,
@@ -492,7 +507,7 @@ export function buildSystemdDaemonStartArgs(input: SystemdDaemonStartArgsInput):
 		`--setenv=SIGNET_HOST=${input.host}`,
 		`--setenv=SIGNET_BIND=${input.bind}`,
 		`--setenv=SIGNET_PATH=${input.agentsDir}`,
-		"--setenv=SIGNET_DAEMON_ENTRYPOINT=1",
+		...(!isRustDaemonPath(input.daemonPath) ? ["--setenv=SIGNET_DAEMON_ENTRYPOINT=1"] : []),
 		...resolveDaemonLaunchCommand(input.daemonPath),
 	];
 }
@@ -663,13 +678,15 @@ export function buildLaunchdDaemonPlist(input: LaunchdDaemonPlistInput): string 
 		<string>${xmlEscape(arg)}</string>`,
 		)
 		.join("");
+	const resolvedSignetDir = process.env.SIGNET_DIR ?? resolveSignetDirFromDaemonPath(input.daemonPath);
+	const isRustDaemon = isRustDaemonPath(input.daemonPath);
 	const env = {
 		SIGNET_PORT: String(input.port),
 		SIGNET_HOST: input.host,
 		SIGNET_BIND: input.bind,
 		SIGNET_PATH: input.agentsDir,
-		SIGNET_DAEMON_ENTRYPOINT: "1",
-		...(process.env.SIGNET_DIR ? { SIGNET_DIR: process.env.SIGNET_DIR } : {}),
+		...(!isRustDaemon ? { SIGNET_DAEMON_ENTRYPOINT: "1" } : {}),
+		...(resolvedSignetDir ? { SIGNET_DIR: resolvedSignetDir } : {}),
 		...(process.env.SIGNET_DAEMON_RUNTIME ? { SIGNET_DAEMON_RUNTIME: process.env.SIGNET_DAEMON_RUNTIME } : {}),
 		...(process.env.SIGNET_DASHBOARD_DIR ? { SIGNET_DASHBOARD_DIR: process.env.SIGNET_DASHBOARD_DIR } : {}),
 		HOME: process.env.HOME ?? homedir(),
@@ -682,6 +699,7 @@ export function buildLaunchdDaemonPlist(input: LaunchdDaemonPlistInput): string 
 			<string>${xmlEscape(value)}</string>`,
 		)
 		.join("");
+	const daemonLogPath = join(dirname(input.startupLogPath), "daemon.log");
 
 	return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -703,7 +721,7 @@ ${programArguments}
 	<key>KeepAlive</key>
 	<true/>
 	<key>StandardOutPath</key>
-	<string>/dev/null</string>
+	<string>${xmlEscape(isRustDaemon ? daemonLogPath : "/dev/null")}</string>
 	<key>StandardErrorPath</key>
 	<string>${xmlEscape(input.startupLogPath)}</string>
 	<key>ProcessType</key>
@@ -850,7 +868,8 @@ export async function startDaemon(agentsDir: string = AGENTS_DIR): Promise<boole
 		SIGNET_HOST: net.host,
 		SIGNET_BIND: net.bind,
 		SIGNET_PATH: agentsDir,
-		SIGNET_DAEMON_ENTRYPOINT: "1",
+		...(!isRustDaemonPath(daemonPath) ? { SIGNET_DAEMON_ENTRYPOINT: "1" } : {}),
+		SIGNET_DIR: process.env.SIGNET_DIR ?? resolveSignetDirFromDaemonPath(daemonPath) ?? undefined,
 	};
 
 	// `detached: true` only creates a new process group; it does not escape the
