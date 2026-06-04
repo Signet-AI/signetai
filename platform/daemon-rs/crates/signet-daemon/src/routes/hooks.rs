@@ -469,6 +469,8 @@ fn pipeline_enabled(state: &AppState) -> bool {
     if state.pipeline_paused() {
         return false;
     }
+    // The Rust manifest config does not expose the TS-only dreaming.enabled
+    // gate, so this surface follows the Rust summary worker pipelineV2 gate.
     state
         .config
         .manifest
@@ -734,6 +736,57 @@ fn session_transcript_content(
     Ok(None)
 }
 
+fn session_transcripts_has_updated_at(conn: &rusqlite::Connection) -> rusqlite::Result<bool> {
+    let mut stmt = conn.prepare("PRAGMA table_info(session_transcripts)")?;
+    let mut rows = stmt.query([])?;
+    while let Some(row) = rows.next()? {
+        let name: String = row.get(1)?;
+        if name == "updated_at" {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn reset_recovery_transcript_target(
+    conn: &rusqlite::Connection,
+    clear_session_key: &str,
+    harness: &str,
+    project: Option<&str>,
+    agent_id: &str,
+) -> rusqlite::Result<Option<(String, String)>> {
+    if let Some(content) = session_transcript_content(conn, clear_session_key, agent_id)?
+        && !content.trim().is_empty()
+    {
+        return Ok(Some((clear_session_key.to_string(), content)));
+    }
+
+    let project_filter = project.unwrap_or("");
+    let timestamp_expr = if session_transcripts_has_updated_at(conn)? {
+        "COALESCE(updated_at, created_at)"
+    } else {
+        "created_at"
+    };
+    let mut stmt = conn.prepare(&format!(
+        "SELECT session_key, content
+         FROM session_transcripts
+         WHERE agent_id = ?1
+           AND (?2 = '' OR harness = ?2)
+           AND (?3 = '' OR project = ?3)
+         ORDER BY {timestamp_expr} DESC
+         LIMIT 1"
+    ))?;
+    let mut rows = stmt.query(rusqlite::params![agent_id, harness, project_filter])?;
+    if let Some(row) = rows.next()? {
+        let session_key: String = row.get(0)?;
+        let content: String = row.get(1)?;
+        if !content.trim().is_empty() {
+            return Ok(Some((session_key, content)));
+        }
+    }
+    Ok(None)
+}
+
 fn audit_fs_timestamp(iso: &str) -> String {
     iso.chars()
         .map(|ch| {
@@ -833,6 +886,19 @@ fn upsert_session_transcript(
         return Ok(());
     }
     let now = chrono::Utc::now().to_rfc3339();
+    if session_transcripts_has_updated_at(conn)? {
+        let _ = conn.execute(
+            "INSERT INTO session_transcripts (session_key, agent_id, content, harness, project, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+         ON CONFLICT(session_key, agent_id) DO UPDATE SET
+            content = excluded.content,
+            harness = excluded.harness,
+            project = excluded.project,
+            updated_at = excluded.updated_at",
+            rusqlite::params![session_key, agent_id, transcript, harness, project, now, now],
+        )?;
+        return Ok(());
+    }
     let _ = conn.execute(
         "INSERT INTO session_transcripts (session_key, agent_id, content, harness, project, created_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6)
@@ -928,6 +994,103 @@ fn enqueue_summary_job(
     Ok(id)
 }
 
+fn derive_reset_recovery_session_id(session_key: &str, transcript: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(transcript.trim().as_bytes());
+    let digest = hasher.finalize();
+    let hex: String = digest[..8].iter().map(|b| format!("{b:02x}")).collect();
+    format!("session-end:{session_key}:{hex}")
+}
+
+async fn recover_missing_session_end_on_clear_start(
+    state: Arc<AppState>,
+    harness: &str,
+    session_key: &str,
+    project: Option<&str>,
+    agent_id: &str,
+) -> Option<String> {
+    if session_key.trim().is_empty() {
+        return None;
+    }
+
+    let pipeline_enabled = pipeline_enabled(state.as_ref());
+    let harness_value = harness.to_string();
+    let session_key_value = session_key.to_string();
+    let project_value = project.map(ToOwned::to_owned);
+    let agent_value = agent_id.to_string();
+    let captured_at = chrono::Utc::now().to_rfc3339();
+
+    let result = state
+        .pool
+        .write(Priority::High, move |conn| {
+            let Some((recovered_session_key, transcript)) = reset_recovery_transcript_target(
+                conn,
+                &session_key_value,
+                &harness_value,
+                project_value.as_deref(),
+                &agent_value,
+            )?
+            else {
+                return Ok(serde_json::Value::Null);
+            };
+
+            let session_id = derive_reset_recovery_session_id(&recovered_session_key, &transcript);
+            let should_skip = !pipeline_enabled
+                || transcript.len() < CHECKPOINT_MIN_DELTA
+                || is_noise_session(
+                    project_value.as_deref(),
+                    Some(session_id.as_str()),
+                    Some(recovered_session_key.as_str()),
+                    Some(harness_value.as_str()),
+                );
+            if should_skip {
+                delete_session_transcript(conn, &recovered_session_key, &agent_value)?;
+                return Ok(serde_json::Value::Null);
+            }
+
+            let job_id = enqueue_summary_job(
+                conn,
+                &harness_value,
+                &transcript,
+                Some(&recovered_session_key),
+                &session_id,
+                project_value.as_deref(),
+                &agent_value,
+                "session_end",
+                &captured_at,
+                None,
+                Some(&captured_at),
+                true,
+            )?;
+            delete_session_transcript(conn, &recovered_session_key, &agent_value)?;
+            Ok(serde_json::json!({ "jobId": job_id }))
+        })
+        .await;
+
+    match result {
+        Ok(value) => value
+            .get("jobId")
+            .and_then(|id| id.as_str())
+            .map(ToOwned::to_owned),
+        Err(error) => {
+            warn!(
+                error = %error,
+                session_key,
+                agent_id,
+                "session-start clear/reset summary recovery failed"
+            );
+            None
+        }
+    }
+}
+
+fn is_clear_session_start(body: &SessionStartBody) -> bool {
+    body.source
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|source| source.eq_ignore_ascii_case("clear"))
+}
+
 // ---------------------------------------------------------------------------
 // POST /api/hooks/session-start
 // ---------------------------------------------------------------------------
@@ -942,6 +1105,7 @@ pub struct SessionStartBody {
     pub context: Option<String>,
     pub session_key: Option<String>,
     pub runtime_path: Option<String>,
+    pub source: Option<String>,
 }
 
 pub async fn session_start(
@@ -973,6 +1137,23 @@ pub async fn session_start(
         return conflict_response(claimed_by);
     }
 
+    let recovered_summary_job = if is_clear_session_start(&body) {
+        let recovered = recover_missing_session_end_on_clear_start(
+            state.clone(),
+            harness,
+            &session_key,
+            body.project.as_deref(),
+            &agent_id,
+        )
+        .await;
+        state.continuity.clear(&session_key);
+        state.dedup.clear_session_start(&session_key);
+        state.dedup.clear(&session_key);
+        recovered
+    } else {
+        None
+    };
+
     // Dedup — if session_key was already seen, return minimal stub
     if state.dedup.mark_session_start(&session_key) {
         let now = chrono::Utc::now();
@@ -983,6 +1164,7 @@ pub async fn session_start(
                 "memories": [],
                 "inject": format!("{}\n[memory active | /remember | /recall]\nCurrent date: {}", build_signet_system_prompt(), now.format("%Y-%m-%d %H:%M")),
                 "deduped": true,
+                "recoveredSummaryJob": recovered_summary_job.clone(),
             })),
         )
             .into_response();
@@ -1041,6 +1223,7 @@ pub async fn session_start(
                 "inject": inject,
                 "sessionKey": session_key,
                 "agentId": agent_id,
+                "recoveredSummaryJob": recovered_summary_job,
             }))
         })
         .await;
@@ -3708,11 +3891,12 @@ mod tests {
 
     use super::{
         CHECKPOINT_MIN_DELTA, CheckpointExtractBody, CompactionCompleteBody, PromptSubmitBody,
-        SessionEndBody, build_signet_system_prompt, compaction_complete, extract_delta,
-        memory_embedding_score, normalize_session_transcript, parse_visibility, prompt_submit,
-        require_session_scope_for_write, resolve_audit_token, resolve_compaction_project,
-        resolve_remember_agent, session_agent_id, session_checkpoint_extract, session_end,
-        session_transcript_content, strip_untrusted_metadata, upsert_session_transcript,
+        SessionEndBody, SessionStartBody, build_signet_system_prompt, compaction_complete,
+        extract_delta, memory_embedding_score, normalize_session_transcript, parse_visibility,
+        prompt_submit, require_session_scope_for_write, resolve_audit_token,
+        resolve_compaction_project, resolve_remember_agent, session_agent_id,
+        session_checkpoint_extract, session_end, session_start, session_transcript_content,
+        strip_untrusted_metadata, upsert_session_transcript,
     };
     use signet_services::session::{RuntimePath, SessionTracker};
 
@@ -3805,6 +3989,197 @@ mod tests {
         test_state_with_manifest(name, |manifest| {
             manifest.hooks = Some(HooksConfig::default());
         })
+    }
+
+    #[tokio::test]
+    async fn clear_session_start_recovers_missing_session_end_summary() {
+        let (state, writer, _tmp) = test_state("hooks-session-start-clear-recovery");
+        let session_key = "claude-reset-rs-recovery";
+        let project = "/home/user/signetai";
+        let transcript = [
+            "User: preserve this reset transcript from prompt-submit.",
+            "Assistant: clear session-start should enqueue the missing session-end summary.",
+        ]
+        .join("\n")
+        .repeat(12);
+
+        state
+            .pool
+            .write(Priority::High, {
+                let transcript = transcript.clone();
+                move |conn| {
+                    upsert_session_transcript(
+                        conn,
+                        session_key,
+                        &transcript,
+                        "claude-code",
+                        Some(project),
+                        "default",
+                    )?;
+                    Ok(serde_json::Value::Null)
+                }
+            })
+            .await
+            .unwrap();
+
+        let _ = session_start(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(SessionStartBody {
+                harness: Some("claude-code".to_string()),
+                project: Some(project.to_string()),
+                agent_id: None,
+                context: None,
+                session_key: Some(session_key.to_string()),
+                runtime_path: None,
+                source: None,
+            }),
+        )
+        .await;
+
+        let first_clear = test_json(
+            session_start(
+                State(state.clone()),
+                HeaderMap::new(),
+                Json(SessionStartBody {
+                    harness: Some("claude-code".to_string()),
+                    project: Some(project.to_string()),
+                    agent_id: None,
+                    context: None,
+                    session_key: Some("clear-new-session".to_string()),
+                    runtime_path: None,
+                    source: Some("clear".to_string()),
+                }),
+            )
+            .await,
+        )
+        .await;
+
+        assert!(first_clear["recoveredSummaryJob"].as_str().is_some());
+        assert!(first_clear["deduped"].as_bool().is_none());
+
+        let _second_clear = test_json(
+            session_start(
+                State(state.clone()),
+                HeaderMap::new(),
+                Json(SessionStartBody {
+                    harness: Some("claude-code".to_string()),
+                    project: Some(project.to_string()),
+                    agent_id: None,
+                    context: None,
+                    session_key: Some("clear-new-session-2".to_string()),
+                    runtime_path: None,
+                    source: Some("clear".to_string()),
+                }),
+            )
+            .await,
+        )
+        .await;
+
+        let (jobs, stored): (i64, i64) = state
+            .pool
+            .read({
+                let session_key = session_key.to_string();
+                move |conn| {
+                    let jobs = conn.query_row(
+                        "SELECT COUNT(*) FROM summary_jobs WHERE session_key = ?1",
+                        rusqlite::params![session_key],
+                        |row| row.get(0),
+                    )?;
+                    let stored = conn.query_row(
+                        "SELECT COUNT(*) FROM session_transcripts WHERE session_key = ?1",
+                        rusqlite::params![session_key],
+                        |row| row.get(0),
+                    )?;
+                    Ok((jobs, stored))
+                }
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(jobs, 1);
+        assert_eq!(stored, 0);
+        writer.abort();
+    }
+
+    #[tokio::test]
+    async fn clear_session_start_recovers_latest_updated_prompt_transcript() {
+        let (state, writer, _tmp) = test_state("hooks-session-start-clear-latest-updated");
+        let project = "/home/user/signetai";
+        let older_created_latest_updated = "claude-reset-rs-latest-updated";
+        let newer_created_stale = "claude-reset-rs-newer-created-stale";
+        let latest_transcript = [
+            "User: this latest updated prompt transcript must be recovered.",
+            "Assistant: updated_at should beat a newer created_at stale row.",
+        ]
+        .join("\n")
+        .repeat(12);
+        let stale_transcript = [
+            "User: this stale created-later transcript must not be recovered.",
+            "Assistant: created_at alone would pick this wrong row.",
+        ]
+        .join("\n")
+        .repeat(12);
+
+        state
+            .pool
+            .write(Priority::High, {
+                let latest_transcript = latest_transcript.clone();
+                let stale_transcript = stale_transcript.clone();
+                move |conn| {
+                    conn.execute(
+                        "INSERT INTO session_transcripts
+                         (session_key, agent_id, content, harness, project, created_at, updated_at)
+                         VALUES (?1, 'default', ?2, 'claude-code', ?3, '2026-06-04T01:00:00Z', '2026-06-04T03:00:00Z')",
+                        rusqlite::params![older_created_latest_updated, latest_transcript, project],
+                    )?;
+                    conn.execute(
+                        "INSERT INTO session_transcripts
+                         (session_key, agent_id, content, harness, project, created_at, updated_at)
+                         VALUES (?1, 'default', ?2, 'claude-code', ?3, '2026-06-04T02:00:00Z', '2026-06-04T02:00:00Z')",
+                        rusqlite::params![newer_created_stale, stale_transcript, project],
+                    )?;
+                    Ok(serde_json::Value::Null)
+                }
+            })
+            .await
+            .unwrap();
+
+        let clear = test_json(
+            session_start(
+                State(state.clone()),
+                HeaderMap::new(),
+                Json(SessionStartBody {
+                    harness: Some("claude-code".to_string()),
+                    project: Some(project.to_string()),
+                    agent_id: None,
+                    context: None,
+                    session_key: Some("clear-latest-updated-session".to_string()),
+                    runtime_path: None,
+                    source: Some("clear".to_string()),
+                }),
+            )
+            .await,
+        )
+        .await;
+
+        assert!(clear["recoveredSummaryJob"].as_str().is_some());
+        let recovered = state
+            .pool
+            .read(move |conn| {
+                Ok(conn.query_row(
+                    "SELECT session_key, transcript FROM summary_jobs LIMIT 1",
+                    [],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+                )?)
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(recovered.0, older_created_latest_updated);
+        assert!(recovered.1.contains("latest updated prompt transcript"));
+        assert!(!recovered.1.contains("stale created-later transcript"));
+        writer.abort();
     }
 
     #[tokio::test]

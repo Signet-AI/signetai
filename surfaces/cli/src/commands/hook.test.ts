@@ -302,6 +302,25 @@ describe("buildSessionStartBody", () => {
 		});
 	});
 
+	test("forwards Claude Code clear source on session start", () => {
+		expect(
+			buildSessionStartBody(
+				{
+					source: "clear",
+					sessionKey: "after-clear-session",
+					cwd: "/tmp/project",
+				},
+				{ harness: "claude-code" },
+			),
+		).toEqual({
+			harness: "claude-code",
+			project: "/tmp/project",
+			source: "clear",
+			sessionKey: "after-clear-session",
+			runtimePath: "legacy",
+		});
+	});
+
 	test("forwards parent_key aliases for explicit parent context", () => {
 		expect(
 			buildSessionStartBody(

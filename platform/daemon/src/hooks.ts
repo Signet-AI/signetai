@@ -29,7 +29,7 @@ import {
 	shouldCheckpoint,
 } from "./continuity-state";
 import { listAgentPresence } from "./cross-agent";
-import { type ReadDb, getDbAccessor, hasDbAccessor } from "./db-accessor";
+import { type ReadDb, type WriteDb, getDbAccessor, hasDbAccessor } from "./db-accessor";
 import { fetchEmbedding } from "./embedding-fetch";
 import { propagateMemoryStatus } from "./knowledge-graph";
 import { logger } from "./logger";
@@ -177,6 +177,21 @@ async function appendCanonicalLiveTranscriptTurns(params: {
 			{ role: "user" as const, content: params.userMessage },
 		],
 	});
+}
+
+function formatLivePromptTranscript(userMessage: string, lastAssistantMessage?: string): string {
+	return [lastAssistantMessage ? `Assistant: ${lastAssistantMessage}` : "", `User: ${userMessage}`]
+		.filter((turn) => turn.trim().length > 0)
+		.join("\n");
+}
+
+function appendLivePromptTranscript(previous: string | undefined, liveTranscript: string): string {
+	const current = liveTranscript.trim();
+	if (!previous || previous.trim().length === 0) return current;
+
+	const stored = previous.trimEnd();
+	if (stored.endsWith(current)) return stored;
+	return `${stored}\n${current}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -426,6 +441,7 @@ export interface SessionStartRequest {
 	harness: string;
 	project?: string;
 	agentId?: string;
+	source?: string;
 	/** Harness-native agent/sub-agent identifier. Not used for Signet data scoping. */
 	harnessAgentId?: string;
 	parentSessionKey?: string;
@@ -2049,12 +2065,36 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 	const agentId = resolveAgentId(req);
 	ensureAgentRegistered(agentId);
 	const config = loadHooksConfig().sessionStart || {};
+	const memoryCfg = loadMemoryConfig(getAgentsDir());
 	const includeIdentity = config.includeIdentity !== false;
 
 	logger.info("hooks", "Session start hook", {
 		harness: req.harness,
 		project: req.project,
 	});
+
+	if (isClearSessionStart(req)) {
+		const sessionKey = req.sessionKey?.trim();
+		const recoveredJobId = recoverMissingSessionEndOnClearStart(req, agentId, memoryCfg, new Date().toISOString());
+		const dedupeKey = sessionStartDedupeKey(req);
+		if (dedupeKey) sessionStartSeen.delete(dedupeKey);
+		if (sessionKey) {
+			sessionStartSeen.delete(sessionKey);
+			clearContinuity(sessionKey);
+			advanceRecallContextEpoch({
+				sessionKey: sessionStartRecallKey(req),
+				agentId,
+				reason: "session-clear",
+				sourceRef: sessionKey,
+			});
+		}
+		logger.info("hooks", "Session start clear/reset handled", {
+			harness: req.harness,
+			project: req.project,
+			sessionKey,
+			recoveredSummaryJob: recoveredJobId,
+		});
+	}
 
 	// Dedup guard: if we already sent a full inject for this session, return
 	// a minimal stub. Identity files / MEMORY.md are already in the context.
@@ -2097,7 +2137,6 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 	// Read MEMORY.md with 10k char budget
 	const memoryMdContent = readMemoryMd(10000, identityFiles);
 
-	const memoryCfg = loadMemoryConfig(getAgentsDir());
 	const traversalCfg = memoryCfg.pipelineV2.traversal;
 	const traversalEnabled = memoryCfg.pipelineV2.graph.enabled && traversalCfg?.enabled === true;
 	const traversalAgentId = agentId;
@@ -3120,6 +3159,15 @@ export async function handleUserPromptSubmit(
 			}
 		} else if (userMessage.trim().length > 0) {
 			try {
+				const liveTranscript = formatLivePromptTranscript(userMessage, req.lastAssistantMessage);
+				const prev = getSessionTranscriptContent(req.sessionKey, agentId);
+				deps.upsertSessionTranscript(
+					req.sessionKey,
+					appendLivePromptTranscript(prev, liveTranscript),
+					req.harness,
+					req.project ?? null,
+					agentId,
+				);
 				await appendCanonicalLiveTranscriptTurns({
 					agentId,
 					harness: req.harness,
@@ -3268,6 +3316,206 @@ export function deriveSessionEndFallbackId(
 	}
 	// See comment above: non-idempotent for the same reason.
 	return `session-end:${scopedKey}:${randomUUID()}`;
+}
+
+function isClearSessionStart(req: SessionStartRequest): boolean {
+	return req.source?.trim().toLowerCase() === "clear";
+}
+
+function tableColumns(db: ReadDb | WriteDb, table: string): Set<string> {
+	const rows = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name?: unknown }>;
+	return new Set(
+		rows.map((row) => (typeof row.name === "string" ? row.name : "")).filter((name): name is string => name.length > 0),
+	);
+}
+
+function summaryJobExistsForRecoveredSession(
+	db: ReadDb | WriteDb,
+	sessionKey: string,
+	sessionId: string,
+	agentId: string,
+): boolean {
+	const columns = tableColumns(db, "summary_jobs");
+	if (columns.has("session_id")) {
+		const agentClause = columns.has("agent_id") ? " AND agent_id = ?" : "";
+		const args = columns.has("agent_id") ? [sessionId, agentId] : [sessionId];
+		const row = db
+			.prepare(`SELECT id FROM summary_jobs WHERE session_id = ?${agentClause} AND status <> 'dead' LIMIT 1`)
+			.get(...args);
+		return row != null;
+	}
+	const row = db
+		.prepare("SELECT id FROM summary_jobs WHERE session_key = ? AND status <> 'dead' LIMIT 1")
+		.get(sessionKey);
+	return row != null;
+}
+
+function clearStoredSessionTranscript(db: WriteDb, sessionKey: string, agentId: string): void {
+	db.prepare("DELETE FROM session_transcripts WHERE session_key = ? AND agent_id = ?").run(sessionKey, agentId);
+}
+
+function getClearRecoveryTranscriptTarget(
+	db: ReadDb | WriteDb,
+	req: SessionStartRequest,
+	sessionKey: string,
+	agentId: string,
+):
+	| {
+			readonly sessionKey: string;
+			readonly transcript: string;
+	  }
+	| undefined {
+	const direct = db
+		.prepare("SELECT content FROM session_transcripts WHERE session_key = ? AND agent_id = ? LIMIT 1")
+		.get(sessionKey, agentId) as { content: string } | undefined;
+	if (direct?.content.trim()) return { sessionKey, transcript: direct.content };
+
+	const columns = tableColumns(db, "session_transcripts");
+	const timestampExpr = columns.has("updated_at") ? "COALESCE(updated_at, created_at)" : "created_at";
+	const row = db
+		.prepare(
+			`SELECT session_key, content
+			 FROM session_transcripts
+			 WHERE agent_id = ?
+			   AND (? = '' OR harness = ?)
+			   AND (? = '' OR project = ?)
+			 ORDER BY ${timestampExpr} DESC
+			 LIMIT 1`,
+		)
+		.get(agentId, req.harness, req.harness, req.project ?? "", req.project ?? "") as
+		| { session_key: string; content: string }
+		| undefined;
+	if (!row || row.content.trim().length === 0) return undefined;
+	return { sessionKey: row.session_key, transcript: row.content };
+}
+
+function recoverMissingSessionEndOnClearStart(
+	req: SessionStartRequest,
+	agentId: string,
+	memoryCfg: ReturnType<typeof loadMemoryConfig>,
+	startedAt: string,
+): string | undefined {
+	const sessionKey = req.sessionKey?.trim();
+	if (!sessionKey) return undefined;
+
+	// TS memory config has a separate dreaming summary path; the Rust manifest
+	// config currently exposes only pipelineV2, so Rust follows that runtime gate.
+	const pipelineEnabled = memoryCfg.pipelineV2.enabled || memoryCfg.pipelineV2.shadowMode || memoryCfg.dreaming.enabled;
+
+	try {
+		// Keep target selection, duplicate detection, enqueue, and cleanup in one
+		// write transaction so parallel clear hooks cannot double-enqueue.
+		const result = getDbAccessor().withWriteTx((db) => {
+			const target = getClearRecoveryTranscriptTarget(db, req, sessionKey, agentId);
+			if (!target) return { skipped: "no-stored-transcript" as const };
+
+			const transcript = target.transcript;
+			const recoveredSessionKey = target.sessionKey;
+			const sessionId = deriveSessionEndFallbackId(recoveredSessionKey, undefined, transcript);
+			const noiseSession = isNoiseSession({
+				project: req.project ?? null,
+				sessionKey: recoveredSessionKey,
+				sessionId,
+				harness: req.harness,
+			});
+			const skipReason = !pipelineEnabled
+				? "pipeline-disabled"
+				: transcript.length < 500
+					? "transcript-too-short"
+					: noiseSession
+						? "noise-session"
+						: null;
+			if (skipReason) {
+				clearStoredSessionTranscript(db, recoveredSessionKey, agentId);
+				return { skipped: skipReason, recoveredSessionKey, transcriptChars: transcript.length };
+			}
+
+			if (summaryJobExistsForRecoveredSession(db, recoveredSessionKey, sessionId, agentId)) {
+				clearStoredSessionTranscript(db, recoveredSessionKey, agentId);
+				return { skipped: "duplicate-job" as const, recoveredSessionKey, transcriptChars: transcript.length };
+			}
+
+			const jobId = randomUUID();
+			const columns = tableColumns(db, "summary_jobs");
+			if (columns.has("session_id")) {
+				db.prepare(
+					`INSERT INTO summary_jobs
+					 (id, session_key, session_id, harness, project, agent_id, transcript,
+					  trigger, captured_at, started_at, ended_at, status, created_at)
+					 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
+				).run(
+					jobId,
+					recoveredSessionKey,
+					sessionId,
+					req.harness,
+					req.project ?? null,
+					agentId,
+					transcript,
+					"session_end",
+					startedAt,
+					null,
+					startedAt,
+					startedAt,
+				);
+			} else {
+				db.prepare(
+					`INSERT INTO summary_jobs
+					 (id, session_key, harness, project, transcript, status, created_at)
+					 VALUES (?, ?, ?, ?, ?, 'pending', ?)`,
+				).run(jobId, recoveredSessionKey, req.harness, req.project ?? null, transcript, startedAt);
+			}
+			clearStoredSessionTranscript(db, recoveredSessionKey, agentId);
+			return { jobId, recoveredSessionKey, transcriptChars: transcript.length };
+		});
+
+		if ("jobId" in result) {
+			logger.info("summary-worker", "Enqueued session summary job", {
+				jobId: result.jobId,
+				harness: req.harness,
+				sessionKey: result.recoveredSessionKey,
+				project: req.project,
+				transcriptChars: result.transcriptChars,
+			});
+			logger.info("hooks", "Recovered missing session-end summary from clear session-start", {
+				harness: req.harness,
+				project: req.project,
+				sessionKey: result.recoveredSessionKey,
+				clearSessionKey: sessionKey,
+				agentId,
+				jobId: result.jobId,
+				transcriptChars: result.transcriptChars,
+			});
+			return result.jobId;
+		}
+
+		if (result.skipped !== "no-stored-transcript" && result.skipped !== "duplicate-job") {
+			logger.info("hooks", "Skipped reset summary recovery", {
+				harness: req.harness,
+				project: req.project,
+				sessionKey: result.recoveredSessionKey,
+				agentId,
+				reason: result.skipped,
+				transcriptChars: result.transcriptChars,
+			});
+		} else if (result.skipped === "no-stored-transcript") {
+			logger.debug("hooks", "Skipped reset summary recovery", {
+				harness: req.harness,
+				project: req.project,
+				sessionKey,
+				agentId,
+				reason: result.skipped,
+			});
+		}
+		return undefined;
+	} catch (error) {
+		logger.warn("hooks", "Reset summary recovery failed", {
+			error: error instanceof Error ? error.message : String(error),
+			harness: req.harness,
+			project: req.project,
+			sessionKey,
+		});
+		return undefined;
+	}
 }
 
 export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionEndResponse> {

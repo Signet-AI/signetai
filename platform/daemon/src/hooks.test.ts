@@ -718,6 +718,85 @@ describe("handleSessionStart", () => {
 		expect(restarted.inject).toContain("Fresh startup memory");
 	});
 
+	test.serial("clear session-start recovers missing session-end from stored prompt transcript", async () => {
+		createMemoryDb([{ content: "Reset startup memory", importance: 0.9 }]);
+		const sessionKey = "claude-reset-recovery-session";
+		const project = "/home/user/signetai";
+		const transcript =
+			"User: please preserve this reset session transcript for summary recovery.\nAssistant: the prompt-submit snapshot should be summarized when clear starts the next session.\n".repeat(
+				8,
+			);
+
+		const initial = await handleSessionStart({ harness: "claude-code", sessionKey, project });
+		expect(initial.memories.length).toBe(1);
+
+		await handleUserPromptSubmit({
+			harness: "claude-code",
+			sessionKey,
+			project,
+			userPrompt: "please preserve this reset session transcript",
+			transcript,
+		});
+
+		const promptDb = openTestDb();
+		try {
+			const stored = promptDb
+				.prepare("SELECT content FROM session_transcripts WHERE session_key = ? AND agent_id = ?")
+				.get(sessionKey, "default") as { content: string } | undefined;
+			expect(stored?.content).toContain("preserve this reset session transcript");
+		} finally {
+			promptDb.close();
+		}
+
+		const restarted = await handleSessionStart({
+			harness: "claude-code",
+			sessionKey: "claude-reset-after-clear-session",
+			project,
+			source: "clear",
+		});
+		expect(restarted.memories.length).toBe(1);
+		expect(restarted.inject).toContain("Reset startup memory");
+
+		await handleSessionStart({
+			harness: "claude-code",
+			sessionKey: "claude-reset-after-clear-session-2",
+			project,
+			source: "clear",
+		});
+
+		const db = openTestDb();
+		try {
+			const jobs = db
+				.prepare(
+					`SELECT session_key, harness, project, agent_id, transcript, trigger, status
+					 FROM summary_jobs
+					 WHERE session_key = ?
+					 ORDER BY created_at ASC`,
+				)
+				.all(sessionKey) as Array<{
+				session_key: string | null;
+				harness: string;
+				project: string | null;
+				agent_id: string;
+				transcript: string;
+				trigger: string;
+				status: string;
+			}>;
+			const stored = db.prepare("SELECT content FROM session_transcripts WHERE session_key = ?").get(sessionKey);
+
+			expect(jobs).toHaveLength(1);
+			expect(jobs[0]?.harness).toBe("claude-code");
+			expect(jobs[0]?.project).toBe(project);
+			expect(jobs[0]?.agent_id).toBe("default");
+			expect(jobs[0]?.trigger).toBe("session_end");
+			expect(jobs[0]?.status).toBe("pending");
+			expect(jobs[0]?.transcript).toContain("preserve this reset session transcript");
+			expect(stored).toBeNull();
+		} finally {
+			db.close();
+		}
+	});
+
 	test.serial("deduplicates session-start by agent and harness scope", async () => {
 		createMemoryDb([{ content: "Scoped startup memory", importance: 0.9 }]);
 		const sessionKey = "shared-session-key";
@@ -1782,6 +1861,47 @@ memory:
 		expect(transcript).toContain("active session visible immediately");
 		expect(transcript).toContain("previous answer is already part of the live transcript");
 		expect(transcript).toContain('"source_format":"live"');
+
+		const db = openTestDb();
+		const row = db.prepare("SELECT content FROM session_transcripts WHERE session_key = ?").get("sess-live-jsonl") as
+			| { content: string }
+			| undefined;
+		db.close();
+		expect(row?.content).toContain("active session visible immediately");
+		expect(row?.content).toContain("previous answer is already part of the live transcript");
+	});
+
+	test.serial("appends shorter live prompt-submit fallback instead of preserving stale stored content", async () => {
+		createMemoryDb([]);
+		const sessionKey = "sess-live-shorter-latest";
+
+		await handleUserPromptSubmit({
+			harness: "claude-code",
+			sessionKey,
+			project: "/home/user/signetai",
+			userMessage:
+				"please keep this long opening reset transcript because the recovery path needs more than one prompt before clear",
+			lastAssistantMessage:
+				"this deliberately longer assistant turn simulates the first live fallback snapshot saved before a later shorter prompt",
+		});
+
+		await handleUserPromptSubmit({
+			harness: "claude-code",
+			sessionKey,
+			project: "/home/user/signetai",
+			userMessage: "latest short reset prompt",
+			lastAssistantMessage: "latest short answer",
+		});
+
+		const db = openTestDb();
+		const row = db.prepare("SELECT content FROM session_transcripts WHERE session_key = ?").get(sessionKey) as
+			| { content: string }
+			| undefined;
+		db.close();
+
+		expect(row?.content).toContain("long opening reset transcript");
+		expect(row?.content).toContain("latest short reset prompt");
+		expect(row?.content).toContain("latest short answer");
 	});
 
 	test.serial("writes raw audit logs while keeping the canonical transcript conversation-only", async () => {
@@ -3312,9 +3432,9 @@ describe("summary worker tick gate", () => {
 			handle.stop();
 
 			const db = openTestDb();
-			const job = db
-				.prepare("SELECT status, attempts FROM summary_jobs WHERE id = ?")
-				.get(jobId) as { status: string; attempts: number } | undefined;
+			const job = db.prepare("SELECT status, attempts FROM summary_jobs WHERE id = ?").get(jobId) as
+				| { status: string; attempts: number }
+				| undefined;
 			db.close();
 
 			expect(job).toBeDefined();

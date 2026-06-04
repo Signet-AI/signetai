@@ -453,6 +453,7 @@ export function buildSessionStartBody(
 	harnessAgentId?: string;
 	parentSessionKey?: string;
 	context?: string;
+	source?: string;
 	sessionKey: string;
 	runtimePath: typeof LEGACY_RUNTIME_PATH;
 } {
@@ -474,6 +475,7 @@ export function buildSessionStartBody(
 		body?.parentID,
 		body?.parentId,
 	);
+	const source = pickString(body?.source);
 	return {
 		harness: options.harness,
 		project: pickString(options.project, body?.cwd),
@@ -481,6 +483,7 @@ export function buildSessionStartBody(
 		...(harnessAgentId ? { harnessAgentId } : {}),
 		...(parentSessionKey ? { parentSessionKey } : {}),
 		...(options.context ? { context: options.context } : {}),
+		...(source ? { source } : {}),
 		sessionKey: pickSessionKey(body),
 		runtimePath: LEGACY_RUNTIME_PATH,
 	};
