@@ -122,8 +122,8 @@ describe("buildSetupInference", () => {
 			executor: "acpx",
 			acpx: {
 				agent: "opencode",
-				package: "acpx@0.7.0",
-				version: "0.7.0",
+				package: "acpx@0.10.0",
+				version: "0.10.0",
 				hooks: "disabled",
 				permissions: "deny-all",
 				terminal: "inherit",
@@ -132,6 +132,19 @@ describe("buildSetupInference", () => {
 		expect(inference?.workloads.memoryExtraction).toEqual({
 			target: "background-acpx/default",
 			taskClass: "memory_extraction",
+		});
+	});
+
+	it("preserves a custom OpenCode model identifier for ACPX routing", () => {
+		const inference = buildSetupInference("acpx", "zai-coding-plan/glm-5.1", ["opencode"], ["acpx"], "/usr/local/bin/bunx");
+
+		expect(inference?.targets["background-acpx"]).toMatchObject({
+			acpx: { agent: "opencode" },
+			models: {
+				default: {
+					model: "zai-coding-plan/glm-5.1",
+				},
+			},
 		});
 	});
 

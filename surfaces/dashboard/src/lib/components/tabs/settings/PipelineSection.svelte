@@ -16,7 +16,7 @@ import {
 	st,
 } from "$lib/stores/settings.svelte";
 import { modelPresetsForProvider } from "@signet/core/llm-model-catalog";
-import { defaultPipelineModel } from "@signet/core/pipeline-providers";
+import { ACPX_PACKAGE_REF, defaultPipelineModel } from "@signet/core/pipeline-providers";
 import {
 	ACPX_DASHBOARD_AGENT_OPTIONS,
 	type AcpxDashboardAgent,
@@ -412,7 +412,7 @@ const ADVANCED_FEATURE_KEYS = ["autonomousFrozen"] as const;
 				</div>
 
 				<div class="grid gap-2 text-[9px] uppercase tracking-[0.08em] text-[var(--sig-text-muted)] md:grid-cols-3">
-					<span>npx acpx@0.7.0</span>
+					<span>npx {ACPX_PACKAGE_REF}</span>
 					<span>permissions: deny-all</span>
 					<span>hooks: disabled</span>
 				</div>

@@ -4,6 +4,7 @@ import { checkbox, confirm, input, select } from "@inquirer/prompts";
 import { OpenClawConnector } from "@signet/connector-openclaw";
 import {
 	IDENTITY_PRESETS,
+	ACPX_PACKAGE_REF,
 	type IdentityContextFileEntry,
 	type IdentityPresetName,
 	type IdentitySpecialFileEntry,
@@ -26,6 +27,7 @@ import { enforceSetupProtection, printSetupProtectionSummary } from "./setup-pro
 import {
 	hasCommand,
 	hasLlamaCppServer,
+	ensureAcpxPackageAvailable,
 	preflightOllamaEmbedding,
 	promptOpenAIEmbeddingModel,
 	resolveCommandPath,
@@ -90,6 +92,23 @@ function resolveSetupExtractionEndpoint(options: {
 	if (options.provider === options.existingProvider && options.existingEndpoint) return options.existingEndpoint;
 	if (options.provider === "openai-compatible") return DEFAULT_OPENAI_COMPATIBLE_ENDPOINT;
 	return undefined;
+}
+
+async function prepareAcpxPackageForSetup(provider: ExtractionProviderChoice, acpxBin: string | undefined): Promise<void> {
+	if (provider !== "acpx") return;
+	if (!acpxBin) {
+		failSetupValidation(
+			"ACPX extraction requires bunx or npx, but neither command was found.",
+			"Install Bun or Node.js, then re-run `signet setup --extraction-provider acpx`.",
+		);
+	}
+	const result = await ensureAcpxPackageAvailable(acpxBin);
+	if (!result.available) {
+		failSetupValidation(
+			`Could not prepare ${ACPX_PACKAGE_REF} with ${acpxBin}.`,
+			result.error ?? "Run the launcher manually and re-run setup.",
+		);
+	}
 }
 
 const IDENTITY_PRESET_CHOICES = ["minimal", "hermes", "openclaw", "custom"] as const;
@@ -378,6 +397,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 
 			const signetSecretsEnabled = await resolveSignetSecretsCorePluginSelection(basePath, true, options);
 			const graphiqEnabled = await resolveGraphiqPluginSelection(basePath, true, options);
+			await prepareAcpxPackageForSetup(migrationExtractionProvider, acpxBin);
 
 			await runExistingSetupWizard(basePath, existing, existingConfig, deps, {
 				nonInteractive: true,
@@ -472,6 +492,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 
 			const signetSecretsEnabled = await resolveSignetSecretsCorePluginSelection(basePath, false, options);
 			const graphiqEnabled = await resolveGraphiqPluginSelection(basePath, false, options);
+			await prepareAcpxPackageForSetup(migrationExtractionProvider, acpxBin);
 
 			await runExistingSetupWizard(basePath, existing, existingConfig, deps, {
 				allowUnprotectedWorkspace: false,
@@ -827,7 +848,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		const choices: Array<{ value: ExtractionProviderChoice; name: string }> = [
 			{
 				value: "acpx",
-				name: `ACPX (recommended default, uses your selected Codex/Claude/OpenCode harness with pinned acpx@0.7.0)${detectedProvider === "acpx" ? " — detected" : ""}`,
+				name: `ACPX (recommended default, uses your selected Codex/Claude/OpenCode harness with pinned ${ACPX_PACKAGE_REF})${detectedProvider === "acpx" ? " — detected" : ""}`,
 			},
 			{
 				value: "llama-cpp",
@@ -987,6 +1008,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		});
 		extractionEndpoint = normalizeHttpEndpoint(endpointInput) ?? DEFAULT_OPENAI_COMPATIBLE_ENDPOINT;
 	}
+	await prepareAcpxPackageForSetup(extractionProvider, acpxBin);
 
 	const wantAdvanced = nonInteractive
 		? false

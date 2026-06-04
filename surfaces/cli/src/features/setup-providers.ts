@@ -1,5 +1,6 @@
 import { spawn, spawnSync } from "node:child_process";
 import { platform } from "node:os";
+import { ACPX_PACKAGE_REF } from "@signet/core";
 import { confirm, select } from "@inquirer/prompts";
 import chalk from "chalk";
 import ora from "ora";
@@ -162,6 +163,32 @@ export function hasCommand(command: string): boolean {
 	} catch {
 		return false;
 	}
+}
+
+function acpxLauncherArgs(bin: string, packageRef: string): string[] {
+	const basename = bin.split(/[\\/]/).pop()?.toLowerCase() ?? bin.toLowerCase();
+	return basename === "npx" || basename === "npx.cmd" ? ["-y", packageRef, "--version"] : [packageRef, "--version"];
+}
+
+export async function ensureAcpxPackageAvailable(
+	acpxBin: string,
+	opts?: {
+		readonly packageRef?: string;
+		readonly runCommand?: typeof runCommandWithOutput;
+	},
+): Promise<{ readonly available: boolean; readonly version?: string; readonly error?: string }> {
+	const packageRef = opts?.packageRef ?? ACPX_PACKAGE_REF;
+	const run = opts?.runCommand ?? runCommandWithOutput;
+	const result = await run(acpxBin, acpxLauncherArgs(acpxBin, packageRef), {
+		env: { ...process.env },
+		timeout: 120000,
+	});
+	const version = result.stdout.trim().split(/\r?\n/).pop()?.trim();
+	if (result.code !== 0) {
+		const detail = result.stderr.trim() || result.stdout.trim() || `launcher exited ${result.code}`;
+		return { available: false, error: detail };
+	}
+	return { available: true, ...(version ? { version } : {}) };
 }
 
 async function runCommandWithOutput(

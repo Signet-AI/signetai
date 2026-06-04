@@ -1,4 +1,4 @@
-import { defaultPipelineModel } from "@signet/core";
+import { ACPX_PACKAGE_REF, ACPX_PACKAGE_VERSION, defaultPipelineModel } from "@signet/core";
 import type { ExtractionProviderChoice, HarnessChoice } from "./setup-shared.js";
 
 export const EXTRACTION_SAFETY_WARNING =
@@ -149,8 +149,8 @@ export function buildSetupInference(
 				acpx: {
 					agent,
 					bin: acpxBin,
-					package: "acpx@0.7.0",
-					version: "0.7.0",
+					package: ACPX_PACKAGE_REF,
+					version: ACPX_PACKAGE_VERSION,
 					mode: "exec",
 					permissions: "deny-all",
 					hooks: "disabled",

@@ -14,6 +14,7 @@ import { isAbsolute, join, resolve as resolvePath } from "node:path";
 import { Readable } from "node:stream";
 import {
 	DEFAULT_PROVIDER_RATE_LIMIT,
+	ACPX_PACKAGE_VERSION,
 	type LlmGenerateResult,
 	type LlmProvider,
 	type LlmUsage,
@@ -968,6 +969,7 @@ export type AcpxJsonEvent = Readonly<Record<string, unknown>>;
 
 export interface AcpxProviderConfig {
 	readonly agent: string;
+	readonly rawAgentCommand?: string;
 	readonly model?: string;
 	readonly version?: string;
 	readonly bin?: string;
@@ -987,7 +989,7 @@ export interface AcpxProviderConfig {
 	readonly extraArgs?: readonly string[];
 }
 
-const DEFAULT_ACPX_VERSION = "0.7.0";
+const DEFAULT_ACPX_VERSION = ACPX_PACKAGE_VERSION;
 
 function normalizeAcpxAgent(agent: string): string {
 	return agent === "claude-code" ? "claude" : agent;
@@ -1061,9 +1063,13 @@ function buildAcpxCommand(
 	if (config.terminal === "disabled") args.push("--no-terminal");
 	if (allowedTools) args.push("--allowed-tools", allowedTools.join(","));
 	args.push(...(config.extraArgs ?? []));
-	args.push(normalizeAcpxAgent(config.agent));
-	if ((config.mode ?? "exec") === "session" && config.session) {
-		args.push("-s", config.session);
+	if (config.rawAgentCommand) {
+		args.push("--agent", config.rawAgentCommand);
+	} else {
+		args.push(normalizeAcpxAgent(config.agent));
+		if ((config.mode ?? "exec") === "session" && config.session) {
+			args.push("-s", config.session);
+		}
 	}
 	args.push("exec", "--file", "-");
 	return { bin, args, cwd };

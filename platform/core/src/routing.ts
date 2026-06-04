@@ -98,6 +98,7 @@ export type RoutingAcpxOutputFormat = "quiet" | "json";
 
 export interface RoutingAcpxConfig {
 	readonly agent: string;
+	readonly rawAgentCommand?: string;
 	readonly version?: string;
 	readonly bin?: string;
 	readonly package?: string;
@@ -551,6 +552,7 @@ function parseAcpxConfig(raw: unknown): RoutingAcpxConfig | undefined {
 	const extraArgs = asStringArray(nested.extraArgs ?? nested.extra_args);
 	return {
 		agent,
+		rawAgentCommand: asString(nested.rawAgentCommand ?? nested.raw_agent_command ?? nested.agentCommand ?? nested.agent_command),
 		version: asString(nested.version ?? nested.acpxVersion ?? nested.acpx_version),
 		bin: asString(nested.bin ?? nested.command),
 		package: asString(nested.package ?? nested.packageRef ?? nested.package_ref),

@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { SetupDetection } from "@signet/core";
-import { validateOllamaModelNonInteractive } from "./setup-providers.js";
+import { ensureAcpxPackageAvailable, validateOllamaModelNonInteractive } from "./setup-providers.js";
 import type { SetupDeps } from "./setup-types.js";
 import { setupWizard } from "./setup.js";
 
@@ -253,5 +253,44 @@ describe("validateOllamaModelNonInteractive", () => {
 		expect(result.available).toBe(false);
 		expect(result.modelInstalled).toBe(false);
 		expect(result.error).toContain("not installed");
+	});
+});
+
+describe("ensureAcpxPackageAvailable", () => {
+	it("resolves the pinned ACPX package through bunx", async () => {
+		const calls: Array<{ readonly command: string; readonly args: readonly string[] }> = [];
+		const result = await ensureAcpxPackageAvailable("/opt/homebrew/bin/bunx", {
+			packageRef: "acpx@test",
+			runCommand: async (command, args) => {
+				calls.push({ command, args });
+				return { code: 0, stdout: "1.2.3\n", stderr: "" };
+			},
+		});
+
+		expect(result).toEqual({ available: true, version: "1.2.3" });
+		expect(calls).toEqual([{ command: "/opt/homebrew/bin/bunx", args: ["acpx@test", "--version"] }]);
+	});
+
+	it("adds npx -y so noninteractive setup can download ACPX without prompting", async () => {
+		const calls: Array<{ readonly command: string; readonly args: readonly string[] }> = [];
+		const result = await ensureAcpxPackageAvailable("/opt/homebrew/bin/npx", {
+			packageRef: "acpx@test",
+			runCommand: async (command, args) => {
+				calls.push({ command, args });
+				return { code: 0, stdout: "1.2.3\n", stderr: "" };
+			},
+		});
+
+		expect(result.available).toBe(true);
+		expect(calls).toEqual([{ command: "/opt/homebrew/bin/npx", args: ["-y", "acpx@test", "--version"] }]);
+	});
+
+	it("returns launcher errors so setup can fail before writing an unusable ACPX route", async () => {
+		const result = await ensureAcpxPackageAvailable("/opt/homebrew/bin/bunx", {
+			packageRef: "acpx@test",
+			runCommand: async () => ({ code: 1, stdout: "", stderr: "not found" }),
+		});
+
+		expect(result).toEqual({ available: false, error: "not found" });
 	});
 });

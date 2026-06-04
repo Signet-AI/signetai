@@ -75,7 +75,7 @@ inference:
       executor: acpx
       acpx:
         agent: codex          # codex, claude (Claude Code), opencode, or another ACPX agent
-        version: "0.7.0"      # pinned by default
+        version: "0.10.0"     # pinned by default
         mode: exec            # current default: one-shot exec
         permissions: deny-all
         hooks: disabled       # sets SIGNET_NO_HOOKS=1
@@ -109,7 +109,7 @@ When a routed workload uses that target, the daemon builds a command equivalent
 to:
 
 ```bash
-npx -y acpx@0.7.0 \
+npx -y acpx@0.10.0 \
   --format quiet \
   --timeout 120 \
   --model gpt-5.4-mini \
@@ -159,7 +159,7 @@ If `mode: session` and `session: <name>` are configured, Signet still uses the
 one-shot `exec --file -` prompt path, but attaches the named ACPX session:
 
 ```bash
-npx -y acpx@0.7.0 codex -s background exec --file -
+npx -y acpx@0.10.0 codex -s background exec --file -
 ```
 
 This preserves the current final-text provider contract while allowing ACPX to
@@ -173,7 +173,8 @@ ACPX target config lives under `inference.targets.<name>.acpx`.
 | Field | Type | Description |
 |---|---|---|
 | `agent` | string | ACPX agent command, for example `codex`, `claude` for Claude Code, or `opencode`. Legacy `claude-code` values are normalized to `claude` before spawning ACPX. |
-| `version` / `acpxVersion` | string | ACPX npm package version. Defaults to Signet's pinned `0.7.0`. |
+| `version` / `acpxVersion` | string | ACPX npm package version. Defaults to Signet's pinned `0.10.0`. |
+| `rawAgentCommand` / `agentCommand` | string | Optional raw ACP server command passed through ACPX's `--agent` escape hatch for custom providers. When set, Signet skips the built-in ACPX agent subcommand. |
 | `bin` | string | Optional executable override. If omitted, Signet runs `npx -y acpx@<version>`. |
 | `cwd` | string | Working directory for ACPX and the harness. |
 | `mode` | `exec` or `session` | `exec` is the default. `session` only adds `-s <session>` before `exec --file -`. |

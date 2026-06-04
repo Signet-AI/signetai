@@ -185,6 +185,56 @@ inference:
 	return { argsPath, promptPath };
 }
 
+function writeAcpxOpenCodeCustomModelFixture(root: string): { readonly argsPath: string; readonly promptPath: string } {
+	mkdirSync(join(root, "memory"), { recursive: true });
+	const bin = join(root, "fake-acpx-opencode.sh");
+	const argsPath = join(root, "acpx-opencode-args.txt");
+	const promptPath = join(root, "acpx-opencode-prompt.txt");
+	writeFileSync(
+		bin,
+		`#!/usr/bin/env bash
+printf '%s\n' "$@" > ${JSON.stringify(argsPath)}
+cat > ${JSON.stringify(promptPath)}
+printf 'opencode:%s\n' "$(cat ${JSON.stringify(promptPath)})"
+`,
+	);
+	chmodSync(bin, 0o755);
+	writeFileSync(
+		join(root, "agent.yaml"),
+		`memory:
+  pipelineV2:
+    extraction:
+      provider: none
+inference:
+  defaultPolicy: background-acpx
+  targets:
+    background-acpx:
+      executor: acpx
+      acpx:
+        agent: opencode
+        bin: ${bin}
+        package: acpx@0.10.0
+        permissions: deny-all
+        hooks: disabled
+        terminal: false
+      models:
+        default:
+          model: zai-coding-plan/glm-5.1
+          reasoning: medium
+          toolUse: true
+  policies:
+    background-acpx:
+      mode: strict
+      defaultTargets:
+        - background-acpx/default
+  workloads:
+    default:
+      policy: background-acpx
+`,
+	);
+	return { argsPath, promptPath };
+}
+
 function writeAcpxInferenceFixtureWithoutHooks(root: string): {
 	readonly promptPath: string;
 	readonly hooksPath: string;
@@ -839,6 +889,42 @@ describe("inference route hardening", () => {
 			expect(args).toContain("--deny-all");
 			expect(args).toContain("--no-terminal");
 			expect(args.slice(-4)).toEqual(["codex", "exec", "--file", "-"]);
+		} finally {
+			resetInferenceRouterForTests();
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("executes a custom OpenCode model through ACPX after loading agent.yaml", async () => {
+		const root = mkdtempSync(join(tmpdir(), "signet-inference-acpx-opencode-"));
+		const fixture = writeAcpxOpenCodeCustomModelFixture(root);
+		try {
+			const { app, secret } = createInferenceTestApp(root);
+			const adminToken = createToken(secret, { sub: "admin", scope: {}, role: "admin" }, 60);
+			const res = await app.request(
+				new Request("http://localhost/api/inference/execute", {
+					method: "POST",
+					headers: {
+						Authorization: `Bearer ${adminToken}`,
+						"content-type": "application/json",
+					},
+					body: JSON.stringify({ prompt: "through custom opencode", operation: "default", refresh: true }),
+				}),
+			);
+			expect(res.status).toBe(200);
+			const body = (await res.json()) as {
+				readonly text?: string;
+				readonly decision?: { readonly targetRef?: string };
+			};
+			expect(body.text).toBe("opencode:through custom opencode");
+			expect(body.decision?.targetRef).toBe("background-acpx/default");
+			expect(readFileSync(fixture.promptPath, "utf-8")).toBe("through custom opencode");
+			const args = readFileSync(fixture.argsPath, "utf-8").trim().split("\n");
+			expect(args).toContain("--model");
+			expect(args[args.indexOf("--model") + 1]).toBe("zai-coding-plan/glm-5.1");
+			expect(args).toContain("--deny-all");
+			expect(args).toContain("--no-terminal");
+			expect(args.slice(-4)).toEqual(["opencode", "exec", "--file", "-"]);
 		} finally {
 			resetInferenceRouterForTests();
 			rmSync(root, { recursive: true, force: true });

@@ -5,6 +5,9 @@ export const OPENCODE_PIPELINE_AGENT = "signet-pipeline";
 export const OPENCODE_PIPELINE_SYSTEM_PROMPT =
 	"You are a structured data extraction system. Return ONLY valid JSON matching the requested schema. No explanations, no markdown, no code fences.";
 
+export const ACPX_PACKAGE_VERSION = "0.10.0";
+export const ACPX_PACKAGE_REF = `acpx@${ACPX_PACKAGE_VERSION}`;
+
 export const PIPELINE_PROVIDER_CHOICES = [
 	"none",
 	"acpx",

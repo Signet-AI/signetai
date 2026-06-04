@@ -220,7 +220,7 @@ describe("pipeline-settings ACPX dashboard setup", () => {
 					executor: "acpx",
 					acpx: {
 						agent: "claude",
-						package: "acpx@0.7.0",
+						package: "acpx@0.10.0",
 						permissions: "deny-all",
 						hooks: "disabled",
 					},

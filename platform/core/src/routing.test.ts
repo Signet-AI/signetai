@@ -323,7 +323,7 @@ describe("inference config + decision engine", () => {
 						executor: "acpx",
 						acpx: {
 							agent: "codex",
-							version: "0.7.0",
+							version: "0.10.0",
 							permissions: "deny-all",
 							hooks: "disabled",
 							terminal: "inherit",
@@ -369,7 +369,7 @@ describe("inference config + decision engine", () => {
 						acpx: {
 							agent: "codex",
 							bin: "/usr/local/bin/bunx",
-							package: "acpx@0.7.0",
+							package: "acpx@0.10.0",
 						},
 						models: {
 							default: {
@@ -401,7 +401,7 @@ describe("inference config + decision engine", () => {
 		expect(parsed.value.targets["background-acpx"]?.acpx).toMatchObject({
 			agent: "codex",
 			bin: "/usr/local/bin/bunx",
-			package: "acpx@0.7.0",
+			package: "acpx@0.10.0",
 		});
 		expect(parsed.value.taskClasses.memory_extraction?.preferredTargets).toEqual([
 			makeRoutingTargetRef("background-acpx", "default"),
@@ -423,6 +423,29 @@ describe("inference config + decision engine", () => {
 		expect(parsed.ok).toBe(true);
 		if (!parsed.ok) return;
 		expect(parsed.value.targets.background?.acpx?.terminal).toBe("disabled");
+	});
+
+	it("parses ACPX raw agent command escape hatch for custom providers", () => {
+		const parsed = parseRoutingConfig({
+			inference: {
+				targets: {
+					custom: {
+						executor: "acpx",
+						acpx: {
+							agent: "custom",
+							rawAgentCommand: "/opt/custom/acp-server --stdio",
+						},
+						models: { default: { model: "custom/model" } },
+					},
+				},
+			},
+		});
+		expect(parsed.ok).toBe(true);
+		if (!parsed.ok) return;
+		expect(parsed.value.targets.custom?.acpx).toMatchObject({
+			agent: "custom",
+			rawAgentCommand: "/opt/custom/acp-server --stdio",
+		});
 	});
 
 	it("parses ACPX event capture configuration", () => {

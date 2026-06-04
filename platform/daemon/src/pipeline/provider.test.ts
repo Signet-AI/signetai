@@ -5,7 +5,7 @@
  */
 
 import { afterEach, describe, expect, it, mock } from "bun:test";
-import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getBypassedSessionKeys, resetSessions } from "../session-tracker";
@@ -178,7 +178,7 @@ printf '  acpx answer  \\n'
 			expect(args.slice(agentIndex)).toEqual(["codex", "-s", "background", "exec", "--file", "-"]);
 			expect(readFileSync(promptPath, "utf-8")).toBe("hello acpx");
 			expect(readFileSync(hooksPath, "utf-8")).toBe("1");
-			expect(readFileSync(cwdPath, "utf-8")).toBe(join(root, ".daemon", "acpx-background"));
+			expect(realpathSync(readFileSync(cwdPath, "utf-8"))).toBe(realpathSync(join(root, ".daemon", "acpx-background")));
 		} finally {
 			if (previousSignetPath === undefined) Reflect.deleteProperty(process.env, "SIGNET_PATH");
 			else process.env.SIGNET_PATH = previousSignetPath;
@@ -216,7 +216,7 @@ printf 'ok\\n'
 			expect(args).toContain("--allowed-tools");
 			expect(args[args.indexOf("--allowed-tools") + 1]).toBe("");
 			expect(args.slice(args.indexOf("claude"))).toEqual(["claude", "exec", "--file", "-"]);
-			expect(readFileSync(cwdPath, "utf-8")).toBe(join(root, ".daemon", "acpx-background"));
+			expect(realpathSync(readFileSync(cwdPath, "utf-8"))).toBe(realpathSync(join(root, ".daemon", "acpx-background")));
 		} finally {
 			if (previousSignetPath === undefined) Reflect.deleteProperty(process.env, "SIGNET_PATH");
 			else process.env.SIGNET_PATH = previousSignetPath;
@@ -426,10 +426,10 @@ printf 'ok\n'
 		);
 		chmodSync(bin, 0o755);
 		try {
-			const provider = createAcpxProvider({ agent: "codex", bin, package: "acpx@0.7.0", hooks: "disabled" });
+			const provider = createAcpxProvider({ agent: "codex", bin, package: "acpx@0.10.0", hooks: "disabled" });
 			await expect(provider.generate("hello", { timeoutMs: 1000 })).resolves.toBe("ok");
 			const args = readFileSync(argsPath, "utf-8").trim().split("\n");
-			expect(args.slice(0, 3)).toEqual(["acpx@0.7.0", "--format", "quiet"]);
+			expect(args.slice(0, 3)).toEqual(["acpx@0.10.0", "--format", "quiet"]);
 			expect(args).toContain("codex");
 		} finally {
 			rmSync(root, { recursive: true, force: true });
@@ -450,12 +450,44 @@ printf 'ok\n'
 		);
 		chmodSync(bin, 0o755);
 		try {
-			const provider = createAcpxProvider({ agent: "claude-code", bin, package: "acpx@0.7.0", hooks: "disabled" });
+			const provider = createAcpxProvider({ agent: "claude-code", bin, package: "acpx@0.10.0", hooks: "disabled" });
 			await expect(provider.generate("hello", { timeoutMs: 1000 })).resolves.toBe("ok");
 			const args = readFileSync(argsPath, "utf-8").trim().split("\n");
 			expect(args).toContain("claude");
 			expect(args).not.toContain("claude-code");
 			expect(args.slice(args.indexOf("claude"))).toEqual(["claude", "exec", "--file", "-"]);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("passes raw ACPX agent commands through the escape hatch without inventing a subcommand", async () => {
+		const root = join(tmpdir(), `signet-acpx-raw-agent-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		mkdirSync(root, { recursive: true });
+		const bin = join(root, "fake-acpx-raw-agent.sh");
+		const argsPath = join(root, "args.json");
+		writeFileSync(
+			bin,
+			`#!/usr/bin/env bash
+printf '%s\n' "$@" > ${JSON.stringify(argsPath)}
+printf 'ok\n'
+`,
+		);
+		chmodSync(bin, 0o755);
+		try {
+			const provider = createAcpxProvider({
+				agent: "custom",
+				rawAgentCommand: "/opt/custom/acp-server --stdio",
+				bin,
+				package: "acpx@0.10.0",
+				hooks: "disabled",
+			});
+			await expect(provider.generate("hello", { timeoutMs: 1000 })).resolves.toBe("ok");
+			const args = readFileSync(argsPath, "utf-8").trim().split("\n");
+			expect(args).toContain("--agent");
+			expect(args[args.indexOf("--agent") + 1]).toBe("/opt/custom/acp-server --stdio");
+			expect(args).not.toContain("custom");
+			expect(args.slice(-3)).toEqual(["exec", "--file", "-"]);
 		} finally {
 			rmSync(root, { recursive: true, force: true });
 		}
@@ -484,8 +516,8 @@ printf 'ok\n'
 			const args = readFileSync(argsPath, "utf-8").trim().split("\n");
 			const cwdIndex = args.indexOf("--cwd");
 			expect(cwdIndex).toBeGreaterThanOrEqual(0);
-			expect(args[cwdIndex + 1]).toBe(join(root, "workspace"));
-			expect(readFileSync(pwdPath, "utf-8").trim()).toBe(join(root, "workspace"));
+			expect(realpathSync(args[cwdIndex + 1] ?? "")).toBe(realpathSync(join(root, "workspace")));
+			expect(realpathSync(readFileSync(pwdPath, "utf-8").trim())).toBe(realpathSync(join(root, "workspace")));
 		} finally {
 			process.chdir(previousCwd);
 			rmSync(root, { recursive: true, force: true });
@@ -510,7 +542,7 @@ wait
 
 		try {
 			const provider = createAcpxProvider({ agent: "codex", bin, hooks: "disabled" });
-			await expect(provider.generate("hang", { timeoutMs: 50 })).rejects.toThrow("codex via ACPX timeout after 50ms");
+			await expect(provider.generate("hang", { timeoutMs: 250 })).rejects.toThrow("codex via ACPX timeout after 250ms");
 
 			let pid = 0;
 			for (let i = 0; i < 20; i += 1) {
