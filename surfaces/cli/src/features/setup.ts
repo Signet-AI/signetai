@@ -3,8 +3,8 @@ import { join } from "node:path";
 import { checkbox, confirm, input, select } from "@inquirer/prompts";
 import { OpenClawConnector } from "@signet/connector-openclaw";
 import {
-	IDENTITY_PRESETS,
 	ACPX_PACKAGE_REF,
+	IDENTITY_PRESETS,
 	type IdentityContextFileEntry,
 	type IdentityPresetName,
 	type IdentitySpecialFileEntry,
@@ -25,9 +25,9 @@ import { EXTRACTION_SAFETY_WARNING, defaultAcpxModel, defaultExtractionModel } f
 import { readSetupCorePluginEnabled, writeSetupCorePluginRegistry } from "./setup-plugins.js";
 import { enforceSetupProtection, printSetupProtectionSummary } from "./setup-protection.js";
 import {
+	ensureAcpxPackageAvailable,
 	hasCommand,
 	hasLlamaCppServer,
-	ensureAcpxPackageAvailable,
 	preflightOllamaEmbedding,
 	promptOpenAIEmbeddingModel,
 	resolveCommandPath,
@@ -94,7 +94,10 @@ function resolveSetupExtractionEndpoint(options: {
 	return undefined;
 }
 
-async function prepareAcpxPackageForSetup(provider: ExtractionProviderChoice, acpxBin: string | undefined): Promise<void> {
+async function prepareAcpxPackageForSetup(
+	provider: ExtractionProviderChoice,
+	acpxBin: string | undefined,
+): Promise<void> {
 	if (provider !== "acpx") return;
 	if (!acpxBin) {
 		failSetupValidation(

@@ -1,5 +1,5 @@
-import type { PipelineCommandConfig, PipelineExtractionConfig, PipelineSynthesisConfig } from "./types";
 import { defaultPipelineModel } from "./pipeline-providers";
+import type { PipelineCommandConfig, PipelineExtractionConfig, PipelineSynthesisConfig } from "./types";
 
 export const ROUTING_ACCOUNT_KINDS = ["subscription_session", "api"] as const;
 export const ROUTING_TARGET_KINDS = ["subscription_session", "api", "local", "gateway"] as const;
@@ -552,7 +552,9 @@ function parseAcpxConfig(raw: unknown): RoutingAcpxConfig | undefined {
 	const extraArgs = asStringArray(nested.extraArgs ?? nested.extra_args);
 	return {
 		agent,
-		rawAgentCommand: asString(nested.rawAgentCommand ?? nested.raw_agent_command ?? nested.agentCommand ?? nested.agent_command),
+		rawAgentCommand: asString(
+			nested.rawAgentCommand ?? nested.raw_agent_command ?? nested.agentCommand ?? nested.agent_command,
+		),
 		version: asString(nested.version ?? nested.acpxVersion ?? nested.acpx_version),
 		bin: asString(nested.bin ?? nested.command),
 		package: asString(nested.package ?? nested.packageRef ?? nested.package_ref),

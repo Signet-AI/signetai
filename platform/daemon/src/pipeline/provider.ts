@@ -13,8 +13,8 @@ import { homedir, tmpdir } from "node:os";
 import { isAbsolute, join, resolve as resolvePath } from "node:path";
 import { Readable } from "node:stream";
 import {
-	DEFAULT_PROVIDER_RATE_LIMIT,
 	ACPX_PACKAGE_VERSION,
+	DEFAULT_PROVIDER_RATE_LIMIT,
 	type LlmGenerateResult,
 	type LlmProvider,
 	type LlmUsage,

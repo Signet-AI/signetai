@@ -1,7 +1,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import { platform } from "node:os";
-import { ACPX_PACKAGE_REF } from "@signet/core";
 import { confirm, select } from "@inquirer/prompts";
+import { ACPX_PACKAGE_REF } from "@signet/core";
 import chalk from "chalk";
 import ora from "ora";
 import { getEmbeddingDimensions, readErr } from "./setup-shared.js";
