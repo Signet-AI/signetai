@@ -1274,7 +1274,7 @@ fn resolve_runtime_extraction_endpoint(
 fn worker_supports_extraction_provider(provider: &str) -> bool {
     matches!(
         provider,
-        "ollama" | "anthropic" | "openai-compatible" | "acpx" | "claude-code" | "codex" | "command"
+        "ollama" | "anthropic" | "openai-compatible" | "acpx" | "claude-code" | "codex" | "command" | "opencode"
     )
 }
 
@@ -2067,15 +2067,24 @@ async fn check_ollama_health(endpoint: Option<&str>) -> bool {
 async fn check_opencode_health(endpoint: Option<&str>) -> bool {
     let base = endpoint
         .filter(|s| !s.is_empty())
-        .unwrap_or("http://127.0.0.1:4096");
+        .unwrap_or("http://localhost:13284");
     let url = format!("{}/health", base.trim_end_matches('/'));
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(2))
         .build();
     let Ok(client) = client else { return false };
-    client
-        .get(&url)
-        .send()
+    let mut req = client.get(&url);
+    if let Ok(pw) = std::env::var("OPENCODE_SERVER_PASSWORD") {
+        use base64::Engine;
+        req = req.header(
+            "Authorization",
+            format!(
+                "Basic {}",
+                base64::engine::general_purpose::STANDARD.encode(format!("opencode:{pw}"))
+            ),
+        );
+    }
+    req.send()
         .await
         .map(|r: reqwest::Response| r.status().is_success())
         .unwrap_or(false)
