@@ -705,11 +705,15 @@ async fn complete_summary_job(pool: &DbPool, id: &str, result: &str) -> Result<(
 async fn fail_summary_job(pool: &DbPool, id: &str, error: &str) -> Result<(), String> {
     let id = id.to_string();
     let error = error.to_string();
+    let is_terminal = error.contains("refusing to mutate immutable artifact")
+        || error.contains("rate limit")
+        || error.contains("RateLimitExceeded");
     pool.write(Priority::Low, move |conn| {
         let ts = Utc::now().to_rfc3339();
+        let status = if is_terminal { "dead" } else { "pending" };
         conn.execute(
-            "UPDATE summary_jobs SET status = 'pending', error = ?1, failed_at = ?2, updated_at = ?2 WHERE id = ?3",
-            params![error, ts, id],
+            "UPDATE summary_jobs SET status = ?1, error = ?2, failed_at = ?3, updated_at = ?3 WHERE id = ?4",
+            params![status, error, ts, id],
         )?;
         Ok(serde_json::Value::Null)
     })

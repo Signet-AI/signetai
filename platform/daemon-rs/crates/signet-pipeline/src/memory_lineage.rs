@@ -793,6 +793,11 @@ fn write_immutable_artifact(
                 upsert_artifact_row(conn, root, &path, &existing_frontmatter, &existing_body)?;
                 return Ok(path);
             }
+            if seed.kind == ArtifactKind::Summary {
+                write_atomic(&path, &content)?;
+                upsert_artifact_row(conn, root, &path, &frontmatter, &body)?;
+                return Ok(path);
+            }
             return Err(format!(
                 "refusing to mutate immutable artifact {}",
                 path.display()
