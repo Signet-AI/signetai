@@ -76,7 +76,7 @@ async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "signet_daemon=info,signet_core=info".into()),
+                .unwrap_or_else(|_| "signet_daemon=info,signet_core=info,signet_pipeline=info".into()),
         )
         .json()
         .init();
@@ -1570,13 +1570,23 @@ pub(crate) async fn start_summary_worker(state: &AppState) -> bool {
         .as_ref()
         .and_then(|memory| memory.pipeline_v2.as_ref())
     else {
+        tracing::warn!("summary worker: no pipeline_v2 config found, skipping");
         return false;
     };
 
-    // Shadow mode workers run so that shadow sessions still produce canonical
-    // --summary.md artifacts (matching TS daemon behavior).  Only a fully
-    // disabled pipeline (enabled=false AND shadow_mode=false) skips the worker.
-    if (!pipeline.enabled && !pipeline.shadow_mode) || pipeline.paused || state.pipeline_paused() {
+    let paused = pipeline.paused || state.pipeline_paused();
+    let disabled = !pipeline.enabled && !pipeline.shadow_mode;
+    tracing::info!(
+        enabled = pipeline.enabled,
+        shadow_mode = pipeline.shadow_mode,
+        paused_config = pipeline.paused,
+        paused_runtime = state.pipeline_paused(),
+        disabled,
+        paused,
+        "summary worker: gate check"
+    );
+    if disabled || paused {
+        tracing::warn!("summary worker: gate blocked, skipping");
         return false;
     }
     // Summary worker gates only on pipeline being active — session-end always
@@ -1646,14 +1656,28 @@ pub(crate) async fn start_synthesis_worker(state: &AppState) -> bool {
         .as_ref()
         .and_then(|memory| memory.pipeline_v2.as_ref())
     else {
+        tracing::warn!("synthesis worker: no pipeline_v2 config found, skipping");
         return false;
     };
 
-    // Mirror summary worker: allow shadow mode to run synthesis for parity.
-    if (!pipeline.enabled && !pipeline.shadow_mode) || pipeline.paused || state.pipeline_paused() {
+    let paused = pipeline.paused || state.pipeline_paused();
+    let disabled = !pipeline.enabled && !pipeline.shadow_mode;
+    tracing::info!(
+        enabled = pipeline.enabled,
+        synthesis_enabled = pipeline.synthesis.enabled,
+        shadow_mode = pipeline.shadow_mode,
+        paused_config = pipeline.paused,
+        paused_runtime = state.pipeline_paused(),
+        disabled,
+        paused,
+        "synthesis worker: gate check"
+    );
+    if disabled || paused {
+        tracing::warn!("synthesis worker: gate blocked, skipping");
         return false;
     }
     if !pipeline.synthesis.enabled {
+        tracing::warn!("synthesis worker: synthesis.enabled=false, skipping");
         return false;
     }
     // run_synthesis uses write_memory_projection (deterministic) and does not
@@ -1761,8 +1785,11 @@ async fn extraction_probe(
             "ollama" => check_ollama_health(extraction.endpoint.as_deref()).await,
             "claude-code" => cli_preflight("claude").await,
             "codex" => cli_preflight("codex").await,
+            "acpx" => cli_preflight("npx").await,
             "anthropic" => check_anthropic_health(extraction.endpoint.as_deref()).await,
             "opencode" => check_opencode_health(extraction.endpoint.as_deref()).await,
+            "openai-compatible" => check_ollama_health(extraction.endpoint.as_deref()).await,
+            "command" => true,
             _ => {
                 warn!(
                     provider,

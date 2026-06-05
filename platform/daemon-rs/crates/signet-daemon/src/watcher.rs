@@ -617,7 +617,14 @@ async fn should_auto_commit(state: &AppState) -> bool {
 async fn run_workspace_sync(base: &Path) {
     match sync_harness_configs(base).await {
         Ok(summary) => debug!(?summary, "workspace sync completed"),
-        Err(err) => error!(error = %err, "workspace sync failed"),
+        Err(err) => {
+            let msg = err.to_string();
+            if msg.contains("Operation not permitted") || msg.contains("os error 1") {
+                debug!("workspace sync skipped: permission denied (TCC)");
+            } else {
+                error!(error = %err, "workspace sync failed");
+            }
+        }
     }
 }
 

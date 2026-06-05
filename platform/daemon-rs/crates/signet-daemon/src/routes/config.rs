@@ -510,12 +510,23 @@ pub async fn identity(State(state): State<Arc<AppState>>) -> Json<serde_json::Va
 
         for line in content.lines() {
             let trimmed = line.trim().trim_start_matches('-').trim();
-            if let Some(val) = trimmed.strip_prefix("name:") {
-                name = val.trim().to_string();
-            } else if let Some(val) = trimmed.strip_prefix("creature:") {
-                creature = val.trim().to_string();
-            } else if let Some(val) = trimmed.strip_prefix("vibe:") {
-                vibe = val.trim().to_string();
+            let cleaned = trimmed.trim_start_matches('*').trim_end_matches('*').trim();
+            let lower = cleaned.to_lowercase();
+            if let Some(val) = lower.strip_prefix("name:") {
+                let val = cleaned.split(':').nth(1).unwrap_or(val).trim();
+                if !val.is_empty() {
+                    name = val.trim_matches('*').trim().to_string();
+                }
+            } else if let Some(val) = lower.strip_prefix("creature:") {
+                let val = cleaned.split(':').nth(1).unwrap_or(val).trim();
+                if !val.is_empty() {
+                    creature = val.trim_matches('*').trim().to_string();
+                }
+            } else if let Some(val) = lower.strip_prefix("vibe:") {
+                let val = cleaned.split(':').nth(1).unwrap_or(val).trim();
+                if !val.is_empty() {
+                    vibe = val.trim_matches('*').trim().to_string();
+                }
             }
         }
 

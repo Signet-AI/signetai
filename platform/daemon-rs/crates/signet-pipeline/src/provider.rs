@@ -722,19 +722,48 @@ impl CliProvider {
 
     pub fn new_acpx(model: &str, timeout_ms: u64) -> Self {
         let timeout_secs = std::cmp::max(1, timeout_ms / 1000);
-        let args: Vec<String> = [
-            "-y",
-            &format!("acpx@{DEFAULT_ACPX_VERSION}"),
-            "--format", "quiet",
-            "--timeout", &timeout_secs.to_string(),
-            "--model", model,
-            "--deny-all",
-            "--no-terminal",
-            "codex",
-            "exec", "--file", "-",
-        ].iter().map(|s| s.to_string()).collect();
+        let agent = if model.starts_with("opencode/") {
+            "opencode"
+        } else if model.starts_with("claude-code/") || model.starts_with("anthropic/") {
+            "claude-code"
+        } else {
+            "codex"
+        };
+        let (binary, args): (String, Vec<String>) = if agent == "opencode" {
+            let model_arg = model.to_string();
+            (
+                "npx".to_string(),
+                [
+                    "-y",
+                    &format!("acpx@{DEFAULT_ACPX_VERSION}"),
+                    "--format", "quiet",
+                    "--timeout", &timeout_secs.to_string(),
+                    "--model", &model_arg,
+                    "--deny-all",
+                    "--no-terminal",
+                    "--agent", "opencode",
+                    "exec", "--file", "-",
+                ].iter().map(|s| s.to_string()).collect(),
+            )
+        } else {
+            let agent_arg = agent.to_string();
+            (
+                "npx".to_string(),
+                [
+                    "-y",
+                    &format!("acpx@{DEFAULT_ACPX_VERSION}"),
+                    "--format", "quiet",
+                    "--timeout", &timeout_secs.to_string(),
+                    "--model", model,
+                    "--deny-all",
+                    "--no-terminal",
+                    &agent_arg,
+                    "exec", "--file", "-",
+                ].iter().map(|s| s.to_string()).collect(),
+            )
+        };
         Self {
-            binary: "npx".to_string(),
+            binary,
             args,
             provider_name: "acpx",
             default_timeout_ms: timeout_ms,
@@ -771,59 +800,76 @@ impl CliProvider {
         use tokio::io::AsyncWriteExt;
         if let Some(mut stdin) = child.stdin.take() {
             let _ = stdin.write_all(prompt.as_bytes()).await;
-            drop(stdin); // close stdin to signal EOF
+            drop(stdin);
         }
 
-        // Wait with timeout
-        match tokio::time::timeout(timeout, child.wait_with_output()).await {
-            Ok(Ok(output)) => {
-                let text = String::from_utf8_lossy(&output.stdout).to_string();
+        // Read stdout/stderr in background while waiting for exit
+        let mut stdout_buf = Vec::new();
+        let mut stderr_buf = Vec::new();
+        let stdout = child.stdout.take();
+        let stderr = child.stderr.take();
 
-                if !output.status.success() {
-                    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-                    if let Ok(mut h) = self.health.try_lock() {
-                        h.record_error();
-                    }
-                    return Err(ProviderError::Other(format!(
-                        "{} exited with {}: {}",
-                        self.binary,
-                        output.status.code().unwrap_or(-1),
-                        stderr.trim()
-                    )));
-                }
-
-                let latency = start.elapsed().as_millis() as u64;
-                {
-                    let mut h = self.health.lock().await;
-                    h.record_success(latency);
-                }
-
-                Ok(GenerateResult {
-                    text,
-                    usage: Some(LlmUsage {
-                        total_duration_ms: Some(latency),
-                        ..Default::default()
-                    }),
-                })
+        let read_stdout = async {
+            if let Some(mut out) = stdout {
+                let _ = tokio::io::AsyncReadExt::read_to_end(&mut out, &mut stdout_buf).await;
             }
-            Ok(Err(e)) => {
+        };
+        let read_stderr = async {
+            if let Some(mut err) = stderr {
+                let _ = tokio::io::AsyncReadExt::read_to_end(&mut err, &mut stderr_buf).await;
+            }
+        };
+        let wait_exit = child.wait();
+
+        let joined = async {
+            let (status_res, _, _) = tokio::join!(wait_exit, read_stdout, read_stderr);
+            status_res
+        };
+        let status = tokio::time::timeout(timeout, joined)
+            .await
+            .map_err(|_| {
+                tracing::warn!(binary = %self.binary, timeout_ms = timeout.as_millis() as u64, "killing timed-out CLI subprocess");
+                let _ = child.start_kill();
                 if let Ok(mut h) = self.health.try_lock() {
                     h.record_error();
                 }
-                Err(ProviderError::Other(format!(
-                    "failed to wait for {}: {}",
-                    self.binary, e
-                )))
-            }
-            Err(_) => {
-                // Timeout -- child was moved into the timeout future,
-                // so we can't kill it here. It will be killed when dropped.
+                ProviderError::Timeout(timeout.as_millis() as u64)
+            })?
+            .map_err(|e| {
                 if let Ok(mut h) = self.health.try_lock() {
                     h.record_error();
                 }
-                Err(ProviderError::Timeout(timeout.as_millis() as u64))
+                ProviderError::Other(format!("failed to wait for {}: {}", self.binary, e))
+            })?;
+
+        let text = String::from_utf8_lossy(&stdout_buf).to_string();
+
+        if !status.success() {
+            let stderr = String::from_utf8_lossy(&stderr_buf).to_string();
+            if let Ok(mut h) = self.health.try_lock() {
+                h.record_error();
             }
+            return Err(ProviderError::Other(format!(
+                "{} exited with {}: {}",
+                self.binary,
+                status.code().unwrap_or(-1),
+                stderr.trim()
+            )));
         }
+
+        let latency = start.elapsed().as_millis() as u64;
+        {
+            let mut h = self.health.lock().await;
+            h.record_success(latency);
+        }
+
+        Ok(GenerateResult {
+            text,
+            usage: Some(LlmUsage {
+                total_duration_ms: Some(latency),
+                ..Default::default()
+            }),
+        })
     }
 }
 
@@ -856,23 +902,36 @@ pub struct OpenCodeProvider {
     model: String,
     default_timeout_ms: u64,
     health: Mutex<HealthTracker>,
+    auth_header: Option<String>,
 }
 
 #[derive(Serialize)]
 struct OpenCodeMessageRequest<'a> {
-    message: &'a str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    model: Option<&'a str>,
+    parts: &'a [serde_json::Value],
+    model: Option<serde_json::Value>,
 }
 
 #[derive(Deserialize)]
 struct OpenCodeSessionResponse {
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
     session_id: Option<String>,
 }
 
 #[derive(Deserialize)]
+struct OpenCodePart {
+    #[serde(rename = "type")]
+    part_type: Option<String>,
+    text: Option<String>,
+}
+
+#[derive(Deserialize)]
 struct OpenCodeMessageResponse {
+    #[serde(default)]
     response: Option<String>,
+    #[serde(default)]
+    parts: Option<Vec<OpenCodePart>>,
 }
 
 impl OpenCodeProvider {
@@ -882,17 +941,37 @@ impl OpenCodeProvider {
             .build()
             .unwrap_or_default();
 
+        let auth_header = std::env::var("OPENCODE_SERVER_PASSWORD")
+            .ok()
+            .map(|pw| {
+                use base64::Engine;
+                format!(
+                    "Basic {}",
+                    base64::engine::general_purpose::STANDARD
+                        .encode(format!("opencode:{pw}"))
+                )
+            });
+
         Self {
             client,
             base_url: base_url.trim_end_matches('/').to_string(),
             model: model.to_string(),
             default_timeout_ms: timeout_ms,
             health: Mutex::new(HealthTracker::new()),
+            auth_header,
         }
     }
 
     pub async fn health(&self) -> ProviderHealth {
         self.health.lock().await.snapshot()
+    }
+
+    fn add_auth(&self, req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        if let Some(ref header) = self.auth_header {
+            req.header("Authorization", header)
+        } else {
+            req
+        }
     }
 
     async fn generate_inner(
@@ -903,12 +982,13 @@ impl OpenCodeProvider {
         let start = Instant::now();
         let timeout = Duration::from_millis(opts.timeout_ms.unwrap_or(self.default_timeout_ms));
 
-        // Create a session
         let session_url = format!("{}/session", self.base_url);
         let session_res = self
-            .client
-            .post(&session_url)
-            .timeout(timeout)
+            .add_auth(
+                self.client
+                    .post(&session_url)
+                    .timeout(timeout),
+            )
             .send()
             .await
             .map_err(|e| ProviderError::Other(format!("opencode session create: {e}")))?;
@@ -925,24 +1005,34 @@ impl OpenCodeProvider {
             .map_err(|e| ProviderError::Parse(format!("opencode session parse: {e}")))?;
 
         let session_id = session_data
-            .session_id
+            .id
+            .or(session_data.session_id)
             .ok_or_else(|| ProviderError::Parse("opencode: no session_id".into()))?;
 
         // Send message to session
         let msg_url = format!("{}/session/{session_id}/message", self.base_url);
         let remaining = timeout.saturating_sub(start.elapsed());
 
+        let (provider_id, model_id) = self
+            .model
+            .split_once('/')
+            .unwrap_or(("zai-coding-plan", &self.model));
         let msg_body = OpenCodeMessageRequest {
-            message: prompt,
-            model: Some(&self.model),
+            parts: &[serde_json::json!({"type": "text", "text": prompt})],
+            model: Some(serde_json::json!({
+                "providerID": provider_id,
+                "modelID": model_id,
+            })),
         };
 
         let msg_res = self
-            .client
-            .post(&msg_url)
-            .header("content-type", "application/json")
-            .timeout(remaining)
-            .json(&msg_body)
+            .add_auth(
+                self.client
+                    .post(&msg_url)
+                    .header("content-type", "application/json")
+                    .timeout(remaining)
+                    .json(&msg_body),
+            )
             .send()
             .await
             .map_err(|e| {
@@ -969,7 +1059,20 @@ impl OpenCodeProvider {
             ProviderError::Parse(format!("opencode response parse: {e}"))
         })?;
 
-        let text = msg_data.response.unwrap_or_default();
+        let text = msg_data
+            .response
+            .or_else(|| {
+                msg_data.parts.as_ref().and_then(|parts| {
+                    parts
+                        .iter()
+                        .filter(|p| p.part_type.as_deref() == Some("text"))
+                        .filter_map(|p| p.text.clone())
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                        .into()
+                })
+            })
+            .unwrap_or_default();
         let latency = start.elapsed().as_millis() as u64;
         {
             let mut h = self.health.lock().await;

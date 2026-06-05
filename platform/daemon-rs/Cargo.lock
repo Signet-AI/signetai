@@ -2307,6 +2307,7 @@ dependencies = [
 name = "signet-pipeline"
 version = "0.138.21"
 dependencies = [
+ "base64 0.22.1",
  "chrono",
  "libc",
  "ort",

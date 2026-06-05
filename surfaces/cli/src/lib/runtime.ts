@@ -847,6 +847,18 @@ export async function startDaemon(agentsDir: string = AGENTS_DIR): Promise<boole
 		return false;
 	}
 
+	if (isRustDaemonPath(daemonPath) && process.platform === "darwin") {
+		try {
+			const { execFileSync } = await import("node:child_process");
+			execFileSync("/usr/bin/codesign", ["-s", "-", "--force", "--identifier", "ai.signet.daemon", daemonPath], {
+				stdio: "ignore",
+				timeout: 5000,
+			});
+		} catch {
+			// Non-fatal: ad-hoc signing is best-effort to stabilize TCC permissions.
+		}
+	}
+
 	const attributionNotice = macOSLaunchAgentAttributionNotice(daemonPath);
 	if (attributionNotice) {
 		console.warn(chalk.yellow(`  Note: ${attributionNotice}`));

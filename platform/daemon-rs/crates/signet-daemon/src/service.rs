@@ -205,10 +205,17 @@ fn install_launchd(port: u16) -> Result<()> {
     fs::create_dir_all(dir)?;
     fs::create_dir_all(log_dir())?;
 
-    // Unload if loaded
     let _ = Command::new("launchctl")
         .args(["unload", &plist.to_string_lossy()])
         .output();
+
+    if cfg!(target_os = "macos") {
+        let bin = binary_path()?;
+        let _ = Command::new("/usr/bin/codesign")
+            .args(["-s", "-", "--force", "--identifier", "ai.signet.daemon"])
+            .arg(&bin)
+            .output();
+    }
 
     fs::write(&plist, launchd_contents(port)?)?;
 

@@ -19,6 +19,7 @@ uuid = { workspace = true }
 sha2 = { workspace = true }
 rusqlite = { workspace = true }
 libc = "0.2"
+base64 = { workspace = true }
 tiktoken-rs = { workspace = true }
 ort = { workspace = true }
 tokenizers = { workspace = true }
