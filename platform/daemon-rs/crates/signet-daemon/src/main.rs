@@ -14,9 +14,10 @@ use tower_http::services::{ServeDir, ServeFile};
 use tracing::{info, warn};
 
 mod analytics;
-#[allow(dead_code)] // Auth module built but not wired into routes until later phases
+#[allow(dead_code)]
 mod auth;
 mod feedback;
+mod log_broadcast;
 mod mcp;
 mod reranker;
 mod routes;
@@ -72,14 +73,17 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    // Initialize logging
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "signet_daemon=info,signet_core=info,signet_pipeline=info".into()),
-        )
-        .json()
-        .init();
+    let log_broadcaster = Arc::new(log_broadcast::LogBroadcaster::new(512));
+
+    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| "signet_daemon=info,signet_core=info,signet_pipeline=info".into());
+
+    use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, registry, Layer as _};
+    let fmt_layer = fmt::layer().json().with_filter(env_filter);
+    let broadcast_layer = log_broadcaster.layer().with_filter(
+        tracing_subscriber::EnvFilter::new("signet_daemon=info,signet_core=info,signet_pipeline=info"),
+    );
+    registry().with(fmt_layer).with(broadcast_layer).init();
 
     // Load config
     let config = DaemonConfig::from_env().map_err(anyhow::Error::msg)?;
@@ -180,6 +184,7 @@ async fn main() -> anyhow::Result<()> {
         llm_startup,
         extraction_worker_stats,
         auth,
+        log_broadcaster.clone(),
     ));
 
     // Run extraction preflight synchronously before serving requests.
@@ -2400,6 +2405,7 @@ mod tests {
                 admin_limiter: AuthRateLimiter::from_rules(&rules),
                 recall_llm_limiter: AuthRateLimiter::from_rules(&rules),
             },
+            Arc::new(log_broadcast::LogBroadcaster::new(64)),
         ))
     }
 

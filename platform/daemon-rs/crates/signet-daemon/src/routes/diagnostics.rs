@@ -799,15 +799,8 @@ pub async fn logs(
 }
 
 /// GET /api/logs/stream — SSE stream of live log events.
-pub async fn logs_stream() -> impl IntoResponse {
-    (
-        [
-            ("content-type", "text/event-stream"),
-            ("cache-control", "no-cache"),
-            ("connection", "keep-alive"),
-        ],
-        "data: {\"type\":\"connected\"}\n\n",
-    )
+pub async fn logs_stream(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    crate::log_broadcast::sse_log_stream(state.log_broadcaster.clone()).await
 }
 
 /// GET /api/version — version info

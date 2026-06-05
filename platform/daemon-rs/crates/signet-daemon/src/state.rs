@@ -18,6 +18,7 @@ use crate::analytics::AnalyticsCollector;
 use crate::auth::rate_limiter::{AuthRateLimiter, RateLimitRule, default_limits};
 use crate::auth::tokens::load_or_create_secret;
 use crate::auth::types::AuthMode;
+use crate::log_broadcast::LogBroadcaster;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -459,6 +460,7 @@ pub struct AppState {
     pub analytics: AnalyticsCollector,
     pub secret_exec_jobs: RwLock<HashMap<String, serde_json::Value>>,
     pub os_agent_sessions: RwLock<HashMap<String, OsAgentSession>>,
+    pub log_broadcaster: Arc<LogBroadcaster>,
 }
 
 pub(crate) fn derive_initial_extraction_state(
@@ -500,6 +502,7 @@ impl AppState {
         llm: Option<Arc<dyn LlmProvider>>,
         extraction_worker_stats: Option<SharedWorkerRuntimeStats>,
         auth: AuthRuntimeState,
+        log_broadcaster: Arc<LogBroadcaster>,
     ) -> Self {
         let paused = config
             .manifest
@@ -553,6 +556,7 @@ impl AppState {
             analytics: AnalyticsCollector::default(),
             secret_exec_jobs: RwLock::new(HashMap::new()),
             os_agent_sessions: RwLock::new(HashMap::new()),
+            log_broadcaster,
         }
     }
 
