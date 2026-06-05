@@ -197,6 +197,7 @@ async fn main() -> anyhow::Result<()> {
     let _ = start_document_worker(state.as_ref()).await;
     let _ = start_summary_worker(state.as_ref()).await;
     let _ = start_synthesis_worker(state.as_ref()).await;
+    let _ = start_dreaming_worker(state.as_ref()).await;
 
     match watcher::sync_harness_configs(&config.base_path).await {
         Ok(summary) => info!(?summary, "initial workspace sync completed"),
@@ -1733,6 +1734,154 @@ pub(crate) async fn stop_synthesis_worker(state: &AppState) {
     if let Some(handle) = handle {
         handle.stop().await;
     }
+}
+
+fn parse_dreaming_config(
+    memory: &signet_core::config::MemoryManifestConfig,
+) -> signet_pipeline::dreaming::DreamingConfig {
+    let raw = memory
+        .pipeline_v2
+        .as_ref()
+        .and_then(|p| p.dreaming.as_ref());
+    match raw {
+        Some(d) => signet_pipeline::dreaming::DreamingConfig {
+            enabled: d.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false),
+            token_threshold: d
+                .get("tokenThreshold")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(100_000),
+            timeout_ms: d
+                .get("timeout")
+                .and_then(|v| v.as_i64())
+                .map(|v| v as u64)
+                .unwrap_or(300_000),
+            max_input_tokens: d
+                .get("maxInputTokens")
+                .and_then(|v| v.as_u64())
+                .map(|v| v as usize)
+                .unwrap_or(128_000),
+            max_output_tokens: d
+                .get("maxOutputTokens")
+                .and_then(|v| v.as_u64())
+                .map(|v| v as usize)
+                .unwrap_or(16_000),
+            backfill_on_first_run: d
+                .get("backfillOnFirstRun")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true),
+        },
+        None => signet_pipeline::dreaming::DreamingConfig::default(),
+    }
+}
+
+pub(crate) async fn start_dreaming_worker(state: &AppState) -> bool {
+    let Some(memory) = state.config.manifest.memory.as_ref() else {
+        return false;
+    };
+    let cfg = parse_dreaming_config(memory);
+    if !cfg.enabled {
+        tracing::info!("dreaming worker: disabled in config, skipping");
+        return false;
+    }
+
+    let Some(pipeline) = memory.pipeline_v2.as_ref() else {
+        tracing::warn!("dreaming worker: no pipeline_v2 config, skipping");
+        return false;
+    };
+
+    if !pipeline.enabled || pipeline.paused || state.pipeline_paused() {
+        tracing::info!("dreaming worker: pipeline disabled or paused, skipping");
+        return false;
+    }
+
+    let llm = state.llm.read().await;
+    let Some(provider) = llm.clone() else {
+        tracing::warn!("dreaming worker: no LLM provider available, skipping");
+        return false;
+    };
+    drop(llm);
+
+    let pool = state.pool.clone();
+    let agents_dir = state.config.base_path.to_string_lossy().to_string();
+    let agent_id = "default".to_string();
+
+    struct DreamingLlmFn(Arc<dyn signet_pipeline::provider::LlmProvider>);
+    impl signet_pipeline::dreaming::LlmGenerateFn for DreamingLlmFn {
+        fn generate(
+            &self,
+            prompt: &str,
+            timeout_ms: Option<u64>,
+            max_tokens: Option<usize>,
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<String, String>> + Send + '_>,
+        > {
+            let prompt = prompt.to_string();
+            let provider = self.0.clone();
+            Box::pin(async move {
+                let mut opts = signet_pipeline::provider::GenerateOpts::default();
+                if let Some(t) = timeout_ms {
+                    opts.timeout_ms = Some(t);
+                }
+                opts.max_tokens = max_tokens.map(|v| v as u32);
+                provider
+                    .generate(&prompt, &opts)
+                    .await
+                    .map(|r| r.text)
+                    .map_err(|e| e.to_string())
+            })
+        }
+    }
+
+    let gen_fn = Arc::new(DreamingLlmFn(provider));
+
+    tokio::spawn(async move {
+        let poll_interval = std::time::Duration::from_secs(60);
+        loop {
+            tokio::time::sleep(poll_interval).await;
+
+            let should = match signet_pipeline::dreaming::should_trigger_dreaming(
+                &pool, &cfg, &agent_id,
+            )
+            .await
+            {
+                true => true,
+                false => continue,
+            };
+
+            if !should {
+                continue;
+            }
+
+            tracing::info!("dreaming worker: triggering dreaming pass");
+            match signet_pipeline::dreaming::run_dreaming_pass(
+                &pool,
+                gen_fn.as_ref(),
+                &cfg,
+                &agents_dir,
+                &agent_id,
+                &signet_pipeline::dreaming::DreamingMode::Incremental,
+                None,
+            )
+            .await
+            {
+                Ok(result) => {
+                    tracing::info!(
+                        applied = result.applied,
+                        skipped = result.skipped,
+                        failed = result.failed,
+                        "dreaming pass completed"
+                    );
+                }
+                Err(err) => {
+                    tracing::warn!(err = %err, "dreaming pass failed");
+                    signet_pipeline::dreaming::record_dreaming_failure(&pool, &agent_id).await;
+                }
+            }
+        }
+    });
+
+    tracing::info!("dreaming worker started (poll: 60s)");
+    true
 }
 
 async fn extraction_probe(

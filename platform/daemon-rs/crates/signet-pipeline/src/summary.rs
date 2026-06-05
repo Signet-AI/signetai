@@ -207,6 +207,8 @@ async fn worker_loop(
                 if let Err(err) = complete_summary_job(&pool, &job.id, &json).await {
                     warn!(err = %err, job_id = %job.id, "failed to complete summary job");
                 }
+                let tokens = crate::dreaming::estimate_tokens(&job.transcript) as i64;
+                crate::dreaming::add_dreaming_tokens(&pool, &job.agent_id, tokens).await;
                 info!(
                     job_id = %job.id,
                     facts = result.facts_extracted,

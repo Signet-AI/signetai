@@ -1407,11 +1407,10 @@ pub struct PipelineV2Config {
     pub feedback: FeedbackConfig,
     pub significance: Option<SignificanceConfig>,
     pub predictor: Option<PredictorConfig>,
-    /// Legacy `pipelineV2.predictorPipeline` block. The runtime no longer
-    /// consumes these toggles, but the parser must keep accepting and
-    /// round-tripping them so older documented manifests do not fall back.
     pub predictor_pipeline: PredictorPipelineConfig,
     pub model_registry: ModelRegistryConfig,
+    #[serde(default)]
+    pub dreaming: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 impl Default for PipelineV2Config {
@@ -1443,8 +1442,9 @@ impl Default for PipelineV2Config {
             feedback: FeedbackConfig::default(),
             significance: Some(SignificanceConfig::default()),
             predictor: None,
-            predictor_pipeline: PredictorPipelineConfig::default(), // legacy manifest compatibility only; hard-deprecated in 0.112.0
+            predictor_pipeline: PredictorPipelineConfig::default(),
             model_registry: ModelRegistryConfig::default(),
+            dreaming: None,
         }
     }
 }

@@ -1025,7 +1025,7 @@ fn parse_dreaming_result(raw: &str) -> Result<DreamingResult, String> {
 }
 
 /// Rough token estimate: ~4 chars per token.
-fn estimate_tokens(text: &str) -> usize {
+pub fn estimate_tokens(text: &str) -> usize {
     text.len() / 4
 }
 
