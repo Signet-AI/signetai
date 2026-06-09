@@ -264,7 +264,7 @@ export const signetSecretsManifest: PluginManifestV1 = {
 	marketplace: {
 		categories: ["secrets", "security"],
 		license: "Apache-2.0",
-		repository: "https://github.com/signetai/signetai",
+		repository: "https://github.com/Signet-AI/signetai",
 		homepage: "https://signetai.sh",
 		checksum: null,
 		signature: null,

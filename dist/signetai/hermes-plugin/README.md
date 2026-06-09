@@ -1,6 +1,6 @@
 # Signet Memory Provider
 
-Persistent cross-session memory powered by the [Signet](https://github.com/signetai/signetai) daemon. Hybrid search (BM25 + vector + knowledge graph), predictive recall, automatic entity extraction, and retention decay.
+Persistent cross-session memory powered by the [Signet](https://github.com/Signet-AI/signetai) daemon. Hybrid search (BM25 + vector + knowledge graph), predictive recall, automatic entity extraction, and retention decay.
 
 ## Requirements
 

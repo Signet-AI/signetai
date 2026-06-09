@@ -6,7 +6,7 @@
   "description": "Local-first identity, memory, and secrets for AI agents",
   "repository": {
     "type": "git",
-    "url": "https://github.com/signetai/signetai.git"
+    "url": "https://github.com/Signet-AI/signetai.git"
   },
   "author": "Signet AI",
   "license": "Apache-2.0",

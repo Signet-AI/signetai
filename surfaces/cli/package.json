@@ -38,7 +38,7 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/signetai/signetai.git"
+    "url": "git+https://github.com/Signet-AI/signetai.git"
   },
   "homepage": "https://signetai.sh",
   "dependencies": {

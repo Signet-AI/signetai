@@ -1,5 +1,5 @@
 ---
-Repo: "github.com/signetai/signetai"
+Repo: "github.com/Signet-AI/signetai"
 GitHub issues/comments/PR comments: >-
   Use literal multiline strings or `-F - <<'EOF'` (or `$'...'`) for real
   newlines; never embed "\\n".

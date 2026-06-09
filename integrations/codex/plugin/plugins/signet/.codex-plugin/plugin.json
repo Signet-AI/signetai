@@ -5,8 +5,8 @@
   "author": {
     "name": "Signet"
   },
-  "homepage": "https://github.com/signetai/signetai",
-  "repository": "https://github.com/signetai/signetai",
+  "homepage": "https://github.com/Signet-AI/signetai",
+  "repository": "https://github.com/Signet-AI/signetai",
   "license": "Apache-2.0",
   "keywords": [
     "signet",
@@ -29,7 +29,7 @@
       "Read",
       "Write"
     ],
-    "websiteURL": "https://github.com/signetai/signetai",
+    "websiteURL": "https://github.com/Signet-AI/signetai",
     "defaultPrompt": [
       "Recall prior Signet context for this repo"
     ],
