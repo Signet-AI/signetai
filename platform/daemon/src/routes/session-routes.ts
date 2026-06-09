@@ -13,6 +13,7 @@ import {
 	renewSession,
 	unbypassSession,
 } from "../session-tracker.js";
+import { readSessionNotes } from "../session-notes-writer.js";
 import { getSessionTranscriptContent } from "../session-transcripts.js";
 import { searchSessionTranscripts } from "../subagent-context.js";
 import { expandTemporalNode } from "../temporal-expand.js";
@@ -204,6 +205,30 @@ export function registerSessionRoutes(app: Hono, deps: SessionRoutesDeps): void 
 			unbypassSession(key);
 		}
 		return c.json({ key, bypassed: enabled });
+	});
+
+	app.get("/api/sessions/:key{(?!summaries$)[^/]+}/notes", (c) => {
+		const scopedAgent = resolveScopedAgentId(c, c.req.query("agent_id"), "default");
+		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+		const key = normalizeSessionKey(c.req.param("key"));
+		const taskParam = c.req.query("task");
+		const taskIndex =
+			typeof taskParam === "string" && taskParam.length > 0 ? Number.parseInt(taskParam, 10) : undefined;
+		if (taskIndex !== undefined && (!Number.isInteger(taskIndex) || taskIndex < 1)) {
+			return c.json({ error: "task must be a positive integer" }, 400);
+		}
+		// Pure read — this is the navigation affordance, not a recall query.
+		const result = readSessionNotes(key);
+		if (!result.ok) return c.json({ ok: false, error: result.error }, 404);
+		const tasks =
+			taskIndex !== undefined ? result.file.tasks.filter((t) => t.taskIndex === taskIndex) : result.file.tasks;
+		return c.json({
+			ok: true,
+			path: result.path,
+			frontmatter: result.file.frontmatter,
+			summaryLine: result.file.summaryLine,
+			tasks,
+		});
 	});
 
 	app.post("/api/sessions/:key{(?!summaries$)[^/]+}/renew", (c) => {

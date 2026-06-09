@@ -253,13 +253,100 @@ describe("createMcpServer", () => {
 		expect(names).toContain("secret_exec");
 		expect(names).toContain("secret_exec_status");
 		expect(names).toContain("session_bypass");
+		expect(names).toContain("signet_session_notes");
 		for (const name of GRAPHIQ_TOOL_NAMES) {
 			expect(names).toContain(name);
 		}
 		for (const alias of GRAPHIQ_COMPAT_ALIASES) {
 			expect(names).toContain(alias);
 		}
-		expect(names.length).toBe(57);
+		expect(names.length).toBe(58);
+	});
+
+	it("signet_session_notes returns the structured notes file", async () => {
+		// Plant a notes file via the writer.
+		const { appendTaskSection } = await import("../session-notes-writer.js");
+		appendTaskSection({
+			sessionKey: "mcp-test-session",
+			agentId: "default",
+			harness: "opencode",
+			cwd: "/tmp",
+			task: {
+				taskIndex: 1,
+				outcome: "MCP-tool test wrote this.",
+				keySteps: ["Wrote a session notes file via the writer."],
+			},
+			agentsDir: tempAgentsDir,
+		});
+		const tool = (server as unknown as { _registeredTools: Record<string, RegisteredTool> })._registeredTools[
+			"signet_session_notes"
+		];
+		expect(tool).toBeDefined();
+		const result = (await tool.handler({ session_key: "mcp-test-session" })) as {
+			content: Array<{ type: string; text: string }>;
+		};
+		expect(result.content).toHaveLength(1);
+		const payload = JSON.parse(result.content[0]!.text) as {
+			path: string;
+			frontmatter: { thread_id: string; source_kind: string };
+			tasks: Array<{ taskIndex: number; outcome: string }>;
+		};
+		expect(payload.frontmatter.thread_id).toBe("mcp-test-session");
+		expect(payload.frontmatter.source_kind).toBe("signet-sessions");
+		expect(payload.tasks).toHaveLength(1);
+		expect(payload.tasks[0]?.outcome).toBe("MCP-tool test wrote this.");
+	});
+
+	it("signet_session_notes scopes to a single task when task_index is set", async () => {
+		const { appendTaskSection } = await import("../session-notes-writer.js");
+		appendTaskSection({
+			sessionKey: "mcp-scope-session",
+			agentId: "default",
+			harness: "opencode",
+			cwd: "/tmp",
+			task: { taskIndex: 1, outcome: "first" },
+			agentsDir: tempAgentsDir,
+		});
+		appendTaskSection({
+			sessionKey: "mcp-scope-session",
+			agentId: "default",
+			harness: "opencode",
+			cwd: "/tmp",
+			task: { taskIndex: 2, outcome: "second" },
+			agentsDir: tempAgentsDir,
+		});
+		const tool = (server as unknown as { _registeredTools: Record<string, RegisteredTool> })._registeredTools[
+			"signet_session_notes"
+		];
+		const result = (await tool.handler({ session_key: "mcp-scope-session", task_index: 1 })) as {
+			content: Array<{ type: string; text: string }>;
+		};
+		const payload = JSON.parse(result.content[0]!.text) as { tasks: Array<{ taskIndex: number }> };
+		expect(payload.tasks).toHaveLength(1);
+		expect(payload.tasks[0]?.taskIndex).toBe(1);
+	});
+
+	it("signet_session_notes returns an error when the file is missing", async () => {
+		const tool = (server as unknown as { _registeredTools: Record<string, RegisteredTool> })._registeredTools[
+			"signet_session_notes"
+		];
+		const result = (await tool.handler({ session_key: "no-such-session" })) as {
+			content: Array<{ type: string; text: string }>;
+			isError: true;
+		};
+		expect(result.isError).toBe(true);
+		expect(result.content[0]?.text).toContain("not found");
+	});
+
+	it("signet_session_notes rejects empty session keys", async () => {
+		const tool = (server as unknown as { _registeredTools: Record<string, RegisteredTool> })._registeredTools[
+			"signet_session_notes"
+		];
+		const result = (await tool.handler({ session_key: "  " })) as {
+			content: Array<{ type: string; text: string }>;
+			isError: true;
+		};
+		expect(result.isError).toBe(true);
 	});
 
 	it("registers generic code tools when GraphIQ has an active project", async () => {

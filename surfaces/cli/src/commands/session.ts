@@ -135,6 +135,105 @@ export function registerSessionCommands(program: Command, deps: SessionDeps): vo
 			}
 			console.log(chalk.green(`  Session ${sessionKey.slice(0, 12)} bypass removed — hooks re-enabled`));
 		});
+
+	program
+		.command("session:notes")
+		.description("Read the structured per-session notes file (frontmatter + numbered Task N sections)")
+		.argument("<session-key>", "Session key (thread_id) to read")
+		.option("--task <n>", "Scope to a single task index", (v) => Number.parseInt(v, 10))
+		.option("--json", "Output as JSON", false)
+		.action(async (sessionKey: string, options: { task?: number; json?: boolean }) => {
+			const trimmed = sessionKey.trim();
+			if (!trimmed) {
+				console.error(chalk.red("Error: session-key is required"));
+				process.exit(1);
+			}
+			const params = new URLSearchParams();
+			if (typeof options.task === "number" && Number.isInteger(options.task)) {
+				params.set("task", String(options.task));
+			}
+			const qs = params.toString();
+			const url = `/api/sessions/${encodeURIComponent(trimmed)}/notes${qs ? `?${qs}` : ""}`;
+			const data = await deps.fetchFromDaemon<{
+				ok: true;
+				path: string;
+				frontmatter: Record<string, unknown>;
+				summaryLine: string;
+				tasks: Array<{
+					taskIndex: number;
+					outcome: string;
+					preferenceSignals: string[];
+					keySteps: string[];
+					failures: string[];
+					reusableKnowledge: string[];
+					references: string[];
+					source: "agent" | "consolidator";
+					attributedAt: string;
+				}>;
+				error?: string;
+			}>(url);
+			if (!data || data.ok !== true) {
+				console.error(
+					chalk.red(
+						data && data.ok === false
+							? `Error: ${data.error}`
+							: "Failed to read session notes (is the daemon running?)",
+					),
+				);
+				process.exit(1);
+			}
+			if (options.json) {
+				console.log(JSON.stringify(data, null, 2));
+				return;
+			}
+			const fm = data.frontmatter as {
+				thread_id?: string;
+				agent_id?: string;
+				harness?: string;
+				cwd?: string;
+				updated_at?: string;
+			};
+			console.log(chalk.bold(`\n  Session Notes: ${trimmed}\n`));
+			console.log(`  ${chalk.dim("path:")} ${data.path}`);
+			console.log(
+				`  ${chalk.dim("agent:")} ${fm.agent_id ?? "(default)"}  ${chalk.dim("harness:")} ${fm.harness ?? "(unknown)"}  ${chalk.dim("cwd:")} ${fm.cwd ?? ""}`,
+			);
+			console.log(`  ${chalk.dim("updated_at:")} ${fm.updated_at ?? ""}`);
+			if (data.summaryLine) {
+				console.log(`  ${chalk.dim("summary:")} ${data.summaryLine}`);
+			}
+			if (data.tasks.length === 0) {
+				console.log(chalk.dim("\n  (no tasks recorded)"));
+				return;
+			}
+			console.log();
+			for (const task of data.tasks) {
+				console.log(chalk.cyan(`  ## Task ${task.taskIndex}`));
+				console.log(`  ${chalk.dim(`source: ${task.source} | attributed_at: ${task.attributedAt}`)}`);
+				if (task.outcome) console.log(`  Outcome: ${task.outcome}`);
+				if (task.preferenceSignals.length > 0) {
+					console.log(`  Preference signals:`);
+					for (const line of task.preferenceSignals) console.log(`    - ${line}`);
+				}
+				if (task.keySteps.length > 0) {
+					console.log(`  Key steps:`);
+					for (const line of task.keySteps) console.log(`    - ${line}`);
+				}
+				if (task.failures.length > 0) {
+					console.log(`  Failures and how to do differently:`);
+					for (const line of task.failures) console.log(`    - ${line}`);
+				}
+				if (task.reusableKnowledge.length > 0) {
+					console.log(`  Reusable knowledge:`);
+					for (const line of task.reusableKnowledge) console.log(`    - ${line}`);
+				}
+				if (task.references.length > 0) {
+					console.log(`  References:`);
+					for (const line of task.references) console.log(`    - ${line}`);
+				}
+				console.log();
+			}
+		});
 }
 
 function formatSessionSearchDate(isoDate: string): string {

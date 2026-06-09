@@ -2559,6 +2559,54 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 		},
 	);
 
+	server.registerTool(
+		"signet_session_notes",
+		{
+			title: "Read Session Notes",
+			description:
+				"Read the structured per-session notes file for a session key. Returns the parsed " +
+				"YAML frontmatter, the one-line summary, and the numbered `## Task N` sections with the " +
+				"six canonical subsections (Outcome, Preference signals, Key steps, Failures and how to " +
+				"do differently, Reusable knowledge, References). Pure read — no LLM, no graph queries. " +
+				"Use this to read back progress you wrote earlier in a long session without reformulating " +
+				"a recall query and getting graph soup.",
+			inputSchema: z.object({
+				session_key: z.string().describe("Session key (thread_id)"),
+				task_index: z.number().int().positive().optional().describe("Optional: scope the read to a single task index"),
+			}),
+		},
+		async ({ session_key, task_index }) => {
+			if (typeof session_key !== "string" || session_key.trim().length === 0) {
+				return errorResult("session_key is required");
+			}
+			// Local read — this is the navigation affordance, not a recall query.
+			const { readSessionNotes } = await import("../session-notes-writer.js");
+			const result = readSessionNotes(session_key.trim());
+			if (!result.ok) return errorResult(result.error);
+			const tasks =
+				typeof task_index === "number"
+					? result.file.tasks.filter((t) => t.taskIndex === task_index)
+					: result.file.tasks;
+			return {
+				content: [
+					{
+						type: "text" as const,
+						text: JSON.stringify(
+							{
+								path: result.path,
+								frontmatter: result.file.frontmatter,
+								summaryLine: result.file.summaryLine,
+								tasks,
+							},
+							null,
+							2,
+						),
+					},
+				],
+			};
+		},
+	);
+
 	registerGraphiqCompatAliases(server, pluginHostProvider);
 
 	if (enableMarketplaceProxyTools) {
