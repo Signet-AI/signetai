@@ -9,9 +9,10 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import {
+	SIGNET_SESSIONS_RELATIVE_ROOT,
 	type DreamingConfig,
 	type IdentityContextFileEntry,
 	resolveSpecialIdentityFiles,
@@ -19,6 +20,12 @@ import {
 } from "@signet/core";
 import type { DbAccessor, ReadDb, WriteDb } from "../db-accessor";
 import { logger } from "../logger";
+import {
+	readSessionNotes,
+	sessionNotesPath,
+	type SessionNotesFrontmatter,
+	type SessionNotesTaskSection,
+} from "../session-notes-writer";
 import { countTokens } from "./tokenizer";
 
 // ---------------------------------------------------------------------------
@@ -405,6 +412,74 @@ function warnIfTruncated(
 	}
 }
 
+export interface RecentSessionNote {
+	readonly sessionKey: string;
+	readonly path: string;
+	readonly summaryLine: string;
+	readonly frontmatter: SessionNotesFrontmatter;
+	readonly tasks: readonly SessionNotesTaskSection[];
+}
+
+const DREAMING_SESSION_NOTES_LIMIT = 10;
+
+/**
+ * Walk `~/.agents/memory/sessions/` and read the most-recently-updated
+ * `notes.md` files. These are the structured per-session artifacts
+ * produced by the session-notes-writer; the dreaming pass mines them
+ * instead of (or in addition to) the session_summaries rows, so the
+ * model sees task-level structure rather than transcript soup.
+ */
+function fetchRecentSessionNotes(agentsDir: string, limit: number): readonly RecentSessionNote[] {
+	const root = join(agentsDir, SIGNET_SESSIONS_RELATIVE_ROOT);
+	if (!existsSync(root)) return [];
+
+	let entries: string[];
+	try {
+		entries = readdirSync(root);
+	} catch (err) {
+		logger.warn("dreaming", "Failed to read sessions directory", {
+			root,
+			error: err instanceof Error ? err.message : String(err),
+		});
+		return [];
+	}
+
+	const candidates: { sessionKey: string; mtimeMs: number; path: string }[] = [];
+	for (const entry of entries) {
+		const dir = join(root, entry);
+		try {
+			if (!statSync(dir).isDirectory()) continue;
+		} catch {
+			continue;
+		}
+		const notesPath = sessionNotesPath(entry, agentsDir);
+		if (!existsSync(notesPath)) continue;
+		try {
+			const stat = statSync(notesPath);
+			candidates.push({ sessionKey: entry, mtimeMs: stat.mtimeMs, path: notesPath });
+		} catch {
+			continue;
+		}
+	}
+
+	candidates.sort((a, b) => b.mtimeMs - a.mtimeMs);
+	const selected = candidates.slice(0, limit);
+
+	const results: RecentSessionNote[] = [];
+	for (const cand of selected) {
+		const read = readSessionNotes(cand.sessionKey, agentsDir);
+		if (!read.ok) continue;
+		results.push({
+			sessionKey: cand.sessionKey,
+			path: read.path,
+			summaryLine: read.file.summaryLine,
+			frontmatter: read.file.frontmatter,
+			tasks: read.file.tasks,
+		});
+	}
+	return results;
+}
+
 // ---------------------------------------------------------------------------
 // Prompt construction
 // ---------------------------------------------------------------------------
@@ -435,6 +510,7 @@ function buildDreamingPrompt(
 	mode: DreamingMode,
 	summaries: readonly SessionSummaryRow[],
 	graph: ReturnType<typeof fetchEntityGraph>,
+	recentSessionNotes: readonly RecentSessionNote[],
 	agentsDir: string,
 	maxTokens: number,
 ): string {
@@ -505,6 +581,64 @@ function buildDreamingPrompt(
 		usedChars += s.content.length;
 	}
 
+	// Session Notes input: structured per-session task artifacts from
+	// `~/.agents/memory/sessions/`. These give the model task-level structure
+	// with named subsections (Outcome, Key steps, Failures, Reusable knowledge,
+	// References) instead of transcript-soup.
+	let sessionNotesText = "";
+	if (recentSessionNotes.length > 0) {
+		const notesBudget = Math.floor(maxTokens * 0.15 * 4);
+		let notesUsed = 0;
+		for (const note of recentSessionNotes) {
+			if (notesUsed >= notesBudget) break;
+			const header = `\n### Session Notes (${note.sessionKey}) — ${note.frontmatter.harness} @ ${note.frontmatter.updated_at}`;
+			if (notesUsed + header.length > notesBudget) break;
+			sessionNotesText += header;
+			notesUsed += header.length;
+			if (note.summaryLine) {
+				const summary = `\n**Summary:** ${note.summaryLine}`;
+				sessionNotesText += summary;
+				notesUsed += summary.length;
+			}
+			for (const task of note.tasks) {
+				if (notesUsed >= notesBudget) break;
+				const taskHeader = `\n**Task ${task.taskIndex}** (${task.source})`;
+				sessionNotesText += taskHeader;
+				notesUsed += taskHeader.length;
+				if (task.outcome) {
+					const t = `\n- Outcome: ${task.outcome}`;
+					sessionNotesText += t;
+					notesUsed += t.length;
+				}
+				for (const line of task.preferenceSignals) {
+					const t = `\n- Preference: ${line}`;
+					if (notesUsed + t.length > notesBudget) break;
+					sessionNotesText += t;
+					notesUsed += t.length;
+				}
+				for (const line of task.keySteps) {
+					const t = `\n- Key step: ${line}`;
+					if (notesUsed + t.length > notesBudget) break;
+					sessionNotesText += t;
+					notesUsed += t.length;
+				}
+				for (const line of task.failures) {
+					const t = `\n- Failure: ${line}`;
+					if (notesUsed + t.length > notesBudget) break;
+					sessionNotesText += t;
+					notesUsed += t.length;
+				}
+				for (const line of task.reusableKnowledge) {
+					const t = `\n- Reusable: ${line}`;
+					if (notesUsed + t.length > notesBudget) break;
+					sessionNotesText += t;
+					notesUsed += t.length;
+				}
+			}
+			sessionNotesText += "\n";
+		}
+	}
+
 	const modeInstructions =
 		mode === "compact"
 			? `You are running in COMPACTION mode. Focus on cleaning up the existing graph:
@@ -546,6 +680,7 @@ Guidelines:
 </task>
 
 ${summaryText ? `<recent_sessions>\n${summaryText}\n</recent_sessions>` : ""}
+${sessionNotesText ? `<session_notes>\n${sessionNotesText}\n</session_notes>` : ""}
 
 <knowledge_graph>
 ${graphText}
@@ -1227,6 +1362,17 @@ export async function runDreamingPass(
 
 		warnIfTruncated(graph, graphLimits);
 
+		// Read the structured per-session notes files as a first-class input.
+		// These give the model task-level structure (Outcome, Key steps, Failures,
+		// Reusable knowledge, References) instead of transcript soup.
+		const recentSessionNotes = fetchRecentSessionNotes(agentsDir, DREAMING_SESSION_NOTES_LIMIT);
+		if (recentSessionNotes.length > 0) {
+			logger.info("dreaming", "Loaded recent session notes for dreaming input", {
+				count: recentSessionNotes.length,
+				sessionKeys: recentSessionNotes.slice(0, 5).map((n) => n.sessionKey),
+			});
+		}
+
 		if (mode === "incremental" && summaries.length === 0 && graph.entities.length === 0) {
 			accessor.withWriteTx((db) => {
 				db.prepare(
@@ -1246,7 +1392,7 @@ export async function runDreamingPass(
 		}
 
 		// Build prompt and call LLM
-		const prompt = buildDreamingPrompt(mode, summaries, graph, agentsDir, cfg.maxInputTokens);
+		const prompt = buildDreamingPrompt(mode, summaries, graph, recentSessionNotes, agentsDir, cfg.maxInputTokens);
 
 		logger.info("dreaming", "Starting dreaming pass", {
 			mode,

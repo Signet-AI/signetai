@@ -634,4 +634,89 @@ describe("dreaming", () => {
 			expect(attr?.status).toBe("deleted");
 		});
 	});
+
+	describe("session notes input", () => {
+		it("reads structured task sections from notes.md into the prompt", async () => {
+			const agentsDir = "/tmp/dreaming-notes-test";
+			const { rmSync, existsSync, mkdirSync } = await import("node:fs");
+			if (existsSync(agentsDir)) rmSync(agentsDir, { recursive: true, force: true });
+			mkdirSync(agentsDir, { recursive: true });
+
+			const { appendTaskSection } = await import("../session-notes-writer.js");
+			appendTaskSection({
+				sessionKey: "notes-session-1",
+				agentId: AGENT,
+				harness: "opencode",
+				cwd: "/tmp/repo",
+				task: {
+					taskIndex: 1,
+					outcome: "Plumbed session notes into dreaming.",
+					keySteps: ["Added fetchRecentSessionNotes", "Threaded into buildDreamingPrompt"],
+					failures: ["Initial import had a wrong symbol name"],
+					reusableKnowledge: ["Match export name exactly when importing from @signet/core"],
+				},
+				agentsDir,
+			});
+			appendTaskSection({
+				sessionKey: "notes-session-1",
+				agentId: AGENT,
+				harness: "opencode",
+				cwd: "/tmp/repo",
+				task: {
+					taskIndex: 2,
+					outcome: "Verified the prompt contains the notes.",
+					keySteps: ["Captured generate() prompt and asserted on its content"],
+				},
+				agentsDir,
+			});
+
+			// Capture the prompt the LLM sees.
+			let capturedPrompt = "";
+			const generate = async (prompt: string) => {
+				capturedPrompt = prompt;
+				return JSON.stringify({ mutations: [], summary: "Reviewed session notes, no changes needed" });
+			};
+
+			// Seed an entity so we get past the empty check.
+			seedEntity(db, "ent-1", "TypeScript", "tool");
+			seedAspect(db, "asp-1", "ent-1", "usage");
+			seedAttribute(db, "attr-1", "asp-1", "TypeScript is used for all backend code");
+
+			await runDreamingPass(accessor, generate, defaultCfg(), agentsDir, AGENT, "incremental");
+
+			// The prompt should contain the structured session-notes block.
+			expect(capturedPrompt).toContain("<session_notes>");
+			expect(capturedPrompt).toContain("notes-session-1");
+			expect(capturedPrompt).toContain("Plumbed session notes into dreaming.");
+			expect(capturedPrompt).toContain("Match export name exactly");
+			// The task-level structure should be in the prompt.
+			expect(capturedPrompt).toContain("Task 1");
+			expect(capturedPrompt).toContain("Task 2");
+			// Provenance markers should be preserved as (agent) in the rendered block.
+			expect(capturedPrompt).toContain("(agent)");
+
+			rmSync(agentsDir, { recursive: true, force: true });
+		});
+
+		it("passes empty notes list gracefully when the sessions dir is absent", async () => {
+			const agentsDir = "/tmp/dreaming-no-sessions-dir";
+			const { rmSync, existsSync } = await import("node:fs");
+			if (existsSync(agentsDir)) rmSync(agentsDir, { recursive: true, force: true });
+
+			let capturedPrompt = "";
+			const generate = async (prompt: string) => {
+				capturedPrompt = prompt;
+				return JSON.stringify({ mutations: [], summary: "no notes" });
+			};
+
+			seedEntity(db, "ent-1", "TypeScript", "tool");
+			seedAspect(db, "asp-1", "ent-1", "usage");
+			seedAttribute(db, "attr-1", "asp-1", "TypeScript is used for all backend code");
+
+			await runDreamingPass(accessor, generate, defaultCfg(), agentsDir, AGENT, "incremental");
+
+			// No session_notes block when the dir doesn't exist.
+			expect(capturedPrompt).not.toContain("<session_notes>");
+		});
+	});
 });
