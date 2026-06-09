@@ -107,6 +107,56 @@ describe("session-notes-writer", () => {
 		expect(read.file.tasks[1]?.outcome).toContain("then committed");
 	});
 
+	test("readSessionNotes preserves non-contiguous task indices", () => {
+		// Hand-craft a file with non-contiguous indices to confirm the reader
+		// extracts the index from the file, not from a synthesized loop counter.
+		const dir = sessionNotesDir("non-contig", tmpRoot);
+		mkdirSync(dir, { recursive: true });
+		const path = sessionNotesPath("non-contig", tmpRoot);
+		const content = `---
+thread_id: non-contig
+agent_id: default
+harness: opencode
+cwd: /tmp
+git_branch: null
+created_at: 2026-06-09T00:00:00.000Z
+updated_at: 2026-06-09T00:00:00.000Z
+consolidated: null
+consolidator_model: null
+source_kind: signet-sessions
+schema_version: 1
+---
+
+session summary
+
+## Task 1
+
+<!-- source: agent | attributed_at: 2026-06-09T00:00:00.000Z -->
+
+Outcome:
+First task.
+
+## Task 5
+
+<!-- source: consolidator | attributed_at: 2026-06-09T00:00:00.000Z -->
+
+Outcome:
+Fifth task.
+
+## Task 12
+
+<!-- source: agent | attributed_at: 2026-06-09T00:00:00.000Z -->
+
+Outcome:
+Twelfth task.
+`;
+		require("node:fs").writeFileSync(path, content);
+		const read = readSessionNotes("non-contig", tmpRoot);
+		expect(read.ok).toBe(true);
+		if (!read.ok) return;
+		expect(read.file.tasks.map((t) => t.taskIndex)).toEqual([1, 5, 12]);
+	});
+
 	test("rejects duplicate taskIndex when overwrite is not intended (caller-controlled)", () => {
 		// The writer itself overwrites in place; the test below proves that two
 		// writes with the same taskIndex converge to a single, latest version.

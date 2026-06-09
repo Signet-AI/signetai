@@ -365,10 +365,23 @@ function readNotesFile(path: string): SessionNotesFile | null {
 	const withoutFrontmatter = raw.replace(/^---\n[\s\S]*?\n---\n?/, "");
 	const summaryLine = (withoutFrontmatter.split("\n").find((line) => line.trim().length > 0) ?? "").trim();
 	const tasks: SessionNotesTaskSection[] = [];
-	const sections = withoutFrontmatter.split(/\n##\s+Task\s+\d+\s*\n/);
-	for (let i = 1; i < sections.length; i++) {
-		const heading = `## Task ${i}`;
-		const parsed = parseTaskSection(heading, sections[i] ?? "");
+	// Match `## Task N` headings; keep the index in the captured group so we
+	// honour non-contiguous task numbers (1, 5, 12) instead of re-synthesizing
+	// from the loop counter.
+	const headingRe = /^##\s+Task\s+(\d+)\s*$/gm;
+	const splits: { index: number; body: string }[] = [];
+	let lastEnd = 0;
+	let m: RegExpExecArray | null;
+	while ((m = headingRe.exec(withoutFrontmatter)) !== null) {
+		const before = withoutFrontmatter.slice(lastEnd, m.index);
+		if (splits.length > 0) splits[splits.length - 1]!.body = before;
+		splits.push({ index: Number(m[1]), body: "" });
+		lastEnd = m.index + m[0].length;
+	}
+	if (splits.length > 0) splits[splits.length - 1]!.body = withoutFrontmatter.slice(lastEnd);
+	for (const split of splits) {
+		const heading = `## Task ${split.index}`;
+		const parsed = parseTaskSection(heading, split.body);
 		if (parsed) tasks.push(parsed);
 	}
 	return { frontmatter, summaryLine, tasks };
@@ -377,8 +390,17 @@ function readNotesFile(path: string): SessionNotesFile | null {
 function writeNotesFileAtomic(path: string, content: string): void {
 	mkdirSync(dirname(path), { recursive: true });
 	const tmp = `${path}.tmp-${process.pid}-${randomUUID()}`;
-	writeFileSync(tmp, content, "utf8");
-	renameSync(tmp, path);
+	try {
+		writeFileSync(tmp, content, "utf8");
+		renameSync(tmp, path);
+	} catch (err) {
+		try {
+			rmSync(tmp, { force: true });
+		} catch {
+			/* tmp already gone or unreadable; nothing useful to do here */
+		}
+		throw err;
+	}
 }
 
 function contentHash(
@@ -438,14 +460,9 @@ export function appendTaskSection(params: AppendTaskSectionParams): AppendTaskSe
 	};
 
 	const tasks: SessionNotesTaskSection[] = [];
-	const seen = new Set<number>();
 	for (const t of existing?.tasks ?? []) {
 		if (t.taskIndex === newTask.taskIndex) continue;
 		tasks.push(t);
-		seen.add(t.taskIndex);
-	}
-	if (seen.has(newTask.taskIndex)) {
-		return { ok: false, error: `Task ${newTask.taskIndex} already exists for this session` };
 	}
 	tasks.push(newTask);
 	tasks.sort((a, b) => a.taskIndex - b.taskIndex);
