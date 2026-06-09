@@ -7,7 +7,7 @@ const required = [
 	"bin/launch.js",
 	"bin/native-platforms.js",
 	"bin/signet.js",
-	"bin/signet-mcp.js",
+	"dist/mcp-stdio.js",
 	"scripts/install-native.js",
 ];
 const missing = required.filter((path) => !existsSync(join(process.cwd(), path)));

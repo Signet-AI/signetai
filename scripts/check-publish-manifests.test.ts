@@ -26,15 +26,12 @@ describe("check-publish-manifests", () => {
 		expect(workflow).toContain("  workflow_dispatch:\n  push:");
 	});
 
-	test("keeps threaded extraction worker in standalone daemon and meta-package builds", () => {
+	test("keeps threaded extraction worker in standalone daemon build", () => {
 		const root = join(import.meta.dir, "..");
 		const daemonBuild = readFileSync(join(root, "platform", "daemon", "build.ts"), "utf-8");
-		const metaPackageBuild = readFileSync(join(root, "dist", "signetai", "build-daemon.ts"), "utf-8");
 
 		expect(daemonBuild).toContain('entrypoint: "./src/pipeline/extraction-thread.ts"');
 		expect(daemonBuild).toContain('outfile: "./dist/extraction-thread.js"');
-		expect(metaPackageBuild).toContain('entrypoint: "../../platform/daemon/src/pipeline/extraction-thread.ts"');
-		expect(metaPackageBuild).toContain('outfile: "./dist/extraction-thread.js"');
 	});
 
 	test("keeps Docker build COPY sources present in the repository", () => {
@@ -61,24 +58,18 @@ describe("check-publish-manifests", () => {
 	test("keeps Node daemon build banner from colliding with esbuild require helper", () => {
 		const root = join(import.meta.dir, "..");
 		const daemonBuild = readFileSync(join(root, "platform", "daemon", "build.ts"), "utf-8");
-		const metaPackageBuild = readFileSync(join(root, "dist", "signetai", "build-daemon.ts"), "utf-8");
 		const banner = "const require = __createRequire(import.meta.url);";
 
 		expect(daemonBuild).toContain(banner);
-		expect(metaPackageBuild).toContain(banner);
 		expect(daemonBuild).not.toContain("const __require =");
-		expect(metaPackageBuild).not.toContain("const __require =");
 	});
 
 	test("routes forced daemon builds through the Node/esbuild path", () => {
 		const root = join(import.meta.dir, "..");
 		const daemonBuild = readFileSync(join(root, "platform", "daemon", "build.ts"), "utf-8");
-		const metaPackageBuild = readFileSync(join(root, "dist", "signetai", "build-daemon.ts"), "utf-8");
 
-		for (const buildScript of [daemonBuild, metaPackageBuild]) {
-			expect(buildScript).toContain('const forceNodeBuild = process.env.FORCE_NODE_BUILD === "1";');
-			expect(buildScript).toContain('const isBun = typeof Bun !== "undefined" && !forceNodeBuild;');
-		}
+		expect(daemonBuild).toContain('const forceNodeBuild = process.env.FORCE_NODE_BUILD === "1";');
+		expect(daemonBuild).toContain('const isBun = typeof Bun !== "undefined" && !forceNodeBuild;');
 	});
 
 	test("keeps runtime split SQLite loader ESM-safe", () => {
@@ -335,6 +326,26 @@ describe("check-publish-manifests", () => {
 		expect(installer).not.toContain("releases/download/bundle-latest");
 	});
 
+	test("wires the signet-mcp stdio bundle into the signetai build", () => {
+		// Guards against the dead-code pattern from PR #816: the meta-package
+		// prebuild must rebuild the stdio bundle, otherwise the npm tarball
+		// ships an empty/missing dist/mcp-stdio.js and the signet-mcp bin
+		// symlink points at nothing (issue #826).
+		const root = join(import.meta.dir, "..");
+		const wrapper = JSON.parse(readFileSync(join(root, "dist", "signetai", "package.json"), "utf-8")) as {
+			scripts?: Record<string, string>;
+		};
+		const buildScript = readFileSync(join(root, "scripts", "build-signet-mcp.ts"), "utf-8");
+
+		expect(wrapper.scripts?.prebuild).toContain("scripts/build-signet-mcp.ts");
+		// Build must target the same entry the bin ships. Asserting on the
+		// full join() call shape (rather than loose substrings) catches
+		// any drift in the path components — a TS file that just happens
+		// to mention "platform" or "mcp-stdio.ts" wouldn't satisfy these.
+		expect(buildScript).toMatch(/join\(\s*root\s*,\s*"platform"\s*,\s*"daemon"\s*,\s*"src"\s*,\s*"mcp-stdio\.ts"\s*\)/);
+		expect(buildScript).toMatch(/join\(\s*root\s*,\s*"dist"\s*,\s*"signetai"\s*,\s*"dist"\s*,\s*"mcp-stdio\.js"\s*\)/);
+	});
+
 	test("keeps the signetai package as a thin publishable native wrapper", () => {
 		const root = join(import.meta.dir, "..");
 		const manifest = JSON.parse(readFileSync(join(root, "dist", "signetai", "package.json"), "utf-8")) as {
@@ -348,7 +359,6 @@ describe("check-publish-manifests", () => {
 		};
 		const launcher = readFileSync(join(root, "dist", "signetai", "bin", "launch.js"), "utf-8");
 		const nativePlatforms = readFileSync(join(root, "dist", "signetai", "bin", "native-platforms.js"), "utf-8");
-		const mcpBin = readFileSync(join(root, "dist", "signetai", "bin", "signet-mcp.js"), "utf-8");
 		const installer = readFileSync(join(root, "dist", "signetai", "scripts", "install-native.js"), "utf-8");
 
 		expect(manifest.name).toBe("signetai");
@@ -358,7 +368,13 @@ describe("check-publish-manifests", () => {
 		expect(manifest.files).not.toContain("native/**");
 		expect(manifest.scripts?.postinstall).toContain("scripts/install-native.js");
 		expect(manifest.bin?.signet).toBe("bin/signet.js");
-		expect(manifest.bin?.["signet-mcp"]).toBe("bin/signet-mcp.js");
+		// signet-mcp must be the self-contained stdio JSON-RPC bundle
+		// (issue #826) — the previous `bin/signet-mcp.js` shim forwarded
+		// to the native binary's management CLI, which broke the MCP
+		// handshake for every harness using the default connector config.
+		expect(manifest.bin?.["signet-mcp"]).toBe("dist/mcp-stdio.js");
+		expect(manifest.files).toContain("dist/mcp-stdio.js");
+		expect(manifest.files).not.toContain("bin/signet-mcp.js");
 		expect(launcher).toContain('join(packageDir, "native"');
 		expect(launcher).toContain("resolveNativePackageBinaryPath");
 		expect(launcher).toContain("require.resolve");
@@ -368,7 +384,6 @@ describe("check-publish-manifests", () => {
 		expect(nativePlatforms).toContain('"darwin-arm64"');
 		expect(nativePlatforms).toContain('"win32-x64"');
 		expect(nativePlatforms).toContain("packageName");
-		expect(mcpBin).toContain("forceMcp: true");
 		expect(installer).toContain("linkSync");
 		expect(installer).toContain("require.resolve");
 		expect(installer).toContain("Linked Signet native binary");

@@ -33,7 +33,7 @@ function resolveBinaryPath() {
 	return null;
 }
 
-export function launchSignet(options = {}) {
+export function launchSignet() {
 	const resolvedBinaryPath = resolveBinaryPath();
 	if (!resolvedBinaryPath) {
 		console.error("Signet native binary is missing.");
@@ -43,8 +43,7 @@ export function launchSignet(options = {}) {
 	}
 
 	const args = process.argv.slice(2);
-	const forwardedArgs = options.forceMcp === true && args[0] !== "mcp" ? ["mcp", ...args] : args;
-	const child = spawn(resolvedBinaryPath, forwardedArgs, {
+	const child = spawn(resolvedBinaryPath, args, {
 		stdio: "inherit",
 		env: process.env,
 		windowsHide: true,

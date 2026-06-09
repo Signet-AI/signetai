@@ -58,17 +58,21 @@ describe("install copy", () => {
 			optionalDependencies?: Record<string, string>;
 			scripts?: Record<string, string>;
 			bin?: Record<string, string>;
+			files?: string[];
 		};
 		const launcher = read("dist/signetai/bin/launch.js");
 		const nativePlatforms = read("dist/signetai/bin/native-platforms.js");
-		const mcpWrapper = read("dist/signetai/bin/signet-mcp.js");
 		const installer = read("dist/signetai/scripts/install-native.js");
 
 		expect(manifest.scripts?.postinstall).toContain("scripts/install-native.js");
 		expect(manifest.dependencies).toBeUndefined();
 		expect(manifest.optionalDependencies).toBeUndefined();
 		expect(manifest.bin?.signet).toBe("bin/signet.js");
-		expect(manifest.bin?.["signet-mcp"]).toBe("bin/signet-mcp.js");
+		// signet-mcp is the self-contained stdio JSON-RPC bundle, not a
+		// wrapper that forwards to the native binary (issue #826).
+		expect(manifest.bin?.["signet-mcp"]).toBe("dist/mcp-stdio.js");
+		expect(manifest.files).toContain("dist/mcp-stdio.js");
+		expect(manifest.files).not.toContain("bin/signet-mcp.js");
 		expect(launcher).toContain('join(packageDir, "native"');
 		expect(launcher).toContain("resolveNativePackageBinaryPath");
 		expect(launcher).toContain("require.resolve");
@@ -77,7 +81,6 @@ describe("install copy", () => {
 		expect(nativePlatforms).toContain('"darwin-x64"');
 		expect(nativePlatforms).toContain('"darwin-arm64"');
 		expect(nativePlatforms).toContain('"win32-x64"');
-		expect(mcpWrapper).toContain("forceMcp: true");
 		expect(installer).toContain("linkSync");
 		expect(installer).toContain("require.resolve");
 		expect(installer).toContain("Skipping Signet native binary linking in workspace install");

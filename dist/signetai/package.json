@@ -5,19 +5,21 @@
   "type": "module",
   "bin": {
     "signet": "bin/signet.js",
-    "signet-mcp": "bin/signet-mcp.js"
+    "signet-mcp": "dist/mcp-stdio.js"
   },
   "files": [
     "bin/launch.js",
     "bin/native-platforms.js",
     "bin/signet.js",
-    "bin/signet-mcp.js",
+    "dist/mcp-stdio.js",
     "scripts/install-native.js",
     "scripts/verify-wrapper.js",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
+    "// prebuild": "Release-only: rebuilds dist/mcp-stdio.js from the daemon's MCP stdio source. Runs on `bun run build:signetai` during the release pipeline, NOT on `npm install` — consumers receive whatever the publisher shipped. The npm tarball is built from a tree where this prebuild has already run.",
+    "prebuild": "bun ../../scripts/build-signet-mcp.ts",
     "build": "node scripts/verify-wrapper.js",
     "postinstall": "node scripts/install-native.js"
   },

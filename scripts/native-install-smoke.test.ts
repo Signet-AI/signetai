@@ -64,21 +64,40 @@ interface CommandResult {
 	readonly stderr: string;
 }
 
-function runCommand(command: string, args: readonly string[], env: NodeJS.ProcessEnv): Promise<CommandResult> {
+function runCommand(
+	command: string,
+	args: readonly string[],
+	env: NodeJS.ProcessEnv,
+	options: { readonly stdin?: string; readonly timeoutMs?: number } = {},
+): Promise<CommandResult> {
+	const { stdin, timeoutMs = 10_000 } = options;
 	return new Promise((resolve, reject) => {
-		const child = spawn(command, args, { env, stdio: ["ignore", "pipe", "pipe"] });
+		const child = spawn(command, args, {
+			env,
+			stdio: [stdin !== undefined ? "pipe" : "ignore", "pipe", "pipe"],
+		});
 		const stdout: Buffer[] = [];
 		const stderr: Buffer[] = [];
 		child.stdout.on("data", (chunk) => stdout.push(Buffer.from(chunk)));
 		child.stderr.on("data", (chunk) => stderr.push(Buffer.from(chunk)));
 		child.on("error", reject);
 		child.on("close", (status) => {
+			clearTimeout(timer);
 			resolve({
 				status,
 				stdout: Buffer.concat(stdout).toString("utf8"),
 				stderr: Buffer.concat(stderr).toString("utf8"),
 			});
 		});
+		const timer = setTimeout(() => {
+			child.kill("SIGTERM");
+			reject(new Error(`command did not exit within ${timeoutMs}ms: ${command} ${args.join(" ")}`));
+		}, timeoutMs);
+		timer.unref();
+		if (stdin !== undefined && child.stdin) {
+			child.stdin.write(stdin);
+			child.stdin.end();
+		}
 	});
 }
 
@@ -196,6 +215,17 @@ describe("native install smoke", () => {
 		mkdirSync(join(nativePackageDir, "bin"), { recursive: true });
 		cpSync(join(root, "dist", "signetai", "scripts"), join(packageDir, "scripts"), { recursive: true });
 		cpSync(join(root, "dist", "signetai", "bin"), join(packageDir, "bin"), { recursive: true });
+		// The signet-mcp stdio bundle is a build artifact (gitignored).
+		// It only exists after `bun run build:signetai`; copy it into the
+		// fake install if present so the install-path probe below can run.
+		// On a clean checkout this whole block is skipped — the dedicated
+		// signet-mcp stdio smoke test (which also skips cleanly) covers
+		// the bundle in isolation.
+		const stdioSource = join(root, "dist", "signetai", "dist", "mcp-stdio.js");
+		const hasStdioBundle = existsSync(stdioSource);
+		if (hasStdioBundle) {
+			cpSync(join(root, "dist", "signetai", "dist"), join(packageDir, "dist"), { recursive: true });
+		}
 		writeFileSync(join(packageDir, "package.json"), readFileSync(join(root, "dist", "signetai", "package.json")));
 		writeFileSync(
 			join(nativePackageDir, "package.json"),
@@ -220,8 +250,40 @@ describe("native install smoke", () => {
 		expect(wrapper.status).toBe(0);
 		expect(wrapper.stdout).toContain("fake native signet --version");
 
-		const mcpWrapper = await runCommand("node", [join(packageDir, "bin", "signet-mcp.js"), "--inspect"], process.env);
-		expect(mcpWrapper.status).toBe(0);
-		expect(mcpWrapper.stdout).toContain("fake native signet mcp --inspect");
+		// signet-mcp must be the self-contained stdio JSON-RPC bundle, not
+		// a wrapper that forwards to the native binary. Beyond the file
+		// presence check, exercise the bundle from a fake install layout
+		// and assert it actually speaks JSON-RPC. This catches bundle-
+		// level breakage (e.g. the bundle was never built, the alias
+		// config is wrong, the entry file is missing) at the install
+		// smoke layer. A typo in the `bin` field of
+		// dist/signetai/package.json itself (e.g. `dist/mcpstdio.js`
+		// pointing at a file that doesn't exist) is caught separately
+		// by the manifest assertion in
+		// scripts/check-publish-manifests.test.ts. Skipped on clean
+		// checkouts where the bundle has not been built; full handshake
+		// coverage lives in scripts/signet-mcp-stdio-smoke.test.ts.
+		const mcpBinPath = join(packageDir, "dist", "mcp-stdio.js");
+		if (!hasStdioBundle) return;
+
+		expect(existsSync(mcpBinPath)).toBe(true);
+
+		const initialize = JSON.stringify({
+			jsonrpc: "2.0",
+			id: 1,
+			method: "initialize",
+			params: {
+				protocolVersion: "2024-11-05",
+				capabilities: {},
+				clientInfo: { name: "native-install-smoke", version: "0" },
+			},
+		});
+		const mcpProbe = await runCommand("node", [mcpBinPath], process.env, { stdin: `${initialize}\n` });
+		expect(mcpProbe.status).toBe(0);
+		const firstLine = mcpProbe.stdout.split("\n").find((line) => line.length > 0) ?? "";
+		const parsed = JSON.parse(firstLine) as { jsonrpc?: unknown; result?: unknown; error?: unknown };
+		expect(parsed.jsonrpc).toBe("2.0");
+		expect(parsed.error).toBeUndefined();
+		expect(parsed.result).toBeDefined();
 	});
 });
