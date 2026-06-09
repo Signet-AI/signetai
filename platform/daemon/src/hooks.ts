@@ -83,7 +83,10 @@ import {
 } from "./session-memories";
 import { isNoiseSession } from "./session-noise";
 import { advanceRecallContextEpoch, claimRecallItems } from "./session-recall-dedupe";
+import { appendTaskSection, SESSION_NOTES_FEATURE_FLAG } from "./session-notes-writer";
+import { getFeatureFlag } from "./feature-flags";
 import { getExpiryWarning } from "./session-tracker";
+import { getInferenceProviderOrNull } from "./llm";
 import {
 	ensureCanonicalTranscriptHistory,
 	getSessionTranscriptContent,
@@ -507,6 +510,21 @@ export interface UserPromptSubmitResponse {
 	warnings?: string[];
 }
 
+export interface SessionEndNoteSection {
+	readonly preferenceSignals?: readonly string[];
+	readonly keySteps?: readonly string[];
+	readonly failures?: readonly string[];
+	readonly reusableKnowledge?: readonly string[];
+	readonly references?: readonly string[];
+}
+
+export interface SessionEndNote {
+	readonly taskIndex: number;
+	readonly outcome: string;
+	readonly sections?: SessionEndNoteSection;
+	readonly summaryLine?: string;
+}
+
 export interface SessionEndRequest {
 	harness: string;
 	transcriptPath?: string;
@@ -517,12 +535,15 @@ export interface SessionEndRequest {
 	cwd?: string;
 	reason?: string;
 	runtimePath?: "plugin" | "legacy";
+	notes?: readonly SessionEndNote[];
 }
 
 export interface SessionEndResponse {
 	memoriesSaved: number;
 	queued?: boolean;
 	jobId?: string;
+	notesFile?: string;
+	notesTasksWritten?: number;
 }
 
 export interface CheckpointExtractRequest {
@@ -3729,6 +3750,81 @@ export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionE
 		});
 	}
 
+	// Persist any agent-supplied per-task notes synchronously. These are the
+	// "in-loop" half of the hybrid writer pattern; the consolidator below
+	// (deferred) is the ACPX end-of-session pass that fills whatever the
+	// agent did not write.
+	let notesFile: string | undefined;
+	let notesTasksWritten = 0;
+	const sessionNotesEnabled = getFeatureFlag(SESSION_NOTES_FEATURE_FLAG);
+	if (sessionNotesEnabled && sessionKey && Array.isArray(req.notes) && req.notes.length > 0) {
+		try {
+			for (const note of req.notes) {
+				const write = appendTaskSection({
+					sessionKey,
+					agentId,
+					harness: req.harness,
+					cwd: req.cwd ?? "",
+					task: {
+						taskIndex: note.taskIndex,
+						outcome: note.outcome,
+						preferenceSignals: note.sections?.preferenceSignals,
+						keySteps: note.sections?.keySteps,
+						failures: note.sections?.failures,
+						reusableKnowledge: note.sections?.reusableKnowledge,
+						references: note.sections?.references,
+						summaryLine: note.summaryLine,
+					},
+					source: "agent",
+				});
+				if (write.ok) {
+					notesFile = write.path;
+					notesTasksWritten += 1;
+				} else {
+					logger.warn("hooks", "Failed to write agent-supplied session note", {
+						sessionKey,
+						taskIndex: note.taskIndex,
+						error: write.error,
+					});
+				}
+			}
+		} catch (err) {
+			logger.warn("hooks", "Agent-supplied notes write failed", {
+				sessionKey,
+				error: err instanceof Error ? err.message : String(err),
+			});
+		}
+	}
+
+	// Deferred: consolidator pass. Runs as a separate stage so a slow model
+	// call never blocks the session-end response. Gracefully no-ops when the
+	// inference resolver is unconfigured or the notes file is already
+	// complete.
+	if (sessionNotesEnabled && sessionKey) {
+		const consolidatorProvider = getInferenceProviderOrNull("memoryExtraction");
+		const consolidatorModelName = consolidatorProvider?.name ?? null;
+		setImmediate(() => {
+			import("./session-notes-consolidator")
+				.then(({ consolidateSession }) =>
+					consolidateSession({
+						sessionKey,
+						agentId,
+						harness: req.harness,
+						cwd: req.cwd ?? "",
+						transcript: retainedTranscript,
+						provider: consolidatorProvider,
+						providerModel: consolidatorModelName,
+					}),
+				)
+				.catch((err) => {
+					logger.warn("hooks", "Consolidator import/invocation failed", {
+						sessionKey,
+						error: err instanceof Error ? err.message : String(err),
+					});
+				});
+		});
+	}
+
 	setImmediate(() => {
 		const work = deferSessionEndWork({
 			transcript: retainedTranscript,
@@ -3753,7 +3849,12 @@ export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionE
 		});
 	});
 
-	return { memoriesSaved: 0, queued: Boolean(jobId), jobId };
+	return {
+		memoriesSaved: 0,
+		queued: Boolean(jobId),
+		jobId,
+		...(notesFile ? { notesFile, notesTasksWritten } : {}),
+	};
 }
 
 async function deferSessionEndWork(params: {

@@ -299,22 +299,16 @@ function parseTaskSection(heading: string, body: string): SessionNotesTaskSectio
 	const source: "agent" | "consolidator" = sourceMatch ? (sourceMatch[1] as "agent" | "consolidator") : "agent";
 	const attributedAt = sourceMatch?.[2] ?? new Date(0).toISOString();
 
-	const blocks = splitBlocks(body);
-	const outcome = (blocks["Outcome:"] ?? "").trim();
-	const preferenceSignals = parseList(blocks["Preference signals:"]);
-	const keySteps = parseList(blocks["Key steps:"]);
-	const failures = parseList(blocks["Failures and how to do differently:"]);
-	const reusableKnowledge = parseList(blocks["Reusable knowledge:"]);
-	const references = parseList(blocks["References:"]);
-
+	const parsed = parseTaskSectionBody(body);
+	if (!parsed) return null;
 	return {
 		taskIndex,
-		outcome,
-		preferenceSignals,
-		keySteps,
-		failures,
-		reusableKnowledge,
-		references,
+		outcome: parsed.outcome,
+		preferenceSignals: parsed.preferenceSignals,
+		keySteps: parsed.keySteps,
+		failures: parsed.failures,
+		reusableKnowledge: parsed.reusableKnowledge,
+		references: parsed.references,
 		source,
 		attributedAt,
 	};
@@ -347,6 +341,59 @@ function parseList(block: string | undefined): string[] {
 		out.push(trimmed);
 	}
 	return out;
+}
+
+export interface ParsedTaskBody {
+	readonly outcome: string;
+	readonly preferenceSignals: readonly string[];
+	readonly keySteps: readonly string[];
+	readonly failures: readonly string[];
+	readonly reusableKnowledge: readonly string[];
+	readonly references: readonly string[];
+}
+
+/**
+ * Parse the six canonical subsection fields from a task body. Returns
+ * null when the body has no `Outcome:` block (the consolidator's
+ * `## Task N` prompt is invalid without one).
+ */
+export function parseTaskSectionBody(body: string): ParsedTaskBody | null {
+	const blocks = splitBlocks(body);
+	const outcome = (blocks["Outcome:"] ?? "").trim();
+	if (!outcome) return null;
+	return {
+		outcome,
+		preferenceSignals: parseList(blocks["Preference signals:"]),
+		keySteps: parseList(blocks["Key steps:"]),
+		failures: parseList(blocks["Failures and how to do differently:"]),
+		reusableKnowledge: parseList(blocks["Reusable knowledge:"]),
+		references: parseList(blocks["References:"]),
+	};
+}
+
+/**
+ * Find the lowest positive integer that is not present in `existingIndices`.
+ * Used by the consolidator to fill gaps in non-contiguous task numbering.
+ */
+export function findLowestMissingIndex(existingIndices: readonly number[]): number {
+	const seen = new Set(existingIndices.filter((n) => Number.isInteger(n) && n >= 1));
+	for (let i = 1; i < Number.MAX_SAFE_INTEGER; i++) {
+		if (!seen.has(i)) return i;
+	}
+	return 1;
+}
+
+/**
+ * Return true when the file's `updated_at` is within `maxAgeMs` of `now`.
+ * The consolidator uses this to skip stale-free files: if the agent just
+ * wrote all sections and the file was last touched seconds ago, there is
+ * no missing task to fill, so a model call would be wasted (and would
+ * invent a phantom task).
+ */
+export function isNotesFileFresh(frontmatter: { readonly updated_at: string }, now: Date, maxAgeMs: number): boolean {
+	const updated = Date.parse(frontmatter.updated_at);
+	if (!Number.isFinite(updated)) return false;
+	return now.getTime() - updated <= maxAgeMs;
 }
 
 // ---------------------------------------------------------------------------
