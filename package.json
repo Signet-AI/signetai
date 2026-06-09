@@ -50,6 +50,7 @@
     "changelog": "bun scripts/changelog.ts",
     "test:prompt:structural": "SIGNET_OLLAMA_TEST_MODEL=nemotron-3-nano:4b bun test platform/daemon/src/pipeline/structural-dependency.test.ts",
     "test:prompt:synthesis": "SIGNET_OLLAMA_TEST_MODEL=nemotron-3-nano:4b bun test platform/daemon/src/pipeline/dependency-synthesis.test.ts",
+    "probe:signet-mcp": "bun scripts/probe-signet-mcp.ts",
     "build:turbo": "turbo run build",
     "test:turbo": "turbo run test",
     "typecheck:turbo": "turbo run typecheck",
