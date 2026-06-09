@@ -8,58 +8,82 @@ Conventional commits: >-
   `type(scope): subject`. Reserve `feat:` for user-facing features only; use
   `fix:`, `refactor:`, `chore:`, `perf:`, `test:`, `docs:`, `build:`, or
   `ci:` for internal changes.
-Last Updated: "2026/05/21"
+Last Updated: "2026/06/09"
 This file: "AGENTS.md (canonical), `CLAUDE.md -> AGENTS.md`."
 ---
 
 This file guides AI assistants working in the Signet monorepo. The goal is
 durable repo work: inspect the real checkout, make scoped changes, add the
-guardrail that would have prevented the issue, and verify the affected runtime.
+guardrail that would have prevented the issue, and verify the affected
+runtime. Telegraph style below — root owns hard policy and routing;
+scoped `AGENTS.md` files own subtree guidance; skills own workflows.
 
-## Operating Stance
+## Start
 
-- Prefer repo truth and runtime truth over inference. Inspect the current
-  files, package scripts, installed binary, daemon health, GitHub state, or
-  failing test before proposing a fix.
-- Stay on task. Do not widen a bug fix into a product redesign unless the
-  user asks for it.
-- Preserve unrelated work. The checkout may be dirty; never reset, checkout,
-  or delete user changes unless explicitly asked.
-- Work on a branch named `<username>/<feature>` from `main` for repo changes.
-- Keep changes maintainable. Shared behavior belongs in shared code, not in
-  repeated local patches.
-- If a public claim, README, docs page, or API contract is affected, update
-  the source of truth in the same PR.
+- Replies: repo-root refs only (e.g. `platform/daemon/src/server.ts:42`).
+  No absolute paths, no `~/`.
+- Fix/triage answers need source, tests, current/shipped behavior, and
+  dependency contract proof.
+- Reviews/answers: high confidence required. Default to exhaustive relevant
+  codebase search/read, including owners, callers, siblings, tests, docs,
+  and upstream/dependency contracts before verdict. Diff-only review is
+  insufficient.
+- Review default: read the whole changed function/module plus callers,
+  callees, sibling implementations, adjacent tests, scoped docs, and
+  dependency contracts before saying `good`, `bad`, `best fix`, `proof
+  sufficient`, or posting a comment. If challenged, keep reading first.
+- Dependency-touching work: direct dependency inspection is mandatory when
+  feasible. Most dependencies are OSS, so read their source/docs/types.
+  Subagent reports, PR text, Signet wrappers, generated schemas, memory,
+  and prior reviews do not satisfy this gate. Cite files/lines checked.
+- Harness-integration work (`integrations/<harness>/`) has a hard gate:
+  the acting agent must personally inspect the sibling harness repo
+  under `references/` for the exact protocol/runtime behavior before
+  any verdict, comment, approval, code change, or `proof sufficient`
+  claim. If missing, clone it there first. No direct sibling-harness
+  check means no verdict on that integration.
+- External API work: live test required. Prefer official docs/source/types;
+  cite current proof. No memory-only API claims.
+- Live-verify when feasible. Never print secrets.
+- Missing deps: `bun install`, retry once, then report first actionable
+  error.
 
-## Definition Of Done
+## Map
 
-For code changes, a complete pass normally includes:
+- Engine/runtime: `platform/core`, `platform/daemon`, `platform/daemon-rs`,
+  `platform/native`.
+- Human surfaces: `surfaces/cli`, `surfaces/dashboard`, `surfaces/desktop`,
+  `surfaces/tray`, `surfaces/browser-extension`.
+- Integrations: `integrations/<harness>/{plugin,connector,extension,...}`.
+  Sibling references live in `references/` (e.g. `references/openclaw/`,
+  `references/pi-mono/`, `references/claude-code/`). The directory
+  name on disk is not always identical to the harness name.
+- Reusable libs: `libs/`, `dist/signetai`.
+- Docs: `docs/**` (generated from root sources via
+  `bun scripts/sync-root-docs.ts`); marketing: `web/marketing`.
+- Architecture: `docs/ARCHITECTURE.md`. Directory map and risk
+  metadata: `repo.map.yaml`.
 
-1. Reproduce or identify the behavior from the current checkout.
-2. Make the smallest durable change that fits the existing architecture.
-3. Add a prevention mechanism: regression test, invariant, validation check,
-   CI guard, or process rule.
-4. Run the narrowest meaningful checks first, then broader checks when the
-   blast radius justifies them.
-5. Validate the real daemon, CLI, package, dashboard, or installed runtime
-   when the bug is runtime-specific.
-6. Inspect `git diff` and make sure unrelated files are not included.
+## Source Truth Model
 
-Typecheck, build, lint, and tests are not substitutes for runtime validation
-when the failure involves an installed CLI, daemon process, desktop shell,
-connector install, browser extension, or generated bundle.
+Signet is a local source-backed substrate for agent continuity. Do not
+collapse it into "a memory app" or "a vector search wrapper."
 
-## Incident -> Guardrail Loop
+- Source artifacts, transcripts, imported files, notes, configs, and
+  documents are evidence.
+- Memory rows are scoped, searchable recall records.
+- Source-backed recall rows must preserve provenance and remain
+  purgeable by source.
+- Ontology stores reviewed structure, currentness, versions, links, and
+  evidence.
+- Epistemic assertions preserve who claimed, believed, observed, decided,
+  preferred, denied, or questioned something.
+- Skills own reviewed repeated behavior.
+- Identity and AGENTS files hold operating policy.
+- Secrets stay out of chat, memory, logs, and source files.
 
-A bug fix is incomplete until the same failure mode is harder to repeat.
-
-Use at least one durable guardrail:
-
-- Regression test for the failing behavior.
-- Input/config validation at the boundary.
-- Invariant check for scoped data, timers, runtime paths, or publish output.
-- CI/publish manifest check for packaging failures.
-- `AGENTS.md` or checklist refinement when the failure was process-related.
+Automatic extraction is not permission to silently author policy,
+ontology, identity, or skill behavior.
 
 ## High-Risk Failure Modes
 
@@ -67,10 +91,11 @@ Prevent these proactively.
 
 ### Scoping Leaks
 
-- Thread `agent_id` / `agentId` through every read and write touching user
-  data.
+- Thread `agent_id` / `agentId` through every read and write touching
+  user data.
 - Thread `visibility` where the data model supports it.
-- Never hardcode `"default"` for scoped paths when a real agent id is known.
+- Never hardcode `"default"` for scoped paths when a real agent id is
+  known.
 - Scope ontology, source-backed rows, memories, sessions, analytics, and
   diagnostics consistently.
 - Reject or explicitly handle cross-agent links, proposal applies, claim
@@ -78,10 +103,10 @@ Prevent these proactively.
 
 ### Validation And Bounds
 
-- Validate external inputs, config, CLI flags, request bodies, and environment
-  variables at the boundary.
-- Clamp counters, limits, latencies, intervals, offsets, and retry values to
-  sane non-negative ranges.
+- Validate external inputs, config, CLI flags, request bodies, and
+  environment variables at the boundary.
+- Clamp counters, limits, latencies, intervals, offsets, and retry values
+  to sane non-negative ranges.
 - Reject out-of-range values with clear structured errors.
 - Fail closed for auth, graph policy, mutation gates, source access, and
   publish/install integrity.
@@ -89,8 +114,8 @@ Prevent these proactively.
 ### Silent Failure And Fallbacks
 
 - Do not swallow errors or silently downgrade behavior.
-- Log with enough context to diagnose path, agent id, source id, session key,
-  runtime path, route, or package surface.
+- Log with enough context to diagnose path, agent id, source id, session
+  key, runtime path, route, or package surface.
 - Return structured failures from APIs and CLIs.
 - For retry or refresh loops, enforce timeout floors, single-flight or
   serialization, and timer cleanup.
@@ -101,32 +126,32 @@ Prevent these proactively.
   endpoints need explicit permission checks.
 - Expensive or abuse-prone paths need rate limiting in `team` and `hybrid`
   modes.
-- Never leak tokens or secret values into chat, logs, memory rows, fixtures,
-  generated docs, or source files.
+- Never leak tokens or secret values into chat, logs, memory rows,
+  fixtures, generated docs, or source files.
 - Never inject GitHub tokens into non-GitHub remotes.
 
 ### Docs Drift
 
-- Code is the authority. Refresh docs from implementation truth, not from old
-  prose.
-- Update behavior, API, schema, status, and user-facing docs in the same PR
-  when affected.
+- Code is the authority. Refresh docs from implementation truth, not
+  from old prose.
+- Update behavior, API, schema, status, and user-facing docs in the same
+  PR when affected.
 - Keep `docs/API.md` accurate for daemon route changes.
-- Root docs duplicated into `docs/` are generated artifacts. Edit the root
-  source, then run `bun scripts/sync-root-docs.ts`.
+- Root docs duplicated into `docs/` are generated artifacts. Edit the
+  root source, then run `bun scripts/sync-root-docs.ts`.
 - Do not hand-edit `docs/CONTRIBUTING.md` or `docs/ROADMAP.md`.
-- Use `bun scripts/doc-drift.ts` when architecture or migration docs might be
-  stale.
+- Use `bun scripts/doc-drift.ts` when architecture or migration docs
+  might be stale.
 
 ### Duplication And Parity Drift
 
-- Do not duplicate constants, maps, dependency types, config defaults, package
-  lists, or descriptions across files.
+- Do not duplicate constants, maps, dependency types, config defaults,
+  package lists, or descriptions across files.
 - Extract a shared source of truth when duplication would create drift.
 - JS daemon changes must preserve Rust shadow/parity expectations in
   `platform/daemon-rs` when the behavior overlaps.
-- Connector install-time code and daemon runtime connector code are different
-  surfaces; do not conflate them.
+- Connector install-time code and daemon runtime connector code are
+  different surfaces; do not conflate them.
 
 ### Tests And Runtime Coverage
 
@@ -134,31 +159,34 @@ Prevent these proactively.
 - Test behavior, not implementation plumbing.
 - Prefer integration-style tests when the contract crosses modules.
 - Add edge-case tests for scoping, invalid inputs, timer lifecycle,
-  permission checks, fallback behavior, generated manifests, and publish
-  output.
-- Keep prompt/model-dependent tests opt-in unless the existing command already
-  defines a model-backed test loop.
+  permission checks, fallback behavior, generated manifests, and
+  publish output.
+- Keep prompt/model-dependent tests opt-in unless the existing command
+  already defines a model-backed test loop.
 
-## Source Truth Model
+## What We Will Not Merge (For Now)
 
-Signet is a local source-backed substrate for agent continuity. Do not collapse
-it into "a memory app" or "a vector search wrapper."
+- Hosted memory APIs, vendor cloud lock-in, or shared base models
+  trained on user data.
+- Shadow fine-tuning, federated learning, or any "learn what to remember"
+  framing that ships user context off the user's machine.
+- Runtime shims, silent compat for old/malformed config keys, or
+  parallel fallback readers. Runtime reads canonical config only.
+- JSON/JSONL/TXT/sidecar files as the default for app state, caches,
+  queues, indexes, cursors, or plugin scratch data. SQLite is the
+  default storage. JSON/JSONL sidecars are acceptable for genuine
+  user-facing artifacts (import/export, attachments, logs, backups)
+  when the storage owner is a named product artifact, not app state.
+- A second path for the same behavior unless the old path is a cited
+  shipped public contract.
+- Marketing copy that frames Signet as a generic "memory app" or "vector
+  search wrapper." Source truth, provenance, accepted changes, skills,
+  and agent continuity are the framing.
+- PRs over ~5,000 changed lines unless the user or owner asks.
+- Bundling multiple unrelated fixes/features in one PR.
 
-- Source artifacts, transcripts, imported files, notes, configs, and documents
-  are evidence.
-- Memory rows are scoped, searchable recall records.
-- Source-backed recall rows must preserve provenance and remain purgeable by
-  source.
-- Ontology stores reviewed structure, currentness, versions, links, and
-  evidence.
-- Epistemic assertions preserve who claimed, believed, observed, decided,
-  preferred, denied, or questioned something.
-- Skills own reviewed repeated behavior.
-- Identity and AGENTS files hold operating policy.
-- Secrets stay out of chat, memory, logs, and source files.
-
-Automatic extraction is not permission to silently author policy, ontology,
-identity, or skill behavior.
+This list is a charter, not a law of physics. Strong user demand and
+strong technical rationale can change it.
 
 ## Architecture Contracts
 
@@ -166,15 +194,16 @@ identity, or skill behavior.
 
 - HTTP server defaults to port `3850`.
 - `/` serves the dashboard.
-- `/api/*` covers config, memory, skills, hooks, updates, diagnostics, auth,
-  ontology, sources, and related daemon APIs.
+- `/api/*` covers config, memory, skills, hooks, updates, diagnostics,
+  auth, ontology, sources, and related daemon APIs.
 - `/memory/*` keeps search and similarity aliases.
 - `/health` is the simple health check.
 - File watcher behavior includes debounced auto-commit and harness sync.
 
 ### Data Location
 
-User data lives in `$SIGNET_WORKSPACE/` (default `~/.agents/`):
+User data lives in `$SIGNET_WORKSPACE/`, defaulting to
+`$HOME/.agents/`:
 
 ```text
 $SIGNET_WORKSPACE/
@@ -192,35 +221,35 @@ $SIGNET_WORKSPACE/
 └── .daemon/logs/
 ```
 
-Do not present `MEMORY.md` as the database or as full source truth. It is a
-generated working summary.
+`MEMORY.md` is a generated working summary.
 
 ### Pipeline And Runtime Paths
 
 - The daemon pipeline lives in `platform/daemon/src/pipeline/`.
 - Connectors send `x-signet-runtime-path: plugin|legacy`.
-- A session may use one active runtime path; conflicts should return `409`.
-- Pipeline stages include extraction, decision, optional knowledge graph,
-  retention decay, document ingest, maintenance, and session summary.
-- Important modes include `shadowMode`, `mutationsFrozen`, `graphEnabled`,
-  and `autonomousEnabled`.
+- A session may use one active runtime path; conflicts should return
+  `409`.
+- Pipeline stages include extraction, decision, optional knowledge
+  graph, retention decay, document ingest, maintenance, and session
+  summary.
+- Important modes include `shadowMode`, `mutationsFrozen`,
+  `graphEnabled`, and `autonomousEnabled`.
 
-For harness duplication or high-token memory reports, inspect the installed
-config and confirm only the intended Signet hook/plugin path is active.
+For harness duplication or high-token memory reports, inspect the
+installed config and confirm only the intended Signet hook/plugin path
+is active.
 
 ### Ontology Control Plane
 
 - Use audited ontology operations for structured graph changes.
-- Pending proposals are for large refactors, risky/destructive changes, or
-  explicit review queues.
+- Pending proposals are for large refactors, risky/destructive changes,
+  or explicit review queues.
 - Clear single operations should usually apply directly with provenance.
 - Claim slots use `group_key` + `claim_key`; version history must remain
   inspectable.
-- Raw source artifacts and transcripts must not be rewritten when graph or
-  memory rows change.
+- Raw source artifacts and transcripts must not be rewritten when graph
+  or memory rows change.
 - `relations` is legacy; new audited links use `entity_dependencies`.
-
-Useful commands:
 
 ```bash
 signet ontology pipeline explain --json
@@ -238,14 +267,12 @@ Credential resolution order:
 2. Credential helper.
 3. `GITHUB_TOKEN` / `gh` CLI for `github.com` only.
 
-Rules:
-
 - If no remote is configured, push/pull should skip gracefully.
 - All git subprocesses that operate on the workspace must set `cwd` to
   `AGENTS_DIR`.
 - Sync must not trample unrelated dirty files.
 
-## Package And Directory Map
+## Package And Build Map
 
 | Package / area | Location | Purpose | Target |
 |---|---|---|---|
@@ -307,128 +334,75 @@ bun run --filter '@signet/daemon' build
 bun run --filter '@signet/cli' test
 ```
 
-## Area-Specific Guidance
+## Proof
 
-### Daemon
+- Typecheck, build, lint, and tests are not substitutes for runtime
+  validation when the failure involves an installed CLI, daemon
+  process, desktop shell, connector install, browser extension, or
+  generated bundle.
+- Validate the real daemon, CLI, package, dashboard, or installed
+  runtime when the bug is runtime-specific.
+- For dependency-backed behavior, cite files/lines inspected in
+  upstream source/types. No API/default/error/timing guesses.
+- Pre-land code changes: prove touched surface. Before landing to
+  `main`: prove touched surface plus appropriate full/broad proof
+  unless scope is clearly narrow.
+- If proof is blocked, say exactly what is missing and why. Do not land
+  related failing format/lint/type/build/tests.
+- Visual proof: use a real runtime path; screenshot when the change is
+  user-visible. No harness/bypass/shortcut unless explicitly asked.
+- Skip findings for repo policy preference when changed code follows
+  the relevant scoped guide and no user-visible, runtime, security, or
+  maintainer-risk impact is shown.
 
-```bash
-cd platform/daemon
-bun run dev
-bun run start
-bun run install:service
-bun run uninstall:service
-```
+## Git / PR / Commit
 
-- Migrations live in `platform/core/src/migrations/`. Add migrations
-  sequentially and register them in the index.
-- Auth lives in `platform/daemon/src/auth/` with middleware, policy, rate
-  limiting, and token management.
-- Route changes usually need API docs and route tests.
-- Long-running workers need timeout floors, cleanup, and single-flight
-  protection where applicable.
+- Branch: `<username>/<feature>` off `main`. One PR = one issue/topic.
+- Conventional commits: `type(scope): subject`. `feat:` is
+  user-facing features only; use `fix:`, `refactor:`, `chore:`,
+  `perf:`, `test:`, `docs:`, `build:`, or `ci:` for internal changes.
+- `main`: no merge commits; rebase on latest `origin/main` before push.
+- GitHub issues/comments/PR comments: use literal multiline strings or
+  `-F - <<'EOF'` for real newlines; never embed `"\n"`.
+- Preserve unrelated work. The checkout may be dirty; never reset,
+  checkout, or delete user changes unless explicitly asked.
+- Do not delete/rename unexpected files; ask if blocking, else ignore.
+- Bulk PR close/reopen >50: ask with count/scope.
 
-### CLI
+## Code
 
-```bash
-cd surfaces/cli
-bun src/cli.ts setup
-bun src/cli.ts status
-```
+- TS strict. Avoid `any`; prefer real types, `unknown`, narrow adapters.
+- No `@ts-nocheck`. Lint suppressions only intentional + explained.
+- External boundaries: prefer `zod` or existing schema helpers.
+- Runtime branching: discriminated unions/closed codes over freeform
+  strings. Avoid semantic sentinels (`?? 0`, empty object/string).
+- Cross-function state: when valid combos matter, return a closed
+  mode/result shape. Avoid parallel nullable fields or derived booleans
+  that callers must keep in sync; make impossible states unrepresentable.
+- Prefer early returns over nested condition pyramids. Split code into
+  gather -> normalize -> decide -> act.
+- Use named intermediates only for domain meaning or readability; avoid
+  temp-variable soup.
+- Code size matters. Prefer small clear code; maintainability includes
+  not growing LOC without payoff.
+- Refactors should reduce non-test LOC unless they remove a larger
+  architectural cost. Before closeout, run `git diff --numstat`; if
+  non-test LOC grew, trim or explicitly justify why fewer paths now
+  exist.
+- Prefer deleting branches, modes, adapters, and tests over preserving
+  them. A refactor that adds a second path has probably failed unless
+  the old path is a cited shipped contract.
+- New helpers/files must pay rent immediately: fewer call paths, fewer
+  concepts, or less repeated logic. No helpers for one-off compat,
+  naming translation, or speculative resilience.
+- Keep APIs narrow: export only current caller needs; keep types/helpers
+  local by default.
+- Tests prove behavior/regressions, not every internal branch.
+- Split files around ~700 LOC when clarity/testability improves.
+- Naming: **Signet** product/docs; `signet` CLI/package/path/config.
+- English: American spelling.
 
-- CLI behavior should match daemon API contracts and return clear failures.
-- Prefer `--json` support for surfaces that agents or scripts consume.
-- Setup and connector commands must be idempotent.
-
-### Dashboard
-
-Dashboard stack: Svelte 5, Tailwind v4, bits-ui, CodeMirror 6,
-3d-force-graph. Built static files are served by the daemon.
-
-```bash
-cd surfaces/dashboard
-bun install
-bun run dev
-bun run build
-bun run check
-```
-
-- Use shadcn-svelte components where practical.
-- Never run broad Biome autofix blindly in `surfaces/dashboard/`. Scope it
-  narrowly, inspect the diff, then rerun `cd surfaces/dashboard && bun run check`.
-- For Svelte issues reported from root, reproduce with the root-level command
-  if needed:
-
-```bash
-bunx svelte-check --tsconfig surfaces/dashboard/tsconfig.json
-```
-
-### Desktop, Tray, And Installed Runtime
-
-- Desktop bugs require checking the installed app or active launcher path when
-  the report is about shipped behavior.
-- Verify daemon process path, symlink target, package version, and health
-  endpoint before assuming the repo build is active.
-- Keep tray logic in `@signet/tray`; do not duplicate menu state in desktop.
-
-### Website And Docs
-
-Astro site:
-
-```bash
-cd web/marketing
-bun run dev
-bun run build
-bun run deploy
-```
-
-- Follow the current `web/marketing` implementation patterns.
-- Edit generator/source files rather than generated artifacts.
-- Keep public copy honest: source truth, provenance, accepted changes, skills,
-  and agent continuity are stronger framing than generic "memory app" claims.
-
-### Publish And Install
-
-- Publishable packages must not ship runtime dependencies on unpublished
-  workspace packages.
-- Validate publish manifests after version rewriting and before npm publish.
-- Bundle/install changes need smoke tests against the real generated package,
-  installer script, or global command path.
-
-Useful checks:
-
-```bash
-bun test scripts/check-publish-manifests.test.ts
-bun run build:publish
-```
-
-## Style
-
-- Package manager: Bun.
-- Lint/format: Biome.
-- Build tool: `bun build` and package scripts.
-- Line width: 80-100 soft, 120 hard.
-- Add comments only for tricky or non-obvious logic.
-- Aim for files under roughly 700 LOC when it improves clarity or testability.
-
-TypeScript conventions:
-
-- Avoid `any`, `as`, and non-null assertions (`!`). Use `unknown`, narrowing,
-  and explicit null checks.
-- Prefer discriminated unions over optional-property bags.
-- Use `readonly` when mutation is not intended.
-- Do not use `enum`; prefer `as const` and union types.
-- Exported functions should have explicit return types.
-- Prefer result types over exceptions at recoverable boundaries.
-- Keep module scope effect-free.
-- Prefer `const`, early returns, and ternaries.
-- Avoid unnecessary reassignment and `else` chains.
-- Prefer functional array methods and type-guard filters when they improve
-  inference and clarity.
-- Reduce variable count by inlining values used once.
-- Avoid unnecessary destructuring.
-- Prefer short single-word names unless they become ambiguous.
-
-See `CONTRIBUTING.md` for fuller style examples.
+Full style examples: `CONTRIBUTING.md`.
 
 ## Environment Variables
 
@@ -441,36 +415,20 @@ SIGNET_BYPASS    set to 1 to bypass hooks
 OPENAI_API_KEY   used when embedding provider is OpenAI
 ```
 
-## PR Checklist
-
-Before opening a PR, verify:
-
-- The branch is based on `main` and named `<username>/<feature>`.
-- Agent scoping and visibility are correct on changed data queries.
-- Inputs, config, env vars, and bounds are validated.
-- Error handling and fallback paths are explicit and tested.
-- Admin, refresh, diagnostics, source, secret, and mutation endpoints have
-  permission checks and rate limits where needed.
-- Runtime paths, timers, and cleanup behavior are covered when touched.
-- Docs were updated for API, schema, status, or behavior changes.
-- Generated docs were produced from root sources, not hand-edited.
-- Publish manifests were validated if publishable packages changed.
-- Each bug fix has a regression test or an explicit prevention guard.
-- Lint, typecheck, build, and tests were run at the right scope.
-- The real daemon, CLI, desktop app, connector, extension, installer, or site
-  was validated when the change affects runtime behavior.
-
 ## Reference Docs
 
-- `AI_POLICY.md`
-- `CONTRIBUTING.md`
-- `docs/API.md`
-- `docs/AUTH.md`
-- `docs/ARCHITECTURE.md`
-- `docs/DASHBOARD.md`
-- `docs/HOOKS.md`
-- `docs/PIPELINE.md`
-- `docs/SOURCES.md`
-- `docs/knowledge-graph-control-plane.md`
-- `docs/specs/INDEX.md`
-- `docs/research/`
+- `AI_POLICY.md` — disclosure and acceptable-use rules for AI-assisted
+  contributions.
+- `CONTRIBUTING.md` — setup, style, area guidance, PR conventions.
+- `docs/ARCHITECTURE.md` — system architecture and module boundaries.
+- `docs/API.md` — daemon HTTP API reference (route → method → body).
+- `docs/AUTH.md` — auth, tokens, role names, rate limiting.
+- `docs/DASHBOARD.md` — dashboard architecture and conventions.
+- `docs/HOOKS.md` — connector / hook / harness plugin contract.
+- `docs/PIPELINE.md` — daemon pipeline stages, modes, runtime paths.
+- `docs/SOURCES.md` — external source lifecycle (connect, index,
+  disconnect, purge).
+- `docs/knowledge-graph-control-plane.md` — ontology operations,
+  proposals, apply pipeline.
+- `docs/specs/INDEX.md` — per-feature spec index.
+- `docs/research/` — research notes and prior experiments.
