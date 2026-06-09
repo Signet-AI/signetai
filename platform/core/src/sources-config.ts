@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, platform } from "node:os";
-import { basename, dirname, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 
 export type SignetSourceKind = "obsidian" | (string & {});
 export type SignetSourceMode = "read-only";
@@ -343,6 +343,68 @@ export function parseDiscordSettings(raw?: SignetSourceProviderSettings): Discor
 		...(since ? { since } : {}),
 		syncMode: isDiscordSyncMode(raw?.syncMode) ? raw.syncMode : "rest",
 	};
+}
+
+export interface AddSignetSessionsSourceInput {
+	readonly name?: string;
+	readonly now?: string;
+}
+
+const SIGNET_SESSIONS_DEFAULT_NAME = "Signet Sessions";
+export const SIGNET_SESSIONS_RELATIVE_ROOT = "memory/sessions";
+
+export function addSignetSessionsSource(
+	input: AddSignetSessionsSourceInput = {},
+	agentsDir = getAgentsDir(),
+): AddSourceResult {
+	return withSourcesConfigLock(agentsDir, () => addSignetSessionsSourceUnlocked(input, agentsDir));
+}
+
+function addSignetSessionsSourceUnlocked(input: AddSignetSessionsSourceInput, agentsDir: string): AddSourceResult {
+	try {
+		return addSignetSessionsSourceChecked(input, agentsDir);
+	} catch (err) {
+		const detail = err instanceof Error ? err.message : String(err);
+		return { ok: false, error: detail };
+	}
+}
+
+function addSignetSessionsSourceChecked(input: AddSignetSessionsSourceInput, agentsDir: string): AddSourceResult {
+	const root = resolve(join(agentsDir, SIGNET_SESSIONS_RELATIVE_ROOT));
+	const now = input.now ?? new Date().toISOString();
+	const cfg = loadSourcesConfigForWrite(agentsDir);
+	const sourceId = `signet-sessions:${createHash("sha256").update(root).digest("hex").slice(0, 16)}`;
+	const existing = cfg.sources.find((source) => source.id === sourceId);
+	if (existing) {
+		const updated: SignetSourceEntry = {
+			...existing,
+			name: cleanName(input.name) ?? existing.name,
+			root,
+			enabled: true,
+			updatedAt: now,
+		};
+		saveSourcesConfig(
+			{
+				version: SOURCES_CONFIG_VERSION,
+				sources: cfg.sources.map((source) => (source.id === existing.id ? updated : source)),
+			},
+			agentsDir,
+		);
+		return { ok: true, source: updated, created: false };
+	}
+	mkdirSync(root, { recursive: true });
+	const source: SignetSourceEntry = {
+		id: sourceId,
+		kind: "signet-sessions",
+		name: cleanName(input.name) ?? SIGNET_SESSIONS_DEFAULT_NAME,
+		root,
+		enabled: true,
+		mode: "read-only",
+		createdAt: now,
+		updatedAt: now,
+	};
+	saveSourcesConfig({ version: SOURCES_CONFIG_VERSION, sources: [...cfg.sources, source] }, agentsDir);
+	return { ok: true, source, created: true };
 }
 
 export function parseGitHubSettings(raw?: SignetSourceProviderSettings): GitHubSourceSettings {
