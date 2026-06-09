@@ -6,6 +6,9 @@ All notable changes to Signet are documented here.
 
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
+### 2026-06-09
+- Bug fixes: restore signet-mcp stdio JSON-RPC server (#826).
+
 ### 2026-06-04
 - Bug fixes: recover reset summaries from prompt transcripts; embed memory writes.
 
@@ -27,11 +30,16 @@ Surface summary of the most recent release dates. See the release ledger below f
 ### 2026-05-30
 - Bug fixes: show macos window on launch.
 
-### 2026-05-28
-- Features: gate prompt injection on entity context.
-- Bug fixes: queue aggregate recall extraction; harden prompt entity context filtering; restrict prompt entity injection types; route prompt context through attributes.
-
 ## Release Ledger
+
+## [0.138.22] - 2026-06-09
+
+Release summary: 1 bug fix.
+Tag range: `v0.138.21..v0.138.22`.
+
+### Bug Fixes
+
+- **wrapper**: restore signet-mcp stdio JSON-RPC server (#826) (#827)
 
 ## [0.138.21] - 2026-06-04
 
