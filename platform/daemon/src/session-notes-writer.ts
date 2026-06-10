@@ -318,9 +318,15 @@ function splitBlocks(body: string): Record<string, string> {
 	const lines = body.split("\n");
 	const result: Record<string, string[]> = {};
 	let current: string | null = null;
+	// Match section headings only when the line is exactly one of the six
+	// canonical labels (no leading whitespace, no trailing content). A loose
+	// trimEnd-based match would re-detect headings inside list items, e.g.
+	// `- "Key steps:"` in a Failures block, and shuffle every line below
+	// it into the wrong bucket. The writer's renderer always emits at
+	// column 0 with no trailing whitespace, so exact equality is safe.
 	for (const line of lines) {
-		if ((REQUIRED_TASK_SECTIONS as readonly string[]).includes(line.trimEnd())) {
-			current = line.trimEnd();
+		if ((REQUIRED_TASK_SECTIONS as readonly string[]).includes(line)) {
+			current = line;
 			result[current] = [];
 		} else if (current) {
 			result[current].push(line);

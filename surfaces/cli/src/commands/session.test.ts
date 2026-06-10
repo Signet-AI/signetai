@@ -95,7 +95,7 @@ describe("registerSessionCommands search", () => {
 	});
 });
 
-describe("registerSessionCommands session:notes", () => {
+describe("registerSessionCommands session notes", () => {
 	test("calls the notes route and prints json", async () => {
 		const lines: string[] = [];
 		console.log = (line?: unknown) => {
@@ -135,7 +135,7 @@ describe("registerSessionCommands session:notes", () => {
 			},
 		});
 
-		await program.parseAsync(["node", "test", "session:notes", "test", "--json"]);
+		await program.parseAsync(["node", "test", "session", "notes", "test", "--json"]);
 
 		expect(capturedPath).toBe("/api/sessions/test/notes");
 		expect(lines).toHaveLength(1);
@@ -182,7 +182,7 @@ describe("registerSessionCommands session:notes", () => {
 			},
 		});
 
-		await program.parseAsync(["node", "test", "session:notes", "test", "--task", "2", "--json"]);
+		await program.parseAsync(["node", "test", "session", "notes", "test", "--task", "2", "--json"]);
 
 		expect(capturedPath).toBe("/api/sessions/test/notes?task=2");
 	});
@@ -208,7 +208,7 @@ describe("registerSessionCommands session:notes", () => {
 		});
 
 		try {
-			await program.parseAsync(["node", "test", "session:notes", "missing"]);
+			await program.parseAsync(["node", "test", "session", "notes", "missing"]);
 		} catch {
 			/* swallow the synthetic exit */
 		}

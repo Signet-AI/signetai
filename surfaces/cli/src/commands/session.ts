@@ -136,10 +136,9 @@ export function registerSessionCommands(program: Command, deps: SessionDeps): vo
 			console.log(chalk.green(`  Session ${sessionKey.slice(0, 12)} bypass removed — hooks re-enabled`));
 		});
 
-	program
-		.command("session:notes")
+	session
+		.command("notes <session-key>")
 		.description("Read the structured per-session notes file (frontmatter + numbered Task N sections)")
-		.argument("<session-key>", "Session key (thread_id) to read")
 		.option("--task <n>", "Scope to a single task index", (v) => Number.parseInt(v, 10))
 		.option("--json", "Output as JSON", false)
 		.action(async (sessionKey: string, options: { task?: number; json?: boolean }) => {

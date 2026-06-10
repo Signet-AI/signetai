@@ -26,7 +26,6 @@ import { logger } from "./logger";
 import type { LlmProvider } from "./pipeline/provider";
 import { redactSecrets } from "./session-checkpoints";
 import {
-	SESSION_NOTES_FILENAME,
 	appendTaskSection,
 	findLowestMissingIndex,
 	isNotesFileFresh,

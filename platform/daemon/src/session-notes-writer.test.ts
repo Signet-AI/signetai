@@ -256,4 +256,40 @@ Twelfth task.
 		expect(existsSync(dir)).toBe(true);
 		expect(existsSync(join(dir, SESSION_NOTES_FILENAME))).toBe(true);
 	});
+
+	test("does not misparse section labels that appear inside list items", () => {
+		// Regression: the previous splitBlocks used line.trimEnd() to match
+		// section headings, so a bullet like `- "Key steps:"` inside a
+		// Failures block would re-detect as a new section header and shuffle
+		// every line below it into the wrong bucket.
+		appendTaskSection({
+			sessionKey: "labels-in-bullets",
+			agentId: "default",
+			harness: "opencode",
+			cwd: "/tmp",
+			task: {
+				taskIndex: 1,
+				outcome: "Validated the parser.",
+				failures: [
+					'The user said "Key steps:" should be lowercase.',
+					'A bullet that ends with "Outcome:" is just text.',
+				],
+				keySteps: ["Tightened the heading match."],
+			},
+			agentsDir: tmpRoot,
+		});
+		const read = readSessionNotes("labels-in-bullets", tmpRoot);
+		expect(read.ok).toBe(true);
+		if (!read.ok) return;
+		expect(read.file.tasks).toHaveLength(1);
+		const task = read.file.tasks[0]!;
+		// Both quoted-label bullets are preserved as failures, not mis-bucketed.
+		expect(task.failures).toEqual([
+			'The user said "Key steps:" should be lowercase.',
+			'A bullet that ends with "Outcome:" is just text.',
+		]);
+		expect(task.keySteps).toEqual(["Tightened the heading match."]);
+		// Outcome was not contaminated by the "Outcome:" substring.
+		expect(task.outcome).toBe("Validated the parser.");
+	});
 });
