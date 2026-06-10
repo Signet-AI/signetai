@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { type Server, createServer } from "node:http";
@@ -157,7 +157,276 @@ async function serveNativeRelease(binary: Buffer): Promise<NativeReleaseServer> 
 	};
 }
 
+interface ConnectorReleaseServer {
+	readonly downloadBase: string;
+	readonly version: string;
+}
+
+async function serveConnectorRelease(
+	connectorTarball: Buffer,
+	version: string,
+): Promise<ConnectorReleaseServer> {
+	const sha256 = createHash("sha256").update(connectorTarball).digest("hex");
+	const manifest = JSON.stringify({
+		schemaVersion: 1,
+		version,
+		assets: [],
+		components: {
+			connectors: {
+				url: `signet-connectors-${version}.tar.gz`,
+				sha256,
+				size: connectorTarball.length,
+			},
+		},
+	});
+
+	const server = createServer((req, res) => {
+		if (
+			req.url === "/download/native-manifest.json" ||
+			req.url === `/download/v${version}/native-manifest.json`
+		) {
+			res.writeHead(200, { "Content-Type": "application/json" });
+			res.end(manifest);
+			return;
+		}
+		if (
+			req.url === `/download/signet-connectors-${version}.tar.gz` ||
+			req.url === `/download/v${version}/signet-connectors-${version}.tar.gz`
+		) {
+			res.writeHead(200, { "Content-Type": "application/octet-stream" });
+			res.end(connectorTarball);
+			return;
+		}
+		res.writeHead(404);
+		res.end("not found");
+	});
+	servers.push(server);
+	await new Promise<void>((resolve) => {
+		server.listen(0, "127.0.0.1", resolve);
+	});
+	const address = server.address();
+	if (address === null || typeof address === "string") {
+		throw new Error("connector release smoke server did not bind to a TCP port");
+	}
+	return {
+		downloadBase: `http://127.0.0.1:${address.port}/download`,
+		version,
+	};
+}
+
+function buildFakeConnectorTarball(): Buffer {
+	// Build a real tar.gz with a `runtime/connectors/hermes-agent/hermes-plugin/...`
+	// layout so the install path's tar extraction is exercised end-to-end.
+	// Tar the explicit directory entries to avoid tar seeing the staging
+	// dir as "file changed as we read it" under aggressive test-runner
+	// file-watching.
+	const stage = mkdtempSync(join(tmpdir(), "signet-connector-tar-"));
+	tempDirs.push(stage);
+	const pluginDir = join(stage, "runtime", "connectors", "hermes-agent", "hermes-plugin");
+	mkdirSync(pluginDir, { recursive: true });
+	writeFileSync(
+		join(pluginDir, "__init__.py"),
+		"\"\"\"Smoke test plugin for issue #831 connector install path.\"\"\"\n",
+	);
+	writeFileSync(join(pluginDir, "plugin.yaml"), "name: signet\nversion: 1.0.0\n");
+	const tarballPath = join(stage, "out.tar.gz");
+	const tar = spawnSync(
+		"tar",
+		[
+			"czf",
+			tarballPath,
+			"-C",
+			stage,
+			"runtime/connectors/hermes-agent/hermes-plugin/__init__.py",
+			"runtime/connectors/hermes-agent/hermes-plugin/plugin.yaml",
+		],
+		{ stdio: "pipe" },
+	);
+	if (tar.status !== 0) {
+		throw new Error(
+			`tar staging failed: status ${tar.status ?? "unknown"} stderr=${tar.stderr?.toString() ?? "(none)"}`,
+		);
+	}
+	const buf = readFileSync(tarballPath);
+	rmSync(stage, { recursive: true, force: true });
+	const idx = tempDirs.indexOf(stage);
+	if (idx >= 0) tempDirs.splice(idx, 1);
+	return buf;
+}
+
 describe("native install smoke", () => {
+	test("postinstall extracts connector assets from a manifest-aware release", async () => {
+		if (process.platform === "win32") return;
+
+		const version = "0.0.0-smoke-831";
+		const tarball = buildFakeConnectorTarball();
+		const release = await serveConnectorRelease(tarball, version);
+
+		const dir = tempDir();
+		const packageDir = join(dir, "signetai");
+		const platform = platformKey();
+		const nativePackageName = `signetai-${platform}`;
+		const nativePackageDir = join(packageDir, "node_modules", nativePackageName);
+		const nativePackageBin = join(nativePackageDir, "bin", "signet");
+		mkdirSync(packageDir, { recursive: true });
+		mkdirSync(join(nativePackageDir, "bin"), { recursive: true });
+		cpSync(join(root, "dist", "signetai", "scripts"), join(packageDir, "scripts"), {
+			recursive: true,
+		});
+		cpSync(join(root, "dist", "signetai", "bin"), join(packageDir, "bin"), {
+			recursive: true,
+		});
+		// Stash the manifest in the wrapper root. `install-native.js`
+		// looks for `native-manifest.json` next to the wrapper's own
+		// package.json.
+		const manifest = JSON.stringify({
+			schemaVersion: 1,
+			version,
+			assets: [],
+			components: {
+				connectors: {
+					url: `signet-connectors-${version}.tar.gz`,
+					sha256: createHash("sha256").update(tarball).digest("hex"),
+					size: tarball.length,
+				},
+			},
+		});
+		writeFileSync(join(packageDir, "native-manifest.json"), manifest);
+		writeFileSync(
+			join(nativePackageDir, "package.json"),
+			JSON.stringify({ name: nativePackageName, version, type: "module" }),
+		);
+		// Native binary can be empty here — the connector install path
+		// runs even when the binary link is skipped.
+		writeFileSync(nativePackageBin, "");
+		chmodSync(nativePackageBin, 0o755);
+
+		const result = await runCommand(
+			"node",
+			[join(packageDir, "scripts", "install-native.js")],
+			{ ...process.env, SIGNET_DOWNLOAD_BASE: release.downloadBase },
+		);
+
+		expect(result.status).toBe(0);
+		expect(result.stdout).toContain("Installed connector assets to");
+
+		// Tarball layout puts files at `<packageDir>/runtime/connectors/...`.
+		// This is the path the binary's `$SIGNET_DIR/runtime/connectors/...`
+		// lookup resolves to, and the layout the connector's
+		// `getPluginSourceDir()` expects.
+		const extractedDir = join(
+			packageDir,
+			"runtime",
+			"connectors",
+			"hermes-agent",
+			"hermes-plugin",
+		);
+		expect(existsSync(join(extractedDir, "__init__.py"))).toBe(true);
+		expect(existsSync(join(extractedDir, "plugin.yaml"))).toBe(true);
+		expect(
+			readFileSync(join(extractedDir, "__init__.py"), "utf8"),
+		).toContain("Smoke test plugin for issue #831");
+		expect(
+			readFileSync(join(packageDir, "runtime", "connectors", ".signet-connectors-version"), "utf8").trim(),
+		).toBe(version);
+	});
+
+	test("postinstall rejects a tarball whose SHA-256 does not match the manifest", async () => {
+		if (process.platform === "win32") return;
+
+		const version = "0.0.0-smoke-831-bad";
+		const tarball = buildFakeConnectorTarball();
+		// Serve a manifest with a wrong SHA so verification must fail.
+		const wrongSha = "0".repeat(64);
+		const server = createServer((req, res) => {
+			if (
+				req.url === "/download/native-manifest.json" ||
+				req.url === `/download/v${version}/native-manifest.json`
+			) {
+				res.writeHead(200, { "Content-Type": "application/json" });
+				res.end(
+					JSON.stringify({
+						schemaVersion: 1,
+						version,
+						assets: [],
+						components: {
+							connectors: {
+								url: `signet-connectors-${version}.tar.gz`,
+								sha256: wrongSha,
+								size: tarball.length,
+							},
+						},
+					}),
+				);
+				return;
+			}
+			if (
+				req.url === `/download/signet-connectors-${version}.tar.gz` ||
+				req.url === `/download/v${version}/signet-connectors-${version}.tar.gz`
+			) {
+				res.writeHead(200, { "Content-Type": "application/octet-stream" });
+				res.end(tarball);
+				return;
+			}
+			res.writeHead(404);
+			res.end("not found");
+		});
+		servers.push(server);
+		await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+		const address = server.address();
+		if (address === null || typeof address === "string") {
+			throw new Error("connector bad-sha server did not bind to a TCP port");
+		}
+
+		const dir = tempDir();
+		const packageDir = join(dir, "signetai");
+		const platform = platformKey();
+		const nativePackageName = `signetai-${platform}`;
+		const nativePackageDir = join(packageDir, "node_modules", nativePackageName);
+		const nativePackageBin = join(nativePackageDir, "bin", "signet");
+		mkdirSync(packageDir, { recursive: true });
+		mkdirSync(join(nativePackageDir, "bin"), { recursive: true });
+		cpSync(join(root, "dist", "signetai", "scripts"), join(packageDir, "scripts"), {
+			recursive: true,
+		});
+		cpSync(join(root, "dist", "signetai", "bin"), join(packageDir, "bin"), {
+			recursive: true,
+		});
+		// The wrapper-side manifest must match what the HTTP server
+		// advertises, otherwise the postinstall skips the connector
+		// install entirely (no URL to fetch from). We override the
+		// SHA via the test server so the postinstall sees a mismatching
+		// value and bails out with the expected error.
+		const manifest = JSON.stringify({
+			schemaVersion: 1,
+			version,
+			assets: [],
+			components: {
+				connectors: {
+					url: `signet-connectors-${version}.tar.gz`,
+					sha256: "0".repeat(64),
+					size: tarball.length,
+				},
+			},
+		});
+		writeFileSync(join(packageDir, "native-manifest.json"), manifest);
+		writeFileSync(
+			join(nativePackageDir, "package.json"),
+			JSON.stringify({ name: nativePackageName, version, type: "module" }),
+		);
+		writeFileSync(nativePackageBin, "");
+		chmodSync(nativePackageBin, 0o755);
+
+		const result = await runCommand(
+			"node",
+			[join(packageDir, "scripts", "install-native.js")],
+			{ ...process.env, SIGNET_DOWNLOAD_BASE: `http://127.0.0.1:${address.port}/download` },
+		);
+
+		expect(result.status).not.toBe(0);
+		expect(result.stderr).toContain("SHA-256 mismatch");
+	});
+
 	test("curl installer installs the manifest-selected native binary", async () => {
 		if (process.platform === "win32") return;
 

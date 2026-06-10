@@ -160,12 +160,34 @@ writeFileSync(
 	`import { materializeEmbeddedAssetTree, registerNativeAssets, registerNativeTransformersBindings } from "../platform/daemon/src/native-runtime-assets";
 import { dashboardAssets, skillAssets, templateAssets, wasmAssets, workerAssets } from "./native-assets";
 import * as transformersWebRuntime from "./transformers-web-runtime";
+import { existsSync } from "node:fs";
+import { dirname, join } from "node:path";
 
 registerNativeAssets({ dashboard: dashboardAssets, skills: skillAssets, templates: templateAssets, workers: workerAssets, wasm: wasmAssets });
 registerNativeTransformersBindings(transformersWebRuntime);
 process.env.SIGNET_VERSION = process.env.SIGNET_VERSION?.trim() || ${JSON.stringify(nativeVersion)};
 process.env.SIGNET_TEMPLATES_DIR ??= materializeEmbeddedAssetTree("templates") ?? "";
 process.env.SIGNET_SKILLS_SOURCE ??= materializeEmbeddedAssetTree("skills") ?? "";
+
+// When the binary is invoked directly (curl-install + signet install,
+// raw binary from PATH) without a parent process setting SIGNET_DIR,
+// fall back to the binary's own install root so connector plugins
+// extracted to \`<install-root>/runtime/connectors/...\` resolve. npm
+// wrapper installs set this explicitly via launch.js and win the
+// priority check below.
+if (!process.env.SIGNET_DIR?.trim()) {
+	const candidates = [
+		dirname(process.execPath),
+		join(dirname(process.execPath), ".."),
+		join(dirname(process.execPath), "..", ".."),
+	];
+	for (const candidate of candidates) {
+		if (existsSync(join(candidate, "runtime", "connectors"))) {
+			process.env.SIGNET_DIR = candidate;
+			break;
+		}
+	}
+}
 await import("../surfaces/cli/src/cli.ts");
 `,
 );

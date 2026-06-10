@@ -270,6 +270,8 @@ jobs:
             signet-darwin-x64.sha256
             signet-win32-x64.exe
             signet-win32-x64.exe.sha256
+            signet-connectors-${NEW_VERSION}.tar.gz
+            native-manifest.json
           )
           for asset in "${expected[@]}"; do
             if ! printf '%s\n' "${ASSETS[@]}" | grep -Fxq "$asset"; then
@@ -282,6 +284,15 @@ jobs:
 
       - name: Generate and upload native manifest
         run: |
+          set -euo pipefail
+          # Build the connector plugin-asset tarball before generating
+          # the manifest so it can pick up the SHA-256 and size. The
+          # tarball mirrors `integrations/*/connector/<asset-dir>/` into
+          # `runtime/connectors/<harness>/<asset-dir>/` so the binary's
+          # `$SIGNET_DIR/runtime/connectors/...` lookup resolves at
+          # install time.
+          SIGNET_VERSION="$NEW_VERSION" bun scripts/build-connector-assets.ts
+          gh release upload "v${NEW_VERSION}" dist/native/signet-connectors-"${NEW_VERSION}".tar.gz --clobber
           SIGNET_VERSION="$NEW_VERSION" bun scripts/generate-native-manifest.ts
           gh release upload "v${NEW_VERSION}" dist/native/native-manifest.json --clobber
         env:

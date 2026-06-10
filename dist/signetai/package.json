@@ -12,6 +12,7 @@
     "bin/native-platforms.js",
     "bin/signet.js",
     "dist/mcp-stdio.js",
+    "native-manifest.json",
     "scripts/install-native.js",
     "scripts/verify-wrapper.js",
     "README.md",

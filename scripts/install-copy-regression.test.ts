@@ -72,10 +72,12 @@ describe("install copy", () => {
 		// wrapper that forwards to the native binary (issue #826).
 		expect(manifest.bin?.["signet-mcp"]).toBe("dist/mcp-stdio.js");
 		expect(manifest.files).toContain("dist/mcp-stdio.js");
+		expect(manifest.files).toContain("native-manifest.json");
 		expect(manifest.files).not.toContain("bin/signet-mcp.js");
 		expect(launcher).toContain('join(packageDir, "native"');
 		expect(launcher).toContain("resolveNativePackageBinaryPath");
 		expect(launcher).toContain("require.resolve");
+		expect(launcher).toContain("SIGNET_DIR");
 		expect(nativePlatforms).toContain('"linux-x64"');
 		expect(nativePlatforms).toContain('"linux-arm64"');
 		expect(nativePlatforms).toContain('"darwin-x64"');
@@ -84,9 +86,43 @@ describe("install copy", () => {
 		expect(installer).toContain("linkSync");
 		expect(installer).toContain("require.resolve");
 		expect(installer).toContain("Skipping Signet native binary linking in workspace install");
-		expect(installer).not.toContain("native-manifest.json");
-		expect(installer).not.toContain("https");
+		// Connector-asset install reads the manifest shipped with the
+		// wrapper to discover the tarball URL and SHA-256. This is the
+		// peer of the launch.js `SIGNET_DIR` wiring: the postinstall
+		// extracts the connector plugin payload that the native binary
+		// expects to find at `$SIGNET_DIR/runtime/connectors/...`.
+		expect(installer).toContain("native-manifest.json");
+		expect(installer).toContain("CONNECTOR_COMPONENT");
+		expect(installer).toContain("verifySha256");
+		expect(installer).toContain("signet-connectors-${manifest.version}.tar.gz");
 		expect(installer).not.toContain("bun.sh/install");
 		expect(installer).not.toContain("better-sqlite3");
+	});
+
+	test("curl installer downloads and verifies the connector-asset tarball", () => {
+		const installer = read("web/marketing/public/install.sh");
+
+		// The curl installer reads `components.connectors` from the
+		// manifest, downloads the tarball, verifies its SHA-256, and
+		// passes it to `signet install --connector-assets <path>` so the
+		// native command can extract the assets next to the installed
+		// binary.
+		expect(installer).toContain("components.connectors");
+		expect(installer).toContain("--connector-assets");
+		expect(installer).toContain("install --connector-assets");
+	});
+
+	test("build-connector-assets stages runtime plugin assets into a tarball", () => {
+		const buildScript = read("scripts/build-connector-assets.ts");
+		expect(buildScript).toContain("signet-connectors-${version}.tar.gz");
+		expect(buildScript).toContain("runtime/connectors");
+		// The build script walks every `integrations/*/connector/` and
+		// ships any non-source/asset dir under the runtime tree.
+		expect(buildScript).toContain("integrations");
+		expect(buildScript).toContain("hermes-plugin");
+		// Skips build/test output dirs.
+		expect(buildScript).toContain('"dist"');
+		expect(buildScript).toContain('"node_modules"');
+		expect(buildScript).toContain('"src"');
 	});
 });

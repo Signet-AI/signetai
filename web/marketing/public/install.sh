@@ -95,7 +95,7 @@ checksum=""
 if command -v jq >/dev/null 2>&1; then
 	checksum="$(jq -r --arg platform "$platform" '.assets[] | select(.platform == $platform) | .sha256' "$manifest_path")"
 else
-	manifest="$(tr -d '\n\r\t' < "$manifest_path" | sed 's/ \+/ /g')"
+	manifest="$(tr -d '\n\r	' < "$manifest_path" | sed 's/ \+/ /g')"
 	if [[ $manifest =~ \"platform\"[[:space:]]*:[[:space:]]*\"$platform\"[^}]*\"sha256\"[[:space:]]*:[[:space:]]*\"([a-f0-9]{64})\" ]]; then
 		checksum="${BASH_REMATCH[1]}"
 	fi
@@ -121,5 +121,50 @@ if [ "$actual" != "$checksum" ]; then
 fi
 
 chmod +x "$binary_path"
-"$binary_path" install "$@"
+
+# Connector plugin assets. Newer releases ship a tarball listed under
+# `components.connectors` in the manifest; older ones have no entry and
+# we silently skip. The tarball is passed to `signet install` so the
+# native command can extract it to the install location and point
+# `SIGNET_DIR` at it.
+connector_url=""
+connector_sha=""
+if command -v jq >/dev/null 2>&1; then
+	connector_url="$(jq -r '.components.connectors.url // empty' "$manifest_path")"
+	connector_sha="$(jq -r '.components.connectors.sha256 // empty' "$manifest_path")"
+fi
+
+connector_path=""
+if [ -n "$connector_url" ] && [ -n "$connector_sha" ]; then
+	# The wrapper exposes `connector_url` as a relative path; promote it
+	# to a full GitHub release URL when only the basename was given.
+	case "$connector_url" in
+		http*) connector_full="$connector_url" ;;
+		*)     connector_full="$DOWNLOAD_BASE/$connector_url" ;;
+	esac
+	connector_path="$DOWNLOAD_DIR/$(basename "$connector_full")"
+	download_to "$connector_full" "$connector_path"
+	actual_conn="$(sha256sum "$connector_path" 2>/dev/null | awk '{print $1}')"
+	if [ -z "$actual_conn" ]; then
+		actual_conn="$(shasum -a 256 "$connector_path" | awk '{print $1}')"
+	fi
+	if [ "$actual_conn" != "$connector_sha" ]; then
+		echo "Checksum verification failed for $(basename "$connector_full")" >&2
+		rm -f "$connector_path" "$binary_path"
+		exit 1
+	fi
+fi
+
+# `signet install` accepts a `--connector-assets <path>` flag so it can
+# verify and extract the tarball next to the binary at its final
+# install location. Older binaries without the flag ignore the unknown
+# argument and continue working.
+if [ -n "$connector_path" ]; then
+	"$binary_path" install --connector-assets "$connector_path" "$@"
+else
+	"$binary_path" install "$@"
+fi
 rm -f "$binary_path"
+if [ -n "$connector_path" ]; then
+	rm -f "$connector_path"
+fi

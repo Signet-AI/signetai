@@ -42,10 +42,21 @@ export function launchSignet() {
 		process.exit(1);
 	}
 
+	// Point the binary at the wrapper's installed runtime tree so the
+	// connector's `getPluginSourceDir()` `SIGNET_DIR/runtime/connectors/...`
+	// fallback can find per-harness plugin assets that the native binary
+	// doesn't carry inline. The env is only set when the wrapper actually
+	// has a runtime tree to share; the binary's own bootstrap can derive
+	// its own path otherwise.
+	const env = { ...process.env };
+	if (!env.SIGNET_DIR && existsSync(join(packageDir, "runtime", "connectors"))) {
+		env.SIGNET_DIR = packageDir;
+	}
+
 	const args = process.argv.slice(2);
 	const child = spawn(resolvedBinaryPath, args, {
 		stdio: "inherit",
-		env: process.env,
+		env,
 		windowsHide: true,
 	});
 

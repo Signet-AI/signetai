@@ -39,6 +39,7 @@ interface InstallOptions {
 	binDir?: string;
 	force?: boolean;
 	json?: boolean;
+	connectorAssets?: string;
 }
 
 interface AppDeps {
@@ -60,6 +61,10 @@ export function registerAppCommands(program: Command, deps: AppDeps): void {
 		.option("--bin-dir <path>", "Directory where the signet binary should be installed")
 		.option("--force", "Replace an existing signet binary")
 		.option("--json", "Output install result as JSON")
+		.option(
+			"--connector-assets <path>",
+			"Path to a connector-asset tarball (signet-connectors-*.tar.gz) to extract alongside the binary",
+		)
 		.action(deps.installNative);
 
 	program
