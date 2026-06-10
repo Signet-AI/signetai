@@ -769,10 +769,14 @@ describe("Hermes Agent bundled plugin", () => {
 		expect(plugin).toContain('"name": "memory_store"');
 		expect(plugin).toContain('"name": "memory_get"');
 		expect(plugin).toContain('"name": "memory_list"');
-		expect(plugin).toContain('"name": "session_search"');
+		// `signet_session_search` is the namespaced form: Hermes reserves
+		// `session_search` as a built-in core tool and would silently drop
+		// any provider trying to register the bare name.
+		expect(plugin).toContain('"name": "signet_session_search"');
 		expect(plugin).not.toContain('"name": "signet_search"');
+		expect(plugin).not.toContain('"name": "session_search"');
 		expect(plugin).toContain('if tool_name in ("memory_search", "recall", "signet_search")');
-		expect(plugin).toContain('if tool_name == "session_search"');
+		expect(plugin).toContain('if tool_name == "signet_session_search"');
 	});
 
 	it("returns Signet tool schemas before daemon initialization", () => {
@@ -964,20 +968,26 @@ describe("Hermes Agent bundled plugin", () => {
 					"manager.add_provider(provider)",
 					"names = manager.get_all_tool_names()",
 					"assert 'memory_search' in names",
-					"assert 'session_search' in names",
+					// `signet_session_search` is what the Signet provider
+					// registers; the bare `session_search` is the Hermes
+					// built-in core tool, so it never lands in the manager
+					// table when only the Signet provider is registered.
+					"assert 'signet_session_search' in names",
+					"assert 'session_search' not in names",
 					"assert 'recall' in names",
 					"assert manager.has_tool('memory_store')",
-					"assert manager.has_tool('session_search')",
+					"assert manager.has_tool('signet_session_search')",
 					"print(','.join(sorted(names)))",
 				].join("\n"),
-			],
-			{ env: { ...process.env, PYTHONPATH: fixture }, encoding: "utf-8" },
-		);
+				],
+				{ env: { ...process.env, PYTHONPATH: fixture }, encoding: "utf-8" },
+				);
 
-		expect(result.status).toBe(0);
-		expect(result.stdout).toContain("memory_search");
-		expect(result.stdout).toContain("session_search");
-		expect(result.stdout).toContain("remember");
+				expect(result.status).toBe(0);
+				expect(result.stdout).toContain("memory_search");
+				expect(result.stdout).toContain("signet_session_search");
+				expect(result.stdout).not.toContain(",session_search,");
+				expect(result.stdout).toContain("remember");
 	});
 
 	it("imports the client from a Hermes user-installed provider namespace", () => {
@@ -1081,13 +1091,16 @@ describe("Hermes Agent bundled plugin", () => {
 		expect(plugin).toContain('agent_scoped=bool(search_args.get("agent_scoped", False))');
 	});
 
-	it("exposes session_search as a dedicated transcript search tool", () => {
+	it("exposes signet_session_search as a dedicated transcript search tool", () => {
 		const plugin = readFileSync(join(import.meta.dir, "hermes-plugin", "__init__.py"), "utf-8");
 		const client = readFileSync(join(import.meta.dir, "hermes-plugin", "client.py"), "utf-8");
 
 		expect(plugin).toContain("SESSION_SEARCH_SCHEMA");
 		expect(plugin).toContain('"description": "Search active or completed Signet session transcripts."');
 		expect(plugin).not.toContain('"expand":');
+		// The Python client method keeps the unnamespaced name because
+		// it is called by `__init__.py` directly, not by the model. Only
+		// the externally-visible tool name is namespaced.
 		expect(plugin).toContain("self._client.session_search(");
 		expect(client).toContain("def session_search(");
 		expect(client).toContain('self._post("/api/sessions/search", body, timeout=_RECALL_TIMEOUT_SECS)');
@@ -1095,7 +1108,7 @@ describe("Hermes Agent bundled plugin", () => {
 		expect(client).not.toContain('body["expand"]');
 	});
 
-	it("defaults Hermes session_search to the configured agent scope", () => {
+	it("defaults the Signet session search to the configured agent scope", () => {
 		const fixture = join(tmpRoot, "python-session-search-client-fixture");
 		const pluginDir = join(fixture, "plugins", "signet");
 		cpSync(join(import.meta.dir, "hermes-plugin"), pluginDir, { recursive: true });
@@ -1511,7 +1524,7 @@ describe("HermesAgentConnector — native bundle (SIGNET_DIR) plugin resolution"
 		expect(parsed.providerName).toBe("signet");
 		expect(parsed.configured).toBe(true);
 		expect(parsed.tools).toEqual(
-			expect.arrayContaining(["memory_search", "memory_store", "session_search", "recall", "remember"]),
+			expect.arrayContaining(["memory_search", "memory_store", "signet_session_search", "recall", "remember"]),
 		);
 	});
 });

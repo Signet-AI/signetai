@@ -5,7 +5,7 @@ Bridges Hermes Agent's memory provider interface to the Signet daemon
 predictive recall, cross-session memory, and the full Signet pipeline
 (extraction, knowledge graph, retention decay, synthesis).
 
-Canonical Signet memory tools (memory_search, session_search, memory_store,
+Canonical Signet memory tools (memory_search, signet_session_search, memory_store,
 memory_get, memory_list, memory_modify, memory_forget, plus recall/remember aliases) are
 exposed through the MemoryProvider interface. The daemon handles all heavy
 lifting: embedding, reranking, knowledge graph traversal, and predictive
@@ -99,7 +99,11 @@ MEMORY_SEARCH_SCHEMA = {
 }
 
 SESSION_SEARCH_SCHEMA = {
-    "name": "session_search",
+    # Hermes reserves `session_search` as a built-in core tool name;
+    # registering under that name would be silently dropped by
+    # `MemoryManager.add_provider`. The Signet provider exposes the
+    # transcript-search tool under the `signet_` namespace instead.
+    "name": "signet_session_search",
     "description": "Search active or completed Signet session transcripts.",
     "parameters": {
         "type": "object",
@@ -962,7 +966,7 @@ class SignetMemoryProvider(MemoryProvider):
             if tool_name in ("memory_search", "recall", "signet_search"):
                 return _search(args)
 
-            if tool_name == "session_search":
+            if tool_name == "signet_session_search":
                 query = str(args.get("query", "")).strip()
                 if not query:
                     return json.dumps({"error": "Missing required parameter: query"})

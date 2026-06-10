@@ -7,7 +7,7 @@ Signet connector for [Hermes Agent](https://github.com/hermes-ai/hermes-agent) -
 Integrates Signet's memory system into Hermes Agent as a native plugin.
 
 - Installs the Signet memory plugin into the Hermes plugin directory
-- Registers memory tools: `memory_search`, `memory_store`, `memory_get`, `memory_list`, `memory_modify`, `memory_forget`, `session_search`, `recall`, and `remember`
+- Registers memory tools: `memory_search`, `memory_store`, `memory_get`, `memory_list`, `memory_modify`, `memory_forget`, `signet_session_search`, `recall`, and `remember`
 - Backs up existing provider configuration for safe uninstallation
 - Uses content hashing to detect when the plugin needs updating
 

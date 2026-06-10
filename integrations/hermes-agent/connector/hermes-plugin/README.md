@@ -36,7 +36,7 @@ Environment variables:
 | Tool | Description |
 |------|-------------|
 | `memory_search` | Hybrid memory search (keyword + semantic + knowledge graph) |
-| `session_search` | Search active or completed session transcripts |
+| `signet_session_search` | Search active or completed Signet session transcripts (namespaced to avoid Hermes's built-in `session_search` core tool) |
 | `memory_store` | Store a fact, preference, or decision to memory |
 | `memory_get` | Retrieve a memory by ID |
 | `memory_list` | List memories with optional filters |
