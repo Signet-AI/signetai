@@ -94,6 +94,9 @@ export function registerSessionRoutes(app: Hono, deps: SessionRoutesDeps): void 
 	app.use("/api/sessions/:key{(?!summaries$)[^/]+}/transcript", async (c, next) => {
 		return requirePermission("recall", authConfig)(c, next);
 	});
+	app.use("/api/sessions/:key{(?!summaries$)[^/]+}/notes", async (c, next) => {
+		return requirePermission("recall", authConfig)(c, next);
+	});
 	app.use("/api/git/*", async (c, next) => {
 		return requirePermission("admin", authConfig)(c, next);
 	});

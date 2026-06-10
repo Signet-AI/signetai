@@ -40,6 +40,9 @@ import { closeDbAccessor, getDbAccessor, getVectorRuntimeStatus, initDbAccessor 
 import { fetchEmbedding } from "./embedding-fetch";
 import { type EmbeddingTrackerHandle, startEmbeddingTracker } from "./embedding-tracker";
 import { initFeatureFlags } from "./feature-flags";
+import { getFeatureFlag } from "./feature-flags";
+import { ensureSignetSessionsSourceRegistered } from "./signet-sessions-source-provider";
+import { SESSION_NOTES_FEATURE_FLAG } from "./session-notes-writer";
 import { writeFileIfChangedAsync } from "./file-sync";
 import { createSignetHttpServer } from "./http-server";
 import { syncAgentWorkspaces } from "./identity-sync";
@@ -1586,6 +1589,9 @@ async function main() {
 		}, 500);
 	});
 	initFeatureFlags(AGENTS_DIR);
+	if (getFeatureFlag(SESSION_NOTES_FEATURE_FLAG)) {
+		ensureSignetSessionsSourceRegistered(AGENTS_DIR);
+	}
 	startUpdateTimer();
 
 	const REQUEST_BODY_LIMIT = 10 * 1_048_576;

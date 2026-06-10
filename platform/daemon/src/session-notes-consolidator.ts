@@ -57,7 +57,7 @@ export interface ConsolidatorInput {
 
 export interface ConsolidatorOutput {
 	readonly ran: boolean;
-	readonly reason?: "no-file" | "no-transcript" | "complete" | "no-provider" | "no-missing-tasks" | "error";
+	readonly reason?: "no-file" | "no-transcript" | "no-provider" | "no-missing-tasks" | "error";
 	readonly tasksFilled: number;
 	readonly model: string | null;
 	readonly error?: string;
