@@ -20,6 +20,7 @@ import {
 	putSecret,
 	resetSecretExecJobsForTests,
 	startSecretExecJob,
+	invalidateSecretsCache,
 } from "./secrets.js";
 
 const originalSignetPath = process.env.SIGNET_PATH;
@@ -40,6 +41,7 @@ describe("local secrets provider", () => {
 		resetDefaultPluginHostForTests();
 		resetSecretExecJobsForTests();
 		setBitwardenClientFactoryForTests(null);
+		invalidateSecretsCache();
 		if (originalSignetPath === undefined) {
 			Reflect.deleteProperty(process.env, "SIGNET_PATH");
 		} else {

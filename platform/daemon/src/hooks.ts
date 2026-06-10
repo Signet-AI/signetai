@@ -2184,6 +2184,7 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 	// Candidate pool fusion: traversal U effective (capped before budget truncation)
 	const recallLimit = Math.max(1, config.recallLimit ?? 50);
 	const candidatePoolLimit = Math.max(1, config.candidatePoolLimit ?? 100);
+	const _candidatesStart = Date.now();
 	const allCandidates = getAllScoredCandidates(
 		req.project,
 		recallLimit,
@@ -2191,6 +2192,7 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 		agentScope.readPolicy,
 		agentScope.policyGroup,
 	);
+	const candidatesMs = Date.now() - _candidatesStart;
 	const candidateById = new Map(allCandidates.map((candidate) => [candidate.id, candidate]));
 	const candidateSourceById = new Map<string, SessionMemoryCandidate["source"]>(
 		allCandidates.map((candidate) => [candidate.id, "effective" as const]),
@@ -2211,7 +2213,9 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 		readonly importance: number;
 	}> = [];
 
+	let traversalMs = 0;
 	if (traversalEnabled) {
+		const _traversalStart = Date.now();
 		try {
 			const focal = getDbAccessor().withReadDb((db) =>
 				resolveFocalEntities(db, traversalAgentId, {
@@ -2289,6 +2293,7 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 		} catch {
 			// Traversal is best-effort; fall back silently
 		}
+		traversalMs = Date.now() - _traversalStart;
 	}
 
 	const mergedCandidates = allCandidates.slice(0, candidatePoolLimit);
@@ -2611,6 +2616,11 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 		injectTokens: countTokens(inject),
 		injectChars: inject.length,
 		durationMs: duration,
+		phaseMs: {
+			candidates: candidatesMs,
+			traversal: traversalMs,
+			inject: duration - candidatesMs - traversalMs,
+		},
 	});
 
 	// Mark this session as having received the full inject

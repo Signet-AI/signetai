@@ -311,6 +311,7 @@ async function putLocalSecret(name: string, value: string): Promise<void> {
 }
 
 export async function putSecret(name: string, value: string): Promise<void> {
+	invalidateSecretsCache();
 	const localName = parseLocalSecretName(name);
 	if (isInternalSecretName(localName) || !(await isBitwardenProviderActive())) {
 		await putLocalSecret(localName, value);
@@ -418,10 +419,27 @@ export function listLocalSecretNames(options: { includeInternal?: boolean } = {}
 	return names.filter((name) => !isInternalSecretName(name));
 }
 
+// TTL cache for listSecrets — avoids Bitwarden round-trips on every session start.
+let cachedSecretNames: string[] | null = null;
+let cachedSecretAt = 0;
+const SECRET_CACHE_TTL_MS = 60_000;
+
+export function invalidateSecretsCache(): void {
+	cachedSecretNames = null;
+	cachedSecretAt = 0;
+}
+
 export async function listSecrets(): Promise<string[]> {
+	const now = Date.now();
+	if (cachedSecretNames !== null && now - cachedSecretAt < SECRET_CACHE_TTL_MS) {
+		return cachedSecretNames;
+	}
+
 	const localNames = listLocalSecretNames({ includeInternal: false });
 	if (!(await isBitwardenProviderActive())) {
 		recordSecretEvent("secret.listed", { count: localNames.length });
+		cachedSecretNames = localNames;
+		cachedSecretAt = now;
 		return localNames;
 	}
 
@@ -432,6 +450,8 @@ export async function listSecrets(): Promise<string[]> {
 		const bitwardenNames = await listBitwardenSecretNames(session);
 		const names = Array.from(new Set([...bitwardenNames, ...visibleLocalNames])).sort((a, b) => a.localeCompare(b));
 		recordSecretEvent("secret.listed", { count: names.length, providerId: "bitwarden" });
+		cachedSecretNames = names;
+		cachedSecretAt = now;
 		return names;
 	} catch {
 		recordSecretEvent("secret.listed", {
@@ -439,6 +459,7 @@ export async function listSecrets(): Promise<string[]> {
 			providerId: "local",
 			degradedProviderId: "bitwarden",
 		});
+		// Don't cache degraded results — Bitwarden may recover
 		return visibleLocalNames;
 	}
 }
@@ -454,10 +475,12 @@ function deleteLocalSecret(name: string): boolean {
 }
 
 export function deleteSecret(name: string): boolean {
+	invalidateSecretsCache();
 	return deleteLocalSecret(name);
 }
 
 export async function deleteSecretFromActiveProvider(name: string): Promise<boolean> {
+	invalidateSecretsCache();
 	const explicitLocal = name.startsWith("local://");
 	const localName = parseLocalSecretName(name);
 	if (explicitLocal || isInternalSecretName(localName) || !(await isBitwardenProviderActive())) {
