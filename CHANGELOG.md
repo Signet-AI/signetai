@@ -7,7 +7,7 @@ All notable changes to Signet are documented here.
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
 ### 2026-06-09
-- Bug fixes: restore signet-mcp stdio JSON-RPC server (#826).
+- Bug fixes: correct repo URL to Signet-AI/signetai; restore signet-mcp stdio JSON-RPC server (#826).
 - Docs: rewrite root vision and agents policy for current surface.
 
 ### 2026-06-04
@@ -32,6 +32,15 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Bug fixes: show macos window on launch.
 
 ## Release Ledger
+
+## [0.138.26] - 2026-06-09
+
+Release summary: 1 bug fix.
+Tag range: `v0.138.25..v0.138.26`.
+
+### Bug Fixes
+
+- **meta**: correct repo URL to Signet-AI/signetai (#830)
 
 ## [0.138.25] - 2026-06-09
 
