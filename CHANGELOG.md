@@ -7,7 +7,7 @@ All notable changes to Signet are documented here.
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
 ### 2026-06-10
-- Bug fixes: ship connector plugin assets + rename session_search (#831).
+- Bug fixes: expose aggregate recall in signet_recall tool for pi connector; ship connector plugin assets + rename session_search (#831).
 
 ### 2026-06-09
 - Bug fixes: correct repo URL to Signet-AI/signetai; restore signet-mcp stdio JSON-RPC server (#826).
@@ -32,6 +32,15 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Docs: nitpick; add missing contributors.
 
 ## Release Ledger
+
+## [0.138.28] - 2026-06-10
+
+Release summary: 1 bug fix.
+Tag range: `v0.138.27..v0.138.28`.
+
+### Bug Fixes
+
+- **pi**: expose aggregate recall in signet_recall tool for pi connector (#834)
 
 ## [0.138.27] - 2026-06-10
 
