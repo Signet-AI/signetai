@@ -157,7 +157,7 @@ export async function recallMemories(
 				saveAggregate,
 			}),
 		),
-		signal: AbortSignal.timeout(READ_TIMEOUT),
+		signal: AbortSignal.timeout(aggregate ? Math.max(READ_TIMEOUT * 6, 30_000) : READ_TIMEOUT),
 	});
 
 	if (!response.ok) {
@@ -472,8 +472,15 @@ function registerCommandsAndTools(pi: PiExtensionApi, daemonUrl: string, agentId
 	pi.registerTool({
 		name: "signet_recall",
 		label: "Signet Recall",
-		description: "Search SignetAI persistent memory for relevant context from previous sessions",
-		promptSnippet: "Search past memories when user asks about previous decisions, preferences, or project context",
+		description:
+			"Search SignetAI persistent memory for relevant context from previous sessions. Use aggregate=true for multi-query synthesis that consolidates scattered memories into a single summary.",
+		promptSnippet:
+			"Search past memories when user asks about previous decisions, preferences, or project context",
+		promptGuidelines: [
+			"Use aggregate=true when the user asks a broad question that likely spans many memories (e.g. 'who is X', 'what happened with Y', 'summarize the history of Z')",
+			"Use aggregate=false (default) for targeted lookups of specific facts or single memories",
+			"Aggregate recall takes longer (3-5s) but produces higher-quality synthesized answers for complex queries",
+		],
 		parameters: Type.Object({
 			query: Type.String({
 				description: "Search query to find relevant memories",
@@ -482,6 +489,18 @@ function registerCommandsAndTools(pi: PiExtensionApi, daemonUrl: string, agentId
 				Type.Number({
 					description: "Maximum number of memories to return (default: 5)",
 					default: 5,
+				}),
+			),
+			aggregate: Type.Optional(
+				Type.Boolean({
+					description:
+						"Enable aggregate recall: runs multiple follow-up queries and synthesizes a consolidated answer. Use for broad questions spanning many memories. (default: false)",
+					default: false,
+				}),
+			),
+			aggregateBudget: Type.Optional(
+				Type.String({
+					description: "Aggregate synthesis budget: 'small', 'medium', or 'large'. Controls depth of multi-query recall and synthesis. (default: medium)",
 				}),
 			),
 		}),
@@ -497,9 +516,52 @@ function registerCommandsAndTools(pi: PiExtensionApi, daemonUrl: string, agentId
 			try {
 				const query = String(params.query || "");
 				const limit = typeof params.limit === "number" ? params.limit : 5;
-				const recall = await recallMemories(daemonUrl, query, { limit, agentId });
+				const isAggregate = params.aggregate === true;
+				const aggregateBudget =
+					typeof params.aggregateBudget === "string" &&
+					["small", "medium", "large"].includes(params.aggregateBudget)
+						? (params.aggregateBudget as "small" | "medium" | "large")
+						: undefined;
+
+				const recall = await recallMemories(daemonUrl, query, {
+					limit,
+					agentId,
+					aggregate: isAggregate,
+					aggregateBudget,
+				});
 				const parsed = parseRecallPayload(recall);
 
+				// Handle aggregate response: single synthesized result + metadata
+				if (isAggregate && recall.aggregate) {
+					const aggregateRows = recall.results ?? parsed.rows;
+					if (aggregateRows.length === 0) {
+						return {
+							content: [{ type: "text", text: "No relevant memories found for this query." }],
+							details: { memoriesFound: 0 },
+						};
+					}
+
+					state.lastRecall = new Date().toISOString();
+					state.memoryCount = aggregateRows.length;
+					updateStatus(ctx);
+
+					const parts = [`[Aggregate Recall] Query: ${query}`];
+					for (const row of aggregateRows) {
+						if (typeof row.content === "string") parts.push(row.content);
+					}
+
+					return {
+						content: [{ type: "text", text: parts.join("\n\n") }],
+						details: {
+							memoriesFound: aggregateRows.length,
+							memories: aggregateRows,
+							aggregate: recall.aggregate,
+							meta: parsed.meta,
+						},
+					};
+				}
+
+				// Standard (non-aggregate) response
 				if (parsed.rows.length === 0) {
 					return {
 						content: [{ type: "text", text: "No relevant memories found for this query." }],
