@@ -139,16 +139,21 @@ export function installNativeBinary(options: NativeInstallOptions = {}): NativeI
 	const target = join(binDir, binaryName());
 	const pathHint = pathContains(binDir) ? null : binDir;
 
-	if (!existsSync(target) || options.force) {
-		if (existsSync(target) && options.force) {
-			rmSync(target, { force: true });
-		}
-		mkdirSync(binDir, { recursive: true });
-		const tmp = join(dirname(target), `.${basename(target)}.${process.pid}.tmp`);
-		copyFileSync(source, tmp);
-		if (process.platform !== "win32") chmodSync(tmp, 0o755);
-		renameSync(tmp, target);
+	if (existsSync(target) && !options.force) {
+		const connectorAssetsDir = options.connectorAssets
+			? installConnectorAssetsFromManifest(options.connectorAssets, binDir)
+			: null;
+		return { source, target, installed: false, pathHint, connectorAssetsDir };
 	}
+
+	if (existsSync(target) && options.force) {
+		rmSync(target, { force: true });
+	}
+	mkdirSync(binDir, { recursive: true });
+	const tmp = join(dirname(target), `.${basename(target)}.${process.pid}.tmp`);
+	copyFileSync(source, tmp);
+	if (process.platform !== "win32") chmodSync(tmp, 0o755);
+	renameSync(tmp, target);
 
 	const connectorAssetsDir = options.connectorAssets
 		? installConnectorAssetsFromManifest(options.connectorAssets, binDir)
@@ -163,7 +168,12 @@ export function printNativeInstallResult(result: NativeInstallResult, json = fal
 		return;
 	}
 
-	console.log(chalk.green(`Installed Signet binary at ${result.target}`));
+	if (result.installed) {
+		console.log(chalk.green(`Installed Signet binary at ${result.target}`));
+	} else {
+		console.log(chalk.yellow(`Signet binary already exists at ${result.target}`));
+		console.log(chalk.dim("Use --force to replace it."));
+	}
 
 	if (result.connectorAssetsDir) {
 		console.log(
