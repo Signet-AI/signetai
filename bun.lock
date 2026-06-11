@@ -76,6 +76,7 @@
         "signet-codex-plugin": "bin/install.js",
       },
       "dependencies": {
+        "@signet/connector-base": "workspace:*",
         "@signet/connector-codex": "workspace:*",
       },
     },
@@ -229,9 +230,6 @@
       "devDependencies": {
         "@types/node": "^22.0.0",
         "typescript": "^5.7.0",
-      },
-      "peerDependencies": {
-        "typescript": ">=5.0.0",
       },
     },
     "libs/sdk": {

@@ -349,6 +349,143 @@ export function removeManagedExtensionFile(filePath: string, marker: string): bo
 }
 
 // ============================================================================
+// Shared npm connector installer runner
+// ============================================================================
+
+export interface ConnectorInstallerOptions {
+	readonly commandName?: string;
+	readonly packageName?: string;
+	readonly label?: string;
+}
+
+type ConnectorConstructor = new () => BaseConnector;
+
+interface ParsedConnectorInstallerArgs {
+	command: "install" | "uninstall" | "status";
+	help?: boolean;
+	url?: string;
+	apiKey?: string;
+	agentId?: string;
+	path?: string;
+}
+
+function connectorInstallerUsage(harness: string, options: ConnectorInstallerOptions): string {
+	const commandName = options.commandName ?? `signet-connector-${harness}`;
+	const packageName = options.packageName ?? `@signet/connector-${harness}`;
+	return `Usage: ${commandName} [install|uninstall|status] [options]
+
+Options:
+  --url <url>          Remote Signet daemon URL (sets SIGNET_DAEMON_URL)
+  --api-key <key>      Signet API key (sets SIGNET_API_KEY)
+  --token <token>      Backward-compatible alias for --api-key
+  --agent-id <id>      Signet agent id for this connector
+  --path <path>        Signet workspace path (default: SIGNET_PATH or ~/.agents)
+  -h, --help           Show this help
+
+Examples:
+  ${commandName} install --url http://host:3850 --api-key sig_sk_...
+  npx -y ${packageName} install --url http://host:3850 --api-key sig_sk_...
+`;
+}
+
+function takeConnectorInstallerValue(args: readonly string[], index: number, name: string): string {
+	const value = args[index + 1];
+	if (!value || value.startsWith("--")) throw new Error(`${name} requires a value`);
+	return value;
+}
+
+function parseConnectorInstallerArgs(argv: readonly string[]): ParsedConnectorInstallerArgs {
+	const options: ParsedConnectorInstallerArgs = { command: "install" };
+	for (let i = 0; i < argv.length; i++) {
+		const arg = argv[i];
+		if (arg === "install" || arg === "uninstall" || arg === "status") {
+			options.command = arg;
+			continue;
+		}
+		if (arg === "-h" || arg === "--help" || arg === "help") {
+			options.help = true;
+			continue;
+		}
+		if (arg === "--url" || arg === "--daemon-url") {
+			options.url = takeConnectorInstallerValue(argv, i, arg);
+			i++;
+			continue;
+		}
+		if (arg === "--api-key" || arg === "--token") {
+			options.apiKey = takeConnectorInstallerValue(argv, i, arg);
+			i++;
+			continue;
+		}
+		if (arg === "--agent-id") {
+			options.agentId = takeConnectorInstallerValue(argv, i, arg);
+			i++;
+			continue;
+		}
+		if (arg === "--path" || arg === "-p") {
+			options.path = takeConnectorInstallerValue(argv, i, arg);
+			i++;
+			continue;
+		}
+		throw new Error(`Unknown argument: ${arg}`);
+	}
+	return options;
+}
+
+function setConnectorInstallerEnv(name: string, value: string | undefined): void {
+	if (typeof value === "string" && value.trim().length > 0) process.env[name] = value.trim();
+}
+
+function printConnectorInstallerList(label: string, values: readonly string[] | undefined): void {
+	if (!Array.isArray(values) || values.length === 0) return;
+	console.log(`${label}:`);
+	for (const value of values) console.log(`  - ${value}`);
+}
+
+export function runConnectorInstaller(
+	harness: string,
+	ConnectorClass: ConnectorConstructor,
+	options: ConnectorInstallerOptions = {},
+): void {
+	const label = options.label ?? harness;
+	async function main(): Promise<void> {
+		const parsed = parseConnectorInstallerArgs(process.argv.slice(2));
+		if (parsed.help) {
+			console.log(connectorInstallerUsage(harness, options));
+			return;
+		}
+		setConnectorInstallerEnv("SIGNET_DAEMON_URL", parsed.url);
+		setConnectorInstallerEnv("SIGNET_API_KEY", parsed.apiKey);
+		setConnectorInstallerEnv("SIGNET_AGENT_ID", parsed.agentId);
+		const basePath = parsed.path || process.env.SIGNET_PATH || join(homedir(), ".agents");
+		const connector = new ConnectorClass();
+
+		if (parsed.command === "status") {
+			console.log(connector.isInstalled() ? `${label}: installed` : `${label}: not installed`);
+			return;
+		}
+
+		if (parsed.command === "uninstall") {
+			const result = await connector.uninstall();
+			console.log(`${label}: uninstalled`);
+			printConnectorInstallerList("Files removed", result.filesRemoved);
+			printConnectorInstallerList("Configs patched", result.configsPatched);
+			return;
+		}
+
+		const result = await connector.install(basePath);
+		console.log(result.message || `${label}: installed`);
+		printConnectorInstallerList("Files written", result.filesWritten);
+		printConnectorInstallerList("Configs patched", result.configsPatched);
+		printConnectorInstallerList("Warnings", result.warnings);
+	}
+
+	main().catch((error) => {
+		console.error(error instanceof Error ? error.message : String(error));
+		process.exitCode = 1;
+	});
+}
+
+// ============================================================================
 // Re-exports
 // ============================================================================
 
