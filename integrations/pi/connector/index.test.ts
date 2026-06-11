@@ -12,6 +12,7 @@ const originalEnv = {
 	PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR,
 	SIGNET_AGENT_ID: process.env.SIGNET_AGENT_ID,
 	SIGNET_DAEMON_URL: process.env.SIGNET_DAEMON_URL,
+	SIGNET_API_KEY: process.env.SIGNET_API_KEY,
 	SIGNET_PATH: process.env.SIGNET_PATH,
 };
 
@@ -33,6 +34,7 @@ beforeEach(() => {
 	process.env.PI_CODING_AGENT_DIR = join(tmpRoot, "agent");
 	process.env.SIGNET_AGENT_ID = "agent-from-env";
 	process.env.SIGNET_DAEMON_URL = "http://127.0.0.1:4123";
+	process.env.SIGNET_API_KEY = "sig_sk_test_connector";
 	// biome-ignore lint/performance/noDelete: assigning undefined to process.env stores the string "undefined"
 	delete process.env.SIGNET_PATH;
 });
@@ -43,6 +45,7 @@ afterEach(() => {
 	restoreEnv("PI_CODING_AGENT_DIR");
 	restoreEnv("SIGNET_AGENT_ID");
 	restoreEnv("SIGNET_DAEMON_URL");
+	restoreEnv("SIGNET_API_KEY");
 	restoreEnv("SIGNET_PATH");
 	if (tmpRoot) {
 		rmSync(tmpRoot, { recursive: true, force: true });
@@ -67,6 +70,7 @@ describe("PiConnector", () => {
 		expect(content).toContain("Managed by Signet (@signet/pi-extension)");
 		expect(content).toContain('Reflect.set(__signetRuntimeEnv, "SIGNET_AGENT_ID", "agent-from-env")');
 		expect(content).toContain('Reflect.set(__signetRuntimeEnv, "SIGNET_DAEMON_URL", "http://127.0.0.1:4123")');
+		expect(content).toContain('Reflect.set(__signetRuntimeEnv, "SIGNET_API_KEY", "sig_sk_test_connector")');
 		expect(content).toContain(`Reflect.set(__signetRuntimeEnv, "SIGNET_PATH", ${JSON.stringify(tmpRoot)})`);
 		expect(content.length).toBeGreaterThan(1_000);
 	});

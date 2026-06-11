@@ -100,11 +100,20 @@ const state: SignetState = {
 // Daemon Health Check
 // ============================================================================
 
+function readAuthToken(): string | undefined {
+	return readTrimmedRuntimeEnv("SIGNET_API_KEY") ?? readTrimmedRuntimeEnv("SIGNET_TOKEN");
+}
+
+function daemonHeaders(headers: Record<string, string> = {}): Record<string, string> {
+	const token = readAuthToken();
+	return token ? { ...headers, Authorization: `Bearer ${token}` } : headers;
+}
+
 async function checkDaemonHealth(daemonUrl: string): Promise<boolean> {
 	try {
 		const response = await fetch(`${daemonUrl}/health`, {
 			method: "GET",
-			headers: { Accept: "application/json" },
+			headers: daemonHeaders({ Accept: "application/json" }),
 			signal: AbortSignal.timeout(READ_TIMEOUT),
 		});
 		return response.ok;
@@ -144,7 +153,7 @@ export async function recallMemories(
 
 	const response = await fetch(`${daemonUrl}/api/memory/recall`, {
 		method: "POST",
-		headers: { "Content-Type": "application/json" },
+		headers: daemonHeaders({ "Content-Type": "application/json" }),
 		body: JSON.stringify(
 			buildRecallRequestBody(query, {
 				limit,
@@ -180,7 +189,7 @@ export async function rememberContent(
 
 	const response = await fetch(`${daemonUrl}/api/hooks/remember`, {
 		method: "POST",
-		headers: { "Content-Type": "application/json" },
+		headers: daemonHeaders({ "Content-Type": "application/json" }),
 		body: JSON.stringify(
 			buildRememberRequestBody(content, {
 				harness: HARNESS,
@@ -214,7 +223,7 @@ export async function searchSourceArtifacts(
 
 	const response = await fetch(`${daemonUrl}/api/memory/recall`, {
 		method: "POST",
-		headers: { "Content-Type": "application/json" },
+		headers: daemonHeaders({ "Content-Type": "application/json" }),
 		body: JSON.stringify({
 			...buildRecallRequestBody(query, {
 				limit,
@@ -249,7 +258,7 @@ export async function searchSessions(
 ): Promise<unknown> {
 	const response = await fetch(`${daemonUrl}/api/sessions/search`, {
 		method: "POST",
-		headers: { "Content-Type": "application/json" },
+		headers: daemonHeaders({ "Content-Type": "application/json" }),
 		body: JSON.stringify({
 			query,
 			sessionKey: options.sessionKey,

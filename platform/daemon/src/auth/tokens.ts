@@ -115,6 +115,10 @@ export function verifyToken(secret: Buffer, token: string): AuthResult {
 		return { authenticated: false, claims: null, error: "missing timestamps" };
 	}
 
+	if (claims.permissions !== undefined && !Array.isArray(claims.permissions)) {
+		return { authenticated: false, claims: null, error: "invalid permissions" };
+	}
+
 	const now = Math.floor(Date.now() / 1000);
 	if (now >= claims.exp) {
 		return { authenticated: false, claims: null, error: "token expired" };

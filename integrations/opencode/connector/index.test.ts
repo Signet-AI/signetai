@@ -5,6 +5,10 @@ import { join } from "node:path";
 import { OpenCodeConnector } from "./src/index.js";
 
 const origHome = process.env.HOME;
+const origDaemonUrl = process.env.SIGNET_DAEMON_URL;
+const origApiKey = process.env.SIGNET_API_KEY;
+const origToken = process.env.SIGNET_TOKEN;
+const origAgentId = process.env.SIGNET_AGENT_ID;
 let tmpRoot = "";
 
 function writeIdentity(dir: string): void {
@@ -33,6 +37,15 @@ beforeEach(() => {
 afterEach(() => {
 	if (origHome !== undefined) process.env.HOME = origHome;
 	else delete process.env.HOME;
+	for (const [key, value] of Object.entries({
+		SIGNET_DAEMON_URL: origDaemonUrl,
+		SIGNET_API_KEY: origApiKey,
+		SIGNET_TOKEN: origToken,
+		SIGNET_AGENT_ID: origAgentId,
+	})) {
+		if (value === undefined) delete process.env[key];
+		else process.env[key] = value;
+	}
 	if (tmpRoot) rmSync(tmpRoot, { recursive: true, force: true });
 });
 
@@ -196,6 +209,28 @@ describe("OpenCodeConnector — pipeline agent registration", () => {
 
 		const config = JSON.parse(readFileSync(configPath, "utf-8"));
 		expect(config.agent["signet-pipeline"]).toEqual(EXPECTED_AGENT);
+	});
+
+	it("install persists remote Signet env into MCP config and plugin bootstrap", async () => {
+		writeIdentity(tmpRoot);
+		process.env.SIGNET_DAEMON_URL = "https://daemon.example.test:3850";
+		process.env.SIGNET_API_KEY = "sig_sk_opencode_test_secret";
+		process.env.SIGNET_AGENT_ID = "opencode-remote";
+		const configPath = join(ocPath(), "opencode.json");
+		writeFileSync(configPath, JSON.stringify({ provider: {} }), "utf-8");
+
+		await new TestableConnector(ocPath()).install(tmpRoot);
+
+		const config = JSON.parse(readFileSync(configPath, "utf-8"));
+		expect(config.mcp.signet.environment).toEqual({
+			SIGNET_DAEMON_URL: "https://daemon.example.test:3850",
+			SIGNET_API_KEY: "sig_sk_opencode_test_secret",
+			SIGNET_AGENT_ID: "opencode-remote",
+		});
+		const plugin = readFileSync(join(ocPath(), "plugins", "signet.mjs"), "utf-8");
+		expect(plugin).toContain('process.env["SIGNET_DAEMON_URL"] = "https://daemon.example.test:3850";');
+		expect(plugin).toContain('process.env["SIGNET_API_KEY"] = "sig_sk_opencode_test_secret";');
+		expect(plugin).toContain('process.env["SIGNET_AGENT_ID"] = "opencode-remote";');
 	});
 
 	it("install creates opencode.json when no config file exists", async () => {

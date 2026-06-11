@@ -33,6 +33,22 @@ function isTimeoutError(err: unknown): boolean {
 	return code === "ABORT_ERR";
 }
 
+function readAuthToken(): string | undefined {
+	const apiKey = process.env.SIGNET_API_KEY?.trim();
+	if (apiKey) return apiKey;
+	const legacyToken = process.env.SIGNET_TOKEN?.trim();
+	return legacyToken || undefined;
+}
+
+function withAuthHeaders(headers?: HeadersInit): Headers {
+	const merged = new Headers(headers);
+	const token = readAuthToken();
+	if (token && !merged.has("Authorization")) {
+		merged.set("Authorization", `Bearer ${token}`);
+	}
+	return merged;
+}
+
 export function createDaemonClient(port: number): {
 	readonly url: string;
 	readonly fetchFromDaemon: DaemonFetch;
@@ -51,8 +67,9 @@ export function createDaemonClient(port: number): {
 		const { timeout, ...fetchOpts } = opts || {};
 		try {
 			const res = await fetch(`${url}${path}`, {
-				signal: AbortSignal.timeout(timeout || 5_000),
 				...fetchOpts,
+				headers: withAuthHeaders(fetchOpts.headers),
+				signal: AbortSignal.timeout(timeout || 5_000),
 			});
 			if (!res.ok) {
 				return { ok: false, reason: "http", status: res.status };
@@ -89,7 +106,7 @@ export function createDaemonClient(port: number): {
 		try {
 			const res = await fetch(`${url}${path}`, {
 				method,
-				headers: body ? { "Content-Type": "application/json" } : {},
+				headers: withAuthHeaders(body ? { "Content-Type": "application/json" } : undefined),
 				body: body ? JSON.stringify(body) : undefined,
 				signal: AbortSignal.timeout(timeoutMs),
 			});

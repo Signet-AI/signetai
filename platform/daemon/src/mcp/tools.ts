@@ -29,6 +29,8 @@ interface McpServerOptions {
 	readonly version?: string;
 	/** Register installed marketplace MCP tools as first-class MCP tools */
 	readonly enableMarketplaceProxyTools?: boolean;
+	/** Per-request bearer credential validated by the daemon's /mcp auth middleware. */
+	readonly authorizationHeader?: string;
 	/** Optional scope context used for marketplace filtering */
 	readonly context?: {
 		readonly harness?: string;
@@ -112,6 +114,7 @@ interface MarketplaceProxyState {
 		readonly workspace?: string;
 		readonly channel?: string;
 	};
+	authorizationHeader?: string;
 	policy: MarketplacePolicy;
 	contextKey: string;
 }
@@ -225,6 +228,21 @@ const GRAPHIQ_COMPAT_ALIASES: ReadonlyMap<string, string> = new Map([
 // Internal HTTP helper
 // ---------------------------------------------------------------------------
 
+// Standalone `signet-mcp` uses process env auth. Hosted `/mcp` requests pass
+// a per-request Authorization header through createMcpServer(), which takes
+// precedence in daemonFetch().
+function readDaemonAuthToken(): string | undefined {
+	const apiKey = process.env.SIGNET_API_KEY?.trim();
+	if (apiKey) return apiKey;
+	const legacyToken = process.env.SIGNET_TOKEN?.trim();
+	return legacyToken || undefined;
+}
+
+function normalizeAuthorizationHeader(value: string | undefined): string | undefined {
+	const trimmed = value?.trim();
+	return trimmed ? trimmed.replace(/[\r\n]+/g, "") : undefined;
+}
+
 async function daemonFetch<T>(
 	baseUrl: string,
 	path: string,
@@ -233,10 +251,13 @@ async function daemonFetch<T>(
 		readonly body?: unknown;
 		readonly timeout?: number;
 		readonly extraHeaders?: Readonly<Record<string, string>>;
+		readonly authorizationHeader?: string;
 	} = {},
 ): Promise<FetchResult<T>> {
 	const { method = "GET", body, timeout = 10_000, extraHeaders } = options;
 
+	const token = readDaemonAuthToken();
+	const authorizationHeader = normalizeAuthorizationHeader(options.authorizationHeader) ?? (token ? `Bearer ${token}` : undefined);
 	const init: RequestInit = {
 		method,
 		headers: {
@@ -244,6 +265,7 @@ async function daemonFetch<T>(
 			"x-signet-runtime-path": "plugin",
 			"x-signet-actor": "mcp-server",
 			"x-signet-actor-type": "harness",
+			...(authorizationHeader ? { Authorization: authorizationHeader } : {}),
 			...extraHeaders,
 		},
 		signal: AbortSignal.timeout(timeout),
@@ -509,9 +531,10 @@ function selectToolsByPolicy(
 	return selected;
 }
 
-async function fetchMarketplacePolicy(baseUrl: string): Promise<MarketplacePolicy | null> {
+async function fetchMarketplacePolicy(baseUrl: string, authorizationHeader?: string): Promise<MarketplacePolicy | null> {
 	const result = await daemonFetch<MarketplacePolicyResponse>(baseUrl, "/api/marketplace/mcp/policy", {
 		timeout: 3_000,
+		authorizationHeader,
 	});
 	if (!result.ok) {
 		return null;
@@ -532,7 +555,7 @@ export async function refreshMarketplaceProxyTools(
 
 	const notify = options?.notify ?? true;
 	const registeredTools = getRegisteredToolsMap(server);
-	const policy = await fetchMarketplacePolicy(state.baseUrl);
+	const policy = await fetchMarketplacePolicy(state.baseUrl, state.authorizationHeader);
 	if (policy) {
 		state.policy = policy;
 	}
@@ -542,6 +565,7 @@ export async function refreshMarketplaceProxyTools(
 		appendMarketplaceContext("/api/marketplace/mcp/tools?refresh=1", state.context),
 		{
 			timeout: 3_000,
+			authorizationHeader: state.authorizationHeader,
 		},
 	);
 
@@ -605,6 +629,7 @@ export async function refreshMarketplaceProxyTools(
 						args,
 					},
 					timeout: 60_000,
+					authorizationHeader: state.authorizationHeader,
 				});
 
 				if (!callResult.ok) {
@@ -756,6 +781,12 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 	const enableMarketplaceProxyTools = opts?.enableMarketplaceProxyTools ?? true;
 	const context = normalizeContext(opts?.context);
 	const contextKey = buildContextKey(context);
+	const authorizationHeader = normalizeAuthorizationHeader(opts?.authorizationHeader);
+	const fetchDaemon = <T>(
+		requestBaseUrl: string,
+		path: string,
+		options?: Parameters<typeof daemonFetch<T>>[2],
+	): Promise<FetchResult<T>> => daemonFetch<T>(requestBaseUrl, path, { ...options, authorizationHeader });
 	const pluginHostProvider: GraphiqPluginPolicyHostProvider = opts?.pluginHost
 		? () => opts.pluginHost as GraphiqPluginPolicyHost
 		: () => createDefaultPluginHost({ persistRegistry: false });
@@ -772,6 +803,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 		signature: "",
 		context,
 		contextKey,
+		authorizationHeader,
 		policy: {
 			mode: "hybrid",
 			maxExpandedTools: 12,
@@ -845,7 +877,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			agent_id,
 			include_recalled,
 		}) => {
-			const result = await daemonFetch<unknown>(baseUrl, "/api/memory/recall", {
+			const result = await fetchDaemon<unknown>(baseUrl, "/api/memory/recall", {
 				method: "POST",
 				body: buildRecallRequestBody(query, {
 					keyword_query,
@@ -930,7 +962,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			agent_id,
 			include_recalled,
 		}) => {
-			const result = await daemonFetch<unknown>(baseUrl, "/api/memory/recall", {
+			const result = await fetchDaemon<unknown>(baseUrl, "/api/memory/recall", {
 				method: "POST",
 				body: buildRecallRequestBody(query, {
 					keyword_query,
@@ -972,7 +1004,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			}),
 		},
 		async ({ query, limit, project, session_key, agent_id, include_recalled }) => {
-			const result = await daemonFetch<unknown>(baseUrl, "/api/memory/recall", {
+			const result = await fetchDaemon<unknown>(baseUrl, "/api/memory/recall", {
 				method: "POST",
 				body: {
 					...buildRecallRequestBody(query, {
@@ -1100,7 +1132,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			validFrom,
 			validUntil,
 		}) => {
-			const result = await daemonFetch<unknown>(baseUrl, "/api/memory/remember", {
+			const result = await fetchDaemon<unknown>(baseUrl, "/api/memory/remember", {
 				method: "POST",
 				body: buildRememberRequestBody(content, {
 					type,
@@ -1140,7 +1172,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			annotations: { readOnlyHint: false },
 		},
 		async ({ content, title, tags }) => {
-			const result = await daemonFetch<unknown>(baseUrl, "/api/memory/codex-native-note", {
+			const result = await fetchDaemon<unknown>(baseUrl, "/api/memory/codex-native-note", {
 				method: "POST",
 				body: { content, title, tags },
 			});
@@ -1163,7 +1195,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			}),
 		},
 		async ({ id }) => {
-			const result = await daemonFetch<unknown>(baseUrl, `/api/memory/${encodeURIComponent(id)}`);
+			const result = await fetchDaemon<unknown>(baseUrl, `/api/memory/${encodeURIComponent(id)}`);
 
 			if (!result.ok) {
 				return errorResult(`Get failed: ${result.error}`);
@@ -1194,7 +1226,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 
 			const qs = params.toString();
 			const path = `/api/memories${qs ? `?${qs}` : ""}`;
-			const result = await daemonFetch<unknown>(baseUrl, path);
+			const result = await fetchDaemon<unknown>(baseUrl, path);
 
 			if (!result.ok) {
 				return errorResult(`List failed: ${result.error}`);
@@ -1223,7 +1255,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			annotations: { readOnlyHint: false },
 		},
 		async ({ id, content, type, importance, tags, reason, pinned }) => {
-			const result = await daemonFetch<unknown>(baseUrl, `/api/memory/${encodeURIComponent(id)}`, {
+			const result = await fetchDaemon<unknown>(baseUrl, `/api/memory/${encodeURIComponent(id)}`, {
 				method: "PATCH",
 				body: {
 					content,
@@ -1257,7 +1289,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			annotations: { readOnlyHint: false },
 		},
 		async ({ id, reason }) => {
-			const result = await daemonFetch<unknown>(baseUrl, `/api/memory/${encodeURIComponent(id)}`, {
+			const result = await fetchDaemon<unknown>(baseUrl, `/api/memory/${encodeURIComponent(id)}`, {
 				method: "DELETE",
 				body: { reason },
 			});
@@ -1310,7 +1342,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			annotations: { readOnlyHint: false },
 		},
 		async ({ session_key, agent_id, ratings, paths, rewards }) => {
-			const result = await daemonFetch<{ ok: boolean; recorded: number }>(baseUrl, "/api/memory/feedback", {
+			const result = await fetchDaemon<{ ok: boolean; recorded: number }>(baseUrl, "/api/memory/feedback", {
 				method: "POST",
 				body: {
 					sessionKey: session_key,
@@ -1355,7 +1387,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 				params.set("limit", String(Math.max(1, Math.min(200, Math.round(limit)))));
 			}
 
-			const result = await daemonFetch<unknown>(baseUrl, `/api/cross-agent/presence?${params.toString()}`);
+			const result = await fetchDaemon<unknown>(baseUrl, `/api/cross-agent/presence?${params.toString()}`);
 
 			if (!result.ok) {
 				return errorResult(`Peer list failed: ${result.error}`);
@@ -1421,7 +1453,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 				};
 			}
 
-			const result = await daemonFetch<unknown>(baseUrl, "/api/cross-agent/messages", {
+			const result = await fetchDaemon<unknown>(baseUrl, "/api/cross-agent/messages", {
 				method: "POST",
 				body,
 			});
@@ -1465,7 +1497,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 				params.set("include_broadcast", String(include_broadcast));
 			}
 
-			const result = await daemonFetch<unknown>(baseUrl, `/api/cross-agent/messages?${params.toString()}`);
+			const result = await fetchDaemon<unknown>(baseUrl, `/api/cross-agent/messages?${params.toString()}`);
 
 			if (!result.ok) {
 				return errorResult(`Inbox read failed: ${result.error}`);
@@ -1485,7 +1517,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			inputSchema: z.object({}),
 		},
 		async () => {
-			const result = await daemonFetch<{ secrets: ReadonlyArray<string> }>(baseUrl, "/api/secrets");
+			const result = await fetchDaemon<{ secrets: ReadonlyArray<string> }>(baseUrl, "/api/secrets");
 
 			if (!result.ok) {
 				return errorResult(`Failed to list secrets: ${result.error}`);
@@ -1530,7 +1562,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 
 			const timeoutMs = timeoutSeconds ? timeoutSeconds * 1000 : undefined;
 			const requestTimeout = 10_000;
-			const result = await daemonFetch<{
+			const result = await fetchDaemon<{
 				stdout?: string;
 				stderr?: string;
 				code?: number;
@@ -1561,7 +1593,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			annotations: { readOnlyHint: true },
 		},
 		async ({ jobId }) => {
-			const result = await daemonFetch<{
+			const result = await fetchDaemon<{
 				id: string;
 				status: string;
 				stdout?: string;
@@ -1607,7 +1639,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			}
 
 			const path = refresh ? "/api/marketplace/mcp/tools?refresh=1" : "/api/marketplace/mcp/tools";
-			const result = await daemonFetch<{
+			const result = await fetchDaemon<{
 				count: number;
 				tools: unknown[];
 				servers: unknown[];
@@ -1649,7 +1681,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 				searchPath.set("refresh", "1");
 			}
 
-			const result = await daemonFetch<MarketplaceSearchResponse>(
+			const result = await fetchDaemon<MarketplaceSearchResponse>(
 				baseUrl,
 				contextPath(`/api/marketplace/mcp/search?${searchPath.toString()}`),
 			);
@@ -1691,7 +1723,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			annotations: { readOnlyHint: false },
 		},
 		async ({ server_id }) => {
-			const result = await daemonFetch<{ success: boolean; server?: unknown; error?: string }>(
+			const result = await fetchDaemon<{ success: boolean; server?: unknown; error?: string }>(
 				baseUrl,
 				contextPath(`/api/marketplace/mcp/${encodeURIComponent(server_id)}`),
 				{
@@ -1721,7 +1753,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			annotations: { readOnlyHint: false },
 		},
 		async ({ server_id }) => {
-			const result = await daemonFetch<{ success: boolean; server?: unknown; error?: string }>(
+			const result = await fetchDaemon<{ success: boolean; server?: unknown; error?: string }>(
 				baseUrl,
 				contextPath(`/api/marketplace/mcp/${encodeURIComponent(server_id)}`),
 				{
@@ -1751,7 +1783,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 		},
 		async ({ server_id }) => {
 			if (server_id) {
-				const result = await daemonFetch<{ server: MarketplaceServerRecord }>(
+				const result = await fetchDaemon<{ server: MarketplaceServerRecord }>(
 					baseUrl,
 					contextPath(`/api/marketplace/mcp/${encodeURIComponent(server_id)}`),
 				);
@@ -1761,7 +1793,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 				return textResult(result.data);
 			}
 
-			const result = await daemonFetch<MarketplaceServersResponse>(
+			const result = await fetchDaemon<MarketplaceServersResponse>(
 				baseUrl,
 				contextPath("/api/marketplace/mcp?scoped=0"),
 			);
@@ -1786,7 +1818,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			annotations: { readOnlyHint: false },
 		},
 		async ({ server_id, harnesses, workspaces, channels }) => {
-			const result = await daemonFetch<{ success: boolean; server?: unknown; error?: string }>(
+			const result = await fetchDaemon<{ success: boolean; server?: unknown; error?: string }>(
 				baseUrl,
 				contextPath(`/api/marketplace/mcp/${encodeURIComponent(server_id)}`),
 				{
@@ -1818,7 +1850,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			inputSchema: z.object({}),
 		},
 		async () => {
-			const result = await daemonFetch<MarketplacePolicyResponse>(baseUrl, "/api/marketplace/mcp/policy");
+			const result = await fetchDaemon<MarketplacePolicyResponse>(baseUrl, "/api/marketplace/mcp/policy");
 			if (!result.ok) {
 				return errorResult(`Policy get failed: ${result.error}`);
 			}
@@ -1839,7 +1871,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			annotations: { readOnlyHint: false },
 		},
 		async ({ mode, max_expanded_tools, max_search_results }) => {
-			const result = await daemonFetch<{ success: boolean; policy?: MarketplacePolicy; error?: string }>(
+			const result = await fetchDaemon<{ success: boolean; policy?: MarketplacePolicy; error?: string }>(
 				baseUrl,
 				"/api/marketplace/mcp/policy",
 				{
@@ -1879,7 +1911,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			annotations: { readOnlyHint: false },
 		},
 		async ({ server_id, tool, args }) => {
-			const result = await daemonFetch<{
+			const result = await fetchDaemon<{
 				success: boolean;
 				result?: unknown;
 				error?: string;
@@ -1929,7 +1961,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			// Always thread agent_id so the scoped route resolves correctly.
 			// Default to "default" matching other cross-agent MCP tools.
 			const aid = agent_id ?? "default";
-			const result = await daemonFetch<{ key: string; bypassed: boolean }>(
+			const result = await fetchDaemon<{ key: string; bypassed: boolean }>(
 				baseUrl,
 				`/api/sessions/${encodeURIComponent(session_key)}/bypass?agent_id=${encodeURIComponent(aid)}`,
 				{ method: "POST", body: { enabled } },
@@ -1959,7 +1991,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			}),
 		},
 		async ({ entity_name, aspect_filter, question, max_tokens }) => {
-			const result = await daemonFetch<unknown>(baseUrl, "/api/knowledge/expand", {
+			const result = await fetchDaemon<unknown>(baseUrl, "/api/knowledge/expand", {
 				method: "POST",
 				body: {
 					entity: entity_name,
@@ -2029,7 +2061,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 
 	const fetchNavigation = async (path: string, params: URLSearchParams, label: string) => {
 		const query = params.toString();
-		const result = await daemonFetch<unknown>(baseUrl, query ? `${path}?${query}` : path);
+		const result = await fetchDaemon<unknown>(baseUrl, query ? `${path}?${query}` : path);
 		if (!result.ok) return errorResult(`${label} failed: ${result.error}`);
 		return textResult(result.data);
 	};
@@ -2303,7 +2335,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			}),
 		},
 		async ({ entity_name, session_id, time_range, max_results }) => {
-			const result = await daemonFetch<unknown>(baseUrl, "/api/knowledge/expand/session", {
+			const result = await fetchDaemon<unknown>(baseUrl, "/api/knowledge/expand/session", {
 				method: "POST",
 				body: {
 					entityName: entity_name,
@@ -2335,7 +2367,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			}),
 		},
 		async ({ id, include_transcript, transcript_char_limit }) => {
-			const result = await daemonFetch<unknown>(baseUrl, "/api/sessions/summaries/expand", {
+			const result = await fetchDaemon<unknown>(baseUrl, "/api/sessions/summaries/expand", {
 				method: "POST",
 				body: {
 					id,
@@ -2371,7 +2403,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			}),
 		},
 		async ({ query, session_key, current_session_key, agent_id, project, limit }) => {
-			const result = await daemonFetch<unknown>(baseUrl, "/api/sessions/search", {
+			const result = await fetchDaemon<unknown>(baseUrl, "/api/sessions/search", {
 				method: "POST",
 				body: {
 					query,
@@ -2409,7 +2441,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			}),
 		},
 		async ({ query, session_key, current_session_key, agent_id, project, limit }) => {
-			const result = await daemonFetch<unknown>(baseUrl, "/api/sessions/search", {
+			const result = await fetchDaemon<unknown>(baseUrl, "/api/sessions/search", {
 				method: "POST",
 				body: {
 					query,

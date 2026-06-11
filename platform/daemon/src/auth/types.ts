@@ -37,6 +37,7 @@ export interface TokenClaims {
 	readonly role: TokenRole;
 	readonly iat: number;
 	readonly exp: number;
+	readonly permissions?: readonly Permission[];
 }
 
 export interface AuthResult {

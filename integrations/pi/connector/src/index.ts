@@ -12,6 +12,7 @@ import {
 	readManagedTrimmedEnv,
 	removeManagedExtensionFile,
 	resolveSignetAgentId,
+	resolveSignetApiKey,
 	resolveSignetDaemonUrl,
 	resolveSignetWorkspacePath,
 } from "@signet/connector-base";
@@ -43,6 +44,7 @@ function buildManagedExtensionContent(env: {
 	readonly signetPath: string;
 	readonly daemonUrl: string;
 	readonly agentId: string;
+	readonly apiKey?: string;
 }): string {
 	const bundle = bundledExtensionContent();
 	const bootstrap = buildManagedExtensionEnvBootstrap(env);
@@ -93,6 +95,7 @@ export class PiConnector extends BaseConnector {
 			signetPath: basePath || resolveSignetWorkspacePath(),
 			daemonUrl: resolveSignetDaemonUrl() || MANAGED_DAEMON_URL_DEFAULT,
 			agentId: resolveSignetAgentId(),
+			apiKey: resolveSignetApiKey(),
 		});
 		const previous = existsSync(targetPath) ? readFileSync(targetPath, "utf8") : null;
 		if (previous !== managedContent) {

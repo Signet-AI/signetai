@@ -617,6 +617,18 @@ function sanitizedEnv(name: string): string {
 	return (process.env[name]?.trim() || "").replace(/[\r\n]+/g, "");
 }
 
+function sanitizedAuthTokenEnv(): string {
+	return sanitizedEnv("SIGNET_API_KEY") || sanitizedEnv("SIGNET_TOKEN");
+}
+
+function trustedOriginForDaemonUrl(daemonUrl: string): string | null {
+	try {
+		return new URL(daemonUrl).origin;
+	} catch {
+		return null;
+	}
+}
+
 type AgentReadPolicy = "isolated" | "shared" | "group";
 
 function configuredAgentReadPolicy(warnings: string[]): AgentReadPolicy {
@@ -632,7 +644,7 @@ async function ensureNamedAgentRegistered(daemonUrl: string, agentId: string, wa
 	if (process.env.SIGNET_SKIP_AGENT_REGISTER === "1") return;
 
 	const baseUrl = trimTrailingSlashes(daemonUrl);
-	const token = sanitizedEnv("SIGNET_TOKEN");
+	const token = sanitizedAuthTokenEnv();
 	const headers: Record<string, string> = {};
 	if (token) {
 		headers.Authorization = `Bearer ${token}`;
@@ -802,15 +814,27 @@ export class HermesAgentConnector extends BaseConnector {
 
 			// Persist auth token so Hermes can reach a non-localhost daemon.
 			// Warn if absent and SIGNET_DAEMON_URL points to a remote host.
-			if (process.env.SIGNET_TOKEN) {
-				signetVars.SIGNET_TOKEN = sanitizedEnv("SIGNET_TOKEN");
+			const authToken = sanitizedAuthTokenEnv();
+			if (authToken) {
+				signetVars.SIGNET_API_KEY = authToken;
+				signetVars.SIGNET_TOKEN = authToken;
+				if (process.env.SIGNET_DAEMON_URL && !signetVars.SIGNET_TRUSTED_DAEMON_ORIGINS) {
+					const trustedOrigin = trustedOriginForDaemonUrl(configuredDaemonUrl);
+					if (trustedOrigin) {
+						signetVars.SIGNET_TRUSTED_DAEMON_ORIGINS = trustedOrigin;
+					} else {
+						warnings.push(
+							`Could not derive trusted daemon origin from SIGNET_DAEMON_URL='${configuredDaemonUrl}'. Set SIGNET_TRUSTED_DAEMON_ORIGINS explicitly if Hermes must send SIGNET_API_KEY to this daemon.`,
+						);
+					}
+				}
 			} else if (
 				process.env.SIGNET_DAEMON_URL &&
 				!process.env.SIGNET_DAEMON_URL.includes("localhost") &&
 				!process.env.SIGNET_DAEMON_URL.includes("127.0.0.1")
 			) {
 				warnings.push(
-					`SIGNET_TOKEN is not set. The Signet daemon at ${process.env.SIGNET_DAEMON_URL} may require authentication. Set SIGNET_TOKEN in your environment before starting Hermes.`,
+					`SIGNET_API_KEY is not set. The Signet daemon at ${process.env.SIGNET_DAEMON_URL} may require authentication. Set SIGNET_API_KEY in your environment before starting Hermes.`,
 				);
 			}
 
@@ -913,6 +937,7 @@ export class HermesAgentConnector extends BaseConnector {
 					"SIGNET_TRUSTED_DAEMON_ORIGINS",
 					"SIGNET_AGENT_ID",
 					"SIGNET_AGENT_WORKSPACE",
+					"SIGNET_API_KEY",
 					"SIGNET_TOKEN",
 				]) {
 					const pattern = new RegExp(`^${key}=.*\n?`, "gm");

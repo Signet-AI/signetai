@@ -14,6 +14,7 @@ const originalEnv = {
 	SIGNET_AGENT_WORKSPACE: process.env.SIGNET_AGENT_WORKSPACE,
 	SIGNET_DAEMON_URL: process.env.SIGNET_DAEMON_URL,
 	SIGNET_TRUSTED_DAEMON_ORIGINS: process.env.SIGNET_TRUSTED_DAEMON_ORIGINS,
+	SIGNET_API_KEY: process.env.SIGNET_API_KEY,
 	SIGNET_TOKEN: process.env.SIGNET_TOKEN,
 	SIGNET_AGENT_READ_POLICY: process.env.SIGNET_AGENT_READ_POLICY,
 	SIGNET_AGENT_MEMORY_POLICY: process.env.SIGNET_AGENT_MEMORY_POLICY,
@@ -674,6 +675,25 @@ describe("HermesAgentConnector.install()", () => {
 		expect(envContent).toContain("SIGNET_TRUSTED_DAEMON_ORIGINS=https://daemon.example.test:8443");
 	});
 
+	it("derives trusted daemon origin when persisting SIGNET_API_KEY", async () => {
+		const hermesRepo = join(tmpRoot, "hermes-agent");
+		mkdirSync(join(hermesRepo, "plugins", "memory"), { recursive: true });
+		const hermesHome = join(tmpRoot, ".hermes");
+		process.env.HERMES_REPO = hermesRepo;
+		process.env.HERMES_HOME = hermesHome;
+		process.env.SIGNET_DAEMON_URL = "https://daemon.example.test:8443/api/ignored";
+		process.env.SIGNET_API_KEY = " sig_sk_hermes_test_secret \n";
+
+		const result = await new HermesAgentConnector().install(tmpRoot);
+
+		const envPath = join(hermesHome, ".env");
+		expect(result.configsPatched).toContain(envPath);
+		const envContent = await Bun.file(envPath).text();
+		expect(envContent).toContain("SIGNET_DAEMON_URL=https://daemon.example.test:8443/api/ignored");
+		expect(envContent).toContain("SIGNET_API_KEY=sig_sk_hermes_test_secret");
+		expect(envContent).toContain("SIGNET_TRUSTED_DAEMON_ORIGINS=https://daemon.example.test:8443");
+	});
+
 	it("derives SIGNET_AGENT_WORKSPACE for named agents", async () => {
 		const hermesRepo = join(tmpRoot, "hermes-agent");
 		mkdirSync(join(hermesRepo, "plugins", "memory"), { recursive: true });
@@ -709,6 +729,7 @@ describe("HermesAgentConnector.install()", () => {
 			process.env.HERMES_REPO = hermesRepo;
 			process.env.HERMES_HOME = hermesHome;
 			process.env.SIGNET_AGENT_ID = "dot";
+			delete process.env.SIGNET_API_KEY;
 			process.env.SIGNET_TOKEN = " test-token \n";
 			process.env.SIGNET_AGENT_READ_POLICY = "isolated";
 			// biome-ignore lint/performance/noDelete: this test exercises registration

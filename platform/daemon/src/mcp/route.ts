@@ -31,6 +31,7 @@ export function mountMcpRoute(app: Hono): void {
 		const channel = c.req.query("channel") ?? c.req.header("x-signet-channel") ?? undefined;
 
 		const server = await createMcpServer({
+			authorizationHeader: c.req.header("authorization"),
 			context: {
 				harness,
 				workspace,

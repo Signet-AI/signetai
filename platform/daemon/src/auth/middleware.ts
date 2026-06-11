@@ -7,6 +7,7 @@ import type { Context, MiddlewareHandler } from "hono";
 import type { AuthConfig } from "./config";
 import type { AuthResult, Permission, TokenScope } from "./types";
 import { verifyToken } from "./tokens";
+import { isSignetApiKey } from "./api-keys";
 import { checkPermission, checkScope } from "./policy";
 import type { AuthRateLimiter } from "./rate-limiter";
 
@@ -40,7 +41,11 @@ function isLocalhost(c: Context): boolean {
 	return false;
 }
 
-export function createAuthMiddleware(config: AuthConfig, secret: Buffer | null): MiddlewareHandler {
+export function createAuthMiddleware(
+	config: AuthConfig,
+	secret: Buffer | null,
+	verifyApiKey?: (token: string) => AuthResult,
+): MiddlewareHandler {
 	return async (c, next) => {
 		// Local mode: no auth required at all
 		if (config.mode === "local") {
@@ -52,7 +57,11 @@ export function createAuthMiddleware(config: AuthConfig, secret: Buffer | null):
 		// Hybrid mode: localhost requests skip token requirement
 		if (config.mode === "hybrid" && isLocalhost(c)) {
 			const token = extractBearerToken(c.req.header("authorization"));
-			if (token && secret) {
+			if (token && isSignetApiKey(token) && verifyApiKey) {
+				// If they send an API key anyway, validate it
+				const result = verifyApiKey(token);
+				c.set("auth", result);
+			} else if (token && secret) {
 				// If they send a token anyway, validate it
 				const result = verifyToken(secret, token);
 				c.set("auth", result);
@@ -71,12 +80,12 @@ export function createAuthMiddleware(config: AuthConfig, secret: Buffer | null):
 			return c.json({ error: "authentication required" });
 		}
 
-		if (!secret) {
+		if (!secret && !(isSignetApiKey(token) && verifyApiKey)) {
 			c.status(500);
 			return c.json({ error: "auth secret not configured" });
 		}
 
-		const result = verifyToken(secret, token);
+		const result = isSignetApiKey(token) && verifyApiKey ? verifyApiKey(token) : verifyToken(secret as Buffer, token);
 		if (!result.authenticated) {
 			c.status(401);
 			c.header("WWW-Authenticate", "Bearer");

@@ -437,10 +437,18 @@ pi uses a bundled extension installed by `@signet/connector-pi` at
 `~/.pi/agent/extensions/signet-pi.js` (or `$PI_CODING_AGENT_DIR/extensions/signet-pi.js`).
 The extension calls the daemon API at session lifecycle events (session-start,
 user-prompt-submit, session-end, compaction) and exposes `/recall`, `/remember`,
-and `/signet-status` commands plus `signet_recall` and `signet_remember`
-LLM-callable tools.
+and `/signet-status` commands plus `signet_recall`, `signet_source_search`,
+`signet_session_search`, and `signet_remember` LLM-callable tools.
 
 Install is handled automatically by `signet setup` or `signet connector install pi`.
+For a remote daemon, pass the daemon URL and API key during install:
+
+```bash
+signet api-key create --name "work laptop pi" --connector pi
+signet connector install pi \
+  --url https://signet-home.tailnet:3850 \
+  --api-key sig_sk_...
+```
 
 Configuration is optional via `~/.pi/agent/extensions/signet.json`. Set
 `SIGNET_ENABLED=false` to disable for a single session.

@@ -8,6 +8,25 @@ afterEach(() => {
 });
 
 describe("createDaemonClient", () => {
+	test("fetchDaemonResult sends SIGNET_API_KEY as bearer auth", async () => {
+		const previous = process.env.SIGNET_API_KEY;
+		process.env.SIGNET_API_KEY = "sig_sk_test_secret";
+		let authorization = "";
+		globalThis.fetch = async (_input, init) => {
+			authorization = new Headers(init?.headers).get("authorization") ?? "";
+			return Response.json({ ok: true });
+		};
+
+		try {
+			const client = createDaemonClient(3850);
+			await client.fetchDaemonResult("/api/auth/whoami");
+			expect(authorization).toBe("Bearer sig_sk_test_secret");
+		} finally {
+			if (previous === undefined) Reflect.deleteProperty(process.env, "SIGNET_API_KEY");
+			else process.env.SIGNET_API_KEY = previous;
+		}
+	});
+
 	test("fetchDaemonResult uses SIGNET_DAEMON_URL when configured", async () => {
 		const previous = process.env.SIGNET_DAEMON_URL;
 		process.env.SIGNET_DAEMON_URL = "http://192.168.0.60:3850/";

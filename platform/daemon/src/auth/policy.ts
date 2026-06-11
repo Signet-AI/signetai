@@ -64,6 +64,13 @@ export function checkPermission(
 		};
 	}
 
+	if (claims.permissions && !claims.permissions.includes(permission)) {
+		return {
+			allowed: false,
+			reason: `credential lacks '${permission}' permission`,
+		};
+	}
+
 	return { allowed: true };
 }
 

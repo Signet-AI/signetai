@@ -2,12 +2,31 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { createDaemonClient } from "./daemon-client.js";
 
 const originalFetch = globalThis.fetch;
+const originalApiKey = process.env.SIGNET_API_KEY;
 
 afterEach(() => {
 	globalThis.fetch = originalFetch;
+	if (originalApiKey === undefined) Reflect.deleteProperty(process.env, "SIGNET_API_KEY");
+	else process.env.SIGNET_API_KEY = originalApiKey;
 });
 
 describe("createDaemonClient", () => {
+	test("postResult sends SIGNET_API_KEY as bearer auth", async () => {
+		process.env.SIGNET_API_KEY = "sig_sk_opencode_secret";
+		let authorization = "";
+		globalThis.fetch = Object.assign(
+			async (_input: RequestInfo | URL, init?: RequestInit) => {
+				authorization = new Headers(init?.headers).get("authorization") ?? "";
+				return Response.json({ ok: true });
+			},
+			{ preconnect: originalFetch.preconnect },
+		);
+
+		const client = createDaemonClient("http://daemon.test");
+		await client.postResult("/api/hooks/session-start", {});
+		expect(authorization).toBe("Bearer sig_sk_opencode_secret");
+	});
+
 	test("postResult classifies timeout failures separately from offline", async () => {
 		globalThis.fetch = Object.assign(
 			async () => {

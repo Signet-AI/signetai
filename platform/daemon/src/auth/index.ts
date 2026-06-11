@@ -11,6 +11,8 @@ export type {
 export { AUTH_MODES, TOKEN_ROLES, PERMISSIONS } from "./types";
 
 export { generateSecret, loadOrCreateSecret, createToken, verifyToken } from "./tokens";
+export { createApiKey, extractApiKeyPrefix, isSignetApiKey, listApiKeys, revokeApiKey, verifyApiKey } from "./api-keys";
+export type { ApiKeyCreateInput, ApiKeyRecord, CreatedApiKey } from "./api-keys";
 
 export { checkPermission, checkScope, PERMISSION_MATRIX } from "./policy";
 

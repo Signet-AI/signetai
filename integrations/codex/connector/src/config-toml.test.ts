@@ -72,6 +72,8 @@ let previousSessionStartTimeout: string | undefined;
 let previousFetchTimeout: string | undefined;
 let previousPromptSubmitTimeout: string | undefined;
 let previousDaemonUrl: string | undefined;
+let previousApiKey: string | undefined;
+let previousToken: string | undefined;
 let previousForceCompatHooks: string | undefined;
 
 function restoreEnv(name: string, value: string | undefined): void {
@@ -87,11 +89,15 @@ beforeEach(() => {
 	previousFetchTimeout = process.env.SIGNET_FETCH_TIMEOUT;
 	previousPromptSubmitTimeout = process.env.SIGNET_PROMPT_SUBMIT_TIMEOUT;
 	previousDaemonUrl = process.env.SIGNET_DAEMON_URL;
+	previousApiKey = process.env.SIGNET_API_KEY;
+	previousToken = process.env.SIGNET_TOKEN;
 	previousForceCompatHooks = process.env.SIGNET_CODEX_FORCE_COMPAT_HOOKS;
 	Reflect.deleteProperty(process.env, "SIGNET_SESSION_START_TIMEOUT");
 	Reflect.deleteProperty(process.env, "SIGNET_FETCH_TIMEOUT");
 	Reflect.deleteProperty(process.env, "SIGNET_PROMPT_SUBMIT_TIMEOUT");
 	Reflect.deleteProperty(process.env, "SIGNET_DAEMON_URL");
+	Reflect.deleteProperty(process.env, "SIGNET_API_KEY");
+	Reflect.deleteProperty(process.env, "SIGNET_TOKEN");
 	Reflect.deleteProperty(process.env, "SIGNET_CODEX_FORCE_COMPAT_HOOKS");
 	tempHome = join(tmpdir(), `signet-codex-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 	codexDir = join(tempHome, ".codex");
@@ -105,6 +111,8 @@ afterEach(() => {
 	restoreEnv("SIGNET_FETCH_TIMEOUT", previousFetchTimeout);
 	restoreEnv("SIGNET_PROMPT_SUBMIT_TIMEOUT", previousPromptSubmitTimeout);
 	restoreEnv("SIGNET_DAEMON_URL", previousDaemonUrl);
+	restoreEnv("SIGNET_API_KEY", previousApiKey);
+	restoreEnv("SIGNET_TOKEN", previousToken);
 	restoreEnv("SIGNET_CODEX_FORCE_COMPAT_HOOKS", previousForceCompatHooks);
 	rmSync(tempHome, { recursive: true, force: true });
 });
@@ -300,6 +308,24 @@ describe("CodexConnector.install — config.toml MCP registration", () => {
 		expect(content).toContain("tool_timeout_sec = 30");
 		expect(content).not.toContain("disabled_tools");
 		expect(content).not.toContain("command = 'signet-mcp'");
+	});
+
+	test("removes stale remote MCP auth header tables on reinstall without an API key", async () => {
+		process.env.SIGNET_DAEMON_URL = "http://192.168.0.60:3850";
+		process.env.SIGNET_API_KEY = "sig_sk_codex_old_secret";
+
+		await connector().install(tempHome);
+		let content = readFileSync(configPath, "utf-8");
+		expect(content).toContain("[mcp_servers.signet.http_headers]");
+		expect(content).toContain("Authorization = 'Bearer sig_sk_codex_old_secret'");
+
+		delete process.env.SIGNET_API_KEY;
+		await connector().install(tempHome);
+
+		content = readFileSync(configPath, "utf-8");
+		expect(content).toContain("[mcp_servers.signet]");
+		expect(content).not.toContain("[mcp_servers.signet.http_headers]");
+		expect(content).not.toContain("sig_sk_codex_old_secret");
 	});
 
 	test("still writes Codex lifecycle hooks when remote HTTP MCP is configured", async () => {
@@ -565,6 +591,18 @@ describe("buildMcpBlock — TOML quoting", () => {
 
 		expect(block).toContain("url = 'https://signet.example.com:3850/mcp'");
 		expect(block).not.toContain("disabled_tools");
+	});
+
+	test("persists HTTP authorization header for remote MCP", () => {
+		const block = buildMcpBlock({
+			url: "https://signet.example.com:3850/mcp",
+			startupTimeoutSec: 10,
+			toolTimeoutSec: 30,
+			httpHeaders: { Authorization: "Bearer sig_sk_codex_test_secret" },
+		});
+
+		expect(block).toContain("[mcp_servers.signet.http_headers]");
+		expect(block).toContain("Authorization = 'Bearer sig_sk_codex_test_secret'");
 	});
 
 	test("Windows paths with backslashes are quoted correctly", () => {

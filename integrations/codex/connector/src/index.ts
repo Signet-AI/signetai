@@ -13,7 +13,12 @@ import {
 
 export type SignetMcpConfig =
 	| { readonly command: string; readonly args: readonly string[] }
-	| { readonly url: string; readonly startupTimeoutSec: number; readonly toolTimeoutSec: number };
+	| {
+			readonly url: string;
+			readonly startupTimeoutSec: number;
+			readonly toolTimeoutSec: number;
+			readonly httpHeaders?: Readonly<Record<string, string>>;
+	  };
 
 const CODEX_PLUGIN_MARKETPLACE_NAME = "signet-local";
 const CODEX_PLUGIN_NAME = "signet";
@@ -56,10 +61,12 @@ function resolveSignetArgs(): string[] {
 function resolveSignetMcp(): SignetMcpConfig {
 	const remoteDaemonUrl = resolveRemoteDaemonUrl();
 	if (remoteDaemonUrl) {
+		const apiKey = readAuthTokenEnv();
 		return {
 			url: `${remoteDaemonUrl}/mcp`,
 			startupTimeoutSec: 10,
 			toolTimeoutSec: 30,
+			...(apiKey ? { httpHeaders: { Authorization: `Bearer ${apiKey}` } } : {}),
 		};
 	}
 	if (process.platform !== "win32") return { command: "signet-mcp", args: [] };
@@ -98,6 +105,7 @@ function codexPluginBundleFiles(
 					url: mcp.url,
 					startup_timeout_sec: mcp.startupTimeoutSec,
 					tool_timeout_sec: mcp.toolTimeoutSec,
+					...(mcp.httpHeaders ? { http_headers: mcp.httpHeaders } : {}),
 				}
 			: {
 					command: mcp.command,
@@ -317,12 +325,25 @@ function cmdEnvQuote(value: string): string {
 	return value.replace(/[\^"&|<>]/g, "^$&");
 }
 
+function readAuthTokenEnv(): string | undefined {
+	return readEnv("SIGNET_API_KEY") ?? readEnv("SIGNET_TOKEN");
+}
+
 function withRemoteDaemonEnv(command: string, remoteDaemonUrl: string | null): string {
-	if (!remoteDaemonUrl) return command;
+	const apiKey = readAuthTokenEnv();
+	if (!remoteDaemonUrl && !apiKey) return command;
 	if (process.platform === "win32") {
-		return `set "SIGNET_DAEMON_URL=${cmdEnvQuote(remoteDaemonUrl)}" && ${command}`;
+		const vars = [
+			...(remoteDaemonUrl ? [`set "SIGNET_DAEMON_URL=${cmdEnvQuote(remoteDaemonUrl)}"`] : []),
+			...(apiKey ? [`set "SIGNET_API_KEY=${cmdEnvQuote(apiKey)}"`] : []),
+		];
+		return `${vars.join(" && ")} && ${command}`;
 	}
-	return `SIGNET_DAEMON_URL=${shellQuote(remoteDaemonUrl)} ${command}`;
+	return [
+		...(remoteDaemonUrl ? [`SIGNET_DAEMON_URL=${shellQuote(remoteDaemonUrl)}`] : []),
+		...(apiKey ? [`SIGNET_API_KEY=${shellQuote(apiKey)}`] : []),
+		command,
+	].join(" ");
 }
 
 function buildHooksFile(signetArgs: string[], remoteDaemonUrl: string | null = resolveRemoteDaemonUrl()): HooksFile {
@@ -378,8 +399,10 @@ function escapeRegExp(value: string): string {
 
 function isSignetHookCommand(cmd: string): boolean {
 	let normalized = cmd.trim().replace(/\s+/g, " ");
-	normalized = normalized.replace(/^SIGNET_DAEMON_URL=(?:'[^']*'|"[^"]*"|\S+)\s+/i, "");
-	normalized = normalized.replace(/^set "SIGNET_DAEMON_URL=[^"]*" && /i, "");
+	for (let i = 0; i < 2; i++) {
+		normalized = normalized.replace(/^(?:SIGNET_DAEMON_URL|SIGNET_API_KEY)=(?:'[^']*'|"[^"]*"|\S+)\s+/i, "");
+		normalized = normalized.replace(/^set "(?:SIGNET_DAEMON_URL|SIGNET_API_KEY)=[^"]*" && /i, "");
+	}
 	return SIGNET_HOOK_SUBCOMMANDS.some((subcommand) => {
 		const hook = `hook\\s+${escapeRegExp(subcommand)}\\b`;
 		const bare = new RegExp(`^(?:signet|signet\\.(?:cmd|ps1|bat|exe))\\s+${hook}`, "i");
@@ -631,6 +654,13 @@ export function buildMcpBlock(mcp: SignetMcpConfig): string {
 			`startup_timeout_sec = ${mcp.startupTimeoutSec}`,
 			`tool_timeout_sec = ${mcp.toolTimeoutSec}`,
 			"",
+			...(mcp.httpHeaders
+				? [
+						"[mcp_servers.signet.http_headers]",
+						...Object.entries(mcp.httpHeaders).map(([key, value]) => `${key} = ${tomlQuote(value)}`),
+						"",
+					]
+				: []),
 		].join("\n");
 	}
 	let block = `# Signet MCP server\n[mcp_servers.signet]\ncommand = ${tomlQuote(mcp.command)}\n`;
@@ -682,10 +712,16 @@ function unpatchConfigToml(path: string): boolean {
 			inSection = true;
 			continue;
 		}
-		// Skip all lines belonging to the signet section until next header
+		// Skip all lines belonging to the signet section and descendant child tables
 		if (inSection) {
-			if (line.match(/^\[/)) inSection = false;
-			else continue;
+			if (line.match(/^\s*\[/)) {
+				if (line.trim().startsWith("[mcp_servers.signet.")) {
+					continue;
+				}
+				inSection = false;
+			} else {
+				continue;
+			}
 		}
 		filtered.push(line);
 	}

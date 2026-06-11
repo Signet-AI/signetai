@@ -22,13 +22,25 @@ export type DaemonFetchResult<T> =
 // Headers
 // ============================================================================
 
+function readRuntimeEnv(name: string): string | undefined {
+	const value = process.env[name];
+	return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function readAuthToken(): string | undefined {
+	return readRuntimeEnv("SIGNET_API_KEY") ?? readRuntimeEnv("SIGNET_TOKEN");
+}
+
 function pluginHeaders(): Record<string, string> {
-	return {
+	const headers: Record<string, string> = {
 		"Content-Type": "application/json",
 		"x-signet-runtime-path": RUNTIME_PATH,
 		"x-signet-actor": "opencode-plugin",
 		"x-signet-actor-type": "harness",
 	};
+	const token = readAuthToken();
+	if (token) headers.Authorization = `Bearer ${token}`;
+	return headers;
 }
 
 // ============================================================================
@@ -128,6 +140,7 @@ async function daemonFetch<T>(
 export async function isDaemonRunning(daemonUrl: string): Promise<boolean> {
 	try {
 		const res = await fetch(`${daemonUrl}/health`, {
+			headers: pluginHeaders(),
 			signal: AbortSignal.timeout(1000),
 		});
 		return res.ok;

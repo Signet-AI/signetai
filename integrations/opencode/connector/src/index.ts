@@ -36,6 +36,32 @@ function isJsonObject(value: unknown): value is JsonObject {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function readTrimmedEnv(name: string): string | undefined {
+	const value = process.env[name];
+	return typeof value === "string" && value.trim().length > 0 ? value.trim().replace(/[\r\n]+/g, "") : undefined;
+}
+
+function signetRuntimeEnv(): Record<string, string> {
+	const env: Record<string, string> = {};
+	const daemonUrl = readTrimmedEnv("SIGNET_DAEMON_URL");
+	const apiKey = readTrimmedEnv("SIGNET_API_KEY") ?? readTrimmedEnv("SIGNET_TOKEN");
+	const agentId = readTrimmedEnv("SIGNET_AGENT_ID");
+	if (daemonUrl) env.SIGNET_DAEMON_URL = daemonUrl;
+	if (apiKey) env.SIGNET_API_KEY = apiKey;
+	if (agentId) env.SIGNET_AGENT_ID = agentId;
+	return env;
+}
+
+function buildPluginBundle(): string {
+	const env = signetRuntimeEnv();
+	const entries = Object.entries(env);
+	if (entries.length === 0) return PLUGIN_BUNDLE;
+	const bootstrap = entries
+		.map(([key, value]) => `process.env[${JSON.stringify(key)}] = ${JSON.stringify(value)};`)
+		.join("\n");
+	return `${bootstrap}\n${PLUGIN_BUNDLE}`;
+}
+
 function toStringArray(value: unknown): string[] {
 	if (!Array.isArray(value)) return [];
 
@@ -264,7 +290,7 @@ export class OpenCodeConnector extends BaseConnector {
 		// Write bundled plugin and register it in config so runtime loading
 		// does not depend on undocumented auto-discovery behavior.
 		const pluginFilePath = this.getPluginFilePath(opencodePath);
-		writeFileSync(pluginFilePath, PLUGIN_BUNDLE);
+		writeFileSync(pluginFilePath, buildPluginBundle());
 		filesWritten.push(pluginFilePath);
 		this.ensureConfigFile(opencodePath);
 		this.registerPlugin(opencodePath);
@@ -491,11 +517,13 @@ export class OpenCodeConnector extends BaseConnector {
 					);
 				}
 			}
+			const environment = signetRuntimeEnv();
 			config.mcp = {
 				...existingMcp,
 				signet: {
 					type: "local",
 					command: mcpCommand,
+					...(Object.keys(environment).length > 0 ? { environment } : {}),
 					enabled: true,
 				},
 			};

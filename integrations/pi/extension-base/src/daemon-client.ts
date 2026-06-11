@@ -1,3 +1,5 @@
+import { readTrimmedRuntimeEnv } from "./helpers.js";
+
 export type DaemonFetchFailure = "offline" | "timeout" | "http" | "invalid-json" | "body-read";
 
 export type DaemonFetchResult<T> =
@@ -15,13 +17,20 @@ export interface DaemonClientConfig {
 	readonly defaultTimeout: number;
 }
 
+function readAuthToken(): string | undefined {
+	return readTrimmedRuntimeEnv("SIGNET_API_KEY") ?? readTrimmedRuntimeEnv("SIGNET_TOKEN");
+}
+
 function buildHeaders(config: DaemonClientConfig): Record<string, string> {
-	return {
+	const headers: Record<string, string> = {
 		"Content-Type": "application/json",
 		"x-signet-runtime-path": config.runtimePath,
 		"x-signet-actor": config.actorName,
 		"x-signet-actor-type": "harness",
 	};
+	const token = readAuthToken();
+	if (token) headers.Authorization = `Bearer ${token}`;
+	return headers;
 }
 
 function errorName(err: unknown): string {

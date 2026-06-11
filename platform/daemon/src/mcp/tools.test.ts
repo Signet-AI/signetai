@@ -142,12 +142,17 @@ function getToolPropertySchema(
 	return schema;
 }
 
-function mockFetch(status: number, body: unknown, capture?: { url?: string; method?: string; body?: string }): void {
+function mockFetch(
+	status: number,
+	body: unknown,
+	capture?: { url?: string; method?: string; body?: string; headers?: Headers },
+): void {
 	globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
 		if (capture) {
 			capture.url = typeof input === "string" ? input : input.toString();
 			capture.method = init?.method ?? "GET";
 			capture.body = init?.body as string;
+			capture.headers = new Headers(init?.headers);
 		}
 		return new Response(JSON.stringify(body), {
 			status,
@@ -204,6 +209,22 @@ describe("createMcpServer", () => {
 	it("creates server with correct info", () => {
 		expect(server).toBeDefined();
 		expect(server.server).toBeDefined();
+	});
+
+	it("forwards per-request authorization to daemon API calls", async () => {
+		await server.close();
+		server = await createMcpServer({
+			daemonUrl: "http://localhost:3850",
+			version: "0.0.1-test",
+			enableMarketplaceProxyTools: false,
+			authorizationHeader: "Bearer sig_sk_mcp_test_secret",
+		});
+		const capture: { headers?: Headers } = {};
+		mockFetch(200, { memories: [] }, capture);
+
+		await callTool(server, "memory_search", { query: "remote" });
+
+		expect(capture.headers?.get("Authorization")).toBe("Bearer sig_sk_mcp_test_secret");
 	});
 
 	it("registers all MCP tools", () => {

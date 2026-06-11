@@ -58,6 +58,8 @@ import { Command } from "commander";
 import ora from "ora";
 import { registerBrowseCommand } from "./browse.js";
 import { registerAgentCommands } from "./commands/agent.js";
+import { registerConnectorCommands } from "./commands/connector.js";
+import { registerApiKeyCommands } from "./commands/api-key.js";
 import { registerAppCommands } from "./commands/app.js";
 import { registerDaemonCommands } from "./commands/daemon.js";
 import { registerDesktopCommands } from "./commands/desktop.js";
@@ -1010,6 +1012,11 @@ registerDaemonCommands(program, {
 	showStatus: (options) => showStatus(options, healthDeps),
 });
 
+registerConnectorCommands(program, {
+	agentsDir: AGENTS_DIR,
+	configureHarnessHooks,
+});
+
 registerGraphiqCommands(program, {
 	agentsDir: AGENTS_DIR,
 });
@@ -1028,6 +1035,11 @@ const SKILLS_DIR = join(AGENTS_DIR, "skills");
 registerSecretCommands(program, {
 	ensureDaemonForSecrets,
 	secretApiCall,
+});
+
+registerApiKeyCommands(program, {
+	ensureDaemonRunning: ensureDaemonForSecrets,
+	apiCall: secretApiCall,
 });
 
 registerSkillCommands(program, {

@@ -284,14 +284,20 @@ export function resolveSignetAgentId(): string {
 	return readManagedTrimmedEnv("SIGNET_AGENT_ID") ?? MANAGED_AGENT_ID_DEFAULT;
 }
 
+export function resolveSignetApiKey(): string | undefined {
+	return readManagedTrimmedEnv("SIGNET_API_KEY") ?? readManagedTrimmedEnv("SIGNET_TOKEN");
+}
+
 export function buildManagedExtensionEnvBootstrap(env: {
 	readonly signetPath: string;
 	readonly daemonUrl: string;
 	readonly agentId: string;
+	readonly apiKey?: string;
 }): string {
 	const workspace = JSON.stringify(env.signetPath);
 	const daemonUrl = JSON.stringify(env.daemonUrl);
 	const agentId = JSON.stringify(env.agentId);
+	const apiKey = env.apiKey ? JSON.stringify(env.apiKey) : null;
 
 	return `const __signetRuntimeProcess = Reflect.get(globalThis, "process");
 if (__signetRuntimeProcess && typeof __signetRuntimeProcess === "object") {
@@ -310,6 +316,9 @@ if (__signetRuntimeProcess && typeof __signetRuntimeProcess === "object") {
 		}
 		if (!__signetReadEnv("SIGNET_AGENT_ID")) {
 			Reflect.set(__signetRuntimeEnv, "SIGNET_AGENT_ID", ${agentId});
+		}
+		if (${apiKey} && !__signetReadEnv("SIGNET_API_KEY") && !__signetReadEnv("SIGNET_TOKEN")) {
+			Reflect.set(__signetRuntimeEnv, "SIGNET_API_KEY", ${apiKey});
 		}
 	}
 }`;

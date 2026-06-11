@@ -880,6 +880,36 @@ Subcommands:
 
 ---
 
+`signet api-key`
+---
+
+Create named API keys for remote connectors and other daemon clients.
+
+```bash
+signet api-key create --name "work laptop pi" --connector pi
+signet api-key list
+signet api-key revoke <id-or-prefix>
+```
+
+The raw `sig_sk_...` key is printed once. Store it on the remote machine as
+`SIGNET_API_KEY`.
+
+---
+
+`signet connector`
+---
+
+Install portable harness connectors. Use `signet connect <harness>` as a short
+alias for `signet connector install <harness>`.
+
+```bash
+signet connector install pi
+signet connector install pi --url https://signet-home.tailnet:3850 --api-key sig_sk_...
+signet connect codex --url https://signet-home.tailnet:3850 --api-key sig_sk_...
+```
+
+---
+
 `signet hook`
 ---
 

@@ -127,7 +127,7 @@ class SignetClient:
             "x-signet-actor": "hermes-memory-plugin",
         }
         # Include auth token only for loopback or explicitly trusted origins.
-        token = _sanitize(os.environ.get("SIGNET_TOKEN", ""))
+        token = _sanitize(os.environ.get("SIGNET_API_KEY", "")) or _sanitize(os.environ.get("SIGNET_TOKEN", ""))
         if token and _should_send_auth_token(self._base_url):
             h["Authorization"] = f"Bearer {token}"
         if extra:

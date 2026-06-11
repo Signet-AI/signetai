@@ -8,7 +8,8 @@ import { appendFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Hono } from "hono";
 import { cors } from "hono/cors";
-import { createAuthMiddleware } from "./auth";
+import { createAuthMiddleware, verifyApiKey } from "./auth";
+import { getDbAccessor } from "./db-accessor";
 import { logger } from "./logger";
 import {
 	AGENTS_DIR,
@@ -53,7 +54,7 @@ export function registerGlobalMiddleware(app: Hono, deps: MiddlewareDeps): void 
 			c.status(503);
 			return c.json({ error: "server initializing" });
 		}
-		const mw = createAuthMiddleware(authConfig, authSecret);
+		const mw = createAuthMiddleware(authConfig, authSecret, (token) => verifyApiKey(getDbAccessor(), token));
 		return mw(c, next);
 	});
 

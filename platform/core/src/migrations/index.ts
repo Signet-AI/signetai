@@ -83,6 +83,7 @@ import { up as aggregateMemoryLinks } from "./074-aggregate-memory-links";
 import { up as memoryArtifactSourceProvenance } from "./075-memory-artifact-source-provenance";
 import { up as temporalEdges } from "./076-temporal-edges";
 import { up as entityAliases } from "./077-entity-aliases";
+import { up as apiKeys } from "./078-api-keys";
 
 // -- Public interface consumed by Database.init() --
 
@@ -733,6 +734,14 @@ export const MIGRATIONS: readonly Migration[] = [
 		up: entityAliases,
 		artifacts: {
 			tables: ["entity_aliases"],
+		},
+	},
+	{
+		version: 78,
+		name: "api-keys",
+		up: apiKeys,
+		artifacts: {
+			tables: ["api_keys"],
 		},
 	},
 ];
