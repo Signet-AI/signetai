@@ -10,6 +10,9 @@ section: "Reference"
 Harnesses are the AI platforms and tools that Signet integrates with
 through connectors, plugins, and lifecycle hooks.
 
+For the end-to-end process of connecting a harness on one machine to a Signet
+daemon on another machine, see [[remote-connectors|Remote Harness Connectors]].
+
 > **Path note:** `$SIGNET_WORKSPACE` means your active Signet workspace path.
 > Default is `~/.agents`, configurable via `signet workspace set <path>`.
 

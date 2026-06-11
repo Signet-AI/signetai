@@ -883,10 +883,11 @@ Subcommands:
 `signet api-key`
 ---
 
-Create named API keys for remote connectors and other daemon clients.
+Create named API keys for remote connectors and other daemon clients. See
+[[remote-connectors|Remote Harness Connectors]] for the full remote setup flow.
 
 ```bash
-signet api-key create --name "work laptop pi" --connector pi
+signet api-key create --name "work laptop pi" --connector pi --agent-id pi-work-laptop
 signet api-key list
 signet api-key revoke <id-or-prefix>
 ```
@@ -900,11 +901,12 @@ The raw `sig_sk_...` key is printed once. Store it on the remote machine as
 ---
 
 Install portable harness connectors. Use `signet connect <harness>` as a short
-alias for `signet connector install <harness>`.
+alias for `signet connector install <harness>`. For a start-to-finish remote
+machine setup, see [[remote-connectors|Remote Harness Connectors]].
 
 ```bash
 signet connector install pi
-signet connector install pi --url https://signet-home.tailnet:3850 --api-key sig_sk_...
+signet connector install pi --url https://signet-home.tailnet:3850 --api-key sig_sk_... --agent-id pi-work-laptop
 signet connect codex --url https://signet-home.tailnet:3850 --api-key sig_sk_...
 ```
 
@@ -912,8 +914,8 @@ Connector installers are also published as individual npm packages for machines
 where you only want to configure one harness:
 
 ```bash
-npx -y @signetai/connector-pi install --url https://signet-home.tailnet:3850 --api-key sig_sk_...
-npx -y @signetai/connector-opencode install --url https://signet-home.tailnet:3850 --api-key sig_sk_...
+npx -y @signetai/connector-pi install --url https://signet-home.tailnet:3850 --api-key sig_sk_... --agent-id pi-work-laptop
+npx -y @signetai/connector-opencode install --url https://signet-home.tailnet:3850 --api-key sig_sk_... --agent-id opencode-work-laptop
 npx -y @signetai/connector-codex install --url https://signet-home.tailnet:3850 --api-key sig_sk_...
 ```
 

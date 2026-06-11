@@ -14,6 +14,10 @@ content into the memory store as searchable [[documents]]. Each connector
 follows a consistent register-sync-health lifecycle managed through
 the [[daemon]]'s [[api|HTTP API]].
 
+This page covers document-source connectors. If you want to install a harness
+adapter on another machine and point it at a remote Signet daemon, see
+[[remote-connectors|Remote Harness Connectors]].
+
 The connector framework lives in `platform/daemon/src/connectors/`.
 Type definitions are in `platform/core/src/connector-types.ts`.
 

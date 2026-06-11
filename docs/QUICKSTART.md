@@ -585,7 +585,8 @@ Next Steps
 - [Configuration Reference](./CONFIGURATION.md) — all agent.yaml options
 - [Memory System](./MEMORY.md) — how remember/recall works
 - [Pipeline](./PIPELINE.md) — how Pipeline V2 extracts and processes memories
-- [Connectors](./CONNECTORS.md) — platform connector details
+- [Connectors](./CONNECTORS.md) — document-source connector details
+- [Remote Harness Connectors](./REMOTE-CONNECTORS.md) — connect harnesses on other machines to one Signet daemon
 - [Hooks](./HOOKS.md) — lifecycle hooks for harness integration
 - [Analytics](./ANALYTICS.md) — session and memory analytics
 - [Diagnostics](./DIAGNOSTICS.md) — health checks and pipeline status

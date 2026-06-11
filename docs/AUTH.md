@@ -36,9 +36,12 @@ a token (full access), but if a token is included it will be validated.
 Remote requests always require a valid token. This lets local tooling
 work without credentials while still securing remote access.
 
-Note: localhost detection in hybrid mode works by checking the `Host`
-request header, not the TCP peer address. This is spoofable in theory
-but acceptable given the daemon typically binds to 127.0.0.1.
+Note: localhost detection in hybrid mode uses the TCP peer address. If the
+daemon cannot determine a localhost peer, it treats the request as remote and
+requires a valid bearer credential. Do not rely on `hybrid` behind a same-host
+reverse proxy for untrusted traffic: proxied public requests can arrive from
+`127.0.0.1` and be treated as local. Use `team` mode or enforce auth at the
+proxy for public deployments.
 
 
 API Key Management
@@ -46,10 +49,11 @@ API Key Management
 
 API keys are the preferred credential for remote connectors. They are named,
 revocable, and stored hashed at rest. The raw key is printed once when it is
-created.
+created. For a complete cross-machine connector walkthrough, see
+[[remote-connectors|Remote Harness Connectors]].
 
 ```bash
-signet api-key create --name "work laptop pi" --connector pi
+signet api-key create --name "work laptop pi" --connector pi --agent-id pi-work-laptop
 signet api-key list
 signet api-key revoke <id-or-prefix>
 ```
@@ -65,15 +69,17 @@ Use `SIGNET_API_KEY` on remote machines:
 ```bash
 SIGNET_DAEMON_URL=https://signet-home.tailnet:3850 \
 SIGNET_API_KEY=sig_sk_... \
-signet connector install pi
+signet connector install pi --agent-id pi-work-laptop
 ```
 
 `SIGNET_TOKEN` remains a backwards-compatible alias for older integrations.
 
 API keys can also carry an optional explicit `permissions` list. When present,
 that list narrows the key beyond its role; for example an `admin` key with only
-`["recall"]` cannot perform admin mutations. Omit `permissions` for the full
-role-level permission set.
+`["recall"]` cannot perform admin mutations. Connector keys created with
+`--connector` default to the narrower connector permission set: `recall`,
+`remember`, and `documents`. For non-connector keys, omit `permissions` for the
+full role-level permission set.
 
 
 Token Management

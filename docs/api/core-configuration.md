@@ -65,6 +65,126 @@ requests/min.
 Returns `400` if `role` is invalid or auth secret is unavailable (local
 mode). Returns `400` if the request body is missing or malformed.
 
+### GET /api/auth/api-keys
+
+List named daemon API keys. Requires `admin` permission. The response never
+includes raw `sig_sk_...` key values; raw keys are only returned once at
+creation time.
+
+**Response**
+
+```json
+{
+  "apiKeys": [
+    {
+      "id": "key_abc123",
+      "prefix": "1b363ad385e1",
+      "name": "work laptop pi",
+      "role": "agent",
+      "scope": { "agent": "pi-work-laptop" },
+      "permissions": ["recall", "remember", "documents"],
+      "connector": "pi",
+      "harness": "pi",
+      "agentId": "pi-work-laptop",
+      "allowedProjects": [],
+      "createdAt": "2026-06-11T04:02:17.922Z",
+      "lastUsedAt": null,
+      "revokedAt": null,
+      "expiresAt": null
+    }
+  ]
+}
+```
+
+### POST /api/auth/api-keys
+
+Create a named API key for remote connectors or other daemon clients. Requires
+`admin` permission. The raw `key` is returned once in this response and is
+stored hashed at rest.
+
+**Request body**
+
+```json
+{
+  "name": "work laptop pi",
+  "connector": "pi",
+  "role": "agent",
+  "agentId": "pi-work-laptop",
+  "scope": { "agent": "pi-work-laptop" },
+  "allowedProjects": [],
+  "expiresAt": null
+}
+```
+
+`name` is required. `role` defaults to `agent` and must be one of `admin`,
+`operator`, `agent`, or `readonly` when provided. `connector`, `harness`,
+`agentId`, `allowedProjects`, `scope`, `permissions`, and `expiresAt` are
+optional. `agentId` is connector metadata; API callers should also set
+`scope: { "agent": "..." }` when scope-guarded API surfaces should be limited
+to that agent. For connector keys, `scope.agent` should usually match
+`agentId`. In Signet 0.140.1, connector lifecycle hook traffic authenticates
+the key but not every hook path enforces agent scope as a hard isolation
+boundary. Connector keys default to the connector permission set: `recall`,
+`remember`, and `documents`.
+
+**Response**
+
+```json
+{
+  "apiKey": {
+    "id": "key_abc123",
+    "prefix": "1b363ad385e1",
+    "name": "work laptop pi",
+    "role": "agent",
+    "scope": { "agent": "pi-work-laptop" },
+    "permissions": ["recall", "remember", "documents"],
+    "connector": "pi",
+    "harness": "pi",
+    "agentId": "pi-work-laptop",
+    "allowedProjects": [],
+    "createdAt": "2026-06-11T04:02:17.922Z",
+    "lastUsedAt": null,
+    "revokedAt": null,
+    "expiresAt": null,
+    "key": "sig_sk_..."
+  }
+}
+```
+
+Returns `400` if the request body is missing or malformed, `name` is empty,
+`role` is invalid, or `expiresAt` is not a valid ISO timestamp.
+
+### DELETE /api/auth/api-keys/:id
+
+Revoke an API key by id or prefix. Requires `admin` permission. Revocation is
+idempotent for an existing key: already-revoked keys are returned with their
+original `revokedAt` timestamp.
+
+**Response**
+
+```json
+{
+  "apiKey": {
+    "id": "key_abc123",
+    "prefix": "1b363ad385e1",
+    "name": "work laptop pi",
+    "role": "agent",
+    "scope": { "agent": "pi-work-laptop" },
+    "permissions": ["recall", "remember", "documents"],
+    "connector": "pi",
+    "harness": "pi",
+    "agentId": "pi-work-laptop",
+    "allowedProjects": [],
+    "createdAt": "2026-06-11T04:02:17.922Z",
+    "lastUsedAt": null,
+    "revokedAt": "2026-06-11T05:00:00.000Z",
+    "expiresAt": null
+  }
+}
+```
+
+Returns `404` if the id or prefix does not match an API key.
+
 
 ## Config
 
