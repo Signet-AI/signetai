@@ -29,7 +29,7 @@ The connector package exposes programmatic cleanup that removes hook handlers an
 
 | Field | Value |
 |-------|-------|
-| Package | `@signet/connector-openclaw` |
+| Package | `@signetai/connector-openclaw` |
 | License | Apache-2.0 |
 | Extra dependency | `json5` (for JSONC config parsing) |
 

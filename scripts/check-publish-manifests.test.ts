@@ -164,18 +164,18 @@ describe("check-publish-manifests", () => {
 			workflow.indexOf("bun scripts/check-publish-manifests.ts"),
 		);
 		expect(workflow.indexOf("bun scripts/check-publish-manifests.ts")).toBeLessThan(
-			workflow.indexOf("publish_npm_package platform/core\n"),
+			workflow.indexOf('publish_npm_package "${STAGED_NPM_ROOT}/core"'),
 		);
-		expect(workflow.indexOf("publish_npm_package platform/core\n")).toBeLessThan(
-			workflow.indexOf("publish_npm_package libs/connector-base\n"),
+		expect(workflow.indexOf('publish_npm_package "${STAGED_NPM_ROOT}/core"')).toBeLessThan(
+			workflow.indexOf('publish_npm_package "${STAGED_NPM_ROOT}/connector-base"'),
 		);
-		expect(workflow.indexOf("publish_npm_package libs/connector-base\n")).toBeLessThan(
-			workflow.indexOf("publish_npm_package integrations/codex/connector\n"),
+		expect(workflow.indexOf('publish_npm_package "${STAGED_NPM_ROOT}/connector-base"')).toBeLessThan(
+			workflow.indexOf('publish_npm_package "${STAGED_NPM_ROOT}/connector-codex"'),
 		);
-		expect(workflow.indexOf("publish_npm_package integrations/codex/connector\n")).toBeLessThan(
-			workflow.indexOf("publish_npm_package integrations/codex/plugin\n"),
+		expect(workflow.indexOf('publish_npm_package "${STAGED_NPM_ROOT}/connector-codex"')).toBeLessThan(
+			workflow.indexOf('publish_npm_package "${STAGED_NPM_ROOT}/codex-plugin"'),
 		);
-		expect(workflow.indexOf("publish_npm_package integrations/codex/plugin\n")).toBeLessThan(
+		expect(workflow.indexOf('publish_npm_package "${STAGED_NPM_ROOT}/codex-plugin"')).toBeLessThan(
 			workflow.indexOf("publish_npm_package dist/signetai\n"),
 		);
 		expect(workflow).toContain('stage_native_package "linux-x64" "signet-linux-x64" "signet"');
@@ -199,13 +199,15 @@ describe("check-publish-manifests", () => {
 		expect(workflow).toContain("NPM_CONFIG_USERCONFIG: ${{ runner.temp }}/.npmrc");
 		expect(workflow).toContain("npm publish --tag next --access public");
 		expect(workflow).toContain('gh release edit "v${NEW_VERSION}" --draft=false');
-		expect(workflow).toContain("publish_npm_package integrations/claude-code/connector");
-		expect(workflow).toContain("publish_npm_package integrations/gemini/connector");
-		expect(workflow).toContain("publish_npm_package integrations/hermes-agent/connector");
-		expect(workflow).toContain("publish_npm_package integrations/oh-my-pi/connector");
-		expect(workflow).toContain("publish_npm_package integrations/openclaw/connector");
-		expect(workflow).toContain("publish_npm_package integrations/opencode/connector");
-		expect(workflow).toContain("publish_npm_package integrations/pi/connector");
+		expect(workflow).toContain('bun scripts/stage-npm-publish.ts "${RUNNER_TEMP}/signet-npm-publish"');
+		expect(workflow).toContain('STAGED_NPM_ROOT="${RUNNER_TEMP}/signet-npm-publish"');
+		expect(workflow).toContain('publish_npm_package "${STAGED_NPM_ROOT}/connector-claude-code"');
+		expect(workflow).toContain('publish_npm_package "${STAGED_NPM_ROOT}/connector-gemini"');
+		expect(workflow).toContain('publish_npm_package "${STAGED_NPM_ROOT}/connector-hermes-agent"');
+		expect(workflow).toContain('publish_npm_package "${STAGED_NPM_ROOT}/connector-oh-my-pi"');
+		expect(workflow).toContain('publish_npm_package "${STAGED_NPM_ROOT}/connector-openclaw"');
+		expect(workflow).toContain('publish_npm_package "${STAGED_NPM_ROOT}/connector-opencode"');
+		expect(workflow).toContain('publish_npm_package "${STAGED_NPM_ROOT}/connector-pi"');
 		expect(workflow.indexOf("publish_npm_package dist/signetai\n")).toBeLessThan(
 			workflow.indexOf('gh release edit "v${NEW_VERSION}" --draft=false'),
 		);
@@ -217,17 +219,17 @@ describe("check-publish-manifests", () => {
 		expect(promoteWorkflow).not.toContain('"signetai-darwin-x64"');
 		expect(promoteWorkflow).not.toContain('"signetai-darwin-arm64"');
 		expect(promoteWorkflow).not.toContain('"signetai-win32-x64"');
-		expect(promoteWorkflow).toContain('"@signet/core"');
-		expect(promoteWorkflow).toContain('"@signet/connector-base"');
-		expect(promoteWorkflow).toContain('"@signet/connector-claude-code"');
-		expect(promoteWorkflow).toContain('"@signet/connector-codex"');
-		expect(promoteWorkflow).toContain('"@signet/connector-gemini"');
-		expect(promoteWorkflow).toContain('"@signet/connector-hermes-agent"');
-		expect(promoteWorkflow).toContain('"@signet/connector-oh-my-pi"');
-		expect(promoteWorkflow).toContain('"@signet/connector-openclaw"');
-		expect(promoteWorkflow).toContain('"@signet/connector-opencode"');
-		expect(promoteWorkflow).toContain('"@signet/connector-pi"');
-		expect(promoteWorkflow).toContain('"@signet/codex-plugin"');
+		expect(promoteWorkflow).toContain('"@signetai/core"');
+		expect(promoteWorkflow).toContain('"@signetai/connector-base"');
+		expect(promoteWorkflow).toContain('"@signetai/connector-claude-code"');
+		expect(promoteWorkflow).toContain('"@signetai/connector-codex"');
+		expect(promoteWorkflow).toContain('"@signetai/connector-gemini"');
+		expect(promoteWorkflow).toContain('"@signetai/connector-hermes-agent"');
+		expect(promoteWorkflow).toContain('"@signetai/connector-oh-my-pi"');
+		expect(promoteWorkflow).toContain('"@signetai/connector-openclaw"');
+		expect(promoteWorkflow).toContain('"@signetai/connector-opencode"');
+		expect(promoteWorkflow).toContain('"@signetai/connector-pi"');
+		expect(promoteWorkflow).toContain('"@signetai/codex-plugin"');
 		expect(promoteWorkflow).toContain('"signetai"');
 		expect(promoteWorkflow).toContain('npm view "${package}@${VERSION}" version >/dev/null');
 		expect(promoteWorkflow).toContain('npm dist-tag add "${package}@${VERSION}" latest');

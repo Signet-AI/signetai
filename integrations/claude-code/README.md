@@ -26,7 +26,7 @@ The connector package exposes programmatic cleanup that removes hooks and MCP se
 
 | Field | Value |
 |-------|-------|
-| Package | `@signet/connector-claude-code` |
+| Package | `@signetai/connector-claude-code` |
 | License | Apache-2.0 |
 
 ## Architecture

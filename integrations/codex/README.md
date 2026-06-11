@@ -31,7 +31,7 @@ machine where you only want to install the Codex integration, use the standalone
 npm installer:
 
 ```bash
-npx -y @signet/codex-plugin install --url http://signet-home.tailnet:3850 --api-key sig_sk_...
+npx -y @signetai/codex-plugin install --url http://signet-home.tailnet:3850 --api-key sig_sk_...
 ```
 
 ## Uninstallation
@@ -44,8 +44,8 @@ daemon memories are preserved.
 
 | Field | Value |
 |-------|-------|
-| Package | `@signet/connector-codex` |
-| Native plugin installer | `@signet/codex-plugin` |
+| Package | `@signetai/connector-codex` |
+| Native plugin installer | `@signetai/codex-plugin` |
 | License | Apache-2.0 |
 
 ## Architecture

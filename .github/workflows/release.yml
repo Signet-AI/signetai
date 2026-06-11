@@ -345,6 +345,9 @@ jobs:
         env:
           SIGNET_EXPECT_NATIVE_OPTIONAL_DEPS: "1"
 
+      - name: Stage scoped npm packages
+        run: bun scripts/stage-npm-publish.ts "${RUNNER_TEMP}/signet-npm-publish"
+
       - name: Publish npm packages
         run: |
           test -n "$NODE_AUTH_TOKEN"
@@ -368,17 +371,18 @@ jobs:
             (cd "$package_dir" && npm publish --tag next --access public)
           }
 
-          publish_npm_package platform/core
-          publish_npm_package libs/connector-base
-          publish_npm_package integrations/claude-code/connector
-          publish_npm_package integrations/codex/connector
-          publish_npm_package integrations/gemini/connector
-          publish_npm_package integrations/hermes-agent/connector
-          publish_npm_package integrations/oh-my-pi/connector
-          publish_npm_package integrations/openclaw/connector
-          publish_npm_package integrations/opencode/connector
-          publish_npm_package integrations/pi/connector
-          publish_npm_package integrations/codex/plugin
+          STAGED_NPM_ROOT="${RUNNER_TEMP}/signet-npm-publish"
+          publish_npm_package "${STAGED_NPM_ROOT}/core"
+          publish_npm_package "${STAGED_NPM_ROOT}/connector-base"
+          publish_npm_package "${STAGED_NPM_ROOT}/connector-claude-code"
+          publish_npm_package "${STAGED_NPM_ROOT}/connector-codex"
+          publish_npm_package "${STAGED_NPM_ROOT}/connector-gemini"
+          publish_npm_package "${STAGED_NPM_ROOT}/connector-hermes-agent"
+          publish_npm_package "${STAGED_NPM_ROOT}/connector-oh-my-pi"
+          publish_npm_package "${STAGED_NPM_ROOT}/connector-openclaw"
+          publish_npm_package "${STAGED_NPM_ROOT}/connector-opencode"
+          publish_npm_package "${STAGED_NPM_ROOT}/connector-pi"
+          publish_npm_package "${STAGED_NPM_ROOT}/codex-plugin"
           publish_npm_package dist/signetai
           publish_npm_package integrations/openclaw/memory-adapter true
         env:

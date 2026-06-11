@@ -27,7 +27,7 @@ The connector package exposes programmatic cleanup that removes settings patches
 
 | Field | Value |
 |-------|-------|
-| Package | `@signet/connector-gemini` |
+| Package | `@signetai/connector-gemini` |
 | License | Apache-2.0 |
 
 ## Architecture

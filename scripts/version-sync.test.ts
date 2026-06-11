@@ -37,17 +37,30 @@ dependencies = [
 		expect(findCargoLockPackageVersion(lock, "signet-native")).toBeNull();
 	});
 
-	test("resolves publishable runtime workspace protocols without rewriting dev-only workspace links", () => {
+	test("resolves publishable runtime workspace protocols and exact internal pins without rewriting dev-only links", () => {
 		const root = mkdtempSync(join(tmpdir(), "signet-version-sync-publish-"));
 		try {
+			const coreManifest = join(root, "core.package.json");
 			const manifest = join(root, "package.json");
+			writeFileSync(
+				coreManifest,
+				JSON.stringify(
+					{
+						name: "@signet/core",
+						version: "0.1.0",
+						publishConfig: { access: "public" },
+					},
+					null,
+					2,
+				),
+			);
 			writeFileSync(
 				manifest,
 				JSON.stringify(
 					{
-						name: "@signetai/test-publishable",
+						name: "@signet/test-publishable",
 						version: "0.1.0",
-						dependencies: { "@signet/runtime": "workspace:*" },
+						dependencies: { "@signet/runtime": "workspace:*", "@signet/core": "0.115.1" },
 						optionalDependencies: { "@signet/optional": "workspace:^" },
 						peerDependencies: { "@signet/peer": "workspace:~" },
 						devDependencies: { "@signet/core": "workspace:*", "@signet/sdk": "workspace:*" },
@@ -58,7 +71,7 @@ dependencies = [
 				),
 			);
 
-			expect(resolveWorkspaceProtocols([manifest], "0.115.2", false)).toEqual([manifest]);
+			expect(resolveWorkspaceProtocols([coreManifest, manifest], "0.115.2", false)).toEqual([manifest]);
 			const updated = JSON.parse(readFileSync(manifest, "utf8")) as {
 				dependencies: Record<string, string>;
 				optionalDependencies: Record<string, string>;
@@ -66,6 +79,7 @@ dependencies = [
 				devDependencies: Record<string, string>;
 			};
 			expect(updated.dependencies["@signet/runtime"]).toBe("0.115.2");
+			expect(updated.dependencies["@signet/core"]).toBe("0.115.2");
 			expect(updated.optionalDependencies["@signet/optional"]).toBe("^0.115.2");
 			expect(updated.peerDependencies["@signet/peer"]).toBe("~0.115.2");
 			expect(updated.devDependencies["@signet/core"]).toBe("workspace:*");
