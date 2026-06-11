@@ -1,4 +1,4 @@
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
 import type { DbAccessor, ReadDb, WriteDb } from "../db-accessor";
 import type { AuthResult, Permission, TokenClaims, TokenRole, TokenScope } from "./types";
 import { PERMISSIONS, TOKEN_ROLES } from "./types";
@@ -62,7 +62,21 @@ function base64url(bytes: Buffer): string {
 }
 
 function hashApiKey(key: string): string {
-	return createHash("sha256").update(key).digest("hex");
+	const salt = randomBytes(16).toString("hex");
+	const hash = scryptSync(key, salt, 32).toString("hex");
+	return `scrypt:${salt}:${hash}`;
+}
+
+function verifyApiKeyHash(storedHash: string, token: string): boolean {
+	const [algorithm, salt, hash] = storedHash.split(":");
+	if (algorithm === "scrypt" && salt && hash) {
+		const expected = Buffer.from(hash, "hex");
+		const actual = scryptSync(token, salt, expected.length).toString("hex");
+		const actualBuffer = Buffer.from(actual, "hex");
+		return expected.length === actualBuffer.length && timingSafeEqual(expected, actualBuffer);
+	}
+
+	return false;
 }
 
 function safeJsonObject(raw: string): TokenScope {
@@ -244,7 +258,6 @@ export function verifyApiKey(accessor: DbAccessor, token: string): AuthResult {
 	const prefix = extractApiKeyPrefix(token);
 	if (!prefix) return { authenticated: false, claims: null, error: "malformed api key" };
 	const now = new Date().toISOString();
-	const tokenHash = hashApiKey(token);
 
 	return accessor.withWriteTx((db) => {
 		const row = db
@@ -258,9 +271,7 @@ export function verifyApiKey(accessor: DbAccessor, token: string): AuthResult {
 			.get(prefix) as ApiKeyRow | undefined;
 		if (!row) return { authenticated: false, claims: null, error: "invalid api key" };
 
-		const expected = Buffer.from(row.key_hash, "hex");
-		const actual = Buffer.from(tokenHash, "hex");
-		if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) {
+		if (!verifyApiKeyHash(row.key_hash, token)) {
 			return { authenticated: false, claims: null, error: "invalid api key" };
 		}
 		if (row.revoked_at) return { authenticated: false, claims: null, error: "api key revoked" };
