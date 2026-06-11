@@ -57,6 +57,9 @@
     "integrations/codex/connector": {
       "name": "@signet/connector-codex",
       "version": "0.139.0",
+      "bin": {
+        "signet-connector-codex": "bin/install.js",
+      },
       "dependencies": {
         "@signet/connector-base": "workspace:*",
         "@signet/core": "workspace:*",
@@ -64,6 +67,16 @@
       "devDependencies": {
         "@types/node": "^22.0.0",
         "typescript": "^5.7.0",
+      },
+    },
+    "integrations/codex/plugin": {
+      "name": "@signet/codex-plugin",
+      "version": "0.139.0",
+      "bin": {
+        "signet-codex-plugin": "bin/install.js",
+      },
+      "dependencies": {
+        "@signet/connector-codex": "workspace:*",
       },
     },
     "integrations/gemini/connector": {
@@ -273,7 +286,6 @@
         "typescript": "^5.7.0",
       },
       "optionalDependencies": {
-        "@signet/native": "workspace:*",
         "better-sqlite3": "^11.0.0",
         "sqlite-vec-darwin-arm64": "^0.1.7-alpha.2",
         "sqlite-vec-darwin-x64": "^0.1.7-alpha.2",
@@ -1419,6 +1431,8 @@
     "@shikijs/vscode-textmate": ["@shikijs/vscode-textmate@10.0.2", "", {}, "sha512-83yeghZ2xxin3Nj8z1NMd/NCuca+gsYXswywDy5bHvwlWL8tpTQmzGeUuHd9FC3E/SBEMvzJRwWEOz5gGes9Qg=="],
 
     "@signet/cli": ["@signet/cli@workspace:surfaces/cli"],
+
+    "@signet/codex-plugin": ["@signet/codex-plugin@workspace:integrations/codex/plugin"],
 
     "@signet/connector-base": ["@signet/connector-base@workspace:libs/connector-base"],
 
