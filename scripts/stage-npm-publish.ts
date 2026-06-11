@@ -91,7 +91,7 @@ export function stageNpmPublishPackages(outputDir: string): string[] {
 	for (const [sourceDir, stageName] of PUBLISH_TARGETS) {
 		const targetDir = join(outputDir, stageName);
 		cpSync(sourceDir, targetDir, {
-			filter: (source) => !source.split("/").includes("node_modules"),
+			filter: (source) => !source.split(/[\\/]/).includes("node_modules"),
 			recursive: true,
 		});
 		rewriteTextFiles(targetDir);
