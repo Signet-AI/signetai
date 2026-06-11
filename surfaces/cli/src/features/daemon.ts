@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { confirm } from "@inquirer/prompts";
-import { detectSchema, ensureUnifiedSchema, runMigrations } from "@signet/core";
+import { detectSchema, ensureUnifiedSchema, runMigrations } from "@signetai/core";
 import chalk from "chalk";
 import open from "open";
 import ora from "ora";

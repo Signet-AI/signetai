@@ -5,7 +5,7 @@
  *
  * Usage:
  * ```typescript
- * import { ClaudeCodeConnector } from '@signet/connector-claude-code';
+ * import { ClaudeCodeConnector } from '@signetai/connector-claude-code';
  *
  * const connector = new ClaudeCodeConnector();
  * await connector.install('~/.agents');
@@ -16,8 +16,8 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { BaseConnector, type InstallResult, type UninstallResult, atomicWriteJson } from "@signet/connector-base";
-import { expandHome, resolvePromptSubmitTimeoutMs, resolveSessionStartTimeoutMs } from "@signet/core";
+import { BaseConnector, type InstallResult, type UninstallResult, atomicWriteJson } from "@signetai/connector-base";
+import { expandHome, resolvePromptSubmitTimeoutMs, resolveSessionStartTimeoutMs } from "@signetai/core";
 
 // ============================================================================
 // Types

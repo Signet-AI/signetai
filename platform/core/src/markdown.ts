@@ -1,5 +1,5 @@
 /**
- * @signet/core - Markdown utilities
+ * @signetai/core - Markdown utilities
  *
  * Functions for managing legacy Signet blocks in markdown files.
  * The block markers are kept for migration and cleanup compatibility.

@@ -27,7 +27,7 @@ The connector package exposes programmatic cleanup that removes settings patches
 
 | Field | Value |
 |-------|-------|
-| Package | `@signet/connector-gemini` |
+| Package | `@signetai/connector-gemini` |
 | License | Apache-2.0 |
 
 ## Architecture
@@ -37,4 +37,4 @@ The connector package exposes programmatic cleanup that removes settings patches
 ~/.agents/                 <-- agent workspace (identity, skills, memories)
 ```
 
-The connector extends `BaseConnector` from `@signet/connector-base` and implements `install()` / `uninstall()` for reversible setup.
+The connector extends `BaseConnector` from `@signetai/connector-base` and implements `install()` / `uninstall()` for reversible setup.

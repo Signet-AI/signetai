@@ -11,7 +11,7 @@ import type {
 	RoutingOperationKind,
 	RoutingRuntimeSnapshot,
 	RoutingRuntimeState,
-} from "@signet/core";
+} from "@signetai/core";
 import {
 	allTargetRefs,
 	compileLegacyRoutingConfig,
@@ -20,7 +20,7 @@ import {
 	parseRoutingTargetRef,
 	parseYamlDocument,
 	resolveRoutingDecision,
-} from "@signet/core";
+} from "@signetai/core";
 import { createRoutingProvider } from "./inference-provider-factory";
 import { logger } from "./logger";
 import { loadMemoryConfig } from "./memory-config";

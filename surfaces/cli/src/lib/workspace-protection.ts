@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join, resolve, sep } from "node:path";
-import { OpenClawConnector } from "@signet/connector-openclaw";
+import { OpenClawConnector } from "@signetai/connector-openclaw";
 import Database from "../sqlite.js";
 
 export interface GitRemoteState {

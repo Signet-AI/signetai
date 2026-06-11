@@ -6,7 +6,7 @@
  * No memory content, user identity, or file paths are ever included.
  */
 
-import type { PipelineTelemetryConfig } from "@signet/core";
+import type { PipelineTelemetryConfig } from "@signetai/core";
 import type { DbAccessor } from "./db-accessor";
 import { logger } from "./logger";
 

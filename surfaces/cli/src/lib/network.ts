@@ -6,7 +6,7 @@ import {
 	parseSimpleYaml,
 	readNetworkMode,
 	resolveNetworkBinding,
-} from "@signet/core";
+} from "@signetai/core";
 
 export interface DaemonNetworkInfo {
 	readonly bindHost?: string | null;

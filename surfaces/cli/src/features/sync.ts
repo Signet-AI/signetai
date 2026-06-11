@@ -1,14 +1,14 @@
 import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { OpenClawConnector } from "@signet/connector-openclaw";
+import { OpenClawConnector } from "@signetai/connector-openclaw";
 import {
 	type WorkspaceSourceRepoSyncResult,
 	getOhMyPiConfigPath,
 	getPiConfigPath,
 	loadConfiguredHarnesses,
 	resolveHermesRepoPath,
-} from "@signet/core";
+} from "@signetai/core";
 import chalk from "chalk";
 
 interface SkillSync {

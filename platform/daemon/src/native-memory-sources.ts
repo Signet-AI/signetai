@@ -9,7 +9,7 @@ import {
 	SOURCE_CHUNK_SOURCE_TYPE,
 	loadSourcesConfig,
 	markSourceIndexed,
-} from "@signet/core";
+} from "@signetai/core";
 import { resolveDaemonAgentId } from "./agent-id";
 import { yieldEvery } from "./async-yield";
 import { getDbAccessor } from "./db-accessor";
@@ -270,7 +270,11 @@ function sourceRelativePath(root: string, filePath: string): string {
 	return relative(normalizedRoot(root), filePath.replace(/\\/g, "/")).replace(/\\/g, "/");
 }
 
-function codexSourceMeta(source: NativeMemorySource, filePath: string, content: string): Record<string, unknown> | undefined {
+function codexSourceMeta(
+	source: NativeMemorySource,
+	filePath: string,
+	content: string,
+): Record<string, unknown> | undefined {
 	if (source.harness !== "codex") return undefined;
 	const rel = safeRelativePath(source.root, filePath) ?? sourceRelativePath(source.root, filePath);
 	const normalized = content.replace(/\r\n?/g, "\n").replace(/\n$/, "");
@@ -472,7 +476,8 @@ export async function indexNativeMemoryFile(
 		const artifactChanged = persistedHash !== hash;
 		if (artifactChanged) {
 			const sourceExternalId = obsidian ? sourceRelativePath(source.root, filePath) : null;
-			const externalId = sourceExternalId ?? (source.harness === "codex" ? sourceRelativePath(source.root, filePath) : null);
+			const externalId =
+				sourceExternalId ?? (source.harness === "codex" ? sourceRelativePath(source.root, filePath) : null);
 			indexExternalMemoryArtifact({
 				agentId,
 				sourcePath: filePath,

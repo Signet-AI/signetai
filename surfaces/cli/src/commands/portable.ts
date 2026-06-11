@@ -8,7 +8,7 @@ import {
 	loadSqliteVec,
 	runMigrations,
 	serializeExportData,
-} from "@signet/core";
+} from "@signetai/core";
 import chalk from "chalk";
 import type { Command } from "commander";
 import ora from "ora";

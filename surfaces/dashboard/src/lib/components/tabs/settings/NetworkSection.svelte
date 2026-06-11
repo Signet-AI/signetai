@@ -3,7 +3,7 @@ import FormField from "$lib/components/config/FormField.svelte";
 import FormSection from "$lib/components/config/FormSection.svelte";
 import * as Select from "$lib/components/ui/select/index.js";
 import { st } from "$lib/stores/settings.svelte";
-// Duplicated from @signet/core/network — core is a Node.js bundle and
+// Duplicated from @signetai/core/network — core is a Node.js bundle and
 // cannot be imported into the browser dashboard build.
 const NETWORK_MODES = ["localhost", "tailscale"] as const;
 

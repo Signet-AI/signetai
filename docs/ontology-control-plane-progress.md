@@ -28,7 +28,7 @@
 - Commands run:
   - `bun run build:core`
   - `bun test platform/daemon/src/ontology-proposals.test.ts surfaces/cli/src/commands/ontology.test.ts platform/core/src/migrations/migrations.test.ts`
-- Failures encountered: daemon tests initially loaded stale `@signet/core/dist`
+- Failures encountered: daemon tests initially loaded stale `@signetai/core/dist`
   without migration 070; rebuilding core fixed it.
 - Remaining risk: API auth middleware is wired through existing route patterns
   but not separately route-tested.

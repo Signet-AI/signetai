@@ -9,7 +9,7 @@
  * BM25 candidates weren't vector-compared at all.
  */
 
-import { cosineSimilarity } from "@signet/core";
+import { cosineSimilarity } from "@signetai/core";
 import type { DbAccessor } from "../db-accessor";
 import type { RerankCandidate, RerankConfig, RerankProvider } from "./reranker";
 

@@ -1,7 +1,7 @@
 import { type Stats, existsSync, lstatSync, readFileSync, readdirSync } from "node:fs";
 import { basename, join, relative } from "node:path";
 import { gunzipSync } from "node:zlib";
-import type { SignetSourceEntry } from "@signet/core";
+import type { SignetSourceEntry } from "@signetai/core";
 import { getDbAccessor } from "./db-accessor";
 import { countChanges } from "./db-helpers";
 import { indexExternalMemoryArtifact } from "./memory-lineage";

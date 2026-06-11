@@ -33,15 +33,15 @@ stable API.
 
 Each harness connector should be its own npm package, for example:
 
-- `@signet/connector-pi`
-- `@signet/connector-codex`
-- `@signet/connector-opencode`
-- `@signet/connector-claude-code`
+- `@signetai/connector-pi`
+- `@signetai/connector-codex`
+- `@signetai/connector-opencode`
+- `@signetai/connector-claude-code`
 
 Connector packages must remain directly installable for portable use:
 
 ```bash
-npx @signet/connector-pi install \
+npx @signetai/connector-pi install \
   --url https://signet-home.tailnet:3850 \
   --api-key sig_sk_...
 ```
@@ -53,7 +53,7 @@ signet connector install pi
 signet connector install pi --url https://signet-home.tailnet:3850 --api-key sig_sk_...
 ```
 
-Shared behavior belongs in `@signet/connector-base`: config loading, daemon
+Shared behavior belongs in `@signetai/connector-base`: config loading, daemon
 client defaults, API-key handling, request envelopes, timeouts, retries, health
 checks, and common Signet tool contracts. Harness-specific packages should own
 only installation and runtime glue required by that harness.

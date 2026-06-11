@@ -1,5 +1,5 @@
 /**
- * @signet/core - Symlink utilities
+ * @signetai/core - Symlink utilities
  *
  * Functions for managing symlinks, particularly for skills directories
  * that need to be shared across different harness installations.

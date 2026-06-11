@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { SIGNET_GRAPHIQ_PLUGIN_ID, SIGNET_SECRETS_PLUGIN_ID } from "@signet/core";
+import { SIGNET_GRAPHIQ_PLUGIN_ID, SIGNET_SECRETS_PLUGIN_ID } from "@signetai/core";
 import {
 	getSetupPluginRegistryPath,
 	readSetupCorePluginEnabled,

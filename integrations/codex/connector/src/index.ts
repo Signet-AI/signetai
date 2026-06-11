@@ -3,13 +3,13 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { BaseConnector, type InstallResult, type UninstallResult, atomicWriteJson } from "@signet/connector-base";
+import { BaseConnector, type InstallResult, type UninstallResult, atomicWriteJson } from "@signetai/connector-base";
 import {
 	expandHome,
 	resolvePromptSubmitTimeoutMs,
 	resolveSessionStartTimeoutMs,
 	resolveSignetDaemonUrl,
-} from "@signet/core";
+} from "@signetai/core";
 
 export type SignetMcpConfig =
 	| { readonly command: string; readonly args: readonly string[] }

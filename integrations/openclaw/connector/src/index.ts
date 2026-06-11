@@ -1,5 +1,5 @@
 /**
- * @signet/connector-openclaw
+ * @signetai/connector-openclaw
  *
  * Signet connector for OpenClaw (and its earlier names: clawdbot, moltbot).
  *
@@ -14,7 +14,7 @@
  *
  * @example
  * ```typescript
- * import { OpenClawConnector } from '@signet/connector-openclaw';
+ * import { OpenClawConnector } from '@signetai/connector-openclaw';
  *
  * const connector = new OpenClawConnector();
  * await connector.install('~/.agents');
@@ -24,8 +24,8 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { delimiter, join, resolve } from "node:path";
-import { BaseConnector, type InstallResult, type UninstallResult, atomicWriteJson } from "@signet/connector-base";
-import { expandHome } from "@signet/core";
+import { BaseConnector, type InstallResult, type UninstallResult, atomicWriteJson } from "@signetai/connector-base";
+import { expandHome } from "@signetai/core";
 import { parse as parseJson5 } from "json5";
 
 // ============================================================================
@@ -1153,12 +1153,12 @@ async function recallMessage(data) {
   }
 
   try {
-    sharedRecallFormatter ??= (await import("@signet/core")).formatRecallText;
+    sharedRecallFormatter ??= (await import("@signetai/core")).formatRecallText;
     if (typeof sharedRecallFormatter === "function") {
       return sharedRecallFormatter(data);
     }
   } catch {
-    // Older standalone hook installs may not have @signet/core resolvable.
+    // Older standalone hook installs may not have @signetai/core resolvable.
     // Keep a compact compatibility path instead of dumping raw JSON into
     // the prompt.
   }

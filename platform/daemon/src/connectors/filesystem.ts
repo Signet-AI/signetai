@@ -16,7 +16,7 @@ import type {
 	SyncCursor,
 	SyncError,
 	SyncResult,
-} from "@signet/core";
+} from "@signetai/core";
 import type { DbAccessor } from "../db-accessor";
 import { logger } from "../logger";
 import { enqueueDocumentIngestJob } from "../pipeline/document-worker";

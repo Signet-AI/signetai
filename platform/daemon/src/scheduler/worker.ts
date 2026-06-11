@@ -7,7 +7,7 @@
 
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { TaskHarness } from "@signet/core";
+import type { TaskHarness } from "@signetai/core";
 import type { DbAccessor, ReadDb } from "../db-accessor";
 import { logger } from "../logger";
 import { loadMemoryConfig } from "../memory-config";
@@ -260,7 +260,8 @@ export async function executeTask(
 		if (!isTaskHarness(task.harness)) {
 			throw new Error(`Unsupported harness: ${task.harness}`);
 		}
-		const model = task.harness === "claude-code" || task.harness === "codex" ? deps.resolveTaskModel(task.harness) : undefined;
+		const model =
+			task.harness === "claude-code" || task.harness === "codex" ? deps.resolveTaskModel(task.harness) : undefined;
 		result = await deps.spawnTask(
 			task.harness,
 			effectivePrompt,

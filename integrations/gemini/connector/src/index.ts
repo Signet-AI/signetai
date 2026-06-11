@@ -17,8 +17,8 @@ import {
 	type UninstallResult,
 	atomicWriteJson,
 	resolveSignetWorkspacePath,
-} from "@signet/connector-base";
-import { expandHome, hasValidIdentity } from "@signet/core";
+} from "@signetai/connector-base";
+import { expandHome, hasValidIdentity } from "@signetai/core";
 
 type JsonObject = Record<string, unknown>;
 

@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { PipelineReflectionsConfig } from "@signet/core";
+import type { PipelineReflectionsConfig } from "@signetai/core";
 import { getDbAccessor } from "../db-accessor";
 import { getInferenceProvider } from "../llm";
 import { logger } from "../logger";

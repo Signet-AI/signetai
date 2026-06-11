@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { existsSync } from "node:fs";
-import { emptyHookRecallResponse, withHookRecallCompat } from "@signet/core";
+import { emptyHookRecallResponse, withHookRecallCompat } from "@signetai/core";
 import type { Context } from "hono";
 import type { Hono } from "hono";
 import { getAgentScope, resolveAgentId } from "../agent-id";

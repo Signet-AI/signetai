@@ -276,7 +276,7 @@ Credential resolution order:
 
 | Package / area | Location | Purpose | Target |
 |---|---|---|---|
-| `@signet/core` | `platform/core` | Types, DB, migrations, search, manifest, identity | node/bun |
+| `@signetai/core` | `platform/core` | Types, DB, migrations, search, manifest, identity | node/bun |
 | `@signet/daemon` | `platform/daemon` | Hono API, hooks, file watching, pipeline, dashboard server | bun |
 | `platform/daemon-rs` | `platform/daemon-rs` | Rust shadow runtime and parity logging | rust |
 | `@signet/native` | `platform/native` | Native accelerators | node |
@@ -286,7 +286,7 @@ Credential resolution order:
 | `@signet/tray` | `surfaces/tray` | Shared tray/menu state utilities | node |
 | `@signet/extension` | `surfaces/browser-extension` | Browser extension UI | browser |
 | `@signet/sdk` | `libs/sdk` | Third-party integration SDK | node |
-| `@signet/connector-base` | `libs/connector-base` | Shared connector primitives | node |
+| `@signetai/connector-base` | `libs/connector-base` | Shared connector primitives | node |
 | `@signet/connector-*` | `integrations/*/connector` | Install-time harness integrations | node |
 | `@signet/opencode-plugin` | `integrations/opencode/plugin` | OpenCode runtime plugin | node |
 | `@signet/oh-my-pi-extension` | `integrations/oh-my-pi/extension` | Oh My Pi extension/runtime bundle | browser |

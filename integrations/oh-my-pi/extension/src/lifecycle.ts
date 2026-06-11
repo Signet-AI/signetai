@@ -1,11 +1,6 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import {
-	STATIC_IDENTITY_SESSION_START_TIMEOUT_STATUS,
-	readStaticIdentity,
-	resolveSessionStartTimeoutMs,
-} from "@signet/core";
-import {
 	type LifecycleConfig,
 	type LifecycleDeps,
 	currentSessionRef,
@@ -17,6 +12,11 @@ import {
 	requestRecallForPrompt,
 } from "@signet/pi-extension-base";
 import { readTrimmedRuntimeEnv } from "@signet/pi-extension-base";
+import {
+	STATIC_IDENTITY_SESSION_START_TIMEOUT_STATUS,
+	readStaticIdentity,
+	resolveSessionStartTimeoutMs,
+} from "@signetai/core";
 import {
 	FETCH_TIMEOUT_ENV,
 	HARNESS,

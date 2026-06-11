@@ -59,7 +59,7 @@ describe("OpenClawConnector config patching", () => {
 		const handlerJs = readFileSync(handlerPath, "utf-8");
 		expect(handlerJs).toContain("async function recallMessage(data)");
 		expect(handlerJs).toContain('if (typeof data?.message === "string") return data.message;');
-		expect(handlerJs).toContain('await import("@signet/core")');
+		expect(handlerJs).toContain('await import("@signetai/core")');
 		expect(handlerJs).toContain('return "No matching memories found.";');
 		expect(handlerJs).toContain("Keep a compact compatibility path");
 		expect(handlerJs).toContain("rows.slice(0, 8)");

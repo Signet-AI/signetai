@@ -1,4 +1,4 @@
-import type { RecallTemporalMeta, TemporalFacet } from "@signet/core";
+import type { RecallTemporalMeta, TemporalFacet } from "@signetai/core";
 import { getDbAccessor } from "./db-accessor";
 import { buildAgentScopeClause } from "./memory-access-scope";
 

@@ -1,56 +1,45 @@
 {
-  "name": "@signet/connector-gemini",
-  "version": "0.140.0",
-  "description": "Signet connector for Gemini CLI",
-  "type": "module",
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
-  "exports": {
-    ".": {
-      "import": "./dist/index.js",
-      "types": "./dist/index.d.ts"
-    }
-  },
-  "files": [
-    "dist",
-    "bin",
-    "!dist/**/*.test.*",
-    "!dist/**/__tests__/**"
-  ],
-  "scripts": {
-    "build": "bun build src/index.ts --outdir dist --target node --external better-sqlite3 && bun run build:types",
-    "build:types": "tsc --emitDeclarationOnly --declaration --outDir dist",
-    "dev": "bun --watch src/index.ts",
-    "typecheck": "tsc --noEmit"
-  },
-  "dependencies": {
-    "@signet/connector-base": "0.140.0",
-    "@signet/core": "0.140.0"
-  },
-  "devDependencies": {
-    "@types/node": "^22.0.0",
-    "typescript": "^5.7.0"
-  },
-  "keywords": [
-    "signet",
-    "gemini",
-    "connector",
-    "ai-memory",
-    "agent-identity"
-  ],
-  "license": "Apache-2.0",
-  "bin": {
-    "signet-connector-gemini": "bin/install.js"
-  },
-  "publishConfig": {
-    "access": "public"
-  },
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/Signet-AI/signetai.git"
-  },
-  "homepage": "https://github.com/Signet-AI/signetai",
-  "bugs": {
-    "url": "https://github.com/Signet-AI/signetai/issues"
-  }
+	"name": "@signetai/connector-gemini",
+	"version": "0.140.0",
+	"description": "Signet connector for Gemini CLI",
+	"type": "module",
+	"main": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"exports": {
+		".": {
+			"import": "./dist/index.js",
+			"types": "./dist/index.d.ts"
+		}
+	},
+	"files": ["dist", "bin", "!dist/**/*.test.*", "!dist/**/__tests__/**"],
+	"scripts": {
+		"build": "bun build src/index.ts --outdir dist --target node --external better-sqlite3 && bun run build:types",
+		"build:types": "tsc --emitDeclarationOnly --declaration --outDir dist",
+		"dev": "bun --watch src/index.ts",
+		"typecheck": "tsc --noEmit"
+	},
+	"dependencies": {
+		"@signetai/connector-base": "0.140.0",
+		"@signetai/core": "0.140.0"
+	},
+	"devDependencies": {
+		"@types/node": "^22.0.0",
+		"typescript": "^5.7.0"
+	},
+	"keywords": ["signet", "gemini", "connector", "ai-memory", "agent-identity"],
+	"license": "Apache-2.0",
+	"bin": {
+		"signet-connector-gemini": "bin/install.js"
+	},
+	"publishConfig": {
+		"access": "public"
+	},
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/Signet-AI/signetai.git"
+	},
+	"homepage": "https://github.com/Signet-AI/signetai",
+	"bugs": {
+		"url": "https://github.com/Signet-AI/signetai/issues"
+	}
 }

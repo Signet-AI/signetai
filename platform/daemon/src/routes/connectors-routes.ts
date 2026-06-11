@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { CONNECTOR_PROVIDERS, type ConnectorConfig, type SyncCursor } from "@signet/core";
+import { CONNECTOR_PROVIDERS, type ConnectorConfig, type SyncCursor } from "@signetai/core";
 import type { Hono } from "hono";
 import { requirePermission } from "../auth";
 import { createFilesystemConnector } from "../connectors/filesystem.js";

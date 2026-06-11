@@ -6,7 +6,7 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { parseSimpleYaml } from "@signet/core";
+import { parseSimpleYaml } from "@signetai/core";
 import { logger } from "./logger";
 
 // ---------------------------------------------------------------------------

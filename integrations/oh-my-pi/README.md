@@ -27,7 +27,7 @@ The connector package exposes programmatic cleanup that removes the extension fi
 
 | Field | Value |
 |-------|-------|
-| Package | `@signet/connector-oh-my-pi` |
+| Package | `@signetai/connector-oh-my-pi` |
 | License | Apache-2.0 |
 
 ## Architecture
@@ -38,4 +38,4 @@ The connector package exposes programmatic cleanup that removes the extension fi
 ~/.agents/                                <-- agent workspace
 ```
 
-The connector extends `BaseConnector` from `@signet/connector-base` and ships a bundled extension that is written to disk on install.
+The connector extends `BaseConnector` from `@signetai/connector-base` and ships a bundled extension that is written to disk on install.

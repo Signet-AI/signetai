@@ -7,7 +7,7 @@
 
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
-import { DEPENDENCY_TYPES } from "@signet/core";
+import { DEPENDENCY_TYPES } from "@signetai/core";
 import { runMigrations } from "../../../core/src/migrations";
 import type { DbAccessor, ReadDb, WriteDb } from "../db-accessor";
 import { DEFAULT_PIPELINE_V2 } from "../memory-config";

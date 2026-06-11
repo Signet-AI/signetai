@@ -1,4 +1,4 @@
-import type { EntityDependency } from "@signet/core";
+import type { EntityDependency } from "@signetai/core";
 import type { DbAccessor } from "./db-accessor";
 import { getEntityDependencyById } from "./knowledge-graph";
 import {

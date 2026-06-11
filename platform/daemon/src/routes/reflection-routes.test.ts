@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { LlmProvider } from "@signet/core";
+import type { LlmProvider } from "@signetai/core";
 import { Hono } from "hono";
 import { type DbAccessor, closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
 import { closeInferenceProviderResolver, initInferenceProviderResolver } from "../llm";

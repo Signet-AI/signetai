@@ -1,7 +1,7 @@
 import { join } from "node:path";
-import { diagnoseHermesIntegration } from "@signet/connector-hermes-agent";
-import { OpenClawConnector, type OpenClawRuntimeState } from "@signet/connector-openclaw";
-import { detectSchema, getMissingIdentityFiles, hasValidIdentity } from "@signet/core";
+import { diagnoseHermesIntegration } from "@signetai/connector-hermes-agent";
+import { OpenClawConnector, type OpenClawRuntimeState } from "@signetai/connector-openclaw";
+import { detectSchema, getMissingIdentityFiles, hasValidIdentity } from "@signetai/core";
 import chalk from "chalk";
 import { daemonAccessLines } from "../lib/network.js";
 import { getGitRemoteState, getSnapshotProtection, hasOpenClawWorkspaceLink } from "../lib/workspace-protection.js";

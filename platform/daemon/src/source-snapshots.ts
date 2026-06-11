@@ -1,5 +1,5 @@
 import type { Database } from "bun:sqlite";
-import { SOURCE_CHUNK_SOURCE_TYPE, type SignetSourceEntry } from "@signet/core";
+import { SOURCE_CHUNK_SOURCE_TYPE, type SignetSourceEntry } from "@signetai/core";
 import { getDbAccessor } from "./db-accessor";
 import type { WriteDb } from "./db-accessor";
 import { syncVecDeleteByEmbeddingIds } from "./db-helpers";

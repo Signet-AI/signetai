@@ -11,7 +11,7 @@ import {
 	type ExtractionResult,
 	MEMORY_TYPES,
 	type MemoryType,
-} from "@signet/core";
+} from "@signetai/core";
 import { classifyEntityQuality, concreteEntityTypesForPrompt, normalizeEntityType } from "../entity-quality";
 import { logger } from "../logger";
 import { type LlmProvider, RateLimitExceededError } from "./provider";
@@ -45,7 +45,7 @@ IMPORTANT — Atomic facts:
 Each fact must be fully understandable WITHOUT the original conversation. Include the specific subject (package name, file path, component, tool) and enough context that a reader seeing only this fact knows exactly what it refers to.
 
 BAD: "install() writes bundled plugin"
-GOOD: "The @signet/connector-opencode install() function writes pre-bundled signet.mjs to ~/.config/opencode/plugins/"
+GOOD: "The @signetai/connector-opencode install() function writes pre-bundled signet.mjs to ~/.config/opencode/plugins/"
 
 BAD: "Uses PostgreSQL instead of MongoDB"
 GOOD: "The auth service uses PostgreSQL instead of MongoDB for better relational query support"

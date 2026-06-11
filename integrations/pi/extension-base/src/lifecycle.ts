@@ -1,6 +1,6 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { readStaticIdentity } from "@signet/core";
+import { readStaticIdentity } from "@signetai/core";
 import type { DaemonClient } from "./daemon-client.js";
 import { readTrimmedRuntimeEnv, readTrimmedString } from "./helpers.js";
 import type { BaseSessionState } from "./session-state.js";

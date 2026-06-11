@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { addDiscordSource, addObsidianSource, loadSourcesConfig } from "@signet/core";
+import { addDiscordSource, addObsidianSource, loadSourcesConfig } from "@signetai/core";
 import { Hono } from "hono";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
 import { hashNormalizedBody } from "../memory-lineage";

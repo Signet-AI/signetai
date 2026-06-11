@@ -25,7 +25,7 @@ machine where you only want to install the OpenCode integration, use the
 standalone npm installer:
 
 ```bash
-npx -y @signet/connector-opencode install --url http://signet-home.tailnet:3850 --api-key sig_sk_...
+npx -y @signetai/connector-opencode install --url http://signet-home.tailnet:3850 --api-key sig_sk_...
 ```
 
 ## Uninstallation
@@ -36,7 +36,7 @@ The connector package exposes programmatic cleanup that removes the plugin file 
 
 | Field | Value |
 |-------|-------|
-| Package | `@signet/connector-opencode` |
+| Package | `@signetai/connector-opencode` |
 | License | Apache-2.0 |
 
 ## Architecture
@@ -48,4 +48,4 @@ The connector package exposes programmatic cleanup that removes the plugin file 
 ~/.agents/                             <-- agent workspace
 ```
 
-The connector extends `BaseConnector` from `@signet/connector-base` and ships a self-contained plugin bundle that OpenCode auto-discovers from its plugins directory.
+The connector extends `BaseConnector` from `@signetai/connector-base` and ships a self-contained plugin bundle that OpenCode auto-discovers from its plugins directory.

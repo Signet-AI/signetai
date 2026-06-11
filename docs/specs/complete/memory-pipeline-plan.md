@@ -115,7 +115,7 @@ modify/forget must be a formal API + policy surface.
 
 Current Signet state in-repo:
 
-1. `@signet/connector-openclaw` is install-time wiring that patches
+1. `@signetai/connector-openclaw` is install-time wiring that patches
    OpenClaw config and installs command-hook files under
    `~/.agents/hooks/agent-memory/`.
 2. Installed hook handler supports command actions `/remember`,
@@ -702,7 +702,7 @@ increasing accidental mutation incidents.
 ### Phase G: OpenClaw plugin-first runtime migration
 
 - define canonical runtime path as `@signetai/adapter-openclaw`
-- keep `@signet/connector-openclaw` as install/bootstrap only
+- keep `@signetai/connector-openclaw` as install/bootstrap only
 - add runtime operations for explicit modify/forget and full lifecycle
   parity with daemon hook surface
 - keep legacy command-hook files as compatibility fallback behind config
@@ -1181,7 +1181,7 @@ consistent with the rest of this spec.
 
 ### 26.2 Component responsibilities
 
-1. `@signet/connector-openclaw` (install/bootstrap):
+1. `@signetai/connector-openclaw` (install/bootstrap):
    - patch OpenClaw config entries
    - install compatibility hook files
    - no long-term ownership of runtime memory policy
@@ -1431,7 +1431,7 @@ component ownership, and sequencing constraints.
 
 ### 32.1 Package ownership map
 
-1. `@signet/core` owns:
+1. `@signetai/core` owns:
    - schema and migrations API surface
    - memory domain types and validators
    - extraction/decision contracts
@@ -1444,7 +1444,7 @@ component ownership, and sequencing constraints.
    - typed client surface for all memory lifecycle APIs
    - integration-safe wrappers and transport defaults
 4. `@signetai/adapter-openclaw` owns runtime plugin behavior.
-5. `@signet/connector-openclaw` owns install/bootstrap and fallback hooks.
+5. `@signetai/connector-openclaw` owns install/bootstrap and fallback hooks.
 
 ### 32.2 Phase A implementation tracks (infrastructure hardening)
 

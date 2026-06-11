@@ -4,7 +4,7 @@
  * background task.
  */
 
-import type { DreamingConfig } from "@signet/core";
+import type { DreamingConfig } from "@signetai/core";
 import type { DbAccessor } from "../db-accessor";
 import { getSynthesisProvider } from "../llm";
 import { logger } from "../logger";

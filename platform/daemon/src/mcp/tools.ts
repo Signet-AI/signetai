@@ -13,7 +13,7 @@ import {
 	buildRecallRequestBody,
 	buildRememberRequestBody,
 	formatRecallText,
-} from "@signet/core";
+} from "@signetai/core";
 import { z } from "zod";
 import { getActiveGraphiqDbPath, runGraphiqCli } from "../graphiq.js";
 import { createDefaultPluginHost } from "../plugins/index.js";
@@ -257,7 +257,8 @@ async function daemonFetch<T>(
 	const { method = "GET", body, timeout = 10_000, extraHeaders } = options;
 
 	const token = readDaemonAuthToken();
-	const authorizationHeader = normalizeAuthorizationHeader(options.authorizationHeader) ?? (token ? `Bearer ${token}` : undefined);
+	const authorizationHeader =
+		normalizeAuthorizationHeader(options.authorizationHeader) ?? (token ? `Bearer ${token}` : undefined);
 	const init: RequestInit = {
 		method,
 		headers: {
@@ -531,7 +532,10 @@ function selectToolsByPolicy(
 	return selected;
 }
 
-async function fetchMarketplacePolicy(baseUrl: string, authorizationHeader?: string): Promise<MarketplacePolicy | null> {
+async function fetchMarketplacePolicy(
+	baseUrl: string,
+	authorizationHeader?: string,
+): Promise<MarketplacePolicy | null> {
 	const result = await daemonFetch<MarketplacePolicyResponse>(baseUrl, "/api/marketplace/mcp/policy", {
 		timeout: 3_000,
 		authorizationHeader,

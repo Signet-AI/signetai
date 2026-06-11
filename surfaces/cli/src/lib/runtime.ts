@@ -15,7 +15,7 @@ import {
 import { homedir } from "node:os";
 import { basename, delimiter, dirname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
-import { parseSimpleYaml } from "@signet/core";
+import { parseSimpleYaml } from "@signetai/core";
 import chalk from "chalk";
 import { resolveDaemonNetwork } from "./network.js";
 import { resolveAgentsDir } from "./workspace.js";

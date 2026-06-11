@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { Worker } from "node:worker_threads";
-import { findSqliteVecExtension } from "@signet/core";
+import { findSqliteVecExtension } from "@signetai/core";
 import { closeDbAccessor, getDbAccessor, hasDbAccessor, initDbAccessorLite } from "./db-accessor";
 import { type SynthesisRequest, getSynthesisWorker, handleSynthesisRequest, setSynthesisWorker } from "./hooks";
 

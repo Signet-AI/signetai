@@ -1,13 +1,13 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { OpenClawConnector } from "@signet/connector-openclaw";
+import { OpenClawConnector } from "@signetai/connector-openclaw";
 import {
 	disableGraphiqState,
 	ensureUnifiedSchema,
 	formatYaml,
 	resolvePrimaryPackageManager,
 	runMigrations,
-} from "@signet/core";
+} from "@signetai/core";
 import chalk from "chalk";
 import open from "open";
 import ora from "ora";

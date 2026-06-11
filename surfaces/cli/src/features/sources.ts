@@ -8,7 +8,7 @@ import {
 	addObsidianSource,
 	loadSourcesConfig,
 	removeSource,
-} from "@signet/core";
+} from "@signetai/core";
 import chalk from "chalk";
 
 export interface SourcesDeps {

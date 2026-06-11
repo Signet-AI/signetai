@@ -28,7 +28,7 @@ import {
 	readMemoriesFtsSql,
 	recreateMemoriesFts,
 	runMigrations,
-} from "@signet/core";
+} from "@signetai/core";
 import { loadMemoryConfig } from "./memory-config";
 
 const isBun = typeof (globalThis as Record<string, unknown>).Bun !== "undefined";
@@ -738,9 +738,7 @@ function ensureVecTable(db: SqliteDatabase, expectedDimensions: number): void {
 	if (existing) {
 		if (!vecEmbeddingsSchemaNeedsRepair(existing.sql, expectedDimensions)) return;
 		if (/\bid\s+TEXT\b/i.test(existing.sql)) {
-			console.warn(
-				`[db-accessor] vec_embeddings schema drift detected; recreating with FLOAT[${expectedDimensions}]`,
-			);
+			console.warn(`[db-accessor] vec_embeddings schema drift detected; recreating with FLOAT[${expectedDimensions}]`);
 		}
 		db.exec("DROP TABLE vec_embeddings");
 	}

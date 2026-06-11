@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { getGraphiqProjectDbPath, updateGraphiqActiveProject } from "@signet/core";
+import { getGraphiqProjectDbPath, updateGraphiqActiveProject } from "@signetai/core";
 import { runGraphiqCli } from "./graphiq.js";
 
 let root = "";

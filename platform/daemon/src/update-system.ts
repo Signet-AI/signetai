@@ -17,7 +17,7 @@ import {
 	resolveGlobalPackagePath,
 	resolvePrimaryPackageManager,
 	syncWorkspaceSourceRepoAsync,
-} from "@signet/core";
+} from "@signetai/core";
 import { logger } from "./logger";
 import { compareVersions, isMajorUpgrade, isVersionNewer } from "./version";
 

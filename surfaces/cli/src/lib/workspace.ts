@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { expandHome } from "@signet/core";
+import { expandHome } from "@signetai/core";
 
 export type WorkspaceSource = "env" | "config" | "default";
 

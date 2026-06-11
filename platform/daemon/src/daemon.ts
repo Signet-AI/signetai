@@ -26,7 +26,7 @@ import {
 	parseRoutingTargetRef,
 	parseSimpleYaml,
 	stripSignetBlock,
-} from "@signet/core";
+} from "@signetai/core";
 import { watch } from "chokidar";
 import { Hono } from "hono";
 import { resolveDaemonAgentId } from "./agent-id";
@@ -82,7 +82,6 @@ import {
 	analyticsCollector,
 	authConfig,
 	bindAbort,
-	embeddingTrackerHandle as sharedEmbeddingTrackerHandle,
 	invalidateDiagnosticsCache,
 	providerRuntimeResolution,
 	providerTracker,
@@ -95,6 +94,7 @@ import {
 	setRestartPipelineRuntime,
 	setShuttingDown,
 	setTelemetryRef,
+	embeddingTrackerHandle as sharedEmbeddingTrackerHandle,
 	shuttingDown,
 } from "./routes/state.js";
 import { startSchedulerWorker } from "./scheduler";

@@ -1,4 +1,4 @@
-# @signet/connector-openclaw
+# @signetai/connector-openclaw
 
 Signet connector for OpenClaw (and its earlier names: clawdbot, moltbot).
 
@@ -11,15 +11,15 @@ config to point OpenClaw at the Signet workspace and enables memory hooks.
 ## Installation
 
 ```bash
-npm install @signet/connector-openclaw
+npm install @signetai/connector-openclaw
 # or
-bun add @signet/connector-openclaw
+bun add @signetai/connector-openclaw
 ```
 
 ## Usage
 
 ```typescript
-import { OpenClawConnector } from '@signet/connector-openclaw';
+import { OpenClawConnector } from '@signetai/connector-openclaw';
 
 const connector = new OpenClawConnector();
 await connector.install('~/.agents');

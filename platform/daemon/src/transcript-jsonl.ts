@@ -12,12 +12,12 @@ import {
 	renameSync,
 	rmSync,
 	statSync,
-	writeSync,
 	writeFileSync,
+	writeSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { createInterface } from "node:readline";
-import { resolveDefaultBasePath } from "@signet/core";
+import { resolveDefaultBasePath } from "@signetai/core";
 
 export type TranscriptRole = "user" | "assistant" | "unknown";
 export type TranscriptSourceFormat = "jsonl" | "markdown" | "db" | "live" | "normalized";
@@ -457,10 +457,7 @@ export function writeCanonicalTranscriptSnapshot(
 					if (trimmedLine.length === 0) continue;
 					try {
 						const parsed = JSON.parse(trimmedLine) as Partial<CanonicalTranscriptRecord>;
-						if (
-							parsed.schema !== "signet.transcript.v1" ||
-							typeof parsed.content !== "string"
-						) {
+						if (parsed.schema !== "signet.transcript.v1" || typeof parsed.content !== "string") {
 							writeSync(fd, `${line}\n`);
 							continue;
 						}
@@ -578,9 +575,8 @@ export function rewriteReplacingLiveOnlySessions(
 		} finally {
 			prescan.close();
 		}
-		const effectiveReplacements = healedKeys.size > 0
-			? new Map([...replacements].filter(([k]) => !healedKeys.has(k)))
-			: replacements;
+		const effectiveReplacements =
+			healedKeys.size > 0 ? new Map([...replacements].filter(([k]) => !healedKeys.has(k))) : replacements;
 		if (effectiveReplacements.size === 0) return healedKeys.size;
 
 		const tmpPath = `${jsonlPath}.rewrite-tmp`;
@@ -602,33 +598,33 @@ export function rewriteReplacingLiveOnlySessions(
 							writeSync(fd, `${line}\n`);
 							continue;
 						}
-					const record = parsed as CanonicalTranscriptRecord;
-					const key = recordSeqCacheKey(record);
-					if (!effectiveReplacements.has(key)) {
-						writeSync(fd, `${line}\n`);
-						continue;
-					}
-					if (rewritten.has(key)) {
-						if (record.source_format === "live") continue;
-						writeSync(fd, `${line}\n`);
-						continue;
-					}
-					const entry = effectiveReplacements.get(key);
-					if (!entry) {
-						writeSync(fd, `${line}\n`);
-						continue;
-					}
-					const next = transcriptTextToTurns(entry.transcript)
-						.map((turn, index) => makeRecord(entry.identity, turn, index + 1))
-						.filter((r): r is CanonicalTranscriptRecord => r !== null);
-					if (next.length === 0) {
-						writeSync(fd, `${line}\n`);
-						continue;
-					}
-					for (const r of next) {
-						writeSync(fd, `${JSON.stringify(r)}\n`);
-					}
-					rewritten.add(key);
+						const record = parsed as CanonicalTranscriptRecord;
+						const key = recordSeqCacheKey(record);
+						if (!effectiveReplacements.has(key)) {
+							writeSync(fd, `${line}\n`);
+							continue;
+						}
+						if (rewritten.has(key)) {
+							if (record.source_format === "live") continue;
+							writeSync(fd, `${line}\n`);
+							continue;
+						}
+						const entry = effectiveReplacements.get(key);
+						if (!entry) {
+							writeSync(fd, `${line}\n`);
+							continue;
+						}
+						const next = transcriptTextToTurns(entry.transcript)
+							.map((turn, index) => makeRecord(entry.identity, turn, index + 1))
+							.filter((r): r is CanonicalTranscriptRecord => r !== null);
+						if (next.length === 0) {
+							writeSync(fd, `${line}\n`);
+							continue;
+						}
+						for (const r of next) {
+							writeSync(fd, `${JSON.stringify(r)}\n`);
+						}
+						rewritten.add(key);
 					} catch {
 						writeSync(fd, `${line}\n`);
 					}

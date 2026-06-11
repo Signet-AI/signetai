@@ -1,4 +1,4 @@
-import type { LlmProvider, OntologyProposal, OntologyProposalStatus } from "@signet/core";
+import type { LlmProvider, OntologyProposal, OntologyProposalStatus } from "@signetai/core";
 import type { DbAccessor } from "./db-accessor";
 import { createOntologyProposals, listOntologyProposalConflicts, listOntologyProposals } from "./ontology-proposals";
 import { extractBalancedJsonObject, stripFences, tryParseJson } from "./pipeline/extraction";

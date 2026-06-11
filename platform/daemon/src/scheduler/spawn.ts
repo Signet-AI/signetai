@@ -4,7 +4,7 @@
  */
 
 import { spawn as nodeSpawn } from "node:child_process";
-import type { TaskHarness } from "@signet/core";
+import type { TaskHarness } from "@signetai/core";
 import { logger } from "../logger";
 import { which } from "../which";
 

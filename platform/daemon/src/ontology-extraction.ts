@@ -1,4 +1,4 @@
-import type { EpistemicAssertion, LlmProvider, OntologyProposal } from "@signet/core";
+import type { EpistemicAssertion, LlmProvider, OntologyProposal } from "@signetai/core";
 import type { DbAccessor, ReadDb } from "./db-accessor";
 import { type CreateEpistemicAssertionInput, createEpistemicAssertionsInTx } from "./ontology-assertions";
 import { type CreateOntologyProposalInput, createOntologyProposalsInTx } from "./ontology-proposals";

@@ -2,7 +2,7 @@ import {
 	STATIC_IDENTITY_SESSION_START_TIMEOUT_STATUS,
 	resolvePromptSubmitTimeoutMs,
 	resolveSessionStartTimeoutMs,
-} from "@signet/core";
+} from "@signetai/core";
 import chalk from "chalk";
 import type { Command } from "commander";
 import type { DaemonFetchResult } from "../lib/daemon.js";

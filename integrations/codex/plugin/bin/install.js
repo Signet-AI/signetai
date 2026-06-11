@@ -1,9 +1,9 @@
 #!/usr/bin/env node
-import { runConnectorInstaller } from "@signet/connector-base";
-import { CodexConnector } from "@signet/connector-codex";
+import { runConnectorInstaller } from "@signetai/connector-base";
+import { CodexConnector } from "@signetai/connector-codex";
 
 runConnectorInstaller("codex", CodexConnector, {
 	commandName: "signet-codex-plugin",
-	packageName: "@signet/codex-plugin",
+	packageName: "@signetai/codex-plugin",
 	label: "codex-plugin",
 });

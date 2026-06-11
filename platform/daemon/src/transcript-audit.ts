@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { resolveDefaultBasePath } from "@signet/core";
+import { resolveDefaultBasePath } from "@signetai/core";
 
 function getTranscriptAuditDir(basePath: string): string {
 	return join(basePath, ".daemon", "logs", "transcripts");

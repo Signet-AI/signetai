@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { parseSimpleYaml } from "@signet/core";
+import { parseSimpleYaml } from "@signetai/core";
 import type { Context } from "hono";
 import { normalizeAndHashContent } from "../content-normalization";
 import { getAgentPresenceForSession } from "../cross-agent";

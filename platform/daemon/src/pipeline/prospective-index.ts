@@ -7,10 +7,10 @@
  * Inspired by Kumiho (arXiv:2603.17244).
  */
 
-import type { LlmProvider, PipelineHintsConfig } from "@signet/core";
+import type { LlmProvider, PipelineHintsConfig } from "@signetai/core";
 import type { DbAccessor, WriteDb } from "../db-accessor";
-import type { PipelineV2Config } from "../memory-config";
 import { logger } from "../logger";
+import type { PipelineV2Config } from "../memory-config";
 
 // ---------------------------------------------------------------------------
 // Types

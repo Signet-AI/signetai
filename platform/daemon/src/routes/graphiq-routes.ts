@@ -6,7 +6,7 @@ import {
 	readGraphiqState,
 	setGraphiqActiveProject,
 	updateGraphiqActiveProject,
-} from "@signet/core";
+} from "@signetai/core";
 import type { Hono } from "hono";
 import { requirePermission } from "../auth";
 import { getActiveGraphiqDbPath, getAgentsDir, resolveGraphiqBinary, runCommand } from "../graphiq.js";

@@ -130,7 +130,7 @@ export const LARGE_TRANSCRIPT = [
 	"symlinks, check if the target already exists and points to the right",
 	"place. For config entries, use upsert semantics instead of blind appends.",
 	"",
-	"User: Also -- the @signet/connector-opencode install() function should",
+	"User: Also -- the @signetai/connector-opencode install() function should",
 	"write the pre-bundled signet.mjs plugin to ~/.config/opencode/plugins/.",
 	"Make sure it creates the directory if it doesn't exist.",
 	"",

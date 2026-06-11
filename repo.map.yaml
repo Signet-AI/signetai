@@ -11,7 +11,7 @@ areas:
       - "pipeline side effects and background workers"
     packages:
       - path: platform/core
-        name: "@signet/core"
+        name: "@signetai/core"
       - path: platform/daemon
         name: "@signet/daemon"
       - path: platform/native
@@ -38,27 +38,27 @@ areas:
     rule: "Group by external system first, then connector/plugin/adapter role."
     packages:
       - path: integrations/claude-code/connector
-        name: "@signet/connector-claude-code"
+        name: "@signetai/connector-claude-code"
       - path: integrations/codex/connector
-        name: "@signet/connector-codex"
+        name: "@signetai/connector-codex"
       - path: integrations/gemini/connector
-        name: "@signet/connector-gemini"
+        name: "@signetai/connector-gemini"
       - path: integrations/hermes-agent/connector
-        name: "@signet/connector-hermes-agent"
+        name: "@signetai/connector-hermes-agent"
       - path: integrations/oh-my-pi/connector
-        name: "@signet/connector-oh-my-pi"
+        name: "@signetai/connector-oh-my-pi"
       - path: integrations/oh-my-pi/extension
         name: "@signet/oh-my-pi-extension"
       - path: integrations/openclaw/connector
-        name: "@signet/connector-openclaw"
+        name: "@signetai/connector-openclaw"
       - path: integrations/openclaw/memory-adapter
         name: "@signetai/signet-memory-openclaw"
       - path: integrations/opencode/connector
-        name: "@signet/connector-opencode"
+        name: "@signetai/connector-opencode"
       - path: integrations/opencode/plugin
         name: "@signet/opencode-plugin"
       - path: integrations/pi/connector
-        name: "@signet/connector-pi"
+        name: "@signetai/connector-pi"
       - path: integrations/pi/extension
         name: "@signet/pi-extension"
       - path: integrations/pi/extension-base
@@ -76,7 +76,7 @@ areas:
       - path: libs/sdk
         name: "@signet/sdk"
       - path: libs/connector-base
-        name: "@signet/connector-base"
+        name: "@signetai/connector-base"
 
   dist:
     purpose: "Assembled shipping artifacts."

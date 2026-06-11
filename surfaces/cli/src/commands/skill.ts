@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { getSkillsRunnerCommand, resolvePrimaryPackageManager } from "@signet/core";
+import { getSkillsRunnerCommand, resolvePrimaryPackageManager } from "@signetai/core";
 import chalk from "chalk";
 import type { Command } from "commander";
 import ora from "ora";

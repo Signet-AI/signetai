@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
-import { getGraphiqStatePath } from "@signet/core";
+import { getGraphiqStatePath } from "@signetai/core";
 import { getAgentsDir } from "../graphiq.js";
 import { getLocalSecretProviderHealth } from "../secrets.js";
 import { signetGraphiqManifest } from "./bundled/graphiq.js";

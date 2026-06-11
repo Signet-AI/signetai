@@ -12,7 +12,7 @@
 
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import type { LlmProvider, PipelineV2Config } from "@signet/core";
+import type { LlmProvider, PipelineV2Config } from "@signetai/core";
 import { runMigrations } from "../../../core/src/migrations";
 import { normalizeAndHashContent } from "../content-normalization";
 import type { DbAccessor, ReadDb, WriteDb } from "../db-accessor";

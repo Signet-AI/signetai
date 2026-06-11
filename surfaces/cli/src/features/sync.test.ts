@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, mock } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { OpenClawConnector } from "@signet/connector-openclaw";
+import { OpenClawConnector } from "@signetai/connector-openclaw";
 import { syncBuiltinSkills, syncTemplates } from "./sync.js";
 
 const originalHome = process.env.HOME;

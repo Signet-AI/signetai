@@ -4,7 +4,7 @@ import type {
 	IdentitySpecialFileEntry,
 	SetupDetection,
 	WorkspaceSourceRepoSyncResult,
-} from "@signet/core";
+} from "@signetai/core";
 import type { EmbeddingProviderChoice, ExtractionProviderChoice, OpenClawRuntimeChoice } from "./setup-shared.js";
 
 export interface SetupWizardOptions {

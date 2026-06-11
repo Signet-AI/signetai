@@ -1,7 +1,7 @@
-import { mergeSignetGitignoreEntries, SIGNET_GIT_PROTECTED_PATHS } from "@signet/core";
+import { spawn } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { spawn } from "node:child_process";
+import { SIGNET_GIT_PROTECTED_PATHS, mergeSignetGitignoreEntries } from "@signetai/core";
 
 export function isGitRepo(dir: string): boolean {
 	return existsSync(join(dir, ".git"));

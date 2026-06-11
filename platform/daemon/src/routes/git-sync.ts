@@ -2,7 +2,7 @@ import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
-import { SIGNET_GIT_PROTECTED_PATHS, mergeSignetGitignoreEntries } from "@signet/core";
+import { SIGNET_GIT_PROTECTED_PATHS, mergeSignetGitignoreEntries } from "@signetai/core";
 import { logger } from "../logger";
 import { getSecret, hasSecret } from "../secrets.js";
 import { AGENTS_DIR } from "./state";

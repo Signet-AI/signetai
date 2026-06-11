@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { addObsidianSource, loadSourcesConfig } from "@signet/core";
+import { addObsidianSource, loadSourcesConfig } from "@signetai/core";
 import {
 	addDiscordSourceFromCli,
 	addGitHubSourceFromCli,

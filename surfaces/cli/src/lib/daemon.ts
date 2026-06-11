@@ -1,4 +1,4 @@
-import { resolveSignetDaemonUrl } from "@signet/core";
+import { resolveSignetDaemonUrl } from "@signetai/core";
 import chalk from "chalk";
 
 export type DaemonFetch = <T>(path: string, opts?: RequestInit & { timeout?: number }) => Promise<T | null>;

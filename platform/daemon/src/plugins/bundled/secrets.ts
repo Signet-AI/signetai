@@ -1,4 +1,4 @@
-import { SIGNET_SECRETS_PLUGIN_ID } from "@signet/core";
+import { SIGNET_SECRETS_PLUGIN_ID } from "@signetai/core";
 import type { PluginManifestV1, PluginSurfaceDeclarationsV1 } from "../types.js";
 
 const SECRET_CAPABILITIES = [

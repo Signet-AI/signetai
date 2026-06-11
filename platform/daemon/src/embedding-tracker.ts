@@ -7,7 +7,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import type { PipelineEmbeddingTrackerConfig } from "@signet/core";
+import type { PipelineEmbeddingTrackerConfig } from "@signetai/core";
 import type { DbAccessor } from "./db-accessor";
 import { syncVecDeleteBySourceExceptHash, syncVecInsert, vectorToBlob } from "./db-helpers";
 import { listStaleEmbeddingRows } from "./embedding-coverage";

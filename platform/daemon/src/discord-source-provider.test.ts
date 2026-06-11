@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { addDiscordSource } from "@signet/core";
+import { addDiscordSource } from "@signetai/core";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import { DISCORD_CHANNEL_TYPES } from "./discord-source-fetch";
 import { discordSourceProvider, setDiscordGatewaySocketFactoryForTest } from "./discord-source-provider";

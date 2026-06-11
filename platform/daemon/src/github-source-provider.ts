@@ -5,7 +5,7 @@ import {
 	type SourceFailureState,
 	type SourceProviderKind,
 	parseGitHubSettings,
-} from "@signet/core";
+} from "@signetai/core";
 import { resolveDaemonAgentId } from "./agent-id";
 import { yieldEvery } from "./async-yield";
 import { getDbAccessor } from "./db-accessor";

@@ -4,7 +4,7 @@
  */
 
 import { desktopApiBase } from "$lib/desktop-shell";
-import type { ModelRegistryEntry } from "@signet/core";
+import type { ModelRegistryEntry } from "@signetai/core";
 import { marked } from "marked";
 
 // When served by the daemon or Vite dev server, use relative URLs.

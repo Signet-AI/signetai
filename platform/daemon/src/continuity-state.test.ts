@@ -1,15 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, test } from "bun:test";
+import type { PipelineContinuityConfig } from "@signetai/core";
 import {
+	clearContinuity,
+	consumeState,
+	getActiveSessionKeys,
+	getState,
 	initContinuity,
 	recordPrompt,
 	recordRemember,
 	shouldCheckpoint,
-	consumeState,
-	clearContinuity,
-	getState,
-	getActiveSessionKeys,
 } from "./continuity-state";
-import type { PipelineContinuityConfig } from "@signet/core";
 
 const defaultConfig: PipelineContinuityConfig = {
 	enabled: true,

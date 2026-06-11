@@ -1,5 +1,5 @@
 /**
- * @signet/core
+ * @signetai/core
  * Core library for Signet - portable AI agent identity
  */
 

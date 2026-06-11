@@ -16,7 +16,7 @@ import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Worker } from "node:worker_threads";
-import { cosineSimilarity, getAgentIdentityFiles, parseSimpleYaml } from "@signet/core";
+import { cosineSimilarity, getAgentIdentityFiles, parseSimpleYaml } from "@signetai/core";
 import { ensureAgentRegistered, getAgentScope, resolveAgentId } from "./agent-id";
 import { extractAnchorTerms } from "./anchor-terms";
 import {

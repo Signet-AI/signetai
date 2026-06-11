@@ -1,6 +1,6 @@
 /**
  * @signet/sdk — HTTP client for the Signet daemon API.
- * No native dependencies (no SQLite, no @signet/core).
+ * No native dependencies (no SQLite, no @signetai/core).
  */
 
 import { SignetClientP2 } from "./client-p2.js";

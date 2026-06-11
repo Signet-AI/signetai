@@ -6,7 +6,7 @@ import {
 	SIGNET_PLUGIN_REGISTRY_FILE,
 	SIGNET_PLUGIN_REGISTRY_VERSION,
 	SIGNET_SECRETS_PLUGIN_ID,
-} from "@signet/core";
+} from "@signetai/core";
 
 export interface CorePluginSetupConfig {
 	readonly signetSecretsEnabled: boolean;

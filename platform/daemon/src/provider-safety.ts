@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { type PipelineProviderChoice, isLocalInferenceEndpoint, isPipelineProvider } from "@signet/core";
+import { type PipelineProviderChoice, isLocalInferenceEndpoint, isPipelineProvider } from "@signetai/core";
 import { parse, stringify } from "yaml";
 import { logger } from "./logger.js";
 

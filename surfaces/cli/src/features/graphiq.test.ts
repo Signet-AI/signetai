@@ -11,7 +11,7 @@ import {
 	readGraphiqState,
 	updateGraphiqActiveProject,
 	writeGraphiqState,
-} from "@signet/core";
+} from "@signetai/core";
 import {
 	ensureGraphiqInstalled,
 	installGraphiqPlugin,

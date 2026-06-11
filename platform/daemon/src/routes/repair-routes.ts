@@ -241,7 +241,7 @@ export function registerRepairRoutes(app: Hono): void {
 		} catch {
 			// no body or invalid JSON — use defaults
 		}
-		let provider: import("@signet/core").LlmProvider | null = null;
+		let provider: import("@signetai/core").LlmProvider | null = null;
 		try {
 			provider = getLlmProvider();
 		} catch {

@@ -15,8 +15,8 @@ import {
 	PIPELINE_WORKER_NUMS,
 	st,
 } from "$lib/stores/settings.svelte";
-import { modelPresetsForProvider } from "@signet/core/llm-model-catalog";
-import { defaultPipelineModel } from "@signet/core/pipeline-providers";
+import { modelPresetsForProvider } from "@signetai/core/llm-model-catalog";
+import { defaultPipelineModel } from "@signetai/core/pipeline-providers";
 import {
 	ACPX_DASHBOARD_AGENT_OPTIONS,
 	type AcpxDashboardAgent,

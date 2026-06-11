@@ -278,7 +278,7 @@ describe("HermesAgentConnector.isInstalled()", () => {
 		writeFileSync(
 			join(hermesRepo, "plugins", "memory", "signet", "signet.install.json"),
 			JSON.stringify({
-				connector: "@signet/connector-hermes-agent",
+				connector: "@signetai/connector-hermes-agent",
 				schemaVersion: 1,
 				connectorVersion: "0.0.0",
 				sourceHash: "stale",
@@ -409,7 +409,7 @@ describe("HermesAgentConnector.install()", () => {
 		writeFileSync(
 			join(hermesHome, "plugins", "signet", "signet.install.json"),
 			JSON.stringify({
-				connector: "@signet/connector-hermes-agent",
+				connector: "@signetai/connector-hermes-agent",
 				schemaVersion: 1,
 				connectorVersion: "0.0.0",
 				sourceHash: "stale",
@@ -1000,15 +1000,15 @@ describe("Hermes Agent bundled plugin", () => {
 					"assert manager.has_tool('signet_session_search')",
 					"print(','.join(sorted(names)))",
 				].join("\n"),
-				],
-				{ env: { ...process.env, PYTHONPATH: fixture }, encoding: "utf-8" },
-				);
+			],
+			{ env: { ...process.env, PYTHONPATH: fixture }, encoding: "utf-8" },
+		);
 
-				expect(result.status).toBe(0);
-				expect(result.stdout).toContain("memory_search");
-				expect(result.stdout).toContain("signet_session_search");
-				expect(result.stdout).not.toContain(",session_search,");
-				expect(result.stdout).toContain("remember");
+		expect(result.status).toBe(0);
+		expect(result.stdout).toContain("memory_search");
+		expect(result.stdout).toContain("signet_session_search");
+		expect(result.stdout).not.toContain(",session_search,");
+		expect(result.stdout).toContain("remember");
 	});
 
 	it("imports the client from a Hermes user-installed provider namespace", () => {

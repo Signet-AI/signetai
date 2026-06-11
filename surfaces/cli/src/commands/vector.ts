@@ -1,7 +1,7 @@
-import { confirm } from "@inquirer/prompts";
 import { existsSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { loadSqliteVec } from "@signet/core";
+import { confirm } from "@inquirer/prompts";
+import { loadSqliteVec } from "@signetai/core";
 import chalk from "chalk";
 import type { Command } from "commander";
 import ora from "ora";

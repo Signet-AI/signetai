@@ -19,7 +19,7 @@ import {
 	readStaticIdentity,
 	resolvePromptSubmitTimeoutMs,
 	resolveSessionStartTimeoutMs,
-} from "@signet/core";
+} from "@signetai/core";
 import { createDaemonClient } from "./daemon-client.js";
 import { createTools } from "./tools.js";
 import {
@@ -87,7 +87,7 @@ function readRuntimeEnv(name: string): string | undefined {
 
 // Thin wrapper: uses readRuntimeEnv for safe env access (OpenCode may run in
 // non-standard runtimes where process.env is not directly accessible), then
-// delegates all file reading and budget logic to @signet/core.
+// delegates all file reading and budget logic to @signetai/core.
 function staticFallback(): string {
 	const dir = readRuntimeEnv("SIGNET_PATH") ?? join(homedir(), ".agents");
 	return readStaticIdentity(dir) ?? "";

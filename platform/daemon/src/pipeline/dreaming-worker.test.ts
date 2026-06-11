@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { DreamingConfig, LlmProvider } from "@signet/core";
+import type { DreamingConfig, LlmProvider } from "@signetai/core";
 import { runMigrations } from "../../../core/src/migrations";
 import type { DbAccessor } from "../db-accessor";
 import { closeInferenceProviderResolver, initInferenceProviderResolver } from "../llm";

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type SignetSourceEntry, addGitHubSource } from "@signet/core";
+import { type SignetSourceEntry, addGitHubSource } from "@signetai/core";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import { githubSourceProvider } from "./github-source-provider";
 import { indexExternalMemoryArtifact } from "./memory-lineage";

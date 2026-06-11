@@ -1,4 +1,4 @@
-import type { SignetSourceEntry, SignetSourceKind, SourceFailureState } from "@signet/core";
+import type { SignetSourceEntry, SignetSourceKind, SourceFailureState } from "@signetai/core";
 import { discordSourceProvider } from "./discord-source-provider";
 import { githubSourceProvider } from "./github-source-provider";
 import {

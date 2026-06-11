@@ -6,7 +6,7 @@
  * Also provides bonus aspect/kind classification when available.
  */
 
-import { DEPENDENCY_DESCRIPTIONS, DEPENDENCY_TYPES, type DependencyType } from "@signet/core";
+import { DEPENDENCY_DESCRIPTIONS, DEPENDENCY_TYPES, type DependencyType } from "@signetai/core";
 import type { DbAccessor, ReadDb, WriteDb } from "../db-accessor";
 import { upsertAspect, upsertDependency } from "../knowledge-graph";
 import { logger } from "../logger";

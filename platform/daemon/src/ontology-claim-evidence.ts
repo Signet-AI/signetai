@@ -6,7 +6,7 @@ import {
 	type Entity,
 	type EntityAspect,
 	type EntityAttribute,
-} from "@signet/core";
+} from "@signetai/core";
 import type { DbAccessor } from "./db-accessor";
 import { listEntityAttributesByPath } from "./knowledge-graph";
 import {

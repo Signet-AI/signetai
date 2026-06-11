@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import type { LlmUsage, RouteRequest, RouterResult } from "@signet/core";
+import type { LlmUsage, RouteRequest, RouterResult } from "@signetai/core";
 import { normalizeAndHashContent } from "./content-normalization";
 import { type WriteDb, getDbAccessor } from "./db-accessor";
 import { syncVecDeleteBySourceId, syncVecInsert, vectorToBlob } from "./db-helpers";

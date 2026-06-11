@@ -24,7 +24,7 @@
 
 <!-- Check all that apply. -->
 
-- [ ] `@signet/core`
+- [ ] `@signetai/core`
 - [ ] `@signet/daemon`
 - [ ] `@signet/cli` / dashboard
 - [ ] `@signet/sdk`

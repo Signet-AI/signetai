@@ -10,7 +10,7 @@ import {
 	defaultPipelineModel,
 	isPipelineProvider,
 	parseSimpleYaml,
-} from "@signet/core";
+} from "@signetai/core";
 import { type AuthConfig, parseAuthConfig } from "./auth";
 import { logger } from "./logger";
 import { isRemotePipelineProviderForEndpoint, providerFallbackForLock } from "./provider-safety";
