@@ -140,19 +140,23 @@ export function collectManifestIssues(
 
 		for (const field of RUNTIME_FIELDS) {
 			for (const [dep, spec] of getRuntimeDependencies(pkg, field)) {
+				const workspaceDep = workspacePackages.get(dep);
 				if (spec.startsWith("workspace:")) {
-					issues.push({
-						file,
-						packageName,
-						field,
-						dep,
-						spec,
-						reason: "runtime dependency still uses workspace protocol",
-					});
+					if (!workspaceDep || !workspaceDep.publishable) {
+						issues.push({
+							file,
+							packageName,
+							field,
+							dep,
+							spec,
+							reason: workspaceDep
+								? `runtime workspace dependency ${dep} is not published`
+								: `runtime workspace dependency ${dep} is not in this workspace`,
+						});
+					}
 					continue;
 				}
 
-				const workspaceDep = workspacePackages.get(dep);
 				if (workspaceDep && !workspaceDep.publishable) {
 					if (packageName === "signetai" && field === "optionalDependencies" && isNativeReleaseTarballSpec(dep, spec)) {
 						continue;

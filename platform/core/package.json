@@ -1,56 +1,64 @@
 {
-  "name": "@signet/core",
-  "version": "0.139.0",
-  "license": "Apache-2.0",
-  "description": "Core library for Signet - portable AI agent identity",
-  "type": "module",
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
-  "exports": {
-    ".": {
-      "import": "./dist/index.js",
-      "types": "./dist/index.d.ts"
-    },
-    "./pipeline-providers": {
-      "import": "./dist/pipeline-providers.js",
-      "types": "./dist/pipeline-providers.d.ts"
-    },
-    "./llm-model-catalog": {
-      "import": "./dist/llm-model-catalog.js",
-      "types": "./dist/llm-model-catalog.d.ts"
-    }
-  },
-  "files": [
-    "dist"
-  ],
-  "scripts": {
-    "build": "bun build ./src/index.ts ./src/pipeline-providers.ts ./src/llm-model-catalog.ts --outdir ./dist --target node --external better-sqlite3 && bun run build:types",
-    "build:types": "tsc --emitDeclarationOnly --declaration --outDir dist",
-    "dev": "bun --watch src/index.ts",
-    "test": "bun test",
-    "typecheck": "tsc --noEmit"
-  },
-  "dependencies": {
-    "sqlite-vec": "^0.1.7-alpha.2",
-    "yaml": "^2.6.0"
-  },
-  "optionalDependencies": {
-    "@signet/native": "workspace:*",
-    "better-sqlite3": "^11.0.0",
-    "sqlite-vec-darwin-arm64": "^0.1.7-alpha.2",
-    "sqlite-vec-darwin-x64": "^0.1.7-alpha.2",
-    "sqlite-vec-linux-arm64": "^0.1.7-alpha.2",
-    "sqlite-vec-linux-x64": "^0.1.7-alpha.2",
-    "sqlite-vec-windows-x64": "^0.1.7-alpha.2"
-  },
-  "devDependencies": {
-    "@types/better-sqlite3": "^7.6.0",
-    "@types/node": "^22.0.0",
-    "typescript": "^5.7.0"
-  },
-  "peerDependenciesMeta": {
-    "better-sqlite3": {
-      "optional": true
-    }
-  }
+	"name": "@signet/core",
+	"version": "0.139.0",
+	"license": "Apache-2.0",
+	"description": "Core library for Signet - portable AI agent identity",
+	"type": "module",
+	"main": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"exports": {
+		".": {
+			"import": "./dist/index.js",
+			"types": "./dist/index.d.ts"
+		},
+		"./pipeline-providers": {
+			"import": "./dist/pipeline-providers.js",
+			"types": "./dist/pipeline-providers.d.ts"
+		},
+		"./llm-model-catalog": {
+			"import": "./dist/llm-model-catalog.js",
+			"types": "./dist/llm-model-catalog.d.ts"
+		}
+	},
+	"files": ["dist", "!dist/**/*.test.*", "!dist/**/__tests__/**"],
+	"scripts": {
+		"build": "bun build ./src/index.ts ./src/pipeline-providers.ts ./src/llm-model-catalog.ts --outdir ./dist --target node --external better-sqlite3 && bun run build:types",
+		"build:types": "tsc --emitDeclarationOnly --declaration --outDir dist",
+		"dev": "bun --watch src/index.ts",
+		"test": "bun test",
+		"typecheck": "tsc --noEmit"
+	},
+	"dependencies": {
+		"sqlite-vec": "^0.1.7-alpha.2",
+		"yaml": "^2.6.0"
+	},
+	"optionalDependencies": {
+		"better-sqlite3": "^11.0.0",
+		"sqlite-vec-darwin-arm64": "^0.1.7-alpha.2",
+		"sqlite-vec-darwin-x64": "^0.1.7-alpha.2",
+		"sqlite-vec-linux-arm64": "^0.1.7-alpha.2",
+		"sqlite-vec-linux-x64": "^0.1.7-alpha.2",
+		"sqlite-vec-windows-x64": "^0.1.7-alpha.2"
+	},
+	"devDependencies": {
+		"@types/better-sqlite3": "^7.6.0",
+		"@types/node": "^22.0.0",
+		"typescript": "^5.7.0"
+	},
+	"peerDependenciesMeta": {
+		"better-sqlite3": {
+			"optional": true
+		}
+	},
+	"publishConfig": {
+		"access": "public"
+	},
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/Signet-AI/signetai.git"
+	},
+	"homepage": "https://github.com/Signet-AI/signetai",
+	"bugs": {
+		"url": "https://github.com/Signet-AI/signetai/issues"
+	}
 }

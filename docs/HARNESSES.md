@@ -245,19 +245,28 @@ grace. Codex `UserPromptSubmit` defaults to 7 seconds: `SIGNET_PROMPT_SUBMIT_TIM
 or `signet connect codex` after upgrading to rewrite an existing
 `~/.codex/hooks.json`.
 
-For a remote Signet daemon, set `SIGNET_DAEMON_URL` before running the
+For a remote Signet daemon, pass `--url` and `--api-key` when installing the
 Codex connector:
 
 ```bash
-SIGNET_DAEMON_URL=http://192.168.0.60:3850 signet setup --harness codex
+signet api-key create --name "work laptop codex" --connector codex
+signet connect codex --url http://192.168.0.60:3850 --api-key sig_sk_...
 ```
 
-When `SIGNET_DAEMON_URL` is set, the Codex connector writes
+Codex also has a native-plugin-oriented npm installer name for machines where
+you do not want to install the full Signet CLI first:
+
+```bash
+npx -y @signet/codex-plugin install --url http://192.168.0.60:3850 --api-key sig_sk_...
+```
+
+When `SIGNET_DAEMON_URL` or `--url` is set, the Codex connector writes
 the plugin MCP URL, or compatibility `[mcp_servers.signet] url =
 "<daemon>/mcp"` when plugin support is unavailable, and bakes the same daemon
 URL into generated lifecycle hook commands. This keeps on-demand MCP tools and
-automatic lifecycle memory pointed at the same Signet instance.
-The value must be the daemon origin only, for example
+automatic lifecycle memory pointed at the same Signet instance. When an API key
+is provided, Codex MCP and lifecycle hook calls send it as bearer auth.
+The URL value must be the daemon origin only, for example
 `http://192.168.0.60:3850` or `https://signet.internal:3850`, with no
 path, query string, fragment, or embedded credentials.
 

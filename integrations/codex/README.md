@@ -23,9 +23,16 @@ available, with a compatibility path for older Codex installs.
 
 ```bash
 signet setup --harness codex
+signet connect codex --url http://signet-home.tailnet:3850 --api-key sig_sk_...
 ```
 
-Interactive setup can also detect Codex CLI and offer to configure it.
+Interactive setup can also detect Codex CLI and offer to configure it. On a
+machine where you only want to install the Codex integration, use the standalone
+npm installer:
+
+```bash
+npx -y @signet/codex-plugin install --url http://signet-home.tailnet:3850 --api-key sig_sk_...
+```
 
 ## Uninstallation
 
@@ -38,6 +45,7 @@ daemon memories are preserved.
 | Field | Value |
 |-------|-------|
 | Package | `@signet/connector-codex` |
+| Native plugin installer | `@signet/codex-plugin` |
 | License | Apache-2.0 |
 
 ## Architecture

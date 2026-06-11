@@ -368,6 +368,17 @@ jobs:
             (cd "$package_dir" && npm publish --tag next --access public)
           }
 
+          publish_npm_package platform/core
+          publish_npm_package libs/connector-base
+          publish_npm_package integrations/claude-code/connector
+          publish_npm_package integrations/codex/connector
+          publish_npm_package integrations/gemini/connector
+          publish_npm_package integrations/hermes-agent/connector
+          publish_npm_package integrations/oh-my-pi/connector
+          publish_npm_package integrations/openclaw/connector
+          publish_npm_package integrations/opencode/connector
+          publish_npm_package integrations/pi/connector
+          publish_npm_package integrations/codex/plugin
           publish_npm_package dist/signetai
           publish_npm_package integrations/openclaw/memory-adapter true
         env:

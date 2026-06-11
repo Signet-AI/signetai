@@ -348,8 +348,10 @@ function main() {
 	}
 
 	// Resolve workspace: protocols in publishable packages so npm publish
-	// ships real version strings instead of "workspace:*".
-	const resolved = resolveWorkspaceProtocols(packageFiles, targetVersion, checkOnly);
+	// ships real version strings instead of "workspace:*". Source manifests
+	// intentionally keep workspace links for local development, so check mode
+	// validates versions without flagging those release-time rewrites as drift.
+	const resolved = checkOnly ? [] : resolveWorkspaceProtocols(packageFiles, targetVersion, false);
 	const nativeOptionalDepsUpdated = syncSignetNativeOptionalDependencies(targetVersion, checkOnly);
 
 	// Sync Cargo.toml files under platform/ and runtimes/

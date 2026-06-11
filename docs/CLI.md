@@ -908,6 +908,23 @@ signet connector install pi --url https://signet-home.tailnet:3850 --api-key sig
 signet connect codex --url https://signet-home.tailnet:3850 --api-key sig_sk_...
 ```
 
+Connector installers are also published as individual npm packages for machines
+where you only want to configure one harness:
+
+```bash
+npx -y @signet/connector-pi install --url https://signet-home.tailnet:3850 --api-key sig_sk_...
+npx -y @signet/connector-opencode install --url https://signet-home.tailnet:3850 --api-key sig_sk_...
+npx -y @signet/connector-codex install --url https://signet-home.tailnet:3850 --api-key sig_sk_...
+```
+
+For Codex, `@signet/codex-plugin` is the native-plugin-oriented installer name.
+It writes the same generated Codex plugin marketplace bundle and compatibility
+hook/MCP config as `signet connect codex`:
+
+```bash
+npx -y @signet/codex-plugin install --url https://signet-home.tailnet:3850 --api-key sig_sk_...
+```
+
 ---
 
 `signet hook`

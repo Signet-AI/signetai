@@ -164,6 +164,18 @@ describe("check-publish-manifests", () => {
 			workflow.indexOf("bun scripts/check-publish-manifests.ts"),
 		);
 		expect(workflow.indexOf("bun scripts/check-publish-manifests.ts")).toBeLessThan(
+			workflow.indexOf("publish_npm_package platform/core\n"),
+		);
+		expect(workflow.indexOf("publish_npm_package platform/core\n")).toBeLessThan(
+			workflow.indexOf("publish_npm_package libs/connector-base\n"),
+		);
+		expect(workflow.indexOf("publish_npm_package libs/connector-base\n")).toBeLessThan(
+			workflow.indexOf("publish_npm_package integrations/codex/connector\n"),
+		);
+		expect(workflow.indexOf("publish_npm_package integrations/codex/connector\n")).toBeLessThan(
+			workflow.indexOf("publish_npm_package integrations/codex/plugin\n"),
+		);
+		expect(workflow.indexOf("publish_npm_package integrations/codex/plugin\n")).toBeLessThan(
 			workflow.indexOf("publish_npm_package dist/signetai\n"),
 		);
 		expect(workflow).toContain('stage_native_package "linux-x64" "signet-linux-x64" "signet"');
@@ -187,6 +199,13 @@ describe("check-publish-manifests", () => {
 		expect(workflow).toContain("NPM_CONFIG_USERCONFIG: ${{ runner.temp }}/.npmrc");
 		expect(workflow).toContain("npm publish --tag next --access public");
 		expect(workflow).toContain('gh release edit "v${NEW_VERSION}" --draft=false');
+		expect(workflow).toContain("publish_npm_package integrations/claude-code/connector");
+		expect(workflow).toContain("publish_npm_package integrations/gemini/connector");
+		expect(workflow).toContain("publish_npm_package integrations/hermes-agent/connector");
+		expect(workflow).toContain("publish_npm_package integrations/oh-my-pi/connector");
+		expect(workflow).toContain("publish_npm_package integrations/openclaw/connector");
+		expect(workflow).toContain("publish_npm_package integrations/opencode/connector");
+		expect(workflow).toContain("publish_npm_package integrations/pi/connector");
 		expect(workflow.indexOf("publish_npm_package dist/signetai\n")).toBeLessThan(
 			workflow.indexOf('gh release edit "v${NEW_VERSION}" --draft=false'),
 		);
@@ -198,6 +217,17 @@ describe("check-publish-manifests", () => {
 		expect(promoteWorkflow).not.toContain('"signetai-darwin-x64"');
 		expect(promoteWorkflow).not.toContain('"signetai-darwin-arm64"');
 		expect(promoteWorkflow).not.toContain('"signetai-win32-x64"');
+		expect(promoteWorkflow).toContain('"@signet/core"');
+		expect(promoteWorkflow).toContain('"@signet/connector-base"');
+		expect(promoteWorkflow).toContain('"@signet/connector-claude-code"');
+		expect(promoteWorkflow).toContain('"@signet/connector-codex"');
+		expect(promoteWorkflow).toContain('"@signet/connector-gemini"');
+		expect(promoteWorkflow).toContain('"@signet/connector-hermes-agent"');
+		expect(promoteWorkflow).toContain('"@signet/connector-oh-my-pi"');
+		expect(promoteWorkflow).toContain('"@signet/connector-openclaw"');
+		expect(promoteWorkflow).toContain('"@signet/connector-opencode"');
+		expect(promoteWorkflow).toContain('"@signet/connector-pi"');
+		expect(promoteWorkflow).toContain('"@signet/codex-plugin"');
 		expect(promoteWorkflow).toContain('"signetai"');
 		expect(promoteWorkflow).toContain('npm view "${package}@${VERSION}" version >/dev/null');
 		expect(promoteWorkflow).toContain('npm dist-tag add "${package}@${VERSION}" latest');
@@ -387,8 +417,8 @@ describe("check-publish-manifests", () => {
 		expect(installer).toContain("linkSync");
 		expect(installer).toContain("require.resolve");
 		expect(installer).toContain("Linked Signet native binary");
-		expect(installer).not.toContain("native-manifest.json");
-		expect(installer).not.toContain("https");
+		expect(installer).toContain("native-manifest.json");
+		expect(installer).toContain("installConnectorAssets");
 		expect(installer).not.toContain("better-sqlite3");
 	});
 
@@ -399,6 +429,46 @@ describe("check-publish-manifests", () => {
 				publishConfig: { access: "public" },
 			}),
 		).toBe(true);
+	});
+
+	test("publishes connector packages with runnable installer bins", () => {
+		const root = join(import.meta.dir, "..");
+		const connectorPackages = [
+			[
+				"integrations/claude-code/connector/package.json",
+				"@signet/connector-claude-code",
+				"signet-connector-claude-code",
+			],
+			["integrations/codex/connector/package.json", "@signet/connector-codex", "signet-connector-codex"],
+			["integrations/gemini/connector/package.json", "@signet/connector-gemini", "signet-connector-gemini"],
+			[
+				"integrations/hermes-agent/connector/package.json",
+				"@signet/connector-hermes-agent",
+				"signet-connector-hermes-agent",
+			],
+			["integrations/oh-my-pi/connector/package.json", "@signet/connector-oh-my-pi", "signet-connector-oh-my-pi"],
+			["integrations/openclaw/connector/package.json", "@signet/connector-openclaw", "signet-connector-openclaw"],
+			["integrations/opencode/connector/package.json", "@signet/connector-opencode", "signet-connector-opencode"],
+			["integrations/pi/connector/package.json", "@signet/connector-pi", "signet-connector-pi"],
+			["integrations/codex/plugin/package.json", "@signet/codex-plugin", "signet-codex-plugin"],
+		] as const;
+
+		for (const [manifestPath, packageName, binName] of connectorPackages) {
+			const manifestFile = join(root, manifestPath);
+			const manifest = JSON.parse(readFileSync(manifestFile, "utf-8")) as {
+				name?: string;
+				publishConfig?: unknown;
+				files?: string[];
+				bin?: Record<string, string>;
+			};
+			expect(manifest.name).toBe(packageName);
+			expect(manifest.publishConfig).toEqual({ access: "public" });
+			expect(manifest.files).toContain("bin");
+			expect(manifest.bin?.[binName]).toBe("bin/install.js");
+			expect(readFileSync(join(dirname(manifestFile), "bin", "install.js"), "utf-8")).toStartWith(
+				"#!/usr/bin/env node",
+			);
+		}
 	});
 
 	test("discovers publishable manifest targets from workspace files", () => {
@@ -503,13 +573,16 @@ describe("check-publish-manifests", () => {
 		}
 	});
 
-	test("flags workspace protocol in runtime dependency fields", () => {
+	test("flags workspace protocol in runtime dependency fields when the dependency is not publishable", () => {
 		const root = mkdtempSync(join(tmpdir(), "signet-publish-manifests-"));
 		try {
 			const signetaiDir = join(root, "dist", "signetai");
+			const connectorDir = join(root, "integrations", "pi", "connector");
 			mkdirSync(signetaiDir, { recursive: true });
+			mkdirSync(connectorDir, { recursive: true });
 
 			const signetaiFile = join(signetaiDir, "package.json");
+			const connectorFile = join(connectorDir, "package.json");
 			writeJson(signetaiFile, {
 				name: "signetai",
 				version: "1.2.3",
@@ -517,12 +590,16 @@ describe("check-publish-manifests", () => {
 					"@signet/connector-pi": "workspace:*",
 				},
 			});
+			writeJson(connectorFile, {
+				name: "@signet/connector-pi",
+				version: "1.2.3",
+			});
 
-			const workspacePackages = collectWorkspacePackages([signetaiFile]);
+			const workspacePackages = collectWorkspacePackages([signetaiFile, connectorFile]);
 			const issues = collectManifestIssues([signetaiFile], workspacePackages);
 
 			expect(issues).toHaveLength(1);
-			expect(issues[0]?.reason).toContain("workspace protocol");
+			expect(issues[0]?.reason).toContain("not published");
 			expect(issues[0]?.field).toBe("dependencies");
 		} finally {
 			rmSync(root, { recursive: true, force: true });
@@ -593,7 +670,7 @@ describe("check-publish-manifests", () => {
 				version: "1.2.3",
 				publishConfig: { access: "public" },
 				dependencies: {
-					"@signetai/signet-memory-openclaw": "1.2.3",
+					"@signetai/signet-memory-openclaw": "workspace:*",
 				},
 			});
 			writeJson(adapterFile, {
