@@ -22,6 +22,41 @@ use crate::{
 
 const DEFAULT_TOKEN_TTL_SECONDS: i64 = 7 * 24 * 60 * 60;
 
+fn api_keys_not_implemented() -> Response {
+    (
+        StatusCode::NOT_IMPLEMENTED,
+        Json(json!({"error": "API key management is not available in the Rust shadow daemon yet"})),
+    )
+        .into_response()
+}
+
+fn require_admin_auth(
+    state: &AppState,
+    peer: &SocketAddr,
+    headers: &HeaderMap,
+) -> Result<(), Response> {
+    let is_local = is_loopback(peer);
+    let auth_runtime = state.auth_snapshot();
+    let auth = authenticate_headers(
+        auth_runtime.mode,
+        auth_runtime.secret.as_deref(),
+        headers,
+        is_local,
+    )
+    .map_err(|resp| *resp)?;
+    require_permission_guard(&auth, Permission::Admin, auth_runtime.mode, is_local)
+        .map_err(|resp| *resp)?;
+    require_rate_limit_guard(
+        &auth,
+        "admin",
+        &auth_runtime.admin_limiter,
+        auth_runtime.mode,
+        headers.get("x-signet-actor").and_then(|v| v.to_str().ok()),
+    )
+    .map_err(|resp| *resp)?;
+    Ok(())
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TokenRequest {
@@ -78,6 +113,36 @@ fn role_name(role: TokenRole) -> &'static str {
         TokenRole::Agent => "agent",
         TokenRole::Readonly => "readonly",
     }
+}
+
+/// GET /api/auth/api-keys — TS daemon owns API-key storage for now.
+pub async fn list_api_keys(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> Result<Response, Response> {
+    require_admin_auth(&state, &peer, &headers)?;
+    Ok(api_keys_not_implemented())
+}
+
+/// POST /api/auth/api-keys — TS daemon owns API-key storage for now.
+pub async fn create_api_key(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> Result<Response, Response> {
+    require_admin_auth(&state, &peer, &headers)?;
+    Ok(api_keys_not_implemented())
+}
+
+/// DELETE /api/auth/api-keys/:id — TS daemon owns API-key storage for now.
+pub async fn revoke_api_key(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> Result<Response, Response> {
+    require_admin_auth(&state, &peer, &headers)?;
+    Ok(api_keys_not_implemented())
 }
 
 /// POST /api/auth/token — mint a scoped token for team/hybrid mode.

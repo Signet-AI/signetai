@@ -8,7 +8,8 @@
 		"deprecated-remove-from-ts-too": "Route is intentionally unsupported and must be removed or hidden from both daemons."
 	},
 	"summary": {
-		"native-rust-replay-proven": 310
+		"native-rust-replay-proven": 310,
+		"mounted-shallow": 3
 	},
 	"routes": [
 		{
@@ -132,10 +133,40 @@
 			"parityRule": false
 		},
 		{
+			"method": "GET",
+			"path": "/api/auth/api-keys",
+			"file": "platform/daemon/src/routes/auth-routes.ts",
+			"line": 65,
+			"status": "mounted-shallow",
+			"rustMounted": true,
+			"contractReplay": false,
+			"parityRule": false
+		},
+		{
+			"method": "POST",
+			"path": "/api/auth/api-keys",
+			"file": "platform/daemon/src/routes/auth-routes.ts",
+			"line": 69,
+			"status": "mounted-shallow",
+			"rustMounted": true,
+			"contractReplay": false,
+			"parityRule": false
+		},
+		{
+			"method": "DELETE",
+			"path": "/api/auth/api-keys/:id",
+			"file": "platform/daemon/src/routes/auth-routes.ts",
+			"line": 102,
+			"status": "mounted-shallow",
+			"rustMounted": true,
+			"contractReplay": false,
+			"parityRule": false
+		},
+		{
 			"method": "POST",
 			"path": "/api/auth/token",
 			"file": "platform/daemon/src/routes/auth-routes.ts",
-			"line": 29,
+			"line": 38,
 			"status": "native-rust-replay-proven",
 			"rustMounted": true,
 			"contractReplay": true,
@@ -145,7 +176,7 @@
 			"method": "GET",
 			"path": "/api/auth/whoami",
 			"file": "platform/daemon/src/routes/auth-routes.ts",
-			"line": 12,
+			"line": 17,
 			"status": "native-rust-replay-proven",
 			"rustMounted": true,
 			"contractReplay": true,

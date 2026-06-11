@@ -207,6 +207,14 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/status", get(status))
         .route("/api/auth/whoami", get(routes::auth::whoami))
         .route("/api/auth/token", axum::routing::post(routes::auth::token))
+        .route(
+            "/api/auth/api-keys",
+            get(routes::auth::list_api_keys).post(routes::auth::create_api_key),
+        )
+        .route(
+            "/api/auth/api-keys/{id}",
+            axum::routing::delete(routes::auth::revoke_api_key),
+        )
         // Memory read routes
         .route("/api/memories", get(routes::memory::list))
         .route("/api/memories/most-used", get(routes::memory::most_used))
