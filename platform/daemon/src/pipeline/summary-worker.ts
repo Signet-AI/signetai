@@ -15,7 +15,7 @@ import { spawn as nodeSpawn } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import type { LlmProvider } from "@signetai/core";
+import type { LlmProvider } from "@signet/core";
 import { normalizeAndHashContent } from "../content-normalization";
 import type { DbAccessor, WriteDb } from "../db-accessor";
 import { countChanges } from "../db-helpers";

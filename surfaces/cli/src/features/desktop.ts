@@ -16,7 +16,7 @@ import {
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { resolveWorkspaceSourceRepoPath, syncWorkspaceSourceRepo } from "@signetai/core";
+import { resolveWorkspaceSourceRepoPath, syncWorkspaceSourceRepo } from "@signet/core";
 import { resolveAgentsDir } from "../lib/workspace.js";
 
 export interface DesktopCommandOptions {

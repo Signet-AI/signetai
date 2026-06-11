@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { DependencyType } from "@signetai/core";
+import type { DependencyType } from "@signet/core";
 import type { DbAccessor, WriteDb } from "./db-accessor";
 import { recordAgentFeedbackInner } from "./session-memories";
 

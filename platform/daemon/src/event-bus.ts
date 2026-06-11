@@ -1,7 +1,7 @@
 /** Signet OS Event Bus — pub/sub with bounded rolling buffer. */
 
 import { EventEmitter } from "node:events";
-import type { ContextSnapshot, EventBusSubscription, SignetOSEvent } from "@signetai/core";
+import type { ContextSnapshot, EventBusSubscription, SignetOSEvent } from "@signet/core";
 import { logger } from "./logger.js";
 
 const MAX_BUFFER_SIZE = 500;

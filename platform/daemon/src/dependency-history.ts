@@ -1,4 +1,4 @@
-import type { DependencyType } from "@signetai/core";
+import type { DependencyType } from "@signet/core";
 
 export const RELATED_TO_REASON_ERROR = "related_to dependencies require a non-empty reason";
 

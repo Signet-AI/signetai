@@ -1,4 +1,4 @@
-import type { SignetSourceEntry } from "@signetai/core";
+import type { SignetSourceEntry } from "@signet/core";
 import type { Command } from "commander";
 import {
 	type DaemonAddSourceResult,

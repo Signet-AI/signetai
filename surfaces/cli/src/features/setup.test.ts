@@ -8,7 +8,7 @@ import {
 	detectExistingSetup,
 	readGraphiqState,
 	updateGraphiqActiveProject,
-} from "@signetai/core";
+} from "@signet/core";
 import { detectedHarnessesForExistingSetup, runExistingSetupWizard } from "./setup-migrate.js";
 import type { SetupDeps } from "./setup-types.js";
 import { setupWizard } from "./setup.js";

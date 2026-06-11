@@ -226,54 +226,26 @@ function resolveWorkspaceSpec(spec: string, version: string): string {
 	}
 }
 
-function isExactSemverSpec(spec: string): boolean {
-	return /^\d+\.\d+\.\d+$/.test(spec);
-}
-
-function isPublishablePackage(pkg: Record<string, unknown>): boolean {
-	return (
-		typeof pkg.name === "string" &&
-		pkg.private !== true &&
-		typeof pkg.publishConfig === "object" &&
-		pkg.publishConfig !== null
-	);
-}
-
 export function resolveWorkspaceProtocols(files: readonly string[], version: string, checkOnly: boolean): string[] {
-	const packageJsonByFile = new Map<string, Record<string, unknown>>();
-	const publishablePackageNames = new Set<string>();
-	for (const file of files) {
-		const pkg = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
-		packageJsonByFile.set(file, pkg);
-		if (isPublishablePackage(pkg)) {
-			publishablePackageNames.add(pkg.name as string);
-		}
-	}
-
 	const patched: string[] = [];
 	for (const file of files) {
-		const pkg = packageJsonByFile.get(file);
-		if (!pkg || !isPublishablePackage(pkg)) continue;
+		const raw = readFileSync(file, "utf8");
+		const pkg = JSON.parse(raw) as Record<string, unknown>;
+		// Only resolve for packages that will be published
+		if (!pkg.publishConfig || pkg.private) continue;
 
 		let changed = false;
-		// Replace workspace: protocols and exact pins to publishable workspace
-		// packages in runtime dependency fields. Dev-only workspace links must stay
-		// local so the nightly release can run bun install before the newly bumped
-		// internal packages have been published.
+		// Replace workspace: protocols only in runtime dependency fields. Dev-only
+		// workspace links must stay local so the nightly release can run bun install
+		// before the newly bumped internal packages have been published.
 		for (const field of PUBLISH_RUNTIME_DEPENDENCY_FIELDS) {
 			const deps = pkg[field];
 			if (!deps || typeof deps !== "object" || Array.isArray(deps)) continue;
 			for (const [name, spec] of Object.entries(deps as Record<string, unknown>)) {
 				if (typeof spec !== "string") continue;
 				const resolved = resolveWorkspaceSpec(spec, version);
-				const next =
-					resolved !== spec
-						? resolved
-						: publishablePackageNames.has(name) && isExactSemverSpec(spec) && spec !== version
-							? version
-							: spec;
-				if (next !== spec) {
-					(deps as Record<string, unknown>)[name] = next;
+				if (resolved !== spec) {
+					(deps as Record<string, unknown>)[name] = resolved;
 					changed = true;
 				}
 			}

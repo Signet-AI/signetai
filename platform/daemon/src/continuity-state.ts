@@ -7,7 +7,7 @@
  */
 
 import { realpathSync } from "node:fs";
-import type { PipelineContinuityConfig } from "@signetai/core";
+import type { PipelineContinuityConfig } from "@signet/core";
 
 export interface ContinuityState {
 	readonly sessionKey: string;

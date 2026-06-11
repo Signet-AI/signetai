@@ -11,7 +11,7 @@ import {
 	memoriesFtsNeedsTokenizerRepair,
 	readMemoriesFtsSql,
 	recreateMemoriesFts,
-} from "@signetai/core";
+} from "@signet/core";
 import { normalizeAndHashContent } from "./content-normalization";
 import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
 import { toFtsSchemaQueryDb } from "./db-accessor";

@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { parseSimpleYaml, readPipelinePauseState, setPipelinePaused } from "@signetai/core";
+import { parseSimpleYaml, readPipelinePauseState, setPipelinePaused } from "@signet/core";
 import type { Context, Hono } from "hono";
 import { resolveAgentId, resolveDaemonAgentId } from "../agent-id.js";
 import { requirePermission, requireRateLimit } from "../auth";

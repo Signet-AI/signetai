@@ -1,5 +1,5 @@
 /**
- * @signetai/connector-opencode
+ * @signet/connector-opencode
  *
  * Signet connector for OpenCode - installs hooks and generates config
  * during 'signet install'.
@@ -12,7 +12,7 @@
  *
  * @example
  * ```typescript
- * import { OpenCodeConnector } from '@signetai/connector-opencode'
+ * import { OpenCodeConnector } from '@signet/connector-opencode'
  *
  * const connector = new OpenCodeConnector()
  * await connector.install('/home/user/.agents')
@@ -22,8 +22,8 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, relative } from "node:path";
-import { BaseConnector, type InstallResult, type UninstallResult, atomicWriteJson } from "@signetai/connector-base";
-import { OPENCODE_PIPELINE_AGENT, OPENCODE_PIPELINE_SYSTEM_PROMPT, expandHome, hasValidIdentity } from "@signetai/core";
+import { BaseConnector, type InstallResult, type UninstallResult, atomicWriteJson } from "@signet/connector-base";
+import { OPENCODE_PIPELINE_AGENT, OPENCODE_PIPELINE_SYSTEM_PROMPT, expandHome, hasValidIdentity } from "@signet/core";
 import { PLUGIN_BUNDLE } from "./plugin-bundle.js";
 
 // ============================================================================

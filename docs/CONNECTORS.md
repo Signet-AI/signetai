@@ -354,7 +354,7 @@ Building Custom Connectors
 --------------------------
 
 To add a new provider, implement the `ConnectorRuntime` interface from
-`@signetai/core`. This section walks through the full process.
+`@signet/core`. This section walks through the full process.
 
 ### Step 1: Implement ConnectorRuntime
 
@@ -368,7 +368,7 @@ import type {
   SyncCursor,
   SyncResult,
   SyncError,
-} from "@signetai/core";
+} from "@signet/core";
 
 class MyConnector implements ConnectorRuntime {
   readonly id: string;

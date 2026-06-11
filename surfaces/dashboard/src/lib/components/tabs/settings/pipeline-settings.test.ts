@@ -1,6 +1,6 @@
 // @ts-nocheck
 import { describe, expect, it } from "bun:test";
-import { DEFAULT_PIPELINE_TIMEOUT_MS } from "@signetai/core/pipeline-providers";
+import { DEFAULT_PIPELINE_TIMEOUT_MS } from "@signet/core/pipeline-providers";
 import {
 	DEFAULT_OPENAI_COMPATIBLE_ENDPOINT,
 	applyAcpxDashboardSetup,

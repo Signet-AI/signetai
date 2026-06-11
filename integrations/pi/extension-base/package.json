@@ -1,17 +1,23 @@
 {
-	"name": "@signet/pi-extension-base",
-	"version": "0.140.0",
-	"description": "Shared runtime utilities for Signet harness extensions (helpers, transcript, types, lifecycle, session state)",
-	"type": "module",
-	"main": "./src/index.ts",
-	"types": "./src/index.ts",
-	"exports": {
-		".": "./src/index.ts"
-	},
-	"dependencies": {
-		"@signetai/core": "workspace:*"
-	},
-	"files": ["src"],
-	"keywords": ["signet", "extension", "base"],
-	"license": "Apache-2.0"
+  "name": "@signet/pi-extension-base",
+  "version": "0.140.0",
+  "description": "Shared runtime utilities for Signet harness extensions (helpers, transcript, types, lifecycle, session state)",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@signet/core": "workspace:*"
+  },
+  "files": [
+    "src"
+  ],
+  "keywords": [
+    "signet",
+    "extension",
+    "base"
+  ],
+  "license": "Apache-2.0"
 }

@@ -1,5 +1,5 @@
 /**
- * @signetai/core - YAML utilities
+ * @signet/core - YAML utilities
  */
 
 import YAML from "yaml";

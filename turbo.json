@@ -20,29 +20,29 @@
 			"cache": false,
 			"persistent": true
 		},
-		"@signetai/connector-opencode#build": {
+		"@signet/connector-opencode#build": {
 			"dependsOn": ["@signet/opencode-plugin#build", "^build"],
 			"outputs": ["dist/**", "build/**", "dashboard/**", "target/**", "!.svelte-kit/**"]
 		},
-		"@signetai/connector-oh-my-pi#build": {
+		"@signet/connector-oh-my-pi#build": {
 			"dependsOn": ["@signet/oh-my-pi-extension#build", "^build"],
 			"outputs": ["dist/**", "build/**", "dashboard/**", "target/**", "!.svelte-kit/**"]
 		},
-		"@signetai/connector-pi#build": {
+		"@signet/connector-pi#build": {
 			"dependsOn": ["@signet/pi-extension#build", "^build"],
 			"outputs": ["dist/**", "build/**", "dashboard/**", "target/**", "!.svelte-kit/**"]
 		},
 		"signetai#build": {
 			"dependsOn": [
-				"@signetai/core#build",
-				"@signetai/connector-base#build",
-				"@signetai/connector-claude-code#build",
-				"@signetai/connector-codex#build",
-				"@signetai/connector-hermes-agent#build",
-				"@signetai/connector-oh-my-pi#build",
-				"@signetai/connector-openclaw#build",
-				"@signetai/connector-opencode#build",
-				"@signetai/connector-pi#build",
+				"@signet/core#build",
+				"@signet/connector-base#build",
+				"@signet/connector-claude-code#build",
+				"@signet/connector-codex#build",
+				"@signet/connector-hermes-agent#build",
+				"@signet/connector-oh-my-pi#build",
+				"@signet/connector-openclaw#build",
+				"@signet/connector-opencode#build",
+				"@signet/connector-pi#build",
 				"@signet/daemon#build"
 			],
 			"outputs": ["dist/**", "build/**", "dashboard/**", "target/**", "!.svelte-kit/**"]

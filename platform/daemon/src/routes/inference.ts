@@ -4,7 +4,7 @@ import {
 	ROUTING_PRIVACY_TIERS,
 	type RouteRequest,
 	parseRoutingTargetRef,
-} from "@signetai/core";
+} from "@signet/core";
 import type { Hono } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import type { AuthMode, TokenClaims } from "../auth/index.js";

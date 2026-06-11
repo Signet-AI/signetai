@@ -9,7 +9,7 @@ section: "Reference"
 ===
 
 `@signet/sdk` is a typed TypeScript HTTP client for the Signet [[daemon]]
-[[api|API]]. It has no native dependencies — no SQLite, no `@signetai/core` —
+[[api|API]]. It has no native dependencies — no SQLite, no `@signet/core` —
 making it suitable for embedding in any Node.js, Bun, or browser environment
 that can reach the daemon over HTTP.
 

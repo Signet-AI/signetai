@@ -18,7 +18,7 @@ import {
 	SIGNET_PLUGIN_REGISTRY_VERSION,
 	SIGNET_SECRETS_PLUGIN_ID,
 	updateGraphiqActiveProject,
-} from "@signetai/core";
+} from "@signet/core";
 import { resetDefaultPluginHostForTests } from "../plugins/index.js";
 import { createMcpServer, refreshMarketplaceProxyTools } from "./tools.js";
 

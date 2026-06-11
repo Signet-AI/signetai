@@ -1,14 +1,14 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { readRuntimeEnv, readTrimmedRuntimeEnv, readTrimmedString } from "@signet/pi-extension-base";
 import {
 	buildRecallRequestBody,
 	buildRememberRequestBody,
 	formatRecallText,
 	parseRecallPayload,
 	resolvePiAgentDir,
-} from "@signetai/core";
-import type { RecallPayload } from "@signetai/core";
+} from "@signet/core";
+import type { RecallPayload } from "@signet/core";
+import { readRuntimeEnv, readTrimmedRuntimeEnv, readTrimmedString } from "@signet/pi-extension-base";
 import { Type } from "@sinclair/typebox";
 import { createDaemonClient } from "./daemon-client.js";
 import {
@@ -528,7 +528,8 @@ function registerCommandsAndTools(pi: PiExtensionApi, daemonUrl: string, agentId
 		label: "Signet Recall",
 		description:
 			"Search SignetAI persistent memory for relevant context from previous sessions. Use aggregate=true for multi-query synthesis that consolidates scattered memories into a single summary.",
-		promptSnippet: "Search past memories when user asks about previous decisions, preferences, or project context",
+		promptSnippet:
+			"Search past memories when user asks about previous decisions, preferences, or project context",
 		promptGuidelines: [
 			"Use aggregate=true when the user asks a broad question that likely spans many memories (e.g. 'who is X', 'what happened with Y', 'summarize the history of Z')",
 			"Use aggregate=false (default) for targeted lookups of specific facts or single memories",
@@ -553,8 +554,7 @@ function registerCommandsAndTools(pi: PiExtensionApi, daemonUrl: string, agentId
 			),
 			aggregateBudget: Type.Optional(
 				Type.String({
-					description:
-						"Aggregate synthesis budget: 'small', 'medium', or 'large'. Controls depth of multi-query recall and synthesis. (default: medium)",
+					description: "Aggregate synthesis budget: 'small', 'medium', or 'large'. Controls depth of multi-query recall and synthesis. (default: medium)",
 				}),
 			),
 		}),
@@ -572,7 +572,8 @@ function registerCommandsAndTools(pi: PiExtensionApi, daemonUrl: string, agentId
 				const limit = typeof params.limit === "number" ? params.limit : 5;
 				const isAggregate = params.aggregate === true;
 				const aggregateBudget =
-					typeof params.aggregateBudget === "string" && ["small", "medium", "large"].includes(params.aggregateBudget)
+					typeof params.aggregateBudget === "string" &&
+					["small", "medium", "large"].includes(params.aggregateBudget)
 						? (params.aggregateBudget as "small" | "medium" | "large")
 						: undefined;
 
@@ -856,6 +857,7 @@ function registerCommandsAndTools(pi: PiExtensionApi, daemonUrl: string, agentId
 			}
 		},
 	});
+
 }
 
 // ============================================================================

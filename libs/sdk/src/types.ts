@@ -1,5 +1,5 @@
 // Response types for the Signet daemon HTTP API.
-// Standalone — no dependency on @signetai/core.
+// Standalone — no dependency on @signet/core.
 
 export interface MemoryRecord {
 	readonly id: string;

@@ -3290,7 +3290,7 @@ Tag range: `v0.72.7..v0.72.8`.
 
 ### Bug Fixes
 
-- **dashboard**: replace @signetai/core runtime import with local constant
+- **dashboard**: replace @signet/core runtime import with local constant
 - **openclaw**: dedupe marketplace proxy refresh (#281)
 
 ## [0.72.7] - 2026-03-22
@@ -3605,7 +3605,7 @@ Tag range: `v0.65.3..v0.65.4`.
 
 ### Bug Fixes
 
-- move @signetai/core to devDependencies in openclaw plugin (#237)
+- move @signet/core to devDependencies in openclaw plugin (#237)
 
 ## [0.65.3] - 2026-03-19
 
@@ -5800,7 +5800,7 @@ Release summary: 25 features, 28 bug fixes, 2 refactors, and 4 docs updates.
 - **cli**: add signet remember and signet recall commands
 - **daemon**: add embedding provider status check
 - **dashboard**: schematic monochrome graph aesthetic
-- **connectors**: add @signetai/connector-openclaw
+- **connectors**: add @signet/connector-openclaw
 - **connectors**: inject Signet system block into harness files
 - **core**: add database schema migration system
 - **core**: add runtime-detected SQLite and connector packages
@@ -5827,9 +5827,9 @@ Release summary: 25 features, 28 bug fixes, 2 refactors, and 4 docs updates.
 - **build**: ensure connectors build before signetai meta-package
 - **connectors**: add @types/node for CI builds
 - **templates**: wrap Signet block in SIGNET:START/END delimiters
-- **build**: use relative import for @signetai/core in CLI
+- **build**: use relative import for @signet/core in CLI
 - **build**: ensure core builds before dependent packages
-- **ci**: mark @signetai/core as external in CLI build
+- **ci**: mark @signet/core as external in CLI build
 - **ci**: use jq for version bump to avoid npm workspace issue
 - add missing dependencies for CI build
 - **ci**: remove frozen-lockfile for workspace compat

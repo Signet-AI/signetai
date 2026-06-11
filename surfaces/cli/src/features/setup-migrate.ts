@@ -14,8 +14,8 @@ import {
 	resolvePrimaryPackageManager,
 	runMigrations,
 	unifySkills,
-} from "@signetai/core";
-import { readNetworkMode } from "@signetai/core";
+} from "@signet/core";
+import { readNetworkMode } from "@signet/core";
 import chalk from "chalk";
 import open from "open";
 import ora from "ora";

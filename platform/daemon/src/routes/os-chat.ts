@@ -6,7 +6,7 @@
  * agent responses with tool call results.
  */
 
-import type { RoutingPrivacyTier } from "@signetai/core";
+import type { RoutingPrivacyTier } from "@signet/core";
 import type { Hono } from "hono";
 import { getInferenceRouterOrNull } from "../inference-router.js";
 import { getInteractiveLlmProviderOrNull } from "../llm.js";

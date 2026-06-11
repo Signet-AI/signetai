@@ -1443,7 +1443,7 @@ Location: `~/.claude/`
 Location: `~/.config/opencode/plugins/`
 
 `signet.mjs` is a bundled OpenCode plugin installed by
-`@signetai/connector-opencode` that exposes `/remember` and `/recall`
+`@signet/connector-opencode` that exposes `/remember` and `/recall`
 as native tools within the harness.
 
 > **Note:** Legacy `memory.mjs` installations are automatically migrated

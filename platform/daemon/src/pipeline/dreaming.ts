@@ -16,7 +16,7 @@ import {
 	type IdentityContextFileEntry,
 	resolveSpecialIdentityFiles,
 	resolveStartupIdentityFiles,
-} from "@signetai/core";
+} from "@signet/core";
 import type { DbAccessor, ReadDb, WriteDb } from "../db-accessor";
 import { logger } from "../logger";
 import { countTokens } from "./tokenizer";

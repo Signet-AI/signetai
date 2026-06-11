@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { resolveWorkspaceSourceRepoPath } from "@signetai/core";
+import { resolveWorkspaceSourceRepoPath } from "@signet/core";
 import { createAgentsWatcherIgnoreMatcher } from "./watcher-ignore";
 
 const tmpDirs: string[] = [];
@@ -62,18 +62,26 @@ describe("createAgentsWatcherIgnoreMatcher", () => {
 		const agentsDir = makeTempAgentsDir();
 		const shouldIgnore = createAgentsWatcherIgnoreMatcher(agentsDir);
 
-		expect(shouldIgnore(join(agentsDir, "memory", "2026-04-10T12-00-00.000Z--abcdefghijklmnop--summary.md"))).toBe(
-			true,
-		);
-		expect(shouldIgnore(join(agentsDir, "memory", "2026-04-10T12-00-00.000Z--abcdefghijklmnop--transcript.md"))).toBe(
-			true,
-		);
-		expect(shouldIgnore(join(agentsDir, "memory", "2026-04-10T12-00-00.000Z--abcdefghijklmnop--manifest.md"))).toBe(
-			true,
-		);
-		expect(shouldIgnore(join(agentsDir, "memory", "2026-04-10T12-00-00.000Z--abcdefghijklmnop--compaction.md"))).toBe(
-			true,
-		);
+		expect(
+			shouldIgnore(
+				join(agentsDir, "memory", "2026-04-10T12-00-00.000Z--abcdefghijklmnop--summary.md"),
+			),
+		).toBe(true);
+		expect(
+			shouldIgnore(
+				join(agentsDir, "memory", "2026-04-10T12-00-00.000Z--abcdefghijklmnop--transcript.md"),
+			),
+		).toBe(true);
+		expect(
+			shouldIgnore(
+				join(agentsDir, "memory", "2026-04-10T12-00-00.000Z--abcdefghijklmnop--manifest.md"),
+			),
+		).toBe(true);
+		expect(
+			shouldIgnore(
+				join(agentsDir, "memory", "2026-04-10T12-00-00.000Z--abcdefghijklmnop--compaction.md"),
+			),
+		).toBe(true);
 	});
 
 	it("does NOT ignore MEMORY.md inside memory/ directory", () => {
@@ -97,9 +105,9 @@ describe("createAgentsWatcherIgnoreMatcher", () => {
 		const shouldIgnore = createAgentsWatcherIgnoreMatcher(agentsDir);
 
 		expect(shouldIgnore(join(agentsDir, "2026-04-10T12-00-00.000Z--abcdefghijklmnop--summary.md"))).toBe(false);
-		expect(shouldIgnore(join(agentsDir, "archive", "2026-04-10T12-00-00.000Z--abcdefghijklmnop--transcript.md"))).toBe(
-			false,
-		);
+		expect(
+			shouldIgnore(join(agentsDir, "archive", "2026-04-10T12-00-00.000Z--abcdefghijklmnop--transcript.md")),
+		).toBe(false);
 		expect(shouldIgnore(join(agentsDir, "MEMORY.backup-2026-04-10.md"))).toBe(false);
 	});
 });

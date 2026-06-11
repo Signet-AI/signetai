@@ -1,40 +1,49 @@
 {
-	"name": "@signetai/connector-base",
-	"version": "0.140.0",
-	"description": "Base class for Signet harness connectors",
-	"type": "module",
-	"main": "./dist/index.js",
-	"types": "./dist/index.d.ts",
-	"exports": {
-		".": {
-			"import": "./dist/index.js",
-			"types": "./dist/index.d.ts"
-		}
-	},
-	"files": ["dist", "!dist/**/*.test.*", "!dist/**/__tests__/**"],
-	"scripts": {
-		"build": "bun build ./src/index.ts --outdir ./dist --target node --external better-sqlite3 && bun run build:types",
-		"build:types": "tsc --emitDeclarationOnly --declaration --outDir dist",
-		"typecheck": "tsc --noEmit"
-	},
-	"dependencies": {
-		"@signetai/core": "0.140.0"
-	},
-	"devDependencies": {
-		"@types/node": "^22.0.0",
-		"typescript": "^5.7.0"
-	},
-	"keywords": ["signet", "connector", "ai", "agent"],
-	"license": "Apache-2.0",
-	"publishConfig": {
-		"access": "public"
-	},
-	"repository": {
-		"type": "git",
-		"url": "https://github.com/Signet-AI/signetai.git"
-	},
-	"homepage": "https://github.com/Signet-AI/signetai",
-	"bugs": {
-		"url": "https://github.com/Signet-AI/signetai/issues"
-	}
+  "name": "@signet/connector-base",
+  "version": "0.140.0",
+  "description": "Base class for Signet harness connectors",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "!dist/**/*.test.*",
+    "!dist/**/__tests__/**"
+  ],
+  "scripts": {
+    "build": "bun build ./src/index.ts --outdir ./dist --target node --external better-sqlite3 && bun run build:types",
+    "build:types": "tsc --emitDeclarationOnly --declaration --outDir dist",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@signet/core": "0.140.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0"
+  },
+  "keywords": [
+    "signet",
+    "connector",
+    "ai",
+    "agent"
+  ],
+  "license": "Apache-2.0",
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Signet-AI/signetai.git"
+  },
+  "homepage": "https://github.com/Signet-AI/signetai",
+  "bugs": {
+    "url": "https://github.com/Signet-AI/signetai/issues"
+  }
 }

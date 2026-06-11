@@ -22,7 +22,7 @@ import {
 import { homedir, tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { pipeline } from "node:stream/promises";
-import { getSkillsRunnerCommand, resolvePrimaryPackageManager } from "@signetai/core";
+import { getSkillsRunnerCommand, resolvePrimaryPackageManager } from "@signet/core";
 import type { Hono } from "hono";
 import type { Entry, ZipFile } from "yauzl";
 import * as yauzl from "yauzl";

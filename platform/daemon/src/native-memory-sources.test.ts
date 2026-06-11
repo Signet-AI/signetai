@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { addObsidianSource, loadSourcesConfig } from "@signetai/core";
+import { addObsidianSource, loadSourcesConfig } from "@signet/core";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import { indexExternalMemoryArtifact } from "./memory-lineage";
 import {
@@ -107,11 +107,7 @@ describe("native memory sources", () => {
 
 		const rows = getDbAccessor().withReadDb(
 			(db) =>
-				db
-					.prepare(
-						"SELECT source_kind, source_id, source_external_id, source_meta_json FROM memory_artifacts ORDER BY source_kind",
-					)
-					.all() as Array<{
+				db.prepare("SELECT source_kind, source_id, source_external_id, source_meta_json FROM memory_artifacts ORDER BY source_kind").all() as Array<{
 					source_kind: string;
 					source_id: string | null;
 					source_external_id: string | null;
@@ -770,7 +766,9 @@ describe("native memory sources", () => {
 		const rows = getDbAccessor().withReadDb(
 			(db) =>
 				db
-					.prepare("SELECT source_id, chunk_text FROM embeddings WHERE source_type = 'source_chunk' ORDER BY source_id")
+					.prepare(
+						"SELECT source_id, chunk_text FROM embeddings WHERE source_type = 'source_chunk' ORDER BY source_id",
+					)
 					.all() as Array<{ source_id: string; chunk_text: string }>,
 		);
 		expect(rows.length).toBeGreaterThanOrEqual(1);

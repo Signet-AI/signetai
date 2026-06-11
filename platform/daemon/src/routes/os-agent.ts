@@ -14,7 +14,7 @@
  *   GET  /api/os/agent-events   — SSE stream of agent commands for the dashboard
  */
 
-import type { RoutingPrivacyTier } from "@signetai/core";
+import type { RoutingPrivacyTier } from "@signet/core";
 import type { Hono } from "hono";
 import { getInferenceRouterOrNull } from "../inference-router.js";
 import { getInteractiveLlmProviderOrNull } from "../llm.js";

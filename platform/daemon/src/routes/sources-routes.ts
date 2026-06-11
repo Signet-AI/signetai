@@ -14,7 +14,7 @@ import {
 	loadSourcesConfig,
 	markSourceIndexed,
 	removeSource,
-} from "@signetai/core";
+} from "@signet/core";
 import type { Hono } from "hono";
 import { resolveDaemonAgentId } from "../agent-id";
 import { type ReadDb, getDbAccessor } from "../db-accessor";

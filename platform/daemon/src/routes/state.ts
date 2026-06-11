@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { networkModeFromBindHost, parseSimpleYaml, readNetworkMode, resolveNetworkBinding } from "@signetai/core";
+import { networkModeFromBindHost, parseSimpleYaml, readNetworkMode, resolveNetworkBinding } from "@signet/core";
 import { type AnalyticsCollector, createAnalyticsCollector } from "../analytics";
 import { type AuthConfig, AuthRateLimiter, loadOrCreateSecret, parseAuthConfig } from "../auth";
 import { getDbAccessor } from "../db-accessor";

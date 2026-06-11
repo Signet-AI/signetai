@@ -6,7 +6,7 @@
  * router-backed workload resolver.
  */
 
-import type { LlmProvider } from "@signetai/core";
+import type { LlmProvider } from "@signet/core";
 
 export type InferenceWorkload =
 	| "default"

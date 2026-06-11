@@ -1,4 +1,4 @@
-import type { RoutingConfig } from "@signetai/core";
+import type { RoutingConfig } from "@signet/core";
 import {
 	type AcpxHooksMode,
 	type StreamCapableLlmProvider,

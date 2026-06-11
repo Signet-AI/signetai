@@ -68,7 +68,7 @@ Tool Reference
 
 All tools are defined in `platform/daemon/src/mcp/tools.ts`. Tool handlers
 call the daemon's HTTP API internally and use the shared recall/remember
-surface helpers from `@signetai/core` so MCP, CLI, and harness integrations do
+surface helpers from `@signet/core` so MCP, CLI, and harness integrations do
 not drift into separate request shapes or result formatting.
 
 ### memory_search

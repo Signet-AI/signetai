@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadSourcesConfig } from "@signetai/core";
+import { loadSourcesConfig } from "@signet/core";
 import { Command } from "commander";
 import { registerSourcesCommands } from "./sources";
 

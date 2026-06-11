@@ -1,4 +1,4 @@
-import { SIGNET_GRAPHIQ_PLUGIN_ID } from "@signetai/core";
+import { SIGNET_GRAPHIQ_PLUGIN_ID } from "@signet/core";
 import type { PluginManifestV1, PluginSurfaceDeclarationsV1 } from "../types.js";
 
 export { SIGNET_GRAPHIQ_PLUGIN_ID };

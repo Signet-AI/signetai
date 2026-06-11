@@ -27,7 +27,7 @@ The connector package exposes programmatic cleanup that restores the previous me
 
 | Field | Value |
 |-------|-------|
-| Package | `@signetai/connector-hermes-agent` |
+| Package | `@signet/connector-hermes-agent` |
 | License | Apache-2.0 |
 
 ## Architecture
@@ -38,4 +38,4 @@ The connector package exposes programmatic cleanup that restores the previous me
 ~/.agents/                       <-- agent workspace (identity, skills, memories)
 ```
 
-The connector extends `BaseConnector` from `@signetai/connector-base` and ships a bundled Python plugin (`__init__.py`, `client.py`, `plugin.yaml`).
+The connector extends `BaseConnector` from `@signet/connector-base` and ships a bundled Python plugin (`__init__.py`, `client.py`, `plugin.yaml`).

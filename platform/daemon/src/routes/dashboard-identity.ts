@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { parseSimpleYaml } from "@signetai/core";
+import { parseSimpleYaml } from "@signet/core";
 
 export interface DashboardIdentity {
 	name: string;

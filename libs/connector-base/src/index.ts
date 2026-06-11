@@ -1,5 +1,5 @@
 /**
- * @signetai/connector-base
+ * @signet/connector-base
  *
  * Base class for Signet harness connectors. Provides shared functionality
  * that all connectors need (Signet block handling, skills symlinking),
@@ -7,7 +7,7 @@
  *
  * @example
  * ```typescript
- * import { BaseConnector, InstallResult } from '@signetai/connector-base';
+ * import { BaseConnector, InstallResult } from '@signet/connector-base';
  *
  * class MyConnector extends BaseConnector {
  *   readonly name = "my-harness";
@@ -43,7 +43,7 @@ import {
 	resolveSignetDaemonUrl as resolveCoreSignetDaemonUrl,
 	stripSignetBlock,
 	symlinkSkills,
-} from "@signetai/core";
+} from "@signet/core";
 
 // ============================================================================
 // Types
@@ -371,7 +371,7 @@ interface ParsedConnectorInstallerArgs {
 
 function connectorInstallerUsage(harness: string, options: ConnectorInstallerOptions): string {
 	const commandName = options.commandName ?? `signet-connector-${harness}`;
-	const packageName = options.packageName ?? `@signetai/connector-${harness}`;
+	const packageName = options.packageName ?? `@signet/connector-${harness}`;
 	return `Usage: ${commandName} [install|uninstall|status] [options]
 
 Options:

@@ -7,7 +7,7 @@
  * All functions expect to run inside a withWriteTx closure.
  */
 
-import type { ExtractedEntity } from "@signetai/core";
+import type { ExtractedEntity } from "@signet/core";
 import type { WriteDb } from "../db-accessor";
 import { countChanges } from "../db-helpers";
 import { requireDependencyReason } from "../dependency-history";

@@ -217,17 +217,17 @@ describe("check-publish-manifests", () => {
 		expect(promoteWorkflow).not.toContain('"signetai-darwin-x64"');
 		expect(promoteWorkflow).not.toContain('"signetai-darwin-arm64"');
 		expect(promoteWorkflow).not.toContain('"signetai-win32-x64"');
-		expect(promoteWorkflow).toContain('"@signetai/core"');
-		expect(promoteWorkflow).toContain('"@signetai/connector-base"');
-		expect(promoteWorkflow).toContain('"@signetai/connector-claude-code"');
-		expect(promoteWorkflow).toContain('"@signetai/connector-codex"');
-		expect(promoteWorkflow).toContain('"@signetai/connector-gemini"');
-		expect(promoteWorkflow).toContain('"@signetai/connector-hermes-agent"');
-		expect(promoteWorkflow).toContain('"@signetai/connector-oh-my-pi"');
-		expect(promoteWorkflow).toContain('"@signetai/connector-openclaw"');
-		expect(promoteWorkflow).toContain('"@signetai/connector-opencode"');
-		expect(promoteWorkflow).toContain('"@signetai/connector-pi"');
-		expect(promoteWorkflow).toContain('"@signetai/codex-plugin"');
+		expect(promoteWorkflow).toContain('"@signet/core"');
+		expect(promoteWorkflow).toContain('"@signet/connector-base"');
+		expect(promoteWorkflow).toContain('"@signet/connector-claude-code"');
+		expect(promoteWorkflow).toContain('"@signet/connector-codex"');
+		expect(promoteWorkflow).toContain('"@signet/connector-gemini"');
+		expect(promoteWorkflow).toContain('"@signet/connector-hermes-agent"');
+		expect(promoteWorkflow).toContain('"@signet/connector-oh-my-pi"');
+		expect(promoteWorkflow).toContain('"@signet/connector-openclaw"');
+		expect(promoteWorkflow).toContain('"@signet/connector-opencode"');
+		expect(promoteWorkflow).toContain('"@signet/connector-pi"');
+		expect(promoteWorkflow).toContain('"@signet/codex-plugin"');
 		expect(promoteWorkflow).toContain('"signetai"');
 		expect(promoteWorkflow).toContain('npm view "${package}@${VERSION}" version >/dev/null');
 		expect(promoteWorkflow).toContain('npm dist-tag add "${package}@${VERSION}" latest');
@@ -436,21 +436,21 @@ describe("check-publish-manifests", () => {
 		const connectorPackages = [
 			[
 				"integrations/claude-code/connector/package.json",
-				"@signetai/connector-claude-code",
+				"@signet/connector-claude-code",
 				"signet-connector-claude-code",
 			],
-			["integrations/codex/connector/package.json", "@signetai/connector-codex", "signet-connector-codex"],
-			["integrations/gemini/connector/package.json", "@signetai/connector-gemini", "signet-connector-gemini"],
+			["integrations/codex/connector/package.json", "@signet/connector-codex", "signet-connector-codex"],
+			["integrations/gemini/connector/package.json", "@signet/connector-gemini", "signet-connector-gemini"],
 			[
 				"integrations/hermes-agent/connector/package.json",
-				"@signetai/connector-hermes-agent",
+				"@signet/connector-hermes-agent",
 				"signet-connector-hermes-agent",
 			],
-			["integrations/oh-my-pi/connector/package.json", "@signetai/connector-oh-my-pi", "signet-connector-oh-my-pi"],
-			["integrations/openclaw/connector/package.json", "@signetai/connector-openclaw", "signet-connector-openclaw"],
-			["integrations/opencode/connector/package.json", "@signetai/connector-opencode", "signet-connector-opencode"],
-			["integrations/pi/connector/package.json", "@signetai/connector-pi", "signet-connector-pi"],
-			["integrations/codex/plugin/package.json", "@signetai/codex-plugin", "signet-codex-plugin"],
+			["integrations/oh-my-pi/connector/package.json", "@signet/connector-oh-my-pi", "signet-connector-oh-my-pi"],
+			["integrations/openclaw/connector/package.json", "@signet/connector-openclaw", "signet-connector-openclaw"],
+			["integrations/opencode/connector/package.json", "@signet/connector-opencode", "signet-connector-opencode"],
+			["integrations/pi/connector/package.json", "@signet/connector-pi", "signet-connector-pi"],
+			["integrations/codex/plugin/package.json", "@signet/codex-plugin", "signet-codex-plugin"],
 		] as const;
 
 		for (const [manifestPath, packageName, binName] of connectorPackages) {
@@ -494,7 +494,7 @@ describe("check-publish-manifests", () => {
 				publishConfig: { access: "public" },
 			});
 			writeJson(connectorFile, {
-				name: "@signetai/connector-pi",
+				name: "@signet/connector-pi",
 			});
 
 			expect(listPublishableManifestTargets([signetaiFile, adapterFile, connectorFile])).toEqual([
@@ -521,11 +521,11 @@ describe("check-publish-manifests", () => {
 				name: "signetai",
 				version: "1.2.3",
 				dependencies: {
-					"@signetai/connector-pi": "1.2.3",
+					"@signet/connector-pi": "1.2.3",
 				},
 			});
 			writeJson(connectorPiFile, {
-				name: "@signetai/connector-pi",
+				name: "@signet/connector-pi",
 				version: "1.2.3",
 			});
 
@@ -534,7 +534,7 @@ describe("check-publish-manifests", () => {
 
 			expect(issues).toHaveLength(1);
 			expect(issues[0]?.reason).toContain("not published");
-			expect(issues[0]?.dep).toBe("@signetai/connector-pi");
+			expect(issues[0]?.dep).toBe("@signet/connector-pi");
 		} finally {
 			rmSync(root, { recursive: true, force: true });
 		}
@@ -587,11 +587,11 @@ describe("check-publish-manifests", () => {
 				name: "signetai",
 				version: "1.2.3",
 				dependencies: {
-					"@signetai/connector-pi": "workspace:*",
+					"@signet/connector-pi": "workspace:*",
 				},
 			});
 			writeJson(connectorFile, {
-				name: "@signetai/connector-pi",
+				name: "@signet/connector-pi",
 				version: "1.2.3",
 			});
 
@@ -643,7 +643,7 @@ describe("check-publish-manifests", () => {
 				version: "1.2.3",
 				devDependencies: {
 					...adapter.devDependencies,
-					"@signetai/core": "1.2.3",
+					"@signet/core": "1.2.3",
 					"@signet/sdk": "1.2.3",
 				},
 			});
@@ -707,11 +707,11 @@ describe("check-publish-manifests", () => {
 					"@sinclair/typebox": "0.34.47",
 				},
 				devDependencies: {
-					"@signetai/core": "workspace:*",
+					"@signet/core": "workspace:*",
 				},
 			});
 			writeJson(coreFile, {
-				name: "@signetai/core",
+				name: "@signet/core",
 				version: "1.2.3",
 			});
 

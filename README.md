@@ -311,7 +311,7 @@ Daemon (@signet/daemon, localhost:3850)
   |-- Multi-Agent
         roster sync, agent_id scoping, read-policy SQL enforcement
 
-Core (@signetai/core)
+Core (@signet/core)
   types, identity, SQLite storage/query, hybrid search, graph traversal
 
 SDK (@signet/sdk)

@@ -1,4 +1,4 @@
-import { type ModelRegistryEntry, PIPELINE_MODEL_CATALOG, type PipelineModelPreset } from "@signetai/core";
+import { type ModelRegistryEntry, type PipelineModelPreset, PIPELINE_MODEL_CATALOG } from "@signet/core";
 
 function toEntry(provider: string, preset: PipelineModelPreset): ModelRegistryEntry {
 	return {
@@ -27,7 +27,7 @@ export function markDeprecatedVersions(entries: readonly ModelRegistryEntry[]): 
 
 export function initModelRegistry(): void {
 	// Kept as an API-compatible no-op. Model IDs now come from the checked-in
-	// provider/harness catalog in @signetai/core, not runtime synthesis or probing.
+	// provider/harness catalog in @signet/core, not runtime synthesis or probing.
 }
 
 export async function refreshRegistry(): Promise<void> {

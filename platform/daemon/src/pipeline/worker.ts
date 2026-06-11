@@ -812,7 +812,7 @@ export function shouldPersistExtractionGraph(cfg: PipelineV2Config, entityCount:
 function runStructuralPass1(
 	accessor: DbAccessor,
 	writtenFacts: readonly WrittenFact[],
-	extractionTriples: readonly import("@signetai/core").ExtractedEntity[],
+	extractionTriples: readonly import("@signet/core").ExtractedEntity[],
 	agentId: string,
 ): StructuralPass1Stats {
 	const stats: StructuralPass1Stats = {
@@ -827,7 +827,7 @@ function runStructuralPass1(
 
 			// Find matching entity triple — heuristic: fact content contains
 			// the source entity name (case-insensitive)
-			let matchedTriple: import("@signetai/core").ExtractedEntity | null = null;
+			let matchedTriple: import("@signet/core").ExtractedEntity | null = null;
 			for (const triple of extractionTriples) {
 				if (lowerContent.includes(triple.source.toLowerCase())) {
 					matchedTriple = triple;

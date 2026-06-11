@@ -15,7 +15,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { DEPENDENCY_TYPES } from "@signetai/core";
+import { DEPENDENCY_TYPES } from "@signet/core";
 
 // Uses the actual pipeline parsing — validates that stripFences handles
 // verbose model output (unfenced JSON arrays, explanation-then-JSON, etc.)

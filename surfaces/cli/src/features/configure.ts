@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { checkbox, confirm, input, select } from "@inquirer/prompts";
-import { parseSimpleYaml, readNetworkMode } from "@signetai/core";
+import { parseSimpleYaml, readNetworkMode } from "@signet/core";
 import chalk from "chalk";
 import {
 	chooseWorkspaceCandidate,

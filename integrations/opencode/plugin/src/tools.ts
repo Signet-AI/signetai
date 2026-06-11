@@ -11,7 +11,7 @@ import {
 	buildRecallRequestBody,
 	buildRememberRequestBody,
 	formatRecallText,
-} from "@signetai/core";
+} from "@signet/core";
 import type { DaemonClient } from "./daemon-client.js";
 import { HARNESS, READ_TIMEOUT, WRITE_TIMEOUT } from "./types.js";
 import type { MemoryRecord } from "./types.js";

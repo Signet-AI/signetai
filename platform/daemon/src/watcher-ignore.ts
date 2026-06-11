@@ -1,5 +1,5 @@
 import { basename, isAbsolute, join, normalize, relative, resolve } from "node:path";
-import { resolveWorkspaceSourceRepoPath } from "@signetai/core";
+import { resolveWorkspaceSourceRepoPath } from "@signet/core";
 
 // Canonical artifact filename patterns (keep in sync with daemon.ts)
 const ARTIFACT_FILENAME_RE = /--(?:summary|transcript|compaction|manifest)\.md$/;
@@ -28,7 +28,12 @@ export function createAgentsWatcherIgnoreMatcher(agentsDir: string): (path: stri
 	const memoriesDbJournal = resolveForComparison(join(agentsDir, "memory", "memories.db-journal"));
 	const sourceRepoRoot = resolveForComparison(resolveWorkspaceSourceRepoPath(agentsDir));
 	const memoryDir = resolveForComparison(join(agentsDir, "memory"));
-	const ignoredPaths = new Set([memoriesDb, memoriesDbWal, memoriesDbShm, memoriesDbJournal]);
+	const ignoredPaths = new Set([
+		memoriesDb,
+		memoriesDbWal,
+		memoriesDbShm,
+		memoriesDbJournal,
+	]);
 
 	return (path: string): boolean => {
 		const normalizedPath = resolveForComparison(path);

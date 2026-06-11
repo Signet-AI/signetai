@@ -37,11 +37,11 @@ The repository is grouped by developer intent:
 - `memorybench/` contains the benchmark harness, providers, reports, and UI.
 
 See [Repository Map](./REPO_MAP.md) for the full path map. The important
-ownership boundary is unchanged: `@signetai/core` owns types and data; the
+ownership boundary is unchanged: `@signet/core` owns types and data; the
 daemon owns runtime behavior; connectors own install-time harness integration;
 runtime plugins and adapters live beside the tool they extend.
 
-`@signetai/core` lives in `platform/core/`. It is the shared foundation and
+`@signet/core` lives in `platform/core/`. It is the shared foundation and
 defines TypeScript
 interfaces, the SQLite wrapper, hybrid search, manifest parsing, and
 constants. Every other package imports from core; core imports from
@@ -61,13 +61,13 @@ broad compatibility, but runs fine under bun.
 `signet-dashboard` lives in `surfaces/dashboard/`. It is built to static
 assets and served by the daemon.
 
-`@signetai/connector-base` lives in `libs/connector-base/` and provides the abstract `BaseConnector` class
+`@signet/connector-base` lives in `libs/connector-base/` and provides the abstract `BaseConnector` class
 that all platform connectors extend. It re-exports shared utilities
 (block injection, skill symlinking) so connector implementations stay
 thin.
 
-`@signetai/connector-claude-code`, `@signetai/connector-opencode`,
-`@signetai/connector-openclaw`, and the other `@signet/connector-*`
+`@signet/connector-claude-code`, `@signet/connector-opencode`,
+`@signet/connector-openclaw`, and the other `@signet/connector-*`
 packages live under `integrations/<tool>/connector/`. They are concrete
 install-time platform adapters. Each implements `install`, `uninstall`,
 `isInstalled`, and `getConfigPath`.

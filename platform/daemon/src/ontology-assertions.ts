@@ -1,4 +1,4 @@
-import type { EpistemicAssertion, EpistemicAssertionPredicate, EpistemicAssertionStatus } from "@signetai/core";
+import type { EpistemicAssertion, EpistemicAssertionPredicate, EpistemicAssertionStatus } from "@signet/core";
 import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
 import { resolveNamedEntity } from "./knowledge-graph";
 

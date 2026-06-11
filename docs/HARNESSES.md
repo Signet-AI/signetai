@@ -257,7 +257,7 @@ Codex also has a native-plugin-oriented npm installer name for machines where
 you do not want to install the full Signet CLI first:
 
 ```bash
-npx -y @signetai/codex-plugin install --url http://192.168.0.60:3850 --api-key sig_sk_...
+npx -y @signet/codex-plugin install --url http://192.168.0.60:3850 --api-key sig_sk_...
 ```
 
 When `SIGNET_DAEMON_URL` or `--url` is set, the Codex connector writes
@@ -392,7 +392,7 @@ The plugin handles lifecycle hooks; MCP provides on-demand memory tools.
 ## Oh My Pi (`oh-my-pi`)
 
 Oh My Pi uses a managed Signet runtime extension installed by
-`@signetai/connector-oh-my-pi`. The extension forwards lifecycle events
+`@signet/connector-oh-my-pi`. The extension forwards lifecycle events
 to the daemon and injects hidden Signet context into the session when
 needed.
 
@@ -437,7 +437,7 @@ next setup or sync run.
 ## pi (`pi`)
 
 pi uses a managed Signet runtime extension installed by
-`@signetai/connector-pi`. The extension forwards lifecycle events
+`@signet/connector-pi`. The extension forwards lifecycle events
 to the daemon and injects hidden Signet context into the session when
 needed.
 
@@ -645,7 +645,7 @@ During setup, Signet creates `$SIGNET_WORKSPACE/hooks/agent-memory/` with:
 
 Signet provides two separate packages for OpenClaw integration:
 
-#### @signetai/connector-openclaw
+#### @signet/connector-openclaw
 
 **Purpose:** Setup and installation
 

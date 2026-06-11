@@ -1,4 +1,4 @@
-import type { SignetSourceEntry } from "@signetai/core";
+import type { SignetSourceEntry } from "@signet/core";
 import {
 	DISCORD_CHANNEL_TYPES,
 	type DiscordAttachment,

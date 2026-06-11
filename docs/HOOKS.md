@@ -417,7 +417,7 @@ The CLI calls the daemon's hook endpoints and outputs context that Claude Code i
 
 ## OpenCode Integration
 
-OpenCode uses a bundled plugin installed by `@signetai/connector-opencode`
+OpenCode uses a bundled plugin installed by `@signet/connector-opencode`
 at `~/.config/opencode/plugins/signet.mjs`. The plugin calls the daemon
 API at session lifecycle events (session-start, user-prompt-submit,
 session-end) and exposes `/remember` and `/recall` as native tools.
@@ -433,7 +433,7 @@ Install is handled automatically by `signet setup` or `signet connect opencode`.
 
 ## pi Integration
 
-pi uses a bundled extension installed by `@signetai/connector-pi` at
+pi uses a bundled extension installed by `@signet/connector-pi` at
 `~/.pi/agent/extensions/signet-pi.js` (or `$PI_CODING_AGENT_DIR/extensions/signet-pi.js`).
 The extension calls the daemon API at session lifecycle events (session-start,
 user-prompt-submit, session-end, compaction) and exposes `/recall`, `/remember`,

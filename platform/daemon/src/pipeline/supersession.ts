@@ -10,7 +10,7 @@
  *  2. Periodic sweep — maintenance worker scans all entities for stale siblings
  */
 
-import type { EntityAttribute } from "@signetai/core";
+import type { EntityAttribute } from "@signet/core";
 import type { DbAccessor } from "../db-accessor";
 import { getAttributesForAspect } from "../knowledge-graph";
 import { logger } from "../logger";

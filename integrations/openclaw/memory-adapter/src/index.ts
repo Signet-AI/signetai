@@ -12,7 +12,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { SignetClient } from "@signet/sdk";
 import {
 	STATIC_IDENTITY_SESSION_START_TIMEOUT_STATUS,
 	applyRecallScoreThreshold,
@@ -22,8 +21,9 @@ import {
 	parseRecallPayload,
 	readStaticIdentity,
 	resolveSessionStartTimeoutMs,
-} from "@signetai/core";
-import type { RecallPayload, RecallRow } from "@signetai/core";
+} from "@signet/core";
+import type { RecallPayload, RecallRow } from "@signet/core";
+import { SignetClient } from "@signet/sdk";
 import { Type } from "@sinclair/typebox";
 import type {
 	OpenClawPluginApi,
@@ -485,7 +485,7 @@ async function getDaemonPid(daemonUrl: string): Promise<number | null> {
 // Static identity fallback when daemon is unreachable
 // ============================================================================
 
-// Wraps @signetai/core's readStaticIdentity to produce a SessionStartResult.
+// Wraps @signet/core's readStaticIdentity to produce a SessionStartResult.
 function staticFallback(reason: "offline" | "timeout" = "offline"): SessionStartResult | null {
 	const dir = process.env.SIGNET_PATH ?? join(homedir(), ".agents");
 	const inject =

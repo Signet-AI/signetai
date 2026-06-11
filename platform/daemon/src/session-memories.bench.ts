@@ -18,7 +18,7 @@ import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runMigrations } from "@signetai/core";
+import { runMigrations } from "@signet/core";
 
 const TEST_DIR = join(tmpdir(), `signet-bench-${Date.now()}`);
 process.env.SIGNET_PATH = TEST_DIR;

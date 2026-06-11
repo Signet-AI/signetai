@@ -163,7 +163,7 @@ the spec stays useful as both contract and progress tracker.
 
 ### Done
 
-- Shared router core exists in `@signetai/core` with:
+- Shared router core exists in `@signet/core` with:
   - `inference:` config parsing
   - legacy extraction/synthesis -> implicit inference compilation
   - strict / automatic / hybrid policy resolution

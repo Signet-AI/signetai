@@ -1,4 +1,4 @@
-import type { LlmProvider } from "@signetai/core";
+import type { LlmProvider } from "@signet/core";
 import type { DbAccessor, ReadDb } from "./db-accessor";
 import { type ApplyOntologyOperationBatchResult, applyOntologyOperationBatch } from "./ontology-proposals";
 import { extractBalancedJsonObject, stripFences, tryParseJson } from "./pipeline/extraction";

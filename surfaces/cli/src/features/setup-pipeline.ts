@@ -1,4 +1,4 @@
-import { defaultPipelineModel } from "@signetai/core";
+import { defaultPipelineModel } from "@signet/core";
 import type { ExtractionProviderChoice, HarnessChoice } from "./setup-shared.js";
 
 export const EXTRACTION_SAFETY_WARNING =

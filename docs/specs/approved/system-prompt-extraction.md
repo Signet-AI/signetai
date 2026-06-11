@@ -51,7 +51,7 @@ under Signet's self-description.
 
 ### 3. The prompt is duplicated and scattered
 
-The system prompt content is defined in `@signetai/core`'s
+The system prompt content is defined in `@signet/core`'s
 `buildSignetBlock()`, but each connector has its own copy/paste
 installation path. Updates to the prompt require rebuilding and
 reinstalling connectors. The `SIGNET-ARCHITECTURE.md` file is a
@@ -140,7 +140,7 @@ descriptions themselves.
 ### What gets removed from AGENTS.md
 
 The entire `<!-- SIGNET:START -->` / `<!-- SIGNET:END -->` block is
-removed from `buildSignetBlock()` in `@signetai/core/src/markdown.ts`.
+removed from `buildSignetBlock()` in `@signet/core/src/markdown.ts`.
 The function either returns an empty string or is removed entirely.
 
 `SIGNET-ARCHITECTURE.md` stays as an on-demand reference file — the

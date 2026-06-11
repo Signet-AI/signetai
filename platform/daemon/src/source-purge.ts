@@ -1,4 +1,4 @@
-import { SOURCE_CHUNK_SOURCE_TYPE } from "@signetai/core";
+import { SOURCE_CHUNK_SOURCE_TYPE } from "@signet/core";
 import { getDbAccessor } from "./db-accessor";
 import { countChanges, syncVecDeleteByEmbeddingIds } from "./db-helpers";
 

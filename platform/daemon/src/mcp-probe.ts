@@ -13,10 +13,12 @@ import type {
 	AutoCardToolAction,
 	McpProbeResult,
 	SignetAppManifest,
-} from "@signetai/core";
-import { DEFAULT_APP_SIZE } from "@signetai/core";
+} from "@signet/core";
+import { DEFAULT_APP_SIZE } from "@signet/core";
 import { createEvent, eventBus } from "./event-bus.js";
 import { logger } from "./logger.js";
+import { getSecret } from "./secrets.js";
+import { deleteCachedWidget, loadCachedWidget } from "./widget-gen.js";
 // Note: validatePublicHttpUrl from url-validation.ts is used by the install
 // endpoint (server-side fetch = real SSRF risk). Manifest ui/icon fields are
 // client-side (iframe/img) so they only need scheme validation, not address blocking.
@@ -25,8 +27,6 @@ import type {
 	MarketplaceMcpConfigHttp,
 	MarketplaceMcpConfigStdio,
 } from "./routes/marketplace.js";
-import { getSecret } from "./secrets.js";
-import { deleteCachedWidget, loadCachedWidget } from "./widget-gen.js";
 
 // ---------------------------------------------------------------------------
 // Paths

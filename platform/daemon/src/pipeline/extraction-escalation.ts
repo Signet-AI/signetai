@@ -15,7 +15,7 @@ import type {
 	ExtractionResult,
 	LlmProvider,
 	PipelineEscalationConfig,
-} from "@signetai/core";
+} from "@signet/core";
 import { normalizeAndHashContent } from "../content-normalization";
 import type { DbAccessor } from "../db-accessor";
 import { logger } from "../logger";

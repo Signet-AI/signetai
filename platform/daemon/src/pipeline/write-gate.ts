@@ -1,4 +1,4 @@
-import { cosineSimilarity } from "@signetai/core";
+import { cosineSimilarity } from "@signet/core";
 import type { ReadDb } from "../db-accessor";
 import { isDecisionContent } from "../inline-entity-linker";
 

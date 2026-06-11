@@ -3,7 +3,7 @@ import {
 	type SourceFailureState,
 	type SourceProviderKind,
 	parseDiscordSettings,
-} from "@signetai/core";
+} from "@signet/core";
 import { resolveDaemonAgentId } from "./agent-id";
 import { getDbAccessor } from "./db-accessor";
 import { countChanges } from "./db-helpers";

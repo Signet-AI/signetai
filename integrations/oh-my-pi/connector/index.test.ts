@@ -133,7 +133,7 @@ describe("root build pipeline", () => {
 		const deps = text.match(/"build:deps":\s*"([^"]+)"/)?.[1] ?? "";
 
 		expect(deps).not.toContain("@signet/cli");
-		expect(deps).not.toContain("@signetai/connector-oh-my-pi");
+		expect(deps).not.toContain("@signet/connector-oh-my-pi");
 	});
 });
 

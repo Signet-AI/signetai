@@ -31,7 +31,7 @@
 		"yaml": "^2.8.2"
 	},
 	"devDependencies": {
-		"@signetai/core": "workspace:*",
+		"@signet/core": "workspace:*",
 		"@internationalized/date": "^3.10.0",
 		"@lucide/svelte": "^0.561.0",
 		"@sveltejs/adapter-static": "^3.0.0",

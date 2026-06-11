@@ -4,8 +4,8 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { BaseConnector, type InstallResult, type UninstallResult } from "@signetai/connector-base";
-import { expandHome, resolveHermesHomePath, resolveHermesRepoPath } from "@signetai/core";
+import { BaseConnector, type InstallResult, type UninstallResult } from "@signet/connector-base";
+import { expandHome, resolveHermesHomePath, resolveHermesRepoPath } from "@signet/core";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -70,7 +70,7 @@ export interface HermesDoctorReport {
 }
 
 interface InstallMarker {
-	readonly connector: "@signetai/connector-hermes-agent";
+	readonly connector: "@signet/connector-hermes-agent";
 	readonly schemaVersion: 1;
 	readonly connectorVersion: string;
 	readonly sourceHash: string;
@@ -508,7 +508,7 @@ function computePluginSourceHash(): string {
 function writeInstallMarker(targetDir: string, targetKind: InstallMarker["targetKind"]): string {
 	const markerPath = join(targetDir, INSTALL_MARKER_FILE);
 	const marker: InstallMarker = {
-		connector: "@signetai/connector-hermes-agent",
+		connector: "@signet/connector-hermes-agent",
 		schemaVersion: 1,
 		connectorVersion: getConnectorVersion(),
 		sourceHash: computePluginSourceHash(),
@@ -525,7 +525,7 @@ function readInstallMarker(targetDir: string): InstallMarker | null {
 	try {
 		const parsed = JSON.parse(readFileSync(markerPath, "utf-8")) as Partial<InstallMarker>;
 		if (
-			parsed.connector === "@signetai/connector-hermes-agent" &&
+			parsed.connector === "@signet/connector-hermes-agent" &&
 			parsed.schemaVersion === 1 &&
 			typeof parsed.connectorVersion === "string" &&
 			typeof parsed.sourceHash === "string" &&

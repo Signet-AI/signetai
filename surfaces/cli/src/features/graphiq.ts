@@ -10,7 +10,7 @@ import {
 	getGraphiqProjectDbPath,
 	readGraphiqState,
 	updateGraphiqActiveProject,
-} from "@signetai/core";
+} from "@signet/core";
 import chalk from "chalk";
 import ora from "ora";
 import { readSetupCorePluginEnabled, writeSetupCorePluginRegistry } from "./setup-plugins.js";

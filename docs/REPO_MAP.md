@@ -32,7 +32,7 @@ setup and `plugin/` for the runtime plugin loaded by OpenCode.
 
 | Package or area | Location |
 |---|---|
-| `@signetai/core` | `platform/core/` |
+| `@signet/core` | `platform/core/` |
 | `@signet/daemon` | `platform/daemon/` |
 | `platform/daemon-rs` | `platform/daemon-rs/` |
 | `@signet/native` | `platform/native/` |
@@ -42,7 +42,7 @@ setup and `plugin/` for the runtime plugin loaded by OpenCode.
 | `@signet/tray` | `surfaces/tray/` |
 | `@signet/extension` | `surfaces/browser-extension/` |
 | `@signet/sdk` | `libs/sdk/` |
-| `@signetai/connector-base` | `libs/connector-base/` |
+| `@signet/connector-base` | `libs/connector-base/` |
 | `@signet/connector-*` | `integrations/<tool>/connector/` |
 | external runtime plugins | `integrations/<tool>/plugin/` |
 | Signet-native plugins | `plugins/<scope>/<name>/` |

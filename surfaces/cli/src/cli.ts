@@ -21,14 +21,14 @@ import {
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve as resolvePath, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { ClaudeCodeConnector } from "@signetai/connector-claude-code";
-import { CodexConnector } from "@signetai/connector-codex";
-import { GeminiConnector } from "@signetai/connector-gemini";
-import { HermesAgentConnector } from "@signetai/connector-hermes-agent";
-import { OhMyPiConnector } from "@signetai/connector-oh-my-pi";
-import { OpenClawConnector } from "@signetai/connector-openclaw";
-import { OpenCodeConnector } from "@signetai/connector-opencode";
-import { PiConnector } from "@signetai/connector-pi";
+import { ClaudeCodeConnector } from "@signet/connector-claude-code";
+import { CodexConnector } from "@signet/connector-codex";
+import { GeminiConnector } from "@signet/connector-gemini";
+import { HermesAgentConnector } from "@signet/connector-hermes-agent";
+import { OhMyPiConnector } from "@signet/connector-oh-my-pi";
+import { OpenClawConnector } from "@signet/connector-openclaw";
+import { OpenCodeConnector } from "@signet/connector-opencode";
+import { PiConnector } from "@signet/connector-pi";
 import {
 	IDENTITY_FILES,
 	type ImportResult,
@@ -52,15 +52,15 @@ import {
 	syncWorkspaceSourceRepo,
 	syncWorkspaceSourceRepoAsync,
 	unifySkills,
-} from "@signetai/core";
+} from "@signet/core";
 import chalk from "chalk";
 import { Command } from "commander";
 import ora from "ora";
 import { registerBrowseCommand } from "./browse.js";
 import { registerAgentCommands } from "./commands/agent.js";
+import { registerConnectorCommands } from "./commands/connector.js";
 import { registerApiKeyCommands } from "./commands/api-key.js";
 import { registerAppCommands } from "./commands/app.js";
-import { registerConnectorCommands } from "./commands/connector.js";
 import { registerDaemonCommands } from "./commands/daemon.js";
 import { registerDesktopCommands } from "./commands/desktop.js";
 import { registerDreamCommands } from "./commands/dream.js";
@@ -344,7 +344,7 @@ function signetLogo() {
 }
 
 function detectExistingSetup(basePath: string): SetupDetection {
-	// Use the enhanced detection from @signetai/core
+	// Use the enhanced detection from @signet/core
 	return detectExistingSetupCore(basePath);
 }
 

@@ -1,7 +1,7 @@
 /**
  * Standalone types for the Signet OpenCode plugin.
  *
- * Keep runtime behavior routed through shared @signetai/core helpers where
+ * Keep runtime behavior routed through shared @signet/core helpers where
  * possible so OpenCode stays aligned with CLI, MCP, and harness surfaces.
  */
 

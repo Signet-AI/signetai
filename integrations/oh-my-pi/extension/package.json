@@ -1,30 +1,37 @@
 {
-	"name": "@signet/oh-my-pi-extension",
-	"version": "0.140.0",
-	"description": "Signet runtime extension for Oh My Pi — session lifecycle hooks and memory recall",
-	"type": "module",
-	"main": "dist/signet-oh-my-pi.mjs",
-	"types": "dist/index.d.ts",
-	"exports": {
-		".": "./dist/signet-oh-my-pi.mjs"
-	},
-	"files": ["dist"],
-	"scripts": {
-		"build": "bun build src/index.ts --outfile dist/signet-oh-my-pi.mjs --target node --minify --format esm --external better-sqlite3 && bun run build:types",
-		"build:types": "tsc --emitDeclarationOnly --declaration --outDir dist",
-		"typecheck": "tsc --noEmit",
-		"dev": "bun --watch src/index.ts"
-	},
-	"dependencies": {
-		"@oh-my-pi/pi-coding-agent": "^13.16.4",
-		"@signetai/core": "workspace:*",
-		"@signet/pi-extension-base": "workspace:*"
-	},
-	"devDependencies": {
-		"@types/node": "^22.0.0",
-		"bun-types": "latest",
-		"typescript": "^5.7.0"
-	},
-	"keywords": ["signet", "oh-my-pi", "extension", "ai-memory"],
-	"license": "Apache-2.0"
+  "name": "@signet/oh-my-pi-extension",
+  "version": "0.140.0",
+  "description": "Signet runtime extension for Oh My Pi — session lifecycle hooks and memory recall",
+  "type": "module",
+  "main": "dist/signet-oh-my-pi.mjs",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": "./dist/signet-oh-my-pi.mjs"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "bun build src/index.ts --outfile dist/signet-oh-my-pi.mjs --target node --minify --format esm --external better-sqlite3 && bun run build:types",
+    "build:types": "tsc --emitDeclarationOnly --declaration --outDir dist",
+    "typecheck": "tsc --noEmit",
+    "dev": "bun --watch src/index.ts"
+  },
+  "dependencies": {
+    "@oh-my-pi/pi-coding-agent": "^13.16.4",
+    "@signet/core": "workspace:*",
+    "@signet/pi-extension-base": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "bun-types": "latest",
+    "typescript": "^5.7.0"
+  },
+  "keywords": [
+    "signet",
+    "oh-my-pi",
+    "extension",
+    "ai-memory"
+  ],
+  "license": "Apache-2.0"
 }

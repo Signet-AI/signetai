@@ -7,7 +7,7 @@
  * write locks.
  */
 
-import { ENTITY_TYPES } from "@signetai/core";
+import { ENTITY_TYPES } from "@signet/core";
 import type { DbAccessor, ReadDb, WriteDb } from "../db-accessor";
 import { getAspectsForEntity } from "../knowledge-graph";
 import { logger } from "../logger";

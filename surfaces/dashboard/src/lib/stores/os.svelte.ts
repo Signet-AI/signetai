@@ -3,7 +3,7 @@
 import { browser } from "$app/environment";
 import { API_BASE } from "$lib/api";
 
-// Types (mirrored from @signetai/core signet-os-types — kept local to avoid
+// Types (mirrored from @signet/core signet-os-types — kept local to avoid
 // build-time cross-package import issues in the dashboard)
 
 export type AppTrayState = "tray" | "grid" | "dock";

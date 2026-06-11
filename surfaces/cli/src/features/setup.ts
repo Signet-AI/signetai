@@ -1,7 +1,7 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { checkbox, confirm, input, select } from "@inquirer/prompts";
-import { OpenClawConnector } from "@signetai/connector-openclaw";
+import { OpenClawConnector } from "@signet/connector-openclaw";
 import {
 	IDENTITY_PRESETS,
 	type IdentityContextFileEntry,
@@ -13,7 +13,7 @@ import {
 	modelPresetsForProvider,
 	parseSimpleYaml,
 	readNetworkMode,
-} from "@signetai/core";
+} from "@signet/core";
 import chalk from "chalk";
 import open from "open";
 import ora from "ora";

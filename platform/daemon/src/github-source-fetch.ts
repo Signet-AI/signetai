@@ -1,4 +1,4 @@
-import type { GitHubSourceState } from "@signetai/core";
+import type { GitHubSourceState } from "@signet/core";
 import { logger } from "./logger";
 
 export interface GitHubFetchConfig {

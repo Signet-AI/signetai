@@ -74,7 +74,7 @@ memorybench/            # benchmark harness, datasets, reports, and local UI
 Key packages:
 
 ```
-platform/core/                         # @signetai/core — types, database, search, identity
+platform/core/                         # @signet/core — types, database, search, identity
 platform/daemon/                       # @signet/daemon — HTTP API, file watcher, pipeline
 platform/daemon-rs/                    # Rust shadow daemon/parity runtime
 surfaces/cli/                          # @signet/cli — setup wizard and daemon management
@@ -82,7 +82,7 @@ surfaces/dashboard/                    # signet-dashboard — Svelte dashboard
 surfaces/desktop/                      # @signet/desktop — Electron desktop application
 surfaces/browser-extension/            # @signet/extension — browser extension
 libs/sdk/                              # @signet/sdk — integration SDK for third-party apps
-libs/connector-base/                   # @signetai/connector-base — shared connector primitives
+libs/connector-base/                   # @signet/connector-base — shared connector primitives
 integrations/<tool>/connector/         # install-time harness connectors
 integrations/<tool>/plugin/            # plugins loaded by external tools
 integrations/openclaw/memory-adapter/  # @signetai/signet-memory-openclaw

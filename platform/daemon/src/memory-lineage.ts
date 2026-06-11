@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writ
 import { mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
-import type { LlmProvider } from "@signetai/core";
+import type { LlmProvider } from "@signet/core";
 import { Tiktoken } from "js-tiktoken/lite";
 import cl100k_base from "js-tiktoken/ranks/cl100k_base";
 import { getAgentScope } from "./agent-id";

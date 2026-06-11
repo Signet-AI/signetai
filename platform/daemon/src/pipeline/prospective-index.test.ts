@@ -6,14 +6,14 @@
  * tags, chain-of-thought noise, empty responses).
  */
 
+import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { Database } from "bun:sqlite";
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import type { PipelineHintsConfig } from "@signetai/core";
 import { runMigrations } from "../../../core/src/migrations";
-import type { DbAccessor, ReadDb, WriteDb } from "../db-accessor";
-import { DEFAULT_PIPELINE_V2 } from "../memory-config";
-import { enqueueHintsJob, generateHints, startHintsWorker } from "./prospective-index";
 import type { LlmProvider } from "./provider";
+import type { DbAccessor, WriteDb, ReadDb } from "../db-accessor";
+import type { PipelineHintsConfig } from "@signet/core";
+import { DEFAULT_PIPELINE_V2 } from "../memory-config";
+import { generateHints, enqueueHintsJob, startHintsWorker } from "./prospective-index";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -112,13 +112,7 @@ function pipelineCfg(hints = HINTS_CFG) {
 		...DEFAULT_PIPELINE_V2,
 		shadowMode: false,
 		mutationsFrozen: false,
-		extraction: {
-			...DEFAULT_PIPELINE_V2.extraction,
-			provider: "ollama" as const,
-			model: "test",
-			timeout: 5000,
-			minConfidence: 0.7,
-		},
+		extraction: { ...DEFAULT_PIPELINE_V2.extraction, provider: "ollama" as const, model: "test", timeout: 5000, minConfidence: 0.7 },
 		worker: { ...DEFAULT_PIPELINE_V2.worker, pollMs: 10 },
 		graph: { ...DEFAULT_PIPELINE_V2.graph, enabled: false, boostWeight: 0 },
 		reranker: { ...DEFAULT_PIPELINE_V2.reranker, enabled: false },

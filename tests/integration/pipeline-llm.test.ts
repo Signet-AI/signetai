@@ -15,12 +15,12 @@
  * attempts must succeed). This accounts for LLM output variability.
  */
 
-import { beforeAll, describe, expect, test } from "bun:test";
+import { describe, test, expect, beforeAll } from "bun:test";
 import {
-	LARGE_TRANSCRIPT,
-	MEDIUM_TRANSCRIPT,
-	MINIMAL_TRANSCRIPT,
 	SMALL_TRANSCRIPT,
+	MEDIUM_TRANSCRIPT,
+	LARGE_TRANSCRIPT,
+	MINIMAL_TRANSCRIPT,
 	UNICODE_TRANSCRIPT,
 } from "./fixtures/transcripts";
 
@@ -272,7 +272,7 @@ IMPORTANT — Atomic facts:
 Each fact must be fully understandable WITHOUT the original conversation. Include the specific subject (package name, file path, component, tool) and enough context that a reader seeing only this fact knows exactly what it refers to.
 
 BAD: "install() writes bundled plugin"
-GOOD: "The @signetai/connector-opencode install() function writes pre-bundled signet.mjs to ~/.config/opencode/plugins/"
+GOOD: "The @signet/connector-opencode install() function writes pre-bundled signet.mjs to ~/.config/opencode/plugins/"
 
 BAD: "Uses PostgreSQL instead of MongoDB"
 GOOD: "The auth service uses PostgreSQL instead of MongoDB for better relational query support"

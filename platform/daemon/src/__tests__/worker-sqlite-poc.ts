@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Worker, isMainThread, parentPort } from "node:worker_threads";
-import { findSqliteVecExtension } from "@signetai/core";
+import { findSqliteVecExtension } from "@signet/core";
 
 type InitMessage = {
 	type: "init";
@@ -70,11 +70,7 @@ function runWorkerChecks(dbPath: string, vecExtensionPath: string): readonly Che
 	} catch (err) {
 		const msg = err instanceof Error ? err.message : String(err);
 		results.push({ check: 2, pass: false, message: msg });
-		return [
-			...results,
-			{ check: 3, pass: false, message: "Skipped: extension load failed" },
-			{ check: 4, pass: false, message: "Skipped: extension load failed" },
-		];
+		return [...results, { check: 3, pass: false, message: "Skipped: extension load failed" }, { check: 4, pass: false, message: "Skipped: extension load failed" }];
 	}
 
 	try {
@@ -87,7 +83,9 @@ function runWorkerChecks(dbPath: string, vecExtensionPath: string): readonly Che
 	}
 
 	try {
-		const row = db.prepare("SELECT vec_version() AS version").get() as { version?: unknown } | undefined;
+		const row = db.prepare("SELECT vec_version() AS version").get() as
+			| { version?: unknown }
+			| undefined;
 		const version = row?.version;
 		if (typeof version === "string" && version.trim().length > 0) {
 			results.push({ check: 4, pass: true, message: `vec_version=${version}` });
@@ -165,12 +163,7 @@ async function runMain(): Promise<void> {
 		];
 		for (const line of lines) console.error(line);
 		printFallback();
-		writeEvidence("task-1-poc-fail.txt", [
-			...lines,
-			"RECOMMENDED FALLBACK STRATEGY:",
-			"A: Bun native Worker",
-			"B: Bun.spawn IPC",
-		]);
+		writeEvidence("task-1-poc-fail.txt", [...lines, "RECOMMENDED FALLBACK STRATEGY:", "A: Bun native Worker", "B: Bun.spawn IPC"]);
 		return;
 	}
 
@@ -179,12 +172,7 @@ async function runMain(): Promise<void> {
 		const line = "FAIL: Check 2 failed: sqlite-vec extension path not found via findSqliteVecExtension()";
 		console.error(line);
 		printFallback();
-		writeEvidence("task-1-poc-fail.txt", [
-			line,
-			"RECOMMENDED FALLBACK STRATEGY:",
-			"A: Bun native Worker",
-			"B: Bun.spawn IPC",
-		]);
+		writeEvidence("task-1-poc-fail.txt", [line, "RECOMMENDED FALLBACK STRATEGY:", "A: Bun native Worker", "B: Bun.spawn IPC"]);
 		return;
 	}
 
@@ -199,12 +187,7 @@ async function runMain(): Promise<void> {
 		const line = `FAIL: Check 1 failed: ${msg}`;
 		console.error(line);
 		printFallback();
-		writeEvidence("task-1-poc-fail.txt", [
-			line,
-			"RECOMMENDED FALLBACK STRATEGY:",
-			"A: Bun native Worker",
-			"B: Bun.spawn IPC",
-		]);
+		writeEvidence("task-1-poc-fail.txt", [line, "RECOMMENDED FALLBACK STRATEGY:", "A: Bun native Worker", "B: Bun.spawn IPC"]);
 		await worker.terminate().catch(() => {});
 		return;
 	}
@@ -224,13 +207,7 @@ async function runMain(): Promise<void> {
 		const failLine = `FAIL: Check ${failed.check} failed: ${failed.message}`;
 		console.error(failLine);
 		printFallback();
-		writeEvidence("task-1-poc-fail.txt", [
-			...checkLines,
-			failLine,
-			"RECOMMENDED FALLBACK STRATEGY:",
-			"A: Bun native Worker",
-			"B: Bun.spawn IPC",
-		]);
+		writeEvidence("task-1-poc-fail.txt", [...checkLines, failLine, "RECOMMENDED FALLBACK STRATEGY:", "A: Bun native Worker", "B: Bun.spawn IPC"]);
 		await worker.terminate().catch(() => {});
 		return;
 	}

@@ -1,4 +1,4 @@
-import type { LlmProvider } from "@signetai/core";
+import type { LlmProvider } from "@signet/core";
 import { stripFences } from "./extraction";
 import type { RerankCandidate, RerankConfig, RerankProvider } from "./reranker";
 

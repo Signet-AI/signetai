@@ -2,7 +2,7 @@
  * LLM provider implementations: Ollama (HTTP), Claude Code (CLI subprocess),
  * Anthropic (direct HTTP API), and OpenCode (headless HTTP server).
  *
- * The LlmProvider interface itself lives in @signetai/core so that the
+ * The LlmProvider interface itself lives in @signet/core so that the
  * ingestion pipeline and other consumers can accept any provider.
  */
 // On Windows, use node:child_process spawn with windowsHide to prevent
@@ -22,7 +22,7 @@ import {
 	type PipelineExtractionConfig,
 	type ProviderRateLimitConfig,
 	defaultPipelineModel,
-} from "@signetai/core";
+} from "@signet/core";
 import { logger } from "../logger";
 import { bypassSession } from "../session-tracker";
 import { which } from "../which";
@@ -724,7 +724,7 @@ function createSterileCodexEnv(baseEnv: Record<string, string | undefined>): {
 	};
 }
 
-export type { LlmProvider, LlmGenerateResult } from "@signetai/core";
+export type { LlmProvider, LlmGenerateResult } from "@signet/core";
 
 export type LlmProviderCallOptions = {
 	readonly timeoutMs?: number;

@@ -31,7 +31,7 @@ machine where you only want to install the Codex integration, use the standalone
 npm installer:
 
 ```bash
-npx -y @signetai/codex-plugin install --url http://signet-home.tailnet:3850 --api-key sig_sk_...
+npx -y @signet/codex-plugin install --url http://signet-home.tailnet:3850 --api-key sig_sk_...
 ```
 
 ## Uninstallation
@@ -44,8 +44,8 @@ daemon memories are preserved.
 
 | Field | Value |
 |-------|-------|
-| Package | `@signetai/connector-codex` |
-| Native plugin installer | `@signetai/codex-plugin` |
+| Package | `@signet/connector-codex` |
+| Native plugin installer | `@signet/codex-plugin` |
 | License | Apache-2.0 |
 
 ## Architecture
@@ -58,7 +58,7 @@ daemon memories are preserved.
 ~/.agents/                                 <-- Signet workspace
 ```
 
-The connector extends `BaseConnector` from `@signetai/connector-base` and implements `install()` / `uninstall()` for reversible setup.
+The connector extends `BaseConnector` from `@signet/connector-base` and implements `install()` / `uninstall()` for reversible setup.
 
 The Codex plugin exposes Signet-specific tools such as `signet_recall`,
 `signet_source_search`, `signet_session_search`, and `signet_save_note`.

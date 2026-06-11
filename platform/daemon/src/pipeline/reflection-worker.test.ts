@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { LlmProvider, PipelineReflectionsConfig } from "@signetai/core";
+import type { LlmProvider, PipelineReflectionsConfig } from "@signet/core";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
 import { logger } from "../logger";
 import { txIngestEnvelope } from "../transactions";

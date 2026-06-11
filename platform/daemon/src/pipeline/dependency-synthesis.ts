@@ -7,7 +7,7 @@
  * which only sees facts from a single memory at a time.
  */
 
-import { DEPENDENCY_TYPES, type DependencyType } from "@signetai/core";
+import { DEPENDENCY_TYPES, type DependencyType } from "@signet/core";
 import type { DbAccessor, ReadDb } from "../db-accessor";
 import { upsertDependency } from "../knowledge-graph";
 import { logger } from "../logger";

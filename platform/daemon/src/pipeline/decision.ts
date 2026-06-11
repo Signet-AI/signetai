@@ -7,7 +7,7 @@
  * never mutating memory content.
  */
 
-import { DECISION_ACTIONS, type DecisionAction, type ExtractedFact, buildFtsMatchQuery } from "@signetai/core";
+import { DECISION_ACTIONS, buildFtsMatchQuery, type DecisionAction, type ExtractedFact } from "@signet/core";
 import { type DbAccessor, isVectorRuntimeUsable } from "../db-accessor";
 import { logger } from "../logger";
 import type { EmbeddingConfig, MemorySearchConfig } from "../memory-config";

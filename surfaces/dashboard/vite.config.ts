@@ -18,8 +18,8 @@ export default defineConfig({
 	},
 	resolve: {
 		alias: {
-			"@signetai/core/llm-model-catalog": resolve(root, "../../platform/core/src/llm-model-catalog.ts"),
-			"@signetai/core/pipeline-providers": resolve(root, "../../platform/core/src/pipeline-providers.ts"),
+			"@signet/core/llm-model-catalog": resolve(root, "../../platform/core/src/llm-model-catalog.ts"),
+			"@signet/core/pipeline-providers": resolve(root, "../../platform/core/src/pipeline-providers.ts"),
 		},
 	},
 	build: {

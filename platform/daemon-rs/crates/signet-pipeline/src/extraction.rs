@@ -100,7 +100,7 @@ Rules:
 - Confidence reflects how certain you are the fact is correct and useful
 
 BAD fact: "install() writes bundled plugin"
-GOOD fact: "The @signetai/connector-opencode install() function writes pre-bundled signet.mjs to ~/.config/opencode/plugins/"
+GOOD fact: "The @signet/connector-opencode install() function writes pre-bundled signet.mjs to ~/.config/opencode/plugins/"
 
 Content:
 {truncated}

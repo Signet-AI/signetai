@@ -5,7 +5,7 @@ import { join } from "node:path";
 import type { OpenClawPluginApi, OpenClawToolDefinition } from "./openclaw-types";
 
 // Import directly; tests seed a real temporary SIGNET_PATH instead of
-// mocking @signetai/core globally, which otherwise leaks into later suites.
+// mocking @signet/core globally, which otherwise leaks into later suites.
 const signet = await import("./index");
 const signetPlugin = signet.default;
 const { memoryStore, sessionSearch, _resetRegistration, _sanitization, cleanupTimedMap } = signet;

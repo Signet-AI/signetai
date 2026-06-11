@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import type { LlmProvider } from "@signetai/core";
+import type { LlmProvider } from "@signet/core";
 import { summarizeRecallWithLlm } from "./reranker-llm";
 
 const OLLAMA = "http://localhost:11434";

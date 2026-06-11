@@ -6,40 +6,40 @@
  * and stores as signed memories.
  *
  * Usage:
- *   import { ingestPath } from "@signetai/core/ingest";
+ *   import { ingestPath } from "@signet/core/ingest";
  *   const result = await ingestPath("~/Documents/notes/", { db, verbose: true });
  */
 
-import { existsSync, readdirSync, statSync } from "fs";
-import { readFileSync } from "fs";
-import { basename, extname, join, resolve } from "path";
+import { existsSync, statSync, readdirSync } from "fs";
+import { join, extname, resolve, basename } from "path";
 import type { LlmProvider } from "../types";
-import { DEFAULT_CHUNKER_CONFIG, chunkDocument } from "./chunker";
-import { parseCodeRepository } from "./code-parser";
-import { parseDiscordExport } from "./discord-parser";
-import { hasEntireBranch, parseEntireRepo } from "./entire-parser";
-import { DEFAULT_EXTRACTOR_CONFIG, extractFromChunks } from "./extractor";
-import type { ExtractionOptions } from "./extractor";
-import { parseCode, parseMarkdown, parseTxt } from "./markdown-parser";
-import { parsePdf } from "./pdf-parser";
-import {
-	buildProvenance,
-	checkAlreadyIngested,
-	computeFileHash,
-	createIngestionJob,
-	updateIngestionJob,
-} from "./provenance";
-import { parseSlackExport } from "./slack-parser";
 import type {
-	ChunkResult,
 	DatabaseLike,
-	ExtractionResult,
-	FileIngestResult,
 	IngestOptions,
 	IngestResult,
+	FileIngestResult,
 	ParsedDocument,
+	ChunkResult,
+	ExtractionResult,
 	ProgressCallback,
 } from "./types";
+import { readFileSync } from "fs";
+import { parseMarkdown, parseTxt, parseCode } from "./markdown-parser";
+import { parsePdf } from "./pdf-parser";
+import { parseSlackExport } from "./slack-parser";
+import { parseDiscordExport } from "./discord-parser";
+import { parseCodeRepository } from "./code-parser";
+import { parseEntireRepo, hasEntireBranch } from "./entire-parser";
+import { chunkDocument, DEFAULT_CHUNKER_CONFIG } from "./chunker";
+import { extractFromChunks, DEFAULT_EXTRACTOR_CONFIG } from "./extractor";
+import type { ExtractionOptions } from "./extractor";
+import {
+	computeFileHash,
+	checkAlreadyIngested,
+	createIngestionJob,
+	updateIngestionJob,
+	buildProvenance,
+} from "./provenance";
 
 // Re-export all types
 export type {

@@ -19,7 +19,7 @@ import {
 	type RecallTemporalMeta,
 	SOURCE_CHUNK_SOURCE_TYPE,
 	vectorSearch,
-} from "@signetai/core";
+} from "@signet/core";
 import { getDbAccessor } from "./db-accessor";
 import { getLlmProvider } from "./llm";
 import { logger } from "./logger";

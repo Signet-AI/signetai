@@ -15,7 +15,7 @@ import {
 	resolveSignetApiKey,
 	resolveSignetDaemonUrl,
 	resolveSignetWorkspacePath,
-} from "@signetai/connector-base";
+} from "@signet/connector-base";
 import {
 	clearConfiguredPiAgentDir,
 	getPiConfigPath,
@@ -23,7 +23,7 @@ import {
 	resolvePiAgentDir,
 	resolvePiExtensionsDir,
 	writeConfiguredPiAgentDir,
-} from "@signetai/core";
+} from "@signet/core";
 import { EXTENSION_BUNDLE } from "./extension-bundle.js";
 
 const PI_EXTENSION_PACKAGE = "@signet/pi-extension";

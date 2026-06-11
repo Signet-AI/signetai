@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { parseSimpleYaml } from "@signetai/core";
+import { parseSimpleYaml } from "@signet/core";
 
 export interface GitConfig {
 	enabled: boolean;

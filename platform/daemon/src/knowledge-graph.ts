@@ -19,7 +19,7 @@ import type {
 	EntityDependency,
 	TaskMeta,
 	TaskStatus,
-} from "@signetai/core";
+} from "@signet/core";
 import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
 import { requireDependencyReason } from "./dependency-history";
 

@@ -3,7 +3,7 @@ import {
 	type PipelineProviderChoice,
 	defaultPipelineModel,
 	isPipelineProvider,
-} from "@signetai/core/pipeline-providers";
+} from "@signet/core/pipeline-providers";
 
 export const DEFAULT_OPENAI_COMPATIBLE_ENDPOINT = "http://127.0.0.1:1234/v1";
 

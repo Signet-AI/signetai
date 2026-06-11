@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { constants, accessSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
-import { readGraphiqState } from "@signetai/core";
+import { readGraphiqState } from "@signet/core";
 
 export interface GraphiqCommandResult {
 	readonly activeProject: string;

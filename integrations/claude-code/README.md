@@ -26,7 +26,7 @@ The connector package exposes programmatic cleanup that removes hooks and MCP se
 
 | Field | Value |
 |-------|-------|
-| Package | `@signetai/connector-claude-code` |
+| Package | `@signet/connector-claude-code` |
 | License | Apache-2.0 |
 
 ## Architecture
@@ -37,4 +37,4 @@ The connector package exposes programmatic cleanup that removes hooks and MCP se
 ~/.agents/                 <-- agent workspace (identity, skills, memories)
 ```
 
-The connector extends `BaseConnector` from `@signetai/connector-base` and implements `install()` / `uninstall()` for reversible setup.
+The connector extends `BaseConnector` from `@signet/connector-base` and implements `install()` / `uninstall()` for reversible setup.

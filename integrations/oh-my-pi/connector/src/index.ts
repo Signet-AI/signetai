@@ -15,7 +15,7 @@ import {
 	resolveSignetApiKey,
 	resolveSignetDaemonUrl,
 	resolveSignetWorkspacePath,
-} from "@signetai/connector-base";
+} from "@signet/connector-base";
 import {
 	clearConfiguredOhMyPiAgentDir,
 	expandHome,
@@ -24,7 +24,7 @@ import {
 	resolveOhMyPiAgentDir,
 	resolveOhMyPiExtensionsDir,
 	writeConfiguredOhMyPiAgentDir,
-} from "@signetai/core";
+} from "@signet/core";
 import { EXTENSION_BUNDLE } from "./extension-bundle.js";
 
 const OH_MY_PI_EXTENSION_PACKAGE = "@signet/oh-my-pi-extension";

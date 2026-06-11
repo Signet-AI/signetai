@@ -1,30 +1,12 @@
 import { describe, expect, it } from "bun:test";
-import type { ModelRegistryEntry } from "@signetai/core";
-import {
-	getAvailableModels,
-	getModelsByProvider,
-	getRegistryStatus,
-	markDeprecatedVersions,
-	refreshRegistry,
-} from "./model-registry";
+import type { ModelRegistryEntry } from "@signet/core";
+import { getAvailableModels, getModelsByProvider, getRegistryStatus, markDeprecatedVersions, refreshRegistry } from "./model-registry";
 
 describe("static model registry", () => {
 	it("preserves entries instead of synthesizing deprecation from model names", () => {
 		const entries: ModelRegistryEntry[] = [
-			{
-				id: "provider/known-older",
-				provider: "checked-provider",
-				label: "Known older",
-				tier: "mid",
-				deprecated: false,
-			},
-			{
-				id: "provider/known-newer",
-				provider: "checked-provider",
-				label: "Known newer",
-				tier: "high",
-				deprecated: false,
-			},
+			{ id: "provider/known-older", provider: "checked-provider", label: "Known older", tier: "mid", deprecated: false },
+			{ id: "provider/known-newer", provider: "checked-provider", label: "Known newer", tier: "high", deprecated: false },
 		];
 		const result = markDeprecatedVersions(entries);
 		expect(result).toEqual(entries);

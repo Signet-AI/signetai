@@ -29,7 +29,7 @@ The connector package exposes programmatic cleanup that removes hook handlers an
 
 | Field | Value |
 |-------|-------|
-| Package | `@signetai/connector-openclaw` |
+| Package | `@signet/connector-openclaw` |
 | License | Apache-2.0 |
 | Extra dependency | `json5` (for JSONC config parsing) |
 
@@ -41,4 +41,4 @@ The connector package exposes programmatic cleanup that removes hook handlers an
 ~/.agents/AGENTS.md             <-- read directly by OpenClaw
 ```
 
-The connector extends `BaseConnector` from `@signetai/connector-base` and implements deep-merge config patching with `json5` for JSONC support.
+The connector extends `BaseConnector` from `@signet/connector-base` and implements deep-merge config patching with `json5` for JSONC support.

@@ -6,7 +6,7 @@ import {
 	parseRoutingTargetRef,
 	parseYamlDocument,
 	stringifyYamlDocument,
-} from "@signetai/core";
+} from "@signet/core";
 import chalk from "chalk";
 import type { Command } from "commander";
 import type { DaemonApiCall, DaemonFetch } from "../lib/daemon.js";
