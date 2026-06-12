@@ -1,4 +1,4 @@
-import { pbkdf2Sync, randomBytes, timingSafeEqual, createHash } from "node:crypto";
+import { pbkdf2Sync, randomBytes, timingSafeEqual } from "node:crypto";
 
 const PASSWORD_HASH_PREFIX = "pbkdf2-sha256";
 const DEFAULT_ITERATIONS = 210_000;
@@ -14,9 +14,11 @@ function decodeBase64Url(value: string): Buffer {
 }
 
 function constantTimeStringEqual(a: string, b: string): boolean {
-	const left = createHash("sha256").update(a).digest();
-	const right = createHash("sha256").update(b).digest();
-	return timingSafeEqual(left, right);
+	const bufA = Buffer.from(a, "utf8");
+	const bufB = Buffer.from(b, "utf8");
+	if (bufA.length !== bufB.length) return false;
+	if (bufA.length === 0) return true;
+	return timingSafeEqual(bufA, bufB);
 }
 
 export function hashPassword(password: string, iterations = DEFAULT_ITERATIONS): string {
