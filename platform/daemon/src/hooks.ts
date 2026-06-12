@@ -13,7 +13,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
-import { getAgentIdentityFiles, parseSimpleYaml, resolveDefaultBasePath } from "@signet/core";
+import { resolveDefaultBasePath } from "@signet/core";
 import { ensureAgentRegistered, getAgentScope, resolveAgentId } from "./agent-id";
 import { applyTokenBudget, selectWithTokenBudget } from "./context-budget";
 import {
@@ -35,6 +35,13 @@ import {
 	loadHooksConfig as loadHooksConfigFromDisk,
 	resolveUserPromptMinScore,
 } from "./hooks-config";
+import {
+	loadIdentity,
+	readAgentsMd,
+	readIdentityFile,
+	readMemoryMd,
+	resolveIdentityFiles,
+} from "./identity-context";
 import { propagateMemoryStatus } from "./knowledge-graph";
 import { logger } from "./logger";
 import { effectiveScore, inferType, isDuplicate } from "./memory-classification";
@@ -618,38 +625,6 @@ function getSessionGapSummary(): string | undefined {
 	}
 }
 
-type IdentityFileMap = Record<string, string>;
-
-function readIdentityPath(filePath: string | undefined, charBudget: number): string | undefined {
-	if (!filePath || !existsSync(filePath)) return undefined;
-
-	try {
-		const content = readFileSync(filePath, "utf-8").trim();
-		if (!content) return undefined;
-		if (content.length <= charBudget) return content;
-		return `${content.slice(0, charBudget)}\n[truncated]`;
-	} catch {
-		return undefined;
-	}
-}
-
-function readIdentityFile(fileName: string, charBudget: number, identityFiles?: IdentityFileMap): string | undefined {
-	return readIdentityPath(identityFiles?.[fileName] ?? join(getAgentsDir(), fileName), charBudget);
-}
-
-function readMemoryMd(charBudget: number, identityFiles?: IdentityFileMap): string | undefined {
-	return readIdentityFile("MEMORY.md", charBudget, identityFiles);
-}
-
-function readAgentsMd(charBudget: number, identityFiles?: IdentityFileMap): string | undefined {
-	return readIdentityFile("AGENTS.md", charBudget, identityFiles);
-}
-
-function resolveIdentityFiles(agentId: string): IdentityFileMap {
-	if (!agentId || agentId === "default") return {};
-	return getAgentIdentityFiles(agentId, getAgentsDir());
-}
-
 export interface ScoredMemory {
 	id: string;
 	content: string;
@@ -962,67 +937,6 @@ function loadHooksConfig(): HooksConfig {
 }
 
 // ============================================================================
-// Type Guards for Parsed YAML
-// ============================================================================
-
-interface AgentConfig {
-	name?: string;
-	description?: string;
-}
-
-function isAgentConfig(value: unknown): value is AgentConfig {
-	return typeof value === "object" && value !== null;
-}
-
-// ============================================================================
-// Identity Loading
-// ============================================================================
-
-function parseIdentityMarkdown(content: string): { name: string; description?: string } {
-	const nameMatch = content.match(/name:\s*(.+)/i);
-	const youAreMatch = content.match(/(?:^|\n)\s*(?:#+\s*)?you are\s+([^\n.]+)\.?/i);
-	const descMatch = content.match(/creature:\s*(.+)/i) || content.match(/role:\s*(.+)/i);
-
-	return {
-		name: (nameMatch?.[1] ?? youAreMatch?.[1] ?? "Agent").trim(),
-		description: descMatch?.[1]?.trim(),
-	};
-}
-
-function loadIdentity(identityFiles?: IdentityFileMap): { name: string; description?: string } {
-	const identityMd = identityFiles?.["IDENTITY.md"];
-	if (identityMd && existsSync(identityMd)) {
-		try {
-			return parseIdentityMarkdown(readFileSync(identityMd, "utf-8"));
-		} catch {}
-	}
-
-	const agentYaml = join(getAgentsDir(), "agent.yaml");
-	if (existsSync(agentYaml)) {
-		try {
-			const content = readFileSync(agentYaml, "utf-8");
-			const config = parseSimpleYaml(content);
-			const agent = config.agent;
-			if (isAgentConfig(agent) && agent.name) {
-				return {
-					name: agent.name,
-					description: agent.description,
-				};
-			}
-		} catch {}
-	}
-
-	const rootIdentityMd = join(getAgentsDir(), "IDENTITY.md");
-	if (existsSync(rootIdentityMd)) {
-		try {
-			return parseIdentityMarkdown(readFileSync(rootIdentityMd, "utf-8"));
-		} catch {}
-	}
-
-	return { name: "Agent" };
-}
-
-// ============================================================================
 // Memory Queries
 // ============================================================================
 
@@ -1195,14 +1109,15 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 		initContinuity(req.sessionKey, req.harness, req.project);
 	}
 
-	const identityFiles = resolveIdentityFiles(agentId);
-	const identity = includeIdentity ? loadIdentity(identityFiles) : { name: "Agent" };
+	const agentsDir = getAgentsDir();
+	const identityFiles = resolveIdentityFiles(agentId, agentsDir);
+	const identity = includeIdentity ? loadIdentity(agentsDir, identityFiles) : { name: "Agent" };
 
 	// Read AGENTS.md first so harness instructions precede synthesized memory
-	const agentsMdContent = includeIdentity ? readAgentsMd(12000, identityFiles) : undefined;
+	const agentsMdContent = includeIdentity ? readAgentsMd(agentsDir, 12000, identityFiles) : undefined;
 
 	// Read MEMORY.md with 10k char budget
-	const memoryMdContent = readMemoryMd(10000, identityFiles);
+	const memoryMdContent = readMemoryMd(agentsDir, 10000, identityFiles);
 
 	const traversalCfg = memoryCfg.pipelineV2.traversal;
 	const traversalEnabled = memoryCfg.pipelineV2.graph.enabled && traversalCfg?.enabled === true;
@@ -1550,9 +1465,9 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 	}
 
 	// Inject additional identity files
-	const soulContent = includeIdentity ? readIdentityFile("SOUL.md", 4000, identityFiles) : undefined;
-	const identityContent = includeIdentity ? readIdentityFile("IDENTITY.md", 2000, identityFiles) : undefined;
-	const userContent = includeIdentity ? readIdentityFile("USER.md", 6000, identityFiles) : undefined;
+	const soulContent = includeIdentity ? readIdentityFile(agentsDir, "SOUL.md", 4000, identityFiles) : undefined;
+	const identityContent = includeIdentity ? readIdentityFile(agentsDir, "IDENTITY.md", 2000, identityFiles) : undefined;
+	const userContent = includeIdentity ? readIdentityFile(agentsDir, "USER.md", 6000, identityFiles) : undefined;
 
 	if (soulContent) {
 		injectParts.push("\n## Soul\n");
