@@ -129,22 +129,35 @@ signet api-key create \
 The command prints the raw `sig_sk_...` key once. Save it in your password
 manager or pass it directly to the remote installer. Do not commit it.
 
-If you create the key with `--agent-id`, pass the same `--agent-id` when you
-install the connector. This keeps scope-guarded API calls and connector
-attribution aligned. In Signet 0.140.1, connector lifecycle hook traffic is
-authenticated but not every hook path enforces agent scope as a hard isolation
-boundary, so use one named key per connector and revoke keys you no longer
-trust.
+If you create the key with `--agent-id`, Signet stores that agent in the key's
+auth scope. Remote requests authenticated by that key default to that agent and
+scope checks reject requests for a different agent. Pass the same `--agent-id`
+when the connector installer supports it so connector attribution and the
+auth-enforced scope stay aligned.
 
-Codex note for Signet 0.140.1: the Codex installer does not yet persist
-`SIGNET_AGENT_ID` into generated Codex hook/MCP config. Use a named but
-unscoped Codex key for now unless you manually manage the generated Codex
-runtime environment.
+For Codex, the API key scope is the important part. Create the key for the exact
+agent that should own the Codex session data:
+
+```bash
+signet api-key create --name "rose codex tailnet" --connector codex --agent-id rose
+```
+
+Then install Codex with that key:
+
+```bash
+npx -y @signetai/codex-plugin install \
+  --url http://signet-home.tailnet:3850 \
+  --api-key sig_sk_...
+```
+
+Codex hook and MCP calls authenticated with that key resolve to `rose` unless a
+route explicitly asks for another agent; a different `agentId` is rejected as a
+scope violation.
 
 For other harnesses, change `--connector` and the name:
 
 ```bash
-signet api-key create --name "work laptop codex" --connector codex
+signet api-key create --name "work laptop codex" --connector codex --agent-id codex-work-laptop
 signet api-key create --name "work laptop opencode" --connector opencode --agent-id opencode-work-laptop
 ```
 
@@ -253,8 +266,11 @@ curl -fsS "$SIGNET_DAEMON_URL/api/auth/whoami" \
   -H "Authorization: Bearer $SIGNET_API_KEY"
 ```
 
-You should get JSON describing the authenticated connector role/scope. If you
-get `401`, check the key, auth mode, and daemon URL.
+You should get JSON describing the authenticated connector role/scope. For an
+agent-scoped key, confirm the response includes that agent in the scope, for
+example `"scope":{"agent":"rose"}`. If you get `401`, check the key, auth
+mode, and daemon URL. If a request for a different `agentId` returns `403`, the
+agent scope is working.
 
 ## 6. Start the harness and run a first check
 
@@ -293,7 +309,7 @@ auth:
 
 ```bash
 signet daemon restart
-signet api-key create --name "laptop codex" --connector codex
+signet api-key create --name "laptop codex" --connector codex --agent-id rose
 ```
 
 On the laptop:

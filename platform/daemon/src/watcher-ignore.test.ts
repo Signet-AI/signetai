@@ -58,30 +58,80 @@ describe("createAgentsWatcherIgnoreMatcher", () => {
 		expect(shouldIgnore(join(agentsDir, "signetai-notes.md"))).toBe(false);
 	});
 
+	it("ignores per-agent Fly runtime homes without ignoring agent identity files", () => {
+		const agentsDir = makeTempAgentsDir();
+		const shouldIgnore = createAgentsWatcherIgnoreMatcher(agentsDir);
+
+		expect(shouldIgnore(join(agentsDir, "agents", "kate", ".fly-kate-home"))).toBe(true);
+		expect(shouldIgnore(join(agentsDir, "agents", "kate", ".fly-kate-home", ".fly", "fly-agent.sock"))).toBe(true);
+		expect(shouldIgnore(join(agentsDir, "agents", "kate", "TOOLS.md"))).toBe(false);
+		expect(shouldIgnore(join(agentsDir, "agents", "kate", "MEMORY.md"))).toBe(false);
+	});
+
+	it("uses .sigignore patterns from the workspace root", () => {
+		const agentsDir = makeTempAgentsDir();
+		writeFileSync(
+			join(agentsDir, ".sigignore"),
+			["# Runtime files managed outside Signet", "agents/kate/runtime/", "*.sock", "!agents/rose/keep.sock", ""].join(
+				"\n",
+			),
+		);
+		const shouldIgnore = createAgentsWatcherIgnoreMatcher(agentsDir);
+
+		expect(shouldIgnore(join(agentsDir, "agents", "kate", "runtime"))).toBe(true);
+		expect(shouldIgnore(join(agentsDir, "agents", "kate", "runtime", "state.json"))).toBe(true);
+		expect(shouldIgnore(join(agentsDir, "agents", "rose", "runtime", "state.json"))).toBe(false);
+		expect(shouldIgnore(join(agentsDir, "agents", "rose", "agent.sock"))).toBe(true);
+		expect(shouldIgnore(join(agentsDir, "agents", "rose", "keep.sock"))).toBe(false);
+		expect(shouldIgnore(join(agentsDir, ".sigignore"))).toBe(false);
+	});
+
+	it("reloads .sigignore after the file changes", () => {
+		const agentsDir = makeTempAgentsDir();
+		const shouldIgnore = createAgentsWatcherIgnoreMatcher(agentsDir);
+		const runtimePath = join(agentsDir, "agents", "rose", "runtime", "state.json");
+
+		expect(shouldIgnore(runtimePath)).toBe(false);
+		writeFileSync(join(agentsDir, ".sigignore"), "agents/rose/runtime/\n");
+		expect(shouldIgnore(runtimePath)).toBe(true);
+	});
+
+	it("keeps leading slash patterns anchored to the workspace root", () => {
+		const agentsDir = makeTempAgentsDir();
+		writeFileSync(join(agentsDir, ".sigignore"), "/runtime/\n");
+		const shouldIgnore = createAgentsWatcherIgnoreMatcher(agentsDir);
+
+		expect(shouldIgnore(join(agentsDir, "runtime", "state.json"))).toBe(true);
+		expect(shouldIgnore(join(agentsDir, "agents", "rose", "runtime", "state.json"))).toBe(false);
+	});
+
+	it("treats double-star directory globs as zero or more path segments", () => {
+		const agentsDir = makeTempAgentsDir();
+		writeFileSync(join(agentsDir, ".sigignore"), "**/*.sock\nfoo/**/bar\n");
+		const shouldIgnore = createAgentsWatcherIgnoreMatcher(agentsDir);
+
+		expect(shouldIgnore(join(agentsDir, "daemon.sock"))).toBe(true);
+		expect(shouldIgnore(join(agentsDir, "agents", "rose", "daemon.sock"))).toBe(true);
+		expect(shouldIgnore(join(agentsDir, "foo", "bar"))).toBe(true);
+		expect(shouldIgnore(join(agentsDir, "foo", "nested", "bar"))).toBe(true);
+	});
+
 	it("ignores canonical artifact files inside memory/ directory", () => {
 		const agentsDir = makeTempAgentsDir();
 		const shouldIgnore = createAgentsWatcherIgnoreMatcher(agentsDir);
 
-		expect(
-			shouldIgnore(
-				join(agentsDir, "memory", "2026-04-10T12-00-00.000Z--abcdefghijklmnop--summary.md"),
-			),
-		).toBe(true);
-		expect(
-			shouldIgnore(
-				join(agentsDir, "memory", "2026-04-10T12-00-00.000Z--abcdefghijklmnop--transcript.md"),
-			),
-		).toBe(true);
-		expect(
-			shouldIgnore(
-				join(agentsDir, "memory", "2026-04-10T12-00-00.000Z--abcdefghijklmnop--manifest.md"),
-			),
-		).toBe(true);
-		expect(
-			shouldIgnore(
-				join(agentsDir, "memory", "2026-04-10T12-00-00.000Z--abcdefghijklmnop--compaction.md"),
-			),
-		).toBe(true);
+		expect(shouldIgnore(join(agentsDir, "memory", "2026-04-10T12-00-00.000Z--abcdefghijklmnop--summary.md"))).toBe(
+			true,
+		);
+		expect(shouldIgnore(join(agentsDir, "memory", "2026-04-10T12-00-00.000Z--abcdefghijklmnop--transcript.md"))).toBe(
+			true,
+		);
+		expect(shouldIgnore(join(agentsDir, "memory", "2026-04-10T12-00-00.000Z--abcdefghijklmnop--manifest.md"))).toBe(
+			true,
+		);
+		expect(shouldIgnore(join(agentsDir, "memory", "2026-04-10T12-00-00.000Z--abcdefghijklmnop--compaction.md"))).toBe(
+			true,
+		);
 	});
 
 	it("does NOT ignore MEMORY.md inside memory/ directory", () => {
@@ -105,9 +155,9 @@ describe("createAgentsWatcherIgnoreMatcher", () => {
 		const shouldIgnore = createAgentsWatcherIgnoreMatcher(agentsDir);
 
 		expect(shouldIgnore(join(agentsDir, "2026-04-10T12-00-00.000Z--abcdefghijklmnop--summary.md"))).toBe(false);
-		expect(
-			shouldIgnore(join(agentsDir, "archive", "2026-04-10T12-00-00.000Z--abcdefghijklmnop--transcript.md")),
-		).toBe(false);
+		expect(shouldIgnore(join(agentsDir, "archive", "2026-04-10T12-00-00.000Z--abcdefghijklmnop--transcript.md"))).toBe(
+			false,
+		);
 		expect(shouldIgnore(join(agentsDir, "MEMORY.backup-2026-04-10.md"))).toBe(false);
 	});
 });

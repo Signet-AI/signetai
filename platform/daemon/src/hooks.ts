@@ -194,6 +194,7 @@ export interface PreCompactionRequest {
 	sessionContext?: string;
 	messageCount?: number;
 	sessionKey?: string;
+	agentId?: string;
 	runtimePath?: "plugin" | "legacy";
 }
 
@@ -266,6 +267,7 @@ export interface RememberRequest {
 	project?: string;
 	content: string;
 	sessionKey?: string;
+	agentId?: string;
 	idempotencyKey?: string;
 	runtimePath?: "plugin" | "legacy";
 }
@@ -440,6 +442,7 @@ function loadHooksConfig(): HooksConfig {
 function getRecentMemories(
 	limit: number,
 	recencyBias = 0.7,
+	agentScope?: { agentId: string; readPolicy: string; policyGroup: string | null },
 ): Array<{
 	id: string;
 	content: string;
@@ -447,7 +450,46 @@ function getRecentMemories(
 	importance: number;
 	created_at: string;
 }> {
-	return memoryCandidates.getRecentMemories(getMemoryDbPath(), limit, recencyBias);
+	if (!existsSync(getMemoryDbPath())) return [];
+
+	try {
+		const rows = getDbAccessor().withReadDb((db) => {
+			const scope = agentScope
+				? buildAgentScopeClause(agentScope.agentId, agentScope.readPolicy, agentScope.policyGroup)
+				: { sql: " AND m.visibility != 'archived'", args: [] };
+			const query = `
+        SELECT
+          m.id, m.content, m.type, m.importance, m.created_at,
+          (julianday('now') - julianday(m.created_at)) as age_days
+        FROM memories m
+        WHERE m.is_deleted = 0${scope.sql}
+        ORDER BY
+          (m.importance * ${1 - recencyBias}) +
+          (1.0 / (1.0 + (julianday('now') - julianday(m.created_at)))) * ${recencyBias}
+          DESC
+        LIMIT ?
+      `;
+
+			return db.prepare(query).all(...scope.args, limit) as Array<{
+				id: string;
+				content: string;
+				type: string;
+				importance: number;
+				created_at: string;
+			}>;
+		});
+
+		return rows.map((r) => ({
+			id: r.id,
+			content: r.content,
+			type: r.type || "general",
+			importance: r.importance || 0.5,
+			created_at: r.created_at,
+		}));
+	} catch (e) {
+		logger.error("hooks", "Failed to query memories", e as Error);
+		return [];
+	}
 }
 
 /**
@@ -1071,7 +1113,9 @@ ${guidelines}
 `;
 
 	if (config.includeRecentMemories !== false) {
-		const recentMemories = getRecentMemories(config.memoryLimit || 5, 0.9);
+		const agentId = resolveAgentId(req);
+		const agentScope = getAgentScope(agentId);
+		const recentMemories = getRecentMemories(config.memoryLimit || 5, 0.9, { agentId, ...agentScope });
 		if (recentMemories.length > 0) {
 			summaryPrompt += "\nRecent memories for reference:\n";
 			for (const mem of recentMemories) {

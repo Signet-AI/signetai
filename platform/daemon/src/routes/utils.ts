@@ -673,11 +673,16 @@ export function buildForgetCandidatesWhere(
 	return { clause, args };
 }
 
-export function loadForgetCandidates(req: ForgetCandidatesRequest): ForgetCandidate[] {
+export function loadForgetCandidates(
+	req: ForgetCandidatesRequest,
+	scope?: { readonly sql: string; readonly args: readonly unknown[] },
+): ForgetCandidate[] {
 	return getDbAccessor().withReadDb((db) => {
 		const limit = Math.max(1, Math.min(req.limit, MAX_MUTATION_BATCH));
 		const withQuery = req.query.trim().length > 0;
-		const { clause, args } = buildForgetCandidatesWhere(req, withQuery ? "m" : "");
+		const { clause, args } = buildForgetCandidatesWhere(req, "m");
+		const scopeSql = scope?.sql ?? "";
+		const scopeArgs = scope?.args ?? [];
 
 		if (withQuery) {
 			try {
@@ -686,11 +691,11 @@ export function loadForgetCandidates(req: ForgetCandidatesRequest): ForgetCandid
 						`SELECT m.id, m.pinned, m.version, bm25(memories_fts) AS raw_score
 						 FROM memories_fts
 						 JOIN memories m ON memories_fts.rowid = m.rowid
-						 WHERE memories_fts MATCH ? AND m.is_deleted = 0${clause}
+						 WHERE memories_fts MATCH ? AND m.is_deleted = 0${clause}${scopeSql}
 						 ORDER BY raw_score
 						 LIMIT ?`,
 					) as any
-				).all(req.query, ...args, limit) as Array<{
+				).all(req.query, ...args, ...scopeArgs, limit) as Array<{
 					id: string;
 					pinned: number;
 					version: number;
@@ -711,11 +716,11 @@ export function loadForgetCandidates(req: ForgetCandidatesRequest): ForgetCandid
 					`SELECT m.id, m.pinned, m.version
 					 FROM memories m
 					 WHERE m.is_deleted = 0
-					   AND (m.content LIKE ? OR m.tags LIKE ?)${clause}
+					   AND (m.content LIKE ? OR m.tags LIKE ?)${clause}${scopeSql}
 					 ORDER BY m.updated_at DESC
 					 LIMIT ?`,
 				) as any
-			).all(`%${req.query}%`, `%${req.query}%`, ...args, limit) as Array<{
+			).all(`%${req.query}%`, `%${req.query}%`, ...args, ...scopeArgs, limit) as Array<{
 				id: string;
 				pinned: number;
 				version: number;
@@ -730,13 +735,13 @@ export function loadForgetCandidates(req: ForgetCandidatesRequest): ForgetCandid
 
 		const rows = (
 			db.prepare(
-				`SELECT id, pinned, version
-				 FROM memories
-				 WHERE is_deleted = 0${clause}
-				 ORDER BY pinned DESC, importance DESC, updated_at DESC
+				`SELECT m.id, m.pinned, m.version
+				 FROM memories m
+				 WHERE m.is_deleted = 0${clause}${scopeSql}
+				 ORDER BY m.pinned DESC, m.importance DESC, m.updated_at DESC
 				 LIMIT ?`,
 			) as any
-		).all(...args, limit) as Array<{
+		).all(...args, ...scopeArgs, limit) as Array<{
 			id: string;
 			pinned: number;
 			version: number;
@@ -750,7 +755,11 @@ export function loadForgetCandidates(req: ForgetCandidatesRequest): ForgetCandid
 	});
 }
 
-export function loadForgetCandidatesByIds(requestedIds: readonly string[], limit: number): ForgetCandidate[] {
+export function loadForgetCandidatesByIds(
+	requestedIds: readonly string[],
+	limit: number,
+	scope?: { readonly sql: string; readonly args: readonly unknown[] },
+): ForgetCandidate[] {
 	const dedupedIds = [...new Set(requestedIds)]
 		.map((id) => id.trim())
 		.filter((id) => id.length > 0)
@@ -759,13 +768,15 @@ export function loadForgetCandidatesByIds(requestedIds: readonly string[], limit
 
 	return getDbAccessor().withReadDb((db) => {
 		const placeholders = dedupedIds.map(() => "?").join(", ");
+		const scopeSql = scope?.sql ?? "";
+		const scopeArgs = scope?.args ?? [];
 		const rows = db
 			.prepare(
-				`SELECT id, pinned, version
-				 FROM memories
-				 WHERE is_deleted = 0 AND id IN (${placeholders})`,
+				`SELECT m.id, m.pinned, m.version
+				 FROM memories m
+				 WHERE m.is_deleted = 0 AND m.id IN (${placeholders})${scopeSql}`,
 			)
-			.all(...dedupedIds) as Array<{
+			.all(...dedupedIds, ...scopeArgs) as Array<{
 			id: string;
 			pinned: number;
 			version: number;

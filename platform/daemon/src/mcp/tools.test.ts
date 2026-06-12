@@ -1119,13 +1119,13 @@ describe("createMcpServer", () => {
 	});
 
 	describe("cross-agent tools", () => {
-		it("agent_peers calls presence endpoint with defaults", async () => {
+		it("agent_peers omits agent_id by default so auth scope can supply it", async () => {
 			const cap: { url?: string } = {};
 			mockFetch(200, { sessions: [], count: 0 }, cap);
 
 			await callTool(server, "agent_peers", {});
 			expect(cap.url).toContain("/api/cross-agent/presence?");
-			expect(cap.url).toContain("agent_id=default");
+			expect(cap.url).not.toContain("agent_id=");
 			expect(cap.url).toContain("include_self=false");
 		});
 
@@ -1181,6 +1181,16 @@ describe("createMcpServer", () => {
 			expect(cap.url).toContain("/api/cross-agent/messages?");
 			expect(cap.url).toContain("agent_id=beta");
 			expect(cap.url).toContain("limit=25");
+		});
+
+		it("agent_message_inbox omits agent_id by default so auth scope can supply it", async () => {
+			const cap: { url?: string } = {};
+			mockFetch(200, { items: [], count: 0 }, cap);
+
+			await callTool(server, "agent_message_inbox", {});
+
+			expect(cap.url).toContain("/api/cross-agent/messages?");
+			expect(cap.url).not.toContain("agent_id=");
 		});
 	});
 

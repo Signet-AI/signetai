@@ -252,9 +252,13 @@ For a remote Signet daemon, pass `--url` and `--api-key` when installing the
 Codex connector:
 
 ```bash
-signet api-key create --name "work laptop codex" --connector codex
+signet api-key create --name "work laptop codex" --connector codex --agent-id rose
 signet connect codex --url http://192.168.0.60:3850 --api-key sig_sk_...
 ```
+
+Use `--agent-id` when creating the API key to bind the remote Codex install to
+one Signet agent. The key scope becomes the default agent for Codex hook/MCP
+requests, and requests for another agent are rejected by daemon auth scope.
 
 Codex also has a native-plugin-oriented npm installer name for machines where
 you do not want to install the full Signet CLI first:

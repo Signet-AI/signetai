@@ -12,6 +12,23 @@ describe("request scope helpers", () => {
 		expect(resolveScopedProject(null, "hybrid", "proj-a").project).toBe("proj-a");
 	});
 
+	it("applies scoped agent when request omits one", () => {
+		const result = resolveScopedAgent(
+			{
+				sub: "api-key:key_rose",
+				role: "agent",
+				scope: { agent: "rose" },
+				iat: Math.floor(Date.now() / 1000),
+				exp: Math.floor(Date.now() / 1000) + 300,
+			},
+			"team",
+			undefined,
+		);
+
+		expect(result.agentId).toBe("rose");
+		expect(result.error).toBeUndefined();
+	});
+
 	it("rejects agent scope mismatches in team mode", () => {
 		const result = resolveScopedAgent(
 			{

@@ -122,10 +122,9 @@ stored hashed at rest.
 optional. `agentId` is connector metadata; API callers should also set
 `scope: { "agent": "..." }` when scope-guarded API surfaces should be limited
 to that agent. For connector keys, `scope.agent` should usually match
-`agentId`. In Signet 0.140.1, connector lifecycle hook traffic authenticates
-the key but not every hook path enforces agent scope as a hard isolation
-boundary. Connector keys default to the connector permission set: `recall`,
-`remember`, and `documents`.
+`agentId`. The Signet CLI does this automatically when you run
+`signet api-key create --agent-id <id>`. Connector keys default to the
+connector permission set: `recall`, `remember`, and `documents`.
 
 **Response**
 

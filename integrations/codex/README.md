@@ -26,6 +26,18 @@ signet setup --harness codex
 signet connect codex --url http://signet-home.tailnet:3850 --api-key sig_sk_...
 ```
 
+For a remote Codex install that must write to one Signet agent, create the API
+key with that agent scope on the daemon machine before installing:
+
+```bash
+signet api-key create --name "rose codex tailnet" --connector codex --agent-id rose
+signet connect codex --url http://signet-home.tailnet:3850 --api-key sig_sk_...
+```
+
+The `--agent-id` on `signet api-key create` is enforced by daemon auth scope;
+Codex requests using that key default to `rose` and cannot access another
+agent's scoped data.
+
 Interactive setup can also detect Codex CLI and offer to configure it. On a
 machine where you only want to install the Codex integration, use the standalone
 npm installer:

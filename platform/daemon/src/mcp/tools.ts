@@ -257,7 +257,8 @@ async function daemonFetch<T>(
 	const { method = "GET", body, timeout = 10_000, extraHeaders } = options;
 
 	const token = readDaemonAuthToken();
-	const authorizationHeader = normalizeAuthorizationHeader(options.authorizationHeader) ?? (token ? `Bearer ${token}` : undefined);
+	const authorizationHeader =
+		normalizeAuthorizationHeader(options.authorizationHeader) ?? (token ? `Bearer ${token}` : undefined);
 	const init: RequestInit = {
 		method,
 		headers: {
@@ -531,7 +532,10 @@ function selectToolsByPolicy(
 	return selected;
 }
 
-async function fetchMarketplacePolicy(baseUrl: string, authorizationHeader?: string): Promise<MarketplacePolicy | null> {
+async function fetchMarketplacePolicy(
+	baseUrl: string,
+	authorizationHeader?: string,
+): Promise<MarketplacePolicy | null> {
 	const result = await daemonFetch<MarketplacePolicyResponse>(baseUrl, "/api/marketplace/mcp/policy", {
 		timeout: 3_000,
 		authorizationHeader,
@@ -1313,7 +1317,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 				"Scores from -1 (harmful) to 1 (directly helpful). 0 = unused.",
 			inputSchema: z.object({
 				session_key: z.string().describe("Current session key"),
-				agent_id: z.string().optional().describe("Agent id scope (default: default)"),
+				agent_id: z.string().optional().describe("Agent id scope (defaults to authenticated scope/current agent)"),
 				ratings: z.object({}).catchall(z.number()).describe("Map of memory ID to relevance score (-1 to 1)"),
 				paths: z
 					.object({})
@@ -1370,7 +1374,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 				"List currently active Signet peer agent sessions. " +
 				"Pass include_self: true to include sessions from the same agent (same agentId).",
 			inputSchema: z.object({
-				agent_id: z.string().optional().describe("Current agent id (default: default)"),
+				agent_id: z.string().optional().describe("Current agent id (defaults to authenticated scope/current agent)"),
 				session_key: z.string().optional().describe("Current session key (excluded from peers)"),
 				include_self: z.boolean().optional().describe("Include sessions owned by the current agent (default false)"),
 				project: z.string().optional().describe("Optional project path filter"),
@@ -1379,7 +1383,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 		},
 		async ({ agent_id, session_key, include_self, project, limit }) => {
 			const params = new URLSearchParams();
-			params.set("agent_id", agent_id ?? "default");
+			if (agent_id) params.set("agent_id", agent_id);
 			if (session_key) params.set("session_key", session_key);
 			params.set("include_self", String(include_self ?? false));
 			if (project) params.set("project", project);
@@ -1474,7 +1478,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			title: "Read Agent Inbox",
 			description: "Read recent cross-agent messages for the current or specified agent.",
 			inputSchema: z.object({
-				agent_id: z.string().optional().describe("Recipient agent id (default: default)"),
+				agent_id: z.string().optional().describe("Recipient agent id (defaults to authenticated scope/current agent)"),
 				session_key: z.string().optional().describe("Recipient session key"),
 				since: z.string().optional().describe("ISO timestamp filter"),
 				limit: z.number().optional().describe("Max messages to return"),
@@ -1484,7 +1488,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 		},
 		async ({ agent_id, session_key, since, limit, include_sent, include_broadcast }) => {
 			const params = new URLSearchParams();
-			params.set("agent_id", agent_id ?? "default");
+			if (agent_id) params.set("agent_id", agent_id);
 			if (session_key) params.set("session_key", session_key);
 			if (since) params.set("since", since);
 			if (typeof limit === "number" && Number.isFinite(limit)) {
@@ -1958,12 +1962,10 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			annotations: { readOnlyHint: false },
 		},
 		async ({ session_key, enabled, agent_id }) => {
-			// Always thread agent_id so the scoped route resolves correctly.
-			// Default to "default" matching other cross-agent MCP tools.
-			const aid = agent_id ?? "default";
+			const query = agent_id ? `?agent_id=${encodeURIComponent(agent_id)}` : "";
 			const result = await fetchDaemon<{ key: string; bypassed: boolean }>(
 				baseUrl,
-				`/api/sessions/${encodeURIComponent(session_key)}/bypass?agent_id=${encodeURIComponent(aid)}`,
+				`/api/sessions/${encodeURIComponent(session_key)}/bypass${query}`,
 				{ method: "POST", body: { enabled } },
 			);
 			if (!result.ok) return errorResult(`Bypass toggle failed: ${result.error}`);

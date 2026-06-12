@@ -713,6 +713,7 @@ function startFileWatcher() {
 			join(AGENTS_DIR, "IDENTITY.md"),
 			join(AGENTS_DIR, "USER.md"),
 			join(AGENTS_DIR, "SIGNET-ARCHITECTURE.md"),
+			join(AGENTS_DIR, ".sigignore"),
 			join(AGENTS_DIR, "agents"),
 		],
 		{
@@ -721,6 +722,10 @@ function startFileWatcher() {
 			ignored: createAgentsWatcherIgnoreMatcher(AGENTS_DIR),
 		},
 	);
+
+	watcher.on("error", (error) => {
+		logger.error("watcher", "File watcher error", error instanceof Error ? error : new Error(String(error)));
+	});
 
 	watcher.on("change", (path) => {
 		logger.info("watcher", "File changed", { path });
