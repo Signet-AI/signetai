@@ -29,6 +29,16 @@ function appendDivergence(agentsDir: string, entry: Record<string, unknown>): vo
 	appendFileSync(logPath, `${JSON.stringify({ ts: new Date().toISOString(), ...entry })}\n`);
 }
 
+const SHADOW_HEADER_ALLOWLIST = new Set(["accept", "content-type", "user-agent", "x-signet-runtime-path"]);
+
+function shadowForwardHeaders(headers: Headers): Headers {
+	const safe = new Headers();
+	for (const [name, value] of headers) {
+		if (SHADOW_HEADER_ALLOWLIST.has(name.toLowerCase())) safe.set(name, value);
+	}
+	return safe;
+}
+
 export function registerGlobalMiddleware(app: Hono, deps: MiddlewareDeps): void {
 	// MW-1: CORS
 	app.use(
@@ -80,7 +90,8 @@ export function registerGlobalMiddleware(app: Hono, deps: MiddlewareDeps): void 
 	app.use("*", async (c, next) => {
 		const method = c.req.method;
 		const shadowProcess = deps.getShadowProcess();
-		if (!shadowProcess) {
+		const reqPath = c.req.path;
+		if (!shadowProcess || reqPath.startsWith("/api/auth/") || reqPath.startsWith("/api/secrets")) {
 			await next();
 			return;
 		}
@@ -89,14 +100,13 @@ export function registerGlobalMiddleware(app: Hono, deps: MiddlewareDeps): void 
 			: Promise.resolve(undefined);
 		await next();
 		if (!deps.getShadowProcess()) return;
-		const reqPath = c.req.path;
 		const search = new URL(c.req.url).search;
 		const primaryStatus = c.res.status;
 		bodyP
 			.then((rawBody) =>
 				fetch(`http://localhost:3851${reqPath}${search}`, {
 					method,
-					headers: Object.fromEntries(c.req.raw.headers),
+					headers: shadowForwardHeaders(c.req.raw.headers),
 					body: rawBody,
 					signal: AbortSignal.timeout(5000),
 				}),

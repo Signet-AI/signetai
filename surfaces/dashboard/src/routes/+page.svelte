@@ -1,9 +1,11 @@
 <script lang="ts">
 import { browser } from "$app/environment";
-import { type DaemonStatus, type Memory, getStatus } from "$lib/api";
+import { API_BASE, type AuthProviderInfo, type DaemonStatus, type Memory, getAuthStatus, getStatus } from "$lib/api";
+import { installDashboardAuthFetch } from "$lib/auth";
 import ExtensionBanner from "$lib/components/ExtensionBanner.svelte";
 import UpgradeBanner from "$lib/components/UpgradeBanner.svelte";
 import AppSidebar from "$lib/components/app-sidebar.svelte";
+import LoginScreen from "$lib/components/auth/LoginScreen.svelte";
 import GlobalCommandPalette from "$lib/components/command/GlobalCommandPalette.svelte";
 import PageFooter from "$lib/components/layout/PageFooter.svelte";
 import TabContentLoader from "$lib/components/layout/TabContentLoader.svelte";
@@ -42,6 +44,8 @@ import { onMount } from "svelte";
 const activeTab = $derived(nav.activeTab);
 const { data } = $props();
 let daemonStatus = $state<DaemonStatus | null>(null);
+let authGate = $state<"loading" | "open" | "login">("loading");
+let authProviders = $state<readonly AuthProviderInfo[]>([]);
 const agentId = $derived.by(() => {
 	const fallback = daemonStatus?.agentId ?? "default";
 	if (!browser) return fallback;
@@ -143,11 +147,28 @@ $effect(() => {
 	};
 });
 
+async function refreshAuthGate(): Promise<void> {
+	const status = await getAuthStatus();
+	authProviders = status?.providers ?? [];
+	if (!status || status.effectiveAccess || status.mode === "local" || status.authenticated) {
+		authGate = "open";
+		return;
+	}
+	authGate = "login";
+}
+
+function handleAuthenticated(): void {
+	authGate = "open";
+	window.location.reload();
+}
+
 // --- Init ---
 onMount(() => {
+	installDashboardAuthFetch(API_BASE);
 	const cleanupNav = initNavFromHash();
 	const cleanupTabGroups = initTabGroupEffects();
 
+	void refreshAuthGate();
 	getStatus().then((s) => {
 		daemonStatus = s;
 	});
@@ -228,6 +249,12 @@ $effect(() => {
 	onclick={handlePageClick}
 />
 
+{#if authGate === "login"}
+	<LoginScreen providers={authProviders} onauthenticated={handleAuthenticated} />
+{:else if authGate === "loading"}
+	<div class="auth-loading">Loading Signet…</div>
+{:else}
+
 <div
 	class="flex flex-col h-screen overflow-hidden"
 	style="--titlebar-h: {titlebar.visible ? titlebar.height : 0}px; width: var(--scaled-viewport-width, 100vw); height: var(--scaled-viewport-height, 100vh);"
@@ -301,11 +328,24 @@ $effect(() => {
 		class: "!font-mono !text-[12px] !border-[var(--sig-border-strong)] !bg-[var(--sig-surface-raised)] !text-[var(--sig-text-bright)]",
 	}}
 />
+{/if}
 
 <style>
 	@media (prefers-reduced-motion: reduce) {
 		:global(.mobile-sidebar-trigger) {
 			transition: none !important;
 		}
+	}
+
+	.auth-loading {
+		min-height: 100vh;
+		display: grid;
+		place-items: center;
+		background: var(--sig-bg);
+		color: var(--sig-text-muted);
+		font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+		font-size: 12px;
+		letter-spacing: 0.12em;
+		text-transform: uppercase;
 	}
 </style>

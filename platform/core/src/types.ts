@@ -136,6 +136,16 @@ export interface AgentManifest {
 		chainId?: number;
 		// Phase J: deployment mode auth
 		mode?: "local" | "team" | "hybrid";
+		defaultTokenTtlSeconds?: number;
+		sessionTokenTtlSeconds?: number;
+		login?: {
+			password?: {
+				username?: string;
+				passwordHash?: string | null;
+			};
+			sso?: { enabled?: boolean };
+			saml?: { enabled?: boolean };
+		};
 		rateLimits?: Record<string, { windowMs?: number; max?: number }>;
 	};
 	capabilities?: string[];

@@ -68,6 +68,7 @@ export const DEFAULT_RATE_LIMITS: Readonly<Record<string, RateLimitConfig>> = {
 	batchForget: { windowMs: 60_000, max: 5 },
 	forceDelete: { windowMs: 60_000, max: 3 },
 	admin: { windowMs: 60_000, max: 10 },
+	login: { windowMs: 60_000, max: 5 },
 	inferenceExplain: { windowMs: 60_000, max: 120 },
 	inferenceExecute: { windowMs: 60_000, max: 20 },
 	inferenceGateway: { windowMs: 60_000, max: 30 },

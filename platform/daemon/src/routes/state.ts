@@ -319,6 +319,7 @@ export let authForgetLimiter = new AuthRateLimiter(60_000, 30);
 export let authModifyLimiter = new AuthRateLimiter(60_000, 60);
 export let authBatchForgetLimiter = new AuthRateLimiter(60_000, 5);
 export let authAdminLimiter = new AuthRateLimiter(60_000, 10);
+export let authLoginLimiter = new AuthRateLimiter(60_000, 5);
 export let authRecallLlmLimiter = new AuthRateLimiter(60_000, 60);
 export const authCrossAgentMessageLimiter = new AuthRateLimiter(60_000, 120);
 
@@ -486,6 +487,7 @@ export function reloadAuthState(agentsDir: string): void {
 		? new AuthRateLimiter(rl.batchForget.windowMs, rl.batchForget.max)
 		: new AuthRateLimiter(60_000, 5);
 	authAdminLimiter = rl.admin ? new AuthRateLimiter(rl.admin.windowMs, rl.admin.max) : new AuthRateLimiter(60_000, 10);
+	authLoginLimiter = rl.login ? new AuthRateLimiter(rl.login.windowMs, rl.login.max) : new AuthRateLimiter(60_000, 5);
 	authRecallLlmLimiter = rl.recallLlm
 		? new AuthRateLimiter(rl.recallLlm.windowMs, rl.recallLlm.max)
 		: new AuthRateLimiter(60_000, 60);

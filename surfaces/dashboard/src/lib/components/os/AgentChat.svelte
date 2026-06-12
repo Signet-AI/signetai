@@ -1,6 +1,7 @@
 <script lang="ts">
 import { Bot, Cpu, ExternalLink, Send, User, Wrench } from "$lib/icons";
 import { API_BASE } from "$lib/api";
+import { openAuthEventStream } from "$lib/auth";
 import {
 	os,
 	fetchTrayEntries,
@@ -143,10 +144,9 @@ async function executeAgentTask(serverId: string, task: string): Promise<string>
 
 		// 3. Connect to SSE stream for agent events
 		return await new Promise<string>((resolve, reject) => {
-			const evtSource = new EventSource(`${API_BASE}/api/os/agent-events?session=${sessionId}`);
 			let result = "Agent task completed";
-
-			evtSource.onmessage = async (e) => {
+			const evtSource = openAuthEventStream(`${API_BASE}/api/os/agent-events?session=${sessionId}`, {
+				onmessage: async (e) => {
 				try {
 					const event = JSON.parse(e.data);
 
@@ -247,13 +247,13 @@ async function executeAgentTask(serverId: string, task: string): Promise<string>
 				} catch (err) {
 					console.warn("Agent SSE parse error:", err);
 				}
-			};
-
-			evtSource.onerror = () => {
-				setAgentSession(null);
-				evtSource.close();
-				reject(new Error("Agent event stream disconnected"));
-			};
+				},
+				onerror: () => {
+					setAgentSession(null);
+					evtSource.close();
+					reject(new Error("Agent event stream disconnected"));
+				},
+			});
 
 			// Timeout after 5 minutes
 			setTimeout(() => {

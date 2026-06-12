@@ -156,6 +156,14 @@ auth:
   mode: local
   defaultTokenTtlSeconds: 604800
   sessionTokenTtlSeconds: 86400
+  login:
+    password:
+      username: admin
+      passwordHash: null
+    sso:
+      enabled: false
+    saml:
+      enabled: false
 
 trust:
   verification: none
@@ -1096,6 +1104,14 @@ auth:
   mode: local
   defaultTokenTtlSeconds: 604800    # 7 days
   sessionTokenTtlSeconds: 86400     # 24 hours
+  login:
+    password:
+      username: admin
+      passwordHash: null            # prefer env or a pbkdf2-sha256$... hash
+    sso:
+      enabled: false                # reserved provider path
+    saml:
+      enabled: false                # reserved provider path
   rateLimits:
     forget:
       windowMs: 60000
@@ -1119,6 +1135,14 @@ auth:
 | `mode` | `"local"` | Auth mode: `"local"`, `"team"`, or `"hybrid"` |
 | `defaultTokenTtlSeconds` | `604800` | API token lifetime (7 days) |
 | `sessionTokenTtlSeconds` | `86400` | Session token lifetime (24 hours) |
+| `login.password.username` | `"admin"` | Dashboard password-login username; `SIGNET_ADMIN_USERNAME` overrides it |
+| `login.password.passwordHash` | `null` | Optional persisted `pbkdf2-sha256$...` password hash; `SIGNET_ADMIN_PASSWORD_HASH` overrides it |
+| `login.sso.enabled` | `false` | Reserved SSO provider toggle; `/api/auth/sso/*` is open but returns `501` until configured |
+| `login.saml.enabled` | `false` | Reserved SAML provider toggle; `/api/auth/saml/*` is open but returns `501` until configured |
+
+Password login is enabled when `SIGNET_ADMIN_PASSWORD`,
+`SIGNET_ADMIN_PASSWORD_HASH`, or `auth.login.password.passwordHash` is set.
+Plaintext passwords are only accepted from the environment.
 
 In `"local"` mode the token secret is generated automatically and stored
 at `$SIGNET_WORKSPACE/.daemon/auth-secret`. In `"team"` and `"hybrid"` modes,
@@ -1138,6 +1162,7 @@ Each key controls a category of potentially destructive operations.
 | `batchForget` | 60 s | 5 | Bulk soft-delete |
 | `forceDelete` | 60 s | 3 | Hard-delete (bypasses tombstone) |
 | `admin` | 60 s | 10 | Admin API operations |
+| `login` | 60 s | 5 | Password dashboard login attempts |
 | `inferenceExplain` | 60 s | 120 | Dry-run route decisions |
 | `inferenceExecute` | 60 s | 20 | Native routed prompt execution |
 | `inferenceGateway` | 60 s | 30 | OpenAI-compatible gateway completions |

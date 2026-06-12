@@ -15,6 +15,7 @@ import {
 	triggerTaskRun,
 	updateTask,
 } from "$lib/api";
+import { openAuthEventStream, type AuthEventStream } from "$lib/auth";
 import { toast } from "$lib/stores/toast.svelte";
 
 export const ts = $state({
@@ -110,7 +111,7 @@ function isTaskStreamEvent(value: unknown): value is TaskStreamEvent {
 	}
 }
 
-let detailEventSource: EventSource | null = null;
+let detailEventSource: AuthEventStream | null = null;
 let detailReconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
 const ansiPattern =
@@ -259,87 +260,86 @@ function startDetailStream(taskId: string): void {
 	closeDetailStream();
 
 	const url = `${API_BASE}/api/tasks/${encodeURIComponent(taskId)}/stream`;
-	detailEventSource = new EventSource(url);
+	detailEventSource = openAuthEventStream(url, {
+		onmessage: (event) => {
+			let parsed: unknown;
+			try {
+				parsed = JSON.parse(event.data);
+			} catch {
+				return;
+			}
 
-	detailEventSource.onmessage = (event) => {
-		let parsed: unknown;
-		try {
-			parsed = JSON.parse(event.data);
-		} catch {
-			return;
-		}
+			if (!isTaskStreamEvent(parsed)) return;
 
-		if (!isTaskStreamEvent(parsed)) return;
+			if (parsed.taskId !== taskId || ts.selectedId !== taskId) {
+				return;
+			}
 
-		if (parsed.taskId !== taskId || ts.selectedId !== taskId) {
-			return;
-		}
+			if (parsed.type === "connected") {
+				ts.detailStreamConnected = true;
+				return;
+			}
 
-		if (parsed.type === "connected") {
-			ts.detailStreamConnected = true;
-			return;
-		}
-
-		if (parsed.type === "run-started") {
-			upsertRun({
-				id: parsed.runId,
-				task_id: parsed.taskId,
-				status: "running",
-				started_at: parsed.startedAt,
-				completed_at: null,
-				exit_code: null,
-				stdout: "",
-				stderr: "",
-				error: null,
-			});
-			return;
-		}
-
-		if (parsed.type === "run-output") {
-			const current = ts.detailRuns.find((r) => r.id === parsed.runId);
-			if (!current) return;
-			const normalizedChunk = normalizeOutputChunk(parsed.chunk);
-
-			if (parsed.stream === "stdout") {
+			if (parsed.type === "run-started") {
 				upsertRun({
-					...current,
-					stdout: `${current.stdout ?? ""}${normalizedChunk}`,
+					id: parsed.runId,
+					task_id: parsed.taskId,
+					status: "running",
+					started_at: parsed.startedAt,
+					completed_at: null,
+					exit_code: null,
+					stdout: "",
+					stderr: "",
+					error: null,
 				});
 				return;
 			}
 
+			if (parsed.type === "run-output") {
+				const current = ts.detailRuns.find((r) => r.id === parsed.runId);
+				if (!current) return;
+				const normalizedChunk = normalizeOutputChunk(parsed.chunk);
+
+				if (parsed.stream === "stdout") {
+					upsertRun({
+						...current,
+						stdout: `${current.stdout ?? ""}${normalizedChunk}`,
+					});
+					return;
+				}
+
+				upsertRun({
+					...current,
+					stderr: `${current.stderr ?? ""}${normalizedChunk}`,
+				});
+				return;
+			}
+
+			const current = ts.detailRuns.find((r) => r.id === parsed.runId);
+			if (!current) return;
+
 			upsertRun({
 				...current,
-				stderr: `${current.stderr ?? ""}${normalizedChunk}`,
+				status: parsed.status,
+				completed_at: parsed.completedAt,
+				exit_code: parsed.exitCode,
+				error: parsed.error,
 			});
-			return;
-		}
+			fetchTasks();
+		},
+		onerror: () => {
+			ts.detailStreamConnected = false;
+			detailEventSource?.close();
+			detailEventSource = null;
+			clearDetailReconnectTimer();
 
-		const current = ts.detailRuns.find((r) => r.id === parsed.runId);
-		if (!current) return;
-
-		upsertRun({
-			...current,
-			status: parsed.status,
-			completed_at: parsed.completedAt,
-			exit_code: parsed.exitCode,
-			error: parsed.error,
-		});
-		fetchTasks();
-	};
-
-	detailEventSource.onerror = () => {
-		ts.detailStreamConnected = false;
-		detailEventSource?.close();
-		detailEventSource = null;
-		clearDetailReconnectTimer();
-
-		detailReconnectTimer = setTimeout(() => {
-			if (ts.detailOpen && ts.selectedId === taskId) {
-				startDetailStream(taskId);
-			}
-		}, 2000);
-	};
+			detailReconnectTimer = setTimeout(() => {
+				if (ts.detailOpen && ts.selectedId === taskId) {
+					startDetailStream(taskId);
+				}
+			}, 2000);
+		},
+	});
 }
 
 export async function fetchTasks(): Promise<void> {

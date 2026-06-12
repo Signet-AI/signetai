@@ -3,6 +3,7 @@
  * Handles communication with the Signet daemon
  */
 
+import { authFetch, setDashboardAuthApiBase } from "$lib/auth";
 import { desktopApiBase } from "$lib/desktop-shell";
 import type { ModelRegistryEntry } from "@signet/core";
 import { marked } from "marked";
@@ -10,6 +11,7 @@ import { marked } from "marked";
 // When served by the daemon or Vite dev server, use relative URLs.
 // The Electron desktop shell loads from file://, so it needs an absolute daemon URL.
 export const API_BASE = desktopApiBase();
+setDashboardAuthApiBase(API_BASE);
 
 export interface Memory {
 	id: string;
@@ -349,6 +351,68 @@ export interface DatabaseTableSampleResponse {
 }
 
 // ============================================================================
+// Auth API
+// ============================================================================
+
+export interface AuthProviderInfo {
+	readonly id: "password" | "sso" | "saml" | string;
+	readonly type: string;
+	readonly enabled: boolean;
+	readonly username?: string;
+	readonly startPath?: string;
+}
+
+export interface AuthStatusResponse {
+	readonly authenticated: boolean;
+	readonly trustedLocal?: boolean;
+	readonly effectiveAccess?: boolean;
+	readonly claims: unknown | null;
+	readonly mode: "local" | "team" | "hybrid";
+	readonly providers: readonly AuthProviderInfo[];
+}
+
+export interface LoginResult {
+	readonly ok: boolean;
+	readonly token?: string;
+	readonly expiresAt?: string;
+	readonly error?: string;
+}
+
+export async function getAuthStatus(): Promise<AuthStatusResponse | null> {
+	try {
+		const response = await authFetch(`${API_BASE}/api/auth/whoami`);
+		if (!response.ok) return null;
+		return await response.json();
+	} catch {
+		return null;
+	}
+}
+
+export async function loginWithPassword(username: string, password: string): Promise<LoginResult> {
+	try {
+		const response = await authFetch(`${API_BASE}/api/auth/login`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ username, password }),
+		});
+		const body = (await response.json().catch(() => null)) as Partial<LoginResult> | { error?: unknown } | null;
+		if (!response.ok) {
+			return {
+				ok: false,
+				error: typeof body?.error === "string" ? body.error : `Login failed with HTTP ${response.status}`,
+			};
+		}
+		return {
+			ok: true,
+			token: typeof body?.token === "string" ? body.token : undefined,
+			expiresAt: typeof body?.expiresAt === "string" ? body.expiresAt : undefined,
+		};
+	} catch (error) {
+		return { ok: false, error: error instanceof Error ? error.message : "Login failed" };
+	}
+}
+
+// ============================================================================
 // API Functions
 // ============================================================================
 
@@ -462,7 +526,7 @@ export async function toggleSessionBypass(key: string, enabled: boolean): Promis
 
 export async function getIdentity(): Promise<Identity> {
 	try {
-		const response = await fetch(`${API_BASE}/api/identity`);
+		const response = await authFetch(`${API_BASE}/api/identity`);
 		if (!response.ok) throw new Error("Failed to fetch identity");
 		return await response.json();
 	} catch {
@@ -472,7 +536,7 @@ export async function getIdentity(): Promise<Identity> {
 
 export async function getConfigFiles(): Promise<ConfigFile[]> {
 	try {
-		const response = await fetch(`${API_BASE}/api/config`);
+		const response = await authFetch(`${API_BASE}/api/config`);
 		if (!response.ok) throw new Error("Failed to fetch config");
 		const data = await response.json();
 		return data.files || [];
@@ -524,7 +588,7 @@ export async function getMemories(
 	try {
 		const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
 		if (agentId) params.set("agent_id", agentId);
-		const response = await fetch(`${API_BASE}/api/memories?${params}`);
+		const response = await authFetch(`${API_BASE}/api/memories?${params}`);
 		if (!response.ok) throw new Error("Failed to fetch memories");
 		return await response.json();
 	} catch {
@@ -1156,7 +1220,7 @@ export async function getHarnesses(timeoutMs = HARNESS_DISCOVERY_TIMEOUT_MS): Pr
 	const controller = new AbortController();
 	const timeout = setTimeout(() => controller.abort(), timeoutMs);
 	try {
-		const response = await fetch(`${API_BASE}/api/harnesses`, { signal: controller.signal });
+		const response = await authFetch(`${API_BASE}/api/harnesses`, { signal: controller.signal });
 		if (!response.ok) throw new Error("Failed to fetch harnesses");
 		const data = await response.json();
 		return data.harnesses || [];

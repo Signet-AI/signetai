@@ -45,8 +45,15 @@ The daemon supports three [[auth]] modes, set in `agent.yaml`:
 - `hybrid` — requests from `localhost` are trusted without a token; requests
   from any other origin require a `Bearer` token.
 
-Tokens are signed JWTs with a role and optional scope. Roles and their
-permissions:
+Tokens use Signet's signed bearer-token format with a role and optional scope.
+Dashboard password login uses `POST /api/auth/login` to exchange the configured
+admin username/password for an admin session token. The dashboard shell,
+`/api/auth/login`, `/api/auth/methods`, `/api/auth/whoami`, and reserved
+`/api/auth/sso/*` and `/api/auth/saml/*` provider paths are reachable without an
+existing bearer token so users can sign in. Other daemon API routes remain
+protected in `team` mode.
+
+Roles and their permissions:
 
 | Role       | Permissions                                                          |
 |------------|----------------------------------------------------------------------|
@@ -67,6 +74,7 @@ Rate limits apply in `team` and `hybrid` modes:
 | modify         | 60 / min    |
 | batchForget    | 5 / min     |
 | admin actions  | 10 / min    |
+| login attempts | 5 / min     |
 | inferenceExplain | 120 / min |
 | inferenceExecute | 20 / min  |
 | inferenceGateway | 30 / min  |

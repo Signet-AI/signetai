@@ -1,6 +1,7 @@
 <script lang="ts">
 import { MessageSquare, RefreshCw } from "$lib/icons";
 import { API_BASE } from "$lib/api";
+import { openAuthEventStream, type AuthEventStream } from "$lib/auth";
 import AgentChat from "$lib/components/os/AgentChat.svelte";
 import AppDock from "$lib/components/os/AppDock.svelte";
 import SidebarGroups from "$lib/components/os/SidebarGroups.svelte";
@@ -28,25 +29,26 @@ const trayApps = $derived(getTrayApps());
 const gridApps = $derived(getGridApps());
 const dockApps = $derived(getDockApps());
 
-let eventSource: EventSource | null = null;
+let eventSource: AuthEventStream | null = null;
 
 onMount(() => {
 	fetchTrayEntries();
 	loadGroups();
 
 	// Subscribe to widget generation events via SSE
-	eventSource = new EventSource(`${API_BASE}/api/os/events/stream?type=widget`);
-	eventSource.onmessage = (e) => {
-		try {
-			const event = JSON.parse(e.data);
-			if (event.type === "widget.generated" && event.payload?.serverId) {
-				// Fetch the generated HTML and update the cache
-				fetchWidgetHtml(event.payload.serverId);
+	eventSource = openAuthEventStream(`${API_BASE}/api/os/events/stream?type=widget`, {
+		onmessage: (e) => {
+			try {
+				const event = JSON.parse(e.data);
+				if (event.type === "widget.generated" && event.payload?.serverId) {
+					// Fetch the generated HTML and update the cache
+					fetchWidgetHtml(event.payload.serverId);
+				}
+			} catch {
+				// Ignore parse errors from heartbeats
 			}
-		} catch {
-			// Ignore parse errors from heartbeats
-		}
-	};
+		},
+	});
 });
 
 onDestroy(() => {

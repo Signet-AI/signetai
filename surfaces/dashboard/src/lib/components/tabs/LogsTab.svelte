@@ -1,6 +1,7 @@
 <script lang="ts">
 import { browser } from "$app/environment";
 import { API_BASE } from "$lib/api";
+import { openAuthEventStream, type AuthEventStream } from "$lib/auth";
 import PageBanner from "$lib/components/layout/PageBanner.svelte";
 import TabGroupBar from "$lib/components/layout/TabGroupBar.svelte";
 import { ENGINE_TAB_ITEMS } from "$lib/components/layout/page-headers";
@@ -59,7 +60,7 @@ let logsStreaming = $state(false);
 let logsReconnecting = $state(false);
 let logsConnecting = $state(false);
 let streamError = $state("");
-let logEventSource: EventSource | null = null;
+let logEventSource: AuthEventStream | null = null;
 let streamEnabled = $state(true);
 let reconnectAttempt = 0;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -385,62 +386,61 @@ function startLogStream() {
 		logsReconnecting = false;
 		streamError = "";
 	}
-	logEventSource = new EventSource(`${API_BASE}/api/logs/stream`);
-
-	logEventSource.onmessage = (event) => {
-		try {
-			const payload: unknown = JSON.parse(event.data);
-			if (isStreamConnectedEvent(payload)) {
-				reconnectAttempt = 0;
-				logsReconnecting = false;
-				logsConnecting = false;
-				logsStreaming = true;
-				streamError = "";
-				return;
+	logEventSource = openAuthEventStream(`${API_BASE}/api/logs/stream`, {
+		onmessage: (event) => {
+			try {
+				const payload: unknown = JSON.parse(event.data);
+				if (isStreamConnectedEvent(payload)) {
+					reconnectAttempt = 0;
+					logsReconnecting = false;
+					logsConnecting = false;
+					logsStreaming = true;
+					streamError = "";
+					return;
+				}
+				const entry = readLogEntry(payload);
+				if (!entry) return;
+				if (logsConnecting) {
+					logsConnecting = false;
+					logsStreaming = true;
+				}
+				const entryLevelValue = LOG_LEVEL_ORDER[entry.level];
+				const filterLevelValue = isLogLevel(logLevelFilter) ? LOG_LEVEL_ORDER[logLevelFilter] : undefined;
+				if (logLevelFilter && (entryLevelValue ?? -1) < (filterLevelValue ?? -1)) return;
+				if (logCategoryFilter && entry.category !== logCategoryFilter) return;
+				const wasViewingLatest = isViewingLatest();
+				const merged = mergeLogEntry(logs, entry, nextLogId, activeLogOrder);
+				nextLogId = merged.nextId;
+				logs = merged.entries;
+				if (wasViewingLatest) selectLatestLog();
+				if (logAutoScroll) {
+					scrollToLatestNextFrame("auto");
+				}
+			} catch {
+				// ignore parse errors
 			}
-			const entry = readLogEntry(payload);
-			if (!entry) return;
-			if (logsConnecting) {
-				logsConnecting = false;
-				logsStreaming = true;
-			}
-			const entryLevelValue = LOG_LEVEL_ORDER[entry.level];
-			const filterLevelValue = isLogLevel(logLevelFilter) ? LOG_LEVEL_ORDER[logLevelFilter] : undefined;
-			if (logLevelFilter && (entryLevelValue ?? -1) < (filterLevelValue ?? -1)) return;
-			if (logCategoryFilter && entry.category !== logCategoryFilter) return;
-			const wasViewingLatest = isViewingLatest();
-			const merged = mergeLogEntry(logs, entry, nextLogId, activeLogOrder);
-			nextLogId = merged.nextId;
-			logs = merged.entries;
-			if (wasViewingLatest) selectLatestLog();
-			if (logAutoScroll) {
-				scrollToLatestNextFrame("auto");
-			}
-		} catch {
-			// ignore parse errors
-		}
-	};
+		},
+		onerror: () => {
+			if (!streamEnabled) return;
 
-	logEventSource.onerror = () => {
-		if (!streamEnabled) return;
+			logsStreaming = false;
+			logsConnecting = false;
+			logEventSource?.close();
+			logEventSource = null;
 
-		logsStreaming = false;
-		logsConnecting = false;
-		logEventSource?.close();
-		logEventSource = null;
+			if (reconnectTimer !== null) return;
 
-		if (reconnectTimer !== null) return;
+			const delay = Math.min(RECONNECT_BASE_MS * 2 ** Math.min(reconnectAttempt, 10), RECONNECT_MAX_MS);
+			reconnectAttempt = Math.min(reconnectAttempt + 1, 10);
+			logsReconnecting = true;
+			streamError = `Stream lost — reconnecting in ${delay / 1000}s`;
 
-		const delay = Math.min(RECONNECT_BASE_MS * 2 ** Math.min(reconnectAttempt, 10), RECONNECT_MAX_MS);
-		reconnectAttempt = Math.min(reconnectAttempt + 1, 10);
-		logsReconnecting = true;
-		streamError = `Stream lost — reconnecting in ${delay / 1000}s`;
-
-		reconnectTimer = setTimeout(() => {
-			reconnectTimer = null;
-			startLogStream();
-		}, delay);
-	};
+			reconnectTimer = setTimeout(() => {
+				reconnectTimer = null;
+				startLogStream();
+			}, delay);
+		},
+	});
 }
 
 function stopLogStream(): void {

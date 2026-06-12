@@ -15,8 +15,12 @@ Auth, config, and identity endpoints.
 
 ### GET /api/auth/whoami
 
-Returns the identity and claims of the current request's token. In `local`
-mode, `authenticated` is always `false` and `claims` is `null`.
+Returns the identity and claims of the current request's token. This route is
+open so the dashboard can determine whether to show the login screen; if an
+`Authorization` header is present, the token is validated opportunistically. In
+`local` mode, `authenticated` is always `false` and `claims` is `null`.
+`effectiveAccess` is `true` when the current request can use the dashboard
+without another login, including trusted localhost requests in `hybrid` mode.
 
 **Response**
 
@@ -30,9 +34,56 @@ mode, `authenticated` is always `false` and `claims` is `null`.
     "iat": 1740000000,
     "exp": 1740086400
   },
-  "mode": "team"
+  "trustedLocal": false,
+  "effectiveAccess": true,
+  "mode": "team",
+  "providers": [
+    { "id": "password", "type": "password", "enabled": true, "username": "admin" },
+    { "id": "sso", "type": "oidc", "enabled": false, "startPath": "/api/auth/sso/start" },
+    { "id": "saml", "type": "saml", "enabled": false, "startPath": "/api/auth/saml/start" }
+  ]
 }
 ```
+
+### GET /api/auth/methods
+
+Open route returning configured dashboard login providers. Password login is
+enabled when `SIGNET_ADMIN_PASSWORD`, `SIGNET_ADMIN_PASSWORD_HASH`, or
+`auth.login.password.passwordHash` is set. SSO and SAML entries are exposed as
+reserved provider paths for future implementation.
+
+### POST /api/auth/login
+
+Open route that exchanges the configured admin username and password for an
+admin session bearer token. Rate-limited to 5 attempts/minute.
+
+**Request body**
+
+```json
+{ "username": "admin", "password": "..." }
+```
+
+**Response**
+
+```json
+{
+  "token": "<token>",
+  "expiresAt": "2026-02-22T10:00:00.000Z",
+  "role": "admin",
+  "username": "admin"
+}
+```
+
+Returns `401` for invalid credentials, `429` when rate-limited, and `503` when
+password login has not been configured.
+
+### GET /api/auth/sso/start
+### GET /api/auth/sso/callback
+### GET /api/auth/saml/start
+### POST /api/auth/saml/acs
+
+Open reserved provider paths. They currently return `501` until SSO/SAML
+providers are implemented.
 
 ### POST /api/auth/token
 

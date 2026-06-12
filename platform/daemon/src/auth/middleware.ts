@@ -27,18 +27,47 @@ function extractBearerToken(header: string | undefined): string | null {
 
 const LOOPBACK = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
 
+export function isAuthOpenPath(path: string): boolean {
+	if (path === "/health") return true;
+	if (path === "/api/auth/login" || path === "/api/auth/methods" || path === "/api/auth/whoami") return true;
+	if (path.startsWith("/api/auth/sso/") || path.startsWith("/api/auth/saml/")) return true;
+	return false;
+}
+
+function isDashboardRequest(c: Context): boolean {
+	const path = c.req.path;
+	if (c.req.method !== "GET" && c.req.method !== "HEAD") return false;
+	if (path.startsWith("/api/") || path.startsWith("/memory/") || path === "/mcp" || path.startsWith("/v1/")) {
+		return false;
+	}
+	if (path === "/" || path.includes(".")) return true;
+	return c.req.header("accept")?.includes("text/html") ?? false;
+}
+
 // Check actual TCP peer address (not spoofable). Returns false (fail closed)
 // when socket info is unavailable — never falls back to the Host header,
 // which can be spoofed behind reverse proxies.
-function isLocalhost(c: Context): boolean {
+export function getPeerAddress(c: Context): string | null {
 	try {
 		const addr = (c.env as Record<string, unknown>)?.incoming as { socket?: { remoteAddress?: string } } | undefined;
-		const remote = addr?.socket?.remoteAddress;
-		if (remote) return LOOPBACK.has(remote);
+		return addr?.socket?.remoteAddress ?? null;
 	} catch {
-		// Socket info unavailable — fail closed
+		return null;
 	}
-	return false;
+}
+
+function isLocalhost(c: Context): boolean {
+	const remote = getPeerAddress(c);
+	return remote ? LOOPBACK.has(remote) : false;
+}
+
+function setOptionalAuth(c: Context, secret: Buffer | null): void {
+	const token = extractBearerToken(c.req.header("authorization"));
+	if (token && secret) {
+		c.set("auth", verifyToken(secret, token));
+		return;
+	}
+	c.set("auth", { authenticated: false, claims: null });
 }
 
 export function createAuthMiddleware(
@@ -47,6 +76,15 @@ export function createAuthMiddleware(
 	verifyApiKey?: (token: string) => AuthResult,
 ): MiddlewareHandler {
 	return async (c, next) => {
+		if (isAuthOpenPath(c.req.path) || isDashboardRequest(c)) {
+			setOptionalAuth(c, secret);
+			if (config.mode === "hybrid" && isLocalhost(c) && !c.get("auth")?.claims) {
+				c.set("auth", { authenticated: false, claims: null, trustedLocal: true });
+			}
+			await next();
+			return;
+		}
+
 		// Local mode: no auth required at all
 		if (config.mode === "local") {
 			c.set("auth", { authenticated: false, claims: null });

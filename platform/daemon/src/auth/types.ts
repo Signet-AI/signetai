@@ -44,6 +44,7 @@ export interface AuthResult {
 	readonly authenticated: boolean;
 	readonly claims: TokenClaims | null;
 	readonly error?: string;
+	readonly trustedLocal?: boolean;
 }
 
 export interface PolicyDecision {

@@ -1,10 +1,11 @@
 import { describe, test, expect, beforeEach } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { Hono } from "hono";
 
 import { generateSecret, loadOrCreateSecret, createToken, verifyToken } from "./tokens";
+import { hashPassword, verifyPasswordHash } from "./password";
 import { checkPermission, checkScope } from "./policy";
 import { AuthRateLimiter } from "./rate-limiter";
 import { createAuthMiddleware, requirePermission, requireRateLimit } from "./middleware";
@@ -128,6 +129,24 @@ describe("tokens", () => {
 			const second = loadOrCreateSecret(path);
 			expect(first.equals(second)).toBe(true);
 		});
+	});
+});
+
+// =============================================================================
+// Password login hashes
+// =============================================================================
+
+describe("password hashes", () => {
+	test("hashPassword creates a verifiable pbkdf2 hash", () => {
+		const hash = hashPassword("correct horse battery staple", 10_000);
+		expect(hash.startsWith("pbkdf2-sha256$")).toBe(true);
+		expect(verifyPasswordHash("correct horse battery staple", hash)).toBe(true);
+		expect(verifyPasswordHash("wrong password", hash)).toBe(false);
+	});
+
+	test("verifyPasswordHash rejects malformed hashes", () => {
+		expect(verifyPasswordHash("password", "not-a-hash")).toBe(false);
+		expect(verifyPasswordHash("password", "pbkdf2-sha256$1$salt$hash")).toBe(false);
 	});
 });
 
@@ -387,12 +406,19 @@ describe("AuthRateLimiter", () => {
 // Middleware integration tests
 // =============================================================================
 
+const testLoginConfig = {
+	password: { username: "admin", passwordHash: null },
+	sso: { enabled: false },
+	saml: { enabled: false },
+};
+
 const teamConfig = {
 	mode: "team" as const,
 	secretPath: "",
 	rateLimits: {},
 	defaultTokenTtlSeconds: 3600,
 	sessionTokenTtlSeconds: 3600,
+	login: testLoginConfig,
 };
 const localConfig = {
 	mode: "local" as const,
@@ -400,6 +426,7 @@ const localConfig = {
 	rateLimits: {},
 	defaultTokenTtlSeconds: 3600,
 	sessionTokenTtlSeconds: 3600,
+	login: testLoginConfig,
 };
 const hybridConfig = {
 	mode: "hybrid" as const,
@@ -407,6 +434,7 @@ const hybridConfig = {
 	rateLimits: {},
 	defaultTokenTtlSeconds: 3600,
 	sessionTokenTtlSeconds: 3600,
+	login: testLoginConfig,
 };
 
 function makeTestApp(
@@ -435,6 +463,17 @@ describe("middleware - createAuthMiddleware", () => {
 		const app = makeTestApp(createAuthMiddleware(teamConfig, secret));
 		const res = await app.request(new Request("http://localhost/test"));
 		expect(res.status).toBe(401);
+	});
+
+	test("team mode: dashboard shell and login routes stay open", async () => {
+		const app = new Hono();
+		app.use("*", createAuthMiddleware(teamConfig, secret));
+		app.get("/", (c) => c.text("dashboard"));
+		app.get("/assets/app.js", (c) => c.text("asset"));
+		app.get("/api/auth/methods", (c) => c.json({ ok: true }));
+		expect((await app.request(new Request("http://localhost/"))).status).toBe(200);
+		expect((await app.request(new Request("http://localhost/assets/app.js"))).status).toBe(200);
+		expect((await app.request(new Request("http://localhost/api/auth/methods"))).status).toBe(200);
 	});
 
 	test("team mode: invalid token returns 401", async () => {
@@ -657,10 +696,78 @@ describe("parseAuthConfig", () => {
 		expect(cfg.sessionTokenTtlSeconds).toBe(500);
 	});
 
+	test("login password and future provider config parse correctly", () => {
+		const cfg = parseAuthConfig(
+			{
+				mode: "team",
+				login: {
+					password: { username: "owner", passwordHash: "pbkdf2-sha256$10000$aaaaaaaaaaa$bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" },
+					sso: { enabled: true },
+					saml: { enabled: true },
+				},
+			},
+			agentsDir,
+		);
+		expect(cfg.login.password.username).toBe("owner");
+		expect(cfg.login.password.passwordHash).toContain("pbkdf2-sha256$");
+		expect(cfg.login.sso.enabled).toBe(true);
+		expect(cfg.login.saml.enabled).toBe(true);
+	});
+
 	test("non-positive TTL falls back to default", () => {
 		const cfg = parseAuthConfig({ defaultTokenTtlSeconds: 0, sessionTokenTtlSeconds: -5 }, agentsDir);
 		expect(cfg.defaultTokenTtlSeconds).toBeGreaterThan(0);
 		expect(cfg.sessionTokenTtlSeconds).toBeGreaterThan(0);
+	});
+});
+
+// =============================================================================
+// Auth routes
+// =============================================================================
+
+describe("auth routes - password dashboard login", () => {
+	test("login is open in team mode and issues an admin session token", async () => {
+		const tmpDir = mkdtempSync(join(tmpdir(), "signet-auth-login-test-"));
+		const prevUsername = process.env.SIGNET_ADMIN_USERNAME;
+		const prevPassword = process.env.SIGNET_ADMIN_PASSWORD;
+		try {
+			mkdirSync(join(tmpDir, ".daemon"), { recursive: true });
+			writeFileSync(join(tmpDir, "agent.yaml"), "auth:\n  mode: team\n  sessionTokenTtlSeconds: 60\n");
+			process.env.SIGNET_ADMIN_USERNAME = "owner";
+			process.env.SIGNET_ADMIN_PASSWORD = "secret-password";
+
+			const state = await import("../routes/state.js");
+			state.reloadAuthState(tmpDir);
+			if (!state.authSecret) throw new Error("expected auth secret");
+
+			const { registerAuthRoutes } = await import("../routes/auth-routes.js");
+			const app = new Hono();
+			app.use("*", createAuthMiddleware(state.authConfig, state.authSecret));
+			registerAuthRoutes(app);
+
+			const login = await app.request("/api/auth/login", {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ username: "owner", password: "secret-password" }),
+			});
+			expect(login.status).toBe(200);
+			const body = (await login.json()) as { token?: string };
+			expect(typeof body.token).toBe("string");
+
+			const whoami = await app.request("/api/auth/whoami", {
+				headers: { authorization: `Bearer ${body.token}` },
+			});
+			expect(whoami.status).toBe(200);
+			const claims = (await whoami.json()) as { authenticated?: boolean; claims?: { role?: string } | null };
+			expect(claims.authenticated).toBe(true);
+			expect(claims.claims?.role).toBe("admin");
+		} finally {
+			if (prevUsername === undefined) Reflect.deleteProperty(process.env, "SIGNET_ADMIN_USERNAME");
+			else process.env.SIGNET_ADMIN_USERNAME = prevUsername;
+			if (prevPassword === undefined) Reflect.deleteProperty(process.env, "SIGNET_ADMIN_PASSWORD");
+			else process.env.SIGNET_ADMIN_PASSWORD = prevPassword;
+			rmSync(tmpDir, { recursive: true, force: true });
+		}
 	});
 });
 

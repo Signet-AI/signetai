@@ -6,6 +6,7 @@
  */
 
 import { API_BASE, getPipelineStatus } from "$lib/api";
+import { openAuthEventStream, type AuthEventStream } from "$lib/auth";
 import {
 	type HealthStatus,
 	type LogEntry,
@@ -58,7 +59,7 @@ export const pipeline = $state({
 // SSE connection
 // ---------------------------------------------------------------------------
 
-let eventSource: EventSource | null = null;
+let eventSource: AuthEventStream | null = null;
 
 export function connectSSE(): void {
 	// Close existing connection if any (allows reconnect)
@@ -67,58 +68,56 @@ export function connectSSE(): void {
 		eventSource = null;
 	}
 
-	eventSource = new EventSource(`${API_BASE}/api/logs/stream`);
-
-	eventSource.onopen = () => {
-		pipeline.connected = true;
-	};
-
-	eventSource.onmessage = (event) => {
-		try {
-			const entry: LogEntry = JSON.parse(event.data);
-			if ((entry as unknown as { type: string }).type === "connected") {
-				pipeline.connected = true;
-				return;
-			}
-
-			// Push ALL pipeline-relevant events to the global feed
-			const feed = [...pipeline.feed, entry];
-			pipeline.feed = feed.length > MAX_FEED_ENTRIES ? feed.slice(-MAX_FEED_ENTRIES) : feed;
-
-			// Route to matching nodes (if any)
-			const nodeIds = categoryToNodeIds.get(entry.category);
-			if (!nodeIds) return;
-
-			for (const id of nodeIds) {
-				const node = pipeline.nodes[id];
-				if (!node) continue;
-
-				node.pulseCount += 1;
-				node.lastActivity = entry.timestamp;
-
-				// Append to recent logs (capped)
-				const logs = [...node.recentLogs, entry];
-				node.recentLogs = logs.length > MAX_RECENT_LOGS ? logs.slice(-MAX_RECENT_LOGS) : logs;
-
-				// Track errors from log level
-				if (entry.level === "error") {
-					node.errorCount += 1;
+	eventSource = openAuthEventStream(`${API_BASE}/api/logs/stream`, {
+		onopen: () => {
+			pipeline.connected = true;
+		},
+		onmessage: (event) => {
+			try {
+				const entry: LogEntry = JSON.parse(event.data);
+				if ((entry as unknown as { type: string }).type === "connected") {
+					pipeline.connected = true;
+					return;
 				}
-			}
-		} catch {
-			// ignore parse errors
-		}
-	};
 
-	eventSource.onerror = () => {
-		pipeline.connected = false;
-		eventSource?.close();
-		eventSource = null;
-		// Auto-reconnect after 3s
-		setTimeout(() => {
-			if (!eventSource) connectSSE();
-		}, 3000);
-	};
+				// Push ALL pipeline-relevant events to the global feed
+				const feed = [...pipeline.feed, entry];
+				pipeline.feed = feed.length > MAX_FEED_ENTRIES ? feed.slice(-MAX_FEED_ENTRIES) : feed;
+
+				// Route to matching nodes (if any)
+				const nodeIds = categoryToNodeIds.get(entry.category);
+				if (!nodeIds) return;
+
+				for (const id of nodeIds) {
+					const node = pipeline.nodes[id];
+					if (!node) continue;
+
+					node.pulseCount += 1;
+					node.lastActivity = entry.timestamp;
+
+					// Append to recent logs (capped)
+					const logs = [...node.recentLogs, entry];
+					node.recentLogs = logs.length > MAX_RECENT_LOGS ? logs.slice(-MAX_RECENT_LOGS) : logs;
+
+					// Track errors from log level
+					if (entry.level === "error") {
+						node.errorCount += 1;
+					}
+				}
+			} catch {
+				// ignore parse errors
+			}
+		},
+		onerror: () => {
+			pipeline.connected = false;
+			eventSource?.close();
+			eventSource = null;
+			// Auto-reconnect after 3s
+			setTimeout(() => {
+				if (!eventSource) connectSSE();
+			}, 3000);
+		},
+	});
 }
 
 export function disconnectSSE(): void {
