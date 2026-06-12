@@ -139,7 +139,7 @@ For Codex, the API key scope is the important part. Create the key for the exact
 agent that should own the Codex session data:
 
 ```bash
-signet api-key create --name "rose codex tailnet" --connector codex --agent-id rose
+signet api-key create --name "codex tailnet" --connector codex --agent-id <agent-name>
 ```
 
 Then install Codex with that key:
@@ -150,8 +150,8 @@ npx -y @signetai/codex-plugin install \
   --api-key sig_sk_...
 ```
 
-Codex hook and MCP calls authenticated with that key resolve to `rose` unless a
-route explicitly asks for another agent; a different `agentId` is rejected as a
+Codex hook and MCP calls authenticated with that key resolve to the scoped
+agent unless a route explicitly asks for another agent; a different `agentId` is rejected as a
 scope violation.
 
 For other harnesses, change `--connector` and the name:
@@ -268,7 +268,7 @@ curl -fsS "$SIGNET_DAEMON_URL/api/auth/whoami" \
 
 You should get JSON describing the authenticated connector role/scope. For an
 agent-scoped key, confirm the response includes that agent in the scope, for
-example `"scope":{"agent":"rose"}`. If you get `401`, check the key, auth
+example `"scope":{"agent":"<agent-name>"}`. If you get `401`, check the key, auth
 mode, and daemon URL. If a request for a different `agentId` returns `403`, the
 agent scope is working.
 
@@ -309,7 +309,7 @@ auth:
 
 ```bash
 signet daemon restart
-signet api-key create --name "laptop codex" --connector codex --agent-id rose
+signet api-key create --name "laptop codex" --connector codex --agent-id <agent-name>
 ```
 
 On the laptop:

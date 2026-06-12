@@ -252,7 +252,7 @@ For a remote Signet daemon, pass `--url` and `--api-key` when installing the
 Codex connector:
 
 ```bash
-signet api-key create --name "work laptop codex" --connector codex --agent-id rose
+signet api-key create --name "work laptop codex" --connector codex --agent-id <agent-name>
 signet connect codex --url http://192.168.0.60:3850 --api-key sig_sk_...
 ```
 

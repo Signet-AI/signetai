@@ -1,4 +1,5 @@
-import { readFileSync, statSync } from "node:fs";
+import { readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { basename, isAbsolute, join, normalize, relative, resolve } from "node:path";
 import { resolveWorkspaceSourceRepoPath } from "@signet/core";
 
@@ -6,7 +7,12 @@ import { resolveWorkspaceSourceRepoPath } from "@signet/core";
 const ARTIFACT_FILENAME_RE = /--(?:summary|transcript|compaction|manifest)\.md$/;
 const MEMORY_BACKUP_FILENAME_RE = /^MEMORY\.(?:backup|bak|pre)-.+\.md$/;
 const SIGNET_IGNORE_FILENAME = ".sigignore";
-const PER_AGENT_FLY_HOME_RE = /^\.fly-[^/\\]+-home$/;
+
+const DEFAULT_SIGNIGNORE_CONTENT = `# Signet watcher ignore — edit freely, changes take effect without restart.
+
+# Harness runtimes
+agents/*/.fly-*-home/
+`;
 
 interface SigignorePattern {
 	readonly negated: boolean;
@@ -129,6 +135,16 @@ function isIgnoredBySigignore(patterns: readonly SigignorePattern[], relativePat
 	return ignored;
 }
 
+function ensureDefaultSigignore(sigignorePath: string): void {
+	try {
+		if (!existsSync(sigignorePath)) {
+			writeFileSync(sigignorePath, DEFAULT_SIGNIGNORE_CONTENT, "utf-8");
+		}
+	} catch {
+		// Best-effort; watcher still works without a .sigignore file.
+	}
+}
+
 function createSigignoreMatcher(agentsDir: string): (normalizedPath: string) => boolean {
 	const workspaceRoot = resolveForComparison(agentsDir);
 	const sigignorePath = resolveForComparison(join(agentsDir, SIGNET_IGNORE_FILENAME));
@@ -167,6 +183,7 @@ export function createAgentsWatcherIgnoreMatcher(agentsDir: string): (path: stri
 	const sourceRepoRoot = resolveForComparison(resolveWorkspaceSourceRepoPath(agentsDir));
 	const memoryDir = resolveForComparison(join(agentsDir, "memory"));
 	const isIgnoredByWorkspaceConfig = createSigignoreMatcher(agentsDir);
+	ensureDefaultSigignore(resolveForComparison(join(agentsDir, SIGNET_IGNORE_FILENAME)));
 	const ignoredPaths = new Set([memoriesDb, memoriesDbWal, memoriesDbShm, memoriesDbJournal]);
 
 	return (path: string): boolean => {
@@ -188,12 +205,6 @@ export function createAgentsWatcherIgnoreMatcher(agentsDir: string): (path: stri
 		const agentSegments = relativeToAgentsRoot === null ? [] : relativeToAgentsRoot.split(/[\\/]+/).filter(Boolean);
 		const isGeneratedWorkspacePath =
 			agentSegments.length === 3 && agentSegments[1] === "workspace" && agentSegments[2] === "AGENTS.md";
-		const isPerAgentFlyHome = agentSegments.length >= 2 && PER_AGENT_FLY_HOME_RE.test(agentSegments[1] ?? "");
-		return (
-			isGeneratedWorkspacePath ||
-			isPerAgentFlyHome ||
-			ignoredPaths.has(normalizedPath) ||
-			isIgnoredByWorkspaceConfig(normalizedPath)
-		);
+		return isGeneratedWorkspacePath || ignoredPaths.has(normalizedPath) || isIgnoredByWorkspaceConfig(normalizedPath);
 	};
 }

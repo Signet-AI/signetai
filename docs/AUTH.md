@@ -59,8 +59,8 @@ signet api-key revoke <id-or-prefix>
 ```
 
 `--agent-id` is an auth scope, not just a label. A key created with
-`--agent-id rose` defaults authenticated requests to agent `rose`, and scope
-checks reject requests for other agents.
+`--agent-id <agent-name>` defaults authenticated requests to that agent,
+and scope checks reject requests for other agents.
 
 Connector clients send the key as bearer auth:
 
@@ -80,7 +80,7 @@ For a Codex client that must attach to a specific agent, create the scoped key
 on the daemon machine and install Codex with that key:
 
 ```bash
-signet api-key create --name "rose codex tailnet" --connector codex --agent-id rose
+signet api-key create --name "codex tailnet" --connector codex --agent-id <agent-name>
 npx -y @signetai/codex-plugin install --url https://signet-home.tailnet:3850 --api-key sig_sk_...
 ```
 

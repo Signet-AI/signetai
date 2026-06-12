@@ -58,7 +58,7 @@ describe("createAgentsWatcherIgnoreMatcher", () => {
 		expect(shouldIgnore(join(agentsDir, "signetai-notes.md"))).toBe(false);
 	});
 
-	it("ignores per-agent Fly runtime homes without ignoring agent identity files", () => {
+	it("ignores per-agent Fly runtime homes via default .sigignore", () => {
 		const agentsDir = makeTempAgentsDir();
 		const shouldIgnore = createAgentsWatcherIgnoreMatcher(agentsDir);
 
@@ -68,19 +68,30 @@ describe("createAgentsWatcherIgnoreMatcher", () => {
 		expect(shouldIgnore(join(agentsDir, "agents", "kate", "MEMORY.md"))).toBe(false);
 	});
 
+	it("creates a default .sigignore when none exists", () => {
+		const agentsDir = makeTempAgentsDir();
+		createAgentsWatcherIgnoreMatcher(agentsDir);
+		const content = require("node:fs").readFileSync(join(agentsDir, ".sigignore"), "utf-8");
+		expect(content).toContain("agents/*/.fly-*-home/");
+	});
+
 	it("uses .sigignore patterns from the workspace root", () => {
 		const agentsDir = makeTempAgentsDir();
 		writeFileSync(
 			join(agentsDir, ".sigignore"),
-			["# Runtime files managed outside Signet", "agents/kate/runtime/", "*.sock", "!agents/rose/keep.sock", ""].join(
-				"\n",
-			),
+			[
+				"# Runtime files managed outside Signet",
+				"agents/*/runtime/",
+				"*.sock",
+				"!agents/*/keep.sock",
+				"",
+			].join("\n"),
 		);
 		const shouldIgnore = createAgentsWatcherIgnoreMatcher(agentsDir);
 
 		expect(shouldIgnore(join(agentsDir, "agents", "kate", "runtime"))).toBe(true);
 		expect(shouldIgnore(join(agentsDir, "agents", "kate", "runtime", "state.json"))).toBe(true);
-		expect(shouldIgnore(join(agentsDir, "agents", "rose", "runtime", "state.json"))).toBe(false);
+		expect(shouldIgnore(join(agentsDir, "agents", "rose", "runtime", "state.json"))).toBe(true);
 		expect(shouldIgnore(join(agentsDir, "agents", "rose", "agent.sock"))).toBe(true);
 		expect(shouldIgnore(join(agentsDir, "agents", "rose", "keep.sock"))).toBe(false);
 		expect(shouldIgnore(join(agentsDir, ".sigignore"))).toBe(false);
