@@ -1,4 +1,5 @@
 <script lang="ts">
+import { Bot, Cpu, ExternalLink, Send, User, Wrench } from "$lib/icons";
 import { API_BASE } from "$lib/api";
 import {
 	os,
@@ -9,12 +10,6 @@ import {
 	sendWidgetAction,
 	setAgentSession,
 } from "$lib/stores/os.svelte";
-import Bot from "@lucide/svelte/icons/bot";
-import Cpu from "@lucide/svelte/icons/cpu";
-import ExternalLink from "@lucide/svelte/icons/external-link";
-import Send from "@lucide/svelte/icons/send";
-import User from "@lucide/svelte/icons/user";
-import Wrench from "@lucide/svelte/icons/wrench";
 import { tick } from "svelte";
 
 interface ToolCall {

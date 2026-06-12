@@ -1,12 +1,10 @@
 <script lang="ts">
+import { Pencil, Play, Trash2 } from "$lib/icons";
 import type { ScheduledTask, TaskRun } from "$lib/api";
 import { Badge } from "$lib/components/ui/badge/index.js";
 import { Button } from "$lib/components/ui/button/index.js";
 import * as ScrollArea from "$lib/components/ui/scroll-area/index.js";
 import * as Sheet from "$lib/components/ui/sheet/index.js";
-import Pencil from "@lucide/svelte/icons/pencil";
-import Play from "@lucide/svelte/icons/play";
-import Trash2 from "@lucide/svelte/icons/trash-2";
 import RunLog from "./RunLog.svelte";
 
 interface Props {

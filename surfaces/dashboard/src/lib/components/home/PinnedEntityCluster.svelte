@@ -2,7 +2,7 @@
 import type { Memory } from "$lib/api";
 import { API_BASE } from "$lib/api";
 import { setTab } from "$lib/stores/navigation.svelte";
-import Brain from "@lucide/svelte/icons/brain";
+import { Brain } from "$lib/icons";
 import { onMount } from "svelte";
 
 interface Props {

@@ -1,7 +1,7 @@
 <script lang="ts">
 import { Card, CardContent, CardHeader, CardTitle } from "$lib/components/ui/card/index.js";
 import { setTab } from "$lib/stores/navigation.svelte";
-import FileText from "@lucide/svelte/icons/file-text";
+import { FileText } from "$lib/icons";
 
 interface Props {
 	html: string | null;

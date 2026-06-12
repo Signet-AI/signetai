@@ -1,13 +1,7 @@
 <script lang="ts">
+import { AppWindowMac, Copy, EyeOff, Minus, Monitor, Square, X } from "$lib/icons";
 import { getDesktopShell, isDesktopShell } from "$lib/desktop-shell";
 import { type DecorationMode, titlebar } from "$lib/stores/titlebar.svelte";
-import AppWindowMac from "@lucide/svelte/icons/app-window-mac";
-import Copy from "@lucide/svelte/icons/copy";
-import EyeOff from "@lucide/svelte/icons/eye-off";
-import Minus from "@lucide/svelte/icons/minus";
-import Monitor from "@lucide/svelte/icons/monitor";
-import Square from "@lucide/svelte/icons/square";
-import X from "@lucide/svelte/icons/x";
 
 const isDesktop = isDesktopShell();
 

@@ -1,4 +1,5 @@
 <script lang="ts">
+import { Folder, FolderOpen, LayoutGrid, Plus, Trash2 } from "$lib/icons";
 import {
 	os,
 	type SidebarGroup,
@@ -8,11 +9,6 @@ import {
 	renameGroup,
 	setActiveGroup,
 } from "$lib/stores/os.svelte";
-import Folder from "@lucide/svelte/icons/folder";
-import FolderOpen from "@lucide/svelte/icons/folder-open";
-import LayoutGrid from "@lucide/svelte/icons/layout-grid";
-import Plus from "@lucide/svelte/icons/plus";
-import Trash2 from "@lucide/svelte/icons/trash-2";
 
 let newGroupName = $state("");
 let showNewInput = $state(false);

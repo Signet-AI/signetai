@@ -1,4 +1,5 @@
 <script lang="ts">
+import { RefreshCw, Server } from "$lib/icons";
 import { getAvatarFromSource, getMonogram, getMonogramBg } from "$lib/card-utils";
 import { Button } from "$lib/components/ui/button/index.js";
 import {
@@ -7,8 +8,6 @@ import {
 	refreshMarketplaceMcpTools,
 	removeMarketplaceMcpServer,
 } from "$lib/stores/marketplace-mcp.svelte";
-import RefreshCw from "@lucide/svelte/icons/refresh-cw";
-import Server from "@lucide/svelte/icons/server";
 import { onMount } from "svelte";
 import { SvelteSet } from "svelte/reactivity";
 

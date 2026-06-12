@@ -29,7 +29,7 @@ import { focusMemoryTab } from "$lib/stores/tab-group-focus.svelte";
 import { toast } from "$lib/stores/toast.svelte";
 import { syncLayoutToStorage, workspaceLayout } from "$lib/stores/workspace-layout.svelte";
 import { ActionLabels } from "$lib/ui/action-labels";
-import ChevronDown from "@lucide/svelte/icons/chevron-down";
+import { ChevronDown } from "$lib/icons";
 import { tick } from "svelte";
 import { onMount } from "svelte";
 // biome-ignore lint/style/useImportType: Svelte component tags need value imports.

@@ -1,15 +1,10 @@
 <script lang="ts">
+import { AppWindowMac, EyeOff, Monitor, RotateCcw, ZoomIn, ZoomOut } from "$lib/icons";
 import FormField from "$lib/components/config/FormField.svelte";
 import FormSection from "$lib/components/config/FormSection.svelte";
 import { isDesktopShell } from "$lib/desktop-shell";
 import { type DecorationMode, titlebar } from "$lib/stores/titlebar.svelte";
 import { uiScale } from "$lib/stores/ui-scale.svelte";
-import AppWindowMac from "@lucide/svelte/icons/app-window-mac";
-import EyeOff from "@lucide/svelte/icons/eye-off";
-import Monitor from "@lucide/svelte/icons/monitor";
-import RotateCcw from "@lucide/svelte/icons/rotate-ccw";
-import ZoomIn from "@lucide/svelte/icons/zoom-in";
-import ZoomOut from "@lucide/svelte/icons/zoom-out";
 
 const isDesktop = isDesktopShell();
 

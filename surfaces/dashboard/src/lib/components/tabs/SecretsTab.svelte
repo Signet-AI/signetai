@@ -1,4 +1,5 @@
 <script lang="ts">
+import { ChevronDown, ChevronRight, Import, KeyRound, Link, Plus, RefreshCw, Trash2, Unlink } from "$lib/icons";
 import {
 	type OnePasswordStatus,
 	type OnePasswordVault,
@@ -16,15 +17,6 @@ import { Input } from "$lib/components/ui/input/index.js";
 import { returnToSidebar } from "$lib/stores/focus.svelte";
 import { nav } from "$lib/stores/navigation.svelte";
 import { toast } from "$lib/stores/toast.svelte";
-import ChevronDown from "@lucide/svelte/icons/chevron-down";
-import ChevronRight from "@lucide/svelte/icons/chevron-right";
-import Import from "@lucide/svelte/icons/import";
-import KeyRound from "@lucide/svelte/icons/key-round";
-import Link from "@lucide/svelte/icons/link";
-import Plus from "@lucide/svelte/icons/plus";
-import RefreshCw from "@lucide/svelte/icons/refresh-cw";
-import Trash2 from "@lucide/svelte/icons/trash-2";
-import Unlink from "@lucide/svelte/icons/unlink";
 import { onMount } from "svelte";
 
 let secrets = $state<string[]>([]);

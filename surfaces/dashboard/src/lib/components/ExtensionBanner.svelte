@@ -1,8 +1,6 @@
 <script lang="ts">
 import { browser } from "$app/environment";
-import Chrome from "@lucide/svelte/icons/chrome";
-import Globe from "@lucide/svelte/icons/globe";
-import X from "@lucide/svelte/icons/x";
+import { Chrome, Globe, X } from "$lib/icons";
 
 const STORAGE_KEY = "signet-extension-banner-dismissed";
 const EXTENSION_MARKER = "signetExtension";

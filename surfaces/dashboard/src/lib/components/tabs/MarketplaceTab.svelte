@@ -28,7 +28,7 @@ import { nav } from "$lib/stores/navigation.svelte";
 import { loadPlugins, pluginsStore } from "$lib/stores/plugins.svelte";
 import { fetchCatalog, fetchInstalled, getCategoryOptions, setQuery, sk } from "$lib/stores/skills.svelte";
 import { toast } from "$lib/stores/toast.svelte";
-import ChevronDown from "@lucide/svelte/icons/chevron-down";
+import { ChevronDown } from "$lib/icons";
 import { onMount } from "svelte";
 
 type MarketplaceSection = "skills" | "mcp" | "plugins";

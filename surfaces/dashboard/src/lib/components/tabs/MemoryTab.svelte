@@ -29,7 +29,7 @@ import { focusMemoryTab } from "$lib/stores/tab-group-focus.svelte";
 import { ActionLabels } from "$lib/ui/action-labels";
 
 import { CalendarDate, type DateValue, getLocalTimeZone } from "@internationalized/date";
-import CalendarIcon from "@lucide/svelte/icons/calendar";
+import { CalendarIcon } from "$lib/icons";
 
 interface Props {
 	memories: Memory[];

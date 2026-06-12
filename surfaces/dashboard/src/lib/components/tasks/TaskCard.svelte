@@ -1,7 +1,7 @@
 <script lang="ts">
 import type { ScheduledTask } from "$lib/api";
 import { Switch } from "$lib/components/ui/switch/index.js";
-import Play from "@lucide/svelte/icons/play";
+import { Play } from "$lib/icons";
 
 interface Props {
 	task: ScheduledTask;

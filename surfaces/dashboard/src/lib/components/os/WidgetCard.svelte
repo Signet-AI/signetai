@@ -1,4 +1,5 @@
 <script lang="ts">
+import { GripVertical, Maximize2, Minimize2, RefreshCw } from "$lib/icons";
 import type { AppTrayEntry, WidgetSizePreset } from "$lib/stores/os.svelte";
 import {
 	os,
@@ -9,10 +10,6 @@ import {
 	widgetHtmlCache,
 } from "$lib/stores/os.svelte";
 import { WIDGET_SIZES } from "$lib/stores/os.svelte";
-import GripVertical from "@lucide/svelte/icons/grip-vertical";
-import Maximize2 from "@lucide/svelte/icons/maximize-2";
-import Minimize2 from "@lucide/svelte/icons/minimize-2";
-import RefreshCw from "@lucide/svelte/icons/refresh-cw";
 import { onMount } from "svelte";
 import AutoCard from "./AutoCard.svelte";
 import WidgetSandbox from "./WidgetSandbox.svelte";

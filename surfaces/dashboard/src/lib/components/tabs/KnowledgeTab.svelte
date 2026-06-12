@@ -1,4 +1,5 @@
 <script lang="ts">
+import { CalendarIcon, Network, Pin, RefreshCw } from "$lib/icons";
 import {
 	type EntityHealth,
 	type KnowledgeAspectWithCounts,
@@ -40,10 +41,6 @@ import * as Table from "$lib/components/ui/table/index.js";
 import { nav } from "$lib/stores/navigation.svelte";
 import { focusMemoryTab } from "$lib/stores/tab-group-focus.svelte";
 import { CalendarDate, type DateValue } from "@internationalized/date";
-import CalendarIcon from "@lucide/svelte/icons/calendar";
-import Network from "@lucide/svelte/icons/network";
-import Pin from "@lucide/svelte/icons/pin";
-import RefreshCw from "@lucide/svelte/icons/refresh-cw";
 import { onMount } from "svelte";
 
 const ENTITY_TYPES = ["all", "project", "person", "system", "tool", "concept", "skill", "task"] as const;

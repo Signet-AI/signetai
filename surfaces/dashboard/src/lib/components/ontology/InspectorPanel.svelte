@@ -1,12 +1,8 @@
 <script lang="ts">
+import { ArrowLeft, CircleDot, Hexagon, Table2, User } from "$lib/icons";
 import type { KnowledgeAttribute } from "$lib/api";
 import { Badge } from "$lib/components/ui/badge/index.js";
 import { ScrollArea } from "$lib/components/ui/scroll-area/index.js";
-import ArrowLeft from "@lucide/svelte/icons/arrow-left";
-import CircleDot from "@lucide/svelte/icons/circle-dot";
-import Hexagon from "@lucide/svelte/icons/hexagon";
-import Table2 from "@lucide/svelte/icons/table-2";
-import User from "@lucide/svelte/icons/user";
 import { NODE_COLORS, entityNameFromGraph } from "./ontology-data";
 import { loadAspectDetail, loadEntityDetail, ontology, selectNode } from "./ontology-state.svelte";
 

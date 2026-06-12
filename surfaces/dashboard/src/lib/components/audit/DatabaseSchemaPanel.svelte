@@ -1,4 +1,5 @@
 <script lang="ts">
+import { ChevronLeft, ChevronRight, Database, RefreshCw, Search } from "$lib/icons";
 import {
 	type DatabaseSchemaGroup,
 	type DatabaseSchemaResponse,
@@ -9,11 +10,6 @@ import {
 } from "$lib/api";
 import { ScrollArea } from "$lib/components/ui/scroll-area/index.js";
 import * as Table from "$lib/components/ui/table/index.js";
-import ChevronLeft from "@lucide/svelte/icons/chevron-left";
-import ChevronRight from "@lucide/svelte/icons/chevron-right";
-import Database from "@lucide/svelte/icons/database";
-import RefreshCw from "@lucide/svelte/icons/refresh-cw";
-import Search from "@lucide/svelte/icons/search";
 import { onMount } from "svelte";
 
 const GROUP_ORDER: readonly DatabaseSchemaGroup[] = ["core", "provenance", "runtime", "internal", "other"];

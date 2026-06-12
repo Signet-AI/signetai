@@ -1,4 +1,5 @@
 <script lang="ts">
+import { ChevronDown, RefreshCw } from "$lib/icons";
 import type {
 	PluginCommandSummary,
 	PluginConnectorSummary,
@@ -32,8 +33,6 @@ import {
 	selectPlugin,
 	togglePlugin,
 } from "$lib/stores/plugins.svelte";
-import ChevronDown from "@lucide/svelte/icons/chevron-down";
-import RefreshCw from "@lucide/svelte/icons/refresh-cw";
 import { onMount } from "svelte";
 
 const SIGNET_GRAPHIQ_PLUGIN_ID = "signet.graphiq";

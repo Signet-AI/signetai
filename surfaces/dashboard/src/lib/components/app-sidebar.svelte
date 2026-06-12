@@ -2,6 +2,20 @@
 import type { DaemonStatus, Harness, Identity } from "$lib/api";
 import * as Sidebar from "$lib/components/ui/sidebar/index.js";
 import {
+	BarChart3,
+	BookOpen,
+	Cog,
+	ExternalLink,
+	Github,
+	ListTodo,
+	Moon,
+	Orbit,
+	PlugZap,
+	ShieldAlert,
+	ShieldCheck,
+	Sun,
+} from "$lib/icons";
+import {
 	type SidebarFocusItem,
 	focus,
 	focusFirstPageElement,
@@ -12,21 +26,9 @@ import {
 	setSidebarNavigationOrder,
 } from "$lib/stores/focus.svelte";
 import { type TabId, nav, setTab } from "$lib/stores/navigation.svelte";
-import BarChart3 from "@lucide/svelte/icons/bar-chart-3";
-import BookOpen from "@lucide/svelte/icons/book-open";
-import Cog from "@lucide/svelte/icons/cog";
-import ExternalLink from "@lucide/svelte/icons/external-link";
-import Github from "@lucide/svelte/icons/github";
-import ListTodo from "@lucide/svelte/icons/list-todo";
-import Moon from "@lucide/svelte/icons/moon";
-import Orbit from "@lucide/svelte/icons/orbit";
-import PlugZap from "@lucide/svelte/icons/plug-zap";
-import ShieldAlert from "@lucide/svelte/icons/shield-alert";
-import ShieldCheck from "@lucide/svelte/icons/shield-check";
-import Sun from "@lucide/svelte/icons/sun";
 import { onMount } from "svelte";
 
-let { useSidebar } = Sidebar;
+const { useSidebar } = Sidebar;
 
 interface Props {
 	identity: Identity;
@@ -42,7 +44,6 @@ const { identity, harnesses, memCount, daemonStatus, theme, onthemetoggle, onpre
 
 const sidebar = useSidebar();
 const SIDEBAR_NAV_ORDER_STORAGE_KEY = "signet:dashboard:sidebar-nav-order";
-
 
 function maybePrefetchEmbeddings(id: string): void {
 	if (id !== "cortex-memory") return;

@@ -14,7 +14,7 @@ import {
 	openForm,
 	ts,
 } from "$lib/stores/tasks.svelte";
-import Plus from "@lucide/svelte/icons/plus";
+import { Plus } from "$lib/icons";
 import { onMount } from "svelte";
 
 // biome-ignore lint/style/useConst: Mutated from template callback.

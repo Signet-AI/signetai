@@ -1,7 +1,7 @@
 <script lang="ts">
 import type { DiagnosticsReport, MemoryStats, PipelineStatus } from "$lib/api";
 import * as Card from "$lib/components/ui/card/index.js";
-import Activity from "@lucide/svelte/icons/activity";
+import { Activity } from "$lib/icons";
 
 interface Props {
 	diagnostics: DiagnosticsReport | null;

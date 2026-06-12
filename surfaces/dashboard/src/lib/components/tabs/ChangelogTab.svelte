@@ -1,4 +1,5 @@
 <script lang="ts">
+import { ExternalLink, Github, RefreshCw } from "$lib/icons";
 import { type MarkdownDoc, fetchChangelog, fetchReadme, fetchRoadmap } from "$lib/api";
 import PageBanner from "$lib/components/layout/PageBanner.svelte";
 import {
@@ -10,9 +11,6 @@ import {
 	CardTitle,
 } from "$lib/components/ui/card/index.js";
 import { Skeleton } from "$lib/components/ui/skeleton/index.js";
-import ExternalLink from "@lucide/svelte/icons/external-link";
-import Github from "@lucide/svelte/icons/github";
-import RefreshCw from "@lucide/svelte/icons/refresh-cw";
 import { onMount } from "svelte";
 
 type ViewId = "readme" | "roadmap" | "changelog";

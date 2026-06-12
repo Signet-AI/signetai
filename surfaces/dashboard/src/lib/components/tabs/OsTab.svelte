@@ -1,4 +1,5 @@
 <script lang="ts">
+import { MessageSquare, RefreshCw } from "$lib/icons";
 import { API_BASE } from "$lib/api";
 import AgentChat from "$lib/components/os/AgentChat.svelte";
 import AppDock from "$lib/components/os/AppDock.svelte";
@@ -19,8 +20,6 @@ import {
 	requestWidgetGen,
 	widgetHtmlCache,
 } from "$lib/stores/os.svelte";
-import MessageSquare from "@lucide/svelte/icons/message-square";
-import RefreshCw from "@lucide/svelte/icons/refresh-cw";
 import { onDestroy, onMount } from "svelte";
 
 let showChat = $state(false);

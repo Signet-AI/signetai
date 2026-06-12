@@ -8,7 +8,7 @@ import * as Sheet from "$lib/components/ui/sheet/index.js";
 import { Switch } from "$lib/components/ui/switch/index.js";
 import { Textarea } from "$lib/components/ui/textarea/index.js";
 import { closeEditForm, doDeleteMemory, doUpdateMemory } from "$lib/stores/memory.svelte";
-import AlertTriangle from "@lucide/svelte/icons/alert-triangle";
+import { AlertTriangle } from "$lib/icons";
 
 interface Props {
 	open: boolean;

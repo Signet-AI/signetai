@@ -1,11 +1,10 @@
 <script lang="ts">
+import { PanelLeft, PanelLeftClose } from "$lib/icons";
 import { type ConfigFile, saveConfigFileResult } from "$lib/api";
 import MarkdownViewer from "$lib/components/config/MarkdownViewer.svelte";
 import * as Popover from "$lib/components/ui/popover/index.js";
 import { toast } from "$lib/stores/toast.svelte";
 import { confirmDiscardChanges, setConfigDirty } from "$lib/stores/unsaved-changes.svelte";
-import PanelLeft from "@lucide/svelte/icons/panel-left";
-import PanelLeftClose from "@lucide/svelte/icons/panel-left-close";
 
 interface Props {
 	configFiles: ConfigFile[];

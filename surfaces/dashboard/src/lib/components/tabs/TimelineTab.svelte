@@ -1,4 +1,5 @@
 <script lang="ts">
+import { ChevronLeft, ChevronRight, RotateCcw } from "$lib/icons";
 import {
 	type MarketplaceMcpServer,
 	type Memory,
@@ -11,9 +12,6 @@ import {
 } from "$lib/api";
 import PageBanner from "$lib/components/layout/PageBanner.svelte";
 import { Button } from "$lib/components/ui/button/index.js";
-import ChevronLeft from "@lucide/svelte/icons/chevron-left";
-import ChevronRight from "@lucide/svelte/icons/chevron-right";
-import RotateCcw from "@lucide/svelte/icons/rotate-ccw";
 import { onMount } from "svelte";
 
 interface Props {

@@ -12,20 +12,22 @@ import {
 	removeSource,
 } from "$lib/api";
 import { getDesktopShell } from "$lib/desktop-shell";
-import Check from "@lucide/svelte/icons/check";
-import CheckCircle2 from "@lucide/svelte/icons/check-circle-2";
-import CirclePlus from "@lucide/svelte/icons/circle-plus";
-import Database from "@lucide/svelte/icons/database";
-import Download from "@lucide/svelte/icons/download";
-import Folder from "@lucide/svelte/icons/folder";
-import FolderOpen from "@lucide/svelte/icons/folder-open";
-import Info from "@lucide/svelte/icons/info";
-import Link2 from "@lucide/svelte/icons/link-2";
-import Plus from "@lucide/svelte/icons/plus";
-import RefreshCw from "@lucide/svelte/icons/refresh-cw";
-import Search from "@lucide/svelte/icons/search";
-import Upload from "@lucide/svelte/icons/upload";
-import X from "@lucide/svelte/icons/x";
+import {
+	Check,
+	CheckCircle2,
+	CirclePlus,
+	Database,
+	Download,
+	Folder,
+	FolderOpen,
+	Info,
+	Link2,
+	Plus,
+	RefreshCw,
+	Search,
+	Upload,
+	X,
+} from "$lib/icons";
 import { onDestroy, onMount } from "svelte";
 
 type SourceKind =

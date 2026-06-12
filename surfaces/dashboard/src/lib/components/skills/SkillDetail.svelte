@@ -10,7 +10,7 @@ import { Textarea } from "$lib/components/ui/textarea/index.js";
 import { computeTrustProfile } from "$lib/skills/risk-profile";
 import { closeDetail, doInstall, doUninstall, sk } from "$lib/stores/skills.svelte";
 import { toast } from "$lib/stores/toast.svelte";
-import ChevronDown from "@lucide/svelte/icons/chevron-down";
+import { ChevronDown } from "$lib/icons";
 import { marked } from "marked";
 
 const REVIEW_DISPLAY_NAME_KEY = "signet:marketplace:reviews:display-name";

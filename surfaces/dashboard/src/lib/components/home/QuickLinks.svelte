@@ -1,13 +1,7 @@
 <script lang="ts">
+import { Activity, BookOpen, Brain, Cog, ListChecks, Network, Orbit } from "$lib/icons";
 import { Button } from "$lib/components/ui/button/index.js";
 import { type TabId, setTab } from "$lib/stores/navigation.svelte";
-import Activity from "@lucide/svelte/icons/activity";
-import BookOpen from "@lucide/svelte/icons/book-open";
-import Brain from "@lucide/svelte/icons/brain";
-import Cog from "@lucide/svelte/icons/cog";
-import ListChecks from "@lucide/svelte/icons/list-checks";
-import Network from "@lucide/svelte/icons/network";
-import Orbit from "@lucide/svelte/icons/orbit";
 
 interface QuickLink {
 	label: string;

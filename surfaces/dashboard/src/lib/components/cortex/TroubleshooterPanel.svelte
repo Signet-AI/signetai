@@ -1,13 +1,7 @@
 <script lang="ts">
+import { Activity, ChevronDown, Info, Loader, Terminal, Trash2, Wrench } from "$lib/icons";
 import { API_BASE } from "$lib/api";
 import * as Select from "$lib/components/ui/select/index.js";
-import Activity from "@lucide/svelte/icons/activity";
-import ChevronDown from "@lucide/svelte/icons/chevron-down";
-import Info from "@lucide/svelte/icons/info";
-import Loader from "@lucide/svelte/icons/loader";
-import Terminal from "@lucide/svelte/icons/terminal";
-import Trash2 from "@lucide/svelte/icons/trash-2";
-import Wrench from "@lucide/svelte/icons/wrench";
 import { tick } from "svelte";
 
 type CmdKind = "cli" | "api";

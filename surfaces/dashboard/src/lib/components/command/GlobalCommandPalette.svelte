@@ -1,7 +1,7 @@
 <script lang="ts">
 import { type TabId, setTab } from "$lib/stores/navigation.svelte";
 import { ActionLabels } from "$lib/ui/action-labels";
-import Search from "@lucide/svelte/icons/search";
+import { Search } from "$lib/icons";
 import { Dialog as CommandPrimitive } from "bits-ui";
 
 interface CommandItem {

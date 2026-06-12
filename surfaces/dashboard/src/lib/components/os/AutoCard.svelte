@@ -1,7 +1,6 @@
 <script lang="ts">
+import { Box, Wrench } from "$lib/icons";
 import type { AutoCardManifest } from "$lib/stores/os.svelte";
-import Box from "@lucide/svelte/icons/box";
-import Wrench from "@lucide/svelte/icons/wrench";
 
 interface Props {
 	autoCard: AutoCardManifest;

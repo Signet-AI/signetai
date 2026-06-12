@@ -1,6 +1,6 @@
 <script lang="ts">
 import type { ProjectionNode } from "$lib/api";
-import ChevronDown from "@lucide/svelte/icons/chevron-down";
+import { ChevronDown } from "$lib/icons";
 import { loadProjection, ontology } from "./ontology-state.svelte";
 
 interface Props {

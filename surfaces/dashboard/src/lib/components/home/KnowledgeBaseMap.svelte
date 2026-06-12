@@ -1,11 +1,8 @@
 <script lang="ts">
+import { FileText, FolderOpen, Network, PlugZap } from "$lib/icons";
 import type { DocumentConnector, SignetSourceEntry } from "$lib/api";
 import { getConnectors, getSources } from "$lib/api";
 import { nav } from "$lib/stores/navigation.svelte";
-import FileText from "@lucide/svelte/icons/file-text";
-import FolderOpen from "@lucide/svelte/icons/folder-open";
-import Network from "@lucide/svelte/icons/network";
-import PlugZap from "@lucide/svelte/icons/plug-zap";
 import { onMount } from "svelte";
 
 type KnowledgeBase = {

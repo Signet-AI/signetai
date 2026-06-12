@@ -1,8 +1,7 @@
 <script lang="ts">
+import { Eye, Pencil } from "$lib/icons";
 import CodeEditor from "$lib/components/CodeEditor.svelte";
 import { Button } from "$lib/components/ui/button/index.js";
-import Eye from "@lucide/svelte/icons/eye";
-import Pencil from "@lucide/svelte/icons/pencil";
 import { marked } from "marked";
 
 interface Props {

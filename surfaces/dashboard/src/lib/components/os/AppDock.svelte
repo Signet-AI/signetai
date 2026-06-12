@@ -1,10 +1,7 @@
 <script lang="ts">
+import { Box, Pin, PinOff, Plus } from "$lib/icons";
 import type { AppTrayEntry } from "$lib/stores/os.svelte";
 import { moveToDock, moveToTray } from "$lib/stores/os.svelte";
-import Box from "@lucide/svelte/icons/box";
-import Pin from "@lucide/svelte/icons/pin";
-import PinOff from "@lucide/svelte/icons/pin-off";
-import Plus from "@lucide/svelte/icons/plus";
 import AddMcpDialog from "./AddMcpDialog.svelte";
 
 interface Props {

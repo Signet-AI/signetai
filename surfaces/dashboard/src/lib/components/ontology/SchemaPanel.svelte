@@ -1,7 +1,6 @@
 <script lang="ts">
+import { ChevronRight, Filter } from "$lib/icons";
 import { ScrollArea } from "$lib/components/ui/scroll-area/index.js";
-import ChevronRight from "@lucide/svelte/icons/chevron-right";
-import Filter from "@lucide/svelte/icons/filter";
 import {
 	GROUP_LABELS,
 	NODE_COLORS,
