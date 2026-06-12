@@ -31,7 +31,7 @@ conversations, preferences, mistakes, routines, and private working context.
 
 That memory is no longer a feature. It is infrastructure — and custody matters.
 
-Signet is a local-first context layer for AI agents: memory, identity,
+Signet is a local-first context layer for AI agents: memory, optional identity,
 transcripts, source records, provenance, agent instructions, secrets, and
 repair tools in infrastructure you control.
 
@@ -46,7 +46,7 @@ the durable layer underneath your agents.
 
 | Claim | Why it matters |
 |---|---|
-| Local-first custody | SQLite, readable workspace files, transcripts, source records, memories, and identity files live where you control them |
+| Local-first custody | SQLite, readable workspace files, transcripts, source records, memories, optional identity files, and secrets metadata live where you control them |
 | Source-backed recall | Every useful memory can point back to where it came from |
 | Repairable memory | Inspect, edit, supersede, delete, reclassify, and scope bad context |
 | Portable across agents | One layer works across Claude Code, Codex, OpenCode, OpenClaw, Gemini CLI, Hermes Agent, MCP, SDKs, and apps |
@@ -62,9 +62,10 @@ tools change.
 
 ```bash
 curl -fsSL https://signetai.sh/install.sh | bash
-signet setup               # interactive setup wizard
-signet status              # confirm daemon + pipeline health
-signet dashboard           # open memory + retrieval inspector
+signet setup                         # interactive setup wizard
+signet setup --identity-mode off     # memory + secrets without Signet-managed identity
+signet status                        # confirm daemon + pipeline health
+signet dashboard                     # open memory + retrieval inspector
 ```
 
 If you already use Claude Code, OpenCode, OpenClaw, Codex, Gemini CLI,

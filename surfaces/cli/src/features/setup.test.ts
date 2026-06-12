@@ -21,6 +21,7 @@ const NO_HARNESSES = {
 	ohMyPi: false,
 	pi: false,
 	hermesAgent: false,
+	gemini: false,
 };
 
 const ORIGINAL_HOME = process.env.HOME;
@@ -416,6 +417,39 @@ describe("setupWizard non-interactive harness hooks", () => {
 		expect(existsSync(join(basePath, "SOUL.md"))).toBe(false);
 	});
 
+	it("writes memory and secrets capabilities without identity files when identity mode is off", async () => {
+		root = mkdtempSync(join(tmpdir(), "setup-ni-identity-off-"));
+		const basePath = join(root, "agents");
+		const templatesPath = join(root, "templates");
+		writeIdentityTemplates(templatesPath);
+
+		const freshDetection: SetupDetection = {
+			...fakeDetection(basePath),
+			agentsDir: false,
+			memoryDb: false,
+		};
+		const deps = stubDeps({
+			AGENTS_DIR: basePath,
+			getTemplatesDir: mock(() => templatesPath),
+			normalizeAgentPath: mock((p: string) => p),
+			detectExistingSetup: mock(() => freshDetection),
+		});
+
+		await setupWizard({ nonInteractive: true, identityMode: "off", skipGit: true }, deps);
+
+		const agentYaml = readFileSync(join(basePath, "agent.yaml"), "utf-8");
+		expect(agentYaml).toContain("capabilities:");
+		expect(agentYaml).toContain("identity:");
+		expect(agentYaml).toContain("mode: off");
+		expect(agentYaml).toContain("memory:");
+		expect(agentYaml).toContain("secrets:");
+		expect(agentYaml).not.toContain("preset:");
+		for (const name of ["AGENTS.md", "SOUL.md", "IDENTITY.md", "USER.md", "DREAMING.md"]) {
+			expect(existsSync(join(basePath, name))).toBe(false);
+		}
+		expect(existsSync(join(basePath, "memory", "memories.db"))).toBe(true);
+	});
+
 	it("writes every openclaw special-session file referenced by the identity preset", async () => {
 		root = mkdtempSync(join(tmpdir(), "setup-ni-openclaw-identity-"));
 		const basePath = join(root, "agents");
@@ -452,6 +486,33 @@ describe("setupWizard non-interactive harness hooks", () => {
 		}
 	});
 
+	it("fails fast on unknown non-interactive identity modes", async () => {
+		root = mkdtempSync(join(tmpdir(), "setup-ni-invalid-identity-mode-"));
+		const basePath = join(root, "agents");
+		mkdirSync(basePath, { recursive: true });
+
+		const exitSpy = spyOn(process, "exit").mockImplementation(((code?: string | number | null) => {
+			throw new Error(`process.exit:${code ?? ""}`);
+		}) as never);
+		const errorSpy = spyOn(console, "error").mockImplementation(() => {});
+
+		try {
+			const deps = stubDeps({
+				AGENTS_DIR: basePath,
+				normalizeAgentPath: mock((p: string) => p),
+				detectExistingSetup: mock(() => fakeDetection(basePath)),
+			});
+
+			await expect(setupWizard({ nonInteractive: true, identityMode: "ghost" }, deps)).rejects.toThrow(
+				"process.exit:1",
+			);
+			expect(String(errorSpy.mock.calls[0]?.[0] ?? "")).toContain("Unknown --identity-mode value: ghost");
+		} finally {
+			errorSpy.mockRestore();
+			exitSpy.mockRestore();
+		}
+	});
+
 	it("fails fast on unknown non-interactive identity presets", async () => {
 		root = mkdtempSync(join(tmpdir(), "setup-ni-invalid-harness-"));
 		const basePath = join(root, "agents");
@@ -478,5 +539,81 @@ describe("setupWizard non-interactive harness hooks", () => {
 			exitSpy.mockRestore();
 			errorSpy.mockRestore();
 		}
+	});
+
+	it("scaffolds identity files when switching from off to managed", async () => {
+		root = mkdtempSync(join(tmpdir(), "setup-ni-off-to-managed-"));
+		const basePath = join(root, "agents");
+		mkdirSync(basePath, { recursive: true });
+		mkdirSync(join(basePath, "memory"), { recursive: true });
+		// Write initial agent.yaml with identity mode off
+		writeFileSync(
+			join(basePath, "agent.yaml"),
+			"capabilities:\n  identity:\n    mode: off\n  memory: {}\n  secrets: {}\n",
+		);
+		writeFileSync(join(basePath, "memory", "memories.db"), "");
+
+		const configureHarnessHooks = mock(async () => {});
+		const deps = stubDeps({
+			AGENTS_DIR: basePath,
+			configureHarnessHooks,
+			normalizeAgentPath: mock((p: string) => p),
+			detectExistingSetup: mock(() => ({
+				...fakeDetection(basePath),
+				agentYaml: true,
+				memoryDb: true,
+			})),
+		});
+
+		await setupWizard({ nonInteractive: true, identityMode: "managed", skipGit: true }, deps);
+
+		// All required identity files should be scaffolded
+		for (const name of ["AGENTS.md", "SOUL.md", "IDENTITY.md", "USER.md"]) {
+			expect(existsSync(join(basePath, name))).toBe(true);
+		}
+		const agentsContent = readFileSync(join(basePath, "AGENTS.md"), "utf-8");
+		expect(agentsContent).toContain("Agent Instructions");
+
+		// agent.yaml should now have managed mode
+		const agentYaml = readFileSync(join(basePath, "agent.yaml"), "utf-8");
+		expect(agentYaml).toContain("mode: managed");
+	});
+
+	it("runs connector cleanup when switching from managed to off", async () => {
+		root = mkdtempSync(join(tmpdir(), "setup-ni-managed-to-off-"));
+		const basePath = join(root, "agents");
+		mkdirSync(basePath, { recursive: true });
+		mkdirSync(join(basePath, "memory"), { recursive: true });
+		// Write initial agent.yaml with identity mode managed
+		writeFileSync(
+			join(basePath, "agent.yaml"),
+			"capabilities:\n  identity:\n    mode: managed\n  memory: {}\n  secrets: {}\nharnesses:\n  - opencode\n",
+		);
+		writeFileSync(join(basePath, "memory", "memories.db"), "");
+
+		const configureHarnessHooks = mock(async () => {});
+		const deps = stubDeps({
+			AGENTS_DIR: basePath,
+			configureHarnessHooks,
+			normalizeAgentPath: mock((p: string) => p),
+			detectExistingSetup: mock(() => ({
+				...fakeDetection(basePath),
+				agentYaml: true,
+				memoryDb: true,
+				harnesses: { ...NO_HARNESSES, opencode: true },
+			})),
+			loadConfiguredHarnesses: mock(() => ["opencode"]),
+		});
+
+		await setupWizard({ nonInteractive: true, identityMode: "off", skipGit: true }, deps);
+
+		// Connector cleanup should have been called for the detected harness
+		expect(configureHarnessHooks).toHaveBeenCalled();
+		const calls = configureHarnessHooks.mock.calls.map((c: unknown[]) => c[0]);
+		expect(calls).toContain("opencode");
+
+		// agent.yaml should now have identity mode off
+		const agentYaml = readFileSync(join(basePath, "agent.yaml"), "utf-8");
+		expect(agentYaml).toContain("mode: off");
 	});
 });

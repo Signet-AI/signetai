@@ -501,7 +501,7 @@ systemctl --user start signet.service
 Editing Your Agent
 ---
 
-Your agent identity lives in four self-managed files:
+If you enabled Signet-managed identity, your agent identity lives in four self-managed files:
 
 **`$SIGNET_WORKSPACE/AGENTS.md`** — How the agent operates, including rules,
 workflow, and constraints. This is the main file that syncs to harnesses.
@@ -520,6 +520,12 @@ Signet as episodic and operational memory. Do not edit it manually.
 
 Edit the four identity files directly in your editor or via the dashboard's
 config editor. Changes sync to harnesses automatically within 2 seconds.
+
+If you want Signet only for memory, recall, sources, and secrets, run setup with
+`--identity-mode off` or choose the identity-off option in the wizard. In that
+mode Signet does not create, inject, or sync `AGENTS.md`, `SOUL.md`,
+`IDENTITY.md`, or `USER.md`; your harness-native instruction files remain the
+source of truth.
 
 ---
 

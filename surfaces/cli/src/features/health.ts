@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { diagnoseHermesIntegration } from "@signet/connector-hermes-agent";
 import { OpenClawConnector, type OpenClawRuntimeState } from "@signet/connector-openclaw";
-import { detectSchema, getMissingIdentityFiles, hasValidIdentity } from "@signet/core";
+import { detectSchema, getMissingIdentityFiles, hasValidIdentity, loadIdentityMode } from "@signet/core";
 import chalk from "chalk";
 import { daemonAccessLines } from "../lib/network.js";
 import { getGitRemoteState, getSnapshotProtection, hasOpenClawWorkspaceLink } from "../lib/workspace-protection.js";
@@ -95,8 +95,10 @@ interface StatusDeps {
 export async function getStatusReport(basePath: string, deps: StatusDeps): Promise<StatusReport> {
 	const existing = deps.detectExistingSetup(basePath);
 	const installed = existing.agentsDir;
+	const identityMode = installed ? loadIdentityMode(basePath) : "managed";
+	const showIdentityFiles = identityMode === "managed";
 	const files = [
-		{ name: "AGENTS.md", exists: existing.agentsMd },
+		...(showIdentityFiles ? [{ name: "AGENTS.md", exists: existing.agentsMd }] : []),
 		{ name: "agent.yaml", exists: existing.agentYaml },
 		{ name: "memories.db", exists: existing.memoryDb },
 	];

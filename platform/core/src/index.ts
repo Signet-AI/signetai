@@ -304,6 +304,7 @@ export type { MigrationDb, Migration } from "./migrations/index";
 export {
 	IDENTITY_FILES,
 	IDENTITY_PRESETS,
+	IDENTITY_MODES,
 	REQUIRED_IDENTITY_KEYS,
 	OPTIONAL_IDENTITY_KEYS,
 	detectExistingSetup,
@@ -313,6 +314,9 @@ export {
 	getMissingIdentityFiles,
 	summarizeIdentity,
 	readStaticIdentity,
+	resolveIdentityModeFromConfig,
+	loadIdentityMode,
+	identityModeManagesFiles,
 	resolveSpecialIdentityFiles,
 	resolveStartupIdentityFiles,
 	resolveSessionStartTimeoutMs,
@@ -328,6 +332,7 @@ export {
 export type {
 	IdentityFileSpec,
 	IdentityPresetName,
+	IdentityMode,
 	IdentityFileContext,
 	IdentitySessionKind,
 	IdentityContextFileEntry,

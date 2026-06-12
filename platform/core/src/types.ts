@@ -138,7 +138,21 @@ export interface AgentManifest {
 		mode?: "local" | "team" | "hybrid";
 		rateLimits?: Record<string, { windowMs?: number; max?: number }>;
 	};
-	capabilities?: string[];
+	capabilities?:
+		| string[]
+		| {
+				memory?: {
+					enabled?: boolean;
+					autoInject?: boolean;
+					memoryHead?: boolean;
+				};
+				secrets?: {
+					enabled?: boolean;
+				};
+				identity?: {
+					mode?: "managed" | "passthrough" | "off";
+				};
+		  };
 	harnessCompatibility?: string[];
 }
 

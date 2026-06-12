@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { confirm } from "@inquirer/prompts";
 import {
 	Database as CoreDatabase,
+	type IdentityMode,
 	type ImportResult,
 	type SetupDetection,
 	type SkillsResult,
@@ -79,11 +80,13 @@ export async function runExistingSetupWizard(
 		acpxBin?: string;
 		signetSecretsEnabled?: boolean;
 		graphiqEnabled?: boolean;
+		identityMode?: IdentityMode;
 	},
 ): Promise<void> {
-	const spinner = ora("Setting up Signet for existing identity...").start();
+	const spinner = ora("Setting up Signet for existing workspace...").start();
 	const signetSecretsEnabled = options?.signetSecretsEnabled ?? true;
 	const graphiqEnabled = options?.graphiqEnabled ?? false;
+	const identityMode = options?.identityMode ?? "managed";
 	let graphiqInstalled = false;
 
 	try {
@@ -152,6 +155,11 @@ export async function runExistingSetupWizard(
 		const config: Record<string, unknown> = {
 			version: 1,
 			schema: "signet/v1",
+			capabilities: {
+				memory: { enabled: true, autoInject: true, memoryHead: true },
+				secrets: { enabled: signetSecretsEnabled },
+				identity: { mode: identityMode },
+			},
 			agent: {
 				name: agentName,
 				description:
@@ -177,7 +185,10 @@ export async function runExistingSetupWizard(
 				top_k: 20,
 				min_score: 0.3,
 			},
-			identity: {
+		};
+
+		if (identityMode === "managed") {
+			config.identity = {
 				preset: "openclaw",
 				startup: {
 					load: [
@@ -193,8 +204,8 @@ export async function runExistingSetupWizard(
 					{ path: "DREAMING.md", kind: "dreaming", role: "dreaming_prompt", budget: 4000 },
 					{ path: "BOOTSTRAP.md", kind: "bootstrap", role: "bootstrap_prompt", budget: 4000 },
 				],
-			},
-		};
+			};
+		}
 
 		if (options?.embeddingProvider && options.embeddingProvider !== "none") {
 			const model =
@@ -226,8 +237,23 @@ export async function runExistingSetupWizard(
 			applySetupInferenceRoute(config, inference);
 		}
 
-		if (!existsSync(join(basePath, "agent.yaml"))) {
-			writeFileSync(join(basePath, "agent.yaml"), formatYaml(config));
+		const agentYamlPath = join(basePath, "agent.yaml");
+		if (existsSync(agentYamlPath)) {
+			const existingCapabilities = readRecord(existingConfig.capabilities);
+			writeFileSync(
+				agentYamlPath,
+				formatYaml({
+					...existingConfig,
+					capabilities: {
+						...existingCapabilities,
+						memory: { ...readRecord(existingCapabilities.memory), enabled: true, autoInject: true, memoryHead: true },
+						secrets: { ...readRecord(existingCapabilities.secrets), enabled: signetSecretsEnabled },
+						identity: { ...readRecord(existingCapabilities.identity), mode: identityMode },
+					},
+				}),
+			);
+		} else {
+			writeFileSync(agentYamlPath, formatYaml(config));
 		}
 
 		writeSetupCorePluginRegistry(basePath, { signetSecretsEnabled, graphiqEnabled });
@@ -240,7 +266,7 @@ export async function runExistingSetupWizard(
 		}
 
 		const agentsPath = join(basePath, "AGENTS.md");
-		if (!existsSync(agentsPath)) {
+		if (identityMode === "managed" && !existsSync(agentsPath)) {
 			const agentsTemplate = join(templatesDir, "AGENTS.md.template");
 			if (existsSync(agentsTemplate)) {
 				const content = readFileSync(agentsTemplate, "utf-8").replace(/\{\{AGENT_NAME\}\}/g, agentName);
@@ -253,15 +279,18 @@ export async function runExistingSetupWizard(
 			}
 		}
 
-		const docs = [
-			{ name: "MEMORY.md", template: "MEMORY.md.template" },
-			{ name: "SOUL.md", template: "SOUL.md.template" },
-			{ name: "IDENTITY.md", template: "IDENTITY.md.template" },
-			{ name: "USER.md", template: "USER.md.template" },
-			{ name: "HEARTBEAT.md", template: "HEARTBEAT.md.template" },
-			{ name: "DREAMING.md", template: "DREAMING.md.template" },
-			{ name: "BOOTSTRAP.md", template: "BOOTSTRAP.md.template" },
-		];
+		const docs =
+			identityMode === "managed"
+				? [
+						{ name: "MEMORY.md", template: "MEMORY.md.template" },
+						{ name: "SOUL.md", template: "SOUL.md.template" },
+						{ name: "IDENTITY.md", template: "IDENTITY.md.template" },
+						{ name: "USER.md", template: "USER.md.template" },
+						{ name: "HEARTBEAT.md", template: "HEARTBEAT.md.template" },
+						{ name: "DREAMING.md", template: "DREAMING.md.template" },
+						{ name: "BOOTSTRAP.md", template: "BOOTSTRAP.md.template" },
+					]
+				: [];
 
 		for (const doc of docs) {
 			const path = join(basePath, doc.name);
@@ -364,7 +393,13 @@ export async function runExistingSetupWizard(
 
 		spinner.succeed(chalk.green("Signet setup complete!"));
 		console.log();
-		console.log(chalk.dim("  Your existing identity files are now managed by Signet."));
+		console.log(
+			chalk.dim(
+				identityMode === "managed"
+					? "  Your existing identity files are now managed by Signet."
+					: "  Signet is set up for memory, recall, sources, and secrets without managing identity.",
+			),
+		);
 		console.log(chalk.dim(`    ${basePath}`));
 		console.log();
 		console.log(chalk.dim("  Core plugins:"));
@@ -432,9 +467,14 @@ export async function runExistingSetupWizard(
 		}
 
 		console.log();
-		console.log(chalk.cyan("  → Next step: Say '/onboarding' to personalize your agent"));
-		console.log(chalk.dim("    This will walk you through setting up your agent's personality,"));
-		console.log(chalk.dim("    communication style, and your preferences."));
+		if (identityMode === "managed") {
+			console.log(chalk.cyan("  → Next step: Say '/onboarding' to personalize your agent"));
+			console.log(chalk.dim("    This will walk you through setting up your agent's personality,"));
+			console.log(chalk.dim("    communication style, and your preferences."));
+		} else {
+			console.log(chalk.cyan("  → Next step: Use `signet remember` or configure harness memory hooks"));
+			console.log(chalk.dim("    Signet will manage memory, recall, sources, and secrets without owning identity."));
+		}
 		if (protection.state === "bypass") {
 			console.log(chalk.red("    Backup warning: this workspace is still unprotected."));
 		}

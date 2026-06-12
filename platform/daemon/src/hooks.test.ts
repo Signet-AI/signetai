@@ -962,6 +962,29 @@ hooks:
 		expect(result.inject).not.toContain("HiddenBot");
 	});
 
+	test.serial("identity mode off keeps Signet memory active without identity stewardship", async () => {
+		writeAgentYaml(`
+capabilities:
+  identity:
+    mode: off
+agent:
+  name: HiddenBot
+`);
+		writeAgentsMd("# AGENTS\n\nOperator policy from AGENTS.");
+		writeFileSync(join(TEST_DIR, "SOUL.md"), "Soul should not inject.");
+
+		const result = await handleSessionStart({ harness: "test" });
+
+		expect(result.identity.name).toBe("Agent");
+		expect(result.inject).toContain("[signet active]");
+		expect(result.inject).toContain("Memory Check Loop");
+		expect(result.inject).toContain("[memory active");
+		expect(result.inject).not.toContain("Identity files in your Signet workspace");
+		expect(result.inject).not.toContain("Operator policy from AGENTS.");
+		expect(result.inject).not.toContain("Soul should not inject.");
+		expect(result.inject).not.toContain("HiddenBot");
+	});
+
 	test.serial("handles missing memory database gracefully", async () => {
 		const result = await handleSessionStart({ harness: "test" });
 		expect(result.memories).toEqual([]);

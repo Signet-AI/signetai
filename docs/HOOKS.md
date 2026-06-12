@@ -112,7 +112,7 @@ persistence scope. Harness-native sub-agent identifiers should be sent as
 }
 ```
 
-The `inject` field is ready-to-use text for prepending to the system prompt. It includes identity, memories, recent context, and the Memory Check Loop formatted as markdown.
+The `inject` field is ready-to-use text for prepending to the system prompt. It includes memories, recent context, the Memory Check Loop, and identity only when Signet-managed identity is enabled.
 
 The Memory Check Loop tells agents when prior context may matter, how to run
 1-3 targeted recalls, what pitfalls to avoid, and how to verify they are
@@ -124,10 +124,14 @@ new hook schema or recall algorithm.
 In `agent.yaml` (see [[configuration]]):
 
 ```yaml
+capabilities:
+  identity:
+    mode: managed            # managed | passthrough | off
+
 hooks:
   sessionStart:
     recallLimit: 10            # How many memories to include
-    includeIdentity: true      # Include identity files
+    includeIdentity: true      # Only applies when identity.mode is managed
     includeRecentContext: true # Include MEMORY.md content
     recencyBias: 0.7           # 0=importance-only, 1=recency-only
 

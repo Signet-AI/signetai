@@ -22,8 +22,8 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, relative } from "node:path";
-import { BaseConnector, type InstallResult, type UninstallResult, atomicWriteJson } from "@signet/connector-base";
-import { OPENCODE_PIPELINE_AGENT, OPENCODE_PIPELINE_SYSTEM_PROMPT, expandHome, hasValidIdentity } from "@signet/core";
+import { BaseConnector, type InstallResult, type UninstallResult, atomicWriteJson, isSignetGeneratedFile } from "@signet/connector-base";
+import { OPENCODE_PIPELINE_AGENT, OPENCODE_PIPELINE_SYSTEM_PROMPT, expandHome, hasValidIdentity, loadIdentityMode } from "@signet/core";
 import { PLUGIN_BUNDLE } from "./plugin-bundle.js";
 
 // ============================================================================
@@ -260,6 +260,8 @@ export class OpenCodeConnector extends BaseConnector {
 		const filesWritten: string[] = [];
 		const expandedBasePath = expandHome(basePath || join(homedir(), ".agents"));
 
+		const identityMode = loadIdentityMode(expandedBasePath);
+
 		if (!hasValidIdentity(expandedBasePath)) {
 			return {
 				success: false,
@@ -295,10 +297,25 @@ export class OpenCodeConnector extends BaseConnector {
 		this.ensureConfigFile(opencodePath);
 		this.registerPlugin(opencodePath);
 
-		// Generate AGENTS.md from identity files
-		const agentsMdPath = await this.generateAgentsMd(expandedBasePath);
-		if (agentsMdPath) {
-			filesWritten.push(agentsMdPath);
+		// Generate AGENTS.md from identity files only when identity is managed
+		if (identityMode === "managed") {
+			const agentsMdPath = await this.generateAgentsMd(expandedBasePath);
+			if (agentsMdPath) {
+				filesWritten.push(agentsMdPath);
+			}
+		} else {
+			// Clean up any previously Signet-generated AGENTS.md when identity is off/passthrough
+			const staleAgentsMd = join(this.getOpenCodePath(), "AGENTS.md");
+			if (existsSync(staleAgentsMd)) {
+				try {
+					const raw = readFileSync(staleAgentsMd, "utf-8");
+					if (isSignetGeneratedFile(raw)) {
+						rmSync(staleAgentsMd);
+					}
+				} catch {
+					// Non-fatal
+				}
+			}
 		}
 
 		// Register Signet MCP server in OpenCode config
@@ -336,8 +353,15 @@ export class OpenCodeConnector extends BaseConnector {
 
 		const agentsMdPath = join(opencodePath, "AGENTS.md");
 		if (existsSync(agentsMdPath)) {
-			rmSync(agentsMdPath);
-			filesRemoved.push(agentsMdPath);
+			try {
+				const raw = readFileSync(agentsMdPath, "utf-8");
+				if (isSignetGeneratedFile(raw)) {
+					rmSync(agentsMdPath);
+					filesRemoved.push(agentsMdPath);
+				}
+			} catch {
+				// Non-fatal — leave file in place
+			}
 		}
 
 		this.migrateFromLegacy(opencodePath);

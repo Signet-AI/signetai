@@ -10,17 +10,19 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { realpathSync } from "node:fs";
-import { readFile as readFileAsync } from "node:fs/promises";
+import { readFile as readFileAsync, unlink as unlinkAsync } from "node:fs/promises";
 import { readdir } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Worker } from "node:worker_threads";
 import {
 	type AgentDefinition,
 	type PipelineSynthesisConfig,
 	buildArchitectureDoc,
+	identityModeManagesFiles,
 	loadConfiguredHarnesses,
+	loadIdentityMode,
 	loadSourcesConfig,
 	normalizeAgentRosterEntry,
 	parseRoutingTargetRef,
@@ -266,6 +268,13 @@ let syncTimer: ReturnType<typeof setTimeout> | null = null;
 const SYNC_DEBOUNCE_MS = 2000;
 
 async function syncHarnessConfigs() {
+	const identityMode = loadIdentityMode(AGENTS_DIR);
+	if (!identityModeManagesFiles(identityMode)) {
+		// Clean up stale generated harness identity files when mode is off/passthrough
+		await cleanupStaleHarnessIdentity();
+		await ensureArchitectureDoc();
+		return;
+	}
 	const agentsMdPath = join(AGENTS_DIR, "AGENTS.md");
 	if (!existsSync(agentsMdPath)) return;
 	const activeHarnesses = new Set(loadConfiguredHarnesses(AGENTS_DIR));
@@ -351,6 +360,68 @@ ${fileList}
 		},
 	});
 	await ensureArchitectureDoc();
+}
+
+/**
+ * Remove Signet-generated harness identity files when identity mode is off/passthrough.
+ * Only deletes files whose first lines match Signet-generated markers.
+ */
+async function cleanupStaleHarnessIdentity(): Promise<void> {
+	const activeHarnesses = new Set(loadConfiguredHarnesses(AGENTS_DIR));
+	const targets: Array<{ path: string; harness: string }> = [];
+
+	const opencodeDir = join(homedir(), ".config", "opencode");
+	if (activeHarnesses.has("opencode") && existsSync(opencodeDir)) {
+		targets.push({ path: join(opencodeDir, "AGENTS.md"), harness: "opencode" });
+	}
+
+	// Gemini uses a configurable GEMINI.md path; check the standard and custom locations
+	if (activeHarnesses.has("gemini")) {
+		const geminiDir = join(homedir(), ".gemini");
+		if (existsSync(geminiDir)) {
+			targets.push({ path: join(geminiDir, "GEMINI.md"), harness: "gemini" });
+			// Also check for custom context-file path from settings.json
+			try {
+				const settingsPath = join(geminiDir, "settings.json");
+				if (existsSync(settingsPath)) {
+					const parsed = JSON.parse(readFileSync(settingsPath, "utf8"));
+					const ctx = typeof parsed === "object" && parsed !== null ? (parsed as Record<string, unknown>).context : null;
+					if (typeof ctx === "object" && ctx !== null) {
+						const fn = (ctx as Record<string, unknown>).fileName;
+						if (Array.isArray(fn) && typeof fn[0] === "string") {
+							const custom = resolve(geminiDir, fn[0]);
+							if (custom.startsWith(resolve(geminiDir) + sep) && custom !== join(geminiDir, "GEMINI.md")) {
+								targets.push({ path: custom, harness: "gemini" });
+							}
+						}
+					}
+				}
+			} catch {
+				// Non-fatal — default path already covered
+			}
+		}
+	}
+
+	for (const { path: targetPath, harness } of targets) {
+		if (!existsSync(targetPath)) continue;
+		try {
+			const raw = await readFileAsync(targetPath, "utf8");
+			const lines = raw.split("\n").slice(0, 5);
+			const isGenerated = lines.some(
+				(line, i) =>
+					/^#\s+AUTO-GENERATED\s+from\s+.*\s+by\s+Signet/i.test(line) ||
+					(/^#\s+Auto-generated\s+from\s+/.test(line) &&
+						i + 1 < lines.length &&
+						/^#\s+Source:\s+/.test(lines[i + 1])),
+			);
+			if (isGenerated) {
+				await unlinkAsync(targetPath);
+				logger.sync.harness(harness, `cleaned stale generated file: ${targetPath}`);
+			}
+		} catch {
+			// Non-fatal
+		}
+	}
 }
 
 async function ensureArchitectureDoc(): Promise<void> {

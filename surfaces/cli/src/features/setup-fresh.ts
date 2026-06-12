@@ -80,15 +80,17 @@ export async function runFreshSetup(cfg: FreshSetupConfig, deps: SetupDeps): Pro
 		spinner.text = "Cloning Signet source checkout...";
 		const sourceRepoSync = await deps.syncWorkspaceSourceRepo(cfg.basePath);
 
-		spinner.text = "Creating agent identity...";
-		const agentsTemplate = join(templatesDir, "AGENTS.md.template");
-		let agentsMd: string;
-		if (existsSync(agentsTemplate)) {
-			agentsMd = readFileSync(agentsTemplate, "utf-8").replace(/\{\{AGENT_NAME\}\}/g, cfg.agentName);
-		} else {
-			agentsMd = `# ${cfg.agentName}\n\nThis is your agent identity file. Define your agent's personality, capabilities,\nand behaviors here. This file is shared across all your AI tools.\n\n## Personality\n\n${cfg.agentName} is a helpful assistant.\n\n## Instructions\n\n- Be concise and direct\n- Ask clarifying questions when needed\n- Remember user preferences\n`;
+		if (cfg.identityMode === "managed") {
+			spinner.text = "Creating agent identity...";
+			const agentsTemplate = join(templatesDir, "AGENTS.md.template");
+			let agentsMd: string;
+			if (existsSync(agentsTemplate)) {
+				agentsMd = readFileSync(agentsTemplate, "utf-8").replace(/\{\{AGENT_NAME\}\}/g, cfg.agentName);
+			} else {
+				agentsMd = `# ${cfg.agentName}\n\nThis is your agent identity file. Define your agent's personality, capabilities,\nand behaviors here. This file is shared across all your AI tools.\n\n## Personality\n\n${cfg.agentName} is a helpful assistant.\n\n## Instructions\n\n- Be concise and direct\n- Ask clarifying questions when needed\n- Remember user preferences\n`;
+			}
+			writeFileSync(join(cfg.basePath, "AGENTS.md"), agentsMd);
 		}
-		writeFileSync(join(cfg.basePath, "AGENTS.md"), agentsMd);
 
 		spinner.text = "Writing configuration...";
 		const now = new Date().toISOString();
@@ -96,6 +98,11 @@ export async function runFreshSetup(cfg: FreshSetupConfig, deps: SetupDeps): Pro
 		const config: Record<string, unknown> = {
 			version: 1,
 			schema: "signet/v1",
+			capabilities: {
+				memory: { enabled: true, autoInject: true, memoryHead: true },
+				secrets: { enabled: cfg.signetSecretsEnabled },
+				identity: { mode: cfg.identityMode },
+			},
 			agent: {
 				name: cfg.agentName,
 				description: cfg.agentDescription,
@@ -120,14 +127,17 @@ export async function runFreshSetup(cfg: FreshSetupConfig, deps: SetupDeps): Pro
 				top_k: cfg.searchTopK,
 				min_score: cfg.searchMinScore,
 			},
-			identity: {
+		};
+
+		if (cfg.identityMode === "managed") {
+			config.identity = {
 				preset: cfg.identityPreset,
 				startup: {
 					load: cfg.startupIdentityFiles,
 				},
 				special: cfg.specialIdentityFiles,
-			},
-		};
+			};
+		}
 
 		if (cfg.embeddingProvider !== "none") {
 			config.embedding = {
@@ -322,9 +332,14 @@ export async function runFreshSetup(cfg: FreshSetupConfig, deps: SetupDeps): Pro
 		console.log();
 		printSetupProtectionSummary(protection);
 		console.log();
-		console.log(chalk.cyan("  → Next step: Say '/onboarding' to personalize your agent"));
-		console.log(chalk.dim("    This will walk you through setting up your agent's personality,"));
-		console.log(chalk.dim("    communication style, and your preferences."));
+		if (cfg.identityMode === "managed") {
+			console.log(chalk.cyan("  → Next step: Say '/onboarding' to personalize your agent"));
+			console.log(chalk.dim("    This will walk you through setting up your agent's personality,"));
+			console.log(chalk.dim("    communication style, and your preferences."));
+		} else {
+			console.log(chalk.cyan("  → Next step: Use `signet remember` or configure harness memory hooks"));
+			console.log(chalk.dim("    Signet will manage memory, recall, sources, and secrets without owning identity."));
+		}
 		if (protection.state === "bypass") {
 			console.log(chalk.red("    Backup warning: this workspace is still unprotected."));
 		}

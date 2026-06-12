@@ -122,6 +122,10 @@ export function registerAppCommands(program: Command, deps: AppDeps): void {
 			"--identity-preset <preset>",
 			"Identity preset for startup/special prompt files (minimal, hermes, openclaw, custom)",
 		)
+		.option(
+			"--identity-mode <mode>",
+			"Identity management mode in non-interactive mode (managed, passthrough, off)",
+		)
 		.action(deps.setupWizard);
 
 	const dashboard = program

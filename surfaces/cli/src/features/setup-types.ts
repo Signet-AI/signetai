@@ -31,6 +31,7 @@ export interface SetupWizardOptions {
 	withGraphiq?: boolean;
 	disableGraphiq?: boolean;
 	identityPreset?: string;
+	identityMode?: string;
 }
 
 export interface SetupDeps {
@@ -70,6 +71,7 @@ export interface SetupDeps {
 	readonly syncNativeEmbeddingModel: (
 		basePath: string,
 	) => Promise<{ readonly status: "updated" | "current" | "skipped" | "error"; readonly message: string }>;
+	readonly loadConfiguredHarnesses?: (basePath: string) => readonly string[];
 }
 
 export interface FreshSetupConfig {
@@ -102,6 +104,7 @@ export interface FreshSetupConfig {
 	readonly createLocalBackup: boolean;
 	readonly signetSecretsEnabled: boolean;
 	readonly graphiqEnabled: boolean;
+	readonly identityMode: "managed" | "passthrough" | "off";
 	readonly identityPreset: IdentityPresetName;
 	readonly startupIdentityFiles: readonly IdentityContextFileEntry[];
 	readonly specialIdentityFiles: readonly IdentitySpecialFileEntry[];

@@ -1,18 +1,22 @@
-import { copyFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { checkbox, confirm, input, select } from "@inquirer/prompts";
 import { OpenClawConnector } from "@signet/connector-openclaw";
 import {
+	IDENTITY_MODES,
 	IDENTITY_PRESETS,
 	type IdentityContextFileEntry,
+	type IdentityMode,
 	type IdentityPresetName,
 	type IdentitySpecialFileEntry,
 	NETWORK_MODES,
 	type NetworkMode,
 	disableGraphiqState,
+	formatYaml,
 	modelPresetsForProvider,
 	parseSimpleYaml,
 	readNetworkMode,
+	resolveIdentityModeFromConfig,
 } from "@signet/core";
 import chalk from "chalk";
 import open from "open";
@@ -93,6 +97,7 @@ function resolveSetupExtractionEndpoint(options: {
 }
 
 const IDENTITY_PRESET_CHOICES = ["minimal", "hermes", "openclaw", "custom"] as const;
+const IDENTITY_MODE_CHOICES = IDENTITY_MODES;
 
 function cloneStartupFiles(preset: IdentityPresetName): IdentityContextFileEntry[] {
 	return IDENTITY_PRESETS[preset].startup.map((entry) => ({ ...entry }));
@@ -108,6 +113,71 @@ function toStartupChoice(entry: IdentityContextFileEntry, checked: boolean) {
 		name: `${entry.path}${entry.role ? ` — ${entry.role.replace(/_/g, " ")}` : ""}`,
 		checked,
 	};
+}
+
+function writeCapabilitySelection(
+	basePath: string,
+	existingConfig: Record<string, unknown>,
+	identityMode: IdentityMode,
+	signetSecretsEnabled: boolean,
+): void {
+	const existingCapabilities = readRecord(existingConfig.capabilities);
+	writeFileSync(
+		join(basePath, "agent.yaml"),
+		formatYaml({
+			...existingConfig,
+			capabilities: {
+				...existingCapabilities,
+				memory: { ...readRecord(existingCapabilities.memory), enabled: true, autoInject: true, memoryHead: true },
+				secrets: { ...readRecord(existingCapabilities.secrets), enabled: signetSecretsEnabled },
+				identity: { ...readRecord(existingCapabilities.identity), mode: identityMode },
+			},
+		}),
+	);
+}
+
+/**
+ * Scaffold minimal identity files when switching from off/passthrough to managed.
+ * Only creates files that do not already exist.
+ */
+function scaffoldIdentityIfNeeded(basePath: string, identityMode: IdentityMode, previousMode: IdentityMode): void {
+	if (identityMode !== "managed" || previousMode === "managed") return;
+	const requiredFiles: Record<string, string> = {
+		"AGENTS.md": "# Agent Instructions\n\nYour agent instructions live here. Run `/onboarding` for a guided setup.\n",
+		"SOUL.md": "# Soul\n\nYour agent's persona and character live here.\n",
+		"IDENTITY.md": "# Identity\n\nYour agent's name and vibe live here.\n",
+		"USER.md": "# About Your User\n\nYour preferences and profile live here.\n",
+	};
+	for (const [name, content] of Object.entries(requiredFiles)) {
+		const filePath = join(basePath, name);
+		if (!existsSync(filePath)) {
+			writeFileSync(filePath, content);
+		}
+	}
+}
+
+async function promptIdentityMode(defaultIdentityMode: IdentityMode): Promise<IdentityMode> {
+	return select({
+		message: "Should Signet manage agent identity/instruction files?",
+		choices: [
+			{
+				value: "managed",
+				name: "Managed identity — Signet creates and syncs AGENTS/SOUL/IDENTITY/USER files",
+				description: "Best when you want full cross-harness agent continuity.",
+			},
+			{
+				value: "off",
+				name: "Off — use Signet only for memory, recall, sources, and secrets",
+				description: "Best when your harness already owns personality and instructions.",
+			},
+			{
+				value: "passthrough",
+				name: "Passthrough — reserve identity for existing harness files",
+				description: "Signet will not author or sync identity files.",
+			},
+		],
+		default: defaultIdentityMode,
+	});
 }
 
 export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps): Promise<void> {
@@ -186,8 +256,15 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 	const normalizedExistingHarnesses = normalizeHarnessList(existingHarnesses, deps);
 	const existingNetworkMode = readNetworkMode(existingConfig);
 	const existingIdentity = readRecord(existingConfig.identity);
+	const configuredIdentityMode = deps.normalizeChoice(options.identityMode, IDENTITY_MODE_CHOICES);
+	const existingIdentityMode = resolveIdentityModeFromConfig(existingConfig);
 	const configuredIdentityPreset = deps.normalizeChoice(options.identityPreset, IDENTITY_PRESET_CHOICES);
 	const existingIdentityPreset = deps.normalizeChoice(existingIdentity.preset, IDENTITY_PRESET_CHOICES);
+	if (options.identityMode && !configuredIdentityMode) {
+		failSetupValidation(
+			`Unknown --identity-mode value: ${options.identityMode}. Valid choices: ${IDENTITY_MODE_CHOICES.join(", ")}.`,
+		);
+	}
 	if (options.identityPreset && !configuredIdentityPreset) {
 		failSetupValidation(
 			`Unknown --identity-preset value: ${options.identityPreset}. Valid choices: ${IDENTITY_PRESET_CHOICES.join(", ")}.`,
@@ -248,11 +325,42 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 			});
 			const signetSecretsEnabled = await resolveSignetSecretsCorePluginSelection(basePath, true, options);
 			const graphiqEnabled = await resolveGraphiqPluginSelection(basePath, true, options);
+			if (existing.agentYaml) {
+				writeCapabilitySelection(basePath, existingConfig, configuredIdentityMode ?? existingIdentityMode, signetSecretsEnabled);
+				scaffoldIdentityIfNeeded(basePath, configuredIdentityMode ?? existingIdentityMode, existingIdentityMode);
+			}
 			writeSetupCorePluginRegistry(basePath, { signetSecretsEnabled, graphiqEnabled });
 			if (graphiqEnabled) {
 				await installGraphiqPlugin({ agentsDir: basePath });
 			} else {
 				disableGraphiqState(basePath);
+			}
+
+			const resolvedIdentityMode = configuredIdentityMode ?? existingIdentityMode;
+
+			// When identity mode changes to off/passthrough, run stale identity cleanup
+			// for all detected and configured harnesses even if --harness was not passed.
+			if (resolvedIdentityMode !== "managed" && existingIdentityMode === "managed") {
+				const h = existing.harnesses;
+				const detectedIds = new Set<string>();
+				if (h.claudeCode) detectedIds.add("claude-code");
+				if (h.openclaw) detectedIds.add("openclaw");
+				if (h.opencode) detectedIds.add("opencode");
+				if (h.codex) detectedIds.add("codex");
+				if (h.ohMyPi) detectedIds.add("oh-my-pi");
+				if (h.pi) detectedIds.add("pi");
+				if (h.hermesAgent) detectedIds.add("hermes-agent");
+				if (h.gemini) detectedIds.add("gemini");
+				// Also include harnesses listed in agent.yaml config
+				const configured = deps.loadConfiguredHarnesses?.(basePath) ?? [];
+				for (const id of configured) detectedIds.add(id);
+				for (const harness of detectedIds) {
+					try {
+						await deps.configureHarnessHooks(harness, basePath);
+					} catch {
+						// best-effort cleanup
+					}
+				}
 			}
 
 			const requestedHarnesses = normalizeHarnessList(options.harness, deps);
@@ -381,6 +489,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 
 			await runExistingSetupWizard(basePath, existing, existingConfig, deps, {
 				nonInteractive: true,
+				identityMode: configuredIdentityMode ?? existingIdentityMode,
 				openDashboard: options.openDashboard === true,
 				skipGit: options.skipGit === true,
 				allowUnprotectedWorkspace: options.allowUnprotectedWorkspace === true,
@@ -472,8 +581,10 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 
 			const signetSecretsEnabled = await resolveSignetSecretsCorePluginSelection(basePath, false, options);
 			const graphiqEnabled = await resolveGraphiqPluginSelection(basePath, false, options);
+			const migrationIdentityMode = configuredIdentityMode ?? (await promptIdentityMode(existingIdentityMode));
 
 			await runExistingSetupWizard(basePath, existing, existingConfig, deps, {
+				identityMode: migrationIdentityMode,
 				allowUnprotectedWorkspace: false,
 				createLocalBackup: false,
 				embeddingProvider: migrationEmbeddingProvider,
@@ -492,14 +603,14 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 			return;
 		}
 	} else {
-		console.log(chalk.bold("  Let's set up your agent identity.\n"));
+		console.log(chalk.bold("  Let's set up your Signet workspace.\n"));
 
 		const setupMethod = nonInteractive
 			? "new"
 			: await select({
 					message: "How would you like to set up?",
 					choices: [
-						{ value: "new", name: "Create new agent identity" },
+						{ value: "new", name: "Create new Signet workspace" },
 						{ value: "github", name: "Import from GitHub repository" },
 					],
 				});
@@ -513,39 +624,43 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		console.log();
 	}
 
-	const defaultIdentityPreset: IdentityPresetName = configuredIdentityPreset ?? existingIdentityPreset ?? "minimal";
-	const identityPreset: IdentityPresetName = nonInteractive
-		? defaultIdentityPreset
-		: await select({
-				message: "Identity/context preset:",
-				choices: [
-					{
-						value: "minimal",
-						name: "Minimal — AGENTS.md startup context + DREAMING.md for dreaming sessions",
-						description: "Lowest token use; DREAMING.md is special-session only.",
-					},
-					{
-						value: "hermes",
-						name: "Hermes — SOUL.md primary identity + AGENTS.md/project context",
-						description: "Grounded in Hermes' current SOUL.md and project-context discovery model.",
-					},
-					{
-						value: "openclaw",
-						name: "OpenClaw — rich character-forward identity stack",
-						description: "AGENTS, SOUL, IDENTITY, USER, MEMORY plus special HEARTBEAT/DREAMING/BOOTSTRAP prompts.",
-					},
-					{
-						value: "custom",
-						name: "Custom — choose startup files explicitly",
-						description: "Start from Minimal, then select files and order for token efficiency.",
-					},
-				],
-				default: defaultIdentityPreset,
-			});
+	const defaultIdentityMode: IdentityMode = configuredIdentityMode ?? existingIdentityMode ?? "managed";
+	const identityMode: IdentityMode = nonInteractive ? defaultIdentityMode : await promptIdentityMode(defaultIdentityMode);
 
-	let startupIdentityFiles = cloneStartupFiles(identityPreset);
-	let specialIdentityFiles = cloneSpecialFiles(identityPreset);
-	if (!nonInteractive && identityPreset === "custom") {
+	const defaultIdentityPreset: IdentityPresetName = configuredIdentityPreset ?? existingIdentityPreset ?? "minimal";
+	const identityPreset: IdentityPresetName =
+		identityMode === "managed" && !nonInteractive
+			? await select({
+					message: "Identity/context preset:",
+					choices: [
+						{
+							value: "minimal",
+							name: "Minimal — AGENTS.md startup context + DREAMING.md for dreaming sessions",
+							description: "Lowest token use; DREAMING.md is special-session only.",
+						},
+						{
+							value: "hermes",
+							name: "Hermes — SOUL.md primary identity + AGENTS.md/project context",
+							description: "Grounded in Hermes' current SOUL.md and project-context discovery model.",
+						},
+						{
+							value: "openclaw",
+							name: "OpenClaw — rich character-forward identity stack",
+							description: "AGENTS, SOUL, IDENTITY, USER, MEMORY plus special HEARTBEAT/DREAMING/BOOTSTRAP prompts.",
+						},
+						{
+							value: "custom",
+							name: "Custom — choose startup files explicitly",
+							description: "Start from Minimal, then select files and order for token efficiency.",
+						},
+					],
+					default: defaultIdentityPreset,
+				})
+			: defaultIdentityPreset;
+
+	let startupIdentityFiles = identityMode === "managed" ? cloneStartupFiles(identityPreset) : [];
+	let specialIdentityFiles = identityMode === "managed" ? cloneSpecialFiles(identityPreset) : [];
+	if (identityMode === "managed" && !nonInteractive && identityPreset === "custom") {
 		const availableStartupFiles = [...IDENTITY_PRESETS.openclaw.startup, ...IDENTITY_PRESETS.hermes.startup].filter(
 			(entry, index, entries) => entries.findIndex((candidate) => candidate.path === entry.path) === index,
 		);
@@ -1082,6 +1197,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		createLocalBackup: options.createLocalBackup === true,
 		signetSecretsEnabled,
 		graphiqEnabled,
+		identityMode,
 		identityPreset,
 		startupIdentityFiles,
 		specialIdentityFiles,

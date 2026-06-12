@@ -6,6 +6,7 @@ import { buildAgentMemoryConfig, getAgentIdentityFiles, normalizeAgentRosterEntr
 import {
 	STATIC_IDENTITY_SESSION_START_TIMEOUT_STATUS,
 	detectExistingSetup,
+	loadIdentityMode,
 	readStaticIdentity,
 	resolvePromptSubmitTimeoutMs,
 	resolveSessionStartTimeoutMs,
@@ -136,6 +137,18 @@ describe("readStaticIdentity", () => {
 		expect(result).toContain("agents");
 		expect(result).not.toContain("dreaming");
 		expect(result).not.toContain("soul");
+	});
+
+	test("identity mode off disables startup identity fallback", () => {
+		writeFileSync(
+			join(TMP, "agent.yaml"),
+			"capabilities:\n  identity:\n    mode: off\nidentity:\n  preset: minimal\n  startup:\n    load:\n      - path: AGENTS.md\n        role: operating_instructions\n",
+		);
+		writeFileSync(join(TMP, "AGENTS.md"), "agents");
+
+		expect(loadIdentityMode(TMP)).toBe("off");
+		expect(resolveStartupIdentityFiles(TMP)).toEqual([]);
+		expect(readStaticIdentity(TMP)).toBeNull();
 	});
 
 	test("respects configured startup identity file order", () => {

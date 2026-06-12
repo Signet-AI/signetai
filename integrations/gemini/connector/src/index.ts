@@ -16,9 +16,10 @@ import {
 	type InstallResult,
 	type UninstallResult,
 	atomicWriteJson,
+	isSignetGeneratedFile,
 	resolveSignetWorkspacePath,
 } from "@signet/connector-base";
-import { expandHome, hasValidIdentity } from "@signet/core";
+import { expandHome, hasValidIdentity, loadIdentityMode } from "@signet/core";
 
 type JsonObject = Record<string, unknown>;
 
@@ -74,6 +75,8 @@ export class GeminiConnector extends BaseConnector {
 		const configsPatched: string[] = [];
 		const expandedBasePath = expandHome(basePath || join(homedir(), ".agents"));
 
+		const identityMode = loadIdentityMode(expandedBasePath);
+
 		if (!hasValidIdentity(expandedBasePath)) {
 			return {
 				success: false,
@@ -100,9 +103,25 @@ export class GeminiConnector extends BaseConnector {
 			configsPatched.push(this.getConfigPath());
 		}
 
-		const geminiMdPath = this.generateGeminiMd(expandedBasePath);
-		if (geminiMdPath) {
-			filesWritten.push(geminiMdPath);
+		// Generate GEMINI.md from identity files only when identity is managed
+		if (identityMode === "managed") {
+			const geminiMdPath = this.generateGeminiMd(expandedBasePath);
+			if (geminiMdPath) {
+				filesWritten.push(geminiMdPath);
+			}
+		} else {
+			// Clean up any previously Signet-generated GEMINI.md when identity is off/passthrough
+			const staleGeminiMd = this.getGeminiMdPath();
+			if (existsSync(staleGeminiMd)) {
+				try {
+					const raw = readFileSync(staleGeminiMd, "utf-8");
+					if (isSignetGeneratedFile(raw)) {
+						rmSync(staleGeminiMd);
+					}
+				} catch {
+					// Non-fatal
+				}
+			}
 		}
 
 		const skillsSource = join(expandedBasePath, "skills");
@@ -133,7 +152,7 @@ export class GeminiConnector extends BaseConnector {
 		const geminiMdPath = this.getGeminiMdPath();
 		if (existsSync(geminiMdPath)) {
 			const raw = readFileSync(geminiMdPath, "utf-8");
-			if (raw.includes("Auto-generated from")) {
+			if (isSignetGeneratedFile(raw)) {
 				rmSync(geminiMdPath);
 				filesRemoved.push(geminiMdPath);
 			}

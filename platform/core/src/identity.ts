@@ -36,6 +36,10 @@ export function resolveAgentBasePath(agentName: string, workspaceDir: string): s
  */
 export type IdentityPresetName = "minimal" | "hermes" | "openclaw" | "custom";
 
+export type IdentityMode = "managed" | "passthrough" | "off";
+
+export const IDENTITY_MODES = ["managed", "passthrough", "off"] as const;
+
 export type IdentityFileContext = "startup" | "session";
 
 export type IdentitySessionKind = "dreaming" | "heartbeat" | "bootstrap";
@@ -495,9 +499,13 @@ export function loadIdentityFilesSync(basePath: string): IdentityMap {
 }
 
 /**
- * Check if a directory has the minimum required identity files
+ * Check if a directory has the minimum required identity files.
+ * Returns false when identity mode is off or passthrough — those modes
+ * intentionally omit identity files.
  */
 export function hasValidIdentity(basePath: string): boolean {
+	const mode = loadIdentityMode(basePath);
+	if (mode !== "managed") return true; // identity files not required
 	for (const key of REQUIRED_IDENTITY_KEYS) {
 		const spec = IDENTITY_FILES[key];
 		if (!existsSync(join(basePath, spec.path))) {
@@ -508,9 +516,13 @@ export function hasValidIdentity(basePath: string): boolean {
 }
 
 /**
- * Get list of missing required identity files
+ * Get list of missing required identity files.
+ * Returns an empty list when identity mode is off or passthrough.
  */
 export function getMissingIdentityFiles(basePath: string): string[] {
+	const mode = loadIdentityMode(basePath);
+	if (mode !== "managed") return [];
+
 	const missing: string[] = [];
 
 	for (const key of REQUIRED_IDENTITY_KEYS) {
@@ -551,6 +563,39 @@ function isSafeRelativeIdentityPath(path: string): boolean {
 
 function readRecord(value: unknown): Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+function isIdentityMode(value: unknown): value is IdentityMode {
+	return typeof value === "string" && (IDENTITY_MODES as readonly string[]).includes(value);
+}
+
+export function resolveIdentityModeFromConfig(config: unknown): IdentityMode {
+	const root = readRecord(config);
+	const capabilities = readRecord(root.capabilities);
+	const capabilityIdentity = readRecord(capabilities.identity);
+	if (isIdentityMode(capabilityIdentity.mode)) return capabilityIdentity.mode;
+
+	const identity = readRecord(root.identity);
+	if (isIdentityMode(identity.mode)) return identity.mode;
+	if (identity.enabled === false) return "off";
+
+	// Existing installs predate capability modules and should keep the current
+	// rich identity behavior unless they explicitly opt out.
+	return "managed";
+}
+
+export function loadIdentityMode(agentsDir: string): IdentityMode {
+	const agentYaml = join(agentsDir, "agent.yaml");
+	if (!existsSync(agentYaml)) return "managed";
+	try {
+		return resolveIdentityModeFromConfig(parseSimpleYaml(readFileSync(agentYaml, "utf-8")));
+	} catch {
+		return "managed";
+	}
+}
+
+export function identityModeManagesFiles(mode: IdentityMode): boolean {
+	return mode === "managed";
 }
 
 function readIdentityEntry(value: unknown): IdentityContextFileEntry | null {
@@ -597,6 +642,7 @@ export function resolveStartupIdentityFiles(agentsDir: string): IdentityContextF
 	if (!existsSync(agentYaml)) return STATIC_BUDGETS.map(({ file, budget }) => ({ path: file, budget }));
 	try {
 		const config = parseSimpleYaml(readFileSync(agentYaml, "utf-8"));
+		if (!identityModeManagesFiles(resolveIdentityModeFromConfig(config))) return [];
 		const identity = readRecord(config.identity);
 		const startup = readRecord(identity.startup);
 		const configured = readIdentityEntryList(startup.load);
@@ -617,6 +663,7 @@ export function resolveSpecialIdentityFiles(agentsDir: string, kind: IdentitySes
 	}
 	try {
 		const config = parseSimpleYaml(readFileSync(agentYaml, "utf-8"));
+		if (!identityModeManagesFiles(resolveIdentityModeFromConfig(config))) return [];
 		const identity = readRecord(config.identity);
 		const configured = readSpecialIdentityEntryList(identity.special).filter((entry) => entry.kind === kind);
 		if (configured.length > 0) return configured;
@@ -657,6 +704,7 @@ export function resolvePromptSubmitTimeoutMs(raw?: string): number {
  */
 export function readStaticIdentity(agentsDir: string, status = STATIC_IDENTITY_OFFLINE_STATUS): string | null {
 	if (!existsSync(agentsDir)) return null;
+	if (!identityModeManagesFiles(loadIdentityMode(agentsDir))) return null;
 
 	const parts: string[] = [];
 
