@@ -225,10 +225,17 @@ export function buildMemoryTimeline(
 		readonly now?: Date;
 		/** Minutes west of UTC (Date.getTimezoneOffset()). Defaults to 0. */
 		readonly tzOffsetMin?: number;
+		/** Optional agent scope filter (undefined = all). */
+		readonly agentId?: string;
+		readonly readPolicy?: string;
+		readonly policyGroup?: string;
 	},
 ): MemoryTimelineResponse {
 	const now = options?.now ?? new Date();
 	const tzOffsetMin = options?.tzOffsetMin ?? 0;
+	const scopeAgentId = options?.agentId;
+	const scopeReadPolicy = options?.readPolicy;
+	const scopePolicyGroup = options?.policyGroup;
 	const nowStartMs = startOfLocalDay(now.getTime(), tzOffsetMin);
 	const buckets = createBuckets(nowStartMs);
 
@@ -236,15 +243,33 @@ export function buildMemoryTimeline(
 	const cutoffMs = nowStartMs - 29 * MS_PER_DAY;
 	const cutoffIso = new Date(cutoffMs).toISOString();
 
+	const scopePredicates: string[] = [];
+	const scopeParams: unknown[] = [];
+	if (scopeAgentId) {
+		if (scopeReadPolicy === "shared") {
+			scopePredicates.push("(visibility = 'global' OR agent_id = ?) AND visibility != 'archived'");
+			scopeParams.push(scopeAgentId);
+		} else if (scopeReadPolicy === "group" && scopePolicyGroup) {
+			scopePredicates.push(
+				"((visibility = 'global' AND agent_id IN (SELECT id FROM agents WHERE policy_group = ?)) OR agent_id = ?) AND visibility != 'archived'",
+			);
+			scopeParams.push(scopePolicyGroup, scopeAgentId);
+		} else {
+			scopePredicates.push("agent_id = ? AND visibility != 'archived'");
+			scopeParams.push(scopeAgentId);
+		}
+	}
+	const scopeSql = scopePredicates.length > 0 ? ` AND ${scopePredicates.join(" AND ")}` : "";
+
 	const memoryRows = db
 		.prepare(
 			`SELECT id, created_at, type, who, tags, importance, pinned
 			 FROM memories
 			 WHERE is_deleted = 0
-			   AND created_at >= ?
+			   AND created_at >= ?${scopeSql}
 			 ORDER BY created_at DESC`,
 		)
-		.all(cutoffIso) as MemoryRow[];
+		.all(cutoffIso, ...scopeParams) as MemoryRow[];
 
 	const historyRows = db
 		.prepare(
@@ -252,10 +277,10 @@ export function buildMemoryTimeline(
 			 FROM memory_history h
 			 INNER JOIN memories m ON m.id = h.memory_id
 			 WHERE m.is_deleted = 0
-			   AND h.created_at >= ?
+			   AND h.created_at >= ?${scopeSql.replace(/agent_id/g, "m.agent_id").replace(/policy_group/g, "m.policy_group")}
 			 ORDER BY h.created_at DESC`,
 		)
-		.all(cutoffIso) as HistoryRow[];
+		.all(cutoffIso, ...scopeParams) as HistoryRow[];
 
 	let invalidMemoryTimestamps = 0;
 	let invalidHistoryTimestamps = 0;

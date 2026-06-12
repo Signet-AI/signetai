@@ -571,11 +571,15 @@ function registerRecall(app: Hono): void {
 				}
 				authRecallLlmLimiter.record(actor);
 			}
+			const requestedProject = parseOptionalString(body.project);
+			const scopedP = resolveScopedProject(c, requestedProject);
+			if (scopedP.error) return c.json({ error: scopedP.error }, 403);
+			const project = scopedP.project ?? requestedProject;
 			const params = {
 				query: body.query,
 				keywordQuery: body.keywordQuery,
 				limit: body.limit,
-				project: body.project,
+				project,
 				aggregate: body.aggregate,
 				aggregateBudget,
 				aggregate_budget: aggregateBudget,
