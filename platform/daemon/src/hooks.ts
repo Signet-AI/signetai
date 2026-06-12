@@ -130,11 +130,12 @@ import { assembleInheritedContextBlock, resolveParentSession } from "./subagent-
 import { searchTemporalFallback } from "./temporal-fallback";
 import { writeTranscriptAudit } from "./transcript-audit";
 import {
-	appendCanonicalTranscriptTurns,
-	canonicalTranscriptRelativePath,
-	inferTranscriptSourceFormat,
-	writeCanonicalTranscriptSnapshot,
-} from "./transcript-jsonl";
+	appendCanonicalLiveTranscriptTurns as appendCanonicalLiveTranscriptTurnsForPath,
+	appendLivePromptTranscript,
+	formatLivePromptTranscript,
+	writeCanonicalTranscriptFromSnapshot as writeCanonicalTranscriptFromSnapshotForPath,
+} from "./transcript-capture";
+import { canonicalTranscriptRelativePath } from "./transcript-jsonl";
 import {
 	normalizeCodexTranscript,
 	normalizeJsonConversationTranscript,
@@ -154,70 +155,6 @@ const deferredSessionEndWork = new Set<Promise<void>>();
 
 export async function flushDeferredSessionEndWorkForTests(): Promise<void> {
 	await Promise.allSettled([...deferredSessionEndWork]);
-}
-
-async function writeCanonicalTranscriptFromSnapshot(params: {
-	readonly agentId: string;
-	readonly harness: string;
-	readonly sessionKey: string | null;
-	readonly sessionId?: string | null;
-	readonly project?: string | null;
-	readonly rawTranscript: string;
-	readonly transcript: string;
-	readonly capturedAt?: string;
-	readonly transcriptPath?: string;
-}): Promise<void> {
-	await ensureCanonicalTranscriptHistory(getAgentsDir(), params.agentId);
-	await writeCanonicalTranscriptSnapshot({
-		basePath: getAgentsDir(),
-		agentId: params.agentId,
-		harness: params.harness,
-		sessionKey: params.sessionKey,
-		sessionId: params.sessionId,
-		project: params.project ?? null,
-		capturedAt: params.capturedAt,
-		sourceFormat: params.rawTranscript ? inferTranscriptSourceFormat(params.rawTranscript) : "normalized",
-		sourcePath: params.transcriptPath,
-		transcript: params.transcript,
-	});
-}
-
-async function appendCanonicalLiveTranscriptTurns(params: {
-	readonly agentId: string;
-	readonly harness: string;
-	readonly sessionKey: string;
-	readonly project?: string | null;
-	readonly userMessage: string;
-	readonly lastAssistantMessage?: string;
-}): Promise<void> {
-	await ensureCanonicalTranscriptHistory(getAgentsDir(), params.agentId);
-	await appendCanonicalTranscriptTurns({
-		basePath: getAgentsDir(),
-		agentId: params.agentId,
-		harness: params.harness,
-		sessionKey: params.sessionKey,
-		project: params.project ?? null,
-		sourceFormat: "live",
-		turns: [
-			...(params.lastAssistantMessage ? [{ role: "assistant" as const, content: params.lastAssistantMessage }] : []),
-			{ role: "user" as const, content: params.userMessage },
-		],
-	});
-}
-
-function formatLivePromptTranscript(userMessage: string, lastAssistantMessage?: string): string {
-	return [lastAssistantMessage ? `Assistant: ${lastAssistantMessage}` : "", `User: ${userMessage}`]
-		.filter((turn) => turn.trim().length > 0)
-		.join("\n");
-}
-
-function appendLivePromptTranscript(previous: string | undefined, liveTranscript: string): string {
-	const current = liveTranscript.trim();
-	if (!previous || previous.trim().length === 0) return current;
-
-	const stored = previous.trimEnd();
-	if (stored.endsWith(current)) return stored;
-	return `${stored}\n${current}`;
 }
 
 function loadDbAccessor() {
@@ -1476,7 +1413,8 @@ export async function handleUserPromptSubmit(
 				if (!prev || transcript.length >= prev.length) {
 					deps.upsertSessionTranscript(req.sessionKey, transcript, req.harness, req.project ?? null, agentId);
 				}
-				await writeCanonicalTranscriptFromSnapshot({
+				await writeCanonicalTranscriptFromSnapshotForPath({
+					basePath: getAgentsDir(),
 					agentId,
 					harness: req.harness,
 					sessionKey: req.sessionKey,
@@ -1501,7 +1439,8 @@ export async function handleUserPromptSubmit(
 					req.project ?? null,
 					agentId,
 				);
-				await appendCanonicalLiveTranscriptTurns({
+				await appendCanonicalLiveTranscriptTurnsForPath({
+					basePath: getAgentsDir(),
 					agentId,
 					harness: req.harness,
 					sessionKey: req.sessionKey,
@@ -1903,7 +1842,8 @@ async function deferSessionEndWork(params: {
 	if (transcript.trim().length > 0) {
 		try {
 			if (!isNoiseSession({ project: cwd, sessionKey: sessionKey ?? null, sessionId, harness })) {
-				await writeCanonicalTranscriptFromSnapshot({
+				await writeCanonicalTranscriptFromSnapshotForPath({
+					basePath: getAgentsDir(),
 					agentId,
 					harness,
 					sessionKey: sessionKey ?? null,
