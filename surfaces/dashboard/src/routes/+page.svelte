@@ -148,13 +148,19 @@ $effect(() => {
 });
 
 async function refreshAuthGate(): Promise<void> {
-	const status = await getAuthStatus();
-	authProviders = status?.providers ?? [];
-	if (!status || status.effectiveAccess || status.mode === "local" || status.authenticated) {
-		authGate = "open";
-		return;
+	try {
+		const status = await getAuthStatus();
+		authProviders = status?.providers ?? [];
+		if (!status || status.effectiveAccess || status.mode === "local" || status.authenticated) {
+			authGate = "open";
+			return;
+		}
+		authGate = "login";
+	} catch {
+		// Fail closed: network errors mean we cannot confirm access,
+		// so stay on login to avoid leaking the dashboard.
+		authGate = "login";
 	}
-	authGate = "login";
 }
 
 function handleAuthenticated(): void {
