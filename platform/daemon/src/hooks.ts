@@ -107,6 +107,15 @@ import {
 } from "./session-memories";
 import { isNoiseSession } from "./session-noise";
 import { advanceRecallContextEpoch, claimRecallItems } from "./session-recall-dedupe";
+import {
+	clearRawSessionStartDedupeKey,
+	clearSessionStartDedupe,
+	hasSessionStartDedupe,
+	markSessionStartDedupe,
+	pruneSessionStartDedupe,
+	resetSessionStartDedupe,
+	sessionStartRecallKey,
+} from "./session-start-state";
 import { getExpiryWarning } from "./session-tracker";
 import {
 	ensureCanonicalTranscriptHistory,
@@ -206,62 +215,6 @@ function appendLivePromptTranscript(previous: string | undefined, liveTranscript
 	const stored = previous.trimEnd();
 	if (stored.endsWith(current)) return stored;
 	return `${stored}\n${current}`;
-}
-
-// ---------------------------------------------------------------------------
-// Hook dedup state (in-memory, fail-open on restart)
-// ---------------------------------------------------------------------------
-
-/** Tracks which sessions have already received a full session-start inject. */
-const sessionStartSeen = new Map<string, number>();
-const SESSION_START_SEEN_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-
-function sessionStartDedupeKey(req: {
-	readonly harness?: string;
-	readonly agentId?: string;
-	readonly project?: string;
-	readonly cwd?: string;
-	readonly sessionKey?: string;
-	readonly sessionId?: string;
-}): string | null {
-	const sessionKey = req.sessionKey || req.sessionId;
-	if (!sessionKey) return null;
-	return [
-		resolveAgentId({ agentId: req.agentId, sessionKey }),
-		req.harness ?? "",
-		req.project ?? req.cwd ?? "",
-		sessionKey,
-	].join("\0");
-}
-
-function sessionStartRecallKey(req: {
-	readonly harness?: string;
-	readonly project?: string;
-	readonly cwd?: string;
-	readonly sessionKey?: string;
-	readonly sessionId?: string;
-}): string | null {
-	const sessionKey = req.sessionKey || req.sessionId;
-	if (!sessionKey) return null;
-	return [req.harness ?? "", req.project ?? req.cwd ?? "", sessionKey].join("\0");
-}
-
-function pruneSessionStartSeen(now = Date.now()): void {
-	for (const [sessionKey, seenAt] of sessionStartSeen.entries()) {
-		if (now - seenAt > SESSION_START_SEEN_TTL_MS) sessionStartSeen.delete(sessionKey);
-	}
-}
-
-export function resetSessionStartDedupe(req: {
-	readonly harness?: string;
-	readonly agentId?: string;
-	readonly project?: string;
-	readonly cwd?: string;
-	readonly sessionKey?: string;
-	readonly sessionId?: string;
-}): void {
-	const key = sessionStartDedupeKey(req);
-	if (key) sessionStartSeen.delete(key);
 }
 
 function loadDbAccessor() {
@@ -511,6 +464,7 @@ export interface RecallRequest {
 // Shared Helpers
 // ============================================================================
 
+export { resetSessionStartDedupe };
 export { effectiveScore, inferType, isDuplicate };
 
 export {
@@ -693,10 +647,9 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 	if (isClearSessionStart(req)) {
 		const sessionKey = req.sessionKey?.trim();
 		const recoveredJobId = recoverMissingSessionEndOnClearStart(req, agentId, memoryCfg, new Date().toISOString());
-		const dedupeKey = sessionStartDedupeKey(req);
-		if (dedupeKey) sessionStartSeen.delete(dedupeKey);
+		clearSessionStartDedupe(req);
 		if (sessionKey) {
-			sessionStartSeen.delete(sessionKey);
+			clearRawSessionStartDedupeKey(sessionKey);
 			clearContinuity(sessionKey);
 			advanceRecallContextEpoch({
 				sessionKey: sessionStartRecallKey(req),
@@ -716,9 +669,8 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 	// Dedup guard: if we already sent a full inject for this session, return
 	// a minimal stub. Identity files / MEMORY.md are already in the context.
 	// Must fire BEFORE initContinuity to avoid resetting accumulated state.
-	pruneSessionStartSeen();
-	const dedupeKey = sessionStartDedupeKey(req);
-	if (dedupeKey && sessionStartSeen.has(dedupeKey)) {
+	pruneSessionStartDedupe();
+	if (hasSessionStartDedupe(req)) {
 		logger.info("hooks", "Session start dedup — returning minimal stub", {
 			harness: req.harness,
 			sessionKey: req.sessionKey,
@@ -1242,9 +1194,7 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 	});
 
 	// Mark this session as having received the full inject
-	if (dedupeKey) {
-		sessionStartSeen.set(dedupeKey, Date.now());
-	}
+	markSessionStartDedupe(req);
 
 	return {
 		identity,
@@ -1921,9 +1871,8 @@ export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionE
 
 	if (req.reason === "clear") {
 		// Caller intends to discard session context — skip checkpoint, just clean up
-		const dedupeKey = sessionStartDedupeKey(req);
-		if (dedupeKey) sessionStartSeen.delete(dedupeKey);
-		if (sessionKey) sessionStartSeen.delete(sessionKey);
+		clearSessionStartDedupe(req);
+		clearRawSessionStartDedupeKey(sessionKey);
 		advanceRecallContextEpoch({
 			sessionKey: sessionStartRecallKey(req),
 			agentId,
