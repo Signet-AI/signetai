@@ -1,8 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { networkModeFromBindHost, parseSimpleYaml, readNetworkMode, resolveNetworkBinding } from "@signet/core";
+import { networkModeFromBindHost, parseSimpleYaml, readNetworkMode, resolveDefaultBasePath, resolveNetworkBinding } from "@signet/core";
 import { type AnalyticsCollector, createAnalyticsCollector } from "../analytics";
 import { type AuthConfig, AuthRateLimiter, loadOrCreateSecret, parseAuthConfig } from "../auth";
 import { getDbAccessor } from "../db-accessor";
@@ -21,7 +20,7 @@ export let restartPipelineRuntimeRef:
 	| null = null;
 
 // Paths
-export const AGENTS_DIR = process.env.SIGNET_PATH || join(homedir(), ".agents");
+export const AGENTS_DIR = resolveDefaultBasePath();
 export const DAEMON_DIR = join(AGENTS_DIR, ".daemon");
 export const PID_FILE = join(DAEMON_DIR, "pid");
 export const LOG_DIR = join(DAEMON_DIR, "logs");

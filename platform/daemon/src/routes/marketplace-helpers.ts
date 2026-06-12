@@ -10,12 +10,12 @@
  */
 
 import { existsSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
+import { resolveDefaultBasePath } from "@signet/core";
 import type { InstalledMarketplaceMcpServer } from "./marketplace.js";
 
 function getAgentsDir(): string {
-	return process.env.SIGNET_PATH || join(homedir(), ".agents");
+	return resolveDefaultBasePath();
 }
 
 function getInstalledMcpPath(): string {

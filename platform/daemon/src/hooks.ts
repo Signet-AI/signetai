@@ -13,10 +13,9 @@
 import type { Database } from "bun:sqlite";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Worker } from "node:worker_threads";
-import { cosineSimilarity, getAgentIdentityFiles, parseSimpleYaml } from "@signet/core";
+import { cosineSimilarity, getAgentIdentityFiles, parseSimpleYaml, resolveDefaultBasePath } from "@signet/core";
 import { ensureAgentRegistered, getAgentScope, resolveAgentId } from "./agent-id";
 import { extractAnchorTerms } from "./anchor-terms";
 import {
@@ -117,7 +116,7 @@ export function getSynthesisWorker(): Worker | null {
 }
 
 function getAgentsDir(): string {
-	return process.env.SIGNET_PATH || join(homedir(), ".agents");
+	return resolveDefaultBasePath();
 }
 
 function getMemoryDbPath(): string {

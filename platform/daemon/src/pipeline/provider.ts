@@ -22,6 +22,7 @@ import {
 	type PipelineExtractionConfig,
 	type ProviderRateLimitConfig,
 	defaultPipelineModel,
+	resolveDefaultBasePath,
 } from "@signet/core";
 import { logger } from "../logger";
 import { bypassSession } from "../session-tracker";
@@ -1018,7 +1019,7 @@ function acpxEnv(hooks: AcpxHooksMode | undefined, runId?: string): NodeJS.Proce
 }
 
 function getAgentsDir(): string {
-	return process.env.SIGNET_PATH || join(homedir(), ".agents");
+	return resolveDefaultBasePath();
 }
 
 function resolveAcpxCwd(cwd: string | undefined, hooks: AcpxHooksMode | undefined): string | undefined {

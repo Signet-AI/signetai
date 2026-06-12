@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { homedir } from "node:os";
 import { join } from "node:path";
+import { resolveDefaultBasePath } from "@signet/core";
 import type { Hono } from "hono";
 import { requirePermission } from "../auth";
 import { getDbAccessor } from "../db-accessor";
@@ -16,7 +16,7 @@ const MAX_REFLECTION_LIMIT = 100;
 const MAX_REFLECTION_ANSWER_CHARS = 10_000;
 
 function getAgentsDir(): string {
-	return process.env.SIGNET_PATH || join(homedir(), ".agents");
+	return resolveDefaultBasePath();
 }
 
 type ReflectionRouteDeps = {

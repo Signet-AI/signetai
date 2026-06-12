@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import type { PipelineReflectionsConfig } from "@signet/core";
+import { resolveDefaultBasePath } from "@signet/core";
 import { getDbAccessor } from "../db-accessor";
 import { getInferenceProvider } from "../llm";
 import { logger } from "../logger";
@@ -24,7 +24,7 @@ const MINUTE_MS = 60_000;
 const DAY_MS = 24 * 60 * MINUTE_MS;
 
 function getAgentsDir(): string {
-	return process.env.SIGNET_PATH || join(homedir(), ".agents");
+	return resolveDefaultBasePath();
 }
 
 function getLastReflectionPath(agentId: string): string {

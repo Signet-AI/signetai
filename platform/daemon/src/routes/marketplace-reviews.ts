@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
+import { resolveDefaultBasePath } from "@signet/core";
 import type { Hono } from "hono";
 
 type ReviewTargetType = "skill" | "mcp";
@@ -38,7 +38,7 @@ const DEFAULT_CONFIG: ReviewsSyncConfig = {
 };
 
 function getAgentsDir(): string {
-	return process.env.SIGNET_PATH || join(homedir(), ".agents");
+	return resolveDefaultBasePath();
 }
 
 function getMarketplaceDir(): string {

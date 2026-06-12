@@ -1,6 +1,6 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { resolveDefaultBasePath } from "@signet/core";
 import { logger } from "../logger.js";
 
 export type PluginAuditResultV1 = "ok" | "denied" | "degraded" | "error";
@@ -51,7 +51,7 @@ const KNOWN_SECRET_VALUE_RE =
 	/\b(AKIA[0-9A-Z]{16}|github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{12,}|xox[baprs]-[A-Za-z0-9-]{10,})\b/g;
 
 export function getDefaultPluginAuditPath(): string {
-	return join(process.env.SIGNET_PATH || join(homedir(), ".agents"), ".daemon", "plugins", "audit-v1.ndjson");
+	return join(resolveDefaultBasePath(), ".daemon", "plugins", "audit-v1.ndjson");
 }
 
 export function recordPluginAuditEvent(input: RecordPluginAuditEventInputV1, auditPath?: string | null): void {

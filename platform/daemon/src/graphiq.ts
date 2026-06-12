@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { constants, accessSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
-import { readGraphiqState } from "@signet/core";
+import { readGraphiqState, resolveDefaultBasePath } from "@signet/core";
 
 export interface GraphiqCommandResult {
 	readonly activeProject: string;
@@ -11,7 +11,7 @@ export interface GraphiqCommandResult {
 }
 
 export function getAgentsDir(): string {
-	return process.env.SIGNET_PATH || join(homedir(), ".agents");
+	return resolveDefaultBasePath();
 }
 
 export function getActiveGraphiqDbPath(): { readonly activeProject: string; readonly dbPath: string } | null {

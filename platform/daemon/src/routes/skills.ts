@@ -19,10 +19,10 @@ import {
 	rmSync,
 	writeFileSync,
 } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { pipeline } from "node:stream/promises";
-import { getSkillsRunnerCommand, resolvePrimaryPackageManager } from "@signet/core";
+import { getSkillsRunnerCommand, resolveDefaultBasePath, resolvePrimaryPackageManager } from "@signet/core";
 import type { Hono } from "hono";
 import type { Entry, ZipFile } from "yauzl";
 import * as yauzl from "yauzl";
@@ -36,7 +36,7 @@ import { parseSkillFile, patchSkillFrontmatter } from "../pipeline/skill-frontma
 import { installSkillNode, uninstallSkillNode } from "../pipeline/skill-graph.js";
 
 function getAgentsDir(): string {
-	return process.env.SIGNET_PATH || join(homedir(), ".agents");
+	return resolveDefaultBasePath();
 }
 
 function getSkillsDir(): string {

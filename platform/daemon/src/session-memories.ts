@@ -7,13 +7,13 @@
  */
 
 import { existsSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
-import { getDbAccessor, type WriteDb } from "./db-accessor";
+import { resolveDefaultBasePath } from "@signet/core";
+import { type WriteDb, getDbAccessor } from "./db-accessor";
 import { logger } from "./logger";
 
 function getMemoryDbPath(): string {
-	const agentsDir = process.env.SIGNET_PATH || join(homedir(), ".agents");
+	const agentsDir = resolveDefaultBasePath();
 	return join(agentsDir, "memory", "memories.db");
 }
 

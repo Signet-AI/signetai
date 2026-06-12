@@ -1,14 +1,14 @@
 /** App Tray API routes — CRUD for app tray entries and MCP install endpoint. */
 
-import type { Hono } from "hono";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { homedir } from "node:os";
-import type { AutoCardToolAction, AutoCardResource, SignetAppManifest } from "@signet/core";
+import type { AutoCardResource, AutoCardToolAction, SignetAppManifest } from "@signet/core";
+import type { Hono } from "hono";
 
-import { isPrivateHostname } from "../url-validation.js";
-import { loadAppTray, loadProbeResult, probeServer, reprobeServer, storeProbeResult } from "../mcp-probe.js";
+import { resolveDefaultBasePath } from "@signet/core";
 import { logger } from "../logger.js";
+import { loadAppTray, loadProbeResult, probeServer, reprobeServer, storeProbeResult } from "../mcp-probe.js";
+import { isPrivateHostname } from "../url-validation.js";
 import { readInstalledServersPublic } from "./marketplace-helpers.js";
 
 function isValidState(s: string): s is "tray" | "grid" | "dock" {
@@ -221,7 +221,7 @@ export function mountAppTrayRoutes(app: Hono): void {
 
 		tray[index] = updated;
 
-		const agentsDir = process.env.SIGNET_PATH || join(homedir(), ".agents");
+		const agentsDir = resolveDefaultBasePath();
 		const trayPath = join(agentsDir, "marketplace", "app-tray.json");
 		writeFileSync(trayPath, JSON.stringify(tray, null, 2));
 
@@ -309,7 +309,7 @@ export function mountAppTrayRoutes(app: Hono): void {
 							gridPosition: pos,
 							updatedAt: new Date().toISOString(),
 						};
-						const agentsDir = process.env.SIGNET_PATH || join(homedir(), ".agents");
+						const agentsDir = resolveDefaultBasePath();
 						const trayPath = join(agentsDir, "marketplace", "app-tray.json");
 						writeFileSync(trayPath, JSON.stringify(tray, null, 2));
 					}
@@ -330,7 +330,7 @@ export function mountAppTrayRoutes(app: Hono): void {
 }
 
 function getAgentsDir(): string {
-	return process.env.SIGNET_PATH || join(homedir(), ".agents");
+	return resolveDefaultBasePath();
 }
 
 function getMarketplaceDir(): string {

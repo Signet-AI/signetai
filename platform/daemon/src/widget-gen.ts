@@ -8,8 +8,8 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
+import { resolveDefaultBasePath } from "@signet/core";
 import { createEvent, eventBus } from "./event-bus";
 import { getWidgetProvider } from "./llm";
 import { logger } from "./logger";
@@ -20,7 +20,7 @@ import { loadProbeResult } from "./mcp-probe";
 // ---------------------------------------------------------------------------
 
 function agentsDir(): string {
-	return process.env.SIGNET_PATH || join(homedir(), ".agents");
+	return resolveDefaultBasePath();
 }
 
 export function widgetDir(): string {

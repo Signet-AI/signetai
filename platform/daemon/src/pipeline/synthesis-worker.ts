@@ -10,9 +10,9 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import type { PipelineSynthesisConfig } from "@signet/core";
+import { resolveDefaultBasePath } from "@signet/core";
 import { getDbAccessor } from "../db-accessor";
 import { handleSynthesisRequest, writeMemoryMd } from "../hooks";
 import { logger } from "../logger";
@@ -35,7 +35,7 @@ const DEFAULT_DEPS: SynthesisDeps = {
 };
 
 function getAgentsDir(): string {
-	return process.env.SIGNET_PATH || join(homedir(), ".agents");
+	return resolveDefaultBasePath();
 }
 
 function normalizeAgentId(agentId?: string): string {

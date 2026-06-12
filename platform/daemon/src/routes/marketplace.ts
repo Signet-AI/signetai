@@ -5,11 +5,11 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { resolveDefaultBasePath } from "@signet/core";
 import type { Hono } from "hono";
 import { getDbAccessor } from "../db-accessor.js";
 import { logger } from "../logger.js";
@@ -150,7 +150,7 @@ let referenceCatalogCache: {
 const toolsCache = new Map<string, MarketplaceToolsCache>();
 
 function getAgentsDir(): string {
-	return process.env.SIGNET_PATH || join(homedir(), ".agents");
+	return resolveDefaultBasePath();
 }
 
 function getMarketplaceDir(): string {

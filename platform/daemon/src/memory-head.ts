@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { resolveDefaultBasePath } from "@signet/core";
 import { getDbAccessor } from "./db-accessor";
 import { countChanges } from "./db-helpers";
 import { loadMemoryConfig } from "./memory-config";
@@ -10,7 +10,7 @@ import { countTokens, truncateToTokens } from "./pipeline/tokenizer";
 export const MEMORY_HEAD_MAX_TOKENS = 5000;
 
 function getAgentsDir(): string {
-	return process.env.SIGNET_PATH || join(homedir(), ".agents");
+	return resolveDefaultBasePath();
 }
 
 interface LeaseRow {

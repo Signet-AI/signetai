@@ -5,9 +5,8 @@
  * Polls every 15 seconds (cron granularity is minutes).
  */
 
-import { homedir } from "node:os";
-import { join } from "node:path";
 import type { TaskHarness } from "@signet/core";
+import { resolveDefaultBasePath } from "@signet/core";
 import type { DbAccessor, ReadDb } from "../db-accessor";
 import { logger } from "../logger";
 import { loadMemoryConfig } from "../memory-config";
@@ -38,7 +37,7 @@ function taskModelCacheKey(harness: "claude-code" | "codex", agentsDir: string):
 }
 
 function getAgentsDir(): string {
-	return process.env.SIGNET_PATH || join(homedir(), ".agents");
+	return resolveDefaultBasePath();
 }
 
 function isTaskHarness(value: string): value is TaskHarness {

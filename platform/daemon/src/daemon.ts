@@ -25,6 +25,7 @@ import {
 	normalizeAgentRosterEntry,
 	parseRoutingTargetRef,
 	parseSimpleYaml,
+	resolveDefaultBasePath,
 	stripSignetBlock,
 } from "@signet/core";
 import { watch } from "chokidar";
@@ -82,7 +83,6 @@ import {
 	analyticsCollector,
 	authConfig,
 	bindAbort,
-	embeddingTrackerHandle as sharedEmbeddingTrackerHandle,
 	invalidateDiagnosticsCache,
 	providerRuntimeResolution,
 	providerTracker,
@@ -95,6 +95,7 @@ import {
 	setRestartPipelineRuntime,
 	setShuttingDown,
 	setTelemetryRef,
+	embeddingTrackerHandle as sharedEmbeddingTrackerHandle,
 	shuttingDown,
 } from "./routes/state.js";
 import { startSchedulerWorker } from "./scheduler";
@@ -194,7 +195,7 @@ export function countConnectorsActive(connectors: readonly { readonly status: st
 export const app = new Hono();
 
 registerGlobalMiddleware(app, { getShadowProcess: () => shadowProcess });
-getOrCreateInferenceRouter(process.env.SIGNET_PATH || join(homedir(), ".agents"));
+getOrCreateInferenceRouter(resolveDefaultBasePath());
 
 mountHealthRoutes(app);
 mountMcpRoute(app);

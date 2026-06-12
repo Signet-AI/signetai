@@ -7,9 +7,9 @@
  */
 
 import { mkdirSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { resolveDefaultBasePath } from "@signet/core";
 import { logger } from "./logger";
 import { getNativeTransformersBindings, materializeEmbeddedWasmAssets } from "./native-runtime-assets";
 
@@ -197,7 +197,7 @@ const INIT_RETRY_COOLDOWN_MS = 300_000;
 // ---------------------------------------------------------------------------
 
 function getCacheDir(): string {
-	const agentsDir = process.env.SIGNET_PATH || join(homedir(), ".agents");
+	const agentsDir = resolveDefaultBasePath();
 	return join(agentsDir, ".models");
 }
 

@@ -13,8 +13,9 @@
 import { execSync, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir, hostname } from "node:os";
+import { hostname } from "node:os";
 import { join } from "node:path";
+import { resolveDefaultBasePath } from "@signet/core";
 import {
 	BITWARDEN_ACTIVE_PROVIDER_SECRET,
 	BITWARDEN_MANAGED_FOLDER_SECRET,
@@ -37,7 +38,7 @@ import { SIGNET_SECRETS_PLUGIN_ID } from "./plugins/bundled/secrets.js";
 // ---------------------------------------------------------------------------
 
 function getAgentsDir(): string {
-	return process.env.SIGNET_PATH || join(homedir(), ".agents");
+	return resolveDefaultBasePath();
 }
 
 function getSecretsDir(): string {
