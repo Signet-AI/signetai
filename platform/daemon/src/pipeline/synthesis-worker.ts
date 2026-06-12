@@ -14,8 +14,8 @@ import { join } from "node:path";
 import type { PipelineSynthesisConfig } from "@signet/core";
 import { resolveDefaultBasePath } from "@signet/core";
 import { getDbAccessor } from "../db-accessor";
-import { handleSynthesisRequest, writeMemoryMd } from "../hooks";
 import { logger } from "../logger";
+import { handleSynthesisRequest, writeMemoryMd } from "../memory-synthesis";
 import { activeSessionCount } from "../session-tracker";
 
 type SynthesisDeps = {
