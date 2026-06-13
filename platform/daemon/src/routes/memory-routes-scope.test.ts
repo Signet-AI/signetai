@@ -15,10 +15,10 @@ describe("structured payload validation", () => {
 	function validateStructured(body: {
 		structured?: unknown;
 	}): { valid: true } | { valid: false; error: string } {
-		if (!("structured" in body) || body.structured == null) {
+		if (!("structured" in body)) {
 			return { valid: true };
 		}
-		if (typeof body.structured !== "object" || Array.isArray(body.structured)) {
+		if (body.structured == null || typeof body.structured !== "object" || Array.isArray(body.structured)) {
 			return { valid: false, error: "structured must be an object with entities and/or aspects arrays" };
 		}
 		const s = body.structured as Record<string, unknown>;
@@ -55,9 +55,10 @@ describe("structured payload validation", () => {
 		expect(result.valid).toBe(false);
 	});
 
-	it("accepts structured: null (treated as unstructured)", () => {
+	it("rejects structured: null", () => {
 		const result = validateStructured({ structured: null });
-		expect(result.valid).toBe(true);
+		expect(result.valid).toBe(false);
+		if (!result.valid) expect(result.error).toContain("must be an object");
 	});
 
 	it("accepts valid structured with entities array", () => {

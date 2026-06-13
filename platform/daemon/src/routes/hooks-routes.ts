@@ -482,10 +482,11 @@ function registerRemember(app: Hono): void {
 				return c.json({ success: true, memories: [], bypassed: true });
 			}
 
+			const headers: Record<string, string> = { "Content-Type": "application/json" };
 			const auth = c.req.header("authorization");
-			const headers: Record<string, string> = auth
-				? { "Content-Type": "application/json", Authorization: auth }
-				: { "Content-Type": "application/json" };
+			if (auth) headers["Authorization"] = auth;
+			const sessionKey = c.req.header("x-signet-session-key") ?? body.sessionKey;
+			if (sessionKey) headers["x-signet-session-key"] = sessionKey;
 			return fetch(`http://${INTERNAL_SELF_HOST}:${PORT}/api/memory/remember`, {
 				method: "POST",
 				headers,

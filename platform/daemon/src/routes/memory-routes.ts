@@ -999,11 +999,11 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 
 		// --- Auto-chunking for oversized memories ---
 		const guardrails = pipelineCfg.guardrails;
-		if ("structured" in body && body.structured != null) {
-			// Validate structured payload shape before bypassing chunking
-			if (typeof body.structured !== "object" || Array.isArray(body.structured)) {
+		if ("structured" in body) {
+			if (body.structured == null || typeof body.structured !== "object" || Array.isArray(body.structured)) {
 				return c.json({ error: "structured must be an object with entities and/or aspects arrays" }, 400);
 			}
+
 			if (body.structured.entities !== undefined && !Array.isArray(body.structured.entities)) {
 				return c.json({ error: "structured.entities must be an array" }, 400);
 			}
