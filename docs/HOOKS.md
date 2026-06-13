@@ -126,11 +126,36 @@ In `agent.yaml` (see [[configuration]]):
 ```yaml
 hooks:
   sessionStart:
-    recallLimit: 10          # How many memories to include
-    includeIdentity: true    # Prepend "You are <name>..."
+    recallLimit: 10            # How many memories to include
+    includeIdentity: true      # Include identity files
     includeRecentContext: true # Include MEMORY.md content
-    recencyBias: 0.7         # 0=importance-only, 1=recency-only
+    recencyBias: 0.7           # 0=importance-only, 1=recency-only
+
+  contextProfiles:
+    coding:
+      sessionStart:
+        recallLimit: 5
+        maxInjectTokens: 5000
+      identity:
+        files:
+          - path: context-profiles/coding/AGENTS.md
+            maxChars: 2200
+    rich:
+      sessionStart:
+        recallLimit: 50
+        maxInjectTokens: 20000
+  harnessProfiles:
+    pi: coding
+    hermes-agent: rich
 ```
+
+Context profiles override hook budgets and startup identity/context files
+per harness. Use them to keep coding harnesses lean while preserving richer
+cold-start identity in operator or character-forward harnesses. For a compact
+coding prompt, run `signet context compile --profile coding --max-chars 2200`;
+that ACPX/inference-backed compiler reads the canonical identity files and
+writes `context-profiles/coding/AGENTS.md`. Session-start hooks only read the
+compiled artifact, so model synthesis is never performed in the hot hook path.
 
 Memory scoring uses: `score = importance × (1 - recencyBias) + recency × recencyBias`
 

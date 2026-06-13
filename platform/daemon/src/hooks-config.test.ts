@@ -5,6 +5,7 @@ import { join } from "node:path";
 import {
 	DEFAULT_SESSION_START_MAX_INJECT_TOKENS,
 	loadHooksConfig,
+	resolveHooksConfigForHarness,
 	resolveUserPromptMinScore,
 } from "./hooks-config";
 
@@ -45,6 +46,89 @@ describe("hooks config", () => {
 		expect(config.userPromptSubmit?.enabled).toBe(false);
 		expect(config.userPromptSubmit?.minScore).toBe(0.42);
 		expect(config.preCompaction?.memoryLimit).toBe(3);
+	});
+
+	test("resolves harness context profiles over global hook defaults", () => {
+		const dir = makeTempDir();
+		writeFileSync(
+			join(dir, "agent.yaml"),
+			`hooks:
+  sessionStart:
+    recallLimit: 50
+    maxInjectTokens: 12000
+  userPromptSubmit:
+    maxInjectChars: 500
+  contextProfiles:
+    coding:
+      sessionStart:
+        recallLimit: 5
+        maxInjectTokens: 5000
+      userPromptSubmit:
+        maxInjectChars: 200
+      identity:
+        files:
+          - path: AGENTS.md
+            maxTokens: 1000
+          - path: USER.md
+            maxTokens: 500
+  harnessProfiles:
+    pi: coding
+`,
+		);
+
+		const resolved = resolveHooksConfigForHarness(loadHooksConfig(dir), "PI");
+
+		expect(resolved.profileName).toBe("coding");
+		expect(resolved.sessionStart?.recallLimit).toBe(5);
+		expect(resolved.sessionStart?.maxInjectTokens).toBe(5000);
+		expect(resolved.userPromptSubmit?.maxInjectChars).toBe(200);
+		expect(resolved.identity?.files?.map((entry) => entry.path)).toEqual(["AGENTS.md", "USER.md"]);
+	});
+
+	test("rejects unsafe profile identity paths and non-positive file budgets", () => {
+		const dir = makeTempDir();
+		writeFileSync(
+			join(dir, "agent.yaml"),
+			`hooks:
+  contextProfiles:
+    unsafe:
+      identity:
+        files:
+          - path: .secrets/API_KEY.md
+            maxTokens: 100
+          - path: memory/transcript.md
+            maxTokens: 100
+          - path: AGENTS.md
+            maxTokens: 0
+          - path: USER.md
+            maxTokens: 10
+  harnessProfiles:
+    pi: unsafe
+`,
+		);
+
+		const resolved = resolveHooksConfigForHarness(loadHooksConfig(dir), "pi");
+
+		expect(resolved.identity?.files?.map((entry) => entry.path)).toEqual(["USER.md"]);
+	});
+
+	test("supports a default context profile for unmapped harnesses", () => {
+		const dir = makeTempDir();
+		writeFileSync(
+			join(dir, "agent.yaml"),
+			`hooks:
+  contextProfiles:
+    lean:
+      sessionStart:
+        recallLimit: 3
+  defaultContextProfile: lean
+`,
+		);
+
+		const resolved = resolveHooksConfigForHarness(loadHooksConfig(dir), "unknown-harness");
+
+		expect(resolved.profileName).toBe("lean");
+		expect(resolved.sessionStart?.recallLimit).toBe(3);
 	});
 
 	test("clamps user prompt minimum score", () => {

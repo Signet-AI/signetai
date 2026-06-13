@@ -864,6 +864,61 @@ creature: digital assistant
 		expect(result.inject).toContain("## Working Memory");
 	});
 
+	test.serial("applies harness context profile identity files and recall budget", async () => {
+		writeAgentYaml(`
+hooks:
+  contextProfiles:
+    coding:
+      sessionStart:
+        recallLimit: 1
+        maxInjectTokens: 5000
+      identity:
+        files:
+          - path: AGENTS.md
+            maxTokens: 4
+          - path: USER.md
+            maxTokens: 20
+  harnessProfiles:
+    pi: coding
+`);
+		writeAgentsMd("alpha beta gamma delta epsilon zeta");
+		writeFileSync(join(TEST_DIR, "USER.md"), "User prefers concise coding context.");
+		writeMemoryMd("# Working Memory\n\nThis should be excluded by the coding profile.");
+		createMemoryDb([
+			{ content: "First profile memory", importance: 0.9 },
+			{ content: "Second profile memory", importance: 0.8 },
+		]);
+
+		const result = await handleSessionStart({ harness: "pi" });
+
+		expect(result.memories).toHaveLength(1);
+		expect(result.inject).toContain("## Agent Instructions");
+		expect(result.inject).toContain("[truncated]");
+		expect(result.inject).toContain("User prefers concise coding context.");
+		expect(result.inject).not.toContain("This should be excluded");
+		expect(result.inject).toContain("First profile memory");
+		expect(result.inject).not.toContain("Second profile memory");
+	});
+
+	test.serial("profile identity include false does not disable working memory context", async () => {
+		writeAgentYaml(`
+hooks:
+  contextProfiles:
+    noIdentity:
+      identity:
+        include: false
+  harnessProfiles:
+    pi: noIdentity
+`);
+		writeAgentsMd("Do not include this identity file.");
+		writeMemoryMd("# Working Memory\n\nKeep this recent context.");
+
+		const result = await handleSessionStart({ harness: "pi" });
+
+		expect(result.inject).not.toContain("Do not include this identity file.");
+		expect(result.inject).toContain("Keep this recent context.");
+	});
+
 	test.serial("loads AGENTS.md before MEMORY.md in inject context", async () => {
 		writeAgentsMd("# AGENTS\n\nFollow AGENTS instructions first.");
 		writeMemoryMd("# Working Memory\n\nThis is working memory context.");

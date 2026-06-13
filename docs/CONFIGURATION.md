@@ -1198,6 +1198,26 @@ hooks:
     recallLimit: 10
     maxInjectChars: 500
     minScore: 0.8
+  contextProfiles:
+    coding:
+      sessionStart:
+        recallLimit: 5
+        maxInjectTokens: 5000
+      userPromptSubmit:
+        maxInjectChars: 300
+      identity:
+        files:
+          - path: context-profiles/coding/AGENTS.md
+            maxChars: 2200
+    rich:
+      sessionStart:
+        recallLimit: 50
+        maxInjectTokens: 20000
+  harnessProfiles:
+    pi: coding
+    codex: coding
+    hermes-agent: rich
+    openclaw: rich
   preCompaction:
     includeRecentMemories: true
     memoryLimit: 5
@@ -1215,6 +1235,29 @@ harness session:
 | `includeRecentContext` | `true` | Include `MEMORY.md` content |
 | `recencyBias` | `0.7` | Weight toward recent vs. important memories (0-1) |
 | `maxInjectTokens` | `12000` | Maximum session-start injection budget after context assembly |
+
+Context profiles let a workspace set different session-start and
+prompt-submit budgets per harness. A profile can override
+`sessionStart`, `userPromptSubmit`, and the ordered identity/context
+files loaded at session start. `identity.files[].maxTokens` is a token
+budget for that source file; `maxChars` is also accepted when a character
+budget is easier to reason about. Map harness names to profile names with
+`hooks.harnessProfiles`; `hooks.defaultContextProfile` can provide a
+fallback for unmapped harnesses.
+
+For lean coding harnesses, compile the canonical identity files into a
+single bounded startup artifact and point the profile at that generated
+file:
+
+```bash
+signet context compile --profile coding --max-chars 2200
+```
+
+The compiler reads `AGENTS.md`, `USER.md`, `IDENTITY.md`, and `SOUL.md`,
+runs the configured inference `session_synthesis` route, hard-caps the
+result, and writes `context-profiles/coding/AGENTS.md`. Session-start
+hooks only read that artifact; they do not perform model synthesis at
+runtime.
 
 Predicted context from recent session summaries is scoped to the active
 project. If the harness does not provide a project path, Signet skips

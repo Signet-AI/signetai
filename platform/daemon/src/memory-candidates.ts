@@ -159,7 +159,7 @@ export function fetchTraversalCandidates(
 							 m.created_at,
 							 m.access_count`,
 						)
-						.all(agentId, ...memoryIds) as ScoredMemory[],
+						.all(agentId, ...memoryIds) as unknown as ScoredMemory[],
 			)
 			.map((row) => ({
 				...row,
@@ -227,7 +227,7 @@ export function getAllScoredCandidates(
 			return b.effScore - a.effScore;
 		});
 
-		return scored;
+		return scored.slice(0, limit);
 	} catch (e) {
 		logger.error("hooks", "Failed to get scored candidates", e as Error);
 		return [];
@@ -386,7 +386,7 @@ export function getRecentMemories(memoryDbPath: string, limit: number, recencyBi
         LIMIT ?
       `;
 
-			return db.prepare(query).all(limit) as Array<SimpleMemory>;
+			return db.prepare(query).all(limit) as unknown as Array<SimpleMemory>;
 		});
 
 		return rows.map((r) => ({
@@ -419,7 +419,7 @@ export function getMemoriesSince(memoryDbPath: string, sinceMs: number, limit: n
 				ORDER BY created_at DESC
 				LIMIT ?
 			`)
-				.all(sinceIso, limit) as Array<SimpleMemory>;
+				.all(sinceIso, limit) as unknown as Array<SimpleMemory>;
 		});
 
 		return rows.map((r) => ({
