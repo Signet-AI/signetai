@@ -960,6 +960,27 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		const scope = body.scope ?? null;
 		const rowProvenance = parseRememberRowProvenance(body as Record<string, unknown>);
 		const agentId = resolveAgentId({ agentId: body.agentId, sessionKey: c.req.header("x-signet-session-key") });
+
+		// Scope check: in team/hybrid mode, verify the token allows writing
+		// to the requested agentId and project before any DB mutations.
+		// Project-scoped tokens must supply a matching project — omitting it
+		// is not allowed since that would create an unscoped memory.
+		const auth = c.get("auth");
+		if (auth?.claims) {
+			const tokenProject = auth.claims.scope?.project;
+			if (auth.claims.role !== "admin" && tokenProject && (!body.project || body.project !== tokenProject)) {
+				return c.json({ error: `scope restricted to project '${tokenProject}'` }, 403);
+			}
+			const scopeDecision = checkScope(
+				auth.claims,
+				{ agent: agentId, project: body.project ?? undefined },
+				authConfig.mode,
+			);
+			if (!scopeDecision.allowed) {
+				return c.json({ error: scopeDecision.reason ?? "scope violation" }, 403);
+			}
+		}
+
 		ensureAgentRegistered(agentId);
 		const visibility = body.visibility === "private" ? "private" : "global";
 		const dedupeScope = { agentId, visibility, scope };
@@ -978,7 +999,21 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 
 		// --- Auto-chunking for oversized memories ---
 		const guardrails = pipelineCfg.guardrails;
-		if (!body.structured && raw.length > guardrails.maxContentChars) {
+		if ("structured" in body && body.structured != null) {
+			// Validate structured payload shape before bypassing chunking
+			if (typeof body.structured !== "object" || Array.isArray(body.structured)) {
+				return c.json({ error: "structured must be an object with entities and/or aspects arrays" }, 400);
+			}
+			if (body.structured.entities !== undefined && !Array.isArray(body.structured.entities)) {
+				return c.json({ error: "structured.entities must be an array" }, 400);
+			}
+			if (body.structured.aspects !== undefined && !Array.isArray(body.structured.aspects)) {
+				return c.json({ error: "structured.aspects must be an array" }, 400);
+			}
+			if (body.structured.hints !== undefined && !Array.isArray(body.structured.hints)) {
+				return c.json({ error: "structured.hints must be an array" }, 400);
+			}
+		} else if (raw.length > guardrails.maxContentChars) {
 			const chunks = chunkBySentence(raw, guardrails.chunkTargetChars);
 			if (chunks.length === 0) {
 				return c.json({ error: "content produced no valid chunks" }, 400);
@@ -1611,9 +1646,14 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 	// =========================================================================
 	app.post("/api/memory/save", async (c) => {
 		const body = await c.req.json().catch(() => ({}));
+		const headers: Record<string, string> = { "Content-Type": "application/json" };
+		const authHdr = c.req.header("authorization");
+		if (authHdr) headers["authorization"] = authHdr;
+		const sessionKey = c.req.header("x-signet-session-key");
+		if (sessionKey) headers["x-signet-session-key"] = sessionKey;
 		return fetch(`http://${INTERNAL_SELF_HOST}:${PORT}/api/memory/remember`, {
 			method: "POST",
-			headers: { "Content-Type": "application/json" },
+			headers,
 			body: JSON.stringify(body),
 		});
 	});
@@ -1623,9 +1663,14 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 	// =========================================================================
 	app.post("/api/hook/remember", async (c) => {
 		const body = await c.req.json().catch(() => ({}));
+		const headers: Record<string, string> = { "Content-Type": "application/json" };
+		const authHdr = c.req.header("authorization");
+		if (authHdr) headers["authorization"] = authHdr;
+		const sessionKey = c.req.header("x-signet-session-key");
+		if (sessionKey) headers["x-signet-session-key"] = sessionKey;
 		return fetch(`http://${INTERNAL_SELF_HOST}:${PORT}/api/memory/remember`, {
 			method: "POST",
-			headers: { "Content-Type": "application/json" },
+			headers,
 			body: JSON.stringify(body),
 		});
 	});
@@ -2554,6 +2599,26 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			const sessionKeyRaw = body.sessionKey ?? c.req.header("x-signet-session-key");
 			const sessionKey = sessionKeyRaw ?? null;
 			const agentId = resolveAgentId({ agentId: body.agentId, sessionKey: sessionKeyRaw });
+
+			// When aggregate save is requested, enforce scope for non-admin tokens.
+			if (aggregateSaveRequested) {
+				const recallAuth = c.get("auth");
+				if (recallAuth?.claims && recallAuth.claims.role !== "admin") {
+					const tokenProject = recallAuth.claims.scope?.project;
+					if (tokenProject && (!body.project || body.project !== tokenProject)) {
+						return c.json({ error: `scope restricted to project '${tokenProject}'` }, 403);
+					}
+					const scopeDecision = checkScope(
+						recallAuth.claims,
+						{ agent: agentId, project: body.project ?? undefined },
+						authConfig.mode,
+					);
+					if (!scopeDecision.allowed) {
+						return c.json({ error: scopeDecision.reason ?? "scope violation" }, 403);
+					}
+				}
+			}
+
 			const agentScope = getAgentScope(agentId);
 			const scopeProject = c.get("auth")?.claims?.scope?.project;
 			const params = {
