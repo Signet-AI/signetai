@@ -1,7 +1,13 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { networkModeFromBindHost, parseSimpleYaml, readNetworkMode, resolveDefaultBasePath, resolveNetworkBinding } from "@signet/core";
+import {
+	networkModeFromBindHost,
+	parseSimpleYaml,
+	readNetworkMode,
+	resolveDefaultBasePath,
+	resolveNetworkBinding,
+} from "@signet/core";
 import { type AnalyticsCollector, createAnalyticsCollector } from "../analytics";
 import { type AuthConfig, AuthRateLimiter, loadOrCreateSecret, parseAuthConfig } from "../auth";
 import { getDbAccessor } from "../db-accessor";
@@ -28,7 +34,7 @@ export const MEMORY_DB = join(AGENTS_DIR, "memory", "memories.db");
 export const SCRIPTS_DIR = join(AGENTS_DIR, "scripts");
 
 export function getCurrentAgentsDir(): string {
-	return process.env.SIGNET_PATH || AGENTS_DIR;
+	return resolveDefaultBasePath();
 }
 
 export function getCurrentMemoryDbPath(): string {
@@ -187,7 +193,7 @@ export const ALLOWED_ORIGINS = _ALLOWED_ORIGINS;
 export function isAllowedOrigin(origin: string | undefined): boolean {
 	if (!origin) return false;
 	if (ALLOWED_ORIGINS.has(origin)) return true;
-	const agentsDir = process.env.SIGNET_PATH || AGENTS_DIR;
+	const agentsDir = getCurrentAgentsDir();
 	const binding = readConfiguredNetworkBinding(agentsDir);
 	const networkMode = networkModeFromBindHost(normalizeLoopbackHost(readEnvTrimmed("SIGNET_BIND") ?? binding.bind));
 	const port = parsePort(readEnvTrimmed("SIGNET_PORT"), PORT);

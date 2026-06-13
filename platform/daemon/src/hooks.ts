@@ -34,25 +34,11 @@ import {
 	loadHooksConfig as loadHooksConfigFromDisk,
 	resolveUserPromptMinScore,
 } from "./hooks-config";
-import {
-	loadIdentity,
-	readAgentsMd,
-	readIdentityFile,
-	readMemoryMd,
-	resolveIdentityFiles,
-} from "./identity-context";
+import { loadIdentity, readAgentsMd, readIdentityFile, readMemoryMd, resolveIdentityFiles } from "./identity-context";
 import { propagateMemoryStatus } from "./knowledge-graph";
 import { logger } from "./logger";
-import {
-	type ScoredMemory,
-	buildActiveConstraintsSection,
-	fetchTraversalCandidates as fetchTraversalCandidatesForPath,
-	getAllScoredCandidates as getAllScoredCandidatesForPath,
-	getMemoriesSince as getMemoriesSinceForPath,
-	getPredictedContextMemories as getPredictedContextMemoriesForPath,
-	getRecentMemories as getRecentMemoriesForPath,
-	updateAccessTracking as updateAccessTrackingForPath,
-} from "./memory-candidates";
+import * as memoryCandidates from "./memory-candidates";
+import { type ScoredMemory, buildActiveConstraintsSection } from "./memory-candidates";
 import { effectiveScore, inferType, isDuplicate } from "./memory-classification";
 import { loadMemoryConfig } from "./memory-config";
 import { ensureCanonicalManifest, indexCanonicalTranscriptJsonl } from "./memory-lineage";
@@ -96,10 +82,7 @@ import {
 	queueCheckpointWrite,
 	writeCheckpoint,
 } from "./session-checkpoints";
-import {
-	deriveSessionEndFallbackId,
-	recoverMissingSessionEndOnClearStart,
-} from "./session-end-recovery";
+import { deriveSessionEndFallbackId, recoverMissingSessionEndOnClearStart } from "./session-end-recovery";
 import {
 	type SessionMemoryCandidate,
 	parseFeedback,
@@ -136,12 +119,7 @@ import { type StructuralFeatures, getStructuralFeatures } from "./structural-fea
 import { assembleInheritedContextBlock, resolveParentSession } from "./subagent-context";
 import { searchTemporalFallback } from "./temporal-fallback";
 import { writeTranscriptAudit } from "./transcript-audit";
-import {
-	appendCanonicalLiveTranscriptTurns as appendCanonicalLiveTranscriptTurnsForPath,
-	appendLivePromptTranscript,
-	formatLivePromptTranscript,
-	writeCanonicalTranscriptFromSnapshot as writeCanonicalTranscriptFromSnapshotForPath,
-} from "./transcript-capture";
+import * as transcriptCapture from "./transcript-capture";
 import { canonicalTranscriptRelativePath } from "./transcript-jsonl";
 import {
 	normalizeCodexTranscript,
@@ -330,15 +308,10 @@ export interface RecallRequest {
 // Shared Helpers
 // ============================================================================
 
-export { buildSignetSystemPrompt, deriveSessionEndFallbackId, resetSessionStartDedupe };
+export { resetSessionStartDedupe };
 export { effectiveScore, inferType, isDuplicate };
 
-export {
-	appendSynthesisIndexBlock,
-	applyTokenBudget,
-	selectWithBudget,
-	selectWithTokenBudget,
-} from "./context-budget";
+export { applyTokenBudget, selectWithBudget, selectWithTokenBudget } from "./context-budget";
 
 function buildPluginPromptContributionSection(target: PluginPromptTargetV1, log: typeof logger): string {
 	try {
@@ -409,7 +382,7 @@ function getSessionGapSummary(): string | undefined {
 }
 
 function fetchTraversalCandidates(memoryIds: ReadonlyArray<string>, agentId: string): ScoredMemory[] {
-	return fetchTraversalCandidatesForPath(getMemoryDbPath(), memoryIds, agentId);
+	return memoryCandidates.fetchTraversalCandidates(getMemoryDbPath(), memoryIds, agentId);
 }
 
 /**
@@ -424,7 +397,7 @@ export function getAllScoredCandidates(
 	readPolicy = "isolated",
 	policyGroup: string | null = null,
 ): ScoredMemory[] {
-	return getAllScoredCandidatesForPath(getMemoryDbPath(), project, limit, agentId, readPolicy, policyGroup);
+	return memoryCandidates.getAllScoredCandidates(getMemoryDbPath(), project, limit, agentId, readPolicy, policyGroup);
 }
 
 function getPredictedContextMemories(
@@ -436,7 +409,7 @@ function getPredictedContextMemories(
 	readPolicy = "isolated",
 	policyGroup: string | null = null,
 ): ScoredMemory[] {
-	return getPredictedContextMemoriesForPath(
+	return memoryCandidates.getPredictedContextMemories(
 		getMemoryDbPath(),
 		project,
 		limit,
@@ -449,7 +422,7 @@ function getPredictedContextMemories(
 }
 
 function updateAccessTracking(ids: string[]): void {
-	updateAccessTrackingForPath(getMemoryDbPath(), ids);
+	memoryCandidates.updateAccessTracking(getMemoryDbPath(), ids);
 }
 
 // ============================================================================
@@ -474,7 +447,7 @@ function getRecentMemories(
 	importance: number;
 	created_at: string;
 }> {
-	return getRecentMemoriesForPath(getMemoryDbPath(), limit, recencyBias);
+	return memoryCandidates.getRecentMemories(getMemoryDbPath(), limit, recencyBias);
 }
 
 /**
@@ -490,7 +463,7 @@ function getMemoriesSince(
 	importance: number;
 	created_at: string;
 }> {
-	return getMemoriesSinceForPath(getMemoryDbPath(), sinceMs, limit);
+	return memoryCandidates.getMemoriesSince(getMemoryDbPath(), sinceMs, limit);
 }
 
 // ============================================================================
@@ -1339,7 +1312,7 @@ export async function handleUserPromptSubmit(
 				if (!prev || transcript.length >= prev.length) {
 					deps.upsertSessionTranscript(req.sessionKey, transcript, req.harness, req.project ?? null, agentId);
 				}
-				await writeCanonicalTranscriptFromSnapshotForPath({
+				await transcriptCapture.writeCanonicalTranscriptFromSnapshot({
 					basePath: getAgentsDir(),
 					agentId,
 					harness: req.harness,
@@ -1356,16 +1329,16 @@ export async function handleUserPromptSubmit(
 			}
 		} else if (userMessage.trim().length > 0) {
 			try {
-				const liveTranscript = formatLivePromptTranscript(userMessage, req.lastAssistantMessage);
+				const liveTranscript = transcriptCapture.formatLivePromptTranscript(userMessage, req.lastAssistantMessage);
 				const prev = getSessionTranscriptContent(req.sessionKey, agentId);
 				deps.upsertSessionTranscript(
 					req.sessionKey,
-					appendLivePromptTranscript(prev, liveTranscript),
+					transcriptCapture.appendLivePromptTranscript(prev, liveTranscript),
 					req.harness,
 					req.project ?? null,
 					agentId,
 				);
-				await appendCanonicalLiveTranscriptTurnsForPath({
+				await transcriptCapture.appendCanonicalLiveTranscriptTurns({
 					basePath: getAgentsDir(),
 					agentId,
 					harness: req.harness,
@@ -1429,15 +1402,15 @@ export async function handleUserPromptSubmit(
 	try {
 		const cfg = deps.loadMemoryConfig(getAgentsDir());
 		const injectBudget = submitCfg.maxInjectChars ?? cfg.pipelineV2.guardrails.contextBudgetChars;
-		const entityContext = await buildEntityPromptContext(
+		const entityContext = await buildEntityPromptContext({
 			userMessage,
 			agentId,
-			resolveUserPromptMinScore(submitCfg.minScore),
+			minScore: resolveUserPromptMinScore(submitCfg.minScore),
 			injectBudget,
-			getMemoryDbPath(),
-			deps.fetchEmbedding,
-			cfg.embedding,
-		);
+			memoryDbPath: getMemoryDbPath(),
+			fetchEmbedding: deps.fetchEmbedding,
+			embedding: cfg.embedding,
+		});
 		if (entityContext.lines.length === 0) {
 			return finalizeUserPromptSubmitSuccess(
 				req,
@@ -1768,7 +1741,7 @@ async function deferSessionEndWork(params: {
 	if (transcript.trim().length > 0) {
 		try {
 			if (!isNoiseSession({ project: cwd, sessionKey: sessionKey ?? null, sessionId, harness })) {
-				await writeCanonicalTranscriptFromSnapshotForPath({
+				await transcriptCapture.writeCanonicalTranscriptFromSnapshot({
 					basePath: getAgentsDir(),
 					agentId,
 					harness,

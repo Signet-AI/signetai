@@ -1,9 +1,4 @@
-import { appendSynthesisIndexBlock as appendRenderedIndexBlock } from "./memory-lineage";
 import { countTokens, truncateToTokens } from "./pipeline/tokenizer";
-
-export function appendSynthesisIndexBlock(content: string, indexBlock: string): string {
-	return appendRenderedIndexBlock(content, indexBlock);
-}
 
 /** Truncate rows to fit a character budget, preserving the input type. */
 export function selectWithBudget<T extends { content: string }>(rows: ReadonlyArray<T>, charBudget: number): T[] {

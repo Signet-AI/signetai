@@ -3,12 +3,13 @@
  * Handles systemd (Linux), launchd (macOS), and Windows service management
  */
 
+import { execSync, spawn } from "child_process";
+import { chmodSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "fs";
 import { homedir, platform } from "os";
 import { join } from "path";
-import { existsSync, mkdirSync, writeFileSync, readFileSync, unlinkSync, chmodSync } from "fs";
-import { execSync, spawn } from "child_process";
+import { resolveDefaultBasePath } from "@signet/core";
 
-const AGENTS_DIR = join(homedir(), ".agents");
+const AGENTS_DIR = resolveDefaultBasePath();
 const DAEMON_DIR = join(AGENTS_DIR, ".daemon");
 const PID_FILE = join(DAEMON_DIR, "pid");
 const LOG_DIR = join(DAEMON_DIR, "logs");

@@ -4,11 +4,7 @@ import { selectWithBudgetSkippingOversized } from "./context-budget";
 import { type ReadDb, getDbAccessor, hasDbAccessor } from "./db-accessor";
 import { logger } from "./logger";
 import type { EmbeddingConfig } from "./memory-config";
-import {
-	countPromptTermOverlap,
-	extractSubstantiveWords,
-	stripUntrustedMetadata,
-} from "./prompt-text";
+import { countPromptTermOverlap, extractSubstantiveWords, stripUntrustedMetadata } from "./prompt-text";
 
 type FetchEmbedding = (text: string, cfg: EmbeddingConfig) => Promise<number[] | null>;
 
@@ -623,15 +619,25 @@ function formatEntityContextLine(line: PromptEntityContextLine): string {
 	return `- [${line.kind}] ${path}: ${line.content} (${source})`;
 }
 
-export async function buildEntityPromptContext(
-	userMessage: string,
-	agentId: string,
-	minScore: number,
-	injectBudget: number,
-	memoryDbPath: string,
-	embedFn: FetchEmbedding,
-	embeddingCfg: EmbeddingConfig,
-): Promise<PromptEntityContextResult> {
+export interface BuildEntityPromptContextOptions {
+	readonly userMessage: string;
+	readonly agentId: string;
+	readonly minScore: number;
+	readonly injectBudget: number;
+	readonly memoryDbPath: string;
+	readonly fetchEmbedding: FetchEmbedding;
+	readonly embedding: EmbeddingConfig;
+}
+
+export async function buildEntityPromptContext({
+	userMessage,
+	agentId,
+	minScore,
+	injectBudget,
+	memoryDbPath,
+	fetchEmbedding,
+	embedding,
+}: BuildEntityPromptContextOptions): Promise<PromptEntityContextResult> {
 	if (isLowSignalPrompt(userMessage)) return { lines: [], memoryCount: 0, engine: "low-signal" };
 	if (!existsSync(memoryDbPath)) return { lines: [], memoryCount: 0, engine: "no-entity" };
 	if (!hasDbAccessor()) return { lines: [], memoryCount: 0, engine: "no-entity" };
@@ -648,7 +654,7 @@ export async function buildEntityPromptContext(
 		if (!semanticQuery) continue;
 		let queryVector: Float32Array | null = null;
 		try {
-			const vector = await embedFn(semanticQuery, embeddingCfg);
+			const vector = await fetchEmbedding(semanticQuery, embedding);
 			if (vector) queryVector = new Float32Array(vector);
 		} catch (error) {
 			logger.warn("hooks", "Entity attribute semantic scoring failed; using lexical attribute scoring", {
@@ -682,7 +688,11 @@ export async function buildEntityPromptContext(
 	});
 }
 
-export function buildEntityContextInject(metadataHeader: string, lines: ReadonlyArray<string>, pluginContext = ""): string {
+export function buildEntityContextInject(
+	metadataHeader: string,
+	lines: ReadonlyArray<string>,
+	pluginContext = "",
+): string {
 	const parts = [metadataHeader.trimEnd(), "", "## Relevant Entity Context", ""];
 	if (pluginContext.trim().length > 0) {
 		parts.push(pluginContext.trimEnd());
@@ -691,4 +701,3 @@ export function buildEntityContextInject(metadataHeader: string, lines: Readonly
 	parts.push(...lines);
 	return `${parts.join("\n").trimEnd()}\n`;
 }
-

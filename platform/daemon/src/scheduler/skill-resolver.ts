@@ -6,11 +6,11 @@
  */
 
 import { readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
+import { resolveDefaultBasePath } from "@signet/core";
 import { logger } from "../logger";
 
-const AGENTS_DIR = process.env.SIGNET_PATH ?? join(homedir(), ".agents");
+const AGENTS_DIR = resolveDefaultBasePath();
 
 /**
  * Strip YAML frontmatter (everything between leading `---` delimiters).

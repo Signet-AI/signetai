@@ -19,6 +19,8 @@ const { initDbAccessor, closeDbAccessor, getDbAccessor } = await import("./db-ac
 const hooks = await import("./hooks");
 const lineage = await import("./memory-lineage");
 const transcriptAudit = await import("./transcript-audit");
+const { deriveSessionEndFallbackId } = await import("./session-end-recovery");
+const { buildSignetSystemPrompt } = await import("./session-start-format");
 const {
 	handleSessionStart,
 	handlePreCompaction,
@@ -27,7 +29,6 @@ const {
 	handleRemember,
 	handleSessionEnd,
 	handleCheckpointExtract,
-	deriveSessionEndFallbackId,
 	effectiveScore,
 	selectWithBudget,
 	isDuplicate,
@@ -35,7 +36,6 @@ const {
 	getAllScoredCandidates,
 	writeMemoryMd: synthWriteMemoryMd,
 	applyTokenBudget,
-	buildSignetSystemPrompt,
 	normalizeCodexTranscript,
 	normalizeJsonConversationTranscript,
 	normalizeSessionTranscript,
