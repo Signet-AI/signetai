@@ -32,9 +32,17 @@ import {
 	type HooksConfig,
 	getDefaultHooksConfig,
 	loadHooksConfig as loadHooksConfigFromDisk,
+	resolveHooksConfigForHarness,
 	resolveUserPromptMinScore,
 } from "./hooks-config";
-import { loadIdentity, readAgentsMd, readIdentityFile, readMemoryMd, resolveIdentityFiles } from "./identity-context";
+import {
+	loadIdentity,
+	readAgentsMd,
+	readContextIdentitySections,
+	readIdentityFile,
+	readMemoryMd,
+	resolveIdentityFiles,
+} from "./identity-context";
 import { propagateMemoryStatus } from "./knowledge-graph";
 import { logger } from "./logger";
 import { buildAgentScopeClause } from "./memory-access-scope";
@@ -116,7 +124,7 @@ import {
 	getSessionTranscriptContent,
 	upsertSessionTranscript,
 } from "./session-transcripts";
-import { type StructuralFeatures, getStructuralFeatures } from "./structural-features";
+import { type StructuralCandidateSource, type StructuralFeatures, getStructuralFeatures } from "./structural-features";
 import { assembleInheritedContextBlock, resolveParentSession } from "./subagent-context";
 import { searchTemporalFallback } from "./temporal-fallback";
 import { writeTranscriptAudit } from "./transcript-audit";
@@ -436,6 +444,10 @@ function loadHooksConfig(): HooksConfig {
 	return loadHooksConfigFromDisk(getAgentsDir());
 }
 
+function loadHooksConfigForHarness(harness: string) {
+	return resolveHooksConfigForHarness(loadHooksConfig(), harness);
+}
+
 // ============================================================================
 // Memory Queries
 // ============================================================================
@@ -517,7 +529,8 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 	const start = Date.now();
 	const agentId = resolveAgentId(req);
 	ensureAgentRegistered(agentId);
-	const config = loadHooksConfig().sessionStart || {};
+	const resolvedHooksConfig = loadHooksConfigForHarness(req.harness);
+	const config = resolvedHooksConfig.sessionStart || {};
 	const memoryCfg = loadMemoryConfig(getAgentsDir());
 	const includeIdentity = config.includeIdentity !== false;
 
@@ -583,11 +596,22 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 	const identityFiles = resolveIdentityFiles(agentId, agentsDir);
 	const identity = includeIdentity ? loadIdentity(agentsDir, identityFiles) : { name: "Agent" };
 
-	// Read AGENTS.md first so harness instructions precede synthesized memory
-	const agentsMdContent = includeIdentity ? readAgentsMd(agentsDir, 12000, identityFiles) : undefined;
+	const profileIdentitySections = includeIdentity
+		? readContextIdentitySections(agentsDir, resolvedHooksConfig.identity, identityFiles)
+		: null;
+	const profileHasExplicitIdentityFiles =
+		includeIdentity && resolvedHooksConfig.identity?.include !== false && resolvedHooksConfig.identity?.files !== undefined;
 
-	// Read MEMORY.md with 10k char budget
-	const memoryMdContent = readMemoryMd(agentsDir, 10000, identityFiles);
+	// Read AGENTS.md first so harness instructions precede synthesized memory.
+	const agentsMdContent =
+		includeIdentity && profileIdentitySections === null ? readAgentsMd(agentsDir, 12000, identityFiles) : undefined;
+
+	// Read MEMORY.md with 10k char budget unless a context profile supplies the identity/context file list.
+	const memoryMdContent =
+		profileIdentitySections?.find((section) => section.path === "MEMORY.md")?.content ??
+		(!profileHasExplicitIdentityFiles && config.includeRecentContext !== false
+			? readMemoryMd(agentsDir, 10000, identityFiles)
+			: undefined);
 
 	const traversalCfg = memoryCfg.pipelineV2.traversal;
 	const traversalEnabled = memoryCfg.pipelineV2.graph.enabled && traversalCfg?.enabled === true;
@@ -635,11 +659,11 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 
 	// Candidate pool fusion: traversal U effective (capped before budget truncation)
 	const recallLimit = Math.max(1, config.recallLimit ?? 50);
-	const candidatePoolLimit = Math.max(1, config.candidatePoolLimit ?? 100);
+	const candidatePoolLimit = Math.max(recallLimit, config.candidatePoolLimit ?? 100);
 	const _candidatesStart = Date.now();
 	const allCandidates = getAllScoredCandidates(
 		req.project,
-		recallLimit,
+		candidatePoolLimit,
 		traversalAgentId,
 		agentScope.readPolicy,
 		agentScope.policyGroup,
@@ -647,6 +671,9 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 	const candidatesMs = Date.now() - _candidatesStart;
 	const candidateById = new Map(allCandidates.map((candidate) => [candidate.id, candidate]));
 	const candidateSourceById = new Map<string, SessionMemoryCandidate["source"]>(
+		allCandidates.map((candidate) => [candidate.id, "effective" as const]),
+	);
+	const structuralCandidateSourceById = new Map<string, StructuralCandidateSource>(
 		allCandidates.map((candidate) => [candidate.id, "effective" as const]),
 	);
 
@@ -696,6 +723,7 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 				for (const memoryId of traversalResult.memoryIds) {
 					if (!candidateById.has(memoryId)) {
 						candidateSourceById.set(memoryId, "ka_traversal");
+						structuralCandidateSourceById.set(memoryId, "ka_traversal");
 					}
 				}
 
@@ -756,7 +784,7 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 	const dbAcc = loadDbAccessor();
 	const candidateIdsForFeatures = mergedCandidates.map((c) => c.id);
 	const structuralById = dbAcc
-		? getStructuralFeatures(dbAcc, candidateIdsForFeatures, agentId, candidateSourceById)
+		? getStructuralFeatures(dbAcc, candidateIdsForFeatures, agentId, structuralCandidateSourceById)
 		: new Map<string, StructuralFeatures>();
 	const sortedCandidates = [...mergedCandidates].sort((a, b) => {
 		if (req.project) {
@@ -790,19 +818,23 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 		});
 	}
 	const tokenBudget = Math.max(1, rawTokenBudget);
-	let memories = selectWithTokenBudget(sortedCandidates, tokenBudget);
+	let memories = selectWithTokenBudget(sortedCandidates.slice(0, recallLimit), tokenBudget);
 
-	// Get predicted context from recent session analysis (~30% of budget)
+	// Get predicted context from recent session analysis (~30% of budget).
 	const existingIds = new Set(memories.map((m) => m.id));
-	const predictedMemories = getPredictedContextMemories(
-		req.project,
-		10,
-		600,
-		existingIds,
-		agentId,
-		agentScope.readPolicy,
-		agentScope.policyGroup,
-	);
+	const predictedLimit = Math.max(0, recallLimit - memories.length);
+	const predictedMemories =
+		predictedLimit > 0
+			? getPredictedContextMemories(
+				req.project,
+				Math.min(10, predictedLimit),
+				600,
+				existingIds,
+				agentId,
+				agentScope.readPolicy,
+				agentScope.policyGroup,
+			)
+			: [];
 	if (predictedMemories.length > 0) {
 		memories.push(...predictedMemories);
 	}
@@ -833,7 +865,7 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 	// Re-fetch structural features for any predicted memories not in the first batch
 	const fullStructuralById =
 		allCandidateIdsForRecording.length > candidateIdsForFeatures.length && dbAcc
-			? getStructuralFeatures(dbAcc, allCandidateIdsForRecording, agentId, candidateSourceById)
+			? getStructuralFeatures(dbAcc, allCandidateIdsForRecording, agentId, structuralCandidateSourceById)
 			: structuralById;
 
 	const candidatesForRecording = [
@@ -930,31 +962,44 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 	if (agentsMdContent) {
 		injectParts.push("\n## Agent Instructions\n");
 		injectParts.push(agentsMdContent);
-	} else if (identity.name !== "Agent" || identity.description) {
+	} else if (profileIdentitySections === null && (identity.name !== "Agent" || identity.description)) {
 		injectParts.push(`You are ${identity.name}${identity.description ? `, ${identity.description}` : ""}.`);
 	}
 
-	// Inject additional identity files
-	const soulContent = includeIdentity ? readIdentityFile(agentsDir, "SOUL.md", 4000, identityFiles) : undefined;
-	const identityContent = includeIdentity ? readIdentityFile(agentsDir, "IDENTITY.md", 2000, identityFiles) : undefined;
-	const userContent = includeIdentity ? readIdentityFile(agentsDir, "USER.md", 6000, identityFiles) : undefined;
+	if (profileIdentitySections !== null) {
+		for (const section of profileIdentitySections) {
+			injectParts.push(`\n## ${section.header}\n`);
+			injectParts.push(section.content);
+		}
+		if (memoryMdContent && !profileIdentitySections.some((section) => section.path === "MEMORY.md")) {
+			injectParts.push("\n## Working Memory\n");
+			injectParts.push(memoryMdContent);
+		}
+	} else {
+		// Inject additional identity files.
+		const soulContent = includeIdentity ? readIdentityFile(agentsDir, "SOUL.md", 4000, identityFiles) : undefined;
+		const identityContent = includeIdentity
+			? readIdentityFile(agentsDir, "IDENTITY.md", 2000, identityFiles)
+			: undefined;
+		const userContent = includeIdentity ? readIdentityFile(agentsDir, "USER.md", 6000, identityFiles) : undefined;
 
-	if (soulContent) {
-		injectParts.push("\n## Soul\n");
-		injectParts.push(soulContent);
-	}
-	if (identityContent) {
-		injectParts.push("\n## Identity\n");
-		injectParts.push(identityContent);
-	}
-	if (userContent) {
-		injectParts.push("\n## About Your User\n");
-		injectParts.push(userContent);
-	}
+		if (soulContent) {
+			injectParts.push("\n## Soul\n");
+			injectParts.push(soulContent);
+		}
+		if (identityContent) {
+			injectParts.push("\n## Identity\n");
+			injectParts.push(identityContent);
+		}
+		if (userContent) {
+			injectParts.push("\n## About Your User\n");
+			injectParts.push(userContent);
+		}
 
-	if (memoryMdContent) {
-		injectParts.push("\n## Working Memory\n");
-		injectParts.push(memoryMdContent);
+		if (memoryMdContent) {
+			injectParts.push("\n## Working Memory\n");
+			injectParts.push(memoryMdContent);
+		}
 	}
 
 	if (memories.length > 0) {
@@ -1034,7 +1079,7 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 	}
 
 	const duration = Date.now() - start;
-	const maxTokens = config.maxInjectTokens ?? (config.maxInjectChars ? Math.round(config.maxInjectChars / 4) : 20000);
+	const maxTokens = tokenBudget;
 	// Pre-reserve space for deterministic continuity sections so they are never truncated.
 	const reservedTokens = countTokens(recoverySection) + countTokens(constraintsSection) + countTokens(inheritedSection);
 	const mainBudget = Math.max(0, maxTokens - reservedTokens);
@@ -1273,7 +1318,7 @@ export async function handleUserPromptSubmit(
 ): Promise<UserPromptSubmitResponse> {
 	const deps = { ...DEFAULT_USER_PROMPT_SUBMIT_DEPS, ...overrides };
 	const start = Date.now();
-	const submitCfg = loadHooksConfig().userPromptSubmit ?? {};
+	const submitCfg = loadHooksConfigForHarness(req.harness).userPromptSubmit ?? {};
 	const userMessage = resolveRecallUserMessage(req);
 	const agentId = deps.resolveAgentId(req);
 	const { keywordTerms } = buildRecallQueryShape(userMessage);

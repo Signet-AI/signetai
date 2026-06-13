@@ -59,6 +59,7 @@ import ora from "ora";
 import { registerBrowseCommand } from "./browse.js";
 import { registerAgentCommands } from "./commands/agent.js";
 import { registerConnectorCommands } from "./commands/connector.js";
+import { registerContextCommands } from "./commands/context.js";
 import { registerApiKeyCommands } from "./commands/api-key.js";
 import { registerAppCommands } from "./commands/app.js";
 import { registerDaemonCommands } from "./commands/daemon.js";
@@ -1082,6 +1083,11 @@ registerAgentCommands(program, {
 registerRouteCommands(program, {
 	AGENTS_DIR,
 	fetchFromDaemon,
+	secretApiCall,
+});
+
+registerContextCommands(program, {
+	AGENTS_DIR,
 	secretApiCall,
 });
 

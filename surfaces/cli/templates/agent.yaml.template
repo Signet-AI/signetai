@@ -169,6 +169,31 @@ hooks:
     # Weight recent memories higher (0-1, higher = more recency bias)
     recencyBias: 0.7
 
+  # Optional named context-budget profiles for different harness workflows.
+  # Use leaner profiles for coding harnesses and richer profiles for
+  # operator/character-forward harnesses. Generate a compact coding prompt with:
+  #   signet context compile --profile coding --max-chars 2200
+  # contextProfiles:
+  #   coding:
+  #     sessionStart:
+  #       recallLimit: 5
+  #       maxInjectTokens: 5000
+  #     userPromptSubmit:
+  #       maxInjectChars: 300
+  #     identity:
+  #       files:
+  #         - path: context-profiles/coding/AGENTS.md
+  #           maxChars: 2200
+  #   rich:
+  #     sessionStart:
+  #       recallLimit: 50
+  #       maxInjectTokens: 20000
+  # harnessProfiles:
+  #   pi: coding
+  #   codex: coding
+  #   hermes-agent: rich
+  #   openclaw: rich
+
   # Called before session compaction/summarization
   preCompaction:
     # Guidelines for the agent when generating session summary
