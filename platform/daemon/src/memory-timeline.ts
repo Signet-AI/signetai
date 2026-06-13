@@ -277,7 +277,7 @@ export function buildMemoryTimeline(
 			 FROM memory_history h
 			 INNER JOIN memories m ON m.id = h.memory_id
 			 WHERE m.is_deleted = 0
-			   AND h.created_at >= ?${scopeSql.replace(/agent_id/g, "m.agent_id").replace(/policy_group/g, "m.policy_group")}
+			   AND h.created_at >= ?${scopeSql.replace(/(?<!\.)agent_id/g, "m.agent_id").replace(/(?<=AND |\()visibility/g, "m.visibility")}
 			 ORDER BY h.created_at DESC`,
 		)
 		.all(cutoffIso, ...scopeParams) as HistoryRow[];

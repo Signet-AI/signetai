@@ -724,7 +724,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 					tzOffsetMin,
 					agentId: shouldEnforceAuthScope(c) ? scopedAgent.agentId : undefined,
 					readPolicy: agentScope.readPolicy,
-					policyGroup: agentScope.policyGroup,
+					policyGroup: agentScope.policyGroup ?? undefined,
 				}),
 			);
 			return c.json(timeline);
@@ -2656,7 +2656,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				save_aggregate: body.save_aggregate ?? body.saveAggregate,
 				agentId,
 				readPolicy: agentScope.readPolicy,
-				policyGroup: agentScope.policyGroup,
+				policyGroup: agentScope.policyGroup ?? undefined,
 				sessionKey: sessionKeyRaw,
 				includeRecalled: body.includeRecalled === true,
 				recallSurface: "api.memory.recall",
@@ -2730,7 +2730,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				project,
 				agentId,
 				readPolicy: agentScope.readPolicy,
-				policyGroup: agentScope.policyGroup,
+				policyGroup: agentScope.policyGroup ?? undefined,
 				sessionKey: sessionKeyRaw,
 				includeRecalled: includeRecalled === "1" || includeRecalled === "true",
 				recallSurface: "api.memory.search",
@@ -3229,6 +3229,9 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 	// GET /api/documents — list documents
 	// =========================================================================
 	app.get("/api/documents", (c) => {
+		if (shouldEnforceAuthScope(c)) {
+			return c.json({ error: "documents list requires unscoped credentials" }, 403);
+		}
 		const status = c.req.query("status");
 		const limit = Math.min(Math.max(1, Number.parseInt(c.req.query("limit") ?? "50", 10) || 50), 500);
 		const offset = Math.max(0, Number.parseInt(c.req.query("offset") ?? "0", 10) || 0);
@@ -3267,6 +3270,9 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 	// GET /api/documents/:id — single document details
 	// =========================================================================
 	app.get("/api/documents/:id", (c) => {
+		if (shouldEnforceAuthScope(c)) {
+			return c.json({ error: "document access requires unscoped credentials" }, 403);
+		}
 		const id = c.req.param("id");
 		try {
 			const accessor = getDbAccessor();
@@ -3331,22 +3337,9 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 
 		const accessor = getDbAccessor();
 		const doc = accessor.withReadDb((db) => {
-			return db.prepare("SELECT id, agent_id FROM documents WHERE id = ?").get(id) as
-				| { id: string; agent_id: string | null }
-				| undefined;
+			return db.prepare("SELECT id FROM documents WHERE id = ?").get(id) as { id: string } | undefined;
 		});
 		if (!doc) return c.json({ error: "Document not found" }, 404);
-
-		if (shouldEnforceAuthScope(c)) {
-			const docScope = resolveMemoryScopedAgentId(c, {
-				agentId: c.req.query("agentId") ?? c.req.query("agent_id") ?? c.req.header("x-signet-agent-id"),
-				sessionKey: c.req.header("x-signet-session-key"),
-			});
-			if (docScope.error) return c.json({ error: docScope.error }, 403);
-			if (doc.agent_id && doc.agent_id !== docScope.agentId) {
-				return c.json({ error: "document not found" }, 404);
-			}
-		}
 
 		try {
 			const now = new Date().toISOString();
@@ -3401,6 +3394,10 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 
 					memoriesRemoved++;
 				});
+			}
+
+			if (shouldEnforceAuthScope(c) && linkedMemories.length === 0) {
+				return c.json({ error: "document not found" }, 404);
 			}
 
 			accessor.withWriteTx((db) => {

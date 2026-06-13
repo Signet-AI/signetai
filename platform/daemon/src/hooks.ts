@@ -37,6 +37,7 @@ import {
 import { loadIdentity, readAgentsMd, readIdentityFile, readMemoryMd, resolveIdentityFiles } from "./identity-context";
 import { propagateMemoryStatus } from "./knowledge-graph";
 import { logger } from "./logger";
+import { buildAgentScopeClause } from "./memory-access-scope";
 import * as memoryCandidates from "./memory-candidates";
 import { type ScoredMemory, buildActiveConstraintsSection } from "./memory-candidates";
 import { effectiveScore, inferType, isDuplicate } from "./memory-classification";
