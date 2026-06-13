@@ -1,6 +1,6 @@
 {
   "name": "@signet/connector-claude-code",
-  "version": "0.140.2",
+  "version": "0.140.3",
   "description": "Signet connector for Claude Code (Anthropic CLI)",
   "type": "module",
   "main": "./dist/index.js",
@@ -24,8 +24,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@signet/connector-base": "0.140.2",
-    "@signet/core": "0.140.2"
+    "@signet/connector-base": "0.140.3",
+    "@signet/core": "0.140.3"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

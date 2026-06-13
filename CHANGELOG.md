@@ -7,6 +7,7 @@ All notable changes to Signet are documented here.
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
 ### 2026-06-13
+- Bug fixes: enforce scope checks on remember and aggregate-save routes.
 - Refactoring: modularize hooks architecture.
 - Docs: add remote harness setup guide.
 
@@ -34,6 +35,15 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Bug fixes: decouple summary worker from pipelineV2 so dreaming gets summaries.
 
 ## Release Ledger
+
+## [0.140.3] - 2026-06-13
+
+Release summary: 1 bug fix.
+Tag range: `v0.140.2..v0.140.3`.
+
+### Bug Fixes
+
+- **daemon**: enforce scope checks on remember and aggregate-save routes (#845)
 
 ## [0.140.2] - 2026-06-13
 
