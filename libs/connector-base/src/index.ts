@@ -262,18 +262,29 @@ export function resolveSignetWorkspacePath(home = homedir()): string {
 	const configured = readManagedTrimmedEnv("SIGNET_PATH");
 	if (configured) return resolve(expandHome(configured));
 
+	const defaultWorkspace = join(home, ".agents");
 	const configHome = readManagedTrimmedEnv("XDG_CONFIG_HOME") ?? join(home, ".config");
 	const workspaceConfigPath = join(configHome, "signet", "workspace.json");
-	if (!existsSync(workspaceConfigPath)) return join(home, ".agents");
+	if (!existsSync(workspaceConfigPath)) return defaultWorkspace;
 
+	let raw: unknown;
 	try {
-		const raw = JSON.parse(readFileSync(workspaceConfigPath, "utf8")) as { workspace?: unknown };
-		return typeof raw.workspace === "string" && raw.workspace.trim().length > 0
-			? resolve(expandHome(raw.workspace.trim()))
-			: join(home, ".agents");
-	} catch {
-		return join(home, ".agents");
+		raw = JSON.parse(readFileSync(workspaceConfigPath, "utf8"));
+	} catch (err) {
+		const detail = err instanceof Error ? err.message : String(err);
+		throw new Error(`Invalid Signet workspace config at ${workspaceConfigPath}: ${detail}`);
 	}
+
+	if (typeof raw !== "object" || raw === null || !("workspace" in raw)) {
+		throw new Error(`Invalid Signet workspace config at ${workspaceConfigPath}: missing workspace`);
+	}
+
+	const workspace = raw.workspace;
+	if (typeof workspace !== "string" || workspace.trim().length === 0) {
+		throw new Error(`Invalid Signet workspace config at ${workspaceConfigPath}: workspace must be a non-empty string`);
+	}
+
+	return resolve(expandHome(workspace.trim()));
 }
 
 export function resolveSignetDaemonUrl(): string {

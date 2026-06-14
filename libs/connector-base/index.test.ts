@@ -154,6 +154,13 @@ describe("resolveSignetWorkspacePath", () => {
 		expect(resolveSignetWorkspacePath()).toBe(resolve(relativeWorkspace));
 	});
 
+	it("uses the default workspace path when no persisted config exists", () => {
+		dir = mkdtempSync(join(tmpdir(), "signet-connector-base-workspace-"));
+		process.env.XDG_CONFIG_HOME = dir;
+
+		expect(resolveSignetWorkspacePath()).toBe(join(homedir(), ".agents"));
+	});
+
 	it("expands and normalizes the configured workspace path", () => {
 		dir = mkdtempSync(join(tmpdir(), "signet-connector-base-workspace-"));
 		process.env.XDG_CONFIG_HOME = dir;
@@ -173,6 +180,26 @@ describe("resolveSignetWorkspacePath", () => {
 		);
 
 		expect(resolveSignetWorkspacePath()).toBe(resolve(join(homedir(), rel, "..", rel, "agents")));
+	});
+
+	it("rejects malformed persisted workspace config instead of falling back to ~/.agents", () => {
+		dir = mkdtempSync(join(tmpdir(), "signet-connector-base-workspace-"));
+		process.env.XDG_CONFIG_HOME = dir;
+		const cfgDir = join(dir, "signet");
+		mkdirSync(cfgDir, { recursive: true });
+		writeFileSync(join(cfgDir, "workspace.json"), "{not json", "utf-8");
+
+		expect(() => resolveSignetWorkspacePath()).toThrow("Invalid Signet workspace config");
+	});
+
+	it("rejects persisted workspace config without a non-empty workspace path", () => {
+		dir = mkdtempSync(join(tmpdir(), "signet-connector-base-workspace-"));
+		process.env.XDG_CONFIG_HOME = dir;
+		const cfgDir = join(dir, "signet");
+		mkdirSync(cfgDir, { recursive: true });
+		writeFileSync(join(cfgDir, "workspace.json"), JSON.stringify({ version: 1, workspace: "  " }), "utf-8");
+
+		expect(() => resolveSignetWorkspacePath()).toThrow("workspace must be a non-empty string");
 	});
 });
 
