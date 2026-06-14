@@ -820,21 +820,21 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 	const tokenBudget = Math.max(1, rawTokenBudget);
 	let memories = selectWithTokenBudget(sortedCandidates.slice(0, recallLimit), tokenBudget);
 
-	// Get predicted context from recent session analysis (~30% of budget).
+	// Predicted context from recent session analysis is additive on top of main
+	// recall: it surfaces topics the user is likely to need next regardless of how
+	// much of the token budget main recall consumed. Capping it by memories.length
+	// would starve it to zero whenever recall fills to recallLimit (default 50),
+	// silently dropping the predicted-context feature entirely.
 	const existingIds = new Set(memories.map((m) => m.id));
-	const predictedLimit = Math.max(0, recallLimit - memories.length);
-	const predictedMemories =
-		predictedLimit > 0
-			? getPredictedContextMemories(
-				req.project,
-				Math.min(10, predictedLimit),
-				600,
-				existingIds,
-				agentId,
-				agentScope.readPolicy,
-				agentScope.policyGroup,
-			)
-			: [];
+	const predictedMemories = getPredictedContextMemories(
+		req.project,
+		10,
+		600,
+		existingIds,
+		agentId,
+		agentScope.readPolicy,
+		agentScope.policyGroup,
+	);
 	if (predictedMemories.length > 0) {
 		memories.push(...predictedMemories);
 	}
