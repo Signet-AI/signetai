@@ -85,6 +85,34 @@ describe("hooks config", () => {
 		expect(resolved.identity?.files?.map((entry) => entry.path)).toEqual(["AGENTS.md", "USER.md"]);
 	});
 
+	test("profile overrides inherit unrelated global hook settings instead of clobbering them", () => {
+		const dir = makeTempDir();
+		writeFileSync(
+			join(dir, "agent.yaml"),
+			`hooks:
+  sessionStart:
+    recallLimit: 50
+    recencyBias: 0.3
+    includeIdentity: false
+    maxInjectTokens: 12000
+  contextProfiles:
+    coding:
+      sessionStart:
+        recallLimit: 5
+  harnessProfiles:
+    pi: coding
+`,
+		);
+
+		const resolved = resolveHooksConfigForHarness(loadHooksConfig(dir), "pi");
+
+		expect(resolved.sessionStart?.recallLimit).toBe(5);
+		// Keys the profile did not mention must fall back to the global values.
+		expect(resolved.sessionStart?.recencyBias).toBe(0.3);
+		expect(resolved.sessionStart?.includeIdentity).toBe(false);
+		expect(resolved.sessionStart?.maxInjectTokens).toBe(12000);
+	});
+
 	test("rejects unsafe profile identity paths and non-positive file budgets", () => {
 		const dir = makeTempDir();
 		writeFileSync(

@@ -272,9 +272,14 @@ function readHarnessProfiles(value: unknown): Record<string, string> | undefined
 }
 
 function mergeConfig<T extends object>(base: T | undefined, override: T | undefined): T | undefined {
-	const merged = { ...(base ?? {}), ...(override ?? {}) } as Record<string, unknown>;
-	for (const key of Object.keys(merged)) {
-		if (merged[key] === undefined) delete merged[key];
+	// Profile readers emit fully-populated objects with `undefined` for unset keys.
+	// A naive spread would let an unset override key clobber a defined base value,
+	// so only copy override keys that are actually present and defined. This keeps
+	// global hook settings (e.g. `sessionStart.recencyBias`) inherited when a profile
+	// only overrides a subset of keys.
+	const merged = { ...(base ?? {}) } as Record<string, unknown>;
+	for (const [key, value] of Object.entries(override ?? {})) {
+		if (value !== undefined) merged[key] = value;
 	}
 	return Object.keys(merged).length > 0 ? (merged as T) : undefined;
 }
