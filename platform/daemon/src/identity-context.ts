@@ -6,6 +6,8 @@ import { countTokens, truncateToTokens } from "./pipeline/tokenizer";
 
 export type IdentityFileMap = Record<string, string>;
 
+const TRUNCATED_MARKER = "\n[truncated]";
+
 export interface IdentityContextSection {
 	path: string;
 	header: string;
@@ -78,7 +80,12 @@ function readIdentityPathWithBudget(
 			if (!Number.isFinite(budget.maxTokens) || budget.maxTokens <= 0) return undefined;
 			const maxTokens = Math.floor(budget.maxTokens);
 			if (countTokens(content) <= maxTokens) return content;
-			return `${truncateToTokens(content, maxTokens)}\n[truncated]`;
+			// Reserve room for the marker so the final string stays within budget.
+			// If the budget is too small to also flag truncation, cap without the marker
+			// rather than exceed the declared budget.
+			const markerTokens = countTokens(TRUNCATED_MARKER);
+			if (markerTokens >= maxTokens) return truncateToTokens(content, maxTokens);
+			return `${truncateToTokens(content, maxTokens - markerTokens)}${TRUNCATED_MARKER}`;
 		}
 
 		const charBudget = budget.maxChars ?? budget.budget;
@@ -86,7 +93,9 @@ function readIdentityPathWithBudget(
 			if (!Number.isFinite(charBudget) || charBudget <= 0) return undefined;
 			const maxChars = Math.floor(charBudget);
 			if (content.length <= maxChars) return content;
-			return `${content.slice(0, maxChars)}\n[truncated]`;
+			const markerChars = TRUNCATED_MARKER.length;
+			if (markerChars >= maxChars) return content.slice(0, maxChars);
+			return `${content.slice(0, maxChars - markerChars)}${TRUNCATED_MARKER}`;
 		}
 
 		return content;
