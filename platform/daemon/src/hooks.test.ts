@@ -875,7 +875,7 @@ hooks:
       identity:
         files:
           - path: AGENTS.md
-            maxTokens: 4
+            maxTokens: 6
           - path: USER.md
             maxTokens: 20
   harnessProfiles:
