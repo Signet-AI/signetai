@@ -121,10 +121,9 @@ export function registerAuthRoutes(app: Hono): void {
 		}
 
 		const ttl = authConfig.sessionTokenTtlSeconds;
-		const authenticatedUsername = login.username;
-		const token = createToken(authSecret, { sub: `dashboard:${authenticatedUsername}`, scope: {}, role: "admin" }, ttl);
+		const token = createToken(authSecret, { sub: "dashboard:admin", scope: {}, role: "admin" }, ttl);
 		const expiresAt = new Date(Date.now() + ttl * 1000).toISOString();
-		return c.json({ token, expiresAt, role: "admin", username: authenticatedUsername });
+		return c.json({ token, expiresAt, role: "admin", username: login.username });
 	});
 
 	app.get("/api/auth/sso/start", (c) => c.json({ error: "SSO login is not configured", provider: "sso" }, 501));
