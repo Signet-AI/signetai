@@ -9,7 +9,7 @@
 	},
 	"summary": {
 		"native-rust-replay-proven": 310,
-		"mounted-shallow": 3
+		"mounted-shallow": 9
 	},
 	"routes": [
 		{
@@ -136,7 +136,7 @@
 			"method": "GET",
 			"path": "/api/auth/api-keys",
 			"file": "platform/daemon/src/routes/auth-routes.ts",
-			"line": 65,
+			"line": 174,
 			"status": "mounted-shallow",
 			"rustMounted": true,
 			"contractReplay": false,
@@ -146,7 +146,7 @@
 			"method": "POST",
 			"path": "/api/auth/api-keys",
 			"file": "platform/daemon/src/routes/auth-routes.ts",
-			"line": 69,
+			"line": 178,
 			"status": "mounted-shallow",
 			"rustMounted": true,
 			"contractReplay": false,
@@ -156,7 +156,67 @@
 			"method": "DELETE",
 			"path": "/api/auth/api-keys/:id",
 			"file": "platform/daemon/src/routes/auth-routes.ts",
-			"line": 102,
+			"line": 211,
+			"status": "mounted-shallow",
+			"rustMounted": true,
+			"contractReplay": false,
+			"parityRule": false
+		},
+		{
+			"method": "POST",
+			"path": "/api/auth/login",
+			"file": "platform/daemon/src/routes/auth-routes.ts",
+			"line": 87,
+			"status": "mounted-shallow",
+			"rustMounted": true,
+			"contractReplay": false,
+			"parityRule": false
+		},
+		{
+			"method": "GET",
+			"path": "/api/auth/methods",
+			"file": "platform/daemon/src/routes/auth-routes.ts",
+			"line": 85,
+			"status": "mounted-shallow",
+			"rustMounted": true,
+			"contractReplay": false,
+			"parityRule": false
+		},
+		{
+			"method": "POST",
+			"path": "/api/auth/saml/acs",
+			"file": "platform/daemon/src/routes/auth-routes.ts",
+			"line": 132,
+			"status": "mounted-shallow",
+			"rustMounted": true,
+			"contractReplay": false,
+			"parityRule": false
+		},
+		{
+			"method": "GET",
+			"path": "/api/auth/saml/start",
+			"file": "platform/daemon/src/routes/auth-routes.ts",
+			"line": 133,
+			"status": "mounted-shallow",
+			"rustMounted": true,
+			"contractReplay": false,
+			"parityRule": false
+		},
+		{
+			"method": "GET",
+			"path": "/api/auth/sso/callback",
+			"file": "platform/daemon/src/routes/auth-routes.ts",
+			"line": 131,
+			"status": "mounted-shallow",
+			"rustMounted": true,
+			"contractReplay": false,
+			"parityRule": false
+		},
+		{
+			"method": "GET",
+			"path": "/api/auth/sso/start",
+			"file": "platform/daemon/src/routes/auth-routes.ts",
+			"line": 130,
 			"status": "mounted-shallow",
 			"rustMounted": true,
 			"contractReplay": false,
@@ -166,7 +226,7 @@
 			"method": "POST",
 			"path": "/api/auth/token",
 			"file": "platform/daemon/src/routes/auth-routes.ts",
-			"line": 38,
+			"line": 147,
 			"status": "native-rust-replay-proven",
 			"rustMounted": true,
 			"contractReplay": true,
@@ -176,7 +236,7 @@
 			"method": "GET",
 			"path": "/api/auth/whoami",
 			"file": "platform/daemon/src/routes/auth-routes.ts",
-			"line": 17,
+			"line": 72,
 			"status": "native-rust-replay-proven",
 			"rustMounted": true,
 			"contractReplay": true,

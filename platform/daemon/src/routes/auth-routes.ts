@@ -1,15 +1,15 @@
 import type { Context, Hono, Next } from "hono";
 import {
+	type Permission,
+	type TokenRole,
+	type TokenScope,
 	createApiKey,
 	createToken,
 	getPeerAddress,
 	listApiKeys,
 	requirePermission,
-	revokeApiKey,
 	requireRateLimit,
-	type Permission,
-	type TokenRole,
-	type TokenScope,
+	revokeApiKey,
 	verifyPasswordHash,
 	verifyPlainPassword,
 } from "../auth";
@@ -42,15 +42,15 @@ function isValidLoginString(value: unknown, maxLength: number): value is string 
 }
 
 function authProviderResponse() {
-	const password = resolvePasswordLogin();
+	const login = resolvePasswordLogin();
 	return {
 		mode: authConfig.mode,
 		providers: [
 			{
 				id: "password",
 				type: "password",
-				enabled: password.configured,
-				username: password.username,
+				enabled: login.configured,
+				username: login.username,
 			},
 			{
 				id: "sso",
@@ -108,22 +108,23 @@ export function registerAuthRoutes(app: Hono): void {
 			return c.json({ error: "password is required" }, 400);
 		}
 
-		const password = resolvePasswordLogin();
-		if (!password.configured) {
+		const login = resolvePasswordLogin();
+		if (!login.configured) {
 			return c.json({ error: "password login is not configured" }, 503);
 		}
 
-		const usernameMatches = verifyPlainPassword(payload.username, password.username);
-		const hashMatches = password.passwordHash ? verifyPasswordHash(payload.password, password.passwordHash) : false;
-		const plainMatches = password.plainPassword ? verifyPlainPassword(payload.password, password.plainPassword) : false;
+		const usernameMatches = verifyPlainPassword(payload.username, login.username);
+		const hashMatches = login.passwordHash ? verifyPasswordHash(payload.password, login.passwordHash) : false;
+		const plainMatches = login.plainPassword ? verifyPlainPassword(payload.password, login.plainPassword) : false;
 		if (!usernameMatches || (!hashMatches && !plainMatches)) {
 			return c.json({ error: "invalid username or password" }, 401);
 		}
 
 		const ttl = authConfig.sessionTokenTtlSeconds;
-		const token = createToken(authSecret, { sub: `dashboard:${password.username}`, scope: {}, role: "admin" }, ttl);
+		const authenticatedUsername = login.username;
+		const token = createToken(authSecret, { sub: `dashboard:${authenticatedUsername}`, scope: {}, role: "admin" }, ttl);
 		const expiresAt = new Date(Date.now() + ttl * 1000).toISOString();
-		return c.json({ token, expiresAt, role: "admin", username: password.username });
+		return c.json({ token, expiresAt, role: "admin", username: authenticatedUsername });
 	});
 
 	app.get("/api/auth/sso/start", (c) => c.json({ error: "SSO login is not configured", provider: "sso" }, 501));

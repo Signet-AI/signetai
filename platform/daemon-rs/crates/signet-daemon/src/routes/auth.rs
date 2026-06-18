@@ -115,6 +115,75 @@ fn role_name(role: TokenRole) -> &'static str {
     }
 }
 
+/// GET /api/auth/methods — advertise dashboard login providers.
+pub async fn methods(State(state): State<Arc<AppState>>) -> Json<Value> {
+    let auth_runtime = state.auth_snapshot();
+    Json(json!({
+        "mode": auth_runtime.mode,
+        "providers": [
+            {
+                "id": "password",
+                "type": "password",
+                "enabled": false,
+                "username": "admin",
+            },
+            {
+                "id": "sso",
+                "type": "oidc",
+                "enabled": false,
+                "startPath": "/api/auth/sso/start",
+            },
+            {
+                "id": "saml",
+                "type": "saml",
+                "enabled": false,
+                "startPath": "/api/auth/saml/start",
+            },
+        ],
+    }))
+}
+
+/// POST /api/auth/login — password login is not implemented in daemon-rs yet.
+pub async fn login() -> Response {
+    (
+        StatusCode::NOT_IMPLEMENTED,
+        Json(json!({"error": "password login is not available in the Rust shadow daemon yet"})),
+    )
+        .into_response()
+}
+
+pub async fn sso_start() -> Response {
+    (
+        StatusCode::NOT_IMPLEMENTED,
+        Json(json!({"error": "SSO login is not configured", "provider": "sso"})),
+    )
+        .into_response()
+}
+
+pub async fn sso_callback() -> Response {
+    (
+        StatusCode::NOT_IMPLEMENTED,
+        Json(json!({"error": "SSO callback is not configured", "provider": "sso"})),
+    )
+        .into_response()
+}
+
+pub async fn saml_start() -> Response {
+    (
+        StatusCode::NOT_IMPLEMENTED,
+        Json(json!({"error": "SAML login is not configured", "provider": "saml"})),
+    )
+        .into_response()
+}
+
+pub async fn saml_acs() -> Response {
+    (
+        StatusCode::NOT_IMPLEMENTED,
+        Json(json!({"error": "SAML ACS is not configured", "provider": "saml"})),
+    )
+        .into_response()
+}
+
 /// GET /api/auth/api-keys — TS daemon owns API-key storage for now.
 pub async fn list_api_keys(
     State(state): State<Arc<AppState>>,

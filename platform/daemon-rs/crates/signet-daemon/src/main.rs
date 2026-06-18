@@ -206,6 +206,15 @@ async fn main() -> anyhow::Result<()> {
         .route("/health", get(health))
         .route("/api/status", get(status))
         .route("/api/auth/whoami", get(routes::auth::whoami))
+        .route("/api/auth/methods", get(routes::auth::methods))
+        .route("/api/auth/login", axum::routing::post(routes::auth::login))
+        .route("/api/auth/sso/start", get(routes::auth::sso_start))
+        .route("/api/auth/sso/callback", get(routes::auth::sso_callback))
+        .route("/api/auth/saml/start", get(routes::auth::saml_start))
+        .route(
+            "/api/auth/saml/acs",
+            axum::routing::post(routes::auth::saml_acs),
+        )
         .route("/api/auth/token", axum::routing::post(routes::auth::token))
         .route(
             "/api/auth/api-keys",

@@ -151,7 +151,11 @@ async function refreshAuthGate(): Promise<void> {
 	try {
 		const status = await getAuthStatus();
 		authProviders = status?.providers ?? [];
-		if (!status || status.effectiveAccess || status.mode === "local" || status.authenticated) {
+		if (!status) {
+			authGate = "login";
+			return;
+		}
+		if (status.effectiveAccess || status.mode === "local" || status.authenticated) {
 			authGate = "open";
 			return;
 		}
