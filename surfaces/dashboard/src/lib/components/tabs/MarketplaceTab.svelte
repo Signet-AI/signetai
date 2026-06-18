@@ -1,11 +1,15 @@
 <script lang="ts">
+import type { SkillSearchResult } from "$lib/api";
 import McpServersTab from "$lib/components/marketplace/McpServersTab.svelte";
 import PluginsPanel from "$lib/components/plugins/PluginsPanel.svelte";
-import SkillsTab from "$lib/components/tabs/SkillsTab.svelte";
+import SkillDetail from "$lib/components/skills/SkillDetail.svelte";
+import SkillGrid from "$lib/components/skills/SkillGrid.svelte";
+import SkillsComparePanel from "$lib/components/skills/SkillsComparePanel.svelte";
 import { getSkillsProviderLabel, normalizeSkillsProviderFilter } from "$lib/components/tabs/marketplace-filters";
 import { Button } from "$lib/components/ui/button/index.js";
 import * as Collapsible from "$lib/components/ui/collapsible/index.js";
 import * as Select from "$lib/components/ui/select/index.js";
+import { ChevronDown } from "$lib/icons";
 import { returnToSidebar } from "$lib/stores/focus.svelte";
 import {
 	fetchMarketplaceMcpCatalog,
@@ -26,9 +30,19 @@ import {
 } from "$lib/stores/marketplace-reviews.svelte";
 import { nav } from "$lib/stores/navigation.svelte";
 import { loadPlugins, pluginsStore } from "$lib/stores/plugins.svelte";
-import { fetchCatalog, fetchInstalled, getCategoryOptions, setQuery, sk } from "$lib/stores/skills.svelte";
+import {
+	clearCompare,
+	doInstall,
+	doUninstall,
+	fetchCatalog,
+	fetchInstalled,
+	getCategoryOptions,
+	openDetail,
+	setQuery,
+	sk,
+	toggleCompare,
+} from "$lib/stores/skills.svelte";
 import { toast } from "$lib/stores/toast.svelte";
-import { ChevronDown } from "$lib/icons";
 import { onMount } from "svelte";
 
 type MarketplaceSection = "skills" | "mcp" | "plugins";
@@ -213,6 +227,77 @@ function setActiveView(value: "browse" | "installed"): void {
 	mcpMarket.view = value;
 }
 
+function getMarketplaceSkillMode(): "installed" | "browse" {
+	return sk.view === "installed" && !sk.query.trim() ? "installed" : "browse";
+}
+
+function getMarketplaceSkillItems() {
+	if (sk.view === "installed" && !sk.query.trim()) return sk.installed;
+	const source = sk.query.trim() ? sk.results : sk.catalog;
+	const filtered = source.filter((item) => {
+		const providerMatches = sk.providerFilter === "all" || item.provider === sk.providerFilter;
+		const categoryMatches = sk.categoryFilter === "all" || (item.category ?? "Other") === sk.categoryFilter;
+		return providerMatches && categoryMatches;
+	});
+	if (sk.sortBy === "newest") return filtered;
+	return [...filtered].sort((a, b) => {
+		if (sk.sortBy === "installs") return (b.installsRaw ?? 0) - (a.installsRaw ?? 0);
+		if (sk.sortBy === "stars") return (b.stars ?? 0) - (a.stars ?? 0);
+		if (sk.sortBy === "name") return a.name.localeCompare(b.name);
+		return (b.popularityScore ?? b.installsRaw ?? 0) - (a.popularityScore ?? a.installsRaw ?? 0);
+	});
+}
+
+function isMarketplaceSkillsLoading(): boolean {
+	if (sk.searching) return true;
+	if (sk.view === "installed" && !sk.query.trim()) return sk.loading && sk.installed.length === 0;
+	return sk.catalogLoading && sk.catalog.length === 0;
+}
+
+function getMarketplaceSkillEmptyState(): "installed" | "browse" | "search" | null {
+	if (isMarketplaceSkillsLoading()) return null;
+	const items = getMarketplaceSkillItems();
+	if (sk.query.trim() && items.length === 0) return "search";
+	if (sk.view === "installed" && !sk.query.trim() && items.length === 0) return "installed";
+	if (sk.view === "browse" && !sk.query.trim() && items.length === 0) return "browse";
+	return null;
+}
+
+function getMarketplaceCompareItems(): SkillSearchResult[] {
+	return getMarketplaceSkillItems()
+		.filter((item): item is SkillSearchResult => "fullName" in item)
+		.filter((item) => sk.compareSelected.includes(item.fullName));
+}
+
+function handleMarketplaceSkillEmptyAction(action: "primary" | "secondary"): void {
+	const emptyState = getMarketplaceSkillEmptyState();
+	if (emptyState === "installed") {
+		if (action === "primary") {
+			sk.view = "browse";
+			void fetchCatalog();
+			return;
+		}
+		return;
+	}
+	if (emptyState === "browse") {
+		if (action === "primary") {
+			sk.providerFilter = "all";
+			return;
+		}
+		sk.catalogLoaded = false;
+		void fetchCatalog({ force: true });
+		return;
+	}
+	if (emptyState === "search") {
+		setQuery("");
+		if (action === "secondary") {
+			sk.view = "browse";
+			sk.providerFilter = "all";
+			void fetchCatalog();
+		}
+	}
+}
+
 function hasUsedTarget(targetType: "skill" | "mcp", targetId: string): boolean {
 	if (targetType === "skill") {
 		return sk.installed.some((s) => s.name === targetId);
@@ -239,7 +324,7 @@ async function refreshSkills(): Promise<void> {
 	refreshingSkills = true;
 	try {
 		sk.catalogLoaded = false;
-		await Promise.all([fetchInstalled(), fetchCatalog()]);
+		await Promise.all([fetchInstalled(), fetchCatalog({ force: true })]);
 	} finally {
 		refreshingSkills = false;
 	}
@@ -796,7 +881,35 @@ $effect(() => {
 
 			<div class="module-body">
 				{#if section === "skills"}
-					<SkillsTab embedded={true} showViewTabs={false} onreviewrequest={handleReviewRequest} />
+					{#if isMarketplaceSkillsLoading()}
+						<div class="skill-loading-state">{sk.searching ? "Searching..." : "Loading..."}</div>
+					{:else}
+					{#if getMarketplaceCompareItems().length > 0}
+						<SkillsComparePanel
+							items={getMarketplaceCompareItems()}
+							onRemove={(key) => toggleCompare(key)}
+							onClear={clearCompare}
+						/>
+					{/if}
+					{#key `${sk.view}:${sk.catalog.length}:${sk.installed.length}:${sk.results.length}:${sk.query}:${sk.sortBy}:${sk.providerFilter}:${sk.categoryFilter}`}
+						<SkillGrid
+							items={getMarketplaceSkillItems()}
+							mode={getMarketplaceSkillMode()}
+							selectedName={sk.selectedName}
+							installing={sk.installing}
+							uninstalling={sk.uninstalling}
+							onitemclick={(name) => openDetail(name)}
+							oninstall={(name) => doInstall(name)}
+							onuninstall={(name) => doUninstall(name)}
+							emptyState={getMarketplaceSkillEmptyState()}
+							onemptyaction={handleMarketplaceSkillEmptyAction}
+							compareSelectedKeys={sk.compareSelected}
+							oncomparetoggle={toggleCompare}
+							onreviewrequest={handleReviewRequest}
+						/>
+					{/key}
+					<SkillDetail />
+					{/if}
 				{:else if section === "mcp"}
 					<McpServersTab
 						embedded={true}
@@ -1290,6 +1403,19 @@ $effect(() => {
 	.module-body {
 		flex: 1;
 		min-height: 0;
+		display: flex;
+		flex-direction: column;
+	}
+
+	.skill-loading-state {
+		flex: 1;
+		min-height: 160px;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		font-family: var(--font-body);
+		font-size: 12px;
+		color: var(--sig-text-muted);
 	}
 
 	.store-rail {

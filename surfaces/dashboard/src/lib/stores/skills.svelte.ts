@@ -14,6 +14,7 @@ import {
 	searchSkills,
 	uninstallSkill,
 } from "$lib/api";
+import { shouldPreserveCatalogOnEmptyRefresh } from "$lib/stores/skills-load-policy";
 import { toast } from "$lib/stores/toast.svelte";
 
 export type SkillsView = "browse" | "installed";
@@ -67,7 +68,7 @@ async function refreshCatalogInBackground(): Promise<void> {
 }
 
 export const sk = $state({
-	view: "browse" as SkillsView,
+	view: "installed" as SkillsView,
 
 	installed: [] as Skill[],
 	loading: false,
@@ -111,6 +112,16 @@ export function getCatalogByName(): Map<string, SkillSearchResult> {
 }
 
 let searchTimer: ReturnType<typeof setTimeout> | null = null;
+let installedLoadPromise: Promise<void> | null = null;
+let catalogLoadPromise: Promise<void> | null = null;
+
+type InstalledLoadOptions = {
+	force?: boolean;
+};
+
+type CatalogLoadOptions = {
+	force?: boolean;
+};
 
 function sortItems(items: readonly SkillSearchResult[], sortBy: SortBy): SkillSearchResult[] {
 	const sorted = [...items];
@@ -183,43 +194,68 @@ export function toggleCompare(skillKey: string): void {
 	sk.compareSelected = [...sk.compareSelected, skillKey];
 }
 
-export async function fetchInstalled(): Promise<void> {
-	sk.loading = true;
-	try {
-		sk.installed = await getSkills();
-	} finally {
-		sk.loading = false;
+export async function fetchInstalled(options: InstalledLoadOptions = {}): Promise<void> {
+	if (installedLoadPromise) {
+		if (!options.force) return installedLoadPromise;
+		await installedLoadPromise;
 	}
+
+	installedLoadPromise = (async () => {
+		sk.loading = true;
+		try {
+			sk.installed = await getSkills();
+		} finally {
+			sk.loading = false;
+			installedLoadPromise = null;
+		}
+	})();
+
+	return installedLoadPromise;
 }
 
-export async function fetchCatalog(): Promise<void> {
-	if (sk.catalogLoaded) return;
+export async function fetchCatalog(options: CatalogLoadOptions = {}): Promise<void> {
+	const force = options.force === true;
+	if (!force && sk.catalogLoaded && sk.catalog.length > 0) return;
+	if (catalogLoadPromise) return catalogLoadPromise;
 
-	const cached = loadCatalogCache();
-	if (cached) {
-		// Serve cache immediately — grid renders with no loading state
-		sk.catalog = cached.results;
-		sk.catalogTotal = cached.total;
-		sk.catalogLoaded = true;
-		sk.catalogLoading = false;
-		// Refresh in the background if the entry is stale
-		if (Date.now() - cached.ts > CATALOG_CACHE_TTL) {
-			void refreshCatalogInBackground();
+	if (!force) {
+		const cached = loadCatalogCache();
+		if (cached) {
+			// Serve cache immediately — grid renders with no loading state
+			sk.catalog = cached.results;
+			sk.catalogTotal = cached.total;
+			sk.catalogLoaded = true;
+			sk.catalogLoading = false;
+			// Refresh in the background if the entry is stale
+			if (Date.now() - cached.ts > CATALOG_CACHE_TTL) {
+				void refreshCatalogInBackground();
+			}
+			return;
 		}
-		return;
 	}
 
-	// Cold load — no cache yet, show spinner and wait
-	sk.catalogLoading = true;
-	try {
-		const data = await browseSkills();
-		sk.catalog = data.results;
-		sk.catalogTotal = data.total;
-		sk.catalogLoaded = true;
-		saveCatalogCache(data.results, data.total);
-	} finally {
-		sk.catalogLoading = false;
-	}
+	// Cold load — no cache yet, show spinner and wait. Multiple callers share
+	// one owner promise so an embedded SkillsTab cannot leave the shared loading
+	// flag true after the marketplace parent already finished loading.
+	catalogLoadPromise = (async () => {
+		sk.catalogLoading = true;
+		try {
+			const data = await browseSkills();
+			if (shouldPreserveCatalogOnEmptyRefresh(data.results.length, sk.catalog.length)) {
+				sk.catalogLoaded = true;
+				return;
+			}
+			sk.catalog = data.results;
+			sk.catalogTotal = data.total;
+			sk.catalogLoaded = true;
+			saveCatalogCache(data.results, data.total);
+		} finally {
+			sk.catalogLoading = false;
+			catalogLoadPromise = null;
+		}
+	})();
+
+	return catalogLoadPromise;
 }
 
 export function setQuery(q: string): void {
@@ -282,7 +318,7 @@ export async function doInstall(name: string): Promise<void> {
 	const result = await installSkill(name, source);
 	if (result.success) {
 		toast(`Skill ${name} installed`, "success");
-		await fetchInstalled();
+		await fetchInstalled({ force: true });
 		// Update installed flag in results and catalog
 		const markInstalled = (s: SkillSearchResult) => (s.name === name ? { ...s, installed: true } : s);
 		sk.results = sk.results.map(markInstalled);
@@ -298,7 +334,7 @@ export async function doUninstall(name: string): Promise<void> {
 	const result = await uninstallSkill(name);
 	if (result.success) {
 		toast(`Skill ${name} uninstalled`, "success");
-		await fetchInstalled();
+		await fetchInstalled({ force: true });
 		const markUninstalled = (s: SkillSearchResult) => (s.name === name ? { ...s, installed: false } : s);
 		sk.results = sk.results.map(markUninstalled);
 		sk.catalog = sk.catalog.map(markUninstalled);
