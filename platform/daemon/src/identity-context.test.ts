@@ -102,6 +102,14 @@ describe("identity context", () => {
 		expect(readContextIdentitySections(dir, { files: [{ path: "context.md", maxTokens: 20 }] })).toEqual([]);
 	});
 
+	test("profile identity sections reject markdown symlinks to non-markdown targets", () => {
+		const dir = makeTempDir();
+		writeFileSync(join(dir, "agent.yaml"), "agent:\n  name: Do Not Inject\n");
+		symlinkSync(join(dir, "agent.yaml"), join(dir, "context.md"));
+
+		expect(readContextIdentitySections(dir, { files: [{ path: "context.md", maxTokens: 20 }] })).toEqual([]);
+	});
+
 	test("profile identity include false suppresses all identity sections", () => {
 		const dir = makeTempDir();
 		writeFileSync(join(dir, "AGENTS.md"), "agent instructions");

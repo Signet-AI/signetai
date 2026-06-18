@@ -112,6 +112,7 @@ function isSafeResolvedIdentityPath(agentsDir: string, filePath: string): boolea
 	try {
 		const base = realpathSync(agentsDir);
 		const target = realpathSync(filePath);
+		if (!target.toLowerCase().endsWith(".md")) return false;
 		const rel = relative(base, target);
 		if (!rel || rel.startsWith("..") || isAbsolute(rel)) return false;
 		const deniedDirs = new Set([".daemon", ".secrets", "memory"]);
@@ -169,7 +170,10 @@ export function parseIdentityMarkdown(content: string): { name: string; descript
 	};
 }
 
-export function loadIdentity(agentsDir: string, identityFiles?: IdentityFileMap): { name: string; description?: string } {
+export function loadIdentity(
+	agentsDir: string,
+	identityFiles?: IdentityFileMap,
+): { name: string; description?: string } {
 	const identityMd = identityFiles?.["IDENTITY.md"];
 	if (identityMd && existsSync(identityMd)) {
 		try {
