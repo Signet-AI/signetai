@@ -5,6 +5,7 @@ import FormSection from "$lib/components/config/FormSection.svelte";
 import { Input } from "$lib/components/ui/input/index.js";
 import * as Select from "$lib/components/ui/select/index.js";
 import { Switch } from "$lib/components/ui/switch/index.js";
+import { humanizeConfigKey } from "$lib/issue-848-format";
 import {
 	PIPELINE_CONTRADICTION_NUMS,
 	PIPELINE_CORE_BOOLS,
@@ -420,7 +421,7 @@ const ADVANCED_FEATURE_KEYS = ["autonomousFrozen"] as const;
 			</div>
 		</div>
 
-		<FormField label={PIPELINE_CORE_BOOLS[0].key} description={PIPELINE_CORE_BOOLS[0].desc}>
+		<FormField label={humanizeConfigKey(PIPELINE_CORE_BOOLS[0].key)} description={PIPELINE_CORE_BOOLS[0].desc}>
 			<Switch checked={st.aBool(["memory", "pipelineV2", PIPELINE_CORE_BOOLS[0].key])} onCheckedChange={setBool(["memory", "pipelineV2", PIPELINE_CORE_BOOLS[0].key])} />
 		</FormField>
 
@@ -580,26 +581,26 @@ const ADVANCED_FEATURE_KEYS = ["autonomousFrozen"] as const;
 		</FormField>
 
 		{#each PIPELINE_FEATURE_BOOLS.filter(b => TOP_LEVEL_FEATURE_KEYS.includes(b.key as typeof TOP_LEVEL_FEATURE_KEYS[number])) as { key, desc } (key)}
-			<FormField label={key} description={desc}>
+			<FormField label={humanizeConfigKey(key)} description={desc}>
 				<Switch checked={st.aBool(["memory", "pipelineV2", key])} onCheckedChange={setBool(["memory", "pipelineV2", key])} />
 			</FormField>
 		{/each}
 
 		{#each PIPELINE_RERANKER_BOOLS as { key, desc } (key)}
-			<FormField label={key} description={desc}>
+			<FormField label={humanizeConfigKey(key)} description={desc}>
 				<Switch checked={st.aBool(["memory", "pipelineV2", key])} onCheckedChange={setBool(["memory", "pipelineV2", key])} />
 			</FormField>
 		{/each}
 
 		<AdvancedSection>
-			<FormField label={PIPELINE_CORE_BOOLS[1].key} description={PIPELINE_CORE_BOOLS[1].desc}>
+			<FormField label={humanizeConfigKey(PIPELINE_CORE_BOOLS[1].key)} description={PIPELINE_CORE_BOOLS[1].desc}>
 				<Switch checked={st.aBool(["memory", "pipelineV2", PIPELINE_CORE_BOOLS[1].key])} onCheckedChange={setBool(["memory", "pipelineV2", PIPELINE_CORE_BOOLS[1].key])} />
 			</FormField>
-			<FormField label={PIPELINE_CORE_BOOLS[2].key} description={PIPELINE_CORE_BOOLS[2].desc}>
+			<FormField label={humanizeConfigKey(PIPELINE_CORE_BOOLS[2].key)} description={PIPELINE_CORE_BOOLS[2].desc}>
 				<Switch checked={st.aBool(["memory", "pipelineV2", PIPELINE_CORE_BOOLS[2].key])} onCheckedChange={setBool(["memory", "pipelineV2", PIPELINE_CORE_BOOLS[2].key])} />
 			</FormField>
 			{#each PIPELINE_FEATURE_BOOLS.filter(b => ADVANCED_FEATURE_KEYS.includes(b.key as typeof ADVANCED_FEATURE_KEYS[number])) as { key, desc } (key)}
-				<FormField label={key} description={desc}>
+				<FormField label={humanizeConfigKey(key)} description={desc}>
 					<Switch checked={st.aBool(["memory", "pipelineV2", key])} onCheckedChange={setBool(["memory", "pipelineV2", key])} />
 				</FormField>
 			{/each}

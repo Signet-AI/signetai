@@ -1,6 +1,7 @@
 <script lang="ts">
 import { type AgentPresence, selectLatestOwnPresence } from "$lib/agent-presence";
 import type { ContinuityEntry, DaemonStatus, DiagnosticsReport, Identity, MemoryStats, PipelineStatus } from "$lib/api";
+import { formatDaemonUptime } from "$lib/issue-848-format";
 
 interface Props {
 	identity: Identity;
@@ -28,20 +29,7 @@ const {
 	memoryStats = null,
 }: Props = $props();
 
-const ageDays = $derived.by(() => {
-	const created = daemonStatus?.agentCreatedAt;
-	if (!created) return null;
-	const ts = new Date(created).getTime();
-	if (Number.isNaN(ts)) return null;
-	return Math.max(0, Math.floor((Date.now() - ts) / 86_400_000));
-});
-
-const ageLabel = $derived.by(() => {
-	if (ageDays === null) return "--";
-	if (ageDays === 0) return "TODAY";
-	if (ageDays === 1) return "1 DAY";
-	return `${ageDays} DAYS`;
-});
+const uptimeLabel = $derived(formatDaemonUptime(daemonStatus?.uptime));
 
 const activeSessions = $derived(daemonStatus?.activeSessions ?? 0);
 const version = $derived(daemonStatus?.version ?? "--");
@@ -122,7 +110,7 @@ function scoreColor(score: number | null): string {
 type Row = { idx: string; label: string; value: string; color?: string };
 
 const leftRows: Row[] = $derived([
-	{ idx: "01", label: "UPTIME", value: ageLabel },
+	{ idx: "01", label: "UPTIME", value: uptimeLabel },
 	{ idx: "02", label: "PROJECT", value: projectName },
 	{ idx: "03", label: "LAST SEEN", value: recency },
 	{ idx: "04", label: "CONNECTORS", value: String(connectorCount) },

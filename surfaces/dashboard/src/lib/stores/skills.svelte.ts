@@ -185,8 +185,11 @@ export function toggleCompare(skillKey: string): void {
 
 export async function fetchInstalled(): Promise<void> {
 	sk.loading = true;
-	sk.installed = await getSkills();
-	sk.loading = false;
+	try {
+		sk.installed = await getSkills();
+	} finally {
+		sk.loading = false;
+	}
 }
 
 export async function fetchCatalog(): Promise<void> {
@@ -208,12 +211,15 @@ export async function fetchCatalog(): Promise<void> {
 
 	// Cold load — no cache yet, show spinner and wait
 	sk.catalogLoading = true;
-	const data = await browseSkills();
-	sk.catalog = data.results;
-	sk.catalogTotal = data.total;
-	sk.catalogLoaded = true;
-	sk.catalogLoading = false;
-	saveCatalogCache(data.results, data.total);
+	try {
+		const data = await browseSkills();
+		sk.catalog = data.results;
+		sk.catalogTotal = data.total;
+		sk.catalogLoaded = true;
+		saveCatalogCache(data.results, data.total);
+	} finally {
+		sk.catalogLoading = false;
+	}
 }
 
 export function setQuery(q: string): void {

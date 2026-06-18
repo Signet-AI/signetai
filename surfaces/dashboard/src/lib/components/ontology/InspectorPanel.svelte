@@ -1,14 +1,16 @@
 <script lang="ts">
-import { ArrowLeft, CircleDot, Hexagon, Table2, User } from "$lib/icons";
 import type { KnowledgeAttribute } from "$lib/api";
 import { Badge } from "$lib/components/ui/badge/index.js";
 import { ScrollArea } from "$lib/components/ui/scroll-area/index.js";
+import { ArrowLeft, CircleDot, Hexagon, Table2, User } from "$lib/icons";
+import { summarizeOntologyText } from "$lib/issue-848-format";
 import { NODE_COLORS, entityNameFromGraph } from "./ontology-data";
 import { loadAspectDetail, loadEntityDetail, ontology, selectNode } from "./ontology-state.svelte";
 
 interface Props {
 	agentId?: string;
 }
+// biome-ignore lint/style/useConst: Svelte props can update after initial mount.
 let { agentId = "default" }: Props = $props();
 
 // Load entity detail when entity or agentId changes
@@ -132,6 +134,10 @@ function formatDate(iso: string): string {
 
 function entityName(id: string): string {
 	return entityNameFromGraph(ontology.entities, id);
+}
+
+function displayOntologyText(value: string): string {
+	return summarizeOntologyText(value);
 }
 
 function navigateTo(id: string, kind: "entity" | "aspect" | "attribute"): void {
@@ -321,7 +327,7 @@ function navigateTo(id: string, kind: "entity" | "aspect" | "attribute"): void {
 											c:{attr.confidence.toFixed(2)} i:{attr.importance.toFixed(2)}
 										</span>
 									</div>
-									<p class="attr-card-content">{attr.content}</p>
+									<p class="attr-card-content">{displayOntologyText(attr.content)}</p>
 								</button>
 							{/each}
 						</div>
@@ -373,7 +379,7 @@ function navigateTo(id: string, kind: "entity" | "aspect" | "attribute"): void {
 
 				<div class="section">
 					<div class="section-label">CONTENT</div>
-					<p class="desc-text">{selectedAttr.content}</p>
+					<p class="desc-text">{displayOntologyText(selectedAttr.content)}</p>
 				</div>
 
 				<div class="section">

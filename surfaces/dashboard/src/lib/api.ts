@@ -1831,7 +1831,7 @@ export async function browseSkills(): Promise<{
 	total: number;
 }> {
 	try {
-		const response = await fetch(`${API_BASE}/api/skills/browse`);
+		const response = await fetch(`${API_BASE}/api/skills/browse`, { signal: AbortSignal.timeout(5000) });
 		if (!response.ok) throw new Error("Browse failed");
 		return await response.json();
 	} catch {

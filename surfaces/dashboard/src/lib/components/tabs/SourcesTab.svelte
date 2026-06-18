@@ -28,6 +28,7 @@ import {
 	Upload,
 	X,
 } from "$lib/icons";
+import { sourceHasChunkCoverageWarning } from "$lib/issue-848-format";
 import { onDestroy, onMount } from "svelte";
 
 type SourceKind =
@@ -916,6 +917,9 @@ function sourceScanLabel(source: SignetSourceEntry): string {
 	const itemLabel = source.kind === "obsidian" ? "notes" : source.kind === "github" ? "items" : "artifacts";
 	const indexed = source.stats?.indexed ?? 0;
 	const chunks = source.stats?.chunks ?? 0;
+	if (indexed > 0 && chunks === 0) {
+		return `${indexed} ${itemLabel} · 0 chunks · extraction pending`;
+	}
 	if (indexed > 0) return `${indexed} ${itemLabel} · ${chunks} chunks${source.lastIndexedAt ? "" : " · syncing"}`;
 	return source.lastIndexedAt
 		? `Scan completed with no indexed ${itemLabel}`
@@ -928,6 +932,7 @@ function sourceHealthLabel(source: SignetSourceEntry): string {
 	if (health.status === "empty") return "No indexed source rows yet";
 	if (health.status === "unhealthy") return health.error ?? "Health diagnostics failed";
 	if (health.status === "healthy") {
+		if (sourceHasChunkCoverageWarning(source.stats)) return "Needs attention · indexed rows have no chunks";
 		const checkpointLabel =
 			source.kind === "discord" && (health.checkpoints?.total ?? 0) > 0
 				? ` · ${health.checkpoints?.total ?? 0} checkpoints`
@@ -947,6 +952,7 @@ function sourceHealthLabel(source: SignetSourceEntry): string {
 
 function sourceHealthTone(source: SignetSourceEntry): string {
 	if (!source.health) return "unknown";
+	if (source.health.status === "healthy" && sourceHasChunkCoverageWarning(source.stats)) return "degraded";
 	return source.health.status;
 }
 

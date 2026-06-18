@@ -12,6 +12,7 @@ interface Props {
 	ontoggle: (id: string, enabled: boolean) => void;
 }
 
+// biome-ignore lint/style/useConst: Svelte props can update after initial mount.
 let {
 	tasks,
 	loading,
@@ -27,9 +28,11 @@ const scheduled = $derived(tasks.filter((t) => t.enabled && t.last_run_status !=
 const running = $derived(tasks.filter((t) => t.last_run_status === "running"));
 
 const completed = $derived(
-	tasks.filter((t) => t.last_run_status === "completed" && !running.some((r) => r.id === t.id)),
+	tasks.filter((t) => t.enabled && t.last_run_status === "completed" && !running.some((r) => r.id === t.id)),
 );
-const failed = $derived(tasks.filter((t) => t.last_run_status === "failed" && !running.some((r) => r.id === t.id)));
+const failed = $derived(
+	tasks.filter((t) => t.enabled && t.last_run_status === "failed" && !running.some((r) => r.id === t.id)),
+);
 const disabled = $derived(tasks.filter((t) => !t.enabled));
 
 const columns = [

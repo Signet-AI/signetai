@@ -5,6 +5,7 @@ import type {
 	ConstellationGraph,
 	ConstellationProposal,
 } from "$lib/api";
+import { summarizeOntologyText } from "../../issue-848-format";
 
 export type KnowledgeMapNodeKind =
 	| "source"
@@ -425,7 +426,7 @@ function toAspectNode(
 	const topAttributes = aspect.attributes
 		.toSorted((a, b) => b.importance - a.importance)
 		.slice(0, 3)
-		.map((attribute) => attribute.content)
+		.map((attribute) => summarizeOntologyText(attribute.content, 96))
 		.join(" / ");
 	return {
 		id: `aspect:${aspect.id}`,
@@ -478,10 +479,10 @@ function toAttributeNode(
 	return {
 		id: `attribute:${attribute.id}`,
 		kind: "attribute",
-		label: truncate(attribute.content, 58),
+		label: truncate(summarizeOntologyText(attribute.content, 96), 58),
 		searchText: attribute.content,
 		sublabel: attribute.kind,
-		preview: attribute.content,
+		preview: summarizeOntologyText(attribute.content),
 		parentId: parent.id,
 		status: attribute.proposalId ? "review" : attribute.status === "deleted" ? "forgotten" : "current",
 		weight: attribute.importance,

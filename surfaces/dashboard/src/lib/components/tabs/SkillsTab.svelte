@@ -147,6 +147,12 @@ const compareItems = $derived.by(() => {
 	return available.filter((item) => sk.compareSelected.includes(item.fullName));
 });
 
+const showLoading = $derived.by(() => {
+	if (sk.searching) return true;
+	if (displayMode === "installed") return sk.loading && sk.installed.length === 0;
+	return sk.catalogLoading && sk.catalog.length === 0;
+});
+
 function handleEmptyAction(action: "primary" | "secondary") {
 	if (emptyState === "installed") {
 		if (action === "primary") {
@@ -323,7 +329,7 @@ onMount(() => {
 		/>
 	{/if}
 
-	{#if sk.searching || sk.catalogLoading || sk.loading}
+	{#if showLoading}
 		<div
 			class="flex-1 flex items-center justify-center
 				text-[var(--sig-text-muted)] text-[12px]"

@@ -1,5 +1,4 @@
 <script lang="ts">
-import { ChevronDown, ChevronRight, Import, KeyRound, Link, Plus, RefreshCw, Trash2, Unlink } from "$lib/icons";
 import {
 	type OnePasswordStatus,
 	type OnePasswordVault,
@@ -14,6 +13,8 @@ import {
 } from "$lib/api";
 import { Checkbox } from "$lib/components/ui/checkbox/index.js";
 import { Input } from "$lib/components/ui/input/index.js";
+import { ChevronDown, ChevronRight, Import, KeyRound, Link, Plus, RefreshCw, Trash2, Unlink } from "$lib/icons";
+import { normalizeSecretNameInput, validateSecretName } from "$lib/issue-848-format";
 import { returnToSidebar } from "$lib/stores/focus.svelte";
 import { nav } from "$lib/stores/navigation.svelte";
 import { toast } from "$lib/stores/toast.svelte";
@@ -25,6 +26,7 @@ let newSecretName = $state("");
 let newSecretValue = $state("");
 let secretAdding = $state(false);
 let secretDeleting = $state<string | null>(null);
+let confirmingDeleteSecret = $state<string | null>(null);
 let addFormOpen = $state(false);
 
 let onePasswordLoading = $state(false);
@@ -43,6 +45,7 @@ let onePasswordConnecting = $state(false);
 let onePasswordDisconnecting = $state(false);
 let onePasswordImporting = $state(false);
 let selectedVaultIds = $state<string[]>([]);
+// biome-ignore lint/style/useConst: Svelte markup assignments mutate this rune.
 let onePasswordExpanded = $state(false);
 
 let focusedSecretIndex = $state(-1);
@@ -82,12 +85,19 @@ async function refreshOnePasswordStatus(): Promise<void> {
 	}
 }
 
+const secretNameError = $derived(validateSecretName(newSecretName.trim()));
+
+function handleSecretNameInput(value: string): void {
+	newSecretName = normalizeSecretNameInput(value);
+}
+
 async function addSecret() {
-	if (!newSecretName.trim() || !newSecretValue.trim()) return;
+	const name = newSecretName.trim();
+	if (secretNameError || !newSecretValue.trim()) return;
 	secretAdding = true;
-	const ok = await putSecret(newSecretName.trim(), newSecretValue);
+	const ok = await putSecret(name, newSecretValue);
 	if (ok) {
-		toast(`Secret ${newSecretName.trim()} added`, "success");
+		toast(`Secret ${name} added`, "success");
 		newSecretName = "";
 		newSecretValue = "";
 		addFormOpen = false;
@@ -99,6 +109,10 @@ async function addSecret() {
 }
 
 async function removeSecret(name: string) {
+	if (confirmingDeleteSecret !== name) {
+		confirmingDeleteSecret = name;
+		return;
+	}
 	secretDeleting = name;
 	const ok = await deleteSecret(name);
 	if (ok) {
@@ -108,6 +122,7 @@ async function removeSecret(name: string) {
 		toast("Failed to delete secret", "error");
 	}
 	secretDeleting = null;
+	confirmingDeleteSecret = null;
 }
 
 async function connectOnePasswordAccount(): Promise<void> {
@@ -457,8 +472,10 @@ onMount(() => {
 				<Input
 					type="text"
 					class="secrets-add-input"
-					bind:value={newSecretName}
-					placeholder="SECRET_NAME"
+					value={newSecretName}
+					oninput={(event) => handleSecretNameInput(event.currentTarget.value)}
+					placeholder="OPENAI_API_KEY"
+					aria-invalid={secretNameError ? "true" : "false"}
 				/>
 				<Input
 					type="password"
@@ -469,10 +486,13 @@ onMount(() => {
 				<button
 					class="add-submit"
 					onclick={addSecret}
-					disabled={secretAdding || !newSecretName.trim() || !newSecretValue.trim()}
+					disabled={secretAdding || Boolean(secretNameError) || !newSecretValue.trim()}
 				>
 					{secretAdding ? "ADDING..." : "ADD"}
 				</button>
+				{#if secretNameError && newSecretName.trim()}
+					<span class="add-error">{secretNameError}</span>
+				{/if}
 			</div>
 		</div>
 	{/if}
@@ -516,6 +536,8 @@ onMount(() => {
 							>
 								{#if secretDeleting === name}
 									<span class="secret-delete-text">...</span>
+								{:else if confirmingDeleteSecret === name}
+									<span class="secret-delete-text">CONFIRM</span>
 								{:else}
 									<Trash2 class="size-3" />
 								{/if}
@@ -800,6 +822,13 @@ onMount(() => {
 	.add-submit:disabled {
 		opacity: 0.3;
 		cursor: not-allowed;
+	}
+
+	.add-error {
+		font-family: var(--font-body);
+		font-size: 9px;
+		line-height: 1.2;
+		color: var(--sig-danger);
 	}
 
 	/* Content area */
