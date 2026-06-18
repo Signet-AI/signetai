@@ -1,227 +1,213 @@
 <script lang="ts">
-	import { invalidateAll } from "$app/navigation";
-	import { type ConfigFile, type DaemonStatus, type Harness, type MemoryStats, saveConfigFileResult } from "$lib/api";
-	import { Button } from "$lib/components/ui/button/index.js";
-	import { applyRecommendedPipelineSetup, resolveSynthesisEnabled } from "$lib/components/tabs/settings/pipeline-settings";
-	import { KNOWN_HARNESSES, st } from "$lib/stores/settings.svelte";
-	import { toast } from "$lib/stores/toast.svelte";
-	import type { TabId } from "$lib/stores/navigation.svelte";
-	import { defaultPipelineModel, type PipelineProviderChoice } from "@signet/core/pipeline-providers";
-	import { onMount, untrack } from "svelte";
-	import { fly } from "svelte/transition";
-	import { stringify } from "yaml";
-	import {
-		type OnboardingState,
-		type EmbeddingProvider,
-		type IdentityPresetName,
-		EMBEDDING_PROVIDER_OPTIONS,
-		EXTRACTION_PROVIDER_OPTIONS,
-		EXTRACTION_MODEL_PRESETS,
-		createDefaultState,
-	} from "./onboarding-state.svelte";
-	import WelcomeStep from "./steps/WelcomeStep.svelte";
-	import IdentityStep from "./steps/IdentityStep.svelte";
-	import EmbeddingStep from "./steps/EmbeddingStep.svelte";
-	import ExtractionStep from "./steps/ExtractionStep.svelte";
-	import ReviewStep from "./steps/ReviewStep.svelte";
+import { invalidateAll } from "$app/navigation";
+import { type ConfigFile, type DaemonStatus, type Harness, type MemoryStats, saveConfigFileResult } from "$lib/api";
+import { resolveSynthesisEnabled } from "$lib/components/tabs/settings/pipeline-settings";
+import { Button } from "$lib/components/ui/button/index.js";
+import type { TabId } from "$lib/stores/navigation.svelte";
+import { KNOWN_HARNESSES, st } from "$lib/stores/settings.svelte";
+import { toast } from "$lib/stores/toast.svelte";
+import { type PipelineProviderChoice, defaultPipelineModel } from "@signet/core/pipeline-providers";
+import { onMount, untrack } from "svelte";
+import { fly } from "svelte/transition";
+import { stringify } from "yaml";
+import {
+	applyOnboardingConfig,
+	defaultIdentityFileContent,
+	missingIdentityFiles,
+	validateOnboardingState,
+	validateOnboardingStep,
+} from "./onboarding-config";
+import {
+	EMBEDDING_PROVIDER_OPTIONS,
+	EXTRACTION_PROVIDER_OPTIONS,
+	type EmbeddingProvider,
+	type IdentityPresetName,
+	type OnboardingState,
+	createDefaultState,
+} from "./onboarding-state.svelte";
+import EmbeddingStep from "./steps/EmbeddingStep.svelte";
+import ExtractionStep from "./steps/ExtractionStep.svelte";
+import IdentityStep from "./steps/IdentityStep.svelte";
+import ReviewStep from "./steps/ReviewStep.svelte";
+import WelcomeStep from "./steps/WelcomeStep.svelte";
 
-	interface Props {
-		configFiles: ConfigFile[];
-		memoryStats: MemoryStats;
-		daemonStatus: DaemonStatus | null;
-		harnesses?: Harness[];
-		onnavigate?: (tab: TabId) => void;
+interface Props {
+	configFiles: ConfigFile[];
+	memoryStats: MemoryStats;
+	daemonStatus: DaemonStatus | null;
+	harnesses?: Harness[];
+	onnavigate?: (tab: TabId) => void;
+}
+
+const { configFiles, memoryStats, daemonStatus, harnesses = [], onnavigate }: Props = $props();
+
+const STEPS = [
+	{ number: "01", title: "Welcome", subtitle: "Choose an identity preset for your agent." },
+	{ number: "02", title: "Identity", subtitle: "Name your agent and select harnesses." },
+	{ number: "03", title: "Embeddings", subtitle: "Configure vector search for semantic recall." },
+	{ number: "04", title: "Extraction", subtitle: "Pick an extraction route for the memory pipeline." },
+	{ number: "05", title: "Review", subtitle: "Confirm your choices before saving." },
+];
+
+let open = $state(false);
+let initialized = $state(false);
+let forceOpen = false;
+let direction = $state<1 | -1>(1);
+const obState = $state<OnboardingState>(createDefaultState());
+
+const storageKey = $derived(`signet:onboarding:dismissed:${daemonStatus?.agentsDir ?? "unknown"}`);
+
+function readPipelineString(...path: string[]): string {
+	return st.aStr(["memory", "pipelineV2", ...path]);
+}
+
+function hydrateFromSettings(): void {
+	st.init(configFiles);
+	obState.agentName = st.aStr(["agent", "name"]) || st.aStr(["name"]) || "My Agent";
+	obState.agentDescription = st.aStr(["agent", "description"]) || st.aStr(["description"]) || "Personal AI assistant";
+	obState.identityPreset = (st.aStr(["identity", "preset"]) || "minimal") as IdentityPresetName;
+
+	const harnessFromApi = harnesses.map((h) => h.id || h.name).filter(Boolean);
+	const combined = [...new Set([...harnessFromApi, ...KNOWN_HARNESSES])];
+	obState.selectedHarnesses = st.harnessArray();
+	if (obState.selectedHarnesses.length === 0 && combined.length > 0) {
+		obState.selectedHarnesses = [combined[0]];
 	}
+	obState.selectedHarness = obState.selectedHarnesses[0] ?? "";
 
-	const { configFiles, memoryStats, daemonStatus, harnesses = [], onnavigate }: Props = $props();
+	const embProvider = st.sStr([...st.embPath(), "provider"]) || "native";
+	obState.embeddingProvider = EMBEDDING_PROVIDER_OPTIONS.some((o) => o.value === embProvider)
+		? (embProvider as EmbeddingProvider)
+		: "native";
+	obState.embeddingModel =
+		st.sStr([...st.embPath(), "model"]) ||
+		(EMBEDDING_PROVIDER_OPTIONS.find((o) => o.value === obState.embeddingProvider)?.defaultModel ?? "");
+	obState.embeddingEndpoint = st.sStr([...st.embPath(), "base_url"]) || st.sStr([...st.embPath(), "baseurl"]) || "";
 
-	const STEPS = [
-		{ number: "01", title: "Welcome", subtitle: "Choose an identity preset for your agent." },
-		{ number: "02", title: "Identity", subtitle: "Name your agent and select harnesses." },
-		{ number: "03", title: "Embeddings", subtitle: "Configure vector search for semantic recall." },
-		{ number: "04", title: "Extraction", subtitle: "Pick an extraction route for the memory pipeline." },
-		{ number: "05", title: "Review", subtitle: "Confirm your choices before saving." },
-	];
+	const rawProvider = readPipelineString("extractionProvider") || readPipelineString("extraction", "provider");
+	obState.extractionProvider = EXTRACTION_PROVIDER_OPTIONS.some((o) => o.value === rawProvider)
+		? (rawProvider as PipelineProviderChoice)
+		: "acpx";
+	obState.extractionModel =
+		readPipelineString("extractionModel") ||
+		readPipelineString("extraction", "model") ||
+		defaultPipelineModel(obState.extractionProvider);
+	obState.extractionEndpoint =
+		readPipelineString("extraction", "endpoint") ||
+		readPipelineString("extractionEndpoint") ||
+		readPipelineString("extractionBaseUrl") ||
+		"";
+	obState.synthesisEnabled = resolveSynthesisEnabled(st.agent);
+	initialized = true;
+}
 
-	let open = $state(false);
-	let initialized = $state(false);
-	let forceOpen = false;
-	let direction = $state<1 | -1>(1);
-	let obState = $state<OnboardingState>(createDefaultState());
+function isDefaultishWorkspace(): boolean {
+	const name = obState.agentName.trim().toLowerCase();
+	return memoryStats.total === 0 && (name === "my agent" || name.length === 0);
+}
 
-	const storageKey = $derived(`signet:onboarding:dismissed:${daemonStatus?.agentsDir ?? "unknown"}`);
-
-	function readPipelineString(...path: string[]): string {
-		return st.aStr(["memory", "pipelineV2", ...path]);
+function maybeOpen(): void {
+	if (typeof window === "undefined") return;
+	if (!initialized || !daemonStatus) return;
+	if (forceOpen) {
+		open = true;
+		return;
 	}
+	if (localStorage.getItem(storageKey) === "true") return;
+	if (isDefaultishWorkspace()) open = true;
+}
 
-	function hydrateFromSettings(): void {
-		st.init(configFiles);
-		obState.agentName = st.aStr(["agent", "name"]) || st.aStr(["name"]) || "My Agent";
-		obState.agentDescription = st.aStr(["agent", "description"]) || st.aStr(["description"]) || "Personal AI assistant";
-		obState.identityPreset = (st.aStr(["identity", "preset"]) || "minimal") as IdentityPresetName;
+onMount(() => {
+	forceOpen = new URLSearchParams(window.location.search).get("onboarding") === "1";
+	untrack(hydrateFromSettings);
+	maybeOpen();
+});
 
-		const harnessFromApi = harnesses.map((h) => h.id || h.name).filter(Boolean);
-		const combined = [...new Set([...harnessFromApi, ...KNOWN_HARNESSES])];
-		obState.selectedHarnesses = st.harnessArray();
-		if (obState.selectedHarnesses.length === 0 && combined.length > 0) {
-			obState.selectedHarnesses = [combined[0]];
-		}
-		obState.selectedHarness = obState.selectedHarnesses[0] ?? "";
+$effect(() => {
+	const _configFiles = configFiles;
+	const _harnesses = harnesses;
+	void _configFiles;
+	void _harnesses;
+	untrack(hydrateFromSettings);
+});
 
-		const embProvider = st.sStr([...st.embPath(), "provider"]) || "native";
-		obState.embeddingProvider = EMBEDDING_PROVIDER_OPTIONS.some((o) => o.value === embProvider) ? embProvider as EmbeddingProvider : "native";
-		obState.embeddingModel =
-			st.sStr([...st.embPath(), "model"]) ||
-			(EMBEDDING_PROVIDER_OPTIONS.find((o) => o.value === obState.embeddingProvider)?.defaultModel ?? "");
-		obState.embeddingEndpoint = st.sStr([...st.embPath(), "base_url"]) || st.sStr([...st.embPath(), "baseurl"]) || "";
+$effect(() => {
+	const _daemonStatus = daemonStatus;
+	const _memoryTotal = memoryStats.total;
+	void _daemonStatus;
+	void _memoryTotal;
+	maybeOpen();
+});
 
-		const rawProvider =
-			readPipelineString("extractionProvider") || readPipelineString("extraction", "provider");
-		obState.extractionProvider = EXTRACTION_PROVIDER_OPTIONS.some((o) => o.value === rawProvider)
-			? (rawProvider as PipelineProviderChoice)
-			: "acpx";
-		obState.extractionModel =
-			readPipelineString("extractionModel") ||
-			readPipelineString("extraction", "model") ||
-			defaultPipelineModel(obState.extractionProvider);
-		obState.extractionEndpoint =
-			readPipelineString("extraction", "endpoint") ||
-			readPipelineString("extractionEndpoint") ||
-			readPipelineString("extractionBaseUrl") ||
-			"";
-		obState.synthesisEnabled = resolveSynthesisEnabled(st.agent);
-		initialized = true;
+function dismiss(): void {
+	forceOpen = false;
+	localStorage.setItem(storageKey, "true");
+	open = false;
+}
+
+function openSettings(): void {
+	dismiss();
+	onnavigate?.("settings");
+}
+
+function nextStep(): void {
+	const errors = validateOnboardingStep(obState, obState.currentStep);
+	if (errors.length > 0) {
+		toast(errors[0], "error");
+		return;
 	}
+	direction = 1;
+	obState.currentStep = Math.min(obState.currentStep + 1, STEPS.length - 1);
+}
 
-	function isDefaultishWorkspace(): boolean {
-		const name = obState.agentName.trim().toLowerCase();
-		return memoryStats.total === 0 && (name === "my agent" || name.length === 0);
+function prevStep(): void {
+	direction = -1;
+	obState.currentStep = Math.max(obState.currentStep - 1, 0);
+}
+
+async function ensureIdentityFiles(): Promise<void> {
+	for (const file of missingIdentityFiles(configFiles, obState.identityPreset)) {
+		const result = await saveConfigFileResult(
+			file,
+			defaultIdentityFileContent(file, obState.agentName.trim() || "My Agent"),
+		);
+		if (!result.ok) throw new Error(result.error ?? `Failed to create ${file} (${result.status})`);
 	}
+}
 
-	function maybeOpen(): void {
-		if (typeof window === "undefined") return;
-		if (!initialized || !daemonStatus) return;
-		if (forceOpen) {
-			open = true;
-			return;
-		}
-		if (localStorage.getItem(storageKey) === "true") return;
-		if (isDefaultishWorkspace()) open = true;
+async function persistOnboardingConfig(): Promise<void> {
+	if (st.agentFile) {
+		await st.save();
+		return;
 	}
+	const result = await saveConfigFileResult("agent.yaml", stringify(st.agent));
+	if (!result.ok) throw new Error(result.error ?? `Failed to create agent.yaml (${result.status})`);
+	st.agentSnapshot = JSON.stringify(st.agent);
+}
 
-	onMount(() => {
-		forceOpen = new URLSearchParams(window.location.search).get("onboarding") === "1";
-		untrack(hydrateFromSettings);
-		maybeOpen();
-	});
-
-	$effect(() => {
-		const _configFiles = configFiles;
-		const _harnesses = harnesses;
-		void _configFiles;
-		void _harnesses;
-		untrack(hydrateFromSettings);
-	});
-
-	$effect(() => {
-		const _daemonStatus = daemonStatus;
-		const _memoryTotal = memoryStats.total;
-		void _daemonStatus;
-		void _memoryTotal;
-		maybeOpen();
-	});
-
-	function dismiss(): void {
-		forceOpen = false;
-		localStorage.setItem(storageKey, "true");
-		open = false;
-	}
-
-	function openSettings(): void {
-		dismiss();
-		onnavigate?.("settings");
-	}
-
-	function validateStep(step: number): string[] {
-		if (step === 1) {
-			const errors: string[] = [];
-			if (!obState.agentName.trim()) errors.push("Agent name is required.");
-			if (obState.selectedHarnesses.length === 0) errors.push("Select at least one harness.");
-			return errors;
-		}
-		if (step === 2) {
-			if (obState.embeddingProvider === "none") return [];
-			if (!obState.embeddingModel.trim()) return ["Embedding model is required."];
-			return [];
-		}
-		if (step === 3) {
-			if (obState.extractionProvider === "none") return [];
-			if (!obState.extractionModel.trim()) return ["Extraction model is required."];
-			return [];
-		}
-		return [];
-	}
-
-	function nextStep(): void {
-		const errors = validateStep(obState.currentStep);
+async function finish(): Promise<void> {
+	if (obState.saving) return;
+	obState.saving = true;
+	try {
+		const errors = validateOnboardingState(obState);
 		if (errors.length > 0) {
 			toast(errors[0], "error");
 			return;
 		}
-		direction = 1;
-		obState.currentStep = Math.min(obState.currentStep + 1, STEPS.length - 1);
+		applyOnboardingConfig(st.agent, obState);
+		st.agent = { ...st.agent };
+		await ensureIdentityFiles();
+		await persistOnboardingConfig();
+		forceOpen = false;
+		localStorage.setItem(storageKey, "true");
+		open = false;
+		await invalidateAll();
+		toast("Setup complete", "success");
+		onnavigate?.("sources");
+	} finally {
+		obState.saving = false;
 	}
-
-	function prevStep(): void {
-		direction = -1;
-		obState.currentStep = Math.max(obState.currentStep - 1, 0);
-	}
-
-	async function persistOnboardingConfig(): Promise<void> {
-		if (st.agentFile) {
-			await st.save();
-			return;
-		}
-		const result = await saveConfigFileResult("agent.yaml", stringify(st.agent));
-		if (!result.ok) throw new Error(result.error ?? `Failed to create agent.yaml (${result.status})`);
-		st.agentSnapshot = JSON.stringify(st.agent);
-	}
-
-	async function finish(): Promise<void> {
-		if (obState.saving) return;
-		obState.saving = true;
-		try {
-			st.aSetStr(["agent", "name"], obState.agentName.trim() || "My Agent");
-			st.aSetStr(["agent", "description"], obState.agentDescription.trim() || "Personal AI assistant");
-			st.aSetStr(["identity", "preset"], obState.identityPreset);
-			st.set(st.agent, ["harnesses"], obState.selectedHarnesses);
-
-			const needsEndpoint = (() => {
-				const mode = EXTRACTION_PROVIDER_OPTIONS.find((o) => o.value === obState.extractionProvider)?.mode;
-				return mode === "local" || mode === "api";
-			})();
-
-			applyRecommendedPipelineSetup(st.agent, {
-				provider: obState.extractionProvider,
-				model: obState.extractionModel,
-				endpoint: needsEndpoint ? obState.extractionEndpoint : "",
-				acpxHarness: obState.extractionProvider === "acpx" ? obState.selectedHarness : "",
-				synthesisEnabled: obState.synthesisEnabled,
-			});
-
-			st.agent = { ...st.agent };
-			await persistOnboardingConfig();
-			forceOpen = false;
-			localStorage.setItem(storageKey, "true");
-			open = false;
-			await invalidateAll();
-			toast("Setup complete", "success");
-			onnavigate?.("sources");
-		} finally {
-			obState.saving = false;
-		}
-	}
+}
 </script>
 
 {#if open}

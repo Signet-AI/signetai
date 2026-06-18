@@ -175,16 +175,82 @@ function acpxCommandAgent(agent: AcpxDashboardAgent): string {
 	return agent === "claude-code" ? "claude" : agent;
 }
 
+function normalizeAcpxAgent(value: string | undefined): AcpxDashboardAgent | undefined {
+	return value === "codex" || value === "claude-code" || value === "opencode" ? value : undefined;
+}
+
+function withoutKey(record: Record<string, unknown>, key: string): Record<string, unknown> {
+	return Object.fromEntries(Object.entries(record).filter(([entryKey]) => entryKey !== key));
+}
+
+function definedKeys(record: Record<string, unknown>): string[] {
+	return Object.entries(record)
+		.filter(([, value]) => value !== undefined)
+		.map(([key]) => key);
+}
+
+function clearIfEmpty(root: Record<string, unknown>, key: string): void {
+	const record = mutableRecord(root[key]);
+	if (record && definedKeys(record).length === 0) root[key] = undefined;
+}
+
+function isGeneratedAcpxTaskClass(value: unknown): boolean {
+	const record = mutableRecord(value);
+	return record?.reasoning === "medium" && record.toolsRequired === true && record.privacy === "restricted_remote";
+}
+
+function removeStaleAcpxInference(agentConfig: Record<string, unknown>): void {
+	const inference = mutableRecord(agentConfig.inference);
+	if (!inference) return;
+	const targets = mutableRecord(inference.targets);
+	if (targets) inference.targets = withoutKey(targets, "background-acpx");
+	const policies = mutableRecord(inference.policies);
+	if (policies) inference.policies = withoutKey(policies, "background-acpx");
+	if (inference.defaultPolicy === "background-acpx") inference.defaultPolicy = undefined;
+	const workloads = mutableRecord(inference.workloads);
+	if (workloads) {
+		let nextWorkloads = workloads;
+		for (const key of ["memoryExtraction", "sessionSynthesis"]) {
+			const workload = mutableRecord(nextWorkloads[key]);
+			if (workload?.target === "background-acpx/default") nextWorkloads = withoutKey(nextWorkloads, key);
+		}
+		inference.workloads = nextWorkloads;
+	}
+	const taskClasses = mutableRecord(inference.taskClasses);
+	if (taskClasses) {
+		const referencedTaskClasses = new Set<string>();
+		const remainingWorkloads = mutableRecord(inference.workloads);
+		if (remainingWorkloads) {
+			for (const value of Object.values(remainingWorkloads)) {
+				const taskClass = mutableRecord(value)?.taskClass;
+				if (typeof taskClass === "string") referencedTaskClasses.add(taskClass);
+			}
+		}
+		let nextTaskClasses = taskClasses;
+		for (const key of ["memory_extraction", "session_synthesis"]) {
+			if (!referencedTaskClasses.has(key) && isGeneratedAcpxTaskClass(nextTaskClasses[key])) {
+				nextTaskClasses = withoutKey(nextTaskClasses, key);
+			}
+		}
+		inference.taskClasses = nextTaskClasses;
+	}
+	clearIfEmpty(inference, "targets");
+	clearIfEmpty(inference, "policies");
+	clearIfEmpty(inference, "workloads");
+	clearIfEmpty(inference, "taskClasses");
+	if (definedKeys(inference).length === 0) agentConfig.inference = undefined;
+}
+
 export function applyRecommendedPipelineSetup(
 	agentConfig: Record<string, unknown>,
-		options: {
-			readonly provider?: PipelineProviderChoice;
-			readonly model?: string;
-			readonly agent?: AcpxDashboardAgent;
-			readonly endpoint?: string;
-			readonly acpxHarness?: string;
-			readonly synthesisEnabled?: boolean;
-		} = {},
+	options: {
+		readonly provider?: PipelineProviderChoice;
+		readonly model?: string;
+		readonly agent?: AcpxDashboardAgent;
+		readonly endpoint?: string;
+		readonly acpxHarness?: string;
+		readonly synthesisEnabled?: boolean;
+	} = {},
 ): void {
 	const provider = options.provider ?? "acpx";
 	const model = options.model?.trim() || defaultPipelineModel(provider);
@@ -224,12 +290,18 @@ export function applyRecommendedPipelineSetup(
 		timeout: 120000,
 	};
 
+	if (provider !== "acpx") {
+		removeStaleAcpxInference(agentConfig);
+		return;
+	}
+
+	const acpxAgent = options.agent ?? normalizeAcpxAgent(acpxHarness) ?? "codex";
 	const inference = ensureRecord(agentConfig, "inference");
 	const targets = ensureRecord(inference, "targets");
 	targets["background-acpx"] = {
 		executor: "acpx",
 		acpx: {
-			agent: acpxCommandAgent(options.agent ?? "codex"),
+			agent: acpxCommandAgent(acpxAgent),
 			package: "acpx@0.7.0",
 			version: "0.7.0",
 			mode: "exec",

@@ -10,9 +10,35 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import {
+	IDENTITY_FILES,
+	IDENTITY_PRESETS,
+	type IdentityContextFileEntry,
+	type IdentityFileContext,
+	type IdentityFileSpec,
+	type IdentityPresetName,
+	type IdentityPresetSpec,
+	type IdentitySessionKind,
+	type IdentitySpecialFileEntry,
+	OPTIONAL_IDENTITY_KEYS,
+	REQUIRED_IDENTITY_KEYS,
+} from "./identity-presets";
 import { listOhMyPiAgentDirCandidates, resolveOhMyPiAgentDir } from "./oh-my-pi";
 import { listPiAgentDirCandidates, resolvePiAgentDir } from "./pi";
 import { parseSimpleYaml } from "./yaml";
+export {
+	IDENTITY_FILES,
+	IDENTITY_PRESETS,
+	OPTIONAL_IDENTITY_KEYS,
+	REQUIRED_IDENTITY_KEYS,
+	type IdentityContextFileEntry,
+	type IdentityFileContext,
+	type IdentityFileSpec,
+	type IdentityPresetName,
+	type IdentityPresetSpec,
+	type IdentitySessionKind,
+	type IdentitySpecialFileEntry,
+} from "./identity-presets";
 
 const OH_MY_PI_MANAGED_EXTENSION_FILENAME = "signet-oh-my-pi.js";
 const OH_MY_PI_LEGACY_MANAGED_EXTENSION_FILENAME = "signet-oh-my-pi.mjs";
@@ -29,46 +55,6 @@ const PI_MANAGED_MARKER = "SIGNET_MANAGED_PI_EXTENSION";
 export function resolveAgentBasePath(agentName: string, workspaceDir: string): string {
 	if (agentName === "default") return workspaceDir;
 	return join(workspaceDir, "agents", agentName);
-}
-
-/**
- * Specification for an identity file
- */
-export type IdentityPresetName = "minimal" | "hermes" | "openclaw" | "custom";
-
-export type IdentityFileContext = "startup" | "session";
-
-export type IdentitySessionKind = "dreaming" | "heartbeat" | "bootstrap";
-
-export interface IdentityFileSpec {
-	/** Relative path from the base directory */
-	path: string;
-	/** Human-readable description */
-	description: string;
-	/** Whether this file is optional */
-	optional?: boolean;
-	/** Whether this file is loaded during normal startup or only in a special session */
-	context?: IdentityFileContext;
-	/** Special session kind when context is "session" */
-	session?: IdentitySessionKind;
-}
-
-export interface IdentityContextFileEntry {
-	path: string;
-	role?: string;
-	budget?: number;
-	enabled?: boolean;
-}
-
-export interface IdentitySpecialFileEntry extends IdentityContextFileEntry {
-	kind: IdentitySessionKind;
-}
-
-export interface IdentityPresetSpec {
-	name: IdentityPresetName;
-	description: string;
-	startup: IdentityContextFileEntry[];
-	special: IdentitySpecialFileEntry[];
 }
 
 /**
@@ -98,118 +84,6 @@ export interface IdentityMap {
 	tools?: IdentityFile;
 	bootstrap?: IdentityFile;
 }
-
-/**
- * Standard identity files that form the cross-harness identity standard.
- * These are recognized by Signet and multiple harnesses.
- */
-export const IDENTITY_FILES: Record<string, IdentityFileSpec> = {
-	agents: {
-		path: "AGENTS.md",
-		description: "Operational rules and behavioral settings",
-		optional: false,
-	},
-	soul: {
-		path: "SOUL.md",
-		description: "Persona, character, and security settings",
-		optional: false,
-	},
-	identity: {
-		path: "IDENTITY.md",
-		description: "Agent name, creature type, and vibe",
-		optional: false,
-	},
-	user: {
-		path: "USER.md",
-		description: "User profile and preferences",
-		optional: false,
-	},
-	heartbeat: {
-		path: "HEARTBEAT.md",
-		description: "Heartbeat prompt used only for heartbeat/background check sessions",
-		optional: true,
-		context: "session",
-		session: "heartbeat",
-	},
-	memory: {
-		path: "MEMORY.md",
-		description: "Memory index and summary",
-		optional: true,
-	},
-	tools: {
-		path: "TOOLS.md",
-		description: "Tool preferences and notes",
-		optional: true,
-	},
-	bootstrap: {
-		path: "BOOTSTRAP.md",
-		description: "Setup ritual (typically deleted after first run)",
-		optional: true,
-		context: "session",
-		session: "bootstrap",
-	},
-	dreaming: {
-		path: "DREAMING.md",
-		description: "Dreaming/reflection prompt used only for dreaming sessions",
-		optional: true,
-		context: "session",
-		session: "dreaming",
-	},
-};
-
-export const IDENTITY_PRESETS: Record<IdentityPresetName, IdentityPresetSpec> = {
-	minimal: {
-		name: "minimal",
-		description: "AGENTS.md only for normal startup, plus DREAMING.md for dreaming sessions.",
-		startup: [{ path: "AGENTS.md", role: "operating_instructions", budget: 12_000 }],
-		special: [{ path: "DREAMING.md", kind: "dreaming", role: "dreaming_prompt", budget: 4_000 }],
-	},
-	hermes: {
-		name: "hermes",
-		description: "Hermes-style SOUL.md primary identity with project-context discovery handled by Hermes.",
-		startup: [
-			{ path: "SOUL.md", role: "primary_identity", budget: 4_000 },
-			{ path: "AGENTS.md", role: "project_context", budget: 12_000 },
-		],
-		special: [{ path: "DREAMING.md", kind: "dreaming", role: "dreaming_prompt", budget: 4_000 }],
-	},
-	openclaw: {
-		name: "openclaw",
-		description: "OpenClaw-style rich identity stack for character-forward agents.",
-		startup: [
-			{ path: "AGENTS.md", role: "operating_instructions", budget: 12_000 },
-			{ path: "SOUL.md", role: "persona", budget: 4_000 },
-			{ path: "IDENTITY.md", role: "agent_identity", budget: 2_000 },
-			{ path: "USER.md", role: "user_profile", budget: 6_000 },
-			{ path: "MEMORY.md", role: "working_memory", budget: 10_000 },
-		],
-		special: [
-			{ path: "HEARTBEAT.md", kind: "heartbeat", role: "heartbeat_prompt", budget: 4_000 },
-			{ path: "DREAMING.md", kind: "dreaming", role: "dreaming_prompt", budget: 4_000 },
-			{ path: "BOOTSTRAP.md", kind: "bootstrap", role: "bootstrap_prompt", budget: 4_000 },
-		],
-	},
-	custom: {
-		name: "custom",
-		description: "User-selected startup files and explicit order.",
-		startup: [{ path: "AGENTS.md", role: "operating_instructions", budget: 12_000 }],
-		special: [{ path: "DREAMING.md", kind: "dreaming", role: "dreaming_prompt", budget: 4_000 }],
-	},
-};
-
-/**
- * Required identity files (non-optional)
- */
-export const REQUIRED_IDENTITY_KEYS = Object.entries(IDENTITY_FILES)
-	.filter(([, spec]) => !spec.optional)
-	.map(([key]) => key);
-
-/**
- * Optional identity files
- */
-export const OPTIONAL_IDENTITY_KEYS = Object.entries(IDENTITY_FILES)
-	.filter(([, spec]) => spec.optional)
-	.map(([key]) => key);
 
 /**
  * Detection result for existing setup

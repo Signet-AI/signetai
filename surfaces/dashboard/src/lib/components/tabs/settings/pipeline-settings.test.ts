@@ -3,8 +3,8 @@ import { describe, expect, it } from "bun:test";
 import { DEFAULT_PIPELINE_TIMEOUT_MS } from "@signet/core/pipeline-providers";
 import {
 	DEFAULT_OPENAI_COMPATIBLE_ENDPOINT,
-	defaultAcpxDashboardAgent,
 	applyRecommendedPipelineSetup,
+	defaultAcpxDashboardAgent,
 	hasExplicitSynthesisConfig,
 	hasExplicitSynthesisProvider,
 	resolveExtractionEndpoint,
@@ -257,8 +257,22 @@ describe("pipeline-settings ACPX dashboard setup", () => {
 		});
 	});
 
-	it("applies onboarding endpoint and ACPX harness choices", () => {
-		const localAgent: Record<string, unknown> = {};
+	it("applies onboarding endpoint without writing stale ACPX routing for non-ACPX providers", () => {
+		const localAgent: Record<string, unknown> = {
+			inference: {
+				defaultPolicy: "background-acpx",
+				targets: { "background-acpx": { executor: "acpx" }, "custom-local": { executor: "ollama" } },
+				policies: { "background-acpx": { mode: "automatic" } },
+				taskClasses: {
+					memory_extraction: { reasoning: "medium", toolsRequired: true, privacy: "restricted_remote" },
+					session_synthesis: { reasoning: "medium", toolsRequired: true, privacy: "restricted_remote" },
+				},
+				workloads: {
+					memoryExtraction: { target: "background-acpx/default", taskClass: "memory_extraction" },
+					sessionSynthesis: { target: "custom-local/default", taskClass: "session_synthesis" },
+				},
+			},
+		};
 		applyRecommendedPipelineSetup(localAgent, {
 			provider: "llama-cpp",
 			model: "qwen3.5:4b",
@@ -282,6 +296,35 @@ describe("pipeline-settings ACPX dashboard setup", () => {
 				},
 			},
 		});
+		expect(localAgent.inference).toMatchObject({
+			targets: { "custom-local": { executor: "ollama" } },
+			workloads: { sessionSynthesis: { target: "custom-local/default", taskClass: "session_synthesis" } },
+		});
+		expect((localAgent.inference as { defaultPolicy?: string }).defaultPolicy).toBeUndefined();
+		expect((localAgent.inference as { targets: Record<string, unknown> }).targets["background-acpx"]).toBeUndefined();
+		expect((localAgent.inference as { policies?: Record<string, unknown> }).policies).toBeUndefined();
+		expect((localAgent.inference as { taskClasses: Record<string, unknown> }).taskClasses).toEqual({
+			session_synthesis: { reasoning: "medium", toolsRequired: true, privacy: "restricted_remote" },
+		});
+		expect((localAgent.inference as { workloads: Record<string, unknown> }).workloads.memoryExtraction).toBeUndefined();
+
+		const generatedOnlyAgent: Record<string, unknown> = {
+			inference: {
+				defaultPolicy: "background-acpx",
+				targets: { "background-acpx": { executor: "acpx" } },
+				policies: { "background-acpx": { mode: "automatic" } },
+				taskClasses: {
+					memory_extraction: { reasoning: "medium", toolsRequired: true, privacy: "restricted_remote" },
+					session_synthesis: { reasoning: "medium", toolsRequired: true, privacy: "restricted_remote" },
+				},
+				workloads: {
+					memoryExtraction: { target: "background-acpx/default", taskClass: "memory_extraction" },
+					sessionSynthesis: { target: "background-acpx/default", taskClass: "session_synthesis" },
+				},
+			},
+		};
+		applyRecommendedPipelineSetup(generatedOnlyAgent, { provider: "ollama", model: "qwen3:4b" });
+		expect(generatedOnlyAgent.inference).toBeUndefined();
 
 		const acpxAgent: Record<string, unknown> = {};
 		applyRecommendedPipelineSetup(acpxAgent, {

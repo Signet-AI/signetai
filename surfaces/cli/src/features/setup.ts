@@ -190,6 +190,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 	const existingIdentity = readRecord(existingConfig.identity);
 	const configuredIdentityPreset = deps.normalizeChoice(options.identityPreset, IDENTITY_PRESET_CHOICES);
 	const existingIdentityPreset = deps.normalizeChoice(existingIdentity.preset, IDENTITY_PRESET_CHOICES);
+	const defaultIdentityPreset: IdentityPresetName = configuredIdentityPreset ?? existingIdentityPreset ?? "minimal";
 	if (options.identityPreset && !configuredIdentityPreset) {
 		failSetupValidation(
 			`Unknown --identity-preset value: ${options.identityPreset}. Valid choices: ${IDENTITY_PRESET_CHOICES.join(", ")}.`,
@@ -519,6 +520,9 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 			return;
 		}
 		if (setupMethod === "dashboard") {
+			const identityPreset = defaultIdentityPreset;
+			const startupIdentityFiles = cloneStartupFiles(identityPreset);
+			const specialIdentityFiles = cloneSpecialFiles(identityPreset);
 			const deploymentType = requestedDeploymentType ?? "local";
 			const embeddingProvider = requestedEmbeddingProvider ?? defaultEmbeddingProviderForDeployment(deploymentType);
 			let embeddingModel = deps.normalizeStringValue(options.embeddingModel) || "nomic-embed-text-v1.5";
@@ -538,6 +542,12 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 			});
 			const extractionModel =
 				deps.normalizeStringValue(options.extractionModel) || defaultExtractionModel(extractionProvider);
+			const extractionEndpoint = resolveSetupExtractionEndpoint({
+				provider: extractionProvider,
+				requestedEndpoint: requestedExtractionEndpoint,
+				existingProvider: detectedProvider,
+				existingEndpoint: existingExtractionEndpoint,
+			});
 			await runFreshSetup(
 				{
 					basePath,
@@ -553,6 +563,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 					embeddingDimensions,
 					extractionProvider,
 					extractionModel,
+					extractionEndpoint,
 					availableExtractionProviders: availableToolExtractionProviders,
 					acpxBin,
 					searchBalance: deps.parseSearchBalanceValue(options.searchBalance) ?? 0.7,
@@ -563,11 +574,14 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 					gitEnabled: options.skipGit !== true,
 					existingAgentsDir: existing.agentsDir,
 					nonInteractive: true,
-					openDashboard: true,
+					openDashboard: options.openDashboard !== false,
 					allowUnprotectedWorkspace: options.allowUnprotectedWorkspace === true,
 					createLocalBackup: options.createLocalBackup === true,
 					signetSecretsEnabled: await resolveSignetSecretsCorePluginSelection(basePath, true, options),
 					graphiqEnabled: await resolveGraphiqPluginSelection(basePath, true, options),
+					identityPreset,
+					startupIdentityFiles,
+					specialIdentityFiles,
 				},
 				deps,
 			);
@@ -576,7 +590,6 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		console.log();
 	}
 
-	const defaultIdentityPreset: IdentityPresetName = configuredIdentityPreset ?? existingIdentityPreset ?? "minimal";
 	const identityPreset: IdentityPresetName = nonInteractive
 		? defaultIdentityPreset
 		: await select({

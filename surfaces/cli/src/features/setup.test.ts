@@ -357,6 +357,50 @@ describe("setupWizard non-interactive harness hooks", () => {
 		expect(detectedHarnessesForExistingSetup(detection, [])).toContain("hermes-agent");
 	});
 
+	it("writes complete identity config from the dashboard setup branch", async () => {
+		root = mkdtempSync(join(tmpdir(), "setup-dashboard-identity-"));
+		const basePath = join(root, "agents");
+		const templatesPath = join(root, "templates");
+		writeIdentityTemplates(templatesPath);
+
+		const freshDetection: SetupDetection = {
+			...fakeDetection(basePath),
+			agentsDir: false,
+			memoryDb: false,
+		};
+		const deps = stubDeps({
+			AGENTS_DIR: basePath,
+			getTemplatesDir: mock(() => templatesPath),
+			normalizeAgentPath: mock((p: string) => p),
+			detectExistingSetup: mock(() => freshDetection),
+		});
+
+		await setupWizard(
+			{
+				setupMode: "dashboard",
+				identityPreset: "hermes",
+				extractionProvider: "openai-compatible",
+				extractionModel: "openai/gpt-oss-20b",
+				extractionEndpoint: "https://gateway.example.test/v1",
+				skipGit: true,
+				openDashboard: false,
+			},
+			deps,
+		);
+
+		const agentYaml = readFileSync(join(basePath, "agent.yaml"), "utf-8");
+		expect(agentYaml).toContain("preset: hermes");
+		expect(agentYaml).toContain("path: SOUL.md");
+		expect(agentYaml).toContain("path: AGENTS.md");
+		expect(agentYaml).toContain("path: DREAMING.md");
+		expect(agentYaml).toContain("provider: openai-compatible");
+		expect(agentYaml).toContain("model: openai/gpt-oss-20b");
+		expect(agentYaml).toContain("endpoint: https://gateway.example.test/v1");
+		expect(existsSync(join(basePath, "SOUL.md"))).toBe(true);
+		expect(existsSync(join(basePath, "AGENTS.md"))).toBe(true);
+		expect(existsSync(join(basePath, "DREAMING.md"))).toBe(true);
+	});
+
 	it("writes minimal identity preset with DREAMING.md as special-session file", async () => {
 		root = mkdtempSync(join(tmpdir(), "setup-ni-minimal-identity-"));
 		const basePath = join(root, "agents");
