@@ -317,6 +317,7 @@ export {
 	resolveIdentityModeFromConfig,
 	loadIdentityMode,
 	identityModeManagesFiles,
+	identityModeReadsFiles,
 	resolveSpecialIdentityFiles,
 	resolveStartupIdentityFiles,
 	resolveSessionStartTimeoutMs,

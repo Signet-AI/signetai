@@ -955,11 +955,13 @@ hooks:
   sessionStart:
     includeIdentity: false
 `);
+		writeMemoryMd("# Working Memory\n\nMemory remains available.");
 
 		const result = await handleSessionStart({ harness: "test" });
 
 		expect(result.identity.name).toBe("Agent");
 		expect(result.inject).not.toContain("HiddenBot");
+		expect(result.inject).toContain("Memory remains available.");
 	});
 
 	test.serial("identity mode off keeps Signet memory active without identity stewardship", async () => {
@@ -983,6 +985,66 @@ agent:
 		expect(result.inject).not.toContain("Operator policy from AGENTS.");
 		expect(result.inject).not.toContain("Soul should not inject.");
 		expect(result.inject).not.toContain("HiddenBot");
+	});
+
+	test.serial("identity passthrough injects existing identity without stewardship instructions", async () => {
+		writeAgentYaml(`
+capabilities:
+  identity:
+    mode: passthrough
+identity:
+  preset: minimal
+  startup:
+    load:
+      - path: AGENTS.md
+        role: operating_instructions
+`);
+		writeAgentsMd("# AGENTS\n\nOperator policy from AGENTS.");
+		writeFileSync(join(TEST_DIR, "SOUL.md"), "Soul should not inject.");
+
+		const result = await handleSessionStart({ harness: "test" });
+
+		expect(result.inject).toContain("[signet active]");
+		expect(result.inject).toContain("Operator policy from AGENTS.");
+		expect(result.inject).not.toContain("Identity files in your Signet workspace");
+		expect(result.inject).not.toContain("Soul should not inject.");
+	});
+
+	test.serial("identity passthrough does not synthesize identity from agent yaml when no files load", async () => {
+		writeAgentYaml(`
+capabilities:
+  identity:
+    mode: passthrough
+agent:
+  name: HarnessOwnedBot
+  description: Should stay out of injection
+identity:
+  startup:
+    load:
+      - path: MISSING.md
+`);
+
+		const result = await handleSessionStart({ harness: "test" });
+
+		expect(result.inject).toContain("[signet active]");
+		expect(result.inject).not.toContain("HarnessOwnedBot");
+		expect(result.inject).not.toContain("Should stay out of injection");
+	});
+
+	test.serial("configured startup identity entries inherit standard file budgets", async () => {
+		writeAgentYaml(`
+identity:
+  startup:
+    load:
+      - path: AGENTS.md
+        role: operating_instructions
+`);
+		writeAgentsMd(`${"a".repeat(5000)}AGENTS-END`);
+
+		const result = await handleSessionStart({ harness: "test" });
+
+		expect(result.inject).toContain("AGENTS-END");
+		expect(result.inject).not.toContain("[truncated]");
 	});
 
 	test.serial("handles missing memory database gracefully", async () => {

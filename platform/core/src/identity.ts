@@ -598,6 +598,10 @@ export function identityModeManagesFiles(mode: IdentityMode): boolean {
 	return mode === "managed";
 }
 
+export function identityModeReadsFiles(mode: IdentityMode): boolean {
+	return mode !== "off";
+}
+
 function readIdentityEntry(value: unknown): IdentityContextFileEntry | null {
 	if (typeof value === "string") {
 		return isSafeRelativeIdentityPath(value) ? { path: value } : null;
@@ -642,7 +646,7 @@ export function resolveStartupIdentityFiles(agentsDir: string): IdentityContextF
 	if (!existsSync(agentYaml)) return STATIC_BUDGETS.map(({ file, budget }) => ({ path: file, budget }));
 	try {
 		const config = parseSimpleYaml(readFileSync(agentYaml, "utf-8"));
-		if (!identityModeManagesFiles(resolveIdentityModeFromConfig(config))) return [];
+		if (!identityModeReadsFiles(resolveIdentityModeFromConfig(config))) return [];
 		const identity = readRecord(config.identity);
 		const startup = readRecord(identity.startup);
 		const configured = readIdentityEntryList(startup.load);
@@ -663,7 +667,7 @@ export function resolveSpecialIdentityFiles(agentsDir: string, kind: IdentitySes
 	}
 	try {
 		const config = parseSimpleYaml(readFileSync(agentYaml, "utf-8"));
-		if (!identityModeManagesFiles(resolveIdentityModeFromConfig(config))) return [];
+		if (!identityModeReadsFiles(resolveIdentityModeFromConfig(config))) return [];
 		const identity = readRecord(config.identity);
 		const configured = readSpecialIdentityEntryList(identity.special).filter((entry) => entry.kind === kind);
 		if (configured.length > 0) return configured;
@@ -704,7 +708,7 @@ export function resolvePromptSubmitTimeoutMs(raw?: string): number {
  */
 export function readStaticIdentity(agentsDir: string, status = STATIC_IDENTITY_OFFLINE_STATUS): string | null {
 	if (!existsSync(agentsDir)) return null;
-	if (!identityModeManagesFiles(loadIdentityMode(agentsDir))) return null;
+	if (!identityModeReadsFiles(loadIdentityMode(agentsDir))) return null;
 
 	const parts: string[] = [];
 

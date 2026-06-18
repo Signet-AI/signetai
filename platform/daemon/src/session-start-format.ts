@@ -34,7 +34,17 @@ export function sanitizePeerPromptField(value: string | undefined): string {
 		.trim();
 }
 
-export function buildSignetSystemPrompt(): string {
+export function buildSignetSystemPrompt(options: { readonly includeIdentityStewardship?: boolean } = {}): string {
+	const identityStewardship = options.includeIdentityStewardship
+		? `
+Identity files in your Signet workspace:
+- AGENTS.md: how you operate (maintain this)
+- SOUL.md: personality and values (maintain this)
+- IDENTITY.md: who you are (maintain this)
+- USER.md: who the user is (maintain this)
+- MEMORY.md: auto-generated working memory summary (system-managed)
+`
+		: "";
 	return `[signet active]
 You have persistent memory managed by Signet.
 
@@ -54,14 +64,7 @@ Memory tools:
 Cross-session history:
 - linked summary and transcript artifacts in your Signet workspace are inspectable across sessions
 - use transcript and summary artifacts when you need deeper history than MEMORY.md or recall snippets provide
-
-Identity files in your Signet workspace:
-- AGENTS.md: how you operate (maintain this)
-- SOUL.md: personality and values (maintain this)
-- IDENTITY.md: who you are (maintain this)
-- USER.md: who the user is (maintain this)
-- MEMORY.md: auto-generated working memory summary (system-managed)
-
+${identityStewardship}
 Secrets:
 - mcp__signet__secret_list
 - mcp__signet__secret_exec
