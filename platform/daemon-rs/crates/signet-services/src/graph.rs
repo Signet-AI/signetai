@@ -1434,8 +1434,9 @@ pub fn get_constellation(
     // Phase 1: Get entities with mentions or pinned or aspects
     let mut stmt = conn.prepare(
         "SELECT e.id, e.name, e.entity_type, e.mentions, e.pinned FROM entities e
-         WHERE e.agent_id = ?1 AND (e.mentions > 0 OR e.pinned = 1
-           OR EXISTS(SELECT 1 FROM entity_aspects WHERE entity_id = e.id))
+         WHERE e.agent_id = ?1
+           AND LOWER(TRIM(e.entity_type)) IN ('person', 'project')
+           AND (e.mentions > 0 OR e.pinned = 1)
          ORDER BY e.pinned DESC, e.mentions DESC, e.name ASC LIMIT 500",
     )?;
     let entity_rows: Vec<(String, String, String, i64, bool)> = stmt

@@ -67,28 +67,7 @@ export interface KnowledgeMapBuildOptions {
 
 const DEFAULT_LIMIT = 600;
 const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
-const PRIMARY_ENTITY_TYPES = new Set([
-	"person",
-	"project",
-	"topic",
-	"system",
-	"product",
-	"organization",
-	"org",
-	"source",
-	"artifact",
-	"agent",
-	"policy",
-	"action",
-	"workflow",
-	"event",
-	"object_type",
-	"interface",
-	"observation",
-	"claim_slot",
-	"claim_value",
-]);
-const NOISY_ENTITY_TYPES = new Set(["benchmark", "run", "file", "chunk", "unknown"]);
+const VISIBLE_CONSTELLATION_ENTITY_TYPES = new Set(["person", "project"]);
 
 export const KNOWLEDGE_NODE_COLORS: Record<KnowledgeMapNodeKind, string> = {
 	source: "#38bdf8",
@@ -295,33 +274,15 @@ function clampLimit(value: number): number {
 }
 
 function includeEntity(entity: ConstellationEntity): boolean {
-	const type = entity.entityType.toLowerCase();
+	const type = entity.entityType.trim().toLowerCase();
 	if (entity.aspects.length === 0) return false;
-	if (entity.pinned) return true;
-	if (looksNoisy(entity.name)) return false;
-	if (PRIMARY_ENTITY_TYPES.has(type)) return true;
-	if (NOISY_ENTITY_TYPES.has(type)) return false;
-	return (
-		entity.mentions >= 3 || entity.aspects.some((aspect) => aspect.attributes.some((attr) => attr.importance >= 0.78))
-	);
-}
-
-function looksNoisy(name: string): boolean {
-	const lower = name.toLowerCase();
-	return (
-		lower.includes("benchmark") ||
-		lower.includes("artifact") ||
-		lower.includes("fixture") ||
-		lower.includes("chunk") ||
-		/\b[0-9a-f]{8,}\b/.test(lower) ||
-		/\d{6,}/.test(lower)
-	);
+	return VISIBLE_CONSTELLATION_ENTITY_TYPES.has(type);
 }
 
 function entityScore(entity: ConstellationEntity, focusLabel?: string): number {
 	const focus = focusLabel?.trim().toLowerCase();
 	const focusBoost = focus && entity.name.toLowerCase().includes(focus) ? 100 : 0;
-	const typeBoost = PRIMARY_ENTITY_TYPES.has(entity.entityType.toLowerCase()) ? 25 : 0;
+	const typeBoost = VISIBLE_CONSTELLATION_ENTITY_TYPES.has(entity.entityType.trim().toLowerCase()) ? 25 : 0;
 	const pinnedBoost = entity.pinned ? 40 : 0;
 	const attrScore = entity.aspects.reduce(
 		(sum, aspect) => sum + aspect.attributes.reduce((inner, attr) => inner + attr.importance, 0),

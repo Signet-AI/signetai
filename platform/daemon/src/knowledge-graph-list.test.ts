@@ -350,12 +350,14 @@ describe("listKnowledgeEntities (issue #515)", () => {
 		dbPath = makeDbPath();
 		initDbAccessor(dbPath);
 
-		seedEntity("e-hub", "Hub", { mentions: 10 });
-		seedEntity("e-leaf", "Leaf", { mentions: 9 });
-		seedEntity("e-hidden", "Hidden", { mentions: 0 });
+		seedEntity("e-hub", "Hub", { entityType: "project", mentions: 10 });
+		seedEntity("e-leaf", "Leaf", { entityType: "person", mentions: 9 });
+		seedEntity("e-hidden", "Hidden", { entityType: "project", mentions: 0 });
+		seedEntity("e-topic", "Noisy Topic", { entityType: "topic", mentions: 99, pinned: true });
 		seedAspect("asp-hub-a", "e-hub", "alpha");
 		seedAspect("asp-hub-b", "e-hub", "beta");
 		seedAspect("asp-hidden", "e-hidden", "hidden");
+		seedAspect("asp-topic", "e-topic", "topic");
 		seedAttribute("attr-hub-a-1", "asp-hub-a", { content: "important alpha", memoryId: "mem-a" });
 		seedAttribute("attr-hub-a-2", "asp-hub-a", { content: "less important alpha" });
 		seedAttribute("attr-hidden", "asp-hidden", { content: "hidden attr" });
@@ -412,6 +414,7 @@ describe("listKnowledgeEntities (issue #515)", () => {
 		});
 
 		expect(graph.entities.map((entity) => entity.id)).toEqual(["e-hub", "e-leaf"]);
+		expect(graph.entities.map((entity) => entity.id)).not.toContain("e-topic");
 		expect(graph.entities[0].aspects.map((aspect) => aspect.id)).toEqual(["asp-hub-a"]);
 		expect(graph.entities[0].aspects[0].attributes.map((attr) => attr.id)).toEqual(["attr-hub-a-1"]);
 		expect(graph.entities[0].aspects[0].attributes[0].version).toBe(2);
@@ -435,9 +438,9 @@ describe("listKnowledgeEntities (issue #515)", () => {
 		seedAgent("default", "shared");
 		seedAgent("noam", "shared");
 		seedAgent("private-agent", "isolated");
-		seedEntity("e-default", "Default Entity", { agentId: "default", mentions: 5 });
-		seedEntity("e-noam", "Noam Entity", { agentId: "noam", mentions: 4 });
-		seedEntity("e-private", "Private Entity", { agentId: "private-agent", mentions: 9 });
+		seedEntity("e-default", "Default Entity", { agentId: "default", entityType: "project", mentions: 5 });
+		seedEntity("e-noam", "Noam Entity", { agentId: "noam", entityType: "person", mentions: 4 });
+		seedEntity("e-private", "Private Entity", { agentId: "private-agent", entityType: "project", mentions: 9 });
 		seedAspect("asp-noam", "e-noam", "shared aspect", "noam");
 		seedAttribute("attr-noam", "asp-noam", { agentId: "noam", content: "shared attribute" });
 		seedDependency("dep-shared", "e-default", "e-noam", { agentId: "noam", strength: 0.9 });

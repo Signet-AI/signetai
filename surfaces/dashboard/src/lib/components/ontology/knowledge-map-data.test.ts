@@ -66,10 +66,38 @@ const graph: ConstellationGraph = {
 			pinned: false,
 			aspects: [],
 		},
+		{
+			id: "entity-pinned-topic",
+			name: "Pinned Topic",
+			entityType: "topic",
+			mentions: 120,
+			pinned: true,
+			aspects: [
+				{
+					id: "aspect-topic",
+					name: "topic facts",
+					weight: 0.9,
+					attributes: [
+						{
+							id: "attr-topic",
+							content: "Pinned non-person/project entities should stay out of constellation view.",
+							kind: "attribute",
+							importance: 0.99,
+						},
+					],
+				},
+			],
+		},
 	],
 	dependencies: [
 		{ sourceEntityId: "entity-signet", targetEntityId: "entity-nicholai", dependencyType: "about", strength: 0.8 },
 		{ sourceEntityId: "entity-signet", targetEntityId: "entity-noisy", dependencyType: "generated", strength: 0.9 },
+		{
+			sourceEntityId: "entity-signet",
+			targetEntityId: "entity-pinned-topic",
+			dependencyType: "mentions",
+			strength: 0.9,
+		},
 	],
 };
 
@@ -85,12 +113,14 @@ describe("knowledge map data", () => {
 		expect(map.nodes.some((node) => node.id === "attribute:attr-source-native")).toBe(true);
 		expect(map.nodes.some((node) => node.id === "entity-noisy")).toBe(false);
 		expect(map.nodes.some((node) => node.id === "entity-empty-person")).toBe(false);
+		expect(map.nodes.some((node) => node.id === "entity-pinned-topic")).toBe(false);
+		expect(map.nodes.some((node) => node.id === "attribute:attr-topic")).toBe(false);
 		expect(map.edges.some((edge) => edge.kind === "supports")).toBe(true);
 		expect(map.edges.some((edge) => edge.kind === "about")).toBe(true);
 		expect(map.edges.find((edge) => edge.kind === "about")?.visualOnly).toBe(true);
 	});
 
-	it("keeps the map bounded and ranks useful people/projects/topics ahead of noisy extracted entities", () => {
+	it("keeps the map bounded and ranks useful people/projects ahead of other entity types", () => {
 		const map = buildKnowledgeMapFromConstellation(graph, { limit: 4 });
 
 		expect(map.nodes).toHaveLength(4);
@@ -117,7 +147,7 @@ describe("knowledge map data", () => {
 			entities: Array.from({ length: 32 }, (_, entityIndex) => ({
 				id: `entity-${entityIndex}`,
 				name: `Entity ${entityIndex}`,
-				entityType: "topic",
+				entityType: entityIndex % 2 === 0 ? "project" : "person",
 				mentions: 20 - (entityIndex % 6),
 				pinned: entityIndex === 0,
 				aspects: Array.from({ length: 5 }, (_, aspectIndex) => ({

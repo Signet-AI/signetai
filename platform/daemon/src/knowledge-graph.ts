@@ -2258,6 +2258,7 @@ export function getKnowledgeGraphForConstellation(
 				 FROM entities e
 				 WHERE e.agent_id IN (${agentPlaceholders})
 				   AND COALESCE(e.status, 'active') = 'active'
+				   AND LOWER(TRIM(e.entity_type)) IN ('person', 'project')
 				   AND (e.mentions > 0 OR e.pinned = 1)
 				 ORDER BY e.pinned DESC, e.mentions DESC, e.name ASC
 				 LIMIT ?`,
