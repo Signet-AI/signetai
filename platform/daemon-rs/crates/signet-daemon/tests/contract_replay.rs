@@ -87,6 +87,18 @@ impl TestServer {
         Self::start_with_auth_mode(None).await
     }
 
+    async fn start_with_agent_id(agent_id: &str) -> Self {
+        let yaml = "agent:\n  name: test-agent\n  version: 1\n";
+        Self::start_with_agent_yaml_files_setup_and_env(
+            None,
+            yaml,
+            &[],
+            |_| {},
+            &[("SIGNET_AGENT_ID", agent_id)],
+        )
+        .await
+    }
+
     /// Start a daemon with team auth enabled and a fixed secret for scoped-token replay.
     async fn start_team_auth() -> Self {
         Self::start_with_auth_mode(Some("team")).await
@@ -121,6 +133,19 @@ impl TestServer {
         yaml: &str,
         files: &[(&str, &str)],
         setup: F,
+    ) -> Self
+    where
+        F: FnOnce(&std::path::Path),
+    {
+        Self::start_with_agent_yaml_files_setup_and_env(auth_mode, yaml, files, setup, &[]).await
+    }
+
+    async fn start_with_agent_yaml_files_setup_and_env<F>(
+        auth_mode: Option<&str>,
+        yaml: &str,
+        files: &[(&str, &str)],
+        setup: F,
+        envs: &[(&str, &str)],
     ) -> Self
     where
         F: FnOnce(&std::path::Path),
@@ -161,7 +186,8 @@ impl TestServer {
 
         // Spawn daemon in background
         let port_str = port.to_string();
-        let child = tokio::process::Command::new(daemon_binary())
+        let mut command = tokio::process::Command::new(daemon_binary());
+        command
             .env("SIGNET_PATH", &signet_path)
             .env("SIGNET_PORT", &port_str)
             .env("SIGNET_HOST", "127.0.0.1")
@@ -178,9 +204,11 @@ impl TestServer {
             .env("PATH", path_with_fakes)
             .env("RUST_LOG", "warn")
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-            .expect("failed to spawn daemon");
+            .stderr(std::process::Stdio::null());
+        for (key, value) in envs {
+            command.env(key, value);
+        }
+        let child = command.spawn().expect("failed to spawn daemon");
 
         // Store child PID for cleanup
         let pid = child.id().unwrap_or(0);
@@ -217,6 +245,50 @@ impl TestServer {
 
     fn db_path(&self) -> std::path::PathBuf {
         self._tmpdir.path().join("memory/memories.db")
+    }
+
+    fn seed_scoping_audit_fixture(&self) {
+        let conn = rusqlite::Connection::open(self.db_path()).expect("open replay db");
+        conn.busy_timeout(Duration::from_secs(5)).unwrap();
+        conn.execute(
+            "INSERT OR REPLACE INTO agents (id, name, read_policy, policy_group, created_at, updated_at)
+             VALUES
+               ('agent-a', 'agent-a', 'isolated', NULL, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
+               ('agent-b', 'agent-b', 'isolated', NULL, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+            [],
+        )
+        .expect("seed scoping agents");
+        conn.execute(
+            "INSERT INTO memories
+             (id, type, content, content_hash, confidence, importance, tags, who, project,
+              created_at, updated_at, updated_by, is_deleted, pinned, version, agent_id,
+              visibility, scope)
+             VALUES
+             ('mem-scope-agent-a', 'fact', 'Agent A private route audit memory.',
+              'scope-agent-a-hash', 1.0, 0.7, 'scope,audit', 'contract',
+              '/workspace/a', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z',
+              'contract', 0, 0, 1, 'agent-a', 'private', NULL),
+             ('mem-scope-agent-b', 'fact', 'Agent B private route audit memory must not leak.',
+              'scope-agent-b-hash', 1.0, 0.8, 'scope,audit', 'contract',
+              '/workspace/b', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z',
+              'contract', 0, 0, 1, 'agent-b', 'private', NULL),
+             ('mem-scope-archived', 'fact', 'Archived route audit memory must not leak.',
+              'scope-archived-hash', 1.0, 0.9, 'scope,audit', 'contract',
+              '/workspace/a', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z',
+              'contract', 0, 0, 1, 'agent-a', 'archived', NULL)",
+            [],
+        )
+        .expect("seed scoping memories");
+        conn.execute(
+            "INSERT INTO memory_history
+             (id, memory_id, event, old_content, new_content, changed_by, reason, metadata, created_at)
+             VALUES
+             ('hist-agent-b', 'mem-scope-agent-b', 'REVIEW_NEEDED', NULL,
+              'Agent B review queue item must not leak.', 'contract', 'scope audit', NULL,
+              '2026-01-01T00:00:01Z')",
+            [],
+        )
+        .expect("seed scoping history");
     }
 
     fn seed_recall_scope_fixture(&self) {
@@ -2443,6 +2515,127 @@ async fn memory_crud() {
     // List should now have >= 1
     let resp = server.get("/api/memories").await;
     assert_eq!(resp.status(), 200);
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn memory_get_scopes_agent_and_excludes_archived_visibility() {
+    let server = TestServer::start_team_auth().await;
+    server.seed_scoping_audit_fixture();
+    let agent_a = TestServer::scoped_token("agent-a");
+
+    let resp = server
+        .get_bearer("/api/memory/mem-scope-agent-a", &agent_a)
+        .await;
+    let status = resp.status();
+    let visible = server.json(resp).await;
+    assert_eq!(status, 200, "unexpected memory get response: {visible}");
+    assert_eq!(visible["id"], "mem-scope-agent-a");
+
+    let resp = server
+        .get_bearer("/api/memory/mem-scope-agent-b", &agent_a)
+        .await;
+    assert_eq!(resp.status(), 404);
+
+    let resp = server
+        .get_bearer("/api/memory/mem-scope-archived", &agent_a)
+        .await;
+    assert_eq!(resp.status(), 404);
+
+    let resp = server
+        .get_bearer("/api/memory/review-queue", &agent_a)
+        .await;
+    assert_eq!(resp.status(), 200);
+    let queue = server.json(resp).await;
+    assert!(
+        queue["items"]
+            .as_array()
+            .expect("items array")
+            .iter()
+            .all(|item| item["memory_id"] != "mem-scope-agent-b"),
+        "agent-b review item leaked to agent-a: {queue}"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn memory_delete_rejects_cross_agent_and_archived_rows() {
+    let server = TestServer::start_team_auth().await;
+    server.seed_scoping_audit_fixture();
+    let agent_a = TestServer::scoped_token("agent-a");
+
+    let resp = server
+        .client
+        .delete(format!("{}/api/memory/mem-scope-agent-b", server.base))
+        .bearer_auth(&agent_a)
+        .json(&json!({"reason": "scope audit"}))
+        .send()
+        .await
+        .expect("delete request failed");
+    assert_eq!(resp.status(), 404);
+    let blocked = server.json(resp).await;
+    assert_eq!(blocked["status"], "not_found");
+
+    let resp = server
+        .client
+        .delete(format!("{}/api/memory/mem-scope-archived", server.base))
+        .bearer_auth(&agent_a)
+        .json(&json!({"reason": "scope audit"}))
+        .send()
+        .await
+        .expect("delete request failed");
+    assert_eq!(resp.status(), 404);
+
+    let conn = rusqlite::Connection::open(server.db_path()).expect("open replay db");
+    let still_live: i64 = conn
+        .query_row(
+            "SELECT is_deleted FROM memories WHERE id = 'mem-scope-agent-b'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("agent-b memory row");
+    assert_eq!(still_live, 0);
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn cross_agent_routes_reject_wrong_agent_session_scope() {
+    let server = TestServer::start_team_auth().await;
+    let agent_a = TestServer::scoped_token("agent-a");
+
+    let resp = server
+        .post_bearer(
+            "/api/cross-agent/presence",
+            json!({
+                "harness": "contract-replay",
+                "sessionKey": "agent:agent-b:scope-audit",
+                "agentId": "agent-a"
+            }),
+            &agent_a,
+        )
+        .await;
+    assert_eq!(resp.status(), 403);
+    let body = server.json(resp).await;
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("session_key does not belong"),
+        "unexpected cross-agent presence error: {body}"
+    );
+
+    let resp = server
+        .post_bearer(
+            "/api/cross-agent/messages",
+            json!({
+                "content": "wrong sender scope",
+                "fromAgentId": "agent-b",
+                "toAgentId": "agent-a"
+            }),
+            &agent_a,
+        )
+        .await;
+    assert_eq!(resp.status(), 403);
 }
 
 #[tokio::test]
@@ -5959,6 +6152,127 @@ async fn dream_promote_replays_native_preference_preview_and_apply() {
     assert_eq!(row.2, 1);
     assert_eq!(row.3, "memory");
     assert_eq!(row.4, "mem-dream-pref");
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn repair_honors_signet_agent_id_when_request_omits_agent() {
+    let server = TestServer::start_with_agent_id("scoped-repair-agent").await;
+    let conn = rusqlite::Connection::open(server.db_path()).expect("open replay db");
+    conn.execute_batch(
+        r#"INSERT INTO entities
+           (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
+           VALUES
+           ('entity-repair-default-scope', 'Default Scope', 'default scope', 'project', 'default', 1,
+            '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
+           ('entity-repair-env-scope', 'Env Scope', 'env scope', 'project', 'scoped-repair-agent', 1,
+            '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');"#,
+    )
+    .expect("seed scoped repair entities");
+    drop(conn);
+
+    let resp = server.post("/api/repair/cluster-entities", json!({})).await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["communities"], 1);
+
+    let conn = rusqlite::Connection::open(server.db_path()).expect("open replay db");
+    let (env_scoped, default_scoped): (Option<String>, Option<String>) = conn
+        .query_row(
+            "SELECT
+               MAX(CASE WHEN id = 'entity-repair-env-scope' THEN community_id END),
+               MAX(CASE WHEN id = 'entity-repair-default-scope' THEN community_id END)
+             FROM entities
+             WHERE id IN ('entity-repair-env-scope', 'entity-repair-default-scope')",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("read scoped repair communities");
+    assert!(env_scoped.is_some());
+    assert!(default_scoped.is_none());
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn repair_cluster_entities_uses_weighted_louvain_for_bridged_communities() {
+    let server = TestServer::start().await;
+    let conn = rusqlite::Connection::open(server.db_path()).expect("open replay db");
+    conn.execute_batch(
+        r#"INSERT INTO entities
+           (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
+           VALUES
+           ('entity-repair-a1', 'Alpha One', 'alpha one', 'project', 'default', 6,
+            '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
+           ('entity-repair-a2', 'Alpha Two', 'alpha two', 'project', 'default', 5,
+            '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
+           ('entity-repair-a3', 'Alpha Three', 'alpha three', 'project', 'default', 4,
+            '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
+           ('entity-repair-b1', 'Beta One', 'beta one', 'project', 'default', 6,
+            '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
+           ('entity-repair-b2', 'Beta Two', 'beta two', 'project', 'default', 5,
+            '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
+           ('entity-repair-b3', 'Beta Three', 'beta three', 'project', 'default', 4,
+            '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
+
+           INSERT INTO entity_dependencies
+           (id, source_entity_id, target_entity_id, agent_id, dependency_type,
+            strength, confidence, reason, created_at, updated_at)
+           VALUES
+           ('dep-repair-a1-a2', 'entity-repair-a1', 'entity-repair-a2', 'default',
+            'depends_on', 1.0, 1.0, 'dense alpha edge', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
+           ('dep-repair-a1-a3', 'entity-repair-a1', 'entity-repair-a3', 'default',
+            'depends_on', 1.0, 1.0, 'dense alpha edge', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
+           ('dep-repair-a2-a3', 'entity-repair-a2', 'entity-repair-a3', 'default',
+            'depends_on', 1.0, 1.0, 'dense alpha edge', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
+           ('dep-repair-b1-b2', 'entity-repair-b1', 'entity-repair-b2', 'default',
+            'depends_on', 1.0, 1.0, 'dense beta edge', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
+           ('dep-repair-b1-b3', 'entity-repair-b1', 'entity-repair-b3', 'default',
+            'depends_on', 1.0, 1.0, 'dense beta edge', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
+           ('dep-repair-b2-b3', 'entity-repair-b2', 'entity-repair-b3', 'default',
+            'depends_on', 1.0, 1.0, 'dense beta edge', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
+           ('dep-repair-bridge', 'entity-repair-a3', 'entity-repair-b1', 'default',
+            'depends_on', 0.05, 1.0, 'weak bridge edge', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');"#,
+    )
+    .expect("seed bridged repair communities");
+    drop(conn);
+
+    let resp = server.post("/api/repair/cluster-entities", json!({})).await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["communities"], 2);
+    assert!(body["modularity"].as_f64().unwrap_or(0.0) > 0.3);
+    let mut member_counts = body["members"]
+        .as_array()
+        .expect("community members")
+        .iter()
+        .map(|member| member["count"].as_u64().unwrap_or(0))
+        .collect::<Vec<_>>();
+    member_counts.sort_unstable();
+    assert_eq!(member_counts, vec![3, 3]);
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn repair_backfill_hints_returns_400_when_hints_disabled() {
+    let server = TestServer::start_with_agent_yaml(
+        None,
+        r#"agent:
+  name: test-agent
+  version: 1
+memory:
+  pipelineV2:
+    hints:
+      enabled: false
+"#,
+    )
+    .await;
+
+    let resp = server
+        .post("/api/repair/backfill-hints", json!({"batchSize": 1}))
+        .await;
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "Hints disabled in pipeline config");
 }
 
 #[tokio::test]

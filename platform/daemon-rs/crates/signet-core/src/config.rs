@@ -1404,6 +1404,7 @@ pub struct PipelineV2Config {
     pub synthesis: SynthesisConfig,
     pub procedural: ProceduralConfig,
     pub structural: StructuralConfig,
+    pub hints: HintsConfig,
     pub feedback: FeedbackConfig,
     pub significance: Option<SignificanceConfig>,
     pub predictor: Option<PredictorConfig>,
@@ -1440,6 +1441,7 @@ impl Default for PipelineV2Config {
             synthesis: SynthesisConfig::default(),
             procedural: ProceduralConfig::default(),
             structural: StructuralConfig::default(),
+            hints: HintsConfig::default(),
             feedback: FeedbackConfig::default(),
             significance: Some(SignificanceConfig::default()),
             predictor: None,
@@ -1824,6 +1826,18 @@ impl Default for ProceduralConfig {
             enrich_min_description: 50,
             reconcile_interval_ms: 300_000,
         }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct HintsConfig {
+    pub enabled: bool,
+}
+
+impl Default for HintsConfig {
+    fn default() -> Self {
+        Self { enabled: true }
     }
 }
 

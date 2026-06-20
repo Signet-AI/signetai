@@ -4912,6 +4912,8 @@ pub async fn claim_version(
 /// GET /api/ontology/entities/:id/aliases — list entity aliases.
 pub async fn entity_aliases(
     State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Path(entity_id): Path<String>,
     Query(query): Query<StatusQuery>,
 ) -> impl IntoResponse {
@@ -4920,6 +4922,16 @@ pub async fn entity_aliases(
     {
         return json_error(StatusCode::BAD_REQUEST, "status is invalid");
     }
+    let agent = match scoped_agent_or_response(
+        &state,
+        peer,
+        &headers,
+        query.agent_id.as_deref(),
+        Permission::Recall,
+    ) {
+        Ok(agent) => agent,
+        Err(resp) => return resp,
+    };
     let status = query.status.unwrap_or_else(|| "active".to_string());
     let result = state
         .pool
@@ -4928,21 +4940,21 @@ pub async fn entity_aliases(
                 conn.prepare_cached(
                     "SELECT id, entity_id, alias, canonical_alias, confidence, source, status, created_at, updated_at
                        FROM entity_aliases
-                      WHERE agent_id = 'default' AND entity_id = ?1
+                      WHERE agent_id = ?1 AND entity_id = ?2
                       ORDER BY created_at DESC",
                 )?
             } else {
                 conn.prepare_cached(
                     "SELECT id, entity_id, alias, canonical_alias, confidence, source, status, created_at, updated_at
                        FROM entity_aliases
-                      WHERE agent_id = 'default' AND entity_id = ?1 AND status = ?2
+                      WHERE agent_id = ?1 AND entity_id = ?2 AND status = ?3
                       ORDER BY created_at DESC",
                 )?
             };
             let mut rows = if status == "all" {
-                stmt.query(rusqlite::params![entity_id])?
+                stmt.query(rusqlite::params![&agent, &entity_id])?
             } else {
-                stmt.query(rusqlite::params![entity_id, status])?
+                stmt.query(rusqlite::params![&agent, &entity_id, &status])?
             };
             let mut items = Vec::new();
             while let Some(row) = rows.next()? {
@@ -4970,6 +4982,8 @@ pub async fn entity_aliases(
 /// POST /api/ontology/entities/:id/aliases — create an alias.
 pub async fn entity_alias_create(
     State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Path(entity_id): Path<String>,
     Json(body): Json<JsonValue>,
 ) -> impl IntoResponse {
@@ -4982,12 +4996,24 @@ pub async fn entity_alias_create(
         .unwrap_or(1.0)
         .clamp(0.0, 1.0);
     let source = read_body_string(&body, "source");
+    let requested_agent =
+        read_body_string(&body, "agent_id").or_else(|| read_body_string(&body, "agentId"));
+    let agent = match scoped_agent_or_response(
+        &state,
+        peer,
+        &headers,
+        requested_agent.as_deref(),
+        Permission::Modify,
+    ) {
+        Ok(agent) => agent,
+        Err(resp) => return resp,
+    };
     let result = state
         .pool
         .write(Priority::Low, move |conn| {
             let exists = conn
-                .prepare_cached("SELECT 1 FROM entities WHERE id = ?1 AND agent_id = 'default'")?
-                .exists(rusqlite::params![entity_id])?;
+                .prepare_cached("SELECT 1 FROM entities WHERE id = ?1 AND agent_id = ?2")?
+                .exists(rusqlite::params![&entity_id, &agent])?;
             if !exists {
                 return Ok(json!({"found": false}));
             }
@@ -4997,8 +5023,8 @@ pub async fn entity_alias_create(
             conn.execute(
                 "INSERT INTO entity_aliases
                  (id, entity_id, agent_id, alias, canonical_alias, confidence, source, status, created_at, updated_at)
-                 VALUES (?1, ?2, 'default', ?3, ?4, ?5, ?6, 'active', ?7, ?7)",
-                rusqlite::params![id, entity_id, alias, canonical_alias, confidence, source, ts],
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'active', ?8, ?8)",
+                rusqlite::params![id, &entity_id, &agent, &alias, &canonical_alias, confidence, &source, ts],
             )?;
             Ok(json!({
                 "found": true,
@@ -5036,8 +5062,21 @@ pub async fn entity_alias_create(
 /// DELETE /api/ontology/entities/:id/aliases/:aliasId — archive an alias.
 pub async fn entity_alias_delete(
     State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Path((entity_id, alias_id)): Path<(String, String)>,
+    Query(query): Query<StatusQuery>,
 ) -> impl IntoResponse {
+    let agent = match scoped_agent_or_response(
+        &state,
+        peer,
+        &headers,
+        query.agent_id.as_deref(),
+        Permission::Modify,
+    ) {
+        Ok(agent) => agent,
+        Err(resp) => return resp,
+    };
     let response_alias_id = alias_id.clone();
     let result = state
         .pool
@@ -5046,8 +5085,8 @@ pub async fn entity_alias_delete(
             let changed = conn.execute(
                 "UPDATE entity_aliases
                     SET status = 'archived', updated_at = ?1
-                  WHERE id = ?2 AND entity_id = ?3 AND agent_id = 'default'",
-                rusqlite::params![ts, alias_id, entity_id],
+                  WHERE id = ?2 AND entity_id = ?3 AND agent_id = ?4",
+                rusqlite::params![ts, &alias_id, &entity_id, &agent],
             )?;
             Ok(json!({"changed": changed}))
         })

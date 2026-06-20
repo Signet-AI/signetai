@@ -200,11 +200,15 @@ Behavioral-core gap-fill, highest-risk first. Worktree-isolated subagents,
 - ✅ **Auth & secrets** (core 7, was PARTIAL): secrets routes wrapped in
   TS-equivalent capability guard; secret-exec validates non-empty command +
   secret map; SSO/SAML 501-IdP-deferral replay case. No secret values leaked.
-- ⏳ **Scoping audit** (core 4): cross-cutting — find + fix routes that don't
-  honor agent_id/visibility/scope like TS. In flight.
-- ⏳ **`/api/repair/*` stubs** (6 stubs): prune-generic/cluster/relink/
-  backfill-hints/dead-memories/forget now native. **3 refinements in flight:**
-  (a) hardcoded `default` agent fallback vs TS SIGNET_AGENT_ID (scoping leak);
-  (b) cluster-entities uses connected-components+modularity 0.0 vs TS weighted
-  Louvain; (c) backfill-hints missing pipelineV2.hints.enabled gate (TS 400).
+- ✅ **`/api/repair/*` stubs** (6 stubs): all native. REFINED: SIGNET_AGENT_ID
+  resolution (no hardcoded default), weighted Louvain community detection
+  (was connected-components+0.0), pipelineV2.hints.enabled gate (TS 400).
+- ⏳ **Scoping audit** (core 4): closed 4 leaks (memory cross-agent/archived,
+  write mutation delete/recover/modify/batch-forget scope, ontology alias
+  hardcoded default, cross-agent sender/session). sessions.rs already correct.
+  **4 in flight (1 critical):** (a) CRITICAL — PATCH /api/memory/:id still
+  bypasses mutation auth/scoping (audit fixed sibling routes, missed `patch`
+  handler) → cross-agent mutation in team/hybrid; (b) presence include_self
+  semantics; (c) message listing hard-filters to_session_key (drops
+  agent/broadcast); (d) last_seen_at RFC3339 'T' vs sqlite space-sep compare.
 - ⬜ Scoping / memory-lineage / hooks / remaining auth — after.

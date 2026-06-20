@@ -1884,6 +1884,14 @@ fn resolve_repair_agent_id(
         .map(ToOwned::to_owned)
         .or_else(|| query_text(query, "agentId", "agent_id"))
         .or_else(|| header_text(headers, "x-signet-agent-id"))
+        .unwrap_or_else(resolve_daemon_agent_id)
+}
+
+fn resolve_daemon_agent_id() -> String {
+    std::env::var("SIGNET_AGENT_ID")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
         .unwrap_or_else(|| "default".to_string())
 }
 
@@ -2465,6 +2473,21 @@ struct ClusterEntityRow {
     mentions: i64,
 }
 
+#[derive(Clone)]
+struct ClusterEdge {
+    left: String,
+    right: String,
+    weight: f64,
+}
+
+fn ordered_edge(left: &str, right: &str) -> (String, String) {
+    if left <= right {
+        (left.to_string(), right.to_string())
+    } else {
+        (right.to_string(), left.to_string())
+    }
+}
+
 fn compute_component_cohesion(component: &[String], edges: &HashSet<(String, String)>) -> f64 {
     if component.len() < 2 {
         return 0.0;
@@ -2482,11 +2505,183 @@ fn compute_component_cohesion(component: &[String], edges: &HashSet<(String, Str
     }
 }
 
+fn compute_modularity(
+    communities: &HashMap<String, usize>,
+    degrees: &HashMap<String, f64>,
+    edges: &[ClusterEdge],
+    total_edge_weight: f64,
+) -> f64 {
+    if total_edge_weight <= f64::EPSILON {
+        return 0.0;
+    }
+
+    let mut degree_by_community: HashMap<usize, f64> = HashMap::new();
+    for (node_id, community) in communities {
+        *degree_by_community.entry(*community).or_insert(0.0) +=
+            degrees.get(node_id).copied().unwrap_or(0.0);
+    }
+
+    let mut internal_weight_by_community: HashMap<usize, f64> = HashMap::new();
+    for edge in edges {
+        let Some(left_community) = communities.get(&edge.left) else {
+            continue;
+        };
+        if Some(left_community) == communities.get(&edge.right) {
+            *internal_weight_by_community
+                .entry(*left_community)
+                .or_insert(0.0) += edge.weight;
+        }
+    }
+
+    degree_by_community
+        .iter()
+        .map(|(community, degree_sum)| {
+            let internal_weight = internal_weight_by_community
+                .get(community)
+                .copied()
+                .unwrap_or(0.0);
+            let expected = degree_sum / (2.0 * total_edge_weight);
+            internal_weight / total_edge_weight - expected * expected
+        })
+        .sum()
+}
+
+fn compact_community_ids(
+    node_ids: &[String],
+    communities: HashMap<String, usize>,
+) -> HashMap<String, usize> {
+    let mut old_to_new: HashMap<usize, usize> = HashMap::new();
+    let mut next = 0_usize;
+    let mut compacted = HashMap::new();
+    for node_id in node_ids {
+        let old = communities.get(node_id).copied().unwrap_or(next);
+        let new = *old_to_new.entry(old).or_insert_with(|| {
+            let assigned = next;
+            next += 1;
+            assigned
+        });
+        compacted.insert(node_id.clone(), new);
+    }
+    compacted
+}
+
+fn detect_weighted_louvain_communities(
+    node_ids: &[String],
+    edges: &[ClusterEdge],
+) -> (HashMap<String, usize>, f64) {
+    let mut communities = node_ids
+        .iter()
+        .enumerate()
+        .map(|(index, node_id)| (node_id.clone(), index))
+        .collect::<HashMap<_, _>>();
+
+    if node_ids.is_empty() || edges.is_empty() {
+        return (communities, 0.0);
+    }
+
+    let mut degrees = node_ids
+        .iter()
+        .map(|node_id| (node_id.clone(), 0.0))
+        .collect::<HashMap<_, _>>();
+    let mut neighbor_communities_by_node: HashMap<String, HashSet<usize>> = node_ids
+        .iter()
+        .map(|node_id| (node_id.clone(), HashSet::new()))
+        .collect();
+    let mut total_edge_weight = 0.0;
+    for edge in edges {
+        total_edge_weight += edge.weight;
+        *degrees.entry(edge.left.clone()).or_insert(0.0) += edge.weight;
+        *degrees.entry(edge.right.clone()).or_insert(0.0) += edge.weight;
+    }
+
+    let mut modularity = compute_modularity(&communities, &degrees, edges, total_edge_weight);
+    let mut next_community = node_ids.len();
+    const EPSILON: f64 = 1.0e-12;
+
+    // Mirrors the TS route's use of graphology-communities-louvain.detailed()
+    // with getEdgeWeight="weight" (platform/daemon/src/pipeline/community-detection.ts:101-115):
+    // start with one community per node, repeatedly move each node to the
+    // neighboring community with the best positive weighted-modularity gain,
+    // and stop at a local optimum for the current graph level.
+    for _ in 0..100 {
+        for communities_set in neighbor_communities_by_node.values_mut() {
+            communities_set.clear();
+        }
+        for edge in edges {
+            if let Some(community) = communities.get(&edge.right).copied() {
+                neighbor_communities_by_node
+                    .entry(edge.left.clone())
+                    .or_default()
+                    .insert(community);
+            }
+            if let Some(community) = communities.get(&edge.left).copied() {
+                neighbor_communities_by_node
+                    .entry(edge.right.clone())
+                    .or_default()
+                    .insert(community);
+            }
+        }
+
+        let mut moved = false;
+        for node_id in node_ids {
+            let original_community = communities[node_id];
+            let mut candidates = neighbor_communities_by_node
+                .get(node_id)
+                .cloned()
+                .unwrap_or_default();
+            candidates.insert(original_community);
+
+            let original_size = communities
+                .values()
+                .filter(|community| **community == original_community)
+                .count();
+            if original_size > 1 {
+                candidates.insert(next_community);
+            }
+
+            let mut ordered_candidates = candidates.into_iter().collect::<Vec<_>>();
+            ordered_candidates.sort_unstable();
+
+            let mut best_community = original_community;
+            let mut best_modularity = modularity;
+            for candidate in ordered_candidates {
+                if candidate == original_community {
+                    continue;
+                }
+                communities.insert(node_id.clone(), candidate);
+                let candidate_modularity =
+                    compute_modularity(&communities, &degrees, edges, total_edge_weight);
+                if candidate_modularity > best_modularity + EPSILON {
+                    best_community = candidate;
+                    best_modularity = candidate_modularity;
+                }
+            }
+
+            communities.insert(node_id.clone(), best_community);
+            if best_community != original_community {
+                moved = true;
+                modularity = best_modularity;
+                if best_community == next_community {
+                    next_community += 1;
+                }
+            }
+        }
+
+        if !moved {
+            break;
+        }
+    }
+
+    let compacted = compact_community_ids(node_ids, communities);
+    let modularity = compute_modularity(&compacted, &degrees, edges, total_edge_weight);
+    (compacted, modularity)
+}
+
 fn cluster_entities_native(
     conn: &rusqlite::Connection,
     agent_id: &str,
 ) -> rusqlite::Result<serde_json::Value> {
-    let entities = conn
+    let mut entities = conn
         .prepare(
             "SELECT id, name, COALESCE(mentions, 0)
              FROM entities
@@ -2500,6 +2695,7 @@ fn cluster_entities_native(
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
+    entities.sort_by(|left, right| left.id.cmp(&right.id));
 
     if entities.is_empty() {
         return Ok(serde_json::json!({
@@ -2515,68 +2711,76 @@ fn cluster_entities_native(
         .cloned()
         .map(|entity| (entity.id.clone(), entity))
         .collect::<HashMap<_, _>>();
-    let mut adjacency = entities
-        .iter()
-        .map(|entity| (entity.id.clone(), Vec::<String>::new()))
-        .collect::<HashMap<_, _>>();
-    let mut edges = HashSet::new();
+    let mut edge_by_pair: HashMap<(String, String), f64> = HashMap::new();
     if sqlite_table_exists(conn, "entity_dependencies")? {
         let deps = conn
             .prepare(
-                "SELECT source_entity_id, target_entity_id
+                "SELECT source_entity_id, target_entity_id, strength, COALESCE(confidence, 0.7)
                  FROM entity_dependencies
                  WHERE COALESCE(NULLIF(agent_id, ''), 'default') = ?1",
             )?
             .query_map([agent_id], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, f64>(2)?,
+                    row.get::<_, f64>(3)?,
+                ))
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
-        for (left, right) in deps {
+        for (left, right, strength, confidence) in deps {
             if left == right
                 || !entity_by_id.contains_key(&left)
                 || !entity_by_id.contains_key(&right)
             {
                 continue;
             }
-            adjacency
-                .entry(left.clone())
-                .or_default()
-                .push(right.clone());
-            adjacency
-                .entry(right.clone())
-                .or_default()
-                .push(left.clone());
-            let edge = if left <= right {
-                (left, right)
-            } else {
-                (right, left)
-            };
-            edges.insert(edge);
+            let weight = strength * confidence;
+            if !weight.is_finite() || weight <= 0.0 {
+                continue;
+            }
+            let edge = ordered_edge(&left, &right);
+            edge_by_pair
+                .entry(edge)
+                .and_modify(|existing| {
+                    if weight > *existing {
+                        *existing = weight;
+                    }
+                })
+                .or_insert(weight);
         }
     }
 
-    let mut seen = HashSet::new();
-    let mut components: Vec<Vec<String>> = Vec::new();
-    for entity in &entities {
-        if seen.contains(&entity.id) {
-            continue;
-        }
-        let mut stack = vec![entity.id.clone()];
-        let mut component = Vec::new();
-        seen.insert(entity.id.clone());
-        while let Some(id) = stack.pop() {
-            component.push(id.clone());
-            if let Some(neighbors) = adjacency.get(&id) {
-                for neighbor in neighbors {
-                    if seen.insert(neighbor.clone()) {
-                        stack.push(neighbor.clone());
-                    }
-                }
-            }
-        }
-        component.sort();
-        components.push(component);
+    let mut edges = edge_by_pair
+        .iter()
+        .map(|((left, right), weight)| ClusterEdge {
+            left: left.clone(),
+            right: right.clone(),
+            weight: *weight,
+        })
+        .collect::<Vec<_>>();
+    edges.sort_by(|left, right| {
+        left.left
+            .cmp(&right.left)
+            .then(left.right.cmp(&right.right))
+    });
+    let edge_pairs = edge_by_pair.keys().cloned().collect::<HashSet<_>>();
+    let node_ids = entities
+        .iter()
+        .map(|entity| entity.id.clone())
+        .collect::<Vec<_>>();
+    let (communities_by_node, modularity) = detect_weighted_louvain_communities(&node_ids, &edges);
+
+    let mut components_by_community: HashMap<usize, Vec<String>> = HashMap::new();
+    for node_id in &node_ids {
+        let community = communities_by_node.get(node_id).copied().unwrap_or(0);
+        components_by_community
+            .entry(community)
+            .or_default()
+            .push(node_id.clone());
     }
+    let mut components = components_by_community.into_iter().collect::<Vec<_>>();
+    components.sort_by_key(|(community, _)| *community);
 
     conn.execute(
         "DELETE FROM entity_communities WHERE agent_id = ?1",
@@ -2589,20 +2793,20 @@ fn cluster_entities_native(
 
     let now = chrono::Utc::now().to_rfc3339();
     let mut members = Vec::new();
-    for (index, component) in components.iter().enumerate() {
-        let community_id = format!("community_{agent_id}_{index}");
+    for (community, component) in components {
+        let community_id = format!("community_{agent_id}_{community}");
         let best = component
             .iter()
             .filter_map(|id| entity_by_id.get(id))
             .max_by_key(|entity| entity.mentions);
         let name = best.map(|entity| entity.name.clone());
-        let cohesion = compute_component_cohesion(component, &edges);
+        let cohesion = compute_component_cohesion(&component, &edge_pairs);
         conn.execute(
             "INSERT INTO entity_communities (id, agent_id, name, cohesion, member_count, created_at, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
             rusqlite::params![community_id, agent_id, name, cohesion, component.len() as i64, now],
         )?;
-        for entity_id in component {
+        for entity_id in &component {
             conn.execute(
                 "UPDATE entities SET community_id = ?1 WHERE id = ?2 AND COALESCE(NULLIF(agent_id, ''), 'default') = ?3",
                 rusqlite::params![community_id, entity_id, agent_id],
@@ -2616,7 +2820,6 @@ fn cluster_entities_native(
         }));
     }
 
-    let modularity = if edges.is_empty() { 0.0 } else { 0.0 };
     let quality = if modularity > 0.6 {
         "strong"
     } else if modularity >= 0.3 {
@@ -2929,6 +3132,15 @@ pub async fn backfill_hints(
     Query(query): Query<HashMap<String, String>>,
     body: Option<Json<BackfillHintsBody>>,
 ) -> impl IntoResponse {
+    let cfg = pipeline_config(&state);
+    if !cfg.hints.enabled {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Hints disabled in pipeline config"})),
+        )
+            .into_response();
+    }
+
     let body = body.map(|Json(body)| body).unwrap_or_default();
     let batch_size = body.batch_size.unwrap_or(50).clamp(1, 200) as i64;
     let agent_id = resolve_repair_agent_id(&headers, &query, body.agent_id.as_deref());
