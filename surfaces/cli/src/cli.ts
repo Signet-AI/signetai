@@ -23,6 +23,7 @@ import { dirname, join, resolve as resolvePath, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ClaudeCodeConnector } from "@signet/connector-claude-code";
 import { CodexConnector } from "@signet/connector-codex";
+import { ForgeConnector } from "@signet/connector-forge";
 import { GeminiConnector } from "@signet/connector-gemini";
 import { HermesAgentConnector } from "@signet/connector-hermes-agent";
 import { OhMyPiConnector } from "@signet/connector-oh-my-pi";
@@ -185,6 +186,19 @@ async function configureHarnessHooks(
 		case "opencode": {
 			const connector = new OpenCodeConnector();
 			await connector.install(basePath);
+			break;
+		}
+		case "forge": {
+			const connector = new ForgeConnector();
+			const result = await connector.install(basePath);
+			if (!result.success) {
+				console.warn(chalk.yellow(`  Warning: ForgeCode integration setup failed: ${result.message}`));
+			} else {
+				console.log(chalk.green(`  ✓ ${result.message}`));
+			}
+			for (const w of result.warnings ?? []) {
+				console.warn(chalk.yellow(`  ${w}`));
+			}
 			break;
 		}
 		case "oh-my-pi": {

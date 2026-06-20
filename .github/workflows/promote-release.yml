@@ -25,6 +25,7 @@ jobs:
             "@signetai/connector-base"
             "@signetai/connector-claude-code"
             "@signetai/connector-codex"
+            "@signetai/connector-forge"
             "@signetai/connector-gemini"
             "@signetai/connector-hermes-agent"
             "@signetai/connector-oh-my-pi"

@@ -5,6 +5,7 @@ import chalk from "chalk";
 export type HarnessChoice =
 	| "claude-code"
 	| "opencode"
+	| "forge"
 	| "openclaw"
 	| "oh-my-pi"
 	| "pi"
@@ -37,6 +38,7 @@ export interface ResolveSetupExtractionProviderOptions {
 export const SETUP_HARNESS_CHOICES: readonly HarnessChoice[] = [
 	"claude-code",
 	"opencode",
+	"forge",
 	"openclaw",
 	"oh-my-pi",
 	"pi",
@@ -95,6 +97,7 @@ export function formatDetectionSummary(detection: SetupDetection): string {
 	if (detection.harnesses.claudeCode) harnesses.push("Claude Code");
 	if (detection.harnesses.openclaw) harnesses.push("OpenClaw");
 	if (detection.harnesses.opencode) harnesses.push("OpenCode");
+	if (detection.harnesses.forge) harnesses.push("ForgeCode");
 	if (detection.harnesses.ohMyPi) harnesses.push("Oh My Pi");
 	if (detection.harnesses.pi) harnesses.push("Pi");
 	if (detection.harnesses.codex) harnesses.push("Codex");

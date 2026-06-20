@@ -10,16 +10,19 @@ import {
   unlinkSync as unlinkSync3,
   writeFileSync as writeFileSync2
 } from "node:fs";
-import { homedir } from "node:os";
-import { isAbsolute, join as join4, relative, resolve as resolve2, sep } from "node:path";
+import { homedir as homedir4 } from "node:os";
+import { isAbsolute, join as join6, relative, resolve as resolve2, sep } from "node:path";
 
 // ../../../libs/connector-base/dist/index.js
 import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync, renameSync, unlinkSync as unlinkSync2, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname as dirname2, join as join3, resolve } from "node:path";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { homedir as homedir2 } from "os";
+import { join as join2 } from "path";
 import { createRequire as createRequire2 } from "node:module";
 import { homedir as homedir3, platform as platform2 } from "node:os";
 import { basename, dirname as dirname3, resolve as resolve3 } from "node:path";
@@ -31,29 +34,15 @@ var __getProtoOf = Object.getPrototypeOf;
 var __defProp = Object.defineProperty;
 var __getOwnPropNames = Object.getOwnPropertyNames;
 var __hasOwnProp = Object.prototype.hasOwnProperty;
-function __accessProp(key) {
-  return this[key];
-}
-var __toESMCache_node;
-var __toESMCache_esm;
 var __toESM = (mod, isNodeMode, target) => {
-  var canCache = mod != null && typeof mod === "object";
-  if (canCache) {
-    var cache = isNodeMode ? __toESMCache_node ??= new WeakMap : __toESMCache_esm ??= new WeakMap;
-    var cached = cache.get(mod);
-    if (cached)
-      return cached;
-  }
   target = mod != null ? __create(__getProtoOf(mod)) : {};
   const to = isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target;
   for (let key of __getOwnPropNames(mod))
     if (!__hasOwnProp.call(to, key))
       __defProp(to, key, {
-        get: __accessProp.bind(mod, key),
+        get: () => mod[key],
         enumerable: true
       });
-  if (canCache)
-    cache.set(mod, to);
   return to;
 };
 var __commonJS = (cb, mod) => () => (mod || cb((mod = { exports: {} }).exports, mod), mod.exports);
@@ -9398,6 +9387,81 @@ function up75(db) {
 			ON memory_artifacts(agent_id, source_id, source_root);
 	`);
 }
+function up76(db) {
+  db.exec(`
+		CREATE TABLE IF NOT EXISTS temporal_edges (
+			id TEXT PRIMARY KEY,
+			agent_id TEXT NOT NULL DEFAULT 'default',
+			subject_type TEXT NOT NULL,
+			subject_id TEXT NOT NULL,
+			facet TEXT NOT NULL CHECK(facet IN ('captured', 'session', 'source', 'observed', 'occurred', 'valid')),
+			start_at TEXT NOT NULL,
+			end_at TEXT,
+			confidence REAL NOT NULL DEFAULT 1.0,
+			provenance_json TEXT,
+			metadata_json TEXT,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_temporal_edges_agent_facet_range
+			ON temporal_edges(agent_id, facet, start_at, end_at);
+		CREATE INDEX IF NOT EXISTS idx_temporal_edges_agent_subject
+			ON temporal_edges(agent_id, subject_type, subject_id);
+	`);
+}
+function up77(db) {
+  db.exec(`
+		CREATE TABLE IF NOT EXISTS entity_aliases (
+			id TEXT PRIMARY KEY,
+			entity_id TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+			agent_id TEXT NOT NULL DEFAULT 'default',
+			alias TEXT NOT NULL,
+			canonical_alias TEXT NOT NULL,
+			confidence REAL NOT NULL DEFAULT 1.0,
+			source TEXT,
+			status TEXT NOT NULL DEFAULT 'active',
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+		);
+
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_entity_aliases_active_unique
+			ON entity_aliases(agent_id, canonical_alias)
+			WHERE status = 'active';
+		CREATE INDEX IF NOT EXISTS idx_entity_aliases_entity
+			ON entity_aliases(agent_id, entity_id, status);
+		CREATE INDEX IF NOT EXISTS idx_entity_aliases_lookup
+			ON entity_aliases(agent_id, canonical_alias, status);
+	`);
+}
+function up78(db) {
+  db.exec(`
+		CREATE TABLE IF NOT EXISTS api_keys (
+			id TEXT PRIMARY KEY,
+			prefix TEXT NOT NULL UNIQUE,
+			name TEXT NOT NULL,
+			key_hash TEXT NOT NULL,
+			role TEXT NOT NULL DEFAULT 'agent',
+			scope_json TEXT NOT NULL DEFAULT '{}',
+			permissions_json TEXT NOT NULL DEFAULT '[]',
+			connector TEXT,
+			harness TEXT,
+			agent_id TEXT,
+			allowed_projects_json TEXT,
+			created_at TEXT NOT NULL,
+			last_used_at TEXT,
+			revoked_at TEXT,
+			expires_at TEXT
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_api_keys_prefix
+			ON api_keys(prefix);
+		CREATE INDEX IF NOT EXISTS idx_api_keys_active
+			ON api_keys(revoked_at, expires_at);
+		CREATE INDEX IF NOT EXISTS idx_api_keys_connector
+			ON api_keys(connector, harness);
+	`);
+}
 var MIGRATIONS = [
   {
     version: 1,
@@ -10000,12 +10064,43 @@ var MIGRATIONS = [
         { table: "memory_artifacts", column: "source_meta_json" }
       ]
     }
+  },
+  {
+    version: 76,
+    name: "temporal-edges",
+    up: up76,
+    artifacts: {
+      tables: ["temporal_edges"]
+    }
+  },
+  {
+    version: 77,
+    name: "entity-aliases",
+    up: up77,
+    artifacts: {
+      tables: ["entity_aliases"]
+    }
+  },
+  {
+    version: 78,
+    name: "api-keys",
+    up: up78,
+    artifacts: {
+      tables: ["api_keys"]
+    }
   }
 ];
 var LATEST_SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1]?.version ?? 0;
 var __filename2 = fileURLToPath(import.meta.url);
 var __dirname2 = dirname(__filename2);
 var import_yaml = __toESM(require_dist(), 1);
+function expandHome(p, home = homedir2()) {
+  if (p === "~")
+    return home;
+  if (p.startsWith("~/") || p.startsWith("~\\"))
+    return join2(home, p.slice(2));
+  return p;
+}
 var LOCAL_BINDS = new Set(["127.0.0.1", "localhost", "::1", "::ffff:127.0.0.1"]);
 var import_yaml2 = __toESM(require_dist(), 1);
 var native = null;
@@ -10350,6 +10445,11 @@ ${content}`);
 `);
   }
 }
+function isSignetGeneratedFile(raw) {
+  const lines = raw.split(`
+`).slice(0, 6);
+  return lines.some((line, i) => /^#\s+AUTO-GENERATED\s+from\s+.*\s+by\s+Signet/i.test(line) || /^#\s+Auto-generated\s+from\s+/.test(line) && i + 1 < lines.length && /^#\s+Source:\s+/.test(lines[i + 1]));
+}
 function atomicWriteJson(path, data, indent = 2) {
   const content = `${JSON.stringify(data, null, indent)}
 `;
@@ -10364,12 +10464,47 @@ function atomicWriteJson(path, data, indent = 2) {
     throw err;
   }
 }
+function readManagedTrimmedEnv(name) {
+  const value = process.env[name];
+  if (typeof value !== "string")
+    return;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+function resolveSignetWorkspacePath(home2 = homedir()) {
+  const configured = readManagedTrimmedEnv("SIGNET_PATH");
+  if (configured)
+    return resolve(expandHome(configured));
+  const defaultWorkspace = join3(home2, ".agents");
+  const configHome = readManagedTrimmedEnv("XDG_CONFIG_HOME") ?? join3(home2, ".config");
+  const workspaceConfigPath = join3(configHome, "signet", "workspace.json");
+  if (!existsSync(workspaceConfigPath))
+    return defaultWorkspace;
+  let raw;
+  try {
+    raw = JSON.parse(readFileSync(workspaceConfigPath, "utf8"));
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    throw new Error(`Invalid Signet workspace config at ${workspaceConfigPath}: ${detail}`);
+  }
+  if (typeof raw !== "object" || raw === null || !("workspace" in raw)) {
+    throw new Error(`Invalid Signet workspace config at ${workspaceConfigPath}: missing workspace`);
+  }
+  const workspace = raw.workspace;
+  if (typeof workspace !== "string" || workspace.trim().length === 0) {
+    throw new Error(`Invalid Signet workspace config at ${workspaceConfigPath}: workspace must be a non-empty string`);
+  }
+  return resolve(expandHome(workspace.trim()));
+}
+function resolveSignetApiKey() {
+  return readManagedTrimmedEnv("SIGNET_API_KEY") ?? readManagedTrimmedEnv("SIGNET_TOKEN");
+}
 
 // ../../../platform/core/dist/index.js
 import { createRequire as createRequire3 } from "node:module";
-import { dirname as dirname4, join as join2 } from "node:path";
+import { dirname as dirname4, join as join4 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
-import { homedir as homedir2 } from "os";
+import { homedir as homedir22 } from "os";
 import { join as join22 } from "path";
 import { createRequire as createRequire22 } from "node:module";
 import { homedir as homedir32, platform as platform22 } from "node:os";
@@ -10382,29 +10517,15 @@ var __getProtoOf2 = Object.getPrototypeOf;
 var __defProp2 = Object.defineProperty;
 var __getOwnPropNames2 = Object.getOwnPropertyNames;
 var __hasOwnProp2 = Object.prototype.hasOwnProperty;
-function __accessProp2(key) {
-  return this[key];
-}
-var __toESMCache_node2;
-var __toESMCache_esm2;
 var __toESM2 = (mod, isNodeMode, target) => {
-  var canCache = mod != null && typeof mod === "object";
-  if (canCache) {
-    var cache = isNodeMode ? __toESMCache_node2 ??= new WeakMap : __toESMCache_esm2 ??= new WeakMap;
-    var cached = cache.get(mod);
-    if (cached)
-      return cached;
-  }
   target = mod != null ? __create2(__getProtoOf2(mod)) : {};
   const to = isNodeMode || !mod || !mod.__esModule ? __defProp2(target, "default", { value: mod, enumerable: true }) : target;
   for (let key of __getOwnPropNames2(mod))
     if (!__hasOwnProp2.call(to, key))
       __defProp2(to, key, {
-        get: __accessProp2.bind(mod, key),
+        get: () => mod[key],
         enumerable: true
       });
-  if (canCache)
-    cache.set(mod, to);
   return to;
 };
 var __commonJS2 = (cb, mod) => () => (mod || cb((mod = { exports: {} }).exports, mod), mod.exports);
@@ -17297,7 +17418,7 @@ function memoriesFtsNeedsTokenizerRepair2(sql) {
     return true;
   return !normalized.includes(`tokenize='${MEMORIES_FTS_TOKENIZER2}'`);
 }
-function up76(db) {
+function up79(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS schema_migrations (
 			version INTEGER PRIMARY KEY,
@@ -17615,7 +17736,7 @@ function hasColumn52(db, table, column) {
   const rows = db.prepare(`PRAGMA table_info(${table})`).all();
   return rows.some((r) => r.name === column);
 }
-function up77(db) {
+function up710(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS documents (
 			id TEXT PRIMARY KEY,
@@ -19749,11 +19870,86 @@ function up752(db) {
 			ON memory_artifacts(agent_id, source_id, source_root);
 	`);
 }
+function up762(db) {
+  db.exec(`
+		CREATE TABLE IF NOT EXISTS temporal_edges (
+			id TEXT PRIMARY KEY,
+			agent_id TEXT NOT NULL DEFAULT 'default',
+			subject_type TEXT NOT NULL,
+			subject_id TEXT NOT NULL,
+			facet TEXT NOT NULL CHECK(facet IN ('captured', 'session', 'source', 'observed', 'occurred', 'valid')),
+			start_at TEXT NOT NULL,
+			end_at TEXT,
+			confidence REAL NOT NULL DEFAULT 1.0,
+			provenance_json TEXT,
+			metadata_json TEXT,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_temporal_edges_agent_facet_range
+			ON temporal_edges(agent_id, facet, start_at, end_at);
+		CREATE INDEX IF NOT EXISTS idx_temporal_edges_agent_subject
+			ON temporal_edges(agent_id, subject_type, subject_id);
+	`);
+}
+function up772(db) {
+  db.exec(`
+		CREATE TABLE IF NOT EXISTS entity_aliases (
+			id TEXT PRIMARY KEY,
+			entity_id TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+			agent_id TEXT NOT NULL DEFAULT 'default',
+			alias TEXT NOT NULL,
+			canonical_alias TEXT NOT NULL,
+			confidence REAL NOT NULL DEFAULT 1.0,
+			source TEXT,
+			status TEXT NOT NULL DEFAULT 'active',
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+		);
+
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_entity_aliases_active_unique
+			ON entity_aliases(agent_id, canonical_alias)
+			WHERE status = 'active';
+		CREATE INDEX IF NOT EXISTS idx_entity_aliases_entity
+			ON entity_aliases(agent_id, entity_id, status);
+		CREATE INDEX IF NOT EXISTS idx_entity_aliases_lookup
+			ON entity_aliases(agent_id, canonical_alias, status);
+	`);
+}
+function up782(db) {
+  db.exec(`
+		CREATE TABLE IF NOT EXISTS api_keys (
+			id TEXT PRIMARY KEY,
+			prefix TEXT NOT NULL UNIQUE,
+			name TEXT NOT NULL,
+			key_hash TEXT NOT NULL,
+			role TEXT NOT NULL DEFAULT 'agent',
+			scope_json TEXT NOT NULL DEFAULT '{}',
+			permissions_json TEXT NOT NULL DEFAULT '[]',
+			connector TEXT,
+			harness TEXT,
+			agent_id TEXT,
+			allowed_projects_json TEXT,
+			created_at TEXT NOT NULL,
+			last_used_at TEXT,
+			revoked_at TEXT,
+			expires_at TEXT
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_api_keys_prefix
+			ON api_keys(prefix);
+		CREATE INDEX IF NOT EXISTS idx_api_keys_active
+			ON api_keys(revoked_at, expires_at);
+		CREATE INDEX IF NOT EXISTS idx_api_keys_connector
+			ON api_keys(connector, harness);
+	`);
+}
 var MIGRATIONS2 = [
   {
     version: 1,
     name: "baseline",
-    up: up76,
+    up: up79,
     artifacts: { tables: ["memories", "conversations", "embeddings"] }
   },
   {
@@ -19796,7 +19992,7 @@ var MIGRATIONS2 = [
   {
     version: 7,
     name: "documents-and-connectors",
-    up: up77,
+    up: up710,
     artifacts: { tables: ["documents", "document_memories", "connectors"] }
   },
   {
@@ -20351,13 +20547,37 @@ var MIGRATIONS2 = [
         { table: "memory_artifacts", column: "source_meta_json" }
       ]
     }
+  },
+  {
+    version: 76,
+    name: "temporal-edges",
+    up: up762,
+    artifacts: {
+      tables: ["temporal_edges"]
+    }
+  },
+  {
+    version: 77,
+    name: "entity-aliases",
+    up: up772,
+    artifacts: {
+      tables: ["entity_aliases"]
+    }
+  },
+  {
+    version: 78,
+    name: "api-keys",
+    up: up782,
+    artifacts: {
+      tables: ["api_keys"]
+    }
   }
 ];
 var LATEST_SCHEMA_VERSION2 = MIGRATIONS2[MIGRATIONS2.length - 1]?.version ?? 0;
 var __filename22 = fileURLToPath2(import.meta.url);
 var __dirname22 = dirname4(__filename22);
 var import_yaml3 = __toESM2(require_dist2(), 1);
-function expandHome(p, home2 = homedir2()) {
+function expandHome2(p, home2 = homedir22()) {
   if (p === "~")
     return home2;
   if (p.startsWith("~/") || p.startsWith("~\\"))
@@ -20366,6 +20586,85 @@ function expandHome(p, home2 = homedir2()) {
 }
 var LOCAL_BINDS2 = new Set(["127.0.0.1", "localhost", "::1", "::ffff:127.0.0.1"]);
 var import_yaml22 = __toESM2(require_dist2(), 1);
+function parseSimpleYaml(text) {
+  try {
+    const parsed = import_yaml22.default.parse(text);
+    return typeof parsed === "object" && parsed !== null ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+function readEnv(env, name) {
+  const value = env[name];
+  if (typeof value !== "string")
+    return;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+function normalizePort(raw, fallback) {
+  if (!raw)
+    return String(fallback);
+  if (!/^\d+$/.test(raw)) {
+    throw new Error(`SIGNET_PORT must be an integer between 1 and 65535: ${raw}`);
+  }
+  const port = Number.parseInt(raw, 10);
+  if (!Number.isFinite(port) || port < 1 || port > 65535) {
+    throw new Error(`SIGNET_PORT must be an integer between 1 and 65535: ${raw}`);
+  }
+  return String(port);
+}
+function bracketIpv6Host(host) {
+  if (host.startsWith("[") || !host.includes(":"))
+    return host;
+  return `[${host}]`;
+}
+function assertPlainHost(raw) {
+  if (raw.includes("/") || raw.includes("@") || raw.includes("?") || raw.includes("#")) {
+    throw new Error(`SIGNET_HOST must be a hostname or IP address, not a URL: ${raw}`);
+  }
+  const host = raw.startsWith("[") && raw.endsWith("]") ? raw.slice(1, -1) : raw;
+  if (host.includes(":")) {
+    if (/^[0-9A-Fa-f:.]+$/.test(host))
+      return;
+    throw new Error(`SIGNET_HOST must be a hostname or IP address: ${raw}`);
+  }
+  if (!/^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$/.test(host)) {
+    throw new Error(`SIGNET_HOST must be a hostname or IP address: ${raw}`);
+  }
+}
+function normalizeDaemonUrl(raw, source) {
+  let parsed;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new Error(`${source} must be an http(s) URL: ${raw}`);
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error(`${source} must use http or https: ${raw}`);
+  }
+  if (parsed.username || parsed.password) {
+    throw new Error(`${source} must not include username or password credentials`);
+  }
+  if (parsed.search || parsed.hash) {
+    throw new Error(`${source} must not include query strings or fragments`);
+  }
+  if (parsed.pathname !== "/" && parsed.pathname !== "") {
+    throw new Error(`${source} must point at the daemon origin, not a path: ${raw}`);
+  }
+  return parsed.toString().replace(/\/$/, "");
+}
+function resolveSignetDaemonUrl(opts = {}) {
+  const env = opts.env ?? process.env;
+  const fallbackHost = opts.defaultHost ?? "127.0.0.1";
+  const fallbackPort = opts.defaultPort ?? 3850;
+  const explicit = readEnv(env, "SIGNET_DAEMON_URL");
+  if (explicit)
+    return normalizeDaemonUrl(explicit, "SIGNET_DAEMON_URL");
+  const host = readEnv(env, "SIGNET_HOST") ?? fallbackHost;
+  assertPlainHost(host);
+  const port = normalizePort(readEnv(env, "SIGNET_PORT"), fallbackPort);
+  return normalizeDaemonUrl(`http://${bracketIpv6Host(host)}:${port}`, "SIGNET_HOST/SIGNET_PORT");
+}
 var native2 = null;
 try {
   const esmRequire = createRequire22(import.meta.url);
@@ -20392,6 +20691,7 @@ function defaultDiscordDesktopCachePath2() {
       return resolve32(process.env.XDG_CONFIG_HOME || resolve32(homedir32(), ".config"), "discord");
   }
 }
+var IDENTITY_MODES = ["managed", "passthrough", "off"];
 var IDENTITY_FILES2 = {
   agents: {
     path: "AGENTS.md",
@@ -20448,6 +20748,9 @@ var IDENTITY_FILES2 = {
 var REQUIRED_IDENTITY_KEYS2 = Object.entries(IDENTITY_FILES2).filter(([, spec]) => !spec.optional).map(([key]) => key);
 var OPTIONAL_IDENTITY_KEYS2 = Object.entries(IDENTITY_FILES2).filter(([, spec]) => spec.optional).map(([key]) => key);
 function hasValidIdentity(basePath) {
+  const mode = loadIdentityMode(basePath);
+  if (mode !== "managed")
+    return true;
   for (const key of REQUIRED_IDENTITY_KEYS2) {
     const spec = IDENTITY_FILES2[key];
     if (!existsSync10(join10(basePath, spec.path))) {
@@ -20455,6 +20758,35 @@ function hasValidIdentity(basePath) {
     }
   }
   return true;
+}
+function readRecord(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? value : {};
+}
+function isIdentityMode(value) {
+  return typeof value === "string" && IDENTITY_MODES.includes(value);
+}
+function resolveIdentityModeFromConfig(config) {
+  const root = readRecord(config);
+  const capabilities = readRecord(root.capabilities);
+  const capabilityIdentity = readRecord(capabilities.identity);
+  if (isIdentityMode(capabilityIdentity.mode))
+    return capabilityIdentity.mode;
+  const identity = readRecord(root.identity);
+  if (isIdentityMode(identity.mode))
+    return identity.mode;
+  if (identity.enabled === false)
+    return "off";
+  return "managed";
+}
+function loadIdentityMode(agentsDir) {
+  const agentYaml = join10(agentsDir, "agent.yaml");
+  if (!existsSync10(agentYaml))
+    return "managed";
+  try {
+    return resolveIdentityModeFromConfig(parseSimpleYaml(readFileSync8(agentYaml, "utf-8")));
+  } catch {
+    return "managed";
+  }
 }
 var home2 = homedir72();
 var SKIP_SUBTYPES2 = new Set([
@@ -20576,71 +20908,94 @@ var SKIP_FILES2 = new Set([".DS_Store", "Thumbs.db", ".gitkeep", "node_modules",
 
 // src/index.ts
 var SIGNET_FORGE_MARKER = "Managed by Signet (@signet/connector-forge)";
-function getHomeDir() {
-  const home3 = process.env.HOME?.trim();
-  return home3 && home3.length > 0 ? home3 : homedir();
-}
 function isJsonObject(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
+function readTrimmedEnv(name) {
+  const value = process.env[name];
+  if (typeof value !== "string")
+    return;
+  const trimmed = value.trim().replace(/[\r\n]+/g, "");
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+function getHomeDir() {
+  const home3 = readTrimmedEnv("HOME");
+  return home3 ?? homedir4();
+}
 function readJsonObject(path) {
-  if (!existsSync2(path)) {
+  if (!existsSync2(path))
     return {};
-  }
-  const raw = readFileSync2(path, "utf-8");
-  const parsed = JSON.parse(raw);
+  const parsed = JSON.parse(readFileSync2(path, "utf-8"));
   if (!isJsonObject(parsed)) {
     throw new Error("Forge MCP config must be a top-level object");
   }
   return parsed;
 }
 function readMcpServers(config) {
-  if (!("mcpServers" in config)) {
+  if (!("mcpServers" in config))
     return {};
-  }
-  const current = config.mcpServers;
-  if (isJsonObject(current)) {
-    return { ...current };
-  }
+  if (isJsonObject(config.mcpServers))
+    return { ...config.mcpServers };
   throw new Error("Forge MCP config field 'mcpServers' must be an object");
 }
+function signetRuntimeEnv(basePath) {
+  const env = { SIGNET_PATH: basePath };
+  const daemonUrl = readTrimmedEnv("SIGNET_DAEMON_URL");
+  const apiKey = readTrimmedEnv("SIGNET_API_KEY") ?? readTrimmedEnv("SIGNET_TOKEN");
+  const agentId = readTrimmedEnv("SIGNET_AGENT_ID");
+  if (daemonUrl)
+    env.SIGNET_DAEMON_URL = daemonUrl;
+  if (apiKey)
+    env.SIGNET_API_KEY = apiKey;
+  if (agentId)
+    env.SIGNET_AGENT_ID = agentId;
+  return env;
+}
+function resolveRemoteDaemonUrl() {
+  return readTrimmedEnv("SIGNET_DAEMON_URL") ? resolveSignetDaemonUrl() : null;
+}
 function resolveSignetMcp() {
-  if (process.platform !== "win32") {
+  if (process.platform !== "win32")
     return { command: "signet-mcp", args: [] };
-  }
   const cliEntry = process.argv[1] || "";
-  const mcpJs = join4(cliEntry, "..", "..", "dist", "mcp-stdio.js");
-  if (existsSync2(mcpJs)) {
+  const mcpJs = join6(cliEntry, "..", "..", "dist", "mcp-stdio.js");
+  if (existsSync2(mcpJs))
     return { command: process.execPath, args: [mcpJs] };
-  }
-  console.warn(`[signet] Warning: could not resolve mcp-stdio.js from argv[1]="${cliEntry}". MCP server config will use "signet-mcp" which may fail on Windows without shell:true.`);
+  console.warn(`[signet] Warning: could not resolve mcp-stdio.js from argv[1]="${cliEntry}". ` + `MCP server config will use "signet-mcp" which may fail on Windows without shell:true.`);
   return { command: "signet-mcp", args: [] };
 }
 function buildMcpServer(basePath) {
+  const remoteDaemonUrl = resolveRemoteDaemonUrl();
+  if (remoteDaemonUrl) {
+    const apiKey = resolveSignetApiKey();
+    return {
+      url: `${remoteDaemonUrl}/mcp`,
+      ...apiKey ? { headers: { Authorization: `Bearer ${apiKey}` } } : {}
+    };
+  }
   const mcp = resolveSignetMcp();
   return {
     command: mcp.command,
-    ...mcp.args.length > 0 ? { args: mcp.args } : {},
-    env: {
-      SIGNET_PATH: basePath
-    }
+    ...mcp.args && mcp.args.length > 0 ? { args: mcp.args } : {},
+    env: signetRuntimeEnv(basePath)
   };
+}
+function isChildOf(candidate, parent) {
+  const rel = relative(parent, candidate);
+  return rel !== "" && rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
 }
 
 class ForgeConnector extends BaseConnector {
   name = "ForgeCode";
   harnessId = "forge";
   getForgeHome() {
-    return join4(getHomeDir(), "forge");
-  }
-  getAgentsPath() {
-    return join4(this.getForgeHome(), "AGENTS.md");
-  }
-  getSkillsPath() {
-    return join4(this.getForgeHome(), "skills");
-  }
-  getMcpConfigPath() {
-    return join4(this.getForgeHome(), ".mcp.json");
+    const configured = readTrimmedEnv("FORGE_CONFIG");
+    if (configured)
+      return resolve2(expandHome2(configured));
+    const legacyPath = join6(getHomeDir(), "forge");
+    if (existsSync2(legacyPath))
+      return legacyPath;
+    return join6(getHomeDir(), ".forge");
   }
   getConfigPath() {
     return this.getMcpConfigPath();
@@ -20648,7 +21003,8 @@ class ForgeConnector extends BaseConnector {
   async install(basePath) {
     const filesWritten = [];
     const configsPatched = [];
-    const expandedBasePath = expandHome(basePath || join4(getHomeDir(), ".agents"));
+    const expandedBasePath = expandHome2(basePath || join6(getHomeDir(), ".agents"));
+    const identityMode = loadIdentityMode(expandedBasePath);
     if (!hasValidIdentity(expandedBasePath)) {
       return {
         success: false,
@@ -20657,43 +21013,53 @@ class ForgeConnector extends BaseConnector {
         configsPatched
       };
     }
-    const mcpPath = this.getMcpConfigPath();
     let config;
     try {
-      config = readJsonObject(mcpPath);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "unknown error";
+      config = readJsonObject(this.getMcpConfigPath());
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
       return {
         success: false,
-        message: `Failed to read Forge MCP config: ${message}`,
+        message: `Failed to read ForgeCode MCP config: ${message}`,
         filesWritten,
         configsPatched
       };
     }
-    try {
-      const strippedAgentsPath = this.stripLegacySignetBlock(expandedBasePath);
-      if (strippedAgentsPath !== null) {
-        filesWritten.push(strippedAgentsPath);
-      }
-      const forgeHome = this.getForgeHome();
-      mkdirSync(forgeHome, { recursive: true });
+    const strippedAgentsPath = this.stripLegacySignetBlock(expandedBasePath);
+    if (strippedAgentsPath !== null)
+      filesWritten.push(strippedAgentsPath);
+    const forgeHome = this.getForgeHome();
+    mkdirSync(forgeHome, { recursive: true });
+    if (identityMode === "managed") {
       const agentsPath = this.generateAgentsMd(expandedBasePath);
-      filesWritten.push(agentsPath);
-      this.registerMcpServer(config, expandedBasePath);
-      atomicWriteJson(mcpPath, config);
-      configsPatched.push(mcpPath);
-      const skillsSource = join4(expandedBasePath, "skills");
-      if (existsSync2(skillsSource)) {
-        this.symlinkSkills(skillsSource, this.getSkillsPath());
+      if (agentsPath)
+        filesWritten.push(agentsPath);
+    } else {
+      const staleAgentsPath = this.getAgentsPath();
+      if (existsSync2(staleAgentsPath)) {
+        try {
+          const raw = readFileSync2(staleAgentsPath, "utf-8");
+          if (isSignetGeneratedFile(raw) || raw.includes(SIGNET_FORGE_MARKER))
+            rmSync(staleAgentsPath);
+        } catch {}
       }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "unknown error";
+    }
+    try {
+      this.registerMcpServer(config, expandedBasePath);
+      atomicWriteJson(this.getMcpConfigPath(), config);
+      configsPatched.push(this.getMcpConfigPath());
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
       return {
         success: false,
         message: `ForgeCode integration install failed: ${message}`,
         filesWritten,
         configsPatched
       };
+    }
+    const skillsSource = join6(expandedBasePath, "skills");
+    if (existsSync2(skillsSource)) {
+      this.symlinkSkills(skillsSource, this.getSkillsPath());
     }
     return {
       success: true,
@@ -20707,31 +21073,34 @@ class ForgeConnector extends BaseConnector {
     const configsPatched = [];
     const agentsPath = this.getAgentsPath();
     if (existsSync2(agentsPath)) {
-      const content = readFileSync2(agentsPath, "utf-8");
-      if (content.includes(SIGNET_FORGE_MARKER)) {
-        rmSync(agentsPath, { force: true });
-        filesRemoved.push(agentsPath);
-      }
-    }
-    const mcpPath = this.getMcpConfigPath();
-    let config = {};
-    if (existsSync2(mcpPath)) {
       try {
-        config = readJsonObject(mcpPath);
+        const raw = readFileSync2(agentsPath, "utf-8");
+        if (isSignetGeneratedFile(raw) || raw.includes(SIGNET_FORGE_MARKER)) {
+          rmSync(agentsPath, { force: true });
+          filesRemoved.push(agentsPath);
+        }
       } catch {}
     }
-    const signetPath = this.extractSignetPath(config);
+    let config = null;
+    if (existsSync2(this.getMcpConfigPath())) {
+      try {
+        config = readJsonObject(this.getMcpConfigPath());
+      } catch {
+        config = null;
+      }
+    }
+    const signetPath = config ? this.extractSignetPath(config) : null;
     this.removeSkillSymlinks(filesRemoved, signetPath);
-    if (Object.keys(config).length > 0) {
+    if (config) {
       try {
         const patched = this.removeMcpServer(config);
         if (patched) {
           if (Object.keys(config).length === 0) {
-            rmSync(mcpPath, { force: true });
-            filesRemoved.push(mcpPath);
+            rmSync(this.getMcpConfigPath(), { force: true });
+            filesRemoved.push(this.getMcpConfigPath());
           } else {
-            atomicWriteJson(mcpPath, config);
-            configsPatched.push(mcpPath);
+            atomicWriteJson(this.getMcpConfigPath(), config);
+            configsPatched.push(this.getMcpConfigPath());
           }
         }
       } catch {}
@@ -20739,21 +21108,57 @@ class ForgeConnector extends BaseConnector {
     return { filesRemoved, configsPatched };
   }
   isInstalled() {
-    if (existsSync2(this.getAgentsPath())) {
-      try {
-        const content = readFileSync2(this.getAgentsPath(), "utf-8");
-        if (content.includes(SIGNET_FORGE_MARKER)) {
-          return true;
-        }
-      } catch {}
-    }
     try {
       const config = readJsonObject(this.getMcpConfigPath());
-      const servers = readMcpServers(config);
-      return "signet" in servers;
+      return "signet" in readMcpServers(config);
     } catch {
       return false;
     }
+  }
+  static isHarnessInstalled() {
+    const home3 = getHomeDir();
+    return existsSync2(readTrimmedEnv("FORGE_CONFIG") ?? "") || existsSync2(join6(home3, "forge", ".mcp.json")) || existsSync2(join6(home3, ".forge", ".mcp.json")) || existsSync2(join6(home3, "forge")) || existsSync2(join6(home3, ".forge"));
+  }
+  getAgentsPath() {
+    return join6(this.getForgeHome(), "AGENTS.md");
+  }
+  getSkillsPath() {
+    return join6(this.getForgeHome(), "skills");
+  }
+  getMcpConfigPath() {
+    return join6(this.getForgeHome(), ".mcp.json");
+  }
+  generateAgentsMd(basePath) {
+    const sourcePath = join6(basePath, "AGENTS.md");
+    if (!existsSync2(sourcePath))
+      return null;
+    const raw = readFileSync2(sourcePath, "utf-8");
+    const userContent = this.stripSignetBlock(raw).trim();
+    const extras = this.composeIdentityExtras(basePath);
+    const body = extras ? `${userContent}${extras}` : userContent;
+    const header = this.generateHeader(sourcePath, this.name);
+    const targetPath = this.getAgentsPath();
+    writeFileSync2(targetPath, `# ${SIGNET_FORGE_MARKER}
+${header}${body}
+`, "utf-8");
+    return targetPath;
+  }
+  registerMcpServer(config, basePath) {
+    const servers = readMcpServers(config);
+    servers.signet = buildMcpServer(basePath);
+    config.mcpServers = servers;
+  }
+  removeMcpServer(config) {
+    const servers = readMcpServers(config);
+    if (!("signet" in servers))
+      return false;
+    const { signet: _, ...rest } = servers;
+    if (Object.keys(rest).length === 0) {
+      delete config.mcpServers;
+    } else {
+      config.mcpServers = rest;
+    }
+    return true;
   }
   extractSignetPath(config) {
     const servers = config.mcpServers;
@@ -20765,63 +21170,43 @@ class ForgeConnector extends BaseConnector {
     const env = signet.env;
     if (!isJsonObject(env))
       return null;
-    const path = env.SIGNET_PATH;
-    return typeof path === "string" && path.length > 0 ? path : null;
+    const value = env.SIGNET_PATH;
+    return typeof value === "string" && value.length > 0 ? value : null;
   }
   removeSkillSymlinks(filesRemoved, signetPath) {
     const skillsDir = this.getSkillsPath();
     if (!existsSync2(skillsDir))
       return;
-    const source = signetPath ?? join4(getHomeDir(), ".agents");
-    const signetSkillsSource = join4(source, "skills");
+    const skillsSource = resolve2(signetPath ?? resolveSignetWorkspacePath(), "skills");
+    let entries;
     try {
-      for (const entry of readdirSync(skillsDir)) {
-        const target = join4(skillsDir, entry);
-        if (!lstatSync2(target).isSymbolicLink())
+      entries = readdirSync(skillsDir);
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const entryPath = join6(skillsDir, entry);
+      try {
+        if (!lstatSync2(entryPath).isSymbolicLink())
           continue;
-        const linkTarget = readlinkSync(target);
-        const resolved = isAbsolute(linkTarget) ? linkTarget : resolve2(skillsDir, linkTarget);
-        const rel = relative(signetSkillsSource, resolved);
-        if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel))
+        const rawTarget = readlinkSync(entryPath);
+        const target = resolve2(skillsDir, rawTarget);
+        if (!isChildOf(target, skillsSource))
           continue;
-        unlinkSync3(target);
-        filesRemoved.push(target);
-      }
-      if (readdirSync(skillsDir).length === 0) {
-        rmSync(skillsDir, { force: true });
-      }
+        unlinkSync3(entryPath);
+        filesRemoved.push(entryPath);
+      } catch {}
+    }
+    try {
+      if (readdirSync(skillsDir).length === 0)
+        rmSync(skillsDir, { recursive: true, force: true });
     } catch {}
   }
-  generateAgentsMd(basePath) {
-    const sourcePath = join4(basePath, "AGENTS.md");
-    const targetPath = this.getAgentsPath();
-    const content = readFileSync2(sourcePath, "utf-8").trim();
-    const extras = this.composeIdentityExtras(basePath);
-    const body = extras ? `${content}${extras}` : content;
-    writeFileSync2(targetPath, `# ${SIGNET_FORGE_MARKER}
-${this.generateHeader(sourcePath, this.name)}${body}
-`, "utf-8");
-    return targetPath;
-  }
-  registerMcpServer(config, basePath) {
-    const servers = readMcpServers(config);
-    servers.signet = buildMcpServer(basePath);
-    config.mcpServers = servers;
-  }
-  removeMcpServer(config) {
-    const servers = readMcpServers(config);
-    if (!("signet" in servers)) {
-      return false;
-    }
-    Reflect.deleteProperty(servers, "signet");
-    if (Object.keys(servers).length === 0) {
-      Reflect.deleteProperty(config, "mcpServers");
-      return true;
-    }
-    config.mcpServers = servers;
-    return true;
-  }
 }
+var forgeConnector = new ForgeConnector;
+var src_default = ForgeConnector;
 export {
+  forgeConnector,
+  src_default as default,
   ForgeConnector
 };

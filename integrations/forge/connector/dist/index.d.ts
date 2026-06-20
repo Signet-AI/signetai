@@ -2,17 +2,21 @@ import { BaseConnector, type InstallResult, type UninstallResult } from "@signet
 export declare class ForgeConnector extends BaseConnector {
     readonly name = "ForgeCode";
     readonly harnessId = "forge";
-    private getForgeHome;
-    private getAgentsPath;
-    private getSkillsPath;
-    private getMcpConfigPath;
+    protected getForgeHome(): string;
     getConfigPath(): string;
     install(basePath: string): Promise<InstallResult>;
     uninstall(): Promise<UninstallResult>;
     isInstalled(): boolean;
-    private extractSignetPath;
-    private removeSkillSymlinks;
+    static isHarnessInstalled(): boolean;
+    private getAgentsPath;
+    private getSkillsPath;
+    private getMcpConfigPath;
     private generateAgentsMd;
     private registerMcpServer;
     private removeMcpServer;
+    private extractSignetPath;
+    private removeSkillSymlinks;
 }
+export declare const forgeConnector: ForgeConnector;
+export default ForgeConnector;
+//# sourceMappingURL=index.d.ts.map

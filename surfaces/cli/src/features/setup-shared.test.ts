@@ -15,16 +15,17 @@ describe("setup deployment defaults", () => {
 		expect(DEPLOYMENT_TYPE_CHOICES).toEqual(["local", "vps", "server"]);
 	});
 
-	it("supports Hermes Agent as a setup harness choice", () => {
+	it("supports Hermes Agent and ForgeCode as setup harness choices", () => {
 		expect(SETUP_HARNESS_CHOICES).toContain("hermes-agent");
+		expect(SETUP_HARNESS_CHOICES).toContain("forge");
 		expect(
-			normalizeHarnessList(["hermes-agent,claude-code"], {
+			normalizeHarnessList(["forge,hermes-agent,claude-code"], {
 				normalizeChoice: (value, allowed) => {
 					const s = String(value);
 					return (allowed as readonly string[]).includes(s) ? (s as (typeof allowed)[number]) : null;
 				},
 			}),
-		).toEqual(["hermes-agent", "claude-code"]);
+		).toEqual(["forge", "hermes-agent", "claude-code"]);
 	});
 
 	it("defaults embedding provider to native across deployment types", () => {

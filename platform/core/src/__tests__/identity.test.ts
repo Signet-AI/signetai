@@ -18,6 +18,7 @@ const TMP = join(tmpdir(), `signet-identity-test-${Date.now()}`);
 const ORIGINAL_HOME = process.env.HOME;
 const ORIGINAL_HERMES_REPO = process.env.HERMES_REPO;
 const ORIGINAL_HERMES_HOME = process.env.HERMES_HOME;
+const ORIGINAL_FORGE_CONFIG = process.env.FORGE_CONFIG;
 
 beforeEach(() => mkdirSync(TMP, { recursive: true }));
 afterEach(() => {
@@ -38,6 +39,12 @@ afterEach(() => {
 		delete process.env.HERMES_HOME;
 	} else {
 		process.env.HERMES_HOME = ORIGINAL_HERMES_HOME;
+	}
+	if (ORIGINAL_FORGE_CONFIG === undefined) {
+		// biome-ignore lint/performance/noDelete: assigning undefined stores the string "undefined"
+		delete process.env.FORGE_CONFIG;
+	} else {
+		process.env.FORGE_CONFIG = ORIGINAL_FORGE_CONFIG;
 	}
 	rmSync(TMP, { recursive: true, force: true });
 });
@@ -219,6 +226,26 @@ describe("detectExistingSetup", () => {
 		const detection = detectExistingSetup(TMP);
 
 		expect(detection.harnesses.hermesAgent).toBe(true);
+	});
+
+	test("detects ForgeCode from the default ~/.forge config path", () => {
+		process.env.HOME = TMP;
+		mkdirSync(join(TMP, ".forge"), { recursive: true });
+		writeFileSync(join(TMP, ".forge", ".mcp.json"), "{}\n");
+
+		const detection = detectExistingSetup(TMP);
+
+		expect(detection.harnesses.forge).toBe(true);
+	});
+
+	test("detects ForgeCode from the legacy ~/forge config path", () => {
+		process.env.HOME = TMP;
+		mkdirSync(join(TMP, "forge"), { recursive: true });
+		writeFileSync(join(TMP, "forge", ".forge.toml"), "# config\n");
+
+		const detection = detectExistingSetup(TMP);
+
+		expect(detection.harnesses.forge).toBe(true);
 	});
 });
 
