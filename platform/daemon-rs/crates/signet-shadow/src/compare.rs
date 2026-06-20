@@ -298,8 +298,8 @@ impl ParityRules {
                 severity: field_severity(rules.endpoint_rule, "body"),
                 field: "body".into(),
                 message: "text body mismatch".into(),
-                primary_value: Some(truncate_str(&primary_body)),
-                shadow_value: Some(truncate_str(&shadow_body)),
+                primary_value: Some(redact_text_body(&primary_body)),
+                shadow_value: Some(redact_text_body(&shadow_body)),
                 category: None,
                 table: None,
                 key: None,
@@ -342,11 +342,12 @@ impl ParityRules {
                         }
                         None => {
                             let severity = field_severity(rules.endpoint_rule, &field_path);
+                            let primary_value = redact_response_value(pval, &field_path);
                             divergences.push(Divergence {
                                 severity,
                                 field: field_path,
                                 message: "field missing in shadow response".into(),
-                                primary_value: Some(truncate_json(pval)),
+                                primary_value: Some(primary_value),
                                 shadow_value: None,
                                 category: None,
                                 table: None,
@@ -371,12 +372,13 @@ impl ParityRules {
                             continue;
                         }
 
+                        let shadow_value = redact_response_value(&sm[key], &field_path);
                         divergences.push(Divergence {
                             severity: Severity::Expected,
                             field: field_path,
                             message: "extra field in shadow response".into(),
                             primary_value: None,
-                            shadow_value: Some(truncate_json(&sm[key])),
+                            shadow_value: Some(shadow_value),
                             category: None,
                             table: None,
                             key: None,
@@ -500,7 +502,7 @@ impl ParityRules {
                     severity: field_severity(rules.endpoint_rule, path),
                     field: match_path.clone(),
                     message: "array element missing in shadow response".into(),
-                    primary_value: Some(truncate_json(&primary[primary_index])),
+                    primary_value: Some(redact_response_tree(&primary[primary_index])),
                     shadow_value: None,
                     category: None,
                     table: None,
@@ -518,7 +520,7 @@ impl ParityRules {
                     field: match_path.clone(),
                     message: "extra array element in shadow response".into(),
                     primary_value: None,
-                    shadow_value: Some(truncate_json(&shadow[shadow_index])),
+                    shadow_value: Some(redact_response_tree(&shadow[shadow_index])),
                     category: None,
                     table: None,
                     key: None,
@@ -551,8 +553,8 @@ impl ParityRules {
                 severity,
                 field: path.to_string(),
                 message: "value mismatch".into(),
-                primary_value: Some(truncate_json(primary)),
-                shadow_value: Some(truncate_json(shadow)),
+                primary_value: Some(redact_response_value(primary, path)),
+                shadow_value: Some(redact_response_value(shadow, path)),
                 category: None,
                 table: None,
                 key: None,
@@ -1184,8 +1186,100 @@ fn is_freeform_internal_column(column: &str) -> bool {
             | "response"
             | "body"
             | "text"
+            | "reason"
+            | "metadata"
+            | "description"
+            | "summary"
+            | "note"
+            | "value"
     ) || normalized.ends_with("content")
         || normalized.ends_with("raw")
+}
+
+/// Sensitive leaf-field detector for RESPONSE-level (HTTP body) divergences.
+/// Mirrors the internal freeform set plus auth-style field names. Returns true
+/// when the leaf at `path` (e.g. ".content", ".apiKey", ".memories[0].content")
+/// must never be serialized in plaintext to the divergence log.
+fn is_sensitive_response_path(path: &str) -> bool {
+    let leaf = path.rsplit(['.', '[', ']']).next().unwrap_or("");
+    let normalized: String = leaf
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect();
+    if normalized.is_empty() {
+        return false;
+    }
+    // Explicit secret/auth field names.
+    const SECRET_FIELDS: &[&str] = &[
+        "apikey",
+        "token",
+        "secret",
+        "password",
+        "clientsecret",
+        "accesstoken",
+        "refreshtoken",
+        "authtoken",
+        "credentials",
+        "authorization",
+        "cookie",
+        "privatekey",
+    ];
+    if SECRET_FIELDS.iter().any(|f| normalized.contains(f)) {
+        return true;
+    }
+    // Reuse the internal freeform detector for content-like fields.
+    is_freeform_internal_column(leaf)
+}
+
+/// Redact a response-level leaf value if its path is sensitive; otherwise
+/// truncate normally. Ensures plaintext memory content / secrets never reach
+/// shadow-divergences.jsonl from response-body comparisons.
+fn redact_response_value(value: &serde_json::Value, path: &str) -> String {
+    if is_sensitive_response_path(path) {
+        return redacted_fingerprint(value).to_string();
+    }
+    truncate_json(value)
+}
+
+/// Recursively redact any sensitive descendant of an object/array, then
+/// stringify. Used when a divergence stringifies a WHOLE element (unordered
+/// array missing/extra) or a whole text body, where the parent path alone
+/// (e.g. "results", "body") doesn't expose the sensitive leaf names. Walks
+/// the tree and replaces any sensitive-keyed leaf with its fingerprint.
+fn redact_response_tree(value: &serde_json::Value) -> String {
+    truncate_str(&redact_response_tree_value(value).to_string())
+}
+
+fn redact_response_tree_value(value: &serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Object(map) => {
+            let mut out = serde_json::Map::with_capacity(map.len());
+            for (key, val) in map {
+                if is_sensitive_response_path(key) {
+                    out.insert(key.clone(), redacted_fingerprint(val));
+                } else {
+                    out.insert(key.clone(), redact_response_tree_value(val));
+                }
+            }
+            serde_json::Value::Object(out)
+        }
+        serde_json::Value::Array(items) => {
+            serde_json::Value::Array(items.iter().map(redact_response_tree_value).collect())
+        }
+        other => other.clone(),
+    }
+}
+
+/// Redact a text body if it looks like JSON (parses -> recursive redact);
+/// otherwise fingerprint the whole thing (non-JSON text bodies are treated
+/// as opaque/freeform so plaintext memory content / secrets never leak).
+fn redact_text_body(body: &str) -> String {
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(body) {
+        return redact_response_tree(&value);
+    }
+    // Non-JSON text body: fingerprint the whole thing (never log raw).
+    redacted_fingerprint(&serde_json::Value::String(body.to_string())).to_string()
 }
 
 fn redacted_fingerprint(value: &serde_json::Value) -> serde_json::Value {
@@ -1957,6 +2051,117 @@ mod tests {
             &[fake_secret, "different-password-should-not-leak"],
         );
         assert!(serialized_divergences(&mismatch).contains("[REDACTED sha64="));
+    }
+
+    #[test]
+    fn response_body_divergences_redact_sensitive_and_freeform_fields() {
+        // Regression: response-level (HTTP body) divergences used truncate_json
+        // verbatim, leaking plaintext memory content + secrets to the jsonl log.
+        let rules = ParityRules::default();
+        let secret = "token-password-should-never-leak-resp";
+        let primary = response_json(
+            200,
+            serde_json::json!({
+                "content": secret,
+                "normalizedContent": secret,
+                "apiKey": "sk-live-12345",
+                "token": "bearer-secret-value",
+                "memories": [{ "content": secret, "id": "m1" }],
+                "safe": "this-is-fine",
+            }),
+        );
+        let shadow = response_json(
+            200,
+            serde_json::json!({
+                "content": "different",
+                "normalizedContent": "different",
+                "apiKey": "sk-other",
+                "token": "bearer-other",
+                "memories": [{ "content": "different", "id": "m1" }],
+                "safe": "this-is-fine",
+            }),
+        );
+        let divs = rules.compare("POST /api/memory/remember", &primary, &shadow);
+        assert!(
+            !divs.is_empty(),
+            "expected divergences on the mismatched fields"
+        );
+        // None of the sensitive/plaintext values may appear in the log.
+        assert_divergences_redacted(
+            &divs,
+            &[secret, "sk-live-12345", "bearer-secret-value", "different"],
+        );
+        // Sensitive fields should be fingerprinted, not truncated plaintext.
+        assert!(serialized_divergences(&divs).contains("[REDACTED sha64="));
+    }
+
+    #[test]
+    fn unordered_array_and_text_body_divergences_redact_nested_content() {
+        // Regression: unordered-array whole-element + text-body paths only saw
+        // the parent path, so nested content/secrets leaked.
+        let secret = "nested-array-secret-never-leak";
+        let mut rule = endpoint_rule();
+        rule.array_ordering = Some("unordered".to_string());
+        let rules = rules_with_endpoint("POST /api/memory/recall", rule);
+        let primary = response_json(
+            200,
+            serde_json::json!({ "results": [{ "id": "r1", "content": secret }] }),
+        );
+        let shadow = response_json(200, serde_json::json!({ "results": [] }));
+        let divs = rules.compare("POST /api/memory/recall", &primary, &shadow);
+        assert!(!divs.is_empty());
+        assert_divergences_redacted(&divs, &[secret]);
+
+        // Text body (compareMode text) with embedded secret.
+        let mut text_rule = endpoint_rule();
+        text_rule.compare_mode = Some("text".to_string());
+        let text_rules = rules_with_endpoint("POST /api/memory/raw", text_rule);
+        let primary_text = response_text(200, &format!("{{\"content\":\"{secret}\"}}"));
+        let shadow_text = response_text(200, "{\"content\":\"other\"}");
+        let divs = text_rules.compare("POST /api/memory/raw", &primary_text, &shadow_text);
+        assert!(!divs.is_empty());
+        assert_divergences_redacted(&divs, &[secret, "other"]);
+    }
+
+    #[test]
+    fn internal_history_and_entity_freeform_fields_are_redacted() {
+        // Regression: reason/metadata/description were not in the freeform set.
+        let rules = ParityRules::default();
+        let secret = "secret-in-history-reason";
+        let meta_secret = "secret-in-metadata";
+        let desc_secret = "secret-in-entity-description";
+        let primary = internal_snapshot_tables(BTreeMap::from([
+            (
+                "memory_history".to_string(),
+                vec![serde_json::json!({
+                    "id": "h1",
+                    "memory_id": "m1",
+                    "event": "created",
+                    "reason": secret,
+                    "metadata": meta_secret,
+                    "content_hash": "hash-m1",
+                    "agent_id": "agent-a",
+                    "visibility": "global",
+                    "scope": "workspace",
+                })],
+            ),
+            (
+                "entities".to_string(),
+                vec![serde_json::json!({
+                    "id": "e1",
+                    "name": "Entity",
+                    "description": desc_secret,
+                    "agent_id": "agent-a",
+                })],
+            ),
+        ]));
+        let shadow = InternalSnapshot {
+            tables: BTreeMap::new(),
+        };
+        let divs = rules.compare_internal("POST /api/memory/remember", &primary, &shadow);
+        assert!(!divs.is_empty());
+        assert_divergences_redacted(&divs, &[secret, meta_secret, desc_secret]);
+        assert!(serialized_divergences(&divs).contains("[REDACTED sha64="));
     }
 
     #[test]

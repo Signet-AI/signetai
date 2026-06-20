@@ -1609,10 +1609,13 @@ async fn probe_mcp_http(
     )
     .await
     {
-        Ok(response) => parse_mcp_http_response(response, Some(3))
-            .await
-            .unwrap_or_else(|_| json!({"resources": []})),
+        // Transport-level failure (connection reset, 404, etc.): the server
+        // doesn't support resources/list. Treat as empty (TS best-effort).
         Err(_) => json!({"resources": []}),
+        // HTTP response received: parse strictly. A 202/204 or malformed body
+        // when id=3 is expected is a real missing-response error (mirrors the
+        // tools/list contract), NOT a silent ok:true zero resources.
+        Ok(response) => parse_mcp_http_response(response, Some(3)).await?,
     };
     let mut server_metadata = metadata_from_initialize(&initialize_result);
     if !metadata_has_declared_manifest(&server_metadata, &server.name)
