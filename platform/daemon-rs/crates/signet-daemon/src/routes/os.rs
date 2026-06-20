@@ -14,14 +14,16 @@ use signet_core::db::Priority;
 use signet_core::error::CoreError;
 use std::collections::{HashMap, VecDeque};
 use std::convert::Infallible;
+use std::process::Stdio;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::{broadcast, mpsc};
 use tokio_stream::wrappers::ReceiverStream;
 
 use crate::{
-    routes::marketplace::{self, McpServer},
+    routes::marketplace::McpServer,
     state::{AppState, OsAgentSession},
     workspace_paths,
 };
@@ -31,6 +33,9 @@ const DEFAULT_WINDOW_MS: i64 = 300_000;
 const MAX_CONTEXT_EVENTS: usize = 100;
 const DEDUP_WINDOW_MS: i64 = 500;
 const GRID_COLS: i64 = 12;
+const OS_MCP_PROTOCOL_VERSION: &str = "2024-11-05";
+const OS_PROBE_CLIENT_NAME: &str = "signet-os-probe";
+const OS_PROBE_CLIENT_VERSION: &str = "0.1.0";
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1154,6 +1159,7 @@ async fn upsert_tray_entry_from_probe(state: &AppState, probe: &Value) -> Result
         .get("serverId")
         .and_then(Value::as_str)
         .ok_or_else(|| CoreError::Invalid("probe missing serverId".into()))?;
+    let previous_entry = get_tray_entry(state, id).await?;
     let auto_card = probe.get("autoCard").cloned().unwrap_or_else(|| {
         json!({
             "name": "MCP Server",
@@ -1178,10 +1184,16 @@ async fn upsert_tray_entry_from_probe(state: &AppState, probe: &Value) -> Result
                 .unwrap_or_else(|| json!({"w": 4, "h": 3})),
         })
     });
-    let created_at = get_tray_entry(state, id)
-        .await?
+    let created_at = previous_entry
+        .as_ref()
         .and_then(|entry| entry.get("createdAt").cloned())
         .unwrap_or_else(|| json!(chrono::Utc::now().to_rfc3339()));
+    let tools_changed = previous_entry
+        .as_ref()
+        .map(|entry| {
+            auto_card_tool_names(entry.get("autoCard")) != auto_card_tool_names(Some(&auto_card))
+        })
+        .unwrap_or(false);
     let state_value = if declared_manifest
         .and_then(|manifest| manifest.get("dock"))
         .and_then(Value::as_bool)
@@ -1207,7 +1219,27 @@ async fn upsert_tray_entry_from_probe(state: &AppState, probe: &Value) -> Result
             "createdAt": created_at,
         }),
     )
-    .await
+    .await?;
+    if tools_changed && get_widget(state, id).await?.is_some() {
+        delete_widget(state, id).await?;
+        // Mirrors TS widget cache invalidation at platform/daemon/src/mcp-probe.ts:496-504.
+        event_bus().emit("system", "widget.invalidated", json!({"serverId": id}));
+    }
+    Ok(())
+}
+
+fn auto_card_tool_names(auto_card: Option<&Value>) -> std::collections::BTreeSet<String> {
+    auto_card
+        .and_then(|value| value.get("tools"))
+        .and_then(Value::as_array)
+        .map(|tools| {
+            tools
+                .iter()
+                .filter_map(|tool| tool.get("name").and_then(Value::as_str))
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 async fn upsert_widget_job(
@@ -1314,18 +1346,20 @@ async fn probe_server(server: &Value) -> Value {
         return failed_probe_result(server, "invalid installed MCP server config", now);
     };
 
-    let tools_result = match marketplace::mcp_request(&server_config, "tools/list", json!({})).await
-    {
+    // Mirrors the TS probe transport lifecycle at platform/daemon/src/mcp-probe.ts:82-130
+    // and discovery ordering at platform/daemon/src/mcp-probe.ts:301-400: initialize,
+    // notifications/initialized, tools/list, resources/list, then manifest metadata parsing.
+    let probe_data = match probe_mcp_server(&server_config).await {
         Ok(result) => result,
         Err(error) => return failed_probe_result(server, error, now),
     };
-    let tools = auto_card_tools(&tools_result);
-
-    let resources_result = marketplace::mcp_request(&server_config, "resources/list", json!({}))
-        .await
-        .unwrap_or_else(|_| json!({"resources": []}));
-    let resources = auto_card_resources(&resources_result);
-    let declared_manifest = read_declared_manifest(&server_config, &resources).await;
+    let tools = auto_card_tools(&probe_data.tools_result);
+    let resources = auto_card_resources(&probe_data.resources_result);
+    let declared_manifest = probe_data
+        .server_metadata
+        .as_ref()
+        .and_then(|metadata| parse_declared_manifest(metadata, &server_config.name))
+        .unwrap_or(Value::Null);
     let has_app_resources = resources.iter().any(|resource| {
         resource
             .get("uri")
@@ -1355,6 +1389,357 @@ async fn probe_server(server: &Value) -> Value {
         "hasAppResources": has_app_resources,
         "probedAt": now,
     })
+}
+
+struct ProbeMcpData {
+    tools_result: Value,
+    resources_result: Value,
+    server_metadata: Option<Value>,
+}
+
+async fn probe_mcp_server(server: &McpServer) -> Result<ProbeMcpData, String> {
+    let config = server
+        .config
+        .as_object()
+        .ok_or_else(|| "invalid MCP server config".to_string())?;
+    let timeout_ms = config
+        .get("timeoutMs")
+        .and_then(Value::as_u64)
+        .unwrap_or(20_000)
+        .clamp(1_000, 30_000);
+    let fut = async {
+        match config.get("transport").and_then(Value::as_str) {
+            Some("stdio") => probe_mcp_stdio(server, config).await,
+            Some("http") => probe_mcp_http(server, config).await,
+            _ => Err("config must include command/url".to_string()),
+        }
+    };
+    tokio::time::timeout(Duration::from_millis(timeout_ms), fut)
+        .await
+        .map_err(|_| format!("MCP server {} timed out after {timeout_ms}ms", server.id))?
+}
+
+async fn probe_mcp_stdio(
+    server: &McpServer,
+    config: &serde_json::Map<String, Value>,
+) -> Result<ProbeMcpData, String> {
+    let command = config
+        .get("command")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "stdio MCP config missing command".to_string())?;
+    let mut child = tokio::process::Command::new(command);
+    if let Some(args) = config.get("args").and_then(Value::as_array) {
+        child.args(args.iter().filter_map(Value::as_str));
+    }
+    if let Some(env) = config.get("env").and_then(Value::as_object) {
+        for (key, value) in env {
+            if let Some(value) = value.as_str() {
+                child.env(key, value);
+            }
+        }
+    }
+    if let Some(cwd) = config.get("cwd").and_then(Value::as_str) {
+        child.current_dir(cwd);
+    }
+    let mut child = child
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| error.to_string())?;
+    let result = async {
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| "failed to open MCP stdin".to_string())?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| "failed to open MCP stdout".to_string())?;
+        let mut lines = BufReader::new(stdout).lines();
+        write_json_line(&mut stdin, &mcp_initialize_request(1)).await?;
+        let initialize_result = read_jsonrpc_id(&mut lines, 1).await?;
+        write_json_line(&mut stdin, &mcp_initialized_notification()).await?;
+        write_json_line(&mut stdin, &mcp_request_value(2, "tools/list", json!({}))).await?;
+        let tools_result = read_jsonrpc_id(&mut lines, 2).await?;
+        write_json_line(
+            &mut stdin,
+            &mcp_request_value(3, "resources/list", json!({})),
+        )
+        .await?;
+        let resources_result = read_jsonrpc_id(&mut lines, 3)
+            .await
+            .unwrap_or_else(|_| json!({"resources": []}));
+        let mut server_metadata = metadata_from_initialize(&initialize_result);
+        if !metadata_has_declared_manifest(&server_metadata, &server.name)
+            && let Some(uri) = manifest_resource_uri(&resources_result)
+        {
+            write_json_line(
+                &mut stdin,
+                &mcp_request_value(4, "resources/read", json!({"uri": uri})),
+            )
+            .await?;
+            if let Ok(content) = read_jsonrpc_id(&mut lines, 4).await {
+                server_metadata = metadata_from_resource_content(&content);
+            }
+        }
+        Ok(ProbeMcpData {
+            tools_result,
+            resources_result,
+            server_metadata,
+        })
+    }
+    .await;
+    let _ = child.kill().await;
+    result
+}
+
+async fn probe_mcp_http(
+    server: &McpServer,
+    config: &serde_json::Map<String, Value>,
+) -> Result<ProbeMcpData, String> {
+    let url = config
+        .get("url")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "HTTP MCP config missing url".to_string())?;
+    let client = reqwest::Client::new();
+    let initialize_response =
+        send_mcp_http_request(&client, config, url, None, &mcp_initialize_request(1)).await?;
+    let session_id = initialize_response
+        .headers()
+        .get("mcp-session-id")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string);
+    let initialize_result = parse_mcp_http_response(initialize_response).await?;
+    let initialized_response = send_mcp_http_request(
+        &client,
+        config,
+        url,
+        session_id.as_deref(),
+        &mcp_initialized_notification(),
+    )
+    .await?;
+    parse_mcp_http_response(initialized_response).await?;
+    let tools_response = send_mcp_http_request(
+        &client,
+        config,
+        url,
+        session_id.as_deref(),
+        &mcp_request_value(2, "tools/list", json!({})),
+    )
+    .await?;
+    let tools_result = parse_mcp_http_response(tools_response).await?;
+    let resources_result = match send_mcp_http_request(
+        &client,
+        config,
+        url,
+        session_id.as_deref(),
+        &mcp_request_value(3, "resources/list", json!({})),
+    )
+    .await
+    {
+        Ok(response) => parse_mcp_http_response(response)
+            .await
+            .unwrap_or_else(|_| json!({"resources": []})),
+        Err(_) => json!({"resources": []}),
+    };
+    let mut server_metadata = metadata_from_initialize(&initialize_result);
+    if !metadata_has_declared_manifest(&server_metadata, &server.name)
+        && let Some(uri) = manifest_resource_uri(&resources_result)
+    {
+        if let Ok(response) = send_mcp_http_request(
+            &client,
+            config,
+            url,
+            session_id.as_deref(),
+            &mcp_request_value(4, "resources/read", json!({"uri": uri})),
+        )
+        .await
+            && let Ok(content) = parse_mcp_http_response(response).await
+        {
+            server_metadata = metadata_from_resource_content(&content);
+        }
+    }
+    Ok(ProbeMcpData {
+        tools_result,
+        resources_result,
+        server_metadata,
+    })
+}
+
+async fn send_mcp_http_request(
+    client: &reqwest::Client,
+    config: &serde_json::Map<String, Value>,
+    url: &str,
+    session_id: Option<&str>,
+    body: &Value,
+) -> Result<reqwest::Response, String> {
+    let mut builder = client
+        .post(url)
+        .header("User-Agent", "signet-daemon-os-probe")
+        .header("Accept", "application/json, text/event-stream")
+        .json(body);
+    if let Some(session_id) = session_id {
+        builder = builder.header("Mcp-Session-Id", session_id);
+    }
+    if let Some(headers) = config.get("headers").and_then(Value::as_object) {
+        for (key, value) in headers {
+            if let Some(value) = value.as_str() {
+                builder = builder.header(key, value);
+            }
+        }
+    }
+    builder.send().await.map_err(|error| error.to_string())
+}
+
+async fn parse_mcp_http_response(response: reqwest::Response) -> Result<Value, String> {
+    let status = response.status();
+    if status == reqwest::StatusCode::ACCEPTED || status == reqwest::StatusCode::NO_CONTENT {
+        return Ok(Value::Null);
+    }
+    if !status.is_success() {
+        return Err(format!("MCP HTTP request failed with status {status}"));
+    }
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    let text = response.text().await.map_err(|error| error.to_string())?;
+    if text.trim().is_empty() {
+        return Ok(Value::Null);
+    }
+    let value =
+        if content_type.contains("text/event-stream") || text.trim_start().starts_with("data:") {
+            parse_sse_json(&text)?
+        } else {
+            serde_json::from_str::<Value>(&text).map_err(|error| error.to_string())?
+        };
+    parse_mcp_response(value)
+}
+
+fn parse_sse_json(text: &str) -> Result<Value, String> {
+    for line in text.lines() {
+        let Some(data) = line.strip_prefix("data:") else {
+            continue;
+        };
+        let data = data.trim();
+        if data.is_empty() || data == "[DONE]" {
+            continue;
+        }
+        return serde_json::from_str::<Value>(data).map_err(|error| error.to_string());
+    }
+    Err("MCP SSE response missing data event".to_string())
+}
+
+fn mcp_initialize_request(id: i64) -> Value {
+    json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": OS_MCP_PROTOCOL_VERSION,
+            "capabilities": {},
+            "clientInfo": {
+                "name": OS_PROBE_CLIENT_NAME,
+                "version": OS_PROBE_CLIENT_VERSION,
+            }
+        }
+    })
+}
+
+fn mcp_initialized_notification() -> Value {
+    json!({"jsonrpc": "2.0", "method": "notifications/initialized"})
+}
+
+fn mcp_request_value(id: i64, method: &str, params: Value) -> Value {
+    json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params})
+}
+
+async fn write_json_line<W>(writer: &mut W, value: &Value) -> Result<(), String>
+where
+    W: AsyncWriteExt + Unpin,
+{
+    let line = serde_json::to_string(value).map_err(|error| error.to_string())?;
+    writer
+        .write_all(line.as_bytes())
+        .await
+        .map_err(|error| error.to_string())?;
+    writer
+        .write_all(b"\n")
+        .await
+        .map_err(|error| error.to_string())
+}
+
+async fn read_jsonrpc_id<R>(lines: &mut tokio::io::Lines<R>, id: i64) -> Result<Value, String>
+where
+    R: tokio::io::AsyncBufRead + Unpin,
+{
+    while let Some(line) = lines.next_line().await.map_err(|error| error.to_string())? {
+        let Ok(value) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
+        if value.get("id").and_then(Value::as_i64) == Some(id) {
+            return parse_mcp_response(value);
+        }
+    }
+    Err("MCP server closed stdout before response".to_string())
+}
+
+fn parse_mcp_response(value: Value) -> Result<Value, String> {
+    if let Some(error) = value.get("error") {
+        return Err(error
+            .get("message")
+            .and_then(Value::as_str)
+            .unwrap_or("MCP request failed")
+            .to_string());
+    }
+    if let Some(result) = value.get("result") {
+        return Ok(result.clone());
+    }
+    if value.get("id").is_none() {
+        return Ok(Value::Null);
+    }
+    Err("MCP response missing result".to_string())
+}
+
+fn metadata_from_initialize(result: &Value) -> Option<Value> {
+    result
+        .get("serverInfo")
+        .filter(|value| value.is_object())
+        .cloned()
+        .or_else(|| result.is_object().then(|| result.clone()))
+}
+
+fn metadata_has_declared_manifest(metadata: &Option<Value>, server_name: &str) -> bool {
+    metadata
+        .as_ref()
+        .and_then(|value| parse_declared_manifest(value, server_name))
+        .is_some()
+}
+
+fn manifest_resource_uri(resources_result: &Value) -> Option<String> {
+    resources_result
+        .get("resources")
+        .and_then(Value::as_array)?
+        .iter()
+        .find_map(|resource| {
+            let uri = resource.get("uri").and_then(Value::as_str)?;
+            let name = resource.get("name").and_then(Value::as_str).unwrap_or("");
+            (matches!(uri, "signet://manifest" | "signet://app") || name == "signet-manifest")
+                .then(|| uri.to_string())
+        })
+}
+
+fn metadata_from_resource_content(content: &Value) -> Option<Value> {
+    let text = content
+        .get("contents")
+        .and_then(Value::as_array)
+        .and_then(|contents| contents.first())
+        .and_then(|first| first.get("text"))
+        .and_then(Value::as_str)?;
+    serde_json::from_str::<Value>(text).ok()
 }
 
 fn failed_probe_result(server: &Value, error: impl ToString, probed_at: String) -> Value {
@@ -1457,37 +1842,6 @@ fn auto_card_resources(result: &Value) -> Vec<Value> {
                 .collect()
         })
         .unwrap_or_default()
-}
-
-async fn read_declared_manifest(server: &McpServer, resources: &[Value]) -> Value {
-    let Some(uri) = resources.iter().find_map(|resource| {
-        let uri = resource.get("uri").and_then(Value::as_str)?;
-        let name = resource.get("name").and_then(Value::as_str).unwrap_or("");
-        if matches!(uri, "signet://manifest" | "signet://app") || name == "signet-manifest" {
-            Some(uri.to_string())
-        } else {
-            None
-        }
-    }) else {
-        return Value::Null;
-    };
-    let Ok(content) = marketplace::mcp_request(server, "resources/read", json!({"uri": uri})).await
-    else {
-        return Value::Null;
-    };
-    let Some(text) = content
-        .get("contents")
-        .and_then(Value::as_array)
-        .and_then(|contents| contents.first())
-        .and_then(|first| first.get("text"))
-        .and_then(Value::as_str)
-    else {
-        return Value::Null;
-    };
-    serde_json::from_str::<Value>(text)
-        .ok()
-        .and_then(|metadata| parse_declared_manifest(&metadata, &server.name))
-        .unwrap_or(Value::Null)
 }
 
 fn parse_declared_manifest(metadata: &Value, server_name: &str) -> Option<Value> {

@@ -249,12 +249,13 @@ will be "honest" ports or harness-backed.
   in-memory rolling-window query/SSE/stats/context, tray+widget SQLite CRUD,
   agent-session state machine, chat/install contracts. SSE streams real.
 - ✅ Refined: real MCP probe (TS-shaped result), widget.generated/widget.error,
-  missing-session error SSE.
-- ⏳ **3 more in flight (1 critical):** (a) CRITICAL — manifest HTML guard
-  only rejects literal `<script src` (bypassable via `<script  src=`/	);
-  TS uses case-insensitive regex `<script\s+src\s*=`; (b) probe skips MCP
-  initialize/initialized handshake (streamable-HTTP servers marked ok:false);
-  (c) reprobe doesn't invalidate cached widget on tool-set change (TS emits
-  widget.invalidated).
-- 📌 **Parity gap found (not OS):** no CORS layer in Rust daemon
-  (daemon-cors.test.ts) — tracked for a focused pass.
+  missing-session error SSE, manifest HTML sanitizer hardened (critical injection
+  bypass closed), MCP initialize handshake + widget.invalidated on tool change.
+- ⏳ **3 more in flight (custom MCP transport):** (a) probe doesn't resolve
+  `secret://` references in stdio env/HTTP headers (auth'd servers fail);
+  (b) SSE parser takes first `data:` w/o matching JSON-RPC id (notifications/
+  progress -> false ok:true zero tools); (c) stdio probe leaks child process on
+  timeout (no kill_on_drop).
+- ✅ **CORS parity** (was a gap): native axum CORS middleware matching TS
+  rules (fixed allowlist + Tailscale gating + app://signet + credentials +
+  204 preflight). Fail-closed, no permissive '*'.

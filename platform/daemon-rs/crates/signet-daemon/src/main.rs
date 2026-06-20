@@ -16,6 +16,7 @@ use tracing::{info, warn};
 mod analytics;
 #[allow(dead_code)] // Auth module built but not wired into routes until later phases
 mod auth;
+mod cors;
 mod feedback;
 mod mcp;
 mod reranker;
@@ -1179,6 +1180,10 @@ async fn main() -> anyhow::Result<()> {
     let app = app.layer(middleware::from_fn_with_state(
         state.clone(),
         analytics::analytics_middleware,
+    ));
+    let app = app.layer(middleware::from_fn_with_state(
+        state.clone(),
+        cors::cors_middleware,
     ));
 
     // Bind — use string form so "localhost" resolves via DNS

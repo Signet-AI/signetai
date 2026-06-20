@@ -1927,6 +1927,201 @@ echo "fake skills installed ${skill} from ${pkg}"
     (bw, op, bin_dir)
 }
 
+struct StrictMcpFixture {
+    base: String,
+    methods: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    _thread: std::thread::JoinHandle<()>,
+}
+
+impl StrictMcpFixture {
+    fn start(tool_sequences: Vec<Vec<&'static str>>) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind strict mcp fixture");
+        listener
+            .set_nonblocking(false)
+            .expect("configure strict mcp fixture");
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let methods = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let thread_methods = methods.clone();
+        let initialized = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let thread_initialized = initialized.clone();
+        let tool_calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let thread_tool_calls = tool_calls.clone();
+        let sequences = tool_sequences
+            .into_iter()
+            .map(|tools| tools.into_iter().map(str::to_string).collect::<Vec<_>>())
+            .collect::<Vec<_>>();
+        let thread = std::thread::spawn(move || {
+            for stream in listener.incoming().take(64) {
+                let Ok(mut stream) = stream else {
+                    continue;
+                };
+                let Ok((headers, body)) = read_fixture_http_request(&mut stream) else {
+                    continue;
+                };
+                let value =
+                    serde_json::from_str::<serde_json::Value>(&body).unwrap_or_else(|_| json!({}));
+                let method = value["method"].as_str().unwrap_or("").to_string();
+                thread_methods.lock().unwrap().push(method.clone());
+                let id = value.get("id").cloned().unwrap_or(serde_json::Value::Null);
+                let session_ok = headers.iter().any(|(key, value)| {
+                    key.eq_ignore_ascii_case("mcp-session-id") && value == "strict-session"
+                });
+                let body = match method.as_str() {
+                    "initialize" => json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "result": {
+                            "protocolVersion": "2024-11-05",
+                            "capabilities": {"tools": {"listChanged": true}, "resources": {}},
+                            "serverInfo": {"name": "Strict MCP", "version": "1.0.0"}
+                        }
+                    })
+                    .to_string(),
+                    "notifications/initialized" if session_ok => {
+                        thread_initialized.store(true, std::sync::atomic::Ordering::SeqCst);
+                        write_fixture_response(&mut stream, 202, "Accepted", "", Some("strict-session"));
+                        continue;
+                    }
+                    "tools/list" if session_ok && thread_initialized.load(std::sync::atomic::Ordering::SeqCst) => {
+                        let call = thread_tool_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        let tools = sequences
+                            .get(call)
+                            .or_else(|| sequences.last())
+                            .cloned()
+                            .unwrap_or_default()
+                            .into_iter()
+                            .map(|name| json!({"name": name, "description": "fixture tool", "inputSchema": {}}))
+                            .collect::<Vec<_>>();
+                        json!({"jsonrpc": "2.0", "id": id, "result": {"tools": tools}}).to_string()
+                    }
+                    "resources/list" if session_ok && thread_initialized.load(std::sync::atomic::Ordering::SeqCst) => json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "result": {"resources": [{"uri": "signet://manifest", "name": "signet-manifest", "mimeType": "application/json"}]}
+                    })
+                    .to_string(),
+                    "resources/read" if session_ok && thread_initialized.load(std::sync::atomic::Ordering::SeqCst) => json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "result": {"contents": [{"uri": "signet://manifest", "mimeType": "application/json", "text": serde_json::json!({
+                            "signet": {
+                                "name": "Strict Resource App",
+                                "ui": "https://example.com/app",
+                                "defaultSize": {"w": 5, "h": 4}
+                            }
+                        }).to_string()}]}
+                    })
+                    .to_string(),
+                    _ => json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "error": {"code": -32002, "message": "not initialized"}
+                    })
+                    .to_string(),
+                };
+                write_fixture_response(&mut stream, 200, "OK", &body, Some("strict-session"));
+            }
+        });
+        Self {
+            base,
+            methods,
+            _thread: thread,
+        }
+    }
+
+    fn methods(&self) -> Vec<String> {
+        self.methods.lock().unwrap().clone()
+    }
+}
+
+fn read_fixture_http_request(
+    stream: &mut std::net::TcpStream,
+) -> std::io::Result<(Vec<(String, String)>, String)> {
+    let mut buffer = Vec::new();
+    let mut chunk = [0_u8; 1024];
+    let mut header_end = None;
+    while header_end.is_none() {
+        let read = stream.read(&mut chunk)?;
+        if read == 0 {
+            break;
+        }
+        buffer.extend_from_slice(&chunk[..read]);
+        header_end = buffer.windows(4).position(|window| window == b"\r\n\r\n");
+    }
+    let header_end = header_end.map(|idx| idx + 4).unwrap_or(buffer.len());
+    let header_text = String::from_utf8_lossy(&buffer[..header_end]);
+    let headers = header_text
+        .lines()
+        .skip(1)
+        .filter_map(|line| {
+            let (key, value) = line.split_once(':')?;
+            Some((key.trim().to_string(), value.trim().to_string()))
+        })
+        .collect::<Vec<_>>();
+    let content_length = headers
+        .iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case("content-length"))
+        .and_then(|(_, value)| value.parse::<usize>().ok())
+        .unwrap_or(0);
+    while buffer.len().saturating_sub(header_end) < content_length {
+        let read = stream.read(&mut chunk)?;
+        if read == 0 {
+            break;
+        }
+        buffer.extend_from_slice(&chunk[..read]);
+    }
+    let body = String::from_utf8_lossy(
+        &buffer
+            [header_end..header_end + content_length.min(buffer.len().saturating_sub(header_end))],
+    )
+    .to_string();
+    Ok((headers, body))
+}
+
+fn write_fixture_response(
+    stream: &mut std::net::TcpStream,
+    status: u16,
+    reason: &str,
+    body: &str,
+    session_id: Option<&str>,
+) {
+    let session_header = session_id
+        .map(|value| format!("Mcp-Session-Id: {value}\r\n"))
+        .unwrap_or_default();
+    let response = format!(
+        "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n{}\r\n{}",
+        body.len(),
+        session_header,
+        body
+    );
+    let _ = stream.write_all(response.as_bytes());
+}
+
+fn write_installed_mcp_server(root: &std::path::Path, id: &str, name: &str, url: &str) {
+    let marketplace = root.join("marketplace");
+    std::fs::create_dir_all(&marketplace).unwrap();
+    std::fs::write(
+        marketplace.join("mcp-servers.json"),
+        serde_json::to_string_pretty(&json!([{
+            "id": id,
+            "source": "manual",
+            "catalogId": null,
+            "name": name,
+            "description": "Strict MCP fixture",
+            "category": "Other",
+            "homepage": null,
+            "official": false,
+            "enabled": true,
+            "scope": {"harnesses": [], "workspaces": [], "channels": []},
+            "config": {"transport": "http", "url": url, "headers": {}, "timeoutMs": 5000},
+            "installedAt": "2026-01-01T00:00:00Z",
+            "updatedAt": "2026-01-01T00:00:00Z"
+        }]))
+        .unwrap(),
+    )
+    .unwrap();
+}
+
 struct MarketplaceCatalogFixture {
     base: String,
     _thread: std::thread::JoinHandle<()>,
@@ -2493,6 +2688,132 @@ async fn health_returns_ok() {
     assert_eq!(resp.status(), 200);
     let body = server.json(resp).await;
     assert_eq!(body["status"], "healthy");
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn cors_replays_ts_allowed_denied_and_preflight_contract() {
+    let yaml = "agent:\n  name: test-agent\n  version: 1\nnetwork:\n  mode: tailscale\nmemory:\n  pipelineV2:\n    enabled: false\n";
+    let server = TestServer::start_with_agent_yaml_files_setup_and_env(
+        None,
+        yaml,
+        &[],
+        |_| {},
+        &[("SIGNET_BIND", "0.0.0.0")],
+    )
+    .await;
+
+    let tailscale_ip_origin = format!("http://100.100.100.100:{}", server.port);
+    let tailscale_dns_origin = format!("https://test.tailnet.ts.net:{}", server.port);
+    let allowed_origins = [
+        tailscale_ip_origin.as_str(),
+        tailscale_dns_origin.as_str(),
+        "app://signet",
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:3850",
+        "http://127.0.0.1:3850",
+    ];
+
+    for origin in allowed_origins {
+        let resp = server
+            .client
+            .get(format!("{}/health", server.base))
+            .header("Origin", origin)
+            .send()
+            .await
+            .expect("cors GET request failed");
+        assert_eq!(
+            resp.status(),
+            200,
+            "allowed origin {origin} should reach health"
+        );
+        assert_eq!(
+            resp.headers()
+                .get("access-control-allow-origin")
+                .and_then(|value| value.to_str().ok()),
+            Some(origin),
+            "allowed origin {origin} should be echoed"
+        );
+        assert_ne!(
+            resp.headers()
+                .get("access-control-allow-origin")
+                .and_then(|value| value.to_str().ok()),
+            Some("*"),
+            "CORS must not use a permissive wildcard origin"
+        );
+        assert_eq!(
+            resp.headers()
+                .get("access-control-allow-credentials")
+                .and_then(|value| value.to_str().ok()),
+            Some("true")
+        );
+    }
+
+    let denied_origin = format!("http://example.com:{}", server.port);
+    let resp = server
+        .client
+        .get(format!("{}/health", server.base))
+        .header("Origin", &denied_origin)
+        .send()
+        .await
+        .expect("cors denied GET request failed");
+    assert_eq!(resp.status(), 200);
+    assert!(
+        resp.headers().get("access-control-allow-origin").is_none(),
+        "denied origins must not receive Access-Control-Allow-Origin"
+    );
+
+    let resp = server
+        .client
+        .request(reqwest::Method::OPTIONS, format!("{}/health", server.base))
+        .header("Origin", &tailscale_ip_origin)
+        .header("Access-Control-Request-Method", "POST")
+        .header(
+            "Access-Control-Request-Headers",
+            "content-type, x-signet-runtime-path",
+        )
+        .send()
+        .await
+        .expect("cors OPTIONS request failed");
+    assert_eq!(resp.status(), 204);
+    let headers = resp.headers();
+    assert_eq!(
+        headers
+            .get("access-control-allow-origin")
+            .and_then(|value| value.to_str().ok()),
+        Some(tailscale_ip_origin.as_str())
+    );
+    assert_eq!(
+        headers
+            .get("access-control-allow-credentials")
+            .and_then(|value| value.to_str().ok()),
+        Some("true")
+    );
+    assert_eq!(
+        headers
+            .get("access-control-allow-methods")
+            .and_then(|value| value.to_str().ok()),
+        Some("GET,HEAD,PUT,POST,DELETE,PATCH")
+    );
+    assert_eq!(
+        headers
+            .get("access-control-allow-headers")
+            .and_then(|value| value.to_str().ok()),
+        Some("content-type,x-signet-runtime-path")
+    );
+    assert!(headers.get("access-control-expose-headers").is_none());
+    let vary = headers
+        .get_all("vary")
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .collect::<Vec<_>>()
+        .join(",");
+    assert!(vary.split(',').any(|value| value.trim() == "Origin"));
+    assert!(
+        vary.split(',')
+            .any(|value| value.trim() == "Access-Control-Request-Headers")
+    );
 }
 
 #[tokio::test]
@@ -5160,6 +5481,126 @@ async fn os_routes_replay_empty_state_and_validation_shapes() {
     assert_eq!(resp.status(), 404);
     let body = server.json(resp).await;
     assert_eq!(body["error"], "Widget not found");
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn os_reprobe_http_mcp_initializes_before_probe_methods() {
+    let fixture = StrictMcpFixture::start(vec![vec!["open"]]);
+    let server = TestServer::start_with_agent_yaml_files_and_setup(
+        None,
+        "agent:\n  name: test-agent\n  version: 1\n",
+        &[],
+        |root| {
+            write_installed_mcp_server(
+                root,
+                "strict-mcp",
+                "Strict MCP",
+                &format!("{}/mcp", fixture.base),
+            )
+        },
+    )
+    .await;
+
+    let resp = server
+        .post("/api/os/tray/strict-mcp/reprobe", json!({}))
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["success"], true);
+    assert_eq!(body["probe"]["ok"], true);
+    assert_eq!(body["probe"]["toolCount"], 1);
+    assert_eq!(body["probe"]["autoCard"]["tools"][0]["name"], "open");
+    assert_eq!(
+        body["probe"]["declaredManifest"]["name"],
+        "Strict Resource App"
+    );
+    assert_eq!(
+        body["probe"]["declaredManifest"]["ui"],
+        "https://example.com/app"
+    );
+
+    let methods = fixture.methods();
+    assert_eq!(
+        methods,
+        vec![
+            "initialize",
+            "notifications/initialized",
+            "tools/list",
+            "resources/list",
+            "resources/read",
+        ]
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn os_reprobe_tool_changes_invalidate_cached_widget_and_emit_event() {
+    let fixture = StrictMcpFixture::start(vec![vec!["first"], vec!["second"]]);
+    let server = TestServer::start_with_agent_yaml_files_and_setup(
+        None,
+        "agent:\n  name: test-agent\n  version: 1\n",
+        &[],
+        |root| {
+            write_installed_mcp_server(
+                root,
+                "strict-mcp",
+                "Strict MCP",
+                &format!("{}/mcp", fixture.base),
+            )
+        },
+    )
+    .await;
+
+    let resp = server
+        .post("/api/os/tray/strict-mcp/reprobe", json!({}))
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["probe"]["ok"], true);
+    assert_eq!(body["probe"]["autoCard"]["tools"][0]["name"], "first");
+
+    let resp = server
+        .post(
+            "/api/os/widget/generate",
+            json!({"serverId": "strict-mcp", "html": "<section>stale widget</section>"}),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["status"], "cached");
+
+    let resp = server.get("/api/os/widget/strict-mcp").await;
+    assert_eq!(resp.status(), 200);
+
+    let resp = server
+        .post("/api/os/tray/strict-mcp/reprobe", json!({}))
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["probe"]["ok"], true);
+    assert_eq!(body["probe"]["autoCard"]["tools"][0]["name"], "second");
+
+    let resp = server.get("/api/os/widget/strict-mcp").await;
+    assert_eq!(resp.status(), 404);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "Widget not found");
+
+    let resp = server
+        .get("/api/os/events?type=widget.invalidated&limit=10")
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    let invalidated = body["events"]
+        .as_array()
+        .expect("events array")
+        .iter()
+        .any(|event| {
+            event["type"] == "widget.invalidated"
+                && event["source"] == "system"
+                && event["payload"]["serverId"] == "strict-mcp"
+        });
+    assert!(invalidated, "widget.invalidated event missing: {body}");
 }
 
 #[tokio::test]
