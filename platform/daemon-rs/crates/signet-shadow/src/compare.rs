@@ -1232,14 +1232,23 @@ fn is_sensitive_response_path(path: &str) -> bool {
     is_freeform_internal_column(leaf)
 }
 
-/// Redact a response-level leaf value if its path is sensitive; otherwise
-/// truncate normally. Ensures plaintext memory content / secrets never reach
-/// shadow-divergences.jsonl from response-body comparisons.
+/// Redact a response-level value at `path`. If the path itself is sensitive,
+/// fingerprint the whole value. Otherwise, for composite (object/array)
+/// values, recursively redact any sensitive DESCENDANT (a non-sensitive
+/// parent like `memory` may hold a sensitive child like `content`). Scalars
+/// at non-sensitive paths are truncated normally. Ensures plaintext memory
+/// content / secrets never reach shadow-divergences.jsonl from response-body
+/// comparisons regardless of nesting.
 fn redact_response_value(value: &serde_json::Value, path: &str) -> String {
     if is_sensitive_response_path(path) {
         return redacted_fingerprint(value).to_string();
     }
-    truncate_json(value)
+    match value {
+        serde_json::Value::Object(_) | serde_json::Value::Array(_) => {
+            redact_response_tree(value)
+        }
+        _ => truncate_json(value),
+    }
 }
 
 /// Recursively redact any sensitive descendant of an object/array, then
@@ -2121,6 +2130,24 @@ mod tests {
         let divs = text_rules.compare("POST /api/memory/raw", &primary_text, &shadow_text);
         assert!(!divs.is_empty());
         assert_divergences_redacted(&divs, &[secret, "other"]);
+    }
+
+    #[test]
+    fn object_field_at_non_sensitive_parent_redacts_nested_content() {
+        // Regression: redact_response_value only fingerprinted when the PARENT
+        // path was sensitive. A non-sensitive parent like `memory` holding a
+        // sensitive child `content` leaked via truncate_json of the whole object.
+        let rules = ParityRules::default();
+        let secret = "nested-object-secret-never-leak";
+        let primary = response_json(
+            200,
+            serde_json::json!({ "memory": { "content": secret, "id": "m1" } }),
+        );
+        let shadow = response_json(200, serde_json::json!({}));
+        let divs = rules.compare("POST /api/memory/remember", &primary, &shadow);
+        assert!(!divs.is_empty());
+        assert_divergences_redacted(&divs, &[secret]);
+        assert!(serialized_divergences(&divs).contains("[REDACTED sha64="));
     }
 
     #[test]
