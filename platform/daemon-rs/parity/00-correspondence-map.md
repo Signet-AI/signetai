@@ -158,3 +158,28 @@ Each phase ends with a gate: autoreview + orchestrator audit. Land on
   `SIGNET_REPLAY_CAPTURE=1`) — documented TODO in `replay-corpus/MANIFEST.md`,
   not yet implemented. Needed for the 1036 provider-mocked + 578 http-files
   test classes.
+
+## Phase 2 status (in flight)
+
+Behavioral-core gap-fill, highest-risk first. Worktree-isolated subagents,
+  each commits + reports SHA; orchestrator cherry-picks by SHA.
+
+- ✅ **Corpus runner extension** (Phase 1 gap closed): `contract_replay_fixtures.rs`
+  now supports `steps[]` multi-request + `$response` placeholders +
+  `jsonContains`/`jsonMatchers`/`jsonPathAssertions` + `manifest.json`.
+  Committed fixture executes green.
+- ✅ **Retention decay** (core 1, was DIVERGENT): fixed wrong columns
+  (`deleted=1`→ canonical `is_deleted`/`deleted_at`), wrong table
+  (`memory_embeddings`→`embeddings`+`vec_embeddings`), cold archive now
+  full-row `original_row_json`, TS ordered stages reproduced, removed
+  Rust-only predictor-training-pair purge (absent from TS). Test
+  `retention_sweep_matches_typescript_ordered_semantics`.
+- ⏳ **Pipeline worker fact-write** (core 3, was PARTIAL): ADD decisions now
+  insert real fact memories with attribution (was only bumping a counter).
+  **3 autoreview-surfaced refinements in flight:** (a) proposal→fact
+  re-matching by confidence can drop facts when multiple share confidence;
+  (b) dedupe includes visibility but UNIQUE key is content_hash+agent_id+scope
+  → visibility mismatch fails job instead of deduping; (c) no memory_history
+  audit rows (TS writes created/deduped/blocked/shadow audit).
+- ⬜ Recall/ranking gates (core 2, DIVERGENT) — next.
+- ⬜ Scoping / memory-lineage / hooks / remaining auth — after.

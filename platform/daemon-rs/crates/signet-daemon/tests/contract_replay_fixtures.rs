@@ -35,12 +35,27 @@ struct ReplayFixture {
     environment: FixtureEnvironment,
     #[serde(default)]
     seed: SeedSpec,
+    #[serde(default)]
+    request: Option<FixtureRequest>,
+    #[serde(default)]
+    expected_response: Option<ExpectedResponse>,
+    #[serde(default)]
+    expected_internal_state: ExpectedInternalState,
+    #[serde(default)]
+    steps: Vec<ReplayStep>,
+    #[serde(default)]
+    normalization: Normalization,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ReplayStep {
+    #[serde(default)]
+    name: Option<String>,
     request: FixtureRequest,
     expected_response: ExpectedResponse,
     #[serde(default)]
     expected_internal_state: ExpectedInternalState,
-    #[serde(default)]
-    normalization: Normalization,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -76,7 +91,34 @@ struct ExpectedResponse {
     #[serde(default)]
     json: Option<Value>,
     #[serde(default)]
+    json_contains: Option<Value>,
+    #[serde(default)]
+    json_matchers: BTreeMap<String, JsonMatcher>,
+    #[serde(default)]
+    json_path_assertions: Vec<JsonPathAssertion>,
+    #[serde(default)]
     ignore_json_paths: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+enum JsonMatcher {
+    Predicate(String),
+    Expected(Value),
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct JsonPathAssertion {
+    path: String,
+    #[serde(default)]
+    contains: Vec<Value>,
+    #[serde(default)]
+    excludes: Vec<Value>,
+    #[serde(default)]
+    equals: Option<Value>,
+    #[serde(default)]
+    count: Option<usize>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -259,79 +301,192 @@ async fn replay_data_driven_fixtures() {
     }
 }
 
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn replay_inline_fixture() {
+    let fixture = inline_fixture();
+    run_fixture(&fixture, None).await;
+}
+
+#[derive(Default)]
+struct ReplayContext {
+    last_response: Option<Value>,
+}
+
 async fn run_fixture(fixture: &ReplayFixture, base_dir: Option<&Path>) {
     let server = TestServer::start(fixture).await;
     apply_seed_sql(fixture, base_dir, &server.db_path());
 
-    let response = send_fixture_request(fixture, &server).await;
+    let mut context = ReplayContext::default();
+    if fixture.steps.is_empty() {
+        let request = fixture.request.as_ref().unwrap_or_else(|| {
+            panic!(
+                "fixture {} must define either top-level request/expectedResponse or steps[]",
+                fixture.id
+            )
+        });
+        let expected_response = fixture.expected_response.as_ref().unwrap_or_else(|| {
+            panic!(
+                "fixture {} top-level request is missing expectedResponse",
+                fixture.id
+            )
+        });
+        run_fixture_step(
+            fixture,
+            "top-level request",
+            request,
+            expected_response,
+            &fixture.expected_internal_state,
+            &server,
+            &mut context,
+        )
+        .await;
+    } else {
+        for (index, step) in fixture.steps.iter().enumerate() {
+            let step_label = step
+                .name
+                .as_deref()
+                .map(str::to_string)
+                .unwrap_or_else(|| format!("step {}", index + 1));
+            run_fixture_step(
+                fixture,
+                &step_label,
+                &step.request,
+                &step.expected_response,
+                &step.expected_internal_state,
+                &server,
+                &mut context,
+            )
+            .await;
+        }
+        assert_db_state(
+            &fixture.id,
+            "fixture final state",
+            &fixture.expected_internal_state,
+            &fixture.normalization,
+            &server.db_path(),
+        );
+    }
+}
+
+async fn run_fixture_step(
+    fixture: &ReplayFixture,
+    step_label: &str,
+    request: &FixtureRequest,
+    expected_response: &ExpectedResponse,
+    expected_internal_state: &ExpectedInternalState,
+    server: &TestServer,
+    context: &mut ReplayContext,
+) {
+    let response = send_fixture_request(&fixture.id, step_label, request, server, context).await;
     let status = response.status().as_u16();
     let headers = response.headers().clone();
-    let body = response
-        .text()
-        .await
-        .unwrap_or_else(|err| panic!("fixture {} failed reading response body: {err}", fixture.id));
+    let body = response.text().await.unwrap_or_else(|err| {
+        panic!(
+            "fixture {} step {step_label:?} failed reading response body: {err}",
+            fixture.id
+        )
+    });
 
     assert_eq!(
-        fixture.expected_response.status, status,
-        "fixture {} response status mismatch; body: {body}",
+        expected_response.status, status,
+        "fixture {} step {step_label:?} response status mismatch; body: {body}",
         fixture.id
     );
-    assert_response_headers(fixture, &headers);
-    assert_response_json(fixture, &body);
-    assert_db_state(fixture, &server.db_path());
+    assert_response_headers(&fixture.id, step_label, expected_response, &headers);
+    let response_value = assert_response_json(
+        &fixture.id,
+        step_label,
+        expected_response,
+        &fixture.normalization,
+        &body,
+    );
+    context.last_response = Some(response_value);
+    assert_db_state(
+        &fixture.id,
+        step_label,
+        expected_internal_state,
+        &fixture.normalization,
+        &server.db_path(),
+    );
 }
 
-async fn send_fixture_request(fixture: &ReplayFixture, server: &TestServer) -> reqwest::Response {
-    let method = fixture
-        .request
+async fn send_fixture_request(
+    fixture_id: &str,
+    step_label: &str,
+    request: &FixtureRequest,
+    server: &TestServer,
+    context: &ReplayContext,
+) -> reqwest::Response {
+    let method = request
         .method
         .parse::<reqwest::Method>()
-        .unwrap_or_else(|err| panic!("fixture {} invalid HTTP method: {err}", fixture.id));
-    let mut request = server
+        .unwrap_or_else(|err| {
+            panic!("fixture {fixture_id} step {step_label:?} invalid HTTP method: {err}")
+        });
+    let path = resolve_placeholders_in_string(&request.path, context, fixture_id, step_label);
+    let path = path.as_str().unwrap_or_else(|| {
+        panic!(
+            "fixture {fixture_id} step {step_label:?} path placeholder did not resolve to a string"
+        )
+    });
+    let mut http_request = server
         .client
-        .request(method, format!("{}{}", server.base, fixture.request.path));
-    for (key, value) in &fixture.request.headers {
-        request = request.header(key, value);
+        .request(method, format!("{}{}", server.base, path));
+    for (key, value) in &request.headers {
+        let header_value = resolve_placeholders_in_string(value, context, fixture_id, step_label);
+        let header_value = header_value.as_str().unwrap_or_else(|| {
+            panic!(
+                "fixture {fixture_id} step {step_label:?} header {key} placeholder did not resolve to a string"
+            )
+        });
+        http_request = http_request.header(key, header_value);
     }
-    if let Some(body) = &fixture.request.body {
-        request = match body {
-            Value::Null => request,
-            Value::String(text) => request.body(text.clone()),
-            _ => request.json(body),
+    if let Some(body) = &request.body {
+        let body = resolve_placeholders(body, context, fixture_id, step_label);
+        http_request = match body {
+            Value::Null => http_request,
+            Value::String(text) => http_request.body(text),
+            _ => http_request.json(&body),
         };
     }
-    request
-        .send()
-        .await
-        .unwrap_or_else(|err| panic!("fixture {} request failed: {err}", fixture.id))
+    http_request.send().await.unwrap_or_else(|err| {
+        panic!("fixture {fixture_id} step {step_label:?} request failed: {err}")
+    })
 }
 
-fn assert_response_headers(fixture: &ReplayFixture, headers: &reqwest::header::HeaderMap) {
-    for (name, expected) in &fixture.expected_response.headers {
+fn assert_response_headers(
+    fixture_id: &str,
+    step_label: &str,
+    expected_response: &ExpectedResponse,
+    headers: &reqwest::header::HeaderMap,
+) {
+    for (name, expected) in &expected_response.headers {
         let actual = headers
             .get(name)
-            .unwrap_or_else(|| panic!("fixture {} missing response header {name}", fixture.id))
+            .unwrap_or_else(|| {
+                panic!("fixture {fixture_id} step {step_label:?} missing response header {name}")
+            })
             .to_str()
-            .unwrap_or_else(|err| panic!("fixture {} invalid header {name}: {err}", fixture.id));
+            .unwrap_or_else(|err| {
+                panic!("fixture {fixture_id} step {step_label:?} invalid header {name}: {err}")
+            });
         match expected {
             ExpectedHeader::Exact(value) => assert_eq!(
                 value, actual,
-                "fixture {} response header {name} mismatch",
-                fixture.id
+                "fixture {fixture_id} step {step_label:?} response header {name} mismatch; expected {value:?}, actual {actual:?}"
             ),
             ExpectedHeader::Rule(rule) => {
                 if let Some(value) = &rule.equals {
                     assert_eq!(
                         value, actual,
-                        "fixture {} response header {name} equals mismatch",
-                        fixture.id
+                        "fixture {fixture_id} step {step_label:?} response header {name} equals mismatch; expected {value:?}, actual {actual:?}"
                     );
                 }
                 if let Some(value) = &rule.contains {
                     assert!(
                         actual.contains(value),
-                        "fixture {} response header {name} expected to contain {value:?}, actual {actual:?}",
-                        fixture.id
+                        "fixture {fixture_id} step {step_label:?} response header {name} expected to contain {value:?}, actual {actual:?}"
                     );
                 }
             }
@@ -339,28 +494,80 @@ fn assert_response_headers(fixture: &ReplayFixture, headers: &reqwest::header::H
     }
 }
 
-fn assert_response_json(fixture: &ReplayFixture, body: &str) {
-    let Some(expected_json) = &fixture.expected_response.json else {
-        return;
+fn assert_response_json(
+    fixture_id: &str,
+    step_label: &str,
+    expected_response: &ExpectedResponse,
+    normalization: &Normalization,
+    body: &str,
+) -> Value {
+    let requires_json = expected_response.json.is_some()
+        || expected_response.json_contains.is_some()
+        || !expected_response.json_matchers.is_empty()
+        || !expected_response.json_path_assertions.is_empty();
+    let Ok(actual) = serde_json::from_str::<Value>(body) else {
+        assert!(
+            !requires_json,
+            "fixture {fixture_id} step {step_label:?} expected JSON response but body did not parse; body: {body}"
+        );
+        return Value::String(body.to_string());
     };
-    let mut expected = expected_json.clone();
-    let mut actual: Value = serde_json::from_str(body).unwrap_or_else(|err| {
-        panic!(
-            "fixture {} expected JSON response but body did not parse: {err}; body: {body}",
-            fixture.id
-        )
-    });
-    for ignore_path in &fixture.expected_response.ignore_json_paths {
-        remove_json_path(&mut expected, ignore_path);
-        remove_json_path(&mut actual, ignore_path);
-    }
-    assert_json_subset(
-        &expected,
+
+    let tolerance = normalization.float_tolerance.unwrap_or(0.0);
+    assert_json_matchers(
+        fixture_id,
+        step_label,
         &actual,
-        "$",
-        fixture.normalization.float_tolerance.unwrap_or(0.0),
-        &fixture.id,
+        &expected_response.json_matchers,
+        tolerance,
     );
+    assert_json_path_assertions(
+        fixture_id,
+        step_label,
+        &actual,
+        &expected_response.json_path_assertions,
+        tolerance,
+    );
+
+    if let Some(expected_json) = &expected_response.json {
+        let mut expected = expected_json.clone();
+        let mut normalized_actual = actual.clone();
+        apply_ignored_json_paths(
+            fixture_id,
+            step_label,
+            &expected_response.ignore_json_paths,
+            &mut expected,
+            &mut normalized_actual,
+        );
+        assert_json_subset(&expected, &normalized_actual, "$", tolerance, fixture_id);
+    }
+    if let Some(expected_contains) = &expected_response.json_contains {
+        let mut expected = expected_contains.clone();
+        let mut normalized_actual = actual.clone();
+        apply_ignored_json_paths(
+            fixture_id,
+            step_label,
+            &expected_response.ignore_json_paths,
+            &mut expected,
+            &mut normalized_actual,
+        );
+        assert_json_subset(&expected, &normalized_actual, "$", tolerance, fixture_id);
+    }
+
+    actual
+}
+
+fn apply_ignored_json_paths(
+    fixture_id: &str,
+    step_label: &str,
+    paths: &[String],
+    expected: &mut Value,
+    actual: &mut Value,
+) {
+    for ignore_path in paths {
+        remove_json_path(expected, ignore_path, fixture_id, step_label);
+        remove_json_path(actual, ignore_path, fixture_id, step_label);
+    }
 }
 
 fn assert_json_subset(
@@ -410,44 +617,57 @@ fn assert_json_subset(
     }
 }
 
-fn assert_db_state(fixture: &ReplayFixture, db_path: &Path) {
-    if fixture.expected_internal_state.db.is_empty() {
+fn assert_db_state(
+    fixture_id: &str,
+    step_label: &str,
+    expected_internal_state: &ExpectedInternalState,
+    normalization: &Normalization,
+    db_path: &Path,
+) {
+    if expected_internal_state.db.is_empty() {
         return;
     }
     let conn = open_replay_db(db_path);
-    let ignored_columns = fixture
-        .normalization
+    let ignored_columns = normalization
         .ignore_columns
         .iter()
         .map(|column| column.to_ascii_lowercase())
         .collect::<BTreeSet<_>>();
 
-    for expectation in &fixture.expected_internal_state.db {
-        assert_valid_identifier(&expectation.table, "table", &fixture.id);
+    for expectation in &expected_internal_state.db {
+        assert_valid_identifier(&expectation.table, "table", fixture_id);
         if let Some(expected_count) = expectation.count {
-            let actual_count = query_count(&conn, expectation, &fixture.id);
+            let actual_count = query_count(&conn, expectation, fixture_id);
             assert_eq!(
                 expected_count, actual_count,
-                "fixture {} DB count mismatch for table {} where {:?}",
-                fixture.id, expectation.table, expectation.where_clause
+                "fixture {fixture_id} step {step_label:?} DB count mismatch for table {} where {:?}; expected {expected_count}, actual {actual_count}",
+                expectation.table, expectation.where_clause
             );
         }
         if expectation.rows.is_some() {
-            assert_db_rows(&conn, fixture, expectation, &ignored_columns);
+            assert_db_rows(
+                &conn,
+                fixture_id,
+                step_label,
+                normalization,
+                expectation,
+                &ignored_columns,
+            );
         }
     }
 }
 
 fn assert_db_rows(
     conn: &rusqlite::Connection,
-    fixture: &ReplayFixture,
+    fixture_id: &str,
+    step_label: &str,
+    normalization: &Normalization,
     expectation: &DbExpectation,
     ignored_columns: &BTreeSet<String>,
 ) {
     assert!(
         !expectation.columns.is_empty(),
-        "fixture {} DB row expectation for table {} must include columns",
-        fixture.id,
+        "fixture {fixture_id} step {step_label:?} DB row expectation for table {} must include columns",
         expectation.table
     );
 
@@ -456,7 +676,7 @@ fn assert_db_rows(
         .iter()
         .enumerate()
         .filter_map(|(index, column)| {
-            assert_valid_identifier(column, "column", &fixture.id);
+            assert_valid_identifier(column, "column", fixture_id);
             (!ignored_columns.contains(&column.to_ascii_lowercase())).then_some(index)
         })
         .collect::<Vec<_>>();
@@ -466,8 +686,7 @@ fn assert_db_rows(
         .collect::<Vec<_>>();
     assert!(
         !selected_columns.is_empty(),
-        "fixture {} DB row expectation for table {} only selected ignored columns",
-        fixture.id,
+        "fixture {fixture_id} step {step_label:?} DB row expectation for table {} only selected ignored columns",
         expectation.table
     );
 
@@ -480,9 +699,9 @@ fn assert_db_rows(
             assert_eq!(
                 expectation.columns.len(),
                 row.len(),
-                "fixture {} expected row width mismatch for table {}",
-                fixture.id,
-                expectation.table
+                "fixture {fixture_id} step {step_label:?} expected row width mismatch for table {}; expected width {}, actual row {row:?}",
+                expectation.table,
+                expectation.columns.len()
             );
             kept_indices
                 .iter()
@@ -490,9 +709,15 @@ fn assert_db_rows(
                 .collect::<Vec<_>>()
         })
         .collect::<Vec<_>>();
-    let mut actual_rows = query_rows(conn, expectation, &selected_columns, fixture);
+    let mut actual_rows = query_rows(
+        conn,
+        expectation,
+        &selected_columns,
+        normalization,
+        fixture_id,
+    );
 
-    let sort_indices = sort_indices(&selected_columns, fixture, expectation);
+    let sort_indices = sort_indices(&selected_columns, normalization, expectation);
     if !sort_indices.is_empty() {
         sort_rows(&mut expected_rows, &sort_indices);
         sort_rows(&mut actual_rows, &sort_indices);
@@ -501,19 +726,17 @@ fn assert_db_rows(
     assert_eq!(
         expected_rows.len(),
         actual_rows.len(),
-        "fixture {} DB row count mismatch for table {}; expected {expected_rows:?}, actual {actual_rows:?}",
-        fixture.id,
+        "fixture {fixture_id} step {step_label:?} DB row count mismatch for table {}; expected {expected_rows:?}, actual {actual_rows:?}",
         expectation.table
     );
-    let tolerance = fixture.normalization.float_tolerance.unwrap_or(0.0);
+    let tolerance = normalization.float_tolerance.unwrap_or(0.0);
     for (row_index, (expected_row, actual_row)) in
         expected_rows.iter().zip(actual_rows.iter()).enumerate()
     {
         assert_eq!(
             expected_row.len(),
             actual_row.len(),
-            "fixture {} DB row width mismatch for table {} row {}",
-            fixture.id,
+            "fixture {fixture_id} step {step_label:?} DB row width mismatch for table {} row {}; expected {expected_row:?}, actual {actual_row:?}",
             expectation.table,
             row_index
         );
@@ -522,8 +745,7 @@ fn assert_db_rows(
         {
             assert!(
                 json_values_equal(expected_value, actual_value, tolerance),
-                "fixture {} DB mismatch for table {} row {} column {}; expected {expected_value}, actual {actual_value}; expected rows {expected_rows:?}, actual rows {actual_rows:?}",
-                fixture.id,
+                "fixture {fixture_id} step {step_label:?} DB mismatch for table {} row {} column {}; expected {expected_value}, actual {actual_value}; expected rows {expected_rows:?}, actual rows {actual_rows:?}",
                 expectation.table,
                 row_index,
                 selected_columns[column_index]
@@ -552,7 +774,8 @@ fn query_rows(
     conn: &rusqlite::Connection,
     expectation: &DbExpectation,
     columns: &[String],
-    fixture: &ReplayFixture,
+    normalization: &Normalization,
+    fixture_id: &str,
 ) -> Vec<Vec<Value>> {
     let column_sql = columns
         .iter()
@@ -563,11 +786,11 @@ fn query_rows(
         "SELECT {column_sql} FROM {}{}{}",
         quote_identifier(&expectation.table),
         where_sql(expectation),
-        order_sql(expectation, &fixture.normalization.sort_rows_by)
+        order_sql(expectation, &normalization.sort_rows_by)
     );
     let mut statement = conn
         .prepare(&sql)
-        .unwrap_or_else(|err| panic!("fixture {} failed DB row query {sql}: {err}", fixture.id));
+        .unwrap_or_else(|err| panic!("fixture {fixture_id} failed DB row query {sql}: {err}"));
     let rows = statement
         .query_map([], |row| {
             let mut values = Vec::with_capacity(columns.len());
@@ -576,14 +799,11 @@ fn query_rows(
             }
             Ok(values)
         })
-        .unwrap_or_else(|err| panic!("fixture {} failed reading DB rows {sql}: {err}", fixture.id));
+        .unwrap_or_else(|err| panic!("fixture {fixture_id} failed reading DB rows {sql}: {err}"));
 
     rows.map(|row| {
         row.unwrap_or_else(|err| {
-            panic!(
-                "fixture {} failed converting DB row {sql}: {err}",
-                fixture.id
-            )
+            panic!("fixture {fixture_id} failed converting DB row {sql}: {err}")
         })
     })
     .collect()
@@ -591,11 +811,10 @@ fn query_rows(
 
 fn sort_indices(
     columns: &[String],
-    fixture: &ReplayFixture,
+    normalization: &Normalization,
     expectation: &DbExpectation,
 ) -> Vec<usize> {
-    fixture
-        .normalization
+    normalization
         .sort_rows_by
         .iter()
         .chain(expectation.order_by.iter())
@@ -855,13 +1074,13 @@ fn inline_fixture() -> ReplayFixture {
                 .to_string(),
             ),
         },
-        request: FixtureRequest {
+        request: Some(FixtureRequest {
             method: "GET".to_string(),
             path: "/health".to_string(),
             headers: BTreeMap::new(),
             body: None,
-        },
-        expected_response: ExpectedResponse {
+        }),
+        expected_response: Some(ExpectedResponse {
             status: 200,
             headers: BTreeMap::from([(
                 "content-type".to_string(),
@@ -871,8 +1090,11 @@ fn inline_fixture() -> ReplayFixture {
                 }),
             )]),
             json: Some(json!({ "status": "healthy" })),
+            json_contains: None,
+            json_matchers: BTreeMap::new(),
+            json_path_assertions: Vec::new(),
             ignore_json_paths: vec!["$.version".to_string()],
-        },
+        }),
         expected_internal_state: ExpectedInternalState {
             db: vec![DbExpectation {
                 table: "memories".to_string(),
@@ -895,11 +1117,311 @@ fn inline_fixture() -> ReplayFixture {
                 order_by: vec!["id".to_string()],
             }],
         },
+        steps: Vec::new(),
         normalization: Normalization {
             ignore_columns: vec!["created_at".to_string(), "updated_at".to_string()],
             sort_rows_by: vec!["id".to_string()],
             float_tolerance: Some(0.000001),
         },
+    }
+}
+
+fn assert_json_matchers(
+    fixture_id: &str,
+    step_label: &str,
+    actual: &Value,
+    matchers: &BTreeMap<String, JsonMatcher>,
+    tolerance: f64,
+) {
+    for (path, matcher) in matchers {
+        let matches = select_json_values(actual, path).unwrap_or_else(|err| {
+            panic!(
+                "fixture {fixture_id} step {step_label:?} invalid jsonMatchers path {path:?}: {err}"
+            )
+        });
+        if matches.is_empty() {
+            assert!(
+                matches_json_matcher(None, matcher, tolerance),
+                "fixture {fixture_id} step {step_label:?} jsonMatcher {path} expected {}, actual absent",
+                describe_json_matcher(matcher)
+            );
+            continue;
+        }
+        for actual_value in matches {
+            assert!(
+                matches_json_matcher(Some(actual_value), matcher, tolerance),
+                "fixture {fixture_id} step {step_label:?} jsonMatcher {path} expected {}, actual {actual_value}",
+                describe_json_matcher(matcher)
+            );
+        }
+    }
+}
+
+fn assert_json_path_assertions(
+    fixture_id: &str,
+    step_label: &str,
+    actual: &Value,
+    assertions: &[JsonPathAssertion],
+    tolerance: f64,
+) {
+    for assertion in assertions {
+        let matches = select_json_values(actual, &assertion.path).unwrap_or_else(|err| {
+            panic!(
+                "fixture {fixture_id} step {step_label:?} invalid jsonPathAssertions path {:?}: {err}",
+                assertion.path
+            )
+        });
+        if let Some(expected_count) = assertion.count {
+            let actual_count = json_path_assertion_count(&matches);
+            assert_eq!(
+                expected_count, actual_count,
+                "fixture {fixture_id} step {step_label:?} jsonPathAssertions {} count mismatch; expected {expected_count}, actual {actual_count}; matches {matches:?}",
+                assertion.path
+            );
+        }
+        if let Some(expected) = &assertion.equals {
+            assert!(
+                json_path_equals(&matches, expected, tolerance),
+                "fixture {fixture_id} step {step_label:?} jsonPathAssertions {} equals mismatch; expected {expected}, actual matches {matches:?}",
+                assertion.path
+            );
+        }
+        for expected in &assertion.contains {
+            assert!(
+                json_path_contains(&matches, expected, tolerance),
+                "fixture {fixture_id} step {step_label:?} jsonPathAssertions {} missing expected value {expected}; actual matches {matches:?}",
+                assertion.path
+            );
+        }
+        for excluded in &assertion.excludes {
+            assert!(
+                !json_path_contains(&matches, excluded, tolerance),
+                "fixture {fixture_id} step {step_label:?} jsonPathAssertions {} found excluded value {excluded}; actual matches {matches:?}",
+                assertion.path
+            );
+        }
+    }
+}
+
+fn matches_json_matcher(actual: Option<&Value>, matcher: &JsonMatcher, tolerance: f64) -> bool {
+    match matcher {
+        JsonMatcher::Expected(expected) => {
+            actual.is_some_and(|value| json_values_equal(expected, value, tolerance))
+        }
+        JsonMatcher::Predicate(predicate) => match predicate.as_str() {
+            "absent" => actual.is_none(),
+            "string" => actual.is_some_and(Value::is_string),
+            "number" => actual.is_some_and(Value::is_number),
+            "boolean" => actual.is_some_and(Value::is_boolean),
+            "array" => actual.is_some_and(Value::is_array),
+            "object" => actual.is_some_and(Value::is_object),
+            "null" => actual.is_some_and(Value::is_null),
+            "timestamp" => actual
+                .and_then(Value::as_str)
+                .is_some_and(looks_like_timestamp),
+            "redacted-secret" => actual
+                .and_then(Value::as_str)
+                .is_some_and(|value| !value.trim().is_empty()),
+            _ => false,
+        },
+    }
+}
+
+fn describe_json_matcher(matcher: &JsonMatcher) -> String {
+    match matcher {
+        JsonMatcher::Predicate(predicate) => predicate.clone(),
+        JsonMatcher::Expected(value) => value.to_string(),
+    }
+}
+
+fn looks_like_timestamp(value: &str) -> bool {
+    value.len() >= 20 && value.contains('T') && (value.ends_with('Z') || value.contains('+'))
+}
+
+fn json_path_assertion_count(matches: &[&Value]) -> usize {
+    match matches {
+        [actual] => actual.as_array().map_or(matches.len(), Vec::len),
+        _ => matches.len(),
+    }
+}
+
+fn json_path_equals(matches: &[&Value], expected: &Value, tolerance: f64) -> bool {
+    match matches {
+        [] => false,
+        [actual] => json_values_equal(expected, actual, tolerance),
+        _ => {
+            let actual = Value::Array(matches.iter().map(|value| (*value).clone()).collect());
+            json_values_equal(expected, &actual, tolerance)
+        }
+    }
+}
+
+fn json_path_contains(matches: &[&Value], expected: &Value, tolerance: f64) -> bool {
+    let haystack = match matches {
+        [actual] => actual.as_array().map_or_else(
+            || matches.to_vec(),
+            |items| items.iter().collect::<Vec<_>>(),
+        ),
+        _ => matches.to_vec(),
+    };
+    haystack
+        .iter()
+        .any(|actual| json_values_equal(expected, actual, tolerance))
+}
+
+fn resolve_placeholders(
+    value: &Value,
+    context: &ReplayContext,
+    fixture_id: &str,
+    step_label: &str,
+) -> Value {
+    match value {
+        Value::String(text) => {
+            resolve_placeholders_in_string(text, context, fixture_id, step_label)
+        }
+        Value::Array(items) => Value::Array(
+            items
+                .iter()
+                .map(|item| resolve_placeholders(item, context, fixture_id, step_label))
+                .collect(),
+        ),
+        Value::Object(object) => Value::Object(
+            object
+                .iter()
+                .map(|(key, value)| {
+                    (
+                        key.clone(),
+                        resolve_placeholders(value, context, fixture_id, step_label),
+                    )
+                })
+                .collect(),
+        ),
+        _ => value.clone(),
+    }
+}
+
+fn resolve_placeholders_in_string(
+    text: &str,
+    context: &ReplayContext,
+    fixture_id: &str,
+    step_label: &str,
+) -> Value {
+    if let Some(path) = response_placeholder_path(text) {
+        return response_placeholder_value(path, context, fixture_id, step_label);
+    }
+    let mut resolved = String::new();
+    let mut rest = text;
+    while let Some(start) = rest.find("${") {
+        resolved.push_str(&rest[..start]);
+        let after_start = &rest[start + 2..];
+        let Some(end) = after_start.find('}') else {
+            resolved.push_str(&rest[start..]);
+            return Value::String(resolved);
+        };
+        let token = &after_start[..end];
+        if let Some(path) = response_placeholder_path(token) {
+            let value = response_placeholder_value(path, context, fixture_id, step_label);
+            resolved.push_str(&json_value_to_placeholder_string(
+                &value, fixture_id, step_label, token,
+            ));
+        } else {
+            resolved.push_str("${");
+            resolved.push_str(token);
+            resolved.push('}');
+        }
+        rest = &after_start[end + 1..];
+    }
+    resolved.push_str(rest);
+    Value::String(resolved)
+}
+
+fn response_placeholder_path(text: &str) -> Option<&str> {
+    if text == "$response" || text.starts_with("$response.") || text.starts_with("$response[") {
+        return Some(text.strip_prefix("$response").unwrap_or_default());
+    }
+    if text == "response" || text.starts_with("response.") || text.starts_with("response[") {
+        return Some(text.strip_prefix("response").unwrap_or_default());
+    }
+    None
+}
+
+fn response_placeholder_value(
+    suffix: &str,
+    context: &ReplayContext,
+    fixture_id: &str,
+    step_label: &str,
+) -> Value {
+    let Some(response) = &context.last_response else {
+        panic!(
+            "fixture {fixture_id} step {step_label:?} used $response placeholder before any prior response"
+        )
+    };
+    let path = if suffix.is_empty() {
+        "$".to_string()
+    } else {
+        format!("${suffix}")
+    };
+    let matches = select_json_values(response, &path).unwrap_or_else(|err| {
+        panic!("fixture {fixture_id} step {step_label:?} invalid $response placeholder path {path}: {err}")
+    });
+    assert_eq!(
+        1,
+        matches.len(),
+        "fixture {fixture_id} step {step_label:?} $response placeholder {path} must select one value; selected {matches:?}"
+    );
+    matches[0].clone()
+}
+
+fn json_value_to_placeholder_string(
+    value: &Value,
+    fixture_id: &str,
+    step_label: &str,
+    token: &str,
+) -> String {
+    match value {
+        Value::Null => "null".to_string(),
+        Value::Bool(value) => value.to_string(),
+        Value::Number(value) => value.to_string(),
+        Value::String(value) => value.clone(),
+        Value::Array(_) | Value::Object(_) => panic!(
+            "fixture {fixture_id} step {step_label:?} placeholder {token:?} selected non-scalar JSON {value} for string interpolation"
+        ),
+    }
+}
+
+fn select_json_values<'a>(value: &'a Value, path: &str) -> Result<Vec<&'a Value>, String> {
+    let tokens = parse_json_path(path)?;
+    let mut matches = Vec::new();
+    collect_json_path_matches(value, &tokens, &mut matches);
+    Ok(matches)
+}
+
+fn collect_json_path_matches<'a>(
+    value: &'a Value,
+    tokens: &[JsonPathToken],
+    matches: &mut Vec<&'a Value>,
+) {
+    let Some((first, rest)) = tokens.split_first() else {
+        matches.push(value);
+        return;
+    };
+    match (first, value) {
+        (JsonPathToken::Key(key), Value::Object(object)) => {
+            if let Some(child) = object.get(key) {
+                collect_json_path_matches(child, rest, matches);
+            }
+        }
+        (JsonPathToken::Index(index), Value::Array(items)) => {
+            if let Some(child) = items.get(*index) {
+                collect_json_path_matches(child, rest, matches);
+            }
+        }
+        (JsonPathToken::Wildcard, Value::Array(items)) => {
+            for child in items {
+                collect_json_path_matches(child, rest, matches);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -910,9 +1432,12 @@ enum JsonPathToken {
     Wildcard,
 }
 
-fn remove_json_path(value: &mut Value, path: &str) {
-    let tokens = parse_json_path(path)
-        .unwrap_or_else(|err| panic!("invalid ignoreJsonPaths entry {path:?}: {err}"));
+fn remove_json_path(value: &mut Value, path: &str, fixture_id: &str, step_label: &str) {
+    let tokens = parse_json_path(path).unwrap_or_else(|err| {
+        panic!(
+            "fixture {fixture_id} step {step_label:?} invalid ignoreJsonPaths entry {path:?}: {err}"
+        )
+    });
     remove_json_path_tokens(value, &tokens);
 }
 

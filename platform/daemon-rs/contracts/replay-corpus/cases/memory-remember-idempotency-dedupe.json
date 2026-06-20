@@ -38,8 +38,7 @@
         "status": 200,
         "headers": { "content-type": { "contains": "application/json" } },
         "jsonContains": {
-          "content": "Replay corpus idempotent memory",
-          "idempotencyKey": "replay-remember-dedupe"
+          "content": "Replay corpus idempotent memory"
         },
         "jsonMatchers": {
           "$.id": "string",
@@ -53,9 +52,12 @@
       "request": {
         "method": "POST",
         "path": "/api/memory/remember",
-        "headers": { "content-type": "application/json" },
+        "headers": {
+          "content-type": "application/json",
+          "x-replay-prev-id": "$response.id"
+        },
         "body": {
-          "content": "Replay corpus idempotent memory retry",
+          "content": "$response.content",
           "who": "replay-fixture",
           "idempotencyKey": "replay-remember-dedupe"
         }
