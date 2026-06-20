@@ -2300,6 +2300,99 @@ impl SseMcpFixture {
     }
 }
 
+struct AcceptedToolsMcpFixture {
+    base: String,
+    _thread: std::thread::JoinHandle<()>,
+}
+
+impl AcceptedToolsMcpFixture {
+    fn start() -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind accepted tools mcp fixture");
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let initialized = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let thread_initialized = initialized.clone();
+        let thread = std::thread::spawn(move || {
+            for stream in listener.incoming().take(16) {
+                let Ok(mut stream) = stream else {
+                    continue;
+                };
+                let Ok((headers, body)) = read_fixture_http_request(&mut stream) else {
+                    continue;
+                };
+                let value =
+                    serde_json::from_str::<serde_json::Value>(&body).unwrap_or_else(|_| json!({}));
+                let method = value["method"].as_str().unwrap_or("");
+                let id = value.get("id").cloned().unwrap_or(serde_json::Value::Null);
+                let session_ok = headers.iter().any(|(key, value)| {
+                    key.eq_ignore_ascii_case("mcp-session-id") && value == "accepted-tools-session"
+                });
+                match method {
+                    "initialize" => {
+                        let body = json!({
+                            "jsonrpc": "2.0",
+                            "id": id,
+                            "result": {
+                                "protocolVersion": "2024-11-05",
+                                "capabilities": {"tools": {}, "resources": {}},
+                                "serverInfo": {"name": "Accepted Tools MCP", "version": "1.0.0"}
+                            }
+                        })
+                        .to_string();
+                        write_fixture_response(
+                            &mut stream,
+                            200,
+                            "OK",
+                            &body,
+                            Some("accepted-tools-session"),
+                        );
+                    }
+                    "notifications/initialized" if session_ok => {
+                        thread_initialized.store(true, std::sync::atomic::Ordering::SeqCst);
+                        write_fixture_response(
+                            &mut stream,
+                            202,
+                            "Accepted",
+                            "",
+                            Some("accepted-tools-session"),
+                        );
+                    }
+                    "tools/list"
+                        if session_ok
+                            && thread_initialized.load(std::sync::atomic::Ordering::SeqCst) =>
+                    {
+                        write_fixture_response(
+                            &mut stream,
+                            202,
+                            "Accepted",
+                            "",
+                            Some("accepted-tools-session"),
+                        );
+                    }
+                    _ => {
+                        let body = json!({
+                            "jsonrpc": "2.0",
+                            "id": id,
+                            "error": {"code": -32002, "message": "not initialized"}
+                        })
+                        .to_string();
+                        write_fixture_response(
+                            &mut stream,
+                            200,
+                            "OK",
+                            &body,
+                            Some("accepted-tools-session"),
+                        );
+                    }
+                }
+            }
+        });
+        Self {
+            base,
+            _thread: thread,
+        }
+    }
+}
+
 fn read_daemon_log_text(root: &std::path::Path) -> String {
     let log_dir = root.join(".daemon/logs");
     let mut text = String::new();
@@ -5949,6 +6042,46 @@ async fn os_reprobe_sse_ignores_notifications_and_requires_matching_id() {
             .as_str()
             .unwrap_or_default()
             .contains("missing JSON-RPC response for id 2")
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn os_reprobe_rejects_accepted_tools_list_without_jsonrpc_response() {
+    let fixture = AcceptedToolsMcpFixture::start();
+    let server = TestServer::start_with_agent_yaml_files_and_setup(
+        None,
+        "agent:\n  name: test-agent\n  version: 1\n",
+        &[],
+        |root| {
+            write_installed_mcp_server(
+                root,
+                "accepted-tools-mcp",
+                "Accepted Tools MCP",
+                &format!("{}/mcp", fixture.base),
+            )
+        },
+    )
+    .await;
+
+    let resp = server
+        .post("/api/os/tray/accepted-tools-mcp/reprobe", json!({}))
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["success"], true);
+    assert_eq!(body["probe"]["ok"], false);
+    assert_eq!(body["probe"]["toolCount"], 0);
+    assert_eq!(
+        body["probe"]["autoCard"]["tools"].as_array().unwrap().len(),
+        0
+    );
+    assert!(
+        body["probe"]["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("missing JSON-RPC response for id 2"),
+        "expected missing-response error, got {body}"
     );
 }
 

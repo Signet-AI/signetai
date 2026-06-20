@@ -664,7 +664,14 @@ fn is_ontology_endpoint(endpoint: &str) -> bool {
 fn memories_spec() -> TableSpec {
     TableSpec::new(
         "memories",
-        vec!["id"],
+        vec![
+            "content_hash",
+            "agent_id",
+            "visibility",
+            "scope",
+            "idempotency_key",
+            "source_id",
+        ],
         vec![
             "id",
             "content",
@@ -688,7 +695,16 @@ fn memories_spec() -> TableSpec {
 fn memory_history_spec() -> TableSpec {
     TableSpec::new(
         "memory_history",
-        vec!["memory_id", "event", "reason"],
+        vec![
+            "memory_content_hash",
+            "memory_agent_id",
+            "memory_visibility",
+            "memory_scope",
+            "memory_idempotency_key",
+            "memory_source_id",
+            "event",
+            "reason",
+        ],
         vec![
             "id",
             "memory_id",
@@ -784,8 +800,10 @@ fn compare_internal_table(
     let empty = Vec::new();
     let primary_rows = primary.tables.get(&rules.table).unwrap_or(&empty);
     let shadow_rows = shadow.tables.get(&rules.table).unwrap_or(&empty);
-    let primary_by_key = rows_by_key(primary_rows, rules);
-    let shadow_by_key = rows_by_key(shadow_rows, rules);
+    let primary_memory_ids = memory_identities(primary);
+    let shadow_memory_ids = memory_identities(shadow);
+    let primary_by_key = rows_by_key(primary_rows, rules, &primary_memory_ids);
+    let shadow_by_key = rows_by_key(shadow_rows, rules, &shadow_memory_ids);
 
     for (key, primary_row) in &primary_by_key {
         match shadow_by_key.get(key) {
@@ -798,7 +816,7 @@ fn compare_internal_table(
                 key,
                 format!("internal.{}", rules.table),
                 "row missing in shadow internal state",
-                Some(primary_row.clone()),
+                Some(redact_internal_row(primary_row, rules)),
                 None,
             )),
         }
@@ -813,7 +831,7 @@ fn compare_internal_table(
                 format!("internal.{}", rules.table),
                 "extra row in shadow internal state",
                 None,
-                Some(shadow_row.clone()),
+                Some(redact_internal_row(shadow_row, rules)),
             ));
         }
     }
@@ -822,25 +840,147 @@ fn compare_internal_table(
 fn rows_by_key(
     rows: &[serde_json::Value],
     rules: &EffectiveInternalTableRule,
+    memory_identities: &BTreeMap<String, String>,
 ) -> BTreeMap<String, serde_json::Value> {
     let mut out = BTreeMap::new();
     for (index, row) in rows.iter().enumerate() {
         out.insert(
-            row_key(row, rules).unwrap_or_else(|| format!("$index:{index}")),
+            row_key(row, rules, memory_identities).unwrap_or_else(|| format!("$index:{index}")),
             row.clone(),
         );
     }
     out
 }
 
-fn row_key(row: &serde_json::Value, rules: &EffectiveInternalTableRule) -> Option<String> {
+fn row_key(
+    row: &serde_json::Value,
+    rules: &EffectiveInternalTableRule,
+    memory_identities: &BTreeMap<String, String>,
+) -> Option<String> {
+    if rules.table == "memories" {
+        return deterministic_memory_key(row, &rules.key_columns);
+    }
+    if rules.table == "memory_history" {
+        return deterministic_memory_history_key(row, rules, memory_identities);
+    }
+
     let object = row.as_object()?;
     let mut parts = Vec::new();
     for column in &rules.key_columns {
         let value = object.get(column)?;
-        parts.push(format!("{column}={}", stable_json_string(value)));
+        let safe_value = redact_internal_value(column, value, rules);
+        parts.push(format!("{column}={}", stable_json_string(&safe_value)));
     }
     Some(parts.join("|"))
+}
+
+fn memory_identities(snapshot: &InternalSnapshot) -> BTreeMap<String, String> {
+    let mut out = BTreeMap::new();
+    let Some(rows) = snapshot.tables.get("memories") else {
+        return out;
+    };
+    for row in rows {
+        let Some(object) = row.as_object() else {
+            continue;
+        };
+        let Some(id) = object.get("id").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        if let Some(identity) = deterministic_memory_key(row, &memory_identity_columns()) {
+            out.insert(id.to_string(), identity);
+        }
+    }
+    out
+}
+
+fn deterministic_memory_key(row: &serde_json::Value, columns: &[String]) -> Option<String> {
+    let object = row.as_object()?;
+    let mut parts = Vec::new();
+    for column in columns {
+        let Some(value) = object.get(column) else {
+            if is_optional_memory_identity_column(column) {
+                continue;
+            }
+            return None;
+        };
+        if value.is_null() && is_optional_memory_identity_column(column) {
+            continue;
+        }
+        parts.push(format!("{column}={}", stable_json_string(value)));
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("|"))
+    }
+}
+
+fn deterministic_memory_history_key(
+    row: &serde_json::Value,
+    rules: &EffectiveInternalTableRule,
+    memory_identities: &BTreeMap<String, String>,
+) -> Option<String> {
+    let object = row.as_object()?;
+    let mut parts = Vec::new();
+    for column in &rules.key_columns {
+        if let Some(parent_column) = column.strip_prefix("memory_") {
+            let Some(memory_identity) =
+                memory_identity_part(object, parent_column, memory_identities)
+            else {
+                if is_optional_memory_identity_column(parent_column) {
+                    continue;
+                }
+                return None;
+            };
+            if memory_identity.is_empty() && is_optional_memory_identity_column(parent_column) {
+                continue;
+            }
+            parts.push(format!("{column}={memory_identity}"));
+            continue;
+        }
+
+        let Some(value) = object.get(column) else {
+            return None;
+        };
+        let safe_value = redact_internal_value(column, value, rules);
+        parts.push(format!("{column}={}", stable_json_string(&safe_value)));
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("|"))
+    }
+}
+
+fn memory_identity_part(
+    history: &serde_json::Map<String, serde_json::Value>,
+    parent_column: &str,
+    memory_identities: &BTreeMap<String, String>,
+) -> Option<String> {
+    let memory_id = history.get("memory_id")?.as_str()?;
+    let identity = memory_identities.get(memory_id)?;
+    identity
+        .split('|')
+        .find_map(|part| part.strip_prefix(&format!("{parent_column}=")))
+        .map(str::to_string)
+}
+
+fn memory_identity_columns() -> Vec<String> {
+    [
+        "content_hash",
+        "agent_id",
+        "visibility",
+        "scope",
+        "idempotency_key",
+        "source_id",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect()
+}
+
+fn is_optional_memory_identity_column(column: &str) -> bool {
+    matches!(column, "idempotency_key" | "source_id")
 }
 
 fn compare_internal_row(
@@ -860,8 +1000,8 @@ fn compare_internal_row(
             key,
             format!("internal.{}", rules.table),
             "row shape mismatch",
-            Some(primary.clone()),
-            Some(shadow.clone()),
+            Some(redact_internal_row(primary, rules)),
+            Some(redact_internal_row(shadow, rules)),
         ));
         return;
     };
@@ -887,7 +1027,7 @@ fn compare_internal_row(
                 key,
                 field,
                 "column missing in shadow internal state",
-                Some(primary_value.clone()),
+                Some(redact_internal_value(column, primary_value, rules)),
                 None,
             )),
         }
@@ -904,7 +1044,7 @@ fn compare_internal_row(
             format!("internal.{}.{}", rules.table, column),
             "extra column in shadow internal state",
             None,
-            Some(shadow_value.clone()),
+            Some(redact_internal_value(column, shadow_value, rules)),
         ));
     }
 }
@@ -967,6 +1107,28 @@ fn compare_internal_value(
 
 fn should_ignore_internal_column(column: &str, rules: &EffectiveInternalTableRule) -> bool {
     rules.ignore_columns.iter().any(|ignored| ignored == column)
+        || is_generated_internal_id_column(&rules.table, column)
+}
+
+fn is_generated_internal_id_column(table: &str, column: &str) -> bool {
+    matches!(
+        (table, column),
+        ("memories", "id") | ("memory_history", "id" | "memory_id")
+    )
+}
+
+fn redact_internal_row(
+    row: &serde_json::Value,
+    rules: &EffectiveInternalTableRule,
+) -> serde_json::Value {
+    let Some(object) = row.as_object() else {
+        return redact_internal_value("row", row, rules);
+    };
+    let mut redacted = serde_json::Map::new();
+    for (column, value) in object {
+        redacted.insert(column.clone(), redact_internal_value(column, value, rules));
+    }
+    serde_json::Value::Object(redacted)
 }
 
 fn redact_internal_value(
@@ -976,6 +1138,9 @@ fn redact_internal_value(
 ) -> serde_json::Value {
     if is_secret_like(column) || rules.redactions.iter().any(|pattern| pattern == column) {
         return serde_json::Value::String("[REDACTED]".into());
+    }
+    if is_freeform_internal_column(column) && !value.is_null() {
+        return redacted_fingerprint(value);
     }
     match value {
         serde_json::Value::Object(map) => {
@@ -993,6 +1158,57 @@ fn redact_internal_value(
         ),
         other => other.clone(),
     }
+}
+
+fn is_freeform_internal_column(column: &str) -> bool {
+    let normalized: String = column
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect();
+    if normalized.contains("hash") {
+        return false;
+    }
+    matches!(
+        normalized.as_str(),
+        "content"
+            | "normalizedcontent"
+            | "oldcontent"
+            | "newcontent"
+            | "sourceraw"
+            | "rawcontent"
+            | "chunktext"
+            | "transcript"
+            | "prompt"
+            | "completion"
+            | "response"
+            | "body"
+            | "text"
+    ) || normalized.ends_with("content")
+        || normalized.ends_with("raw")
+}
+
+fn redacted_fingerprint(value: &serde_json::Value) -> serde_json::Value {
+    if value.is_null() {
+        return serde_json::Value::Null;
+    }
+    let canonical = stable_json_string(value);
+    serde_json::Value::String(format!(
+        "[REDACTED sha64={:016x} bytes={}]",
+        stable_hash64(&canonical),
+        canonical.len()
+    ))
+}
+
+fn stable_hash64(value: &str) -> u64 {
+    const FNV_OFFSET: u64 = 0xcbf29ce484222325;
+    const FNV_PRIME: u64 = 0x100000001b3;
+    let mut hash = FNV_OFFSET;
+    for byte in value.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+    hash
 }
 
 fn stable_json_string(value: &serde_json::Value) -> String {
@@ -1693,20 +1909,192 @@ mod tests {
     #[test]
     fn compare_internal_reports_keyed_value_mismatch() {
         let rules = ParityRules::default();
-        let primary = internal_snapshot(vec![serde_json::json!({"id":"m1","agent_id":"agent-a"})]);
-        let shadow = internal_snapshot(vec![serde_json::json!({"id":"m1","agent_id":"agent-b"})]);
+        let primary = internal_snapshot(vec![memory_row("m1", "hash-a", "agent-a", "secret A")]);
+        let shadow = internal_snapshot(vec![memory_row("m2", "hash-a", "agent-b", "secret A")]);
 
         let divs = rules.compare_internal("POST /api/memory/remember", &primary, &shadow);
-        assert_eq!(divs.len(), 1);
+        assert_eq!(divs.len(), 2);
         assert_eq!(divs[0].category.as_deref(), Some("internalState"));
         assert_eq!(divs[0].table.as_deref(), Some("memories"));
-        assert!(divs[0].key.as_deref().unwrap().contains("m1"));
-        assert_eq!(divs[0].field, "internal.memories.agent_id");
+        assert!(divs[0].key.as_deref().unwrap().contains("hash-a"));
+    }
+
+    #[test]
+    fn internal_memory_rows_redact_freeform_values_for_missing_extra_and_mismatch() {
+        let rules = ParityRules::default();
+        let fake_secret = "token-password-should-never-leak";
+        let primary = internal_snapshot(vec![memory_row(
+            "primary-id",
+            "hash-secret",
+            "agent-a",
+            fake_secret,
+        )]);
+        let shadow = internal_snapshot(Vec::new());
+        let missing = rules.compare_internal("POST /api/memory/remember", &primary, &shadow);
+        assert_divergences_redacted(&missing, &[fake_secret]);
+        assert!(serialized_divergences(&missing).contains("hash-secret"));
+
+        let extra = rules.compare_internal("POST /api/memory/remember", &shadow, &primary);
+        assert_divergences_redacted(&extra, &[fake_secret]);
+        assert!(serialized_divergences(&extra).contains("hash-secret"));
+
+        let primary = internal_snapshot(vec![memory_row(
+            "primary-id",
+            "hash-same",
+            "agent-a",
+            fake_secret,
+        )]);
+        let shadow = internal_snapshot(vec![memory_row(
+            "shadow-id",
+            "hash-same",
+            "agent-a",
+            "different-password-should-not-leak",
+        )]);
+        let mismatch = rules.compare_internal("POST /api/memory/remember", &primary, &shadow);
+        assert!(!mismatch.is_empty(), "expected redacted content mismatch");
+        assert_divergences_redacted(
+            &mismatch,
+            &[fake_secret, "different-password-should-not-leak"],
+        );
+        assert!(serialized_divergences(&mismatch).contains("[REDACTED sha64="));
+    }
+
+    #[test]
+    fn equivalent_memory_uuids_match_by_deterministic_identity() {
+        let rules = ParityRules::default();
+        let primary_memory_id = "550e8400-e29b-41d4-a716-446655440000";
+        let shadow_memory_id = "550e8400-e29b-41d4-a716-446655440999";
+        let primary = internal_snapshot_tables(BTreeMap::from([
+            (
+                "memories".to_string(),
+                vec![memory_row(
+                    primary_memory_id,
+                    "hash-equivalent",
+                    "agent-a",
+                    "same redacted content",
+                )],
+            ),
+            (
+                "memory_history".to_string(),
+                vec![serde_json::json!({
+                    "id": "history-primary",
+                    "memory_id": primary_memory_id,
+                    "event": "created",
+                    "new_content": "same redacted content",
+                    "changed_by": "user",
+                    "reason": "remember",
+                    "metadata": {"source": "test"},
+                })],
+            ),
+        ]));
+        let shadow = internal_snapshot_tables(BTreeMap::from([
+            (
+                "memories".to_string(),
+                vec![memory_row(
+                    shadow_memory_id,
+                    "hash-equivalent",
+                    "agent-a",
+                    "same redacted content",
+                )],
+            ),
+            (
+                "memory_history".to_string(),
+                vec![serde_json::json!({
+                    "id": "history-shadow",
+                    "memory_id": shadow_memory_id,
+                    "event": "created",
+                    "new_content": "same redacted content",
+                    "changed_by": "user",
+                    "reason": "remember",
+                    "metadata": {"source": "test"},
+                })],
+            ),
+        ]));
+
+        let divs = rules.compare_internal("POST /api/memory/remember", &primary, &shadow);
+        assert!(divs.is_empty(), "unexpected divergences: {divs:?}");
+    }
+
+    #[test]
+    fn real_memory_content_difference_is_detected_without_plaintext() {
+        let rules = ParityRules::default();
+        let primary_secret = "primary password plaintext";
+        let shadow_secret = "shadow token plaintext";
+        let primary = internal_snapshot(vec![memory_row(
+            "primary-id",
+            "hash-primary",
+            "agent-a",
+            primary_secret,
+        )]);
+        let shadow = internal_snapshot(vec![memory_row(
+            "shadow-id",
+            "hash-shadow",
+            "agent-a",
+            shadow_secret,
+        )]);
+
+        let divs = rules.compare_internal("POST /api/memory/remember", &primary, &shadow);
+        assert!(
+            !divs.is_empty(),
+            "expected content-hash keyed row divergence"
+        );
+        let serialized = serialized_divergences(&divs);
+        assert!(
+            !serialized.contains(primary_secret),
+            "primary content leaked: {serialized}"
+        );
+        assert!(
+            !serialized.contains(shadow_secret),
+            "shadow content leaked: {serialized}"
+        );
+        assert!(serialized.contains("hash-primary") || serialized.contains("hash-shadow"));
+    }
+
+    fn memory_row(
+        id: &str,
+        content_hash: &str,
+        agent_id: &str,
+        content: &str,
+    ) -> serde_json::Value {
+        serde_json::json!({
+            "id": id,
+            "content": content,
+            "content_hash": content_hash,
+            "normalized_content": content,
+            "agent_id": agent_id,
+            "visibility": "global",
+            "scope": "workspace",
+            "source_type": "manual",
+            "source_id": null,
+            "source_path": null,
+            "runtime_path": "plugin",
+            "idempotency_key": null,
+            "is_deleted": 0,
+            "version": 1,
+        })
+    }
+
+    fn assert_divergences_redacted(divergences: &[Divergence], forbidden: &[&str]) {
+        let serialized = serialized_divergences(divergences);
+        for value in forbidden {
+            assert!(
+                !serialized.contains(value),
+                "plaintext leaked: {value} in {serialized}"
+            );
+        }
+    }
+
+    fn serialized_divergences(divergences: &[Divergence]) -> String {
+        serde_json::to_string(divergences).unwrap()
     }
 
     fn internal_snapshot(rows: Vec<serde_json::Value>) -> InternalSnapshot {
-        InternalSnapshot {
-            tables: BTreeMap::from([("memories".to_string(), rows)]),
-        }
+        internal_snapshot_tables(BTreeMap::from([("memories".to_string(), rows)]))
+    }
+
+    fn internal_snapshot_tables(
+        tables: BTreeMap<String, Vec<serde_json::Value>>,
+    ) -> InternalSnapshot {
+        InternalSnapshot { tables }
     }
 }

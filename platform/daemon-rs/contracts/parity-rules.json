@@ -88,11 +88,12 @@
 				"internalState": {
 					"tables": {
 						"memories": {
-							"key": ["id"],
+							"key": ["content_hash", "agent_id", "visibility", "scope", "idempotency_key", "source_id"],
 							"columns": [
 								"id",
 								"content",
 								"content_hash",
+								"normalized_content",
 								"agent_id",
 								"visibility",
 								"scope",
@@ -110,8 +111,8 @@
 							"arrayOrdering": "unordered"
 						},
 						"memory_history": {
-							"key": ["memory_id", "event", "reason"],
-							"ignoreColumns": ["id", "created_at"],
+							"key": ["memory_content_hash", "memory_agent_id", "memory_visibility", "memory_scope", "memory_idempotency_key", "memory_source_id", "event", "reason"],
+							"ignoreColumns": ["created_at"],
 							"redactions": ["token", "secret", "password", "apiKey", "clientSecret"],
 							"timestampPrecision": "second",
 							"arrayOrdering": "unordered"

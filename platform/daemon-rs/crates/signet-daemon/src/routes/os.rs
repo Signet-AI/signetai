@@ -1665,7 +1665,10 @@ async fn parse_mcp_http_response(
 ) -> Result<Value, String> {
     let status = response.status();
     if status == reqwest::StatusCode::ACCEPTED || status == reqwest::StatusCode::NO_CONTENT {
-        return Ok(Value::Null);
+        return match expected_id {
+            Some(id) => Err(missing_mcp_response_error(id)),
+            None => Ok(Value::Null),
+        };
     }
     if !status.is_success() {
         return Err(format!("MCP HTTP request failed with status {status}"));
@@ -1678,13 +1681,20 @@ async fn parse_mcp_http_response(
         .to_string();
     let text = response.text().await.map_err(|error| error.to_string())?;
     if text.trim().is_empty() {
-        return Ok(Value::Null);
+        return match expected_id {
+            Some(id) => Err(missing_mcp_response_error(id)),
+            None => Ok(Value::Null),
+        };
     }
     if content_type.contains("text/event-stream") || text.trim_start().starts_with("data:") {
         return parse_sse_json(&text, expected_id).and_then(parse_mcp_response);
     }
     let value = serde_json::from_str::<Value>(&text).map_err(|error| error.to_string())?;
     parse_mcp_response_for_id(value, expected_id)
+}
+
+fn missing_mcp_response_error(id: i64) -> String {
+    format!("MCP response missing JSON-RPC response for id {id}")
 }
 
 fn parse_sse_json(text: &str, expected_id: Option<i64>) -> Result<Value, String> {
@@ -1706,9 +1716,7 @@ fn parse_sse_json(text: &str, expected_id: Option<i64>) -> Result<Value, String>
         }
     }
     match expected_id {
-        Some(id) => Err(format!(
-            "MCP SSE response missing JSON-RPC response for id {id}"
-        )),
+        Some(id) => Err(missing_mcp_response_error(id)),
         None => Err("MCP SSE response missing data event".to_string()),
     }
 }
@@ -1732,9 +1740,7 @@ fn parse_mcp_response_for_id(value: Value, expected_id: Option<i64>) -> Result<V
     if let Some(id) = expected_id
         && value.get("id").and_then(Value::as_i64) != Some(id)
     {
-        return Err(format!(
-            "MCP response missing JSON-RPC response for id {id}"
-        ));
+        return Err(missing_mcp_response_error(id));
     }
     parse_mcp_response(value)
 }
