@@ -289,6 +289,7 @@ async fn worker_loop(
     stats: SharedWorkerRuntimeStats,
 ) {
     let mut consecutive_failures: u32 = 0;
+    let mut drain_queue = false;
     let base_delay = Duration::from_millis(config.poll_ms);
     let max_delay = Duration::from_secs(60);
 
@@ -351,17 +352,20 @@ async fn worker_loop(
             guard.record_poll_state(load_per_cpu, overloaded, now_ms);
         }
 
-        // Calculate backoff delay
+        // Calculate backoff delay. After a successful job, immediately poll once
+        // more to drain queued work instead of paying poll_ms per job. Idle
+        // behavior still sleeps for poll_ms when the queue is empty.
         let delay = if overloaded {
             Duration::from_millis(config.overload_backoff_ms)
+        } else if drain_queue && consecutive_failures == 0 {
+            Duration::ZERO
+        } else if consecutive_failures > 0 {
+            let backoff = base_delay * 2u32.pow(consecutive_failures.min(6));
+            backoff.min(max_delay)
         } else {
-            if consecutive_failures > 0 {
-                let backoff = base_delay * 2u32.pow(consecutive_failures.min(6));
-                backoff.min(max_delay)
-            } else {
-                base_delay
-            }
+            base_delay
         };
+        drain_queue = false;
 
         {
             let mut guard = stats.lock().await;
@@ -414,6 +418,8 @@ async fn worker_loop(
                 let result_json = serde_json::to_string(&jr).unwrap_or_default();
                 if let Err(e) = complete_job(&pool, &job.id, &result_json).await {
                     warn!(err = %e, job_id = %job.id, "failed to complete job");
+                } else {
+                    drain_queue = true;
                 }
                 info!(
                     job_id = %job.id,
