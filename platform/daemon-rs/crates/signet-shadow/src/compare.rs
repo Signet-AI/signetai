@@ -1212,10 +1212,23 @@ fn log_safe_field(path: &str) -> String {
 /// True when a bracket suffix consists solely of safe array-index segments
 /// like `[3]`, `[*]`, or `[0][1]` — never arbitrary (secret-bearing) text.
 fn bracket_suffix_is_safe(suffix: &str) -> bool {
-    suffix.split('[').filter(|s| !s.is_empty()).all(|seg| {
-        let inner = seg.strip_suffix(']').unwrap_or(seg);
-        inner == "*" || inner.chars().all(|c| c.is_ascii_digit())
-    })
+    // Each segment MUST be a closed [..] with inner '*' or ASCII digits.
+    // Rejects malformed suffixes (e.g. `id[123` unclosed) and secret-shaped
+    // object keys that happen to contain '['.
+    let mut rest = suffix;
+    loop {
+        let Some(after_open) = rest.strip_prefix('[') else {
+            return rest.is_empty();
+        };
+        let Some(close_idx) = after_open.find(']') else {
+            return false;
+        };
+        let inner = &after_open[..close_idx];
+        if !(inner == "*" || (!inner.is_empty() && inner.chars().all(|c| c.is_ascii_digit()))) {
+            return false;
+        }
+        rest = &after_open[close_idx + 1..];
+    }
 }
 
 fn redact_response_value(value: &serde_json::Value, path: &str) -> String {
@@ -2418,6 +2431,10 @@ mod tests {
         assert!(leaked.contains("[REDACTED sha64="));
         let leaked = log_safe_field("id[vault-key-xyz]");
         assert!(!leaked.contains("vault-key-xyz"));
+        // Malformed suffix (unclosed bracket) -> fingerprint, not verbatim.
+        let leaked = log_safe_field("id[1234567890123456");
+        assert!(!leaked.contains("1234567890123456"));
+        assert!(leaked.contains("[REDACTED sha64="));
     }
 
     #[test]
