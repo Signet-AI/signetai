@@ -209,4 +209,21 @@ Behavioral-core gap-fill, highest-risk first. Worktree-isolated subagents,
   before modify). Cross-agent presence include_self default=false (TS parity),
   message session_key folded into visibility OR, stale-filter parsed-timestamp
   compare. sessions.rs already correct.
-- ⬜ Scoping / memory-lineage / hooks / remaining auth — after.
+
+## /api/os/* scope decision (user-approved 2026-06-20)
+
+The ~13 `/api/os/*` stubs are **Signet OS dashboard-coupled** (os-agent GUI
+automation loop via SSE→postMessage→iframe + LLM; in-memory event-bus pub/sub;
+tray/widget management). Native parity target = **HTTP/SSE/state contract only**:
+route shapes, SSE streams, in-memory event-bus/presence/agent-session state,
+tray+widget CRUD persistence — so a dashboard pointed at the Rust daemon
+functions. The observe-think-act LLM loop + DOM interaction stays
+dashboard-side (wrong layer to port into the daemon).
+
+## Phase 2b status (test porting — starting)
+
+Port the 114 needs-port TS tests (grouped in `03-test-corpus-manifest.md`).
+Priority: recall/ranking (18), pipeline (19), misc routes (23), memory/lineage
+(11), sources (11), then the rest. Many → contract_replay cases or corpus
+fixtures. Some runtime-specific tests (watcher/scheduler/socket/event-loop)
+will be "honest" ports or harness-backed.
