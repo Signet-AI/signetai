@@ -251,11 +251,22 @@ will be "honest" ports or harness-backed.
 - ✅ Refined: real MCP probe (TS-shaped result), widget.generated/widget.error,
   missing-session error SSE, manifest HTML sanitizer hardened (critical injection
   bypass closed), MCP initialize handshake + widget.invalidated on tool change.
-- ⏳ **3 more in flight (custom MCP transport):** (a) probe doesn't resolve
-  `secret://` references in stdio env/HTTP headers (auth'd servers fail);
-  (b) SSE parser takes first `data:` w/o matching JSON-RPC id (notifications/
-  progress -> false ok:true zero tools); (c) stdio probe leaks child process on
-  timeout (no kill_on_drop).
+- ⏳ **3 more in flight (custom MCP transport):** ✅ DONE — probe resolves
+  `secret://` (no-log), SSE parser matches JSON-RPC id (notifications skipped,
+  missing fails honestly), kill_on_drop. **1 refinement in flight:** 202/204
+  accepted even when a response id is expected (false ok:true zero tools).
 - ✅ **CORS parity** (was a gap): native axum CORS middleware matching TS
-  rules (fixed allowlist + Tailscale gating + app://signet + credentials +
-  204 preflight). Fail-closed, no permissive '*'.
+  rules. Fail-closed, no permissive '*'.
+
+## Phase 3 status (shadow internal-state — in flight)
+
+- ✅ snapshot.rs (read-only SQLite, canonical rows, redaction, normalization),
+  compare_internal (key columns, ignoreColumns, tolerances, unordered),
+  main.rs opt-in --internal-state, route table map (memories/history/entities),
+  parity-rules internalState schema sample. 25 shadow tests green.
+- ⏳ **2 in flight (1 critical):** (a) CRITICAL — row-missing/extra divergences
+  log full memory rows incl raw content/normalized_content → secrets in
+  memories leak to shadow-divergences.jsonl (esp. since generated UUIDs make
+  normal writes look missing/extra); (b) keying rows by `id` fails because TS/
+  Rust generate independent UUIDs — key by content_hash+agent_id+visibility+
+  scope+idempotency/source instead.

@@ -85,7 +85,40 @@
 			"POST /api/memory/remember": {
 				"deterministic": ["status"],
 				"ignoreFields": ["id"],
-				"note": "ID is generated, skip comparison"
+				"internalState": {
+					"tables": {
+						"memories": {
+							"key": ["id"],
+							"columns": [
+								"id",
+								"content",
+								"content_hash",
+								"agent_id",
+								"visibility",
+								"scope",
+								"source_type",
+								"source_id",
+								"source_path",
+								"runtime_path",
+								"idempotency_key",
+								"is_deleted",
+								"version"
+							],
+							"ignoreColumns": ["created_at", "updated_at", "deleted_at"],
+							"redactions": ["token", "secret", "password", "apiKey", "clientSecret"],
+							"timestampPrecision": "second",
+							"arrayOrdering": "unordered"
+						},
+						"memory_history": {
+							"key": ["memory_id", "event", "reason"],
+							"ignoreColumns": ["id", "created_at"],
+							"redactions": ["token", "secret", "password", "apiKey", "clientSecret"],
+							"timestampPrecision": "second",
+							"arrayOrdering": "unordered"
+						}
+					}
+				},
+				"note": "ID is generated; internalState documents the proposed DB comparator schema."
 			},
 			"POST /api/memory/save": {
 				"deterministic": ["status"],

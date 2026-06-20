@@ -4,10 +4,11 @@
 //! emitting typed divergences.
 
 use serde::Deserialize;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use crate::ForwardResponse;
 use crate::divergence::{Divergence, Severity};
+use crate::snapshot::{InternalSnapshot, TableSpec, is_secret_like};
 
 // ---------------------------------------------------------------------------
 // Rule types (deserialized from contracts/parity-rules.json)
@@ -47,8 +48,27 @@ struct EndpointRule {
     timestamp_precision: Option<String>,
     tolerance: Option<HashMap<String, f64>>,
     array_ordering: Option<String>,
+    internal_state: Option<InternalStateRule>,
     #[allow(dead_code)]
     note: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+struct InternalStateRule {
+    tables: BTreeMap<String, InternalTableRule>,
+}
+
+#[derive(Debug, Deserialize, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+struct InternalTableRule {
+    key: Option<Vec<String>>,
+    columns: Option<Vec<String>>,
+    ignore_columns: Option<Vec<String>>,
+    tolerance: Option<HashMap<String, f64>>,
+    redactions: Option<Vec<String>>,
+    timestamp_precision: Option<String>,
+    array_ordering: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -138,6 +158,11 @@ impl ParityRules {
                 ),
                 primary_value: Some(primary.status.to_string()),
                 shadow_value: Some(shadow.status.to_string()),
+                category: None,
+                table: None,
+                key: None,
+                primary_json: None,
+                shadow_json: None,
             });
         }
 
@@ -156,6 +181,56 @@ impl ParityRules {
         }
 
         divergences
+    }
+
+    pub fn internal_table_specs(
+        &self,
+        endpoint: &str,
+        selector: &InternalStateSelector,
+    ) -> Vec<TableSpec> {
+        let mut specs = route_table_specs(endpoint);
+        let rule_key = normalize_endpoint(endpoint);
+        if let Some(internal) = self
+            .rules
+            .as_ref()
+            .and_then(|rules| rules.rules.endpoints.get(&rule_key))
+            .and_then(|rule| rule.internal_state.as_ref())
+        {
+            for (table, rule) in &internal.tables {
+                upsert_table_spec(&mut specs, table, rule);
+            }
+        }
+
+        specs
+            .into_iter()
+            .filter(|spec| selector.includes(&spec.name))
+            .collect()
+    }
+
+    pub fn compare_internal(
+        &self,
+        endpoint: &str,
+        primary: &InternalSnapshot,
+        shadow: &InternalSnapshot,
+    ) -> Vec<Divergence> {
+        let mut divergences = Vec::new();
+        let specs = self.internal_table_specs(endpoint, &InternalStateSelector::All);
+        for spec in specs {
+            let table_rule = self.internal_table_rule(endpoint, &spec.name);
+            let effective = internal_effective_rule(&spec, table_rule.as_ref());
+            compare_internal_table(&effective, primary, shadow, &mut divergences);
+        }
+        divergences
+    }
+
+    fn internal_table_rule(&self, endpoint: &str, table: &str) -> Option<InternalTableRule> {
+        let rule_key = normalize_endpoint(endpoint);
+        self.rules
+            .as_ref()
+            .and_then(|rules| rules.rules.endpoints.get(&rule_key))
+            .and_then(|rule| rule.internal_state.as_ref())
+            .and_then(|internal| internal.tables.get(table))
+            .cloned()
     }
 
     fn effective_rules(&self, endpoint: &str) -> EffectiveRules<'_> {
@@ -225,6 +300,11 @@ impl ParityRules {
                 message: "text body mismatch".into(),
                 primary_value: Some(truncate_str(&primary_body)),
                 shadow_value: Some(truncate_str(&shadow_body)),
+                category: None,
+                table: None,
+                key: None,
+                primary_json: None,
+                shadow_json: None,
             });
         }
     }
@@ -268,6 +348,11 @@ impl ParityRules {
                                 message: "field missing in shadow response".into(),
                                 primary_value: Some(truncate_json(pval)),
                                 shadow_value: None,
+                                category: None,
+                                table: None,
+                                key: None,
+                                primary_json: None,
+                                shadow_json: None,
                             });
                         }
                     }
@@ -292,6 +377,11 @@ impl ParityRules {
                             message: "extra field in shadow response".into(),
                             primary_value: None,
                             shadow_value: Some(truncate_json(&sm[key])),
+                            category: None,
+                            table: None,
+                            key: None,
+                            primary_json: None,
+                            shadow_json: None,
                         });
                     }
                 }
@@ -327,6 +417,11 @@ impl ParityRules {
                 ),
                 primary_value: Some(primary.len().to_string()),
                 shadow_value: Some(shadow.len().to_string()),
+                category: None,
+                table: None,
+                key: None,
+                primary_json: None,
+                shadow_json: None,
             });
         }
 
@@ -364,6 +459,11 @@ impl ParityRules {
                 ),
                 primary_value: Some(primary.len().to_string()),
                 shadow_value: Some(shadow.len().to_string()),
+                category: None,
+                table: None,
+                key: None,
+                primary_json: None,
+                shadow_json: None,
             });
         }
 
@@ -402,6 +502,11 @@ impl ParityRules {
                     message: "array element missing in shadow response".into(),
                     primary_value: Some(truncate_json(&primary[primary_index])),
                     shadow_value: None,
+                    category: None,
+                    table: None,
+                    key: None,
+                    primary_json: None,
+                    shadow_json: None,
                 });
             }
         }
@@ -414,6 +519,11 @@ impl ParityRules {
                     message: "extra array element in shadow response".into(),
                     primary_value: None,
                     shadow_value: Some(truncate_json(&shadow[shadow_index])),
+                    category: None,
+                    table: None,
+                    key: None,
+                    primary_json: None,
+                    shadow_json: None,
                 });
             }
         }
@@ -443,9 +553,450 @@ impl ParityRules {
                 message: "value mismatch".into(),
                 primary_value: Some(truncate_json(primary)),
                 shadow_value: Some(truncate_json(shadow)),
+                category: None,
+                table: None,
+                key: None,
+                primary_json: None,
+                shadow_json: None,
             });
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Internal-state helpers
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InternalStateSelector {
+    All,
+    Tables(BTreeSet<String>),
+}
+
+impl InternalStateSelector {
+    pub fn from_value(value: &str) -> Option<Self> {
+        let value = value.trim();
+        if value.is_empty()
+            || matches!(
+                value.to_ascii_lowercase().as_str(),
+                "0" | "false" | "off" | "none"
+            )
+        {
+            return None;
+        }
+        if matches!(
+            value.to_ascii_lowercase().as_str(),
+            "1" | "true" | "on" | "all"
+        ) {
+            return Some(Self::All);
+        }
+        let mut tables = BTreeSet::new();
+        for raw in value.split(',') {
+            match raw.trim().to_ascii_lowercase().as_str() {
+                "memories" | "memory" => {
+                    tables.insert("memories".to_string());
+                }
+                "history" | "memory_history" => {
+                    tables.insert("memory_history".to_string());
+                }
+                "ontology" | "knowledge" | "entities" => {
+                    tables.insert("entities".to_string());
+                }
+                "" => {}
+                other => {
+                    tables.insert(other.to_string());
+                }
+            }
+        }
+        if tables.is_empty() {
+            None
+        } else {
+            Some(Self::Tables(tables))
+        }
+    }
+
+    fn includes(&self, table: &str) -> bool {
+        match self {
+            Self::All => true,
+            Self::Tables(tables) => tables.contains(table),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct EffectiveInternalTableRule {
+    table: String,
+    key_columns: Vec<String>,
+    ignore_columns: Vec<String>,
+    tolerance: Option<HashMap<String, f64>>,
+    redactions: Vec<String>,
+    timestamp_precision: Option<TimestampPrecision>,
+    array_ordering: ArrayOrdering,
+}
+
+fn route_table_specs(endpoint: &str) -> Vec<TableSpec> {
+    let normalized = normalize_endpoint(endpoint);
+    let mut specs = Vec::new();
+    if is_memory_endpoint(&normalized) {
+        specs.push(memories_spec());
+        specs.push(memory_history_spec());
+        specs.push(entities_spec());
+    } else if is_ontology_endpoint(&normalized) {
+        specs.push(entities_spec());
+    }
+    specs
+}
+
+fn is_memory_endpoint(endpoint: &str) -> bool {
+    endpoint.contains(" /api/memory")
+        || endpoint.contains(" /memory/")
+        || endpoint.contains(" /api/hook/remember")
+        || endpoint.contains(" /api/hooks/remember")
+        || endpoint.contains(" /api/hooks/session")
+}
+
+fn is_ontology_endpoint(endpoint: &str) -> bool {
+    endpoint.contains(" /api/knowledge")
+        || endpoint.contains(" /api/ontology")
+        || endpoint.contains(" /api/graphiq")
+}
+
+fn memories_spec() -> TableSpec {
+    TableSpec::new(
+        "memories",
+        vec!["id"],
+        vec![
+            "id",
+            "content",
+            "content_hash",
+            "normalized_content",
+            "agent_id",
+            "visibility",
+            "scope",
+            "source_type",
+            "source_id",
+            "source_path",
+            "runtime_path",
+            "idempotency_key",
+            "is_deleted",
+            "version",
+        ],
+        vec!["created_at", "updated_at", "deleted_at", "last_accessed"],
+    )
+}
+
+fn memory_history_spec() -> TableSpec {
+    TableSpec::new(
+        "memory_history",
+        vec!["memory_id", "event", "reason"],
+        vec![
+            "id",
+            "memory_id",
+            "event",
+            "old_content",
+            "new_content",
+            "changed_by",
+            "reason",
+            "metadata",
+            "actor_type",
+            "session_id",
+            "request_id",
+        ],
+        vec!["created_at"],
+    )
+}
+
+fn entities_spec() -> TableSpec {
+    TableSpec::new(
+        "entities",
+        vec!["id"],
+        vec![
+            "id",
+            "name",
+            "canonical_name",
+            "entity_type",
+            "description",
+            "agent_id",
+            "status",
+            "mentions",
+            "pinned",
+        ],
+        vec!["created_at", "updated_at", "pinned_at", "embedding"],
+    )
+}
+
+fn upsert_table_spec(specs: &mut Vec<TableSpec>, table: &str, rule: &InternalTableRule) {
+    let mut spec = specs
+        .iter()
+        .position(|spec| spec.name == table)
+        .map(|index| specs.remove(index))
+        .unwrap_or_else(|| TableSpec {
+            name: table.to_string(),
+            key_columns: rule.key.clone().unwrap_or_else(|| vec!["id".to_string()]),
+            columns: rule.columns.clone().unwrap_or_default(),
+            ignore_columns: rule.ignore_columns.clone().unwrap_or_default(),
+        });
+
+    if let Some(key) = &rule.key {
+        spec.key_columns = key.clone();
+    }
+    if let Some(columns) = &rule.columns {
+        spec.columns = columns.clone();
+    }
+    if let Some(ignore_columns) = &rule.ignore_columns {
+        spec.ignore_columns = ignore_columns.clone();
+    }
+    specs.push(spec);
+}
+
+fn internal_effective_rule(
+    spec: &TableSpec,
+    rule: Option<&InternalTableRule>,
+) -> EffectiveInternalTableRule {
+    EffectiveInternalTableRule {
+        table: spec.name.clone(),
+        key_columns: rule
+            .and_then(|rule| rule.key.clone())
+            .unwrap_or_else(|| spec.key_columns.clone()),
+        ignore_columns: rule
+            .and_then(|rule| rule.ignore_columns.clone())
+            .unwrap_or_else(|| spec.ignore_columns.clone()),
+        tolerance: rule.and_then(|rule| rule.tolerance.clone()),
+        redactions: rule
+            .and_then(|rule| rule.redactions.clone())
+            .unwrap_or_default(),
+        timestamp_precision: rule
+            .and_then(|rule| rule.timestamp_precision.as_deref())
+            .and_then(parse_timestamp_precision),
+        array_ordering: rule
+            .and_then(|rule| rule.array_ordering.as_deref())
+            .and_then(parse_array_ordering)
+            .unwrap_or(ArrayOrdering::Unordered),
+    }
+}
+
+fn compare_internal_table(
+    rules: &EffectiveInternalTableRule,
+    primary: &InternalSnapshot,
+    shadow: &InternalSnapshot,
+    divergences: &mut Vec<Divergence>,
+) {
+    let empty = Vec::new();
+    let primary_rows = primary.tables.get(&rules.table).unwrap_or(&empty);
+    let shadow_rows = shadow.tables.get(&rules.table).unwrap_or(&empty);
+    let primary_by_key = rows_by_key(primary_rows, rules);
+    let shadow_by_key = rows_by_key(shadow_rows, rules);
+
+    for (key, primary_row) in &primary_by_key {
+        match shadow_by_key.get(key) {
+            Some(shadow_row) => {
+                compare_internal_row(rules, key, primary_row, shadow_row, divergences)
+            }
+            None => divergences.push(Divergence::internal(
+                Severity::Critical,
+                &rules.table,
+                key,
+                format!("internal.{}", rules.table),
+                "row missing in shadow internal state",
+                Some(primary_row.clone()),
+                None,
+            )),
+        }
+    }
+
+    for (key, shadow_row) in &shadow_by_key {
+        if !primary_by_key.contains_key(key) {
+            divergences.push(Divergence::internal(
+                Severity::Critical,
+                &rules.table,
+                key,
+                format!("internal.{}", rules.table),
+                "extra row in shadow internal state",
+                None,
+                Some(shadow_row.clone()),
+            ));
+        }
+    }
+}
+
+fn rows_by_key(
+    rows: &[serde_json::Value],
+    rules: &EffectiveInternalTableRule,
+) -> BTreeMap<String, serde_json::Value> {
+    let mut out = BTreeMap::new();
+    for (index, row) in rows.iter().enumerate() {
+        out.insert(
+            row_key(row, rules).unwrap_or_else(|| format!("$index:{index}")),
+            row.clone(),
+        );
+    }
+    out
+}
+
+fn row_key(row: &serde_json::Value, rules: &EffectiveInternalTableRule) -> Option<String> {
+    let object = row.as_object()?;
+    let mut parts = Vec::new();
+    for column in &rules.key_columns {
+        let value = object.get(column)?;
+        parts.push(format!("{column}={}", stable_json_string(value)));
+    }
+    Some(parts.join("|"))
+}
+
+fn compare_internal_row(
+    rules: &EffectiveInternalTableRule,
+    key: &str,
+    primary: &serde_json::Value,
+    shadow: &serde_json::Value,
+    divergences: &mut Vec<Divergence>,
+) {
+    let Some(primary_obj) = primary.as_object() else {
+        return;
+    };
+    let Some(shadow_obj) = shadow.as_object() else {
+        divergences.push(Divergence::internal(
+            Severity::Critical,
+            &rules.table,
+            key,
+            format!("internal.{}", rules.table),
+            "row shape mismatch",
+            Some(primary.clone()),
+            Some(shadow.clone()),
+        ));
+        return;
+    };
+
+    for (column, primary_value) in primary_obj {
+        if should_ignore_internal_column(column, rules) {
+            continue;
+        }
+        let field = format!("internal.{}.{}", rules.table, column);
+        match shadow_obj.get(column) {
+            Some(shadow_value) => compare_internal_value(
+                rules,
+                key,
+                &field,
+                column,
+                primary_value,
+                shadow_value,
+                divergences,
+            ),
+            None => divergences.push(Divergence::internal(
+                Severity::Critical,
+                &rules.table,
+                key,
+                field,
+                "column missing in shadow internal state",
+                Some(primary_value.clone()),
+                None,
+            )),
+        }
+    }
+
+    for (column, shadow_value) in shadow_obj {
+        if primary_obj.contains_key(column) || should_ignore_internal_column(column, rules) {
+            continue;
+        }
+        divergences.push(Divergence::internal(
+            Severity::Critical,
+            &rules.table,
+            key,
+            format!("internal.{}.{}", rules.table, column),
+            "extra column in shadow internal state",
+            None,
+            Some(shadow_value.clone()),
+        ));
+    }
+}
+
+fn compare_internal_value(
+    rules: &EffectiveInternalTableRule,
+    key: &str,
+    field: &str,
+    column: &str,
+    primary: &serde_json::Value,
+    shadow: &serde_json::Value,
+    divergences: &mut Vec<Divergence>,
+) {
+    let primary = redact_internal_value(column, primary, rules);
+    let shadow = redact_internal_value(column, shadow, rules);
+    if numeric_values_equal(
+        &primary,
+        &shadow,
+        tolerance_for_path(rules.tolerance.as_ref(), field),
+    ) {
+        return;
+    }
+    if timestamp_values_equal(&primary, &shadow, rules.timestamp_precision) {
+        return;
+    }
+
+    match (&primary, &shadow) {
+        (serde_json::Value::Array(primary_items), serde_json::Value::Array(shadow_items))
+            if matches!(rules.array_ordering, ArrayOrdering::Unordered) =>
+        {
+            let mut primary_sorted = primary_items
+                .iter()
+                .map(stable_json_string)
+                .collect::<Vec<_>>();
+            let mut shadow_sorted = shadow_items
+                .iter()
+                .map(stable_json_string)
+                .collect::<Vec<_>>();
+            primary_sorted.sort();
+            shadow_sorted.sort();
+            if primary_sorted == shadow_sorted {
+                return;
+            }
+        }
+        _ => {}
+    }
+
+    if primary != shadow {
+        divergences.push(Divergence::internal(
+            Severity::Critical,
+            &rules.table,
+            key,
+            field.to_string(),
+            "internal value mismatch",
+            Some(primary),
+            Some(shadow),
+        ));
+    }
+}
+
+fn should_ignore_internal_column(column: &str, rules: &EffectiveInternalTableRule) -> bool {
+    rules.ignore_columns.iter().any(|ignored| ignored == column)
+}
+
+fn redact_internal_value(
+    column: &str,
+    value: &serde_json::Value,
+    rules: &EffectiveInternalTableRule,
+) -> serde_json::Value {
+    if is_secret_like(column) || rules.redactions.iter().any(|pattern| pattern == column) {
+        return serde_json::Value::String("[REDACTED]".into());
+    }
+    match value {
+        serde_json::Value::Object(map) => {
+            let mut object = serde_json::Map::new();
+            for (key, child) in map {
+                object.insert(key.clone(), redact_internal_value(key, child, rules));
+            }
+            serde_json::Value::Object(object)
+        }
+        serde_json::Value::Array(items) => serde_json::Value::Array(
+            items
+                .iter()
+                .map(|item| redact_internal_value(column, item, rules))
+                .collect(),
+        ),
+        other => other.clone(),
+    }
+}
+
+fn stable_json_string(value: &serde_json::Value) -> String {
+    serde_json::to_string(value).unwrap_or_else(|_| String::new())
 }
 
 // ---------------------------------------------------------------------------
@@ -812,6 +1363,7 @@ mod tests {
             timestamp_precision: None,
             tolerance: None,
             array_ordering: None,
+            internal_state: None,
             note: None,
         }
     }
@@ -914,6 +1466,7 @@ mod tests {
             timestamp_precision: None,
             tolerance: None,
             array_ordering: None,
+            internal_state: None,
             note: None,
         };
 
@@ -1095,5 +1648,65 @@ mod tests {
 
         let divs = rules.compare("GET /status-only", &primary, &shadow);
         assert!(divs.is_empty(), "unexpected divergences: {divs:?}");
+    }
+
+    #[test]
+    fn compare_internal_matches_by_key_with_redaction_tolerance_and_unordered_arrays() {
+        let mut tolerance = HashMap::new();
+        tolerance.insert("confidence".to_string(), 0.05);
+        let mut rule = endpoint_rule();
+        rule.internal_state = Some(InternalStateRule {
+            tables: BTreeMap::from([(
+                "memories".to_string(),
+                InternalTableRule {
+                    key: Some(vec!["id".to_string()]),
+                    columns: Some(vec![
+                        "id".to_string(),
+                        "agent_id".to_string(),
+                        "confidence".to_string(),
+                        "tags".to_string(),
+                        "apiKey".to_string(),
+                        "updated_at".to_string(),
+                    ]),
+                    ignore_columns: Some(vec!["updated_at".to_string()]),
+                    tolerance: Some(tolerance),
+                    redactions: Some(vec!["apiKey".to_string()]),
+                    timestamp_precision: Some("second".to_string()),
+                    array_ordering: Some("unordered".to_string()),
+                },
+            )]),
+        });
+        let rules = rules_with_endpoint("POST /api/memory/remember", rule);
+        let primary = internal_snapshot(vec![
+            serde_json::json!({"id":"m2","agent_id":"agent-a","confidence":0.7,"tags":["b","a"],"apiKey":"primary","updated_at":"2026-01-01T00:00:00Z"}),
+            serde_json::json!({"id":"m1","agent_id":"agent-a","confidence":0.8,"tags":["x","y"],"apiKey":"primary","updated_at":"2026-01-01T00:00:00Z"}),
+        ]);
+        let shadow = internal_snapshot(vec![
+            serde_json::json!({"id":"m1","agent_id":"agent-a","confidence":0.83,"tags":["y","x"],"apiKey":"shadow","updated_at":"2030-01-01T00:00:00Z"}),
+            serde_json::json!({"id":"m2","agent_id":"agent-a","confidence":0.69,"tags":["a","b"],"apiKey":"shadow","updated_at":"2030-01-01T00:00:00Z"}),
+        ]);
+
+        let divs = rules.compare_internal("POST /api/memory/remember", &primary, &shadow);
+        assert!(divs.is_empty(), "unexpected divergences: {divs:?}");
+    }
+
+    #[test]
+    fn compare_internal_reports_keyed_value_mismatch() {
+        let rules = ParityRules::default();
+        let primary = internal_snapshot(vec![serde_json::json!({"id":"m1","agent_id":"agent-a"})]);
+        let shadow = internal_snapshot(vec![serde_json::json!({"id":"m1","agent_id":"agent-b"})]);
+
+        let divs = rules.compare_internal("POST /api/memory/remember", &primary, &shadow);
+        assert_eq!(divs.len(), 1);
+        assert_eq!(divs[0].category.as_deref(), Some("internalState"));
+        assert_eq!(divs[0].table.as_deref(), Some("memories"));
+        assert!(divs[0].key.as_deref().unwrap().contains("m1"));
+        assert_eq!(divs[0].field, "internal.memories.agent_id");
+    }
+
+    fn internal_snapshot(rows: Vec<serde_json::Value>) -> InternalSnapshot {
+        InternalSnapshot {
+            tables: BTreeMap::from([("memories".to_string(), rows)]),
+        }
     }
 }

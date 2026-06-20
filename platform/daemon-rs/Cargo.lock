@@ -1862,6 +1862,7 @@ dependencies = [
  "chrono",
  "regex-lite",
  "reqwest",
+ "rusqlite",
  "serde",
  "serde_json",
  "tokio",

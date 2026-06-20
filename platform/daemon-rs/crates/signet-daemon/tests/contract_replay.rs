@@ -2085,11 +2085,22 @@ fn write_fixture_response(
     body: &str,
     session_id: Option<&str>,
 ) {
+    write_fixture_response_with_type(stream, status, reason, "application/json", body, session_id);
+}
+
+fn write_fixture_response_with_type(
+    stream: &mut std::net::TcpStream,
+    status: u16,
+    reason: &str,
+    content_type: &str,
+    body: &str,
+    session_id: Option<&str>,
+) {
     let session_header = session_id
         .map(|value| format!("Mcp-Session-Id: {value}\r\n"))
         .unwrap_or_default();
     let response = format!(
-        "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n{}\r\n{}",
+        "HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n{}\r\n{}",
         body.len(),
         session_header,
         body
@@ -2097,7 +2108,227 @@ fn write_fixture_response(
     let _ = stream.write_all(response.as_bytes());
 }
 
+struct HeaderSecretMcpFixture {
+    base: String,
+    seen_headers: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    _thread: std::thread::JoinHandle<()>,
+}
+
+impl HeaderSecretMcpFixture {
+    fn start(header_name: &'static str) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind header mcp fixture");
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let seen_headers = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let thread_headers = seen_headers.clone();
+        let initialized = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let thread_initialized = initialized.clone();
+        let thread = std::thread::spawn(move || {
+            for stream in listener.incoming().take(16) {
+                let Ok(mut stream) = stream else {
+                    continue;
+                };
+                let Ok((headers, body)) = read_fixture_http_request(&mut stream) else {
+                    continue;
+                };
+                if let Some((_, value)) = headers
+                    .iter()
+                    .find(|(key, _)| key.eq_ignore_ascii_case(header_name))
+                {
+                    thread_headers.lock().unwrap().push(value.clone());
+                }
+                let value =
+                    serde_json::from_str::<serde_json::Value>(&body).unwrap_or_else(|_| json!({}));
+                let method = value["method"].as_str().unwrap_or("");
+                let id = value.get("id").cloned().unwrap_or(serde_json::Value::Null);
+                let session_ok = headers.iter().any(|(key, value)| {
+                    key.eq_ignore_ascii_case("mcp-session-id") && value == "header-session"
+                });
+                let body = match method {
+                    "initialize" => json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "result": {
+                            "protocolVersion": "2024-11-05",
+                            "capabilities": {"tools": {}, "resources": {}},
+                            "serverInfo": {"name": "Header Secret MCP", "version": "1.0.0"}
+                        }
+                    })
+                    .to_string(),
+                    "notifications/initialized" if session_ok => {
+                        thread_initialized.store(true, std::sync::atomic::Ordering::SeqCst);
+                        write_fixture_response(
+                            &mut stream,
+                            202,
+                            "Accepted",
+                            "",
+                            Some("header-session"),
+                        );
+                        continue;
+                    }
+                    "tools/list"
+                        if session_ok
+                            && thread_initialized.load(std::sync::atomic::Ordering::SeqCst) =>
+                    {
+                        json!({"jsonrpc": "2.0", "id": id, "result": {"tools": [{"name": "header_open", "inputSchema": {}}]}}).to_string()
+                    }
+                    "resources/list"
+                        if session_ok
+                            && thread_initialized.load(std::sync::atomic::Ordering::SeqCst) =>
+                    {
+                        json!({"jsonrpc": "2.0", "id": id, "result": {"resources": []}})
+                            .to_string()
+                    }
+                    _ => json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "error": {"code": -32002, "message": "not initialized"}
+                    })
+                    .to_string(),
+                };
+                write_fixture_response(&mut stream, 200, "OK", &body, Some("header-session"));
+            }
+        });
+        Self {
+            base,
+            seen_headers,
+            _thread: thread,
+        }
+    }
+
+    fn seen_headers(&self) -> Vec<String> {
+        self.seen_headers.lock().unwrap().clone()
+    }
+}
+
+struct SseMcpFixture {
+    base: String,
+    _thread: std::thread::JoinHandle<()>,
+}
+
+impl SseMcpFixture {
+    fn start(send_matching_tools_response: bool) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind sse mcp fixture");
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let initialized = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let thread_initialized = initialized.clone();
+        let thread = std::thread::spawn(move || {
+            for stream in listener.incoming().take(16) {
+                let Ok(mut stream) = stream else {
+                    continue;
+                };
+                let Ok((headers, body)) = read_fixture_http_request(&mut stream) else {
+                    continue;
+                };
+                let value =
+                    serde_json::from_str::<serde_json::Value>(&body).unwrap_or_else(|_| json!({}));
+                let method = value["method"].as_str().unwrap_or("");
+                let id = value.get("id").cloned().unwrap_or(serde_json::Value::Null);
+                let session_ok = headers.iter().any(|(key, value)| {
+                    key.eq_ignore_ascii_case("mcp-session-id") && value == "sse-session"
+                });
+                match method {
+                    "initialize" => {
+                        let body = json!({
+                            "jsonrpc": "2.0",
+                            "id": id,
+                            "result": {
+                                "protocolVersion": "2024-11-05",
+                                "capabilities": {"tools": {}, "resources": {}},
+                                "serverInfo": {"name": "SSE MCP", "version": "1.0.0"}
+                            }
+                        })
+                        .to_string();
+                        write_fixture_response(&mut stream, 200, "OK", &body, Some("sse-session"));
+                    }
+                    "notifications/initialized" if session_ok => {
+                        thread_initialized.store(true, std::sync::atomic::Ordering::SeqCst);
+                        write_fixture_response(
+                            &mut stream,
+                            202,
+                            "Accepted",
+                            "",
+                            Some("sse-session"),
+                        );
+                    }
+                    "tools/list"
+                        if session_ok
+                            && thread_initialized.load(std::sync::atomic::Ordering::SeqCst) =>
+                    {
+                        let mut body = format!(
+                            "data: {}\n\n",
+                            json!({"jsonrpc": "2.0", "method": "notifications/progress", "params": {"message": "warming"}})
+                        );
+                        if send_matching_tools_response {
+                            body.push_str(&format!(
+                                "data: {}\n\n",
+                                json!({"jsonrpc": "2.0", "id": id, "result": {"tools": [{"name": "sse_open", "inputSchema": {}}]}})
+                            ));
+                        }
+                        write_fixture_response_with_type(
+                            &mut stream,
+                            200,
+                            "OK",
+                            "text/event-stream",
+                            &body,
+                            Some("sse-session"),
+                        );
+                    }
+                    "resources/list"
+                        if session_ok
+                            && thread_initialized.load(std::sync::atomic::Ordering::SeqCst) =>
+                    {
+                        let body = json!({"jsonrpc": "2.0", "id": id, "result": {"resources": []}})
+                            .to_string();
+                        write_fixture_response(&mut stream, 200, "OK", &body, Some("sse-session"));
+                    }
+                    _ => {
+                        let body = json!({
+                            "jsonrpc": "2.0",
+                            "id": id,
+                            "error": {"code": -32002, "message": "not initialized"}
+                        })
+                        .to_string();
+                        write_fixture_response(&mut stream, 200, "OK", &body, Some("sse-session"));
+                    }
+                }
+            }
+        });
+        Self {
+            base,
+            _thread: thread,
+        }
+    }
+}
+
+fn read_daemon_log_text(root: &std::path::Path) -> String {
+    let log_dir = root.join(".daemon/logs");
+    let mut text = String::new();
+    let Ok(entries) = std::fs::read_dir(log_dir) else {
+        return text;
+    };
+    for entry in entries.flatten() {
+        if let Ok(content) = std::fs::read_to_string(entry.path()) {
+            text.push_str(&content);
+        }
+    }
+    text
+}
+
 fn write_installed_mcp_server(root: &std::path::Path, id: &str, name: &str, url: &str) {
+    write_installed_mcp_server_config(
+        root,
+        id,
+        name,
+        json!({"transport": "http", "url": url, "headers": {}, "timeoutMs": 5000}),
+    );
+}
+
+fn write_installed_mcp_server_config(
+    root: &std::path::Path,
+    id: &str,
+    name: &str,
+    config: serde_json::Value,
+) {
     let marketplace = root.join("marketplace");
     std::fs::create_dir_all(&marketplace).unwrap();
     std::fs::write(
@@ -2113,7 +2344,7 @@ fn write_installed_mcp_server(root: &std::path::Path, id: &str, name: &str, url:
             "official": false,
             "enabled": true,
             "scope": {"harnesses": [], "workspaces": [], "channels": []},
-            "config": {"transport": "http", "url": url, "headers": {}, "timeoutMs": 5000},
+            "config": config,
             "installedAt": "2026-01-01T00:00:00Z",
             "updatedAt": "2026-01-01T00:00:00Z"
         }]))
@@ -5601,6 +5832,207 @@ async fn os_reprobe_tool_changes_invalidate_cached_widget_and_emit_event() {
                 && event["payload"]["serverId"] == "strict-mcp"
         });
     assert!(invalidated, "widget.invalidated event missing: {body}");
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn os_reprobe_resolves_secret_refs_for_http_headers_without_log_leak() {
+    const HEADER_NAME: &str = "x-probe-token";
+    const SECRET_NAME: &str = "PROBE_HEADER_TOKEN";
+    const SECRET_VALUE: &str = "resolved-header-token";
+    let fixture = HeaderSecretMcpFixture::start(HEADER_NAME);
+    let server = TestServer::start().await;
+
+    let resp = server
+        .post(
+            &format!("/api/secrets/{SECRET_NAME}"),
+            json!({"value": SECRET_VALUE}),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    write_installed_mcp_server_config(
+        server._tmpdir.path(),
+        "header-secret-mcp",
+        "Header Secret MCP",
+        json!({
+            "transport": "http",
+            "url": format!("{}/mcp", fixture.base),
+            "headers": {HEADER_NAME: format!("secret://{SECRET_NAME}")},
+            "timeoutMs": 5000
+        }),
+    );
+
+    let resp = server
+        .post("/api/os/tray/header-secret-mcp/reprobe", json!({}))
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["success"], true);
+    assert_eq!(body["probe"]["ok"], true);
+    assert_eq!(body["probe"]["toolCount"], 1);
+
+    let seen_headers = fixture.seen_headers();
+    assert!(
+        seen_headers.iter().any(|value| value == SECRET_VALUE),
+        "resolved header was not sent"
+    );
+    assert!(
+        !seen_headers
+            .iter()
+            .any(|value| value.starts_with("secret://")),
+        "secret reference was sent instead of resolving"
+    );
+    let body_text = body.to_string();
+    assert!(
+        !body_text.contains(SECRET_VALUE),
+        "probe response leaked resolved secret"
+    );
+    assert!(
+        !body_text.contains(&format!("secret://{SECRET_NAME}")),
+        "probe response leaked secret reference"
+    );
+    let logs = read_daemon_log_text(server._tmpdir.path());
+    assert!(
+        !logs.contains(SECRET_VALUE),
+        "daemon logs leaked resolved secret"
+    );
+    assert!(
+        !logs.contains(&format!("secret://{SECRET_NAME}")),
+        "daemon logs leaked secret reference"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn os_reprobe_sse_ignores_notifications_and_requires_matching_id() {
+    let matching = SseMcpFixture::start(true);
+    let server = TestServer::start_with_agent_yaml_files_and_setup(
+        None,
+        "agent:\n  name: test-agent\n  version: 1\n",
+        &[],
+        |root| {
+            write_installed_mcp_server(
+                root,
+                "sse-mcp",
+                "SSE MCP",
+                &format!("{}/mcp", matching.base),
+            )
+        },
+    )
+    .await;
+
+    let resp = server.post("/api/os/tray/sse-mcp/reprobe", json!({})).await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["success"], true);
+    assert_eq!(body["probe"]["ok"], true);
+    assert_eq!(body["probe"]["toolCount"], 1);
+    assert_eq!(body["probe"]["autoCard"]["tools"][0]["name"], "sse_open");
+
+    let missing = SseMcpFixture::start(false);
+    write_installed_mcp_server(
+        server._tmpdir.path(),
+        "sse-mcp-missing",
+        "SSE MCP Missing",
+        &format!("{}/mcp", missing.base),
+    );
+    let resp = server
+        .post("/api/os/tray/sse-mcp-missing/reprobe", json!({}))
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["success"], true);
+    assert_eq!(body["probe"]["ok"], false);
+    assert_eq!(body["probe"]["toolCount"], 0);
+    assert!(
+        body["probe"]["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("missing JSON-RPC response for id 2")
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn os_reprobe_stdio_secret_env_timeout_kills_child() {
+    const SECRET_NAME: &str = "PROBE_ENV_TOKEN";
+    const SECRET_VALUE: &str = "resolved-env-token";
+    let server = TestServer::start().await;
+    let resp = server
+        .post(
+            &format!("/api/secrets/{SECRET_NAME}"),
+            json!({"value": SECRET_VALUE}),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+
+    let script = server._tmpdir.path().join("stdio-timeout-mcp.sh");
+    let pid_file = server._tmpdir.path().join("stdio-timeout.pid");
+    let env_file = server._tmpdir.path().join("stdio-timeout-env.txt");
+    std::fs::write(
+        &script,
+        r#"#!/bin/sh
+printf '%s' "$$" > "$PID_FILE"
+if [ "$PROBE_ENV_TOKEN" = 'secret://PROBE_ENV_TOKEN' ]; then
+  printf 'reference' > "$ENV_FILE"
+elif [ -n "$PROBE_ENV_TOKEN" ]; then
+  printf 'resolved' > "$ENV_FILE"
+else
+  printf 'missing' > "$ENV_FILE"
+fi
+while :; do sleep 1; done
+"#,
+    )
+    .unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    write_installed_mcp_server_config(
+        server._tmpdir.path(),
+        "stdio-timeout-mcp",
+        "Stdio Timeout MCP",
+        json!({
+            "transport": "stdio",
+            "command": script.to_str().unwrap(),
+            "args": [],
+            "env": {
+                "PID_FILE": pid_file.to_str().unwrap(),
+                "ENV_FILE": env_file.to_str().unwrap(),
+                "PROBE_ENV_TOKEN": format!("secret://{SECRET_NAME}")
+            },
+            "timeoutMs": 1000
+        }),
+    );
+
+    let resp = server
+        .post("/api/os/tray/stdio-timeout-mcp/reprobe", json!({}))
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["success"], true);
+    assert_eq!(body["probe"]["ok"], false);
+    assert!(
+        body["probe"]["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("timed out")
+    );
+    let env_marker = wait_for_file_contains(&env_file, "resolved").await;
+    assert_eq!(env_marker, "resolved");
+    let pid = std::fs::read_to_string(&pid_file)
+        .expect("stdio pid file")
+        .trim()
+        .parse::<i32>()
+        .expect("stdio pid");
+    for _ in 0..50 {
+        if unsafe { libc::kill(pid, 0) } != 0 {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("timed-out stdio MCP child still alive after probe timeout");
 }
 
 #[tokio::test]

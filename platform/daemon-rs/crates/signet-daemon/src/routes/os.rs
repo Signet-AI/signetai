@@ -7,6 +7,7 @@ use axum::{
     http::{StatusCode, header},
     response::{IntoResponse, Response},
 };
+use base64::Engine;
 use rusqlite::{OptionalExtension, params};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -36,6 +37,7 @@ const GRID_COLS: i64 = 12;
 const OS_MCP_PROTOCOL_VERSION: &str = "2024-11-05";
 const OS_PROBE_CLIENT_NAME: &str = "signet-os-probe";
 const OS_PROBE_CLIENT_VERSION: &str = "0.1.0";
+const SECRET_REF_PREFIX: &str = "secret://";
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -688,7 +690,7 @@ pub async fn tray_reprobe(
         )
             .into_response();
     };
-    let probe = probe_server(&server).await;
+    let probe = probe_server(&state, &server).await;
     match store_probe_result(&state, &id, probe.clone()).await {
         Ok(()) => {
             if let Err(error) = upsert_tray_entry_from_probe(&state, &probe).await {
@@ -1340,7 +1342,7 @@ async fn available_tool_count(state: &AppState) -> usize {
     probes.unwrap_or(0)
 }
 
-async fn probe_server(server: &Value) -> Value {
+async fn probe_server(state: &AppState, server: &Value) -> Value {
     let now = chrono::Utc::now().to_rfc3339();
     let Ok(server_config) = installed_server_from_value(server) else {
         return failed_probe_result(server, "invalid installed MCP server config", now);
@@ -1349,7 +1351,7 @@ async fn probe_server(server: &Value) -> Value {
     // Mirrors the TS probe transport lifecycle at platform/daemon/src/mcp-probe.ts:82-130
     // and discovery ordering at platform/daemon/src/mcp-probe.ts:301-400: initialize,
     // notifications/initialized, tools/list, resources/list, then manifest metadata parsing.
-    let probe_data = match probe_mcp_server(&server_config).await {
+    let probe_data = match probe_mcp_server(state, &server_config).await {
         Ok(result) => result,
         Err(error) => return failed_probe_result(server, error, now),
     };
@@ -1397,7 +1399,69 @@ struct ProbeMcpData {
     server_metadata: Option<Value>,
 }
 
-async fn probe_mcp_server(server: &McpServer) -> Result<ProbeMcpData, String> {
+#[derive(Debug, Deserialize)]
+struct OsSecretEntry {
+    ciphertext: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct OsSecretsStore {
+    secrets: HashMap<String, OsSecretEntry>,
+}
+
+fn parse_secret_reference(value: &str) -> Option<&str> {
+    value
+        .strip_prefix(SECRET_REF_PREFIX)
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+}
+
+fn load_os_secrets_store(state: &AppState) -> OsSecretsStore {
+    let Ok(path) =
+        workspace_paths::child_file(&state.config.base_path, &[".secrets", "secrets.enc"])
+    else {
+        return OsSecretsStore::default();
+    };
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<OsSecretsStore>(&raw).ok())
+        .unwrap_or_default()
+}
+
+fn decode_os_secret(entry: &OsSecretEntry) -> Result<String, String> {
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(&entry.ciphertext)
+        .map_err(|error| format!("decode secret: {error}"))?;
+    String::from_utf8(decoded).map_err(|error| format!("decode secret utf8: {error}"))
+}
+
+fn resolve_os_secret_reference(state: &AppState, value: &str) -> Result<String, String> {
+    let Some(name) = parse_secret_reference(value) else {
+        return Ok(value.to_string());
+    };
+    let store = load_os_secrets_store(state);
+    store
+        .secrets
+        .get(name)
+        .ok_or_else(|| format!("Secret '{name}' not found"))
+        .and_then(decode_os_secret)
+}
+
+fn resolve_secret_references(
+    state: &AppState,
+    values: &serde_json::Map<String, Value>,
+) -> Result<HashMap<String, String>, String> {
+    let mut resolved = HashMap::new();
+    for (key, value) in values {
+        let Some(value) = value.as_str() else {
+            continue;
+        };
+        resolved.insert(key.clone(), resolve_os_secret_reference(state, value)?);
+    }
+    Ok(resolved)
+}
+
+async fn probe_mcp_server(state: &AppState, server: &McpServer) -> Result<ProbeMcpData, String> {
     let config = server
         .config
         .as_object()
@@ -1409,8 +1473,8 @@ async fn probe_mcp_server(server: &McpServer) -> Result<ProbeMcpData, String> {
         .clamp(1_000, 30_000);
     let fut = async {
         match config.get("transport").and_then(Value::as_str) {
-            Some("stdio") => probe_mcp_stdio(server, config).await,
-            Some("http") => probe_mcp_http(server, config).await,
+            Some("stdio") => probe_mcp_stdio(state, server, config).await,
+            Some("http") => probe_mcp_http(state, server, config).await,
             _ => Err("config must include command/url".to_string()),
         }
     };
@@ -1420,6 +1484,7 @@ async fn probe_mcp_server(server: &McpServer) -> Result<ProbeMcpData, String> {
 }
 
 async fn probe_mcp_stdio(
+    state: &AppState,
     server: &McpServer,
     config: &serde_json::Map<String, Value>,
 ) -> Result<ProbeMcpData, String> {
@@ -1432,16 +1497,15 @@ async fn probe_mcp_stdio(
         child.args(args.iter().filter_map(Value::as_str));
     }
     if let Some(env) = config.get("env").and_then(Value::as_object) {
-        for (key, value) in env {
-            if let Some(value) = value.as_str() {
-                child.env(key, value);
-            }
+        for (key, value) in resolve_secret_references(state, env)? {
+            child.env(key, value);
         }
     }
     if let Some(cwd) = config.get("cwd").and_then(Value::as_str) {
         child.current_dir(cwd);
     }
     let mut child = child
+        .kill_on_drop(true)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -1495,6 +1559,7 @@ async fn probe_mcp_stdio(
 }
 
 async fn probe_mcp_http(
+    state: &AppState,
     server: &McpServer,
     config: &serde_json::Map<String, Value>,
 ) -> Result<ProbeMcpData, String> {
@@ -1503,42 +1568,48 @@ async fn probe_mcp_http(
         .and_then(Value::as_str)
         .ok_or_else(|| "HTTP MCP config missing url".to_string())?;
     let client = reqwest::Client::new();
+    let headers = config
+        .get("headers")
+        .and_then(Value::as_object)
+        .map(|headers| resolve_secret_references(state, headers))
+        .transpose()?
+        .unwrap_or_default();
     let initialize_response =
-        send_mcp_http_request(&client, config, url, None, &mcp_initialize_request(1)).await?;
+        send_mcp_http_request(&client, &headers, url, None, &mcp_initialize_request(1)).await?;
     let session_id = initialize_response
         .headers()
         .get("mcp-session-id")
         .and_then(|value| value.to_str().ok())
         .map(str::to_string);
-    let initialize_result = parse_mcp_http_response(initialize_response).await?;
+    let initialize_result = parse_mcp_http_response(initialize_response, Some(1)).await?;
     let initialized_response = send_mcp_http_request(
         &client,
-        config,
+        &headers,
         url,
         session_id.as_deref(),
         &mcp_initialized_notification(),
     )
     .await?;
-    parse_mcp_http_response(initialized_response).await?;
+    parse_mcp_http_response(initialized_response, None).await?;
     let tools_response = send_mcp_http_request(
         &client,
-        config,
+        &headers,
         url,
         session_id.as_deref(),
         &mcp_request_value(2, "tools/list", json!({})),
     )
     .await?;
-    let tools_result = parse_mcp_http_response(tools_response).await?;
+    let tools_result = parse_mcp_http_response(tools_response, Some(2)).await?;
     let resources_result = match send_mcp_http_request(
         &client,
-        config,
+        &headers,
         url,
         session_id.as_deref(),
         &mcp_request_value(3, "resources/list", json!({})),
     )
     .await
     {
-        Ok(response) => parse_mcp_http_response(response)
+        Ok(response) => parse_mcp_http_response(response, Some(3))
             .await
             .unwrap_or_else(|_| json!({"resources": []})),
         Err(_) => json!({"resources": []}),
@@ -1549,13 +1620,13 @@ async fn probe_mcp_http(
     {
         if let Ok(response) = send_mcp_http_request(
             &client,
-            config,
+            &headers,
             url,
             session_id.as_deref(),
             &mcp_request_value(4, "resources/read", json!({"uri": uri})),
         )
         .await
-            && let Ok(content) = parse_mcp_http_response(response).await
+            && let Ok(content) = parse_mcp_http_response(response, Some(4)).await
         {
             server_metadata = metadata_from_resource_content(&content);
         }
@@ -1569,7 +1640,7 @@ async fn probe_mcp_http(
 
 async fn send_mcp_http_request(
     client: &reqwest::Client,
-    config: &serde_json::Map<String, Value>,
+    headers: &HashMap<String, String>,
     url: &str,
     session_id: Option<&str>,
     body: &Value,
@@ -1582,17 +1653,16 @@ async fn send_mcp_http_request(
     if let Some(session_id) = session_id {
         builder = builder.header("Mcp-Session-Id", session_id);
     }
-    if let Some(headers) = config.get("headers").and_then(Value::as_object) {
-        for (key, value) in headers {
-            if let Some(value) = value.as_str() {
-                builder = builder.header(key, value);
-            }
-        }
+    for (key, value) in headers {
+        builder = builder.header(key, value);
     }
     builder.send().await.map_err(|error| error.to_string())
 }
 
-async fn parse_mcp_http_response(response: reqwest::Response) -> Result<Value, String> {
+async fn parse_mcp_http_response(
+    response: reqwest::Response,
+    expected_id: Option<i64>,
+) -> Result<Value, String> {
     let status = response.status();
     if status == reqwest::StatusCode::ACCEPTED || status == reqwest::StatusCode::NO_CONTENT {
         return Ok(Value::Null);
@@ -1610,27 +1680,63 @@ async fn parse_mcp_http_response(response: reqwest::Response) -> Result<Value, S
     if text.trim().is_empty() {
         return Ok(Value::Null);
     }
-    let value =
-        if content_type.contains("text/event-stream") || text.trim_start().starts_with("data:") {
-            parse_sse_json(&text)?
-        } else {
-            serde_json::from_str::<Value>(&text).map_err(|error| error.to_string())?
-        };
-    parse_mcp_response(value)
+    if content_type.contains("text/event-stream") || text.trim_start().starts_with("data:") {
+        return parse_sse_json(&text, expected_id).and_then(parse_mcp_response);
+    }
+    let value = serde_json::from_str::<Value>(&text).map_err(|error| error.to_string())?;
+    parse_mcp_response_for_id(value, expected_id)
 }
 
-fn parse_sse_json(text: &str) -> Result<Value, String> {
-    for line in text.lines() {
+fn parse_sse_json(text: &str, expected_id: Option<i64>) -> Result<Value, String> {
+    let mut event_data = Vec::new();
+    for line in text.lines().chain(std::iter::once("")) {
+        if line.trim().is_empty() {
+            if let Some(value) = parse_sse_event_data(&event_data, expected_id)? {
+                return Ok(value);
+            }
+            event_data.clear();
+            continue;
+        }
         let Some(data) = line.strip_prefix("data:") else {
             continue;
         };
         let data = data.trim();
-        if data.is_empty() || data == "[DONE]" {
-            continue;
+        if !data.is_empty() && data != "[DONE]" {
+            event_data.push(data.to_string());
         }
-        return serde_json::from_str::<Value>(data).map_err(|error| error.to_string());
     }
-    Err("MCP SSE response missing data event".to_string())
+    match expected_id {
+        Some(id) => Err(format!(
+            "MCP SSE response missing JSON-RPC response for id {id}"
+        )),
+        None => Err("MCP SSE response missing data event".to_string()),
+    }
+}
+
+fn parse_sse_event_data(
+    event_data: &[String],
+    expected_id: Option<i64>,
+) -> Result<Option<Value>, String> {
+    if event_data.is_empty() {
+        return Ok(None);
+    }
+    let data = event_data.join("\n");
+    let value = serde_json::from_str::<Value>(&data).map_err(|error| error.to_string())?;
+    if expected_id.is_none() || value.get("id").and_then(Value::as_i64) == expected_id {
+        return Ok(Some(value));
+    }
+    Ok(None)
+}
+
+fn parse_mcp_response_for_id(value: Value, expected_id: Option<i64>) -> Result<Value, String> {
+    if let Some(id) = expected_id
+        && value.get("id").and_then(Value::as_i64) != Some(id)
+    {
+        return Err(format!(
+            "MCP response missing JSON-RPC response for id {id}"
+        ));
+    }
+    parse_mcp_response(value)
 }
 
 fn mcp_initialize_request(id: i64) -> Value {
