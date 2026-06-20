@@ -345,7 +345,7 @@ impl ParityRules {
                             let primary_value = redact_response_value(pval, &field_path);
                             divergences.push(Divergence {
                                 severity,
-                                field: field_path,
+                                field: log_safe_field(&field_path),
                                 message: "field missing in shadow response".into(),
                                 primary_value: Some(primary_value),
                                 shadow_value: None,
@@ -375,7 +375,7 @@ impl ParityRules {
                         let shadow_value = redact_response_value(&sm[key], &field_path);
                         divergences.push(Divergence {
                             severity: Severity::Expected,
-                            field: field_path,
+                            field: log_safe_field(&field_path),
                             message: "extra field in shadow response".into(),
                             primary_value: None,
                             shadow_value: Some(shadow_value),
@@ -500,9 +500,9 @@ impl ParityRules {
             } else {
                 divergences.push(Divergence {
                     severity: field_severity(rules.endpoint_rule, path),
-                    field: match_path.clone(),
+                    field: log_safe_field(&match_path),
                     message: "array element missing in shadow response".into(),
-                    primary_value: Some(redact_response_tree(&primary[primary_index])),
+                    primary_value: Some(redact_response_tree(&primary[primary_index], &match_path)),
                     shadow_value: None,
                     category: None,
                     table: None,
@@ -517,10 +517,10 @@ impl ParityRules {
             if !matched_shadow[shadow_index] {
                 divergences.push(Divergence {
                     severity: Severity::Expected,
-                    field: match_path.clone(),
+                    field: log_safe_field(&match_path),
                     message: "extra array element in shadow response".into(),
                     primary_value: None,
-                    shadow_value: Some(redact_response_tree(&shadow[shadow_index])),
+                    shadow_value: Some(redact_response_tree(&shadow[shadow_index], &match_path)),
                     category: None,
                     table: None,
                     key: None,
@@ -551,7 +551,7 @@ impl ParityRules {
             let severity = field_severity(rules.endpoint_rule, path);
             divergences.push(Divergence {
                 severity,
-                field: path.to_string(),
+                field: log_safe_field(path),
                 message: "value mismatch".into(),
                 primary_value: Some(redact_response_value(primary, path)),
                 shadow_value: Some(redact_response_value(shadow, path)),
@@ -908,7 +908,8 @@ fn deterministic_memory_key(row: &serde_json::Value, columns: &[String]) -> Opti
         if value.is_null() && is_optional_memory_identity_column(column) {
             continue;
         }
-        parts.push(format!("{column}={}", stable_json_string(value)));
+        let safe_value = redact_internal_value(column, value, &memory_identity_redaction_rule());
+        parts.push(format!("{column}={}", stable_json_string(&safe_value)));
     }
     if parts.is_empty() {
         None
@@ -1138,38 +1139,301 @@ fn redact_internal_value(
     value: &serde_json::Value,
     rules: &EffectiveInternalTableRule,
 ) -> serde_json::Value {
-    if is_secret_like(column) || rules.redactions.iter().any(|pattern| pattern == column) {
+    if rules.redactions.iter().any(|pattern| pattern == column) {
         return serde_json::Value::String("[REDACTED]".into());
     }
-    if is_freeform_internal_column(column) && !value.is_null() {
-        return redacted_fingerprint(value);
-    }
-    match value {
-        serde_json::Value::Object(map) => {
-            let mut object = serde_json::Map::new();
-            for (key, child) in map {
-                object.insert(key.clone(), redact_internal_value(key, child, rules));
-            }
-            serde_json::Value::Object(object)
-        }
-        serde_json::Value::Array(items) => serde_json::Value::Array(
-            items
-                .iter()
-                .map(|item| redact_internal_value(column, item, rules))
-                .collect(),
-        ),
-        other => other.clone(),
+    redact_json_for_log(
+        value,
+        column,
+        is_secret_like(column),
+        CompositeRedaction::PreserveStructure,
+    )
+}
+
+fn memory_identity_redaction_rule() -> EffectiveInternalTableRule {
+    EffectiveInternalTableRule {
+        table: "memories".to_string(),
+        key_columns: memory_identity_columns(),
+        ignore_columns: Vec::new(),
+        tolerance: None,
+        redactions: Vec::new(),
+        timestamp_precision: None,
+        array_ordering: ArrayOrdering::Unordered,
     }
 }
 
-fn is_freeform_internal_column(column: &str) -> bool {
-    let normalized: String = column
-        .chars()
-        .filter(|ch| ch.is_ascii_alphanumeric())
-        .flat_map(char::to_lowercase)
-        .collect();
-    if normalized.contains("hash") {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CompositeRedaction {
+    Fingerprint,
+    PreserveStructure,
+}
+
+/// Format a JSON path for the divergence `field` with sensitive segments
+/// fingerprinted. Prevents secrets embedded as object keys (e.g.
+/// {"credentials":{"sk-live-...":true}}) from leaking via the field path.
+/// Array indices pass through; sensitive/non-allowlisted field names become
+/// [REDACTED sha64=...].
+fn log_safe_field(path: &str) -> String {
+    let mut out = String::new();
+    let mut first = true;
+    for raw_segment in path.split('.') {
+        if !first {
+            out.push('.');
+        }
+        first = false;
+        let (name, rest) = match raw_segment.find('[') {
+            Some(idx) => (&raw_segment[..idx], &raw_segment[idx..]),
+            None => (raw_segment, ""),
+        };
+        if name.is_empty() {
+            out.push_str(raw_segment);
+            continue;
+        }
+        if is_sensitive_field_name(name) || !is_log_safe_scalar_path(name) {
+            let fp = redacted_fingerprint(&serde_json::Value::String(name.to_string()));
+            out.push_str(&fp.to_string());
+        } else {
+            out.push_str(name);
+        }
+        out.push_str(rest);
+    }
+    out
+}
+
+fn redact_response_value(value: &serde_json::Value, path: &str) -> String {
+    truncate_str(
+        &redact_json_for_log(value, path, false, CompositeRedaction::Fingerprint).to_string(),
+    )
+}
+
+fn redact_response_tree(value: &serde_json::Value, path: &str) -> String {
+    truncate_str(
+        &redact_json_for_log(value, path, false, CompositeRedaction::Fingerprint).to_string(),
+    )
+}
+
+/// Redact a text body if it looks like JSON; otherwise fingerprint the whole
+/// opaque body. Text bodies are freeform by contract, so even parseable JSON is
+/// redacted under the sensitive `body` parent instead of trusting field names.
+fn redact_text_body(body: &str) -> String {
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(body) {
+        return redact_response_tree(&value, "body");
+    }
+    redacted_fingerprint(&serde_json::Value::String(body.to_string())).to_string()
+}
+
+fn redact_json_for_log(
+    value: &serde_json::Value,
+    path: &str,
+    inherited_sensitive: bool,
+    composite_redaction: CompositeRedaction,
+) -> serde_json::Value {
+    let path_sensitive = inherited_sensitive || path_has_sensitive_segment(path);
+    match value {
+        serde_json::Value::Null => value.clone(),
+        serde_json::Value::Bool(_) | serde_json::Value::Number(_) => {
+            // A numeric/bool value under a sensitive path (e.g. {"token":123456})
+            // must still be fingerprinted, not logged verbatim.
+            if path_sensitive {
+                redacted_fingerprint(value)
+            } else {
+                value.clone()
+            }
+        }
+        serde_json::Value::String(text) => {
+            if path_sensitive || !is_log_safe_scalar_path(path) || !is_log_safe_string(path, text) {
+                redacted_fingerprint(value)
+            } else {
+                value.clone()
+            }
+        }
+        serde_json::Value::Object(map) => {
+            if should_fingerprint_composite(path, path_sensitive, composite_redaction) {
+                return redacted_fingerprint(value);
+            }
+            let deny_descendants = deny_composite_descendants(path, path_sensitive);
+            let mut out = serde_json::Map::with_capacity(map.len());
+            for (key, child) in map {
+                let child_path = join_path(path, key);
+                let child_sensitive = deny_descendants || is_sensitive_field_name(key);
+                out.insert(
+                    key.clone(),
+                    redact_json_for_log(child, &child_path, child_sensitive, composite_redaction),
+                );
+            }
+            serde_json::Value::Object(out)
+        }
+        serde_json::Value::Array(items) => {
+            if should_fingerprint_composite(path, path_sensitive, composite_redaction) {
+                return redacted_fingerprint(value);
+            }
+            let deny_descendants = deny_composite_descendants(path, path_sensitive);
+            serde_json::Value::Array(
+                items
+                    .iter()
+                    .map(|item| {
+                        redact_json_for_log(item, path, deny_descendants, composite_redaction)
+                    })
+                    .collect(),
+            )
+        }
+    }
+}
+
+fn should_fingerprint_composite(
+    path: &str,
+    path_sensitive: bool,
+    composite_redaction: CompositeRedaction,
+) -> bool {
+    path_sensitive
+        || matches!(composite_redaction, CompositeRedaction::Fingerprint) && !path.is_empty()
+}
+
+fn deny_composite_descendants(path: &str, path_sensitive: bool) -> bool {
+    path_sensitive || !path.is_empty() && !is_log_safe_scalar_path(path)
+}
+
+fn join_path(parent: &str, child: &str) -> String {
+    if parent.is_empty() {
+        child.to_string()
+    } else {
+        format!("{parent}.{child}")
+    }
+}
+
+fn is_log_safe_scalar_path(path: &str) -> bool {
+    path_leaf_field(path)
+        .as_deref()
+        .map(is_log_safe_scalar_field)
+        .unwrap_or(false)
+}
+
+fn is_log_safe_scalar_field(field: &str) -> bool {
+    matches!(
+        normalize_field_name(field).as_str(),
+        "id" | "memoryid"
+            | "sessionid"
+            | "requestid"
+            | "sourceid"
+            | "idempotencykey"
+            | "status"
+            | "state"
+            | "version"
+            | "isdeleted"
+            | "deletedat"
+            | "agentid"
+            | "visibility"
+            | "scope"
+            | "sourcetype"
+            | "runtimepath"
+            | "event"
+            | "createdat"
+            | "updatedat"
+            | "lastaccessed"
+            | "contenthash"
+            | "dimensions"
+            | "count"
+            | "total"
+            | "limit"
+            | "offset"
+            | "method"
+            | "path"
+            | "route"
+            | "statuscode"
+            | "ok"
+            | "toolcount"
+            | "resourcecount"
+            | "entitytype"
+            | "actortype"
+            | "changedby"
+            | "confidence"
+            | "score"
+    )
+}
+
+fn is_log_safe_string(path: &str, value: &str) -> bool {
+    const MAX_SAFE_STRING_BYTES: usize = 128;
+    let Some(field) = path_leaf_field(path) else {
         return false;
+    };
+    if is_sensitive_field_name(&field)
+        || value.is_empty()
+        || value.len() > MAX_SAFE_STRING_BYTES
+        || value.contains(['\n', '\r'])
+    {
+        return false;
+    }
+    normalize_field_name(&field) == "contenthash" || !looks_secret_like_value(value)
+}
+
+fn looks_secret_like_value(value: &str) -> bool {
+    let normalized = value.to_ascii_lowercase();
+    [
+        "secret",
+        "password",
+        "token",
+        "bearer ",
+        "apikey",
+        "api_key",
+        "private key",
+        "credential",
+        "sk-",
+        "planted",
+    ]
+    .iter()
+    .any(|needle| normalized.contains(needle))
+}
+
+fn path_has_sensitive_segment(path: &str) -> bool {
+    path_field_names(path)
+        .iter()
+        .any(|field| is_sensitive_field_name(field))
+}
+
+fn path_leaf_field(path: &str) -> Option<String> {
+    path_field_names(path).pop()
+}
+
+fn path_field_names(path: &str) -> Vec<String> {
+    path.split('.')
+        .filter_map(|segment| {
+            let field = segment
+                .split_once('[')
+                .map(|(head, _)| head)
+                .unwrap_or(segment);
+            if field.is_empty() {
+                None
+            } else {
+                Some(field.to_string())
+            }
+        })
+        .collect()
+}
+
+fn is_sensitive_field_name(field: &str) -> bool {
+    let normalized = normalize_field_name(field);
+    if normalized.is_empty() {
+        return false;
+    }
+    const SENSITIVE_SUBSTRINGS: &[&str] = &[
+        "apikey",
+        "token",
+        "secret",
+        "password",
+        "clientsecret",
+        "accesstoken",
+        "refreshtoken",
+        "authtoken",
+        "credential",
+        "authorization",
+        "cookie",
+        "privatekey",
+    ];
+    if SENSITIVE_SUBSTRINGS
+        .iter()
+        .any(|needle| normalized.contains(needle))
+    {
+        return true;
     }
     matches!(
         normalized.as_str(),
@@ -1190,103 +1454,30 @@ fn is_freeform_internal_column(column: &str) -> bool {
             | "metadata"
             | "description"
             | "summary"
+            | "summaryprompt"
             | "note"
             | "value"
-    ) || normalized.ends_with("content")
+            | "inject"
+            | "injection"
+            | "injections"
+            | "recentcontext"
+            | "systemprompt"
+            | "hiddenprompt"
+            | "memories"
+            | "memory"
+            | "recall"
+            | "context"
+    ) || (normalized.ends_with("content") && normalized != "contenthash")
         || normalized.ends_with("raw")
+        || normalized.ends_with("prompt")
 }
 
-/// Sensitive leaf-field detector for RESPONSE-level (HTTP body) divergences.
-/// Mirrors the internal freeform set plus auth-style field names. Returns true
-/// when the leaf at `path` (e.g. ".content", ".apiKey", ".memories[0].content")
-/// must never be serialized in plaintext to the divergence log.
-fn is_sensitive_response_path(path: &str) -> bool {
-    let leaf = path.rsplit(['.', '[', ']']).next().unwrap_or("");
-    let normalized: String = leaf
+fn normalize_field_name(field: &str) -> String {
+    field
         .chars()
         .filter(|ch| ch.is_ascii_alphanumeric())
         .flat_map(char::to_lowercase)
-        .collect();
-    if normalized.is_empty() {
-        return false;
-    }
-    // Explicit secret/auth field names.
-    const SECRET_FIELDS: &[&str] = &[
-        "apikey",
-        "token",
-        "secret",
-        "password",
-        "clientsecret",
-        "accesstoken",
-        "refreshtoken",
-        "authtoken",
-        "credentials",
-        "authorization",
-        "cookie",
-        "privatekey",
-    ];
-    if SECRET_FIELDS.iter().any(|f| normalized.contains(f)) {
-        return true;
-    }
-    // Reuse the internal freeform detector for content-like fields.
-    is_freeform_internal_column(leaf)
-}
-
-/// Redact a response-level value at `path`. If the path itself is sensitive,
-/// fingerprint the whole value. Otherwise, for composite (object/array)
-/// values, recursively redact any sensitive DESCENDANT (a non-sensitive
-/// parent like `memory` may hold a sensitive child like `content`). Scalars
-/// at non-sensitive paths are truncated normally. Ensures plaintext memory
-/// content / secrets never reach shadow-divergences.jsonl from response-body
-/// comparisons regardless of nesting.
-fn redact_response_value(value: &serde_json::Value, path: &str) -> String {
-    if is_sensitive_response_path(path) {
-        return redacted_fingerprint(value).to_string();
-    }
-    match value {
-        serde_json::Value::Object(_) | serde_json::Value::Array(_) => redact_response_tree(value),
-        _ => truncate_json(value),
-    }
-}
-
-/// Recursively redact any sensitive descendant of an object/array, then
-/// stringify. Used when a divergence stringifies a WHOLE element (unordered
-/// array missing/extra) or a whole text body, where the parent path alone
-/// (e.g. "results", "body") doesn't expose the sensitive leaf names. Walks
-/// the tree and replaces any sensitive-keyed leaf with its fingerprint.
-fn redact_response_tree(value: &serde_json::Value) -> String {
-    truncate_str(&redact_response_tree_value(value).to_string())
-}
-
-fn redact_response_tree_value(value: &serde_json::Value) -> serde_json::Value {
-    match value {
-        serde_json::Value::Object(map) => {
-            let mut out = serde_json::Map::with_capacity(map.len());
-            for (key, val) in map {
-                if is_sensitive_response_path(key) {
-                    out.insert(key.clone(), redacted_fingerprint(val));
-                } else {
-                    out.insert(key.clone(), redact_response_tree_value(val));
-                }
-            }
-            serde_json::Value::Object(out)
-        }
-        serde_json::Value::Array(items) => {
-            serde_json::Value::Array(items.iter().map(redact_response_tree_value).collect())
-        }
-        other => other.clone(),
-    }
-}
-
-/// Redact a text body if it looks like JSON (parses -> recursive redact);
-/// otherwise fingerprint the whole thing (non-JSON text bodies are treated
-/// as opaque/freeform so plaintext memory content / secrets never leak).
-fn redact_text_body(body: &str) -> String {
-    if let Ok(value) = serde_json::from_str::<serde_json::Value>(body) {
-        return redact_response_tree(&value);
-    }
-    // Non-JSON text body: fingerprint the whole thing (never log raw).
-    redacted_fingerprint(&serde_json::Value::String(body.to_string())).to_string()
+        .collect()
 }
 
 fn redacted_fingerprint(value: &serde_json::Value) -> serde_json::Value {
@@ -1635,10 +1826,6 @@ fn format_array_element_path(path: &str, index: &str) -> String {
     } else {
         format!("{path}[{index}]")
     }
-}
-
-fn truncate_json(val: &serde_json::Value) -> String {
-    truncate_str(&val.to_string())
 }
 
 fn truncate_str(value: &str) -> String {
@@ -2149,6 +2336,153 @@ mod tests {
     }
 
     #[test]
+    fn numeric_and_bool_values_under_sensitive_paths_are_redacted() {
+        // Regression: Null|Bool|Number were returned verbatim regardless of
+        // path sensitivity, so {"token":123456} leaked the numeric token.
+        let rules = ParityRules::default();
+        let numeric_secret = "1234567890123456";
+        let primary = response_json(
+            200,
+            serde_json::json!({ "token": numeric_secret.parse::<i64>().unwrap() }),
+        );
+        let shadow = response_json(200, serde_json::json!({ "token": 0 }));
+        let divs = rules.compare("POST /api/auth/token", &primary, &shadow);
+        assert!(!divs.is_empty());
+        // The numeric secret must NOT appear in the serialized divergence log.
+        assert_divergences_redacted(&divs, &[numeric_secret]);
+    }
+
+    #[test]
+    fn secret_embedded_as_object_key_is_redacted_from_field_path() {
+        // Regression: secrets as JSON object keys leaked via Divergence.field.
+        let rules = ParityRules::default();
+        let key_secret = "sk-live-key-as-object-name-12345";
+        let primary = response_json(
+            200,
+            serde_json::json!({ "credentials": { key_secret: true } }),
+        );
+        let shadow = response_json(200, serde_json::json!({ "credentials": {} }));
+        let divs = rules.compare("POST /api/auth/token", &primary, &shadow);
+        assert!(!divs.is_empty());
+        assert_divergences_redacted(&divs, &[key_secret]);
+    }
+
+    #[test]
+    fn array_index_paths_and_hook_context_fields_are_redacted() {
+        let rules = ParityRules::default();
+        let content_secret = "array-content-secret-never-leak";
+        let hook_secret = "hook-context-secret-never-leak";
+        let primary = response_json(
+            200,
+            serde_json::json!({
+                "content": [content_secret],
+                "inject": { "id": "safe-looking-id", "payload": hook_secret },
+                "recentContext": hook_secret,
+                "summaryPrompt": hook_secret,
+                "injections": [{ "id": "injection-id", "systemPrompt": hook_secret }],
+                "hiddenPrompt": hook_secret,
+                "recall": { "id": "recall-id", "context": hook_secret }
+            }),
+        );
+        let shadow = response_json(
+            200,
+            serde_json::json!({
+                "content": ["shadow-content"],
+                "inject": { "id": "different-id", "payload": "shadow-hook" },
+                "recentContext": "shadow-hook",
+                "summaryPrompt": "shadow-hook",
+                "injections": [{ "id": "different-id", "systemPrompt": "shadow-hook" }],
+                "hiddenPrompt": "shadow-hook",
+                "recall": { "id": "different-id", "context": "shadow-hook" }
+            }),
+        );
+
+        let divs = rules.compare("POST /api/hooks/session", &primary, &shadow);
+        assert!(!divs.is_empty());
+        assert_divergences_redacted(
+            &divs,
+            &[
+                content_secret,
+                hook_secret,
+                "safe-looking-id",
+                "injection-id",
+                "recall-id",
+                "shadow-content",
+                "shadow-hook",
+            ],
+        );
+        assert!(serialized_divergences(&divs).contains("[REDACTED sha64="));
+    }
+
+    #[test]
+    fn deterministic_memory_key_redacts_sensitive_key_columns() {
+        let mut rule = endpoint_rule();
+        rule.internal_state = Some(InternalStateRule {
+            tables: BTreeMap::from([(
+                "memories".to_string(),
+                InternalTableRule {
+                    key: Some(vec!["content".to_string(), "agent_id".to_string()]),
+                    columns: None,
+                    ignore_columns: None,
+                    tolerance: None,
+                    redactions: None,
+                    timestamp_precision: None,
+                    array_ordering: None,
+                },
+            )]),
+        });
+        let rules = rules_with_endpoint("POST /api/memory/remember", rule);
+        let primary_secret = "primary-key-column-secret-never-leak";
+        let shadow_secret = "shadow-key-column-secret-never-leak";
+        let primary = internal_snapshot(vec![memory_row(
+            "primary-id",
+            "hash-primary-key-redaction",
+            "agent-a",
+            primary_secret,
+        )]);
+        let shadow = internal_snapshot(vec![memory_row(
+            "shadow-id",
+            "hash-shadow-key-redaction",
+            "agent-a",
+            shadow_secret,
+        )]);
+
+        let divs = rules.compare_internal("POST /api/memory/remember", &primary, &shadow);
+        assert!(!divs.is_empty());
+        let serialized = serialized_divergences(&divs);
+        assert_divergences_redacted(&divs, &[primary_secret, shadow_secret]);
+        assert!(serialized.contains("[REDACTED sha64="));
+    }
+
+    #[test]
+    fn property_planted_secrets_do_not_leak_from_random_response_shapes() {
+        let rules = ParityRules::default();
+        let mut rng = TestRng::new(0x5eed_f00d_dead_beef);
+        for case in 0..160 {
+            let primary_secret = format!("PLANTED_SECRET_PRIMARY_{case}_do_not_log");
+            let shadow_secret = format!("PLANTED_SECRET_SHADOW_{case}_do_not_log");
+            let primary_json = random_json_with_secret(&mut rng, 0, &primary_secret);
+            let shadow_json = replace_secret_string(&primary_json, &primary_secret, &shadow_secret);
+            let primary = response_json(200, primary_json.clone());
+            let shadow = response_json(200, shadow_json);
+
+            let mut divs = rules.compare("POST /api/hooks/session", &primary, &shadow);
+            divs.extend(rules.compare(
+                "POST /api/hooks/session",
+                &primary,
+                &response_json(200, serde_json::json!({})),
+            ));
+
+            assert!(!divs.is_empty(), "case {case} produced no divergences");
+            assert_divergences_redacted(&divs, &[&primary_secret, &shadow_secret]);
+            assert!(
+                serialized_divergences(&divs).contains("[REDACTED sha64="),
+                "case {case} did not fingerprint redacted values"
+            );
+        }
+    }
+
+    #[test]
     fn internal_history_and_entity_freeform_fields_are_redacted() {
         // Regression: reason/metadata/description were not in the freeform set.
         let rules = ParityRules::default();
@@ -2278,6 +2612,112 @@ mod tests {
             "shadow content leaked: {serialized}"
         );
         assert!(serialized.contains("hash-primary") || serialized.contains("hash-shadow"));
+    }
+
+    struct TestRng {
+        state: u64,
+    }
+
+    impl TestRng {
+        fn new(seed: u64) -> Self {
+            Self { state: seed }
+        }
+
+        fn next(&mut self) -> u64 {
+            self.state = self
+                .state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            self.state
+        }
+
+        fn usize(&mut self, upper: usize) -> usize {
+            (self.next() as usize) % upper
+        }
+    }
+
+    fn random_json_with_secret(rng: &mut TestRng, depth: usize, secret: &str) -> serde_json::Value {
+        if depth >= 5 {
+            return serde_json::Value::String(secret.to_string());
+        }
+
+        match rng.usize(5) {
+            0 => serde_json::Value::String(secret.to_string()),
+            1 => serde_json::json!([random_json_with_secret(rng, depth + 1, secret)]),
+            2 => serde_json::json!([
+                { "id": format!("case-{depth}"), "status": "ok" },
+                random_json_with_secret(rng, depth + 1, secret),
+                { "count": depth }
+            ]),
+            _ => {
+                let key = random_secret_parent_key(rng);
+                let mut object = serde_json::Map::new();
+                object.insert(
+                    key.to_string(),
+                    random_json_with_secret(rng, depth + 1, secret),
+                );
+                let sibling_key = random_safe_key(rng);
+                if sibling_key != key {
+                    object.insert(
+                        sibling_key.to_string(),
+                        serde_json::Value::String(format!("diagnostic-{depth}")),
+                    );
+                }
+                object.insert("count".to_string(), serde_json::json!(depth));
+                object.insert("ok".to_string(), serde_json::json!(true));
+                serde_json::Value::Object(object)
+            }
+        }
+    }
+
+    fn random_secret_parent_key(rng: &mut TestRng) -> &'static str {
+        const KEYS: &[&str] = &[
+            "content",
+            "memory",
+            "memories",
+            "inject",
+            "recentContext",
+            "summaryPrompt",
+            "injections",
+            "systemPrompt",
+            "hiddenPrompt",
+            "recall",
+            "context",
+            "prompt",
+            "notes",
+            "payload",
+            "details",
+            "items",
+            "id",
+            "status",
+            "path",
+        ];
+        KEYS[rng.usize(KEYS.len())]
+    }
+
+    fn random_safe_key(rng: &mut TestRng) -> &'static str {
+        const KEYS: &[&str] = &["id", "status", "version", "agent_id", "visibility", "scope"];
+        KEYS[rng.usize(KEYS.len())]
+    }
+
+    fn replace_secret_string(value: &serde_json::Value, from: &str, to: &str) -> serde_json::Value {
+        match value {
+            serde_json::Value::String(text) if text == from => {
+                serde_json::Value::String(to.to_string())
+            }
+            serde_json::Value::Array(items) => serde_json::Value::Array(
+                items
+                    .iter()
+                    .map(|item| replace_secret_string(item, from, to))
+                    .collect(),
+            ),
+            serde_json::Value::Object(map) => serde_json::Value::Object(
+                map.iter()
+                    .map(|(key, child)| (key.clone(), replace_secret_string(child, from, to)))
+                    .collect(),
+            ),
+            other => other.clone(),
+        }
     }
 
     fn memory_row(
