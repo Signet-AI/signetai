@@ -535,7 +535,34 @@ fn ensure_cross_daemon_parity_tables(conn: &Connection) -> Result<(), CoreError>
         CREATE INDEX IF NOT EXISTS idx_api_keys_active
             ON api_keys(revoked_at, expires_at);
         CREATE INDEX IF NOT EXISTS idx_api_keys_connector
-            ON api_keys(connector, harness);",
+            ON api_keys(connector, harness);
+
+        CREATE TABLE IF NOT EXISTS os_tray_entries (
+            id TEXT PRIMARY KEY,
+            state TEXT NOT NULL DEFAULT 'tray' CHECK(state IN ('tray', 'grid', 'dock')),
+            entry_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_os_tray_state
+            ON os_tray_entries(state, updated_at DESC);
+
+        CREATE TABLE IF NOT EXISTS os_probe_results (
+            server_id TEXT PRIMARY KEY,
+            probe_json TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS os_widgets (
+            id TEXT PRIMARY KEY,
+            status TEXT NOT NULL DEFAULT 'generating',
+            html TEXT,
+            job_json TEXT,
+            generated_at TEXT,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_os_widgets_status
+            ON os_widgets(status, updated_at DESC);",
     )?;
 
     // Stamp all TS migration versions whose artifacts are already present in a

@@ -220,10 +220,37 @@ tray+widget CRUD persistence — so a dashboard pointed at the Rust daemon
 functions. The observe-think-act LLM loop + DOM interaction stays
 dashboard-side (wrong layer to port into the daemon).
 
-## Phase 2b status (test porting — starting)
+## Phase 2b status (test porting — in progress)
 
 Port the 114 needs-port TS tests (grouped in `03-test-corpus-manifest.md`).
 Priority: recall/ranking (18), pipeline (19), misc routes (23), memory/lineage
 (11), sources (11), then the rest. Many → contract_replay cases or corpus
 fixtures. Some runtime-specific tests (watcher/scheduler/socket/event-loop)
 will be "honest" ports or harness-backed.
+
+- ✅ recall/ranking + memory/lineage ports: signet-core/tests/recall_parity.rs
+  (10 tests), signet-pipeline/tests/recall_ports.rs (4). Covers source-chunk
+  fallback scope, native-artifact fallback, authorize-before-content, temporal
+  intent+evidence, hint recall scope, structured-path rescue, currentness,
+  telemetry schema, embedding coverage, session dedupe epochs, memory-head
+  agent-safe/budget, session checkpoints.
+- ✅ pipeline ports: signet-pipeline/tests/{worker_ports,retention_ports,
+  pipeline_misc}.rs (12 tests). Covers retention sweep, worker ADD fact-write +
+  memory_history + graph + FTS, shadow mode, retries, summary DAG,
+  provider-executable-availability. Plus contract_replay pipeline-models +
+  dream snake_case.
+- ⬜ Remaining port groups: misc routes (23), sources (11), auth/secrets (7),
+  skills (7), scoping (6), ontology (4), mcp (2), hooks (2), dashboard (2),
+  marketplace (1), retention (1).
+
+## /api/os/* status (in flight)
+
+- ✅ HTTP/SSE/state contract parity (per user-approved scope): event-bus
+  in-memory rolling-window query/SSE/stats/context, tray+widget SQLite CRUD,
+  agent-session state machine, chat/install contracts. SSE streams real.
+- ⏳ **3 refinements in flight:** (a) tray reprobe stores synthetic ok=true
+  (should probe real MCP server, persist TS-shaped result with
+  declaredManifest/tools/resources); (b) widget generate emits
+  `widget.generation` but dashboard listens for `widget.generated` (stuck
+  generating — needs async completion or different event); (c) missing
+  /api/os/agent-events session idles (should emit TS-shaped error SSE event).

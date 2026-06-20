@@ -664,3 +664,25 @@ CREATE INDEX idx_memory_jobs_completed_at
 			ON memory_jobs(completed_at);
 CREATE INDEX idx_memory_jobs_failed_at
 			ON memory_jobs(failed_at);
+CREATE TABLE os_tray_entries (
+            id TEXT PRIMARY KEY,
+            state TEXT NOT NULL DEFAULT 'tray' CHECK(state IN ('tray', 'grid', 'dock')),
+            entry_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+CREATE INDEX idx_os_tray_state ON os_tray_entries(state, updated_at DESC);
+CREATE TABLE os_probe_results (
+            server_id TEXT PRIMARY KEY,
+            probe_json TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+CREATE TABLE os_widgets (
+            id TEXT PRIMARY KEY,
+            status TEXT NOT NULL DEFAULT 'generating',
+            html TEXT,
+            job_json TEXT,
+            generated_at TEXT,
+            updated_at TEXT NOT NULL
+        );
+CREATE INDEX idx_os_widgets_status ON os_widgets(status, updated_at DESC);

@@ -1699,6 +1699,26 @@ impl TestServer {
     }
 }
 
+async fn next_sse_chunk(resp: &mut reqwest::Response) -> String {
+    let chunk = tokio::time::timeout(Duration::from_secs(5), resp.chunk())
+        .await
+        .expect("timed out waiting for SSE chunk")
+        .expect("SSE chunk request failed")
+        .expect("SSE stream ended before chunk");
+    String::from_utf8_lossy(&chunk).to_string()
+}
+
+async fn read_sse_until(resp: &mut reqwest::Response, needle: &str) -> String {
+    let mut collected = String::new();
+    for _ in 0..12 {
+        collected.push_str(&next_sse_chunk(resp).await);
+        if collected.contains(needle) {
+            return collected;
+        }
+    }
+    panic!("SSE stream did not contain {needle}: {collected}");
+}
+
 async fn call_mcp_tool(
     server: &TestServer,
     name: &str,
@@ -4818,32 +4838,34 @@ async fn os_routes_replay_empty_state_and_validation_shapes() {
     assert_eq!(body["query"]["limit"], 500);
     assert_eq!(body["query"]["windowMs"], 1000);
 
-    let resp = server
-        .get("/api/os/events/stream?type=browser.navigate")
-        .await;
-    assert_eq!(resp.status(), 200);
-    let text = resp.text().await.expect("os events stream body");
+    let mut event_stream = server
+        .client
+        .get(format!("{}/api/os/events/stream?type=widget", server.base))
+        .send()
+        .await
+        .expect("open os event stream");
+    assert_eq!(event_stream.status(), 200);
+    let text = next_sse_chunk(&mut event_stream).await;
     assert!(text.contains("\"type\":\"connected\""));
-    assert!(text.contains("\"subscribedTo\":\"browser.navigate\""));
+    assert!(text.contains("\"subscribedTo\":\"widget\""));
+
+    let resp = server.get("/api/os/events/stats").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["bufferSize"], 0);
+    assert!(body["subscriptionCount"].as_u64().unwrap_or_default() >= 1);
 
     let resp = server.get("/api/os/context").await;
     assert_eq!(resp.status(), 200);
     let body = server.json(resp).await;
     assert_eq!(body["events"], json!([]));
-
-    let resp = server.get("/api/os/events/stats").await;
-    assert_eq!(resp.status(), 200);
+    assert_eq!(body["totalEvents"], 0);
 
     let resp = server.get("/api/os/agent-sessions").await;
     assert_eq!(resp.status(), 200);
     let body = server.json(resp).await;
     assert_eq!(body["sessions"], json!([]));
     assert_eq!(body["count"], 0);
-
-    let resp = server.get("/api/os/agent-events").await;
-    assert_eq!(resp.status(), 200);
-    let text = resp.text().await.expect("os agent stream body");
-    assert!(text.contains("\"type\":\"connected\""));
 
     let resp = server.post("/api/os/agent-execute", json!({})).await;
     assert_eq!(resp.status(), 400);
@@ -4859,8 +4881,24 @@ async fn os_routes_replay_empty_state_and_validation_shapes() {
     assert_eq!(resp.status(), 200);
     let body = server.json(resp).await;
     let session_id = body["sessionId"].as_str().expect("session id");
-    assert!(session_id.starts_with("agent-"));
+    assert!(session_id.starts_with("agent_"));
     assert_eq!(body["serverId"], "browser");
+
+    let mut agent_stream = server
+        .client
+        .get(format!(
+            "{}/api/os/agent-events?session={}",
+            server.base, session_id
+        ))
+        .send()
+        .await
+        .expect("open agent event stream");
+    assert_eq!(agent_stream.status(), 200);
+    let first_agent_chunk = next_sse_chunk(&mut agent_stream).await;
+    assert!(
+        first_agent_chunk.contains("\"type\":\"connected\"")
+            || first_agent_chunk.contains("agentStart")
+    );
 
     let resp = server
         .post(
@@ -4892,12 +4930,21 @@ async fn os_routes_replay_empty_state_and_validation_shapes() {
     let resp = server
         .post(
             "/api/os/agent-state",
-            json!({"sessionId": session_id, "domState": {"url": "http://localhost"}}),
+            json!({"sessionId": session_id, "domState": {"url": "http://localhost"}, "status": "done", "step": 1, "result": "opened settings"}),
         )
         .await;
     assert_eq!(resp.status(), 200);
     let body = server.json(resp).await;
     assert_eq!(body["success"], true);
+    let agent_update = read_sse_until(&mut agent_stream, "done").await;
+    assert!(agent_update.contains(session_id));
+    assert!(agent_update.contains("done"));
+
+    let resp = server.get("/api/os/agent-sessions").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["sessions"][0]["status"], "done");
+    assert_eq!(body["sessions"][0]["step"], 1);
 
     let resp = server
         .post("/api/os/agent-state", json!({"sessionId": "missing"}))
@@ -4959,7 +5006,7 @@ async fn os_routes_replay_empty_state_and_validation_shapes() {
     let resp = server
         .post(
             "/api/os/install",
-            json!({"url": "https://example.com/mcp", "name": "Example MCP"}),
+            json!({"url": "https://example.com/mcp", "name": "Example MCP", "autoPlace": true}),
         )
         .await;
     assert_eq!(resp.status(), 200);
@@ -4977,20 +5024,88 @@ async fn os_routes_replay_empty_state_and_validation_shapes() {
     assert_eq!(installed[0]["config"]["transport"], "http");
     assert_eq!(installed[0]["config"]["url"], "https://example.com/mcp");
 
+    let resp = server.get("/api/os/tray").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["count"], 1);
+    assert_eq!(body["entries"][0]["id"], "example-mcp");
+    assert_eq!(body["entries"][0]["state"], "grid");
+
+    let resp = server
+        .patch(
+            "/api/os/tray/example-mcp",
+            json!({"state": "dock", "gridPosition": {"x": 2, "y": 3, "w": 4, "h": 3}}),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["success"], true);
+    assert_eq!(body["entry"]["state"], "dock");
+
+    let resp = server.get("/api/os/tray/example-mcp").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["entry"]["gridPosition"]["x"], 2);
+
+    let resp = server
+        .post("/api/os/tray/example-mcp/reprobe", json!({}))
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["success"], true);
+    assert_eq!(body["probe"]["ok"], true);
+
+    let resp = server.get("/api/os/tray/example-mcp/probe").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["probe"]["serverId"], "example-mcp");
+
     let resp = server.post("/api/os/widget/generate", json!({})).await;
     assert_eq!(resp.status(), 400);
     let body = server.json(resp).await;
     assert_eq!(body["error"], "serverId is required");
 
-    let resp = server.get("/api/os/widget/missing").await;
-    assert_eq!(resp.status(), 404);
+    let resp = server
+        .post(
+            "/api/os/widget/generate",
+            json!({"serverId": "example-mcp", "html": "<section>Example widget</section>"}),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
     let body = server.json(resp).await;
-    assert_eq!(body["error"], "Widget not found");
+    assert_eq!(body["status"], "cached");
+    assert_eq!(body["html"], "<section>Example widget</section>");
 
-    let resp = server.delete("/api/os/widget/missing").await;
+    let event_text = read_sse_until(&mut event_stream, "widget.generation").await;
+    assert!(event_text.contains("example-mcp"));
+
+    let resp = server.get("/api/os/events?type=widget&limit=10").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["count"], 1);
+    assert_eq!(body["events"][0]["type"], "widget.generation");
+
+    let resp = server.get("/api/os/context").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert!(body["totalEvents"].as_u64().unwrap_or_default() >= 1);
+    assert!(body["activeSources"].as_u64().unwrap_or_default() >= 1);
+
+    let resp = server.get("/api/os/widget/example-mcp").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["html"], "<section>Example widget</section>");
+    assert!(body["generatedAt"].as_str().is_some());
+
+    let resp = server.delete("/api/os/widget/example-mcp").await;
     assert_eq!(resp.status(), 200);
     let body = server.json(resp).await;
     assert_eq!(body["success"], true);
+
+    let resp = server.get("/api/os/widget/example-mcp").await;
+    assert_eq!(resp.status(), 404);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "Widget not found");
 }
 
 #[tokio::test]
@@ -6148,6 +6263,16 @@ async fn dream_routes_replay_status_and_inactive_worker_shapes() {
             .expect("dreaming passes")
             .is_empty()
     );
+
+    // Ports snake_case query compatibility from
+    // platform/daemon/src/routes/pipeline-routes-agent.test.ts:36-40.
+    let resp = server
+        .get("/api/dream/status?agent_id=agent-dream-snake")
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["state"]["tokensSinceLastPass"], 0);
+    assert_eq!(body["worker"]["activeAgentId"], serde_json::Value::Null);
 
     let resp = server.post("/api/dream/trigger", json!({})).await;
     assert_eq!(resp.status(), 503);
@@ -11032,12 +11157,27 @@ async fn remaining_public_routes_have_contract_replay_coverage() {
         &[200],
     );
 
+    // Ports route-shape coverage from platform/daemon/src/routes/pipeline-routes-models.test.ts:12-45.
+    // Rust currently exposes the active configured model rather than the full TS static catalog.
     let resp = server.get("/api/pipeline/models").await;
     assert_status("GET /api/pipeline/models", &resp, &[200]);
+    let body = server.json(resp).await;
+    let models = body["models"].as_array().expect("pipeline models array");
+    assert_eq!(models.len(), 1);
+    assert!(models[0]["name"].is_string());
+    assert!(models[0]["provider"].is_string());
+    assert_eq!(models[0]["active"], true);
+
     let resp = server.get("/api/pipeline/models/by-provider").await;
     assert_status("GET /api/pipeline/models/by-provider", &resp, &[200]);
+    let body = server.json(resp).await;
+    let provider = models[0]["provider"].as_str().expect("provider name");
+    assert!(body[provider].as_array().expect("provider model list")[0]["name"].is_string());
+
     let resp = server.post("/api/pipeline/models/refresh", json!({})).await;
     assert_status("POST /api/pipeline/models/refresh", &resp, &[200]);
+    let body = server.json(resp).await;
+    assert!(body["models"].as_array().expect("refreshed models").len() >= 1);
 
     let resp = server.post("/api/repair/backfill-skipped", json!({})).await;
     assert_status("POST /api/repair/backfill-skipped", &resp, &[200]);
