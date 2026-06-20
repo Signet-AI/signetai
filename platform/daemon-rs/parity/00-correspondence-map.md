@@ -220,28 +220,31 @@ tray+widget CRUD persistence — so a dashboard pointed at the Rust daemon
 functions. The observe-think-act LLM loop + DOM interaction stays
 dashboard-side (wrong layer to port into the daemon).
 
-## Phase 2b status (test porting — in progress)
+## Phase 2b status (test porting — COMPLETE)
 
-Port the 114 needs-port TS tests (grouped in `03-test-corpus-manifest.md`).
-Priority: recall/ranking (18), pipeline (19), misc routes (23), memory/lineage
-(11), sources (11), then the rest. Many → contract_replay cases or corpus
-fixtures. Some runtime-specific tests (watcher/scheduler/socket/event-loop)
-will be "honest" ports or harness-backed.
+All 114 needs-port TS tests resolved: each is either PORTED (passing Rust test,
+fails on regression, cites TS file:line) or DOCUMENTED (#[ignore] gap/skip
+marker citing what Rust module is missing OR the specific JS-runtime dependency).
 
-- ✅ recall/ranking + memory/lineage ports: signet-core/tests/recall_parity.rs
-  (10 tests), signet-pipeline/tests/recall_ports.rs (4). Covers source-chunk
-  fallback scope, native-artifact fallback, authorize-before-content, temporal
-  intent+evidence, hint recall scope, structured-path rescue, currentness,
-  telemetry schema, embedding coverage, session dedupe epochs, memory-head
-  agent-safe/budget, session checkpoints.
-- ✅ pipeline ports: signet-pipeline/tests/{worker_ports,retention_ports,
-  pipeline_misc}.rs (12 tests). Covers retention sweep, worker ADD fact-write +
-  memory_history + graph + FTS, shadow mode, retries, summary DAG,
-  provider-executable-availability. Plus contract_replay pipeline-models +
-  dream snake_case.
-- ⬜ Remaining port groups: misc routes (23), sources (11), auth/secrets (7),
-  skills (7), scoping (6), ontology (4), mcp (2), hooks (2), dashboard (2),
-  marketplace (1), retention (1).
+Ported groups: recall/ranking (14), pipeline (12 + graph-search in tail),
+misc+auth (6), sources+scoping+ontology (11), skills/mcp/hooks/dashboard/
+marketplace (7), tail [pipeline_tail/sources_tail/routes_tail/runtime_tail]
+(17 ported + 43 documented gaps/skips).
+
+Documented REAL gaps (missing Rust modules, tracked for follow-up): continuity-
+scoring, prospective-index, skill-enrichment (trailing-comma JSON parser),
+skill-reconciler worker, reflection/dreaming workers, model-registry static
+ACPX catalog, structured-evidence shaping, synthesis-worker public API,
+contradiction JSON parser, embedding-tracker, native-memory-sources,
+path-feedback, aggregate-recall API, prompt-text helper, knowledge-feedback,
+file-sync/single-flight-runner/watcher-ignore/structural-features/identity-
+context/session-memories (helpers private or no Rust API).
+
+JS-runtime skips (cite Bun/Node/Hono/subprocess dependency): bind-with-retry,
+daemon-refactor, daemon-auth-guard-colocation, db-accessor, middleware,
+resource-monitor, scheduler spawn/worker/worker-execute, update-system,
+graphiq CLI, provider ACPX subprocess, rate-limit wrapper, live Ollama,
+Discord/GitHub live API, inference-router legacy.
 
 ## /api/os/* status (in flight)
 
@@ -282,8 +285,6 @@ assertion, 5-run median per bench-spec).
 ## Phase 5 status (final verification + landing — pending user go)
 
 Remaining before landing:
-- Finish the ~40 residual test ports (mostly runtime/JS-specific or
-  provider-mocked — will be 'honest ports' or harness-backed; real parity
-  gaps already flagged in 03-test-corpus-manifest.md).
 - Final full-workspace verification sweep + autoreview on the complete diff.
+- Landing PR review on explicit user go (long-lived branch, never auto-merge).
 - Landing PR review on explicit user go (long-lived branch, never auto-merge).
