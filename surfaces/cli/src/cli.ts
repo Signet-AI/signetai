@@ -60,10 +60,10 @@ import { Command } from "commander";
 import ora from "ora";
 import { registerBrowseCommand } from "./browse.js";
 import { registerAgentCommands } from "./commands/agent.js";
-import { registerConnectorCommands } from "./commands/connector.js";
-import { registerContextCommands } from "./commands/context.js";
 import { registerApiKeyCommands } from "./commands/api-key.js";
 import { registerAppCommands } from "./commands/app.js";
+import { registerConnectorCommands } from "./commands/connector.js";
+import { registerContextCommands } from "./commands/context.js";
 import { registerDaemonCommands } from "./commands/daemon.js";
 import { registerDesktopCommands } from "./commands/desktop.js";
 import { registerDreamCommands } from "./commands/dream.js";
@@ -192,10 +192,9 @@ async function configureHarnessHooks(
 			const connector = new ForgeConnector();
 			const result = await connector.install(basePath);
 			if (!result.success) {
-				console.warn(chalk.yellow(`  Warning: ForgeCode integration setup failed: ${result.message}`));
-			} else {
-				console.log(chalk.green(`  ✓ ${result.message}`));
+				throw new Error(`ForgeCode integration setup failed: ${result.message}`);
 			}
+			console.log(chalk.green(`  ✓ ${result.message}`));
 			for (const w of result.warnings ?? []) {
 				console.warn(chalk.yellow(`  ${w}`));
 			}

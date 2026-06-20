@@ -17,6 +17,7 @@ const NO_HARNESSES = {
 	claudeCode: false,
 	openclaw: false,
 	opencode: false,
+	forge: false,
 	codex: false,
 	ohMyPi: false,
 	pi: false,
@@ -358,6 +359,19 @@ describe("setupWizard non-interactive harness hooks", () => {
 		expect(detectedHarnessesForExistingSetup(detection, [])).toContain("hermes-agent");
 	});
 
+	it("includes ForgeCode in migration harnesses when detected in ~/.forge", () => {
+		root = mkdtempSync(join(tmpdir(), "setup-migrate-forge-default-"));
+		const basePath = join(root, "agents");
+		mkdirSync(basePath, { recursive: true });
+		mkdirSync(join(root, ".forge"), { recursive: true });
+		writeFileSync(join(root, ".forge", ".mcp.json"), "{}\n");
+		process.env.HOME = root;
+
+		const detection = detectExistingSetup(basePath);
+		expect(detection.harnesses.forge).toBe(true);
+		expect(detectedHarnessesForExistingSetup(detection, [])).toContain("forge");
+	});
+
 	it("writes minimal identity preset with DREAMING.md as special-session file", async () => {
 		root = mkdtempSync(join(tmpdir(), "setup-ni-minimal-identity-"));
 		const basePath = join(root, "agents");
@@ -600,7 +614,7 @@ describe("setupWizard non-interactive harness hooks", () => {
 				...fakeDetection(basePath),
 				agentYaml: true,
 				memoryDb: true,
-				harnesses: { ...NO_HARNESSES, opencode: true },
+				harnesses: { ...NO_HARNESSES, forge: true, opencode: true },
 			})),
 			loadConfiguredHarnesses: mock(() => ["opencode"]),
 		});
@@ -611,6 +625,7 @@ describe("setupWizard non-interactive harness hooks", () => {
 		expect(configureHarnessHooks).toHaveBeenCalled();
 		const calls = configureHarnessHooks.mock.calls.map((c: unknown[]) => c[0]);
 		expect(calls).toContain("opencode");
+		expect(calls).toContain("forge");
 
 		// agent.yaml should now have identity mode off
 		const agentYaml = readFileSync(join(basePath, "agent.yaml"), "utf-8");

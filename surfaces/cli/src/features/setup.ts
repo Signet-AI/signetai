@@ -326,7 +326,12 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 			const signetSecretsEnabled = await resolveSignetSecretsCorePluginSelection(basePath, true, options);
 			const graphiqEnabled = await resolveGraphiqPluginSelection(basePath, true, options);
 			if (existing.agentYaml) {
-				writeCapabilitySelection(basePath, existingConfig, configuredIdentityMode ?? existingIdentityMode, signetSecretsEnabled);
+				writeCapabilitySelection(
+					basePath,
+					existingConfig,
+					configuredIdentityMode ?? existingIdentityMode,
+					signetSecretsEnabled,
+				);
 				scaffoldIdentityIfNeeded(basePath, configuredIdentityMode ?? existingIdentityMode, existingIdentityMode);
 			}
 			writeSetupCorePluginRegistry(basePath, { signetSecretsEnabled, graphiqEnabled });
@@ -346,6 +351,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 				if (h.claudeCode) detectedIds.add("claude-code");
 				if (h.openclaw) detectedIds.add("openclaw");
 				if (h.opencode) detectedIds.add("opencode");
+				if (h.forge) detectedIds.add("forge");
 				if (h.codex) detectedIds.add("codex");
 				if (h.ohMyPi) detectedIds.add("oh-my-pi");
 				if (h.pi) detectedIds.add("pi");
@@ -625,7 +631,9 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 	}
 
 	const defaultIdentityMode: IdentityMode = configuredIdentityMode ?? existingIdentityMode ?? "managed";
-	const identityMode: IdentityMode = nonInteractive ? defaultIdentityMode : await promptIdentityMode(defaultIdentityMode);
+	const identityMode: IdentityMode = nonInteractive
+		? defaultIdentityMode
+		: await promptIdentityMode(defaultIdentityMode);
 
 	const defaultIdentityPreset: IdentityPresetName = configuredIdentityPreset ?? existingIdentityPreset ?? "minimal";
 	const identityPreset: IdentityPresetName =
@@ -685,6 +693,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		{ value: "claude-code", name: "Claude Code (Anthropic CLI)", checked: existingHarnesses.includes("claude-code") },
 		{ value: "codex", name: "Codex", checked: existingHarnesses.includes("codex") },
 		{ value: "opencode", name: "OpenCode", checked: existingHarnesses.includes("opencode") },
+		{ value: "forge", name: "ForgeCode", checked: existingHarnesses.includes("forge") },
 		{ value: "openclaw", name: "OpenClaw", checked: existingHarnesses.includes("openclaw") },
 		{ value: "oh-my-pi", name: "Oh My Pi", checked: existingHarnesses.includes("oh-my-pi") },
 		{ value: "pi", name: "Pi", checked: existingHarnesses.includes("pi") },
