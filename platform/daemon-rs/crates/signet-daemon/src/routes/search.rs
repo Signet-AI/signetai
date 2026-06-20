@@ -235,10 +235,21 @@ pub async fn recall(
     }
     let temporal_intent = has_temporal_candidate_intent(&body);
 
-    // Rate-limit LLM-enabled recall independently of plain recall.
-    // Skipped in local auth mode; active in team/hybrid modes.
+    // Authenticate recall unconditionally in team/hybrid mode. LLM-enabled recall
+    // additionally receives its independent rate limit below; local mode remains
+    // permissive through authenticate_headers.
     {
         let auth_runtime = state.auth_snapshot();
+        let is_local = is_loopback(&peer);
+        let auth = match authenticate_headers(
+            auth_runtime.mode,
+            auth_runtime.secret.as_deref(),
+            &headers,
+            is_local,
+        ) {
+            Ok(auth) => auth,
+            Err(resp) => return (*resp).into_response(),
+        };
         let (reranker_enabled, use_extraction_model) = state
             .config
             .manifest
@@ -248,17 +259,6 @@ pub async fn recall(
             .map(|p| (p.reranker.enabled, p.reranker.use_extraction_model))
             .unwrap_or((false, false));
         if reranker_enabled && use_extraction_model && auth_runtime.mode != AuthMode::Local {
-            // authenticate_headers returns Err only for hard auth failures; in local
-            // mode we already returned above, so unwrap_or with unauthenticated is safe.
-            let auth = authenticate_headers(
-                auth_runtime.mode,
-                auth_runtime.secret.as_deref(),
-                &headers,
-                is_loopback(&peer),
-            )
-            .unwrap_or_else(|_| crate::auth::middleware::AuthState {
-                result: crate::auth::types::AuthResult::unauthenticated(),
-            });
             if let Err(resp) = require_rate_limit_guard(
                 &auth,
                 "recallLlm",

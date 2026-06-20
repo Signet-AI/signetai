@@ -3154,6 +3154,66 @@ async fn status_returns_db_info() {
 
 #[tokio::test]
 #[ignore = "requires built daemon binary"]
+async fn team_global_auth_middleware_replays_ts_open_and_protected_paths() {
+    // TS parity: platform/daemon/src/middleware.ts:61-68 mounts auth globally;
+    // platform/daemon/src/auth/middleware.ts:30-45 keeps /health,
+    // /api/auth/{login,methods,whoami}, /api/auth/{sso,saml}/*, and dashboard
+    // GET/HEAD requests open while protected API routes require Bearer auth.
+    let server = TestServer::start_team_auth().await;
+    let admin_token = TestServer::scoped_role_token("default", "admin");
+
+    for path in ["/health", "/api/auth/methods", "/"] {
+        let resp = server.get(path).await;
+        assert_eq!(
+            resp.status(),
+            200,
+            "open path should not require auth: {path}"
+        );
+    }
+
+    let remember_body = json!({
+        "content": "Critical global auth middleware replay memory",
+        "type": "fact"
+    });
+    let resp = server
+        .post("/api/memory/remember", remember_body.clone())
+        .await;
+    assert_eq!(resp.status(), 401);
+    assert_eq!(server.json(resp).await["error"], "authentication required");
+
+    let resp = server
+        .post_bearer("/api/memory/remember", remember_body, &admin_token)
+        .await;
+    assert_eq!(resp.status(), 200);
+
+    let recall_body = json!({"query": "Critical global auth middleware", "limit": 1});
+    let resp = server.post("/api/memory/recall", recall_body.clone()).await;
+    assert_eq!(resp.status(), 401);
+    assert_eq!(server.json(resp).await["error"], "authentication required");
+
+    let resp = server
+        .post_bearer("/api/memory/recall", recall_body, &admin_token)
+        .await;
+    assert_eq!(resp.status(), 200);
+
+    let widget_body = json!({
+        "serverId": "critical-auth-widget",
+        "html": "<section>auth ok</section>"
+    });
+    let resp = server
+        .post("/api/os/widget/generate", widget_body.clone())
+        .await;
+    assert_eq!(resp.status(), 401);
+    assert_eq!(server.json(resp).await["error"], "authentication required");
+
+    let resp = server
+        .post_bearer("/api/os/widget/generate", widget_body, &admin_token)
+        .await;
+    assert_eq!(resp.status(), 200);
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
 async fn memory_crud() {
     let server = TestServer::start().await;
 
@@ -6510,8 +6570,12 @@ async fn phase2b_misc_auth_secrets_replay_smoke() {
     // route semantics. The non-ignored Phase 2b coverage lives in
     // misc_routes_parity.rs, while contract_replay keeps the route-level fixture.
     let server = TestServer::start_team_auth().await;
+    let admin_token = TestServer::scoped_role_token("default", "admin");
 
     let resp = server.get("/api/version").await;
+    assert_eq!(resp.status(), 401);
+
+    let resp = server.get_bearer("/api/version", &admin_token).await;
     assert_eq!(resp.status(), 200);
     let body = server.json(resp).await;
     assert_eq!(body["version"], env!("CARGO_PKG_VERSION"));

@@ -1,9 +1,11 @@
 //! Axum middleware for auth: token validation, permission checks,
 //! scope enforcement, and rate limiting.
 
+use std::{net::SocketAddr, sync::Arc};
+
 use axum::body::Body;
-use axum::extract::Request;
-use axum::http::{HeaderMap, StatusCode};
+use axum::extract::{ConnectInfo, Request, State};
+use axum::http::{HeaderMap, Method, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Json, Response};
 
@@ -12,6 +14,7 @@ use super::policy::{check_permission, check_scope};
 use super::rate_limiter::AuthRateLimiter;
 use super::tokens::verify_token;
 use super::types::{AuthMode, AuthResult, Permission, TokenScope};
+use crate::state::AppState;
 
 // ---------------------------------------------------------------------------
 // Auth state stored in request extensions
@@ -32,13 +35,56 @@ fn extract_bearer(headers: &HeaderMap) -> Option<&str> {
     if token.is_empty() { None } else { Some(token) }
 }
 
-fn is_localhost(headers: &HeaderMap) -> bool {
-    let host = headers
-        .get("host")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-    let host_no_port = host.split(':').next().unwrap_or("");
-    matches!(host_no_port, "localhost" | "127.0.0.1" | "::1")
+fn is_loopback_request(req: &Request<Body>) -> bool {
+    req.extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|ConnectInfo(peer)| peer.ip().is_loopback())
+        .unwrap_or(false)
+}
+
+pub fn is_auth_open_path(path: &str) -> bool {
+    if path == "/health" {
+        return true;
+    }
+    if matches!(
+        path,
+        "/api/auth/login" | "/api/auth/methods" | "/api/auth/whoami"
+    ) {
+        return true;
+    }
+    path.starts_with("/api/auth/sso/") || path.starts_with("/api/auth/saml/")
+}
+
+fn is_dashboard_request(req: &Request<Body>) -> bool {
+    if !matches!(req.method(), &Method::GET | &Method::HEAD) {
+        return false;
+    }
+    let path = req.uri().path();
+    if path.starts_with("/api/")
+        || path.starts_with("/memory/")
+        || path == "/mcp"
+        || path.starts_with("/v1/")
+    {
+        return false;
+    }
+    if path == "/" || path.contains('.') {
+        return true;
+    }
+    req.headers()
+        .get("accept")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|accept| accept.contains("text/html"))
+}
+
+fn optional_auth_state(headers: &HeaderMap, secret: Option<&[u8]>) -> AuthState {
+    if let (Some(token), Some(secret)) = (extract_bearer(headers), secret) {
+        return AuthState {
+            result: verify_token(secret, token),
+        };
+    }
+    AuthState {
+        result: AuthResult::unauthenticated(),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -123,15 +169,25 @@ pub fn authenticate_headers(
 // Auth middleware (validates token, sets AuthState in extensions)
 // ---------------------------------------------------------------------------
 
-pub async fn auth_middleware(auth_cfg: AuthConfig, mut req: Request<Body>, next: Next) -> Response {
-    let auth = match authenticate_headers(
-        auth_cfg.mode,
-        auth_cfg.secret.as_deref(),
-        req.headers(),
-        auth_cfg.mode == AuthMode::Hybrid && is_localhost(req.headers()),
-    ) {
-        Ok(auth) => auth,
-        Err(resp) => return *resp,
+pub async fn auth_middleware(
+    State(state): State<Arc<AppState>>,
+    mut req: Request<Body>,
+    next: Next,
+) -> Response {
+    let auth_runtime = state.auth_snapshot();
+    let is_local = is_loopback_request(&req);
+    let auth = if is_auth_open_path(req.uri().path()) || is_dashboard_request(&req) {
+        optional_auth_state(req.headers(), auth_runtime.secret.as_deref())
+    } else {
+        match authenticate_headers(
+            auth_runtime.mode,
+            auth_runtime.secret.as_deref(),
+            req.headers(),
+            is_local,
+        ) {
+            Ok(auth) => auth,
+            Err(resp) => return *resp,
+        }
     };
 
     req.extensions_mut().insert(auth);

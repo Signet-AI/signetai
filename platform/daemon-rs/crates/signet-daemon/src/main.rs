@@ -1179,6 +1179,10 @@ async fn main() -> anyhow::Result<()> {
     .with_state(state.clone());
     let app = app.layer(middleware::from_fn_with_state(
         state.clone(),
+        auth::middleware::auth_middleware,
+    ));
+    let app = app.layer(middleware::from_fn_with_state(
+        state.clone(),
         analytics::analytics_middleware,
     ));
     let app = app.layer(middleware::from_fn_with_state(
