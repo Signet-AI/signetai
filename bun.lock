@@ -46,9 +46,12 @@
     "integrations/claude-code/connector": {
       "name": "@signet/connector-claude-code",
       "version": "0.142.4",
+      "bin": {
+        "signet-connector-claude-code": "bin/install.js",
+      },
       "dependencies": {
-        "@signet/connector-base": "workspace:*",
-        "@signet/core": "workspace:*",
+        "@signet/connector-base": "0.142.4",
+        "@signet/core": "0.142.4",
       },
       "devDependencies": {
         "@types/node": "^22.0.0",
@@ -62,8 +65,8 @@
         "signet-connector-codex": "bin/install.js",
       },
       "dependencies": {
-        "@signet/connector-base": "workspace:*",
-        "@signet/core": "workspace:*",
+        "@signet/connector-base": "0.142.4",
+        "@signet/core": "0.142.4",
       },
       "devDependencies": {
         "@types/node": "^22.0.0",
@@ -81,12 +84,30 @@
         "@signet/connector-codex": "workspace:*",
       },
     },
+    "integrations/forge/connector": {
+      "name": "@signet/connector-forge",
+      "version": "0.142.4",
+      "bin": {
+        "signet-connector-forge": "bin/install.js",
+      },
+      "dependencies": {
+        "@signet/connector-base": "0.142.4",
+        "@signet/core": "0.142.4",
+      },
+      "devDependencies": {
+        "@types/node": "^22.0.0",
+        "typescript": "^5.7.0",
+      },
+    },
     "integrations/gemini/connector": {
       "name": "@signet/connector-gemini",
       "version": "0.142.4",
+      "bin": {
+        "signet-connector-gemini": "bin/install.js",
+      },
       "dependencies": {
-        "@signet/connector-base": "workspace:*",
-        "@signet/core": "workspace:*",
+        "@signet/connector-base": "0.142.4",
+        "@signet/core": "0.142.4",
       },
       "devDependencies": {
         "@types/node": "^22.0.0",
@@ -96,9 +117,12 @@
     "integrations/hermes-agent/connector": {
       "name": "@signet/connector-hermes-agent",
       "version": "0.142.4",
+      "bin": {
+        "signet-connector-hermes-agent": "bin/install.js",
+      },
       "dependencies": {
-        "@signet/connector-base": "workspace:*",
-        "@signet/core": "workspace:*",
+        "@signet/connector-base": "0.142.4",
+        "@signet/core": "0.142.4",
       },
       "devDependencies": {
         "@types/node": "^22.0.0",
@@ -108,9 +132,12 @@
     "integrations/oh-my-pi/connector": {
       "name": "@signet/connector-oh-my-pi",
       "version": "0.142.4",
+      "bin": {
+        "signet-connector-oh-my-pi": "bin/install.js",
+      },
       "dependencies": {
-        "@signet/connector-base": "workspace:*",
-        "@signet/core": "workspace:*",
+        "@signet/connector-base": "0.142.4",
+        "@signet/core": "0.142.4",
       },
       "devDependencies": {
         "@types/node": "^22.0.0",
@@ -134,9 +161,12 @@
     "integrations/openclaw/connector": {
       "name": "@signet/connector-openclaw",
       "version": "0.142.4",
+      "bin": {
+        "signet-connector-openclaw": "bin/install.js",
+      },
       "dependencies": {
-        "@signet/connector-base": "workspace:*",
-        "@signet/core": "workspace:*",
+        "@signet/connector-base": "0.142.4",
+        "@signet/core": "0.142.4",
         "json5": "^2.2.3",
       },
       "devDependencies": {
@@ -165,9 +195,12 @@
     "integrations/opencode/connector": {
       "name": "@signet/connector-opencode",
       "version": "0.142.4",
+      "bin": {
+        "signet-connector-opencode": "bin/install.js",
+      },
       "dependencies": {
-        "@signet/connector-base": "workspace:*",
-        "@signet/core": "workspace:*",
+        "@signet/connector-base": "0.142.4",
+        "@signet/core": "0.142.4",
       },
       "devDependencies": {
         "@types/node": "^22.0.0",
@@ -187,9 +220,12 @@
     "integrations/pi/connector": {
       "name": "@signet/connector-pi",
       "version": "0.142.4",
+      "bin": {
+        "signet-connector-pi": "bin/install.js",
+      },
       "dependencies": {
-        "@signet/connector-base": "workspace:*",
-        "@signet/core": "workspace:*",
+        "@signet/connector-base": "0.142.4",
+        "@signet/core": "0.142.4",
       },
       "devDependencies": {
         "@types/node": "^22.0.0",
@@ -226,7 +262,7 @@
       "name": "@signet/connector-base",
       "version": "0.142.4",
       "dependencies": {
-        "@signet/core": "workspace:*",
+        "@signet/core": "0.142.4",
       },
       "devDependencies": {
         "@types/node": "^22.0.0",
@@ -356,6 +392,7 @@
         "@inquirer/prompts": "^7.0.0",
         "@signet/connector-claude-code": "workspace:*",
         "@signet/connector-codex": "workspace:*",
+        "@signet/connector-forge": "workspace:*",
         "@signet/connector-gemini": "workspace:*",
         "@signet/connector-hermes-agent": "workspace:*",
         "@signet/connector-oh-my-pi": "workspace:*",
@@ -1439,6 +1476,8 @@
     "@signet/connector-claude-code": ["@signet/connector-claude-code@workspace:integrations/claude-code/connector"],
 
     "@signet/connector-codex": ["@signet/connector-codex@workspace:integrations/codex/connector"],
+
+    "@signet/connector-forge": ["@signet/connector-forge@workspace:integrations/forge/connector"],
 
     "@signet/connector-gemini": ["@signet/connector-gemini@workspace:integrations/gemini/connector"],
 
@@ -3962,6 +4001,8 @@
 
     "@signet/connector-codex/@types/node": ["@types/node@22.19.17", "", { "dependencies": { "undici-types": "~6.21.0" } }, "sha512-wGdMcf+vPYM6jikpS/qhg6WiqSV/OhG+jeeHT/KlVqxYfD40iYJf9/AE1uQxVWFvU7MipKRkRv8NSHiCGgPr8Q=="],
 
+    "@signet/connector-forge/@types/node": ["@types/node@22.19.17", "", { "dependencies": { "undici-types": "~6.21.0" } }, "sha512-wGdMcf+vPYM6jikpS/qhg6WiqSV/OhG+jeeHT/KlVqxYfD40iYJf9/AE1uQxVWFvU7MipKRkRv8NSHiCGgPr8Q=="],
+
     "@signet/connector-gemini/@types/node": ["@types/node@22.19.17", "", { "dependencies": { "undici-types": "~6.21.0" } }, "sha512-wGdMcf+vPYM6jikpS/qhg6WiqSV/OhG+jeeHT/KlVqxYfD40iYJf9/AE1uQxVWFvU7MipKRkRv8NSHiCGgPr8Q=="],
 
     "@signet/connector-hermes-agent/@types/node": ["@types/node@22.19.17", "", { "dependencies": { "undici-types": "~6.21.0" } }, "sha512-wGdMcf+vPYM6jikpS/qhg6WiqSV/OhG+jeeHT/KlVqxYfD40iYJf9/AE1uQxVWFvU7MipKRkRv8NSHiCGgPr8Q=="],
@@ -4365,6 +4406,8 @@
     "@signet/connector-claude-code/@types/node/undici-types": ["undici-types@6.21.0", "", {}, "sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ=="],
 
     "@signet/connector-codex/@types/node/undici-types": ["undici-types@6.21.0", "", {}, "sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ=="],
+
+    "@signet/connector-forge/@types/node/undici-types": ["undici-types@6.21.0", "", {}, "sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ=="],
 
     "@signet/connector-gemini/@types/node/undici-types": ["undici-types@6.21.0", "", {}, "sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ=="],
 
