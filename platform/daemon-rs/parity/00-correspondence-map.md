@@ -253,20 +253,37 @@ will be "honest" ports or harness-backed.
   bypass closed), MCP initialize handshake + widget.invalidated on tool change.
 - ⏳ **3 more in flight (custom MCP transport):** ✅ DONE — probe resolves
   `secret://` (no-log), SSE parser matches JSON-RPC id (notifications skipped,
-  missing fails honestly), kill_on_drop. **1 refinement in flight:** 202/204
-  accepted even when a response id is expected (false ok:true zero tools).
+  missing fails honestly), kill_on_drop, 202/204 gating, resources/list strict.
 - ✅ **CORS parity** (was a gap): native axum CORS middleware matching TS
   rules. Fail-closed, no permissive '*'.
 
-## Phase 3 status (shadow internal-state — in flight)
+## Phase 4 status (perf SLOs — DONE, all 7 PASS)
 
-- ✅ snapshot.rs (read-only SQLite, canonical rows, redaction, normalization),
-  compare_internal (key columns, ignoreColumns, tolerances, unordered),
-  main.rs opt-in --internal-state, route table map (memories/history/entities),
-  parity-rules internalState schema sample. 25 shadow tests green.
-- ⏳ **2 in flight (1 critical):** (a) CRITICAL — row-missing/extra divergences
-  log full memory rows incl raw content/normalized_content → secrets in
-  memories leak to shadow-divergences.jsonl (esp. since generated UUIDs make
-  normal writes look missing/extra); (b) keying rows by `id` fails because TS/
-  Rust generate independent UUIDs — key by content_hash+agent_id+visibility+
-  scope+idempotency/source instead.
+Measured against contracts/fixtures/bench-dataset.sql (AMD Ryzen 9 7900X):
+
+| SLO | Target | Measured | Status |
+|---|---:|---:|---|
+| Binary size | <30MB | 22.2MB | ✅ PASS |
+| Cold startup (--check-migrations) | <500ms | 2-6ms warm / 71ms cold | ✅ PASS |
+| Idle RSS | <50MB | 16MB | ✅ PASS |
+| Recall p50 | <15ms | 3.24ms | ✅ PASS |
+| Recall p95 | <40ms | 4.20ms | ✅ PASS |
+| Hybrid search QPS | >200/s | 2449/s | ✅ PASS |
+| Pipeline throughput | >10 jobs/s | 157 jobs/s | ✅ PASS |
+
+One targeted prod optimization: worker_loop does one zero-delay drain poll
+after a successful job (was paying poll_ms per queued job; 1.99→157 jobs/s).
+No busy-loop (idle still sleeps poll_ms; failures back off; overload precedes).
+
+Bench harness: recall.rs (tokio wrapper), signet-pipeline/benches/throughput.rs,
+signet-daemon/benches/http_recall.rs (real daemon spawn, non-empty-results
+assertion, 5-run median per bench-spec).
+
+## Phase 5 status (final verification + landing — pending user go)
+
+Remaining before landing:
+- Finish the ~40 residual test ports (mostly runtime/JS-specific or
+  provider-mocked — will be 'honest ports' or harness-backed; real parity
+  gaps already flagged in 03-test-corpus-manifest.md).
+- Final full-workspace verification sweep + autoreview on the complete diff.
+- Landing PR review on explicit user go (long-lived branch, never auto-merge).
