@@ -38,8 +38,20 @@ fn extract_bearer(headers: &HeaderMap) -> Option<&str> {
 fn is_loopback_request(req: &Request<Body>) -> bool {
     req.extensions()
         .get::<ConnectInfo<SocketAddr>>()
-        .map(|ConnectInfo(peer)| peer.ip().is_loopback())
+        .map(|ConnectInfo(peer)| is_loopback_ip(peer.ip()))
         .unwrap_or(false)
+}
+
+/// True for loopback in any form: IPv4 127.0.0.0/8, IPv6 ::1, and the
+/// IPv4-mapped IPv6 form ::ffff:127.0.0.1 (which `IpAddr::is_loopback` does
+/// NOT catch). Mirrors the TS middleware + existing Rust route helpers.
+fn is_loopback_ip(ip: std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(v4) => v4.is_loopback(),
+        std::net::IpAddr::V6(v6) => {
+            v6.is_loopback() || v6.to_ipv4_mapped().is_some_and(|v4| v4.is_loopback())
+        }
+    }
 }
 
 pub fn is_auth_open_path(path: &str) -> bool {

@@ -19,8 +19,10 @@ use signet_core::search::{
     touch_accessed, traversal_primary_candidates, vec_search_scored,
 };
 
-use crate::auth::middleware::{authenticate_headers, require_rate_limit_guard};
-use crate::auth::types::AuthMode;
+use crate::auth::middleware::{
+    authenticate_headers, require_permission_guard, require_rate_limit_guard, resolve_scoped_agent,
+};
+use crate::auth::types::{AuthMode, Permission};
 use crate::reranker;
 use crate::routes::pipeline::is_loopback;
 use crate::state::AppState;
@@ -235,10 +237,12 @@ pub async fn recall(
     }
     let temporal_intent = has_temporal_candidate_intent(&body);
 
-    // Authenticate recall unconditionally in team/hybrid mode. LLM-enabled recall
-    // additionally receives its independent rate limit below; local mode remains
-    // permissive through authenticate_headers.
-    {
+    // Authenticate recall unconditionally in team/hybrid mode, enforce Recall
+    // permission, and resolve the scoped agent (so a limited/cross-agent
+    // credential cannot read memory outside its scope). LLM-enabled recall
+    // additionally receives its independent rate limit below; local mode
+    // remains permissive through authenticate_headers.
+    let (agent_id, _auth) = {
         let auth_runtime = state.auth_snapshot();
         let is_local = is_loopback(&peer);
         let auth = match authenticate_headers(
@@ -249,6 +253,26 @@ pub async fn recall(
         ) {
             Ok(auth) => auth,
             Err(resp) => return (*resp).into_response(),
+        };
+        if let Err(resp) =
+            require_permission_guard(&auth, Permission::Recall, auth_runtime.mode, is_local)
+        {
+            return (*resp).into_response();
+        }
+        let scoped = match resolve_scoped_agent(
+            &auth,
+            auth_runtime.mode,
+            is_local,
+            body.agent_id.as_deref(),
+        ) {
+            Ok(scoped) => scoped,
+            Err(reason) => {
+                return (
+                    StatusCode::FORBIDDEN,
+                    Json(serde_json::json!({"error": reason})),
+                )
+                    .into_response();
+            }
         };
         let (reranker_enabled, use_extraction_model) = state
             .config
@@ -269,7 +293,8 @@ pub async fn recall(
                 return (*resp).into_response();
             }
         }
-    }
+        (scoped, auth)
+    };
 
     // Clamp recall limit to TS normalizeRecallLimit bounds (1..50) to avoid
     // oversized hydration/fallback work on large limits.
@@ -304,13 +329,9 @@ pub async fn recall(
     let importance_min = body.importance_min;
     let since = body.since.clone();
     let until = body.until.clone();
-    let agent_id = body
-        .agent_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| "default".to_string());
+    // agent_id is resolved from the authenticated+scoped token above (not
+    // trusted from the request body) — a limited credential cannot read
+    // another agent's memories by passing agent_id in the body.
     let scope = body
         .scope
         .as_deref()
