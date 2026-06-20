@@ -122,11 +122,39 @@ Each phase ends with a gate: autoreview + orchestrator audit. Land on
 - Child model: `zai/glm-5.2`. Keep idiomatic Rust for HTTP/db/auth plumbing.
 - Don't touch `main`, don't reset/checkout/delete unrelated work.
 
-## Where to start Phase 1 (concrete first moves)
+## Phase 1 status (DONE, committed)
 
-1. Wire `parity-rules.json` enforcement in `signet-shadow/src/compare.rs`
-   (`tolerance`, `arrayOrdering`, `timestampPrecision`, `compareMode`).
-2. Scaffold `platform/daemon-rs/contracts/replay-corpus/` + the generator
-   (`scripts/generate-rust-replay-corpus.ts`, two-pass per `04` §3.3).
-3. Add the data-driven fixture runner to `contract_replay.rs`.
-4. Close the 9 shallow auth routes (smallest, unblocks auth core in Phase 2).
+- ✅ Wired dead `parity-rules.json` fields in `signet-shadow/src/compare.rs`
+  (`arrayOrdering`, `tolerance`, `timestampPrecision`, `compareMode`,
+  `compareBody`) + regression tests (21/21 green). Autoreview-surfaced
+  `timestampPrecision:"ignore"` either-side-ISO bug fixed (now requires both ISO).
+- ✅ `generate-rust-replay-corpus.ts` PASS-A generator → `inventory.json`
+  (2078 cases across all 167 TS tests; convertibility: 1036 provider-mocked,
+  578 http-files, 272 state-only, 174 runtime-specific, 18 http-db).
+- ✅ `contract_replay_fixtures.rs` data-driven runner (inline example green).
+- ✅ Closed 9 shallow auth routes → NATIVE (`/api/auth/methods`, api-keys
+  CRUD, login, SSO/SAML deferral). `route-parity.json` now 316/319
+  replay-proven (was 310); 3 remaining shallow = SSO/SAML start/callback
+  (external-IdP deferral — TS returns identical 501).
+- ✅ API-key VERIFICATION wired end-to-end (autoreview critical finding):
+  `verify_api_key` (constant-time scrypt + `last_used_at` + permissions),
+  `sig_sk_` bearer path in middleware, permissions enforced in policy.
+  Replay case `auth_api_key_bearer_verifies_updates_last_used_and_revocation_fails`.
+
+### Phase 1 known gaps → Phase 2 (tracked)
+
+- **Corpus runner ↔ fixture schema mismatch.** `contract_replay_fixtures.rs`
+  implements top-level `request`/`expectedResponse.json`; the 3 committed
+  fixtures use `steps[]` + `jsonContains`/`jsonMatchers`/`jsonPathAssertions`
+  (the fuller schema from `04` §3.2). Fixtures are documentary until the
+  runner gains `steps[]` + matcher support. Also needs `manifest.json`
+  (runner looks for it; only `inventory.json` + `cases/*` exist).
+  → **Phase 2 first task:** extend runner to support `steps[]` + the matcher
+  fields + add `manifest.json`, make ≥1 committed fixture execute green.
+  This scales naturally as the 114 needs-port tests get ported.
+- **3 remaining shallow auth routes** (SSO/SAML start/callback) — replay case
+  for the 501-deferral shape.
+- **PASS-B record-mode capture** (runtime instrumentation under
+  `SIGNET_REPLAY_CAPTURE=1`) — documented TODO in `replay-corpus/MANIFEST.md`,
+  not yet implemented. Needed for the 1036 provider-mocked + 578 http-files
+  test classes.

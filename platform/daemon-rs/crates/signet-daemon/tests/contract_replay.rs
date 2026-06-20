@@ -8556,6 +8556,232 @@ async fn analytics_collector_routes_record_request_counters_and_latency() {
 
 #[tokio::test]
 #[ignore = "requires built daemon binary"]
+async fn native_auth_routes_replay_ts_contract() {
+    let yaml = r#"agent:
+  name: test-agent
+  version: 1
+auth:
+  method: token
+  mode: team
+  login:
+    password:
+      username: avery
+      passwordHash: pbkdf2-sha256$10000$YWJjZGVmZ2hpamtsbW5vcA$DIskV6toASr80zCtPVeCG3APSUi4JVudd_NeFhCnFxk
+"#;
+    let server = TestServer::start_team_auth_with_agent_yaml(yaml).await;
+    let admin_token = TestServer::scoped_role_token("default", "admin");
+
+    let resp = server.get("/api/auth/methods").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["mode"], "team");
+    assert_eq!(body["providers"][0]["id"], "password");
+    assert_eq!(body["providers"][0]["enabled"], true);
+    assert_eq!(body["providers"][0]["username"], "avery");
+    assert_eq!(body["providers"][1]["startPath"], "/api/auth/sso/start");
+    assert_eq!(body["providers"][2]["startPath"], "/api/auth/saml/start");
+
+    for (method, path, expected) in [
+        (
+            "GET",
+            "/api/auth/sso/start",
+            json!({"error": "SSO login is not configured", "provider": "sso"}),
+        ),
+        (
+            "GET",
+            "/api/auth/sso/callback",
+            json!({"error": "SSO callback is not configured", "provider": "sso"}),
+        ),
+        (
+            "GET",
+            "/api/auth/saml/start",
+            json!({"error": "SAML login is not configured", "provider": "saml"}),
+        ),
+    ] {
+        let resp = server.get(path).await;
+        assert_eq!(resp.status(), 501, "{method} {path}");
+        assert_eq!(server.json(resp).await, expected);
+    }
+    let resp = server.post("/api/auth/saml/acs", json!({})).await;
+    assert_eq!(resp.status(), 501);
+    assert_eq!(
+        server.json(resp).await,
+        json!({"error": "SAML ACS is not configured", "provider": "saml"})
+    );
+
+    let resp = server
+        .post(
+            "/api/auth/login",
+            json!({"username": "avery", "password": "correct horse battery staple"}),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert!(
+        body["token"]
+            .as_str()
+            .is_some_and(|token| token.contains('.'))
+    );
+    assert_eq!(body["role"], "admin");
+    assert_eq!(body["username"], "avery");
+    assert!(body["expiresAt"].as_str().is_some_and(|s| s.ends_with('Z')));
+
+    let resp = server.get_bearer("/api/auth/api-keys", &admin_token).await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert!(
+        body["apiKeys"]
+            .as_array()
+            .expect("apiKeys array")
+            .is_empty()
+    );
+
+    let resp = server
+        .post_bearer(
+            "/api/auth/api-keys",
+            json!({
+                "name": "work laptop pi",
+                "connector": "pi",
+                "agentId": "agent-pi",
+                "allowedProjects": ["/workspace/signet"],
+                "scope": {"agent": "agent-pi"}
+            }),
+            &admin_token,
+        )
+        .await;
+    assert_eq!(resp.status(), 201);
+    let body = server.json(resp).await;
+    let created = &body["apiKey"];
+    let id = created["id"].as_str().expect("api key id").to_string();
+    let raw_key = created["key"]
+        .as_str()
+        .expect("raw api key returned once")
+        .to_string();
+    assert!(raw_key.starts_with("sig_sk_"));
+    assert_eq!(created["name"], "work laptop pi");
+    assert_eq!(created["role"], "agent");
+    assert_eq!(created["connector"], "pi");
+    assert_eq!(created["harness"], "pi");
+    assert_eq!(created["agentId"], "agent-pi");
+    assert_eq!(created["allowedProjects"][0], "/workspace/signet");
+    assert_eq!(
+        created["permissions"],
+        json!(["recall", "remember", "documents"])
+    );
+    assert!(created.get("key_hash").is_none());
+
+    let conn = rusqlite::Connection::open(server.db_path()).expect("open replay db");
+    let stored_hash: String = conn
+        .query_row(
+            "SELECT key_hash FROM api_keys WHERE id = ?1",
+            rusqlite::params![id],
+            |row| row.get(0),
+        )
+        .expect("stored api key hash");
+    assert!(stored_hash.starts_with("scrypt:"));
+    assert!(!stored_hash.contains(&raw_key));
+
+    let resp = server.get_bearer("/api/auth/api-keys", &admin_token).await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    let listed = &body["apiKeys"][0];
+    assert_eq!(listed["name"], "work laptop pi");
+    assert!(listed.get("key").is_none());
+    assert_eq!(listed["revokedAt"], serde_json::Value::Null);
+
+    let resp = server
+        .delete_bearer(&format!("/api/auth/api-keys/{id}"), &admin_token)
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["apiKey"]["id"], id);
+    assert!(body["apiKey"]["revokedAt"].as_str().is_some());
+
+    let resp = server
+        .delete_bearer("/api/auth/api-keys/missing-key", &admin_token)
+        .await;
+    assert_eq!(resp.status(), 404);
+    assert_eq!(server.json(resp).await["error"], "API key not found");
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn auth_api_key_bearer_verifies_updates_last_used_and_revocation_fails() {
+    let server = TestServer::start_team_auth().await;
+    let admin_token = TestServer::scoped_role_token("default", "admin");
+
+    let resp = server
+        .post_bearer(
+            "/api/auth/api-keys",
+            json!({
+                "name": "limited recall key",
+                "role": "admin",
+                "permissions": ["recall"],
+                "scope": {"agent": "agent-api-key"}
+            }),
+            &admin_token,
+        )
+        .await;
+    assert_eq!(resp.status(), 201);
+    let body = server.json(resp).await;
+    let created = &body["apiKey"];
+    let id = created["id"].as_str().expect("api key id").to_string();
+    let raw_key = created["key"].as_str().expect("raw api key").to_string();
+    assert!(raw_key.starts_with("sig_sk_"));
+    assert!(created.get("key_hash").is_none());
+
+    let conn = rusqlite::Connection::open(server.db_path()).expect("open replay db");
+    let (stored_hash, before_last_used): (String, Option<String>) = conn
+        .query_row(
+            "SELECT key_hash, last_used_at FROM api_keys WHERE id = ?1",
+            rusqlite::params![id.as_str()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("stored api key row");
+    assert!(stored_hash.starts_with("scrypt:"));
+    assert!(!stored_hash.contains(&raw_key));
+    assert!(before_last_used.is_none());
+    drop(conn);
+
+    let resp = server.get_bearer("/api/auth/whoami", &raw_key).await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["authenticated"], true);
+    assert_eq!(body["claims"]["sub"], format!("api-key:{id}"));
+    assert_eq!(body["claims"]["role"], "admin");
+    assert_eq!(body["claims"]["scope"]["agent"], "agent-api-key");
+    assert_eq!(body["claims"]["permissions"], json!(["recall"]));
+
+    let conn = rusqlite::Connection::open(server.db_path()).expect("open replay db");
+    let after_last_used: Option<String> = conn
+        .query_row(
+            "SELECT last_used_at FROM api_keys WHERE id = ?1",
+            rusqlite::params![id.as_str()],
+            |row| row.get(0),
+        )
+        .expect("last_used_at after auth");
+    assert!(after_last_used.is_some());
+    drop(conn);
+
+    let resp = server.get_bearer("/api/auth/api-keys", &raw_key).await;
+    assert_eq!(resp.status(), 403);
+    assert_eq!(
+        server.json(resp).await["error"],
+        "credential lacks 'admin' permission"
+    );
+
+    let resp = server
+        .delete_bearer(&format!("/api/auth/api-keys/{id}"), &admin_token)
+        .await;
+    assert_eq!(resp.status(), 200);
+
+    let resp = server.get_bearer("/api/auth/whoami", &raw_key).await;
+    assert_eq!(resp.status(), 401);
+    assert_eq!(server.json(resp).await["error"], "api key revoked");
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
 async fn auth_token_route_mints_scoped_tokens_and_whoami_reads_bearer() {
     let server = TestServer::start_team_auth().await;
     let admin_token = TestServer::scoped_role_token("default", "admin");

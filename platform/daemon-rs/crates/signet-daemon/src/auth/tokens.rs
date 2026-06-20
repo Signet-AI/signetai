@@ -90,6 +90,7 @@ pub fn create_token(
         role,
         iat: now,
         exp: now + ttl_seconds,
+        permissions: None,
     };
     let payload = serde_json::to_string(&claims).expect("claims are always serializable");
     let payload_b64 = URL_SAFE_NO_PAD.encode(payload.as_bytes());

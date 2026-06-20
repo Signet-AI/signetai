@@ -1,0 +1,73 @@
+{
+  "id": "memory-recall-agent-visibility-scope",
+  "source": {
+    "file": "platform/daemon/src/memory-search.test.ts",
+    "testName": "hybridRecall > defaults agent searches without readPolicy to isolated access",
+    "line": 1117
+  },
+  "classification": {
+    "family": "recall/ranking",
+    "convertibility": "http-db",
+    "tags": ["recall", "agent_id", "visibility", "scope"]
+  },
+  "environment": {
+    "agentYaml": "name: ReplayRecall\nembedding:\n  provider: none\nmemory:\n  pipelineV2:\n    enabled: false\n",
+    "env": {},
+    "clock": "2026-01-01T00:00:10.000Z",
+    "uuidSeed": "memory-recall-agent-visibility-scope"
+  },
+  "seed": {
+    "schema": "migrations-current",
+    "sql": "cases/memory-recall-agent-visibility-scope.seed.sql",
+    "redactions": ["OPENAI_API_KEY", "GITHUB_TOKEN", "SIGNET_AUTH_SECRET"]
+  },
+  "request": {
+    "method": "POST",
+    "path": "/api/memory/recall",
+    "headers": { "content-type": "application/json" },
+    "body": {
+      "query": "scoped replay marker",
+      "limit": 10,
+      "agentId": "agent-a"
+    }
+  },
+  "expectedResponse": {
+    "status": 200,
+    "headers": { "content-type": { "contains": "application/json" } },
+    "jsonPathAssertions": [
+      {
+        "path": "$.results[*].id",
+        "contains": ["mem-recall-agent-a-global", "mem-recall-agent-a-private"],
+        "excludes": ["mem-recall-agent-b-global", "mem-recall-agent-a-archived"]
+      }
+    ],
+    "ignoreJsonPaths": ["$.meta.timings", "$.results[*].score", "$.results[*].createdAt", "$.results[*].updatedAt"]
+  },
+  "expectedInternalState": {
+    "db": [
+      {
+        "table": "memories",
+        "where": "id LIKE 'mem-recall-%'",
+        "count": 4
+      },
+      {
+        "table": "memories",
+        "where": "id LIKE 'mem-recall-%'",
+        "orderBy": ["id"],
+        "columns": ["id", "agent_id", "visibility", "is_deleted"],
+        "rows": [
+          ["mem-recall-agent-a-archived", "agent-a", "archived", 0],
+          ["mem-recall-agent-a-global", "agent-a", "global", 0],
+          ["mem-recall-agent-a-private", "agent-a", "private", 0],
+          ["mem-recall-agent-b-global", "agent-b", "global", 0]
+        ]
+      }
+    ],
+    "files": []
+  },
+  "normalization": {
+    "ignoreColumns": ["created_at", "updated_at", "last_accessed", "access_count"],
+    "sortRowsBy": ["id"],
+    "floatTolerance": 0.000001
+  }
+}

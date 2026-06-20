@@ -31,6 +31,8 @@ const TS_AGENT_SCOPED_IDEMPOTENCY_VERSION: u32 = 72;
 const TS_AGENT_SCOPED_IDEMPOTENCY_NAME: &str = "agent-scoped-idempotency-key";
 const TS_ENTITY_ALIASES_VERSION: u32 = 77;
 const TS_ENTITY_ALIASES_NAME: &str = "entity-aliases";
+const TS_API_KEYS_VERSION: u32 = 78;
+const TS_API_KEYS_NAME: &str = "api-keys";
 const TS_DAILY_REFLECTIONS_VERSION: u32 = 68;
 const TS_DAILY_REFLECTIONS_NAME: &str = "daily-reflections";
 const TS_DAILY_REFLECTIONS_MULTI_VERSION: u32 = 69;
@@ -510,6 +512,31 @@ fn ensure_cross_daemon_parity_tables(conn: &Connection) -> Result<(), CoreError>
     conn.execute_batch(include_str!("sql/055-thread-heads.sql"))?;
     conn.execute_batch(include_str!("sql/056-entity-fts.sql"))?;
     conn.execute_batch(include_str!("sql/057-session-summary-uniqueness.sql"))?;
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS api_keys (
+            id TEXT PRIMARY KEY,
+            prefix TEXT NOT NULL UNIQUE,
+            name TEXT NOT NULL,
+            key_hash TEXT NOT NULL,
+            role TEXT NOT NULL DEFAULT 'agent',
+            scope_json TEXT NOT NULL DEFAULT '{}',
+            permissions_json TEXT NOT NULL DEFAULT '[]',
+            connector TEXT,
+            harness TEXT,
+            agent_id TEXT,
+            allowed_projects_json TEXT,
+            created_at TEXT NOT NULL,
+            last_used_at TEXT,
+            revoked_at TEXT,
+            expires_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_api_keys_prefix
+            ON api_keys(prefix);
+        CREATE INDEX IF NOT EXISTS idx_api_keys_active
+            ON api_keys(revoked_at, expires_at);
+        CREATE INDEX IF NOT EXISTS idx_api_keys_connector
+            ON api_keys(connector, harness);",
+    )?;
 
     // Stamp all TS migration versions whose artifacts are already present in a
     // Rust-created database. The TS migration runner skips by version and then
@@ -535,6 +562,7 @@ fn ensure_cross_daemon_parity_tables(conn: &Connection) -> Result<(), CoreError>
         TS_DAILY_REFLECTIONS_MULTI_NAME,
     )?;
     stamp_typescript_parity_migration(conn, TS_ENTITY_ALIASES_VERSION, TS_ENTITY_ALIASES_NAME)?;
+    stamp_typescript_parity_migration(conn, TS_API_KEYS_VERSION, TS_API_KEYS_NAME)?;
     // TS 32-39 share version slots with Rust 32-39. Do not overwrite Rust's
     // local rows; the compatibility invariant is that the TS-declared
     // artifacts for those versions exist before the TS daemon opens the DB.

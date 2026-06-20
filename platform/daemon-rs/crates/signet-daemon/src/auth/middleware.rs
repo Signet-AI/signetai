@@ -7,6 +7,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Json, Response};
 
+use super::api_keys::{is_signet_api_key, verify_api_key_from_workspace};
 use super::policy::{check_permission, check_scope};
 use super::rate_limiter::AuthRateLimiter;
 use super::tokens::verify_token;
@@ -64,7 +65,9 @@ pub fn authenticate_headers(
 
     if mode == AuthMode::Hybrid && is_local {
         let result = if let Some(token) = extract_bearer(headers) {
-            if let Some(secret) = secret {
+            if is_signet_api_key(token) {
+                verify_api_key_from_workspace(token)
+            } else if let Some(secret) = secret {
                 verify_token(secret, token)
             } else {
                 AuthResult::unauthenticated()
@@ -87,17 +90,20 @@ pub fn authenticate_headers(
         ));
     };
 
-    let Some(secret) = secret else {
-        return Err(Box::new(
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "auth secret not configured"})),
-            )
-                .into_response(),
-        ));
+    let result = if is_signet_api_key(token) {
+        verify_api_key_from_workspace(token)
+    } else {
+        let Some(secret) = secret else {
+            return Err(Box::new(
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": "auth secret not configured"})),
+                )
+                    .into_response(),
+            ));
+        };
+        verify_token(secret, token)
     };
-
-    let result = verify_token(secret, token);
     if !result.authenticated {
         let err = result.error.as_deref().unwrap_or("invalid token");
         return Err(Box::new(

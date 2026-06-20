@@ -4,7 +4,7 @@
 //! emitting typed divergences.
 
 use serde::Deserialize;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use crate::ForwardResponse;
 use crate::divergence::{Divergence, Severity};
@@ -30,12 +30,10 @@ struct RulesBlock {
 #[derive(Debug, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct DefaultRule {
-    #[allow(dead_code)]
     compare_mode: Option<String>,
+    compare_body: Option<bool>,
     ignore_fields: Vec<String>,
-    #[allow(dead_code)]
     timestamp_precision: Option<String>,
-    #[allow(dead_code)]
     array_ordering: Option<String>,
 }
 
@@ -44,9 +42,10 @@ struct DefaultRule {
 struct EndpointRule {
     deterministic: Vec<String>,
     ignore_fields: Vec<String>,
-    #[allow(dead_code)]
+    compare_mode: Option<String>,
+    compare_body: Option<bool>,
+    timestamp_precision: Option<String>,
     tolerance: Option<HashMap<String, f64>>,
-    #[allow(dead_code)]
     array_ordering: Option<String>,
     #[allow(dead_code)]
     note: Option<String>,
@@ -56,10 +55,38 @@ struct EndpointRule {
 #[serde(rename_all = "camelCase")]
 struct ErrorComparison {
     must_match: Vec<String>,
-    #[allow(dead_code)]
     compare_body: Option<bool>,
     #[allow(dead_code)]
     ignore_fields: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CompareMode {
+    Json,
+    Text,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ArrayOrdering {
+    Ordered,
+    Unordered,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TimestampPrecision {
+    Millisecond,
+    Second,
+    Ignore,
+}
+
+struct EffectiveRules<'a> {
+    endpoint_rule: Option<&'a EndpointRule>,
+    ignore_fields: Vec<&'a str>,
+    tolerance: Option<&'a HashMap<String, f64>>,
+    compare_mode: CompareMode,
+    compare_body: bool,
+    timestamp_precision: Option<TimestampPrecision>,
+    array_ordering: ArrayOrdering,
 }
 
 // ---------------------------------------------------------------------------
@@ -86,6 +113,7 @@ impl ParityRules {
         shadow: &ForwardResponse,
     ) -> Vec<Divergence> {
         let mut divergences = Vec::new();
+        let rules = self.effective_rules(endpoint);
 
         // Status code comparison — always critical
         if primary.status != shadow.status {
@@ -113,43 +141,104 @@ impl ParityRules {
             });
         }
 
-        // JSON body comparison
-        if let (Some(pj), Some(sj)) = (&primary.body_json, &shadow.body_json) {
-            self.compare_json(endpoint, pj, sj, "", &mut divergences);
+        if !rules.compare_body {
+            return divergences;
+        }
+
+        match rules.compare_mode {
+            CompareMode::Json => {
+                // JSON body comparison
+                if let (Some(pj), Some(sj)) = (&primary.body_json, &shadow.body_json) {
+                    self.compare_json(&rules, pj, sj, "", &mut divergences);
+                }
+            }
+            CompareMode::Text => self.compare_text(&rules, primary, shadow, &mut divergences),
         }
 
         divergences
     }
 
+    fn effective_rules(&self, endpoint: &str) -> EffectiveRules<'_> {
+        // Normalize endpoint for rule lookup (strip path params)
+        let rule_key = normalize_endpoint(endpoint);
+        let rules_file = self.rules.as_ref();
+        let endpoint_rule = rules_file.and_then(|r| r.rules.endpoints.get(&rule_key));
+        let default_rule = rules_file.map(|r| &r.rules.default);
+
+        let ignore_fields: Vec<&str> = match (endpoint_rule, default_rule) {
+            (Some(er), _) => er.ignore_fields.iter().map(|s| s.as_str()).collect(),
+            (None, Some(default)) => default.ignore_fields.iter().map(|s| s.as_str()).collect(),
+            (None, None) => vec!["updatedAt", "createdAt"],
+        };
+
+        let compare_mode = endpoint_rule
+            .and_then(|r| r.compare_mode.as_deref())
+            .or_else(|| default_rule.and_then(|r| r.compare_mode.as_deref()))
+            .and_then(parse_compare_mode)
+            .unwrap_or(CompareMode::Json);
+
+        let compare_body = endpoint_rule
+            .and_then(|r| r.compare_body)
+            .or_else(|| default_rule.and_then(|r| r.compare_body))
+            .or_else(|| {
+                rules_file
+                    .and_then(|r| r.error_comparison.as_ref())
+                    .and_then(|ec| ec.compare_body)
+            })
+            .unwrap_or(true);
+
+        let timestamp_precision = endpoint_rule
+            .and_then(|r| r.timestamp_precision.as_deref())
+            .or_else(|| default_rule.and_then(|r| r.timestamp_precision.as_deref()))
+            .and_then(parse_timestamp_precision);
+
+        let array_ordering = endpoint_rule
+            .and_then(|r| r.array_ordering.as_deref())
+            .or_else(|| default_rule.and_then(|r| r.array_ordering.as_deref()))
+            .and_then(parse_array_ordering)
+            .unwrap_or(ArrayOrdering::Ordered);
+
+        EffectiveRules {
+            endpoint_rule,
+            ignore_fields,
+            tolerance: endpoint_rule.and_then(|r| r.tolerance.as_ref()),
+            compare_mode,
+            compare_body,
+            timestamp_precision,
+            array_ordering,
+        }
+    }
+
+    fn compare_text(
+        &self,
+        rules: &EffectiveRules<'_>,
+        primary: &ForwardResponse,
+        shadow: &ForwardResponse,
+        divergences: &mut Vec<Divergence>,
+    ) {
+        let primary_body = String::from_utf8_lossy(&primary.body_bytes);
+        let shadow_body = String::from_utf8_lossy(&shadow.body_bytes);
+        if primary_body != shadow_body {
+            divergences.push(Divergence {
+                severity: field_severity(rules.endpoint_rule, "body"),
+                field: "body".into(),
+                message: "text body mismatch".into(),
+                primary_value: Some(truncate_str(&primary_body)),
+                shadow_value: Some(truncate_str(&shadow_body)),
+            });
+        }
+    }
+
     fn compare_json(
         &self,
-        endpoint: &str,
+        rules: &EffectiveRules<'_>,
         primary: &serde_json::Value,
         shadow: &serde_json::Value,
         path: &str,
         divergences: &mut Vec<Divergence>,
     ) {
-        // Normalize endpoint for rule lookup (strip path params)
-        let rule_key = normalize_endpoint(endpoint);
-        let endpoint_rule = self
-            .rules
-            .as_ref()
-            .and_then(|r| r.rules.endpoints.get(&rule_key));
-
-        let ignore_fields: Vec<&str> = match (endpoint_rule, self.rules.as_ref()) {
-            (Some(er), _) => er.ignore_fields.iter().map(|s| s.as_str()).collect(),
-            (None, Some(rf)) => rf
-                .rules
-                .default
-                .ignore_fields
-                .iter()
-                .map(|s| s.as_str())
-                .collect(),
-            _ => vec![],
-        };
-
         // Check if this path is in the ignore list
-        if should_ignore(path, &ignore_fields) {
+        if should_ignore(path, &rules.ignore_fields) {
             return;
         }
 
@@ -163,16 +252,16 @@ impl ParityRules {
                         format!("{path}.{key}")
                     };
 
-                    if should_ignore(&field_path, &ignore_fields) {
+                    if should_ignore(&field_path, &rules.ignore_fields) {
                         continue;
                     }
 
                     match sm.get(key) {
                         Some(sval) => {
-                            self.compare_json(endpoint, pval, sval, &field_path, divergences);
+                            self.compare_json(rules, pval, sval, &field_path, divergences);
                         }
                         None => {
-                            let severity = field_severity(endpoint_rule, &field_path);
+                            let severity = field_severity(rules.endpoint_rule, &field_path);
                             divergences.push(Divergence {
                                 severity,
                                 field: field_path,
@@ -193,7 +282,7 @@ impl ParityRules {
                             format!("{path}.{key}")
                         };
 
-                        if should_ignore(&field_path, &ignore_fields) {
+                        if should_ignore(&field_path, &rules.ignore_fields) {
                             continue;
                         }
 
@@ -208,40 +297,153 @@ impl ParityRules {
                 }
             }
             (serde_json::Value::Array(pa), serde_json::Value::Array(sa)) => {
-                if pa.len() != sa.len() {
-                    let severity = field_severity(endpoint_rule, path);
-                    divergences.push(Divergence {
-                        severity,
-                        field: format!("{path}.length"),
-                        message: format!(
-                            "array length mismatch: primary={}, shadow={}",
-                            pa.len(),
-                            sa.len()
-                        ),
-                        primary_value: Some(pa.len().to_string()),
-                        shadow_value: Some(sa.len().to_string()),
-                    });
+                if matches!(rules.array_ordering, ArrayOrdering::Unordered) {
+                    self.compare_unordered_array(rules, pa, sa, path, divergences);
+                } else {
+                    self.compare_ordered_array(rules, pa, sa, path, divergences);
+                }
+            }
+            _ => self.compare_leaf(rules, primary, shadow, path, divergences),
+        }
+    }
+
+    fn compare_ordered_array(
+        &self,
+        rules: &EffectiveRules<'_>,
+        primary: &[serde_json::Value],
+        shadow: &[serde_json::Value],
+        path: &str,
+        divergences: &mut Vec<Divergence>,
+    ) {
+        if primary.len() != shadow.len() {
+            let severity = field_severity(rules.endpoint_rule, path);
+            divergences.push(Divergence {
+                severity,
+                field: format_array_length_path(path),
+                message: format!(
+                    "array length mismatch: primary={}, shadow={}",
+                    primary.len(),
+                    shadow.len()
+                ),
+                primary_value: Some(primary.len().to_string()),
+                shadow_value: Some(shadow.len().to_string()),
+            });
+        }
+
+        // Compare element by element up to min length
+        let min_len = primary.len().min(shadow.len());
+        for i in 0..min_len {
+            let elem_path = format_array_element_path(path, &i.to_string());
+            self.compare_json(rules, &primary[i], &shadow[i], &elem_path, divergences);
+        }
+    }
+
+    fn compare_unordered_array(
+        &self,
+        rules: &EffectiveRules<'_>,
+        primary: &[serde_json::Value],
+        shadow: &[serde_json::Value],
+        path: &str,
+        divergences: &mut Vec<Divergence>,
+    ) {
+        let primary_canonical = canonical_array(primary, rules, path);
+        let shadow_canonical = canonical_array(shadow, rules, path);
+        if primary_canonical == shadow_canonical {
+            return;
+        }
+
+        if primary.len() != shadow.len() {
+            let severity = field_severity(rules.endpoint_rule, path);
+            divergences.push(Divergence {
+                severity,
+                field: format_array_length_path(path),
+                message: format!(
+                    "array length mismatch: primary={}, shadow={}",
+                    primary.len(),
+                    shadow.len()
+                ),
+                primary_value: Some(primary.len().to_string()),
+                shadow_value: Some(shadow.len().to_string()),
+            });
+        }
+
+        let mut primary_items = sorted_canonical_indexes(primary, rules, path);
+        let shadow_items = sorted_canonical_indexes(shadow, rules, path);
+        let mut matched_shadow = vec![false; shadow.len()];
+        let match_path = format_array_element_path(path, "*");
+
+        for (_, primary_index) in primary_items.drain(..) {
+            let mut matched_index = None;
+            for (_, shadow_index) in &shadow_items {
+                if matched_shadow[*shadow_index] {
+                    continue;
                 }
 
-                // Compare element by element up to min length
-                let min_len = pa.len().min(sa.len());
-                for i in 0..min_len {
-                    let elem_path = format!("{path}[{i}]");
-                    self.compare_json(endpoint, &pa[i], &sa[i], &elem_path, divergences);
+                let mut trial = Vec::new();
+                self.compare_json(
+                    rules,
+                    &primary[primary_index],
+                    &shadow[*shadow_index],
+                    &match_path,
+                    &mut trial,
+                );
+                if trial.is_empty() {
+                    matched_index = Some(*shadow_index);
+                    break;
                 }
             }
-            _ => {
-                if primary != shadow {
-                    let severity = field_severity(endpoint_rule, path);
-                    divergences.push(Divergence {
-                        severity,
-                        field: path.to_string(),
-                        message: "value mismatch".into(),
-                        primary_value: Some(truncate_json(primary)),
-                        shadow_value: Some(truncate_json(shadow)),
-                    });
-                }
+
+            if let Some(index) = matched_index {
+                matched_shadow[index] = true;
+            } else {
+                divergences.push(Divergence {
+                    severity: field_severity(rules.endpoint_rule, path),
+                    field: match_path.clone(),
+                    message: "array element missing in shadow response".into(),
+                    primary_value: Some(truncate_json(&primary[primary_index])),
+                    shadow_value: None,
+                });
             }
+        }
+
+        for (_, shadow_index) in shadow_items {
+            if !matched_shadow[shadow_index] {
+                divergences.push(Divergence {
+                    severity: Severity::Expected,
+                    field: match_path.clone(),
+                    message: "extra array element in shadow response".into(),
+                    primary_value: None,
+                    shadow_value: Some(truncate_json(&shadow[shadow_index])),
+                });
+            }
+        }
+    }
+
+    fn compare_leaf(
+        &self,
+        rules: &EffectiveRules<'_>,
+        primary: &serde_json::Value,
+        shadow: &serde_json::Value,
+        path: &str,
+        divergences: &mut Vec<Divergence>,
+    ) {
+        if numeric_values_equal(primary, shadow, tolerance_for_path(rules.tolerance, path)) {
+            return;
+        }
+
+        if timestamp_values_equal(primary, shadow, rules.timestamp_precision) {
+            return;
+        }
+
+        if primary != shadow {
+            let severity = field_severity(rules.endpoint_rule, path);
+            divergences.push(Divergence {
+                severity,
+                field: path.to_string(),
+                message: "value mismatch".into(),
+                primary_value: Some(truncate_json(primary)),
+                shadow_value: Some(truncate_json(shadow)),
+            });
         }
     }
 }
@@ -275,6 +477,31 @@ fn normalize_endpoint(endpoint: &str) -> String {
         .collect();
 
     format!("{method} {}", normalized.join("/"))
+}
+
+fn parse_compare_mode(value: &str) -> Option<CompareMode> {
+    match value.to_ascii_lowercase().as_str() {
+        "json" => Some(CompareMode::Json),
+        "text" => Some(CompareMode::Text),
+        _ => None,
+    }
+}
+
+fn parse_array_ordering(value: &str) -> Option<ArrayOrdering> {
+    match value.to_ascii_lowercase().as_str() {
+        "ordered" => Some(ArrayOrdering::Ordered),
+        "unordered" => Some(ArrayOrdering::Unordered),
+        _ => None,
+    }
+}
+
+fn parse_timestamp_precision(value: &str) -> Option<TimestampPrecision> {
+    match value.to_ascii_lowercase().as_str() {
+        "ms" | "millisecond" | "milliseconds" => Some(TimestampPrecision::Millisecond),
+        "s" | "sec" | "second" | "seconds" => Some(TimestampPrecision::Second),
+        "ignore" => Some(TimestampPrecision::Ignore),
+        _ => None,
+    }
 }
 
 fn should_ignore(path: &str, ignore_fields: &[&str]) -> bool {
@@ -329,18 +556,301 @@ fn path_matches_pattern(path: &str, pattern: &str) -> bool {
     path.ends_with(suffix)
 }
 
-fn truncate_json(val: &serde_json::Value) -> String {
-    let s = val.to_string();
-    if s.len() > 200 {
-        format!("{}...", &s[..200])
-    } else {
-        s
+fn tolerance_for_path<'a>(tolerances: Option<&'a HashMap<String, f64>>, path: &str) -> Option<f64> {
+    tolerances.and_then(|map| {
+        map.iter().find_map(|(pattern, tolerance)| {
+            let matches = path == pattern
+                || path.ends_with(&format!(".{pattern}"))
+                || path_matches_pattern(path, pattern);
+            if matches {
+                Some(tolerance.max(0.0))
+            } else {
+                None
+            }
+        })
+    })
+}
+
+fn numeric_values_equal(
+    primary: &serde_json::Value,
+    shadow: &serde_json::Value,
+    tolerance: Option<f64>,
+) -> bool {
+    let Some(tolerance) = tolerance else {
+        return false;
+    };
+    let (Some(primary), Some(shadow)) = (primary.as_f64(), shadow.as_f64()) else {
+        return false;
+    };
+    (primary - shadow).abs() <= tolerance
+}
+
+fn timestamp_values_equal(
+    primary: &serde_json::Value,
+    shadow: &serde_json::Value,
+    precision: Option<TimestampPrecision>,
+) -> bool {
+    let Some(precision) = precision else {
+        return false;
+    };
+    let (Some(primary), Some(shadow)) = (primary.as_str(), shadow.as_str()) else {
+        return false;
+    };
+
+    match precision {
+        TimestampPrecision::Ignore => is_iso_timestamp(primary) && is_iso_timestamp(shadow),
+        TimestampPrecision::Millisecond => {
+            let (Some(primary), Some(shadow)) =
+                (parse_iso_timestamp(primary), parse_iso_timestamp(shadow))
+            else {
+                return false;
+            };
+            rounded_timestamp_millis(&primary) == rounded_timestamp_millis(&shadow)
+        }
+        TimestampPrecision::Second => {
+            let (Some(primary), Some(shadow)) =
+                (parse_iso_timestamp(primary), parse_iso_timestamp(shadow))
+            else {
+                return false;
+            };
+            rounded_timestamp_seconds(&primary) == rounded_timestamp_seconds(&shadow)
+        }
     }
+}
+
+fn is_iso_timestamp(value: &str) -> bool {
+    parse_iso_timestamp(value).is_some()
+}
+
+fn parse_iso_timestamp(value: &str) -> Option<chrono::DateTime<chrono::FixedOffset>> {
+    chrono::DateTime::parse_from_rfc3339(value).ok()
+}
+
+fn rounded_timestamp_millis(timestamp: &chrono::DateTime<chrono::FixedOffset>) -> i128 {
+    timestamp.timestamp() as i128 * 1_000
+        + (timestamp.timestamp_subsec_nanos() as i128 + 500_000) / 1_000_000
+}
+
+fn rounded_timestamp_seconds(timestamp: &chrono::DateTime<chrono::FixedOffset>) -> i128 {
+    timestamp.timestamp() as i128 + i128::from(timestamp.timestamp_subsec_nanos() >= 500_000_000)
+}
+
+fn canonical_array(
+    values: &[serde_json::Value],
+    rules: &EffectiveRules<'_>,
+    path: &str,
+) -> Vec<String> {
+    let mut canonical: Vec<String> = values
+        .iter()
+        .map(|value| canonical_json_string(value, rules, &format_array_element_path(path, "*")))
+        .collect();
+    canonical.sort();
+    canonical
+}
+
+fn sorted_canonical_indexes(
+    values: &[serde_json::Value],
+    rules: &EffectiveRules<'_>,
+    path: &str,
+) -> Vec<(String, usize)> {
+    let mut indexes: Vec<(String, usize)> = values
+        .iter()
+        .enumerate()
+        .map(|(index, value)| {
+            (
+                canonical_json_string(value, rules, &format_array_element_path(path, "*")),
+                index,
+            )
+        })
+        .collect();
+    indexes.sort_by(|left, right| left.0.cmp(&right.0).then(left.1.cmp(&right.1)));
+    indexes
+}
+
+fn canonical_json_string(
+    value: &serde_json::Value,
+    rules: &EffectiveRules<'_>,
+    path: &str,
+) -> String {
+    serde_json::to_string(&canonical_json(value, rules, path)).unwrap_or_else(|_| String::new())
+}
+
+fn canonical_json(
+    value: &serde_json::Value,
+    rules: &EffectiveRules<'_>,
+    path: &str,
+) -> serde_json::Value {
+    if should_ignore(path, &rules.ignore_fields) {
+        return serde_json::Value::String("<ignored>".into());
+    }
+
+    match value {
+        serde_json::Value::Object(map) => {
+            let mut sorted = BTreeMap::new();
+            for (key, child) in map {
+                let field_path = if path.is_empty() {
+                    key.clone()
+                } else {
+                    format!("{path}.{key}")
+                };
+                if should_ignore(&field_path, &rules.ignore_fields) {
+                    continue;
+                }
+                sorted.insert(key.clone(), canonical_json(child, rules, &field_path));
+            }
+
+            let mut object = serde_json::Map::new();
+            for (key, child) in sorted {
+                object.insert(key, child);
+            }
+            serde_json::Value::Object(object)
+        }
+        serde_json::Value::Array(items) => {
+            let child_path = format_array_element_path(path, "*");
+            let mut canonical_items: Vec<serde_json::Value> = items
+                .iter()
+                .map(|item| canonical_json(item, rules, &child_path))
+                .collect();
+            if matches!(rules.array_ordering, ArrayOrdering::Unordered) {
+                canonical_items.sort_by_key(|item| {
+                    serde_json::to_string(item).unwrap_or_else(|_| String::new())
+                });
+            }
+            serde_json::Value::Array(canonical_items)
+        }
+        serde_json::Value::String(value) => {
+            canonical_timestamp_value(value, rules.timestamp_precision)
+                .unwrap_or_else(|| serde_json::Value::String(value.clone()))
+        }
+        _ => value.clone(),
+    }
+}
+
+fn canonical_timestamp_value(
+    value: &str,
+    precision: Option<TimestampPrecision>,
+) -> Option<serde_json::Value> {
+    match precision? {
+        TimestampPrecision::Ignore => {
+            if is_iso_timestamp(value) {
+                Some(serde_json::Value::String("<timestamp>".into()))
+            } else {
+                None
+            }
+        }
+        TimestampPrecision::Millisecond => parse_iso_timestamp(value).map(|timestamp| {
+            serde_json::Value::String(format!(
+                "<timestamp-ms:{}>",
+                rounded_timestamp_millis(&timestamp)
+            ))
+        }),
+        TimestampPrecision::Second => parse_iso_timestamp(value).map(|timestamp| {
+            serde_json::Value::String(format!(
+                "<timestamp-s:{}>",
+                rounded_timestamp_seconds(&timestamp)
+            ))
+        }),
+    }
+}
+
+fn format_array_length_path(path: &str) -> String {
+    if path.is_empty() {
+        "length".into()
+    } else {
+        format!("{path}.length")
+    }
+}
+
+fn format_array_element_path(path: &str, index: &str) -> String {
+    if path.is_empty() {
+        format!("[{index}]")
+    } else {
+        format!("{path}[{index}]")
+    }
+}
+
+fn truncate_json(val: &serde_json::Value) -> String {
+    truncate_str(&val.to_string())
+}
+
+fn truncate_str(value: &str) -> String {
+    const LIMIT: usize = 200;
+    if value.len() <= LIMIT {
+        return value.to_string();
+    }
+
+    let mut end = 0;
+    for (index, _) in value.char_indices() {
+        if index > LIMIT {
+            break;
+        }
+        end = index;
+    }
+    format!("{}...", &value[..end])
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn default_rule() -> DefaultRule {
+        DefaultRule {
+            compare_mode: Some("json".to_string()),
+            compare_body: None,
+            ignore_fields: vec!["updatedAt".to_string(), "createdAt".to_string()],
+            timestamp_precision: None,
+            array_ordering: Some("ordered".to_string()),
+        }
+    }
+
+    fn endpoint_rule() -> EndpointRule {
+        EndpointRule {
+            deterministic: vec![],
+            ignore_fields: vec![],
+            compare_mode: None,
+            compare_body: None,
+            timestamp_precision: None,
+            tolerance: None,
+            array_ordering: None,
+            note: None,
+        }
+    }
+
+    fn rules_with_endpoint(endpoint: &str, endpoint_rule: EndpointRule) -> ParityRules {
+        let mut endpoints = HashMap::new();
+        endpoints.insert(endpoint.to_string(), endpoint_rule);
+        ParityRules {
+            rules: Some(RulesFile {
+                rules: RulesBlock {
+                    default: default_rule(),
+                    endpoints,
+                },
+                error_comparison: Some(ErrorComparison {
+                    must_match: vec!["statusCode".to_string()],
+                    compare_body: Some(true),
+                    ignore_fields: vec![],
+                }),
+            }),
+        }
+    }
+
+    fn response_json(status: u16, json: serde_json::Value) -> ForwardResponse {
+        ForwardResponse {
+            status,
+            body_bytes: bytes::Bytes::from(json.to_string()),
+            body_json: Some(json),
+            content_type: Some("application/json".to_string()),
+        }
+    }
+
+    fn response_text(status: u16, body: &str) -> ForwardResponse {
+        ForwardResponse {
+            status,
+            body_bytes: bytes::Bytes::from(body.to_string()),
+            body_json: serde_json::from_str(body).ok(),
+            content_type: Some("text/plain".to_string()),
+        }
+    }
 
     #[test]
     fn normalize_uuid_path() {
@@ -399,6 +909,9 @@ mod tests {
         let rule = EndpointRule {
             deterministic: vec!["status".to_string()],
             ignore_fields: vec!["version".to_string()],
+            compare_mode: None,
+            compare_body: None,
+            timestamp_precision: None,
             tolerance: None,
             array_ordering: None,
             note: None,
@@ -426,19 +939,161 @@ mod tests {
     fn identical_responses_no_divergence() {
         let rules = ParityRules::default();
         let json = serde_json::json!({"status": "ok", "count": 42});
-        let primary = ForwardResponse {
-            status: 200,
-            body_bytes: bytes::Bytes::new(),
-            body_json: Some(json.clone()),
-            content_type: None,
-        };
-        let shadow = ForwardResponse {
-            status: 200,
-            body_bytes: bytes::Bytes::new(),
-            body_json: Some(json),
-            content_type: None,
-        };
+        let primary = response_json(200, json.clone());
+        let shadow = response_json(200, json);
         let divs = rules.compare("GET /health", &primary, &shadow);
         assert!(divs.is_empty());
+    }
+
+    #[test]
+    fn unordered_array_equality_ignores_order() {
+        let mut rule = endpoint_rule();
+        rule.array_ordering = Some("unordered".to_string());
+        let rules = rules_with_endpoint("POST /api/memory/recall", rule);
+        let primary = response_json(
+            200,
+            serde_json::json!({
+                "results": [
+                    {"id": "a", "content": "alpha"},
+                    {"id": "b", "content": "beta"}
+                ]
+            }),
+        );
+        let shadow = response_json(
+            200,
+            serde_json::json!({
+                "results": [
+                    {"content": "beta", "id": "b"},
+                    {"content": "alpha", "id": "a"}
+                ]
+            }),
+        );
+
+        let divs = rules.compare("POST /api/memory/recall", &primary, &shadow);
+        assert!(divs.is_empty(), "unexpected divergences: {divs:?}");
+    }
+
+    #[test]
+    fn tolerance_bands_float_values() {
+        let mut tolerance = HashMap::new();
+        tolerance.insert("score".to_string(), 0.05);
+        let mut rule = endpoint_rule();
+        rule.tolerance = Some(tolerance);
+        let rules = rules_with_endpoint("GET /api/diagnostics", rule);
+
+        let primary = response_json(200, serde_json::json!({"score": 0.80}));
+        let shadow = response_json(200, serde_json::json!({"score": 0.83}));
+        assert!(
+            rules
+                .compare("GET /api/diagnostics", &primary, &shadow)
+                .is_empty()
+        );
+
+        let shadow = response_json(200, serde_json::json!({"score": 0.91}));
+        let divs = rules.compare("GET /api/diagnostics", &primary, &shadow);
+        assert_eq!(divs.len(), 1);
+        assert_eq!(divs[0].field, "score");
+    }
+
+    #[test]
+    fn timestamp_precision_rounds_to_millisecond() {
+        let mut rule = endpoint_rule();
+        rule.timestamp_precision = Some("ms".to_string());
+        let rules = rules_with_endpoint("GET /api/events", rule);
+        let primary = response_json(
+            200,
+            serde_json::json!({"timestamp": "2026-01-01T00:00:00.123400Z"}),
+        );
+        let shadow = response_json(
+            200,
+            serde_json::json!({"timestamp": "2026-01-01T00:00:00.123499Z"}),
+        );
+
+        let divs = rules.compare("GET /api/events", &primary, &shadow);
+        assert!(divs.is_empty(), "unexpected divergences: {divs:?}");
+    }
+
+    #[test]
+    fn timestamp_precision_rounds_to_second() {
+        let mut rule = endpoint_rule();
+        rule.timestamp_precision = Some("s".to_string());
+        let rules = rules_with_endpoint("GET /api/events", rule);
+        let primary = response_json(
+            200,
+            serde_json::json!({"timestamp": "2026-01-01T00:00:00.100Z"}),
+        );
+        let shadow = response_json(
+            200,
+            serde_json::json!({"timestamp": "2026-01-01T00:00:00.400Z"}),
+        );
+
+        let divs = rules.compare("GET /api/events", &primary, &shadow);
+        assert!(divs.is_empty(), "unexpected divergences: {divs:?}");
+    }
+
+    #[test]
+    fn timestamp_precision_ignore_skips_iso_timestamps() {
+        let mut rule = endpoint_rule();
+        rule.timestamp_precision = Some("ignore".to_string());
+        let rules = rules_with_endpoint("GET /api/events", rule);
+        let primary = response_json(
+            200,
+            serde_json::json!({"timestamp": "2026-01-01T00:00:00.000Z"}),
+        );
+        let shadow = response_json(
+            200,
+            serde_json::json!({"timestamp": "2030-12-31T23:59:59.999Z"}),
+        );
+
+        let divs = rules.compare("GET /api/events", &primary, &shadow);
+        assert!(divs.is_empty(), "unexpected divergences: {divs:?}");
+    }
+
+    #[test]
+    fn timestamp_precision_ignore_requires_both_sides_iso() {
+        // Regression: "ignore" must only suppress a timestamp when BOTH sides
+        // parse as ISO. Otherwise a real divergence like "ready" vs an ISO
+        // timestamp would be hidden.
+        let mut rule = endpoint_rule();
+        rule.timestamp_precision = Some("ignore".to_string());
+        let rules = rules_with_endpoint("GET /api/events", rule);
+        let primary = response_json(200, serde_json::json!({"state": "ready"}));
+        let shadow = response_json(
+            200,
+            serde_json::json!({"state": "2026-01-01T00:00:00.000Z"}),
+        );
+
+        let divs = rules.compare("GET /api/events", &primary, &shadow);
+        assert_eq!(
+            divs.len(),
+            1,
+            "expected a divergence when only one side is ISO: {divs:?}"
+        );
+        assert_eq!(divs[0].field, "state");
+    }
+
+    #[test]
+    fn compare_mode_text_compares_raw_body_strings() {
+        let mut rule = endpoint_rule();
+        rule.compare_mode = Some("text".to_string());
+        let rules = rules_with_endpoint("GET /plain", rule);
+        let primary = response_text(200, "{\"ok\":true}");
+        let shadow = response_text(200, "{\"ok\":true }\n");
+
+        let divs = rules.compare("GET /plain", &primary, &shadow);
+        assert_eq!(divs.len(), 1);
+        assert_eq!(divs[0].field, "body");
+    }
+
+    #[test]
+    fn compare_body_false_skips_body_comparison() {
+        let mut rule = endpoint_rule();
+        rule.compare_body = Some(false);
+        let rules = rules_with_endpoint("GET /status-only", rule);
+        let primary = response_json(200, serde_json::json!({"status": "primary"}));
+        let shadow = response_json(200, serde_json::json!({"status": "shadow"}));
+
+        let divs = rules.compare("GET /status-only", &primary, &shadow);
+        assert!(divs.is_empty(), "unexpected divergences: {divs:?}");
     }
 }
