@@ -1549,7 +1549,7 @@ fn parse_declared_manifest(metadata: &Value, server_name: &str) -> Option<Value>
         .get("html")
         .and_then(Value::as_str)
         .map(str::trim)
-        .filter(|value| !value.is_empty() && !value.to_lowercase().contains("<script src"))
+        .filter(|value| !value.is_empty() && !manifest_html_has_external_script(value))
     {
         manifest.insert("html".to_string(), json!(html));
     }
@@ -1758,6 +1758,65 @@ fn unique_server_id(base_id: &str, servers: &[Value]) -> String {
     }
 }
 
+/// Mirrors the TS manifest-HTML sanitizer at `platform/daemon/src/mcp-probe.ts:250`
+/// (`/<script\s+src\s*=/i`): reject any `<script` tag followed by one or more
+/// whitespace characters and then `src=`. Case-insensitive. This blocks
+/// external-script injection (`<script src=...>`, `<script  src=...>`,
+/// `<script\tsrc=...>`, `<SCRIPT src=...>`) without needing a regex dep.
+fn manifest_html_has_external_script(html: &str) -> bool {
+    let lower: Vec<(usize, char)> = html.to_lowercase().char_indices().collect();
+    let needle = "<script";
+    let mut i = 0;
+    while i + needle.len() <= lower.len() {
+        // Find the next "<script" occurrence (compare on the char stream).
+        let matches = lower[i..]
+            .iter()
+            .take(needle.chars().count())
+            .enumerate()
+            .all(|(j, (_, c))| *c == needle.chars().nth(j).unwrap());
+        if !matches {
+            i += 1;
+            continue;
+        }
+        // Advance past "<script" in the char stream.
+        let mut k = i + needle.chars().count();
+        // Require at least one whitespace char (\s+ in the TS regex).
+        let mut saw_ws = false;
+        while k < lower.len() {
+            let c = lower[k].1;
+            if c.is_whitespace() {
+                saw_ws = true;
+                k += 1;
+            } else {
+                break;
+            }
+        }
+        if saw_ws {
+            // Check for `src` followed by optional whitespace then `=`.
+            let rest: String = lower[k..].iter().map(|(_, c)| *c).collect();
+            let mut rest_chars = rest.chars();
+            if rest_chars.next() == Some('s')
+                && rest_chars.next() == Some('r')
+                && rest_chars.next() == Some('c')
+            {
+                let mut after_src = rest_chars.peekable();
+                while let Some(&c) = after_src.peek() {
+                    if c.is_whitespace() {
+                        after_src.next();
+                    } else {
+                        break;
+                    }
+                }
+                if after_src.next() == Some('=') {
+                    return true;
+                }
+            }
+        }
+        i += 1;
+    }
+    false
+}
+
 fn sanitize_server_id(value: &str) -> String {
     let mut out = String::new();
     let mut last_dash = false;
@@ -1913,4 +1972,54 @@ fn is_private_hostname(hostname: &str) -> bool {
         return true;
     }
     host.ends_with(".local") || host.ends_with(".internal") || host.ends_with(".localhost")
+}
+
+#[cfg(test)]
+mod manifest_html_sanitizer_tests {
+    use super::manifest_html_has_external_script;
+
+    // Mirrors TS platform/daemon/src/mcp-probe.ts:250  /<script\s+src\s*=/i
+    #[test]
+    fn rejects_plain_external_script_tag() {
+        assert!(manifest_html_has_external_script(
+            "<script src='https://evil/x.js'></script>"
+        ));
+    }
+
+    #[test]
+    fn rejects_extra_whitespace_variants() {
+        // The literal-substring guard this replaces would MISS these.
+        assert!(manifest_html_has_external_script(
+            "<script  src='https://evil/x.js'></script>"
+        ));
+        assert!(manifest_html_has_external_script(
+            "<script\tsrc='https://evil/x.js'></script>"
+        ));
+        assert!(manifest_html_has_external_script(
+            "<script\n src='https://evil/x.js'></script>"
+        ));
+    }
+
+    #[test]
+    fn rejects_case_insensitive_and_src_eq_padding() {
+        assert!(manifest_html_has_external_script(
+            "<SCRIPT src='https://evil/x.js'></SCRIPT>"
+        ));
+        assert!(manifest_html_has_external_script(
+            "<script src \t= 'https://evil/x.js'></script>"
+        ));
+        assert!(manifest_html_has_external_script(
+            "<Script Src='https://evil/x.js'></Script>"
+        ));
+    }
+
+    #[test]
+    fn accepts_inline_script_without_src() {
+        // Inline <script> blocks (no src=) are allowed by TS too.
+        assert!(!manifest_html_has_external_script(
+            "<script>console.log('hi')</script>"
+        ));
+        assert!(!manifest_html_has_external_script("<div>hello</div>"));
+        assert!(!manifest_html_has_external_script(""));
+    }
 }
