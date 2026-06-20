@@ -8,7 +8,7 @@ Surface summary of the most recent release dates. See the release ledger below f
 
 ### 2026-06-20
 - Features: add ForgeCode integration.
-- Bug fixes: accept session summary agent_id; restore native vector runtime.
+- Bug fixes: harden session transcript capture; accept session summary agent_id; restore native vector runtime.
 
 ### 2026-06-19
 - Bug fixes: limit constellation entity types; render skills marketplace reliably.
@@ -34,6 +34,15 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Performance: batch graph traversal queries and cache secrets.
 
 ## Release Ledger
+
+## [0.143.2] - 2026-06-20
+
+Release summary: 1 bug fix.
+Tag range: `v0.143.1..v0.143.2`.
+
+### Bug Fixes
+
+- **daemon**: harden session transcript capture
 
 ## [0.143.1] - 2026-06-20
 
