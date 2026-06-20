@@ -88,6 +88,45 @@ describe("temporal summary API auth", () => {
 		expect(json.summaries?.map((row) => row.id)).toEqual(["node-a"]);
 	});
 
+	it("accepts conventional snake_case agent and session query parameters for summaries", async () => {
+		const byAgent = await app.request("http://localhost/api/sessions/summaries?agent_id=agent-b", {
+			headers: jsonHeader(),
+		});
+		const byAgentJson = (await byAgent.json()) as {
+			summaries?: Array<{ id: string }>;
+			total?: number;
+		};
+
+		expect(byAgent.status).toBe(200);
+		expect(byAgentJson.total).toBe(1);
+		expect(byAgentJson.summaries?.map((row) => row.id)).toEqual(["node-b"]);
+
+		const bySession = await app.request("http://localhost/api/sessions/summaries?session_key=agent:agent-b:summary", {
+			headers: jsonHeader(),
+		});
+		const bySessionJson = (await bySession.json()) as {
+			summaries?: Array<{ id: string }>;
+			total?: number;
+		};
+
+		expect(bySession.status).toBe(200);
+		expect(bySessionJson.total).toBe(1);
+		expect(bySessionJson.summaries?.map((row) => row.id)).toEqual(["node-b"]);
+
+		const fallback = await app.request(
+			"http://localhost/api/sessions/summaries?agent_id=&agentId=agent-a&session_key=&sessionKey=agent:agent-b:summary",
+			{ headers: jsonHeader() },
+		);
+		const fallbackJson = (await fallback.json()) as {
+			summaries?: Array<{ id: string }>;
+			total?: number;
+		};
+
+		expect(fallback.status).toBe(200);
+		expect(fallbackJson.total).toBe(1);
+		expect(fallbackJson.summaries?.map((row) => row.id)).toEqual(["node-a"]);
+	});
+
 	it("expands the requested temporal node", async () => {
 		const res = await app.request("http://localhost/api/sessions/summaries/expand", {
 			method: "POST",

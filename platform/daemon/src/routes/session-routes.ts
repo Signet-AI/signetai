@@ -17,7 +17,7 @@ import { getSessionTranscriptContent } from "../session-transcripts.js";
 import { searchSessionTranscripts } from "../subagent-context.js";
 import { expandTemporalNode } from "../temporal-expand.js";
 import { authConfig } from "./state.js";
-import { readOptionalJsonObject, resolveScopedAgentId, resolveScopedProject } from "./utils.js";
+import { parseOptionalString, readOptionalJsonObject, resolveScopedAgentId, resolveScopedProject } from "./utils.js";
 
 function listLiveSessions(agentId: string): Array<{
 	key: string;
@@ -230,8 +230,14 @@ export function registerSessionRoutes(app: Hono, deps: SessionRoutesDeps): void 
 		const scopedAgent = resolveScopedAgentId(
 			c,
 			resolveAgentId({
-				agentId: c.req.query("agentId") ?? c.req.header("x-signet-agent-id"),
-				sessionKey: c.req.query("sessionKey") ?? c.req.header("x-signet-session-key"),
+				agentId:
+					parseOptionalString(c.req.query("agent_id")) ??
+					parseOptionalString(c.req.query("agentId")) ??
+					parseOptionalString(c.req.header("x-signet-agent-id")),
+				sessionKey:
+					parseOptionalString(c.req.query("session_key")) ??
+					parseOptionalString(c.req.query("sessionKey")) ??
+					parseOptionalString(c.req.header("x-signet-session-key")),
 			}),
 		);
 		if (scopedAgent.error) {

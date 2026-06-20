@@ -3647,6 +3647,58 @@ async fn session_endpoints() {
             ],
         )
         .expect("seed transcript");
+        conn.execute(
+            "INSERT INTO session_summaries
+             (id, project, depth, kind, content, token_count, earliest_at, latest_at, session_key, harness, agent_id, created_at, source_type)
+             VALUES (?1, 'session-test', 0, 'session', ?2, 12, ?3, ?3, ?4, 'contract-replay', 'default', ?3, 'summary')",
+            rusqlite::params![
+                "summary-session-default",
+                "Default summary for native session route replay.",
+                "2026-06-02T00:00:00Z",
+                "seeded-session",
+            ],
+        )
+        .expect("seed default summary");
+        conn.execute(
+            "INSERT INTO session_summaries
+             (id, project, depth, kind, content, token_count, earliest_at, latest_at, session_key, harness, agent_id, created_at, source_type)
+             VALUES (?1, 'session-test', 0, 'session', ?2, 12, ?3, ?3, ?4, 'contract-replay', 'other-agent', ?3, 'summary')",
+            rusqlite::params![
+                "summary-session-other-agent",
+                "Other-agent summary must not leak into default summary scope.",
+                "2026-06-02T00:00:01Z",
+                "shared-summary-session",
+            ],
+        )
+        .expect("seed other-agent summary");
+        conn.execute(
+            "INSERT INTO session_transcripts
+             (session_key, agent_id, content, harness, project, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![
+                "shared-summary-session",
+                "default",
+                "default transcript must not attach to other-agent summary",
+                "contract-replay",
+                "session-test",
+                "2026-06-02T00:00:01Z"
+            ],
+        )
+        .expect("seed default colliding transcript");
+        conn.execute(
+            "INSERT INTO session_transcripts
+             (session_key, agent_id, content, harness, project, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![
+                "shared-summary-session",
+                "other-agent",
+                "other-agent transcript body",
+                "contract-replay",
+                "session-test",
+                "2026-06-02T00:00:01Z"
+            ],
+        )
+        .expect("seed other-agent transcript");
     }
     let resp = server.get("/api/sessions/seeded-session/transcript").await;
     assert_eq!(resp.status(), 200);
@@ -3671,6 +3723,27 @@ async fn session_endpoints() {
 
     let resp = server.get("/api/sessions/summaries").await;
     assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["total"], 1);
+    assert_eq!(body["summaries"][0]["id"], "summary-session-default");
+    assert_eq!(body["summaries"][0]["agentId"], "default");
+
+    let resp = server
+        .get("/api/sessions/summaries?agent_id=other-agent")
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["total"], 1);
+    assert_eq!(body["summaries"][0]["id"], "summary-session-other-agent");
+    assert_eq!(body["summaries"][0]["agentId"], "other-agent");
+
+    let resp = server
+        .get("/api/sessions/summaries?session_key=agent:other-agent:shared-summary-session")
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["total"], 1);
+    assert_eq!(body["summaries"][0]["id"], "summary-session-other-agent");
 
     let resp = server
         .post("/api/sessions/summaries/expand", json!({}))
@@ -3688,6 +3761,28 @@ async fn session_endpoints() {
     assert_eq!(resp.status(), 404);
     let body = server.json(resp).await;
     assert_eq!(body["error"], "summary node not found");
+
+    let resp = server
+        .post(
+            "/api/sessions/summaries/expand",
+            json!({"id": "summary-session-other-agent"}),
+        )
+        .await;
+    assert_eq!(resp.status(), 404);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "summary node not found");
+
+    let resp = server
+        .post(
+            "/api/sessions/summaries/expand",
+            json!({"id": "summary-session-other-agent", "agentId": "other-agent"}),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["summary"]["id"], "summary-session-other-agent");
+    assert_eq!(body["summary"]["agentId"], "other-agent");
+    assert_eq!(body["transcript"], "other-agent transcript body");
 
     let resp = server.get("/api/sessions/checkpoints").await;
     assert_eq!(resp.status(), 200);

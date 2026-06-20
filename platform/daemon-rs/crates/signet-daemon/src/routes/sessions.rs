@@ -11,7 +11,9 @@ use axum::response::IntoResponse;
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::auth::middleware::{authenticate_headers, resolve_scoped_agent};
+use crate::auth::middleware::{AuthState, authenticate_headers, resolve_scoped_agent};
+use crate::auth::policy::check_scope;
+use crate::auth::types::{AuthMode, TokenScope};
 use crate::state::AppState;
 
 // ---------------------------------------------------------------------------
@@ -551,6 +553,76 @@ pub struct SummaryParams {
     pub depth: Option<i64>,
     pub limit: Option<usize>,
     pub offset: Option<usize>,
+    #[serde(alias = "agentId")]
+    pub agent_id: Option<String>,
+    #[serde(alias = "sessionKey")]
+    pub session_key: Option<String>,
+}
+
+fn optional_text(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn header_text(headers: &HeaderMap, name: &str) -> Option<String> {
+    headers
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| optional_text(Some(value)))
+}
+
+fn session_agent_id(session_key: &str) -> Option<String> {
+    let mut parts = session_key.splitn(3, ':');
+    match (parts.next(), parts.next()) {
+        (Some("agent"), Some(agent_id)) if !agent_id.trim().is_empty() => {
+            Some(agent_id.trim().to_string())
+        }
+        _ => None,
+    }
+}
+
+fn requested_agent_id(explicit: Option<String>, session_key: Option<String>) -> String {
+    explicit
+        .or_else(|| session_key.and_then(|key| session_agent_id(&key)))
+        .unwrap_or_else(|| "default".to_string())
+}
+
+fn resolve_scoped_project(
+    auth_state: &AuthState,
+    mode: AuthMode,
+    is_local: bool,
+    requested: Option<&str>,
+) -> Result<Option<String>, String> {
+    let scoped = auth_state
+        .result
+        .claims
+        .as_ref()
+        .and_then(|claims| claims.scope.project.as_deref())
+        .and_then(|project| optional_text(Some(project)));
+    let project = optional_text(requested).or(scoped);
+
+    if mode == AuthMode::Local
+        || (mode == AuthMode::Hybrid && is_local && !auth_state.result.authenticated)
+    {
+        return Ok(project);
+    }
+
+    let Some(project) = project else {
+        return Ok(None);
+    };
+    let target = TokenScope {
+        project: Some(project.clone()),
+        agent: None,
+        user: None,
+    };
+    let decision = check_scope(auth_state.result.claims.as_ref(), &target, mode);
+    if decision.allowed {
+        Ok(Some(project))
+    } else {
+        Err(decision.reason.unwrap_or_else(|| "scope violation".into()))
+    }
 }
 
 #[derive(Default, Deserialize)]
@@ -625,10 +697,16 @@ pub struct SummaryExpandBody {
     id: Option<String>,
     include_transcript: Option<bool>,
     transcript_char_limit: Option<i64>,
+    #[serde(alias = "agent_id")]
+    agent_id: Option<String>,
+    #[serde(alias = "session_key")]
+    session_key: Option<String>,
 }
 
 pub async fn summary_expand(
     State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Json(body): Json<SummaryExpandBody>,
 ) -> axum::response::Response {
     let id = body.id.unwrap_or_default().trim().to_string();
@@ -644,6 +722,44 @@ pub async fn summary_expand(
         .transcript_char_limit
         .unwrap_or(2_000)
         .clamp(200, 12_000);
+    let requested = requested_agent_id(
+        optional_text(body.agent_id.as_deref())
+            .or_else(|| header_text(&headers, "x-signet-agent-id")),
+        optional_text(body.session_key.as_deref())
+            .or_else(|| header_text(&headers, "x-signet-session-key")),
+    );
+    let is_local = peer.ip().is_loopback();
+    let auth_runtime = state.auth_snapshot();
+    let auth = match authenticate_headers(
+        auth_runtime.mode,
+        auth_runtime.secret.as_deref(),
+        &headers,
+        is_local,
+    ) {
+        Ok(a) => a,
+        Err(e) => return *e,
+    };
+    let agent_id =
+        match resolve_scoped_agent(&auth, auth_runtime.mode, is_local, Some(requested.as_str())) {
+            Ok(id) => id,
+            Err(reason) => {
+                return (
+                    StatusCode::FORBIDDEN,
+                    Json(serde_json::json!({"error": reason})),
+                )
+                    .into_response();
+            }
+        };
+    let project = match resolve_scoped_project(&auth, auth_runtime.mode, is_local, None) {
+        Ok(project) => project,
+        Err(reason) => {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({"error": reason})),
+            )
+                .into_response();
+        }
+    };
     let result = state
         .pool
         .read(move |conn| {
@@ -652,9 +768,9 @@ pub async fn summary_expand(
                     "SELECT id, project, depth, kind, content, token_count,
                             earliest_at, latest_at, session_key, harness, agent_id, created_at
                      FROM session_summaries
-                     WHERE id = ?1
+                     WHERE id = ?1 AND agent_id = ?2 AND (?3 IS NULL OR project = ?3)
                      LIMIT 1",
-                    [&id],
+                    rusqlite::params![id, agent_id, project],
                     |row| {
                         Ok(serde_json::json!({
                             "id": row.get::<_, String>(0)?,
@@ -684,9 +800,9 @@ pub async fn summary_expand(
                         conn.query_row(
                             "SELECT substr(content, 1, ?1)
                              FROM session_transcripts
-                             WHERE session_key = ?2
+                             WHERE session_key = ?2 AND agent_id = ?3 AND (?4 IS NULL OR project = ?4)
                              LIMIT 1",
-                            rusqlite::params![transcript_limit, session_key],
+                            rusqlite::params![transcript_limit, session_key, agent_id, project],
                             |row| row.get::<_, String>(0),
                         )
                         .ok()
@@ -721,9 +837,54 @@ pub async fn summary_expand(
 pub async fn summaries(
     State(state): State<Arc<AppState>>,
     axum::extract::Query(params): axum::extract::Query<SummaryParams>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
 ) -> axum::response::Response {
     let limit = params.limit.unwrap_or(50).min(200);
     let offset = params.offset.unwrap_or(0);
+    let requested = requested_agent_id(
+        optional_text(params.agent_id.as_deref())
+            .or_else(|| header_text(&headers, "x-signet-agent-id")),
+        optional_text(params.session_key.as_deref())
+            .or_else(|| header_text(&headers, "x-signet-session-key")),
+    );
+    let is_local = peer.ip().is_loopback();
+    let auth_runtime = state.auth_snapshot();
+    let auth = match authenticate_headers(
+        auth_runtime.mode,
+        auth_runtime.secret.as_deref(),
+        &headers,
+        is_local,
+    ) {
+        Ok(a) => a,
+        Err(e) => return *e,
+    };
+    let agent_id =
+        match resolve_scoped_agent(&auth, auth_runtime.mode, is_local, Some(requested.as_str())) {
+            Ok(id) => id,
+            Err(reason) => {
+                return (
+                    StatusCode::FORBIDDEN,
+                    Json(serde_json::json!({"error": reason})),
+                )
+                    .into_response();
+            }
+        };
+    let project = match resolve_scoped_project(
+        &auth,
+        auth_runtime.mode,
+        is_local,
+        params.project.as_deref(),
+    ) {
+        Ok(project) => project,
+        Err(reason) => {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({"error": reason})),
+            )
+                .into_response();
+        }
+    };
 
     let result = state
         .pool
@@ -731,11 +892,12 @@ pub async fn summaries(
             let mut sql = String::from(
                 "SELECT s.*, \
                  (SELECT COUNT(*) FROM session_summary_children c WHERE c.parent_id = s.id) AS child_count \
-                 FROM session_summaries s WHERE 1=1",
+                 FROM session_summaries s WHERE s.agent_id = ?",
             );
             let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+            params_vec.push(Box::new(agent_id.clone()));
 
-            if let Some(ref project) = params.project {
+            if let Some(ref project) = project {
                 sql.push_str(" AND s.project = ?");
                 params_vec.push(Box::new(project.clone()));
             }
@@ -753,10 +915,12 @@ pub async fn summaries(
                 params_vec.iter().map(|p| p.as_ref()).collect();
 
             // Query total count
-            let mut count_sql = String::from("SELECT COUNT(*) FROM session_summaries WHERE 1=1");
+            let mut count_sql =
+                String::from("SELECT COUNT(*) FROM session_summaries WHERE agent_id = ?");
             let mut count_params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+            count_params.push(Box::new(agent_id));
 
-            if let Some(ref project) = params.project {
+            if let Some(ref project) = project {
                 count_sql.push_str(" AND project = ?");
                 count_params.push(Box::new(project.clone()));
             }
