@@ -181,12 +181,22 @@ Behavioral-core gap-fill, highest-risk first. Worktree-isolated subagents,
   key (content_hash+agent_id+scope, visibility-differing dupes dedupe not
   fail), memory_history audit rows written in-transaction for
   created/deduped/blocked/none/shadow. Tests extended.
-- ⏳ **Recall / ranking gates** (core 2, was DIVERGENT): added authorize-before-content
-  security boundary (candidates scoped before any content-bearing stage —
-  the critical scoping-leak fix), temporal candidates, traversal-primary
-  graph fusion, SEC-lite/dampening/currentness, source fallbacks. **3
-  autoreview-surfaced refinements in flight:** (a) temporal boost runs on
-  every recall, should only run on temporal-intent queries (reorders normal
-  recalls); (b) source fallback key `obsidian_chunk` vs TS `source_obsidian_chunk`;
-  (c) source-fallback dedupe missing `source_id` on hydrated memories.
+- ✅ **Recall / ranking gates** (core 2, was DIVERGENT): authorize-before-content
+  security boundary + temporal/traversal/SEC/dampening/currentness/source gates.
+  REFINED: temporal gated on intent, obsidian source key fixed, fallback dedupe
+  via hydrated source_id. **1 refinement in flight:** recall `time` used only as
+  boolean gate, not range-validated/filtered (TS resolveTemporalRecall).
+- ✅ **Memory writes & lineage** (core 5, was PARTIAL): immutable-artifact
+  recapture strictness, artifact provenance + is_deleted revival, reindex no
+  longer purges noncanonical/native rows, agent-scoped MEMORY.md path
+  (agents/<agent>/MEMORY.md) + unsafe-id rejection, tx_ingest_envelope
+  attribution helper, remove_canonical_session, temporal-index parity.
+- ⏳ **Hook / hidden-message inject** (core 6, was PARTIAL): session-start now
+  builds full TS-shaped payload (system prompt, plugins, identity, memory,
+  summary, recovery, secret NAMES only, budget); runtime-path 409 preserved.
+  **2 refinements in flight:** (a) memory budget always includes first memory
+  even if oversized (TS selectWithTokenBudget skips); (b) synthesis completion
+  resolves scoped agent but DISCARDS it → writes root MEMORY.md instead of
+  agents/<agent>/ (cross-agent clobber bug exposed by core 5 path change).
+  Plus audit for any other stale root-MEMORY.md write sites.
 - ⬜ Scoping / memory-lineage / hooks / remaining auth — after.

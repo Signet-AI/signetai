@@ -45,6 +45,7 @@ pub enum SearchSource {
     TemporalHybrid,
     Sec,
     Source,
+    SourceObsidian,
     NativeArtifact,
 }
 
@@ -63,6 +64,7 @@ impl SearchSource {
             Self::TemporalHybrid => "temporal_hybrid",
             Self::Sec => "sec",
             Self::Source => "source",
+            Self::SourceObsidian => "source_obsidian",
             Self::NativeArtifact => "native_memory",
         }
     }
@@ -678,6 +680,24 @@ pub fn temporal_candidates(
             warn!(err = %e, "temporal candidate search failed");
             Vec::new()
         }
+    }
+}
+
+/// Recall-route temporal gate from TS `memory-search.ts:1105-1123`.
+/// Temporal edge candidates only participate after request/query temporal
+/// intent has been parsed; otherwise ordinary recall must not be reordered by
+/// memories that merely have temporal metadata.
+pub fn temporal_candidates_for_recall(
+    conn: &Connection,
+    top_k: usize,
+    filter: &RecallFilter,
+    min_score: f64,
+    temporal_intent: bool,
+) -> Vec<ScoredHit> {
+    if temporal_intent {
+        temporal_candidates(conn, top_k, filter, min_score)
+    } else {
+        Vec::new()
     }
 }
 
@@ -1444,7 +1464,7 @@ pub fn source_chunk_vector_fallbacks(
         let mut stmt = conn.prepare(
             "SELECT id, source_type, source_id, vector, chunk_text, created_at
              FROM embeddings
-             WHERE source_type IN ('source_chunk', 'obsidian_chunk')
+             WHERE source_type IN ('source_chunk', 'source_obsidian_chunk')
                AND vector IS NOT NULL AND agent_id = ?1",
         )?;
         let rows = stmt.query_map(params![agent_id], |row| {
@@ -1461,7 +1481,7 @@ pub fn source_chunk_vector_fallbacks(
                 .unwrap_or("source")
                 .to_string();
             let source = if source_id.starts_with("obsidian:") {
-                SearchSource::Source
+                SearchSource::SourceObsidian
             } else {
                 SearchSource::Source
             };
@@ -2115,6 +2135,59 @@ mod tests {
     }
 
     #[test]
+    fn normal_recall_without_temporal_intent_does_not_get_temporal_boost() {
+        let conn = setup();
+        insert_memory(&conn, "keyword", "apollo direct keyword", "fact");
+        insert_memory(&conn, "temporal", "apollo temporal edge", "fact");
+        conn.execute(
+            "INSERT INTO temporal_edges (id, agent_id, subject_type, subject_id, facet, start_at, confidence, created_at, updated_at)
+             VALUES ('te-normal-gate', 'default', 'memory', 'temporal', 'observed', '2026-06-01T00:00:00Z', 0.95, datetime('now'), datetime('now'))",
+            [],
+        )
+        .unwrap();
+        let filter = RecallFilter {
+            agent_id: Some("default"),
+            read_policy: Some("shared"),
+            ..Default::default()
+        };
+        let keyword_hits = vec![
+            ScoredHit {
+                id: "keyword".to_string(),
+                score: 0.7,
+                source: SearchSource::Keyword,
+            },
+            ScoredHit {
+                id: "temporal".to_string(),
+                score: 0.2,
+                source: SearchSource::Keyword,
+            },
+        ];
+
+        let normal_temporal = temporal_candidates_for_recall(&conn, 10, &filter, 0.1, false);
+        let mut normal =
+            merge_recall_candidates(&keyword_hits, &[], &[], &[], &normal_temporal, 0.5, 0.1);
+        normal.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
+
+        assert!(normal_temporal.is_empty());
+        assert_eq!(normal.first().unwrap().id, "keyword");
+        assert_eq!(
+            normal.iter().find(|h| h.id == "temporal").unwrap().source,
+            SearchSource::Keyword
+        );
+
+        let temporal_intent = temporal_candidates_for_recall(&conn, 10, &filter, 0.1, true);
+        let mut boosted =
+            merge_recall_candidates(&keyword_hits, &[], &[], &[], &temporal_intent, 0.5, 0.1);
+        boosted.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
+
+        assert_eq!(boosted.first().unwrap().id, "temporal");
+        assert!(matches!(
+            boosted.first().unwrap().source,
+            SearchSource::TemporalHybrid
+        ));
+    }
+
+    #[test]
     fn temporal_and_traversal_candidates_can_be_primary_then_topic_scored() {
         let conn = setup();
         insert_memory(&conn, "flat", "apollo keyword direct", "fact");
@@ -2286,6 +2359,33 @@ mod tests {
         assert!(hits[0].id.starts_with("source-chunk:"));
         assert!(hits[0].content.contains("apollo source content"));
         assert!(blocked.is_empty());
+    }
+
+    #[test]
+    fn source_chunk_fallback_returns_obsidian_source_key_and_label() {
+        let conn = setup();
+        let vector: Vec<f32> = vec![1.0, 0.0, 0.0, 0.0];
+        let blob: Vec<u8> = vector.iter().flat_map(|f| f.to_le_bytes()).collect();
+        conn.execute(
+            "INSERT INTO embeddings (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id)
+             VALUES ('emb-obsidian', 'hash-obsidian', ?1, 4, 'source_obsidian_chunk', 'obsidian:vault:note', 'source_path: vault/note.md\napollo obsidian source content', datetime('now'), 'agent-a')",
+            params![blob],
+        )
+        .unwrap();
+
+        let hits = source_chunk_vector_fallbacks(
+            &conn,
+            Some(&vector),
+            &HashSet::new(),
+            5,
+            "agent-a",
+            None,
+        );
+
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].source_type, "source_obsidian_chunk");
+        assert_eq!(hits[0].source.as_str(), "source_obsidian");
+        assert!(hits[0].tags.contains("source_obsidian_chunk"));
     }
 
     #[test]

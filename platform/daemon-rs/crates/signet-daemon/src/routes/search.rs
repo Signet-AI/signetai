@@ -15,8 +15,8 @@ use signet_core::search::{
     apply_rehearsal_boost, apply_sec_lite, apply_temporal_topic_evidence,
     authorize_scored_candidates, fts_search, fuse_traversal_primary, hint_search,
     load_currentness_info, merge_recall_candidates, native_artifact_fallbacks,
-    source_chunk_vector_fallbacks, structured_path_candidates, temporal_candidates, touch_accessed,
-    traversal_primary_candidates, vec_search_scored,
+    source_chunk_vector_fallbacks, structured_path_candidates, temporal_candidates_for_recall,
+    touch_accessed, traversal_primary_candidates, vec_search_scored,
 };
 
 use crate::auth::middleware::{authenticate_headers, require_rate_limit_guard};
@@ -46,6 +46,16 @@ pub struct RecallBody {
     pub until: Option<String>,
     pub scope: Option<String>,
     pub project: Option<String>,
+    pub time: Option<RecallTimeOptions>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecallTimeOptions {
+    pub start: Option<String>,
+    pub end: Option<String>,
+    pub facets: Option<Vec<String>>,
+    pub mode: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -98,7 +108,92 @@ pub struct RecallHit {
     pub scope: Option<String>,
     pub created_at: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub supplementary: Option<bool>,
+}
+
+fn has_time_option_start(time: Option<&RecallTimeOptions>) -> bool {
+    let Some(options) = time else {
+        return false;
+    };
+    let _parsed_contract_fields = (&options.end, &options.facets, &options.mode);
+    options
+        .start
+        .as_deref()
+        .is_some_and(|start| !start.trim().is_empty())
+}
+
+fn parse_temporal_day_token(token: &str) -> Option<u32> {
+    let trimmed = token
+        .trim_end_matches("st")
+        .trim_end_matches("nd")
+        .trim_end_matches("rd")
+        .trim_end_matches("th");
+    trimmed
+        .parse::<u32>()
+        .ok()
+        .filter(|day| (1..=31).contains(day))
+}
+
+fn parse_temporal_month_token(token: &str) -> Option<u32> {
+    match token {
+        "january" | "jan" => Some(1),
+        "february" | "feb" => Some(2),
+        "march" | "mar" => Some(3),
+        "april" | "apr" => Some(4),
+        "may" => Some(5),
+        "june" | "jun" => Some(6),
+        "july" | "jul" => Some(7),
+        "august" | "aug" => Some(8),
+        "september" | "sep" | "sept" => Some(9),
+        "october" | "oct" => Some(10),
+        "november" | "nov" => Some(11),
+        "december" | "dec" => Some(12),
+        _ => None,
+    }
+}
+
+fn is_temporal_year_token(token: &str) -> bool {
+    token.len() == 4 && token.chars().all(|ch| ch.is_ascii_digit())
+}
+
+fn has_explicit_temporal_day(query: &str) -> bool {
+    let lower = query.to_ascii_lowercase();
+    let tokens: Vec<&str> = lower
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+        .filter(|token| !token.is_empty())
+        .collect();
+
+    tokens.windows(3).any(|window| {
+        let [first, second, third] = window else {
+            return false;
+        };
+        if is_temporal_year_token(first) {
+            let month = second
+                .parse::<u32>()
+                .ok()
+                .filter(|month| (1..=12).contains(month));
+            return month.is_some() && parse_temporal_day_token(third).is_some();
+        }
+        parse_temporal_month_token(first).is_some()
+            && parse_temporal_day_token(second).is_some()
+            && is_temporal_year_token(third)
+    })
+}
+
+fn has_temporal_candidate_intent(body: &RecallBody) -> bool {
+    has_time_option_start(body.time.as_ref()) || has_explicit_temporal_day(&body.query)
+}
+
+fn fallback_existing_source_ids(results: &[RecallHit]) -> std::collections::HashSet<String> {
+    results
+        .iter()
+        .filter_map(|row| row.source_id.as_deref())
+        .map(str::trim)
+        .filter(|source_id| !source_id.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
 }
 
 fn recall_response(results: Vec<RecallHit>, query: String, method: String) -> RecallResponse {
@@ -143,6 +238,7 @@ pub async fn recall(
         )
             .into_response();
     }
+    let temporal_intent = has_temporal_candidate_intent(&body);
 
     // Rate-limit LLM-enabled recall independently of plain recall.
     // Skipped in local auth mode; active in team/hybrid modes.
@@ -273,7 +369,8 @@ pub async fn recall(
                 None => vec![],
             };
             let structured_hits = structured_path_candidates(conn, &query, top_k, &filter);
-            let temporal_hits = temporal_candidates(conn, top_k, &filter, min_score);
+            let temporal_hits =
+                temporal_candidates_for_recall(conn, top_k, &filter, min_score, temporal_intent);
             let flat = merge_recall_candidates(
                 &fts_hits,
                 &hint_hits,
@@ -311,7 +408,8 @@ pub async fn recall(
                 limit
             };
             let top_ids: Vec<&str> = scored.iter().take(pre_hydrate).map(|s| s.id.as_str()).collect();
-            let allow_source_fallbacks = mem_type.is_none()
+            let allow_source_fallbacks = temporal_hits.is_empty()
+                && mem_type.is_none()
                 && tags.is_none()
                 && who.is_none()
                 && pinned.is_none()
@@ -324,7 +422,7 @@ pub async fn recall(
             if !top_ids.is_empty() {
                 let placeholders: String = top_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
                 let sql = format!(
-                    "SELECT id, content, type, tags, pinned, importance, who, project, created_at, visibility, scope
+                    "SELECT id, content, type, tags, pinned, importance, who, project, created_at, visibility, scope, source_id
                      FROM memories WHERE id IN ({placeholders}) AND COALESCE(is_deleted, 0) = 0"
                 );
 
@@ -368,6 +466,7 @@ pub async fn recall(
                                 created_at: row.get(8)?,
                                 visibility: row.get(9)?,
                                 scope: row.get(10)?,
+                                source_id: row.get(11)?,
                                 supplementary: None,
                             },
                         ))
@@ -391,10 +490,7 @@ pub async fn recall(
             // Thin memory recall source/session/transcript fallbacks mirror TS memory-search.ts:2003.
             if results.len() < limit && allow_source_fallbacks {
                 let fill = limit - results.len();
-                let mut existing_source_ids: std::collections::HashSet<String> = results
-                    .iter()
-                    .filter_map(|row| row.id.strip_prefix("source-chunk:").map(ToOwned::to_owned))
-                    .collect();
+                let mut existing_source_ids = fallback_existing_source_ids(&results);
                 let source_hits = source_chunk_vector_fallbacks(
                     conn,
                     query_vec.as_deref(),
@@ -416,6 +512,7 @@ pub async fn recall(
                     } else {
                         hit.content.clone()
                     };
+                    let source_id = hit.source_id.clone();
                     results.push(RecallHit {
                         id: hit.id,
                         content,
@@ -432,6 +529,7 @@ pub async fn recall(
                         visibility: None,
                         scope: None,
                         created_at: hit.created_at,
+                        source_id: Some(source_id),
                         supplementary: Some(true),
                     });
                 }
@@ -457,6 +555,7 @@ pub async fn recall(
                         } else {
                             hit.content.clone()
                         };
+                        let source_id = hit.source_id.clone();
                         results.push(RecallHit {
                             id: hit.id,
                             content,
@@ -473,6 +572,7 @@ pub async fn recall(
                             visibility: None,
                             scope: None,
                             created_at: hit.created_at,
+                            source_id: Some(source_id),
                             supplementary: Some(true),
                         });
                     }
@@ -605,6 +705,7 @@ pub async fn recall(
                                     visibility: None,
                                     scope: None,
                                     created_at: chrono::Utc::now().to_rfc3339(),
+                                    source_id: None,
                                     supplementary: Some(true),
                                 },
                             );
@@ -704,6 +805,7 @@ pub async fn search_get(
         until: None,
         scope: params.scope,
         project: params.project,
+        time: None,
     };
 
     recall(State(state), ConnectInfo(peer), headers, Json(body))
@@ -750,6 +852,7 @@ pub async fn legacy_search(
         until: None,
         scope: None,
         project: None,
+        time: None,
     };
 
     recall(State(state), ConnectInfo(peer), headers, Json(body))
@@ -1161,6 +1264,85 @@ pub async fn embeddings_health(State(state): State<Arc<AppState>>) -> Json<serde
         });
 
     Json(report)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn recall_body(query: &str) -> RecallBody {
+        RecallBody {
+            query: query.to_string(),
+            keyword_query: None,
+            limit: None,
+            agent_id: Some("agent-a".to_string()),
+            memory_type: None,
+            tags: None,
+            who: None,
+            pinned: None,
+            importance_min: None,
+            since: None,
+            until: None,
+            scope: None,
+            project: None,
+            time: None,
+        }
+    }
+
+    fn recall_hit(id: &str, source_id: Option<&str>) -> RecallHit {
+        RecallHit {
+            id: id.to_string(),
+            content: String::new(),
+            content_length: 0,
+            truncated: false,
+            score: 0.5,
+            source: "keyword".to_string(),
+            memory_type: "fact".to_string(),
+            tags: None,
+            pinned: false,
+            importance: 0.5,
+            who: None,
+            project: None,
+            visibility: None,
+            scope: None,
+            created_at: "2026-06-01T00:00:00Z".to_string(),
+            source_id: source_id.map(ToOwned::to_owned),
+            supplementary: None,
+        }
+    }
+
+    #[test]
+    fn reranker_temporal_candidate_gate_requires_temporal_intent() {
+        let mut normal = recall_body("apollo launch checklist");
+        normal.since = Some("2026-01-01T00:00:00Z".to_string());
+        assert!(!has_temporal_candidate_intent(&normal));
+
+        let explicit_day = recall_body("what happened with apollo on June 14, 2026?");
+        assert!(has_temporal_candidate_intent(&explicit_day));
+
+        let mut request_time = recall_body("apollo launch checklist");
+        request_time.time = Some(RecallTimeOptions {
+            start: Some("2026-06-14T00:00:00Z".to_string()),
+            end: None,
+            facets: None,
+            mode: Some("filter".to_string()),
+        });
+        assert!(has_temporal_candidate_intent(&request_time));
+    }
+
+    #[test]
+    fn reranker_fallback_dedupe_uses_hydrated_memory_source_ids() {
+        let results = vec![
+            recall_hit("memory-with-source", Some("obsidian:vault:note")),
+            recall_hit("memory-without-source", None),
+        ];
+
+        let existing_source_ids = fallback_existing_source_ids(&results);
+
+        assert!(existing_source_ids.contains("obsidian:vault:note"));
+        assert!(!existing_source_ids.contains("memory-with-source"));
+        assert!(!existing_source_ids.contains("memory-without-source"));
+    }
 }
 
 #[derive(Debug, Deserialize)]

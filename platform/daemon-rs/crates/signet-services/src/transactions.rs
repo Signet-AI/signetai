@@ -42,6 +42,105 @@ pub struct IngestResult {
     pub duplicate_of: Option<String>,
 }
 
+pub struct IngestEnvelopeInput<'a> {
+    pub id: &'a str,
+    pub content: &'a str,
+    pub normalized_content: Option<&'a str>,
+    pub content_hash: &'a str,
+    pub who: Option<&'a str>,
+    pub why: Option<&'a str>,
+    pub project: Option<&'a str>,
+    pub importance: f64,
+    pub memory_type: &'a str,
+    pub tags: Option<&'a str>,
+    pub pinned: bool,
+    pub extraction_status: &'a str,
+    pub embedding_model: Option<&'a str>,
+    pub extraction_model: Option<&'a str>,
+    pub source_type: Option<&'a str>,
+    pub source_id: Option<&'a str>,
+    pub source_path: Option<&'a str>,
+    pub source_root: Option<&'a str>,
+    pub source_memory_id: Option<&'a str>,
+    pub idempotency_key: Option<&'a str>,
+    pub runtime_path: Option<&'a str>,
+    pub agent_id: &'a str,
+    pub visibility: &'a str,
+    pub scope: Option<&'a str>,
+    pub created_at: &'a str,
+    pub updated_by: &'a str,
+}
+
+pub fn tx_ingest_envelope(
+    conn: &Connection,
+    input: &IngestEnvelopeInput,
+) -> Result<String, CoreError> {
+    let source_id = input.source_id.or(input.source_memory_id);
+    memory::insert(
+        conn,
+        &memory::InsertMemory {
+            id: input.id,
+            content: input.content,
+            normalized_content: input.normalized_content.unwrap_or(input.content),
+            content_hash: input.content_hash,
+            memory_type: input.memory_type,
+            tags: input.tags.unwrap_or("[]"),
+            who: input.who,
+            why: input.why,
+            project: input.project,
+            importance: input.importance,
+            pinned: input.pinned,
+            extraction_status: input.extraction_status,
+            embedding_model: input.embedding_model,
+            extraction_model: input.extraction_model,
+            source_type: input.source_type,
+            source_id,
+            source_path: input.source_path,
+            idempotency_key: input.idempotency_key,
+            runtime_path: input.runtime_path,
+            now: input.created_at,
+            updated_by: input.updated_by,
+            agent_id: input.agent_id,
+            visibility: input.visibility,
+            scope: input.scope,
+        },
+    )?;
+
+    let hist_id = uuid::Uuid::new_v4().to_string();
+    let metadata = serde_json::json!({
+        "sourceType": input.source_type,
+        "sourceId": source_id,
+        "sourcePath": input.source_path,
+        "sourceRoot": input.source_root,
+        "runtimePath": input.runtime_path,
+        "idempotencyKey": input.idempotency_key,
+        "agentId": input.agent_id,
+        "visibility": input.visibility,
+        "scope": input.scope,
+        "extractionModel": input.extraction_model,
+        "sourceMemoryId": input.source_memory_id.or(source_id),
+    });
+    let metadata_text = metadata.to_string();
+    memory::insert_history(
+        conn,
+        &memory::InsertHistory {
+            id: &hist_id,
+            memory_id: input.id,
+            event: "created",
+            old_content: None,
+            new_content: Some(input.content),
+            changed_by: input.updated_by,
+            reason: input.why,
+            metadata: Some(&metadata_text),
+            now: input.created_at,
+            actor_type: input.source_type,
+            session_id: source_id,
+            request_id: input.idempotency_key,
+        },
+    )?;
+    Ok(input.id.to_string())
+}
+
 pub fn ingest(conn: &Connection, input: &IngestInput) -> Result<IngestResult, CoreError> {
     let norm = normalize_and_hash(input.content);
 
@@ -681,6 +780,86 @@ mod tests {
         // History should have created + deleted + recovered
         let hist = memory::get_history(&conn, &r.id).unwrap();
         assert_eq!(hist.len(), 3);
+    }
+
+    #[test]
+    fn tx_ingest_envelope_preserves_attribution_fields() {
+        let conn = setup();
+        tx_ingest_envelope(
+            &conn,
+            &IngestEnvelopeInput {
+                id: "env-1",
+                content: "pipeline attributed fact",
+                normalized_content: Some("pipeline attributed fact"),
+                content_hash: "hash-env-1",
+                who: Some("pipeline-v2"),
+                why: Some("extracted-fact"),
+                project: Some("/work/signet"),
+                importance: 0.8,
+                memory_type: "fact",
+                tags: Some("[]"),
+                pinned: false,
+                extraction_status: "completed",
+                embedding_model: Some("embedder"),
+                extraction_model: Some("extractor"),
+                source_type: Some("pipeline-v2"),
+                source_id: None,
+                source_path: Some("memory/source.md"),
+                source_root: Some("repo://signet"),
+                source_memory_id: Some("source-memory-1"),
+                idempotency_key: Some("idem-1"),
+                runtime_path: Some("plugin"),
+                agent_id: "agent-a",
+                visibility: "private",
+                scope: Some("scope-a"),
+                created_at: "2026-06-01T00:00:00Z",
+                updated_by: "pipeline-v2",
+            },
+        )
+        .unwrap();
+
+        let row = conn
+            .query_row(
+                "SELECT source_type, source_id, source_path, runtime_path, idempotency_key,
+                        agent_id, visibility, scope, extraction_model, extraction_status
+                 FROM memories WHERE id = 'env-1'",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, Option<String>>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                        row.get::<_, Option<String>>(4)?,
+                        row.get::<_, String>(5)?,
+                        row.get::<_, String>(6)?,
+                        row.get::<_, Option<String>>(7)?,
+                        row.get::<_, Option<String>>(8)?,
+                        row.get::<_, Option<String>>(9)?,
+                    ))
+                },
+            )
+            .unwrap();
+        assert_eq!(row.0.as_deref(), Some("pipeline-v2"));
+        assert_eq!(row.1.as_deref(), Some("source-memory-1"));
+        assert_eq!(row.2.as_deref(), Some("memory/source.md"));
+        assert_eq!(row.3.as_deref(), Some("plugin"));
+        assert_eq!(row.4.as_deref(), Some("idem-1"));
+        assert_eq!(row.5, "agent-a");
+        assert_eq!(row.6, "private");
+        assert_eq!(row.7.as_deref(), Some("scope-a"));
+        assert_eq!(row.8.as_deref(), Some("extractor"));
+        assert_eq!(row.9.as_deref(), Some("completed"));
+
+        let metadata: String = conn
+            .query_row(
+                "SELECT metadata FROM memory_history WHERE memory_id = 'env-1' AND event = 'created'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(metadata.contains("repo://signet"));
+        assert!(metadata.contains("source-memory-1"));
     }
 
     #[test]
