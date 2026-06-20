@@ -411,7 +411,7 @@ impl ParityRules {
             let severity = field_severity(rules.endpoint_rule, path);
             divergences.push(Divergence {
                 severity,
-                field: format_array_length_path(path),
+                field: log_safe_field(&format_array_length_path(path)),
                 message: format!(
                     "array length mismatch: primary={}, shadow={}",
                     primary.len(),
@@ -453,7 +453,7 @@ impl ParityRules {
             let severity = field_severity(rules.endpoint_rule, path);
             divergences.push(Divergence {
                 severity,
-                field: format_array_length_path(path),
+                field: log_safe_field(&format_array_length_path(path)),
                 message: format!(
                     "array length mismatch: primary={}, shadow={}",
                     primary.len(),
@@ -2362,6 +2362,25 @@ mod tests {
             serde_json::json!({ "credentials": { key_secret: true } }),
         );
         let shadow = response_json(200, serde_json::json!({ "credentials": {} }));
+        let divs = rules.compare("POST /api/auth/token", &primary, &shadow);
+        assert!(!divs.is_empty());
+        assert_divergences_redacted(&divs, &[key_secret]);
+    }
+
+    #[test]
+    fn secret_as_object_key_with_array_value_redacted_from_length_field() {
+        // Regression: array-length divergence used format_array_length_path raw,
+        // leaking a secret embedded as the key of an array-valued field.
+        let rules = ParityRules::default();
+        let key_secret = "sk-array-key-secret-67890";
+        let primary = response_json(
+            200,
+            serde_json::json!({ "credentials": { key_secret: [1, 2] } }),
+        );
+        let shadow = response_json(
+            200,
+            serde_json::json!({ "credentials": { key_secret: [1] } }),
+        );
         let divs = rules.compare("POST /api/auth/token", &primary, &shadow);
         assert!(!divs.is_empty());
         assert_divergences_redacted(&divs, &[key_secret]);
