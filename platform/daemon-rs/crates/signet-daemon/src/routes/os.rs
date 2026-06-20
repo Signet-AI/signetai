@@ -21,6 +21,7 @@ use tokio::sync::{broadcast, mpsc};
 use tokio_stream::wrappers::ReceiverStream;
 
 use crate::{
+    routes::marketplace::{self, McpServer},
     state::{AppState, OsAgentSession},
     workspace_paths,
 };
@@ -336,15 +337,46 @@ pub async fn agent_sessions(State(state): State<Arc<AppState>>) -> Json<Value> {
     Json(json!({"sessions": sessions, "count": sessions.len()}))
 }
 
-pub async fn agent_events(Query(query): Query<AgentEventsQuery>) -> Response {
+pub async fn agent_events(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<AgentEventsQuery>,
+) -> Response {
+    let session_filter = query.session.clone();
+    let connected_session = if let Some(session_id) = session_filter.as_deref() {
+        let sessions = state.os_agent_sessions.read().await;
+        let Some(session) = sessions.get(session_id).cloned() else {
+            let (tx, rx) = mpsc::channel::<Result<Bytes, Infallible>>(1);
+            tokio::spawn(async move {
+                let _ = send_sse(
+                    &tx,
+                    json!({"type": "error", "data": {"error": "Session not found"}}),
+                )
+                .await;
+            });
+            return sse_response(rx);
+        };
+        Some(session)
+    } else {
+        None
+    };
+
     let (tx, rx) = mpsc::channel::<Result<Bytes, Infallible>>(32);
     let mut bus_rx = agent_event_bus().tx.subscribe();
     agent_event_bus().subscribers.fetch_add(1, Ordering::SeqCst);
-    let session_filter = query.session.clone();
     let replay = agent_event_bus().recent(None, 50, DEFAULT_WINDOW_MS);
     tokio::spawn(async move {
         let _subscriber = SubscriberGuard::new(agent_event_bus());
-        if !send_sse(&tx, json!({"type": "connected"})).await {
+        let connected = connected_session
+            .as_ref()
+            .map(|session| {
+                json!({
+                    "type": "connected",
+                    "sessionId": session.id,
+                    "serverId": session.server_id,
+                })
+            })
+            .unwrap_or_else(|| json!({"type": "connected"}));
+        if !send_sse(&tx, connected).await {
             return;
         }
         for event in replay.into_iter().rev() {
@@ -651,9 +683,14 @@ pub async fn tray_reprobe(
         )
             .into_response();
     };
-    let probe = make_probe_result(&server);
+    let probe = probe_server(&server).await;
     match store_probe_result(&state, &id, probe.clone()).await {
-        Ok(()) => Json(json!({"success": true, "probe": probe})).into_response(),
+        Ok(()) => {
+            if let Err(error) = upsert_tray_entry_from_probe(&state, &probe).await {
+                return internal_error(error).into_response();
+            }
+            Json(json!({"success": true, "probe": probe})).into_response()
+        }
         Err(error) => internal_error(error).into_response(),
     }
 }
@@ -792,24 +829,32 @@ pub async fn widget_generate(
             Err(error) => return internal_error(error).into_response(),
         }
     }
-    let status = if body.get("html").and_then(Value::as_str).is_some() {
-        "cached"
-    } else {
-        "generating"
-    };
-    if let Err(error) = upsert_widget_job(&state, server_id, status, body.clone()).await {
-        return internal_error(error).into_response();
+    if body.get("html").and_then(Value::as_str).is_some() {
+        if let Err(error) = upsert_widget_job(&state, server_id, "cached", body.clone()).await {
+            return internal_error(error).into_response();
+        }
+        event_bus().emit(
+            "widget",
+            "widget.generated",
+            json!({"serverId": server_id, "success": true}),
+        );
+        return Json(json!({"status": "cached", "html": body["html"].clone()})).into_response();
+    }
+
+    let error = "Rust daemon widget generation requires generated html from the dashboard runtime";
+    if let Err(db_error) = upsert_widget_job(&state, server_id, "error", body.clone()).await {
+        return internal_error(db_error).into_response();
     }
     event_bus().emit(
         "widget",
-        "widget.generation",
-        json!({"serverId": server_id, "status": status}),
+        "widget.error",
+        json!({"serverId": server_id, "error": error}),
     );
-    if status == "cached" {
-        Json(json!({"status": "cached", "html": body["html"].clone()})).into_response()
-    } else {
-        (StatusCode::ACCEPTED, Json(json!({"status": "generating"}))).into_response()
-    }
+    (
+        StatusCode::NOT_IMPLEMENTED,
+        Json(json!({"status": "error", "error": error})),
+    )
+        .into_response()
 }
 
 pub async fn widget_get(
@@ -1104,6 +1149,67 @@ async fn store_probe_result(state: &AppState, id: &str, probe: Value) -> Result<
         .map(|_| ())
 }
 
+async fn upsert_tray_entry_from_probe(state: &AppState, probe: &Value) -> Result<(), CoreError> {
+    let id = probe
+        .get("serverId")
+        .and_then(Value::as_str)
+        .ok_or_else(|| CoreError::Invalid("probe missing serverId".into()))?;
+    let auto_card = probe.get("autoCard").cloned().unwrap_or_else(|| {
+        json!({
+            "name": "MCP Server",
+            "tools": [],
+            "resources": [],
+            "hasAppResources": false,
+            "defaultSize": {"w": 4, "h": 3},
+        })
+    });
+    let declared_manifest = probe
+        .get("declaredManifest")
+        .filter(|value| !value.is_null());
+    let effective_manifest = declared_manifest.cloned().unwrap_or_else(|| {
+        json!({
+            "name": auto_card
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or("MCP Server"),
+            "defaultSize": auto_card
+                .get("defaultSize")
+                .cloned()
+                .unwrap_or_else(|| json!({"w": 4, "h": 3})),
+        })
+    });
+    let created_at = get_tray_entry(state, id)
+        .await?
+        .and_then(|entry| entry.get("createdAt").cloned())
+        .unwrap_or_else(|| json!(chrono::Utc::now().to_rfc3339()));
+    let state_value = if declared_manifest
+        .and_then(|manifest| manifest.get("dock"))
+        .and_then(Value::as_bool)
+        == Some(true)
+    {
+        "dock"
+    } else {
+        "tray"
+    };
+    upsert_tray_entry(
+        state,
+        json!({
+            "id": id,
+            "name": effective_manifest
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or("MCP Server"),
+            "icon": effective_manifest.get("icon").cloned().unwrap_or(Value::Null),
+            "state": state_value,
+            "manifest": effective_manifest,
+            "autoCard": auto_card,
+            "hasDeclaredManifest": declared_manifest.is_some(),
+            "createdAt": created_at,
+        }),
+    )
+    .await
+}
+
 async fn upsert_widget_job(
     state: &AppState,
     id: &str,
@@ -1202,16 +1308,65 @@ async fn available_tool_count(state: &AppState) -> usize {
     probes.unwrap_or(0)
 }
 
-fn make_probe_result(server: &Value) -> Value {
+async fn probe_server(server: &Value) -> Value {
+    let now = chrono::Utc::now().to_rfc3339();
+    let Ok(server_config) = installed_server_from_value(server) else {
+        return failed_probe_result(server, "invalid installed MCP server config", now);
+    };
+
+    let tools_result = match marketplace::mcp_request(&server_config, "tools/list", json!({})).await
+    {
+        Ok(result) => result,
+        Err(error) => return failed_probe_result(server, error, now),
+    };
+    let tools = auto_card_tools(&tools_result);
+
+    let resources_result = marketplace::mcp_request(&server_config, "resources/list", json!({}))
+        .await
+        .unwrap_or_else(|_| json!({"resources": []}));
+    let resources = auto_card_resources(&resources_result);
+    let declared_manifest = read_declared_manifest(&server_config, &resources).await;
+    let has_app_resources = resources.iter().any(|resource| {
+        resource
+            .get("uri")
+            .and_then(Value::as_str)
+            .map(|uri| uri.starts_with("app://"))
+            .unwrap_or(false)
+    });
     let name = server
         .get("name")
         .and_then(Value::as_str)
         .unwrap_or("MCP Server");
-    let id = server.get("id").and_then(Value::as_str).unwrap_or("server");
+
     json!({
+        "serverId": server_config.id,
         "ok": true,
+        "error": null,
+        "declaredManifest": declared_manifest,
+        "autoCard": {
+            "name": name,
+            "tools": tools,
+            "resources": resources,
+            "hasAppResources": has_app_resources,
+            "defaultSize": {"w": 4, "h": 3},
+        },
+        "toolCount": tools.len(),
+        "resourceCount": resources.len(),
+        "hasAppResources": has_app_resources,
+        "probedAt": now,
+    })
+}
+
+fn failed_probe_result(server: &Value, error: impl ToString, probed_at: String) -> Value {
+    let id = server.get("id").and_then(Value::as_str).unwrap_or("server");
+    let name = server
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or("MCP Server");
+    json!({
         "serverId": id,
-        "checkedAt": chrono::Utc::now().to_rfc3339(),
+        "ok": false,
+        "error": error.to_string(),
         "declaredManifest": null,
         "autoCard": {
             "name": name,
@@ -1219,8 +1374,202 @@ fn make_probe_result(server: &Value) -> Value {
             "resources": [],
             "hasAppResources": false,
             "defaultSize": {"w": 4, "h": 3},
-        }
+        },
+        "toolCount": 0,
+        "resourceCount": 0,
+        "hasAppResources": false,
+        "probedAt": probed_at,
     })
+}
+
+fn installed_server_from_value(server: &Value) -> Result<McpServer, serde_json::Error> {
+    serde_json::from_value(json!({
+        "id": server.get("id").and_then(Value::as_str).unwrap_or("server"),
+        "source": server.get("source").and_then(Value::as_str).unwrap_or("manual"),
+        "catalogId": server.get("catalogId").cloned().unwrap_or(Value::Null),
+        "name": server.get("name").and_then(Value::as_str).unwrap_or("MCP Server"),
+        "description": server.get("description").and_then(Value::as_str).unwrap_or(""),
+        "category": server.get("category").and_then(Value::as_str).unwrap_or("Other"),
+        "homepage": server.get("homepage").cloned().unwrap_or(Value::Null),
+        "official": server.get("official").and_then(Value::as_bool).unwrap_or(false),
+        "enabled": server.get("enabled").and_then(Value::as_bool).unwrap_or(true),
+        "scope": server.get("scope").cloned().unwrap_or_else(|| json!({"harnesses": [], "workspaces": [], "channels": []})),
+        "config": server.get("config").cloned().unwrap_or(Value::Null),
+        "installedAt": server.get("installedAt").and_then(Value::as_str).unwrap_or(""),
+        "updatedAt": server.get("updatedAt").and_then(Value::as_str).unwrap_or(""),
+    }))
+}
+
+fn auto_card_tools(result: &Value) -> Vec<Value> {
+    result
+        .get("tools")
+        .and_then(Value::as_array)
+        .map(|tools| {
+            tools
+                .iter()
+                .filter_map(|tool| {
+                    let name = tool.get("name").and_then(Value::as_str)?;
+                    if name.is_empty() {
+                        return None;
+                    }
+                    Some(json!({
+                        "name": name,
+                        "description": tool.get("description").and_then(Value::as_str).unwrap_or(""),
+                        "readOnly": tool
+                            .get("annotations")
+                            .and_then(|annotations| annotations.get("readOnlyHint"))
+                            .and_then(Value::as_bool)
+                            .unwrap_or(false),
+                        "inputSchema": tool.get("inputSchema").cloned().unwrap_or_else(|| json!({})),
+                    }))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn auto_card_resources(result: &Value) -> Vec<Value> {
+    result
+        .get("resources")
+        .and_then(Value::as_array)
+        .map(|resources| {
+            resources
+                .iter()
+                .filter_map(|resource| {
+                    let uri = resource.get("uri").and_then(Value::as_str)?;
+                    if uri.is_empty() {
+                        return None;
+                    }
+                    let mut out = serde_json::Map::new();
+                    out.insert("uri".to_string(), json!(uri));
+                    out.insert(
+                        "name".to_string(),
+                        json!(resource.get("name").and_then(Value::as_str).unwrap_or(uri)),
+                    );
+                    if let Some(description) = resource.get("description").and_then(Value::as_str) {
+                        out.insert("description".to_string(), json!(description));
+                    }
+                    if let Some(mime_type) = resource.get("mimeType").and_then(Value::as_str) {
+                        out.insert("mimeType".to_string(), json!(mime_type));
+                    }
+                    Some(Value::Object(out))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+async fn read_declared_manifest(server: &McpServer, resources: &[Value]) -> Value {
+    let Some(uri) = resources.iter().find_map(|resource| {
+        let uri = resource.get("uri").and_then(Value::as_str)?;
+        let name = resource.get("name").and_then(Value::as_str).unwrap_or("");
+        if matches!(uri, "signet://manifest" | "signet://app") || name == "signet-manifest" {
+            Some(uri.to_string())
+        } else {
+            None
+        }
+    }) else {
+        return Value::Null;
+    };
+    let Ok(content) = marketplace::mcp_request(server, "resources/read", json!({"uri": uri})).await
+    else {
+        return Value::Null;
+    };
+    let Some(text) = content
+        .get("contents")
+        .and_then(Value::as_array)
+        .and_then(|contents| contents.first())
+        .and_then(|first| first.get("text"))
+        .and_then(Value::as_str)
+    else {
+        return Value::Null;
+    };
+    serde_json::from_str::<Value>(text)
+        .ok()
+        .and_then(|metadata| parse_declared_manifest(&metadata, &server.name))
+        .unwrap_or(Value::Null)
+}
+
+fn parse_declared_manifest(metadata: &Value, server_name: &str) -> Option<Value> {
+    let block = metadata
+        .get("signet")
+        .or_else(|| metadata.get("signet.app"))?
+        .as_object()?;
+    let mut manifest = serde_json::Map::new();
+    manifest.insert(
+        "name".to_string(),
+        json!(
+            block
+                .get("name")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or(server_name)
+        ),
+    );
+    for key in ["icon", "ui"] {
+        if let Some(url) = block
+            .get(key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| is_http_url(value))
+        {
+            manifest.insert(key.to_string(), json!(url));
+        }
+    }
+    if let Some(size) = block.get("defaultSize").and_then(Value::as_object) {
+        if let (Some(w), Some(h)) = (
+            size.get("w").and_then(Value::as_i64),
+            size.get("h").and_then(Value::as_i64),
+        ) {
+            manifest.insert(
+                "defaultSize".to_string(),
+                json!({"w": w.clamp(1, 12), "h": h.clamp(1, 12)}),
+            );
+        }
+    }
+    if let Some(events) = block.get("events").and_then(Value::as_object) {
+        let mut out = serde_json::Map::new();
+        for key in ["subscribe", "emit"] {
+            if let Some(values) = string_array(events.get(key)) {
+                out.insert(key.to_string(), Value::Array(values));
+            }
+        }
+        if !out.is_empty() {
+            manifest.insert("events".to_string(), Value::Object(out));
+        }
+    }
+    if let Some(values) = string_array(block.get("menuItems")) {
+        manifest.insert("menuItems".to_string(), Value::Array(values));
+    }
+    if let Some(dock) = block.get("dock").and_then(Value::as_bool) {
+        manifest.insert("dock".to_string(), json!(dock));
+    }
+    if let Some(html) = block
+        .get("html")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && !value.to_lowercase().contains("<script src"))
+    {
+        manifest.insert("html".to_string(), json!(html));
+    }
+    Some(Value::Object(manifest))
+}
+
+fn string_array(value: Option<&Value>) -> Option<Vec<Value>> {
+    let values = value
+        .and_then(Value::as_array)?
+        .iter()
+        .filter_map(Value::as_str)
+        .map(|value| json!(value))
+        .collect::<Vec<_>>();
+    Some(values)
+}
+
+fn is_http_url(value: &str) -> bool {
+    reqwest::Url::parse(value)
+        .map(|url| matches!(url.scheme(), "http" | "https"))
+        .unwrap_or(false)
 }
 
 fn tray_entry_for_server(server: &Value) -> Value {

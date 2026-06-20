@@ -4867,6 +4867,26 @@ async fn os_routes_replay_empty_state_and_validation_shapes() {
     assert_eq!(body["sessions"], json!([]));
     assert_eq!(body["count"], 0);
 
+    let mut missing_agent_stream = server
+        .client
+        .get(format!(
+            "{}/api/os/agent-events?session=missing-session",
+            server.base
+        ))
+        .send()
+        .await
+        .expect("open missing agent event stream");
+    assert_eq!(missing_agent_stream.status(), 200);
+    let missing_agent_chunk = next_sse_chunk(&mut missing_agent_stream).await;
+    assert!(missing_agent_chunk.contains(r#""type":"error""#));
+    assert!(missing_agent_chunk.contains("Session not found"));
+    let ended = tokio::time::timeout(Duration::from_secs(2), missing_agent_stream.chunk())
+        .await
+        .expect("missing-session stream did not close")
+        .expect("missing-session stream read failed")
+        .is_none();
+    assert!(ended, "missing-session error stream should close");
+
     let resp = server.post("/api/os/agent-execute", json!({})).await;
     assert_eq!(resp.status(), 400);
     let body = server.json(resp).await;
@@ -5014,15 +5034,20 @@ async fn os_routes_replay_empty_state_and_validation_shapes() {
     assert_eq!(body["ok"], true);
     assert_eq!(body["widgetId"], "example-mcp");
     assert_eq!(body["manifest"], serde_json::Value::Null);
-    let installed: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(server._tmpdir.path().join("marketplace/mcp-servers.json"))
-            .unwrap(),
-    )
-    .unwrap();
+    let installed_path = server._tmpdir.path().join("marketplace/mcp-servers.json");
+    let mut installed: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&installed_path).unwrap()).unwrap();
     assert_eq!(installed[0]["id"], "example-mcp");
     assert_eq!(installed[0]["source"], "manual");
     assert_eq!(installed[0]["config"]["transport"], "http");
     assert_eq!(installed[0]["config"]["url"], "https://example.com/mcp");
+    installed[0]["config"]["url"] = json!("http://127.0.0.1:9/mcp");
+    installed[0]["config"]["timeoutMs"] = json!(1000);
+    std::fs::write(
+        &installed_path,
+        serde_json::to_string_pretty(&installed).unwrap(),
+    )
+    .unwrap();
 
     let resp = server.get("/api/os/tray").await;
     assert_eq!(resp.status(), 200);
@@ -5053,17 +5078,39 @@ async fn os_routes_replay_empty_state_and_validation_shapes() {
     assert_eq!(resp.status(), 200);
     let body = server.json(resp).await;
     assert_eq!(body["success"], true);
-    assert_eq!(body["probe"]["ok"], true);
+    assert_eq!(body["probe"]["ok"], false);
+    assert!(body["probe"]["error"].as_str().unwrap_or_default().len() > 0);
+    assert_eq!(body["probe"]["declaredManifest"], serde_json::Value::Null);
+    assert_eq!(body["probe"]["autoCard"]["tools"], json!([]));
+    assert_eq!(body["probe"]["autoCard"]["resources"], json!([]));
+    assert_eq!(body["probe"]["toolCount"], 0);
+    assert_eq!(body["probe"]["resourceCount"], 0);
+    assert_eq!(body["probe"]["hasAppResources"], false);
+    assert!(body["probe"]["probedAt"].as_str().is_some());
 
     let resp = server.get("/api/os/tray/example-mcp/probe").await;
     assert_eq!(resp.status(), 200);
     let body = server.json(resp).await;
     assert_eq!(body["probe"]["serverId"], "example-mcp");
+    assert_eq!(body["probe"]["ok"], false);
 
     let resp = server.post("/api/os/widget/generate", json!({})).await;
     assert_eq!(resp.status(), 400);
     let body = server.json(resp).await;
     assert_eq!(body["error"], "serverId is required");
+
+    let resp = server
+        .post(
+            "/api/os/widget/generate",
+            json!({"serverId": "example-mcp", "force": true}),
+        )
+        .await;
+    assert_eq!(resp.status(), 501);
+    let body = server.json(resp).await;
+    assert_eq!(body["status"], "error");
+    assert!(body["error"].as_str().unwrap_or_default().contains("html"));
+    let error_event_text = read_sse_until(&mut event_stream, "widget.error").await;
+    assert!(error_event_text.contains("example-mcp"));
 
     let resp = server
         .post(
@@ -5076,14 +5123,21 @@ async fn os_routes_replay_empty_state_and_validation_shapes() {
     assert_eq!(body["status"], "cached");
     assert_eq!(body["html"], "<section>Example widget</section>");
 
-    let event_text = read_sse_until(&mut event_stream, "widget.generation").await;
+    let event_text = read_sse_until(&mut event_stream, "widget.generated").await;
     assert!(event_text.contains("example-mcp"));
 
     let resp = server.get("/api/os/events?type=widget&limit=10").await;
     assert_eq!(resp.status(), 200);
     let body = server.json(resp).await;
-    assert_eq!(body["count"], 1);
-    assert_eq!(body["events"][0]["type"], "widget.generation");
+    assert!(body["count"].as_u64().unwrap_or_default() >= 2);
+    let event_types = body["events"]
+        .as_array()
+        .expect("events array")
+        .iter()
+        .filter_map(|event| event["type"].as_str())
+        .collect::<Vec<_>>();
+    assert!(event_types.contains(&"widget.error"));
+    assert!(event_types.contains(&"widget.generated"));
 
     let resp = server.get("/api/os/context").await;
     assert_eq!(resp.status(), 200);
@@ -5441,6 +5495,21 @@ async fn secrets_routes_enforce_plugin_capability_gate() {
     assert_eq!(body["events"][0]["event"], "plugin.capability_denied");
     assert_eq!(body["events"][0]["result"], "denied");
     assert_eq!(body["events"][0]["source"], "secrets-routes");
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn phase2b_misc_auth_secrets_replay_smoke() {
+    // TS parity: platform/daemon/src/version.test.ts:5-24 verifies version
+    // route semantics. The non-ignored Phase 2b coverage lives in
+    // misc_routes_parity.rs, while contract_replay keeps the route-level fixture.
+    let server = TestServer::start_team_auth().await;
+
+    let resp = server.get("/api/version").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(body["runtime"], "rust");
 }
 
 #[tokio::test]
@@ -7376,6 +7445,21 @@ async fn sources_endpoints() {
         2048
     );
 
+    // Port of platform/daemon/src/routes/sources-routes.test.ts:248-261:
+    // provider source routes reject raw tokens before config persistence.
+    let resp = server
+        .post(
+            "/api/sources/discord",
+            json!({
+                "guildIds": ["123456789012345678"],
+                "tokenRef": "MzI0NzY5ODEwMDc4NzQ3NjY4.GbM8rb.fakeFakeFakeFakeFakeFakeFakeFake"
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert!(body["error"].as_str().unwrap().contains("not a raw token"));
+
     let resp = server
         .post(
             "/api/sources/github",
@@ -7407,6 +7491,19 @@ async fn sources_endpoints() {
         body["source"]["providerSettings"]["repos"],
         json!(["Signet-AI/signetai"])
     );
+
+    let resp = server
+        .post(
+            "/api/sources/github",
+            json!({
+                "repos": ["Signet-AI/signetai"],
+                "tokenRef": "ghp_0123456789abcdefghijklmnopqrstuvwxyz"
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert!(body["error"].as_str().unwrap().contains("not a raw token"));
 }
 
 #[tokio::test]

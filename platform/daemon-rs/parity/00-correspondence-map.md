@@ -248,9 +248,13 @@ will be "honest" ports or harness-backed.
 - ✅ HTTP/SSE/state contract parity (per user-approved scope): event-bus
   in-memory rolling-window query/SSE/stats/context, tray+widget SQLite CRUD,
   agent-session state machine, chat/install contracts. SSE streams real.
-- ⏳ **3 refinements in flight:** (a) tray reprobe stores synthetic ok=true
-  (should probe real MCP server, persist TS-shaped result with
-  declaredManifest/tools/resources); (b) widget generate emits
-  `widget.generation` but dashboard listens for `widget.generated` (stuck
-  generating — needs async completion or different event); (c) missing
-  /api/os/agent-events session idles (should emit TS-shaped error SSE event).
+- ✅ Refined: real MCP probe (TS-shaped result), widget.generated/widget.error,
+  missing-session error SSE.
+- ⏳ **3 more in flight (1 critical):** (a) CRITICAL — manifest HTML guard
+  only rejects literal `<script src` (bypassable via `<script  src=`/	);
+  TS uses case-insensitive regex `<script\s+src\s*=`; (b) probe skips MCP
+  initialize/initialized handshake (streamable-HTTP servers marked ok:false);
+  (c) reprobe doesn't invalidate cached widget on tool-set change (TS emits
+  widget.invalidated).
+- 📌 **Parity gap found (not OS):** no CORS layer in Rust daemon
+  (daemon-cors.test.ts) — tracked for a focused pass.
