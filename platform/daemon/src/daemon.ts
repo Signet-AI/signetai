@@ -1475,7 +1475,7 @@ async function main() {
 		: (resolveEmbeddedWorkerPath("synthesis-render-worker") ?? join(__dirname, "synthesis-render-worker.ts"));
 	let synthWorker: Worker | null = null;
 	try {
-		synthWorker = new Worker(workerPath);
+		synthWorker = new Worker(workerPath, { type: "module" });
 	} catch (err) {
 		logger.warn(
 			"daemon",

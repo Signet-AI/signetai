@@ -40,13 +40,14 @@ describe("native-runtime-assets", () => {
 
 	test("materializes embedded worker and wasm files", () => {
 		registerNativeAssets({
-			workers: [{ name: "example-worker", contentBase64: Buffer.from("module.exports = 1;").toString("base64") }],
+			workers: [{ name: "example-worker", contentBase64: Buffer.from("export default 1;").toString("base64") }],
 			wasm: [{ name: "example.wasm", contentBase64: Buffer.from("wasm-bytes").toString("base64") }],
 		});
 
 		const workerPath = resolveEmbeddedWorkerPath("example-worker");
 		expect(workerPath).toBeTruthy();
-		expect(workerPath ? readFileSync(workerPath, "utf8") : "").toBe("module.exports = 1;");
+		expect(workerPath?.endsWith(".mjs")).toBe(true);
+		expect(workerPath ? readFileSync(workerPath, "utf8") : "").toBe("export default 1;");
 
 		const wasmDir = materializeEmbeddedWasmAssets();
 		expect(wasmDir).toBeTruthy();

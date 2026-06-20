@@ -101,9 +101,9 @@ const nativeExternalArgs = ["--external", "better-sqlite3"] as const;
 for (const [name, entry] of workerEntries) {
 	runBunBuild([
 		"--target=bun",
-		"--format=cjs",
+		"--format=esm",
 		"--outfile",
-		join(workerDir, `${name}.cjs`),
+		join(workerDir, `${name}.mjs`),
 		...nativeExternalArgs,
 		entry,
 	]);
@@ -131,7 +131,7 @@ const skillAssets = fileAssetsFor(skillsDir);
 
 const workerAssets = workerEntries.map(([name]) => ({
 	name,
-	contentBase64: readFileSync(join(workerDir, `${name}.cjs`)).toString("base64"),
+	contentBase64: readFileSync(join(workerDir, `${name}.mjs`)).toString("base64"),
 }));
 const transformersPackageJson = daemonRequire.resolve("@huggingface/transformers/package.json");
 const transformersDir = dirname(transformersPackageJson);

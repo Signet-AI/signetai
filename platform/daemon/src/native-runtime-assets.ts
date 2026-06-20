@@ -72,7 +72,7 @@ export function resolveEmbeddedWorkerPath(name: string): string | null {
 
 	const hash = createHash("sha256").update(worker.contentBase64).digest("hex").slice(0, 16);
 	const dir = join(tmpdir(), "signet-native-workers");
-	const path = join(dir, `${name.replace(/[^a-zA-Z0-9_.-]/g, "_")}-${hash}.cjs`);
+	const path = join(dir, `${name.replace(/[^a-zA-Z0-9_.-]/g, "_")}-${hash}.mjs`);
 	mkdirSync(dir, { recursive: true });
 	if (!existsSync(path)) {
 		writeFileSync(path, Buffer.from(worker.contentBase64, "base64"));

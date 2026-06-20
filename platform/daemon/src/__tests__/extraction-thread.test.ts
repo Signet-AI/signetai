@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { EventEmitter } from "node:events";
+import type { WorkerOptions } from "node:worker_threads";
 import {
 	type ExtractionWorker,
 	type ExtractionWorkerFactory,
@@ -18,6 +19,7 @@ class FakeExtractionWorker implements ExtractionWorker {
 	terminateCalls = 0;
 	readonly paths: string[] = [];
 	readonly inits: WorkerInit[] = [];
+	readonly options: WorkerOptions[] = [];
 
 	private readonly emitter = new EventEmitter();
 
@@ -71,9 +73,10 @@ function testInit(): WorkerInit {
 }
 
 function fakeFactory(worker: FakeExtractionWorker): ExtractionWorkerFactory {
-	return (path, init) => {
+	return (path, init, options) => {
 		worker.paths.push(path);
 		worker.inits.push(init);
+		worker.options.push(options);
 		return worker;
 	};
 }
@@ -317,6 +320,8 @@ describe("startExtractionThread lifecycle", () => {
 		expect(handle.running).toBe(true);
 		expect(handle.stats.processed).toBe(7);
 		expect(worker.inits).toHaveLength(1);
+		expect(worker.options[0]?.type).toBe("module");
+		expect(worker.options[0]?.workerData).toEqual(testInit());
 
 		handle.nudge();
 		expect(worker.messages).toContainEqual({ type: "nudge" });

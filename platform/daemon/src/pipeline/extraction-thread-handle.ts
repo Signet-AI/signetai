@@ -10,7 +10,7 @@
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { Worker } from "node:worker_threads";
+import { Worker, type WorkerOptions } from "node:worker_threads";
 import type { AnalyticsCollector } from "../analytics";
 import { logger } from "../logger";
 import type { LogCategory } from "../logger";
@@ -30,7 +30,11 @@ export interface ExtractionWorker {
 	terminate(): Promise<number> | number;
 }
 
-export type ExtractionWorkerFactory = (workerPath: string, init: WorkerInit) => ExtractionWorker;
+export type ExtractionWorkerFactory = (
+	workerPath: string,
+	init: WorkerInit,
+	options: WorkerOptions,
+) => ExtractionWorker;
 
 export interface ExtractionThreadOpts {
 	readonly init: WorkerInit;
@@ -49,7 +53,8 @@ export function startExtractionThread(opts: ExtractionThreadOpts): Promise<Worke
 		const workerPath = existsSync(bundled)
 			? bundled
 			: (resolveEmbeddedWorkerPath("extraction-thread") ?? join(__dirname, "extraction-thread.ts"));
-		const worker = (opts.workerFactory ?? createNodeWorker)(workerPath, init);
+		const workerOptions = createExtractionWorkerOptions(init);
+		const worker = (opts.workerFactory ?? createNodeWorker)(workerPath, init, workerOptions);
 
 		let running = true;
 		let settled = false;
@@ -186,6 +191,10 @@ export function startExtractionThread(opts: ExtractionThreadOpts): Promise<Worke
 	});
 }
 
-function createNodeWorker(workerPath: string, init: WorkerInit): ExtractionWorker {
-	return new Worker(workerPath, { workerData: init });
+export function createExtractionWorkerOptions(init: WorkerInit): WorkerOptions {
+	return { workerData: init, type: "module" };
+}
+
+function createNodeWorker(workerPath: string, _init: WorkerInit, options: WorkerOptions): ExtractionWorker {
+	return new Worker(workerPath, options);
 }

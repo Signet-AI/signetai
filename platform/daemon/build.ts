@@ -41,6 +41,7 @@ if (isBun) {
 			outdir: ".",
 			naming: outfile,
 			target: "bun",
+			format: "esm",
 			external: EXTERNAL_BUN,
 			alias: ALIAS,
 		});

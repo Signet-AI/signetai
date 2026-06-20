@@ -22,6 +22,19 @@ COPY public ./public
 COPY web ./web
 
 RUN bun install --frozen-lockfile
+ARG TARGETOS=linux
+ARG TARGETARCH
+RUN set -eux; \
+	arch="${TARGETARCH:-$(uname -m)}"; \
+	case "$arch" in \
+		amd64|x86_64) arch="x64" ;; \
+		aarch64) arch="arm64" ;; \
+	esac; \
+	pkg="sqlite-vec-${TARGETOS}-${arch}"; \
+	vec_path="$(find node_modules -path "*/${pkg}/vec0.so" -type f | head -n 1)"; \
+	test -n "$vec_path"; \
+	mkdir -p dist/docker-sqlite-vec; \
+	cp "$vec_path" dist/docker-sqlite-vec/vec0.so
 RUN bun run build:core
 RUN bun run build:connector-base
 RUN bun run build:opencode-plugin
@@ -43,8 +56,10 @@ ENV SIGNET_PATH=/data/agents
 ENV SIGNET_BIND=0.0.0.0
 ENV SIGNET_PORT=3850
 ENV SIGNET_DAEMON_ENTRYPOINT=1
+ENV SIGNET_VEC_PATH=/app/sqlite-vec/vec0.so
 
 COPY --from=build /app/dist/native/signet ./bin/signet
+COPY --from=build /app/dist/docker-sqlite-vec ./sqlite-vec
 COPY --from=build /app/dist/signetai/templates ./dist/signetai/templates
 COPY deploy/docker/entrypoint.sh ./deploy/docker/entrypoint.sh
 COPY deploy/docker/scripts ./deploy/docker/scripts

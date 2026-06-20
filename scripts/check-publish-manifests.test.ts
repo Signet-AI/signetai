@@ -49,7 +49,10 @@ describe("check-publish-manifests", () => {
 
 		expect(missingSources).toEqual([]);
 		expect(dockerfile).toContain("RUN bun run build:native-bun");
+		expect(dockerfile).toContain('pkg="sqlite-vec-${TARGETOS}-${arch}"');
+		expect(dockerfile).toContain("ENV SIGNET_VEC_PATH=/app/sqlite-vec/vec0.so");
 		expect(dockerfile).toContain("COPY --from=build /app/dist/native/signet ./bin/signet");
+		expect(dockerfile).toContain("COPY --from=build /app/dist/docker-sqlite-vec ./sqlite-vec");
 		expect(dockerfile).not.toContain("/app/dist/signetai/dist");
 		expect(dockerfile).not.toContain("/app/dist/signetai/dashboard");
 		expect(dockerfile).not.toContain("/app/dist/signetai/skills");
