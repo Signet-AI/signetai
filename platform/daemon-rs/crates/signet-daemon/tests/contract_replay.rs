@@ -2599,6 +2599,101 @@ async fn memory_delete_rejects_cross_agent_and_archived_rows() {
 
 #[tokio::test]
 #[ignore = "requires built daemon binary"]
+async fn memory_patch_scopes_mutation_agent_and_excludes_archived_rows() {
+    let server = TestServer::start_team_auth().await;
+    server.seed_scoping_audit_fixture();
+    let agent_a = TestServer::scoped_token("agent-a");
+
+    let resp = server
+        .patch_bearer(
+            "/api/memory/mem-scope-agent-b",
+            json!({
+                "content": "Agent A must not patch agent B memory.",
+                "reason": "scope audit patch",
+            }),
+            &agent_a,
+        )
+        .await;
+    let status = resp.status();
+    let blocked = server.json(resp).await;
+    assert!(
+        status == 404 || status == 403,
+        "cross-agent patch unexpectedly allowed: status={status} body={blocked}"
+    );
+
+    let resp = server
+        .patch_bearer(
+            "/api/memory/mem-scope-archived",
+            json!({
+                "content": "Agent A must not patch archived memory.",
+                "reason": "scope audit patch archived",
+            }),
+            &agent_a,
+        )
+        .await;
+    let status = resp.status();
+    let archived = server.json(resp).await;
+    assert!(
+        status == 404 || status == 403,
+        "archived patch unexpectedly allowed: status={status} body={archived}"
+    );
+
+    let own_content = "Agent A PATCH scoping audit update succeeds.";
+    let resp = server
+        .patch_bearer(
+            "/api/memory/mem-scope-agent-a",
+            json!({
+                "content": own_content,
+                "reason": "scope audit patch own",
+            }),
+            &agent_a,
+        )
+        .await;
+    let status = resp.status();
+    let updated = server.json(resp).await;
+    assert_eq!(status, 200, "own patch rejected: {updated}");
+    assert_eq!(updated["status"], "updated");
+
+    let conn = rusqlite::Connection::open(server.db_path()).expect("open replay db");
+    let (agent_a_content, agent_a_version): (String, i64) = conn
+        .query_row(
+            "SELECT content, version FROM memories WHERE id = ?1",
+            rusqlite::params!["mem-scope-agent-a"],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("agent-a memory row");
+    assert_eq!(agent_a_content, own_content);
+    assert_eq!(agent_a_version, 2);
+
+    let (agent_b_content, agent_b_version): (String, i64) = conn
+        .query_row(
+            "SELECT content, version FROM memories WHERE id = ?1",
+            rusqlite::params!["mem-scope-agent-b"],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("agent-b memory row");
+    assert_eq!(
+        agent_b_content,
+        "Agent B private route audit memory must not leak."
+    );
+    assert_eq!(agent_b_version, 1);
+
+    let (archived_content, archived_version): (String, i64) = conn
+        .query_row(
+            "SELECT content, version FROM memories WHERE id = ?1",
+            rusqlite::params!["mem-scope-archived"],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("archived memory row");
+    assert_eq!(
+        archived_content,
+        "Archived route audit memory must not leak."
+    );
+    assert_eq!(archived_version, 1);
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
 async fn cross_agent_routes_reject_wrong_agent_session_scope() {
     let server = TestServer::start_team_auth().await;
     let agent_a = TestServer::scoped_token("agent-a");

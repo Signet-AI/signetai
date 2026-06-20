@@ -203,12 +203,10 @@ Behavioral-core gap-fill, highest-risk first. Worktree-isolated subagents,
 - ✅ **`/api/repair/*` stubs** (6 stubs): all native. REFINED: SIGNET_AGENT_ID
   resolution (no hardcoded default), weighted Louvain community detection
   (was connected-components+0.0), pipelineV2.hints.enabled gate (TS 400).
-- ⏳ **Scoping audit** (core 4): closed 4 leaks (memory cross-agent/archived,
-  write mutation delete/recover/modify/batch-forget scope, ontology alias
-  hardcoded default, cross-agent sender/session). sessions.rs already correct.
-  **4 in flight (1 critical):** (a) CRITICAL — PATCH /api/memory/:id still
-  bypasses mutation auth/scoping (audit fixed sibling routes, missed `patch`
-  handler) → cross-agent mutation in team/hybrid; (b) presence include_self
-  semantics; (c) message listing hard-filters to_session_key (drops
-  agent/broadcast); (d) last_seen_at RFC3339 'T' vs sqlite space-sep compare.
+- ✅ **Scoping audit** (core 4): closed leaks across memory/write/ontology/
+  crossagent routes (cross-agent isolation, archived exclusion, no hardcoded
+  `default`). PATCH /api/memory/:id critical bypass fixed (memory_mutation_allowed
+  before modify). Cross-agent presence include_self default=false (TS parity),
+  message session_key folded into visibility OR, stale-filter parsed-timestamp
+  compare. sessions.rs already correct.
 - ⬜ Scoping / memory-lineage / hooks / remaining auth — after.

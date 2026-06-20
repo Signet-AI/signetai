@@ -164,6 +164,78 @@ fn query_values(values: &[String]) -> Vec<&dyn ToSql> {
     values.iter().map(|value| value as &dyn ToSql).collect()
 }
 
+fn presence_stale_cutoff() -> String {
+    (chrono::Utc::now() - chrono::Duration::hours(4)).to_rfc3339()
+}
+
+fn build_presence_list_query(
+    agent_id: &str,
+    session_key: Option<&str>,
+    project: Option<&str>,
+    include_self: bool,
+    limit: usize,
+    stale_cutoff: &str,
+) -> (String, Vec<String>) {
+    let mut sql = "SELECT key, session_key, agent_id, harness, project, runtime_path, provider, started_at, last_seen_at FROM agent_presence WHERE julianday(last_seen_at) >= julianday(?)".to_string();
+    let mut args = vec![stale_cutoff.to_string()];
+    if !include_self {
+        sql.push_str(" AND (agent_id IS NULL OR agent_id != ?");
+        args.push(agent_id.to_string());
+        if let Some(session_key) = session_key {
+            sql.push_str(" OR (agent_id = ? AND session_key IS NOT NULL AND session_key != ?)");
+            args.push(agent_id.to_string());
+            args.push(session_key.to_string());
+        }
+        sql.push(')');
+    }
+    if let Some(project) = project {
+        sql.push_str(" AND project = ?");
+        args.push(project.to_string());
+    }
+    sql.push_str(&format!(" ORDER BY last_seen_at DESC LIMIT {limit}"));
+    (sql, args)
+}
+
+fn build_messages_list_query(
+    agent_id: &str,
+    session_key: Option<&str>,
+    since: Option<&str>,
+    include_sent: bool,
+    include_broadcast: bool,
+    unscoped_local: bool,
+    limit: usize,
+) -> (String, Vec<String>) {
+    let mut sql = "SELECT m.id, m.created_at, m.from_agent_id, m.from_session_key, m.to_agent_id, m.to_session_key, m.content, m.type, m.broadcast FROM agent_messages m WHERE 1=1".to_string();
+    let mut args = Vec::<String>::new();
+    if let Some(since) = since {
+        sql.push_str(" AND m.created_at >= ?");
+        args.push(since.to_string());
+    }
+    if !unscoped_local {
+        let mut visibility_clauses = Vec::<&str>::new();
+        if let Some(session_key) = session_key {
+            visibility_clauses.push("m.to_session_key = ?");
+            args.push(session_key.to_string());
+        }
+        visibility_clauses.push("m.to_agent_id = ?");
+        args.push(agent_id.to_string());
+        visibility_clauses.push("m.to_session_key IN (SELECT session_key FROM agent_presence WHERE agent_id = ? AND session_key IS NOT NULL)");
+        args.push(agent_id.to_string());
+        if include_sent {
+            visibility_clauses.push("m.from_agent_id = ?");
+            args.push(agent_id.to_string());
+        }
+        if include_broadcast {
+            visibility_clauses.push("m.broadcast = 1");
+        }
+        sql.push_str(" AND (");
+        sql.push_str(&visibility_clauses.join(" OR "));
+        sql.push(')');
+    }
+    sql.push_str(&format!(" ORDER BY m.created_at DESC LIMIT {limit}"));
+    (sql, args)
+}
+
 // ---------------------------------------------------------------------------
 // Route handlers
 // ---------------------------------------------------------------------------
@@ -189,34 +261,27 @@ pub async fn list_presence(
     let session_key = clean(params.session_key.as_deref());
     let project = clean(params.project.as_deref());
     let include_self = params.include_self.unwrap_or(false);
+    let stale_cutoff = presence_stale_cutoff();
 
     let result = state
         .pool
         .read(move |conn| {
-            if let Err(error) = validate_session_agent_binding(conn, session_key.as_deref(), &agent_id, true)? {
+            if let Err(error) =
+                validate_session_agent_binding(conn, session_key.as_deref(), &agent_id, true)?
+            {
                 return Ok(serde_json::json!({"_code": 403, "error": error}));
             }
             if !table_exists(conn, "agent_presence")? {
                 return Ok(serde_json::json!({"sessions": [], "count": 0}));
             }
-            let mut sql = "SELECT key, session_key, agent_id, harness, project, runtime_path, provider, started_at, last_seen_at FROM agent_presence WHERE last_seen_at >= datetime('now', '-4 hours')".to_string();
-            let mut args = Vec::<String>::new();
-            if include_self {
-                sql.push_str(" AND agent_id = ?");
-                args.push(agent_id.clone());
-            } else {
-                sql.push_str(" AND agent_id != ?");
-                args.push(agent_id.clone());
-            }
-            if let Some(session_key) = session_key {
-                sql.push_str(" AND session_key = ?");
-                args.push(session_key);
-            }
-            if let Some(project) = project {
-                sql.push_str(" AND project = ?");
-                args.push(project);
-            }
-            sql.push_str(&format!(" ORDER BY last_seen_at DESC LIMIT {limit}"));
+            let (sql, args) = build_presence_list_query(
+                &agent_id,
+                session_key.as_deref(),
+                project.as_deref(),
+                include_self,
+                limit,
+                &stale_cutoff,
+            );
             let params = query_values(&args);
             let mut stmt = conn.prepare(&sql)?;
             let rows: Vec<serde_json::Value> = stmt
@@ -435,39 +500,23 @@ pub async fn list_messages(
     let result = state
         .pool
         .read(move |conn| {
-            if let Err(error) = validate_session_agent_binding(conn, session_key.as_deref(), &agent_id, true)? {
+            if let Err(error) =
+                validate_session_agent_binding(conn, session_key.as_deref(), &agent_id, true)?
+            {
                 return Ok(serde_json::json!({"_code": 403, "error": error}));
             }
             if !table_exists(conn, "agent_messages")? {
                 return Ok(serde_json::json!({"items": [], "count": 0}));
             }
-            let mut sql = "SELECT m.id, m.created_at, m.from_agent_id, m.from_session_key, m.to_agent_id, m.to_session_key, m.content, m.type, m.broadcast FROM agent_messages m WHERE 1=1".to_string();
-            let mut args = Vec::<String>::new();
-            if let Some(since) = since {
-                sql.push_str(" AND m.created_at >= ?");
-                args.push(since);
-            }
-            if let Some(session_key) = session_key {
-                sql.push_str(" AND (m.to_session_key = ? OR (? = '' AND 0))");
-                args.push(session_key);
-                args.push(String::new());
-            }
-            if !unscoped_local {
-                sql.push_str(" AND (");
-                sql.push_str("m.to_agent_id = ?");
-                args.push(agent_id.clone());
-                sql.push_str(" OR m.to_session_key IN (SELECT session_key FROM agent_presence WHERE agent_id = ? AND session_key IS NOT NULL)");
-                args.push(agent_id.clone());
-                if include_sent {
-                    sql.push_str(" OR m.from_agent_id = ?");
-                    args.push(agent_id.clone());
-                }
-                if include_broadcast {
-                    sql.push_str(" OR m.broadcast = 1");
-                }
-                sql.push(')');
-            }
-            sql.push_str(&format!(" ORDER BY m.created_at DESC LIMIT {limit}"));
+            let (sql, args) = build_messages_list_query(
+                &agent_id,
+                session_key.as_deref(),
+                since.as_deref(),
+                include_sent,
+                include_broadcast,
+                unscoped_local,
+                limit,
+            );
             let params = query_values(&args);
             let mut stmt = conn.prepare(&sql)?;
             let rows: Vec<serde_json::Value> = stmt
@@ -629,5 +678,207 @@ pub async fn send_message(
             Json(serde_json::json!({"error": format!("{e}")})),
         )
             .into_response(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rusqlite::{Connection, params};
+
+    fn setup_conn() -> Connection {
+        let conn = Connection::open_in_memory().expect("in-memory sqlite");
+        conn.execute_batch(
+            "CREATE TABLE agent_presence (
+                key TEXT PRIMARY KEY,
+                session_key TEXT,
+                agent_id TEXT,
+                harness TEXT NOT NULL DEFAULT 'unknown',
+                project TEXT,
+                runtime_path TEXT,
+                provider TEXT,
+                started_at TEXT NOT NULL,
+                last_seen_at TEXT NOT NULL
+            );
+            CREATE TABLE agent_messages (
+                id TEXT PRIMARY KEY,
+                created_at TEXT NOT NULL,
+                from_agent_id TEXT,
+                from_session_key TEXT,
+                to_agent_id TEXT,
+                to_session_key TEXT,
+                content TEXT NOT NULL,
+                type TEXT NOT NULL DEFAULT 'info',
+                broadcast INTEGER NOT NULL DEFAULT 0
+            );",
+        )
+        .expect("schema");
+        conn
+    }
+
+    fn insert_presence(
+        conn: &Connection,
+        key: &str,
+        session_key: &str,
+        agent_id: &str,
+        last_seen_at: &str,
+    ) {
+        conn.execute(
+            "INSERT INTO agent_presence (key, session_key, agent_id, harness, started_at, last_seen_at)
+             VALUES (?1, ?2, ?3, 'test', ?4, ?4)",
+            params![key, session_key, agent_id, last_seen_at],
+        )
+        .expect("insert presence");
+    }
+
+    fn query_column(conn: &Connection, sql: &str, args: &[String], column: usize) -> Vec<String> {
+        let params = query_values(args);
+        let mut stmt = conn.prepare(sql).expect("prepare query");
+        stmt.query_map(params.as_slice(), |row| row.get::<_, String>(column))
+            .expect("query rows")
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .expect("collect rows")
+    }
+
+    #[test]
+    fn presence_include_self_lists_all_and_exclude_self_uses_session_as_context() {
+        let conn = setup_conn();
+        let fresh = "2026-06-20T12:00:00Z";
+        insert_presence(&conn, "session:alice-1", "alice-1", "alice", fresh);
+        insert_presence(&conn, "session:alice-2", "alice-2", "alice", fresh);
+        insert_presence(&conn, "session:bob-1", "bob-1", "bob", fresh);
+
+        let (sql, args) = build_presence_list_query(
+            "alice",
+            Some("alice-1"),
+            None,
+            true,
+            50,
+            "2026-06-20T08:00:00Z",
+        );
+        let listed = query_column(&conn, &sql, &args, 1);
+        assert_eq!(
+            listed.len(),
+            3,
+            "include_self=true returns the full presence list"
+        );
+        assert!(
+            listed.contains(&"alice-1".to_string()),
+            "current session is included"
+        );
+        assert!(
+            listed.contains(&"alice-2".to_string()),
+            "same-agent sibling session is included"
+        );
+        assert!(
+            listed.contains(&"bob-1".to_string()),
+            "other agents are included"
+        );
+
+        let (sql, args) = build_presence_list_query(
+            "alice",
+            Some("alice-1"),
+            None,
+            false,
+            50,
+            "2026-06-20T08:00:00Z",
+        );
+        let listed = query_column(&conn, &sql, &args, 1);
+        assert_eq!(
+            listed.len(),
+            2,
+            "include_self=false excludes only the current session context"
+        );
+        assert!(
+            !listed.contains(&"alice-1".to_string()),
+            "current session is excluded"
+        );
+        assert!(
+            listed.contains(&"alice-2".to_string()),
+            "session_key is not a hard row filter"
+        );
+        assert!(
+            listed.contains(&"bob-1".to_string()),
+            "other agents remain visible"
+        );
+    }
+
+    #[test]
+    fn message_session_key_is_folded_into_visibility_or_clause() {
+        let conn = setup_conn();
+        insert_presence(
+            &conn,
+            "session:alice-1",
+            "alice-1",
+            "alice",
+            "2026-06-20T12:00:00Z",
+        );
+        conn.execute(
+            "INSERT INTO agent_messages (id, created_at, from_agent_id, from_session_key, to_agent_id, to_session_key, content, type, broadcast)
+             VALUES
+                ('to-session', '2026-06-20T12:01:00Z', 'bob', 'bob-1', NULL, 'alice-1', 'session', 'info', 0),
+                ('to-agent', '2026-06-20T12:02:00Z', 'bob', 'bob-1', 'alice', NULL, 'agent', 'info', 0),
+                ('broadcast', '2026-06-20T12:03:00Z', 'bob', 'bob-1', NULL, NULL, 'broadcast', 'info', 1),
+                ('sent', '2026-06-20T12:04:00Z', 'alice', 'alice-1', 'bob', NULL, 'sent', 'info', 0),
+                ('hidden', '2026-06-20T12:05:00Z', 'bob', 'bob-1', 'carol', NULL, 'hidden', 'info', 0)",
+            [],
+        )
+        .expect("insert messages");
+
+        let (sql, args) =
+            build_messages_list_query("alice", Some("alice-1"), None, true, true, false, 100);
+        let ids = query_column(&conn, &sql, &args, 0);
+        assert!(
+            ids.contains(&"to-session".to_string()),
+            "session-key recipient remains visible"
+        );
+        assert!(
+            ids.contains(&"to-agent".to_string()),
+            "agent-addressed message is not dropped by session_key"
+        );
+        assert!(
+            ids.contains(&"broadcast".to_string()),
+            "broadcast is not dropped by session_key"
+        );
+        assert!(
+            ids.contains(&"sent".to_string()),
+            "include_sent remains part of the visibility OR"
+        );
+        assert!(
+            !ids.contains(&"hidden".to_string()),
+            "unrelated messages stay hidden"
+        );
+    }
+
+    #[test]
+    fn presence_stale_filter_parses_rfc3339_timestamps() {
+        let conn = setup_conn();
+        insert_presence(
+            &conn,
+            "session:stale",
+            "stale",
+            "alice",
+            "2026-06-20T01:00:00Z",
+        );
+        insert_presence(
+            &conn,
+            "session:fresh",
+            "fresh",
+            "alice",
+            "2026-06-20T09:00:00Z",
+        );
+
+        let (sql, args) =
+            build_presence_list_query("alice", None, None, true, 50, "2026-06-20T08:00:00Z");
+        assert!(
+            sql.contains("julianday(last_seen_at) >= julianday(?)"),
+            "presence staleness must parse timestamps instead of comparing text"
+        );
+        let listed = query_column(&conn, &sql, &args, 1);
+        assert_eq!(listed, vec!["fresh".to_string()]);
+        assert!(
+            !listed.contains(&"stale".to_string()),
+            "same-day stale T-separated row is excluded"
+        );
     }
 }

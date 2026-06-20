@@ -297,6 +297,8 @@ pub async fn codex_native_note(
 
 pub async fn patch(
     State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Path(id): Path<String>,
     Json(payload): Json<Value>,
 ) -> axum::response::Response {
@@ -423,11 +425,32 @@ pub async fn patch(
         return resp;
     }
 
+    let requested_agent = requested_mutation_agent(&headers, None);
+    let (agent_id, auth) = match auth_for_mutation(
+        &state,
+        &headers,
+        &peer,
+        requested_agent.as_deref(),
+        Permission::Modify,
+    ) {
+        Ok(value) => value,
+        Err(resp) => return resp,
+    };
+    let project = mutation_project(&auth);
+
     let memory_id = id.clone();
     let content_changed = content.is_some();
     let result = state
         .pool
         .write(Priority::High, move |conn| {
+            if !memory_mutation_allowed(conn, &memory_id, &agent_id, project.as_deref(), false)? {
+                return Ok(serde_json::json!({
+                    "id": memory_id,
+                    "status": "not_found",
+                    "error": "Not found",
+                    "_code": 404,
+                }));
+            }
             let result = transactions::modify(
                 conn,
                 &transactions::ModifyInput {
