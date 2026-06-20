@@ -360,10 +360,11 @@ fn select_memories_for_budget(
             estimate_tokens(tag) + 3
         };
         let tokens = estimate_tokens(&memory.content) + tag_tokens + 4;
-        if selected.is_empty() || used.saturating_add(tokens) <= token_budget {
-            used = used.saturating_add(tokens);
-            selected.push(memory);
+        if used.saturating_add(tokens) > token_budget {
+            break;
         }
+        used = used.saturating_add(tokens);
+        selected.push(memory);
     }
     selected
 }
@@ -777,13 +778,16 @@ pub async fn synthesis_complete(
         )
             .into_response();
     }
-    if let Err(error) = resolve_synthesis_agent(&headers, body.agent_id(), body.session_key()) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": error })),
-        )
-            .into_response();
-    }
+    let agent_id = match resolve_synthesis_agent(&headers, body.agent_id(), body.session_key()) {
+        Ok(agent_id) => agent_id,
+        Err(error) => {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({ "error": error })),
+            )
+                .into_response();
+        }
+    };
     if state.synthesis_worker_handle.lock().await.is_none() {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -799,7 +803,7 @@ pub async fn synthesis_complete(
         )
             .into_response();
     };
-    match write_memory_md_atomic(&root, &content) {
+    match write_memory_md_atomic(&root, &agent_id, &content) {
         Ok(()) => Json(serde_json::json!({ "success": true })).into_response(),
         Err(error) => {
             warn!(err = %error, "synthesis complete failed");
@@ -812,14 +816,27 @@ pub async fn synthesis_complete(
     }
 }
 
-fn write_memory_md_atomic(root: &Path, content: &str) -> Result<(), String> {
+fn memory_md_path(root: &Path, agent_id: &str) -> Result<std::path::PathBuf, String> {
+    if agent_id == "default" {
+        workspace_paths::child_file(root, &["MEMORY.md"]).map_err(|err| err.to_string())
+    } else {
+        workspace_paths::child_file(root, &["agents", agent_id, "MEMORY.md"])
+            .map_err(|err| err.to_string())
+    }
+}
+
+fn write_memory_md_atomic(root: &Path, agent_id: &str, content: &str) -> Result<(), String> {
     fs::create_dir_all(root).map_err(|err| err.to_string())?;
-    let path = root.join("MEMORY.md");
+    let path = memory_md_path(root, agent_id)?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| "MEMORY.md path has no parent".to_string())?;
+    fs::create_dir_all(parent).map_err(|err| err.to_string())?;
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|err| err.to_string())?
         .as_nanos();
-    let tmp = root.join(format!(".MEMORY.md.{nanos}.tmp"));
+    let tmp = parent.join(format!(".MEMORY.md.{nanos}.tmp"));
     fs::write(&tmp, content).map_err(|err| err.to_string())?;
     fs::rename(&tmp, &path).map_err(|err| {
         let _ = fs::remove_file(&tmp);
@@ -4438,6 +4455,7 @@ mod tests {
     use axum::body::to_bytes;
     use axum::extract::State;
     use axum::http::{HeaderMap, StatusCode};
+    use axum::response::IntoResponse;
     use serde_json::Value;
     use sha2::{Digest, Sha256};
     use signet_core::config::{
@@ -4446,6 +4464,9 @@ mod tests {
     };
     use signet_core::db::{DbPool, Priority};
     use signet_pipeline::embedding::EmbeddingProvider;
+    use signet_pipeline::provider::LlmSemaphore;
+    use signet_pipeline::provider::{GenerateOpts, GenerateResult, LlmProvider, ProviderError};
+    use signet_pipeline::synthesis::{self, SynthesisConfig};
     use tempfile::TempDir;
 
     use crate::auth::rate_limiter::{AuthRateLimiter, default_limits};
@@ -4453,13 +4474,14 @@ mod tests {
     use crate::state::{AppState, AuthRuntimeState};
 
     use super::{
-        CHECKPOINT_MIN_DELTA, CheckpointExtractBody, CompactionCompleteBody, PromptSubmitBody,
-        SessionEndBody, SessionStartBody, build_signet_system_prompt, compaction_complete,
-        extract_delta, memory_embedding_score, normalize_session_transcript, parse_visibility,
-        prompt_submit, require_session_scope_for_write, resolve_audit_token,
-        resolve_compaction_project, resolve_remember_agent, session_agent_id,
+        CHECKPOINT_MIN_DELTA, CheckpointExtractBody, CompactionCompleteBody, InjectMemoryRow,
+        PromptSubmitBody, SessionEndBody, SessionStartBody, SynthesisCompleteBody,
+        build_signet_system_prompt, compaction_complete, extract_delta, memory_embedding_score,
+        normalize_session_transcript, parse_visibility, prompt_submit,
+        require_session_scope_for_write, resolve_audit_token, resolve_compaction_project,
+        resolve_remember_agent, select_memories_for_budget, session_agent_id,
         session_checkpoint_extract, session_end, session_start, session_transcript_content,
-        strip_untrusted_metadata, upsert_session_transcript,
+        strip_untrusted_metadata, synthesis_complete, upsert_session_transcript,
     };
     use signet_services::session::{RuntimePath, SessionTracker};
 
@@ -4470,6 +4492,31 @@ mod tests {
 
     struct TestEmbeddingProvider {
         vector: Vec<f32>,
+    }
+
+    struct TestLlmProvider;
+
+    impl LlmProvider for TestLlmProvider {
+        fn generate(
+            &self,
+            _prompt: &str,
+            _opts: &GenerateOpts,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<Output = Result<GenerateResult, ProviderError>> + Send + '_,
+            >,
+        > {
+            Box::pin(async {
+                Ok(GenerateResult {
+                    text: "test synthesis".to_string(),
+                    usage: None,
+                })
+            })
+        }
+
+        fn name(&self) -> &str {
+            "test"
+        }
     }
 
     impl EmbeddingProvider for TestEmbeddingProvider {
@@ -4552,6 +4599,79 @@ mod tests {
         test_state_with_manifest(name, |manifest| {
             manifest.hooks = Some(HooksConfig::default());
         })
+    }
+
+    #[test]
+    fn session_start_budget_selection_excludes_oversized_first_memory() {
+        let memories = vec![
+            InjectMemoryRow {
+                id: "oversized".to_string(),
+                content: "oversized memory ".repeat(80),
+                tags: None,
+                created_at: "2026-06-01T00:00:00Z".to_string(),
+            },
+            InjectMemoryRow {
+                id: "small".to_string(),
+                content: "small memory".to_string(),
+                tags: None,
+                created_at: "2026-06-01T00:00:00Z".to_string(),
+            },
+        ];
+
+        let selected = select_memories_for_budget(memories, 16);
+
+        assert!(
+            selected.is_empty(),
+            "oversized first row must not be injected or marked served"
+        );
+    }
+
+    #[tokio::test]
+    async fn synthesis_complete_writes_agent_scoped_memory_file() {
+        let (state, writer, tmp) = test_state("hooks-synthesis-complete-agent-memory");
+        std::fs::write(tmp.path().join("MEMORY.md"), "root memory must remain").unwrap();
+        let handle = synthesis::start(
+            state.pool.clone(),
+            Arc::new(TestLlmProvider),
+            Arc::new(LlmSemaphore::new(1)),
+            SynthesisConfig {
+                poll_ms: 3_600_000,
+                agents_dir: tmp.path().to_string_lossy().to_string(),
+                ..SynthesisConfig::default()
+            },
+        );
+        *state.synthesis_worker_handle.lock().await = Some(handle);
+
+        let resp = synthesis_complete(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(SynthesisCompleteBody {
+                content: Some("agent-a synthesized head".to_string()),
+                agent_id_camel: None,
+                agent_id: Some("agent-a".to_string()),
+                session_key_camel: None,
+                session_key: None,
+            }),
+        )
+        .await
+        .into_response();
+        let status = resp.status();
+        let body = test_json(resp).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join("MEMORY.md")).unwrap(),
+            "root memory must remain"
+        );
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join("agents/agent-a/MEMORY.md")).unwrap(),
+            "agent-a synthesized head"
+        );
+
+        if let Some(handle) = state.synthesis_worker_handle.lock().await.take() {
+            handle.stop().await;
+        }
+        drop(state);
+        let _ = writer.await;
     }
 
     #[tokio::test]

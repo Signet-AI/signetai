@@ -984,6 +984,56 @@ impl TestServer {
         .expect("seed knowledge health and hygiene fixture");
     }
 
+    fn seed_repair_native_fixture(&self) {
+        let conn = rusqlite::Connection::open(self.db_path()).expect("open replay db");
+        conn.busy_timeout(Duration::from_secs(5)).unwrap();
+        conn.execute_batch(
+            r#"INSERT INTO entities
+               (id, name, canonical_name, entity_type, agent_id, mentions, pinned,
+                created_at, updated_at)
+               VALUES
+               ('entity-repair-alpha', 'Signet Alpha', 'signet alpha', 'project', 'default', 4, 0,
+                '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
+               ('entity-repair-beta', 'Signet Beta', 'signet beta', 'project', 'default', 2, 0,
+                '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
+               ('entity-repair-generic', 'The Repair Heading', 'the repair heading', 'concept', 'default', 1, 0,
+                '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
+               ('entity-repair-other-agent', 'Other Agent Abstract Repair', 'other agent abstract repair', 'concept', 'other-agent', 1, 0,
+                '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
+
+               INSERT INTO entity_dependencies
+               (id, source_entity_id, target_entity_id, agent_id, dependency_type,
+                strength, confidence, reason, created_at, updated_at)
+               VALUES
+               ('dep-repair-alpha-beta', 'entity-repair-alpha', 'entity-repair-beta', 'default',
+                'depends_on', 0.8, 0.9, 'Repair replay cluster edge.',
+                '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
+
+               INSERT INTO memories
+               (id, type, content, confidence, importance, tags, who, project,
+                created_at, updated_at, updated_by, is_deleted, pinned, version,
+                agent_id, visibility, scope)
+               VALUES
+               ('mem-repair-unhinted', 'fact', 'Unhinted repair fixture memory for prospective indexing.',
+                1.0, 0.9, 'repair', 'contract-replay', 'signet',
+                '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 'contract-replay',
+                0, 0, 1, 'default', 'global', NULL),
+               ('mem-repair-relink', 'fact', 'Signet Alpha depends on Signet Beta for repair replay.',
+                1.0, 0.9, 'repair', 'contract-replay', 'signet',
+                '2026-01-02T00:00:00Z', '2026-01-02T00:00:00Z', 'contract-replay',
+                0, 0, 1, 'default', 'global', NULL),
+               ('mem-repair-dead', 'fact', 'Low confidence stale repair memory.',
+                0.01, 0.2, 'repair', 'contract-replay', 'signet',
+                '2025-01-01T00:00:00Z', '2025-01-01T00:00:00Z', 'contract-replay',
+                0, 0, 1, 'default', 'global', NULL),
+               ('mem-repair-other-agent-dead', 'fact', 'Other agent dead memory must not be repaired by default.',
+                0.01, 0.2, 'repair', 'contract-replay', 'signet',
+                '2025-01-01T00:00:00Z', '2025-01-01T00:00:00Z', 'contract-replay',
+                0, 0, 1, 'other-agent', 'global', NULL);"#,
+        )
+        .expect("seed native repair fixture");
+    }
+
     fn seed_memory_search_telemetry_fixture(&self) {
         let conn = rusqlite::Connection::open(self.db_path()).expect("open replay db");
         conn.busy_timeout(Duration::from_secs(5)).unwrap();
@@ -1271,6 +1321,27 @@ impl TestServer {
             "sessionScore": session_feedback.0,
             "sessionFeedbackCount": session_feedback.1,
         })
+    }
+
+    fn write_secret_plugin_registry(&self, enabled: bool, granted_capabilities: &[&str]) {
+        let dir = self._tmpdir.path().join(".daemon/plugins");
+        std::fs::create_dir_all(&dir).expect("plugin registry dir");
+        let line = serde_json::json!({
+            "version": 1,
+            "plugins": {
+                "signet.secrets": {
+                    "enabled": enabled,
+                    "grantedCapabilities": granted_capabilities,
+                    "installedAt": "2026-04-16T12:00:00.000Z",
+                    "updatedAt": "2026-04-16T12:00:00.000Z"
+                }
+            }
+        });
+        std::fs::write(
+            dir.join("registry-v1.json"),
+            format!("{}\n", serde_json::to_string_pretty(&line).unwrap()),
+        )
+        .expect("write plugin registry");
     }
 
     fn seed_plugin_audit_fixture(&self) {
@@ -4916,6 +4987,75 @@ async fn secrets_list() {
 
 #[tokio::test]
 #[ignore = "requires built daemon binary"]
+async fn secrets_routes_enforce_plugin_capability_gate() {
+    let server = TestServer::start().await;
+    server.write_secret_plugin_registry(false, &["secrets:list"]);
+
+    let resp = server.post("/api/secrets/REPLAY_SECRET", json!({})).await;
+    assert_eq!(resp.status(), 403);
+    let body = server.json(resp).await;
+    assert_eq!(body["pluginId"], "signet.secrets");
+    assert_eq!(body["status"], "plugin-inactive");
+    assert_eq!(body["missingCapabilities"], json!(["secrets:write"]));
+    assert_eq!(body["error"], "disabled by host policy");
+
+    server.write_secret_plugin_registry(true, &["secrets:list"]);
+    let resp = server
+        .post(
+            "/api/secrets/exec",
+            json!({"command": "   ", "secrets": {}}),
+        )
+        .await;
+    assert_eq!(resp.status(), 403);
+    let body = server.json(resp).await;
+    assert_eq!(body["pluginId"], "signet.secrets");
+    assert_eq!(body["status"], "capability-missing");
+    assert_eq!(body["missingCapabilities"], json!(["secrets:exec"]));
+
+    let resp = server
+        .post("/api/secrets/1password/import", json!({}))
+        .await;
+    assert_eq!(resp.status(), 403);
+    let body = server.json(resp).await;
+    assert_eq!(body["status"], "capability-missing");
+    assert_eq!(
+        body["missingCapabilities"],
+        json!(["secrets:providers:configure"])
+    );
+
+    let resp = server.delete("/api/secrets/REPLAY_SECRET").await;
+    assert_eq!(resp.status(), 403);
+    let body = server.json(resp).await;
+    assert_eq!(body["status"], "capability-missing");
+    assert_eq!(body["missingCapabilities"], json!(["secrets:delete"]));
+
+    let resp = server
+        .get("/api/plugins/audit?pluginId=signet.secrets&event=plugin.capability_denied&limit=10")
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert!(body["count"].as_i64().unwrap_or_default() >= 4);
+    assert_eq!(body["events"][0]["event"], "plugin.capability_denied");
+    assert_eq!(body["events"][0]["result"], "denied");
+    assert_eq!(body["events"][0]["source"], "secrets-routes");
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn auth_sso_saml_start_defers_to_external_idp_with_ts_501_shape() {
+    let server = TestServer::start().await;
+
+    let resp = server.get("/api/auth/sso/start").await;
+    assert_eq!(resp.status(), 501);
+    let body = server.json(resp).await;
+    assert_eq!(
+        body,
+        json!({"error": "SSO login is not configured", "provider": "sso"})
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
 async fn tasks_crud() {
     let server = TestServer::start().await;
 
@@ -5825,6 +5965,7 @@ async fn dream_promote_replays_native_preference_preview_and_apply() {
 #[ignore = "requires built daemon binary"]
 async fn repair_endpoints() {
     let server = TestServer::start().await;
+    server.seed_repair_native_fixture();
 
     let resp = server.get("/api/repair/embedding-gaps").await;
     assert_eq!(resp.status(), 200);
@@ -5836,32 +5977,78 @@ async fn repair_endpoints() {
     assert_eq!(resp.status(), 200);
 
     let resp = server
-        .post("/api/repair/prune-generic-entities", json!({}))
+        .post(
+            "/api/repair/prune-generic-entities",
+            json!({"dryRun": true}),
+        )
         .await;
     assert_eq!(resp.status(), 200);
     let body = server.json(resp).await;
-    assert_eq!(body["action"], "prune-generic-entities");
-    assert_eq!(body["pruned"], 0);
+    assert_eq!(body["action"], "pruneGenericEntities");
+    assert_eq!(body["success"], true);
+    assert!(body["affected"].as_u64().unwrap_or(0) >= 1);
+    assert!(
+        body["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("generic/non-concrete")
+    );
+
+    let resp = server
+        .post(
+            "/api/repair/prune-generic-entities",
+            json!({"dryRun": false, "batchSize": 1}),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["action"], "pruneGenericEntities");
+    assert_eq!(body["affected"], 1);
+    let generic_remaining: i64 = rusqlite::Connection::open(server.db_path())
+        .expect("open replay db")
+        .query_row(
+            "SELECT COUNT(*) FROM entities WHERE id = 'entity-repair-generic'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("count generic entity");
+    assert_eq!(generic_remaining, 0);
 
     let resp = server.post("/api/repair/cluster-entities", json!({})).await;
     assert_eq!(resp.status(), 200);
     let body = server.json(resp).await;
-    assert_eq!(body["action"], "cluster-entities");
-    assert_eq!(body["clusters"], 0);
+    assert!(body["communities"].as_u64().unwrap_or(0) >= 1);
+    assert!(
+        body["members"]
+            .as_array()
+            .is_some_and(|members| !members.is_empty())
+    );
 
-    let resp = server.post("/api/repair/relink-entities", json!({})).await;
+    let resp = server
+        .post("/api/repair/relink-entities", json!({"batchSize": 20}))
+        .await;
     assert_eq!(resp.status(), 200);
     let body = server.json(resp).await;
     assert_eq!(body["action"], "relink-entities");
-    assert_eq!(body["remaining"], 0);
-    assert_eq!(body["message"], "all memories linked");
+    assert!(body["processed"].as_u64().unwrap_or(0) >= 1);
+    assert!(body["linked"].as_u64().unwrap_or(0) >= 1);
 
-    let resp = server.post("/api/repair/backfill-hints", json!({})).await;
+    let resp = server
+        .post("/api/repair/backfill-hints", json!({"batchSize": 2}))
+        .await;
     assert_eq!(resp.status(), 200);
     let body = server.json(resp).await;
     assert_eq!(body["action"], "backfill-hints");
-    assert_eq!(body["enqueued"], 0);
-    assert_eq!(body["message"], "all unscoped memories have hints");
+    assert_eq!(body["enqueued"], 2);
+    let hint_jobs: i64 = rusqlite::Connection::open(server.db_path())
+        .expect("open replay db")
+        .query_row(
+            "SELECT COUNT(*) FROM memory_jobs WHERE job_type = 'prospective_index' AND status = 'pending'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("count hint jobs");
+    assert_eq!(hint_jobs, 2);
 
     let resp = server.post("/api/repair/re-embed", json!({})).await;
     assert_eq!(resp.status(), 200);
@@ -5895,13 +6082,10 @@ async fn repair_endpoints() {
     let resp = server.get("/api/repair/dead-memories").await;
     assert_eq!(resp.status(), 200);
     let body = server.json(resp).await;
-    assert_eq!(body["count"], 0);
-    assert!(
-        body["memories"]
-            .as_array()
-            .expect("dead memories")
-            .is_empty()
-    );
+    assert_eq!(body["count"], 1);
+    let dead = body["memories"].as_array().expect("dead memories");
+    assert_eq!(dead[0]["id"], "mem-repair-dead");
+    assert_eq!(dead[0]["reason"], "low_confidence");
 
     let resp = server
         .post("/api/repair/dead-memories/forget", json!({}))
@@ -5913,12 +6097,25 @@ async fn repair_endpoints() {
     let resp = server
         .post(
             "/api/repair/dead-memories/forget",
-            json!({"ids": ["dead-memory-a"]}),
+            json!({"ids": ["mem-repair-dead", "mem-repair-other-agent-dead"]}),
         )
         .await;
     assert_eq!(resp.status(), 200);
     let body = server.json(resp).await;
-    assert_eq!(body["forgotten"], 0);
+    assert_eq!(body["forgotten"], 1);
+    let deleted: (i64, i64) = rusqlite::Connection::open(server.db_path())
+        .expect("open replay db")
+        .query_row(
+            "SELECT
+               SUM(CASE WHEN id = 'mem-repair-dead' AND is_deleted = 1 THEN 1 ELSE 0 END),
+               SUM(CASE WHEN id = 'mem-repair-other-agent-dead' AND is_deleted = 1 THEN 1 ELSE 0 END)
+             FROM memories
+             WHERE id IN ('mem-repair-dead', 'mem-repair-other-agent-dead')",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("count forgotten memories");
+    assert_eq!(deleted, (1, 0));
 
     let resp = server.get("/api/troubleshoot/commands").await;
     assert_eq!(resp.status(), 200);

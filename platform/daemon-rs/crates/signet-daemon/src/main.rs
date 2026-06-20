@@ -916,60 +916,61 @@ async fn main() -> anyhow::Result<()> {
             get(routes::os::widget_get).delete(routes::os::widget_delete),
         )
         // Secrets routes
-        .route("/api/secrets", get(routes::secrets::list))
+        .route("/api/secrets", get(routes::secrets::list_guarded))
         .route(
             "/api/secrets/1password/status",
-            get(routes::secrets::onepassword_status),
+            get(routes::secrets::onepassword_status_guarded),
         )
         .route(
             "/api/secrets/bitwarden/status",
-            get(routes::secrets::bitwarden_status),
+            get(routes::secrets::bitwarden_status_guarded),
         )
         .route(
             "/api/secrets/bitwarden/connect",
-            axum::routing::post(routes::secrets::bitwarden_connect)
-                .delete(routes::secrets::bitwarden_disconnect),
+            axum::routing::post(routes::secrets::bitwarden_connect_guarded)
+                .delete(routes::secrets::bitwarden_disconnect_guarded),
         )
         .route(
             "/api/secrets/bitwarden/provider",
-            axum::routing::post(routes::secrets::bitwarden_provider),
+            axum::routing::post(routes::secrets::bitwarden_provider_guarded),
         )
         .route(
             "/api/secrets/bitwarden/folders",
-            get(routes::secrets::bitwarden_folders),
+            get(routes::secrets::bitwarden_folders_guarded),
         )
         .route(
             "/api/secrets/bitwarden/migrate",
-            axum::routing::post(routes::secrets::bitwarden_migrate),
+            axum::routing::post(routes::secrets::bitwarden_migrate_guarded),
         )
         .route(
             "/api/secrets/1password/connect",
-            axum::routing::post(routes::secrets::onepassword_connect)
-                .delete(routes::secrets::onepassword_disconnect),
+            axum::routing::post(routes::secrets::onepassword_connect_guarded)
+                .delete(routes::secrets::onepassword_disconnect_guarded),
         )
         .route(
             "/api/secrets/1password/vaults",
-            get(routes::secrets::onepassword_vaults),
+            get(routes::secrets::onepassword_vaults_guarded),
         )
         .route(
             "/api/secrets/1password/import",
-            axum::routing::post(routes::secrets::onepassword_import),
+            axum::routing::post(routes::secrets::onepassword_import_guarded),
         )
         .route(
             "/api/secrets/exec",
-            axum::routing::post(routes::secrets::run_with_secrets),
+            axum::routing::post(routes::secrets::run_with_secrets_guarded),
         )
         .route(
             "/api/secrets/exec/{job_id}",
-            get(routes::secrets::exec_status),
+            get(routes::secrets::exec_status_guarded),
         )
         .route(
             "/api/secrets/{name}/exec",
-            axum::routing::post(routes::secrets::run_named_secret),
+            axum::routing::post(routes::secrets::run_named_secret_guarded),
         )
         .route(
             "/api/secrets/{name}",
-            axum::routing::post(routes::secrets::put).delete(routes::secrets::delete),
+            axum::routing::post(routes::secrets::put_guarded)
+                .delete(routes::secrets::delete_guarded),
         )
         // Scheduler routes
         .route(

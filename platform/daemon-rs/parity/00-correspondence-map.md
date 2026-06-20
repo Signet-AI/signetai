@@ -191,12 +191,20 @@ Behavioral-core gap-fill, highest-risk first. Worktree-isolated subagents,
   longer purges noncanonical/native rows, agent-scoped MEMORY.md path
   (agents/<agent>/MEMORY.md) + unsafe-id rejection, tx_ingest_envelope
   attribution helper, remove_canonical_session, temporal-index parity.
-- ⏳ **Hook / hidden-message inject** (core 6, was PARTIAL): session-start now
-  builds full TS-shaped payload (system prompt, plugins, identity, memory,
-  summary, recovery, secret NAMES only, budget); runtime-path 409 preserved.
-  **2 refinements in flight:** (a) memory budget always includes first memory
-  even if oversized (TS selectWithTokenBudget skips); (b) synthesis completion
-  resolves scoped agent but DISCARDS it → writes root MEMORY.md instead of
-  agents/<agent>/ (cross-agent clobber bug exposed by core 5 path change).
-  Plus audit for any other stale root-MEMORY.md write sites.
+- ✅ **Hook / hidden-message inject** (core 6, was PARTIAL): session-start full
+  TS-shaped payload; prompt-submit entity-context; runtime-path 409 preserved.
+  REFINED: synthesis writes agent-scoped MEMORY.md (was root clobber), inject
+  budget skips oversized (selectWithTokenBudget), temporal channel disabled
+  for time requests until range-filtering lands. All MEMORY.md write sites
+  audited agent-scoped-correct.
+- ✅ **Auth & secrets** (core 7, was PARTIAL): secrets routes wrapped in
+  TS-equivalent capability guard; secret-exec validates non-empty command +
+  secret map; SSO/SAML 501-IdP-deferral replay case. No secret values leaked.
+- ⏳ **Scoping audit** (core 4): cross-cutting — find + fix routes that don't
+  honor agent_id/visibility/scope like TS. In flight.
+- ⏳ **`/api/repair/*` stubs** (6 stubs): prune-generic/cluster/relink/
+  backfill-hints/dead-memories/forget now native. **3 refinements in flight:**
+  (a) hardcoded `default` agent fallback vs TS SIGNET_AGENT_ID (scoping leak);
+  (b) cluster-entities uses connected-components+modularity 0.0 vs TS weighted
+  Louvain; (c) backfill-hints missing pipelineV2.hints.enabled gate (TS 400).
 - ⬜ Scoping / memory-lineage / hooks / remaining auth — after.

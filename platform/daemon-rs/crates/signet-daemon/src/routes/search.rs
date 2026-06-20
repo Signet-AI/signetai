@@ -113,77 +113,65 @@ pub struct RecallHit {
     pub supplementary: Option<bool>,
 }
 
-fn has_time_option_start(time: Option<&RecallTimeOptions>) -> bool {
+fn parse_recall_time(
+    value: &str,
+    field: &'static str,
+) -> Result<chrono::DateTime<chrono::Utc>, &'static str> {
+    chrono::DateTime::parse_from_rfc3339(value.trim())
+        .map(|dt| dt.with_timezone(&chrono::Utc))
+        .map_err(|_| match field {
+            "time.start" => "time.start must be a valid ISO timestamp",
+            _ => "time.end must be a valid ISO timestamp",
+        })
+}
+
+fn validate_recall_time_options(time: Option<&RecallTimeOptions>) -> Result<(), &'static str> {
     let Some(options) = time else {
-        return false;
+        return Ok(());
     };
-    let _parsed_contract_fields = (&options.end, &options.facets, &options.mode);
-    options
+    let Some(start) = options
         .start
         .as_deref()
-        .is_some_and(|start| !start.trim().is_empty())
-}
-
-fn parse_temporal_day_token(token: &str) -> Option<u32> {
-    let trimmed = token
-        .trim_end_matches("st")
-        .trim_end_matches("nd")
-        .trim_end_matches("rd")
-        .trim_end_matches("th");
-    trimmed
-        .parse::<u32>()
-        .ok()
-        .filter(|day| (1..=31).contains(day))
-}
-
-fn parse_temporal_month_token(token: &str) -> Option<u32> {
-    match token {
-        "january" | "jan" => Some(1),
-        "february" | "feb" => Some(2),
-        "march" | "mar" => Some(3),
-        "april" | "apr" => Some(4),
-        "may" => Some(5),
-        "june" | "jun" => Some(6),
-        "july" | "jul" => Some(7),
-        "august" | "aug" => Some(8),
-        "september" | "sep" | "sept" => Some(9),
-        "october" | "oct" => Some(10),
-        "november" | "nov" => Some(11),
-        "december" | "dec" => Some(12),
-        _ => None,
-    }
-}
-
-fn is_temporal_year_token(token: &str) -> bool {
-    token.len() == 4 && token.chars().all(|ch| ch.is_ascii_digit())
-}
-
-fn has_explicit_temporal_day(query: &str) -> bool {
-    let lower = query.to_ascii_lowercase();
-    let tokens: Vec<&str> = lower
-        .split(|ch: char| !ch.is_ascii_alphanumeric())
-        .filter(|token| !token.is_empty())
-        .collect();
-
-    tokens.windows(3).any(|window| {
-        let [first, second, third] = window else {
-            return false;
-        };
-        if is_temporal_year_token(first) {
-            let month = second
-                .parse::<u32>()
-                .ok()
-                .filter(|month| (1..=12).contains(month));
-            return month.is_some() && parse_temporal_day_token(third).is_some();
+        .filter(|value| !value.trim().is_empty())
+    else {
+        return Err("time.start is required when time is provided");
+    };
+    let start = parse_recall_time(start, "time.start")?;
+    if let Some(end) = options.end.as_deref() {
+        if end.trim().is_empty() {
+            return Err("time.end must be a valid ISO timestamp");
         }
-        parse_temporal_month_token(first).is_some()
-            && parse_temporal_day_token(second).is_some()
-            && is_temporal_year_token(third)
-    })
+        let end = parse_recall_time(end, "time.end")?;
+        if end <= start {
+            return Err("time.end must be after time.start");
+        }
+    }
+    if let Some(facets) = options.facets.as_ref() {
+        const ALLOWED: &[&str] = &[
+            "session", "source", "captured", "observed", "occurred", "valid",
+        ];
+        if facets
+            .iter()
+            .any(|facet| !ALLOWED.contains(&facet.as_str()))
+        {
+            return Err(
+                "time.facets entries must be one of: session, source, captured, observed, occurred, valid",
+            );
+        }
+    }
+    if let Some(mode) = options.mode.as_deref()
+        && !matches!(mode, "auto" | "timeline" | "filter")
+    {
+        return Err("time.mode must be one of: auto, timeline, filter");
+    }
+    Ok(())
 }
 
-fn has_temporal_candidate_intent(body: &RecallBody) -> bool {
-    has_time_option_start(body.time.as_ref()) || has_explicit_temporal_day(&body.query)
+fn has_temporal_candidate_intent(_body: &RecallBody) -> bool {
+    // Disabled until this route can pass validated temporal ranges/facets to the
+    // candidate query. TS validates and filters in temporal-recall.ts:229-257;
+    // treating time.start as a boolean gate boosted every temporal edge.
+    false
 }
 
 fn fallback_existing_source_ids(results: &[RecallHit]) -> std::collections::HashSet<String> {
@@ -235,6 +223,13 @@ pub async fn recall(
         return (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({"error": "query is required"})),
+        )
+            .into_response();
+    }
+    if let Err(error) = validate_recall_time_options(body.time.as_ref()) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": error})),
         )
             .into_response();
     }
@@ -1312,22 +1307,35 @@ mod tests {
     }
 
     #[test]
-    fn reranker_temporal_candidate_gate_requires_temporal_intent() {
+    fn reranker_temporal_candidate_channel_stays_disabled_for_time_requests() {
         let mut normal = recall_body("apollo launch checklist");
         normal.since = Some("2026-01-01T00:00:00Z".to_string());
         assert!(!has_temporal_candidate_intent(&normal));
 
         let explicit_day = recall_body("what happened with apollo on June 14, 2026?");
-        assert!(has_temporal_candidate_intent(&explicit_day));
+        assert!(!has_temporal_candidate_intent(&explicit_day));
 
         let mut request_time = recall_body("apollo launch checklist");
         request_time.time = Some(RecallTimeOptions {
             start: Some("2026-06-14T00:00:00Z".to_string()),
-            end: None,
+            end: Some("2026-06-15T00:00:00Z".to_string()),
+            facets: Some(vec!["session".to_string(), "source".to_string()]),
+            mode: Some("filter".to_string()),
+        });
+        assert!(validate_recall_time_options(request_time.time.as_ref()).is_ok());
+        assert!(!has_temporal_candidate_intent(&request_time));
+
+        let mut invalid_time = recall_body("apollo launch checklist");
+        invalid_time.time = Some(RecallTimeOptions {
+            start: Some("2026-06-15T00:00:00Z".to_string()),
+            end: Some("2026-06-14T00:00:00Z".to_string()),
             facets: None,
             mode: Some("filter".to_string()),
         });
-        assert!(has_temporal_candidate_intent(&request_time));
+        assert_eq!(
+            validate_recall_time_options(invalid_time.time.as_ref()),
+            Err("time.end must be after time.start")
+        );
     }
 
     #[test]
