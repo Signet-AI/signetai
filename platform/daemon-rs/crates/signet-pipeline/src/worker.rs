@@ -7,12 +7,15 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::Utc;
+use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, watch};
 use tracing::{info, warn};
 
 use signet_core::db::DbPool;
+use signet_core::error::CoreError;
 use signet_core::queries::memory;
+use signet_core::types::{DecisionAction, DecisionProposal};
 use signet_services::{graph, normalize::normalize_and_hash};
 
 use crate::antonyms;
@@ -549,7 +552,7 @@ async fn process_extract(
 
     // --- Stage 3: Shadow decisions on extracted facts ---
     if !facts.is_empty() {
-        let decisions = decision::run_shadow_decisions(
+        let decisions = run_attributed_shadow_decisions(
             &facts,
             pool,
             provider.as_ref(),
@@ -557,35 +560,41 @@ async fn process_extract(
             &agent_id,
             source_scope.as_deref(),
             &source_visibility,
-            &std::collections::HashMap::new(), // No pre-computed embeddings yet
         )
         .await;
 
         warnings.extend(decisions.warnings);
 
         if config.shadow_mode {
+            record_shadow_decision_histories(
+                pool,
+                &source_memory_id,
+                &decisions.proposals,
+                &facts,
+                provider.name(),
+                facts.len(),
+                entities_count,
+            )
+            .await?;
             warnings.push("shadow_mode: decisions not applied".into());
         } else {
             // Process proposals: apply write gate to ADD proposals, run contradiction checks
             // for update/delete proposals, and persist accepted fact memories. Mirrors TS
-            // controlled writes at platform/daemon/src/pipeline/worker.ts:514-534 and
-            // platform/daemon/src/pipeline/worker.ts:1290.
-            for proposal in &decisions.proposals {
+            // controlled writes at platform/daemon/src/pipeline/worker.ts:453-580 and
+            // platform/daemon/src/pipeline/worker.ts:1290-1322. TS proposals carry `fact`
+            // directly (platform/daemon/src/pipeline/decision.ts:40-46, 322-352), so Rust
+            // preserves the fact index instead of re-matching proposals by confidence/reason.
+            for attributed in &decisions.proposals {
+                let Some(fact) = facts.get(attributed.fact_index) else {
+                    return Err(format!(
+                        "decision proposal referenced missing fact index {}",
+                        attributed.fact_index
+                    ));
+                };
+                let proposal = &attributed.proposal;
+
                 match proposal.action {
-                    signet_core::types::DecisionAction::Add => {
-                        // Find the source fact for this proposal. The Rust proposal shape does
-                        // not carry the full fact yet, so prefer confidence/reason matches and
-                        // fall back to the first fact for one-proposal/one-fact outputs.
-                        let fact = facts
-                            .iter()
-                            .find(|f| {
-                                f.confidence == proposal.confidence
-                                    || proposal.reason.contains(&f.content)
-                            })
-                            .or_else(|| facts.first());
-
-                        let Some(fact) = fact else { continue };
-
+                    DecisionAction::Add => {
                         // --- Stage 4: Write gate ---
                         let gate_input = write_gate::WriteGateInput {
                             agent_id: agent_id.clone(),
@@ -608,18 +617,36 @@ async fn process_extract(
                                 gate_result.surprise,
                                 gate_result.threshold
                             ));
+                            record_decision_history_only(
+                                pool,
+                                &source_memory_id,
+                                proposal,
+                                fact,
+                                DecisionAuditMeta {
+                                    shadow: false,
+                                    extraction_model: provider.name().to_string(),
+                                    fact_count: facts.len(),
+                                    entity_count: entities_count,
+                                    skipped_reason: Some("write_gate_low_surprisal".to_string()),
+                                    ..DecisionAuditMeta::default()
+                                },
+                            )
+                            .await?;
                             continue;
                         }
 
                         match insert_extracted_fact_memory(
                             pool,
                             fact,
+                            proposal,
                             &source_memory_id,
                             &agent_id,
                             source_project.as_deref(),
                             source_scope.as_deref(),
                             &source_visibility,
                             provider.name(),
+                            facts.len(),
+                            entities_count,
                         )
                         .await?
                         {
@@ -628,31 +655,58 @@ async fn process_extract(
                                 .push(format!("deduped_fact: existing_memory_id={existing_id}")),
                         }
                     }
-                    signet_core::types::DecisionAction::Update
-                    | signet_core::types::DecisionAction::Delete => {
+                    DecisionAction::Update | DecisionAction::Delete => {
+                        let mut contradiction_risk = false;
                         if let Some(target_id) = proposal.target_memory_id.as_deref() {
-                            if contradiction_risk_for_target(
+                            contradiction_risk = contradiction_risk_for_target(
                                 pool,
-                                facts
-                                    .first()
-                                    .map(|fact| fact.content.as_str())
-                                    .unwrap_or(""),
+                                fact.content.as_str(),
                                 target_id,
                                 &agent_id,
                                 source_scope.as_deref(),
                                 &source_visibility,
                             )
-                            .await?
-                            {
+                            .await?;
+                            if contradiction_risk {
                                 warnings.push(format!(
                                     "contradiction_risk: action={:?} target_memory_id={target_id}",
                                     proposal.action
                                 ));
                             }
                         }
+                        record_decision_history_only(
+                            pool,
+                            &source_memory_id,
+                            proposal,
+                            fact,
+                            DecisionAuditMeta {
+                                shadow: false,
+                                extraction_model: provider.name().to_string(),
+                                fact_count: facts.len(),
+                                entity_count: entities_count,
+                                blocked_reason: Some("destructive_mutations_disabled".to_string()),
+                                review_needed: contradiction_risk,
+                                contradiction_risk,
+                                ..DecisionAuditMeta::default()
+                            },
+                        )
+                        .await?;
                     }
-                    signet_core::types::DecisionAction::None => {
-                        // No write needed.
+                    DecisionAction::None => {
+                        record_decision_history_only(
+                            pool,
+                            &source_memory_id,
+                            proposal,
+                            fact,
+                            DecisionAuditMeta {
+                                shadow: false,
+                                extraction_model: provider.name().to_string(),
+                                fact_count: facts.len(),
+                                entity_count: entities_count,
+                                ..DecisionAuditMeta::default()
+                            },
+                        )
+                        .await?;
                     }
                 }
             }
@@ -674,23 +728,94 @@ async fn process_extract(
     })
 }
 
+#[derive(Debug, Clone)]
+struct AttributedDecisionProposal {
+    proposal: DecisionProposal,
+    fact_index: usize,
+}
+
+#[derive(Debug, Clone, Default)]
+struct AttributedDecisionResult {
+    proposals: Vec<AttributedDecisionProposal>,
+    warnings: Vec<String>,
+}
+
+async fn run_attributed_shadow_decisions(
+    facts: &[extraction::ExtractedFact],
+    pool: &DbPool,
+    provider: &dyn LlmProvider,
+    cfg: &DecisionConfig,
+    agent_id: &str,
+    scope: Option<&str>,
+    visibility: &str,
+) -> AttributedDecisionResult {
+    let mut attributed = AttributedDecisionResult::default();
+
+    for (fact_index, fact) in facts.iter().enumerate() {
+        let result = decision::run_shadow_decisions(
+            std::slice::from_ref(fact),
+            pool,
+            provider,
+            cfg,
+            agent_id,
+            scope,
+            visibility,
+            &std::collections::HashMap::new(),
+        )
+        .await;
+        attributed.warnings.extend(result.warnings);
+        attributed
+            .proposals
+            .extend(
+                result
+                    .proposals
+                    .into_iter()
+                    .map(|proposal| AttributedDecisionProposal {
+                        proposal,
+                        fact_index,
+                    }),
+            );
+    }
+
+    attributed
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum FactWriteOutcome {
     Inserted { id: String },
     Duplicate { existing_id: String },
 }
 
+#[derive(Debug, Clone, Default)]
+struct DecisionAuditMeta {
+    shadow: bool,
+    extraction_model: String,
+    fact_count: usize,
+    entity_count: usize,
+    created_memory_id: Option<String>,
+    deduped_existing_id: Option<String>,
+    blocked_reason: Option<String>,
+    review_needed: bool,
+    contradiction_risk: bool,
+    skipped_reason: Option<String>,
+}
+
 async fn insert_extracted_fact_memory(
     pool: &DbPool,
     fact: &extraction::ExtractedFact,
+    proposal: &DecisionProposal,
     source_memory_id: &str,
     agent_id: &str,
     source_project: Option<&str>,
     source_scope: Option<&str>,
     source_visibility: &str,
     extraction_model: &str,
+    fact_count: usize,
+    entity_count: usize,
 ) -> Result<FactWriteOutcome, String> {
     let normalized = normalize_and_hash(&fact.content);
+    let fact = fact.clone();
+    let proposal = proposal.clone();
     let fact_type = fact.fact_type.clone();
     let source_memory_id = source_memory_id.to_string();
     let agent_id = agent_id.to_string();
@@ -700,14 +825,27 @@ async fn insert_extracted_fact_memory(
     let extraction_model = extraction_model.to_string();
     let importance = fact.confidence.clamp(0.0, 1.0);
 
-    pool.write(signet_core::db::Priority::Low, move |conn| {
-        if let Some(existing_id) = memory::exists_by_hash_scoped(
+    pool.write_tx(signet_core::db::Priority::Low, move |conn| {
+        if let Some(existing_id) = find_existing_fact_by_hash_scoped(
             conn,
             &normalized.hash,
             &agent_id,
             source_scope.as_deref(),
-            &source_visibility,
         )? {
+            record_decision_history(
+                conn,
+                &source_memory_id,
+                &proposal,
+                &fact,
+                DecisionAuditMeta {
+                    shadow: false,
+                    extraction_model: extraction_model.clone(),
+                    fact_count,
+                    entity_count,
+                    deduped_existing_id: Some(existing_id.clone()),
+                    ..DecisionAuditMeta::default()
+                },
+            )?;
             return Ok(serde_json::json!({
                 "status": "duplicate",
                 "id": existing_id,
@@ -715,8 +853,8 @@ async fn insert_extracted_fact_memory(
         }
 
         let id = uuid::Uuid::new_v4().to_string();
-        let now = chrono::Utc::now().to_rfc3339();
-        let inserted_id = memory::insert(
+        let now = Utc::now().to_rfc3339();
+        let inserted_id = match memory::insert(
             conn,
             &memory::InsertMemory {
                 id: &id,
@@ -744,6 +882,65 @@ async fn insert_extracted_fact_memory(
                 visibility: &source_visibility,
                 scope: source_scope.as_deref(),
             },
+        ) {
+            Ok(inserted_id) => inserted_id,
+            Err(error) if is_unique_constraint_error(&error) => {
+                let existing_id = find_existing_fact_by_hash_scoped(
+                    conn,
+                    &normalized.hash,
+                    &agent_id,
+                    source_scope.as_deref(),
+                )?
+                .ok_or_else(|| {
+                    CoreError::Conflict(
+                        "fact insert hit UNIQUE constraint but no scoped duplicate was found"
+                            .to_string(),
+                    )
+                })?;
+                record_decision_history(
+                    conn,
+                    &source_memory_id,
+                    &proposal,
+                    &fact,
+                    DecisionAuditMeta {
+                        shadow: false,
+                        extraction_model: extraction_model.clone(),
+                        fact_count,
+                        entity_count,
+                        deduped_existing_id: Some(existing_id.clone()),
+                        ..DecisionAuditMeta::default()
+                    },
+                )?;
+                return Ok(serde_json::json!({
+                    "status": "duplicate",
+                    "id": existing_id,
+                }));
+            }
+            Err(error) => return Err(error),
+        };
+
+        record_created_memory_history(
+            conn,
+            &inserted_id,
+            &normalized.storage,
+            &proposal,
+            &fact,
+            &source_memory_id,
+            &extraction_model,
+        )?;
+        record_decision_history(
+            conn,
+            &source_memory_id,
+            &proposal,
+            &fact,
+            DecisionAuditMeta {
+                shadow: false,
+                extraction_model: extraction_model.clone(),
+                fact_count,
+                entity_count,
+                created_memory_id: Some(inserted_id.clone()),
+                ..DecisionAuditMeta::default()
+            },
         )?;
 
         Ok(serde_json::json!({
@@ -769,6 +966,194 @@ async fn insert_extracted_fact_memory(
             other => Err(format!("fact write returned unknown status: {other}")),
         }
     })
+}
+
+fn find_existing_fact_by_hash_scoped(
+    conn: &rusqlite::Connection,
+    hash: &str,
+    agent_id: &str,
+    scope: Option<&str>,
+) -> Result<Option<String>, CoreError> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT id FROM memories
+         WHERE content_hash = ?1
+           AND COALESCE(is_deleted, 0) = 0
+           AND agent_id = ?2
+           AND IFNULL(scope, '') = ?3
+         LIMIT 1",
+    )?;
+    let scope_key = scope.unwrap_or("");
+    let existing_id = stmt
+        .query_row(rusqlite::params![hash, agent_id, scope_key], |row| {
+            row.get(0)
+        })
+        .optional()?;
+    Ok(existing_id)
+}
+
+fn is_unique_constraint_error(error: &CoreError) -> bool {
+    let message = error.to_string();
+    message.contains("UNIQUE constraint") || message.contains("idx_memories_content_hash_unique")
+}
+
+async fn record_decision_history_only(
+    pool: &DbPool,
+    source_memory_id: &str,
+    proposal: &DecisionProposal,
+    fact: &extraction::ExtractedFact,
+    meta: DecisionAuditMeta,
+) -> Result<(), String> {
+    let source_memory_id = source_memory_id.to_string();
+    let proposal = proposal.clone();
+    let fact = fact.clone();
+    pool.write_tx(signet_core::db::Priority::Low, move |conn| {
+        record_decision_history(conn, &source_memory_id, &proposal, &fact, meta)?;
+        Ok(serde_json::Value::Null)
+    })
+    .await
+    .map(|_| ())
+    .map_err(|error| error.to_string())
+}
+
+async fn record_shadow_decision_histories(
+    pool: &DbPool,
+    source_memory_id: &str,
+    proposals: &[AttributedDecisionProposal],
+    facts: &[extraction::ExtractedFact],
+    extraction_model: &str,
+    fact_count: usize,
+    entity_count: usize,
+) -> Result<(), String> {
+    let source_memory_id = source_memory_id.to_string();
+    let proposals = proposals.to_vec();
+    let facts = facts.to_vec();
+    let extraction_model = extraction_model.to_string();
+    pool.write_tx(signet_core::db::Priority::Low, move |conn| {
+        for attributed in &proposals {
+            let fact = facts.get(attributed.fact_index).ok_or_else(|| {
+                CoreError::Invalid(format!(
+                    "decision proposal referenced missing fact index {}",
+                    attributed.fact_index
+                ))
+            })?;
+            record_decision_history(
+                conn,
+                &source_memory_id,
+                &attributed.proposal,
+                fact,
+                DecisionAuditMeta {
+                    shadow: true,
+                    extraction_model: extraction_model.clone(),
+                    fact_count,
+                    entity_count,
+                    ..DecisionAuditMeta::default()
+                },
+            )?;
+        }
+        Ok(serde_json::Value::Null)
+    })
+    .await
+    .map(|_| ())
+    .map_err(|error| error.to_string())
+}
+
+fn record_decision_history(
+    conn: &rusqlite::Connection,
+    source_memory_id: &str,
+    proposal: &DecisionProposal,
+    fact: &extraction::ExtractedFact,
+    meta: DecisionAuditMeta,
+) -> Result<(), CoreError> {
+    let now = Utc::now().to_rfc3339();
+    let metadata = serde_json::json!({
+        "shadow": meta.shadow,
+        "proposedAction": decision_action_name(&proposal.action),
+        "targetMemoryId": proposal.target_memory_id,
+        "targetContent": serde_json::Value::Null,
+        "confidence": proposal.confidence,
+        "fact": fact,
+        "extractionModel": meta.extraction_model,
+        "factCount": meta.fact_count,
+        "entityCount": meta.entity_count,
+        "createdMemoryId": meta.created_memory_id,
+        "updatedMemoryId": serde_json::Value::Null,
+        "deletedMemoryId": serde_json::Value::Null,
+        "dedupedExistingId": meta.deduped_existing_id,
+        "blockedReason": meta.blocked_reason,
+        "reviewNeeded": meta.review_needed,
+        "contradictionRisk": meta.contradiction_risk,
+        "skippedReason": meta.skipped_reason,
+    })
+    .to_string();
+
+    memory::insert_history(
+        conn,
+        &memory::InsertHistory {
+            id: &uuid::Uuid::new_v4().to_string(),
+            memory_id: source_memory_id,
+            event: "none",
+            old_content: None,
+            new_content: None,
+            changed_by: if meta.shadow {
+                "pipeline-shadow"
+            } else {
+                "pipeline-v2"
+            },
+            reason: Some(proposal.reason.as_str()),
+            metadata: Some(&metadata),
+            now: &now,
+            actor_type: None,
+            session_id: None,
+            request_id: None,
+        },
+    )
+}
+
+fn record_created_memory_history(
+    conn: &rusqlite::Connection,
+    memory_id: &str,
+    content: &str,
+    proposal: &DecisionProposal,
+    fact: &extraction::ExtractedFact,
+    source_memory_id: &str,
+    extraction_model: &str,
+) -> Result<(), CoreError> {
+    let now = Utc::now().to_rfc3339();
+    let metadata = serde_json::json!({
+        "proposedAction": decision_action_name(&proposal.action),
+        "sourceMemoryId": source_memory_id,
+        "decisionConfidence": proposal.confidence,
+        "factConfidence": fact.confidence,
+        "extractionModel": extraction_model,
+    })
+    .to_string();
+
+    memory::insert_history(
+        conn,
+        &memory::InsertHistory {
+            id: &uuid::Uuid::new_v4().to_string(),
+            memory_id,
+            event: "created",
+            old_content: None,
+            new_content: Some(content),
+            changed_by: "pipeline-v2",
+            reason: Some(proposal.reason.as_str()),
+            metadata: Some(&metadata),
+            now: &now,
+            actor_type: None,
+            session_id: None,
+            request_id: None,
+        },
+    )
+}
+
+fn decision_action_name(action: &DecisionAction) -> &'static str {
+    match action {
+        DecisionAction::Add => "add",
+        DecisionAction::Update => "update",
+        DecisionAction::Delete => "delete",
+        DecisionAction::None => "none",
+    }
 }
 
 async fn contradiction_risk_for_target(
@@ -1106,6 +1491,36 @@ mod tests {
         DbPool::open(&path).expect("open worker test db")
     }
 
+    async fn seed_source_memory(
+        pool: &DbPool,
+        id: &str,
+        agent_id: &str,
+        visibility: &str,
+        scope: Option<&str>,
+        project: Option<&str>,
+        content: &str,
+    ) {
+        let id = id.to_string();
+        let agent_id = agent_id.to_string();
+        let visibility = visibility.to_string();
+        let scope = scope.map(str::to_string);
+        let project = project.map(str::to_string);
+        let content = content.to_string();
+        pool.write(Priority::High, move |conn| {
+            let now = chrono::Utc::now().to_rfc3339();
+            conn.execute(
+                "INSERT INTO memories
+                 (id, type, content, created_at, updated_at, updated_by, vector_clock,
+                  agent_id, visibility, scope, project, is_deleted, extraction_status)
+                 VALUES (?1, 'transcript', ?2, ?3, ?3, 'test', '{}', ?4, ?5, ?6, ?7, 0, 'none')",
+                rusqlite::params![id, content, now, agent_id, visibility, scope, project],
+            )?;
+            Ok(serde_json::Value::Null)
+        })
+        .await
+        .expect("seed source memory");
+    }
+
     #[tokio::test]
     async fn process_extract_add_decision_writes_fact_memory_with_source_scope() {
         let (pool, handle) = open_test_pool();
@@ -1179,7 +1594,7 @@ mod tests {
         let written = pool
             .read(|conn| {
                 let row = conn.query_row(
-                    "SELECT content, type, who, why, source_type, source_id, agent_id,
+                    "SELECT id, content, type, who, why, source_type, source_id, agent_id,
                             visibility, scope, project, importance, extraction_status,
                             extraction_model, updated_by
                      FROM memories
@@ -1187,20 +1602,21 @@ mod tests {
                     [],
                     |row| {
                         Ok(serde_json::json!({
-                            "content": row.get::<_, String>(0)?,
-                            "type": row.get::<_, String>(1)?,
-                            "who": row.get::<_, String>(2)?,
-                            "why": row.get::<_, String>(3)?,
-                            "source_type": row.get::<_, String>(4)?,
-                            "source_id": row.get::<_, String>(5)?,
-                            "agent_id": row.get::<_, String>(6)?,
-                            "visibility": row.get::<_, String>(7)?,
-                            "scope": row.get::<_, String>(8)?,
-                            "project": row.get::<_, String>(9)?,
-                            "importance": row.get::<_, f64>(10)?,
-                            "extraction_status": row.get::<_, String>(11)?,
-                            "extraction_model": row.get::<_, String>(12)?,
-                            "updated_by": row.get::<_, String>(13)?,
+                            "id": row.get::<_, String>(0)?,
+                            "content": row.get::<_, String>(1)?,
+                            "type": row.get::<_, String>(2)?,
+                            "who": row.get::<_, String>(3)?,
+                            "why": row.get::<_, String>(4)?,
+                            "source_type": row.get::<_, String>(5)?,
+                            "source_id": row.get::<_, String>(6)?,
+                            "agent_id": row.get::<_, String>(7)?,
+                            "visibility": row.get::<_, String>(8)?,
+                            "scope": row.get::<_, String>(9)?,
+                            "project": row.get::<_, String>(10)?,
+                            "importance": row.get::<_, f64>(11)?,
+                            "extraction_status": row.get::<_, String>(12)?,
+                            "extraction_model": row.get::<_, String>(13)?,
+                            "updated_by": row.get::<_, String>(14)?,
                         }))
                     },
                 )?;
@@ -1223,6 +1639,64 @@ mod tests {
         assert_eq!(written["extraction_status"], "completed");
         assert_eq!(written["extraction_model"], "sequence-test-model");
         assert_eq!(written["updated_by"], "pipeline-v2");
+
+        let written_id = written["id"].as_str().expect("written id").to_string();
+        let history = pool
+            .read(move |conn| {
+                let created: serde_json::Value = conn.query_row(
+                    "SELECT event, changed_by, reason, new_content, metadata FROM memory_history WHERE memory_id = ?1",
+                    rusqlite::params![written_id],
+                    |row| {
+                        Ok(serde_json::json!({
+                            "event": row.get::<_, String>(0)?,
+                            "changed_by": row.get::<_, String>(1)?,
+                            "reason": row.get::<_, String>(2)?,
+                            "new_content": row.get::<_, String>(3)?,
+                            "metadata": serde_json::from_str::<serde_json::Value>(&row.get::<_, String>(4)?)
+                                .expect("created metadata json"),
+                        }))
+                    },
+                )?;
+                let decision: serde_json::Value = conn.query_row(
+                    "SELECT event, changed_by, reason, metadata FROM memory_history WHERE memory_id = 'source-memory'",
+                    [],
+                    |row| {
+                        Ok(serde_json::json!({
+                            "event": row.get::<_, String>(0)?,
+                            "changed_by": row.get::<_, String>(1)?,
+                            "reason": row.get::<_, String>(2)?,
+                            "metadata": serde_json::from_str::<serde_json::Value>(&row.get::<_, String>(3)?)
+                                .expect("decision metadata json"),
+                        }))
+                    },
+                )?;
+                Ok(serde_json::json!({"created": created, "decision": decision}))
+            })
+            .await
+            .expect("read fact write history");
+
+        assert_eq!(history["created"]["event"], "created");
+        assert_eq!(history["created"]["changed_by"], "pipeline-v2");
+        assert_eq!(
+            history["created"]["reason"],
+            format!("new fact: {fact_content}")
+        );
+        assert_eq!(history["created"]["new_content"], fact_content);
+        assert_eq!(
+            history["created"]["metadata"]["sourceMemoryId"],
+            "source-memory"
+        );
+        assert_eq!(history["created"]["metadata"]["proposedAction"], "add");
+        assert_eq!(history["decision"]["event"], "none");
+        assert_eq!(history["decision"]["changed_by"], "pipeline-v2");
+        assert_eq!(
+            history["decision"]["metadata"]["createdMemoryId"],
+            written["id"]
+        );
+        assert_eq!(
+            history["decision"]["metadata"]["fact"]["content"],
+            fact_content
+        );
 
         let source_status = pool
             .read(|conn| {
@@ -1252,6 +1726,399 @@ mod tests {
             .await
             .expect("read entity mentions");
         assert_eq!(graph_counts, 2);
+
+        drop(pool);
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn process_extract_add_decisions_with_identical_confidence_write_each_source_fact() {
+        let (pool, handle) = open_test_pool();
+        seed_source_memory(
+            &pool,
+            "source-identical-confidence",
+            "agent-core3",
+            "private",
+            Some("repo-scope"),
+            Some("platform/daemon-rs"),
+            "User: Please retain both independent Rust parity facts from this transcript so the extraction pipeline can prove proposal attribution across identical confidence values.",
+        )
+        .await;
+
+        let fact_a = "The Rust parity worker must preserve the first independently extracted fact when several ADD decisions share the same confidence value during controlled writes.";
+        let fact_b = "The Rust parity worker must preserve the second independently extracted fact when several ADD decisions share the same confidence value during controlled writes.";
+        let extraction = serde_json::json!({
+            "facts": [
+                {"content": fact_a, "type": "fact", "confidence": 0.77},
+                {"content": fact_b, "type": "fact", "confidence": 0.77}
+            ],
+            "entities": []
+        })
+        .to_string();
+        let decision_a = serde_json::json!({
+            "action": "add",
+            "confidence": 0.77,
+            "reason": "No existing memories match this fact"
+        })
+        .to_string();
+        let decision_b = serde_json::json!({
+            "action": "add",
+            "confidence": 0.77,
+            "reason": "No existing memories match this fact"
+        })
+        .to_string();
+        let provider: Arc<dyn LlmProvider> = Arc::new(SequenceProvider::new(vec![
+            extraction, decision_a, decision_b,
+        ]));
+        let mut config = WorkerConfig {
+            graph_enabled: false,
+            shadow_mode: false,
+            ..WorkerConfig::default()
+        };
+        config.significance.enabled = false;
+
+        let result = process_extract(
+            &pool,
+            &LeasedJob {
+                id: "job-identical-confidence".to_string(),
+                memory_id: Some("source-identical-confidence".to_string()),
+                job_type: "extract".to_string(),
+                payload: None,
+                attempts: 1,
+            },
+            &provider,
+            &Arc::new(LlmSemaphore::new(1)),
+            &config,
+        )
+        .await
+        .expect("process identical confidence facts");
+
+        assert_eq!(result.facts_extracted, 2);
+        let written = pool
+            .read(move |conn| {
+                let count: i64 = conn.query_row(
+                    "SELECT COUNT(*) FROM memories
+                     WHERE source_type = 'pipeline-v2' AND source_id = 'source-identical-confidence'",
+                    [],
+                    |row| row.get(0),
+                )?;
+                let fact_a_count: i64 = conn.query_row(
+                    "SELECT COUNT(*) FROM memories WHERE content = ?1",
+                    rusqlite::params![fact_a],
+                    |row| row.get(0),
+                )?;
+                let fact_b_count: i64 = conn.query_row(
+                    "SELECT COUNT(*) FROM memories WHERE content = ?1",
+                    rusqlite::params![fact_b],
+                    |row| row.get(0),
+                )?;
+                Ok((count, fact_a_count, fact_b_count))
+            })
+            .await
+            .expect("read identical confidence writes");
+        assert_eq!(written, (2, 1, 1));
+
+        drop(pool);
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn process_extract_dedupes_same_fact_across_visibility_with_history() {
+        let (pool, handle) = open_test_pool();
+        seed_source_memory(
+            &pool,
+            "source-visibility-dedupe",
+            "agent-core3",
+            "private",
+            Some("repo-scope"),
+            Some("platform/daemon-rs"),
+            "User: Please retain the scoped visibility dedupe audit behavior for the Rust pipeline worker controlled fact write path.",
+        )
+        .await;
+
+        let fact_content = "The Rust pipeline worker must dedupe extracted facts by content hash, agent id, and scope even when source visibility differs from an existing memory row.";
+        let normalized = signet_services::normalize::normalize_and_hash(fact_content);
+        let normalized_content = normalized.normalized.clone();
+        let content_hash = normalized.hash.clone();
+        let content_hash_for_audit = content_hash.clone();
+        pool.write(Priority::High, move |conn| {
+            let now = chrono::Utc::now().to_rfc3339();
+            conn.execute(
+                "INSERT INTO memories
+                 (id, type, content, normalized_content, content_hash, created_at, updated_at,
+                  updated_by, vector_clock, agent_id, visibility, scope, project, is_deleted,
+                  extraction_status)
+                 VALUES ('existing-visibility-dedupe', 'fact', ?1, ?2, ?3, ?4, ?4, 'test', '{}',
+                         'agent-core3', 'global', 'repo-scope', 'platform/daemon-rs', 0, 'completed')",
+                rusqlite::params![
+                    fact_content,
+                    normalized_content,
+                    content_hash,
+                    now
+                ],
+            )?;
+            Ok(serde_json::Value::Null)
+        })
+        .await
+        .expect("seed existing visibility duplicate");
+
+        let extraction = serde_json::json!({
+            "facts": [{"content": fact_content, "type": "fact", "confidence": 0.81}],
+            "entities": []
+        })
+        .to_string();
+        let decision = serde_json::json!({
+            "action": "add",
+            "confidence": 0.81,
+            "reason": "No existing memories match this fact"
+        })
+        .to_string();
+        let provider: Arc<dyn LlmProvider> =
+            Arc::new(SequenceProvider::new(vec![extraction, decision]));
+        let mut config = WorkerConfig {
+            graph_enabled: false,
+            shadow_mode: false,
+            ..WorkerConfig::default()
+        };
+        config.significance.enabled = false;
+
+        let result = process_extract(
+            &pool,
+            &LeasedJob {
+                id: "job-visibility-dedupe".to_string(),
+                memory_id: Some("source-visibility-dedupe".to_string()),
+                job_type: "extract".to_string(),
+                payload: None,
+                attempts: 1,
+            },
+            &provider,
+            &Arc::new(LlmSemaphore::new(1)),
+            &config,
+        )
+        .await
+        .expect("process visibility duplicate");
+
+        assert_eq!(result.facts_extracted, 0);
+        assert!(result.warnings.iter().any(
+            |warning| warning == "deduped_fact: existing_memory_id=existing-visibility-dedupe"
+        ));
+        let audit = pool
+            .read(move |conn| {
+                let memory_count: i64 = conn.query_row(
+                    "SELECT COUNT(*) FROM memories WHERE content_hash = ?1 AND agent_id = 'agent-core3' AND scope = 'repo-scope'",
+                    rusqlite::params![content_hash_for_audit],
+                    |row| row.get(0),
+                )?;
+                let history: serde_json::Value = conn.query_row(
+                    "SELECT event, changed_by, reason, metadata FROM memory_history WHERE memory_id = 'source-visibility-dedupe'",
+                    [],
+                    |row| {
+                        Ok(serde_json::json!({
+                            "event": row.get::<_, String>(0)?,
+                            "changed_by": row.get::<_, String>(1)?,
+                            "reason": row.get::<_, String>(2)?,
+                            "metadata": serde_json::from_str::<serde_json::Value>(&row.get::<_, String>(3)?)
+                                .expect("dedupe metadata json"),
+                        }))
+                    },
+                )?;
+                Ok(serde_json::json!({"memory_count": memory_count, "history": history}))
+            })
+            .await
+            .expect("read visibility dedupe audit");
+        assert_eq!(audit["memory_count"], 1);
+        assert_eq!(audit["history"]["event"], "none");
+        assert_eq!(audit["history"]["changed_by"], "pipeline-v2");
+        assert_eq!(
+            audit["history"]["metadata"]["dedupedExistingId"],
+            "existing-visibility-dedupe"
+        );
+        assert_eq!(audit["history"]["metadata"]["proposedAction"], "add");
+
+        drop(pool);
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn process_extract_records_blocked_destructive_and_shadow_decision_history() {
+        let (pool, handle) = open_test_pool();
+        seed_source_memory(
+            &pool,
+            "source-blocked-decision",
+            "agent-core3",
+            "private",
+            Some("repo-scope"),
+            Some("platform/daemon-rs"),
+            "User: Please audit blocked destructive controlled writes for the Rust pipeline worker while keeping extracted facts traceable to source decisions.",
+        )
+        .await;
+        seed_source_memory(
+            &pool,
+            "source-shadow-decision",
+            "agent-core3",
+            "private",
+            Some("repo-scope"),
+            Some("platform/daemon-rs"),
+            "User: Please audit shadow controlled writes for the Rust pipeline worker while keeping extracted facts traceable to source decisions.",
+        )
+        .await;
+        pool.write(Priority::High, |conn| {
+            let now = chrono::Utc::now().to_rfc3339();
+            conn.execute(
+                "INSERT INTO memories
+                 (id, type, content, created_at, updated_at, updated_by, vector_clock,
+                  agent_id, visibility, scope, project, is_deleted, extraction_status)
+                 VALUES ('target-blocked-delete', 'fact',
+                         'The Rust pipeline worker target memory remains available for blocked destructive delete decision auditing.',
+                         ?1, ?1, 'test', '{}', 'agent-core3', 'private', 'repo-scope',
+                         'platform/daemon-rs', 0, 'completed')",
+                rusqlite::params![now],
+            )?;
+            Ok(serde_json::Value::Null)
+        })
+        .await
+        .expect("seed blocked target");
+
+        let blocked_fact = "The Rust pipeline worker target memory remains available for blocked destructive delete decision auditing and must not be deleted by controlled writes.";
+        let blocked_extraction = serde_json::json!({
+            "facts": [{"content": blocked_fact, "type": "fact", "confidence": 0.83}],
+            "entities": []
+        })
+        .to_string();
+        let blocked_decision = serde_json::json!({
+            "action": "delete",
+            "targetId": "target-blocked-delete",
+            "confidence": 0.91,
+            "reason": "Destructive delete should be blocked for audit parity"
+        })
+        .to_string();
+        let blocked_provider: Arc<dyn LlmProvider> = Arc::new(SequenceProvider::new(vec![
+            blocked_extraction,
+            blocked_decision,
+        ]));
+        let mut config = WorkerConfig {
+            graph_enabled: false,
+            shadow_mode: false,
+            ..WorkerConfig::default()
+        };
+        config.significance.enabled = false;
+        config.decision.min_score = 0.0;
+
+        let blocked_result = process_extract(
+            &pool,
+            &LeasedJob {
+                id: "job-blocked-decision".to_string(),
+                memory_id: Some("source-blocked-decision".to_string()),
+                job_type: "extract".to_string(),
+                payload: None,
+                attempts: 1,
+            },
+            &blocked_provider,
+            &Arc::new(LlmSemaphore::new(1)),
+            &config,
+        )
+        .await
+        .expect("process blocked destructive decision");
+        assert_eq!(blocked_result.facts_extracted, 0);
+
+        let shadow_fact = "The Rust pipeline worker shadow mode must record source decision audit history without inserting extracted ADD fact memories.";
+        let shadow_extraction = serde_json::json!({
+            "facts": [{"content": shadow_fact, "type": "fact", "confidence": 0.84}],
+            "entities": []
+        })
+        .to_string();
+        let shadow_decision = serde_json::json!({
+            "action": "add",
+            "confidence": 0.84,
+            "reason": "No existing memories match this fact"
+        })
+        .to_string();
+        let shadow_provider: Arc<dyn LlmProvider> = Arc::new(SequenceProvider::new(vec![
+            shadow_extraction,
+            shadow_decision,
+        ]));
+        let mut shadow_config = WorkerConfig {
+            graph_enabled: false,
+            shadow_mode: true,
+            ..WorkerConfig::default()
+        };
+        shadow_config.significance.enabled = false;
+
+        let shadow_result = process_extract(
+            &pool,
+            &LeasedJob {
+                id: "job-shadow-decision".to_string(),
+                memory_id: Some("source-shadow-decision".to_string()),
+                job_type: "extract".to_string(),
+                payload: None,
+                attempts: 1,
+            },
+            &shadow_provider,
+            &Arc::new(LlmSemaphore::new(1)),
+            &shadow_config,
+        )
+        .await
+        .expect("process shadow decision");
+        assert_eq!(shadow_result.facts_extracted, 0);
+
+        let audit = pool
+            .read(|conn| {
+                let blocked: serde_json::Value = conn.query_row(
+                    "SELECT event, changed_by, reason, metadata FROM memory_history WHERE memory_id = 'source-blocked-decision'",
+                    [],
+                    |row| {
+                        Ok(serde_json::json!({
+                            "event": row.get::<_, String>(0)?,
+                            "changed_by": row.get::<_, String>(1)?,
+                            "reason": row.get::<_, String>(2)?,
+                            "metadata": serde_json::from_str::<serde_json::Value>(&row.get::<_, String>(3)?)
+                                .expect("blocked metadata json"),
+                        }))
+                    },
+                )?;
+                let shadow: serde_json::Value = conn.query_row(
+                    "SELECT event, changed_by, reason, metadata FROM memory_history WHERE memory_id = 'source-shadow-decision'",
+                    [],
+                    |row| {
+                        Ok(serde_json::json!({
+                            "event": row.get::<_, String>(0)?,
+                            "changed_by": row.get::<_, String>(1)?,
+                            "reason": row.get::<_, String>(2)?,
+                            "metadata": serde_json::from_str::<serde_json::Value>(&row.get::<_, String>(3)?)
+                                .expect("shadow metadata json"),
+                        }))
+                    },
+                )?;
+                let shadow_inserted: i64 = conn.query_row(
+                    "SELECT COUNT(*) FROM memories WHERE source_type = 'pipeline-v2' AND source_id = 'source-shadow-decision'",
+                    [],
+                    |row| row.get(0),
+                )?;
+                Ok(serde_json::json!({
+                    "blocked": blocked,
+                    "shadow": shadow,
+                    "shadow_inserted": shadow_inserted,
+                }))
+            })
+            .await
+            .expect("read blocked and shadow audit");
+
+        assert_eq!(audit["blocked"]["event"], "none");
+        assert_eq!(audit["blocked"]["changed_by"], "pipeline-v2");
+        assert_eq!(
+            audit["blocked"]["reason"],
+            "Destructive delete should be blocked for audit parity"
+        );
+        assert_eq!(audit["blocked"]["metadata"]["proposedAction"], "delete");
+        assert_eq!(
+            audit["blocked"]["metadata"]["blockedReason"],
+            "destructive_mutations_disabled"
+        );
+        assert_eq!(audit["shadow"]["event"], "none");
+        assert_eq!(audit["shadow"]["changed_by"], "pipeline-shadow");
+        assert_eq!(audit["shadow"]["metadata"]["shadow"], true);
+        assert_eq!(audit["shadow"]["metadata"]["proposedAction"], "add");
+        assert_eq!(audit["shadow_inserted"], 0);
 
         drop(pool);
         handle.abort();

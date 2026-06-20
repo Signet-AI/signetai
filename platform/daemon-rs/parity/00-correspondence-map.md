@@ -174,12 +174,19 @@ Behavioral-core gap-fill, highest-risk first. Worktree-isolated subagents,
   full-row `original_row_json`, TS ordered stages reproduced, removed
   Rust-only predictor-training-pair purge (absent from TS). Test
   `retention_sweep_matches_typescript_ordered_semantics`.
-- ⏳ **Pipeline worker fact-write** (core 3, was PARTIAL): ADD decisions now
+- ✅ **Pipeline worker fact-write** (core 3, was PARTIAL): ADD decisions now
   insert real fact memories with attribution (was only bumping a counter).
-  **3 autoreview-surfaced refinements in flight:** (a) proposal→fact
-  re-matching by confidence can drop facts when multiple share confidence;
-  (b) dedupe includes visibility but UNIQUE key is content_hash+agent_id+scope
-  → visibility mismatch fails job instead of deduping; (c) no memory_history
-  audit rows (TS writes created/deduped/blocked/shadow audit).
-- ⬜ Recall/ranking gates (core 2, DIVERGENT) — next.
+  REFINED: proposal→fact attribution carries originating fact index (no more
+  confidence/reason re-match dropping facts), dedupe aligned with DB UNIQUE
+  key (content_hash+agent_id+scope, visibility-differing dupes dedupe not
+  fail), memory_history audit rows written in-transaction for
+  created/deduped/blocked/none/shadow. Tests extended.
+- ⏳ **Recall / ranking gates** (core 2, was DIVERGENT): added authorize-before-content
+  security boundary (candidates scoped before any content-bearing stage —
+  the critical scoping-leak fix), temporal candidates, traversal-primary
+  graph fusion, SEC-lite/dampening/currentness, source fallbacks. **3
+  autoreview-surfaced refinements in flight:** (a) temporal boost runs on
+  every recall, should only run on temporal-intent queries (reorders normal
+  recalls); (b) source fallback key `obsidian_chunk` vs TS `source_obsidian_chunk`;
+  (c) source-fallback dedupe missing `source_id` on hydrated memories.
 - ⬜ Scoping / memory-lineage / hooks / remaining auth — after.
