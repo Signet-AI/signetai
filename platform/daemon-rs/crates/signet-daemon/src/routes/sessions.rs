@@ -164,6 +164,91 @@ pub struct AgentScopeParams {
     pub agent_id: Option<String>,
 }
 
+fn blackbox_not_implemented() -> axum::response::Response {
+    (
+        StatusCode::NOT_IMPLEMENTED,
+        Json(serde_json::json!({
+            "error": "Black Box replay is not available in the Rust shadow daemon yet"
+        })),
+    )
+        .into_response()
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/sessions/blackbox
+// ---------------------------------------------------------------------------
+
+pub async fn blackbox_list(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<AgentScopeParams>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> axum::response::Response {
+    let is_local = peer.ip().is_loopback();
+    let auth_runtime = state.auth_snapshot();
+    let auth = match authenticate_headers(
+        auth_runtime.mode,
+        auth_runtime.secret.as_deref(),
+        &headers,
+        is_local,
+    ) {
+        Ok(a) => a,
+        Err(e) => return *e,
+    };
+    if let Err(reason) = resolve_scoped_agent(
+        &auth,
+        auth_runtime.mode,
+        is_local,
+        params.agent_id.as_deref(),
+    ) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error": reason})),
+        )
+            .into_response();
+    }
+
+    blackbox_not_implemented()
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/sessions/:key/blackbox
+// ---------------------------------------------------------------------------
+
+pub async fn blackbox_get(
+    State(state): State<Arc<AppState>>,
+    Path(_key): Path<String>,
+    Query(params): Query<AgentScopeParams>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> axum::response::Response {
+    let is_local = peer.ip().is_loopback();
+    let auth_runtime = state.auth_snapshot();
+    let auth = match authenticate_headers(
+        auth_runtime.mode,
+        auth_runtime.secret.as_deref(),
+        &headers,
+        is_local,
+    ) {
+        Ok(a) => a,
+        Err(e) => return *e,
+    };
+    if let Err(reason) = resolve_scoped_agent(
+        &auth,
+        auth_runtime.mode,
+        is_local,
+        params.agent_id.as_deref(),
+    ) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error": reason})),
+        )
+            .into_response();
+    }
+
+    blackbox_not_implemented()
+}
+
 /// Look up a session for the given agent — tracker first, then presence DB.
 /// Mirrors TS `listLiveSessions(agentId).find(s => s.key === key)`.
 ///

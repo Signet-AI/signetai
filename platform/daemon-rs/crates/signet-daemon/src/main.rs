@@ -462,7 +462,15 @@ async fn main() -> anyhow::Result<()> {
             "/api/sessions/checkpoints/latest",
             get(routes::sessions::checkpoint_latest),
         )
+        .route(
+            "/api/sessions/blackbox",
+            get(routes::sessions::blackbox_list),
+        )
         .route("/api/sessions/{key}", get(routes::sessions::get))
+        .route(
+            "/api/sessions/{key}/blackbox",
+            get(routes::sessions::blackbox_get),
+        )
         .route(
             "/api/sessions/{key}/transcript",
             get(routes::sessions::transcript),

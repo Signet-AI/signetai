@@ -460,6 +460,87 @@ Both raw keys (`abc123`) and prefixed keys (`session:abc123`) are accepted.
 
 Returns `404` if no transcript exists for that session and agent scope.
 
+### GET /api/sessions/blackbox
+
+List sessions with replayable Black Box evidence for the requesting agent.
+This is a dashboard-oriented flight recorder index assembled from existing
+recall telemetry, context injection events, source artifacts, and epistemic
+assertions. Results are scoped to the authenticated agent and may be narrowed
+with `project`.
+
+**Query parameters**
+
+- `agent_id` / `agentId` — optional scoped agent selector when authorized.
+- `project` — optional project path filter.
+- `limit` — optional maximum session count.
+
+**Response**
+
+```json
+{
+  "agentId": "default",
+  "sessions": [
+    {
+      "sessionKey": "session-uuid",
+      "agentId": "default",
+      "project": "/workspace/repo",
+      "lastAt": "2026-03-08T10:00:00.000Z",
+      "recallEvents": 3,
+      "artifactEvents": 1
+    }
+  ],
+  "count": 1
+}
+```
+
+### GET /api/sessions/:key/blackbox
+
+Return a session-scoped Black Box replay for a specific session key. The replay
+preserves the raw session key supplied by the caller so persisted `session:`
+prefixes continue to resolve. It explains what evidence was visible to Signet
+at each point in the session; it does not claim deterministic model causality.
+
+**Query parameters**
+
+- `agent_id` / `agentId` — optional scoped agent selector when authorized.
+- `project` — optional project path filter. When present, unprojected recall
+  context rows are omitted unless they can be joined through project artifacts.
+
+**Response**
+
+```json
+{
+  "sessionKey": "session-uuid",
+  "agentId": "default",
+  "generatedAt": "2026-03-08T10:05:00.000Z",
+  "eventCount": 2,
+  "events": [
+    {
+      "id": "telemetry:abc:query",
+      "kind": "recall.requested",
+      "at": "2026-03-08T10:00:00.000Z",
+      "title": "Recall requested",
+      "detail": "dashboard provenance",
+      "refs": [],
+      "payload": {
+        "route": "/api/memory/recall",
+        "resultCount": 3
+      }
+    }
+  ],
+  "frame": {
+    "at": "2026-03-08T10:00:00.000Z",
+    "activeRefCount": 0,
+    "activeRefs": [],
+    "likelyInfluences": [],
+    "warnings": []
+  }
+}
+```
+
+`events[].kind` is one of `recall.requested`, `recall.result`,
+`context.recalled`, `artifact.written`, or `assertion.created`.
+
 ### POST /api/sessions/search
 
 Search active or completed session transcripts. This route powers the

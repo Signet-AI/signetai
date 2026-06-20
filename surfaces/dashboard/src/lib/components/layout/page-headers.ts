@@ -129,7 +129,7 @@ export const PAGE_FOOTERS: Partial<Record<TabId, PageFooterStatic>> = {
 	pipeline: { left: "Pipeline", right: "memory loop v2" },
 	embeddings: { left: "Constellation", right: "UMAP" },
 	knowledge: { left: "structural graph browser", right: "entities, traversal, predictor slices" },
-	logs: { left: "Log viewer", right: "daemon logs" },
+	logs: { left: "Log viewer", right: "daemon logs + context trace" },
 	secrets: { left: "Secrets", right: "libsodium" },
 	predictor: { left: "Predictor Model", right: "predictive memory scorer" },
 	connectors: { left: "platform harnesses + data sources", right: "connector health" },

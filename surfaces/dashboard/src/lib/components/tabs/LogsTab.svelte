@@ -1,7 +1,7 @@
 <script lang="ts">
 import { browser } from "$app/environment";
-import { API_BASE } from "$lib/api";
-import { openAuthEventStream, type AuthEventStream } from "$lib/auth";
+import { API_BASE, type BlackBoxEvent, type BlackBoxRef, type BlackBoxSession, getBlackBoxSession } from "$lib/api";
+import { type AuthEventStream, openAuthEventStream } from "$lib/auth";
 import PageBanner from "$lib/components/layout/PageBanner.svelte";
 import TabGroupBar from "$lib/components/layout/TabGroupBar.svelte";
 import { ENGINE_TAB_ITEMS } from "$lib/components/layout/page-headers";
@@ -64,14 +64,22 @@ let logEventSource: AuthEventStream | null = null;
 let streamEnabled = $state(true);
 let reconnectAttempt = 0;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+// biome-ignore lint/style/useConst: reassigned from Svelte template callbacks.
 let logLevelFilter = $state<string>("");
+// biome-ignore lint/style/useConst: reassigned from Svelte template callbacks.
 let logCategoryFilter = $state<string>("");
 let logOrderChoice = $state<LogOrder | null>(null);
 let logAutoScroll = $state(false);
 let logAutoScrollPausedByScroll = $state(false);
 let initialLoadDone = $state(false);
+// biome-ignore lint/style/useConst: assigned through bind:viewportRef.
 let logViewport = $state<HTMLElement | null>(null);
 let selectedLogKey = $state<string | null>(null);
+let contextTrace = $state<BlackBoxSession | null>(null);
+let contextTraceLoading = $state(false);
+let contextTraceError = $state("");
+let loadedContextTraceKey = $state("");
+let contextTraceRequestId = 0;
 let copied = $state(false);
 let autoScrollSnapFrame: number | null = null;
 let nextLogId = 0;
@@ -301,6 +309,11 @@ function getSelectedLog(): LogEntry | null {
 }
 
 const selectedLog = $derived(getSelectedLog());
+const selectedLogSessionKey = $derived(readSessionKeyFromLog(selectedLog));
+const contextTraceEvents = $derived(contextTrace?.events.slice(-6).reverse() ?? []);
+const contextTraceRefs = $derived(
+	dedupeTraceRefs(contextTrace?.events.flatMap((event) => event.refs) ?? []).slice(0, 8),
+);
 
 function scrollToLatest(behavior: ScrollBehavior = "smooth"): void {
 	if (!logViewport) return;
@@ -499,6 +512,62 @@ function readString(value: unknown): string | null {
 	return typeof value === "string" && value.length > 0 ? value : null;
 }
 
+function readSessionKeyFromLog(log: LogEntry | null): string {
+	if (!log?.data) return "";
+	const candidates = [
+		log.data.sessionKey,
+		log.data.session_key,
+		log.data.sessionId,
+		log.data.session_id,
+		log.data.currentSessionKey,
+	];
+	for (const candidate of candidates) {
+		if (typeof candidate === "string" && candidate.trim()) return candidate.trim();
+	}
+	return "";
+}
+
+function dedupeTraceRefs(refs: readonly BlackBoxRef[]): BlackBoxRef[] {
+	const byKey = new Map<string, BlackBoxRef>();
+	for (const ref of refs) {
+		const key = `${ref.kind}:${ref.id}`;
+		if (!byKey.has(key)) byKey.set(key, ref);
+	}
+	return [...byKey.values()];
+}
+
+function formatTraceEventKind(kind: BlackBoxEvent["kind"]): string {
+	return kind.replace(".", " ");
+}
+
+function traceRefBadge(ref: BlackBoxRef): string {
+	if (ref.sourcePath || ref.kind === "source" || ref.kind === "source_artifact") return "source-backed";
+	if (ref.kind === "assertion") return ref.status ? `claim · ${ref.status}` : "claim";
+	if (typeof ref.score === "number") return `score ${ref.score.toFixed(2)}`;
+	return ref.kind;
+}
+
+async function loadContextTrace(sessionKey = selectedLogSessionKey): Promise<void> {
+	const key = sessionKey.trim();
+	if (!key) return;
+	const requestId = ++contextTraceRequestId;
+	contextTraceLoading = true;
+	contextTraceError = "";
+	try {
+		const replay = await getBlackBoxSession(key, { limit: 200 });
+		if (requestId !== contextTraceRequestId) return;
+		contextTrace = replay;
+		loadedContextTraceKey = key;
+	} catch (err) {
+		if (requestId !== contextTraceRequestId) return;
+		contextTrace = null;
+		loadedContextTraceKey = "";
+		contextTraceError = err instanceof Error ? err.message : String(err);
+	} finally {
+		if (requestId === contextTraceRequestId) contextTraceLoading = false;
+	}
+}
+
 function readStringArray(value: unknown): string[] {
 	if (!Array.isArray(value)) return [];
 	return value.filter((item): item is string => typeof item === "string" && item.length > 0);
@@ -573,6 +642,16 @@ onMount(() => {
 		if (reconnectTimer !== null) clearTimeout(reconnectTimer);
 		if (logEventSource) logEventSource.close();
 	};
+});
+
+$effect(() => {
+	const key = selectedLogSessionKey;
+	contextTraceRequestId += 1;
+	contextTrace = null;
+	contextTraceError = "";
+	loadedContextTraceKey = "";
+	contextTraceLoading = false;
+	if (key) void loadContextTrace(key);
 });
 
 $effect(() => {
@@ -773,6 +852,72 @@ $effect(() => {
 						{/each}
 					</div>
 				{/if}
+				<div class="context-trace-card mb-[var(--space-sm)] rounded-lg border border-[var(--sig-border)] bg-[var(--sig-surface)] overflow-hidden">
+					<div class="flex items-center justify-between gap-2 px-2 py-1 border-b border-[var(--sig-border)]">
+						<div>
+							<div class="sig-eyebrow tracking-[0.08em]">Context trace</div>
+							<div class="text-[10px] text-[var(--sig-text-muted)]">Richer logs: memories, sources, injections, and artifacts attached to this session.</div>
+						</div>
+						{#if selectedLogSessionKey}
+							<Button
+								variant="outline"
+								size="sm"
+								class="sig-eyebrow px-2 py-1 h-auto hover:border-[var(--sig-border-strong)] hover:text-[var(--sig-text-bright)]"
+								onclick={() => loadContextTrace(selectedLogSessionKey)}
+								disabled={contextTraceLoading}
+							>
+								{contextTraceLoading ? "Loading" : "Reload"}
+							</Button>
+						{/if}
+					</div>
+					{#if !selectedLogSessionKey}
+						<div class="p-3 text-[11px] leading-relaxed text-[var(--sig-text-muted)]">
+							No session key is attached to this log entry. Hook/session logs with <code>sessionKey</code> show the context evidence here.
+						</div>
+					{:else if contextTraceLoading && !contextTrace}
+						<div class="p-3 text-[11px] text-[var(--sig-text-muted)]">Loading context trace for {selectedLogSessionKey}…</div>
+					{:else if contextTraceError}
+						<div class="p-3 text-[11px] text-[var(--sig-danger)]">{contextTraceError}</div>
+					{:else if contextTrace && loadedContextTraceKey === selectedLogSessionKey}
+						<div class="grid grid-cols-3 border-b border-[var(--sig-border)] text-center">
+							<div class="p-2 border-r border-[var(--sig-border)]">
+								<div class="sig-eyebrow">Events</div>
+								<strong class="text-[var(--sig-text-bright)]">{contextTrace.eventCount}</strong>
+							</div>
+							<div class="p-2 border-r border-[var(--sig-border)]">
+								<div class="sig-eyebrow">Active refs</div>
+								<strong class="text-[var(--sig-text-bright)]">{contextTraceRefs.length}</strong>
+							</div>
+							<div class="p-2">
+								<div class="sig-eyebrow">Session</div>
+								<strong class="block truncate text-[var(--sig-text-bright)]" title={contextTrace.sessionKey}>{contextTrace.sessionKey}</strong>
+							</div>
+						</div>
+						<div class="p-2 space-y-2">
+							{#if contextTraceRefs.length > 0}
+								<div class="flex flex-wrap gap-1">
+									{#each contextTraceRefs as ref}
+										<span class="trace-ref" title={ref.sourcePath ?? ref.id}>
+											<strong>{ref.label ?? ref.id}</strong>
+											<small>{traceRefBadge(ref)}</small>
+										</span>
+									{/each}
+								</div>
+							{/if}
+							<div class="space-y-1">
+								{#each contextTraceEvents as event}
+									<div class="trace-event">
+										<span>{formatTraceEventKind(event.kind)}</span>
+										<strong>{event.title}</strong>
+										<small>{event.refs.length} refs · {formatLogDate(event.at)}</small>
+									</div>
+								{:else}
+									<div class="text-[11px] text-[var(--sig-text-muted)]">No context trace events recorded for this session yet.</div>
+								{/each}
+							</div>
+						</div>
+					{/if}
+				</div>
 				<div class="rounded-lg border border-[var(--sig-border)] bg-[var(--sig-surface)] overflow-hidden">
 					<div class="flex items-center justify-between gap-2 px-2 py-1 border-b border-[var(--sig-border)]">
 						<div class="sig-eyebrow tracking-[0.08em]">Log details</div>
@@ -812,6 +957,54 @@ $effect(() => {
 			color-mix(in srgb, var(--sig-surface-raised) 90%, var(--sig-bg)) 0%,
 			var(--sig-surface-raised) 72%
 		);
+}
+
+.trace-ref {
+	display: inline-flex;
+	max-width: 100%;
+	gap: 6px;
+	align-items: center;
+	border: 1px solid var(--sig-border);
+	background: color-mix(in srgb, var(--sig-surface-raised) 72%, var(--sig-bg));
+	padding: 3px 6px;
+	font-size: 10px;
+}
+
+.trace-ref strong {
+	max-width: 220px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	color: var(--sig-text-bright);
+}
+
+.trace-ref small,
+.trace-event span,
+.trace-event small {
+	color: var(--sig-text-muted);
+}
+
+.trace-event {
+	display: grid;
+	grid-template-columns: 96px minmax(0, 1fr) auto;
+	gap: 8px;
+	align-items: baseline;
+	border-top: 1px solid var(--sig-border);
+	padding: 6px 0;
+	font-size: 11px;
+}
+
+.trace-event span {
+	text-transform: uppercase;
+	letter-spacing: 0.08em;
+	font-size: 9px;
+}
+
+.trace-event strong {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	color: var(--sig-text-bright);
 }
 
 .log-row::before {

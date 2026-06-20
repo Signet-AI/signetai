@@ -1,6 +1,7 @@
 import type { Hono } from "hono";
 import { resolveAgentId } from "../agent-id.js";
 import { requirePermission } from "../auth";
+import { buildBlackBoxSession, listBlackBoxSessions } from "../black-box.js";
 import { listAgentPresence, touchAgentPresence } from "../cross-agent.js";
 import { getDbAccessor } from "../db-accessor.js";
 import { logger } from "../logger.js";
@@ -90,6 +91,12 @@ export function registerSessionRoutes(app: Hono, deps: SessionRoutesDeps): void 
 	app.use("/api/sessions/search", async (c, next) => {
 		return requirePermission("recall", authConfig)(c, next);
 	});
+	app.use("/api/sessions/blackbox", async (c, next) => {
+		return requirePermission("recall", authConfig)(c, next);
+	});
+	app.use("/api/sessions/:key{(?!summaries$)[^/]+}/blackbox", async (c, next) => {
+		return requirePermission("recall", authConfig)(c, next);
+	});
 	app.use("/api/sessions/:key{(?!summaries$)[^/]+}/transcript", async (c, next) => {
 		return requirePermission("recall", authConfig)(c, next);
 	});
@@ -102,6 +109,25 @@ export function registerSessionRoutes(app: Hono, deps: SessionRoutesDeps): void 
 		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
 		const sessions = listLiveSessions(scopedAgent.agentId);
 		return c.json({ sessions, count: sessions.length });
+	});
+
+	app.get("/api/sessions/blackbox", (c) => {
+		const scopedAgent = resolveScopedAgentId(
+			c,
+			parseOptionalString(c.req.query("agent_id")) ?? parseOptionalString(c.req.query("agentId")),
+			"default",
+		);
+		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+		const scopedProject = resolveScopedProject(c, c.req.query("project"));
+		if (scopedProject.error) return c.json({ error: scopedProject.error }, 403);
+		const limitRaw = Number.parseInt(c.req.query("limit") ?? "50", 10);
+		const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(100, limitRaw)) : 50;
+		const sessions = listBlackBoxSessions(getDbAccessor(), {
+			agentId: scopedAgent.agentId,
+			project: scopedProject.project,
+			limit,
+		});
+		return c.json({ agentId: scopedAgent.agentId, project: scopedProject.project, sessions, count: sessions.length });
 	});
 
 	app.post("/api/sessions/search", async (c) => {
@@ -165,6 +191,39 @@ export function registerSessionRoutes(app: Hono, deps: SessionRoutesDeps): void 
 		const content = getSessionTranscriptContent(key, scopedAgent.agentId);
 		if (!content) return c.json({ error: "Transcript not found" }, 404);
 		return c.json({ sessionKey: key, agentId: scopedAgent.agentId, content });
+	});
+
+	app.get("/api/sessions/:key{(?!summaries$)[^/]+}/blackbox", (c) => {
+		const key = c.req.param("key").trim();
+		const requestedAgentId =
+			parseOptionalString(c.req.query("agent_id")) ??
+			parseOptionalString(c.req.query("agentId")) ??
+			parseOptionalString(c.req.header("x-signet-agent-id"));
+		const scopedAgent = resolveScopedAgentId(
+			c,
+			requestedAgentId ?? (key.startsWith("agent:") ? resolveAgentId({ sessionKey: key }) : undefined),
+		);
+		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+		const scopedProject = resolveScopedProject(c, c.req.query("project"));
+		if (scopedProject.error) return c.json({ error: scopedProject.error }, 403);
+		const atRaw = parseOptionalString(c.req.query("at"));
+		let at: string | undefined;
+		if (atRaw) {
+			const parsed = new Date(atRaw);
+			if (Number.isNaN(parsed.getTime())) return c.json({ error: "at must be an ISO timestamp" }, 400);
+			at = parsed.toISOString();
+		}
+		const limitRaw = Number.parseInt(c.req.query("limit") ?? "500", 10);
+		const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(500, limitRaw)) : 500;
+		return c.json(
+			buildBlackBoxSession(getDbAccessor(), {
+				agentId: scopedAgent.agentId,
+				sessionKey: key,
+				project: scopedProject.project,
+				at,
+				limit,
+			}),
+		);
 	});
 
 	app.get("/api/sessions/:key{(?!summaries$)[^/]+}", (c) => {

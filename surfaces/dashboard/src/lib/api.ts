@@ -68,6 +68,71 @@ export interface MemoryTimelineResponse {
 	error?: string;
 }
 
+export type BlackBoxEventKind =
+	| "recall.requested"
+	| "recall.result"
+	| "context.recalled"
+	| "artifact.written"
+	| "assertion.created";
+
+export interface BlackBoxRef {
+	kind: "memory" | "source" | "source_artifact" | "assertion" | "session";
+	id: string;
+	label?: string;
+	score?: number;
+	status?: string;
+	sourcePath?: string;
+}
+
+export interface BlackBoxEvent {
+	id: string;
+	kind: BlackBoxEventKind;
+	at: string;
+	title: string;
+	detail: string;
+	refs: BlackBoxRef[];
+	payload?: Record<string, unknown>;
+}
+
+export interface BlackBoxInfluence {
+	eventId: string;
+	at: string;
+	reason: string;
+	refs: BlackBoxRef[];
+}
+
+export interface BlackBoxFrame {
+	at: string;
+	activeRefCount: number;
+	activeRefs: BlackBoxRef[];
+	likelyInfluences: BlackBoxInfluence[];
+	warnings: string[];
+}
+
+export interface BlackBoxSession {
+	sessionKey: string;
+	agentId: string;
+	generatedAt: string;
+	eventCount: number;
+	events: BlackBoxEvent[];
+	frame: BlackBoxFrame;
+}
+
+export interface BlackBoxSessionSummary {
+	sessionKey: string;
+	agentId: string;
+	project: string | null;
+	lastAt: string;
+	recallEvents: number;
+	artifactEvents: number;
+}
+
+export interface BlackBoxSessionsResponse {
+	agentId: string;
+	sessions: BlackBoxSessionSummary[];
+	count: number;
+}
+
 export interface ConfigFile {
 	name: string;
 	content: string;
@@ -768,6 +833,31 @@ export async function getMemoryTimeline(options?: {
 			error: "Timeline API unavailable. Showing memory-index fallback.",
 		};
 	}
+}
+
+export async function getBlackBoxSessions(agentId?: string, limit = 50): Promise<BlackBoxSessionsResponse> {
+	const params = new URLSearchParams();
+	if (agentId) params.set("agent_id", agentId);
+	params.set("limit", limit.toString());
+	const response = await authFetch(`${API_BASE}/api/sessions/blackbox?${params}`);
+	if (!response.ok) throw new Error("Failed to fetch Black Box sessions");
+	return await response.json();
+}
+
+export async function getBlackBoxSession(
+	sessionKey: string,
+	options: { agentId?: string; at?: string; limit?: number } = {},
+): Promise<BlackBoxSession> {
+	const params = new URLSearchParams();
+	if (options.agentId) params.set("agent_id", options.agentId);
+	if (options.at) params.set("at", options.at);
+	if (options.limit) params.set("limit", options.limit.toString());
+	const query = params.toString();
+	const response = await authFetch(
+		`${API_BASE}/api/sessions/${encodeURIComponent(sessionKey)}/blackbox${query ? `?${query}` : ""}`,
+	);
+	if (!response.ok) throw new Error("Failed to fetch Black Box session");
+	return await response.json();
 }
 
 export async function searchMemories(
