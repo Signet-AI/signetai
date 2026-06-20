@@ -56,7 +56,6 @@ import * as memoryCandidates from "./memory-candidates";
 import { type ScoredMemory, buildActiveConstraintsSection } from "./memory-candidates";
 import { effectiveScore, inferType, isDuplicate } from "./memory-classification";
 import { loadMemoryConfig } from "./memory-config";
-import { ensureCanonicalManifest, indexCanonicalTranscriptJsonl } from "./memory-lineage";
 import { hybridRecall } from "./memory-search";
 import {
 	type SynthesisRequest,
@@ -135,7 +134,7 @@ import { assembleInheritedContextBlock, resolveParentSession } from "./subagent-
 import { searchTemporalFallback } from "./temporal-fallback";
 import { writeTranscriptAudit } from "./transcript-audit";
 import * as transcriptCapture from "./transcript-capture";
-import { canonicalTranscriptRelativePath } from "./transcript-jsonl";
+import { enqueueTranscriptCaptureJob, runTranscriptCaptureOnce } from "./transcript-capture-worker";
 import {
 	normalizeCodexTranscript,
 	normalizeJsonConversationTranscript,
@@ -1199,7 +1198,10 @@ ${guidelines}
 	if (config.includeRecentMemories !== false) {
 		const agentId = resolveAgentId(req);
 		const agentScope = getAgentScope(agentId);
-		const recentMemories = getRecentMemories(config.memoryLimit || 5, 0.9, { agentId, ...agentScope });
+		const configuredLimit =
+			typeof config.memoryLimit === "number" && Number.isFinite(config.memoryLimit) ? config.memoryLimit : 5;
+		const memoryLimit = Math.max(0, Math.min(50, Math.trunc(configuredLimit)));
+		const recentMemories = getRecentMemories(memoryLimit, 0.9, { agentId, ...agentScope });
 		if (recentMemories.length > 0) {
 			summaryPrompt += "\nRecent memories for reference:\n";
 			for (const mem of recentMemories) {
@@ -1213,7 +1215,6 @@ ${guidelines}
 		sessionKey: req.sessionKey,
 		messageCount: req.messageCount,
 		summaryPromptChars: summaryPrompt.length,
-		summaryPrompt,
 	});
 
 	// Write pre-compaction checkpoint from accumulated continuity state.
@@ -1747,6 +1748,7 @@ export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionE
 
 	const pipelineEnabled = memoryCfg.pipelineV2.enabled || memoryCfg.pipelineV2.shadowMode || memoryCfg.dreaming.enabled;
 	const hasSummaryLength = summaryTranscript.length >= 500;
+	let summaryStatus: "pending" | "skipped" | "not_requested" = pipelineEnabled ? "skipped" : "not_requested";
 	let jobId: string | undefined;
 
 	// Queue for async processing by the summary worker instead of
@@ -1769,6 +1771,7 @@ export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionE
 			sessionId,
 		});
 	} else if (hasSummaryLength) {
+		summaryStatus = "pending";
 		jobId = enqueueSummaryJob(getDbAccessor(), {
 			harness: req.harness,
 			transcript: summaryTranscript,
@@ -1796,24 +1799,44 @@ export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionE
 		});
 	}
 
-	setImmediate(() => {
-		const work = deferSessionEndWork({
-			transcript: retainedTranscript,
-			rawTranscript,
-			sessionKey,
-			sessionId,
-			agentId,
-			harness: req.harness,
-			cwd: req.cwd ?? null,
-			endedAt,
-			transcriptPath: req.transcriptPath,
-			memoryCfg,
-		}).catch((error) => {
-			logger.warn("hooks", "Deferred session-end work failed", {
+	if (retainedTranscript.trim().length > 0 || rawTranscript.trim().length > 0) {
+		try {
+			enqueueTranscriptCaptureJob(getDbAccessor(), {
+				agentId,
+				harness: req.harness,
+				sessionKey: sessionKey ?? null,
+				sessionId,
+				project: req.cwd ?? null,
+				transcript: retainedTranscript,
+				rawTranscript,
+				transcriptPath: req.transcriptPath ?? null,
+				capturedAt: endedAt,
+				endedAt,
+				summaryStatus,
+			});
+		} catch (error) {
+			logger.warn("hooks", "Transcript capture enqueue failed", {
 				error: error instanceof Error ? error.message : String(error),
 				sessionKey,
 			});
-		});
+		}
+	}
+
+	setImmediate(() => {
+		const work = runTranscriptCaptureOnce(getDbAccessor(), getAgentsDir())
+			.catch((error) => {
+				logger.warn("hooks", "Deferred transcript capture job failed", {
+					error: error instanceof Error ? error.message : String(error),
+					sessionKey,
+				});
+			})
+			.then(() =>
+				deferSessionEndWork({
+					sessionKey,
+					agentId,
+					memoryCfg,
+				}),
+			);
 		deferredSessionEndWork.add(work);
 		void work.finally(() => {
 			deferredSessionEndWork.delete(work);
@@ -1824,100 +1847,11 @@ export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionE
 }
 
 async function deferSessionEndWork(params: {
-	transcript: string;
-	rawTranscript: string;
 	sessionKey: string | undefined;
-	sessionId: string;
 	agentId: string;
-	harness: string;
-	cwd: string | null;
-	endedAt: string;
-	transcriptPath: string | undefined;
 	memoryCfg: ReturnType<typeof loadMemoryConfig>;
 }): Promise<void> {
-	const {
-		transcript,
-		rawTranscript,
-		sessionKey,
-		sessionId,
-		agentId,
-		harness,
-		cwd,
-		endedAt,
-		transcriptPath,
-		memoryCfg,
-	} = params;
-
-	if (rawTranscript) {
-		try {
-			writeTranscriptAudit({
-				basePath: getAgentsDir(),
-				agentId,
-				sessionId,
-				sessionKey: sessionKey ?? null,
-				rawTranscript,
-				capturedAt: endedAt,
-			});
-		} catch (error) {
-			logger.warn("hooks", "Deferred transcript audit write failed", {
-				error: error instanceof Error ? error.message : String(error),
-				sessionKey,
-			});
-		}
-	}
-
-	if (transcript.trim().length > 0) {
-		try {
-			if (!isNoiseSession({ project: cwd, sessionKey: sessionKey ?? null, sessionId, harness })) {
-				await transcriptCapture.writeCanonicalTranscriptFromSnapshot({
-					basePath: getAgentsDir(),
-					agentId,
-					harness,
-					sessionKey: sessionKey ?? null,
-					sessionId,
-					project: cwd,
-					rawTranscript,
-					transcript,
-					capturedAt: endedAt,
-					transcriptPath,
-				});
-				const manifest = ensureCanonicalManifest({
-					agentId,
-					sessionId,
-					sessionKey: sessionKey ?? null,
-					project: cwd,
-					harness,
-					capturedAt: endedAt,
-					startedAt: null,
-					endedAt,
-				});
-				indexCanonicalTranscriptJsonl({
-					agentId,
-					sessionId,
-					sessionKey: sessionKey ?? null,
-					project: cwd,
-					harness,
-					capturedAt: endedAt,
-					startedAt: null,
-					endedAt,
-					transcript,
-					manifestPath: manifest.path.replace(`${getAgentsDir()}/`, "").replace(/\\/g, "/"),
-				});
-				logger.debug("hooks", "Session transcript JSONL snapshot written", {
-					harness,
-					project: cwd,
-					sessionKey,
-					path: canonicalTranscriptRelativePath(harness),
-				});
-			}
-		} catch (e) {
-			logger.warn("hooks", "Deferred transcript indexing failed", {
-				error: e instanceof Error ? e.message : String(e),
-				sessionKey,
-				transcriptPath,
-			});
-		}
-	}
+	const { sessionKey, agentId, memoryCfg } = params;
 
 	const pipelineActive = memoryCfg.pipelineV2.enabled || memoryCfg.pipelineV2.shadowMode;
 	if (sessionKey && pipelineActive && memoryCfg.pipelineV2.graph.enabled && memoryCfg.pipelineV2.feedback.enabled) {

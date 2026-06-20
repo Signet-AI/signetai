@@ -218,6 +218,14 @@ Diagnostic data for a single domain. Known domains include `queue`, `storage`,
 
 Returns `400` for unknown domains.
 
+### GET /api/diagnostics/transcripts
+
+Scoped transcript capture diagnostics. Returns durable capture queue counts,
+session transcript row age metadata, manifest/artifact counts, pending or failed
+summary counts, missing transcript/summary artifact counts, and transcript audit
+log metadata. Agent-scoped requests do not expose legacy flat audit log counts
+because those filenames are not agent-scoped.
+
 ### GET /api/diagnostics/database/schema
 
 Read-only SQLite schema explorer data for the dashboard database table view.

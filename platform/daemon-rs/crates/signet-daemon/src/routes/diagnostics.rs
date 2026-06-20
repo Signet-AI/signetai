@@ -2,12 +2,14 @@
 //!
 //! Health diagnostics, log listing, and version/update endpoints.
 
-use std::{collections::HashMap, path::Path as StdPath, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap, fs, net::SocketAddr, path::Path as StdPath, sync::Arc, time::Duration,
+};
 
 use axum::{
     Json,
-    extract::{Path, Query, State},
-    http::StatusCode,
+    extract::{ConnectInfo, Path, Query, State},
+    http::{HeaderMap, StatusCode},
     response::Html,
     response::IntoResponse,
 };
@@ -16,9 +18,15 @@ use rusqlite::{Connection, types::ValueRef};
 use serde::{Deserialize, Serialize};
 use signet_pipeline::provider::GenerateOpts;
 
-use crate::state::{
-    AppState, OpenClawHeartbeat, OpenClawHeartbeatData, UpdateChannel, UpdateInfo,
-    UpdateRuntimeConfig,
+use crate::{
+    auth::{
+        middleware::{authenticate_headers, require_permission_guard, resolve_scoped_agent},
+        types::Permission,
+    },
+    state::{
+        AppState, OpenClawHeartbeat, OpenClawHeartbeatData, UpdateChannel, UpdateInfo,
+        UpdateRuntimeConfig,
+    },
 };
 
 // ---------------------------------------------------------------------------
@@ -511,6 +519,198 @@ fn safe_count(conn: &Connection, table: &str) -> Option<i64> {
         |row| row.get(0),
     )
     .ok()
+}
+
+fn table_exists(conn: &Connection, table: &str) -> bool {
+    conn.query_row(
+        "SELECT 1 FROM sqlite_master WHERE type IN ('table', 'view') AND name = ? LIMIT 1",
+        [table],
+        |_row| Ok(()),
+    )
+    .is_ok()
+}
+
+fn count_where_agent(conn: &Connection, table: &str, where_clause: &str, agent_id: &str) -> i64 {
+    if !table_exists(conn, table) {
+        return 0;
+    }
+    conn.query_row(
+        &format!(
+            "SELECT COUNT(*) AS count FROM {} WHERE agent_id = ?1 AND {}",
+            quote_identifier(table),
+            where_clause
+        ),
+        [agent_id],
+        |row| row.get(0),
+    )
+    .unwrap_or(0)
+}
+
+fn manifest_field(body: &str, key: &str) -> Option<String> {
+    body.lines().find_map(|line| {
+        let trimmed = line.trim();
+        let rest = trimmed.strip_prefix(key)?.trim_start();
+        let value = rest.strip_prefix(':')?.trim();
+        if value.is_empty() || value == "null" || value == "~" {
+            None
+        } else {
+            Some(value.trim_matches(['\'', '"']).to_string())
+        }
+    })
+}
+
+#[derive(Deserialize)]
+pub struct TranscriptDiagnosticsQuery {
+    #[serde(alias = "agentId")]
+    pub agent_id: Option<String>,
+}
+
+/// GET /api/diagnostics/transcripts — transcript capture and artifact health.
+pub async fn transcript_diagnostics(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<TranscriptDiagnosticsQuery>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> axum::response::Response {
+    let is_local = peer.ip().is_loopback();
+    let auth_runtime = state.auth_snapshot();
+    let auth = match authenticate_headers(
+        auth_runtime.mode,
+        auth_runtime.secret.as_deref(),
+        &headers,
+        is_local,
+    ) {
+        Ok(auth) => auth,
+        Err(error) => return *error,
+    };
+    if let Err(error) =
+        require_permission_guard(&auth, Permission::Diagnostics, auth_runtime.mode, is_local)
+    {
+        return *error;
+    }
+    let daemon_agent_fallback = std::env::var("SIGNET_AGENT_ID")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "default".to_string());
+    let requested = params.agent_id.as_deref().or_else(|| {
+        headers
+            .get("x-signet-agent-id")
+            .and_then(|value| value.to_str().ok())
+    });
+    let token_scoped_agent = auth
+        .result
+        .claims
+        .as_ref()
+        .and_then(|claims| claims.scope.agent.as_deref());
+    let agent_id = match resolve_scoped_agent(&auth, auth_runtime.mode, is_local, requested) {
+        Ok(agent_id)
+            if requested.is_none() && token_scoped_agent.is_none() && agent_id == "default" =>
+        {
+            daemon_agent_fallback
+        }
+        Ok(agent_id) => agent_id,
+        Err(reason) => {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({"error": reason})),
+            )
+                .into_response();
+        }
+    };
+    let base_path = state.config.base_path.clone();
+    let agent_for_db = agent_id.clone();
+    let result = state
+        .pool
+        .read(move |conn| {
+            let capture = serde_json::json!({
+                "pending": count_where_agent(conn, "transcript_capture_jobs", "status = 'pending'", &agent_for_db),
+                "processing": count_where_agent(conn, "transcript_capture_jobs", "status = 'processing'", &agent_for_db),
+                "completed": count_where_agent(conn, "transcript_capture_jobs", "status = 'completed'", &agent_for_db),
+                "failed": count_where_agent(conn, "transcript_capture_jobs", "status = 'failed'", &agent_for_db),
+                "dead": count_where_agent(conn, "transcript_capture_jobs", "status = 'dead'", &agent_for_db),
+            });
+            let manifests = count_where_agent(conn, "memory_artifacts", "source_kind = 'manifest'", &agent_for_db);
+            let transcript_artifacts = count_where_agent(conn, "memory_artifacts", "source_kind = 'transcript'", &agent_for_db);
+            let summary_artifacts = count_where_agent(conn, "memory_artifacts", "source_kind = 'summary'", &agent_for_db);
+            let session_rows = count_where_agent(conn, "session_transcripts", "1 = 1", &agent_for_db);
+
+            let mut pending_summaries = 0;
+            let mut failed_summaries = 0;
+            let mut missing_transcript_artifacts = 0;
+            let mut missing_summary_artifacts = 0;
+            if table_exists(conn, "memory_artifacts") {
+                let mut stmt = conn.prepare(
+                    "SELECT source_path FROM memory_artifacts WHERE agent_id = ?1 AND source_kind = 'manifest'",
+                )?;
+                let rows = stmt.query_map([&agent_for_db], |row| row.get::<_, String>(0))?;
+                for row in rows {
+                    let source_path = row?;
+                    let full_path = base_path.join(&source_path);
+                    let Ok(body) = fs::read_to_string(&full_path) else {
+                        continue;
+                    };
+                    let summary_status = manifest_field(&body, "summary_status");
+                    let summary_path = manifest_field(&body, "summary_path");
+                    let transcript_status = manifest_field(&body, "transcript_status");
+                    let transcript_path = manifest_field(&body, "transcript_path");
+                    if summary_status.as_deref() == Some("pending") {
+                        pending_summaries += 1;
+                    }
+                    if summary_status.as_deref() == Some("failed") {
+                        failed_summaries += 1;
+                    }
+                    if let Some(path) = summary_path
+                        && !base_path.join(path).exists()
+                    {
+                        missing_summary_artifacts += 1;
+                    }
+                    if (transcript_status.as_deref() == Some("completed")
+                        || (transcript_status.is_none() && transcript_path.is_some()))
+                        && transcript_path
+                            .as_deref()
+                            .map(|path| !base_path.join(path).exists())
+                            .unwrap_or(false)
+                    {
+                        missing_transcript_artifacts += 1;
+                    }
+                }
+            }
+            Ok(serde_json::json!({
+                "ok": capture["failed"].as_i64().unwrap_or(0) == 0
+                    && capture["dead"].as_i64().unwrap_or(0) == 0
+                    && failed_summaries == 0
+                    && missing_transcript_artifacts == 0,
+                "agentId": agent_for_db,
+                "capture": capture,
+                "sessionStore": { "rows": session_rows },
+                "artifacts": {
+                    "manifests": manifests,
+                    "transcriptArtifacts": transcript_artifacts,
+                    "summaryArtifacts": summary_artifacts,
+                    "pendingSummaries": pending_summaries,
+                    "failedSummaries": failed_summaries,
+                    "missingTranscriptArtifacts": missing_transcript_artifacts,
+                    "missingSummaryArtifacts": missing_summary_artifacts,
+                },
+                "audit": {
+                    "latestLogs": 0,
+                    "finalLogs": 0,
+                    "newestAuditAt": serde_json::Value::Null,
+                    "omittedReason": "Rust daemon reports database-backed transcript diagnostics only",
+                },
+            }))
+        })
+        .await;
+
+    match result {
+        Ok(value) => (StatusCode::OK, Json(value)).into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("{error}")})),
+        )
+            .into_response(),
+    }
 }
 
 fn read_columns(conn: &Connection, table: &str) -> rusqlite::Result<Vec<serde_json::Value>> {

@@ -120,6 +120,7 @@ silently disappear from the API reference.
 | GET | `/api/diagnostics/database/tables/:table/sample` | platform/daemon/src/routes/database-diagnostics.ts |
 | POST | `/api/diagnostics/openclaw/heartbeat` | platform/daemon/src/routes/pipeline-routes.ts |
 | GET | `/api/diagnostics/openclaw` | platform/daemon/src/routes/pipeline-routes.ts |
+| GET | `/api/diagnostics/transcripts` | platform/daemon/src/routes/pipeline-routes.ts |
 | POST | `/api/pipeline/nudge` | platform/daemon/src/routes/pipeline-routes.ts |
 | GET | `/api/pipeline/models` | platform/daemon/src/routes/pipeline-routes.ts |
 | GET | `/api/pipeline/models/by-provider` | platform/daemon/src/routes/pipeline-routes.ts |

@@ -24,7 +24,12 @@ import { getInferenceProvider } from "../llm";
 import { logger } from "../logger";
 import { inferType, isDuplicate } from "../memory-classification";
 import { loadMemoryConfig } from "../memory-config";
-import { IMMUTABLE_ARTIFACT_ERROR_PREFIX, writeSummaryArtifact } from "../memory-lineage";
+import {
+	IMMUTABLE_ARTIFACT_ERROR_PREFIX,
+	ensureCanonicalManifest,
+	updateManifest,
+	writeSummaryArtifact,
+} from "../memory-lineage";
 import { isNoiseSession } from "../session-noise";
 import { upsertSessionTranscript } from "../session-transcripts";
 import { upsertThreadHead } from "../thread-heads";
@@ -536,6 +541,55 @@ export function markCommandStageCompleted(accessor: DbAccessor, jobId: string): 
 	});
 }
 
+function tracksSessionSummaryArtifact(job: SummaryJobRow): boolean {
+	return (
+		job.trigger === "session_end" &&
+		!isNoiseSession({
+			project: job.project,
+			sessionKey: job.session_key,
+			sessionId: job.session_id ?? job.id,
+			harness: job.harness,
+		})
+	);
+}
+
+function updateSummaryArtifactStatus(job: SummaryJobRow, status: "failed" | "skipped", errorMessage?: string): void {
+	if (!tracksSessionSummaryArtifact(job)) return;
+	try {
+		const manifest = ensureCanonicalManifest({
+			agentId: job.agent_id,
+			sessionId: job.session_id ?? job.session_key ?? job.id,
+			sessionKey: job.session_key,
+			project: job.project,
+			harness: job.harness,
+			capturedAt: job.captured_at ?? job.created_at,
+			startedAt: job.started_at,
+			endedAt: job.ended_at,
+		});
+		updateManifest(manifest.path, (frontmatter) => ({
+			...frontmatter,
+			summary_path: frontmatter.summary_path ?? null,
+			summary_status: frontmatter.summary_path ? "completed" : status,
+			...(status === "failed" && errorMessage ? { summary_error: errorMessage.slice(0, 500) } : {}),
+		}));
+	} catch (error) {
+		logger.warn("summary-worker", `Failed to mark summary artifact ${status}`, {
+			error: error instanceof Error ? error.message : String(error),
+			jobId: job.id,
+			sessionKey: job.session_key,
+			project: job.project,
+		});
+	}
+}
+
+function markSummaryArtifactSkipped(job: SummaryJobRow): void {
+	updateSummaryArtifactStatus(job, "skipped");
+}
+
+function markSummaryArtifactFailed(job: SummaryJobRow, errorMessage: string): void {
+	updateSummaryArtifactStatus(job, "failed", errorMessage);
+}
+
 async function processJob(
 	accessor: DbAccessor,
 	provider: LlmProvider | null,
@@ -549,6 +603,7 @@ async function processJob(
 		shouldRunSignificanceGateForJob(commandMode, commandStageStatus) &&
 		!passesSignificanceGate(accessor, job, memoryCfg)
 	) {
+		markSummaryArtifactSkipped(job);
 		return;
 	}
 
@@ -588,6 +643,7 @@ async function processJob(
 		if (job.session_key) {
 			upsertSessionTranscript(job.session_key, job.transcript, job.harness, job.project, job.agent_id);
 		}
+		markSummaryArtifactSkipped(job);
 		return;
 	}
 
@@ -638,6 +694,7 @@ async function processJob(
 			sessionKey: job.session_key,
 			project: job.project,
 		});
+		markSummaryArtifactSkipped(job);
 	} else {
 		const saved = insertSummaryFacts(accessor, job, result.facts);
 		logger.info("summary-worker", "Inserted session facts", {
@@ -1289,7 +1346,8 @@ function writeSummaryToDAG(accessor: DbAccessor, job: SummaryJobRow, result: Llm
 /** Resolve from synthesis config — distinct from extraction so users can
  *  decouple the summary provider/model/timeout from the extraction pipeline. */
 export function recoverSummaryJobs(accessor: DbAccessor, limit: number = RECOVER_BATCH): SummaryRecoveryBatch {
-	return accessor.withWriteTx((db) => {
+	const deadRows: SummaryJobRow[] = [];
+	const result = accessor.withWriteTx((db) => {
 		const take = Number.isFinite(limit) ? Math.max(1, Math.min(RECOVER_LIMIT_MAX, Math.trunc(limit))) : RECOVER_BATCH;
 		const table = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'summary_jobs'").get() as
 			| { name: string }
@@ -1300,17 +1358,15 @@ export function recoverSummaryJobs(accessor: DbAccessor, limit: number = RECOVER
 
 		const rows = db
 			.prepare(
-				`SELECT id, attempts, max_attempts
+				`SELECT id, session_key, session_id, harness, project, transcript,
+				        agent_id, trigger, captured_at, started_at, ended_at,
+				        attempts, max_attempts, created_at
 				 FROM summary_jobs
 				 WHERE status IN ('processing', 'leased')
 				 ORDER BY created_at ASC
 				 LIMIT ?`,
 			)
-			.all(take) as Array<{
-			id: string;
-			attempts: number;
-			max_attempts: number;
-		}>;
+			.all(take) as SummaryJobRow[];
 
 		if (rows.length === 0) {
 			return { selected: 0, updated: 0 };
@@ -1330,10 +1386,15 @@ export function recoverSummaryJobs(accessor: DbAccessor, limit: number = RECOVER
 		for (const row of rows) {
 			const status = row.attempts >= row.max_attempts ? "dead" : "pending";
 			updated += countChanges(update.run(status, COMMAND_STAGE_RUNNING_RESULT, row.id));
+			if (status === "dead") deadRows.push(row);
 		}
 
 		return { selected: rows.length, updated };
 	});
+	for (const row of deadRows) {
+		markSummaryArtifactFailed(row, "summary job recovered as dead after daemon restart");
+	}
+	return result;
 }
 
 export function startSummaryWorker(accessor: DbAccessor): SummaryWorkerHandle {
@@ -1435,13 +1496,12 @@ export function startSummaryWorker(accessor: DbAccessor): SummaryWorkerHandle {
 			const errorMessage = e instanceof Error ? e.message : String(e);
 			logger.error("summary-worker", "Job failed", e instanceof Error ? e : undefined, { error: errorMessage });
 
-			// Try to mark the job as failed/pending for retry
+			// Try to mark the job as failed/pending for retry.
+			let deadJobRow: SummaryJobRow | null = null;
 			try {
 				if (jobId) {
 					accessor.withWriteTx((db) => {
-						const row = db.prepare("SELECT attempts, max_attempts FROM summary_jobs WHERE id = ?").get(jobId) as
-							| { attempts: number; max_attempts: number }
-							| undefined;
+						const row = db.prepare("SELECT * FROM summary_jobs WHERE id = ?").get(jobId) as SummaryJobRow | undefined;
 
 						if (!row) return;
 
@@ -1452,10 +1512,17 @@ export function startSummaryWorker(accessor: DbAccessor): SummaryWorkerHandle {
 							 SET status = ?, error = ?
 							 WHERE id = ? AND status = 'processing'`,
 						).run(status, errorMessage, jobId);
+
+						if (status === "dead") {
+							deadJobRow = row;
+						}
 					});
+					if (deadJobRow) {
+						markSummaryArtifactFailed(deadJobRow, errorMessage);
+					}
 				}
 			} catch {
-				// DB error during error handling — just log and move on
+				// DB or artifact error during error handling — just log and move on.
 			}
 
 			scheduleTick(terminal ? 500 : POLL_INTERVAL_MS * 3);

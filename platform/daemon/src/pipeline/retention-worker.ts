@@ -41,9 +41,9 @@ interface MemoryRow {
 	readonly [key: string]: unknown;
 }
 import { countChanges, syncVecDeleteByEmbeddingIds } from "../db-helpers";
+import { logger } from "../logger";
 import { txDecrementEntityMentions } from "./graph-transactions";
 import { invalidateTraversalCache } from "./graph-traversal";
-import { logger } from "../logger";
 
 export interface RetentionConfig {
 	/** How often to run the retention sweep (ms) */
@@ -84,6 +84,8 @@ export interface RetentionSweepResult {
 	historyPurged: number;
 	completedJobsPurged: number;
 	deadJobsPurged: number;
+	completedTranscriptCaptureJobsPurged: number;
+	deadTranscriptCaptureJobsPurged: number;
 }
 
 function purgeGraphLinks(
@@ -299,15 +301,72 @@ function purgeDeadJobs(db: WriteDb, cutoff: string, limit: number): number {
 	return countChanges(result);
 }
 
-export function runRetentionSweepOnce(accessor: DbAccessor, cfg: RetentionConfig = DEFAULT_RETENTION): RetentionSweepResult {
+function purgeTranscriptCaptureJobs(db: WriteDb, status: "completed" | "dead", cutoff: string, limit: number): number {
+	const timestampColumn = status === "completed" ? "completed_at" : "updated_at";
+	try {
+		const result = db
+			.prepare(
+				`DELETE FROM transcript_capture_jobs
+				 WHERE status = ? AND ${timestampColumn} IS NOT NULL AND ${timestampColumn} < ?
+				 LIMIT ?`,
+			)
+			.run(status, cutoff, limit);
+		return countChanges(result);
+	} catch (error) {
+		if (error instanceof Error && error.message.includes("no such table")) return 0;
+		throw error;
+	}
+}
+
+function clampNumber(value: number, fallback: number, min: number, max: number): number {
+	if (!Number.isFinite(value)) return fallback;
+	return Math.max(min, Math.min(max, Math.trunc(value)));
+}
+
+function normalizeRetentionConfig(cfg: RetentionConfig): RetentionConfig {
+	return {
+		intervalMs: clampNumber(cfg.intervalMs, DEFAULT_RETENTION.intervalMs, 60_000, 7 * 24 * 60 * 60 * 1000),
+		tombstoneRetentionMs: clampNumber(
+			cfg.tombstoneRetentionMs,
+			DEFAULT_RETENTION.tombstoneRetentionMs,
+			0,
+			3650 * 24 * 60 * 60 * 1000,
+		),
+		historyRetentionMs: clampNumber(
+			cfg.historyRetentionMs,
+			DEFAULT_RETENTION.historyRetentionMs,
+			0,
+			3650 * 24 * 60 * 60 * 1000,
+		),
+		completedJobRetentionMs: clampNumber(
+			cfg.completedJobRetentionMs,
+			DEFAULT_RETENTION.completedJobRetentionMs,
+			0,
+			3650 * 24 * 60 * 60 * 1000,
+		),
+		deadJobRetentionMs: clampNumber(
+			cfg.deadJobRetentionMs,
+			DEFAULT_RETENTION.deadJobRetentionMs,
+			0,
+			3650 * 24 * 60 * 60 * 1000,
+		),
+		batchLimit: clampNumber(cfg.batchLimit, DEFAULT_RETENTION.batchLimit, 1, 10_000),
+	};
+}
+
+export function runRetentionSweepOnce(
+	accessor: DbAccessor,
+	cfg: RetentionConfig = DEFAULT_RETENTION,
+): RetentionSweepResult {
+	const normalizedCfg = normalizeRetentionConfig(cfg);
 	const now = Date.now();
-	const tombstoneCutoff = new Date(now - cfg.tombstoneRetentionMs).toISOString();
-	const historyCutoff = new Date(now - cfg.historyRetentionMs).toISOString();
-	const completedJobCutoff = new Date(now - cfg.completedJobRetentionMs).toISOString();
-	const deadJobCutoff = new Date(now - cfg.deadJobRetentionMs).toISOString();
+	const tombstoneCutoff = new Date(now - normalizedCfg.tombstoneRetentionMs).toISOString();
+	const historyCutoff = new Date(now - normalizedCfg.historyRetentionMs).toISOString();
+	const completedJobCutoff = new Date(now - normalizedCfg.completedJobRetentionMs).toISOString();
+	const deadJobCutoff = new Date(now - normalizedCfg.deadJobRetentionMs).toISOString();
 
 	// Step 1: graph links for expired tombstones + entity decrement
-	const graphResult = accessor.withWriteTx((db) => purgeGraphLinks(db, tombstoneCutoff, cfg.batchLimit));
+	const graphResult = accessor.withWriteTx((db) => purgeGraphLinks(db, tombstoneCutoff, normalizedCfg.batchLimit));
 	const graphLinksPurged = graphResult.mentionsPurged;
 	const entitiesOrphaned = graphResult.entitiesOrphaned;
 
@@ -316,19 +375,29 @@ export function runRetentionSweepOnce(accessor: DbAccessor, cfg: RetentionConfig
 	}
 
 	// Step 2: embeddings for expired tombstones
-	const embeddingsPurged = accessor.withWriteTx((db) => purgeEmbeddings(db, tombstoneCutoff, cfg.batchLimit));
+	const embeddingsPurged = accessor.withWriteTx((db) => purgeEmbeddings(db, tombstoneCutoff, normalizedCfg.batchLimit));
 
 	// Step 3: hard-delete tombstoned rows (FTS cleanup via memories_ad trigger)
-	const tombstonesPurged = accessor.withWriteTx((db) => purgeTombstones(db, tombstoneCutoff, cfg.batchLimit));
+	const tombstonesPurged = accessor.withWriteTx((db) => purgeTombstones(db, tombstoneCutoff, normalizedCfg.batchLimit));
 
 	// Step 4: old history events
-	const historyPurged = accessor.withWriteTx((db) => purgeHistory(db, historyCutoff, cfg.batchLimit));
+	const historyPurged = accessor.withWriteTx((db) => purgeHistory(db, historyCutoff, normalizedCfg.batchLimit));
 
 	// Step 5: completed jobs
-	const completedJobsPurged = accessor.withWriteTx((db) => purgeCompletedJobs(db, completedJobCutoff, cfg.batchLimit));
+	const completedJobsPurged = accessor.withWriteTx((db) =>
+		purgeCompletedJobs(db, completedJobCutoff, normalizedCfg.batchLimit),
+	);
 
 	// Step 6: dead-letter jobs
-	const deadJobsPurged = accessor.withWriteTx((db) => purgeDeadJobs(db, deadJobCutoff, cfg.batchLimit));
+	const deadJobsPurged = accessor.withWriteTx((db) => purgeDeadJobs(db, deadJobCutoff, normalizedCfg.batchLimit));
+
+	// Step 7: transcript-capture job queue retention
+	const completedTranscriptCaptureJobsPurged = accessor.withWriteTx((db) =>
+		purgeTranscriptCaptureJobs(db, "completed", completedJobCutoff, normalizedCfg.batchLimit),
+	);
+	const deadTranscriptCaptureJobsPurged = accessor.withWriteTx((db) =>
+		purgeTranscriptCaptureJobs(db, "dead", deadJobCutoff, normalizedCfg.batchLimit),
+	);
 
 	return {
 		graphLinksPurged,
@@ -338,15 +407,18 @@ export function runRetentionSweepOnce(accessor: DbAccessor, cfg: RetentionConfig
 		historyPurged,
 		completedJobsPurged,
 		deadJobsPurged,
+		completedTranscriptCaptureJobsPurged,
+		deadTranscriptCaptureJobsPurged,
 	};
 }
 
 export function startRetentionWorker(accessor: DbAccessor, cfg: RetentionConfig = DEFAULT_RETENTION): RetentionHandle {
+	const normalizedCfg = normalizeRetentionConfig(cfg);
 	let running = true;
 	let timer: ReturnType<typeof setInterval> | null = null;
 
 	function doSweep(): RetentionSweepResult {
-		const result = runRetentionSweepOnce(accessor, cfg);
+		const result = runRetentionSweepOnce(accessor, normalizedCfg);
 		const total =
 			result.graphLinksPurged +
 			result.entitiesOrphaned +
@@ -354,7 +426,9 @@ export function startRetentionWorker(accessor: DbAccessor, cfg: RetentionConfig 
 			result.tombstonesPurged +
 			result.historyPurged +
 			result.completedJobsPurged +
-			result.deadJobsPurged;
+			result.deadJobsPurged +
+			result.completedTranscriptCaptureJobsPurged +
+			result.deadTranscriptCaptureJobsPurged;
 
 		if (total > 0) {
 			logger.info("retention", "Sweep completed", { ...result });
@@ -371,12 +445,12 @@ export function startRetentionWorker(accessor: DbAccessor, cfg: RetentionConfig 
 				error: e instanceof Error ? e.message : String(e),
 			});
 		}
-	}, cfg.intervalMs);
+	}, normalizedCfg.intervalMs);
 
 	logger.info("retention", "Worker started", {
-		intervalMs: cfg.intervalMs,
-		tombstoneDays: Math.round(cfg.tombstoneRetentionMs / 86400000),
-		historyDays: Math.round(cfg.historyRetentionMs / 86400000),
+		intervalMs: normalizedCfg.intervalMs,
+		tombstoneDays: Math.round(normalizedCfg.tombstoneRetentionMs / 86400000),
+		historyDays: Math.round(normalizedCfg.historyRetentionMs / 86400000),
 	});
 
 	return {

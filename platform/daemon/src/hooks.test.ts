@@ -1672,8 +1672,11 @@ describe("handleSessionEnd", () => {
 		expect(transcript).toContain('"schema":"signet.transcript.v1"');
 		expect(transcript).toContain('"role":"user"');
 		expect(transcript).toContain("please update packages/daemon/src/hooks.ts");
-		expect(manifest).toContain('summary_path: "memory/');
-		expect(manifest).toContain('transcript_path: "memory/test/transcripts/transcript.jsonl"');
+		expect(manifest).toContain("summary_path: null");
+		expect(manifest).toContain('summary_status: "pending"');
+		expect(manifest).toContain('transcript_path: "memory/');
+		expect(manifest).toContain('transcript_status: "completed"');
+		expect(manifest).toContain('canonical_transcript_path: "memory/test/transcripts/transcript.jsonl"');
 	});
 
 	test.serial("resumed session-end with same harness session id gets distinct immutable artifact ids", async () => {
@@ -2672,7 +2675,7 @@ describe("memory-lineage", () => {
 		expect(transcriptAfter).toBe(transcriptBefore);
 		expect(manifest).toContain('compaction_path: "memory/');
 		expect(manifest).toContain('kind: "manifest"');
-		expect(manifest).toContain("revision: 2");
+		expect(manifest).toContain("revision: 3");
 	});
 
 	test.serial("projection uses artifact frontmatter sentence and rejects low-signal frontmatter", async () => {
@@ -3562,7 +3565,8 @@ describe("summary worker tick gate", () => {
 			});
 			expect(enq.queued).toBe(true);
 			expect(typeof enq.jobId).toBe("string");
-			const jobId = enq.jobId!;
+			if (!enq.jobId) throw new Error("expected checkpoint enqueue to return a job id");
+			const jobId = enq.jobId;
 
 			const { startSummaryWorker } = await import("./pipeline/summary-worker");
 			const handle = startSummaryWorker(getDbAccessor());
@@ -3580,7 +3584,7 @@ describe("summary worker tick gate", () => {
 			expect(job).toBeDefined();
 			// Gate allowed tick through → job was leased → attempts incremented.
 			// Without LLM the processing will fail, but that doesn't matter.
-			expect(job!.attempts).toBeGreaterThan(0);
+			expect(job?.attempts).toBeGreaterThan(0);
 		},
 		15_000,
 	);

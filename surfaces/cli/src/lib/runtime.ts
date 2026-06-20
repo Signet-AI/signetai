@@ -50,6 +50,11 @@ interface DaemonInstance {
 		readonly overloadSince: string | null;
 		readonly nextTickInMs: number | null;
 	} | null;
+	readonly transcripts: {
+		readonly pending: number;
+		readonly failed: number;
+		readonly dead: number;
+	} | null;
 }
 
 interface DaemonProbeDeps {
@@ -173,9 +178,17 @@ async function getDaemonInstances(): Promise<DaemonInstance[]> {
 								nextTickInMs?: number | null;
 							};
 						};
+						transcripts?: {
+							capture?: {
+								pending?: number;
+								failed?: number;
+								dead?: number;
+							};
+						};
 					};
 					const extraction = data.providerResolution?.extraction;
 					const extractionWorker = data.pipeline?.extraction;
+					const transcripts = data.transcripts?.capture;
 					return {
 						baseUrl,
 						pid: data.pid ?? null,
@@ -209,6 +222,13 @@ async function getDaemonInstances(): Promise<DaemonInstance[]> {
 										typeof extractionWorker.nextTickInMs === "number" ? extractionWorker.nextTickInMs : null,
 								}
 							: null,
+						transcripts: transcripts
+							? {
+									pending: typeof transcripts.pending === "number" ? transcripts.pending : 0,
+									failed: typeof transcripts.failed === "number" ? transcripts.failed : 0,
+									dead: typeof transcripts.dead === "number" ? transcripts.dead : 0,
+								}
+							: null,
 					};
 				}
 			} catch {
@@ -225,6 +245,7 @@ async function getDaemonInstances(): Promise<DaemonInstance[]> {
 				networkMode: null,
 				extraction: null,
 				extractionWorker: null,
+				transcripts: null,
 			};
 		}),
 	);
@@ -336,6 +357,7 @@ export async function getDaemonStatus(): Promise<{
 	networkMode: string | null;
 	extraction: DaemonInstance["extraction"];
 	extractionWorker: DaemonInstance["extractionWorker"];
+	transcripts: DaemonInstance["transcripts"];
 }> {
 	const instances = await getDaemonInstances();
 	if (instances.length > 0) {
@@ -351,6 +373,7 @@ export async function getDaemonStatus(): Promise<{
 			networkMode: preferred.networkMode,
 			extraction: preferred.extraction,
 			extractionWorker: preferred.extractionWorker,
+			transcripts: preferred.transcripts,
 		};
 	}
 
@@ -364,6 +387,7 @@ export async function getDaemonStatus(): Promise<{
 		networkMode: null,
 		extraction: null,
 		extractionWorker: null,
+		transcripts: null,
 	};
 }
 

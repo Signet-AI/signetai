@@ -115,6 +115,7 @@ import {
 	updateSourceIndexJobProgress,
 } from "./source-index-progress";
 import { type TelemetryCollector, createTelemetryCollector } from "./telemetry";
+import { type TranscriptCaptureWorkerHandle, startTranscriptCaptureWorker } from "./transcript-capture-worker";
 
 import {
 	getSynthesisWorker as getSynthesisRenderWorker,
@@ -176,6 +177,7 @@ let shadowProcess: ChildProcess | null = null;
 let embeddingTrackerHandle: EmbeddingTrackerHandle | null = null;
 let skillReconcilerHandle: ReturnType<typeof startReconciler> | null = null;
 let schedulerHandle: { stop(): Promise<void> } | null = null;
+let transcriptCaptureWorkerHandle: TranscriptCaptureWorkerHandle | null = null;
 let structuralBackfillTimer: ReturnType<typeof setTimeout> | null = null;
 // These are mirrored into state.ts via setters for read access by
 // route modules. Only daemon.ts should assign or clear them.
@@ -385,7 +387,8 @@ async function cleanupStaleHarnessIdentity(): Promise<void> {
 				const settingsPath = join(geminiDir, "settings.json");
 				if (existsSync(settingsPath)) {
 					const parsed = JSON.parse(readFileSync(settingsPath, "utf8"));
-					const ctx = typeof parsed === "object" && parsed !== null ? (parsed as Record<string, unknown>).context : null;
+					const ctx =
+						typeof parsed === "object" && parsed !== null ? (parsed as Record<string, unknown>).context : null;
 					if (typeof ctx === "object" && ctx !== null) {
 						const fn = (ctx as Record<string, unknown>).fileName;
 						if (Array.isArray(fn) && typeof fn[0] === "string") {
@@ -410,9 +413,7 @@ async function cleanupStaleHarnessIdentity(): Promise<void> {
 			const isGenerated = lines.some(
 				(line, i) =>
 					/^#\s+AUTO-GENERATED\s+from\s+.*\s+by\s+Signet/i.test(line) ||
-					(/^#\s+Auto-generated\s+from\s+/.test(line) &&
-						i + 1 < lines.length &&
-						/^#\s+Source:\s+/.test(lines[i + 1])),
+					(/^#\s+Auto-generated\s+from\s+/.test(line) && i + 1 < lines.length && /^#\s+Source:\s+/.test(lines[i + 1])),
 			);
 			if (isGenerated) {
 				await unlinkAsync(targetPath);
@@ -985,6 +986,13 @@ async function stopPipelineRuntime(): Promise<void> {
 		schedulerHandle = null;
 	}
 
+	if (transcriptCaptureWorkerHandle) {
+		try {
+			transcriptCaptureWorkerHandle.stop();
+		} catch {}
+		transcriptCaptureWorkerHandle = null;
+	}
+
 	try {
 		await stopPipeline();
 	} catch {}
@@ -1080,6 +1088,9 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 	});
 
 	reloadAuthState(AGENTS_DIR);
+	if (!transcriptCaptureWorkerHandle) {
+		transcriptCaptureWorkerHandle = startTranscriptCaptureWorker(getDbAccessor(), AGENTS_DIR);
+	}
 
 	const router = getOrCreateInferenceRouter(AGENTS_DIR);
 	const defaultAgentId = resolveDaemonAgentId();
@@ -1611,6 +1622,9 @@ async function main() {
 	initCheckpointFlush(getDbAccessor());
 
 	schedulerHandle = startSchedulerWorker(getDbAccessor());
+	if (!transcriptCaptureWorkerHandle) {
+		transcriptCaptureWorkerHandle = startTranscriptCaptureWorker(getDbAccessor(), AGENTS_DIR);
+	}
 
 	checkpointPruneTimer = setInterval(() => {
 		try {

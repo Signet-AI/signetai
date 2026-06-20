@@ -29,6 +29,17 @@ describe("transcript normalization", () => {
 		expect(normalizeJsonConversationTranscript(raw)).toBe("User: question\nAssistant: answer");
 	});
 
+	it("normalizes Pi-style role aliases without turning unknown roles into users", () => {
+		const raw = [
+			JSON.stringify({ type: "message", message: { role: "human", parts: [{ text: "hello" }] } }),
+			JSON.stringify({ type: "message", message: { role: "agent", content: [{ input_text: "hi" }] } }),
+			JSON.stringify({ type: "message", message: { role: "mystery", content: "do not label as user" } }),
+			JSON.stringify({ type: "message", message: { role: "toolResult", content: "tool output" } }),
+		].join("\n");
+
+		expect(normalizeJsonConversationTranscript(raw)).toBe("User: hello\nAssistant: hi\nTool: tool output");
+	});
+
 	it("reports long JSON-line transcripts with no conversation turns", () => {
 		let warning: { harness: string; rawChars: number } | undefined;
 		const raw = Array.from({ length: 80 }, () => JSON.stringify({ type: "tool_call", payload: "x" })).join("\n");

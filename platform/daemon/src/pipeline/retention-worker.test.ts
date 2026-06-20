@@ -1,8 +1,8 @@
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { runMigrations } from "../../../core/src/migrations";
-import type { DbAccessor, WriteDb, ReadDb } from "../db-accessor";
-import { startRetentionWorker, type RetentionConfig } from "./retention-worker";
+import type { DbAccessor, ReadDb, WriteDb } from "../db-accessor";
+import { type RetentionConfig, startRetentionWorker } from "./retention-worker";
 
 function makeAccessor(db: Database): DbAccessor {
 	return {
@@ -158,6 +158,33 @@ describe("retention worker", () => {
 		expect(db.prepare("SELECT id FROM memory_jobs WHERE id = ?").get("job-old")).toBeNull();
 		expect(db.prepare("SELECT id FROM memory_jobs WHERE id = ?").get("job-dead")).toBeNull();
 		expect(db.prepare("SELECT id FROM memory_jobs WHERE id = ?").get("job-dead-recent")).toBeTruthy();
+	});
+
+	it("purges old transcript capture jobs past retention windows", () => {
+		const insertCompleted = db.prepare(
+			`INSERT INTO transcript_capture_jobs (
+				id, agent_id, harness, session_id, transcript, captured_at, status, attempts, max_attempts,
+				created_at, updated_at, completed_at
+			) VALUES (?, 'default', 'test', ?, 'User: hi', ?, 'completed', 1, 5, ?, ?, ?)`,
+		);
+		insertCompleted.run("tc-recent", "tc-recent", daysAgo(5), daysAgo(5), daysAgo(5), daysAgo(5));
+		insertCompleted.run("tc-old", "tc-old", daysAgo(20), daysAgo(20), daysAgo(20), daysAgo(20));
+		db.prepare(
+			`INSERT INTO transcript_capture_jobs (
+				id, agent_id, harness, session_id, transcript, captured_at, status, attempts, max_attempts,
+				created_at, updated_at
+			) VALUES (?, 'default', 'test', ?, 'User: hi', ?, 'dead', 5, 5, ?, ?)`,
+		).run("tc-dead", "tc-dead", daysAgo(35), daysAgo(35), daysAgo(35));
+
+		const handle = startRetentionWorker(accessor, testRetentionConfig());
+		const result = handle.sweep();
+		handle.stop();
+
+		expect(result.completedTranscriptCaptureJobsPurged).toBe(1);
+		expect(result.deadTranscriptCaptureJobsPurged).toBe(1);
+		expect(db.prepare("SELECT id FROM transcript_capture_jobs WHERE id = ?").get("tc-recent")).toBeTruthy();
+		expect(db.prepare("SELECT id FROM transcript_capture_jobs WHERE id = ?").get("tc-old")).toBeNull();
+		expect(db.prepare("SELECT id FROM transcript_capture_jobs WHERE id = ?").get("tc-dead")).toBeNull();
 	});
 
 	it("purges graph links before tombstones and cleans orphaned entities", () => {

@@ -1046,10 +1046,8 @@ function ensureManifestRecord(seed: {
 	readonly sessionToken: string;
 }): ManifestState {
 	const path = artifactPath(seed.capturedAt, seed.sessionToken, "manifest");
-	const summaryPath = relativeArtifactPath(seed.capturedAt, seed.sessionToken, "summary");
-	const transcriptPath = seed.harness
-		? canonicalTranscriptRelativePath(seed.harness)
-		: relativeArtifactPath(seed.capturedAt, seed.sessionToken, "transcript");
+	const transcriptPath = relativeArtifactPath(seed.capturedAt, seed.sessionToken, "transcript");
+	const canonicalPath = seed.harness ? canonicalTranscriptRelativePath(seed.harness) : null;
 	const existing = loadManifest(path);
 	if (existing) return existing;
 
@@ -1063,8 +1061,11 @@ function ensureManifestRecord(seed: {
 		captured_at: seed.capturedAt,
 		started_at: seed.startedAt,
 		ended_at: seed.endedAt,
-		summary_path: summaryPath,
+		summary_path: null,
+		summary_status: "not_requested",
 		transcript_path: transcriptPath,
+		transcript_status: "pending",
+		canonical_transcript_path: canonicalPath,
 		compaction_path: null,
 		memory_md_refs: [],
 		updated_at: seed.capturedAt,
@@ -1171,25 +1172,52 @@ export function ensureCanonicalManifest(seed: {
 	});
 }
 
+function withManifestLock<T>(path: string, fn: () => T): T {
+	const lockPath = `${path}.lock`;
+	const startedAt = Date.now();
+	while (true) {
+		try {
+			mkdirSync(lockPath);
+			break;
+		} catch (error) {
+			try {
+				const ageMs = Date.now() - statSync(lockPath).mtimeMs;
+				if (ageMs > 30_000) rmSync(lockPath, { recursive: true, force: true });
+			} catch {}
+			if (Date.now() - startedAt > 5_000) {
+				throw new Error(`Timed out waiting for manifest lock: ${path}`, { cause: error });
+			}
+			Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+		}
+	}
+	try {
+		return fn();
+	} finally {
+		rmSync(lockPath, { recursive: true, force: true });
+	}
+}
+
 export function updateManifest(
 	path: string,
 	mutate: (frontmatter: Record<string, unknown>) => Record<string, unknown>,
 ): ManifestState {
-	const current = loadManifest(path);
-	if (!current) {
-		throw new Error(`Manifest not found: ${path}`);
-	}
-	const next = mutate({ ...current.frontmatter });
-	const revision = typeof next.revision === "number" ? next.revision : current.revision;
-	next.revision = revision + 1;
-	next.updated_at = new Date().toISOString();
-	if (!("content_sha256" in next)) {
-		next.content_sha256 = hashNormalizedBody(current.body);
-	}
-	if (!("hash_scope" in next)) {
-		next.hash_scope = HASH_SCOPE;
-	}
-	return saveManifest(path, next, current.body);
+	return withManifestLock(path, () => {
+		const current = loadManifest(path);
+		if (!current) {
+			throw new Error(`Manifest not found: ${path}`);
+		}
+		const next = mutate({ ...current.frontmatter });
+		const revision = typeof next.revision === "number" ? next.revision : current.revision;
+		next.revision = revision + 1;
+		next.updated_at = new Date().toISOString();
+		if (!("content_sha256" in next)) {
+			next.content_sha256 = hashNormalizedBody(current.body);
+		}
+		if (!("hash_scope" in next)) {
+			next.hash_scope = HASH_SCOPE;
+		}
+		return saveManifest(path, next, current.body);
+	});
 }
 
 function relativePath(path: string): string {
@@ -1206,6 +1234,7 @@ export function writeTranscriptArtifact(params: {
 	readonly startedAt: string | null;
 	readonly endedAt: string | null;
 	readonly transcript: string;
+	readonly summaryStatus?: "pending" | "skipped" | "not_requested";
 }): { readonly manifestPath: string; readonly transcriptPath: string } {
 	const manifest = ensureCanonicalManifest(params);
 	const sessionToken = deriveSessionToken(params.agentId, params.sessionId);
@@ -1233,6 +1262,24 @@ export function writeTranscriptArtifact(params: {
 	});
 	const parsed = parseFrontmatterDocument(readFileSync(fullPath, "utf8"));
 	upsertArtifactRow(fullPath, parsed.frontmatter, normalizeMarkdownBody(parsed.body));
+	updateManifest(manifest.path, (frontmatter) => {
+		const existingSummaryStatus = manifestValue(frontmatter, "summary_status");
+		const terminalSummaryStatus =
+			existingSummaryStatus === "completed" ||
+			existingSummaryStatus === "failed" ||
+			existingSummaryStatus === "skipped";
+		return {
+			...frontmatter,
+			transcript_path: relativePath(fullPath),
+			transcript_status: "completed",
+			canonical_transcript_path: params.harness ? canonicalTranscriptRelativePath(params.harness) : null,
+			summary_status: frontmatter.summary_path
+				? "completed"
+				: terminalSummaryStatus
+					? existingSummaryStatus
+					: (params.summaryStatus ?? frontmatter.summary_status ?? "not_requested"),
+		};
+	});
 	return {
 		manifestPath: relativePath(manifest.path),
 		transcriptPath: relativePath(fullPath),
@@ -1274,6 +1321,11 @@ export async function writeSummaryArtifact(params: {
 	});
 	const parsed = parseFrontmatterDocument(readFileSync(fullPath, "utf8"));
 	upsertArtifactRow(fullPath, parsed.frontmatter, normalizeMarkdownBody(parsed.body));
+	updateManifest(manifest.path, (frontmatter) => ({
+		...frontmatter,
+		summary_path: relativePath(fullPath),
+		summary_status: "completed",
+	}));
 	return {
 		manifestPath: relativePath(manifest.path),
 		summaryPath: relativePath(fullPath),

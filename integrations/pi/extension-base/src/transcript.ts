@@ -13,22 +13,15 @@ function normalizeWhitespace(input: string): string {
 	return input.replace(/\s*\r?\n\s*/g, " ").trim();
 }
 
-function roleLabel(role: string | undefined): string {
-	switch (role) {
-		case "assistant":
-			return "Assistant";
-		case "system":
-			return "System";
-		case "custom":
-			return "Custom";
-		case "tool":
-		case "toolResult":
-		case "bashExecution":
-		case "pythonExecution":
-			return "Tool";
-		default:
-			return "User";
+function roleLabel(role: string | undefined): string | undefined {
+	const normalized = role?.trim().toLowerCase();
+	if (!normalized || ["user", "human", "client"].includes(normalized)) return "User";
+	if (["assistant", "agent", "model", "ai"].includes(normalized)) return "Assistant";
+	if (["system", "developer"].includes(normalized)) return "System";
+	if (["custom", "tool", "toolresult", "tool_result", "bashexecution", "pythonexecution"].includes(normalized)) {
+		return normalized === "custom" ? "Custom" : "Tool";
 	}
+	return undefined;
 }
 
 function extractTextContent(value: unknown): string | undefined {
@@ -54,8 +47,9 @@ function extractTextContent(value: unknown): string | undefined {
 
 function buildMessageLine(role: string | undefined, content: unknown): string | undefined {
 	const text = extractTextContent(content);
-	if (!text) return undefined;
-	return `${roleLabel(role)}: ${text}`;
+	const label = roleLabel(role);
+	if (!text || !label) return undefined;
+	return `${label}: ${text}`;
 }
 
 function entryToTranscriptLine(entry: BaseSessionEntry, excludeCustomTypes: ReadonlySet<string>): string | undefined {

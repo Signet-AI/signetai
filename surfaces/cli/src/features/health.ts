@@ -40,6 +40,11 @@ interface DaemonStatus {
 		readonly overloadSince: string | null;
 		readonly nextTickInMs: number | null;
 	} | null;
+	readonly transcripts: {
+		readonly pending: number;
+		readonly failed: number;
+		readonly dead: number;
+	} | null;
 }
 
 interface DbReport {
@@ -193,6 +198,20 @@ export async function showStatus(options: { path?: string; json?: boolean }, dep
 		);
 		for (const line of daemonAccessLines(deps.defaultPort, report.daemon)) {
 			console.log(chalk.dim(`    ${line}`));
+		}
+		const transcripts = report.daemon.transcripts;
+		if (transcripts) {
+			const unhealthy = transcripts.failed > 0 || transcripts.dead > 0;
+			const pending = transcripts.pending > 0;
+			const icon = unhealthy ? chalk.red("✗") : pending ? chalk.yellow("◐") : chalk.green("✓");
+			const label = unhealthy
+				? chalk.red("needs attention")
+				: pending
+					? chalk.yellow("pending")
+					: chalk.green("healthy");
+			console.log(
+				`    ${icon} Transcript capture ${label}${transcripts.pending > 0 ? chalk.dim(` (${transcripts.pending} pending)`) : ""}${transcripts.failed + transcripts.dead > 0 ? chalk.dim(` (${transcripts.failed + transcripts.dead} failed/dead)`) : ""}`,
+			);
 		}
 		const extractionNotice = getExtractionStatusNotice(report.daemon);
 		if (extractionNotice) {

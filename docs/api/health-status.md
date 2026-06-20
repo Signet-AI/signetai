@@ -113,6 +113,9 @@ silent fallback or hard-blocked extraction after boot.
   "activeSessions": 1,
   "bypassedSessions": 1,
   "agentCreatedAt": "2026-02-21T10:00:00.000Z",
+  "transcripts": {
+    "capture": { "pending": 0, "processing": 0, "failed": 0, "dead": 0 }
+  },
   "health": { "score": 0.97, "status": "healthy" },
   "update": {
     "currentVersion": "0.124.5",
@@ -140,6 +143,8 @@ states when the configured extraction provider is unavailable or routed to a
 fallback target.
 When `pipeline.extraction.overloaded` is `true`, the extraction worker is
 intentionally backing off for `overloadBackoffMs` between polls.
+`transcripts.capture` exposes compact durable transcript-capture queue counts;
+use `GET /api/diagnostics/transcripts` for detailed artifact/audit diagnostics.
 Use `GET /api/inference/status` for the shared inference control plane status.
 
 

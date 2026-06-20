@@ -87,24 +87,30 @@ function normalizeJsonConversationRecord(record: Record<string, unknown>): strin
 
 	if (isRecord(record.message)) {
 		const msg = record.message;
-		const role = extractString(msg, ["role", "speaker"]);
+		const role = extractString(msg, ["role", "speaker", "author"]);
 		const text = extractMessageText(msg);
-		if (role && text) {
-			const lower = role.toLowerCase();
-			if (lower === "user") return `User: ${text}`;
-			if (lower === "assistant") return `Assistant: ${text}`;
-		}
+		const label = normalizeRoleLabel(role);
+		if (label && text) return `${label}: ${text}`;
 	}
 
-	const role = extractString(record, ["role", "speaker"]);
+	const role = extractString(record, ["role", "speaker", "author"]);
 	if (role) {
-		const lowerRole = role.toLowerCase();
 		const text = extractMessageText(record);
-		if (lowerRole === "user" && text) return `User: ${text}`;
-		if (lowerRole === "assistant" && text) return `Assistant: ${text}`;
+		const label = normalizeRoleLabel(role);
+		if (label && text) return `${label}: ${text}`;
 	}
 
 	return "";
+}
+
+function normalizeRoleLabel(role: string): "User" | "Assistant" | "System" | "Tool" | null {
+	const lower = role.trim().toLowerCase();
+	if (["user", "human", "client"].includes(lower)) return "User";
+	if (["assistant", "agent", "model", "ai"].includes(lower)) return "Assistant";
+	if (["system", "developer"].includes(lower)) return "System";
+	if (["tool", "toolresult", "tool_result", "bashexecution", "pythonexecution", "custom"].includes(lower))
+		return "Tool";
+	return null;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -123,15 +129,16 @@ function extractString(record: Record<string, unknown>, keys: readonly string[])
 }
 
 function extractMessageText(record: Record<string, unknown>): string {
-	const direct = extractString(record, ["content", "text", "message"]);
+	const direct = extractString(record, ["content", "text", "message", "output"]);
 	if (direct) return direct;
 
-	const content = record.content;
-	if (!Array.isArray(content)) return "";
+	const content = Array.isArray(record.content) ? record.content : Array.isArray(record.parts) ? record.parts : null;
+	if (!content) return "";
 
 	const parts = content.flatMap((item) => {
-		if (!isRecord(item) || item.type !== "text") return [];
-		const text = extractString(item, ["text", "content"]);
+		if (typeof item === "string") return [item.trim().replace(/[\r\n]+/g, " ")].filter(Boolean);
+		if (!isRecord(item)) return [];
+		const text = extractString(item, ["text", "input_text", "content", "message"]);
 		return text ? [text] : [];
 	});
 

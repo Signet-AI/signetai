@@ -26,6 +26,8 @@ import {
 } from "../pipeline/model-registry.js";
 import { getSecret } from "../secrets.js";
 import { activeSessionCount, getBypassedSessionKeys } from "../session-tracker.js";
+import { getTranscriptCaptureStatus } from "../transcript-capture-worker.js";
+import { getTranscriptHealthReport } from "../transcript-health.js";
 import {
 	AGENTS_DIR,
 	BIND_HOST,
@@ -55,7 +57,7 @@ import {
 	setPipelineTransition,
 	telemetryRef,
 } from "./state.js";
-import { STATUS_CACHE_TTL, cachedEmbeddingStatus, statusCacheTime } from "./utils.js";
+import { STATUS_CACHE_TTL, cachedEmbeddingStatus, resolveScopedAgentId, statusCacheTime } from "./utils.js";
 
 const pipelineAdminGuard = async (c: Context, next: () => Promise<void>): Promise<Response | undefined> => {
 	const permDenied = await requirePermission("admin", authConfig)(c, () => Promise.resolve());
@@ -150,6 +152,16 @@ export function registerPipelineRoutes(app: Hono): void {
 	app.use("/api/diagnostics/*", async (c, next) => {
 		return requirePermission("diagnostics", authConfig)(c, next);
 	});
+	app.get("/api/diagnostics/transcripts", (c) => {
+		const requestedAgentId = c.req.query("agentId") ?? c.req.query("agent_id") ?? c.req.header("x-signet-agent-id");
+		const scopedAgent = resolveScopedAgentId(c, requestedAgentId, resolveDaemonAgentId());
+		if (scopedAgent.error) {
+			return c.json({ error: scopedAgent.error }, 403);
+		}
+		const agentId = resolveAgentId({ agentId: scopedAgent.agentId });
+		return c.json(getTranscriptHealthReport(getDbAccessor(), AGENTS_DIR, agentId));
+	});
+
 	app.get("/api/status", (c) => {
 		const config = loadMemoryConfig(AGENTS_DIR);
 		const workerStatus = getPipelineWorkerStatus();
@@ -184,6 +196,26 @@ export function registerPipelineRoutes(app: Hono): void {
 			/* ignore parse errors */
 		}
 
+		let transcriptCapture:
+			| {
+					pending: number;
+					failed: number;
+					dead: number;
+					processing: number;
+			  }
+			| undefined;
+		try {
+			const capture = getTranscriptCaptureStatus(getDbAccessor(), resolveDaemonAgentId());
+			transcriptCapture = {
+				pending: capture.pending,
+				failed: capture.failed,
+				dead: capture.dead,
+				processing: capture.processing,
+			};
+		} catch {
+			// DB may still be initializing; omit compact transcript health.
+		}
+
 		return c.json({
 			status: "running",
 			version: CURRENT_VERSION,
@@ -216,6 +248,7 @@ export function registerPipelineRoutes(app: Hono): void {
 			},
 			activeSessions: activeSessionCount(),
 			bypassedSessions: getBypassedSessionKeys().size,
+			...(transcriptCapture ? { transcripts: { capture: transcriptCapture } } : {}),
 			agentCreatedAt,
 			...(health ? { health } : {}),
 			update: {

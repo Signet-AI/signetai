@@ -1084,6 +1084,10 @@ async fn main() -> anyhow::Result<()> {
             axum::routing::post(routes::diagnostics::openclaw_heartbeat),
         )
         .route(
+            "/api/diagnostics/transcripts",
+            get(routes::diagnostics::transcript_diagnostics),
+        )
+        .route(
             "/api/telemetry/memory-search",
             get(routes::telemetry::memory_search),
         )

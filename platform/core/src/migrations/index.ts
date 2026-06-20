@@ -84,6 +84,7 @@ import { up as memoryArtifactSourceProvenance } from "./075-memory-artifact-sour
 import { up as temporalEdges } from "./076-temporal-edges";
 import { up as entityAliases } from "./077-entity-aliases";
 import { up as apiKeys } from "./078-api-keys";
+import { up as transcriptCaptureJobs } from "./079-transcript-capture-jobs";
 
 // -- Public interface consumed by Database.init() --
 
@@ -742,6 +743,14 @@ export const MIGRATIONS: readonly Migration[] = [
 		up: apiKeys,
 		artifacts: {
 			tables: ["api_keys"],
+		},
+	},
+	{
+		version: 79,
+		name: "transcript-capture-jobs",
+		up: transcriptCaptureJobs,
+		artifacts: {
+			tables: ["transcript_capture_jobs"],
 		},
 	},
 ];
