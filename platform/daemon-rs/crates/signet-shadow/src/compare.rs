@@ -1195,9 +1195,27 @@ fn log_safe_field(path: &str) -> String {
         } else {
             out.push_str(name);
         }
-        out.push_str(rest);
+        // Defensive: only preserve generated array suffixes ([12], [*]). The
+        // path builder only ever emits numeric indices, but if a future change
+        // ever introduces a non-numeric bracket suffix (e.g. a bracketed object
+        // key), fingerprint it rather than leak it verbatim.
+        if !rest.is_empty() && !bracket_suffix_is_safe(rest) {
+            let fp = redacted_fingerprint(&serde_json::Value::String(rest.to_string()));
+            out.push_str(&fp.to_string());
+        } else {
+            out.push_str(rest);
+        }
     }
     out
+}
+
+/// True when a bracket suffix consists solely of safe array-index segments
+/// like `[3]`, `[*]`, or `[0][1]` — never arbitrary (secret-bearing) text.
+fn bracket_suffix_is_safe(suffix: &str) -> bool {
+    suffix.split('[').filter(|s| !s.is_empty()).all(|seg| {
+        let inner = seg.strip_suffix(']').unwrap_or(seg);
+        inner == "*" || inner.chars().all(|c| c.is_ascii_digit())
+    })
 }
 
 fn redact_response_value(value: &serde_json::Value, path: &str) -> String {
@@ -2384,6 +2402,22 @@ mod tests {
         let divs = rules.compare("POST /api/auth/token", &primary, &shadow);
         assert!(!divs.is_empty());
         assert_divergences_redacted(&divs, &[key_secret]);
+    }
+
+    #[test]
+    fn log_safe_field_redacts_non_numeric_bracket_suffixes() {
+        // Defensive: if a path ever contains a non-numeric bracket suffix
+        // (e.g. a bracketed object key like id[sk-live-secret]), fingerprint it
+        // rather than leak it. Numeric indices ([12], [*], [0][1]) on allowlisted
+        // field names pass through.
+        assert!(log_safe_field("id[0]").contains("id[0]"));
+        assert!(log_safe_field("id[3]").contains("[3]"));
+        assert!(log_safe_field("id[*]").contains("id[*]"));
+        let leaked = log_safe_field("id[sk-live-secret]");
+        assert!(!leaked.contains("sk-live-secret"));
+        assert!(leaked.contains("[REDACTED sha64="));
+        let leaked = log_safe_field("id[vault-key-xyz]");
+        assert!(!leaked.contains("vault-key-xyz"));
     }
 
     #[test]
