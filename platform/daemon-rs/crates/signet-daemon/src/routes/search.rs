@@ -271,7 +271,9 @@ pub async fn recall(
         }
     }
 
-    let limit = body.limit.unwrap_or(10);
+    // Clamp recall limit to TS normalizeRecallLimit bounds (1..50) to avoid
+    // oversized hydration/fallback work on large limits.
+    let limit = body.limit.unwrap_or(10).clamp(1, 50);
     let search_cfg = state.config.manifest.search.clone().unwrap_or_default();
     let alpha = search_cfg.alpha;
     let min_score = search_cfg.min_score;
