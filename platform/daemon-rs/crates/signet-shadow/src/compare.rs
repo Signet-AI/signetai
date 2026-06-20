@@ -1244,9 +1244,7 @@ fn redact_response_value(value: &serde_json::Value, path: &str) -> String {
         return redacted_fingerprint(value).to_string();
     }
     match value {
-        serde_json::Value::Object(_) | serde_json::Value::Array(_) => {
-            redact_response_tree(value)
-        }
+        serde_json::Value::Object(_) | serde_json::Value::Array(_) => redact_response_tree(value),
         _ => truncate_json(value),
     }
 }
