@@ -284,7 +284,20 @@ assertion, 5-run median per bench-spec).
 
 ## Phase 5 status (final verification + landing — pending user go)
 
-Remaining before landing:
-- Final full-workspace verification sweep + autoreview on the complete diff.
-- Landing PR review on explicit user go (long-lived branch, never auto-merge).
+Final holistic autoreview completed. Found + closed:
+- recall limit not clamped → TS normalizeRecallLimit 1..50.
+- **CRITICAL:** global auth middleware not layered → /api/os/* + conditional-
+  search routes were public in team/hybrid. Fixed via global auth middleware
+  (Option A, like TS) with TS open-path allowlist + Recall permission +
+  scoped-agent enforcement on recall (agent_id from scoped auth, not body).
+- IPv4-mapped loopback (::ffff:127.0.0.1) handled in is_loopback_ip.
+- Verified admin-scope-bypass MATCHES TS (auth.test.ts:272 'admin role
+  bypasses scope restrictions') — not a bug.
+
+Final verification sweep: cargo build --workspace green; fmt clean; ~519 tests
+passing across the workspace + 121 contract_replay --ignored + 166 documented
+gap/skip markers; all 7 perf SLOs PASS; shadow redaction GATE CLOSED.
+
+Remaining: landing PR review on EXPLICIT user go (long-lived branch, never
+auto-merge).
 - Landing PR review on explicit user go (long-lived branch, never auto-merge).
