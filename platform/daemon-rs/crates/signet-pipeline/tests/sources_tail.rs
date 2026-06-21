@@ -13,6 +13,9 @@ use signet_pipeline::embedding_tracker::{
     EmbeddingFailureMap, StaleEmbeddingRow, compute_embedding_retry_backoff_ms,
     process_embedding_cycle,
 };
+use signet_pipeline::memory_ingest_filter::{
+    is_artifact_filename, is_memory_backup_filename, should_exclude_memory_ingest_filename,
+};
 use signet_pipeline::memory_lineage::upsert_thread_head;
 use signet_pipeline::native_memory_sources::{
     clear_native_memory_fingerprint_cache, codex_native_memory_source, index_native_memory_file,
@@ -511,12 +514,31 @@ fn native_memory_sources_index_reject_dedupe_and_purge_codex_artifacts() {
     fs::remove_dir_all(dir).ok();
 }
 
-// platform/daemon/src/source-index-progress.test.ts:10 covers the TS delayed
-// source-index runner completed-job guard. Rust source_index_job/progress route
-// helpers are private daemon route details, not exposed to signet-pipeline.
+// Port of platform/daemon/src/source-index-progress.test.ts:10-19. The Rust
+// helper must not reopen a completed source-index job when a duplicate delayed
+// runner fires.
 #[test]
-#[ignore = "gap: Rust source index progress helpers are private/not exposed"]
-fn gap_source_index_progress_private() {}
+fn source_index_progress_duplicate_runner_keeps_completed_job_closed() {
+    use signet_pipeline::source_index_progress::{
+        SourceIndexJobStatus, begin_source_index_job, clear_source_index_progress_for_tests,
+        complete_source_index_job, get_source_index_job, mark_source_index_job_running,
+    };
+
+    clear_source_index_progress_for_tests();
+    let job = begin_source_index_job("tail-source-1");
+    assert_eq!(
+        mark_source_index_job_running("tail-source-1", &job.id).map(|job| job.status),
+        Some(SourceIndexJobStatus::Running)
+    );
+    complete_source_index_job("tail-source-1", &job.id, 3);
+
+    assert!(mark_source_index_job_running("tail-source-1", &job.id).is_none());
+    assert_eq!(
+        get_source_index_job("tail-source-1").map(|job| job.status),
+        Some(SourceIndexJobStatus::Complete)
+    );
+    clear_source_index_progress_for_tests();
+}
 
 // platform/daemon/src/discord-source-fetch.test.ts:15 and
 // discord-source-provider.test.ts:15 depend on live Discord REST/gateway/cache
@@ -533,12 +555,42 @@ fn skip_discord_live_rest_sources() {}
 #[ignore = "skip: live GitHub API source provider has no Rust equivalent"]
 fn skip_github_live_api_sources() {}
 
-// platform/daemon/src/memory-ingest-filter.test.ts:12 covers watcher filename
-// exclusion matchers. The relevant daemon-rs watcher helpers are private to
-// signet-daemon and not available from signet-pipeline integration tests.
+// Port of platform/daemon/src/memory-ingest-filter.test.ts:12-66. Generated
+// backup/artifact names are excluded, while user-authored memory filenames are
+// left ingestable.
 #[test]
-#[ignore = "gap: Rust watcher ingest filename matcher is private/not exposed"]
-fn gap_memory_ingest_filter_private() {}
+fn memory_ingest_filter_matches_generated_artifact_filename_contract() {
+    for filename in [
+        "MEMORY.backup-2026-03-31T21-17-05.md",
+        "MEMORY.bak-2026-03-31T21-17-05.md",
+        "MEMORY.pre-2026-03-31T21-17-05.md",
+    ] {
+        assert!(is_memory_backup_filename(filename));
+        assert!(should_exclude_memory_ingest_filename(filename));
+    }
+
+    for filename in [
+        "2026-03-01T00-09-52.500Z--eej6phr2ekkn46eo--summary.md",
+        "2026-03-01T00-09-52.500Z--o4ebayj7w4fs3grh--transcript.md",
+        "2026-03-25T08-06-26.000Z--abc12345--compaction.md",
+        "2026-03-01T00-09-53.500Z--o4ebayj7w4fs3grh--manifest.md",
+    ] {
+        assert!(is_artifact_filename(filename));
+        assert!(should_exclude_memory_ingest_filename(filename));
+    }
+
+    for filename in [
+        "MEMORY.md",
+        "2026-01-20.md",
+        "2026-02-10-signet.md",
+        "2026-02-22-dashboard-umap-projection-migration.md",
+        "2026-03-01-phase-2-pre-compaction-capture-implementation-plan.md",
+    ] {
+        assert!(!is_memory_backup_filename(filename));
+        assert!(!is_artifact_filename(filename));
+        assert!(!should_exclude_memory_ingest_filename(filename));
+    }
+}
 
 // platform/daemon/src/temporal-expand.test.ts:13 covers expandTemporalNode.
 // Rust has lower-level temporal candidate search in signet-core, but no
