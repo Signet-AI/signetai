@@ -23,6 +23,8 @@ impl<'a> Default for TemporalExpandOptions<'a> {
     }
 }
 
+pub type TemporalExpansionConfig<'a> = TemporalExpandOptions<'a>;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TemporalExpandNode {
     pub id: String,
