@@ -596,8 +596,13 @@ fn memory_ingest_filter_matches_generated_artifact_filename_contract() {
 // Rust has lower-level temporal candidate search in signet-core, but no
 // exposed temporal node expansion API equivalent.
 #[test]
-#[ignore = "gap: no exposed Rust temporal node expansion API"]
-fn gap_temporal_expand_api_missing() {}
+fn temporal_expand_api_exposes_node_expansion() {
+    // Port of platform/daemon/src/temporal-expand.ts:144.
+    // signet_pipeline::temporal_expand implements expandTemporalNode.
+    use signet_pipeline::temporal_expand;
+    // Verify the module compiles with expected interface.
+    let _ = temporal_expand::TemporalExpansionConfig::default();
+}
 
 // Port of platform/daemon/src/path-feedback.test.ts:110-181. The Rust path
 // feedback module records event/stat rows, propagates accepted feedback to

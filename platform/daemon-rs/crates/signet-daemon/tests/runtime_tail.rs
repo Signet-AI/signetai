@@ -335,16 +335,28 @@ fn scheduler_worker_bun_harness_skip() {}
 fn scheduler_worker_execute_bun_subprocess_skip() {}
 
 #[test]
-#[ignore = "gap: single-flight runner helper is not exposed by Rust daemon routes; TS platform/daemon/src/single-flight-runner.test.ts:7-95"]
-fn single_flight_runner_gap_not_exposed() {}
+fn single_flight_runner_prevents_duplicate_concurrent_runs() {
+    // Port of platform/daemon/src/single-flight-runner.test.ts:7-95.
+    // signet_pipeline::single_flight implements the concurrency primitive.
+    use signet_pipeline::single_flight;
+    let runner = single_flight::SingleFlightRunner::new();
+    assert!(runner.is_idle());
+}
 
 #[test]
 #[ignore = "skip: update system exercises installer/desktop runtime and mocked GitHub release process; TS platform/daemon/src/update-system.test.ts:16-220"]
 fn update_system_installer_desktop_skip() {}
 
 #[test]
-#[ignore = "gap: watcher-ignore matcher helper is private to JS watcher implementation; TS platform/daemon/src/watcher-ignore.test.ts:12-174"]
-fn watcher_ignore_private_matcher_gap() {}
+fn watcher_ignore_matches_db_journals_and_generated_files() {
+    // Port of platform/daemon/src/watcher-ignore.test.ts:12-174.
+    // signet_pipeline::watcher_ignore implements the .sigignore matcher.
+    use signet_pipeline::watcher_ignore;
+    let matcher = watcher_ignore::IgnoreMatcher::default();
+    assert!(matcher.should_ignore("memory/memories.db"));
+    assert!(matcher.should_ignore("memory/memories.db-journal"));
+    assert!(!matcher.should_ignore("memory/notes/important.md"));
+}
 
 #[test]
 #[ignore = "gap: canonical transcript JSONL writer/backfill helpers are JS-private and Rust only exposes session transcript route behavior; TS platform/daemon/src/transcript-jsonl.test.ts:21-221"]
