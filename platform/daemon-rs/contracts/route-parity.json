@@ -8,8 +8,8 @@
 		"deprecated-remove-from-ts-too": "Route is intentionally unsupported and must be removed or hidden from both daemons."
 	},
 	"summary": {
-		"native-rust-replay-proven": 316,
-		"mounted-shallow": 3
+		"native-rust-replay-proven": 315,
+		"mounted-shallow": 4
 	},
 	"routes": [
 		{
@@ -217,9 +217,9 @@
 			"path": "/api/auth/sso/start",
 			"file": "platform/daemon/src/routes/auth-routes.ts",
 			"line": 129,
-			"status": "mounted-shallow",
+			"status": "native-rust-replay-proven",
 			"rustMounted": true,
-			"contractReplay": false,
+			"contractReplay": true,
 			"parityRule": false
 		},
 		{
@@ -250,7 +250,7 @@
 			"status": "native-rust-replay-proven",
 			"rustMounted": true,
 			"contractReplay": true,
-			"parityRule": false
+			"parityRule": true
 		},
 		{
 			"method": "GET",
@@ -1830,7 +1830,7 @@
 			"status": "native-rust-replay-proven",
 			"rustMounted": true,
 			"contractReplay": true,
-			"parityRule": false
+			"parityRule": true
 		},
 		{
 			"method": "POST",
@@ -1927,9 +1927,9 @@
 			"path": "/api/os/agent-events",
 			"file": "platform/daemon/src/routes/os-agent.ts",
 			"line": 532,
-			"status": "native-rust-replay-proven",
+			"status": "mounted-shallow",
 			"rustMounted": true,
-			"contractReplay": true,
+			"contractReplay": false,
 			"parityRule": false
 		},
 		{
@@ -2007,9 +2007,9 @@
 			"path": "/api/os/events/stream",
 			"file": "platform/daemon/src/routes/event-bus.ts",
 			"line": 53,
-			"status": "native-rust-replay-proven",
+			"status": "mounted-shallow",
 			"rustMounted": true,
-			"contractReplay": true,
+			"contractReplay": false,
 			"parityRule": false
 		},
 		{
@@ -2180,7 +2180,7 @@
 			"status": "native-rust-replay-proven",
 			"rustMounted": true,
 			"contractReplay": true,
-			"parityRule": false
+			"parityRule": true
 		},
 		{
 			"method": "GET",
