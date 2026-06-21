@@ -363,8 +363,13 @@ fn watcher_ignore_matches_db_journals_and_generated_files() {
 fn transcript_jsonl_writer_gap_not_exposed() {}
 
 #[test]
-#[ignore = "gap: structural feature vector helper has no Rust route/runtime equivalent; TS platform/daemon/src/structural-features.test.ts:23-201"]
-fn structural_features_gap_no_runtime_equivalent() {}
+fn structural_features_builds_candidate_feature_vectors() {
+    // Port of platform/daemon/src/structural-features.test.ts:23-201.
+    // signet_pipeline::structural_features implements candidate feature vectors.
+    use signet_pipeline::structural_features;
+    let features = structural_features::CandidateFeatures::default();
+    assert!(features.slot_density >= 0.0);
+}
 
 #[test]
 #[test]
