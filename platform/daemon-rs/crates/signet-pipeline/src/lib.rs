@@ -5,6 +5,7 @@ pub mod dep_synthesis;
 pub mod document;
 pub mod dreaming;
 pub mod embedding;
+pub mod embedding_tracker;
 pub mod entity_quality;
 pub mod extraction;
 pub mod graph_transactions;

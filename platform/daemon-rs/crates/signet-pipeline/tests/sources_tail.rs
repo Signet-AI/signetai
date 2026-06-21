@@ -1,9 +1,20 @@
+use std::collections::HashMap;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use rusqlite::{Connection, params};
+use serde_json::json;
 use signet_core::config::EmbeddingConfig;
 use signet_core::queries::embedding::{self, InsertEmbedding};
 use signet_pipeline::document::chunk_content;
 use signet_pipeline::embedding::from_config;
 use signet_pipeline::memory_lineage::upsert_thread_head;
+use signet_pipeline::native_memory_sources::{
+    clear_native_memory_fingerprint_cache, codex_native_memory_source, index_native_memory_file,
+    purge_native_memory_source_artifacts,
+};
+use signet_pipeline::path_feedback::{RecordPathFeedbackInput, record_path_feedback};
 
 fn setup_conn() -> Connection {
     signet_core::db::register_vec_extension();
@@ -23,6 +34,34 @@ fn embedding_config(provider: &str) -> EmbeddingConfig {
         base_url: None,
         api_key: None,
     }
+}
+
+fn temp_tail_root(name: &str) -> PathBuf {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|value| value.as_nanos())
+        .unwrap_or(0);
+    let dir = std::env::temp_dir().join(format!(
+        "signet-sources-tail-{name}-{}-{now}",
+        std::process::id()
+    ));
+    fs::create_dir_all(&dir).expect("create temp root");
+    dir
+}
+
+fn write_file(path: &Path, body: &str) {
+    fs::create_dir_all(path.parent().expect("file parent")).expect("create parent");
+    fs::write(path, body).expect("write file");
+}
+
+#[cfg(unix)]
+fn make_symlink(target: &Path, link: &Path) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(target, link)
+}
+
+#[cfg(windows)]
+fn make_symlink(target: &Path, link: &Path) -> std::io::Result<()> {
+    std::os::windows::fs::symlink_file(target, link)
 }
 
 // Port of platform/daemon/src/embedding-fetch.test.ts:12-23 and :98-135 for
@@ -286,12 +325,70 @@ fn thread_head_upsert_keeps_agent_scope_label_and_newest_state() {
 #[ignore = "gap: no Rust embedding retry tracker module"]
 fn gap_embedding_tracker_missing() {}
 
-// platform/daemon/src/native-memory-sources.test.ts:18 covers native
-// Codex/Claude memory source discovery, symlink rejection, dedupe, and purge.
-// daemon-rs has no native memory source discovery equivalent.
+// Port of platform/daemon/src/native-memory-sources.test.ts:49-70,
+// :162-174, :345-360, and :814-831. The Rust native memory source module
+// indexes Codex artifacts, rejects symlink escapes, skips unchanged persisted
+// artifacts after a cold cache, and purges by source root without SQL wildcard
+// overreach.
 #[test]
-#[ignore = "gap: no Rust native memory source discovery module"]
-fn gap_native_memory_sources_missing() {}
+fn native_memory_sources_index_reject_dedupe_and_purge_codex_artifacts() {
+    clear_native_memory_fingerprint_cache();
+    let conn = setup_conn();
+    let dir = temp_tail_root("native-memory");
+    let root = dir.join(".codex_%");
+    let sibling_root = dir.join(".codex_AX");
+    let file = root.join("memories/memory_summary.md");
+    let sibling_file = sibling_root.join("memories/memory_summary.md");
+    write_file(&file, "Codex remembered the tail native memory bridge.\n");
+    write_file(
+        &sibling_file,
+        "Codex sibling artifact should survive purge.\n",
+    );
+
+    let source = codex_native_memory_source(&root);
+    let sibling_source = codex_native_memory_source(&sibling_root);
+    assert!(index_native_memory_file(&conn, &source, &file, "agent-native").unwrap());
+    assert!(
+        index_native_memory_file(&conn, &sibling_source, &sibling_file, "agent-native").unwrap()
+    );
+
+    let row: (String, String, String, Option<String>) = conn
+        .query_row(
+            "SELECT source_path, source_kind, harness, source_external_id
+             FROM memory_artifacts
+             WHERE source_path = ?1",
+            params![file.to_str().unwrap()],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .expect("read indexed native memory artifact");
+    assert_eq!(row.0, file.to_str().unwrap());
+    assert_eq!(row.1, "native_memory_summary");
+    assert_eq!(row.2, "codex");
+    assert_eq!(row.3.as_deref(), Some("memories/memory_summary.md"));
+
+    clear_native_memory_fingerprint_cache();
+    assert!(!index_native_memory_file(&conn, &source, &file, "agent-native").unwrap());
+
+    let outside = dir.join("outside.md");
+    let link = root.join("memories/MEMORY.md");
+    write_file(&outside, "Do not index through a symlink.\n");
+    make_symlink(&outside, &link).expect("create symlink escape");
+    assert!(!index_native_memory_file(&conn, &source, &link, "agent-native").unwrap());
+
+    let purged =
+        purge_native_memory_source_artifacts(&conn, &source, Some("agent-native")).unwrap();
+    assert_eq!(purged, 1);
+    let remaining: Vec<String> = conn
+        .prepare("SELECT source_path FROM memory_artifacts WHERE agent_id = 'agent-native' ORDER BY source_path")
+        .and_then(|mut stmt| {
+            let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+            Ok(rows.filter_map(|row| row.ok()).collect::<Vec<_>>())
+        })
+        .expect("read remaining native artifacts");
+    assert_eq!(remaining, vec![sibling_file.to_str().unwrap().to_string()]);
+
+    fs::remove_dir_all(dir).ok();
+}
 
 // platform/daemon/src/source-index-progress.test.ts:10 covers the TS delayed
 // source-index runner completed-job guard. Rust source_index_job/progress route
@@ -329,9 +426,140 @@ fn gap_memory_ingest_filter_private() {}
 #[ignore = "gap: no exposed Rust temporal node expansion API"]
 fn gap_temporal_expand_api_missing() {}
 
-// platform/daemon/src/path-feedback.test.ts:110 covers path feedback stats,
-// aspect/dependency propagation, and session/agent filtering. No Rust path
-// feedback module equivalent is exposed.
+// Port of platform/daemon/src/path-feedback.test.ts:110-181. The Rust path
+// feedback module records event/stat rows, propagates accepted feedback to
+// aspect/dependency weights, and rejects memory IDs outside the rated session.
 #[test]
-#[ignore = "gap: no Rust path feedback module equivalent"]
-fn gap_path_feedback_missing() {}
+fn path_feedback_records_stats_propagates_and_filters_session_memory_ids() {
+    let conn = setup_conn();
+    let ts = "2026-06-20T00:00:00Z";
+    conn.execute(
+        "INSERT INTO memories
+         (id, type, content, confidence, importance, created_at, updated_at, updated_by, vector_clock, is_deleted)
+         VALUES ('mem-a', 'fact', 'A memory', 1.0, 0.5, ?1, ?1, 'test', '{}', 0)",
+        params![ts],
+    )
+    .expect("insert memory");
+    conn.execute(
+        "INSERT INTO entities
+         (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
+         VALUES ('ent-a', 'Entity A', 'entity a', 'project', 'default', 1, ?1, ?1),
+                ('ent-b', 'Entity B', 'entity b', 'project', 'default', 1, ?1, ?1)",
+        params![ts],
+    )
+    .expect("insert entities");
+    conn.execute(
+        "INSERT INTO entity_aspects
+         (id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at)
+         VALUES ('asp-a', 'ent-a', 'default', 'timeline', 'timeline', 0.5, ?1, ?1)",
+        params![ts],
+    )
+    .expect("insert aspect");
+    conn.execute(
+        "INSERT INTO entity_attributes
+         (id, aspect_id, agent_id, memory_id, kind, content, normalized_content, confidence, importance, status, created_at, updated_at)
+         VALUES ('attr-a', 'asp-a', 'default', 'mem-a', 'attribute', 'x', 'x', 1, 0.8, 'active', ?1, ?1)",
+        params![ts],
+    )
+    .expect("insert attribute");
+    conn.execute(
+        "INSERT INTO entity_dependencies
+         (id, source_entity_id, target_entity_id, agent_id, dependency_type, strength, confidence, reason, created_at, updated_at)
+         VALUES ('dep-a', 'ent-a', 'ent-b', 'default', 'related_to', 0.5, 0.7, 'single-memory', ?1, ?1)",
+        params![ts],
+    )
+    .expect("insert dependency");
+    conn.execute(
+        "INSERT INTO session_memories
+         (id, session_key, agent_id, memory_id, source, effective_score, final_score, rank, was_injected, fts_hit_count, created_at, path_json)
+         VALUES ('sm-sess-a-mem-a', 'sess-a', 'default', 'mem-a', 'ka_traversal', 0.8, 0.8, 0, 1, 0, ?1, ?2)",
+        params![
+            ts,
+            json!({
+                "entity_ids": ["ent-a", "ent-b"],
+                "aspect_ids": ["asp-a"],
+                "dependency_ids": ["dep-a"]
+            })
+            .to_string()
+        ],
+    )
+    .expect("insert session memory");
+
+    let mut ratings = HashMap::new();
+    ratings.insert("mem-a".to_string(), 1.0);
+    let result = record_path_feedback(
+        &conn,
+        RecordPathFeedbackInput {
+            session_key: "sess-a".to_string(),
+            agent_id: "default".to_string(),
+            ratings,
+            paths: None,
+            rewards: Some(json!({"mem-a": {"forward_citation": 1}})),
+            max_aspect_weight: None,
+            min_aspect_weight: None,
+        },
+    )
+    .expect("record path feedback");
+    assert_eq!(result.accepted, 1);
+    assert_eq!(result.propagated, 1);
+
+    let event: (f64, f64) = conn
+        .query_row(
+            "SELECT rating, reward_forward FROM path_feedback_events WHERE memory_id = 'mem-a'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("read path feedback event");
+    assert_eq!(event, (1.0, 1.0));
+    let stats: (i64, i64) = conn
+        .query_row(
+            "SELECT sample_count, positive_count FROM path_feedback_stats LIMIT 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("read path feedback stats");
+    assert_eq!(stats, (1, 1));
+    let aspect_weight: f64 = conn
+        .query_row(
+            "SELECT weight FROM entity_aspects WHERE id = 'asp-a'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("read aspect weight");
+    assert!(aspect_weight > 0.5);
+    let dep: (f64, String) = conn
+        .query_row(
+            "SELECT strength, reason FROM entity_dependencies WHERE id = 'dep-a'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("read dependency");
+    assert!(dep.0 > 0.5);
+    assert_eq!(dep.1, "pattern-matched");
+
+    let mut ghost_ratings = HashMap::new();
+    ghost_ratings.insert("ghost".to_string(), 1.0);
+    let ghost = record_path_feedback(
+        &conn,
+        RecordPathFeedbackInput {
+            session_key: "sess-a".to_string(),
+            agent_id: "default".to_string(),
+            ratings: ghost_ratings,
+            paths: Some(json!({"ghost": {"entity_ids": ["ent-a"], "aspect_ids": ["asp-a"], "dependency_ids": ["dep-a"]}})),
+            rewards: None,
+            max_aspect_weight: None,
+            min_aspect_weight: None,
+        },
+    )
+    .expect("record ghost path feedback");
+    assert_eq!(ghost.accepted, 0);
+    assert_eq!(ghost.propagated, 0);
+    let ghost_events: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM path_feedback_events WHERE memory_id = 'ghost'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("count ghost feedback events");
+    assert_eq!(ghost_events, 0);
+}
