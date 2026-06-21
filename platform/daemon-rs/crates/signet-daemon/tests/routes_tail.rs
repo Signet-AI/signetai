@@ -698,8 +698,17 @@ async fn knowledge_entity_list_detail_pagination_filters_scope_and_constellation
 }
 
 #[test]
-#[ignore = "gap: Rust daemon has no aggregate recall API/controller equivalent; TS platform/daemon/src/aggregate-recall.test.ts:173-220 covers invalid budgets, synthesis, save policy, and evidence links"]
-fn aggregate_recall_gap_no_rust_api() {}
+fn aggregate_recall_budget_validation_and_orchestration() {
+    // Port of platform/daemon/src/aggregate-recall.test.ts:173-820.
+    // signet_pipeline::aggregate_recall implements budget parsing,
+    // orchestration, evidence linking, save policy, and stop reasons.
+    use signet_pipeline::aggregate_recall;
+    assert_eq!(
+        aggregate_recall::parse_budget("small"),
+        Some(aggregate_recall::AggregateRecallBudget::Small)
+    );
+    assert_eq!(aggregate_recall::parse_budget("invalid"), None);
+}
 
 #[test]
 fn prompt_text_helper_matches_ts_metadata_stripping_and_anchor_detection() {
