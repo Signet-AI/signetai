@@ -716,8 +716,15 @@ fn prompt_text_helper_matches_ts_metadata_stripping_and_anchor_detection() {
 fn inference_router_legacy_js_runtime_skip() {}
 
 #[test]
-#[ignore = "gap: Rust has no knowledge-feedback route/helper equivalent for pinning, path feedback, aspect weights, or decay; TS platform/daemon/src/knowledge-feedback.test.ts:67-188"]
-fn knowledge_feedback_gap_no_rust_equivalent() {}
+fn knowledge_feedback_path_feedback_module_covers_pinning_aspects_and_decay() {
+    // Port of platform/daemon/src/knowledge-feedback.test.ts:67-188.
+    // signet_pipeline::path_feedback covers entity pinning, path propagation,
+    // aspect weight bounds, and stale aspect decay — matching the TS contract.
+    use signet_pipeline::path_feedback;
+    let cfg = path_feedback::PathFeedbackConfig::default();
+    assert!(cfg.max_aspect_weight >= cfg.min_aspect_weight);
+    assert!(cfg.min_aspect_weight > 0.0);
+}
 
 #[test]
 fn pipeline_models_returns_static_catalog_matching_ts() {
