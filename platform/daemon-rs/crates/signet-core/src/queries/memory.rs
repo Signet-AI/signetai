@@ -148,39 +148,32 @@ pub fn exists_by_hash_scoped(
     conn: &Connection,
     hash: &str,
     agent_id: &str,
+    project: Option<&str>,
     scope: Option<&str>,
     visibility: &str,
 ) -> Result<Option<String>, CoreError> {
-    let sql = if scope.is_some() {
+    let mut stmt = conn.prepare_cached(
         "SELECT id FROM memories
          WHERE content_hash = ?1
            AND is_deleted = 0
-           AND agent_id = ?2
-           AND visibility = ?3
-           AND scope = ?4
-         LIMIT 1"
-    } else {
-        "SELECT id FROM memories
-         WHERE content_hash = ?1
-           AND is_deleted = 0
-           AND agent_id = ?2
-           AND visibility = ?3
-           AND scope IS NULL
-         LIMIT 1"
-    };
-    let mut stmt = conn.prepare_cached(sql)?;
-    let id = if let Some(sc) = scope {
-        stmt.query_row(params![hash, agent_id, visibility, sc], |r| {
-            r.get::<_, String>(0)
-        })
-        .optional()?
-    } else {
-        stmt.query_row(params![hash, agent_id, visibility], |r| {
-            r.get::<_, String>(0)
-        })
-        .optional()?
-    };
-    Ok(id)
+           AND COALESCE(NULLIF(agent_id, ''), 'default') = ?2
+           AND COALESCE(project, '') = ?3
+           AND COALESCE(scope, '__NULL__') = ?4
+           AND COALESCE(visibility, 'global') = ?5
+         LIMIT 1",
+    )?;
+    Ok(stmt
+        .query_row(
+            params![
+                hash,
+                agent_id,
+                project.unwrap_or(""),
+                scope.unwrap_or("__NULL__"),
+                visibility
+            ],
+            |r| r.get::<_, String>(0),
+        )
+        .optional()?)
 }
 
 // ---------------------------------------------------------------------------
@@ -307,13 +300,29 @@ pub fn update(
     }
 
     // Duplicate content hash check
-    if let Some(hash) = fields.content_hash
-        && let Some(dup_id) = exists_by_hash(conn, hash)?
-        && dup_id != id
-    {
-        return Ok(UpdateResult::DuplicateHash {
-            existing_id: dup_id,
-        });
+    if let Some(hash) = fields.content_hash {
+        let duplicate = conn
+            .query_row(
+                "SELECT other.id
+                 FROM memories current
+                 JOIN memories other ON other.content_hash = ?2
+                  AND other.id <> current.id
+                  AND other.is_deleted = 0
+                  AND COALESCE(NULLIF(other.agent_id, ''), 'default') = COALESCE(NULLIF(current.agent_id, ''), 'default')
+                  AND COALESCE(other.project, '') = COALESCE(current.project, '')
+                  AND COALESCE(other.scope, '__NULL__') = COALESCE(current.scope, '__NULL__')
+                  AND COALESCE(other.visibility, 'global') = COALESCE(current.visibility, 'global')
+                 WHERE current.id = ?1
+                 LIMIT 1",
+                params![id, hash],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        if let Some(dup_id) = duplicate {
+            return Ok(UpdateResult::DuplicateHash {
+                existing_id: dup_id,
+            });
+        }
     }
 
     // Build dynamic SET clause

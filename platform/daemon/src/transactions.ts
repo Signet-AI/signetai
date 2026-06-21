@@ -166,6 +166,10 @@ interface MutableMemoryRow {
 	pinned: number;
 	version: number;
 	is_deleted: number;
+	agent_id: string | null;
+	project: string | null;
+	scope: string | null;
+	visibility: string | null;
 }
 
 export function insertHistoryEvent(
@@ -277,7 +281,8 @@ export function txIngestEnvelope(db: WriteDb, mem: IngestEnvelope): string {
 export function txModifyMemory(db: WriteDb, input: ModifyMemoryTxInput): ModifyMemoryTxResult {
 	const existing = db
 		.prepare(
-			`SELECT id, content, type, tags, importance, pinned, version, is_deleted
+			`SELECT id, content, type, tags, importance, pinned, version, is_deleted,
+			        agent_id, project, scope, visibility
 			 FROM memories
 			 WHERE id = ?`,
 		)
@@ -316,10 +321,23 @@ export function txModifyMemory(db: WriteDb, input: ModifyMemoryTxInput): ModifyM
 			const duplicate = db
 				.prepare(
 					`SELECT id FROM memories
-					 WHERE id <> ? AND content_hash = ? AND is_deleted = 0
+					 WHERE id <> ?
+					   AND content_hash = ?
+					   AND COALESCE(NULLIF(agent_id, ''), 'default') = COALESCE(NULLIF(?, ''), 'default')
+					   AND COALESCE(project, '') = COALESCE(?, '')
+					   AND COALESCE(scope, '__NULL__') = COALESCE(?, '__NULL__')
+					   AND COALESCE(visibility, 'global') = COALESCE(?, 'global')
+					   AND is_deleted = 0
 					 LIMIT 1`,
 				)
-				.get(input.memoryId, input.patch.contentHash) as { id: string } | undefined;
+				.get(
+					input.memoryId,
+					input.patch.contentHash,
+					existing.agent_id,
+					existing.project,
+					existing.scope,
+					existing.visibility,
+				) as { id: string } | undefined;
 			if (duplicate) {
 				return {
 					status: "duplicate_content_hash",

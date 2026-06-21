@@ -50,6 +50,7 @@ pub fn ingest(conn: &Connection, input: &IngestInput) -> Result<IngestResult, Co
         conn,
         &norm.hash,
         input.agent_id,
+        input.project,
         input.scope,
         input.visibility,
     )? {

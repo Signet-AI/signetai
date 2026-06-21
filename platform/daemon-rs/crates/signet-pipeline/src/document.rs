@@ -6,6 +6,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
 use tracing::{info, warn};
@@ -336,6 +337,19 @@ fn document_memory_embedding_hash(agent_id: &str, memory_id: &str, memory_hash: 
     format!("memory:{agent_id}:{memory_id}:{memory_hash}")
 }
 
+fn is_document_deleted(
+    conn: &rusqlite::Connection,
+    document_id: &str,
+) -> Result<bool, rusqlite::Error> {
+    conn.query_row(
+        "SELECT status = 'deleted' FROM documents WHERE id = ?1",
+        rusqlite::params![document_id],
+        |row| row.get::<_, bool>(0),
+    )
+    .optional()
+    .map(|value| value.unwrap_or(false))
+}
+
 async fn update_document_status(
     pool: &DbPool,
     document_id: &str,
@@ -352,7 +366,7 @@ async fn update_document_status(
              SET status = ?1,
                  error = ?2,
                  updated_at = ?3
-             WHERE id = ?4",
+             WHERE id = ?4 AND status != 'deleted'",
             rusqlite::params![status, error, ts, document_id],
         )?;
         Ok(serde_json::Value::Null)
@@ -378,7 +392,7 @@ async fn mark_document_done(
                  memory_count = ?2,
                  completed_at = ?3,
                  updated_at = ?3
-             WHERE id = ?4",
+             WHERE id = ?4 AND status != 'deleted'",
             rusqlite::params![chunk_count, memory_count, ts, document_id],
         )?;
         Ok(serde_json::Value::Null)
@@ -396,11 +410,22 @@ async fn persist_document_chunks(
     config: &DocumentConfig,
 ) -> Result<(), String> {
     let document_id = document_id.to_string();
-    let agent_id = agent_id.to_string();
+    let payload_agent_id = agent_id.to_string();
     let chunks = chunks.to_vec();
     let embedding_model = config.embedding_model.clone();
     pool.write(signet_core::db::Priority::Low, move |conn| {
         let ts = chrono::Utc::now().to_rfc3339();
+        if is_document_deleted(conn, &document_id)? {
+            return Ok(serde_json::Value::Null);
+        }
+        let (agent_id, document_project) = conn
+            .query_row(
+                "SELECT COALESCE(NULLIF(agent_id, ''), 'default'), project FROM documents WHERE id = ?1",
+                rusqlite::params![document_id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
+            )
+            .optional()?
+            .unwrap_or((payload_agent_id, None));
         let old_memory_ids = {
             let mut stmt = conn
                 .prepare_cached("SELECT memory_id FROM document_memories WHERE document_id = ?1")?;
@@ -415,6 +440,19 @@ async fn persist_document_chunks(
             rusqlite::params![document_id],
         )?;
         for memory_id in old_memory_ids {
+            let active_references: i64 = conn.query_row(
+                "SELECT COUNT(*)
+                 FROM document_memories dm
+                 JOIN documents d ON d.id = dm.document_id
+                 WHERE dm.memory_id = ?1
+                   AND dm.document_id != ?2
+                   AND d.status != 'deleted'",
+                rusqlite::params![memory_id, document_id],
+                |row| row.get(0),
+            )?;
+            if active_references > 0 {
+                continue;
+            }
             let _ = embedding::delete_by_source(conn, "memory", &memory_id, None);
             conn.execute(
                 "UPDATE memories
@@ -432,10 +470,13 @@ async fn persist_document_chunks(
                      WHERE content_hash = ?1
                        AND COALESCE(is_deleted, 0) = 0
                        AND agent_id = ?2
+                       AND COALESCE(project, '') = COALESCE(?3, '')
                        AND visibility = 'private'
-                       AND IFNULL(scope, '') = ''
+                       AND COALESCE(scope, '__NULL__') = '__NULL__'
+                       AND type = 'document_chunk'
+                       AND source_type = 'document'
                      LIMIT 1",
-                    rusqlite::params![normalized.hash, agent_id],
+                    rusqlite::params![normalized.hash, agent_id, document_project],
                     |row| row.get::<_, String>(0),
                 )
                 .ok();
@@ -447,12 +488,12 @@ async fn persist_document_chunks(
                     "INSERT INTO memories
                      (id, type, category, content, normalized_content, content_hash,
                       confidence, importance, source_id, source_type, tags, created_at,
-                     updated_at, updated_by, vector_clock, agent_id, visibility,
+                     updated_at, updated_by, vector_clock, agent_id, project, visibility,
                      is_deleted, extraction_status, embedding_model)
                      VALUES (?1, 'document_chunk', 'document_chunk', ?2, ?3, ?4,
                              1.0, 0.3, ?5, 'document', ?6, ?7,
-                             ?7, 'document-worker', '{}', ?8, 'private',
-                             0, 'none', ?9)",
+                             ?7, 'document-worker', '{}', ?8, ?9, 'private',
+                             0, 'none', ?10)",
                     rusqlite::params![
                         memory_id,
                         normalized.storage,
@@ -462,13 +503,14 @@ async fn persist_document_chunks(
                         format!("document,chunk:{}", chunk.chunk.index),
                         ts,
                         agent_id,
+                        document_project,
                         chunk.vector.as_ref().and(embedding_model.as_deref()),
                     ],
                 )?;
                 memory_id
             };
             conn.execute(
-                "INSERT INTO document_memories (document_id, memory_id, chunk_index)
+                "INSERT OR IGNORE INTO document_memories (document_id, memory_id, chunk_index)
                  VALUES (?1, ?2, ?3)",
                 rusqlite::params![document_id, linked_memory_id, chunk.chunk.index],
             )?;
@@ -508,7 +550,7 @@ async fn persist_document_chunks(
                  memory_count = ?1,
                  completed_at = ?2,
                  updated_at = ?2
-             WHERE id = ?3",
+             WHERE id = ?3 AND status != 'deleted'",
             rusqlite::params![chunks.len(), ts, document_id],
         )?;
         Ok(serde_json::Value::Null)
@@ -651,9 +693,9 @@ mod tests {
             conn.execute(
                 "INSERT INTO documents
                  (id, source_type, content_type, title, raw_content, status,
-                  chunk_count, memory_count, created_at, updated_at)
+                  chunk_count, memory_count, agent_id, created_at, updated_at)
                  VALUES ('doc-replay', 'text', 'text/plain', 'Replay', 'abcdefghi',
-                         'queued', 0, 0, ?1, ?1)",
+                         'queued', 0, 0, 'agent-doc', ?1, ?1)",
                 rusqlite::params![now],
             )?;
             Ok(serde_json::Value::Null)
@@ -777,12 +819,12 @@ mod tests {
             conn.execute(
                 "INSERT INTO documents
                  (id, source_type, content_type, title, raw_content, status,
-                  chunk_count, memory_count, created_at, updated_at)
+                  chunk_count, memory_count, agent_id, created_at, updated_at)
                  VALUES
                  ('doc-agent-a', 'text', 'text/plain', 'Agent A', 'same chunk',
-                  'queued', 0, 0, ?1, ?1),
+                  'queued', 0, 0, 'agent-a', ?1, ?1),
                  ('doc-agent-b', 'text', 'text/plain', 'Agent B', 'same chunk',
-                  'queued', 0, 0, ?1, ?1)",
+                  'queued', 0, 0, 'agent-b', ?1, ?1)",
                 rusqlite::params![now],
             )?;
             Ok(serde_json::Value::Null)

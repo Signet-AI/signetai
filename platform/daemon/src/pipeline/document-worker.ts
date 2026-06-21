@@ -9,13 +9,13 @@
  * calls inside write locks.
  */
 
-import type { DbAccessor, WriteDb } from "../db-accessor";
-import type { EmbeddingConfig, PipelineV2Config } from "../memory-config";
 import { normalizeAndHashContent } from "../content-normalization";
-import { vectorToBlob, syncVecInsert } from "../db-helpers";
+import type { DbAccessor, WriteDb } from "../db-accessor";
+import { syncVecInsert, vectorToBlob } from "../db-helpers";
+import { logger } from "../logger";
+import type { EmbeddingConfig, PipelineV2Config } from "../memory-config";
 import { txIngestEnvelope } from "../transactions";
 import { fetchUrlContent } from "./url-fetcher";
-import { logger } from "../logger";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -52,6 +52,15 @@ interface DocumentRow {
 	readonly raw_content: string | null;
 	readonly status: string;
 	readonly error: string | null;
+	readonly agent_id: string;
+	readonly project: string | null;
+}
+
+function readDocumentScope(doc: DocumentRow): { agentId: string; project: string | null } {
+	return {
+		agentId: doc.agent_id.trim() || "default",
+		project: doc.project?.trim() || null,
+	};
 }
 
 // ---------------------------------------------------------------------------
@@ -131,19 +140,24 @@ function failJob(db: WriteDb, jobId: string, error: string, attempts: number, ma
 // Document status updates
 // ---------------------------------------------------------------------------
 
+function isDocumentDeleted(db: WriteDb, docId: string): boolean {
+	const row = db.prepare("SELECT status FROM documents WHERE id = ?").get(docId) as { status: string } | undefined;
+	return row?.status === "deleted";
+}
+
 function updateDocumentStatus(db: WriteDb, docId: string, status: string, error?: string): void {
 	const now = new Date().toISOString();
 	if (error !== undefined) {
 		db.prepare(
 			`UPDATE documents
 			 SET status = ?, error = ?, updated_at = ?
-			 WHERE id = ?`,
+			 WHERE id = ? AND status != 'deleted'`,
 		).run(status, error, now, docId);
 	} else {
 		db.prepare(
 			`UPDATE documents
 			 SET status = ?, updated_at = ?
-			 WHERE id = ?`,
+			 WHERE id = ? AND status != 'deleted'`,
 		).run(status, now, docId);
 	}
 }
@@ -154,7 +168,7 @@ function completeDocument(db: WriteDb, docId: string, chunkCount: number, memory
 		`UPDATE documents
 		 SET status = 'done', chunk_count = ?, memory_count = ?,
 		     completed_at = ?, updated_at = ?
-		 WHERE id = ?`,
+		 WHERE id = ? AND status != 'deleted'`,
 	).run(chunkCount, memoryCount, now, now, docId);
 }
 
@@ -206,10 +220,11 @@ async function processDocument(deps: DocumentWorkerDeps, job: DocumentJobRow): P
 		throw new Error(`Document ${docId} not found`);
 	}
 
-	if (doc.status === "done") {
+	if (doc.status === "done" || doc.status === "deleted") {
 		accessor.withWriteTx((db) => completeJob(db, job.id));
 		return;
 	}
+	const documentScope = readDocumentScope(doc);
 
 	// -- Step 1: Extract content --
 	accessor.withWriteTx((db) => updateDocumentStatus(db, docId, "extracting"));
@@ -227,8 +242,21 @@ async function processDocument(deps: DocumentWorkerDeps, job: DocumentJobRow): P
 		content = doc.raw_content ?? "";
 	}
 
+	let deletedAfterExtraction = false;
+	accessor.withWriteTx((db) => {
+		if (isDocumentDeleted(db, docId)) {
+			completeJob(db, job.id);
+			deletedAfterExtraction = true;
+		}
+	});
+	if (deletedAfterExtraction) return;
+
 	if (content.length === 0) {
 		accessor.withWriteTx((db) => {
+			if (isDocumentDeleted(db, docId)) {
+				completeJob(db, job.id);
+				return;
+			}
 			updateDocumentStatus(db, docId, "failed", "Empty content");
 			failJob(db, job.id, "Empty content", job.attempts, job.max_attempts);
 		});
@@ -238,7 +266,7 @@ async function processDocument(deps: DocumentWorkerDeps, job: DocumentJobRow): P
 	// Update title if discovered
 	if (title && title !== doc.title) {
 		accessor.withWriteTx((db) => {
-			db.prepare("UPDATE documents SET title = ?, updated_at = ? WHERE id = ?").run(
+			db.prepare("UPDATE documents SET title = ?, updated_at = ? WHERE id = ? AND status != 'deleted'").run(
 				title,
 				new Date().toISOString(),
 				docId,
@@ -252,7 +280,7 @@ async function processDocument(deps: DocumentWorkerDeps, job: DocumentJobRow): P
 	const chunks = chunkText(content, pipelineCfg.documents.chunkSize, pipelineCfg.documents.chunkOverlap);
 
 	accessor.withWriteTx((db) => {
-		db.prepare("UPDATE documents SET chunk_count = ?, updated_at = ? WHERE id = ?").run(
+		db.prepare("UPDATE documents SET chunk_count = ?, updated_at = ? WHERE id = ? AND status != 'deleted'").run(
 			chunks.length,
 			new Date().toISOString(),
 			docId,
@@ -264,6 +292,7 @@ async function processDocument(deps: DocumentWorkerDeps, job: DocumentJobRow): P
 
 	let memoriesCreated = 0;
 
+	let aborted = false;
 	for (let i = 0; i < chunks.length; i++) {
 		const chunkText = chunks[i];
 		if (!chunkText || chunkText.trim().length === 0) continue;
@@ -273,6 +302,11 @@ async function processDocument(deps: DocumentWorkerDeps, job: DocumentJobRow): P
 
 		// Each chunk's memory creation in its own transaction
 		accessor.withWriteTx((db) => {
+			if (isDocumentDeleted(db, docId)) {
+				completeJob(db, job.id);
+				aborted = true;
+				return;
+			}
 			const normalized = normalizeAndHashContent(chunkText);
 
 			// Dedup: skip if exact content already linked to this document
@@ -287,30 +321,48 @@ async function processDocument(deps: DocumentWorkerDeps, job: DocumentJobRow): P
 				.get(docId, normalized.contentHash);
 			if (existingLink) return;
 
-			const memId = crypto.randomUUID();
 			const now = new Date().toISOString();
+			const existingScopedMemory = db
+				.prepare(
+					`SELECT id FROM memories
+					 WHERE content_hash = ?
+					   AND COALESCE(NULLIF(agent_id, ''), 'default') = ?
+					   AND COALESCE(project, '') = COALESCE(?, '')
+					   AND COALESCE(scope, '__NULL__') = '__NULL__'
+					   AND visibility = 'private'
+					   AND type = 'document_chunk'
+					   AND source_type = 'document'
+					   AND is_deleted = 0
+					 LIMIT 1`,
+				)
+				.get(normalized.contentHash, documentScope.agentId, documentScope.project) as { id: string } | undefined;
+			const memId = existingScopedMemory?.id ?? crypto.randomUUID();
 
-			txIngestEnvelope(db, {
-				id: memId,
-				content: normalized.storageContent,
-				normalizedContent: normalized.normalizedContent,
-				contentHash: normalized.contentHash,
-				who: docId,
-				why: "document_ingest",
-				project: null,
-				importance: 0.3,
-				type: "document_chunk",
-				tags: title ? `document:${title}` : null,
-				pinned: 0,
-				isDeleted: 0,
-				extractionStatus: "none",
-				embeddingModel: vector ? embeddingCfg.model : null,
-				extractionModel: null,
-				updatedBy: "document-worker",
-				sourceType: "document",
-				sourceId: docId,
-				createdAt: now,
-			});
+			if (!existingScopedMemory) {
+				txIngestEnvelope(db, {
+					id: memId,
+					content: normalized.storageContent,
+					normalizedContent: normalized.normalizedContent,
+					contentHash: normalized.contentHash,
+					who: docId,
+					why: "document_ingest",
+					project: documentScope.project,
+					importance: 0.3,
+					type: "document_chunk",
+					tags: title ? `document:${title}` : null,
+					pinned: 0,
+					isDeleted: 0,
+					extractionStatus: "none",
+					embeddingModel: vector ? embeddingCfg.model : null,
+					extractionModel: null,
+					updatedBy: "document-worker",
+					sourceType: "document",
+					sourceId: docId,
+					agentId: documentScope.agentId,
+					visibility: "private",
+					createdAt: now,
+				});
+			}
 
 			// Link via document_memories
 			db.prepare(
@@ -330,19 +382,20 @@ async function processDocument(deps: DocumentWorkerDeps, job: DocumentJobRow): P
 				} else {
 					const embId = crypto.randomUUID();
 					const blob = vectorToBlob(vector);
+					const embeddingHash = `memory:${documentScope.agentId}:${memId}:${normalized.contentHash}`;
 					db.prepare(
 						`INSERT INTO embeddings
 						 (id, content_hash, vector, dimensions, source_type,
-						  source_id, chunk_text, created_at)
-						 VALUES (?, ?, ?, ?, 'memory', ?, ?, ?)
+						  source_id, chunk_text, created_at, agent_id)
+						 VALUES (?, ?, ?, ?, 'memory', ?, ?, ?, ?)
 						 ON CONFLICT(content_hash) DO UPDATE SET
 						   vector = excluded.vector,
 						   dimensions = excluded.dimensions`,
-					).run(embId, normalized.contentHash, blob, vector.length, memId, chunkText, now);
+					).run(embId, embeddingHash, blob, vector.length, memId, chunkText, now, documentScope.agentId);
 					// Resolve actual embedding ID (may differ from embId on conflict)
-					const actualEmbRow = db
-						.prepare("SELECT id FROM embeddings WHERE content_hash = ?")
-						.get(normalized.contentHash) as { id: string } | undefined;
+					const actualEmbRow = db.prepare("SELECT id FROM embeddings WHERE content_hash = ?").get(embeddingHash) as
+						| { id: string }
+						| undefined;
 					if (actualEmbRow) {
 						syncVecInsert(db, actualEmbRow.id, vector);
 					}
@@ -351,6 +404,7 @@ async function processDocument(deps: DocumentWorkerDeps, job: DocumentJobRow): P
 
 			memoriesCreated++;
 		});
+		if (aborted) return;
 	}
 
 	// -- Step 4: Finalize --
@@ -359,9 +413,15 @@ async function processDocument(deps: DocumentWorkerDeps, job: DocumentJobRow): P
 	});
 
 	accessor.withWriteTx((db) => {
+		if (isDocumentDeleted(db, docId)) {
+			completeJob(db, job.id);
+			aborted = true;
+			return;
+		}
 		completeDocument(db, docId, chunks.length, memoriesCreated);
 		completeJob(db, job.id);
 	});
+	if (aborted) return;
 
 	logger.info("document-worker", "Document processed", {
 		documentId: docId,
@@ -397,6 +457,10 @@ export function startDocumentWorker(deps: DocumentWorkerDeps): DocumentWorkerHan
 			});
 
 			deps.accessor.withWriteTx((db) => {
+				if (job.document_id && isDocumentDeleted(db, job.document_id)) {
+					completeJob(db, job.id);
+					return;
+				}
 				failJob(db, job.id, msg, job.attempts, job.max_attempts);
 				if (job.document_id) {
 					updateDocumentStatus(db, job.document_id, "failed", msg);

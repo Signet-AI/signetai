@@ -91,6 +91,8 @@ export interface DocumentRow {
 	readonly chunk_count: number;
 	readonly memory_count: number;
 	readonly metadata_json: string | null;
+	readonly agent_id: string;
+	readonly project: string | null;
 	readonly created_at: string;
 	readonly updated_at: string;
 	readonly completed_at: string | null;

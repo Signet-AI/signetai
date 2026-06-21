@@ -673,6 +673,8 @@ pub struct Document {
     pub chunk_count: i64,
     pub memory_count: i64,
     pub metadata_json: Option<String>,
+    pub agent_id: String,
+    pub project: Option<String>,
     pub created_at: String,
     pub updated_at: String,
     pub completed_at: Option<String>,

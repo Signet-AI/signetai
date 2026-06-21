@@ -107,6 +107,8 @@ const TS_ARTIFACT_SOURCE_PROVENANCE_VERSION: u32 = 75;
 const TS_ARTIFACT_SOURCE_PROVENANCE_NAME: &str = "memory-artifact-source-provenance";
 const TS_TEMPORAL_EDGES_VERSION: u32 = 76;
 const TS_TEMPORAL_EDGES_NAME: &str = "temporal-edges";
+const TS_DOCUMENT_SCOPE_COLUMNS_VERSION: u32 = 80;
+const TS_DOCUMENT_SCOPE_COLUMNS_NAME: &str = "document-scope-columns";
 
 /// Simple checksum matching the TS implementation (hash of "version:name").
 fn checksum(version: u32, name: &str) -> String {
@@ -701,6 +703,92 @@ fn ensure_cross_daemon_parity_columns(conn: &Connection) -> Result<(), CoreError
     )?;
     add_column_if_missing(conn, "connectors", "enabled", "INTEGER NOT NULL DEFAULT 1")?;
 
+    let should_backfill_document_scope =
+        !typescript_parity_migration_stamped(conn, TS_DOCUMENT_SCOPE_COLUMNS_VERSION)?;
+    add_column_if_missing(
+        conn,
+        "documents",
+        "agent_id",
+        "TEXT NOT NULL DEFAULT 'default'",
+    )?;
+    add_column_if_missing(conn, "documents", "project", "TEXT")?;
+    if should_backfill_document_scope {
+        conn.execute_batch(
+            "UPDATE documents
+                SET agent_id = NULLIF(TRIM(json_extract(metadata_json, '$.signet.agentId')), '')
+              WHERE metadata_json IS NOT NULL
+                AND json_valid(metadata_json)
+                AND json_type(metadata_json, '$.signet.agentId') = 'text'
+                AND NULLIF(TRIM(json_extract(metadata_json, '$.signet.agentId')), '') IS NOT NULL;
+             UPDATE documents
+                SET project = NULLIF(TRIM(json_extract(metadata_json, '$.signet.project')), '')
+              WHERE metadata_json IS NOT NULL
+                AND json_valid(metadata_json)
+                AND json_type(metadata_json, '$.signet.project') = 'text';
+             WITH linked_scope AS (
+                SELECT
+                    dm.document_id,
+                    m.agent_id,
+                    m.project,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY dm.document_id
+                        ORDER BY COUNT(*) DESC, m.agent_id, COALESCE(m.project, '')
+                    ) AS rank
+                FROM document_memories dm
+                JOIN memories m ON m.id = dm.memory_id
+                WHERE m.agent_id IS NOT NULL
+                  AND NULLIF(TRIM(m.agent_id), '') IS NOT NULL
+                GROUP BY dm.document_id, m.agent_id, m.project
+             )
+             UPDATE documents
+                SET agent_id = COALESCE((
+                        SELECT agent_id FROM linked_scope
+                        WHERE linked_scope.document_id = documents.id AND rank = 1
+                    ), agent_id),
+                    project = (
+                        SELECT project FROM linked_scope
+                        WHERE linked_scope.document_id = documents.id AND rank = 1
+                    )
+              WHERE EXISTS (
+                    SELECT 1 FROM linked_scope
+                    WHERE linked_scope.document_id = documents.id AND rank = 1
+                )
+                AND NOT (
+                    metadata_json IS NOT NULL
+                    AND json_valid(metadata_json)
+                    AND json_type(metadata_json, '$.signet.agentId') = 'text'
+                    AND NULLIF(TRIM(json_extract(metadata_json, '$.signet.agentId')), '') IS NOT NULL
+                );
+             UPDATE memories
+                SET visibility = 'private'
+              WHERE id IN (SELECT memory_id FROM document_memories)
+                AND type = 'document_chunk'
+                AND source_type = 'document'
+                AND (visibility IS NULL OR visibility = 'global');",
+        )?;
+    }
+    conn.execute_batch(
+        "DROP INDEX IF EXISTS idx_memories_content_hash_unique;
+         CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_content_hash_unique
+            ON memories(
+                content_hash,
+                COALESCE(NULLIF(agent_id, ''), 'default'),
+                COALESCE(project, ''),
+                COALESCE(scope, '__NULL__'),
+                COALESCE(visibility, 'global')
+            )
+            WHERE content_hash IS NOT NULL AND is_deleted = 0;
+         CREATE INDEX IF NOT EXISTS idx_documents_agent_project
+            ON documents(agent_id, project);
+         CREATE INDEX IF NOT EXISTS idx_documents_source_scope
+            ON documents(source_url, agent_id, project);",
+    )?;
+    stamp_typescript_parity_migration(
+        conn,
+        TS_DOCUMENT_SCOPE_COLUMNS_VERSION,
+        TS_DOCUMENT_SCOPE_COLUMNS_NAME,
+    )?;
+
     add_column_if_missing(
         conn,
         "entity_aspects",
@@ -1016,18 +1104,22 @@ fn ensure_summary_jobs_required_columns(conn: &Connection) -> Result<(), CoreErr
     Ok(())
 }
 
+fn typescript_parity_migration_stamped(conn: &Connection, version: u32) -> Result<bool, CoreError> {
+    conn.query_row(
+        "SELECT COUNT(*) FROM schema_migrations WHERE version = ?1",
+        [version],
+        |row| row.get::<_, i64>(0),
+    )
+    .map(|count| count > 0)
+    .map_err(CoreError::from)
+}
+
 fn stamp_typescript_parity_migration(
     conn: &Connection,
     version: u32,
     name: &str,
 ) -> Result<(), CoreError> {
-    let already_stamped: bool = conn
-        .query_row(
-            "SELECT COUNT(*) FROM schema_migrations WHERE version = ?1",
-            [version],
-            |row| row.get::<_, i64>(0),
-        )
-        .map(|count| count > 0)?;
+    let already_stamped = typescript_parity_migration_stamped(conn, version)?;
     if already_stamped {
         return Ok(());
     }

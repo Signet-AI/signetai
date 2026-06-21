@@ -3,7 +3,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { vectorSearch } from "@signet/core";
-import type { Hono } from "hono";
+import type { Context, Hono } from "hono";
 import { ensureAgentRegistered, getAgentScope, resolveAgentId } from "../agent-id";
 import { aggregateRecall, parseAggregateRecallBudget, readAggregateRecallBudgetInput } from "../aggregate-recall";
 import { checkScope, requirePermission, requireRateLimit } from "../auth";
@@ -70,8 +70,12 @@ import {
 	parseTagsMutation,
 	readOptionalJsonObject,
 	resolveMutationActor,
+	resolveScopedAgentId,
+	resolveScopedProject,
 	runLegacyEmbeddingsExport,
+	shouldEnforceAuthScope,
 	toRecord,
+	validateSessionAgentBinding,
 } from "./utils";
 
 const MAX_MUTATION_BATCH = 200;
@@ -251,6 +255,7 @@ interface RememberRowProvenance {
 interface RememberDedupeScope {
 	readonly agentId: string;
 	readonly visibility: "global" | "private" | "archived";
+	readonly project: string | null;
 	readonly scope: string | null;
 }
 
@@ -354,9 +359,11 @@ function scopedContentHashPredicate(input: RememberDedupeScope): {
 	return {
 		sql: `
 			COALESCE(NULLIF(agent_id, ''), 'default') = ?
+			AND COALESCE(project, '') = ?
 			AND COALESCE(scope, '__NULL__') = ?
+			AND COALESCE(visibility, 'global') = ?
 		`,
-		params: [input.agentId || "default", input.scope ?? "__NULL__"],
+		params: [input.agentId || "default", input.project ?? "", input.scope ?? "__NULL__", input.visibility],
 	};
 }
 
@@ -504,6 +511,55 @@ function recordRecallQaTelemetry(input: {
 		response: input.result,
 		retentionDays: input.cfg.pipelineV2.telemetry.retentionDays,
 	});
+}
+
+function resolveAgentIdHint(input: { readonly agentId?: string; readonly sessionKey?: string }): string | undefined {
+	const explicitAgentId = parseOptionalString(input.agentId);
+	if (explicitAgentId) return explicitAgentId;
+	const parts = (parseOptionalString(input.sessionKey) ?? "").split(":");
+	return parts[0] === "agent" ? parseOptionalString(parts[1]) : undefined;
+}
+
+function resolveMemoryScopedAgentId(
+	c: Context,
+	input: { readonly agentId?: string; readonly sessionKey?: string },
+): { agentId: string; error?: string } {
+	const sessionKey = parseOptionalString(input.sessionKey);
+	const requestedAgentId = resolveAgentIdHint(input);
+	const scopedAgent = resolveScopedAgentId(c, requestedAgentId, "default");
+	if (scopedAgent.error) return scopedAgent;
+
+	const sessionError = validateSessionAgentBinding(c, sessionKey, scopedAgent.agentId, {
+		requireExisting: false,
+		context: "session",
+	});
+	if (sessionError) return { agentId: scopedAgent.agentId, error: sessionError };
+
+	return scopedAgent;
+}
+
+interface DocumentScopeRow {
+	readonly agent_id: string | null;
+	readonly project: string | null;
+}
+
+function documentScopeMatches(
+	row: DocumentScopeRow,
+	scope: { readonly agentId: string; readonly project: string | null },
+): boolean {
+	return row.agent_id === scope.agentId && row.project === scope.project;
+}
+
+function documentScopeOwnedBy(
+	row: DocumentScopeRow,
+	scope: { readonly agentId: string; readonly project: string | null },
+): boolean {
+	if (row.agent_id !== scope.agentId) return false;
+	return scope.project === null || row.project === scope.project;
+}
+
+function documentMetadataJson(metadata: unknown): string | null {
+	return metadata === undefined ? null : JSON.stringify(metadata);
 }
 
 export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): void {
@@ -1008,7 +1064,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 
 		ensureAgentRegistered(agentId);
 		const visibility = body.visibility === "private" ? "private" : "global";
-		const dedupeScope = { agentId, visibility, scope };
+		const dedupeScope = { agentId, visibility, project: body.project ?? null, scope };
 		const hasBodyTags = Object.prototype.hasOwnProperty.call(body, "tags");
 		const bodyTags = hasBodyTags ? parseTagsMutation(body.tags) : undefined;
 		if (hasBodyTags && bodyTags === undefined) {
@@ -3166,6 +3222,25 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 					? ((body.url as string | undefined) ?? null)
 					: null;
 
+		const scopedAgent = resolveMemoryScopedAgentId(c, {
+			agentId:
+				parseOptionalString(body.agentId) ??
+				parseOptionalString(body.agent_id) ??
+				c.req.query("agentId") ??
+				c.req.query("agent_id") ??
+				c.req.header("x-signet-agent-id"),
+			sessionKey: c.req.header("x-signet-session-key"),
+		});
+		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+		const metadataRecord = toRecord(body.metadata);
+		const scopedProject = resolveScopedProject(
+			c,
+			parseOptionalString(body.project) ?? parseOptionalString(metadataRecord?.project),
+		);
+		if (scopedProject.error) return c.json({ error: scopedProject.error }, 403);
+		ensureAgentRegistered(scopedAgent.agentId);
+		const metadataJson = documentMetadataJson(body.metadata);
+
 		const accessor = getDbAccessor();
 
 		try {
@@ -3174,14 +3249,19 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 
 			const result = accessor.withWriteTx((db) => {
 				if (sourceUrl) {
-					const existing = db
+					const candidates = db
 						.prepare(
-							`SELECT id, status FROM documents
+							`SELECT id, status, agent_id, project FROM documents
 							 WHERE source_url = ?
-							   AND status NOT IN ('failed', 'deleted')
-							 LIMIT 1`,
+							   AND status NOT IN ('failed', 'deleted')`,
 						)
-						.get(sourceUrl) as { id: string; status: string } | undefined;
+						.all(sourceUrl) as ReadonlyArray<{ id: string; status: string } & DocumentScopeRow>;
+					const existing = candidates.find((candidate) =>
+						documentScopeMatches(candidate, {
+							agentId: scopedAgent.agentId,
+							project: scopedProject.project ?? null,
+						}),
+					);
 					if (existing) {
 						return { deduplicated: true as const, existing };
 					}
@@ -3191,8 +3271,8 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 					`INSERT INTO documents
 					 (id, source_url, source_type, content_type, title,
 					  raw_content, status, connector_id, chunk_count,
-					  memory_count, metadata_json, created_at, updated_at)
-					 VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, 0, 0, ?, ?, ?)`,
+					  memory_count, metadata_json, agent_id, project, created_at, updated_at)
+					 VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, 0, 0, ?, ?, ?, ?, ?)`,
 				).run(
 					id,
 					sourceUrl,
@@ -3201,7 +3281,9 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 					(body.title as string | undefined) ?? null,
 					sourceType === "text" ? (body.content as string) : null,
 					(body.connector_id as string | undefined) ?? null,
-					body.metadata ? JSON.stringify(body.metadata) : null,
+					metadataJson,
+					scopedAgent.agentId,
+					scopedProject.project ?? null,
 					now,
 					now,
 				);
@@ -3301,9 +3383,12 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			const agentScope = getAgentScope(scopedAgent.agentId);
 			const access = buildAgentScopeClause(scopedAgent.agentId, agentScope.readPolicy, agentScope.policyGroup);
 			const scopeProject = c.get("auth")?.claims?.scope?.project;
-			const projectSql = scopeProject ? " AND m.project = ?" : "";
-			const scopeArgs = scopeProject ? [...access.args, scopeProject] : access.args;
-			const scopePredicate = shouldEnforceAuthScope(c) ? `${access.sql}${projectSql}` : "";
+			const projectSql = scopeProject ? " AND m.project = ? AND d.project = ?" : "";
+			const scopeArgs = scopeProject
+				? [scopedAgent.agentId, ...access.args, scopeProject, scopeProject]
+				: [scopedAgent.agentId, ...access.args];
+			const documentScopeSql = " AND d.agent_id = ?";
+			const scopePredicate = shouldEnforceAuthScope(c) ? `${documentScopeSql}${access.sql}${projectSql}` : "";
 			const accessor = getDbAccessor();
 			const chunks = accessor.withReadDb((db) => {
 				return db
@@ -3311,8 +3396,9 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 						`SELECT m.id, m.content, m.type, m.created_at,
 					        dm.chunk_index
 					 FROM document_memories dm
+					 JOIN documents d ON d.id = dm.document_id
 					 JOIN memories m ON m.id = dm.memory_id
-						 WHERE dm.document_id = ? AND m.is_deleted = 0
+						 WHERE dm.document_id = ? AND d.status != 'deleted' AND m.is_deleted = 0
 						   ${scopePredicate}
 					 ORDER BY dm.chunk_index ASC`,
 					)
@@ -3337,7 +3423,9 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 
 		const accessor = getDbAccessor();
 		const doc = accessor.withReadDb((db) => {
-			return db.prepare("SELECT id FROM documents WHERE id = ?").get(id) as { id: string } | undefined;
+			return db.prepare("SELECT id, agent_id, project FROM documents WHERE id = ?").get(id) as
+				| ({ id: string } & DocumentScopeRow)
+				| undefined;
 		});
 		if (!doc) return c.json({ error: "Document not found" }, 404);
 
@@ -3350,32 +3438,56 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				sessionKey: c.req.header("x-signet-session-key"),
 			});
 			if (delScopedAgent.error) return c.json({ error: delScopedAgent.error }, 403);
-			const delAgentScope = getAgentScope(delScopedAgent.agentId);
-			const delAccess = buildAgentScopeClause(
-				delScopedAgent.agentId,
-				delAgentScope.readPolicy,
-				delAgentScope.policyGroup,
-			);
-			const delScopeProject = c.get("auth")?.claims?.scope?.project;
-			const delProjectSql = delScopeProject ? " AND m.project = ?" : "";
-			const delScopeArgs = delScopeProject ? [...delAccess.args, delScopeProject] : delAccess.args;
-			const linkedMemories = accessor.withReadDb((db) => {
-				return db
-					.prepare(
-						`SELECT dm.memory_id FROM document_memories dm
-						 WHERE dm.document_id = ?
-						 ${shouldEnforceAuthScope(c) ? `AND EXISTS (SELECT 1 FROM memories m WHERE m.id = dm.memory_id AND m.is_deleted = 0${delAccess.sql}${delProjectSql})` : ""}`,
-					)
-					.all(id, ...(shouldEnforceAuthScope(c) ? delScopeArgs : [])) as ReadonlyArray<{ memory_id: string }>;
+			const delScopeProject = c.get("auth")?.claims?.scope?.project ?? null;
+			const documentOwnedByScope = documentScopeOwnedBy(doc, {
+				agentId: delScopedAgent.agentId,
+				project: delScopeProject,
 			});
+			const enforceScope = shouldEnforceAuthScope(c);
+			const delProjectSql = delScopeProject ? " AND m.project = ?" : "";
+			const delScopeArgs = delScopeProject ? [delScopedAgent.agentId, delScopeProject] : [delScopedAgent.agentId];
+			const linkedMemorySql = `SELECT dm.memory_id FROM document_memories dm
+				 WHERE dm.document_id = ?
+				 ${enforceScope ? `AND EXISTS (SELECT 1 FROM memories m WHERE m.id = dm.memory_id AND m.is_deleted = 0 AND m.agent_id = ? AND m.visibility != 'archived'${delProjectSql})` : ""}`;
+			if (enforceScope && !documentOwnedByScope) {
+				return c.json({ error: "document not found" }, 404);
+			}
 
-			let memoriesRemoved = 0;
-			for (const link of linkedMemories) {
-				accessor.withWriteTx((db) => {
+			const memoriesRemoved = accessor.withWriteTx((db) => {
+				db.prepare(
+					`UPDATE documents
+					 SET status = 'deleted', error = ?, updated_at = ?
+					 WHERE id = ?`,
+				).run(reason, now, id);
+				db.prepare(
+					`UPDATE memory_jobs
+					 SET status = 'completed', error = ?, completed_at = ?, updated_at = ?
+					 WHERE job_type = 'document_ingest'
+					   AND memory_id IS NULL
+					   AND document_id = ?
+					   AND status IN ('pending', 'leased')`,
+				).run(`Document deleted: ${reason}`, now, now, id);
+
+				let removed = 0;
+				const linkedMemories = db
+					.prepare(linkedMemorySql)
+					.all(id, ...(enforceScope ? delScopeArgs : [])) as ReadonlyArray<{ memory_id: string }>;
+				for (const link of linkedMemories) {
 					const mem = db.prepare("SELECT is_deleted FROM memories WHERE id = ?").get(link.memory_id) as
 						| { is_deleted: number }
 						| undefined;
-					if (!mem || mem.is_deleted === 1) return;
+					if (!mem || mem.is_deleted === 1) continue;
+					const activeReferences = db
+						.prepare(
+							`SELECT COUNT(*) AS count
+							 FROM document_memories dm
+							 JOIN documents d ON d.id = dm.document_id
+							 WHERE dm.memory_id = ?
+							   AND dm.document_id != ?
+							   AND d.status != 'deleted'`,
+						)
+						.get(link.memory_id, id) as { count: number };
+					if (activeReferences.count > 0) continue;
 
 					db.prepare(
 						`UPDATE memories
@@ -3392,20 +3504,9 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 						 VALUES (?, ?, 'deleted', NULL, NULL, ?, ?, NULL, ?)`,
 					).run(histId, link.memory_id, actor.changedBy, `Document deleted: ${reason}`, now);
 
-					memoriesRemoved++;
-				});
-			}
-
-			if (shouldEnforceAuthScope(c) && linkedMemories.length === 0) {
-				return c.json({ error: "document not found" }, 404);
-			}
-
-			accessor.withWriteTx((db) => {
-				db.prepare(
-					`UPDATE documents
-					 SET status = 'deleted', error = ?, updated_at = ?
-					 WHERE id = ?`,
-				).run(reason, now, id);
+					removed++;
+				}
+				return removed;
 			});
 
 			return c.json({ deleted: true, memoriesRemoved });

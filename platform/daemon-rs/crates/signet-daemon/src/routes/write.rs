@@ -1000,17 +1000,27 @@ fn scoped_content_hash_row(
     conn: &rusqlite::Connection,
     hash: &str,
     agent_id: &str,
+    project: Option<&str>,
     scope: Option<&str>,
+    visibility: &str,
 ) -> Result<Option<String>, rusqlite::Error> {
     conn.query_row(
         "SELECT id
          FROM memories
          WHERE content_hash = ?1
            AND COALESCE(NULLIF(agent_id, ''), 'default') = ?2
-           AND COALESCE(scope, '__NULL__') = ?3
+           AND COALESCE(project, '') = ?3
+           AND COALESCE(scope, '__NULL__') = ?4
+           AND COALESCE(visibility, 'global') = ?5
            AND is_deleted = 0
          LIMIT 1",
-        params![hash, agent_id, scope.unwrap_or("__NULL__")],
+        params![
+            hash,
+            agent_id,
+            project.unwrap_or(""),
+            scope.unwrap_or("__NULL__"),
+            visibility
+        ],
         |row| row.get(0),
     )
     .optional()
@@ -1949,8 +1959,15 @@ pub async fn remember(
                                 "error": "chunked content contains duplicate chunks"
                             }));
                         }
-                        if scoped_content_hash_row(conn, &plan.hash, &agent_id, scope.as_deref())?
-                            .is_some()
+                        if scoped_content_hash_row(
+                            conn,
+                            &plan.hash,
+                            &agent_id,
+                            project.as_deref(),
+                            scope.as_deref(),
+                            &visibility,
+                        )?
+                        .is_some()
                         {
                             return Ok(serde_json::json!({
                                 "__status": 409,

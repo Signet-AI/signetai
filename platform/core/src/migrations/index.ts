@@ -85,6 +85,7 @@ import { up as temporalEdges } from "./076-temporal-edges";
 import { up as entityAliases } from "./077-entity-aliases";
 import { up as apiKeys } from "./078-api-keys";
 import { up as transcriptCaptureJobs } from "./079-transcript-capture-jobs";
+import { up as documentScopeColumns } from "./080-document-scope-columns";
 
 // -- Public interface consumed by Database.init() --
 
@@ -751,6 +752,17 @@ export const MIGRATIONS: readonly Migration[] = [
 		up: transcriptCaptureJobs,
 		artifacts: {
 			tables: ["transcript_capture_jobs"],
+		},
+	},
+	{
+		version: 80,
+		name: "document-scope-columns",
+		up: documentScopeColumns,
+		artifacts: {
+			columns: [
+				{ table: "documents", column: "agent_id" },
+				{ table: "documents", column: "project" },
+			],
 		},
 	},
 ];

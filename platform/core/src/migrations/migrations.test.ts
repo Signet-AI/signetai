@@ -13,6 +13,7 @@ import { up as sessionSummaryUniqueness } from "./046-session-summary-uniqueness
 import { up as agentScopedTemporalUniqueness } from "./047-agent-scoped-temporal-uniqueness";
 import { up as threadHeadsMigration } from "./048-thread-heads";
 import { up as ontologyControlPlaneState } from "./070-ontology-control-plane-state";
+import { up as documentScopeColumns } from "./080-document-scope-columns";
 import { MIGRATIONS, hasPendingMigrations, runMigrations } from "./index";
 
 function createFreshDb(): Database {
@@ -103,6 +104,61 @@ describe("migration framework", () => {
 		// same number of migration records (no duplicates)
 		const uniqueVersions = new Set(migrations.map((m) => m.version));
 		expect(uniqueVersions.size).toBe(migrations.length);
+	});
+
+	test("document scope columns backfill from metadata and linked memories", () => {
+		db = createFreshDb();
+		db.exec(`
+			CREATE TABLE documents (
+				id TEXT PRIMARY KEY,
+				source_url TEXT,
+				metadata_json TEXT
+			);
+			CREATE TABLE memories (
+				id TEXT PRIMARY KEY,
+				agent_id TEXT,
+				project TEXT
+			);
+			CREATE TABLE document_memories (
+				document_id TEXT NOT NULL,
+				memory_id TEXT NOT NULL
+			);
+		`);
+		db.query("INSERT INTO documents (id, metadata_json) VALUES (?, ?)").run(
+			"doc-metadata",
+			JSON.stringify({ signet: { agentId: "agent-meta", project: "/repo/meta" } }),
+		);
+		db.query("INSERT INTO documents (id, metadata_json) VALUES (?, ?)").run(
+			"doc-metadata-authoritative",
+			JSON.stringify({ signet: { agentId: "agent-meta", project: "/repo/meta" } }),
+		);
+		db.query("INSERT INTO documents (id, metadata_json) VALUES ('doc-linked', NULL)").run();
+		db.query("INSERT INTO documents (id, metadata_json) VALUES ('doc-default', NULL)").run();
+		db.query(
+			"INSERT INTO memories (id, agent_id, project) VALUES ('mem-linked', 'agent-linked', '/repo/linked')",
+		).run();
+		db.query(
+			"INSERT INTO memories (id, agent_id, project) VALUES ('mem-conflict', 'agent-conflict', '/repo/conflict')",
+		).run();
+		db.query("INSERT INTO document_memories (document_id, memory_id) VALUES ('doc-linked', 'mem-linked')").run();
+		db.query(
+			"INSERT INTO document_memories (document_id, memory_id) VALUES ('doc-metadata-authoritative', 'mem-conflict')",
+		).run();
+
+		documentScopeColumns(db);
+		documentScopeColumns(db);
+
+		const rows = db.query("SELECT id, agent_id, project FROM documents ORDER BY id").all() as Array<{
+			id: string;
+			agent_id: string;
+			project: string | null;
+		}>;
+		expect(rows).toEqual([
+			{ id: "doc-default", agent_id: "default", project: null },
+			{ id: "doc-linked", agent_id: "agent-linked", project: "/repo/linked" },
+			{ id: "doc-metadata", agent_id: "agent-meta", project: "/repo/meta" },
+			{ id: "doc-metadata-authoritative", agent_id: "agent-meta", project: "/repo/meta" },
+		]);
 	});
 
 	test("daily reflections allow multiple dashboard-open insights per agent and date", () => {
@@ -800,7 +856,7 @@ describe("migration framework", () => {
 		expect(colNames).toContain("pinned_at");
 	});
 
-	test("unique partial index on content_hash is agent- and scope-aware", () => {
+	test("unique partial index on content_hash is agent-, project-, and scope-aware", () => {
 		db = createFreshDb();
 		runMigrations(db);
 
@@ -826,11 +882,17 @@ describe("migration framework", () => {
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		).run("c", "hello from agent a", "hash1", "fact", "agent-a", null, now, now, "test");
 
+		// A different project may also persist the same content hash.
+		db.prepare(
+			`INSERT INTO memories (id, content, content_hash, type, agent_id, project, scope, created_at, updated_at, updated_by)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		).run("d", "hello from project scope", "hash1", "fact", "default", "/repo/other", null, now, now, "test");
+
 		// A different benchmark scope may also persist the same content hash.
 		db.prepare(
 			`INSERT INTO memories (id, content, content_hash, type, agent_id, scope, created_at, updated_at, updated_by)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		).run("d", "hello from bench scope", "hash1", "fact", "default", "bench:run-1", now, now, "test");
+		).run("g", "hello from bench scope", "hash1", "fact", "default", "bench:run-1", now, now, "test");
 
 		// NULL content_hash should not conflict.
 		db.prepare(
