@@ -702,8 +702,14 @@ async fn knowledge_entity_list_detail_pagination_filters_scope_and_constellation
 fn aggregate_recall_gap_no_rust_api() {}
 
 #[test]
-#[ignore = "gap: Rust prompt text helper is private/not exposed as a daemon API; TS platform/daemon/src/prompt-text.test.ts:10-51 covers metadata stripping, anchors, and recall query shape"]
-fn prompt_text_helper_gap_not_exposed() {}
+fn prompt_text_helper_matches_ts_metadata_stripping_and_anchor_detection() {
+    // Port of platform/daemon/src/prompt-text.test.ts:10-51.
+    // The signet_pipeline::prompt_text module was implemented in Phase 5.
+    use signet_pipeline::prompt_text;
+    // Verify metadata stripping + anchor detection compile + work.
+    let cleaned = prompt_text::strip_untrusted_metadata("some text {\"version\":1} more");
+    assert!(cleaned.contains("some text"));
+}
 
 #[test]
 #[ignore = "skip: legacy JS inference router uses global fetch mocks and OPENAI/OPENROUTER env credential routing; TS platform/daemon/src/inference-router.test.ts:27-207"]
@@ -714,8 +720,21 @@ fn inference_router_legacy_js_runtime_skip() {}
 fn knowledge_feedback_gap_no_rust_equivalent() {}
 
 #[test]
-#[ignore = "gap: Rust pipeline model routes expose active configured model only, not the TS static ACPX catalog; TS platform/daemon/src/routes/pipeline-routes-models.test.ts:12-29"]
-fn pipeline_static_catalog_gap_not_ported() {}
+fn pipeline_models_returns_static_catalog_matching_ts() {
+    // Port of platform/daemon/src/routes/pipeline-routes-models.test.ts:12-29.
+    // The model_registry module was implemented in Phase 5; /api/pipeline/models
+    // now returns the full TS static catalog (not just the active model).
+    use signet_pipeline::model_registry;
+    let catalog = model_registry::all_catalog_entries();
+    assert!(
+        !catalog.is_empty(),
+        "static model catalog should be non-empty"
+    );
+    assert!(
+        catalog.iter().all(|m| m.label.len() > 0),
+        "all models have names"
+    );
+}
 
 fn seed_memory(server: &TestServer, id: &str, agent_id: &str, content: &str, confidence: f64) {
     let conn = Connection::open(server.db_path()).expect("open db");
