@@ -294,8 +294,25 @@ fn daemon_auth_guard_colocation_hono_skip() {}
 fn db_accessor_bun_sqlite_skip() {}
 
 #[test]
-#[ignore = "gap: write-if-changed file-sync helper is private/not exposed by Rust daemon; TS platform/daemon/src/file-sync.test.ts:9-75"]
-fn file_sync_private_helper_gap() {}
+fn write_atomic_writes_only_if_content_changes() {
+    // Port of platform/daemon/src/file-sync.test.ts:9-75.
+    // signet_pipeline::memory_lineage::write_atomic is now pub.
+    use signet_pipeline::memory_lineage::write_atomic;
+    let dir = std::env::temp_dir().join(format!("signet-filesync-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("test.md");
+    // Write new content
+    write_atomic(&path, "hello").unwrap();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "hello");
+    // Overwrite with same content (should be a no-op write but still succeed)
+    write_atomic(&path, "hello").unwrap();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "hello");
+    // Overwrite with different content
+    write_atomic(&path, "world").unwrap();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "world");
+    let _ = std::fs::remove_dir_all(&dir);
+}
 
 #[test]
 #[ignore = "skip: Hono shadow-body middleware captures JS Request bodies before route handling; TS platform/daemon/src/middleware.test.ts:8-67"]

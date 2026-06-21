@@ -358,7 +358,7 @@ fn relative_path(root: &Path, path: &Path) -> String {
         .replace('\\', "/")
 }
 
-fn write_atomic(path: &Path, content: &str) -> Result<(), String> {
+pub fn write_atomic(path: &Path, content: &str) -> Result<(), String> {
     let Some(dir) = path.parent() else {
         return Err("artifact path missing parent".to_string());
     };
