@@ -6,10 +6,11 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use axum::{
-    extract::{ConnectInfo, State},
+    extract::{ConnectInfo, Query, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Json, Response},
 };
+use serde::Deserialize;
 use serde_yml::{Mapping, Value};
 use signet_core::config::PipelineV2Config;
 
@@ -190,6 +191,53 @@ fn build_embedding(
         .map(|cfg| signet_pipeline::embedding::from_config(cfg, None))
 }
 
+#[derive(Debug, Default, Deserialize)]
+pub struct ModelQuery {
+    provider: Option<String>,
+    #[serde(default, rename = "deprecated")]
+    include_deprecated: bool,
+}
+
+fn configured_pipeline_model(state: &AppState) -> (&str, &str) {
+    let extraction = state
+        .config
+        .manifest
+        .memory
+        .as_ref()
+        .and_then(|m| m.pipeline_v2.as_ref())
+        .map(|p| &p.extraction);
+
+    (
+        extraction.map(|e| e.provider.as_str()).unwrap_or("ollama"),
+        extraction.map(|e| e.model.as_str()).unwrap_or("qwen3:4b"),
+    )
+}
+
+fn model_entry_json(
+    entry: &signet_pipeline::model_registry::ModelRegistryEntry,
+    active_provider: &str,
+    active_model: &str,
+) -> serde_json::Value {
+    let mut value = serde_json::to_value(entry).unwrap_or_else(|_| serde_json::json!({}));
+    if let Some(object) = value.as_object_mut() {
+        object.insert("name".to_string(), serde_json::json!(entry.id));
+        object.insert(
+            "active".to_string(),
+            serde_json::json!(entry.provider == active_provider && entry.id == active_model),
+        );
+    }
+    value
+}
+
+fn sort_active_first(models: &mut [serde_json::Value]) {
+    models.sort_by_key(|model| {
+        !model
+            .get("active")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+    });
+}
+
 async fn apply_pause_state(state: &AppState, paused: bool) {
     state.pipeline_paused.store(paused, Ordering::SeqCst);
     let next = if paused { None } else { build_embedding(state) };
@@ -358,54 +406,47 @@ pub async fn nudge(State(state): State<Arc<AppState>>) -> impl IntoResponse {
 }
 
 /// GET /api/pipeline/models — list available LLM models.
-pub async fn models(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
-    let extraction = state
-        .config
-        .manifest
-        .memory
-        .as_ref()
-        .and_then(|m| m.pipeline_v2.as_ref())
-        .map(|p| &p.extraction);
-
-    let provider = extraction.map(|e| e.provider.as_str()).unwrap_or("ollama");
-    let model = extraction.map(|e| e.model.as_str()).unwrap_or("qwen3:4b");
+pub async fn models(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<ModelQuery>,
+) -> Json<serde_json::Value> {
+    let (active_provider, active_model) = configured_pipeline_model(&state);
+    let mut models: Vec<_> = signet_pipeline::model_registry::get_available_models(
+        query.provider.as_deref(),
+        query.include_deprecated,
+    )
+    .iter()
+    .map(|entry| model_entry_json(entry, active_provider, active_model))
+    .collect();
+    sort_active_first(&mut models);
 
     Json(serde_json::json!({
-        "models": [
-            {
-                "name": model,
-                "provider": provider,
-                "active": true,
-            }
-        ],
+        "models": models,
+        "registry": signet_pipeline::model_registry::get_registry_status(),
     }))
 }
 
 /// GET /api/pipeline/models/by-provider — models grouped by provider.
 pub async fn models_by_provider(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
-    let extraction = state
-        .config
-        .manifest
-        .memory
-        .as_ref()
-        .and_then(|m| m.pipeline_v2.as_ref())
-        .map(|p| &p.extraction);
-
-    let provider = extraction.map(|e| e.provider.as_str()).unwrap_or("ollama");
-    let model = extraction.map(|e| e.model.as_str()).unwrap_or("qwen3:4b");
-
+    let (active_provider, active_model) = configured_pipeline_model(&state);
     let mut result = serde_json::Map::new();
-    result.insert(
-        provider.to_string(),
-        serde_json::json!([{ "name": model, "active": true }]),
-    );
+    for (provider, entries) in signet_pipeline::model_registry::get_models_by_provider() {
+        let mut models: Vec<_> = entries
+            .iter()
+            .map(|entry| model_entry_json(entry, active_provider, active_model))
+            .collect();
+        if provider == active_provider {
+            sort_active_first(&mut models);
+        }
+        result.insert(provider, serde_json::Value::Array(models));
+    }
 
     Json(serde_json::Value::Object(result))
 }
 
 /// POST /api/pipeline/models/refresh — refresh model registry.
 pub async fn models_refresh(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
-    models(State(state)).await
+    models(State(state), Query(ModelQuery::default())).await
 }
 
 pub async fn pause(

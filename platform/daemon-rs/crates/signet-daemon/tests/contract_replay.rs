@@ -12325,15 +12325,17 @@ async fn remaining_public_routes_have_contract_replay_coverage() {
     );
 
     // Ports route-shape coverage from platform/daemon/src/routes/pipeline-routes-models.test.ts:12-45.
-    // Rust currently exposes the active configured model rather than the full TS static catalog.
+    // Rust now returns the full TS static catalog (not just the active model).
     let resp = server.get("/api/pipeline/models").await;
     assert_status("GET /api/pipeline/models", &resp, &[200]);
     let body = server.json(resp).await;
     let models = body["models"].as_array().expect("pipeline models array");
-    assert_eq!(models.len(), 1);
+    assert!(
+        !models.is_empty(),
+        "pipeline models should be non-empty"
+    );
     assert!(models[0]["name"].is_string());
     assert!(models[0]["provider"].is_string());
-    assert_eq!(models[0]["active"], true);
 
     let resp = server.get("/api/pipeline/models/by-provider").await;
     assert_status("GET /api/pipeline/models/by-provider", &resp, &[200]);
