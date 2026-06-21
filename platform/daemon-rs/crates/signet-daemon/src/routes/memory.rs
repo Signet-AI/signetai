@@ -104,7 +104,7 @@ fn auth_for_permission(
     headers: &HeaderMap,
     permission: Permission,
 ) -> Result<AuthState, Response> {
-    let is_local = peer.ip().is_loopback();
+    let is_local = crate::auth::middleware::is_loopback_ip(peer.ip());
     let auth_runtime = state.auth_snapshot();
     let auth = authenticate_headers(
         auth_runtime.mode,
@@ -125,7 +125,7 @@ fn scoped_agent_or_response(
     requested: Option<&str>,
     permission: Permission,
 ) -> Result<(String, AuthState), Response> {
-    let is_local = peer.ip().is_loopback();
+    let is_local = crate::auth::middleware::is_loopback_ip(peer.ip());
     let auth_runtime = state.auth_snapshot();
     let auth = auth_for_permission(state, peer, headers, permission)?;
     let agent =

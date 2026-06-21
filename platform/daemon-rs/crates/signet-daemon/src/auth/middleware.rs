@@ -45,7 +45,7 @@ fn is_loopback_request(req: &Request<Body>) -> bool {
 /// True for loopback in any form: IPv4 127.0.0.0/8, IPv6 ::1, and the
 /// IPv4-mapped IPv6 form ::ffff:127.0.0.1 (which `IpAddr::is_loopback` does
 /// NOT catch). Mirrors the TS middleware + existing Rust route helpers.
-fn is_loopback_ip(ip: std::net::IpAddr) -> bool {
+pub fn is_loopback_ip(ip: std::net::IpAddr) -> bool {
     match ip {
         std::net::IpAddr::V4(v4) => v4.is_loopback(),
         std::net::IpAddr::V6(v6) => {
@@ -202,8 +202,31 @@ pub async fn auth_middleware(
         }
     };
 
+    // TS applies requirePermission("admin") to /api/repair/*, /api/troubleshoot/*,
+    // and /api/secrets* before the handler (repair-routes.ts:81-85,
+    // secrets-routes.ts:91-95). Enforce the same here in the global middleware
+    // so every handler under these paths requires admin, not just basic auth.
+    let path = req.uri().path();
+    if is_admin_required_path(path) {
+        if let Err(resp) =
+            require_permission_guard(&auth, Permission::Admin, auth_runtime.mode, is_local)
+        {
+            return *resp;
+        }
+    }
+
     req.extensions_mut().insert(auth);
     next.run(req).await
+}
+
+/// Paths that require Permission::Admin in both TS and Rust. Mirrors TS
+/// `app.use("/api/repair/*", requirePermission("admin"))` etc.
+fn is_admin_required_path(path: &str) -> bool {
+    path.starts_with("/api/repair/")
+        || path.starts_with("/api/troubleshoot/")
+        || path.starts_with("/api/secrets")
+        // secrets sub-routes: /api/secrets, /api/secrets/:name, /api/secrets/exec, etc.
+        || path == "/api/secrets"
 }
 
 // ---------------------------------------------------------------------------

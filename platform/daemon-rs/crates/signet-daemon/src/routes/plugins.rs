@@ -545,7 +545,7 @@ pub async fn diagnostics(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    if id != SIGNET_SECRETS_PLUGIN_ID {
+    if id != SIGNET_SECRETS_PLUGIN_ID && id != SIGNET_GRAPHIQ_PLUGIN_ID {
         return (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({"error": "Plugin not found"})),
@@ -561,14 +561,17 @@ pub async fn diagnostics(
 
 /// GET /api/plugins/:id
 pub async fn get(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> impl IntoResponse {
-    if id != SIGNET_SECRETS_PLUGIN_ID {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "Plugin not found"})),
-        )
-            .into_response();
+    if id == SIGNET_GRAPHIQ_PLUGIN_ID {
+        return (StatusCode::OK, Json(graphiq_record(&state))).into_response();
     }
-    (StatusCode::OK, Json(plugin_record(&state))).into_response()
+    if id == SIGNET_SECRETS_PLUGIN_ID {
+        return (StatusCode::OK, Json(plugin_record(&state))).into_response();
+    }
+    (
+        StatusCode::NOT_FOUND,
+        Json(serde_json::json!({"error": "Plugin not found"})),
+    )
+        .into_response()
 }
 
 /// PATCH /api/plugins/:id
@@ -582,7 +585,7 @@ pub async fn patch(
     if let Err(resp) = require_admin_mutation(&state, peer, &headers) {
         return resp;
     }
-    if id != SIGNET_SECRETS_PLUGIN_ID {
+    if id != SIGNET_SECRETS_PLUGIN_ID && id != SIGNET_GRAPHIQ_PLUGIN_ID {
         return (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({"error": "Plugin not found"})),

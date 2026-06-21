@@ -68,6 +68,21 @@ impl ProxyConfig {
     }
 }
 
+/// Sanitize client-supplied x-request-id: only allow alphanumeric + dash,
+/// max 128 chars. Otherwise fingerprint to prevent secret/token leakage
+/// into shadow-divergences.jsonl.
+fn sanitize_request_id(raw: &str) -> String {
+    if raw.len() <= 128 && raw.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+        raw.to_string()
+    } else {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        let mut hasher = DefaultHasher::new();
+        raw.hash(&mut hasher);
+        format!("[redacted-id:{:016x}]", hasher.finish())
+    }
+}
+
 fn flag_val<T: std::str::FromStr>(args: &[String], name: &str) -> Option<T> {
     args.iter()
         .position(|a| a == name)
@@ -196,10 +211,12 @@ async fn proxy(State(state): State<Arc<ProxyState>>, req: Request<Body>) -> Resp
     let shadow_method = method.clone();
     let shadow_headers = headers.clone();
     let shadow_path = path.clone();
+    // #7 REVIEW FIX: allowlist x-request-id shape (alphanumeric + dash, max 128)
+    // to prevent client-supplied secrets/tokens from being logged verbatim.
     let request_id = headers
         .get("x-request-id")
         .and_then(|value| value.to_str().ok())
-        .map(str::to_string);
+        .map(|raw| sanitize_request_id(raw));
 
     tokio::spawn(async move {
         let shadow_start = Instant::now();

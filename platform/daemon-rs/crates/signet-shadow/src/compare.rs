@@ -807,10 +807,33 @@ fn compare_internal_table(
     let primary_by_key = rows_by_key(primary_rows, rules, &primary_memory_ids);
     let shadow_by_key = rows_by_key(shadow_rows, rules, &shadow_memory_ids);
 
-    for (key, primary_row) in &primary_by_key {
+    for (key, primary_rows_for_key) in &primary_by_key {
         match shadow_by_key.get(key) {
-            Some(shadow_row) => {
-                compare_internal_row(rules, key, primary_row, shadow_row, divergences)
+            Some(shadow_rows_for_key) => {
+                // #6 REVIEW FIX: detect duplicate-key count mismatches.
+                // If one daemon wrote N rows with the same key and the other wrote M,
+                // emit a count-mismatch divergence instead of silently overwriting.
+                if primary_rows_for_key.len() != shadow_rows_for_key.len() {
+                    divergences.push(Divergence::internal(
+                        Severity::Critical,
+                        &rules.table,
+                        key,
+                        format!("internal.{}", rules.table),
+                        format!(
+                            "duplicate row count mismatch: primary={}, shadow={}",
+                            primary_rows_for_key.len(),
+                            shadow_rows_for_key.len()
+                        ),
+                        Some(serde_json::json!({"primary_count": primary_rows_for_key.len()})),
+                        Some(serde_json::json!({"shadow_count": shadow_rows_for_key.len()})),
+                    ));
+                }
+                // Compare the first row of each set (best-effort for equal counts).
+                if let (Some(p_row), Some(s_row)) =
+                    (primary_rows_for_key.first(), shadow_rows_for_key.first())
+                {
+                    compare_internal_row(rules, key, p_row, s_row, divergences);
+                }
             }
             None => divergences.push(Divergence::internal(
                 Severity::Critical,
@@ -818,13 +841,18 @@ fn compare_internal_table(
                 key,
                 format!("internal.{}", rules.table),
                 "row missing in shadow internal state",
-                Some(redact_internal_row(primary_row, rules)),
+                Some(redact_internal_row(
+                    primary_rows_for_key
+                        .first()
+                        .unwrap_or(&serde_json::Value::Null),
+                    rules,
+                )),
                 None,
             )),
         }
     }
 
-    for (key, shadow_row) in &shadow_by_key {
+    for (key, shadow_rows_for_key) in &shadow_by_key {
         if !primary_by_key.contains_key(key) {
             divergences.push(Divergence::internal(
                 Severity::Critical,
@@ -833,7 +861,12 @@ fn compare_internal_table(
                 format!("internal.{}", rules.table),
                 "extra row in shadow internal state",
                 None,
-                Some(redact_internal_row(shadow_row, rules)),
+                Some(redact_internal_row(
+                    shadow_rows_for_key
+                        .first()
+                        .unwrap_or(&serde_json::Value::Null),
+                    rules,
+                )),
             ));
         }
     }
@@ -843,13 +876,12 @@ fn rows_by_key(
     rows: &[serde_json::Value],
     rules: &EffectiveInternalTableRule,
     memory_identities: &BTreeMap<String, String>,
-) -> BTreeMap<String, serde_json::Value> {
-    let mut out = BTreeMap::new();
+) -> BTreeMap<String, Vec<serde_json::Value>> {
+    let mut out: BTreeMap<String, Vec<serde_json::Value>> = BTreeMap::new();
     for (index, row) in rows.iter().enumerate() {
-        out.insert(
-            row_key(row, rules, memory_identities).unwrap_or_else(|| format!("$index:{index}")),
-            row.clone(),
-        );
+        let key =
+            row_key(row, rules, memory_identities).unwrap_or_else(|| format!("$index:{index}"));
+        out.entry(key).or_default().push(row.clone());
     }
     out
 }

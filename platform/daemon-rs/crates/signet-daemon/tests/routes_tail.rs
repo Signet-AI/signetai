@@ -707,7 +707,10 @@ fn aggregate_recall_budget_validation_and_orchestration() {
         aggregate_recall::parse_aggregate_recall_budget(Some("small")),
         Some(aggregate_recall::AggregateRecallBudget::Small)
     );
-    assert_eq!(aggregate_recall::parse_aggregate_recall_budget(Some("invalid")), None);
+    assert_eq!(
+        aggregate_recall::parse_aggregate_recall_budget(Some("invalid")),
+        None
+    );
 }
 
 #[test]

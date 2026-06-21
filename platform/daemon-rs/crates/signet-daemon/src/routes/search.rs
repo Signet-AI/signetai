@@ -299,6 +299,31 @@ pub async fn recall(
     // Clamp recall limit to TS normalizeRecallLimit bounds (1..50) to avoid
     // oversized hydration/fallback work on large limits.
     let limit = body.limit.unwrap_or(10).clamp(1, 50);
+
+    // #4 REVIEW FIX: Enforce project scope from token claims.
+    // TS overwrites recall params with claims.scope.project (memory-routes.ts:762).
+    // A token scoped to project A must not recall project B.
+    let scoped_project = _auth
+        .result
+        .claims
+        .as_ref()
+        .and_then(|c| c.scope.project.as_deref())
+        .map(|s| s.to_string());
+    if let Some(ref scope_proj) = scoped_project {
+        if let Some(ref body_proj) = body.project {
+            let body_proj = body_proj.trim();
+            if !body_proj.is_empty() && body_proj != scope_proj.as_str() {
+                return (
+                    StatusCode::FORBIDDEN,
+                    Json(serde_json::json!({
+                        "error": "project scope mismatch",
+                        "scoped_project": scope_proj,
+                    })),
+                )
+                    .into_response();
+            }
+        }
+    }
     let search_cfg = state.config.manifest.search.clone().unwrap_or_default();
     let alpha = search_cfg.alpha;
     let min_score = search_cfg.min_score;

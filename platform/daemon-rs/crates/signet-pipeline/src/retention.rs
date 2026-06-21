@@ -192,10 +192,21 @@ pub async fn run_sweep(pool: &DbPool, config: &RetentionConfig) -> Result<Retent
 
     // Step 5: Completed jobs.
     let completed_jobs_purged =
-        purge_completed_jobs(pool, completed_job_cutoff, config.batch_size).await?;
+        purge_completed_jobs(pool, completed_job_cutoff.clone(), config.batch_size).await?;
 
     // Step 6: Dead-letter jobs.
-    let dead_jobs_purged = purge_dead_jobs(pool, dead_job_cutoff, config.batch_size).await?;
+    let dead_jobs_purged =
+        purge_dead_jobs(pool, dead_job_cutoff.clone(), config.batch_size).await?;
+
+    // Step 7: transcript_capture_jobs (TS retention-worker.ts:309).
+    // Try/catch for missing table — older DBs may not have it.
+    let transcript_jobs_purged = purge_transcript_capture_jobs(
+        pool,
+        completed_job_cutoff,
+        dead_job_cutoff,
+        config.batch_size,
+    )
+    .await?;
 
     Ok(RetentionResult {
         graph_links_purged,
@@ -401,6 +412,25 @@ async fn purge_tombstones(pool: &DbPool, cutoff: String, batch: u32) -> Result<u
             return Ok(serde_json::json!(0));
         }
 
+        // Guard: skip cold archival if memories_cold table doesn't exist
+        // (older/stamped DBs). TS wraps in try/catch on 'no such table'.
+        let cold_exists: bool = conn
+            .query_row(
+                "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='memories_cold'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(false);
+        if !cold_exists {
+            // Still purge tombstones but skip archival.
+            let count = conn.execute(
+                "DELETE FROM memories WHERE is_deleted = 1 AND deleted_at < ?1
+                 LIMIT ?2",
+                params![cutoff, batch],
+            )?;
+            return Ok(serde_json::json!(count));
+        }
+
         let archived_at = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
         for row in &rows {
             conn.execute(
@@ -501,6 +531,51 @@ async fn purge_dead_jobs(pool: &DbPool, cutoff: String, batch: u32) -> Result<us
             params![cutoff, batch],
         )?;
         Ok(serde_json::json!(count))
+    })
+    .await
+    .map(|value| value_to_usize(&value))
+    .map_err(|e| e.to_string())
+}
+
+/// Step 7: purge old transcript_capture_jobs (TS retention-worker.ts:309).
+/// Uses try/catch semantics — if the table doesn't exist (older DBs), returns 0.
+async fn purge_transcript_capture_jobs(
+    pool: &DbPool,
+    completed_cutoff: String,
+    dead_cutoff: String,
+    batch: u32,
+) -> Result<usize, String> {
+    pool.write_tx(Priority::Low, move |conn| {
+        // Guard: skip if table doesn't exist (older stamped DBs).
+        let table_exists: bool = conn
+            .query_row(
+                "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='transcript_capture_jobs'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(false);
+        if !table_exists {
+            return Ok(serde_json::json!(0));
+        }
+        let completed = conn.execute(
+            "DELETE FROM transcript_capture_jobs
+             WHERE id IN (
+                 SELECT id FROM transcript_capture_jobs
+                 WHERE status = 'completed' AND completed_at IS NOT NULL AND completed_at < ?1
+                 LIMIT ?2
+             )",
+            params![completed_cutoff, batch],
+        )?;
+        let dead = conn.execute(
+            "DELETE FROM transcript_capture_jobs
+             WHERE id IN (
+                 SELECT id FROM transcript_capture_jobs
+                 WHERE status = 'dead' AND updated_at IS NOT NULL AND updated_at < ?1
+                 LIMIT ?2
+             )",
+            params![dead_cutoff, batch],
+        )?;
+        Ok(serde_json::json!(completed + dead))
     })
     .await
     .map(|value| value_to_usize(&value))
