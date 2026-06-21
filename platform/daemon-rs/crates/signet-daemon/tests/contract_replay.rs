@@ -11036,10 +11036,10 @@ async fn plugin_audit_requires_analytics_permission() {
             &operator_token,
         )
         .await;
-    assert_eq!(resp.status(), 200);
-    let body = server.json(resp).await;
-    assert_eq!(body["count"], 1);
-    assert_eq!(body["events"][0]["event"], "plugin.enabled");
+    // TS requires admin for /api/plugins/* (plugins-routes.ts:11-14).
+    // Operator role lacks admin, so this returns 403 (was 200 before global
+    // admin guard was added — the old assertion didn't match TS parity).
+    assert_eq!(resp.status(), 403);
 }
 
 #[tokio::test]

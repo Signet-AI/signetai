@@ -545,7 +545,16 @@ pub async fn diagnostics(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    if id != SIGNET_SECRETS_PLUGIN_ID && id != SIGNET_GRAPHIQ_PLUGIN_ID {
+    // #5 REVIEW FIX: GraphIQ diagnostics/mutation are not yet implemented.
+    // Return 404 for signet.graphiq detail/mutation until implemented.
+    if id == SIGNET_GRAPHIQ_PLUGIN_ID {
+        return (
+            StatusCode::NOT_IMPLEMENTED,
+            Json(serde_json::json!({"error": "GraphIQ diagnostics not yet implemented"})),
+        )
+            .into_response();
+    }
+    if id != SIGNET_SECRETS_PLUGIN_ID {
         return (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({"error": "Plugin not found"})),
@@ -582,10 +591,18 @@ pub async fn patch(
     Path(id): Path<String>,
     Json(body): Json<PatchPluginBody>,
 ) -> impl IntoResponse {
+    // #5 REVIEW FIX: GraphIQ PATCH not yet implemented (was writing secrets state).
+    if id == SIGNET_GRAPHIQ_PLUGIN_ID {
+        return (
+            StatusCode::NOT_IMPLEMENTED,
+            Json(serde_json::json!({"error": "GraphIQ mutation not yet implemented"})),
+        )
+            .into_response();
+    }
     if let Err(resp) = require_admin_mutation(&state, peer, &headers) {
         return resp;
     }
-    if id != SIGNET_SECRETS_PLUGIN_ID && id != SIGNET_GRAPHIQ_PLUGIN_ID {
+    if id != SIGNET_SECRETS_PLUGIN_ID {
         return (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({"error": "Plugin not found"})),

@@ -36,6 +36,7 @@ use crate::routes::memory_embeddings::{
     memory_has_embedding, prepare_memory_embedding, upsert_memory_embedding,
 };
 use crate::state::AppState;
+use crate::state::AuthRuntimeState;
 
 // ---------------------------------------------------------------------------
 // Mutations-frozen guard
@@ -1204,7 +1205,7 @@ fn guard_write_scope(
     headers: &HeaderMap,
     peer: &SocketAddr,
     agent_id: &str,
-) -> Result<(), Box<axum::response::Response>> {
+) -> Result<(AuthState, AuthRuntimeState), Box<axum::response::Response>> {
     let auth_runtime = state.auth_snapshot();
     let auth = authenticate_headers(
         auth_runtime.mode,
@@ -1212,12 +1213,21 @@ fn guard_write_scope(
         headers,
         is_loopback(peer),
     )?;
+    // #1 REVIEW FIX: remember writes must require Permission::Remember,
+    // not just scope. A readonly/recall-only token must not create memories.
+    require_permission_guard(
+        &auth,
+        Permission::Remember,
+        auth_runtime.mode,
+        is_loopback(peer),
+    )?;
     let target = TokenScope {
         project: None,
         agent: Some(agent_id.to_string()),
         user: None,
     };
-    require_scope_guard(&auth, &target, auth_runtime.mode, is_loopback(peer))
+    require_scope_guard(&auth, &target, auth_runtime.mode, is_loopback(peer))?;
+    Ok((auth, auth_runtime))
 }
 
 fn clean_header(value: Option<&str>) -> Option<String> {
@@ -1972,9 +1982,33 @@ pub async fn remember(
         )
             .into_response();
     }
-    if let Err(resp) = guard_write_scope(state.as_ref(), &headers, &peer, &agent_id) {
-        return *resp;
-    }
+    // #1+#2 REVIEW FIX: remember writes require Permission::Remember,
+    // and project scope is enforced from token claims.
+    let (write_auth, _) = match guard_write_scope(state.as_ref(), &headers, &peer, &agent_id) {
+        Ok(v) => v,
+        Err(resp) => return *resp,
+    };
+    // Override body project with scoped-project token enforcement.
+    let scoped_project = write_auth
+        .result
+        .claims
+        .as_ref()
+        .and_then(|c| c.scope.project.as_deref())
+        .map(|s| s.to_string());
+    let project = {
+        if let Some(ref sp) = scoped_project {
+            if let Some(ref bp) = project {
+                if bp != sp {
+                    return (StatusCode::FORBIDDEN,
+                        Json(serde_json::json!({"error": "project scope mismatch", "scoped_project": sp})))
+                        .into_response();
+                }
+            }
+            Some(sp.clone())
+        } else {
+            project
+        }
+    };
     let extraction_max_attempts = state
         .config
         .manifest

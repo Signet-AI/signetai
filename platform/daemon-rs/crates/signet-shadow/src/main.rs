@@ -68,19 +68,14 @@ impl ProxyConfig {
     }
 }
 
-/// Sanitize client-supplied x-request-id: only allow alphanumeric + dash,
-/// max 128 chars. Otherwise fingerprint to prevent secret/token leakage
-/// into shadow-divergences.jsonl.
+/// Sanitize client-supplied x-request-id: ALWAYS hash to prevent any
+/// secret-looking value (e.g. sk-aaa...) from leaking into the divergence log.
 fn sanitize_request_id(raw: &str) -> String {
-    if raw.len() <= 128 && raw.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
-        raw.to_string()
-    } else {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-        let mut hasher = DefaultHasher::new();
-        raw.hash(&mut hasher);
-        format!("[redacted-id:{:016x}]", hasher.finish())
-    }
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut hasher = DefaultHasher::new();
+    raw.hash(&mut hasher);
+    format!("[req:{:016x}]", hasher.finish())
 }
 
 fn flag_val<T: std::str::FromStr>(args: &[String], name: &str) -> Option<T> {

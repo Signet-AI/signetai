@@ -828,11 +828,15 @@ fn compare_internal_table(
                         Some(serde_json::json!({"shadow_count": shadow_rows_for_key.len()})),
                     ));
                 }
-                // Compare the first row of each set (best-effort for equal counts).
-                if let (Some(p_row), Some(s_row)) =
-                    (primary_rows_for_key.first(), shadow_rows_for_key.first())
-                {
-                    compare_internal_row(rules, key, p_row, s_row, divergences);
+                // #6 REVIEW FIX: compare ALL rows for duplicate keys, not just first.
+                // [A,B] vs [A,C] must be detected. Compare each pair; if counts
+                // are equal, compare element-by-element.
+                if primary_rows_for_key.len() == shadow_rows_for_key.len() {
+                    for (p_row, s_row) in
+                        primary_rows_for_key.iter().zip(shadow_rows_for_key.iter())
+                    {
+                        compare_internal_row(rules, key, p_row, s_row, divergences);
+                    }
                 }
             }
             None => divergences.push(Divergence::internal(

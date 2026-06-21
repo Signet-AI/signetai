@@ -227,6 +227,9 @@ fn is_admin_required_path(path: &str) -> bool {
         || path.starts_with("/api/secrets")
         // secrets sub-routes: /api/secrets, /api/secrets/:name, /api/secrets/exec, etc.
         || path == "/api/secrets"
+        // #4 REVIEW FIX: TS requires admin for plugins and graphiq too.
+        || path.starts_with("/api/plugins")
+        || path.starts_with("/api/graphiq/")
 }
 
 // ---------------------------------------------------------------------------

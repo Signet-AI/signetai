@@ -363,12 +363,15 @@ pub async fn recall(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned);
-    let project = body
-        .project
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned);
+    // #3 REVIEW FIX: use scoped_project when body.project is omitted.
+    // A token scoped to project A must not recall all projects by omitting it.
+    let project = scoped_project.as_ref().map(|s| s.clone()).or_else(|| {
+        body.project
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+    });
     let query_for_response = query.clone();
 
     let result = state
