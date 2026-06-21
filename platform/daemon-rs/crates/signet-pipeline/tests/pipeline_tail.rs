@@ -6,6 +6,9 @@ use std::sync::{Arc, Mutex};
 use rusqlite::{Connection, params};
 use signet_core::db::{DbPool, Priority};
 use signet_core::queries::embedding::vector_to_blob;
+use signet_pipeline::contradiction::{
+    build_prompt as build_contradiction_prompt, parse_semantic_contradiction,
+};
 use signet_pipeline::model_registry::{
     ModelRegistryEntry, ModelTier, get_available_models, get_models_by_provider,
     get_registry_status, mark_deprecated_versions,
@@ -19,6 +22,7 @@ use signet_pipeline::skill_reconciler::{
     ReconcileResult, SkillFrontmatter, SkillReconcilerConfig, reconcile_once, skill_embedding_hash,
     skill_entity_id,
 };
+use signet_pipeline::structured_evidence::{EvidenceCandidateInput, shape_structured_evidence};
 use signet_pipeline::synthesis::{SynthesisConfig, start as start_synthesis_worker};
 use signet_services::graph::get_graph_boost_ids;
 use uuid::Uuid;
@@ -209,13 +213,47 @@ async fn synthesis_worker_renders_projection_from_existing_summaries() {
     let _ = std::fs::remove_dir_all(root);
 }
 
-// platform/daemon/src/pipeline/contradiction.test.ts:17 documents semantic
-// contradiction JSON extraction from prose/fences/trailing commas. Rust only
-// exposes antonym/token primitives in signet-pipeline/src/antonyms.rs; no
-// public JSON-from-prose contradiction parser exists to port.
+// Port of platform/daemon/src/pipeline/contradiction.test.ts:17-63.
+// Rust must extract semantic contradiction JSON from prose/fences/trailing
+// commas and prefer the final object over earlier examples.
 #[test]
-#[ignore = "gap: Rust has antonym primitives but no public contradiction JSON extraction module"]
-fn gap_contradiction_json_from_prose_parser_missing() {}
+fn contradiction_json_from_prose_parser_matches_ts() {
+    let prose = parse_semantic_contradiction(
+        "We should compare these carefully.\n{\"contradicts\": true, \"confidence\": 0.91, \"reasoning\": \"Default theme changed from dark to light.\"}\nThis is my final answer.",
+    )
+    .expect("parse prose wrapped contradiction JSON");
+    assert!(prose.detected);
+    assert_eq!(prose.confidence, 0.91);
+    assert!(prose.reasoning.contains("theme"));
+
+    let fenced = parse_semantic_contradiction(
+        r#"```json
+{
+  "contradicts": false,
+  "confidence": 0.8,
+  "reasoning": "These statements are complementary.",
+}
+```"#,
+    )
+    .expect("parse fenced trailing-comma contradiction JSON");
+    assert!(!fenced.detected);
+    assert_eq!(fenced.confidence, 0.8);
+
+    let final_object = parse_semantic_contradiction(
+        "Example: {\"contradicts\": false, \"confidence\": 0.2, \"reasoning\": \"example\"}\nFinal: {\"contradicts\": true, \"confidence\": 0.95, \"reasoning\": \"actual answer\"}",
+    )
+    .expect("parse final contradiction object");
+    assert!(final_object.detected);
+    assert_eq!(final_object.confidence, 0.95);
+    assert!(final_object.reasoning.contains("actual answer"));
+
+    let prompt = build_contradiction_prompt(
+        "Dark mode is enabled by default",
+        "Light mode is the default theme",
+    );
+    assert!(prompt.contains("Do these two statements contradict each other?"));
+    assert!(prompt.contains("Return ONLY a JSON object"));
+}
 
 // platform/daemon/src/pipeline/continuity-scoring.test.ts:114 documents the
 // TS session continuity scoring schema and round trip. There is no Rust
@@ -453,10 +491,51 @@ fn skill_reconciler_does_not_loop_after_enriched_embedding_text() {
     std::fs::remove_dir_all(root).ok();
 }
 
-// platform/daemon/src/pipeline/structured-evidence.test.ts:4 and
-// structured-path-evidence.test.ts:11 cover structured evidence ranking boosts.
-// Rust recall shaping APIs are private/internal here, so no direct port is
-// available from signet-pipeline integration tests.
+// Port of platform/daemon/src/pipeline/structured-evidence.test.ts:35-53.
+// The Rust structured evidence module must let structured path evidence
+// introduce/rank candidates above generic semantic or lexical neighbors.
 #[test]
-#[ignore = "gap: structured evidence ranking APIs are private/internal in Rust"]
-fn gap_structured_evidence_private_apis() {}
+fn structured_evidence_private_api_gap_now_has_public_ranking_port() {
+    let generic_streaming = EvidenceCandidateInput {
+        id: "generic-streaming".to_string(),
+        source: Some("vector".to_string()),
+        semantic: Some(0.82),
+        ..EvidenceCandidateInput::default()
+    };
+    let music_platform = EvidenceCandidateInput {
+        id: "music-platform".to_string(),
+        source: Some("structured".to_string()),
+        structured: Some(0.53),
+        ..EvidenceCandidateInput::default()
+    };
+    let shaped = shape_structured_evidence(&[generic_streaming, music_platform]);
+    assert_eq!(
+        shaped.first().map(|row| row.id.as_str()),
+        Some("music-platform")
+    );
+    assert_eq!(
+        shaped.first().map(|row| row.source.as_str()),
+        Some("structured")
+    );
+
+    let mountain_trip = EvidenceCandidateInput {
+        id: "mountain-trip".to_string(),
+        source: Some("hybrid".to_string()),
+        lexical: Some(0.38),
+        semantic: Some(0.9),
+        ..EvidenceCandidateInput::default()
+    };
+    let virtual_coffee = EvidenceCandidateInput {
+        id: "virtual-coffee".to_string(),
+        source: Some("hybrid".to_string()),
+        semantic: Some(0.82),
+        structured: Some(0.39),
+        ..EvidenceCandidateInput::default()
+    };
+    let shaped = shape_structured_evidence(&[mountain_trip, virtual_coffee]);
+    assert_eq!(
+        shaped.first().map(|row| row.id.as_str()),
+        Some("virtual-coffee")
+    );
+    assert_eq!(shaped.first().map(|row| row.source.as_str()), Some("sec"));
+}

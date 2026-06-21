@@ -9,6 +9,10 @@ use signet_core::config::EmbeddingConfig;
 use signet_core::queries::embedding::{self, InsertEmbedding};
 use signet_pipeline::document::chunk_content;
 use signet_pipeline::embedding::from_config;
+use signet_pipeline::embedding_tracker::{
+    EmbeddingFailureMap, StaleEmbeddingRow, compute_embedding_retry_backoff_ms,
+    process_embedding_cycle,
+};
 use signet_pipeline::memory_lineage::upsert_thread_head;
 use signet_pipeline::native_memory_sources::{
     clear_native_memory_fingerprint_cache, codex_native_memory_source, index_native_memory_file,
@@ -318,12 +322,129 @@ fn thread_head_upsert_keeps_agent_scope_label_and_newest_state() {
     assert_eq!(count, 2);
 }
 
-// platform/daemon/src/embedding-tracker.test.ts:11 covers embedding retry
-// backoff/suppression/content-hash invalidation. No Rust embedding tracker
-// module exists.
+// Port of platform/daemon/src/embedding-tracker.test.ts:11-91. Rust must
+// preserve embedding retry backoff floors, per-payload suppression, content-hash
+// invalidation, and clearing suppression after success.
 #[test]
-#[ignore = "gap: no Rust embedding retry tracker module"]
-fn gap_embedding_tracker_missing() {}
+fn embedding_tracker_retry_suppression_matches_ts() {
+    assert_eq!(compute_embedding_retry_backoff_ms(1, 1_000), 60_000);
+    assert_eq!(compute_embedding_retry_backoff_ms(2, 1_000), 5 * 60_000);
+    assert_eq!(compute_embedding_retry_backoff_ms(3, 1_000), 30 * 60_000);
+    assert_eq!(compute_embedding_retry_backoff_ms(4, 1_000), 60 * 60_000);
+    assert_eq!(compute_embedding_retry_backoff_ms(1, 20_000), 100_000);
+    assert_eq!(compute_embedding_retry_backoff_ms(2, 20_000), 500_000);
+
+    let rows = vec![StaleEmbeddingRow {
+        id: "mem-1".to_string(),
+        content: "bad".to_string(),
+        content_hash: "hash-a".to_string(),
+        current_model: None,
+    }];
+    let mut failures = EmbeddingFailureMap::new();
+    let mut calls = 0;
+    let first = process_embedding_cycle(
+        &rows,
+        &mut failures,
+        "mxbai-embed-large",
+        1_000,
+        |_| {
+            calls += 1;
+            None
+        },
+        1_000,
+    );
+    let second = process_embedding_cycle(
+        &rows,
+        &mut failures,
+        "mxbai-embed-large",
+        1_000,
+        |_| {
+            calls += 1;
+            None
+        },
+        2_000,
+    );
+    assert_eq!(first.failed, 1);
+    assert_eq!(second.failed, 0);
+    assert_eq!(second.queue_depth, 0);
+    assert_eq!(calls, 1);
+
+    let mut failures = EmbeddingFailureMap::new();
+    let mut fetch_calls = Vec::new();
+    let old_row = StaleEmbeddingRow {
+        id: "mem-1".to_string(),
+        content: "bad-old".to_string(),
+        content_hash: "hash-old".to_string(),
+        current_model: None,
+    };
+    process_embedding_cycle(
+        &[old_row],
+        &mut failures,
+        "mxbai-embed-large",
+        1_000,
+        |text| {
+            fetch_calls.push(text.to_string());
+            None
+        },
+        1_000,
+    );
+    let new_row = StaleEmbeddingRow {
+        id: "mem-1".to_string(),
+        content: "good-new-shape".to_string(),
+        content_hash: "hash-new".to_string(),
+        current_model: None,
+    };
+    let next = process_embedding_cycle(
+        &[new_row],
+        &mut failures,
+        "mxbai-embed-large",
+        1_000,
+        |text| {
+            fetch_calls.push(text.to_string());
+            None
+        },
+        2_000,
+    );
+    assert_eq!(next.queue_depth, 1);
+    assert_eq!(fetch_calls, vec!["bad-old", "good-new-shape"]);
+
+    let rows = vec![StaleEmbeddingRow {
+        id: "mem-1".to_string(),
+        content: "retry-me".to_string(),
+        content_hash: "hash-a".to_string(),
+        current_model: None,
+    }];
+    let mut failures = EmbeddingFailureMap::new();
+    let mut ok = false;
+    process_embedding_cycle(
+        &rows,
+        &mut failures,
+        "mxbai-embed-large",
+        1_000,
+        |_| if ok { Some(vec![0.1, 0.2, 0.3]) } else { None },
+        1_000,
+    );
+    ok = true;
+    let retry = process_embedding_cycle(
+        &rows,
+        &mut failures,
+        "mxbai-embed-large",
+        1_000,
+        |_| if ok { Some(vec![0.1, 0.2, 0.3]) } else { None },
+        70_000,
+    );
+    let after = process_embedding_cycle(
+        &rows,
+        &mut failures,
+        "mxbai-embed-large",
+        1_000,
+        |_| if ok { Some(vec![0.1, 0.2, 0.3]) } else { None },
+        71_000,
+    );
+    assert_eq!(retry.results.len(), 1);
+    assert_eq!(after.results.len(), 1);
+    assert_eq!(after.failed, 0);
+}
 
 // Port of platform/daemon/src/native-memory-sources.test.ts:49-70,
 // :162-174, :345-360, and :814-831. The Rust native memory source module
