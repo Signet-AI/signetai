@@ -12,6 +12,8 @@ pub mod graph_traversal;
 pub mod maintenance;
 pub mod memory_lineage;
 pub mod model_registry;
+pub mod native_memory_sources;
+pub mod path_feedback;
 pub mod prompt_text;
 pub mod prospective_index;
 pub mod provider;
