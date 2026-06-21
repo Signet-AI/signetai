@@ -1,4 +1,5 @@
 pub mod antonyms;
+pub mod contradiction;
 pub mod decision;
 pub mod dep_synthesis;
 pub mod document;
@@ -11,6 +12,7 @@ pub mod graph_traversal;
 pub mod maintenance;
 pub mod memory_lineage;
 pub mod model_registry;
+pub mod prompt_text;
 pub mod prospective_index;
 pub mod provider;
 pub mod retention;

@@ -12330,10 +12330,7 @@ async fn remaining_public_routes_have_contract_replay_coverage() {
     assert_status("GET /api/pipeline/models", &resp, &[200]);
     let body = server.json(resp).await;
     let models = body["models"].as_array().expect("pipeline models array");
-    assert!(
-        !models.is_empty(),
-        "pipeline models should be non-empty"
-    );
+    assert!(!models.is_empty(), "pipeline models should be non-empty");
     assert!(models[0]["name"].is_string());
     assert!(models[0]["provider"].is_string());
 

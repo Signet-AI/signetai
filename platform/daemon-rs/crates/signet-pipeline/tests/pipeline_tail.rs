@@ -5,8 +5,19 @@ use std::sync::{Arc, Mutex};
 
 use rusqlite::{Connection, params};
 use signet_core::db::{DbPool, Priority};
+use signet_core::queries::embedding::vector_to_blob;
+use signet_pipeline::model_registry::{
+    ModelRegistryEntry, ModelTier, get_available_models, get_models_by_provider,
+    get_registry_status, mark_deprecated_versions,
+};
+use signet_pipeline::prospective_index::{build_prompt, parse_hints};
 use signet_pipeline::provider::{
     GenerateOpts, GenerateResult, LlmProvider, LlmSemaphore, ProviderError,
+};
+use signet_pipeline::skill_enrichment::parse_enrichment_output;
+use signet_pipeline::skill_reconciler::{
+    ReconcileResult, SkillFrontmatter, SkillReconcilerConfig, reconcile_once, skill_embedding_hash,
+    skill_entity_id,
 };
 use signet_pipeline::synthesis::{SynthesisConfig, start as start_synthesis_worker};
 use signet_services::graph::get_graph_boost_ids;
@@ -220,19 +231,86 @@ fn gap_continuity_scoring_module_missing() {}
 #[ignore = "gap: route/logic covered elsewhere; Rust dreaming worker runtime is not exposed"]
 fn gap_dreaming_worker_runtime_missing() {}
 
-// platform/daemon/src/pipeline/model-registry.test.ts:5 covers the static ACPX
-// model catalog. Rust pipeline routes return active configured models only; no
-// daemon-rs static ACPX catalog module exists.
+// Port of platform/daemon/src/pipeline/model-registry.test.ts:5-43 and
+// platform/core/src/llm-model-catalog.ts:21-69. The Rust static registry must
+// preserve checked catalog entries, expose provider grouping/status, and avoid
+// synthesizing deprecation from model names.
 #[test]
-#[ignore = "gap: Rust model route returns active configured models, not static ACPX catalog"]
-fn gap_static_model_registry_catalog_missing() {}
+fn model_registry_exposes_checked_static_catalog_without_synthesized_deprecation() {
+    let acpx: Vec<_> = get_available_models(Some("acpx"), false)
+        .into_iter()
+        .map(|model| model.id)
+        .collect();
+    assert!(acpx.contains(&"gpt-5.4-mini".to_string()));
+    assert!(acpx.contains(&"haiku".to_string()));
+    assert!(acpx.contains(&"google/gemini-2.5-flash".to_string()));
+    assert!(!acpx.contains(&"gpt-5-codex".to_string()));
+    assert!(!acpx.contains(&"gpt-5-codex-mini".to_string()));
 
-// platform/daemon/src/pipeline/prospective-index.test.ts:272 covers TS
-// prospective hint generation and worker enqueueing. No Rust prospective-index
-// worker/module exists.
+    let by_provider = get_models_by_provider();
+    let codex: Vec<_> = by_provider["codex"]
+        .iter()
+        .map(|model| model.id.as_str())
+        .collect();
+    assert_eq!(
+        codex,
+        vec![
+            "gpt-5.4-mini",
+            "gpt-5.4",
+            "gpt-5.5",
+            "gpt-5.3-codex",
+            "gpt-5.3-codex-spark",
+            "gpt-5.2",
+        ]
+    );
+
+    let status = get_registry_status();
+    assert!(status.initialized);
+    assert_eq!(status.last_refresh_at, 0);
+    assert_eq!(status.model_counts["acpx"], 3);
+    assert_eq!(status.model_counts["codex"], 6);
+
+    let entries = vec![ModelRegistryEntry {
+        id: "provider/known-older".to_string(),
+        provider: "checked-provider".to_string(),
+        label: "Known older".to_string(),
+        tier: ModelTier::Mid,
+        deprecated: false,
+    }];
+    let cloned = mark_deprecated_versions(&entries);
+    assert_eq!(cloned, entries);
+    assert_ne!(cloned.as_ptr(), entries.as_ptr());
+}
+
+// Port of platform/daemon/src/pipeline/prospective-index.ts:41-53 and
+// prospective-index.test.ts:292-370. Rust hint generation must use the same
+// prompt scaffold and line filtering for clean, think-tag, noisy, residue,
+// numbered, empty, and too-short LLM outputs.
 #[test]
-#[ignore = "gap: no Rust prospective-index worker/module"]
-fn gap_prospective_index_worker_missing() {}
+fn prospective_index_builds_ts_prompt_and_filters_hint_lines() {
+    let prompt = build_prompt("Caroline moved to Seattle", 5);
+    assert!(prompt.contains("Given this fact stored in a personal memory system:"));
+    assert!(prompt.contains("\"Caroline moved to Seattle\""));
+    assert!(prompt.contains("Generate 5 diverse questions or cues"));
+    assert!(prompt.ends_with("Return ONLY the questions, one per line. No numbering, no bullets."));
+
+    let hints = parse_hints(
+        "<think>\nI should generate diverse questions.\n</think>\n\
+         1. Where does Caroline live now?\n\
+         Let's craft diverse questions:\n\
+         Who is Caroline's roommate in Seattle?\n\
+         Short?\n\
+         What model did Jake request for the iMessage agent on Apr 27?",
+    );
+    assert_eq!(
+        hints,
+        vec![
+            "Where does Caroline live now?".to_string(),
+            "Who is Caroline's roommate in Seattle?".to_string(),
+            "What model did Jake request for the iMessage agent on Apr 27?".to_string(),
+        ]
+    );
+}
 
 // platform/daemon/src/pipeline/provider.test.ts:134 covers Bun/Node subprocess
 // ACPX/ACP provider execution, environment/cwd safety, and process timeouts.
@@ -261,18 +339,119 @@ fn gap_reflection_worker_missing() {}
 #[ignore = "skip: live Ollama reranker smoke has external runtime dependency"]
 fn skip_reranker_llm_live_ollama() {}
 
-// platform/daemon/src/pipeline/skill-enrichment.test.ts:17 covers JSON
-// extraction from prose/fences/trailing commas. Rust skill parsing is private
-// to daemon routes and has no trailing-comma fenced-JSON enrichment parser.
+// Port of platform/daemon/src/pipeline/skill-enrichment.test.ts:17-79.
+// Rust enrichment parsing must accept prose/fenced JSON, tolerate trailing
+// commas, and prefer the final balanced object over earlier examples.
 #[test]
-#[ignore = "gap: Rust parser is private and no trailing-comma fenced JSON skill enrichment parser exists"]
-fn gap_skill_enrichment_parser_missing() {}
+fn skill_enrichment_parser_matches_ts_json_extraction() {
+    let prose = parse_enrichment_output(
+        "We need to output JSON only.\n\n{\"description\":\"Best practices for Remotion video creation and dynamic media generation.\",\"triggers\":[\"build remotion animation\",\"make video composition\"],\"tags\":[\"video\",\"animation\"]}",
+    )
+    .expect("parse prose wrapped JSON");
+    assert!(prose.description.contains("Remotion"));
+    assert!(
+        prose
+            .triggers
+            .contains(&"build remotion animation".to_string())
+    );
+    assert!(prose.tags.contains(&"video".to_string()));
 
-// platform/daemon/src/pipeline/skill-reconciler.test.ts:54 covers the TS disk
-// reconciler worker. No Rust skill reconciler worker exists.
+    let fenced = parse_enrichment_output(
+        r#"```json
+{
+  "description": "Guidance for creating and optimizing Remotion compositions.",
+  "triggers": ["render remotion videos", "optimize remotion compositions",],
+  "tags": ["video", "performance",]
+}
+```"#,
+    )
+    .expect("parse fenced trailing comma JSON");
+    assert_eq!(fenced.triggers.len(), 2);
+    assert!(fenced.tags.contains(&"performance".to_string()));
+
+    let final_object = parse_enrichment_output(
+        "Example: {\"description\":\"\",\"triggers\":[],\"tags\":[]}\nFinal: {\"description\":\"Practical guidance for producing Remotion compositions with reusable patterns.\",\"triggers\":[\"build remotion video\"],\"tags\":[\"video\"]}",
+    )
+    .expect("parse final enrichment object");
+    assert!(final_object.description.contains("Remotion"));
+    assert!(
+        final_object
+            .triggers
+            .contains(&"build remotion video".to_string())
+    );
+}
+
+// Port of platform/daemon/src/pipeline/skill-reconciler.test.ts:54-121.
+// The Rust reconciler must not loop after install-time enrichment changes only
+// the stored embedding text while the raw frontmatter hash remains unchanged.
 #[test]
-#[ignore = "gap: no Rust skill reconciler worker"]
-fn gap_skill_reconciler_worker_missing() {}
+fn skill_reconciler_does_not_loop_after_enriched_embedding_text() {
+    let conn = setup_conn();
+    let root = unique_root("skill-tail-root");
+    let skill = "loop-skill";
+    let skill_dir = root.join("skills").join(skill);
+    std::fs::create_dir_all(&skill_dir).expect("create skill dir");
+    let file = skill_dir.join("SKILL.md");
+    std::fs::write(
+        &file,
+        "---\nname: loop-skill\ndescription: tiny\n---\nthis skill helps with reconciliation loop debugging and metadata enrichment.",
+    )
+    .expect("write skill file");
+
+    let fm = SkillFrontmatter {
+        name: skill.to_string(),
+        description: "tiny".to_string(),
+        version: None,
+        author: None,
+        license: None,
+        triggers: None,
+        tags: None,
+        permissions: None,
+        role: None,
+    };
+    let entity_id = skill_entity_id("default", skill);
+    let hash = skill_embedding_hash(&entity_id, &fm);
+    conn.execute(
+        "INSERT INTO entities
+         (id, name, canonical_name, entity_type, agent_id, description, mentions, created_at, updated_at)
+         VALUES (?1, ?2, ?2, 'skill', 'default', ?3, 0, '2026-06-20T00:00:00.000Z', '2026-06-20T00:00:00.000Z')",
+        params![entity_id, skill, fm.description],
+    )
+    .expect("insert skill entity");
+    conn.execute(
+        "INSERT INTO skill_meta (entity_id, agent_id, source, role, installed_at, fs_path)
+         VALUES (?1, 'default', 'reconciler', 'utility', '2026-06-20T00:00:00.000Z', ?2)",
+        params![entity_id, file.to_string_lossy()],
+    )
+    .expect("insert skill meta");
+    conn.execute(
+        "INSERT INTO embeddings
+         (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id)
+         VALUES ('emb-loop-tail', ?1, ?2, 3, 'skill', ?3, ?4, '2026-06-20T00:00:00.000Z', 'default')",
+        params![
+            hash,
+            vector_to_blob(&[0.1_f32, 0.2, 0.3]),
+            entity_id,
+            "loop-skill — debug a reconciliation loop in signet and inspect skill metadata drift",
+        ],
+    )
+    .expect("insert enriched embedding");
+
+    let pass = reconcile_once(&conn, &root, &SkillReconcilerConfig::default(), |_| {
+        panic!("reconcile_once should not reinstall unchanged enriched skills")
+    })
+    .expect("reconcile unchanged skill");
+
+    assert_eq!(
+        pass,
+        ReconcileResult {
+            installed: 0,
+            updated: 0,
+            removed: 0,
+        }
+    );
+    std::fs::remove_dir_all(root).ok();
+}
 
 // platform/daemon/src/pipeline/structured-evidence.test.ts:4 and
 // structured-path-evidence.test.ts:11 cover structured evidence ranking boosts.
