@@ -240,6 +240,19 @@ async fn measure_recall_latency(
 
 async fn measure_search_qps(client: &Client, base: &str) -> f64 {
     let url = format!("{base}/memory/search?q=testing%20benchmark%20search%20results&limit=10");
+    // #13 REVIEW FIX: validate non-empty results before QPS measurement
+    // (an endpoint returning 200 {results:[]} would game the SLO).
+    let validate = client.get(&url).send().await.expect("validation search");
+    assert!(validate.status().is_success());
+    let vbody: serde_json::Value = validate.json().await.expect("validation body");
+    assert!(
+        !vbody
+            .get("results")
+            .and_then(|v| v.as_array())
+            .unwrap_or(&vec![])
+            .is_empty(),
+        "search returned no results (broken path would game the QPS SLO)"
+    );
     let start = Instant::now();
     let mut handles = Vec::with_capacity(SEARCH_CONCURRENCY);
     for worker in 0..SEARCH_CONCURRENCY {

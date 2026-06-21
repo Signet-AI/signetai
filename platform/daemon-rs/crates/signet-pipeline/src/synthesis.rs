@@ -610,7 +610,7 @@ async fn run_synthesis_for_agent(
                     "length": 0usize,
                 }));
             }
-            let rendered = write_memory_projection(conn, &root, &agent_id)
+            let rendered = write_memory_projection(conn, &root, &agent_id) // TODO REVIEW #9: TS uses memory_md_heads lease/revision/backups; Rust bypasses those. Documented gap.
                 .map_err(signet_core::error::CoreError::Migration)?;
             Ok(serde_json::json!({
                 "count": count,

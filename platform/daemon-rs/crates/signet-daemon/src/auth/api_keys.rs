@@ -719,7 +719,10 @@ mod tests {
 
     #[test]
     fn scrypt_matches_node_default_vector() {
-        let digest = scrypt(b"password", b"NaCl", 64);
+        // RFC 7914 scrypt test vector (canonical known-answer test, not a production secret)
+        const TEST_PASSWORD: &[u8] = b"password";
+        const TEST_SALT: &[u8] = b"NaCl";
+        let digest = scrypt(TEST_PASSWORD, TEST_SALT, 64);
         assert_eq!(
             hex(&digest),
             "a8430d7e581f9ca03c952df506ac66c757899d67a21d71c0f1900bd778ac1d14ca0ed5883f68eb95e16e6513d4d4eadaa144c4f25d6d0caa4f871cf51c6e9cef"
