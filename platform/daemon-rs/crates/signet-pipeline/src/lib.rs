@@ -1,3 +1,4 @@
+pub mod aggregate_recall;
 pub mod antonyms;
 pub mod contradiction;
 pub mod decision;
