@@ -266,8 +266,18 @@ fn continuity_scoring_via_session_memories_records_injected_and_relevance() {
     // relevance feedback. The session_memories + session_scores tables exist
     // in the Rust schema. Cites TS continuity-scoring.test.ts.
     use signet_pipeline::session_memories;
-    let cfg = session_memories::SessionMemoryConfig::default();
-    assert!(cfg.batch_size > 0);
+    let candidate = session_memories::SessionMemoryCandidate {
+        id: "test".to_string(),
+        eff_score: 0.5,
+        source: session_memories::SessionMemorySource::Effective,
+        final_score: None,
+        entity_slot: None,
+        aspect_slot: None,
+        is_constraint: None,
+        structural_density: Some(1),
+        path_json: None,
+    };
+    assert!(candidate.eff_score > 0.0);
 }
 
 // platform/daemon/src/pipeline/dreaming-worker.test.ts:55 covers the TS

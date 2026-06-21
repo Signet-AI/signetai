@@ -704,10 +704,10 @@ fn aggregate_recall_budget_validation_and_orchestration() {
     // orchestration, evidence linking, save policy, and stop reasons.
     use signet_pipeline::aggregate_recall;
     assert_eq!(
-        aggregate_recall::parse_budget("small"),
+        aggregate_recall::parse_aggregate_recall_budget(Some("small")),
         Some(aggregate_recall::AggregateRecallBudget::Small)
     );
-    assert_eq!(aggregate_recall::parse_budget("invalid"), None);
+    assert_eq!(aggregate_recall::parse_aggregate_recall_budget(Some("invalid")), None);
 }
 
 #[test]
