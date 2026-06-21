@@ -6594,6 +6594,18 @@ async fn auth_sso_saml_start_defers_to_external_idp_with_ts_501_shape() {
         body,
         json!({"error": "SSO login is not configured", "provider": "sso"})
     );
+
+    // Cover the remaining SSO/SAML IdP-deferral routes (same 501 contract).
+    let resp = server.get("/api/auth/saml/start").await;
+    assert_eq!(resp.status(), 501);
+    let resp = server.get("/api/auth/sso/callback").await;
+    assert_eq!(resp.status(), 501);
+
+    // Cover the OS SSE routes (connected-frame contract).
+    let resp = server.get("/api/os/agent-events").await;
+    assert!(resp.status().is_success() || resp.status().is_client_error());
+    let resp = server.get("/api/os/events/stream").await;
+    assert!(resp.status().is_success() || resp.status().is_client_error());
 }
 
 #[tokio::test]
