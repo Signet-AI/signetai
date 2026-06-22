@@ -31,7 +31,7 @@ use crate::auth::middleware::{
     AuthState, authenticate_headers, require_permission_guard, require_scope_guard,
     resolve_scoped_agent,
 };
-use crate::auth::types::{Permission, TokenScope};
+use crate::auth::types::{Permission, TokenRole, TokenScope};
 use crate::routes::memory_embeddings::{
     memory_has_embedding, prepare_memory_embedding, upsert_memory_embedding,
 };
@@ -1982,33 +1982,26 @@ pub async fn remember(
         )
             .into_response();
     }
-    // #1+#2 REVIEW FIX: remember writes require Permission::Remember,
-    // and project scope is enforced from token claims.
+    // TS parity: remember writes require Permission::Remember. Non-admin
+    // project-scoped tokens must explicitly request their scoped project;
+    // admins bypass project scope and keep the requested/omitted project.
     let (write_auth, _) = match guard_write_scope(state.as_ref(), &headers, &peer, &agent_id) {
         Ok(v) => v,
         Err(resp) => return *resp,
     };
-    // Override body project with scoped-project token enforcement.
-    let scoped_project = write_auth
-        .result
-        .claims
-        .as_ref()
-        .and_then(|c| c.scope.project.as_deref())
-        .map(|s| s.to_string());
-    let project = {
-        if let Some(ref sp) = scoped_project {
-            if let Some(ref bp) = project {
-                if bp != sp {
-                    return (StatusCode::FORBIDDEN,
-                        Json(serde_json::json!({"error": "project scope mismatch", "scoped_project": sp})))
-                        .into_response();
-                }
-            }
-            Some(sp.clone())
-        } else {
-            project
-        }
-    };
+    if let Some(claims) = write_auth.result.claims.as_ref()
+        && claims.role != TokenRole::Admin
+        && let Some(scoped_project) = claims.scope.project.as_deref()
+        && project.as_deref() != Some(scoped_project)
+    {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
+                "error": format!("scope restricted to project '{scoped_project}'")
+            })),
+        )
+            .into_response();
+    }
     let extraction_max_attempts = state
         .config
         .manifest

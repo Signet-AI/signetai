@@ -1651,6 +1651,22 @@ impl TestServer {
             "iat": now,
             "exp": now + 3600,
         });
+        Self::sign_token(payload)
+    }
+
+    fn project_scoped_role_token(agent: &str, project: &str, role: &str) -> String {
+        let now = chrono::Utc::now().timestamp();
+        let payload = json!({
+            "sub": format!("test-{agent}-{project}"),
+            "scope": {"agent": agent, "project": project},
+            "role": role,
+            "iat": now,
+            "exp": now + 3600,
+        });
+        Self::sign_token(payload)
+    }
+
+    fn sign_token(payload: serde_json::Value) -> String {
         let payload_b64 = URL_SAFE_NO_PAD.encode(payload.to_string().as_bytes());
         let mut mac = HmacSha256::new_from_slice(AUTH_SECRET).expect("valid hmac secret");
         mac.update(payload_b64.as_bytes());
@@ -3210,6 +3226,89 @@ async fn team_global_auth_middleware_replays_ts_open_and_protected_paths() {
         .post_bearer("/api/os/widget/generate", widget_body, &admin_token)
         .await;
     assert_eq!(resp.status(), 200);
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn memory_remember_enforces_ts_project_scope_contract() {
+    let server = TestServer::start_team_auth().await;
+    let scoped_agent = TestServer::project_scoped_role_token("default", "project-a", "agent");
+    let scoped_admin = TestServer::project_scoped_role_token("default", "project-a", "admin");
+
+    let resp = server
+        .post_bearer(
+            "/api/memory/remember",
+            json!({"content": "Project scoped remember omission"}),
+            &scoped_agent,
+        )
+        .await;
+    assert_eq!(resp.status(), 403);
+    assert_eq!(
+        server.json(resp).await["error"],
+        "scope restricted to project 'project-a'"
+    );
+
+    let resp = server
+        .post_bearer(
+            "/api/memory/remember",
+            json!({"content": "Project scoped remember mismatch", "project": "project-b"}),
+            &scoped_agent,
+        )
+        .await;
+    assert_eq!(resp.status(), 403);
+
+    let resp = server
+        .post_bearer(
+            "/api/memory/remember",
+            json!({"content": "Project scoped remember match", "project": "project-a"}),
+            &scoped_agent,
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+
+    let resp = server
+        .post_bearer(
+            "/api/memory/remember",
+            json!({"content": "Admin project scope omitted"}),
+            &scoped_admin,
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+
+    let resp = server
+        .post_bearer(
+            "/api/memory/remember",
+            json!({"content": "Admin project scope mismatch", "project": "project-b"}),
+            &scoped_admin,
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+
+    let conn = rusqlite::Connection::open(server.db_path()).expect("open replay db");
+    let matched_project: Option<String> = conn
+        .query_row(
+            "SELECT project FROM memories WHERE content = 'Project scoped remember match'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("matching project-scoped memory");
+    assert_eq!(matched_project.as_deref(), Some("project-a"));
+    let admin_omitted_project: Option<String> = conn
+        .query_row(
+            "SELECT project FROM memories WHERE content = 'Admin project scope omitted'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("admin omitted project memory");
+    assert_eq!(admin_omitted_project, None);
+    let admin_requested_project: Option<String> = conn
+        .query_row(
+            "SELECT project FROM memories WHERE content = 'Admin project scope mismatch'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("admin requested project memory");
+    assert_eq!(admin_requested_project.as_deref(), Some("project-b"));
 }
 
 #[tokio::test]
