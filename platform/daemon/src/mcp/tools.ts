@@ -205,6 +205,8 @@ const BASE_TOOL_NAMES = new Set<string>([
 	"signet_code_status",
 	"signet_code_doctor",
 	"signet_code_constants",
+	"signet_code_clear",
+	"signet_code_briefing",
 	"code_search",
 	"code_context",
 	"code_blast",
@@ -230,6 +232,8 @@ const GRAPHIQ_MCP_TOOL_NAMES = new Set([
 	"signet_code_status",
 	"signet_code_doctor",
 	"signet_code_constants",
+	"signet_code_clear",
+	"signet_code_briefing",
 ]);
 
 const GRAPHIQ_COMPAT_ALIASES: ReadonlyMap<string, string> = new Map([
@@ -239,6 +243,8 @@ const GRAPHIQ_COMPAT_ALIASES: ReadonlyMap<string, string> = new Map([
 	["code_status", "signet_code_status"],
 	["code_doctor", "signet_code_doctor"],
 	["code_constants", "signet_code_constants"],
+	["code_clear", "signet_code_clear"],
+	["code_briefing", "signet_code_briefing"],
 ]);
 
 // ---------------------------------------------------------------------------
@@ -776,6 +782,24 @@ function registerGraphiqCompatAliases(server: McpServer, pluginHostProvider: Gra
 				return parts;
 			},
 			label: "Code constants failed",
+		},
+		{
+			alias: "code_clear",
+			canonical: "signet_code_clear",
+			schema: z.object({}),
+			buildArgs: () => ["clear", "--yes"],
+			label: "Code clear failed",
+		},
+		{
+			alias: "code_briefing",
+			canonical: "signet_code_briefing",
+			schema: z.object({ compact: z.boolean().optional() }),
+			buildArgs: (a) => {
+				const parts = ["briefing"];
+				if (a.compact) parts.push("--compact");
+				return parts;
+			},
+			label: "Code briefing failed",
 		},
 	];
 
@@ -2706,6 +2730,33 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			const boundedTop = boundedInteger(top, GRAPHIQ_CONSTANTS_TOP_DEFAULT, GRAPHIQ_CONSTANTS_TOP_MAX);
 			args.push("--top", String(boundedTop));
 			return graphIqToolResult(args, "Code constants failed", "signet_code_constants", pluginHostProvider);
+		},
+	);
+
+	server.registerTool(
+		"signet_code_clear",
+		{
+			title: "Clear Index",
+			description: "Delete the active GraphIQ index and leave a fresh empty database ready for a clean reindex.",
+			inputSchema: z.object({}),
+		},
+		async () => graphIqToolResult(["clear", "--yes"], "Code clear failed", "signet_code_clear", pluginHostProvider),
+	);
+
+	server.registerTool(
+		"signet_code_briefing",
+		{
+			title: "Code Briefing",
+			description:
+				"Get an architecture overview of the active GraphIQ-indexed project: subsystems, public API, hub symbols, and languages.",
+			inputSchema: z.object({
+				compact: z.boolean().optional().describe("Return a compact briefing (top subsystems and API only)"),
+			}),
+		},
+		async ({ compact }) => {
+			const args = ["briefing"];
+			if (compact) args.push("--compact");
+			return graphIqToolResult(args, "Code briefing failed", "signet_code_briefing", pluginHostProvider);
 		},
 	);
 

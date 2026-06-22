@@ -11,6 +11,7 @@ const GRAPHIQ_CAPABILITIES = [
 	"code:status",
 	"code:doctor",
 	"code:dead-code",
+	"code:clear",
 	"prompt:contribute:user-prompt-submit",
 	"mcp:tool",
 	"cli:command",
@@ -39,6 +40,16 @@ const surfaces: PluginSurfaceDeclarationsV1 = {
 			path: ["graphiq", "dead-code"],
 			summary: "Find unreachable code in the active project",
 			requiredCapabilities: ["cli:command", "code:dead-code"],
+		},
+		{
+			path: ["graphiq", "clear"],
+			summary: "Clear the active GraphIQ index to a fresh empty database",
+			requiredCapabilities: ["cli:command", "code:clear"],
+		},
+		{
+			path: ["graphiq", "briefing"],
+			summary: "Get an architecture briefing for the active project",
+			requiredCapabilities: ["cli:command", "code:status"],
 		},
 	],
 	mcpTools: [
@@ -83,6 +94,18 @@ const surfaces: PluginSurfaceDeclarationsV1 = {
 			title: "Dead Code Detection",
 			summary: "Find unreachable symbols in the active project",
 			requiredCapabilities: ["mcp:tool", "code:dead-code"],
+		},
+		{
+			name: "signet_code_clear",
+			title: "Clear Index",
+			summary: "Delete the active index and leave a fresh empty database",
+			requiredCapabilities: ["mcp:tool", "code:clear"],
+		},
+		{
+			name: "signet_code_briefing",
+			title: "Code Briefing",
+			summary: "Architecture overview: subsystems, public API, hub symbols",
+			requiredCapabilities: ["mcp:tool", "code:status"],
 		},
 	],
 	dashboardPanels: [],
@@ -175,6 +198,7 @@ export const signetGraphiqManifest: PluginManifestV1 = {
 			"code:status": { summary: "Inspect active code index status" },
 			"code:doctor": { summary: "Diagnose or repair active code index artifacts" },
 			"code:dead-code": { summary: "Detect unreachable code in indexed projects" },
+			"code:clear": { summary: "Delete the active index and create a fresh empty database" },
 			"prompt:contribute:user-prompt-submit": {
 				summary: "Contribute bounded guidance for code retrieval decisions",
 			},
