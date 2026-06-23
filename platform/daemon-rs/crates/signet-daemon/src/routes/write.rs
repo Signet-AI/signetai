@@ -4,7 +4,7 @@ use std::collections::HashSet;
 use std::env;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
-use std::net::{IpAddr, SocketAddr};
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -28,7 +28,7 @@ use signet_services::transactions;
 
 use crate::analytics::ErrorEntry;
 use crate::auth::middleware::{
-    AuthState, authenticate_headers, require_permission_guard, require_scope_guard,
+    AuthState, authenticate_headers, is_loopback_ip, require_permission_guard, require_scope_guard,
     resolve_scoped_agent,
 };
 use crate::auth::types::{Permission, TokenRole, TokenScope};
@@ -1194,10 +1194,7 @@ fn require_session_scope_for_write(
 }
 
 fn is_loopback(addr: &SocketAddr) -> bool {
-    match addr.ip() {
-        IpAddr::V4(ip) => ip.is_loopback(),
-        IpAddr::V6(ip) => ip.is_loopback(),
-    }
+    is_loopback_ip(addr.ip())
 }
 
 fn guard_write_scope(
@@ -2911,6 +2908,49 @@ mod tests {
             .await
             .expect("body bytes");
         serde_json::from_slice(&bytes).expect("json body")
+    }
+
+    #[tokio::test]
+    async fn remember_allows_ipv4_mapped_loopback_in_hybrid_mode() {
+        let (state, _dir) = build_test_state().await;
+        {
+            let mut auth = state.auth.write().expect("auth lock");
+            auth.mode = AuthMode::Hybrid;
+        }
+
+        let peer = SocketAddr::new("::ffff:127.0.0.1".parse().expect("mapped loopback"), 3850);
+        let response = remember(
+            State(state),
+            ConnectInfo(peer),
+            HeaderMap::new(),
+            Json(RememberBody {
+                content: Some("IPv4-mapped loopback remember parity".to_string()),
+                who: None,
+                project: None,
+                importance: None,
+                tags: None,
+                pinned: None,
+                source_type: None,
+                source_id: None,
+                created_at: None,
+                source_path: None,
+                runtime_path: None,
+                idempotency_key: None,
+                metadata: None,
+                memory_type: None,
+                agent_id: None,
+                visibility: None,
+                scope: None,
+                session_key: None,
+                hints: None,
+                structured: None,
+            }),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = read_json_body(response).await;
+        assert_eq!(body["status"], "created");
     }
 
     #[tokio::test]
