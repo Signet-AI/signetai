@@ -48,5 +48,7 @@ describe("mergeSignetGitignoreEntries", () => {
 		expect(isSignetGitTrackedPath("memory/session.jsonl")).toBe(true);
 		expect(isSignetGitTrackedPath("memory/memories.db.bak-v1-1")).toBe(false);
 		expect(isSignetGitTrackedPath("memory/backups/old.db")).toBe(false);
+		expect(isSignetGitTrackedPath("node_modules/package.json")).toBe(false);
+		expect(isSignetGitTrackedPath("app/node_modules/package.json")).toBe(false);
 	});
 });

@@ -65,6 +65,7 @@ export function isSignetGitProtectedPath(path: string): boolean {
 		lower === ".shadow" ||
 		lower.startsWith(".shadow/") ||
 		lower === "node_modules" ||
+		lower.startsWith("node_modules/") ||
 		lower.includes("/node_modules/") ||
 		lower === SIGNET_SOURCE_CHECKOUT_DIRNAME ||
 		lower.startsWith(`${SIGNET_SOURCE_CHECKOUT_DIRNAME}/`) ||
