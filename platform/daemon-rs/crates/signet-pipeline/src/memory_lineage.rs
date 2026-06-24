@@ -24,6 +24,7 @@ const MEMORY_MD_MAX_TOKENS: usize = MEMORY_HEAD_MAX_TOKENS - PROJECTION_HEADROOM
 const LOW_SIGNAL_SENTENCES: &[&str] = &["Investigated issue.", "Worked on task.", "Reviewed code."];
 const BASE32: &[u8; 32] = b"abcdefghijklmnopqrstuvwxyz234567";
 const NOISE_PURGE_REASON: &str = "automatic projection cleanup for temp/test sessions";
+const IMMUTABLE_ARTIFACT_ERROR_PREFIX: &str = "Refusing to mutate immutable artifact";
 static PROJECTION_PURGE_SEEN: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -245,12 +246,12 @@ fn base32_sha256(input: &str) -> String {
     out
 }
 
-pub fn derive_session_token(agent_id: &str, session_key: Option<&str>, session_id: &str) -> String {
-    let identity = session_key
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| session_id.trim());
-    base32_sha256(&format!("{agent_id}:{identity}"))
+pub fn derive_session_token(
+    agent_id: &str,
+    _session_key: Option<&str>,
+    session_id: &str,
+) -> String {
+    base32_sha256(&format!("{}:{}", agent_id, session_id.trim()))
         .chars()
         .take(16)
         .collect()
@@ -357,7 +358,7 @@ fn relative_path(root: &Path, path: &Path) -> String {
         .replace('\\', "/")
 }
 
-fn write_atomic(path: &Path, content: &str) -> Result<(), String> {
+pub fn write_atomic(path: &Path, content: &str) -> Result<(), String> {
     let Some(dir) = path.parent() else {
         return Err("artifact path missing parent".to_string());
     };
@@ -454,28 +455,18 @@ fn find_manifest(
     root: &Path,
     agent_id: &str,
     session_id: &str,
-    session_key: Option<&str>,
+    _session_key: Option<&str>,
 ) -> Result<Option<ManifestState>, String> {
-    let sql = if session_key.is_some() {
-        "SELECT source_path FROM memory_artifacts
-         WHERE agent_id = ?1 AND source_kind = 'manifest' AND session_key = ?2
-         ORDER BY captured_at ASC LIMIT 1"
-    } else {
-        "SELECT source_path FROM memory_artifacts
-         WHERE agent_id = ?1 AND source_kind = 'manifest' AND session_id = ?2
-         ORDER BY captured_at ASC LIMIT 1"
-    };
-    let rel = if let Some(key) = session_key {
-        conn.query_row(sql, params![agent_id, key], |row| row.get::<_, String>(0))
-            .optional()
-            .map_err(|err| err.to_string())?
-    } else {
-        conn.query_row(sql, params![agent_id, session_id], |row| {
-            row.get::<_, String>(0)
-        })
+    let rel = conn
+        .query_row(
+            "SELECT source_path FROM memory_artifacts
+             WHERE agent_id = ?1 AND source_kind = 'manifest' AND session_id = ?2
+             ORDER BY captured_at ASC LIMIT 1",
+            params![agent_id, session_id],
+            |row| row.get::<_, String>(0),
+        )
         .optional()
-        .map_err(|err| err.to_string())?
-    };
+        .map_err(|err| err.to_string())?;
     match rel {
         Some(rel) => load_manifest(&root.join(rel)),
         None => Ok(None),
@@ -780,24 +771,38 @@ fn write_immutable_artifact(
     if path.exists() {
         let existing = fs::read_to_string(&path).map_err(|err| err.to_string())?;
         let (existing_frontmatter, existing_body) = parse_document(&existing)?;
-        let current = read_string(&existing_frontmatter, "content_sha256");
-        let next = read_string(&frontmatter, "content_sha256");
-        if current == next {
-            let existing_body = normalize_markdown_body(&existing_body);
-            upsert_artifact_row(conn, root, &path, &existing_frontmatter, &existing_body)?;
-            return Ok(path);
-        }
-        if normalize_markdown_body(&existing_body) != body {
-            if seed.kind == ArtifactKind::Transcript {
-                let existing_body = normalize_markdown_body(&existing_body);
-                upsert_artifact_row(conn, root, &path, &existing_frontmatter, &existing_body)?;
-                return Ok(path);
-            }
+        let fields_match = read_string(&existing_frontmatter, "kind").as_deref()
+            == read_string(&frontmatter, "kind").as_deref()
+            && read_string(&existing_frontmatter, "agent_id").as_deref()
+                == read_string(&frontmatter, "agent_id").as_deref()
+            && read_string(&existing_frontmatter, "session_id").as_deref()
+                == read_string(&frontmatter, "session_id").as_deref()
+            && read_string(&existing_frontmatter, "hash_scope").as_deref()
+                == read_string(&frontmatter, "hash_scope").as_deref();
+        if !fields_match {
             return Err(format!(
-                "refusing to mutate immutable artifact {}",
+                "{IMMUTABLE_ARTIFACT_ERROR_PREFIX} {} (identity mismatch)",
                 path.display()
             ));
         }
+        let existing_body_hash = hash_normalized_body(&existing_body);
+        if let Some(declared) = read_string(&existing_frontmatter, "content_sha256")
+            && declared != existing_body_hash
+        {
+            return Err(format!(
+                "{IMMUTABLE_ARTIFACT_ERROR_PREFIX} {} (checksum mismatch)",
+                path.display()
+            ));
+        }
+        if existing_body_hash != hash_normalized_body(&body) {
+            return Err(format!(
+                "{IMMUTABLE_ARTIFACT_ERROR_PREFIX} {} (content mismatch)",
+                path.display()
+            ));
+        }
+        let existing_body = normalize_markdown_body(&existing_body);
+        upsert_artifact_row(conn, root, &path, &existing_frontmatter, &existing_body)?;
+        return Ok(path);
     }
     write_atomic(&path, &content)?;
     upsert_artifact_row(conn, root, &path, &frontmatter, &body)?;
@@ -840,6 +845,15 @@ fn is_valid_artifact(
     rel.starts_with("memory/") && rel.ends_with(&format!("--{}.md", kind.as_str()))
 }
 
+fn source_mtime_ms(path: &Path) -> f64 {
+    fs::metadata(path)
+        .and_then(|meta| meta.modified())
+        .ok()
+        .and_then(|mtime| mtime.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_secs_f64() * 1000.0)
+        .unwrap_or(0.0)
+}
+
 fn upsert_artifact_row(
     conn: &Connection,
     root: &Path,
@@ -856,6 +870,7 @@ fn upsert_artifact_row(
         .split("--")
         .nth(1)
         .map(ToOwned::to_owned)
+        .or_else(|| read_string(frontmatter, "session_token"))
         .unwrap_or_else(|| derive_session_token(&agent_id, session_key.as_deref(), &session_id));
     let project = read_string(frontmatter, "project");
     let harness = read_string(frontmatter, "harness");
@@ -867,17 +882,25 @@ fn upsert_artifact_row(
     let source_node_id = read_string(frontmatter, "source_node_id");
     let memory_sentence = read_string(frontmatter, "memory_sentence");
     let quality = read_string(frontmatter, "memory_sentence_quality");
+    let source_id = read_string(frontmatter, "source_id");
+    let source_root = read_string(frontmatter, "source_root");
+    let source_external_id = read_string(frontmatter, "source_external_id");
+    let source_parent_path = read_string(frontmatter, "source_parent_path");
+    let source_meta_json = read_string(frontmatter, "source_meta_json");
     let source_sha =
         read_string(frontmatter, "content_sha256").unwrap_or_else(|| hash_normalized_body(body));
     let updated_at =
         read_string(frontmatter, "updated_at").unwrap_or_else(|| Utc::now().to_rfc3339());
+    let source_mtime_ms = source_mtime_ms(path);
     conn.execute(
         "INSERT INTO memory_artifacts (
             agent_id, source_path, source_sha256, source_kind, session_id,
             session_key, session_token, project, harness, captured_at,
             started_at, ended_at, manifest_path, source_node_id,
-            memory_sentence, memory_sentence_quality, content, updated_at
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
+            memory_sentence, memory_sentence_quality, content, updated_at,
+            source_mtime_ms, source_id, source_root, source_external_id,
+            source_parent_path, source_meta_json, is_deleted, deleted_at
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, 0, NULL)
          ON CONFLICT(agent_id, source_path) DO UPDATE SET
             source_sha256 = excluded.source_sha256,
             source_kind = excluded.source_kind,
@@ -894,7 +917,15 @@ fn upsert_artifact_row(
             memory_sentence = excluded.memory_sentence,
             memory_sentence_quality = excluded.memory_sentence_quality,
             content = excluded.content,
-            updated_at = excluded.updated_at",
+            updated_at = excluded.updated_at,
+            source_mtime_ms = excluded.source_mtime_ms,
+            source_id = excluded.source_id,
+            source_root = excluded.source_root,
+            source_external_id = excluded.source_external_id,
+            source_parent_path = excluded.source_parent_path,
+            source_meta_json = excluded.source_meta_json,
+            is_deleted = 0,
+            deleted_at = NULL",
         params![
             agent_id,
             source_path,
@@ -914,6 +945,12 @@ fn upsert_artifact_row(
             quality,
             normalize_markdown_body(body),
             updated_at,
+            source_mtime_ms,
+            source_id,
+            source_root,
+            source_external_id,
+            source_parent_path,
+            source_meta_json,
         ],
     )
     .map_err(|err| err.to_string())?;
@@ -943,21 +980,44 @@ fn list_canonical_files(root: &Path) -> Result<Vec<PathBuf>, String> {
     Ok(files)
 }
 
+fn is_canonical_artifact_source_path(source_path: &str) -> bool {
+    let name = source_path.rsplit('/').next().unwrap_or(source_path);
+    source_path.starts_with("memory/")
+        && name.contains("--")
+        && (name.ends_with("--summary.md")
+            || name.ends_with("--transcript.md")
+            || name.ends_with("--compaction.md")
+            || name.ends_with("--manifest.md"))
+}
+
+fn delete_artifact_rows_for_path(
+    conn: &Connection,
+    root: &Path,
+    path: &Path,
+    agent_id: Option<&str>,
+) -> Result<(), String> {
+    let rel = relative_path(root, path);
+    let abs = path.to_string_lossy().replace('\\', "/");
+    if let Some(agent_id) = agent_id {
+        conn.execute(
+            "DELETE FROM memory_artifacts WHERE agent_id = ?1 AND (source_path = ?2 OR source_path = ?3)",
+            params![agent_id, rel, abs],
+        )
+    } else {
+        conn.execute(
+            "DELETE FROM memory_artifacts WHERE source_path = ?1 OR source_path = ?2",
+            params![rel, abs],
+        )
+    }
+    .map_err(|err| err.to_string())?;
+    Ok(())
+}
+
 pub fn reindex_memory_artifacts(
     conn: &Connection,
     root: &Path,
     agent_id: Option<&str>,
 ) -> Result<(), String> {
-    if agent_id.is_some() {
-        conn.execute(
-            "DELETE FROM memory_artifacts WHERE agent_id = ?1",
-            params![agent_id],
-        )
-        .map_err(|err| err.to_string())?;
-    } else {
-        conn.execute("DELETE FROM memory_artifacts", [])
-            .map_err(|err| err.to_string())?;
-    }
     let tombstones = {
         let mut stmt = if agent_id.is_some() {
             conn.prepare("SELECT session_token FROM memory_artifact_tombstones WHERE agent_id = ?1")
@@ -977,28 +1037,67 @@ pub fn reindex_memory_artifacts(
             rows.filter_map(Result::ok).collect::<BTreeSet<_>>()
         }
     };
-    for path in list_canonical_files(root)? {
-        let content = fs::read_to_string(&path).map_err(|err| err.to_string())?;
+
+    let files = list_canonical_files(root)?;
+    let file_set = files
+        .iter()
+        .map(|path| relative_path(root, path))
+        .collect::<BTreeSet<_>>();
+
+    for path in &files {
+        let content = match fs::read_to_string(path) {
+            Ok(content) => content,
+            Err(_) => continue,
+        };
         let (frontmatter, body) = parse_document(&content)?;
         let next_agent =
             read_string(&frontmatter, "agent_id").unwrap_or_else(|| "default".to_string());
         if agent_id.is_some_and(|value| value != next_agent) {
+            delete_artifact_rows_for_path(conn, root, path, agent_id)?;
             continue;
         }
-        let rel = relative_path(root, &path);
+        let rel = relative_path(root, path);
         let token = rel.split("--").nth(1).map(ToOwned::to_owned);
         if token
             .as_ref()
             .is_some_and(|value| tombstones.contains(value))
         {
+            delete_artifact_rows_for_path(conn, root, path, agent_id)?;
             continue;
         }
         let normalized = normalize_markdown_body(&body);
-        if !is_valid_artifact(root, &path, &frontmatter, &normalized) {
+        if !is_valid_artifact(root, path, &frontmatter, &normalized) {
+            delete_artifact_rows_for_path(conn, root, path, agent_id)?;
             continue;
         }
-        upsert_artifact_row(conn, root, &path, &frontmatter, &normalized)?;
+        upsert_artifact_row(conn, root, path, &frontmatter, &normalized)?;
     }
+
+    let stale_paths = if let Some(agent_id) = agent_id {
+        let mut stmt = conn
+            .prepare("SELECT source_path FROM memory_artifacts WHERE agent_id = ?1")
+            .map_err(|err| err.to_string())?;
+        stmt.query_map(params![agent_id], |row| row.get::<_, String>(0))
+            .map_err(|err| err.to_string())?
+            .filter_map(Result::ok)
+            .collect::<Vec<_>>()
+    } else {
+        let mut stmt = conn
+            .prepare("SELECT source_path FROM memory_artifacts")
+            .map_err(|err| err.to_string())?;
+        stmt.query_map([], |row| row.get::<_, String>(0))
+            .map_err(|err| err.to_string())?
+            .filter_map(Result::ok)
+            .collect::<Vec<_>>()
+    };
+
+    for source_path in stale_paths {
+        if !is_canonical_artifact_source_path(&source_path) || file_set.contains(&source_path) {
+            continue;
+        }
+        delete_artifact_rows_for_path(conn, root, &root.join(&source_path), agent_id)?;
+    }
+
     Ok(())
 }
 
@@ -1062,6 +1161,70 @@ fn is_noise_artifact_group(rows: &[NoiseArtifactRow]) -> bool {
     })
 }
 
+pub fn remove_canonical_session(
+    conn: &Connection,
+    root: &Path,
+    agent_id: &str,
+    session_token: &str,
+    reason: &str,
+) -> Result<Vec<String>, String> {
+    let mut path_stmt = conn
+        .prepare(
+            "SELECT source_path FROM memory_artifacts
+             WHERE agent_id = ?1 AND session_token = ?2",
+        )
+        .map_err(|err| err.to_string())?;
+    let paths = path_stmt
+        .query_map(params![agent_id, session_token], |row| {
+            row.get::<_, String>(0)
+        })
+        .map_err(|err| err.to_string())?
+        .filter_map(Result::ok)
+        .collect::<Vec<_>>();
+    conn.execute("SAVEPOINT remove_canonical_session", [])
+        .map_err(|err| err.to_string())?;
+    let db_result = (|| {
+        conn.execute(
+            "INSERT INTO memory_artifact_tombstones (
+                agent_id, session_token, removed_at, reason, removed_paths
+             ) VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(agent_id, session_token) DO UPDATE SET
+                removed_at = excluded.removed_at,
+                reason = excluded.reason,
+                removed_paths = excluded.removed_paths",
+            params![
+                agent_id,
+                session_token,
+                Utc::now().to_rfc3339(),
+                reason,
+                serde_json::to_string(&paths).map_err(|err| err.to_string())?,
+            ],
+        )
+        .map_err(|err| err.to_string())?;
+        conn.execute(
+            "DELETE FROM memory_artifacts WHERE agent_id = ?1 AND session_token = ?2",
+            params![agent_id, session_token],
+        )
+        .map_err(|err| err.to_string())?;
+        Ok::<(), String>(())
+    })();
+    match db_result {
+        Ok(()) => {
+            conn.execute("RELEASE remove_canonical_session", [])
+                .map_err(|err| err.to_string())?;
+        }
+        Err(err) => {
+            let _ = conn.execute("ROLLBACK TO remove_canonical_session", []);
+            let _ = conn.execute("RELEASE remove_canonical_session", []);
+            return Err(err);
+        }
+    }
+    for path in &paths {
+        let _ = fs::remove_file(root.join(path));
+    }
+    Ok(paths)
+}
+
 pub fn purge_canonical_noise_sessions(
     conn: &Connection,
     root: &Path,
@@ -1104,67 +1267,7 @@ pub fn purge_canonical_noise_sessions(
         if !is_noise_artifact_group(&group) {
             continue;
         }
-        let mut path_stmt = conn
-            .prepare(
-                "SELECT source_path FROM memory_artifacts
-                 WHERE agent_id = ?1 AND session_token = ?2",
-            )
-            .map_err(|err| err.to_string())?;
-        let paths = path_stmt
-            .query_map(params![agent_id, session_token], |row| {
-                row.get::<_, String>(0)
-            })
-            .map_err(|err| err.to_string())?
-            .filter_map(Result::ok)
-            .collect::<Vec<_>>();
-        // Tombstone insert and artifact row deletion are atomic: if the process
-        // crashes between them the DB would be inconsistent (tombstone present
-        // but artifacts row still live, or vice versa). Wrap both in a savepoint
-        // so they commit or roll back together, matching the TS withWriteTx.
-        conn.execute("SAVEPOINT purge_noise", [])
-            .map_err(|err| err.to_string())?;
-        let db_result = (|| {
-            conn.execute(
-                "INSERT INTO memory_artifact_tombstones (
-                    agent_id, session_token, removed_at, reason, removed_paths
-                 ) VALUES (?1, ?2, ?3, ?4, ?5)
-                 ON CONFLICT(agent_id, session_token) DO UPDATE SET
-                    removed_at = excluded.removed_at,
-                    reason = excluded.reason,
-                    removed_paths = excluded.removed_paths",
-                params![
-                    agent_id,
-                    session_token,
-                    Utc::now().to_rfc3339(),
-                    reason,
-                    serde_json::to_string(&paths).map_err(|err| err.to_string())?,
-                ],
-            )
-            .map_err(|err| err.to_string())?;
-            conn.execute(
-                "DELETE FROM memory_artifacts WHERE agent_id = ?1 AND session_token = ?2",
-                params![agent_id, session_token],
-            )
-            .map_err(|err| err.to_string())?;
-            Ok::<(), String>(())
-        })();
-        match db_result {
-            Ok(()) => {
-                conn.execute("RELEASE purge_noise", [])
-                    .map_err(|err| err.to_string())?;
-            }
-            Err(e) => {
-                let _ = conn.execute("ROLLBACK TO purge_noise", []);
-                let _ = conn.execute("RELEASE purge_noise", []);
-                return Err(e);
-            }
-        }
-        // File removal happens after the DB transaction commits. An orphaned
-        // file is benign (reindex skips missing paths); a missing file with a
-        // live DB row is the dangerous case, which the savepoint prevents.
-        for path in &paths {
-            let _ = fs::remove_file(root.join(path));
-        }
+        remove_canonical_session(conn, root, agent_id, &session_token, reason)?;
         removed += 1;
     }
     Ok(removed)
@@ -1341,7 +1444,7 @@ pub fn write_compaction_artifact(
     })
 }
 
-fn build_temporal_index(conn: &Connection, agent_id: &str) -> String {
+fn build_temporal_index(conn: &Connection, agent_id: &str) -> (String, usize) {
     let mut stmt = match conn.prepare(
         "SELECT id, kind, COALESCE(source_type, kind), depth, latest_at,
                 project, session_key, source_ref, content
@@ -1351,7 +1454,7 @@ fn build_temporal_index(conn: &Connection, agent_id: &str) -> String {
          LIMIT 20",
     ) {
         Ok(stmt) => stmt,
-        Err(_) => return "## Temporal Index\n\n- no temporal nodes yet.".to_string(),
+        Err(_) => return (String::new(), 0),
     };
     let rows = stmt.query_map(params![agent_id], |row| {
         Ok((
@@ -1367,7 +1470,7 @@ fn build_temporal_index(conn: &Connection, agent_id: &str) -> String {
         ))
     });
     let Ok(rows) = rows else {
-        return "## Temporal Index\n\n- no temporal nodes yet.".to_string();
+        return (String::new(), 0);
     };
     let lines = rows
         .filter_map(Result::ok)
@@ -1393,9 +1496,10 @@ fn build_temporal_index(conn: &Connection, agent_id: &str) -> String {
         })
         .collect::<Vec<_>>();
     if lines.is_empty() {
-        "## Temporal Index\n\n- no temporal nodes yet.".to_string()
+        (String::new(), 0)
     } else {
-        format!("## Temporal Index\n\n{}", lines.join("\n"))
+        let count = lines.len();
+        (format!("## Temporal Index\n\n{}", lines.join("\n")), count)
     }
 }
 
@@ -1787,7 +1891,7 @@ pub fn render_memory_projection(
         Err(_) => Vec::new(),
     };
     let ledger = build_ledger(conn, agent_id)?;
-    let index_block = build_temporal_index(conn, agent_id);
+    let (index_block, temporal_count) = build_temporal_index(conn, agent_id);
     let global_lines = if memories.is_empty() {
         vec!["- no durable global head items yet.".to_string()]
     } else {
@@ -1845,7 +1949,7 @@ pub fn render_memory_projection(
     }
     Ok(RenderResult {
         content: join_parts(&parts),
-        file_count: memories.len() + thread_heads.len() + count,
+        file_count: memories.len() + thread_heads.len() + count + temporal_count,
         index_block: trimmed_index,
     })
 }
@@ -1879,17 +1983,53 @@ fn truncate_memory_projection(content: &str) -> Result<String, String> {
     truncate_tokens(content, budget)
 }
 
+fn normalize_agent_id(agent_id: &str) -> &str {
+    let trimmed = agent_id.trim();
+    if trimmed.is_empty() {
+        "default"
+    } else {
+        trimmed
+    }
+}
+
+fn is_safe_agent_id(agent_id: &str) -> bool {
+    if agent_id == "default" {
+        return true;
+    }
+    let mut chars = agent_id.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    (first.is_ascii_lowercase() || first.is_ascii_digit())
+        && chars.all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-')
+}
+
+fn memory_projection_path(root: &Path, agent_id: &str) -> PathBuf {
+    if agent_id == "default" {
+        root.join("MEMORY.md")
+    } else {
+        root.join("agents").join(agent_id).join("MEMORY.md")
+    }
+}
+
 pub fn write_memory_projection(
     conn: &Connection,
     root: &Path,
     agent_id: &str,
 ) -> Result<RenderResult, String> {
+    let agent_id = normalize_agent_id(agent_id);
+    if !is_safe_agent_id(agent_id) {
+        return Err(format!("Invalid agentId for MEMORY.md path: {agent_id}"));
+    }
     if should_purge_projection_noise(root, agent_id)? {
         purge_canonical_noise_sessions(conn, root, agent_id, NOISE_PURGE_REASON)?;
     }
     let rendered = render_memory_projection(conn, root, agent_id)?;
     let content = truncate_memory_projection(&rendered.content)?;
-    write_atomic(&root.join("MEMORY.md"), &format!("{}\n", content))?;
+    write_atomic(
+        &memory_projection_path(root, agent_id),
+        &format!("{}\n", content),
+    )?;
     Ok(RenderResult {
         content,
         ..rendered
@@ -2292,6 +2432,14 @@ mod tests {
                 memory_sentence_quality TEXT,
                 content TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
+                source_mtime_ms REAL,
+                source_id TEXT,
+                source_root TEXT,
+                source_external_id TEXT,
+                source_parent_path TEXT,
+                source_meta_json TEXT,
+                is_deleted INTEGER NOT NULL DEFAULT 0,
+                deleted_at TEXT,
                 PRIMARY KEY (agent_id, source_path)
             );
             CREATE TABLE memory_artifact_tombstones (

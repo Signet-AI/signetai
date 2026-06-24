@@ -53,6 +53,13 @@ pub fn default_limits() -> HashMap<String, RateLimitRule> {
             max: 10,
         },
     );
+    m.insert(
+        "login".into(),
+        RateLimitRule {
+            window_ms: 60_000,
+            max: 5,
+        },
+    );
     // LLM-enabled recall (useExtractionModel: true) — separate bucket so
     // operators can tune the cost-sensitive path independently of plain recall.
     m.insert(

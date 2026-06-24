@@ -28,7 +28,7 @@ use signet_pipeline::memory_lineage::{
 use signet_services::session::{ClaimResult, RuntimePath, SessionTracker};
 use signet_services::transactions;
 
-use crate::routes::plugins;
+use crate::routes::{plugins, secrets};
 use crate::state::AppState;
 use crate::workspace_paths;
 
@@ -151,6 +151,413 @@ Secrets:\n\
 - mcp__signet__secret_list\n\
 - mcp__signet__secret_exec\n\
 Secrets are injected into subprocesses as environment variables and are not exposed as raw values.\n"
+}
+
+#[derive(Debug, Clone)]
+struct SessionStartRuntimeConfig {
+    recall_limit: usize,
+    token_budget: usize,
+    include_identity: bool,
+    include_recent_context: bool,
+}
+
+impl Default for SessionStartRuntimeConfig {
+    fn default() -> Self {
+        Self {
+            recall_limit: 50,
+            token_budget: 12_000,
+            include_identity: true,
+            include_recent_context: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct InjectMemoryRow {
+    id: String,
+    content: String,
+    tags: Option<String>,
+    created_at: String,
+}
+
+fn yaml_mapping_get<'a>(map: &'a serde_yml::Mapping, key: &str) -> Option<&'a serde_yml::Value> {
+    map.get(serde_yml::Value::String(key.to_string()))
+}
+
+fn yaml_as_usize(value: Option<&serde_yml::Value>) -> Option<usize> {
+    value.and_then(|value| match value {
+        serde_yml::Value::Number(number) => number.as_u64().map(|n| n as usize),
+        serde_yml::Value::String(raw) => raw.trim().parse::<usize>().ok(),
+        _ => None,
+    })
+}
+
+fn yaml_as_bool(value: Option<&serde_yml::Value>) -> Option<bool> {
+    value.and_then(|value| match value {
+        serde_yml::Value::Bool(value) => Some(*value),
+        serde_yml::Value::String(raw) => match raw.trim().to_ascii_lowercase().as_str() {
+            "true" => Some(true),
+            "false" => Some(false),
+            _ => None,
+        },
+        _ => None,
+    })
+}
+
+fn load_session_start_runtime_config(base_path: &Path) -> SessionStartRuntimeConfig {
+    let mut config = SessionStartRuntimeConfig::default();
+    for name in ["agent.yaml", "AGENT.yaml"] {
+        let path = base_path.join(name);
+        let Ok(raw) = fs::read_to_string(path) else {
+            continue;
+        };
+        let Ok(value) = serde_yml::from_str::<serde_yml::Value>(&raw) else {
+            continue;
+        };
+        let Some(root) = value.as_mapping() else {
+            continue;
+        };
+        let Some(hooks) = yaml_mapping_get(root, "hooks").and_then(serde_yml::Value::as_mapping)
+        else {
+            continue;
+        };
+        let Some(session_start) = yaml_mapping_get(hooks, "sessionStart")
+            .or_else(|| yaml_mapping_get(hooks, "session_start"))
+            .and_then(serde_yml::Value::as_mapping)
+        else {
+            continue;
+        };
+        if let Some(limit) = yaml_as_usize(yaml_mapping_get(session_start, "recallLimit")) {
+            config.recall_limit = limit.clamp(1, 200);
+        }
+        if let Some(include_identity) =
+            yaml_as_bool(yaml_mapping_get(session_start, "includeIdentity"))
+        {
+            config.include_identity = include_identity;
+        }
+        if let Some(include_recent_context) =
+            yaml_as_bool(yaml_mapping_get(session_start, "includeRecentContext"))
+        {
+            config.include_recent_context = include_recent_context;
+        }
+        if let Some(tokens) = yaml_as_usize(yaml_mapping_get(session_start, "maxInjectTokens")) {
+            config.token_budget = tokens.max(1);
+        } else if let Some(chars) = yaml_as_usize(yaml_mapping_get(session_start, "maxInjectChars"))
+        {
+            config.token_budget = ((chars + 2) / 4).max(1);
+        }
+        break;
+    }
+    config
+}
+
+fn estimate_tokens(text: &str) -> usize {
+    text.chars().count().div_ceil(4)
+}
+
+fn apply_token_budget(text: &str, max_tokens: usize) -> String {
+    let max_chars = max_tokens.saturating_mul(4);
+    if max_chars == 0 {
+        return String::new();
+    }
+    if text.chars().count() <= max_chars {
+        return text.to_string();
+    }
+    let suffix = "...";
+    let keep = max_chars.saturating_sub(suffix.len());
+    if keep == 0 {
+        return text.chars().take(max_chars).collect();
+    }
+    format!("{}{}", text.chars().take(keep).collect::<String>(), suffix)
+}
+
+fn read_workspace_markdown(base_path: &Path, filename: &str, max_chars: usize) -> Option<String> {
+    let path = workspace_paths::child_file(base_path, &[filename]).ok()?;
+    read_markdown_path(&path, max_chars)
+}
+
+fn read_agent_identity_markdown(
+    base_path: &Path,
+    agent_id: &str,
+    filename: &str,
+    max_chars: usize,
+) -> Option<String> {
+    if agent_id != "default"
+        && let Ok(path) = workspace_paths::child_file(base_path, &["agents", agent_id, filename])
+        && let Some(content) = read_markdown_path(&path, max_chars)
+    {
+        return Some(content);
+    }
+    read_workspace_markdown(base_path, filename, max_chars)
+}
+
+fn read_agent_memory_markdown(
+    base_path: &Path,
+    agent_id: &str,
+    max_chars: usize,
+) -> Option<String> {
+    if agent_id == "default" {
+        return read_workspace_markdown(base_path, "MEMORY.md", max_chars);
+    }
+    let path = workspace_paths::child_file(base_path, &["agents", agent_id, "MEMORY.md"]).ok()?;
+    read_markdown_path(&path, max_chars)
+}
+
+fn read_markdown_path(path: &Path, max_chars: usize) -> Option<String> {
+    let raw = fs::read_to_string(path).ok()?;
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(trim_to_chars(trimmed, max_chars))
+}
+
+fn trim_to_chars(text: &str, max_chars: usize) -> String {
+    if text.chars().count() <= max_chars {
+        return text.to_string();
+    }
+    let keep = max_chars.saturating_sub(3);
+    if keep == 0 {
+        return text.chars().take(max_chars).collect();
+    }
+    format!("{}...", text.chars().take(keep).collect::<String>())
+}
+
+fn identity_header_for_file(filename: &str) -> &'static str {
+    match filename {
+        "SOUL.md" => "Soul",
+        "IDENTITY.md" => "Identity",
+        "USER.md" => "User",
+        _ => "Identity Context",
+    }
+}
+
+fn format_memory_date(raw: &str) -> String {
+    chrono::DateTime::parse_from_rfc3339(raw)
+        .map(|dt| {
+            dt.with_timezone(&chrono::Local)
+                .format("%Y-%m-%d")
+                .to_string()
+        })
+        .unwrap_or_else(|_| raw.chars().take(10).collect())
+}
+
+fn select_memories_for_budget(
+    memories: Vec<InjectMemoryRow>,
+    token_budget: usize,
+) -> Vec<InjectMemoryRow> {
+    let mut selected = Vec::new();
+    let mut used = 0usize;
+    for memory in memories {
+        let tag = memory
+            .tags
+            .as_deref()
+            .filter(|tags| !tags.is_empty())
+            .unwrap_or("");
+        let tag_tokens = if tag.is_empty() {
+            0
+        } else {
+            estimate_tokens(tag) + 3
+        };
+        let tokens = estimate_tokens(&memory.content) + tag_tokens + 4;
+        if used.saturating_add(tokens) > token_budget {
+            break;
+        }
+        used = used.saturating_add(tokens);
+        selected.push(memory);
+    }
+    selected
+}
+
+fn get_agent_read_scope(conn: &rusqlite::Connection, agent_id: &str) -> (String, Option<String>) {
+    conn.query_row(
+        "SELECT read_policy, policy_group FROM agents WHERE id = ?1 LIMIT 1",
+        [agent_id],
+        |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
+    )
+    .unwrap_or_else(|_| {
+        if agent_id == "default" {
+            ("shared".to_string(), None)
+        } else {
+            ("isolated".to_string(), None)
+        }
+    })
+}
+
+fn table_has_column(conn: &rusqlite::Connection, table: &str, column: &str) -> bool {
+    let Ok(mut stmt) = conn.prepare(&format!("PRAGMA table_info({table})")) else {
+        return false;
+    };
+    let Ok(rows) = stmt.query_map([], |row| row.get::<_, String>(1)) else {
+        return false;
+    };
+    rows.filter_map(|row| row.ok()).any(|name| name == column)
+}
+
+fn fetch_session_start_memories(
+    conn: &rusqlite::Connection,
+    agent_id: &str,
+    project: Option<&str>,
+    limit: usize,
+) -> rusqlite::Result<Vec<InjectMemoryRow>> {
+    let (read_policy, policy_group) = get_agent_read_scope(conn, agent_id);
+    let mut sql = "SELECT id, content, NULLIF(COALESCE(tags, ''), ''), created_at
+                   FROM memories m
+                   WHERE COALESCE(m.visibility, 'global') != 'archived'"
+        .to_string();
+    if table_has_column(conn, "memories", "is_deleted") {
+        sql.push_str(" AND COALESCE(m.is_deleted, 0) = 0");
+    }
+    let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+    match (read_policy.as_str(), policy_group.as_deref()) {
+        ("shared", _) => {
+            sql.push_str(" AND (COALESCE(m.visibility, 'global') = 'global' OR m.agent_id = ?)");
+            params.push(Box::new(agent_id.to_string()));
+        }
+        ("group", Some(group)) => {
+            sql.push_str(
+                " AND ((COALESCE(m.visibility, 'global') = 'global'
+                         AND m.agent_id IN (SELECT id FROM agents WHERE policy_group = ?))
+                        OR m.agent_id = ?)",
+            );
+            params.push(Box::new(group.to_string()));
+            params.push(Box::new(agent_id.to_string()));
+        }
+        _ => {
+            sql.push_str(" AND m.agent_id = ?");
+            params.push(Box::new(agent_id.to_string()));
+        }
+    }
+    if let Some(project) = project.filter(|value| !value.trim().is_empty()) {
+        sql.push_str(" ORDER BY CASE WHEN m.project = ? THEN 0 ELSE 1 END,");
+        params.push(Box::new(project.to_string()));
+    } else {
+        sql.push_str(" ORDER BY");
+    }
+    sql.push_str(
+        " COALESCE(m.pinned, 0) DESC, COALESCE(m.importance, 0.5) DESC, m.created_at DESC LIMIT ?",
+    );
+    params.push(Box::new(limit as i64));
+
+    let param_refs = params
+        .iter()
+        .map(|value| value.as_ref())
+        .collect::<Vec<_>>();
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(rusqlite::params_from_iter(param_refs), |row| {
+        Ok(InjectMemoryRow {
+            id: row.get(0)?,
+            content: row.get(1)?,
+            tags: row.get(2)?,
+            created_at: row.get(3)?,
+        })
+    })?;
+    Ok(rows.filter_map(|row| row.ok()).collect())
+}
+
+fn update_memory_access_tracking(
+    conn: &rusqlite::Connection,
+    memories: &[InjectMemoryRow],
+) -> rusqlite::Result<()> {
+    let now = chrono::Utc::now().to_rfc3339();
+    for memory in memories {
+        conn.execute(
+            "UPDATE memories
+             SET last_accessed = ?1,
+                 access_count = COALESCE(access_count, 0) + 1
+             WHERE id = ?2",
+            rusqlite::params![now, memory.id],
+        )?;
+    }
+    Ok(())
+}
+
+fn latest_recovery_checkpoint(
+    conn: &rusqlite::Connection,
+    session_key: &str,
+    project_normalized: Option<&str>,
+    agent_id: &str,
+) -> Option<signet_core::types::SessionCheckpoint> {
+    let bound_agent = session_agent_id(Some(session_key));
+    let same_key_recovery_allowed = bound_agent
+        .as_deref()
+        .map(|bound| bound == agent_id)
+        .unwrap_or(agent_id == "default");
+    if same_key_recovery_allowed
+        && let Ok(mut checkpoints) =
+            signet_services::session::get_checkpoints_for_session(conn, session_key)
+        && let Some(checkpoint) = checkpoints.drain(..).next()
+    {
+        return Some(checkpoint);
+    }
+
+    // session_checkpoints has no agent_id column. Project fallback is safe only
+    // for legacy default-agent sessions; agent-prefixed sessions use same-key
+    // lookup above so recovery digests cannot cross agent boundaries.
+    (agent_id == "default")
+        .then_some(project_normalized)
+        .flatten()
+        .and_then(|project| {
+            signet_services::session::get_recovery_checkpoints(conn, project, 4).ok()
+        })
+        .and_then(|mut checkpoints| checkpoints.drain(..).next())
+}
+
+fn format_recovery_digest(
+    checkpoint: &signet_core::types::SessionCheckpoint,
+    budget_chars: usize,
+) -> String {
+    trim_to_chars(checkpoint.digest.trim(), budget_chars.max(1))
+}
+
+fn plugin_prompt_contribution_section_for(state: &AppState, target_filter: Option<&str>) -> String {
+    let contributions = plugins::active_prompt_contributions(state);
+    if contributions.is_empty() {
+        return String::new();
+    }
+
+    let mut parts = vec!["## Plugin Context".to_string(), String::new()];
+    for contribution in contributions {
+        let plugin_id = contribution
+            .get("pluginId")
+            .and_then(|value| value.as_str())
+            .unwrap_or_default();
+        let id = contribution
+            .get("id")
+            .and_then(|value| value.as_str())
+            .unwrap_or_default();
+        let target = contribution
+            .get("target")
+            .and_then(|value| value.as_str())
+            .unwrap_or_default();
+        let content = contribution
+            .get("content")
+            .and_then(|value| value.as_str())
+            .unwrap_or_default()
+            .trim();
+        if plugin_id.is_empty() || id.is_empty() || target.is_empty() || content.is_empty() {
+            continue;
+        }
+        if target_filter.is_some_and(|expected| target != expected) {
+            continue;
+        }
+        parts.push(format!(
+            "<signet-plugin-context plugin=\"{plugin_id}\" id=\"{id}\" target=\"{target}\">"
+        ));
+        parts.push(content.to_string());
+        parts.push("</signet-plugin-context>".to_string());
+        parts.push(String::new());
+    }
+
+    if parts.len() <= 2 {
+        String::new()
+    } else {
+        parts.join("\n").trim_end().to_string()
+    }
+}
+
+fn secrets_prompt_listing_allowed(state: &AppState) -> bool {
+    !plugins::active_prompt_contributions(state).is_empty()
 }
 
 fn resolve_remember_agent(
@@ -371,13 +778,16 @@ pub async fn synthesis_complete(
         )
             .into_response();
     }
-    if let Err(error) = resolve_synthesis_agent(&headers, body.agent_id(), body.session_key()) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": error })),
-        )
-            .into_response();
-    }
+    let agent_id = match resolve_synthesis_agent(&headers, body.agent_id(), body.session_key()) {
+        Ok(agent_id) => agent_id,
+        Err(error) => {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({ "error": error })),
+            )
+                .into_response();
+        }
+    };
     if state.synthesis_worker_handle.lock().await.is_none() {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -393,7 +803,7 @@ pub async fn synthesis_complete(
         )
             .into_response();
     };
-    match write_memory_md_atomic(&root, &content) {
+    match write_memory_md_atomic(&root, &agent_id, &content) {
         Ok(()) => Json(serde_json::json!({ "success": true })).into_response(),
         Err(error) => {
             warn!(err = %error, "synthesis complete failed");
@@ -406,14 +816,27 @@ pub async fn synthesis_complete(
     }
 }
 
-fn write_memory_md_atomic(root: &Path, content: &str) -> Result<(), String> {
+fn memory_md_path(root: &Path, agent_id: &str) -> Result<std::path::PathBuf, String> {
+    if agent_id == "default" {
+        workspace_paths::child_file(root, &["MEMORY.md"]).map_err(|err| err.to_string())
+    } else {
+        workspace_paths::child_file(root, &["agents", agent_id, "MEMORY.md"])
+            .map_err(|err| err.to_string())
+    }
+}
+
+fn write_memory_md_atomic(root: &Path, agent_id: &str, content: &str) -> Result<(), String> {
     fs::create_dir_all(root).map_err(|err| err.to_string())?;
-    let path = root.join("MEMORY.md");
+    let path = memory_md_path(root, agent_id)?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| "MEMORY.md path has no parent".to_string())?;
+    fs::create_dir_all(parent).map_err(|err| err.to_string())?;
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|err| err.to_string())?
         .as_nanos();
-    let tmp = root.join(format!(".MEMORY.md.{nanos}.tmp"));
+    let tmp = parent.join(format!(".MEMORY.md.{nanos}.tmp"));
     fs::write(&tmp, content).map_err(|err| err.to_string())?;
     fs::rename(&tmp, &path).map_err(|err| {
         let _ = fs::remove_file(&tmp);
@@ -1127,7 +1550,24 @@ pub async fn session_start(
         .clone()
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let path = resolve_runtime_path(&headers, body.runtime_path.as_deref());
-    let agent_id = body.agent_id.clone().unwrap_or_else(|| "default".into());
+    let bound_agent = session_agent_id(Some(&session_key));
+    if let (Some(explicit), Some(bound)) = (body.agent_id.as_deref(), bound_agent.as_deref())
+        && explicit.trim() != bound
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "agent_id does not match session scope"})),
+        )
+            .into_response();
+    }
+    let agent_id = body
+        .agent_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or(bound_agent)
+        .unwrap_or_else(|| "default".into());
 
     // Session claim
     if let Some(p) = path
@@ -1147,22 +1587,32 @@ pub async fn session_start(
         )
         .await;
         state.continuity.clear(&session_key);
-        state.dedup.clear_session_start(&session_key);
+        state.dedup.clear_session_start_scoped(
+            &agent_id,
+            Some(harness),
+            body.project.as_deref(),
+            &session_key,
+        );
         state.dedup.clear(&session_key);
         recovered
     } else {
         None
     };
 
-    // Dedup — if session_key was already seen, return minimal stub
-    if state.dedup.mark_session_start(&session_key) {
-        let now = chrono::Utc::now();
+    // Dedup — if this scoped session_start was already seen, return the TS minimal stub.
+    if state.dedup.has_session_start_scoped(
+        &agent_id,
+        Some(harness),
+        body.project.as_deref(),
+        &session_key,
+    ) {
+        let metadata_header = format_metadata_header();
         return (
             StatusCode::OK,
             Json(serde_json::json!({
-                "identity": { "name": state.config.manifest.agent.name },
+                "identity": { "name": "Agent" },
                 "memories": [],
-                "inject": format!("{}\n[memory active | /remember | /recall]\nCurrent date: {}", build_signet_system_prompt(), now.format("%Y-%m-%d %H:%M")),
+                "inject": format!("[memory active | /remember | /recall]\n{}", metadata_header.trim_end()),
                 "deduped": true,
                 "recoveredSummaryJob": recovered_summary_job.clone(),
             })),
@@ -1187,39 +1637,188 @@ pub async fn session_start(
 
     let identity_name = state.config.manifest.agent.name.clone();
     let identity_desc = state.config.manifest.agent.description.clone();
+    let dedupe_agent_id = agent_id.clone();
+    let dedupe_project = body.project.clone();
+    let dedupe_session_key = session_key.clone();
+    let runtime_cfg = load_session_start_runtime_config(&state.config.base_path);
+    let base_path = state.config.base_path.clone();
+    let continuity_cfg = state
+        .config
+        .manifest
+        .memory
+        .as_ref()
+        .and_then(|memory| memory.pipeline_v2.as_ref())
+        .map(|pipeline| pipeline.continuity.clone())
+        .unwrap_or_default();
+    let system_plugin_context = plugin_prompt_contribution_section_for(&state, Some("system"));
+    let session_plugin_context =
+        plugin_prompt_contribution_section_for(&state, Some("session-start"));
+    let secret_names = if secrets_prompt_listing_allowed(&state) {
+        secrets::secret_names(&state)
+    } else {
+        Vec::new()
+    };
 
-    // Load recovery checkpoints and build response
+    let agents_md = runtime_cfg
+        .include_identity
+        .then(|| read_agent_identity_markdown(&base_path, &agent_id, "AGENTS.md", 12_000))
+        .flatten();
+    let identity_sections = if runtime_cfg.include_identity {
+        ["SOUL.md", "IDENTITY.md", "USER.md"]
+            .into_iter()
+            .filter_map(|filename| {
+                read_agent_identity_markdown(&base_path, &agent_id, filename, 6_000)
+                    .map(|content| (identity_header_for_file(filename), content))
+            })
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
+    let memory_md = runtime_cfg
+        .include_recent_context
+        .then(|| read_agent_memory_markdown(&base_path, &agent_id, 10_000))
+        .flatten();
+
+    // Load scoped memory recall/recovery and build TS-equivalent hidden-message inject.
     let pn = project_normalized.clone();
+    let project_for_memories = body.project.clone();
     let result = state
         .pool
-        .read(move |conn| {
-            // Get recovery checkpoints if project exists
-            let recovery = if let Some(pn) = &pn {
-                signet_services::session::get_recovery_checkpoints(conn, pn, 4).unwrap_or_default()
+        .write(Priority::Low, move |conn| {
+            let memory_pool_limit = runtime_cfg.recall_limit.max(1).saturating_mul(2);
+            let raw_memories = fetch_session_start_memories(
+                conn,
+                &agent_id,
+                project_for_memories.as_deref(),
+                memory_pool_limit,
+            )?;
+            let memories = select_memories_for_budget(
+                raw_memories,
+                runtime_cfg.token_budget.saturating_div(2).max(1),
+            )
+            .into_iter()
+            .take(runtime_cfg.recall_limit)
+            .collect::<Vec<_>>();
+            update_memory_access_tracking(conn, &memories)?;
+
+            let recovery_section = if continuity_cfg.enabled {
+                latest_recovery_checkpoint(conn, &session_key, pn.as_deref(), &agent_id).map(|checkpoint| {
+                    format!(
+                        "\n## Session Recovery Context\n{}",
+                        format_recovery_digest(&checkpoint, continuity_cfg.recovery_budget_chars)
+                    )
+                })
             } else {
-                vec![]
+                None
             };
 
-            // Build inject string
-            let now = chrono::Utc::now();
-            let mut inject = String::new();
-            inject.push_str(build_signet_system_prompt());
-            // TS: injectParts.join("\n") with prompt ending \n produces a blank line here
-            inject.push('\n');
-            inject.push_str("[memory active | /remember | /recall]\n");
-            inject.push_str(&format!("Current date: {}\n", now.format("%Y-%m-%d %H:%M")));
-
-            // Add recovery digest if available
-            if let Some(checkpoint) = recovery.first() {
-                inject.push_str(&format!("\n[Session Recovery]\n{}\n", checkpoint.digest));
+            let mut inject_parts = Vec::new();
+            inject_parts.push(build_signet_system_prompt().to_string());
+            if !system_plugin_context.is_empty() {
+                inject_parts.push(system_plugin_context.clone());
             }
+            inject_parts.push("[memory active | /remember | /recall]".to_string());
+            inject_parts.push(format!("\n{}", format_metadata_header()));
+
+            if let Some(content) = &agents_md {
+                inject_parts.push("\n## Agent Instructions\n".to_string());
+                inject_parts.push(content.clone());
+            }
+
+            if runtime_cfg.include_identity && identity_sections.is_empty() && agents_md.is_none() {
+                if identity_name != "Agent" || identity_desc.as_deref().is_some_and(|value| !value.trim().is_empty()) {
+                    inject_parts.push(format!(
+                        "You are {}{}.",
+                        identity_name,
+                        identity_desc
+                            .as_deref()
+                            .filter(|value| !value.trim().is_empty())
+                            .map(|value| format!(", {value}"))
+                            .unwrap_or_default()
+                    ));
+                }
+            } else {
+                for (header, content) in &identity_sections {
+                    inject_parts.push(format!("\n## {header}\n"));
+                    inject_parts.push(content.clone());
+                }
+            }
+
+            if let Some(content) = &memory_md {
+                inject_parts.push("\n## Working Memory\n".to_string());
+                inject_parts.push(content.clone());
+            }
+
+            if !memories.is_empty() {
+                inject_parts.push(format!(
+                    "\n## Relevant Memories (auto-loaded | scored by importance x recency | {} results)\n",
+                    memories.len()
+                ));
+                for memory in &memories {
+                    let tags = memory
+                        .tags
+                        .as_deref()
+                        .filter(|tags| !tags.trim().is_empty())
+                        .map(|tags| format!(" [{tags}]"))
+                        .unwrap_or_default();
+                    inject_parts.push(format!(
+                        "- {}{} ({})",
+                        memory.content,
+                        tags,
+                        format_memory_date(&memory.created_at)
+                    ));
+                }
+            }
+
+            if !session_plugin_context.is_empty() {
+                inject_parts.push(session_plugin_context.clone());
+            }
+
+            if !secret_names.is_empty() {
+                inject_parts.push("\n## Available Secrets\n".to_string());
+                inject_parts.push(
+                    "Use the `secret_exec` MCP tool to run commands with these secrets injected as env vars."
+                        .to_string(),
+                );
+                for name in &secret_names {
+                    inject_parts.push(format!("- {name}"));
+                }
+            }
+
+            let reserved_tokens = recovery_section
+                .as_deref()
+                .map(estimate_tokens)
+                .unwrap_or_default();
+            let main_budget = runtime_cfg.token_budget.saturating_sub(reserved_tokens);
+            if main_budget == 0 && reserved_tokens > 0 {
+                warn!(
+                    max_tokens = runtime_cfg.token_budget,
+                    reserved_tokens,
+                    "session-start reserved recovery exhausted inject token budget"
+                );
+            }
+            let mut inject = apply_token_budget(&inject_parts.join("\n"), main_budget);
+            if let Some(recovery) = recovery_section {
+                inject.push_str(&recovery);
+            }
+            let memories_json = memories
+                .iter()
+                .map(|memory| {
+                    serde_json::json!({
+                        "id": memory.id,
+                        "content": memory.content,
+                        "tags": memory.tags,
+                        "created_at": memory.created_at,
+                    })
+                })
+                .collect::<Vec<_>>();
 
             Ok(serde_json::json!({
                 "identity": {
-                    "name": identity_name,
-                    "description": identity_desc,
+                    "name": if runtime_cfg.include_identity { identity_name.clone() } else { "Agent".to_string() },
+                    "description": if runtime_cfg.include_identity { identity_desc.clone() } else { None },
                 },
-                "memories": [],
+                "memories": memories_json,
                 "inject": inject,
                 "sessionKey": session_key,
                 "agentId": agent_id,
@@ -1229,12 +1828,28 @@ pub async fn session_start(
         .await;
 
     match result {
-        Ok(val) => (StatusCode::OK, Json(val)).into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e.to_string()})),
-        )
-            .into_response(),
+        Ok(val) => {
+            state.dedup.mark_session_start_scoped(
+                &dedupe_agent_id,
+                Some(harness),
+                dedupe_project.as_deref(),
+                &dedupe_session_key,
+            );
+            (StatusCode::OK, Json(val)).into_response()
+        }
+        Err(e) => {
+            state.dedup.clear_session_start_scoped(
+                &dedupe_agent_id,
+                Some(harness),
+                dedupe_project.as_deref(),
+                &dedupe_session_key,
+            );
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e.to_string()})),
+            )
+                .into_response()
+        }
     }
 }
 
@@ -1631,42 +2246,7 @@ fn memory_embedding_score(
 }
 
 fn build_plugin_prompt_contribution_section(state: &AppState) -> String {
-    let contributions = plugins::active_prompt_contributions(state);
-    if contributions.is_empty() {
-        return String::new();
-    }
-
-    let mut parts = vec!["## Plugin Context".to_string(), String::new()];
-    for contribution in contributions {
-        let plugin_id = contribution
-            .get("pluginId")
-            .and_then(|value| value.as_str())
-            .unwrap_or_default();
-        let id = contribution
-            .get("id")
-            .and_then(|value| value.as_str())
-            .unwrap_or_default();
-        let target = contribution
-            .get("target")
-            .and_then(|value| value.as_str())
-            .unwrap_or_default();
-        let content = contribution
-            .get("content")
-            .and_then(|value| value.as_str())
-            .unwrap_or_default()
-            .trim();
-        if plugin_id.is_empty() || id.is_empty() || target.is_empty() || content.is_empty() {
-            continue;
-        }
-        parts.push(format!(
-            "<signet-plugin-context plugin=\"{plugin_id}\" id=\"{id}\" target=\"{target}\">"
-        ));
-        parts.push(content.to_string());
-        parts.push("</signet-plugin-context>".to_string());
-        parts.push(String::new());
-    }
-
-    parts.join("\n").trim_end().to_string()
+    plugin_prompt_contribution_section_for(state, Some("user-prompt-submit"))
 }
 
 fn build_entity_context_inject(
@@ -3875,6 +4455,7 @@ mod tests {
     use axum::body::to_bytes;
     use axum::extract::State;
     use axum::http::{HeaderMap, StatusCode};
+    use axum::response::IntoResponse;
     use serde_json::Value;
     use sha2::{Digest, Sha256};
     use signet_core::config::{
@@ -3883,6 +4464,9 @@ mod tests {
     };
     use signet_core::db::{DbPool, Priority};
     use signet_pipeline::embedding::EmbeddingProvider;
+    use signet_pipeline::provider::LlmSemaphore;
+    use signet_pipeline::provider::{GenerateOpts, GenerateResult, LlmProvider, ProviderError};
+    use signet_pipeline::synthesis::{self, SynthesisConfig};
     use tempfile::TempDir;
 
     use crate::auth::rate_limiter::{AuthRateLimiter, default_limits};
@@ -3890,13 +4474,14 @@ mod tests {
     use crate::state::{AppState, AuthRuntimeState};
 
     use super::{
-        CHECKPOINT_MIN_DELTA, CheckpointExtractBody, CompactionCompleteBody, PromptSubmitBody,
-        SessionEndBody, SessionStartBody, build_signet_system_prompt, compaction_complete,
-        extract_delta, memory_embedding_score, normalize_session_transcript, parse_visibility,
-        prompt_submit, require_session_scope_for_write, resolve_audit_token,
-        resolve_compaction_project, resolve_remember_agent, session_agent_id,
+        CHECKPOINT_MIN_DELTA, CheckpointExtractBody, CompactionCompleteBody, InjectMemoryRow,
+        PromptSubmitBody, SessionEndBody, SessionStartBody, SynthesisCompleteBody,
+        build_signet_system_prompt, compaction_complete, extract_delta, memory_embedding_score,
+        normalize_session_transcript, parse_visibility, prompt_submit,
+        require_session_scope_for_write, resolve_audit_token, resolve_compaction_project,
+        resolve_remember_agent, select_memories_for_budget, session_agent_id,
         session_checkpoint_extract, session_end, session_start, session_transcript_content,
-        strip_untrusted_metadata, upsert_session_transcript,
+        strip_untrusted_metadata, synthesis_complete, upsert_session_transcript,
     };
     use signet_services::session::{RuntimePath, SessionTracker};
 
@@ -3907,6 +4492,31 @@ mod tests {
 
     struct TestEmbeddingProvider {
         vector: Vec<f32>,
+    }
+
+    struct TestLlmProvider;
+
+    impl LlmProvider for TestLlmProvider {
+        fn generate(
+            &self,
+            _prompt: &str,
+            _opts: &GenerateOpts,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<Output = Result<GenerateResult, ProviderError>> + Send + '_,
+            >,
+        > {
+            Box::pin(async {
+                Ok(GenerateResult {
+                    text: "test synthesis".to_string(),
+                    usage: None,
+                })
+            })
+        }
+
+        fn name(&self) -> &str {
+            "test"
+        }
     }
 
     impl EmbeddingProvider for TestEmbeddingProvider {
@@ -3989,6 +4599,386 @@ mod tests {
         test_state_with_manifest(name, |manifest| {
             manifest.hooks = Some(HooksConfig::default());
         })
+    }
+
+    #[test]
+    fn session_start_budget_selection_excludes_oversized_first_memory() {
+        let memories = vec![
+            InjectMemoryRow {
+                id: "oversized".to_string(),
+                content: "oversized memory ".repeat(80),
+                tags: None,
+                created_at: "2026-06-01T00:00:00Z".to_string(),
+            },
+            InjectMemoryRow {
+                id: "small".to_string(),
+                content: "small memory".to_string(),
+                tags: None,
+                created_at: "2026-06-01T00:00:00Z".to_string(),
+            },
+        ];
+
+        let selected = select_memories_for_budget(memories, 16);
+
+        assert!(
+            selected.is_empty(),
+            "oversized first row must not be injected or marked served"
+        );
+    }
+
+    #[tokio::test]
+    async fn synthesis_complete_writes_agent_scoped_memory_file() {
+        let (state, writer, tmp) = test_state("hooks-synthesis-complete-agent-memory");
+        std::fs::write(tmp.path().join("MEMORY.md"), "root memory must remain").unwrap();
+        let handle = synthesis::start(
+            state.pool.clone(),
+            Arc::new(TestLlmProvider),
+            Arc::new(LlmSemaphore::new(1)),
+            SynthesisConfig {
+                poll_ms: 3_600_000,
+                agents_dir: tmp.path().to_string_lossy().to_string(),
+                ..SynthesisConfig::default()
+            },
+        );
+        *state.synthesis_worker_handle.lock().await = Some(handle);
+
+        let resp = synthesis_complete(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(SynthesisCompleteBody {
+                content: Some("agent-a synthesized head".to_string()),
+                agent_id_camel: None,
+                agent_id: Some("agent-a".to_string()),
+                session_key_camel: None,
+                session_key: None,
+            }),
+        )
+        .await
+        .into_response();
+        let status = resp.status();
+        let body = test_json(resp).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join("MEMORY.md")).unwrap(),
+            "root memory must remain"
+        );
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join("agents/agent-a/MEMORY.md")).unwrap(),
+            "agent-a synthesized head"
+        );
+
+        if let Some(handle) = state.synthesis_worker_handle.lock().await.take() {
+            handle.stop().await;
+        }
+        drop(state);
+        let _ = writer.await;
+    }
+
+    #[tokio::test]
+    async fn session_start_injects_full_native_context_without_cross_agent_or_secret_values() {
+        let (state, writer, tmp) = test_state("hooks-session-start-full-inject");
+        std::fs::write(
+            tmp.path().join("AGENTS.md"),
+            "Follow repo-root instructions.",
+        )
+        .unwrap();
+        std::fs::write(tmp.path().join("SOUL.md"), "Steady and source-backed.").unwrap();
+        std::fs::write(
+            tmp.path().join("IDENTITY.md"),
+            "Root identity must be overridden.",
+        )
+        .unwrap();
+        std::fs::write(tmp.path().join("USER.md"), "The user cares about parity.").unwrap();
+        std::fs::create_dir_all(tmp.path().join("agents/agent-a")).unwrap();
+        std::fs::write(
+            tmp.path().join("agents/agent-a/IDENTITY.md"),
+            "Agent-local identity override.",
+        )
+        .unwrap();
+        std::fs::write(
+            tmp.path().join("agents/agent-a/MEMORY.md"),
+            "Working summary must be present.",
+        )
+        .unwrap();
+        std::fs::create_dir_all(tmp.path().join(".secrets")).unwrap();
+        std::fs::write(
+            tmp.path().join(".secrets/secrets.enc"),
+            serde_json::json!({
+                "version": 1,
+                "secrets": {
+                    "API_TOKEN": {
+                        "ciphertext": "c3VwZXItc2VjcmV0LXZhbHVl",
+                        "created": "2026-05-27T00:00:00Z",
+                        "updated": "2026-05-27T00:00:00Z"
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        state
+            .pool
+            .write(Priority::Low, move |conn| {
+                let now = "2026-05-27T00:00:00Z";
+                let _ = conn.execute("ALTER TABLE memories ADD COLUMN is_deleted INTEGER DEFAULT 0", []);
+                conn.execute(
+                    "INSERT INTO memories (id, type, content, confidence, importance, tags, project, created_at, updated_at, agent_id, visibility, is_deleted)
+                     VALUES ('mem-agent-a', 'fact', 'Agent scoped memory should inject.', 1.0, 0.99, 'parity,hook', '/repo', ?1, ?1, 'agent-a', 'private', 0)",
+                    rusqlite::params![now],
+                )?;
+                conn.execute(
+                    "INSERT INTO memories (id, type, content, confidence, importance, project, created_at, updated_at, agent_id, visibility, is_deleted)
+                     VALUES ('mem-agent-a-deleted', 'fact', 'Soft-deleted memory must not inject.', 1.0, 2.0, '/repo', ?1, ?1, 'agent-a', 'private', 1)",
+                    rusqlite::params![now],
+                )?;
+                conn.execute(
+                    "INSERT INTO memories (id, type, content, confidence, importance, project, created_at, updated_at, agent_id, visibility, is_deleted)
+                     VALUES ('mem-agent-b', 'fact', 'Cross agent memory must not inject.', 1.0, 1.0, '/repo', ?1, ?1, 'agent-b', 'private', 0)",
+                    rusqlite::params![now],
+                )?;
+                conn.execute(
+                    "INSERT INTO session_checkpoints
+                     (id, session_key, harness, project, project_normalized, trigger, digest, prompt_count, created_at)
+                     VALUES ('chk-full', 'agent:agent-a:sess-full-inject', 'test', '/repo', '/repo', 'prompt', 'Recovered digest should inject.', 3, ?1)",
+                    rusqlite::params![now],
+                )?;
+                Ok(serde_json::Value::Null)
+            })
+            .await
+            .unwrap();
+
+        let resp = session_start(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(SessionStartBody {
+                harness: Some("test".to_string()),
+                project: Some("/repo".to_string()),
+                agent_id: Some("agent-a".to_string()),
+                context: None,
+                session_key: Some("agent:agent-a:sess-full-inject".to_string()),
+                runtime_path: Some("plugin".to_string()),
+                source: None,
+            }),
+        )
+        .await;
+
+        let status = resp.status();
+        let body = test_json(resp).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let inject = body["inject"].as_str().unwrap_or_default();
+        assert!(inject.contains("[signet active]"));
+        assert!(inject.contains("[memory active | /remember | /recall]"));
+        assert!(inject.contains("# Current Date & Time"));
+        assert!(inject.contains("## Agent Instructions"));
+        assert!(inject.contains("Follow repo-root instructions."));
+        assert!(inject.contains("## Soul"));
+        assert!(inject.contains("Steady and source-backed."));
+        assert!(inject.contains("## Identity"));
+        assert!(inject.contains("Agent-local identity override."));
+        assert!(!inject.contains("Root identity must be overridden."));
+        assert!(inject.contains("## User"));
+        assert!(inject.contains("The user cares about parity."));
+        assert!(inject.contains("## Working Memory"));
+        assert!(inject.contains("Working summary must be present."));
+        assert!(inject.contains(
+            "## Relevant Memories (auto-loaded | scored by importance x recency | 1 results)"
+        ));
+        assert!(inject.contains("Agent scoped memory should inject."));
+        assert!(inject.contains("[parity,hook]"));
+        assert!(inject.contains("## Session Recovery Context"));
+        assert!(inject.contains("Recovered digest should inject."));
+        assert!(inject.contains("## Available Secrets"));
+        assert!(inject.contains("- API_TOKEN"));
+        assert!(!inject.contains("super-secret-value"));
+        assert!(!inject.contains("Soft-deleted memory must not inject."));
+        assert!(!inject.contains("Cross agent memory must not inject."));
+        assert_eq!(body["agentId"], serde_json::json!("agent-a"));
+        assert_eq!(body["memories"].as_array().unwrap().len(), 1);
+        assert_eq!(body["memories"][0]["id"], serde_json::json!("mem-agent-a"));
+
+        drop(state);
+        let _ = writer.await;
+    }
+
+    #[tokio::test]
+    async fn session_start_resolves_agent_scoped_session_keys() {
+        let (state, writer, _tmp) = test_state("hooks-session-start-agent-key");
+        state
+            .pool
+            .write(Priority::Low, move |conn| {
+                conn.execute(
+                    "INSERT INTO memories (id, type, content, confidence, importance, created_at, updated_at, agent_id, visibility)
+                     VALUES ('mem-agent-key', 'fact', 'Agent key scoped memory should inject.', 1.0, 1.0, ?1, ?1, 'agent-a', 'private')",
+                    rusqlite::params!["2026-05-27T00:00:00Z"],
+                )?;
+                Ok(serde_json::Value::Null)
+            })
+            .await
+            .unwrap();
+
+        let resp = session_start(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(SessionStartBody {
+                harness: Some("test".to_string()),
+                project: None,
+                agent_id: None,
+                context: None,
+                session_key: Some("agent:agent-a:keyed".to_string()),
+                runtime_path: Some("plugin".to_string()),
+                source: None,
+            }),
+        )
+        .await;
+        let status = resp.status();
+        let body = test_json(resp).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["agentId"], serde_json::json!("agent-a"));
+        assert_eq!(
+            body["memories"][0]["id"],
+            serde_json::json!("mem-agent-key")
+        );
+
+        let mismatch = session_start(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(SessionStartBody {
+                harness: Some("test".to_string()),
+                project: None,
+                agent_id: Some("agent-b".to_string()),
+                context: None,
+                session_key: Some("agent:agent-a:mismatch".to_string()),
+                runtime_path: Some("plugin".to_string()),
+                source: None,
+            }),
+        )
+        .await;
+        assert_eq!(mismatch.status(), StatusCode::BAD_REQUEST);
+
+        drop(state);
+        let _ = writer.await;
+    }
+
+    #[tokio::test]
+    async fn session_start_budget_and_dedupe_are_agent_scoped() {
+        let (state, writer, tmp) =
+            test_state_with_manifest("hooks-session-start-budget-scope", |manifest| {
+                manifest.hooks = Some(HooksConfig::default());
+                manifest.agent.name = "Leaky Native Identity".to_string();
+                manifest.agent.description =
+                    Some("must stay out when includeIdentity is false".to_string());
+            });
+        std::fs::write(
+            tmp.path().join("agent.yaml"),
+            "hooks:\n  sessionStart:\n    recallLimit: 10\n    maxInjectTokens: 120\n    includeIdentity: false\n    includeRecentContext: true\n",
+        )
+        .unwrap();
+        let long_memory = "Long memory tail should be outside budget. ".repeat(80);
+        state
+            .pool
+            .write(Priority::Low, move |conn| {
+                let now = "2026-05-27T00:00:00Z";
+                conn.execute(
+                    "INSERT INTO memories (id, type, content, confidence, importance, created_at, updated_at, agent_id, visibility)
+                     VALUES ('mem-agent-a-small', 'fact', 'Small budgeted memory.', 1.0, 1.0, ?1, ?1, 'agent-a', 'private')",
+                    rusqlite::params![now],
+                )?;
+                conn.execute(
+                    "INSERT INTO memories (id, type, content, confidence, importance, created_at, updated_at, agent_id, visibility)
+                     VALUES ('mem-agent-a-long', 'fact', ?1, 1.0, 0.9, ?2, ?2, 'agent-a', 'private')",
+                    rusqlite::params![long_memory, now],
+                )?;
+                conn.execute(
+                    "INSERT INTO memories (id, type, content, confidence, importance, created_at, updated_at, agent_id, visibility)
+                     VALUES ('mem-agent-b-small', 'fact', 'Agent B first inject should not be deduped by agent A.', 1.0, 1.0, ?1, ?1, 'agent-b', 'private')",
+                    rusqlite::params![now],
+                )?;
+                Ok(serde_json::Value::Null)
+            })
+            .await
+            .unwrap();
+
+        let first = session_start(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(SessionStartBody {
+                harness: Some("test".to_string()),
+                project: None,
+                agent_id: Some("agent-a".to_string()),
+                context: None,
+                session_key: Some("shared-session-key".to_string()),
+                runtime_path: Some("plugin".to_string()),
+                source: None,
+            }),
+        )
+        .await;
+        let first_status = first.status();
+        let first_body = test_json(first).await;
+        assert_eq!(first_status, StatusCode::OK, "{first_body}");
+        assert!(
+            first_body["inject"]
+                .as_str()
+                .unwrap_or_default()
+                .chars()
+                .count()
+                <= 480
+        );
+        assert_eq!(first_body["identity"]["name"], serde_json::json!("Agent"));
+        assert!(
+            !first_body["inject"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("Leaky Native Identity")
+        );
+        assert_eq!(first_body["memories"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            first_body["memories"][0]["id"],
+            serde_json::json!("mem-agent-a-small")
+        );
+
+        let duplicate = session_start(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(SessionStartBody {
+                harness: Some("test".to_string()),
+                project: None,
+                agent_id: Some("agent-a".to_string()),
+                context: None,
+                session_key: Some("shared-session-key".to_string()),
+                runtime_path: Some("plugin".to_string()),
+                source: None,
+            }),
+        )
+        .await;
+        let duplicate_body = test_json(duplicate).await;
+        assert_eq!(duplicate_body["deduped"], serde_json::json!(true));
+        assert_eq!(duplicate_body["memories"].as_array().unwrap().len(), 0);
+
+        let other_agent = session_start(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(SessionStartBody {
+                harness: Some("test".to_string()),
+                project: None,
+                agent_id: Some("agent-b".to_string()),
+                context: None,
+                session_key: Some("shared-session-key".to_string()),
+                runtime_path: Some("plugin".to_string()),
+                source: None,
+            }),
+        )
+        .await;
+        let other_body = test_json(other_agent).await;
+        assert_ne!(other_body["deduped"], serde_json::json!(true));
+        assert_eq!(other_body["memories"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            other_body["memories"][0]["id"],
+            serde_json::json!("mem-agent-b-small")
+        );
+
+        drop(state);
+        let _ = writer.await;
     }
 
     #[tokio::test]
@@ -4595,7 +5585,8 @@ mod tests {
         assert_eq!(counts.0, 1);
         assert_eq!(counts.1, 0);
 
-        let memory_md = std::fs::read_to_string(tmp.path().join("MEMORY.md")).unwrap();
+        let memory_md =
+            std::fs::read_to_string(tmp.path().join("agents/agent-a/MEMORY.md")).unwrap();
         assert!(memory_md.contains("Session Ledger (Last 30 Days)"));
         assert!(memory_md.contains("[[memory/"));
 

@@ -1,19 +1,25 @@
 //! Memory CRUD route handlers.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::Json;
-use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
-use axum::response::IntoResponse;
-use rusqlite::OptionalExtension;
+use axum::extract::{ConnectInfo, Path, Query, State};
+use axum::http::{HeaderMap, StatusCode};
+use axum::response::{IntoResponse, Response};
+use rusqlite::types::Value as SqlValue;
+use rusqlite::{OptionalExtension, ToSql};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha1::{Digest, Sha1};
 
 use signet_core::db::Priority;
 
+use crate::auth::middleware::{
+    AuthState, authenticate_headers, require_permission_guard, resolve_scoped_agent,
+};
+use crate::auth::types::Permission;
 use crate::feedback::parse_scores;
 use crate::state::AppState;
 
@@ -25,11 +31,15 @@ use crate::state::AppState;
 pub struct ListParams {
     limit: Option<usize>,
     offset: Option<usize>,
+    #[serde(alias = "agentId")]
+    agent_id: Option<String>,
 }
 
 #[derive(Deserialize)]
 pub struct MostUsedParams {
     limit: Option<usize>,
+    #[serde(alias = "agentId")]
+    agent_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -38,6 +48,185 @@ pub struct SimilarParams {
     k: Option<usize>,
     #[allow(dead_code)]
     r#type: Option<String>,
+    #[serde(alias = "agentId")]
+    agent_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct MemoryAccessParams {
+    #[serde(alias = "agentId")]
+    agent_id: Option<String>,
+}
+
+struct AgentScope {
+    read_policy: String,
+    policy_group: Option<String>,
+}
+
+fn clean_text(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn session_agent_id(session_key: Option<&str>) -> Option<String> {
+    let mut parts = session_key?.splitn(3, ':');
+    match (parts.next(), parts.next()) {
+        (Some("agent"), Some(agent_id)) if !agent_id.trim().is_empty() => {
+            Some(agent_id.trim().to_string())
+        }
+        _ => None,
+    }
+}
+
+fn requested_agent_id(query_agent: Option<&str>, headers: &HeaderMap) -> Option<String> {
+    clean_text(query_agent)
+        .or_else(|| {
+            clean_text(
+                headers
+                    .get("x-signet-agent-id")
+                    .and_then(|v| v.to_str().ok()),
+            )
+        })
+        .or_else(|| {
+            session_agent_id(
+                headers
+                    .get("x-signet-session-key")
+                    .and_then(|v| v.to_str().ok()),
+            )
+        })
+}
+
+fn auth_for_permission(
+    state: &AppState,
+    peer: SocketAddr,
+    headers: &HeaderMap,
+    permission: Permission,
+) -> Result<AuthState, Response> {
+    let is_local = crate::auth::middleware::is_loopback_ip(peer.ip());
+    let auth_runtime = state.auth_snapshot();
+    let auth = authenticate_headers(
+        auth_runtime.mode,
+        auth_runtime.secret.as_deref(),
+        headers,
+        is_local,
+    )
+    .map_err(|resp| *resp)?;
+    require_permission_guard(&auth, permission, auth_runtime.mode, is_local)
+        .map_err(|resp| *resp)?;
+    Ok(auth)
+}
+
+fn scoped_agent_or_response(
+    state: &AppState,
+    peer: SocketAddr,
+    headers: &HeaderMap,
+    requested: Option<&str>,
+    permission: Permission,
+) -> Result<(String, AuthState), Response> {
+    let is_local = crate::auth::middleware::is_loopback_ip(peer.ip());
+    let auth_runtime = state.auth_snapshot();
+    let auth = auth_for_permission(state, peer, headers, permission)?;
+    let agent =
+        resolve_scoped_agent(&auth, auth_runtime.mode, is_local, requested).map_err(|reason| {
+            (
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({"error": reason})),
+            )
+                .into_response()
+        })?;
+    Ok((agent, auth))
+}
+
+fn agent_scope(conn: &rusqlite::Connection, agent_id: &str) -> rusqlite::Result<AgentScope> {
+    let row: Option<(Option<String>, Option<String>)> = conn
+        .query_row(
+            "SELECT read_policy, policy_group FROM agents WHERE id = ?1",
+            [agent_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    Ok(match row {
+        Some((policy, group)) => AgentScope {
+            read_policy: policy.unwrap_or_else(|| "isolated".to_string()),
+            policy_group: group.and_then(|value| clean_text(Some(&value))),
+        },
+        None => AgentScope {
+            read_policy: "isolated".to_string(),
+            policy_group: None,
+        },
+    })
+}
+
+fn agent_scope_clause(alias: &str, agent_id: &str, scope: &AgentScope) -> (String, Vec<SqlValue>) {
+    let prefix = if alias.is_empty() {
+        "".to_string()
+    } else {
+        format!("{alias}.")
+    };
+    let agent_expr = format!("COALESCE(NULLIF({prefix}agent_id, ''), 'default')");
+    let visibility_expr = format!("COALESCE({prefix}visibility, 'global')");
+    match (scope.read_policy.as_str(), scope.policy_group.as_deref()) {
+        ("shared", _) => (
+            format!(
+                " AND (({visibility_expr} = 'global') OR {agent_expr} = ?) AND {visibility_expr} != 'archived'"
+            ),
+            vec![SqlValue::Text(agent_id.to_string())],
+        ),
+        ("group", Some(group)) => (
+            format!(
+                " AND ((({visibility_expr} = 'global') AND {agent_expr} IN (SELECT id FROM agents WHERE policy_group = ?)) OR {agent_expr} = ?) AND {visibility_expr} != 'archived'"
+            ),
+            vec![
+                SqlValue::Text(group.to_string()),
+                SqlValue::Text(agent_id.to_string()),
+            ],
+        ),
+        _ => (
+            format!(" AND {agent_expr} = ? AND {visibility_expr} != 'archived'"),
+            vec![SqlValue::Text(agent_id.to_string())],
+        ),
+    }
+}
+
+fn project_scope_clause(auth: &AuthState, alias: &str) -> (String, Vec<SqlValue>) {
+    let Some(project) = auth
+        .result
+        .claims
+        .as_ref()
+        .and_then(|claims| claims.scope.project.as_deref())
+        .and_then(|project| clean_text(Some(project)))
+    else {
+        return (String::new(), Vec::new());
+    };
+    let prefix = if alias.is_empty() {
+        "".to_string()
+    } else {
+        format!("{alias}.")
+    };
+    (
+        format!(" AND {prefix}project = ?"),
+        vec![SqlValue::Text(project)],
+    )
+}
+
+fn visible_memory_scope(
+    conn: &rusqlite::Connection,
+    agent_id: &str,
+    auth: &AuthState,
+    alias: &str,
+) -> rusqlite::Result<(String, Vec<SqlValue>)> {
+    let agent_scope = agent_scope(conn, agent_id)?;
+    let (mut sql, mut args) = agent_scope_clause(alias, agent_id, &agent_scope);
+    let (project_sql, mut project_args) = project_scope_clause(auth, alias);
+    sql.push_str(&project_sql);
+    args.append(&mut project_args);
+    Ok((sql, args))
+}
+
+fn params_from_values(values: &[SqlValue]) -> Vec<&dyn ToSql> {
+    values.iter().map(|value| value as &dyn ToSql).collect()
 }
 
 #[derive(Serialize)]
@@ -57,22 +246,42 @@ pub struct MemoryStats {
 
 pub async fn list(
     State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Query(params): Query<ListParams>,
-) -> Json<ListResponse> {
+) -> Response {
+    let requested = requested_agent_id(params.agent_id.as_deref(), &headers);
+    let (agent_id, auth) = match scoped_agent_or_response(
+        &state,
+        peer,
+        &headers,
+        requested.as_deref(),
+        Permission::Recall,
+    ) {
+        Ok(value) => value,
+        Err(resp) => return resp,
+    };
     let limit = params.limit.unwrap_or(100);
     let offset = params.offset.unwrap_or(0);
 
     let result = state
         .pool
         .read(move |conn| {
-            let mut stmt = conn.prepare_cached(
-                "SELECT id, content, created_at, who, importance, tags, source_type, pinned, type
-                 FROM memories
-                 ORDER BY created_at DESC
-                 LIMIT ?1 OFFSET ?2",
-            )?;
+            let (scope_sql, mut scope_args) = visible_memory_scope(conn, &agent_id, &auth, "m")?;
+            let mut query_args = scope_args.clone();
+            query_args.push(SqlValue::Integer(limit as i64));
+            query_args.push(SqlValue::Integer(offset as i64));
+            let sql = format!(
+                "SELECT m.id, m.content, m.created_at, m.who, m.importance, m.tags, m.source_type, m.pinned, m.type
+                 FROM memories m
+                 WHERE COALESCE(m.is_deleted, 0) = 0{scope_sql}
+                 ORDER BY m.created_at DESC
+                 LIMIT ? OFFSET ?"
+            );
+            let params = params_from_values(&query_args);
+            let mut stmt = conn.prepare(&sql)?;
             let memories: Vec<serde_json::Value> = stmt
-                .query_map(rusqlite::params![limit, offset], |row| {
+                .query_map(params.as_slice(), |row| {
                     Ok(serde_json::json!({
                         "id": row.get::<_, String>(0)?,
                         "content": row.get::<_, String>(1)?,
@@ -88,16 +297,25 @@ pub async fn list(
                 .filter_map(|r| r.ok())
                 .collect();
 
-            let total: i64 = conn.query_row("SELECT COUNT(*) FROM memories", [], |r| r.get(0))?;
+            let count_sql = format!("SELECT COUNT(*) FROM memories m WHERE COALESCE(m.is_deleted, 0) = 0{scope_sql}");
+            let count_params = params_from_values(&scope_args);
+            let total: i64 = conn.query_row(&count_sql, count_params.as_slice(), |r| r.get(0))?;
             let embeddings: i64 = conn
-                .query_row("SELECT COUNT(*) FROM embeddings", [], |r| r.get(0))
+                .query_row(
+                    &format!(
+                        "SELECT COUNT(*) FROM embeddings e JOIN memories m ON e.source_type = 'memory' AND e.source_id = m.id WHERE COALESCE(m.is_deleted, 0) = 0{scope_sql}"
+                    ),
+                    count_params.as_slice(),
+                    |r| r.get(0),
+                )
                 .unwrap_or(0);
             let critical: i64 = conn.query_row(
-                "SELECT COUNT(*) FROM memories WHERE importance >= 0.9",
-                [],
+                &format!("SELECT COUNT(*) FROM memories m WHERE COALESCE(m.is_deleted, 0) = 0 AND m.importance >= 0.9{scope_sql}"),
+                count_params.as_slice(),
                 |r| r.get(0),
             )?;
 
+            scope_args.clear();
             Ok(ListResponse {
                 memories,
                 total,
@@ -119,7 +337,7 @@ pub async fn list(
             },
         });
 
-    Json(result)
+    (StatusCode::OK, Json(result)).into_response()
 }
 
 // ---------------------------------------------------------------------------
@@ -128,22 +346,39 @@ pub async fn list(
 
 pub async fn most_used(
     State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Query(params): Query<MostUsedParams>,
-) -> Json<serde_json::Value> {
+) -> Response {
+    let requested = requested_agent_id(params.agent_id.as_deref(), &headers);
+    let (agent_id, auth) = match scoped_agent_or_response(
+        &state,
+        peer,
+        &headers,
+        requested.as_deref(),
+        Permission::Recall,
+    ) {
+        Ok(value) => value,
+        Err(resp) => return resp,
+    };
     let limit = params.limit.unwrap_or(6).clamp(1, 200);
     let memories = state
         .pool
         .read(move |conn| {
-            let mut stmt = conn.prepare_cached(
-                "SELECT id, content, access_count, importance, type, tags
-                 FROM memories
-                 WHERE access_count > 0
-                   AND (is_deleted = 0 OR is_deleted IS NULL)
-                 ORDER BY access_count DESC, importance DESC
-                 LIMIT ?1",
-            )?;
+            let (scope_sql, mut args) = visible_memory_scope(conn, &agent_id, &auth, "m")?;
+            args.push(SqlValue::Integer(limit as i64));
+            let sql = format!(
+                "SELECT m.id, m.content, m.access_count, m.importance, m.type, m.tags
+                 FROM memories m
+                 WHERE m.access_count > 0
+                   AND (m.is_deleted = 0 OR m.is_deleted IS NULL){scope_sql}
+                 ORDER BY m.access_count DESC, m.importance DESC
+                 LIMIT ?"
+            );
+            let params = params_from_values(&args);
+            let mut stmt = conn.prepare(&sql)?;
             let rows: Vec<serde_json::Value> = stmt
-                .query_map(rusqlite::params![limit], |row| {
+                .query_map(params.as_slice(), |row| {
                     Ok(serde_json::json!({
                         "id": row.get::<_, String>(0)?,
                         "content": row.get::<_, String>(1)?,
@@ -160,7 +395,11 @@ pub async fn most_used(
         .await
         .unwrap_or_default();
 
-    Json(serde_json::json!({ "memories": memories }))
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({ "memories": memories })),
+    )
+        .into_response()
 }
 
 // ---------------------------------------------------------------------------
@@ -169,9 +408,11 @@ pub async fn most_used(
 
 pub async fn similar(
     State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Query(params): Query<SimilarParams>,
 ) -> impl IntoResponse {
-    let Some(id) = params.id.map(|id| id.trim().to_string()) else {
+    let Some(id) = params.id.as_ref().map(|id| id.trim().to_string()) else {
         return (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({"error": "id is required", "results": []})),
@@ -185,20 +426,36 @@ pub async fn similar(
         )
             .into_response();
     }
+    let requested = requested_agent_id(params.agent_id.as_deref(), &headers);
+    let (agent_id, auth) = match scoped_agent_or_response(
+        &state,
+        peer,
+        &headers,
+        requested.as_deref(),
+        Permission::Recall,
+    ) {
+        Ok(value) => value,
+        Err(resp) => return resp,
+    };
     let _limit = params.k.unwrap_or(10).clamp(1, 100);
 
     let has_embedding = state
         .pool
         .read(move |conn| {
+            let (scope_sql, mut args) = visible_memory_scope(conn, &agent_id, &auth, "m")?;
+            args.insert(0, SqlValue::Text(id));
+            let params = params_from_values(&args);
             Ok(conn
-                .prepare_cached(
+                .prepare(&format!(
                     "SELECT 1
-                   FROM embeddings
-                  WHERE source_type = 'memory'
-                    AND source_id = ?1
-                  LIMIT 1",
-                )?
-                .exists(rusqlite::params![id])?)
+                   FROM embeddings e
+                   JOIN memories m ON m.id = e.source_id
+                  WHERE e.source_type = 'memory'
+                    AND e.source_id = ?
+                    AND COALESCE(m.is_deleted, 0) = 0{scope_sql}
+                  LIMIT 1"
+                ))?
+                .exists(params.as_slice())?)
         })
         .await;
 
@@ -227,21 +484,42 @@ pub async fn similar(
 // GET /api/memory/:id
 // ---------------------------------------------------------------------------
 
-pub async fn get(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> impl IntoResponse {
+pub async fn get(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Query(params): Query<MemoryAccessParams>,
+) -> impl IntoResponse {
+    let requested = requested_agent_id(params.agent_id.as_deref(), &headers);
+    let (agent_id, auth) = match scoped_agent_or_response(
+        &state,
+        peer,
+        &headers,
+        requested.as_deref(),
+        Permission::Recall,
+    ) {
+        Ok(value) => value,
+        Err(resp) => return resp,
+    };
     let row = state
         .pool
         .read(move |conn| {
-            let mut stmt = conn.prepare_cached(
-                "SELECT id, content, type, importance, tags, pinned, who,
-                        source_id, source_type, project, session_id, confidence,
-                        access_count, last_accessed, is_deleted, deleted_at,
-                        extraction_status, embedding_model, version,
-                        created_at, updated_at, updated_by
-                 FROM memories WHERE id = ?1 AND (is_deleted = 0 OR is_deleted IS NULL)",
-            )?;
+            let (scope_sql, mut args) = visible_memory_scope(conn, &agent_id, &auth, "m")?;
+            args.insert(0, SqlValue::Text(id));
+            let sql = format!(
+                "SELECT m.id, m.content, m.type, m.importance, m.tags, m.pinned, m.who,
+                        m.source_id, m.source_type, m.project, NULL AS session_id, m.confidence,
+                        m.access_count, m.last_accessed, m.is_deleted, m.deleted_at,
+                        m.extraction_status, m.embedding_model, m.version,
+                        m.created_at, m.updated_at, m.updated_by
+                 FROM memories m WHERE m.id = ? AND (m.is_deleted = 0 OR m.is_deleted IS NULL){scope_sql}"
+            );
+            let params = params_from_values(&args);
+            let mut stmt = conn.prepare(&sql)?;
 
             let result = stmt
-                .query_row(rusqlite::params![id], |row| {
+                .query_row(params.as_slice(), |row| {
                     Ok(serde_json::json!({
                         "id": row.get::<_, String>(0)?,
                         "content": row.get::<_, String>(1)?,
@@ -291,10 +569,14 @@ pub async fn get(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> 
 #[derive(Deserialize)]
 pub struct HistoryParams {
     limit: Option<usize>,
+    #[serde(alias = "agentId")]
+    agent_id: Option<String>,
 }
 
 pub async fn history(
     State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Path(id): Path<String>,
     Query(params): Query<HistoryParams>,
 ) -> impl IntoResponse {
@@ -308,14 +590,28 @@ pub async fn history(
     }
     let limit = params.limit.unwrap_or(200).min(1000);
     let missing_memory_id = memory_id.clone();
+    let requested = requested_agent_id(params.agent_id.as_deref(), &headers);
+    let (agent_id, auth) = match scoped_agent_or_response(
+        &state,
+        peer,
+        &headers,
+        requested.as_deref(),
+        Permission::Recall,
+    ) {
+        Ok(value) => value,
+        Err(resp) => return resp,
+    };
 
     let result = state
         .pool
         .read(move |conn| {
-            // Check existence
-            let exists: bool = conn
-                .prepare_cached("SELECT id FROM memories WHERE id = ?1")?
-                .exists(rusqlite::params![memory_id])?;
+            let (scope_sql, mut scope_args) = visible_memory_scope(conn, &agent_id, &auth, "m")?;
+            scope_args.insert(0, SqlValue::Text(memory_id.clone()));
+            let exists_sql = format!("SELECT 1 FROM memories m WHERE m.id = ?{scope_sql}");
+            let exists_params = params_from_values(&scope_args);
+            let exists = conn
+                .prepare(&exists_sql)?
+                .exists(exists_params.as_slice())?;
             if !exists {
                 return Ok(None);
             }
@@ -403,11 +699,28 @@ pub async fn history(
 }
 
 /// GET /api/memory/review-queue
-pub async fn review_queue(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+pub async fn review_queue(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Query(params): Query<MemoryAccessParams>,
+) -> impl IntoResponse {
+    let requested = requested_agent_id(params.agent_id.as_deref(), &headers);
+    let (agent_id, auth) = match scoped_agent_or_response(
+        &state,
+        peer,
+        &headers,
+        requested.as_deref(),
+        Permission::Recall,
+    ) {
+        Ok(value) => value,
+        Err(resp) => return resp,
+    };
     let result = state
         .pool
-        .read(|conn| {
-            let mut stmt = conn.prepare_cached(
+        .read(move |conn| {
+            let (scope_sql, args) = visible_memory_scope(conn, &agent_id, &auth, "m")?;
+            let sql = format!(
                 "SELECT h.id, h.memory_id, h.event, h.old_content, h.new_content,
                         h.reason, h.metadata, h.created_at, h.session_id,
                         m.content AS current_content, m.type AS memory_type,
@@ -416,11 +729,14 @@ pub async fn review_queue(State(state): State<Arc<AppState>>) -> impl IntoRespon
                  LEFT JOIN memories m ON m.id = h.memory_id
                  WHERE h.event IN ('DEDUP', 'REVIEW_NEEDED', 'BLOCKED_DESTRUCTIVE')
                    AND h.created_at > datetime('now', '-30 days')
+                   AND COALESCE(m.is_deleted, 0) = 0{scope_sql}
                  ORDER BY h.created_at DESC
-                 LIMIT 200",
-            )?;
+                 LIMIT 200"
+            );
+            let params = params_from_values(&args);
+            let mut stmt = conn.prepare(&sql)?;
             let items = stmt
-                .query_map([], |row| {
+                .query_map(params.as_slice(), |row| {
                     Ok(serde_json::json!({
                         "id": row.get::<_, String>(0)?,
                         "memory_id": row.get::<_, String>(1)?,
@@ -442,11 +758,12 @@ pub async fn review_queue(State(state): State<Arc<AppState>>) -> impl IntoRespon
         .await;
 
     match result {
-        Ok(body) => (StatusCode::OK, Json(body)),
+        Ok(body) => (StatusCode::OK, Json(body)).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": format!("{e}"), "items": []})),
-        ),
+        )
+            .into_response(),
     }
 }
 

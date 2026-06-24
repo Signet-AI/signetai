@@ -24,6 +24,7 @@ use crate::{
 };
 
 const SIGNET_SECRETS_PLUGIN_ID: &str = "signet.secrets";
+const SIGNET_GRAPHIQ_PLUGIN_ID: &str = "signet.graphiq";
 const AUDIT_FILE: &str = "audit-v1.ndjson";
 const REGISTRY_FILE: &str = "registry-v1.json";
 
@@ -133,6 +134,36 @@ fn secret_capabilities() -> Vec<&'static str> {
     ]
 }
 
+fn graphiq_capabilities() -> Vec<&'static str> {
+    vec![
+        "code:index",
+        "code:search",
+        "code:context",
+        "code:blast",
+        "code:status",
+        "code:doctor",
+        "code:dead-code",
+        "prompt:contribute:user-prompt-submit",
+        "mcp:tool",
+        "cli:command",
+    ]
+}
+
+fn graphiq_granted_capabilities() -> Vec<&'static str> {
+    vec![
+        "cli:command",
+        "code:blast",
+        "code:context",
+        "code:dead-code",
+        "code:doctor",
+        "code:index",
+        "code:search",
+        "code:status",
+        "mcp:tool",
+        "prompt:contribute:user-prompt-submit",
+    ]
+}
+
 fn secret_surfaces() -> serde_json::Value {
     serde_json::json!({
         "daemonRoutes": [
@@ -207,6 +238,86 @@ fn prompt_contribution() -> serde_json::Value {
         );
     }
     value
+}
+
+fn graphiq_surfaces() -> serde_json::Value {
+    serde_json::json!({
+        "daemonRoutes": [],
+        "cliCommands": [
+            {"path": ["index"], "summary": "Index a project with GraphIQ", "requiredCapabilities": ["cli:command", "code:index"]},
+            {"path": ["graphiq", "status"], "summary": "Show GraphIQ status for the active project", "requiredCapabilities": ["cli:command", "code:status"]},
+            {"path": ["graphiq", "doctor"], "summary": "Diagnose the active GraphIQ index", "requiredCapabilities": ["cli:command", "code:doctor"]},
+            {"path": ["graphiq", "upgrade-index"], "summary": "Rebuild stale GraphIQ artifacts", "requiredCapabilities": ["cli:command", "code:doctor"]},
+            {"path": ["graphiq", "dead-code"], "summary": "Find unreachable code in the active project", "requiredCapabilities": ["cli:command", "code:dead-code"]}
+        ],
+        "mcpTools": [
+            {"name": "signet_code_search", "title": "Search Code", "summary": "Search the active GraphIQ-indexed project", "requiredCapabilities": ["mcp:tool", "code:search"]},
+            {"name": "signet_code_context", "title": "Code Context", "summary": "Read source and structural neighborhood for a symbol", "requiredCapabilities": ["mcp:tool", "code:context"]},
+            {"name": "signet_code_blast", "title": "Code Blast Radius", "summary": "Analyze forward/backward impact for a symbol", "requiredCapabilities": ["mcp:tool", "code:blast"]},
+            {"name": "signet_code_status", "title": "Code Index Status", "summary": "Show GraphIQ status for the active project", "requiredCapabilities": ["mcp:tool", "code:status"]},
+            {"name": "signet_code_doctor", "title": "Code Index Doctor", "summary": "Diagnose active GraphIQ index health", "requiredCapabilities": ["mcp:tool", "code:doctor"]},
+            {"name": "signet_code_constants", "title": "Code Constants", "summary": "Find shared numeric and string constants in code", "requiredCapabilities": ["mcp:tool", "code:search"]},
+            {"name": "signet_code_dead_code", "title": "Dead Code Detection", "summary": "Find unreachable symbols in the active project", "requiredCapabilities": ["mcp:tool", "code:dead-code"]}
+        ],
+        "dashboardPanels": [],
+        "sdkClients": [],
+        "connectorCapabilities": [
+            {"id": "claude-code", "title": "Claude Code", "summary": "MCP tools via signet-mcp stdio", "requiredCapabilities": ["mcp:tool"]},
+            {"id": "opencode", "title": "OpenCode", "summary": "MCP tools via signet-mcp stdio", "requiredCapabilities": ["mcp:tool"]},
+            {"id": "codex", "title": "Codex CLI", "summary": "MCP tools via signet-mcp stdio", "requiredCapabilities": ["mcp:tool"]},
+            {"id": "gemini", "title": "Gemini CLI", "summary": "MCP tools via signet-mcp stdio", "requiredCapabilities": ["mcp:tool"]},
+            {"id": "openclaw", "title": "OpenClaw", "summary": "MCP tools via signet-mcp stdio", "requiredCapabilities": ["mcp:tool"]},
+            {"id": "hermes-agent", "title": "Hermes Agent", "summary": "MCP tools via signet-mcp stdio", "requiredCapabilities": ["mcp:tool"]},
+            {"id": "oh-my-pi", "title": "Oh My Pi", "summary": "MCP tools via signet-mcp stdio", "requiredCapabilities": ["mcp:tool"]},
+            {"id": "pi", "title": "Pi", "summary": "MCP tools via signet-mcp stdio", "requiredCapabilities": ["mcp:tool"]}
+        ],
+        "promptContributions": [
+            {
+                "id": "signet.graphiq.code-retrieval-guidance",
+                "target": "user-prompt-submit",
+                "mode": "context",
+                "priority": 430,
+                "maxTokens": 100,
+                "summary": "Advise agents to use GraphIQ for code structure and implementation context",
+                "requiredCapabilities": ["prompt:contribute:user-prompt-submit"]
+            }
+        ]
+    })
+}
+
+fn read_graphiq_enabled(state: &AppState) -> bool {
+    let Ok(path) = workspace_paths::child_file(
+        &state.config.base_path,
+        &[".daemon", "graphiq", "state.json"],
+    ) else {
+        return false;
+    };
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+        .and_then(|json| json.get("enabled").and_then(serde_json::Value::as_bool))
+        .unwrap_or(false)
+}
+
+fn graphiq_record(state: &AppState) -> serde_json::Value {
+    let enabled = read_graphiq_enabled(state);
+    serde_json::json!({
+        "id": SIGNET_GRAPHIQ_PLUGIN_ID,
+        "name": "GraphIQ Code Retrieval",
+        "version": "1.0.0",
+        "publisher": "aaf2tbz",
+        "source": "bundled",
+        "trustTier": "verified",
+        "enabled": enabled,
+        "state": if enabled { "active" } else { "disabled" },
+        "stateReason": if enabled { serde_json::Value::Null } else { serde_json::json!("disabled by host policy") },
+        "declaredCapabilities": graphiq_capabilities(),
+        "grantedCapabilities": graphiq_granted_capabilities(),
+        "pendingCapabilities": [],
+        "surfaces": if enabled { graphiq_surfaces() } else { empty_surfaces() },
+        "installedAt": serde_json::Value::Null,
+        "updatedAt": serde_json::Value::Null,
+    })
 }
 
 fn plugin_record(state: &AppState) -> serde_json::Value {
@@ -347,7 +458,7 @@ fn parse_audit_event(line: &str) -> Option<serde_json::Value> {
 
 /// GET /api/plugins
 pub async fn list(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
-    Json(serde_json::json!({"plugins": [plugin_record(&state)]}))
+    Json(serde_json::json!({"plugins": [plugin_record(&state), graphiq_record(&state)]}))
 }
 
 /// GET /api/plugins/prompt-contributions
@@ -434,6 +545,15 @@ pub async fn diagnostics(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
+    // #5 REVIEW FIX: GraphIQ diagnostics/mutation are not yet implemented.
+    // Return 404 for signet.graphiq detail/mutation until implemented.
+    if id == SIGNET_GRAPHIQ_PLUGIN_ID {
+        return (
+            StatusCode::NOT_IMPLEMENTED,
+            Json(serde_json::json!({"error": "GraphIQ diagnostics not yet implemented"})),
+        )
+            .into_response();
+    }
     if id != SIGNET_SECRETS_PLUGIN_ID {
         return (
             StatusCode::NOT_FOUND,
@@ -450,14 +570,17 @@ pub async fn diagnostics(
 
 /// GET /api/plugins/:id
 pub async fn get(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> impl IntoResponse {
-    if id != SIGNET_SECRETS_PLUGIN_ID {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "Plugin not found"})),
-        )
-            .into_response();
+    if id == SIGNET_GRAPHIQ_PLUGIN_ID {
+        return (StatusCode::OK, Json(graphiq_record(&state))).into_response();
     }
-    (StatusCode::OK, Json(plugin_record(&state))).into_response()
+    if id == SIGNET_SECRETS_PLUGIN_ID {
+        return (StatusCode::OK, Json(plugin_record(&state))).into_response();
+    }
+    (
+        StatusCode::NOT_FOUND,
+        Json(serde_json::json!({"error": "Plugin not found"})),
+    )
+        .into_response()
 }
 
 /// PATCH /api/plugins/:id
@@ -468,6 +591,14 @@ pub async fn patch(
     Path(id): Path<String>,
     Json(body): Json<PatchPluginBody>,
 ) -> impl IntoResponse {
+    // #5 REVIEW FIX: GraphIQ PATCH not yet implemented (was writing secrets state).
+    if id == SIGNET_GRAPHIQ_PLUGIN_ID {
+        return (
+            StatusCode::NOT_IMPLEMENTED,
+            Json(serde_json::json!({"error": "GraphIQ mutation not yet implemented"})),
+        )
+            .into_response();
+    }
     if let Err(resp) = require_admin_mutation(&state, peer, &headers) {
         return resp;
     }

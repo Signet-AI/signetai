@@ -20,8 +20,6 @@ scoped `AGENTS.md` files own subtree guidance; skills own workflows.
 
 ## Start
 
-- Replies: repo-root refs only (e.g. `platform/daemon/src/server.ts:42`).
-  No absolute paths, no `~/`.
 - Fix/triage answers need source, tests, current/shipped behavior, and
   dependency contract proof.
 - Reviews/answers: high confidence required. Default to exhaustive relevant
@@ -38,10 +36,11 @@ scoped `AGENTS.md` files own subtree guidance; skills own workflows.
   and prior reviews do not satisfy this gate. Cite files/lines checked.
 - Harness-integration work (`integrations/<harness>/`) has a hard gate:
   the acting agent must personally inspect the sibling harness repo
-  under `references/` for the exact protocol/runtime behavior before
-  any verdict, comment, approval, code change, or `proof sufficient`
-  claim. If missing, clone it there first. No direct sibling-harness
-  check means no verdict on that integration.
+  under a directory called `references/` (not tracked in repo) for the 
+  exact protocol/runtime behavior before any verdict, comment, approval, 
+  code change, or `proof sufficient` claim. If missing, clone it there 
+  first. No direct sibling-harness check and e2e test of the integration 
+  in that harness means no verdict on that integration.
 - External API work: live test required. Prefer official docs/source/types;
   cite current proof. No memory-only API claims.
 - Live-verify when feasible. Never print secrets.
@@ -66,9 +65,6 @@ scoped `AGENTS.md` files own subtree guidance; skills own workflows.
 
 ## Source Truth Model
 
-Signet is a local source-backed substrate for agent continuity. Do not
-collapse it into "a memory app" or "a vector search wrapper."
-
 - Source artifacts, transcripts, imported files, notes, configs, and
   documents are evidence.
 - Memory rows are scoped, searchable recall records.
@@ -78,12 +74,9 @@ collapse it into "a memory app" or "a vector search wrapper."
   evidence.
 - Epistemic assertions preserve who claimed, believed, observed, decided,
   preferred, denied, or questioned something.
-- Skills own reviewed repeated behavior.
+- Skills own repeated behavior (optimize for N+1).
 - Identity and AGENTS files hold operating policy.
 - Secrets stay out of chat, memory, logs, and source files.
-
-Automatic extraction is not permission to silently author policy,
-ontology, identity, or skill behavior.
 
 ## High-Risk Failure Modes
 
@@ -91,7 +84,7 @@ Prevent these proactively.
 
 ### Scoping Leaks
 
-- Thread `agent_id` / `agentId` through every read and write touching
+- Thread both `agent_id` AND `agentId` through every read and write touching
   user data.
 - Thread `visibility` where the data model supports it.
 - Never hardcode `"default"` for scoped paths when a real agent id is
@@ -148,8 +141,8 @@ Prevent these proactively.
 - Do not duplicate constants, maps, dependency types, config defaults,
   package lists, or descriptions across files.
 - Extract a shared source of truth when duplication would create drift.
-- JS daemon changes must preserve Rust shadow/parity expectations in
-  `platform/daemon-rs` when the behavior overlaps.
+- `platform/daemon` changes must be mirrored and verified for parity in
+  `platform/daemon-rs` always.
 - Connector install-time code and daemon runtime connector code are
   different surfaces; do not conflate them.
 
@@ -166,8 +159,6 @@ Prevent these proactively.
 
 ## What We Will Not Merge (For Now)
 
-- Hosted memory APIs, vendor cloud lock-in, or shared base models
-  trained on user data.
 - Shadow fine-tuning, federated learning, or any "learn what to remember"
   framing that ships user context off the user's machine.
 - Runtime shims, silent compat for old/malformed config keys, or
@@ -177,16 +168,6 @@ Prevent these proactively.
   default storage. JSON/JSONL sidecars are acceptable for genuine
   user-facing artifacts (import/export, attachments, logs, backups)
   when the storage owner is a named product artifact, not app state.
-- A second path for the same behavior unless the old path is a cited
-  shipped public contract.
-- Marketing copy that frames Signet as a generic "memory app" or "vector
-  search wrapper." Source truth, provenance, accepted changes, skills,
-  and agent continuity are the framing.
-- PRs over ~5,000 changed lines unless the user or owner asks.
-- Bundling multiple unrelated fixes/features in one PR.
-
-This list is a charter, not a law of physics. Strong user demand and
-strong technical rationale can change it.
 
 ## Architecture Contracts
 
@@ -216,12 +197,13 @@ $SIGNET_WORKSPACE/
 ├── memory/
 │   ├── memories.db
 │   └── scripts/
+├── dreaming/ 
 ├── skills/
 ├── .secrets/
 └── .daemon/logs/
 ```
 
-`MEMORY.md` is a generated working summary.
+`MEMORY.md` is a procedurally generated working ledger.
 
 ### Pipeline And Runtime Paths
 

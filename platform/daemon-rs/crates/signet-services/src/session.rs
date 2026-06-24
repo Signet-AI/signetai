@@ -536,21 +536,74 @@ impl DedupState {
         }
     }
 
+    fn session_start_scope_key(
+        agent_id: &str,
+        harness: Option<&str>,
+        project: Option<&str>,
+        session_key: &str,
+    ) -> String {
+        [
+            agent_id.trim(),
+            harness.unwrap_or_default().trim(),
+            project.unwrap_or_default().trim(),
+            session_key.trim(),
+        ]
+        .join("\0")
+    }
+
     /// Mark session start as seen. Returns true if already seen.
     pub fn mark_session_start(&self, session_key: &str) -> bool {
+        self.mark_session_start_scoped("default", None, None, session_key)
+    }
+
+    pub fn has_session_start_scoped(
+        &self,
+        agent_id: &str,
+        harness: Option<&str>,
+        project: Option<&str>,
+        session_key: &str,
+    ) -> bool {
+        let key = Self::session_start_scope_key(agent_id, harness, project, session_key);
+        self.session_start_seen.lock().unwrap().contains_key(&key)
+    }
+
+    /// Mark an agent/harness/project-scoped session start as seen.
+    /// Mirrors TS `sessionStartDedupeKey()` so agents that share a raw
+    /// harness session key do not suppress each other's first full inject.
+    pub fn mark_session_start_scoped(
+        &self,
+        agent_id: &str,
+        harness: Option<&str>,
+        project: Option<&str>,
+        session_key: &str,
+    ) -> bool {
+        let key = Self::session_start_scope_key(agent_id, harness, project, session_key);
         let mut seen = self.session_start_seen.lock().unwrap();
-        if seen.contains_key(session_key) {
+        if seen.contains_key(&key) {
             true
         } else {
-            seen.insert(session_key.to_string(), true);
+            seen.insert(key, true);
             false
         }
     }
 
     /// Clear session start mark.
     pub fn clear_session_start(&self, session_key: &str) {
+        self.clear_session_start_scoped("default", None, None, session_key);
         let mut seen = self.session_start_seen.lock().unwrap();
-        seen.remove(session_key);
+        seen.retain(|key, _| key.rsplit('\0').next() != Some(session_key.trim()));
+    }
+
+    pub fn clear_session_start_scoped(
+        &self,
+        agent_id: &str,
+        harness: Option<&str>,
+        project: Option<&str>,
+        session_key: &str,
+    ) {
+        let key = Self::session_start_scope_key(agent_id, harness, project, session_key);
+        let mut seen = self.session_start_seen.lock().unwrap();
+        seen.remove(&key);
     }
 
     /// Record injected memory IDs for dedup window (last 5 prompts).
@@ -826,6 +879,22 @@ mod tests {
 
         dedup.reset_prompt_dedup("s1");
         assert!(dedup.recent_ids("s1").is_empty());
+    }
+
+    #[test]
+    fn session_start_dedupe_is_agent_harness_project_scoped() {
+        let dedup = DedupState::new();
+        assert!(!dedup.mark_session_start_scoped("agent-a", Some("pi"), Some("/repo"), "shared"));
+        assert!(dedup.mark_session_start_scoped("agent-a", Some("pi"), Some("/repo"), "shared"));
+        assert!(!dedup.mark_session_start_scoped("agent-b", Some("pi"), Some("/repo"), "shared"));
+        assert!(!dedup.mark_session_start_scoped(
+            "agent-a",
+            Some("codex"),
+            Some("/repo"),
+            "shared"
+        ));
+        dedup.clear_session_start_scoped("agent-a", Some("pi"), Some("/repo"), "shared");
+        assert!(!dedup.mark_session_start_scoped("agent-a", Some("pi"), Some("/repo"), "shared"));
     }
 
     #[test]

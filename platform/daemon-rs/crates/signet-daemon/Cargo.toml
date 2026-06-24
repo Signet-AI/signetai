@@ -8,6 +8,10 @@ description = "Signet daemon: HTTP API, MCP server, file watcher, pipeline"
 name = "signet-daemon"
 path = "src/main.rs"
 
+[[bench]]
+name = "http_recall"
+harness = false
+
 [dependencies]
 signet-core = { workspace = true }
 signet-services = { workspace = true }

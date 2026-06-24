@@ -1,0 +1,96 @@
+{
+  "id": "memory-remember-idempotency-dedupe",
+  "source": {
+    "file": "platform/daemon/src/mutation-api.test.ts",
+    "testName": "mutation API routes > POST /api/memory/remember scopes idempotency-key dedupe by agent and visibility",
+    "line": 224
+  },
+  "classification": {
+    "family": "memory/lineage",
+    "convertibility": "http-db",
+    "tags": ["memory", "remember", "idempotency", "dedupe"]
+  },
+  "environment": {
+    "agentYaml": "embedding:\n  provider: none\nmemory:\n  pipelineV2:\n    enabled: false\n    shadowMode: false\n    allowUpdateDelete: true\n",
+    "env": {},
+    "clock": "2026-01-01T00:00:00.000Z",
+    "uuidSeed": "memory-remember-idempotency-dedupe"
+  },
+  "seed": {
+    "schema": "migrations-current",
+    "sql": "cases/memory-remember-idempotency-dedupe.seed.sql",
+    "redactions": ["OPENAI_API_KEY", "GITHUB_TOKEN", "SIGNET_AUTH_SECRET"]
+  },
+  "steps": [
+    {
+      "name": "initial remember write",
+      "request": {
+        "method": "POST",
+        "path": "/api/memory/remember",
+        "headers": { "content-type": "application/json" },
+        "body": {
+          "content": "Replay corpus idempotent memory",
+          "who": "replay-fixture",
+          "idempotencyKey": "replay-remember-dedupe"
+        }
+      },
+      "expectedResponse": {
+        "status": 200,
+        "headers": { "content-type": { "contains": "application/json" } },
+        "jsonContains": {
+          "content": "Replay corpus idempotent memory"
+        },
+        "jsonMatchers": {
+          "$.id": "string",
+          "$.deduped": "absent"
+        },
+        "ignoreJsonPaths": ["$.id", "$.createdAt", "$.updatedAt", "$.contentHash"]
+      }
+    },
+    {
+      "name": "idempotent retry dedupes to the first row",
+      "request": {
+        "method": "POST",
+        "path": "/api/memory/remember",
+        "headers": {
+          "content-type": "application/json",
+          "x-replay-prev-id": "$response.id"
+        },
+        "body": {
+          "content": "$response.content",
+          "who": "replay-fixture",
+          "idempotencyKey": "replay-remember-dedupe"
+        }
+      },
+      "expectedResponse": {
+        "status": 200,
+        "headers": { "content-type": { "contains": "application/json" } },
+        "jsonContains": { "deduped": true },
+        "jsonMatchers": { "$.id": "string" },
+        "ignoreJsonPaths": ["$.id", "$.createdAt", "$.updatedAt", "$.contentHash"]
+      },
+      "expectedInternalState": {
+        "db": [
+          {
+            "table": "memories",
+            "where": "idempotency_key = 'replay-remember-dedupe'",
+            "count": 1
+          },
+          {
+            "table": "memories",
+            "where": "idempotency_key = 'replay-remember-dedupe'",
+            "orderBy": ["id"],
+            "columns": ["content", "agent_id", "visibility", "is_deleted"],
+            "rows": [["Replay corpus idempotent memory", "default", "global", 0]]
+          }
+        ],
+        "files": []
+      }
+    }
+  ],
+  "normalization": {
+    "ignoreColumns": ["id", "created_at", "updated_at", "content_hash"],
+    "sortRowsBy": ["id"],
+    "floatTolerance": 0.000001
+  }
+}

@@ -91,6 +91,8 @@ pub struct TokenClaims {
     pub role: TokenRole,
     pub iat: i64,
     pub exp: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub permissions: Option<Vec<Permission>>,
 }
 
 // ---------------------------------------------------------------------------

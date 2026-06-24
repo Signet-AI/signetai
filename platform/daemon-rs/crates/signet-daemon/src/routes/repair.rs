@@ -1,16 +1,16 @@
 //! Repair action routes: maintenance and recovery endpoints.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::convert::Infallible;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::Arc;
-use std::time::Duration;
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use axum::{
     body::{Body, Bytes},
     extract::{Query, State},
-    http::{StatusCode, header},
+    http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Json, Response},
 };
 use rusqlite::OptionalExtension;
@@ -865,6 +865,40 @@ pub struct DeduplicateBody {
     pub dry_run: bool,
     #[serde(default)]
     pub semantic_enabled: bool,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ScopedRepairBody {
+    pub batch_size: Option<usize>,
+    pub dry_run: Option<bool>,
+    #[serde(alias = "agent_id")]
+    pub agent_id: Option<String>,
+    pub visibility: Option<String>,
+    pub scope: Option<String>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct RepairAgentBody {
+    #[serde(alias = "agent_id")]
+    pub agent_id: Option<String>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct RelinkBody {
+    pub batch_size: Option<usize>,
+    #[serde(alias = "agent_id")]
+    pub agent_id: Option<String>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct BackfillHintsBody {
+    pub batch_size: Option<usize>,
+    #[serde(alias = "agent_id")]
+    pub agent_id: Option<String>,
 }
 
 #[derive(Debug)]
@@ -1814,52 +1848,1376 @@ pub async fn structural_backfill(
     }
 }
 
+fn header_text(headers: &HeaderMap, name: &str) -> Option<String> {
+    headers
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn query_text(query: &HashMap<String, String>, camel: &str, snake: &str) -> Option<String> {
+    query
+        .get(camel)
+        .or_else(|| query.get(snake))
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn normalize_scope_value(value: Option<String>) -> Option<String> {
+    value
+        .map(|raw| raw.trim().to_string())
+        .filter(|raw| !raw.is_empty())
+}
+
+fn resolve_repair_agent_id(
+    headers: &HeaderMap,
+    query: &HashMap<String, String>,
+    body_agent_id: Option<&str>,
+) -> String {
+    body_agent_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| query_text(query, "agentId", "agent_id"))
+        .or_else(|| header_text(headers, "x-signet-agent-id"))
+        .unwrap_or_else(resolve_daemon_agent_id)
+}
+
+fn resolve_daemon_agent_id() -> String {
+    std::env::var("SIGNET_AGENT_ID")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "default".to_string())
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RepairActorType {
+    Operator,
+    Agent,
+    Daemon,
+}
+
+impl RepairActorType {
+    fn from_header(value: Option<String>) -> Self {
+        match value
+            .as_deref()
+            .unwrap_or("operator")
+            .trim()
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "agent" => Self::Agent,
+            "daemon" => Self::Daemon,
+            _ => Self::Operator,
+        }
+    }
+}
+
+struct RepairContextHeaders {
+    actor: String,
+    actor_type: RepairActorType,
+    reason: String,
+    request_id: Option<String>,
+}
+
+fn resolve_repair_context(headers: &HeaderMap) -> RepairContextHeaders {
+    RepairContextHeaders {
+        actor: header_text(headers, "x-signet-actor").unwrap_or_else(|| "operator".to_string()),
+        actor_type: RepairActorType::from_header(header_text(headers, "x-signet-actor-type")),
+        reason: header_text(headers, "x-signet-reason")
+            .unwrap_or_else(|| "manual repair".to_string()),
+        request_id: header_text(headers, "x-signet-request-id"),
+    }
+}
+
+#[derive(Clone, Copy)]
+struct RepairLimiterEntry {
+    last_run_at: Instant,
+    hourly_count: u64,
+    hour_reset_at: Instant,
+}
+
+static REPAIR_LIMITER: OnceLock<Mutex<HashMap<String, RepairLimiterEntry>>> = OnceLock::new();
+
+fn check_rate_limit(action: &str, cooldown_ms: u64, hourly_budget: u64) -> Result<(), String> {
+    let now = Instant::now();
+    let state = REPAIR_LIMITER.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut guard = state
+        .lock()
+        .map_err(|_| "repair limiter lock poisoned".to_string())?;
+    let Some(entry) = guard.get_mut(action) else {
+        return Ok(());
+    };
+    let cooldown = Duration::from_millis(cooldown_ms);
+    let elapsed = now.saturating_duration_since(entry.last_run_at);
+    if elapsed < cooldown {
+        return Err(format!(
+            "cooldown active, {}ms remaining",
+            (cooldown - elapsed).as_millis()
+        ));
+    }
+    if now >= entry.hour_reset_at {
+        entry.hourly_count = 0;
+        entry.hour_reset_at = now + Duration::from_secs(60 * 60);
+    }
+    if entry.hourly_count >= hourly_budget {
+        return Err(format!("hourly budget exhausted ({hourly_budget} runs/hr)"));
+    }
+    Ok(())
+}
+
+fn record_rate_limit(action: &str) -> Result<(), String> {
+    let now = Instant::now();
+    let state = REPAIR_LIMITER.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut guard = state
+        .lock()
+        .map_err(|_| "repair limiter lock poisoned".to_string())?;
+    guard
+        .entry(action.to_string())
+        .and_modify(|entry| {
+            if now >= entry.hour_reset_at {
+                entry.hourly_count = 1;
+                entry.hour_reset_at = now + Duration::from_secs(60 * 60);
+            } else {
+                entry.hourly_count += 1;
+            }
+            entry.last_run_at = now;
+        })
+        .or_insert(RepairLimiterEntry {
+            last_run_at: now,
+            hourly_count: 1,
+            hour_reset_at: now + Duration::from_secs(60 * 60),
+        });
+    Ok(())
+}
+
+fn pipeline_config(state: &AppState) -> signet_core::config::PipelineV2Config {
+    state
+        .config
+        .manifest
+        .memory
+        .as_ref()
+        .and_then(|memory| memory.pipeline_v2.clone())
+        .unwrap_or_default()
+}
+
+fn check_repair_gate(
+    state: &AppState,
+    ctx: &RepairContextHeaders,
+    action: &str,
+    cooldown_ms: u64,
+    hourly_budget: u64,
+) -> Result<(), String> {
+    let cfg = pipeline_config(state);
+    if cfg.autonomous.frozen {
+        return Err("autonomous.frozen is set".to_string());
+    }
+    if ctx.actor_type == RepairActorType::Agent && !cfg.autonomous.enabled {
+        return Err("autonomous.enabled is false; agents cannot trigger repairs".to_string());
+    }
+    if matches!(
+        ctx.actor_type,
+        RepairActorType::Operator | RepairActorType::Daemon
+    ) {
+        return Ok(());
+    }
+    check_rate_limit(action, cooldown_ms, hourly_budget)
+}
+
+fn repair_status_for_error(message: &str) -> StatusCode {
+    if message.contains("cooldown active")
+        || message.contains("hourly budget exhausted")
+        || message.contains("autonomous.")
+        || message.contains("agents cannot trigger repairs")
+    {
+        StatusCode::TOO_MANY_REQUESTS
+    } else {
+        StatusCode::INTERNAL_SERVER_ERROR
+    }
+}
+
+fn write_repair_audit(
+    conn: &rusqlite::Connection,
+    action: &str,
+    ctx: &RepairContextHeaders,
+    affected: usize,
+    message: &str,
+) -> rusqlite::Result<()> {
+    let now = chrono::Utc::now().to_rfc3339();
+    conn.execute(
+        "INSERT OR IGNORE INTO memories
+         (id, type, content, confidence, importance, created_at, updated_at,
+          updated_by, is_deleted, deleted_at, agent_id, visibility)
+         VALUES ('system', 'fact', 'Repair audit system record', 1.0, 0.0,
+                 ?1, ?1, 'system', 1, ?1, 'default', 'global')",
+        [&now],
+    )?;
+    conn.execute(
+        "INSERT INTO memory_history
+         (id, memory_id, event, old_content, new_content, changed_by, reason,
+          metadata, created_at, actor_type, request_id)
+         VALUES (?1, 'system', 'none', NULL, NULL, ?2, ?3, ?4, ?5, ?6, ?7)",
+        rusqlite::params![
+            uuid::Uuid::new_v4().to_string(),
+            ctx.actor,
+            ctx.reason,
+            serde_json::json!({"repairAction": action, "affected": affected, "message": message})
+                .to_string(),
+            now,
+            match ctx.actor_type {
+                RepairActorType::Operator => "operator",
+                RepairActorType::Agent => "agent",
+                RepairActorType::Daemon => "daemon",
+            },
+            ctx.request_id,
+        ],
+    )?;
+    Ok(())
+}
+
+fn normalize_entity_name(value: &str) -> String {
+    value
+        .trim()
+        .replace(['“', '”'], "\"")
+        .replace(['‘', '’'], "'")
+        .trim_matches(|ch| ch == '\'' || ch == '"' || ch == '`')
+        .to_ascii_lowercase()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn normalize_entity_type(value: &str) -> String {
+    value.trim().to_ascii_lowercase().replace([' ', '-'], "_")
+}
+
+fn classify_entity_quality(name: &str, entity_type: &str) -> Result<(), &'static str> {
+    const CONCRETE: &[&str] = &[
+        "person",
+        "organization",
+        "project",
+        "product",
+        "system",
+        "tool",
+        "artifact",
+        "document",
+        "source",
+        "place",
+        "event",
+    ];
+    const ABSTRACT: &[&str] = &[
+        "concept",
+        "task",
+        "skill",
+        "agent",
+        "policy",
+        "action",
+        "workflow",
+        "object_type",
+        "interface",
+        "observation",
+        "claim_slot",
+        "claim_value",
+        "chunk_group",
+    ];
+    const GENERIC: &[&str] = &[
+        "a",
+        "an",
+        "and",
+        "are",
+        "author",
+        "because",
+        "being",
+        "but",
+        "can",
+        "current work",
+        "did",
+        "do",
+        "does",
+        "for",
+        "from",
+        "had",
+        "has",
+        "have",
+        "he",
+        "her",
+        "him",
+        "his",
+        "i",
+        "in",
+        "intent",
+        "is",
+        "it",
+        "its",
+        "let",
+        "of",
+        "on",
+        "or",
+        "pending tasks",
+        "primary request",
+        "read",
+        "recipient",
+        "sender",
+        "she",
+        "someone",
+        "summary",
+        "that",
+        "the",
+        "their",
+        "them",
+        "they",
+        "this",
+        "to",
+        "understand",
+        "want",
+        "was",
+        "we",
+        "we're",
+        "were",
+        "with",
+        "write",
+        "you",
+        "your",
+    ];
+    const METADATA: &[&str] = &[
+        "assistant",
+        "author",
+        "current work",
+        "intent",
+        "pending tasks",
+        "primary request",
+        "recipient",
+        "sender",
+        "system",
+        "user",
+    ];
+    const DISCOURSE: &[&str] = &[
+        "because",
+        "despite",
+        "however",
+        "let",
+        "once",
+        "read",
+        "summary",
+        "understand",
+        "want",
+        "write",
+    ];
+
+    let canonical = normalize_entity_name(name);
+    let normalized_type = normalize_entity_type(entity_type);
+    let has_concrete_type = CONCRETE.contains(&normalized_type.as_str());
+    if canonical.chars().all(|ch| ch.is_ascii_digit()) {
+        return Err("numeric_only");
+    }
+    if GENERIC.contains(&canonical.as_str()) {
+        return Err("generic_or_scaffolding_name");
+    }
+    if METADATA.contains(&canonical.as_str()) {
+        return Err("metadata_role");
+    }
+    if DISCOURSE.contains(&canonical.as_str()) {
+        return Err("discourse_fragment");
+    }
+    let lowered = name.trim().to_ascii_lowercase();
+    if [
+        "user",
+        "assistant",
+        "system",
+        "sender",
+        "recipient",
+        "author",
+    ]
+    .iter()
+    .any(|prefix| {
+        lowered.starts_with(&format!("{prefix}:"))
+            || lowered.starts_with(&format!("{prefix} "))
+            || lowered.starts_with(&format!("{prefix}-"))
+    }) {
+        return Err("role_prefixed_scaffolding");
+    }
+    if canonical.starts_with("current ")
+        || canonical.starts_with("pending ")
+        || canonical.starts_with("primary ")
+    {
+        return Err("section_heading");
+    }
+    if canonical.len() < 4 && !has_concrete_type {
+        return Err("too_short");
+    }
+    if normalized_type != "extracted" && normalized_type != "unknown" && !has_concrete_type {
+        return Err(if ABSTRACT.contains(&normalized_type.as_str()) {
+            "non_concrete_entity_type"
+        } else {
+            "unknown_entity_type"
+        });
+    }
+    if normalized_type == "event" {
+        let has_event_signal = [
+            "announced",
+            "announcement",
+            "created",
+            "decided",
+            "deployed",
+            "digest",
+            "installed",
+            "launched",
+            "meeting",
+            "merged",
+            "published",
+            "released",
+            "started",
+            "stopped",
+            "updated",
+            "today",
+            "yesterday",
+            "last ",
+            "202",
+            "jan",
+            "feb",
+            "mar",
+            "apr",
+            "may",
+            "jun",
+            "jul",
+            "aug",
+            "sep",
+            "oct",
+            "nov",
+            "dec",
+        ]
+        .iter()
+        .any(|needle| canonical.contains(needle));
+        if !has_event_signal {
+            return Err("event_without_time_or_event_signal");
+        }
+    }
+    Ok(())
+}
+
+fn delete_entity_graph_rows(conn: &rusqlite::Connection, ids: &[String]) -> rusqlite::Result<()> {
+    if ids.is_empty() {
+        return Ok(());
+    }
+    let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+    let aspects = conn
+        .prepare(&format!(
+            "SELECT id FROM entity_aspects WHERE entity_id IN ({placeholders})"
+        ))?
+        .query_map(rusqlite::params_from_iter(ids.iter()), |row| {
+            row.get::<_, String>(0)
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    if !aspects.is_empty() {
+        let aspect_placeholders = aspects.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        conn.execute(
+            &format!("DELETE FROM entity_attributes WHERE aspect_id IN ({aspect_placeholders})"),
+            rusqlite::params_from_iter(aspects.iter()),
+        )?;
+    }
+    conn.execute(
+        &format!("DELETE FROM memory_entity_mentions WHERE entity_id IN ({placeholders})"),
+        rusqlite::params_from_iter(ids.iter()),
+    )?;
+    conn.execute(
+        &format!(
+            "DELETE FROM relations WHERE source_entity_id IN ({placeholders}) OR target_entity_id IN ({placeholders})"
+        ),
+        rusqlite::params_from_iter(ids.iter().chain(ids.iter())),
+    )?;
+    if sqlite_table_exists(conn, "entity_dependencies")? {
+        conn.execute(
+            &format!(
+                "DELETE FROM entity_dependencies WHERE source_entity_id IN ({placeholders}) OR target_entity_id IN ({placeholders})"
+            ),
+            rusqlite::params_from_iter(ids.iter().chain(ids.iter())),
+        )?;
+    }
+    conn.execute(
+        &format!("DELETE FROM entity_aspects WHERE entity_id IN ({placeholders})"),
+        rusqlite::params_from_iter(ids.iter()),
+    )?;
+    conn.execute(
+        &format!("DELETE FROM entities WHERE id IN ({placeholders})"),
+        rusqlite::params_from_iter(ids.iter()),
+    )?;
+    Ok(())
+}
+
 /// POST /api/repair/prune-generic-entities — prune low-value generated graph nodes.
-pub async fn prune_generic_entities() -> impl IntoResponse {
-    (
-        StatusCode::OK,
-        Json(serde_json::json!({
-            "action": "prune-generic-entities",
-            "dryRun": true,
-            "pruned": 0,
-            "remaining": 0,
-            "message": "no generic entities found",
-        })),
-    )
+pub async fn prune_generic_entities(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(query): Query<HashMap<String, String>>,
+    body: Option<Json<ScopedRepairBody>>,
+) -> impl IntoResponse {
+    let body = body.map(|Json(body)| body).unwrap_or_default();
+    let ctx = resolve_repair_context(&headers);
+    let action = "pruneGenericEntities";
+    if let Err(message) = check_repair_gate(&state, &ctx, action, 60_000, 10) {
+        let status = repair_status_for_error(&message);
+        return (status, Json(repair_result(action, false, 0, &message))).into_response();
+    }
+
+    let batch_size = body.batch_size.unwrap_or(100).clamp(1, 500) as i64;
+    let dry_run = body.dry_run.unwrap_or(true);
+    let agent_id = resolve_repair_agent_id(&headers, &query, body.agent_id.as_deref());
+    let result = state
+        .pool
+        .write_tx(signet_core::db::Priority::Low, move |conn| {
+            let page_size = (batch_size * 10).max(500);
+            let mut offset = 0_i64;
+            let mut candidates: Vec<(String, String, String)> = Vec::new();
+            loop {
+                let page = {
+                    let mut stmt = conn.prepare(
+                        "SELECT e.id, e.name, e.entity_type
+                         FROM entities e
+                         WHERE COALESCE(NULLIF(e.agent_id, ''), 'default') = ?1
+                           AND COALESCE(e.pinned, 0) = 0
+                           AND e.entity_type NOT IN ('skill')
+                           AND NOT EXISTS (SELECT 1 FROM skill_meta sm WHERE sm.entity_id = e.id)
+                         ORDER BY e.updated_at DESC
+                         LIMIT ?2 OFFSET ?3",
+                    )?;
+                    stmt.query_map(rusqlite::params![agent_id, page_size, offset], |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, String>(2)?,
+                        ))
+                    })?
+                    .collect::<rusqlite::Result<Vec<_>>>()?
+                };
+                if page.is_empty() {
+                    break;
+                }
+                let page_len = page.len() as i64;
+                for (id, name, entity_type) in page {
+                    if let Err(reason) = classify_entity_quality(&name, &entity_type) {
+                        candidates.push((id, name, reason.to_string()));
+                        if candidates.len() >= batch_size as usize {
+                            break;
+                        }
+                    }
+                }
+                if candidates.len() >= batch_size as usize {
+                    break;
+                }
+                offset += page_len;
+            }
+
+            if dry_run {
+                let preview = candidates
+                    .iter()
+                    .take(10)
+                    .map(|(_, name, reason)| format!("{name} ({reason})"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let suffix = if preview.is_empty() {
+                    String::new()
+                } else {
+                    format!(": {preview}")
+                };
+                return Ok(repair_result(
+                    action,
+                    true,
+                    candidates.len(),
+                    &format!(
+                        "dry-run: would delete {} generic/non-concrete entities{suffix}",
+                        candidates.len()
+                    ),
+                ));
+            }
+
+            if candidates.is_empty() {
+                return Ok(repair_result(
+                    action,
+                    true,
+                    0,
+                    "no generic/non-concrete entities found",
+                ));
+            }
+
+            let ids = candidates
+                .into_iter()
+                .map(|(id, _, _)| id)
+                .collect::<Vec<_>>();
+            delete_entity_graph_rows(conn, &ids)?;
+            let message = format!("deleted {} generic/non-concrete entities", ids.len());
+            write_repair_audit(conn, action, &ctx, ids.len(), &message)?;
+            record_rate_limit(action).map_err(|err| rusqlite::Error::InvalidParameterName(err))?;
+            Ok(repair_result(action, true, ids.len(), &message))
+        })
+        .await;
+
+    match result {
+        Ok(body) => (StatusCode::OK, Json(body)).into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(repair_result(action, false, 0, &error.to_string())),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(Clone)]
+struct ClusterEntityRow {
+    id: String,
+    name: String,
+    mentions: i64,
+}
+
+#[derive(Clone)]
+struct ClusterEdge {
+    left: String,
+    right: String,
+    weight: f64,
+}
+
+fn ordered_edge(left: &str, right: &str) -> (String, String) {
+    if left <= right {
+        (left.to_string(), right.to_string())
+    } else {
+        (right.to_string(), left.to_string())
+    }
+}
+
+fn compute_component_cohesion(component: &[String], edges: &HashSet<(String, String)>) -> f64 {
+    if component.len() < 2 {
+        return 0.0;
+    }
+    let set = component.iter().collect::<HashSet<_>>();
+    let internal = edges
+        .iter()
+        .filter(|(left, right)| set.contains(left) && set.contains(right))
+        .count();
+    let max_edges = component.len() * (component.len() - 1) / 2;
+    if max_edges == 0 {
+        0.0
+    } else {
+        internal as f64 / max_edges as f64
+    }
+}
+
+fn compute_modularity(
+    communities: &HashMap<String, usize>,
+    degrees: &HashMap<String, f64>,
+    edges: &[ClusterEdge],
+    total_edge_weight: f64,
+) -> f64 {
+    if total_edge_weight <= f64::EPSILON {
+        return 0.0;
+    }
+
+    let mut degree_by_community: HashMap<usize, f64> = HashMap::new();
+    for (node_id, community) in communities {
+        *degree_by_community.entry(*community).or_insert(0.0) +=
+            degrees.get(node_id).copied().unwrap_or(0.0);
+    }
+
+    let mut internal_weight_by_community: HashMap<usize, f64> = HashMap::new();
+    for edge in edges {
+        let Some(left_community) = communities.get(&edge.left) else {
+            continue;
+        };
+        if Some(left_community) == communities.get(&edge.right) {
+            *internal_weight_by_community
+                .entry(*left_community)
+                .or_insert(0.0) += edge.weight;
+        }
+    }
+
+    degree_by_community
+        .iter()
+        .map(|(community, degree_sum)| {
+            let internal_weight = internal_weight_by_community
+                .get(community)
+                .copied()
+                .unwrap_or(0.0);
+            let expected = degree_sum / (2.0 * total_edge_weight);
+            internal_weight / total_edge_weight - expected * expected
+        })
+        .sum()
+}
+
+fn compact_community_ids(
+    node_ids: &[String],
+    communities: HashMap<String, usize>,
+) -> HashMap<String, usize> {
+    let mut old_to_new: HashMap<usize, usize> = HashMap::new();
+    let mut next = 0_usize;
+    let mut compacted = HashMap::new();
+    for node_id in node_ids {
+        let old = communities.get(node_id).copied().unwrap_or(next);
+        let new = *old_to_new.entry(old).or_insert_with(|| {
+            let assigned = next;
+            next += 1;
+            assigned
+        });
+        compacted.insert(node_id.clone(), new);
+    }
+    compacted
+}
+
+fn detect_weighted_louvain_communities(
+    node_ids: &[String],
+    edges: &[ClusterEdge],
+) -> (HashMap<String, usize>, f64) {
+    let mut communities = node_ids
+        .iter()
+        .enumerate()
+        .map(|(index, node_id)| (node_id.clone(), index))
+        .collect::<HashMap<_, _>>();
+
+    if node_ids.is_empty() || edges.is_empty() {
+        return (communities, 0.0);
+    }
+
+    let mut degrees = node_ids
+        .iter()
+        .map(|node_id| (node_id.clone(), 0.0))
+        .collect::<HashMap<_, _>>();
+    let mut neighbor_communities_by_node: HashMap<String, HashSet<usize>> = node_ids
+        .iter()
+        .map(|node_id| (node_id.clone(), HashSet::new()))
+        .collect();
+    let mut total_edge_weight = 0.0;
+    for edge in edges {
+        total_edge_weight += edge.weight;
+        *degrees.entry(edge.left.clone()).or_insert(0.0) += edge.weight;
+        *degrees.entry(edge.right.clone()).or_insert(0.0) += edge.weight;
+    }
+
+    let mut modularity = compute_modularity(&communities, &degrees, edges, total_edge_weight);
+    let mut next_community = node_ids.len();
+    const EPSILON: f64 = 1.0e-12;
+
+    // Mirrors the TS route's use of graphology-communities-louvain.detailed()
+    // with getEdgeWeight="weight" (platform/daemon/src/pipeline/community-detection.ts:101-115):
+    // start with one community per node, repeatedly move each node to the
+    // neighboring community with the best positive weighted-modularity gain,
+    // and stop at a local optimum for the current graph level.
+    for _ in 0..100 {
+        for communities_set in neighbor_communities_by_node.values_mut() {
+            communities_set.clear();
+        }
+        for edge in edges {
+            if let Some(community) = communities.get(&edge.right).copied() {
+                neighbor_communities_by_node
+                    .entry(edge.left.clone())
+                    .or_default()
+                    .insert(community);
+            }
+            if let Some(community) = communities.get(&edge.left).copied() {
+                neighbor_communities_by_node
+                    .entry(edge.right.clone())
+                    .or_default()
+                    .insert(community);
+            }
+        }
+
+        let mut moved = false;
+        for node_id in node_ids {
+            let original_community = communities[node_id];
+            let mut candidates = neighbor_communities_by_node
+                .get(node_id)
+                .cloned()
+                .unwrap_or_default();
+            candidates.insert(original_community);
+
+            let original_size = communities
+                .values()
+                .filter(|community| **community == original_community)
+                .count();
+            if original_size > 1 {
+                candidates.insert(next_community);
+            }
+
+            let mut ordered_candidates = candidates.into_iter().collect::<Vec<_>>();
+            ordered_candidates.sort_unstable();
+
+            let mut best_community = original_community;
+            let mut best_modularity = modularity;
+            for candidate in ordered_candidates {
+                if candidate == original_community {
+                    continue;
+                }
+                communities.insert(node_id.clone(), candidate);
+                let candidate_modularity =
+                    compute_modularity(&communities, &degrees, edges, total_edge_weight);
+                if candidate_modularity > best_modularity + EPSILON {
+                    best_community = candidate;
+                    best_modularity = candidate_modularity;
+                }
+            }
+
+            communities.insert(node_id.clone(), best_community);
+            if best_community != original_community {
+                moved = true;
+                modularity = best_modularity;
+                if best_community == next_community {
+                    next_community += 1;
+                }
+            }
+        }
+
+        if !moved {
+            break;
+        }
+    }
+
+    let compacted = compact_community_ids(node_ids, communities);
+    let modularity = compute_modularity(&compacted, &degrees, edges, total_edge_weight);
+    (compacted, modularity)
+}
+
+fn cluster_entities_native(
+    conn: &rusqlite::Connection,
+    agent_id: &str,
+) -> rusqlite::Result<serde_json::Value> {
+    let mut entities = conn
+        .prepare(
+            "SELECT id, name, COALESCE(mentions, 0)
+             FROM entities
+             WHERE COALESCE(NULLIF(agent_id, ''), 'default') = ?1",
+        )?
+        .query_map([agent_id], |row| {
+            Ok(ClusterEntityRow {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                mentions: row.get(2)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    entities.sort_by(|left, right| left.id.cmp(&right.id));
+
+    if entities.is_empty() {
+        return Ok(serde_json::json!({
+            "communities": 0,
+            "modularity": 0,
+            "quality": "fragmented",
+            "members": [],
+        }));
+    }
+
+    let entity_by_id = entities
+        .iter()
+        .cloned()
+        .map(|entity| (entity.id.clone(), entity))
+        .collect::<HashMap<_, _>>();
+    let mut edge_by_pair: HashMap<(String, String), f64> = HashMap::new();
+    if sqlite_table_exists(conn, "entity_dependencies")? {
+        let deps = conn
+            .prepare(
+                "SELECT source_entity_id, target_entity_id, strength, COALESCE(confidence, 0.7)
+                 FROM entity_dependencies
+                 WHERE COALESCE(NULLIF(agent_id, ''), 'default') = ?1",
+            )?
+            .query_map([agent_id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, f64>(2)?,
+                    row.get::<_, f64>(3)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        for (left, right, strength, confidence) in deps {
+            if left == right
+                || !entity_by_id.contains_key(&left)
+                || !entity_by_id.contains_key(&right)
+            {
+                continue;
+            }
+            let weight = strength * confidence;
+            if !weight.is_finite() || weight <= 0.0 {
+                continue;
+            }
+            let edge = ordered_edge(&left, &right);
+            edge_by_pair
+                .entry(edge)
+                .and_modify(|existing| {
+                    if weight > *existing {
+                        *existing = weight;
+                    }
+                })
+                .or_insert(weight);
+        }
+    }
+
+    let mut edges = edge_by_pair
+        .iter()
+        .map(|((left, right), weight)| ClusterEdge {
+            left: left.clone(),
+            right: right.clone(),
+            weight: *weight,
+        })
+        .collect::<Vec<_>>();
+    edges.sort_by(|left, right| {
+        left.left
+            .cmp(&right.left)
+            .then(left.right.cmp(&right.right))
+    });
+    let edge_pairs = edge_by_pair.keys().cloned().collect::<HashSet<_>>();
+    let node_ids = entities
+        .iter()
+        .map(|entity| entity.id.clone())
+        .collect::<Vec<_>>();
+    let (communities_by_node, modularity) = detect_weighted_louvain_communities(&node_ids, &edges);
+
+    let mut components_by_community: HashMap<usize, Vec<String>> = HashMap::new();
+    for node_id in &node_ids {
+        let community = communities_by_node.get(node_id).copied().unwrap_or(0);
+        components_by_community
+            .entry(community)
+            .or_default()
+            .push(node_id.clone());
+    }
+    let mut components = components_by_community.into_iter().collect::<Vec<_>>();
+    components.sort_by_key(|(community, _)| *community);
+
+    conn.execute(
+        "DELETE FROM entity_communities WHERE agent_id = ?1",
+        [agent_id],
+    )?;
+    conn.execute(
+        "UPDATE entities SET community_id = NULL WHERE COALESCE(NULLIF(agent_id, ''), 'default') = ?1",
+        [agent_id],
+    )?;
+
+    let now = chrono::Utc::now().to_rfc3339();
+    let mut members = Vec::new();
+    for (community, component) in components {
+        let community_id = format!("community_{agent_id}_{community}");
+        let best = component
+            .iter()
+            .filter_map(|id| entity_by_id.get(id))
+            .max_by_key(|entity| entity.mentions);
+        let name = best.map(|entity| entity.name.clone());
+        let cohesion = compute_component_cohesion(&component, &edge_pairs);
+        conn.execute(
+            "INSERT INTO entity_communities (id, agent_id, name, cohesion, member_count, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
+            rusqlite::params![community_id, agent_id, name, cohesion, component.len() as i64, now],
+        )?;
+        for entity_id in &component {
+            conn.execute(
+                "UPDATE entities SET community_id = ?1 WHERE id = ?2 AND COALESCE(NULLIF(agent_id, ''), 'default') = ?3",
+                rusqlite::params![community_id, entity_id, agent_id],
+            )?;
+        }
+        members.push(serde_json::json!({
+            "id": community_id,
+            "name": name,
+            "count": component.len(),
+            "cohesion": cohesion,
+        }));
+    }
+
+    let quality = if modularity > 0.6 {
+        "strong"
+    } else if modularity >= 0.3 {
+        "moderate"
+    } else {
+        "fragmented"
+    };
+    Ok(serde_json::json!({
+        "communities": members.len(),
+        "modularity": modularity,
+        "quality": quality,
+        "members": members,
+    }))
 }
 
 /// POST /api/repair/cluster-entities — cluster likely duplicate entities.
-pub async fn cluster_entities() -> impl IntoResponse {
-    Json(serde_json::json!({
-        "action": "cluster-entities",
-        "clusters": 0,
-        "entities": 0,
-        "message": "no entity clusters found",
-    }))
+pub async fn cluster_entities(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(query): Query<HashMap<String, String>>,
+    body: Option<Json<RepairAgentBody>>,
+) -> impl IntoResponse {
+    let body = body.map(|Json(body)| body).unwrap_or_default();
+    let agent_id = resolve_repair_agent_id(&headers, &query, body.agent_id.as_deref());
+    let result = state
+        .pool
+        .write_tx(signet_core::db::Priority::Low, move |conn| {
+            Ok(cluster_entities_native(conn, &agent_id)?)
+        })
+        .await;
+    match result {
+        Ok(body) => (StatusCode::OK, Json(body)).into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": error.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+fn extract_candidate_names(text: &str) -> Vec<String> {
+    const SKIP: &[&str] = &[
+        "the",
+        "this",
+        "that",
+        "these",
+        "those",
+        "there",
+        "then",
+        "what",
+        "when",
+        "where",
+        "which",
+        "while",
+        "who",
+        "how",
+        "here",
+        "have",
+        "has",
+        "had",
+        "our",
+        "your",
+        "their",
+        "some",
+        "any",
+        "all",
+        "each",
+        "every",
+        "both",
+        "few",
+        "more",
+        "most",
+        "many",
+        "much",
+        "other",
+        "another",
+        "such",
+        "like",
+        "just",
+        "also",
+        "only",
+        "very",
+        "new",
+        "old",
+        "good",
+        "great",
+        "best",
+        "well",
+        "long",
+        "high",
+        "low",
+        "big",
+        "small",
+        "large",
+        "little",
+        "same",
+        "different",
+        "important",
+        "sure",
+        "true",
+        "right",
+        "left",
+        "yes",
+        "not",
+        "but",
+        "and",
+        "for",
+        "nor",
+        "yet",
+        "can",
+        "may",
+        "will",
+        "shall",
+        "should",
+        "would",
+        "could",
+        "might",
+        "must",
+        "does",
+        "did",
+        "been",
+        "being",
+        "are",
+        "was",
+        "were",
+        "note",
+        "however",
+        "therefore",
+        "thus",
+        "key",
+        "facts",
+        "preferences",
+        "events",
+        "relationships",
+    ];
+    let mut names = Vec::new();
+    for sentence in text
+        .split(|ch| ['.', '!', '?', '\n'].contains(&ch))
+        .filter(|s| !s.trim().is_empty())
+    {
+        let mut run: Vec<String> = Vec::new();
+        for word in sentence.split_whitespace() {
+            let clean = word
+                .trim_matches(|ch: char| ",;:'\"()[]{}".contains(ch))
+                .to_string();
+            if clean.is_empty() {
+                continue;
+            }
+            let is_capitalized = clean
+                .chars()
+                .next()
+                .is_some_and(|ch| ch.is_ascii_uppercase())
+                && clean
+                    .chars()
+                    .nth(1)
+                    .is_some_and(|ch| ch.is_ascii_lowercase());
+            let is_all_caps = clean.len() <= 6
+                && clean.len() >= 2
+                && clean.chars().all(|ch| ch.is_ascii_uppercase());
+            if (is_capitalized || is_all_caps)
+                && !SKIP.contains(&clean.to_ascii_lowercase().as_str())
+            {
+                run.push(clean);
+            } else if !run.is_empty() {
+                let name = run.join(" ");
+                if name.len() >= 3 && !names.contains(&name) {
+                    names.push(name);
+                }
+                run.clear();
+            }
+        }
+        if !run.is_empty() {
+            let name = run.join(" ");
+            if name.len() >= 3 && !names.contains(&name) {
+                names.push(name);
+            }
+        }
+    }
+    names
+}
+
+fn link_memory_to_entities_native(
+    conn: &rusqlite::Connection,
+    memory_id: &str,
+    content: &str,
+    agent_id: &str,
+) -> rusqlite::Result<(usize, Vec<String>)> {
+    let names = extract_candidate_names(content);
+    if names.is_empty() {
+        return Ok((0, Vec::new()));
+    }
+    let now = chrono::Utc::now().to_rfc3339();
+    let mut linked = 0_usize;
+    let mut entity_ids = Vec::new();
+    for name in names {
+        let canonical = normalize_entity_name(&name);
+        if canonical.len() < 3 {
+            continue;
+        }
+        let entity_id = conn
+            .query_row(
+                "SELECT id FROM entities
+                 WHERE (canonical_name = ?1 OR name = ?2)
+                   AND COALESCE(NULLIF(agent_id, ''), 'default') = ?3
+                 LIMIT 1",
+                rusqlite::params![canonical, name, agent_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        let Some(entity_id) = entity_id else {
+            continue;
+        };
+        conn.execute(
+            "UPDATE entities SET mentions = COALESCE(mentions, 0) + 1, updated_at = ?1 WHERE id = ?2",
+            rusqlite::params![now, entity_id],
+        )?;
+        let changes = conn.execute(
+            "INSERT OR IGNORE INTO memory_entity_mentions
+             (memory_id, entity_id, mention_text, confidence, created_at)
+             VALUES (?1, ?2, ?3, 0.8, ?4)",
+            rusqlite::params![memory_id, entity_id, name, now],
+        )?;
+        if changes > 0 {
+            linked += 1;
+        }
+        entity_ids.push(entity_id);
+    }
+    Ok((linked, entity_ids))
 }
 
 /// POST /api/repair/relink-entities — link unlinked memories to ontology entities.
-pub async fn relink_entities() -> impl IntoResponse {
-    Json(serde_json::json!({
-        "action": "relink-entities",
-        "linked": 0,
-        "remaining": 0,
-        "message": "all memories linked",
-    }))
+pub async fn relink_entities(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(query): Query<HashMap<String, String>>,
+    body: Option<Json<RelinkBody>>,
+) -> impl IntoResponse {
+    let body = body.map(|Json(body)| body).unwrap_or_default();
+    let batch_size = body.batch_size.unwrap_or(500).clamp(1, 5000) as i64;
+    let agent_id = resolve_repair_agent_id(&headers, &query, body.agent_id.as_deref());
+    let result = state
+        .pool
+        .write_tx(signet_core::db::Priority::Low, move |conn| {
+            let rows = conn
+                .prepare(
+                    "SELECT id, content FROM memories
+                     WHERE COALESCE(is_deleted, 0) = 0
+                       AND COALESCE(NULLIF(agent_id, ''), 'default') = ?1
+                       AND id NOT IN (SELECT DISTINCT memory_id FROM memory_entity_mentions)
+                     LIMIT ?2",
+                )?
+                .query_map(rusqlite::params![agent_id, batch_size], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            if rows.is_empty() {
+                return Ok(serde_json::json!({
+                    "action": "relink-entities",
+                    "linked": 0,
+                    "remaining": 0,
+                    "message": "all memories linked",
+                }));
+            }
+            let mut linked = 0_usize;
+            let mut entities = 0_usize;
+            for (id, content) in &rows {
+                let (count, entity_ids) =
+                    link_memory_to_entities_native(conn, id, content, &agent_id)?;
+                linked += count;
+                entities += entity_ids.len();
+            }
+            let remaining: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM memories
+                 WHERE COALESCE(is_deleted, 0) = 0
+                   AND COALESCE(NULLIF(agent_id, ''), 'default') = ?1
+                   AND id NOT IN (SELECT DISTINCT memory_id FROM memory_entity_mentions)",
+                [agent_id],
+                |row| row.get(0),
+            )?;
+            Ok(serde_json::json!({
+                "action": "relink-entities",
+                "processed": rows.len(),
+                "linked": linked,
+                "entities": entities,
+                "aspects": 0,
+                "attributes": 0,
+                "remaining": remaining,
+                "message": if remaining > 0 {
+                    format!("{remaining} memories still need linking — call again")
+                } else {
+                    "all memories linked".to_string()
+                },
+            }))
+        })
+        .await;
+    match result {
+        Ok(body) => (StatusCode::OK, Json(body)).into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": error.to_string()})),
+        )
+            .into_response(),
+    }
 }
 
 /// POST /api/repair/backfill-hints — enqueue prospective hint jobs for unhinted rows.
-pub async fn backfill_hints() -> impl IntoResponse {
-    Json(serde_json::json!({
-        "action": "backfill-hints",
-        "enqueued": 0,
-        "remaining": 0,
-        "message": "all unscoped memories have hints",
-    }))
+pub async fn backfill_hints(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(query): Query<HashMap<String, String>>,
+    body: Option<Json<BackfillHintsBody>>,
+) -> impl IntoResponse {
+    let cfg = pipeline_config(&state);
+    if !cfg.hints.enabled {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Hints disabled in pipeline config"})),
+        )
+            .into_response();
+    }
+
+    let body = body.map(|Json(body)| body).unwrap_or_default();
+    let batch_size = body.batch_size.unwrap_or(50).clamp(1, 200) as i64;
+    let agent_id = resolve_repair_agent_id(&headers, &query, body.agent_id.as_deref());
+    let result = state
+        .pool
+        .write_tx(signet_core::db::Priority::Low, move |conn| {
+            let rows = conn
+                .prepare(
+                    "SELECT m.id, m.content FROM memories m
+                     WHERE COALESCE(m.is_deleted, 0) = 0
+                       AND m.scope IS NULL
+                       AND COALESCE(NULLIF(m.agent_id, ''), 'default') = ?1
+                       AND m.id NOT IN (SELECT DISTINCT memory_id FROM memory_hints)
+                     ORDER BY m.created_at DESC
+                     LIMIT ?2",
+                )?
+                .query_map(rusqlite::params![agent_id, batch_size], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            if rows.is_empty() {
+                return Ok(serde_json::json!({
+                    "action": "backfill-hints",
+                    "enqueued": 0,
+                    "remaining": 0,
+                    "message": "all unscoped memories have hints",
+                }));
+            }
+            let now = chrono::Utc::now().to_rfc3339();
+            let mut enqueued = 0_usize;
+            for (memory_id, content) in rows {
+                let payload = serde_json::json!({"memoryId": memory_id, "content": content}).to_string();
+                conn.execute(
+                    "INSERT INTO memory_jobs
+                     (id, memory_id, job_type, status, payload, attempts, max_attempts, created_at, updated_at)
+                     VALUES (?1, ?2, 'prospective_index', 'pending', ?3, 0, 3, ?4, ?4)",
+                    rusqlite::params![uuid::Uuid::new_v4().to_string(), memory_id, payload, now],
+                )?;
+                enqueued += 1;
+            }
+            let remaining: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM memories
+                 WHERE COALESCE(is_deleted, 0) = 0
+                   AND scope IS NULL
+                   AND COALESCE(NULLIF(agent_id, ''), 'default') = ?1
+                   AND id NOT IN (SELECT DISTINCT memory_id FROM memory_hints)",
+                [agent_id],
+                |row| row.get(0),
+            )?;
+            Ok(serde_json::json!({
+                "action": "backfill-hints",
+                "enqueued": enqueued,
+                "remaining": remaining,
+                "message": if remaining > 0 {
+                    format!("{remaining} unscoped memories still need hints — call again")
+                } else {
+                    "all unscoped memories have hints".to_string()
+                },
+            }))
+        })
+        .await;
+    match result {
+        Ok(body) => (StatusCode::OK, Json(body)).into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": error.to_string()})),
+        )
+            .into_response(),
+    }
 }
 
 /// GET /api/repair/dead-memories — review low-confidence stale memories.
-pub async fn dead_memories(Query(query): Query<HashMap<String, String>>) -> impl IntoResponse {
+pub async fn dead_memories(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(query): Query<HashMap<String, String>>,
+) -> impl IntoResponse {
     let max_confidence = query
         .get("maxConfidence")
         .and_then(|value| value.parse::<f64>().ok())
@@ -1888,21 +3246,93 @@ pub async fn dead_memories(Query(query): Query<HashMap<String, String>>) -> impl
             .into_response();
     }
 
-    Json(serde_json::json!({
-        "count": 0,
-        "memories": [],
-    }))
-    .into_response()
+    let agent_id = resolve_repair_agent_id(&headers, &query, None);
+    let visibility = query_text(&query, "visibility", "visibility");
+    let scope = normalize_scope_value(query_text(&query, "scope", "scope"));
+    let limit = limit.min(500.0).floor() as i64;
+    let result = state
+        .pool
+        .read(move |conn| {
+            let mut sql = String::from(
+                "SELECT id, content, confidence, last_accessed, importance,
+                        CASE
+                          WHEN confidence < ?1 THEN 'low_confidence'
+                          WHEN last_accessed IS NULL THEN 'never_accessed'
+                          ELSE 'stale'
+                        END AS reason
+                 FROM memories
+                 WHERE COALESCE(is_deleted, 0) = 0
+                   AND COALESCE(NULLIF(agent_id, ''), 'default') = ?4
+                   AND COALESCE(importance, 0.5) <= 0.8
+                   AND (
+                     confidence < ?1
+                     OR (last_accessed IS NULL AND julianday('now') - julianday(created_at) > ?2)
+                     OR (last_accessed IS NOT NULL AND julianday('now') - julianday(last_accessed) > ?3)
+                   )",
+            );
+            let mut params: Vec<rusqlite::types::Value> = vec![
+                max_confidence.into(),
+                max_access_days.into(),
+                max_access_days.into(),
+                agent_id.into(),
+            ];
+            if let Some(visibility) = visibility {
+                sql.push_str(" AND COALESCE(visibility, 'global') = ?");
+                params.push(visibility.into());
+            }
+            if let Some(scope) = scope {
+                sql.push_str(" AND COALESCE(scope, '__NULL__') = ?");
+                params.push(scope.into());
+            }
+            sql.push_str(" ORDER BY confidence ASC, last_accessed ASC NULLS FIRST LIMIT ?");
+            params.push(limit.into());
+            let memories = conn
+                .prepare(&sql)?
+                .query_map(rusqlite::params_from_iter(params.iter()), |row| {
+                    Ok(serde_json::json!({
+                        "id": row.get::<_, String>(0)?,
+                        "content": row.get::<_, String>(1)?,
+                        "confidence": row.get::<_, f64>(2)?,
+                        "last_accessed": row.get::<_, Option<String>>(3)?,
+                        "importance": row.get::<_, f64>(4)?,
+                        "reason": row.get::<_, String>(5)?,
+                    }))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(serde_json::json!({
+                "count": memories.len(),
+                "memories": memories,
+            }))
+        })
+        .await;
+
+    match result {
+        Ok(body) => (StatusCode::OK, Json(body)).into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": error.to_string()})),
+        )
+            .into_response(),
+    }
 }
 
 #[derive(Default, Deserialize)]
-#[serde(default)]
+#[serde(default, rename_all = "camelCase")]
 pub struct ForgetDeadMemoriesBody {
     ids: Vec<serde_json::Value>,
+    #[serde(alias = "agent_id")]
+    agent_id: Option<String>,
+    visibility: Option<String>,
+    scope: Option<String>,
 }
 
 /// POST /api/repair/dead-memories/forget — forget reviewed dead memories.
-pub async fn forget_dead_memories(Json(body): Json<ForgetDeadMemoriesBody>) -> impl IntoResponse {
+pub async fn forget_dead_memories(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(query): Query<HashMap<String, String>>,
+    Json(body): Json<ForgetDeadMemoriesBody>,
+) -> impl IntoResponse {
     if body.ids.is_empty() {
         return (
             StatusCode::BAD_REQUEST,
@@ -1917,18 +3347,67 @@ pub async fn forget_dead_memories(Json(body): Json<ForgetDeadMemoriesBody>) -> i
         )
             .into_response();
     }
-    let valid = body
-        .ids
-        .iter()
-        .all(|id| id.as_str().is_some_and(|value| !value.is_empty()));
-    if !valid {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "All ids must be non-empty strings" })),
-        )
-            .into_response();
+    let mut ids = Vec::with_capacity(body.ids.len());
+    for id in &body.ids {
+        let Some(id) = id.as_str().filter(|value| !value.is_empty()) else {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": "All ids must be non-empty strings" })),
+            )
+                .into_response();
+        };
+        ids.push(id.to_string());
     }
-    Json(serde_json::json!({ "forgotten": 0 })).into_response()
+    let agent_id = resolve_repair_agent_id(&headers, &query, body.agent_id.as_deref());
+    let visibility = normalize_scope_value(body.visibility)
+        .or_else(|| query_text(&query, "visibility", "visibility"));
+    let scope = normalize_scope_value(body.scope).or_else(|| query_text(&query, "scope", "scope"));
+    let ctx = resolve_repair_context(&headers);
+    let result = state
+        .pool
+        .write_tx(signet_core::db::Priority::Low, move |conn| {
+            let now = chrono::Utc::now().to_rfc3339();
+            let mut forgotten = 0_usize;
+            for id in &ids {
+                let mut sql = String::from(
+                    "UPDATE memories SET is_deleted = 1, deleted_at = ?1, updated_at = ?1
+                     WHERE id = ?2
+                       AND COALESCE(is_deleted, 0) = 0
+                       AND COALESCE(NULLIF(agent_id, ''), 'default') = ?3",
+                );
+                let mut params: Vec<rusqlite::types::Value> = vec![
+                    now.clone().into(),
+                    id.clone().into(),
+                    agent_id.clone().into(),
+                ];
+                if let Some(visibility) = visibility.as_ref() {
+                    sql.push_str(" AND COALESCE(visibility, 'global') = ?");
+                    params.push(visibility.clone().into());
+                }
+                if let Some(scope) = scope.as_ref() {
+                    sql.push_str(" AND COALESCE(scope, '__NULL__') = ?");
+                    params.push(scope.clone().into());
+                }
+                forgotten += conn.execute(&sql, rusqlite::params_from_iter(params.iter()))?;
+            }
+            write_repair_audit(
+                conn,
+                "forget-dead-memories",
+                &ctx,
+                forgotten,
+                &format!("soft-deleted {forgotten} dead memories"),
+            )?;
+            Ok(serde_json::json!({ "forgotten": forgotten }))
+        })
+        .await;
+    match result {
+        Ok(body) => (StatusCode::OK, Json(body)).into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": error.to_string()})),
+        )
+            .into_response(),
+    }
 }
 
 /// GET /api/repair/cold-stats — audit cold storage.

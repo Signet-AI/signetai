@@ -21,5 +21,9 @@ rusqlite = { workspace = true }
 libc = "0.2"
 tiktoken-rs = { workspace = true }
 
+[[bench]]
+name = "throughput"
+harness = false
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt", "macros"] }

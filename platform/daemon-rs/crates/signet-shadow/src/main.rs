@@ -9,6 +9,7 @@
 
 mod compare;
 mod divergence;
+mod snapshot;
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -32,6 +33,14 @@ struct ProxyConfig {
     primary_host: String,
     shadow_host: String,
     log_path: std::path::PathBuf,
+    internal_state: Option<InternalStateConfig>,
+}
+
+#[derive(Clone)]
+struct InternalStateConfig {
+    primary_path: std::path::PathBuf,
+    shadow_path: std::path::PathBuf,
+    selector: compare::InternalStateSelector,
 }
 
 impl ProxyConfig {
@@ -47,14 +56,26 @@ impl ProxyConfig {
 
         let log_dir = dirs_log();
         let log_path = log_dir.join("shadow-divergences.jsonl");
+        let internal_state = internal_state_config(&args);
 
         Self {
             proxy_port,
             primary_host,
             shadow_host,
             log_path,
+            internal_state,
         }
     }
+}
+
+/// Sanitize client-supplied x-request-id: ALWAYS hash to prevent any
+/// secret-looking value (e.g. sk-aaa...) from leaking into the divergence log.
+fn sanitize_request_id(raw: &str) -> String {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut hasher = DefaultHasher::new();
+    raw.hash(&mut hasher);
+    format!("[req:{:016x}]", hasher.finish())
 }
 
 fn flag_val<T: std::str::FromStr>(args: &[String], name: &str) -> Option<T> {
@@ -68,7 +89,34 @@ fn flag_str(args: &[String], name: &str) -> Option<String> {
     args.iter()
         .position(|a| a == name)
         .and_then(|i| args.get(i + 1))
+        .filter(|value| !value.starts_with("--"))
         .cloned()
+}
+
+fn flag_present(args: &[String], name: &str) -> bool {
+    args.iter().any(|arg| arg == name)
+}
+
+fn internal_state_config(args: &[String]) -> Option<InternalStateConfig> {
+    let selector_value = flag_str(args, "--internal-state")
+        .or_else(|| flag_present(args, "--internal-state").then(|| "all".to_string()))
+        .or_else(|| std::env::var("SIGNET_SHADOW_INTERNAL_STATE").ok());
+    let selector = selector_value
+        .as_deref()
+        .and_then(compare::InternalStateSelector::from_value)?;
+    let primary_path = flag_str(args, "--primary-signet-path")
+        .or_else(|| std::env::var("SIGNET_SHADOW_PRIMARY_PATH").ok())
+        .map(std::path::PathBuf::from)?;
+    let shadow_path = flag_str(args, "--shadow-signet-path")
+        .or_else(|| std::env::var("SIGNET_SHADOW_SHADOW_PATH").ok())
+        .or_else(|| std::env::var("SIGNET_SHADOW_PATH").ok())
+        .map(std::path::PathBuf::from)?;
+
+    Some(InternalStateConfig {
+        primary_path,
+        shadow_path,
+        selector,
+    })
 }
 
 fn dirs_log() -> std::path::PathBuf {
@@ -91,6 +139,7 @@ struct ProxyState {
     shadow: String,
     logger: divergence::DivergenceLogger,
     rules: compare::ParityRules,
+    internal_state: Option<InternalStateConfig>,
 }
 
 // ---------------------------------------------------------------------------
@@ -157,6 +206,12 @@ async fn proxy(State(state): State<Arc<ProxyState>>, req: Request<Body>) -> Resp
     let shadow_method = method.clone();
     let shadow_headers = headers.clone();
     let shadow_path = path.clone();
+    // #7 REVIEW FIX: allowlist x-request-id shape (alphanumeric + dash, max 128)
+    // to prevent client-supplied secrets/tokens from being logged verbatim.
+    let request_id = headers
+        .get("x-request-id")
+        .and_then(|value| value.to_str().ok())
+        .map(|raw| sanitize_request_id(raw));
 
     tokio::spawn(async move {
         let shadow_start = Instant::now();
@@ -174,11 +229,43 @@ async fn proxy(State(state): State<Arc<ProxyState>>, req: Request<Body>) -> Resp
 
         match shadow_result {
             Ok(shadow) => {
-                let divergences = shadow_state
-                    .rules
-                    .compare(&endpoint, &primary_snapshot, &shadow);
+                let mut divergences =
+                    shadow_state
+                        .rules
+                        .compare(&endpoint, &primary_snapshot, &shadow);
+                let mut internal_compared = false;
+                let mut snapshot_errors = Vec::new();
 
-                if !divergences.is_empty() {
+                if let Some(internal) = &shadow_state.internal_state {
+                    let tables = shadow_state
+                        .rules
+                        .internal_table_specs(&endpoint, &internal.selector);
+                    if !tables.is_empty() {
+                        match (
+                            snapshot::snapshot_workspace(&internal.primary_path, &tables),
+                            snapshot::snapshot_workspace(&internal.shadow_path, &tables),
+                        ) {
+                            (Ok(primary_internal), Ok(shadow_internal)) => {
+                                internal_compared = true;
+                                divergences.extend(shadow_state.rules.compare_internal(
+                                    &endpoint,
+                                    &primary_internal,
+                                    &shadow_internal,
+                                ));
+                            }
+                            (primary_result, shadow_result) => {
+                                if let Err(e) = primary_result {
+                                    snapshot_errors.push(format!("primary snapshot failed: {e}"));
+                                }
+                                if let Err(e) = shadow_result {
+                                    snapshot_errors.push(format!("shadow snapshot failed: {e}"));
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if !divergences.is_empty() || !snapshot_errors.is_empty() {
                     let entry = divergence::DivergenceEntry {
                         timestamp: chrono::Utc::now().to_rfc3339(),
                         endpoint: endpoint.clone(),
@@ -187,6 +274,9 @@ async fn proxy(State(state): State<Arc<ProxyState>>, req: Request<Body>) -> Resp
                         primary_latency_ms: primary_elapsed.as_millis() as u64,
                         shadow_latency_ms: shadow_elapsed.as_millis() as u64,
                         divergences,
+                        request_id: request_id.clone(),
+                        internal_compared,
+                        snapshot_errors,
                     };
 
                     if let Err(e) = shadow_state.logger.log(&entry) {
@@ -196,6 +286,8 @@ async fn proxy(State(state): State<Arc<ProxyState>>, req: Request<Body>) -> Resp
                     warn!(
                         endpoint,
                         count = entry.divergences.len(),
+                        internal = entry.internal_compared,
+                        snapshot_errors = entry.snapshot_errors.len(),
                         "divergence detected"
                     );
                 }
@@ -215,7 +307,15 @@ async fn proxy(State(state): State<Arc<ProxyState>>, req: Request<Body>) -> Resp
                         message: format!("shadow request failed: {e}"),
                         primary_value: None,
                         shadow_value: None,
+                        category: None,
+                        table: None,
+                        key: None,
+                        primary_json: None,
+                        shadow_json: None,
                     }],
+                    request_id,
+                    internal_compared: false,
+                    snapshot_errors: Vec::new(),
                 };
                 let _ = shadow_state.logger.log(&entry);
             }
@@ -438,6 +538,7 @@ async fn main() -> anyhow::Result<()> {
         primary = %config.primary_host,
         shadow = %config.shadow_host,
         log = %config.log_path.display(),
+        internal_state = config.internal_state.is_some(),
         "starting shadow replay proxy"
     );
 
@@ -449,6 +550,7 @@ async fn main() -> anyhow::Result<()> {
         shadow: config.shadow_host,
         logger,
         rules,
+        internal_state: config.internal_state,
     });
 
     // Catch-all router — every request gets proxied

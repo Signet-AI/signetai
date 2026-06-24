@@ -87,6 +87,18 @@ impl TestServer {
         Self::start_with_auth_mode(None).await
     }
 
+    async fn start_with_agent_id(agent_id: &str) -> Self {
+        let yaml = "agent:\n  name: test-agent\n  version: 1\n";
+        Self::start_with_agent_yaml_files_setup_and_env(
+            None,
+            yaml,
+            &[],
+            |_| {},
+            &[("SIGNET_AGENT_ID", agent_id)],
+        )
+        .await
+    }
+
     /// Start a daemon with team auth enabled and a fixed secret for scoped-token replay.
     async fn start_team_auth() -> Self {
         Self::start_with_auth_mode(Some("team")).await
@@ -121,6 +133,19 @@ impl TestServer {
         yaml: &str,
         files: &[(&str, &str)],
         setup: F,
+    ) -> Self
+    where
+        F: FnOnce(&std::path::Path),
+    {
+        Self::start_with_agent_yaml_files_setup_and_env(auth_mode, yaml, files, setup, &[]).await
+    }
+
+    async fn start_with_agent_yaml_files_setup_and_env<F>(
+        auth_mode: Option<&str>,
+        yaml: &str,
+        files: &[(&str, &str)],
+        setup: F,
+        envs: &[(&str, &str)],
     ) -> Self
     where
         F: FnOnce(&std::path::Path),
@@ -161,7 +186,8 @@ impl TestServer {
 
         // Spawn daemon in background
         let port_str = port.to_string();
-        let child = tokio::process::Command::new(daemon_binary())
+        let mut command = tokio::process::Command::new(daemon_binary());
+        command
             .env("SIGNET_PATH", &signet_path)
             .env("SIGNET_PORT", &port_str)
             .env("SIGNET_HOST", "127.0.0.1")
@@ -178,9 +204,11 @@ impl TestServer {
             .env("PATH", path_with_fakes)
             .env("RUST_LOG", "warn")
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-            .expect("failed to spawn daemon");
+            .stderr(std::process::Stdio::null());
+        for (key, value) in envs {
+            command.env(key, value);
+        }
+        let child = command.spawn().expect("failed to spawn daemon");
 
         // Store child PID for cleanup
         let pid = child.id().unwrap_or(0);
@@ -217,6 +245,50 @@ impl TestServer {
 
     fn db_path(&self) -> std::path::PathBuf {
         self._tmpdir.path().join("memory/memories.db")
+    }
+
+    fn seed_scoping_audit_fixture(&self) {
+        let conn = rusqlite::Connection::open(self.db_path()).expect("open replay db");
+        conn.busy_timeout(Duration::from_secs(5)).unwrap();
+        conn.execute(
+            "INSERT OR REPLACE INTO agents (id, name, read_policy, policy_group, created_at, updated_at)
+             VALUES
+               ('agent-a', 'agent-a', 'isolated', NULL, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
+               ('agent-b', 'agent-b', 'isolated', NULL, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+            [],
+        )
+        .expect("seed scoping agents");
+        conn.execute(
+            "INSERT INTO memories
+             (id, type, content, content_hash, confidence, importance, tags, who, project,
+              created_at, updated_at, updated_by, is_deleted, pinned, version, agent_id,
+              visibility, scope)
+             VALUES
+             ('mem-scope-agent-a', 'fact', 'Agent A private route audit memory.',
+              'scope-agent-a-hash', 1.0, 0.7, 'scope,audit', 'contract',
+              '/workspace/a', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z',
+              'contract', 0, 0, 1, 'agent-a', 'private', NULL),
+             ('mem-scope-agent-b', 'fact', 'Agent B private route audit memory must not leak.',
+              'scope-agent-b-hash', 1.0, 0.8, 'scope,audit', 'contract',
+              '/workspace/b', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z',
+              'contract', 0, 0, 1, 'agent-b', 'private', NULL),
+             ('mem-scope-archived', 'fact', 'Archived route audit memory must not leak.',
+              'scope-archived-hash', 1.0, 0.9, 'scope,audit', 'contract',
+              '/workspace/a', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z',
+              'contract', 0, 0, 1, 'agent-a', 'archived', NULL)",
+            [],
+        )
+        .expect("seed scoping memories");
+        conn.execute(
+            "INSERT INTO memory_history
+             (id, memory_id, event, old_content, new_content, changed_by, reason, metadata, created_at)
+             VALUES
+             ('hist-agent-b', 'mem-scope-agent-b', 'REVIEW_NEEDED', NULL,
+              'Agent B review queue item must not leak.', 'contract', 'scope audit', NULL,
+              '2026-01-01T00:00:01Z')",
+            [],
+        )
+        .expect("seed scoping history");
     }
 
     fn seed_recall_scope_fixture(&self) {
@@ -984,6 +1056,56 @@ impl TestServer {
         .expect("seed knowledge health and hygiene fixture");
     }
 
+    fn seed_repair_native_fixture(&self) {
+        let conn = rusqlite::Connection::open(self.db_path()).expect("open replay db");
+        conn.busy_timeout(Duration::from_secs(5)).unwrap();
+        conn.execute_batch(
+            r#"INSERT INTO entities
+               (id, name, canonical_name, entity_type, agent_id, mentions, pinned,
+                created_at, updated_at)
+               VALUES
+               ('entity-repair-alpha', 'Signet Alpha', 'signet alpha', 'project', 'default', 4, 0,
+                '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
+               ('entity-repair-beta', 'Signet Beta', 'signet beta', 'project', 'default', 2, 0,
+                '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
+               ('entity-repair-generic', 'The Repair Heading', 'the repair heading', 'concept', 'default', 1, 0,
+                '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
+               ('entity-repair-other-agent', 'Other Agent Abstract Repair', 'other agent abstract repair', 'concept', 'other-agent', 1, 0,
+                '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
+
+               INSERT INTO entity_dependencies
+               (id, source_entity_id, target_entity_id, agent_id, dependency_type,
+                strength, confidence, reason, created_at, updated_at)
+               VALUES
+               ('dep-repair-alpha-beta', 'entity-repair-alpha', 'entity-repair-beta', 'default',
+                'depends_on', 0.8, 0.9, 'Repair replay cluster edge.',
+                '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
+
+               INSERT INTO memories
+               (id, type, content, confidence, importance, tags, who, project,
+                created_at, updated_at, updated_by, is_deleted, pinned, version,
+                agent_id, visibility, scope)
+               VALUES
+               ('mem-repair-unhinted', 'fact', 'Unhinted repair fixture memory for prospective indexing.',
+                1.0, 0.9, 'repair', 'contract-replay', 'signet',
+                '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 'contract-replay',
+                0, 0, 1, 'default', 'global', NULL),
+               ('mem-repair-relink', 'fact', 'Signet Alpha depends on Signet Beta for repair replay.',
+                1.0, 0.9, 'repair', 'contract-replay', 'signet',
+                '2026-01-02T00:00:00Z', '2026-01-02T00:00:00Z', 'contract-replay',
+                0, 0, 1, 'default', 'global', NULL),
+               ('mem-repair-dead', 'fact', 'Low confidence stale repair memory.',
+                0.01, 0.2, 'repair', 'contract-replay', 'signet',
+                '2025-01-01T00:00:00Z', '2025-01-01T00:00:00Z', 'contract-replay',
+                0, 0, 1, 'default', 'global', NULL),
+               ('mem-repair-other-agent-dead', 'fact', 'Other agent dead memory must not be repaired by default.',
+                0.01, 0.2, 'repair', 'contract-replay', 'signet',
+                '2025-01-01T00:00:00Z', '2025-01-01T00:00:00Z', 'contract-replay',
+                0, 0, 1, 'other-agent', 'global', NULL);"#,
+        )
+        .expect("seed native repair fixture");
+    }
+
     fn seed_memory_search_telemetry_fixture(&self) {
         let conn = rusqlite::Connection::open(self.db_path()).expect("open replay db");
         conn.busy_timeout(Duration::from_secs(5)).unwrap();
@@ -1273,6 +1395,27 @@ impl TestServer {
         })
     }
 
+    fn write_secret_plugin_registry(&self, enabled: bool, granted_capabilities: &[&str]) {
+        let dir = self._tmpdir.path().join(".daemon/plugins");
+        std::fs::create_dir_all(&dir).expect("plugin registry dir");
+        let line = serde_json::json!({
+            "version": 1,
+            "plugins": {
+                "signet.secrets": {
+                    "enabled": enabled,
+                    "grantedCapabilities": granted_capabilities,
+                    "installedAt": "2026-04-16T12:00:00.000Z",
+                    "updatedAt": "2026-04-16T12:00:00.000Z"
+                }
+            }
+        });
+        std::fs::write(
+            dir.join("registry-v1.json"),
+            format!("{}\n", serde_json::to_string_pretty(&line).unwrap()),
+        )
+        .expect("write plugin registry");
+    }
+
     fn seed_plugin_audit_fixture(&self) {
         let dir = self._tmpdir.path().join(".daemon/plugins");
         std::fs::create_dir_all(&dir).expect("plugin audit dir");
@@ -1508,6 +1651,22 @@ impl TestServer {
             "iat": now,
             "exp": now + 3600,
         });
+        Self::sign_token(payload)
+    }
+
+    fn project_scoped_role_token(agent: &str, project: &str, role: &str) -> String {
+        let now = chrono::Utc::now().timestamp();
+        let payload = json!({
+            "sub": format!("test-{agent}-{project}"),
+            "scope": {"agent": agent, "project": project},
+            "role": role,
+            "iat": now,
+            "exp": now + 3600,
+        });
+        Self::sign_token(payload)
+    }
+
+    fn sign_token(payload: serde_json::Value) -> String {
         let payload_b64 = URL_SAFE_NO_PAD.encode(payload.to_string().as_bytes());
         let mut mac = HmacSha256::new_from_slice(AUTH_SECRET).expect("valid hmac secret");
         mac.update(payload_b64.as_bytes());
@@ -1554,6 +1713,26 @@ impl TestServer {
     async fn json(&self, resp: reqwest::Response) -> serde_json::Value {
         resp.json().await.expect("failed to parse json")
     }
+}
+
+async fn next_sse_chunk(resp: &mut reqwest::Response) -> String {
+    let chunk = tokio::time::timeout(Duration::from_secs(5), resp.chunk())
+        .await
+        .expect("timed out waiting for SSE chunk")
+        .expect("SSE chunk request failed")
+        .expect("SSE stream ended before chunk");
+    String::from_utf8_lossy(&chunk).to_string()
+}
+
+async fn read_sse_until(resp: &mut reqwest::Response, needle: &str) -> String {
+    let mut collected = String::new();
+    for _ in 0..12 {
+        collected.push_str(&next_sse_chunk(resp).await);
+        if collected.contains(needle) {
+            return collected;
+        }
+    }
+    panic!("SSE stream did not contain {needle}: {collected}");
 }
 
 async fn call_mcp_tool(
@@ -1762,6 +1941,525 @@ echo "fake skills installed ${skill} from ${pkg}"
             .expect("chmod fake bunx");
     }
     (bw, op, bin_dir)
+}
+
+struct StrictMcpFixture {
+    base: String,
+    methods: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    _thread: std::thread::JoinHandle<()>,
+}
+
+impl StrictMcpFixture {
+    fn start(tool_sequences: Vec<Vec<&'static str>>) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind strict mcp fixture");
+        listener
+            .set_nonblocking(false)
+            .expect("configure strict mcp fixture");
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let methods = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let thread_methods = methods.clone();
+        let initialized = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let thread_initialized = initialized.clone();
+        let tool_calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let thread_tool_calls = tool_calls.clone();
+        let sequences = tool_sequences
+            .into_iter()
+            .map(|tools| tools.into_iter().map(str::to_string).collect::<Vec<_>>())
+            .collect::<Vec<_>>();
+        let thread = std::thread::spawn(move || {
+            for stream in listener.incoming().take(64) {
+                let Ok(mut stream) = stream else {
+                    continue;
+                };
+                let Ok((headers, body)) = read_fixture_http_request(&mut stream) else {
+                    continue;
+                };
+                let value =
+                    serde_json::from_str::<serde_json::Value>(&body).unwrap_or_else(|_| json!({}));
+                let method = value["method"].as_str().unwrap_or("").to_string();
+                thread_methods.lock().unwrap().push(method.clone());
+                let id = value.get("id").cloned().unwrap_or(serde_json::Value::Null);
+                let session_ok = headers.iter().any(|(key, value)| {
+                    key.eq_ignore_ascii_case("mcp-session-id") && value == "strict-session"
+                });
+                let body = match method.as_str() {
+                    "initialize" => json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "result": {
+                            "protocolVersion": "2024-11-05",
+                            "capabilities": {"tools": {"listChanged": true}, "resources": {}},
+                            "serverInfo": {"name": "Strict MCP", "version": "1.0.0"}
+                        }
+                    })
+                    .to_string(),
+                    "notifications/initialized" if session_ok => {
+                        thread_initialized.store(true, std::sync::atomic::Ordering::SeqCst);
+                        write_fixture_response(&mut stream, 202, "Accepted", "", Some("strict-session"));
+                        continue;
+                    }
+                    "tools/list" if session_ok && thread_initialized.load(std::sync::atomic::Ordering::SeqCst) => {
+                        let call = thread_tool_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        let tools = sequences
+                            .get(call)
+                            .or_else(|| sequences.last())
+                            .cloned()
+                            .unwrap_or_default()
+                            .into_iter()
+                            .map(|name| json!({"name": name, "description": "fixture tool", "inputSchema": {}}))
+                            .collect::<Vec<_>>();
+                        json!({"jsonrpc": "2.0", "id": id, "result": {"tools": tools}}).to_string()
+                    }
+                    "resources/list" if session_ok && thread_initialized.load(std::sync::atomic::Ordering::SeqCst) => json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "result": {"resources": [{"uri": "signet://manifest", "name": "signet-manifest", "mimeType": "application/json"}]}
+                    })
+                    .to_string(),
+                    "resources/read" if session_ok && thread_initialized.load(std::sync::atomic::Ordering::SeqCst) => json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "result": {"contents": [{"uri": "signet://manifest", "mimeType": "application/json", "text": serde_json::json!({
+                            "signet": {
+                                "name": "Strict Resource App",
+                                "ui": "https://example.com/app",
+                                "defaultSize": {"w": 5, "h": 4}
+                            }
+                        }).to_string()}]}
+                    })
+                    .to_string(),
+                    _ => json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "error": {"code": -32002, "message": "not initialized"}
+                    })
+                    .to_string(),
+                };
+                write_fixture_response(&mut stream, 200, "OK", &body, Some("strict-session"));
+            }
+        });
+        Self {
+            base,
+            methods,
+            _thread: thread,
+        }
+    }
+
+    fn methods(&self) -> Vec<String> {
+        self.methods.lock().unwrap().clone()
+    }
+}
+
+fn read_fixture_http_request(
+    stream: &mut std::net::TcpStream,
+) -> std::io::Result<(Vec<(String, String)>, String)> {
+    let mut buffer = Vec::new();
+    let mut chunk = [0_u8; 1024];
+    let mut header_end = None;
+    while header_end.is_none() {
+        let read = stream.read(&mut chunk)?;
+        if read == 0 {
+            break;
+        }
+        buffer.extend_from_slice(&chunk[..read]);
+        header_end = buffer.windows(4).position(|window| window == b"\r\n\r\n");
+    }
+    let header_end = header_end.map(|idx| idx + 4).unwrap_or(buffer.len());
+    let header_text = String::from_utf8_lossy(&buffer[..header_end]);
+    let headers = header_text
+        .lines()
+        .skip(1)
+        .filter_map(|line| {
+            let (key, value) = line.split_once(':')?;
+            Some((key.trim().to_string(), value.trim().to_string()))
+        })
+        .collect::<Vec<_>>();
+    let content_length = headers
+        .iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case("content-length"))
+        .and_then(|(_, value)| value.parse::<usize>().ok())
+        .unwrap_or(0);
+    while buffer.len().saturating_sub(header_end) < content_length {
+        let read = stream.read(&mut chunk)?;
+        if read == 0 {
+            break;
+        }
+        buffer.extend_from_slice(&chunk[..read]);
+    }
+    let body = String::from_utf8_lossy(
+        &buffer
+            [header_end..header_end + content_length.min(buffer.len().saturating_sub(header_end))],
+    )
+    .to_string();
+    Ok((headers, body))
+}
+
+fn write_fixture_response(
+    stream: &mut std::net::TcpStream,
+    status: u16,
+    reason: &str,
+    body: &str,
+    session_id: Option<&str>,
+) {
+    write_fixture_response_with_type(stream, status, reason, "application/json", body, session_id);
+}
+
+fn write_fixture_response_with_type(
+    stream: &mut std::net::TcpStream,
+    status: u16,
+    reason: &str,
+    content_type: &str,
+    body: &str,
+    session_id: Option<&str>,
+) {
+    let session_header = session_id
+        .map(|value| format!("Mcp-Session-Id: {value}\r\n"))
+        .unwrap_or_default();
+    let response = format!(
+        "HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n{}\r\n{}",
+        body.len(),
+        session_header,
+        body
+    );
+    let _ = stream.write_all(response.as_bytes());
+}
+
+struct HeaderSecretMcpFixture {
+    base: String,
+    seen_headers: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    _thread: std::thread::JoinHandle<()>,
+}
+
+impl HeaderSecretMcpFixture {
+    fn start(header_name: &'static str) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind header mcp fixture");
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let seen_headers = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let thread_headers = seen_headers.clone();
+        let initialized = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let thread_initialized = initialized.clone();
+        let thread = std::thread::spawn(move || {
+            for stream in listener.incoming().take(16) {
+                let Ok(mut stream) = stream else {
+                    continue;
+                };
+                let Ok((headers, body)) = read_fixture_http_request(&mut stream) else {
+                    continue;
+                };
+                if let Some((_, value)) = headers
+                    .iter()
+                    .find(|(key, _)| key.eq_ignore_ascii_case(header_name))
+                {
+                    thread_headers.lock().unwrap().push(value.clone());
+                }
+                let value =
+                    serde_json::from_str::<serde_json::Value>(&body).unwrap_or_else(|_| json!({}));
+                let method = value["method"].as_str().unwrap_or("");
+                let id = value.get("id").cloned().unwrap_or(serde_json::Value::Null);
+                let session_ok = headers.iter().any(|(key, value)| {
+                    key.eq_ignore_ascii_case("mcp-session-id") && value == "header-session"
+                });
+                let body = match method {
+                    "initialize" => json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "result": {
+                            "protocolVersion": "2024-11-05",
+                            "capabilities": {"tools": {}, "resources": {}},
+                            "serverInfo": {"name": "Header Secret MCP", "version": "1.0.0"}
+                        }
+                    })
+                    .to_string(),
+                    "notifications/initialized" if session_ok => {
+                        thread_initialized.store(true, std::sync::atomic::Ordering::SeqCst);
+                        write_fixture_response(
+                            &mut stream,
+                            202,
+                            "Accepted",
+                            "",
+                            Some("header-session"),
+                        );
+                        continue;
+                    }
+                    "tools/list"
+                        if session_ok
+                            && thread_initialized.load(std::sync::atomic::Ordering::SeqCst) =>
+                    {
+                        json!({"jsonrpc": "2.0", "id": id, "result": {"tools": [{"name": "header_open", "inputSchema": {}}]}}).to_string()
+                    }
+                    "resources/list"
+                        if session_ok
+                            && thread_initialized.load(std::sync::atomic::Ordering::SeqCst) =>
+                    {
+                        json!({"jsonrpc": "2.0", "id": id, "result": {"resources": []}})
+                            .to_string()
+                    }
+                    _ => json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "error": {"code": -32002, "message": "not initialized"}
+                    })
+                    .to_string(),
+                };
+                write_fixture_response(&mut stream, 200, "OK", &body, Some("header-session"));
+            }
+        });
+        Self {
+            base,
+            seen_headers,
+            _thread: thread,
+        }
+    }
+
+    fn seen_headers(&self) -> Vec<String> {
+        self.seen_headers.lock().unwrap().clone()
+    }
+}
+
+struct SseMcpFixture {
+    base: String,
+    _thread: std::thread::JoinHandle<()>,
+}
+
+impl SseMcpFixture {
+    fn start(send_matching_tools_response: bool) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind sse mcp fixture");
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let initialized = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let thread_initialized = initialized.clone();
+        let thread = std::thread::spawn(move || {
+            for stream in listener.incoming().take(16) {
+                let Ok(mut stream) = stream else {
+                    continue;
+                };
+                let Ok((headers, body)) = read_fixture_http_request(&mut stream) else {
+                    continue;
+                };
+                let value =
+                    serde_json::from_str::<serde_json::Value>(&body).unwrap_or_else(|_| json!({}));
+                let method = value["method"].as_str().unwrap_or("");
+                let id = value.get("id").cloned().unwrap_or(serde_json::Value::Null);
+                let session_ok = headers.iter().any(|(key, value)| {
+                    key.eq_ignore_ascii_case("mcp-session-id") && value == "sse-session"
+                });
+                match method {
+                    "initialize" => {
+                        let body = json!({
+                            "jsonrpc": "2.0",
+                            "id": id,
+                            "result": {
+                                "protocolVersion": "2024-11-05",
+                                "capabilities": {"tools": {}, "resources": {}},
+                                "serverInfo": {"name": "SSE MCP", "version": "1.0.0"}
+                            }
+                        })
+                        .to_string();
+                        write_fixture_response(&mut stream, 200, "OK", &body, Some("sse-session"));
+                    }
+                    "notifications/initialized" if session_ok => {
+                        thread_initialized.store(true, std::sync::atomic::Ordering::SeqCst);
+                        write_fixture_response(
+                            &mut stream,
+                            202,
+                            "Accepted",
+                            "",
+                            Some("sse-session"),
+                        );
+                    }
+                    "tools/list"
+                        if session_ok
+                            && thread_initialized.load(std::sync::atomic::Ordering::SeqCst) =>
+                    {
+                        let mut body = format!(
+                            "data: {}\n\n",
+                            json!({"jsonrpc": "2.0", "method": "notifications/progress", "params": {"message": "warming"}})
+                        );
+                        if send_matching_tools_response {
+                            body.push_str(&format!(
+                                "data: {}\n\n",
+                                json!({"jsonrpc": "2.0", "id": id, "result": {"tools": [{"name": "sse_open", "inputSchema": {}}]}})
+                            ));
+                        }
+                        write_fixture_response_with_type(
+                            &mut stream,
+                            200,
+                            "OK",
+                            "text/event-stream",
+                            &body,
+                            Some("sse-session"),
+                        );
+                    }
+                    "resources/list"
+                        if session_ok
+                            && thread_initialized.load(std::sync::atomic::Ordering::SeqCst) =>
+                    {
+                        let body = json!({"jsonrpc": "2.0", "id": id, "result": {"resources": []}})
+                            .to_string();
+                        write_fixture_response(&mut stream, 200, "OK", &body, Some("sse-session"));
+                    }
+                    _ => {
+                        let body = json!({
+                            "jsonrpc": "2.0",
+                            "id": id,
+                            "error": {"code": -32002, "message": "not initialized"}
+                        })
+                        .to_string();
+                        write_fixture_response(&mut stream, 200, "OK", &body, Some("sse-session"));
+                    }
+                }
+            }
+        });
+        Self {
+            base,
+            _thread: thread,
+        }
+    }
+}
+
+struct AcceptedToolsMcpFixture {
+    base: String,
+    _thread: std::thread::JoinHandle<()>,
+}
+
+impl AcceptedToolsMcpFixture {
+    fn start() -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind accepted tools mcp fixture");
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let initialized = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let thread_initialized = initialized.clone();
+        let thread = std::thread::spawn(move || {
+            for stream in listener.incoming().take(16) {
+                let Ok(mut stream) = stream else {
+                    continue;
+                };
+                let Ok((headers, body)) = read_fixture_http_request(&mut stream) else {
+                    continue;
+                };
+                let value =
+                    serde_json::from_str::<serde_json::Value>(&body).unwrap_or_else(|_| json!({}));
+                let method = value["method"].as_str().unwrap_or("");
+                let id = value.get("id").cloned().unwrap_or(serde_json::Value::Null);
+                let session_ok = headers.iter().any(|(key, value)| {
+                    key.eq_ignore_ascii_case("mcp-session-id") && value == "accepted-tools-session"
+                });
+                match method {
+                    "initialize" => {
+                        let body = json!({
+                            "jsonrpc": "2.0",
+                            "id": id,
+                            "result": {
+                                "protocolVersion": "2024-11-05",
+                                "capabilities": {"tools": {}, "resources": {}},
+                                "serverInfo": {"name": "Accepted Tools MCP", "version": "1.0.0"}
+                            }
+                        })
+                        .to_string();
+                        write_fixture_response(
+                            &mut stream,
+                            200,
+                            "OK",
+                            &body,
+                            Some("accepted-tools-session"),
+                        );
+                    }
+                    "notifications/initialized" if session_ok => {
+                        thread_initialized.store(true, std::sync::atomic::Ordering::SeqCst);
+                        write_fixture_response(
+                            &mut stream,
+                            202,
+                            "Accepted",
+                            "",
+                            Some("accepted-tools-session"),
+                        );
+                    }
+                    "tools/list"
+                        if session_ok
+                            && thread_initialized.load(std::sync::atomic::Ordering::SeqCst) =>
+                    {
+                        write_fixture_response(
+                            &mut stream,
+                            202,
+                            "Accepted",
+                            "",
+                            Some("accepted-tools-session"),
+                        );
+                    }
+                    _ => {
+                        let body = json!({
+                            "jsonrpc": "2.0",
+                            "id": id,
+                            "error": {"code": -32002, "message": "not initialized"}
+                        })
+                        .to_string();
+                        write_fixture_response(
+                            &mut stream,
+                            200,
+                            "OK",
+                            &body,
+                            Some("accepted-tools-session"),
+                        );
+                    }
+                }
+            }
+        });
+        Self {
+            base,
+            _thread: thread,
+        }
+    }
+}
+
+fn read_daemon_log_text(root: &std::path::Path) -> String {
+    let log_dir = root.join(".daemon/logs");
+    let mut text = String::new();
+    let Ok(entries) = std::fs::read_dir(log_dir) else {
+        return text;
+    };
+    for entry in entries.flatten() {
+        if let Ok(content) = std::fs::read_to_string(entry.path()) {
+            text.push_str(&content);
+        }
+    }
+    text
+}
+
+fn write_installed_mcp_server(root: &std::path::Path, id: &str, name: &str, url: &str) {
+    write_installed_mcp_server_config(
+        root,
+        id,
+        name,
+        json!({"transport": "http", "url": url, "headers": {}, "timeoutMs": 5000}),
+    );
+}
+
+fn write_installed_mcp_server_config(
+    root: &std::path::Path,
+    id: &str,
+    name: &str,
+    config: serde_json::Value,
+) {
+    let marketplace = root.join("marketplace");
+    std::fs::create_dir_all(&marketplace).unwrap();
+    std::fs::write(
+        marketplace.join("mcp-servers.json"),
+        serde_json::to_string_pretty(&json!([{
+            "id": id,
+            "source": "manual",
+            "catalogId": null,
+            "name": name,
+            "description": "Strict MCP fixture",
+            "category": "Other",
+            "homepage": null,
+            "official": false,
+            "enabled": true,
+            "scope": {"harnesses": [], "workspaces": [], "channels": []},
+            "config": config,
+            "installedAt": "2026-01-01T00:00:00Z",
+            "updatedAt": "2026-01-01T00:00:00Z"
+        }]))
+        .unwrap(),
+    )
+    .unwrap();
 }
 
 struct MarketplaceCatalogFixture {
@@ -2334,6 +3032,132 @@ async fn health_returns_ok() {
 
 #[tokio::test]
 #[ignore = "requires built daemon binary"]
+async fn cors_replays_ts_allowed_denied_and_preflight_contract() {
+    let yaml = "agent:\n  name: test-agent\n  version: 1\nnetwork:\n  mode: tailscale\nmemory:\n  pipelineV2:\n    enabled: false\n";
+    let server = TestServer::start_with_agent_yaml_files_setup_and_env(
+        None,
+        yaml,
+        &[],
+        |_| {},
+        &[("SIGNET_BIND", "0.0.0.0")],
+    )
+    .await;
+
+    let tailscale_ip_origin = format!("http://100.100.100.100:{}", server.port);
+    let tailscale_dns_origin = format!("https://test.tailnet.ts.net:{}", server.port);
+    let allowed_origins = [
+        tailscale_ip_origin.as_str(),
+        tailscale_dns_origin.as_str(),
+        "app://signet",
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:3850",
+        "http://127.0.0.1:3850",
+    ];
+
+    for origin in allowed_origins {
+        let resp = server
+            .client
+            .get(format!("{}/health", server.base))
+            .header("Origin", origin)
+            .send()
+            .await
+            .expect("cors GET request failed");
+        assert_eq!(
+            resp.status(),
+            200,
+            "allowed origin {origin} should reach health"
+        );
+        assert_eq!(
+            resp.headers()
+                .get("access-control-allow-origin")
+                .and_then(|value| value.to_str().ok()),
+            Some(origin),
+            "allowed origin {origin} should be echoed"
+        );
+        assert_ne!(
+            resp.headers()
+                .get("access-control-allow-origin")
+                .and_then(|value| value.to_str().ok()),
+            Some("*"),
+            "CORS must not use a permissive wildcard origin"
+        );
+        assert_eq!(
+            resp.headers()
+                .get("access-control-allow-credentials")
+                .and_then(|value| value.to_str().ok()),
+            Some("true")
+        );
+    }
+
+    let denied_origin = format!("http://example.com:{}", server.port);
+    let resp = server
+        .client
+        .get(format!("{}/health", server.base))
+        .header("Origin", &denied_origin)
+        .send()
+        .await
+        .expect("cors denied GET request failed");
+    assert_eq!(resp.status(), 200);
+    assert!(
+        resp.headers().get("access-control-allow-origin").is_none(),
+        "denied origins must not receive Access-Control-Allow-Origin"
+    );
+
+    let resp = server
+        .client
+        .request(reqwest::Method::OPTIONS, format!("{}/health", server.base))
+        .header("Origin", &tailscale_ip_origin)
+        .header("Access-Control-Request-Method", "POST")
+        .header(
+            "Access-Control-Request-Headers",
+            "content-type, x-signet-runtime-path",
+        )
+        .send()
+        .await
+        .expect("cors OPTIONS request failed");
+    assert_eq!(resp.status(), 204);
+    let headers = resp.headers();
+    assert_eq!(
+        headers
+            .get("access-control-allow-origin")
+            .and_then(|value| value.to_str().ok()),
+        Some(tailscale_ip_origin.as_str())
+    );
+    assert_eq!(
+        headers
+            .get("access-control-allow-credentials")
+            .and_then(|value| value.to_str().ok()),
+        Some("true")
+    );
+    assert_eq!(
+        headers
+            .get("access-control-allow-methods")
+            .and_then(|value| value.to_str().ok()),
+        Some("GET,HEAD,PUT,POST,DELETE,PATCH")
+    );
+    assert_eq!(
+        headers
+            .get("access-control-allow-headers")
+            .and_then(|value| value.to_str().ok()),
+        Some("content-type,x-signet-runtime-path")
+    );
+    assert!(headers.get("access-control-expose-headers").is_none());
+    let vary = headers
+        .get_all("vary")
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .collect::<Vec<_>>()
+        .join(",");
+    assert!(vary.split(',').any(|value| value.trim() == "Origin"));
+    assert!(
+        vary.split(',')
+            .any(|value| value.trim() == "Access-Control-Request-Headers")
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
 async fn status_returns_db_info() {
     let server = TestServer::start().await;
     let resp = server.get("/api/status").await;
@@ -2342,6 +3166,149 @@ async fn status_returns_db_info() {
     assert_eq!(body["status"], "running");
     assert!(body["db"]["memories"].is_number());
     assert!(body["db"]["entities"].is_number());
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn team_global_auth_middleware_replays_ts_open_and_protected_paths() {
+    // TS parity: platform/daemon/src/middleware.ts:61-68 mounts auth globally;
+    // platform/daemon/src/auth/middleware.ts:30-45 keeps /health,
+    // /api/auth/{login,methods,whoami}, /api/auth/{sso,saml}/*, and dashboard
+    // GET/HEAD requests open while protected API routes require Bearer auth.
+    let server = TestServer::start_team_auth().await;
+    let admin_token = TestServer::scoped_role_token("default", "admin");
+
+    for path in ["/health", "/api/auth/methods", "/"] {
+        let resp = server.get(path).await;
+        assert_eq!(
+            resp.status(),
+            200,
+            "open path should not require auth: {path}"
+        );
+    }
+
+    let remember_body = json!({
+        "content": "Critical global auth middleware replay memory",
+        "type": "fact"
+    });
+    let resp = server
+        .post("/api/memory/remember", remember_body.clone())
+        .await;
+    assert_eq!(resp.status(), 401);
+    assert_eq!(server.json(resp).await["error"], "authentication required");
+
+    let resp = server
+        .post_bearer("/api/memory/remember", remember_body, &admin_token)
+        .await;
+    assert_eq!(resp.status(), 200);
+
+    let recall_body = json!({"query": "Critical global auth middleware", "limit": 1});
+    let resp = server.post("/api/memory/recall", recall_body.clone()).await;
+    assert_eq!(resp.status(), 401);
+    assert_eq!(server.json(resp).await["error"], "authentication required");
+
+    let resp = server
+        .post_bearer("/api/memory/recall", recall_body, &admin_token)
+        .await;
+    assert_eq!(resp.status(), 200);
+
+    let widget_body = json!({
+        "serverId": "critical-auth-widget",
+        "html": "<section>auth ok</section>"
+    });
+    let resp = server
+        .post("/api/os/widget/generate", widget_body.clone())
+        .await;
+    assert_eq!(resp.status(), 401);
+    assert_eq!(server.json(resp).await["error"], "authentication required");
+
+    let resp = server
+        .post_bearer("/api/os/widget/generate", widget_body, &admin_token)
+        .await;
+    assert_eq!(resp.status(), 200);
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn memory_remember_enforces_ts_project_scope_contract() {
+    let server = TestServer::start_team_auth().await;
+    let scoped_agent = TestServer::project_scoped_role_token("default", "project-a", "agent");
+    let scoped_admin = TestServer::project_scoped_role_token("default", "project-a", "admin");
+
+    let resp = server
+        .post_bearer(
+            "/api/memory/remember",
+            json!({"content": "Project scoped remember omission"}),
+            &scoped_agent,
+        )
+        .await;
+    assert_eq!(resp.status(), 403);
+    assert_eq!(
+        server.json(resp).await["error"],
+        "scope restricted to project 'project-a'"
+    );
+
+    let resp = server
+        .post_bearer(
+            "/api/memory/remember",
+            json!({"content": "Project scoped remember mismatch", "project": "project-b"}),
+            &scoped_agent,
+        )
+        .await;
+    assert_eq!(resp.status(), 403);
+
+    let resp = server
+        .post_bearer(
+            "/api/memory/remember",
+            json!({"content": "Project scoped remember match", "project": "project-a"}),
+            &scoped_agent,
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+
+    let resp = server
+        .post_bearer(
+            "/api/memory/remember",
+            json!({"content": "Admin project scope omitted"}),
+            &scoped_admin,
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+
+    let resp = server
+        .post_bearer(
+            "/api/memory/remember",
+            json!({"content": "Admin project scope mismatch", "project": "project-b"}),
+            &scoped_admin,
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+
+    let conn = rusqlite::Connection::open(server.db_path()).expect("open replay db");
+    let matched_project: Option<String> = conn
+        .query_row(
+            "SELECT project FROM memories WHERE content = 'Project scoped remember match'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("matching project-scoped memory");
+    assert_eq!(matched_project.as_deref(), Some("project-a"));
+    let admin_omitted_project: Option<String> = conn
+        .query_row(
+            "SELECT project FROM memories WHERE content = 'Admin project scope omitted'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("admin omitted project memory");
+    assert_eq!(admin_omitted_project, None);
+    let admin_requested_project: Option<String> = conn
+        .query_row(
+            "SELECT project FROM memories WHERE content = 'Admin project scope mismatch'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("admin requested project memory");
+    assert_eq!(admin_requested_project.as_deref(), Some("project-b"));
 }
 
 #[tokio::test]
@@ -2372,6 +3339,222 @@ async fn memory_crud() {
     // List should now have >= 1
     let resp = server.get("/api/memories").await;
     assert_eq!(resp.status(), 200);
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn memory_get_scopes_agent_and_excludes_archived_visibility() {
+    let server = TestServer::start_team_auth().await;
+    server.seed_scoping_audit_fixture();
+    let agent_a = TestServer::scoped_token("agent-a");
+
+    let resp = server
+        .get_bearer("/api/memory/mem-scope-agent-a", &agent_a)
+        .await;
+    let status = resp.status();
+    let visible = server.json(resp).await;
+    assert_eq!(status, 200, "unexpected memory get response: {visible}");
+    assert_eq!(visible["id"], "mem-scope-agent-a");
+
+    let resp = server
+        .get_bearer("/api/memory/mem-scope-agent-b", &agent_a)
+        .await;
+    assert_eq!(resp.status(), 404);
+
+    let resp = server
+        .get_bearer("/api/memory/mem-scope-archived", &agent_a)
+        .await;
+    assert_eq!(resp.status(), 404);
+
+    let resp = server
+        .get_bearer("/api/memory/review-queue", &agent_a)
+        .await;
+    assert_eq!(resp.status(), 200);
+    let queue = server.json(resp).await;
+    assert!(
+        queue["items"]
+            .as_array()
+            .expect("items array")
+            .iter()
+            .all(|item| item["memory_id"] != "mem-scope-agent-b"),
+        "agent-b review item leaked to agent-a: {queue}"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn memory_delete_rejects_cross_agent_and_archived_rows() {
+    let server = TestServer::start_team_auth().await;
+    server.seed_scoping_audit_fixture();
+    let agent_a = TestServer::scoped_token("agent-a");
+
+    let resp = server
+        .client
+        .delete(format!("{}/api/memory/mem-scope-agent-b", server.base))
+        .bearer_auth(&agent_a)
+        .json(&json!({"reason": "scope audit"}))
+        .send()
+        .await
+        .expect("delete request failed");
+    assert_eq!(resp.status(), 404);
+    let blocked = server.json(resp).await;
+    assert_eq!(blocked["status"], "not_found");
+
+    let resp = server
+        .client
+        .delete(format!("{}/api/memory/mem-scope-archived", server.base))
+        .bearer_auth(&agent_a)
+        .json(&json!({"reason": "scope audit"}))
+        .send()
+        .await
+        .expect("delete request failed");
+    assert_eq!(resp.status(), 404);
+
+    let conn = rusqlite::Connection::open(server.db_path()).expect("open replay db");
+    let still_live: i64 = conn
+        .query_row(
+            "SELECT is_deleted FROM memories WHERE id = 'mem-scope-agent-b'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("agent-b memory row");
+    assert_eq!(still_live, 0);
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn memory_patch_scopes_mutation_agent_and_excludes_archived_rows() {
+    let server = TestServer::start_team_auth().await;
+    server.seed_scoping_audit_fixture();
+    let agent_a = TestServer::scoped_token("agent-a");
+
+    let resp = server
+        .patch_bearer(
+            "/api/memory/mem-scope-agent-b",
+            json!({
+                "content": "Agent A must not patch agent B memory.",
+                "reason": "scope audit patch",
+            }),
+            &agent_a,
+        )
+        .await;
+    let status = resp.status();
+    let blocked = server.json(resp).await;
+    assert!(
+        status == 404 || status == 403,
+        "cross-agent patch unexpectedly allowed: status={status} body={blocked}"
+    );
+
+    let resp = server
+        .patch_bearer(
+            "/api/memory/mem-scope-archived",
+            json!({
+                "content": "Agent A must not patch archived memory.",
+                "reason": "scope audit patch archived",
+            }),
+            &agent_a,
+        )
+        .await;
+    let status = resp.status();
+    let archived = server.json(resp).await;
+    assert!(
+        status == 404 || status == 403,
+        "archived patch unexpectedly allowed: status={status} body={archived}"
+    );
+
+    let own_content = "Agent A PATCH scoping audit update succeeds.";
+    let resp = server
+        .patch_bearer(
+            "/api/memory/mem-scope-agent-a",
+            json!({
+                "content": own_content,
+                "reason": "scope audit patch own",
+            }),
+            &agent_a,
+        )
+        .await;
+    let status = resp.status();
+    let updated = server.json(resp).await;
+    assert_eq!(status, 200, "own patch rejected: {updated}");
+    assert_eq!(updated["status"], "updated");
+
+    let conn = rusqlite::Connection::open(server.db_path()).expect("open replay db");
+    let (agent_a_content, agent_a_version): (String, i64) = conn
+        .query_row(
+            "SELECT content, version FROM memories WHERE id = ?1",
+            rusqlite::params!["mem-scope-agent-a"],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("agent-a memory row");
+    assert_eq!(agent_a_content, own_content);
+    assert_eq!(agent_a_version, 2);
+
+    let (agent_b_content, agent_b_version): (String, i64) = conn
+        .query_row(
+            "SELECT content, version FROM memories WHERE id = ?1",
+            rusqlite::params!["mem-scope-agent-b"],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("agent-b memory row");
+    assert_eq!(
+        agent_b_content,
+        "Agent B private route audit memory must not leak."
+    );
+    assert_eq!(agent_b_version, 1);
+
+    let (archived_content, archived_version): (String, i64) = conn
+        .query_row(
+            "SELECT content, version FROM memories WHERE id = ?1",
+            rusqlite::params!["mem-scope-archived"],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("archived memory row");
+    assert_eq!(
+        archived_content,
+        "Archived route audit memory must not leak."
+    );
+    assert_eq!(archived_version, 1);
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn cross_agent_routes_reject_wrong_agent_session_scope() {
+    let server = TestServer::start_team_auth().await;
+    let agent_a = TestServer::scoped_token("agent-a");
+
+    let resp = server
+        .post_bearer(
+            "/api/cross-agent/presence",
+            json!({
+                "harness": "contract-replay",
+                "sessionKey": "agent:agent-b:scope-audit",
+                "agentId": "agent-a"
+            }),
+            &agent_a,
+        )
+        .await;
+    assert_eq!(resp.status(), 403);
+    let body = server.json(resp).await;
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("session_key does not belong"),
+        "unexpected cross-agent presence error: {body}"
+    );
+
+    let resp = server
+        .post_bearer(
+            "/api/cross-agent/messages",
+            json!({
+                "content": "wrong sender scope",
+                "fromAgentId": "agent-b",
+                "toAgentId": "agent-a"
+            }),
+            &agent_a,
+        )
+        .await;
+    assert_eq!(resp.status(), 403);
 }
 
 #[tokio::test]
@@ -4459,21 +5642,28 @@ async fn os_routes_replay_empty_state_and_validation_shapes() {
     assert_eq!(body["query"]["limit"], 500);
     assert_eq!(body["query"]["windowMs"], 1000);
 
-    let resp = server
-        .get("/api/os/events/stream?type=browser.navigate")
-        .await;
-    assert_eq!(resp.status(), 200);
-    let text = resp.text().await.expect("os events stream body");
+    let mut event_stream = server
+        .client
+        .get(format!("{}/api/os/events/stream?type=widget", server.base))
+        .send()
+        .await
+        .expect("open os event stream");
+    assert_eq!(event_stream.status(), 200);
+    let text = next_sse_chunk(&mut event_stream).await;
     assert!(text.contains("\"type\":\"connected\""));
-    assert!(text.contains("\"subscribedTo\":\"browser.navigate\""));
+    assert!(text.contains("\"subscribedTo\":\"widget\""));
+
+    let resp = server.get("/api/os/events/stats").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["bufferSize"], 0);
+    assert!(body["subscriptionCount"].as_u64().unwrap_or_default() >= 1);
 
     let resp = server.get("/api/os/context").await;
     assert_eq!(resp.status(), 200);
     let body = server.json(resp).await;
     assert_eq!(body["events"], json!([]));
-
-    let resp = server.get("/api/os/events/stats").await;
-    assert_eq!(resp.status(), 200);
+    assert_eq!(body["totalEvents"], 0);
 
     let resp = server.get("/api/os/agent-sessions").await;
     assert_eq!(resp.status(), 200);
@@ -4481,10 +5671,25 @@ async fn os_routes_replay_empty_state_and_validation_shapes() {
     assert_eq!(body["sessions"], json!([]));
     assert_eq!(body["count"], 0);
 
-    let resp = server.get("/api/os/agent-events").await;
-    assert_eq!(resp.status(), 200);
-    let text = resp.text().await.expect("os agent stream body");
-    assert!(text.contains("\"type\":\"connected\""));
+    let mut missing_agent_stream = server
+        .client
+        .get(format!(
+            "{}/api/os/agent-events?session=missing-session",
+            server.base
+        ))
+        .send()
+        .await
+        .expect("open missing agent event stream");
+    assert_eq!(missing_agent_stream.status(), 200);
+    let missing_agent_chunk = next_sse_chunk(&mut missing_agent_stream).await;
+    assert!(missing_agent_chunk.contains(r#""type":"error""#));
+    assert!(missing_agent_chunk.contains("Session not found"));
+    let ended = tokio::time::timeout(Duration::from_secs(2), missing_agent_stream.chunk())
+        .await
+        .expect("missing-session stream did not close")
+        .expect("missing-session stream read failed")
+        .is_none();
+    assert!(ended, "missing-session error stream should close");
 
     let resp = server.post("/api/os/agent-execute", json!({})).await;
     assert_eq!(resp.status(), 400);
@@ -4500,8 +5705,24 @@ async fn os_routes_replay_empty_state_and_validation_shapes() {
     assert_eq!(resp.status(), 200);
     let body = server.json(resp).await;
     let session_id = body["sessionId"].as_str().expect("session id");
-    assert!(session_id.starts_with("agent-"));
+    assert!(session_id.starts_with("agent_"));
     assert_eq!(body["serverId"], "browser");
+
+    let mut agent_stream = server
+        .client
+        .get(format!(
+            "{}/api/os/agent-events?session={}",
+            server.base, session_id
+        ))
+        .send()
+        .await
+        .expect("open agent event stream");
+    assert_eq!(agent_stream.status(), 200);
+    let first_agent_chunk = next_sse_chunk(&mut agent_stream).await;
+    assert!(
+        first_agent_chunk.contains("\"type\":\"connected\"")
+            || first_agent_chunk.contains("agentStart")
+    );
 
     let resp = server
         .post(
@@ -4533,12 +5754,21 @@ async fn os_routes_replay_empty_state_and_validation_shapes() {
     let resp = server
         .post(
             "/api/os/agent-state",
-            json!({"sessionId": session_id, "domState": {"url": "http://localhost"}}),
+            json!({"sessionId": session_id, "domState": {"url": "http://localhost"}, "status": "done", "step": 1, "result": "opened settings"}),
         )
         .await;
     assert_eq!(resp.status(), 200);
     let body = server.json(resp).await;
     assert_eq!(body["success"], true);
+    let agent_update = read_sse_until(&mut agent_stream, "done").await;
+    assert!(agent_update.contains(session_id));
+    assert!(agent_update.contains("done"));
+
+    let resp = server.get("/api/os/agent-sessions").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["sessions"][0]["status"], "done");
+    assert_eq!(body["sessions"][0]["step"], 1);
 
     let resp = server
         .post("/api/os/agent-state", json!({"sessionId": "missing"}))
@@ -4600,7 +5830,7 @@ async fn os_routes_replay_empty_state_and_validation_shapes() {
     let resp = server
         .post(
             "/api/os/install",
-            json!({"url": "https://example.com/mcp", "name": "Example MCP"}),
+            json!({"url": "https://example.com/mcp", "name": "Example MCP", "autoPlace": true}),
         )
         .await;
     assert_eq!(resp.status(), 200);
@@ -4608,30 +5838,493 @@ async fn os_routes_replay_empty_state_and_validation_shapes() {
     assert_eq!(body["ok"], true);
     assert_eq!(body["widgetId"], "example-mcp");
     assert_eq!(body["manifest"], serde_json::Value::Null);
-    let installed: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(server._tmpdir.path().join("marketplace/mcp-servers.json"))
-            .unwrap(),
-    )
-    .unwrap();
+    let installed_path = server._tmpdir.path().join("marketplace/mcp-servers.json");
+    let mut installed: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&installed_path).unwrap()).unwrap();
     assert_eq!(installed[0]["id"], "example-mcp");
     assert_eq!(installed[0]["source"], "manual");
     assert_eq!(installed[0]["config"]["transport"], "http");
     assert_eq!(installed[0]["config"]["url"], "https://example.com/mcp");
+    installed[0]["config"]["url"] = json!("http://127.0.0.1:9/mcp");
+    installed[0]["config"]["timeoutMs"] = json!(1000);
+    std::fs::write(
+        &installed_path,
+        serde_json::to_string_pretty(&installed).unwrap(),
+    )
+    .unwrap();
+
+    let resp = server.get("/api/os/tray").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["count"], 1);
+    assert_eq!(body["entries"][0]["id"], "example-mcp");
+    assert_eq!(body["entries"][0]["state"], "grid");
+
+    let resp = server
+        .patch(
+            "/api/os/tray/example-mcp",
+            json!({"state": "dock", "gridPosition": {"x": 2, "y": 3, "w": 4, "h": 3}}),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["success"], true);
+    assert_eq!(body["entry"]["state"], "dock");
+
+    let resp = server.get("/api/os/tray/example-mcp").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["entry"]["gridPosition"]["x"], 2);
+
+    let resp = server
+        .post("/api/os/tray/example-mcp/reprobe", json!({}))
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["success"], true);
+    assert_eq!(body["probe"]["ok"], false);
+    assert!(body["probe"]["error"].as_str().unwrap_or_default().len() > 0);
+    assert_eq!(body["probe"]["declaredManifest"], serde_json::Value::Null);
+    assert_eq!(body["probe"]["autoCard"]["tools"], json!([]));
+    assert_eq!(body["probe"]["autoCard"]["resources"], json!([]));
+    assert_eq!(body["probe"]["toolCount"], 0);
+    assert_eq!(body["probe"]["resourceCount"], 0);
+    assert_eq!(body["probe"]["hasAppResources"], false);
+    assert!(body["probe"]["probedAt"].as_str().is_some());
+
+    let resp = server.get("/api/os/tray/example-mcp/probe").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["probe"]["serverId"], "example-mcp");
+    assert_eq!(body["probe"]["ok"], false);
 
     let resp = server.post("/api/os/widget/generate", json!({})).await;
     assert_eq!(resp.status(), 400);
     let body = server.json(resp).await;
     assert_eq!(body["error"], "serverId is required");
 
-    let resp = server.get("/api/os/widget/missing").await;
+    let resp = server
+        .post(
+            "/api/os/widget/generate",
+            json!({"serverId": "example-mcp", "force": true}),
+        )
+        .await;
+    assert_eq!(resp.status(), 501);
+    let body = server.json(resp).await;
+    assert_eq!(body["status"], "error");
+    assert!(body["error"].as_str().unwrap_or_default().contains("html"));
+    let error_event_text = read_sse_until(&mut event_stream, "widget.error").await;
+    assert!(error_event_text.contains("example-mcp"));
+
+    let resp = server
+        .post(
+            "/api/os/widget/generate",
+            json!({"serverId": "example-mcp", "html": "<section>Example widget</section>"}),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["status"], "cached");
+    assert_eq!(body["html"], "<section>Example widget</section>");
+
+    let event_text = read_sse_until(&mut event_stream, "widget.generated").await;
+    assert!(event_text.contains("example-mcp"));
+
+    let resp = server.get("/api/os/events?type=widget&limit=10").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert!(body["count"].as_u64().unwrap_or_default() >= 2);
+    let event_types = body["events"]
+        .as_array()
+        .expect("events array")
+        .iter()
+        .filter_map(|event| event["type"].as_str())
+        .collect::<Vec<_>>();
+    assert!(event_types.contains(&"widget.error"));
+    assert!(event_types.contains(&"widget.generated"));
+
+    let resp = server.get("/api/os/context").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert!(body["totalEvents"].as_u64().unwrap_or_default() >= 1);
+    assert!(body["activeSources"].as_u64().unwrap_or_default() >= 1);
+
+    let resp = server.get("/api/os/widget/example-mcp").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["html"], "<section>Example widget</section>");
+    assert!(body["generatedAt"].as_str().is_some());
+
+    let resp = server.delete("/api/os/widget/example-mcp").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["success"], true);
+
+    let resp = server.get("/api/os/widget/example-mcp").await;
+    assert_eq!(resp.status(), 404);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "Widget not found");
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn os_reprobe_http_mcp_initializes_before_probe_methods() {
+    let fixture = StrictMcpFixture::start(vec![vec!["open"]]);
+    let server = TestServer::start_with_agent_yaml_files_and_setup(
+        None,
+        "agent:\n  name: test-agent\n  version: 1\n",
+        &[],
+        |root| {
+            write_installed_mcp_server(
+                root,
+                "strict-mcp",
+                "Strict MCP",
+                &format!("{}/mcp", fixture.base),
+            )
+        },
+    )
+    .await;
+
+    let resp = server
+        .post("/api/os/tray/strict-mcp/reprobe", json!({}))
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["success"], true);
+    assert_eq!(body["probe"]["ok"], true);
+    assert_eq!(body["probe"]["toolCount"], 1);
+    assert_eq!(body["probe"]["autoCard"]["tools"][0]["name"], "open");
+    assert_eq!(
+        body["probe"]["declaredManifest"]["name"],
+        "Strict Resource App"
+    );
+    assert_eq!(
+        body["probe"]["declaredManifest"]["ui"],
+        "https://example.com/app"
+    );
+
+    let methods = fixture.methods();
+    assert_eq!(
+        methods,
+        vec![
+            "initialize",
+            "notifications/initialized",
+            "tools/list",
+            "resources/list",
+            "resources/read",
+        ]
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn os_reprobe_tool_changes_invalidate_cached_widget_and_emit_event() {
+    let fixture = StrictMcpFixture::start(vec![vec!["first"], vec!["second"]]);
+    let server = TestServer::start_with_agent_yaml_files_and_setup(
+        None,
+        "agent:\n  name: test-agent\n  version: 1\n",
+        &[],
+        |root| {
+            write_installed_mcp_server(
+                root,
+                "strict-mcp",
+                "Strict MCP",
+                &format!("{}/mcp", fixture.base),
+            )
+        },
+    )
+    .await;
+
+    let resp = server
+        .post("/api/os/tray/strict-mcp/reprobe", json!({}))
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["probe"]["ok"], true);
+    assert_eq!(body["probe"]["autoCard"]["tools"][0]["name"], "first");
+
+    let resp = server
+        .post(
+            "/api/os/widget/generate",
+            json!({"serverId": "strict-mcp", "html": "<section>stale widget</section>"}),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["status"], "cached");
+
+    let resp = server.get("/api/os/widget/strict-mcp").await;
+    assert_eq!(resp.status(), 200);
+
+    let resp = server
+        .post("/api/os/tray/strict-mcp/reprobe", json!({}))
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["probe"]["ok"], true);
+    assert_eq!(body["probe"]["autoCard"]["tools"][0]["name"], "second");
+
+    let resp = server.get("/api/os/widget/strict-mcp").await;
     assert_eq!(resp.status(), 404);
     let body = server.json(resp).await;
     assert_eq!(body["error"], "Widget not found");
 
-    let resp = server.delete("/api/os/widget/missing").await;
+    let resp = server
+        .get("/api/os/events?type=widget.invalidated&limit=10")
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    let invalidated = body["events"]
+        .as_array()
+        .expect("events array")
+        .iter()
+        .any(|event| {
+            event["type"] == "widget.invalidated"
+                && event["source"] == "system"
+                && event["payload"]["serverId"] == "strict-mcp"
+        });
+    assert!(invalidated, "widget.invalidated event missing: {body}");
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn os_reprobe_resolves_secret_refs_for_http_headers_without_log_leak() {
+    const HEADER_NAME: &str = "x-probe-token";
+    const SECRET_NAME: &str = "PROBE_HEADER_TOKEN";
+    const SECRET_VALUE: &str = "resolved-header-token";
+    let fixture = HeaderSecretMcpFixture::start(HEADER_NAME);
+    let server = TestServer::start().await;
+
+    let resp = server
+        .post(
+            &format!("/api/secrets/{SECRET_NAME}"),
+            json!({"value": SECRET_VALUE}),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    write_installed_mcp_server_config(
+        server._tmpdir.path(),
+        "header-secret-mcp",
+        "Header Secret MCP",
+        json!({
+            "transport": "http",
+            "url": format!("{}/mcp", fixture.base),
+            "headers": {HEADER_NAME: format!("secret://{SECRET_NAME}")},
+            "timeoutMs": 5000
+        }),
+    );
+
+    let resp = server
+        .post("/api/os/tray/header-secret-mcp/reprobe", json!({}))
+        .await;
     assert_eq!(resp.status(), 200);
     let body = server.json(resp).await;
     assert_eq!(body["success"], true);
+    assert_eq!(body["probe"]["ok"], true);
+    assert_eq!(body["probe"]["toolCount"], 1);
+
+    let seen_headers = fixture.seen_headers();
+    assert!(
+        seen_headers.iter().any(|value| value == SECRET_VALUE),
+        "resolved header was not sent"
+    );
+    assert!(
+        !seen_headers
+            .iter()
+            .any(|value| value.starts_with("secret://")),
+        "secret reference was sent instead of resolving"
+    );
+    let body_text = body.to_string();
+    assert!(
+        !body_text.contains(SECRET_VALUE),
+        "probe response leaked resolved secret"
+    );
+    assert!(
+        !body_text.contains(&format!("secret://{SECRET_NAME}")),
+        "probe response leaked secret reference"
+    );
+    let logs = read_daemon_log_text(server._tmpdir.path());
+    assert!(
+        !logs.contains(SECRET_VALUE),
+        "daemon logs leaked resolved secret"
+    );
+    assert!(
+        !logs.contains(&format!("secret://{SECRET_NAME}")),
+        "daemon logs leaked secret reference"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn os_reprobe_sse_ignores_notifications_and_requires_matching_id() {
+    let matching = SseMcpFixture::start(true);
+    let server = TestServer::start_with_agent_yaml_files_and_setup(
+        None,
+        "agent:\n  name: test-agent\n  version: 1\n",
+        &[],
+        |root| {
+            write_installed_mcp_server(
+                root,
+                "sse-mcp",
+                "SSE MCP",
+                &format!("{}/mcp", matching.base),
+            )
+        },
+    )
+    .await;
+
+    let resp = server.post("/api/os/tray/sse-mcp/reprobe", json!({})).await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["success"], true);
+    assert_eq!(body["probe"]["ok"], true);
+    assert_eq!(body["probe"]["toolCount"], 1);
+    assert_eq!(body["probe"]["autoCard"]["tools"][0]["name"], "sse_open");
+
+    let missing = SseMcpFixture::start(false);
+    write_installed_mcp_server(
+        server._tmpdir.path(),
+        "sse-mcp-missing",
+        "SSE MCP Missing",
+        &format!("{}/mcp", missing.base),
+    );
+    let resp = server
+        .post("/api/os/tray/sse-mcp-missing/reprobe", json!({}))
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["success"], true);
+    assert_eq!(body["probe"]["ok"], false);
+    assert_eq!(body["probe"]["toolCount"], 0);
+    assert!(
+        body["probe"]["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("missing JSON-RPC response for id 2")
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn os_reprobe_rejects_accepted_tools_list_without_jsonrpc_response() {
+    let fixture = AcceptedToolsMcpFixture::start();
+    let server = TestServer::start_with_agent_yaml_files_and_setup(
+        None,
+        "agent:\n  name: test-agent\n  version: 1\n",
+        &[],
+        |root| {
+            write_installed_mcp_server(
+                root,
+                "accepted-tools-mcp",
+                "Accepted Tools MCP",
+                &format!("{}/mcp", fixture.base),
+            )
+        },
+    )
+    .await;
+
+    let resp = server
+        .post("/api/os/tray/accepted-tools-mcp/reprobe", json!({}))
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["success"], true);
+    assert_eq!(body["probe"]["ok"], false);
+    assert_eq!(body["probe"]["toolCount"], 0);
+    assert_eq!(
+        body["probe"]["autoCard"]["tools"].as_array().unwrap().len(),
+        0
+    );
+    assert!(
+        body["probe"]["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("missing JSON-RPC response for id 2"),
+        "expected missing-response error, got {body}"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn os_reprobe_stdio_secret_env_timeout_kills_child() {
+    const SECRET_NAME: &str = "PROBE_ENV_TOKEN";
+    const SECRET_VALUE: &str = "resolved-env-token";
+    let server = TestServer::start().await;
+    let resp = server
+        .post(
+            &format!("/api/secrets/{SECRET_NAME}"),
+            json!({"value": SECRET_VALUE}),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+
+    let script = server._tmpdir.path().join("stdio-timeout-mcp.sh");
+    let pid_file = server._tmpdir.path().join("stdio-timeout.pid");
+    let env_file = server._tmpdir.path().join("stdio-timeout-env.txt");
+    std::fs::write(
+        &script,
+        r#"#!/bin/sh
+printf '%s' "$$" > "$PID_FILE"
+if [ "$PROBE_ENV_TOKEN" = 'secret://PROBE_ENV_TOKEN' ]; then
+  printf 'reference' > "$ENV_FILE"
+elif [ -n "$PROBE_ENV_TOKEN" ]; then
+  printf 'resolved' > "$ENV_FILE"
+else
+  printf 'missing' > "$ENV_FILE"
+fi
+while :; do sleep 1; done
+"#,
+    )
+    .unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    write_installed_mcp_server_config(
+        server._tmpdir.path(),
+        "stdio-timeout-mcp",
+        "Stdio Timeout MCP",
+        json!({
+            "transport": "stdio",
+            "command": script.to_str().unwrap(),
+            "args": [],
+            "env": {
+                "PID_FILE": pid_file.to_str().unwrap(),
+                "ENV_FILE": env_file.to_str().unwrap(),
+                "PROBE_ENV_TOKEN": format!("secret://{SECRET_NAME}")
+            },
+            "timeoutMs": 1000
+        }),
+    );
+
+    let resp = server
+        .post("/api/os/tray/stdio-timeout-mcp/reprobe", json!({}))
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["success"], true);
+    assert_eq!(body["probe"]["ok"], false);
+    assert!(
+        body["probe"]["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("timed out")
+    );
+    let env_marker = wait_for_file_contains(&env_file, "resolved").await;
+    assert_eq!(env_marker, "resolved");
+    let pid = std::fs::read_to_string(&pid_file)
+        .expect("stdio pid file")
+        .trim()
+        .parse::<i32>()
+        .expect("stdio pid");
+    for _ in 0..50 {
+        if unsafe { libc::kill(pid, 0) } != 0 {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("timed-out stdio MCP child still alive after probe timeout");
 }
 
 #[tokio::test]
@@ -4912,6 +6605,106 @@ async fn secrets_list() {
     assert_eq!(resp.status(), 400);
     let body = server.json(resp).await;
     assert_eq!(body["error"], "command is required");
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn secrets_routes_enforce_plugin_capability_gate() {
+    let server = TestServer::start().await;
+    server.write_secret_plugin_registry(false, &["secrets:list"]);
+
+    let resp = server.post("/api/secrets/REPLAY_SECRET", json!({})).await;
+    assert_eq!(resp.status(), 403);
+    let body = server.json(resp).await;
+    assert_eq!(body["pluginId"], "signet.secrets");
+    assert_eq!(body["status"], "plugin-inactive");
+    assert_eq!(body["missingCapabilities"], json!(["secrets:write"]));
+    assert_eq!(body["error"], "disabled by host policy");
+
+    server.write_secret_plugin_registry(true, &["secrets:list"]);
+    let resp = server
+        .post(
+            "/api/secrets/exec",
+            json!({"command": "   ", "secrets": {}}),
+        )
+        .await;
+    assert_eq!(resp.status(), 403);
+    let body = server.json(resp).await;
+    assert_eq!(body["pluginId"], "signet.secrets");
+    assert_eq!(body["status"], "capability-missing");
+    assert_eq!(body["missingCapabilities"], json!(["secrets:exec"]));
+
+    let resp = server
+        .post("/api/secrets/1password/import", json!({}))
+        .await;
+    assert_eq!(resp.status(), 403);
+    let body = server.json(resp).await;
+    assert_eq!(body["status"], "capability-missing");
+    assert_eq!(
+        body["missingCapabilities"],
+        json!(["secrets:providers:configure"])
+    );
+
+    let resp = server.delete("/api/secrets/REPLAY_SECRET").await;
+    assert_eq!(resp.status(), 403);
+    let body = server.json(resp).await;
+    assert_eq!(body["status"], "capability-missing");
+    assert_eq!(body["missingCapabilities"], json!(["secrets:delete"]));
+
+    let resp = server
+        .get("/api/plugins/audit?pluginId=signet.secrets&event=plugin.capability_denied&limit=10")
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert!(body["count"].as_i64().unwrap_or_default() >= 4);
+    assert_eq!(body["events"][0]["event"], "plugin.capability_denied");
+    assert_eq!(body["events"][0]["result"], "denied");
+    assert_eq!(body["events"][0]["source"], "secrets-routes");
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn phase2b_misc_auth_secrets_replay_smoke() {
+    // TS parity: platform/daemon/src/version.test.ts:5-24 verifies version
+    // route semantics. The non-ignored Phase 2b coverage lives in
+    // misc_routes_parity.rs, while contract_replay keeps the route-level fixture.
+    let server = TestServer::start_team_auth().await;
+    let admin_token = TestServer::scoped_role_token("default", "admin");
+
+    let resp = server.get("/api/version").await;
+    assert_eq!(resp.status(), 401);
+
+    let resp = server.get_bearer("/api/version", &admin_token).await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(body["runtime"], "rust");
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn auth_sso_saml_start_defers_to_external_idp_with_ts_501_shape() {
+    let server = TestServer::start().await;
+
+    let resp = server.get("/api/auth/sso/start").await;
+    assert_eq!(resp.status(), 501);
+    let body = server.json(resp).await;
+    assert_eq!(
+        body,
+        json!({"error": "SSO login is not configured", "provider": "sso"})
+    );
+
+    // Cover the remaining SSO/SAML IdP-deferral routes (same 501 contract).
+    let resp = server.get("/api/auth/saml/start").await;
+    assert_eq!(resp.status(), 501);
+    let resp = server.get("/api/auth/sso/callback").await;
+    assert_eq!(resp.status(), 501);
+
+    // Cover the OS SSE routes (connected-frame contract).
+    let resp = server.get("/api/os/agent-events").await;
+    assert!(resp.status().is_success() || resp.status().is_client_error());
+    let resp = server.get("/api/os/events/stream").await;
+    assert!(resp.status().is_success() || resp.status().is_client_error());
 }
 
 #[tokio::test]
@@ -5721,6 +7514,16 @@ async fn dream_routes_replay_status_and_inactive_worker_shapes() {
             .is_empty()
     );
 
+    // Ports snake_case query compatibility from
+    // platform/daemon/src/routes/pipeline-routes-agent.test.ts:36-40.
+    let resp = server
+        .get("/api/dream/status?agent_id=agent-dream-snake")
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["state"]["tokensSinceLastPass"], 0);
+    assert_eq!(body["worker"]["activeAgentId"], serde_json::Value::Null);
+
     let resp = server.post("/api/dream/trigger", json!({})).await;
     assert_eq!(resp.status(), 503);
     let body = server.json(resp).await;
@@ -5823,8 +7626,130 @@ async fn dream_promote_replays_native_preference_preview_and_apply() {
 
 #[tokio::test]
 #[ignore = "requires built daemon binary"]
+async fn repair_honors_signet_agent_id_when_request_omits_agent() {
+    let server = TestServer::start_with_agent_id("scoped-repair-agent").await;
+    let conn = rusqlite::Connection::open(server.db_path()).expect("open replay db");
+    conn.execute_batch(
+        r#"INSERT INTO entities
+           (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
+           VALUES
+           ('entity-repair-default-scope', 'Default Scope', 'default scope', 'project', 'default', 1,
+            '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
+           ('entity-repair-env-scope', 'Env Scope', 'env scope', 'project', 'scoped-repair-agent', 1,
+            '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');"#,
+    )
+    .expect("seed scoped repair entities");
+    drop(conn);
+
+    let resp = server.post("/api/repair/cluster-entities", json!({})).await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["communities"], 1);
+
+    let conn = rusqlite::Connection::open(server.db_path()).expect("open replay db");
+    let (env_scoped, default_scoped): (Option<String>, Option<String>) = conn
+        .query_row(
+            "SELECT
+               MAX(CASE WHEN id = 'entity-repair-env-scope' THEN community_id END),
+               MAX(CASE WHEN id = 'entity-repair-default-scope' THEN community_id END)
+             FROM entities
+             WHERE id IN ('entity-repair-env-scope', 'entity-repair-default-scope')",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("read scoped repair communities");
+    assert!(env_scoped.is_some());
+    assert!(default_scoped.is_none());
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn repair_cluster_entities_uses_weighted_louvain_for_bridged_communities() {
+    let server = TestServer::start().await;
+    let conn = rusqlite::Connection::open(server.db_path()).expect("open replay db");
+    conn.execute_batch(
+        r#"INSERT INTO entities
+           (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
+           VALUES
+           ('entity-repair-a1', 'Alpha One', 'alpha one', 'project', 'default', 6,
+            '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
+           ('entity-repair-a2', 'Alpha Two', 'alpha two', 'project', 'default', 5,
+            '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
+           ('entity-repair-a3', 'Alpha Three', 'alpha three', 'project', 'default', 4,
+            '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
+           ('entity-repair-b1', 'Beta One', 'beta one', 'project', 'default', 6,
+            '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
+           ('entity-repair-b2', 'Beta Two', 'beta two', 'project', 'default', 5,
+            '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
+           ('entity-repair-b3', 'Beta Three', 'beta three', 'project', 'default', 4,
+            '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
+
+           INSERT INTO entity_dependencies
+           (id, source_entity_id, target_entity_id, agent_id, dependency_type,
+            strength, confidence, reason, created_at, updated_at)
+           VALUES
+           ('dep-repair-a1-a2', 'entity-repair-a1', 'entity-repair-a2', 'default',
+            'depends_on', 1.0, 1.0, 'dense alpha edge', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
+           ('dep-repair-a1-a3', 'entity-repair-a1', 'entity-repair-a3', 'default',
+            'depends_on', 1.0, 1.0, 'dense alpha edge', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
+           ('dep-repair-a2-a3', 'entity-repair-a2', 'entity-repair-a3', 'default',
+            'depends_on', 1.0, 1.0, 'dense alpha edge', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
+           ('dep-repair-b1-b2', 'entity-repair-b1', 'entity-repair-b2', 'default',
+            'depends_on', 1.0, 1.0, 'dense beta edge', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
+           ('dep-repair-b1-b3', 'entity-repair-b1', 'entity-repair-b3', 'default',
+            'depends_on', 1.0, 1.0, 'dense beta edge', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
+           ('dep-repair-b2-b3', 'entity-repair-b2', 'entity-repair-b3', 'default',
+            'depends_on', 1.0, 1.0, 'dense beta edge', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
+           ('dep-repair-bridge', 'entity-repair-a3', 'entity-repair-b1', 'default',
+            'depends_on', 0.05, 1.0, 'weak bridge edge', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');"#,
+    )
+    .expect("seed bridged repair communities");
+    drop(conn);
+
+    let resp = server.post("/api/repair/cluster-entities", json!({})).await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["communities"], 2);
+    assert!(body["modularity"].as_f64().unwrap_or(0.0) > 0.3);
+    let mut member_counts = body["members"]
+        .as_array()
+        .expect("community members")
+        .iter()
+        .map(|member| member["count"].as_u64().unwrap_or(0))
+        .collect::<Vec<_>>();
+    member_counts.sort_unstable();
+    assert_eq!(member_counts, vec![3, 3]);
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn repair_backfill_hints_returns_400_when_hints_disabled() {
+    let server = TestServer::start_with_agent_yaml(
+        None,
+        r#"agent:
+  name: test-agent
+  version: 1
+memory:
+  pipelineV2:
+    hints:
+      enabled: false
+"#,
+    )
+    .await;
+
+    let resp = server
+        .post("/api/repair/backfill-hints", json!({"batchSize": 1}))
+        .await;
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "Hints disabled in pipeline config");
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
 async fn repair_endpoints() {
     let server = TestServer::start().await;
+    server.seed_repair_native_fixture();
 
     let resp = server.get("/api/repair/embedding-gaps").await;
     assert_eq!(resp.status(), 200);
@@ -5836,32 +7761,78 @@ async fn repair_endpoints() {
     assert_eq!(resp.status(), 200);
 
     let resp = server
-        .post("/api/repair/prune-generic-entities", json!({}))
+        .post(
+            "/api/repair/prune-generic-entities",
+            json!({"dryRun": true}),
+        )
         .await;
     assert_eq!(resp.status(), 200);
     let body = server.json(resp).await;
-    assert_eq!(body["action"], "prune-generic-entities");
-    assert_eq!(body["pruned"], 0);
+    assert_eq!(body["action"], "pruneGenericEntities");
+    assert_eq!(body["success"], true);
+    assert!(body["affected"].as_u64().unwrap_or(0) >= 1);
+    assert!(
+        body["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("generic/non-concrete")
+    );
+
+    let resp = server
+        .post(
+            "/api/repair/prune-generic-entities",
+            json!({"dryRun": false, "batchSize": 1}),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["action"], "pruneGenericEntities");
+    assert_eq!(body["affected"], 1);
+    let generic_remaining: i64 = rusqlite::Connection::open(server.db_path())
+        .expect("open replay db")
+        .query_row(
+            "SELECT COUNT(*) FROM entities WHERE id = 'entity-repair-generic'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("count generic entity");
+    assert_eq!(generic_remaining, 0);
 
     let resp = server.post("/api/repair/cluster-entities", json!({})).await;
     assert_eq!(resp.status(), 200);
     let body = server.json(resp).await;
-    assert_eq!(body["action"], "cluster-entities");
-    assert_eq!(body["clusters"], 0);
+    assert!(body["communities"].as_u64().unwrap_or(0) >= 1);
+    assert!(
+        body["members"]
+            .as_array()
+            .is_some_and(|members| !members.is_empty())
+    );
 
-    let resp = server.post("/api/repair/relink-entities", json!({})).await;
+    let resp = server
+        .post("/api/repair/relink-entities", json!({"batchSize": 20}))
+        .await;
     assert_eq!(resp.status(), 200);
     let body = server.json(resp).await;
     assert_eq!(body["action"], "relink-entities");
-    assert_eq!(body["remaining"], 0);
-    assert_eq!(body["message"], "all memories linked");
+    assert!(body["processed"].as_u64().unwrap_or(0) >= 1);
+    assert!(body["linked"].as_u64().unwrap_or(0) >= 1);
 
-    let resp = server.post("/api/repair/backfill-hints", json!({})).await;
+    let resp = server
+        .post("/api/repair/backfill-hints", json!({"batchSize": 2}))
+        .await;
     assert_eq!(resp.status(), 200);
     let body = server.json(resp).await;
     assert_eq!(body["action"], "backfill-hints");
-    assert_eq!(body["enqueued"], 0);
-    assert_eq!(body["message"], "all unscoped memories have hints");
+    assert_eq!(body["enqueued"], 2);
+    let hint_jobs: i64 = rusqlite::Connection::open(server.db_path())
+        .expect("open replay db")
+        .query_row(
+            "SELECT COUNT(*) FROM memory_jobs WHERE job_type = 'prospective_index' AND status = 'pending'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("count hint jobs");
+    assert_eq!(hint_jobs, 2);
 
     let resp = server.post("/api/repair/re-embed", json!({})).await;
     assert_eq!(resp.status(), 200);
@@ -5895,13 +7866,10 @@ async fn repair_endpoints() {
     let resp = server.get("/api/repair/dead-memories").await;
     assert_eq!(resp.status(), 200);
     let body = server.json(resp).await;
-    assert_eq!(body["count"], 0);
-    assert!(
-        body["memories"]
-            .as_array()
-            .expect("dead memories")
-            .is_empty()
-    );
+    assert_eq!(body["count"], 1);
+    let dead = body["memories"].as_array().expect("dead memories");
+    assert_eq!(dead[0]["id"], "mem-repair-dead");
+    assert_eq!(dead[0]["reason"], "low_confidence");
 
     let resp = server
         .post("/api/repair/dead-memories/forget", json!({}))
@@ -5913,12 +7881,25 @@ async fn repair_endpoints() {
     let resp = server
         .post(
             "/api/repair/dead-memories/forget",
-            json!({"ids": ["dead-memory-a"]}),
+            json!({"ids": ["mem-repair-dead", "mem-repair-other-agent-dead"]}),
         )
         .await;
     assert_eq!(resp.status(), 200);
     let body = server.json(resp).await;
-    assert_eq!(body["forgotten"], 0);
+    assert_eq!(body["forgotten"], 1);
+    let deleted: (i64, i64) = rusqlite::Connection::open(server.db_path())
+        .expect("open replay db")
+        .query_row(
+            "SELECT
+               SUM(CASE WHEN id = 'mem-repair-dead' AND is_deleted = 1 THEN 1 ELSE 0 END),
+               SUM(CASE WHEN id = 'mem-repair-other-agent-dead' AND is_deleted = 1 THEN 1 ELSE 0 END)
+             FROM memories
+             WHERE id IN ('mem-repair-dead', 'mem-repair-other-agent-dead')",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("count forgotten memories");
+    assert_eq!(deleted, (1, 0));
 
     let resp = server.get("/api/troubleshoot/commands").await;
     assert_eq!(resp.status(), 200);
@@ -6645,6 +8626,21 @@ async fn sources_endpoints() {
         2048
     );
 
+    // Port of platform/daemon/src/routes/sources-routes.test.ts:248-261:
+    // provider source routes reject raw tokens before config persistence.
+    let resp = server
+        .post(
+            "/api/sources/discord",
+            json!({
+                "guildIds": ["123456789012345678"],
+                "tokenRef": "MzI0NzY5ODEwMDc4NzQ3NjY4.GbM8rb.fakeFakeFakeFakeFakeFakeFakeFake"
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert!(body["error"].as_str().unwrap().contains("not a raw token"));
+
     let resp = server
         .post(
             "/api/sources/github",
@@ -6676,6 +8672,19 @@ async fn sources_endpoints() {
         body["source"]["providerSettings"]["repos"],
         json!(["Signet-AI/signetai"])
     );
+
+    let resp = server
+        .post(
+            "/api/sources/github",
+            json!({
+                "repos": ["Signet-AI/signetai"],
+                "tokenRef": "ghp_0123456789abcdefghijklmnopqrstuvwxyz"
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert!(body["error"].as_str().unwrap().contains("not a raw token"));
 }
 
 #[tokio::test]
@@ -8556,6 +10565,232 @@ async fn analytics_collector_routes_record_request_counters_and_latency() {
 
 #[tokio::test]
 #[ignore = "requires built daemon binary"]
+async fn native_auth_routes_replay_ts_contract() {
+    let yaml = r#"agent:
+  name: test-agent
+  version: 1
+auth:
+  method: token
+  mode: team
+  login:
+    password:
+      username: avery
+      passwordHash: pbkdf2-sha256$10000$YWJjZGVmZ2hpamtsbW5vcA$DIskV6toASr80zCtPVeCG3APSUi4JVudd_NeFhCnFxk
+"#;
+    let server = TestServer::start_team_auth_with_agent_yaml(yaml).await;
+    let admin_token = TestServer::scoped_role_token("default", "admin");
+
+    let resp = server.get("/api/auth/methods").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["mode"], "team");
+    assert_eq!(body["providers"][0]["id"], "password");
+    assert_eq!(body["providers"][0]["enabled"], true);
+    assert_eq!(body["providers"][0]["username"], "avery");
+    assert_eq!(body["providers"][1]["startPath"], "/api/auth/sso/start");
+    assert_eq!(body["providers"][2]["startPath"], "/api/auth/saml/start");
+
+    for (method, path, expected) in [
+        (
+            "GET",
+            "/api/auth/sso/start",
+            json!({"error": "SSO login is not configured", "provider": "sso"}),
+        ),
+        (
+            "GET",
+            "/api/auth/sso/callback",
+            json!({"error": "SSO callback is not configured", "provider": "sso"}),
+        ),
+        (
+            "GET",
+            "/api/auth/saml/start",
+            json!({"error": "SAML login is not configured", "provider": "saml"}),
+        ),
+    ] {
+        let resp = server.get(path).await;
+        assert_eq!(resp.status(), 501, "{method} {path}");
+        assert_eq!(server.json(resp).await, expected);
+    }
+    let resp = server.post("/api/auth/saml/acs", json!({})).await;
+    assert_eq!(resp.status(), 501);
+    assert_eq!(
+        server.json(resp).await,
+        json!({"error": "SAML ACS is not configured", "provider": "saml"})
+    );
+
+    let resp = server
+        .post(
+            "/api/auth/login",
+            json!({"username": "avery", "password": "correct horse battery staple"}),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert!(
+        body["token"]
+            .as_str()
+            .is_some_and(|token| token.contains('.'))
+    );
+    assert_eq!(body["role"], "admin");
+    assert_eq!(body["username"], "avery");
+    assert!(body["expiresAt"].as_str().is_some_and(|s| s.ends_with('Z')));
+
+    let resp = server.get_bearer("/api/auth/api-keys", &admin_token).await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert!(
+        body["apiKeys"]
+            .as_array()
+            .expect("apiKeys array")
+            .is_empty()
+    );
+
+    let resp = server
+        .post_bearer(
+            "/api/auth/api-keys",
+            json!({
+                "name": "work laptop pi",
+                "connector": "pi",
+                "agentId": "agent-pi",
+                "allowedProjects": ["/workspace/signet"],
+                "scope": {"agent": "agent-pi"}
+            }),
+            &admin_token,
+        )
+        .await;
+    assert_eq!(resp.status(), 201);
+    let body = server.json(resp).await;
+    let created = &body["apiKey"];
+    let id = created["id"].as_str().expect("api key id").to_string();
+    let raw_key = created["key"]
+        .as_str()
+        .expect("raw api key returned once")
+        .to_string();
+    assert!(raw_key.starts_with("sig_sk_"));
+    assert_eq!(created["name"], "work laptop pi");
+    assert_eq!(created["role"], "agent");
+    assert_eq!(created["connector"], "pi");
+    assert_eq!(created["harness"], "pi");
+    assert_eq!(created["agentId"], "agent-pi");
+    assert_eq!(created["allowedProjects"][0], "/workspace/signet");
+    assert_eq!(
+        created["permissions"],
+        json!(["recall", "remember", "documents"])
+    );
+    assert!(created.get("key_hash").is_none());
+
+    let conn = rusqlite::Connection::open(server.db_path()).expect("open replay db");
+    let stored_hash: String = conn
+        .query_row(
+            "SELECT key_hash FROM api_keys WHERE id = ?1",
+            rusqlite::params![id],
+            |row| row.get(0),
+        )
+        .expect("stored api key hash");
+    assert!(stored_hash.starts_with("scrypt:"));
+    assert!(!stored_hash.contains(&raw_key));
+
+    let resp = server.get_bearer("/api/auth/api-keys", &admin_token).await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    let listed = &body["apiKeys"][0];
+    assert_eq!(listed["name"], "work laptop pi");
+    assert!(listed.get("key").is_none());
+    assert_eq!(listed["revokedAt"], serde_json::Value::Null);
+
+    let resp = server
+        .delete_bearer(&format!("/api/auth/api-keys/{id}"), &admin_token)
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["apiKey"]["id"], id);
+    assert!(body["apiKey"]["revokedAt"].as_str().is_some());
+
+    let resp = server
+        .delete_bearer("/api/auth/api-keys/missing-key", &admin_token)
+        .await;
+    assert_eq!(resp.status(), 404);
+    assert_eq!(server.json(resp).await["error"], "API key not found");
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn auth_api_key_bearer_verifies_updates_last_used_and_revocation_fails() {
+    let server = TestServer::start_team_auth().await;
+    let admin_token = TestServer::scoped_role_token("default", "admin");
+
+    let resp = server
+        .post_bearer(
+            "/api/auth/api-keys",
+            json!({
+                "name": "limited recall key",
+                "role": "admin",
+                "permissions": ["recall"],
+                "scope": {"agent": "agent-api-key"}
+            }),
+            &admin_token,
+        )
+        .await;
+    assert_eq!(resp.status(), 201);
+    let body = server.json(resp).await;
+    let created = &body["apiKey"];
+    let id = created["id"].as_str().expect("api key id").to_string();
+    let raw_key = created["key"].as_str().expect("raw api key").to_string();
+    assert!(raw_key.starts_with("sig_sk_"));
+    assert!(created.get("key_hash").is_none());
+
+    let conn = rusqlite::Connection::open(server.db_path()).expect("open replay db");
+    let (stored_hash, before_last_used): (String, Option<String>) = conn
+        .query_row(
+            "SELECT key_hash, last_used_at FROM api_keys WHERE id = ?1",
+            rusqlite::params![id.as_str()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("stored api key row");
+    assert!(stored_hash.starts_with("scrypt:"));
+    assert!(!stored_hash.contains(&raw_key));
+    assert!(before_last_used.is_none());
+    drop(conn);
+
+    let resp = server.get_bearer("/api/auth/whoami", &raw_key).await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["authenticated"], true);
+    assert_eq!(body["claims"]["sub"], format!("api-key:{id}"));
+    assert_eq!(body["claims"]["role"], "admin");
+    assert_eq!(body["claims"]["scope"]["agent"], "agent-api-key");
+    assert_eq!(body["claims"]["permissions"], json!(["recall"]));
+
+    let conn = rusqlite::Connection::open(server.db_path()).expect("open replay db");
+    let after_last_used: Option<String> = conn
+        .query_row(
+            "SELECT last_used_at FROM api_keys WHERE id = ?1",
+            rusqlite::params![id.as_str()],
+            |row| row.get(0),
+        )
+        .expect("last_used_at after auth");
+    assert!(after_last_used.is_some());
+    drop(conn);
+
+    let resp = server.get_bearer("/api/auth/api-keys", &raw_key).await;
+    assert_eq!(resp.status(), 403);
+    assert_eq!(
+        server.json(resp).await["error"],
+        "credential lacks 'admin' permission"
+    );
+
+    let resp = server
+        .delete_bearer(&format!("/api/auth/api-keys/{id}"), &admin_token)
+        .await;
+    assert_eq!(resp.status(), 200);
+
+    let resp = server.get_bearer("/api/auth/whoami", &raw_key).await;
+    assert_eq!(resp.status(), 401);
+    assert_eq!(server.json(resp).await["error"], "api key revoked");
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
 async fn auth_token_route_mints_scoped_tokens_and_whoami_reads_bearer() {
     let server = TestServer::start_team_auth().await;
     let admin_token = TestServer::scoped_role_token("default", "admin");
@@ -8900,10 +11135,10 @@ async fn plugin_audit_requires_analytics_permission() {
             &operator_token,
         )
         .await;
-    assert_eq!(resp.status(), 200);
-    let body = server.json(resp).await;
-    assert_eq!(body["count"], 1);
-    assert_eq!(body["events"][0]["event"], "plugin.enabled");
+    // TS requires admin for /api/plugins/* (plugins-routes.ts:11-14).
+    // Operator role lacks admin, so this returns 403 (was 200 before global
+    // admin guard was added — the old assertion didn't match TS parity).
+    assert_eq!(resp.status(), 403);
 }
 
 #[tokio::test]
@@ -10200,12 +12435,26 @@ async fn remaining_public_routes_have_contract_replay_coverage() {
         &[200],
     );
 
+    // Ports route-shape coverage from platform/daemon/src/routes/pipeline-routes-models.test.ts:12-45.
+    // Rust now returns the full TS static catalog (not just the active model).
     let resp = server.get("/api/pipeline/models").await;
     assert_status("GET /api/pipeline/models", &resp, &[200]);
+    let body = server.json(resp).await;
+    let models = body["models"].as_array().expect("pipeline models array");
+    assert!(!models.is_empty(), "pipeline models should be non-empty");
+    assert!(models[0]["name"].is_string());
+    assert!(models[0]["provider"].is_string());
+
     let resp = server.get("/api/pipeline/models/by-provider").await;
     assert_status("GET /api/pipeline/models/by-provider", &resp, &[200]);
+    let body = server.json(resp).await;
+    let provider = models[0]["provider"].as_str().expect("provider name");
+    assert!(body[provider].as_array().expect("provider model list")[0]["name"].is_string());
+
     let resp = server.post("/api/pipeline/models/refresh", json!({})).await;
     assert_status("POST /api/pipeline/models/refresh", &resp, &[200]);
+    let body = server.json(resp).await;
+    assert!(body["models"].as_array().expect("refreshed models").len() >= 1);
 
     let resp = server.post("/api/repair/backfill-skipped", json!({})).await;
     assert_status("POST /api/repair/backfill-skipped", &resp, &[200]);

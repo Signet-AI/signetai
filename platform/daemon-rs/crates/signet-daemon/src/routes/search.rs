@@ -11,11 +11,18 @@ use serde::{Deserialize, Serialize};
 use tracing::warn;
 
 use signet_core::search::{
-    RecallFilter, fts_search, merge_scores, touch_accessed, vec_search_scored,
+    RecallFilter, annotate_currentness, apply_currentness_bias, apply_dampening,
+    apply_rehearsal_boost, apply_sec_lite, apply_temporal_topic_evidence,
+    authorize_scored_candidates, fts_search, fuse_traversal_primary, hint_search,
+    load_currentness_info, merge_recall_candidates, native_artifact_fallbacks,
+    source_chunk_vector_fallbacks, structured_path_candidates, temporal_candidates_for_recall,
+    touch_accessed, traversal_primary_candidates, vec_search_scored,
 };
 
-use crate::auth::middleware::{authenticate_headers, require_rate_limit_guard};
-use crate::auth::types::AuthMode;
+use crate::auth::middleware::{
+    authenticate_headers, require_permission_guard, require_rate_limit_guard, resolve_scoped_agent,
+};
+use crate::auth::types::{AuthMode, Permission};
 use crate::reranker;
 use crate::routes::pipeline::is_loopback;
 use crate::state::AppState;
@@ -41,6 +48,16 @@ pub struct RecallBody {
     pub until: Option<String>,
     pub scope: Option<String>,
     pub project: Option<String>,
+    pub time: Option<RecallTimeOptions>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecallTimeOptions {
+    pub start: Option<String>,
+    pub end: Option<String>,
+    pub facets: Option<Vec<String>>,
+    pub mode: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -93,7 +110,80 @@ pub struct RecallHit {
     pub scope: Option<String>,
     pub created_at: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub supplementary: Option<bool>,
+}
+
+fn parse_recall_time(
+    value: &str,
+    field: &'static str,
+) -> Result<chrono::DateTime<chrono::Utc>, &'static str> {
+    chrono::DateTime::parse_from_rfc3339(value.trim())
+        .map(|dt| dt.with_timezone(&chrono::Utc))
+        .map_err(|_| match field {
+            "time.start" => "time.start must be a valid ISO timestamp",
+            _ => "time.end must be a valid ISO timestamp",
+        })
+}
+
+fn validate_recall_time_options(time: Option<&RecallTimeOptions>) -> Result<(), &'static str> {
+    let Some(options) = time else {
+        return Ok(());
+    };
+    let Some(start) = options
+        .start
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    else {
+        return Err("time.start is required when time is provided");
+    };
+    let start = parse_recall_time(start, "time.start")?;
+    if let Some(end) = options.end.as_deref() {
+        if end.trim().is_empty() {
+            return Err("time.end must be a valid ISO timestamp");
+        }
+        let end = parse_recall_time(end, "time.end")?;
+        if end <= start {
+            return Err("time.end must be after time.start");
+        }
+    }
+    if let Some(facets) = options.facets.as_ref() {
+        const ALLOWED: &[&str] = &[
+            "session", "source", "captured", "observed", "occurred", "valid",
+        ];
+        if facets
+            .iter()
+            .any(|facet| !ALLOWED.contains(&facet.as_str()))
+        {
+            return Err(
+                "time.facets entries must be one of: session, source, captured, observed, occurred, valid",
+            );
+        }
+    }
+    if let Some(mode) = options.mode.as_deref()
+        && !matches!(mode, "auto" | "timeline" | "filter")
+    {
+        return Err("time.mode must be one of: auto, timeline, filter");
+    }
+    Ok(())
+}
+
+fn has_temporal_candidate_intent(_body: &RecallBody) -> bool {
+    // Disabled until this route can pass validated temporal ranges/facets to the
+    // candidate query. TS validates and filters in temporal-recall.ts:229-257;
+    // treating time.start as a boolean gate boosted every temporal edge.
+    false
+}
+
+fn fallback_existing_source_ids(results: &[RecallHit]) -> std::collections::HashSet<String> {
+    results
+        .iter()
+        .filter_map(|row| row.source_id.as_deref())
+        .map(str::trim)
+        .filter(|source_id| !source_id.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
 }
 
 fn recall_response(results: Vec<RecallHit>, query: String, method: String) -> RecallResponse {
@@ -138,11 +228,52 @@ pub async fn recall(
         )
             .into_response();
     }
+    if let Err(error) = validate_recall_time_options(body.time.as_ref()) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": error})),
+        )
+            .into_response();
+    }
+    let temporal_intent = has_temporal_candidate_intent(&body);
 
-    // Rate-limit LLM-enabled recall independently of plain recall.
-    // Skipped in local auth mode; active in team/hybrid modes.
-    {
+    // Authenticate recall unconditionally in team/hybrid mode, enforce Recall
+    // permission, and resolve the scoped agent (so a limited/cross-agent
+    // credential cannot read memory outside its scope). LLM-enabled recall
+    // additionally receives its independent rate limit below; local mode
+    // remains permissive through authenticate_headers.
+    let (agent_id, _auth) = {
         let auth_runtime = state.auth_snapshot();
+        let is_local = is_loopback(&peer);
+        let auth = match authenticate_headers(
+            auth_runtime.mode,
+            auth_runtime.secret.as_deref(),
+            &headers,
+            is_local,
+        ) {
+            Ok(auth) => auth,
+            Err(resp) => return (*resp).into_response(),
+        };
+        if let Err(resp) =
+            require_permission_guard(&auth, Permission::Recall, auth_runtime.mode, is_local)
+        {
+            return (*resp).into_response();
+        }
+        let scoped = match resolve_scoped_agent(
+            &auth,
+            auth_runtime.mode,
+            is_local,
+            body.agent_id.as_deref(),
+        ) {
+            Ok(scoped) => scoped,
+            Err(reason) => {
+                return (
+                    StatusCode::FORBIDDEN,
+                    Json(serde_json::json!({"error": reason})),
+                )
+                    .into_response();
+            }
+        };
         let (reranker_enabled, use_extraction_model) = state
             .config
             .manifest
@@ -152,17 +283,6 @@ pub async fn recall(
             .map(|p| (p.reranker.enabled, p.reranker.use_extraction_model))
             .unwrap_or((false, false));
         if reranker_enabled && use_extraction_model && auth_runtime.mode != AuthMode::Local {
-            // authenticate_headers returns Err only for hard auth failures; in local
-            // mode we already returned above, so unwrap_or with unauthenticated is safe.
-            let auth = authenticate_headers(
-                auth_runtime.mode,
-                auth_runtime.secret.as_deref(),
-                &headers,
-                is_loopback(&peer),
-            )
-            .unwrap_or_else(|_| crate::auth::middleware::AuthState {
-                result: crate::auth::types::AuthResult::unauthenticated(),
-            });
             if let Err(resp) = require_rate_limit_guard(
                 &auth,
                 "recallLlm",
@@ -173,9 +293,37 @@ pub async fn recall(
                 return (*resp).into_response();
             }
         }
-    }
+        (scoped, auth)
+    };
 
-    let limit = body.limit.unwrap_or(10);
+    // Clamp recall limit to TS normalizeRecallLimit bounds (1..50) to avoid
+    // oversized hydration/fallback work on large limits.
+    let limit = body.limit.unwrap_or(10).clamp(1, 50);
+
+    // #4 REVIEW FIX: Enforce project scope from token claims.
+    // TS overwrites recall params with claims.scope.project (memory-routes.ts:762).
+    // A token scoped to project A must not recall project B.
+    let scoped_project = _auth
+        .result
+        .claims
+        .as_ref()
+        .and_then(|c| c.scope.project.as_deref())
+        .map(|s| s.to_string());
+    if let Some(ref scope_proj) = scoped_project {
+        if let Some(ref body_proj) = body.project {
+            let body_proj = body_proj.trim();
+            if !body_proj.is_empty() && body_proj != scope_proj.as_str() {
+                return (
+                    StatusCode::FORBIDDEN,
+                    Json(serde_json::json!({
+                        "error": "project scope mismatch",
+                        "scoped_project": scope_proj,
+                    })),
+                )
+                    .into_response();
+            }
+        }
+    }
     let search_cfg = state.config.manifest.search.clone().unwrap_or_default();
     let alpha = search_cfg.alpha;
     let min_score = search_cfg.min_score;
@@ -206,25 +354,24 @@ pub async fn recall(
     let importance_min = body.importance_min;
     let since = body.since.clone();
     let until = body.until.clone();
-    let agent_id = body
-        .agent_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| "default".to_string());
+    // agent_id is resolved from the authenticated+scoped token above (not
+    // trusted from the request body) — a limited credential cannot read
+    // another agent's memories by passing agent_id in the body.
     let scope = body
         .scope
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned);
-    let project = body
-        .project
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned);
+    // #3 REVIEW FIX: use scoped_project when body.project is omitted.
+    // A token scoped to project A must not recall all projects by omitting it.
+    let project = scoped_project.as_ref().map(|s| s.clone()).or_else(|| {
+        body.project
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+    });
     let query_for_response = query.clone();
 
     let result = state
@@ -260,137 +407,223 @@ pub async fn recall(
                 policy_group: policy_group.as_deref(),
             };
 
-            // FTS5 keyword search
+            // Candidate collection order follows TS memory-search.ts:997/1162/1203/1261/1290/1333/1378.
             let fts_hits = fts_search(conn, &keyword_query, top_k, &filter).unwrap_or_default();
-
-            // Vector KNN search
+            let hint_hits = hint_search(conn, &keyword_query, top_k, &filter);
             let vec_hits = match &query_vec {
                 Some(v) => vec_search_scored(conn, v, top_k, &filter),
                 None => vec![],
             };
+            let structured_hits = structured_path_candidates(conn, &query, top_k, &filter);
+            let temporal_hits =
+                temporal_candidates_for_recall(conn, top_k, &filter, min_score, temporal_intent);
+            let flat = merge_recall_candidates(
+                &fts_hits,
+                &hint_hits,
+                &vec_hits,
+                &structured_hits,
+                &temporal_hits,
+                alpha,
+                min_score,
+            );
+            let traversal_hits = traversal_primary_candidates(conn, &query, top_k, &filter, min_score);
+            let mut scored = fuse_traversal_primary(&flat, &traversal_hits, limit, top_k);
 
-            // Merge
-            let mut scored = merge_scores(&fts_hits, &vec_hits, alpha, min_score);
-            scored.truncate(limit);
+            // Critical auth boundary: TS memory-search.ts:1634 authorizes all
+            // IDs before any content-bearing stage, reranker, or access touch.
+            scored = authorize_scored_candidates(conn, &scored, &filter);
+            apply_temporal_topic_evidence(conn, &mut scored, &query);
+            apply_sec_lite(
+                &mut scored,
+                &fts_hits,
+                &hint_hits,
+                &vec_hits,
+                &structured_hits,
+                &traversal_hits,
+                min_score,
+            );
+            apply_rehearsal_boost(conn, &mut scored, 0.08, 14.0);
+            apply_dampening(conn, &mut scored, &query);
+            let scored_ids: Vec<&str> = scored.iter().map(|s| s.id.as_str()).collect();
+            let currentness = load_currentness_info(conn, &scored_ids, &agent_id);
+            apply_currentness_bias(&mut scored, &currentness);
 
-            if scored.is_empty() {
-                return Ok(recall_response(
-                    vec![],
-                    query_for_response,
-                    "hybrid".to_string(),
-                ));
-            }
-
-            // Fetch full rows with agent scope filtering
-            let ids: Vec<&str> = scored.iter().map(|s| s.id.as_str()).collect();
-            let placeholders: String = ids
-                .iter()
-                .map(|_| "?")
-                .collect::<Vec<_>>()
-                .join(",");
-
-            let mut clauses = Vec::new();
-            let mut filter_params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
-            if let Some(scope) = &scope {
-                clauses.push("scope = ?");
-                filter_params.push(Box::new(scope.clone()));
+            let pre_hydrate = if body.agent_id.is_some() || project.is_some() || scope.is_some() {
+                limit.saturating_mul(3).max(limit)
             } else {
-                clauses.push("scope IS NULL");
-            }
-            if let Some(project) = &project {
-                clauses.push("project = ?");
-                filter_params.push(Box::new(project.clone()));
-            }
-            {
-                let aid = &agent_id;
-                match read_policy.as_str() {
-                    "shared" => {
-                        clauses.push("(visibility = 'global' OR agent_id = ?) AND visibility != 'archived'");
-                        filter_params.push(Box::new(aid.clone()));
-                    }
-                    "group" => {
-                        if let Some(group) = &policy_group {
-                            clauses.push("((visibility = 'global' AND agent_id IN (SELECT id FROM agents WHERE policy_group = ?)) OR agent_id = ?) AND visibility != 'archived'");
-                            filter_params.push(Box::new(group.clone()));
-                            filter_params.push(Box::new(aid.clone()));
+                limit
+            };
+            let top_ids: Vec<&str> = scored.iter().take(pre_hydrate).map(|s| s.id.as_str()).collect();
+            let allow_source_fallbacks = temporal_hits.is_empty()
+                && mem_type.is_none()
+                && tags.is_none()
+                && who.is_none()
+                && pinned.is_none()
+                && importance_min.is_none()
+                && since.is_none()
+                && until.is_none()
+                && scope.is_none();
+
+            let mut results = Vec::new();
+            if !top_ids.is_empty() {
+                let placeholders: String = top_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+                let sql = format!(
+                    "SELECT id, content, type, tags, pinned, importance, who, project, created_at, visibility, scope, source_id
+                     FROM memories WHERE id IN ({placeholders}) AND COALESCE(is_deleted, 0) = 0"
+                );
+
+                let mut stmt = conn.prepare(&sql)?;
+                let refs: Vec<Box<dyn rusqlite::types::ToSql>> = top_ids
+                    .iter()
+                    .map(|s| Box::new(s.to_string()) as Box<dyn rusqlite::types::ToSql>)
+                    .collect();
+                let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+                    refs.iter().map(|b| b.as_ref()).collect();
+
+                let rows: std::collections::HashMap<String, RecallHit> = stmt
+                    .query_map(param_refs.as_slice(), |row| {
+                        let raw_content: String = row.get(1)?;
+                        let id: String = row.get(0)?;
+                        let content = annotate_currentness(&raw_content, currentness.get(&id));
+                        let len = content.len();
+                        let is_truncated = len > truncate;
+                        let display = if is_truncated {
+                            let boundary = content.floor_char_boundary(truncate);
+                            format!("{} [truncated]", &content[..boundary])
                         } else {
-                            clauses.push("agent_id = ? AND visibility != 'archived'");
-                            filter_params.push(Box::new(aid.clone()));
-                        }
+                            content
+                        };
+
+                        Ok((
+                            id.clone(),
+                            RecallHit {
+                                id,
+                                content: display,
+                                content_length: len,
+                                truncated: is_truncated,
+                                score: 0.0,
+                                source: String::new(),
+                                memory_type: row.get(2)?,
+                                tags: row.get(3)?,
+                                pinned: row.get::<_, i64>(4)? != 0,
+                                importance: row.get(5)?,
+                                who: row.get(6)?,
+                                project: row.get(7)?,
+                                created_at: row.get(8)?,
+                                visibility: row.get(9)?,
+                                scope: row.get(10)?,
+                                source_id: row.get(11)?,
+                                supplementary: None,
+                            },
+                        ))
+                    })?
+                    .filter_map(|r| r.ok())
+                    .collect();
+
+                results = scored
+                    .iter()
+                    .take(pre_hydrate)
+                    .filter_map(|s| {
+                        let mut hit = rows.get(&s.id)?.clone();
+                        hit.score = (s.score * 100.0).round() / 100.0;
+                        hit.source = s.source.as_str().to_string();
+                        Some(hit)
+                    })
+                    .take(limit)
+                    .collect();
+            }
+
+            // Thin memory recall source/session/transcript fallbacks mirror TS memory-search.ts:2003.
+            if results.len() < limit && allow_source_fallbacks {
+                let fill = limit - results.len();
+                let mut existing_source_ids = fallback_existing_source_ids(&results);
+                let source_hits = source_chunk_vector_fallbacks(
+                    conn,
+                    query_vec.as_deref(),
+                    &existing_source_ids,
+                    fill,
+                    &agent_id,
+                    project.as_deref(),
+                );
+                for hit in source_hits {
+                    if results.len() >= limit {
+                        break;
                     }
-                    _ => {
-                        clauses.push("agent_id = ? AND visibility != 'archived'");
-                        filter_params.push(Box::new(aid.clone()));
+                    existing_source_ids.insert(hit.source_id.clone());
+                    let content_len = hit.content.len();
+                    let truncated = content_len > truncate;
+                    let content = if truncated {
+                        let boundary = hit.content.floor_char_boundary(truncate);
+                        format!("{} [truncated]", &hit.content[..boundary])
+                    } else {
+                        hit.content.clone()
+                    };
+                    let source_id = hit.source_id.clone();
+                    results.push(RecallHit {
+                        id: hit.id,
+                        content,
+                        content_length: content_len,
+                        truncated,
+                        score: (hit.score.clamp(0.01, 1.0) * 100.0).round() / 100.0,
+                        source: hit.source.as_str().to_string(),
+                        memory_type: hit.source_type,
+                        tags: Some(hit.tags),
+                        pinned: false,
+                        importance: hit.importance,
+                        who: Some(hit.who),
+                        project: hit.project,
+                        visibility: None,
+                        scope: None,
+                        created_at: hit.created_at,
+                        source_id: Some(source_id),
+                        supplementary: Some(true),
+                    });
+                }
+                if results.len() < limit {
+                    let fill = limit - results.len();
+                    let native_hits = native_artifact_fallbacks(
+                        conn,
+                        &keyword_query,
+                        &existing_source_ids,
+                        fill,
+                        &agent_id,
+                        project.as_deref(),
+                    );
+                    for hit in native_hits {
+                        if results.len() >= limit {
+                            break;
+                        }
+                        let content_len = hit.content.len();
+                        let truncated = content_len > truncate;
+                        let content = if truncated {
+                            let boundary = hit.content.floor_char_boundary(truncate);
+                            format!("{} [truncated]", &hit.content[..boundary])
+                        } else {
+                            hit.content.clone()
+                        };
+                        let source_id = hit.source_id.clone();
+                        results.push(RecallHit {
+                            id: hit.id,
+                            content,
+                            content_length: content_len,
+                            truncated,
+                            score: (hit.score.clamp(0.01, 1.0) * 100.0).round() / 100.0,
+                            source: hit.source.as_str().to_string(),
+                            memory_type: hit.source_type,
+                            tags: Some(hit.tags),
+                            pinned: false,
+                            importance: hit.importance,
+                            who: Some(hit.who),
+                            project: hit.project,
+                            visibility: None,
+                            scope: None,
+                            created_at: hit.created_at,
+                            source_id: Some(source_id),
+                            supplementary: Some(true),
+                        });
                     }
                 }
             }
-            let filter_sql = if clauses.is_empty() {
-                String::new()
-            } else {
-                format!(" AND {}", clauses.join(" AND "))
-            };
-
-            let sql = format!(
-                "SELECT id, content, type, tags, pinned, importance, who, project, created_at, visibility, scope
-                 FROM memories WHERE id IN ({placeholders}){filter_sql}"
-            );
-
-            let mut stmt = conn.prepare(&sql)?;
-            let mut refs: Vec<Box<dyn rusqlite::types::ToSql>> = ids
-                .iter()
-                .map(|s| Box::new(s.to_string()) as Box<dyn rusqlite::types::ToSql>)
-                .collect();
-            refs.extend(filter_params);
-            let param_refs: Vec<&dyn rusqlite::types::ToSql> =
-                refs.iter().map(|b| b.as_ref()).collect();
-
-            let rows: std::collections::HashMap<String, RecallHit> = stmt
-                .query_map(param_refs.as_slice(), |row| {
-                    let content: String = row.get(1)?;
-                    let len = content.len();
-                    let is_truncated = len > truncate;
-                    let display = if is_truncated {
-                        // floor_char_boundary avoids slicing mid-codepoint
-                        let boundary = content.floor_char_boundary(truncate);
-                        format!("{} [truncated]", &content[..boundary])
-                    } else {
-                        content
-                    };
-
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        RecallHit {
-                            id: row.get(0)?,
-                            content: display,
-                            content_length: len,
-                            truncated: is_truncated,
-                            score: 0.0, // Filled below
-                            source: String::new(),
-                            memory_type: row.get(2)?,
-                            tags: row.get(3)?,
-                            pinned: row.get::<_, i64>(4)? != 0,
-                            importance: row.get(5)?,
-                            who: row.get(6)?,
-                            project: row.get(7)?,
-                            created_at: row.get(8)?,
-                            visibility: row.get(9)?,
-                            scope: row.get(10)?,
-                            supplementary: None,
-                        },
-                    ))
-                })?
-                .filter_map(|r| r.ok())
-                .collect();
-
-            let results: Vec<RecallHit> = scored
-                .iter()
-                .filter_map(|s| {
-                    let mut hit = rows.get(&s.id)?.clone();
-                    hit.score = (s.score * 100.0).round() / 100.0;
-                    hit.source = s.source.as_str().to_string();
-                    Some(hit)
-                })
-                .collect();
 
             let method = if has_vec { "hybrid" } else { "keyword" };
             Ok(recall_response(results, query_for_response, method.to_string()))
@@ -518,6 +751,7 @@ pub async fn recall(
                                     visibility: None,
                                     scope: None,
                                     created_at: chrono::Utc::now().to_rfc3339(),
+                                    source_id: None,
                                     supplementary: Some(true),
                                 },
                             );
@@ -617,6 +851,7 @@ pub async fn search_get(
         until: None,
         scope: params.scope,
         project: params.project,
+        time: None,
     };
 
     recall(State(state), ConnectInfo(peer), headers, Json(body))
@@ -663,6 +898,7 @@ pub async fn legacy_search(
         until: None,
         scope: None,
         project: None,
+        time: None,
     };
 
     recall(State(state), ConnectInfo(peer), headers, Json(body))
@@ -1074,6 +1310,98 @@ pub async fn embeddings_health(State(state): State<Arc<AppState>>) -> Json<serde
         });
 
     Json(report)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn recall_body(query: &str) -> RecallBody {
+        RecallBody {
+            query: query.to_string(),
+            keyword_query: None,
+            limit: None,
+            agent_id: Some("agent-a".to_string()),
+            memory_type: None,
+            tags: None,
+            who: None,
+            pinned: None,
+            importance_min: None,
+            since: None,
+            until: None,
+            scope: None,
+            project: None,
+            time: None,
+        }
+    }
+
+    fn recall_hit(id: &str, source_id: Option<&str>) -> RecallHit {
+        RecallHit {
+            id: id.to_string(),
+            content: String::new(),
+            content_length: 0,
+            truncated: false,
+            score: 0.5,
+            source: "keyword".to_string(),
+            memory_type: "fact".to_string(),
+            tags: None,
+            pinned: false,
+            importance: 0.5,
+            who: None,
+            project: None,
+            visibility: None,
+            scope: None,
+            created_at: "2026-06-01T00:00:00Z".to_string(),
+            source_id: source_id.map(ToOwned::to_owned),
+            supplementary: None,
+        }
+    }
+
+    #[test]
+    fn reranker_temporal_candidate_channel_stays_disabled_for_time_requests() {
+        let mut normal = recall_body("apollo launch checklist");
+        normal.since = Some("2026-01-01T00:00:00Z".to_string());
+        assert!(!has_temporal_candidate_intent(&normal));
+
+        let explicit_day = recall_body("what happened with apollo on June 14, 2026?");
+        assert!(!has_temporal_candidate_intent(&explicit_day));
+
+        let mut request_time = recall_body("apollo launch checklist");
+        request_time.time = Some(RecallTimeOptions {
+            start: Some("2026-06-14T00:00:00Z".to_string()),
+            end: Some("2026-06-15T00:00:00Z".to_string()),
+            facets: Some(vec!["session".to_string(), "source".to_string()]),
+            mode: Some("filter".to_string()),
+        });
+        assert!(validate_recall_time_options(request_time.time.as_ref()).is_ok());
+        assert!(!has_temporal_candidate_intent(&request_time));
+
+        let mut invalid_time = recall_body("apollo launch checklist");
+        invalid_time.time = Some(RecallTimeOptions {
+            start: Some("2026-06-15T00:00:00Z".to_string()),
+            end: Some("2026-06-14T00:00:00Z".to_string()),
+            facets: None,
+            mode: Some("filter".to_string()),
+        });
+        assert_eq!(
+            validate_recall_time_options(invalid_time.time.as_ref()),
+            Err("time.end must be after time.start")
+        );
+    }
+
+    #[test]
+    fn reranker_fallback_dedupe_uses_hydrated_memory_source_ids() {
+        let results = vec![
+            recall_hit("memory-with-source", Some("obsidian:vault:note")),
+            recall_hit("memory-without-source", None),
+        ];
+
+        let existing_source_ids = fallback_existing_source_ids(&results);
+
+        assert!(existing_source_ids.contains("obsidian:vault:note"));
+        assert!(!existing_source_ids.contains("memory-with-source"));
+        assert!(!existing_source_ids.contains("memory-without-source"));
+    }
 }
 
 #[derive(Debug, Deserialize)]

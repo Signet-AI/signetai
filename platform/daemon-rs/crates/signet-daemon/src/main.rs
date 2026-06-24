@@ -1,6 +1,6 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
 use anyhow::Context;
@@ -16,6 +16,7 @@ use tracing::{info, warn};
 mod analytics;
 #[allow(dead_code)] // Auth module built but not wired into routes until later phases
 mod auth;
+mod cors;
 mod feedback;
 mod mcp;
 mod reranker;
@@ -26,6 +27,27 @@ mod watcher;
 mod workspace_paths;
 
 use state::{AppState, AuthRuntimeState, ExtractionRuntimeState, derive_initial_extraction_state};
+
+static START_INSTANT: OnceLock<Instant> = OnceLock::new();
+static START_EPOCH_MS: OnceLock<i64> = OnceLock::new();
+
+fn init_process_clock() {
+    START_INSTANT.get_or_init(Instant::now);
+    START_EPOCH_MS.get_or_init(current_epoch_ms);
+}
+
+fn process_uptime_seconds() -> f64 {
+    START_INSTANT
+        .get_or_init(Instant::now)
+        .elapsed()
+        .as_secs_f64()
+}
+
+fn process_started_at_iso() -> String {
+    let started_at = *START_EPOCH_MS.get_or_init(current_epoch_ms);
+    iso_from_epoch_ms(started_at)
+        .unwrap_or_else(|| Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true))
+}
 
 fn dashboard_dir() -> Option<PathBuf> {
     let candidates = [
@@ -51,6 +73,7 @@ fn dashboard_dir() -> Option<PathBuf> {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    init_process_clock();
     let args: Vec<String> = std::env::args().collect();
 
     // Service management subcommands (no logging needed)
@@ -916,60 +939,61 @@ async fn main() -> anyhow::Result<()> {
             get(routes::os::widget_get).delete(routes::os::widget_delete),
         )
         // Secrets routes
-        .route("/api/secrets", get(routes::secrets::list))
+        .route("/api/secrets", get(routes::secrets::list_guarded))
         .route(
             "/api/secrets/1password/status",
-            get(routes::secrets::onepassword_status),
+            get(routes::secrets::onepassword_status_guarded),
         )
         .route(
             "/api/secrets/bitwarden/status",
-            get(routes::secrets::bitwarden_status),
+            get(routes::secrets::bitwarden_status_guarded),
         )
         .route(
             "/api/secrets/bitwarden/connect",
-            axum::routing::post(routes::secrets::bitwarden_connect)
-                .delete(routes::secrets::bitwarden_disconnect),
+            axum::routing::post(routes::secrets::bitwarden_connect_guarded)
+                .delete(routes::secrets::bitwarden_disconnect_guarded),
         )
         .route(
             "/api/secrets/bitwarden/provider",
-            axum::routing::post(routes::secrets::bitwarden_provider),
+            axum::routing::post(routes::secrets::bitwarden_provider_guarded),
         )
         .route(
             "/api/secrets/bitwarden/folders",
-            get(routes::secrets::bitwarden_folders),
+            get(routes::secrets::bitwarden_folders_guarded),
         )
         .route(
             "/api/secrets/bitwarden/migrate",
-            axum::routing::post(routes::secrets::bitwarden_migrate),
+            axum::routing::post(routes::secrets::bitwarden_migrate_guarded),
         )
         .route(
             "/api/secrets/1password/connect",
-            axum::routing::post(routes::secrets::onepassword_connect)
-                .delete(routes::secrets::onepassword_disconnect),
+            axum::routing::post(routes::secrets::onepassword_connect_guarded)
+                .delete(routes::secrets::onepassword_disconnect_guarded),
         )
         .route(
             "/api/secrets/1password/vaults",
-            get(routes::secrets::onepassword_vaults),
+            get(routes::secrets::onepassword_vaults_guarded),
         )
         .route(
             "/api/secrets/1password/import",
-            axum::routing::post(routes::secrets::onepassword_import),
+            axum::routing::post(routes::secrets::onepassword_import_guarded),
         )
         .route(
             "/api/secrets/exec",
-            axum::routing::post(routes::secrets::run_with_secrets),
+            axum::routing::post(routes::secrets::run_with_secrets_guarded),
         )
         .route(
             "/api/secrets/exec/{job_id}",
-            get(routes::secrets::exec_status),
+            get(routes::secrets::exec_status_guarded),
         )
         .route(
             "/api/secrets/{name}/exec",
-            axum::routing::post(routes::secrets::run_named_secret),
+            axum::routing::post(routes::secrets::run_named_secret_guarded),
         )
         .route(
             "/api/secrets/{name}",
-            axum::routing::post(routes::secrets::put).delete(routes::secrets::delete),
+            axum::routing::post(routes::secrets::put_guarded)
+                .delete(routes::secrets::delete_guarded),
         )
         // Scheduler routes
         .route(
@@ -1177,7 +1201,15 @@ async fn main() -> anyhow::Result<()> {
     .with_state(state.clone());
     let app = app.layer(middleware::from_fn_with_state(
         state.clone(),
+        auth::middleware::auth_middleware,
+    ));
+    let app = app.layer(middleware::from_fn_with_state(
+        state.clone(),
         analytics::analytics_middleware,
+    ));
+    let app = app.layer(middleware::from_fn_with_state(
+        state.clone(),
+        cors::cors_middleware,
     ));
 
     // Bind — use string form so "localhost" resolves via DNS
@@ -2170,10 +2202,30 @@ async fn dead_letter_pending_extraction_jobs(state: &AppState, reason: &str, now
 // Route handlers
 // ---------------------------------------------------------------------------
 
-async fn health() -> Json<serde_json::Value> {
+async fn health(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+    let db_ok = state
+        .pool
+        .read(|conn| {
+            conn.query_row("SELECT 1", [], |_| Ok::<(), rusqlite::Error>(()))?;
+            Ok(true)
+        })
+        .await
+        .unwrap_or(false);
+    let update = state.update_state.read().await.clone();
+
     Json(serde_json::json!({
         "status": "healthy",
+        "uptime": process_uptime_seconds(),
+        "pid": std::process::id(),
         "version": env!("CARGO_PKG_VERSION"),
+        "port": state.config.port,
+        "agentsDir": state.config.base_path.to_string_lossy(),
+        "db": db_ok,
+        "shuttingDown": false,
+        "updateAvailable": update.last_check.as_ref().map(|check| check.update_available).unwrap_or(false),
+        "pendingRestart": update.pending_restart_version.is_some(),
+        "pipeline": health_pipeline_summary(&state).await,
+        "resources": resource_snapshot(),
     }))
 }
 
@@ -2184,6 +2236,106 @@ fn current_epoch_ms() -> i64 {
 fn iso_from_epoch_ms(ms: i64) -> Option<String> {
     chrono::DateTime::<Utc>::from_timestamp_millis(ms)
         .map(|dt| dt.to_rfc3339_opts(SecondsFormat::Millis, true))
+}
+
+fn read_env_trimmed(name: &str) -> Option<String> {
+    std::env::var(name)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn daemon_agent_id(state: &AppState) -> String {
+    read_env_trimmed("SIGNET_AGENT_ID").unwrap_or_else(|| state.config.manifest.agent.name.clone())
+}
+
+fn resource_snapshot() -> serde_json::Value {
+    let mut total = -1i64;
+    let mut memory_md = 0i64;
+    let mut sockets = 0i64;
+    let mut inotify = 0i64;
+    let mut pipes = 0i64;
+    let mut db = 0i64;
+    let mut other = 0i64;
+
+    if let Ok(entries) = std::fs::read_dir(format!("/proc/{}/fd", std::process::id())) {
+        let mut count = 0i64;
+        for entry in entries.flatten() {
+            count += 1;
+            match std::fs::read_link(entry.path()) {
+                Ok(target) => {
+                    let target = target.to_string_lossy();
+                    if target.contains("/memory/") && target.ends_with(".md") {
+                        memory_md += 1;
+                    } else if target.starts_with("socket:") {
+                        sockets += 1;
+                    } else if target.contains("inotify") {
+                        inotify += 1;
+                    } else if target.starts_with("pipe:") {
+                        pipes += 1;
+                    } else if target.contains("memories.db") {
+                        db += 1;
+                    } else {
+                        other += 1;
+                    }
+                }
+                Err(_) => other += 1,
+            }
+        }
+        total = count;
+    }
+
+    let rss = std::fs::read_to_string(format!("/proc/{}/status", std::process::id()))
+        .ok()
+        .and_then(|status| {
+            status.lines().find_map(|line| {
+                line.strip_prefix("VmRSS:").and_then(|value| {
+                    value
+                        .split_whitespace()
+                        .next()
+                        .and_then(|kb| kb.parse::<i64>().ok())
+                        .map(|kb| (kb + 1023) / 1024)
+                })
+            })
+        })
+        .unwrap_or(0);
+
+    serde_json::json!({
+        "total": total,
+        "memoryMd": memory_md,
+        "sockets": sockets,
+        "inotify": inotify,
+        "pipes": pipes,
+        "db": db,
+        "other": other,
+        "rss": rss,
+        "heapUsed": 0,
+    })
+}
+
+async fn health_pipeline_summary(state: &AppState) -> serde_json::Value {
+    let pipeline = state
+        .config
+        .manifest
+        .memory
+        .as_ref()
+        .and_then(|memory| memory.pipeline_v2.as_ref());
+    let paused =
+        pipeline.map(|pipeline| pipeline.paused).unwrap_or(false) || state.pipeline_paused();
+    let stats = state.extraction_worker_stats.read().await.clone();
+    let snapshot = if let Some(stats) = stats.as_ref() {
+        Some(stats.lock().await.snapshot(current_epoch_ms()))
+    } else {
+        None
+    };
+    let running = snapshot.as_ref().map(|snap| snap.running).unwrap_or(false) && !paused;
+
+    serde_json::json!({
+        "extractionRunning": running,
+        "extractionStalled": false,
+        "extractionPending": 0,
+        "extractionBackoffMs": snapshot.as_ref().map(|snap| snap.overload_backoff_ms).or_else(|| pipeline.map(|pipeline| pipeline.worker.overload_backoff_ms)).unwrap_or(0),
+    })
 }
 
 async fn status(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
@@ -2272,14 +2424,50 @@ async fn status(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
         })
         .await
         .unwrap_or_else(|_| serde_json::json!({"error": "db unavailable"}));
+    let configured_log_file = read_env_trimmed("SIGNET_LOG_FILE");
+    let configured_log_dir = read_env_trimmed("SIGNET_LOG_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| state.config.logs_dir());
+    let log_dir = configured_log_file
+        .as_ref()
+        .and_then(|file| std::path::Path::new(file).parent())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| configured_log_dir.clone());
+    let log_file = configured_log_file.unwrap_or_else(|| {
+        configured_log_dir
+            .join(format!("signet-{}.log", Utc::now().format("%Y-%m-%d")))
+            .to_string_lossy()
+            .to_string()
+    });
+    let active_sessions = state.sessions.list_sessions(None);
+    let update = state.update_state.read().await.clone();
+    let embedding = state
+        .config
+        .manifest
+        .embedding
+        .as_ref()
+        .map(|embedding| {
+            serde_json::json!({
+                "provider": embedding.provider,
+                "model": embedding.model,
+            })
+        })
+        .unwrap_or_else(|| serde_json::json!({}));
 
     Json(serde_json::json!({
         "status": "running",
         "version": env!("CARGO_PKG_VERSION"),
+        "pid": std::process::id(),
+        "uptime": process_uptime_seconds(),
+        "startedAt": process_started_at_iso(),
         "port": state.config.port,
         "host": state.config.host,
         "bindHost": bind,
         "networkMode": network_mode_from_bind(bind),
+        "agentId": daemon_agent_id(&state),
+        "agentsDir": state.config.base_path.to_string_lossy(),
+        "memoryDb": state.config.db_path.is_file(),
+        "pipelineV2": pipeline,
         "db": db_stats,
         "agent": state.config.manifest.agent.name,
         "pipeline": {
@@ -2288,6 +2476,25 @@ async fn status(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
         "providerResolution": {
             "extraction": extraction,
         },
+        "logging": {
+            "logDir": log_dir.to_string_lossy(),
+            "logFile": log_file,
+        },
+        "activeSessions": active_sessions.len(),
+        "bypassedSessions": active_sessions.iter().filter(|session| session.bypassed).count(),
+        "agentCreatedAt": state.config.manifest.agent.created,
+        "update": {
+            "currentVersion": update.current_version,
+            "latestVersion": update.last_check.as_ref().and_then(|check| check.latest_version.clone()),
+            "updateAvailable": update.last_check.as_ref().map(|check| check.update_available).unwrap_or(false),
+            "pendingRestart": update.pending_restart_version,
+            "autoInstall": update.config.auto_install,
+            "checkInterval": update.config.check_interval,
+            "lastCheckAt": update.last_check_time,
+            "lastError": update.last_auto_update_error,
+            "timerActive": false,
+        },
+        "embedding": embedding,
     }))
 }
 

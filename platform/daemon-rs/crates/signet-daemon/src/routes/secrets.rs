@@ -13,9 +13,10 @@ use axum::{
     body::Bytes,
     extract::{Path, State},
     http::StatusCode,
-    response::IntoResponse,
+    response::{IntoResponse, Response},
 };
 use serde::{Deserialize, Serialize};
+use tracing::warn;
 
 use crate::state::AppState;
 use crate::workspace_paths;
@@ -42,6 +43,23 @@ const BITWARDEN_ACTIVE_PROVIDER_SECRET: &str = "SIGNET_SECRETS_ACTIVE_PROVIDER";
 const BITWARDEN_MANAGED_FOLDER_SECRET: &str = "BITWARDEN_MANAGED_FOLDER_ID";
 const ONEPASSWORD_SERVICE_ACCOUNT_SECRET: &str = "OP_SERVICE_ACCOUNT_TOKEN";
 const BITWARDEN_DELETED_NAMES_SECRET: &str = "BITWARDEN_DELETED_SECRET_NAMES";
+const SIGNET_SECRETS_PLUGIN_ID: &str = "signet.secrets";
+const PLUGIN_AUDIT_FILE: &str = "audit-v1.ndjson";
+const PLUGIN_REGISTRY_FILE: &str = "registry-v1.json";
+const SECRET_CAPABILITIES: &[&str] = &[
+    "secrets:list",
+    "secrets:write",
+    "secrets:delete",
+    "secrets:exec",
+    "secrets:providers:list",
+    "secrets:providers:configure",
+    "prompt:contribute:user-prompt-submit",
+    "mcp:tool",
+    "cli:command",
+    "dashboard:panel",
+    "sdk:client",
+    "connector:capability",
+];
 
 impl Default for SecretsStore {
     fn default() -> Self {
@@ -50,6 +68,186 @@ impl Default for SecretsStore {
             secrets: std::collections::HashMap::new(),
         }
     }
+}
+
+struct SecretCapabilityCheck {
+    status: &'static str,
+    reason: Option<String>,
+    missing_capabilities: Vec<String>,
+    http_status: StatusCode,
+}
+
+fn registry_path(state: &AppState) -> std::io::Result<PathBuf> {
+    workspace_paths::child_file(
+        &state.config.base_path,
+        &[".daemon", "plugins", PLUGIN_REGISTRY_FILE],
+    )
+}
+
+fn audit_path(state: &AppState) -> std::io::Result<PathBuf> {
+    workspace_paths::child_file(
+        &state.config.base_path,
+        &[".daemon", "plugins", PLUGIN_AUDIT_FILE],
+    )
+}
+
+fn normalized_capabilities(value: Option<&serde_json::Value>) -> Vec<String> {
+    let Some(values) = value.and_then(serde_json::Value::as_array) else {
+        return SECRET_CAPABILITIES
+            .iter()
+            .map(|value| value.to_string())
+            .collect();
+    };
+    if values.iter().any(|entry| !entry.is_string()) {
+        return SECRET_CAPABILITIES
+            .iter()
+            .map(|value| value.to_string())
+            .collect();
+    }
+    let mut capabilities = values
+        .iter()
+        .filter_map(serde_json::Value::as_str)
+        .filter(|capability| SECRET_CAPABILITIES.contains(capability))
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    capabilities.sort();
+    capabilities.dedup();
+    capabilities
+}
+
+fn secret_plugin_state(state: &AppState) -> (bool, Vec<String>) {
+    let defaults = || {
+        (
+            true,
+            SECRET_CAPABILITIES
+                .iter()
+                .map(|value| value.to_string())
+                .collect(),
+        )
+    };
+    let Ok(path) = registry_path(state) else {
+        return defaults();
+    };
+    let Ok(raw) = std::fs::read_to_string(path) else {
+        return defaults();
+    };
+    let Ok(json) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        return defaults();
+    };
+    let Some(plugin) = json
+        .pointer("/plugins/signet.secrets")
+        .and_then(serde_json::Value::as_object)
+    else {
+        return defaults();
+    };
+    let enabled = plugin
+        .get("enabled")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(true);
+    let granted_capabilities = normalized_capabilities(plugin.get("grantedCapabilities"));
+    (enabled, granted_capabilities)
+}
+
+fn check_secret_capabilities(state: &AppState, required: &[&str]) -> Option<SecretCapabilityCheck> {
+    let (enabled, granted_capabilities) = secret_plugin_state(state);
+    if !enabled {
+        return Some(SecretCapabilityCheck {
+            status: "plugin-inactive",
+            reason: Some("disabled by host policy".to_string()),
+            missing_capabilities: required.iter().map(|value| value.to_string()).collect(),
+            http_status: StatusCode::FORBIDDEN,
+        });
+    }
+    let missing_capabilities = required
+        .iter()
+        .filter(|capability| {
+            !granted_capabilities
+                .iter()
+                .any(|granted| granted == **capability)
+        })
+        .map(|value| value.to_string())
+        .collect::<Vec<_>>();
+    if missing_capabilities.is_empty() {
+        return None;
+    }
+    Some(SecretCapabilityCheck {
+        status: "capability-missing",
+        reason: Some(format!(
+            "Plugin is missing required capabilities: {}",
+            missing_capabilities.join(", ")
+        )),
+        missing_capabilities,
+        http_status: StatusCode::FORBIDDEN,
+    })
+}
+
+fn record_capability_denied(
+    state: &AppState,
+    path: &str,
+    method: &str,
+    required: &[&str],
+    check: &SecretCapabilityCheck,
+) {
+    let Ok(path_on_disk) = audit_path(state) else {
+        warn!("failed to resolve plugin audit path for secrets capability denial");
+        return;
+    };
+    let event = serde_json::json!({
+        "id": uuid::Uuid::new_v4().to_string(),
+        "timestamp": chrono::Utc::now().to_rfc3339(),
+        "event": "plugin.capability_denied",
+        "pluginId": SIGNET_SECRETS_PLUGIN_ID,
+        "result": "denied",
+        "source": "secrets-routes",
+        "data": {
+            "path": path,
+            "method": method,
+            "status": check.status,
+            "httpStatus": check.http_status.as_u16(),
+            "requiredCapabilities": required,
+            "missingCapabilities": check.missing_capabilities.clone(),
+        },
+    });
+    if let Err(error) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path_on_disk)
+        .and_then(|mut file| {
+            use std::io::Write;
+            writeln!(file, "{event}")
+        })
+    {
+        warn!(error = %error, "failed to write plugin audit event for secrets capability denial");
+    }
+}
+
+fn reject_if_capability_denied(
+    state: &AppState,
+    path: &str,
+    method: &str,
+    required: &[&str],
+) -> Result<(), Response> {
+    let Some(check) = check_secret_capabilities(state, required) else {
+        return Ok(());
+    };
+    record_capability_denied(state, path, method, required, &check);
+    let body = serde_json::json!({
+        "error": check.reason.unwrap_or_else(|| "Plugin capability denied".to_string()),
+        "pluginId": SIGNET_SECRETS_PLUGIN_ID,
+        "status": check.status,
+        "missingCapabilities": check.missing_capabilities,
+    });
+    Err((check.http_status, Json(body)).into_response())
+}
+
+fn parse_json_body(bytes: Bytes) -> Result<serde_json::Value, Response> {
+    serde_json::from_slice::<serde_json::Value>(&bytes).map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Invalid JSON body"})),
+        )
+            .into_response()
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -645,6 +843,190 @@ fn selected_onepassword_vaults(
 // ---------------------------------------------------------------------------
 // Route handlers
 // ---------------------------------------------------------------------------
+
+macro_rules! guarded_state_route {
+    ($name:ident, $inner:ident, $path:literal, $method:literal, [$($capability:literal),+ $(,)?]) => {
+        pub async fn $name(State(state): State<Arc<AppState>>) -> Response {
+            if let Err(response) = reject_if_capability_denied(&state, $path, $method, &[$($capability),+]) {
+                return response;
+            }
+            $inner(State(state)).await.into_response()
+        }
+    };
+}
+
+macro_rules! guarded_body_route {
+    ($name:ident, $inner:ident, $path:literal, $method:literal, [$($capability:literal),+ $(,)?]) => {
+        pub async fn $name(State(state): State<Arc<AppState>>, bytes: Bytes) -> Response {
+            if let Err(response) = reject_if_capability_denied(&state, $path, $method, &[$($capability),+]) {
+                return response;
+            }
+            let body = match parse_json_body(bytes) {
+                Ok(body) => body,
+                Err(response) => return response,
+            };
+            $inner(State(state), Json(body)).await.into_response()
+        }
+    };
+}
+
+macro_rules! guarded_path_route {
+    ($name:ident, $inner:ident, $path_ty:ty, $param:ident, $path:literal, $method:literal, [$($capability:literal),+ $(,)?]) => {
+        pub async fn $name(State(state): State<Arc<AppState>>, Path($param): Path<$path_ty>) -> Response {
+            if let Err(response) = reject_if_capability_denied(&state, $path, $method, &[$($capability),+]) {
+                return response;
+            }
+            $inner(State(state), Path($param)).await.into_response()
+        }
+    };
+}
+
+macro_rules! guarded_path_body_route {
+    ($name:ident, $inner:ident, $path_ty:ty, $param:ident, $path:literal, $method:literal, [$($capability:literal),+ $(,)?]) => {
+        pub async fn $name(
+            State(state): State<Arc<AppState>>,
+            Path($param): Path<$path_ty>,
+            bytes: Bytes,
+        ) -> Response {
+            if let Err(response) = reject_if_capability_denied(&state, $path, $method, &[$($capability),+]) {
+                return response;
+            }
+            let body = match parse_json_body(bytes) {
+                Ok(body) => body,
+                Err(response) => return response,
+            };
+            $inner(State(state), Path($param), Json(body)).await.into_response()
+        }
+    };
+}
+
+guarded_state_route!(list_guarded, list, "/api/secrets", "GET", ["secrets:list"]);
+guarded_state_route!(
+    bitwarden_status_guarded,
+    bitwarden_status,
+    "/api/secrets/bitwarden/status",
+    "GET",
+    ["secrets:providers:list"]
+);
+guarded_body_route!(
+    bitwarden_connect_guarded,
+    bitwarden_connect,
+    "/api/secrets/bitwarden/connect",
+    "POST",
+    ["secrets:providers:configure"]
+);
+guarded_state_route!(
+    bitwarden_disconnect_guarded,
+    bitwarden_disconnect,
+    "/api/secrets/bitwarden/connect",
+    "DELETE",
+    ["secrets:providers:configure"]
+);
+guarded_body_route!(
+    bitwarden_provider_guarded,
+    bitwarden_provider,
+    "/api/secrets/bitwarden/provider",
+    "POST",
+    ["secrets:providers:configure"]
+);
+guarded_state_route!(
+    bitwarden_folders_guarded,
+    bitwarden_folders,
+    "/api/secrets/bitwarden/folders",
+    "GET",
+    ["secrets:providers:list"]
+);
+guarded_body_route!(
+    bitwarden_migrate_guarded,
+    bitwarden_migrate,
+    "/api/secrets/bitwarden/migrate",
+    "POST",
+    ["secrets:providers:configure"]
+);
+guarded_state_route!(
+    onepassword_status_guarded,
+    onepassword_status,
+    "/api/secrets/1password/status",
+    "GET",
+    ["secrets:providers:list"]
+);
+guarded_body_route!(
+    onepassword_connect_guarded,
+    onepassword_connect,
+    "/api/secrets/1password/connect",
+    "POST",
+    ["secrets:providers:configure"]
+);
+guarded_state_route!(
+    onepassword_disconnect_guarded,
+    onepassword_disconnect,
+    "/api/secrets/1password/connect",
+    "DELETE",
+    ["secrets:providers:configure"]
+);
+guarded_state_route!(
+    onepassword_vaults_guarded,
+    onepassword_vaults,
+    "/api/secrets/1password/vaults",
+    "GET",
+    ["secrets:providers:list"]
+);
+guarded_body_route!(
+    onepassword_import_guarded,
+    onepassword_import,
+    "/api/secrets/1password/import",
+    "POST",
+    ["secrets:providers:configure"]
+);
+
+guarded_path_route!(
+    exec_status_guarded,
+    exec_status,
+    String,
+    job_id,
+    "/api/secrets/exec/:jobId",
+    "GET",
+    ["secrets:exec"]
+);
+guarded_path_body_route!(
+    run_named_secret_guarded,
+    run_named_secret,
+    String,
+    name,
+    "/api/secrets/:name/exec",
+    "POST",
+    ["secrets:exec"]
+);
+guarded_path_body_route!(
+    put_guarded,
+    put,
+    String,
+    name,
+    "/api/secrets/:name",
+    "POST",
+    ["secrets:write"]
+);
+guarded_path_route!(
+    delete_guarded,
+    delete,
+    String,
+    name,
+    "/api/secrets/:name",
+    "DELETE",
+    ["secrets:delete"]
+);
+
+pub async fn run_with_secrets_guarded(
+    State(state): State<Arc<AppState>>,
+    bytes: Bytes,
+) -> Response {
+    if let Err(response) =
+        reject_if_capability_denied(&state, "/api/secrets/exec", "POST", &["secrets:exec"])
+    {
+        return response;
+    }
+    run_with_secrets(State(state), bytes).await.into_response()
+}
 
 /// GET /api/secrets — list secret names
 pub async fn list(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
@@ -1615,18 +1997,29 @@ pub async fn run_named_secret(
     };
     let secrets = match body.get("secrets") {
         None => std::collections::HashMap::from([(name.clone(), name)]),
-        Some(value) if value.is_object() => value
-            .as_object()
-            .unwrap()
-            .iter()
-            .filter_map(|(key, value)| {
-                value
-                    .as_str()
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .map(|value| (key.clone(), value.to_string()))
-            })
-            .collect::<std::collections::HashMap<_, _>>(),
+        Some(value) if value.is_object() => {
+            let values = value.as_object().unwrap();
+            if values.is_empty() {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({"error": "non-empty secrets map is required"})),
+                )
+                    .into_response();
+            }
+            let mut secrets = std::collections::HashMap::new();
+            for (key, value) in values {
+                let Some(secret_ref) = value.as_str().filter(|value| !value.trim().is_empty())
+                else {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(serde_json::json!({"error": "non-empty secrets map is required"})),
+                    )
+                        .into_response();
+                };
+                secrets.insert(key.clone(), secret_ref.to_string());
+            }
+            secrets
+        }
         _ => {
             return (
                 StatusCode::BAD_REQUEST,

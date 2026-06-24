@@ -4,7 +4,7 @@ use std::collections::HashSet;
 use std::env;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
-use std::net::{IpAddr, SocketAddr};
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -27,12 +27,16 @@ use signet_services::session::SessionTracker;
 use signet_services::transactions;
 
 use crate::analytics::ErrorEntry;
-use crate::auth::middleware::{authenticate_headers, require_scope_guard};
-use crate::auth::types::TokenScope;
+use crate::auth::middleware::{
+    AuthState, authenticate_headers, is_loopback_ip, require_permission_guard, require_scope_guard,
+    resolve_scoped_agent,
+};
+use crate::auth::types::{Permission, TokenRole, TokenScope};
 use crate::routes::memory_embeddings::{
     memory_has_embedding, prepare_memory_embedding, upsert_memory_embedding,
 };
 use crate::state::AppState;
+use crate::state::AuthRuntimeState;
 
 // ---------------------------------------------------------------------------
 // Mutations-frozen guard
@@ -294,6 +298,8 @@ pub async fn codex_native_note(
 
 pub async fn patch(
     State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Path(id): Path<String>,
     Json(payload): Json<Value>,
 ) -> axum::response::Response {
@@ -420,11 +426,32 @@ pub async fn patch(
         return resp;
     }
 
+    let requested_agent = requested_mutation_agent(&headers, None);
+    let (agent_id, auth) = match auth_for_mutation(
+        &state,
+        &headers,
+        &peer,
+        requested_agent.as_deref(),
+        Permission::Modify,
+    ) {
+        Ok(value) => value,
+        Err(resp) => return resp,
+    };
+    let project = mutation_project(&auth);
+
     let memory_id = id.clone();
     let content_changed = content.is_some();
     let result = state
         .pool
         .write(Priority::High, move |conn| {
+            if !memory_mutation_allowed(conn, &memory_id, &agent_id, project.as_deref(), false)? {
+                return Ok(serde_json::json!({
+                    "id": memory_id,
+                    "status": "not_found",
+                    "error": "Not found",
+                    "_code": 404,
+                }));
+            }
             let result = transactions::modify(
                 conn,
                 &transactions::ModifyInput {
@@ -1167,10 +1194,7 @@ fn require_session_scope_for_write(
 }
 
 fn is_loopback(addr: &SocketAddr) -> bool {
-    match addr.ip() {
-        IpAddr::V4(ip) => ip.is_loopback(),
-        IpAddr::V6(ip) => ip.is_loopback(),
-    }
+    is_loopback_ip(addr.ip())
 }
 
 fn guard_write_scope(
@@ -1178,7 +1202,7 @@ fn guard_write_scope(
     headers: &HeaderMap,
     peer: &SocketAddr,
     agent_id: &str,
-) -> Result<(), Box<axum::response::Response>> {
+) -> Result<(AuthState, AuthRuntimeState), Box<axum::response::Response>> {
     let auth_runtime = state.auth_snapshot();
     let auth = authenticate_headers(
         auth_runtime.mode,
@@ -1186,12 +1210,114 @@ fn guard_write_scope(
         headers,
         is_loopback(peer),
     )?;
+    // #1 REVIEW FIX: remember writes must require Permission::Remember,
+    // not just scope. A readonly/recall-only token must not create memories.
+    require_permission_guard(
+        &auth,
+        Permission::Remember,
+        auth_runtime.mode,
+        is_loopback(peer),
+    )?;
     let target = TokenScope {
         project: None,
         agent: Some(agent_id.to_string()),
         user: None,
     };
-    require_scope_guard(&auth, &target, auth_runtime.mode, is_loopback(peer))
+    require_scope_guard(&auth, &target, auth_runtime.mode, is_loopback(peer))?;
+    Ok((auth, auth_runtime))
+}
+
+fn clean_header(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn requested_mutation_agent(headers: &HeaderMap, explicit: Option<&str>) -> Option<String> {
+    clean_header(explicit)
+        .or_else(|| {
+            clean_header(
+                headers
+                    .get("x-signet-agent-id")
+                    .and_then(|v| v.to_str().ok()),
+            )
+        })
+        .or_else(|| {
+            session_agent_id(
+                headers
+                    .get("x-signet-session-key")
+                    .and_then(|v| v.to_str().ok()),
+            )
+        })
+}
+
+fn auth_for_mutation(
+    state: &AppState,
+    headers: &HeaderMap,
+    peer: &SocketAddr,
+    requested: Option<&str>,
+    permission: Permission,
+) -> Result<(String, AuthState), axum::response::Response> {
+    let is_local = is_loopback(peer);
+    let auth_runtime = state.auth_snapshot();
+    let auth = authenticate_headers(
+        auth_runtime.mode,
+        auth_runtime.secret.as_deref(),
+        headers,
+        is_local,
+    )
+    .map_err(|resp| *resp)?;
+    require_permission_guard(&auth, permission, auth_runtime.mode, is_local)
+        .map_err(|resp| *resp)?;
+    let agent =
+        resolve_scoped_agent(&auth, auth_runtime.mode, is_local, requested).map_err(|reason| {
+            (
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({"error": reason})),
+            )
+                .into_response()
+        })?;
+    Ok((agent, auth))
+}
+
+fn mutation_project(auth: &AuthState) -> Option<String> {
+    auth.result
+        .claims
+        .as_ref()
+        .and_then(|claims| claims.scope.project.as_deref())
+        .and_then(|project| clean_header(Some(project)))
+}
+
+fn memory_mutation_allowed(
+    conn: &rusqlite::Connection,
+    id: &str,
+    agent_id: &str,
+    project: Option<&str>,
+    include_deleted: bool,
+) -> rusqlite::Result<bool> {
+    let deleted_clause = if include_deleted {
+        ""
+    } else {
+        " AND COALESCE(is_deleted, 0) = 0"
+    };
+    let project_clause = if project.is_some() {
+        " AND project = ?3"
+    } else {
+        ""
+    };
+    let sql = format!(
+        "SELECT 1 FROM memories
+         WHERE id = ?1
+           AND COALESCE(NULLIF(agent_id, ''), 'default') = ?2
+           AND COALESCE(visibility, 'global') != 'archived'{deleted_clause}{project_clause}
+         LIMIT 1"
+    );
+    if let Some(project) = project {
+        conn.prepare(&sql)?.exists(params![id, agent_id, project])
+    } else {
+        conn.prepare(&sql)?.exists(params![id, agent_id])
+    }
 }
 
 fn dead_letter_blocked_extraction_memory(
@@ -1853,8 +1979,25 @@ pub async fn remember(
         )
             .into_response();
     }
-    if let Err(resp) = guard_write_scope(state.as_ref(), &headers, &peer, &agent_id) {
-        return *resp;
+    // TS parity: remember writes require Permission::Remember. Non-admin
+    // project-scoped tokens must explicitly request their scoped project;
+    // admins bypass project scope and keep the requested/omitted project.
+    let (write_auth, _) = match guard_write_scope(state.as_ref(), &headers, &peer, &agent_id) {
+        Ok(v) => v,
+        Err(resp) => return *resp,
+    };
+    if let Some(claims) = write_auth.result.claims.as_ref()
+        && claims.role != TokenRole::Admin
+        && let Some(scoped_project) = claims.scope.project.as_deref()
+        && project.as_deref() != Some(scoped_project)
+    {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
+                "error": format!("scope restricted to project '{scoped_project}'")
+            })),
+        )
+            .into_response();
     }
     let extraction_max_attempts = state
         .config
@@ -2768,6 +2911,49 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn remember_allows_ipv4_mapped_loopback_in_hybrid_mode() {
+        let (state, _dir) = build_test_state().await;
+        {
+            let mut auth = state.auth.write().expect("auth lock");
+            auth.mode = AuthMode::Hybrid;
+        }
+
+        let peer = SocketAddr::new("::ffff:127.0.0.1".parse().expect("mapped loopback"), 3850);
+        let response = remember(
+            State(state),
+            ConnectInfo(peer),
+            HeaderMap::new(),
+            Json(RememberBody {
+                content: Some("IPv4-mapped loopback remember parity".to_string()),
+                who: None,
+                project: None,
+                importance: None,
+                tags: None,
+                pinned: None,
+                source_type: None,
+                source_id: None,
+                created_at: None,
+                source_path: None,
+                runtime_path: None,
+                idempotency_key: None,
+                metadata: None,
+                memory_type: None,
+                agent_id: None,
+                visibility: None,
+                scope: None,
+                session_key: None,
+                hints: None,
+                structured: None,
+            }),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = read_json_body(response).await;
+        assert_eq!(body["status"], "created");
+    }
+
+    #[tokio::test]
     async fn remember_embeds_created_memory_rows() {
         let (state, _dir) = build_test_state().await;
         *state.embedding.write().await = Some(Arc::new(TestEmbeddingProvider {
@@ -3162,6 +3348,7 @@ struct DeletePayload {
     reason: Option<String>,
     force: Option<bool>,
     if_version: Option<i64>,
+    agent_id: Option<String>,
 }
 
 const MAX_FORGET_BATCH: usize = 200;
@@ -3186,6 +3373,8 @@ pub struct ForgetBatchBody {
     pub if_version: Option<i64>,
     pub confirm_token: Option<String>,
     pub changed_by: Option<String>,
+    #[serde(alias = "agentId")]
+    pub agent_id: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -3207,6 +3396,7 @@ fn parse_delete_query(raw_query: Option<&str>) -> Result<DeletePayload, &'static
         reason: None,
         force: None,
         if_version: None,
+        agent_id: None,
     };
     let Some(raw_query) = raw_query else {
         return Ok(payload);
@@ -3234,6 +3424,9 @@ fn parse_delete_query(raw_query: Option<&str>) -> Result<DeletePayload, &'static
                 }
                 payload.if_version = Some(version);
             }
+            "agent_id" | "agentId" => {
+                payload.agent_id = trim_opt(Some(value.replace('+', " ")));
+            }
             _ => {}
         }
     }
@@ -3246,6 +3439,7 @@ fn parse_delete_body(bytes: &Bytes) -> Result<DeletePayload, &'static str> {
             reason: None,
             force: None,
             if_version: None,
+            agent_id: None,
         });
     }
     let Ok(value) = serde_json::from_slice::<Value>(bytes) else {
@@ -3297,10 +3491,19 @@ fn parse_delete_body(bytes: &Bytes) -> Result<DeletePayload, &'static str> {
         None
     };
 
+    let agent_id = payload
+        .get("agent_id")
+        .or_else(|| payload.get("agentId"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+
     Ok(DeletePayload {
         reason,
         force,
         if_version,
+        agent_id,
     })
 }
 
@@ -3350,6 +3553,8 @@ fn forget_result_json(id: String, result: transactions::ForgetResult) -> serde_j
 
 pub async fn forget_batch(
     State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Json(body): Json<ForgetBatchBody>,
 ) -> axum::response::Response {
     let mode = trim_opt(body.mode.clone()).unwrap_or_else(|| "preview".to_string());
@@ -3360,6 +3565,19 @@ pub async fn forget_batch(
         )
             .into_response();
     }
+
+    let requested_agent = requested_mutation_agent(&headers, body.agent_id.as_deref());
+    let (agent_id, auth) = match auth_for_mutation(
+        &state,
+        &headers,
+        &peer,
+        requested_agent.as_deref(),
+        Permission::Forget,
+    ) {
+        Ok(value) => value,
+        Err(resp) => return resp,
+    };
+    let project = mutation_project(&auth);
 
     let limit = body.limit.unwrap_or(20).clamp(1, MAX_FORGET_BATCH);
     let ids = body
@@ -3410,12 +3628,18 @@ pub async fn forget_batch(
                     return Ok(Vec::new());
                 }
                 let placeholders = std::iter::repeat_n("?", deduped.len()).collect::<Vec<_>>().join(", ");
+                let project_clause = if project.is_some() { " AND project = ?" } else { "" };
                 let sql = format!(
-                    "SELECT id, pinned, version FROM memories WHERE (is_deleted = 0 OR is_deleted IS NULL) AND id IN ({placeholders})"
+                    "SELECT id, pinned, version FROM memories WHERE (is_deleted = 0 OR is_deleted IS NULL) AND id IN ({placeholders}) AND COALESCE(NULLIF(agent_id, ''), 'default') = ? AND COALESCE(visibility, 'global') != 'archived'{project_clause}"
                 );
+                let mut query_args = deduped.iter().map(|id| id as &dyn rusqlite::ToSql).collect::<Vec<_>>();
+                query_args.push(&agent_id as &dyn rusqlite::ToSql);
+                if let Some(ref project) = project {
+                    query_args.push(project as &dyn rusqlite::ToSql);
+                }
                 let mut stmt = conn.prepare(&sql)?;
                 let rows = stmt
-                    .query_map(rusqlite::params_from_iter(deduped.iter()), |row| {
+                    .query_map(query_args.as_slice(), |row| {
                         Ok(ForgetCandidate {
                             id: row.get(0)?,
                             pinned: row.get(1)?,
@@ -3431,8 +3655,16 @@ pub async fn forget_batch(
                     .collect());
             }
 
-            let mut clauses = vec!["(is_deleted = 0 OR is_deleted IS NULL)".to_string()];
-            let mut args = Vec::<String>::new();
+            let mut clauses = vec![
+                "(is_deleted = 0 OR is_deleted IS NULL)".to_string(),
+                "COALESCE(NULLIF(agent_id, ''), 'default') = ?".to_string(),
+                "COALESCE(visibility, 'global') != 'archived'".to_string(),
+            ];
+            let mut args = vec![agent_id];
+            if let Some(project) = project {
+                clauses.push("project = ?".to_string());
+                args.push(project);
+            }
             if let Some(value) = query {
                 clauses.push("(content LIKE ? OR tags LIKE ?)".to_string());
                 args.push(format!("%{value}%"));
@@ -3597,6 +3829,8 @@ pub async fn forget_batch(
 
 pub async fn delete(
     State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Path(id): Path<String>,
     RawQuery(raw_query): RawQuery,
     bytes: Bytes,
@@ -3644,10 +3878,33 @@ pub async fn delete(
     };
     let force = body.force.or(query.force).unwrap_or(false);
     let if_version = body.if_version.or(query.if_version);
+    let requested_agent = requested_mutation_agent(
+        &headers,
+        body.agent_id.as_deref().or(query.agent_id.as_deref()),
+    );
+    let (agent_id, auth) = match auth_for_mutation(
+        &state,
+        &headers,
+        &peer,
+        requested_agent.as_deref(),
+        Permission::Forget,
+    ) {
+        Ok(value) => value,
+        Err(resp) => return resp,
+    };
+    let project = mutation_project(&auth);
 
     let result = state
         .pool
         .write(Priority::High, move |conn| {
+            if !memory_mutation_allowed(conn, &id, &agent_id, project.as_deref(), false)? {
+                return Ok(serde_json::json!({
+                    "id": id.clone(),
+                    "status": "not_found",
+                    "error": "Not found",
+                    "_code": 404
+                }));
+            }
             let r = transactions::forget(
                 conn,
                 &transactions::ForgetInput {
@@ -3749,10 +4006,14 @@ pub async fn delete(
 pub struct RecoverBody {
     pub reason: Option<String>,
     pub if_version: Option<i64>,
+    #[serde(alias = "agentId")]
+    pub agent_id: Option<String>,
 }
 
 pub async fn recover(
     State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Path(id): Path<String>,
     body: Option<Json<RecoverBody>>,
 ) -> axum::response::Response {
@@ -3763,10 +4024,26 @@ pub async fn recover(
     let body = body.map(|Json(b)| b);
     let reason = body.as_ref().and_then(|b| b.reason.clone());
     let if_version = body.as_ref().and_then(|b| b.if_version);
+    let requested_agent =
+        requested_mutation_agent(&headers, body.as_ref().and_then(|b| b.agent_id.as_deref()));
+    let (agent_id, auth) = match auth_for_mutation(
+        &state,
+        &headers,
+        &peer,
+        requested_agent.as_deref(),
+        Permission::Recover,
+    ) {
+        Ok(value) => value,
+        Err(resp) => return resp,
+    };
+    let project = mutation_project(&auth);
 
     let result = state
         .pool
         .write(Priority::High, move |conn| {
+            if !memory_mutation_allowed(conn, &id, &agent_id, project.as_deref(), true)? {
+                return Ok(serde_json::json!({"status": "not_found", "_code": 404}));
+            }
             let r = transactions::recover(
                 conn,
                 &transactions::RecoverInput {
@@ -3828,6 +4105,8 @@ pub async fn recover(
 pub struct ModifyBody {
     pub patches: Vec<PatchItem>,
     pub reason: Option<String>,
+    #[serde(alias = "agentId")]
+    pub agent_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -3851,6 +4130,8 @@ const MAX_MUTATION_BATCH: usize = 100;
 
 pub async fn modify_batch(
     State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Json(body): Json<ModifyBody>,
 ) -> axum::response::Response {
     if let Some(resp) = check_mutations_frozen(&state) {
@@ -3875,6 +4156,18 @@ pub async fn modify_batch(
             .into_response();
     }
 
+    let requested_agent = requested_mutation_agent(&headers, body.agent_id.as_deref());
+    let (agent_id, auth) = match auth_for_mutation(
+        &state,
+        &headers,
+        &peer,
+        requested_agent.as_deref(),
+        Permission::Modify,
+    ) {
+        Ok(value) => value,
+        Err(resp) => return resp,
+    };
+    let project = mutation_project(&auth);
     let reason = body.reason;
     let patches = body.patches;
 
@@ -3885,6 +4178,14 @@ pub async fn modify_batch(
             let mut updated = 0usize;
 
             for patch in &patches {
+                if !memory_mutation_allowed(conn, &patch.id, &agent_id, project.as_deref(), false)?
+                {
+                    results.push(serde_json::json!({
+                        "id": patch.id,
+                        "status": "not_found",
+                    }));
+                    continue;
+                }
                 let tags: Option<Vec<String>> = patch
                     .patch
                     .tags

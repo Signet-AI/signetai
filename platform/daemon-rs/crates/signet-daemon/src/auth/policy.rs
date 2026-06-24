@@ -23,6 +23,30 @@ fn role_has_permission(role: TokenRole, perm: Permission) -> bool {
     }
 }
 
+fn role_name(role: TokenRole) -> &'static str {
+    match role {
+        TokenRole::Admin => "admin",
+        TokenRole::Operator => "operator",
+        TokenRole::Agent => "agent",
+        TokenRole::Readonly => "readonly",
+    }
+}
+
+fn permission_name(permission: Permission) -> &'static str {
+    match permission {
+        Permission::Remember => "remember",
+        Permission::Recall => "recall",
+        Permission::Modify => "modify",
+        Permission::Forget => "forget",
+        Permission::Recover => "recover",
+        Permission::Admin => "admin",
+        Permission::Documents => "documents",
+        Permission::Connectors => "connectors",
+        Permission::Diagnostics => "diagnostics",
+        Permission::Analytics => "analytics",
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Permission check
 // ---------------------------------------------------------------------------
@@ -50,8 +74,21 @@ pub fn check_permission(
         return PolicyDecision {
             allowed: false,
             reason: Some(format!(
-                "role '{:?}' lacks '{:?}' permission",
-                claims.role, perm
+                "role '{}' lacks '{}' permission",
+                role_name(claims.role),
+                permission_name(perm)
+            )),
+        };
+    }
+
+    if let Some(permissions) = claims.permissions.as_ref()
+        && !permissions.contains(&perm)
+    {
+        return PolicyDecision {
+            allowed: false,
+            reason: Some(format!(
+                "credential lacks '{}' permission",
+                permission_name(perm)
             )),
         };
     }
@@ -145,6 +182,7 @@ mod tests {
             role,
             iat: 0,
             exp: i64::MAX,
+            permissions: None,
         }
     }
 

@@ -51,3 +51,7 @@ package-lock.json
 pnpm-lock.yaml
 tmp/
 yarn.lock
+
+# Generated replay-corpus inventory (regenerable via platform/daemon-rs/scripts/generate-rust-replay-corpus.ts).
+# Curated cases/*.json + *.seed.sql fixtures ARE tracked; only the bulk AST inventory is not.
+platform/daemon-rs/contracts/replay-corpus/inventory.json

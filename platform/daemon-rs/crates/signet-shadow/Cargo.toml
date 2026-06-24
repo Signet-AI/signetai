@@ -22,3 +22,4 @@ tower-http = { workspace = true }
 anyhow = { workspace = true }
 regex-lite = { workspace = true }
 bytes = { workspace = true }
+rusqlite = { workspace = true }

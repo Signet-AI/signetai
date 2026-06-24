@@ -1,0 +1,116 @@
+{
+  "id": "auth-api-key-create-list",
+  "source": {
+    "file": "platform/daemon/src/auth/api-keys.test.ts",
+    "testName": "api keys > creates a connector key, stores only metadata, and verifies the raw secret",
+    "line": 60
+  },
+  "classification": {
+    "family": "auth/secrets",
+    "convertibility": "http-db",
+    "tags": ["auth", "api-key", "create", "list", "redaction"]
+  },
+  "environment": {
+    "agentYaml": "name: ReplayAuth\nauth:\n  mode: local\n",
+    "env": { "SIGNET_AUTH_MODE": "local" },
+    "clock": "2026-01-01T00:00:20.000Z",
+    "uuidSeed": "auth-api-key-create-list"
+  },
+  "seed": {
+    "schema": "migrations-current",
+    "sql": "cases/auth-api-key-create-list.seed.sql",
+    "redactions": ["OPENAI_API_KEY", "GITHUB_TOKEN", "SIGNET_AUTH_SECRET", "apiKey.key", "api_keys.key_hash"]
+  },
+  "steps": [
+    {
+      "name": "create connector API key",
+      "request": {
+        "method": "POST",
+        "path": "/api/auth/api-keys",
+        "headers": { "content-type": "application/json" },
+        "body": {
+          "name": "replay pi connector",
+          "connector": "pi",
+          "agentId": "agent-pi"
+        }
+      },
+      "expectedResponse": {
+        "status": 201,
+        "headers": { "content-type": { "contains": "application/json" } },
+        "jsonContains": {
+          "apiKey": {
+            "name": "replay pi connector",
+            "role": "agent",
+            "connector": "pi",
+            "harness": "pi",
+            "agentId": "agent-pi",
+            "permissions": ["recall", "remember", "documents"],
+            "lastUsedAt": null,
+            "revokedAt": null,
+            "expiresAt": null
+          }
+        },
+        "jsonMatchers": {
+          "$.apiKey.id": "string",
+          "$.apiKey.prefix": "string",
+          "$.apiKey.key": "redacted-secret",
+          "$.apiKey.createdAt": "timestamp"
+        },
+        "ignoreJsonPaths": ["$.apiKey.id", "$.apiKey.prefix", "$.apiKey.key", "$.apiKey.createdAt"]
+      }
+    },
+    {
+      "name": "list connector API key metadata only",
+      "request": {
+        "method": "GET",
+        "path": "/api/auth/api-keys",
+        "headers": {},
+        "body": null
+      },
+      "expectedResponse": {
+        "status": 200,
+        "headers": { "content-type": { "contains": "application/json" } },
+        "jsonPathAssertions": [
+          { "path": "$.apiKeys", "count": 1 },
+          { "path": "$.apiKeys[0].key", "equals": null }
+        ],
+        "jsonContains": {
+          "apiKeys": [
+            {
+              "name": "replay pi connector",
+              "role": "agent",
+              "connector": "pi",
+              "harness": "pi",
+              "agentId": "agent-pi",
+              "permissions": ["recall", "remember", "documents"],
+              "lastUsedAt": null,
+              "revokedAt": null,
+              "expiresAt": null
+            }
+          ]
+        },
+        "ignoreJsonPaths": ["$.apiKeys[0].id", "$.apiKeys[0].prefix", "$.apiKeys[0].createdAt"]
+      },
+      "expectedInternalState": {
+        "db": [
+          {
+            "table": "api_keys",
+            "count": 1
+          },
+          {
+            "table": "api_keys",
+            "orderBy": ["name"],
+            "columns": ["name", "role", "permissions_json", "connector", "harness", "agent_id", "revoked_at", "expires_at"],
+            "rows": [["replay pi connector", "agent", "[\"recall\",\"remember\",\"documents\"]", "pi", "pi", "agent-pi", null, null]]
+          }
+        ],
+        "files": []
+      }
+    }
+  ],
+  "normalization": {
+    "ignoreColumns": ["id", "prefix", "key_hash", "created_at", "last_used_at"],
+    "sortRowsBy": ["name"],
+    "floatTolerance": 0.000001
+  }
+}
