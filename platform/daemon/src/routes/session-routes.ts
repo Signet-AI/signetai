@@ -17,6 +17,7 @@ import {
 import { getSessionTranscriptContent } from "../session-transcripts.js";
 import { searchSessionTranscripts } from "../subagent-context.js";
 import { expandTemporalNode } from "../temporal-expand.js";
+import { clampGitSyncIntervalSeconds } from "./git-config.js";
 import { authConfig } from "./state.js";
 import { parseOptionalString, readOptionalJsonObject, resolveScopedAgentId, resolveScopedProject } from "./utils.js";
 
@@ -64,8 +65,8 @@ export interface GitConfig {
 export function applyGitConfigPatch(gc: GitConfig, body: Partial<GitConfig>): void {
 	if (body.autoCommit !== undefined && typeof body.autoCommit === "boolean") gc.autoCommit = body.autoCommit;
 	if (body.autoSync !== undefined && typeof body.autoSync === "boolean") gc.autoSync = body.autoSync;
-	if (body.syncInterval !== undefined && typeof body.syncInterval === "number" && Number.isFinite(body.syncInterval)) {
-		gc.syncInterval = body.syncInterval;
+	if (body.syncInterval !== undefined) {
+		gc.syncInterval = clampGitSyncIntervalSeconds(body.syncInterval) ?? gc.syncInterval;
 	}
 	if (typeof body.remote === "string" && body.remote.length > 0) gc.remote = body.remote;
 	if (typeof body.branch === "string" && body.branch.length > 0) gc.branch = body.branch;
@@ -474,11 +475,8 @@ export function registerSessionRoutes(app: Hono, deps: SessionRoutesDeps): void 
 
 		applyGitConfigPatch(gc, body);
 
-		if (
-			typeof body.autoSync === "boolean" ||
-			(typeof body.syncInterval === "number" && Number.isFinite(body.syncInterval))
-		) {
-			stopGitSyncTimer();
+		if (typeof body.autoSync === "boolean" || body.syncInterval !== undefined) {
+			await stopGitSyncTimer();
 			if (gc.autoSync) {
 				startGitSyncTimer();
 			}

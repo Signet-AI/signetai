@@ -16,6 +16,7 @@ import {
 	statfsSync,
 	unlinkSync,
 } from "node:fs";
+import { copyFile as copyFileAsync, unlink as unlinkAsync } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
@@ -540,6 +541,39 @@ export function backupBeforeMigration(
 	schemaVersion: number,
 	deps: MigrationBackupDeps = migrationBackupDeps,
 ): void {
+	prepareMigrationBackup(db, dbPath, deps);
+	const backupDest = migrationBackupDestination(dbPath, schemaVersion, deps);
+	try {
+		deps.copyFileSync(dbPath, backupDest);
+	} catch (err) {
+		cleanupPartialMigrationBackup(backupDest, deps);
+		throw migrationBackupError(backupDest, err);
+	}
+	finishMigrationBackup(dbPath, backupDest, deps);
+}
+
+export async function backupBeforeMigrationAsync(
+	db: { exec(sql: string): unknown },
+	dbPath: string,
+	schemaVersion: number,
+	deps: MigrationBackupDeps = migrationBackupDeps,
+): Promise<void> {
+	prepareMigrationBackup(db, dbPath, deps);
+	const backupDest = migrationBackupDestination(dbPath, schemaVersion, deps);
+	try {
+		if (deps === migrationBackupDeps) {
+			await copyFileAsync(dbPath, backupDest);
+		} else {
+			deps.copyFileSync(dbPath, backupDest);
+		}
+	} catch (err) {
+		await cleanupPartialMigrationBackupAsync(backupDest, deps);
+		throw migrationBackupError(backupDest, err);
+	}
+	finishMigrationBackup(dbPath, backupDest, deps);
+}
+
+function prepareMigrationBackup(db: { exec(sql: string): unknown }, dbPath: string, deps: MigrationBackupDeps): void {
 	// Flush WAL so the .db file is self-contained.
 	try {
 		db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
@@ -555,24 +589,38 @@ export function backupBeforeMigration(
 	if (requiredBytes !== null) {
 		pruneMigrationBackupsForHeadroom(dbPath, requiredBytes, 1, deps);
 	}
+}
 
-	const timestamp = deps.now();
-	const backupDest = `${dbPath}.bak-v${schemaVersion}-${timestamp}`;
+function migrationBackupDestination(dbPath: string, schemaVersion: number, deps: MigrationBackupDeps): string {
+	return `${dbPath}.bak-v${schemaVersion}-${deps.now()}`;
+}
+
+function cleanupPartialMigrationBackup(backupDest: string, deps: MigrationBackupDeps): void {
 	try {
-		deps.copyFileSync(dbPath, backupDest);
-	} catch (err) {
-		try {
-			deps.unlinkSync(backupDest);
-		} catch {
-			// Best effort cleanup for partial copy files.
-		}
-		throw new Error(
-			`Failed to create pre-migration backup at ${backupDest}. ` +
-				`Free disk space and retry; the database was not migrated. Cause: ${readErrorMessage(err)}`,
-		);
+		deps.unlinkSync(backupDest);
+	} catch {
+		// Best effort cleanup for partial copy files.
 	}
-	deps.log(`[db-accessor] Pre-migration backup: ${backupDest}`);
+}
 
+async function cleanupPartialMigrationBackupAsync(backupDest: string, deps: MigrationBackupDeps): Promise<void> {
+	try {
+		if (deps === migrationBackupDeps) await unlinkAsync(backupDest);
+		else deps.unlinkSync(backupDest);
+	} catch {
+		// Best effort cleanup for partial copy files.
+	}
+}
+
+function migrationBackupError(backupDest: string, err: unknown): Error {
+	return new Error(
+		`Failed to create pre-migration backup at ${backupDest}. ` +
+			`Free disk space and retry; the database was not migrated. Cause: ${readErrorMessage(err)}`,
+	);
+}
+
+function finishMigrationBackup(dbPath: string, backupDest: string, deps: MigrationBackupDeps): void {
+	deps.log(`[db-accessor] Pre-migration backup: ${backupDest}`);
 	// Final retention pass in case another process wrote backups concurrently.
 	pruneMigrationBackups(dbPath, MAX_MIGRATION_BACKUPS, deps);
 }
@@ -583,6 +631,18 @@ export function backupBeforeMigration(
  * the write connection, sets pragmas, and runs pending migrations.
  */
 export function initDbAccessor(path: string, opts?: { readonly agentsDir?: string }): void {
+	const writeConn = openDbAccessorConnection(path, opts);
+	backupBeforePendingMigrations(writeConn, path);
+	finishDbAccessorInit(writeConn, opts);
+}
+
+export async function initDbAccessorAsync(path: string, opts?: { readonly agentsDir?: string }): Promise<void> {
+	const writeConn = openDbAccessorConnection(path, opts);
+	await backupBeforePendingMigrationsAsync(writeConn, path);
+	finishDbAccessorInit(writeConn, opts);
+}
+
+function openDbAccessorConnection(path: string, opts?: { readonly agentsDir?: string }): SqliteDatabase {
 	if (accessor) {
 		throw new Error("DbAccessor already initialised");
 	}
@@ -599,16 +659,29 @@ export function initDbAccessor(path: string, opts?: { readonly agentsDir?: strin
 	const writeConn = new Database(path);
 	configurePragmas(writeConn);
 	loadVecExtension(writeConn);
+	return writeConn;
+}
 
-	// Back up before migrations if there are pending changes
+function readCurrentSchemaVersion(writeConn: SqliteDatabase): number {
+	const row = writeConn.prepare("SELECT MAX(version) as version FROM schema_migrations").get() as
+		| { version: number }
+		| undefined;
+	return row && typeof row.version === "number" ? row.version : 0;
+}
+
+function backupBeforePendingMigrations(writeConn: SqliteDatabase, path: string): void {
 	if (existsSync(path) && hasPendingMigrations(toMigrationDb(writeConn))) {
-		const row = writeConn.prepare("SELECT MAX(version) as version FROM schema_migrations").get() as
-			| { version: number }
-			| undefined;
-		const currentSchemaVersion = row && typeof row.version === "number" ? row.version : 0;
-		backupBeforeMigration(writeConn, path, currentSchemaVersion);
+		backupBeforeMigration(writeConn, path, readCurrentSchemaVersion(writeConn));
 	}
+}
 
+async function backupBeforePendingMigrationsAsync(writeConn: SqliteDatabase, path: string): Promise<void> {
+	if (existsSync(path) && hasPendingMigrations(toMigrationDb(writeConn))) {
+		await backupBeforeMigrationAsync(writeConn, path, readCurrentSchemaVersion(writeConn));
+	}
+}
+
+function finishDbAccessorInit(writeConn: SqliteDatabase, opts?: { readonly agentsDir?: string }): void {
 	// Run schema migrations — this is the sole schema authority.
 	// Failures here are fatal: the daemon must not start on bad schema.
 	runMigrations(toMigrationDb(writeConn));

@@ -2,18 +2,24 @@ import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
-import { SIGNET_GIT_PROTECTED_PATHS, mergeSignetGitignoreEntries } from "@signet/core";
+import {
+	SIGNET_GIT_PROTECTED_PATHS,
+	isSignetGitProtectedPath,
+	isSignetGitTrackedPath,
+	mergeSignetGitignoreEntries,
+} from "@signet/core";
 import { logger } from "../logger";
 import { getSecret, hasSecret } from "../secrets.js";
 import { AGENTS_DIR } from "./state";
 
-import { type GitConfig, gitConfig } from "./git-config";
+import { clampGitSyncIntervalSeconds, type GitConfig, gitConfig } from "./git-config";
 export { gitConfig };
 
 let gitSyncTimer: ReturnType<typeof setInterval> | null = null;
 let lastGitSync: Date | null = null;
 let gitSyncInProgress = false;
 let gitSyncPromise: Promise<unknown> | null = null;
+let gitSyncQueued = false;
 
 const DEFAULT_GIT_TIMEOUT_MS = 10_000;
 const FETCH_GIT_TIMEOUT_MS = 45_000;
@@ -56,19 +62,15 @@ interface GitCredentials {
 	usePlainGit?: boolean;
 }
 
-function killProcessTree(proc: ChildProcessWithoutNullStreams): void {
+function killProcessTree(proc: ChildProcessWithoutNullStreams, signal: NodeJS.Signals): void {
 	try {
 		if (process.platform !== "win32" && proc.pid) {
-			process.kill(-proc.pid, "SIGTERM");
+			process.kill(-proc.pid, signal);
 			return;
 		}
-		proc.kill("SIGTERM");
+		proc.kill(signal);
 	} catch {
-		try {
-			proc.kill("SIGKILL");
-		} catch {
-			/* best-effort */
-		}
+		/* best-effort */
 	}
 }
 
@@ -89,20 +91,32 @@ async function runBoundedCommand(cmd: string, args: string[], options?: CommandO
 		let settled = false;
 		let timedOut = false;
 		let truncated = false;
+		let killTimer: ReturnType<typeof setTimeout> | null = null;
+		let fallbackTimer: ReturnType<typeof setTimeout> | null = null;
 
 		const finish = (result: CommandResult) => {
 			if (settled) return;
 			settled = true;
 			clearTimeout(timer);
+			if (killTimer) clearTimeout(killTimer);
+			if (fallbackTimer) clearTimeout(fallbackTimer);
 			resolve(result);
+		};
+
+		const terminate = () => {
+			killProcessTree(proc, "SIGTERM");
+			killTimer = setTimeout(() => killProcessTree(proc, "SIGKILL"), 1_000);
+			killTimer.unref?.();
+			fallbackTimer = setTimeout(() => finish({ stdout, stderr, code: 124, timedOut, truncated }), 3_000);
+			fallbackTimer.unref?.();
 		};
 
 		const timer = setTimeout(() => {
 			timedOut = true;
 			stderr += `\nCommand timed out after ${timeoutMs}ms`;
-			killProcessTree(proc);
-			finish({ stdout, stderr, code: 124, timedOut, truncated });
+			terminate();
 		}, timeoutMs);
+		timer.unref?.();
 
 		if (options?.input) {
 			proc.stdin?.write(options.input);
@@ -118,8 +132,7 @@ async function runBoundedCommand(cmd: string, args: string[], options?: CommandO
 				truncated = true;
 				stdout += chunk.slice(0, Math.max(0, maxOutputBytes - Buffer.byteLength(stdout)));
 				stderr += `\nCommand output exceeded ${maxOutputBytes} bytes`;
-				killProcessTree(proc);
-				finish({ stdout, stderr, code: 124, timedOut, truncated });
+				terminate();
 			}
 		});
 		proc.stderr?.on("data", (d) => {
@@ -131,8 +144,7 @@ async function runBoundedCommand(cmd: string, args: string[], options?: CommandO
 				truncated = true;
 				stderr += chunk.slice(0, Math.max(0, maxOutputBytes - Buffer.byteLength(stderr)));
 				stderr += `\nCommand output exceeded ${maxOutputBytes} bytes`;
-				killProcessTree(proc);
-				finish({ stdout, stderr, code: 124, timedOut, truncated });
+				terminate();
 			}
 		});
 		proc.on("close", (code) => {
@@ -586,34 +598,45 @@ export function startGitSyncTimer() {
 		gitSyncTimer = null;
 	}
 
-	if (!gitConfig.autoSync || gitConfig.syncInterval <= 0) {
+	if (!gitConfig.enabled || !gitConfig.autoSync) {
 		logger.debug("git", "Auto-sync disabled");
 		return;
 	}
 
+	gitConfig.syncInterval = clampGitSyncIntervalSeconds(gitConfig.syncInterval) ?? 300;
 	const intervalMs = gitConfig.syncInterval * 1000;
 	logger.info("git", `Auto-sync enabled: every ${gitConfig.syncInterval}s`);
 
 	gitSyncTimer = setInterval(() => {
-		const work = (async () => {
+		queuePeriodicGitSync();
+	}, intervalMs);
+}
+
+function queuePeriodicGitSync(): void {
+	if (gitSyncPromise) {
+		gitSyncQueued = true;
+		return;
+	}
+
+	const work = (async () => {
+		do {
+			gitSyncQueued = false;
 			const hasCreds = await hasAnyGitCredentials();
-			if (!hasCreds) {
-				return;
-			}
+			if (!hasCreds) return;
 
 			logger.debug("git", "Running periodic sync...");
 			const result = await gitSync();
 			if (!result.success) {
 				logger.warn("git", `Periodic sync failed: ${result.message}`);
 			}
-		})().catch((e) => {
-			logger.warn("git", "Periodic sync error", { error: String(e) });
-		});
-		gitSyncPromise = work;
-		work.finally(() => {
-			if (gitSyncPromise === work) gitSyncPromise = null;
-		});
-	}, intervalMs);
+		} while (gitSyncQueued);
+	})().catch((e) => {
+		logger.warn("git", "Periodic sync error", { error: String(e) });
+	});
+	gitSyncPromise = work;
+	work.finally(() => {
+		if (gitSyncPromise === work) gitSyncPromise = null;
+	});
 }
 
 function cancelAutoCommit(): void {
@@ -625,13 +648,13 @@ function cancelAutoCommit(): void {
 	pendingChanges = [];
 }
 
-export async function stopGitSyncTimer(): Promise<void> {
+export async function stopGitSyncTimer(options?: { readonly shutdown?: boolean }): Promise<void> {
 	if (gitSyncTimer) {
 		clearInterval(gitSyncTimer);
 		gitSyncTimer = null;
 	}
-	// Drain both periodic sync and the debounced auto-commit timer on shutdown.
-	cancelAutoCommit();
+	gitSyncQueued = false;
+	if (options?.shutdown) cancelAutoCommit();
 	if (gitSyncPromise) {
 		try {
 			await gitSyncPromise;
@@ -750,19 +773,61 @@ let commitPending = false;
 let commitTimer: ReturnType<typeof setTimeout> | null = null;
 const COMMIT_DEBOUNCE_MS = 5000;
 
-function ensureProtectedGitignore(dir: string): void {
+export function ensureWorkspaceGitignore(): boolean {
+	try {
+		return ensureProtectedGitignore(AGENTS_DIR);
+	} catch (error) {
+		logger.warn("git", "Failed to update lightweight workspace .gitignore", {
+			error: error instanceof Error ? error.message : String(error),
+		});
+		return false;
+	}
+}
+
+function ensureProtectedGitignore(dir: string): boolean {
 	const gitignorePath = join(dir, ".gitignore");
 	const existingContent = existsSync(gitignorePath) ? readFileSync(gitignorePath, "utf-8") : "";
 	const nextContent = mergeSignetGitignoreEntries(existingContent);
 	if (nextContent !== existingContent) {
 		writeFileSync(gitignorePath, nextContent, "utf-8");
+		return true;
 	}
+	return false;
 }
 
 async function gitUntrackProtectedFiles(dir: string): Promise<void> {
-	await runGitCommand(["rm", "--cached", "--ignore-unmatch", "--quiet", "--", ...SIGNET_GIT_PROTECTED_PATHS], dir, {
+	await runGitCommand(["rm", "-r", "--cached", "--ignore-unmatch", "--quiet", "--", ...SIGNET_GIT_PROTECTED_PATHS], dir, {
 		timeoutMs: MUTATING_GIT_TIMEOUT_MS,
 	});
+}
+
+async function listStagedProtectedRemovals(dir: string): Promise<string[]> {
+	const result = await runGitCommand(["diff", "--cached", "--name-only", "-z", "--diff-filter=D"], dir, {
+		timeoutMs: DEFAULT_GIT_TIMEOUT_MS,
+	});
+	if (result.code !== 0) return [];
+	return splitNullSeparated(result.stdout).filter(isSignetGitProtectedPath);
+}
+
+async function listStagedPaths(dir: string): Promise<string[]> {
+	const result = await runGitCommand(["diff", "--cached", "--name-only", "-z"], dir, {
+		timeoutMs: DEFAULT_GIT_TIMEOUT_MS,
+	});
+	if (result.code !== 0) return [];
+	return splitNullSeparated(result.stdout);
+}
+
+async function restoreStagedPaths(dir: string, paths: readonly string[]): Promise<void> {
+	if (paths.length === 0) return;
+	await runGitCommand(["restore", "--staged", "--", ...literalPathspecs(paths)], dir, { timeoutMs: DEFAULT_GIT_TIMEOUT_MS });
+}
+
+function literalPathspecs(paths: readonly string[]): string[] {
+	return paths.map((path) => `:(literal)${path}`);
+}
+
+function splitNullSeparated(value: string): string[] {
+	return value.split("\0").filter((entry) => entry.length > 0);
 }
 
 const GIT_AUTOCOMMIT_TIMEOUT_MS = 30_000;
@@ -800,47 +865,65 @@ async function gitAutoCommit(dir: string, changedFiles: string[]): Promise<void>
 
 	try {
 		ensureProtectedGitignore(dir);
+		const stagedBefore = await listStagedPaths(dir);
 		await gitUntrackProtectedFiles(dir);
+		let protectedRemovals = await listStagedProtectedRemovals(dir);
+		const preexistingProtected = new Set(stagedBefore.filter(isSignetGitProtectedPath));
+		const hasUnrelatedStagedChanges = stagedBefore.some((path) => !isSignetGitProtectedPath(path));
+		const newlyStagedProtectedRemovals = protectedRemovals.filter((path) => !preexistingProtected.has(path));
+		if (protectedRemovals.length > 0 && hasUnrelatedStagedChanges) {
+			logger.warn("git", "Skipped protected-path cleanup because unrelated staged changes already exist");
+			await restoreStagedPaths(dir, newlyStagedProtectedRemovals);
+			protectedRemovals = [];
+		}
 
-		const relativeFiles = Array.from(
-			new Set(changedFiles.map((file) => toRelativeGitPath(dir, file)).filter((file): file is string => Boolean(file))),
-		);
+		const candidateFiles = changedFiles.map((file) => toRelativeGitPath(dir, file)).filter((file): file is string => Boolean(file));
+		const relativeFiles = Array.from(new Set(candidateFiles.filter(isSignetGitTrackedPath)));
+		const commitFiles = Array.from(new Set([...relativeFiles, ...protectedRemovals]));
 		const droppedChanges = changedFiles.length - relativeFiles.length;
 		if (droppedChanges > 0) {
-			logger.warn("git", `Dropped ${droppedChanges} auto-commit paths outside the git workspace`);
+			logger.warn("git", `Dropped ${droppedChanges} auto-commit paths outside the lightweight workspace backup policy`);
 		}
-		if (relativeFiles.length === 0) return;
+		if (commitFiles.length === 0) return;
 
-		const fileList = relativeFiles.join(", ");
+		const fileList = commitFiles.join(", ");
 		const now = new Date();
 		const timestamp = now.toISOString().replace(/[:.]/g, "-").slice(0, 19);
 		const message = `${timestamp}_auto_${fileList.slice(0, 50)}`;
 
-		const addResult = await runGitCommand(["add", "--", ...relativeFiles], dir, {
-			timeoutMs: GIT_AUTOCOMMIT_TIMEOUT_MS,
-		});
-		if (addResult.code !== 0) {
-			logger.warn("git", failingGitResultMessage("Auto-commit add", addResult));
-			recordGitFailure(failingGitResultMessage("Auto-commit add", addResult));
-			return;
+		if (relativeFiles.length > 0) {
+			const addResult = await runGitCommand(["add", "--", ...literalPathspecs(relativeFiles)], dir, {
+				timeoutMs: GIT_AUTOCOMMIT_TIMEOUT_MS,
+			});
+			if (addResult.code !== 0) {
+				await restoreStagedPaths(dir, newlyStagedProtectedRemovals);
+				logger.warn("git", failingGitResultMessage("Auto-commit add", addResult));
+				recordGitFailure(failingGitResultMessage("Auto-commit add", addResult));
+				return;
+			}
 		}
 
-		const statusResult = await runGitCommand(["status", "--porcelain", "--", ...relativeFiles], dir, {
-			timeoutMs: DEFAULT_GIT_TIMEOUT_MS,
-		});
-		if (statusResult.code !== 0) {
-			logger.warn("git", failingGitResultMessage("Auto-commit status", statusResult));
-			recordGitFailure(failingGitResultMessage("Auto-commit status", statusResult));
-			return;
+		const commitArgs = protectedRemovals.length > 0
+			? ["commit", "-m", message]
+			: ["commit", "-m", message, "--", ...literalPathspecs(commitFiles)];
+		if (protectedRemovals.length === 0) {
+			const statusResult = await runGitCommand(["status", "--porcelain", "--", ...literalPathspecs(commitFiles)], dir, {
+				timeoutMs: DEFAULT_GIT_TIMEOUT_MS,
+			});
+			if (statusResult.code !== 0) {
+				logger.warn("git", failingGitResultMessage("Auto-commit status", statusResult));
+				recordGitFailure(failingGitResultMessage("Auto-commit status", statusResult));
+				return;
+			}
+			if (!statusResult.stdout.trim()) return;
 		}
-		if (!statusResult.stdout.trim()) return;
 
-		const commitResult = await runGitCommand(["commit", "-m", message, "--", ...relativeFiles], dir, {
+		const commitResult = await runGitCommand(commitArgs, dir, {
 			timeoutMs: MUTATING_GIT_TIMEOUT_MS,
 		});
 		if (commitResult.code === 0) {
 			recordGitSuccess();
-			logger.git.commit(message, relativeFiles.length);
+			logger.git.commit(message, commitFiles.length);
 		} else {
 			logger.warn("git", failingGitResultMessage("Auto-commit", commitResult));
 			recordGitFailure(failingGitResultMessage("Auto-commit", commitResult));
@@ -853,23 +936,39 @@ async function gitAutoCommit(dir: string, changedFiles: string[]): Promise<void>
 let pendingChanges: string[] = [];
 
 export function scheduleAutoCommit(changedPath: string) {
-	if (!gitConfig.autoCommit) return;
+	if (!gitConfig.enabled || !gitConfig.autoCommit) return;
 	pendingChanges.push(changedPath);
+	scheduleAutoCommitFlush(COMMIT_DEBOUNCE_MS);
+}
 
+function scheduleAutoCommitFlush(delayMs: number): void {
 	if (commitTimer) {
 		clearTimeout(commitTimer);
 	}
 
 	commitTimer = setTimeout(async () => {
-		if (commitPending) return;
+		commitTimer = null;
+		if (commitPending || autocommitInFlight) {
+			if (pendingChanges.length > 0) scheduleAutoCommitFlush(1_000);
+			return;
+		}
 		commitPending = true;
 
 		const changes = [...pendingChanges];
 		pendingChanges = [];
 
-		await gitAutoCommit(AGENTS_DIR, changes);
-		commitPending = false;
-	}, COMMIT_DEBOUNCE_MS);
+		try {
+			await gitAutoCommit(AGENTS_DIR, changes);
+		} catch (error) {
+			const reason = `Auto-commit crashed: ${error instanceof Error ? error.message : String(error)}`;
+			logger.warn("git", reason);
+			recordGitFailure(reason);
+		} finally {
+			commitPending = false;
+			if (pendingChanges.length > 0) scheduleAutoCommitFlush(1_000);
+		}
+	}, delayMs);
+	commitTimer.unref?.();
 }
 
 export function getAutoCommitQueueStateForTests(): { pending: boolean; queued: number } {

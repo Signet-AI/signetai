@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { gitConfig, loadGitConfig } from "./git-config";
+import { clampGitSyncIntervalSeconds, gitConfig, loadGitConfig } from "./git-config";
 import {
 	getAutoCommitQueueStateForTests,
 	getGitStatus,
@@ -39,6 +39,14 @@ describe("loadGitConfig", () => {
 		} finally {
 			rmSync(root, { recursive: true, force: true });
 		}
+	});
+
+	it("clamps sync interval to a safe background range", () => {
+		expect(clampGitSyncIntervalSeconds(1)).toBe(60);
+		expect(clampGitSyncIntervalSeconds("30")).toBe(60);
+		expect(clampGitSyncIntervalSeconds(120)).toBe(120);
+		expect(clampGitSyncIntervalSeconds(100_000)).toBe(86_400);
+		expect(clampGitSyncIntervalSeconds("nope")).toBeNull();
 	});
 });
 
@@ -197,7 +205,68 @@ describe("git auto-commit scoping", () => {
 			const commit = calls.find((args) => args[0] === "commit");
 			expect(commit).toBeDefined();
 			expect(commit).toContain("--");
-			expect(commit?.slice((commit?.indexOf("--") ?? -1) + 1)).toEqual(["AGENTS.md"]);
+			expect(commit?.slice((commit?.indexOf("--") ?? -1) + 1)).toEqual([":(literal)AGENTS.md"]);
+		} finally {
+			gitConfig.autoCommit = previous;
+			setGitCommandRunnerForTests(null);
+			setGitRepoProbeForTests(null);
+			resetGitHealthForTests();
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("drops database backup paths from daemon auto-commit", async () => {
+		const root = mkdtempSync(join(tmpdir(), "signet-git-autocommit-"));
+		const previous = gitConfig.autoCommit;
+		const calls: string[][] = [];
+		try {
+			gitConfig.autoCommit = true;
+			mkdirSync(join(root, ".git"));
+			mkdirSync(join(root, "memory"));
+			writeFileSync(join(root, "AGENTS.md"), "identity");
+			writeFileSync(join(root, "memory", "memories.db.bak-v1-1"), "db backup");
+			setGitRepoProbeForTests(() => true);
+			setGitCommandRunnerForTests(async (_cmd, args) => {
+				calls.push(args);
+				if (args[0] === "status") return { code: 0, stdout: "M AGENTS.md\n", stderr: "" };
+				return { code: 0, stdout: "", stderr: "" };
+			});
+
+			await gitAutoCommitForTests(root, [join(root, "AGENTS.md"), join(root, "memory", "memories.db.bak-v1-1")]);
+
+			const add = calls.find((args) => args[0] === "add");
+			expect(add?.join(" ")).toContain("AGENTS.md");
+			expect(add?.join(" ")).not.toContain("memories.db");
+		} finally {
+			gitConfig.autoCommit = previous;
+			setGitCommandRunnerForTests(null);
+			setGitRepoProbeForTests(null);
+			resetGitHealthForTests();
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("commits protected removals created by recursive untracking", async () => {
+		const root = mkdtempSync(join(tmpdir(), "signet-git-autocommit-"));
+		const previous = gitConfig.autoCommit;
+		const calls: string[][] = [];
+		try {
+			gitConfig.autoCommit = true;
+			mkdirSync(join(root, ".git"));
+			setGitRepoProbeForTests(() => true);
+			setGitCommandRunnerForTests(async (_cmd, args) => {
+				calls.push(args);
+				if (args[0] === "diff") return { code: 0, stdout: "memory/memories.db.bak-v1-1\0", stderr: "" };
+				if (args[0] === "status") return { code: 0, stdout: "D  memory/memories.db.bak-v1-1\n", stderr: "" };
+				return { code: 0, stdout: "", stderr: "" };
+			});
+
+			await gitAutoCommitForTests(root, [join(root, "memory", "memories.db.bak-v1-1")]);
+
+			const rm = calls.find((args) => args[0] === "rm");
+			expect(rm).toContain("-r");
+			const commit = calls.find((args) => args[0] === "commit");
+			expect(commit?.join(" ")).toContain("memory/memories.db.bak-v1-1");
 		} finally {
 			gitConfig.autoCommit = previous;
 			setGitCommandRunnerForTests(null);

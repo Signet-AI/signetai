@@ -1,42 +1,52 @@
 import { describe, expect, it } from "bun:test";
-import { SIGNET_GIT_PROTECTED_PATHS, mergeSignetGitignoreEntries } from "./gitignore";
+import { isSignetGitTrackedPath, mergeSignetGitignoreEntries } from "./gitignore";
 
 describe("mergeSignetGitignoreEntries", () => {
-	it("adds the protected database entries to empty content", () => {
-		expect(mergeSignetGitignoreEntries("")).toBe(
-			["# Signet generated data", ...SIGNET_GIT_PROTECTED_PATHS, ""].join("\n"),
-		);
+	it("adds a lightweight workspace block to empty content", () => {
+		const merged = mergeSignetGitignoreEntries("");
+
+		expect(merged).toContain("# BEGIN Signet lightweight workspace");
+		expect(merged).toContain("*\n!*/");
+		expect(merged).toContain("!**/*.md");
+		expect(merged).toContain("!**/*.jsonl");
+		expect(merged).toContain("!skills/**");
+		expect(merged).toContain("!tools/**");
+		expect(merged).toContain("!dreaming/**");
+		expect(merged).toContain("memory/memories.db*");
+		expect(merged).toContain("memory/backups/");
+		expect(merged).toContain("*.db");
+		expect(merged).toContain("signetai/");
+		expect(merged).toContain("# END Signet lightweight workspace");
 	});
 
-	it("preserves existing content and appends only missing entries", () => {
-		const existing = ["# Existing", ".venv/", "", "memory/memories.db-wal", ""].join("\n");
+	it("preserves existing content and appends the managed block last", () => {
+		const existing = ["# Existing", ".venv/", "", "!/memory/**", ""].join("\n");
+		const merged = mergeSignetGitignoreEntries(existing);
 
-		expect(mergeSignetGitignoreEntries(existing)).toBe(
-			[
-				"# Existing",
-				".venv/",
-				"",
-				"memory/memories.db-wal",
-				"",
-				"# Signet generated data",
-				"memory/memories.db",
-				"memory/memories.db-shm",
-				"memory/memories.db-journal",
-				"signetai/",
-				"",
-			].join("\n"),
-		);
+		expect(merged.startsWith("# Existing\n.venv/\n\n!/memory/**\n\n# BEGIN Signet lightweight workspace")).toBe(true);
+		expect(merged.trimEnd().endsWith("# END Signet lightweight workspace")).toBe(true);
+		expect(merged.indexOf("memory/memories.db*")).toBeGreaterThan(merged.indexOf("!/memory/**"));
 	});
 
-	it("is idempotent when all entries are already present", () => {
-		const existing = ["# Signet generated data", ...SIGNET_GIT_PROTECTED_PATHS, ""].join("\n");
+	it("replaces an older managed block instead of appending duplicates", () => {
+		const once = mergeSignetGitignoreEntries("# Existing\n");
+		const twice = mergeSignetGitignoreEntries(once);
 
-		expect(mergeSignetGitignoreEntries(existing)).toBe(existing);
+		expect(twice).toBe(once);
+		expect(twice.match(/# BEGIN Signet lightweight workspace/g)?.length).toBe(1);
 	});
 
-	it("preserves CRLF content when no entries are missing", () => {
-		const existing = ["# Signet generated data", ...SIGNET_GIT_PROTECTED_PATHS, ""].join("\r\n");
+	it("normalizes CRLF content while preserving non-managed rules", () => {
+		const merged = mergeSignetGitignoreEntries("# Existing\r\n.venv/\r\n");
 
-		expect(mergeSignetGitignoreEntries(existing)).toBe(existing);
+		expect(merged.startsWith("# Existing\n.venv/\n\n# BEGIN Signet lightweight workspace")).toBe(true);
+	});
+
+	it("allows the managed gitignore but rejects database backups", () => {
+		expect(isSignetGitTrackedPath(".gitignore")).toBe(true);
+		expect(isSignetGitTrackedPath("AGENTS.md")).toBe(true);
+		expect(isSignetGitTrackedPath("memory/session.jsonl")).toBe(true);
+		expect(isSignetGitTrackedPath("memory/memories.db.bak-v1-1")).toBe(false);
+		expect(isSignetGitTrackedPath("memory/backups/old.db")).toBe(false);
 	});
 });

@@ -12,6 +12,15 @@ export interface GitConfig {
 	branch: string;
 }
 
+export const MIN_GIT_SYNC_INTERVAL_SECONDS = 60;
+export const MAX_GIT_SYNC_INTERVAL_SECONDS = 24 * 60 * 60;
+
+export function clampGitSyncIntervalSeconds(value: unknown): number | null {
+	const parsed = typeof value === "number" ? value : typeof value === "string" ? Number.parseInt(value, 10) : Number.NaN;
+	if (!Number.isFinite(parsed)) return null;
+	return Math.min(MAX_GIT_SYNC_INTERVAL_SECONDS, Math.max(MIN_GIT_SYNC_INTERVAL_SECONDS, Math.trunc(parsed)));
+}
+
 function resolveAgentsDirForModuleInit(): string {
 	return resolveDefaultBasePath();
 }
@@ -72,7 +81,9 @@ export function loadGitConfig(agentsDir = resolveAgentsDirForModuleInit()): GitC
 				if (git.enabled !== undefined) defaults.enabled = git.enabled === "true" || git.enabled === true;
 				if (git.autoCommit !== undefined) defaults.autoCommit = git.autoCommit === "true" || git.autoCommit === true;
 				if (git.autoSync !== undefined) defaults.autoSync = git.autoSync === "true" || git.autoSync === true;
-				if (git.syncInterval !== undefined) defaults.syncInterval = Number.parseInt(git.syncInterval as string, 10);
+				if (git.syncInterval !== undefined) {
+					defaults.syncInterval = clampGitSyncIntervalSeconds(git.syncInterval) ?? defaults.syncInterval;
+				}
 				if (git.remote) defaults.remote = git.remote as string;
 				if (git.branch) defaults.branch = git.branch as string;
 			}

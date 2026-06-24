@@ -39,7 +39,7 @@ import { bindWithRetry } from "./bind-with-retry";
 import { migrateConfig } from "./config-migration";
 import { listConnectors } from "./connectors/registry";
 import { clearAllPresence } from "./cross-agent";
-import { closeDbAccessor, getDbAccessor, getVectorRuntimeStatus, initDbAccessor } from "./db-accessor";
+import { closeDbAccessor, getDbAccessor, getVectorRuntimeStatus, initDbAccessorAsync } from "./db-accessor";
 import { fetchEmbedding } from "./embedding-fetch";
 import { type EmbeddingTrackerHandle, startEmbeddingTracker } from "./embedding-tracker";
 import { initFeatureFlags } from "./feature-flags";
@@ -130,6 +130,7 @@ import { setupDashboardRoutes } from "./routes/dashboard.js";
 import { registerDatabaseDiagnosticsRoutes } from "./routes/database-diagnostics.js";
 import { mountEventBusRoutes } from "./routes/event-bus.js";
 import {
+	ensureWorkspaceGitignore,
 	getGitStatus,
 	gitConfig,
 	gitPull,
@@ -1406,7 +1407,7 @@ async function cleanup() {
 
 	stopSessionCleanup();
 
-	await stopGitSyncTimer();
+	await stopGitSyncTimer({ shutdown: true });
 	stopUpdateTimer();
 
 	const renderWorker = getSynthesisRenderWorker();
@@ -1473,7 +1474,7 @@ async function main() {
 	mkdirSync(DAEMON_DIR, { recursive: true });
 	mkdirSync(LOG_DIR, { recursive: true });
 
-	initDbAccessor(MEMORY_DB, { agentsDir: AGENTS_DIR });
+	await initDbAccessorAsync(MEMORY_DB, { agentsDir: AGENTS_DIR });
 	startSessionCleanup();
 	logFdSnapshot("post-db-init");
 	startEventLoopMonitor();
@@ -1560,6 +1561,10 @@ async function main() {
 		logger.warn("config-migration", "Config migration failed; continuing startup", {
 			error: err instanceof Error ? err.message : String(err),
 		});
+	}
+
+	if (ensureWorkspaceGitignore()) {
+		scheduleAutoCommit(join(AGENTS_DIR, ".gitignore"));
 	}
 
 	startFileWatcher();

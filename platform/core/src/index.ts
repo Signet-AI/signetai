@@ -207,7 +207,12 @@ export type {
 	UpdateGraphiqActiveProjectInput,
 } from "./graphiq";
 export {
+	SIGNET_GIT_ALLOWED_DIRECTORIES,
+	SIGNET_GIT_ALLOWED_FILE_EXTENSIONS,
 	SIGNET_GIT_PROTECTED_PATHS,
+	SIGNET_GIT_TRACKED_PATHS,
+	isSignetGitProtectedPath,
+	isSignetGitTrackedPath,
 	mergeSignetGitignoreEntries,
 } from "./gitignore";
 export {

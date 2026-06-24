@@ -328,22 +328,33 @@ async function runGitAsync(
 			cwd,
 			stdio: ["ignore", "pipe", "pipe"],
 			windowsHide: true,
+			detached: process.platform !== "win32",
 		});
 		let stdout = "";
 		let stderr = "";
 		let settled = false;
-		const timer = setTimeout(() => {
+		let killTimer: ReturnType<typeof setTimeout> | null = null;
+		let fallbackTimer: ReturnType<typeof setTimeout> | null = null;
+		const finish = (result: GitCommandResult): void => {
 			if (settled) return;
 			settled = true;
-			proc.kill("SIGKILL");
-			resolve({
-				ok: false,
-				stdout,
-				stderr,
-				exitCode: null,
-				errorCode: "TIMEOUT",
-			});
+			clearTimeout(timer);
+			if (killTimer) clearTimeout(killTimer);
+			if (fallbackTimer) clearTimeout(fallbackTimer);
+			resolve(result);
+		};
+		const timer = setTimeout(() => {
+			stderr += `\ngit ${args.join(" ")} timed out after ${timeoutMs}ms`;
+			killGitProcessTree(proc, "SIGTERM");
+			killTimer = setTimeout(() => killGitProcessTree(proc, "SIGKILL"), 1_000);
+			killTimer.unref?.();
+			fallbackTimer = setTimeout(
+				() => finish({ ok: false, stdout, stderr, exitCode: null, errorCode: "TIMEOUT" }),
+				3_000,
+			);
+			fallbackTimer.unref?.();
 		}, timeoutMs);
+		timer.unref?.();
 
 		proc.stdout?.on("data", (chunk: Buffer | string) => {
 			stdout += chunk.toString();
@@ -352,10 +363,7 @@ async function runGitAsync(
 			stderr += chunk.toString();
 		});
 		proc.on("error", (error) => {
-			if (settled) return;
-			settled = true;
-			clearTimeout(timer);
-			resolve({
+			finish({
 				ok: false,
 				stdout,
 				stderr,
@@ -364,10 +372,7 @@ async function runGitAsync(
 			});
 		});
 		proc.on("close", (code) => {
-			if (settled) return;
-			settled = true;
-			clearTimeout(timer);
-			resolve({
+			finish({
 				ok: code === 0,
 				stdout,
 				stderr,
@@ -376,6 +381,18 @@ async function runGitAsync(
 			});
 		});
 	});
+}
+
+function killGitProcessTree(proc: ReturnType<typeof spawn>, signal: NodeJS.Signals): void {
+	try {
+		if (process.platform !== "win32" && proc.pid) {
+			process.kill(-proc.pid, signal);
+			return;
+		}
+		proc.kill(signal);
+	} catch {
+		// Best effort.
+	}
 }
 
 function hasGitMetadata(path: string): boolean {

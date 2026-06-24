@@ -1,18 +1,49 @@
-# Python virtual environment
-.venv/
+# Signet workspace Git policy
+# The workspace repo is a lightweight backup of source-like files, not runtime state.
 
-# Daemon runtime
+# BEGIN Signet lightweight workspace
+# Keep the workspace repo small: back up text identity, transcript, and skill/tool sources only.
+*
+!*/
+!.gitignore
+!*.md
+!**/*.md
+!*.json
+!**/*.json
+!*.jsonl
+!**/*.jsonl
+!*.html
+!**/*.html
+!*.yaml
+!**/*.yaml
+!*.yml
+!**/*.yml
+!skills/
+!skills/**
+!tools/
+!tools/**
+!dreaming/
+!dreaming/**
+
+# Hard-deny generated/runtime state even if an older rule unignored memory/.
 .daemon/
-
-# Python cache
-__pycache__/
-*.pyc
-
-# SQLite journals
-memory/memories.db
-*.db-journal
-*.db-wal
-*.db-shm
-
-# Managed Signet source checkout
+.shadow/
+node_modules/
 signetai/
+memory/memories.db*
+memory/**/*.db
+memory/**/*.db-*
+memory/**/*.db-journal
+memory/**/*.db-shm
+memory/**/*.db-wal
+memory/**/*.sqlite
+memory/**/*.sqlite3
+memory/backups/
+*.db
+*.db-*
+*.db-journal
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+# END Signet lightweight workspace
