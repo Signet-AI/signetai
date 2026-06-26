@@ -89,6 +89,7 @@ import { up as documentScopeColumns } from "./080-document-scope-columns";
 import { up as aggregateEvidenceSources } from "./081-aggregate-evidence-sources";
 import { up as skillInvocationsHarness } from "./082-skill-invocations-harness";
 import { up as memoryLifecycleRepair } from "./083-memory-lifecycle-repair";
+import { up as legacyMarkdownImportState } from "./084-legacy-markdown-import-state";
 
 // -- Public interface consumed by Database.init() --
 
@@ -802,7 +803,14 @@ export const MIGRATIONS: readonly Migration[] = [
 			],
 		},
 	},
-];
+	{
+		version: 84,
+		name: "legacy-markdown-import-state",
+		up: legacyMarkdownImportState,
+		artifacts: {
+			tables: ["legacy_markdown_imports", "legacy_markdown_chunks"],
+		},
+	},
 
 /** Simple checksum for audit trail (hash of migration name + version). */
 function checksum(m: Migration): string {
