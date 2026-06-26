@@ -75,6 +75,7 @@ export type PluginRegistrationMode = "full" | "setup-only" | "setup-runtime" | "
 export interface OpenClawPluginApi {
 	readonly pluginConfig?: Record<string, unknown>;
 	readonly config?: unknown;
+	readonly version?: string;
 	readonly registrationMode?: PluginRegistrationMode;
 	readonly logger: {
 		info(msg: string): void;

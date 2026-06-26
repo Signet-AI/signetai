@@ -368,6 +368,80 @@ describe("status report openclaw runtime", () => {
 		}
 	});
 
+	it("doctor reports OpenClaw stale heartbeat", async () => {
+		const root = mkdtempSync(join(tmpdir(), "health-runtime-"));
+		const workspace = join(root, "agents");
+		const lines: string[] = [];
+		const oldLog = console.log;
+		try {
+			process.env.HOME = root;
+			mkdirSync(workspace, { recursive: true });
+			writeFileSync(join(workspace, "AGENTS.md"), "# src\n");
+			writeFileSync(join(workspace, "agent.yaml"), "version: 1\n");
+			writeFileSync(join(workspace, "SOUL.md"), "soul\n");
+			writeFileSync(join(workspace, "IDENTITY.md"), "identity\n");
+			writeFileSync(join(workspace, "USER.md"), "user\n");
+			writeFileSync(join(workspace, "MEMORY.md"), "memory\n");
+			const cfgPath = join(root, "openclaw.json");
+			writeFileSync(
+				cfgPath,
+				JSON.stringify({
+					plugins: {
+						slots: { memory: "signet-memory-openclaw" },
+						entries: { "signet-memory-openclaw": { enabled: true } },
+					},
+				}),
+			);
+			process.env.OPENCLAW_CONFIG_PATH = cfgPath;
+			console.log = (...args: unknown[]) => {
+				lines.push(args.join(" "));
+			};
+
+			await showDoctor(
+				{},
+				{
+					...depsFor(workspace),
+					getDaemonStatus: async () => ({
+						running: true,
+						pid: 42,
+						uptime: 10,
+						version: "0.145.1",
+						host: "127.0.0.1",
+						bindHost: "127.0.0.1",
+						networkMode: "local",
+						extraction: null,
+						extractionWorker: null,
+						transcripts: null,
+						probe: {
+							status: "healthy",
+							detail: "/health responded",
+							url: "http://127.0.0.1:3850",
+							listenerPresent: true,
+							processPid: 42,
+							stalePid: null,
+						},
+						openclaw: {
+							status: "stale",
+							lastHeartbeat: "2026-06-25T00:00:00.000Z",
+							pluginVersion: "test-plugin",
+							hooksRegistered: ["before_prompt_build"],
+							hooksSucceeded: 1,
+							hooksFailed: 1,
+							lastLatencyMs: 42,
+							lastError: "daemon returned no prompt memory injection",
+						},
+					}),
+				},
+			);
+
+			const output = lines.join("\n");
+			expect(output).toContain("OpenClaw plugin heartbeat is stale");
+		} finally {
+			console.log = oldLog;
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	it("doctor warns when openclaw is still on the legacy-only runtime path", async () => {
 		const root = mkdtempSync(join(tmpdir(), "health-runtime-"));
 		const workspace = join(root, "agents");

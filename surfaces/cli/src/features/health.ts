@@ -45,6 +45,24 @@ interface DaemonStatus {
 		readonly failed: number;
 		readonly dead: number;
 	} | null;
+	readonly probe?: {
+		readonly status: "healthy" | "listener-unhealthy" | "process-unhealthy" | "stale-artifact" | "absent";
+		readonly detail: string;
+		readonly url: string | null;
+		readonly listenerPresent: boolean;
+		readonly processPid: number | null;
+		readonly stalePid: number | null;
+	};
+	readonly openclaw?: {
+		readonly status: "connected" | "stale" | "never-seen";
+		readonly lastHeartbeat: string | null;
+		readonly pluginVersion: string | null;
+		readonly hooksRegistered: readonly string[];
+		readonly hooksSucceeded: number;
+		readonly hooksFailed: number;
+		readonly lastLatencyMs: number;
+		readonly lastError: string | null;
+	} | null;
 }
 
 interface DbReport {
@@ -220,8 +238,20 @@ export async function showStatus(options: { path?: string; json?: boolean }, dep
 			console.log(colorize(`    ${icon} ${extractionNotice.title}`));
 			console.log(chalk.dim(`      ${extractionNotice.detail}`));
 		}
+		if (report.daemon.openclaw && report.openclawRuntime === "plugin") {
+			const icon =
+				report.daemon.openclaw.status === "connected"
+					? chalk.green("✓")
+					: report.daemon.openclaw.status === "stale"
+						? chalk.yellow("⚠")
+						: chalk.yellow("◐");
+			console.log(`    ${icon} OpenClaw plugin ${report.daemon.openclaw.status}`);
+		}
 	} else {
 		console.log(`  ${chalk.red("○")} Daemon ${chalk.red("stopped")}`);
+		if (report.daemon.probe && report.daemon.probe.status !== "absent") {
+			console.log(chalk.dim(`    ${report.daemon.probe.detail}`));
+		}
 	}
 
 	console.log();
@@ -400,6 +430,95 @@ async function showHermesDoctor(options: { json?: boolean }): Promise<void> {
 	console.log();
 }
 
+function addDaemonProbeFindings(report: StatusReport, findings: DoctorFinding[]): void {
+	const probe = report.daemon.probe;
+	if (!probe || probe.status === "healthy") return;
+
+	if (probe.status === "listener-unhealthy") {
+		findings.push({
+			level: "error",
+			message: "Daemon port is listening, but /health is unreachable.",
+			fix: "Run `signet daemon restart`; if it recurs, inspect ~/.agents/.daemon/logs/daemon.err.log.",
+		});
+		return;
+	}
+
+	if (probe.status === "process-unhealthy") {
+		findings.push({
+			level: "error",
+			message: "Daemon process exists, but the HTTP health endpoint is unreachable.",
+			fix: "Run `signet daemon restart`; if it hangs, stop the stale process and inspect daemon logs.",
+		});
+		return;
+	}
+
+	if (probe.status === "stale-artifact") {
+		findings.push({
+			level: "warn",
+			message: "Daemon pid artifact is stale.",
+			fix: "Run `signet daemon start`; stale pid files are ignored by current status probes.",
+		});
+	}
+}
+
+function addOpenClawRuntimeFindings(report: StatusReport, findings: DoctorFinding[]): void {
+	if (report.openclawRuntime === "dual") {
+		findings.push({
+			level: "error",
+			message:
+				"OpenClaw dual-system conflict: legacy hook AND plugin are both enabled. This causes duplicate memories, 2× token burn, and 409 session errors.",
+			fix: 'Run `signet setup --harness openclaw` to repair, or set hooks.internal.entries["signet-memory"].enabled = false in your openclaw config.',
+		});
+	}
+
+	if (report.openclawRuntime === "legacy") {
+		findings.push({
+			level: "warn",
+			message:
+				"OpenClaw is still running on the legacy Signet hook path. Manual commands still work, but session-start, prompt-submit, compaction, and session-end capture stay disabled.",
+			fix: "Run `signet sync` to migrate this OpenClaw config to the plugin runtime path.",
+		});
+	}
+}
+
+function addOpenClawHeartbeatFindings(report: StatusReport, findings: DoctorFinding[]): void {
+	if (!report.daemon.running || report.openclawRuntime !== "plugin") return;
+	const health = report.daemon.openclaw;
+	if (!health) {
+		findings.push({
+			level: "warn",
+			message: "OpenClaw plugin path is configured, but daemon OpenClaw diagnostics are unavailable.",
+			fix: "Update/restart the Signet daemon, then rerun `signet doctor` to verify plugin heartbeat state.",
+		});
+		return;
+	}
+
+	if (health.status === "never-seen") {
+		findings.push({
+			level: "warn",
+			message: "OpenClaw plugin path is configured, but the Signet daemon has not seen a plugin heartbeat.",
+			fix: "Restart OpenClaw so the signet-memory plugin can register, then rerun `signet doctor`.",
+		});
+		return;
+	}
+
+	if (health.status === "stale") {
+		findings.push({
+			level: "warn",
+			message: "OpenClaw plugin heartbeat is stale.",
+			fix: "Restart OpenClaw or check its plugin logs for signet-memory registration errors.",
+		});
+	}
+
+	if (health.lastError) {
+		findings.push({
+			level: "warn",
+			message: `OpenClaw plugin reported degraded Signet hook activity: ${health.lastError}`,
+			fix: "Check the daemon logs and OpenClaw plugin logs for the failing hook or subsystem.",
+		});
+	}
+}
+
 function getDoctorFindings(report: StatusReport): DoctorFinding[] {
 	if (!report.installed) {
 		return [
@@ -441,11 +560,14 @@ function getDoctorFindings(report: StatusReport): DoctorFinding[] {
 	}
 
 	if (!report.daemon.running) {
-		findings.push({
-			level: "warn",
-			message: "Daemon is not running.",
-			fix: "Run `signet daemon start`.",
-		});
+		addDaemonProbeFindings(report, findings);
+		if (!report.daemon.probe || report.daemon.probe.status === "absent") {
+			findings.push({
+				level: "warn",
+				message: "Daemon is not running.",
+				fix: "Run `signet daemon start`.",
+			});
+		}
 	}
 
 	if (report.db.needsMigration && report.db.schema) {
@@ -464,23 +586,8 @@ function getDoctorFindings(report: StatusReport): DoctorFinding[] {
 		});
 	}
 
-	if (report.openclawRuntime === "dual") {
-		findings.push({
-			level: "error",
-			message:
-				"OpenClaw dual-system conflict: legacy hook AND plugin are both enabled. This causes duplicate memories, 2× token burn, and 409 session errors.",
-			fix: 'Run `signet setup --harness openclaw` to repair, or set hooks.internal.entries["signet-memory"].enabled = false in your openclaw config.',
-		});
-	}
-
-	if (report.openclawRuntime === "legacy") {
-		findings.push({
-			level: "warn",
-			message:
-				"OpenClaw is still running on the legacy Signet hook path. Manual commands still work, but session-start, prompt-submit, compaction, and session-end capture stay disabled.",
-			fix: "Run `signet sync` to migrate this OpenClaw config to the plugin runtime path.",
-		});
-	}
+	addOpenClawRuntimeFindings(report, findings);
+	addOpenClawHeartbeatFindings(report, findings);
 
 	if (report.openclawWorkspaceUnprotected) {
 		findings.push({

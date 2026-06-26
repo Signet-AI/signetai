@@ -36,6 +36,7 @@ let lastPromptSubmitBody: unknown = null;
 let lastMemoryRecallBody: unknown = null;
 let lastSessionSearchBody: unknown = null;
 let lastCheckpointBody: unknown = null;
+let lastHeartbeatBody: unknown = null;
 let warnMessages: string[] = [];
 let testDir = "";
 
@@ -140,6 +141,7 @@ beforeEach(() => {
 	lastMemoryRecallBody = null;
 	lastSessionSearchBody = null;
 	lastCheckpointBody = null;
+	lastHeartbeatBody = null;
 	checkpointResponse = null;
 	warnMessages = [];
 	testDir = mkdtempSync(join(tmpdir(), "signet-openclaw-test-"));
@@ -155,6 +157,9 @@ beforeEach(() => {
 			switch (path) {
 				case "/health":
 					return jsonResponse({ pid: 1234 });
+				case "/api/diagnostics/openclaw/heartbeat":
+					lastHeartbeatBody = init?.body ? JSON.parse(String(init.body)) : null;
+					return jsonResponse({ ok: true });
 				case "/api/hooks/session-start":
 					if (timeoutSessionStartCount > 0) {
 						timeoutSessionStartCount -= 1;
@@ -1823,6 +1828,17 @@ describe("registration guard (#422)", () => {
 		expect(tools.length).toBeGreaterThan(0);
 		expect(hooks.size).toBeGreaterThan(0);
 		expect(registeredServices.length).toBeGreaterThan(0);
+	});
+
+	it("publishes an OpenClaw diagnostics heartbeat after startup health succeeds", async () => {
+		const { api } = createMockApi({ registrationMode: "full", version: "test-plugin" });
+		signetPlugin.register(api);
+		await Bun.sleep(0);
+
+		expect(lastHeartbeatBody).toMatchObject({
+			pluginVersion: "test-plugin",
+			hooksRegistered: ["before_prompt_build", "before_agent_start", "agent_end", "before_compaction", "after_compaction"],
+		});
 	});
 
 	it("second full-mode register() call is a no-op", () => {

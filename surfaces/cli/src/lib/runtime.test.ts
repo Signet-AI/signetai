@@ -369,6 +369,18 @@ describe("getDaemonStatus", () => {
 	it("parses extraction provider degradation from /api/status", async () => {
 		globalThis.fetch = async (input: string | URL) => {
 			const url = String(input);
+			if (url.endsWith("/api/diagnostics/openclaw")) {
+				return Response.json({
+					status: "connected",
+					lastHeartbeat: "2026-06-25T00:00:00.000Z",
+					pluginVersion: "test-plugin",
+					hooksRegistered: ["before_prompt_build"],
+					hooksSucceeded: 2,
+					hooksFailed: 1,
+					lastLatencyMs: 42,
+					lastError: "daemon returned no prompt memory injection",
+				});
+			}
 			if (url.endsWith("/health")) {
 				return new Response("ok", { status: 200 });
 			}
@@ -426,6 +438,16 @@ describe("getDaemonStatus", () => {
 			overloadBackoffMs: 30000,
 			overloadSince: "2026-03-26T00:00:02.000Z",
 			nextTickInMs: 28000,
+		});
+		expect(status.openclaw).toEqual({
+			status: "connected",
+			lastHeartbeat: "2026-06-25T00:00:00.000Z",
+			pluginVersion: "test-plugin",
+			hooksRegistered: ["before_prompt_build"],
+			hooksSucceeded: 2,
+			hooksFailed: 1,
+			lastLatencyMs: 42,
+			lastError: "daemon returned no prompt memory injection",
 		});
 	});
 });

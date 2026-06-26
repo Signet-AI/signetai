@@ -12,6 +12,7 @@ import {
 	unlinkSync,
 	writeFileSync,
 } from "node:fs";
+import { connect } from "node:net";
 import { homedir } from "node:os";
 import { basename, delimiter, dirname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,6 +24,26 @@ import { resolveAgentsDir } from "./workspace.js";
 export const AGENTS_DIR = resolveAgentsDir().path;
 export const DEFAULT_PORT = 3850;
 const DAEMON_BASE_URLS = [`http://127.0.0.1:${DEFAULT_PORT}`, `http://[::1]:${DEFAULT_PORT}`] as const;
+
+export interface DaemonHealthProbe {
+	readonly status: "healthy" | "listener-unhealthy" | "process-unhealthy" | "stale-artifact" | "absent";
+	readonly detail: string;
+	readonly url: string | null;
+	readonly listenerPresent: boolean;
+	readonly processPid: number | null;
+	readonly stalePid: number | null;
+}
+
+export interface DaemonOpenClawHealthSummary {
+	readonly status: "connected" | "stale" | "never-seen";
+	readonly lastHeartbeat: string | null;
+	readonly pluginVersion: string | null;
+	readonly hooksRegistered: readonly string[];
+	readonly hooksSucceeded: number;
+	readonly hooksFailed: number;
+	readonly lastLatencyMs: number;
+	readonly lastError: string | null;
+}
 
 interface DaemonInstance {
 	readonly baseUrl: string;
@@ -55,6 +76,8 @@ interface DaemonInstance {
 		readonly failed: number;
 		readonly dead: number;
 	} | null;
+	readonly probe: DaemonHealthProbe;
+	readonly openclaw: DaemonOpenClawHealthSummary | null;
 }
 
 interface DaemonProbeDeps {
@@ -133,6 +156,118 @@ async function isDaemonHealthyAt(baseUrl: string): Promise<boolean> {
 	}
 }
 
+async function fetchJsonOrNull<T>(baseUrl: string, path: string): Promise<T | null> {
+	try {
+		const response = await fetch(`${baseUrl}${path}`, {
+			signal: AbortSignal.timeout(1200),
+		});
+		if (!response.ok) return null;
+		return (await response.json()) as T;
+	} catch {
+		return null;
+	}
+}
+
+function stringArray(value: unknown): string[] {
+	return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
+function summarizeOpenClawHealth(value: unknown): DaemonOpenClawHealthSummary | null {
+	if (!value || typeof value !== "object") return null;
+	const report = value as Record<string, unknown>;
+	const status = report.status;
+	if (status !== "connected" && status !== "stale" && status !== "never-seen") return null;
+	return {
+		status,
+		lastHeartbeat: typeof report.lastHeartbeat === "string" ? report.lastHeartbeat : null,
+		pluginVersion: typeof report.pluginVersion === "string" ? report.pluginVersion : null,
+		hooksRegistered: stringArray(report.hooksRegistered),
+		hooksSucceeded: typeof report.hooksSucceeded === "number" ? report.hooksSucceeded : 0,
+		hooksFailed: typeof report.hooksFailed === "number" ? report.hooksFailed : 0,
+		lastLatencyMs: typeof report.lastLatencyMs === "number" ? report.lastLatencyMs : 0,
+		lastError: typeof report.lastError === "string" ? report.lastError : null,
+	};
+}
+
+function canConnect(host: string, port: number, timeoutMs = 500): Promise<boolean> {
+	return new Promise((resolve) => {
+		const socket = connect({ host, port });
+		let settled = false;
+		const finish = (value: boolean) => {
+			if (settled) return;
+			settled = true;
+			socket.destroy();
+			resolve(value);
+		};
+		socket.setTimeout(timeoutMs);
+		socket.once("connect", () => finish(true));
+		socket.once("timeout", () => finish(false));
+		socket.once("error", () => finish(false));
+	});
+}
+
+function readPidArtifact(agentsDir: string): { pid: number | null; stale: boolean } {
+	const path = pidFile(agentsDir);
+	if (!existsSync(path)) return { pid: null, stale: false };
+	try {
+		const pid = Number.parseInt(readFileSync(path, "utf-8").trim(), 10);
+		if (!Number.isInteger(pid) || pid <= 0) return { pid: null, stale: true };
+		return { pid, stale: !isAlive(pid) };
+	} catch {
+		return { pid: null, stale: true };
+	}
+}
+
+async function buildUnreachableDaemonProbe(agentsDir: string): Promise<DaemonHealthProbe> {
+	const artifact = readPidArtifact(agentsDir);
+	const managedPid = readManagedDaemonPid(agentsDir);
+	const processPid = managedPid ?? findDaemonProcessPids()[0] ?? null;
+	const listenerPresent = await canConnect("127.0.0.1", DEFAULT_PORT);
+	const url = `http://127.0.0.1:${DEFAULT_PORT}`;
+
+	if (listenerPresent) {
+		return {
+			status: "listener-unhealthy",
+			detail: `TCP listener is present on ${url}, but /health did not return successfully within the probe timeout`,
+			url,
+			listenerPresent,
+			processPid,
+			stalePid: artifact.stale ? artifact.pid : null,
+		};
+	}
+
+	if (processPid !== null) {
+		return {
+			status: "process-unhealthy",
+			detail: "A Signet daemon process appears to be running, but the health endpoint is unreachable",
+			url,
+			listenerPresent,
+			processPid,
+			stalePid: artifact.stale ? artifact.pid : null,
+		};
+	}
+
+	if (artifact.stale) {
+		return {
+			status: "stale-artifact",
+			detail: "Daemon pid artifact is stale; no live Signet daemon process or healthy listener was found",
+			url,
+			listenerPresent,
+			processPid: null,
+			stalePid: artifact.pid,
+		};
+	}
+
+	return {
+		status: "absent",
+		detail: "No Signet daemon process or healthy listener was found",
+		url,
+		listenerPresent,
+		processPid: null,
+		stalePid: null,
+	};
+}
+
 export async function getReachableDaemonUrls(): Promise<string[]> {
 	const checks = await Promise.all(
 		DAEMON_BASE_URLS.map(async (baseUrl) => ((await isDaemonHealthyAt(baseUrl)) ? baseUrl : null)),
@@ -189,6 +324,7 @@ async function getDaemonInstances(): Promise<DaemonInstance[]> {
 					const extraction = data.providerResolution?.extraction;
 					const extractionWorker = data.pipeline?.extraction;
 					const transcripts = data.transcripts?.capture;
+					const openclawReport = await fetchJsonOrNull<unknown>(baseUrl, "/api/diagnostics/openclaw");
 					return {
 						baseUrl,
 						pid: data.pid ?? null,
@@ -229,6 +365,15 @@ async function getDaemonInstances(): Promise<DaemonInstance[]> {
 									dead: typeof transcripts.dead === "number" ? transcripts.dead : 0,
 								}
 							: null,
+						probe: {
+							status: "healthy",
+							detail: `/health responded successfully at ${baseUrl}`,
+							url: baseUrl,
+							listenerPresent: true,
+							processPid: data.pid ?? null,
+							stalePid: null,
+						},
+						openclaw: summarizeOpenClawHealth(openclawReport),
 					};
 				}
 			} catch {
@@ -246,6 +391,15 @@ async function getDaemonInstances(): Promise<DaemonInstance[]> {
 				extraction: null,
 				extractionWorker: null,
 				transcripts: null,
+				probe: {
+					status: "healthy",
+					detail: `/health responded successfully at ${baseUrl}; /api/status did not return full metadata`,
+					url: baseUrl,
+					listenerPresent: true,
+					processPid: null,
+					stalePid: null,
+				},
+				openclaw: null,
 			};
 		}),
 	);
@@ -358,6 +512,8 @@ export async function getDaemonStatus(): Promise<{
 	extraction: DaemonInstance["extraction"];
 	extractionWorker: DaemonInstance["extractionWorker"];
 	transcripts: DaemonInstance["transcripts"];
+	probe: DaemonHealthProbe;
+	openclaw: DaemonOpenClawHealthSummary | null;
 }> {
 	const instances = await getDaemonInstances();
 	if (instances.length > 0) {
@@ -374,12 +530,18 @@ export async function getDaemonStatus(): Promise<{
 			extraction: preferred.extraction,
 			extractionWorker: preferred.extractionWorker,
 			transcripts: preferred.transcripts,
+			probe: {
+				...preferred.probe,
+				processPid: preferred.probe.processPid ?? fallbackPid,
+			},
+			openclaw: preferred.openclaw,
 		};
 	}
 
+	const probe = await buildUnreachableDaemonProbe(AGENTS_DIR);
 	return {
 		running: false,
-		pid: null,
+		pid: probe.processPid,
 		uptime: null,
 		version: null,
 		host: null,
@@ -388,6 +550,8 @@ export async function getDaemonStatus(): Promise<{
 		extraction: null,
 		extractionWorker: null,
 		transcripts: null,
+		probe,
+		openclaw: null,
 	};
 }
 

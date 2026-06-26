@@ -40,6 +40,8 @@ const DEFAULT_DAEMON_URL = "http://localhost:3850";
 const RUNTIME_PATH = "plugin" as const;
 const READ_TIMEOUT = 5000;
 const WRITE_TIMEOUT = 10000;
+const HEARTBEAT_TIMEOUT = 2000;
+const HEARTBEAT_INTERVAL_MS = 60_000;
 const COMPACTION_HOOK_DEDUPE_MS = 1000;
 const SESSION_START_TIMEOUT = resolveSessionStartTimeoutMs(
 	process.env.SIGNET_SESSION_START_TIMEOUT ?? process.env.SIGNET_FETCH_TIMEOUT,
@@ -1549,6 +1551,38 @@ const signetPlugin = {
 			let healthTimer: ReturnType<typeof setInterval> | null = null;
 			let marketplaceProxyTimer: ReturnType<typeof setInterval> | null = null;
 			const marketplaceProxyNames = new Set<string>();
+			const hooksRegistered = [
+				"before_prompt_build",
+				"before_agent_start",
+				"agent_end",
+				"before_compaction",
+				"after_compaction",
+			];
+			let healthError: string | null = null;
+			let heartbeatInFlight = false;
+
+			const pluginVersion = typeof api.version === "string" && api.version.trim() ? api.version : "unknown";
+			const sendHeartbeat = async (): Promise<void> => {
+				if (heartbeatInFlight) return;
+				heartbeatInFlight = true;
+				try {
+					await daemonFetchResult<{ ok: boolean }>(daemonUrl, "/api/diagnostics/openclaw/heartbeat", {
+						method: "POST",
+						body: {
+							pluginVersion,
+							hooksRegistered,
+							lastHookCall: null,
+							lastError: healthError,
+							latencyMs: 0,
+							hooksSucceeded: 0,
+							hooksFailed: healthError ? 1 : 0,
+						},
+						timeout: HEARTBEAT_TIMEOUT,
+					});
+				} finally {
+					heartbeatInFlight = false;
+				}
+			};
 
 			api.logger.info(`signet-memory: registered (daemon: ${daemonUrl})`);
 
@@ -1557,9 +1591,13 @@ const signetPlugin = {
 				daemonReachable = pid !== null;
 				knownPid = pid;
 				if (!daemonReachable) {
+					healthError = `daemon unreachable at ${daemonUrl}; memory hooks are disabled until Signet is healthy`;
 					api.logger.warn(
-						`signet-memory: daemon unreachable at ${daemonUrl}. Memory tools will silently no-op until daemon is running.`,
+						`signet-memory: daemon unreachable at ${daemonUrl}. Memory hooks are disabled until daemon health recovers; run \`signet status\` or \`signet doctor\` for diagnostics.`,
 					);
+				} else {
+					healthError = null;
+					void sendHeartbeat();
 				}
 			});
 
@@ -2509,10 +2547,15 @@ const signetPlugin = {
 						if (ok !== daemonReachable) {
 							daemonReachable = ok;
 							if (ok) {
+								healthError = null;
 								api.logger.info("signet-memory: daemon reconnected");
+								void sendHeartbeat();
 							} else {
-								api.logger.warn("signet-memory: daemon became unreachable");
+								healthError = `daemon became unreachable at ${daemonUrl}; memory hooks are disabled`;
+								api.logger.warn("signet-memory: daemon became unreachable; memory hooks are disabled until health recovers");
 							}
+						} else if (ok) {
+							void sendHeartbeat();
 						}
 						// Daemon restarted (PID changed). Evict all claimed sessions so
 						// ensureSessionStarted re-inits on next turn, restoring identity
@@ -2522,7 +2565,7 @@ const signetPlugin = {
 							claimedSessions.clear();
 						}
 						knownPid = pid;
-					}, 60_000);
+					}, HEARTBEAT_INTERVAL_MS);
 				},
 				stop() {
 					api.logger.info("signet-memory: service stopped");
