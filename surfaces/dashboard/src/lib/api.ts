@@ -3456,6 +3456,9 @@ export interface DailyReflection {
 export interface TodayReflectionResponse {
 	reflection: DailyReflection | null;
 	reflections?: DailyReflection[];
+	generated?: number;
+	message?: string;
+	error?: string;
 }
 
 function agentQuery(agentId?: string): string {
@@ -3479,10 +3482,19 @@ export async function generateReflection(agentId?: string, count = 1): Promise<T
 		const res = await fetch(`${API_BASE}/api/reflections/generate${suffix}${separator}count=${count}`, {
 			method: "POST",
 		});
-		if (!res.ok) return { reflection: null, reflections: [] };
+		if (!res.ok) {
+			let message = "Failed to generate Daily Brief";
+			try {
+				const body = (await res.json()) as { error?: unknown };
+				if (typeof body.error === "string" && body.error.trim()) message = body.error;
+			} catch {
+				// Keep the generic error message when the daemon does not return JSON.
+			}
+			return { reflection: null, reflections: [], error: message };
+		}
 		return (await res.json()) as TodayReflectionResponse;
 	} catch {
-		return { reflection: null, reflections: [] };
+		return { reflection: null, reflections: [], error: "Failed to reach the daemon" };
 	}
 }
 

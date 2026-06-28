@@ -48,7 +48,7 @@ onMount(() => {
 	};
 });
 
-async function generateQuestion(): Promise<void> {
+async function generateQuestion(options: { manual?: boolean } = {}): Promise<void> {
 	const token = generationToken + 1;
 	generationToken = token;
 	generating = true;
@@ -62,16 +62,29 @@ async function generateQuestion(): Promise<void> {
 	try {
 		const generated = await generateReflection(agentId, 1);
 		if (generationToken !== token) return;
+		if (generated.error) {
+			generationFailed = reflections.length === 0;
+			if (options.manual) toast(generated.error, "error");
+			return;
+		}
 		const next = generated.reflections ?? (generated.reflection ? [generated.reflection] : []);
 		const questions = next.filter((item) => item.question);
 		if (questions.length > 0) {
 			reflections = questions.slice(0, 1);
-			toast("Today's question is ready", "success");
+			answerText = "";
+			showAnswerId = null;
+			toast(options.manual ? "New question is ready" : "Today's question is ready", "success");
+		} else if (options.manual) {
+			generationFailed = reflections.length === 0;
+			toast("No new question found yet", "info");
 		} else {
 			generationFailed = true;
 		}
 	} catch {
-		if (generationToken === token) generationFailed = true;
+		if (generationToken === token) {
+			if (options.manual) toast("Couldn't refresh the question", "error");
+			else generationFailed = true;
+		}
 	} finally {
 		clearTimeout(slowTimer);
 		if (generationToken === token) {
@@ -104,9 +117,19 @@ async function handleAnswer(item: DailyReflection): Promise<void> {
 <div class="panel sig-panel">
 	<div class="panel-header sig-panel-header">
 		<span class="panel-title">DAILY BRIEF</span>
-		{#if reflection}
-			<span class="panel-date">{reflection.date}</span>
-		{/if}
+		<div class="panel-actions">
+			{#if reflection}
+				<span class="panel-date">{reflection.date}</span>
+			{/if}
+			<button
+				class="refresh-brief"
+				disabled={generating || loading || showAnswerId !== null}
+				title={showAnswerId ? "Save or cancel your draft before refreshing" : "Generate a new question"}
+				onclick={() => generateQuestion({ manual: true })}
+			>
+				{generating ? "Looking…" : "Refresh"}
+			</button>
+		</div>
 	</div>
 
 	<div class="panel-body">
@@ -156,12 +179,13 @@ async function handleAnswer(item: DailyReflection): Promise<void> {
 							{:else}
 								<button
 									class="answer-prompt"
+									disabled={generating}
 									onclick={() => {
 										answerText = "";
 										showAnswerId = item.id;
 									}}
 								>
-									Write back
+									{generating ? "Looking…" : "Write back"}
 								</button>
 							{/if}
 						</div>
@@ -225,11 +249,44 @@ async function handleAnswer(item: DailyReflection): Promise<void> {
 		color: var(--sig-text-bright);
 	}
 
+	.panel-actions {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+	}
+
 	.panel-date {
 		font-family: var(--font-body);
 		font-size: 8px;
 		letter-spacing: 0.1em;
 		color: var(--sig-text-muted);
+	}
+
+	.refresh-brief {
+		font-family: var(--font-body);
+		font-size: 8px;
+		letter-spacing: 0.1em;
+		color: var(--sig-highlight-text);
+		background: var(--sig-highlight-muted);
+		border: 1px solid var(--sig-highlight-dim);
+		border-radius: 999px;
+		padding: 3px 8px;
+		cursor: pointer;
+		text-transform: uppercase;
+		transition:
+			opacity var(--dur) var(--ease),
+			border-color var(--dur) var(--ease),
+			background var(--dur) var(--ease);
+	}
+
+	.refresh-brief:hover:not(:disabled) {
+		background: color-mix(in srgb, var(--sig-highlight) 14%, transparent);
+		border-color: var(--sig-highlight);
+	}
+
+	.refresh-brief:disabled {
+		opacity: 0.55;
+		cursor: default;
 	}
 
 	.panel-body {
@@ -331,10 +388,15 @@ async function handleAnswer(item: DailyReflection): Promise<void> {
 			box-shadow var(--dur) var(--ease);
 	}
 
-	.answer-prompt:hover {
+	.answer-prompt:hover:not(:disabled) {
 		opacity: 0.9;
 		transform: translateY(-1px);
 		box-shadow: 0 0 18px color-mix(in srgb, var(--sig-highlight) 18%, transparent);
+	}
+
+	.answer-prompt:disabled {
+		opacity: 0.55;
+		cursor: default;
 	}
 
 	.answer-input {
