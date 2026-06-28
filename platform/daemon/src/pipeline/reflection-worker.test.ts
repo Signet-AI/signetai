@@ -8,9 +8,11 @@ import { closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
 import { logger } from "../logger";
 import { txIngestEnvelope } from "../transactions";
 import {
+	buildReflectionPrompt,
 	collectReflectionContext,
 	generateDailyBriefInsights,
 	nextReflectionDelayMs,
+	parseDailyBriefInsights,
 	startReflectionWorker,
 } from "./reflection-worker";
 
@@ -124,29 +126,96 @@ describe("reflection worker", () => {
 		expect(existsSync(join(dir, ".daemon", "last-reflection.default.json"))).toBe(false);
 	});
 
-	it("collects recent source context and only lets pinned old memories bypass the cutoff", () => {
-		const old = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
-		const recentId = seedMemory("default", { content: "Recent source", hash: "recent-source" });
-		const pinnedId = seedMemory("default", {
-			content: "Pinned durable source",
-			createdAt: old,
-			pinned: 1,
-			hash: "pinned-source",
-		});
-		seedMemory("default", { content: "Stale unpinned source", createdAt: old, hash: "stale-source" });
+	it("collects the last 50 saved memories as the daily brief source batch", () => {
+		const ids: string[] = [];
+		const base = Date.now() - 60_000;
+		for (let i = 0; i < 55; i += 1) {
+			ids.push(
+				seedMemory("default", {
+					content: `Saved memory ${i}`,
+					createdAt: new Date(base + i * 1000).toISOString(),
+					hash: `saved-memory-${i}`,
+				}),
+			);
+		}
 
 		const context = collectReflectionContext("default", config);
 
-		expect(context.memories.map((m) => m.id)).toEqual([pinnedId, recentId]);
-		expect(context.memories.map((m) => m.content)).not.toContain("Stale unpinned source");
+		expect(context.memories).toHaveLength(50);
+		expect(context.memories.map((m) => m.id)).toEqual(ids.slice(5).reverse());
+		expect(context.summaries).toEqual([]);
+		expect(context.transcripts).toEqual([]);
+		expect(context.graphFacts).toEqual([]);
+	});
+
+	it("builds a simple gap-observation prompt over saved memories", () => {
+		const prompt = buildReflectionPrompt(
+			{
+				memories: [
+					{
+						id: "memory-1",
+						content: "Issue #868 likely involves compare/install catalog key routing.",
+						type: "fact",
+						tags: "issue868,backend",
+						createdAt: "2026-06-28T00:00:00.000Z",
+					},
+				],
+				summaries: [],
+				transcripts: [],
+				graphFacts: [],
+				existingReflections: [],
+			},
+			1,
+		);
+
+		expect(prompt).toContain("Given the following 1 saved memories, observe the gaps.");
+		expect(prompt).toContain("Last saved memories:");
+		expect(prompt).toContain("Do not turn implementation checks into yes/no questions");
+		expect(prompt).toContain("INSIGHT: <observed gap or useful next-check insight>");
+	});
+
+	it("parses declarative gap insights and drops quiz-style questions", () => {
+		const insights = parseDailyBriefInsights(
+			[
+				"INSIGHT: Rust parity test ports are the release bottleneck; group the remaining work by harness surface before opening more feature threads.",
+				"FOCUS: rust-parity, release",
+				"INSIGHT: Has the backend compare/install logic been updated to route by catalogKey?",
+				"FOCUS: rejected",
+				"INSIGHT: Has the backend path been verified? Verify it before release.",
+				"FOCUS: rejected",
+				"GAP: Issue #868 likely hinges on compare/install catalog-key routing; verify the backend path before touching UI behavior.",
+				"FOCUS: issue868, backend",
+				"INSIGHT: The open loop \"Why does install fail?\" needs an owner before release.",
+				"FOCUS: install, owner",
+			].join("\n"),
+			3,
+		);
+
+		expect(insights).toEqual([
+			{
+				summary:
+					"Rust parity test ports are the release bottleneck; group the remaining work by harness surface before opening more feature threads.",
+				patterns: ["rust-parity", "release"],
+			},
+			{
+				summary:
+					"Issue #868 likely hinges on compare/install catalog-key routing; verify the backend path before touching UI behavior.",
+				patterns: ["issue868", "backend"],
+			},
+			{
+				summary: "The open loop \"Why does install fail?\" needs an owner before release.",
+				patterns: ["install", "owner"],
+			},
+		]);
+		expect(parseDailyBriefInsights("QUESTION: Has the backend path been verified?\nFOCUS: backend", 1)).toEqual([]);
+		expect(parseDailyBriefInsights("  QUESTION: Has the backend path been verified?\n  FOCUS: backend", 1)).toEqual([]);
 	});
 
 	it("persists generated brief insights", async () => {
 		const memoryId = seedMemory("default");
 		const worker = startReflectionWorker(config, {
 			getDbAccessor,
-			getInferenceProvider: () =>
-				provider("SUMMARY: Worker persisted.\nPATTERNS: persistence\nQUESTION: Should we keep it?"),
+			getInferenceProvider: () => provider("BRIEF: Worker persisted the daily brief row.\nFOCUS: persistence"),
 			logger,
 		});
 
@@ -165,7 +234,7 @@ describe("reflection worker", () => {
 				},
 		);
 		expect(reflection).toEqual({
-			summary: "Should we keep it?",
+			summary: "Worker persisted the daily brief row.",
 			model: "test-model",
 			memory_ids: JSON.stringify([memoryId]),
 		});
@@ -227,7 +296,7 @@ describe("reflection worker", () => {
 				waiting += 1;
 				if (waiting === 2) release?.();
 				await barrier;
-				return "INSIGHT: Should this duplicate be inserted once?\nFOCUS: race, dedupe";
+				return "INSIGHT: Duplicate dashboard-open generations should insert one row.\nFOCUS: race, dedupe";
 			},
 		};
 		await Promise.all([
@@ -251,8 +320,8 @@ describe("reflection worker", () => {
 		});
 		expect(rows).toEqual([
 			{
-				summary: "Should this duplicate be inserted once?",
-				content_key: "should this duplicate be inserted once",
+				summary: "Duplicate dashboard-open generations should insert one row.",
+				content_key: "duplicate dashboard open generations should insert one row",
 			},
 		]);
 	});

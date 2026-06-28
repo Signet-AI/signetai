@@ -72,7 +72,7 @@ function app(): Hono {
 		agentsDir: dir,
 		getDbAccessor: () => dbAccessor,
 		getInferenceProvider: () =>
-			makeProvider("SUMMARY: We fixed reflections.\nPATTERNS: persistence, scoping\nQUESTION: Keep it?"),
+			makeProvider("INSIGHT: Reflection generation now persists declarative gap observations.\nFOCUS: persistence, scoping"),
 	});
 	return next;
 }
@@ -119,8 +119,8 @@ describe("reflection routes", () => {
 		const res = await app().request("/api/reflections/generate?agentId=agent-a", { method: "POST" });
 		expect(res.status).toBe(200);
 		const body = await res.json();
-		expect(body.reflection.summary).toBe("Keep it?");
-		expect(body.reflection.patterns).toEqual([]);
+		expect(body.reflection.summary).toBe("Reflection generation now persists declarative gap observations.");
+		expect(body.reflection.patterns).toEqual(["persistence", "scoping"]);
 
 		const row = dbAccessor.withReadDb(
 			(db) =>
