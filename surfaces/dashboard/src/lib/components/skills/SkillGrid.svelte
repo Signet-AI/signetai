@@ -1,5 +1,6 @@
 <script lang="ts">
 import type { Skill, SkillSearchResult } from "$lib/api";
+import { skillIdentityKey, skillRenderKey, skillSource } from "$lib/skills/skill-identity";
 import SkillCard from "./SkillCard.svelte";
 import SkillsEmptyState from "./SkillsEmptyState.svelte";
 
@@ -12,8 +13,8 @@ type Props = {
 	selectedName?: string | null;
 	installing?: string | null;
 	uninstalling?: string | null;
-	onitemclick?: (name: string) => void;
-	oninstall?: (name: string) => void;
+	onitemclick?: (name: string, source?: string) => void;
+	oninstall?: (name: string, source?: string) => void;
 	onuninstall?: (name: string) => void;
 	emptyState?: EmptyStateKind | null;
 	onemptyaction?: (action: "primary" | "secondary") => void;
@@ -43,12 +44,8 @@ const {
 	onreviewrequest,
 }: Props = $props();
 
-function isSearchResult(i: Skill | SkillSearchResult): i is SkillSearchResult {
-	return "installed" in i && "fullName" in i;
-}
-
 function skillKey(i: Skill | SkillSearchResult): string {
-	return isSearchResult(i) ? i.fullName : i.name;
+	return skillIdentityKey(i);
 }
 
 const emptyActions = $derived.by(() => {
@@ -98,7 +95,7 @@ const remainingCount = $derived(items.length - visibleCount);
 				<div class="featured-count">{featuredItems.length} featured</div>
 			</div>
 			<div class="grid featured-grid">
-				{#each featuredItems as item (skillKey(item))}
+				{#each featuredItems as item, index (skillRenderKey(item, index))}
 					<SkillCard
 						{item}
 						{mode}
@@ -107,8 +104,8 @@ const remainingCount = $derived(items.length - visibleCount);
 						installing={installing === item.name}
 						uninstalling={uninstalling === item.name}
 						compareSelected={compareSelectedKeys.includes(skillKey(item))}
-						onclick={() => onitemclick?.(item.name)}
-						oninstall={() => oninstall?.(item.name)}
+						onclick={() => onitemclick?.(item.name, skillSource(item))}
+						oninstall={() => oninstall?.(item.name, skillSource(item))}
 						onuninstall={() => onuninstall?.(item.name)}
 						oncomparetoggle={() => oncomparetoggle?.(skillKey(item))}
 					/>
@@ -120,7 +117,7 @@ const remainingCount = $derived(items.length - visibleCount);
 	{#if items.length > 0}
 		<!-- Main grid -->
 		<div class="grid">
-			{#each visibleItems as item (skillKey(item))}
+			{#each visibleItems as item, index (skillRenderKey(item, index))}
 				<SkillCard
 					{item}
 					{mode}
@@ -128,8 +125,8 @@ const remainingCount = $derived(items.length - visibleCount);
 					installing={installing === item.name}
 					uninstalling={uninstalling === item.name}
 					compareSelected={compareSelectedKeys.includes(skillKey(item))}
-					onclick={() => onitemclick?.(item.name)}
-					oninstall={() => oninstall?.(item.name)}
+					onclick={() => onitemclick?.(item.name, skillSource(item))}
+					oninstall={() => oninstall?.(item.name, skillSource(item))}
 					onuninstall={() => onuninstall?.(item.name)}
 					oncomparetoggle={() => oncomparetoggle?.(skillKey(item))}
 				/>

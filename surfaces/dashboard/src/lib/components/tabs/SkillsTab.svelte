@@ -6,6 +6,7 @@ import SkillsComparePanel from "$lib/components/skills/SkillsComparePanel.svelte
 import { getFeaturedOfficialSkills, omitFeaturedSkills } from "$lib/components/skills/featured-skills";
 import * as Select from "$lib/components/ui/select/index.js";
 import * as Tabs from "$lib/components/ui/tabs/index.js";
+import { skillIdentityKey } from "$lib/skills/skill-identity";
 import {
 	type ProviderFilter,
 	type SkillsView,
@@ -144,7 +145,7 @@ const emptyState = $derived<"installed" | "browse" | "search" | null>(
 
 const compareItems = $derived.by(() => {
 	const available = displayItems.filter((item): item is SkillSearchResult => "fullName" in item);
-	return available.filter((item) => sk.compareSelected.includes(item.fullName));
+	return available.filter((item) => sk.compareSelected.includes(skillIdentityKey(item)));
 });
 
 const showLoading = $derived.by(() => {
@@ -344,8 +345,8 @@ onMount(() => {
 			selectedName={sk.selectedName}
 			installing={sk.installing}
 			uninstalling={sk.uninstalling}
-			onitemclick={(name) => openDetail(name)}
-			oninstall={(name) => doInstall(name)}
+			onitemclick={(name, source) => openDetail(name, source)}
+			oninstall={(name, source) => doInstall(name, source)}
 			onuninstall={(name) => doUninstall(name)}
 			emptyState={emptyState}
 			onemptyaction={handleEmptyAction}

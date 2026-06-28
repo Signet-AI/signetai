@@ -1844,6 +1844,7 @@ export interface Skill {
 export interface SkillSearchResult {
 	name: string;
 	fullName: string;
+	catalogKey?: string;
 	installs: string;
 	installsRaw?: number;
 	popularityScore?: number;

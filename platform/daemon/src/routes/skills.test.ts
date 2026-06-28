@@ -547,9 +547,14 @@ This is a test skill.`,
 			const signetSkills = body.results.filter((s: { provider: string }) => s.provider === "signet");
 			expect(signetSkills.length).toBeGreaterThan(0);
 
-			// Verify signet skills use repo path as fullName, not signet@ prefix
+			// Verify signet skills keep repo path as the install source but expose
+			// per-skill catalog keys for keyed UI rendering and compare state.
+			const catalogKeys = new Set<string>();
 			for (const skill of signetSkills) {
 				expect(skill.fullName).toBe("Signet-AI/signetai");
+				expect(skill.catalogKey).toBe(`signet:Signet-AI/signetai:${skill.name}`);
+				expect(catalogKeys.has(skill.catalogKey)).toBe(false);
+				catalogKeys.add(skill.catalogKey);
 				expect(skill.official).toBe(true);
 			}
 

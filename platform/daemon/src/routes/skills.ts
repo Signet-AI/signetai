@@ -91,6 +91,7 @@ type ClawhubItem = {
 type SkillBrowseResult = {
 	name: string;
 	fullName: string;
+	catalogKey: string;
 	installs: string;
 	installsRaw: number;
 	popularityScore: number;
@@ -233,6 +234,24 @@ function calculateSkillPopularity(input: {
 	return input.installsRaw + stars * 200 + verifiedBoost;
 }
 
+function createSkillBrowseResult(input: Omit<SkillBrowseResult, "catalogKey">): SkillBrowseResult {
+	return {
+		...input,
+		catalogKey: `${input.provider}:${input.fullName}:${input.name}`,
+	};
+}
+
+function dedupeSkillBrowseResults(results: SkillBrowseResult[]): SkillBrowseResult[] {
+	const byKey = new Map<string, SkillBrowseResult>();
+	for (const result of results) {
+		const existing = byKey.get(result.catalogKey);
+		if (!existing || result.popularityScore > existing.popularityScore) {
+			byKey.set(result.catalogKey, result);
+		}
+	}
+	return Array.from(byKey.values());
+}
+
 async function fetchCatalog(): Promise<CatalogEntry[]> {
 	const now = Date.now();
 	if (catalogCache.length > 0 && now - catalogFetchedAt < CATALOG_TTL) {
@@ -343,7 +362,7 @@ function listSignetOfficialSkills(): SkillBrowseResult[] {
 				const meta = parseSkillFrontmatter(content);
 				const isBuiltin = /^builtin:\s*true$/m.test(content);
 				return [
-					{
+					createSkillBrowseResult({
 						name: d.name,
 						fullName: "Signet-AI/signetai",
 						installs: isBuiltin ? "built-in" : "--",
@@ -359,7 +378,7 @@ function listSignetOfficialSkills(): SkillBrowseResult[] {
 						permissions: meta.permissions,
 						official: true,
 						builtin: isBuiltin,
-					},
+					}),
 				];
 			} catch {
 				return [];
@@ -917,43 +936,51 @@ export function mountSkillsRoutes(app: Hono, _authMode: AuthMode = "local"): voi
 		const installed = listInstalledSkills().map((s) => s.name);
 		const signetNames = new Set(signetSkills.map((s) => s.name));
 
-		const skillsShResults: SkillBrowseResult[] = skillsShCatalog.map((s) => ({
-			name: s.name,
-			fullName: `${s.source}@${s.skillId}`,
-			installs: formatInstalls(s.installs),
-			installsRaw: s.installs,
-			popularityScore: calculateSkillPopularity({ installsRaw: s.installs }),
-			description: "",
-			installed: installed.includes(s.name),
-			provider: "skills.sh" as const,
-			category: inferSkillCategory(`${s.name} ${s.skillId} ${s.source}`),
-			downloads: s.installs,
-			maintainer: s.source.split("/")[0] || undefined,
-		}));
-
-		const clawhubResults: SkillBrowseResult[] = clawhubItems.map((s) => ({
-			name: s.slug,
-			fullName: `clawhub@${s.slug}`,
-			installs: formatInstalls(s.stats.installsAllTime),
-			installsRaw: s.stats.installsAllTime,
-			popularityScore: calculateSkillPopularity({
-				installsRaw: s.stats.installsAllTime,
-				stars: s.stats.stars,
+		const skillsShResults: SkillBrowseResult[] = skillsShCatalog.map((s) =>
+			createSkillBrowseResult({
+				name: s.name,
+				fullName: `${s.source}@${s.skillId}`,
+				installs: formatInstalls(s.installs),
+				installsRaw: s.installs,
+				popularityScore: calculateSkillPopularity({ installsRaw: s.installs }),
+				description: "",
+				installed: installed.includes(s.name),
+				provider: "skills.sh" as const,
+				category: inferSkillCategory(`${s.name} ${s.skillId} ${s.source}`),
+				downloads: s.installs,
+				maintainer: s.source.split("/")[0] || undefined,
 			}),
-			description: s.summary,
-			installed: installed.includes(s.slug),
-			provider: "clawhub" as const,
-			category: inferSkillCategory(`${s.slug} ${s.summary} ${s.tags.latest}`),
-			stars: s.stats.stars,
-			downloads: s.stats.downloads,
-			versions: s.stats.versions,
-			author: s.displayName,
-			maintainer: s.displayName,
-		}));
+		);
+
+		const clawhubResults: SkillBrowseResult[] = clawhubItems.map((s) =>
+			createSkillBrowseResult({
+				name: s.slug,
+				fullName: `clawhub@${s.slug}`,
+				installs: formatInstalls(s.stats.installsAllTime),
+				installsRaw: s.stats.installsAllTime,
+				popularityScore: calculateSkillPopularity({
+					installsRaw: s.stats.installsAllTime,
+					stars: s.stats.stars,
+				}),
+				description: s.summary,
+				installed: installed.includes(s.slug),
+				provider: "clawhub" as const,
+				category: inferSkillCategory(`${s.slug} ${s.summary} ${s.tags.latest}`),
+				stars: s.stats.stars,
+				downloads: s.stats.downloads,
+				versions: s.stats.versions,
+				author: s.displayName,
+				maintainer: s.displayName,
+			}),
+		);
 
 		// Deduplicate: prefer signet provider when a skill exists in multiple sources
-		const external = [...skillsShResults, ...clawhubResults].filter((s) => !signetNames.has(s.name));
-		const results = [...signetSkills, ...external].sort((a, b) => b.popularityScore - a.popularityScore);
+		const external = dedupeSkillBrowseResults([...skillsShResults, ...clawhubResults]).filter(
+			(s) => !signetNames.has(s.name),
+		);
+		const results = dedupeSkillBrowseResults([...signetSkills, ...external]).sort(
+			(a, b) => b.popularityScore - a.popularityScore,
+		);
 		return c.json({ results, total: results.length });
 	});
 
@@ -985,19 +1012,21 @@ export function mountSkillsRoutes(app: Hono, _authMode: AuthMode = "local"): voi
 							source: string;
 						}>;
 					};
-					return (data.skills ?? []).map((s) => ({
-						name: s.name,
-						fullName: `${s.source}@${s.skillId}`,
-						installs: formatInstalls(s.installs),
-						installsRaw: s.installs,
-						popularityScore: calculateSkillPopularity({ installsRaw: s.installs }),
-						description: "",
-						installed: installed.includes(s.name),
-						provider: "skills.sh" as const,
-						category: inferSkillCategory(`${s.name} ${s.skillId} ${s.source}`),
-						downloads: s.installs,
-						maintainer: s.source.split("/")[0] || undefined,
-					}));
+					return (data.skills ?? []).map((s) =>
+						createSkillBrowseResult({
+							name: s.name,
+							fullName: `${s.source}@${s.skillId}`,
+							installs: formatInstalls(s.installs),
+							installsRaw: s.installs,
+							popularityScore: calculateSkillPopularity({ installsRaw: s.installs }),
+							description: "",
+							installed: installed.includes(s.name),
+							provider: "skills.sh" as const,
+							category: inferSkillCategory(`${s.name} ${s.skillId} ${s.source}`),
+							downloads: s.installs,
+							maintainer: s.source.split("/")[0] || undefined,
+						}),
+					);
 				} catch (err) {
 					logger.error("skills", "skills.sh search failed", err as Error);
 					return [];
@@ -1012,25 +1041,27 @@ export function mountSkillsRoutes(app: Hono, _authMode: AuthMode = "local"): voi
 							s.displayName.toLowerCase().includes(lowerQuery) ||
 							s.summary.toLowerCase().includes(lowerQuery),
 					)
-					.map((s) => ({
-						name: s.slug,
-						fullName: `clawhub@${s.slug}`,
-						installs: formatInstalls(s.stats.installsAllTime),
-						installsRaw: s.stats.installsAllTime,
-						popularityScore: calculateSkillPopularity({
+					.map((s) =>
+						createSkillBrowseResult({
+							name: s.slug,
+							fullName: `clawhub@${s.slug}`,
+							installs: formatInstalls(s.stats.installsAllTime),
 							installsRaw: s.stats.installsAllTime,
+							popularityScore: calculateSkillPopularity({
+								installsRaw: s.stats.installsAllTime,
+								stars: s.stats.stars,
+							}),
+							description: s.summary,
+							installed: installed.includes(s.slug),
+							provider: "clawhub" as const,
+							category: inferSkillCategory(`${s.slug} ${s.summary} ${s.tags.latest}`),
 							stars: s.stats.stars,
+							downloads: s.stats.downloads,
+							versions: s.stats.versions,
+							author: s.displayName,
+							maintainer: s.displayName,
 						}),
-						description: s.summary,
-						installed: installed.includes(s.slug),
-						provider: "clawhub" as const,
-						category: inferSkillCategory(`${s.slug} ${s.summary} ${s.tags.latest}`),
-						stars: s.stats.stars,
-						downloads: s.stats.downloads,
-						versions: s.stats.versions,
-						author: s.displayName,
-						maintainer: s.displayName,
-					}));
+					);
 			})(),
 		]);
 
@@ -1039,8 +1070,12 @@ export function mountSkillsRoutes(app: Hono, _authMode: AuthMode = "local"): voi
 			(s) => s.name.toLowerCase().includes(lowerQuery) || s.description.toLowerCase().includes(lowerQuery),
 		);
 		const signetNames = new Set(signetFiltered.map((s) => s.name));
-		const external = [...skillsShResults, ...clawhubFiltered].filter((s) => !signetNames.has(s.name));
-		const results = [...signetFiltered, ...external].sort((a, b) => b.popularityScore - a.popularityScore);
+		const external = dedupeSkillBrowseResults([...skillsShResults, ...clawhubFiltered]).filter(
+			(s) => !signetNames.has(s.name),
+		);
+		const results = dedupeSkillBrowseResults([...signetFiltered, ...external]).sort(
+			(a, b) => b.popularityScore - a.popularityScore,
+		);
 		return c.json({ results });
 	});
 

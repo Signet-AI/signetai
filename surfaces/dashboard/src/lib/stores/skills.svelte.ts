@@ -282,7 +282,13 @@ export async function doSearch(): Promise<void> {
 	sk.searching = false;
 }
 
-export async function openDetail(name: string): Promise<void> {
+function findCatalogMatch(name: string, source?: string): SkillSearchResult | undefined {
+	const matches = [...sk.results, ...sk.catalog].filter((s) => s.name === name);
+	if (source) return matches.find((s) => s.fullName === source) ?? matches[0];
+	return matches[0];
+}
+
+export async function openDetail(name: string, source?: string): Promise<void> {
 	sk.selectedName = name;
 	sk.detailOpen = true;
 	sk.detailLoading = true;
@@ -290,11 +296,11 @@ export async function openDetail(name: string): Promise<void> {
 	sk.detailMeta = null;
 
 	// Find source from search results or catalog for remote fetch
-	const match = sk.results.find((s) => s.name === name) || sk.catalog.find((s) => s.name === name);
+	const match = findCatalogMatch(name, source);
 	sk.detailSource = match ?? null;
-	const source = match?.fullName || undefined;
+	const detailSource = source ?? match?.fullName;
 
-	const detail = await getSkill(name, source);
+	const detail = await getSkill(name, detailSource);
 	if (detail) {
 		sk.detailMeta = detail;
 		sk.detailContent = (detail as SkillDetail).content ?? "";
@@ -310,12 +316,14 @@ export function closeDetail(): void {
 	sk.detailSource = null;
 }
 
-export async function doInstall(name: string): Promise<void> {
+export async function doInstall(name: string, source?: string): Promise<void> {
 	sk.installing = name;
-	// Look up fullName from search results or catalog
-	const match = sk.results.find((s) => s.name === name) || sk.catalog.find((s) => s.name === name);
-	const source = match?.fullName || undefined;
-	const result = await installSkill(name, source);
+	// Look up fullName from search results, the active detail pane, or catalog.
+	const detailSource = sk.detailOpen && sk.selectedName === name ? sk.detailSource?.fullName : undefined;
+	const requestedSource = source ?? detailSource;
+	const match = findCatalogMatch(name, requestedSource);
+	const installSource = requestedSource ?? match?.fullName;
+	const result = await installSkill(name, installSource);
 	if (result.success) {
 		toast(`Skill ${name} installed`, "success");
 		await fetchInstalled({ force: true });

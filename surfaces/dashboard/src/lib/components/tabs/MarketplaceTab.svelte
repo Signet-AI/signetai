@@ -10,6 +10,7 @@ import { Button } from "$lib/components/ui/button/index.js";
 import * as Collapsible from "$lib/components/ui/collapsible/index.js";
 import * as Select from "$lib/components/ui/select/index.js";
 import { ChevronDown } from "$lib/icons";
+import { skillIdentityKey } from "$lib/skills/skill-identity";
 import { returnToSidebar } from "$lib/stores/focus.svelte";
 import {
 	fetchMarketplaceMcpCatalog,
@@ -266,7 +267,7 @@ function getMarketplaceSkillEmptyState(): "installed" | "browse" | "search" | nu
 function getMarketplaceCompareItems(): SkillSearchResult[] {
 	return getMarketplaceSkillItems()
 		.filter((item): item is SkillSearchResult => "fullName" in item)
-		.filter((item) => sk.compareSelected.includes(item.fullName));
+		.filter((item) => sk.compareSelected.includes(skillIdentityKey(item)));
 }
 
 function handleMarketplaceSkillEmptyAction(action: "primary" | "secondary"): void {
@@ -898,8 +899,8 @@ $effect(() => {
 							selectedName={sk.selectedName}
 							installing={sk.installing}
 							uninstalling={sk.uninstalling}
-							onitemclick={(name) => openDetail(name)}
-							oninstall={(name) => doInstall(name)}
+							onitemclick={(name, source) => openDetail(name, source)}
+							oninstall={(name, source) => doInstall(name, source)}
 							onuninstall={(name) => doUninstall(name)}
 							emptyState={getMarketplaceSkillEmptyState()}
 							onemptyaction={handleMarketplaceSkillEmptyAction}

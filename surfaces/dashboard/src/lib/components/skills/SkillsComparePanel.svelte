@@ -1,6 +1,7 @@
 <script lang="ts">
 import type { SkillSearchResult } from "$lib/api";
 import { computePermissionFootprint } from "$lib/skills/risk-profile";
+import { skillIdentityKey } from "$lib/skills/skill-identity";
 
 type Props = {
 	items: SkillSearchResult[];
@@ -8,10 +9,15 @@ type Props = {
 	onClear: () => void;
 };
 
+// biome-ignore lint/style/useConst: Svelte updates destructured $props bindings when parents pass new values.
 let { items, onRemove, onClear }: Props = $props();
 
 function itemKey(item: SkillSearchResult): string {
-	return item.fullName;
+	return skillIdentityKey(item);
+}
+
+function itemRenderKey(item: SkillSearchResult, index: number): string {
+	return `${itemKey(item)}:${index}`;
 }
 
 function formatCount(value: number | undefined): string {
@@ -52,7 +58,7 @@ function verifiedLabel(item: SkillSearchResult): string {
 				</tr>
 			</thead>
 			<tbody>
-				{#each items as item (itemKey(item))}
+				{#each items as item, index (itemRenderKey(item, index))}
 					<tr>
 						<td>{item.name}</td>
 						<td>{maintainerLabel(item)}</td>
