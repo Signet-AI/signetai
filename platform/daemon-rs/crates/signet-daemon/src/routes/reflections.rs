@@ -44,7 +44,7 @@ fn reflection_limit(limit: Option<i64>) -> i64 {
 fn generate_count(count: Option<i64>) -> i64 {
     match count {
         Some(count) if count > 0 => count.min(6),
-        _ => 3,
+        _ => 1,
     }
 }
 

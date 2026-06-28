@@ -33,9 +33,9 @@ function parseReflectionLimit(raw: string | undefined): number {
 }
 
 function parseGenerateCount(raw: string | undefined): number {
-	if (raw === undefined) return 3;
+	if (raw === undefined) return 1;
 	const parsed = Number.parseInt(raw, 10);
-	if (!Number.isFinite(parsed) || parsed <= 0) return 3;
+	if (!Number.isFinite(parsed) || parsed <= 0) return 1;
 	return Math.min(parsed, 6);
 }
 
@@ -157,7 +157,7 @@ export function registerReflectionRoutes(app: Hono, deps: ReflectionRouteDeps = 
 			return c.json({
 				reflections: [],
 				generated: 0,
-				message: "No source material or fresh non-duplicate insight found",
+				message: "No source material or fresh non-duplicate question found",
 			});
 		}
 
@@ -169,7 +169,7 @@ export function registerReflectionRoutes(app: Hono, deps: ReflectionRouteDeps = 
 				.all(...ids) as ReflectionRow[];
 		});
 
-		logger.info("reflections", "Generated daily brief insights", { agentId, date, count: rows.length });
+		logger.info("reflections", "Generated daily brief questions", { agentId, date, count: rows.length });
 		const reflections = rows.map(formatReflection);
 		return c.json({ reflection: reflections[0] ?? null, reflections, generated: reflections.length });
 	});

@@ -273,24 +273,32 @@ fn is_question_led_insight(text: &str) -> bool {
 pub fn parse_daily_brief_insights(text: &str, limit: usize) -> Vec<DailyBriefInsight> {
     let mut insights = Vec::new();
     let mut pending: Option<String> = None;
+    let mut pending_is_question = false;
     let mut patterns: Vec<String> = Vec::new();
 
     fn flush(
         insights: &mut Vec<DailyBriefInsight>,
         pending: &mut Option<String>,
+        pending_is_question: &mut bool,
         patterns: &mut Vec<String>,
     ) {
         let Some(raw) = pending.take() else { return };
-        let summary = trim_line(&raw, 420);
-        if !summary.is_empty() && !is_question_led_insight(&summary) {
+        let summary = trim_line(&raw, 560);
+        if !summary.is_empty() {
+            let question = if *pending_is_question || is_question_led_insight(&summary) {
+                Some(summary.clone())
+            } else {
+                None
+            };
             insights.push(DailyBriefInsight {
-                question: None,
+                question,
                 summary,
                 patterns: std::mem::take(patterns),
             });
         } else {
             patterns.clear();
         }
+        *pending_is_question = false;
     }
 
     for raw_line in text.lines() {
@@ -307,10 +315,16 @@ pub fn parse_daily_brief_insights(text: &str, limit: usize) -> Vec<DailyBriefIns
             let label_upper = label.trim().to_ascii_uppercase();
             if matches!(
                 label_upper.as_str(),
-                "BRIEF" | "GAP" | "INSIGHT" | "SUMMARY"
+                "ASK" | "QUESTION" | "BRIEF" | "GAP" | "INSIGHT" | "SUMMARY"
             ) {
-                flush(&mut insights, &mut pending, &mut patterns);
+                flush(
+                    &mut insights,
+                    &mut pending,
+                    &mut pending_is_question,
+                    &mut patterns,
+                );
                 pending = Some(value.trim().to_string());
+                pending_is_question = matches!(label_upper.as_str(), "ASK" | "QUESTION");
                 continue;
             }
             if pending.is_some() && matches!(label_upper.as_str(), "FOCUS" | "PATTERNS" | "TAGS") {
@@ -324,7 +338,12 @@ pub fn parse_daily_brief_insights(text: &str, limit: usize) -> Vec<DailyBriefIns
             }
         }
     }
-    flush(&mut insights, &mut pending, &mut patterns);
+    flush(
+        &mut insights,
+        &mut pending,
+        &mut pending_is_question,
+        &mut patterns,
+    );
 
     if insights.is_empty() {
         let has_structured_label = text.lines().any(|line| {
@@ -349,10 +368,15 @@ pub fn parse_daily_brief_insights(text: &str, limit: usize) -> Vec<DailyBriefIns
                     | "TAGS"
             )
         });
-        let fallback = trim_line(text, 420);
-        if !has_structured_label && !fallback.is_empty() && !is_question_led_insight(&fallback) {
+        let fallback = trim_line(text, 560);
+        if !has_structured_label && !fallback.is_empty() {
+            let question = if is_question_led_insight(&fallback) {
+                Some(fallback.clone())
+            } else {
+                None
+            };
             insights.push(DailyBriefInsight {
-                question: None,
+                question,
                 summary: fallback,
                 patterns: Vec::new(),
             });
@@ -371,19 +395,30 @@ pub fn parse_daily_brief_insights(text: &str, limit: usize) -> Vec<DailyBriefIns
 }
 
 pub fn build_reflection_prompt(context: &ReflectionSourceContext, count: usize) -> String {
+    let plural = if count == 1 { "question" } else { "questions" };
     let mut lines = vec![
-        "You are Signet's Daily Brief generator.".to_string(),
-        format!(
-            "Given the following {} saved memories, observe the gaps.",
-            context.memories.len()
-        ),
-        "Find missing decisions, contradictions, unresolved loops, stale assumptions, or next checks implied by the memories.".to_string(),
-        format!("Return exactly {count} concrete insights. Each insight should be declarative, useful, and grounded in the memories."),
-        "Do not quiz the user. Do not turn implementation checks into yes/no questions. Do not summarize the batch.".to_string(),
+        "You are the question generator for a daily memory brief.".to_string(),
+        "You will receive a mechanically selected bundle of recent user memories. It is not curated for a topic. Treat it as raw memory evidence.".to_string(),
+        String::new(),
+        format!("Goal: write {count} {plural} the user might actually want to answer today."),
+        String::new(),
+        "Pattern to prefer:".to_string(),
+        "- Find an earlier/later pair, repeated thread, or gentle mismatch in the memories.".to_string(),
+        "- Shape: \"You wrote/said X, and later Y showed up. How does that fit/feel now?\"".to_string(),
+        "- The question should be a memory prompt, not a task prompt.".to_string(),
+        String::new(),
+        "Rules:".to_string(),
+        "- Address the user by name only if the name is clear from the memories.".to_string(),
+        "- Use concrete details from the memories: people, projects, quotes, places, dates, or repeated phrases.".to_string(),
+        "- Ask about a real remembered tension, change, or open feeling.".to_string(),
+        "- Do not ask what Signet, an agent, or a tool should do.".to_string(),
+        "- Do not ask for productivity planning unless the memories themselves clearly center on an active decision.".to_string(),
+        "- Do not invent hypotheticals or future scenarios.".to_string(),
+        "- Do not over-compress into vague labels like \"hidden mess,\" \"small kind thing,\" or \"relationship architecture.\"".to_string(),
+        "- Keep each question natural and answerable on first read. 45-85 words is fine.".to_string(),
         String::new(),
         "Output only lines in this format:".to_string(),
-        "INSIGHT: <observed gap or useful next-check insight>".to_string(),
-        "FOCUS: <2-5 comma-separated concrete tags>".to_string(),
+        "QUESTION: <daily brief question>".to_string(),
         String::new(),
     ];
 
@@ -408,7 +443,7 @@ pub fn build_reflection_prompt(context: &ReflectionSourceContext, count: usize) 
         lines.push(String::new());
     }
 
-    lines.push("Last saved memories:".to_string());
+    lines.push("Recent saved memories:".to_string());
     for memory in &context.memories {
         let date = &memory.created_at[..memory.created_at.len().min(10)];
         let tags = if memory.tags.is_empty() {
@@ -675,7 +710,7 @@ impl ReflectionWorkerHandle {
                 ) {
                     warn!(agent_id, error = %e, "failed to persist reflection timestamp");
                 }
-                info!(agent_id, count = ids.len(), "generated daily brief insight");
+                info!(agent_id, count = ids.len(), "generated daily brief question");
             }
             Err(e) => warn!(agent_id, error = %e, "reflection generation failed"),
         }

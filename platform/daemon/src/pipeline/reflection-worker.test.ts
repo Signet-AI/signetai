@@ -148,7 +148,7 @@ describe("reflection worker", () => {
 		expect(context.graphFacts).toEqual([]);
 	});
 
-	it("builds a simple gap-observation prompt over saved memories", () => {
+	it("builds a memory-question prompt over saved memories", () => {
 		const prompt = buildReflectionPrompt(
 			{
 				memories: [
@@ -168,54 +168,53 @@ describe("reflection worker", () => {
 			1,
 		);
 
-		expect(prompt).toContain("Given the following 1 saved memories, observe the gaps.");
-		expect(prompt).toContain("Last saved memories:");
-		expect(prompt).toContain("Do not turn implementation checks into yes/no questions");
-		expect(prompt).toContain("INSIGHT: <observed gap or useful next-check insight>");
+		expect(prompt).toContain("mechanically selected bundle of recent user memories");
+		expect(prompt).toContain("You wrote/said X, and later Y showed up. How does that fit/feel now?");
+		expect(prompt).toContain("Do not ask what Signet, an agent, or a tool should do.");
+		expect(prompt).toContain("Recent saved memories:");
+		expect(prompt).toContain("QUESTION: <daily brief question>");
 	});
 
-	it("parses declarative gap insights and drops quiz-style questions", () => {
+	it("parses daily brief questions and preserves legacy insight output", () => {
+		const question =
+			"Nicholai, you wrote that AI work should keep humility because it is still AI slop next to real art. Later, Ant fixing broken CI felt hug-worthy. How do those truths sit together now?";
 		const insights = parseDailyBriefInsights(
 			[
+				`QUESTION: ${question}`,
 				"INSIGHT: Rust parity test ports are the release bottleneck; group the remaining work by harness surface before opening more feature threads.",
 				"FOCUS: rust-parity, release",
-				"INSIGHT: Has the backend compare/install logic been updated to route by catalogKey?",
-				"FOCUS: rejected",
-				"INSIGHT: Has the backend path been verified? Verify it before release.",
-				"FOCUS: rejected",
-				"GAP: Issue #868 likely hinges on compare/install catalog-key routing; verify the backend path before touching UI behavior.",
-				"FOCUS: issue868, backend",
-				"INSIGHT: The open loop \"Why does install fail?\" needs an owner before release.",
-				"FOCUS: install, owner",
 			].join("\n"),
-			3,
+			2,
 		);
 
 		expect(insights).toEqual([
 			{
+				summary: question,
+				question,
+				patterns: [],
+			},
+			{
 				summary:
 					"Rust parity test ports are the release bottleneck; group the remaining work by harness surface before opening more feature threads.",
+				question: undefined,
 				patterns: ["rust-parity", "release"],
 			},
+		]);
+		expect(parseDailyBriefInsights("QUESTION: Has the backend path been verified?\nFOCUS: backend", 1)).toEqual([
 			{
-				summary:
-					"Issue #868 likely hinges on compare/install catalog-key routing; verify the backend path before touching UI behavior.",
-				patterns: ["issue868", "backend"],
-			},
-			{
-				summary: "The open loop \"Why does install fail?\" needs an owner before release.",
-				patterns: ["install", "owner"],
+				summary: "Has the backend path been verified?",
+				question: "Has the backend path been verified?",
+				patterns: ["backend"],
 			},
 		]);
-		expect(parseDailyBriefInsights("QUESTION: Has the backend path been verified?\nFOCUS: backend", 1)).toEqual([]);
-		expect(parseDailyBriefInsights("  QUESTION: Has the backend path been verified?\n  FOCUS: backend", 1)).toEqual([]);
 	});
 
-	it("persists generated brief insights", async () => {
+	it("persists generated brief questions", async () => {
 		const memoryId = seedMemory("default");
+		const question = "Nicholai, you wrote one thing and later another related thing showed up. How does that feel now?";
 		const worker = startReflectionWorker(config, {
 			getDbAccessor,
-			getInferenceProvider: () => provider("BRIEF: Worker persisted the daily brief row.\nFOCUS: persistence"),
+			getInferenceProvider: () => provider(`QUESTION: ${question}`),
 			logger,
 		});
 
@@ -227,14 +226,16 @@ describe("reflection worker", () => {
 
 		const reflection = getDbAccessor().withReadDb(
 			(db) =>
-				db.prepare("SELECT summary, model, memory_ids FROM daily_reflections WHERE agent_id = ?").get("default") as {
+				db.prepare("SELECT summary, question, model, memory_ids FROM daily_reflections WHERE agent_id = ?").get("default") as {
 					summary: string;
+					question: string | null;
 					model: string;
 					memory_ids: string;
 				},
 		);
 		expect(reflection).toEqual({
-			summary: "Worker persisted the daily brief row.",
+			summary: question,
+			question,
 			model: "test-model",
 			memory_ids: JSON.stringify([memoryId]),
 		});
@@ -296,7 +297,7 @@ describe("reflection worker", () => {
 				waiting += 1;
 				if (waiting === 2) release?.();
 				await barrier;
-				return "INSIGHT: Duplicate dashboard-open generations should insert one row.\nFOCUS: race, dedupe";
+				return "QUESTION: Duplicate dashboard-open generations should insert one row?";
 			},
 		};
 		await Promise.all([
@@ -320,7 +321,7 @@ describe("reflection worker", () => {
 		});
 		expect(rows).toEqual([
 			{
-				summary: "Duplicate dashboard-open generations should insert one row.",
+				summary: "Duplicate dashboard-open generations should insert one row?",
 				content_key: "duplicate dashboard open generations should insert one row",
 			},
 		]);

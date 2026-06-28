@@ -130,17 +130,31 @@ function isQuestionLedInsight(text: string): boolean {
 	);
 }
 
-export function buildReflectionPrompt(context: ReflectionSourceContext, count = 3): string {
+export function buildReflectionPrompt(context: ReflectionSourceContext, count = 1): string {
+	const plural = count === 1 ? "question" : "questions";
 	const lines: string[] = [
-		"You are Signet's Daily Brief generator.",
-		`Given the following ${context.memories.length} saved memories, observe the gaps.`,
-		"Find missing decisions, contradictions, unresolved loops, stale assumptions, or next checks implied by the memories.",
-		`Return exactly ${count} concrete insights. Each insight should be declarative, useful, and grounded in the memories.`,
-		"Do not quiz the user. Do not turn implementation checks into yes/no questions. Do not summarize the batch.",
+		"You are the question generator for a daily memory brief.",
+		"You will receive a mechanically selected bundle of recent user memories. It is not curated for a topic. Treat it as raw memory evidence.",
+		"",
+		`Goal: write ${count} ${plural} the user might actually want to answer today.`,
+		"",
+		"Pattern to prefer:",
+		"- Find an earlier/later pair, repeated thread, or gentle mismatch in the memories.",
+		'- Shape: "You wrote/said X, and later Y showed up. How does that fit/feel now?"',
+		"- The question should be a memory prompt, not a task prompt.",
+		"",
+		"Rules:",
+		"- Address the user by name only if the name is clear from the memories.",
+		"- Use concrete details from the memories: people, projects, quotes, places, dates, or repeated phrases.",
+		"- Ask about a real remembered tension, change, or open feeling.",
+		"- Do not ask what Signet, an agent, or a tool should do.",
+		"- Do not ask for productivity planning unless the memories themselves clearly center on an active decision.",
+		"- Do not invent hypotheticals or future scenarios.",
+		'- Do not over-compress into vague labels like "hidden mess," "small kind thing," or "relationship architecture."',
+		"- Keep each question natural and answerable on first read. 45-85 words is fine.",
 		"",
 		"Output only lines in this format:",
-		"INSIGHT: <observed gap or useful next-check insight>",
-		"FOCUS: <2-5 comma-separated concrete tags>",
+		"QUESTION: <daily brief question>",
 		"",
 	];
 
@@ -155,7 +169,7 @@ export function buildReflectionPrompt(context: ReflectionSourceContext, count = 
 		lines.push("");
 	}
 
-	lines.push("Last saved memories:");
+	lines.push("Recent saved memories:");
 	for (const m of context.memories) {
 		const date = m.createdAt.slice(0, 10);
 		lines.push(`  [${date}] (${m.type}) ${m.tags ? `[${m.tags}] ` : ""}${trimLine(m.content, 500)}`);
@@ -178,26 +192,32 @@ export function parseReflectionResponse(text: string): { summary: string; patter
 	return { summary, patterns, question };
 }
 
-export function parseDailyBriefInsights(text: string, limit = 3): DailyBriefInsight[] {
+export function parseDailyBriefInsights(text: string, limit = 1): DailyBriefInsight[] {
 	const insights: DailyBriefInsight[] = [];
 	let pending: string | null = null;
+	let pendingIsQuestion = false;
 	let patterns: string[] = [];
 
 	function flush(): void {
 		if (!pending) return;
-		const summary = trimLine(pending, 420);
-		if (summary && !isQuestionLedInsight(summary)) insights.push({ summary, patterns });
+		const summary = trimLine(pending, 560);
+		if (summary) {
+			const question = pendingIsQuestion || isQuestionLedInsight(summary) ? summary : undefined;
+			insights.push({ summary, question, patterns });
+		}
 		pending = null;
+		pendingIsQuestion = false;
 		patterns = [];
 	}
 
 	for (const rawLine of text.split(/\r?\n/)) {
 		const line = rawLine.trim();
 		if (!line) continue;
-		const brief = line.match(/^(?:[-*]\s*)?(?:BRIEF|GAP|INSIGHT|SUMMARY)\s*:\s*(.+)$/i)?.[1];
-		if (brief) {
+		const entry = line.match(/^(?:[-*]\s*)?(?:ASK|QUESTION|BRIEF|GAP|INSIGHT|SUMMARY)\s*:\s*(.+)$/i);
+		if (entry) {
 			flush();
-			pending = brief.trim();
+			pending = entry[1].trim();
+			pendingIsQuestion = /^(?:[-*]\s*)?(?:ASK|QUESTION)\s*:/i.test(line);
 			continue;
 		}
 		const focus = line.match(/^(?:[-*]\s*)?(?:FOCUS|PATTERNS|TAGS)\s*:\s*(.+)$/i)?.[1];
@@ -215,8 +235,11 @@ export function parseDailyBriefInsights(text: string, limit = 3): DailyBriefInsi
 		const hasStructuredLabel = /^\s*(?:[-*]\s*)?(?:ASK|BRIEF|FOCUS|GAP|INSIGHT|PATTERNS|QUESTION|SUMMARY|TAGS)\s*:/im.test(
 			text,
 		);
-		const fallback = trimLine(text, 420);
-		if (!hasStructuredLabel && fallback && !isQuestionLedInsight(fallback)) insights.push({ summary: fallback, patterns: [] });
+		const fallback = trimLine(text, 560);
+		if (!hasStructuredLabel && fallback) {
+			const question = isQuestionLedInsight(fallback) ? fallback : undefined;
+			insights.push({ summary: fallback, question, patterns: [] });
+		}
 	}
 
 	const seen = new Set<string>();
@@ -277,7 +300,7 @@ export function collectReflectionContext(
 export async function generateDailyBriefInsights(
 	agentId: string,
 	config: PipelineReflectionsConfig,
-	count = 3,
+	count = 1,
 	deps: ReflectionDeps = DEFAULT_DEPS,
 ): Promise<string[]> {
 	const context = collectReflectionContext(agentId, config, deps);
@@ -362,7 +385,7 @@ export function startReflectionWorker(
 				return;
 			}
 			writeLastReflectionTime(agentId, todayDate());
-			deps.logger.info("reflections", "Generated daily brief insight", { agentId, count: ids.length });
+			deps.logger.info("reflections", "Generated daily brief question", { agentId, count: ids.length });
 		} catch (e) {
 			deps.logger.warn("reflections", "Generation failed", {
 				error: e instanceof Error ? e.message : String(e),

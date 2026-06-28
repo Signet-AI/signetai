@@ -3472,7 +3472,7 @@ export async function getTodayReflection(agentId?: string): Promise<TodayReflect
 	}
 }
 
-export async function generateReflection(agentId?: string, count = 3): Promise<TodayReflectionResponse> {
+export async function generateReflection(agentId?: string, count = 1): Promise<TodayReflectionResponse> {
 	try {
 		const suffix = agentQuery(agentId);
 		const separator = suffix ? "&" : "?";

@@ -12,25 +12,74 @@ const { agentId }: Props = $props();
 
 let reflections = $state<DailyReflection[]>([]);
 let loading = $state(true);
+let generating = $state(false);
+let generationSlow = $state(false);
+let generationFailed = $state(false);
 let answerText = $state("");
 let submittingId = $state<string | null>(null);
 let showAnswerId = $state<string | null>(null);
+let generationToken = 0;
 
 const reflection = $derived(reflections[0] ?? null);
 
-onMount(async () => {
-	loading = true;
-	const generated = await generateReflection(agentId, 3);
-	let next = generated.reflections ?? (generated.reflection ? [generated.reflection] : []);
+onMount(() => {
+	let active = true;
 
-	if (next.length === 0) {
+	async function loadToday(): Promise<void> {
+		loading = true;
 		const today = await getTodayReflection(agentId);
-		next = today.reflections ?? (today.reflection ? [today.reflection] : []);
+		if (!active) return;
+
+		const todayItems = today.reflections ?? (today.reflection ? [today.reflection] : []);
+		const questions = todayItems.filter((item) => item.question);
+		reflections = questions.slice(0, 1);
+		loading = false;
+
+		if (questions.length === 0) {
+			void generateQuestion();
+		}
 	}
 
-	reflections = next;
-	loading = false;
+	void loadToday();
+
+	return () => {
+		active = false;
+		generationToken += 1;
+	};
 });
+
+async function generateQuestion(): Promise<void> {
+	const token = generationToken + 1;
+	generationToken = token;
+	generating = true;
+	generationSlow = false;
+	generationFailed = false;
+
+	const slowTimer = setTimeout(() => {
+		if (generationToken === token) generationSlow = true;
+	}, 10_000);
+
+	try {
+		const generated = await generateReflection(agentId, 1);
+		if (generationToken !== token) return;
+		const next = generated.reflections ?? (generated.reflection ? [generated.reflection] : []);
+		const questions = next.filter((item) => item.question);
+		if (questions.length > 0) {
+			reflections = questions.slice(0, 1);
+			toast("Today's question is ready", "success");
+		} else {
+			generationFailed = true;
+		}
+	} catch {
+		if (generationToken === token) generationFailed = true;
+	} finally {
+		clearTimeout(slowTimer);
+		if (generationToken === token) {
+			generating = false;
+			generationSlow = false;
+		}
+	}
+}
 
 async function handleAnswer(item: DailyReflection): Promise<void> {
 	if (!answerText.trim()) return;
@@ -45,7 +94,7 @@ async function handleAnswer(item: DailyReflection): Promise<void> {
 		);
 		answerText = "";
 		showAnswerId = null;
-		toast("Answer saved as memory", "success");
+		toast("Saved into your memory thread", "success");
 	} else {
 		toast(result.error ?? "Failed to save answer", "error");
 	}
@@ -67,17 +116,15 @@ async function handleAnswer(item: DailyReflection): Promise<void> {
 				<span class="loading-line short"></span>
 				<span class="loading-line"></span>
 			</div>
-		{:else if reflections.length === 0}
-			<div class="empty-state">
-				<span>No brief yet</span>
-				<span class="empty-hint">No fresh memory signal found</span>
-			</div>
-		{:else}
+		{:else if reflection}
 			{#each reflections as item (item.id)}
-				<section class="reflection-item">
+				<section class="reflection-item" class:reflection-item--question={item.question}>
+					{#if item.question}
+						<span class="daily-question-label">TODAY'S QUESTION</span>
+					{/if}
 					<p class="reflection-summary">{item.summary}</p>
 
-					{#if item.patterns.length > 0}
+					{#if !item.question && item.patterns.length > 0}
 						<div class="patterns">
 							{#each item.patterns as pattern}
 								<span class="pattern-tag">{pattern}</span>
@@ -114,7 +161,7 @@ async function handleAnswer(item: DailyReflection): Promise<void> {
 										showAnswerId = item.id;
 									}}
 								>
-									Answer
+									Write back
 								</button>
 							{/if}
 						</div>
@@ -128,6 +175,27 @@ async function handleAnswer(item: DailyReflection): Promise<void> {
 					{/if}
 				</section>
 			{/each}
+		{:else if generating}
+			<div class="brief-status" aria-live="polite">
+				<span class="brief-status-label">FINDING TODAY'S QUESTION</span>
+				<span class="brief-status-text">
+					{generationSlow ? "Still looking. You can keep using the dashboard." : "Looking through recent memories…"}
+				</span>
+				<div class="loading-state loading-state--ambient">
+					<span class="loading-line"></span>
+					<span class="loading-line short"></span>
+				</div>
+			</div>
+		{:else if generationFailed}
+			<div class="empty-state">
+				<span>No good question found yet</span>
+				<span class="empty-hint">Daily Brief will try again when there is a stronger memory thread.</span>
+			</div>
+		{:else}
+			<div class="empty-state">
+				<span>No brief yet</span>
+				<span class="empty-hint">No fresh memory signal found</span>
+			</div>
 		{/if}
 	</div>
 </div>
@@ -187,12 +255,32 @@ async function handleAnswer(item: DailyReflection): Promise<void> {
 		padding-top: 0;
 	}
 
+	.reflection-item--question {
+		gap: var(--space-md);
+		padding: var(--space-sm) 0;
+	}
+
+	.daily-question-label {
+		font-family: var(--font-display);
+		font-size: 8px;
+		font-weight: 700;
+		letter-spacing: 0.16em;
+		color: var(--sig-highlight);
+		text-transform: uppercase;
+	}
+
 	.reflection-summary {
 		font-family: var(--font-body);
 		font-size: 13px;
 		line-height: 1.6;
 		color: var(--sig-text);
 		margin: 0;
+	}
+
+	.reflection-item--question .reflection-summary {
+		font-size: clamp(15px, 1.55vw, 18px);
+		line-height: 1.65;
+		color: var(--sig-text-bright);
 	}
 
 	.patterns {
@@ -220,22 +308,33 @@ async function handleAnswer(item: DailyReflection): Promise<void> {
 		padding-top: var(--space-sm);
 	}
 
+	.reflection-item--question .question-block {
+		border-top: none;
+		padding-top: 0;
+	}
+
 	.answer-prompt {
 		font-family: var(--font-body);
 		font-size: 10px;
-		letter-spacing: 0.06em;
-		color: var(--sig-surface);
-		background: var(--sig-accent);
-		border: none;
-		padding: 4px 12px;
-		border-radius: 2px;
+		letter-spacing: 0.08em;
+		color: var(--primary-foreground);
+		background: var(--sig-highlight);
+		border: 1px solid var(--sig-highlight);
+		padding: 6px 14px;
+		border-radius: 999px;
 		cursor: pointer;
 		align-self: flex-start;
-		transition: opacity var(--dur) var(--ease);
+		box-shadow: 0 0 0 1px color-mix(in srgb, var(--sig-highlight) 18%, transparent);
+		transition:
+			opacity var(--dur) var(--ease),
+			transform var(--dur) var(--ease),
+			box-shadow var(--dur) var(--ease);
 	}
 
 	.answer-prompt:hover {
-		opacity: 0.8;
+		opacity: 0.9;
+		transform: translateY(-1px);
+		box-shadow: 0 0 18px color-mix(in srgb, var(--sig-highlight) 18%, transparent);
 	}
 
 	.answer-input {
@@ -345,6 +444,37 @@ async function handleAnswer(item: DailyReflection): Promise<void> {
 		flex-direction: column;
 		gap: 6px;
 		padding-top: 4px;
+	}
+
+	.loading-state--ambient {
+		width: min(420px, 100%);
+		padding-top: var(--space-sm);
+	}
+
+	.brief-status {
+		flex: 1;
+		display: flex;
+		flex-direction: column;
+		justify-content: center;
+		gap: var(--space-sm);
+		min-height: 160px;
+		padding: var(--space-md) 0;
+	}
+
+	.brief-status-label {
+		font-family: var(--font-display);
+		font-size: 8px;
+		font-weight: 700;
+		letter-spacing: 0.16em;
+		color: var(--sig-highlight);
+		text-transform: uppercase;
+	}
+
+	.brief-status-text {
+		font-family: var(--font-body);
+		font-size: 13px;
+		line-height: 1.6;
+		color: var(--sig-text-muted);
 	}
 
 	.loading-line {
