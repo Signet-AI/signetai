@@ -246,8 +246,39 @@ export const SignetPlugin: Plugin = async ({ directory, client: oc }) => {
 
 	return {
 		// ------------------------------------------------------------------
+		// Record skill usage — OpenCode runs skills via the `skill` tool,
+		// whose args carry { name }. Recorded as a source='agent' invocation.
+		// ------------------------------------------------------------------
+		"tool.execute.after": async (input, output): Promise<void> => {
+			if (input.tool !== "skill") return;
+			const skillName = typeof input.args?.name === "string" ? input.args.name : "";
+			if (!skillName) return;
+			// opencode's execute.after carries no structured success flag — its output
+			// is { title, output, metadata } and the ToolStateError status lives on the
+			// message part, not here. Best-effort: treat a metadata.error as failure,
+			// else assume success. ponytail: tighten if opencode exposes a state flag.
+			const meta = output?.metadata as Record<string, unknown> | undefined;
+			const success = !(meta && typeof meta === "object" && "error" in meta);
+			void client
+				.post("/api/hooks/skill-invocation", {
+					harness: HARNESS,
+					skillName,
+					agentId,
+					sessionId: input.sessionID,
+					toolUseId: input.callID,
+					cwd: directory,
+					args: JSON.stringify(input.args),
+					success,
+					origin: "plugin",
+					runtimePath: RUNTIME_PATH,
+				})
+				.catch(() => {});
+		},
+
+		// ------------------------------------------------------------------
 		// Per-prompt memory recall — extract user text and call daemon
 		// ------------------------------------------------------------------
+
 		"chat.message": async (input, output): Promise<void> => {
 			const userText = output.parts
 				.map((part) => readPartText(part))

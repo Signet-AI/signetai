@@ -14,6 +14,36 @@ let releaseSession: ((sessionKey: string) => void) | undefined;
 let getSessionPath: ((sessionKey: string) => "plugin" | "legacy" | undefined) | undefined;
 let getEndedSession: ((sessionKey: string) => { readonly runtimePath?: "plugin" | "legacy" } | undefined) | undefined;
 
+function skillTranscript(sessionId: string, toolUseId: string, skillName: string): string {
+	return [
+		JSON.stringify({
+			sessionId,
+			timestamp: "2024-01-01T00:00:00.000Z",
+			cwd: "/tmp/project",
+			message: { content: [{ type: "tool_use", name: "Skill", id: toolUseId, input: { skill: skillName } }] },
+		}),
+		JSON.stringify({
+			sessionId,
+			timestamp: "2024-01-01T00:00:01.000Z",
+			cwd: "/tmp/project",
+			message: { content: [{ type: "tool_result", tool_use_id: toolUseId, is_error: false }] },
+		}),
+	].join("\n");
+}
+
+async function waitForSkillInvocation(toolUseId: string): Promise<{ agent_id: string } | undefined> {
+	for (let i = 0; i < 20; i++) {
+		const row = getDbAccessor?.().withReadDb(
+			(db) => db.prepare("SELECT agent_id FROM skill_invocations WHERE tool_use_id = ?").get(toolUseId) as
+				| { agent_id: string }
+				| undefined,
+		);
+		if (row) return row;
+		await new Promise((resolve) => setTimeout(resolve, 10));
+	}
+	return undefined;
+}
+
 describe("/api/hooks/recall", () => {
 	beforeAll(async () => {
 		prev = process.env.SIGNET_PATH;
@@ -272,6 +302,55 @@ memory:
 				claimedBy: "plugin",
 			});
 			expect(getSessionPath?.(sessionKey)).toBe("plugin");
+		} finally {
+			releaseSession?.(sessionKey);
+		}
+	});
+
+	it("records session-end transcript skill scans under the session agent scope", async () => {
+		const sessionKey = "agent:scan-agent:end";
+		const toolUseId = `toolu_session_end_${crypto.randomUUID()}`;
+		const transcriptPath = join(dir, "session-end-skills.jsonl");
+		writeFileSync(transcriptPath, skillTranscript(sessionKey, toolUseId, "web-search"));
+		try {
+			const resp = await app.request("/api/hooks/session-end", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({
+					harness: "claude-code",
+					sessionKey,
+					transcriptPath,
+				}),
+			});
+
+			expect(resp.status).toBe(200);
+			const row = await waitForSkillInvocation(toolUseId);
+			expect(row?.agent_id).toBe("scan-agent");
+		} finally {
+			releaseSession?.(sessionKey);
+		}
+	});
+
+	it("records pre-compaction transcript skill scans under the explicit agent scope", async () => {
+		const sessionKey = "pre-compaction-scan-agent";
+		const toolUseId = `toolu_precompact_${crypto.randomUUID()}`;
+		const transcriptPath = join(dir, "pre-compaction-skills.jsonl");
+		writeFileSync(transcriptPath, skillTranscript(sessionKey, toolUseId, "web-search"));
+		try {
+			const resp = await app.request("/api/hooks/pre-compaction", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({
+					harness: "claude-code",
+					sessionKey,
+					agentId: "explicit-scan-agent",
+					transcriptPath,
+				}),
+			});
+
+			expect(resp.status).toBe(200);
+			const row = await waitForSkillInvocation(toolUseId);
+			expect(row?.agent_id).toBe("explicit-scan-agent");
 		} finally {
 			releaseSession?.(sessionKey);
 		}

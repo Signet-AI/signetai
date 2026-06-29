@@ -395,6 +395,10 @@ export type {
 	SkillsResult,
 } from "./skills";
 
+// Skill transcript parsing (pure — no fs)
+export { parseTranscriptSkills } from "./skill-transcript";
+export type { ParsedSkillInvocation } from "./skill-transcript";
+
 // Memory import
 export {
 	importMemoryLogs,

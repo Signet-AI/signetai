@@ -4446,6 +4446,12 @@ pub async fn session_checkpoint_extract(
     }
 }
 
+// Shadow stub: skill capture runs in the TS daemon (transcript scan); Rust mounts for route parity only.
+// Reports recorded:false so a client can't mistake the shallow mount for a real write.
+pub async fn skill_invocation(Json(_body): Json<serde_json::Value>) -> impl IntoResponse {
+    Json(serde_json::json!({ "recorded": false }))
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::Path;

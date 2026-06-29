@@ -60,6 +60,8 @@ import {
 	releaseSession,
 	renewSession,
 } from "../session-tracker.js";
+import { recordSkillInvocation } from "../skill-invocations";
+import { recordSkillsFromTranscript } from "../skill-transcript-scan";
 import { validateTemporalTimeOptions } from "../temporal-recall";
 import { upsertThreadHead } from "../thread-heads";
 import { autoConnectGraphiq } from "./graphiq-routes.js";
@@ -377,15 +379,10 @@ function registerSessionEnd(app: Hono): void {
 			const sessionKey = body.sessionKey || body.sessionId;
 			const conflict = skipConflictingSessionEnd(sessionKey, runtimePath);
 			if (conflict) return c.json(conflict);
-			const duplicate = claimAutomaticSessionOrSkip(
-				sessionKey,
-				runtimePath,
-				parseOptionalString(body.agentId) ?? "default",
-				"session-end",
-				{
-					memoriesSaved: 0,
-				},
-			);
+			const agentId = resolveAgentId({ agentId: parseOptionalString(body.agentId), sessionKey });
+			const duplicate = claimAutomaticSessionOrSkip(sessionKey, runtimePath, agentId, "session-end", {
+				memoriesSaved: 0,
+			});
 			if (duplicate) return c.json(duplicate);
 
 			if (sessionKey && isSessionBypassed(sessionKey)) {
@@ -400,6 +397,13 @@ function registerSessionEnd(app: Hono): void {
 					markSessionEnded(sessionKey, runtimePath);
 					removeAgentPresence(sessionKey);
 				}
+				const transcriptPath = parseOptionalString(body.transcriptPath);
+				if (transcriptPath) {
+					// recordSkillsFromTranscript is throw-proof by contract — safe in setImmediate.
+					setImmediate(() =>
+						recordSkillsFromTranscript({ transcriptPath, harness: body.harness, agentId, origin: "scan" }),
+					);
+				}
 				return c.json(result);
 			} catch (e) {
 				if (sessionKey) {
@@ -410,6 +414,49 @@ function registerSessionEnd(app: Hono): void {
 			}
 		} catch (e) {
 			logger.error("hooks", "Session end hook failed", e as Error);
+			return c.json({ error: "Hook execution failed" }, 500);
+		}
+	});
+}
+
+// Harness-emitted skill invocations (claude-code PostToolUse, opencode
+// tool.execute.after, ...). Records source='agent' rows deduped on
+// (harness, sessionId, toolUseId) so a re-fired hook records once.
+function registerSkillInvocation(app: Hono): void {
+	app.post("/api/hooks/skill-invocation", async (c) => {
+		if (isInternalCall(c)) {
+			return c.json({ recorded: false });
+		}
+		try {
+			const body = toRecord(await c.req.json()) ?? {};
+			const harness = parseOptionalString(body.harness);
+			const skillName = parseOptionalString(body.skillName ?? body.skill);
+			if (!harness) return c.json({ error: "harness is required" }, 400);
+			if (!skillName) return c.json({ error: "skillName is required" }, 400);
+
+			stampHarness(harness);
+
+			const sessionKey = parseOptionalString(body.sessionKey ?? body.sessionId);
+			const agentId = resolveAgentId({ agentId: parseOptionalString(body.agentId), sessionKey });
+
+			recordSkillInvocation({
+				skillName,
+				agentId,
+				source: "agent",
+				latencyMs: parseOptionalInt(body.latencyMs) ?? 0,
+				success: parseOptionalBoolean(body.success) ?? true,
+				errorText: parseOptionalString(body.errorText),
+				harness,
+				sessionId: sessionKey,
+				toolUseId: parseOptionalString(body.toolUseId),
+				cwd: parseOptionalString(body.cwd),
+				origin: parseOptionalString(body.origin),
+				args: parseOptionalString(body.args),
+				createdAt: parseOptionalString(body.createdAt),
+			});
+			return c.json({ recorded: true });
+		} catch (e) {
+			logger.error("hooks", "Skill invocation hook failed", e as Error);
 			return c.json({ error: "Hook execution failed" }, 500);
 		}
 	});
@@ -484,7 +531,7 @@ function registerRemember(app: Hono): void {
 
 			const headers: Record<string, string> = { "Content-Type": "application/json" };
 			const auth = c.req.header("authorization");
-			if (auth) headers["Authorization"] = auth;
+			if (auth) headers.Authorization = auth;
 			const sessionKey = c.req.header("x-signet-session-key") ?? body.sessionKey;
 			if (sessionKey) headers["x-signet-session-key"] = sessionKey;
 			return fetch(`http://${INTERNAL_SELF_HOST}:${PORT}/api/memory/remember`, {
@@ -619,7 +666,10 @@ function registerRecall(app: Hono): void {
 function registerPreCompaction(app: Hono): void {
 	app.post("/api/hooks/pre-compaction", async (c) => {
 		try {
-			const body = (await c.req.json()) as PreCompactionRequest;
+			const rawBody = toRecord(await c.req.json()) ?? {};
+			const transcriptPath =
+				parseOptionalString(rawBody.transcriptPath) ?? parseOptionalString(rawBody.transcript_path);
+			const body = rawBody as unknown as PreCompactionRequest;
 
 			if (!body.harness) {
 				return c.json({ error: "harness is required" }, 400);
@@ -628,17 +678,12 @@ function registerPreCompaction(app: Hono): void {
 			const runtimePath = resolveRuntimePath(c, body);
 			if (runtimePath) body.runtimePath = runtimePath;
 
-			const duplicate = claimAutomaticSessionOrSkip(
-				body.sessionKey,
-				runtimePath,
-				resolveAgentId({ sessionKey: body.sessionKey }),
-				"pre-compaction",
-				{
-					guidelines: "",
-					instructions: "",
-					summaryPrompt: "",
-				},
-			);
+			const agentId = resolveAgentId({ agentId: parseOptionalString(body.agentId), sessionKey: body.sessionKey });
+			const duplicate = claimAutomaticSessionOrSkip(body.sessionKey, runtimePath, agentId, "pre-compaction", {
+				guidelines: "",
+				instructions: "",
+				summaryPrompt: "",
+			});
 			if (duplicate) return c.json(duplicate);
 
 			if (checkBypass(body)) {
@@ -646,6 +691,11 @@ function registerPreCompaction(app: Hono): void {
 			}
 
 			const result = handlePreCompaction(body);
+			if (transcriptPath) {
+				setImmediate(() =>
+					recordSkillsFromTranscript({ transcriptPath, harness: body.harness, agentId, origin: "scan" }),
+				);
+			}
 			return c.json(result);
 		} catch (e) {
 			logger.error("hooks", "Pre-compaction hook failed", e as Error);
@@ -1409,6 +1459,7 @@ export function registerHooksRoutes(app: Hono): void {
 	registerSessionStart(app);
 	registerUserPromptSubmit(app);
 	registerSessionEnd(app);
+	registerSkillInvocation(app);
 	registerCheckpointExtract(app);
 	registerRemember(app);
 	registerRecall(app);

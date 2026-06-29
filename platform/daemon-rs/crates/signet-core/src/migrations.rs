@@ -111,6 +111,8 @@ const TS_TEMPORAL_EDGES_VERSION: u32 = 76;
 const TS_TEMPORAL_EDGES_NAME: &str = "temporal-edges";
 const TS_DOCUMENT_SCOPE_COLUMNS_VERSION: u32 = 80;
 const TS_DOCUMENT_SCOPE_COLUMNS_NAME: &str = "document-scope-columns";
+const TS_SKILL_INVOCATIONS_HARNESS_VERSION: u32 = 82;
+const TS_SKILL_INVOCATIONS_HARNESS_NAME: &str = "skill-invocations-harness";
 
 /// Simple checksum matching the TS implementation (hash of "version:name").
 fn checksum(version: u32, name: &str) -> String {
@@ -843,6 +845,21 @@ fn ensure_cross_daemon_parity_columns(conn: &Connection) -> Result<(), CoreError
         conn,
         TS_DOCUMENT_SCOPE_COLUMNS_VERSION,
         TS_DOCUMENT_SCOPE_COLUMNS_NAME,
+    )?;
+
+    // Harness skill-invocation columns (parity with TS 082). Add columns first,
+    // then the indexes that reference them (059 sql), then stamp.
+    add_column_if_missing(conn, "skill_invocations", "harness", "TEXT")?;
+    add_column_if_missing(conn, "skill_invocations", "session_id", "TEXT")?;
+    add_column_if_missing(conn, "skill_invocations", "tool_use_id", "TEXT")?;
+    add_column_if_missing(conn, "skill_invocations", "cwd", "TEXT")?;
+    add_column_if_missing(conn, "skill_invocations", "origin", "TEXT")?;
+    add_column_if_missing(conn, "skill_invocations", "args", "TEXT")?;
+    conn.execute_batch(include_str!("sql/059-skill-invocations-harness.sql"))?;
+    stamp_typescript_parity_migration(
+        conn,
+        TS_SKILL_INVOCATIONS_HARNESS_VERSION,
+        TS_SKILL_INVOCATIONS_HARNESS_NAME,
     )?;
 
     add_column_if_missing(

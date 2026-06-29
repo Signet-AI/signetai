@@ -422,6 +422,10 @@ async fn main() -> anyhow::Result<()> {
             axum::routing::post(routes::hooks::synthesis_complete),
         )
         .route(
+            "/api/hooks/skill-invocation",
+            axum::routing::post(routes::hooks::skill_invocation),
+        )
+        .route(
             "/api/hooks/synthesis/config",
             get(routes::hooks::synthesis_config),
         )

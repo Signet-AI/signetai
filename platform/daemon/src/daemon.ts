@@ -240,10 +240,12 @@ mountInferenceRoutes(app, {
 // ============================================================================
 
 setFetchEmbedding(fetchEmbedding);
+// Mount the literal /api/skills/analytics before mountSkillsRoutes, whose
+// /api/skills/:name route would otherwise match "analytics" as a skill name.
+mountSkillAnalyticsRoutes(app);
 mountSkillsRoutes(app);
 mountMarketplaceRoutes(app);
 mountMcpAnalyticsRoutes(app);
-mountSkillAnalyticsRoutes(app);
 mountAppTrayRoutes(app);
 mountWidgetRoutes(app);
 mountEventBusRoutes(app);

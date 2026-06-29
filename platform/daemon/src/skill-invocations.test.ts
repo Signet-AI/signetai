@@ -63,6 +63,48 @@ describe("recordSkillInvocation", () => {
 		expect(meta?.last_used_at).not.toBeNull();
 	});
 
+	it("does not inflate use_count on a deduped re-insert (idempotent harness re-scan)", () => {
+		seedSkill(db, { id: "skill-ws", name: "web-search", agentId: "agent-scan" });
+
+		const base = {
+			skillName: "web-search",
+			agentId: "agent-scan",
+			source: "agent" as const,
+			latencyMs: 10,
+			success: true,
+			harness: "claude-code",
+			sessionId: "sess-abc",
+			toolUseId: "tool-use-1",
+		};
+
+		// First call — should insert one row and bump use_count to 1.
+		recordSkillInvocation(base);
+		// Second identical call — dedupe index drops it; use_count must NOT increase.
+		recordSkillInvocation(base);
+
+		const invCount = (
+			db
+				.prepare(
+					"SELECT COUNT(*) AS cnt FROM skill_invocations WHERE skill_name = ? AND agent_id = ? AND tool_use_id = ?",
+				)
+				.get("web-search", "agent-scan", "tool-use-1") as { cnt: number }
+		).cnt;
+		expect(invCount).toBe(1);
+
+		const meta = db.prepare("SELECT use_count FROM skill_meta WHERE agent_id = ?").get("agent-scan") as
+			| { use_count: number }
+			| undefined;
+		expect(meta?.use_count).toBe(1);
+
+		// A genuinely new toolUseId counts as a new invocation.
+		recordSkillInvocation({ ...base, toolUseId: "tool-use-2" });
+
+		const metaAfter = db.prepare("SELECT use_count FROM skill_meta WHERE agent_id = ?").get("agent-scan") as
+			| { use_count: number }
+			| undefined;
+		expect(metaAfter?.use_count).toBe(2);
+	});
+
 	it("keeps historical rows even when skill metadata is missing", () => {
 		recordSkillInvocation({
 			skillName: "browser-use",
