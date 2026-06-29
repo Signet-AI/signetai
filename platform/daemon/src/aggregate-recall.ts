@@ -286,9 +286,14 @@ function parsePlannerQueries(raw: string): string[] {
 		.filter((line) => line.length > 0);
 }
 
+function isAggregateRecallRow(row: RecallResult): boolean {
+	return row.source === "aggregate-recall" || row.source_id?.startsWith("aggregate-recall:") === true;
+}
+
 function isSourceMemoryRow(row: RecallResult): boolean {
 	return (
 		row.source !== "llm_summary" &&
+		!isAggregateRecallRow(row) &&
 		!row.id.startsWith("constructed:") &&
 		!row.id.startsWith("summary:") &&
 		!row.id.startsWith("source-chunk:") &&
@@ -638,6 +643,7 @@ export async function aggregateRecall(
 	const ingestEnvelope = deps.ingestEnvelope ?? txIngestEnvelope;
 	const timings = createAggregateTimingCollector();
 	const usageStages: AggregateRecallUsageStage[] = [];
+	const now = (deps.now?.() ?? new Date()).toISOString();
 	const finish = (response: RecallResponse): RecallResponse => {
 		const recallTimings = timings.finish();
 		const usage = buildAggregateUsage(usageStages);
@@ -694,7 +700,7 @@ export async function aggregateRecall(
 			params,
 			budget,
 			maxQueries,
-			initialRows: first.results,
+			initialRows: uniqueEvidence(first.results),
 		}),
 	);
 	const queries = uniqueQueries(params.query, planned.queries, maxQueries);
@@ -738,7 +744,6 @@ export async function aggregateRecall(
 	const agentId = params.agentId ?? "default";
 	const project = sourceProject(params);
 	const key = aggregateKey({ agentId, project, query: params.query, budget, sourceMemoryIds });
-	const now = (deps.now?.() ?? new Date()).toISOString();
 
 	let row: RecallResult | null;
 	let deduped = false;

@@ -710,6 +710,40 @@ memory:
 		expect(links.map((link) => link.source_memory_id)).toEqual(["mem-1"]);
 	});
 
+	it("does not use saved aggregate recall rows as aggregate evidence", async () => {
+		const router = new StaticRouter();
+		const result = await aggregateRecall(
+			{
+				query: "what happened",
+				aggregate: true,
+				agentId: "agent-a",
+			},
+			loadMemoryConfig(dir),
+			{
+				router,
+				embedFn: async () => null,
+				logger: quietLogger(),
+				now: () => new Date("2026-05-20T12:00:00.000Z"),
+				idFactory: () => "aggregate-source-filter",
+				hybridRecall: async (params: RecallParams) =>
+					response(params.query, [
+						{
+							...row("aggregate-memory", "Stale synthesized aggregate should not be recursive evidence"),
+							source_id: "aggregate-recall:old-key",
+							tags: "aggregate,recall",
+						},
+						row("mem-1", "Real evidence"),
+					]),
+			},
+		);
+
+		expect(result.aggregate?.sourceMemoryIds).toEqual(["mem-1"]);
+		expect(router.prompts[0]).toContain("Real evidence");
+		expect(router.prompts[0]).not.toContain("Stale synthesized aggregate");
+		expect(router.prompts[1]).toContain("Real evidence");
+		expect(router.prompts[1]).not.toContain("Stale synthesized aggregate");
+	});
+
 	it("returns unsaved aggregate when content hash conflicts with an inaccessible memory", async () => {
 		const answer = "Aggregate answer from memory evidence.";
 		const normalized = normalizeAndHashContent(answer);

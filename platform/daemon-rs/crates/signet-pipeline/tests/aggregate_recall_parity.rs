@@ -581,3 +581,53 @@ async fn synthesized_recall_rows_are_not_evidence_sources() {
         .expect("read links");
     assert_eq!(links, vec!["mem-1"]);
 }
+
+#[tokio::test]
+async fn saved_aggregate_recall_rows_are_not_recursive_evidence_sources() {
+    let conn = setup_conn();
+    let mut aggregate_row = row(
+        "aggregate-memory",
+        "Stale synthesized aggregate should not be recursive evidence",
+    );
+    aggregate_row.source_id = Some("aggregate-recall:old-key".to_string());
+    aggregate_row.tags = Some("aggregate,recall".to_string());
+    let recall = StaticRecall::default().with(
+        "what happened",
+        vec![aggregate_row, row("mem-1", "Real evidence")],
+    );
+    let router = StaticRouter::default();
+    let now = || Utc.with_ymd_and_hms(2026, 5, 20, 12, 0, 0).unwrap();
+    let id = || "aggregate-source-filter".to_string();
+
+    let result = aggregate_recall(
+        &conn,
+        AggregateRecallParams {
+            query: "what happened".to_string(),
+            aggregate: true,
+            agent_id: Some("agent-a".to_string()),
+            ..AggregateRecallParams::default()
+        },
+        AggregateRecallDeps {
+            recall: Some(&recall),
+            router: Some(&router),
+            now: Some(&now),
+            id_factory: Some(&id),
+            ..AggregateRecallDeps::default()
+        },
+    )
+    .await
+    .expect("aggregate result");
+
+    assert_eq!(
+        result
+            .aggregate
+            .expect("aggregate metadata")
+            .source_memory_ids,
+        vec!["mem-1"]
+    );
+    let prompts = router.prompts.borrow();
+    assert!(prompts[0].contains("Real evidence"));
+    assert!(!prompts[0].contains("Stale synthesized aggregate"));
+    assert!(prompts[1].contains("Real evidence"));
+    assert!(!prompts[1].contains("Stale synthesized aggregate"));
+}

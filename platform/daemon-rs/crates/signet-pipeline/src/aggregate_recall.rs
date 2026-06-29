@@ -569,8 +569,17 @@ fn parse_planner_queries(raw: &str) -> Vec<String> {
         .collect()
 }
 
+fn is_aggregate_recall_row(row: &RecallResult) -> bool {
+    row.source == "aggregate-recall"
+        || row
+            .source_id
+            .as_deref()
+            .is_some_and(|source_id| source_id.starts_with("aggregate-recall:"))
+}
+
 fn is_source_memory_row(row: &RecallResult) -> bool {
     row.source != "llm_summary"
+        && !is_aggregate_recall_row(row)
         && !row.id.starts_with("constructed:")
         && !row.id.starts_with("summary:")
         && !row.id.starts_with("source-chunk:")
@@ -1164,6 +1173,11 @@ pub async fn aggregate_recall(
     let save_aggregate = deps.router.is_some() && params.save_aggregate != Some(false);
     let mut timings = TimingCollector::new();
     let mut usage_stages: Vec<AggregateRecallUsageStage> = Vec::new();
+    let now = deps
+        .now
+        .map(|now| now())
+        .unwrap_or_else(Utc::now)
+        .to_rfc3339();
 
     let first = timings
         .time_async("aggregate_initial_recall", || {
@@ -1194,9 +1208,16 @@ pub async fn aggregate_recall(
         ));
     };
 
+    let first_planning_evidence = unique_evidence(&first.results);
     let (planned_queries, planning_usage) = timings
         .time_async("aggregate_planning", || {
-            plan_queries(router, &params, budget, max_queries, &first.results)
+            plan_queries(
+                router,
+                &params,
+                budget,
+                max_queries,
+                &first_planning_evidence,
+            )
         })
         .await;
     if let Some(usage) = planning_usage {
@@ -1275,11 +1296,6 @@ pub async fn aggregate_recall(
         budget,
         &source_memory_ids,
     );
-    let now = deps
-        .now
-        .map(|now| now())
-        .unwrap_or_else(Utc::now)
-        .to_rfc3339();
     let mut row: Option<RecallResult>;
     let mut deduped = false;
     let mut saved = false;
