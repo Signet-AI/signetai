@@ -335,8 +335,8 @@ async function handleAnswer(item: DailyReflection): Promise<void> {
 	}
 
 	.reflection-item--question .reflection-summary {
-		font-size: clamp(15px, 1.55vw, 18px);
-		line-height: 1.65;
+		font-size: 13px;
+		line-height: 1.6;
 		color: var(--sig-text-bright);
 	}
 
