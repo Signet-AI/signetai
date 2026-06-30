@@ -72,6 +72,49 @@ describe("hybridRecall", () => {
 		return Array.from({ length: 768 }, (_, index) => (index === 0 ? 1 : 0));
 	}
 
+	function seedUnbackedOntologyClaim(opts: {
+		readonly id: string;
+		readonly agentId?: string;
+		readonly entity: string;
+		readonly aspect: string;
+		readonly group: string;
+		readonly claim: string;
+		readonly content: string;
+		readonly evidencePath: string;
+	}): void {
+		const now = new Date().toISOString();
+		const agentId = opts.agentId ?? "default";
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO entities (
+					id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at
+				) VALUES (?, ?, ?, 'project', ?, 1, ?, ?)`,
+			).run(`ent-${opts.id}`, opts.entity, opts.entity.toLowerCase(), agentId, now, now);
+			db.prepare(
+				`INSERT INTO entity_aspects (
+					id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at
+				) VALUES (?, ?, ?, ?, ?, 0.9, ?, ?)`,
+			).run(`asp-${opts.id}`, `ent-${opts.id}`, agentId, opts.aspect, opts.aspect, now, now);
+			db.prepare(
+				`INSERT INTO entity_attributes (
+					id, aspect_id, agent_id, memory_id, kind, content, normalized_content,
+					confidence, importance, status, group_key, claim_key, proposal_evidence, created_at, updated_at
+				) VALUES (?, ?, ?, NULL, 'attribute', ?, ?, 0.96, 0.82, 'active', ?, ?, ?, ?, ?)`,
+			).run(
+				opts.id,
+				`asp-${opts.id}`,
+				agentId,
+				opts.content,
+				opts.content.toLowerCase(),
+				opts.group,
+				opts.claim,
+				JSON.stringify([{ source_kind: "transcript", source_path: opts.evidencePath, quote: opts.content }]),
+				now,
+				now,
+			);
+		});
+	}
+
 	it("keeps recall memory-only even when legacy expand is requested", async () => {
 		const now = new Date().toISOString();
 		getDbAccessor().withWriteTx((db) => {
@@ -150,6 +193,69 @@ describe("hybridRecall", () => {
 		for (const stage of result.meta.timings.stages) {
 			expect(stage.durationMs).toBeGreaterThanOrEqual(0);
 		}
+	});
+
+	it("returns source-provenanced ontology claims as first-class recall results", async () => {
+		seedUnbackedOntologyClaim({
+			id: "attr-artbat-invoice",
+			entity: "ARTBAT / Arbat ForComp",
+			aspect: "billing_context",
+			group: "invoice_followup",
+			claim: "maksym_request_2026_06_29",
+			content:
+				"Updated invoice context: current ARTBAT / Arbat ForComp invoice is €1,000, and separate outstanding 2025 ARTBAT balance is €2,000 for Maksym Getman.",
+			evidencePath: "/home/nicholai/.agents/dreaming/2026-06-29-cron-2230/dreaming-log.md:32",
+		});
+
+		const result = await hybridRecall(
+			{
+				query: "how much were the Artbat invoices for Maksym Getman?",
+				keywordQuery: "how much were the Artbat invoices for Maksym Getman?",
+				limit: 5,
+				agentId: "default",
+				readPolicy: "isolated",
+			},
+			testCfg({ graph: true }),
+			async () => null,
+		);
+
+		expect(result.results[0]).toMatchObject({
+			id: "ontology-claim:attr-artbat-invoice",
+			source: "ontology_claim",
+			type: "ontology_claim",
+			source_id: "attr-artbat-invoice",
+			source_path: "/home/nicholai/.agents/dreaming/2026-06-29-cron-2230/dreaming-log.md:32",
+		});
+		expect(result.results[0]?.content).toContain("€1,000");
+		expect(result.results[0]?.content).toContain("€2,000");
+		expect(result.meta.noHits).toBe(false);
+	});
+
+	it("does not use ontology-only claims under memory project filters", async () => {
+		seedUnbackedOntologyClaim({
+			id: "attr-project-filtered",
+			entity: "ARTBAT / Arbat ForComp",
+			aspect: "billing_context",
+			group: "invoice_followup",
+			claim: "maksym_request_2026_06_29",
+			content: "Current ARTBAT invoice is €1,000 for Maksym Getman.",
+			evidencePath: "dreaming-log.md:1",
+		});
+
+		const result = await hybridRecall(
+			{
+				query: "how much was the Artbat invoice for Maksym Getman?",
+				keywordQuery: "how much was the Artbat invoice for Maksym Getman?",
+				limit: 5,
+				agentId: "default",
+				readPolicy: "isolated",
+				project: "some-project",
+			},
+			testCfg({ graph: true }),
+			async () => null,
+		);
+
+		expect(result.results.find((row) => row.id.startsWith("ontology-claim:"))).toBeUndefined();
 	});
 
 	it("returns provider-generic source chunk vector fallback hits", async () => {

@@ -577,20 +577,29 @@ fn is_aggregate_recall_row(row: &RecallResult) -> bool {
             .is_some_and(|source_id| source_id.starts_with("aggregate-recall:"))
 }
 
-fn is_source_memory_row(row: &RecallResult) -> bool {
+fn is_ontology_claim_row(row: &RecallResult) -> bool {
+    row.source == "ontology_claim" || row.id.starts_with("ontology-claim:")
+}
+
+fn is_linkable_source_memory_row(row: &RecallResult) -> bool {
     row.source != "llm_summary"
         && !is_aggregate_recall_row(row)
+        && !is_ontology_claim_row(row)
         && !row.id.starts_with("constructed:")
         && !row.id.starts_with("summary:")
         && !row.id.starts_with("source-chunk:")
         && !row.id.starts_with("native-artifact:")
 }
 
+fn is_aggregate_evidence_row(row: &RecallResult) -> bool {
+    is_ontology_claim_row(row) || is_linkable_source_memory_row(row)
+}
+
 fn unique_evidence(rows: &[RecallResult]) -> Vec<RecallResult> {
     let mut seen = HashSet::new();
     let mut result = Vec::new();
     for row in rows {
-        if !is_source_memory_row(row) || seen.contains(&row.id) {
+        if !is_aggregate_evidence_row(row) || seen.contains(&row.id) {
             continue;
         }
         seen.insert(row.id.clone());
@@ -599,9 +608,20 @@ fn unique_evidence(rows: &[RecallResult]) -> Vec<RecallResult> {
     result
 }
 
-fn evidence_can_save_as_global_aggregate(rows: &[RecallResult]) -> bool {
+fn linkable_source_memory_ids(rows: &[RecallResult]) -> Vec<String> {
     rows.iter()
-        .all(|row| row.visibility.as_deref() == Some("global") && row.scope.as_deref().is_none())
+        .filter(|row| is_linkable_source_memory_row(row))
+        .map(|row| row.id.clone())
+        .collect()
+}
+
+fn evidence_can_save_as_global_aggregate(rows: &[RecallResult]) -> bool {
+    !rows.is_empty()
+        && rows.iter().all(|row| {
+            is_linkable_source_memory_row(row)
+                && row.visibility.as_deref() == Some("global")
+                && row.scope.as_deref().is_none()
+        })
 }
 
 fn is_insufficient_aggregate_answer(text: &str) -> bool {
@@ -1186,11 +1206,9 @@ pub async fn aggregate_recall(
         .await?;
 
     let Some(router) = deps.router else {
-        let source_memory_ids = unique_evidence(&first.results)
-            .into_iter()
-            .map(|row| row.id)
-            .collect::<Vec<_>>();
-        let reason = if source_memory_ids.is_empty() {
+        let first_evidence = unique_evidence(&first.results);
+        let source_memory_ids = linkable_source_memory_ids(&first_evidence);
+        let reason = if first_evidence.is_empty() {
             AggregateRecallStoppedReason::NoEvidence
         } else {
             AggregateRecallStoppedReason::RouterUnavailable
@@ -1247,10 +1265,11 @@ pub async fn aggregate_recall(
         .flat_map(|response| response.results.iter().cloned())
         .collect::<Vec<_>>();
     let evidence = unique_evidence(&all_rows);
-    let source_memory_ids = evidence
+    let evidence_ids = evidence
         .iter()
         .map(|row| row.id.clone())
         .collect::<Vec<_>>();
+    let source_memory_ids = linkable_source_memory_ids(&evidence);
     if evidence.is_empty() {
         return Ok(finish_response(
             timings,
@@ -1294,7 +1313,7 @@ pub async fn aggregate_recall(
         project.as_deref(),
         &params.query,
         budget,
-        &source_memory_ids,
+        &evidence_ids,
     );
     let mut row: Option<RecallResult>;
     let mut deduped = false;

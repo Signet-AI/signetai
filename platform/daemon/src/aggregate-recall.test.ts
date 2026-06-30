@@ -497,6 +497,58 @@ memory:
 		expect(count.n).toBe(0);
 	});
 
+	it("uses ontology claim rows as synthesis evidence without saving memory-only provenance links", async () => {
+		const ontologyRow: RecallResult = {
+			id: "ontology-claim:attr-artbat-invoice",
+			content:
+				"[Ontology claim: ARTBAT / Arbat ForComp › billing_context]\nCurrent ARTBAT invoice is €1,000 and the outstanding 2025 balance is €2,000.",
+			content_length: 134,
+			truncated: false,
+			score: 1,
+			source: "ontology_claim",
+			source_id: "attr-artbat-invoice",
+			source_path: "/home/nicholai/.agents/dreaming/2026-06-29-cron-2230/dreaming-log.md:32",
+			type: "ontology_claim",
+			tags: "ontology,claim,source-backed",
+			pinned: false,
+			importance: 0.82,
+			who: "signet",
+			project: null,
+			created_at: "2026-06-29T22:30:00.000Z",
+		};
+		const router = new StaticRouter(
+			"ARTBAT / Arbat ForComp invoices for Maksym Getman are €1,000 current and €2,000 outstanding from 2025.",
+		);
+		const result = await aggregateRecall(
+			{
+				query: "how much were the Artbat invoices for Maksym Getman?",
+				aggregate: true,
+				agentId: "agent-a",
+				readPolicy: "isolated",
+			},
+			loadMemoryConfig(dir),
+			{
+				router,
+				embedFn: async () => null,
+				hybridRecall: async (input: RecallParams) => response(input.query, [ontologyRow]),
+			},
+		);
+
+		expect(router.prompts.at(-1)).toContain("ontology-claim:attr-artbat-invoice");
+		expect(router.prompts.at(-1)).toContain("€1,000");
+		expect(result.results[0]?.content).toContain("€1,000");
+		expect(result.aggregate).toMatchObject({
+			savedMemoryId: null,
+			saved: false,
+			sourceMemoryIds: [],
+			stoppedReason: "complete",
+		});
+		const count = getDbAccessor().withReadDb((db) => db.prepare("SELECT COUNT(*) AS n FROM memories").get()) as {
+			n: number;
+		};
+		expect(count.n).toBe(0);
+	});
+
 	it("returns but does not save insufficient-evidence aggregate answers", async () => {
 		const result = await aggregateRecall(
 			{

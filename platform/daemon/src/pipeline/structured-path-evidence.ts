@@ -5,6 +5,9 @@ const PUNCT = /[^a-z0-9\s]/g;
 
 const ADVICE_CUES = new Set(["advice", "advise", "idea", "recommend", "recommendation", "suggestion", "tip", "way"]);
 
+const AMOUNT_CUES = new Set(["amount", "balance", "bill", "billing", "cost", "invoice", "paid", "pay", "payment"]);
+const BILLING_PATH_CUES = new Set(["amount", "balance", "billing", "invoice", "pay", "payment"]);
+
 const INTENT_ASPECTS = new Set([
 	"decision_patterns",
 	"decision pattern",
@@ -60,6 +63,47 @@ interface StructuredPathRow {
 	readonly confidence: number | null;
 }
 
+export interface StructuredClaimCandidate {
+	readonly id: string;
+	readonly score: number;
+	readonly entityName: string;
+	readonly entityType: string;
+	readonly aspect: string;
+	readonly groupKey: string | null;
+	readonly claimKey: string | null;
+	readonly content: string;
+	readonly kind: string;
+	readonly importance: number;
+	readonly confidence: number | null;
+	readonly createdAt: string;
+	readonly updatedAt: string;
+	readonly version: number;
+	readonly sourceKind: string | null;
+	readonly sourceId: string | null;
+	readonly sourcePath: string | null;
+	readonly proposalEvidence: string | null;
+}
+
+interface StructuredClaimRow {
+	readonly id: string;
+	readonly entity_name: string;
+	readonly entity_type: string;
+	readonly aspect: string;
+	readonly group_key: string | null;
+	readonly claim_key: string | null;
+	readonly content: string;
+	readonly kind: string;
+	readonly importance: number;
+	readonly confidence: number | null;
+	readonly created_at: string;
+	readonly updated_at: string;
+	readonly version: number;
+	readonly source_kind: string | null;
+	readonly source_id: string | null;
+	readonly source_path: string | null;
+	readonly proposal_evidence: string | null;
+}
+
 function normalizeToken(raw: string): string {
 	const cleaned = raw.toLowerCase().replace(PUNCT, " ").trim();
 	if (!cleaned) return "";
@@ -104,12 +148,43 @@ interface MemoryPathAggregate {
 	hasIntentAspect: boolean;
 }
 
+interface PathScoreRow {
+	readonly key: string;
+	readonly entity_name?: string;
+	readonly aspect: string;
+	readonly group_key: string | null;
+	readonly claim_key: string | null;
+	readonly content: string;
+	readonly kind: string;
+	readonly importance: number;
+	readonly confidence: number | null;
+}
+
 function queryTokenWeight(token: string): number {
 	if (token === "colleague" || token === "coworker" || token === "teammate") return 1.7;
 	if (token === "connected" || token === "connection" || token === "connect") return 1.5;
+	if (token === "invoice" || token === "billing" || token === "payment" || token === "balance") return 1.8;
 	if (token === "remote") return 1.3;
 	if (ADVICE_CUES.has(token)) return 0.55;
 	return 1;
+}
+
+function scoreStructuredClaimCandidate(
+	row: StructuredClaimRow,
+	queryTokens: readonly string[],
+	baseScore: number,
+): number {
+	let score = baseScore;
+	const queryHasAmountIntent = queryTokens.some((token) => AMOUNT_CUES.has(token));
+	if (queryHasAmountIntent) {
+		const pathTokens = new Set(
+			tokenize(
+				[row.entity_name, row.aspect, row.group_key ?? "", row.claim_key ?? "", row.kind, row.content].join(" "),
+			),
+		);
+		if ([...BILLING_PATH_CUES].some((token) => pathTokens.has(token))) score += 0.28;
+	}
+	return Math.max(0, Math.min(1.15, score));
 }
 
 function scorePathTokens(
@@ -150,6 +225,39 @@ function scorePathTokens(
 	return Math.max(0, Math.min(1, coverage * weight + intentBoost + anchorBoost));
 }
 
+function scorePathRows(rows: readonly PathScoreRow[], queryTokens: readonly string[]): Map<string, number> {
+	const aggregates = new Map<string, MemoryPathAggregate>();
+	for (const row of rows) {
+		let aggregate = aggregates.get(row.key);
+		if (!aggregate) {
+			aggregate = {
+				tokens: new Set(),
+				importance: 0,
+				confidence: 0,
+				hasIntentAspect: false,
+			};
+			aggregates.set(row.key, aggregate);
+		}
+		for (const token of tokenize(
+			[row.entity_name ?? "", row.aspect, row.group_key ?? "", row.claim_key ?? "", row.kind, row.content].join(" "),
+		)) {
+			aggregate.tokens.add(token);
+		}
+		aggregate.importance = Math.max(aggregate.importance, Math.max(0, Math.min(1, row.importance)));
+		aggregate.confidence = Math.max(aggregate.confidence, Math.max(0, Math.min(1, row.confidence ?? 0.8)));
+		const aspect = row.aspect.toLowerCase().replace(/_/g, " ").trim();
+		aggregate.hasIntentAspect = aggregate.hasIntentAspect || INTENT_ASPECTS.has(aspect);
+	}
+
+	const hasAdviceIntent = queryTokens.some((token) => ADVICE_CUES.has(token));
+	const scores = new Map<string, number>();
+	for (const [id, aggregate] of aggregates) {
+		const score = scorePathTokens(queryTokens, hasAdviceIntent, aggregate);
+		if (score > 0) scores.set(id, score);
+	}
+	return scores;
+}
+
 export function scoreStructuredPathEvidence(
 	db: ReadDb,
 	memoryIds: readonly string[],
@@ -186,40 +294,62 @@ export function scoreStructuredPathEvidence(
 		)
 		.all(...uniqueIds, agentId, agentId, agentId) as StructuredPathRow[];
 
-	const aggregates = new Map<string, MemoryPathAggregate>();
-	for (const row of rows) {
-		let aggregate = aggregates.get(row.memory_id);
-		if (!aggregate) {
-			aggregate = {
-				tokens: new Set(),
-				importance: 0,
-				confidence: 0,
-				hasIntentAspect: false,
-			};
-			aggregates.set(row.memory_id, aggregate);
-		}
-		for (const token of tokenize(
-			[row.aspect, row.group_key ?? "", row.claim_key ?? "", row.kind, row.content].join(" "),
-		)) {
-			aggregate.tokens.add(token);
-		}
-		aggregate.importance = Math.max(aggregate.importance, Math.max(0, Math.min(1, row.importance)));
-		aggregate.confidence = Math.max(aggregate.confidence, Math.max(0, Math.min(1, row.confidence ?? 0.8)));
-		const aspect = row.aspect.toLowerCase().replace(/_/g, " ").trim();
-		aggregate.hasIntentAspect = aggregate.hasIntentAspect || INTENT_ASPECTS.has(aspect);
-	}
-
-	const hasAdviceIntent = queryTokens.some((token) => ADVICE_CUES.has(token));
-	const scores = new Map<string, number>();
-	for (const [id, aggregate] of aggregates) {
-		const score = scorePathTokens(queryTokens, hasAdviceIntent, aggregate);
-		if (score > 0) scores.set(id, score);
-	}
-	return scores;
+	return scorePathRows(
+		rows.map((row) => ({ ...row, key: row.memory_id })),
+		queryTokens,
+	);
 }
 
 function escapeLikeToken(token: string): string {
 	return token.replace(/[%_\\]/g, "\\$&");
+}
+
+function proposalEvidenceHasSourcePointer(raw: string | null): boolean {
+	if (!raw) return false;
+	try {
+		const parsed = JSON.parse(raw) as unknown;
+		return (
+			Array.isArray(parsed) &&
+			parsed.some((item) => {
+				if (!item || typeof item !== "object") return false;
+				const record = item as Record<string, unknown>;
+				return ["source", "source_id", "source_path", "transcript_id", "session_key", "memory_id"].some(
+					(key) => typeof record[key] === "string" && record[key].trim().length > 0,
+				);
+			})
+		);
+	} catch {
+		return false;
+	}
+}
+
+function claimHasSourcePointer(row: StructuredClaimRow): boolean {
+	return (
+		(row.source_id !== null && row.source_id.trim().length > 0) ||
+		(row.source_path !== null && row.source_path.trim().length > 0) ||
+		proposalEvidenceHasSourcePointer(row.proposal_evidence)
+	);
+}
+
+function queryTokensForPathSearch(query: string, limit: number): { queryTokens: string[]; tokens: string[] } | null {
+	const queryTokens = [...new Set(tokenize(query))];
+	if (queryTokens.length === 0 || limit <= 0) return null;
+
+	const tokens = expandedQueryTokens(queryTokens)
+		.filter((token) => token.length >= 3)
+		.slice(0, 18);
+	return tokens.length > 0 ? { queryTokens, tokens } : null;
+}
+
+function pathSearchHaystack(): string {
+	return `LOWER(
+		COALESCE(e.name, '') || ' ' ||
+		COALESCE(asp.canonical_name, '') || ' ' ||
+		COALESCE(ea.group_key, '') || ' ' ||
+		COALESCE(ea.claim_key, '') || ' ' ||
+		COALESCE(ea.kind, '') || ' ' ||
+		COALESCE(ea.content, '')
+	)`;
 }
 
 export function findStructuredPathCandidates(
@@ -233,23 +363,11 @@ export function findStructuredPathCandidates(
 		readonly filterArgs?: readonly unknown[];
 	} = { limit: 20 },
 ): Map<string, number> {
-	const queryTokens = [...new Set(tokenize(query))];
-	if (queryTokens.length === 0 || options.limit <= 0) return new Map();
+	const parsed = queryTokensForPathSearch(query, options.limit);
+	if (!parsed) return new Map();
 
-	const tokens = expandedQueryTokens(queryTokens)
-		.filter((token) => token.length >= 3)
-		.slice(0, 18);
-	if (tokens.length === 0) return new Map();
-
-	const haystack = `LOWER(
-		COALESCE(e.name, '') || ' ' ||
-		COALESCE(asp.canonical_name, '') || ' ' ||
-		COALESCE(ea.group_key, '') || ' ' ||
-		COALESCE(ea.claim_key, '') || ' ' ||
-		COALESCE(ea.kind, '') || ' ' ||
-		COALESCE(ea.content, '')
-	)`;
-	const like = tokens.map(() => `${haystack} LIKE ? ESCAPE '\\'`).join(" OR ");
+	const haystack = pathSearchHaystack();
+	const like = parsed.tokens.map(() => `${haystack} LIKE ? ESCAPE '\\'`).join(" OR ");
 	const filterSql = options.filterSql ?? "";
 	const rows = db
 		.prepare(
@@ -282,7 +400,7 @@ export function findStructuredPathCandidates(
 			agentId,
 			agentId,
 			...(options.filterArgs ?? []),
-			...tokens.map((token) => `%${escapeLikeToken(token)}%`),
+			...parsed.tokens.map((token) => `%${escapeLikeToken(token)}%`),
 			Math.max(options.limit * 8, options.limit),
 		) as StructuredPathRow[];
 
@@ -295,4 +413,101 @@ export function findStructuredPathCandidates(
 			.sort((a, b) => b[1] - a[1])
 			.slice(0, options.limit),
 	);
+}
+
+export function findStructuredClaimCandidates(
+	db: ReadDb,
+	query: string,
+	agentId: string,
+	options: { readonly limit: number; readonly minScore?: number } = { limit: 20 },
+): StructuredClaimCandidate[] {
+	const parsed = queryTokensForPathSearch(query, options.limit);
+	if (!parsed) return [];
+
+	const haystack = pathSearchHaystack();
+	const like = parsed.tokens.map(() => `${haystack} LIKE ? ESCAPE '\\'`).join(" OR ");
+	const roughScore = parsed.tokens.map(() => `CASE WHEN ${haystack} LIKE ? ESCAPE '\\' THEN 1 ELSE 0 END`).join(" + ");
+	const rows = db
+		.prepare(
+			`SELECT
+				 ea.id,
+				 e.name AS entity_name,
+				 e.entity_type,
+				 asp.canonical_name AS aspect,
+				 ea.group_key,
+				 ea.claim_key,
+				 ea.content,
+				 ea.kind,
+				 ea.importance,
+				 ea.confidence,
+				 ea.created_at,
+				 ea.updated_at,
+				 ea.version,
+				 ea.source_kind,
+				 ea.source_id,
+				 ea.source_path,
+				 ea.proposal_evidence
+			 FROM entity_attributes ea
+			 JOIN entity_aspects asp ON asp.id = ea.aspect_id
+			 JOIN entities e ON e.id = asp.entity_id
+			 WHERE ea.agent_id = ?
+			   AND asp.agent_id = ?
+			   AND e.agent_id = ?
+			   AND ea.status = 'active'
+			   AND asp.status = 'active'
+			   AND e.status = 'active'
+			   AND ea.memory_id IS NULL
+			   AND (
+			     ea.source_id IS NOT NULL OR
+			     ea.source_path IS NOT NULL OR
+			     (ea.proposal_evidence IS NOT NULL AND ea.proposal_evidence != '[]')
+			   )
+			   AND (${like})
+			 ORDER BY (${roughScore}) DESC, ea.importance DESC, ea.updated_at DESC
+			 LIMIT ?`,
+		)
+		.all(
+			agentId,
+			agentId,
+			agentId,
+			...parsed.tokens.map((token) => `%${escapeLikeToken(token)}%`),
+			...parsed.tokens.map((token) => `%${escapeLikeToken(token)}%`),
+			Math.max(options.limit * 32, 500),
+		) as StructuredClaimRow[];
+
+	const scores = scorePathRows(
+		rows.map((row) => ({ ...row, key: row.id })),
+		parsed.queryTokens,
+	);
+	const minScore = Math.max(options.minScore ?? 0, 0.65);
+	return rows
+		.flatMap((row): StructuredClaimCandidate[] => {
+			if (!claimHasSourcePointer(row)) return [];
+			const score = scoreStructuredClaimCandidate(row, parsed.queryTokens, scores.get(row.id) ?? 0);
+			if (score < minScore) return [];
+			return [
+				{
+					id: row.id,
+					score,
+					entityName: row.entity_name,
+					entityType: row.entity_type,
+					aspect: row.aspect,
+					groupKey: row.group_key,
+					claimKey: row.claim_key,
+					content: row.content,
+					kind: row.kind,
+					importance: row.importance,
+					confidence: row.confidence,
+					createdAt: row.created_at,
+					updatedAt: row.updated_at,
+					version: row.version,
+					sourceKind: row.source_kind,
+					sourceId: row.source_id,
+					sourcePath: row.source_path,
+					proposalEvidence: row.proposal_evidence,
+				},
+			];
+		})
+		.sort((a, b) => b.score - a.score)
+		.slice(0, options.limit);
 }

@@ -33,6 +33,27 @@ fn row(id: &str, content: &str) -> RecallResult {
     }
 }
 
+fn ontology_claim_row(id: &str, content: &str) -> RecallResult {
+    RecallResult {
+        id: format!("ontology-claim:{id}"),
+        content: content.to_string(),
+        content_length: content.len(),
+        truncated: false,
+        score: 1.3,
+        source: "ontology_claim".to_string(),
+        source_id: Some(id.to_string()),
+        memory_type: "ontology_claim".to_string(),
+        tags: Some("ontology,claim,source-backed".to_string()),
+        pinned: false,
+        importance: 0.82,
+        who: "signet".to_string(),
+        project: None,
+        created_at: "2026-06-29T22:30:00.000Z".to_string(),
+        visibility: None,
+        scope: None,
+    }
+}
+
 fn response(query: &str, results: Vec<RecallResult>) -> RecallResponse {
     let total_returned = results.len();
     RecallResponse {
@@ -630,4 +651,42 @@ async fn saved_aggregate_recall_rows_are_not_recursive_evidence_sources() {
     assert!(!prompts[0].contains("Stale synthesized aggregate"));
     assert!(prompts[1].contains("Real evidence"));
     assert!(!prompts[1].contains("Stale synthesized aggregate"));
+}
+
+#[tokio::test]
+async fn ontology_claim_rows_are_synthesis_evidence_but_not_linkable_memory_sources() {
+    let conn = setup_conn();
+    let recall = StaticRecall::default().with(
+        "how much were the Artbat invoices for Maksym Getman?",
+        vec![ontology_claim_row(
+            "attr-artbat-invoice",
+            "Current ARTBAT invoice is €1,000 and the outstanding 2025 balance is €2,000.",
+        )],
+    );
+    let router = StaticRouter::default();
+
+    let result = aggregate_recall(
+        &conn,
+        AggregateRecallParams {
+            query: "how much were the Artbat invoices for Maksym Getman?".to_string(),
+            aggregate: true,
+            agent_id: Some("agent-a".to_string()),
+            ..AggregateRecallParams::default()
+        },
+        AggregateRecallDeps {
+            recall: Some(&recall),
+            router: Some(&router),
+            ..AggregateRecallDeps::default()
+        },
+    )
+    .await
+    .expect("aggregate result");
+
+    let aggregate = result.aggregate.expect("aggregate metadata");
+    assert!(!aggregate.saved);
+    assert!(aggregate.saved_memory_id.is_none());
+    assert!(aggregate.source_memory_ids.is_empty());
+    let prompts = router.prompts.borrow();
+    assert!(prompts[1].contains("ontology-claim:attr-artbat-invoice"));
+    assert!(prompts[1].contains("€1,000"));
 }

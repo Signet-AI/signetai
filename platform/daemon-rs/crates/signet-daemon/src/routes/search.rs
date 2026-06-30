@@ -214,6 +214,251 @@ fn refresh_recall_meta(resp: &mut RecallResponse) {
     resp.meta.no_hits = resp.results.is_empty();
 }
 
+fn ontology_claim_tokens(text: &str) -> Vec<String> {
+    text.to_lowercase()
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+        .filter(|token| token.len() >= 2)
+        .filter(|token| {
+            !matches!(
+                *token,
+                "the" | "and" | "for" | "what" | "with" | "were" | "was" | "did" | "about" | "is"
+            )
+        })
+        .filter_map(|token| {
+            let normalized = match token.strip_suffix("ing") {
+                Some(stem) if stem.len() > 2 => stem.to_string(),
+                _ if token.ends_with('s') && token.len() > 3 => {
+                    token.trim_end_matches('s').to_string()
+                }
+                _ => token.to_string(),
+            };
+            (normalized.len() >= 2).then_some(normalized)
+        })
+        .collect()
+}
+
+fn evidence_has_source_pointer(raw: Option<&str>) -> bool {
+    let Some(raw) = raw else { return false };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(raw) else {
+        return false;
+    };
+    let Some(items) = value.as_array() else {
+        return false;
+    };
+    items.iter().any(|item| {
+        let Some(obj) = item.as_object() else {
+            return false;
+        };
+        [
+            "source",
+            "source_id",
+            "source_path",
+            "transcript_id",
+            "session_key",
+            "memory_id",
+        ]
+        .iter()
+        .any(|key| {
+            obj.get(*key)
+                .and_then(|value| value.as_str())
+                .is_some_and(|value| !value.trim().is_empty())
+        })
+    })
+}
+
+fn first_evidence_source(raw: Option<&str>) -> Option<String> {
+    let value = serde_json::from_str::<serde_json::Value>(raw?).ok()?;
+    let items = value.as_array()?;
+    for item in items {
+        let Some(obj) = item.as_object() else {
+            continue;
+        };
+        for key in [
+            "source_path",
+            "source_id",
+            "transcript_id",
+            "session_key",
+            "memory_id",
+            "source",
+        ] {
+            if let Some(value) = obj.get(key).and_then(|value| value.as_str()) {
+                if !value.trim().is_empty() {
+                    return Some(value.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+fn ontology_claim_hits(
+    conn: &rusqlite::Connection,
+    query: &str,
+    limit: usize,
+    agent_id: &str,
+    truncate: usize,
+) -> Vec<RecallHit> {
+    let tokens = ontology_claim_tokens(query);
+    if tokens.is_empty() || limit == 0 {
+        return Vec::new();
+    }
+    let terms = tokens.iter().take(18).cloned().collect::<Vec<_>>();
+    let haystack = "lower(coalesce(ent.name, '') || ' ' || coalesce(asp.canonical_name, '') || ' ' || coalesce(ea.group_key, '') || ' ' || coalesce(ea.claim_key, '') || ' ' || coalesce(ea.kind, '') || ' ' || coalesce(ea.content, ''))";
+    let like = terms
+        .iter()
+        .map(|_| format!("{haystack} LIKE ?"))
+        .collect::<Vec<_>>()
+        .join(" OR ");
+    if like.is_empty() {
+        return Vec::new();
+    }
+    let rough_score = terms
+        .iter()
+        .map(|_| format!("CASE WHEN {haystack} LIKE ? THEN 1 ELSE 0 END"))
+        .collect::<Vec<_>>()
+        .join(" + ");
+    let sql = format!(
+        "SELECT ea.id, ent.name, asp.canonical_name, ea.group_key, ea.claim_key,
+                ea.content, ea.importance, ea.created_at, ea.updated_at,
+                ea.source_id, ea.source_path, ea.proposal_evidence, ({rough_score}) AS rough_score
+         FROM entity_attributes ea
+         JOIN entity_aspects asp ON asp.id = ea.aspect_id
+         JOIN entities ent ON ent.id = asp.entity_id
+         WHERE ea.agent_id = ? AND asp.agent_id = ? AND ent.agent_id = ?
+           AND ea.status = 'active' AND asp.status = 'active' AND ent.status = 'active'
+           AND ea.memory_id IS NULL
+           AND (ea.source_id IS NOT NULL OR ea.source_path IS NOT NULL OR (ea.proposal_evidence IS NOT NULL AND ea.proposal_evidence != '[]'))
+           AND ({like})
+         ORDER BY rough_score DESC, ea.importance DESC, ea.updated_at DESC
+         LIMIT ?"
+    );
+    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+    for token in &terms {
+        params.push(Box::new(format!("%{token}%")));
+    }
+    params.push(Box::new(agent_id.to_string()));
+    params.push(Box::new(agent_id.to_string()));
+    params.push(Box::new(agent_id.to_string()));
+    for token in &terms {
+        params.push(Box::new(format!("%{token}%")));
+    }
+    params.push(Box::new((limit.max(50) * 32).min(1600) as i64));
+    let refs: Vec<&dyn rusqlite::types::ToSql> =
+        params.iter().map(|param| param.as_ref()).collect();
+    let Ok(mut stmt) = conn.prepare(&sql) else {
+        return Vec::new();
+    };
+    let Ok(rows) = stmt.query_map(refs.as_slice(), |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, Option<String>>(3)?,
+            row.get::<_, Option<String>>(4)?,
+            row.get::<_, String>(5)?,
+            row.get::<_, f64>(6).unwrap_or(0.5),
+            row.get::<_, String>(7)?,
+            row.get::<_, String>(8)?,
+            row.get::<_, Option<String>>(9)?,
+            row.get::<_, Option<String>>(10)?,
+            row.get::<_, Option<String>>(11)?,
+            row.get::<_, i64>(12).unwrap_or(0),
+        ))
+    }) else {
+        return Vec::new();
+    };
+    let query_tokens: std::collections::HashSet<String> = tokens.into_iter().collect();
+    let mut hits = Vec::new();
+    for row in rows.filter_map(|row| row.ok()) {
+        let (
+            id,
+            entity_name,
+            aspect,
+            group_key,
+            claim_key,
+            claim,
+            importance,
+            created_at,
+            updated_at,
+            source_id,
+            source_path,
+            proposal_evidence,
+            _,
+        ) = row;
+        if source_id.as_deref().is_none_or(str::is_empty)
+            && source_path.as_deref().is_none_or(str::is_empty)
+            && !evidence_has_source_pointer(proposal_evidence.as_deref())
+        {
+            continue;
+        }
+        let text = format!(
+            "{entity_name} {aspect} {} {} {claim}",
+            group_key.as_deref().unwrap_or(""),
+            claim_key.as_deref().unwrap_or("")
+        );
+        let matched = ontology_claim_tokens(&text)
+            .into_iter()
+            .filter(|token| query_tokens.contains(token))
+            .count() as f64;
+        let coverage = matched / query_tokens.len().max(1) as f64;
+        if coverage < 0.35 {
+            continue;
+        }
+        let score = (1.0 + (coverage.min(1.0) * 0.45)).clamp(0.01, 1.45);
+        let path = [
+            entity_name.as_str(),
+            aspect.as_str(),
+            group_key.as_deref().unwrap_or(""),
+            claim_key.as_deref().unwrap_or(""),
+        ]
+        .into_iter()
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(" › ");
+        let content = format!("[Ontology claim: {path}]\n{claim}");
+        let content_length = content.len();
+        let truncated = content_length > truncate;
+        let display = if truncated {
+            let boundary = content.floor_char_boundary(truncate);
+            format!("{} [truncated]", &content[..boundary])
+        } else {
+            content
+        };
+        hits.push(RecallHit {
+            id: format!("ontology-claim:{id}"),
+            content: display,
+            content_length,
+            truncated,
+            score: (score * 100.0).round() / 100.0,
+            source: "ontology_claim".to_string(),
+            memory_type: "ontology_claim".to_string(),
+            tags: Some("ontology,claim,source-backed".to_string()),
+            pinned: false,
+            importance,
+            who: Some("signet".to_string()),
+            project: None,
+            visibility: None,
+            scope: None,
+            created_at: if updated_at.trim().is_empty() {
+                created_at
+            } else {
+                updated_at
+            },
+            source_id: Some(
+                source_id
+                    .filter(|value| !value.trim().is_empty())
+                    .or_else(|| source_path.filter(|value| !value.trim().is_empty()))
+                    .or_else(|| first_evidence_source(proposal_evidence.as_deref()))
+                    .unwrap_or(id),
+            ),
+            supplementary: None,
+        });
+    }
+    hits.sort_by(|a, b| b.score.total_cmp(&a.score));
+    hits.truncate(limit);
+    hits
+}
+
 pub async fn recall(
     State(state): State<Arc<AppState>>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
@@ -463,6 +708,12 @@ pub async fn recall(
                 && since.is_none()
                 && until.is_none()
                 && scope.is_none();
+            let allow_ontology_claims = allow_source_fallbacks && project.is_none() && !temporal_intent;
+            let ontology_hits = if allow_ontology_claims {
+                ontology_claim_hits(conn, &query, top_k, &agent_id, truncate)
+            } else {
+                Vec::new()
+            };
 
             let mut results = Vec::new();
             if !top_ids.is_empty() {
@@ -531,6 +782,12 @@ pub async fn recall(
                     })
                     .take(limit)
                     .collect();
+            }
+
+            if !ontology_hits.is_empty() {
+                results.extend(ontology_hits);
+                results.sort_by(|a, b| b.score.total_cmp(&a.score));
+                results.truncate(limit);
             }
 
             // Thin memory recall source/session/transcript fallbacks mirror TS memory-search.ts:2003.
@@ -1401,6 +1658,52 @@ mod tests {
         assert!(existing_source_ids.contains("obsidian:vault:note"));
         assert!(!existing_source_ids.contains("memory-with-source"));
         assert!(!existing_source_ids.contains("memory-without-source"));
+    }
+
+    #[test]
+    fn ontology_claim_hits_returns_unbacked_source_provenanced_claims() {
+        let conn = rusqlite::Connection::open_in_memory().expect("open db");
+        signet_core::migrations::run(&conn).expect("migrate db");
+        conn.execute(
+            "INSERT INTO entities (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
+             VALUES ('ent-artbat', 'ARTBAT / Arbat ForComp', 'artbat arbat forcomp', 'project', 'default', 1, '2026-06-29T00:00:00Z', '2026-06-29T00:00:00Z')",
+            [],
+        )
+        .expect("insert entity");
+        conn.execute(
+            "INSERT INTO entity_aspects (id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at)
+             VALUES ('asp-billing', 'ent-artbat', 'default', 'billing_context', 'billing_context', 0.9, '2026-06-29T00:00:00Z', '2026-06-29T00:00:00Z')",
+            [],
+        )
+        .expect("insert aspect");
+        conn.execute(
+            r#"INSERT INTO entity_attributes (
+                id, aspect_id, agent_id, memory_id, kind, content, normalized_content,
+                confidence, importance, status, group_key, claim_key, proposal_evidence, created_at, updated_at
+             ) VALUES (
+                'attr-artbat-invoice', 'asp-billing', 'default', NULL, 'attribute',
+                'Current ARTBAT invoice is €1,000 and outstanding 2025 balance is €2,000 for Maksym Getman.',
+                'current artbat invoice eur 1000 outstanding balance eur 2000 maksym getman',
+                0.95, 0.82, 'active', 'invoice_followup', 'maksym_request_2026_06_29',
+                '[{"source_path":"dreaming-log.md:32","quote":"€1,000 and €2,000"}]',
+                '2026-06-29T00:00:00Z', '2026-06-30T00:00:00Z'
+             )"#,
+            [],
+        )
+        .expect("insert attribute");
+
+        let hits = ontology_claim_hits(
+            &conn,
+            "how much were the Artbat invoices for Maksym Getman?",
+            5,
+            "default",
+            50_000,
+        );
+
+        assert_eq!(hits[0].id, "ontology-claim:attr-artbat-invoice");
+        assert_eq!(hits[0].source, "ontology_claim");
+        assert!(hits[0].content.contains("€1,000"));
+        assert!(hits[0].content.contains("€2,000"));
     }
 }
 

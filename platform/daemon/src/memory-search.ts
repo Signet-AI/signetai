@@ -39,7 +39,12 @@ import {
 	shapeByFacetCoverage,
 	shapeStructuredEvidence,
 } from "./pipeline/structured-evidence";
-import { findStructuredPathCandidates, scoreStructuredPathEvidence } from "./pipeline/structured-path-evidence";
+import {
+	type StructuredClaimCandidate,
+	findStructuredClaimCandidates,
+	findStructuredPathCandidates,
+	scoreStructuredPathEvidence,
+} from "./pipeline/structured-path-evidence";
 import { type RecallDedupeMeta, applyRecallDedupe } from "./session-recall-dedupe";
 import { escapeLike } from "./sql-utils";
 import { type TemporalTimeOptions, resolveTemporalRecall } from "./temporal-recall";
@@ -311,6 +316,97 @@ function hasMemoryMetadataFilters(params: RecallParams): boolean {
 		params.until !== undefined ||
 		params.scope !== undefined
 	);
+}
+
+function canUseOntologyClaimRecall(params: RecallParams): boolean {
+	return params.sourceOnly !== true && !params.project && !hasMemoryMetadataFilters(params);
+}
+
+interface ClaimEvidencePointer {
+	readonly source_kind?: string;
+	readonly source_id?: string;
+	readonly source_path?: string;
+	readonly quote?: string;
+}
+
+function readEvidenceString(record: Record<string, unknown>, keys: readonly string[]): string | undefined {
+	for (const key of keys) {
+		const value = record[key];
+		if (typeof value === "string" && value.trim().length > 0) return value;
+	}
+	return undefined;
+}
+
+function parseClaimEvidence(raw: string | null): ClaimEvidencePointer[] {
+	if (!raw) return [];
+	try {
+		const parsed = JSON.parse(raw) as unknown;
+		if (!Array.isArray(parsed)) return [];
+		return parsed.flatMap((item): ClaimEvidencePointer[] => {
+			if (!item || typeof item !== "object") return [];
+			const record = item as Record<string, unknown>;
+			const sourceKind = readEvidenceString(record, ["source_kind", "source"]);
+			const sourceId = readEvidenceString(record, ["source_id", "transcript_id", "session_key", "memory_id", "source"]);
+			const sourcePath = readEvidenceString(record, ["source_path"]);
+			if (!sourceKind && !sourceId && !sourcePath && typeof record.quote !== "string") return [];
+			return [
+				{
+					source_kind: sourceKind,
+					source_id: sourceId,
+					source_path: sourcePath,
+					quote: typeof record.quote === "string" ? record.quote : undefined,
+				},
+			];
+		});
+	} catch {
+		return [];
+	}
+}
+
+function ontologyClaimSourcePath(candidate: StructuredClaimCandidate): string | undefined {
+	if (candidate.sourcePath) return candidate.sourcePath;
+	return parseClaimEvidence(candidate.proposalEvidence).find((item) => item.source_path)?.source_path;
+}
+
+function ontologyClaimContent(candidate: StructuredClaimCandidate): string {
+	const path = [candidate.entityName, candidate.aspect, candidate.groupKey, candidate.claimKey]
+		.filter((part): part is string => typeof part === "string" && part.trim().length > 0)
+		.join(" › ");
+	const evidence = parseClaimEvidence(candidate.proposalEvidence).slice(0, 2);
+	const evidenceLines = evidence.flatMap((item): string[] => {
+		const source = [item.source_kind, item.source_path ?? item.source_id].filter(Boolean).join(": ");
+		if (!source && !item.quote) return [];
+		const quote = item.quote ? ` — ${item.quote.replace(/\s+/g, " ").trim()}` : "";
+		return [`Evidence: ${source || "source"}${quote}`];
+	});
+	return [`[Ontology claim: ${path}]`, candidate.content, ...evidenceLines].join("\n");
+}
+
+function ontologyClaimToRecallResult(candidate: StructuredClaimCandidate, truncateChars: number): RecallResult {
+	const content = ontologyClaimContent(candidate);
+	const truncated = content.length > truncateChars;
+	const sourcePath = ontologyClaimSourcePath(candidate);
+	return {
+		id: `ontology-claim:${candidate.id}`,
+		content: truncated ? `${content.slice(0, truncateChars)} [truncated]` : content,
+		content_length: content.length,
+		truncated,
+		// Source-provenanced active ontology claims represent Dreaming's current
+		// structured truth. Only high-overlap claims are admitted upstream; keep
+		// them prominent enough to beat stale synthesized memories without letting
+		// low-overlap entity context into the result set.
+		score: Math.round(Math.max(0.01, Math.min(1.45, 1 + candidate.score * 0.45)) * 100) / 100,
+		source: "ontology_claim",
+		source_id: candidate.id,
+		type: "ontology_claim",
+		tags: "ontology,claim,source-backed",
+		pinned: false,
+		importance: candidate.importance,
+		who: "signet",
+		project: null,
+		created_at: candidate.updatedAt || candidate.createdAt,
+		...(sourcePath ? { source_path: sourcePath } : {}),
+	};
 }
 
 function normalizeRecallLimit(raw: number | undefined): number {
@@ -1293,6 +1389,7 @@ export async function hybridRecall(
 	// memories can be recalled even when their raw prose does not share enough
 	// surface text with the question.
 	const structuredCandidateMap = new Map<string, number>();
+	let ontologyClaimCandidates: StructuredClaimCandidate[] = [];
 	if (cfg.pipelineV2.graph.enabled) {
 		try {
 			const agentId = params.agentId ?? "default";
@@ -1311,6 +1408,23 @@ export async function hybridRecall(
 			logger.warn("memory", "Structured path candidate search failed (non-fatal)", {
 				error: e instanceof Error ? e.message : String(e),
 			});
+		}
+		if (canUseOntologyClaimRecall(params) && temporalCandidateSet.size === 0 && !temporal.meta) {
+			try {
+				const agentId = params.agentId ?? "default";
+				ontologyClaimCandidates = timings.time("ontology_claim_candidates", () =>
+					getDbAccessor().withReadDb((db) =>
+						findStructuredClaimCandidates(db, query, agentId, {
+							limit: cfg.search.top_k,
+							minScore,
+						}),
+					),
+				);
+			} catch (e) {
+				logger.warn("memory", "Ontology claim candidate search failed (non-fatal)", {
+					error: e instanceof Error ? e.message : String(e),
+				});
+			}
 		}
 	}
 
@@ -1998,9 +2112,13 @@ export async function hybridRecall(
 			: limit;
 	const topIds = params.sourceOnly === true ? [] : scored.slice(0, preHydrate).map((s) => s.id);
 	const recallTruncate = cfg.pipelineV2.guardrails.recallTruncateChars;
+	const ontologyClaimResults = ontologyClaimCandidates.map((candidate) =>
+		ontologyClaimToRecallResult(candidate, recallTruncate),
+	);
 	const allowSourceFallbacks = temporalCandidateSet.size === 0 && !hasMemoryMetadataFilters(params);
 
 	if (topIds.length === 0) {
+		const results = suppressPreviouslyRecalledForSelection(ontologyClaimResults).slice(0, limit);
 		const fallbackLimit = selectionDedupeEnabled ? Math.max(limit * 3, limit + 10) : limit;
 		const sourceChunkHits = allowSourceFallbacks
 			? timings.time("source_chunk_vector_fallback", () =>
@@ -2013,8 +2131,8 @@ export async function hybridRecall(
 					),
 				)
 			: [];
-		if (sourceChunkHits.length > 0) {
-			const results = suppressPreviouslyRecalledForSelection(
+		if (sourceChunkHits.length > 0 && results.length < limit) {
+			const sourceResults = suppressPreviouslyRecalledForSelection(
 				sourceChunkHits.slice(0, fallbackLimit).map((hit): RecallResult => {
 					const content = `[Source chunk: ${hit.sourcePath}]\n${hit.chunkText}`;
 					const truncated = content.length > recallTruncate;
@@ -2038,25 +2156,17 @@ export async function hybridRecall(
 						supplementary: true,
 					};
 				}),
-			).slice(0, limit);
-			if (results.length > 0) {
-				return await finish({
-					results,
-					query,
-					method: "hybrid",
-					meta: {
-						totalReturned: results.length,
-						hasSupplementary: true,
-						noHits: false,
-					},
-				});
+			);
+			for (const row of sourceResults) {
+				if (results.length >= limit) break;
+				results.push(row);
 			}
 		}
 		const nativeHits = allowSourceFallbacks
 			? timings.time("native_artifact_fallback", () => buildNativeArtifactRecallHits(params, expandedQuery, new Set()))
 			: [];
-		if (nativeHits.length > 0) {
-			const results = suppressPreviouslyRecalledForSelection(
+		if (nativeHits.length > 0 && results.length < limit) {
+			const nativeResults = suppressPreviouslyRecalledForSelection(
 				nativeHits.slice(0, fallbackLimit).map((hit): RecallResult => {
 					const content = nativeArtifactRecallContent(hit);
 					const truncated = content.length > recallTruncate;
@@ -2081,28 +2191,20 @@ export async function hybridRecall(
 						supplementary: true,
 					};
 				}),
-			).slice(0, limit);
-			if (results.length > 0) {
-				return await finish({
-					results,
-					query,
-					method: "keyword",
-					meta: {
-						totalReturned: results.length,
-						hasSupplementary: true,
-						noHits: false,
-					},
-				});
+			);
+			for (const row of nativeResults) {
+				if (results.length >= limit) break;
+				results.push(row);
 			}
 		}
 		return await finish({
-			results: [],
+			results,
 			query,
-			method: "hybrid",
+			method: queryVecF32 ? "hybrid" : "keyword",
 			meta: {
-				totalReturned: 0,
-				hasSupplementary: false,
-				noHits: true,
+				totalReturned: results.length,
+				hasSupplementary: results.some((row) => row.supplementary === true),
+				noHits: results.length === 0,
 			},
 		});
 	}
@@ -2172,8 +2274,16 @@ export async function hybridRecall(
 						},
 					];
 				}),
-		).slice(0, limit),
+		),
 	);
+
+	if (ontologyClaimResults.length > 0) {
+		results = suppressPreviouslyRecalledForSelection([...results, ...ontologyClaimResults])
+			.sort((a, b) => b.score - a.score)
+			.slice(0, limit);
+	} else if (results.length > limit) {
+		results = results.slice(0, limit);
+	}
 
 	if (results.length < limit) {
 		const existingSourceIds = new Set(results.map((row) => row.source_id).filter((id): id is string => !!id));

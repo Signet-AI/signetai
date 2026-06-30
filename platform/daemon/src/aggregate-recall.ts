@@ -290,10 +290,15 @@ function isAggregateRecallRow(row: RecallResult): boolean {
 	return row.source === "aggregate-recall" || row.source_id?.startsWith("aggregate-recall:") === true;
 }
 
-function isSourceMemoryRow(row: RecallResult): boolean {
+function isOntologyClaimRow(row: RecallResult): boolean {
+	return row.source === "ontology_claim" || row.id.startsWith("ontology-claim:");
+}
+
+function isLinkableSourceMemoryRow(row: RecallResult): boolean {
 	return (
 		row.source !== "llm_summary" &&
 		!isAggregateRecallRow(row) &&
+		!isOntologyClaimRow(row) &&
 		!row.id.startsWith("constructed:") &&
 		!row.id.startsWith("summary:") &&
 		!row.id.startsWith("source-chunk:") &&
@@ -301,19 +306,30 @@ function isSourceMemoryRow(row: RecallResult): boolean {
 	);
 }
 
+function isAggregateEvidenceRow(row: RecallResult): boolean {
+	return isOntologyClaimRow(row) || isLinkableSourceMemoryRow(row);
+}
+
 function uniqueEvidence(rows: readonly RecallResult[]): RecallResult[] {
 	const seen = new Set<string>();
 	const result: RecallResult[] = [];
 	for (const row of rows) {
-		if (!isSourceMemoryRow(row) || seen.has(row.id)) continue;
+		if (!isAggregateEvidenceRow(row) || seen.has(row.id)) continue;
 		seen.add(row.id);
 		result.push(row);
 	}
 	return result;
 }
 
+function linkableSourceMemoryIds(rows: readonly RecallResult[]): string[] {
+	return rows.filter(isLinkableSourceMemoryRow).map((row) => row.id);
+}
+
 function evidenceCanSaveAsGlobalAggregate(rows: readonly RecallResult[]): boolean {
-	return rows.every((row) => row.visibility === "global" && row.scope === null);
+	return (
+		rows.length > 0 &&
+		rows.every((row) => isLinkableSourceMemoryRow(row) && row.visibility === "global" && row.scope === null)
+	);
 }
 
 function isInsufficientAggregateAnswer(text: string): boolean {
@@ -682,14 +698,15 @@ export async function aggregateRecall(
 	const first = await timings.timeAsync("aggregate_initial_recall", () => recall(params, cfg, deps.embedFn));
 
 	if (!deps.router) {
-		const sourceMemoryIds = uniqueEvidence(first.results).map((row) => row.id);
+		const firstEvidence = uniqueEvidence(first.results);
+		const sourceMemoryIds = linkableSourceMemoryIds(firstEvidence);
 		return finish(
 			emptyAggregateResponse(
 				params,
 				budget,
 				[params.query],
 				sourceMemoryIds,
-				sourceMemoryIds.length === 0 ? "no_evidence" : "router_unavailable",
+				firstEvidence.length === 0 ? "no_evidence" : "router_unavailable",
 			),
 		);
 	}
@@ -727,7 +744,8 @@ export async function aggregateRecall(
 	const recalls = [first, ...followupRecalls];
 
 	const evidence = uniqueEvidence(recalls.flatMap((result) => result.results));
-	const sourceMemoryIds = evidence.map((row) => row.id);
+	const evidenceIds = evidence.map((row) => row.id);
+	const sourceMemoryIds = linkableSourceMemoryIds(evidence);
 	if (evidence.length === 0) {
 		return finish(emptyAggregateResponse(params, budget, queries, [], "no_evidence"));
 	}
@@ -743,7 +761,7 @@ export async function aggregateRecall(
 
 	const agentId = params.agentId ?? "default";
 	const project = sourceProject(params);
-	const key = aggregateKey({ agentId, project, query: params.query, budget, sourceMemoryIds });
+	const key = aggregateKey({ agentId, project, query: params.query, budget, sourceMemoryIds: evidenceIds });
 
 	let row: RecallResult | null;
 	let deduped = false;
