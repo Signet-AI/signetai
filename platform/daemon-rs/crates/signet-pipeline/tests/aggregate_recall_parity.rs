@@ -21,6 +21,7 @@ fn row(id: &str, content: &str) -> RecallResult {
         score: 0.9,
         source: "hybrid".to_string(),
         source_id: None,
+        source_path: None,
         memory_type: "semantic".to_string(),
         tags: None,
         pinned: false,
@@ -42,6 +43,9 @@ fn ontology_claim_row(id: &str, content: &str) -> RecallResult {
         score: 1.3,
         source: "ontology_claim".to_string(),
         source_id: Some(id.to_string()),
+        source_path: Some(
+            "/home/nicholai/.agents/dreaming/2026-06-29-cron-2230/dreaming-log.md:32".to_string(),
+        ),
         memory_type: "ontology_claim".to_string(),
         tags: Some("ontology,claim,source-backed".to_string()),
         pinned: false,
@@ -654,7 +658,7 @@ async fn saved_aggregate_recall_rows_are_not_recursive_evidence_sources() {
 }
 
 #[tokio::test]
-async fn ontology_claim_rows_are_synthesis_evidence_but_not_linkable_memory_sources() {
+async fn ontology_claim_rows_save_typed_evidence_without_memory_source_links() {
     let conn = setup_conn();
     let recall = StaticRecall::default().with(
         "how much were the Artbat invoices for Maksym Getman?",
@@ -683,9 +687,43 @@ async fn ontology_claim_rows_are_synthesis_evidence_but_not_linkable_memory_sour
     .expect("aggregate result");
 
     let aggregate = result.aggregate.expect("aggregate metadata");
-    assert!(!aggregate.saved);
-    assert!(aggregate.saved_memory_id.is_none());
+    assert!(aggregate.saved);
+    let saved_memory_id = aggregate.saved_memory_id.expect("saved aggregate id");
     assert!(aggregate.source_memory_ids.is_empty());
+    let saved_visibility: String = conn
+        .query_row(
+            "SELECT visibility FROM memories WHERE id = ?1",
+            params![&saved_memory_id],
+            |row| row.get(0),
+        )
+        .expect("read saved visibility");
+    assert_eq!(saved_visibility, "private");
+    let memory_link_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM aggregate_memory_sources WHERE aggregate_memory_id = ?1",
+            params![&saved_memory_id],
+            |row| row.get(0),
+        )
+        .expect("count memory links");
+    assert_eq!(memory_link_count, 0);
+    let evidence_links = conn
+        .prepare(
+            "SELECT source_kind, source_id FROM aggregate_evidence_sources WHERE aggregate_memory_id = ?1",
+        )
+        .expect("prepare evidence links")
+        .query_map(params![&saved_memory_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .expect("query evidence links")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("read evidence links");
+    assert_eq!(
+        evidence_links,
+        vec![(
+            "ontology_claim".to_string(),
+            "attr-artbat-invoice".to_string()
+        )]
+    );
     let prompts = router.prompts.borrow();
     assert!(prompts[1].contains("ontology-claim:attr-artbat-invoice"));
     assert!(prompts[1].contains("€1,000"));

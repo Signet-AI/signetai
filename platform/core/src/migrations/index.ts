@@ -86,6 +86,7 @@ import { up as entityAliases } from "./077-entity-aliases";
 import { up as apiKeys } from "./078-api-keys";
 import { up as transcriptCaptureJobs } from "./079-transcript-capture-jobs";
 import { up as documentScopeColumns } from "./080-document-scope-columns";
+import { up as aggregateEvidenceSources } from "./081-aggregate-evidence-sources";
 
 // -- Public interface consumed by Database.init() --
 
@@ -763,6 +764,14 @@ export const MIGRATIONS: readonly Migration[] = [
 				{ table: "documents", column: "agent_id" },
 				{ table: "documents", column: "project" },
 			],
+		},
+	},
+	{
+		version: 81,
+		name: "aggregate-evidence-sources",
+		up: aggregateEvidenceSources,
+		artifacts: {
+			tables: ["aggregate_evidence_sources"],
 		},
 	},
 ];

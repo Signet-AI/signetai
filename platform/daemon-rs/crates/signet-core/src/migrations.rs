@@ -512,6 +512,7 @@ fn ensure_cross_daemon_parity_tables(conn: &Connection) -> Result<(), CoreError>
     conn.execute_batch(include_str!("sql/055-thread-heads.sql"))?;
     conn.execute_batch(include_str!("sql/056-entity-fts.sql"))?;
     conn.execute_batch(include_str!("sql/057-session-summary-uniqueness.sql"))?;
+    conn.execute_batch(include_str!("sql/058-aggregate-evidence-sources.sql"))?;
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS api_keys (
             id TEXT PRIMARY KEY,

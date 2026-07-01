@@ -78,7 +78,7 @@ interface AggregateMemoryRow {
 
 interface ContentHashMatch {
 	readonly row: RecallResult;
-	readonly visibleForAggregate: boolean;
+	readonly projectMatches: boolean;
 	readonly aggregateRecallMemory: boolean;
 }
 
@@ -325,11 +325,38 @@ function linkableSourceMemoryIds(rows: readonly RecallResult[]): string[] {
 	return rows.filter(isLinkableSourceMemoryRow).map((row) => row.id);
 }
 
-function evidenceCanSaveAsGlobalAggregate(rows: readonly RecallResult[]): boolean {
+interface AggregateEvidenceSource {
+	readonly sourceKind: string;
+	readonly sourceId: string;
+	readonly sourcePath: string | null;
+}
+
+function aggregateEvidenceSources(rows: readonly RecallResult[]): AggregateEvidenceSource[] {
+	return rows.flatMap((row): AggregateEvidenceSource[] => {
+		if (isOntologyClaimRow(row)) {
+			const sourceId = row.source_id ?? row.id.replace(/^ontology-claim:/, "");
+			return [{ sourceKind: "ontology_claim", sourceId, sourcePath: row.source_path ?? null }];
+		}
+		if (isLinkableSourceMemoryRow(row)) {
+			return [{ sourceKind: "memory", sourceId: row.id, sourcePath: row.source_path ?? null }];
+		}
+		return [];
+	});
+}
+
+function evidenceCanSaveAsAggregate(rows: readonly RecallResult[]): boolean {
 	return (
 		rows.length > 0 &&
-		rows.every((row) => isLinkableSourceMemoryRow(row) && row.visibility === "global" && row.scope === null)
+		rows.every(
+			(row) =>
+				isOntologyClaimRow(row) ||
+				(isLinkableSourceMemoryRow(row) && row.visibility === "global" && row.scope === null),
+		)
 	);
+}
+
+function aggregateVisibilityForEvidence(rows: readonly RecallResult[]): "global" | "private" {
+	return rows.some(isOntologyClaimRow) ? "private" : "global";
 }
 
 function isInsufficientAggregateAnswer(text: string): boolean {
@@ -399,13 +426,14 @@ function rowToRecallResult(row: AggregateMemoryRow): RecallResult {
 		who: row.who ?? "",
 		project: row.project,
 		created_at: row.created_at,
+		visibility: row.visibility ?? null,
 	};
 }
 
 function loadAggregateMemory(db: WriteDb, id: string): RecallResult | null {
 	const row = db
 		.prepare(
-			`SELECT id, content, source_id, type, tags, pinned, importance, who, project, created_at
+			`SELECT id, content, source_id, type, tags, pinned, importance, who, project, visibility, created_at
 			 FROM memories
 			 WHERE id = ? AND is_deleted = 0`,
 		)
@@ -416,21 +444,21 @@ function loadAggregateMemory(db: WriteDb, id: string): RecallResult | null {
 function loadAggregateByKey(
 	db: WriteDb,
 	key: string,
-	input: { readonly agentId: string; readonly project: string | null },
+	input: { readonly agentId: string; readonly project: string | null; readonly visibility: "global" | "private" },
 ): RecallResult | null {
 	const row = db
 		.prepare(
-			`SELECT id, content, source_id, type, tags, pinned, importance, who, project, created_at
+			`SELECT id, content, source_id, type, tags, pinned, importance, who, project, visibility, created_at
 			 FROM memories
 			 WHERE idempotency_key = ?
 			   AND COALESCE(NULLIF(agent_id, ''), 'default') = ?
 			   AND source_type = 'aggregate-recall'
-			   AND visibility = 'global'
+			   AND visibility = ?
 			   AND scope IS NULL
 			   AND is_deleted = 0
 			 LIMIT 1`,
 		)
-		.get(key, input.agentId) as AggregateMemoryRow | undefined;
+		.get(key, input.agentId, input.visibility) as AggregateMemoryRow | undefined;
 	if (!row) return null;
 	if (input.project !== null && row.project !== input.project) return null;
 	return rowToRecallResult(row);
@@ -455,7 +483,7 @@ function loadMemoryByContentHash(
 	if (!row) return null;
 	return {
 		row: rowToRecallResult(row),
-		visibleForAggregate: row.visibility === "global" && (input.project === null || row.project === input.project),
+		projectMatches: input.project === null || row.project === input.project,
 		aggregateRecallMemory: row.source_type === "aggregate-recall",
 	};
 }
@@ -473,6 +501,22 @@ function linkAggregateSources(
 			 (aggregate_memory_id, source_memory_id, agent_id, created_at)
 			 VALUES (?, ?, ?, ?)`,
 		).run(aggregateMemoryId, sourceMemoryId, agentId, now);
+	}
+}
+
+function linkAggregateEvidenceSources(
+	db: WriteDb,
+	aggregateMemoryId: string,
+	evidenceSources: readonly AggregateEvidenceSource[],
+	agentId: string,
+	now: string,
+): void {
+	for (const source of evidenceSources) {
+		db.prepare(
+			`INSERT OR IGNORE INTO aggregate_evidence_sources
+			 (aggregate_memory_id, source_kind, source_id, source_path, agent_id, created_at)
+			 VALUES (?, ?, ?, ?, ?, ?)`,
+		).run(aggregateMemoryId, source.sourceKind, source.sourceId, source.sourcePath, agentId, now);
 	}
 }
 
@@ -501,12 +545,19 @@ function resolveAggregateDuplicate(
 		readonly contentHash: string;
 		readonly answer: string;
 		readonly sourceMemoryIds: readonly string[];
+		readonly evidenceSources: readonly AggregateEvidenceSource[];
+		readonly saveVisibility: "global" | "private";
 		readonly now: string;
 	},
 ): AggregateDuplicateResolution | null {
-	const existing = loadAggregateByKey(db, input.key, { agentId: input.agentId, project: input.project });
+	const existing = loadAggregateByKey(db, input.key, {
+		agentId: input.agentId,
+		project: input.project,
+		visibility: input.saveVisibility,
+	});
 	if (existing) {
 		linkAggregateSources(db, existing.id, input.sourceMemoryIds, input.agentId, input.now);
+		linkAggregateEvidenceSources(db, existing.id, input.evidenceSources, input.agentId, input.now);
 		linkAggregateQueryHint(db, existing.id, input.agentId, input.query, input.now);
 		return { row: existing, saved: true };
 	}
@@ -515,10 +566,15 @@ function resolveAggregateDuplicate(
 		project: input.project,
 	});
 	if (!duplicateContent) return null;
-	if (!duplicateContent.visibleForAggregate || !duplicateContent.aggregateRecallMemory) {
+	if (
+		duplicateContent.row.visibility !== input.saveVisibility ||
+		!duplicateContent.projectMatches ||
+		!duplicateContent.aggregateRecallMemory
+	) {
 		return { row: unsavedAggregateResult(input.answer, input.key, input.project), saved: false };
 	}
 	linkAggregateSources(db, duplicateContent.row.id, input.sourceMemoryIds, input.agentId, input.now);
+	linkAggregateEvidenceSources(db, duplicateContent.row.id, input.evidenceSources, input.agentId, input.now);
 	linkAggregateQueryHint(db, duplicateContent.row.id, input.agentId, input.query, input.now);
 	return { row: duplicateContent.row, saved: true };
 }
@@ -746,6 +802,8 @@ export async function aggregateRecall(
 	const evidence = uniqueEvidence(recalls.flatMap((result) => result.results));
 	const evidenceIds = evidence.map((row) => row.id);
 	const sourceMemoryIds = linkableSourceMemoryIds(evidence);
+	const evidenceSources = aggregateEvidenceSources(evidence);
+	const saveVisibility = aggregateVisibilityForEvidence(evidence);
 	if (evidence.length === 0) {
 		return finish(emptyAggregateResponse(params, budget, queries, [], "no_evidence"));
 	}
@@ -766,7 +824,7 @@ export async function aggregateRecall(
 	let row: RecallResult | null;
 	let deduped = false;
 	let saved = false;
-	if (saveAggregate && evidenceCanSaveAsGlobalAggregate(evidence) && aggregateAnswerCanBeSaved(answer)) {
+	if (saveAggregate && evidenceCanSaveAsAggregate(evidence) && aggregateAnswerCanBeSaved(answer)) {
 		const normalized = normalizeAndHashContent(answer);
 		row = timings.time("aggregate_save", () =>
 			getDbAccessor().withWriteTx((db) => {
@@ -778,6 +836,8 @@ export async function aggregateRecall(
 					contentHash: normalized.contentHash,
 					answer,
 					sourceMemoryIds,
+					evidenceSources,
+					saveVisibility,
 					now,
 				});
 				if (duplicate) {
@@ -809,7 +869,7 @@ export async function aggregateRecall(
 					idempotencyKey: key,
 					scope: null,
 					agentId,
-					visibility: "global",
+					visibility: saveVisibility,
 					createdAt: now,
 				};
 				try {
@@ -824,6 +884,8 @@ export async function aggregateRecall(
 						contentHash: normalized.contentHash,
 						answer,
 						sourceMemoryIds,
+						evidenceSources,
+						saveVisibility,
 						now,
 					});
 					if (!racedDuplicate) {
@@ -837,6 +899,7 @@ export async function aggregateRecall(
 					return racedDuplicate.row;
 				}
 				linkAggregateSources(db, id, sourceMemoryIds, agentId, now);
+				linkAggregateEvidenceSources(db, id, evidenceSources, agentId, now);
 				linkAggregateQueryHint(db, id, agentId, params.query, now);
 				enqueueExtractionJobInTx(db, id);
 				saved = true;

@@ -497,7 +497,7 @@ memory:
 		expect(count.n).toBe(0);
 	});
 
-	it("uses ontology claim rows as synthesis evidence without saving memory-only provenance links", async () => {
+	it("saves ontology claim evidence links without memory-only provenance links", async () => {
 		const ontologyRow: RecallResult = {
 			id: "ontology-claim:attr-artbat-invoice",
 			content:
@@ -538,15 +538,38 @@ memory:
 		expect(router.prompts.at(-1)).toContain("€1,000");
 		expect(result.results[0]?.content).toContain("€1,000");
 		expect(result.aggregate).toMatchObject({
-			savedMemoryId: null,
-			saved: false,
+			saved: true,
 			sourceMemoryIds: [],
 			stoppedReason: "complete",
 		});
-		const count = getDbAccessor().withReadDb((db) => db.prepare("SELECT COUNT(*) AS n FROM memories").get()) as {
-			n: number;
-		};
-		expect(count.n).toBe(0);
+		expect(result.aggregate?.savedMemoryId).toBeTruthy();
+		const links = getDbAccessor().withReadDb((db) => {
+			const saved = db.prepare("SELECT visibility FROM memories WHERE id = ?").get(result.aggregate?.savedMemoryId) as {
+				visibility: string;
+			};
+			const evidence = db
+				.prepare(
+					"SELECT source_kind, source_id, source_path FROM aggregate_evidence_sources WHERE aggregate_memory_id = ?",
+				)
+				.all(result.aggregate?.savedMemoryId) as Array<{
+				source_kind: string;
+				source_id: string;
+				source_path: string | null;
+			}>;
+			const memory = db
+				.prepare("SELECT COUNT(*) AS n FROM aggregate_memory_sources WHERE aggregate_memory_id = ?")
+				.get(result.aggregate?.savedMemoryId) as { n: number };
+			return { evidence, memory, saved };
+		});
+		expect(links.saved.visibility).toBe("private");
+		expect(links.evidence).toEqual([
+			{
+				source_kind: "ontology_claim",
+				source_id: "attr-artbat-invoice",
+				source_path: "/home/nicholai/.agents/dreaming/2026-06-29-cron-2230/dreaming-log.md:32",
+			},
+		]);
+		expect(links.memory.n).toBe(0);
 	});
 
 	it("returns but does not save insufficient-evidence aggregate answers", async () => {

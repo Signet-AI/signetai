@@ -183,6 +183,7 @@ pub struct RecallResult {
     pub score: f64,
     pub source: String,
     pub source_id: Option<String>,
+    pub source_path: Option<String>,
     #[serde(rename = "type")]
     pub memory_type: String,
     pub tags: Option<String>,
@@ -355,7 +356,7 @@ struct AggregateMemoryRow {
 #[derive(Debug, Clone)]
 struct ContentHashMatch {
     row: RecallResult,
-    visible_for_aggregate: bool,
+    project_matches: bool,
     aggregate_recall_memory: bool,
 }
 
@@ -615,13 +616,53 @@ fn linkable_source_memory_ids(rows: &[RecallResult]) -> Vec<String> {
         .collect()
 }
 
-fn evidence_can_save_as_global_aggregate(rows: &[RecallResult]) -> bool {
+#[derive(Debug, Clone)]
+struct AggregateEvidenceSource {
+    source_kind: String,
+    source_id: String,
+    source_path: Option<String>,
+}
+
+fn aggregate_evidence_sources(rows: &[RecallResult]) -> Vec<AggregateEvidenceSource> {
+    rows.iter()
+        .filter_map(|row| {
+            if is_ontology_claim_row(row) {
+                Some(AggregateEvidenceSource {
+                    source_kind: "ontology_claim".to_string(),
+                    source_id: row.source_id.clone().unwrap_or_else(|| {
+                        row.id.trim_start_matches("ontology-claim:").to_string()
+                    }),
+                    source_path: row.source_path.clone(),
+                })
+            } else if is_linkable_source_memory_row(row) {
+                Some(AggregateEvidenceSource {
+                    source_kind: "memory".to_string(),
+                    source_id: row.id.clone(),
+                    source_path: row.source_path.clone(),
+                })
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+fn evidence_can_save_as_aggregate(rows: &[RecallResult]) -> bool {
     !rows.is_empty()
         && rows.iter().all(|row| {
-            is_linkable_source_memory_row(row)
-                && row.visibility.as_deref() == Some("global")
-                && row.scope.as_deref().is_none()
+            is_ontology_claim_row(row)
+                || (is_linkable_source_memory_row(row)
+                    && row.visibility.as_deref() == Some("global")
+                    && row.scope.as_deref().is_none())
         })
+}
+
+fn aggregate_visibility_for_evidence(rows: &[RecallResult]) -> &'static str {
+    if rows.iter().any(is_ontology_claim_row) {
+        "private"
+    } else {
+        "global"
+    }
 }
 
 fn is_insufficient_aggregate_answer(text: &str) -> bool {
@@ -698,6 +739,7 @@ fn row_to_recall_result(row: AggregateMemoryRow) -> RecallResult {
         score: 1.0,
         source: "aggregate-recall".to_string(),
         source_id: row.source_id,
+        source_path: None,
         memory_type: row.memory_type,
         tags: row.tags,
         pinned: row.pinned,
@@ -745,6 +787,7 @@ fn load_aggregate_by_key(
     key: &str,
     agent_id: &str,
     project: Option<&str>,
+    visibility: &str,
 ) -> Result<Option<RecallResult>, rusqlite::Error> {
     let row = conn
         .query_row(
@@ -753,11 +796,11 @@ fn load_aggregate_by_key(
              WHERE idempotency_key = ?1
                AND COALESCE(NULLIF(agent_id, ''), 'default') = ?2
                AND source_type = 'aggregate-recall'
-               AND visibility = 'global'
+               AND visibility = ?3
                AND scope IS NULL
                AND COALESCE(is_deleted, 0) = 0
              LIMIT 1",
-            params![key, agent_id],
+            params![key, agent_id, visibility],
             |row| {
                 Ok(AggregateMemoryRow {
                     id: row.get(0)?,
@@ -820,12 +863,11 @@ fn load_memory_by_content_hash(
         )
         .optional()?;
     Ok(row.map(|row| {
-        let visible_for_aggregate = row.visibility.as_deref() == Some("global")
-            && (project.is_none() || row.project.as_deref() == project);
+        let project_matches = project.is_none() || row.project.as_deref() == project;
         let aggregate_recall_memory = row.source_type.as_deref() == Some("aggregate-recall");
         ContentHashMatch {
             row: row_to_recall_result(row),
-            visible_for_aggregate,
+            project_matches,
             aggregate_recall_memory,
         }
     }))
@@ -844,6 +886,31 @@ fn link_aggregate_sources(
              (aggregate_memory_id, source_memory_id, agent_id, created_at)
              VALUES (?1, ?2, ?3, ?4)",
             params![aggregate_memory_id, source_memory_id, agent_id, now],
+        )?;
+    }
+    Ok(())
+}
+
+fn link_aggregate_evidence_sources(
+    conn: &Connection,
+    aggregate_memory_id: &str,
+    evidence_sources: &[AggregateEvidenceSource],
+    agent_id: &str,
+    now: &str,
+) -> Result<(), rusqlite::Error> {
+    for source in evidence_sources {
+        conn.execute(
+            "INSERT OR IGNORE INTO aggregate_evidence_sources
+             (aggregate_memory_id, source_kind, source_id, source_path, agent_id, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                aggregate_memory_id,
+                source.source_kind,
+                source.source_id,
+                source.source_path,
+                agent_id,
+                now
+            ],
         )?;
     }
     Ok(())
@@ -883,6 +950,7 @@ fn unsaved_aggregate_result(content: &str, key: &str, project: Option<&str>) -> 
         score: 1.0,
         source: "aggregate-recall".to_string(),
         source_id: Some(key.to_string()),
+        source_path: None,
         memory_type: "semantic".to_string(),
         tags: Some("aggregate,recall".to_string()),
         pinned: false,
@@ -904,10 +972,13 @@ fn resolve_aggregate_duplicate(
     content_hash: &str,
     answer: &str,
     source_memory_ids: &[String],
+    evidence_sources: &[AggregateEvidenceSource],
+    save_visibility: &str,
     now: &str,
 ) -> Result<Option<AggregateDuplicateResolution>, AggregateRecallError> {
-    if let Some(existing) = load_aggregate_by_key(conn, key, agent_id, project)? {
+    if let Some(existing) = load_aggregate_by_key(conn, key, agent_id, project, save_visibility)? {
         link_aggregate_sources(conn, &existing.id, source_memory_ids, agent_id, now)?;
+        link_aggregate_evidence_sources(conn, &existing.id, evidence_sources, agent_id, now)?;
         link_aggregate_query_hint(conn, &existing.id, agent_id, query, now)?;
         return Ok(Some(AggregateDuplicateResolution {
             row: existing,
@@ -920,7 +991,10 @@ fn resolve_aggregate_duplicate(
     else {
         return Ok(None);
     };
-    if !duplicate_content.visible_for_aggregate || !duplicate_content.aggregate_recall_memory {
+    if duplicate_content.row.visibility.as_deref() != Some(save_visibility)
+        || !duplicate_content.project_matches
+        || !duplicate_content.aggregate_recall_memory
+    {
         return Ok(Some(AggregateDuplicateResolution {
             row: unsaved_aggregate_result(answer, key, project),
             saved: false,
@@ -930,6 +1004,13 @@ fn resolve_aggregate_duplicate(
         conn,
         &duplicate_content.row.id,
         source_memory_ids,
+        agent_id,
+        now,
+    )?;
+    link_aggregate_evidence_sources(
+        conn,
+        &duplicate_content.row.id,
+        evidence_sources,
         agent_id,
         now,
     )?;
@@ -1157,6 +1238,7 @@ fn default_hybrid_recall(
             score: hit.score,
             source: hit.source.as_str().to_string(),
             source_id,
+            source_path: None,
             memory_type: hit.memory_type,
             tags,
             pinned: pinned == 1,
@@ -1270,6 +1352,8 @@ pub async fn aggregate_recall(
         .map(|row| row.id.clone())
         .collect::<Vec<_>>();
     let source_memory_ids = linkable_source_memory_ids(&evidence);
+    let evidence_sources = aggregate_evidence_sources(&evidence);
+    let save_visibility = aggregate_visibility_for_evidence(&evidence);
     if evidence.is_empty() {
         return Ok(finish_response(
             timings,
@@ -1320,7 +1404,7 @@ pub async fn aggregate_recall(
     let mut saved = false;
 
     if save_aggregate
-        && evidence_can_save_as_global_aggregate(&evidence)
+        && evidence_can_save_as_aggregate(&evidence)
         && aggregate_answer_can_be_saved(&answer)
     {
         let normalized = normalize_and_hash(&answer);
@@ -1334,6 +1418,8 @@ pub async fn aggregate_recall(
                 &normalized.hash,
                 &answer,
                 &source_memory_ids,
+                &evidence_sources,
+                save_visibility,
                 &now,
             )?;
             if let Some(duplicate) = duplicate {
@@ -1377,7 +1463,7 @@ pub async fn aggregate_recall(
                 idempotency_key: Some(&key),
                 runtime_path: None,
                 agent_id: &agent_id,
-                visibility: "global",
+                visibility: save_visibility,
                 scope: None,
                 created_at: &now,
                 updated_by: "signet",
@@ -1395,6 +1481,8 @@ pub async fn aggregate_recall(
                     &normalized.hash,
                     &answer,
                     &source_memory_ids,
+                    &evidence_sources,
+                    save_visibility,
                     &now,
                 )?;
                 deduped = true;
@@ -1413,6 +1501,7 @@ pub async fn aggregate_recall(
                 )));
             }
             link_aggregate_sources(conn, &id, &source_memory_ids, &agent_id, &now)?;
+            link_aggregate_evidence_sources(conn, &id, &evidence_sources, &agent_id, &now)?;
             link_aggregate_query_hint(conn, &id, &agent_id, &params.query, &now)?;
             enqueue_extraction_job(conn, &id, &now)?;
             saved = true;
