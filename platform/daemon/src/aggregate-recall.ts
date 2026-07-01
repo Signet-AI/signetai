@@ -751,7 +751,10 @@ export async function aggregateRecall(
 				: response.aggregate,
 		};
 	};
-	const first = await timings.timeAsync("aggregate_initial_recall", () => recall(params, cfg, deps.embedFn));
+	const aggregateRecallParams: RecallParams = { ...params, excludeAggregateRecallMemories: true };
+	const first = await timings.timeAsync("aggregate_initial_recall", () =>
+		recall(aggregateRecallParams, cfg, deps.embedFn),
+	);
 
 	if (!deps.router) {
 		const firstEvidence = uniqueEvidence(first.results);
@@ -790,6 +793,7 @@ export async function aggregateRecall(
 									...params,
 									query,
 									aggregate: false,
+									excludeAggregateRecallMemories: true,
 								},
 								cfg,
 								deps.embedFn,

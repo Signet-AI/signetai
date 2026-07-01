@@ -63,7 +63,7 @@ fn upsert_embedding_stamps_agent_and_syncs_vec_index() {
         .expect("read vec count");
     assert_eq!(vec_count, 1);
 
-    let results = vector_search(&conn, &vector, 5, None);
+    let results = vector_search(&conn, &vector, 5, None, false);
     assert_eq!(
         results.first().map(|(id, _)| id.as_str()),
         Some("mem-agent")

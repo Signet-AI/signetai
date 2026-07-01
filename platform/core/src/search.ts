@@ -32,6 +32,7 @@ export interface SearchOptions {
 export interface VectorSearchOptions {
 	limit?: number;
 	type?: "fact" | "preference" | "decision";
+	excludeAggregateRecall?: boolean;
 }
 
 export interface HybridSearchOptions {
@@ -134,20 +135,26 @@ export function vectorSearch(
 		// sqlite-vec uses MATCH syntax for vector search
 		// The query vector must be serialized as a blob
 		const queryBlob = new Float32Array(queryVector);
+		const maxK = options?.excludeAggregateRecall ? Math.max(limit, Math.min(limit * 8, 1000)) : limit;
+		let k = limit;
 
-		// vec0 KNN queries require `k = ?` in the WHERE clause
-		const params: unknown[] = [queryBlob, limit];
+		while (true) {
+			// vec0 KNN queries require `k = ?` in the WHERE clause
+			const params: unknown[] = [queryBlob, k];
 
-		// Build type filter if specified
-		let typeFilter = "";
-		if (options?.type) {
-			typeFilter = " AND m.type = ?";
-			params.push(options.type);
-		}
+			// Build type filter if specified
+			let typeFilter = "";
+			if (options?.type) {
+				typeFilter = " AND m.type = ?";
+				params.push(options.type);
+			}
+			if (options?.excludeAggregateRecall) {
+				typeFilter += " AND COALESCE(m.source_type, '') != 'aggregate-recall'";
+			}
 
-		// Query vec_embeddings virtual table, join with embeddings to get source_id
-		const rows = db
-			.prepare(`
+			// Query vec_embeddings virtual table, join with embeddings to get source_id
+			const rows = db
+				.prepare(`
       SELECT
         e.source_id,
         v.distance
@@ -157,14 +164,18 @@ export function vectorSearch(
       WHERE v.embedding MATCH ? AND k = ?${typeFilter}
       ORDER BY v.distance
     `)
-			.all(...params) as Array<{ source_id: string; distance: number }>;
+				.all(...params) as Array<{ source_id: string; distance: number }>;
 
-		// Convert cosine distance to similarity score
-		// sqlite-vec with distance_metric=cosine returns (1 - similarity)
-		// So similarity = 1 - distance
-		for (const row of rows) {
-			const similarity = 1 - row.distance;
-			results.push({ id: row.source_id, score: Math.max(0, similarity) });
+			results.length = 0;
+			// Convert cosine distance to similarity score
+			// sqlite-vec with distance_metric=cosine returns (1 - similarity)
+			// So similarity = 1 - distance
+			for (const row of rows.slice(0, limit)) {
+				const similarity = 1 - row.distance;
+				results.push({ id: row.source_id, score: Math.max(0, similarity) });
+			}
+			if (results.length >= limit || k >= maxK || (!options?.excludeAggregateRecall && rows.length < k)) break;
+			k = Math.min(k * 2, maxK);
 		}
 	} catch (e) {
 		// Vector search may fail if no embeddings exist or vec table unavailable

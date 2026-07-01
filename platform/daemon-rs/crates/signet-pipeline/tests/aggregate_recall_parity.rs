@@ -77,6 +77,7 @@ fn response(query: &str, results: Vec<RecallResult>) -> RecallResponse {
 #[derive(Default)]
 struct StaticRecall {
     calls: RefCell<Vec<String>>,
+    exclude_flags: RefCell<Vec<bool>>,
     by_query: HashMap<String, Vec<RecallResult>>,
 }
 
@@ -89,6 +90,10 @@ impl StaticRecall {
     fn calls(&self) -> Vec<String> {
         self.calls.borrow().clone()
     }
+
+    fn exclude_flags(&self) -> Vec<bool> {
+        self.exclude_flags.borrow().clone()
+    }
 }
 
 impl AggregateRecallProvider for StaticRecall {
@@ -99,6 +104,9 @@ impl AggregateRecallProvider for StaticRecall {
     ) -> BoxAggregateFuture<'a, Result<RecallResponse, AggregateRecallError>> {
         Box::pin(async move {
             self.calls.borrow_mut().push(params.query.clone());
+            self.exclude_flags
+                .borrow_mut()
+                .push(params.exclude_aggregate_recall_memories);
             let rows = self
                 .by_query
                 .get(&params.query)
@@ -249,6 +257,93 @@ async fn rejects_invalid_aggregate_budget() {
     .await
     .expect_err("invalid budgets should reject");
     assert!(matches!(err, AggregateRecallError::InvalidBudget));
+}
+
+#[tokio::test]
+async fn provider_recalls_are_marked_to_exclude_aggregate_created_memories() {
+    let conn = setup_conn();
+    let recall = StaticRecall::default()
+        .with("what happened", vec![row("mem-1", "First evidence")])
+        .with("follow up one", vec![row("mem-2", "Second evidence")])
+        .with("follow up two", vec![row("mem-3", "Third evidence")]);
+    let router = StaticRouter::default();
+
+    aggregate_recall(
+        &conn,
+        AggregateRecallParams {
+            query: "what happened".to_string(),
+            aggregate: true,
+            agent_id: Some("agent-a".to_string()),
+            ..AggregateRecallParams::default()
+        },
+        AggregateRecallDeps {
+            recall: Some(&recall),
+            router: Some(&router),
+            ..AggregateRecallDeps::default()
+        },
+    )
+    .await
+    .expect("aggregate result");
+
+    let flags = recall.exclude_flags();
+    assert!(!flags.is_empty());
+    assert!(flags.iter().all(|flag| *flag));
+}
+
+#[tokio::test]
+async fn default_aggregate_recall_excludes_aggregate_created_memories() {
+    let conn = setup_conn();
+    conn.execute(
+        "INSERT INTO memories (
+            id, content, type, source_type, source_id, agent_id, visibility, created_at, updated_at, updated_by, importance
+        ) VALUES (?1, ?2, 'fact', 'aggregate-recall', 'aggregate-recall:old', 'agent-a', 'global', datetime('now'), datetime('now'), 'test', 0.9)",
+        params!["aggregate-created-memory", "alpha stale aggregate-created summary"],
+    )
+    .expect("insert aggregate memory");
+    conn.execute(
+        "INSERT INTO memories (
+            id, content, type, agent_id, visibility, created_at, updated_at, updated_by, importance
+        ) VALUES (?1, ?2, 'fact', 'agent-a', 'global', datetime('now'), datetime('now'), 'test', 0.9)",
+        params!["ordinary-memory", "alpha ordinary source evidence"],
+    )
+    .expect("insert ordinary memory");
+
+    let router = StaticRouter::default();
+    let result = aggregate_recall(
+        &conn,
+        AggregateRecallParams {
+            query: "alpha".to_string(),
+            aggregate: true,
+            agent_id: Some("agent-a".to_string()),
+            read_policy: Some("isolated".to_string()),
+            ..AggregateRecallParams::default()
+        },
+        AggregateRecallDeps {
+            router: Some(&router),
+            ..AggregateRecallDeps::default()
+        },
+    )
+    .await
+    .expect("aggregate result");
+
+    assert_eq!(
+        result
+            .aggregate
+            .expect("aggregate metadata")
+            .source_memory_ids,
+        vec!["ordinary-memory"]
+    );
+    let prompts = router.prompts.borrow();
+    assert!(
+        prompts
+            .iter()
+            .any(|prompt| prompt.contains("ordinary source evidence"))
+    );
+    assert!(
+        !prompts
+            .iter()
+            .any(|prompt| prompt.contains("stale aggregate-created"))
+    );
 }
 
 #[tokio::test]

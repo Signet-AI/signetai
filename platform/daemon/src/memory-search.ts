@@ -90,6 +90,8 @@ export interface RecallParams {
 	recallMode?: string;
 	/** Internal escape hatch for hooks that must claim only injected rows. */
 	claimRecallResults?: boolean;
+	/** Internal aggregate-recall guard: derived aggregate memories may be returned by normal recall, but never as aggregate evidence. */
+	excludeAggregateRecallMemories?: boolean;
 	/** Internal escape hatch for hooks that must track only injected rows elsewhere. */
 	trackRecallAccess?: boolean;
 }
@@ -271,6 +273,9 @@ function buildFilterClause(params: RecallParams): FilterClause {
 	if (typeof params.importance_min === "number") {
 		parts.push("m.importance >= ?");
 		args.push(params.importance_min);
+	}
+	if (params.aggregate === true || params.excludeAggregateRecallMemories === true) {
+		parts.push("COALESCE(m.source_type, '') != 'aggregate-recall'");
 	}
 	if (params.since) {
 		parts.push("m.created_at >= ?");
@@ -1362,13 +1367,15 @@ export async function hybridRecall(
 	const vectorMap = new Map<string, number>();
 	if (queryVecF32) {
 		const queryVector = queryVecF32;
-		const vecLimit = needsPostFilter ? cfg.search.top_k * 2 : cfg.search.top_k;
+		const excludeAggregateRecall = params.aggregate === true || params.excludeAggregateRecallMemories === true;
+		const vecLimit = needsPostFilter || excludeAggregateRecall ? cfg.search.top_k * 2 : cfg.search.top_k;
 		try {
 			timings.time("vector_search", () => {
 				getDbAccessor().withReadDb((db) => {
 					const vecResults = vectorSearch(db as any, queryVector, {
 						limit: vecLimit,
 						type: params.type as "fact" | "preference" | "decision" | undefined,
+						excludeAggregateRecall,
 					});
 					for (const r of vecResults) {
 						vectorMap.set(r.id, r.score);

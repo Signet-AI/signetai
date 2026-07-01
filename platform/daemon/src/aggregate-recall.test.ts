@@ -785,6 +785,30 @@ memory:
 		expect(links.map((link) => link.source_memory_id)).toEqual(["mem-1"]);
 	});
 
+	it("marks every recall during aggregate synthesis to exclude aggregate-created memories", async () => {
+		const seen: Array<boolean | undefined> = [];
+		await aggregateRecall(
+			{
+				query: "what happened",
+				aggregate: true,
+				agentId: "agent-a",
+			},
+			loadMemoryConfig(dir),
+			{
+				router: new StaticRouter(),
+				embedFn: async () => null,
+				logger: quietLogger(),
+				hybridRecall: async (params: RecallParams) => {
+					seen.push(params.excludeAggregateRecallMemories);
+					return response(params.query, [row(`mem-${seen.length}`, "Real evidence")]);
+				},
+			},
+		);
+
+		expect(seen.length).toBeGreaterThan(0);
+		expect(seen.every((value) => value === true)).toBe(true);
+	});
+
 	it("does not use saved aggregate recall rows as aggregate evidence", async () => {
 		const router = new StaticRouter();
 		const result = await aggregateRecall(

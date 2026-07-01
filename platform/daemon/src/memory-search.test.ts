@@ -115,6 +115,58 @@ describe("hybridRecall", () => {
 		});
 	}
 
+	it("keeps aggregate-created memories out of aggregate recall only", async () => {
+		const now = new Date().toISOString();
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO memories (
+					id, content, type, source_type, source_id, agent_id, visibility, created_at, updated_at, updated_by
+				) VALUES (?, ?, 'fact', ?, ?, ?, 'global', ?, ?, 'test')`,
+			).run(
+				"aggregate-created-memory",
+				"alpha aggregate-created stale summary",
+				"aggregate-recall",
+				"aggregate-recall:old-key",
+				"agent-a",
+				now,
+				now,
+			);
+			db.prepare(
+				`INSERT INTO memories (
+					id, content, type, agent_id, visibility, created_at, updated_at, updated_by
+				) VALUES (?, ?, 'fact', ?, 'global', ?, ?, 'test')`,
+			).run("ordinary-memory", "alpha ordinary source evidence", "agent-a", now, now);
+		});
+
+		const normal = await hybridRecall(
+			{
+				query: "alpha",
+				keywordQuery: "alpha",
+				limit: 5,
+				agentId: "agent-a",
+				readPolicy: "isolated",
+			},
+			loadMemoryConfig(dir),
+			async () => null,
+		);
+		expect(normal.results.map((row) => row.id)).toContain("aggregate-created-memory");
+
+		const aggregate = await hybridRecall(
+			{
+				query: "alpha",
+				keywordQuery: "alpha",
+				limit: 5,
+				aggregate: true,
+				agentId: "agent-a",
+				readPolicy: "isolated",
+			},
+			loadMemoryConfig(dir),
+			async () => null,
+		);
+		expect(aggregate.results.map((row) => row.id)).not.toContain("aggregate-created-memory");
+		expect(aggregate.results.map((row) => row.id)).toContain("ordinary-memory");
+	});
+
 	it("keeps recall memory-only even when legacy expand is requested", async () => {
 		const now = new Date().toISOString();
 		getDbAccessor().withWriteTx((db) => {

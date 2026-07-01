@@ -155,6 +155,8 @@ pub struct AggregateRecallParams {
     pub read_policy: Option<String>,
     #[serde(default)]
     pub project: Option<String>,
+    #[serde(default)]
+    pub exclude_aggregate_recall_memories: bool,
 }
 
 impl AggregateRecallParams {
@@ -1193,6 +1195,7 @@ fn default_hybrid_recall(
             query: params.query.clone(),
             vector: None,
             limit: 10,
+            exclude_aggregate_recall: true,
             ..SearchOptions::default()
         },
     )?;
@@ -1200,7 +1203,7 @@ fn default_hybrid_recall(
     for hit in hits {
         let row = conn
             .query_row(
-                "SELECT source_id, tags, pinned, importance, who, project, created_at, visibility, scope
+                "SELECT source_id, tags, pinned, importance, who, project, created_at, visibility, scope, source_type
                  FROM memories WHERE id = ?1",
                 params![hit.id],
                 |row| {
@@ -1214,22 +1217,37 @@ fn default_hybrid_recall(
                         row.get::<_, String>(6)?,
                         row.get::<_, Option<String>>(7)?,
                         row.get::<_, Option<String>>(8)?,
+                        row.get::<_, Option<String>>(9)?,
                     ))
                 },
             )
             .optional()?;
-        let (source_id, tags, pinned, importance, who, project, created_at, visibility, scope) =
-            row.unwrap_or((
-                None,
-                None,
-                0,
-                hit.confidence,
-                None,
-                None,
-                Utc::now().to_rfc3339(),
-                Some("global".to_string()),
-                None,
-            ));
+        let (
+            source_id,
+            tags,
+            pinned,
+            importance,
+            who,
+            project,
+            created_at,
+            visibility,
+            scope,
+            source_type,
+        ) = row.unwrap_or((
+            None,
+            None,
+            0,
+            hit.confidence,
+            None,
+            None,
+            Utc::now().to_rfc3339(),
+            Some("global".to_string()),
+            None,
+            None,
+        ));
+        if source_type.as_deref() == Some("aggregate-recall") {
+            continue;
+        }
         results.push(RecallResult {
             id: hit.id,
             content_length: hit.content.len(),
@@ -1249,6 +1267,9 @@ fn default_hybrid_recall(
             visibility,
             scope,
         });
+        if results.len() >= 10 {
+            break;
+        }
     }
     let total_returned = results.len();
     Ok(RecallResponse {
@@ -1281,9 +1302,11 @@ pub async fn aggregate_recall(
         .unwrap_or_else(Utc::now)
         .to_rfc3339();
 
+    let mut initial_recall_params = params.clone();
+    initial_recall_params.exclude_aggregate_recall_memories = true;
     let first = timings
         .time_async("aggregate_initial_recall", || {
-            run_recall(conn, deps.recall, params.clone())
+            run_recall(conn, deps.recall, initial_recall_params.clone())
         })
         .await?;
 
@@ -1334,6 +1357,7 @@ pub async fn aggregate_recall(
                     let mut followup = params.clone();
                     followup.query = query;
                     followup.aggregate = false;
+                    followup.exclude_aggregate_recall_memories = true;
                     responses.push(run_recall(conn, deps.recall, followup).await?);
                 }
                 Ok::<_, AggregateRecallError>(responses)

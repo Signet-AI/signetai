@@ -650,6 +650,7 @@ pub async fn recall(
                 agent_id: Some(agent_id.as_str()),
                 read_policy: Some(read_policy.as_str()),
                 policy_group: policy_group.as_deref(),
+                exclude_aggregate_recall: false,
             };
 
             // Candidate collection order follows TS memory-search.ts:997/1162/1203/1261/1290/1333/1378.

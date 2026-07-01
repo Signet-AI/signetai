@@ -92,6 +92,7 @@ pub struct SearchOptions {
     pub min_score: f64,
     pub top_k: usize,
     pub memory_type: Option<String>,
+    pub exclude_aggregate_recall: bool,
 }
 
 impl Default for SearchOptions {
@@ -104,6 +105,7 @@ impl Default for SearchOptions {
             min_score: 0.1,
             top_k: 50,
             memory_type: None,
+            exclude_aggregate_recall: false,
         }
     }
 }
@@ -127,6 +129,7 @@ pub struct RecallFilter<'a> {
     pub agent_id: Option<&'a str>,
     pub read_policy: Option<&'a str>,
     pub policy_group: Option<&'a str>,
+    pub exclude_aggregate_recall: bool,
 }
 
 struct FilterClause {
@@ -177,6 +180,9 @@ fn build_filter(f: &RecallFilter) -> FilterClause {
     if let Some(project) = f.project {
         parts.push("m.project = ?".to_string());
         args.push(Box::new(project.to_string()));
+    }
+    if f.exclude_aggregate_recall {
+        parts.push("COALESCE(m.source_type, '') != 'aggregate-recall'".to_string());
     }
     if let Some(agent_id) = f.agent_id {
         match f.read_policy.unwrap_or("isolated") {
@@ -349,49 +355,67 @@ pub fn vector_search(
     query_vec: &[f32],
     limit: usize,
     memory_type: Option<&str>,
+    exclude_aggregate_recall: bool,
 ) -> Vec<(String, f64)> {
     let blob: Vec<u8> = query_vec.iter().flat_map(|f| f.to_le_bytes()).collect();
 
-    let sql = if memory_type.is_some() {
-        "SELECT e.source_id, v.distance
-         FROM vec_embeddings v
-         JOIN embeddings e ON v.id = e.id
-         JOIN memories m ON e.source_id = m.id
-         WHERE v.embedding MATCH ?1 AND k = ?2 AND m.type = ?3
-         ORDER BY v.distance"
+    let mut filters = Vec::new();
+    if memory_type.is_some() {
+        filters.push("m.type = ?".to_string());
+    }
+    if exclude_aggregate_recall {
+        filters.push("COALESCE(m.source_type, '') != 'aggregate-recall'".to_string());
+    }
+    let filter_sql = if filters.is_empty() {
+        String::new()
     } else {
+        format!(" AND {}", filters.join(" AND "))
+    };
+    let sql = format!(
         "SELECT e.source_id, v.distance
          FROM vec_embeddings v
          JOIN embeddings e ON v.id = e.id
          JOIN memories m ON e.source_id = m.id
-         WHERE v.embedding MATCH ?1 AND k = ?2
+         WHERE v.embedding MATCH ?1 AND k = ?2{filter_sql}
          ORDER BY v.distance"
-    };
+    );
 
     let result = (|| -> Result<Vec<(String, f64)>, rusqlite::Error> {
-        let mut stmt = conn.prepare(sql)?;
-
-        let collect = |row: &rusqlite::Row| -> rusqlite::Result<(String, f64)> {
-            Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))
-        };
-
-        let raw: Vec<(String, f64)> = if let Some(t) = memory_type {
-            stmt.query_map(params![blob, limit, t], collect)?
-                .filter_map(|r| r.ok())
-                .collect()
+        let max_k = if exclude_aggregate_recall {
+            limit.max((limit * 8).min(1000))
         } else {
-            stmt.query_map(params![blob, limit], collect)?
-                .filter_map(|r| r.ok())
-                .collect()
+            limit
         };
+        let mut k = limit;
+        let out = loop {
+            let mut stmt = conn.prepare(&sql)?;
+            let collect = |row: &rusqlite::Row| -> rusqlite::Result<(String, f64)> {
+                Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))
+            };
+            let raw: Vec<(String, f64)> = if let Some(t) = memory_type {
+                stmt.query_map(params![blob.clone(), k, t], collect)?
+                    .filter_map(|r| r.ok())
+                    .collect()
+            } else {
+                stmt.query_map(params![blob.clone(), k], collect)?
+                    .filter_map(|r| r.ok())
+                    .collect()
+            };
 
-        Ok(raw
-            .into_iter()
-            .map(|(id, dist)| {
-                let sim = (1.0 - dist).max(0.0);
-                (id, sim)
-            })
-            .collect())
+            let out = raw
+                .into_iter()
+                .take(limit)
+                .map(|(id, dist)| {
+                    let sim = (1.0 - dist).max(0.0);
+                    (id, sim)
+                })
+                .collect::<Vec<_>>();
+            if out.len() >= limit || k >= max_k || !exclude_aggregate_recall {
+                break out;
+            }
+            k = (k * 2).min(max_k);
+        };
+        Ok(out)
     })();
 
     match result {
@@ -411,34 +435,48 @@ pub fn vec_search_scored(
     filter: &RecallFilter,
 ) -> Vec<ScoredHit> {
     let blob: Vec<u8> = query_vec.iter().flat_map(|f| f.to_le_bytes()).collect();
-    let fc = build_filter(filter);
-    let sql = format!(
-        "SELECT e.source_id, v.distance
-         FROM vec_embeddings v
-         JOIN embeddings e ON v.id = e.id
-         JOIN memories m ON e.source_id = m.id
-         WHERE v.embedding MATCH ? AND k = ?{filter_sql}
-         ORDER BY v.distance",
-        filter_sql = fc.sql,
-    );
 
     let result = (|| -> Result<Vec<ScoredHit>, rusqlite::Error> {
-        let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
-        params.push(Box::new(blob));
-        params.push(Box::new(top_k as i64));
-        params.extend(fc.args);
-        let refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|b| b.as_ref()).collect();
+        let max_k = if filter.exclude_aggregate_recall {
+            top_k.max((top_k * 8).min(1000))
+        } else {
+            top_k
+        };
+        let mut k = top_k;
+        let out = loop {
+            let fc = build_filter(filter);
+            let sql = format!(
+                "SELECT e.source_id, v.distance
+                 FROM vec_embeddings v
+                 JOIN embeddings e ON v.id = e.id
+                 JOIN memories m ON e.source_id = m.id
+                 WHERE v.embedding MATCH ? AND k = ?{filter_sql}
+                 ORDER BY v.distance",
+                filter_sql = fc.sql,
+            );
+            let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+            params.push(Box::new(blob.clone()));
+            params.push(Box::new(k as i64));
+            params.extend(fc.args);
+            let refs: Vec<&dyn rusqlite::types::ToSql> =
+                params.iter().map(|b| b.as_ref()).collect();
 
-        let mut stmt = conn.prepare(&sql)?;
-        let rows = stmt.query_map(refs.as_slice(), |row| {
-            let dist = row.get::<_, f64>(1)?;
-            Ok(ScoredHit {
-                id: row.get(0)?,
-                score: (1.0 - dist).max(0.0),
-                source: SearchSource::Vector,
-            })
-        })?;
-        Ok(rows.filter_map(|r| r.ok()).collect())
+            let mut stmt = conn.prepare(&sql)?;
+            let rows = stmt.query_map(refs.as_slice(), |row| {
+                let dist = row.get::<_, f64>(1)?;
+                Ok(ScoredHit {
+                    id: row.get(0)?,
+                    score: (1.0 - dist).max(0.0),
+                    source: SearchSource::Vector,
+                })
+            })?;
+            let out = rows.filter_map(|r| r.ok()).take(top_k).collect::<Vec<_>>();
+            if out.len() >= top_k || k >= max_k || !filter.exclude_aggregate_recall {
+                break out;
+            }
+            k = (k * 2).min(max_k);
+        };
+        Ok(out)
     })();
 
     match result {
@@ -1803,12 +1841,34 @@ pub fn hybrid_search(conn: &Connection, opts: &SearchOptions) -> Result<Vec<Sear
 
     // Vector search
     let vec_results = match &opts.vector {
-        Some(v) => vector_search(conn, v, top_k, opts.memory_type.as_deref()),
+        Some(v) => vector_search(
+            conn,
+            v,
+            top_k,
+            opts.memory_type.as_deref(),
+            opts.exclude_aggregate_recall,
+        ),
         None => Vec::new(),
     };
 
     // Keyword search
-    let kw_results = keyword_search(conn, &opts.query, top_k);
+    let kw_results = if opts.exclude_aggregate_recall {
+        fts_search(
+            conn,
+            &opts.query,
+            top_k,
+            &RecallFilter {
+                memory_type: opts.memory_type.as_deref(),
+                exclude_aggregate_recall: true,
+                ..RecallFilter::default()
+            },
+        )?
+        .into_iter()
+        .map(|hit| (hit.id, hit.score))
+        .collect()
+    } else {
+        keyword_search(conn, &opts.query, top_k)
+    };
 
     // Build score maps
     let vec_map: HashMap<&str, f64> = vec_results
@@ -2409,7 +2469,7 @@ mod tests {
 
         // Search with a very similar vector
         let query: Vec<f32> = (0..768).map(|i| (i as f32) / 768.0 + 0.001).collect();
-        let results = vector_search(&conn, &query, 10, None);
+        let results = vector_search(&conn, &query, 10, None, false);
 
         assert!(!results.is_empty());
         assert_eq!(results[0].0, "m1");
