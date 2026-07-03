@@ -34,9 +34,10 @@ function skillTranscript(sessionId: string, toolUseId: string, skillName: string
 async function waitForSkillInvocation(toolUseId: string): Promise<{ agent_id: string } | undefined> {
 	for (let i = 0; i < 20; i++) {
 		const row = getDbAccessor?.().withReadDb(
-			(db) => db.prepare("SELECT agent_id FROM skill_invocations WHERE tool_use_id = ?").get(toolUseId) as
-				| { agent_id: string }
-				| undefined,
+			(db) =>
+				db.prepare("SELECT agent_id FROM skill_invocations WHERE tool_use_id = ?").get(toolUseId) as
+					| { agent_id: string }
+					| undefined,
 		);
 		if (row) return row;
 		await new Promise((resolve) => setTimeout(resolve, 10));
@@ -76,7 +77,8 @@ memory:
 		app = daemon.app;
 	});
 
-	afterAll(() => {
+	afterAll(async () => {
+		await new Promise((resolve) => setTimeout(resolve, 50));
 		if (prev === undefined) {
 			Reflect.deleteProperty(process.env as Record<string, string | undefined>, "SIGNET_PATH");
 		} else {

@@ -113,6 +113,7 @@ describe("recordSkillsFromTranscript", () => {
 	it("skips oversized transcript files", () => {
 		const oversizedPath = join(tmpdir(), `transcript-oversized-${crypto.randomUUID()}.jsonl`);
 		try {
+			writeFileSync(oversizedPath, "");
 			truncateSync(oversizedPath, MAX_TRANSCRIPT_SCAN_BYTES + 1);
 			recordSkillsFromTranscript({
 				transcriptPath: oversizedPath,
