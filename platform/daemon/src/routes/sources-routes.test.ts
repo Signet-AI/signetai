@@ -70,8 +70,9 @@ describe("Sources routes", () => {
 				expect(sources).toHaveLength(1);
 				expect(sources[0]?.sourceId).toStartWith("obsidian:");
 				expect(bridgeOptions.yieldEveryFiles).toBe(1);
-				expect(bridgeOptions.embeddingConfig).toBeUndefined();
-				expect(bridgeOptions.fetchEmbedding).toBeUndefined();
+				expect(bridgeOptions.embeddingConfig).toBeDefined();
+				expect(bridgeOptions.embeddingConfig?.provider).toBe("native");
+				expect(bridgeOptions.fetchEmbedding).toBeDefined();
 				expect(bridgeOptions.sourceCleanupEnabled).toBe(false);
 				expect(bridgeOptions.sourceGraphEnabled).toBe(false);
 				return {

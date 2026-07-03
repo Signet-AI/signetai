@@ -51,7 +51,11 @@ import { closeInferenceProviderResolver, getInferenceProvider, initInferenceProv
 import { logger } from "./logger";
 import { type ResolvedMemoryConfig, loadMemoryConfig, shouldWarnGraphExtractionWritesDisabled } from "./memory-config";
 import { registerGlobalMiddleware } from "./middleware";
-import { type NativeMemoryBridgeHandle, startNativeMemoryBridge } from "./native-memory-sources";
+import {
+	type NativeMemoryBridgeHandle,
+	resolveEmbeddingBridgeOptions,
+	startNativeMemoryBridge,
+} from "./native-memory-sources";
 import { resolveEmbeddedWorkerPath } from "./native-runtime-assets";
 import {
 	DEFAULT_RETENTION,
@@ -1770,6 +1774,7 @@ async function main() {
 				pollIntervalMs: 0,
 				sourceCleanupEnabled: false,
 				sourceGraphEnabled: false,
+				...resolveEmbeddingBridgeOptions(memoryCfg.embedding, fetchEmbedding),
 				onFileIndexed: (event) => {
 					const sourceId = event.source.sourceId;
 					if (!sourceId) return;

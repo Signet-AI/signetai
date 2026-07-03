@@ -70,6 +70,19 @@ export interface NativeMemoryBridgeOptions {
 	readonly onFileIndexed?: (event: NativeMemoryFileIndexEvent) => void;
 }
 
+/**
+ * Resolve the embeddingConfig/fetchEmbedding bridge options from a memory
+ * config, so source providers actually get their content chunked and
+ * embedded after sync instead of only writing memory_artifacts rows.
+ */
+export function resolveEmbeddingBridgeOptions(
+	embeddingCfg: EmbeddingConfig,
+	fetchEmbedding: SourceEmbeddingFetch,
+): Pick<NativeMemoryBridgeOptions, "embeddingConfig" | "fetchEmbedding"> {
+	if (embeddingCfg.provider === "none") return {};
+	return { embeddingConfig: embeddingCfg, fetchEmbedding };
+}
+
 export interface NativeMemoryFileIndexEvent {
 	readonly source: NativeMemorySource;
 	readonly filePath: string;

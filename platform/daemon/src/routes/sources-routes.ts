@@ -18,9 +18,12 @@ import {
 import type { Hono } from "hono";
 import { resolveDaemonAgentId } from "../agent-id";
 import { type ReadDb, getDbAccessor } from "../db-accessor";
+import { fetchEmbedding } from "../embedding-fetch";
+import { loadMemoryConfig } from "../memory-config";
 import {
 	type NativeMemoryBridgeHandle,
 	purgeNativeMemorySourceArtifacts,
+	resolveEmbeddingBridgeOptions,
 	startNativeMemoryBridge,
 } from "../native-memory-sources";
 import {
@@ -391,12 +394,14 @@ async function runSourceIndexJob(input: SourceIndexJobInput, job: SourceIndexJob
 			return;
 		}
 		if (!provider.toNativeSource) throw new Error(`Source provider has no sync implementation: ${input.source.kind}`);
+		const memoryCfg = loadMemoryConfig(input.agentsDir);
 		bridge = input.startBridge([provider.toNativeSource(input.source)], {
 			pollIntervalMs: 0,
 			agentsDir: input.agentsDir,
 			yieldEveryFiles: 1,
 			sourceCleanupEnabled: false,
 			sourceGraphEnabled: false,
+			...resolveEmbeddingBridgeOptions(memoryCfg.embedding, fetchEmbedding),
 			onFileIndexed: (event) => {
 				if (!isCurrentSourceIndexJob(input.source.id, job.id)) return;
 				updateSourceIndexJobProgress(input.source.id, job.id, {

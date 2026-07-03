@@ -12,6 +12,7 @@ import {
 	obsidianNativeMemorySource,
 	purgeNativeMemorySourceArtifacts,
 	removeNativeMemoryFile,
+	resolveEmbeddingBridgeOptions,
 	startNativeMemoryBridge,
 } from "./native-memory-sources";
 
@@ -1138,5 +1139,32 @@ describe("native memory sources", () => {
 		} finally {
 			await handle.close();
 		}
+	});
+});
+
+describe("resolveEmbeddingBridgeOptions", () => {
+	const fetchEmbedding = async () => [1, 2, 3];
+
+	it("wires embeddingConfig and fetchEmbedding through when an embedding provider is configured", () => {
+		const options = resolveEmbeddingBridgeOptions(
+			{ provider: "native", model: "test", dimensions: 3, base_url: "" },
+			fetchEmbedding,
+		);
+		expect(options.embeddingConfig).toEqual({ provider: "native", model: "test", dimensions: 3, base_url: "" });
+		expect(options.fetchEmbedding).toBe(fetchEmbedding);
+	});
+
+	it("omits embeddingConfig and fetchEmbedding when the embedding provider is 'none'", () => {
+		// Regression guard: source-sync callers (daemon startup, manual re-sync
+		// routes) must skip embedding wiring when embeddings are disabled, but
+		// must NOT skip it merely because a caller forgot to pass the config.
+		// This previously caused Obsidian (and other) sources to be recorded in
+		// memory_artifacts but never chunked/embedded.
+		const options = resolveEmbeddingBridgeOptions(
+			{ provider: "none", model: "", dimensions: 0, base_url: "" },
+			fetchEmbedding,
+		);
+		expect(options.embeddingConfig).toBeUndefined();
+		expect(options.fetchEmbedding).toBeUndefined();
 	});
 });
