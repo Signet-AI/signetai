@@ -105,6 +105,28 @@ describe("recordSkillInvocation", () => {
 		expect(metaAfter?.use_count).toBe(2);
 	});
 
+	it("deduplicates harness invocations per agent", () => {
+		const base = {
+			skillName: "web-search",
+			source: "agent" as const,
+			latencyMs: 10,
+			success: true,
+			harness: "claude-code",
+			sessionId: "sess-shared",
+			toolUseId: "tool-use-shared",
+		};
+
+		recordSkillInvocation({ ...base, agentId: "agent-one" });
+		recordSkillInvocation({ ...base, agentId: "agent-two" });
+
+		const invCount = (
+			db
+				.prepare("SELECT COUNT(*) AS cnt FROM skill_invocations WHERE session_id = ? AND tool_use_id = ?")
+				.get("sess-shared", "tool-use-shared") as { cnt: number }
+		).cnt;
+		expect(invCount).toBe(2);
+	});
+
 	it("keeps historical rows even when skill metadata is missing", () => {
 		recordSkillInvocation({
 			skillName: "browser-use",

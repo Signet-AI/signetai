@@ -6,8 +6,8 @@ import type { MigrationDb } from "./index";
  * Migration 053 created skill_invocations for Signet's own scheduler/api
  * skill runs. This extends it to capture skill use emitted by external agent
  * harnesses (claude-code, opencode, ...) as source='agent' rows, keyed and
- * deduped on (harness, session_id, tool_use_id) so a harness hook that fires
- * or retries records each invocation once.
+ * deduped on (agent_id, harness, session_id, tool_use_id) so a harness hook
+ * that fires or retries records each invocation once per scoped agent.
  *
  * Idempotent: guards each ADD COLUMN with a pragma check (SQLite ALTER has no
  * IF NOT EXISTS) and uses IF NOT EXISTS on indexes, so it is a no-op on DBs
@@ -29,9 +29,12 @@ export function up(db: MigrationDb): void {
 
 	// Dedupe key for harness-emitted rows. Partial so Signet-internal
 	// scheduler/api rows (which have no harness/session/tool ids) never collide.
+	// Drop first to repair any dev database that ran an earlier PR draft with
+	// the same index name but without agent_id in the key.
+	db.exec("DROP INDEX IF EXISTS idx_skill_inv_dedupe");
 	db.exec(`
-		CREATE UNIQUE INDEX IF NOT EXISTS idx_skill_inv_dedupe
-		ON skill_invocations(harness, session_id, tool_use_id)
+		CREATE UNIQUE INDEX idx_skill_inv_dedupe
+		ON skill_invocations(agent_id, harness, session_id, tool_use_id)
 		WHERE harness IS NOT NULL AND session_id IS NOT NULL AND tool_use_id IS NOT NULL
 	`);
 	db.exec("CREATE INDEX IF NOT EXISTS idx_skill_inv_harness ON skill_invocations(harness, created_at)");

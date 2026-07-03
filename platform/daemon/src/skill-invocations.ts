@@ -11,7 +11,7 @@ export interface SkillInvocationRecord {
 	readonly latencyMs: number;
 	readonly success: boolean;
 	readonly errorText?: string;
-	// Harness-emitted rows (source='agent'). Deduped on (harness, sessionId, toolUseId).
+	// Harness-emitted rows (source='agent'). Deduped on (agentId, harness, sessionId, toolUseId).
 	readonly harness?: string;
 	readonly sessionId?: string;
 	readonly toolUseId?: string;
@@ -48,7 +48,7 @@ export function recordSkillInvocation(record: SkillInvocationRecord): void {
 	try {
 		getDbAccessor().withWriteTx((db) => {
 			// OR IGNORE lets the partial-unique idx_skill_inv_dedupe drop a repeated
-			// harness event (same harness/session/tool_use_id). Internal rows have
+			// harness event (same agent/harness/session/tool_use_id). Internal rows have
 			// null ids, never match the partial index, and always insert.
 			db.prepare(
 				`INSERT OR IGNORE INTO skill_invocations

@@ -5,7 +5,7 @@
  * Walks Claude Code transcripts (~/.claude/projects/**\/*.jsonl), finds `Skill`
  * tool_use entries, pairs each with its tool_result for success + latency, and
  * POSTs to the daemon's /api/hooks/skill-invocation. Dedupe (the partial-unique
- * index on harness/session_id/tool_use_id) makes re-runs safe.
+ * index on agent_id/harness/session_id/tool_use_id) makes re-runs safe.
  *
  * Targets either a running daemon (--port, default) or a SQLite file directly
  * (--db, for offline backfill while the daemon keeps running — WAL-safe).
@@ -28,6 +28,10 @@ function arg(flag: string): string | undefined {
 
 function resolveAgentId(): string {
 	return arg("--agent-id")?.trim() || process.env.SIGNET_AGENT_ID?.trim() || "default";
+}
+
+function readAuthToken(): string | undefined {
+	return process.env.SIGNET_API_KEY?.trim() || process.env.SIGNET_TOKEN?.trim() || undefined;
 }
 
 function walk(dir: string): string[] {
@@ -75,6 +79,7 @@ async function main(): Promise<void> {
 	const dry = process.argv.includes("--dry");
 	const agentId = resolveAgentId();
 	const url = `http://127.0.0.1:${port}/api/hooks/skill-invocation`;
+	const authToken = readAuthToken();
 
 	const files = walk(dir);
 	console.log(`Scanning ${files.length} transcripts in ${dir} for agent ${agentId}`);
@@ -106,14 +111,20 @@ async function main(): Promise<void> {
 	let sent = 0;
 	for (const record of records) {
 		try {
+			const headers: Record<string, string> = { "Content-Type": "application/json" };
+			if (authToken) headers.Authorization = `Bearer ${authToken}`;
 			const res = await fetch(url, {
 				method: "POST",
-				headers: { "Content-Type": "application/json" },
+				headers,
 				body: JSON.stringify({ ...record, agentId }),
 			});
-			if (res.ok) sent++;
-		} catch {
-			// daemon down / transient — skip, re-run is safe
+			if (res.ok) {
+				sent++;
+			} else {
+				console.warn(`POST ${url} failed with HTTP ${res.status}`);
+			}
+		} catch (err) {
+			console.warn(`POST ${url} failed: ${err instanceof Error ? err.message : String(err)}`);
 		}
 	}
 	console.log(`Posted ${sent}/${records.length} to ${url}`);

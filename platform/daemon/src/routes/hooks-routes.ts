@@ -379,7 +379,21 @@ function registerSessionEnd(app: Hono): void {
 			const sessionKey = body.sessionKey || body.sessionId;
 			const conflict = skipConflictingSessionEnd(sessionKey, runtimePath);
 			if (conflict) return c.json(conflict);
-			const agentId = resolveAgentId({ agentId: parseOptionalString(body.agentId), sessionKey });
+			const transcriptPath = parseOptionalString(body.transcriptPath);
+			let agentId = resolveAgentId({ agentId: parseOptionalString(body.agentId), sessionKey });
+			if (transcriptPath) {
+				const denied = await requirePermission("remember", authConfig)(c, () => Promise.resolve());
+				if (denied) return denied;
+				const scopedAgent = resolveScopedAgentId(c, agentId);
+				if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+				const sessionError = validateSessionAgentBinding(c, sessionKey, scopedAgent.agentId, {
+					requireExisting: false,
+					context: "sessionKey",
+				});
+				if (sessionError) return c.json({ error: sessionError }, 403);
+				agentId = scopedAgent.agentId;
+				body.agentId = agentId;
+			}
 			const duplicate = claimAutomaticSessionOrSkip(sessionKey, runtimePath, agentId, "session-end", {
 				memoriesSaved: 0,
 			});
@@ -397,7 +411,6 @@ function registerSessionEnd(app: Hono): void {
 					markSessionEnded(sessionKey, runtimePath);
 					removeAgentPresence(sessionKey);
 				}
-				const transcriptPath = parseOptionalString(body.transcriptPath);
 				if (transcriptPath) {
 					// recordSkillsFromTranscript is throw-proof by contract — safe in setImmediate.
 					setImmediate(() =>
@@ -421,7 +434,7 @@ function registerSessionEnd(app: Hono): void {
 
 // Harness-emitted skill invocations (claude-code PostToolUse, opencode
 // tool.execute.after, ...). Records source='agent' rows deduped on
-// (harness, sessionId, toolUseId) so a re-fired hook records once.
+// (agentId, harness, sessionId, toolUseId) so a re-fired hook records once.
 function registerSkillInvocation(app: Hono): void {
 	app.post("/api/hooks/skill-invocation", async (c) => {
 		if (isInternalCall(c)) {
@@ -687,7 +700,20 @@ function registerPreCompaction(app: Hono): void {
 			const runtimePath = resolveRuntimePath(c, body);
 			if (runtimePath) body.runtimePath = runtimePath;
 
-			const agentId = resolveAgentId({ agentId: parseOptionalString(body.agentId), sessionKey: body.sessionKey });
+			let agentId = resolveAgentId({ agentId: parseOptionalString(body.agentId), sessionKey: body.sessionKey });
+			if (transcriptPath) {
+				const denied = await requirePermission("remember", authConfig)(c, () => Promise.resolve());
+				if (denied) return denied;
+				const scopedAgent = resolveScopedAgentId(c, agentId);
+				if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+				const sessionError = validateSessionAgentBinding(c, body.sessionKey, scopedAgent.agentId, {
+					requireExisting: false,
+					context: "sessionKey",
+				});
+				if (sessionError) return c.json({ error: sessionError }, 403);
+				agentId = scopedAgent.agentId;
+				body.agentId = agentId;
+			}
 			const duplicate = claimAutomaticSessionOrSkip(body.sessionKey, runtimePath, agentId, "pre-compaction", {
 				guidelines: "",
 				instructions: "",

@@ -108,20 +108,23 @@ fn adds_harness_columns_and_dedupe_index_to_skill_invocations() {
         .expect("query dedupe index");
     assert!(index_exists, "idx_skill_inv_dedupe should exist");
 
-    // Partial-unique dedupe: the same (harness, session_id, tool_use_id) inserts once.
+    // Partial-unique dedupe: the same (agent_id, harness, session_id, tool_use_id) inserts once.
     let insert = "INSERT OR IGNORE INTO skill_invocations
         (id, skill_name, agent_id, source, latency_ms, success, created_at, harness, session_id, tool_use_id)
-        VALUES (?1, 'caveman', 'default', 'agent', 0, 1, '2026-06-01T00:00:00Z', 'claude-code', 's1', 't1')";
-    conn.execute(insert, ["row-a"]).expect("first insert");
-    conn.execute(insert, ["row-b"])
+        VALUES (?1, 'caveman', ?2, 'agent', 0, 1, '2026-06-01T00:00:00Z', 'claude-code', 's1', 't1')";
+    conn.execute(insert, ("row-a", "agent-a"))
+        .expect("first insert");
+    conn.execute(insert, ("row-b", "agent-a"))
         .expect("second insert ignored");
+    conn.execute(insert, ("row-c", "agent-b"))
+        .expect("second agent insert succeeds");
     let count: i64 = conn
         .query_row("SELECT COUNT(*) FROM skill_invocations", [], |row| {
             row.get(0)
         })
         .expect("count rows");
     assert_eq!(
-        count, 1,
-        "dedupe should drop the repeated harness invocation"
+        count, 2,
+        "dedupe should drop repeated harness invocations per agent"
     );
 }

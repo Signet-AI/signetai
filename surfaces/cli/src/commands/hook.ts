@@ -263,8 +263,8 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 			const sessionContext = pickString(input?.session_context, input?.sessionContext);
 			// Forward the transcript path so the daemon can run its skill scan at
 			// compaction as a crash-resilient checkpoint (SessionEnd does the same).
-			// Re-scanning the same transcript is deduped on (harness, session_id,
-			// tool_use_id), so the checkpoint can't double-count.
+			// Re-scanning the same transcript is deduped on (agent_id, harness,
+			// session_id, tool_use_id), so the checkpoint can't double-count.
 			const transcriptPath = pickString(input?.transcript_path, input?.transcriptPath);
 			const nativeAgentId = options.harness === "claude-code" ? pickString(input?.agent_id) : "";
 			const agentId = pickString(
