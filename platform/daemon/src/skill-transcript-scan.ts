@@ -10,6 +10,7 @@ export function recordSkillsFromTranscript(args: {
 	readonly harness: string;
 	readonly agentId: string;
 	readonly origin?: string; // default "scan"
+	readonly expectedSessionId?: string;
 }): void {
 	if (args.transcriptPath.trim().length === 0) return;
 
@@ -44,7 +45,12 @@ export function recordSkillsFromTranscript(args: {
 		const { records, skipped } = parseTranscriptSkills(content);
 		const origin = args.origin ?? "scan";
 
+		let skippedSessionMismatch = 0;
 		for (const rec of records) {
+			if (args.expectedSessionId && rec.sessionId !== args.expectedSessionId) {
+				skippedSessionMismatch++;
+				continue;
+			}
 			recordSkillInvocation({
 				skillName: rec.skillName,
 				agentId: args.agentId,
@@ -52,7 +58,7 @@ export function recordSkillsFromTranscript(args: {
 				latencyMs: rec.latencyMs,
 				success: rec.success,
 				harness: args.harness,
-				sessionId: rec.sessionId,
+				sessionId: rec.sessionId || args.expectedSessionId,
 				toolUseId: rec.toolUseId,
 				cwd: rec.cwd,
 				args: rec.args,
@@ -63,8 +69,9 @@ export function recordSkillsFromTranscript(args: {
 
 		logger.debug("skills", "Transcript skill scan complete", {
 			path: args.transcriptPath,
-			records: records.length,
+			records: records.length - skippedSessionMismatch,
 			skipped,
+			skippedSessionMismatch,
 		});
 	} catch (err) {
 		logger.warn("skills", "Transcript skill scan failed (non-fatal)", err instanceof Error ? err : undefined);

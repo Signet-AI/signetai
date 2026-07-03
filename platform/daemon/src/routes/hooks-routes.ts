@@ -191,6 +191,17 @@ function parseIsoTimestamp(value: unknown): { value?: string; error?: string } {
 	return { value: new Date(ms).toISOString() };
 }
 
+function parseOptionalNonNegativeInt(value: unknown): number | undefined {
+	if (typeof value === "number") {
+		return Number.isInteger(value) && value >= 0 ? value : undefined;
+	}
+	if (typeof value !== "string") return undefined;
+	const text = value.trim();
+	if (!/^\d+$/.test(text)) return undefined;
+	const parsed = Number(text);
+	return Number.isSafeInteger(parsed) ? parsed : undefined;
+}
+
 // Guard against recursive hook calls from spawned agent contexts
 function isInternalCall(c: Context): boolean {
 	return c.req.header("x-signet-no-hooks") === "1";
@@ -425,7 +436,13 @@ function registerSessionEnd(app: Hono): void {
 				if (transcriptPath) {
 					// recordSkillsFromTranscript is throw-proof by contract — safe in setImmediate.
 					setImmediate(() =>
-						recordSkillsFromTranscript({ transcriptPath, harness: body.harness, agentId, origin: "scan" }),
+						recordSkillsFromTranscript({
+							transcriptPath,
+							harness: body.harness,
+							agentId,
+							origin: "scan",
+							expectedSessionId: sessionKey,
+						}),
 					);
 				}
 				return c.json(result);
@@ -463,6 +480,9 @@ function registerSkillInvocation(app: Hono): void {
 			const createdAt = parseIsoTimestamp(body.createdAt);
 			if (createdAt.error) return c.json({ error: createdAt.error }, 400);
 			const sessionKey = parseOptionalString(body.sessionKey ?? body.sessionId);
+			const runtimePath = resolveRuntimePath(c, { runtimePath: parseOptionalString(body.runtimePath) });
+			const conflict = checkSessionClaim(c, sessionKey, runtimePath);
+			if (conflict) return conflict;
 			const requestedAgentId = resolveAgentId({ agentId: parseOptionalString(body.agentId), sessionKey });
 			const denied = await requirePermission("remember", authConfig)(c, () => Promise.resolve());
 			if (denied) return denied;
@@ -474,11 +494,18 @@ function registerSkillInvocation(app: Hono): void {
 			});
 			if (sessionError) return c.json({ error: sessionError }, 403);
 
+			const rawLatencyMs = body.latencyMs;
+			const latencyMs =
+				rawLatencyMs === undefined || rawLatencyMs === null ? 0 : parseOptionalNonNegativeInt(rawLatencyMs);
+			if (latencyMs === undefined) {
+				return c.json({ error: "latencyMs must be a non-negative integer" }, 400);
+			}
+
 			recordSkillInvocation({
 				skillName,
 				agentId: scopedAgent.agentId,
 				source: "agent",
-				latencyMs: parseOptionalInt(body.latencyMs) ?? 0,
+				latencyMs,
 				success: parseOptionalBoolean(body.success) ?? true,
 				errorText: parseOptionalString(body.errorText),
 				harness,
@@ -741,7 +768,13 @@ function registerPreCompaction(app: Hono): void {
 			const result = handlePreCompaction(body);
 			if (transcriptPath) {
 				setImmediate(() =>
-					recordSkillsFromTranscript({ transcriptPath, harness: body.harness, agentId, origin: "scan" }),
+					recordSkillsFromTranscript({
+						transcriptPath,
+						harness: body.harness,
+						agentId,
+						origin: "scan",
+						expectedSessionId: body.sessionKey,
+					}),
 				);
 			}
 			return c.json(result);

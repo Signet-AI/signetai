@@ -309,6 +309,43 @@ memory:
 		}
 	});
 
+	it("rejects skill invocation posts from a conflicting runtime path", async () => {
+		const sessionKey = "duplicate-skill-invocation-runtime";
+		try {
+			const first = await app.request("/api/hooks/user-prompt-submit", {
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+					"x-signet-runtime-path": "plugin",
+				},
+				body: JSON.stringify({
+					harness: "opencode",
+					userMessage: "deploy checklist",
+					sessionKey,
+				}),
+			});
+			expect(first.status).toBe(200);
+
+			const duplicate = await app.request("/api/hooks/skill-invocation", {
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+					"x-signet-runtime-path": "legacy",
+				},
+				body: JSON.stringify({
+					harness: "claude-code",
+					skillName: "web-search",
+					sessionKey,
+					toolUseId: "toolu_conflict",
+				}),
+			});
+
+			expect(duplicate.status).toBe(409);
+		} finally {
+			releaseSession?.(sessionKey);
+		}
+	});
+
 	it("rejects malformed skill invocation timestamps", async () => {
 		const resp = await app.request("/api/hooks/skill-invocation", {
 			method: "POST",
@@ -322,6 +359,21 @@ memory:
 
 		expect(resp.status).toBe(400);
 		expect(await resp.json()).toMatchObject({ error: "createdAt must be an ISO timestamp" });
+	});
+
+	it("rejects malformed skill invocation latency", async () => {
+		const resp = await app.request("/api/hooks/skill-invocation", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				harness: "claude-code",
+				skillName: "web-search",
+				latencyMs: "123abc",
+			}),
+		});
+
+		expect(resp.status).toBe(400);
+		expect(await resp.json()).toMatchObject({ error: "latencyMs must be a non-negative integer" });
 	});
 
 	it("records session-end transcript skill scans under the session agent scope", async () => {

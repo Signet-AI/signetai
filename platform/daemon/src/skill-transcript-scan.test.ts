@@ -93,6 +93,54 @@ describe("recordSkillsFromTranscript", () => {
 		expect(ids).not.toContain("toolu_CCC");
 	});
 
+	it("skips records from transcripts that do not match the expected session", () => {
+		recordSkillsFromTranscript({
+			transcriptPath: fixturePath,
+			harness: "claude-code",
+			agentId: "default",
+			origin: "scan",
+			expectedSessionId: "different-session",
+		});
+
+		const { n } = db.prepare("SELECT COUNT(*) AS n FROM skill_invocations").get() as { n: number };
+		expect(n).toBe(0);
+	});
+
+	it("skips records missing session ids when a session is expected", () => {
+		const missingSessionPath = join(tmpdir(), `transcript-missing-session-${crypto.randomUUID()}.jsonl`);
+		try {
+			writeFileSync(
+				missingSessionPath,
+				[
+					JSON.stringify({
+						timestamp: "2024-01-01T00:00:00.000Z",
+						message: {
+							content: [
+								{ type: "tool_use", name: "Skill", id: "toolu_missing_session", input: { skill: "web-search" } },
+							],
+						},
+					}),
+					JSON.stringify({
+						timestamp: "2024-01-01T00:00:01.000Z",
+						message: { content: [{ type: "tool_result", tool_use_id: "toolu_missing_session", is_error: false }] },
+					}),
+				].join("\n"),
+			);
+			recordSkillsFromTranscript({
+				transcriptPath: missingSessionPath,
+				harness: "claude-code",
+				agentId: "default",
+				origin: "scan",
+				expectedSessionId: "sess-scan-1",
+			});
+
+			const { n } = db.prepare("SELECT COUNT(*) AS n FROM skill_invocations").get() as { n: number };
+			expect(n).toBe(0);
+		} finally {
+			rmSync(missingSessionPath, { force: true });
+		}
+	});
+
 	it("skips non-file transcript paths", () => {
 		const dirPath = join(tmpdir(), `transcript-dir-${crypto.randomUUID()}`);
 		mkdirSync(dirPath);

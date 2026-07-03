@@ -109,7 +109,7 @@ export function parseTranscriptSkills(content: string): { records: ParsedSkillIn
 		}
 		// latencyMs is wall-clock time between message timestamps; includes any
 		// idle/queue gap before the result message — not pure tool exec time.
-		const latencyMs = result.at > use.at ? result.at - use.at : 0;
+		const latencyMs = use.at > 0 && result.at >= use.at ? result.at - use.at : 0;
 		records.push({
 			skillName: use.skillName,
 			sessionId: use.sessionId,

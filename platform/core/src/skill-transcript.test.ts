@@ -278,6 +278,25 @@ describe("parseTranscriptSkills", () => {
 		expect(records.length).toBe(2);
 		expect(skipped).toBe(1);
 	});
+
+	test("uses zero latency when the tool_use timestamp is invalid", () => {
+		const content = [
+			JSON.stringify({
+				timestamp: "not-a-date",
+				sessionId: "sess-invalid-time",
+				message: {
+					content: [{ type: "tool_use", id: "toolu_invalid_time", name: "Skill", input: { skill: "web-search" } }],
+				},
+			}),
+			JSON.stringify({
+				timestamp: "2024-01-01T00:00:01.000Z",
+				sessionId: "sess-invalid-time",
+				message: { content: [{ type: "tool_result", tool_use_id: "toolu_invalid_time", is_error: false }] },
+			}),
+		].join("\n");
+		const { records } = parseTranscriptSkills(content);
+		expect(records[0]?.latencyMs).toBe(0);
+	});
 });
 
 describe("parseTranscriptSkills — real Claude Code transcript structure", () => {
