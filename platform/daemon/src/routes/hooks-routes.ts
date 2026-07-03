@@ -180,6 +180,17 @@ function skipConflictingSessionEnd(
 	};
 }
 
+const ISO_TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/;
+
+function parseIsoTimestamp(value: unknown): { value?: string; error?: string } {
+	const text = parseOptionalString(value);
+	if (!text) return {};
+	if (!ISO_TIMESTAMP_RE.test(text)) return { error: "createdAt must be an ISO timestamp" };
+	const ms = Date.parse(text);
+	if (!Number.isFinite(ms)) return { error: "createdAt must be a valid timestamp" };
+	return { value: new Date(ms).toISOString() };
+}
+
 // Guard against recursive hook calls from spawned agent contexts
 function isInternalCall(c: Context): boolean {
 	return c.req.header("x-signet-no-hooks") === "1";
@@ -449,6 +460,8 @@ function registerSkillInvocation(app: Hono): void {
 
 			stampHarness(harness);
 
+			const createdAt = parseIsoTimestamp(body.createdAt);
+			if (createdAt.error) return c.json({ error: createdAt.error }, 400);
 			const sessionKey = parseOptionalString(body.sessionKey ?? body.sessionId);
 			const requestedAgentId = resolveAgentId({ agentId: parseOptionalString(body.agentId), sessionKey });
 			const denied = await requirePermission("remember", authConfig)(c, () => Promise.resolve());
@@ -474,7 +487,7 @@ function registerSkillInvocation(app: Hono): void {
 				cwd: parseOptionalString(body.cwd),
 				origin: parseOptionalString(body.origin),
 				args: parseOptionalString(body.args),
-				createdAt: parseOptionalString(body.createdAt),
+				createdAt: createdAt.value,
 			});
 			return c.json({ recorded: true });
 		} catch (e) {

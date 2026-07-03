@@ -309,6 +309,21 @@ memory:
 		}
 	});
 
+	it("rejects malformed skill invocation timestamps", async () => {
+		const resp = await app.request("/api/hooks/skill-invocation", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				harness: "claude-code",
+				skillName: "web-search",
+				createdAt: "not-a-date",
+			}),
+		});
+
+		expect(resp.status).toBe(400);
+		expect(await resp.json()).toMatchObject({ error: "createdAt must be an ISO timestamp" });
+	});
+
 	it("records session-end transcript skill scans under the session agent scope", async () => {
 		const sessionKey = "agent:scan-agent:end";
 		const toolUseId = `toolu_session_end_${crypto.randomUUID()}`;

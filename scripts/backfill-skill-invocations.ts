@@ -119,7 +119,12 @@ async function main(): Promise<void> {
 				body: JSON.stringify({ ...record, agentId }),
 			});
 			if (res.ok) {
-				sent++;
+				const body = (await res.json().catch(() => null)) as { recorded?: boolean } | null;
+				if (body?.recorded === true) {
+					sent++;
+				} else {
+					console.warn(`POST ${url} returned recorded=false`);
+				}
 			} else {
 				console.warn(`POST ${url} failed with HTTP ${res.status}`);
 			}
@@ -142,6 +147,17 @@ function insertDirect(dbPath: string, records: Array<Record<string, unknown>>, a
 		  harness, session_id, tool_use_id, cwd, origin, args)
 		 VALUES (?, ?, ?, 'agent', ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)`,
 	);
+	const updateSkillMeta = db.prepare(
+		`UPDATE skill_meta
+		 SET use_count = COALESCE(use_count, 0) + 1,
+		     last_used_at = ?,
+		     updated_at = ?
+		 WHERE agent_id = ?
+		   AND entity_id IN (
+			   SELECT id FROM entities
+			   WHERE agent_id = ? AND lower(name) = ?
+		   )`,
+	);
 	// Empty -> NULL so the partial-unique dedupe index (which only applies when
 	// harness/session_id/tool_use_id are all NOT NULL) behaves like the recorder.
 	const nn = (v: unknown): string | null => {
@@ -154,20 +170,25 @@ function insertDirect(dbPath: string, records: Array<Record<string, unknown>>, a
 	const BATCH_SIZE = 200;
 	const insertBatch = db.transaction((rows: Array<Record<string, unknown>>) => {
 		for (const r of rows) {
-			stmt.run(
+			const skillName = String(r.skillName).trim().toLowerCase();
+			const createdAt = String(r.createdAt ?? new Date().toISOString());
+			const result = stmt.run(
 				crypto.randomUUID(),
-				String(r.skillName).trim().toLowerCase(),
+				skillName,
 				agentId,
 				Number(r.latencyMs) || 0,
 				r.success === false ? 0 : 1,
-				String(r.createdAt ?? new Date().toISOString()),
+				createdAt,
 				nn(r.harness),
 				nn(r.sessionId),
 				nn(r.toolUseId),
 				nn(r.cwd),
 				nn(r.origin) ?? "backfill",
 				nn(r.args),
-			);
+			) as { changes?: number };
+			if ((result.changes ?? 0) > 0) {
+				updateSkillMeta.run(createdAt, createdAt, agentId, agentId, skillName);
+			}
 		}
 	});
 	let written = 0;
