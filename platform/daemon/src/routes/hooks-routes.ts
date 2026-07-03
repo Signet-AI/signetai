@@ -437,11 +437,20 @@ function registerSkillInvocation(app: Hono): void {
 			stampHarness(harness);
 
 			const sessionKey = parseOptionalString(body.sessionKey ?? body.sessionId);
-			const agentId = resolveAgentId({ agentId: parseOptionalString(body.agentId), sessionKey });
+			const requestedAgentId = resolveAgentId({ agentId: parseOptionalString(body.agentId), sessionKey });
+			const denied = await requirePermission("remember", authConfig)(c, () => Promise.resolve());
+			if (denied) return denied;
+			const scopedAgent = resolveScopedAgentId(c, requestedAgentId);
+			if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+			const sessionError = validateSessionAgentBinding(c, sessionKey, scopedAgent.agentId, {
+				requireExisting: false,
+				context: "sessionKey",
+			});
+			if (sessionError) return c.json({ error: sessionError }, 403);
 
 			recordSkillInvocation({
 				skillName,
-				agentId,
+				agentId: scopedAgent.agentId,
 				source: "agent",
 				latencyMs: parseOptionalInt(body.latencyMs) ?? 0,
 				success: parseOptionalBoolean(body.success) ?? true,
