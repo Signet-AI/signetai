@@ -88,6 +88,7 @@ import { up as transcriptCaptureJobs } from "./079-transcript-capture-jobs";
 import { up as documentScopeColumns } from "./080-document-scope-columns";
 import { up as aggregateEvidenceSources } from "./081-aggregate-evidence-sources";
 import { up as skillInvocationsHarness } from "./082-skill-invocations-harness";
+import { up as memoryLifecycleRepair } from "./083-memory-lifecycle-repair";
 
 // -- Public interface consumed by Database.init() --
 
@@ -783,6 +784,21 @@ export const MIGRATIONS: readonly Migration[] = [
 			columns: [
 				{ table: "skill_invocations", column: "harness" },
 				{ table: "skill_invocations", column: "tool_use_id" },
+			],
+		},
+	},
+	{
+		version: 83,
+		name: "memory-lifecycle-repair",
+		up: memoryLifecycleRepair,
+		artifacts: {
+			tables: ["transcript_capture_jobs", "aggregate_evidence_sources", "entity_dependencies"],
+			columns: [
+				{ table: "documents", column: "agent_id" },
+				{ table: "documents", column: "project" },
+				{ table: "memories", column: "superseded_by" },
+				{ table: "memories", column: "superseded_at" },
+				{ table: "memories", column: "superseded_reason" },
 			],
 		},
 	},

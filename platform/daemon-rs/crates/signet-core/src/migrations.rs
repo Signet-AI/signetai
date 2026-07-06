@@ -109,10 +109,16 @@ const TS_ARTIFACT_SOURCE_PROVENANCE_VERSION: u32 = 75;
 const TS_ARTIFACT_SOURCE_PROVENANCE_NAME: &str = "memory-artifact-source-provenance";
 const TS_TEMPORAL_EDGES_VERSION: u32 = 76;
 const TS_TEMPORAL_EDGES_NAME: &str = "temporal-edges";
+const TS_TRANSCRIPT_CAPTURE_JOBS_VERSION: u32 = 79;
+const TS_TRANSCRIPT_CAPTURE_JOBS_NAME: &str = "transcript-capture-jobs";
 const TS_DOCUMENT_SCOPE_COLUMNS_VERSION: u32 = 80;
 const TS_DOCUMENT_SCOPE_COLUMNS_NAME: &str = "document-scope-columns";
+const TS_AGGREGATE_EVIDENCE_SOURCES_VERSION: u32 = 81;
+const TS_AGGREGATE_EVIDENCE_SOURCES_NAME: &str = "aggregate-evidence-sources";
 const TS_SKILL_INVOCATIONS_HARNESS_VERSION: u32 = 82;
 const TS_SKILL_INVOCATIONS_HARNESS_NAME: &str = "skill-invocations-harness";
+const TS_MEMORY_LIFECYCLE_REPAIR_VERSION: u32 = 83;
+const TS_MEMORY_LIFECYCLE_REPAIR_NAME: &str = "memory-lifecycle-repair";
 
 /// Simple checksum matching the TS implementation (hash of "version:name").
 fn checksum(version: u32, name: &str) -> String {
@@ -148,6 +154,16 @@ fn add_column_if_missing(
     }
 
     Ok(())
+}
+
+fn column_exists(conn: &Connection, table: &str, column: &str) -> Result<bool, CoreError> {
+    conn.prepare(&format!("PRAGMA table_info(\"{table}\")"))
+        .and_then(|mut stmt| {
+            let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
+            let names: Vec<String> = rows.filter_map(|r| r.ok()).collect();
+            Ok(names.iter().any(|n| n == column))
+        })
+        .map_err(CoreError::from)
 }
 
 fn table_exists(conn: &Connection, table: &str) -> Result<bool, CoreError> {
@@ -733,6 +749,319 @@ fn ensure_cross_daemon_parity_tables(conn: &Connection) -> Result<(), CoreError>
     Ok(())
 }
 
+fn ensure_transcript_capture_jobs(conn: &Connection) -> Result<(), CoreError> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS transcript_capture_jobs (
+            id TEXT PRIMARY KEY,
+            agent_id TEXT NOT NULL DEFAULT 'default',
+            harness TEXT NOT NULL,
+            session_key TEXT,
+            session_id TEXT NOT NULL,
+            project TEXT,
+            transcript TEXT NOT NULL,
+            raw_transcript TEXT,
+            transcript_path TEXT,
+            captured_at TEXT NOT NULL,
+            ended_at TEXT,
+            summary_status TEXT NOT NULL DEFAULT 'not_requested',
+            status TEXT NOT NULL DEFAULT 'pending',
+            attempts INTEGER NOT NULL DEFAULT 0,
+            max_attempts INTEGER NOT NULL DEFAULT 5,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            completed_at TEXT,
+            error TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_transcript_capture_jobs_status
+            ON transcript_capture_jobs(status, created_at);
+        CREATE INDEX IF NOT EXISTS idx_transcript_capture_jobs_agent_session
+            ON transcript_capture_jobs(agent_id, session_key, created_at);",
+    )?;
+    Ok(())
+}
+
+fn repair_document_scope_columns(conn: &Connection) -> Result<(), CoreError> {
+    add_column_if_missing(
+        conn,
+        "documents",
+        "agent_id",
+        "TEXT NOT NULL DEFAULT 'default'",
+    )?;
+    add_column_if_missing(conn, "documents", "project", "TEXT")?;
+    conn.execute_batch(
+        "UPDATE documents
+            SET agent_id = NULLIF(TRIM(json_extract(metadata_json, '$.signet.agentId')), '')
+          WHERE metadata_json IS NOT NULL
+            AND json_valid(metadata_json)
+            AND json_type(metadata_json, '$.signet.agentId') = 'text'
+            AND NULLIF(TRIM(json_extract(metadata_json, '$.signet.agentId')), '') IS NOT NULL;
+         UPDATE documents
+            SET project = NULLIF(TRIM(json_extract(metadata_json, '$.signet.project')), '')
+          WHERE metadata_json IS NOT NULL
+            AND json_valid(metadata_json)
+            AND json_type(metadata_json, '$.signet.project') = 'text';
+         WITH linked_scope AS (
+            SELECT
+                dm.document_id,
+                m.agent_id,
+                m.project,
+                ROW_NUMBER() OVER (
+                    PARTITION BY dm.document_id
+                    ORDER BY COUNT(*) DESC, m.agent_id, COALESCE(m.project, '')
+                ) AS rank
+            FROM document_memories dm
+            JOIN memories m ON m.id = dm.memory_id
+            WHERE m.agent_id IS NOT NULL
+              AND NULLIF(TRIM(m.agent_id), '') IS NOT NULL
+            GROUP BY dm.document_id, m.agent_id, m.project
+         )
+         UPDATE documents
+            SET agent_id = COALESCE((
+                    SELECT agent_id FROM linked_scope
+                    WHERE linked_scope.document_id = documents.id AND rank = 1
+                ), agent_id),
+                project = (
+                    SELECT project FROM linked_scope
+                    WHERE linked_scope.document_id = documents.id AND rank = 1
+                )
+          WHERE EXISTS (
+                SELECT 1 FROM linked_scope
+                WHERE linked_scope.document_id = documents.id AND rank = 1
+            )
+            AND NOT (
+                metadata_json IS NOT NULL
+                AND json_valid(metadata_json)
+                AND json_type(metadata_json, '$.signet.agentId') = 'text'
+                AND NULLIF(TRIM(json_extract(metadata_json, '$.signet.agentId')), '') IS NOT NULL
+            );
+         UPDATE memories
+            SET visibility = 'private'
+          WHERE id IN (SELECT memory_id FROM document_memories)
+            AND type = 'document_chunk'
+            AND source_type = 'document'
+            AND (visibility IS NULL OR visibility = 'global');
+         DROP INDEX IF EXISTS idx_memories_content_hash_unique;
+         CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_content_hash_unique
+            ON memories(
+                content_hash,
+                COALESCE(NULLIF(agent_id, ''), 'default'),
+                COALESCE(project, ''),
+                COALESCE(scope, '__NULL__'),
+                COALESCE(visibility, 'global')
+            )
+            WHERE content_hash IS NOT NULL AND is_deleted = 0;
+         CREATE INDEX IF NOT EXISTS idx_documents_agent_project
+            ON documents(agent_id, project);
+         CREATE INDEX IF NOT EXISTS idx_documents_source_scope
+            ON documents(source_url, agent_id, project);",
+    )?;
+    Ok(())
+}
+
+fn repair_document_scope_columns_preserving_existing(conn: &Connection) -> Result<(), CoreError> {
+    let preserve_agent_id = column_exists(conn, "documents", "agent_id")?;
+    let preserve_project = column_exists(conn, "documents", "project")?;
+    if preserve_agent_id {
+        conn.execute_batch(
+            "CREATE TEMP TABLE __signet_doc_agent_guard AS
+             SELECT id, agent_id FROM documents
+             WHERE NULLIF(TRIM(agent_id), '') IS NOT NULL
+               AND NULLIF(TRIM(agent_id), '') <> 'default';",
+        )?;
+    }
+    if preserve_project {
+        conn.execute_batch(
+            "CREATE TEMP TABLE __signet_doc_project_guard AS
+             SELECT id, project FROM documents
+             WHERE NULLIF(TRIM(project), '') IS NOT NULL;",
+        )?;
+    }
+
+    let result = (|| -> Result<(), CoreError> {
+        repair_document_scope_columns(conn)?;
+        if preserve_agent_id {
+            conn.execute_batch(
+                "UPDATE documents
+                    SET agent_id = (
+                        SELECT agent_id FROM __signet_doc_agent_guard
+                        WHERE __signet_doc_agent_guard.id = documents.id
+                    )
+                  WHERE EXISTS (
+                        SELECT 1 FROM __signet_doc_agent_guard
+                        WHERE __signet_doc_agent_guard.id = documents.id
+                    );",
+            )?;
+        }
+        if preserve_project {
+            conn.execute_batch(
+                "UPDATE documents
+                    SET project = (
+                        SELECT project FROM __signet_doc_project_guard
+                        WHERE __signet_doc_project_guard.id = documents.id
+                    )
+                  WHERE EXISTS (
+                        SELECT 1 FROM __signet_doc_project_guard
+                        WHERE __signet_doc_project_guard.id = documents.id
+                    );",
+            )?;
+        }
+        Ok(())
+    })();
+
+    let _ = conn.execute_batch("DROP TABLE IF EXISTS temp.__signet_doc_agent_guard;");
+    let _ = conn.execute_batch("DROP TABLE IF EXISTS temp.__signet_doc_project_guard;");
+    result
+}
+
+fn run_memory_lifecycle_repair(
+    conn: &Connection,
+    backfill_legacy_relations: bool,
+) -> Result<(), CoreError> {
+    ensure_transcript_capture_jobs(conn)?;
+    if table_exists(conn, "documents")? {
+        if backfill_legacy_relations
+            || !column_exists(conn, "documents", "agent_id")?
+            || !column_exists(conn, "documents", "project")?
+        {
+            repair_document_scope_columns_preserving_existing(conn)?;
+        } else {
+            if table_exists(conn, "document_memories")?
+                && column_exists(conn, "memories", "visibility")?
+                && column_exists(conn, "memories", "type")?
+                && column_exists(conn, "memories", "source_type")?
+            {
+                conn.execute_batch(
+                    "UPDATE memories
+                        SET visibility = 'private'
+                      WHERE id IN (SELECT memory_id FROM document_memories)
+                        AND type = 'document_chunk'
+                        AND source_type = 'document'
+                        AND (visibility IS NULL OR visibility = 'global');",
+                )?;
+            }
+            if column_exists(conn, "memories", "content_hash")?
+                && column_exists(conn, "memories", "agent_id")?
+                && column_exists(conn, "memories", "project")?
+                && column_exists(conn, "memories", "scope")?
+                && column_exists(conn, "memories", "visibility")?
+                && column_exists(conn, "memories", "is_deleted")?
+            {
+                conn.execute_batch(
+                    "DROP INDEX IF EXISTS idx_memories_content_hash_unique;
+                     CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_content_hash_unique
+                        ON memories(
+                            content_hash,
+                            COALESCE(NULLIF(agent_id, ''), 'default'),
+                            COALESCE(project, ''),
+                            COALESCE(scope, '__NULL__'),
+                            COALESCE(visibility, 'global')
+                        )
+                        WHERE content_hash IS NOT NULL AND is_deleted = 0;",
+                )?;
+            }
+            conn.execute_batch(
+                "CREATE INDEX IF NOT EXISTS idx_documents_agent_project
+                    ON documents(agent_id, project);
+                 CREATE INDEX IF NOT EXISTS idx_documents_source_scope
+                    ON documents(source_url, agent_id, project);",
+            )?;
+        }
+    }
+    conn.execute_batch(include_str!("sql/058-aggregate-evidence-sources.sql"))?;
+
+    add_column_if_missing(conn, "memories", "superseded_by", "TEXT")?;
+    add_column_if_missing(conn, "memories", "superseded_at", "TEXT")?;
+    add_column_if_missing(conn, "memories", "superseded_reason", "TEXT")?;
+    conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_memories_superseded_by ON memories(superseded_by);
+         CREATE INDEX IF NOT EXISTS idx_memories_active_supersession ON memories(is_deleted, superseded_by);",
+    )?;
+
+    if !table_exists(conn, "relations")? || !table_exists(conn, "entity_dependencies")? {
+        return Ok(());
+    }
+
+    add_column_if_missing(conn, "entity_dependencies", "confidence", "REAL")?;
+    add_column_if_missing(conn, "entity_dependencies", "reason", "TEXT")?;
+    add_column_if_missing(conn, "entity_dependencies", "source_id", "TEXT")?;
+    add_column_if_missing(conn, "entity_dependencies", "source_kind", "TEXT")?;
+    add_column_if_missing(
+        conn,
+        "entity_dependencies",
+        "proposal_evidence",
+        "TEXT NOT NULL DEFAULT '[]'",
+    )?;
+    add_column_if_missing(
+        conn,
+        "entity_dependencies",
+        "status",
+        "TEXT NOT NULL DEFAULT 'active'",
+    )?;
+
+    if !backfill_legacy_relations {
+        return Ok(());
+    }
+
+    let relation_confidence = if column_exists(conn, "relations", "confidence")? {
+        "r.confidence"
+    } else {
+        "NULL"
+    };
+    let relation_updated_at = if column_exists(conn, "relations", "updated_at")? {
+        "r.updated_at"
+    } else {
+        "r.created_at"
+    };
+    let source_agent_id = if column_exists(conn, "entities", "agent_id")? {
+        "COALESCE(NULLIF(TRIM(src.agent_id), ''), 'default')"
+    } else {
+        "'default'"
+    };
+    let target_agent_id = if column_exists(conn, "entities", "agent_id")? {
+        "COALESCE(NULLIF(TRIM(dst.agent_id), ''), 'default')"
+    } else {
+        "'default'"
+    };
+
+    let sql = format!(
+        "INSERT OR IGNORE INTO entity_dependencies (
+            id, source_entity_id, target_entity_id, agent_id, dependency_type,
+            strength, confidence, reason, created_at, updated_at, source_id,
+            source_kind, proposal_evidence, status
+        )
+        SELECT
+            'relation:' || r.id,
+            r.source_entity_id,
+            r.target_entity_id,
+            COALESCE({source_agent_id}, {target_agent_id}, 'default'),
+            CASE WHEN r.relation_type IN (
+                'uses', 'requires', 'owned_by', 'owns', 'blocks', 'informs',
+                'maintains', 'implements', 'built', 'depends_on', 'related_to',
+                'learned_from', 'teaches', 'knows', 'assumes', 'supports_claim',
+                'authored_by', 'links_to', 'contains', 'contains_note',
+                'contradicts', 'supersedes', 'part_of', 'produced_artifact',
+                'precedes', 'follows', 'triggers', 'may_execute',
+                'requires_approval_from', 'impacts', 'produces', 'consumes'
+            ) THEN r.relation_type ELSE 'related_to' END,
+            MAX(0.1, MIN(1.0, COALESCE(r.strength, 0.5))),
+            MAX(0.1, MIN(1.0, COALESCE({relation_confidence}, 0.7))),
+            'legacy relation backfill: ' || r.relation_type,
+            COALESCE(r.created_at, datetime('now')),
+            COALESCE({relation_updated_at}, r.created_at, datetime('now')),
+            r.id,
+            'relation',
+            '[]',
+            'active'
+        FROM relations r
+        JOIN entities src ON src.id = r.source_entity_id
+        JOIN entities dst ON dst.id = r.target_entity_id
+        WHERE r.source_entity_id <> r.target_entity_id
+          AND {source_agent_id} = {target_agent_id}"
+    );
+    conn.execute_batch(&sql)?;
+    Ok(())
+}
+
 fn ensure_cross_daemon_parity_columns(conn: &Connection) -> Result<(), CoreError> {
     ensure_summary_jobs_required_columns(conn)?;
 
@@ -761,8 +1090,33 @@ fn ensure_cross_daemon_parity_columns(conn: &Connection) -> Result<(), CoreError
     )?;
     add_column_if_missing(conn, "connectors", "enabled", "INTEGER NOT NULL DEFAULT 1")?;
 
-    let should_backfill_document_scope =
-        !typescript_parity_migration_stamped(conn, TS_DOCUMENT_SCOPE_COLUMNS_VERSION)?;
+    ensure_transcript_capture_jobs(conn)?;
+    stamp_typescript_parity_migration(
+        conn,
+        TS_TRANSCRIPT_CAPTURE_JOBS_VERSION,
+        TS_TRANSCRIPT_CAPTURE_JOBS_NAME,
+    )?;
+
+    let document_agent_id_exists = column_exists(conn, "documents", "agent_id")?;
+    let document_project_exists = column_exists(conn, "documents", "project")?;
+    let document_scope_columns_missing = !document_agent_id_exists || !document_project_exists;
+    let should_backfill_document_scope = document_scope_columns_missing
+        || !typescript_parity_migration_stamped(conn, TS_DOCUMENT_SCOPE_COLUMNS_VERSION)?;
+    if should_backfill_document_scope && document_agent_id_exists {
+        conn.execute_batch(
+            "CREATE TEMP TABLE __signet_doc_agent_guard AS
+             SELECT id, agent_id FROM documents
+             WHERE NULLIF(TRIM(agent_id), '') IS NOT NULL
+               AND NULLIF(TRIM(agent_id), '') <> 'default';",
+        )?;
+    }
+    if should_backfill_document_scope && document_project_exists {
+        conn.execute_batch(
+            "CREATE TEMP TABLE __signet_doc_project_guard AS
+             SELECT id, project FROM documents
+             WHERE NULLIF(TRIM(project), '') IS NOT NULL;",
+        )?;
+    }
     add_column_if_missing(
         conn,
         "documents",
@@ -824,7 +1178,35 @@ fn ensure_cross_daemon_parity_columns(conn: &Connection) -> Result<(), CoreError
                 AND source_type = 'document'
                 AND (visibility IS NULL OR visibility = 'global');",
         )?;
+        if document_agent_id_exists {
+            conn.execute_batch(
+                "UPDATE documents
+                    SET agent_id = (
+                        SELECT agent_id FROM __signet_doc_agent_guard
+                        WHERE __signet_doc_agent_guard.id = documents.id
+                    )
+                  WHERE EXISTS (
+                        SELECT 1 FROM __signet_doc_agent_guard
+                        WHERE __signet_doc_agent_guard.id = documents.id
+                    );",
+            )?;
+        }
+        if document_project_exists {
+            conn.execute_batch(
+                "UPDATE documents
+                    SET project = (
+                        SELECT project FROM __signet_doc_project_guard
+                        WHERE __signet_doc_project_guard.id = documents.id
+                    )
+                  WHERE EXISTS (
+                        SELECT 1 FROM __signet_doc_project_guard
+                        WHERE __signet_doc_project_guard.id = documents.id
+                    );",
+            )?;
+        }
     }
+    let _ = conn.execute_batch("DROP TABLE IF EXISTS temp.__signet_doc_agent_guard;");
+    let _ = conn.execute_batch("DROP TABLE IF EXISTS temp.__signet_doc_project_guard;");
     conn.execute_batch(
         "DROP INDEX IF EXISTS idx_memories_content_hash_unique;
          CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_content_hash_unique
@@ -846,6 +1228,11 @@ fn ensure_cross_daemon_parity_columns(conn: &Connection) -> Result<(), CoreError
         TS_DOCUMENT_SCOPE_COLUMNS_VERSION,
         TS_DOCUMENT_SCOPE_COLUMNS_NAME,
     )?;
+    stamp_typescript_parity_migration(
+        conn,
+        TS_AGGREGATE_EVIDENCE_SOURCES_VERSION,
+        TS_AGGREGATE_EVIDENCE_SOURCES_NAME,
+    )?;
 
     // Harness skill-invocation columns (parity with TS 082). Add columns first,
     // then the indexes that reference them (059 sql), then stamp.
@@ -860,6 +1247,15 @@ fn ensure_cross_daemon_parity_columns(conn: &Connection) -> Result<(), CoreError
         conn,
         TS_SKILL_INVOCATIONS_HARNESS_VERSION,
         TS_SKILL_INVOCATIONS_HARNESS_NAME,
+    )?;
+
+    let should_backfill_legacy_relations =
+        !typescript_parity_migration_stamped(conn, TS_MEMORY_LIFECYCLE_REPAIR_VERSION)?;
+    run_memory_lifecycle_repair(conn, should_backfill_legacy_relations)?;
+    stamp_typescript_parity_migration(
+        conn,
+        TS_MEMORY_LIFECYCLE_REPAIR_VERSION,
+        TS_MEMORY_LIFECYCLE_REPAIR_NAME,
     )?;
 
     add_column_if_missing(
