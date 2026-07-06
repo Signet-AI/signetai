@@ -74,7 +74,7 @@ export const DEFAULT_PIPELINE_V2: ResolvedPipelineV2Config = {
 	allowRemoteProviders: true,
 	extraction: {
 		provider: "llama-cpp",
-		fallbackProvider: "llama-cpp",
+		fallbackProvider: "none",
 		allowRemoteProviders: true,
 		model: defaultPipelineModel("llama-cpp"),
 		strength: "low",
@@ -126,7 +126,7 @@ export const DEFAULT_PIPELINE_V2: ResolvedPipelineV2Config = {
 	autonomous: {
 		enabled: true,
 		frozen: false,
-		allowUpdateDelete: true,
+		allowUpdateDelete: false,
 		maintenanceIntervalMs: 30 * 60 * 1000, // 30 min
 		maintenanceMode: "execute",
 	},
@@ -219,8 +219,8 @@ export const DEFAULT_PIPELINE_V2: ResolvedPipelineV2Config = {
 		ftsWeightDelta: 0.02,
 		maxAspectWeight: 1.0,
 		minAspectWeight: 0.1,
-		decayEnabled: true,
-		decayRate: 0.005,
+		decayEnabled: false,
+		decayRate: 0,
 		staleDays: 14,
 		decayIntervalSessions: 10,
 	},

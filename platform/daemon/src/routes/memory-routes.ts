@@ -15,8 +15,8 @@ import { buildEmbeddingHealth } from "../embedding-health";
 import { getInferenceRouterOrNull } from "../inference-router";
 import { linkMemoryToEntities } from "../inline-entity-linker";
 import { logger } from "../logger";
-import { loadMemoryConfig } from "../memory-config";
-import { type RecallParams, buildAgentScopeClause, hybridRecall } from "../memory-search";
+import { loadMemoryConfig, type ResolvedMemoryConfig } from "../memory-config";
+import { type RecallParams, type RecallResponse, buildAgentScopeClause, hybridRecall } from "../memory-search";
 import { recordMemorySearchTelemetry } from "../memory-search-telemetry";
 import { resolveMemorySearchTelemetryProject } from "../memory-search-telemetry-project";
 import { buildMemoryTimeline } from "../memory-timeline";
@@ -25,7 +25,7 @@ import { enqueueDocumentIngestJob } from "../pipeline";
 import { parseFeedback, recordAgentFeedback } from "../session-memories";
 import { upsertSessionTranscript } from "../session-transcripts";
 import { createTemporalEdgeId, normalizeTemporalTimestamp, validateTemporalTimeOptions } from "../temporal-recall";
-import { txForgetMemory, txIngestEnvelope, txModifyMemory, txRecoverMemory } from "../transactions";
+import { txForgetMemory, txIngestEnvelope, txModifyMemory, txRecoverMemory, txSupersedeMemory } from "../transactions";
 import { cacheProjection, computeProjection, computeProjectionForQuery, getCachedProjection } from "../umap-projection";
 import {
 	AGENTS_DIR,
@@ -498,8 +498,8 @@ function recordRecallQaTelemetry(input: {
 	readonly sessionKey: string | null;
 	readonly project: string | null;
 	readonly params: RecallParams;
-	readonly result: Awaited<ReturnType<typeof hybridRecall>>;
-	readonly cfg: ReturnType<typeof loadMemoryConfig>;
+	readonly result: RecallResponse;
+	readonly cfg: ResolvedMemoryConfig;
 }): void {
 	if (!input.cfg.pipelineV2.telemetry.memorySearchQaEnabled) return;
 	recordMemorySearchTelemetry(getDbAccessor(), {
@@ -619,6 +619,20 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		});
 	});
 
+	app.use("/api/memories/:id/tombstone", async (c, next) => {
+		const perm = requirePermission("forget", authConfig);
+		const rate = requireRateLimit("forget", authForgetLimiter, authConfig);
+		await perm(c, async () => {
+			await rate(c, next);
+		});
+	});
+	app.use("/api/memories/:id/supersede", async (c, next) => {
+		const perm = requirePermission("modify", authConfig);
+		const rate = requireRateLimit("modify", authModifyLimiter, authConfig);
+		await perm(c, async () => {
+			await rate(c, next);
+		});
+	});
 	// Recover
 	app.use("/api/memory/:id/recover", async (c, next) => {
 		return requirePermission("recover", authConfig)(c, next);
@@ -692,14 +706,14 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 					.prepare(`
       SELECT id, content, created_at, who, importance, tags, source_type, pinned, type
       FROM memories
-      WHERE COALESCE(is_deleted, 0) = 0
+      WHERE COALESCE(is_deleted, 0) = 0 AND superseded_by IS NULL
       ORDER BY created_at DESC
       LIMIT ? OFFSET ?
     `)
 					.all(limit, offset);
 
 				const totalResult = db
-					.prepare("SELECT COUNT(*) as count FROM memories WHERE COALESCE(is_deleted, 0) = 0")
+					.prepare("SELECT COUNT(*) as count FROM memories WHERE COALESCE(is_deleted, 0) = 0 AND superseded_by IS NULL")
 					.get() as {
 					count: number;
 				};
@@ -711,7 +725,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 					// embeddings table might not exist
 				}
 				const critResult = db
-					.prepare("SELECT COUNT(*) as count FROM memories WHERE COALESCE(is_deleted, 0) = 0 AND importance >= 0.9")
+					.prepare("SELECT COUNT(*) as count FROM memories WHERE COALESCE(is_deleted, 0) = 0 AND superseded_by IS NULL AND importance >= 0.9")
 					.get() as {
 					count: number;
 				};
@@ -750,6 +764,8 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 					SELECT id, content, access_count, importance, type, tags
 					FROM memories
 					WHERE access_count > 0
+					  AND COALESCE(is_deleted, 0) = 0
+					  AND superseded_by IS NULL
 					ORDER BY access_count DESC, importance DESC
 					LIMIT ?
 				`)
@@ -759,6 +775,72 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		} catch (e) {
 			logger.error("memory", "Error loading most-used memories", e as Error);
 			return c.json({ memories: [] });
+		}
+	});
+
+	// =========================================================================
+	// GET /api/memories/curator-slices
+	// =========================================================================
+	app.get("/api/memories/curator-slices", (c) => {
+		try {
+			const minSessions = Math.max(1, Math.min(100, Number.parseInt(c.req.query("minSessions") || "3", 10) || 3));
+			const limit = Math.max(1, Math.min(500, Number.parseInt(c.req.query("limit") || "100", 10) || 100));
+			const sessionKeyRaw = c.req.header("x-signet-session-key");
+			const agentId = resolveAgentId({
+				agentId: c.req.query("agentId") ?? c.req.query("agent_id") ?? c.req.header("x-signet-agent-id"),
+				sessionKey: sessionKeyRaw,
+			});
+			const slices = getDbAccessor().withReadDb((db) => {
+				const injectedNeverUsed = db
+					.prepare(
+						`SELECT m.id, m.content, COUNT(DISTINCT sm.session_key) AS sessions
+						 FROM session_memories sm
+						 JOIN memories m ON m.id = sm.memory_id
+						 WHERE sm.agent_id = ?
+						   AND sm.was_injected = 1
+						   AND COALESCE(m.is_deleted, 0) = 0
+						   AND m.superseded_by IS NULL
+						 GROUP BY m.id, m.content
+						 HAVING sessions >= ?
+						    AND SUM(CASE WHEN sm.agent_preference = 'USED' OR sm.agent_relevance_score > 0.5 THEN 1 ELSE 0 END) = 0
+						 ORDER BY sessions DESC
+						 LIMIT ?`,
+					)
+					.all(agentId, minSessions, limit);
+				const contradicted = db
+					.prepare(
+						`SELECT m.id, m.content, COUNT(*) AS contradicted_count
+						 FROM session_memories sm
+						 JOIN memories m ON m.id = sm.memory_id
+						 WHERE sm.agent_id = ?
+						   AND COALESCE(m.is_deleted, 0) = 0
+						   AND m.superseded_by IS NULL
+						   AND (sm.agent_preference = 'CONTRADICTED' OR sm.agent_relevance_score < 0)
+						 GROUP BY m.id, m.content
+						 ORDER BY contradicted_count DESC
+						 LIMIT ?`,
+					)
+					.all(agentId, limit);
+				const highUsed = db
+					.prepare(
+						`SELECT m.id, m.content, COUNT(*) AS used_count
+						 FROM session_memories sm
+						 JOIN memories m ON m.id = sm.memory_id
+						 WHERE sm.agent_id = ?
+						   AND COALESCE(m.is_deleted, 0) = 0
+						   AND m.superseded_by IS NULL
+						   AND (sm.agent_preference = 'USED' OR sm.agent_relevance_score > 0.5)
+						 GROUP BY m.id, m.content
+						 ORDER BY used_count DESC
+						 LIMIT ?`,
+					)
+					.all(agentId, limit);
+				return { injectedNeverUsed, contradicted, highUsed };
+			});
+			return c.json({ agentId, minSessions, limit, ...slices });
+		} catch (e) {
+			logger.error("memory", "Error loading curator slices", e as Error);
+			return c.json({ error: "Failed to load curator slices" }, 500);
 		}
 	});
 
@@ -2287,6 +2369,92 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		}
 
 		return c.json({ error: "Unknown mutation result" }, 500);
+	});
+
+	// =========================================================================
+	// POST /api/memories/:id/tombstone
+	// =========================================================================
+	app.post("/api/memories/:id/tombstone", async (c) => {
+		const payload = await readOptionalJsonObject(c);
+		if (payload === null) return c.json({ error: "Invalid JSON body" }, 400);
+		const memoryId = c.req.param("id")?.trim();
+		if (!memoryId) return c.json({ error: "memory id is required" }, 400);
+
+		const cfg = loadMemoryConfig(AGENTS_DIR);
+		if (cfg.pipelineV2.mutationsFrozen) return c.json({ error: "Mutations are frozen (kill switch active)" }, 503);
+
+		const now = new Date().toISOString();
+		const actor = resolveMutationActor(c, parseOptionalString(payload.changed_by));
+		const reason = parseOptionalString(payload.reason) ?? parseOptionalString(c.req.query("reason")) ?? "curator tombstone";
+		const txResult = getDbAccessor().withWriteTx((db) =>
+			txForgetMemory(db, {
+				memoryId,
+				reason,
+				changedBy: actor.changedBy,
+				changedAt: now,
+				force: true,
+				ctx: actor,
+			}),
+		);
+
+		if (txResult.status === "deleted" || txResult.status === "already_deleted") {
+			return c.json({
+				id: txResult.memoryId,
+				status: "tombstoned",
+				currentVersion: txResult.currentVersion,
+				newVersion: txResult.newVersion,
+				idempotent: txResult.status === "already_deleted",
+			});
+		}
+		if (txResult.status === "not_found") return c.json({ id: txResult.memoryId, status: txResult.status }, 404);
+		return c.json({ id: txResult.memoryId, status: txResult.status, error: "Tombstone failed" }, 409);
+	});
+
+	// =========================================================================
+	// POST /api/memories/:id/supersede
+	// =========================================================================
+	app.post("/api/memories/:id/supersede", async (c) => {
+		const payload = toRecord(await c.req.json().catch(() => null));
+		if (!payload) return c.json({ error: "Invalid JSON body" }, 400);
+		const memoryId = c.req.param("id")?.trim();
+		if (!memoryId) return c.json({ error: "memory id is required" }, 400);
+		const supersededBy = parseOptionalString(payload.superseded_by);
+		if (!supersededBy) return c.json({ error: "superseded_by is required" }, 400);
+
+		const cfg = loadMemoryConfig(AGENTS_DIR);
+		if (cfg.pipelineV2.mutationsFrozen) return c.json({ error: "Mutations are frozen (kill switch active)" }, 503);
+
+		const now = new Date().toISOString();
+		const actor = resolveMutationActor(c, parseOptionalString(payload.changed_by));
+		const reason = parseOptionalString(payload.reason) ?? null;
+		const txResult = getDbAccessor().withWriteTx((db) =>
+			txSupersedeMemory(db, {
+				memoryId,
+				supersededBy,
+				reason,
+				changedBy: actor.changedBy,
+				changedAt: now,
+				ctx: actor,
+			}),
+		);
+
+		if (txResult.status === "superseded" || txResult.status === "already_superseded") {
+			return c.json({
+				id: txResult.memoryId,
+				status: "superseded",
+				superseded_by: txResult.supersededBy,
+				currentVersion: txResult.currentVersion,
+				newVersion: txResult.newVersion,
+				idempotent: txResult.status === "already_superseded",
+			});
+		}
+		if (txResult.status === "not_found" || txResult.status === "target_not_found") {
+			return c.json({ id: txResult.memoryId, status: txResult.status, superseded_by: supersededBy }, 404);
+		}
+		if (txResult.status === "self_supersede") {
+			return c.json({ id: txResult.memoryId, status: txResult.status, error: "memory cannot supersede itself" }, 400);
+		}
+		return c.json({ id: txResult.memoryId, status: txResult.status, error: "Supersede failed" }, 409);
 	});
 
 	// =========================================================================
