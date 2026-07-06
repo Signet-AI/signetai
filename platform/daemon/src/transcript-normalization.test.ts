@@ -20,6 +20,11 @@ describe("transcript normalization", () => {
 		expect(normalizeSessionTranscript("test", "User: plain text")).toBe("User: plain text");
 	});
 
+	it("falls back to raw text for rendered Codex transcripts", () => {
+		const raw = "User: plain Codex transcript\nAssistant: queued";
+		expect(normalizeSessionTranscript("codex", raw)).toBe(raw);
+	});
+
 	it("normalizes generic JSON-line conversations", () => {
 		const raw = [
 			JSON.stringify({ role: "user", content: "question" }),

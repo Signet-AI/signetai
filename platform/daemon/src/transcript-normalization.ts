@@ -11,7 +11,9 @@ export function normalizeSessionTranscript(
 	onEmptyJsonConversation?: EmptyJsonConversationReporter,
 ): string {
 	if (harness.trim().toLowerCase() === "codex") {
-		return normalizeCodexTranscript(raw);
+		const codex = normalizeCodexTranscript(raw);
+		if (codex || normalizeJsonConversationTranscript(raw) !== null) return codex;
+		return raw;
 	}
 
 	const result = normalizeJsonConversationTranscript(raw);
