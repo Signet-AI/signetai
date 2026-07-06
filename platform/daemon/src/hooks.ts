@@ -56,7 +56,6 @@ import * as memoryCandidates from "./memory-candidates";
 import { type ScoredMemory, buildActiveConstraintsSection } from "./memory-candidates";
 import { effectiveScore, inferType, isDuplicate } from "./memory-classification";
 import { loadMemoryConfig, type ResolvedMemoryConfig } from "./memory-config";
-import { ensureCanonicalManifest, indexCanonicalTranscriptJsonl } from "./memory-lineage";
 import { hybridRecall, type RecallResponse, type RecallResult } from "./memory-search";
 import { recordMemorySearchTelemetry } from "./memory-search-telemetry";
 import {
