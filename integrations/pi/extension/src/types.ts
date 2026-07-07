@@ -73,6 +73,31 @@ export interface PiSessionSwitchEvent {
 	readonly previousSessionFile?: string;
 }
 
+/**
+ * `session_before_switch` — fired before switching to another session.
+ *
+ * pi-mono (the older monorepo fork of pi, v0.66.x) emits this INSTEAD of the
+ * post-event `session_switch`; current pi emits both. The payload carries the
+ * session being switched TO (`targetSessionFile`), not the previous one, so the
+ * handler relies on `endPreviousSession`'s active-session-file fallback.
+ */
+export interface PiSessionBeforeSwitchEvent {
+	readonly type: "session_before_switch";
+	readonly reason?: "new" | "resume";
+	readonly targetSessionFile?: string;
+}
+
+/**
+ * `session_before_fork` — fired before forking a session.
+ *
+ * pi-mono emits this INSTEAD of the post-event `session_fork`; current pi emits
+ * both. Same end-previous-only handling as `session_before_switch`.
+ */
+export interface PiSessionBeforeForkEvent {
+	readonly type: "session_before_fork";
+	readonly entryId?: string;
+}
+
 // UI and notification types
 export interface PiTheme {
 	fg(color: string, text: string): string;
@@ -131,6 +156,14 @@ export interface PiExtensionApi {
 	on(event: "session_start", handler: (event: unknown, ctx: PiExtensionContext) => unknown): void;
 	on(event: "session_switch", handler: (event: PiSessionSwitchEvent, ctx: PiExtensionContext) => unknown): void;
 	on(event: "session_fork", handler: (event: PiSessionSwitchEvent, ctx: PiExtensionContext) => unknown): void;
+	on(
+		event: "session_before_switch",
+		handler: (event: PiSessionBeforeSwitchEvent, ctx: PiExtensionContext) => unknown,
+	): void;
+	on(
+		event: "session_before_fork",
+		handler: (event: PiSessionBeforeForkEvent, ctx: PiExtensionContext) => unknown,
+	): void;
 	on(event: "session_shutdown", handler: (event: unknown, ctx: PiExtensionContext) => unknown): void;
 	on(event: "input", handler: (event: PiInputEvent, ctx: PiExtensionContext) => unknown): void;
 	on(

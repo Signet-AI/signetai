@@ -38,6 +38,22 @@ The connector package exposes programmatic cleanup that removes the extension fi
 | Package | `@signetai/connector-pi` |
 | License | Apache-2.0 |
 
+## Compatibility
+
+The extension works with both **pi** (`@earendil-works/pi-coding-agent`) and
+**pi-mono** (`@mariozechner/pi-coding-agent`, the older monorepo fork, e.g.
+v0.66.x). Both resolve the agent dir the same way (`~/.pi/agent`, overridable
+via `PI_CODING_AGENT_DIR`), so the connector writes the managed extension to the
+same location either variant scans.
+
+The only difference is the session-lifecycle event vocabulary: current pi emits
+both the cancellable `session_before_fork` / `session_before_switch` events and
+the post-action `session_fork` / `session_switch` events, while pi-mono only
+emits the `before` variants. The extension ends the previous session on the
+`before` events (fires exactly once per action under either variant) and
+refreshes the new session on the post events — falling back to `session_start`
+under pi-mono. See [#887](https://github.com/Signet-AI/signetai/issues/887).
+
 ## Architecture
 
 ```
