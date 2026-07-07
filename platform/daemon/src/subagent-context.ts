@@ -2,6 +2,14 @@ import type { ReadDb } from "./db-accessor";
 import { sanitizeFtsQuery } from "./memory-search";
 import { redactSecrets } from "./session-checkpoints";
 
+const OMP_UUID_LIKE_SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}[:-][0-9a-f]{4}[:-][0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function canonicalizeTranscriptLookup(value: string): string {
+	const trimmed = value.trim();
+	return OMP_UUID_LIKE_SESSION_ID.test(trimmed) ? trimmed.replace(/:/g, "-") : trimmed;
+}
+
+
 export interface SubagentContextRequest {
 	readonly harness: string;
 	readonly project?: string;
@@ -274,6 +282,39 @@ export function searchSessionTranscripts(params: {
 	const limit = Math.max(1, Math.min(20, Math.trunc(params.limit)));
 	const targetSessionKey = cleanString(params.sessionKey) ?? parentSessionKeyFromOpenClaw(params.currentSessionKey);
 	const seen = timestampExpr(params.db, "st");
+
+	const exactAliases = [...new Set([query, canonicalizeTranscriptLookup(query)])];
+	const hasSessionId = columnExists(params.db, "session_transcripts", "session_id");
+	const exactPlaceholders = exactAliases.map(() => "?").join(", ");
+	const exactPredicates = [`st.session_key IN (${exactPlaceholders})`];
+	if (hasSessionId) exactPredicates.push(`st.session_id IN (${exactPlaceholders})`);
+	const exactRows = params.db
+		.prepare(
+			[
+				`SELECT st.session_key, st.project, ${seen} AS updated_at, st.content, st.content AS excerpt, 0 AS rank`,
+				"FROM session_transcripts st",
+				"WHERE st.agent_id = ?",
+				`AND (${exactPredicates.join(" OR ")})`,
+				`ORDER BY CASE WHEN st.project = ? THEN 0 ELSE 1 END, ${seen} DESC LIMIT ?`,
+			].join("\n"),
+		)
+		.all(params.agentId, ...exactAliases, ...(hasSessionId ? exactAliases : []), params.project ?? "", limit) as Array<{
+			readonly session_key: string;
+			readonly project: string | null;
+			readonly updated_at: string;
+			readonly content: string;
+			readonly excerpt: string;
+			readonly rank: number;
+		}>;
+	if (exactRows.length > 0) {
+		return exactRows.map((row) => ({
+			sessionKey: row.session_key,
+			project: row.project,
+			updatedAt: row.updated_at,
+			excerpt: excerptFor(row.content, query),
+			rank: 0,
+		}));
+	}
 
 	if (tableExists(params.db, "session_transcripts_fts")) {
 		const fts = sanitizeFtsQuery(query);

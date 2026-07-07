@@ -13,6 +13,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const TEST_DIR = join(tmpdir(), `signet-hooks-test-${Date.now()}`);
+const PREV_SIGNET_AGENT_ID_FOR_HOOKS = process.env.SIGNET_AGENT_ID;
+process.env.SIGNET_AGENT_ID = "default";
 process.env.SIGNET_PATH = TEST_DIR;
 
 const { initDbAccessor, closeDbAccessor, getDbAccessor } = await import("./db-accessor");
@@ -221,7 +223,8 @@ function createMemoryDb(
 			attempts INTEGER DEFAULT 0,
 			max_attempts INTEGER DEFAULT 3,
 			created_at TEXT NOT NULL DEFAULT (datetime('now')),
-			completed_at TEXT
+			completed_at TEXT,
+			content_hash TEXT
 		)
 	`);
 
@@ -1844,8 +1847,8 @@ describe("handleSessionEnd", () => {
 				.get("sess-long-retention") as { transcript: string } | undefined;
 
 			expect(stored?.content).toContain(tailMarker);
-			expect(queued?.transcript).toContain("[truncated]");
-			expect(queued?.transcript).not.toContain(tailMarker);
+			expect(queued?.transcript).toContain(tailMarker);
+			expect(queued?.transcript).not.toContain("[truncated]");
 		} finally {
 			db.close();
 		}
@@ -3805,6 +3808,102 @@ describe("queryAnchorsMissingFromRecall", () => {
 	});
 });
 
+
+test.serial("session-end queues stored transcript and content-hash summary job", async () => {
+	createMemoryDb([]);
+	const transcript = "User: session end should store transcript and queue summary job.\nAssistant: summary queue should receive session_end trigger.\n".repeat(8);
+
+	const result = await handleSessionEnd({
+		harness: "test",
+		transcript,
+		sessionKey: "sess-content-hash",
+		sessionId: "sess-content-hash",
+		agentId: "noam",
+		cwd: "/home/user/signetai",
+	});
+
+	expect(result.queued).toBe(true);
+	const db = openTestDb();
+	try {
+		const stored = db
+			.prepare("SELECT content FROM session_transcripts WHERE session_key = ? AND agent_id = ?")
+			.get("sess-content-hash", "noam") as { content: string } | undefined;
+		const jobs = db
+			.prepare("SELECT trigger, content_hash FROM summary_jobs WHERE session_key = ? AND agent_id = ?")
+			.all("sess-content-hash", "noam") as Array<{ trigger: string; content_hash: string | null }>;
+		expect(stored?.content).toContain("session end should store transcript");
+		expect(jobs).toHaveLength(1);
+		expect(jobs[0]?.trigger).toBe("session_end");
+		expect(jobs[0]?.content_hash).toBe(createHash("sha256").update(transcript).digest("hex"));
+	} finally {
+		db.close();
+	}
+});
+
+test.serial("session-end skips duplicate summary job for identical content hash", async () => {
+	createMemoryDb([]);
+	const transcript = "User: identical transcript should dedupe summary queue.\nAssistant: same content should not queue twice.\n".repeat(8);
+	const req = {
+		harness: "test",
+		transcript,
+		sessionKey: "sess-dedupe-hash",
+		sessionId: "sess-dedupe-hash",
+		agentId: "noam",
+		cwd: "/home/user/signetai",
+	} as const;
+
+	const first = await handleSessionEnd(req);
+	const second = await handleSessionEnd(req);
+
+	expect(first.queued).toBe(true);
+	expect(second.queued).toBe(false);
+	const db = openTestDb();
+	try {
+		const row = db.prepare("SELECT COUNT(*) count FROM summary_jobs WHERE session_key = ? AND agent_id = ?").get(
+			"sess-dedupe-hash",
+			"noam",
+		) as { count: number };
+		expect(row.count).toBe(1);
+	} finally {
+		db.close();
+	}
+});
+
+test.serial("session-end queues second job when transcript content changes", async () => {
+	createMemoryDb([]);
+	const firstTranscript = "User: first transcript content for hash one.\nAssistant: first response.\n".repeat(8);
+	const secondTranscript = `${firstTranscript}User: added later OMP content.\nAssistant: second response.\n`;
+
+	await handleSessionEnd({
+		harness: "test",
+		transcript: firstTranscript,
+		sessionKey: "sess-changed-hash",
+		sessionId: "sess-changed-hash",
+		agentId: "noam",
+		cwd: "/home/user/signetai",
+	});
+	const second = await handleSessionEnd({
+		harness: "test",
+		transcript: secondTranscript,
+		sessionKey: "sess-changed-hash",
+		sessionId: "sess-changed-hash",
+		agentId: "noam",
+		cwd: "/home/user/signetai",
+	});
+
+	expect(second.queued).toBe(true);
+	const db = openTestDb();
+	try {
+		const rows = db
+			.prepare("SELECT content_hash FROM summary_jobs WHERE session_key = ? AND agent_id = ? ORDER BY created_at ASC")
+			.all("sess-changed-hash", "noam") as Array<{ content_hash: string | null }>;
+		expect(rows).toHaveLength(2);
+		expect(new Set(rows.map((row) => row.content_hash)).size).toBe(2);
+	} finally {
+		db.close();
+	}
+});
+
 describe("normalizeSessionTranscript", () => {
 	it("routes codex harness to normalizeCodexTranscript", () => {
 		const raw = [
@@ -3928,4 +4027,13 @@ describe("applyTokenBudget", () => {
 			expect(countTokens(result)).toBeLessThanOrEqual(budget);
 		}
 	});
+});
+
+
+afterAll(() => {
+	if (PREV_SIGNET_AGENT_ID_FOR_HOOKS === undefined) {
+		process.env.SIGNET_AGENT_ID = undefined;
+	} else {
+		process.env.SIGNET_AGENT_ID = PREV_SIGNET_AGENT_ID_FOR_HOOKS;
+	}
 });

@@ -10,6 +10,7 @@
  * - onRecall: explicit memory query
  */
 
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -146,6 +147,40 @@ function getMemoryDbPath(): string {
 }
 
 const deferredSessionEndWork = new Set<Promise<void>>();
+
+
+function summaryJobsHasColumn(column: string): boolean {
+	try {
+		return getDbAccessor().withReadDb((db) => {
+			const cols = db.prepare("PRAGMA table_info(summary_jobs)").all() as ReadonlyArray<Record<string, unknown>>;
+			return cols.some((col) => col.name === column);
+		});
+	} catch {
+		return false;
+	}
+}
+
+function summaryJobWithContentHashExists(agentId: string, sessionKey: string | undefined, contentHash: string): boolean {
+	if (!sessionKey || !summaryJobsHasColumn("content_hash")) return false;
+	return getDbAccessor().withReadDb((db) => {
+		const row = db
+			.prepare(
+				`SELECT id FROM summary_jobs
+				 WHERE agent_id = ? AND session_key = ? AND content_hash = ?
+				 AND status IN ('pending', 'processing', 'completed')
+				 LIMIT 1`,
+			)
+			.get(agentId, sessionKey, contentHash) as { id: string } | undefined;
+		return Boolean(row);
+	});
+}
+
+function storeSummaryJobContentHash(jobId: string | undefined, contentHash: string): void {
+	if (!jobId || !summaryJobsHasColumn("content_hash")) return;
+	getDbAccessor().withWriteTx((db) => {
+		db.prepare("UPDATE summary_jobs SET content_hash = ? WHERE id = ?").run(contentHash, jobId);
+	});
+}
 
 export async function flushDeferredSessionEndWorkForTests(): Promise<void> {
 	await Promise.allSettled([...deferredSessionEndWork]);
@@ -1844,24 +1879,35 @@ export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionE
 			sessionId,
 		});
 	} else if (hasSummaryLength) {
-		summaryStatus = "pending";
-		jobId = enqueueSummaryJob(getDbAccessor(), {
-			harness: req.harness,
-			transcript: summaryTranscript,
-			sessionKey,
-			sessionId,
-			project: req.cwd,
-			agentId,
-			trigger: "session_end",
-			capturedAt: endedAt,
-			endedAt,
-		});
+		const contentHash = createHash("sha256").update(retainedTranscript).digest("hex");
+		if (summaryJobWithContentHashExists(agentId, sessionKey, contentHash)) {
+			summaryStatus = "skipped";
+			logger.info("hooks", "Session end summary skipped duplicate content", {
+				agentId,
+				sessionKey,
+				contentHash,
+			});
+		} else {
+			summaryStatus = "pending";
+			jobId = enqueueSummaryJob(getDbAccessor(), {
+				harness: req.harness,
+				transcript: retainedTranscript,
+				sessionKey,
+				sessionId,
+				project: req.cwd ?? null,
+				agentId,
+				trigger: "session_end",
+				capturedAt: endedAt,
+				endedAt,
+			});
+			storeSummaryJobContentHash(jobId, contentHash);
 
-		logger.info("hooks", "Session end queued for summary", {
-			jobId,
-			feedbackTelemetry: getFeedbackTelemetry(),
-		});
-		logger.info("hooks", "Session end transcript queued", {
+			logger.info("hooks", "Session end queued for summary", {
+				jobId,
+				feedbackTelemetry: getFeedbackTelemetry(),
+			});
+		}
+				logger.info("hooks", "Session end transcript queued", {
 			harness: req.harness,
 			project: req.cwd,
 			sessionKey,
@@ -1896,20 +1942,28 @@ export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionE
 	}
 
 	setImmediate(() => {
-		const work = runTranscriptCaptureOnce(getDbAccessor(), getAgentsDir())
-			.catch((error) => {
+		let work: Promise<void>;
+		try {
+			work = runTranscriptCaptureOnce(getDbAccessor(), getAgentsDir()).catch((error) => {
 				logger.warn("hooks", "Deferred transcript capture job failed", {
 					error: error instanceof Error ? error.message : String(error),
 					sessionKey,
 				});
-			})
-			.then(() =>
-				deferSessionEndWork({
-					sessionKey,
-					agentId,
-					memoryCfg,
-				}),
-			);
+			});
+		} catch (error) {
+			logger.warn("hooks", "Deferred transcript capture job failed", {
+				error: error instanceof Error ? error.message : String(error),
+				sessionKey,
+			});
+			return;
+		}
+		work = work.then(() =>
+			deferSessionEndWork({
+				sessionKey,
+				agentId,
+				memoryCfg,
+			}),
+		);
 		deferredSessionEndWork.add(work);
 		void work.finally(() => {
 			deferredSessionEndWork.delete(work);

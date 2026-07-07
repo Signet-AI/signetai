@@ -14,7 +14,7 @@ import {
 	renewSession,
 	unbypassSession,
 } from "../session-tracker.js";
-import { getSessionTranscriptContent } from "../session-transcripts.js";
+import { getSessionTranscriptContent, getStoredSessionTranscriptInfo } from "../session-transcripts.js";
 import { searchSessionTranscripts } from "../subagent-context.js";
 import { expandTemporalNode } from "../temporal-expand.js";
 import { clampGitSyncIntervalSeconds } from "./git-config.js";
@@ -152,7 +152,6 @@ export function registerSessionRoutes(app: Hono, deps: SessionRoutesDeps): void 
 			}),
 		);
 		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
-
 		const scopedProject = resolveScopedProject(
 			c,
 			(typeof body.project === "string" ? body.project : undefined) ?? c.req.query("project"),
@@ -228,15 +227,34 @@ export function registerSessionRoutes(app: Hono, deps: SessionRoutesDeps): void 
 	});
 
 	app.get("/api/sessions/:key{(?!summaries$)[^/]+}", (c) => {
-		const scopedAgent = resolveScopedAgentId(c, c.req.query("agent_id"), "default");
-		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
 		const key = normalizeSessionKey(c.req.param("key"));
+		const scopedAgent = resolveScopedAgentId(
+			c,
+			resolveAgentId({
+				agentId: c.req.query("agent_id") ?? c.req.header("x-signet-agent-id"),
+				sessionKey: key,
+			}),
+			"default",
+		);
+		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
 		const sessions = listLiveSessions(scopedAgent.agentId);
 		const session = sessions.find((s) => s.key === key);
-		if (!session) {
-			return c.json({ error: "Session not found" }, 404);
-		}
-		return c.json(session);
+		if (session) return c.json(session);
+
+		const stored = getStoredSessionTranscriptInfo(key, scopedAgent.agentId);
+		if (!stored) return c.json({ error: "Session not found" }, 404);
+		return c.json({
+			key: `session:${stored.sessionKey}`,
+			sessionKey: stored.sessionKey,
+			agentId: stored.agentId,
+			harness: stored.harness,
+			project: stored.project,
+			runtimePath: "transcript",
+			provider: "session_transcripts",
+			startedAt: stored.createdAt,
+			lastSeenAt: stored.updatedAt ?? stored.createdAt,
+			status: "stored",
+		});
 	});
 
 	app.post("/api/sessions/:key{(?!summaries$)[^/]+}/bypass", async (c) => {
@@ -309,6 +327,8 @@ export function registerSessionRoutes(app: Hono, deps: SessionRoutesDeps): void 
 		}
 		const agentId = scopedAgent.agentId;
 		const project = scopedProject.project;
+		const summarySessionKey =
+			parseOptionalString(c.req.query("session_key")) ?? parseOptionalString(c.req.query("sessionKey"));
 		const depthRaw = c.req.query("depth");
 		const depthNum = depthRaw !== undefined ? Number(depthRaw) : undefined;
 		if (
@@ -340,6 +360,10 @@ export function registerSessionRoutes(app: Hono, deps: SessionRoutesDeps): void 
 			if (depthNum !== undefined) {
 				where += " AND depth = ?";
 				params.push(depthNum);
+			}
+			if (summarySessionKey) {
+				where += " AND session_key = ?";
+				params.push(summarySessionKey);
 			}
 
 			const countRow = db.prepare(`SELECT COUNT(*) as cnt FROM session_summaries ${where}`).get(...params) as
