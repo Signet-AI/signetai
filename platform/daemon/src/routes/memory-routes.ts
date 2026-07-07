@@ -15,7 +15,7 @@ import { buildEmbeddingHealth } from "../embedding-health";
 import { getInferenceRouterOrNull } from "../inference-router";
 import { linkMemoryToEntities } from "../inline-entity-linker";
 import { logger } from "../logger";
-import { loadMemoryConfig, type ResolvedMemoryConfig } from "../memory-config";
+import { type ResolvedMemoryConfig, loadMemoryConfig } from "../memory-config";
 import { type RecallParams, type RecallResponse, buildAgentScopeClause, hybridRecall } from "../memory-search";
 import { recordMemorySearchTelemetry } from "../memory-search-telemetry";
 import { resolveMemorySearchTelemetryProject } from "../memory-search-telemetry-project";
@@ -538,6 +538,30 @@ function resolveMemoryScopedAgentId(
 	return scopedAgent;
 }
 
+function authorizeMemoryMutationScope(c: Context, memoryIds: readonly string[]): { error?: string } {
+	if (!shouldEnforceAuthScope(c)) return {};
+	const ids = [...new Set(memoryIds.map((id) => id.trim()).filter(Boolean))];
+	if (ids.length === 0) return {};
+	const rows = getDbAccessor().withReadDb((db) => {
+		const stmt = db.prepare("SELECT id, agent_id, project FROM memories WHERE id = ?");
+		return ids.map((id) => stmt.get(id) as { id: string; agent_id: string | null; project: string | null } | undefined);
+	});
+	const claims = c.get("auth")?.claims ?? null;
+	for (const row of rows) {
+		if (!row) continue;
+		if (claims?.role !== "admin" && claims?.scope?.project && row.project !== claims.scope.project) {
+			return { error: `scope restricted to project '${claims.scope.project}'` };
+		}
+		const decision = checkScope(
+			claims,
+			{ agent: row.agent_id ?? "default", project: row.project ?? undefined },
+			authConfig.mode,
+		);
+		if (!decision.allowed) return { error: decision.reason ?? "scope violation" };
+	}
+	return {};
+}
+
 interface DocumentScopeRow {
 	readonly agent_id: string | null;
 	readonly project: string | null;
@@ -598,6 +622,9 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		return requirePermission("recall", authConfig)(c, next);
 	});
 	app.use("/api/memory/timeline", async (c, next) => {
+		return requirePermission("recall", authConfig)(c, next);
+	});
+	app.use("/api/memories/curator-slices", async (c, next) => {
 		return requirePermission("recall", authConfig)(c, next);
 	});
 
@@ -725,7 +752,9 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 					// embeddings table might not exist
 				}
 				const critResult = db
-					.prepare("SELECT COUNT(*) as count FROM memories WHERE COALESCE(is_deleted, 0) = 0 AND superseded_by IS NULL AND importance >= 0.9")
+					.prepare(
+						"SELECT COUNT(*) as count FROM memories WHERE COALESCE(is_deleted, 0) = 0 AND superseded_by IS NULL AND importance >= 0.9",
+					)
 					.get() as {
 					count: number;
 				};
@@ -786,10 +815,20 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			const minSessions = Math.max(1, Math.min(100, Number.parseInt(c.req.query("minSessions") || "3", 10) || 3));
 			const limit = Math.max(1, Math.min(500, Number.parseInt(c.req.query("limit") || "100", 10) || 100));
 			const sessionKeyRaw = c.req.header("x-signet-session-key");
-			const agentId = resolveAgentId({
+			const scopedAgent = resolveMemoryScopedAgentId(c, {
 				agentId: c.req.query("agentId") ?? c.req.query("agent_id") ?? c.req.header("x-signet-agent-id"),
 				sessionKey: sessionKeyRaw,
 			});
+			if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+			const agentId = scopedAgent.agentId;
+			const agentScope = getAgentScope(agentId);
+			const access = buildAgentScopeClause(agentId, agentScope.readPolicy, agentScope.policyGroup ?? null);
+			const claims = c.get("auth")?.claims;
+			const scopeProject = claims?.role === "admin" ? undefined : claims?.scope?.project;
+			const scopePredicate = shouldEnforceAuthScope(c)
+				? `${access.sql}${scopeProject ? " AND m.project = ?" : ""}`
+				: "";
+			const scopeArgs = shouldEnforceAuthScope(c) ? (scopeProject ? [...access.args, scopeProject] : access.args) : [];
 			const slices = getDbAccessor().withReadDb((db) => {
 				const injectedNeverUsed = db
 					.prepare(
@@ -800,13 +839,14 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 						   AND sm.was_injected = 1
 						   AND COALESCE(m.is_deleted, 0) = 0
 						   AND m.superseded_by IS NULL
+						   ${scopePredicate}
 						 GROUP BY m.id, m.content
 						 HAVING sessions >= ?
 						    AND SUM(CASE WHEN sm.agent_preference = 'USED' OR sm.agent_relevance_score > 0.5 THEN 1 ELSE 0 END) = 0
 						 ORDER BY sessions DESC
 						 LIMIT ?`,
 					)
-					.all(agentId, minSessions, limit);
+					.all(agentId, ...scopeArgs, minSessions, limit);
 				const contradicted = db
 					.prepare(
 						`SELECT m.id, m.content, COUNT(*) AS contradicted_count
@@ -815,12 +855,13 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 						 WHERE sm.agent_id = ?
 						   AND COALESCE(m.is_deleted, 0) = 0
 						   AND m.superseded_by IS NULL
+						   ${scopePredicate}
 						   AND (sm.agent_preference = 'CONTRADICTED' OR sm.agent_relevance_score < 0)
 						 GROUP BY m.id, m.content
 						 ORDER BY contradicted_count DESC
 						 LIMIT ?`,
 					)
-					.all(agentId, limit);
+					.all(agentId, ...scopeArgs, limit);
 				const highUsed = db
 					.prepare(
 						`SELECT m.id, m.content, COUNT(*) AS used_count
@@ -829,12 +870,13 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 						 WHERE sm.agent_id = ?
 						   AND COALESCE(m.is_deleted, 0) = 0
 						   AND m.superseded_by IS NULL
+						   ${scopePredicate}
 						   AND (sm.agent_preference = 'USED' OR sm.agent_relevance_score > 0.5)
 						 GROUP BY m.id, m.content
 						 ORDER BY used_count DESC
 						 LIMIT ?`,
 					)
-					.all(agentId, limit);
+					.all(agentId, ...scopeArgs, limit);
 				return { injectedNeverUsed, contradicted, highUsed };
 			});
 			return c.json({ agentId, minSessions, limit, ...slices });
@@ -2382,10 +2424,13 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 
 		const cfg = loadMemoryConfig(AGENTS_DIR);
 		if (cfg.pipelineV2.mutationsFrozen) return c.json({ error: "Mutations are frozen (kill switch active)" }, 503);
+		const scopeDecision = authorizeMemoryMutationScope(c, [memoryId]);
+		if (scopeDecision.error) return c.json({ error: scopeDecision.error }, 403);
 
 		const now = new Date().toISOString();
 		const actor = resolveMutationActor(c, parseOptionalString(payload.changed_by));
-		const reason = parseOptionalString(payload.reason) ?? parseOptionalString(c.req.query("reason")) ?? "curator tombstone";
+		const reason =
+			parseOptionalString(payload.reason) ?? parseOptionalString(c.req.query("reason")) ?? "curator tombstone";
 		const txResult = getDbAccessor().withWriteTx((db) =>
 			txForgetMemory(db, {
 				memoryId,
@@ -2423,6 +2468,8 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 
 		const cfg = loadMemoryConfig(AGENTS_DIR);
 		if (cfg.pipelineV2.mutationsFrozen) return c.json({ error: "Mutations are frozen (kill switch active)" }, 503);
+		const scopeDecision = authorizeMemoryMutationScope(c, [memoryId, supersededBy]);
+		if (scopeDecision.error) return c.json({ error: scopeDecision.error }, 403);
 
 		const now = new Date().toISOString();
 		const actor = resolveMutationActor(c, parseOptionalString(payload.changed_by));
@@ -2453,6 +2500,12 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		}
 		if (txResult.status === "self_supersede") {
 			return c.json({ id: txResult.memoryId, status: txResult.status, error: "memory cannot supersede itself" }, 400);
+		}
+		if (txResult.status === "scope_mismatch") {
+			return c.json(
+				{ id: txResult.memoryId, status: txResult.status, error: "superseded_by must share memory scope" },
+				409,
+			);
 		}
 		return c.json({ id: txResult.memoryId, status: txResult.status, error: "Supersede failed" }, 409);
 	});

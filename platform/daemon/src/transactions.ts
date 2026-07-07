@@ -173,6 +173,7 @@ export type SupersedeMemoryTxStatus =
 	| "deleted"
 	| "target_deleted"
 	| "self_supersede"
+	| "scope_mismatch"
 	| "already_superseded";
 
 export interface SupersedeMemoryTxResult {
@@ -588,6 +589,20 @@ export function txForgetMemory(db: WriteDb, input: ForgetMemoryTxInput): ForgetM
 	};
 }
 
+function normalizeMemoryScope(row: {
+	readonly agent_id: string | null;
+	readonly project: string | null;
+	readonly scope: string | null;
+	readonly visibility: string | null;
+}): { agentId: string; project: string | null; scope: string | null; visibility: string } {
+	return {
+		agentId: row.agent_id ?? "default",
+		project: row.project ?? null,
+		scope: row.scope ?? null,
+		visibility: row.visibility ?? "global",
+	};
+}
+
 export function txSupersedeMemory(db: WriteDb, input: SupersedeMemoryTxInput): SupersedeMemoryTxResult {
 	if (input.memoryId === input.supersededBy) {
 		return { status: "self_supersede", memoryId: input.memoryId, supersededBy: input.supersededBy };
@@ -595,7 +610,7 @@ export function txSupersedeMemory(db: WriteDb, input: SupersedeMemoryTxInput): S
 
 	const existing = db
 		.prepare(
-			`SELECT id, content, version, is_deleted, superseded_by
+			`SELECT id, content, version, is_deleted, superseded_by, agent_id, project, scope, visibility
 			 FROM memories
 			 WHERE id = ?`,
 		)
@@ -606,6 +621,10 @@ export function txSupersedeMemory(db: WriteDb, input: SupersedeMemoryTxInput): S
 				version: number;
 				is_deleted: number;
 				superseded_by: string | null;
+				agent_id: string | null;
+				project: string | null;
+				scope: string | null;
+				visibility: string | null;
 		  }
 		| undefined;
 	if (!existing) return { status: "not_found", memoryId: input.memoryId };
@@ -624,13 +643,33 @@ export function txSupersedeMemory(db: WriteDb, input: SupersedeMemoryTxInput): S
 
 	const target = db
 		.prepare(
-			`SELECT id, is_deleted
+			`SELECT id, is_deleted, agent_id, project, scope, visibility
 			 FROM memories
 			 WHERE id = ?`,
 		)
-		.get(input.supersededBy) as { id: string; is_deleted: number } | undefined;
+		.get(input.supersededBy) as
+		| {
+				id: string;
+				is_deleted: number;
+				agent_id: string | null;
+				project: string | null;
+				scope: string | null;
+				visibility: string | null;
+		  }
+		| undefined;
 	if (!target) return { status: "target_not_found", memoryId: input.memoryId, supersededBy: input.supersededBy };
-	if (target.is_deleted === 1) return { status: "target_deleted", memoryId: input.memoryId, supersededBy: input.supersededBy };
+	if (target.is_deleted === 1)
+		return { status: "target_deleted", memoryId: input.memoryId, supersededBy: input.supersededBy };
+	const existingScope = normalizeMemoryScope(existing);
+	const targetScope = normalizeMemoryScope(target);
+	if (
+		existingScope.agentId !== targetScope.agentId ||
+		existingScope.project !== targetScope.project ||
+		existingScope.scope !== targetScope.scope ||
+		existingScope.visibility !== targetScope.visibility
+	) {
+		return { status: "scope_mismatch", memoryId: input.memoryId, supersededBy: input.supersededBy };
+	}
 
 	db.prepare(
 		`UPDATE memories
