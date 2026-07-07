@@ -9,8 +9,7 @@
 	},
 	"summary": {
 		"native-rust-replay-proven": 319,
-		"mounted-shallow": 4,
-		"missing": 3
+		"mounted-shallow": 7
 	},
 	"routes": [
 		{
@@ -1508,8 +1507,8 @@
 			"path": "/api/memories/:id/supersede",
 			"file": "platform/daemon/src/routes/memory-routes.ts",
 			"line": 2461,
-			"status": "missing",
-			"rustMounted": false,
+			"status": "mounted-shallow",
+			"rustMounted": true,
 			"contractReplay": false,
 			"parityRule": false
 		},
@@ -1518,8 +1517,8 @@
 			"path": "/api/memories/:id/tombstone",
 			"file": "platform/daemon/src/routes/memory-routes.ts",
 			"line": 2419,
-			"status": "missing",
-			"rustMounted": false,
+			"status": "mounted-shallow",
+			"rustMounted": true,
 			"contractReplay": false,
 			"parityRule": false
 		},
@@ -1528,8 +1527,8 @@
 			"path": "/api/memories/curator-slices",
 			"file": "platform/daemon/src/routes/memory-routes.ts",
 			"line": 813,
-			"status": "missing",
-			"rustMounted": false,
+			"status": "mounted-shallow",
+			"rustMounted": true,
 			"contractReplay": false,
 			"parityRule": false
 		},

@@ -5,21 +5,24 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::Json;
+use axum::body::Bytes;
 use axum::extract::{ConnectInfo, Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use rusqlite::types::Value as SqlValue;
 use rusqlite::{OptionalExtension, ToSql};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Map, Value};
 use sha1::{Digest, Sha1};
 
 use signet_core::db::Priority;
 
 use crate::auth::middleware::{
-    AuthState, authenticate_headers, require_permission_guard, resolve_scoped_agent,
+    AuthState, authenticate_headers, require_permission_guard, require_rate_limit_guard,
+    resolve_scoped_agent,
 };
-use crate::auth::types::Permission;
+use crate::auth::policy::check_scope;
+use crate::auth::types::{AuthMode, Permission, TokenRole, TokenScope};
 use crate::feedback::parse_scores;
 use crate::state::AppState;
 
@@ -56,6 +59,42 @@ pub struct SimilarParams {
 pub struct MemoryAccessParams {
     #[serde(alias = "agentId")]
     agent_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct CuratorSlicesParams {
+    #[serde(alias = "agentId")]
+    agent_id: Option<String>,
+    #[serde(alias = "minSessions")]
+    min_sessions: Option<usize>,
+    limit: Option<usize>,
+}
+
+#[derive(Deserialize)]
+pub struct TombstoneQuery {
+    reason: Option<String>,
+}
+
+#[derive(Clone)]
+struct MemoryScopeRow {
+    id: String,
+    content: Option<String>,
+    pinned: i64,
+    version: i64,
+    is_deleted: i64,
+    superseded_by: Option<String>,
+    agent_id: Option<String>,
+    project: Option<String>,
+    scope: Option<String>,
+    visibility: Option<String>,
+}
+
+#[derive(Clone)]
+struct MutationActor {
+    changed_by: String,
+    actor_type: String,
+    session_id: Option<String>,
+    request_id: Option<String>,
 }
 
 struct AgentScope {
@@ -116,6 +155,141 @@ fn auth_for_permission(
     require_permission_guard(&auth, permission, auth_runtime.mode, is_local)
         .map_err(|resp| *resp)?;
     Ok(auth)
+}
+
+fn yaml_child<'a>(value: &'a serde_yml::Value, key: &str) -> Option<&'a serde_yml::Value> {
+    let serde_yml::Value::Mapping(map) = value else {
+        return None;
+    };
+    map.get(serde_yml::Value::String(key.to_string()))
+}
+
+fn live_mutations_frozen(state: &AppState) -> bool {
+    for name in ["agent.yaml", "AGENT.yaml", "config.yaml"] {
+        let path = state.config.base_path.join(name);
+        let Ok(content) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        let Ok(raw) = serde_yml::from_str::<serde_yml::Value>(&content) else {
+            continue;
+        };
+        if let Some(value) = yaml_child(&raw, "memory")
+            .and_then(|memory| yaml_child(memory, "pipelineV2"))
+            .and_then(|pipeline| yaml_child(pipeline, "mutationsFrozen"))
+            .and_then(serde_yml::Value::as_bool)
+        {
+            return value;
+        }
+    }
+
+    state
+        .config
+        .manifest
+        .memory
+        .as_ref()
+        .and_then(|memory| memory.pipeline_v2.as_ref())
+        .map(|pipeline| pipeline.mutations_frozen)
+        .unwrap_or(false)
+}
+
+fn check_mutations_frozen(state: &AppState) -> Option<Response> {
+    if live_mutations_frozen(state) {
+        Some(
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({"error": "Mutations are frozen (kill switch active)"})),
+            )
+                .into_response(),
+        )
+    } else {
+        None
+    }
+}
+
+fn invalid_json_body() -> Response {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(serde_json::json!({"error": "Invalid JSON body"})),
+    )
+        .into_response()
+}
+
+fn parse_json_object_body(body: &Bytes, allow_empty: bool) -> Result<Map<String, Value>, Response> {
+    if body.iter().all(u8::is_ascii_whitespace) {
+        return if allow_empty {
+            Ok(Map::new())
+        } else {
+            Err(invalid_json_body())
+        };
+    }
+    let value: Value = serde_json::from_slice(body).map_err(|_| invalid_json_body())?;
+    value.as_object().cloned().ok_or_else(invalid_json_body)
+}
+
+fn optional_payload_string(payload: &Map<String, Value>, key: &str) -> Option<String> {
+    clean_text(payload.get(key).and_then(Value::as_str))
+}
+
+fn role_name(role: TokenRole) -> &'static str {
+    match role {
+        TokenRole::Admin => "admin",
+        TokenRole::Agent => "agent",
+        TokenRole::Readonly => "readonly",
+        TokenRole::Operator => "operator",
+    }
+}
+
+fn header_text(headers: &HeaderMap, name: &str) -> Option<String> {
+    clean_text(headers.get(name).and_then(|value| value.to_str().ok()))
+}
+
+fn apply_mutation_rate_limit(
+    state: &AppState,
+    auth: &AuthState,
+    _headers: &HeaderMap,
+    operation: &str,
+) -> Result<(), Response> {
+    let auth_runtime = state.auth_snapshot();
+    require_rate_limit_guard(
+        auth,
+        operation,
+        &auth_runtime.admin_limiter,
+        auth_runtime.mode,
+        None,
+    )
+    .map_err(|resp| *resp)
+}
+
+fn mutation_actor(
+    auth: &AuthState,
+    headers: &HeaderMap,
+    payload_changed_by: Option<String>,
+) -> MutationActor {
+    let session_id = header_text(headers, "x-signet-session-id");
+    let request_id = header_text(headers, "x-signet-request-id");
+    if let Some(claims) = auth.result.claims.as_ref() {
+        return MutationActor {
+            changed_by: claims.sub.clone(),
+            actor_type: role_name(claims.role).to_string(),
+            session_id,
+            request_id,
+        };
+    }
+
+    let raw_actor_type = header_text(headers, "x-signet-actor-type");
+    let actor_type = match raw_actor_type.as_deref() {
+        Some("operator" | "pipeline" | "harness" | "sdk" | "daemon") => raw_actor_type.unwrap(),
+        _ => "operator".to_string(),
+    };
+
+    MutationActor {
+        changed_by: header_text(headers, "x-signet-actor")
+            .or(payload_changed_by)
+            .unwrap_or_else(|| "daemon".to_string()),
+        actor_type,
+        session_id,
+        request_id,
+    }
 }
 
 fn scoped_agent_or_response(
@@ -191,6 +365,14 @@ fn agent_scope_clause(alias: &str, agent_id: &str, scope: &AgentScope) -> (Strin
 }
 
 fn project_scope_clause(auth: &AuthState, alias: &str) -> (String, Vec<SqlValue>) {
+    if auth
+        .result
+        .claims
+        .as_ref()
+        .is_some_and(|claims| claims.role == TokenRole::Admin)
+    {
+        return (String::new(), Vec::new());
+    }
     let Some(project) = auth
         .result
         .claims
@@ -227,6 +409,136 @@ fn visible_memory_scope(
 
 fn params_from_values(values: &[SqlValue]) -> Vec<&dyn ToSql> {
     values.iter().map(|value| value as &dyn ToSql).collect()
+}
+
+fn load_memory_scope_row(
+    conn: &rusqlite::Connection,
+    memory_id: &str,
+) -> rusqlite::Result<Option<MemoryScopeRow>> {
+    conn.query_row(
+        "SELECT id, content, COALESCE(pinned, 0), version, COALESCE(is_deleted, 0), superseded_by,
+                agent_id, project, scope, visibility
+         FROM memories
+         WHERE id = ?1",
+        [memory_id],
+        |row| {
+            Ok(MemoryScopeRow {
+                id: row.get(0)?,
+                content: row.get(1)?,
+                pinned: row.get(2)?,
+                version: row.get(3)?,
+                is_deleted: row.get(4)?,
+                superseded_by: row.get(5)?,
+                agent_id: row.get(6)?,
+                project: row.get(7)?,
+                scope: row.get(8)?,
+                visibility: row.get(9)?,
+            })
+        },
+    )
+    .optional()
+}
+
+fn authorize_memory_mutation_scope(auth: &AuthState, row: &MemoryScopeRow) -> Result<(), String> {
+    let claims = auth.result.claims.as_ref();
+    if claims.is_none() {
+        return Ok(());
+    }
+    if let Some(claims) = claims
+        && claims.role != TokenRole::Admin
+        && let Some(project) = claims.scope.project.as_deref()
+        && row.project.as_deref() != Some(project)
+    {
+        return Err(format!("scope restricted to project '{project}'"));
+    }
+    let target = TokenScope {
+        agent: Some(
+            row.agent_id
+                .clone()
+                .unwrap_or_else(|| "default".to_string()),
+        ),
+        project: row.project.clone(),
+        user: None,
+    };
+    let auth_runtime_mode = crate::auth::types::AuthMode::Hybrid;
+    // check_scope short-circuits for local mode, but mutation handlers only call
+    // this helper after route-local auth has already decided whether scope applies.
+    let decision = check_scope(claims, &target, auth_runtime_mode);
+    if decision.allowed {
+        Ok(())
+    } else {
+        Err(decision
+            .reason
+            .unwrap_or_else(|| "scope violation".to_string()))
+    }
+}
+
+fn same_supersession_scope(left: &MemoryScopeRow, right: &MemoryScopeRow) -> bool {
+    left.agent_id.as_deref().unwrap_or("default") == right.agent_id.as_deref().unwrap_or("default")
+        && left.project == right.project
+        && left.scope == right.scope
+        && left.visibility.as_deref().unwrap_or("global")
+            == right.visibility.as_deref().unwrap_or("global")
+}
+
+fn table_exists(conn: &rusqlite::Connection, name: &str) -> rusqlite::Result<bool> {
+    conn.query_row(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",
+        [name],
+        |_| Ok(()),
+    )
+    .optional()
+    .map(|value| value.is_some())
+}
+
+fn delete_aggregate_memory_source_links(
+    conn: &rusqlite::Connection,
+    memory_id: &str,
+) -> rusqlite::Result<()> {
+    if !table_exists(conn, "aggregate_memory_sources")? {
+        return Ok(());
+    }
+    conn.execute(
+        "DELETE FROM aggregate_memory_sources
+         WHERE aggregate_memory_id = ?1 OR source_memory_id = ?1",
+        [memory_id],
+    )?;
+    Ok(())
+}
+
+fn insert_memory_history(
+    conn: &rusqlite::Connection,
+    memory_id: &str,
+    event: &str,
+    old_content: Option<&str>,
+    changed_by: &str,
+    actor_type: &str,
+    session_id: Option<&str>,
+    request_id: Option<&str>,
+    reason: Option<&str>,
+    metadata: Value,
+    created_at: &str,
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT INTO memory_history
+            (id, memory_id, event, old_content, new_content, changed_by, reason, metadata, created_at,
+             actor_type, session_id, request_id)
+         VALUES (?1, ?2, ?3, ?4, NULL, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+        rusqlite::params![
+            uuid::Uuid::new_v4().to_string(),
+            memory_id,
+            event,
+            old_content,
+            changed_by,
+            reason,
+            metadata.to_string(),
+            created_at,
+            actor_type,
+            session_id,
+            request_id,
+        ],
+    )?;
+    Ok(())
 }
 
 #[derive(Serialize)]
@@ -274,7 +586,8 @@ pub async fn list(
             let sql = format!(
                 "SELECT m.id, m.content, m.created_at, m.who, m.importance, m.tags, m.source_type, m.pinned, m.type
                  FROM memories m
-                 WHERE COALESCE(m.is_deleted, 0) = 0{scope_sql}
+                 WHERE COALESCE(m.is_deleted, 0) = 0
+                   AND m.superseded_by IS NULL{scope_sql}
                  ORDER BY m.created_at DESC
                  LIMIT ? OFFSET ?"
             );
@@ -297,20 +610,20 @@ pub async fn list(
                 .filter_map(|r| r.ok())
                 .collect();
 
-            let count_sql = format!("SELECT COUNT(*) FROM memories m WHERE COALESCE(m.is_deleted, 0) = 0{scope_sql}");
+            let count_sql = format!("SELECT COUNT(*) FROM memories m WHERE COALESCE(m.is_deleted, 0) = 0 AND m.superseded_by IS NULL{scope_sql}");
             let count_params = params_from_values(&scope_args);
             let total: i64 = conn.query_row(&count_sql, count_params.as_slice(), |r| r.get(0))?;
             let embeddings: i64 = conn
                 .query_row(
                     &format!(
-                        "SELECT COUNT(*) FROM embeddings e JOIN memories m ON e.source_type = 'memory' AND e.source_id = m.id WHERE COALESCE(m.is_deleted, 0) = 0{scope_sql}"
+                        "SELECT COUNT(*) FROM embeddings e JOIN memories m ON e.source_type = 'memory' AND e.source_id = m.id WHERE COALESCE(m.is_deleted, 0) = 0 AND m.superseded_by IS NULL{scope_sql}"
                     ),
                     count_params.as_slice(),
                     |r| r.get(0),
                 )
                 .unwrap_or(0);
             let critical: i64 = conn.query_row(
-                &format!("SELECT COUNT(*) FROM memories m WHERE COALESCE(m.is_deleted, 0) = 0 AND m.importance >= 0.9{scope_sql}"),
+                &format!("SELECT COUNT(*) FROM memories m WHERE COALESCE(m.is_deleted, 0) = 0 AND m.superseded_by IS NULL AND m.importance >= 0.9{scope_sql}"),
                 count_params.as_slice(),
                 |r| r.get(0),
             )?;
@@ -371,7 +684,8 @@ pub async fn most_used(
                 "SELECT m.id, m.content, m.access_count, m.importance, m.type, m.tags
                  FROM memories m
                  WHERE m.access_count > 0
-                   AND (m.is_deleted = 0 OR m.is_deleted IS NULL){scope_sql}
+                   AND (m.is_deleted = 0 OR m.is_deleted IS NULL)
+                   AND m.superseded_by IS NULL{scope_sql}
                  ORDER BY m.access_count DESC, m.importance DESC
                  LIMIT ?"
             );
@@ -400,6 +714,414 @@ pub async fn most_used(
         Json(serde_json::json!({ "memories": memories })),
     )
         .into_response()
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/memories/curator-slices
+// ---------------------------------------------------------------------------
+
+pub async fn curator_slices(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Query(params): Query<CuratorSlicesParams>,
+) -> Response {
+    let requested = requested_agent_id(params.agent_id.as_deref(), &headers);
+    let (agent_id, auth) = match scoped_agent_or_response(
+        &state,
+        peer,
+        &headers,
+        requested.as_deref(),
+        Permission::Recall,
+    ) {
+        Ok(value) => value,
+        Err(resp) => return resp,
+    };
+    let min_sessions = params.min_sessions.unwrap_or(3).clamp(1, 100) as i64;
+    let limit = params.limit.unwrap_or(100).clamp(1, 500) as i64;
+    let enforce_auth_scope =
+        state.auth_snapshot().mode != AuthMode::Local && auth.result.authenticated;
+
+    let result = state
+        .pool
+        .read(move |conn| {
+            let (scope_sql, scope_args) = if enforce_auth_scope {
+                visible_memory_scope(conn, &agent_id, &auth, "m")?
+            } else {
+                (String::new(), Vec::new())
+            };
+
+            let mut stale_args = vec![SqlValue::Text(agent_id.clone())];
+            stale_args.extend(scope_args.iter().cloned());
+            stale_args.push(SqlValue::Integer(min_sessions));
+            stale_args.push(SqlValue::Integer(limit));
+            let injected_never_used = {
+                let sql = format!(
+                    "SELECT m.id, m.content, COUNT(DISTINCT sm.session_key) AS sessions
+                     FROM session_memories sm
+                     JOIN memories m ON m.id = sm.memory_id
+                     WHERE sm.agent_id = ?
+                       AND sm.was_injected = 1
+                       AND COALESCE(m.is_deleted, 0) = 0
+                       AND m.superseded_by IS NULL{scope_sql}
+                     GROUP BY m.id, m.content
+                     HAVING sessions >= ?
+                        AND SUM(CASE WHEN sm.agent_preference = 'USED' OR sm.agent_relevance_score > 0.5 THEN 1 ELSE 0 END) = 0
+                     ORDER BY sessions DESC
+                     LIMIT ?"
+                );
+                let params = params_from_values(&stale_args);
+                let mut stmt = conn.prepare(&sql)?;
+                stmt.query_map(params.as_slice(), |row| {
+                    Ok(serde_json::json!({
+                        "id": row.get::<_, String>(0)?,
+                        "content": row.get::<_, String>(1)?,
+                        "sessions": row.get::<_, i64>(2)?,
+                    }))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?
+            };
+
+            let mut feedback_args = vec![SqlValue::Text(agent_id.clone())];
+            feedback_args.extend(scope_args.iter().cloned());
+            feedback_args.push(SqlValue::Integer(limit));
+            let contradicted = {
+                let sql = format!(
+                    "SELECT m.id, m.content, COUNT(*) AS contradicted_count
+                     FROM session_memories sm
+                     JOIN memories m ON m.id = sm.memory_id
+                     WHERE sm.agent_id = ?
+                       AND COALESCE(m.is_deleted, 0) = 0
+                       AND m.superseded_by IS NULL{scope_sql}
+                       AND (sm.agent_preference = 'CONTRADICTED' OR sm.agent_relevance_score < 0)
+                     GROUP BY m.id, m.content
+                     ORDER BY contradicted_count DESC
+                     LIMIT ?"
+                );
+                let params = params_from_values(&feedback_args);
+                let mut stmt = conn.prepare(&sql)?;
+                stmt.query_map(params.as_slice(), |row| {
+                    Ok(serde_json::json!({
+                        "id": row.get::<_, String>(0)?,
+                        "content": row.get::<_, String>(1)?,
+                        "contradicted_count": row.get::<_, i64>(2)?,
+                    }))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?
+            };
+
+            let high_used = {
+                let sql = format!(
+                    "SELECT m.id, m.content, COUNT(*) AS used_count
+                     FROM session_memories sm
+                     JOIN memories m ON m.id = sm.memory_id
+                     WHERE sm.agent_id = ?
+                       AND COALESCE(m.is_deleted, 0) = 0
+                       AND m.superseded_by IS NULL{scope_sql}
+                       AND (sm.agent_preference = 'USED' OR sm.agent_relevance_score > 0.5)
+                     GROUP BY m.id, m.content
+                     ORDER BY used_count DESC
+                     LIMIT ?"
+                );
+                let params = params_from_values(&feedback_args);
+                let mut stmt = conn.prepare(&sql)?;
+                stmt.query_map(params.as_slice(), |row| {
+                    Ok(serde_json::json!({
+                        "id": row.get::<_, String>(0)?,
+                        "content": row.get::<_, String>(1)?,
+                        "used_count": row.get::<_, i64>(2)?,
+                    }))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?
+            };
+
+            Ok(serde_json::json!({
+                "agentId": agent_id,
+                "minSessions": min_sessions,
+                "limit": limit,
+                "injectedNeverUsed": injected_never_used,
+                "contradicted": contradicted,
+                "highUsed": high_used,
+            }))
+        })
+        .await;
+
+    match result {
+        Ok(body) => (StatusCode::OK, Json(body)).into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("Failed to load curator slices: {err}")})),
+        )
+            .into_response(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// POST /api/memories/:id/tombstone
+// ---------------------------------------------------------------------------
+
+pub async fn tombstone(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Query(query): Query<TombstoneQuery>,
+    body: Bytes,
+) -> Response {
+    let payload = match parse_json_object_body(&body, true) {
+        Ok(payload) => payload,
+        Err(resp) => return resp,
+    };
+    let memory_id = id.trim().to_string();
+    if memory_id.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "memory id is required"})),
+        )
+            .into_response();
+    }
+    let auth = match auth_for_permission(&state, peer, &headers, Permission::Forget) {
+        Ok(auth) => auth,
+        Err(resp) => return resp,
+    };
+    if let Some(resp) = check_mutations_frozen(&state) {
+        return resp;
+    }
+    if let Err(resp) = apply_mutation_rate_limit(&state, &auth, &headers, "forget") {
+        return resp;
+    }
+    let reason = optional_payload_string(&payload, "reason")
+        .or_else(|| clean_text(query.reason.as_deref()))
+        .unwrap_or_else(|| "curator tombstone".to_string());
+    let actor = mutation_actor(
+        &auth,
+        &headers,
+        optional_payload_string(&payload, "changed_by"),
+    );
+    let changed_at = chrono::Utc::now().to_rfc3339();
+
+    let result = state
+        .pool
+        .write_tx(Priority::High, move |conn| {
+            let Some(row) = load_memory_scope_row(conn, &memory_id)? else {
+                return Ok(serde_json::json!({"id": memory_id, "status": "not_found"}));
+            };
+            if let Err(reason) = authorize_memory_mutation_scope(&auth, &row) {
+                return Ok(
+                    serde_json::json!({"id": memory_id, "status": "forbidden", "error": reason}),
+                );
+            }
+            if row.is_deleted == 1 {
+                return Ok(serde_json::json!({
+                    "id": row.id,
+                    "status": "tombstoned",
+                    "currentVersion": row.version,
+                    "idempotent": true,
+                }));
+            }
+            if row.pinned == 1 && actor.actor_type == "pipeline" {
+                return Ok(serde_json::json!({
+                    "id": row.id,
+                    "status": "autonomous_force_denied",
+                    "currentVersion": row.version,
+                }));
+            }
+            conn.execute(
+                "UPDATE memories
+                 SET is_deleted = 1,
+                     deleted_at = ?1,
+                     updated_at = ?1,
+                     updated_by = ?2,
+                     version = version + 1
+                 WHERE id = ?3",
+                rusqlite::params![changed_at, actor.changed_by, row.id],
+            )?;
+            delete_aggregate_memory_source_links(conn, &row.id)?;
+            insert_memory_history(
+                conn,
+                &row.id,
+                "deleted",
+                row.content.as_deref(),
+                &actor.changed_by,
+                &actor.actor_type,
+                actor.session_id.as_deref(),
+                actor.request_id.as_deref(),
+                Some(&reason),
+                serde_json::json!({"force": true, "ifVersion": null}),
+                &changed_at,
+            )?;
+            Ok(serde_json::json!({
+                "id": row.id,
+                "status": "tombstoned",
+                "currentVersion": row.version,
+                "newVersion": row.version + 1,
+                "idempotent": false,
+            }))
+        })
+        .await;
+
+    match result {
+        Ok(body) if body.get("status").and_then(Value::as_str) == Some("not_found") => {
+            (StatusCode::NOT_FOUND, Json(body)).into_response()
+        }
+        Ok(body) if body.get("status").and_then(Value::as_str) == Some("forbidden") => {
+            (StatusCode::FORBIDDEN, Json(body)).into_response()
+        }
+        Ok(body)
+            if body.get("status").and_then(Value::as_str) == Some("autonomous_force_denied") =>
+        {
+            (StatusCode::FORBIDDEN, Json(body)).into_response()
+        }
+        Ok(body) => (StatusCode::OK, Json(body)).into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("Tombstone failed: {err}")})),
+        )
+            .into_response(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// POST /api/memories/:id/supersede
+// ---------------------------------------------------------------------------
+
+pub async fn supersede(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    body: Bytes,
+) -> Response {
+    let payload = match parse_json_object_body(&body, false) {
+        Ok(payload) => payload,
+        Err(resp) => return resp,
+    };
+    let memory_id = id.trim().to_string();
+    let superseded_by = optional_payload_string(&payload, "superseded_by").unwrap_or_default();
+    if memory_id.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "memory id is required"})),
+        )
+            .into_response();
+    }
+    if superseded_by.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "superseded_by is required"})),
+        )
+            .into_response();
+    }
+    if memory_id == superseded_by {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"id": memory_id, "status": "self_supersede", "error": "memory cannot supersede itself"})),
+        )
+            .into_response();
+    }
+    let auth = match auth_for_permission(&state, peer, &headers, Permission::Modify) {
+        Ok(auth) => auth,
+        Err(resp) => return resp,
+    };
+    if let Some(resp) = check_mutations_frozen(&state) {
+        return resp;
+    }
+    if let Err(resp) = apply_mutation_rate_limit(&state, &auth, &headers, "modify") {
+        return resp;
+    }
+    let reason = optional_payload_string(&payload, "reason");
+    let actor = mutation_actor(
+        &auth,
+        &headers,
+        optional_payload_string(&payload, "changed_by"),
+    );
+    let changed_at = chrono::Utc::now().to_rfc3339();
+
+    let result = state
+        .pool
+        .write_tx(Priority::High, move |conn| {
+            let Some(row) = load_memory_scope_row(conn, &memory_id)? else {
+                return Ok(serde_json::json!({"id": memory_id, "status": "not_found", "superseded_by": superseded_by}));
+            };
+            if let Err(reason) = authorize_memory_mutation_scope(&auth, &row) {
+                return Ok(serde_json::json!({"id": row.id, "status": "forbidden", "error": reason}));
+            }
+            if row.is_deleted == 1 {
+                return Ok(serde_json::json!({"id": row.id, "status": "deleted", "currentVersion": row.version}));
+            }
+            let Some(target) = load_memory_scope_row(conn, &superseded_by)? else {
+                return Ok(serde_json::json!({"id": row.id, "status": "target_not_found", "superseded_by": superseded_by}));
+            };
+            if let Err(reason) = authorize_memory_mutation_scope(&auth, &target) {
+                return Ok(serde_json::json!({"id": row.id, "status": "forbidden", "error": reason}));
+            }
+            if row.superseded_by.as_deref() == Some(target.id.as_str()) {
+                return Ok(serde_json::json!({
+                    "id": row.id,
+                    "status": "superseded",
+                    "superseded_by": target.id,
+                    "currentVersion": row.version,
+                    "idempotent": true,
+                }));
+            }
+            if target.is_deleted == 1 {
+                return Ok(serde_json::json!({"id": row.id, "status": "target_deleted", "superseded_by": target.id}));
+            }
+            if !same_supersession_scope(&row, &target) {
+                return Ok(serde_json::json!({"id": row.id, "status": "scope_mismatch", "superseded_by": target.id}));
+            }
+            let target_id = target.id.clone();
+            conn.execute(
+                "UPDATE memories
+                 SET superseded_by = ?1,
+                     superseded_at = ?2,
+                     superseded_reason = ?3,
+                     updated_at = ?2,
+                     updated_by = ?4,
+                     version = version + 1
+                 WHERE id = ?5",
+                rusqlite::params![target_id, changed_at, reason, actor.changed_by, row.id],
+            )?;
+            insert_memory_history(
+                conn,
+                &row.id,
+                "superseded",
+                row.content.as_deref(),
+                &actor.changed_by,
+                &actor.actor_type,
+                actor.session_id.as_deref(),
+                actor.request_id.as_deref(),
+                reason.as_deref().or(Some("superseded")),
+                serde_json::json!({"supersededBy": target.id, "previousSupersededBy": row.superseded_by}),
+                &changed_at,
+            )?;
+            Ok(serde_json::json!({
+                "id": row.id,
+                "status": "superseded",
+                "superseded_by": target.id,
+                "currentVersion": row.version,
+                "newVersion": row.version + 1,
+                "idempotent": false,
+            }))
+        })
+        .await;
+
+    match result {
+        Ok(body) => match body.get("status").and_then(Value::as_str) {
+            Some("not_found") | Some("target_not_found") => {
+                (StatusCode::NOT_FOUND, Json(body)).into_response()
+            }
+            Some("forbidden") => (StatusCode::FORBIDDEN, Json(body)).into_response(),
+            Some("self_supersede") => (StatusCode::BAD_REQUEST, Json(body)).into_response(),
+            Some("superseded") => (StatusCode::OK, Json(body)).into_response(),
+            _ => (StatusCode::CONFLICT, Json(body)).into_response(),
+        },
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("Supersede failed: {err}")})),
+        )
+            .into_response(),
+    }
 }
 
 // ---------------------------------------------------------------------------

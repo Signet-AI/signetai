@@ -251,6 +251,18 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/memories", get(routes::memory::list))
         .route("/api/memories/most-used", get(routes::memory::most_used))
         .route(
+            "/api/memories/curator-slices",
+            get(routes::memory::curator_slices),
+        )
+        .route(
+            "/api/memories/{id}/tombstone",
+            axum::routing::post(routes::memory::tombstone),
+        )
+        .route(
+            "/api/memories/{id}/supersede",
+            axum::routing::post(routes::memory::supersede),
+        )
+        .route(
             "/api/memory/{id}",
             get(routes::memory::get)
                 .patch(routes::write::patch)
