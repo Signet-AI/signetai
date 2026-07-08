@@ -7,7 +7,7 @@
 import { afterEach, describe, expect, it, mock } from "bun:test";
 import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { getBypassedSessionKeys, resetSessions } from "../session-tracker";
 import {
 	DEFAULT_OLLAMA_FALLBACK_MAX_CONTEXT_TOKENS,
@@ -868,7 +868,76 @@ describe("createClaudeCodeProvider", () => {
 });
 
 describe("createCodexProvider", () => {
-	afterEach(() => restoreSpawn());
+	let restoreCodexEnv: (() => void) | undefined;
+
+	afterEach(() => {
+		restoreSpawn();
+		restoreCodexEnv?.();
+		restoreCodexEnv = undefined;
+	});
+	function withTempCodexEnv(root: string, options: { auth?: boolean; apiKey?: string }): () => void {
+		const previous = {
+			HOME: process.env.HOME,
+			CODEX_HOME: process.env.CODEX_HOME,
+			OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+			PATH: process.env.PATH,
+			SIGNET_CODEX_RUNTIME_DIR: process.env.SIGNET_CODEX_RUNTIME_DIR,
+		};
+		const home = join(root, "home");
+		const codexHome = join(root, "codex-home");
+		const binDir = join(root, "bin");
+		mkdirSync(home, { recursive: true });
+		mkdirSync(codexHome, { recursive: true });
+		mkdirSync(binDir, { recursive: true });
+		const codexBin = join(binDir, "codex");
+		writeFileSync(codexBin, "#!/usr/bin/env sh\n");
+		chmodSync(codexBin, 0o755);
+		if (options.auth) writeFileSync(join(codexHome, "auth.json"), '{"provider":"test"}');
+		process.env.HOME = home;
+		process.env.CODEX_HOME = codexHome;
+		process.env.PATH = previous.PATH ? `${binDir}${delimiter}${previous.PATH}` : binDir;
+		process.env.SIGNET_CODEX_RUNTIME_DIR = join(root, "runtime");
+		if (options.apiKey === undefined) {
+			Reflect.deleteProperty(process.env, "OPENAI_API_KEY");
+		} else {
+			process.env.OPENAI_API_KEY = options.apiKey;
+		}
+
+		return () => {
+			for (const [key, value] of Object.entries(previous)) {
+				if (value === undefined) {
+					Reflect.deleteProperty(process.env, key);
+				} else {
+					process.env[key] = value;
+				}
+			}
+			rmSync(root, { recursive: true, force: true });
+		};
+	}
+
+	function useTempCodexEnv(options: { auth?: boolean; apiKey?: string } = { auth: true }): void {
+		const root = join(tmpdir(), `signet-codex-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		restoreCodexEnv = withTempCodexEnv(root, options);
+	}
+
+	function mockCodexVersion(exitCode: number, forbiddenSecret?: string): () => number {
+		let calls = 0;
+		Bun.spawn = mock((args: string[], opts?: { env?: Record<string, string | undefined> }) => {
+			calls += 1;
+			expect(args.at(-1)).toBe("--version");
+			if (forbiddenSecret) {
+				expect(args.join("\0")).not.toContain(forbiddenSecret);
+				expect(Object.values(opts?.env ?? {}).join("\0")).not.toContain(forbiddenSecret);
+			}
+			return {
+				stdout: streamFromString("codex 1.0.0\n"),
+				stderr: streamFromString(""),
+				exited: Promise.resolve(exitCode),
+				kill() {},
+			};
+		}) as unknown as typeof Bun.spawn;
+		return () => calls;
+	}
 
 	it("uses the default model (gpt-5.4-mini) when none is supplied", () => {
 		const provider = createCodexProvider();
@@ -880,7 +949,61 @@ describe("createCodexProvider", () => {
 		expect(provider.name).toBe("codex:gpt-5.3-codex");
 	});
 
+	it("available() returns true when codex --version exits 0 and CODEX_HOME auth exists", async () => {
+		const root = join(tmpdir(), `signet-codex-available-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		const restoreEnv = withTempCodexEnv(root, { auth: true });
+		const calls = mockCodexVersion(0);
+		try {
+			const provider = createCodexProvider();
+			expect(await provider.available()).toBe(true);
+			expect(calls()).toBe(1);
+		} finally {
+			restoreEnv();
+		}
+	});
+
+	it("available() returns true when codex --version exits 0 and OPENAI_API_KEY exists", async () => {
+		const root = join(tmpdir(), `signet-codex-available-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		const apiKey = "test-openai-api-key";
+		const restoreEnv = withTempCodexEnv(root, { apiKey });
+		const calls = mockCodexVersion(0, apiKey);
+		try {
+			const provider = createCodexProvider();
+			expect(await provider.available()).toBe(true);
+			expect(calls()).toBe(1);
+		} finally {
+			restoreEnv();
+		}
+	});
+
+	it("available() returns false when codex --version exits 0 without auth or API key", async () => {
+		const root = join(tmpdir(), `signet-codex-available-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		const restoreEnv = withTempCodexEnv(root, {});
+		const calls = mockCodexVersion(0);
+		try {
+			const provider = createCodexProvider();
+			expect(await provider.available()).toBe(false);
+			expect(calls()).toBe(1);
+		} finally {
+			restoreEnv();
+		}
+	});
+
+	it("available() returns false when codex --version fails", async () => {
+		const root = join(tmpdir(), `signet-codex-available-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		const restoreEnv = withTempCodexEnv(root, { auth: true });
+		const calls = mockCodexVersion(1);
+		try {
+			const provider = createCodexProvider();
+			expect(await provider.available()).toBe(false);
+			expect(calls()).toBe(1);
+		} finally {
+			restoreEnv();
+		}
+	});
+
 	it("generateWithUsage() parses JSONL agent output and usage", async () => {
+		useTempCodexEnv();
 		let capturedArgs: string[] = [];
 		let capturedEnv: Record<string, string | undefined> | undefined;
 		Bun.spawn = mock((args: string[], opts?: { env?: Record<string, string | undefined> }) => {
@@ -914,6 +1037,7 @@ describe("createCodexProvider", () => {
 	});
 
 	it("does not disable Signet MCP through an incomplete Codex config override", async () => {
+		useTempCodexEnv();
 		let capturedArgs: string[] = [];
 		Bun.spawn = mock((args: string[]) => {
 			capturedArgs = args;
@@ -940,14 +1064,17 @@ describe("createCodexProvider", () => {
 		const root = join(tmpdir(), `signet-codex-provider-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 		const home = join(root, "home");
 		const liveCodex = join(root, "live-codex");
+		const runtimeRoot = join(root, "runtime");
 		mkdirSync(liveCodex, { recursive: true });
 		writeFileSync(join(liveCodex, "auth.json"), '{"provider":"test"}');
 		writeFileSync(join(liveCodex, "version.json"), '{"version":"1"}');
 
 		const prevHome = process.env.HOME;
 		const prevCodexHome = process.env.CODEX_HOME;
+		const prevCodexRuntimeDir = process.env.SIGNET_CODEX_RUNTIME_DIR;
 		process.env.HOME = home;
 		process.env.CODEX_HOME = liveCodex;
+		process.env.SIGNET_CODEX_RUNTIME_DIR = runtimeRoot;
 
 		let capturedEnv: Record<string, string | undefined> | undefined;
 		Bun.spawn = mock((args: string[], opts?: { env?: Record<string, string | undefined> }) => {
@@ -956,7 +1083,7 @@ describe("createCodexProvider", () => {
 			const srcVersion = join(liveCodex, "version.json");
 			const dstAuth = join(capturedEnv?.CODEX_HOME ?? "", "auth.json");
 			expect(capturedEnv?.CODEX_HOME).toBe(join(capturedEnv?.HOME ?? "", ".codex"));
-			expect(capturedEnv?.HOME?.startsWith(tmpdir())).toBe(true);
+			expect(capturedEnv?.HOME?.startsWith(runtimeRoot)).toBe(true);
 			expect(existsSync(dstAuth)).toBe(existsSync(srcAuth));
 			if (existsSync(srcAuth)) {
 				expect(lstatSync(dstAuth).isSymbolicLink()).toBe(false);
@@ -997,12 +1124,19 @@ describe("createCodexProvider", () => {
 			} else {
 				process.env.CODEX_HOME = prevCodexHome;
 			}
+			if (prevCodexRuntimeDir === undefined) {
+				Reflect.deleteProperty(process.env, "SIGNET_CODEX_RUNTIME_DIR");
+			} else {
+				process.env.SIGNET_CODEX_RUNTIME_DIR = prevCodexRuntimeDir;
+			}
 			rmSync(root, { recursive: true, force: true });
 		}
 	});
 
 	it("does not delete sibling sterile homes while Codex is running", async () => {
+		useTempCodexEnv();
 		const root = join(tmpdir(), "signet-codex-home");
+		process.env.SIGNET_CODEX_RUNTIME_DIR = root;
 		mkdirSync(root, { recursive: true });
 		const sibling = join(root, `home-sibling-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 		const marker = join(sibling, "marker.txt");
@@ -1039,6 +1173,7 @@ describe("createCodexProvider", () => {
 	});
 
 	it("generate() throws on non-zero exit", async () => {
+		useTempCodexEnv();
 		Bun.spawn = mock((_args: string[]) => ({
 			stdout: streamFromString(""),
 			stderr: streamFromString("boom"),
@@ -1051,6 +1186,7 @@ describe("createCodexProvider", () => {
 	});
 
 	it("generate() reports timeout when kill triggers a non-zero exit", async () => {
+		useTempCodexEnv();
 		Bun.spawn = mock((_args: string[]) => {
 			let resolveExit!: (code: number) => void;
 			const exited = new Promise<number>((resolve) => {

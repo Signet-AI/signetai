@@ -507,6 +507,32 @@ inference:
           toolUse: true
 ```
 
+Direct Codex CLI targets use the `codex` binary in the daemon runtime. The Docker image includes the CLI;
+mount a logged-in Codex config directory only when you opt into this executor:
+
+```bash
+SIGNET_CODEX_HOME="$HOME/.codex" docker compose -f compose.yml -f compose.codex.yml up -d
+```
+
+```yaml
+inference:
+  targets:
+    codex-cli:
+      executor: codex
+      models:
+        default:
+          model: gpt-5.4-mini
+          reasoning: medium
+  workloads:
+    sessionSynthesis:
+      target: codex-cli/default
+      taskClass: session_synthesis
+```
+
+Signet marks the target unavailable unless `codex --version` works and either `CODEX_HOME/auth.json`
+is mounted or `OPENAI_API_KEY` is present. The auth cache is copied into a sterile temporary home for
+each call; the mounted Codex config stays read-only.
+
 Model fields:
 
 | Field | Type | Description |

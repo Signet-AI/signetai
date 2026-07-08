@@ -684,11 +684,29 @@ export async function awaitSubprocessWithDeadline<T>(
 	}
 }
 
+function codexAuthPaths(baseEnv: Record<string, string | undefined>): string[] {
+	const liveHome = baseEnv.HOME ?? homedir();
+	const homeAuth = join(liveHome, ".codex", "auth.json");
+	const codexHomeAuth = baseEnv.CODEX_HOME ? join(baseEnv.CODEX_HOME, "auth.json") : homeAuth;
+	return codexHomeAuth === homeAuth ? [homeAuth] : [codexHomeAuth, homeAuth];
+}
+
+function hasCodexCredential(baseEnv: Record<string, string | undefined>): boolean {
+	const apiKey = baseEnv.OPENAI_API_KEY?.trim();
+	return Boolean(apiKey) || codexAuthPaths(baseEnv).some((path) => existsSync(path));
+}
+
+function resolveCodexRuntimeRoot(baseEnv: Record<string, string | undefined>): string {
+	const configured = baseEnv.SIGNET_CODEX_RUNTIME_DIR?.trim();
+	if (configured) return configured;
+	return join(resolveDefaultBasePath(), ".daemon", "codex-home");
+}
+
 function createSterileCodexEnv(baseEnv: Record<string, string | undefined>): {
 	readonly env: Record<string, string | undefined>;
 	cleanup(): void;
 } {
-	const root = join(tmpdir(), "signet-codex-home");
+	const root = resolveCodexRuntimeRoot(baseEnv);
 	mkdirSync(root, { recursive: true });
 	const home = mkdtempSync(join(root, "home-"));
 	const codexHome = join(home, ".codex");
@@ -2479,6 +2497,9 @@ export function createCodexProvider(config?: Partial<CodexProviderConfig>): LlmP
 	): Promise<LlmGenerateResult> {
 		const timeoutMs = opts?.timeoutMs ?? cfg.defaultTimeoutMs;
 		const deadline = performance.now() + timeoutMs;
+		if (!hasCodexCredential(process.env)) {
+			throw new Error("Codex CLI auth unavailable: set OPENAI_API_KEY or mount CODEX_HOME with auth.json");
+		}
 
 		return withLlmConcurrency(
 			async () => {
@@ -2551,17 +2572,18 @@ export function createCodexProvider(config?: Partial<CodexProviderConfig>): LlmP
 
 		async available(): Promise<boolean> {
 			try {
+				const versionEnv = { ...process.env };
+				Reflect.deleteProperty(versionEnv, "OPENAI_API_KEY");
 				const proc = spawnHidden(["codex", "--version"], {
 					env: {
-						...process.env,
+						...versionEnv,
 						SIGNET_NO_HOOKS: "1",
 						SIGNET_CODEX_BYPASS_WRAPPER: "1",
 					},
 				});
 				const exitCode = await proc.exited;
-				return exitCode === 0;
+				return exitCode === 0 && hasCodexCredential(process.env);
 			} catch {
-				logger.debug("pipeline", "Codex CLI not available");
 				return false;
 			}
 		},

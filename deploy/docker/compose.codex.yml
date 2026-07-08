@@ -1,0 +1,8 @@
+services:
+  signet:
+    environment:
+      CODEX_HOME: /root/.codex
+    volumes:
+      # Mount your local Codex CLI auth cache read-only when routing Signet
+      # inference targets to `executor: codex`.
+      - ${SIGNET_CODEX_HOME:?set SIGNET_CODEX_HOME to your Codex config directory, e.g. $HOME/.codex}:/root/.codex:ro

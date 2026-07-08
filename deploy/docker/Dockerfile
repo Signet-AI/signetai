@@ -57,6 +57,14 @@ ENV SIGNET_BIND=0.0.0.0
 ENV SIGNET_PORT=3850
 ENV SIGNET_DAEMON_ENTRYPOINT=1
 ENV SIGNET_VEC_PATH=/app/sqlite-vec/vec0.so
+ENV PATH="/root/.bun/bin:${PATH}"
+
+RUN apt-get update \
+	&& apt-get install -y --no-install-recommends ca-certificates nodejs \
+	&& rm -rf /var/lib/apt/lists/*
+
+ARG CODEX_CLI_VERSION=0.142.5
+RUN bun install -g @openai/codex@${CODEX_CLI_VERSION}
 
 COPY --from=build /app/dist/native/signet ./bin/signet
 COPY --from=build /app/dist/docker-sqlite-vec ./sqlite-vec
