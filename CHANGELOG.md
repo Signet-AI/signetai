@@ -6,6 +6,9 @@ All notable changes to Signet are documented here.
 
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
+### 2026-07-09
+- Bug fixes: support pi-mono session lifecycle events.
+
 ### 2026-07-06
 - Features: capture harness skill usage (claude-code scan + opencode post).
 - Bug fixes: chunk and embed Obsidian source content after sync; queue rendered Codex transcripts.
@@ -25,11 +28,16 @@ Surface summary of the most recent release dates. See the release ledger below f
 ### 2026-06-26
 - Bug fixes: surface Signet health diagnostics.
 
-### 2026-06-24
-- Features: Rust daemon full parity effort.
-- Bug fixes: harden workspace backup commits.
-
 ## Release Ledger
+
+## [0.146.3] - 2026-07-09
+
+Release summary: 1 bug fix.
+Tag range: `v0.146.2..v0.146.3`.
+
+### Bug Fixes
+
+- **pi**: support pi-mono session lifecycle events (#888)
 
 ## [0.146.2] - 2026-07-06
 
