@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { Command } from "commander";
 import {
 	buildCodexHookOutput,
@@ -15,6 +15,27 @@ import {
 } from "./hook";
 
 const prevLog = console.log;
+
+// process.exit mock: the postAction hook (hook.ts lines 136-138) calls
+// process.exit(0) after every hook subcommand. This mock prevents the real
+// process.exit from terminating the test runner during integration tests
+// that exercise program.parseAsync, while letting new tests verify exit codes.
+const hookExitCodes: number[] = [];
+const originalExit = process.exit;
+
+beforeAll(() => {
+	process.exit = ((code?: number) => {
+		hookExitCodes.push(code ?? 0);
+	}) as typeof process.exit;
+});
+
+afterAll(() => {
+	process.exit = originalExit;
+});
+
+beforeEach(() => {
+	hookExitCodes.length = 0;
+});
 
 afterEach(() => {
 	console.log = prevLog;
@@ -637,5 +658,88 @@ describe("shouldReadCompactionInput", () => {
 				sessionKey: "sess-1",
 			}),
 		).toBeFalse();
+	});
+});
+
+describe("postAction exit behavior", () => {
+	test("calls process.exit(0) after a successful hook command", async () => {
+		const program = new Command();
+		registerHookCommands(program, {
+			AGENTS_DIR: "/tmp/agents",
+			fetchDaemonResult: async () => ({ ok: true, data: {} }),
+			readStaticIdentity: () => null,
+		});
+
+		await program.parseAsync(["node", "test", "hook", "session-end", "-H", "test-harness"]);
+
+		expect(hookExitCodes).toEqual([0]);
+	});
+
+	test("calls process.exit(0) after a hook command with output", async () => {
+		const lines: string[] = [];
+		const prevLog = console.log;
+		console.log = (line?: unknown) => {
+			lines.push(String(line ?? ""));
+		};
+
+		const program = new Command();
+		registerHookCommands(program, {
+			AGENTS_DIR: "/tmp/agents",
+			fetchDaemonResult: async () => ({
+				ok: true,
+				data: { inject: "recalled context" },
+			}),
+			readStaticIdentity: () => null,
+		});
+
+		await program.parseAsync(["node", "test", "hook", "user-prompt-submit", "-H", "test-harness"]);
+
+		expect(hookExitCodes).toEqual([0]);
+		expect(lines).toContain("recalled context");
+
+		console.log = prevLog;
+	});
+
+	test("preAction bypass via SIGNET_NO_HOOKS exits with code 0", async () => {
+		const prev = process.env.SIGNET_NO_HOOKS;
+		process.env.SIGNET_NO_HOOKS = "1";
+
+		const program = new Command();
+		registerHookCommands(program, {
+			AGENTS_DIR: "/tmp/agents",
+			fetchDaemonResult: async () => ({ ok: true, data: { memoriesSaved: 0 } }),
+			readStaticIdentity: () => null,
+		});
+
+		await program.parseAsync(["node", "test", "hook", "session-end", "-H", "test-harness"]);
+
+		// preAction calls exit(0), then action runs and postAction also calls exit(0).
+		// With the mock all calls fire — but they're all code 0.
+		expect(hookExitCodes.length).toBeGreaterThanOrEqual(1);
+		for (const code of hookExitCodes) {
+			expect(code).toBe(0);
+		}
+
+		process.env.SIGNET_NO_HOOKS = prev;
+	});
+
+	test("error path calls process.exit(1) before postAction fires", async () => {
+		const program = new Command();
+		registerHookCommands(program, {
+			AGENTS_DIR: "/tmp/agents",
+			fetchDaemonResult: async () => ({
+				ok: true,
+				data: { error: "something went wrong" },
+			}),
+			readStaticIdentity: () => null,
+		});
+
+		await program.parseAsync(["node", "test", "hook", "session-start", "-H", "test-harness"]);
+
+		// Handler calls exit(1) for data.error, then postAction fires exit(0).
+		// With the mock both land — the first call proves the handler's exit
+		// code is preserved and not preempted by postAction.
+		expect(hookExitCodes.length).toBeGreaterThanOrEqual(1);
+		expect(hookExitCodes[0]).toBe(1);
 	});
 });

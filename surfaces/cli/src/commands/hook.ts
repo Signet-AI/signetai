@@ -125,6 +125,18 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 		}
 	});
 
+	// Hook subcommands read stdin via async iteration in readJson(), which
+	// registers a persistent listener on process.stdin. If the harness keeps
+	// its end of the stdin pipe open (rather than closing it or killing us),
+	// that listener keeps the event loop alive indefinitely — Node never exits
+	// on its own. Most action handlers only call process.exit() on error/fallback
+	// paths, not on success, so the happy path relied on natural event-loop drain
+	// and could hang. Force a clean exit once every action settles so these
+	// one-shot IPC processes can never outlive their single request/response.
+	hookCmd.hook("postAction", () => {
+		process.exit(0);
+	});
+
 	hookCmd
 		.command("session-start")
 		.description("Get context/memories for a new session")

@@ -811,9 +811,7 @@ function ensureVecTable(db: SqliteDatabase, expectedDimensions: number): void {
 	if (existing) {
 		if (!vecEmbeddingsSchemaNeedsRepair(existing.sql, expectedDimensions)) return;
 		if (/\bid\s+TEXT\b/i.test(existing.sql)) {
-			console.warn(
-				`[db-accessor] vec_embeddings schema drift detected; recreating with FLOAT[${expectedDimensions}]`,
-			);
+			console.warn(`[db-accessor] vec_embeddings schema drift detected; recreating with FLOAT[${expectedDimensions}]`);
 		}
 		db.exec("DROP TABLE vec_embeddings");
 	}
@@ -826,26 +824,54 @@ function ensureVecTable(db: SqliteDatabase, expectedDimensions: number): void {
 	`);
 }
 
+function vecRowidsTableAvailable(db: SqliteDatabase): boolean {
+	try {
+		const row = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'vec_embeddings_rowids'").get();
+		return row !== undefined;
+	} catch {
+		return false;
+	}
+}
+
+function missingVecEmbeddingsRows(
+	db: SqliteDatabase,
+	expectedDimensions: number,
+): Array<{ id: string; vector: Buffer }> {
+	// sqlite-vec's virtual table is expensive for anti-joins: on a 43k-row local
+	// DB, `LEFT JOIN vec_embeddings` costs ~6.5s even when no rows are missing.
+	// The backing rowid table is a normal SQLite table with a UNIQUE id index and
+	// answers the same existence question in tens of milliseconds. Keep the
+	// virtual-table fallback for non-sqlite-vec test doubles and unexpected
+	// future layouts.
+	const targetTable = vecRowidsTableAvailable(db) ? "vec_embeddings_rowids" : "vec_embeddings";
+	return db
+		.prepare(
+			`SELECT e.id, e.vector FROM embeddings e
+			 LEFT JOIN ${targetTable} v ON v.id = e.id
+			 WHERE v.id IS NULL AND e.dimensions = ?`,
+		)
+		.all(expectedDimensions) as Array<{ id: string; vector: Buffer }>;
+}
+
+function countSkippedVecEmbeddingsRows(db: SqliteDatabase, expectedDimensions: number): number {
+	const targetTable = vecRowidsTableAvailable(db) ? "vec_embeddings_rowids" : "vec_embeddings";
+	const skippedRow = db
+		.prepare(
+			`SELECT COUNT(*) AS n FROM embeddings e
+			 LEFT JOIN ${targetTable} v ON v.id = e.id
+			 WHERE v.id IS NULL AND e.dimensions != ?`,
+		)
+		.get(expectedDimensions) as { n: number } | undefined;
+	return skippedRow?.n ?? 0;
+}
+
 function backfillVecEmbeddings(db: SqliteDatabase, expectedDimensions: number): void {
 	// Directly query for missing rows instead of comparing counts.
 	// Count comparison is racy — a row can exist in embeddings but not
 	// vec_embeddings even when counts match (e.g. after a crash mid-sync).
-	const rows = db
-		.prepare(
-			`SELECT e.id, e.vector FROM embeddings e
-			 LEFT JOIN vec_embeddings v ON v.id = e.id
-			 WHERE v.id IS NULL AND e.dimensions = ?`,
-		)
-		.all(expectedDimensions) as Array<{ id: string; vector: Buffer }>;
+	const rows = missingVecEmbeddingsRows(db, expectedDimensions);
 
-	const skippedRow = db
-		.prepare(
-			`SELECT COUNT(*) AS n FROM embeddings e
-			 LEFT JOIN vec_embeddings v ON v.id = e.id
-			 WHERE v.id IS NULL AND e.dimensions != ?`,
-		)
-		.get(expectedDimensions) as { n: number } | undefined;
-	const skippedCount = skippedRow?.n ?? 0;
+	const skippedCount = countSkippedVecEmbeddingsRows(db, expectedDimensions);
 	if (skippedCount > 0) {
 		console.warn(
 			`[db-accessor] Skipped ${skippedCount} embeddings with dimensions that do not match FLOAT[${expectedDimensions}]`,

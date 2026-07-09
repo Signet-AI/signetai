@@ -340,6 +340,64 @@ function upsertRelation(
 	return true;
 }
 
+/**
+ * Upsert an entity_dependency mirroring the extracted relation.
+ *
+ * The extraction pipeline writes to `relations` (legacy), but graph
+ * diagnostics and traversal read from `entity_dependencies` (current
+ * control-plane link table).  This function writes to both so extracted
+ * edges are immediately visible to traversal.
+ *
+ * Uses INSERT OR IGNORE + separate UPDATE to handle the UNIQUE index
+ * on (source_entity_id, target_entity_id, dependency_type, agent_id).
+ */
+function upsertDependency(
+	db: WriteDb,
+	sourceEntityId: string,
+	targetEntityId: string,
+	dependencyType: string,
+	confidence: number,
+	agentId: string,
+	now: string,
+	reason: string = "extracted",
+): void {
+	const id = crypto.randomUUID();
+	db.prepare(
+		`INSERT OR IGNORE INTO entity_dependencies
+		 (id, source_entity_id, target_entity_id, agent_id,
+		  aspect_id, dependency_type, strength, confidence,
+		  reason, status, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, NULL, ?, 1.0, ?,
+		         ?, 'active', ?, ?)`,
+	).run(id, sourceEntityId, targetEntityId, agentId, dependencyType, confidence, reason, now, now);
+
+	// If the unique constraint prevented a new row, the triple already
+	// exists — update confidence via running average.
+	const rowCount = countChanges(db);
+	if (rowCount === 0) {
+		const existing = db
+			.prepare(
+				`SELECT id, confidence FROM entity_dependencies
+				 WHERE source_entity_id = ?
+				   AND target_entity_id = ?
+				   AND dependency_type = ?
+				   AND agent_id = ?
+				 LIMIT 1`,
+			)
+			.get(sourceEntityId, targetEntityId, dependencyType, agentId) as
+			| { id: string; confidence: number }
+			| undefined;
+		if (existing) {
+			const avg = (existing.confidence + confidence) / 2;
+			db.prepare(
+				`UPDATE entity_dependencies
+				 SET confidence = ?, updated_at = ?
+				 WHERE id = ? AND agent_id = ?`,
+			).run(avg, now, existing.id, agentId);
+		}
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Exported transaction closures
 // ---------------------------------------------------------------------------
@@ -383,6 +441,11 @@ export function txPersistEntities(db: WriteDb, input: PersistEntitiesInput): Per
 		const isNewRelation = upsertRelation(db, source.id, target.id, triple.relationship, triple.confidence, now);
 		if (isNewRelation) relationsInserted++;
 		else relationsUpdated++;
+
+		// Also write to the current control-plane link table so extracted
+		// edges are visible to graph diagnostics and traversal.
+		upsertDependency(db, source.id, target.id, triple.relationship, triple.confidence, input.agentId, now,
+			`extracted from memory ${input.sourceMemoryId}`);
 
 		// Link mentions to source memory (INSERT OR IGNORE for idempotency)
 		const mentionPairs: Array<{ entityId: string; text: string }> = [
