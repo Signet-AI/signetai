@@ -19,10 +19,12 @@ import {
 	forgetDeadMemories,
 	getDedupStats,
 	getEmbeddingGapStats,
+	integrityCheck,
 	pruneChunkGroupEntities,
 	pruneGenericEntities,
 	pruneSingletonExtractedEntities,
 	reclassifyEntities,
+	rebuildDerivedIndexes,
 	reembedMissingMemories,
 	releaseStaleLeases,
 	requeueDeadJobs,
@@ -579,6 +581,25 @@ export function registerRepairRoutes(app: Hono): void {
 		"daemon-restart": ["signet", ["daemon", "restart"]],
 		update: ["signet", ["update", "install"]],
 	};
+
+	app.get("/api/repair/integrity-check", (c) => {
+		const result = integrityCheck(getDbAccessor());
+		return c.json(result);
+	});
+
+	app.post("/api/repair/rebuild-indexes", async (c) => {
+		const cfg = loadMemoryConfig(AGENTS_DIR);
+		const ctx = resolveRepairContext(c);
+		const result = await rebuildDerivedIndexes(
+			getDbAccessor(),
+			cfg.pipelineV2,
+			ctx,
+			repairLimiter,
+			fetchEmbedding,
+			cfg.embedding,
+		);
+		return c.json(result);
+	});
 
 	app.get("/api/troubleshoot/commands", (c) => {
 		return c.json({

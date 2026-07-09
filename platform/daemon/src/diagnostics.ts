@@ -35,6 +35,8 @@ export interface IndexHealth extends HealthScore {
 	readonly memoriesRowCount: number;
 	readonly ftsMismatch: boolean;
 	readonly embeddingCoverage: number;
+	/** True when FTS is mismatched or embedding coverage is below 80%. */
+	readonly indexNeedsRepair: boolean;
 }
 
 export interface ProviderHealth extends HealthScore {
@@ -342,6 +344,7 @@ export function getIndexHealth(db: ReadDb): IndexHealth {
 		memoriesRowCount,
 		ftsMismatch,
 		embeddingCoverage,
+		indexNeedsRepair: ftsMismatch || embeddingCoverage < 0.8,
 	};
 }
 
