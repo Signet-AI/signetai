@@ -157,6 +157,34 @@ export interface RecoverMemoryTxResult {
 	newVersion?: number;
 }
 
+export interface SupersedeMemoryTxInput {
+	memoryId: string;
+	supersededBy: string;
+	reason: string | null;
+	changedBy: string;
+	changedAt: string;
+	ctx?: MutationContext;
+}
+
+export type SupersedeMemoryTxStatus =
+	| "superseded"
+	| "not_found"
+	| "target_not_found"
+	| "deleted"
+	| "target_deleted"
+	| "self_supersede"
+	| "scope_mismatch"
+	| "already_superseded";
+
+export interface SupersedeMemoryTxResult {
+	status: SupersedeMemoryTxStatus;
+	memoryId: string;
+	supersededBy?: string;
+	currentSupersededBy?: string | null;
+	newVersion?: number;
+	currentVersion?: number;
+}
+
 interface MutableMemoryRow {
 	id: string;
 	content: string;
@@ -558,6 +586,126 @@ export function txForgetMemory(db: WriteDb, input: ForgetMemoryTxInput): ForgetM
 		memoryId: input.memoryId,
 		currentVersion: existing.version,
 		newVersion: existing.version + 1,
+	};
+}
+
+function normalizeMemoryScope(row: {
+	readonly agent_id: string | null;
+	readonly project: string | null;
+	readonly scope: string | null;
+	readonly visibility: string | null;
+}): { agentId: string; project: string | null; scope: string | null; visibility: string } {
+	return {
+		agentId: row.agent_id ?? "default",
+		project: row.project ?? null,
+		scope: row.scope ?? null,
+		visibility: row.visibility ?? "global",
+	};
+}
+
+export function txSupersedeMemory(db: WriteDb, input: SupersedeMemoryTxInput): SupersedeMemoryTxResult {
+	if (input.memoryId === input.supersededBy) {
+		return { status: "self_supersede", memoryId: input.memoryId, supersededBy: input.supersededBy };
+	}
+
+	const existing = db
+		.prepare(
+			`SELECT id, content, version, is_deleted, superseded_by, agent_id, project, scope, visibility
+			 FROM memories
+			 WHERE id = ?`,
+		)
+		.get(input.memoryId) as
+		| {
+				id: string;
+				content: string;
+				version: number;
+				is_deleted: number;
+				superseded_by: string | null;
+				agent_id: string | null;
+				project: string | null;
+				scope: string | null;
+				visibility: string | null;
+		  }
+		| undefined;
+	if (!existing) return { status: "not_found", memoryId: input.memoryId };
+	if (existing.is_deleted === 1) {
+		return { status: "deleted", memoryId: input.memoryId, currentVersion: existing.version };
+	}
+	if (existing.superseded_by === input.supersededBy) {
+		return {
+			status: "already_superseded",
+			memoryId: input.memoryId,
+			supersededBy: input.supersededBy,
+			currentVersion: existing.version,
+			currentSupersededBy: existing.superseded_by,
+		};
+	}
+
+	const target = db
+		.prepare(
+			`SELECT id, is_deleted, agent_id, project, scope, visibility
+			 FROM memories
+			 WHERE id = ?`,
+		)
+		.get(input.supersededBy) as
+		| {
+				id: string;
+				is_deleted: number;
+				agent_id: string | null;
+				project: string | null;
+				scope: string | null;
+				visibility: string | null;
+		  }
+		| undefined;
+	if (!target) return { status: "target_not_found", memoryId: input.memoryId, supersededBy: input.supersededBy };
+	if (target.is_deleted === 1)
+		return { status: "target_deleted", memoryId: input.memoryId, supersededBy: input.supersededBy };
+	const existingScope = normalizeMemoryScope(existing);
+	const targetScope = normalizeMemoryScope(target);
+	if (
+		existingScope.agentId !== targetScope.agentId ||
+		existingScope.project !== targetScope.project ||
+		existingScope.scope !== targetScope.scope ||
+		existingScope.visibility !== targetScope.visibility
+	) {
+		return { status: "scope_mismatch", memoryId: input.memoryId, supersededBy: input.supersededBy };
+	}
+
+	db.prepare(
+		`UPDATE memories
+		 SET superseded_by = ?,
+		     superseded_at = ?,
+		     superseded_reason = ?,
+		     updated_at = ?,
+		     updated_by = ?,
+		     version = version + 1
+		 WHERE id = ?`,
+	).run(input.supersededBy, input.changedAt, input.reason, input.changedAt, input.changedBy, input.memoryId);
+
+	insertHistoryEvent(db, {
+		memoryId: input.memoryId,
+		event: "superseded",
+		oldContent: existing.content,
+		newContent: null,
+		changedBy: input.changedBy,
+		reason: input.reason ?? "superseded",
+		metadata: JSON.stringify({
+			supersededBy: input.supersededBy,
+			previousSupersededBy: existing.superseded_by ?? null,
+		}),
+		createdAt: input.changedAt,
+		actorType: input.ctx?.actorType,
+		sessionId: input.ctx?.sessionId,
+		requestId: input.ctx?.requestId,
+	});
+
+	return {
+		status: "superseded",
+		memoryId: input.memoryId,
+		supersededBy: input.supersededBy,
+		currentVersion: existing.version,
+		newVersion: existing.version + 1,
+		currentSupersededBy: existing.superseded_by,
 	};
 }
 

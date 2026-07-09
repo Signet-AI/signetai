@@ -23,13 +23,14 @@ import { countChanges } from "../db-helpers";
 import { getInferenceProvider } from "../llm";
 import { logger } from "../logger";
 import { inferType, isDuplicate } from "../memory-classification";
-import { loadMemoryConfig } from "../memory-config";
+import { loadMemoryConfig, type ResolvedMemoryConfig } from "../memory-config";
 import {
 	IMMUTABLE_ARTIFACT_ERROR_PREFIX,
 	ensureCanonicalManifest,
 	updateManifest,
 	writeSummaryArtifact,
 } from "../memory-lineage";
+import { recordPathFeedback } from "../path-feedback";
 import { isNoiseSession } from "../session-noise";
 import { upsertSessionTranscript } from "../session-transcripts";
 import { upsertThreadHead } from "../thread-heads";
@@ -348,7 +349,7 @@ function parseLlmResponse(raw: string): LlmSummaryResult | null {
 function passesSignificanceGate(
 	accessor: DbAccessor,
 	job: SummaryJobRow,
-	memoryCfg: ReturnType<typeof loadMemoryConfig>,
+	memoryCfg: ResolvedMemoryConfig,
 ): boolean {
 	const significanceCfg: SignificanceConfig = memoryCfg.pipelineV2.significance ?? {
 		enabled: true,
@@ -385,7 +386,7 @@ function substituteCommandTokens(input: string, replacements: Record<string, str
 
 export async function runSummaryCommandProvider(
 	job: SummaryJobRow,
-	cfg: ReturnType<typeof loadMemoryConfig>,
+	cfg: ResolvedMemoryConfig,
 ): Promise<void> {
 	const command = cfg.pipelineV2.extraction.command;
 	if (!command) {
@@ -594,7 +595,7 @@ async function processJob(
 	accessor: DbAccessor,
 	provider: LlmProvider | null,
 	job: SummaryJobRow,
-	memoryCfg: ReturnType<typeof loadMemoryConfig>,
+	memoryCfg: ResolvedMemoryConfig,
 ): Promise<void> {
 	const commandMode = memoryCfg.pipelineV2.extraction.provider === "command";
 	const commandStageStatus: CommandStageStatus = commandMode ? getCommandStageStatus(accessor, job.id) : "none";
@@ -890,14 +891,25 @@ function loadInjectedMemories(
 }
 
 /**
- * Write per-memory relevance scores back to session_memories.
+ * Write observed per-memory verdicts back to session_memories and path feedback.
  * Maps LLM's 8-char ID prefixes to full memory IDs.
  */
-function writePerMemoryRelevance(
+function verdictScore(verdict: "USED" | "IGNORED" | "CONTRADICTED" | undefined, relevance: number): number {
+	if (verdict === "USED") return 1;
+	if (verdict === "IGNORED") return 0;
+	if (verdict === "CONTRADICTED") return -1;
+	return Math.max(0, Math.min(1, relevance));
+}
+
+function writePerMemoryVerdicts(
 	accessor: DbAccessor,
 	sessionKey: string,
 	agentId: string,
-	perMemory: ReadonlyArray<{ readonly id: string; readonly relevance: number }>,
+	perMemory: ReadonlyArray<{
+		readonly id: string;
+		readonly relevance: number;
+		readonly verdict?: "USED" | "IGNORED" | "CONTRADICTED";
+	}>,
 	injectedMemories: ReadonlyArray<InjectedMemoryPreview>,
 ): void {
 	if (perMemory.length === 0) return;
@@ -908,18 +920,36 @@ function writePerMemoryRelevance(
 		prefixMap.set(mem.memoryId.slice(0, 8), mem.memoryId);
 	}
 
+	const ratings: Record<string, number> = {};
+	const preferences: Record<string, string> = {};
+	const relevanceScores: Record<string, number> = {};
+	for (const entry of perMemory) {
+		const fullId = prefixMap.get(entry.id);
+		if (!fullId) continue;
+		ratings[fullId] = verdictScore(entry.verdict, entry.relevance);
+		preferences[fullId] = entry.verdict ?? "IGNORED";
+		relevanceScores[fullId] = ratings[fullId];
+	}
+	if (Object.keys(ratings).length === 0) return;
+
+	try {
+		recordPathFeedback(accessor, { sessionKey, agentId, ratings });
+	} catch (e) {
+		logger.warn("summary-worker", "Failed to write path feedback verdicts", {
+			error: e instanceof Error ? e.message : String(e),
+		});
+	}
+
 	try {
 		accessor.withWriteTx((db) => {
 			const stmt = db.prepare(
-				`UPDATE session_memories SET relevance_score = ?
+				`UPDATE session_memories
+				 SET relevance_score = ?,
+				     agent_preference = ?
 				 WHERE session_key = ? AND agent_id = ? AND memory_id = ?`,
 			);
-
-			for (const entry of perMemory) {
-				const fullId = prefixMap.get(entry.id);
-				if (!fullId) continue;
-				const score = Math.max(0, Math.min(1, entry.relevance));
-				stmt.run(score, sessionKey, agentId, fullId);
+			for (const [memoryId, score] of Object.entries(relevanceScores)) {
+				stmt.run(score, preferences[memoryId] ?? "IGNORED", sessionKey, agentId, memoryId);
 			}
 		});
 	} catch (e) {
@@ -954,7 +984,7 @@ function buildContinuityPrompt(
 Consider:
 - Were the memories relevant to what was discussed?
 - Did the user have to re-explain things that memory should have known?
-- Were there gaps where prior context would have helped?
+- Did a memory materially shape an answer, get ignored, or conflict with the transcript?
 
 Pre-loaded memories (${injectedMemories.length} total):
 ${memorySection}
@@ -963,16 +993,20 @@ Return ONLY a JSON object (no markdown fences):
 {
   "score": 0.0-1.0,
   "confidence": 0.0-1.0,
-  "memories_used": <number of pre-loaded memories that were actually relevant>,
+  "memories_used": <number of pre-loaded memories with verdict USED>,
   "novel_context_count": <number of times user had to re-explain something>,
   "reasoning": "Brief explanation of the score",
-  "per_memory": [{"id": "<8-char prefix>", "relevance": 0.0-1.0}]
+  "per_memory": [{"id": "<8-char prefix>", "relevance": 0.0-1.0, "verdict": "USED|IGNORED|CONTRADICTED"}]
 }
+
+Verdicts:
+- USED: the memory materially shaped an answer or decision in the transcript.
+- IGNORED: the memory was injected but did not matter.
+- CONTRADICTED: the transcript shows the memory is wrong or stale.
+Use the 8-char ID prefix shown in brackets. Include one per_memory item for every injected memory.
 
 Score guide: 1.0 = memories perfectly covered all needed context, 0.0 = memories were useless and everything was re-explained.
 Confidence: how certain you are in your scoring (1.0 = very confident, 0.0 = basically guessing).
-per_memory: rate each injected memory's relevance to the session. Use the 8-char ID prefix shown in brackets above.
-
 Session summary:
 ${summaryPreview}
 
@@ -989,6 +1023,7 @@ interface ContinuityResult {
 	readonly per_memory: ReadonlyArray<{
 		readonly id: string;
 		readonly relevance: number;
+		readonly verdict?: "USED" | "IGNORED" | "CONTRADICTED";
 	}>;
 }
 
@@ -997,7 +1032,7 @@ async function scoreContinuity(
 	provider: LlmProvider,
 	job: SummaryJobRow,
 	summary: string,
-	memoryCfg: ReturnType<typeof loadMemoryConfig>,
+	memoryCfg: ResolvedMemoryConfig,
 ): Promise<void> {
 	// Load injected memories for this session (empty array for old sessions)
 	const injectedMemories = loadInjectedMemories(accessor, job.session_key, job.agent_id);
@@ -1024,14 +1059,16 @@ async function scoreContinuity(
 
 	const perMemoryRaw = Array.isArray(parsed.per_memory) ? parsed.per_memory : [];
 	const perMemory = perMemoryRaw
-		.filter(
-			(e: unknown): e is { id: string; relevance: number } =>
-				typeof e === "object" &&
-				e !== null &&
-				typeof (e as Record<string, unknown>).id === "string" &&
-				typeof (e as Record<string, unknown>).relevance === "number",
-		)
-		.map((e) => ({ id: e.id, relevance: e.relevance }));
+		.filter((e: unknown): e is { id: string; relevance: number; verdict?: string } => {
+			if (typeof e !== "object" || e === null) return false;
+			const row = e as Record<string, unknown>;
+			return typeof row.id === "string" && typeof row.relevance === "number";
+		})
+		.map((e) => {
+			const verdict: "USED" | "IGNORED" | "CONTRADICTED" | undefined =
+				e.verdict === "USED" || e.verdict === "IGNORED" || e.verdict === "CONTRADICTED" ? e.verdict : undefined;
+			return { id: e.id, relevance: e.relevance, verdict };
+		});
 
 	const result: ContinuityResult = {
 		score: Math.max(0, Math.min(1, parsed.score)),
@@ -1042,9 +1079,9 @@ async function scoreContinuity(
 		per_memory: perMemory,
 	};
 
-	// Write per-memory relevance scores back to session_memories
+	// Write observed usage verdicts back to session_memories + path feedback.
 	if (job.session_key && result.per_memory.length > 0) {
-		writePerMemoryRelevance(accessor, job.session_key, job.agent_id, result.per_memory, injectedMemories);
+		writePerMemoryVerdicts(accessor, job.session_key, job.agent_id, result.per_memory, injectedMemories);
 	}
 
 	const id = crypto.randomUUID();

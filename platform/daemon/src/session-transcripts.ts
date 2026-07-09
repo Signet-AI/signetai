@@ -36,6 +36,23 @@ interface StoredTranscriptBackfillRow {
 
 const canonicalBackfills = new Set<string>();
 
+const OMP_UUID_LIKE_SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}[:-][0-9a-f]{4}[:-][0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export function canonicalizeTranscriptLookup(value: string): string {
+	const trimmed = value.trim();
+	return OMP_UUID_LIKE_SESSION_ID.test(trimmed) ? trimmed.replace(/:/g, "-") : trimmed;
+}
+
+
+export interface StoredTranscriptInfo {
+	readonly sessionKey: string;
+	readonly agentId: string;
+	readonly harness: string | null;
+	readonly project: string | null;
+	readonly createdAt: string;
+	readonly updatedAt: string | null;
+}
+
 export interface TranscriptHit {
 	readonly sessionKey: string;
 	readonly project: string | null;
@@ -76,6 +93,17 @@ function tableExists(name: string): boolean {
 		return getDbAccessor().withReadDb((db) => {
 			const row = db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`).get(name);
 			return row !== undefined;
+		});
+	} catch {
+		return false;
+	}
+}
+
+function sessionTranscriptsHasColumn(column: string): boolean {
+	try {
+		return getDbAccessor().withReadDb((db) => {
+			const cols = db.prepare("PRAGMA table_info(session_transcripts)").all() as ReadonlyArray<Record<string, unknown>>;
+			return cols.some((col) => col.name === column);
 		});
 	} catch {
 		return false;
@@ -445,13 +473,62 @@ export function upsertSessionTranscript(
 }
 
 /** Read the stored transcript content for a session. */
-export function getSessionTranscriptContent(sessionKey: string, agentId: string): string | undefined {
+export function getStoredSessionTranscriptInfo(sessionKey: string, agentId: string): StoredTranscriptInfo | undefined {
 	if (!tableExists("session_transcripts")) return undefined;
+	const aliases = [...new Set([sessionKey, canonicalizeTranscriptLookup(sessionKey)])];
+	const placeholders = aliases.map(() => "?").join(", ");
+	const hasUpdated = hasUpdatedAt();
+	const updatedAtExpr = hasUpdated ? "updated_at" : "NULL AS updated_at";
+	const seenExpr = hasUpdated ? "COALESCE(updated_at, created_at)" : "created_at";
 	try {
 		return getDbAccessor().withReadDb((db) => {
 			const row = db
-				.prepare("SELECT content FROM session_transcripts WHERE session_key = ? AND agent_id = ?")
-				.get(sessionKey, agentId) as { content: string } | undefined;
+				.prepare(
+					`SELECT session_key, agent_id, harness, project, created_at, ${updatedAtExpr}
+					 FROM session_transcripts
+					 WHERE agent_id = ? AND session_key IN (${placeholders})
+					 ORDER BY CASE WHEN session_key = ? THEN 0 ELSE 1 END, ${seenExpr} DESC
+					 LIMIT 1`,
+				)
+				.get(agentId, ...aliases, sessionKey) as
+				| {
+					session_key: string;
+					agent_id: string;
+					harness: string | null;
+					project: string | null;
+					created_at: string;
+					updated_at?: string | null;
+				}
+				| undefined;
+			if (!row) return undefined;
+			return {
+				sessionKey: row.session_key,
+				agentId: row.agent_id,
+				harness: row.harness,
+				project: row.project,
+				createdAt: row.created_at,
+				updatedAt: row.updated_at ?? null,
+			};
+		});
+	} catch {
+		return undefined;
+	}
+}
+
+export function getSessionTranscriptContent(sessionKey: string, agentId: string): string | undefined {
+	if (!tableExists("session_transcripts")) return undefined;
+	const aliases = [...new Set([sessionKey, canonicalizeTranscriptLookup(sessionKey)])];
+	const placeholders = aliases.map(() => "?").join(", ");
+	try {
+		return getDbAccessor().withReadDb((db) => {
+			const row = db
+				.prepare(
+					`SELECT content FROM session_transcripts
+					 WHERE agent_id = ? AND session_key IN (${placeholders})
+					 ORDER BY CASE WHEN session_key = ? THEN 0 ELSE 1 END, ${hasUpdatedAt() ? "COALESCE(updated_at, created_at)" : "created_at"} DESC
+					 LIMIT 1`,
+				)
+				.get(agentId, ...aliases, sessionKey) as { content: string } | undefined;
 			return row?.content;
 		});
 	} catch {
@@ -473,6 +550,40 @@ export function searchTranscriptFallback(params: {
 	const seenExpr = hasUpdatedAt() ? "COALESCE(st.updated_at, st.created_at)" : "st.created_at";
 	const sameProject = (project: string | null): number =>
 		params.project && project && params.project === project ? 0 : 1;
+	const exactQuery = params.query.trim();
+	if (exactQuery.length > 0) {
+		const aliases = [...new Set([exactQuery, canonicalizeTranscriptLookup(exactQuery)])];
+		const hasSessionId = sessionTranscriptsHasColumn("session_id");
+		const placeholders = aliases.map(() => "?").join(", ");
+		const keyPredicates = [`st.session_key IN (${placeholders})`];
+		if (hasSessionId) keyPredicates.push(`st.session_id IN (${placeholders})`);
+		const exactRows = getDbAccessor().withReadDb((db) => {
+			const args: unknown[] = [params.agentId, ...aliases, ...(hasSessionId ? aliases : []), exactQuery, params.project ?? "", limit];
+			return db
+				.prepare(
+					[
+						`SELECT st.session_key, st.project, ${seenExpr} AS seen_at, st.content, 0 AS rank`,
+						"FROM session_transcripts st",
+						"WHERE st.agent_id = ?",
+						`AND (${keyPredicates.join(" OR ")})`,
+						`ORDER BY CASE WHEN st.session_key = ? THEN 0 ELSE 1 END, CASE WHEN st.project = ? THEN 0 ELSE 1 END, ${seenExpr} DESC LIMIT ?`,
+					].join("\n"),
+				)
+				.all(...args) as TranscriptRow[];
+		});
+		if (exactRows.length > 0) {
+			return exactRows
+				.map((row) => ({
+					sessionKey: row.session_key,
+					project: row.project,
+					updatedAt: row.seen_at,
+					excerpt: buildExcerpt(typeof row.content === "string" ? row.content : "", params.query),
+					rank: 0,
+				}))
+				.sort((a, b) => sameProject(a.project) - sameProject(b.project))
+				.slice(0, limit);
+		}
+	}
 
 	try {
 		if (tableExists("session_transcripts_fts")) {
@@ -527,18 +638,23 @@ export function searchTranscriptFallback(params: {
 				}
 			}
 		}
+	} catch (error) {
+		logger.warn("transcripts", "Transcript FTS table check failed", {
+			error: error instanceof Error ? error.message : String(error),
+		});
+	}
+	if (params.allowScanFallback === false) return [];
 
-		if (params.allowScanFallback === false) return [];
+	const words = params.query
+		.toLowerCase()
+		.split(/\W+/)
+		.filter((term) => term.length >= 3)
+		.slice(0, 5);
+	const anchors = extractAnchorTerms(params.query).slice(0, 5);
+	const terms = anchors.length > 0 ? anchors : words;
+	if (terms.length === 0) return [];
 
-		const words = params.query
-			.toLowerCase()
-			.split(/\W+/)
-			.filter((term) => term.length >= 3)
-			.slice(0, 5);
-		const anchors = extractAnchorTerms(params.query).slice(0, 5);
-		const terms = anchors.length > 0 ? anchors : words;
-		if (terms.length === 0) return [];
-
+	try {
 		const rows = getDbAccessor().withReadDb((db) => {
 			const score = terms.map(() => "CASE WHEN LOWER(st.content) LIKE ? THEN 1 ELSE 0 END").join(" + ");
 			const any = terms.map(() => "LOWER(st.content) LIKE ?").join(" OR ");

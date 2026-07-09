@@ -618,6 +618,18 @@ function mergeCandidate(
 	}
 }
 
+function hasColumn(db: { prepare: (sql: string) => { all: () => Array<{ name?: unknown }> } }, table: string, column: string): boolean {
+	try {
+		return db.prepare(`PRAGMA table_info(${table})`).all().some((row) => row.name === column);
+	} catch {
+		return false;
+	}
+}
+
+function memorySupersessionSql(db: { prepare: (sql: string) => { all: () => Array<{ name?: unknown }> } }, alias = "m"): string {
+	return hasColumn(db, "memories", "superseded_by") ? ` AND ${alias}.superseded_by IS NULL` : "";
+}
+
 function authorizeScoredCandidates(
 	scored: ReadonlyArray<{ id: string; score: number; source: string }>,
 	filter: FilterClause,
@@ -634,12 +646,31 @@ function authorizeScoredCandidates(
 				`SELECT m.id
 				 FROM memories m
 				 WHERE m.id IN (${placeholders})
-				   AND m.is_deleted = 0${filter.sql}`,
+				   AND m.is_deleted = 0
+				   ${memorySupersessionSql(db)}${filter.sql}`,
 			)
 			.all(...ids, ...filter.args) as Array<{ id: string }>;
 		return new Set(rows.map((row) => row.id));
 	});
 	return scored.filter((row) => allowed.has(row.id));
+}
+
+function loadObservedScores(ids: readonly string[], agentId: string): Map<string, number> {
+	if (ids.length === 0) return new Map();
+	const placeholders = ids.map(() => "?").join(", ");
+	return getDbAccessor().withReadDb((db) => {
+		const rows = db
+			.prepare(
+				`SELECT memory_id, AVG(agent_relevance_score) AS score
+				 FROM session_memories
+				 WHERE agent_id = ?
+				   AND memory_id IN (${placeholders})
+				   AND agent_relevance_score IS NOT NULL
+				 GROUP BY memory_id`,
+			)
+			.all(agentId, ...ids) as Array<{ memory_id: string; score: number }>;
+		return new Map(rows.map((row) => [row.memory_id, row.score]));
+	});
 }
 
 interface CurrentnessInfo {
@@ -1276,7 +1307,8 @@ export async function hybridRecall(
         FROM memories_fts
         CROSS JOIN memories m ON memories_fts.rowid = m.rowid
         WHERE memories_fts MATCH ?
-          AND m.is_deleted = 0${filter.sql}
+          AND m.is_deleted = 0
+          ${memorySupersessionSql(db)}${filter.sql}
         ORDER BY raw_score
         LIMIT ?
       `) as any
@@ -1317,7 +1349,8 @@ export async function hybridRecall(
 					   CROSS JOIN memories m ON m.id = h.memory_id
 					   WHERE memory_hints_fts MATCH ?
 					     AND h.agent_id = ?
-					     AND m.is_deleted = 0${filter.sql}
+					     AND m.is_deleted = 0
+					     ${memorySupersessionSql(db)}${filter.sql}
 					   ORDER BY raw_score LIMIT ?`;
 
 					const agentId = params.agentId ?? "default";
@@ -1699,6 +1732,7 @@ export async function hybridRecall(
 											  AND ea.status = 'active'
 											 WHERE m.id IN (${placeholders})
 											   AND m.is_deleted = 0
+											   ${memorySupersessionSql(db)}
 											 ${filter.sql}
 											 GROUP BY m.id, m.importance`,
 											)
@@ -2106,7 +2140,15 @@ export async function hybridRecall(
 				(structuredEvidenceMap.get(row.id) ?? 0) > 0;
 			if (row.source === "hint" && !hasDirectEvidence) row.score = Math.min(row.score, HINT_ONLY_SCORE_CAP);
 		}
-		scored.sort((a, b) => b.score - a.score);
+		const observedScores = loadObservedScores(
+			scored.map((row) => row.id),
+			params.agentId ?? "default",
+		);
+		scored.sort((a, b) => {
+			const aObserved = observedScores.get(a.id);
+			const bObserved = observedScores.get(b.id);
+			return (bObserved ?? b.score) - (aObserved ?? a.score);
+		});
 	});
 
 	// Over-fetch before hydration for constrained searches. Broad candidate
@@ -2228,7 +2270,7 @@ export async function hybridRecall(
 					.prepare(
 						`SELECT m.id, m.content, m.source_id, m.type, m.tags, m.pinned, m.importance, m.who, m.project, m.created_at, m.visibility, m.scope
         FROM memories m
-        WHERE m.id IN (${placeholders}) AND m.is_deleted = 0${filter.sql}`,
+        WHERE m.id IN (${placeholders}) AND m.is_deleted = 0${memorySupersessionSql(db)}${filter.sql}`,
 					)
 					.all(...topIds, ...filter.args) as Array<{
 					id: string;
@@ -2451,6 +2493,7 @@ export async function hybridRecall(
 							 WHERE mem.entity_id IN (${ePlaceholders})
 							   AND m.type = 'rationale'
 							   AND m.is_deleted = 0
+							   ${memorySupersessionSql(db)}
 							   ${filter.sql}
 							 LIMIT 10`,
 					)
@@ -2527,7 +2570,7 @@ export async function hybridRecall(
 								 FROM memory_entity_mentions mem
 								 JOIN memories m ON m.id = mem.memory_id
 								 WHERE mem.entity_id IN (${ph})
-								   AND m.is_deleted = 0${filter.sql}`,
+								   AND m.is_deleted = 0${memorySupersessionSql(db)}${filter.sql}`,
 							)
 							.all(...eids, ...filter.args) as Array<{ entity_id: string }>;
 						eids = sr.map((r) => r.entity_id);

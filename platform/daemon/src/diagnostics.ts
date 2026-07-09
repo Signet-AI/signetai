@@ -112,6 +112,7 @@ export interface DiagnosticsReport {
 export interface DiagnosticsOptions {
 	readonly graphEnabled?: boolean;
 	readonly graphExtractionWritesEnabled?: boolean;
+	readonly traversalPrimary?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -560,7 +561,7 @@ const BASE_WEIGHTS = {
 
 export function getGraphHealth(
 	db: ReadDb,
-	options?: Pick<DiagnosticsOptions, "graphEnabled" | "graphExtractionWritesEnabled">,
+	options?: Pick<DiagnosticsOptions, "graphEnabled" | "graphExtractionWritesEnabled" | "traversalPrimary">,
 ): GraphHealth {
 	const extractionWritesEnabled = options?.graphExtractionWritesEnabled ?? null;
 	try {
@@ -582,7 +583,13 @@ export function getGraphHealth(
 		const edgeCount = edgeRow?.n ?? 0;
 		const activeMemoryCount = memoryRow?.n ?? 0;
 		const graphEnabled = options?.graphEnabled ?? true;
-		const score = graphEnabled && activeMemoryCount >= GRAPH_FLATLINE_MEMORY_THRESHOLD && entityCount === 0 ? 0.6 : 1.0;
+		const traversalPrimary = options?.traversalPrimary ?? false;
+		const zeroEdgeTraversal = traversalPrimary && edgeCount === 0;
+		const score = zeroEdgeTraversal
+			? 0.6
+			: graphEnabled && activeMemoryCount >= GRAPH_FLATLINE_MEMORY_THRESHOLD && entityCount === 0
+				? 0.6
+				: 1.0;
 
 		const avg = cohesionRow?.avg;
 		const quality: GraphHealth["quality"] =
@@ -596,7 +603,7 @@ export function getGraphHealth(
 
 		return {
 			score,
-			status: scoreStatus(score),
+			status: zeroEdgeTraversal ? "degraded" : scoreStatus(score),
 			extractionWritesEnabled,
 			entityCount,
 			edgeCount,
@@ -637,6 +644,7 @@ export function getDiagnostics(
 	const graph = getGraphHealth(db, {
 		graphEnabled: options?.graphEnabled,
 		graphExtractionWritesEnabled: options?.graphExtractionWritesEnabled,
+		traversalPrimary: options?.traversalPrimary,
 	});
 
 	const compositeScore = clamp(

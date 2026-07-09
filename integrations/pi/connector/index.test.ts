@@ -165,6 +165,13 @@ describe("EXTENSION_BUNDLE integrity", () => {
 		expect(EXTENSION_BUNDLE).not.toContain("session.compacting");
 	});
 
+	it("wires pi-mono compat events (session_before_fork/session_before_switch)", () => {
+		// pi-mono (older monorepo fork) only emits the before-variants; the bundle
+		// must register handlers for them so fork/switch tracking works under it.
+		expect(EXTENSION_BUNDLE).toContain("session_before_fork");
+		expect(EXTENSION_BUNDLE).toContain("session_before_switch");
+	});
+
 	it("includes harness field in remember request body", () => {
 		expect(EXTENSION_BUNDLE).toMatch(/hooks\/remember[\s\S]{0,200}harness:/);
 	});

@@ -721,7 +721,10 @@ pub async fn recall(
                 let placeholders: String = top_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
                 let sql = format!(
                     "SELECT id, content, type, tags, pinned, importance, who, project, created_at, visibility, scope, source_id
-                     FROM memories WHERE id IN ({placeholders}) AND COALESCE(is_deleted, 0) = 0"
+                     FROM memories
+                     WHERE id IN ({placeholders})
+                       AND COALESCE(is_deleted, 0) = 0
+                       AND superseded_by IS NULL"
                 );
 
                 let mut stmt = conn.prepare(&sql)?;

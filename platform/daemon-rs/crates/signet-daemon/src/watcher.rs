@@ -1,11 +1,13 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use notify::{RecursiveMode, Watcher};
+use rusqlite::OptionalExtension;
 use sha2::{Digest, Sha256};
 use signet_core::db::Priority;
+use signet_core::error::CoreError;
 use signet_services::transactions;
 use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, error, info, warn};
@@ -16,6 +18,7 @@ const SYNC_DEBOUNCE_MS: u64 = 2_000;
 const COMMIT_DEBOUNCE_MS: u64 = 5_000;
 const GIT_AUTOCOMMIT_TIMEOUT_MS: u64 = 30_000;
 const MEMORY_IMPORT_POLL_MS: u64 = 30_000;
+const LEGACY_MARKDOWN_IMPORTER_VERSION: i64 = 1;
 const CONFIG_FILES: [&str; 3] = ["agent.yaml", "AGENT.yaml", "config.yaml"];
 const SYNC_TRIGGER_FILES: [&str; 8] = [
     "agent.yaml",
@@ -289,6 +292,184 @@ fn is_memory_artifact_filename(name: &str) -> bool {
         .any(|suffix| name.ends_with(suffix))
 }
 
+#[derive(Clone, Copy)]
+struct LegacyMarkdownFileState {
+    mtime_ms: i64,
+    ctime_ms: i64,
+    size: i64,
+}
+
+struct LegacyMarkdownImportState {
+    mtime_ms: i64,
+    ctime_ms: i64,
+    size: i64,
+    content_hash: String,
+    importer_version: i64,
+    chunk_count: i64,
+    status: String,
+}
+
+fn system_time_ms(time: SystemTime) -> i64 {
+    time.duration_since(UNIX_EPOCH)
+        .map(|duration| i64::try_from(duration.as_millis()).unwrap_or(i64::MAX))
+        .unwrap_or(0)
+}
+
+#[cfg(unix)]
+fn metadata_ctime_ms(metadata: &std::fs::Metadata) -> i64 {
+    use std::os::unix::fs::MetadataExt;
+    metadata.ctime().saturating_mul(1000) + (metadata.ctime_nsec() / 1_000_000)
+}
+
+#[cfg(not(unix))]
+fn metadata_ctime_ms(metadata: &std::fs::Metadata) -> i64 {
+    metadata
+        .created()
+        .or_else(|_| metadata.modified())
+        .map(system_time_ms)
+        .unwrap_or(0)
+}
+
+fn legacy_markdown_file_state(path: &Path) -> Option<LegacyMarkdownFileState> {
+    let metadata = std::fs::metadata(path).ok()?;
+    Some(LegacyMarkdownFileState {
+        mtime_ms: metadata.modified().map(system_time_ms).unwrap_or(0),
+        ctime_ms: metadata_ctime_ms(&metadata),
+        size: i64::try_from(metadata.len()).unwrap_or(i64::MAX),
+    })
+}
+
+async fn read_legacy_markdown_import_state(
+    state: &AppState,
+    path: &Path,
+) -> Option<LegacyMarkdownImportState> {
+    let path = path.to_string_lossy().to_string();
+    state
+        .pool
+        .read(move |conn| {
+            conn.query_row(
+                "SELECT mtime_ms, ctime_ms, size, content_hash, importer_version, chunk_count, status
+                   FROM legacy_markdown_imports
+                  WHERE path = ?1",
+                [&path],
+                |row| {
+                    Ok(LegacyMarkdownImportState {
+                        mtime_ms: row.get(0)?,
+                        ctime_ms: row.get(1)?,
+                        size: row.get(2)?,
+                        content_hash: row.get(3)?,
+                        importer_version: row.get(4)?,
+                        chunk_count: row.get(5)?,
+                        status: row.get(6)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(CoreError::from)
+        })
+        .await
+        .ok()
+        .flatten()
+}
+
+fn legacy_markdown_import_is_current(
+    row: Option<&LegacyMarkdownImportState>,
+    state: LegacyMarkdownFileState,
+) -> bool {
+    row.is_some_and(|row| {
+        row.importer_version == LEGACY_MARKDOWN_IMPORTER_VERSION
+            && row.mtime_ms == state.mtime_ms
+            && row.ctime_ms == state.ctime_ms
+            && row.size == state.size
+            && (row.status == "imported" || row.status == "empty")
+    })
+}
+
+fn upsert_legacy_markdown_import_state(
+    conn: &rusqlite::Connection,
+    path: &str,
+    state: LegacyMarkdownFileState,
+    content_hash: &str,
+    chunk_count: i64,
+    status: &str,
+    error: Option<&str>,
+) -> Result<(), CoreError> {
+    let now = chrono::Utc::now().to_rfc3339();
+    conn.execute(
+        "INSERT INTO legacy_markdown_imports
+          (path, mtime_ms, ctime_ms, size, content_hash, importer_version, chunk_count,
+           last_imported_at, last_seen_at, status, error)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8, ?9, ?10)
+         ON CONFLICT(path) DO UPDATE SET
+           mtime_ms = excluded.mtime_ms,
+           ctime_ms = excluded.ctime_ms,
+           size = excluded.size,
+           content_hash = excluded.content_hash,
+           importer_version = excluded.importer_version,
+           chunk_count = excluded.chunk_count,
+           last_imported_at = excluded.last_imported_at,
+           last_seen_at = excluded.last_seen_at,
+           status = excluded.status,
+           error = excluded.error",
+        rusqlite::params![
+            path,
+            state.mtime_ms,
+            state.ctime_ms,
+            state.size,
+            content_hash,
+            LEGACY_MARKDOWN_IMPORTER_VERSION,
+            chunk_count,
+            now,
+            status,
+            error,
+        ],
+    )?;
+    Ok(())
+}
+
+fn legacy_markdown_chunk_known(
+    conn: &rusqlite::Connection,
+    path: &str,
+    chunk_hash: &str,
+) -> Result<bool, CoreError> {
+    let found: Option<i64> = conn
+        .query_row(
+            "SELECT 1 FROM legacy_markdown_chunks WHERE file_path = ?1 AND chunk_hash = ?2",
+            rusqlite::params![path, chunk_hash],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(found.is_some())
+}
+
+fn record_legacy_markdown_chunk(
+    conn: &rusqlite::Connection,
+    path: &str,
+    chunk_hash: &str,
+    chunk_index: i64,
+    memory_id: Option<&str>,
+    source_id: &str,
+) -> Result<(), CoreError> {
+    conn.execute(
+        "INSERT INTO legacy_markdown_chunks
+          (file_path, chunk_hash, chunk_index, memory_id, source_id, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+         ON CONFLICT(file_path, chunk_hash) DO UPDATE SET
+           chunk_index = excluded.chunk_index,
+           memory_id = COALESCE(excluded.memory_id, legacy_markdown_chunks.memory_id),
+           source_id = excluded.source_id",
+        rusqlite::params![
+            path,
+            chunk_hash,
+            chunk_index,
+            memory_id,
+            source_id,
+            chrono::Utc::now().to_rfc3339(),
+        ],
+    )?;
+    Ok(())
+}
+
 async fn ingest_memory_markdown(
     state: &AppState,
     path: &Path,
@@ -297,6 +478,14 @@ async fn ingest_memory_markdown(
     if path.file_name().and_then(|name| name.to_str()) == Some("MEMORY.md") {
         return 0;
     }
+    let Some(file_state) = legacy_markdown_file_state(path) else {
+        return 0;
+    };
+    let prior_state = read_legacy_markdown_import_state(state, path).await;
+    if legacy_markdown_import_is_current(prior_state.as_ref(), file_state) {
+        return 0;
+    }
+
     let content = match std::fs::read_to_string(path) {
         Ok(content) => content,
         Err(err) => {
@@ -308,16 +497,63 @@ async fn ingest_memory_markdown(
             return 0;
         }
     };
-    if content.trim().is_empty() {
+    let content_hash = sha256_hex_prefix(&content, 16);
+    if prior_state.as_ref().is_some_and(|row| {
+        row.content_hash == content_hash
+            && row.importer_version == LEGACY_MARKDOWN_IMPORTER_VERSION
+            && (row.status == "imported" || row.status == "empty")
+    }) {
+        let path_text = path.to_string_lossy().to_string();
+        let content_hash_for_tx = content_hash.clone();
+        let chunk_count = prior_state.as_ref().map(|row| row.chunk_count).unwrap_or(0);
+        let status = prior_state
+            .as_ref()
+            .map(|row| row.status.clone())
+            .unwrap_or_else(|| "imported".to_string());
+        let _ = state
+            .pool
+            .write_tx(Priority::Low, move |conn| {
+                upsert_legacy_markdown_import_state(
+                    conn,
+                    &path_text,
+                    file_state,
+                    &content_hash_for_tx,
+                    chunk_count,
+                    &status,
+                    None,
+                )?;
+                Ok(serde_json::json!({}))
+            })
+            .await;
         return 0;
     }
 
-    let content_hash = sha256_hex_prefix(&content, 16);
+    if content.trim().is_empty() {
+        let path_text = path.to_string_lossy().to_string();
+        let content_hash_for_tx = content_hash.clone();
+        let _ = state
+            .pool
+            .write_tx(Priority::Low, move |conn| {
+                upsert_legacy_markdown_import_state(
+                    conn,
+                    &path_text,
+                    file_state,
+                    &content_hash_for_tx,
+                    0,
+                    "empty",
+                    None,
+                )?;
+                Ok(serde_json::json!({}))
+            })
+            .await;
+        ingested.insert(path.to_path_buf(), content_hash);
+        return 0;
+    }
+
     if ingested.get(path) == Some(&content_hash) {
         debug!(path = %path.display(), "legacy memory markdown file unchanged, skipping");
         return 0;
     }
-    ingested.insert(path.to_path_buf(), content_hash);
 
     let filename = path
         .file_stem()
@@ -326,7 +562,8 @@ async fn ingest_memory_markdown(
     let date = filename.get(..10).filter(|value| is_iso_date_prefix(value));
     let plans = chunk_markdown_hierarchically(&content, 512)
         .into_iter()
-        .filter_map(|chunk| {
+        .enumerate()
+        .filter_map(|(chunk_index, chunk)| {
             let body = if !chunk.header.is_empty() && chunk.text.starts_with(&chunk.header) {
                 chunk.text[chunk.header.len()..].trim()
             } else {
@@ -335,13 +572,16 @@ async fn ingest_memory_markdown(
             if body.len() < 80 {
                 return None;
             }
-            let chunk_key = format!("openclaw:{filename}:{}", sha256_hex_prefix(&chunk.text, 16));
+            let chunk_hash = sha256_hex_prefix(&chunk.text, 16);
+            let chunk_key = format!("openclaw:{filename}:{chunk_hash}");
             let level_tag = match chunk.level {
                 MemoryMarkdownChunkLevel::Section => "hierarchical-section",
                 MemoryMarkdownChunkLevel::Paragraph => "hierarchical-paragraph",
             };
             Some(MemoryImportPlan {
                 content: chunk.text,
+                chunk_hash,
+                chunk_index,
                 importance: match chunk.level {
                     MemoryMarkdownChunkLevel::Section => 0.65,
                     MemoryMarkdownChunkLevel::Paragraph => 0.55,
@@ -359,15 +599,39 @@ async fn ingest_memory_markdown(
         .collect::<Vec<_>>();
 
     if plans.is_empty() {
+        let path_text = path.to_string_lossy().to_string();
+        let content_hash_for_tx = content_hash.clone();
+        let _ = state
+            .pool
+            .write_tx(Priority::Low, move |conn| {
+                upsert_legacy_markdown_import_state(
+                    conn,
+                    &path_text,
+                    file_state,
+                    &content_hash_for_tx,
+                    0,
+                    "empty",
+                    None,
+                )?;
+                Ok(serde_json::json!({}))
+            })
+            .await;
+        ingested.insert(path.to_path_buf(), content_hash);
         return 0;
     }
 
+    let path_text = path.to_string_lossy().to_string();
+    let content_hash_for_tx = content_hash.clone();
     let result = state
         .pool
         .write_tx(Priority::High, move |conn| {
             let mut imported = 0usize;
             for plan in &plans {
-                transactions::ingest(
+                if legacy_markdown_chunk_known(conn, &path_text, &plan.chunk_hash)? {
+                    imported += 1;
+                    continue;
+                }
+                let result = transactions::ingest(
                     conn,
                     &transactions::IngestInput {
                         content: &plan.content,
@@ -389,8 +653,25 @@ async fn ingest_memory_markdown(
                         scope: None,
                     },
                 )?;
+                record_legacy_markdown_chunk(
+                    conn,
+                    &path_text,
+                    &plan.chunk_hash,
+                    i64::try_from(plan.chunk_index).unwrap_or(i64::MAX),
+                    Some(&result.id),
+                    &plan.source_id,
+                )?;
                 imported += 1;
             }
+            upsert_legacy_markdown_import_state(
+                conn,
+                &path_text,
+                file_state,
+                &content_hash_for_tx,
+                i64::try_from(imported).unwrap_or(i64::MAX),
+                "imported",
+                None,
+            )?;
             Ok(serde_json::json!({ "imported": imported }))
         })
         .await;
@@ -402,6 +683,7 @@ async fn ingest_memory_markdown(
                 .and_then(serde_json::Value::as_u64)
                 .and_then(|count| usize::try_from(count).ok())
                 .unwrap_or(0);
+            ingested.insert(path.to_path_buf(), content_hash);
             if imported > 0 {
                 info!(
                     path = %path.display(),
@@ -413,6 +695,25 @@ async fn ingest_memory_markdown(
             imported
         }
         Err(err) => {
+            ingested.remove(path);
+            let path_text = path.to_string_lossy().to_string();
+            let content_hash_for_tx = content_hash.clone();
+            let error_message = err.to_string();
+            let _ = state
+                .pool
+                .write_tx(Priority::Low, move |conn| {
+                    upsert_legacy_markdown_import_state(
+                        conn,
+                        &path_text,
+                        file_state,
+                        &content_hash_for_tx,
+                        0,
+                        "failed",
+                        Some(&error_message),
+                    )?;
+                    Ok(serde_json::json!({}))
+                })
+                .await;
             error!(
                 path = %path.display(),
                 error = %err,
@@ -426,6 +727,8 @@ async fn ingest_memory_markdown(
 #[derive(Clone)]
 struct MemoryImportPlan {
     content: String,
+    chunk_hash: String,
+    chunk_index: usize,
     importance: f64,
     source_id: String,
     tags: Vec<String>,

@@ -10,6 +10,7 @@
  * - onRecall: explicit memory query
  */
 
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -55,8 +56,9 @@ import { buildAgentScopeClause } from "./memory-access-scope";
 import * as memoryCandidates from "./memory-candidates";
 import { type ScoredMemory, buildActiveConstraintsSection } from "./memory-candidates";
 import { effectiveScore, inferType, isDuplicate } from "./memory-classification";
-import { loadMemoryConfig } from "./memory-config";
-import { hybridRecall } from "./memory-search";
+import { loadMemoryConfig, type ResolvedMemoryConfig } from "./memory-config";
+import { hybridRecall, type RecallResponse, type RecallResult } from "./memory-search";
+import { recordMemorySearchTelemetry } from "./memory-search-telemetry";
 import {
 	type SynthesisRequest,
 	type SynthesisResponse,
@@ -65,13 +67,7 @@ import {
 	setSynthesisWorker,
 	writeMemoryMd,
 } from "./memory-synthesis";
-import {
-	applyFtsOverlapFeedback,
-	decayAspectWeights,
-	getFeedbackTelemetry,
-	recordFeedbackTelemetry,
-	shouldRunSessionDecay,
-} from "./pipeline/aspect-feedback";
+import { getFeedbackTelemetry, recordFeedbackTelemetry } from "./pipeline/aspect-feedback";
 import {
 	invalidateTraversalCache,
 	resolveFocalEntities,
@@ -82,7 +78,7 @@ import { enqueueSummaryJob } from "./pipeline/summary-worker";
 import { countTokens } from "./pipeline/tokenizer";
 import { getDefaultPluginHost } from "./plugins/index";
 import type { PluginPromptTargetV1 } from "./plugins/types";
-import { buildEntityContextInject, buildEntityPromptContext } from "./prompt-entity-context";
+import { buildEntityContextInject, buildEntityPromptContext, type PromptEntityContextMemory } from "./prompt-entity-context";
 import { buildRecallQueryShape, queryAnchorsMissingFromRecall, stripUntrustedMetadata } from "./prompt-text";
 import { listSecrets } from "./secrets";
 import {
@@ -151,6 +147,40 @@ function getMemoryDbPath(): string {
 }
 
 const deferredSessionEndWork = new Set<Promise<void>>();
+
+
+function summaryJobsHasColumn(column: string): boolean {
+	try {
+		return getDbAccessor().withReadDb((db) => {
+			const cols = db.prepare("PRAGMA table_info(summary_jobs)").all() as ReadonlyArray<Record<string, unknown>>;
+			return cols.some((col) => col.name === column);
+		});
+	} catch {
+		return false;
+	}
+}
+
+function summaryJobWithContentHashExists(agentId: string, sessionKey: string | undefined, contentHash: string): boolean {
+	if (!sessionKey || !summaryJobsHasColumn("content_hash")) return false;
+	return getDbAccessor().withReadDb((db) => {
+		const row = db
+			.prepare(
+				`SELECT id FROM summary_jobs
+				 WHERE agent_id = ? AND session_key = ? AND content_hash = ?
+				 AND status IN ('pending', 'processing', 'completed')
+				 LIMIT 1`,
+			)
+			.get(agentId, sessionKey, contentHash) as { id: string } | undefined;
+		return Boolean(row);
+	});
+}
+
+function storeSummaryJobContentHash(jobId: string | undefined, contentHash: string): void {
+	if (!jobId || !summaryJobsHasColumn("content_hash")) return;
+	getDbAccessor().withWriteTx((db) => {
+		db.prepare("UPDATE summary_jobs SET content_hash = ? WHERE id = ?").run(contentHash, jobId);
+	});
+}
 
 export async function flushDeferredSessionEndWorkForTests(): Promise<void> {
 	await Promise.allSettled([...deferredSessionEndWork]);
@@ -1311,6 +1341,62 @@ function finalizeUserPromptSubmitSuccess(
 	return result;
 }
 
+function entityMemoryToRecallResult(memory: PromptEntityContextMemory): RecallResult {
+	return {
+		id: memory.id,
+		content: memory.content,
+		content_length: memory.content.length,
+		truncated: false,
+		score: memory.score,
+		source: memory.sourceKind ?? "entity_context",
+		...(memory.sourceId ? { source_id: memory.sourceId } : {}),
+		...(memory.sourcePath ? { source_path: memory.sourcePath } : {}),
+		type: "fact",
+		tags: null,
+		pinned: false,
+		importance: memory.importance,
+		who: "signet",
+		project: null,
+		created_at: new Date(0).toISOString(),
+	};
+}
+
+function recordUserPromptRecallTelemetry(input: {
+	readonly cfg: { readonly pipelineV2: { readonly telemetry: { readonly memorySearchQaEnabled: boolean; readonly retentionDays: number } } };
+	readonly agentId: string;
+	readonly sessionKey: string | undefined;
+	readonly project: string | undefined;
+	readonly userMessage: string;
+	readonly memories: readonly PromptEntityContextMemory[];
+	readonly startedAt: number;
+	readonly engine: string;
+}): void {
+	if (!input.cfg.pipelineV2.telemetry.memorySearchQaEnabled) return;
+	const response: RecallResponse = {
+		results: input.memories.map(entityMemoryToRecallResult),
+		query: input.userMessage,
+		method: "hybrid",
+		meta: {
+			totalReturned: input.memories.length,
+			hasSupplementary: false,
+			noHits: input.memories.length === 0,
+			timings: {
+				totalMs: Date.now() - input.startedAt,
+				stages: [{ name: input.engine, durationMs: Date.now() - input.startedAt }],
+			},
+		},
+	};
+	recordMemorySearchTelemetry(getDbAccessor(), {
+		route: "POST /api/hooks/user-prompt-submit",
+		agentId: input.agentId,
+		sessionKey: input.sessionKey ?? null,
+		project: input.project ?? null,
+		params: { query: input.userMessage, sessionKey: input.sessionKey, project: input.project },
+		response,
+		retentionDays: input.cfg.pipelineV2.telemetry.retentionDays,
+	});
+}
+
 type UserPromptSubmitDeps = {
 	readonly logger: typeof logger;
 	readonly loadMemoryConfig: typeof loadMemoryConfig;
@@ -1541,6 +1627,16 @@ export async function handleUserPromptSubmit(
 			embedding: cfg.embedding,
 		});
 		if (entityContext.lines.length === 0) {
+			recordUserPromptRecallTelemetry({
+				cfg,
+				agentId,
+				sessionKey: req.sessionKey,
+				project: req.project,
+				userMessage,
+				memories: [],
+				startedAt: start,
+				engine: entityContext.engine,
+			});
 			return finalizeUserPromptSubmitSuccess(
 				req,
 				userMessage,
@@ -1555,6 +1651,18 @@ export async function handleUserPromptSubmit(
 				deps.logger,
 			);
 		}
+		const memoryIds = entityContext.memories.map((memory) => memory.id);
+		deps.trackFtsHits(req.sessionKey, memoryIds, agentId);
+		recordUserPromptRecallTelemetry({
+			cfg,
+			agentId,
+			sessionKey: req.sessionKey,
+			project: req.project,
+			userMessage,
+			memories: entityContext.memories,
+			startedAt: start,
+			engine: "entity-context",
+		});
 		const pluginContext = buildPluginPromptContributionSection("user-prompt-submit", deps.logger);
 		return finalizeUserPromptSubmitSuccess(
 			req,
@@ -1771,24 +1879,35 @@ export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionE
 			sessionId,
 		});
 	} else if (hasSummaryLength) {
-		summaryStatus = "pending";
-		jobId = enqueueSummaryJob(getDbAccessor(), {
-			harness: req.harness,
-			transcript: summaryTranscript,
-			sessionKey,
-			sessionId,
-			project: req.cwd,
-			agentId,
-			trigger: "session_end",
-			capturedAt: endedAt,
-			endedAt,
-		});
+		const contentHash = createHash("sha256").update(retainedTranscript).digest("hex");
+		if (summaryJobWithContentHashExists(agentId, sessionKey, contentHash)) {
+			summaryStatus = "skipped";
+			logger.info("hooks", "Session end summary skipped duplicate content", {
+				agentId,
+				sessionKey,
+				contentHash,
+			});
+		} else {
+			summaryStatus = "pending";
+			jobId = enqueueSummaryJob(getDbAccessor(), {
+				harness: req.harness,
+				transcript: retainedTranscript,
+				sessionKey,
+				sessionId,
+				project: req.cwd ?? null,
+				agentId,
+				trigger: "session_end",
+				capturedAt: endedAt,
+				endedAt,
+			});
+			storeSummaryJobContentHash(jobId, contentHash);
 
-		logger.info("hooks", "Session end queued for summary", {
-			jobId,
-			feedbackTelemetry: getFeedbackTelemetry(),
-		});
-		logger.info("hooks", "Session end transcript queued", {
+			logger.info("hooks", "Session end queued for summary", {
+				jobId,
+				feedbackTelemetry: getFeedbackTelemetry(),
+			});
+		}
+				logger.info("hooks", "Session end transcript queued", {
 			harness: req.harness,
 			project: req.cwd,
 			sessionKey,
@@ -1823,20 +1942,28 @@ export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionE
 	}
 
 	setImmediate(() => {
-		const work = runTranscriptCaptureOnce(getDbAccessor(), getAgentsDir())
-			.catch((error) => {
+		let work: Promise<void>;
+		try {
+			work = runTranscriptCaptureOnce(getDbAccessor(), getAgentsDir()).catch((error) => {
 				logger.warn("hooks", "Deferred transcript capture job failed", {
 					error: error instanceof Error ? error.message : String(error),
 					sessionKey,
 				});
-			})
-			.then(() =>
-				deferSessionEndWork({
-					sessionKey,
-					agentId,
-					memoryCfg,
-				}),
-			);
+			});
+		} catch (error) {
+			logger.warn("hooks", "Deferred transcript capture job failed", {
+				error: error instanceof Error ? error.message : String(error),
+				sessionKey,
+			});
+			return;
+		}
+		work = work.then(() =>
+			deferSessionEndWork({
+				sessionKey,
+				agentId,
+				memoryCfg,
+			}),
+		);
 		deferredSessionEndWork.add(work);
 		void work.finally(() => {
 			deferredSessionEndWork.delete(work);
@@ -1849,49 +1976,24 @@ export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionE
 async function deferSessionEndWork(params: {
 	sessionKey: string | undefined;
 	agentId: string;
-	memoryCfg: ReturnType<typeof loadMemoryConfig>;
+	memoryCfg: ResolvedMemoryConfig;
 }): Promise<void> {
 	const { sessionKey, agentId, memoryCfg } = params;
 
 	const pipelineActive = memoryCfg.pipelineV2.enabled || memoryCfg.pipelineV2.shadowMode;
 	if (sessionKey && pipelineActive && memoryCfg.pipelineV2.graph.enabled && memoryCfg.pipelineV2.feedback.enabled) {
-		let feedbackDecayedAspects = 0;
-		let feedbackPropagatedAttributes = 0;
 		try {
-			const feedback = applyFtsOverlapFeedback(getDbAccessor(), sessionKey, agentId, {
-				delta: memoryCfg.pipelineV2.feedback.ftsWeightDelta,
-				maxWeight: memoryCfg.pipelineV2.feedback.maxAspectWeight,
-				minWeight: memoryCfg.pipelineV2.feedback.minAspectWeight,
-			});
-
-			if (
-				memoryCfg.pipelineV2.feedback.decayEnabled &&
-				shouldRunSessionDecay(agentId, memoryCfg.pipelineV2.feedback.decayIntervalSessions)
-			) {
-				feedbackDecayedAspects = decayAspectWeights(getDbAccessor(), agentId, {
-					decayRate: memoryCfg.pipelineV2.feedback.decayRate,
-					minWeight: memoryCfg.pipelineV2.feedback.minAspectWeight,
-					staleDays: memoryCfg.pipelineV2.feedback.staleDays,
-				});
-			}
-
-			feedbackPropagatedAttributes = propagateMemoryStatus(getDbAccessor(), agentId);
-			if (feedbackDecayedAspects > 0 || feedbackPropagatedAttributes > 0) {
+			const feedbackPropagatedAttributes = propagateMemoryStatus(getDbAccessor(), agentId);
+			if (feedbackPropagatedAttributes > 0) {
 				invalidateTraversalCache();
 			}
-			recordFeedbackTelemetry({
-				feedbackDecayedAspects,
-				feedbackPropagatedAttributes,
-			});
-			logger.debug("hooks", "Deferred aspect feedback completed", {
+			recordFeedbackTelemetry({ feedbackPropagatedAttributes });
+			logger.debug("hooks", "Deferred status propagation completed", {
 				sessionKey,
-				feedbackAspectsUpdated: feedback.aspectsUpdated,
-				feedbackFtsConfirmations: feedback.totalFtsConfirmations,
-				feedbackDecayedAspects,
 				feedbackPropagatedAttributes,
 			});
 		} catch (err) {
-			logger.warn("hooks", "Deferred aspect feedback failed", {
+			logger.warn("hooks", "Deferred status propagation failed", {
 				error: err instanceof Error ? err.message : String(err),
 				sessionKey,
 			});

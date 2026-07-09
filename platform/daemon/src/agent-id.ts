@@ -10,21 +10,31 @@ export interface AgentScope {
 }
 
 /**
+ * Resolve default daemon agent ID from environment.
+ */
+export function defaultAgentId(env: NodeJS.ProcessEnv = process.env): string {
+	const configured = env.SIGNET_AGENT_ID?.trim();
+	return configured && configured.length > 0 ? configured : "default";
+}
+
+/**
  * Resolve the agent ID from a request body.
  * Falls back to parsing OpenClaw's "agent:{id}:{rest}" session key format.
- * Final fallback: "default".
+ * Final fallback: configured daemon agent or "default".
  */
-export function resolveAgentId(body: { agentId?: string; sessionKey?: string }): string {
+export function resolveAgentId(
+	body: { agentId?: string; sessionKey?: string },
+	env: NodeJS.ProcessEnv = process.env,
+): string {
 	const explicit = body.agentId?.trim();
 	if (explicit) return explicit;
 	const parts = (body.sessionKey ?? "").split(":");
 	if (parts[0] === "agent" && parts[1]?.trim()) return parts[1].trim();
-	return "default";
+	return defaultAgentId(env);
 }
 
 export function resolveDaemonAgentId(env: NodeJS.ProcessEnv = process.env): string {
-	const agentId = env.SIGNET_AGENT_ID?.trim();
-	return resolveAgentId({ agentId });
+	return defaultAgentId(env);
 }
 
 function parseScopeValue(value: unknown): string | null {

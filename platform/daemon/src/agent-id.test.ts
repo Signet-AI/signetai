@@ -35,6 +35,11 @@ describe("agent id registration", () => {
 		expect(resolveDaemonAgentId({ SIGNET_AGENT_ID: "  " } as NodeJS.ProcessEnv)).toBe("default");
 	});
 
+
+	test("uses configured daemon agent id as resolveAgentId fallback", () => {
+		expect(resolveAgentId({}, { SIGNET_AGENT_ID: "noam" } as NodeJS.ProcessEnv)).toBe("noam");
+		expect(resolveAgentId({}, {} as NodeJS.ProcessEnv)).toBe("default");
+	});
 	test("resolves agent id from agent-scoped session keys", () => {
 		expect(resolveAgentId({ sessionKey: "agent:agent-b:session-1" })).toBe("agent-b");
 	});

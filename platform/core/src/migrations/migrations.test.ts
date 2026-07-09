@@ -14,6 +14,7 @@ import { up as agentScopedTemporalUniqueness } from "./047-agent-scoped-temporal
 import { up as threadHeadsMigration } from "./048-thread-heads";
 import { up as ontologyControlPlaneState } from "./070-ontology-control-plane-state";
 import { up as documentScopeColumns } from "./080-document-scope-columns";
+import { up as memoryLifecycleRepair } from "./083-memory-lifecycle-repair";
 import { MIGRATIONS, hasPendingMigrations, runMigrations } from "./index";
 
 function createFreshDb(): Database {
@@ -1048,6 +1049,130 @@ describe("migration framework", () => {
 		expect(colNames).toContain("success");
 		expect(colNames).toContain("error_text");
 		expect(colNames).toContain("created_at");
+	});
+
+	test("migration 083 backfills legacy relations idempotently", () => {
+		db = createFreshDb();
+		runMigrations(db);
+
+		db.query(
+			`INSERT INTO entities (id, name, canonical_name, entity_type, agent_id, created_at, updated_at)
+			 VALUES ('entity-source', 'Source', 'source', 'concept', 'agent-a', '2026-07-01T00:00:00.000Z', '2026-07-01T00:00:00.000Z')`,
+		).run();
+		db.query(
+			`INSERT INTO entities (id, name, canonical_name, entity_type, agent_id, created_at, updated_at)
+			 VALUES ('entity-target', 'Target', 'target', 'concept', 'agent-a', '2026-07-01T00:00:00.000Z', '2026-07-01T00:00:00.000Z')`,
+		).run();
+		db.query(
+			`INSERT INTO entities (id, name, canonical_name, entity_type, agent_id, created_at, updated_at)
+			 VALUES ('entity-other-agent', 'Other', 'other', 'concept', 'agent-b', '2026-07-01T00:00:00.000Z', '2026-07-01T00:00:00.000Z')`,
+		).run();
+		db.query(
+			`INSERT INTO relations (id, source_entity_id, target_entity_id, relation_type, strength, created_at)
+			 VALUES ('legacy-rel', 'entity-source', 'entity-target', 'unknown_local_type', 0.8, '2026-07-01T00:00:01.000Z')`,
+		).run();
+		db.query(
+			`INSERT INTO relations (id, source_entity_id, target_entity_id, relation_type, strength, created_at)
+			 VALUES ('cross-agent-rel', 'entity-source', 'entity-other-agent', 'related_to', 0.9, '2026-07-01T00:00:02.000Z')`,
+		).run();
+		db.query(
+			`INSERT INTO documents (id, source_type, metadata_json, agent_id, project, created_at, updated_at)
+			 VALUES ('doc-guard', 'obsidian', '{"signet":{"agentId":"metadata-agent","project":"/old"}}', 'corrected-agent', '/corrected', '2026-07-01T00:00:00.000Z', '2026-07-01T00:00:00.000Z')`,
+		).run();
+		db.query(
+			`INSERT INTO memories (id, content, content_hash, type, source_type, visibility, agent_id, created_at, updated_at, updated_by)
+			 VALUES ('doc-memory-guard', 'chunk', 'doc-hash-guard', 'document_chunk', 'document', 'global', 'corrected-agent', '2026-07-01T00:00:00.000Z', '2026-07-01T00:00:00.000Z', 'test')`,
+		).run();
+		db.query("INSERT INTO document_memories (document_id, memory_id) VALUES ('doc-guard', 'doc-memory-guard')").run();
+		db.query(
+			`INSERT INTO documents (id, source_type, metadata_json, agent_id, project, created_at, updated_at)
+			 VALUES ('doc-placeholder', 'obsidian', '{"signet":{"agentId":"metadata-agent","project":"/metadata"}}', 'default', NULL, '2026-07-01T00:00:00.000Z', '2026-07-01T00:00:00.000Z')`,
+		).run();
+		db.exec("DROP INDEX IF EXISTS idx_documents_agent_project");
+		db.exec("DROP INDEX IF EXISTS idx_documents_source_scope");
+
+		memoryLifecycleRepair(db);
+		memoryLifecycleRepair(db);
+
+		const row = db
+			.query(
+				`SELECT id, agent_id, dependency_type, strength, confidence, reason, source_id, source_kind, status, created_at, updated_at
+				 FROM entity_dependencies WHERE id = 'relation:legacy-rel'`,
+			)
+			.get() as {
+			id: string;
+			agent_id: string;
+			dependency_type: string;
+			strength: number;
+			confidence: number;
+			reason: string;
+			source_id: string;
+			source_kind: string;
+			status: string;
+			created_at: string;
+			updated_at: string;
+		};
+		expect(row).toEqual({
+			id: "relation:legacy-rel",
+			agent_id: "agent-a",
+			dependency_type: "related_to",
+			strength: 0.8,
+			confidence: 0.5,
+			reason: "legacy relation backfill: unknown_local_type",
+			source_id: "legacy-rel",
+			source_kind: "relation",
+			status: "active",
+			created_at: "2026-07-01T00:00:01.000Z",
+			updated_at: "2026-07-01T00:00:01.000Z",
+		});
+		const { count } = db
+			.query("SELECT COUNT(*) AS count FROM entity_dependencies WHERE id = 'relation:legacy-rel'")
+			.get() as { count: number };
+		expect(count).toBe(1);
+		const crossAgent = db.query("SELECT id FROM entity_dependencies WHERE id = 'relation:cross-agent-rel'").get();
+		expect(crossAgent).toBeNull();
+		const guardedDocument = db.query("SELECT agent_id, project FROM documents WHERE id = 'doc-guard'").get() as {
+			agent_id: string;
+			project: string;
+		};
+		expect(guardedDocument).toEqual({ agent_id: "corrected-agent", project: "/corrected" });
+		const repairedDocumentIndexes = db
+			.query(
+				"SELECT name FROM sqlite_master WHERE type = 'index' AND name IN ('idx_documents_agent_project', 'idx_documents_source_scope')",
+			)
+			.all();
+		expect(repairedDocumentIndexes.length).toBe(2);
+		const documentMemory = db.query("SELECT visibility FROM memories WHERE id = 'doc-memory-guard'").get() as {
+			visibility: string;
+		};
+		expect(documentMemory.visibility).toBe("private");
+		const placeholderDocument = db
+			.query("SELECT agent_id, project FROM documents WHERE id = 'doc-placeholder'")
+			.get() as {
+			agent_id: string;
+			project: string;
+		};
+		expect(placeholderDocument).toEqual({ agent_id: "metadata-agent", project: "/metadata" });
+	});
+
+	test("migration 083 preserves existing document scope when one column is missing", () => {
+		db = createFreshDb();
+		runMigrations(db);
+		db.query(
+			`INSERT INTO documents (id, source_type, metadata_json, agent_id, project, created_at, updated_at)
+			 VALUES ('doc-partial', 'obsidian', '{"signet":{"agentId":"metadata-agent","project":"/metadata"}}', 'corrected-agent', '/corrected', '2026-07-01T00:00:00.000Z', '2026-07-01T00:00:00.000Z')`,
+		).run();
+		db.exec("DROP INDEX IF EXISTS idx_documents_agent_project");
+		db.exec("DROP INDEX IF EXISTS idx_documents_source_scope");
+		db.exec("ALTER TABLE documents DROP COLUMN project");
+
+		memoryLifecycleRepair(db);
+
+		const row = db.query("SELECT agent_id, project FROM documents WHERE id = 'doc-partial'").get() as {
+			agent_id: string;
+			project: string;
+		};
+		expect(row).toEqual({ agent_id: "corrected-agent", project: "/metadata" });
 	});
 
 	test("entities table has graph-extended columns after migration", () => {

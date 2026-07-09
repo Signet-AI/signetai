@@ -41,8 +41,19 @@ type PromptEntityContextLine = {
 	readonly version: number;
 };
 
-type PromptEntityContextResult = {
+export type PromptEntityContextMemory = {
+	readonly id: string;
+	readonly content: string;
+	readonly score: number;
+	readonly sourceKind: string | null;
+	readonly sourceId: string | null;
+	readonly sourcePath: string | null;
+	readonly importance: number;
+};
+
+export type PromptEntityContextResult = {
 	readonly lines: readonly string[];
+	readonly memories: readonly PromptEntityContextMemory[];
 	readonly memoryCount: number;
 	readonly engine: "entity-context" | "low-signal" | "no-entity" | "no-aspect-hit";
 };
@@ -638,11 +649,11 @@ export async function buildEntityPromptContext({
 	fetchEmbedding,
 	embedding,
 }: BuildEntityPromptContextOptions): Promise<PromptEntityContextResult> {
-	if (isLowSignalPrompt(userMessage)) return { lines: [], memoryCount: 0, engine: "low-signal" };
-	if (!existsSync(memoryDbPath)) return { lines: [], memoryCount: 0, engine: "no-entity" };
-	if (!hasDbAccessor()) return { lines: [], memoryCount: 0, engine: "no-entity" };
+	if (isLowSignalPrompt(userMessage)) return { lines: [], memories: [], memoryCount: 0, engine: "low-signal" };
+	if (!existsSync(memoryDbPath)) return { lines: [], memories: [], memoryCount: 0, engine: "no-entity" };
+	if (!hasDbAccessor()) return { lines: [], memories: [], memoryCount: 0, engine: "no-entity" };
 	const matches = getDbAccessor().withReadDb((db) => resolvePromptEntityMatches(db, agentId, userMessage));
-	if (matches.length === 0) return { lines: [], memoryCount: 0, engine: "no-entity" };
+	if (matches.length === 0) return { lines: [], memories: [], memoryCount: 0, engine: "no-entity" };
 
 	const vectorsByEntity = new Map<
 		string,
@@ -663,7 +674,7 @@ export async function buildEntityPromptContext({
 		}
 		vectorsByEntity.set(entity.entityId, { semanticQuery, queryVector });
 	}
-	if (vectorsByEntity.size === 0) return { lines: [], memoryCount: 0, engine: "no-aspect-hit" };
+	if (vectorsByEntity.size === 0) return { lines: [], memories: [], memoryCount: 0, engine: "no-aspect-hit" };
 	return getDbAccessor().withReadDb((db) => {
 		const lines = matches.flatMap((entity) =>
 			loadEntityContextLines(
@@ -675,13 +686,29 @@ export async function buildEntityPromptContext({
 				vectorsByEntity.get(entity.entityId)?.queryVector ?? null,
 			),
 		);
-		if (lines.length === 0) return { lines: [], memoryCount: 0, engine: "no-aspect-hit" };
+		if (lines.length === 0) return { lines: [], memories: [], memoryCount: 0, engine: "no-aspect-hit" };
 		const selected = selectWithBudgetSkippingOversized(
-			lines.map((line) => ({ content: formatEntityContextLine(line) })),
+			lines.map((line) => ({ content: formatEntityContextLine(line), line })),
 			injectBudget,
 		).slice(0, ENTITY_CONTEXT_MAX_LINES);
+		const memories = selected.flatMap(({ line }) =>
+			line.memoryId
+				? [
+						{
+							id: line.memoryId,
+							content: line.content,
+							score: Math.max(line.confidence, line.importance),
+							sourceKind: line.sourceKind,
+							sourceId: line.sourceId,
+							sourcePath: line.sourcePath,
+							importance: line.importance,
+						},
+					]
+				: [],
+		);
 		return {
 			lines: selected.map((line) => line.content),
+			memories: [...new Map(memories.map((memory) => [memory.id, memory])).values()],
 			memoryCount: selected.length,
 			engine: selected.length > 0 ? "entity-context" : "no-aspect-hit",
 		};

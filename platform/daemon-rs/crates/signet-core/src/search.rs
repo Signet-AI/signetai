@@ -138,7 +138,10 @@ struct FilterClause {
 }
 
 fn build_filter(f: &RecallFilter) -> FilterClause {
-    let mut parts = vec!["COALESCE(m.is_deleted, 0) = 0".to_string()];
+    let mut parts = vec![
+        "COALESCE(m.is_deleted, 0) = 0".to_string(),
+        "m.superseded_by IS NULL".to_string(),
+    ];
     let mut args: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
 
     if let Some(scope) = f.scope {

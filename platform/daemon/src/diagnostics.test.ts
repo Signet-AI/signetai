@@ -261,6 +261,18 @@ describe("getGraphHealth", () => {
 		expect(result.score).toBe(1);
 	});
 
+	test("primary traversal with zero edges degrades graph health", () => {
+		const primary = getGraphHealth(asReadDb(db), { traversalPrimary: true, graphExtractionWritesEnabled: false });
+		expect(primary.edgeCount).toBe(0);
+		expect(primary.status).toBe("degraded");
+		expect(primary.score).toBeLessThan(1);
+
+		const secondary = getGraphHealth(asReadDb(db), { traversalPrimary: false, graphExtractionWritesEnabled: false });
+		expect(secondary.edgeCount).toBe(0);
+		expect(secondary.status).toBe("healthy");
+		expect(secondary.score).toBe(1);
+	});
+
 	test("composite status reflects graph degradation", () => {
 		for (let i = 0; i < 10; i++) {
 			insertMemory(db, `mem-graph-composite-${i}`);

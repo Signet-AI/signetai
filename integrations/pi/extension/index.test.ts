@@ -458,6 +458,197 @@ describe("SignetPiExtension", () => {
 		expect(registered.has("before_agent_start")).toBe(true);
 		expect(registered.has("context")).toBe(true);
 		expect(registered.has("session_before_compact")).toBe(true);
+		// pi-mono compat: the before-events must be registered so fork/switch
+		// tracking works under pi-mono (which only emits the before-variants).
+		expect(registered.has("session_before_switch")).toBe(true);
+		expect(registered.has("session_before_fork")).toBe(true);
+		expect(registered.has("session_switch")).toBe(true);
+		expect(registered.has("session_fork")).toBe(true);
+	});
+
+	it("session_before_switch ends the previous session; session_switch only refreshes (no double session-end)", async () => {
+		const requests: Array<{ method: string; path: string; body: unknown }> = [];
+		const server = Bun.serve({
+			port: 0,
+			async fetch(req) {
+				const path = new URL(req.url).pathname;
+				const body = req.method === "POST" ? ((await req.json().catch(() => undefined)) as unknown) : undefined;
+				requests.push({ method: req.method, path, body });
+				if (path === "/health") return new Response(null, { status: 200 });
+				if (path === "/api/hooks/session-start") return Response.json({ inject: "session-context" });
+				if (path === "/api/hooks/session-end") return Response.json({ ok: true });
+				return new Response("not found", { status: 404 });
+			},
+		});
+		servers.push(server);
+		process.env.SIGNET_DAEMON_URL = `http://127.0.0.1:${server.port}`;
+
+		const handlers: HandlerMap = {};
+		const pi = {
+			on(event: string, handler: (event: unknown, ctx: unknown) => unknown) {
+				(handlers[event] ??= []).push(handler);
+			},
+			registerCommand(_name: string, _opts: unknown) {},
+			registerTool(_opts: unknown) {},
+		};
+		SignetPiExtension(pi as never);
+
+		const ctx = {
+			cwd: "/tmp/pi-project",
+			sessionManager: {
+				getBranch: () => [],
+				getEntries: () => [],
+				getHeader: () => ({ id: "session-pi-switch-1", cwd: "/tmp/pi-project" }),
+				getSessionFile: () => undefined,
+				getSessionId: () => "session-pi-switch-1",
+			},
+			ui: {
+				notify: () => {},
+				setStatus: () => {},
+				theme: { fg: (_color: string, text: string) => text },
+			},
+		};
+
+		// Establish the active session so endPreviousSession has a session to end.
+		await handlers.session_start[0]?.({}, ctx);
+		// before-event (emitted by both current pi and pi-mono): end previous session.
+		await handlers.session_before_switch[0]?.({ type: "session_before_switch", reason: "new" }, ctx);
+		// post-event (current pi only): refresh the new session. pi-mono refreshes
+		// via session_start (reason fork/new/resume) instead.
+		await handlers.session_switch[0]?.({ type: "session_switch", reason: "new" }, ctx);
+
+		const posts = requests.filter((r) => r.method === "POST");
+		expect(posts.map((r) => r.path)).toEqual([
+			"/api/hooks/session-start",
+			"/api/hooks/session-end",
+			"/api/hooks/session-start",
+		]);
+		// Exactly one session-end across before + post events — no double post.
+		expect(posts.filter((r) => r.path === "/api/hooks/session-end")).toHaveLength(1);
+		const end = posts.find((r) => r.path === "/api/hooks/session-end");
+		expect(end?.body).toMatchObject({
+			harness: "pi",
+			reason: "session_switch",
+			sessionKey: "session-pi-switch-1",
+		});
+		expect(end?.body).not.toHaveProperty("transcript");
+	});
+
+	it("session_before_fork ends the previous session with the fork reason", async () => {
+		const requests: Array<{ method: string; path: string; body: unknown }> = [];
+		const server = Bun.serve({
+			port: 0,
+			async fetch(req) {
+				const path = new URL(req.url).pathname;
+				const body = req.method === "POST" ? ((await req.json().catch(() => undefined)) as unknown) : undefined;
+				requests.push({ method: req.method, path, body });
+				if (path === "/health") return new Response(null, { status: 200 });
+				if (path === "/api/hooks/session-start") return Response.json({ inject: "session-context" });
+				if (path === "/api/hooks/session-end") return Response.json({ ok: true });
+				return new Response("not found", { status: 404 });
+			},
+		});
+		servers.push(server);
+		process.env.SIGNET_DAEMON_URL = `http://127.0.0.1:${server.port}`;
+
+		const handlers: HandlerMap = {};
+		const pi = {
+			on(event: string, handler: (event: unknown, ctx: unknown) => unknown) {
+				(handlers[event] ??= []).push(handler);
+			},
+			registerCommand(_name: string, _opts: unknown) {},
+			registerTool(_opts: unknown) {},
+		};
+		SignetPiExtension(pi as never);
+
+		const ctx = {
+			cwd: "/tmp/pi-project",
+			sessionManager: {
+				getBranch: () => [],
+				getEntries: () => [],
+				getHeader: () => ({ id: "session-pi-fork-1", cwd: "/tmp/pi-project" }),
+				getSessionFile: () => undefined,
+				getSessionId: () => "session-pi-fork-1",
+			},
+			ui: {
+				notify: () => {},
+				setStatus: () => {},
+				theme: { fg: (_color: string, text: string) => text },
+			},
+		};
+
+		await handlers.session_start[0]?.({}, ctx);
+		await handlers.session_before_fork[0]?.({ type: "session_before_fork", entryId: "entry-42" }, ctx);
+
+		const end = requests.find((r) => r.method === "POST" && r.path === "/api/hooks/session-end");
+		expect(end).toBeDefined();
+		expect(end?.body).toMatchObject({
+			harness: "pi",
+			reason: "session_fork",
+			sessionKey: "session-pi-fork-1",
+		});
+	});
+
+	it("pi-mono flow: before-event ends the old session, then session_start establishes the new one", async () => {
+		// pi-mono only emits session_before_switch (no session_switch post-event) and
+		// follows it with session_start (reason new/resume) carrying the NEW session.
+		const requests: Array<{ method: string; path: string; body: unknown }> = [];
+		const server = Bun.serve({
+			port: 0,
+			async fetch(req) {
+				const path = new URL(req.url).pathname;
+				const body = req.method === "POST" ? ((await req.json().catch(() => undefined)) as unknown) : undefined;
+				requests.push({ method: req.method, path, body });
+				if (path === "/health") return new Response(null, { status: 200 });
+				if (path === "/api/hooks/session-start") return Response.json({ inject: "session-context" });
+				if (path === "/api/hooks/session-end") return Response.json({ ok: true });
+				return new Response("not found", { status: 404 });
+			},
+		});
+		servers.push(server);
+		process.env.SIGNET_DAEMON_URL = `http://127.0.0.1:${server.port}`;
+
+		const handlers: HandlerMap = {};
+		const pi = {
+			on(event: string, handler: (event: unknown, ctx: unknown) => unknown) {
+				(handlers[event] ??= []).push(handler);
+			},
+			registerCommand(_name: string, _opts: unknown) {},
+			registerTool(_opts: unknown) {},
+		};
+		SignetPiExtension(pi as never);
+
+		const ctxFor = (id: string) => ({
+			cwd: "/tmp/pi-project",
+			sessionManager: {
+				getBranch: () => [],
+				getEntries: () => [],
+				getHeader: () => ({ id, cwd: "/tmp/pi-project" }),
+				getSessionFile: () => undefined,
+				getSessionId: () => id,
+			},
+			ui: {
+				notify: () => {},
+				setStatus: () => {},
+				theme: { fg: (_color: string, text: string) => text },
+			},
+		});
+
+		// 1) Old session A is active.
+		await handlers.session_start[0]?.({}, ctxFor("session-A"));
+		// 2) pi-mono before-event fires while A is still the active session.
+		await handlers.session_before_switch[0]?.({ type: "session_before_switch", reason: "new" }, ctxFor("session-A"));
+		// 3) pi-mono follows with session_start for the NEW session B (no session_switch).
+		await handlers.session_start[0]?.({}, ctxFor("session-B"));
+
+		const posts = requests.filter((r) => r.method === "POST");
+		const ends = posts.filter((r) => r.path === "/api/hooks/session-end");
+		const starts = posts.filter((r) => r.path === "/api/hooks/session-start");
+		// Exactly one session-end, targeting the old session A.
+		expect(ends).toHaveLength(1);
+		expect(ends[0]?.body).toMatchObject({ harness: "pi", reason: "session_switch", sessionKey: "session-A" });
+		// session-start fired for both A (initial) and B (after switch).
+		expect(starts.map((r) => (r.body as { sessionKey?: string }).sessionKey)).toEqual(["session-A", "session-B"]);
 	});
 
 	it("bypass mode skips automatic hooks but keeps commands and tools", () => {
