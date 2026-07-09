@@ -107,10 +107,12 @@ describe("check-publish-manifests", () => {
 		expect(buildScript).toContain('join(root, "skills")');
 		expect(buildScript).toContain("templateAssets");
 		expect(buildScript).toContain("skillAssets");
+		expect(buildScript).toContain("connectorAssets");
 		expect(buildScript).toContain("process.env.SIGNET_VERSION");
 		expect(buildScript).toContain("process.env.SIGNET_VERSION?.trim()");
 		expect(buildScript).toContain("SIGNET_TEMPLATES_DIR");
 		expect(buildScript).toContain("SIGNET_SKILLS_SOURCE");
+		expect(buildScript).toContain("SIGNET_CONNECTOR_ASSETS_DIR");
 		expect(buildScript).not.toContain('"@1password/sdk"');
 		expect(workflow).toContain("build-native:");
 		expect(workflow).toContain("platform: linux-x64");

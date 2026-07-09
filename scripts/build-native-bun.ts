@@ -91,6 +91,7 @@ if (!existsSync(join(dashboardDir, "index.html"))) {
 }
 const templatesDir = join(root, "surfaces", "cli", "templates");
 const skillsDir = join(root, "skills");
+const hermesPluginDir = join(root, "integrations", "hermes-agent", "connector", "hermes-plugin");
 
 const workerEntries = [
 	["synthesis-render-worker", "platform/daemon/src/synthesis-render-worker.ts"],
@@ -117,17 +118,19 @@ const dashboardAssets = walkFiles(dashboardDir).map((path) => {
 		contentBase64: readFileSync(path).toString("base64"),
 	};
 });
-const fileAssetsFor = (dir: string) =>
+const fileAssetsFor = (dir: string, prefix = "") =>
 	walkFiles(dir).map((path) => {
 		const relative = path.slice(dir.length).replaceAll("\\", "/");
+		const normalized = relative.startsWith("/") ? relative.slice(1) : relative;
 		return {
-			path: relative.startsWith("/") ? relative.slice(1) : relative,
+			path: prefix ? `${prefix}/${normalized}` : normalized,
 			contentBase64: readFileSync(path).toString("base64"),
 			mode: statSync(path).mode & 0o777,
 		};
 	});
 const templateAssets = fileAssetsFor(templatesDir);
 const skillAssets = fileAssetsFor(skillsDir);
+const connectorAssets = fileAssetsFor(hermesPluginDir, "hermes-agent/hermes-plugin");
 
 const workerAssets = workerEntries.map(([name]) => ({
 	name,
@@ -188,6 +191,7 @@ const wasmAssets = ["ort-wasm-simd-threaded.mjs", "ort-wasm-simd-threaded.wasm"]
 writeFileSync(
 	join(buildDir, "native-assets.ts"),
 	`export const dashboardAssets = ${JSON.stringify(dashboardAssets)} as const;\n` +
+		`export const connectorAssets = ${JSON.stringify(connectorAssets)} as const;\n` +
 		`export const skillAssets = ${JSON.stringify(skillAssets)} as const;\n` +
 		`export const templateAssets = ${JSON.stringify(templateAssets)} as const;\n` +
 		`export const workerAssets = ${JSON.stringify(workerAssets)} as const;\n` +
@@ -206,16 +210,17 @@ export const { env, pipeline } = transformers;
 writeFileSync(
 	join(buildDir, "cli-native.ts"),
 	`import { materializeEmbeddedAssetTree, registerNativeAssets, registerNativeTransformersBindings } from "../platform/daemon/src/native-runtime-assets";
-import { dashboardAssets, skillAssets, templateAssets, wasmAssets, workerAssets } from "./native-assets";
+import { connectorAssets, dashboardAssets, skillAssets, templateAssets, wasmAssets, workerAssets } from "./native-assets";
 import * as transformersWebRuntime from "./transformers-web-runtime";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 
-registerNativeAssets({ dashboard: dashboardAssets, skills: skillAssets, templates: templateAssets, workers: workerAssets, wasm: wasmAssets });
+registerNativeAssets({ connectors: connectorAssets, dashboard: dashboardAssets, skills: skillAssets, templates: templateAssets, workers: workerAssets, wasm: wasmAssets });
 registerNativeTransformersBindings(transformersWebRuntime);
 process.env.SIGNET_VERSION = process.env.SIGNET_VERSION?.trim() || ${JSON.stringify(nativeVersion)};
 process.env.SIGNET_TEMPLATES_DIR ??= materializeEmbeddedAssetTree("templates") ?? "";
 process.env.SIGNET_SKILLS_SOURCE ??= materializeEmbeddedAssetTree("skills") ?? "";
+process.env.SIGNET_CONNECTOR_ASSETS_DIR ??= materializeEmbeddedAssetTree("connectors") ?? "";
 
 // When the binary is invoked directly (curl-install + signet install,
 // raw binary from PATH) without a parent process setting SIGNET_DIR,

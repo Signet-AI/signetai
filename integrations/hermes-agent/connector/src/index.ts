@@ -21,6 +21,13 @@ function getPluginSourceDir(): string {
 	// In development, hermes-plugin/ is at package root
 	const fromSrc = join(__dirname, "..", "..", "hermes-plugin");
 	if (existsSync(fromSrc)) return fromSrc;
+	// Native binaries materialize embedded connector assets into a stable,
+	// content-addressed tree before loading the CLI.
+	const connectorAssetsDir = process.env.SIGNET_CONNECTOR_ASSETS_DIR?.trim();
+	if (connectorAssetsDir) {
+		const fromEmbeddedAssets = join(connectorAssetsDir, "hermes-agent", "hermes-plugin");
+		if (existsSync(fromEmbeddedAssets)) return fromEmbeddedAssets;
+	}
 	// In the native bundle (SIGNET_DIR), hermes-plugin/ lives inside the
 	// connectors directory alongside the connector JS output.
 	const signetDir = process.env.SIGNET_DIR?.trim();
@@ -480,6 +487,8 @@ function getConnectorPackageJsonPath(): string | null {
 }
 
 function getConnectorVersion(): string {
+	const runtimeVersion = process.env.SIGNET_VERSION?.trim();
+	if (runtimeVersion) return runtimeVersion;
 	const packageJsonPath = getConnectorPackageJsonPath();
 	if (!packageJsonPath) return "unknown";
 	try {
@@ -991,8 +1000,15 @@ export async function diagnoseHermesIntegration(opts?: {
 	const repoPluginDir = hermesRepo ? getRepoPluginTargetDir(hermesRepo) : null;
 	const checks: HermesDiagnosticCheck[] = [];
 	const warnings: string[] = [];
-	const userPluginCurrent = pluginLooksCurrent(userPluginDir);
-	const repoPluginCurrent = repoPluginDir ? pluginLooksCurrent(repoPluginDir) : false;
+	let pluginSourceDir: string | null = null;
+	let pluginSourceError: string | null = null;
+	try {
+		pluginSourceDir = getPluginSourceDir();
+	} catch (error) {
+		pluginSourceError = error instanceof Error ? error.message : String(error);
+	}
+	const userPluginCurrent = pluginSourceDir !== null && pluginLooksCurrent(userPluginDir);
+	const repoPluginCurrent = pluginSourceDir !== null && repoPluginDir ? pluginLooksCurrent(repoPluginDir) : false;
 	const probe = hermesRepo
 		? probeHermesProvider(hermesRepo)
 		: userPluginCurrent
@@ -1000,6 +1016,13 @@ export async function diagnoseHermesIntegration(opts?: {
 			: { ok: false, toolNames: [], error: "Hermes repo not found and user plugin is missing or stale" };
 	const daemon = await checkDaemon(daemonUrl);
 
+	checks.push({
+		id: "plugin-source",
+		label: "Bundled Hermes plugin source",
+		ok: pluginSourceDir !== null,
+		detail: pluginSourceDir ?? pluginSourceError ?? "Cannot find hermes-plugin directory in connector package",
+		fix: pluginSourceDir ? undefined : "Reinstall Signet from a release that includes Hermes connector assets.",
+	});
 	checks.push({
 		id: "daemon-health",
 		label: "Signet daemon",

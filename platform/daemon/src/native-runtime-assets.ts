@@ -26,6 +26,7 @@ export interface EmbeddedFileAsset {
 }
 
 export interface NativeRuntimeAssets {
+	readonly connectors?: readonly EmbeddedFileAsset[];
 	readonly dashboard?: readonly EmbeddedDashboardAsset[];
 	readonly skills?: readonly EmbeddedFileAsset[];
 	readonly templates?: readonly EmbeddedFileAsset[];
@@ -99,15 +100,14 @@ export function materializeEmbeddedWasmAssets(): string | null {
 	return dir;
 }
 
-export function materializeEmbeddedAssetTree(kind: "skills" | "templates"): string | null {
+export function materializeEmbeddedAssetTree(kind: "connectors" | "skills" | "templates"): string | null {
 	const assets = nativeRuntimeAssets()[kind] ?? [];
 	if (assets.length === 0) return null;
 
-	const hash = createHash("sha256")
+	const sourceHash = createHash("sha256")
 		.update(assets.map((asset) => `${asset.path}:${asset.contentBase64}:${asset.mode ?? ""}`).join("\n"))
-		.digest("hex")
-		.slice(0, 16);
-	const root = join(tmpdir(), `signet-native-${kind}`, hash);
+		.digest("hex");
+	const root = join(tmpdir(), `signet-native-${kind}`, sourceHash.slice(0, 16));
 	mkdirSync(root, { recursive: true });
 	for (const asset of assets) {
 		const parts = asset.path.split(/[\\/]+/).filter(Boolean);
@@ -118,6 +118,9 @@ export function materializeEmbeddedAssetTree(kind: "skills" | "templates"): stri
 			writeFileSync(path, Buffer.from(asset.contentBase64, "base64"));
 			if (asset.mode !== undefined) chmodSync(path, asset.mode);
 		}
+	}
+	if (kind === "connectors") {
+		writeFileSync(join(root, ".signet-assets.json"), `${JSON.stringify({ kind, sourceHash }, null, 2)}\n`);
 	}
 	return root;
 }

@@ -78,6 +78,31 @@ describe("native-runtime-assets", () => {
 		expect(skillsDir ? readFileSync(`${skillsDir}/signet/SKILL.md`, "utf8") : "").toContain("Signet");
 	});
 
+	test("materializes connector assets under a deterministic hash with a content marker", () => {
+		registerNativeAssets({
+			connectors: [
+				{
+					path: "hermes-agent/hermes-plugin/__init__.py",
+					contentBase64: Buffer.from("# signet provider\n").toString("base64"),
+					mode: 0o644,
+				},
+			],
+		});
+
+		const first = materializeEmbeddedAssetTree("connectors");
+		const second = materializeEmbeddedAssetTree("connectors");
+		expect(first).toBe(second);
+		expect(first ? readFileSync(`${first}/hermes-agent/hermes-plugin/__init__.py`, "utf8") : "").toBe(
+			"# signet provider\n",
+		);
+		const marker = JSON.parse(first ? readFileSync(`${first}/.signet-assets.json`, "utf8") : "{}") as {
+			kind?: unknown;
+			sourceHash?: unknown;
+		};
+		expect(marker.kind).toBe("connectors");
+		expect(marker.sourceHash).toMatch(/^[a-f0-9]{64}$/);
+	});
+
 	test("stores pre-resolved transformers bindings for compiled runtime", () => {
 		const bindings = { env: {}, pipeline: () => undefined };
 		registerNativeTransformersBindings(bindings);

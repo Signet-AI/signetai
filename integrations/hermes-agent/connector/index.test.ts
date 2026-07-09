@@ -21,6 +21,7 @@ const originalEnv = {
 	SIGNET_AGENT_POLICY_GROUP: process.env.SIGNET_AGENT_POLICY_GROUP,
 	SIGNET_SKIP_AGENT_REGISTER: process.env.SIGNET_SKIP_AGENT_REGISTER,
 	SIGNET_DIR: process.env.SIGNET_DIR,
+	SIGNET_CONNECTOR_ASSETS_DIR: process.env.SIGNET_CONNECTOR_ASSETS_DIR,
 };
 
 let tmpRoot = "";
@@ -174,6 +175,8 @@ beforeEach(() => {
 	process.env.SIGNET_SKIP_AGENT_REGISTER = "1";
 	// biome-ignore lint/performance/noDelete: ensure no stale value from outer env
 	delete process.env.SIGNET_DIR;
+	// biome-ignore lint/performance/noDelete: ensure no stale value from outer env
+	delete process.env.SIGNET_CONNECTOR_ASSETS_DIR;
 });
 
 afterEach(() => {
@@ -190,6 +193,7 @@ afterEach(() => {
 	restoreEnv("SIGNET_AGENT_POLICY_GROUP");
 	restoreEnv("SIGNET_SKIP_AGENT_REGISTER");
 	restoreEnv("SIGNET_DIR");
+	restoreEnv("SIGNET_CONNECTOR_ASSETS_DIR");
 	if (tmpRoot) {
 		rmSync(tmpRoot, { recursive: true, force: true });
 	}
@@ -729,6 +733,7 @@ describe("HermesAgentConnector.install()", () => {
 			process.env.HERMES_REPO = hermesRepo;
 			process.env.HERMES_HOME = hermesHome;
 			process.env.SIGNET_AGENT_ID = "dot";
+			// biome-ignore lint/performance/noDelete: exercise the SIGNET_TOKEN fallback without a stale API key
 			delete process.env.SIGNET_API_KEY;
 			process.env.SIGNET_TOKEN = " test-token \n";
 			process.env.SIGNET_AGENT_READ_POLICY = "isolated";
@@ -1000,15 +1005,15 @@ describe("Hermes Agent bundled plugin", () => {
 					"assert manager.has_tool('signet_session_search')",
 					"print(','.join(sorted(names)))",
 				].join("\n"),
-				],
-				{ env: { ...process.env, PYTHONPATH: fixture }, encoding: "utf-8" },
-				);
+			],
+			{ env: { ...process.env, PYTHONPATH: fixture }, encoding: "utf-8" },
+		);
 
-				expect(result.status).toBe(0);
-				expect(result.stdout).toContain("memory_search");
-				expect(result.stdout).toContain("signet_session_search");
-				expect(result.stdout).not.toContain(",session_search,");
-				expect(result.stdout).toContain("remember");
+		expect(result.status).toBe(0);
+		expect(result.stdout).toContain("memory_search");
+		expect(result.stdout).toContain("signet_session_search");
+		expect(result.stdout).not.toContain(",session_search,");
+		expect(result.stdout).toContain("remember");
 	});
 
 	it("imports the client from a Hermes user-installed provider namespace", () => {
@@ -1388,6 +1393,61 @@ describe("HermesAgentConnector — AGENTS.md legacy block migration", () => {
 });
 
 describe("HermesAgentConnector — native bundle (SIGNET_DIR) plugin resolution", () => {
+	it("installs from a materialized embedded connector asset tree", async () => {
+		const connectorAssetsDir = join(tmpRoot, "embedded-connectors");
+		const pluginDir = join(connectorAssetsDir, "hermes-agent", "hermes-plugin");
+		cpSync(join(import.meta.dir, "hermes-plugin"), pluginDir, { recursive: true });
+
+		process.env.SIGNET_CONNECTOR_ASSETS_DIR = connectorAssetsDir;
+		process.env.HERMES_HOME = join(tmpRoot, ".hermes");
+		const isolatedRoot = mkdtempSync(join(import.meta.dir, "isolated-embedded-connector-"));
+		const isolatedDistDir = join(isolatedRoot, "runtime", "cli", "dist");
+		mkdirSync(isolatedDistDir, { recursive: true });
+		cpSync(join(import.meta.dir, "src", "index.ts"), join(isolatedDistDir, "index.ts"));
+
+		try {
+			const isolatedModule = await import(
+				`${pathToFileURL(join(isolatedDistDir, "index.ts")).href}?embedded=${Date.now()}`
+			);
+			const result = await new isolatedModule.HermesAgentConnector().install(tmpRoot);
+
+			expect(result.success).toBe(true);
+			expect(existsSync(join(process.env.HERMES_HOME, "plugins", "signet", "__init__.py"))).toBe(true);
+		} finally {
+			rmSync(isolatedRoot, { recursive: true, force: true });
+		}
+	});
+
+	it("returns structured doctor diagnostics when bundled assets are absent", async () => {
+		process.env.HERMES_HOME = join(tmpRoot, ".hermes");
+		const isolatedRoot = mkdtempSync(join(import.meta.dir, "isolated-missing-connector-"));
+		const isolatedDistDir = join(isolatedRoot, "runtime", "cli", "dist");
+		mkdirSync(isolatedDistDir, { recursive: true });
+		cpSync(join(import.meta.dir, "src", "index.ts"), join(isolatedDistDir, "index.ts"));
+
+		try {
+			const isolatedModule = await import(
+				`${pathToFileURL(join(isolatedDistDir, "index.ts")).href}?missing=${Date.now()}`
+			);
+			const report = await isolatedModule.diagnoseHermesIntegration({
+				hermesHome: process.env.HERMES_HOME,
+				hermesRepo: null,
+				daemonUrl: "http://127.0.0.1:1",
+			});
+
+			expect(report.ok).toBe(false);
+			expect(report.checks).toContainEqual(
+				expect.objectContaining({
+					id: "plugin-source",
+					ok: false,
+					detail: expect.stringContaining("Cannot find hermes-plugin directory"),
+				}),
+			);
+		} finally {
+			rmSync(isolatedRoot, { recursive: true, force: true });
+		}
+	});
+
 	it("installs successfully when hermes-plugin is in SIGNET_DIR runtime connectors layout", async () => {
 		const signetDir = join(tmpRoot, "signet-bundle");
 		const hermesPluginSource = join(import.meta.dir, "hermes-plugin");
