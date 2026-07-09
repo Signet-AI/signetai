@@ -537,6 +537,38 @@ describe("Worker processing", () => {
 		expect(result.skipped).toBe("memory_not_found");
 	});
 
+	it("skips a deleted source before invoking the provider", async () => {
+		let generateCalls = 0;
+		const provider: LlmProvider = {
+			name: "must-not-run",
+			async generate() {
+				generateCalls++;
+				return JSON.stringify({ facts: [], entities: [] });
+			},
+			async available() {
+				return true;
+			},
+		};
+
+		insertMemory(db, "mem-deleted-before-extract", "User prefers a private editor configuration");
+		enqueueExtractionJob(accessor, "mem-deleted-before-extract");
+		const deletedAt = new Date().toISOString();
+		db.prepare(
+			`UPDATE memories
+			 SET is_deleted = 1, deleted_at = ?, updated_at = ?
+			 WHERE id = ?`,
+		).run(deletedAt, deletedAt, "mem-deleted-before-extract");
+
+		const worker = startWorker(accessor, provider, PIPELINE_CFG, DECISION_CFG);
+		await Bun.sleep(200);
+		await worker.stop();
+
+		expect(generateCalls).toBe(0);
+		const job = getJob(db, "mem-deleted-before-extract");
+		expect(job?.status).toBe("completed");
+		expect(JSON.parse(job?.result ?? "{}")).toEqual({ skipped: "memory_forgotten" });
+	});
+
 	it("fails job with retry when LLM provider throws", async () => {
 		// When the LLM throws, extraction now propagates the error so the
 		// worker's failJob() path handles it with exponential backoff retry.

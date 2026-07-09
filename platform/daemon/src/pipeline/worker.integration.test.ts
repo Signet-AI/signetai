@@ -16,6 +16,7 @@ import type { LlmProvider, PipelineV2Config } from "@signet/core";
 import { runMigrations } from "../../../core/src/migrations";
 import { normalizeAndHashContent } from "../content-normalization";
 import type { DbAccessor, ReadDb, WriteDb } from "../db-accessor";
+import { txForgetMemory } from "../transactions";
 import type { DecisionConfig } from "./decision";
 import { startHintsWorker } from "./prospective-index";
 import { enqueueExtractionJob, startWorker } from "./worker";
@@ -617,6 +618,68 @@ describe("pipeline integration", () => {
 		// Search for relocation-related hint
 		const relocationResults = getHintsFts(db, '"Nicholai" "Seattle"');
 		expect(relocationResults.length).toBeGreaterThan(0);
+	});
+
+	it("forgetting a leased source before Phase C blocks fact and graph writes", async () => {
+		const sourceId = crypto.randomUUID();
+		insertMemory(db, sourceId, "Nicholai moved from Portland to Seattle in 2019 for a new engineering role");
+
+		let signalExtractionStarted!: () => void;
+		const extractionStarted = new Promise<void>((resolve) => {
+			signalExtractionStarted = resolve;
+		});
+		let releaseExtraction!: () => void;
+		const extractionBarrier = new Promise<void>((resolve) => {
+			releaseExtraction = resolve;
+		});
+		let providerCalls = 0;
+		const provider: LlmProvider = {
+			name: "mock-race",
+			async generate() {
+				providerCalls++;
+				if (providerCalls === 1) {
+					signalExtractionStarted();
+					await extractionBarrier;
+					return EXTRACTION_RESPONSE;
+				}
+				return DECISION_ADD_RESPONSE;
+			},
+			async available() {
+				return true;
+			},
+		};
+
+		enqueueExtractionJob(accessor, sourceId);
+		const worker = startWorker(accessor, provider, testPipelineCfg(), testDecisionCfg());
+		await extractionStarted;
+
+		const forgottenAt = new Date().toISOString();
+		const forgotten = accessor.withWriteTx((writeDb) =>
+			txForgetMemory(writeDb, {
+				memoryId: sourceId,
+				reason: "privacy request during extraction",
+				changedBy: "operator",
+				changedAt: forgottenAt,
+				force: false,
+			}),
+		);
+		expect(forgotten.status).toBe("deleted");
+
+		releaseExtraction();
+		await new Promise((resolve) => setTimeout(resolve, 300));
+		await worker.stop();
+
+		const job = getJob(db, sourceId, "extract");
+		expect(job?.status).toBe("dead");
+		expect(job?.error).toBe("Source memory forgotten");
+		expect(JSON.parse(job?.result ?? "{}")).toEqual({ cancelled: "memory_forgotten" });
+		expect(getWrittenFacts(db, sourceId)).toEqual([]);
+		expect(getEntities(db, "Nicholai")).toBeNull();
+		expect(getEntities(db, "Seattle")).toBeNull();
+		expect(getEntities(db, "Portland")).toBeNull();
+		expect(getMentions(db, sourceId)).toEqual([]);
+		const relationCount = db.prepare("SELECT COUNT(*) AS count FROM relations").get() as { count: number };
+		expect(relationCount.count).toBe(0);
 	});
 
 	it("shadow mode: extracts and decides but writes nothing", async () => {

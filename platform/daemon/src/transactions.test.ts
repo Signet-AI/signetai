@@ -285,6 +285,91 @@ describe("transactions: txModifyMemory + txForgetMemory + txRecoverMemory", () =
 		expect(history.reason).toBe("cleanup with force");
 	});
 
+	it("dead-letters pending and leased jobs for a forgotten memory without touching other jobs", () => {
+		insertMemory(db, {
+			id: "mem-forget-jobs",
+			content: "Forget jobs source",
+			contentHash: "hash-forget-jobs",
+		});
+		insertMemory(db, {
+			id: "mem-keep-jobs",
+			content: "Keep jobs source",
+			contentHash: "hash-keep-jobs",
+		});
+
+		const createdAt = "2026-07-09T10:00:00.000Z";
+		const insertJob = db.prepare(
+			`INSERT INTO memory_jobs
+			 (id, memory_id, job_type, status, attempts, max_attempts, created_at, updated_at)
+			 VALUES (?, ?, 'extract', ?, 0, 3, ?, ?)`,
+		);
+		insertJob.run("job-forget-pending", "mem-forget-jobs", "pending", createdAt, createdAt);
+		insertJob.run("job-forget-leased", "mem-forget-jobs", "leased", createdAt, createdAt);
+		insertJob.run("job-forget-completed", "mem-forget-jobs", "completed", createdAt, createdAt);
+		insertJob.run("job-keep-leased", "mem-keep-jobs", "leased", createdAt, createdAt);
+
+		const changedAt = "2026-07-09T10:05:00.000Z";
+		const result = txForgetMemory(asWriteDb(db), {
+			memoryId: "mem-forget-jobs",
+			reason: "privacy request",
+			changedBy: "operator",
+			changedAt,
+			force: false,
+		});
+
+		expect(result.status).toBe("deleted");
+		const cancelled = db
+			.prepare(
+				`SELECT id, status, result, error, failed_at, updated_at
+				 FROM memory_jobs
+				 WHERE id IN ('job-forget-pending', 'job-forget-leased')
+				 ORDER BY id`,
+			)
+			.all() as Array<{
+			id: string;
+			status: string;
+			result: string | null;
+			error: string | null;
+			failed_at: string | null;
+			updated_at: string;
+		}>;
+		expect(cancelled).toHaveLength(2);
+		for (const job of cancelled) {
+			expect(job.status).toBe("dead");
+			expect(JSON.parse(job.result ?? "{}")).toEqual({ cancelled: "memory_forgotten" });
+			expect(job.error).toBe("Source memory forgotten");
+			expect(job.failed_at).toBe(changedAt);
+			expect(job.updated_at).toBe(changedAt);
+		}
+
+		const untouched = db
+			.prepare(
+				`SELECT id, status, result, error, failed_at, updated_at
+				 FROM memory_jobs
+				 WHERE id IN ('job-forget-completed', 'job-keep-leased')
+				 ORDER BY id`,
+			)
+			.all();
+		expect(untouched).toEqual([
+			{
+				id: "job-forget-completed",
+				status: "completed",
+				result: null,
+				error: null,
+				failed_at: null,
+				updated_at: createdAt,
+			},
+			{
+				id: "job-keep-leased",
+				status: "leased",
+				result: null,
+				error: null,
+				failed_at: null,
+				updated_at: createdAt,
+			},
+		]);
+	});
+
 	it("removes aggregate provenance links when a linked memory is forgotten", () => {
 		insertMemory(db, {
 			id: "mem-aggregate",

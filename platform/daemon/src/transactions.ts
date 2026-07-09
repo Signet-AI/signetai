@@ -8,6 +8,7 @@
 
 import type { WriteDb } from "./db-accessor";
 import { syncVecDeleteBySourceExceptHash, syncVecDeleteBySourceId, syncVecInsert, vectorToBlob } from "./db-helpers";
+import { cancelExtractionJobsForForgottenMemory } from "./pipeline/extraction-queue";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -562,6 +563,7 @@ export function txForgetMemory(db: WriteDb, input: ForgetMemoryTxInput): ForgetM
 		     version = version + 1
 		 WHERE id = ?`,
 	).run(input.changedAt, input.changedAt, input.changedBy, input.memoryId);
+	cancelExtractionJobsForForgottenMemory(db, input.memoryId, input.changedAt);
 	deleteAggregateMemorySourceLinks(db, input.memoryId);
 
 	insertHistoryEvent(db, {
