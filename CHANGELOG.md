@@ -7,7 +7,9 @@ All notable changes to Signet are documented here.
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
 ### 2026-07-09
-- Bug fixes: repair memory lifecycle lineage; force exit after hook actions to prevent orphaned processes; support pi-mono session lifecycle events.
+- Features: support Codex CLI in Docker; add observed feedback loop.
+- Bug fixes: backfill extracted relations into entity_dependencies for graph traversal; persist startup import reconciliation state; repair memory lifecycle lineage; force exit after hook actions to prevent orphaned processes; support pi-mono session lifecycle events.
+- Docs: add noamsiegel and quannon to contributors list.
 
 ### 2026-07-06
 - Features: capture harness skill usage (claude-code scan + opencode post).
@@ -29,6 +31,25 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Bug fixes: surface Signet health diagnostics.
 
 ## Release Ledger
+
+## [0.147.0] - 2026-07-09
+
+Release summary: 2 features, 2 bug fixes, and 1 docs update.
+Tag range: `v0.146.5..v0.147.0`.
+
+### Features
+
+- **inference**: support Codex CLI in Docker (#889)
+- **memory**: add observed feedback loop (#885)
+
+### Bug Fixes
+
+- **core**: backfill extracted relations into entity_dependencies for graph traversal (#892)
+- **daemon**: persist startup import reconciliation state (#871)
+
+### Docs
+
+- add noamsiegel and quannon to contributors list
 
 ## [0.146.5] - 2026-07-09
 
