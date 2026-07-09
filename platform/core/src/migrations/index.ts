@@ -90,6 +90,7 @@ import { up as aggregateEvidenceSources } from "./081-aggregate-evidence-sources
 import { up as skillInvocationsHarness } from "./082-skill-invocations-harness";
 import { up as memoryLifecycleRepair } from "./083-memory-lifecycle-repair";
 import { up as legacyMarkdownImportState } from "./084-legacy-markdown-import-state";
+import { up as backfillRelationsToDependencies } from "./085-backfill-relations-to-dependencies";
 
 // -- Public interface consumed by Database.init() --
 
@@ -811,6 +812,15 @@ export const MIGRATIONS: readonly Migration[] = [
 			tables: ["legacy_markdown_imports", "legacy_markdown_chunks"],
 		},
 	},
+	{
+		version: 85,
+		name: "backfill-relations-to-dependencies",
+		up: backfillRelationsToDependencies,
+		artifacts: {
+			tables: ["entity_dependencies"],
+		},
+	},
+];
 
 /** Simple checksum for audit trail (hash of migration name + version). */
 function checksum(m: Migration): string {
