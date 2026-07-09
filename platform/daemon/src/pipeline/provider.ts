@@ -2584,6 +2584,7 @@ export function createCodexProvider(config?: Partial<CodexProviderConfig>): LlmP
 				const exitCode = await proc.exited;
 				return exitCode === 0 && hasCodexCredential(process.env);
 			} catch {
+				logger.debug("pipeline", "Codex CLI not available");
 				return false;
 			}
 		},
