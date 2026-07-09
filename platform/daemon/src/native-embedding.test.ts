@@ -1,4 +1,4 @@
-import { describe, it, expect, mock, beforeEach, afterEach } from "bun:test";
+import { afterEach, describe, expect, it, mock } from "bun:test";
 
 // Mock @huggingface/transformers to avoid real model downloads
 const mockEmbedFn = mock(async (text: string, _opts: unknown) => ({
@@ -87,7 +87,11 @@ describe("native-embedding", () => {
 
 		const status1 = await checkNativeProvider();
 		expect(status1.available).toBe(false);
-		expect(status1.error).toContain("network timeout");
+		expect(status1.error).toContain("runtime=bundled runtime");
+		expect(status1.error).toContain("backend=onnx-wasm");
+		expect(status1.error).toContain("cachePath=");
+		expect(status1.error).toContain("wasmPath=unavailable");
+		expect(status1.error).toContain("cause=network timeout");
 
 		await shutdownNativeProvider();
 

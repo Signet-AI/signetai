@@ -62,6 +62,11 @@ interface TransformersBindings {
 	) => Promise<unknown>;
 }
 
+interface LoadedTransformersBindings {
+	readonly bindings: TransformersBindings;
+	readonly source: string;
+}
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -84,7 +89,7 @@ function readTransformersBindings(value: unknown): TransformersBindings | null {
 	};
 }
 
-async function loadTransformersBindings(): Promise<TransformersBindings> {
+async function loadTransformersBindings(): Promise<LoadedTransformersBindings> {
 	const importBySpecifier = (specifier: string): Promise<unknown> => {
 		return import(specifier);
 	};
@@ -139,11 +144,11 @@ async function loadTransformersBindings(): Promise<TransformersBindings> {
 		}
 
 		const direct = readTransformersBindings(mod);
-		if (direct !== null) return direct;
+		if (direct !== null) return { bindings: direct, source: candidate.source };
 
 		if (isRecord(mod) && "default" in mod) {
 			const fromDefault = readTransformersBindings(mod.default);
-			if (fromDefault !== null) return fromDefault;
+			if (fromDefault !== null) return { bindings: fromDefault, source: candidate.source };
 		}
 
 		failures.push(`${candidate.source}: unsupported export shape (missing env/pipeline)`);
@@ -216,19 +221,24 @@ async function ensureInitialized(): Promise<void> {
 }
 
 async function doInit(): Promise<void> {
+	let runtimeSource = "unresolved";
+	let cacheDir = "unresolved";
+	let wasmDir: string | null = null;
 	try {
 		initError = null;
 
-		const cacheDir = getCacheDir();
+		cacheDir = getCacheDir();
 		mkdirSync(cacheDir, { recursive: true });
 
 		// Dynamic import to avoid top-level WASM load
-		const transformers = await loadTransformersBindings();
+		const loaded = await loadTransformersBindings();
+		const transformers = loaded.bindings;
+		runtimeSource = loaded.source;
 
 		// Configure cache directory
 		transformers.env.cacheDir = cacheDir;
 		transformers.env.allowLocalModels = true;
-		const wasmDir = materializeEmbeddedWasmAssets();
+		wasmDir = materializeEmbeddedWasmAssets();
 		if (wasmDir) {
 			const backends = transformers.env.backends;
 			const onnx = isRecord(backends) ? backends.onnx : null;
@@ -238,8 +248,12 @@ async function doInit(): Promise<void> {
 			}
 		}
 
-		logger.info("native-embedding", `Initializing ${MODEL_ID} (q8 quantization)`);
-		logger.info("native-embedding", `Model cache: ${cacheDir}`);
+		logger.info("native-embedding", `Initializing ${MODEL_ID} (q8 quantization)`, {
+			runtime: runtimeSource,
+			backend: "onnx-wasm",
+			cachePath: cacheDir,
+			wasmPath: wasmDir ?? "unavailable",
+		});
 
 		const pipe = await transformers.pipeline("feature-extraction", MODEL_ID, {
 			dtype: "q8" as const,
@@ -267,11 +281,13 @@ async function doInit(): Promise<void> {
 		modelCached = true;
 		logger.info("native-embedding", `Ready — ${EXPECTED_DIMS}-dim embeddings`);
 	} catch (err) {
-		initError = err instanceof Error ? err.message : String(err);
+		const cause = err instanceof Error ? err.message : String(err);
+		initError = `runtime=${runtimeSource}; backend=onnx-wasm; cachePath=${cacheDir}; wasmPath=${wasmDir ?? "unavailable"}; cause=${cause}`;
 		initPromise = null;
 		lastInitFailure = Date.now();
-		logger.error("native-embedding", `Init failed: ${initError}`);
-		throw err;
+		const wrapped = new Error(initError, { cause: err });
+		logger.error("native-embedding", `Init failed: ${initError}`, wrapped);
+		throw wrapped;
 	}
 }
 
