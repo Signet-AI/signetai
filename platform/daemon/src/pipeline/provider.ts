@@ -1841,6 +1841,10 @@ export function createOllamaProvider(config?: Partial<OllamaProviderConfig>): Ll
 						timeoutMs,
 						signal: abort.signal,
 						options,
+						extraBody: {
+							...(opts?.responseFormat === "json" ? { format: "json" } : {}),
+							...(opts?.think !== undefined ? { think: opts.think } : {}),
+						},
 					});
 				} catch (e) {
 					if (e instanceof DOMException && e.name === "AbortError") {

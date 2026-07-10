@@ -713,6 +713,32 @@ describe("createOllamaProvider", () => {
 		expect(options ? getNumberField(options, "num_ctx") : undefined).toBe(4096);
 	});
 
+	it("generate() maps requested structured non-thinking output to Ollama body fields", async () => {
+		let capturedBody: Record<string, unknown> = {};
+		mockFetch(async (_url, init) => {
+			capturedBody = parseJsonObjectBody(init?.body);
+			return Response.json({ response: "{}" });
+		});
+
+		const provider = createOllamaProvider({ model: "test-model" });
+		await provider.generate("test", { responseFormat: "json", think: false });
+		expect(capturedBody.format).toBe("json");
+		expect(capturedBody.think).toBe(false);
+	});
+
+	it("generate() preserves free-form Ollama body unless structured output is requested", async () => {
+		let capturedBody: Record<string, unknown> = {};
+		mockFetch(async (_url, init) => {
+			capturedBody = parseJsonObjectBody(init?.body);
+			return Response.json({ response: "ok" });
+		});
+
+		const provider = createOllamaProvider({ model: "test-model" });
+		await provider.generate("test");
+		expect(capturedBody.format).toBeUndefined();
+		expect(capturedBody.think).toBeUndefined();
+	});
+
 	it("generate() omits num_ctx when maxContextTokens is non-finite", async () => {
 		let capturedBody: Record<string, unknown> = {};
 		mockFetch(async (_url, init) => {

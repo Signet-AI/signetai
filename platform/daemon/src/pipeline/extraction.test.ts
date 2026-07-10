@@ -75,6 +75,27 @@ describe("extractFactsAndEntities", () => {
 		expect(seenTimeout).toBe(12345);
 	});
 
+	it("requests structured non-thinking provider output", async () => {
+		let seenResponseFormat: string | undefined;
+		let seenThink: boolean | undefined;
+		const provider: LlmProvider = {
+			name: "structured-probe",
+			async generate(_prompt, opts) {
+				seenResponseFormat = opts?.responseFormat;
+				seenThink = opts?.think;
+				return VALID_RESPONSE;
+			},
+			async available() {
+				return true;
+			},
+		};
+
+		await extractFactsAndEntities(INPUT, provider);
+
+		expect(seenResponseFormat).toBe("json");
+		expect(seenThink).toBe(false);
+	});
+
 	it("parses valid JSON response correctly", async () => {
 		const provider = mockProvider([VALID_RESPONSE]);
 		const result = await extractFactsAndEntities(INPUT, provider);

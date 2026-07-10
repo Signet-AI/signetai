@@ -488,8 +488,8 @@ export async function extractFactsAndEntities(
 			timeoutMs: opts?.timeoutMs,
 			maxTokens: opts?.maxTokens,
 			signal: opts?.signal,
-			responseFormat: opts?.responseFormat,
-			think: opts?.think,
+			responseFormat: opts?.responseFormat ?? "json",
+			think: opts?.think ?? false,
 		});
 	} catch (e) {
 		if (e instanceof RateLimitExceededError) {
