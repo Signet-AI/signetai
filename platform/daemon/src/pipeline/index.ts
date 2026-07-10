@@ -255,7 +255,7 @@ export function startPipeline(
 	};
 
 	if (pipelineCfg.worker.threadedExtraction && workerInit) {
-		pendingStartup = startExtractionThread({ init: workerInit, analytics, telemetry })
+		pendingStartup = startExtractionThread({ init: workerInit, provider, analytics, telemetry })
 			.then((handle) => {
 				workerHandle = handle;
 				logger.info("pipeline", "Extraction worker thread started");

@@ -38,13 +38,23 @@ export interface WorkerInit {
 	readonly searchConfig: Record<string, unknown>;
 }
 
+export interface SerializedGenerateOptions {
+	readonly timeoutMs?: number;
+	readonly maxTokens?: number;
+	readonly temperature?: number;
+	readonly responseFormat?: "json";
+	readonly think?: boolean;
+}
+
 // ---------------------------------------------------------------------------
 // Main → Worker messages
 // ---------------------------------------------------------------------------
 
 export type MainToWorkerMessage =
 	| { readonly type: "stop" }
-	| { readonly type: "nudge" };
+	| { readonly type: "nudge" }
+	| { readonly type: "generateResult"; readonly id: string; readonly text: string }
+	| { readonly type: "generateError"; readonly id: string; readonly error: string };
 
 // ---------------------------------------------------------------------------
 // Worker → Main messages
@@ -53,6 +63,12 @@ export type MainToWorkerMessage =
 export type WorkerToMainMessage =
 	| { readonly type: "ready" }
 	| { readonly type: "stopped" }
+	| {
+			readonly type: "generate";
+			readonly id: string;
+			readonly prompt: string;
+			readonly options?: SerializedGenerateOptions;
+	  }
 	| { readonly type: "stats"; readonly stats: WorkerStats }
 	| { readonly type: "log"; readonly level: string; readonly category: string; readonly message: string; readonly data?: Record<string, unknown> }
 	| { readonly type: "telemetry"; readonly event: string; readonly data: Record<string, unknown> }
