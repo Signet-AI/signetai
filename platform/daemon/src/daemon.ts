@@ -70,7 +70,7 @@ import { type DreamingWorkerHandle, startDreamingWorker } from "./pipeline/dream
 import type { WorkerInit } from "./pipeline/extraction-thread-protocol";
 import { invalidateTraversalCache } from "./pipeline/graph-traversal";
 import { stopModelRegistry } from "./pipeline/model-registry";
-import { stopOpenCodeServer } from "./pipeline/provider";
+import { configureLlmConcurrency, stopOpenCodeServer } from "./pipeline/provider";
 import { startReconciler } from "./pipeline/skill-reconciler";
 import { type RepairContext, structuralBackfill } from "./repair-actions";
 import { logFdSnapshot, startEventLoopMonitor, startFdPollMonitor, stopResourceMonitors } from "./resource-monitor";
@@ -1307,6 +1307,7 @@ function syncAgentRoster(agentsDir: string): void {
 
 async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?: TelemetryCollector): Promise<void> {
 	const pipelinePaused = memoryCfg.pipelineV2.paused;
+	configureLlmConcurrency(memoryCfg.pipelineV2.worker.maxLlmConcurrency);
 	clearStructuralBackfillTimer();
 	if (shouldWarnGraphExtractionWritesDisabled(memoryCfg)) {
 		logger.warn("pipeline", "Graph extraction writes are disabled while graph reads are enabled", {

@@ -816,7 +816,10 @@ describe("createOllamaProvider", () => {
 // ---------------------------------------------------------------------------
 
 describe("createOpenAiCompatibleProvider", () => {
-	afterEach(() => restoreFetch());
+	afterEach(() => {
+		configureLlmConcurrency(2);
+		restoreFetch();
+	});
 
 	it("buffers streaming reasoning_content when content arrives later", async () => {
 		mockFetch(async (_url, init) => {
@@ -939,6 +942,33 @@ describe("createOpenAiCompatibleProvider", () => {
 		setTimeout(() => controller.abort(), 20);
 
 		await expect(result).rejects.toThrow(/aborted/i);
+	});
+
+	it("respects the global LLM concurrency cap", async () => {
+		configureLlmConcurrency(1);
+		let active = 0;
+		let peak = 0;
+		mockFetch(async () => {
+			active += 1;
+			peak = Math.max(peak, active);
+			await new Promise((resolve) => setTimeout(resolve, 40));
+			active -= 1;
+			return Response.json({
+				choices: [{ message: { content: "ok" } }],
+			});
+		});
+
+		const provider = createOpenAiCompatibleProvider({
+			name: "openai-compatible",
+			model: "test-model",
+			baseUrl: "http://localhost:9999",
+			defaultTimeoutMs: 1000,
+		});
+
+		await Promise.all([provider.generate("one"), provider.generate("two")]);
+
+		expect(peak).toBe(1);
+		expect(getLlmConcurrencyStatus().running).toBe(0);
 	});
 });
 
@@ -1535,7 +1565,10 @@ function openCodeResponse(text: string, tokens?: { input?: number; output?: numb
 }
 
 describe("createOpenCodeProvider", () => {
-	afterEach(() => restoreFetch());
+	afterEach(() => {
+		configureLlmConcurrency(2);
+		restoreFetch();
+	});
 
 	it("returns a provider with the correct name", () => {
 		const provider = createOpenCodeProvider({ model: "google/gemini-2.5-flash" });
@@ -1890,6 +1923,43 @@ describe("createOpenCodeProvider", () => {
 			defaultTimeoutMs: 50,
 		});
 		await expect(provider.generate("test", { timeoutMs: 50 })).rejects.toThrow(/timeout/i);
+	});
+
+	it("aborts an indefinitely pending message fetch when the caller signal is cancelled", async () => {
+		let messageSignal: AbortSignal | undefined;
+		mockFetch(
+			withParentSession(async (url, init) => {
+				if (url.includes("/session") && !url.includes("/message")) {
+					return Response.json({
+						id: "ses_abort",
+						slug: "test",
+						projectID: "p",
+						directory: "/tmp",
+						title: "test",
+						version: "1",
+					});
+				}
+				if (url.endsWith("/session/ses_abort/message") && init?.method === "POST") {
+					messageSignal = init.signal ?? undefined;
+					return new Promise((_resolve, reject) => {
+						init.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+					});
+				}
+				return Response.json({});
+			}),
+		);
+
+		const provider = createOpenCodeProvider({ baseUrl: "http://localhost:9999" });
+		const controller = new AbortController();
+		const started = performance.now();
+		const result = provider.generate("test", { timeoutMs: 500, signal: controller.signal });
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		controller.abort();
+
+		await expect(result).rejects.toThrow(/aborted/i);
+		expect(performance.now() - started).toBeLessThan(200);
+		expect(messageSignal?.aborted).toBe(true);
+		expect(getLlmConcurrencyStatus().running).toBe(0);
 	});
 
 	it("available() returns true when /global/health responds 200", async () => {
@@ -3384,6 +3454,8 @@ wait
 });
 
 describe("createCommandLineProvider process lifecycle", () => {
+	afterEach(() => configureLlmConcurrency(2));
+
 	it("kills the process group on timeout and waits for descendants to exit", async () => {
 		if (process.platform === "win32") return;
 		const root = join(tmpdir(), `signet-command-timeout-${Date.now()}-${Math.random().toString(36).slice(2)}`);
@@ -3446,6 +3518,60 @@ wait
 					}
 				}
 			}
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("respects the global LLM concurrency cap", async () => {
+		if (process.platform === "win32") return;
+		configureLlmConcurrency(1);
+		const root = join(tmpdir(), `signet-command-concurrency-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		mkdirSync(root, { recursive: true });
+		const bin = join(root, "fake-command-concurrency.sh");
+		const activePath = join(root, "active");
+		const peakPath = join(root, "peak");
+		const lockDir = join(root, "lock");
+		writeFileSync(
+			bin,
+			`#!/usr/bin/env bash
+set -euo pipefail
+lock() {
+  while ! mkdir ${JSON.stringify(lockDir)} 2>/dev/null; do sleep 0.005; done
+}
+unlock() {
+  rmdir ${JSON.stringify(lockDir)}
+}
+lock
+active=0
+if [ -s ${JSON.stringify(activePath)} ]; then active=$(cat ${JSON.stringify(activePath)}); fi
+active=$((active + 1))
+printf '%s' "$active" > ${JSON.stringify(activePath)}
+peak=0
+if [ -s ${JSON.stringify(peakPath)} ]; then peak=$(cat ${JSON.stringify(peakPath)}); fi
+if [ "$active" -gt "$peak" ]; then printf '%s' "$active" > ${JSON.stringify(peakPath)}; fi
+unlock
+sleep 0.05
+lock
+active=$(cat ${JSON.stringify(activePath)})
+active=$((active - 1))
+printf '%s' "$active" > ${JSON.stringify(activePath)}
+unlock
+printf 'ok\\n'
+`,
+		);
+		chmodSync(bin, 0o755);
+
+		try {
+			const provider = createCommandLineProvider({
+				name: "fake-command",
+				bin,
+				defaultTimeoutMs: 1000,
+			});
+			await Promise.all([provider.generate("one"), provider.generate("two")]);
+
+			expect(Number(readFileSync(peakPath, "utf-8"))).toBe(1);
+			expect(getLlmConcurrencyStatus().running).toBe(0);
+		} finally {
 			rmSync(root, { recursive: true, force: true });
 		}
 	});

@@ -62,6 +62,7 @@ describe("daemon status contract", () => {
 		Bun.which = originalWhich;
 		const provider = await import("./pipeline/provider");
 		provider.resetClaudeCodeCircuit();
+		provider.configureLlmConcurrency(2);
 	});
 
 	it("exposes extraction worker load-shedding fields on /api/status", async () => {
@@ -189,6 +190,31 @@ describe("daemon status contract", () => {
 				process.env.OPENAI_API_KEY = originalOpenAiKey;
 			}
 		}
+	});
+
+	it("applies worker maxLlmConcurrency before summary-only runtime starts", async () => {
+		const { closeDbAccessor, initDbAccessor } = await import("./db-accessor");
+		const { loadMemoryConfig } = await import("./memory-config");
+		const { getLlmConcurrencyStatus } = await import("./pipeline/provider");
+		const state = await import("./routes/state.js");
+		closeDbAccessor();
+		initDbAccessor(join(dir, "memory", "memories.db"), { agentsDir: dir });
+		writeFileSync(
+			join(dir, "agent.yaml"),
+			`memory:
+  pipelineV2:
+    enabled: false
+    worker:
+      maxLlmConcurrency: 1
+  dreaming:
+    enabled: true
+`,
+		);
+
+		expect(state.restartPipelineRuntimeRef).toBeDefined();
+		await state.restartPipelineRuntimeRef?.(loadMemoryConfig(dir));
+
+		expect(getLlmConcurrencyStatus().limit).toBe(1);
 	});
 
 	it("exposes Claude Code circuit cooldown without reporting it as a running worker", async () => {

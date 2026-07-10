@@ -1462,62 +1462,92 @@ export function createAcpxProvider(config: AcpxProviderConfig): LlmProvider {
 		name: `acpx:${config.agent}${config.model ? `:${config.model}` : ""}`,
 		async generate(prompt, opts): Promise<string> {
 			const timeoutMs = opts?.timeoutMs ?? config.timeoutMs ?? 60_000;
-			const { bin, args, cwd } = buildAcpxCommand(config, timeoutMs);
-			const outputFormat = resolveAcpxFormat(config);
-			const runId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
-			return new Promise<string>((resolve, reject) => {
-				let stdout = "";
-				let stderr = "";
-				let settled = false;
-				const child = nodeSpawn(bin, args, {
-					cwd,
-					env: acpxEnv(config.hooks, runId),
-					stdio: ["pipe", "pipe", "pipe"],
-					detached: process.platform !== "win32",
-					windowsHide: true,
-				});
-				const finish = (fn: () => void): void => {
-					if (settled) return;
-					settled = true;
-					clearTimeout(timer);
-					cleanupAcpxAgentProcesses(config.agent, runId);
-					fn();
-				};
-				const timer = setTimeout(() => {
-					terminateChildProcessTreeWithEscalation(child);
-					finish(() => reject(new Error(`${config.agent} via ACPX timeout after ${timeoutMs}ms`)));
-				}, timeoutMs);
-				child.stdout?.setEncoding("utf8");
-				child.stderr?.setEncoding("utf8");
-				child.stdout?.on("data", (chunk) => {
-					stdout += String(chunk);
-				});
-				child.stderr?.on("data", (chunk) => {
-					stderr += String(chunk);
-				});
-				child.on("error", (error) => finish(() => reject(error)));
-				child.on("close", (code) =>
-					finish(() => {
-						if (code !== 0) {
-							reject(new Error(`${config.agent} via ACPX exited ${code}: ${stderr.slice(0, 300)}`));
-							return;
+			const deadline = performance.now() + timeoutMs;
+			const signal = generateSignal(opts);
+			return withLlmConcurrency(
+				async () => {
+					const remainingMs = deadline - performance.now();
+					if (remainingMs <= 0) {
+						throw new Error(
+							`${config.agent} via ACPX timeout after ${timeoutMs}ms (deadline exceeded waiting for semaphore)`,
+						);
+					}
+					const { bin, args, cwd } = buildAcpxCommand(config, remainingMs);
+					const outputFormat = resolveAcpxFormat(config);
+					const runId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+					return new Promise<string>((resolve, reject) => {
+						let stdout = "";
+						let stderr = "";
+						let settled = false;
+						let aborted = false;
+						const child = nodeSpawn(bin, args, {
+							cwd,
+							env: acpxEnv(config.hooks, runId),
+							stdio: ["pipe", "pipe", "pipe"],
+							detached: process.platform !== "win32",
+							windowsHide: true,
+						});
+						const finish = (fn: () => void): void => {
+							if (settled) return;
+							settled = true;
+							clearTimeout(timer);
+							signal?.removeEventListener("abort", onAbort);
+							cleanupAcpxAgentProcesses(config.agent, runId);
+							fn();
+						};
+						const onAbort = (): void => {
+							aborted = true;
+							terminateChildProcessTreeWithEscalation(child);
+						};
+						if (signal?.aborted) {
+							onAbort();
+						} else {
+							signal?.addEventListener("abort", onAbort, { once: true });
 						}
-						let text: string;
-						try {
-							text = outputFormat === "json" ? parseAcpxJsonOutput(stdout, config) : stdout.trim();
-						} catch (error) {
-							reject(error);
-							return;
-						}
-						if (!text) {
-							reject(new Error(`${config.agent} via ACPX returned empty response`));
-							return;
-						}
-						resolve(text);
-					}),
-				);
-				child.stdin?.end(prompt);
-			});
+						const timer = setTimeout(() => {
+							terminateChildProcessTreeWithEscalation(child);
+							finish(() => reject(new Error(`${config.agent} via ACPX timeout after ${timeoutMs}ms`)));
+						}, remainingMs);
+						child.stdout?.setEncoding("utf8");
+						child.stderr?.setEncoding("utf8");
+						child.stdout?.on("data", (chunk) => {
+							stdout += String(chunk);
+						});
+						child.stderr?.on("data", (chunk) => {
+							stderr += String(chunk);
+						});
+						child.on("error", (error) => finish(() => reject(error)));
+						child.on("close", (code) =>
+							finish(() => {
+								if (aborted) {
+									reject(new Error(`${config.agent} via ACPX aborted`));
+									return;
+								}
+								if (code !== 0) {
+									reject(new Error(`${config.agent} via ACPX exited ${code}: ${stderr.slice(0, 300)}`));
+									return;
+								}
+								let text: string;
+								try {
+									text = outputFormat === "json" ? parseAcpxJsonOutput(stdout, config) : stdout.trim();
+								} catch (error) {
+									reject(error);
+									return;
+								}
+								if (!text) {
+									reject(new Error(`${config.agent} via ACPX returned empty response`));
+									return;
+								}
+								resolve(text);
+							}),
+						);
+						child.stdin?.end(prompt);
+					});
+				},
+				timeoutMs,
+				"acpx",
+				signal,
+			);
 		},
 		async available(): Promise<boolean> {
 			const bin = config.bin ?? "npx";
@@ -1532,88 +1562,101 @@ export function createCommandLineProvider(config: CommandLineProviderConfig): Ll
 		name: config.name,
 		async generate(prompt, opts): Promise<string> {
 			const timeoutMs = opts?.timeoutMs ?? config.defaultTimeoutMs;
+			const deadline = performance.now() + timeoutMs;
 			const signal = generateSignal(opts);
-			return new Promise<string>((resolve, reject) => {
-				let stdout = "";
-				let stderr = "";
-				let settled = false;
-				let aborted = false;
-				const child = nodeSpawn(
-					config.bin,
-					args.map((arg) => replacePromptTokens(arg, prompt)),
-					{
-						cwd: config.cwd,
-						env: {
-							...process.env,
-							...Object.fromEntries(
-								Object.entries(config.env ?? {}).map(([key, value]) => [key, replacePromptTokens(value, prompt)]),
-							),
-							SIGNET_PROMPT: prompt,
-						},
-						stdio: ["pipe", "pipe", "pipe"],
-						detached: process.platform !== "win32",
-						windowsHide: true,
-					},
-				);
-				let timedOut = false;
-				const onAbort = (): void => {
-					if (settled) return;
-					aborted = true;
-					terminateChildProcessTreeWithEscalation(child);
-				};
-				if (signal?.aborted) {
-					aborted = true;
-				} else {
-					signal?.addEventListener("abort", onAbort, { once: true });
-				}
-				const timer = setTimeout(() => {
-					if (settled) return;
-					timedOut = true;
-					terminateChildProcessTreeWithEscalation(child);
-				}, timeoutMs);
-				if (aborted) {
-					onAbort();
-				}
-				child.stdout?.setEncoding("utf8");
-				child.stderr?.setEncoding("utf8");
-				child.stdout?.on("data", (chunk) => {
-					stdout += String(chunk);
-				});
-				child.stderr?.on("data", (chunk) => {
-					stderr += String(chunk);
-				});
-				child.on("error", (error) => {
-					if (settled) return;
-					settled = true;
-					clearTimeout(timer);
-					reject(error);
-				});
-				child.on("close", (code) => {
-					if (settled) return;
-					settled = true;
-					clearTimeout(timer);
-					signal?.removeEventListener("abort", onAbort);
-					if (aborted) {
-						reject(new Error(`${config.name} aborted`));
-						return;
+			return withLlmConcurrency(
+				async () => {
+					const remainingMs = deadline - performance.now();
+					if (remainingMs <= 0) {
+						throw new Error(`${config.name} timeout after ${timeoutMs}ms (deadline exceeded waiting for semaphore)`);
 					}
-					if (timedOut) {
-						reject(new Error(`${config.name} timeout after ${timeoutMs}ms`));
-						return;
-					}
-					if (code !== 0) {
-						reject(new Error(`${config.name} exited ${code}: ${stderr.slice(0, 300)}`));
-						return;
-					}
-					const text = stdout.trim();
-					if (!text) {
-						reject(new Error(`${config.name} returned empty response`));
-						return;
-					}
-					resolve(text);
-				});
-				child.stdin?.end(prompt);
-			});
+					return new Promise<string>((resolve, reject) => {
+						let stdout = "";
+						let stderr = "";
+						let settled = false;
+						let aborted = false;
+						const child = nodeSpawn(
+							config.bin,
+							args.map((arg) => replacePromptTokens(arg, prompt)),
+							{
+								cwd: config.cwd,
+								env: {
+									...process.env,
+									...Object.fromEntries(
+										Object.entries(config.env ?? {}).map(([key, value]) => [key, replacePromptTokens(value, prompt)]),
+									),
+									SIGNET_PROMPT: prompt,
+								},
+								stdio: ["pipe", "pipe", "pipe"],
+								detached: process.platform !== "win32",
+								windowsHide: true,
+							},
+						);
+						let timedOut = false;
+						const onAbort = (): void => {
+							if (settled) return;
+							aborted = true;
+							terminateChildProcessTreeWithEscalation(child);
+						};
+						if (signal?.aborted) {
+							aborted = true;
+						} else {
+							signal?.addEventListener("abort", onAbort, { once: true });
+						}
+						const timer = setTimeout(() => {
+							if (settled) return;
+							timedOut = true;
+							terminateChildProcessTreeWithEscalation(child);
+						}, remainingMs);
+						if (aborted) {
+							onAbort();
+						}
+						child.stdout?.setEncoding("utf8");
+						child.stderr?.setEncoding("utf8");
+						child.stdout?.on("data", (chunk) => {
+							stdout += String(chunk);
+						});
+						child.stderr?.on("data", (chunk) => {
+							stderr += String(chunk);
+						});
+						child.on("error", (error) => {
+							if (settled) return;
+							settled = true;
+							clearTimeout(timer);
+							signal?.removeEventListener("abort", onAbort);
+							reject(error);
+						});
+						child.on("close", (code) => {
+							if (settled) return;
+							settled = true;
+							clearTimeout(timer);
+							signal?.removeEventListener("abort", onAbort);
+							if (aborted) {
+								reject(new Error(`${config.name} aborted`));
+								return;
+							}
+							if (timedOut) {
+								reject(new Error(`${config.name} timeout after ${timeoutMs}ms`));
+								return;
+							}
+							if (code !== 0) {
+								reject(new Error(`${config.name} exited ${code}: ${stderr.slice(0, 300)}`));
+								return;
+							}
+							const text = stdout.trim();
+							if (!text) {
+								reject(new Error(`${config.name} returned empty response`));
+								return;
+							}
+							resolve(text);
+						});
+						child.stdin?.end(prompt);
+					});
+				},
+				timeoutMs,
+				config.name,
+				signal,
+			);
 		},
 		async available(): Promise<boolean> {
 			return which(config.bin) !== null;
@@ -1645,73 +1688,86 @@ export function createOpenAiCompatibleProvider(config: OpenAiCompatibleProviderC
 
 	async function call(prompt: string, opts?: LlmProviderCallOptions): Promise<LlmGenerateResult> {
 		const timeoutMs = opts?.timeoutMs ?? config.defaultTimeoutMs;
-		const abort = createAbortBundle(timeoutMs, generateSignal(opts));
-		try {
-			const bodyObj: Record<string, unknown> = {
-				model: config.model,
-				messages: [{ role: "user", content: prompt }],
-				max_tokens: opts?.maxTokens ?? 4096,
-			};
-			if (config.disableThinking) {
-				bodyObj.thinking = { type: "disabled" };
-			}
-			const res = await fetch(`${baseUrl}/chat/completions`, {
-				method: "POST",
-				headers: headers(),
-				body: JSON.stringify(bodyObj),
-				signal: abort.signal,
-			});
-			if (!res.ok) {
-				const detail = (await res.text().catch(() => "")).slice(0, 300);
-				throw new Error(`${config.name} HTTP ${res.status}: ${detail}`);
-			}
-			const body = (await res.json()) as {
-				choices?: Array<{
-					message?: {
-						content?: string | Array<{ text?: string; type?: string }>;
-						reasoning_content?: string;
+		const deadline = performance.now() + timeoutMs;
+		const signal = generateSignal(opts);
+		return withLlmConcurrency(
+			async () => {
+				const remainingMs = deadline - performance.now();
+				if (remainingMs <= 0) {
+					throw new Error(`${config.name} timeout after ${timeoutMs}ms (deadline exceeded waiting for semaphore)`);
+				}
+				const abort = createAbortBundle(remainingMs, signal);
+				try {
+					const bodyObj: Record<string, unknown> = {
+						model: config.model,
+						messages: [{ role: "user", content: prompt }],
+						max_tokens: opts?.maxTokens ?? 4096,
 					};
-				}>;
-				usage?: {
-					prompt_tokens?: number;
-					completion_tokens?: number;
-					total_tokens?: number;
-					cached_tokens?: number;
-				};
-			};
-			let text = extractOpenAiLikeText(body.choices?.[0]?.message?.content);
-			if (!text.trim()) {
-				// Reasoning models may exhaust the max_tokens budget on
-				// reasoning_content before emitting content. Fall back to
-				// reasoning_content so the caller gets usable output instead
-				// of "returned empty response".
-				text = (body.choices?.[0]?.message?.reasoning_content ?? "").trim();
-				if (!text) throw new Error(`${config.name} returned empty response`);
-			}
-			return {
-				text,
-				usage: body.usage
-					? {
-							inputTokens: body.usage.prompt_tokens ?? null,
-							outputTokens: body.usage.completion_tokens ?? null,
-							cacheReadTokens: body.usage.cached_tokens ?? null,
-							cacheCreationTokens: null,
-							totalCost: null,
-							totalDurationMs: null,
-						}
-					: null,
-			};
-		} catch (error) {
-			if (abort.timedOut()) {
-				throw new Error(`${config.name} timeout after ${timeoutMs}ms`);
-			}
-			if (error instanceof DOMException && error.name === "AbortError") {
-				throw new Error(`${config.name} aborted`);
-			}
-			throw error;
-		} finally {
-			abort.cleanup();
-		}
+					if (config.disableThinking) {
+						bodyObj.thinking = { type: "disabled" };
+					}
+					const res = await fetch(`${baseUrl}/chat/completions`, {
+						method: "POST",
+						headers: headers(),
+						body: JSON.stringify(bodyObj),
+						signal: abort.signal,
+					});
+					if (!res.ok) {
+						const detail = (await res.text().catch(() => "")).slice(0, 300);
+						throw new Error(`${config.name} HTTP ${res.status}: ${detail}`);
+					}
+					const body = (await res.json()) as {
+						choices?: Array<{
+							message?: {
+								content?: string | Array<{ text?: string; type?: string }>;
+								reasoning_content?: string;
+							};
+						}>;
+						usage?: {
+							prompt_tokens?: number;
+							completion_tokens?: number;
+							total_tokens?: number;
+							cached_tokens?: number;
+						};
+					};
+					let text = extractOpenAiLikeText(body.choices?.[0]?.message?.content);
+					if (!text.trim()) {
+						// Reasoning models may exhaust the max_tokens budget on
+						// reasoning_content before emitting content. Fall back to
+						// reasoning_content so the caller gets usable output instead
+						// of "returned empty response".
+						text = (body.choices?.[0]?.message?.reasoning_content ?? "").trim();
+						if (!text) throw new Error(`${config.name} returned empty response`);
+					}
+					return {
+						text,
+						usage: body.usage
+							? {
+									inputTokens: body.usage.prompt_tokens ?? null,
+									outputTokens: body.usage.completion_tokens ?? null,
+									cacheReadTokens: body.usage.cached_tokens ?? null,
+									cacheCreationTokens: null,
+									totalCost: null,
+									totalDurationMs: null,
+								}
+							: null,
+					};
+				} catch (error) {
+					if (abort.timedOut()) {
+						throw new Error(`${config.name} timeout after ${timeoutMs}ms`);
+					}
+					if (error instanceof DOMException && error.name === "AbortError") {
+						throw new Error(`${config.name} aborted`);
+					}
+					throw error;
+				} finally {
+					abort.cleanup();
+				}
+			},
+			timeoutMs,
+			config.name,
+			signal,
+		);
 	}
 
 	return {
@@ -3447,12 +3503,26 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 		}
 	}
 
-	async function createSession(remainingMs?: number): Promise<string> {
+	async function fetchWithBudget(
+		url: string,
+		init: RequestInit,
+		timeoutMs: number,
+		signal?: AbortSignal,
+	): Promise<Response> {
+		const abort = createAbortBundle(Math.max(1, timeoutMs), signal);
+		try {
+			return await fetch(url, { ...init, signal: abort.signal });
+		} finally {
+			abort.cleanup();
+		}
+	}
+
+	async function createSession(remainingMs?: number, signal?: AbortSignal): Promise<string> {
 		// Attach parentID so OpenCode treats extraction sessions as children.
 		// Child sessions are hidden from the root session list and, crucially,
 		// skipped by the desktop notification handler.
 		const started = performance.now();
-		const parentId = await getOrCreateParentSession(remainingMs);
+		const parentId = await getOrCreateParentSession(remainingMs, signal);
 
 		// Subtract time spent creating the parent session so the child
 		// creation timeout stays within the caller's overall budget.
@@ -3464,12 +3534,16 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 		const payload: Record<string, unknown> = { title: "signet-extraction" };
 		if (parentId) payload.parentID = parentId;
 
-		let res = await fetch(`${cfg.baseUrl}/session`, {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify(payload),
-			signal: AbortSignal.timeout(childTimeoutMs()),
-		});
+		let res = await fetchWithBudget(
+			`${cfg.baseUrl}/session`,
+			{
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify(payload),
+			},
+			childTimeoutMs(),
+			signal,
+		);
 
 		if (!res.ok && parentId) {
 			logger.warn("pipeline", "Child session creation failed with parentID, retrying unparented", {
@@ -3477,12 +3551,16 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 				parentId,
 			});
 			parentSessionId = null;
-			res = await fetch(`${cfg.baseUrl}/session`, {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ title: "signet-extraction" }),
-				signal: AbortSignal.timeout(childTimeoutMs()),
-			});
+			res = await fetchWithBudget(
+				`${cfg.baseUrl}/session`,
+				{
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ title: "signet-extraction" }),
+				},
+				childTimeoutMs(),
+				signal,
+			);
 		}
 
 		if (!res.ok) {
@@ -3512,16 +3590,20 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 	 *  for pipeline work.  Returns null on failure so extraction can
 	 *  proceed unparented (notifications will fire but extraction still
 	 *  works). */
-	async function getOrCreateParentSession(remainingMs?: number): Promise<string | null> {
+	async function getOrCreateParentSession(remainingMs?: number, signal?: AbortSignal): Promise<string | null> {
 		if (parentSessionId) return parentSessionId;
 		try {
 			const timeout = Math.min(5_000, Math.max(1, remainingMs ?? 5_000));
-			const res = await fetch(`${cfg.baseUrl}/session`, {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ title: "signet-system" }),
-				signal: AbortSignal.timeout(timeout),
-			});
+			const res = await fetchWithBudget(
+				`${cfg.baseUrl}/session`,
+				{
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ title: "signet-system" }),
+				},
+				timeout,
+				signal,
+			);
 			if (!res.ok) {
 				logger.warn("pipeline", "OpenCode parent session creation failed", {
 					status: res.status,
@@ -3539,6 +3621,7 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 			logger.debug("pipeline", "OpenCode parent session created", { id });
 			return id;
 		} catch (e) {
+			if (signal?.aborted) throw e;
 			logger.warn("pipeline", "OpenCode parent session creation error", {
 				error: e instanceof Error ? e.message : String(e),
 			});
@@ -3593,10 +3676,11 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 
 	async function sendMessage(
 		prompt: string,
-		opts?: { timeoutMs?: number; maxTokens?: number },
+		opts?: Pick<LlmProviderCallOptions, "timeoutMs" | "maxTokens" | "signal" | "abortSignal">,
 	): Promise<OpenCodeMessageResponse> {
 		const timeoutMs = opts?.timeoutMs ?? cfg.defaultTimeoutMs;
 		const deadline = performance.now() + timeoutMs;
+		const callerSignal = generateSignal(opts);
 
 		return withLlmConcurrency(
 			async () => {
@@ -3604,10 +3688,11 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 				if (remaining <= 0) {
 					throw new Error(`OpenCode timeout after ${timeoutMs}ms (deadline exceeded waiting for semaphore)`);
 				}
+				const abort = createAbortBundle(remaining, callerSignal);
 
 				// Session creation is inside the semaphore so concurrent
 				// generate() calls cannot share and then race-delete a session.
-				const sid = await createSession(deadline - performance.now());
+				const sid = await createSession(deadline - performance.now(), abort.signal);
 				bypassSession(sid, { allowUnknown: true });
 
 				// Track every session created during this call so the finally
@@ -3615,22 +3700,19 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 				const allSids = new Set<string | null>([sid]);
 				let activeSid = sid;
 
-				const controller = new AbortController();
-				const timer = setTimeout(() => controller.abort(), deadline - performance.now());
-
 				try {
 					const postMessage = async (sid: string): Promise<Response> =>
 						fetch(`${cfg.baseUrl}/session/${sid}/message`, {
 							method: "POST",
 							headers: { "Content-Type": "application/json" },
 							body: buildMessageBody(prompt, true),
-							signal: controller.signal,
+							signal: abort.signal,
 						});
 
 					const listMessages = async (sid: string): Promise<Response> =>
 						fetch(`${cfg.baseUrl}/session/${sid}/message`, {
 							method: "GET",
-							signal: controller.signal,
+							signal: abort.signal,
 						});
 
 					const parseResponsePayload = async (res: Response): Promise<unknown> => {
@@ -3681,15 +3763,31 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 					// Use remaining time after semaphore acquisition for poll deadline
 					const pollForAssistantMessage = async (forSessionId: string): Promise<OpenCodeMessageResponse | null> => {
 						const pollRemaining = deadline - performance.now();
-						const pollDeadline = performance.now() + Math.max(1000, Math.min(pollRemaining, 20000));
+						const pollDeadline = performance.now() + Math.max(0, Math.min(pollRemaining, 50));
 						while (performance.now() < pollDeadline) {
+							if (abort.signal.aborted) throw new DOMException("aborted", "AbortError");
 							const res = await listMessages(forSessionId);
 							if (res.ok) {
 								const payload = await parseResponsePayload(res);
 								const parsed = parseMessagePayload(payload, forSessionId, "poll");
 								if (parsed) return parsed;
 							}
-							await new Promise((resolve) => setTimeout(resolve, 250));
+							const delayMs = Math.min(25, Math.max(0, pollDeadline - performance.now()));
+							if (delayMs <= 0) break;
+							await new Promise<void>((resolve, reject) => {
+								if (abort.signal.aborted) {
+									reject(new DOMException("aborted", "AbortError"));
+									return;
+								}
+								const onAbort = (): void => finish(() => reject(new DOMException("aborted", "AbortError")));
+								const finish = (fn: () => void): void => {
+									clearTimeout(timer);
+									abort.signal.removeEventListener("abort", onAbort);
+									fn();
+								};
+								const timer = setTimeout(() => finish(resolve), delayMs);
+								abort.signal.addEventListener("abort", onAbort, { once: true });
+							});
 						}
 						return null;
 					};
@@ -3701,11 +3799,12 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 						const payload = await parseResponsePayload(res);
 						const parsed = parseMessagePayload(payload, forSessionId, "post");
 						if (parsed) return parsed;
+						if (payload !== null) return null;
 						return pollForAssistantMessage(forSessionId);
 					};
 
 					const retryWithNewSession = async (): Promise<OpenCodeMessageResponse | null> => {
-						const retrySid = await createSession(deadline - performance.now());
+						const retrySid = await createSession(deadline - performance.now(), abort.signal);
 						allSids.add(retrySid);
 						activeSid = retrySid;
 						const retryRes = await postMessage(retrySid);
@@ -3739,14 +3838,14 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 								structuredOutputSupported = false;
 							}
 							consumedBody = null;
-							const retrySid = await createSession(deadline - performance.now());
+							const retrySid = await createSession(deadline - performance.now(), abort.signal);
 							allSids.add(retrySid);
 							activeSid = retrySid;
 							res = await fetch(`${cfg.baseUrl}/session/${retrySid}/message`, {
 								method: "POST",
 								headers: { "Content-Type": "application/json" },
 								body: buildMessageBody(prompt, false),
-								signal: controller.signal,
+								signal: abort.signal,
 							});
 						}
 					}
@@ -3774,13 +3873,13 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 								status: res.status,
 								agent: cfg.agent,
 							});
-							const retrySid = await createSession(deadline - performance.now());
+							const retrySid = await createSession(deadline - performance.now(), abort.signal);
 							allSids.add(retrySid);
 							const retryRes = await fetch(`${cfg.baseUrl}/session/${retrySid}/message`, {
 								method: "POST",
 								headers: { "Content-Type": "application/json" },
 								body: buildMessageBody(prompt, true),
-								signal: controller.signal,
+								signal: abort.signal,
 							});
 							if (retryRes.ok) {
 								activeSid = retrySid;
@@ -3824,14 +3923,14 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 							sessionId: activeSid,
 						});
 						structuredOutputSupported = false;
-						const fallbackSid = await createSession(deadline - performance.now());
+						const fallbackSid = await createSession(deadline - performance.now(), abort.signal);
 						allSids.add(fallbackSid);
 						activeSid = fallbackSid;
 						const fallbackRes = await fetch(`${cfg.baseUrl}/session/${fallbackSid}/message`, {
 							method: "POST",
 							headers: { "Content-Type": "application/json" },
 							body: buildMessageBody(prompt, false),
-							signal: controller.signal,
+							signal: abort.signal,
 						});
 						if (fallbackRes.ok) {
 							const fallbackParsed = await parsePostResponse(fallbackRes, fallbackSid);
@@ -3853,7 +3952,11 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 				} catch (e) {
 					const err =
 						e instanceof DOMException && e.name === "AbortError"
-							? new Error(`OpenCode timeout after ${timeoutMs}ms`)
+							? new Error(
+									callerSignal?.aborted && !abort.timedOut()
+										? "OpenCode aborted"
+										: `OpenCode timeout after ${timeoutMs}ms`,
+								)
 							: e;
 					// NOTE(changed-behavior): This warn-level error alerting is unique
 					// to the OpenCode provider.  Other providers (Ollama, Claude Code,
@@ -3868,12 +3971,13 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 					});
 					throw err;
 				} finally {
-					clearTimeout(timer);
+					abort.cleanup();
 					for (const s of allSids) void deleteSession(s);
 				}
 			},
 			timeoutMs,
 			"opencode",
+			callerSignal,
 		);
 	}
 
