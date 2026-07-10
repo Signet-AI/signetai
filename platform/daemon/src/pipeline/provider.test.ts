@@ -24,6 +24,7 @@ import {
 	createOpenAiCompatibleProvider,
 	createOpenCodeProvider,
 	createOpenRouterProvider,
+	getLlmConcurrencyStatus,
 	resolveDefaultOllamaFallbackMaxContextTokens,
 	resolveDefaultOllamaFallbackModel,
 } from "./provider";
@@ -2406,7 +2407,7 @@ describe("createOpenCodeProvider", () => {
 
 		expect(results).toHaveLength(N);
 		for (const r of results) expect(r).toBe("ok");
-		expect(peak).toBeLessThanOrEqual(4);
+		expect(peak).toBeLessThanOrEqual(getLlmConcurrencyStatus().limit);
 		expect(peak).toBeGreaterThan(0);
 	});
 
@@ -2430,8 +2431,9 @@ describe("createOpenCodeProvider", () => {
 			}),
 		);
 
-		// Fill all 4 semaphore slots with blocked requests
-		const fillers = Array.from({ length: 4 }, (_, i) =>
+		const limit = getLlmConcurrencyStatus().limit;
+		// Fill all semaphore slots with blocked requests
+		const fillers = Array.from({ length: limit }, (_, i) =>
 			createOpenCodeProvider({ baseUrl: "http://localhost:9999", model: `filler${i}` }),
 		);
 		const fillerPromises = fillers.map((p) => p.generate("block"));
@@ -3282,7 +3284,7 @@ describe("createOllamaProvider — concurrency semaphore enforcement", () => {
 
 		expect(results).toHaveLength(N);
 		for (const r of results) expect(r).toBe("test result");
-		expect(peak).toBeLessThanOrEqual(4);
+		expect(peak).toBeLessThanOrEqual(getLlmConcurrencyStatus().limit);
 		expect(peak).toBeGreaterThan(0);
 	});
 });
@@ -3326,7 +3328,7 @@ describe("createOpenCodeProvider — nested semaphore deadlock in fallback", () 
 		// 200 responses → triggers tryOllamaFallback. If the inner acquire is
 		// still present, the 4th worker (or earlier) will block waiting for a
 		// slot that never frees → test times out = FAIL.
-		const N = 4; // matches DEFAULT_MAX_LLM_CONCURRENCY
+		const N = getLlmConcurrencyStatus().limit;
 		let postCount = 0;
 
 		mockFetch(
@@ -3508,7 +3510,7 @@ describe("createLlamaCppProvider — concurrency semaphore enforcement", () => {
 
 		expect(results).toHaveLength(N);
 		for (const r of results) expect(r).toBe("test result");
-		expect(peak).toBeLessThanOrEqual(4);
+		expect(peak).toBeLessThanOrEqual(getLlmConcurrencyStatus().limit);
 		expect(peak).toBeGreaterThan(0);
 	});
 });
