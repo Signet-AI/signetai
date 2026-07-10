@@ -610,17 +610,23 @@ function spawnHidden(cmd: string[], options?: { env?: Record<string, string | un
 		stdout: "pipe",
 		stderr: "pipe",
 		env: options?.env ? sanitizedEnv : undefined,
+		detached: process.platform !== "win32",
 	});
 	return {
 		stdout: child.stdout,
 		stderr: child.stderr,
 		exited: child.exited,
 		kill(signal?: string) {
-			if (signal === "SIGKILL") {
-				child.kill("SIGKILL");
-			} else {
-				child.kill("SIGTERM");
+			const actualSignal = signal === "SIGKILL" ? "SIGKILL" : "SIGTERM";
+			if (process.platform !== "win32") {
+				try {
+					process.kill(-child.pid, actualSignal);
+					return;
+				} catch {
+					// Fall back to the direct child below when it has already exited.
+				}
 			}
+			child.kill(actualSignal);
 		},
 	};
 }
@@ -646,42 +652,44 @@ export async function awaitSubprocessWithDeadline<T>(
 ): Promise<T> {
 	if (remainingMs <= 0) {
 		proc.kill("SIGTERM");
+		const graceTimer = setTimeout(() => proc.kill("SIGKILL"), SUBPROCESS_KILL_GRACE_MS);
 		await proc.exited.catch(() => {});
+		clearTimeout(graceTimer);
 		throw new SemaphoreTimeoutError(
 			originalTimeoutMs,
 			`${label} timeout after ${originalTimeoutMs}ms (deadline exceeded before subprocess work)`,
 		);
 	}
 
-	let timedOut = false;
-	const deadlineTimer = setTimeout(() => {
-		timedOut = true;
-		proc.kill("SIGTERM");
-	}, remainingMs);
+	const timeout = Symbol("timeout");
 	let graceTimer: ReturnType<typeof setTimeout> | undefined;
-
-	try {
-		const result = await resultFn(proc);
-		clearTimeout(deadlineTimer);
-		if (timedOut) {
+	let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+	const timeoutPromise = new Promise<typeof timeout>((resolve) => {
+		deadlineTimer = setTimeout(() => {
+			proc.kill("SIGTERM");
 			graceTimer = setTimeout(() => proc.kill("SIGKILL"), SUBPROCESS_KILL_GRACE_MS);
-			await proc.exited.catch(() => {});
-			clearTimeout(graceTimer);
-			throw new SemaphoreTimeoutError(
-				originalTimeoutMs,
-				`${label} timeout after ${originalTimeoutMs}ms (result arrived after deadline)`,
-			);
-		}
-		return result;
-	} catch (err) {
-		clearTimeout(deadlineTimer);
-		if (!timedOut) throw err;
-		// Timeout fired — SIGTERM sent. Wait for exit with SIGKILL backstop.
-		graceTimer = setTimeout(() => proc.kill("SIGKILL"), SUBPROCESS_KILL_GRACE_MS);
+			resolve(timeout);
+		}, remainingMs);
+	});
+	const resultPromise = resultFn(proc).then(
+		(value) => ({ ok: true as const, value }),
+		(error) => ({ ok: false as const, error }),
+	);
+
+	const result = await Promise.race([resultPromise, timeoutPromise]);
+	if (result === timeout) {
+		if (deadlineTimer) clearTimeout(deadlineTimer);
 		await proc.exited.catch(() => {});
-		clearTimeout(graceTimer);
+		if (graceTimer) clearTimeout(graceTimer);
 		throw new SemaphoreTimeoutError(originalTimeoutMs, `${label} timeout after ${originalTimeoutMs}ms`);
 	}
+
+	if (graceTimer) clearTimeout(graceTimer);
+	if (deadlineTimer) clearTimeout(deadlineTimer);
+	if (result.ok) {
+		return result.value;
+	}
+	throw result.error;
 }
 
 function codexAuthPaths(baseEnv: Record<string, string | undefined>): string[] {
@@ -1365,14 +1373,15 @@ export function createCommandLineProvider(config: CommandLineProviderConfig): Ll
 							SIGNET_PROMPT: prompt,
 						},
 						stdio: ["pipe", "pipe", "pipe"],
+						detached: process.platform !== "win32",
 						windowsHide: true,
 					},
 				);
+				let timedOut = false;
 				const timer = setTimeout(() => {
 					if (settled) return;
-					settled = true;
-					child.kill("SIGTERM");
-					reject(new Error(`${config.name} timeout after ${timeoutMs}ms`));
+					timedOut = true;
+					terminateChildProcessTreeWithEscalation(child);
 				}, timeoutMs);
 				child.stdout?.setEncoding("utf8");
 				child.stderr?.setEncoding("utf8");
@@ -1392,6 +1401,10 @@ export function createCommandLineProvider(config: CommandLineProviderConfig): Ll
 					if (settled) return;
 					settled = true;
 					clearTimeout(timer);
+					if (timedOut) {
+						reject(new Error(`${config.name} timeout after ${timeoutMs}ms`));
+						return;
+					}
 					if (code !== 0) {
 						reject(new Error(`${config.name} exited ${code}: ${stderr.slice(0, 300)}`));
 						return;

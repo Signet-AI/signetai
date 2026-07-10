@@ -17,6 +17,7 @@ import {
 	awaitSubprocessWithDeadline,
 	createAcpxProvider,
 	createClaudeCodeProvider,
+	createCommandLineProvider,
 	createCodexProvider,
 	createLlamaCppProvider,
 	createOllamaProvider,
@@ -2884,6 +2885,107 @@ describe("awaitSubprocessWithDeadline — success-after-timeout race", () => {
 		);
 
 		expect(killed).toBe(true);
+	});
+
+	it("arms SIGKILL while resultFn is still waiting for process exit", async () => {
+		let resolveExit: (code: number) => void = () => {};
+		const exitPromise = new Promise<number>((resolve) => {
+			resolveExit = resolve;
+		});
+		const signals: string[] = [];
+		const fakeProc = {
+			stdout: streamFromString(""),
+			stderr: streamFromString(""),
+			exited: exitPromise,
+			kill(signal?: string) {
+				signals.push(signal ?? "SIGTERM");
+				if (signal === "SIGKILL") resolveExit(143);
+			},
+		};
+
+		const resultFn = async (proc: typeof fakeProc) => {
+			await proc.exited;
+			return "late";
+		};
+
+		const outcome = await Promise.race([
+			awaitSubprocessWithDeadline(fakeProc, 20, "test", 20, resultFn).then(
+				() => "resolved",
+				(error) => error,
+			),
+			new Promise<Error>((resolve) => setTimeout(() => resolve(new Error("deadline helper did not settle")), 2600)),
+		]);
+
+		expect(outcome).toBeInstanceOf(SemaphoreTimeoutError);
+		expect(signals).toEqual(["SIGTERM", "SIGKILL"]);
+	});
+});
+
+describe("createCommandLineProvider process lifecycle", () => {
+	it("kills the process group on timeout and waits for descendants to exit", async () => {
+		if (process.platform === "win32") return;
+		const root = join(tmpdir(), `signet-command-timeout-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		mkdirSync(root, { recursive: true });
+		const bin = join(root, "fake-command-leak.sh");
+		const rootPidPath = join(root, "root.pid");
+		const childPidPath = join(root, "child.pid");
+		writeFileSync(
+			bin,
+			`#!/usr/bin/env bash
+trap '' TERM
+printf '%s' "$$" > ${JSON.stringify(rootPidPath)}
+sleep 30 &
+printf '%s' "$!" > ${JSON.stringify(childPidPath)}
+wait
+`,
+		);
+		chmodSync(bin, 0o755);
+
+		try {
+			const provider = createCommandLineProvider({
+				name: "fake-command",
+				bin,
+				defaultTimeoutMs: 50,
+			});
+			await expect(provider.generate("hang")).rejects.toThrow("fake-command timeout after 50ms");
+
+			const rootPid = Number(readFileSync(rootPidPath, "utf-8"));
+			const childPid = Number(readFileSync(childPidPath, "utf-8"));
+			expect(rootPid).toBeGreaterThan(0);
+			expect(childPid).toBeGreaterThan(0);
+
+			let rootAlive = true;
+			let childAlive = true;
+			for (let i = 0; i < 40; i += 1) {
+				try {
+					process.kill(rootPid, 0);
+				} catch {
+					rootAlive = false;
+				}
+				try {
+					process.kill(childPid, 0);
+				} catch {
+					childAlive = false;
+				}
+				if (!rootAlive && !childAlive) break;
+				await new Promise((resolve) => setTimeout(resolve, 25));
+			}
+			expect(rootAlive).toBe(false);
+			expect(childAlive).toBe(false);
+		} finally {
+			for (const path of [rootPidPath, childPidPath]) {
+				if (!existsSync(path)) continue;
+				const pid = Number(readFileSync(path, "utf-8"));
+				if (pid > 0) {
+					try {
+						process.kill(pid, "SIGKILL");
+					} catch {
+						// Already exited.
+					}
+				}
+			}
+			rmSync(root, { recursive: true, force: true });
+		}
 	});
 });
 
