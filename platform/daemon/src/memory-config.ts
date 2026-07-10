@@ -537,7 +537,11 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): ResolvedPipel
 	}
 	const effectiveProvider =
 		!allowRemoteProviders && isRemotePipelineProviderForEndpoint(resolvedProvider, resolvedEndpoint)
-			? providerFallbackForLock(resolvedProvider, resolvedFallbackProvider, resolvedEndpoint)
+			? providerFallbackForLock(
+					resolvedProvider,
+					resolvedFallbackProvider === "none" ? "llama-cpp" : resolvedFallbackProvider,
+					resolvedEndpoint,
+				)
 			: resolvedProvider;
 	const effectiveModel =
 		effectiveProvider === resolvedProvider ? resolvedModel : defaultPipelineModel(effectiveProvider);
