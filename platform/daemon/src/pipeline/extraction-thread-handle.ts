@@ -61,6 +61,9 @@ export function startExtractionThread(opts: ExtractionThreadOpts): Promise<Worke
 		let running = true;
 		let settled = false;
 		const pendingGenerate = new Map<string, { readonly controller: AbortController; readonly done: Promise<void> }>();
+		const abortPendingGenerate = (): void => {
+			for (const pending of pendingGenerate.values()) pending.controller.abort();
+		};
 		let latestStats: WorkerStats = {
 			failures: 0,
 			lastProgressAt: Date.now(),
@@ -78,6 +81,7 @@ export function startExtractionThread(opts: ExtractionThreadOpts): Promise<Worke
 		const readyTimer = setTimeout(() => {
 			if (settled) return;
 			settled = true;
+			abortPendingGenerate();
 			reject(
 				new Error(
 					`Extraction worker thread failed to become ready within ${opts.readyTimeoutMs ?? READY_TIMEOUT_MS}ms`,
@@ -166,6 +170,7 @@ export function startExtractionThread(opts: ExtractionThreadOpts): Promise<Worke
 			clearTimeout(readyTimer);
 			logger.error("pipeline", "Extraction worker thread crashed", err);
 			running = false;
+			abortPendingGenerate();
 			if (!settled) {
 				settled = true;
 				reject(err);
@@ -175,6 +180,7 @@ export function startExtractionThread(opts: ExtractionThreadOpts): Promise<Worke
 		worker.on("exit", (code: number) => {
 			clearTimeout(readyTimer);
 			running = false;
+			abortPendingGenerate();
 			if (code !== 0) {
 				logger.warn("pipeline", "Extraction worker thread exited with non-zero code", { code });
 			}

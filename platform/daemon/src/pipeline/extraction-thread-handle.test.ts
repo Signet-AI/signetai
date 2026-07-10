@@ -33,6 +33,10 @@ class FakeExtractionWorker implements ExtractionWorker {
 	emitMessage(msg: WorkerToMainMessage): void {
 		for (const listener of this.listeners.message) listener(msg);
 	}
+
+	emitError(err: Error): void {
+		for (const listener of this.listeners.error) listener(err);
+	}
 }
 
 const init: WorkerInit = {
@@ -116,5 +120,37 @@ describe("startExtractionThread inference proxy", () => {
 		fake.emitMessage({ type: "stopped" });
 		await stopPromise;
 		expect(fake.posted).toContainEqual({ type: "generateError", id: "req-2", error: "provider aborted" });
+	});
+
+	it("aborts in-flight provider work when the extraction worker crashes", async () => {
+		const fake = new FakeExtractionWorker();
+		let observedSignal: AbortSignal | undefined;
+		const provider: LlmProvider = {
+			name: "test-provider",
+			generate(_prompt, opts) {
+				observedSignal = opts?.signal;
+				return new Promise((_resolve, reject) => {
+					opts?.signal?.addEventListener("abort", () => reject(new Error("provider aborted")));
+				});
+			},
+			async available() {
+				return true;
+			},
+		};
+
+		const handlePromise = startExtractionThread({
+			init,
+			provider,
+			workerFactory: () => fake,
+			readyTimeoutMs: 1000,
+		});
+		fake.emitMessage({ type: "ready" });
+		await handlePromise;
+		fake.emitMessage({ type: "generate", id: "req-crash", prompt: "slow", options: { timeoutMs: 5000 } });
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		fake.emitError(new Error("worker crashed"));
+
+		expect(observedSignal?.aborted).toBe(true);
 	});
 });

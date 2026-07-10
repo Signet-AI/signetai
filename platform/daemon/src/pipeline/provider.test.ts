@@ -1029,7 +1029,7 @@ describe("createClaudeCodeProvider", () => {
 		}
 	});
 
-	it("opens a provider-local cooldown on classified stderr failures and rejects without respawn", async () => {
+	it("opens a daemon-wide cooldown on classified stderr failures and rejects without respawn", async () => {
 		const restorePath = withFakeClaudeOnPath();
 		let spawns = 0;
 		Bun.spawn = mock(() => {
