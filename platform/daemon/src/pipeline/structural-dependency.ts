@@ -399,6 +399,7 @@ async function processDependencyBatch(
 export function startStructuralDependencyWorker(deps: StructuralDependencyDeps): StructuralDependencyHandle {
 	let running = true;
 	let timer: ReturnType<typeof setInterval> | null = null;
+	let inFlight: Promise<void> | null = null;
 
 	async function tick(): Promise<void> {
 		if (!running) return;
@@ -413,10 +414,13 @@ export function startStructuralDependencyWorker(deps: StructuralDependencyDeps):
 
 	timer = setInterval(() => {
 		if (!running) return;
-		tick().catch((e) => {
+		if (inFlight) return;
+		inFlight = tick().catch((e) => {
 			logger.warn("structural-dependency", "Tick error", {
 				error: String(e),
 			});
+		}).finally(() => {
+			inFlight = null;
 		});
 	}, deps.pipelineCfg.structural.pollIntervalMs);
 
@@ -429,6 +433,7 @@ export function startStructuralDependencyWorker(deps: StructuralDependencyDeps):
 		async stop() {
 			running = false;
 			if (timer) clearInterval(timer);
+			if (inFlight) await inFlight;
 			logger.info("structural-dependency", "Worker stopped");
 		},
 		get running() {
