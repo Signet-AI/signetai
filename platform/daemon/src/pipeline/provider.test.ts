@@ -663,6 +663,27 @@ describe("createOllamaProvider", () => {
 		await expect(provider.generate("test prompt", { timeoutMs: 50 })).rejects.toThrow(/timeout/i);
 	});
 
+	it("generate() aborts promptly when the caller signal is cancelled", async () => {
+		mockFetch((_url, init) => {
+			return new Promise((_resolve, reject) => {
+				const signal = init?.signal;
+				if (signal) {
+					signal.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+				}
+			});
+		});
+
+		const provider = createOllamaProvider({
+			model: "slow-model",
+			defaultTimeoutMs: 1000,
+		});
+		const controller = new AbortController();
+		const result = provider.generate("test prompt", { timeoutMs: 1000, signal: controller.signal });
+		setTimeout(() => controller.abort(), 20);
+
+		await expect(result).rejects.toThrow(/aborted/i);
+	});
+
 	it("generate() sends maxTokens as num_predict", async () => {
 		let capturedBody: Record<string, unknown> = {};
 		mockFetch(async (_url, init) => {
@@ -842,6 +863,26 @@ describe("createOpenAiCompatibleProvider", () => {
 				},
 			},
 		]);
+	});
+
+	it("generate() aborts promptly when the caller signal is cancelled", async () => {
+		mockFetch((_url, init) => {
+			return new Promise((_resolve, reject) => {
+				init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+			});
+		});
+
+		const provider = createOpenAiCompatibleProvider({
+			name: "openai-compatible",
+			model: "test-model",
+			baseUrl: "http://localhost:9999",
+			defaultTimeoutMs: 1000,
+		});
+		const controller = new AbortController();
+		const result = provider.generate("test", { timeoutMs: 1000, signal: controller.signal });
+		setTimeout(() => controller.abort(), 20);
+
+		await expect(result).rejects.toThrow(/aborted/i);
 	});
 });
 
@@ -2822,6 +2863,21 @@ describe("LlmConcurrencySemaphore", () => {
 		sem.release();
 	});
 
+	it("external abort removes queued acquisition without waiting for timeout", async () => {
+		const sem = new LlmConcurrencySemaphore(1);
+		await sem.acquire();
+		const controller = new AbortController();
+		const wait = sem.acquireWithTimeout(500, controller.signal);
+		expect(sem.pending).toBe(1);
+		controller.abort();
+
+		await expect(wait).rejects.toThrow(/aborted/i);
+		expect(sem.pending).toBe(0);
+		expect(sem.activeTimers).toBe(0);
+
+		sem.release();
+	});
+
 	it("global cap: concurrent calls beyond max queue and resolve in order", async () => {
 		const sem = new LlmConcurrencySemaphore(2);
 
@@ -2954,6 +3010,73 @@ wait
 			expect(rootPid).toBeGreaterThan(0);
 			expect(childPid).toBeGreaterThan(0);
 
+			let rootAlive = true;
+			let childAlive = true;
+			for (let i = 0; i < 40; i += 1) {
+				try {
+					process.kill(rootPid, 0);
+				} catch {
+					rootAlive = false;
+				}
+				try {
+					process.kill(childPid, 0);
+				} catch {
+					childAlive = false;
+				}
+				if (!rootAlive && !childAlive) break;
+				await new Promise((resolve) => setTimeout(resolve, 25));
+			}
+			expect(rootAlive).toBe(false);
+			expect(childAlive).toBe(false);
+		} finally {
+			for (const path of [rootPidPath, childPidPath]) {
+				if (!existsSync(path)) continue;
+				const pid = Number(readFileSync(path, "utf-8"));
+				if (pid > 0) {
+					try {
+						process.kill(pid, "SIGKILL");
+					} catch {
+						// Already exited.
+					}
+				}
+			}
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("aborts a running command when the caller signal is cancelled", async () => {
+		if (process.platform === "win32") return;
+		const root = join(tmpdir(), `signet-command-abort-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		mkdirSync(root, { recursive: true });
+		const bin = join(root, "fake-command-abort.sh");
+		const rootPidPath = join(root, "root.pid");
+		const childPidPath = join(root, "child.pid");
+		writeFileSync(
+			bin,
+			`#!/usr/bin/env bash
+trap '' TERM
+printf '%s' "$$" > ${JSON.stringify(rootPidPath)}
+sleep 30 &
+printf '%s' "$!" > ${JSON.stringify(childPidPath)}
+wait
+`,
+		);
+		chmodSync(bin, 0o755);
+
+		try {
+			const provider = createCommandLineProvider({
+				name: "fake-command",
+				bin,
+				defaultTimeoutMs: 1000,
+			});
+			const controller = new AbortController();
+			const result = provider.generate("hang", { timeoutMs: 1000, signal: controller.signal });
+			await new Promise((resolve) => setTimeout(resolve, 50));
+			controller.abort();
+
+			await expect(result).rejects.toThrow(/aborted/i);
+			const rootPid = Number(readFileSync(rootPidPath, "utf-8"));
+			const childPid = Number(readFileSync(childPidPath, "utf-8"));
 			let rootAlive = true;
 			let childAlive = true;
 			for (let i = 0; i < 40; i += 1) {
