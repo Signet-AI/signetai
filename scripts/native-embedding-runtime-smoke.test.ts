@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,6 +10,18 @@ const root = join(import.meta.dir, "..");
 const enabled = process.env.SIGNET_NATIVE_EMBEDDING_SMOKE === "1";
 const tempDirs: string[] = [];
 const children: ChildProcessWithoutNullStreams[] = [];
+
+/** Resolve the compiled native binary to smoke-test.
+ *  Honors an explicit SIGNET_NATIVE_SMOKE_BINARY override (release CI builds to
+ *  dist/native/$RELEASE_ASSET); otherwise derives the asset name for the current
+ *  platform so one test covers every release leg. */
+function nativeSmokeBinary(): string {
+	const override = process.env.SIGNET_NATIVE_SMOKE_BINARY;
+	if (override) return override;
+	const key = `${process.platform}-${process.arch}`;
+	const name = `signet-${key}`;
+	return join(root, "dist", "native", key.startsWith("win32-") ? `${name}.exe` : name);
+}
 
 function tempDir(): string {
 	const path = mkdtempSync(join(tmpdir(), "signet-native-embedding-smoke-"));
@@ -68,11 +80,12 @@ describe("compiled native embedding runtime", () => {
 	const smoke = enabled ? test : test.skip;
 
 	smoke(
-		"embeds and recalls a fixed sentence through the compiled Linux binary",
+		"embeds and recalls a fixed sentence through the compiled native binary",
 		async () => {
-			if (process.platform !== "linux" || process.arch !== "x64") return;
-
-			const binary = join(root, "dist", "native", "signet-linux-x64");
+			const binary = nativeSmokeBinary();
+			if (!existsSync(binary)) {
+				throw new Error(`native binary not found at ${binary}; build it first (bun run build:native-bun)`);
+			}
 			const workspace = tempDir();
 			writeFileSync(
 				join(workspace, "agent.yaml"),

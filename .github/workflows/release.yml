@@ -212,6 +212,13 @@ jobs:
         shell: bash
         run: test -s ./dist/native/"$RELEASE_ASSET"
 
+      - name: Native embedding smoke
+        shell: bash
+        env:
+          SIGNET_NATIVE_EMBEDDING_SMOKE: "1"
+          SIGNET_NATIVE_SMOKE_BINARY: ./dist/native/${{ matrix.asset }}
+        run: bun test scripts/native-embedding-runtime-smoke.test.ts
+
       - name: Upload to release
         shell: bash
         run: |
