@@ -647,6 +647,37 @@ describe("Worker processing", () => {
 		expect(job?.status).toBe("completed");
 	});
 
+	it("worker stop() aborts in-flight extraction and restores the lease without consuming a retry", async () => {
+		let observedSignal: AbortSignal | undefined;
+		const abortingProvider: LlmProvider = {
+			name: "abort-aware",
+			generate(_prompt, opts) {
+				observedSignal = opts?.signal;
+				return new Promise((_resolve, reject) => {
+					opts?.signal?.addEventListener("abort", () => reject(new Error("provider aborted")));
+				});
+			},
+			async available() {
+				return true;
+			},
+		};
+
+		insertMemory(db, "mem-abort-stop", "User prefers cancellable extraction");
+		enqueueExtractionJob(accessor, "mem-abort-stop");
+
+		const worker = startWorker(accessor, abortingProvider, PIPELINE_CFG, DECISION_CFG);
+		await Bun.sleep(50);
+
+		const stopPromise = worker.stop();
+		expect(observedSignal?.aborted).toBe(true);
+		await stopPromise;
+
+		const job = getJob(db, "mem-abort-stop");
+		expect(job?.status).toBe("pending");
+		expect(job?.attempts).toBe(0);
+		expect(job?.error ?? null).toBeNull();
+	});
+
 	it("worker is not running after stop()", async () => {
 		const worker = startWorker(accessor, goodProvider(), PIPELINE_CFG, DECISION_CFG);
 

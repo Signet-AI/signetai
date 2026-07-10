@@ -45,7 +45,7 @@ import { countTokens } from "./tokenizer";
 // ---------------------------------------------------------------------------
 
 export interface SummaryWorkerHandle {
-	stop(): void;
+	stop(): Promise<void>;
 	readonly running: boolean;
 }
 
@@ -602,6 +602,7 @@ async function processJob(
 	provider: LlmProvider | null,
 	job: SummaryJobRow,
 	memoryCfg: ResolvedMemoryConfig,
+	signal?: AbortSignal,
 ): Promise<void> {
 	const commandMode = memoryCfg.pipelineV2.enabled && memoryCfg.pipelineV2.extraction.provider === "command";
 	const commandStageStatus: CommandStageStatus = commandMode ? getCommandStageStatus(accessor, job.id) : "none";
@@ -658,6 +659,7 @@ async function processJob(
 	const genOpts = {
 		timeoutMs: memoryCfg.pipelineV2.synthesis.timeout,
 		maxTokens: memoryCfg.pipelineV2.synthesis.maxTokens,
+		signal,
 		refresh: true,
 	};
 	const result =
@@ -771,6 +773,7 @@ async function processJob(
 interface GenerateOpts {
 	readonly timeoutMs: number;
 	readonly maxTokens: number;
+	readonly signal?: AbortSignal;
 }
 
 async function processSingle(
@@ -1551,6 +1554,8 @@ export function startSummaryRecovery(accessor: DbAccessor): () => void {
 export function startSummaryWorker(accessor: DbAccessor, options: SummaryWorkerOptions = {}): SummaryWorkerHandle {
 	let timer: ReturnType<typeof setTimeout> | null = null;
 	let stopped = false;
+	let activeTick: Promise<void> | null = null;
+	let activeAbort: AbortController | null = null;
 	const stopRecovery = startSummaryRecovery(accessor);
 
 	let cachedProvider: LlmProvider | null = null;
@@ -1566,6 +1571,7 @@ export function startSummaryWorker(accessor: DbAccessor, options: SummaryWorkerO
 		}
 
 		let jobId: string | null = null;
+		let leasedJob: SummaryJobRow | null = null;
 
 		try {
 			const isSynthesisAvailable = options.isSynthesisAvailable ?? (async () => false);
@@ -1585,6 +1591,8 @@ export function startSummaryWorker(accessor: DbAccessor, options: SummaryWorkerO
 			}
 
 			jobId = job.id;
+			leasedJob = job;
+			activeAbort = new AbortController();
 			const memoryCfg = loadMemoryConfig(AGENTS_DIR);
 			const commandMode = memoryCfg.pipelineV2.enabled && memoryCfg.pipelineV2.extraction.provider === "command";
 			let synthesisAvailable = false;
@@ -1616,7 +1624,7 @@ export function startSummaryWorker(accessor: DbAccessor, options: SummaryWorkerO
 					if (!commandMode) throw error;
 				}
 			}
-			await processJob(accessor, synthesisAvailable ? cachedProvider : null, job, memoryCfg);
+			await processJob(accessor, synthesisAvailable ? cachedProvider : null, job, memoryCfg, activeAbort.signal);
 
 			// Mark complete
 			accessor.withWriteTx((db) => {
@@ -1634,6 +1642,10 @@ export function startSummaryWorker(accessor: DbAccessor, options: SummaryWorkerO
 		} catch (e) {
 			const terminal = isTerminalSummaryJobError(e instanceof Error ? e : String(e));
 			const errorMessage = e instanceof Error ? e.message : String(e);
+			if (stopped && leasedJob && /aborted|cancelled|canceled/i.test(errorMessage)) {
+				restoreUnprocessedSummaryLease(accessor, leasedJob);
+				return;
+			}
 			logger.error("summary-worker", "Job failed", e instanceof Error ? e : undefined, { error: errorMessage });
 
 			// Try to mark the job as failed/pending for retry.
@@ -1666,16 +1678,20 @@ export function startSummaryWorker(accessor: DbAccessor, options: SummaryWorkerO
 			}
 
 			scheduleTick(terminal ? 500 : POLL_INTERVAL_MS * 3);
+		} finally {
+			activeAbort = null;
 		}
 	}
 
 	function scheduleTick(delay: number): void {
 		if (stopped) return;
 		timer = setTimeout(() => {
-			tick().catch((err) => {
+			activeTick = tick().catch((err) => {
 				logger.error("summary-worker", "Unhandled tick error", err instanceof Error ? err : undefined, {
 					error: err instanceof Error ? err.message : String(err),
 				});
+			}).finally(() => {
+				activeTick = null;
 			});
 		}, delay);
 	}
@@ -1684,10 +1700,12 @@ export function startSummaryWorker(accessor: DbAccessor, options: SummaryWorkerO
 	scheduleTick(POLL_INTERVAL_MS);
 
 	return {
-		stop() {
+		async stop() {
 			stopped = true;
+			activeAbort?.abort();
 			if (timer) clearTimeout(timer);
 			stopRecovery();
+			if (activeTick) await activeTick;
 		},
 		get running() {
 			return !stopped;

@@ -229,6 +229,24 @@ function failJob(db: WriteDb, jobId: string, error: string, attempts: number, ma
 	).run(nextStatus, error, now, now, jobId);
 }
 
+function restoreCancelledJobLease(db: WriteDb, job: JobRow): void {
+	const now = new Date().toISOString();
+	db.prepare(
+		`UPDATE memory_jobs
+		 SET status = 'pending',
+		     attempts = MAX(attempts - 1, 0),
+		     leased_at = NULL,
+		     error = NULL,
+		     updated_at = ?
+		 WHERE id = ? AND status = 'leased'`,
+	).run(now, job.id);
+}
+
+function isCancellationError(error: unknown): boolean {
+	const message = error instanceof Error ? error.message : String(error);
+	return /aborted|cancelled|canceled/i.test(message);
+}
+
 // deadLetterJob writes status='dead' directly via SQL, bypassing failJob.
 // It intentionally does NOT increment the attempts column — the caller
 // (rate-limit exhaustion) classifies the job as non-retryable before the
@@ -1019,6 +1037,7 @@ export function startWorker(
 	};
 	const log: LogSink = logSink ?? logger;
 	let running = true;
+	const runtimeAbort = new AbortController();
 	let inflight: Promise<void> | null = null;
 	let pollTimer: ReturnType<typeof setInterval> | null = null;
 	let reapTimer: ReturnType<typeof setInterval> | null = null;
@@ -1181,6 +1200,7 @@ export function startWorker(
 		const rawExtraction = await extractFactsAndEntities(row.content, instrumentedProvider, {
 			timeoutMs: extractionTimeout,
 			maxTokens: extractionMaxTokens,
+			signal: runtimeAbort.signal,
 		});
 		const extractionMs = Date.now() - extractionStart;
 
@@ -1198,7 +1218,7 @@ export function startWorker(
 			accessor,
 			agentId,
 			escalationThresholds,
-			{ timeoutMs: extractionTimeout, maxTokens: extractionMaxTokens },
+			{ timeoutMs: extractionTimeout, maxTokens: extractionMaxTokens, signal: runtimeAbort.signal },
 		);
 
 		const extraction = escalated.result;
@@ -1584,6 +1604,11 @@ export function startWorker(
 				analytics?.recordLatency("jobs", runtime.now() - jobStart);
 			} catch (e) {
 				const msg = e instanceof Error ? e.message : String(e);
+				if (!running && isCancellationError(e)) {
+					accessor.withWriteTx((db) => restoreCancelledJobLease(db, job));
+					lastAttempt = runtime.now();
+					return;
+				}
 				const nonRetryable = e instanceof RateLimitExceededError;
 				log.warn("pipeline", "Job failed", {
 					jobId: job.id,
@@ -1821,6 +1846,7 @@ export function startWorker(
 		},
 		async stop() {
 			running = false;
+			runtimeAbort.abort();
 			if (pollTimer) clearTimeout(pollTimer);
 			if (reapTimer) clearInterval(reapTimer);
 			if (watchdog) clearInterval(watchdog);

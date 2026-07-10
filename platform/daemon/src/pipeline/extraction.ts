@@ -467,7 +467,7 @@ export function parseRawExtractionOutput(rawOutput: string): ExtractionResult {
 export async function extractFactsAndEntities(
 	input: string,
 	provider: LlmProvider,
-	opts?: { timeoutMs?: number; maxTokens?: number },
+	opts?: { timeoutMs?: number; maxTokens?: number; signal?: AbortSignal; responseFormat?: "json"; think?: boolean },
 ): Promise<ExtractionResult> {
 	const trimmed = input.trim().replace(/\s+/g, " ");
 	if (trimmed.length < MIN_FACT_LENGTH) {
@@ -487,6 +487,9 @@ export async function extractFactsAndEntities(
 		rawOutput = await provider.generate(prompt, {
 			timeoutMs: opts?.timeoutMs,
 			maxTokens: opts?.maxTokens,
+			signal: opts?.signal,
+			responseFormat: opts?.responseFormat,
+			think: opts?.think,
 		});
 	} catch (e) {
 		if (e instanceof RateLimitExceededError) {

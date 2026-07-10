@@ -391,7 +391,7 @@ export async function stopPipeline(): Promise<void> {
 		structuralClassifyHandle = null;
 	}
 	if (summaryWorkerHandle) {
-		summaryWorkerHandle.stop();
+		await summaryWorkerHandle.stop();
 		summaryWorkerHandle = null;
 	}
 	if (summaryRecoveryStop) {
