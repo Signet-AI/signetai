@@ -1000,7 +1000,7 @@ describe("createClaudeCodeProvider", () => {
 		}
 	});
 
-	it("passes Anthropic API credentials only when API-key billing is explicit and maps maxBudgetUsd", async () => {
+	it("passes Anthropic API credentials only when API key env inheritance is explicit and maps maxBudgetUsd", async () => {
 		process.env.ANTHROPIC_API_KEY = "sk-ant-explicit";
 		const restorePath = withFakeClaudeOnPath();
 		try {
@@ -1019,7 +1019,7 @@ describe("createClaudeCodeProvider", () => {
 
 			const provider = createClaudeCodeProvider({
 				model: "haiku",
-				billingMode: "api-key",
+				allowApiKeyEnv: true,
 				maxBudgetUsd: 0.25,
 			});
 			await expect(provider.generate("hello", { timeoutMs: 1000 })).resolves.toBe("ok");

@@ -275,7 +275,8 @@ export interface PipelineWorkerConfig {
 }
 
 export interface PipelineClaudeCodeConfig {
-	readonly billingMode: "subscription" | "api-key";
+	/** Allow daemon-spawned Claude Code calls to inherit ambient Anthropic API-key env vars. */
+	readonly allowApiKeyEnv: boolean;
 	readonly maxBudgetUsd?: number;
 	readonly cooldownMs: number;
 }

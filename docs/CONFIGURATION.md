@@ -822,47 +822,49 @@ disabled. Set at least one sub-field to opt in.
 Rate-limited synthesis jobs that fail are sent to dead-letter without
 retry. See the extraction `rateLimit` docs above for the full warning.
 
-### Claude Code background billing (`claudeCode`)
+### Claude Code background environment (`claudeCode`)
 
 Applies whenever legacy pipeline extraction, synthesis, or an explicit
 inference route uses the `claude-code` provider.
 
 | Field | Default | Range | Description |
 |-------|---------|-------|-------------|
-| `billingMode` | `"subscription"` | — | `"subscription"` strips ambient `ANTHROPIC_API_KEY`/paid Console credentials from daemon-spawned `claude -p` calls so Claude Code uses the logged-in subscription OAuth account. `"api-key"` explicitly allows API-key billing. |
-| `maxBudgetUsd` | unset | 0.01-1000 | Optional per-invocation spend cap passed to Claude Code print mode as `--max-budget-usd`. Omitted by default because Claude Code documents no default limit for this flag and forcing one could change subscription behavior. |
-| `cooldownMs` | `300000` | 1000-3600000 ms | Provider-local cooldown opened after Claude Code reports quota, usage-limit, credit, billing, or auth failures. Calls during cooldown fail before spawning `claude`. |
+| `allowApiKeyEnv` | `false` | — | When `false`, daemon-spawned `claude -p` calls strip ambient `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN`. Set `true` only when background pipeline jobs should inherit those env credentials. Legacy unshipped `billingMode: api-key` is accepted as an alias for `true`; `billingMode: subscription` maps to `false`. |
+| `maxBudgetUsd` | unset | 0.01-1000 | Optional per-invocation spend cap passed to Claude Code print mode as `--max-budget-usd`. Omitted by default because Claude Code documents no default limit for this flag and forcing one could change CLI behavior. |
+| `cooldownMs` | `300000` | 1000-3600000 ms | Daemon-wide Claude Code circuit cooldown opened after Claude Code reports quota, usage-limit, credit, billing, or auth failures. Calls during cooldown fail before spawning `claude`. Interactive and background `claude-code` providers in the daemon share this circuit and config snapshot. |
 
 ```yaml
 memory:
   pipelineV2:
     claudeCode:
-      billingMode: subscription
+      allowApiKeyEnv: false
       cooldownMs: 300000
 ```
 
-Only opt into API-key billing when you intentionally want background pipeline
-jobs to use Claude API pay-as-you-go credits:
+Only opt into ambient API-key/token inheritance when you intentionally want
+background pipeline jobs to use the Anthropic credentials already present in
+the daemon environment:
 
 ```yaml
 memory:
   pipelineV2:
     claudeCode:
-      billingMode: api-key
+      allowApiKeyEnv: true
       maxBudgetUsd: 0.25
 ```
 
-Anthropic's current July 2026 Claude Code docs say `--max-budget-usd` is a
-print-mode-only API-call budget flag with no default limit:
-<https://code.claude.com/docs/en/cli-reference>. Their support docs also state
-that `ANTHROPIC_API_KEY` takes priority over Claude subscriptions and causes
-API usage charges:
-<https://support.claude.com/en/articles/12304248-manage-api-key-environment-variables-in-claude-code>.
-As of the June 15, 2026 update, the announced separate Claude Agent SDK /
-`claude -p` monthly credit change is paused; `claude -p` still draws from
-subscription usage limits and the separate credit is not available:
-<https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan>.
-
+Anthropic's Claude Code CLI reference lists `--max-budget-usd` as a
+print-mode-only API-call budget flag:
+<https://docs.anthropic.com/en/docs/claude-code/cli-reference>. Anthropic's
+Claude Code cost docs describe Claude Code charges in terms of API token
+consumption and subscription plan pricing separately:
+<https://docs.anthropic.com/en/docs/claude-code/costs>. Anthropic support docs
+also state that paid Claude subscriptions and Claude Console/API usage are
+separate products:
+<https://support.anthropic.com/en/articles/9876003-i-subscribe-to-claude-pro-why-do-i-have-to-pay-separately-for-api-usage-on-console>.
+Signet does not verify the billing account selected by a persisted
+`claude auth login --console` session; it only controls whether the daemon
+subprocess inherits ambient Anthropic API key/token environment variables.
 
 ### Worker (`worker`)
 

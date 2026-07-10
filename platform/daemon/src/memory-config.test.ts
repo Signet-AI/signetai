@@ -702,12 +702,12 @@ describe("loadPipelineConfig", () => {
 		expect(result.synthesis.timeout).toBe(180000);
 	});
 
-	it("loads explicit Claude Code API-key billing and budget controls", () => {
+	it("loads explicit Claude Code API key env inheritance and budget controls", () => {
 		const result = loadPipelineConfig({
 			memory: {
 				pipelineV2: {
 					claudeCode: {
-						billingMode: "api-key",
+						allowApiKeyEnv: true,
 						maxBudgetUsd: 0.5,
 						cooldownMs: 120000,
 					},
@@ -715,15 +715,29 @@ describe("loadPipelineConfig", () => {
 			},
 		});
 
-		expect(result.claudeCode.billingMode).toBe("api-key");
+		expect(result.claudeCode.allowApiKeyEnv).toBe(true);
 		expect(result.claudeCode.maxBudgetUsd).toBe(0.5);
 		expect(result.claudeCode.cooldownMs).toBe(120000);
 	});
 
-	it("defaults Claude Code background billing to subscription OAuth without a spend cap", () => {
+	it("maps legacy Claude Code billingMode to API key env inheritance", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					claudeCode: {
+						billingMode: "api-key",
+					},
+				},
+			},
+		});
+
+		expect(result.claudeCode.allowApiKeyEnv).toBe(true);
+	});
+
+	it("defaults Claude Code background calls to strip ambient Anthropic env without a spend cap", () => {
 		const result = loadPipelineConfig({});
 
-		expect(result.claudeCode.billingMode).toBe("subscription");
+		expect(result.claudeCode.allowApiKeyEnv).toBe(false);
 		expect(result.claudeCode.maxBudgetUsd).toBeUndefined();
 		expect(result.claudeCode.cooldownMs).toBeGreaterThan(0);
 	});

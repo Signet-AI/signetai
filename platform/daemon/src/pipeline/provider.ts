@@ -2063,7 +2063,7 @@ export function createLlamaCppProvider(config?: Partial<LlamaCppProviderConfig>)
 export interface ClaudeCodeProviderConfig {
 	readonly model: string;
 	readonly defaultTimeoutMs: number;
-	readonly billingMode: "subscription" | "api-key";
+	readonly allowApiKeyEnv: boolean;
 	readonly maxBudgetUsd?: number;
 	readonly cooldownMs: number;
 }
@@ -2071,7 +2071,7 @@ export interface ClaudeCodeProviderConfig {
 const DEFAULT_CLAUDE_CODE_CONFIG: ClaudeCodeProviderConfig = {
 	model: "haiku",
 	defaultTimeoutMs: 60000,
-	billingMode: "subscription",
+	allowApiKeyEnv: false,
 	cooldownMs: 300000,
 };
 
@@ -2116,8 +2116,8 @@ interface ClaudeCodeCircuitState {
 }
 
 let claudeCodeCircuit: ClaudeCodeCircuitState | null = null;
-let lastClaudeCodeRuntimeConfig: Pick<ClaudeCodeProviderConfig, "billingMode" | "maxBudgetUsd" | "cooldownMs"> = {
-	billingMode: DEFAULT_CLAUDE_CODE_CONFIG.billingMode,
+let lastClaudeCodeRuntimeConfig: Pick<ClaudeCodeProviderConfig, "allowApiKeyEnv" | "maxBudgetUsd" | "cooldownMs"> = {
+	allowApiKeyEnv: DEFAULT_CLAUDE_CODE_CONFIG.allowApiKeyEnv,
 	cooldownMs: DEFAULT_CLAUDE_CODE_CONFIG.cooldownMs,
 };
 
@@ -2207,41 +2207,49 @@ export function resetClaudeCodeCircuit(): void {
 
 export function getClaudeCodeCircuitStatus(): {
 	readonly open: boolean;
+	readonly status: "closed" | "open" | "half-open";
 	readonly reason: ClaudeCodeCircuitReason | null;
 	readonly retryAt: string | null;
 	readonly halfOpen: boolean;
-	readonly billingMode: ClaudeCodeProviderConfig["billingMode"];
+	readonly scope: "daemon";
+	readonly allowApiKeyEnv: boolean;
 	readonly maxBudgetUsd: number | null;
 	readonly cooldownMs: number;
 } {
 	if (!claudeCodeCircuit) {
 		return {
 			open: false,
+			status: "closed",
 			reason: null,
 			retryAt: null,
 			halfOpen: false,
-			billingMode: lastClaudeCodeRuntimeConfig.billingMode,
+			scope: "daemon",
+			allowApiKeyEnv: lastClaudeCodeRuntimeConfig.allowApiKeyEnv,
 			maxBudgetUsd: lastClaudeCodeRuntimeConfig.maxBudgetUsd ?? null,
 			cooldownMs: lastClaudeCodeRuntimeConfig.cooldownMs,
 		};
 	}
+	const halfOpen = Date.now() >= claudeCodeCircuit.retryAtMs;
+	const open = !halfOpen || claudeCodeCircuit.probeInFlight;
 	return {
-		open: Date.now() < claudeCodeCircuit.retryAtMs || claudeCodeCircuit.probeInFlight,
+		open,
+		status: halfOpen ? "half-open" : "open",
 		reason: claudeCodeCircuit.reason,
 		retryAt: new Date(claudeCodeCircuit.retryAtMs).toISOString(),
-		halfOpen: Date.now() >= claudeCodeCircuit.retryAtMs,
-		billingMode: lastClaudeCodeRuntimeConfig.billingMode,
+		halfOpen,
+		scope: "daemon",
+		allowApiKeyEnv: lastClaudeCodeRuntimeConfig.allowApiKeyEnv,
 		maxBudgetUsd: lastClaudeCodeRuntimeConfig.maxBudgetUsd ?? null,
 		cooldownMs: lastClaudeCodeRuntimeConfig.cooldownMs,
 	};
 }
 
-function buildClaudeCodeEnv(billingMode: ClaudeCodeProviderConfig["billingMode"]): Record<string, string> {
+function buildClaudeCodeEnv(allowApiKeyEnv: boolean): Record<string, string> {
 	const cleanEnv: Record<string, string> = {};
 	for (const [k, v] of Object.entries(process.env)) {
 		if (v === undefined) continue;
 		if (k === "CLAUDECODE" || k.startsWith("CLAUDE_CODE_") || k === "SIGNET_NO_HOOKS") continue;
-		if (billingMode !== "api-key" && (k === "ANTHROPIC_API_KEY" || k === "ANTHROPIC_AUTH_TOKEN")) continue;
+		if (!allowApiKeyEnv && (k === "ANTHROPIC_API_KEY" || k === "ANTHROPIC_AUTH_TOKEN")) continue;
 		cleanEnv[k] = v;
 	}
 	if (process.env.CLAUDE_CODE_OAUTH_TOKEN !== undefined) {
@@ -2253,7 +2261,7 @@ function buildClaudeCodeEnv(billingMode: ClaudeCodeProviderConfig["billingMode"]
 export function createClaudeCodeProvider(config?: Partial<ClaudeCodeProviderConfig>): LlmProvider {
 	const cfg = { ...DEFAULT_CLAUDE_CODE_CONFIG, ...config };
 	lastClaudeCodeRuntimeConfig = {
-		billingMode: cfg.billingMode,
+		allowApiKeyEnv: cfg.allowApiKeyEnv,
 		...(cfg.maxBudgetUsd !== undefined ? { maxBudgetUsd: cfg.maxBudgetUsd } : {}),
 		cooldownMs: cfg.cooldownMs,
 	};
@@ -2293,12 +2301,12 @@ export function createClaudeCodeProvider(config?: Partial<ClaudeCodeProviderConf
 						outputFormat,
 						promptLen: prompt.length,
 						timeoutMs,
-						billingMode: cfg.billingMode,
+						allowApiKeyEnv: cfg.allowApiKeyEnv,
 						maxBudgetUsd: cfg.maxBudgetUsd ?? null,
 					});
 
 					const proc = spawnHidden(["claude", ...args], {
-						env: buildClaudeCodeEnv(cfg.billingMode),
+						env: buildClaudeCodeEnv(cfg.allowApiKeyEnv),
 					});
 
 					try {

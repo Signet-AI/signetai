@@ -157,16 +157,56 @@ let dreamingWorkerHandle: DreamingWorkerHandle | null = null;
 let reflectionWorkerHandle: ReflectionWorkerHandle | null = null;
 let pendingStartup: Promise<void> | null = null;
 
+type WorkerStatusEntry = {
+	readonly running: boolean;
+	readonly stats?: WorkerStats;
+};
+
+type LlmConcurrencyStatus = ReturnType<typeof getLlmConcurrencyStatus>;
+type ClaudeCodeCircuitStatus = ReturnType<typeof getClaudeCodeCircuitStatus>;
+
+export type PipelineWorkerStatus = {
+	readonly llmConcurrency: {
+		readonly running: boolean;
+		readonly concurrency: LlmConcurrencyStatus;
+		/** Backward-compatible alias for callers that read provider status from stats. */
+		readonly stats: LlmConcurrencyStatus;
+	};
+	readonly claudeCode: {
+		/** Claude Code has no daemon worker; circuit-open cooldown is reported under circuit. */
+		readonly running: false;
+		readonly circuit: ClaudeCodeCircuitStatus;
+		/** Backward-compatible alias for callers that read provider status from stats. */
+		readonly stats: ClaudeCodeCircuitStatus;
+	};
+	readonly extraction: WorkerStatusEntry;
+	readonly summary: WorkerStatusEntry;
+	readonly document: WorkerStatusEntry;
+	readonly retention: WorkerStatusEntry;
+	readonly maintenance: WorkerStatusEntry;
+	readonly synthesis: WorkerStatusEntry;
+	readonly structuralClassify: WorkerStatusEntry;
+	readonly structuralDependency: WorkerStatusEntry;
+	readonly dependencySynthesis: WorkerStatusEntry;
+	readonly hints: WorkerStatusEntry;
+	readonly dreaming: WorkerStatusEntry;
+	readonly reflections: WorkerStatusEntry;
+};
+
 /** Snapshot of running state for each worker — used by /api/pipeline/status */
-export function getPipelineWorkerStatus(): Record<string, { running: boolean; stats?: WorkerStats }> {
+export function getPipelineWorkerStatus(): PipelineWorkerStatus {
+	const llmConcurrency = getLlmConcurrencyStatus();
+	const claudeCodeCircuit = getClaudeCodeCircuitStatus();
 	return {
 		llmConcurrency: {
-			running: getLlmConcurrencyStatus().running > 0,
-			stats: getLlmConcurrencyStatus() as unknown as WorkerStats,
+			running: llmConcurrency.running > 0,
+			concurrency: llmConcurrency,
+			stats: llmConcurrency,
 		},
 		claudeCode: {
-			running: getClaudeCodeCircuitStatus().open,
-			stats: getClaudeCodeCircuitStatus() as unknown as WorkerStats,
+			running: false,
+			circuit: claudeCodeCircuit,
+			stats: claudeCodeCircuit,
 		},
 		extraction: {
 			running: workerHandle !== null,

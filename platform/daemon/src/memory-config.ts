@@ -98,7 +98,7 @@ export const DEFAULT_PIPELINE_V2: ResolvedPipelineV2Config = {
 		threadedExtraction: true,
 	},
 	claudeCode: {
-		billingMode: "subscription",
+		allowApiKeyEnv: false,
 		cooldownMs: 300000,
 	},
 	graph: {
@@ -369,11 +369,18 @@ function resolveMaxLlmConcurrency(rawValue: unknown, defaultValue: number): numb
 
 function parseClaudeCodeConfig(raw: unknown, fallback: PipelineV2Config["claudeCode"]): PipelineV2Config["claudeCode"] {
 	if (!isRecord(raw)) return fallback;
-	const billingMode = raw.billingMode === "api-key" ? "api-key" : fallback.billingMode;
+	const allowApiKeyEnv =
+		typeof raw.allowApiKeyEnv === "boolean"
+			? raw.allowApiKeyEnv
+			: raw.billingMode === "api-key"
+				? true
+				: raw.billingMode === "subscription"
+					? false
+					: fallback.allowApiKeyEnv;
 	const maxBudgetUsd = parseOptionalPositive(raw.maxBudgetUsd, 0.01, 1000);
 	const cooldownMs = clampPositive(raw.cooldownMs, 1000, 3600000, fallback.cooldownMs);
 	return {
-		billingMode,
+		allowApiKeyEnv,
 		...(maxBudgetUsd !== undefined ? { maxBudgetUsd } : {}),
 		cooldownMs,
 	};

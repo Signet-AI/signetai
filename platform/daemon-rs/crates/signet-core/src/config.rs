@@ -318,9 +318,13 @@ fn normalize_pipeline_claude_code(pipeline: &mut PipelineV2Config, raw: Option<&
         return;
     };
 
-    if let Some(value) = raw_string(claude_code, "billingMode") {
-        if value == "api-key" || value == "subscription" {
-            pipeline.claude_code.billing_mode = value.to_string();
+    if let Some(value) = raw_bool(claude_code, "allowApiKeyEnv") {
+        pipeline.claude_code.allow_api_key_env = value;
+    } else if let Some(value) = raw_string(claude_code, "billingMode") {
+        if value == "api-key" {
+            pipeline.claude_code.allow_api_key_env = true;
+        } else if value == "subscription" {
+            pipeline.claude_code.allow_api_key_env = false;
         }
     }
     if let Some(value) = raw_f64(claude_code, "maxBudgetUsd") {
@@ -440,6 +444,10 @@ fn raw_string<'a>(value: &'a serde_yml::Value, key: &str) -> Option<&'a str> {
         .as_str()
         .map(str::trim)
         .filter(|value| !value.is_empty())
+}
+
+fn raw_bool(value: &serde_yml::Value, key: &str) -> Option<bool> {
+    raw_child(value, key)?.as_bool()
 }
 
 fn raw_optional_string_strict<'a>(
@@ -742,13 +750,13 @@ memory:
     }
 
     #[test]
-    fn claude_code_config_parses_budget_and_billing_mode() {
+    fn claude_code_config_parses_budget_and_api_key_env() {
         let manifest = parse_manifest(
             r#"
 memory:
   pipelineV2:
     claudeCode:
-      billingMode: api-key
+      allowApiKeyEnv: true
       maxBudgetUsd: 0.5
       cooldownMs: 120000
 "#,
@@ -760,9 +768,29 @@ memory:
             .and_then(|memory| memory.pipeline_v2)
             .expect("pipeline config");
 
-        assert_eq!(pipeline.claude_code.billing_mode, "api-key");
+        assert!(pipeline.claude_code.allow_api_key_env);
         assert_eq!(pipeline.claude_code.max_budget_usd, Some(0.5));
         assert_eq!(pipeline.claude_code.cooldown_ms, 120_000);
+    }
+
+    #[test]
+    fn claude_code_config_maps_legacy_billing_mode_to_api_key_env() {
+        let manifest = parse_manifest(
+            r#"
+memory:
+  pipelineV2:
+    claudeCode:
+      billingMode: api-key
+"#,
+        )
+        .expect("parse manifest");
+
+        let pipeline = manifest
+            .memory
+            .and_then(|memory| memory.pipeline_v2)
+            .expect("pipeline config");
+
+        assert!(pipeline.claude_code.allow_api_key_env);
     }
 
     #[test]
@@ -1562,7 +1590,7 @@ impl Default for PipelineV2Config {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ClaudeCodeConfig {
-    pub billing_mode: String,
+    pub allow_api_key_env: bool,
     pub max_budget_usd: Option<f64>,
     pub cooldown_ms: u64,
 }
@@ -1570,7 +1598,7 @@ pub struct ClaudeCodeConfig {
 impl Default for ClaudeCodeConfig {
     fn default() -> Self {
         Self {
-            billing_mode: "subscription".to_string(),
+            allow_api_key_env: false,
             max_budget_usd: None,
             cooldown_ms: 300_000,
         }
