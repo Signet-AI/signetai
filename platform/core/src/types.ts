@@ -20,13 +20,19 @@ export interface LlmGenerateResult {
 	readonly usage: LlmUsage | null;
 }
 
+export interface LlmGenerateOptions {
+	readonly timeoutMs?: number;
+	readonly maxTokens?: number;
+	readonly temperature?: number;
+	readonly signal?: AbortSignal;
+	readonly responseFormat?: "json";
+	readonly think?: boolean;
+}
+
 export interface LlmProvider {
 	readonly name: string;
-	generate(prompt: string, opts?: { timeoutMs?: number; maxTokens?: number; temperature?: number }): Promise<string>;
-	generateWithUsage?(
-		prompt: string,
-		opts?: { timeoutMs?: number; maxTokens?: number; temperature?: number },
-	): Promise<LlmGenerateResult>;
+	generate(prompt: string, opts?: LlmGenerateOptions): Promise<string>;
+	generateWithUsage?(prompt: string, opts?: LlmGenerateOptions): Promise<LlmGenerateResult>;
 	available(): Promise<boolean>;
 }
 
