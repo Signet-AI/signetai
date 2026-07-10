@@ -18,6 +18,7 @@ import type { ExtractionThreadOpts } from "./extraction-thread-handle";
 import type { WorkerInit } from "./extraction-thread-protocol";
 import { type MaintenanceHandle, startMaintenanceWorker } from "./maintenance-worker";
 import { type HintsWorkerHandle, startHintsWorker } from "./prospective-index";
+import { configureLlmConcurrency, getClaudeCodeCircuitStatus, getLlmConcurrencyStatus } from "./provider";
 import type { ReflectionWorkerHandle } from "./reflection-worker";
 import {
 	DEFAULT_RETENTION,
@@ -35,7 +36,6 @@ import {
 } from "./summary-worker";
 import { type SynthesisWorkerHandle, startSynthesisWorker } from "./synthesis-worker";
 import { type WorkerHandle, type WorkerProgressStats, type WorkerStats, startWorker } from "./worker";
-import { configureLlmConcurrency, getClaudeCodeCircuitStatus, getLlmConcurrencyStatus } from "./provider";
 
 export { enqueueExtractionJob } from "./extraction-queue";
 export type { WorkerStats } from "./worker";

@@ -11,12 +11,12 @@
  */
 
 import { isMainThread, parentPort, workerData } from "node:worker_threads";
+import type { LlmProvider } from "@signet/core";
 import type { AnalyticsCollector } from "../analytics";
 import { getDbAccessor } from "../db-accessor";
 import { initDbAccessorLite } from "../db-accessor";
 import { fetchEmbedding } from "../embedding-fetch";
-import type { LlmProvider } from "@signet/core";
-import type { PipelineV2Config, EmbeddingConfig, MemorySearchConfig } from "../memory-config";
+import type { EmbeddingConfig, MemorySearchConfig, PipelineV2Config } from "../memory-config";
 import type { TelemetryCollector } from "../telemetry";
 import type { DecisionConfig } from "./decision";
 import type { MainToWorkerMessage, WorkerInit, WorkerToMainMessage } from "./extraction-thread-protocol";
@@ -33,6 +33,7 @@ if (isMainThread) {
 
 const port = parentPort;
 if (!port) throw new Error("parentPort unavailable");
+const workerPort = port;
 const init = workerData as WorkerInit;
 
 // ---------------------------------------------------------------------------
@@ -40,7 +41,7 @@ const init = workerData as WorkerInit;
 // ---------------------------------------------------------------------------
 
 function send(msg: WorkerToMainMessage): void {
-	port!.postMessage(msg);
+	workerPort.postMessage(msg);
 }
 
 const pendingGenerate = new Map<
@@ -184,7 +185,7 @@ async function bootstrap(): Promise<void> {
 		}, STATS_INTERVAL_MS);
 
 		// 6. Listen for control messages from main thread
-		port!.on("message", async (msg: MainToWorkerMessage) => {
+		workerPort.on("message", async (msg: MainToWorkerMessage) => {
 			if (msg.type === "stop") {
 				for (const [id, pending] of pendingGenerate) {
 					pending.reject(new Error("extraction worker stopped"));

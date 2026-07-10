@@ -8,6 +8,7 @@ import type { DbAccessor, ReadDb, WriteDb } from "../db-accessor";
 import { loadMemoryConfig } from "../memory-config";
 import { IMMUTABLE_ARTIFACT_ERROR_PREFIX } from "../memory-lineage";
 import { RateLimitExceededError } from "./provider";
+import type { LlmProvider } from "./provider";
 import {
 	SUMMARY_WORKER_UPDATED_BY,
 	type SummaryWorkerHandle,
@@ -29,7 +30,6 @@ import {
 	startSummaryRecovery,
 	startSummaryWorker,
 } from "./summary-worker";
-import type { LlmProvider } from "./provider";
 
 describe("canProcessSummaryJobs", () => {
 	it("preserves command extraction when synthesis is unavailable", () => {

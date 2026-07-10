@@ -175,7 +175,11 @@ export function configureLlmConcurrency(limit: number): void {
 	llmSemaphore = new LlmConcurrencySemaphore(normalized);
 }
 
-export function getLlmConcurrencyStatus(): { readonly running: number; readonly pending: number; readonly limit: number } {
+export function getLlmConcurrencyStatus(): {
+	readonly running: number;
+	readonly pending: number;
+	readonly limit: number;
+} {
 	return {
 		running: llmSemaphore.running,
 		pending: llmSemaphore.pending,
@@ -355,7 +359,9 @@ export function withRateLimit(provider: LlmProvider, config?: ProviderRateLimitC
  * Run an async function guarded by the global LLM concurrency semaphore.
  * Ensures no more than N concurrent LLM calls across all providers and workers.
  */
-function generateSignal(opts?: { readonly signal?: AbortSignal; readonly abortSignal?: AbortSignal }): AbortSignal | undefined {
+function generateSignal(opts?: { readonly signal?: AbortSignal; readonly abortSignal?: AbortSignal }):
+	| AbortSignal
+	| undefined {
 	return opts?.signal ?? opts?.abortSignal;
 }
 
@@ -1818,10 +1824,7 @@ export function createOllamaProvider(config?: Partial<OllamaProviderConfig>): Ll
 		model,
 	};
 
-	async function callOllama(
-		prompt: string,
-		opts?: LlmProviderCallOptions,
-	): Promise<OllamaGenerateResponse> {
+	async function callOllama(prompt: string, opts?: LlmProviderCallOptions): Promise<OllamaGenerateResponse> {
 		const timeoutMs = opts?.timeoutMs ?? cfg.defaultTimeoutMs;
 
 		return withLlmConcurrency(

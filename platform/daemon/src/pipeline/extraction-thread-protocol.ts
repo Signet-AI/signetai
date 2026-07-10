@@ -70,7 +70,13 @@ export type WorkerToMainMessage =
 			readonly options?: SerializedGenerateOptions;
 	  }
 	| { readonly type: "stats"; readonly stats: WorkerStats }
-	| { readonly type: "log"; readonly level: string; readonly category: string; readonly message: string; readonly data?: Record<string, unknown> }
+	| {
+			readonly type: "log";
+			readonly level: string;
+			readonly category: string;
+			readonly message: string;
+			readonly data?: Record<string, unknown>;
+	  }
 	| { readonly type: "telemetry"; readonly event: string; readonly data: Record<string, unknown> }
 	| { readonly type: "analytics"; readonly method: string; readonly args: readonly unknown[] }
 	| { readonly type: "error"; readonly error: string; readonly stack?: string };

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import type { LlmProvider } from "@signet/core";
-import { startExtractionThread, type ExtractionWorker } from "./extraction-thread-handle";
+import { type ExtractionWorker, startExtractionThread } from "./extraction-thread-handle";
 import type { MainToWorkerMessage, WorkerInit, WorkerToMainMessage } from "./extraction-thread-protocol";
 
 class FakeExtractionWorker implements ExtractionWorker {
@@ -14,7 +14,10 @@ class FakeExtractionWorker implements ExtractionWorker {
 	on(event: "message", listener: (msg: WorkerToMainMessage) => void): ExtractionWorker;
 	on(event: "error", listener: (err: Error) => void): ExtractionWorker;
 	on(event: "exit", listener: (code: number) => void): ExtractionWorker;
-	on(event: "message" | "error" | "exit", listener: ((msg: WorkerToMainMessage) => void) | ((err: Error) => void) | ((code: number) => void)): ExtractionWorker {
+	on(
+		event: "message" | "error" | "exit",
+		listener: ((msg: WorkerToMainMessage) => void) | ((err: Error) => void) | ((code: number) => void),
+	): ExtractionWorker {
 		this.listeners[event].push(listener as never);
 		return this;
 	}

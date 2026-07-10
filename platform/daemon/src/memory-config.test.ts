@@ -1419,7 +1419,7 @@ describe("loadPipelineConfig", () => {
 	it("loads canonical worker maxLlmConcurrency with bounded defaults and env override", () => {
 		const previous = process.env.SIGNET_MAX_LLM_CONCURRENCY;
 		try {
-			delete process.env.SIGNET_MAX_LLM_CONCURRENCY;
+			process.env.SIGNET_MAX_LLM_CONCURRENCY = undefined;
 			expect(loadPipelineConfig({ memory: { pipelineV2: { enabled: true } } }).worker.maxLlmConcurrency).toBe(2);
 			expect(
 				loadPipelineConfig({ memory: { pipelineV2: { enabled: true, worker: { maxLlmConcurrency: 0 } } } }).worker
@@ -1435,7 +1435,7 @@ describe("loadPipelineConfig", () => {
 					.maxLlmConcurrency,
 			).toBe(7);
 		} finally {
-			if (previous === undefined) delete process.env.SIGNET_MAX_LLM_CONCURRENCY;
+			if (previous === undefined) process.env.SIGNET_MAX_LLM_CONCURRENCY = undefined;
 			else process.env.SIGNET_MAX_LLM_CONCURRENCY = previous;
 		}
 	});

@@ -1691,13 +1691,15 @@ export function startSummaryWorker(accessor: DbAccessor, options: SummaryWorkerO
 	function scheduleTick(delay: number): void {
 		if (stopped) return;
 		timer = setTimeout(() => {
-			activeTick = tick().catch((err) => {
-				logger.error("summary-worker", "Unhandled tick error", err instanceof Error ? err : undefined, {
-					error: err instanceof Error ? err.message : String(err),
+			activeTick = tick()
+				.catch((err) => {
+					logger.error("summary-worker", "Unhandled tick error", err instanceof Error ? err : undefined, {
+						error: err instanceof Error ? err.message : String(err),
+					});
+				})
+				.finally(() => {
+					activeTick = null;
 				});
-			}).finally(() => {
-				activeTick = null;
-			});
 		}, delay);
 	}
 

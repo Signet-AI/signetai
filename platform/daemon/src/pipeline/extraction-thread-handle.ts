@@ -11,8 +11,8 @@ import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Worker, type WorkerOptions } from "node:worker_threads";
-import type { AnalyticsCollector } from "../analytics";
 import type { LlmProvider } from "@signet/core";
+import type { AnalyticsCollector } from "../analytics";
 import { logger } from "../logger";
 import type { LogCategory } from "../logger";
 import { resolveEmbeddedWorkerPath } from "../native-runtime-assets";
@@ -60,10 +60,7 @@ export function startExtractionThread(opts: ExtractionThreadOpts): Promise<Worke
 
 		let running = true;
 		let settled = false;
-		const pendingGenerate = new Map<
-			string,
-			{ readonly controller: AbortController; readonly done: Promise<void> }
-		>();
+		const pendingGenerate = new Map<string, { readonly controller: AbortController; readonly done: Promise<void> }>();
 		let latestStats: WorkerStats = {
 			failures: 0,
 			lastProgressAt: Date.now(),
@@ -200,8 +197,11 @@ export function startExtractionThread(opts: ExtractionThreadOpts): Promise<Worke
 			},
 			async stop(): Promise<void> {
 				if (!running) return;
-				for (const pending of pendingGenerate.values()) pending.controller.abort();
-				await Promise.allSettled(Array.from(pendingGenerate.values(), (pending) => pending.done));
+				const activeGenerate = Array.from(pendingGenerate.values());
+				for (const pending of activeGenerate) pending.controller.abort();
+				if (activeGenerate.length > 0) {
+					await Promise.allSettled(activeGenerate.map((pending) => pending.done));
+				}
 				worker.postMessage({ type: "stop" });
 				await new Promise<void>((res) => {
 					const stopTimer = setTimeout(() => {

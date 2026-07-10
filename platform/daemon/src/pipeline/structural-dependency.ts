@@ -415,13 +415,15 @@ export function startStructuralDependencyWorker(deps: StructuralDependencyDeps):
 	timer = setInterval(() => {
 		if (!running) return;
 		if (inFlight) return;
-		inFlight = tick().catch((e) => {
-			logger.warn("structural-dependency", "Tick error", {
-				error: String(e),
+		inFlight = tick()
+			.catch((e) => {
+				logger.warn("structural-dependency", "Tick error", {
+					error: String(e),
+				});
+			})
+			.finally(() => {
+				inFlight = null;
 			});
-		}).finally(() => {
-			inFlight = null;
-		});
 	}, deps.pipelineCfg.structural.pollIntervalMs);
 
 	logger.info("structural-dependency", "Worker started", {
