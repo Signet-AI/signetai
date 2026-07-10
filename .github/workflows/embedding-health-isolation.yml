@@ -1,0 +1,57 @@
+name: Embedding Health Isolation
+
+# Permanent CI invariant: the daemon's HTTP server (incl. /health) must stay
+# responsive regardless of native embedding state — init, model download, or
+# inference. The guard that would have caught the event-loop wedge fixed in
+# this change. Runs the worker-handle unit tests (bounded RPC, crash/exit
+# handling, sync status) and the end-to-end isolation test (real daemon over
+# HTTP, model fetch stalled at a local blackhole, /health SLA asserted).
+#
+# Mirrors rust-daemon-parity.yml (path-scoped pull_request + push-to-main).
+
+on:
+  pull_request:
+    paths:
+      - "platform/daemon/src/native-embedding*.ts"
+      - "platform/daemon/src/embedding-worker*.ts"
+      - "platform/daemon/src/embedding-fetch.ts"
+      - "platform/daemon/src/embedding-health.ts"
+      - "platform/daemon/src/routes/utils.ts"
+      - "platform/daemon/src/daemon.ts"
+      - "scripts/native-embedding-runtime-smoke.test.ts"
+      - "scripts/build-native-bun.ts"
+      - ".github/workflows/embedding-health-isolation.yml"
+  push:
+    branches: [main]
+    paths:
+      - "platform/daemon/src/native-embedding*.ts"
+      - "platform/daemon/src/embedding-worker*.ts"
+      - "platform/daemon/src/embedding-fetch.ts"
+      - "platform/daemon/src/embedding-health.ts"
+      - "platform/daemon/src/routes/utils.ts"
+      - "platform/daemon/src/daemon.ts"
+      - ".github/workflows/embedding-health-isolation.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  isolation:
+    name: Native embedding cannot block /health
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Worker-handle unit tests (RPC bounds, crash/exit, sync status)
+        working-directory: platform/daemon
+        run: bun test src/embedding-worker-handle.test.ts src/native-embedding.test.ts
+
+      - name: End-to-end /health SLA while embedding download is stalled
+        working-directory: platform/daemon
+        run: bun test src/native-embedding-eventloop-isolation.test.ts

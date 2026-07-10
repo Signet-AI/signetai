@@ -96,6 +96,12 @@ const hermesPluginDir = join(root, "integrations", "hermes-agent", "connector", 
 const workerEntries = [
 	["synthesis-render-worker", "platform/daemon/src/synthesis-render-worker.ts"],
 	["extraction-thread", "platform/daemon/src/pipeline/extraction-thread.ts"],
+	// Native ONNX embedding runs in a worker so model download / WASM compile /
+	// inference can never block the daemon's main event loop (see
+	// embedding-worker.ts). Transformers is bundled into this asset; the ONNX
+	// .wasm is embedded separately (wasmAssets) and the main thread passes the
+	// materialized wasmDir to the worker via workerData.
+	["embedding-worker", "platform/daemon/src/embedding-worker.ts"],
 ] as const;
 const nativeExternalArgs = ["--external", "better-sqlite3"] as const;
 
