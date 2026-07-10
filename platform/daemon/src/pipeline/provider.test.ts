@@ -970,6 +970,57 @@ describe("createOpenAiCompatibleProvider", () => {
 		expect(peak).toBe(1);
 		expect(getLlmConcurrencyStatus().running).toBe(0);
 	});
+
+	it("streamWithUsage shares the global LLM concurrency cap with non-streaming calls", async () => {
+		configureLlmConcurrency(1);
+		let active = 0;
+		let peak = 0;
+		let releaseFirstFetch: (() => void) | undefined;
+
+		mockFetch(async (_url, init) => {
+			active += 1;
+			peak = Math.max(peak, active);
+			const body = parseJsonObjectBody(init?.body);
+			if (body.stream === true) {
+				await new Promise<void>((resolve) => {
+					releaseFirstFetch = resolve;
+				});
+				active -= 1;
+				return new Response(
+					streamFromString(
+						['data: {"choices":[{"delta":{"content":"streamed"}}]}', "", "data: [DONE]", "", ""].join("\n"),
+					),
+				);
+			}
+			active -= 1;
+			return Response.json({ choices: [{ message: { content: "generated" } }] });
+		});
+
+		const provider = createOpenAiCompatibleProvider({
+			name: "openai-compatible",
+			model: "test-model",
+			baseUrl: "http://localhost:9999",
+			defaultTimeoutMs: 1000,
+		});
+		if (!provider.streamWithUsage) {
+			throw new Error("expected streamWithUsage on OpenAI-compatible provider");
+		}
+
+		const streaming = provider.streamWithUsage("stream");
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		const generated = provider.generate("generate");
+		await new Promise((resolve) => setTimeout(resolve, 20));
+
+		expect(getLlmConcurrencyStatus().running).toBe(1);
+		expect(getLlmConcurrencyStatus().pending).toBe(1);
+		releaseFirstFetch?.();
+		const [streamResult, generatedText] = await Promise.all([streaming, generated]);
+
+		expect(generatedText).toBe("generated");
+		expect((await collectStreamEvents(streamResult.stream)).some((event) => event.type === "done")).toBe(true);
+		expect(peak).toBe(1);
+		expect(getLlmConcurrencyStatus().running).toBe(0);
+	});
 });
 
 // ---------------------------------------------------------------------------
@@ -3983,6 +4034,83 @@ describe("createOpenCodeProvider — fallback respects remaining deadline", () =
 			expect(ollamaWait).toBeLessThan(4000);
 		}
 	}, 15000);
+});
+
+describe("createOpenCodeProvider — fallback respects caller abort", () => {
+	afterEach(() => {
+		configureLlmConcurrency(2);
+		restoreFetch();
+	});
+
+	it("aborts the Ollama fallback request promptly when the caller aborts", async () => {
+		configureLlmConcurrency(1);
+		let fallbackStarted = false;
+		let fallbackAborted = false;
+		let releaseFallback: (() => void) | undefined;
+
+		mockFetch(
+			withParentSession(async (url, init) => {
+				if (url.includes("/session") && !url.includes("/message")) {
+					return Response.json({
+						id: "ses_abort_fallback",
+						slug: "test",
+						projectID: "p",
+						directory: "/tmp",
+						title: "test",
+						version: "1",
+					});
+				}
+				if (url.includes("/api/tags")) {
+					return Response.json({ models: [{ name: "qwen3:4b" }] });
+				}
+				if (url.includes("/api/generate")) {
+					fallbackStarted = true;
+					await new Promise<void>((resolve, reject) => {
+						releaseFallback = resolve;
+						init?.signal?.addEventListener("abort", () => {
+							fallbackAborted = true;
+							reject(new DOMException("Aborted", "AbortError"));
+						});
+					});
+					return Response.json({
+						response: JSON.stringify({ result: "late" }),
+						prompt_eval_count: 1,
+						eval_count: 1,
+					});
+				}
+				if (init?.method === "POST" && url.includes("/message")) {
+					return new Response("", {
+						status: 200,
+						headers: { "Content-Type": "application/json" },
+					});
+				}
+				return Response.json([]);
+			}),
+		);
+
+		const provider = createOpenCodeProvider({
+			baseUrl: "http://localhost:9999",
+			enableOllamaFallback: true,
+			ollamaFallbackBaseUrl: "http://localhost:11434",
+			ollamaFallbackModel: "qwen3:4b",
+			defaultTimeoutMs: 3000,
+		});
+
+		const controller = new AbortController();
+		const call = provider.generate("test", { signal: controller.signal, timeoutMs: 3000 });
+		for (let i = 0; i < 100 && !fallbackStarted; i += 1) {
+			await new Promise((resolve) => setTimeout(resolve, 10));
+		}
+		expect(fallbackStarted).toBe(true);
+
+		const start = performance.now();
+		controller.abort();
+		await expect(call).rejects.toThrow(/aborted|fallback/i);
+		expect(performance.now() - start).toBeLessThan(500);
+		expect(fallbackAborted).toBe(true);
+		expect(getLlmConcurrencyStatus().running).toBe(0);
+		releaseFallback?.();
+	});
 });
 
 describe("createLlamaCppProvider — concurrency semaphore enforcement", () => {

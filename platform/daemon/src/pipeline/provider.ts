@@ -1781,53 +1781,66 @@ export function createOpenAiCompatibleProvider(config: OpenAiCompatibleProviderC
 		},
 		async streamWithUsage(prompt, opts): Promise<LlmProviderStreamResult> {
 			const timeoutMs = opts?.timeoutMs ?? config.defaultTimeoutMs;
-			const abort = createAbortBundle(timeoutMs, generateSignal(opts));
-			try {
-				const streamBody: Record<string, unknown> = {
-					model: config.model,
-					messages: [{ role: "user", content: prompt }],
-					max_tokens: opts?.maxTokens ?? 4096,
-					stream: true,
-					stream_options: { include_usage: true },
-				};
-				if (config.disableThinking) {
-					streamBody.thinking = { type: "disabled" };
-				}
-				const res = await fetch(`${baseUrl}/chat/completions`, {
-					method: "POST",
-					headers: headers(),
-					body: JSON.stringify(streamBody),
-					signal: abort.signal,
-				});
-				if (!res.ok) {
-					const detail = (await res.text().catch(() => "")).slice(0, 300);
-					throw new Error(`${config.name} HTTP ${res.status}: ${detail}`);
-				}
-				const result = createOpenAiLikeStreamResult(res, () => {
-					abort.abort("stream cancelled");
-					abort.cleanup();
-				});
-				return {
-					stream: result.stream,
-					cancel(reason?: string) {
-						logger.debug("pipeline", "Cancelling openai-compatible stream", {
-							provider: config.name,
-							reason: reason ?? "unspecified",
+			const deadline = performance.now() + timeoutMs;
+			const signal = generateSignal(opts);
+			return withLlmConcurrency(
+				async () => {
+					const remainingMs = deadline - performance.now();
+					if (remainingMs <= 0) {
+						throw new Error(`${config.name} timeout after ${timeoutMs}ms (deadline exceeded waiting for semaphore)`);
+					}
+					const abort = createAbortBundle(remainingMs, signal);
+					try {
+						const streamBody: Record<string, unknown> = {
+							model: config.model,
+							messages: [{ role: "user", content: prompt }],
+							max_tokens: opts?.maxTokens ?? 4096,
+							stream: true,
+							stream_options: { include_usage: true },
+						};
+						if (config.disableThinking) {
+							streamBody.thinking = { type: "disabled" };
+						}
+						const res = await fetch(`${baseUrl}/chat/completions`, {
+							method: "POST",
+							headers: headers(),
+							body: JSON.stringify(streamBody),
+							signal: abort.signal,
 						});
-						abort.abort(reason);
+						if (!res.ok) {
+							const detail = (await res.text().catch(() => "")).slice(0, 300);
+							throw new Error(`${config.name} HTTP ${res.status}: ${detail}`);
+						}
+						const result = createOpenAiLikeStreamResult(res, () => {
+							abort.abort("stream cancelled");
+							abort.cleanup();
+						});
+						return {
+							stream: result.stream,
+							cancel(reason?: string) {
+								logger.debug("pipeline", "Cancelling openai-compatible stream", {
+									provider: config.name,
+									reason: reason ?? "unspecified",
+								});
+								abort.abort(reason);
+								abort.cleanup();
+							},
+						};
+					} catch (error) {
 						abort.cleanup();
-					},
-				};
-			} catch (error) {
-				abort.cleanup();
-				if (abort.timedOut()) {
-					throw new Error(`${config.name} timeout after ${timeoutMs}ms`);
-				}
-				if (error instanceof DOMException && error.name === "AbortError") {
-					throw new Error(`${config.name} aborted`);
-				}
-				throw error;
-			}
+						if (abort.timedOut()) {
+							throw new Error(`${config.name} timeout after ${timeoutMs}ms`);
+						}
+						if (error instanceof DOMException && error.name === "AbortError") {
+							throw new Error(`${config.name} aborted`);
+						}
+						throw error;
+					}
+				},
+				timeoutMs,
+				config.name,
+				signal,
+			);
 		},
 		async available(): Promise<boolean> {
 			try {
@@ -3434,6 +3447,7 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 		remainingMs: number,
 		opts: { maxTokens?: number } | undefined,
 		reason: string,
+		signal?: AbortSignal,
 	): Promise<OpenCodeMessageResponse | null> {
 		if (!cfg.enableOllamaFallback) return null;
 		if (remainingMs <= 0) return null;
@@ -3451,8 +3465,7 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 			const timeoutMs = Math.min(remainingMs, 20_000);
 			const maxTokens = opts?.maxTokens ?? 512;
 
-			const controller = new AbortController();
-			const timer = setTimeout(() => controller.abort(), timeoutMs);
+			const abort = createAbortBundle(timeoutMs, signal);
 			let resultText = "";
 			let inputTokens: number | null = null;
 			let outputTokens: number | null = null;
@@ -3468,7 +3481,7 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 					model: cfg.ollamaFallbackModel,
 					prompt,
 					timeoutMs,
-					signal: controller.signal,
+					signal: abort.signal,
 					options,
 					extraBody: { format: "json", think: false },
 				});
@@ -3476,7 +3489,7 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 				inputTokens = typeof data.prompt_eval_count === "number" ? data.prompt_eval_count : null;
 				outputTokens = typeof data.eval_count === "number" ? data.eval_count : null;
 			} finally {
-				clearTimeout(timer);
+				abort.cleanup();
 			}
 
 			logger.warn("pipeline", "OpenCode fallback to Ollama used", {
@@ -3494,6 +3507,9 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 				parts: [{ type: "text", text: resultText }],
 			} as OpenCodeMessageResponse;
 		} catch (e) {
+			if (signal?.aborted || (e instanceof DOMException && e.name === "AbortError")) {
+				throw e;
+			}
 			logger.warn("pipeline", "OpenCode fallback to Ollama failed", {
 				reason,
 				model: cfg.ollamaFallbackModel,
@@ -3863,6 +3879,7 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 								deadline - performance.now(),
 								opts,
 								"post-response-malformed-after-http-retry",
+								abort.signal,
 							);
 							if (ollamaFallback) return ollamaFallback;
 							return buildOpenCodeFallbackResponse();
@@ -3892,6 +3909,7 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 								deadline - performance.now(),
 								opts,
 								"agent-not-found-retry-failed",
+								abort.signal,
 							);
 							if (ollamaFallback) return ollamaFallback;
 							return buildOpenCodeFallbackResponse();
@@ -3905,6 +3923,7 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 								deadline - performance.now(),
 								opts,
 								"concurrent-agent-rejection",
+								abort.signal,
 							);
 							if (ollamaFallback) return ollamaFallback;
 							return buildOpenCodeFallbackResponse();
@@ -3946,6 +3965,7 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 						deadline - performance.now(),
 						opts,
 						"post-response-malformed-after-session-reset",
+						abort.signal,
 					);
 					if (ollamaFallback) return ollamaFallback;
 					return buildOpenCodeFallbackResponse();

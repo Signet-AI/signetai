@@ -97,8 +97,10 @@ impl Default for LlmSemaphore {
     fn default() -> Self {
         let max = std::env::var("SIGNET_MAX_LLM_CONCURRENCY")
             .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(4);
+            .and_then(|v| v.parse::<usize>().ok())
+            .filter(|value| *value >= 1)
+            .map(|value| value.min(16))
+            .unwrap_or(2);
         Self::new(max)
     }
 }
@@ -1202,6 +1204,87 @@ pub fn from_config(cfg: &LlmProviderConfig) -> Arc<dyn LlmProvider> {
                 timeout,
                 cfg.max_context_tokens,
             ))
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::LlmSemaphore;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    };
+    use tokio::sync::Notify;
+    use tokio::time::{Duration, sleep, timeout};
+
+    #[tokio::test]
+    async fn default_llm_semaphore_limits_to_two_when_env_is_unset() {
+        let previous = std::env::var_os("SIGNET_MAX_LLM_CONCURRENCY");
+        unsafe {
+            std::env::remove_var("SIGNET_MAX_LLM_CONCURRENCY");
+        }
+
+        let semaphore = Arc::new(LlmSemaphore::default());
+        let entered = Arc::new(AtomicUsize::new(0));
+        let third_entered = Arc::new(AtomicBool::new(false));
+        let release = Arc::new(Notify::new());
+
+        let mut blockers = Vec::new();
+        for _ in 0..2 {
+            let semaphore = Arc::clone(&semaphore);
+            let entered = Arc::clone(&entered);
+            let release = Arc::clone(&release);
+            blockers.push(tokio::spawn(async move {
+                semaphore
+                    .run(async {
+                        entered.fetch_add(1, Ordering::SeqCst);
+                        release.notified().await;
+                    })
+                    .await;
+            }));
+        }
+
+        for _ in 0..100 {
+            if entered.load(Ordering::SeqCst) == 2 {
+                break;
+            }
+            sleep(Duration::from_millis(5)).await;
+        }
+        assert_eq!(entered.load(Ordering::SeqCst), 2);
+
+        let third = {
+            let semaphore = Arc::clone(&semaphore);
+            let third_entered = Arc::clone(&third_entered);
+            tokio::spawn(async move {
+                semaphore
+                    .run(async {
+                        third_entered.store(true, Ordering::SeqCst);
+                    })
+                    .await;
+            })
+        };
+
+        sleep(Duration::from_millis(50)).await;
+        assert!(!third_entered.load(Ordering::SeqCst));
+
+        release.notify_waiters();
+        for blocker in blockers {
+            timeout(Duration::from_secs(1), blocker)
+                .await
+                .expect("blocker released")
+                .expect("blocker task");
+        }
+        timeout(Duration::from_secs(1), third)
+            .await
+            .expect("third released")
+            .expect("third task");
+
+        unsafe {
+            match previous {
+                Some(value) => std::env::set_var("SIGNET_MAX_LLM_CONCURRENCY", value),
+                None => std::env::remove_var("SIGNET_MAX_LLM_CONCURRENCY"),
+            }
         }
     }
 }

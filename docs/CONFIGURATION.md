@@ -878,7 +878,7 @@ control.
 | `leaseTimeoutMs` | `300000` | 10000-600000 ms | Time before an uncompleted job lease expires |
 | `maxLoadPerCpu` | `0.8` | 0.1-8.0 | Load-per-CPU threshold above which extraction polling is deferred |
 | `overloadBackoffMs` | `30000` | 1000-300000 ms | Delay between poll attempts while host load stays above threshold |
-| `maxLlmConcurrency` | `2` | 1-16 | Global cap for concurrent LLM calls across extraction, synthesis, reranking, and inference providers. `SIGNET_MAX_LLM_CONCURRENCY` overrides the process default before config is loaded; canonical YAML config takes precedence once the daemon loads `agent.yaml`. |
+| `maxLlmConcurrency` | `2` | 1-16 | Global cap for concurrent LLM calls across extraction, synthesis, reranking, and inference providers. `SIGNET_MAX_LLM_CONCURRENCY` overrides YAML when set, matching the TypeScript daemon and Rust daemon runtime behavior. |
 
 A job that exceeds `maxRetries` moves to dead-letter status and is
 eventually purged by the retention worker.

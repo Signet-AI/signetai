@@ -1501,7 +1501,7 @@ async fn start_extraction_worker_inner(state: &AppState, dead_letter_on_blocked:
     let provider = signet_pipeline::provider::from_config(&provider_cfg);
     // Share the same provider with the recall handler for LLM reranking.
     *state.llm.write().await = Some(provider.clone());
-    let semaphore = Arc::new(signet_pipeline::provider::LlmSemaphore::default());
+    let semaphore = state.llm_semaphore.clone();
     let worker_config = signet_pipeline::worker::WorkerConfig {
         poll_ms: pipeline.worker.poll_ms,
         max_retries: pipeline.worker.max_retries,
@@ -1668,7 +1668,7 @@ pub(crate) async fn start_summary_worker(state: &AppState) -> bool {
                 signet_pipeline::provider::resolve_ollama_max_context_tokens(),
             ),
         });
-    let semaphore = Arc::new(signet_pipeline::provider::LlmSemaphore::default());
+    let semaphore = state.llm_semaphore.clone();
     let handle = signet_pipeline::summary::start(
         state.pool.clone(),
         provider,
@@ -1743,7 +1743,7 @@ pub(crate) async fn start_synthesis_worker(state: &AppState) -> bool {
             timeout_ms: Some(pipeline.synthesis.timeout),
             max_context_tokens: None,
         });
-    let semaphore = Arc::new(signet_pipeline::provider::LlmSemaphore::default());
+    let semaphore = state.llm_semaphore.clone();
     let handle = signet_pipeline::synthesis::start(
         state.pool.clone(),
         provider,
@@ -3269,5 +3269,19 @@ mod tests {
         assert!(provider_is_unsupported_for_daemon_startup_preflight(
             "openrouter"
         ));
+    }
+
+    #[test]
+    fn daemon_workers_do_not_construct_per_worker_default_llm_semaphores() {
+        let source = include_str!("main.rs");
+        let forbidden = [
+            "Arc::new(signet_pipeline::provider::",
+            "LlmSemaphore::default())",
+        ]
+        .concat();
+        assert!(
+            !source.contains(&forbidden),
+            "daemon workers must use one shared semaphore configured from pipeline.worker.max_llm_concurrency"
+        );
     }
 }

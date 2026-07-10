@@ -710,7 +710,11 @@ impl ReflectionWorkerHandle {
                 ) {
                     warn!(agent_id, error = %e, "failed to persist reflection timestamp");
                 }
-                info!(agent_id, count = ids.len(), "generated daily brief question");
+                info!(
+                    agent_id,
+                    count = ids.len(),
+                    "generated daily brief question"
+                );
             }
             Err(e) => warn!(agent_id, error = %e, "reflection generation failed"),
         }

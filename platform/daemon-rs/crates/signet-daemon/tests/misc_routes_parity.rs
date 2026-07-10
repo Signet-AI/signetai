@@ -117,6 +117,7 @@ memory:
             .env("SIGNET_MEMORY_IMPORT_POLL_MS", "200")
             .env("SIGNET_BW_BIN", fake_bw)
             .env("SIGNET_OP_BIN", fake_op)
+            .env_remove("SIGNET_AGENT_ID")
             .env("PATH", path_with_fakes)
             .env("RUST_LOG", "warn")
             .stdout(std::process::Stdio::null())

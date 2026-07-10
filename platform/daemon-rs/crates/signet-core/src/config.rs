@@ -308,7 +308,11 @@ fn normalize_pipeline_worker(pipeline: &mut PipelineV2Config, raw: Option<&serde
     let max_llm_concurrency = raw
         .and_then(|value| raw_child(value, "worker"))
         .and_then(|value| raw_u64(value, "maxLlmConcurrency"));
-    if let Some(value) = max_llm_concurrency {
+    let env_max_llm_concurrency = std::env::var("SIGNET_MAX_LLM_CONCURRENCY")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value >= 1);
+    if let Some(value) = env_max_llm_concurrency.or(max_llm_concurrency) {
         pipeline.worker.max_llm_concurrency = value.clamp(1, 16);
     }
 }
@@ -1169,6 +1173,11 @@ memory:
 
     #[test]
     fn worker_max_llm_concurrency_loads_with_bounded_default() {
+        let previous = std::env::var_os("SIGNET_MAX_LLM_CONCURRENCY");
+        unsafe {
+            std::env::remove_var("SIGNET_MAX_LLM_CONCURRENCY");
+        }
+
         let default_pipeline = PipelineV2Config::default();
         assert_eq!(default_pipeline.worker.max_llm_concurrency, 2);
 
@@ -1201,6 +1210,31 @@ memory:
         .pipeline_v2
         .unwrap();
         assert_eq!(high.worker.max_llm_concurrency, 16);
+
+        unsafe {
+            std::env::set_var("SIGNET_MAX_LLM_CONCURRENCY", "7");
+        }
+        let env_override = parse_manifest(
+            r#"
+memory:
+  pipelineV2:
+    worker:
+      maxLlmConcurrency: 3
+"#,
+        )
+        .expect("manifest parses")
+        .memory
+        .unwrap()
+        .pipeline_v2
+        .unwrap();
+        assert_eq!(env_override.worker.max_llm_concurrency, 7);
+
+        unsafe {
+            match previous {
+                Some(value) => std::env::set_var("SIGNET_MAX_LLM_CONCURRENCY", value),
+                None => std::env::remove_var("SIGNET_MAX_LLM_CONCURRENCY"),
+            }
+        }
     }
 
     #[test]

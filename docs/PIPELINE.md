@@ -1097,7 +1097,7 @@ worker:
   leaseTimeoutMs: 300000         # ms, range 10000–600000
   maxLoadPerCpu: 0.8             # load-per-CPU threshold, range 0.1–8.0
   overloadBackoffMs: 30000       # ms, range 1000–300000
-  maxLlmConcurrency: 2           # global concurrent LLM calls, range 1–16; SIGNET_MAX_LLM_CONCURRENCY overrides only the pre-config default
+  maxLlmConcurrency: 2           # global concurrent LLM calls, range 1–16; SIGNET_MAX_LLM_CONCURRENCY overrides YAML when set
 
 graph:
   enabled: true
