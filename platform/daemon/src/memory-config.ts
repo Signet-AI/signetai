@@ -94,6 +94,7 @@ export const DEFAULT_PIPELINE_V2: ResolvedPipelineV2Config = {
 		leaseTimeoutMs: 300000,
 		maxLoadPerCpu: 0.8,
 		overloadBackoffMs: 30000,
+		maxLlmConcurrency: 2,
 		threadedExtraction: true,
 	},
 	graph: {
@@ -348,6 +349,18 @@ function parseRateLimitConfig(raw: unknown): PipelineV2Config["extraction"]["rat
 		burstSize: burstSize ?? DEFAULT_PROVIDER_RATE_LIMIT.burstSize,
 		waitTimeoutMs: waitTimeoutMs ?? DEFAULT_PROVIDER_RATE_LIMIT.waitTimeoutMs,
 	};
+}
+
+function resolveMaxLlmConcurrency(rawValue: unknown, defaultValue: number): number {
+	const env = process.env.SIGNET_MAX_LLM_CONCURRENCY;
+	const candidate = env !== undefined ? Number(env) : rawValue;
+	if (env !== undefined && (!Number.isSafeInteger(candidate) || candidate < 1)) {
+		logger.warn("pipeline", "SIGNET_MAX_LLM_CONCURRENCY is not a valid positive integer, using config/default", {
+			value: env,
+		});
+		return clampPositive(rawValue, 1, 16, defaultValue);
+	}
+	return clampPositive(candidate, 1, 16, defaultValue);
 }
 
 function parseCommandArgv(raw: string): { bin: string; args: string[] } | null {
@@ -670,6 +683,7 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): ResolvedPipel
 				300000,
 				d.worker.overloadBackoffMs,
 			),
+			maxLlmConcurrency: resolveMaxLlmConcurrency(workerRaw?.maxLlmConcurrency, d.worker.maxLlmConcurrency),
 			threadedExtraction: workerRaw?.threadedExtraction !== false,
 		},
 

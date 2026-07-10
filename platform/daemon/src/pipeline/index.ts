@@ -35,6 +35,7 @@ import {
 } from "./summary-worker";
 import { type SynthesisWorkerHandle, startSynthesisWorker } from "./synthesis-worker";
 import { type WorkerHandle, type WorkerProgressStats, type WorkerStats, startWorker } from "./worker";
+import { configureLlmConcurrency, getLlmConcurrencyStatus } from "./provider";
 
 export { enqueueExtractionJob } from "./extraction-queue";
 export type { WorkerStats } from "./worker";
@@ -159,6 +160,10 @@ let pendingStartup: Promise<void> | null = null;
 /** Snapshot of running state for each worker — used by /api/pipeline/status */
 export function getPipelineWorkerStatus(): Record<string, { running: boolean; stats?: WorkerStats }> {
 	return {
+		llmConcurrency: {
+			running: getLlmConcurrencyStatus().running > 0,
+			stats: getLlmConcurrencyStatus() as unknown as WorkerStats,
+		},
 		extraction: {
 			running: workerHandle !== null,
 			stats: workerHandle?.stats,
@@ -225,6 +230,7 @@ export function startPipeline(
 		logger.info("pipeline", "Pipeline paused; worker start skipped");
 		return;
 	}
+	configureLlmConcurrency(pipelineCfg.worker.maxLlmConcurrency);
 
 	if (pipelineCfg.extraction.provider === "command") {
 		ensureRetentionWorker(accessor, DEFAULT_RETENTION);

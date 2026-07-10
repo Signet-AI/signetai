@@ -1376,6 +1376,30 @@ describe("loadPipelineConfig", () => {
 		expect(result.worker.overloadBackoffMs).toBe(DEFAULT_PIPELINE_V2.worker.overloadBackoffMs);
 	});
 
+	it("loads canonical worker maxLlmConcurrency with bounded defaults and env override", () => {
+		const previous = process.env.SIGNET_MAX_LLM_CONCURRENCY;
+		try {
+			delete process.env.SIGNET_MAX_LLM_CONCURRENCY;
+			expect(loadPipelineConfig({ memory: { pipelineV2: { enabled: true } } }).worker.maxLlmConcurrency).toBe(2);
+			expect(
+				loadPipelineConfig({ memory: { pipelineV2: { enabled: true, worker: { maxLlmConcurrency: 0 } } } }).worker
+					.maxLlmConcurrency,
+			).toBe(1);
+			expect(
+				loadPipelineConfig({ memory: { pipelineV2: { enabled: true, worker: { maxLlmConcurrency: 99 } } } }).worker
+					.maxLlmConcurrency,
+			).toBe(16);
+			process.env.SIGNET_MAX_LLM_CONCURRENCY = "7";
+			expect(
+				loadPipelineConfig({ memory: { pipelineV2: { enabled: true, worker: { maxLlmConcurrency: 3 } } } }).worker
+					.maxLlmConcurrency,
+			).toBe(7);
+		} finally {
+			if (previous === undefined) delete process.env.SIGNET_MAX_LLM_CONCURRENCY;
+			else process.env.SIGNET_MAX_LLM_CONCURRENCY = previous;
+		}
+	});
+
 	it("defaults threadedExtraction to true when absent", () => {
 		const result = loadPipelineConfig({
 			memory: { pipelineV2: { enabled: true } },

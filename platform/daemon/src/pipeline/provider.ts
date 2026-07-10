@@ -38,7 +38,7 @@ import { trimTrailingSlash } from "./url";
 // Without this, 10+ concurrent calls can cause memory bloat, API rate
 // limiting, and timeout cascades.
 
-const DEFAULT_MAX_LLM_CONCURRENCY = 4;
+const DEFAULT_MAX_LLM_CONCURRENCY = 2;
 
 export class SemaphoreTimeoutError extends Error {
 	readonly timeoutMs: number;
@@ -146,12 +146,16 @@ export class LlmConcurrencySemaphore {
 		return this.active;
 	}
 
+	get limit(): number {
+		return this.max;
+	}
+
 	get activeTimers(): number {
 		return this.timers;
 	}
 }
 
-const llmSemaphore = new LlmConcurrencySemaphore(
+let llmSemaphore = new LlmConcurrencySemaphore(
 	process.env.SIGNET_MAX_LLM_CONCURRENCY !== undefined
 		? (() => {
 				const parsed = Number(process.env.SIGNET_MAX_LLM_CONCURRENCY);
@@ -165,6 +169,19 @@ const llmSemaphore = new LlmConcurrencySemaphore(
 			})()
 		: DEFAULT_MAX_LLM_CONCURRENCY,
 );
+
+export function configureLlmConcurrency(limit: number): void {
+	const normalized = Number.isSafeInteger(limit) ? Math.min(16, Math.max(1, limit)) : DEFAULT_MAX_LLM_CONCURRENCY;
+	llmSemaphore = new LlmConcurrencySemaphore(normalized);
+}
+
+export function getLlmConcurrencyStatus(): { readonly running: number; readonly pending: number; readonly limit: number } {
+	return {
+		running: llmSemaphore.running,
+		pending: llmSemaphore.pending,
+		limit: llmSemaphore.limit,
+	};
+}
 
 // ---------------------------------------------------------------------------
 // Token-bucket rate limiter for provider-level call throttling

@@ -303,6 +303,13 @@ fn normalize_pipeline_worker(pipeline: &mut PipelineV2Config, raw: Option<&serde
     if let Some(value) = overload_backoff_ms {
         pipeline.worker.overload_backoff_ms = value.clamp(1_000, 300_000);
     }
+
+    let max_llm_concurrency = raw
+        .and_then(|value| raw_child(value, "worker"))
+        .and_then(|value| raw_u64(value, "maxLlmConcurrency"));
+    if let Some(value) = max_llm_concurrency {
+        pipeline.worker.max_llm_concurrency = value.clamp(1, 16);
+    }
 }
 
 fn normalize_pipeline_structural(pipeline: &mut PipelineV2Config, raw: Option<&serde_yml::Value>) {
@@ -1090,6 +1097,42 @@ memory:
     }
 
     #[test]
+    fn worker_max_llm_concurrency_loads_with_bounded_default() {
+        let default_pipeline = PipelineV2Config::default();
+        assert_eq!(default_pipeline.worker.max_llm_concurrency, 2);
+
+        let low = parse_manifest(
+            r#"
+memory:
+  pipelineV2:
+    worker:
+      maxLlmConcurrency: 0
+"#,
+        )
+        .expect("manifest parses")
+        .memory
+        .unwrap()
+        .pipeline_v2
+        .unwrap();
+        assert_eq!(low.worker.max_llm_concurrency, 1);
+
+        let high = parse_manifest(
+            r#"
+memory:
+  pipelineV2:
+    worker:
+      maxLlmConcurrency: 99
+"#,
+        )
+        .expect("manifest parses")
+        .memory
+        .unwrap()
+        .pipeline_v2
+        .unwrap();
+        assert_eq!(high.worker.max_llm_concurrency, 16);
+    }
+
+    #[test]
     fn structural_synthesis_max_stall_ms_parses_zero() {
         let manifest = parse_manifest(
             r#"
@@ -1547,6 +1590,7 @@ pub struct WorkerConfig {
     pub lease_timeout_ms: u64,
     pub max_load_per_cpu: f64,
     pub overload_backoff_ms: u64,
+    pub max_llm_concurrency: u64,
 }
 
 impl Default for WorkerConfig {
@@ -1557,6 +1601,7 @@ impl Default for WorkerConfig {
             lease_timeout_ms: 60_000,
             max_load_per_cpu: 0.8,
             overload_backoff_ms: 30_000,
+            max_llm_concurrency: 2,
         }
     }
 }
