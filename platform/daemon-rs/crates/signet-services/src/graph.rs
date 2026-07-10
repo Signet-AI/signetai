@@ -1604,6 +1604,16 @@ pub fn persist_entities(
     let ts = now();
 
     for triple in input.entities {
+        if !signet_core::entity_quality::should_persist_entity(
+            &triple.source,
+            triple.source_type.as_deref(),
+        ) || !signet_core::entity_quality::should_persist_entity(
+            &triple.target,
+            triple.target_type.as_deref(),
+        ) {
+            continue;
+        }
+
         let src_canonical = to_canonical(&triple.source);
         let tgt_canonical = to_canonical(&triple.target);
 
@@ -1928,5 +1938,49 @@ mod tests {
         assert!(result.memory_ids.contains("m1"));
         assert_eq!(result.entity_count, 1);
         assert!(!result.timed_out);
+    }
+
+    #[test]
+    fn persist_entities_rechecks_quality_before_writing() {
+        let conn = setup();
+        let entities = vec![
+            signet_core::types::ExtractedEntity {
+                source: "**Status:**".into(),
+                source_type: None,
+                relationship: "describes".into(),
+                target: "Signet".into(),
+                target_type: Some("project".into()),
+                confidence: 0.9,
+            },
+            signet_core::types::ExtractedEntity {
+                source: "Current Project".into(),
+                source_type: Some("project".into()),
+                relationship: "uses".into(),
+                target: "Status Page".into(),
+                target_type: Some("system".into()),
+                confidence: 0.9,
+            },
+        ];
+
+        let result = persist_entities(
+            &conn,
+            &PersistEntitiesInput {
+                entities: &entities,
+                source_memory_id: "memory-1",
+                agent_id: "default",
+            },
+        )
+        .unwrap();
+
+        assert_eq!(result.entities_inserted, 2);
+        assert_eq!(result.relations_inserted, 1);
+        let names = conn
+            .prepare("SELECT name FROM entities ORDER BY name")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(names, vec!["Current Project", "Status Page"]);
     }
 }

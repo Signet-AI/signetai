@@ -2157,7 +2157,7 @@ mod tests {
                     "target": "SQLite Store",
                     "relationship": "uses",
                     "source_type": "system",
-                    "target_type": "database"
+                    "target_type": "system"
                 }]
             })
             .to_string(),

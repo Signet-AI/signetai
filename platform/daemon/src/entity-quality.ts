@@ -42,6 +42,7 @@ const GENERIC_CANONICAL_NAMES = new Set([
 	"being",
 	"but",
 	"can",
+	"current",
 	"current work",
 	"did",
 	"do",
@@ -69,9 +70,11 @@ const GENERIC_CANONICAL_NAMES = new Set([
 	"primary request",
 	"read",
 	"recipient",
+	"result",
 	"sender",
 	"she",
 	"someone",
+	"status",
 	"summary",
 	"that",
 	"the",
@@ -81,6 +84,7 @@ const GENERIC_CANONICAL_NAMES = new Set([
 	"this",
 	"to",
 	"understand",
+	"update",
 	"want",
 	"was",
 	"we",
@@ -133,7 +137,8 @@ export function normalizeEntityName(value: string): string {
 		.trim()
 		.replace(/[“”]/g, '"')
 		.replace(/[‘’]/g, "'")
-		.replace(/^['"`]+|['"`]+$/g, "")
+		.replace(/^[\p{P}\p{S}]+|[\p{P}\p{S}]+$/gu, "")
+		.trim()
 		.toLowerCase()
 		.replace(/\s+/g, " ");
 }
@@ -159,15 +164,15 @@ export function classifyEntityQuality(name: string, type?: string): EntityQualit
 	const normalizedType = normalizeEntityType(type);
 	const hasConcreteType = isConcreteEntityType(normalizedType);
 
+	if (canonical.length === 0) {
+		return { ok: false, reason: name.trim().length === 0 ? "too_short" : "punctuation_only" };
+	}
 	if (/^\d+$/.test(canonical)) return { ok: false, reason: "numeric_only" };
 	if (GENERIC_CANONICAL_NAMES.has(canonical)) return { ok: false, reason: "generic_or_scaffolding_name" };
 	if (METADATA_LABELS.has(canonical)) return { ok: false, reason: "metadata_role" };
 	if (DISCOURSE_WORDS.has(canonical)) return { ok: false, reason: "discourse_fragment" };
 	if (/^(user|assistant|system|sender|recipient|author)\b[:\s-]+/i.test(name.trim())) {
 		return { ok: false, reason: "role_prefixed_scaffolding" };
-	}
-	if (/^(current|pending|primary)\s+/i.test(canonical)) {
-		return { ok: false, reason: "section_heading" };
 	}
 	if (canonical.length < 4 && !hasConcreteType) return { ok: false, reason: "too_short" };
 

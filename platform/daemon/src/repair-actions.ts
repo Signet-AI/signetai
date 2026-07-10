@@ -1793,6 +1793,10 @@ function deleteEntityGraphRows(db: WriteDb, ids: readonly string[]): void {
 	db.prepare(
 		`DELETE FROM entity_dependencies WHERE source_entity_id IN (${placeholders}) OR target_entity_id IN (${placeholders})`,
 	).run(...ids, ...ids);
+	db.prepare(`DELETE FROM entity_retrieval_stats WHERE entity_id IN (${placeholders})`).run(...ids);
+	db.prepare(
+		`DELETE FROM entity_cooccurrence WHERE source_entity_id IN (${placeholders}) OR target_entity_id IN (${placeholders})`,
+	).run(...ids, ...ids);
 	db.prepare(`DELETE FROM entity_aspects WHERE entity_id IN (${placeholders})`).run(...ids);
 	db.prepare(`DELETE FROM entities WHERE id IN (${placeholders})`).run(...ids);
 }

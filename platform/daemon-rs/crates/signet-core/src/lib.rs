@@ -1,6 +1,7 @@
 pub mod config;
 pub mod constants;
 pub mod db;
+pub mod entity_quality;
 pub mod error;
 pub mod migrations;
 pub mod queries;

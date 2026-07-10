@@ -343,6 +343,56 @@ describe("pruneGenericEntities", () => {
 		}
 	});
 
+	it("prunes Markdown-polluted and standalone structural nodes while preserving specific names", () => {
+		const db = new Database(":memory:");
+		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
+		const accessor = asAccessor(db);
+		const limiter = createRateLimiter();
+		const now = new Date().toISOString();
+
+		try {
+			const insert = db.prepare(
+				`INSERT INTO entities
+				 (id, name, canonical_name, entity_type, agent_id, mentions, pinned, created_at, updated_at)
+				 VALUES (?, ?, ?, ?, 'default', 1, 0, ?, ?)`,
+			);
+			insert.run("ent-current", "Current", "current", "project", now, now);
+			insert.run("ent-status", "**Status:**", "status", "document", now, now);
+			insert.run("ent-project", "Current Project", "current project", "project", now, now);
+			insert.run("ent-page", "Status Page", "status page", "system", now, now);
+			db.prepare(
+				`INSERT INTO entity_retrieval_stats
+				 (agent_id, entity_id, session_count, last_session_key, updated_at, created_at)
+				 VALUES ('default', 'ent-current', 1, 'session-1', ?, ?)`,
+			).run(now, now);
+			db.prepare(
+				`INSERT INTO entity_cooccurrence
+				 (agent_id, source_entity_id, target_entity_id, session_count, last_session_key, updated_at, created_at)
+				 VALUES ('default', 'ent-current', 'ent-project', 1, 'session-1', ?, ?)`,
+			).run(now, now);
+
+			const dryRun = pruneGenericEntities(accessor, TEST_CFG, CTX_OPERATOR, limiter, { dryRun: true });
+			expect(dryRun.success).toBe(true);
+			expect(dryRun.affected).toBe(2);
+			expect(dryRun.message).toContain("Current");
+			expect(dryRun.message).toContain("**Status:**");
+
+			const result = pruneGenericEntities(accessor, TEST_CFG, CTX_OPERATOR, limiter, { dryRun: false });
+			expect(result.success).toBe(true);
+			expect(result.affected).toBe(2);
+			const remaining = db.prepare("SELECT name FROM entities ORDER BY name").all() as Array<{ name: string }>;
+			expect(remaining.map((row) => row.name)).toEqual(["Current Project", "Status Page"]);
+			expect(
+				(db.prepare("SELECT COUNT(*) AS count FROM entity_retrieval_stats").get() as { count: number }).count,
+			).toBe(0);
+			expect((db.prepare("SELECT COUNT(*) AS count FROM entity_cooccurrence").get() as { count: number }).count).toBe(
+				0,
+			);
+		} finally {
+			db.close();
+		}
+	});
+
 	it("continues scanning past recent valid entities to find older generic rows", () => {
 		const db = new Database(":memory:");
 		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);

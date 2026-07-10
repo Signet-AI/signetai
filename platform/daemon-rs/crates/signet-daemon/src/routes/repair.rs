@@ -2092,212 +2092,13 @@ fn normalize_entity_name(value: &str) -> String {
         .join(" ")
 }
 
-fn normalize_entity_type(value: &str) -> String {
-    value.trim().to_ascii_lowercase().replace([' ', '-'], "_")
-}
-
 fn classify_entity_quality(name: &str, entity_type: &str) -> Result<(), &'static str> {
-    const CONCRETE: &[&str] = &[
-        "person",
-        "organization",
-        "project",
-        "product",
-        "system",
-        "tool",
-        "artifact",
-        "document",
-        "source",
-        "place",
-        "event",
-    ];
-    const ABSTRACT: &[&str] = &[
-        "concept",
-        "task",
-        "skill",
-        "agent",
-        "policy",
-        "action",
-        "workflow",
-        "object_type",
-        "interface",
-        "observation",
-        "claim_slot",
-        "claim_value",
-        "chunk_group",
-    ];
-    const GENERIC: &[&str] = &[
-        "a",
-        "an",
-        "and",
-        "are",
-        "author",
-        "because",
-        "being",
-        "but",
-        "can",
-        "current work",
-        "did",
-        "do",
-        "does",
-        "for",
-        "from",
-        "had",
-        "has",
-        "have",
-        "he",
-        "her",
-        "him",
-        "his",
-        "i",
-        "in",
-        "intent",
-        "is",
-        "it",
-        "its",
-        "let",
-        "of",
-        "on",
-        "or",
-        "pending tasks",
-        "primary request",
-        "read",
-        "recipient",
-        "sender",
-        "she",
-        "someone",
-        "summary",
-        "that",
-        "the",
-        "their",
-        "them",
-        "they",
-        "this",
-        "to",
-        "understand",
-        "want",
-        "was",
-        "we",
-        "we're",
-        "were",
-        "with",
-        "write",
-        "you",
-        "your",
-    ];
-    const METADATA: &[&str] = &[
-        "assistant",
-        "author",
-        "current work",
-        "intent",
-        "pending tasks",
-        "primary request",
-        "recipient",
-        "sender",
-        "system",
-        "user",
-    ];
-    const DISCOURSE: &[&str] = &[
-        "because",
-        "despite",
-        "however",
-        "let",
-        "once",
-        "read",
-        "summary",
-        "understand",
-        "want",
-        "write",
-    ];
-
-    let canonical = normalize_entity_name(name);
-    let normalized_type = normalize_entity_type(entity_type);
-    let has_concrete_type = CONCRETE.contains(&normalized_type.as_str());
-    if canonical.chars().all(|ch| ch.is_ascii_digit()) {
-        return Err("numeric_only");
+    let result = signet_core::entity_quality::classify_entity_quality(name, Some(entity_type));
+    if result.ok {
+        Ok(())
+    } else {
+        Err(result.reason.unwrap_or("invalid_entity"))
     }
-    if GENERIC.contains(&canonical.as_str()) {
-        return Err("generic_or_scaffolding_name");
-    }
-    if METADATA.contains(&canonical.as_str()) {
-        return Err("metadata_role");
-    }
-    if DISCOURSE.contains(&canonical.as_str()) {
-        return Err("discourse_fragment");
-    }
-    let lowered = name.trim().to_ascii_lowercase();
-    if [
-        "user",
-        "assistant",
-        "system",
-        "sender",
-        "recipient",
-        "author",
-    ]
-    .iter()
-    .any(|prefix| {
-        lowered.starts_with(&format!("{prefix}:"))
-            || lowered.starts_with(&format!("{prefix} "))
-            || lowered.starts_with(&format!("{prefix}-"))
-    }) {
-        return Err("role_prefixed_scaffolding");
-    }
-    if canonical.starts_with("current ")
-        || canonical.starts_with("pending ")
-        || canonical.starts_with("primary ")
-    {
-        return Err("section_heading");
-    }
-    if canonical.len() < 4 && !has_concrete_type {
-        return Err("too_short");
-    }
-    if normalized_type != "extracted" && normalized_type != "unknown" && !has_concrete_type {
-        return Err(if ABSTRACT.contains(&normalized_type.as_str()) {
-            "non_concrete_entity_type"
-        } else {
-            "unknown_entity_type"
-        });
-    }
-    if normalized_type == "event" {
-        let has_event_signal = [
-            "announced",
-            "announcement",
-            "created",
-            "decided",
-            "deployed",
-            "digest",
-            "installed",
-            "launched",
-            "meeting",
-            "merged",
-            "published",
-            "released",
-            "started",
-            "stopped",
-            "updated",
-            "today",
-            "yesterday",
-            "last ",
-            "202",
-            "jan",
-            "feb",
-            "mar",
-            "apr",
-            "may",
-            "jun",
-            "jul",
-            "aug",
-            "sep",
-            "oct",
-            "nov",
-            "dec",
-        ]
-        .iter()
-        .any(|needle| canonical.contains(needle));
-        if !has_event_signal {
-            return Err("event_without_time_or_event_signal");
-        }
-    }
-    Ok(())
 }
 
 fn delete_entity_graph_rows(conn: &rusqlite::Connection, ids: &[String]) -> rusqlite::Result<()> {
@@ -2334,6 +2135,20 @@ fn delete_entity_graph_rows(conn: &rusqlite::Connection, ids: &[String]) -> rusq
         conn.execute(
             &format!(
                 "DELETE FROM entity_dependencies WHERE source_entity_id IN ({placeholders}) OR target_entity_id IN ({placeholders})"
+            ),
+            rusqlite::params_from_iter(ids.iter().chain(ids.iter())),
+        )?;
+    }
+    if sqlite_table_exists(conn, "entity_retrieval_stats")? {
+        conn.execute(
+            &format!("DELETE FROM entity_retrieval_stats WHERE entity_id IN ({placeholders})"),
+            rusqlite::params_from_iter(ids.iter()),
+        )?;
+    }
+    if sqlite_table_exists(conn, "entity_cooccurrence")? {
+        conn.execute(
+            &format!(
+                "DELETE FROM entity_cooccurrence WHERE source_entity_id IN ({placeholders}) OR target_entity_id IN ({placeholders})"
             ),
             rusqlite::params_from_iter(ids.iter().chain(ids.iter())),
         )?;
@@ -3514,6 +3329,53 @@ mod tests {
     fn test_state() -> Arc<AppState> {
         let (state, _writer) = test_state_with_embedding(None);
         state
+    }
+
+    #[test]
+    fn delete_entity_graph_rows_removes_derived_feedback_rows() {
+        let conn = rusqlite::Connection::open_in_memory().expect("open in-memory db");
+        conn.execute_batch(
+            "CREATE TABLE entities (id TEXT PRIMARY KEY);
+             CREATE TABLE entity_aspects (id TEXT PRIMARY KEY, entity_id TEXT NOT NULL);
+             CREATE TABLE entity_attributes (aspect_id TEXT);
+             CREATE TABLE memory_entity_mentions (entity_id TEXT);
+             CREATE TABLE relations (source_entity_id TEXT, target_entity_id TEXT);
+             CREATE TABLE entity_dependencies (source_entity_id TEXT, target_entity_id TEXT);
+             CREATE TABLE entity_retrieval_stats (entity_id TEXT);
+             CREATE TABLE entity_cooccurrence (source_entity_id TEXT, target_entity_id TEXT);",
+        )
+        .expect("create graph tables");
+        conn.execute("INSERT INTO entities (id) VALUES ('bad'), ('good')", [])
+            .expect("seed entities");
+        conn.execute(
+            "INSERT INTO entity_retrieval_stats (entity_id) VALUES ('bad')",
+            [],
+        )
+        .expect("seed retrieval stats");
+        conn.execute(
+            "INSERT INTO entity_cooccurrence (source_entity_id, target_entity_id) VALUES ('bad', 'good')",
+            [],
+        )
+        .expect("seed cooccurrence");
+
+        delete_entity_graph_rows(&conn, &["bad".to_string()]).expect("delete graph rows");
+
+        let remaining_entities: i64 = conn
+            .query_row("SELECT COUNT(*) FROM entities", [], |row| row.get(0))
+            .expect("count entities");
+        let retrieval_rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM entity_retrieval_stats", [], |row| {
+                row.get(0)
+            })
+            .expect("count retrieval stats");
+        let cooccurrence_rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM entity_cooccurrence", [], |row| {
+                row.get(0)
+            })
+            .expect("count cooccurrence");
+        assert_eq!(remaining_entities, 1);
+        assert_eq!(retrieval_rows, 0);
+        assert_eq!(cooccurrence_rows, 0);
     }
 
     #[tokio::test]

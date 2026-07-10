@@ -214,6 +214,33 @@ describe("graph-transactions", () => {
 			expect(names.map((row) => row.name)).toEqual(["Signet Daily Digest — 2026-05-10", "Signet Desktop"]);
 		});
 
+		it("rejects Markdown-polluted triples while preserving specific structural-word names", () => {
+			const result = txPersistEntities(asWriteDb(db), {
+				entities: [
+					{
+						source: "**Status:**",
+						relationship: "describes",
+						target: "Signet",
+						confidence: 0.9,
+					},
+					{
+						source: "Current Project",
+						relationship: "uses",
+						target: "Status Page",
+						confidence: 0.9,
+					},
+				],
+				sourceMemoryId: "mem-entity-quality",
+				extractedAt: new Date().toISOString(),
+				agentId: "default",
+			});
+
+			expect(result.entitiesInserted).toBe(2);
+			expect(result.relationsInserted).toBe(1);
+			const names = db.query("SELECT name FROM entities ORDER BY name").all() as Array<{ name: string }>;
+			expect(names.map((row) => row.name)).toEqual(["Current Project", "Status Page"]);
+		});
+
 		it("records reasoned related_to audit history for structured co-occurrences", () => {
 			const now = new Date().toISOString();
 

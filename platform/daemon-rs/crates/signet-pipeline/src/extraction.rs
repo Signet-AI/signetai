@@ -4,6 +4,7 @@
 //! and returns typed results with confidence scores.
 
 use serde::{Deserialize, Serialize};
+use signet_core::entity_quality::classify_entity_quality;
 
 // ---------------------------------------------------------------------------
 // Extraction types
@@ -199,6 +200,18 @@ pub fn parse(raw: &str) -> ExtractionResult {
                     warnings.push(format!("entity {i}: source and target are required"));
                     continue;
                 }
+                let source_quality =
+                    classify_entity_quality(&entity.source, entity.source_type.as_deref());
+                let target_quality =
+                    classify_entity_quality(&entity.target, entity.target_type.as_deref());
+                if !source_quality.ok || !target_quality.ok {
+                    warnings.push(format!(
+                        "entity {i}: low-quality source or target ({}/{})",
+                        source_quality.reason.unwrap_or("ok"),
+                        target_quality.reason.unwrap_or("ok")
+                    ));
+                    continue;
+                }
                 entities.push(entity);
             }
             Err(e) => {
@@ -339,6 +352,22 @@ mod tests {
         assert!(result.warnings.is_empty());
         assert_eq!(result.facts[0].fact_type, "preference");
         assert!((result.facts[0].confidence - 0.9).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn parse_filters_malformed_entities_but_preserves_specific_names() {
+        let raw = r#"{"facts":[],"entities":[{"source":"**Status:**","target":"Signet","relationship":"describes"},{"source":"Current Project","target":"Status Page","relationship":"uses"}]}"#;
+
+        let result = parse(raw);
+        assert_eq!(result.entities.len(), 1);
+        assert_eq!(result.entities[0].source, "Current Project");
+        assert_eq!(result.entities[0].target, "Status Page");
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("entity 0"))
+        );
     }
 
     #[test]

@@ -434,13 +434,13 @@ pub fn persist_structured(
     for triple in entities {
         let src_type = normalize_entity_type(triple.source_type.as_deref());
         let tgt_type = normalize_entity_type(triple.target_type.as_deref());
-        if !should_persist_entity(&triple.source, src_type)
-            || !should_persist_entity(&triple.target, tgt_type)
+        if !should_persist_entity(&triple.source, src_type.as_deref())
+            || !should_persist_entity(&triple.target, tgt_type.as_deref())
         {
             continue;
         }
 
-        let source = match upsert_entity(conn, &triple.source, src_type, agent_id, now) {
+        let source = match upsert_entity(conn, &triple.source, src_type.as_deref(), agent_id, now) {
             Some(s) => s,
             None => continue,
         };
@@ -450,7 +450,7 @@ pub fn persist_structured(
             result.entities_updated += 1;
         }
 
-        let target = match upsert_entity(conn, &triple.target, tgt_type, agent_id, now) {
+        let target = match upsert_entity(conn, &triple.target, tgt_type.as_deref(), agent_id, now) {
             Some(t) => t,
             None => continue,
         };
