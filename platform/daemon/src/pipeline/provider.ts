@@ -624,6 +624,7 @@ interface SpawnResult {
 	readonly stdout: ReadableStream<Uint8Array>;
 	readonly stderr: ReadableStream<Uint8Array>;
 	readonly exited: Promise<number>;
+	readonly processGroupId?: number;
 	kill(signal?: string): void;
 }
 
@@ -710,6 +711,7 @@ function spawnHidden(cmd: string[], options?: { env?: Record<string, string | un
 		stdout: child.stdout,
 		stderr: child.stderr,
 		exited: child.exited,
+		processGroupId: process.platform !== "win32" ? child.pid : undefined,
 		kill(signal?: string) {
 			const actualSignal = signal === "SIGKILL" ? "SIGKILL" : "SIGTERM";
 			if (process.platform !== "win32") {
@@ -736,6 +738,68 @@ function spawnHidden(cmd: string[], options?: { env?: Record<string, string | un
 // until the child process is actually dead.
 
 const SUBPROCESS_KILL_GRACE_MS = 2000;
+const SUBPROCESS_KILL_REAP_MS = 1000;
+
+function unixProcessGroupExists(processGroupId: number): boolean {
+	try {
+		process.kill(-processGroupId, 0);
+		return true;
+	} catch (error) {
+		if (
+			error instanceof Error &&
+			"code" in error &&
+			(error as NodeJS.ErrnoException).code !== undefined &&
+			(error as NodeJS.ErrnoException).code !== "ESRCH"
+		) {
+			return true;
+		}
+		return false;
+	}
+}
+
+async function waitForUnixProcessGroupExit(processGroupId: number, timeoutMs: number): Promise<boolean> {
+	const deadline = performance.now() + timeoutMs;
+	while (unixProcessGroupExists(processGroupId)) {
+		if (performance.now() >= deadline) return false;
+		await new Promise((resolve) => setTimeout(resolve, 25));
+	}
+	return true;
+}
+
+function signalSubprocess(proc: SpawnResult, signal: "SIGTERM" | "SIGKILL"): void {
+	const processGroupId = proc.processGroupId;
+	if (process.platform !== "win32" && typeof processGroupId === "number") {
+		try {
+			process.kill(-processGroupId, signal);
+			return;
+		} catch {
+			// Fall back to the proc-specific kill hook below. The group may have
+			// already drained, or the hook may know how to terminate this process.
+		}
+	}
+	try {
+		proc.kill(signal);
+	} catch {
+		// The process may already be gone.
+	}
+}
+
+async function terminateSubprocessWithEscalation(proc: SpawnResult): Promise<void> {
+	signalSubprocess(proc, "SIGTERM");
+	const processGroupId = proc.processGroupId;
+	if (process.platform !== "win32" && typeof processGroupId === "number") {
+		const groupExited = await waitForUnixProcessGroupExit(processGroupId, SUBPROCESS_KILL_GRACE_MS);
+		if (!groupExited) {
+			signalSubprocess(proc, "SIGKILL");
+			await waitForUnixProcessGroupExit(processGroupId, SUBPROCESS_KILL_REAP_MS);
+		}
+		await proc.exited.catch(() => {});
+		return;
+	}
+	const graceTimer = setTimeout(() => signalSubprocess(proc, "SIGKILL"), SUBPROCESS_KILL_GRACE_MS);
+	await proc.exited.catch(() => {});
+	clearTimeout(graceTimer);
+}
 
 export async function awaitSubprocessWithDeadline<T>(
 	proc: SpawnResult,
@@ -746,17 +810,11 @@ export async function awaitSubprocessWithDeadline<T>(
 	signal?: AbortSignal,
 ): Promise<T> {
 	if (signal?.aborted) {
-		proc.kill("SIGTERM");
-		const graceTimer = setTimeout(() => proc.kill("SIGKILL"), SUBPROCESS_KILL_GRACE_MS);
-		await proc.exited.catch(() => {});
-		clearTimeout(graceTimer);
+		await terminateSubprocessWithEscalation(proc);
 		throw new Error(`${label} aborted`);
 	}
 	if (remainingMs <= 0) {
-		proc.kill("SIGTERM");
-		const graceTimer = setTimeout(() => proc.kill("SIGKILL"), SUBPROCESS_KILL_GRACE_MS);
-		await proc.exited.catch(() => {});
-		clearTimeout(graceTimer);
+		await terminateSubprocessWithEscalation(proc);
 		throw new SemaphoreTimeoutError(
 			originalTimeoutMs,
 			`${label} timeout after ${originalTimeoutMs}ms (deadline exceeded before subprocess work)`,
@@ -765,12 +823,11 @@ export async function awaitSubprocessWithDeadline<T>(
 
 	const timeout = Symbol("timeout");
 	const aborted = Symbol("aborted");
-	let graceTimer: ReturnType<typeof setTimeout> | undefined;
+	let terminationPromise: Promise<void> | undefined;
 	let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
 	let abortListener: (() => void) | undefined;
 	const terminate = (): void => {
-		proc.kill("SIGTERM");
-		graceTimer = setTimeout(() => proc.kill("SIGKILL"), SUBPROCESS_KILL_GRACE_MS);
+		terminationPromise ??= terminateSubprocessWithEscalation(proc);
 	};
 	const timeoutPromise = new Promise<typeof timeout>((resolve) => {
 		deadlineTimer = setTimeout(() => {
@@ -794,8 +851,7 @@ export async function awaitSubprocessWithDeadline<T>(
 	const result = await Promise.race([resultPromise, timeoutPromise, abortPromise]);
 	if (result === timeout || result === aborted) {
 		if (deadlineTimer) clearTimeout(deadlineTimer);
-		await proc.exited.catch(() => {});
-		if (graceTimer) clearTimeout(graceTimer);
+		await (terminationPromise ?? proc.exited.catch(() => {}));
 		if (signal && abortListener) signal.removeEventListener("abort", abortListener);
 		if (result === aborted) {
 			throw new Error(`${label} aborted`);
@@ -803,7 +859,6 @@ export async function awaitSubprocessWithDeadline<T>(
 		throw new SemaphoreTimeoutError(originalTimeoutMs, `${label} timeout after ${originalTimeoutMs}ms`);
 	}
 
-	if (graceTimer) clearTimeout(graceTimer);
 	if (deadlineTimer) clearTimeout(deadlineTimer);
 	if (signal && abortListener) signal.removeEventListener("abort", abortListener);
 	if (result.ok) {

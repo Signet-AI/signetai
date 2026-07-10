@@ -37,6 +37,10 @@ class FakeExtractionWorker implements ExtractionWorker {
 	emitError(err: Error): void {
 		for (const listener of this.listeners.error) listener(err);
 	}
+
+	emitExit(code: number): void {
+		for (const listener of this.listeners.exit) listener(code);
+	}
 }
 
 const init: WorkerInit = {
@@ -151,6 +155,67 @@ describe("startExtractionThread inference proxy", () => {
 
 		fake.emitError(new Error("worker crashed"));
 
+		expect(observedSignal?.aborted).toBe(true);
+	});
+
+	it("aborts in-flight provider work when the extraction worker exits unexpectedly", async () => {
+		const fake = new FakeExtractionWorker();
+		let observedSignal: AbortSignal | undefined;
+		const provider: LlmProvider = {
+			name: "test-provider",
+			generate(_prompt, opts) {
+				observedSignal = opts?.signal;
+				return new Promise((_resolve, reject) => {
+					opts?.signal?.addEventListener("abort", () => reject(new Error("provider aborted")));
+				});
+			},
+			async available() {
+				return true;
+			},
+		};
+
+		const handlePromise = startExtractionThread({
+			init,
+			provider,
+			workerFactory: () => fake,
+			readyTimeoutMs: 1000,
+		});
+		fake.emitMessage({ type: "ready" });
+		await handlePromise;
+		fake.emitMessage({ type: "generate", id: "req-exit", prompt: "slow", options: { timeoutMs: 5000 } });
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		fake.emitExit(1);
+
+		expect(observedSignal?.aborted).toBe(true);
+	});
+
+	it("aborts early proxied generate work when readiness times out", async () => {
+		const fake = new FakeExtractionWorker();
+		let observedSignal: AbortSignal | undefined;
+		const provider: LlmProvider = {
+			name: "test-provider",
+			generate(_prompt, opts) {
+				observedSignal = opts?.signal;
+				return new Promise((_resolve, reject) => {
+					opts?.signal?.addEventListener("abort", () => reject(new Error("provider aborted")));
+				});
+			},
+			async available() {
+				return true;
+			},
+		};
+
+		const handlePromise = startExtractionThread({
+			init,
+			provider,
+			workerFactory: () => fake,
+			readyTimeoutMs: 10,
+		});
+		fake.emitMessage({ type: "generate", id: "req-ready-timeout", prompt: "early", options: { timeoutMs: 5000 } });
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		await expect(handlePromise).rejects.toThrow("failed to become ready");
 		expect(observedSignal?.aborted).toBe(true);
 	});
 });

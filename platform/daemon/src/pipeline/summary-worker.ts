@@ -484,6 +484,7 @@ export async function runSummaryCommandProvider(
 					stdout: emptyByteStream(),
 					stderr: emptyByteStream(),
 					exited,
+					processGroupId: process.platform !== "win32" ? child.pid : undefined,
 					kill(signalName?: string) {
 						terminateSummaryCommand(child, signalName === "SIGKILL" ? "SIGKILL" : "SIGTERM");
 					},

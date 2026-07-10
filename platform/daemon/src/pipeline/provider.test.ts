@@ -5,6 +5,7 @@
  */
 
 import { afterEach, describe, expect, it, mock } from "bun:test";
+import { spawn as nodeSpawn } from "node:child_process";
 import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
@@ -60,6 +61,29 @@ function streamFromString(value: string): ReadableStream<Uint8Array> {
 			controller.close();
 		},
 	});
+}
+
+async function waitForPidFile(path: string): Promise<number> {
+	for (let i = 0; i < 100; i += 1) {
+		if (existsSync(path)) {
+			const pid = Number(readFileSync(path, "utf-8"));
+			if (pid > 0) return pid;
+		}
+		await new Promise((resolve) => setTimeout(resolve, 10));
+	}
+	throw new Error(`pid file was not written: ${path}`);
+}
+
+async function waitForProcessExit(pid: number): Promise<boolean> {
+	for (let i = 0; i < 60; i += 1) {
+		try {
+			process.kill(pid, 0);
+		} catch {
+			return true;
+		}
+		await new Promise((resolve) => setTimeout(resolve, 25));
+	}
+	return false;
 }
 
 async function collectStreamEvents(stream: ReadableStream<LlmProviderStreamEvent>): Promise<LlmProviderStreamEvent[]> {
@@ -3273,6 +3297,89 @@ describe("awaitSubprocessWithDeadline — success-after-timeout race", () => {
 
 		expect(outcome).toBeInstanceOf(SemaphoreTimeoutError);
 		expect(signals).toEqual(["SIGTERM", "SIGKILL"]);
+	});
+
+	it("SIGKILLs the process group when the leader exits before a SIGTERM-resistant descendant", async () => {
+		if (process.platform === "win32") return;
+		const root = join(tmpdir(), `signet-deadline-group-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		mkdirSync(root, { recursive: true });
+		const bin = join(root, "leader-exits-descendant-ignores-term.sh");
+		const leaderPidPath = join(root, "leader.pid");
+		const childPidPath = join(root, "child.pid");
+		writeFileSync(
+			bin,
+			`#!/usr/bin/env bash
+set -euo pipefail
+printf '%s' "$$" > ${JSON.stringify(leaderPidPath)}
+bash -c 'trap "" TERM; printf "%s" "$$" > "$1"; while true; do sleep 1; done' _ ${JSON.stringify(childPidPath)} &
+while [ ! -s ${JSON.stringify(childPidPath)} ]; do sleep 0.01; done
+trap 'exit 0' TERM
+wait
+`,
+		);
+		chmodSync(bin, 0o755);
+
+		const child = nodeSpawn(bin, [], {
+			stdio: ["ignore", "ignore", "ignore"],
+			detached: true,
+		});
+		const exited = new Promise<number>((resolve, reject) => {
+			child.on("error", reject);
+			child.on("close", (code) => resolve(code ?? 1));
+		});
+
+		try {
+			const childPid = await waitForPidFile(childPidPath);
+			const controller = new AbortController();
+			const wait = awaitSubprocessWithDeadline(
+				{
+					stdout: streamFromString(""),
+					stderr: streamFromString(""),
+					exited,
+					processGroupId: child.pid,
+					kill(signal?: string) {
+						const actualSignal = signal === "SIGKILL" ? "SIGKILL" : "SIGTERM";
+						if (typeof child.pid === "number") {
+							process.kill(-child.pid, actualSignal);
+							return;
+						}
+						child.kill(actualSignal);
+					},
+				},
+				10_000,
+				"test",
+				10_000,
+				async (proc) => {
+					await proc.exited;
+					return "done";
+				},
+				controller.signal,
+			);
+			controller.abort();
+
+			await expect(wait).rejects.toThrow("test aborted");
+			expect(await waitForProcessExit(childPid)).toBe(true);
+		} finally {
+			for (const path of [leaderPidPath, childPidPath]) {
+				if (!existsSync(path)) continue;
+				const pid = Number(readFileSync(path, "utf-8"));
+				if (pid > 0) {
+					try {
+						process.kill(pid, "SIGKILL");
+					} catch {
+						// Already exited.
+					}
+				}
+			}
+			if (typeof child.pid === "number") {
+				try {
+					process.kill(-child.pid, "SIGKILL");
+				} catch {
+					// Process group already gone.
+				}
+			}
+			rmSync(root, { recursive: true, force: true });
+		}
 	});
 });
 
