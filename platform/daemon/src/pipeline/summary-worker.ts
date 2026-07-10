@@ -733,7 +733,7 @@ async function processJob(
 	}
 
 	try {
-		await scoreContinuity(accessor, provider, job, result.summary, memoryCfg);
+		await scoreContinuity(accessor, provider, job, result.summary, memoryCfg, signal);
 	} catch (e) {
 		logger.warn("summary-worker", "Continuity scoring failed (non-fatal)", {
 			error: e instanceof Error ? e.message : String(e),
@@ -1037,12 +1037,13 @@ interface ContinuityResult {
 	}>;
 }
 
-async function scoreContinuity(
+export async function scoreContinuity(
 	accessor: DbAccessor,
 	provider: LlmProvider,
 	job: SummaryJobRow,
 	summary: string,
 	memoryCfg: ResolvedMemoryConfig,
+	signal?: AbortSignal,
 ): Promise<void> {
 	// Load injected memories for this session (empty array for old sessions)
 	const injectedMemories = loadInjectedMemories(accessor, job.session_key, job.agent_id);
@@ -1052,6 +1053,7 @@ async function scoreContinuity(
 	const raw = await provider.generate(prompt, {
 		timeoutMs: memoryCfg.pipelineV2.synthesis.timeout,
 		maxTokens: memoryCfg.pipelineV2.synthesis.maxTokens,
+		signal,
 	});
 
 	let jsonStr = raw.trim();

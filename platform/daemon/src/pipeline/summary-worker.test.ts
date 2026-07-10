@@ -24,10 +24,12 @@ import {
 	resolveFailedSummaryJobStatus,
 	resolveSummaryHeadingDate,
 	runSummaryCommandProvider,
+	scoreContinuity,
 	shouldRunSignificanceGateForJob,
 	startSummaryRecovery,
 	startSummaryWorker,
 } from "./summary-worker";
+import type { LlmProvider } from "./provider";
 
 describe("canProcessSummaryJobs", () => {
 	it("preserves command extraction when synthesis is unavailable", () => {
@@ -573,6 +575,52 @@ describe("recoverSummaryJobs", () => {
 });
 
 describe("summary job helpers", () => {
+	it("passes pipeline cancellation into continuity scoring generation", async () => {
+		const db = new Database(":memory:");
+		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
+		const accessor = makeAccessor(db);
+		const controller = new AbortController();
+		controller.abort();
+		let observedSignal: AbortSignal | undefined;
+		const provider: LlmProvider = {
+			async generate(_prompt, opts) {
+				observedSignal = opts?.signal;
+				throw new Error("aborted");
+			},
+		};
+
+		try {
+			await expect(
+				scoreContinuity(
+					accessor,
+					provider,
+					{
+						id: "job-continuity",
+						session_key: "session-continuity",
+						session_id: null,
+						harness: "codex",
+						project: "/tmp/project",
+						agent_id: "default",
+						transcript: "User: summarize continuity cancellation",
+						trigger: "test",
+						captured_at: null,
+						started_at: null,
+						ended_at: null,
+						attempts: 1,
+						max_attempts: 3,
+						created_at: new Date().toISOString(),
+					},
+					"summary",
+					loadMemoryConfig(makeAgentsDir("memory:\n")),
+					controller.signal,
+				),
+			).rejects.toThrow("aborted");
+			expect(observedSignal).toBe(controller.signal);
+		} finally {
+			db.close();
+		}
+	});
+
 	it("derives the summary heading date from persisted session timing instead of wall clock", () => {
 		expect(
 			resolveSummaryHeadingDate({
