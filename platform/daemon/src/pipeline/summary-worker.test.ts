@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runMigrations } from "../../../core/src/migrations";
@@ -756,6 +756,25 @@ describe("command stage completion marker", () => {
 });
 
 describe("runSummaryCommandProvider", () => {
+	function summaryJob(id: string, transcript = "test") {
+		return {
+			id,
+			session_key: `session-${id}`,
+			session_id: null,
+			harness: "codex",
+			project: "/tmp/project",
+			agent_id: "default",
+			transcript,
+			trigger: "test",
+			captured_at: null,
+			started_at: null,
+			ended_at: null,
+			attempts: 1,
+			max_attempts: 3,
+			created_at: new Date().toISOString(),
+		};
+	}
+
 	it("executes argv-safe command mode with token substitution and temp cleanup", async () => {
 		const marker = join(tmpdir(), `signet-summary-marker-${Date.now()}-${Math.random()}.txt`);
 		const dir = makeAgentsDir("memory:\n  pipelineV2:\n    extraction:\n      provider: ollama\n");
@@ -920,4 +939,122 @@ setInterval(() => {}, 1000);
 		expect(existsSync(marker)).toBe(true);
 		rmSync(marker, { force: true });
 	}, 15_000);
+
+	it("aborts command mode promptly from the active worker signal", async () => {
+		const marker = join(tmpdir(), `signet-summary-abort-${Date.now()}-${Math.random()}.txt`);
+		const dir = makeAgentsDir("memory:\n  pipelineV2:\n    extraction:\n      provider: ollama\n");
+		const scriptPath = join(dir, "summary-command-abort.mjs");
+		writeFileSync(
+			scriptPath,
+			`import { writeFileSync } from "node:fs";
+writeFileSync(process.argv[2], String(process.pid), "utf8");
+setInterval(() => {}, 1000);
+`,
+			"utf8",
+		);
+		const cfg = loadMemoryConfig(dir);
+		const commandCfg = {
+			...cfg,
+			pipelineV2: {
+				...cfg.pipelineV2,
+				extraction: {
+					...cfg.pipelineV2.extraction,
+					timeout: 5000,
+					provider: "command" as const,
+					command: { bin: process.execPath, args: [scriptPath, marker] },
+				},
+			},
+		};
+		const controller = new AbortController();
+		const started = Date.now();
+		const run = runSummaryCommandProvider(summaryJob("job-abort"), commandCfg, controller.signal);
+
+		for (let i = 0; i < 40 && !existsSync(marker); i += 1) {
+			await new Promise((resolve) => setTimeout(resolve, 25));
+		}
+		controller.abort();
+
+		await expect(run).rejects.toThrow(/aborted/i);
+		expect(Date.now() - started).toBeLessThan(2500);
+		rmSync(marker, { force: true });
+	}, 8000);
+
+	it("kills stubborn command descendants on abort", async () => {
+		if (process.platform === "win32") return;
+		const root = join(tmpdir(), `signet-summary-descendant-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		const dir = makeAgentsDir("memory:\n  pipelineV2:\n    extraction:\n      provider: ollama\n");
+		const rootPidPath = join(root, "root.pid");
+		const childPidPath = join(root, "child.pid");
+		mkdirSync(root, { recursive: true });
+		const scriptPath = join(dir, "summary-command-descendant.sh");
+		writeFileSync(
+			scriptPath,
+			`#!/usr/bin/env bash
+trap '' TERM
+printf '%s' "$$" > ${JSON.stringify(rootPidPath)}
+sleep 30 &
+printf '%s' "$!" > ${JSON.stringify(childPidPath)}
+wait
+`,
+			"utf8",
+		);
+		chmodSync(scriptPath, 0o755);
+		const cfg = loadMemoryConfig(dir);
+		const commandCfg = {
+			...cfg,
+			pipelineV2: {
+				...cfg.pipelineV2,
+				extraction: {
+					...cfg.pipelineV2.extraction,
+					timeout: 5000,
+					provider: "command" as const,
+					command: { bin: scriptPath, args: [] },
+				},
+			},
+		};
+		const controller = new AbortController();
+
+		try {
+			const run = runSummaryCommandProvider(summaryJob("job-descendant"), commandCfg, controller.signal);
+			for (let i = 0; i < 40 && (!existsSync(rootPidPath) || !existsSync(childPidPath)); i += 1) {
+				await new Promise((resolve) => setTimeout(resolve, 25));
+			}
+			controller.abort();
+			await expect(run).rejects.toThrow(/aborted/i);
+
+			const rootPid = Number(readFileSync(rootPidPath, "utf8"));
+			const childPid = Number(readFileSync(childPidPath, "utf8"));
+			let rootAlive = true;
+			let childAlive = true;
+			for (let i = 0; i < 50; i += 1) {
+				try {
+					process.kill(rootPid, 0);
+				} catch {
+					rootAlive = false;
+				}
+				try {
+					process.kill(childPid, 0);
+				} catch {
+					childAlive = false;
+				}
+				if (!rootAlive && !childAlive) break;
+				await new Promise((resolve) => setTimeout(resolve, 25));
+			}
+			expect(rootAlive).toBe(false);
+			expect(childAlive).toBe(false);
+		} finally {
+			for (const path of [rootPidPath, childPidPath]) {
+				if (!existsSync(path)) continue;
+				const pid = Number(readFileSync(path, "utf8"));
+				if (pid > 0) {
+					try {
+						process.kill(pid, "SIGKILL");
+					} catch {
+						// Already exited.
+					}
+				}
+			}
+			rmSync(root, { recursive: true, force: true });
+		}
+	}, 8000);
 });

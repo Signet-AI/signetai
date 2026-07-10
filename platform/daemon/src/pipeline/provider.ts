@@ -51,7 +51,7 @@ export class SemaphoreTimeoutError extends Error {
 }
 
 export class LlmConcurrencySemaphore {
-	private readonly max: number;
+	private max: number;
 	private active = 0;
 	private readonly queue: Array<{
 		readonly start: () => void;
@@ -60,6 +60,11 @@ export class LlmConcurrencySemaphore {
 
 	constructor(max: number) {
 		this.max = max;
+	}
+
+	setLimit(max: number): void {
+		this.max = max;
+		this.drain();
 	}
 
 	async acquire(signal?: AbortSignal): Promise<void> {
@@ -134,8 +139,7 @@ export class LlmConcurrencySemaphore {
 			throw new Error("LlmConcurrencySemaphore.release(): no active acquisitions to release");
 		}
 		this.active--;
-		const next = this.queue.shift();
-		if (next) next.start();
+		this.drain();
 	}
 
 	get pending(): number {
@@ -153,9 +157,17 @@ export class LlmConcurrencySemaphore {
 	get activeTimers(): number {
 		return this.timers;
 	}
+
+	private drain(): void {
+		while (this.active < this.max) {
+			const next = this.queue.shift();
+			if (!next) return;
+			next.start();
+		}
+	}
 }
 
-let llmSemaphore = new LlmConcurrencySemaphore(
+const llmSemaphore = new LlmConcurrencySemaphore(
 	process.env.SIGNET_MAX_LLM_CONCURRENCY !== undefined
 		? (() => {
 				const parsed = Number(process.env.SIGNET_MAX_LLM_CONCURRENCY);
@@ -172,7 +184,7 @@ let llmSemaphore = new LlmConcurrencySemaphore(
 
 export function configureLlmConcurrency(limit: number): void {
 	const normalized = Number.isSafeInteger(limit) ? Math.min(16, Math.max(1, limit)) : DEFAULT_MAX_LLM_CONCURRENCY;
-	llmSemaphore = new LlmConcurrencySemaphore(normalized);
+	llmSemaphore.setLimit(normalized);
 }
 
 export function getLlmConcurrencyStatus(): {
@@ -371,11 +383,12 @@ async function withLlmConcurrency<T>(
 	label?: string,
 	signal?: AbortSignal,
 ): Promise<T> {
+	const semaphore = llmSemaphore;
 	try {
 		if (timeoutMs !== undefined) {
-			await llmSemaphore.acquireWithTimeout(timeoutMs, signal);
+			await semaphore.acquireWithTimeout(timeoutMs, signal);
 		} else {
-			await llmSemaphore.acquire(signal);
+			await semaphore.acquire(signal);
 		}
 	} catch (err) {
 		if (err instanceof SemaphoreTimeoutError && label) {
@@ -389,7 +402,7 @@ async function withLlmConcurrency<T>(
 	try {
 		return await fn();
 	} finally {
-		llmSemaphore.release();
+		semaphore.release();
 	}
 }
 
@@ -2126,11 +2139,12 @@ let lastClaudeCodeRuntimeConfig: Pick<ClaudeCodeProviderConfig, "allowApiKeyEnv"
 
 function classifyClaudeCodeFailure(text: string): ClaudeCodeCircuitReason | null {
 	const lower = text.toLowerCase();
-	if (
-		/\b(unauthorized|invalid api key|invalid x-api-key|authentication|not authenticated|permission denied|login required)\b/.test(
-			lower,
-		)
-	) {
+	const authEvidence =
+		/\b(unauthorized|invalid api key|invalid x-api-key|authentication|not authenticated|login required)\b/.test(lower);
+	const apiPermissionDenied =
+		/\bpermission denied\b/.test(lower) &&
+		/\b(anthropic|claude|api key|x-api-key|oauth|token|credential|auth)\b/.test(lower);
+	if (authEvidence || apiPermissionDenied) {
 		return "auth";
 	}
 	if (lower.includes("billing") || /\b(payment|invoice|pay-as-you-go|pay as you go)\b/.test(lower)) return "billing";
@@ -2346,8 +2360,15 @@ export function createClaudeCodeProvider(config?: Partial<ClaudeCodeProviderConf
 						if (halfOpenProbe) resetClaudeCodeCircuit();
 						return result;
 					} catch (error) {
-						if (halfOpenProbe && !(error instanceof ClaudeCodeCircuitOpenError)) {
-							claudeCodeCircuit = null;
+						if (halfOpenProbe && !(error instanceof ClaudeCodeCircuitOpenError) && claudeCodeCircuit) {
+							claudeCodeCircuit.probeInFlight = false;
+							claudeCodeCircuit = {
+								...claudeCodeCircuit,
+								openedAtMs: Date.now(),
+								retryAtMs: Date.now() + Math.max(1000, cfg.cooldownMs),
+								message: error instanceof Error ? error.message.slice(0, 300) : String(error).slice(0, 300),
+								probeInFlight: false,
+							};
 						}
 						throw error;
 					}

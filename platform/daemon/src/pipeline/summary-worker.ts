@@ -36,7 +36,12 @@ import { upsertSessionTranscript } from "../session-transcripts";
 import { upsertThreadHead } from "../thread-heads";
 import { addDreamingTokens } from "./dreaming";
 import { enqueueExtractionJobInTx } from "./extraction-queue";
-import { ClaudeCodeCircuitOpenError, RateLimitExceededError } from "./provider";
+import {
+	ClaudeCodeCircuitOpenError,
+	RateLimitExceededError,
+	SemaphoreTimeoutError,
+	awaitSubprocessWithDeadline,
+} from "./provider";
 import { type SignificanceConfig, assessSignificance } from "./significance-gate";
 import { countTokens } from "./tokenizer";
 
@@ -393,7 +398,35 @@ function substituteCommandTokens(input: string, replacements: Record<string, str
 	return output;
 }
 
-export async function runSummaryCommandProvider(job: SummaryJobRow, cfg: ResolvedMemoryConfig): Promise<void> {
+const emptyByteStream = (): ReadableStream<Uint8Array> =>
+	new ReadableStream<Uint8Array>({
+		start(controller) {
+			controller.close();
+		},
+	});
+
+function terminateSummaryCommand(child: ReturnType<typeof nodeSpawn>, signal: NodeJS.Signals): void {
+	const pid = child.pid;
+	if (process.platform !== "win32" && typeof pid === "number") {
+		try {
+			process.kill(-pid, signal);
+			return;
+		} catch {
+			// Fall through to direct child signaling when the group is already gone.
+		}
+	}
+	try {
+		child.kill(signal);
+	} catch {
+		// Child is already gone.
+	}
+}
+
+export async function runSummaryCommandProvider(
+	job: SummaryJobRow,
+	cfg: ResolvedMemoryConfig,
+	signal?: AbortSignal,
+): Promise<void> {
 	const command = cfg.pipelineV2.extraction.command;
 	if (!command) {
 		throw new Error("pipelineV2.extraction.command is required when extraction.provider is 'command'");
@@ -430,70 +463,48 @@ export async function runSummaryCommandProvider(job: SummaryJobRow, cfg: Resolve
 	}
 
 	try {
-		await new Promise<void>((resolve, reject) => {
-			const child = nodeSpawn(bin, args, {
-				cwd: cwd && cwd.length > 0 ? cwd : undefined,
-				env: {
-					...process.env,
-					...envFromConfig,
-					SIGNET_PATH: AGENTS_DIR,
-				},
-				stdio: ["ignore", "ignore", "ignore"],
-				windowsHide: true,
-			});
-
-			let settled = false;
-			let timedOut = false;
-			let killTimer: ReturnType<typeof setTimeout> | null = null;
-			const clearKillTimer = (): void => {
-				if (killTimer) {
-					clearTimeout(killTimer);
-					killTimer = null;
-				}
-			};
-			const timeoutError = new Error(`summary command timed out after ${timeoutMs}ms`);
-			const timeout = setTimeout(() => {
-				if (settled) return;
-				timedOut = true;
-				child.kill("SIGTERM");
-				killTimer = setTimeout(() => {
-					try {
-						child.kill("SIGKILL");
-					} catch {
-						// Child is already gone.
-					}
-				}, 2000);
-			}, timeoutMs);
-
-			child.on("error", (err) => {
-				clearKillTimer();
-				if (settled) return;
-				settled = true;
-				clearTimeout(timeout);
-				if (timedOut) {
-					reject(timeoutError);
-					return;
-				}
-				reject(err);
-			});
-
-			child.on("close", (code) => {
-				clearKillTimer();
-				if (settled) return;
-				settled = true;
-				clearTimeout(timeout);
-				if (timedOut) {
-					reject(timeoutError);
-					return;
-				}
-				const exitCode = code ?? 1;
-				if (exitCode !== 0) {
-					reject(new Error(`summary command exited with code ${exitCode}`));
-					return;
-				}
-				resolve();
-			});
+		const child = nodeSpawn(bin, args, {
+			cwd: cwd && cwd.length > 0 ? cwd : undefined,
+			env: {
+				...process.env,
+				...envFromConfig,
+				SIGNET_PATH: AGENTS_DIR,
+			},
+			stdio: ["ignore", "ignore", "ignore"],
+			windowsHide: true,
+			detached: process.platform !== "win32",
 		});
+		const exited = new Promise<number>((resolve, reject) => {
+			child.on("error", reject);
+			child.on("close", (code) => resolve(code ?? 1));
+		});
+		try {
+			await awaitSubprocessWithDeadline(
+				{
+					stdout: emptyByteStream(),
+					stderr: emptyByteStream(),
+					exited,
+					kill(signalName?: string) {
+						terminateSummaryCommand(child, signalName === "SIGKILL" ? "SIGKILL" : "SIGTERM");
+					},
+				},
+				timeoutMs,
+				"summary command",
+				timeoutMs,
+				async (proc) => {
+					const exitCode = await proc.exited;
+					if (exitCode !== 0) {
+						throw new Error(`summary command exited with code ${exitCode}`);
+					}
+				},
+				signal,
+			);
+		} catch (error) {
+			if (error instanceof SemaphoreTimeoutError) {
+				throw new Error(`summary command timed out after ${timeoutMs}ms`);
+			}
+			throw error;
+		}
 	} finally {
 		rmSync(tempDir, { recursive: true, force: true });
 	}
@@ -619,7 +630,7 @@ async function processJob(
 		if (commandStageStatus === "none") {
 			markCommandStageRunning(accessor, job.id);
 			try {
-				await runSummaryCommandProvider(job, memoryCfg);
+				await runSummaryCommandProvider(job, memoryCfg, signal);
 			} catch (error) {
 				clearCommandStageRunning(accessor, job.id);
 				throw error;

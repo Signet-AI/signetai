@@ -15,6 +15,7 @@ import {
 	type LlmProviderStreamEvent,
 	SemaphoreTimeoutError,
 	awaitSubprocessWithDeadline,
+	configureLlmConcurrency,
 	createAcpxProvider,
 	createClaudeCodeProvider,
 	createCodexProvider,
@@ -1075,6 +1076,65 @@ describe("createClaudeCodeProvider", () => {
 		expect(status.open).toBe(true);
 		expect(status.reason).toBe("billing");
 		restorePath();
+	});
+
+	it("does not open daemon auth cooldown for generic local permission denied", async () => {
+		const restorePath = withFakeClaudeOnPath();
+		let spawns = 0;
+		try {
+			Bun.spawn = mock(() => {
+				spawns += 1;
+				return {
+					pid: 12349,
+					stdout: streamFromString(""),
+					stderr: streamFromString("bash: /tmp/local-script: Permission denied\n"),
+					exited: Promise.resolve(126),
+					kill() {},
+				};
+			}) as unknown as typeof Bun.spawn;
+
+			const provider = createClaudeCodeProvider({ model: "haiku", cooldownMs: 60_000 });
+			await expect(provider.generate("first", { timeoutMs: 1000 })).rejects.toThrow(/exit 126/i);
+			expect(getClaudeCodeCircuitStatus().open).toBe(false);
+			await expect(provider.generate("second", { timeoutMs: 1000 })).rejects.toThrow(/exit 126/i);
+			expect(spawns).toBe(2);
+		} finally {
+			restorePath();
+		}
+	});
+
+	it("keeps cooldown after a failed half-open probe with unclassified output", async () => {
+		const restorePath = withFakeClaudeOnPath();
+		let spawns = 0;
+		try {
+			Bun.spawn = mock(() => {
+				spawns += 1;
+				return {
+					pid: 12350,
+					stdout: streamFromString(""),
+					stderr:
+						spawns === 1
+							? streamFromString("Claude AI usage limit reached. Try again later.\n")
+							: streamFromString("temporary local failure\n"),
+					exited: Promise.resolve(1),
+					kill() {},
+				};
+			}) as unknown as typeof Bun.spawn;
+
+			const provider = createClaudeCodeProvider({ model: "haiku", cooldownMs: 1 });
+			await expect(provider.generate("first", { timeoutMs: 1000 })).rejects.toThrow(/usage limit/i);
+			await new Promise((resolve) => setTimeout(resolve, 1050));
+			await expect(provider.generate("probe", { timeoutMs: 1000 })).rejects.toThrow(/temporary local failure/i);
+
+			const status = getClaudeCodeCircuitStatus();
+			expect(status.open).toBe(true);
+			expect(status.status).toBe("open");
+			expect(status.reason).toBe("usage_limit");
+			await expect(provider.generate("blocked", { timeoutMs: 1000 })).rejects.toThrow(/cooldown/i);
+			expect(spawns).toBe(2);
+		} finally {
+			restorePath();
+		}
 	});
 });
 
@@ -3077,6 +3137,75 @@ describe("LlmConcurrencySemaphore", () => {
 	it("rejects fractional SIGNET_MAX_LLM_CONCURRENCY", () => {
 		const parsed = Number("1.5");
 		expect(Number.isSafeInteger(parsed)).toBe(false);
+	});
+
+	it("reconfigures the global semaphore without stranding active or queued callers", async () => {
+		configureLlmConcurrency(1);
+		const gate = new AbortController();
+		let running = 0;
+		const waitForStatus = async (expected: { running: number; pending: number; limit: number }): Promise<void> => {
+			for (let i = 0; i < 40; i += 1) {
+				const status = getLlmConcurrencyStatus();
+				if (
+					status.running === expected.running &&
+					status.pending === expected.pending &&
+					status.limit === expected.limit
+				) {
+					return;
+				}
+				await new Promise((resolve) => setTimeout(resolve, 10));
+			}
+			expect(getLlmConcurrencyStatus()).toMatchObject(expected);
+		};
+
+		mockFetch((_url, init) => {
+			running += 1;
+			return new Promise<Response>((resolve, reject) => {
+				let settled = false;
+				const finish = () => {
+					if (settled) return;
+					settled = true;
+					running -= 1;
+					resolve(Response.json({ response: "ok" }));
+				};
+				if (gate.signal.aborted) finish();
+				else gate.signal.addEventListener("abort", finish, { once: true });
+				init?.signal?.addEventListener("abort", () => {
+					if (settled) return;
+					settled = true;
+					running -= 1;
+					reject(new DOMException("aborted", "AbortError"));
+				});
+			});
+		});
+
+		let first: Promise<string> | undefined;
+		let second: Promise<string> | undefined;
+		try {
+			const provider = createOllamaProvider({
+				model: "test-model",
+				baseUrl: "http://localhost:9999",
+				defaultTimeoutMs: 1000,
+			});
+
+			first = provider.generate("first", { timeoutMs: 1000 });
+			await waitForStatus({ running: 1, pending: 0, limit: 1 });
+			second = provider.generate("second", { timeoutMs: 1000 });
+			await waitForStatus({ running: 1, pending: 1, limit: 1 });
+
+			configureLlmConcurrency(2);
+			await waitForStatus({ running: 2, pending: 0, limit: 2 });
+
+			gate.abort();
+			await expect(first).resolves.toBe("ok");
+			await expect(second).resolves.toBe("ok");
+			expect(getLlmConcurrencyStatus()).toMatchObject({ running: 0, pending: 0, limit: 2 });
+		} finally {
+			gate.abort();
+			await Promise.allSettled([first, second].filter((promise): promise is Promise<string> => promise !== undefined));
+			restoreFetch();
+			configureLlmConcurrency(2);
+		}
 	});
 });
 
