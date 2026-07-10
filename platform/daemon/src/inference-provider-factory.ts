@@ -1,4 +1,4 @@
-import type { RoutingConfig } from "@signet/core";
+import type { PipelineClaudeCodeConfig, RoutingConfig } from "@signet/core";
 import {
 	type AcpxHooksMode,
 	type StreamCapableLlmProvider,
@@ -24,6 +24,7 @@ export interface CreateRoutingProviderOptions {
 	readonly targetId: string;
 	readonly modelId: string;
 	readonly acpxHooks?: AcpxHooksMode;
+	readonly claudeCode?: PipelineClaudeCodeConfig;
 	resolveCredential(credentialRef: string | undefined): Promise<string | undefined>;
 }
 
@@ -73,7 +74,7 @@ export async function createRoutingProvider(opts: CreateRoutingProviderOptions):
 				baseUrl: target.endpoint ?? DEFAULT_OLLAMA_BASE_URL,
 			});
 		case "claude-code":
-			return createClaudeCodeProvider({ model: model.model });
+			return createClaudeCodeProvider({ model: model.model, ...opts.claudeCode });
 		case "codex":
 			return createCodexProvider({ model: model.model });
 		case "opencode":

@@ -822,6 +822,47 @@ disabled. Set at least one sub-field to opt in.
 Rate-limited synthesis jobs that fail are sent to dead-letter without
 retry. See the extraction `rateLimit` docs above for the full warning.
 
+### Claude Code background billing (`claudeCode`)
+
+Applies whenever legacy pipeline extraction, synthesis, or an explicit
+inference route uses the `claude-code` provider.
+
+| Field | Default | Range | Description |
+|-------|---------|-------|-------------|
+| `billingMode` | `"subscription"` | — | `"subscription"` strips ambient `ANTHROPIC_API_KEY`/paid Console credentials from daemon-spawned `claude -p` calls so Claude Code uses the logged-in subscription OAuth account. `"api-key"` explicitly allows API-key billing. |
+| `maxBudgetUsd` | unset | 0.01-1000 | Optional per-invocation spend cap passed to Claude Code print mode as `--max-budget-usd`. Omitted by default because Claude Code documents no default limit for this flag and forcing one could change subscription behavior. |
+| `cooldownMs` | `300000` | 1000-3600000 ms | Provider-local cooldown opened after Claude Code reports quota, usage-limit, credit, billing, or auth failures. Calls during cooldown fail before spawning `claude`. |
+
+```yaml
+memory:
+  pipelineV2:
+    claudeCode:
+      billingMode: subscription
+      cooldownMs: 300000
+```
+
+Only opt into API-key billing when you intentionally want background pipeline
+jobs to use Claude API pay-as-you-go credits:
+
+```yaml
+memory:
+  pipelineV2:
+    claudeCode:
+      billingMode: api-key
+      maxBudgetUsd: 0.25
+```
+
+Anthropic's current July 2026 Claude Code docs say `--max-budget-usd` is a
+print-mode-only API-call budget flag with no default limit:
+<https://code.claude.com/docs/en/cli-reference>. Their support docs also state
+that `ANTHROPIC_API_KEY` takes priority over Claude subscriptions and causes
+API usage charges:
+<https://support.claude.com/en/articles/12304248-manage-api-key-environment-variables-in-claude-code>.
+As of the June 15, 2026 update, the announced separate Claude Agent SDK /
+`claude -p` monthly credit change is paused; `claude -p` still draws from
+subscription usage limits and the separate credit is not available:
+<https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan>.
+
 
 ### Worker (`worker`)
 

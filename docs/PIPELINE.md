@@ -1081,6 +1081,11 @@ synthesis:
   # when omitted entirely, synthesis falls back to extraction provider/model
   # explicit top-level inference.workloads bindings override legacy provider selection
 
+claudeCode:
+  billingMode: subscription      # "subscription" (default) or "api-key"
+  # maxBudgetUsd: 0.25           # optional; maps to claude -p --max-budget-usd
+  cooldownMs: 300000             # ms, range 1000–3600000
+
 worker:
   pollMs: 2000                   # ms, range 100–60000
   maxRetries: 3                  # range 1–10

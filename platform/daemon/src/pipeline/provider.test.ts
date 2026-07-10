@@ -24,7 +24,9 @@ import {
 	createOpenAiCompatibleProvider,
 	createOpenCodeProvider,
 	createOpenRouterProvider,
+	getClaudeCodeCircuitStatus,
 	getLlmConcurrencyStatus,
+	resetClaudeCodeCircuit,
 	resolveDefaultOllamaFallbackMaxContextTokens,
 	resolveDefaultOllamaFallbackModel,
 } from "./provider";
@@ -35,6 +37,7 @@ import {
 
 const originalFetch = globalThis.fetch;
 const originalSpawn = Bun.spawn;
+const originalWhich = Bun.which;
 
 function mockFetch(handler: (url: string, init?: RequestInit) => Response | Promise<Response>): void {
 	globalThis.fetch = mock(handler) as unknown as typeof fetch;
@@ -46,6 +49,7 @@ function restoreFetch(): void {
 
 function restoreSpawn(): void {
 	Bun.spawn = originalSpawn;
+	Bun.which = originalWhich;
 }
 
 function streamFromString(value: string): ReadableStream<Uint8Array> {
@@ -918,6 +922,31 @@ describe("createOpenAiCompatibleProvider", () => {
 // ---------------------------------------------------------------------------
 
 describe("createClaudeCodeProvider", () => {
+	function withFakeClaudeOnPath(): () => void {
+		const root = join(tmpdir(), `signet-claude-code-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		const binDir = join(root, "bin");
+		mkdirSync(binDir, { recursive: true });
+		const claudeBin = join(binDir, "claude");
+		writeFileSync(claudeBin, "#!/usr/bin/env sh\n");
+		chmodSync(claudeBin, 0o755);
+		const previousPath = process.env.PATH;
+		process.env.PATH = previousPath ? `${binDir}${delimiter}${previousPath}` : binDir;
+		Bun.which = mock((bin: string) =>
+			bin === "claude" ? claudeBin : originalWhich.call(Bun, bin),
+		) as typeof Bun.which;
+		return () => {
+			Bun.which = originalWhich;
+			if (previousPath === undefined) Reflect.deleteProperty(process.env, "PATH");
+			else process.env.PATH = previousPath;
+			rmSync(root, { recursive: true, force: true });
+		};
+	}
+
+	afterEach(() => {
+		restoreSpawn();
+		resetClaudeCodeCircuit();
+	});
+
 	it("returns a provider with the correct name", () => {
 		const provider = createClaudeCodeProvider({ model: "haiku" });
 		expect(provider.name).toBe("claude-code:haiku");
@@ -933,6 +962,119 @@ describe("createClaudeCodeProvider", () => {
 		const result = await provider.available();
 		// This will be true in dev environments where claude is installed
 		expect(typeof result).toBe("boolean");
+	});
+
+	it("does not pass ambient Anthropic API credentials to background print-mode calls by default", async () => {
+		const previous = {
+			ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
+			ANTHROPIC_AUTH_TOKEN: process.env.ANTHROPIC_AUTH_TOKEN,
+			CLAUDE_CODE_OAUTH_TOKEN: process.env.CLAUDE_CODE_OAUTH_TOKEN,
+		};
+		process.env.ANTHROPIC_API_KEY = "sk-ant-secret";
+		process.env.ANTHROPIC_AUTH_TOKEN = "paid-console-token";
+		process.env.CLAUDE_CODE_OAUTH_TOKEN = "subscription-token";
+		const restorePath = withFakeClaudeOnPath();
+		try {
+			Bun.spawn = mock((args: string[], opts?: { env?: Record<string, string | undefined> }) => {
+				expect(args).toContain("-p");
+				expect(opts?.env?.ANTHROPIC_API_KEY).toBeUndefined();
+				expect(opts?.env?.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
+				expect(opts?.env?.CLAUDE_CODE_OAUTH_TOKEN).toBe("subscription-token");
+				return {
+					pid: 12345,
+					stdout: streamFromString("ok\n"),
+					stderr: streamFromString(""),
+					exited: Promise.resolve(0),
+					kill() {},
+				};
+			}) as unknown as typeof Bun.spawn;
+
+			const provider = createClaudeCodeProvider({ model: "haiku" });
+			await expect(provider.generate("hello", { timeoutMs: 1000 })).resolves.toBe("ok");
+		} finally {
+			restorePath();
+			for (const [key, value] of Object.entries(previous)) {
+				if (value === undefined) Reflect.deleteProperty(process.env, key);
+				else process.env[key] = value;
+			}
+		}
+	});
+
+	it("passes Anthropic API credentials only when API-key billing is explicit and maps maxBudgetUsd", async () => {
+		process.env.ANTHROPIC_API_KEY = "sk-ant-explicit";
+		const restorePath = withFakeClaudeOnPath();
+		try {
+			Bun.spawn = mock((args: string[], opts?: { env?: Record<string, string | undefined> }) => {
+				expect(args).toContain("--max-budget-usd");
+				expect(args[args.indexOf("--max-budget-usd") + 1]).toBe("0.25");
+				expect(opts?.env?.ANTHROPIC_API_KEY).toBe("sk-ant-explicit");
+				return {
+					pid: 12346,
+					stdout: streamFromString("ok\n"),
+					stderr: streamFromString(""),
+					exited: Promise.resolve(0),
+					kill() {},
+				};
+			}) as unknown as typeof Bun.spawn;
+
+			const provider = createClaudeCodeProvider({
+				model: "haiku",
+				billingMode: "api-key",
+				maxBudgetUsd: 0.25,
+			});
+			await expect(provider.generate("hello", { timeoutMs: 1000 })).resolves.toBe("ok");
+		} finally {
+			restorePath();
+			Reflect.deleteProperty(process.env, "ANTHROPIC_API_KEY");
+		}
+	});
+
+	it("opens a provider-local cooldown on classified stderr failures and rejects without respawn", async () => {
+		const restorePath = withFakeClaudeOnPath();
+		let spawns = 0;
+		Bun.spawn = mock(() => {
+			spawns += 1;
+			return {
+				pid: 12347,
+				stdout: streamFromString(""),
+				stderr: streamFromString("Claude AI usage limit reached. Try again later.\n"),
+				exited: Promise.resolve(1),
+				kill() {},
+			};
+		}) as unknown as typeof Bun.spawn;
+
+		const provider = createClaudeCodeProvider({
+			model: "haiku",
+			cooldownMs: 60_000,
+		});
+		await expect(provider.generate("first", { timeoutMs: 1000 })).rejects.toThrow(/usage limit/i);
+		const status = getClaudeCodeCircuitStatus();
+		expect(status.open).toBe(true);
+		expect(status.reason).toBe("usage_limit");
+
+		await expect(provider.generate("second", { timeoutMs: 1000 })).rejects.toThrow(/cooldown/i);
+		expect(spawns).toBe(1);
+		restorePath();
+	});
+
+	it("opens the cooldown from JSON error subtype output", async () => {
+		const restorePath = withFakeClaudeOnPath();
+		Bun.spawn = mock(() => ({
+			pid: 12348,
+			stdout: streamFromString(
+				JSON.stringify({ type: "error", subtype: "billing_error", message: "credits exhausted" }),
+			),
+			stderr: streamFromString(""),
+			exited: Promise.resolve(0),
+			kill() {},
+		})) as unknown as typeof Bun.spawn;
+
+		const provider = createClaudeCodeProvider({ model: "haiku", cooldownMs: 60_000 });
+		await expect(provider.generateWithUsage?.("first", { timeoutMs: 1000 })).rejects.toThrow(/billing/i);
+		const status = getClaudeCodeCircuitStatus();
+		expect(status.open).toBe(true);
+		expect(status.reason).toBe("billing");
+		restorePath();
 	});
 });
 

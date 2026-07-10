@@ -197,6 +197,7 @@ fn normalize_manifest(
     let raw_pipeline = raw_child(raw, "memory").and_then(|value| raw_child(value, "pipelineV2"));
     normalize_pipeline_extraction(pipeline, raw_pipeline)?;
     normalize_pipeline_worker(pipeline, raw_pipeline);
+    normalize_pipeline_claude_code(pipeline, raw_pipeline);
     normalize_pipeline_reranker(pipeline, raw_pipeline);
     normalize_pipeline_synthesis(pipeline, raw_pipeline)?;
     normalize_pipeline_structural(pipeline, raw_pipeline);
@@ -309,6 +310,24 @@ fn normalize_pipeline_worker(pipeline: &mut PipelineV2Config, raw: Option<&serde
         .and_then(|value| raw_u64(value, "maxLlmConcurrency"));
     if let Some(value) = max_llm_concurrency {
         pipeline.worker.max_llm_concurrency = value.clamp(1, 16);
+    }
+}
+
+fn normalize_pipeline_claude_code(pipeline: &mut PipelineV2Config, raw: Option<&serde_yml::Value>) {
+    let Some(claude_code) = raw.and_then(|value| raw_child(value, "claudeCode")) else {
+        return;
+    };
+
+    if let Some(value) = raw_string(claude_code, "billingMode") {
+        if value == "api-key" || value == "subscription" {
+            pipeline.claude_code.billing_mode = value.to_string();
+        }
+    }
+    if let Some(value) = raw_f64(claude_code, "maxBudgetUsd") {
+        pipeline.claude_code.max_budget_usd = Some(value.clamp(0.01, 1000.0));
+    }
+    if let Some(value) = raw_u64(claude_code, "cooldownMs") {
+        pipeline.claude_code.cooldown_ms = value.clamp(1_000, 3_600_000);
     }
 }
 
@@ -720,6 +739,30 @@ memory:
         assert_eq!(pipeline.synthesis.provider, "ollama");
         assert_eq!(pipeline.synthesis.model, "qwen3:4b");
         assert_eq!(pipeline.synthesis.timeout, pipeline.extraction.timeout);
+    }
+
+    #[test]
+    fn claude_code_config_parses_budget_and_billing_mode() {
+        let manifest = parse_manifest(
+            r#"
+memory:
+  pipelineV2:
+    claudeCode:
+      billingMode: api-key
+      maxBudgetUsd: 0.5
+      cooldownMs: 120000
+"#,
+        )
+        .expect("parse manifest");
+
+        let pipeline = manifest
+            .memory
+            .and_then(|memory| memory.pipeline_v2)
+            .expect("pipeline config");
+
+        assert_eq!(pipeline.claude_code.billing_mode, "api-key");
+        assert_eq!(pipeline.claude_code.max_budget_usd, Some(0.5));
+        assert_eq!(pipeline.claude_code.cooldown_ms, 120_000);
     }
 
     #[test]
@@ -1448,6 +1491,7 @@ pub struct PipelineV2Config {
     pub telemetry_enabled: bool,
     pub extraction: ExtractionConfig,
     pub worker: WorkerConfig,
+    pub claude_code: ClaudeCodeConfig,
     pub graph: GraphConfig,
     pub traversal: Option<TraversalConfig>,
     pub reranker: RerankerConfig,
@@ -1491,6 +1535,7 @@ impl Default for PipelineV2Config {
             telemetry_enabled: false,
             extraction: ExtractionConfig::default(),
             worker: WorkerConfig::default(),
+            claude_code: ClaudeCodeConfig::default(),
             graph: GraphConfig::default(),
             traversal: Some(TraversalConfig::default()),
             reranker: RerankerConfig::default(),
@@ -1510,6 +1555,24 @@ impl Default for PipelineV2Config {
             predictor: None,
             predictor_pipeline: PredictorPipelineConfig::default(), // legacy manifest compatibility only; hard-deprecated in 0.112.0
             model_registry: ModelRegistryConfig::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ClaudeCodeConfig {
+    pub billing_mode: String,
+    pub max_budget_usd: Option<f64>,
+    pub cooldown_ms: u64,
+}
+
+impl Default for ClaudeCodeConfig {
+    fn default() -> Self {
+        Self {
+            billing_mode: "subscription".to_string(),
+            max_budget_usd: None,
+            cooldown_ms: 300_000,
         }
     }
 }

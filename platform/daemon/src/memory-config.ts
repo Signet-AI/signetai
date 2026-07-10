@@ -97,6 +97,10 @@ export const DEFAULT_PIPELINE_V2: ResolvedPipelineV2Config = {
 		maxLlmConcurrency: 2,
 		threadedExtraction: true,
 	},
+	claudeCode: {
+		billingMode: "subscription",
+		cooldownMs: 300000,
+	},
 	graph: {
 		enabled: true,
 		extractionWritesEnabled: true,
@@ -363,6 +367,18 @@ function resolveMaxLlmConcurrency(rawValue: unknown, defaultValue: number): numb
 	return clampPositive(candidate, 1, 16, defaultValue);
 }
 
+function parseClaudeCodeConfig(raw: unknown, fallback: PipelineV2Config["claudeCode"]): PipelineV2Config["claudeCode"] {
+	if (!isRecord(raw)) return fallback;
+	const billingMode = raw.billingMode === "api-key" ? "api-key" : fallback.billingMode;
+	const maxBudgetUsd = parseOptionalPositive(raw.maxBudgetUsd, 0.01, 1000);
+	const cooldownMs = clampPositive(raw.cooldownMs, 1000, 3600000, fallback.cooldownMs);
+	return {
+		billingMode,
+		...(maxBudgetUsd !== undefined ? { maxBudgetUsd } : {}),
+		cooldownMs,
+	};
+}
+
 function parseCommandArgv(raw: string): { bin: string; args: string[] } | null {
 	const tokens = raw.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g);
 	if (!tokens || tokens.length === 0) return null;
@@ -434,6 +450,7 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): ResolvedPipel
 	const extractionRaw = raw.extraction as Record<string, unknown> | undefined;
 	const escalationRaw = extractionRaw?.escalation as Record<string, unknown> | undefined;
 	const workerRaw = raw.worker as Record<string, unknown> | undefined;
+	const claudeCodeRaw = raw.claudeCode as Record<string, unknown> | undefined;
 	const graphRaw = raw.graph as Record<string, unknown> | undefined;
 	const traversalRaw = raw.traversal as Record<string, unknown> | undefined;
 	const rerankerRaw = raw.reranker as Record<string, unknown> | undefined;
@@ -690,6 +707,7 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): ResolvedPipel
 			maxLlmConcurrency: resolveMaxLlmConcurrency(workerRaw?.maxLlmConcurrency, d.worker.maxLlmConcurrency),
 			threadedExtraction: workerRaw?.threadedExtraction !== false,
 		},
+		claudeCode: parseClaudeCodeConfig(claudeCodeRaw, d.claudeCode),
 
 		graph: {
 			enabled: resolveBool(graphRaw?.enabled, raw.graphEnabled, d.graph.enabled),

@@ -52,6 +52,7 @@ export type {
 	PipelineEscalationConfig,
 	PipelineExtractionConfig,
 	PipelineWorkerConfig,
+	PipelineClaudeCodeConfig,
 	PipelineGraphConfig,
 	PipelineTraversalConfig,
 	PipelineRerankerConfig,

@@ -488,6 +488,7 @@ export class InferenceRouter {
 				targetId,
 				modelId,
 				acpxHooks,
+				claudeCode: loadMemoryConfig(this.agentsDir).pipelineV2.claudeCode,
 				resolveCredential: (credentialRef) => this.resolveCredential(credentialRef),
 			});
 		})();

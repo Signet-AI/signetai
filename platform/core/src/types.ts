@@ -274,6 +274,12 @@ export interface PipelineWorkerConfig {
 	readonly threadedExtraction: boolean;
 }
 
+export interface PipelineClaudeCodeConfig {
+	readonly billingMode: "subscription" | "api-key";
+	readonly maxBudgetUsd?: number;
+	readonly cooldownMs: number;
+}
+
 export interface PipelineGraphConfig {
 	readonly enabled: boolean;
 	readonly extractionWritesEnabled?: boolean;
@@ -385,6 +391,7 @@ export interface PipelineV2Config {
 	// Grouped sub-objects
 	readonly extraction: PipelineExtractionConfig;
 	readonly worker: PipelineWorkerConfig;
+	readonly claudeCode: PipelineClaudeCodeConfig;
 	readonly graph: PipelineGraphConfig;
 	readonly traversal?: PipelineTraversalConfig;
 	readonly reranker: PipelineRerankerConfig;

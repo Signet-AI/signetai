@@ -702,6 +702,32 @@ describe("loadPipelineConfig", () => {
 		expect(result.synthesis.timeout).toBe(180000);
 	});
 
+	it("loads explicit Claude Code API-key billing and budget controls", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					claudeCode: {
+						billingMode: "api-key",
+						maxBudgetUsd: 0.5,
+						cooldownMs: 120000,
+					},
+				},
+			},
+		});
+
+		expect(result.claudeCode.billingMode).toBe("api-key");
+		expect(result.claudeCode.maxBudgetUsd).toBe(0.5);
+		expect(result.claudeCode.cooldownMs).toBe(120000);
+	});
+
+	it("defaults Claude Code background billing to subscription OAuth without a spend cap", () => {
+		const result = loadPipelineConfig({});
+
+		expect(result.claudeCode.billingMode).toBe("subscription");
+		expect(result.claudeCode.maxBudgetUsd).toBeUndefined();
+		expect(result.claudeCode.cooldownMs).toBeGreaterThan(0);
+	});
+
 	it("flat model without flat provider is honoured (not silently discarded)", () => {
 		const result = loadPipelineConfig({
 			memory: {

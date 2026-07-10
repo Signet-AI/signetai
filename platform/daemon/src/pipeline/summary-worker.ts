@@ -36,7 +36,7 @@ import { upsertSessionTranscript } from "../session-transcripts";
 import { upsertThreadHead } from "../thread-heads";
 import { addDreamingTokens } from "./dreaming";
 import { enqueueExtractionJobInTx } from "./extraction-queue";
-import { RateLimitExceededError } from "./provider";
+import { ClaudeCodeCircuitOpenError, RateLimitExceededError } from "./provider";
 import { type SignificanceConfig, assessSignificance } from "./significance-gate";
 import { countTokens } from "./tokenizer";
 
@@ -1644,7 +1644,10 @@ export function startSummaryWorker(accessor: DbAccessor, options: SummaryWorkerO
 		} catch (e) {
 			const terminal = isTerminalSummaryJobError(e instanceof Error ? e : String(e));
 			const errorMessage = e instanceof Error ? e.message : String(e);
-			if (stopped && leasedJob && /aborted|cancelled|canceled/i.test(errorMessage)) {
+			if (
+				leasedJob &&
+				(e instanceof ClaudeCodeCircuitOpenError || (stopped && /aborted|cancelled|canceled/i.test(errorMessage)))
+			) {
 				restoreUnprocessedSummaryLease(accessor, leasedJob);
 				return;
 			}

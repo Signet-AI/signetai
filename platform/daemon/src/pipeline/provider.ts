@@ -2063,15 +2063,28 @@ export function createLlamaCppProvider(config?: Partial<LlamaCppProviderConfig>)
 export interface ClaudeCodeProviderConfig {
 	readonly model: string;
 	readonly defaultTimeoutMs: number;
+	readonly billingMode: "subscription" | "api-key";
+	readonly maxBudgetUsd?: number;
+	readonly cooldownMs: number;
 }
 
 const DEFAULT_CLAUDE_CODE_CONFIG: ClaudeCodeProviderConfig = {
 	model: "haiku",
 	defaultTimeoutMs: 60000,
+	billingMode: "subscription",
+	cooldownMs: 300000,
 };
 
 interface ClaudeCodeJsonResponse {
 	readonly result?: string;
+	readonly type?: string;
+	readonly subtype?: string;
+	readonly message?: string;
+	readonly error?: {
+		readonly type?: string;
+		readonly subtype?: string;
+		readonly message?: string;
+	};
 	readonly usage?: {
 		readonly input_tokens?: number;
 		readonly output_tokens?: number;
@@ -2081,8 +2094,169 @@ interface ClaudeCodeJsonResponse {
 	readonly cost_usd?: number;
 }
 
+export type ClaudeCodeCircuitReason = "quota" | "usage_limit" | "credit" | "billing" | "auth";
+
+export class ClaudeCodeCircuitOpenError extends Error {
+	constructor(
+		message: string,
+		public readonly reason: ClaudeCodeCircuitReason,
+		public readonly retryAt: string,
+	) {
+		super(message);
+		this.name = "ClaudeCodeCircuitOpenError";
+	}
+}
+
+interface ClaudeCodeCircuitState {
+	readonly reason: ClaudeCodeCircuitReason;
+	readonly retryAtMs: number;
+	readonly openedAtMs: number;
+	readonly message: string;
+	probeInFlight: boolean;
+}
+
+let claudeCodeCircuit: ClaudeCodeCircuitState | null = null;
+let lastClaudeCodeRuntimeConfig: Pick<ClaudeCodeProviderConfig, "billingMode" | "maxBudgetUsd" | "cooldownMs"> = {
+	billingMode: DEFAULT_CLAUDE_CODE_CONFIG.billingMode,
+	cooldownMs: DEFAULT_CLAUDE_CODE_CONFIG.cooldownMs,
+};
+
+function classifyClaudeCodeFailure(text: string): ClaudeCodeCircuitReason | null {
+	const lower = text.toLowerCase();
+	if (
+		/\b(unauthorized|invalid api key|invalid x-api-key|authentication|not authenticated|permission denied|login required)\b/.test(
+			lower,
+		)
+	) {
+		return "auth";
+	}
+	if (lower.includes("billing") || /\b(payment|invoice|pay-as-you-go|pay as you go)\b/.test(lower)) return "billing";
+	if (lower.includes("credit") || /\b(prepaid|balance|insufficient funds)\b/.test(lower)) return "credit";
+	if (/\b(usage limit|usage limits|rate limit|quota exceeded|limit reached|capacity exceeded)\b/.test(lower)) {
+		return lower.includes("quota") ? "quota" : "usage_limit";
+	}
+	if (/\bquota\b/.test(lower)) return "quota";
+	return null;
+}
+
+function classifyClaudeCodeJson(raw: string): ClaudeCodeCircuitReason | null {
+	try {
+		const parsed = JSON.parse(raw) as ClaudeCodeJsonResponse;
+		const fields = [
+			parsed.type,
+			parsed.subtype,
+			parsed.message,
+			parsed.error?.type,
+			parsed.error?.subtype,
+			parsed.error?.message,
+		]
+			.filter((value): value is string => typeof value === "string")
+			.join(" ");
+		return classifyClaudeCodeFailure(fields);
+	} catch {
+		return null;
+	}
+}
+
+function openClaudeCodeCircuit(
+	reason: ClaudeCodeCircuitReason,
+	message: string,
+	cooldownMs: number,
+): ClaudeCodeCircuitOpenError {
+	const now = Date.now();
+	const retryAtMs = now + Math.max(1000, cooldownMs);
+	claudeCodeCircuit = {
+		reason,
+		message: message.slice(0, 300),
+		openedAtMs: now,
+		retryAtMs,
+		probeInFlight: false,
+	};
+	return new ClaudeCodeCircuitOpenError(
+		`claude-code ${reason} failure; cooldown active until ${new Date(retryAtMs).toISOString()}: ${message.slice(0, 300)}`,
+		reason,
+		new Date(retryAtMs).toISOString(),
+	);
+}
+
+function enterClaudeCodeCircuitProbe(): boolean {
+	const state = claudeCodeCircuit;
+	if (!state) return false;
+	const now = Date.now();
+	if (now < state.retryAtMs) {
+		throw new ClaudeCodeCircuitOpenError(
+			`claude-code cooldown active until ${new Date(state.retryAtMs).toISOString()}: ${state.message}`,
+			state.reason,
+			new Date(state.retryAtMs).toISOString(),
+		);
+	}
+	if (state.probeInFlight) {
+		throw new ClaudeCodeCircuitOpenError(
+			`claude-code cooldown half-open probe already in flight until ${new Date(state.retryAtMs).toISOString()}`,
+			state.reason,
+			new Date(state.retryAtMs).toISOString(),
+		);
+	}
+	state.probeInFlight = true;
+	return true;
+}
+
+export function resetClaudeCodeCircuit(): void {
+	claudeCodeCircuit = null;
+}
+
+export function getClaudeCodeCircuitStatus(): {
+	readonly open: boolean;
+	readonly reason: ClaudeCodeCircuitReason | null;
+	readonly retryAt: string | null;
+	readonly halfOpen: boolean;
+	readonly billingMode: ClaudeCodeProviderConfig["billingMode"];
+	readonly maxBudgetUsd: number | null;
+	readonly cooldownMs: number;
+} {
+	if (!claudeCodeCircuit) {
+		return {
+			open: false,
+			reason: null,
+			retryAt: null,
+			halfOpen: false,
+			billingMode: lastClaudeCodeRuntimeConfig.billingMode,
+			maxBudgetUsd: lastClaudeCodeRuntimeConfig.maxBudgetUsd ?? null,
+			cooldownMs: lastClaudeCodeRuntimeConfig.cooldownMs,
+		};
+	}
+	return {
+		open: Date.now() < claudeCodeCircuit.retryAtMs || claudeCodeCircuit.probeInFlight,
+		reason: claudeCodeCircuit.reason,
+		retryAt: new Date(claudeCodeCircuit.retryAtMs).toISOString(),
+		halfOpen: Date.now() >= claudeCodeCircuit.retryAtMs,
+		billingMode: lastClaudeCodeRuntimeConfig.billingMode,
+		maxBudgetUsd: lastClaudeCodeRuntimeConfig.maxBudgetUsd ?? null,
+		cooldownMs: lastClaudeCodeRuntimeConfig.cooldownMs,
+	};
+}
+
+function buildClaudeCodeEnv(billingMode: ClaudeCodeProviderConfig["billingMode"]): Record<string, string> {
+	const cleanEnv: Record<string, string> = {};
+	for (const [k, v] of Object.entries(process.env)) {
+		if (v === undefined) continue;
+		if (k === "CLAUDECODE" || k.startsWith("CLAUDE_CODE_") || k === "SIGNET_NO_HOOKS") continue;
+		if (billingMode !== "api-key" && (k === "ANTHROPIC_API_KEY" || k === "ANTHROPIC_AUTH_TOKEN")) continue;
+		cleanEnv[k] = v;
+	}
+	if (process.env.CLAUDE_CODE_OAUTH_TOKEN !== undefined) {
+		cleanEnv.CLAUDE_CODE_OAUTH_TOKEN = process.env.CLAUDE_CODE_OAUTH_TOKEN;
+	}
+	return { ...cleanEnv, NO_COLOR: "1", SIGNET_NO_HOOKS: "1" };
+}
+
 export function createClaudeCodeProvider(config?: Partial<ClaudeCodeProviderConfig>): LlmProvider {
 	const cfg = { ...DEFAULT_CLAUDE_CODE_CONFIG, ...config };
+	lastClaudeCodeRuntimeConfig = {
+		billingMode: cfg.billingMode,
+		...(cfg.maxBudgetUsd !== undefined ? { maxBudgetUsd: cfg.maxBudgetUsd } : {}),
+		cooldownMs: cfg.cooldownMs,
+	};
 
 	async function callClaude(
 		prompt: string,
@@ -2091,67 +2265,92 @@ export function createClaudeCodeProvider(config?: Partial<ClaudeCodeProviderConf
 	): Promise<string> {
 		const timeoutMs = opts?.timeoutMs ?? cfg.defaultTimeoutMs;
 		const deadline = performance.now() + timeoutMs;
+		const halfOpenProbe = enterClaudeCodeCircuitProbe();
 
-		return withLlmConcurrency(
-			async () => {
-				const remainingMs = deadline - performance.now();
-				if (remainingMs <= 0) {
-					throw new Error(`claude-code timeout after ${timeoutMs}ms (deadline exceeded waiting for semaphore)`);
-				}
+		try {
+			return await withLlmConcurrency(
+				async () => {
+					const remainingMs = deadline - performance.now();
+					if (remainingMs <= 0) {
+						throw new Error(`claude-code timeout after ${timeoutMs}ms (deadline exceeded waiting for semaphore)`);
+					}
 
-				const args = ["-p", prompt, "--model", cfg.model, "--no-session-persistence", "--output-format", outputFormat];
+					const args = [
+						"-p",
+						prompt,
+						"--model",
+						cfg.model,
+						"--no-session-persistence",
+						"--output-format",
+						outputFormat,
+					];
+					if (cfg.maxBudgetUsd !== undefined) {
+						args.push("--max-budget-usd", String(cfg.maxBudgetUsd));
+					}
 
-				// Strip ALL Claude Code env vars to prevent nested-session
-				// detection when the daemon is launched from a CC session.
-				// Also inject SIGNET_NO_HOOKS to prevent recursive hook loops.
-				const cleanEnv: Record<string, string> = {};
-				for (const [k, v] of Object.entries(process.env)) {
-					if (v === undefined) continue;
-					if (k === "CLAUDECODE" || k.startsWith("CLAUDE_CODE_") || k === "SIGNET_NO_HOOKS") continue;
-					cleanEnv[k] = v;
-				}
+					logger.debug("pipeline", "Spawning claude-code subprocess", {
+						model: cfg.model,
+						outputFormat,
+						promptLen: prompt.length,
+						timeoutMs,
+						billingMode: cfg.billingMode,
+						maxBudgetUsd: cfg.maxBudgetUsd ?? null,
+					});
 
-				logger.debug("pipeline", "Spawning claude-code subprocess", {
-					model: cfg.model,
-					outputFormat,
-					promptLen: prompt.length,
-					timeoutMs,
-				});
+					const proc = spawnHidden(["claude", ...args], {
+						env: buildClaudeCodeEnv(cfg.billingMode),
+					});
 
-				const proc = spawnHidden(["claude", ...args], {
-					env: { ...cleanEnv, NO_COLOR: "1", SIGNET_NO_HOOKS: "1" },
-				});
+					try {
+						const result = await awaitSubprocessWithDeadline(
+							proc,
+							remainingMs,
+							"claude-code",
+							timeoutMs,
+							async (p) => {
+								const [stdout, stderr, exitCode] = await Promise.all([
+									new Response(p.stdout).text().catch(() => ""),
+									new Response(p.stderr).text().catch(() => ""),
+									p.exited.catch(() => -1),
+								]);
 
-				return awaitSubprocessWithDeadline(
-					proc,
-					remainingMs,
-					"claude-code",
-					timeoutMs,
-					async (p) => {
-						const [stdout, stderr, exitCode] = await Promise.all([
-							new Response(p.stdout).text().catch(() => ""),
-							new Response(p.stderr).text().catch(() => ""),
-							p.exited.catch(() => -1),
-						]);
+								if (exitCode !== 0) {
+									const detail = stderr.trim() || stdout.trim();
+									const reason = classifyClaudeCodeFailure(detail) ?? classifyClaudeCodeJson(detail);
+									if (reason) throw openClaudeCodeCircuit(reason, detail, cfg.cooldownMs);
+									throw new Error(`claude-code exit ${exitCode}: ${stderr.slice(0, 300)}`);
+								}
 
-						if (exitCode !== 0) {
-							throw new Error(`claude-code exit ${exitCode}: ${stderr.slice(0, 300)}`);
-						}
+								const result = stdout.trim();
+								if (result.length === 0) {
+									throw new Error("claude-code returned empty output");
+								}
+								const reason = classifyClaudeCodeJson(result);
+								if (reason) throw openClaudeCodeCircuit(reason, result, cfg.cooldownMs);
 
-						const result = stdout.trim();
-						if (result.length === 0) {
-							throw new Error("claude-code returned empty output");
-						}
-
+								return result;
+							},
+							generateSignal(opts),
+						);
+						if (halfOpenProbe) resetClaudeCodeCircuit();
 						return result;
-					},
-					generateSignal(opts),
-				);
-			},
-			timeoutMs,
-			"claude-code",
-			generateSignal(opts),
-		);
+					} catch (error) {
+						if (halfOpenProbe && !(error instanceof ClaudeCodeCircuitOpenError)) {
+							claudeCodeCircuit = null;
+						}
+						throw error;
+					}
+				},
+				timeoutMs,
+				"claude-code",
+				generateSignal(opts),
+			);
+		} catch (error) {
+			if (halfOpenProbe && claudeCodeCircuit?.probeInFlight) {
+				claudeCodeCircuit.probeInFlight = false;
+			}
+			throw error;
+		}
 	}
 
 	return {
@@ -2650,10 +2849,7 @@ function parseCodexJsonl(raw: string): LlmGenerateResult {
 export function createCodexProvider(config?: Partial<CodexProviderConfig>): LlmProvider {
 	const cfg = { ...DEFAULT_CODEX_CONFIG, ...config };
 
-	async function callCodex(
-		prompt: string,
-		opts?: LlmProviderCallOptions,
-	): Promise<LlmGenerateResult> {
+	async function callCodex(prompt: string, opts?: LlmProviderCallOptions): Promise<LlmGenerateResult> {
 		const timeoutMs = opts?.timeoutMs ?? cfg.defaultTimeoutMs;
 		const deadline = performance.now() + timeoutMs;
 		if (!hasCodexCredential(process.env)) {

@@ -35,7 +35,7 @@ import {
 } from "./summary-worker";
 import { type SynthesisWorkerHandle, startSynthesisWorker } from "./synthesis-worker";
 import { type WorkerHandle, type WorkerProgressStats, type WorkerStats, startWorker } from "./worker";
-import { configureLlmConcurrency, getLlmConcurrencyStatus } from "./provider";
+import { configureLlmConcurrency, getClaudeCodeCircuitStatus, getLlmConcurrencyStatus } from "./provider";
 
 export { enqueueExtractionJob } from "./extraction-queue";
 export type { WorkerStats } from "./worker";
@@ -163,6 +163,10 @@ export function getPipelineWorkerStatus(): Record<string, { running: boolean; st
 		llmConcurrency: {
 			running: getLlmConcurrencyStatus().running > 0,
 			stats: getLlmConcurrencyStatus() as unknown as WorkerStats,
+		},
+		claudeCode: {
+			running: getClaudeCodeCircuitStatus().open,
+			stats: getClaudeCodeCircuitStatus() as unknown as WorkerStats,
 		},
 		extraction: {
 			running: workerHandle !== null,
