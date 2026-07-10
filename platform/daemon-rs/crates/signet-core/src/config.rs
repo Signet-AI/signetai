@@ -787,6 +787,20 @@ memory:
 
         assert_eq!(pipeline.synthesis.provider, "none");
         assert!(!pipeline.synthesis.enabled);
+        assert!(!pipeline.summary_workload_enabled());
+    }
+
+    #[test]
+    fn summary_workload_requires_enabled_non_none_provider() {
+        let mut pipeline = PipelineV2Config::default();
+        assert!(pipeline.summary_workload_enabled());
+
+        pipeline.synthesis.enabled = false;
+        assert!(!pipeline.summary_workload_enabled());
+
+        pipeline.synthesis.enabled = true;
+        pipeline.synthesis.provider = "NONE".to_string();
+        assert!(!pipeline.summary_workload_enabled());
     }
 
     #[test]
@@ -1413,6 +1427,12 @@ pub struct PipelineV2Config {
     /// round-tripping them so older documented manifests do not fall back.
     pub predictor_pipeline: PredictorPipelineConfig,
     pub model_registry: ModelRegistryConfig,
+}
+
+impl PipelineV2Config {
+    pub fn summary_workload_enabled(&self) -> bool {
+        self.synthesis.enabled && !self.synthesis.provider.eq_ignore_ascii_case("none")
+    }
 }
 
 impl Default for PipelineV2Config {

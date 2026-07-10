@@ -3572,7 +3572,7 @@ describe("summary worker tick gate", () => {
 			const jobId = enq.jobId;
 
 			const { startSummaryWorker } = await import("./pipeline/summary-worker");
-			const handle = startSummaryWorker(getDbAccessor());
+			const handle = startSummaryWorker(getDbAccessor(), { isSynthesisAvailable: async () => true });
 
 			// First tick fires after POLL_INTERVAL_MS (5s)
 			await new Promise((resolve) => setTimeout(resolve, 5500));
@@ -3588,6 +3588,216 @@ describe("summary worker tick gate", () => {
 			// Gate allowed tick through → job was leased → attempts incremented.
 			// Without LLM the processing will fail, but that doesn't matter.
 			expect(job?.attempts).toBeGreaterThan(0);
+		},
+		15_000,
+	);
+
+	test.serial(
+		"leaves jobs unchanged when direct worker startup has no route check",
+		async () => {
+			writeAgentYaml(`memory:
+  pipelineV2:
+    enabled: false
+  dreaming:
+    enabled: true
+`);
+			createMemoryDb([]);
+			const enq = handleCheckpointExtract({
+				harness: "test",
+				sessionKey: "ckpt-worker-no-route",
+				transcript: "x".repeat(600),
+			});
+			if (!enq.jobId) throw new Error("expected checkpoint enqueue to return a job id");
+
+			const { startSummaryWorker } = await import("./pipeline/summary-worker");
+			const handle = startSummaryWorker(getDbAccessor());
+			await new Promise((resolve) => setTimeout(resolve, 5500));
+			handle.stop();
+
+			const db = openTestDb();
+			const job = db.prepare("SELECT status, attempts FROM summary_jobs WHERE id = ?").get(enq.jobId) as {
+				status: string;
+				attempts: number;
+			};
+			db.close();
+			expect(job).toEqual({ status: "pending", attempts: 0 });
+		},
+		15_000,
+	);
+
+	test.serial(
+		"does not activate retained command config when pipeline V2 is disabled",
+		async () => {
+			const marker = join(TEST_DIR, "disabled-pipeline-command-ran");
+			writeAgentYaml(`memory:
+  pipelineV2:
+    enabled: false
+    allowRemoteProviders: true
+    extraction:
+      provider: command
+      command:
+        bin: node
+        args:
+          - -e
+          - "require('node:fs').writeFileSync('${marker}', 'unexpected')"
+    synthesis:
+      enabled: false
+      provider: none
+  dreaming:
+    enabled: true
+`);
+			createMemoryDb([]);
+			const enq = handleCheckpointExtract({
+				harness: "test",
+				sessionKey: "ckpt-worker-disabled-command",
+				transcript: "x".repeat(600),
+			});
+			if (!enq.jobId) throw new Error("expected checkpoint enqueue to return a job id");
+
+			const { startSummaryWorker } = await import("./pipeline/summary-worker");
+			const handle = startSummaryWorker(getDbAccessor(), { isSynthesisAvailable: async () => false });
+			try {
+				await new Promise((resolve) => setTimeout(resolve, 5500));
+			} finally {
+				handle.stop();
+			}
+
+			const db = openTestDb();
+			const job = db.prepare("SELECT status, attempts FROM summary_jobs WHERE id = ?").get(enq.jobId) as {
+				status: string;
+				attempts: number;
+			};
+			db.close();
+			expect(existsSync(marker)).toBe(false);
+			expect(job).toEqual({ status: "pending", attempts: 0 });
+		},
+		15_000,
+	);
+
+	test.serial(
+		"uses synthesis instead of retained command config when pipeline V2 is disabled",
+		async () => {
+			const marker = join(TEST_DIR, "disabled-pipeline-available-command-ran");
+			writeAgentYaml(`memory:
+  pipelineV2:
+    enabled: false
+    allowRemoteProviders: true
+    extraction:
+      provider: command
+      command:
+        bin: node
+        args:
+          - -e
+          - "require('node:fs').writeFileSync('${marker}', 'unexpected')"
+  dreaming:
+    enabled: true
+`);
+			createMemoryDb([]);
+			const schemaDb = openTestDb();
+			schemaDb.exec("ALTER TABLE summary_jobs ADD COLUMN error TEXT");
+			schemaDb.close();
+			const enq = handleCheckpointExtract({
+				harness: "test",
+				sessionKey: "ckpt-worker-disabled-command-with-synthesis",
+				transcript: "x".repeat(600),
+			});
+			if (!enq.jobId) throw new Error("expected checkpoint enqueue to return a job id");
+
+			let resolverCalls = 0;
+			let generateCalls = 0;
+			const { initInferenceProviderResolver, closeInferenceProviderResolver } = await import("./llm");
+			initInferenceProviderResolver(() => {
+				resolverCalls += 1;
+				return {
+					name: "test-synthesis",
+					async available() {
+						return true;
+					},
+					async generate() {
+						generateCalls += 1;
+						throw new Error("expected synthesis attempt");
+					},
+				};
+			});
+			const { startSummaryWorker } = await import("./pipeline/summary-worker");
+			const handle = startSummaryWorker(getDbAccessor(), { isSynthesisAvailable: async () => true });
+			try {
+				await new Promise((resolve) => setTimeout(resolve, 5500));
+			} finally {
+				handle.stop();
+				closeInferenceProviderResolver();
+			}
+
+			const db = openTestDb();
+			const job = db.prepare("SELECT status, attempts FROM summary_jobs WHERE id = ?").get(enq.jobId) as {
+				status: string;
+				attempts: number;
+			};
+			db.close();
+			expect(existsSync(marker)).toBe(false);
+			expect(resolverCalls).toBe(1);
+			expect(generateCalls).toBe(1);
+			expect(job).toEqual({ status: "pending", attempts: 1 });
+		},
+		15_000,
+	);
+
+	test.serial(
+		"completes command-only extraction without resolving synthesis",
+		async () => {
+			const marker = join(TEST_DIR, "command-only-ran");
+			writeAgentYaml(`memory:
+  pipelineV2:
+    enabled: true
+    allowRemoteProviders: true
+    significance:
+      enabled: false
+    extraction:
+      provider: command
+      command:
+        bin: node
+        args:
+          - -e
+          - "require('node:fs').writeFileSync('${marker}', 'ok')"
+    synthesis:
+      enabled: false
+      provider: none
+`);
+			createMemoryDb([]);
+			const schemaDb = openTestDb();
+			schemaDb.exec("ALTER TABLE summary_jobs ADD COLUMN result TEXT");
+			schemaDb.close();
+			const enq = handleCheckpointExtract({
+				harness: "test",
+				sessionKey: "ckpt-worker-command-only",
+				transcript: "x".repeat(600),
+			});
+			if (!enq.jobId) throw new Error("expected checkpoint enqueue to return a job id");
+
+			let resolverCalls = 0;
+			const { initInferenceProviderResolver, closeInferenceProviderResolver } = await import("./llm");
+			initInferenceProviderResolver(() => {
+				resolverCalls += 1;
+				throw new Error("synthesis resolver must not be called");
+			});
+			const { startSummaryWorker } = await import("./pipeline/summary-worker");
+			const handle = startSummaryWorker(getDbAccessor(), { isSynthesisAvailable: async () => false });
+			try {
+				await new Promise((resolve) => setTimeout(resolve, 5500));
+			} finally {
+				handle.stop();
+				closeInferenceProviderResolver();
+			}
+
+			const db = openTestDb();
+			const job = db.prepare("SELECT status, attempts FROM summary_jobs WHERE id = ?").get(enq.jobId) as {
+				status: string;
+				attempts: number;
+			};
+			db.close();
+			expect(existsSync(marker)).toBe(true);
+			expect(resolverCalls).toBe(0);
+			expect(job).toEqual({ status: "completed", attempts: 1 });
 		},
 		15_000,
 	);
@@ -3808,10 +4018,12 @@ describe("queryAnchorsMissingFromRecall", () => {
 	});
 });
 
-
 test.serial("session-end queues stored transcript and content-hash summary job", async () => {
 	createMemoryDb([]);
-	const transcript = "User: session end should store transcript and queue summary job.\nAssistant: summary queue should receive session_end trigger.\n".repeat(8);
+	const transcript =
+		"User: session end should store transcript and queue summary job.\nAssistant: summary queue should receive session_end trigger.\n".repeat(
+			8,
+		);
 
 	const result = await handleSessionEnd({
 		harness: "test",
@@ -3842,7 +4054,10 @@ test.serial("session-end queues stored transcript and content-hash summary job",
 
 test.serial("session-end skips duplicate summary job for identical content hash", async () => {
 	createMemoryDb([]);
-	const transcript = "User: identical transcript should dedupe summary queue.\nAssistant: same content should not queue twice.\n".repeat(8);
+	const transcript =
+		"User: identical transcript should dedupe summary queue.\nAssistant: same content should not queue twice.\n".repeat(
+			8,
+		);
 	const req = {
 		harness: "test",
 		transcript,
@@ -3859,10 +4074,9 @@ test.serial("session-end skips duplicate summary job for identical content hash"
 	expect(second.queued).toBe(false);
 	const db = openTestDb();
 	try {
-		const row = db.prepare("SELECT COUNT(*) count FROM summary_jobs WHERE session_key = ? AND agent_id = ?").get(
-			"sess-dedupe-hash",
-			"noam",
-		) as { count: number };
+		const row = db
+			.prepare("SELECT COUNT(*) count FROM summary_jobs WHERE session_key = ? AND agent_id = ?")
+			.get("sess-dedupe-hash", "noam") as { count: number };
 		expect(row.count).toBe(1);
 	} finally {
 		db.close();
@@ -4028,7 +4242,6 @@ describe("applyTokenBudget", () => {
 		}
 	});
 });
-
 
 afterAll(() => {
 	if (PREV_SIGNET_AGENT_ID_FOR_HOOKS === undefined) {

@@ -11,11 +11,13 @@ import { RateLimitExceededError } from "./provider";
 import {
 	SUMMARY_WORKER_UPDATED_BY,
 	type SummaryWorkerHandle,
+	canProcessSummaryJobs,
 	clearCommandStageRunning,
 	getCommandStageStatus,
 	hasCommandStageCompleted,
 	insertSummaryFacts,
 	isTerminalSummaryJobError,
+	leaseSummaryJobWhenAvailable,
 	markCommandStageCompleted,
 	markCommandStageRunning,
 	recoverSummaryJobs,
@@ -23,8 +25,25 @@ import {
 	resolveSummaryHeadingDate,
 	runSummaryCommandProvider,
 	shouldRunSignificanceGateForJob,
+	startSummaryRecovery,
 	startSummaryWorker,
 } from "./summary-worker";
+
+describe("canProcessSummaryJobs", () => {
+	it("preserves command extraction when synthesis is unavailable", () => {
+		expect(canProcessSummaryJobs(true, false)).toBe(true);
+	});
+
+	it("requires synthesis for non-command summary work", () => {
+		expect(canProcessSummaryJobs(false, true)).toBe(true);
+		expect(canProcessSummaryJobs(false, false)).toBe(false);
+	});
+
+	it("does not let command extraction bypass a pipeline pause", () => {
+		expect(canProcessSummaryJobs(true, false, true)).toBe(false);
+		expect(canProcessSummaryJobs(true, true, true)).toBe(false);
+	});
+});
 
 function makeAccessor(db: Database): DbAccessor {
 	return {
@@ -321,6 +340,98 @@ describe("insertSummaryFacts", () => {
 	});
 });
 
+describe("leaseSummaryJobWhenAvailable", () => {
+	let db: Database;
+	let accessor: DbAccessor;
+
+	beforeEach(() => {
+		db = new Database(":memory:");
+		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
+		accessor = makeAccessor(db);
+		db.prepare(
+			`INSERT INTO summary_jobs
+			 (id, session_key, session_id, harness, project, agent_id, transcript,
+			  trigger, status, attempts, max_attempts, created_at)
+			 VALUES ('job-gated', 'session-gated', 'session-gated', 'hermes', NULL,
+			         'default', 'User: hello', 'session_end', 'pending', 0, 3, ?)`,
+		).run(new Date().toISOString());
+	});
+
+	afterEach(() => {
+		db.close();
+	});
+
+	it("leaves pending jobs unchanged when synthesis is unavailable", async () => {
+		const job = await leaseSummaryJobWhenAvailable(accessor, async () => false);
+
+		expect(job).toBeNull();
+		const row = db.prepare("SELECT status, attempts FROM summary_jobs WHERE id = 'job-gated'").get() as {
+			status: string;
+			attempts: number;
+		};
+		expect(row).toEqual({ status: "pending", attempts: 0 });
+	});
+
+	it("restores an unchanged pending job when synthesis becomes unavailable after lease", async () => {
+		let checks = 0;
+		const job = await leaseSummaryJobWhenAvailable(accessor, async () => {
+			checks += 1;
+			return checks === 1;
+		});
+
+		expect(job).toBeNull();
+		expect(checks).toBe(2);
+		const row = db.prepare("SELECT status, attempts FROM summary_jobs WHERE id = 'job-gated'").get() as {
+			status: string;
+			attempts: number;
+		};
+		expect(row).toEqual({ status: "pending", attempts: 0 });
+	});
+
+	it("restores an unchanged pending job when the post-lease availability check errors", async () => {
+		let checks = 0;
+		await expect(
+			leaseSummaryJobWhenAvailable(accessor, async () => {
+				checks += 1;
+				if (checks === 2) throw new Error("routing refresh failed");
+				return true;
+			}),
+		).rejects.toThrow("routing refresh failed");
+
+		const row = db.prepare("SELECT status, attempts FROM summary_jobs WHERE id = 'job-gated'").get() as {
+			status: string;
+			attempts: number;
+		};
+		expect(row).toEqual({ status: "pending", attempts: 0 });
+	});
+
+	it("surfaces a failed lease restoration instead of silently stranding work", async () => {
+		let checks = 0;
+		await expect(
+			leaseSummaryJobWhenAvailable(accessor, async () => {
+				checks += 1;
+				if (checks === 2) {
+					db.prepare("UPDATE summary_jobs SET status = 'dead' WHERE id = 'job-gated'").run();
+					return false;
+				}
+				return true;
+			}),
+		).rejects.toThrow("Failed to restore unprocessed summary lease for job job-gated");
+	});
+
+	it("leases a pending job only while synthesis remains available", async () => {
+		const job = await leaseSummaryJobWhenAvailable(accessor, async () => true);
+
+		expect(job?.id).toBe("job-gated");
+		expect(job?.attempts).toBe(1);
+		const row = db.prepare("SELECT status, attempts FROM summary_jobs WHERE id = 'job-gated'").get() as {
+			status: string;
+			attempts: number;
+		};
+		expect(row).toEqual({ status: "processing", attempts: 1 });
+	});
+});
+
 describe("recoverSummaryJobs", () => {
 	let db: Database;
 	let accessor: DbAccessor;
@@ -437,6 +548,27 @@ describe("recoverSummaryJobs", () => {
 
 		const after = db.prepare("SELECT status FROM summary_jobs WHERE id = 'job-startup'").get() as { status: string };
 		expect(after.status).toBe("pending");
+	});
+
+	it("recovers stale leases without leasing pending work", async () => {
+		const now = new Date().toISOString();
+		const stmt = db.prepare(
+			`INSERT INTO summary_jobs
+			 (id, session_key, harness, project, transcript, status, attempts, max_attempts, created_at)
+			 VALUES (?, NULL, 'codex', NULL, 'transcript', ?, ?, 3, ?)`,
+		);
+		stmt.run("job-stale", "leased", 1, now);
+		stmt.run("job-pending", "pending", 0, now);
+
+		const stopRecovery = startSummaryRecovery(accessor);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		stopRecovery();
+
+		const rows = db.prepare("SELECT id, status, attempts FROM summary_jobs ORDER BY id").all();
+		expect(rows).toEqual([
+			{ id: "job-pending", status: "pending", attempts: 0 },
+			{ id: "job-stale", status: "pending", attempts: 1 },
+		]);
 	});
 });
 

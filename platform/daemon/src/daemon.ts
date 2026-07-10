@@ -60,6 +60,7 @@ import { resolveEmbeddedWorkerPath } from "./native-runtime-assets";
 import {
 	DEFAULT_RETENTION,
 	ensureRetentionWorker,
+	ensureSummaryRecovery,
 	ensureSummaryWorker,
 	setDreamingWorker,
 	startPipeline,
@@ -1347,7 +1348,7 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 	const routerStatus = await router.status(false);
 	const statusValue = routerStatus.ok ? routerStatus.value : null;
 	const explicitInference = statusValue?.source === "explicit";
-	const commandExtractionMode = memoryCfg.pipelineV2.extraction.provider === "command";
+	const commandExtractionMode = memoryCfg.pipelineV2.enabled && memoryCfg.pipelineV2.extraction.provider === "command";
 	const extractionWorkloadConfigured =
 		!pipelinePaused && (commandExtractionMode || (await router.hasWorkload("memory_extraction")));
 	const synthesisWorkloadConfigured = !pipelinePaused && (await router.hasWorkload("session_synthesis"));
@@ -1434,9 +1435,29 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 	});
 
 	// Summary worker — shared infrastructure, owned here not by startPipeline.
-	// Both pipelineV2 and dreaming consume session summaries.
-	if ((memoryCfg.pipelineV2.enabled || memoryCfg.dreaming.enabled) && !pipelinePaused) {
-		ensureSummaryWorker(getDbAccessor());
+	// Both pipelineV2 and dreaming consume session summaries. Command-mode
+	// extraction also checkpoints through summary_jobs and remains runnable
+	// without synthesis; all other queued work requires an effective route.
+	const isSummarySynthesisAvailable = async (): Promise<boolean> =>
+		(await router.explain({ agentId: defaultAgentId, operation: "session_synthesis" }, true)).ok;
+	const hasSummaryConsumers = memoryCfg.pipelineV2.enabled || memoryCfg.dreaming.enabled;
+	const summarySynthesisAvailable = hasSummaryConsumers ? await isSummarySynthesisAvailable() : false;
+	if (hasSummaryConsumers && !pipelinePaused && (commandExtractionMode || summarySynthesisAvailable)) {
+		ensureSummaryWorker(getDbAccessor(), {
+			isSynthesisAvailable: isSummarySynthesisAvailable,
+		});
+	} else if (hasSummaryConsumers) {
+		ensureSummaryRecovery(getDbAccessor(), {
+			workerOptions: { isSynthesisAvailable: isSummarySynthesisAvailable },
+			shouldStartWorker: async () => {
+				const liveCfg = loadMemoryConfig(AGENTS_DIR);
+				if ((!liveCfg.pipelineV2.enabled && !liveCfg.dreaming.enabled) || liveCfg.pipelineV2.paused) return false;
+				return (
+					(liveCfg.pipelineV2.enabled && liveCfg.pipelineV2.extraction.provider === "command") ||
+					(await isSummarySynthesisAvailable())
+				);
+			},
+		});
 	}
 
 	if (memoryCfg.pipelineV2.enabled && !pipelinePaused && extractionAvailable) {

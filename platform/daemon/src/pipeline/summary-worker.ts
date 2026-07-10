@@ -23,7 +23,7 @@ import { countChanges } from "../db-helpers";
 import { getInferenceProvider } from "../llm";
 import { logger } from "../logger";
 import { inferType, isDuplicate } from "../memory-classification";
-import { loadMemoryConfig, type ResolvedMemoryConfig } from "../memory-config";
+import { type ResolvedMemoryConfig, loadMemoryConfig } from "../memory-config";
 import {
 	IMMUTABLE_ARTIFACT_ERROR_PREFIX,
 	ensureCanonicalManifest,
@@ -47,6 +47,19 @@ import { countTokens } from "./tokenizer";
 export interface SummaryWorkerHandle {
 	stop(): void;
 	readonly running: boolean;
+}
+
+export interface SummaryWorkerOptions {
+	/** Must perform a live route check. Omitted means synthesis is unavailable. */
+	readonly isSynthesisAvailable?: () => Promise<boolean>;
+}
+
+export function canProcessSummaryJobs(
+	commandExtractionMode: boolean,
+	synthesisAvailable: boolean,
+	paused = false,
+): boolean {
+	return !paused && (commandExtractionMode || synthesisAvailable);
 }
 
 const RECOVER_BATCH = 100;
@@ -346,11 +359,7 @@ function parseLlmResponse(raw: string): LlmSummaryResult | null {
 // Core processing
 // ---------------------------------------------------------------------------
 
-function passesSignificanceGate(
-	accessor: DbAccessor,
-	job: SummaryJobRow,
-	memoryCfg: ResolvedMemoryConfig,
-): boolean {
+function passesSignificanceGate(accessor: DbAccessor, job: SummaryJobRow, memoryCfg: ResolvedMemoryConfig): boolean {
 	const significanceCfg: SignificanceConfig = memoryCfg.pipelineV2.significance ?? {
 		enabled: true,
 		minTurns: 5,
@@ -384,10 +393,7 @@ function substituteCommandTokens(input: string, replacements: Record<string, str
 	return output;
 }
 
-export async function runSummaryCommandProvider(
-	job: SummaryJobRow,
-	cfg: ResolvedMemoryConfig,
-): Promise<void> {
+export async function runSummaryCommandProvider(job: SummaryJobRow, cfg: ResolvedMemoryConfig): Promise<void> {
 	const command = cfg.pipelineV2.extraction.command;
 	if (!command) {
 		throw new Error("pipelineV2.extraction.command is required when extraction.provider is 'command'");
@@ -597,7 +603,7 @@ async function processJob(
 	job: SummaryJobRow,
 	memoryCfg: ResolvedMemoryConfig,
 ): Promise<void> {
-	const commandMode = memoryCfg.pipelineV2.extraction.provider === "command";
+	const commandMode = memoryCfg.pipelineV2.enabled && memoryCfg.pipelineV2.extraction.provider === "command";
 	const commandStageStatus: CommandStageStatus = commandMode ? getCommandStageStatus(accessor, job.id) : "none";
 
 	if (
@@ -652,6 +658,7 @@ async function processJob(
 	const genOpts = {
 		timeoutMs: memoryCfg.pipelineV2.synthesis.timeout,
 		maxTokens: memoryCfg.pipelineV2.synthesis.maxTokens,
+		refresh: true,
 	};
 	const result =
 		job.transcript.length > CHUNK_TARGET_CHARS
@@ -1434,10 +1441,117 @@ export function recoverSummaryJobs(accessor: DbAccessor, limit: number = RECOVER
 	return result;
 }
 
-export function startSummaryWorker(accessor: DbAccessor): SummaryWorkerHandle {
+export async function leaseSummaryJobWhenAvailable(
+	accessor: DbAccessor,
+	isWorkloadAvailable: () => Promise<boolean>,
+): Promise<SummaryJobRow | null> {
+	if (!(await isWorkloadAvailable())) return null;
+
+	const job = accessor.withWriteTx((db) => {
+		let row: SummaryJobRow | undefined;
+		try {
+			row = db
+				.prepare(
+					`SELECT id, session_key, session_id, harness, project, transcript,
+					        agent_id, trigger, captured_at, started_at, ended_at,
+					        attempts, max_attempts, created_at
+					 FROM summary_jobs
+					 WHERE status = 'pending' AND attempts < max_attempts
+					 ORDER BY created_at ASC
+					 LIMIT 1`,
+				)
+				.get() as SummaryJobRow | undefined;
+		} catch {
+			row = db
+				.prepare(
+					`SELECT id, session_key, session_key AS session_id, harness, project, transcript,
+					        'default' AS agent_id, 'session_end' AS trigger,
+					        created_at AS captured_at, NULL AS started_at, completed_at AS ended_at,
+					        attempts, max_attempts, created_at
+					 FROM summary_jobs
+					 WHERE status = 'pending' AND attempts < max_attempts
+					 ORDER BY created_at ASC
+					 LIMIT 1`,
+				)
+				.get() as SummaryJobRow | undefined;
+		}
+
+		if (!row) return null;
+
+		const updated = countChanges(
+			db
+				.prepare(
+					`UPDATE summary_jobs
+					 SET status = 'processing', attempts = attempts + 1
+					 WHERE id = ? AND status = 'pending' AND attempts = ?`,
+				)
+				.run(row.id, row.attempts),
+		);
+		return updated === 1 ? { ...row, attempts: row.attempts + 1 } : null;
+	});
+
+	if (!job) return null;
+
+	try {
+		if (await isWorkloadAvailable()) return job;
+	} catch (error) {
+		restoreUnprocessedSummaryLease(accessor, job);
+		throw error;
+	}
+
+	restoreUnprocessedSummaryLease(accessor, job);
+	return null;
+}
+
+function restoreUnprocessedSummaryLease(accessor: DbAccessor, job: SummaryJobRow): void {
+	const restored = accessor.withWriteTx((db) =>
+		countChanges(
+			db
+				.prepare(
+					`UPDATE summary_jobs
+					 SET status = 'pending', attempts = attempts - 1
+					 WHERE id = ? AND status = 'processing' AND attempts = ?`,
+				)
+				.run(job.id, job.attempts),
+		),
+	);
+	if (restored !== 1) {
+		throw new Error(`Failed to restore unprocessed summary lease for job ${job.id}`);
+	}
+}
+
+export function startSummaryRecovery(accessor: DbAccessor): () => void {
 	let timer: ReturnType<typeof setTimeout> | null = null;
-	let recoverTimer: ReturnType<typeof setTimeout> | null = null;
 	let stopped = false;
+
+	function schedule(delay: number): void {
+		if (stopped) return;
+		timer = setTimeout(() => {
+			try {
+				const batch = recoverSummaryJobs(accessor);
+				if (batch.updated > 0) {
+					logger.info("summary-worker", `Crash recovery: reset ${batch.updated} stuck job(s) to pending/dead`);
+				}
+				if (batch.selected >= RECOVER_BATCH) schedule(0);
+			} catch (e) {
+				logger.warn("summary-worker", "Crash recovery failed (non-fatal)", {
+					error: e instanceof Error ? e.message : String(e),
+				});
+			}
+		}, delay);
+	}
+
+	schedule(0);
+	return () => {
+		stopped = true;
+		if (timer) clearTimeout(timer);
+	};
+}
+
+export function startSummaryWorker(accessor: DbAccessor, options: SummaryWorkerOptions = {}): SummaryWorkerHandle {
+	let timer: ReturnType<typeof setTimeout> | null = null;
+	let stopped = false;
+	const stopRecovery = startSummaryRecovery(accessor);
 
 	let cachedProvider: LlmProvider | null = null;
 
@@ -1454,46 +1568,16 @@ export function startSummaryWorker(accessor: DbAccessor): SummaryWorkerHandle {
 		let jobId: string | null = null;
 
 		try {
-			// Lease a pending job
-			const job = accessor.withWriteTx((db) => {
-				let row: SummaryJobRow | undefined;
-				try {
-					row = db
-						.prepare(
-							`SELECT id, session_key, session_id, harness, project, transcript,
-							        agent_id, trigger, captured_at, started_at, ended_at,
-							        attempts, max_attempts, created_at
-							 FROM summary_jobs
-							 WHERE status = 'pending' AND attempts < max_attempts
-							 ORDER BY created_at ASC
-							 LIMIT 1`,
-						)
-						.get() as SummaryJobRow | undefined;
-				} catch {
-					row = db
-						.prepare(
-							`SELECT id, session_key, session_key AS session_id, harness, project, transcript,
-							        'default' AS agent_id, 'session_end' AS trigger,
-							        created_at AS captured_at, NULL AS started_at, completed_at AS ended_at,
-							        attempts, max_attempts, created_at
-							 FROM summary_jobs
-							 WHERE status = 'pending' AND attempts < max_attempts
-							 ORDER BY created_at ASC
-							 LIMIT 1`,
-						)
-						.get() as SummaryJobRow | undefined;
-				}
-
-				if (!row) return null;
-
-				db.prepare(
-					`UPDATE summary_jobs
-					 SET status = 'processing', attempts = attempts + 1
-					 WHERE id = ?`,
-				).run(row.id);
-
-				return { ...row, attempts: row.attempts + 1 };
-			});
+			const isSynthesisAvailable = options.isSynthesisAvailable ?? (async () => false);
+			const isWorkloadAvailable = async (): Promise<boolean> => {
+				const latest = loadMemoryConfig(AGENTS_DIR);
+				return canProcessSummaryJobs(
+					latest.pipelineV2.enabled && latest.pipelineV2.extraction.provider === "command",
+					await isSynthesisAvailable(),
+					latest.pipelineV2.paused,
+				);
+			};
+			const job = await leaseSummaryJobWhenAvailable(accessor, isWorkloadAvailable);
 
 			if (!job) {
 				scheduleTick(POLL_INTERVAL_MS);
@@ -1501,6 +1585,20 @@ export function startSummaryWorker(accessor: DbAccessor): SummaryWorkerHandle {
 			}
 
 			jobId = job.id;
+			const memoryCfg = loadMemoryConfig(AGENTS_DIR);
+			const commandMode = memoryCfg.pipelineV2.enabled && memoryCfg.pipelineV2.extraction.provider === "command";
+			let synthesisAvailable = false;
+			try {
+				synthesisAvailable = await isSynthesisAvailable();
+			} catch (error) {
+				if (!commandMode) restoreUnprocessedSummaryLease(accessor, job);
+				throw error;
+			}
+			if (!commandMode && !synthesisAvailable) {
+				restoreUnprocessedSummaryLease(accessor, job);
+				scheduleTick(POLL_INTERVAL_MS);
+				return;
+			}
 
 			logger.info("summary-worker", "Processing session summary", {
 				jobId: job.id,
@@ -1510,10 +1608,15 @@ export function startSummaryWorker(accessor: DbAccessor): SummaryWorkerHandle {
 				project: job.project,
 			});
 
-			if (!cachedProvider) {
-				cachedProvider = getInferenceProvider("sessionSynthesis");
+			// Command-only extraction must not resolve or call session synthesis.
+			if (synthesisAvailable && !cachedProvider) {
+				try {
+					cachedProvider = getInferenceProvider("sessionSynthesis");
+				} catch (error) {
+					if (!commandMode) throw error;
+				}
 			}
-			await processJob(accessor, cachedProvider, job, cfg);
+			await processJob(accessor, synthesisAvailable ? cachedProvider : null, job, memoryCfg);
 
 			// Mark complete
 			accessor.withWriteTx((db) => {
@@ -1577,29 +1680,6 @@ export function startSummaryWorker(accessor: DbAccessor): SummaryWorkerHandle {
 		}, delay);
 	}
 
-	function scheduleRecovery(delay: number): void {
-		if (stopped) return;
-		recoverTimer = setTimeout(() => {
-			try {
-				const batch = recoverSummaryJobs(accessor);
-				if (batch.updated > 0) {
-					logger.info("summary-worker", `Crash recovery: reset ${batch.updated} stuck job(s) to pending/dead`);
-				}
-				if (batch.selected >= RECOVER_BATCH) {
-					scheduleRecovery(0);
-				}
-			} catch (e) {
-				logger.warn("summary-worker", "Crash recovery failed (non-fatal)", {
-					error: e instanceof Error ? e.message : String(e),
-				});
-			}
-		}, delay);
-	}
-
-	// Crash recovery runs in small async batches so daemon startup and HTTP
-	// readiness are not blocked by large summary_jobs tables.
-	scheduleRecovery(0);
-
 	// Start polling
 	scheduleTick(POLL_INTERVAL_MS);
 
@@ -1607,7 +1687,7 @@ export function startSummaryWorker(accessor: DbAccessor): SummaryWorkerHandle {
 		stop() {
 			stopped = true;
 			if (timer) clearTimeout(timer);
-			if (recoverTimer) clearTimeout(recoverTimer);
+			stopRecovery();
 		},
 		get running() {
 			return !stopped;
