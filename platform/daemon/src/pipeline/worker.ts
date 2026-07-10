@@ -22,11 +22,7 @@ import type { DecisionConfig, FactDecisionProposal } from "./decision";
 import { runShadowDecisions } from "./decision";
 import { extractFactsAndEntities } from "./extraction";
 import { escalate } from "./extraction-escalation";
-import {
-	cancelExtractionJobForForgottenMemory,
-	enqueueExtractionJob,
-	enqueueExtractionJobInTx,
-} from "./extraction-queue";
+import { cancelExtractionJobForForgottenMemory } from "./extraction-queue";
 import { txPersistEntities } from "./graph-transactions";
 import { invalidateTraversalCache } from "./graph-traversal";
 import { enqueueHintsJob } from "./prospective-index";
