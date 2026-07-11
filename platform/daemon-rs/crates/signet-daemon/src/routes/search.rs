@@ -939,6 +939,7 @@ pub async fn recall(
 
                     let (updated_scores, summary) = reranker::rerank_and_summarize(
                         provider,
+                        &state.llm_semaphore,
                         &resp.query,
                         &candidates,
                         timeout_ms,

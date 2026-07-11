@@ -383,6 +383,19 @@ async function withLlmConcurrency<T>(
 	label?: string,
 	signal?: AbortSignal,
 ): Promise<T> {
+	const release = await acquireLlmConcurrencyPermit(timeoutMs, label, signal);
+	try {
+		return await fn();
+	} finally {
+		release();
+	}
+}
+
+async function acquireLlmConcurrencyPermit(
+	timeoutMs?: number,
+	label?: string,
+	signal?: AbortSignal,
+): Promise<() => void> {
 	const semaphore = llmSemaphore;
 	try {
 		if (timeoutMs !== undefined) {
@@ -399,11 +412,12 @@ async function withLlmConcurrency<T>(
 		}
 		throw err;
 	}
-	try {
-		return await fn();
-	} finally {
+	let released = false;
+	return () => {
+		if (released) return;
+		released = true;
 		semaphore.release();
-	}
+	};
 }
 
 // ---------------------------------------------------------------------------
@@ -1009,7 +1023,11 @@ function extractOpenAiLikeText(content: unknown): string {
 		.join("");
 }
 
-function createOpenAiLikeStreamResult(res: Response, cancel: () => void): LlmProviderStreamResult {
+function createOpenAiLikeStreamResult(
+	res: Response,
+	cancel: () => void,
+	onTerminal: () => void = () => {},
+): LlmProviderStreamResult {
 	if (!res.body) {
 		throw new Error("streaming response body was missing");
 	}
@@ -1112,10 +1130,12 @@ function createOpenAiLikeStreamResult(res: Response, cancel: () => void): LlmPro
 				controller.error(error);
 			} finally {
 				reader.releaseLock();
+				onTerminal();
 			}
 		},
 		cancel() {
 			cancel();
+			onTerminal();
 		},
 	});
 
@@ -1124,6 +1144,7 @@ function createOpenAiLikeStreamResult(res: Response, cancel: () => void): LlmPro
 		cancel(reason?: string) {
 			logger.debug("pipeline", "Cancelling streaming provider call", { reason: reason ?? "unspecified" });
 			cancel();
+			onTerminal();
 		},
 	};
 }
@@ -1783,64 +1804,71 @@ export function createOpenAiCompatibleProvider(config: OpenAiCompatibleProviderC
 			const timeoutMs = opts?.timeoutMs ?? config.defaultTimeoutMs;
 			const deadline = performance.now() + timeoutMs;
 			const signal = generateSignal(opts);
-			return withLlmConcurrency(
-				async () => {
-					const remainingMs = deadline - performance.now();
-					if (remainingMs <= 0) {
-						throw new Error(`${config.name} timeout after ${timeoutMs}ms (deadline exceeded waiting for semaphore)`);
-					}
-					const abort = createAbortBundle(remainingMs, signal);
-					try {
-						const streamBody: Record<string, unknown> = {
-							model: config.model,
-							messages: [{ role: "user", content: prompt }],
-							max_tokens: opts?.maxTokens ?? 4096,
-							stream: true,
-							stream_options: { include_usage: true },
-						};
-						if (config.disableThinking) {
-							streamBody.thinking = { type: "disabled" };
-						}
-						const res = await fetch(`${baseUrl}/chat/completions`, {
-							method: "POST",
-							headers: headers(),
-							body: JSON.stringify(streamBody),
-							signal: abort.signal,
-						});
-						if (!res.ok) {
-							const detail = (await res.text().catch(() => "")).slice(0, 300);
-							throw new Error(`${config.name} HTTP ${res.status}: ${detail}`);
-						}
-						const result = createOpenAiLikeStreamResult(res, () => {
-							abort.abort("stream cancelled");
-							abort.cleanup();
-						});
-						return {
-							stream: result.stream,
-							cancel(reason?: string) {
-								logger.debug("pipeline", "Cancelling openai-compatible stream", {
-									provider: config.name,
-									reason: reason ?? "unspecified",
-								});
-								abort.abort(reason);
-								abort.cleanup();
-							},
-						};
-					} catch (error) {
-						abort.cleanup();
-						if (abort.timedOut()) {
-							throw new Error(`${config.name} timeout after ${timeoutMs}ms`);
-						}
-						if (error instanceof DOMException && error.name === "AbortError") {
-							throw new Error(`${config.name} aborted`);
-						}
-						throw error;
-					}
-				},
-				timeoutMs,
-				config.name,
-				signal,
-			);
+			const release = await acquireLlmConcurrencyPermit(timeoutMs, config.name, signal);
+			const remainingMs = deadline - performance.now();
+			if (remainingMs <= 0) {
+				release();
+				throw new Error(`${config.name} timeout after ${timeoutMs}ms (deadline exceeded waiting for semaphore)`);
+			}
+			const abort = createAbortBundle(remainingMs, signal);
+			let responseBody: ReadableStream<Uint8Array> | null = null;
+			let abortListener: (() => void) | undefined;
+			const terminal = (): void => {
+				if (abortListener) {
+					abort.signal.removeEventListener("abort", abortListener);
+					abortListener = undefined;
+				}
+				abort.cleanup();
+				release();
+			};
+			try {
+				const streamBody: Record<string, unknown> = {
+					model: config.model,
+					messages: [{ role: "user", content: prompt }],
+					max_tokens: opts?.maxTokens ?? 4096,
+					stream: true,
+					stream_options: { include_usage: true },
+				};
+				if (config.disableThinking) {
+					streamBody.thinking = { type: "disabled" };
+				}
+				const res = await fetch(`${baseUrl}/chat/completions`, {
+					method: "POST",
+					headers: headers(),
+					body: JSON.stringify(streamBody),
+					signal: abort.signal,
+				});
+				if (!res.ok) {
+					const detail = (await res.text().catch(() => "")).slice(0, 300);
+					throw new Error(`${config.name} HTTP ${res.status}: ${detail}`);
+				}
+				responseBody = res.body;
+				abortListener = () => {
+					responseBody?.cancel().catch(() => {});
+					terminal();
+				};
+				abort.signal.addEventListener("abort", abortListener, { once: true });
+				if (abort.signal.aborted) {
+					abortListener();
+				}
+				return createOpenAiLikeStreamResult(
+					res,
+					() => {
+						responseBody?.cancel().catch(() => {});
+						abort.abort("stream cancelled");
+					},
+					terminal,
+				);
+			} catch (error) {
+				terminal();
+				if (abort.timedOut()) {
+					throw new Error(`${config.name} timeout after ${timeoutMs}ms`);
+				}
+				if (error instanceof DOMException && error.name === "AbortError") {
+					throw new Error(`${config.name} aborted`);
+				}
+				throw error;
+			}
 		},
 		async available(): Promise<boolean> {
 			try {

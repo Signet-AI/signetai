@@ -63,6 +63,20 @@ function streamFromString(value: string): ReadableStream<Uint8Array> {
 	});
 }
 
+function deferred<T = void>(): {
+	readonly promise: Promise<T>;
+	resolve(value: T | PromiseLike<T>): void;
+	reject(reason?: unknown): void;
+} {
+	let resolve!: (value: T | PromiseLike<T>) => void;
+	let reject!: (reason?: unknown) => void;
+	const promise = new Promise<T>((res, rej) => {
+		resolve = res;
+		reject = rej;
+	});
+	return { promise, resolve, reject };
+}
+
 async function waitForPidFile(path: string): Promise<number> {
 	for (let i = 0; i < 100; i += 1) {
 		if (existsSync(path)) {
@@ -971,28 +985,25 @@ describe("createOpenAiCompatibleProvider", () => {
 		expect(getLlmConcurrencyStatus().running).toBe(0);
 	});
 
-	it("streamWithUsage shares the global LLM concurrency cap with non-streaming calls", async () => {
+	it("streamWithUsage holds the global LLM concurrency permit until the body reaches DONE", async () => {
 		configureLlmConcurrency(1);
-		let active = 0;
-		let peak = 0;
-		let releaseFirstFetch: (() => void) | undefined;
+		const firstChunk = deferred<void>();
+		const secondChunk = deferred<void>();
+		let streamingController: ReadableStreamDefaultController<Uint8Array> | undefined;
 
 		mockFetch(async (_url, init) => {
-			active += 1;
-			peak = Math.max(peak, active);
 			const body = parseJsonObjectBody(init?.body);
 			if (body.stream === true) {
-				await new Promise<void>((resolve) => {
-					releaseFirstFetch = resolve;
-				});
-				active -= 1;
 				return new Response(
-					streamFromString(
-						['data: {"choices":[{"delta":{"content":"streamed"}}]}', "", "data: [DONE]", "", ""].join("\n"),
-					),
+					new ReadableStream({
+						start(controller) {
+							streamingController = controller;
+						},
+					}),
 				);
 			}
-			active -= 1;
+			await firstChunk.promise;
+			secondChunk.resolve();
 			return Response.json({ choices: [{ message: { content: "generated" } }] });
 		});
 
@@ -1006,19 +1017,169 @@ describe("createOpenAiCompatibleProvider", () => {
 			throw new Error("expected streamWithUsage on OpenAI-compatible provider");
 		}
 
-		const streaming = provider.streamWithUsage("stream");
-		await new Promise((resolve) => setTimeout(resolve, 20));
+		const streamResult = await provider.streamWithUsage("stream");
 		const generated = provider.generate("generate");
 		await new Promise((resolve) => setTimeout(resolve, 20));
 
 		expect(getLlmConcurrencyStatus().running).toBe(1);
 		expect(getLlmConcurrencyStatus().pending).toBe(1);
-		releaseFirstFetch?.();
-		const [streamResult, generatedText] = await Promise.all([streaming, generated]);
+		const streamEvents = collectStreamEvents(streamResult.stream);
+		streamingController?.enqueue(
+			new TextEncoder().encode(
+				['data: {"choices":[{"delta":{"content":"streamed"}}]}', "", "data: [DONE]", "", ""].join("\n"),
+			),
+		);
+		streamingController?.close();
+		expect((await streamEvents).some((event) => event.type === "done")).toBe(true);
 
-		expect(generatedText).toBe("generated");
-		expect((await collectStreamEvents(streamResult.stream)).some((event) => event.type === "done")).toBe(true);
-		expect(peak).toBe(1);
+		expect(getLlmConcurrencyStatus().running).toBe(1);
+		expect(getLlmConcurrencyStatus().pending).toBe(0);
+		firstChunk.resolve();
+		expect(await generated).toBe("generated");
+		await secondChunk.promise;
+		expect(getLlmConcurrencyStatus().running).toBe(0);
+	});
+
+	it("streamWithUsage releases its permit exactly once when upstream EOF arrives before DONE", async () => {
+		configureLlmConcurrency(1);
+		let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
+		mockFetch(async (_url, init) => {
+			const body = parseJsonObjectBody(init?.body);
+			if (body.stream === true) {
+				return new Response(new ReadableStream({ start: (c) => (controller = c) }));
+			}
+			return Response.json({ choices: [{ message: { content: "after eof" } }] });
+		});
+		const provider = createOpenAiCompatibleProvider({
+			name: "openai-compatible",
+			model: "test-model",
+			baseUrl: "http://localhost:9999",
+			defaultTimeoutMs: 1000,
+		});
+		const result = await provider.streamWithUsage?.("stream");
+		if (!result) throw new Error("expected stream result");
+
+		const events = collectStreamEvents(result.stream);
+		controller?.close();
+		await expect(events).rejects.toThrow(/ended unexpectedly/);
+		await expect(provider.generate("next")).resolves.toBe("after eof");
+		expect(getLlmConcurrencyStatus().running).toBe(0);
+	});
+
+	it("streamWithUsage releases its permit exactly once on reader errors", async () => {
+		configureLlmConcurrency(1);
+		let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
+		mockFetch(async (_url, init) => {
+			const body = parseJsonObjectBody(init?.body);
+			if (body.stream === true) {
+				return new Response(new ReadableStream({ start: (c) => (controller = c) }));
+			}
+			return Response.json({ choices: [{ message: { content: "after reader error" } }] });
+		});
+		const provider = createOpenAiCompatibleProvider({
+			name: "openai-compatible",
+			model: "test-model",
+			baseUrl: "http://localhost:9999",
+			defaultTimeoutMs: 1000,
+		});
+		const result = await provider.streamWithUsage?.("stream");
+		if (!result) throw new Error("expected stream result");
+
+		const events = collectStreamEvents(result.stream);
+		controller?.error(new Error("reader failed"));
+		await expect(events).rejects.toThrow(/reader failed/);
+		await expect(provider.generate("next")).resolves.toBe("after reader error");
+		expect(getLlmConcurrencyStatus().running).toBe(0);
+	});
+
+	it("streamWithUsage releases its permit exactly once on explicit cancel", async () => {
+		configureLlmConcurrency(1);
+		let cancelCount = 0;
+		mockFetch(async (_url, init) => {
+			const body = parseJsonObjectBody(init?.body);
+			if (body.stream === true) {
+				return new Response(
+					new ReadableStream({
+						cancel() {
+							cancelCount += 1;
+						},
+					}),
+				);
+			}
+			return Response.json({ choices: [{ message: { content: "after cancel" } }] });
+		});
+		const provider = createOpenAiCompatibleProvider({
+			name: "openai-compatible",
+			model: "test-model",
+			baseUrl: "http://localhost:9999",
+			defaultTimeoutMs: 1000,
+		});
+		const result = await provider.streamWithUsage?.("stream");
+		if (!result) throw new Error("expected stream result");
+
+		result.cancel("test cancel");
+		result.cancel("duplicate cancel");
+		await expect(provider.generate("next")).resolves.toBe("after cancel");
+		expect(cancelCount).toBeLessThanOrEqual(1);
+		expect(getLlmConcurrencyStatus().running).toBe(0);
+	});
+
+	it("streamWithUsage releases its permit exactly once when caller aborts the open body", async () => {
+		configureLlmConcurrency(1);
+		let sawAbort = false;
+		mockFetch(async (_url, init) => {
+			const body = parseJsonObjectBody(init?.body);
+			if (body.stream === true) {
+				init?.signal?.addEventListener("abort", () => {
+					sawAbort = true;
+				});
+				return new Response(new ReadableStream());
+			}
+			return Response.json({ choices: [{ message: { content: "after abort" } }] });
+		});
+		const provider = createOpenAiCompatibleProvider({
+			name: "openai-compatible",
+			model: "test-model",
+			baseUrl: "http://localhost:9999",
+			defaultTimeoutMs: 1000,
+		});
+		const abort = new AbortController();
+		const result = await provider.streamWithUsage?.("stream", { signal: abort.signal, timeoutMs: 1000 });
+		if (!result) throw new Error("expected stream result");
+
+		abort.abort();
+		await expect(provider.generate("next")).resolves.toBe("after abort");
+		expect(sawAbort).toBe(true);
+		expect(getLlmConcurrencyStatus().running).toBe(0);
+	});
+
+	it("streamWithUsage releases its permit exactly once when the open body times out", async () => {
+		configureLlmConcurrency(1);
+		let sawAbort = false;
+		mockFetch(async (_url, init) => {
+			const body = parseJsonObjectBody(init?.body);
+			if (body.stream === true) {
+				init?.signal?.addEventListener("abort", () => {
+					sawAbort = true;
+				});
+				return new Response(new ReadableStream());
+			}
+			return Response.json({ choices: [{ message: { content: "after timeout" } }] });
+		});
+		const provider = createOpenAiCompatibleProvider({
+			name: "openai-compatible",
+			model: "test-model",
+			baseUrl: "http://localhost:9999",
+			defaultTimeoutMs: 25,
+		});
+		const result = await provider.streamWithUsage?.("stream", { timeoutMs: 25 });
+		if (!result) throw new Error("expected stream result");
+
+		for (let i = 0; i < 20 && getLlmConcurrencyStatus().running !== 0; i += 1) {
+			await new Promise((resolve) => setTimeout(resolve, 10));
+		}
+		await expect(provider.generate("next")).resolves.toBe("after timeout");
+		expect(sawAbort).toBe(true);
 		expect(getLlmConcurrencyStatus().running).toBe(0);
 	});
 });

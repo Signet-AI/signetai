@@ -7,7 +7,9 @@ use signet_core::config::DaemonConfig;
 use signet_core::db::DbPool;
 use signet_pipeline::document::DocumentHandle;
 use signet_pipeline::embedding::EmbeddingProvider;
-use signet_pipeline::provider::{LlmProvider, LlmSemaphore};
+use signet_pipeline::provider::{
+    GenerateOpts, GenerateResult, LlmProvider, LlmSemaphore, ProviderError,
+};
 use signet_pipeline::summary::SummaryHandle;
 use signet_pipeline::synthesis::SynthesisHandle;
 use signet_pipeline::worker::{SharedWorkerRuntimeStats, WorkerHandle};
@@ -611,6 +613,36 @@ impl AppState {
 
     pub async fn harness_last_seen(&self, harness: &str) -> Option<String> {
         self.harness_last_seen.read().await.get(harness).cloned()
+    }
+
+    pub async fn llm_provider(&self) -> Option<Arc<dyn LlmProvider>> {
+        self.llm.read().await.clone()
+    }
+
+    pub async fn generate_llm(
+        &self,
+        prompt: &str,
+        opts: &GenerateOpts,
+    ) -> Result<Option<GenerateResult>, ProviderError> {
+        let Some(provider) = self.llm_provider().await else {
+            return Ok(None);
+        };
+        let result = self
+            .llm_semaphore
+            .run(async { provider.generate(prompt, opts).await })
+            .await?;
+        Ok(Some(result))
+    }
+
+    pub async fn generate_with_provider(
+        &self,
+        provider: &Arc<dyn LlmProvider>,
+        prompt: &str,
+        opts: &GenerateOpts,
+    ) -> Result<GenerateResult, ProviderError> {
+        self.llm_semaphore
+            .run(async { provider.generate(prompt, opts).await })
+            .await
     }
 }
 

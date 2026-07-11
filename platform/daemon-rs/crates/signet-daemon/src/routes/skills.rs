@@ -560,7 +560,9 @@ async fn install_skill_graph_node(state: Arc<AppState>, name: String) -> Result<
             .is_none_or(|triggers| triggers.is_empty());
     let enriched = if procedural.enrich_on_install && needs_enrichment {
         if let Some(provider) = llm_provider.as_ref() {
-            match enrich_skill_frontmatter(provider, &skill_name, &description, &content).await {
+            match enrich_skill_frontmatter(&state, provider, &skill_name, &description, &content)
+                .await
+            {
                 Ok(Some(enrichment)) => {
                     if !enrichment.description.is_empty() {
                         meta.description = Some(enrichment.description);
@@ -836,14 +838,16 @@ struct SkillEnrichmentResult {
 }
 
 async fn enrich_skill_frontmatter(
+    state: &Arc<AppState>,
     provider: &Arc<dyn signet_pipeline::provider::LlmProvider>,
     name: &str,
     description: &str,
     body: &str,
 ) -> Result<Option<SkillEnrichmentResult>, String> {
     let prompt = build_skill_enrichment_prompt(name, description, body);
-    let raw = provider
-        .generate(
+    let raw = state
+        .generate_with_provider(
+            provider,
             &prompt,
             &GenerateOpts {
                 max_tokens: Some(512),
@@ -910,8 +914,9 @@ async fn extract_skill_body_entities(
         return Ok(0);
     }
 
-    let raw = provider
-        .generate(
+    let raw = state
+        .generate_with_provider(
+            provider,
             &extraction::build_prompt(&normalized_body),
             &GenerateOpts::default(),
         )

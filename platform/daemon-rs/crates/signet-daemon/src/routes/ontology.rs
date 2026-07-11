@@ -6248,7 +6248,7 @@ pub async fn consolidate(
     };
 
     let provider = if use_provider {
-        state.llm.read().await.clone()
+        state.llm_provider().await
     } else {
         None
     };
@@ -6263,8 +6263,9 @@ pub async fn consolidate(
     let proposals = if use_provider {
         if let Some(provider) = provider.as_ref() {
             let prompt = consolidation_prompt(&source, &conflict_items);
-            match provider
-                .generate(
+            match state
+                .generate_with_provider(
+                    provider,
                     &prompt,
                     &GenerateOpts {
                         timeout_ms: Some(provider_timeout_ms),

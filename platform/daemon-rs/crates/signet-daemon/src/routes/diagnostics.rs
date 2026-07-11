@@ -224,7 +224,7 @@ pub async fn home_greeting(State(state): State<Arc<AppState>>) -> impl IntoRespo
     };
     let fallback = format!("good {time_of_day}");
 
-    if let Some(provider) = state.llm.read().await.clone() {
+    if state.llm_provider().await.is_some() {
         let soul_content = std::fs::read_to_string(state.config.base_path.join("SOUL.md"))
             .unwrap_or_default()
             .chars()
@@ -235,7 +235,7 @@ pub async fn home_greeting(State(state): State<Arc<AppState>>) -> impl IntoRespo
         );
         if let Ok(text) = tokio::time::timeout(
             std::time::Duration::from_secs(10),
-            provider.generate(
+            state.generate_llm(
                 &prompt,
                 &GenerateOpts {
                     timeout_ms: Some(10_000),
@@ -245,7 +245,7 @@ pub async fn home_greeting(State(state): State<Arc<AppState>>) -> impl IntoRespo
         )
         .await
         {
-            if let Ok(text) = text {
+            if let Ok(Some(text)) = text {
                 let greeting = text.text.trim().trim_matches(['"', '\'']).to_string();
                 if !greeting.is_empty() {
                     return (
@@ -1832,4 +1832,114 @@ pub async fn update_run(
             "restartRequired": false,
         })
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use signet_core::{
+        config::{AgentManifest, DaemonConfig, MemoryManifestConfig, PipelineV2Config},
+        db::DbPool,
+    };
+    use signet_pipeline::provider::{GenerateResult, LlmProvider, ProviderError};
+    use tokio::sync::Notify;
+
+    struct BlockingProvider {
+        entered: AtomicUsize,
+        release: Notify,
+    }
+
+    impl BlockingProvider {
+        fn new() -> Self {
+            Self {
+                entered: AtomicUsize::new(0),
+                release: Notify::new(),
+            }
+        }
+    }
+
+    impl LlmProvider for BlockingProvider {
+        fn generate(
+            &self,
+            _prompt: &str,
+            _opts: &GenerateOpts,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<Output = Result<GenerateResult, ProviderError>> + Send + '_,
+            >,
+        > {
+            Box::pin(async move {
+                let call = self.entered.fetch_add(1, Ordering::SeqCst);
+                if call == 0 {
+                    self.release.notified().await;
+                }
+                Ok(GenerateResult {
+                    text: "hello from the route".to_string(),
+                    usage: None,
+                })
+            })
+        }
+
+        fn name(&self) -> &str {
+            "blocking"
+        }
+    }
+
+    fn test_state(provider: Arc<BlockingProvider>) -> Arc<AppState> {
+        let root = std::env::temp_dir().join(format!(
+            "signet-diagnostics-route-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(root.join("memory")).expect("create temp memory dir");
+        let db_path = root.join("memory").join("memories.db");
+        let (pool, _writer) = DbPool::open(&db_path).expect("open test db");
+        let mut pipeline = PipelineV2Config::default();
+        pipeline.worker.max_llm_concurrency = 1;
+        let mut manifest = AgentManifest::default();
+        manifest.memory = Some(MemoryManifestConfig {
+            database: None,
+            vectors: None,
+            session_budget: None,
+            decay_rate: None,
+            pipeline_v2: Some(pipeline),
+        });
+        let config = DaemonConfig {
+            base_path: root,
+            db_path,
+            port: 3850,
+            host: "127.0.0.1".to_string(),
+            bind: Some("127.0.0.1".to_string()),
+            manifest,
+        };
+        let auth = crate::state::AuthRuntimeState::from_config(&config).expect("auth runtime");
+        Arc::new(AppState::new(
+            config,
+            pool,
+            None,
+            Some(provider),
+            None,
+            auth,
+        ))
+    }
+
+    #[tokio::test]
+    async fn home_greeting_uses_app_state_shared_llm_semaphore() {
+        let provider = Arc::new(BlockingProvider::new());
+        let state = test_state(provider.clone());
+
+        let first = tokio::spawn(home_greeting(State(state.clone())));
+        while provider.entered.load(Ordering::SeqCst) == 0 {
+            tokio::task::yield_now().await;
+        }
+        let second = tokio::spawn(home_greeting(State(state)));
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        assert_eq!(provider.entered.load(Ordering::SeqCst), 1);
+
+        provider.release.notify_one();
+        let _ = first.await.expect("first greeting");
+        let _ = second.await.expect("second greeting");
+        assert_eq!(provider.entered.load(Ordering::SeqCst), 2);
+    }
 }
