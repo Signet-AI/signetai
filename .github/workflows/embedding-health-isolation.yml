@@ -48,10 +48,13 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Worker-handle unit tests (RPC bounds, crash/exit, sync status)
+      - name: Build @signet/core (workspace dep the daemon imports)
+        run: bun run build:core
+      # Unit guard: proves the main-thread adapter never blocks while the
+      # embedding worker is stuck (the ★ non-blocking invariant), plus RPC
+      # bounds, crash/exit handling, and sync status. Needs only @signet/core.
+      # The end-to-end /health-SLA test (real daemon spawn) and the compiled-
+      # binary smoke run in release.yml, where the full workspace is built.
+      - name: Worker-handle unit + facade contract tests
         working-directory: platform/daemon
         run: bun test src/embedding-worker-handle.test.ts src/native-embedding.test.ts
-
-      - name: End-to-end /health SLA while embedding download is stalled
-        working-directory: platform/daemon
-        run: bun test src/native-embedding-eventloop-isolation.test.ts

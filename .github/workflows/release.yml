@@ -198,6 +198,10 @@ jobs:
       - name: Build workspace dependencies
         run: bun run build
 
+      - name: Native embedding /health isolation (source daemon)
+        working-directory: platform/daemon
+        run: bun test src/native-embedding-eventloop-isolation.test.ts
+
       - name: Build dashboard assets
         run: bun run build:dashboard
 
