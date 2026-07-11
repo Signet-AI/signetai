@@ -256,4 +256,77 @@ describe("embedding-worker-handle", () => {
 		worker.emit({ type: "embed_result", id: lastEmbedId(worker), vector: vec() });
 		await expect(p).resolves.toHaveLength(DIM);
 	});
+
+	// Regression test for #922: when the embedding worker handle is created
+	// inside the extraction worker thread, globalThis.__SIGNET_NATIVE_RUNTIME_ASSETS__
+	// is not registered, so resolveEmbeddedWorkerPath() returns null. The
+	// caller must be able to pass pre-resolved asset paths that bypass the
+	// registry. This test verifies the handle uses embeddingWorkerPath from
+	// opts and passes wasmDir/transformersRuntimePath through to workerData.
+	it("uses pre-resolved asset paths instead of the native asset registry (#922)", async () => {
+		const { worker, factory } = fakePair();
+		const fakeWorkerPath = "/tmp/test-embedding-worker-resolved.mjs";
+		const fakeWasmDir = "/tmp/test-wasm-dir";
+		const fakeTransformersPath = "/tmp/test-transformers-runtime.mjs";
+
+		const handle = await createEmbeddingWorkerHandle({
+			workerFactory: factory,
+			expectedDimensions: DIM,
+			embeddingWorkerPath: fakeWorkerPath,
+			wasmAssetDir: fakeWasmDir,
+			transformersRuntimeAssetPath: fakeTransformersPath,
+		});
+		worker.emit({ type: "ready" });
+		handles.push(handle);
+
+		// The factory received the pre-resolved worker path, not a .ts fallback
+		// or a null. We verify by checking the factory was called (the worker
+		// was created). The path itself was passed as the first arg to the
+		// factory — since FakeWorker ignores it, we verify the init payload
+		// was passed correctly by checking the worker responds to embed.
+		const p = handle.embed("test");
+		await flush();
+		expect(worker.posted.some((m) => m.type === "embed" && m.text === "test")).toBe(true);
+		worker.emit({ type: "embed_result", id: lastEmbedId(worker), vector: vec() });
+		await expect(p).resolves.toHaveLength(DIM);
+
+		// Verify the factory was called with the exact pre-resolved path
+		// by re-creating with a tracking factory.
+		let capturedPath = "";
+		const trackingFactory: EmbeddingWorkerFactory = (path: string) => {
+			capturedPath = path;
+			return worker;
+		};
+		await createEmbeddingWorkerHandle({
+			workerFactory: trackingFactory,
+			expectedDimensions: DIM,
+			embeddingWorkerPath: fakeWorkerPath,
+		});
+		expect(capturedPath).toBe(fakeWorkerPath);
+	});
+
+	it("passes pre-resolved wasmDir and transformersRuntimePath into workerData init (#922)", async () => {
+		// Verify that when pre-resolved paths are provided, they flow into
+		// the EmbeddingWorkerInit that becomes workerData. The factory's
+		// second arg is the init object.
+		const initCaptures: EmbeddingWorkerInit[] = [];
+		const trackingFactory: EmbeddingWorkerFactory = (_path: string, init: EmbeddingWorkerInit): EmbeddingWorkerLike => {
+			initCaptures.push(init);
+			const w = new FakeWorker();
+			return w;
+		};
+		const fakeWasmDir = "/tmp/test-wasm-dir-922";
+		const fakeTransformersPath = "/tmp/test-transformers-922.mjs";
+		const handle = await createEmbeddingWorkerHandle({
+			workerFactory: trackingFactory,
+			expectedDimensions: DIM,
+			wasmAssetDir: fakeWasmDir,
+			transformersRuntimeAssetPath: fakeTransformersPath,
+		});
+		handles.push(handle);
+
+		expect(initCaptures.length).toBe(1);
+		expect(initCaptures[0].wasmDir).toBe(fakeWasmDir);
+		expect(initCaptures[0].transformersRuntimePath).toBe(fakeTransformersPath);
+	});
 });

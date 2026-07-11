@@ -36,6 +36,17 @@ export interface WorkerInit {
 	readonly pipelineConfig: Record<string, unknown>;
 	/** Search config for decision phase. */
 	readonly searchConfig: Record<string, unknown>;
+	/**
+	 * Pre-resolved native embedding worker path (main thread resolves via
+	 * resolveEmbeddedWorkerPath, since the extraction worker thread cannot
+	 * read `globalThis.__SIGNET_NATIVE_RUNTIME_ASSETS__`). Null in source
+	 * mode (#922).
+	 */
+	readonly nativeEmbeddingWorkerPath?: string | null;
+	/** Pre-resolved WASM assets directory. Null in source mode (#922). */
+	readonly nativeWasmDir?: string | null;
+	/** Pre-resolved transformers runtime path. Null in source mode (#922). */
+	readonly nativeTransformersRuntimePath?: string | null;
 }
 
 export interface SerializedGenerateOptions {

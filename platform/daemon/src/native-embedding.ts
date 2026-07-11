@@ -35,6 +35,37 @@ let handlePromise: Promise<EmbeddingWorkerHandle> | null = null;
 let resolvedHandle: EmbeddingWorkerHandle | null = null;
 let workerFactoryOverride: EmbeddingWorkerFactory | null = null;
 
+/**
+ * Pre-resolved native asset paths, set by configureNativeEmbeddingAssets()
+ * when the daemon starts. When set, createEmbeddingWorkerHandle() uses these
+ * instead of calling resolveEmbeddedWorkerPath()/materializeEmbeddedWasmAssets()
+ * — necessary because the extraction worker thread spawns its own embedding
+ * worker handle, and `globalThis.__SIGNET_NATIVE_RUNTIME_ASSETS__` is not
+ * registered inside worker threads (#922).
+ */
+let assetPathsOverride: {
+	readonly embeddingWorkerPath: string | null;
+	readonly wasmDir: string | null;
+	readonly transformersRuntimePath: string | null;
+} | null = null;
+
+/**
+ * Configure pre-resolved native asset paths for the embedding worker. Called
+ * once from the main thread (daemon startup) after registerNativeAssets().
+ * The values are inherited by all subsequent createEmbeddingWorkerHandle()
+ * calls — including those from inside the extraction worker thread, which
+ * reads this module's module-level state.
+ *
+ * In source mode (no native assets), pass nulls.
+ */
+export function configureNativeEmbeddingAssets(paths: {
+	readonly embeddingWorkerPath: string | null;
+	readonly wasmDir: string | null;
+	readonly transformersRuntimePath: string | null;
+}): void {
+	assetPathsOverride = paths;
+}
+
 // Tracks the most recent init/warm-up attempt. When the daemon's startup
 // probe calls checkNativeProvider(), this promise is set. nativeEmbed()
 // awaits it before calling embed() so the first `signet remember` after a
@@ -54,8 +85,8 @@ function getHandle(): Promise<EmbeddingWorkerHandle> {
 			workerFactoryOverride
 				? { workerFactory: workerFactoryOverride }
 				: remoteHostOverride
-					? { remoteHostOverride }
-					: {},
+					? { remoteHostOverride, ...(assetPathsOverride ?? {}) }
+					: { ...(assetPathsOverride ?? {}) },
 		).then((h) => {
 			resolvedHandle = h;
 			return h;
@@ -133,4 +164,5 @@ export function __setEmbeddingWorkerFactoryForTests(factory: EmbeddingWorkerFact
 export async function __resetEmbeddingProviderForTests(): Promise<void> {
 	await shutdownNativeProvider();
 	workerFactoryOverride = null;
+	assetPathsOverride = null;
 }

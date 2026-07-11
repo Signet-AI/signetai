@@ -17,6 +17,7 @@ import { getDbAccessor } from "../db-accessor";
 import { initDbAccessorLite } from "../db-accessor";
 import { fetchEmbedding } from "../embedding-fetch";
 import type { EmbeddingConfig, MemorySearchConfig, PipelineV2Config } from "../memory-config";
+import { configureNativeEmbeddingAssets } from "../native-embedding";
 import type { TelemetryCollector } from "../telemetry";
 import type { DecisionConfig } from "./decision";
 import type { MainToWorkerMessage, WorkerInit, WorkerToMainMessage } from "./extraction-thread-protocol";
@@ -149,6 +150,25 @@ const STATS_INTERVAL_MS = 10_000;
 
 async function bootstrap(): Promise<void> {
 	try {
+		// Configure pre-resolved native embedding asset paths BEFORE any
+		// embedding can happen. The extraction worker thread has an isolated
+		// globalThis — `globalThis.__SIGNET_NATIVE_RUNTIME_ASSETS__` is not
+		// registered here, so resolveEmbeddedWorkerPath() returns null and
+		// the embedding worker crashes with ModuleNotFound when the
+		// extraction thread tries to spawn its own embedding sub-worker (#922).
+		// The main thread resolves these paths and passes them via WorkerInit.
+		if (
+			init.nativeEmbeddingWorkerPath !== undefined ||
+			init.nativeWasmDir !== undefined ||
+			init.nativeTransformersRuntimePath !== undefined
+		) {
+			configureNativeEmbeddingAssets({
+				embeddingWorkerPath: init.nativeEmbeddingWorkerPath ?? null,
+				wasmDir: init.nativeWasmDir ?? null,
+				transformersRuntimePath: init.nativeTransformersRuntimePath ?? null,
+			});
+		}
+
 		// 1. Init DB — opens own bun:sqlite WAL connection
 		initDbAccessorLite(init.dbPath, init.vecExtensionPath);
 		const accessor = getDbAccessor();

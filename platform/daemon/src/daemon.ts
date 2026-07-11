@@ -56,7 +56,7 @@ import {
 	resolveEmbeddingBridgeOptions,
 	startNativeMemoryBridge,
 } from "./native-memory-sources";
-import { resolveEmbeddedWorkerPath } from "./native-runtime-assets";
+import { materializeEmbeddedWasmAssets, resolveEmbeddedWorkerPath } from "./native-runtime-assets";
 import {
 	DEFAULT_RETENTION,
 	ensureRetentionWorker,
@@ -1477,6 +1477,13 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 					},
 					pipelineConfig: memoryCfg.pipelineV2 as unknown as Record<string, unknown>,
 					searchConfig: memoryCfg.search as unknown as Record<string, unknown>,
+					// Resolve native asset paths on the main thread, where
+					// globalThis.__SIGNET_NATIVE_RUNTIME_ASSETS__ is registered.
+					// The extraction worker thread has an isolated globalThis
+					// and cannot resolve these itself (#922). Null in source mode.
+					nativeEmbeddingWorkerPath: resolveEmbeddedWorkerPath("embedding-worker"),
+					nativeWasmDir: materializeEmbeddedWasmAssets(),
+					nativeTransformersRuntimePath: resolveEmbeddedWorkerPath("embedding-worker-transformers-runtime"),
 				}
 			: undefined;
 
@@ -1492,6 +1499,18 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 			telemetry,
 			workerInit,
 		);
+
+		// Configure the main thread's own native embedding handle with the
+		// same pre-resolved asset paths. This is not strictly necessary on
+		// the main thread (it has the asset globals), but it ensures
+		// consistency and makes the main thread path identical to the
+		// extraction-thread path (#922).
+		const { configureNativeEmbeddingAssets } = await import("./native-embedding");
+		configureNativeEmbeddingAssets({
+			embeddingWorkerPath: resolveEmbeddedWorkerPath("embedding-worker"),
+			wasmDir: materializeEmbeddedWasmAssets(),
+			transformersRuntimePath: resolveEmbeddedWorkerPath("embedding-worker-transformers-runtime"),
+		});
 	} else {
 		ensureRetentionWorker(getDbAccessor(), DEFAULT_RETENTION);
 	}

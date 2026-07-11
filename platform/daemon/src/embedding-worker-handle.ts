@@ -75,6 +75,25 @@ export interface EmbeddingHandleOptions {
 	readonly initTimeoutMs?: number;
 	readonly embedTimeoutMs?: number;
 	readonly cooldownMs?: number;
+	/**
+	 * Pre-resolved embedding worker executable path. When provided (including
+	 * null), skips the native asset registry resolution. Needed when this
+	 * handle is created from inside a worker thread (e.g., the extraction
+	 * thread) where `globalThis.__SIGNET_NATIVE_RUNTIME_ASSETS__` is not
+	 * registered and `resolveEmbeddedWorkerPath` returns null.
+	 */
+	readonly embeddingWorkerPath?: string | null;
+	/**
+	 * Pre-resolved WASM assets directory. Same rationale as
+	 * embeddingWorkerPath — the main thread materializes WASM assets,
+	 * the worker thread inherits the path.
+	 */
+	readonly wasmAssetDir?: string | null;
+	/**
+	 * Pre-resolved transformers runtime path. Same rationale as
+	 * embeddingWorkerPath.
+	 */
+	readonly transformersRuntimeAssetPath?: string | null;
 }
 
 interface PendingRpc {
@@ -121,13 +140,21 @@ export async function createEmbeddingWorkerHandle(opts: EmbeddingHandleOptions =
 	// here and hand the directory to the worker (which has an isolated
 	// globalThis and cannot read them itself). Null in source mode, where
 	// onnxruntime-wasm resolves its .wasm from node_modules.
-	const wasmDir = materializeEmbeddedWasmAssets();
+	//
+	// When opts provides pre-resolved values (i.e., this handle is created
+	// from inside a worker thread), use them directly instead of calling
+	// the asset registry — `globalThis.__SIGNET_NATIVE_RUNTIME_ASSETS__` is
+	// not registered in spawned worker threads (#922).
+	const wasmDir = opts.wasmAssetDir !== undefined ? opts.wasmAssetDir : materializeEmbeddedWasmAssets();
 	// Resolve the worker-specific WASM transformers runtime. The worker has
 	// an isolated globalThis, so the main thread's
 	// globalThis[Symbol.for("onnxruntime")] registration does NOT propagate.
 	// This .mjs file registers WASM onnxruntime on the worker's own globalThis
 	// before transformers loads. Null in source mode.
-	const transformersRuntimePath = resolveEmbeddedWorkerPath("embedding-worker-transformers-runtime");
+	const transformersRuntimePath =
+		opts.transformersRuntimeAssetPath !== undefined
+			? opts.transformersRuntimeAssetPath
+			: resolveEmbeddedWorkerPath("embedding-worker-transformers-runtime");
 
 	const init: EmbeddingWorkerInit = {
 		cacheDir,
@@ -140,9 +167,19 @@ export async function createEmbeddingWorkerHandle(opts: EmbeddingHandleOptions =
 
 	const __dirname = dirname(fileURLToPath(import.meta.url));
 	const bundled = join(__dirname, "embedding-worker.js");
-	const workerPath = existsSync(bundled)
-		? bundled
-		: (resolveEmbeddedWorkerPath("embedding-worker") ?? join(__dirname, "embedding-worker.ts"));
+	// When the embedding worker path is pre-resolved by the caller (e.g.,
+	// from the main thread via WorkerInit), use it directly. Otherwise fall
+	// back to the bundled/asset-registry/source path as before. This is
+	// critical when createEmbeddingWorkerHandle() is called from inside the
+	// extraction worker thread — `resolveEmbeddedWorkerPath` returns null
+	// there because `globalThis.__SIGNET_NATIVE_RUNTIME_ASSETS__` is not
+	// registered in the worker's isolated globalThis (#922).
+	const workerPath =
+		opts.embeddingWorkerPath !== undefined
+			? (opts.embeddingWorkerPath ?? join(__dirname, "embedding-worker.ts"))
+			: existsSync(bundled)
+				? bundled
+				: (resolveEmbeddedWorkerPath("embedding-worker") ?? join(__dirname, "embedding-worker.ts"));
 	const workerOptions = { workerData: init, type: "module" } as const;
 	const worker = (opts.workerFactory ?? createNodeWorker)(workerPath, init, workerOptions);
 
