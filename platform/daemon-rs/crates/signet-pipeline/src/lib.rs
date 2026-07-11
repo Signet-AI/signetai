@@ -6,6 +6,7 @@ pub mod dep_synthesis;
 pub mod document;
 pub mod dreaming;
 pub mod dreaming_worker;
+pub mod durability_gate;
 pub mod embedding;
 pub mod embedding_tracker;
 pub mod entity_quality;

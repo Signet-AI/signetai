@@ -359,6 +359,10 @@ export interface PipelineWriteGateConfig {
 	readonly continuityDiscount: number;
 }
 
+export interface PipelineDurabilityConfig {
+	readonly enabled: boolean;
+}
+
 export interface PipelineV2Config {
 	// Master switches (flat)
 	readonly enabled: boolean;
@@ -391,6 +395,7 @@ export interface PipelineV2Config {
 	readonly feedback: PipelineFeedbackConfig;
 	readonly significance?: PipelineSignificanceConfig;
 	readonly writeGate?: PipelineWriteGateConfig;
+	readonly durability?: PipelineDurabilityConfig;
 	readonly modelRegistry: PipelineModelRegistryConfig;
 	readonly hints?: PipelineHintsConfig;
 	readonly reflections: PipelineReflectionsConfig;

@@ -20,6 +20,7 @@ import { PROSPECTIVE_ANTONYM_PAIRS, hasAntonymConflict, hasNegation, overlapCoun
 import { detectSemanticContradiction } from "./contradiction";
 import type { DecisionConfig, FactDecisionProposal } from "./decision";
 import { runShadowDecisions } from "./decision";
+import { type DurabilityConfig, assessDurability } from "./durability-gate";
 import { extractFactsAndEntities } from "./extraction";
 import { escalate } from "./extraction-escalation";
 import { cancelExtractionJobForForgottenMemory } from "./extraction-queue";
@@ -105,6 +106,7 @@ interface AppliedWriteStats {
 	deleted: number;
 	deduped: number;
 	skippedLowConfidence: number;
+	skippedTransient: number;
 	blockedDestructive: number;
 	reviewNeeded: number;
 	embeddingsAdded: number;
@@ -145,6 +147,7 @@ function zeroWriteStats(): AppliedWriteStats {
 		deleted: 0,
 		deduped: 0,
 		skippedLowConfidence: 0,
+		skippedTransient: 0,
 		blockedDestructive: 0,
 		reviewNeeded: 0,
 		embeddingsAdded: 0,
@@ -400,6 +403,7 @@ function applyPhaseCWrites(
 		readonly sourceScope: string | null;
 		readonly sourceVisibility: "global" | "private" | "archived";
 		readonly writeGate: WriteGateConfig;
+		readonly durability: DurabilityConfig;
 		readonly semanticContradictions?: ReadonlyMap<number, { detected: boolean; confidence: number; reasoning: string }>;
 	},
 	embeddingByHash: ReadonlyMap<string, readonly number[]>,
@@ -454,6 +458,19 @@ function applyPhaseCWrites(
 					factCount: meta.factCount,
 					entityCount: meta.entityCount,
 					skippedReason: "empty_fact_content",
+				});
+				continue;
+			}
+
+			const durability = assessDurability(proposal.fact.content, proposal.fact.type, meta.durability);
+			if (!durability.durable) {
+				stats.skippedTransient++;
+				recordDecisionHistory(db, sourceMemoryId, proposal, {
+					shadow: false,
+					extractionModel: meta.extractionModel,
+					factCount: meta.factCount,
+					entityCount: meta.entityCount,
+					skippedReason: "transient_operational",
 				});
 				continue;
 			}
@@ -1220,6 +1237,7 @@ export function startWorker(
 			threshold: 0.4,
 			continuityDiscount: 0.15,
 		};
+		const durabilityCfg: DurabilityConfig = pipelineCfg.durability ?? { enabled: true };
 
 		const embeddingByHash = new Map<string, readonly number[]>();
 		const prefetchWarnings: string[] = [];
@@ -1328,6 +1346,7 @@ export function startWorker(
 						sourceScope,
 						sourceVisibility,
 						writeGate: writeGateCfg,
+						durability: durabilityCfg,
 						semanticContradictions: contradictionFlags,
 					},
 					embeddingByHash,

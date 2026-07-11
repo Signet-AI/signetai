@@ -235,6 +235,9 @@ export const DEFAULT_PIPELINE_V2: ResolvedPipelineV2Config = {
 		threshold: 0.4,
 		continuityDiscount: 0.15,
 	},
+	durability: {
+		enabled: true,
+	},
 	modelRegistry: {
 		enabled: true,
 		refreshIntervalMs: 3600_000,
@@ -436,6 +439,7 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): ResolvedPipel
 	const feedbackRaw = raw.feedback as Record<string, unknown> | undefined;
 	const significanceRaw = raw.significance as Record<string, unknown> | undefined;
 	const writeGateRaw = raw.writeGate as Record<string, unknown> | undefined;
+	const durabilityRaw = raw.durability as Record<string, unknown> | undefined;
 	const modelRegistryRaw = raw.modelRegistry as Record<string, unknown> | undefined;
 	const hintsRaw = raw.hints as Record<string, unknown> | undefined;
 	const reflectionsRaw = raw.reflections as Record<string, unknown> | undefined;
@@ -998,6 +1002,9 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): ResolvedPipel
 				writeGateRaw?.continuityDiscount ?? raw.writeGateContinuityDiscount,
 				d.writeGate?.continuityDiscount ?? 0.15,
 			),
+		},
+		durability: {
+			enabled: resolveBool(durabilityRaw?.enabled, undefined, d.durability?.enabled ?? true),
 		},
 
 		modelRegistry: {

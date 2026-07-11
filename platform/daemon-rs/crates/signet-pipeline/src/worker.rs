@@ -21,6 +21,7 @@ use signet_services::{graph, normalize::normalize_and_hash};
 use crate::antonyms;
 
 use crate::decision::{self, DecisionConfig};
+use crate::durability_gate::{self, DurabilityConfig};
 use crate::extraction;
 use crate::provider::{GenerateOpts, LlmProvider, LlmSemaphore};
 use crate::significance_gate::{self, SignificanceConfig};
@@ -50,6 +51,8 @@ pub struct WorkerConfig {
     pub decision: DecisionConfig,
     /// Write gate: adaptive surprisal threshold for candidate memories.
     pub write_gate: WriteGateConfig,
+    /// Durability gate: rejects transient operational content before persistence (#897).
+    pub durability: DurabilityConfig,
 }
 
 impl Default for WorkerConfig {
@@ -82,6 +85,7 @@ impl Default for WorkerConfig {
                 threshold: 0.3,
                 continuity_discount: 0.1,
             },
+            durability: DurabilityConfig { enabled: true },
         }
     }
 }
@@ -601,6 +605,31 @@ async fn process_extract(
 
                 match proposal.action {
                     DecisionAction::Add => {
+                        // --- Durability gate: reject transient operational content (#897) ---
+                        let durability = durability_gate::assess_durability(
+                            &fact.content,
+                            &fact.fact_type,
+                            &config.durability,
+                        );
+                        if !durability.durable {
+                            record_decision_history_only(
+                                pool,
+                                &source_memory_id,
+                                proposal,
+                                fact,
+                                DecisionAuditMeta {
+                                    shadow: false,
+                                    extraction_model: provider.name().to_string(),
+                                    fact_count: facts.len(),
+                                    entity_count: entities_count,
+                                    skipped_reason: Some("transient_operational".to_string()),
+                                    ..DecisionAuditMeta::default()
+                                },
+                            )
+                            .await?;
+                            continue;
+                        }
+
                         // --- Stage 4: Write gate ---
                         let gate_input = write_gate::WriteGateInput {
                             agent_id: agent_id.clone(),
