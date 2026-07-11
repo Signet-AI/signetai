@@ -56,8 +56,8 @@ import { buildAgentScopeClause } from "./memory-access-scope";
 import * as memoryCandidates from "./memory-candidates";
 import { type ScoredMemory, buildActiveConstraintsSection } from "./memory-candidates";
 import { effectiveScore, inferType, isDuplicate } from "./memory-classification";
-import { loadMemoryConfig, type ResolvedMemoryConfig } from "./memory-config";
-import { hybridRecall, type RecallResponse, type RecallResult } from "./memory-search";
+import { type ResolvedMemoryConfig, loadMemoryConfig } from "./memory-config";
+import { type RecallResponse, type RecallResult, hybridRecall } from "./memory-search";
 import { recordMemorySearchTelemetry } from "./memory-search-telemetry";
 import {
 	type SynthesisRequest,
@@ -78,7 +78,11 @@ import { enqueueSummaryJob } from "./pipeline/summary-worker";
 import { countTokens } from "./pipeline/tokenizer";
 import { getDefaultPluginHost } from "./plugins/index";
 import type { PluginPromptTargetV1 } from "./plugins/types";
-import { buildEntityContextInject, buildEntityPromptContext, type PromptEntityContextMemory } from "./prompt-entity-context";
+import {
+	type PromptEntityContextMemory,
+	buildEntityContextInject,
+	buildEntityPromptContext,
+} from "./prompt-entity-context";
 import { buildRecallQueryShape, queryAnchorsMissingFromRecall, stripUntrustedMetadata } from "./prompt-text";
 import { listSecrets } from "./secrets";
 import {
@@ -148,7 +152,6 @@ function getMemoryDbPath(): string {
 
 const deferredSessionEndWork = new Set<Promise<void>>();
 
-
 function summaryJobsHasColumn(column: string): boolean {
 	try {
 		return getDbAccessor().withReadDb((db) => {
@@ -160,7 +163,11 @@ function summaryJobsHasColumn(column: string): boolean {
 	}
 }
 
-function summaryJobWithContentHashExists(agentId: string, sessionKey: string | undefined, contentHash: string): boolean {
+function summaryJobWithContentHashExists(
+	agentId: string,
+	sessionKey: string | undefined,
+	contentHash: string,
+): boolean {
 	if (!sessionKey || !summaryJobsHasColumn("content_hash")) return false;
 	return getDbAccessor().withReadDb((db) => {
 		const row = db
@@ -1362,7 +1369,11 @@ function entityMemoryToRecallResult(memory: PromptEntityContextMemory): RecallRe
 }
 
 function recordUserPromptRecallTelemetry(input: {
-	readonly cfg: { readonly pipelineV2: { readonly telemetry: { readonly memorySearchQaEnabled: boolean; readonly retentionDays: number } } };
+	readonly cfg: {
+		readonly pipelineV2: {
+			readonly telemetry: { readonly memorySearchQaEnabled: boolean; readonly retentionDays: number };
+		};
+	};
 	readonly agentId: string;
 	readonly sessionKey: string | undefined;
 	readonly project: string | undefined;
@@ -1897,6 +1908,7 @@ export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionE
 				project: req.cwd ?? null,
 				agentId,
 				trigger: "session_end",
+				boundaryReason: "session_closed",
 				capturedAt: endedAt,
 				endedAt,
 			});
@@ -1907,7 +1919,7 @@ export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionE
 				feedbackTelemetry: getFeedbackTelemetry(),
 			});
 		}
-				logger.info("hooks", "Session end transcript queued", {
+		logger.info("hooks", "Session end transcript queued", {
 			harness: req.harness,
 			project: req.cwd,
 			sessionKey,
@@ -2195,6 +2207,18 @@ export function handleCheckpointExtract(req: CheckpointExtractRequest): Checkpoi
 	// Cursor is advanced AFTER the enqueue so a crash between the two steps
 	// causes a redundant re-extraction next time rather than silently
 	// skipping a delta window.
+	//
+	// Content-hash dedup: if the same delta was already enqueued (e.g. two
+	// checkpoints fired before the cursor advanced), skip the duplicate.
+	const checkpointContentHash = createHash("sha256").update(capped).digest("hex");
+	if (summaryJobWithContentHashExists(agentId, req.sessionKey, checkpointContentHash)) {
+		logger.info("hooks", "Checkpoint extract skipped duplicate content", {
+			agentId,
+			sessionKey: req.sessionKey,
+			contentHash: checkpointContentHash,
+		});
+		return { skipped: true };
+	}
 	const jobId = enqueueSummaryJob(getDbAccessor(), {
 		harness: req.harness,
 		transcript: capped,
@@ -2207,8 +2231,10 @@ export function handleCheckpointExtract(req: CheckpointExtractRequest): Checkpoi
 		project: req.project,
 		agentId,
 		trigger: "checkpoint_extract",
+		boundaryReason: "checkpoint",
 		capturedAt: new Date().toISOString(),
 	});
+	storeSummaryJobContentHash(jobId, checkpointContentHash);
 	// Advance cursor using UTF-8 byte length so the stored offset is
 	// byte-compatible with the Rust daemon on a shared database.
 	advanceExtractCursor(req.sessionKey, agentId, Buffer.byteLength(transcript, "utf8"));

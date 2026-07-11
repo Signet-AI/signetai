@@ -92,6 +92,7 @@ import { up as memoryLifecycleRepair } from "./083-memory-lifecycle-repair";
 import { up as legacyMarkdownImportState } from "./084-legacy-markdown-import-state";
 import { up as backfillRelationsToDependencies } from "./085-backfill-relations-to-dependencies";
 import { up as summaryJobsContentHash } from "./086-summary-jobs-content-hash";
+import { up as summaryJobsBoundaryReason } from "./087-summary-jobs-boundary-reason";
 
 // -- Public interface consumed by Database.init() --
 
@@ -827,6 +828,14 @@ export const MIGRATIONS: readonly Migration[] = [
 		up: summaryJobsContentHash,
 		artifacts: {
 			columns: [{ table: "summary_jobs", column: "content_hash" }],
+		},
+	},
+	{
+		version: 87,
+		name: "summary-jobs-boundary-reason",
+		up: summaryJobsBoundaryReason,
+		artifacts: {
+			columns: [{ table: "summary_jobs", column: "boundary_reason" }],
 		},
 	},
 ];

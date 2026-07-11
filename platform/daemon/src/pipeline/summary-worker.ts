@@ -34,6 +34,7 @@ import { recordPathFeedback } from "../path-feedback";
 import { isNoiseSession } from "../session-noise";
 import { upsertSessionTranscript } from "../session-transcripts";
 import { upsertThreadHead } from "../thread-heads";
+import { isDurableBoundary, normalizeBoundaryReason } from "./boundary-reason";
 import { addDreamingTokens } from "./dreaming";
 import { enqueueExtractionJobInTx } from "./extraction-queue";
 import {
@@ -75,7 +76,7 @@ interface SummaryRecoveryBatch {
 	readonly updated: number;
 }
 
-interface SummaryJobRow {
+export interface SummaryJobRow {
 	readonly id: string;
 	readonly session_key: string | null;
 	readonly session_id: string | null;
@@ -84,6 +85,7 @@ interface SummaryJobRow {
 	readonly agent_id: string;
 	readonly transcript: string;
 	readonly trigger: string;
+	readonly boundary_reason: string | null;
 	readonly captured_at: string | null;
 	readonly started_at: string | null;
 	readonly ended_at: string | null;
@@ -560,9 +562,10 @@ export function markCommandStageCompleted(accessor: DbAccessor, jobId: string): 
 	});
 }
 
-function tracksSessionSummaryArtifact(job: SummaryJobRow): boolean {
+export function tracksSessionSummaryArtifact(job: SummaryJobRow): boolean {
 	return (
 		job.trigger === "session_end" &&
+		isDurableBoundary(job.boundary_reason) &&
 		!isNoiseSession({
 			project: job.project,
 			sessionKey: job.session_key,
@@ -681,8 +684,17 @@ async function processJob(
 
 	if (!result) throw new Error("Failed to parse LLM summary response");
 
+	// Boundary-reason gating: only durable boundaries (session_closed,
+	// new_session) produce durable summary artifacts and extracted facts.
+	// Non-durable boundaries (compaction, checkpoint) still produce the LLM
+	// summary for DAG/continuity but skip durable fact extraction to prevent
+	// duplicate facts from overlapping transcript ranges.
+	const boundaryReason = normalizeBoundaryReason(job.boundary_reason);
+	const durable = isDurableBoundary(boundaryReason);
+
 	if (
 		!commandMode &&
+		durable &&
 		job.trigger === "session_end" &&
 		!isNoiseSession({
 			project: job.project,
@@ -715,6 +727,17 @@ async function processJob(
 		logger.info("summary-worker", "Command extraction mode: skipping summary markdown + fact insertion", {
 			sessionKey: job.session_key,
 			project: job.project,
+		});
+		markSummaryArtifactSkipped(job);
+	} else if (!durable) {
+		// Non-durable boundary (compaction/checkpoint): skip durable fact
+		// extraction to prevent duplicate facts from overlapping ranges.
+		// The LLM summary was still computed for DAG continuity above.
+		logger.info("summary-worker", "Skipping durable fact extraction for non-durable boundary", {
+			sessionKey: job.session_key,
+			project: job.project,
+			boundaryReason,
+			trigger: job.trigger,
 		});
 		markSummaryArtifactSkipped(job);
 	} else {
@@ -1420,7 +1443,7 @@ export function recoverSummaryJobs(accessor: DbAccessor, limit: number = RECOVER
 		const rows = db
 			.prepare(
 				`SELECT id, session_key, session_id, harness, project, transcript,
-				        agent_id, trigger, captured_at, started_at, ended_at,
+				        agent_id, trigger, boundary_reason, captured_at, started_at, ended_at,
 				        attempts, max_attempts, created_at
 				 FROM summary_jobs
 				 WHERE status IN ('processing', 'leased')
@@ -1470,7 +1493,7 @@ export async function leaseSummaryJobWhenAvailable(
 			row = db
 				.prepare(
 					`SELECT id, session_key, session_id, harness, project, transcript,
-					        agent_id, trigger, captured_at, started_at, ended_at,
+					        agent_id, trigger, boundary_reason, captured_at, started_at, ended_at,
 					        attempts, max_attempts, created_at
 					 FROM summary_jobs
 					 WHERE status = 'pending' AND attempts < max_attempts
@@ -1483,6 +1506,7 @@ export async function leaseSummaryJobWhenAvailable(
 				.prepare(
 					`SELECT id, session_key, session_key AS session_id, harness, project, transcript,
 					        'default' AS agent_id, 'session_end' AS trigger,
+					        NULL AS boundary_reason,
 					        created_at AS captured_at, NULL AS started_at, completed_at AS ended_at,
 					        attempts, max_attempts, created_at
 					 FROM summary_jobs
@@ -1746,6 +1770,7 @@ export function enqueueSummaryJob(
 		readonly project?: string;
 		readonly agentId: string;
 		readonly trigger?: string;
+		readonly boundaryReason?: string;
 		readonly capturedAt?: string;
 		readonly startedAt?: string;
 		readonly endedAt?: string;
@@ -1759,8 +1784,8 @@ export function enqueueSummaryJob(
 			db.prepare(
 				`INSERT INTO summary_jobs
 				 (id, session_key, session_id, harness, project, agent_id, transcript,
-				  trigger, captured_at, started_at, ended_at, status, created_at)
-				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
+				  trigger, boundary_reason, captured_at, started_at, ended_at, status, created_at)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
 			).run(
 				id,
 				params.sessionKey || null,
@@ -1770,6 +1795,7 @@ export function enqueueSummaryJob(
 				params.agentId,
 				params.transcript,
 				params.trigger || "session_end",
+				params.boundaryReason || null,
 				params.capturedAt || now,
 				params.startedAt || null,
 				params.endedAt || null,
@@ -1797,6 +1823,7 @@ export function enqueueSummaryJob(
 		harness: params.harness,
 		sessionKey: params.sessionKey,
 		project: params.project,
+		boundaryReason: params.boundaryReason || null,
 		transcriptChars: params.transcript.length,
 	});
 
