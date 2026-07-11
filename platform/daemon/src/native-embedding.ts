@@ -35,6 +35,14 @@ let handlePromise: Promise<EmbeddingWorkerHandle> | null = null;
 let resolvedHandle: EmbeddingWorkerHandle | null = null;
 let workerFactoryOverride: EmbeddingWorkerFactory | null = null;
 
+// Tracks the most recent init/warm-up attempt. When the daemon's startup
+// probe calls checkNativeProvider(), this promise is set. nativeEmbed()
+// awaits it before calling embed() so the first `signet remember` after a
+// daemon restart waits for the native worker to finish initializing (model
+// load + WASM compile) instead of racing the 15 s embed timeout and losing
+// (#920).
+let initPromise: Promise<unknown> | null = null;
+
 function getHandle(): Promise<EmbeddingWorkerHandle> {
 	if (!handlePromise) {
 		// SIGNET_EMBEDDING_REMOTE_HOST: test/debug seam that redirects the
@@ -62,12 +70,27 @@ function getHandle(): Promise<EmbeddingWorkerHandle> {
 
 export async function nativeEmbed(text: string): Promise<number[]> {
 	const handle = await getHandle();
+	// If an init/warm-up is in flight (e.g., the startup probe hasn't
+	// completed yet), await it before embedding. This ensures the first
+	// `signet remember` after a daemon restart waits for the native worker
+	// to finish initializing instead of racing the 15 s embed timeout and
+	// silently saving without an embedding (#920).
+	if (initPromise && !resolvedHandle?.getStatus().initialized) {
+		await initPromise.catch(() => {});
+		initPromise = null;
+	}
 	return handle.embed(text);
 }
 
 export async function checkNativeProvider(): Promise<NativeProviderStatus> {
 	const handle = await getHandle();
-	return handle.checkAvailable();
+	const p = handle.checkAvailable();
+	initPromise = p;
+	// Clear once settled so subsequent nativeEmbed calls don't await a stale promise.
+	p.finally(() => {
+		if (initPromise === p) initPromise = null;
+	});
+	return p;
 }
 
 export function getNativeProviderStatus(): NativeProviderSnapshot {
@@ -80,6 +103,7 @@ export function getNativeProviderStatus(): NativeProviderSnapshot {
 export async function shutdownNativeProvider(): Promise<void> {
 	const pending = handlePromise;
 	handlePromise = null;
+	initPromise = null;
 	const h = resolvedHandle;
 	resolvedHandle = null;
 	if (h) {

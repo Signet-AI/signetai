@@ -137,4 +137,106 @@ describe("native-embedding facade (worker-backed)", () => {
 		expect(worker.posted.filter((m) => m.type === "shutdown").length).toBeGreaterThan(shutdownsBefore);
 		expect(getNativeProviderStatus().initialized).toBe(false);
 	});
+
+	it("★ nativeEmbed awaits in-flight init before embedding (warm-up race #920)", async () => {
+		// Simulate the daemon startup probe: checkNativeProvider() fires
+		// and starts init. Before it completes, nativeEmbed() is called.
+		// nativeEmbed should await the init promise, then send the embed
+		// RPC — NOT race the embed timeout against the still-initializing
+		// worker.
+		const checkP = checkNativeProvider();
+		await flush();
+		worker.emit({ type: "ready" });
+		await flush();
+
+		// At this point, checkAvailable RPC has been posted and is pending.
+		expect(worker.posted.some((m) => m.type === "checkAvailable")).toBe(true);
+		expect(worker.posted.some((m) => m.type === "embed")).toBe(false);
+
+		// While check is still in flight, start an embed.
+		const embedP = nativeEmbed("warm-start test");
+		await flush();
+
+		// The embed RPC should NOT have been posted yet — we're waiting
+		// for the check (init) to complete first.
+		expect(worker.posted.some((m) => m.type === "embed")).toBe(false);
+
+		// Now complete the init check.
+		const checkReq = worker.posted.find((m) => m.type === "checkAvailable");
+		worker.emit({
+			type: "status",
+			status: { initialized: true, initializing: false, modelCached: true, error: null },
+		});
+		worker.emit({
+			type: "check_result",
+			id: checkReq?.type === "checkAvailable" ? checkReq.id : -1,
+			available: true,
+		});
+		await checkP;
+		await flush();
+
+		// NOW the embed RPC should be posted (init is done).
+		expect(worker.posted.some((m) => m.type === "embed")).toBe(true);
+
+		// Respond to the embed RPC.
+		const embedReq = [...worker.posted].reverse().find((m) => m.type === "embed");
+		worker.emit({
+			type: "embed_result",
+			id: embedReq?.type === "embed" ? embedReq.id : -1,
+			vector: vec(),
+		});
+		const result = await embedP;
+		expect(result).toHaveLength(DIM);
+	});
+
+	it("nativeEmbed proceeds without waiting when no init is in flight", async () => {
+		// No checkNativeProvider() has been called, so initPromise is null.
+		// nativeEmbed should go straight to embed without waiting.
+		const p = nativeEmbed("direct");
+		await flush();
+		worker.emit({ type: "ready" });
+		await flush();
+
+		// Embed RPC is posted immediately — no checkAvailable sent first.
+		expect(worker.posted.some((m) => m.type === "checkAvailable")).toBe(false);
+		expect(worker.posted.some((m) => m.type === "embed")).toBe(true);
+
+		const req = worker.posted.find((m) => m.type === "embed");
+		worker.emit({ type: "embed_result", id: req?.type === "embed" ? req.id : -1, vector: vec() });
+		await expect(p).resolves.toHaveLength(DIM);
+	});
+
+	it("nativeEmbed still embeds when init check returns unavailable (graceful degradation)", async () => {
+		// The startup probe fires and the worker reports unavailable (e.g.,
+		// model not downloaded yet, but the daemon is running). nativeEmbed
+		// should still proceed to attempt the embed after the init promise
+		// settles, rather than hanging indefinitely. The embed may succeed
+		// (worker recovered between probe and embed) or fail (propagated).
+		const checkP = checkNativeProvider();
+		await flush();
+		worker.emit({ type: "ready" });
+		await flush();
+
+		// Worker responds as unavailable.
+		const checkReq = worker.posted.find((m) => m.type === "checkAvailable");
+		worker.emit({
+			type: "check_result",
+			id: checkReq?.type === "checkAvailable" ? checkReq.id : -1,
+			available: false,
+			error: "not ready yet",
+		});
+		await checkP;
+
+		// The init promise has settled (not rejected — checkAvailable
+		// resolves with {available:false}). nativeEmbed should not hang
+		// waiting for it. The embed may be in cooldown from the failed
+		// check, so we verify the promise settles (not that it hangs).
+		const embedP = nativeEmbed("after-unavailable");
+		// Race with a timeout to prove it doesn't hang.
+		const result = await Promise.race([
+			embedP.then(() => "settled").catch(() => "rejected"),
+			Bun.sleep(2000).then(() => "hung"),
+		]);
+		expect(result).not.toBe("hung");
+	});
 });
