@@ -152,6 +152,7 @@ export {
 	withHookRecallCompat,
 } from "./recall";
 export type {
+	AggregateRecallMeta,
 	AggregateRecallUsage,
 	AggregateRecallUsageStage,
 	RecallMeta,
@@ -160,7 +161,10 @@ export type {
 	RecallRequestOptions,
 	RecallRow,
 	RecallScoreFilterRow,
+	RecallTemporalMeta,
+	RecallTimeOptions,
 	RememberRequestOptions,
+	TemporalFacet,
 } from "./recall";
 export {
 	createMemoriesFts,

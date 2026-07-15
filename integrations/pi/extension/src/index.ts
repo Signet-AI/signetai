@@ -140,33 +140,15 @@ export async function recallMemories(
 		saveAggregate?: boolean;
 	} = {},
 ): Promise<RecallPayload> {
-	const {
-		limit = 10,
-		agentId,
-		sessionKey,
-		includeRecalled,
-		scope,
-		aggregate,
-		aggregateBudget,
-		saveAggregate,
-	} = options;
-
 	const response = await fetch(`${daemonUrl}/api/memory/recall`, {
 		method: "POST",
 		headers: daemonHeaders({ "Content-Type": "application/json" }),
 		body: JSON.stringify(
 			buildRecallRequestBody(query, {
-				limit,
-				agentId,
-				sessionKey,
-				includeRecalled,
-				scope,
-				aggregate,
-				aggregateBudget,
-				saveAggregate,
+				...options,
 			}),
 		),
-		signal: AbortSignal.timeout(aggregate ? Math.max(READ_TIMEOUT * 6, 30_000) : READ_TIMEOUT),
+		signal: AbortSignal.timeout(options.aggregate ? Math.max(READ_TIMEOUT * 6, 30_000) : READ_TIMEOUT),
 	});
 
 	if (!response.ok) {
@@ -219,7 +201,7 @@ export async function searchSourceArtifacts(
 		project?: string;
 	} = {},
 ): Promise<RecallPayload> {
-	const { limit = 10, agentId, sessionKey, includeRecalled, project } = options;
+	const { limit, agentId, sessionKey, includeRecalled, project } = options;
 
 	const response = await fetch(`${daemonUrl}/api/memory/recall`, {
 		method: "POST",
@@ -465,7 +447,7 @@ function registerCommandsAndTools(pi: PiExtensionApi, daemonUrl: string, agentId
 			ctx.ui.notify(`Recalling: "${args}"...`, "info");
 
 			try {
-				const recall = await recallMemories(daemonUrl, args, { limit: 5, agentId });
+				const recall = await recallMemories(daemonUrl, args, { agentId });
 				const parsed = parseRecallPayload(recall);
 
 				if (parsed.rows.length === 0) {
@@ -565,8 +547,24 @@ function registerCommandsAndTools(pi: PiExtensionApi, daemonUrl: string, agentId
 			}),
 			limit: Type.Optional(
 				Type.Number({
-					description: "Maximum number of memories to return (default: 5)",
-					default: 5,
+					description: "Maximum number of memories to return (default: 10)",
+					default: 10,
+				}),
+			),
+			sessionKey: Type.Optional(
+				Type.String({
+					description: "Session key for per-context recall dedupe",
+				}),
+			),
+			includeRecalled: Type.Optional(
+				Type.Boolean({
+					description: "Include rows already recalled in this context",
+					default: false,
+				}),
+			),
+			scope: Type.Optional(
+				Type.Union([Type.Literal("global"), Type.Literal("agent"), Type.Literal("session")], {
+					description: "Recall scope constraint",
 				}),
 			),
 			aggregate: Type.Optional(
@@ -594,7 +592,12 @@ function registerCommandsAndTools(pi: PiExtensionApi, daemonUrl: string, agentId
 
 			try {
 				const query = String(params.query || "");
-				const limit = typeof params.limit === "number" ? params.limit : 5;
+				const limit = typeof params.limit === "number" ? params.limit : undefined;
+				const sessionKey = typeof params.sessionKey === "string" ? params.sessionKey : undefined;
+				const scope =
+					typeof params.scope === "string" && ["global", "agent", "session"].includes(params.scope)
+						? (params.scope as "global" | "agent" | "session")
+						: undefined;
 				const isAggregate = params.aggregate === true;
 				const aggregateBudget =
 					typeof params.aggregateBudget === "string" && ["small", "medium", "large"].includes(params.aggregateBudget)
@@ -604,6 +607,9 @@ function registerCommandsAndTools(pi: PiExtensionApi, daemonUrl: string, agentId
 				const recall = await recallMemories(daemonUrl, query, {
 					limit,
 					agentId,
+					sessionKey,
+					includeRecalled: params.includeRecalled === true,
+					scope,
 					aggregate: isAggregate,
 					aggregateBudget,
 				});
@@ -623,7 +629,11 @@ function registerCommandsAndTools(pi: PiExtensionApi, daemonUrl: string, agentId
 					state.memoryCount = aggregateRows.length;
 					updateStatus(ctx);
 
-					const parts = [`[Aggregate Recall] Query: ${query}`];
+					const degraded = recall.aggregate.partial === true;
+					const parts = [
+						degraded ? `[Aggregate Recall degraded] Query: ${query}` : `[Aggregate Recall] Query: ${query}`,
+					];
+					if (degraded && typeof recall.aggregate.message === "string") parts.push(recall.aggregate.message);
 					for (const row of aggregateRows) {
 						if (typeof row.content === "string") parts.push(row.content);
 					}

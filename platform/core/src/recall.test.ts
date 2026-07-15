@@ -42,6 +42,38 @@ describe("recall surface helpers", () => {
 		expect(text).toContain("id: ctx-1; SEC adds supporting evidence.");
 	});
 
+	it("formats degraded aggregate recall as evidence with a clear partial message", () => {
+		const text = formatRecallText({
+			method: "hybrid",
+			results: [
+				{
+					id: "mem-1",
+					content: "First evidence",
+					source: "hybrid",
+					type: "semantic",
+					created_at: "2026-05-20T12:00:00.000Z",
+				},
+			],
+			meta: { totalReturned: 1, hasSupplementary: false, noHits: false },
+			aggregate: {
+				savedMemoryId: null,
+				saved: false,
+				deduped: false,
+				budget: "small",
+				queries: ["what happened"],
+				sourceMemoryIds: ["mem-1"],
+				stoppedReason: "router_unavailable",
+				partial: true,
+				message: "Aggregate recall could not synthesize; returning retrieved evidence.",
+			},
+		});
+
+		expect(text).toContain("Aggregate recall could not synthesize; returning retrieved evidence.");
+		expect(text).toContain("Found 1 memory (hybrid).");
+		expect(text).toContain("First evidence");
+		expect(text).not.toContain("No matching memories found.");
+	});
+
 	it("builds recall request bodies without forwarding client-side score thresholds", () => {
 		expect(
 			buildRecallRequestBody("graph", {
@@ -63,6 +95,97 @@ describe("recall surface helpers", () => {
 		});
 	});
 
+	it("owns the canonical recall default limit", () => {
+		expect(buildRecallRequestBody("graph")).toEqual({
+			query: "graph",
+			limit: 10,
+		});
+	});
+
+	it("uses explicit agent ids before contextual agent ids", () => {
+		expect(
+			buildRecallRequestBody("graph", {
+				agentId: "explicit-agent",
+				contextAgentId: "context-agent",
+			}),
+		).toMatchObject({
+			agentId: "explicit-agent",
+		});
+
+		expect(
+			buildRecallRequestBody("graph", {
+				contextAgentId: "context-agent",
+			}),
+		).toMatchObject({
+			agentId: "context-agent",
+		});
+	});
+
+	it("normalizes standard recall aliases without losing valid options", () => {
+		expect(
+			buildRecallRequestBody("graph", {
+				keyword_query: "graph OR entity",
+				limit: 2,
+				agent_id: "agent-a",
+				session_key: "session-a",
+				include_recalled: true,
+				source_only: true,
+				aggregate: true,
+				aggregate_budget: "large",
+				save_aggregate: false,
+				scope: "session",
+				project: "/tmp/project",
+				type: "decision",
+				tags: "architecture",
+				who: "codex",
+				pinned: true,
+				importance_min: 0.8,
+				since: "2026-01-01",
+				until: "2026-02-01",
+				time: {
+					start: "2026-01-01T00:00:00.000Z",
+					end: "2026-02-01T00:00:00.000Z",
+					facets: ["captured", "source"],
+					mode: "filter",
+				},
+				expand: true,
+			}),
+		).toEqual({
+			query: "graph",
+			keywordQuery: "graph OR entity",
+			limit: 2,
+			agentId: "agent-a",
+			sessionKey: "session-a",
+			includeRecalled: true,
+			sourceOnly: true,
+			aggregate: true,
+			aggregateBudget: "large",
+			saveAggregate: false,
+			scope: "session",
+			project: "/tmp/project",
+			type: "decision",
+			tags: "architecture",
+			who: "codex",
+			pinned: true,
+			importance_min: 0.8,
+			since: "2026-01-01",
+			until: "2026-02-01",
+			time: {
+				start: "2026-01-01T00:00:00.000Z",
+				end: "2026-02-01T00:00:00.000Z",
+				facets: ["captured", "source"],
+				mode: "filter",
+			},
+			expand: true,
+		});
+	});
+
+	it("bounds recall limits to a positive canonical range", () => {
+		expect(buildRecallRequestBody("graph", { limit: 0 }).limit).toBe(1);
+		expect(buildRecallRequestBody("graph", { limit: -5 }).limit).toBe(1);
+		expect(buildRecallRequestBody("graph", { limit: 5000 }).limit).toBe(100);
+	});
+
 	it("forwards temporal recall request options", () => {
 		expect(
 			buildRecallRequestBody("2026/05/13", {
@@ -75,6 +198,7 @@ describe("recall surface helpers", () => {
 			}),
 		).toEqual({
 			query: "2026/05/13",
+			limit: 10,
 			time: {
 				start: "2026-05-13T00:00:00.000Z",
 				end: "2026-05-14T00:00:00.000Z",
@@ -128,6 +252,7 @@ describe("recall surface helpers", () => {
 			}),
 		).toEqual({
 			query: "graph",
+			limit: 10,
 			aggregate: true,
 			aggregateBudget: "medium",
 			saveAggregate: false,
@@ -137,9 +262,10 @@ describe("recall surface helpers", () => {
 	it("forwards source-only recall constraints only when callers set them", () => {
 		expect(buildRecallRequestBody("graph", { sourceOnly: true })).toEqual({
 			query: "graph",
+			limit: 10,
 			sourceOnly: true,
 		});
-		expect(buildRecallRequestBody("graph", { sourceOnly: false })).toEqual({ query: "graph" });
+		expect(buildRecallRequestBody("graph", { sourceOnly: false })).toEqual({ query: "graph", limit: 10 });
 	});
 
 	it("normalizes legacy structured aspect tuples for remember callers", () => {

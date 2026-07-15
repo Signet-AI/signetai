@@ -134,6 +134,27 @@ class StaticRouter implements AggregateInferenceRouter {
 	}
 }
 
+class SynthesisFailingRouter extends StaticRouter {
+	override async execute(
+		request: RouteRequest,
+		prompt: string,
+		opts?: {
+			readonly timeoutMs?: number;
+			readonly maxTokens?: number;
+			readonly refresh?: boolean;
+			readonly acpxHooks?: "disabled" | "inherit";
+		},
+	): ReturnType<AggregateInferenceRouter["execute"]> {
+		if (this.calls.length === 1) {
+			this.calls.push(request);
+			this.prompts.push(prompt);
+			this.opts.push(opts ?? {});
+			return { ok: false, error: new Error("synthesis unavailable") };
+		}
+		return super.execute(request, prompt, opts);
+	}
+}
+
 function quietLogger(): { readonly warn: ReturnType<typeof mock> } {
 	return {
 		warn: mock((_category: string, _message: string, _data?: Record<string, unknown>) => {}),
@@ -364,6 +385,69 @@ memory:
 			"https://gateway.example.test/v1/chat/completions",
 			"https://gateway.example.test/v1/chat/completions",
 		]);
+	});
+
+	it("returns evidence with partial aggregate metadata when the router is unavailable", async () => {
+		const result = await aggregateRecall(
+			{
+				query: "what evidence exists",
+				aggregate: true,
+				agentId: "agent-a",
+				readPolicy: "isolated",
+			},
+			loadMemoryConfig(dir),
+			{
+				embedFn: async () => null,
+				logger: quietLogger(),
+				hybridRecall: async (params: RecallParams) =>
+					response(params.query, [row("mem-1", "First evidence"), row("mem-2", "Second evidence")]),
+			},
+		);
+
+		expect(result.results.map((entry) => entry.id)).toEqual(["mem-1", "mem-2"]);
+		expect(result.meta.noHits).toBe(false);
+		expect(result.meta.totalReturned).toBe(2);
+		expect(result.aggregate).toMatchObject({
+			savedMemoryId: null,
+			saved: false,
+			deduped: false,
+			sourceMemoryIds: ["mem-1", "mem-2"],
+			stoppedReason: "router_unavailable",
+			partial: true,
+		});
+		expect(result.aggregate?.message).toContain("router");
+	});
+
+	it("returns evidence with partial aggregate metadata when synthesis fails", async () => {
+		const result = await aggregateRecall(
+			{
+				query: "what evidence exists",
+				aggregate: true,
+				agentId: "agent-a",
+				readPolicy: "isolated",
+			},
+			loadMemoryConfig(dir),
+			{
+				router: new SynthesisFailingRouter(),
+				embedFn: async () => null,
+				logger: quietLogger(),
+				hybridRecall: async (params: RecallParams) =>
+					response(params.query, [row("mem-1", "First evidence"), row("mem-2", "Second evidence")]),
+			},
+		);
+
+		expect(result.results.map((entry) => entry.id)).toEqual(["mem-1", "mem-2"]);
+		expect(result.meta.noHits).toBe(false);
+		expect(result.meta.totalReturned).toBe(2);
+		expect(result.aggregate).toMatchObject({
+			savedMemoryId: null,
+			saved: false,
+			deduped: false,
+			sourceMemoryIds: ["mem-1", "mem-2"],
+			stoppedReason: "synthesis_failed",
+			partial: true,
+		});
+		expect(result.aggregate?.message).toContain("synthesis");
 	});
 
 	it("dedupes repeated aggregate runs for the same evidence set", async () => {
@@ -1095,7 +1179,7 @@ memory:
 		expect(rows.pending_extract_count).toBe(1);
 	});
 
-	it("returns structured no-hit metadata when synthesis is unavailable", async () => {
+	it("returns structured no-hit metadata when aggregate recall has no evidence", async () => {
 		const result = await aggregateRecall(
 			{
 				query: "what happened",
@@ -1107,7 +1191,7 @@ memory:
 			{
 				router: null,
 				embedFn: async () => null,
-				hybridRecall: async (input: RecallParams) => response(input.query, [row("mem-1", "First evidence")]),
+				hybridRecall: async (input: RecallParams) => response(input.query, []),
 			},
 		);
 
@@ -1116,8 +1200,8 @@ memory:
 		expect(result.aggregate).toMatchObject({
 			saved: false,
 			savedMemoryId: null,
-			stoppedReason: "router_unavailable",
-			sourceMemoryIds: ["mem-1"],
+			stoppedReason: "no_evidence",
+			sourceMemoryIds: [],
 		});
 		expect(result.meta.timings.stages.map((stage) => stage.name)).toEqual(["aggregate_initial_recall"]);
 	});

@@ -139,6 +139,8 @@ export interface RecallResponse {
 		queries: readonly string[];
 		sourceMemoryIds: readonly string[];
 		stoppedReason: "complete" | "no_evidence" | "router_unavailable" | "synthesis_failed";
+		partial?: boolean;
+		message?: string;
 		usage?: AggregateRecallUsage;
 	};
 	entities?: Array<{

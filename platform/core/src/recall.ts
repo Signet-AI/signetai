@@ -71,6 +71,8 @@ export interface AggregateRecallMeta {
 	readonly queries: readonly string[];
 	readonly sourceMemoryIds: readonly string[];
 	readonly stoppedReason: "complete" | "no_evidence" | "router_unavailable" | "synthesis_failed";
+	readonly partial?: boolean;
+	readonly message?: string;
 	readonly usage?: AggregateRecallUsage;
 }
 
@@ -128,10 +130,15 @@ export interface RecallRequestOptions {
 	readonly time?: RecallTimeOptions;
 	readonly expand?: boolean;
 	readonly agentId?: string;
+	readonly agent_id?: string;
+	readonly contextAgentId?: string;
 	readonly sessionKey?: string;
+	readonly session_key?: string;
 	readonly includeRecalled?: boolean;
+	readonly include_recalled?: boolean;
 	readonly scope?: "global" | "agent" | "session";
 	readonly sourceOnly?: boolean;
+	readonly source_only?: boolean;
 	readonly aggregate?: boolean;
 	readonly aggregateBudget?: AggregateRecallBudget;
 	readonly aggregate_budget?: AggregateRecallBudget;
@@ -193,6 +200,11 @@ function normalizeRememberTags(tags: string | readonly string[] | undefined): st
 	}
 
 	return undefined;
+}
+
+function normalizeRecallLimit(limit: number | undefined): number {
+	if (typeof limit !== "number" || !Number.isFinite(limit)) return 10;
+	return Math.min(100, Math.max(1, Math.trunc(limit)));
 }
 
 export function partitionRecallRows<T extends RecallPartitionableRow>(
@@ -348,7 +360,14 @@ export function formatRecallText(raw: unknown): string {
 	const { primary, supporting } = partitionRecallRows(parsed.rows);
 	if (parsed.meta.temporal?.mode === "timeline") return formatTemporalRecallText(primary, parsed.meta.temporal);
 	const noun = parsed.meta.totalReturned === 1 ? "memory" : "memories";
-	const parts = [`Found ${parsed.meta.totalReturned} ${noun}${parsed.method ? ` (${parsed.method})` : ""}.`];
+	const parts =
+		payload.aggregate?.partial === true && typeof payload.aggregate.message === "string"
+			? [
+					payload.aggregate.message,
+					"",
+					`Found ${parsed.meta.totalReturned} ${noun}${parsed.method ? ` (${parsed.method})` : ""}.`,
+				]
+			: [`Found ${parsed.meta.totalReturned} ${noun}${parsed.method ? ` (${parsed.method})` : ""}.`];
 
 	if (primary.length > 0) {
 		parts.push("", "Primary matches:", ...primary.map((row) => formatRecallRow(row)));
@@ -365,7 +384,7 @@ export function buildRecallRequestBody(query: string, options: RecallRequestOpti
 	return withDefined({
 		query,
 		keywordQuery: options.keywordQuery ?? options.keyword_query,
-		limit: options.limit,
+		limit: normalizeRecallLimit(options.limit),
 		project: options.project,
 		type: options.type,
 		tags: options.tags,
@@ -376,11 +395,11 @@ export function buildRecallRequestBody(query: string, options: RecallRequestOpti
 		until: options.until,
 		time: options.time,
 		expand: options.expand === true ? true : undefined,
-		agentId: options.agentId,
-		sessionKey: options.sessionKey,
-		includeRecalled: options.includeRecalled === true ? true : undefined,
+		agentId: options.agentId ?? options.agent_id ?? options.contextAgentId,
+		sessionKey: options.sessionKey ?? options.session_key,
+		includeRecalled: options.includeRecalled === true || options.include_recalled === true ? true : undefined,
 		scope: options.scope,
-		sourceOnly: options.sourceOnly === true ? true : undefined,
+		sourceOnly: options.sourceOnly === true || options.source_only === true ? true : undefined,
 		aggregate: options.aggregate === true ? true : undefined,
 		aggregateBudget: options.aggregateBudget ?? options.aggregate_budget,
 		saveAggregate:

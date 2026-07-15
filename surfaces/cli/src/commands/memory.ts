@@ -94,7 +94,7 @@ export function registerMemoryCommands(program: Command, deps: MemoryDeps): void
 	program
 		.command("recall <query>")
 		.description("Search memories using hybrid (vector + keyword) search")
-		.option("-l, --limit <n>", "Max results", Number.parseInt, 10)
+		.option("-l, --limit <n>", "Max results", Number.parseInt)
 		.option("--project <project>", "Filter by project")
 		.option("-t, --type <type>", "Filter by type")
 		.option("--tags <tags>", "Filter by tags (comma-separated)")

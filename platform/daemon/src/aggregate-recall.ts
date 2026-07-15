@@ -245,6 +245,42 @@ function emptyAggregateResponse(
 	};
 }
 
+function degradedAggregateResponse(
+	params: RecallParams,
+	budget: AggregateRecallBudget,
+	queries: readonly string[],
+	evidence: readonly RecallResult[],
+	sourceMemoryIds: readonly string[],
+	stoppedReason: "router_unavailable" | "synthesis_failed",
+): RecallResponse {
+	const message =
+		stoppedReason === "router_unavailable"
+			? "Aggregate recall could not synthesize because the inference router is unavailable; returning retrieved evidence."
+			: "Aggregate recall synthesis failed; returning retrieved evidence.";
+	return {
+		results: [...evidence],
+		query: params.query,
+		method: "hybrid",
+		meta: {
+			totalReturned: evidence.length,
+			hasSupplementary: evidence.some((row) => row.supplementary === true),
+			noHits: evidence.length === 0,
+			timings: { totalMs: 0, stages: [] },
+		},
+		aggregate: {
+			savedMemoryId: null,
+			saved: false,
+			deduped: false,
+			budget,
+			queries,
+			sourceMemoryIds,
+			stoppedReason,
+			partial: true,
+			message,
+		},
+	};
+}
+
 function normalizeQuery(value: string): string {
 	return value.trim().replace(/\s+/g, " ").toLowerCase();
 }
@@ -759,6 +795,11 @@ export async function aggregateRecall(
 	if (!deps.router) {
 		const firstEvidence = uniqueEvidence(first.results);
 		const sourceMemoryIds = linkableSourceMemoryIds(firstEvidence);
+		if (firstEvidence.length > 0) {
+			return finish(
+				degradedAggregateResponse(params, budget, [params.query], firstEvidence, sourceMemoryIds, "router_unavailable"),
+			);
+		}
 		return finish(
 			emptyAggregateResponse(
 				params,
@@ -818,7 +859,7 @@ export async function aggregateRecall(
 	if (synthesized.usage) usageStages.push(synthesized.usage);
 	const answer = synthesized.answer;
 	if (!answer) {
-		return finish(emptyAggregateResponse(params, budget, queries, sourceMemoryIds, "synthesis_failed"));
+		return finish(degradedAggregateResponse(params, budget, queries, evidence, sourceMemoryIds, "synthesis_failed"));
 	}
 
 	const agentId = params.agentId ?? "default";

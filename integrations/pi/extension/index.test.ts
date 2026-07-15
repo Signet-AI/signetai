@@ -701,6 +701,198 @@ describe("SignetPiExtension", () => {
 		expect(toolNames).not.toContain("signet_memory_feedback");
 	});
 
+	it("signet_recall tool forwards canonical recall context with default limit 10", async () => {
+		let capturedBody: Record<string, unknown> = {};
+		const server = Bun.serve({
+			port: 0,
+			async fetch(req) {
+				const path = new URL(req.url).pathname;
+				if (path === "/health") return new Response(null, { status: 200 });
+				if (path === "/api/memory/recall") {
+					capturedBody = (await req.json()) as Record<string, unknown>;
+					return Response.json({
+						method: "hybrid",
+						results: [{ id: "mem-1", content: "session memory", source: "hybrid", type: "fact" }],
+						meta: { totalReturned: 1, hasSupplementary: false, noHits: false },
+					});
+				}
+				return new Response("not found", { status: 404 });
+			},
+		});
+		servers.push(server);
+		process.env.SIGNET_DAEMON_URL = `http://127.0.0.1:${server.port}`;
+		process.env.SIGNET_AGENT_ID = "context-agent";
+
+		let recallTool:
+			| {
+					parameters?: { properties?: Record<string, unknown> };
+					execute: (
+						toolCallId: string,
+						params: Record<string, unknown>,
+						signal: AbortSignal,
+						onUpdate: unknown,
+						ctx: unknown,
+					) => Promise<unknown>;
+			  }
+			| undefined;
+		const pi = {
+			on(_event: string, _handler: unknown) {},
+			registerCommand(_name: string, _opts: unknown) {},
+			registerTool(opts: { name: string; parameters?: { properties?: Record<string, unknown> }; execute: never }) {
+				if (opts.name === "signet_recall") recallTool = opts as typeof recallTool;
+			},
+		};
+
+		SignetPiExtension(pi as never);
+
+		expect(recallTool?.parameters?.properties).toHaveProperty("sessionKey");
+		expect(recallTool?.parameters?.properties).toHaveProperty("includeRecalled");
+		expect(recallTool?.parameters?.properties).toHaveProperty("scope");
+
+		const ctx = {
+			sessionManager: {
+				getHeader: () => ({ id: "ctx-session", cwd: "/tmp/pi-project" }),
+				getSessionId: () => "ctx-session",
+			},
+			ui: {
+				setStatus: () => {},
+				theme: { fg: (_color: string, text: string) => text },
+			},
+		};
+
+		await recallTool?.execute(
+			"tool-call-1",
+			{
+				query: "session memory",
+				sessionKey: "explicit-session",
+				includeRecalled: true,
+				scope: "session",
+			},
+			new AbortController().signal,
+			undefined,
+			ctx,
+		);
+
+		expect(capturedBody).toMatchObject({
+			query: "session memory",
+			limit: 10,
+			agentId: "context-agent",
+			sessionKey: "explicit-session",
+			includeRecalled: true,
+			scope: "session",
+		});
+	});
+
+	it("signet_recall tool labels degraded aggregate evidence honestly", async () => {
+		const server = Bun.serve({
+			port: 0,
+			async fetch(req) {
+				const path = new URL(req.url).pathname;
+				if (path === "/health") return new Response(null, { status: 200 });
+				if (path === "/api/memory/recall") {
+					return Response.json({
+						method: "hybrid",
+						results: [{ id: "mem-1", content: "First evidence", source: "hybrid", type: "semantic" }],
+						meta: { totalReturned: 1, hasSupplementary: false, noHits: false },
+						aggregate: {
+							savedMemoryId: null,
+							saved: false,
+							deduped: false,
+							budget: "small",
+							queries: ["what happened"],
+							sourceMemoryIds: ["mem-1"],
+							stoppedReason: "synthesis_failed",
+							partial: true,
+							message: "Aggregate recall synthesis failed; returning retrieved evidence.",
+						},
+					});
+				}
+				return new Response("not found", { status: 404 });
+			},
+		});
+		servers.push(server);
+		process.env.SIGNET_DAEMON_URL = `http://127.0.0.1:${server.port}`;
+
+		let recallTool:
+			| {
+					execute: (
+						toolCallId: string,
+						params: Record<string, unknown>,
+						signal: AbortSignal,
+						onUpdate: unknown,
+						ctx: unknown,
+					) => Promise<{ content?: Array<{ text?: string }>; details?: Record<string, unknown> }>;
+			  }
+			| undefined;
+		const pi = {
+			on(_event: string, _handler: unknown) {},
+			registerCommand(_name: string, _opts: unknown) {},
+			registerTool(opts: { name: string; execute: never }) {
+				if (opts.name === "signet_recall") recallTool = opts as typeof recallTool;
+			},
+		};
+
+		SignetPiExtension(pi as never);
+
+		const result = await recallTool?.execute(
+			"tool-call-1",
+			{ query: "what happened", aggregate: true },
+			new AbortController().signal,
+			undefined,
+			{
+				sessionManager: { getHeader: () => ({ id: "ctx-session" }), getSessionId: () => "ctx-session" },
+				ui: { setStatus: () => {}, theme: { fg: (_color: string, text: string) => text } },
+			},
+		);
+
+		expect(result?.content?.[0]?.text).toContain("[Aggregate Recall degraded]");
+		expect(result?.content?.[0]?.text).toContain("Aggregate recall synthesis failed");
+		expect(result?.content?.[0]?.text).toContain("First evidence");
+		expect(result?.details?.aggregate).toMatchObject({ partial: true, stoppedReason: "synthesis_failed" });
+	});
+
+	it("/recall command uses the canonical default recall limit", async () => {
+		let capturedBody: Record<string, unknown> = {};
+		const server = Bun.serve({
+			port: 0,
+			async fetch(req) {
+				const path = new URL(req.url).pathname;
+				if (path === "/health") return new Response(null, { status: 200 });
+				if (path === "/api/memory/recall") {
+					capturedBody = (await req.json()) as Record<string, unknown>;
+					return Response.json({
+						method: "hybrid",
+						results: [{ id: "mem-1", content: "command memory", source: "hybrid", type: "fact" }],
+						meta: { totalReturned: 1, hasSupplementary: false, noHits: false },
+					});
+				}
+				return new Response("not found", { status: 404 });
+			},
+		});
+		servers.push(server);
+		process.env.SIGNET_DAEMON_URL = `http://127.0.0.1:${server.port}`;
+
+		let recallCommand: { handler: (args: string, ctx: unknown) => Promise<void> } | undefined;
+		const pi = {
+			on(_event: string, _handler: unknown) {},
+			registerCommand(name: string, opts: { handler: (args: string, ctx: unknown) => Promise<void> }) {
+				if (name === "recall") recallCommand = opts;
+			},
+			registerTool(_opts: unknown) {},
+		};
+
+		SignetPiExtension(pi as never);
+		await recallCommand?.handler("command memory", {
+			ui: {
+				notify: () => {},
+				setStatus: () => {},
+				theme: { fg: (_color: string, text: string) => text },
+			},
+		});
+
+		expect(capturedBody.limit).toBe(10);
+	});
+
 	it("context injection end-to-end: session context and recall are delivered via context event", async () => {
 		const server = Bun.serve({
 			port: 0,

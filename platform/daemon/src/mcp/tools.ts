@@ -857,6 +857,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 				session_key: z.string().optional().describe("Session key for per-context recall dedupe"),
 				agent_id: z.string().optional().describe("Agent ID for scoped recall"),
 				include_recalled: z.boolean().optional().describe("Include rows already recalled in this context"),
+				scope: z.enum(["global", "agent", "session"]).optional().describe("Recall scope constraint"),
 			}),
 		},
 		async ({
@@ -880,12 +881,13 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			session_key,
 			agent_id,
 			include_recalled,
+			scope,
 		}) => {
 			const result = await fetchDaemon<unknown>(baseUrl, "/api/memory/recall", {
 				method: "POST",
 				body: buildRecallRequestBody(query, {
 					keyword_query,
-					limit: limit ?? 10,
+					limit,
 					project,
 					type,
 					tags,
@@ -901,6 +903,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 					sessionKey: session_key,
 					agentId: agent_id,
 					includeRecalled: include_recalled,
+					scope,
 				}),
 			});
 
@@ -945,6 +948,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 				session_key: z.string().optional().describe("Session key for per-context recall dedupe"),
 				agent_id: z.string().optional().describe("Agent ID for scoped recall"),
 				include_recalled: z.boolean().optional().describe("Include rows already recalled in this context"),
+				scope: z.enum(["global", "agent", "session"]).optional().describe("Recall scope constraint"),
 			}),
 		},
 		async ({
@@ -965,12 +969,13 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			session_key,
 			agent_id,
 			include_recalled,
+			scope,
 		}) => {
 			const result = await fetchDaemon<unknown>(baseUrl, "/api/memory/recall", {
 				method: "POST",
 				body: buildRecallRequestBody(query, {
 					keyword_query,
-					limit: limit ?? 10,
+					limit,
 					project,
 					type,
 					tags,
@@ -984,6 +989,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 					sessionKey: session_key,
 					agentId: agent_id,
 					includeRecalled: include_recalled,
+					scope,
 				}),
 			});
 
@@ -1012,7 +1018,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 				method: "POST",
 				body: {
 					...buildRecallRequestBody(query, {
-						limit: limit ?? 10,
+						limit,
 						project,
 						sessionKey: session_key,
 						agentId: agent_id,

@@ -720,6 +720,37 @@ describe("createMcpServer", () => {
 			expect(result.isError).toBeUndefined();
 			expect(result.content[0]?.text).toContain("Signet recall result");
 		});
+
+		it("forwards canonical recall context fields through signet_recall", async () => {
+			const cap: { body?: string } = {};
+			mockFetch(
+				200,
+				{
+					method: "hybrid",
+					results: [],
+					meta: { totalReturned: 0, hasSupplementary: false, noHits: true },
+				},
+				cap,
+			);
+
+			await callTool(server, "signet_recall", {
+				query: "What happened in this session?",
+				session_key: "session-b",
+				agent_id: "agent-b",
+				include_recalled: true,
+				scope: "session",
+			});
+
+			const body = JSON.parse(cap.body ?? "{}");
+			expect(body).toMatchObject({
+				query: "What happened in this session?",
+				limit: 10,
+				sessionKey: "session-b",
+				agentId: "agent-b",
+				includeRecalled: true,
+				scope: "session",
+			});
+		});
 	});
 
 	describe("signet_source_search", () => {
