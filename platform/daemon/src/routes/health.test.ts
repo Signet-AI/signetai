@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
@@ -21,6 +21,7 @@ import { mountHealthRoutes } from "./health";
  */
 
 let dir = "";
+let savedSignetPath: string | undefined;
 
 function makeApp(): Hono {
 	const app = new Hono();
@@ -31,11 +32,23 @@ function makeApp(): Hono {
 beforeEach(() => {
 	closeDbAccessor();
 	dir = mkdtempSync(join(tmpdir(), "signet-health-routes-"));
+	// Point the daemon's base path at the bare temp workspace and disable the
+	// embedding provider: readiness must pass here without depending on
+	// whatever providers happen to run on the host machine.
+	savedSignetPath = process.env.SIGNET_PATH;
+	process.env.SIGNET_PATH = dir;
+	writeFileSync(join(dir, "agent.yaml"), "embedding:\n  provider: none\n");
 	initDbAccessor(join(dir, "memory", "memories.db"));
 });
 
 afterEach(() => {
 	closeDbAccessor();
+	if (savedSignetPath === undefined) {
+		// biome-ignore lint/performance/noDelete: deleting env keys avoids stringifying undefined in process.env.
+		delete process.env.SIGNET_PATH;
+	} else {
+		process.env.SIGNET_PATH = savedSignetPath;
+	}
 	rmSync(dir, { recursive: true, force: true });
 });
 

@@ -4,12 +4,12 @@
  */
 
 import type { Context, MiddlewareHandler } from "hono";
-import type { AuthConfig } from "./config";
-import type { AuthResult, Permission, TokenScope } from "./types";
-import { verifyToken } from "./tokens";
 import { isSignetApiKey } from "./api-keys";
+import type { AuthConfig } from "./config";
 import { checkPermission, checkScope } from "./policy";
 import type { AuthRateLimiter } from "./rate-limiter";
+import { verifyToken } from "./tokens";
+import type { AuthResult, Permission, TokenScope } from "./types";
 
 // Augment Hono context variables
 declare module "hono" {
@@ -28,7 +28,7 @@ function extractBearerToken(header: string | undefined): string | null {
 const LOOPBACK = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
 
 export function isAuthOpenPath(path: string): boolean {
-	if (path === "/health") return true;
+	if (path === "/health" || path === "/health/live" || path === "/health/ready") return true;
 	if (path === "/api/auth/login" || path === "/api/auth/methods" || path === "/api/auth/whoami") return true;
 	if (path.startsWith("/api/auth/sso/") || path.startsWith("/api/auth/saml/")) return true;
 	return false;
