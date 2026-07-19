@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getExtractionStatusNotice, getStatusReport, showDoctor } from "./health.js";
+import { getExtractionStatusNotice, getStatusReport, showDoctor, showStatus } from "./health.js";
 
 const originalHome = process.env.HOME;
 const originalOpenClawConfig = process.env.OPENCLAW_CONFIG_PATH;
@@ -602,5 +602,95 @@ describe("getExtractionStatusNotice", () => {
 
 		expect(notice?.level).toBe("error");
 		expect(notice?.title).toBe("Extraction blocked");
+	});
+});
+
+describe("showStatus readiness labeling", () => {
+	function runningDaemonDeps(
+		basePath: string,
+		probe: {
+			status: "healthy" | "degraded";
+			detail: string;
+			url: string;
+			listenerPresent: boolean;
+			processPid: number | null;
+			stalePid: number | null;
+			readinessReasons?: readonly string[];
+		},
+	) {
+		return {
+			...depsFor(basePath),
+			getDaemonStatus: async () => ({
+				running: true,
+				pid: 42,
+				uptime: 10,
+				version: "0.148.0",
+				host: "127.0.0.1",
+				bindHost: "127.0.0.1",
+				networkMode: "local",
+				extraction: null,
+				extractionWorker: null,
+				transcripts: null,
+				probe,
+				openclaw: null,
+			}),
+		};
+	}
+
+	async function captureStatus(deps: ReturnType<typeof runningDaemonDeps>): Promise<string> {
+		const lines: string[] = [];
+		const oldLog = console.log;
+		console.log = (...args: unknown[]) => {
+			lines.push(args.join(" "));
+		};
+		try {
+			await showStatus({}, deps);
+		} finally {
+			console.log = oldLog;
+		}
+		return lines.join("\n");
+	}
+
+	it("labels liveness and shows degraded readiness reasons", async () => {
+		const root = mkdtempSync(join(tmpdir(), "health-status-"));
+		try {
+			const output = await captureStatus(
+				runningDaemonDeps(root, {
+					status: "degraded",
+					detail: "/health responded; readiness degraded",
+					url: "http://127.0.0.1:3850",
+					listenerPresent: true,
+					processPid: 42,
+					stalePid: null,
+					readinessReasons: ["pending migrations"],
+				}),
+			);
+			expect(output).toContain("Daemon running");
+			expect(output).toContain("(live)");
+			expect(output).toContain("Readiness degraded: pending migrations");
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("keeps status output unchanged when the daemon is ready", async () => {
+		const root = mkdtempSync(join(tmpdir(), "health-status-"));
+		try {
+			const output = await captureStatus(
+				runningDaemonDeps(root, {
+					status: "healthy",
+					detail: "/health responded",
+					url: "http://127.0.0.1:3850",
+					listenerPresent: true,
+					processPid: 42,
+					stalePid: null,
+				}),
+			);
+			expect(output).toContain("Daemon running");
+			expect(output).not.toContain("(live)");
+			expect(output).not.toContain("Readiness degraded");
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
 	});
 });

@@ -26,12 +26,14 @@ export const DEFAULT_PORT = 3850;
 const DAEMON_BASE_URLS = [`http://127.0.0.1:${DEFAULT_PORT}`, `http://[::1]:${DEFAULT_PORT}`] as const;
 
 export interface DaemonHealthProbe {
-	readonly status: "healthy" | "listener-unhealthy" | "process-unhealthy" | "stale-artifact" | "absent";
+	readonly status: "healthy" | "degraded" | "listener-unhealthy" | "process-unhealthy" | "stale-artifact" | "absent";
 	readonly detail: string;
 	readonly url: string | null;
 	readonly listenerPresent: boolean;
 	readonly processPid: number | null;
 	readonly stalePid: number | null;
+	/** Present only when /health/ready reported not_ready; absent when readiness is unknown (older daemon). */
+	readonly readinessReasons?: readonly string[];
 }
 
 export interface DaemonOpenClawHealthSummary {
@@ -154,6 +156,55 @@ async function isDaemonHealthyAt(baseUrl: string): Promise<boolean> {
 	} catch {
 		return false;
 	}
+}
+
+interface DaemonReadiness {
+	readonly ready: boolean;
+	readonly reasons: string[];
+}
+
+// Readiness is null when /health/ready is unreachable (e.g. an older daemon
+// without the route); callers must treat null as unknown, never as not-ready.
+async function fetchDaemonReadiness(baseUrl: string): Promise<DaemonReadiness | null> {
+	try {
+		const response = await fetch(`${baseUrl}/health/ready`, {
+			signal: AbortSignal.timeout(1200),
+		});
+		if (!response.ok && response.status !== 503) return null;
+		const data = (await response.json()) as { status?: string; reasons?: unknown };
+		if (data.status !== "ready" && data.status !== "not_ready") return null;
+		return { ready: data.status === "ready", reasons: stringArray(data.reasons) };
+	} catch {
+		return null;
+	}
+}
+
+function reachableDaemonProbe(
+	baseUrl: string,
+	processPid: number | null,
+	readiness: DaemonReadiness | null,
+	note?: string,
+): DaemonHealthProbe {
+	const detail = `/health responded successfully at ${baseUrl}${note ?? ""}`;
+	if (readiness !== null && !readiness.ready) {
+		return {
+			status: "degraded",
+			detail: `${detail}; readiness degraded`,
+			url: baseUrl,
+			listenerPresent: true,
+			processPid,
+			stalePid: null,
+			readinessReasons: readiness.reasons,
+		};
+	}
+	return {
+		status: "healthy",
+		detail,
+		url: baseUrl,
+		listenerPresent: true,
+		processPid,
+		stalePid: null,
+	};
 }
 
 async function fetchJsonOrNull<T>(baseUrl: string, path: string): Promise<T | null> {
@@ -325,6 +376,7 @@ async function getDaemonInstances(): Promise<DaemonInstance[]> {
 					const extractionWorker = data.pipeline?.extraction;
 					const transcripts = data.transcripts?.capture;
 					const openclawReport = await fetchJsonOrNull<unknown>(baseUrl, "/api/diagnostics/openclaw");
+					const readiness = await fetchDaemonReadiness(baseUrl);
 					return {
 						baseUrl,
 						pid: data.pid ?? null,
@@ -365,14 +417,7 @@ async function getDaemonInstances(): Promise<DaemonInstance[]> {
 									dead: typeof transcripts.dead === "number" ? transcripts.dead : 0,
 								}
 							: null,
-						probe: {
-							status: "healthy",
-							detail: `/health responded successfully at ${baseUrl}`,
-							url: baseUrl,
-							listenerPresent: true,
-							processPid: data.pid ?? null,
-							stalePid: null,
-						},
+						probe: reachableDaemonProbe(baseUrl, data.pid ?? null, readiness),
 						openclaw: summarizeOpenClawHealth(openclawReport),
 					};
 				}
@@ -391,14 +436,12 @@ async function getDaemonInstances(): Promise<DaemonInstance[]> {
 				extraction: null,
 				extractionWorker: null,
 				transcripts: null,
-				probe: {
-					status: "healthy",
-					detail: `/health responded successfully at ${baseUrl}; /api/status did not return full metadata`,
-					url: baseUrl,
-					listenerPresent: true,
-					processPid: null,
-					stalePid: null,
-				},
+				probe: reachableDaemonProbe(
+					baseUrl,
+					null,
+					await fetchDaemonReadiness(baseUrl),
+					"; /api/status did not return full metadata",
+				),
 				openclaw: null,
 			};
 		}),

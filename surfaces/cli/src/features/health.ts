@@ -46,12 +46,13 @@ interface DaemonStatus {
 		readonly dead: number;
 	} | null;
 	readonly probe?: {
-		readonly status: "healthy" | "listener-unhealthy" | "process-unhealthy" | "stale-artifact" | "absent";
+		readonly status: "healthy" | "degraded" | "listener-unhealthy" | "process-unhealthy" | "stale-artifact" | "absent";
 		readonly detail: string;
 		readonly url: string | null;
 		readonly listenerPresent: boolean;
 		readonly processPid: number | null;
 		readonly stalePid: number | null;
+		readonly readinessReasons?: readonly string[];
 	};
 	readonly openclaw?: {
 		readonly status: "connected" | "stale" | "never-seen";
@@ -208,14 +209,22 @@ export async function showStatus(options: { path?: string; json?: boolean }, dep
 	console.log(chalk.bold("  Status\n"));
 
 	if (report.daemon.running) {
+		const readinessDegraded = report.daemon.probe?.status === "degraded";
 		const ver = report.daemon.version && report.daemon.version !== "0.0.0" ? ` v${report.daemon.version}` : "";
-		console.log(`  ${chalk.green("●")} Daemon ${chalk.green("running")}${chalk.dim(ver)}`);
+		console.log(
+			`  ${chalk.green("●")} Daemon ${chalk.green("running")}${chalk.dim(ver)}${readinessDegraded ? chalk.dim(" (live)") : ""}`,
+		);
 		console.log(chalk.dim(`    PID: ${report.daemon.pid ?? "unknown"}`));
 		console.log(
 			chalk.dim(`    Uptime: ${report.daemon.uptime === null ? "unknown" : deps.formatUptime(report.daemon.uptime)}`),
 		);
 		for (const line of daemonAccessLines(deps.defaultPort, report.daemon)) {
 			console.log(chalk.dim(`    ${line}`));
+		}
+		if (readinessDegraded) {
+			const reasons = report.daemon.probe?.readinessReasons ?? [];
+			const summary = reasons.slice(0, 2).join("; ");
+			console.log(chalk.yellow(`    ▲ Readiness degraded${summary ? `: ${summary}` : ""}`));
 		}
 		const transcripts = report.daemon.transcripts;
 		if (transcripts) {

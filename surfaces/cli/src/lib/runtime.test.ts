@@ -421,6 +421,9 @@ describe("getDaemonStatus", () => {
 
 		const status = await getDaemonStatus();
 		expect(status.running).toBe(true);
+		// The mock has no /health/ready route (older daemon): readiness is unknown, not a regression.
+		expect(status.probe.status).toBe("healthy");
+		expect(status.probe.readinessReasons).toBeUndefined();
 		expect(status.extraction).toEqual({
 			configured: "claude-code",
 			effective: "ollama",
@@ -449,5 +452,63 @@ describe("getDaemonStatus", () => {
 			lastLatencyMs: 42,
 			lastError: "daemon returned no prompt memory injection",
 		});
+	});
+
+	it("keeps the probe healthy when /health/ready reports ready", async () => {
+		globalThis.fetch = async (input: string | URL) => {
+			const url = String(input);
+			if (url.endsWith("/health/ready")) {
+				return Response.json({
+					status: "ready",
+					version: "0.148.0",
+					shuttingDown: false,
+					checks: { db: true, migrations: true },
+					reasons: [],
+				});
+			}
+			if (url.endsWith("/health")) {
+				return new Response("ok", { status: 200 });
+			}
+			if (url.endsWith("/api/status")) {
+				return Response.json({ pid: 42, uptime: 10, version: "0.148.0" });
+			}
+			return new Response("not found", { status: 404 });
+		};
+
+		const status = await getDaemonStatus();
+		expect(status.running).toBe(true);
+		expect(status.probe.status).toBe("healthy");
+		expect(status.probe.readinessReasons).toBeUndefined();
+	});
+
+	it("marks the probe degraded with reasons when /health/ready reports not_ready", async () => {
+		globalThis.fetch = async (input: string | URL) => {
+			const url = String(input);
+			if (url.endsWith("/health/ready")) {
+				return Response.json(
+					{
+						status: "not_ready",
+						version: "0.148.0",
+						shuttingDown: false,
+						checks: { db: true, migrations: false },
+						reasons: ["pending migrations"],
+					},
+					{ status: 503 },
+				);
+			}
+			if (url.endsWith("/health")) {
+				return new Response("ok", { status: 200 });
+			}
+			if (url.endsWith("/api/status")) {
+				return Response.json({ pid: 42, uptime: 10, version: "0.148.0" });
+			}
+			return new Response("not found", { status: 404 });
+		};
+
+		const status = await getDaemonStatus();
+		expect(status.running).toBe(true);
+		expect(status.probe.status).toBe("degraded");
+		expect(status.probe.readinessReasons).toEqual(["pending migrations"]);
+		expect(status.probe.detail).toContain("readiness degraded");
 	});
 });
