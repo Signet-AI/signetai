@@ -773,6 +773,14 @@ async fn main() -> anyhow::Result<()> {
             axum::routing::post(routes::repair::check_fts),
         )
         .route(
+            "/api/repair/integrity-check",
+            get(routes::repair::integrity_check),
+        )
+        .route(
+            "/api/repair/rebuild-indexes",
+            axum::routing::post(routes::repair::rebuild_indexes),
+        )
+        .route(
             "/api/repair/retention-sweep",
             axum::routing::post(routes::repair::retention_sweep),
         )

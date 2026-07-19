@@ -1331,6 +1331,217 @@ pub async fn re_embed(
     )
 }
 
+/// Run `PRAGMA integrity_check` and reduce it to the TypeScript shape:
+/// ok=true with an empty message list for a single "ok" row, otherwise
+/// ok=false with the reported violations.
+async fn pragma_integrity_check(
+    state: &AppState,
+) -> Result<(bool, Vec<String>), signet_core::CoreError> {
+    let value = state
+        .pool
+        .read(|conn| {
+            let mut stmt = conn.prepare("PRAGMA integrity_check")?;
+            let messages = stmt
+                .query_map([], |row| row.get::<_, String>(0))?
+                .collect::<rusqlite::Result<Vec<String>>>()?;
+            Ok(serde_json::json!(messages))
+        })
+        .await?;
+    let messages = value
+        .as_array()
+        .map(|rows| {
+            rows.iter()
+                .filter_map(|row| row.as_str().map(str::to_string))
+                .collect::<Vec<String>>()
+        })
+        .unwrap_or_default();
+    let ok = messages.len() == 1 && messages[0] == "ok";
+    Ok((ok, if ok { Vec::new() } else { messages }))
+}
+
+/// GET /api/repair/integrity-check — run PRAGMA integrity_check.
+pub async fn integrity_check(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    match pragma_integrity_check(&state).await {
+        Ok((ok, messages)) => (
+            StatusCode::OK,
+            Json(serde_json::json!({ "ok": ok, "messages": messages })),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "ok": false, "messages": [e.to_string()] })),
+        ),
+    }
+}
+
+/// POST /api/repair/rebuild-indexes — coordinated rebuild of derived indexes:
+/// integrity check, FTS consistency repair, then re-embed up to 200 gaps.
+pub async fn rebuild_indexes(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    // Step 1: SQLite integrity check.
+    let (integrity_ok, integrity_messages) = match pragma_integrity_check(&state).await {
+        Ok(result) => result,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            );
+        }
+    };
+
+    // Step 2: FTS consistency check with repair, mirroring the TypeScript
+    // checkFtsConsistency threshold (ftsCount > memCount * 1.1).
+    let fts = state
+        .pool
+        .write(signet_core::db::Priority::Low, |conn| {
+            let mem_count: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM memories WHERE COALESCE(is_deleted, 0) = 0",
+                [],
+                |row| row.get(0),
+            )?;
+            let fts_count: i64 = conn
+                .query_row("SELECT COUNT(*) FROM memories_fts", [], |row| row.get(0))
+                .unwrap_or(0);
+            let mismatch = mem_count > 0 && (fts_count as f64) > mem_count as f64 * 1.1;
+            if mismatch {
+                conn.execute(
+                    "INSERT INTO memories_fts(memories_fts) VALUES('rebuild')",
+                    [],
+                )?;
+            }
+            let message = if mismatch {
+                format!(
+                    "FTS mismatch: {mem_count} active memories vs {fts_count} FTS rows — rebuilt"
+                )
+            } else {
+                format!("FTS consistent: {mem_count} active, {fts_count} FTS rows")
+            };
+            Ok(serde_json::json!({ "repaired": mismatch, "message": message }))
+        })
+        .await;
+    let fts = match fts {
+        Ok(value) => value,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            );
+        }
+    };
+    let fts_repaired = fts["repaired"].as_bool().unwrap_or(false);
+    let fts_message = fts["message"].as_str().unwrap_or("").to_string();
+
+    // Step 3: re-embed a single batch of up to 200 memories missing vectors.
+    let rows = match state
+        .pool
+        .read(|conn| {
+            let rows = list_unembedded_memories(conn, 200)?;
+            Ok(serde_json::Value::Array(
+                rows.into_iter()
+                    .map(|row| {
+                        serde_json::json!({
+                            "id": row.id,
+                            "content": row.content,
+                            "contentHash": row.content_hash,
+                        })
+                    })
+                    .collect::<Vec<_>>(),
+            ))
+        })
+        .await
+    {
+        Ok(value) => value
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|value| {
+                Some(UnembeddedMemory {
+                    id: value.get("id")?.as_str()?.to_string(),
+                    content: value.get("content")?.as_str()?.to_string(),
+                    content_hash: value
+                        .get("contentHash")
+                        .and_then(serde_json::Value::as_str)
+                        .map(ToOwned::to_owned),
+                })
+            })
+            .collect::<Vec<_>>(),
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            );
+        }
+    };
+
+    let selected = rows.len();
+    let mut written = 0usize;
+    if !rows.is_empty() {
+        if let Some(provider) = state.embedding.read().await.clone() {
+            let mut vectors = Vec::new();
+            for row in rows {
+                match provider.embed(&row.content).await {
+                    Some(vector) if vector.len() == provider.dimensions() => {
+                        vectors.push((row, vector));
+                    }
+                    Some(_) | None => {}
+                }
+            }
+            let model = state
+                .config
+                .manifest
+                .embedding
+                .as_ref()
+                .map(|embedding| embedding.model.clone());
+            if !vectors.is_empty() {
+                match state
+                    .pool
+                    .write(signet_core::db::Priority::Low, move |conn| {
+                        Ok(serde_json::json!(write_embedding_batch(
+                            conn,
+                            &vectors,
+                            model.as_deref(),
+                        )?))
+                    })
+                    .await
+                {
+                    Ok(value) => written = value.as_u64().unwrap_or(0) as usize,
+                    Err(e) => {
+                        return (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(serde_json::json!({ "error": e.to_string() })),
+                        );
+                    }
+                }
+            }
+        }
+    }
+    let total_missing = selected - written;
+
+    let mut parts: Vec<String> = Vec::new();
+    if integrity_ok {
+        parts.push("integrity: ok".to_string());
+    } else {
+        parts.push(format!("integrity: {} issue(s)", integrity_messages.len()));
+    }
+    parts.push(if fts_repaired {
+        "FTS: repaired".to_string()
+    } else {
+        "FTS: consistent".to_string()
+    });
+    parts.push(format!(
+        "embeddings: re-embedded {written} of {selected} missing"
+    ));
+
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "integrity": { "ok": integrity_ok, "messages": integrity_messages },
+            "fts": { "repaired": fts_repaired, "message": fts_message },
+            "embeddings": { "reembedded": written, "totalMissing": total_missing },
+            "summary": parts.join(" · "),
+        })),
+    )
+}
+
 /// POST /api/repair/resync-vec — rebuild vector index.
 pub async fn resync_vec(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let result = state

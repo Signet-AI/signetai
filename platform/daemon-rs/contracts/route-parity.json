@@ -8,9 +8,8 @@
 		"deprecated-remove-from-ts-too": "Route is intentionally unsupported and must be removed or hidden from both daemons."
 	},
 	"summary": {
-		"native-rust-replay-proven": 321,
-		"mounted-shallow": 7,
-		"missing": 2
+		"native-rust-replay-proven": 323,
+		"mounted-shallow": 7
 	},
 	"routes": [
 		{
@@ -2448,9 +2447,9 @@
 			"path": "/api/repair/integrity-check",
 			"file": "platform/daemon/src/routes/repair-routes.ts",
 			"line": 585,
-			"status": "missing",
-			"rustMounted": false,
-			"contractReplay": false,
+			"status": "native-rust-replay-proven",
+			"rustMounted": true,
+			"contractReplay": true,
 			"parityRule": false
 		},
 		{
@@ -2498,9 +2497,9 @@
 			"path": "/api/repair/rebuild-indexes",
 			"file": "platform/daemon/src/routes/repair-routes.ts",
 			"line": 590,
-			"status": "missing",
-			"rustMounted": false,
-			"contractReplay": false,
+			"status": "native-rust-replay-proven",
+			"rustMounted": true,
+			"contractReplay": true,
 			"parityRule": false
 		},
 		{
