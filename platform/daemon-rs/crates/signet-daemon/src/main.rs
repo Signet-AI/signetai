@@ -2256,6 +2256,7 @@ async fn health(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
 
 // Queue backlog thresholds, mirroring the TS daemon's diagnostics constants
 // (platform/daemon/src/diagnostics.ts) so /health/ready gates on the same limits.
+// Cross-daemon parity is asserted by constants-parity.test.ts — update both sides.
 const QUEUE_MAX_DEPTH: i64 = 50;
 const QUEUE_MAX_DEAD_RATE: f64 = 0.01;
 const QUEUE_MAX_OLDEST_AGE_SEC: f64 = 300.0;

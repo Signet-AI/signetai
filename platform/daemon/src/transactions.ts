@@ -7,7 +7,7 @@
  */
 
 import type { WriteDb } from "./db-accessor";
-import { syncVecDeleteBySourceExceptHash, syncVecDeleteBySourceId, syncVecInsert, vectorToBlob } from "./db-helpers";
+import { syncVecDeleteBySourceExceptHash, syncVecDeleteBySourceId, syncVecInsert, tableExists, vectorToBlob } from "./db-helpers";
 import { cancelExtractionJobsForForgottenMemory } from "./pipeline/extraction-queue";
 
 // ---------------------------------------------------------------------------
@@ -237,11 +237,6 @@ export function insertHistoryEvent(
 		args.sessionId ?? null,
 		args.requestId ?? null,
 	);
-}
-
-function tableExists(db: WriteDb, name: string): boolean {
-	const row = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name);
-	return row !== null && row !== undefined;
 }
 
 function deleteAggregateMemorySourceLinks(db: WriteDb, memoryId: string): void {

@@ -1,5 +1,6 @@
 import type { AgentRosterReadPolicy, RecallTemporalMeta, TemporalFacet } from "@signet/core";
 import { getDbAccessor } from "./db-accessor";
+import { tableExists } from "./db-helpers";
 import { buildAgentScopeClause } from "./memory-access-scope";
 
 const DEFAULT_TEMPORAL_FACETS: readonly TemporalFacet[] = [
@@ -283,10 +284,6 @@ export function parseTemporalRecallIntent(params: {
 		mode: resolveTemporalMode(params.time?.mode, contentQuery),
 		facets: normalizeFacets(params.time?.facets),
 	};
-}
-
-function tableExists(db: { prepare(sql: string): { get(...args: unknown[]): unknown } }, name: string): boolean {
-	return db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(name) !== undefined;
 }
 
 function columnExists(

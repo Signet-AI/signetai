@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 
 import { dirname, join } from "node:path";
 import { extractAnchorTerms } from "./anchor-terms";
 import { getDbAccessor } from "./db-accessor";
+import { tableExists as tableExistsIn } from "./db-helpers";
 import { logger } from "./logger";
 import { sanitizeFtsQuery } from "./memory-search";
 import {
@@ -90,10 +91,7 @@ function markBackfillCanonical(classification: TranscriptSessionKeyClassificatio
 
 function tableExists(name: string): boolean {
 	try {
-		return getDbAccessor().withReadDb((db) => {
-			const row = db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`).get(name);
-			return row !== undefined;
-		});
+		return getDbAccessor().withReadDb((db) => tableExistsIn(db, name));
 	} catch {
 		return false;
 	}

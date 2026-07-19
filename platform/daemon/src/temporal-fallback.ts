@@ -1,5 +1,6 @@
 import { extractAnchorTerms } from "./anchor-terms";
 import { getDbAccessor } from "./db-accessor";
+import { tableExists as tableExistsIn } from "./db-helpers";
 import { logger } from "./logger";
 import { escapeLike } from "./sql-utils";
 import { deriveThreadKey, deriveThreadLabel } from "./thread-heads";
@@ -30,10 +31,7 @@ export interface TemporalHit {
 
 function tableExists(name: string): boolean {
 	try {
-		return getDbAccessor().withReadDb((db) => {
-			const row = db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`).get(name);
-			return row !== undefined;
-		});
+		return getDbAccessor().withReadDb((db) => tableExistsIn(db, name));
 	} catch (err) {
 		logger.warn("temporal-fallback", "tableExists failed", {
 			table: name,
