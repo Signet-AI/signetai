@@ -329,12 +329,18 @@ fn model_registry_exposes_checked_static_catalog_without_synthesized_deprecation
             "gpt-5.2",
         ]
     );
+    let kimi: Vec<_> = by_provider["kimi"]
+        .iter()
+        .map(|model| model.id.as_str())
+        .collect();
+    assert_eq!(kimi, vec!["kimi-k3", "kimi-k2.7", "kimi-k2.6"]);
 
     let status = get_registry_status();
     assert!(status.initialized);
     assert_eq!(status.last_refresh_at, 0);
     assert_eq!(status.model_counts["acpx"], 3);
     assert_eq!(status.model_counts["codex"], 6);
+    assert_eq!(status.model_counts["kimi"], 3);
 
     let entries = vec![ModelRegistryEntry {
         id: "provider/known-older".to_string(),

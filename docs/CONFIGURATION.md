@@ -200,7 +200,7 @@ verification.
 ### harnesses
 
 List of AI platforms to integrate with. Valid values: `claude-code`,
-`opencode`, `openclaw`, `codex`, `gemini`, `oh-my-pi`, `pi`, and
+`opencode`, `openclaw`, `codex`, `kimi`, `gemini`, `oh-my-pi`, `pi`, and
 `hermes-agent`. Support for `cursor`, `windsurf`, and `chatgpt` is planned.
 
 
@@ -335,7 +335,7 @@ process reads all memories and asks a model to write a coherent summary.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `harness` | string | `"openclaw"` | Which harness runs synthesis (`openclaw`, `claude-code`, `codex`, `opencode`) |
+| `harness` | string | `"openclaw"` | Which harness runs synthesis (`openclaw`, `claude-code`, `codex`, `kimi`, `opencode`) |
 | `model` | string | `"sonnet"` | Model identifier |
 | `schedule` | string | `"daily"` | `"daily"`, `"weekly"`, or `"on-demand"` |
 | `max_tokens` | number | `4000` | Max output tokens |
@@ -690,7 +690,7 @@ Controls the LLM-based extraction stage. Supports multiple providers.
 
 | Field | Default | Range | Description |
 |-------|---------|-------|-------------|
-| `provider` | `"llama-cpp"` | — | `"none"`, `"acpx"`, `"llama-cpp"`, `"ollama"`, `"claude-code"`, `"opencode"`, `"codex"`, `"anthropic"`, `"openrouter"`, `"openai-compatible"`, or `"command"` |
+| `provider` | `"llama-cpp"` | — | `"none"`, `"acpx"`, `"llama-cpp"`, `"ollama"`, `"claude-code"`, `"opencode"`, `"codex"`, `"kimi"`, `"anthropic"`, `"openrouter"`, `"openai-compatible"`, or `"command"` |
 | `fallbackProvider` | `"llama-cpp"` | — | `"llama-cpp"`, `"ollama"`, or `"none"`; legacy extraction configs compile this into an inference fallback target |
 | `model` | `"qwen3:4b"` | — | Model name for the configured provider |
 | `timeout` | `90000` | 5000-300000 ms | Extraction call timeout |
@@ -726,7 +726,7 @@ that billing behavior.
 `rateLimit` is opt-in. If the stanza is omitted, Signet preserves the
 provider's existing behavior with no throughput throttling. When
 configured, it applies only to remote or paid providers
-(`acpx`, `claude-code`, `anthropic`, `openrouter`, `openai-compatible`, `codex`, `opencode`).
+(`acpx`, `claude-code`, `anthropic`, `openrouter`, `openai-compatible`, `codex`, `kimi`, `opencode`).
 Ollama and `command` providers are always exempt. If you set `rateLimit`
 on an exempt provider, Signet logs a warning and passes calls through
 unthrottled.
@@ -757,7 +757,8 @@ often under load.
 
 When using `ollama`, the model must be available locally. When using
 `claude-code`, the Claude Code CLI must be on PATH. `codex` uses the
-Codex CLI as the extraction provider. Lower `minConfidence` to capture
+Codex CLI as the extraction provider. `kimi` uses the Kimi CLI
+(models Kimi K3 / K2.7 / K2.6, default Kimi K2.7). Lower `minConfidence` to capture
 more facts at the cost of noise; raise it to write only high-confidence
 facts.
 
@@ -823,7 +824,7 @@ handles synthesis.
 | Field | Default | Range | Description |
 |-------|---------|-------|-------------|
 | `enabled` | `true` | — | Enable background session summary generation |
-| `provider` | inherited from extraction when omitted | — | `"none"`, `"llama-cpp"`, `"ollama"`, `"claude-code"`, `"codex"`, `"opencode"`, `"anthropic"`, `"openrouter"`, or `"openai-compatible"` |
+| `provider` | inherited from extraction when omitted | — | `"none"`, `"llama-cpp"`, `"ollama"`, `"claude-code"`, `"codex"`, `"kimi"`, `"opencode"`, `"anthropic"`, `"openrouter"`, or `"openai-compatible"` |
 | `model` | inherited from extraction when omitted | — | Model name for the configured provider |
 | `endpoint` | inherited from extraction when omitted | — | Optional base URL override for Ollama, OpenCode, OpenRouter, or OpenAI-compatible gateways |
 | `timeout` | inherited from extraction when omitted | 5000-300000 ms | Summary generation timeout |

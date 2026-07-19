@@ -696,8 +696,8 @@ export function registerMiscRoutes(app: Hono): void {
 			return c.json({ error: "Invalid cron expression" }, 400);
 		}
 
-		if (harness !== "claude-code" && harness !== "opencode" && harness !== "codex") {
-			return c.json({ error: "harness must be 'claude-code', 'codex', or 'opencode'" }, 400);
+		if (harness !== "claude-code" && harness !== "opencode" && harness !== "codex" && harness !== "kimi") {
+			return c.json({ error: "harness must be 'claude-code', 'codex', 'kimi', or 'opencode'" }, 400);
 		}
 
 		if (skillName && (skillName.includes("/") || skillName.includes(".."))) {
@@ -893,7 +893,12 @@ export function registerMiscRoutes(app: Hono): void {
 
 		const taskPrompt = typeof task.prompt === "string" ? task.prompt : null;
 		const taskHarness =
-			task.harness === "claude-code" || task.harness === "opencode" || task.harness === "codex" ? task.harness : null;
+			task.harness === "claude-code" ||
+			task.harness === "opencode" ||
+			task.harness === "codex" ||
+			task.harness === "kimi"
+				? task.harness
+				: null;
 		if (!taskPrompt || !taskHarness) {
 			return c.json({ error: "Task has invalid prompt or harness" }, 500);
 		}
@@ -902,7 +907,9 @@ export function registerMiscRoutes(app: Hono): void {
 		const taskWorkingDir = typeof task.working_directory === "string" ? task.working_directory : null;
 		const taskAgentId = readTaskAgentId(task, scoped.agentId);
 		const taskModel =
-			taskHarness === "claude-code" || taskHarness === "codex" ? resolveTaskModel(taskHarness) : undefined;
+			taskHarness === "claude-code" || taskHarness === "codex" || taskHarness === "kimi"
+				? resolveTaskModel(taskHarness)
+				: undefined;
 
 		const effectivePrompt = resolveSkillPrompt(taskPrompt, taskSkillName, taskSkillMode);
 		const startedMs = Date.now();

@@ -18,6 +18,14 @@ export function normalizeSessionTranscript(
 		return raw;
 	}
 
+	if (harness.trim().toLowerCase() === "kimi") {
+		const kimi = normalizeKimiTranscript(raw);
+		if (kimi) return kimi;
+		const generic = normalizeJsonConversationTranscript(raw);
+		if (generic !== null) return generic;
+		return raw;
+	}
+
 	const result = normalizeJsonConversationTranscript(raw);
 	// null = not a JSON-line transcript, safe to return raw.
 	if (result === null) return raw;
@@ -200,4 +208,65 @@ export function normalizeCodexTranscript(raw: string): string {
 	}
 
 	return lines.join("\n");
+}
+
+/**
+ * Normalize a Kimi Code CLI stream-json transcript.
+ *
+ * Kimi emits chat-shaped JSONL records:
+ *   {"role":"assistant","content":"...","tool_calls":[...]}
+ *   {"role":"tool","tool_call_id":"...","content":"..."}
+ *   {"role":"meta","type":"session.resume_hint",...}
+ * Assistant content may be a string or an array of text parts, and
+ * tool-call-only assistant turns may omit content entirely.
+ */
+export function normalizeKimiTranscript(raw: string): string {
+	const lines: string[] = [];
+
+	for (const row of raw.split(/\r?\n/)) {
+		const trimmed = row.trim();
+		if (!trimmed) continue;
+
+		let parsed: unknown;
+		try {
+			parsed = JSON.parse(trimmed);
+		} catch {
+			continue;
+		}
+
+		if (typeof parsed !== "object" || parsed === null) continue;
+		const record = parsed as Record<string, unknown>;
+
+		if (record.role === "user") {
+			const text = extractKimiMessageText(record.content);
+			if (text) lines.push(`User: ${text}`);
+			continue;
+		}
+
+		if (record.role === "assistant") {
+			const text = extractKimiMessageText(record.content);
+			if (text) lines.push(`Assistant: ${text}`);
+		}
+
+		// tool and meta records are intentionally omitted.
+	}
+
+	return lines.join("\n");
+}
+
+function extractKimiMessageText(content: unknown): string {
+	const rawText =
+		typeof content === "string"
+			? content
+			: Array.isArray(content)
+				? content
+						.flatMap((part) => {
+							if (typeof part === "string") return [part];
+							if (!isRecord(part)) return [];
+							const text = extractString(part, ["text", "content"]);
+							return text ? [text] : [];
+						})
+						.join(" ")
+				: "";
+	return rawText.trim().replace(/[\r\n]+/g, " ");
 }

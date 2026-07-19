@@ -10,6 +10,7 @@ export type HarnessChoice =
 	| "oh-my-pi"
 	| "pi"
 	| "codex"
+	| "kimi"
 	| "hermes-agent"
 	| "gemini";
 export type EmbeddingProviderChoice = "native" | "llama-cpp" | "ollama" | "openai" | "none";
@@ -20,6 +21,7 @@ export type ExtractionProviderChoice =
 	| "ollama"
 	| "opencode"
 	| "codex"
+	| "kimi"
 	| "openrouter"
 	| "openai-compatible"
 	| "none";
@@ -43,6 +45,7 @@ export const SETUP_HARNESS_CHOICES: readonly HarnessChoice[] = [
 	"oh-my-pi",
 	"pi",
 	"codex",
+	"kimi",
 	"hermes-agent",
 	"gemini",
 ];
@@ -54,6 +57,7 @@ export const EXTRACTION_PROVIDER_CHOICES: readonly ExtractionProviderChoice[] = 
 	"ollama",
 	"opencode",
 	"codex",
+	"kimi",
 	"openrouter",
 	"openai-compatible",
 	"none",
@@ -68,6 +72,7 @@ const DETECTED_EXTRACTION_PROVIDER_ORDER: readonly ExtractionProviderChoice[] = 
 	"codex",
 	"ollama",
 	"opencode",
+	"kimi",
 ];
 
 interface PathDeps {
@@ -83,6 +88,15 @@ export function hasExistingIdentityFiles(detection: SetupDetection): boolean {
 	const core = ["AGENTS.md", "SOUL.md", "IDENTITY.md", "USER.md"];
 	const found = detection.identityFiles.filter((file) => core.includes(file));
 	return found.length >= 2;
+}
+
+/**
+ * Read a harness flag from SetupDetection tolerantly. Newer cores add keys
+ * (e.g. `kimi`) to detection.harnesses; this keeps the CLI compiling and
+ * working against cores that predate the field.
+ */
+export function detectionHasHarness(detection: SetupDetection, key: string): boolean {
+	return (detection.harnesses as unknown as Record<string, boolean | undefined>)[key] === true;
 }
 
 export function formatDetectionSummary(detection: SetupDetection): string {
@@ -101,6 +115,7 @@ export function formatDetectionSummary(detection: SetupDetection): string {
 	if (detection.harnesses.ohMyPi) harnesses.push("Oh My Pi");
 	if (detection.harnesses.pi) harnesses.push("Pi");
 	if (detection.harnesses.codex) harnesses.push("Codex");
+	if (detectionHasHarness(detection, "kimi")) harnesses.push("Kimi");
 	if (detection.harnesses.hermesAgent) harnesses.push("Hermes Agent");
 	if (detection.harnesses.gemini) harnesses.push("Gemini");
 	if (harnesses.length > 0) {
@@ -275,6 +290,9 @@ function extractionProvidersFromHarnesses(harnesses: readonly HarnessChoice[]): 
 		let provider: ExtractionProviderChoice | null = null;
 		if (harness === "claude-code" || harness === "codex" || harness === "opencode") {
 			provider = "acpx";
+		}
+		if (harness === "kimi") {
+			provider = "kimi";
 		}
 		if (provider && !providers.includes(provider)) {
 			providers.push(provider);

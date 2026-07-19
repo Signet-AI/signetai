@@ -360,6 +360,11 @@ fn model_registry_matches_static_ts_catalog() {
             "gpt-5.2",
         ]
     );
+    let kimi: Vec<_> = by_provider["kimi"]
+        .iter()
+        .map(|model| model.id.as_str())
+        .collect();
+    assert_eq!(kimi, vec!["kimi-k3", "kimi-k2.7", "kimi-k2.6"]);
     assert_eq!(
         get_available_models(Some("constructor"), false),
         Vec::<ModelRegistryEntry>::new()
@@ -370,6 +375,7 @@ fn model_registry_matches_static_ts_catalog() {
     assert_eq!(status.last_refresh_at, 0);
     assert_eq!(status.model_counts["acpx"], 3);
     assert_eq!(status.model_counts["codex"], 6);
+    assert_eq!(status.model_counts["kimi"], 3);
 
     let entries = vec![ModelRegistryEntry {
         id: "provider/known-older".to_string(),

@@ -21,7 +21,7 @@ use crate::state::AppState;
 // Constants
 // ---------------------------------------------------------------------------
 
-const VALID_HARNESSES: &[&str] = &["claude-code", "opencode", "codex"];
+const VALID_HARNESSES: &[&str] = &["claude-code", "opencode", "codex", "kimi"];
 
 const CRON_PRESETS: &[(&str, &str)] = &[
     ("Every 15 min", "*/15 * * * *"),
@@ -241,7 +241,7 @@ fn parse_create_task(
     if !VALID_HARNESSES.contains(&harness.as_str()) {
         return Err((
             StatusCode::BAD_REQUEST,
-            serde_json::json!({"error": "harness must be 'claude-code', 'codex', or 'opencode'"}),
+            serde_json::json!({"error": "harness must be 'claude-code', 'codex', 'kimi', or 'opencode'"}),
         ));
     }
 
@@ -749,6 +749,7 @@ mod tests {
         assert!(VALID_HARNESSES.contains(&"claude-code"));
         assert!(VALID_HARNESSES.contains(&"opencode"));
         assert!(VALID_HARNESSES.contains(&"codex"));
+        assert!(VALID_HARNESSES.contains(&"kimi"));
         assert!(!VALID_HARNESSES.contains(&"unknown"));
     }
 

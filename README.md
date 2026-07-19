@@ -49,7 +49,7 @@ the durable layer underneath your agents.
 | Local-first custody | SQLite, readable workspace files, transcripts, source records, memories, optional identity files, and secrets metadata live where you control them |
 | Source-backed recall | Every useful memory can point back to where it came from |
 | Repairable memory | Inspect, edit, supersede, delete, reclassify, and scope bad context |
-| Portable across agents | One layer works across Claude Code, Codex, OpenCode, OpenClaw, Gemini CLI, Hermes Agent, MCP, SDKs, and apps |
+| Portable across agents | One layer works across Claude Code, Codex, Kimi, OpenCode, OpenClaw, Gemini CLI, Hermes Agent, MCP, SDKs, and apps |
 | Team deployment primitives | Signet includes scoped agents, visibility, auth policy, retention controls, secrets storage, and audit-friendly APIs |
 | Proven recall | LongMemEval-tracked recall without giving up governance |
 
@@ -68,7 +68,7 @@ signet status                        # confirm daemon + pipeline health
 signet dashboard                     # open memory + retrieval inspector
 ```
 
-If you already use Claude Code, OpenCode, OpenClaw, Codex, Gemini CLI,
+If you already use Claude Code, OpenCode, OpenClaw, Codex, Kimi, Gemini CLI,
 Pi, Oh My Pi, or Hermes Agent, keep your existing harness. Signet installs
 under it.
 
@@ -157,6 +157,7 @@ the tools people already use and gives them one owned memory layer.
 | [OpenCode](https://github.com/sst/opencode) | Plugin + hooks | Runtime plugin with lifecycle support |
 | [OpenClaw](https://github.com/openclaw/openclaw) | Runtime plugin | Flagship path; hooks available for legacy setups |
 | [Codex](https://github.com/openai/codex) | MCP + compatibility hooks | MCP-first integration; plugin bundle when available |
+| [Kimi](https://github.com/MoonshotAI/kimi-cli) | Hooks + MCP | `config.toml` hooks plus stdio MCP server |
 | [Hermes Agent](https://github.com/NousResearch/hermes-agent) | Memory provider plugin | `memory_*`, `recall`, and `remember` tools |
 | [Pi](https://github.com/mariozechner/pi-coding-agent) | Extension + hooks | Memory commands and agent-callable tools |
 | Oh My Pi | Managed extension | Lifecycle recall injection through the managed extension |
@@ -325,7 +326,7 @@ SDK (@signet/sdk)
   typed client, React hooks, Vercel/OpenAI helpers, plugin-facing primitives
 
 Connectors
-  claude-code, opencode, openclaw, codex, gemini, oh-my-pi, pi,
+  claude-code, opencode, openclaw, codex, kimi, gemini, oh-my-pi, pi,
   hermes-agent
 ```
 
@@ -388,7 +389,7 @@ Requirements:
 - Bun for normal repo development
 - Node.js 18+ for Node-targeted package surfaces
 - macOS or Linux
-- Optional for harness integrations: Claude Code, Codex, OpenCode, OpenClaw,
+- Optional for harness integrations: Claude Code, Codex, Kimi, OpenCode, OpenClaw,
   Gemini CLI, Pi, Oh My Pi, or Hermes Agent
 
 Embeddings (choose one):

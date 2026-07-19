@@ -1161,6 +1161,15 @@ pub fn from_config(cfg: &LlmProviderConfig) -> Arc<dyn LlmProvider> {
             info!(provider = "codex", model = %cfg.model, timeout_ms = timeout, "LLM provider initialized");
             Arc::new(CliProvider::new("codex", &["exec"], timeout, "codex"))
         }
+        "kimi" => {
+            info!(provider = "kimi", model = %cfg.model, timeout_ms = timeout, "LLM provider initialized");
+            Arc::new(CliProvider::new(
+                "kimi",
+                &["-p", "--output-format", "stream-json"],
+                timeout,
+                "kimi",
+            ))
+        }
         "acpx" => {
             info!(provider = "acpx", model = %cfg.model, timeout_ms = timeout, "LLM provider initialized");
             Arc::new(CliProvider::new("acpx", &[], timeout, "acpx"))

@@ -26,7 +26,7 @@ const editing = $derived(editingId ? tasks.find((t) => t.id === editingId) : nul
 let name = $state("");
 let prompt = $state("");
 let cronExpression = $state("0 9 * * *");
-let harness = $state<"claude-code" | "opencode" | "codex">("claude-code");
+let harness = $state<"claude-code" | "opencode" | "codex" | "kimi">("claude-code");
 let workingDirectory = $state("");
 let cronMode = $state<"preset" | "custom">("preset");
 let submitting = $state(false);
@@ -246,10 +246,10 @@ const selectItemClass = "text-[12px] text-[var(--sig-text)]";
 					<Select.Root
 						type="single"
 						value={harness}
-						onValueChange={(v) => { if (v) harness = v as "claude-code" | "opencode" | "codex"; }}
+						onValueChange={(v) => { if (v) harness = v as "claude-code" | "opencode" | "codex" | "kimi"; }}
 					>
 						<Select.Trigger class="{inputClass} w-full">
-							{harness === "claude-code" ? "Claude Code" : harness === "codex" ? "Codex" : "OpenCode"}
+							{harness === "claude-code" ? "Claude Code" : harness === "codex" ? "Codex" : harness === "kimi" ? "Kimi (Kimi CLI)" : "OpenCode"}
 						</Select.Trigger>
 						<Select.Content class={selectContentClass}>
 							<Select.Item value="claude-code" label="Claude Code" class={selectItemClass}>
@@ -257,6 +257,9 @@ const selectItemClass = "text-[12px] text-[var(--sig-text)]";
 							</Select.Item>
 							<Select.Item value="codex" label="Codex" class={selectItemClass}>
 								Codex
+							</Select.Item>
+							<Select.Item value="kimi" label="Kimi (Kimi CLI)" class={selectItemClass}>
+								Kimi (Kimi CLI)
 							</Select.Item>
 							<Select.Item value="opencode" label="OpenCode" class={selectItemClass}>
 								OpenCode

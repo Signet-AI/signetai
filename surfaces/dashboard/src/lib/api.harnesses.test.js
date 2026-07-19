@@ -29,14 +29,22 @@ describe("harness api helper", () => {
 						exists: true,
 						lastSeen: null,
 					},
+					{
+						id: "kimi",
+						name: "Kimi",
+						path: "/tmp/kimi",
+						exists: true,
+						lastSeen: null,
+					},
 				],
 			});
 		};
 
 		const harnesses = await getHarnesses(50);
 
-		expect(harnesses).toHaveLength(1);
+		expect(harnesses).toHaveLength(2);
 		expect(harnesses[0].id).toBe("codex");
+		expect(harnesses[1].id).toBe("kimi");
 	});
 
 	it("falls back to an empty list when harness discovery stalls", async () => {

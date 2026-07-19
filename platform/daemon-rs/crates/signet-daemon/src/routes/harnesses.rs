@@ -19,14 +19,17 @@ pub async fn list(State(state): State<Arc<AppState>>) -> Json<serde_json::Value>
     let opencode_path = home.join(".config").join("opencode").join("AGENTS.md");
     let openclaw_path = state.config.base_path.join("AGENTS.md");
     let gemini_path = home.join(".gemini").join("settings.json");
+    let kimi_path = home.join(".kimi-code").join("config.toml");
     let claude_exists = claude_path.exists();
     let opencode_exists = opencode_path.exists();
     let openclaw_exists = openclaw_path.exists();
     let gemini_exists = gemini_path.exists();
+    let kimi_exists = kimi_path.exists();
     let claude_last_seen = state.harness_last_seen("claude-code").await;
     let opencode_last_seen = state.harness_last_seen("opencode").await;
     let openclaw_last_seen = state.harness_last_seen("openclaw").await;
     let gemini_last_seen = state.harness_last_seen("gemini").await;
+    let kimi_last_seen = state.harness_last_seen("kimi").await;
 
     let harnesses = vec![
         json!({
@@ -56,6 +59,13 @@ pub async fn list(State(state): State<Arc<AppState>>) -> Json<serde_json::Value>
             "path": gemini_path,
             "exists": gemini_exists,
             "lastSeen": gemini_last_seen,
+        }),
+        json!({
+            "name": "Kimi CLI",
+            "id": "kimi",
+            "path": kimi_path,
+            "exists": kimi_exists,
+            "lastSeen": kimi_last_seen,
         }),
     ];
 

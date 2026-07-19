@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import {
 	normalizeCodexTranscript,
 	normalizeJsonConversationTranscript,
+	normalizeKimiTranscript,
 	normalizeSessionTranscript,
 } from "./transcript-normalization";
 
@@ -60,5 +61,32 @@ describe("transcript normalization", () => {
 
 		expect(normalizeSessionTranscript("custom", raw, (next) => (warning = next))).toBe("");
 		expect(warning).toEqual({ harness: "custom", rawChars: raw.length });
+	});
+
+	it("normalizes Kimi stream-json user and assistant messages without tool or meta lines", () => {
+		const raw = [
+			JSON.stringify({ role: "user", content: "hello\nthere" }),
+			JSON.stringify({
+				role: "assistant",
+				tool_calls: [{ type: "function", id: "tc_1", function: { name: "Read", arguments: "{}" } }],
+			}),
+			JSON.stringify({ role: "tool", tool_call_id: "tc_1", content: "file contents" }),
+			JSON.stringify({ role: "assistant", content: "hi\nback" }),
+			JSON.stringify({ role: "meta", type: "session.resume_hint", session_id: "abc" }),
+		].join("\n");
+
+		expect(normalizeKimiTranscript(raw)).toBe("User: hello there\nAssistant: hi back");
+		expect(normalizeSessionTranscript("kimi", raw)).toBe("User: hello there\nAssistant: hi back");
+	});
+
+	it("normalizes Kimi array-form assistant content", () => {
+		const raw = JSON.stringify({ role: "assistant", content: [{ type: "text", text: "answer" }] });
+
+		expect(normalizeKimiTranscript(raw)).toBe("Assistant: answer");
+	});
+
+	it("falls back to raw text for rendered Kimi transcripts", () => {
+		const raw = "User: plain Kimi transcript\nAssistant: queued";
+		expect(normalizeSessionTranscript("kimi", raw)).toBe(raw);
 	});
 });

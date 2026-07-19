@@ -351,6 +351,7 @@ export {
 	resolveHermesRepoPath,
 	resolveHermesRepoPluginPath,
 	hermesAgentCandidateDirs,
+	resolveKimiHomePath,
 } from "./identity";
 export type {
 	IdentityFileSpec,

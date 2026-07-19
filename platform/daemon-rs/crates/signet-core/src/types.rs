@@ -312,6 +312,7 @@ pub enum TaskHarness {
     ClaudeCode,
     Opencode,
     Codex,
+    Kimi,
 }
 
 impl TaskHarness {
@@ -320,6 +321,7 @@ impl TaskHarness {
             Self::ClaudeCode => "claude-code",
             Self::Opencode => "opencode",
             Self::Codex => "codex",
+            Self::Kimi => "kimi",
         }
     }
 }

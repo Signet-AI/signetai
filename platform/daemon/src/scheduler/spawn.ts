@@ -42,6 +42,13 @@ function buildCommand(harness: TaskHarness, prompt: string, model?: string): rea
 			args.push(prompt);
 			return ["codex", args];
 		}
+		case "kimi": {
+			const args = ["-p", prompt, "--output-format", "stream-json"];
+			if (model) {
+				args.push("-m", model);
+			}
+			return ["kimi", args];
+		}
 		case "opencode":
 			return ["opencode", ["run", "--format", "json", prompt]];
 	}

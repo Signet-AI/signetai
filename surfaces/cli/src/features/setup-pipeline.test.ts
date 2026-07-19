@@ -15,6 +15,10 @@ describe("defaultExtractionModel", () => {
 	it("uses qwen3:4b as the ollama floor", () => {
 		expect(defaultExtractionModel("ollama")).toBe("qwen3:4b");
 	});
+
+	it("uses kimi-k2.7 as the Kimi CLI default", () => {
+		expect(defaultExtractionModel("kimi")).toBe("kimi-k2.7");
+	});
 });
 
 describe("buildSetupPipeline", () => {

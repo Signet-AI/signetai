@@ -25,6 +25,7 @@ agent:
 # ============================================================================
 
 # AI tools this agent works with
+# Valid values: claude-code, codex, kimi, opencode, openclaw, forge, oh-my-pi, pi, hermes-agent, gemini
 harnesses:
   - claude-code
   - codex

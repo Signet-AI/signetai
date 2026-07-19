@@ -19,6 +19,7 @@ const ORIGINAL_HOME = process.env.HOME;
 const ORIGINAL_HERMES_REPO = process.env.HERMES_REPO;
 const ORIGINAL_HERMES_HOME = process.env.HERMES_HOME;
 const ORIGINAL_FORGE_CONFIG = process.env.FORGE_CONFIG;
+const ORIGINAL_KIMI_CODE_HOME = process.env.KIMI_CODE_HOME;
 
 beforeEach(() => mkdirSync(TMP, { recursive: true }));
 afterEach(() => {
@@ -45,6 +46,12 @@ afterEach(() => {
 		delete process.env.FORGE_CONFIG;
 	} else {
 		process.env.FORGE_CONFIG = ORIGINAL_FORGE_CONFIG;
+	}
+	if (ORIGINAL_KIMI_CODE_HOME === undefined) {
+		// biome-ignore lint/performance/noDelete: assigning undefined stores the string "undefined"
+		delete process.env.KIMI_CODE_HOME;
+	} else {
+		process.env.KIMI_CODE_HOME = ORIGINAL_KIMI_CODE_HOME;
 	}
 	rmSync(TMP, { recursive: true, force: true });
 });
@@ -246,6 +253,30 @@ describe("detectExistingSetup", () => {
 		const detection = detectExistingSetup(TMP);
 
 		expect(detection.harnesses.forge).toBe(true);
+	});
+
+	test("detects Kimi Code from the default ~/.kimi-code config path", () => {
+		process.env.HOME = TMP;
+		// biome-ignore lint/performance/noDelete: assigning undefined stores the string "undefined"
+		delete process.env.KIMI_CODE_HOME;
+		mkdirSync(join(TMP, ".kimi-code"), { recursive: true });
+		writeFileSync(join(TMP, ".kimi-code", "config.toml"), "# config\n");
+
+		const detection = detectExistingSetup(TMP);
+
+		expect(detection.harnesses.kimi).toBe(true);
+	});
+
+	test("detects Kimi Code from the KIMI_CODE_HOME override", () => {
+		process.env.HOME = TMP;
+		const kimiHome = join(TMP, "custom-kimi-home");
+		process.env.KIMI_CODE_HOME = kimiHome;
+		mkdirSync(kimiHome, { recursive: true });
+		writeFileSync(join(kimiHome, "config.toml"), "# config\n");
+
+		const detection = detectExistingSetup(TMP);
+
+		expect(detection.harnesses.kimi).toBe(true);
 	});
 });
 

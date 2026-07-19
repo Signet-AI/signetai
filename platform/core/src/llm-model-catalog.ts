@@ -12,6 +12,7 @@ export type ModelCatalogProvider =
 	| "ollama"
 	| "claude-code"
 	| "codex"
+	| "kimi"
 	| "opencode"
 	| "anthropic"
 	| "openrouter"
@@ -52,6 +53,11 @@ export const PIPELINE_MODEL_CATALOG = {
 		{ value: "openai/gpt-5.4-mini", label: "openai/gpt-5.4-mini", tier: "low", source: "harness" },
 		{ value: "openai/gpt-5.4", label: "openai/gpt-5.4", tier: "mid", source: "harness" },
 	],
+	kimi: [
+		{ value: "kimi-k3", label: "Kimi K3", tier: "high", source: "harness" },
+		{ value: "kimi-k2.7", label: "Kimi K2.7", tier: "mid", source: "harness" },
+		{ value: "kimi-k2.6", label: "Kimi K2.6", tier: "low", source: "harness" },
+	],
 	anthropic: [
 		{ value: "claude-3-5-haiku-20241022", label: "Claude 3.5 Haiku", tier: "low", source: "provider" },
 		{ value: "claude-sonnet-4-20250514", label: "Claude Sonnet 4", tier: "mid", source: "provider" },
@@ -76,6 +82,7 @@ export const MODEL_DEFAULTS = {
 	ollama: "qwen3:4b",
 	"claude-code": "haiku",
 	codex: "gpt-5.4-mini",
+	kimi: "kimi-k2.7",
 	opencode: "google/gemini-2.5-flash",
 	anthropic: "claude-3-5-haiku-20241022",
 	openrouter: "openai/gpt-4o-mini",

@@ -250,6 +250,7 @@ async function configureHarnesses(yaml: string, deps: Deps, dir: string): Promis
 		choices: [
 			{ value: "claude-code", name: "Claude Code" },
 			{ value: "codex", name: "Codex" },
+			{ value: "kimi", name: "Kimi" },
 			{ value: "opencode", name: "OpenCode" },
 			{ value: "openclaw", name: "OpenClaw" },
 			{ value: "hermes-agent", name: "Hermes Agent" },

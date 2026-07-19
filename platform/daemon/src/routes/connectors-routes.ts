@@ -369,6 +369,12 @@ export function registerConnectorRoutes(app: Hono): void {
 				path: join(homedir(), ".gemini", "settings.json"),
 				exists: existsSync(join(homedir(), ".gemini", "settings.json")),
 			},
+			{
+				name: "Kimi CLI",
+				id: "kimi",
+				path: join(homedir(), ".kimi-code", "config.toml"),
+				exists: existsSync(join(homedir(), ".kimi-code", "config.toml")),
+			},
 		];
 
 		const harnesses = configs.map((config) => ({

@@ -48,6 +48,7 @@ const REMOTE_PROVIDERS = new Set([
 	"acpx",
 	"claude-code",
 	"codex",
+	"kimi",
 	"opencode",
 	"anthropic",
 	"openrouter",

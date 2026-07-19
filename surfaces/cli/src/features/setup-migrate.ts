@@ -35,6 +35,7 @@ import { enforceSetupProtection, printSetupProtectionSummary, refreshSnapshotPro
 import {
 	type EmbeddingProviderChoice,
 	type ExtractionProviderChoice,
+	detectionHasHarness,
 	formatWorkspaceSourceRepoSync,
 	getEmbeddingDimensions,
 	readErr,
@@ -54,6 +55,7 @@ export function detectedHarnessesForExistingSetup(
 	if (detection.harnesses.opencode) detected.push("opencode");
 	if (detection.harnesses.forge || configuredHarnessList.includes("forge")) detected.push("forge");
 	if (detection.harnesses.codex) detected.push("codex");
+	if (detectionHasHarness(detection, "kimi") || configuredHarnessList.includes("kimi")) detected.push("kimi");
 	if (detection.harnesses.hermesAgent) detected.push("hermes-agent");
 	if (detection.harnesses.gemini) detected.push("gemini");
 	if (detection.harnesses.ohMyPi || configuredHarnessList.includes("oh-my-pi")) detected.push("oh-my-pi");

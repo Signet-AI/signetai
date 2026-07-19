@@ -12,6 +12,7 @@ export const PIPELINE_PROVIDER_CHOICES = [
 	"ollama",
 	"claude-code",
 	"codex",
+	"kimi",
 	"opencode",
 	"anthropic",
 	"openrouter",

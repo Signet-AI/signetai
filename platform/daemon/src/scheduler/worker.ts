@@ -6,7 +6,7 @@
  */
 
 import type { TaskHarness } from "@signet/core";
-import { resolveDefaultBasePath } from "@signet/core";
+import { defaultPipelineModel, resolveDefaultBasePath } from "@signet/core";
 import type { DbAccessor, ReadDb } from "../db-accessor";
 import { logger } from "../logger";
 import { loadMemoryConfig } from "../memory-config";
@@ -24,6 +24,7 @@ export interface SchedulerHandle {
 const POLL_INTERVAL_MS = 15_000;
 const MAX_CONCURRENT = 3;
 const TASK_MODEL_CACHE_TTL_MS = 5_000;
+const DEFAULT_KIMI_TASK_MODEL = defaultPipelineModel("kimi");
 
 interface TaskModelCacheEntry {
 	readonly model: string | undefined;
@@ -32,7 +33,7 @@ interface TaskModelCacheEntry {
 
 const taskModelCache = new Map<string, TaskModelCacheEntry>();
 
-function taskModelCacheKey(harness: "claude-code" | "codex", agentsDir: string): string {
+function taskModelCacheKey(harness: "claude-code" | "codex" | "kimi", agentsDir: string): string {
 	return `${agentsDir}:${harness}`;
 }
 
@@ -41,7 +42,7 @@ function getAgentsDir(): string {
 }
 
 function isTaskHarness(value: string): value is TaskHarness {
-	return value === "claude-code" || value === "opencode" || value === "codex";
+	return value === "claude-code" || value === "opencode" || value === "codex" || value === "kimi";
 }
 
 export interface DueTaskRow {
@@ -83,7 +84,7 @@ export function resolveTaskModel(
 	harness: DueTaskRow["harness"],
 	agentsDir: string = getAgentsDir(),
 ): string | undefined {
-	if (harness !== "codex" && harness !== "claude-code") return undefined;
+	if (harness !== "codex" && harness !== "claude-code" && harness !== "kimi") return undefined;
 
 	const now = Date.now();
 	const cacheKey = taskModelCacheKey(harness, agentsDir);
@@ -94,7 +95,8 @@ export function resolveTaskModel(
 
 	const cfg = loadMemoryConfig(agentsDir);
 	const extraction = cfg.pipelineV2.extraction;
-	const model = extraction.provider === harness ? extraction.model : undefined;
+	const model =
+		extraction.provider === harness ? extraction.model : harness === "kimi" ? DEFAULT_KIMI_TASK_MODEL : undefined;
 	taskModelCache.set(cacheKey, {
 		model,
 		expiresAt: now + TASK_MODEL_CACHE_TTL_MS,
@@ -259,7 +261,10 @@ export async function executeTask(
 		if (!isTaskHarness(task.harness)) {
 			throw new Error(`Unsupported harness: ${task.harness}`);
 		}
-		const model = task.harness === "claude-code" || task.harness === "codex" ? deps.resolveTaskModel(task.harness) : undefined;
+		const model =
+			task.harness === "claude-code" || task.harness === "codex" || task.harness === "kimi"
+				? deps.resolveTaskModel(task.harness)
+				: undefined;
 		result = await deps.spawnTask(
 			task.harness,
 			effectivePrompt,

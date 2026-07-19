@@ -10,6 +10,7 @@ import {
 	resolveHermesRepoPath,
 } from "@signet/core";
 import chalk from "chalk";
+import { resolveCommandPath } from "./setup-providers.js";
 
 interface SkillSync {
 	readonly installed: readonly string[];
@@ -271,6 +272,9 @@ function detectInstalledHarnesses(): string[] {
 	}
 	if (existsSync(join(home, ".config", "signet", "bin", "codex")) || existsSync(join(home, ".codex", "config.toml"))) {
 		found.push("codex");
+	}
+	if (existsSync(join(home, ".kimi-code")) || resolveCommandPath("kimi") !== undefined) {
+		found.push("kimi");
 	}
 	if (existsSync(join(home, ".config", "opencode"))) {
 		found.push("opencode");

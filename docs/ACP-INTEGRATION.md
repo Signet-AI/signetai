@@ -333,7 +333,7 @@ For background inference, prefer this progression:
 
 ```text
 legacy direct harness provider
-  memory.pipelineV2.extraction.provider: codex | claude-code | opencode
+  memory.pipelineV2.extraction.provider: codex | kimi | claude-code | opencode
 
         ↓
 

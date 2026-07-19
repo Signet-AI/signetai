@@ -166,11 +166,11 @@ Options:
 | `--name <name>` | Agent name in non-interactive mode |
 | `--description <description>` | Agent description in non-interactive mode |
 | `--deployment-type <type>` | Deployment context (`local`, `vps`, `server`) used for interactive guidance and non-interactive inferred defaults |
-| `--harness <harness>` | Repeatable/comma-separated harness list (`claude-code`, `opencode`, `openclaw`, `hermes-agent`, `oh-my-pi`, `pi`, `codex`, `gemini`) |
+| `--harness <harness>` | Repeatable/comma-separated harness list (`claude-code`, `opencode`, `openclaw`, `hermes-agent`, `oh-my-pi`, `pi`, `codex`, `kimi`, `gemini`) |
 | `--identity-preset <preset>` | Identity/context preset (`minimal`, `hermes`, `openclaw`, `custom`); controls startup-loaded files and special prompt files like `DREAMING.md` |
 | `--embedding-provider <provider>` | Non-interactive embedding provider (`ollama`, `openai`, `native`, `none`) |
 | `--embedding-model <model>` | Non-interactive embedding model |
-| `--extraction-provider <provider>` | Non-interactive extraction provider (`claude-code`, `codex`, `ollama`, `opencode`, `openrouter`, `openai-compatible`, `none`) |
+| `--extraction-provider <provider>` | Non-interactive extraction provider (`claude-code`, `codex`, `kimi`, `ollama`, `opencode`, `openrouter`, `openai-compatible`, `none`) |
 | `--extraction-model <model>` | Non-interactive extraction model |
 | `--extraction-endpoint <url>` | Non-interactive extraction endpoint for OpenAI-compatible providers |
 | `--search-balance <alpha>` | Non-interactive search alpha (`0-1`) |
@@ -194,7 +194,7 @@ Non-interactive behavior:
 - hooks/connectors are configured for requested harnesses
 - with `--deployment-type vps`, setup prefers non-local extraction defaults
   from selected harnesses when those tools are available locally, then other
-  detected tooling (`claude-code`, `codex`, `opencode`), and falls back to
+  detected tooling (`claude-code`, `codex`, `kimi`, `opencode`), and falls back to
   `none` when needed
 - for existing-identity migration, previously configured extraction providers
   are preserved unless `--extraction-provider` is explicitly passed
@@ -226,6 +226,7 @@ Wizard steps:
 2. **Harnesses** - Which AI platforms you use:
    - Claude Code (Anthropic CLI)
    - Codex
+   - Kimi
    - OpenCode
    - OpenClaw
    - Oh My Pi
@@ -291,6 +292,7 @@ If harnesses are selected, their configs are also created:
 - **OpenCode**: `~/.config/opencode/plugins/signet.mjs` plugin, `~/.config/opencode/AGENTS.md`
 - **OpenClaw**: `$SIGNET_WORKSPACE/hooks/agent-memory/` hook directory
 - **Codex**: wrapper installed at `~/.config/signet/bin/codex` with session hooks
+- **Kimi**: `~/.kimi-code/config.toml` hooks, `~/.kimi-code/mcp.json` MCP server
 
 ---
 

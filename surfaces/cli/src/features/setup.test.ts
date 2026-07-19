@@ -149,6 +149,24 @@ describe("setupWizard non-interactive harness hooks", () => {
 		]);
 	});
 
+	it("installs requested harness hooks for kimi", async () => {
+		root = mkdtempSync(join(tmpdir(), "setup-ni-hooks-kimi-"));
+		const basePath = join(root, "agents");
+		mkdirSync(basePath, { recursive: true });
+
+		const configureHarnessHooks = mock(async (_harness: string, _path: string) => {});
+		const deps = stubDeps({
+			AGENTS_DIR: basePath,
+			configureHarnessHooks,
+			normalizeAgentPath: mock((p: string) => p),
+			detectExistingSetup: mock(() => fakeDetection(basePath)),
+		});
+
+		await setupWizard({ nonInteractive: true, harness: ["kimi"] }, deps);
+
+		expect(configureHarnessHooks.mock.calls).toEqual([["kimi", basePath]]);
+	});
+
 	it("warns but does not throw when hook installation fails", async () => {
 		root = mkdtempSync(join(tmpdir(), "setup-ni-fail-"));
 		const basePath = join(root, "agents");
@@ -370,6 +388,14 @@ describe("setupWizard non-interactive harness hooks", () => {
 		const detection = detectExistingSetup(basePath);
 		expect(detection.harnesses.forge).toBe(true);
 		expect(detectedHarnessesForExistingSetup(detection, [])).toContain("forge");
+	});
+
+	it("includes Kimi in migration harnesses when listed in the configured harnesses", () => {
+		root = mkdtempSync(join(tmpdir(), "setup-migrate-kimi-"));
+		const basePath = join(root, "agents");
+		mkdirSync(basePath, { recursive: true });
+
+		expect(detectedHarnessesForExistingSetup(fakeDetection(basePath), ["kimi"])).toContain("kimi");
 	});
 
 	it("writes minimal identity preset with DREAMING.md as special-session file", async () => {

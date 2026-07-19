@@ -246,6 +246,7 @@ export interface PipelineExtractionConfig {
 		| "claude-code"
 		| "opencode"
 		| "codex"
+		| "kimi"
 		| "anthropic"
 		| "openrouter"
 		| "openai-compatible"
@@ -444,6 +445,7 @@ export interface PipelineSynthesisConfig {
 		| "ollama"
 		| "claude-code"
 		| "codex"
+		| "kimi"
 		| "opencode"
 		| "anthropic"
 		| "openrouter"
@@ -558,7 +560,7 @@ export type DecisionAction = (typeof DECISION_ACTIONS)[number];
 
 // -- Scheduled tasks --
 
-export const TASK_HARNESSES = ["claude-code", "opencode", "codex"] as const;
+export const TASK_HARNESSES = ["claude-code", "opencode", "codex", "kimi"] as const;
 export type TaskHarness = (typeof TASK_HARNESSES)[number];
 
 export const TASK_RUN_STATUSES = ["pending", "running", "completed", "failed"] as const;

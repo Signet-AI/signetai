@@ -70,6 +70,20 @@ function printCodexHookOutput(hookEventName: CodexHookEventName, additionalConte
 	console.log(JSON.stringify(buildCodexHookOutput(hookEventName, additionalContext)));
 }
 
+/**
+ * Kimi hook output contract: for SessionStart and UserPromptSubmit, any text
+ * on STDOUT is appended to the model context verbatim — no JSON wrapper.
+ * SessionEnd is observation-only and emits nothing.
+ */
+export function buildKimiHookOutput(additionalContext?: string): string {
+	return additionalContext?.trim() ?? "";
+}
+
+function printKimiHookOutput(additionalContext?: string): void {
+	const text = buildKimiHookOutput(additionalContext);
+	if (text) console.log(text);
+}
+
 export function buildSessionStartFallback(
 	readStaticIdentity: HookDeps["readStaticIdentity"],
 	agentsDir: string,
@@ -146,6 +160,7 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 		.option("--context <context>", "Additional context")
 		.option("--json", "Output as JSON")
 		.option("--codex-json", "Output Codex hook JSON")
+		.option("--kimi-json", "Output Kimi hook context (plain text on stdout)")
 		.action(async (options) => {
 			const input = await readJson();
 			const res = await deps.fetchDaemonResult<{
@@ -177,6 +192,8 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 					}
 					if (options.codexJson) {
 						printCodexHookOutput("SessionStart", fallback);
+					} else if (options.kimiJson) {
+						printKimiHookOutput(fallback);
 					} else if (options.json) {
 						console.log(JSON.stringify({ inject: fallback, identity: { name: "signet" }, memories: [] }));
 					} else {
@@ -191,6 +208,7 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 					process.stderr.write("[signet] daemon not running, no identity files found\n");
 				}
 				if (options.codexJson) printCodexHookOutput("SessionStart");
+				if (options.kimiJson) printKimiHookOutput();
 				process.exit(0);
 			}
 			const data = res.data;
@@ -200,6 +218,8 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 			}
 			if (options.codexJson) {
 				printCodexHookOutput("SessionStart", data.inject);
+			} else if (options.kimiJson) {
+				printKimiHookOutput(data.inject);
 			} else if (options.json) {
 				console.log(JSON.stringify(data, null, 2));
 			} else if (data.inject) {
@@ -214,6 +234,7 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 		.option("--project <project>", "Project path")
 		.option("--json", "Output as JSON")
 		.option("--codex-json", "Output Codex hook JSON")
+		.option("--kimi-json", "Output Kimi hook context (plain text on stdout)")
 		.action(async (options) => {
 			const input = await readJson();
 			const stdinProject = pickString(input?.cwd);
@@ -230,10 +251,13 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 			);
 			if (!data) {
 				if (options.codexJson) printCodexHookOutput("UserPromptSubmit");
+				if (options.kimiJson) printKimiHookOutput();
 				process.exit(0);
 			}
 			if (options.codexJson) {
 				printCodexHookOutput("UserPromptSubmit", data.inject);
+			} else if (options.kimiJson) {
+				printKimiHookOutput(data.inject);
 			} else if (options.json) {
 				console.log(JSON.stringify(data, null, 2));
 			} else if (data.inject) {

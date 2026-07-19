@@ -44,7 +44,7 @@ function handleAddCustom(): void {
 			<Input class="text-[var(--sig-text-muted)] cursor-default" readonly value={formatDate(st.get(st.agent, "agent", "updated"))} />
 		</FormField>
 
-		<FormField label="Active harnesses" description="Supported: claude-code, codex, openclaw, opencode. Cursor, windsurf, chatgpt, and gemini are planned.">
+		<FormField label="Active harnesses" description="Supported: claude-code, codex, kimi, openclaw, opencode. Cursor, windsurf, chatgpt, and gemini are planned.">
 			<div class="harness-grid">
 				{#each KNOWN_HARNESSES as h (h)}
 					<label class="harness-item">

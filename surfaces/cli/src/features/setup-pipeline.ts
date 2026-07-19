@@ -34,7 +34,12 @@ export interface SetupPipelineConfig {
 
 type DirectExtractionProviderChoice = Exclude<ExtractionProviderChoice, "acpx">;
 
+export const KIMI_DEFAULT_EXTRACTION_MODEL = "kimi-k2.7";
+
 export function defaultExtractionModel(provider: DirectExtractionProviderChoice): string {
+	// Kimi is not (yet) part of core's PipelineProviderChoice, so its default
+	// is resolved here rather than through defaultPipelineModel.
+	if (provider === "kimi") return KIMI_DEFAULT_EXTRACTION_MODEL;
 	return defaultPipelineModel(provider);
 }
 

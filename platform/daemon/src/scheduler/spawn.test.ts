@@ -1,7 +1,7 @@
+import { afterEach, describe, expect, it } from "bun:test";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "bun:test";
 import { spawnTask } from "./spawn";
 
 describe("spawnTask", () => {
@@ -44,6 +44,64 @@ printf 'ok'
 			"--model",
 			"gpt-5.3-codex",
 			"summarize this",
+		]);
+	});
+
+	it("passes the configured model to kimi scheduled tasks", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "signet-spawn-test-"));
+		tempDirs.push(dir);
+
+		const outPath = join(dir, "args.txt");
+		const binPath = join(dir, "kimi");
+		writeFileSync(
+			binPath,
+			`#!/bin/sh
+printf '%s\n' "$@" > ${JSON.stringify(outPath)}
+printf 'ok'
+`,
+		);
+		chmodSync(binPath, 0o755);
+		process.env.PATH = `${dir}:${originalPath ?? ""}`;
+		Bun.which = ((bin: string) => (bin === "kimi" ? binPath : originalWhich(bin))) as typeof Bun.which;
+
+		const result = await spawnTask("kimi", "summarize this", dir, 5000, undefined, "kimi-k2.7");
+
+		expect(result.exitCode).toBe(0);
+		expect(readFileSync(outPath, "utf8").trim().split("\n")).toEqual([
+			"-p",
+			"summarize this",
+			"--output-format",
+			"stream-json",
+			"-m",
+			"kimi-k2.7",
+		]);
+	});
+
+	it("omits the model flag for kimi scheduled tasks when no model is configured", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "signet-spawn-test-"));
+		tempDirs.push(dir);
+
+		const outPath = join(dir, "args.txt");
+		const binPath = join(dir, "kimi");
+		writeFileSync(
+			binPath,
+			`#!/bin/sh
+printf '%s\n' "$@" > ${JSON.stringify(outPath)}
+printf 'ok'
+`,
+		);
+		chmodSync(binPath, 0o755);
+		process.env.PATH = `${dir}:${originalPath ?? ""}`;
+		Bun.which = ((bin: string) => (bin === "kimi" ? binPath : originalWhich(bin))) as typeof Bun.which;
+
+		const result = await spawnTask("kimi", "summarize this", dir, 5000);
+
+		expect(result.exitCode).toBe(0);
+		expect(readFileSync(outPath, "utf8").trim().split("\n")).toEqual([
+			"-p",
+			"summarize this",
+			"--output-format",
+			"stream-json",
 		]);
 	});
 

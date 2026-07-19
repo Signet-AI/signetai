@@ -392,6 +392,30 @@ describe("inference config + decision engine", () => {
 		expect(legacy.policies["legacy-default"]?.fallbackTargets).toEqual([]);
 	});
 
+	it("compiles kimi as a harness-subscription legacy target with restricted privacy", () => {
+		const legacy = compileLegacyRoutingConfig({
+			extraction: {
+				provider: "kimi",
+				model: "kimi-k2.7",
+				endpoint: undefined,
+			},
+			synthesis: {
+				enabled: true,
+				provider: "kimi",
+				model: "kimi-k3",
+				endpoint: undefined,
+			},
+		});
+
+		expect(legacy.targets["legacy-extraction"]?.executor).toBe("kimi");
+		expect(legacy.targets["legacy-extraction"]?.kind).toBe("subscription_session");
+		expect(legacy.targets["legacy-extraction"]?.privacy).toBe("restricted_remote");
+		expect(legacy.targets["legacy-extraction"]?.account).toBeUndefined();
+		expect(legacy.targets["legacy-synthesis"]?.executor).toBe("kimi");
+		expect(legacy.targets["legacy-synthesis"]?.kind).toBe("subscription_session");
+		expect(legacy.targets["legacy-synthesis"]?.privacy).toBe("restricted_remote");
+	});
+
 	it("fails closed for legacy extraction when fallbackProvider is none and synthesis is available", () => {
 		const extractionRef = makeRoutingTargetRef("legacy-extraction", "default");
 		const synthesisRef = makeRoutingTargetRef("legacy-synthesis", "default");

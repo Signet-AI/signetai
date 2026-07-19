@@ -3,6 +3,7 @@ import { Command } from "commander";
 import {
 	buildCodexHookOutput,
 	buildCompactionCompleteBody,
+	buildKimiHookOutput,
 	buildSessionEndBody,
 	buildSessionStartBody,
 	buildSessionStartFallback,
@@ -114,6 +115,22 @@ describe("buildCodexHookOutput", () => {
 				hookEventName: "UserPromptSubmit",
 			},
 		});
+	});
+});
+
+describe("buildKimiHookOutput", () => {
+	test("returns trimmed plain text for context injection", () => {
+		expect(buildKimiHookOutput(" recalled context ")).toBe("recalled context");
+	});
+
+	test("emits no JSON wrapper — Kimi appends raw stdout to the model context", () => {
+		const output = buildKimiHookOutput("recalled context");
+		expect(output.startsWith("{")).toBe(false);
+	});
+
+	test("returns empty string when context is missing or blank", () => {
+		expect(buildKimiHookOutput()).toBe("");
+		expect(buildKimiHookOutput("   ")).toBe("");
 	});
 });
 
@@ -554,6 +571,67 @@ describe("buildUserPromptSubmitBody", () => {
 				additionalContext: "recalled context",
 			},
 		});
+	});
+
+	test("hook command can emit Kimi user-prompt-submit plain text", async () => {
+		const lines: string[] = [];
+		console.log = (line?: unknown) => {
+			lines.push(String(line ?? ""));
+		};
+
+		const program = new Command();
+		registerHookCommands(program, {
+			AGENTS_DIR: "/tmp/agents",
+			fetchDaemonResult: async () => ({
+				ok: true,
+				data: { inject: "recalled context" },
+			}),
+			readStaticIdentity: () => null,
+		});
+
+		await program.parseAsync(["node", "test", "hook", "user-prompt-submit", "-H", "kimi", "--kimi-json"]);
+
+		// Kimi appends raw STDOUT to the model context — plain text, no JSON wrapper
+		expect(lines).toEqual(["recalled context"]);
+	});
+
+	test("hook command can emit Kimi session-start plain text", async () => {
+		const lines: string[] = [];
+		console.log = (line?: unknown) => {
+			lines.push(String(line ?? ""));
+		};
+
+		const program = new Command();
+		registerHookCommands(program, {
+			AGENTS_DIR: "/tmp/agents",
+			fetchDaemonResult: async () => ({
+				ok: true,
+				data: { inject: "session context" },
+			}),
+			readStaticIdentity: () => null,
+		});
+
+		await program.parseAsync(["node", "test", "hook", "session-start", "-H", "kimi", "--kimi-json"]);
+
+		expect(lines).toEqual(["session context"]);
+	});
+
+	test("Kimi user-prompt-submit emits nothing when there is no context", async () => {
+		const lines: string[] = [];
+		console.log = (line?: unknown) => {
+			lines.push(String(line ?? ""));
+		};
+
+		const program = new Command();
+		registerHookCommands(program, {
+			AGENTS_DIR: "/tmp/agents",
+			fetchDaemonResult: async () => ({ ok: true, data: {} }),
+			readStaticIdentity: () => null,
+		});
+
+		await program.parseAsync(["node", "test", "hook", "user-prompt-submit", "-H", "kimi", "--kimi-json"]);
+
+		expect(lines).toEqual([]);
 	});
 });
 

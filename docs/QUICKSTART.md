@@ -223,6 +223,7 @@ for each:
 - OpenCode — plugin + AGENTS.md sync
 - OpenClaw — adapter-openclaw hooks
 - Codex — wrapper install + session hooks
+- Kimi — `config.toml` hooks + MCP server
 
 **3. Agent description**
 

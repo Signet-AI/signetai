@@ -28,6 +28,26 @@ describe("setup deployment defaults", () => {
 		).toEqual(["forge", "hermes-agent", "claude-code"]);
 	});
 
+	it("supports Kimi as a setup harness choice", () => {
+		expect(SETUP_HARNESS_CHOICES).toContain("kimi");
+		expect(
+			normalizeHarnessList(["kimi,codex"], {
+				normalizeChoice: (value, allowed) => {
+					const s = String(value);
+					return (allowed as readonly string[]).includes(s) ? (s as (typeof allowed)[number]) : null;
+				},
+			}),
+		).toEqual(["kimi", "codex"]);
+	});
+
+	it("maps the kimi harness to the kimi extraction provider on vps", () => {
+		expect(defaultExtractionProviderForDeployment("vps", "none", ["kimi"], ["kimi"])).toBe("kimi");
+	});
+
+	it("detects kimi as an extraction provider when available", () => {
+		expect(detectExtractionProviderFromAvailable(["kimi"])).toBe("kimi");
+	});
+
 	it("defaults embedding provider to native across deployment types", () => {
 		expect(defaultEmbeddingProviderForDeployment("local")).toBe("native");
 		expect(defaultEmbeddingProviderForDeployment("vps")).toBe("native");

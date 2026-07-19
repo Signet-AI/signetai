@@ -1852,6 +1852,7 @@ async fn extraction_probe(
             "ollama" => check_ollama_health(extraction.endpoint.as_deref()).await,
             "claude-code" => cli_preflight("claude").await,
             "codex" => cli_preflight("codex").await,
+            "kimi" => cli_preflight("kimi").await,
             "anthropic" => check_anthropic_health(extraction.endpoint.as_deref()).await,
             "opencode" => check_opencode_health(extraction.endpoint.as_deref()).await,
             _ => {

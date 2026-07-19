@@ -125,6 +125,23 @@ describe("pipeline-settings synthesis resolution", () => {
 		expect(resolveSynthesisEnabled(agent)).toBe(true);
 	});
 
+	it("uses kimi provider defaults for explicit kimi synthesis blocks without a model", () => {
+		const agent = {
+			memory: {
+				pipelineV2: {
+					synthesis: {
+						provider: "kimi",
+					},
+				},
+			},
+		};
+
+		expect(hasExplicitSynthesisProvider(agent)).toBe(true);
+		expect(resolveSynthesisProvider(agent)).toBe("kimi");
+		expect(resolveSynthesisModel(agent)).toBe("kimi-k2.7");
+		expect(resolveSynthesisEnabled(agent)).toBe(true);
+	});
+
 	it("uses the shared pipeline timeout default when synthesis and extraction timeouts are both implicit", () => {
 		const agent = {
 			memory: {

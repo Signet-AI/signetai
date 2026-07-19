@@ -2,7 +2,7 @@ import { type ConfigFile, saveConfigFileResult } from "$lib/api";
 import { toast } from "$lib/stores/toast.svelte";
 import { parse, stringify } from "yaml";
 
-export const KNOWN_HARNESSES = ["claude-code", "codex", "openclaw", "opencode"];
+export const KNOWN_HARNESSES = ["claude-code", "codex", "kimi", "openclaw", "opencode"];
 
 export const PIPELINE_CORE_BOOLS = [
 	{ key: "enabled", desc: "Master switch. Pipeline does nothing when disabled." },

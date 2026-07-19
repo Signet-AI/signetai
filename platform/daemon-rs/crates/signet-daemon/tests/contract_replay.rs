@@ -6852,7 +6852,7 @@ async fn tasks_crud() {
     let body = server.json(resp).await;
     assert_eq!(
         body["error"],
-        "harness must be 'claude-code', 'codex', or 'opencode'"
+        "harness must be 'claude-code', 'codex', 'kimi', or 'opencode'"
     );
 
     let mut invalid_skill = base_task.clone();
@@ -9910,7 +9910,7 @@ async fn dashboard_openclaw_and_harness_routes_replay_ts_shapes() {
     assert_eq!(resp.status(), 200);
     let body = server.json(resp).await;
     let harnesses = body["harnesses"].as_array().expect("harnesses array");
-    assert_eq!(harnesses.len(), 4);
+    assert_eq!(harnesses.len(), 5);
     assert_eq!(harnesses[0]["name"], "Claude Code");
     assert_eq!(harnesses[0]["id"], "claude-code");
     assert!(
@@ -9952,6 +9952,15 @@ async fn dashboard_openclaw_and_harness_routes_replay_ts_shapes() {
             .ends_with(".gemini/settings.json")
     );
     assert_eq!(harnesses[3]["lastSeen"], serde_json::Value::Null);
+    assert_eq!(harnesses[4]["name"], "Kimi CLI");
+    assert_eq!(harnesses[4]["id"], "kimi");
+    assert!(
+        harnesses[4]["path"]
+            .as_str()
+            .expect("kimi path")
+            .ends_with(".kimi-code/config.toml")
+    );
+    assert_eq!(harnesses[4]["lastSeen"], serde_json::Value::Null);
 
     let resp = server.post("/api/harnesses/regenerate", json!({})).await;
     assert_eq!(resp.status(), 404);

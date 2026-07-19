@@ -7,7 +7,7 @@ export interface TaskPreset {
 	readonly description: string;
 	readonly name: string;
 	readonly prompt: string;
-	readonly harness: "claude-code" | "opencode" | "codex";
+	readonly harness: "claude-code" | "opencode" | "codex" | "kimi";
 	readonly cronExpression: string;
 	readonly skillName?: string;
 	readonly skillMode?: "inject" | "slash";

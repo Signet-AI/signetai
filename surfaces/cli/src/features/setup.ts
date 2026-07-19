@@ -50,6 +50,7 @@ import {
 	defaultExtractionProviderForDeployment,
 	detectExtractionProviderFromAvailable,
 	detectPreferredOpenClawWorkspace,
+	detectionHasHarness,
 	failNonInteractiveSetup,
 	failSetupValidation,
 	findUnknownHarnessValues,
@@ -67,6 +68,15 @@ import {
 import type { FreshSetupConfig, SetupDeps, SetupWizardOptions } from "./setup-types.js";
 
 function modelChoices(provider: ExtractionProviderChoice): Array<{ value: string; name: string }> {
+	// Kimi is not (yet) part of core's model catalog, so its presets are
+	// declared here rather than through modelPresetsForProvider.
+	if (provider === "kimi") {
+		return [
+			{ value: "kimi-k3", name: "kimi-k3" },
+			{ value: "kimi-k2.7", name: "kimi-k2.7 (default)" },
+			{ value: "kimi-k2.6", name: "kimi-k2.6" },
+		];
+	}
 	return modelPresetsForProvider(provider).map((preset) => ({ value: preset.value, name: preset.label }));
 }
 
@@ -272,6 +282,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 	}
 	const hasClaudeCommand = hasCommand("claude");
 	const hasCodexCommand = hasCommand("codex");
+	const hasKimiCommand = hasCommand("kimi");
 	const hasOllamaCommand = hasCommand("ollama");
 	const hasOpenCodeCommand = hasCommand("opencode");
 	const acpxBin = resolveCommandPath("bunx") ?? resolveCommandPath("npx");
@@ -284,6 +295,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 	if (hasCodexCommand) availableToolExtractionProviders.push("codex");
 	if (hasOllamaCommand) availableToolExtractionProviders.push("ollama");
 	if (hasOpenCodeCommand) availableToolExtractionProviders.push("opencode");
+	if (hasKimiCommand) availableToolExtractionProviders.push("kimi");
 	const detectedProvider = detectExtractionProviderFromAvailable(availableToolExtractionProviders);
 
 	if (rawDeploymentType && !requestedDeploymentType) {
@@ -353,6 +365,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 				if (h.opencode) detectedIds.add("opencode");
 				if (h.forge) detectedIds.add("forge");
 				if (h.codex) detectedIds.add("codex");
+				if (detectionHasHarness(existing, "kimi")) detectedIds.add("kimi");
 				if (h.ohMyPi) detectedIds.add("oh-my-pi");
 				if (h.pi) detectedIds.add("pi");
 				if (h.hermesAgent) detectedIds.add("hermes-agent");
@@ -692,6 +705,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 	const harnessChoices = [
 		{ value: "claude-code", name: "Claude Code (Anthropic CLI)", checked: existingHarnesses.includes("claude-code") },
 		{ value: "codex", name: "Codex", checked: existingHarnesses.includes("codex") },
+		{ value: "kimi", name: "Kimi (Kimi CLI / Kimi Code)", checked: existingHarnesses.includes("kimi") },
 		{ value: "opencode", name: "OpenCode", checked: existingHarnesses.includes("opencode") },
 		{ value: "forge", name: "ForgeCode", checked: existingHarnesses.includes("forge") },
 		{ value: "openclaw", name: "OpenClaw", checked: existingHarnesses.includes("openclaw") },
@@ -966,6 +980,10 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 				name: `Codex (gpt-5.4-mini, recommended if you already have Pro/Max)${detectedProvider === "codex" ? " — detected" : ""}`,
 			},
 			{
+				value: "kimi",
+				name: `Kimi (kimi-k2.7, uses your local Kimi CLI)${detectedProvider === "kimi" ? " — detected" : ""}`,
+			},
+			{
 				value: "ollama",
 				name: `Ollama (local, qwen3:4b minimum)${detectedProvider === "ollama" ? " — detected" : ""}`,
 			},
@@ -1036,6 +1054,20 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 			extractionModel = await select({
 				message: "Which Codex model for extraction?",
 				choices: modelChoices("codex"),
+			});
+		}
+	} else if (extractionProvider === "kimi") {
+		if (nonInteractive) {
+			extractionModel =
+				deps.normalizeStringValue(options.extractionModel) ||
+				deps.normalizeStringValue(existingPipeline.extractionModel) ||
+				deps.normalizeStringValue(existingExtraction.model) ||
+				defaultExtractionModel("kimi");
+		} else {
+			console.log();
+			extractionModel = await select({
+				message: "Which Kimi model for extraction?",
+				choices: modelChoices("kimi"),
 			});
 		}
 	} else if (extractionProvider === "opencode") {

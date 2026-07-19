@@ -540,6 +540,7 @@ fn is_pipeline_provider(value: &str) -> bool {
             | "claude-code"
             | "opencode"
             | "codex"
+            | "kimi"
             | "anthropic"
             | "openrouter"
             | "command"
@@ -561,6 +562,7 @@ fn default_pipeline_model(provider: &str) -> &'static str {
         "claude-code" => "haiku",
         "anthropic" => "claude-3-5-haiku-20241022",
         "codex" => "gpt-5.4-mini",
+        "kimi" => "kimi-k2.7",
         "opencode" => "google/gemini-2.5-flash",
         "openrouter" => "openai/gpt-4o-mini",
         _ => "qwen3:4b",
@@ -889,6 +891,7 @@ memory:
     fn explicit_synthesis_provider_uses_provider_default_model() {
         let cases = [
             ("codex", "gpt-5.4-mini"),
+            ("kimi", "kimi-k2.7"),
             ("opencode", "google/gemini-2.5-flash"),
             ("anthropic", "claude-3-5-haiku-20241022"),
         ];

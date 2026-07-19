@@ -147,6 +147,46 @@ describe("syncTemplates workspace detection", () => {
 			rmSync(root, { recursive: true, force: true });
 		}
 	});
+
+	it("detects an installed Kimi harness from ~/.kimi-code and re-registers configured hooks", async () => {
+		const root = mkdtempSync(join(tmpdir(), "sync-active-kimi-"));
+		const basePath = join(root, "agents");
+		const origLog = console.log;
+
+		try {
+			process.env.HOME = root;
+			mkdirSync(basePath, { recursive: true });
+			mkdirSync(join(root, ".kimi-code"), { recursive: true });
+			writeFileSync(join(basePath, "agent.yaml"), "harnesses:\n  - kimi\n");
+
+			const logs: string[] = [];
+			console.log = (...args: unknown[]) => logs.push(args.join(" "));
+			const configureHarnessHooks = mock(async () => {});
+
+			await syncTemplates({
+				agentsDir: basePath,
+				configureHarnessHooks,
+				getSkillsSourceDir: () => join(root, "skills-src"),
+				getTemplatesDir: () => join(root, "templates"),
+				signetLogo: () => "signet",
+				syncBuiltinSkills: () => ({ installed: [], updated: [], skipped: [] }),
+				syncNativeEmbeddingModel: async () => ({ status: "current", message: "ready" }),
+				syncWorkspaceSourceRepo: async () => ({
+					status: "current",
+					path: join(basePath, "signetai"),
+					message: "current",
+					branch: "main",
+					defaultBranch: "main",
+				}),
+			});
+
+			expect(configureHarnessHooks.mock.calls.map((call) => call[0])).toEqual(["kimi"]);
+			expect(logs.join("\n")).toContain("kimi");
+		} finally {
+			console.log = origLog;
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
 });
 
 describe("syncBuiltinSkills", () => {

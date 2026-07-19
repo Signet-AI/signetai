@@ -1,8 +1,8 @@
+import { Database } from "bun:sqlite";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Database } from "bun:sqlite";
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { runMigrations } from "../../../core/src/migrations";
 import type { ReadDb } from "../db-accessor";
 import { clearTaskModelCache, resolveTaskModel, selectDueTasks } from "./worker";
@@ -113,6 +113,38 @@ describe("resolveTaskModel", () => {
 		}
 	});
 
+	it("returns the configured kimi extraction model for kimi tasks", () => {
+		const agentsDir = mkdtempSync(join(tmpdir(), "signet-agents-"));
+		try {
+			writeFileSync(
+				join(agentsDir, "agent.yaml"),
+				["memory:", "  pipelineV2:", "    extraction:", "      provider: kimi", "      model: kimi-k3"].join("\n"),
+			);
+
+			expect(resolveTaskModel("kimi", agentsDir)).toBe("kimi-k3");
+		} finally {
+			rmSync(agentsDir, { recursive: true, force: true });
+		}
+	});
+
+	it("defaults kimi tasks to kimi-k2.7 when the extraction provider is not kimi", () => {
+		const agentsDir = mkdtempSync(join(tmpdir(), "signet-agents-"));
+		try {
+			writeFileSync(
+				join(agentsDir, "agent.yaml"),
+				["memory:", "  pipelineV2:", "    extraction:", "      provider: codex", "      model: gpt-5.3-codex"].join(
+					"\n",
+				),
+			);
+
+			expect(resolveTaskModel("kimi", agentsDir)).toBe("kimi-k2.7");
+			expect(resolveTaskModel("codex", agentsDir)).toBe("gpt-5.3-codex");
+			expect(resolveTaskModel("claude-code", agentsDir)).toBeUndefined();
+		} finally {
+			rmSync(agentsDir, { recursive: true, force: true });
+		}
+	});
+
 	it("returns the configured claude extraction model for claude-code tasks", () => {
 		const agentsDir = mkdtempSync(join(tmpdir(), "signet-agents-"));
 		try {
@@ -166,9 +198,7 @@ describe("resolveTaskModel", () => {
 
 			writeFileSync(
 				configPath,
-				["memory:", "  pipelineV2:", "    extraction:", "      provider: codex", "      model: gpt-5.4"].join(
-					"\n",
-				),
+				["memory:", "  pipelineV2:", "    extraction:", "      provider: codex", "      model: gpt-5.4"].join("\n"),
 			);
 
 			expect(resolveTaskModel("codex", agentsDir)).toBe("gpt-5.3-codex");
@@ -192,7 +222,9 @@ describe("resolveTaskModel", () => {
 
 			writeFileSync(
 				configPath,
-				["memory:", "  pipelineV2:", "    extraction:", "      provider: claude-code", "      model: sonnet"].join("\n"),
+				["memory:", "  pipelineV2:", "    extraction:", "      provider: claude-code", "      model: sonnet"].join(
+					"\n",
+				),
 			);
 
 			expect(resolveTaskModel("claude-code", agentsDir)).toBe("haiku");

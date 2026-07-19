@@ -7,6 +7,7 @@ export const ROUTING_EXECUTOR_KINDS = [
 	"acpx",
 	"claude-code",
 	"codex",
+	"kimi",
 	"opencode",
 	"anthropic",
 	"openrouter",
@@ -408,7 +409,13 @@ function inferLegacyTargetKind(executor: string, endpoint: string | undefined): 
 function inferTargetPrivacy(executor: string, endpoint?: string): RoutingPrivacyTier {
 	if (executor === "openai-compatible" && isLocalInferenceEndpoint(endpoint)) return "local_only";
 	if (executor === "ollama" || executor === "llama-cpp") return "local_only";
-	if (executor === "acpx" || executor === "claude-code" || executor === "codex" || executor === "opencode")
+	if (
+		executor === "acpx" ||
+		executor === "claude-code" ||
+		executor === "codex" ||
+		executor === "kimi" ||
+		executor === "opencode"
+	)
 		return "restricted_remote";
 	return "remote_ok";
 }

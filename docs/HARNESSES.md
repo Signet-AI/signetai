@@ -323,6 +323,66 @@ than a local Ollama instance.
 
 ---
 
+## Kimi
+
+Kimi is Moonshot AI's terminal coding agent (Kimi CLI / Kimi Code). It
+reads configuration from `~/.kimi-code/`. Signet integrates with Kimi
+through lifecycle hooks installed as `[[hooks]]` entries in
+`~/.kimi-code/config.toml` and a Signet MCP stdio server registered in
+`~/.kimi-code/mcp.json`.
+
+### Files managed by Signet
+
+| File | Description |
+|------|-------------|
+| `~/.kimi-code/config.toml` | `[[hooks]]` entries for SessionStart, UserPromptSubmit, and SessionEnd |
+| `~/.kimi-code/mcp.json` | `signet` MCP stdio server registration |
+
+### How it works
+
+1. `signet setup --harness kimi` installs the hooks and MCP registration. Existing user config sections and user-owned hooks are preserved; re-running setup is idempotent.
+2. On session start, Kimi fires `SessionStart` → calls `signet hook session-start -H kimi --kimi-json` → Signet returns identity + memories, appended to the model's context.
+3. On every user prompt, Kimi fires `UserPromptSubmit` → calls `signet hook user-prompt-submit -H kimi --kimi-json` → Signet returns bounded entity current-view context only when the prompt mentions a known entity or active alias. Empty matches return no additional context.
+4. On session end, Kimi fires `SessionEnd` → calls `signet hook session-end -H kimi` → Signet extracts memories from the transcript. `SessionEnd` is observation-only.
+5. The MCP server exposes `signet_recall`, `signet_source_search`, `signet_session_search`, `signet_save_note`, and compatibility `memory_*` tools that Kimi can invoke directly during sessions.
+
+Hook timeouts use the same budgets as the other hook-driven harnesses:
+`SIGNET_SESSION_START_TIMEOUT` and `SIGNET_PROMPT_SUBMIT_TIMEOUT` (see
+[[cli|CLI reference]]), rounded up to seconds with a small harness grace.
+
+### Supported hooks
+
+| Hook | Supported |
+|------|-----------|
+| session-start | yes — identity + memories appended to model context |
+| user-prompt-submit | yes — entity current-view context when matched |
+| session-end | yes — transcript extraction |
+
+### Pipeline and task-runner provider
+
+Kimi can be selected as the extraction provider in `agent.yaml` or
+Settings → Pipeline (models Kimi K3, Kimi K2.7, and Kimi K2.6; default
+Kimi K2.7) and as the session synthesis provider (K3, K2.7). The
+synthesis provider also serves as the dreaming provider. On the
+dashboard Tasks page, Kimi is available as a task-runner harness,
+running `kimi -p ... --output-format stream-json` (default model
+`kimi-k2.7`).
+
+### Prerequisites
+
+- Kimi CLI (`kimi`) installed and in `PATH`
+- `~/.kimi-code/` config directory (or `KIMI_CODE_HOME` override)
+- Signet daemon running (`signet daemon start`)
+
+### Uninstall
+
+Uninstalling the Kimi connector removes only Signet-owned `[[hooks]]`
+blocks from `config.toml` and the `signet` entry from `mcp.json`.
+User-owned hooks, other MCP servers, and all other config sections are
+kept.
+
+---
+
 ## OpenCode
 
 OpenCode is an open-source AI coding tool. Signet integrates via a
