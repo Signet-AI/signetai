@@ -33,7 +33,13 @@ function toRecordOrUndefined(row: unknown): Record<string, unknown> | undefined 
 	return typeof row === "object" && row !== null ? (row as Record<string, unknown>) : undefined;
 }
 
-/** Adapt the accessor's readonly db to the MigrationDb surface. */
+/**
+ * Adapt the accessor's readonly db to the MigrationDb surface.
+ * This is read-only: hasPendingMigrations only reads schema_migrations.
+ * The exec/run methods exist to satisfy the MigrationDb interface but will
+ * throw on the readonly accessor if ever used for writes. Do not add write
+ * calls through this adapter.
+ */
 function readDbAsMigrationDb(db: ReadDb): MigrationDb {
 	return {
 		exec(sql: string): void {

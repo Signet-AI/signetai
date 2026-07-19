@@ -2312,7 +2312,7 @@ fn queue_health(conn: &rusqlite::Connection) -> Result<serde_json::Value, rusqli
     let ten_min_ago = iso_from_epoch_ms(now_ms - 10 * 60 * 1000).unwrap_or_default();
     let lease_anomalies: i64 = conn.query_row(
         "SELECT COUNT(*) FROM memory_jobs
-         WHERE status = 'leased' AND created_at < ?1",
+         WHERE status = 'leased' AND updated_at < ?1",
         [ten_min_ago],
         |r| r.get(0),
     )?;
