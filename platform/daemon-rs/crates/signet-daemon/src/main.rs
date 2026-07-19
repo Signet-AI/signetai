@@ -4,7 +4,7 @@ use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
 use anyhow::Context;
-use axum::{Router, extract::State, middleware, response::Json, routing::get};
+use axum::{Router, extract::State, http::StatusCode, middleware, response::Json, routing::get};
 use chrono::{SecondsFormat, Utc};
 use signet_core::config::{DaemonConfig, network_mode_from_bind};
 use signet_core::constants::DEFAULT_EMBEDDING_DIMENSIONS;
@@ -227,6 +227,8 @@ async fn main() -> anyhow::Result<()> {
     // Build router
     let app = Router::new()
         .route("/health", get(health))
+        .route("/health/live", get(health_live))
+        .route("/health/ready", get(health_ready))
         .route("/api/status", get(status))
         .route("/api/auth/whoami", get(routes::auth::whoami))
         .route("/api/auth/methods", get(routes::auth::methods))
@@ -2244,6 +2246,226 @@ async fn health(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
     }))
 }
 
+// Queue backlog thresholds, mirroring the TS daemon's diagnostics constants
+// (platform/daemon/src/diagnostics.ts) so /health/ready gates on the same limits.
+const QUEUE_MAX_DEPTH: i64 = 50;
+const QUEUE_MAX_DEAD_RATE: f64 = 0.01;
+const QUEUE_MAX_OLDEST_AGE_SEC: f64 = 300.0;
+
+/// Cheap liveness: process is up. Never touches db or subsystems, always 200.
+/// Mirrors GET /health/live in platform/daemon/src/routes/health.ts.
+async fn health_live(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+    Json(serde_json::json!({
+        "status": "healthy",
+        "uptime": process_uptime_seconds(),
+        "pid": std::process::id(),
+        "version": env!("CARGO_PKG_VERSION"),
+        "port": state.config.port,
+        "shuttingDown": false,
+    }))
+}
+
+fn parse_iso_epoch_ms(value: &str) -> Option<i64> {
+    chrono::DateTime::parse_from_rfc3339(value)
+        .ok()
+        .map(|dt| dt.timestamp_millis())
+}
+
+fn queue_health(conn: &rusqlite::Connection) -> Result<serde_json::Value, rusqlite::Error> {
+    let now_ms = current_epoch_ms();
+    let (depth, oldest): (i64, Option<String>) = conn.query_row(
+        "SELECT COUNT(*) AS cnt, MIN(created_at) AS oldest
+         FROM memory_jobs WHERE status = 'pending'",
+        [],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    let oldest_age_sec = oldest
+        .as_deref()
+        .and_then(parse_iso_epoch_ms)
+        .map(|ms| ((now_ms - ms).max(0)) as f64 / 1000.0)
+        .unwrap_or(0.0);
+
+    let window_start = iso_from_epoch_ms(now_ms - 60 * 60 * 1000).unwrap_or_default();
+    let (dead, completed_and_dead): (i64, i64) = conn.query_row(
+        "SELECT
+            COALESCE(SUM(CASE WHEN status = 'dead' THEN 1 ELSE 0 END), 0),
+            COALESCE(SUM(CASE WHEN status IN ('completed','dead') THEN 1 ELSE 0 END), 0)
+         FROM memory_jobs
+         WHERE updated_at >= ?1",
+        [window_start],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    let dead_rate = if completed_and_dead > 0 {
+        dead as f64 / completed_and_dead as f64
+    } else {
+        0.0
+    };
+
+    let ten_min_ago = iso_from_epoch_ms(now_ms - 10 * 60 * 1000).unwrap_or_default();
+    let lease_anomalies: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM memory_jobs
+         WHERE status = 'leased' AND created_at < ?1",
+        [ten_min_ago],
+        |r| r.get(0),
+    )?;
+
+    let mut score = 1.0f64;
+    if depth > QUEUE_MAX_DEPTH {
+        score -= 0.3;
+    }
+    if dead_rate > QUEUE_MAX_DEAD_RATE {
+        score -= 0.3;
+    }
+    if oldest_age_sec > QUEUE_MAX_OLDEST_AGE_SEC {
+        score -= 0.2;
+    }
+    if lease_anomalies > 0 {
+        score -= 0.2;
+    }
+    let score = score.clamp(0.0, 1.0);
+    let status = if score >= 0.8 {
+        "healthy"
+    } else if score >= 0.5 {
+        "degraded"
+    } else {
+        "unhealthy"
+    };
+
+    Ok(serde_json::json!({
+        "score": score,
+        "status": status,
+        "depth": depth,
+        "oldestAgeSec": oldest_age_sec,
+        "deadRate": dead_rate,
+        "leaseAnomalies": lease_anomalies,
+    }))
+}
+
+/// Readiness: composed per-check results. 200 only when every gate passes.
+/// Mirrors GET /health/ready in platform/daemon/src/routes/health.ts.
+///
+/// Shadow-runtime differences (documented in parity notes):
+/// - No shutdown flag exists in daemon-rs; shuttingDown is always false and the
+///   "shutting_down" reason is never emitted.
+/// - The embedding check reports the configured provider without a network
+///   probe; a configured-but-unreachable provider does not gate readiness here.
+async fn health_ready(State(state): State<Arc<AppState>>) -> (StatusCode, Json<serde_json::Value>) {
+    let mut reasons: Vec<String> = Vec::new();
+
+    // db, migrations, and queue share one read connection, as in the TS daemon.
+    let db_result = state
+        .pool
+        .read(|conn| {
+            conn.query_row("SELECT 1", [], |_| Ok::<(), rusqlite::Error>(()))?;
+            let applied: i64 = conn.query_row(
+                "SELECT COALESCE(MAX(version), 0) FROM schema_migrations",
+                [],
+                |r| r.get(0),
+            )?;
+            let migrations_ok = applied >= signet_core::migrations::LATEST_SCHEMA_VERSION as i64;
+            let queue = queue_health(conn)?;
+            Ok((migrations_ok, queue))
+        })
+        .await;
+
+    let (db_ok, migrations_ok, queue) = match db_result {
+        Ok((migrations_ok, queue)) => (true, migrations_ok, queue),
+        Err(err) => {
+            reasons.push(format!("database unavailable: {err}"));
+            (false, false, serde_json::json!({ "error": "database unavailable" }))
+        }
+    };
+    if db_ok && !migrations_ok {
+        reasons.push("pending migrations".to_string());
+    }
+    if db_ok {
+        let depth = queue["depth"].as_i64().unwrap_or(0);
+        let dead_rate = queue["deadRate"].as_f64().unwrap_or(0.0);
+        let oldest_age_sec = queue["oldestAgeSec"].as_f64().unwrap_or(0.0);
+        if depth > QUEUE_MAX_DEPTH {
+            reasons.push(format!(
+                "queue backlog depth {depth} exceeds {QUEUE_MAX_DEPTH}"
+            ));
+        }
+        if dead_rate > QUEUE_MAX_DEAD_RATE {
+            reasons.push(format!(
+                "queue dead-letter rate {dead_rate:.4} exceeds {QUEUE_MAX_DEAD_RATE}"
+            ));
+        }
+        if oldest_age_sec > QUEUE_MAX_OLDEST_AGE_SEC {
+            reasons.push(format!(
+                "queue oldest pending job age {}s exceeds {}s",
+                oldest_age_sec.round() as i64,
+                QUEUE_MAX_OLDEST_AGE_SEC as i64
+            ));
+        }
+    }
+
+    // Embedding: the shadow runtime does not probe the provider; report the
+    // configured provider and whether it initialized, without gating.
+    let embedding = match state.config.manifest.embedding.as_ref() {
+        None => serde_json::json!({ "provider": "none", "available": true, "note": "disabled" }),
+        Some(cfg) if cfg.provider == "none" => {
+            serde_json::json!({ "provider": "none", "available": true, "note": "disabled" })
+        }
+        Some(cfg) => serde_json::json!({
+            "provider": cfg.provider,
+            "available": state.embedding.read().await.is_some(),
+            "note": "availability not probed by shadow runtime",
+        }),
+    };
+
+    // Inference gates readiness only when the extraction route is fully blocked.
+    let extraction = state.extraction_state.read().await.clone();
+    let inference = match extraction.as_ref() {
+        Some(es) => serde_json::json!({
+            "status": es.status,
+            "configured": es.configured,
+            "effective": es.effective,
+            "reason": es.reason,
+        }),
+        None => serde_json::json!({
+            "status": "unknown",
+            "configured": serde_json::Value::Null,
+            "effective": "unknown",
+            "reason": serde_json::Value::Null,
+        }),
+    };
+    if let Some(es) = extraction.as_ref() {
+        if es.status == "blocked" {
+            reasons.push(format!(
+                "inference route blocked: {}",
+                es.reason
+                    .clone()
+                    .unwrap_or_else(|| "no available extraction provider".to_string())
+            ));
+        }
+    }
+
+    let ready = reasons.is_empty();
+    let status = if ready {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    };
+    (
+        status,
+        Json(serde_json::json!({
+            "status": if ready { "ready" } else { "not_ready" },
+            "version": env!("CARGO_PKG_VERSION"),
+            "shuttingDown": false,
+            "checks": {
+                "db": db_ok,
+                "migrations": migrations_ok,
+                "embedding": embedding,
+                "inference": inference,
+                "queue": queue,
+            },
+            "reasons": reasons,
+        })),
+    )
+}
+
 fn current_epoch_ms() -> i64 {
     Utc::now().timestamp_millis()
 }
@@ -2531,10 +2753,12 @@ mod tests {
     use crate::state::{AppState, AuthRuntimeState, ExtractionRuntimeState};
 
     use super::{
-        append_api_path, dead_letter_pending_extraction_jobs, host_in_trusted_override_list,
+        QUEUE_MAX_DEPTH, append_api_path, dead_letter_pending_extraction_jobs, health_ready,
+        host_in_trusted_override_list,
         host_matches_trusted_override, normalize_endpoint_base, preflight_extraction,
         provider_endpoint_is_trusted_for_secret_probe,
-        provider_is_unsupported_for_daemon_startup_preflight, resolve_runtime_extraction_endpoint,
+        provider_is_unsupported_for_daemon_startup_preflight, queue_health,
+        resolve_runtime_extraction_endpoint,
         resolve_runtime_extraction_model, resume_extraction_check, start_extraction_worker,
         start_extraction_worker_inner, status, stop_extraction_worker, stop_summary_worker,
         stop_synthesis_worker, worker_supports_extraction_provider,
@@ -2634,6 +2858,94 @@ mod tests {
 
     fn test_state() -> Arc<AppState> {
         test_state_with_extraction("ollama", "ollama", None)
+    }
+
+    #[tokio::test]
+    async fn queue_health_reports_pending_backlog_and_dead_rate() {
+        let state = test_state();
+        let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        state
+            .pool
+            .write_tx(signet_core::db::Priority::High, move |conn| {
+                conn.execute(
+                    "INSERT INTO memories (id, content, normalized_content, content_hash, type, importance, extraction_status, created_at, updated_at, updated_by)
+                     VALUES ('mem-1', 'memory', 'memory', 'hash-qh', 'fact', 0.5, 'queued', ?1, ?1, 'test')",
+                    rusqlite::params![now],
+                )?;
+                conn.execute(
+                    "INSERT INTO memory_jobs (id, memory_id, job_type, status, created_at, updated_at)
+                     VALUES ('job-p1', 'mem-1', 'extract', 'pending', ?1, ?1)",
+                    rusqlite::params![now],
+                )?;
+                conn.execute(
+                    "INSERT INTO memory_jobs (id, memory_id, job_type, status, created_at, updated_at)
+                     VALUES ('job-d1', 'mem-1', 'extract', 'dead', ?1, ?1)",
+                    rusqlite::params![now],
+                )?;
+                Ok(serde_json::json!({"ok": true}))
+            })
+            .await
+            .expect("seed queue jobs");
+
+        let queue = state
+            .pool
+            .read(|conn| Ok(queue_health(conn)?))
+            .await
+            .expect("queue health");
+
+        assert_eq!(queue["depth"], 1);
+        assert_eq!(queue["deadRate"], 1.0);
+        assert_eq!(queue["leaseAnomalies"], 0);
+        assert_eq!(queue["oldestAgeSec"].as_f64().unwrap_or(-1.0) >= 0.0, true);
+        assert_eq!(queue["status"], "degraded");
+    }
+
+    #[tokio::test]
+    async fn health_ready_returns_200_with_empty_reasons_when_healthy() {
+        let state = test_state();
+        let (status, axum::response::Json(body)) = health_ready(State(state)).await;
+        assert_eq!(status, axum::http::StatusCode::OK);
+        assert_eq!(body["status"], "ready");
+        assert_eq!(body["checks"]["db"], true);
+        assert_eq!(body["checks"]["migrations"], true);
+        assert_eq!(body["reasons"], serde_json::json!([]));
+    }
+
+    #[tokio::test]
+    async fn health_ready_returns_503_with_reason_when_queue_backlogged() {
+        let state = test_state();
+        let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        state
+            .pool
+            .write_tx(signet_core::db::Priority::High, move |conn| {
+                conn.execute(
+                    "INSERT INTO memories (id, content, normalized_content, content_hash, type, importance, extraction_status, created_at, updated_at, updated_by)
+                     VALUES ('mem-1', 'memory', 'memory', 'hash-qb', 'fact', 0.5, 'queued', ?1, ?1, 'test')",
+                    rusqlite::params![now],
+                )?;
+                for i in 0..(QUEUE_MAX_DEPTH + 1) {
+                    conn.execute(
+                        "INSERT INTO memory_jobs (id, memory_id, job_type, status, created_at, updated_at)
+                         VALUES (?1, 'mem-1', 'extract', 'pending', ?2, ?2)",
+                        rusqlite::params![format!("job-b{i}"), now],
+                    )?;
+                }
+                Ok(serde_json::json!({"ok": true}))
+            })
+            .await
+            .expect("seed backlog");
+
+        let (status, axum::response::Json(body)) = health_ready(State(state)).await;
+        assert_eq!(status, axum::http::StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(body["status"], "not_ready");
+        assert_eq!(
+            body["reasons"],
+            serde_json::json!([format!(
+                "queue backlog depth {} exceeds {}",
+                QUEUE_MAX_DEPTH + 1,
+                QUEUE_MAX_DEPTH
+            )])
+        );
     }
 
     #[tokio::test]

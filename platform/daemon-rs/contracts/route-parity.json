@@ -8,7 +8,7 @@
 		"deprecated-remove-from-ts-too": "Route is intentionally unsupported and must be removed or hidden from both daemons."
 	},
 	"summary": {
-		"native-rust-replay-proven": 319,
+		"native-rust-replay-proven": 321,
 		"mounted-shallow": 7,
 		"missing": 2
 	},
@@ -647,7 +647,7 @@
 			"method": "GET",
 			"path": "/api/features",
 			"file": "platform/daemon/src/routes/health.ts",
-			"line": 48,
+			"line": 273,
 			"status": "native-rust-replay-proven",
 			"rustMounted": true,
 			"contractReplay": true,
@@ -3237,7 +3237,27 @@
 			"method": "GET",
 			"path": "/health",
 			"file": "platform/daemon/src/routes/health.ts",
-			"line": 10,
+			"line": 158,
+			"status": "native-rust-replay-proven",
+			"rustMounted": true,
+			"contractReplay": true,
+			"parityRule": true
+		},
+		{
+			"method": "GET",
+			"path": "/health/live",
+			"file": "platform/daemon/src/routes/health.ts",
+			"line": 197,
+			"status": "native-rust-replay-proven",
+			"rustMounted": true,
+			"contractReplay": true,
+			"parityRule": true
+		},
+		{
+			"method": "GET",
+			"path": "/health/ready",
+			"file": "platform/daemon/src/routes/health.ts",
+			"line": 209,
 			"status": "native-rust-replay-proven",
 			"rustMounted": true,
 			"contractReplay": true,
