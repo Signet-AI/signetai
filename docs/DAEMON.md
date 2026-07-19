@@ -232,7 +232,7 @@ request/response schemas.
 
 | Group | Base path | Description |
 |-------|-----------|-------------|
-| Health | `/health` | Liveness check, daemon status |
+| Health | `/health`, `/health/live`, `/health/ready` | Liveness and readiness probes, daemon status |
 | Auth | `/api/auth/*` | Token issuance, validation, rate limit status |
 | Config | `/api/config` | Read and write identity files |
 | Identity | `/api/identity` | Parsed identity fields |
@@ -280,6 +280,13 @@ GET /health
   "resources": { "...": "..." }
 }
 ```
+
+`GET /health` is the legacy health check. For orchestration and monitoring,
+prefer the dedicated probes: `GET /health/live` is a cheap liveness probe that
+never touches the database or subsystems (always 200 while the process is up),
+and `GET /health/ready` returns 200 only when the database, migrations,
+embedding, inference, and queue gates all pass — 503 with a `reasons` list
+otherwise. See [Health and status API](./api/health-status.md).
 
 ### Daemon Status
 
@@ -442,6 +449,7 @@ Confirm the daemon is running and the dashboard was built:
 ```bash
 signet status
 curl http://localhost:3850/health
+curl http://localhost:3850/health/ready
 ls surfaces/dashboard/build/
 ```
 
