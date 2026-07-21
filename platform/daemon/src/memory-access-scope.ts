@@ -1,6 +1,8 @@
+import type { AgentRosterReadPolicy } from "@signet/core";
+
 export function buildAgentScopeClause(
 	agentId: string,
-	readPolicy: string,
+	readPolicy: AgentRosterReadPolicy,
 	policyGroup: string | null,
 ): { sql: string; args: unknown[] } {
 	if (readPolicy === "shared") {

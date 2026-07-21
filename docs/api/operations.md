@@ -168,9 +168,10 @@ Modify auto-update settings. Changes are persisted to `agent.yaml`.
 
 ### POST /api/update/run
 
-Install the latest version immediately. Runs the global install command for
-the detected package manager. A daemon restart is required to activate the
-update.
+Install the latest version immediately. The daemon updates the executable that
+is actually running: direct native installs download the matching verified
+release binary, while npm, Bun, pnpm, and Yarn wrapper installs retain their
+owning package manager. A daemon restart is required to activate the update.
 
 **Response**
 
@@ -180,12 +181,21 @@ update.
   "message": "Update installed. Restart daemon to apply.",
   "output": "...",
   "installedVersion": "0.110.0",
-  "restartRequired": true
+  "restartRequired": true,
+  "installMethod": "native",
+  "activeExecutablePath": "/home/user/.local/bin/signet",
+  "activeExecutableVerified": true,
+  "observedVersion": "0.110.0"
 }
 ```
 
-If already up to date, returns `success: true` with a message indicating no
-update is needed.
+Failures return `success: false`, `restartRequired: false`,
+and a stable `errorCode` such as `manifest_invalid`, `checksum_mismatch`,
+`install_failed`, or `verification_failed`. `activeExecutableVerified` is true
+only when the active path reports the selected version exactly, and
+`observedVersion` is present whenever that path returned a valid version. If
+already up to date, the route returns `success: true` with a message indicating
+no update is needed.
 
 
 ## Diagnostics

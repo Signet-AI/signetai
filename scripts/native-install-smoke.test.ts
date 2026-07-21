@@ -104,6 +104,7 @@ function runCommand(
 interface NativeReleaseServer {
 	readonly downloadBase: string;
 	readonly releasesApiBase: string;
+	readonly nightlyVersionApi: string;
 }
 
 async function serveNativeRelease(binary: Buffer): Promise<NativeReleaseServer> {
@@ -127,6 +128,16 @@ async function serveNativeRelease(binary: Buffer): Promise<NativeReleaseServer> 
 		if (req.url === "/releases") {
 			res.writeHead(200, { "Content-Type": "application/json" });
 			res.end(JSON.stringify([{ tag_name: tag, draft: false, prerelease: true }]));
+			return;
+		}
+		if (req.url === "/releases/latest") {
+			res.writeHead(200, { "Content-Type": "application/json" });
+			res.end(JSON.stringify({ tag_name: tag, draft: false, prerelease: false }));
+			return;
+		}
+		if (req.url === "/npm-next") {
+			res.writeHead(200, { "Content-Type": "application/json" });
+			res.end(JSON.stringify({ version: tag.slice(1) }));
 			return;
 		}
 		if (req.url === "/download/native-manifest.json" || req.url === `/download/${tag}/native-manifest.json`) {
@@ -154,6 +165,7 @@ async function serveNativeRelease(binary: Buffer): Promise<NativeReleaseServer> 
 	return {
 		downloadBase: `${origin}/download`,
 		releasesApiBase: `${origin}/releases`,
+		nightlyVersionApi: `${origin}/npm-next`,
 	};
 }
 
@@ -162,10 +174,7 @@ interface ConnectorReleaseServer {
 	readonly version: string;
 }
 
-async function serveConnectorRelease(
-	connectorTarball: Buffer,
-	version: string,
-): Promise<ConnectorReleaseServer> {
+async function serveConnectorRelease(connectorTarball: Buffer, version: string): Promise<ConnectorReleaseServer> {
 	const sha256 = createHash("sha256").update(connectorTarball).digest("hex");
 	const manifest = JSON.stringify({
 		schemaVersion: 1,
@@ -181,10 +190,7 @@ async function serveConnectorRelease(
 	});
 
 	const server = createServer((req, res) => {
-		if (
-			req.url === "/download/native-manifest.json" ||
-			req.url === `/download/v${version}/native-manifest.json`
-		) {
+		if (req.url === "/download/native-manifest.json" || req.url === `/download/v${version}/native-manifest.json`) {
 			res.writeHead(200, { "Content-Type": "application/json" });
 			res.end(manifest);
 			return;
@@ -224,10 +230,7 @@ function buildFakeConnectorTarball(): Buffer {
 	tempDirs.push(stage);
 	const pluginDir = join(stage, "runtime", "connectors", "hermes-agent", "hermes-plugin");
 	mkdirSync(pluginDir, { recursive: true });
-	writeFileSync(
-		join(pluginDir, "__init__.py"),
-		"\"\"\"Smoke test plugin for issue #831 connector install path.\"\"\"\n",
-	);
+	writeFileSync(join(pluginDir, "__init__.py"), '"""Smoke test plugin for issue #831 connector install path."""\n');
 	writeFileSync(join(pluginDir, "plugin.yaml"), "name: signet\nversion: 1.0.0\n");
 	const tarballPath = join(stage, "out.tar.gz");
 	const tar = spawnSync(
@@ -301,11 +304,10 @@ describe("native install smoke", () => {
 		writeFileSync(nativePackageBin, "");
 		chmodSync(nativePackageBin, 0o755);
 
-		const result = await runCommand(
-			"node",
-			[join(packageDir, "scripts", "install-native.js")],
-			{ ...process.env, SIGNET_DOWNLOAD_BASE: release.downloadBase },
-		);
+		const result = await runCommand("node", [join(packageDir, "scripts", "install-native.js")], {
+			...process.env,
+			SIGNET_DOWNLOAD_BASE: release.downloadBase,
+		});
 
 		expect(result.status).toBe(0);
 		expect(result.stdout).toContain("Installed connector assets to");
@@ -314,21 +316,13 @@ describe("native install smoke", () => {
 		// This is the path the binary's `$SIGNET_DIR/runtime/connectors/...`
 		// lookup resolves to, and the layout the connector's
 		// `getPluginSourceDir()` expects.
-		const extractedDir = join(
-			packageDir,
-			"runtime",
-			"connectors",
-			"hermes-agent",
-			"hermes-plugin",
-		);
+		const extractedDir = join(packageDir, "runtime", "connectors", "hermes-agent", "hermes-plugin");
 		expect(existsSync(join(extractedDir, "__init__.py"))).toBe(true);
 		expect(existsSync(join(extractedDir, "plugin.yaml"))).toBe(true);
-		expect(
-			readFileSync(join(extractedDir, "__init__.py"), "utf8"),
-		).toContain("Smoke test plugin for issue #831");
-		expect(
-			readFileSync(join(packageDir, "runtime", "connectors", ".signet-connectors-version"), "utf8").trim(),
-		).toBe(version);
+		expect(readFileSync(join(extractedDir, "__init__.py"), "utf8")).toContain("Smoke test plugin for issue #831");
+		expect(readFileSync(join(packageDir, "runtime", "connectors", ".signet-connectors-version"), "utf8").trim()).toBe(
+			version,
+		);
 	});
 
 	test("postinstall rejects a tarball whose SHA-256 does not match the manifest", async () => {
@@ -339,10 +333,7 @@ describe("native install smoke", () => {
 		// Serve a manifest with a wrong SHA so verification must fail.
 		const wrongSha = "0".repeat(64);
 		const server = createServer((req, res) => {
-			if (
-				req.url === "/download/native-manifest.json" ||
-				req.url === `/download/v${version}/native-manifest.json`
-			) {
+			if (req.url === "/download/native-manifest.json" || req.url === `/download/v${version}/native-manifest.json`) {
 				res.writeHead(200, { "Content-Type": "application/json" });
 				res.end(
 					JSON.stringify({
@@ -417,11 +408,10 @@ describe("native install smoke", () => {
 		writeFileSync(nativePackageBin, "");
 		chmodSync(nativePackageBin, 0o755);
 
-		const result = await runCommand(
-			"node",
-			[join(packageDir, "scripts", "install-native.js")],
-			{ ...process.env, SIGNET_DOWNLOAD_BASE: `http://127.0.0.1:${address.port}/download` },
-		);
+		const result = await runCommand("node", [join(packageDir, "scripts", "install-native.js")], {
+			...process.env,
+			SIGNET_DOWNLOAD_BASE: `http://127.0.0.1:${address.port}/download`,
+		});
 
 		expect(result.status).not.toBe(0);
 		expect(result.stderr).toContain("SHA-256 mismatch");
@@ -434,19 +424,22 @@ describe("native install smoke", () => {
 		const binDir = join(dir, "bin");
 		const downloadDir = join(dir, "downloads");
 		const release = await serveNativeRelease(fakeNativeBinary());
+		mkdirSync(binDir, { recursive: true });
+		writeFileSync(join(binDir, "signet"), "old binary");
 
 		const result = await runCommand(
 			"bash",
-			[join(root, "web", "marketing", "public", "install.sh"), "--bin-dir", binDir, "--force", "--json"],
+			[join(root, "web", "marketing", "public", "install.sh"), "--bin-dir", binDir, "--json"],
 			{ ...process.env, HOME: dir, SIGNET_DOWNLOAD_BASE: release.downloadBase, SIGNET_DOWNLOAD_DIR: downloadDir },
 		);
 
 		expect(result.status).toBe(0);
 		expect(result.stdout).toContain('"installed":true');
 		expect(existsSync(join(binDir, "signet"))).toBe(true);
+		expect(readFileSync(join(binDir, "signet"), "utf8")).toContain("fake native signet");
 	});
 
-	test("curl installer resolves prerelease native assets without releases/latest", async () => {
+	test("curl installer resolves the stable release through releases/latest", async () => {
 		if (process.platform === "win32") return;
 
 		const dir = tempDir();
@@ -462,6 +455,56 @@ describe("native install smoke", () => {
 				HOME: dir,
 				SIGNET_DOWNLOAD_DIR: downloadDir,
 				SIGNET_RELEASES_API_BASE: release.releasesApiBase,
+				SIGNET_RELEASES_DOWNLOAD_BASE: release.downloadBase,
+			},
+		);
+
+		expect(result.status).toBe(0);
+		expect(result.stdout).toContain('"installed":true');
+		expect(existsSync(join(binDir, "signet"))).toBe(true);
+	});
+
+	test("curl installer preserves the VERSION release override", async () => {
+		if (process.platform === "win32") return;
+
+		const dir = tempDir();
+		const binDir = join(dir, "bin");
+		const release = await serveNativeRelease(fakeNativeBinary());
+
+		const result = await runCommand(
+			"bash",
+			[join(root, "web", "marketing", "public", "install.sh"), "--bin-dir", binDir, "--json"],
+			{
+				...process.env,
+				HOME: dir,
+				VERSION: "0.0.0-test",
+				SIGNET_RELEASES_API_BASE: "http://127.0.0.1:1/not-used",
+				SIGNET_RELEASES_DOWNLOAD_BASE: release.downloadBase,
+			},
+		);
+
+		expect(result.status).toBe(0);
+		expect(result.stdout).toContain('"installed":true');
+		expect(existsSync(join(binDir, "signet"))).toBe(true);
+	});
+
+	test("curl installer resolves nightly only with explicit channel opt-in", async () => {
+		if (process.platform === "win32") return;
+
+		const dir = tempDir();
+		const binDir = join(dir, "bin");
+		const downloadDir = join(dir, "downloads");
+		const release = await serveNativeRelease(fakeNativeBinary());
+
+		const result = await runCommand(
+			"bash",
+			[join(root, "web", "marketing", "public", "install.sh"), "--bin-dir", binDir, "--json"],
+			{
+				...process.env,
+				HOME: dir,
+				SIGNET_CHANNEL: "nightly",
+				SIGNET_DOWNLOAD_DIR: downloadDir,
+				SIGNET_NIGHTLY_VERSION_API: release.nightlyVersionApi,
 				SIGNET_RELEASES_DOWNLOAD_BASE: release.downloadBase,
 			},
 		);

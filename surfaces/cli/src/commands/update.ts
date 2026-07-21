@@ -1,9 +1,11 @@
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { type SignetInstallationReport, detectSignetInstallations } from "@signet/core";
 import chalk from "chalk";
 import type { Command } from "commander";
 import ora from "ora";
+import { printConcurrentInstallationWarning } from "../features/installation-warning.js";
 
 interface UpdateDeps {
 	readonly AGENTS_DIR: string;
@@ -20,6 +22,7 @@ interface UpdateDeps {
 		skillsSourceDir: string,
 		basePath: string,
 	) => { installed: string[]; updated: string[]; skipped: string[] };
+	readonly detectInstallations?: () => SignetInstallationReport;
 }
 
 const UPDATE_INSTALL_TIMEOUT_MS = 15 * 60_000;
@@ -102,6 +105,9 @@ export function registerUpdateCommands(program: Command, deps: UpdateDeps): void
 		.command("install")
 		.description("Install the latest update")
 		.action(async () => {
+			const printInstallationWarning = (): void => {
+				printConcurrentInstallationWarning((deps.detectInstallations ?? detectSignetInstallations)());
+			};
 			const check = await deps.fetchFromDaemon<{
 				updateAvailable?: boolean;
 				latestVersion?: string;
@@ -111,17 +117,20 @@ export function registerUpdateCommands(program: Command, deps: UpdateDeps): void
 
 			if (!check) {
 				console.error(chalk.red("Could not connect to daemon"));
+				printInstallationWarning();
 				process.exit(1);
 			}
 
 			if (check.restartRequired && !check.updateAvailable) {
 				console.log(chalk.yellow(`✓ Update already installed (v${check.pendingVersion || check.latestVersion})`));
 				console.log(chalk.cyan("  Restart daemon to apply: signet daemon restart"));
+				printInstallationWarning();
 				return;
 			}
 
 			if (!check.updateAvailable) {
 				console.log(chalk.green("✓ Already running the latest version"));
+				printInstallationWarning();
 				return;
 			}
 
@@ -132,6 +141,11 @@ export function registerUpdateCommands(program: Command, deps: UpdateDeps): void
 				message?: string;
 				output?: string;
 				restartRequired?: boolean;
+				errorCode?: string;
+				installMethod?: string;
+				activeExecutablePath?: string;
+				activeExecutableVerified?: boolean;
+				observedVersion?: string;
 				desktopUpdate?: { status?: string; message?: string };
 			}>("/api/update/run", {
 				method: "POST",
@@ -145,6 +159,7 @@ export function registerUpdateCommands(program: Command, deps: UpdateDeps): void
 				if (data?.output) {
 					console.log(chalk.dim(data.output));
 				}
+				printInstallationWarning();
 				process.exit(1);
 			}
 
@@ -191,6 +206,7 @@ export function registerUpdateCommands(program: Command, deps: UpdateDeps): void
 			if (data.restartRequired) {
 				console.log(chalk.cyan("\n  Restart daemon to apply: signet daemon restart"));
 			}
+			printInstallationWarning();
 		});
 
 	updateCmd

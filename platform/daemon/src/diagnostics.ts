@@ -194,6 +194,12 @@ function clamp(n: number): number {
 }
 
 const QUEUE_RECENT_WINDOW_MS = 60 * 60 * 1000;
+
+// Queue backlog thresholds. Exported so /health/ready gates on the same
+// limits that drive the queue health score.
+export const QUEUE_MAX_DEPTH = 50;
+export const QUEUE_MAX_DEAD_RATE = 0.01;
+export const QUEUE_MAX_OLDEST_AGE_SEC = 300;
 const GRAPH_FLATLINE_MEMORY_THRESHOLD = 10;
 
 // ---------------------------------------------------------------------------
@@ -240,9 +246,9 @@ export function getQueueHealth(db: ReadDb): QueueHealth {
 	const leaseAnomalies = anomalyRow?.cnt ?? 0;
 
 	let score = 1.0;
-	if (depth > 50) score -= 0.3;
-	if (deadRate > 0.01) score -= 0.3;
-	if (oldestAgeSec > 300) score -= 0.2;
+	if (depth > QUEUE_MAX_DEPTH) score -= 0.3;
+	if (deadRate > QUEUE_MAX_DEAD_RATE) score -= 0.3;
+	if (oldestAgeSec > QUEUE_MAX_OLDEST_AGE_SEC) score -= 0.2;
 	if (leaseAnomalies > 0) score -= 0.2;
 
 	score = clamp(score);

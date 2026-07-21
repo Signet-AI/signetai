@@ -1,7 +1,15 @@
 import { join } from "node:path";
 import { diagnoseHermesIntegration } from "@signet/connector-hermes-agent";
 import { OpenClawConnector, type OpenClawRuntimeState } from "@signet/connector-openclaw";
-import { detectSchema, getMissingIdentityFiles, hasValidIdentity, loadIdentityMode } from "@signet/core";
+import {
+	type SignetInstallationReport,
+	detectSchema,
+	detectSignetInstallations,
+	getMissingIdentityFiles,
+	hasValidIdentity,
+	inactivePackageManagerInstallations,
+	loadIdentityMode,
+} from "@signet/core";
 import chalk from "chalk";
 import { daemonAccessLines } from "../lib/network.js";
 import { getGitRemoteState, getSnapshotProtection, hasOpenClawWorkspaceLink } from "../lib/workspace-protection.js";
@@ -46,12 +54,13 @@ interface DaemonStatus {
 		readonly dead: number;
 	} | null;
 	readonly probe?: {
-		readonly status: "healthy" | "listener-unhealthy" | "process-unhealthy" | "stale-artifact" | "absent";
+		readonly status: "healthy" | "degraded" | "listener-unhealthy" | "process-unhealthy" | "stale-artifact" | "absent";
 		readonly detail: string;
 		readonly url: string | null;
 		readonly listenerPresent: boolean;
 		readonly processPid: number | null;
 		readonly stalePid: number | null;
+		readonly readinessReasons?: readonly string[];
 	};
 	readonly openclaw?: {
 		readonly status: "connected" | "stale" | "never-seen";
@@ -99,6 +108,7 @@ interface StatusReport {
 
 interface DoctorFinding {
 	readonly level: "info" | "warn" | "error";
+	readonly code?: string;
 	readonly message: string;
 	readonly fix?: string;
 }
@@ -113,6 +123,7 @@ interface StatusDeps {
 	readonly normalizeAgentPath: (pathValue: string) => string;
 	readonly parseIntegerValue: (value: unknown) => number | null;
 	readonly signetLogo: () => string;
+	readonly detectInstallations?: () => SignetInstallationReport;
 }
 
 export async function getStatusReport(basePath: string, deps: StatusDeps): Promise<StatusReport> {
@@ -208,14 +219,22 @@ export async function showStatus(options: { path?: string; json?: boolean }, dep
 	console.log(chalk.bold("  Status\n"));
 
 	if (report.daemon.running) {
+		const readinessDegraded = report.daemon.probe?.status === "degraded";
 		const ver = report.daemon.version && report.daemon.version !== "0.0.0" ? ` v${report.daemon.version}` : "";
-		console.log(`  ${chalk.green("●")} Daemon ${chalk.green("running")}${chalk.dim(ver)}`);
+		console.log(
+			`  ${chalk.green("●")} Daemon ${chalk.green("running")}${chalk.dim(ver)}${readinessDegraded ? chalk.dim(" (live)") : ""}`,
+		);
 		console.log(chalk.dim(`    PID: ${report.daemon.pid ?? "unknown"}`));
 		console.log(
 			chalk.dim(`    Uptime: ${report.daemon.uptime === null ? "unknown" : deps.formatUptime(report.daemon.uptime)}`),
 		);
 		for (const line of daemonAccessLines(deps.defaultPort, report.daemon)) {
 			console.log(chalk.dim(`    ${line}`));
+		}
+		if (readinessDegraded) {
+			const reasons = report.daemon.probe?.readinessReasons ?? [];
+			const summary = reasons.slice(0, 2).join("; ");
+			console.log(chalk.yellow(`    ▲ Readiness degraded${summary ? `: ${summary}` : ""}`));
 		}
 		const transcripts = report.daemon.transcripts;
 		if (transcripts) {
@@ -354,11 +373,12 @@ export async function showDoctor(
 
 	const basePath = deps.normalizeAgentPath(deps.extractPathOption(options) ?? deps.agentsDir);
 	const report = await getStatusReport(basePath, deps);
-	const findings = getDoctorFindings(report);
+	const installations = (deps.detectInstallations ?? detectSignetInstallations)();
+	const findings = getDoctorFindings(report, installations);
 	const ok = findings.every((finding) => finding.level !== "error");
 
 	if (options.json) {
-		console.log(JSON.stringify({ ok, report, findings }, null, 2));
+		console.log(JSON.stringify({ ok, report, installations, findings }, null, 2));
 		return;
 	}
 
@@ -519,18 +539,33 @@ function addOpenClawHeartbeatFindings(report: StatusReport, findings: DoctorFind
 	}
 }
 
-function getDoctorFindings(report: StatusReport): DoctorFinding[] {
+function addConcurrentInstallationFindings(report: SignetInstallationReport, findings: DoctorFinding[]): void {
+	if (report.target.kind !== "native") return;
+	for (const duplicate of inactivePackageManagerInstallations(report)) {
+		findings.push({
+			level: "warn",
+			code: "duplicate_signet_installation",
+			message: `Another Signet installation is inactive: ${duplicate.executablePath} (${duplicate.method}). Active: ${report.target.executablePath} (native).`,
+			fix: duplicate.removalCommand
+				? `After verifying the active installation, remove the duplicate manually: ${duplicate.removalCommand}`
+				: undefined,
+		});
+	}
+}
+
+function getDoctorFindings(report: StatusReport, installations: SignetInstallationReport): DoctorFinding[] {
+	const findings: DoctorFinding[] = [];
+	addConcurrentInstallationFindings(installations, findings);
+
 	if (!report.installed) {
-		return [
-			{
-				level: "error",
-				message: "No Signet installation found.",
-				fix: "Run `signet setup`.",
-			},
-		];
+		findings.push({
+			level: "error",
+			message: "No Signet installation found.",
+			fix: "Run `signet setup`.",
+		});
+		return findings;
 	}
 
-	const findings: DoctorFinding[] = [];
 	const hasAgentYaml = report.files.find((file) => file.name === "agent.yaml")?.exists ?? false;
 	const missingIdentity = report.missingIdentityFiles.filter((file) => file !== "agent.yaml");
 

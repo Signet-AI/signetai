@@ -506,6 +506,15 @@ export {
 	type PackageManagerResolution,
 	type PackageManagerCommand,
 } from "./package-manager";
+export {
+	detectSignetInstallations,
+	inactivePackageManagerInstallations,
+	packageManagerRemovalCommand,
+	type SignetInstallation,
+	type SignetInstallationReport,
+	type SignetInstallMethod,
+	type SignetUpdateTarget,
+} from "./signet-installation";
 
 // Document ingestion
 export { ingestPath } from "./ingest/index";

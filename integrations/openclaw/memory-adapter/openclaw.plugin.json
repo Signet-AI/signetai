@@ -1,6 +1,19 @@
 {
 	"id": "signet-memory-openclaw",
 	"kind": "memory",
+	"contracts": {
+		"tools": [
+			"memory_search",
+			"memory_get",
+			"memory_store",
+			"memory_list",
+			"memory_modify",
+			"memory_forget",
+			"session_search",
+			"mcp_server_list",
+			"mcp_server_call"
+		]
+	},
 	"uiHints": {
 		"daemonUrl": {
 			"label": "Daemon URL",

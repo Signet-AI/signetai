@@ -19,6 +19,10 @@ jobs:
         run: |
           set -euo pipefail
           test -n "$NODE_AUTH_TOKEN"
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Invalid release version: $VERSION"
+            exit 1
+          fi
           npm config set //registry.npmjs.org/:_authToken "$NODE_AUTH_TOKEN"
           required_packages=(
             "@signetai/core"
@@ -35,11 +39,38 @@ jobs:
             "@signetai/codex-plugin"
             "signetai"
           )
+          optional_packages=(
+            "@signetai/signet-memory-openclaw"
+          )
+
+          # Preflight every required package and the GitHub release before
+          # changing any public dist-tag or release state.
           for package in "${required_packages[@]}"; do
             npm view "${package}@${VERSION}" version >/dev/null
+          done
+          gh release view "v${VERSION}" --repo "$GITHUB_REPOSITORY" >/dev/null
+
+          promoted_packages=("${required_packages[@]}")
+          for package in "${optional_packages[@]}"; do
+            if npm view "${package}@${VERSION}" version >/dev/null 2>&1; then
+              promoted_packages+=("$package")
+            else
+              echo "Optional package ${package}@${VERSION} is absent; leaving its latest tag unchanged"
+            fi
+          done
+
+          for package in "${promoted_packages[@]}"; do
             npm dist-tag add "${package}@${VERSION}" latest
           done
-          npm dist-tag add "@signetai/signet-memory-openclaw@${VERSION}" latest || true
+
+          for package in "${promoted_packages[@]}"; do
+            latest=$(npm view "${package}@latest" version)
+            if [ "$latest" != "$VERSION" ]; then
+              echo "::error::${package} latest is ${latest}, expected ${VERSION}"
+              exit 1
+            fi
+          done
+
           gh release edit "v${VERSION}" --repo "$GITHUB_REPOSITORY" --prerelease=false --latest
           echo "Promoted v${VERSION} to stable/latest"
         env:

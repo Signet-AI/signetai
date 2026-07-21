@@ -1023,7 +1023,6 @@ const MIN_UPDATE_INTERVAL_SECONDS: i64 = 300;
 const MAX_UPDATE_INTERVAL_SECONDS: i64 = 604_800;
 const UPDATE_CACHE_TTL_SECONDS: i64 = 3_600;
 const UPDATE_HTTP_TIMEOUT_SECONDS: u64 = 10;
-const UPDATE_INSTALL_TIMEOUT_SECONDS: u64 = 15 * 60;
 
 fn update_config_payload(
     config: &UpdateRuntimeConfig,
@@ -1641,40 +1640,34 @@ struct UpdateRunResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     installed_version: Option<String>,
     restart_required: bool,
-}
-
-fn clip_update_output(output: &str) -> Option<String> {
-    let trimmed = output.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    if trimmed.len() <= 6_000 {
-        Some(trimmed.to_string())
-    } else {
-        Some(trimmed[trimmed.len() - 6_000..].to_string())
-    }
-}
-
-async fn command_exists(command: &str) -> bool {
-    tokio::process::Command::new(command)
-        .arg("--version")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .output()
-        .await
-        .map(|output| output.status.success())
-        .unwrap_or(false)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    install_method: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    active_executable_path: Option<String>,
+    active_executable_verified: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    observed_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error_code: Option<String>,
 }
 
 async fn run_update_install(target_version: &str) -> UpdateRunResult {
     if let Ok(result) = std::env::var("SIGNET_UPDATE_MOCK_RUN_RESULT") {
         return if result == "success" {
+            let active_executable_path = std::env::current_exe()
+                .ok()
+                .map(|path| path.to_string_lossy().into_owned());
             UpdateRunResult {
                 success: true,
                 message: "Update installed. Restart daemon to apply.".to_string(),
                 output: None,
                 installed_version: Some(target_version.to_string()),
                 restart_required: true,
+                install_method: Some("native".to_string()),
+                active_executable_path,
+                active_executable_verified: true,
+                observed_version: Some(target_version.to_string()),
+                error_code: None,
             }
         } else {
             UpdateRunResult {
@@ -1683,67 +1676,37 @@ async fn run_update_install(target_version: &str) -> UpdateRunResult {
                 output: None,
                 installed_version: None,
                 restart_required: false,
+                install_method: None,
+                active_executable_path: std::env::current_exe()
+                    .ok()
+                    .map(|path| path.to_string_lossy().into_owned()),
+                active_executable_verified: false,
+                observed_version: None,
+                error_code: Some("install_failed".to_string()),
             }
         };
     }
 
-    let install_package = format!("signetai@{target_version}");
-    let (command, args): (&str, Vec<String>) = if command_exists("bun").await {
-        ("bun", vec!["add".into(), "-g".into(), install_package])
-    } else {
-        ("npm", vec!["install".into(), "-g".into(), install_package])
-    };
-    let output = match tokio::time::timeout(
-        Duration::from_secs(UPDATE_INSTALL_TIMEOUT_SECONDS),
-        tokio::process::Command::new(command).args(&args).output(),
-    )
-    .await
-    {
-        Ok(Ok(output)) => output,
-        Ok(Err(error)) => {
-            return UpdateRunResult {
-                success: false,
-                message: format!("Update failed: {error}"),
-                output: None,
-                installed_version: None,
-                restart_required: false,
-            };
-        }
-        Err(_) => {
-            return UpdateRunResult {
-                success: false,
-                message: "Update failed: install command timed out".to_string(),
-                output: None,
-                installed_version: None,
-                restart_required: false,
-            };
-        }
-    };
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let clipped = clip_update_output(&format!("{stdout}\n{stderr}"));
-    if !output.status.success() {
-        return UpdateRunResult {
-            success: false,
-            message: format!(
-                "Update failed: {}",
-                if stderr.trim().is_empty() {
-                    "Unknown error"
-                } else {
-                    stderr.trim()
-                }
-            ),
-            output: clipped,
-            installed_version: None,
-            restart_required: false,
-        };
-    }
+    unsupported_runtime_update_result(target_version)
+}
+
+fn unsupported_runtime_update_result(target_version: &str) -> UpdateRunResult {
+    let active_executable_path = std::env::current_exe()
+        .ok()
+        .map(|path| path.to_string_lossy().into_owned());
     UpdateRunResult {
-        success: true,
-        message: "Update installed. Restart daemon to apply.".to_string(),
-        output: clipped,
-        installed_version: Some(target_version.to_string()),
-        restart_required: true,
+        success: false,
+        message: format!(
+            "Rust shadow runtime cannot safely install Signet v{target_version}; use the TypeScript/native daemon update path"
+        ),
+        output: None,
+        installed_version: None,
+        restart_required: false,
+        install_method: None,
+        active_executable_path,
+        active_executable_verified: false,
+        observed_version: None,
+        error_code: Some("unsupported_runtime_update".to_string()),
     }
 }
 
@@ -1758,6 +1721,8 @@ pub async fn update_run(
             "success": false,
             "message": format!("Invalid targetVersion '{}'", body_target.unwrap_or_default()),
             "restartRequired": false,
+            "activeExecutableVerified": false,
+            "errorCode": "invalid_target_version",
         }));
     }
 
@@ -1768,6 +1733,8 @@ pub async fn update_run(
                 "success": false,
                 "message": "Update already in progress",
                 "restartRequired": false,
+                "activeExecutableVerified": false,
+                "errorCode": "update_in_progress",
             }));
         }
         update.install_in_progress = true;
@@ -1812,6 +1779,8 @@ pub async fn update_run(
             "success": false,
             "message": "Update failed: no target version available",
             "restartRequired": false,
+            "activeExecutableVerified": false,
+            "errorCode": "no_target_version",
         }));
     };
 
@@ -1941,5 +1910,20 @@ mod tests {
         let _ = first.await.expect("first greeting");
         let _ = second.await.expect("second greeting");
         assert_eq!(provider.entered.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn rust_runtime_update_fails_closed_without_claiming_install_success() {
+        let result = unsupported_runtime_update_result("1.2.3");
+
+        assert!(!result.success);
+        assert_eq!(
+            result.error_code.as_deref(),
+            Some("unsupported_runtime_update")
+        );
+        assert!(!result.active_executable_verified);
+        assert!(result.observed_version.is_none());
+        assert!(result.installed_version.is_none());
+        assert!(!result.restart_required);
     }
 }

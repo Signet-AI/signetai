@@ -178,7 +178,8 @@ Prevent these proactively.
 - `/api/*` covers config, memory, skills, hooks, updates, diagnostics,
   auth, ontology, sources, and related daemon APIs.
 - `/memory/*` keeps search and similarity aliases.
-- `/health` is the simple health check.
+- `/health` is the legacy health check; `/health/live` and `/health/ready`
+  are the dedicated liveness and readiness probes.
 - File watcher behavior includes debounced auto-commit and harness sync.
 
 ### Data Location

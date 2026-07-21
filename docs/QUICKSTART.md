@@ -133,6 +133,12 @@ from the same GitHub release. Install scripts only link the native binary into
 place; if scripts are disabled, the wrapper resolves the native package
 directly. They do not install Bun, rebuild Signet, or install daemon
 dependencies.
+
+Choose one installation method per machine. `signet update install` preserves
+the active method, and `signet doctor` warns when an inactive package-manager
+wrapper coexists with a direct native install. Duplicate installs are never
+removed automatically.
+
 Published native binaries currently cover Linux x64, Linux arm64, macOS x64,
 macOS arm64, and Windows x64. Windows direct installs should use
 `npm install -g signetai`; the old PowerShell `install.ps1` path has been

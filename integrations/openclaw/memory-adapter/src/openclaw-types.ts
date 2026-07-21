@@ -70,7 +70,23 @@ export type PluginHookAfterCompactionEvent = {
 // Plugin API
 // ============================================================================
 
-export type PluginRegistrationMode = "full" | "setup-only" | "setup-runtime" | "cli-metadata";
+export type PluginRegistrationMode =
+	| "full"
+	| "discovery"
+	| "tool-discovery"
+	| "setup-only"
+	| "setup-runtime"
+	| "cli-metadata";
+
+export interface OpenClawMemoryCapability {
+	promptBuilder?: (params: {
+		availableTools: Set<string>;
+		citationsMode?: "auto" | "on" | "off";
+		agentId?: string;
+		agentSessionKey?: string;
+		sandboxed?: boolean;
+	}) => string[];
+}
 
 export interface OpenClawPluginApi {
 	readonly pluginConfig?: Record<string, unknown>;
@@ -90,6 +106,7 @@ export interface OpenClawPluginApi {
 			optional?: boolean;
 		},
 	): void;
+	registerMemoryCapability(capability: OpenClawMemoryCapability): void;
 	registerCli(fn: (ctx: { program: unknown }) => void, opts?: { commands?: readonly string[] }): void;
 	registerService(service: {
 		id: string;

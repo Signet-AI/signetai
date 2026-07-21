@@ -1,4 +1,4 @@
-# @signetai/connector-openclaw
+# @signet/connector-openclaw
 
 Signet connector for OpenClaw (and its earlier names: clawdbot, moltbot).
 
@@ -6,20 +6,21 @@ Signet connector for OpenClaw (and its earlier names: clawdbot, moltbot).
 
 Unlike other harnesses, OpenClaw reads `~/.agents/AGENTS.md` directly, so no
 generated output file is needed. Instead, this connector patches the JSON
-config to point OpenClaw at the Signet workspace and enables memory hooks.
+config to point OpenClaw at the Signet workspace and configures the Signet
+memory plugin.
 
 ## Installation
 
 ```bash
-npm install @signetai/connector-openclaw
+npm install @signet/connector-openclaw
 # or
-bun add @signetai/connector-openclaw
+bun add @signet/connector-openclaw
 ```
 
 ## Usage
 
 ```typescript
-import { OpenClawConnector } from '@signetai/connector-openclaw';
+import { OpenClawConnector } from '@signet/connector-openclaw';
 
 const connector = new OpenClawConnector();
 await connector.install('~/.agents');
@@ -40,16 +41,22 @@ await connector.install('~/.agents');
   `OPENCLAW_HOME`, `CLAWDBOT_HOME`, `MOLDBOT_HOME`, `MOLTBOT_HOME`,
   `OPENCLAW_STATE_HOME`
 - Sets `agents.defaults.workspace` to point at `~/.agents`
-- Enables the `signet-memory` internal hook entry
+- Selects `signet-memory-openclaw` as the memory plugin and adds it to
+  `plugins.allow`
+- Grants the plugin the explicit `hooks.allowConversationAccess` permission
+  required for `agent_end` transcript capture
+- Disables OpenClaw's built-in memory search and the legacy `signet-memory`
+  internal hook to prevent duplicate memory paths
 - Creates hook handler files in `~/.agents/hooks/agent-memory/` for
-  `/remember`, `/recall`, and `/context` commands
+  legacy `/remember`, `/recall`, and `/context` command compatibility
 
 ## API
 
-### `install(basePath: string): Promise<InstallResult>`
+### `install(basePath: string, options?: OpenClawInstallOptions): Promise<InstallResult>`
 
 Install the connector. Patches all found OpenClaw config files and installs
-hook handler files.
+hook handler files. The plugin runtime is the default; pass
+`{ runtimePath: "legacy" }` only for an older OpenClaw runtime.
 
 ### `uninstall(basePath?: string): Promise<UninstallResult>`
 

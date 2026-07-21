@@ -5,20 +5,37 @@
  * db-accessor.ts).
  */
 
-import { spawn } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import {
 	type PackageManagerFamily,
+	type SignetInstallMethod,
+	type SignetInstallationReport,
 	type WorkspaceSourceRepoSyncResult,
-	getGlobalInstallCommand,
+	detectSignetInstallations,
 	parseSimpleYaml,
 	resolveGlobalPackagePath,
 	resolvePrimaryPackageManager,
 	syncWorkspaceSourceRepoAsync,
 } from "@signet/core";
 import { logger } from "./logger";
+import {
+	UPDATE_INSTALL_TIMEOUT_MS,
+	type UpdateInstallDeps,
+	type UpdateInstallErrorCode,
+	UpdateInstallFailure,
+	type UpdateProcessOptions,
+	type UpdateProcessResult,
+	VERSION_VERIFY_TIMEOUT_MS,
+	cliSubprocessEnvironment,
+	clipUpdateOutput,
+	installUpdateTarget,
+	normalizeExactSemver,
+	remainingUpdateTimeout,
+	runUpdateProcess,
+	verifyExecutableVersion,
+} from "./update-install";
 import { compareVersions, isMajorUpgrade, isVersionNewer } from "./version";
 
 // ---------------------------------------------------------------------------
@@ -38,14 +55,32 @@ export interface UpdateInfo {
 	isMajorUpgrade?: boolean;
 }
 
-export interface UpdateRunResult {
-	success: boolean;
-	message: string;
-	output?: string;
-	installedVersion?: string;
-	restartRequired?: boolean;
-	desktopUpdate?: DesktopUpdateResult;
+export interface UpdateRunSuccess {
+	readonly success: true;
+	readonly message: string;
+	readonly output?: string;
+	readonly installedVersion: string;
+	readonly restartRequired: boolean;
+	readonly installMethod: SignetInstallMethod;
+	readonly activeExecutablePath: string;
+	readonly activeExecutableVerified: true;
+	readonly observedVersion: string;
+	readonly desktopUpdate?: DesktopUpdateResult;
 }
+
+export interface UpdateRunFailure {
+	readonly success: false;
+	readonly message: string;
+	readonly output?: string;
+	readonly restartRequired: false;
+	readonly errorCode: UpdateInstallErrorCode;
+	readonly installMethod?: SignetInstallMethod;
+	readonly activeExecutablePath?: string;
+	readonly activeExecutableVerified: boolean;
+	readonly observedVersion?: string;
+}
+
+export type UpdateRunResult = UpdateRunSuccess | UpdateRunFailure;
 
 export type UpdateChannel = "stable" | "nightly";
 
@@ -103,7 +138,6 @@ const CHANNEL_TO_NPM_TAG: Record<UpdateChannel, "latest" | "next"> = {
 	stable: "latest",
 	nightly: "next",
 };
-const EXACT_SEMVER_PATTERN = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 const MANAGED_DESKTOP_LAUNCHER_MARKER = "# signet-desktop managed launcher";
 
 export const MIN_UPDATE_INTERVAL_SECONDS = 300;
@@ -224,18 +258,7 @@ export function getUpdateSummary(): string | null {
 			return `Signet v${latest} is available (current: v${currentVersion}). Auto-update will install it on the next check cycle.${autoInfo}${notes}`;
 		}
 
-		const packageManager = resolvePrimaryPackageManager({
-			agentsDir,
-			env: process.env,
-		});
-		const installPackage =
-			updateConfig.channel === "nightly"
-				? `${NPM_PACKAGE}@${npmTagForUpdateChannel(updateConfig.channel)}`
-				: NPM_PACKAGE;
-		const installCmd = getGlobalInstallCommand(packageManager.family, installPackage);
-		const fullInstallCmd = `${installCmd.command} ${installCmd.args.join(" ")}`;
-
-		return `Signet v${latest} is available (current: v${currentVersion}).\n\nTo update Signet:\n  ${fullInstallCmd}\n  signet daemon restart\n  signet sync\n\nThese are the ONLY supported update commands. Do not use npx, bunx, or signet update install.${notes}`;
+		return `Signet v${latest} is available (current: v${currentVersion}).\n\nTo update the active Signet installation:\n  signet update install\n  signet daemon restart\n  signet sync${notes}`;
 	}
 
 	if (lastAutoUpdateAt && updateConfig.autoInstall) {
@@ -488,31 +511,7 @@ export async function checkForUpdates(): Promise<UpdateInfo> {
 
 export function normalizeTargetVersion(targetVersion: string | undefined): string | null {
 	if (typeof targetVersion !== "string") return null;
-	const trimmed = targetVersion.trim();
-	if (!trimmed) return null;
-	const normalized = trimmed.replace(/^v/i, "");
-	if (!EXACT_SEMVER_PATTERN.test(normalized)) {
-		return null;
-	}
-	return normalized;
-}
-
-export function parseInstalledPackageVersion(packageJsonContent: string): string | null {
-	try {
-		const parsed = JSON.parse(packageJsonContent) as { version?: unknown };
-		if (typeof parsed.version !== "string") return null;
-		const version = parsed.version.trim();
-		if (!version) return null;
-		return EXACT_SEMVER_PATTERN.test(version) ? version : null;
-	} catch {
-		return null;
-	}
-}
-
-interface UpdateVerificationDeps {
-	resolveGlobalPackagePath: (family: PackageManagerFamily, packageName: string) => string | undefined;
-	existsSync: (path: string) => boolean;
-	readFileSync: (path: string, encoding: BufferEncoding) => string;
+	return normalizeExactSemver(targetVersion);
 }
 
 interface FinalizeSuccessfulUpdateDeps {
@@ -520,63 +519,42 @@ interface FinalizeSuccessfulUpdateDeps {
 	updateDesktopInstallAfterUpdate?: (
 		repoSync: WorkspaceSourceRepoSyncResult,
 		installedVersion: string,
+		activeExecutablePath: string,
 	) => Promise<DesktopUpdateResult>;
 }
 
-export function verifyInstalledVersion(
-	family: PackageManagerFamily,
-	packageName: string,
-	expectedVersion: string | null,
-	deps: UpdateVerificationDeps = {
-		resolveGlobalPackagePath: (family, packageName) => resolveGlobalPackagePath(family, packageName),
-		existsSync: (path) => existsSync(path),
-		readFileSync: (path, encoding) => readFileSync(path, { encoding }),
-	},
-): { ok: true; installedVersion: string } | { ok: false; message: string } {
-	try {
-		const packagePath = deps.resolveGlobalPackagePath(family, packageName);
-		if (!packagePath) {
-			return {
-				ok: false,
-				message: `Update exited cleanly but could not locate global package path for '${packageName}'`,
-			};
-		}
+interface SuccessfulUpdateMetadata {
+	readonly installMethod: SignetInstallMethod;
+	readonly activeExecutablePath: string;
+}
 
-		const packageJsonPath = join(packagePath, "package.json");
-		if (!deps.existsSync(packageJsonPath)) {
-			return {
-				ok: false,
-				message: `Update exited cleanly but package manifest missing at ${packageJsonPath}`,
-			};
-		}
+interface RunUpdateDeps extends UpdateInstallDeps {
+	readonly detectInstallations?: () => SignetInstallationReport;
+	readonly finalizeSuccessfulUpdate?: typeof finalizeSuccessfulUpdateInstall;
+}
 
-		const installedVersion = parseInstalledPackageVersion(deps.readFileSync(packageJsonPath, "utf-8"));
-		if (!installedVersion) {
-			return {
-				ok: false,
-				message: `Update exited cleanly but installed package.json has no valid version at ${packageJsonPath}`,
-			};
-		}
-
-		if (expectedVersion && installedVersion !== expectedVersion) {
-			return {
-				ok: false,
-				message: `Install exited cleanly but version is ${installedVersion}, expected ${expectedVersion}`,
-			};
-		}
-
-		return {
-			ok: true,
-			installedVersion,
-		};
-	} catch (error) {
-		return {
-			ok: false,
-			message: `Update exited cleanly but failed to verify installed version: ${
-				error instanceof Error ? error.message : String(error)
-			}`,
-		};
-	}
+function updateFailure(
+	errorCode: UpdateInstallErrorCode,
+	message: string,
+	options: {
+		readonly output?: string;
+		readonly installMethod?: SignetInstallMethod;
+		readonly activeExecutablePath?: string;
+		readonly activeExecutableVerified?: boolean;
+		readonly observedVersion?: string;
+	} = {},
+): UpdateRunFailure {
+	return {
+		success: false,
+		message,
+		restartRequired: false,
+		errorCode,
+		activeExecutableVerified: options.activeExecutableVerified ?? false,
+		...(options.output ? { output: options.output } : {}),
+		...(options.installMethod ? { installMethod: options.installMethod } : {}),
+		...(options.activeExecutablePath ? { activeExecutablePath: options.activeExecutablePath } : {}),
+		...(options.observedVersion ? { observedVersion: options.observedVersion } : {}),
+	};
 }
 
 interface DesktopInstallDetectionDeps {
@@ -584,24 +562,11 @@ interface DesktopInstallDetectionDeps {
 	readonly readFileSync: (path: string, encoding: BufferEncoding) => string;
 }
 
-interface DesktopCommandResult {
-	readonly exitCode: number | null;
-	readonly stdout: string;
-	readonly stderr: string;
-	readonly errorMessage?: string;
-	readonly timedOut: boolean;
-}
-
-interface DesktopCommandOptions {
-	readonly cwd: string;
-	readonly env: NodeJS.ProcessEnv;
-	readonly timeoutMs: number;
-}
-
 interface DesktopUpdateDeps {
 	readonly home?: string;
 	readonly env?: NodeJS.ProcessEnv;
 	readonly execPath?: string;
+	readonly signetCliPath?: string;
 	readonly timeoutMs?: number;
 	readonly existsSync?: (path: string) => boolean;
 	readonly readFileSync?: (path: string, encoding: BufferEncoding) => string;
@@ -610,8 +575,8 @@ interface DesktopUpdateDeps {
 	readonly runCommand?: (
 		command: string,
 		args: readonly string[],
-		options: DesktopCommandOptions,
-	) => Promise<DesktopCommandResult>;
+		options: UpdateProcessOptions,
+	) => Promise<UpdateProcessResult>;
 }
 
 export function detectDesktopInstall(
@@ -672,73 +637,6 @@ export function canUpdateDesktopFromSourceSync(status: WorkspaceSourceRepoSyncRe
 	return status === "cloned" || status === "pulled" || status === "current";
 }
 
-function clipUpdateOutput(output: string): string | undefined {
-	const trimmed = output.trim();
-	if (!trimmed) return undefined;
-	return trimmed.length <= 6000 ? trimmed : trimmed.slice(-6000);
-}
-
-async function runDesktopCommand(
-	command: string,
-	args: readonly string[],
-	options: DesktopCommandOptions,
-): Promise<DesktopCommandResult> {
-	return await new Promise((resolve) => {
-		const proc = spawn(command, [...args], {
-			cwd: options.cwd,
-			env: options.env,
-			stdio: ["ignore", "pipe", "pipe"],
-			windowsHide: true,
-		});
-		let stdout = "";
-		let stderr = "";
-		let settled = false;
-		let timer: ReturnType<typeof setTimeout> | null = null;
-
-		const settle = (result: DesktopCommandResult): void => {
-			if (settled) return;
-			settled = true;
-			if (timer) clearTimeout(timer);
-			resolve(result);
-		};
-
-		timer = setTimeout(() => {
-			proc.kill("SIGKILL");
-			settle({
-				exitCode: null,
-				stdout,
-				stderr,
-				errorMessage: `desktop update exceeded ${options.timeoutMs}ms`,
-				timedOut: true,
-			});
-		}, options.timeoutMs);
-
-		proc.stdout?.on("data", (chunk: Buffer | string) => {
-			stdout += chunk.toString();
-		});
-		proc.stderr?.on("data", (chunk: Buffer | string) => {
-			stderr += chunk.toString();
-		});
-		proc.on("error", (error) => {
-			settle({
-				exitCode: null,
-				stdout,
-				stderr,
-				errorMessage: error.message,
-				timedOut: false,
-			});
-		});
-		proc.on("close", (code) => {
-			settle({
-				exitCode: code,
-				stdout,
-				stderr,
-				timedOut: false,
-			});
-		});
-	});
-}
-
 export async function updateDesktopInstallAfterUpdate(
 	repoSync: WorkspaceSourceRepoSyncResult,
 	installedVersion: string,
@@ -766,34 +664,46 @@ export async function updateDesktopInstallAfterUpdate(
 	}
 
 	const env = deps.env ?? process.env;
-	const packageManager = (deps.resolvePrimaryPackageManager ?? resolvePrimaryPackageManager)({
-		agentsDir,
-		env,
-	});
-	const packagePath = (deps.resolveGlobalPackagePath ?? resolveGlobalPackagePath)(packageManager.family, NPM_PACKAGE);
-	if (!packagePath) {
-		return {
-			status: "error",
-			message: "Could not locate the installed signetai package to run desktop update",
-		};
-	}
+	let command: string;
+	let args: string[];
+	if (deps.signetCliPath) {
+		if (!fsDeps.existsSync(deps.signetCliPath)) {
+			return {
+				status: "error",
+				message: `Active Signet executable is missing at ${deps.signetCliPath}`,
+			};
+		}
+		command = deps.signetCliPath;
+		args = ["desktop", "install", "--repo", repoSync.path];
+	} else {
+		const packageManager = (deps.resolvePrimaryPackageManager ?? resolvePrimaryPackageManager)({
+			agentsDir,
+			env,
+		});
+		const packagePath = (deps.resolveGlobalPackagePath ?? resolveGlobalPackagePath)(packageManager.family, NPM_PACKAGE);
+		if (!packagePath) {
+			return {
+				status: "error",
+				message: "Could not locate the installed signetai package to run desktop update",
+			};
+		}
 
-	const signetBin = join(packagePath, "bin", "signet.js");
-	if (!fsDeps.existsSync(signetBin)) {
-		return {
-			status: "error",
-			message: `Installed signetai package is missing CLI entrypoint at ${signetBin}`,
-		};
+		const signetBin = join(packagePath, "bin", "signet.js");
+		if (!fsDeps.existsSync(signetBin)) {
+			return {
+				status: "error",
+				message: `Installed signetai package is missing CLI entrypoint at ${signetBin}`,
+			};
+		}
+		command = deps.execPath ?? process.execPath;
+		args = [signetBin, "desktop", "install", "--repo", repoSync.path];
 	}
-
-	const command = deps.execPath ?? process.execPath;
-	const args = [signetBin, "desktop", "install", "--repo", repoSync.path];
-	const result = await (deps.runCommand ?? runDesktopCommand)(command, args, {
+	const result = await (deps.runCommand ?? runUpdateProcess)(command, args, {
 		cwd: repoSync.path,
-		env: {
+		env: cliSubprocessEnvironment({
 			...env,
 			SIGNET_SOURCE_DIR: repoSync.path,
-		},
+		}),
 		timeoutMs: deps.timeoutMs ?? DESKTOP_UPDATE_TIMEOUT_MS,
 	});
 	const output = clipUpdateOutput(`${result.stdout}\n${result.stderr}`);
@@ -819,16 +729,31 @@ export async function updateDesktopInstallAfterUpdate(
 export async function finalizeSuccessfulUpdateInstall(
 	installedVersion: string,
 	stdout: string,
+	metadata: SuccessfulUpdateMetadata,
 	deps: FinalizeSuccessfulUpdateDeps = {
 		syncWorkspaceSourceRepoAsync: (workspaceDir) => syncWorkspaceSourceRepoAsync(workspaceDir),
-		updateDesktopInstallAfterUpdate: (repoSync, version) => updateDesktopInstallAfterUpdate(repoSync, version),
+		updateDesktopInstallAfterUpdate: (repoSync, version, activeExecutablePath) =>
+			updateDesktopInstallAfterUpdate(repoSync, version, {
+				signetCliPath: activeExecutablePath,
+			}),
 	},
 ): Promise<UpdateRunResult> {
 	pendingRestartVersion = installedVersion;
 	lastUpdateCheck = null;
 	lastUpdateCheckTime = null;
 
-	const repoSync = await deps.syncWorkspaceSourceRepoAsync(agentsDir);
+	let repoSync: WorkspaceSourceRepoSyncResult;
+	try {
+		repoSync = await deps.syncWorkspaceSourceRepoAsync(agentsDir);
+	} catch (error) {
+		repoSync = {
+			status: "error",
+			path: join(agentsDir, "signetai"),
+			message: `Signet source checkout sync threw after update: ${error instanceof Error ? error.message : String(error)}`,
+			branch: null,
+			defaultBranch: null,
+		};
+	}
 	if (repoSync.status === "error") {
 		logger.warn("system", "Workspace Signet source checkout sync failed after update", {
 			path: repoSync.path,
@@ -842,10 +767,21 @@ export async function finalizeSuccessfulUpdateInstall(
 		});
 	}
 
-	const desktopUpdate = await (deps.updateDesktopInstallAfterUpdate ?? updateDesktopInstallAfterUpdate)(
-		repoSync,
-		installedVersion,
-	);
+	const desktopUpdater =
+		deps.updateDesktopInstallAfterUpdate ??
+		((repoSyncResult, version, activeExecutablePath) =>
+			updateDesktopInstallAfterUpdate(repoSyncResult, version, {
+				signetCliPath: activeExecutablePath,
+			}));
+	let desktopUpdate: DesktopUpdateResult;
+	try {
+		desktopUpdate = await desktopUpdater(repoSync, installedVersion, metadata.activeExecutablePath);
+	} catch (error) {
+		desktopUpdate = {
+			status: "error",
+			message: `Signet desktop update threw after installing v${installedVersion}: ${error instanceof Error ? error.message : String(error)}`,
+		};
+	}
 	if (desktopUpdate.status === "updated") {
 		logger.info("update", desktopUpdate.message);
 	} else if (desktopUpdate.status === "error") {
@@ -861,108 +797,136 @@ export async function finalizeSuccessfulUpdateInstall(
 		output: stdout,
 		installedVersion,
 		restartRequired: true,
+		installMethod: metadata.installMethod,
+		activeExecutablePath: metadata.activeExecutablePath,
+		activeExecutableVerified: true,
+		observedVersion: installedVersion,
 		desktopUpdate,
 	};
 }
 
-export async function runUpdate(targetVersion?: string): Promise<UpdateRunResult> {
+export async function runUpdate(targetVersion?: string, deps: RunUpdateDeps = {}): Promise<UpdateRunResult> {
 	assertInitialized();
-	const normalizedTargetVersion = normalizeTargetVersion(targetVersion);
-	if (targetVersion && !normalizedTargetVersion) {
-		return {
-			success: false,
-			message: `Invalid targetVersion '${targetVersion}'`,
-		};
+	let normalizedTargetVersion = normalizeTargetVersion(targetVersion);
+	if (targetVersion !== undefined && !normalizedTargetVersion) {
+		return updateFailure("invalid_target_version", `Invalid targetVersion '${targetVersion}'`);
 	}
 
 	if (updateInstallInProgress) {
-		return {
-			success: false,
-			message: "Update already in progress",
-		};
+		return updateFailure("update_in_progress", "Update already in progress");
 	}
 
 	updateInstallInProgress = true;
-
 	try {
-		return await new Promise((resolve) => {
-			const packageManager = resolvePrimaryPackageManager({
-				agentsDir,
-				env: process.env,
-			});
-			const installPackage = normalizedTargetVersion ? `${NPM_PACKAGE}@${normalizedTargetVersion}` : NPM_PACKAGE;
-			const installCommand = getGlobalInstallCommand(packageManager.family, installPackage);
+		if (!normalizedTargetVersion) {
+			const check = await checkForUpdates();
+			normalizedTargetVersion = check.latestVersion;
+		}
+		if (!normalizedTargetVersion) {
+			return updateFailure("no_target_version", "Update failed: no target version available");
+		}
 
-			logger.info("system", "Running update command", {
-				command: `${installCommand.command} ${installCommand.args.join(" ")}`,
-				family: packageManager.family,
-				source: packageManager.source,
-				reason: packageManager.reason,
-			});
+		const report = (deps.detectInstallations ?? (() => detectSignetInstallations()))();
+		const target = report.target;
+		if (target.kind === "unsupported") {
+			return updateFailure(
+				"unsupported_installation",
+				`${target.reason}. Install Signet with the native installer or a supported package-manager wrapper before updating.`,
+				{ activeExecutablePath: target.executablePath },
+			);
+		}
 
-			const proc = spawn(installCommand.command, installCommand.args, {
-				stdio: "pipe",
-				windowsHide: true,
-			});
-			let stdout = "";
-			let stderr = "";
-
-			proc.stdout?.on("data", (d: Buffer) => {
-				stdout += d.toString();
-			});
-			proc.stderr?.on("data", (d: Buffer) => {
-				stderr += d.toString();
-			});
-
-			proc.on("close", (code) => {
-				void (async () => {
-					logger.info("update", "Update command exited", {
-						exitCode: code ?? -1,
-						command: `${installCommand.command} ${installCommand.args.join(" ")}`,
-					});
-					if (code === 0) {
-						const verification = verifyInstalledVersion(packageManager.family, NPM_PACKAGE, normalizedTargetVersion);
-						if (!verification.ok) {
-							logger.warn("system", "Update verification failed", {
-								reason: verification.message,
-								family: packageManager.family,
-							});
-							resolve({
-								success: false,
-								message: verification.message,
-								output: stdout + stderr,
-							});
-							return;
-						}
-
-						resolve(await finalizeSuccessfulUpdateInstall(verification.installedVersion, stdout));
-						return;
-					}
-
-					logger.warn("system", "Update failed", { stderr });
-					resolve({
-						success: false,
-						message: `Update failed: ${stderr || "Unknown error"}`,
-						output: stdout + stderr,
-					});
-				})().catch((err: unknown) => {
-					const message = err instanceof Error ? err.message : "Unknown error";
-					logger.warn("system", "Update post-install handling failed", { error: message });
-					resolve({
-						success: false,
-						message: `Update failed: ${message}`,
-						output: stdout + stderr,
-					});
-				});
-			});
-
-			proc.on("error", (e) => {
-				resolve({
-					success: false,
-					message: `Update failed: ${e.message}`,
-				});
-			});
+		const installMethod: SignetInstallMethod = target.kind === "native" ? "native" : target.family;
+		const deadline = Date.now() + UPDATE_INSTALL_TIMEOUT_MS;
+		logger.info("update", "Installing update for active executable", {
+			version: normalizedTargetVersion,
+			installMethod,
+			activeExecutablePath: target.executablePath,
 		});
+
+		let output = "";
+		try {
+			output = await installUpdateTarget(
+				target,
+				normalizedTargetVersion,
+				deadline,
+				{ packageName: NPM_PACKAGE, githubRepo: GITHUB_REPO },
+				deps,
+			);
+		} catch (error) {
+			const code = error instanceof UpdateInstallFailure ? error.code : "install_failed";
+			const message = error instanceof Error ? error.message : String(error);
+			logger.warn("update", "Update install failed", {
+				errorCode: code,
+				message,
+				installMethod,
+				activeExecutablePath: target.executablePath,
+			});
+			return updateFailure(code, message, {
+				output,
+				installMethod,
+				activeExecutablePath: target.executablePath,
+			});
+		}
+
+		let verification: Awaited<ReturnType<typeof verifyExecutableVersion>>;
+		try {
+			verification = await verifyExecutableVersion(target.executablePath, normalizedTargetVersion, {
+				runCommand: deps.runCommand,
+				env: deps.env ?? process.env,
+				platform: deps.platform,
+				timeoutMs: Math.min(VERSION_VERIFY_TIMEOUT_MS, remainingUpdateTimeout(deadline)),
+			});
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			return updateFailure("verification_failed", message, {
+				output,
+				installMethod,
+				activeExecutablePath: target.executablePath,
+			});
+		}
+		if (!verification.ok) {
+			logger.warn("update", "Active executable verification failed", {
+				reason: verification.message,
+				installMethod,
+				activeExecutablePath: target.executablePath,
+			});
+			return updateFailure("verification_failed", verification.message, {
+				output,
+				installMethod,
+				activeExecutablePath: target.executablePath,
+				observedVersion: verification.observedVersion,
+			});
+		}
+
+		try {
+			return await (deps.finalizeSuccessfulUpdate ?? finalizeSuccessfulUpdateInstall)(
+				verification.installedVersion,
+				output,
+				{
+					installMethod,
+					activeExecutablePath: target.executablePath,
+				},
+			);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			logger.warn("update", "Update post-install handling failed", {
+				message,
+				installMethod,
+				activeExecutablePath: target.executablePath,
+			});
+			return updateFailure(
+				"post_install_failed",
+				`Update installed and verified, but post-install handling failed: ${message}`,
+				{
+					output,
+					installMethod,
+					activeExecutablePath: target.executablePath,
+					activeExecutableVerified: true,
+					observedVersion: verification.installedVersion,
+				},
+			);
+		}
 	} finally {
 		updateInstallInProgress = false;
 	}

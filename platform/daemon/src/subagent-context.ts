@@ -1,4 +1,5 @@
 import type { ReadDb } from "./db-accessor";
+import { tableExists } from "./db-helpers";
 import { sanitizeFtsQuery } from "./memory-search";
 import { redactSecrets } from "./session-checkpoints";
 
@@ -45,11 +46,6 @@ function cleanString(value: unknown): string | undefined {
 	if (typeof value !== "string") return undefined;
 	const trimmed = value.trim();
 	return trimmed.length > 0 ? trimmed : undefined;
-}
-
-function tableExists(db: ReadDb, name: string): boolean {
-	const row = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(name);
-	return row !== undefined && row !== null;
 }
 
 function columnExists(db: ReadDb, table: string, column: string): boolean {

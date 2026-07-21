@@ -1,3 +1,5 @@
+import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
 	chmodSync,
 	copyFileSync,
@@ -8,10 +10,8 @@ import {
 	rmSync,
 	writeFileSync,
 } from "node:fs";
-import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import { spawnSync } from "node:child_process";
 import chalk from "chalk";
 
 export interface NativeInstallOptions {
@@ -56,9 +56,7 @@ function pathContains(dir: string): boolean {
 function verifySha256(path: string, expected: string): void {
 	const actual = createHash("sha256").update(readFileSync(path)).digest("hex").toLowerCase();
 	if (actual !== expected.toLowerCase()) {
-		throw new Error(
-			`SHA-256 mismatch for ${path}: expected ${expected.toLowerCase()}, got ${actual}`,
-		);
+		throw new Error(`SHA-256 mismatch for ${path}: expected ${expected.toLowerCase()}, got ${actual}`);
 	}
 }
 
@@ -81,10 +79,7 @@ function extractConnectorAssets(archivePath: string, extractRoot: string): void 
  * to `<binDir>/../runtime/connectors/`, mirroring the layout the npm
  * wrapper uses after `install-native.js` runs.
  */
-function installConnectorAssetsFromManifest(
-	tarballPath: string,
-	binDir: string,
-): string {
+function installConnectorAssetsFromManifest(tarballPath: string, binDir: string): string {
 	// Look up the expected SHA-256 from the manifest. The manifest is
 	// resolved relative to the wrapper's `native-manifest.json` if it
 	// exists, otherwise we fall back to trusting the tarball as-is
@@ -107,9 +102,7 @@ function installConnectorAssetsFromManifest(
 			if (typeof expectedSize === "number") {
 				const actual = readFileSync(tarballPath).length;
 				if (actual !== expectedSize) {
-					throw new Error(
-						`Tarball size mismatch: expected ${expectedSize}, got ${actual}`,
-					);
+					throw new Error(`Tarball size mismatch: expected ${expectedSize}, got ${actual}`);
 				}
 			}
 			break;
@@ -146,18 +139,40 @@ export function installNativeBinary(options: NativeInstallOptions = {}): NativeI
 		return { source, target, installed: false, pathHint, connectorAssetsDir };
 	}
 
-	if (existsSync(target) && options.force) {
-		rmSync(target, { force: true });
-	}
-	mkdirSync(binDir, { recursive: true });
-	const tmp = join(dirname(target), `.${basename(target)}.${process.pid}.tmp`);
-	copyFileSync(source, tmp);
-	if (process.platform !== "win32") chmodSync(tmp, 0o755);
-	renameSync(tmp, target);
-
+	// Validate and extract companion assets before replacing an existing
+	// executable. A connector checksum or extraction failure must leave the
+	// previously working Signet binary in place.
 	const connectorAssetsDir = options.connectorAssets
 		? installConnectorAssetsFromManifest(options.connectorAssets, binDir)
 		: null;
+
+	mkdirSync(binDir, { recursive: true });
+	const tmp = join(dirname(target), `.${basename(target)}.${process.pid}.tmp`);
+	rmSync(tmp, { force: true });
+	copyFileSync(source, tmp);
+	try {
+		if (process.platform !== "win32") chmodSync(tmp, 0o755);
+		if (process.platform === "win32" && existsSync(target)) {
+			const backup = join(dirname(target), `.${basename(target)}.${process.pid}.backup`);
+			rmSync(backup, { force: true });
+			renameSync(target, backup);
+			try {
+				renameSync(tmp, target);
+				rmSync(backup, { force: true });
+			} catch (error) {
+				if (!existsSync(target) && existsSync(backup)) {
+					renameSync(backup, target);
+				}
+				throw error;
+			}
+		} else {
+			// POSIX rename replaces the existing path atomically, so a failed
+			// copy or checksum never removes the previously installed binary.
+			renameSync(tmp, target);
+		}
+	} finally {
+		rmSync(tmp, { force: true });
+	}
 
 	return { source, target, installed: true, pathHint, connectorAssetsDir };
 }
@@ -176,9 +191,7 @@ export function printNativeInstallResult(result: NativeInstallResult, json = fal
 	}
 
 	if (result.connectorAssetsDir) {
-		console.log(
-			chalk.green(`Installed connector assets to ${result.connectorAssetsDir}`),
-		);
+		console.log(chalk.green(`Installed connector assets to ${result.connectorAssetsDir}`));
 	}
 
 	if (result.pathHint) {

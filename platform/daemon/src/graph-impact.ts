@@ -7,6 +7,7 @@
  */
 
 import type { ReadDb } from "./db-accessor";
+import { tableExists } from "./db-helpers";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -41,12 +42,7 @@ interface ImpactResult {
 // Table detection
 // ---------------------------------------------------------------------------
 
-function tableExists(db: ReadDb, name: string): boolean {
-	const row = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(name) as
-		| { name: string }
-		| undefined;
-	return row !== undefined;
-}
+
 
 // ---------------------------------------------------------------------------
 // Walk

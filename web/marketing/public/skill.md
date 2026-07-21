@@ -302,6 +302,11 @@ These are the supported install methods. Do not use:
 - `sudo npm install` — never use sudo
 - Cloning the repository — that is for contributors, not users
 
+Choose one install method. `signet update install` updates the active method,
+and `signet doctor` reports inactive npm/Bun/pnpm/Yarn duplicates with a
+manual uninstall command. Signet never removes another installation
+automatically.
+
 > GATE: After the install command completes, verify it worked:
 > ```bash
 > signet --version
@@ -518,6 +523,7 @@ of what Signet is supposed to fix.
        "entries": {
          "signet-memory-openclaw": {
            "enabled": true,
+           "hooks": { "allowConversationAccess": true },
            "config": { "daemonUrl": "http://localhost:3850" }
          }
        }
@@ -531,10 +537,14 @@ of what Signet is supposed to fix.
    }
    ```
 
-3. Sets `memorySearch.enabled: false` — this is the critical line
+3. Sets `hooks.allowConversationAccess: true` for the Signet plugin.
+   OpenClaw requires this explicit opt-in before a non-bundled plugin
+   can receive the `agent_end` transcript used for session extraction.
+
+4. Sets `memorySearch.enabled: false` — this is the critical line
    that disables OpenClaw's built-in memory search.
 
-4. Sets the workspace to `~/.agents/` so OpenClaw reads identity
+5. Sets the workspace to `~/.agents/` so OpenClaw reads identity
    files directly (no generated output file needed).
 
 **Two runtime paths:**
@@ -574,14 +584,18 @@ cat <config_path> | grep -A1 memorySearch
 # 3. Check if the plugin is registered
 cat <config_path> | grep -A3 signet-memory-openclaw
 
-# 4. If either check fails, re-run setup
+# 4. Check conversation access for the session-end capture hook
+cat <config_path> | grep -A4 allowConversationAccess
+
+# 5. If any check fails, re-run setup
 signet setup --harness openclaw
 ```
 
 If `signet setup` can't find the config, you may need to manually
 patch `openclaw.json` with the JSON shown above. The critical fields
 are `plugins.entries["signet-memory-openclaw"].enabled: true` and
-`agents.defaults.memorySearch.enabled: false`.
+`plugins.entries["signet-memory-openclaw"].hooks.allowConversationAccess:
+true`, plus `agents.defaults.memorySearch.enabled: false`.
 
 ---
 

@@ -23,6 +23,9 @@ Install explicitly:
 
 ```bash
 npm install -g signetai@next
+
+# Direct native installer
+curl -fsSL https://signetai.sh/install.sh | SIGNET_CHANNEL=nightly bash
 ```
 
 The npm package is a wrapper around the same compiled Signet binary published
@@ -45,6 +48,9 @@ Install:
 
 ```bash
 npm install -g signetai
+
+# Direct native installer (stable is the default)
+curl -fsSL https://signetai.sh/install.sh | bash
 ```
 
 Or switch back from nightly:
@@ -73,6 +79,23 @@ Channel lookup rules:
 
 - `stable` checks GitHub latest stable release first, then falls back to npm `latest`.
 - `nightly` skips GitHub latest and checks npm `next` directly, so it cannot be accidentally pinned back to stable by the GitHub latest endpoint.
+- The public direct installer resolves GitHub `releases/latest` for stable and
+  npm `next` for nightly. `SIGNET_RELEASE_TAG`, `SIGNET_VERSION`, or the
+  existing `VERSION` alias remains an explicit version override.
+
+## Release integrity and trust
+
+Native self-updates validate the selected asset's declared size and SHA-256
+digest against `native-manifest.json` from the same versioned GitHub release.
+The public direct installer validates the asset's SHA-256 digest against that
+manifest. These checks detect incomplete, corrupted, or mismatched downloads,
+but do not independently authenticate the manifest. Native release assets and
+the manifest are not currently signed.
+
+The current trust anchor is the Signet GitHub Actions release workflow, its
+repository release permissions, and HTTPS delivery from GitHub. Artifact
+signing or attestations would require a separate trust root and verification
+flow; they are not implied by the SHA-256 checks described here.
 
 ## Promotion checklist
 

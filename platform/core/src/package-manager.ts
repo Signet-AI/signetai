@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { inferPackageManagerFromExecutable } from "./package-manager-path";
 import { parseSimpleYaml } from "./yaml";
 
 export type PackageManagerFamily = "bun" | "npm" | "pnpm" | "yarn";
@@ -27,6 +28,8 @@ interface ResolvePackageManagerOptions {
 	fallbackOrder?: PackageManagerFamily[];
 	commandExists?: (command: string) => boolean;
 	execPath?: string;
+	home?: string;
+	platform?: NodeJS.Platform;
 }
 
 const DEFAULT_FALLBACK_ORDER: PackageManagerFamily[] = ["npm", "pnpm", "bun", "yarn"];
@@ -88,21 +91,6 @@ function pickFirstAvailable(
 	return null;
 }
 
-/**
- * Detect the package manager that installed the running binary by inspecting
- * the executable path. E.g. `~/.bun/bin/signet` → bun, `/usr/lib/node_modules/` → npm.
- */
-function detectFromExecPath(execPath: string | undefined): PackageManagerFamily | null {
-	if (!execPath) return null;
-	const lower = execPath.replaceAll("\\", "/").toLowerCase();
-	if (lower.includes(".bun/") || lower.includes("/bun/")) return "bun";
-	if (lower.includes(".pnpm/") || lower.includes("/pnpm/")) return "pnpm";
-	if (lower.includes(".yarn/") || lower.includes("/yarn/")) return "yarn";
-	// npm global installs go to /usr/lib/node_modules or similar
-	if (lower.includes("node_modules")) return "npm";
-	return null;
-}
-
 function readConfiguredPackageManager(agentsDir: string | undefined): PackageManagerFamily | null {
 	if (!agentsDir) return null;
 
@@ -141,9 +129,15 @@ export function resolvePrimaryPackageManager(options: ResolvePackageManagerOptio
 	const userAgentFamily = parsePackageManagerUserAgent(options.userAgent ?? options.env?.npm_config_user_agent);
 	// Try the provided exec path, then process.argv[0], then `which signet`
 	let execPathForDetection = options.execPath ?? (typeof process !== "undefined" ? process.argv[0] : undefined);
-	if (!options.execPath && !detectFromExecPath(execPathForDetection)) {
+	const inferFromPath = (path: string | undefined): PackageManagerFamily | null =>
+		inferPackageManagerFromExecutable(path, {
+			env: options.env,
+			home: options.home,
+			platform: options.platform,
+		});
+	if (!options.execPath && !inferFromPath(execPathForDetection)) {
 		try {
-			const locator = process.platform === "win32" ? "where" : "which";
+			const locator = (options.platform ?? process.platform) === "win32" ? "where" : "which";
 			const result = spawnSync(locator, ["signet"], { encoding: "utf-8", windowsHide: true });
 			if (result.status === 0 && result.stdout.trim()) {
 				execPathForDetection = result.stdout.trim();
@@ -152,7 +146,7 @@ export function resolvePrimaryPackageManager(options: ResolvePackageManagerOptio
 			// Ignore — best effort
 		}
 	}
-	const execPathFamily = detectFromExecPath(execPathForDetection);
+	const execPathFamily = inferFromPath(execPathForDetection);
 
 	const fallbackFamily = pickFirstAvailable(available, fallbackOrder) ?? fallbackOrder[0] ?? "npm";
 

@@ -49,7 +49,19 @@ interface OpenClawConfigShape {
 		slots?: {
 			memory?: string;
 		};
-		entries?: Record<string, { enabled?: boolean; config?: Record<string, unknown> }>;
+		entries?: Record<
+			string,
+			{
+				enabled?: boolean;
+				config?: Record<string, unknown>;
+				hooks?: {
+					allowPromptInjection?: boolean;
+					allowConversationAccess?: boolean;
+					timeoutMs?: number;
+					timeouts?: Record<string, number>;
+				};
+			}
+		>;
 		load?: {
 			paths?: string[];
 		};
@@ -381,6 +393,12 @@ export class OpenClawConnector extends BaseConnector {
 					entries: {
 						"signet-memory-openclaw": {
 							enabled: true,
+							// OpenClaw 2026.7.1+ blocks raw-conversation hooks for
+							// non-bundled plugins unless the operator opts in. The
+							// plugin needs agent_end to persist the session transcript.
+							hooks: {
+								allowConversationAccess: true,
+							},
 							config: {
 								daemonUrl: "http://localhost:3850",
 							},
@@ -882,7 +900,7 @@ export class OpenClawConnector extends BaseConnector {
 
 	/**
 	 * Patch configs with plugin entry using the object format:
-	 * plugins.entries["signet-memory-openclaw"] = { enabled, config }
+	 * plugins.entries["signet-memory-openclaw"] = { enabled, hooks, config }
 	 *
 	 * Migrates:
 	 * - Legacy array-style plugins (["signet-memory"] -> { entries: {...} })

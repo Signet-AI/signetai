@@ -327,38 +327,6 @@ interface MarketplaceContextOptions {
 	readonly channel?: string;
 }
 
-interface MarketplaceExposurePolicy {
-	readonly mode: "compact" | "hybrid" | "expanded";
-	readonly maxExpandedTools: number;
-	readonly maxSearchResults: number;
-	readonly updatedAt: string;
-}
-
-function sanitizeToolSegment(value: string): string {
-	const normalized = value
-		.trim()
-		.toLowerCase()
-		.replace(/[^a-z0-9]+/g, "_")
-		.replace(/^_+|_+$/g, "");
-	return normalized.length > 0 ? normalized : "tool";
-}
-
-function buildProxyToolName(used: Set<string>, serverId: string, toolName: string): string {
-	const base = `signet_${sanitizeToolSegment(serverId)}_${sanitizeToolSegment(toolName)}`;
-	if (!used.has(base)) {
-		used.add(base);
-		return base;
-	}
-
-	let suffix = 2;
-	while (used.has(`${base}_${suffix}`)) {
-		suffix += 1;
-	}
-	const uniqueName = `${base}_${suffix}`;
-	used.add(uniqueName);
-	return uniqueName;
-}
-
 // ============================================================================
 // Shared fetch helper
 // ============================================================================
@@ -854,19 +822,6 @@ export async function marketplaceToolCall(
 		},
 		timeout: WRITE_TIMEOUT,
 	});
-}
-
-async function getMarketplaceExposurePolicy(
-	options: MarketplaceContextOptions = {},
-): Promise<MarketplaceExposurePolicy | null> {
-	const daemonUrl = options.daemonUrl || DEFAULT_DAEMON_URL;
-	const result = await daemonFetch<{ policy?: MarketplaceExposurePolicy }>(daemonUrl, "/api/marketplace/mcp/policy", {
-		timeout: READ_TIMEOUT,
-	});
-	if (!result?.policy) {
-		return null;
-	}
-	return result.policy;
 }
 
 // ============================================================================
@@ -1392,99 +1347,6 @@ function buildCompactionEventKey(
 	return parts.join("|");
 }
 
-async function registerMarketplaceProxyTools(
-	api: OpenClawPluginApi,
-	options: MarketplaceContextOptions,
-	knownNames: Set<string>,
-	proxyNameByToolKey: Map<string, string>,
-): Promise<{ registeredNow: number; total: number }> {
-	const [catalog, policy] = await Promise.all([
-		marketplaceToolList({ ...options, refresh: true }),
-		getMarketplaceExposurePolicy(options),
-	]);
-	if (!catalog || catalog.tools.length === 0) {
-		return { registeredNow: 0, total: knownNames.size };
-	}
-
-	const mode = policy?.mode ?? "hybrid";
-	const maxExpandedTools =
-		typeof policy?.maxExpandedTools === "number" && Number.isFinite(policy.maxExpandedTools)
-			? Math.max(0, Math.min(100, Math.round(policy.maxExpandedTools)))
-			: 12;
-
-	const sortedTools = [...catalog.tools].sort((a, b) =>
-		`${a.serverId}:${a.toolName}`.localeCompare(`${b.serverId}:${b.toolName}`),
-	);
-
-	const candidates =
-		mode === "expanded" ? sortedTools : mode === "hybrid" ? sortedTools.slice(0, maxExpandedTools) : [];
-
-	const usedNames = new Set<string>([
-		"memory_search",
-		"memory_store",
-		"memory_get",
-		"memory_list",
-		"memory_modify",
-		"memory_forget",
-		"mcp_server_list",
-		"mcp_server_call",
-	]);
-	for (const name of knownNames) {
-		usedNames.add(name);
-	}
-
-	let registeredNow = 0;
-	for (const tool of candidates) {
-		const toolKey = `${tool.serverId}\0${tool.toolName}`;
-		let proxyName = proxyNameByToolKey.get(toolKey);
-		if (!proxyName) {
-			proxyName = buildProxyToolName(usedNames, tool.serverId, tool.toolName);
-			proxyNameByToolKey.set(toolKey, proxyName);
-		} else {
-			usedNames.add(proxyName);
-		}
-		if (knownNames.has(proxyName)) {
-			continue;
-		}
-
-		api.registerTool(
-			{
-				name: proxyName,
-				label: `Signet ${tool.serverName} • ${tool.toolName}`,
-				description:
-					tool.description && tool.description.trim().length > 0
-						? tool.description
-						: `Proxy tool ${tool.toolName} from MCP server ${tool.serverName}`,
-				parameters: Type.Object({}, { additionalProperties: true }),
-				async execute(_toolCallId, params) {
-					const args = typeof params === "object" && params !== null ? (params as Record<string, unknown>) : {};
-
-					try {
-						const result = await marketplaceToolCall(tool.serverId, tool.toolName, args, options);
-						if (!result?.success) {
-							return textResult(`Tool server call failed: ${result?.error ?? "unknown error"}`, {
-								error: result?.error ?? "unknown",
-							});
-						}
-
-						const text = typeof result.result === "string" ? result.result : JSON.stringify(result.result, null, 2);
-						return textResult(text, { result: result.result });
-					} catch (err) {
-						return textResult(`Tool server call failed: ${String(err)}`, {
-							error: String(err),
-						});
-					}
-				},
-			},
-			{ name: proxyName },
-		);
-		knownNames.add(proxyName);
-		registeredNow += 1;
-	}
-
-	return { registeredNow, total: knownNames.size };
-}
-
 // ============================================================================
 // Plugin definition (OpenClaw register(api) pattern)
 // ============================================================================
@@ -1505,6 +1367,33 @@ function writeRegistered(value: boolean): void {
 	Reflect.set(globalThis, REG_KEY, value);
 }
 
+function buildMemoryPromptSection({
+	availableTools,
+	citationsMode,
+}: {
+	availableTools: Set<string>;
+	citationsMode?: "auto" | "on" | "off";
+}): string[] {
+	const hasSearch = availableTools.has("memory_search");
+	const hasGet = availableTools.has("memory_get");
+	if (!hasSearch && !hasGet) return [];
+
+	const guidance = hasSearch
+		? `Before answering about prior work, decisions, dates, people, preferences, or todos, use memory_search${
+				hasGet ? "; then use memory_get when an exact memory must be inspected" : ""
+			}. Signet results are scoped and provenance-backed; if recall is inconclusive, say that you checked.`
+		: "When a request points to a specific remembered item, use memory_get before answering. Signet results are scoped and provenance-backed; if the lookup is inconclusive, say that you checked.";
+
+	const lines = ["## Signet Memory", guidance];
+	if (citationsMode === "off") {
+		lines.push("Do not expose source identifiers or provenance in the reply unless the user asks for them.");
+	} else {
+		lines.push("Include provenance when it materially helps the user verify a recalled claim.");
+	}
+	lines.push("");
+	return lines;
+}
+
 const signetPlugin = {
 	id: "signet-memory-openclaw",
 	name: "Signet Memory",
@@ -1514,16 +1403,23 @@ const signetPlugin = {
 
 	register(api: OpenClawPluginApi): void {
 		const mode = api.registrationMode ?? "full";
-		// Only "full" should register runtime behavior. setup-only,
-		// setup-runtime, and cli-metadata are metadata/setup passes.
-		if (mode !== "full") {
-			if (!["cli-metadata", "setup-only", "setup-runtime"].includes(mode)) {
-				api.logger.warn(`signet-memory: skipping runtime registration for unknown mode=${mode}`);
-			}
+
+		// Discovery must remain side-effect free: OpenClaw runs it while
+		// inspecting plugin capabilities, before a live runtime exists.
+		if (mode === "discovery") {
+			api.registerMemoryCapability({ promptBuilder: buildMemoryPromptSection });
 			return;
 		}
 
-		if (readRegistered()) {
+		if (["cli-metadata", "setup-only", "setup-runtime"].includes(mode)) {
+			return;
+		}
+		if (mode !== "full" && mode !== "tool-discovery") {
+			api.logger.warn(`signet-memory: skipping runtime registration for unknown mode=${mode}`);
+			return;
+		}
+
+		if (mode === "full" && readRegistered()) {
 			api.logger.warn("signet-memory: register() called twice with non-cli mode, skipping duplicate");
 			return;
 		}
@@ -1537,20 +1433,21 @@ const signetPlugin = {
 				workspace: process.env.SIGNET_WORKSPACE ?? process.cwd(),
 				channel: process.env.SIGNET_CHANNEL,
 			};
-			writeRegistered(true);
-			claimed = true;
+			if (mode === "full") {
+				api.registerMemoryCapability({ promptBuilder: buildMemoryPromptSection });
+				writeRegistered(true);
+				claimed = true;
+			}
 
 			// Request normalization — two layers for coverage: fetch wrapper +
-			// SDK prototype patch.
-			const removeFetchSanitizer = installFetchSanitizer();
-			const removeSdkSanitizer = installSdkSanitizer();
+			// SDK prototype patch. Tool discovery is deliberately side-effect free.
+			const removeFetchSanitizer = mode === "full" ? installFetchSanitizer() : () => {};
+			const removeSdkSanitizer = mode === "full" ? installSdkSanitizer() : () => {};
 
 			// Instance-scoped health state (safe for multi-register)
 			let daemonReachable = true;
 			let knownPid: number | null = null;
 			let healthTimer: ReturnType<typeof setInterval> | null = null;
-			let marketplaceProxyTimer: ReturnType<typeof setInterval> | null = null;
-			const marketplaceProxyNames = new Set<string>();
 			const hooksRegistered = [
 				"before_prompt_build",
 				"before_agent_start",
@@ -1584,22 +1481,26 @@ const signetPlugin = {
 				}
 			};
 
-			api.logger.info(`signet-memory: registered (daemon: ${daemonUrl})`);
+			if (mode === "full") {
+				api.logger.info(`signet-memory: registered (daemon: ${daemonUrl})`);
+			}
 
 			// Fire-and-forget startup health check (also captures initial PID)
-			getDaemonPid(daemonUrl).then((pid) => {
-				daemonReachable = pid !== null;
-				knownPid = pid;
-				if (!daemonReachable) {
-					healthError = `daemon unreachable at ${daemonUrl}; memory hooks are disabled until Signet is healthy`;
-					api.logger.warn(
-						`signet-memory: daemon unreachable at ${daemonUrl}. Memory hooks are disabled until daemon health recovers; run \`signet status\` or \`signet doctor\` for diagnostics.`,
-					);
-				} else {
-					healthError = null;
-					void sendHeartbeat();
-				}
-			});
+			if (mode === "full") {
+				getDaemonPid(daemonUrl).then((pid) => {
+					daemonReachable = pid !== null;
+					knownPid = pid;
+					if (!daemonReachable) {
+						healthError = `daemon unreachable at ${daemonUrl}; memory hooks are disabled until Signet is healthy`;
+						api.logger.warn(
+							`signet-memory: daemon unreachable at ${daemonUrl}. Memory hooks are disabled until daemon health recovers; run \`signet status\` or \`signet doctor\` for diagnostics.`,
+						);
+					} else {
+						healthError = null;
+						void sendHeartbeat();
+					}
+				});
+			}
 
 			// ==================================================================
 			// Tools
@@ -2078,25 +1979,10 @@ const signetPlugin = {
 				{ name: "mcp_server_call" },
 			);
 
-			const marketplaceProxyNameByToolKey = new Map<string, string>();
-
-			const refreshMarketplaceProxyTools = (): Promise<void> =>
-				registerMarketplaceProxyTools(api, opts, marketplaceProxyNames, marketplaceProxyNameByToolKey)
-					.then((result) => {
-						if (result.registeredNow > 0) {
-							api.logger.info(
-								`signet-memory: registered ${result.registeredNow} marketplace proxy tools (${result.total} total)`,
-							);
-						}
-					})
-					.catch((error) => {
-						api.logger.warn(`signet-memory: failed to register marketplace proxy tools: ${String(error)}`);
-					});
-
-			void refreshMarketplaceProxyTools();
-			marketplaceProxyTimer = setInterval(() => {
-				void refreshMarketplaceProxyTools();
-			}, 15_000);
+			// OpenClaw uses this pass to build the tool registry exposed to a
+			// harness such as Codex. Static tools are enough; hooks, services,
+			// timers, marketplace refreshes, and daemon probes belong to full mode.
+			if (mode === "tool-discovery") return;
 
 			// ==================================================================
 			// Lifecycle hooks
@@ -2552,7 +2438,9 @@ const signetPlugin = {
 								void sendHeartbeat();
 							} else {
 								healthError = `daemon became unreachable at ${daemonUrl}; memory hooks are disabled`;
-								api.logger.warn("signet-memory: daemon became unreachable; memory hooks are disabled until health recovers");
+								api.logger.warn(
+									"signet-memory: daemon became unreachable; memory hooks are disabled until health recovers",
+								);
 							}
 						} else if (ok) {
 							void sendHeartbeat();
@@ -2575,10 +2463,6 @@ const signetPlugin = {
 						if (healthTimer) {
 							clearInterval(healthTimer);
 							healthTimer = null;
-						}
-						if (marketplaceProxyTimer) {
-							clearInterval(marketplaceProxyTimer);
-							marketplaceProxyTimer = null;
 						}
 					} finally {
 						// Always release the process-level registration guard so a

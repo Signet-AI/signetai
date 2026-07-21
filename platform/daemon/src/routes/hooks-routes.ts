@@ -43,7 +43,7 @@ import { getInferenceRouterOrNull } from "../inference-router";
 import { logger } from "../logger";
 import { loadMemoryConfig } from "../memory-config";
 import { writeCompactionArtifact } from "../memory-lineage.js";
-import { hybridRecall } from "../memory-search";
+import { type RecallParams, hybridRecall } from "../memory-search";
 import { getSynthesisWorker, readLastSynthesisTime } from "../pipeline";
 import { isNoiseSession } from "../session-noise";
 import { advanceRecallContextEpoch } from "../session-recall-dedupe";
@@ -684,14 +684,14 @@ function registerRecall(app: Hono): void {
 			const scopedP = resolveScopedProject(c, requestedProject);
 			if (scopedP.error) return c.json({ error: scopedP.error }, 403);
 			const project = scopedP.project ?? requestedProject;
-			const params = {
+			const params: RecallParams = {
 				query: body.query,
 				keywordQuery: body.keywordQuery,
 				limit: body.limit,
 				project,
 				aggregate: body.aggregate,
-				aggregateBudget,
-				aggregate_budget: aggregateBudget,
+				aggregateBudget: aggregateBudget ?? undefined,
+				aggregate_budget: aggregateBudget ?? undefined,
 				saveAggregate: body.saveAggregate ?? body.save_aggregate,
 				save_aggregate: body.save_aggregate ?? body.saveAggregate,
 				type: body.type,
@@ -699,7 +699,7 @@ function registerRecall(app: Hono): void {
 				who: body.who,
 				since: body.since,
 				until: body.until,
-				time: body.time,
+				time: body.time as RecallParams["time"],
 				expand: body.expand,
 				agentId,
 				readPolicy: agentScope.readPolicy,
@@ -951,12 +951,12 @@ function registerCompactionComplete(app: Hono): void {
 				sessionKey: body.sessionKey,
 				agentId,
 				reason: "compaction-complete",
-				sourceRef: summaryId ?? body.sessionKey ?? null,
+				sourceRef: summaryId ?? body.sessionKey ?? undefined,
 			});
 			resetSessionStartDedupe({
 				harness: body.harness,
 				agentId,
-				project,
+				project: project ?? undefined,
 				sessionKey: body.sessionKey,
 			});
 

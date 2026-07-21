@@ -14,13 +14,14 @@
 
 import { createHash } from "node:crypto";
 import {
+	type AgentRosterReadPolicy,
 	LEGACY_OBSIDIAN_CHUNK_SOURCE_TYPE,
 	type LlmUsage,
 	type RecallTemporalMeta,
 	SOURCE_CHUNK_SOURCE_TYPE,
 	vectorSearch,
 } from "@signet/core";
-import { getDbAccessor } from "./db-accessor";
+import { getDbAccessor, prepareTypedStatement } from "./db-accessor";
 import { getLlmProvider } from "./llm";
 import { logger } from "./logger";
 import { buildAgentScopeClause } from "./memory-access-scope";
@@ -64,7 +65,7 @@ export interface RecallParams {
 	save_aggregate?: boolean;
 	agentId?: string;
 	/** Agent read policy — 'isolated' | 'shared' | 'group'. When set with agentId, filters by visibility. */
-	readPolicy?: string;
+	readPolicy?: AgentRosterReadPolicy;
 	/** Policy group name (required when readPolicy is 'group'). */
 	policyGroup?: string | null;
 	type?: string;
@@ -1270,7 +1271,7 @@ export async function hybridRecall(
 		sessionKey: params.sessionKey,
 	});
 	if (temporal.response) {
-		return await finish(temporal.response);
+		return await finish({ ...temporal.response, results: [...temporal.response.results] });
 	}
 	if (temporal.adjustedQuery) {
 		query = temporal.adjustedQuery;
@@ -1332,8 +1333,9 @@ export async function hybridRecall(
 			getDbAccessor().withReadDb((db) => {
 				// CROSS JOIN keeps SQLite from scanning memories first via
 				// low-selectivity filters before applying the FTS rowid match.
-				const ftsRows = (
-					db.prepare(`
+				const ftsRows = prepareTypedStatement<{ id: string; raw_score: number }>(
+					db,
+					`
         SELECT m.id, bm25(memories_fts) AS raw_score
         FROM memories_fts
         CROSS JOIN memories m ON memories_fts.rowid = m.rowid
@@ -1342,11 +1344,8 @@ export async function hybridRecall(
           ${memorySupersessionSql(db)}${filter.sql}
         ORDER BY raw_score
         LIMIT ?
-      `) as any
-				).all(keywordQuery, ...filter.args, cfg.search.top_k) as Array<{
-					id: string;
-					raw_score: number;
-				}>;
+      `,
+				).all(keywordQuery, ...filter.args, cfg.search.top_k);
 
 				// Min-max normalize BM25 scores to [0,1] within the batch
 				const rawScores = ftsRows.map((r) => Math.abs(r.raw_score));
@@ -1387,10 +1386,7 @@ export async function hybridRecall(
 					const agentId = params.agentId ?? "default";
 					const args = [keywordQuery, agentId, ...filter.args, cfg.search.top_k];
 
-					const rows = (db.prepare(sql) as any).all(...args) as Array<{
-						id: string;
-						raw_score: number;
-					}>;
+					const rows = prepareTypedStatement<{ id: string; raw_score: number }>(db, sql).all(...args);
 
 					// Normalize hint scores the same way as memory FTS
 					const rawScores = rows.map((r) => Math.abs(r.raw_score));
@@ -1436,9 +1432,9 @@ export async function hybridRecall(
 		try {
 			timings.time("vector_search", () => {
 				getDbAccessor().withReadDb((db) => {
-					const vecResults = vectorSearch(db as any, queryVector, {
+					const vecResults = vectorSearch(db, queryVector, {
 						limit: vecLimit,
-						type: params.type as "fact" | "preference" | "decision" | undefined,
+						type: params.type,
 						excludeAggregateRecall,
 					});
 					for (const r of vecResults) {

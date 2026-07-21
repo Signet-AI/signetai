@@ -683,7 +683,10 @@ For each config found, verify:
    OpenClaw's native memory is still active alongside Signet.
 2. **`signet-memory-openclaw` plugin is registered** — Check
    `plugins.entries["signet-memory-openclaw"].enabled` is `true`.
-3. **No dual runtime paths** — Either the plugin path OR legacy
+3. **Conversation access is explicitly allowed** — Check
+   `plugins.entries["signet-memory-openclaw"].hooks.allowConversationAccess`
+   is `true`; OpenClaw otherwise blocks Signet's `agent_end` capture hook.
+4. **No dual runtime paths** — Either the plugin path OR legacy
    hooks should be active, not both.
 
 If any check fails, fix with:
@@ -695,6 +698,7 @@ Report the OpenClaw integration status in the audit summary:
 ```
 openclaw integration: [healthy/dual-system detected/not installed]
 memorySearch disabled: [yes/no/n/a]
+conversation access allowed: [yes/no/n/a]
 runtime path: [plugin/legacy/n/a]
 ```
 

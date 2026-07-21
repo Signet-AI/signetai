@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getExtractionStatusNotice, getStatusReport, showDoctor } from "./health.js";
+import { getExtractionStatusNotice, getStatusReport, showDoctor, showStatus } from "./health.js";
 
 const originalHome = process.env.HOME;
 const originalOpenClawConfig = process.env.OPENCLAW_CONFIG_PATH;
@@ -487,6 +487,62 @@ describe("status report openclaw runtime", () => {
 	});
 });
 
+describe("doctor concurrent Signet installations", () => {
+	it("includes a structured warning and manual npm remediation in JSON mode", async () => {
+		const root = mkdtempSync(join(tmpdir(), "health-installations-"));
+		const workspace = join(root, "agents");
+		const lines: string[] = [];
+		const oldLog = console.log;
+		try {
+			mkdirSync(workspace, { recursive: true });
+			console.log = (...args: unknown[]) => {
+				lines.push(args.join(" "));
+			};
+
+			await showDoctor(
+				{ json: true },
+				{
+					...depsFor(workspace),
+					detectInstallations: () => ({
+						target: {
+							kind: "native",
+							executablePath: join(root, ".local", "bin", "signet"),
+						},
+						installations: [],
+						inactive: [
+							{
+								method: "npm",
+								executablePath: join(root, ".npm-global", "bin", "signet"),
+								packagePath: join(root, ".npm-global", "lib", "node_modules", "signetai"),
+								active: false,
+								removalCommand: "npm uninstall -g signetai",
+							},
+						],
+					}),
+				},
+			);
+
+			const output = JSON.parse(lines.join("\n")) as {
+				installations?: { target?: { kind?: string } };
+				findings?: Array<{
+					code?: string;
+					fix?: string;
+				}>;
+			};
+			expect(output.installations?.target?.kind).toBe("native");
+			expect(output.findings).toContainEqual(
+				expect.objectContaining({
+					code: "duplicate_signet_installation",
+					fix: expect.stringContaining("npm uninstall -g signetai"),
+				}),
+			);
+		} finally {
+			console.log = oldLog;
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+});
+
 describe("getExtractionStatusNotice", () => {
 	it("returns a warning for degraded extraction", () => {
 		const notice = getExtractionStatusNotice({
@@ -602,5 +658,95 @@ describe("getExtractionStatusNotice", () => {
 
 		expect(notice?.level).toBe("error");
 		expect(notice?.title).toBe("Extraction blocked");
+	});
+});
+
+describe("showStatus readiness labeling", () => {
+	function runningDaemonDeps(
+		basePath: string,
+		probe: {
+			status: "healthy" | "degraded";
+			detail: string;
+			url: string;
+			listenerPresent: boolean;
+			processPid: number | null;
+			stalePid: number | null;
+			readinessReasons?: readonly string[];
+		},
+	) {
+		return {
+			...depsFor(basePath),
+			getDaemonStatus: async () => ({
+				running: true,
+				pid: 42,
+				uptime: 10,
+				version: "0.148.0",
+				host: "127.0.0.1",
+				bindHost: "127.0.0.1",
+				networkMode: "local",
+				extraction: null,
+				extractionWorker: null,
+				transcripts: null,
+				probe,
+				openclaw: null,
+			}),
+		};
+	}
+
+	async function captureStatus(deps: ReturnType<typeof runningDaemonDeps>): Promise<string> {
+		const lines: string[] = [];
+		const oldLog = console.log;
+		console.log = (...args: unknown[]) => {
+			lines.push(args.join(" "));
+		};
+		try {
+			await showStatus({}, deps);
+		} finally {
+			console.log = oldLog;
+		}
+		return lines.join("\n");
+	}
+
+	it("labels liveness and shows degraded readiness reasons", async () => {
+		const root = mkdtempSync(join(tmpdir(), "health-status-"));
+		try {
+			const output = await captureStatus(
+				runningDaemonDeps(root, {
+					status: "degraded",
+					detail: "/health responded; readiness degraded",
+					url: "http://127.0.0.1:3850",
+					listenerPresent: true,
+					processPid: 42,
+					stalePid: null,
+					readinessReasons: ["pending migrations"],
+				}),
+			);
+			expect(output).toContain("Daemon running");
+			expect(output).toContain("(live)");
+			expect(output).toContain("Readiness degraded: pending migrations");
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("keeps status output unchanged when the daemon is ready", async () => {
+		const root = mkdtempSync(join(tmpdir(), "health-status-"));
+		try {
+			const output = await captureStatus(
+				runningDaemonDeps(root, {
+					status: "healthy",
+					detail: "/health responded",
+					url: "http://127.0.0.1:3850",
+					listenerPresent: true,
+					processPid: 42,
+					stalePid: null,
+				}),
+			);
+			expect(output).toContain("Daemon running");
+			expect(output).not.toContain("(live)");
+			expect(output).not.toContain("Readiness degraded");
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
 	});
 });

@@ -35,16 +35,36 @@ import { loadMemoryConfig } from "./memory-config";
 const isBun = typeof (globalThis as Record<string, unknown>).Bun !== "undefined";
 const require = createRequire(import.meta.url);
 
-type SqliteStatement = {
+export type SqliteStatement = {
 	run(...params: unknown[]): void;
 	get(...params: unknown[]): Record<string, unknown> | undefined;
 	all(...params: unknown[]): Record<string, unknown>[];
 };
 
+export interface TypedSqliteStatement<Row extends object> {
+	run(...params: unknown[]): void;
+	get(...params: unknown[]): Row | undefined;
+	all(...params: unknown[]): Row[];
+}
+
+export function prepareTypedStatement<Row extends object>(
+	db: {
+		prepare(sql: string): {
+			run(...params: unknown[]): unknown;
+			get(...params: unknown[]): unknown;
+			all(...params: unknown[]): unknown[];
+		};
+	},
+	sql: string,
+): TypedSqliteStatement<Row> {
+	return db.prepare(sql) as unknown as TypedSqliteStatement<Row>;
+}
+
 type SqliteDatabase = {
 	prepare(sql: string): SqliteStatement;
 	exec(sql: string): void;
 	close(): void;
+	loadExtension?(path: string): void;
 };
 
 let Database: new (path: string, opts?: Record<string, unknown>) => SqliteDatabase;
@@ -307,8 +327,9 @@ export function resolveSqliteRuntimeConfig(opts?: {
 	const set =
 		opts?.set ??
 		((path: string) => {
-			if (typeof (Database as Record<string, unknown>).setCustomSQLite === "function") {
-				(Database as { setCustomSQLite(p: string): void }).setCustomSQLite(path);
+			const sqliteCtor = Database as unknown as { setCustomSQLite?: (p: string) => void };
+			if (typeof sqliteCtor.setCustomSQLite === "function") {
+				sqliteCtor.setCustomSQLite(path);
 			}
 		});
 	const agentsDir = opts?.agentsDir ?? resolveSqliteAgentsDir({ env });
@@ -396,6 +417,7 @@ function loadVecExtension(db: SqliteDatabase): void {
 	}
 	if (vecExtPath) {
 		try {
+			if (typeof db.loadExtension !== "function") throw new Error("SQLite loadExtension API unavailable");
 			db.loadExtension(vecExtPath);
 			vecLoaded = true;
 			vecLoadError = null;
@@ -728,6 +750,7 @@ export function initDbAccessorLite(dbPathParam: string, vecExtensionPath: string
 
 	if (vecExtensionPath) {
 		try {
+			if (typeof writeConn.loadExtension !== "function") throw new Error("SQLite loadExtension API unavailable");
 			writeConn.loadExtension(vecExtensionPath);
 			vecLoaded = true;
 			vecLoadError = null;

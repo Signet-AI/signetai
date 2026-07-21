@@ -8,7 +8,7 @@ import { ensureAgentRegistered, getAgentScope, resolveAgentId } from "../agent-i
 import { aggregateRecall, parseAggregateRecallBudget, readAggregateRecallBudgetInput } from "../aggregate-recall";
 import { checkScope, requirePermission, requireRateLimit } from "../auth";
 import { normalizeAndHashContent } from "../content-normalization";
-import { type WriteDb, getDbAccessor } from "../db-accessor";
+import { type ReadDb, type WriteDb, getDbAccessor, prepareTypedStatement } from "../db-accessor";
 import { syncVecDeleteBySourceId, syncVecInsert, vectorToBlob } from "../db-helpers";
 import { fetchEmbedding } from "../embedding-fetch";
 import { buildEmbeddingHealth } from "../embedding-health";
@@ -368,7 +368,7 @@ function scopedContentHashPredicate(input: RememberDedupeScope): {
 }
 
 function getScopedIdempotencyMemoryId(
-	db: WriteDb,
+	db: ReadDb | WriteDb,
 	key: string | undefined,
 	input: RememberDedupeScope,
 ): RememberDedupeIdRow | undefined {
@@ -385,7 +385,7 @@ function getScopedIdempotencyMemoryId(
 }
 
 function getScopedIdempotencyDedupeRow(
-	db: WriteDb,
+	db: ReadDb | WriteDb,
 	key: string | undefined,
 	input: RememberDedupeScope,
 ): RememberDedupeRow | undefined {
@@ -402,7 +402,7 @@ function getScopedIdempotencyDedupeRow(
 }
 
 function getScopedSourceDedupeRow(
-	db: WriteDb,
+	db: ReadDb | WriteDb,
 	sourceType: string,
 	sourceId: string,
 	input: RememberDedupeScope,
@@ -419,7 +419,7 @@ function getScopedSourceDedupeRow(
 }
 
 function getScopedContentHashMemoryId(
-	db: WriteDb,
+	db: ReadDb | WriteDb,
 	contentHash: string,
 	input: RememberDedupeScope,
 ): { readonly id: string } | undefined {
@@ -440,7 +440,7 @@ function isMemoryContentHashUniqueError(err: unknown): boolean {
 }
 
 function getScopedContentHashDedupeRow(
-	db: WriteDb,
+	db: ReadDb | WriteDb,
 	contentHash: string,
 	input: RememberDedupeScope,
 ): RememberDedupeRow | undefined {
@@ -456,21 +456,19 @@ function getScopedContentHashDedupeRow(
 }
 
 function getScopedChunkIdempotencyRows(
-	db: WriteDb,
+	db: ReadDb | WriteDb,
 	baseKey: string | undefined,
 	input: RememberDedupeScope,
 ): readonly RememberChunkDedupeRow[] {
 	if (!baseKey) return [];
 	const scoped = scopedMemoryPredicate(input);
-	return (
-		db
-			.prepare(
-				`SELECT id, source_id AS sourceId, content_hash AS contentHash, idempotency_key AS idempotencyKey
-				 FROM memories
-				 WHERE idempotency_key LIKE ? ESCAPE '\\' AND ${scoped.sql} AND is_deleted = 0`,
-			)
-			.all(`${escapeSqlLike(baseKey)}:chunk:%`, ...scoped.params) as RememberChunkDedupeRow[]
+	return prepareTypedStatement<RememberChunkDedupeRow>(
+		db,
+		`SELECT id, source_id AS sourceId, content_hash AS contentHash, idempotency_key AS idempotencyKey
+			 FROM memories
+			 WHERE idempotency_key LIKE ? ESCAPE '\\' AND ${scoped.sql} AND is_deleted = 0`,
 	)
+		.all(`${escapeSqlLike(baseKey)}:chunk:%`, ...scoped.params)
 		.filter((row) => chunkIdempotencyIndex(baseKey, row.idempotencyKey) !== null)
 		.sort((left, right) => {
 			const leftIndex = chunkIdempotencyIndex(baseKey, left.idempotencyKey);
@@ -479,7 +477,7 @@ function getScopedChunkIdempotencyRows(
 		});
 }
 
-function hasMemoriesSessionIdColumn(db: any): boolean {
+function hasMemoriesSessionIdColumn(db: ReadDb | WriteDb): boolean {
 	if (hasMemoriesSessionIdColumnCache !== null) {
 		return hasMemoriesSessionIdColumnCache;
 	}
@@ -1010,8 +1008,9 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 					// FTS path
 					const { clause, args } = buildWhere(filterParams);
 					try {
-						rows = (
-							db.prepare(`
+						rows = prepareTypedStatement<Record<string, unknown>>(
+							db,
+							`
             SELECT m.id, m.content, m.created_at, m.who, m.importance, m.tags,
                    m.type, m.pinned, bm25(memories_fts) as score
             FROM memories_fts
@@ -1019,26 +1018,28 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
             WHERE memories_fts MATCH ?${clause}
             ORDER BY score
             LIMIT ${limit ?? 20}
-          `) as any
+          `,
 						).all(query, ...args);
 					} catch {
 						// FTS not available — fall back to LIKE
 						const { clause: rc, args: rargs } = buildWhereRaw(filterParams);
-						rows = (
-							db.prepare(`
+						rows = prepareTypedStatement<Record<string, unknown>>(
+							db,
+							`
             SELECT id, content, created_at, who, importance, tags, type, pinned
             FROM memories
             WHERE (content LIKE ? OR tags LIKE ?)${rc}
             ORDER BY created_at DESC
             LIMIT ${limit ?? 20}
-          `) as any
+          `,
 						).all(`%${query}%`, `%${query}%`, ...rargs);
 					}
 				} else if (hasFilters) {
 					// Pure filter path
 					const { clause, args } = buildWhereRaw(filterParams);
-					rows = (
-						db.prepare(`
+					rows = prepareTypedStatement<Record<string, unknown>>(
+						db,
+						`
           SELECT id, content, created_at, who, importance, tags, type, pinned,
                  CASE WHEN pinned = 1 THEN 1.0
                       ELSE importance * MAX(0.1, POWER(0.95,
@@ -1048,7 +1049,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
           WHERE 1=1${clause}
           ORDER BY score DESC
           LIMIT ${limit ?? 50}
-        `) as any
+        `,
 					).all(...args);
 				}
 
@@ -1187,8 +1188,8 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		}
 
 		ensureAgentRegistered(agentId);
-		const visibility = body.visibility === "private" ? "private" : "global";
-		const dedupeScope = { agentId, visibility, project: body.project ?? null, scope };
+		const visibility: RememberDedupeScope["visibility"] = body.visibility === "private" ? "private" : "global";
+		const dedupeScope: RememberDedupeScope = { agentId, visibility, project: body.project ?? null, scope };
 		const hasBodyTags = Object.prototype.hasOwnProperty.call(body, "tags");
 		const bodyTags = hasBodyTags ? parseTagsMutation(body.tags) : undefined;
 		if (hasBodyTags && bodyTags === undefined) {
@@ -1853,7 +1854,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		const body = await c.req.json().catch(() => ({}));
 		const headers: Record<string, string> = { "Content-Type": "application/json" };
 		const authHdr = c.req.header("authorization");
-		if (authHdr) headers["authorization"] = authHdr;
+		if (authHdr) headers.authorization = authHdr;
 		const sessionKey = c.req.header("x-signet-session-key");
 		if (sessionKey) headers["x-signet-session-key"] = sessionKey;
 		return fetch(`http://${INTERNAL_SELF_HOST}:${PORT}/api/memory/remember`, {
@@ -1870,7 +1871,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		const body = await c.req.json().catch(() => ({}));
 		const headers: Record<string, string> = { "Content-Type": "application/json" };
 		const authHdr = c.req.header("authorization");
-		if (authHdr) headers["authorization"] = authHdr;
+		if (authHdr) headers.authorization = authHdr;
 		const sessionKey = c.req.header("x-signet-session-key");
 		if (sessionKey) headers["x-signet-session-key"] = sessionKey;
 		return fetch(`http://${INTERNAL_SELF_HOST}:${PORT}/api/memory/remember`, {
@@ -2927,8 +2928,8 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				...body,
 				query,
 				aggregate: body.aggregate,
-				aggregateBudget,
-				aggregate_budget: aggregateBudget,
+				aggregateBudget: aggregateBudget ?? undefined,
+				aggregate_budget: aggregateBudget ?? undefined,
 				saveAggregate: body.saveAggregate ?? body.save_aggregate,
 				save_aggregate: body.save_aggregate ?? body.saveAggregate,
 				agentId,
@@ -3063,9 +3064,9 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 					),
 				);
 
-				return vectorSearch(db as any, queryVector, {
+				return vectorSearch(db, queryVector, {
 					limit: k + 1,
-					type: type as "fact" | "preference" | "decision" | undefined,
+					type,
 				});
 			});
 
@@ -3470,13 +3471,12 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 
 			const result = accessor.withWriteTx((db) => {
 				if (sourceUrl) {
-					const candidates = db
-						.prepare(
-							`SELECT id, status, agent_id, project FROM documents
+					const candidates = prepareTypedStatement<{ id: string; status: string } & DocumentScopeRow>(
+						db,
+						`SELECT id, status, agent_id, project FROM documents
 							 WHERE source_url = ?
 							   AND status NOT IN ('failed', 'deleted')`,
-						)
-						.all(sourceUrl) as ReadonlyArray<{ id: string; status: string } & DocumentScopeRow>;
+					).all(sourceUrl);
 					const existing = candidates.find((candidate) =>
 						documentScopeMatches(candidate, {
 							agentId: scopedAgent.agentId,
@@ -3690,9 +3690,10 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				).run(`Document deleted: ${reason}`, now, now, id);
 
 				let removed = 0;
-				const linkedMemories = db
-					.prepare(linkedMemorySql)
-					.all(id, ...(enforceScope ? delScopeArgs : [])) as ReadonlyArray<{ memory_id: string }>;
+				const linkedMemories = prepareTypedStatement<{ memory_id: string }>(db, linkedMemorySql).all(
+					id,
+					...(enforceScope ? delScopeArgs : []),
+				);
 				for (const link of linkedMemories) {
 					const mem = db.prepare("SELECT is_deleted FROM memories WHERE id = ?").get(link.memory_id) as
 						| { is_deleted: number }

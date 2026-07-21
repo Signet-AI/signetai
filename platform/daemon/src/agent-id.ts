@@ -2,10 +2,11 @@
  * Agent ID resolution helpers.
  */
 
+import type { AgentRosterReadPolicy } from "@signet/core";
 import { getDbAccessor } from "./db-accessor";
 
 export interface AgentScope {
-	readonly readPolicy: string;
+	readonly readPolicy: AgentRosterReadPolicy;
 	readonly policyGroup: string | null;
 }
 
@@ -43,6 +44,12 @@ function parseScopeValue(value: unknown): string | null {
 	return text.length > 0 ? text : null;
 }
 
+function parseReadPolicy(value: unknown): AgentRosterReadPolicy {
+	const policy = parseScopeValue(value);
+	if (policy === "shared" || policy === "group" || policy === "isolated") return policy;
+	return "isolated";
+}
+
 export function getAgentScope(agentId: string): AgentScope {
 	try {
 		return getDbAccessor().withReadDb((db) => {
@@ -54,7 +61,7 @@ export function getAgentScope(agentId: string): AgentScope {
 				};
 			}
 
-			const readPolicy = parseScopeValue("read_policy" in row ? row.read_policy : undefined) ?? "isolated";
+			const readPolicy = parseReadPolicy("read_policy" in row ? row.read_policy : undefined);
 			const policyGroup = parseScopeValue("policy_group" in row ? row.policy_group : undefined);
 			return { readPolicy, policyGroup };
 		});
@@ -66,7 +73,7 @@ export function getAgentScope(agentId: string): AgentScope {
 	}
 }
 
-export function ensureAgentRegistered(agentId: string, readPolicy = "shared"): void {
+export function ensureAgentRegistered(agentId: string, readPolicy: AgentRosterReadPolicy = "shared"): void {
 	const id = agentId.trim() || "default";
 	const now = new Date().toISOString();
 	try {

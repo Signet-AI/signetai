@@ -270,12 +270,19 @@ describe("syncTemplates openclaw migration", () => {
 				hooks?: { internal?: { entries?: Record<string, { enabled?: boolean }> } };
 				plugins?: {
 					slots?: { memory?: string };
-					entries?: Record<string, { enabled?: boolean }>;
+					entries?: Record<
+						string,
+						{
+							enabled?: boolean;
+							hooks?: { allowConversationAccess?: boolean };
+						}
+					>;
 				};
 			};
 			expect(patched.hooks?.internal?.entries?.["signet-memory"]?.enabled).toBe(false);
 			expect(patched.plugins?.slots?.memory).toBe("signet-memory-openclaw");
 			expect(patched.plugins?.entries?.["signet-memory-openclaw"]?.enabled).toBe(true);
+			expect(patched.plugins?.entries?.["signet-memory-openclaw"]?.hooks?.allowConversationAccess).toBe(true);
 		} finally {
 			rmSync(root, { recursive: true, force: true });
 		}

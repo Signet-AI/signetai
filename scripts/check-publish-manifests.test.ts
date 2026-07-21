@@ -238,7 +238,14 @@ describe("check-publish-manifests", () => {
 		expect(promoteWorkflow).toContain('"signetai"');
 		expect(promoteWorkflow).toContain('npm view "${package}@${VERSION}" version >/dev/null');
 		expect(promoteWorkflow).toContain('npm dist-tag add "${package}@${VERSION}" latest');
-		expect(promoteWorkflow).toContain('npm dist-tag add "@signetai/signet-memory-openclaw@${VERSION}" latest || true');
+		expect(promoteWorkflow).toContain('"@signetai/signet-memory-openclaw"');
+		expect(promoteWorkflow).toContain('latest=$(npm view "${package}@latest" version)');
+		expect(promoteWorkflow.indexOf('npm view "${package}@${VERSION}" version >/dev/null')).toBeLessThan(
+			promoteWorkflow.indexOf('npm dist-tag add "${package}@${VERSION}" latest'),
+		);
+		expect(promoteWorkflow.indexOf('latest=$(npm view "${package}@latest" version)')).toBeLessThan(
+			promoteWorkflow.indexOf('gh release edit "v${VERSION}"'),
+		);
 		expect(promoteWorkflow).toContain("NPM_CONFIG_USERCONFIG: ${{ runner.temp }}/.npmrc");
 		expect(manifestScript).toContain('name.endsWith(".sha256")');
 		expect(manifestScript).toContain("native-manifest.json");
@@ -349,12 +356,13 @@ describe("check-publish-manifests", () => {
 		expect(installer).toContain("native-manifest.json");
 		expect(installer).toContain("SIGNET_RELEASES_API_BASE");
 		expect(installer).toContain("SIGNET_RELEASE_TAG");
+		expect(installer).toContain("SIGNET_CHANNEL");
 		expect(installer).toContain("sha256sum");
 		expect(installer).toContain("shasum -a 256");
 		expect(installer).toContain(
 			"Published Signet native binaries: linux-x64, linux-arm64, darwin-x64, darwin-arm64, win32-x64",
 		);
-		expect(installer).toContain('"$binary_path" install "$@"');
+		expect(installer).toContain('"$binary_path" install --force "$@"');
 		expect(installer).not.toContain("bun add -g signetai");
 		expect(installer).not.toContain("npm install -g signetai");
 		expect(installer).not.toContain("bun.sh/install");
@@ -635,7 +643,7 @@ describe("check-publish-manifests", () => {
 		expect(rootPackage.scripts?.["build:deps"]).toStartWith("bun run --filter '@signet/sdk' build && ");
 		expect(adapter.dependencies?.["@signet/sdk"]).toBeUndefined();
 		expect(adapter.devDependencies?.["@signet/sdk"]).toBeDefined();
-		expect(adapter.peerDependencies?.openclaw).toBe(">=2026.5.22");
+		expect(adapter.peerDependencies?.openclaw).toBe(">=2026.7.1");
 		expect(adapter.peerDependenciesMeta?.openclaw?.optional).toBe(true);
 
 		const workspacePackages = collectWorkspacePackages([adapterFile, sdkFile, coreFile]);

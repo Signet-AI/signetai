@@ -15,7 +15,9 @@ Health, status, and runtime feature endpoints.
 
 ### GET /health
 
-No authentication required. Lightweight liveness check.
+No authentication required. Legacy health check retained for backward
+compatibility. New integrations should prefer `GET /health/live` for liveness
+and `GET /health/ready` for readiness.
 
 **Response**
 
@@ -38,6 +40,108 @@ No authentication required. Lightweight liveness check.
     "extractionBackoffMs": 0
   },
   "resources": { "...": "..." }
+}
+```
+
+### GET /health/live
+
+No authentication required. Cheap liveness probe: reports that the daemon
+process is up and serving HTTP. It never touches the database or any
+subsystem, and always returns 200 while the process is alive.
+
+**Response** (always 200)
+
+```json
+{
+  "status": "healthy",
+  "uptime": 3600.5,
+  "pid": 12345,
+  "version": "0.124.5",
+  "port": 3850,
+  "shuttingDown": false
+}
+```
+
+`status` is `"healthy"`, or `"shutting_down"` once shutdown has begun.
+
+### GET /health/ready
+
+No authentication required. Readiness probe: reports whether the daemon can
+actually serve work. Returns 200 only when every gate passes, otherwise 503
+with a human-readable `reasons` list. Gates:
+
+- `db` — a readonly database connection answers `SELECT 1`.
+- `migrations` — no pending database migrations.
+- `embedding` — the configured embedding provider is reachable. Passes with
+  `note: "disabled"` when the provider is intentionally `"none"`.
+- `inference` — the extraction route is not fully `blocked`; a `degraded`
+  route still passes readiness.
+- `queue` — durable queue depth, dead-letter rate, and oldest pending job age
+  are within thresholds. Becomes `{ "error": "database unavailable" }` when
+  the database check fails.
+
+**Response** (200 when ready)
+
+```json
+{
+  "status": "ready",
+  "version": "0.124.5",
+  "shuttingDown": false,
+  "checks": {
+    "db": true,
+    "migrations": true,
+    "embedding": {
+      "provider": "ollama",
+      "available": true,
+      "checkedAt": "2026-02-21T10:00:00.000Z"
+    },
+    "inference": {
+      "status": "active",
+      "configured": "ollama",
+      "effective": "ollama",
+      "reason": null
+    },
+    "queue": {
+      "score": 1,
+      "status": "healthy",
+      "depth": 0,
+      "oldestAgeSec": 0,
+      "deadRate": 0,
+      "leaseAnomalies": 0
+    }
+  },
+  "reasons": []
+}
+```
+
+**Response** (503 when not ready) — same shape, with `status: "not_ready"`
+and one entry per failing gate in `reasons`:
+
+```json
+{
+  "status": "not_ready",
+  "version": "0.124.5",
+  "shuttingDown": false,
+  "checks": {
+    "db": true,
+    "migrations": false,
+    "embedding": { "provider": "none", "available": true, "note": "disabled" },
+    "inference": {
+      "status": "active",
+      "configured": "ollama",
+      "effective": "ollama",
+      "reason": null
+    },
+    "queue": {
+      "score": 1,
+      "status": "healthy",
+      "depth": 0,
+      "oldestAgeSec": 0,
+      "deadRate": 0,
+      "leaseAnomalies": 0
+    }
+  },
+  "reasons": ["pending migrations"]
 }
 ```
 

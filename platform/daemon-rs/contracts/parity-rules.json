@@ -41,6 +41,35 @@
         ],
         "note": "Rust now emits the TypeScript health envelope from platform/daemon/src/routes/health.ts; process/runtime counters are per-daemon and ignored."
       },
+      "GET /health/live": {
+        "deterministic": [
+          "status",
+          "shuttingDown"
+        ],
+        "ignoreFields": [
+          "version",
+          "uptime",
+          "pid",
+          "port"
+        ],
+        "note": "Liveness probe from platform/daemon/src/routes/health.ts; process/runtime counters are per-daemon and ignored."
+      },
+      "GET /health/ready": {
+        "deterministic": [
+          "status",
+          "shuttingDown"
+        ],
+        "ignoreFields": [
+          "version",
+          "checks.db",
+          "checks.migrations",
+          "checks.embedding",
+          "checks.inference",
+          "checks.queue",
+          "reasons"
+        ],
+        "note": "Readiness probe from platform/daemon/src/routes/health.ts; check details and reason strings depend on live db/queue/provider state and are ignored. Rust mirrors the TS status envelope and 200/503 gating for db, migrations, and queue; the shadow runtime does not probe embedding providers and has no shutdown flag, so those gates cannot fire in daemon-rs."
+      },
       "GET /api/status": {
         "deterministic": [
           "status",

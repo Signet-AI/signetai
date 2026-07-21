@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { OpenClawPluginApi, OpenClawToolDefinition } from "./openclaw-types";
+import type { OpenClawMemoryCapability, OpenClawPluginApi, OpenClawToolDefinition } from "./openclaw-types";
 
 // Import directly; tests seed a real temporary SIGNET_PATH instead of
 // mocking @signet/core globally, which otherwise leaks into later suites.
@@ -79,10 +79,12 @@ function createMockApi(overrides?: Partial<OpenClawPluginApi>): {
 	hooks: Map<string, HookHandler>;
 	hookOptions: Map<string, unknown>;
 	tools: Array<ToolRegistration>;
+	memoryCapabilities: Array<OpenClawMemoryCapability>;
 } {
 	const hooks = new Map<string, HookHandler>();
 	const hookOptions = new Map<string, unknown>();
 	const tools: Array<ToolRegistration> = [];
+	const memoryCapabilities: Array<OpenClawMemoryCapability> = [];
 
 	const api: OpenClawPluginApi = {
 		pluginConfig: {
@@ -104,6 +106,9 @@ function createMockApi(overrides?: Partial<OpenClawPluginApi>): {
 		registerTool(tool) {
 			tools.push(tool);
 		},
+		registerMemoryCapability(capability) {
+			memoryCapabilities.push(capability);
+		},
 		registerCli() {
 			// no-op
 		},
@@ -122,7 +127,7 @@ function createMockApi(overrides?: Partial<OpenClawPluginApi>): {
 		...overrides,
 	};
 
-	return { api, hooks, hookOptions, tools };
+	return { api, hooks, hookOptions, tools, memoryCapabilities };
 }
 
 beforeEach(() => {
@@ -1791,43 +1796,99 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		expect(getHits("/api/hooks/session-checkpoint-extract")).toBe(1);
 	});
 
-	it("does not reregister marketplace proxy tools on refresh", async () => {
+	it("keeps marketplace access behind the manifest-declared static tools", async () => {
 		const { api, tools } = createMockApi();
 		signetPlugin.register(api);
 		await Bun.sleep(0);
 
-		const firstNames = tools.map((tool) => tool.name);
-		const proxyNames = firstNames.filter((name) => name.startsWith("signet_server_a_"));
-		expect(proxyNames).toEqual(["signet_server_a_alpha", "signet_server_a_beta"]);
+		expect(tools.some((tool) => tool.name.startsWith("signet_server_a_"))).toBeFalse();
+		expect(getHits("/api/marketplace/mcp/tools")).toBe(0);
+		expect(getHits("/api/marketplace/mcp/policy")).toBe(0);
 
-		await flushIntervals();
-		await Bun.sleep(0);
-
-		const refreshedNames = tools.map((tool) => tool.name);
-		expect(refreshedNames.filter((name) => name === "signet_server_a_alpha").length).toBe(1);
-		expect(refreshedNames.filter((name) => name === "signet_server_a_beta").length).toBe(1);
-		expect(refreshedNames.some((name) => name === "signet_server_a_alpha_2")).toBeFalse();
-		expect(refreshedNames.some((name) => name === "signet_server_a_beta_2")).toBeFalse();
+		const listTool = tools.find((tool) => tool.name === "mcp_server_list");
+		expect(listTool).toBeDefined();
+		await listTool?.execute("tool-call-1", {});
+		expect(getHits("/api/marketplace/mcp/tools")).toBe(1);
 	});
 });
 
 describe("registration guard (#422)", () => {
+	it("registers a side-effect-free memory capability in discovery mode", async () => {
+		const { api, hooks, tools, memoryCapabilities } = createMockApi({ registrationMode: "discovery" });
+		signetPlugin.register(api);
+		await Bun.sleep(0);
+
+		expect(memoryCapabilities).toHaveLength(1);
+		expect(tools).toHaveLength(0);
+		expect(hooks.size).toBe(0);
+		expect(registeredServices).toHaveLength(0);
+		expect(intervalCallbacks).toHaveLength(0);
+		expect(getHits("/health")).toBe(0);
+
+		const promptBuilder = memoryCapabilities[0]?.promptBuilder;
+		expect(promptBuilder).toBeDefined();
+		expect(
+			promptBuilder?.({ availableTools: new Set(["memory_search", "memory_get"]), citationsMode: "auto" }),
+		).toContain("## Signet Memory");
+		expect(promptBuilder?.({ availableTools: new Set(), citationsMode: "auto" })).toEqual([]);
+	});
+
+	it("registers static tools without runtime side effects in tool-discovery mode", async () => {
+		const { api, hooks, tools, memoryCapabilities } = createMockApi({ registrationMode: "tool-discovery" });
+		signetPlugin.register(api);
+		await Bun.sleep(0);
+
+		expect(tools.map((tool) => tool.name)).toEqual([
+			"memory_search",
+			"memory_store",
+			"session_search",
+			"memory_get",
+			"memory_list",
+			"memory_modify",
+			"memory_forget",
+			"mcp_server_list",
+			"mcp_server_call",
+		]);
+		expect(memoryCapabilities).toHaveLength(0);
+		expect(hooks.size).toBe(0);
+		expect(registeredServices).toHaveLength(0);
+		expect(intervalCallbacks).toHaveLength(0);
+		expect(getHits("/health")).toBe(0);
+	});
+
 	it("skips tools, hooks, and services when registrationMode is cli-metadata", () => {
-		const { api, hooks, tools } = createMockApi({ registrationMode: "cli-metadata" });
+		const { api, hooks, tools, memoryCapabilities } = createMockApi({ registrationMode: "cli-metadata" });
 		signetPlugin.register(api);
 
 		expect(tools.length).toBe(0);
 		expect(hooks.size).toBe(0);
 		expect(registeredServices.length).toBe(0);
+		expect(memoryCapabilities).toHaveLength(0);
 	});
 
 	it("registers normally when registrationMode is full", () => {
-		const { api, hooks, tools } = createMockApi({ registrationMode: "full" });
+		const { api, hooks, tools, memoryCapabilities } = createMockApi({ registrationMode: "full" });
 		signetPlugin.register(api);
 
 		expect(tools.length).toBeGreaterThan(0);
 		expect(hooks.size).toBeGreaterThan(0);
 		expect(registeredServices.length).toBeGreaterThan(0);
+		expect(memoryCapabilities).toHaveLength(1);
+	});
+
+	it("supports discovery, tool discovery, then full registration in one process", () => {
+		const discovery = createMockApi({ registrationMode: "discovery" });
+		signetPlugin.register(discovery.api);
+		const toolDiscovery = createMockApi({ registrationMode: "tool-discovery" });
+		signetPlugin.register(toolDiscovery.api);
+		const full = createMockApi({ registrationMode: "full" });
+		signetPlugin.register(full.api);
+
+		expect(discovery.memoryCapabilities).toHaveLength(1);
+		expect(toolDiscovery.tools.length).toBeGreaterThan(0);
+		expect(full.memoryCapabilities).toHaveLength(1);
+		expect(full.tools.length).toBeGreaterThan(0);
+		expect(full.hooks.size).toBeGreaterThan(0);
 	});
 
 	it("publishes an OpenClaw diagnostics heartbeat after startup health succeeds", async () => {
@@ -1837,7 +1898,13 @@ describe("registration guard (#422)", () => {
 
 		expect(lastHeartbeatBody).toMatchObject({
 			pluginVersion: "test-plugin",
-			hooksRegistered: ["before_prompt_build", "before_agent_start", "agent_end", "before_compaction", "after_compaction"],
+			hooksRegistered: [
+				"before_prompt_build",
+				"before_agent_start",
+				"agent_end",
+				"before_compaction",
+				"after_compaction",
+			],
 		});
 	});
 

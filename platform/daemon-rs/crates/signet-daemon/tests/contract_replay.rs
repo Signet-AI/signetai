@@ -3032,6 +3032,34 @@ async fn health_returns_ok() {
 
 #[tokio::test]
 #[ignore = "requires built daemon binary"]
+async fn health_live_returns_ok() {
+    let server = TestServer::start().await;
+    let resp = server.get("/health/live").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["status"], "healthy");
+    assert_eq!(body["shuttingDown"], false);
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn health_ready_returns_ready_envelope() {
+    let server = TestServer::start().await;
+    let resp = server.get("/health/ready").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["status"], "ready");
+    assert_eq!(body["shuttingDown"], false);
+    assert_eq!(body["checks"]["db"], true);
+    assert_eq!(body["checks"]["migrations"], true);
+    assert!(body["checks"]["embedding"].is_object());
+    assert!(body["checks"]["inference"].is_object());
+    assert!(body["checks"]["queue"].is_object());
+    assert!(body["reasons"].is_array());
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
 async fn cors_replays_ts_allowed_denied_and_preflight_contract() {
     let yaml = "agent:\n  name: test-agent\n  version: 1\nnetwork:\n  mode: tailscale\nmemory:\n  pipelineV2:\n    enabled: false\n";
     let server = TestServer::start_with_agent_yaml_files_setup_and_env(

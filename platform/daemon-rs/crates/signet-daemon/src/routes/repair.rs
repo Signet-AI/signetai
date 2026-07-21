@@ -1337,24 +1337,16 @@ pub async fn re_embed(
 async fn pragma_integrity_check(
     state: &AppState,
 ) -> Result<(bool, Vec<String>), signet_core::CoreError> {
-    let value = state
+    let messages = state
         .pool
         .read(|conn| {
             let mut stmt = conn.prepare("PRAGMA integrity_check")?;
             let messages = stmt
                 .query_map([], |row| row.get::<_, String>(0))?
                 .collect::<rusqlite::Result<Vec<String>>>()?;
-            Ok(serde_json::json!(messages))
+            Ok(messages)
         })
         .await?;
-    let messages = value
-        .as_array()
-        .map(|rows| {
-            rows.iter()
-                .filter_map(|row| row.as_str().map(str::to_string))
-                .collect::<Vec<String>>()
-        })
-        .unwrap_or_default();
     let ok = messages.len() == 1 && messages[0] == "ok";
     Ok((ok, if ok { Vec::new() } else { messages }))
 }

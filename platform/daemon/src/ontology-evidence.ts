@@ -1,4 +1,5 @@
 import type { ReadDb } from "./db-accessor";
+import { tableExists } from "./db-helpers";
 
 export interface OntologyEvidenceRef {
 	readonly sourceKind: string | null;
@@ -66,10 +67,6 @@ function readString(record: Readonly<Record<string, unknown>>, key: string): str
 	if (typeof value !== "string") return null;
 	const trimmed = value.trim();
 	return trimmed.length > 0 ? trimmed : null;
-}
-
-function tableExists(db: ReadDb, name: string): boolean {
-	return db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(name) !== undefined;
 }
 
 function columnExists(db: ReadDb, table: string, column: string): boolean {

@@ -5,6 +5,17 @@ REPO="${SIGNET_RELEASE_REPO:-Signet-AI/signetai}"
 DOWNLOAD_DIR="${SIGNET_DOWNLOAD_DIR:-$HOME/.signet/downloads}"
 RELEASES_API_BASE="${SIGNET_RELEASES_API_BASE:-https://api.github.com/repos/${REPO}/releases}"
 RELEASES_DOWNLOAD_BASE="${SIGNET_RELEASES_DOWNLOAD_BASE:-https://github.com/${REPO}/releases/download}"
+LATEST_RELEASE_API="${SIGNET_LATEST_RELEASE_API:-${RELEASES_API_BASE}/latest}"
+NIGHTLY_VERSION_API="${SIGNET_NIGHTLY_VERSION_API:-https://registry.npmjs.org/signetai/next}"
+SIGNET_CHANNEL="${SIGNET_CHANNEL:-stable}"
+
+case "$SIGNET_CHANNEL" in
+	stable | nightly) ;;
+	*)
+		echo "SIGNET_CHANNEL must be stable or nightly" >&2
+		exit 1
+		;;
+esac
 
 if command -v curl >/dev/null 2>&1; then
 	DOWNLOAD=(curl -fsSL)
@@ -30,6 +41,18 @@ download_text() {
 	"${DOWNLOAD[@]}" "$url"
 }
 
+json_string() {
+	local json="$1"
+	local key="$2"
+	if command -v jq >/dev/null 2>&1; then
+		printf '%s' "$json" | jq -r --arg key "$key" '.[$key] // empty'
+	else
+		printf '%s' "$json" |
+			tr -d '\n\r' |
+			sed -n "s/.*\"${key}\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p"
+	fi
+}
+
 resolve_download_base() {
 	if [ -n "${SIGNET_DOWNLOAD_BASE:-}" ]; then
 		printf '%s\n' "$SIGNET_DOWNLOAD_BASE"
@@ -39,21 +62,26 @@ resolve_download_base() {
 		printf '%s/%s\n' "$RELEASES_DOWNLOAD_BASE" "$SIGNET_RELEASE_TAG"
 		return
 	fi
-	if [ -n "${SIGNET_VERSION:-}" ]; then
-		printf '%s/v%s\n' "$RELEASES_DOWNLOAD_BASE" "$SIGNET_VERSION"
+	local explicit_version="${SIGNET_VERSION:-${VERSION:-}}"
+	if [ -n "$explicit_version" ]; then
+		printf '%s/v%s\n' "$RELEASES_DOWNLOAD_BASE" "$explicit_version"
 		return
 	fi
 
-	local releases_json
 	local release_tag
-	releases_json="$(download_text "$RELEASES_API_BASE")"
-	if command -v jq >/dev/null 2>&1; then
-		release_tag="$(printf '%s' "$releases_json" | jq -r '[.[] | select(.draft | not)][0].tag_name // empty')"
+	if [ "$SIGNET_CHANNEL" = "stable" ]; then
+		local release_json
+		release_json="$(download_text "$LATEST_RELEASE_API")"
+		release_tag="$(json_string "$release_json" "tag_name")"
 	else
-		release_tag="$(printf '%s\n' "$releases_json" | tr '{' '\n' | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
+		local nightly_json
+		local nightly_version
+		nightly_json="$(download_text "$NIGHTLY_VERSION_API")"
+		nightly_version="$(json_string "$nightly_json" "version")"
+		release_tag="${nightly_version:+v${nightly_version}}"
 	fi
 	if [ -z "$release_tag" ]; then
-		echo "Could not resolve latest Signet release, including prereleases" >&2
+		echo "Could not resolve latest Signet ${SIGNET_CHANNEL} release" >&2
 		exit 1
 	fi
 	printf '%s/%s\n' "$RELEASES_DOWNLOAD_BASE" "$release_tag"
@@ -160,9 +188,9 @@ fi
 # install location. Older binaries without the flag ignore the unknown
 # argument and continue working.
 if [ -n "$connector_path" ]; then
-	"$binary_path" install --connector-assets "$connector_path" "$@"
+	"$binary_path" install --force --connector-assets "$connector_path" "$@"
 else
-	"$binary_path" install "$@"
+	"$binary_path" install --force "$@"
 fi
 rm -f "$binary_path"
 if [ -n "$connector_path" ]; then

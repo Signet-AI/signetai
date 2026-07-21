@@ -1,5 +1,6 @@
-import type { RecallTemporalMeta, TemporalFacet } from "@signet/core";
+import type { AgentRosterReadPolicy, RecallTemporalMeta, TemporalFacet } from "@signet/core";
 import { getDbAccessor } from "./db-accessor";
+import { tableExists } from "./db-helpers";
 import { buildAgentScopeClause } from "./memory-access-scope";
 
 const DEFAULT_TEMPORAL_FACETS: readonly TemporalFacet[] = [
@@ -78,7 +79,7 @@ export interface TemporalRecallParams {
 	readonly time?: TemporalTimeOptions;
 	readonly limit: number;
 	readonly agentId?: string;
-	readonly readPolicy?: string;
+	readonly readPolicy?: AgentRosterReadPolicy;
 	readonly policyGroup?: string | null;
 	readonly project?: string;
 	readonly sessionKey?: string;
@@ -285,10 +286,6 @@ export function parseTemporalRecallIntent(params: {
 	};
 }
 
-// ---------------------------------------------------------------------------
-// Freshness intent (issue #903)
-// ---------------------------------------------------------------------------
-
 // Date-range interpretation remains exclusively in resolveTemporalRecall.
 // This detector is intentionally limited to unambiguous recency language.
 // Bare "now" is excluded because it commonly appears in otherwise timeless
@@ -297,10 +294,6 @@ const FRESHNESS_TERM_PATTERN = /\b(current|currently|latest|recent|recently|toda
 
 export function hasFreshnessIntent(query: string): boolean {
 	return FRESHNESS_TERM_PATTERN.test(query);
-}
-
-function tableExists(db: { prepare(sql: string): { get(...args: unknown[]): unknown } }, name: string): boolean {
-	return db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(name) !== undefined;
 }
 
 function columnExists(

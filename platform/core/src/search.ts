@@ -24,14 +24,14 @@ export interface SearchOptions {
 	query: string;
 	limit?: number;
 	alpha?: number; // Vector weight (1-alpha = BM25 weight)
-	type?: "fact" | "preference" | "decision";
+	type?: string;
 	minScore?: number;
 	topK?: number; // Candidates per source before blending
 }
 
 export interface VectorSearchOptions {
 	limit?: number;
-	type?: "fact" | "preference" | "decision";
+	type?: string;
 	excludeAggregateRecall?: boolean;
 }
 
@@ -40,7 +40,7 @@ export interface HybridSearchOptions {
 	alpha?: number;
 	minScore?: number;
 	topK?: number;
-	type?: "fact" | "preference" | "decision";
+	type?: string;
 }
 
 export interface SearchResult {

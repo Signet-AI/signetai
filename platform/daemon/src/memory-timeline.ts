@@ -1,4 +1,5 @@
-import type { ReadDb } from "./db-accessor";
+import type { AgentRosterReadPolicy } from "@signet/core";
+import { type ReadDb, prepareTypedStatement } from "./db-accessor";
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
@@ -227,7 +228,7 @@ export function buildMemoryTimeline(
 		readonly tzOffsetMin?: number;
 		/** Optional agent scope filter (undefined = all). */
 		readonly agentId?: string;
-		readonly readPolicy?: string;
+		readonly readPolicy?: AgentRosterReadPolicy;
 		readonly policyGroup?: string;
 	},
 ): MemoryTimelineResponse {
@@ -261,26 +262,24 @@ export function buildMemoryTimeline(
 	}
 	const scopeSql = scopePredicates.length > 0 ? ` AND ${scopePredicates.join(" AND ")}` : "";
 
-	const memoryRows = db
-		.prepare(
-			`SELECT id, created_at, type, who, tags, importance, pinned
+	const memoryRows = prepareTypedStatement<MemoryRow>(
+		db,
+		`SELECT id, created_at, type, who, tags, importance, pinned
 			 FROM memories
 			 WHERE is_deleted = 0
 			   AND created_at >= ?${scopeSql}
 			 ORDER BY created_at DESC`,
-		)
-		.all(cutoffIso, ...scopeParams) as MemoryRow[];
+	).all(cutoffIso, ...scopeParams);
 
-	const historyRows = db
-		.prepare(
-			`SELECT h.memory_id, h.event, h.reason, h.created_at
+	const historyRows = prepareTypedStatement<HistoryRow>(
+		db,
+		`SELECT h.memory_id, h.event, h.reason, h.created_at
 			 FROM memory_history h
 			 INNER JOIN memories m ON m.id = h.memory_id
 			 WHERE m.is_deleted = 0
 			   AND h.created_at >= ?${scopeSql.replace(/(?<!\.)agent_id/g, "m.agent_id").replace(/(?<=AND |\()visibility/g, "m.visibility")}
 			 ORDER BY h.created_at DESC`,
-		)
-		.all(cutoffIso, ...scopeParams) as HistoryRow[];
+	).all(cutoffIso, ...scopeParams);
 
 	let invalidMemoryTimestamps = 0;
 	let invalidHistoryTimestamps = 0;

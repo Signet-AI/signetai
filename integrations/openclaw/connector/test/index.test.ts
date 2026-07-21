@@ -94,6 +94,7 @@ describe("OpenClawConnector config patching", () => {
 		expect(patched.agents.defaults.workspace).toBe("/home/other/.agents");
 		expect(patched.hooks.internal.entries["signet-memory"].enabled).toBe(false);
 		expect(patched.plugins.entries["signet-memory-openclaw"].enabled).toBe(true);
+		expect(patched.plugins.entries["signet-memory-openclaw"].hooks.allowConversationAccess).toBe(true);
 
 		await connector.configureWorkspace(workspacePath);
 		const workspacePatched = JSON.parse(readFileSync(configPath, "utf-8"));
@@ -136,6 +137,59 @@ describe("OpenClawConnector config patching", () => {
 		expect(patched.agents.defaults.workspace).toBe("/home/old/.agents");
 		expect(patched.hooks.internal.entries["signet-memory"].enabled).toBe(false);
 		expect(patched.plugins.entries["signet-memory-openclaw"].enabled).toBe(true);
+		expect(patched.plugins.entries["signet-memory-openclaw"].hooks.allowConversationAccess).toBe(true);
+	});
+
+	it("grants required conversation access while preserving existing hook policy", async () => {
+		const configPath = join(tmpRoot, "openclaw.json");
+		const hookBasePath = join(tmpRoot, "agents");
+
+		writeFileSync(
+			configPath,
+			JSON.stringify(
+				{
+					plugins: {
+						entries: {
+							"signet-memory-openclaw": {
+								enabled: true,
+								hooks: {
+									allowPromptInjection: false,
+									allowConversationAccess: false,
+									timeoutMs: 45_000,
+									timeouts: { before_prompt_build: 12_000 },
+								},
+								config: {
+									daemonUrl: "http://localhost:9999",
+									customSetting: "preserved",
+								},
+							},
+						},
+					},
+				},
+				null,
+				2,
+			),
+		);
+		process.env.OPENCLAW_CONFIG_PATH = configPath;
+
+		await new OpenClawConnector().install(hookBasePath, {
+			configureWorkspace: false,
+			configureHooks: false,
+			runtimePath: "plugin",
+		});
+
+		const patched = JSON.parse(readFileSync(configPath, "utf-8"));
+		const entry = patched.plugins.entries["signet-memory-openclaw"];
+		expect(entry.hooks).toEqual({
+			allowPromptInjection: false,
+			allowConversationAccess: true,
+			timeoutMs: 45_000,
+			timeouts: { before_prompt_build: 12_000 },
+		});
+		expect(entry.config).toEqual({
+			daemonUrl: "http://localhost:3850",
+			customSetting: "preserved",
+		});
 	});
 
 	it("does not execute non-JSON expressions while parsing configs", async () => {

@@ -40,7 +40,9 @@ describe("install copy", () => {
 		expect(installer).toContain("native-manifest.json");
 		expect(installer).toContain("SIGNET_RELEASES_API_BASE");
 		expect(installer).toContain("SIGNET_RELEASE_TAG");
-		expect(installer).toContain('"$binary_path" install "$@"');
+		expect(installer).toContain("${VERSION:-}");
+		expect(installer).toContain("SIGNET_CHANNEL");
+		expect(installer).toContain('"$binary_path" install --force "$@"');
 		expect(installer).toContain(
 			"Published Signet native binaries: linux-x64, linux-arm64, darwin-x64, darwin-arm64, win32-x64",
 		);
@@ -109,7 +111,7 @@ describe("install copy", () => {
 		// binary.
 		expect(installer).toContain("components.connectors");
 		expect(installer).toContain("--connector-assets");
-		expect(installer).toContain("install --connector-assets");
+		expect(installer).toContain("install --force --connector-assets");
 	});
 
 	test("build-connector-assets stages runtime plugin assets into a tarball", () => {

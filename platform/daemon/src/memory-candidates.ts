@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import type { AgentRosterReadPolicy } from "@signet/core";
 import { type WriteDb, getDbAccessor } from "./db-accessor";
 import { logger } from "./logger";
 import { effectiveScore } from "./memory-classification";
@@ -180,7 +181,7 @@ export function getAllScoredCandidates(
 	project: string | undefined,
 	limit: number,
 	agentId = "default",
-	readPolicy = "isolated",
+	readPolicy: AgentRosterReadPolicy = "isolated",
 	policyGroup: string | null = null,
 ): ScoredMemory[] {
 	if (!existsSync(memoryDbPath)) return [];
@@ -247,7 +248,7 @@ export function getPredictedContextMemories(
 	charBudget: number,
 	excludeIds: ReadonlySet<string>,
 	agentId: string,
-	readPolicy = "isolated",
+	readPolicy: AgentRosterReadPolicy = "isolated",
 	policyGroup: string | null = null,
 ): ScoredMemory[] {
 	if (!existsSync(memoryDbPath)) return [];

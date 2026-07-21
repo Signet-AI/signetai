@@ -51,7 +51,10 @@ export function registerGlobalMiddleware(app: Hono, deps: MiddlewareDeps): void 
 
 	// MW-2: Shutdown guard
 	app.use("*", async (c, next) => {
-		if (shuttingDown && c.req.path !== "/health") {
+		// Liveness/readiness probes must keep answering during shutdown: /health
+		// and /health/live report liveness, /health/ready returns its structured
+		// 503 rather than the guard's generic one.
+		if (shuttingDown && !c.req.path.startsWith("/health")) {
 			c.status(503);
 			return c.json({ error: "shutting down" });
 		}
