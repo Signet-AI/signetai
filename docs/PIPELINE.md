@@ -894,13 +894,13 @@ dampening pipeline
 before the final sort. The goal is to break score bunching where relevant
 and irrelevant results land at similar fusion scores.
 
-A temporal freshness prior may run between dampening and currentness when
-the query carries temporal intent. Month-range phrases ("in March",
-"March 2026") softly downrank facts outside that window, and freshness
-terms ("current", "latest", "recent", "today") apply a bounded recency
-boost against `created_at` plus a stronger downweight for fully superseded
-facts. The prior never excludes rows and is skipped for timeless queries
-or when the caller passes explicit `since`/`until` bounds.
+The existing rehearsal stage also recognizes explicit freshness terms
+(`current`, `latest`, `recent`, `today`, `this week`, and `this month`). For
+those queries only, it applies a bounded `created_at` recency boost alongside
+its normal access-based decay. Date-range interpretation remains exclusively
+on the structural temporal-recall path, and bare `now` does not trigger
+freshness shaping. Timeless queries and callers with `since`/`until` bounds are
+unchanged.
 
 Structured currentness then applies a final correction before hydration.
 Active attributes remain eligible as current evidence, while memories whose

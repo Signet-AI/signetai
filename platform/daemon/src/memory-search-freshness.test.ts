@@ -5,63 +5,40 @@ import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import { type ResolvedMemoryConfig, loadMemoryConfig } from "./memory-config";
 import { hybridRecall } from "./memory-search";
-import { parseFreshnessIntent } from "./temporal-recall";
+import { hasFreshnessIntent } from "./temporal-recall";
 
 const NOW_ISO = "2026-07-19T00:00:00.000Z";
 const MARCH_CREATED = "2026-03-10T12:00:00.000Z";
 const JULY_CREATED = "2026-07-10T12:00:00.000Z";
 
-describe("parseFreshnessIntent", () => {
-	it("parses a bare month into a bounded range for the current year", () => {
-		const intent = parseFreshnessIntent("What did we plan in March?", new Date("2026-07-19T00:00:00Z"));
-		expect(intent?.kind).toBe("range");
-		if (intent?.kind !== "range") return;
-		expect(intent.since).toBe(new Date(2026, 2, 1).toISOString());
-		expect(intent.until).toBe(new Date(2026, 3, 1).toISOString());
+describe("hasFreshnessIntent", () => {
+	it("detects explicit freshness terms", () => {
+		expect(hasFreshnessIntent("current status of heron")).toBe(true);
+		expect(hasFreshnessIntent("what is the latest on heron")).toBe(true);
+		expect(hasFreshnessIntent("heron news today")).toBe(true);
+		expect(hasFreshnessIntent("recently updated architecture")).toBe(true);
 	});
 
-	it("rolls a future bare month back to the previous year", () => {
-		const intent = parseFreshnessIntent("notes from March", new Date("2026-01-15T00:00:00Z"));
-		expect(intent?.kind).toBe("range");
-		if (intent?.kind !== "range") return;
-		expect(intent.since).toBe(new Date(2025, 2, 1).toISOString());
-		expect(intent.until).toBe(new Date(2025, 3, 1).toISOString());
+	it("does not treat dates, month ranges, or bare now as freshness intent", () => {
+		expect(hasFreshnessIntent("What did we plan in March?")).toBe(false);
+		expect(hasFreshnessIntent("March 2026 retrospective")).toBe(false);
+		expect(hasFreshnessIntent("what happened on March 15, 2026")).toBe(false);
+		expect(hasFreshnessIntent("how does the embedding pipeline work now")).toBe(false);
 	});
 
-	it("honors an explicit year", () => {
-		const intent = parseFreshnessIntent("in march 2026", new Date("2026-01-15T00:00:00Z"));
-		expect(intent?.kind).toBe("range");
-		if (intent?.kind !== "range") return;
-		expect(intent.since).toBe(new Date(2026, 2, 1).toISOString());
-	});
-
-	it("detects freshness terms without bounds", () => {
-		expect(parseFreshnessIntent("current status of heron")?.kind).toBe("freshness");
-		expect(parseFreshnessIntent("what is the latest on heron")?.kind).toBe("freshness");
-		expect(parseFreshnessIntent("heron news today")?.kind).toBe("freshness");
-	});
-
-	it("returns null for timeless queries", () => {
-		expect(parseFreshnessIntent("heron status level")).toBeNull();
-	});
-
-	it("ignores unanchored month words used as verbs or modals", () => {
-		expect(parseFreshnessIntent("what may block the heron release")).toBeNull();
-		expect(parseFreshnessIntent("we march on with the migration")).toBeNull();
-		expect(parseFreshnessIntent("March 2026 retrospective")?.kind).toBe("range");
-	});
-
-	it("leaves day-level dates to the explicit-day parser", () => {
-		expect(parseFreshnessIntent("what happened on March 15, 2026")).toBeNull();
+	it("does not fire for observed timeless production queries", () => {
+		expect(hasFreshnessIntent("how does the embedding pipeline work")).toBe(false);
+		expect(hasFreshnessIntent("what is Signet architecture")).toBe(false);
+		expect(hasFreshnessIntent("GitHub bot configuration")).toBe(false);
 	});
 });
 
-describe("hybridRecall temporal freshness prior", () => {
+describe("hybridRecall freshness-aware rehearsal", () => {
 	let dir = "";
 	let prevSignetPath: string | undefined;
 
 	beforeEach(() => {
-		dir = mkdtempSync(join(tmpdir(), "signet-temporal-prior-"));
+		dir = mkdtempSync(join(tmpdir(), "signet-freshness-rehearsal-"));
 		mkdirSync(join(dir, "memory"), { recursive: true });
 		writeFileSync(join(dir, "agent.yaml"), "name: TemporalPriorTest\n");
 		prevSignetPath = process.env.SIGNET_PATH;
@@ -130,13 +107,6 @@ describe("hybridRecall temporal freshness prior", () => {
 		expect(res.results[0]?.id).toBe("july-fact");
 	});
 
-	it("ranks the in-window fact first for a month-range query", async () => {
-		seedFacts();
-		const res = await recall("What did we plan for heron in March?", testCfg());
-		expect(res.results.length).toBeGreaterThanOrEqual(2);
-		expect(res.results[0]?.id).toBe("march-fact");
-	});
-
 	it("does not change ordering for timeless queries", async () => {
 		seedFacts();
 		const enabled = await recall("heron status level", testCfg());
@@ -144,7 +114,16 @@ describe("hybridRecall temporal freshness prior", () => {
 		expect(enabled.results.map((row) => row.id)).toEqual(disabled.results.map((row) => row.id));
 	});
 
-	it("skips the prior when explicit since/until bounds are passed", async () => {
+	it("does not add a second scoring path for month-range queries", async () => {
+		seedFacts();
+		const enabled = await recall("What did we plan for heron in March?", testCfg());
+		const disabled = await recall("What did we plan for heron in March?", testCfg({ temporal_prior_enabled: false }));
+		expect(enabled.results.map(({ id, score }) => ({ id, score }))).toEqual(
+			disabled.results.map(({ id, score }) => ({ id, score })),
+		);
+	});
+
+	it("skips the freshness boost when explicit since/until bounds are passed", async () => {
 		seedFacts();
 		const res = await hybridRecall(
 			{

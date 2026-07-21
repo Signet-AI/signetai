@@ -286,60 +286,17 @@ export function parseTemporalRecallIntent(params: {
 }
 
 // ---------------------------------------------------------------------------
-// Freshness / month-range intent (issue #903)
+// Freshness intent (issue #903)
 // ---------------------------------------------------------------------------
 
-export type FreshnessIntent =
-	| { readonly kind: "range"; readonly since: string; readonly until: string }
-	| { readonly kind: "freshness" };
+// Date-range interpretation remains exclusively in resolveTemporalRecall.
+// This detector is intentionally limited to unambiguous recency language.
+// Bare "now" is excluded because it commonly appears in otherwise timeless
+// conversational queries without asking recall to prefer newer memories.
+const FRESHNESS_TERM_PATTERN = /\b(current|currently|latest|recent|recently|today|this week|this month)\b/i;
 
-const FRESHNESS_TERM_PATTERN = /\b(current|currently|latest|recent|recently|now|today|this week|this month)\b/i;
-// A month phrase only counts as a range when anchored by a preposition
-// ("in March") or an explicit year ("March 2026") — a bare month word is too
-// often a verb or modal ("we march on", "this may block us") and must not
-// trigger the prior for timeless queries.
-const MONTH_NAME =
-	"jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?";
-const MONTH_RANGE_PATTERN = new RegExp(
-	`\\b(?:in|of|from)\\s+(${MONTH_NAME})(?:\\s+(\\d{4}))?\\b|\\b(${MONTH_NAME})\\s+(\\d{4})\\b`,
-	"i",
-);
-
-/**
- * Detect a temporal freshness prior from a free-text recall query.
- *
- * Returns a bounded month range for month-name-only phrases ("in March",
- * "March 2026"), a freshness marker for queries asking about the current or
- * recent state of the world, and null for timeless queries. Day-level dates
- * ("March 15, 2026") are left to `parseTemporalRecallIntent` and yield null
- * here.
- *
- * `now` is injectable so callers (and tests) can pin the reference time
- * instead of depending on the wall clock; it defaults to the current time.
- */
-export function parseFreshnessIntent(query: string, now: Date = new Date()): FreshnessIntent | null {
-	// Day-level phrases belong to the explicit-day parser, not the month prior.
-	if (!parseExplicitDay(query)) {
-		const monthMatch = query.match(MONTH_RANGE_PATTERN);
-		if (monthMatch) {
-			const month = MONTHS.get((monthMatch[1] ?? monthMatch[3] ?? "").toLowerCase());
-			if (month) {
-				const yearMatch = monthMatch[2] ?? monthMatch[4];
-				let year = yearMatch ? Number.parseInt(yearMatch, 10) : now.getFullYear();
-				// A month without an explicit year that is still ahead of `now`
-				// refers to last year's occurrence.
-				if (!yearMatch && month > now.getMonth() + 1) year -= 1;
-				const since = new Date(year, month - 1, 1);
-				const until = new Date(year, month, 1);
-				return { kind: "range", since: since.toISOString(), until: until.toISOString() };
-			}
-		}
-	}
-
-	if (FRESHNESS_TERM_PATTERN.test(query)) {
-		return { kind: "freshness" };
-	}
-	return null;
+export function hasFreshnessIntent(query: string): boolean {
+	return FRESHNESS_TERM_PATTERN.test(query);
 }
 
 function tableExists(db: { prepare(sql: string): { get(...args: unknown[]): unknown } }, name: string): boolean {

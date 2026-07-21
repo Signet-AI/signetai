@@ -1692,17 +1692,53 @@ pub fn native_artifact_fallbacks(
 // Post-processing boosts
 // ---------------------------------------------------------------------------
 
-/// Rehearsal boost: frequently-accessed memories with recency decay.
-///
-/// Boost = `weight * ln(access_count + 1) * 0.5^(days_since / half_life)`.
-/// Multiplicative: `score *= (1 + boost)`.
+/// Detect unambiguous freshness language. Date-range interpretation remains
+/// exclusively in the existing temporal recall path. Bare "now" is
+/// intentionally excluded because it commonly appears in timeless queries.
+pub fn has_freshness_intent(query: &str) -> bool {
+    let words: Vec<String> = query
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .map(str::to_ascii_lowercase)
+        .collect();
+    words.iter().any(|word| {
+        matches!(
+            word.as_str(),
+            "current" | "currently" | "latest" | "recent" | "recently" | "today"
+        )
+    }) || words
+        .windows(2)
+        .any(|pair| pair[0] == "this" && matches!(pair[1].as_str(), "week" | "month"))
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct FreshnessBoost {
+    pub now_ms: i64,
+    pub weight: f64,
+    pub half_life_days: f64,
+}
+
+fn parse_memory_timestamp_ms(raw: &str) -> Option<i64> {
+    chrono::DateTime::parse_from_rfc3339(raw)
+        .ok()
+        .map(|dt| dt.timestamp_millis())
+        .or_else(|| {
+            chrono::NaiveDateTime::parse_from_str(raw, "%Y-%m-%d %H:%M:%S")
+                .ok()
+                .map(|dt| dt.and_utc().timestamp_millis())
+        })
+}
+
+/// Apply access rehearsal and, only for freshness-aware queries, a bounded
+/// created-at recency boost in the same existing scoring stage.
 pub fn apply_rehearsal_boost(
     conn: &Connection,
     scored: &mut [ScoredHit],
     weight: f64,
     half_life_days: f64,
+    freshness: Option<FreshnessBoost>,
 ) {
-    if scored.is_empty() || weight <= 0.0 {
+    if scored.is_empty() || (weight <= 0.0 && freshness.is_none()) {
         return;
     }
 
@@ -1713,12 +1749,11 @@ pub fn apply_rehearsal_boost(
         .map(|(i, _)| format!("?{}", i + 1))
         .collect::<Vec<_>>()
         .join(",");
-
     let sql = format!(
-        "SELECT id, access_count, last_accessed FROM memories WHERE id IN ({placeholders})"
+        "SELECT id, access_count, last_accessed, created_at FROM memories WHERE id IN ({placeholders})"
     );
 
-    let access: HashMap<String, (i64, Option<String>)> = match conn.prepare(&sql) {
+    let access: HashMap<String, (i64, Option<String>, String)> = match conn.prepare(&sql) {
         Ok(mut stmt) => {
             let refs: Vec<&dyn rusqlite::types::ToSql> = ids
                 .iter()
@@ -1730,6 +1765,7 @@ pub fn apply_rehearsal_boost(
                     (
                         row.get::<_, i64>(1).unwrap_or(0),
                         row.get::<_, Option<String>>(2)?,
+                        row.get::<_, String>(3)?,
                     ),
                 ))
             })
@@ -1738,282 +1774,34 @@ pub fn apply_rehearsal_boost(
             .unwrap_or_default()
         }
         Err(e) => {
-            warn!(err = %e, "rehearsal boost query failed");
+            warn!(err = %e, "rehearsal/freshness boost query failed");
             return;
         }
     };
 
-    let now = chrono::Utc::now();
+    let now_ms = chrono::Utc::now().timestamp_millis();
     for hit in scored.iter_mut() {
-        if let Some((count, last)) = access.get(&hit.id) {
-            if *count <= 0 {
-                continue;
-            }
+        let Some((count, last, created_at)) = access.get(&hit.id) else {
+            continue;
+        };
+        if weight > 0.0 && *count > 0 {
             let days_since = last
                 .as_deref()
-                .and_then(|s| {
-                    chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S")
-                        .ok()
-                        .or_else(|| {
-                            chrono::DateTime::parse_from_rfc3339(s)
-                                .ok()
-                                .map(|dt| dt.naive_utc())
-                        })
-                })
-                .map(|dt| (now.naive_utc() - dt).num_seconds() as f64 / 86_400.0)
+                .and_then(parse_memory_timestamp_ms)
+                .map(|timestamp| (now_ms - timestamp) as f64 / 86_400_000.0)
                 .unwrap_or(half_life_days);
             let recency = 0.5_f64.powf(days_since / half_life_days);
             let boost = weight * (*count as f64 + 1.0).ln() * recency;
             hit.score *= 1.0 + boost;
         }
-    }
-
-    scored.sort_by(|a, b| {
-        b.score
-            .partial_cmp(&a.score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-}
-
-// ---------------------------------------------------------------------------
-// Temporal freshness prior (issue #903)
-// ---------------------------------------------------------------------------
-
-/// Multiplier for rows outside a parsed month range, from TS
-/// `memory-search.ts` `TEMPORAL_RANGE_OUTSIDE_MULTIPLIER`. Rows are never
-/// excluded — the prior only reweights.
-pub const TEMPORAL_RANGE_OUTSIDE_MULTIPLIER: f64 = 0.7;
-/// Extra multiplier for only-superseded rows under a freshness intent, from
-/// TS `TEMPORAL_FRESHNESS_SUPERSEDED_MULTIPLIER`. The currentness stage still
-/// applies its own 0.65 afterwards.
-pub const TEMPORAL_FRESHNESS_SUPERSEDED_MULTIPLIER: f64 = 0.5;
-
-/// Freshness intent from TS `temporal-recall.ts` `FreshnessIntent`.
-/// Range bounds are epoch milliseconds (`since` inclusive, `until`
-/// exclusive), built from local-time month boundaries exactly like the TS
-/// `new Date(year, month - 1, 1)` construction.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FreshnessIntent {
-    Range { since_ms: i64, until_ms: i64 },
-    Freshness,
-}
-
-// A month phrase only counts as a range when anchored by a preposition
-// ("in March") or an explicit year ("March 2026") — a bare month word is too
-// often a verb or modal ("we march on", "this may block us") and must not
-// trigger the prior for timeless queries. Mirrors TS MONTH_RANGE_PATTERN.
-const MONTH_PATTERN: &str = r"(?i)\b(?:in|of|from)\s+(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)(?:\s+(\d{4}))?\b|\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+(\d{4})\b";
-const FRESHNESS_TERM_PATTERN: &str =
-    r"(?i)\b(current|currently|latest|recent|recently|now|today|this week|this month)\b";
-const EXPLICIT_DAY_NUMERIC_PATTERN: &str = r"\b(\d{4})[/-](\d{1,2})[/-](\d{1,2})\b";
-const EXPLICIT_DAY_NAMED_PATTERN: &str = r"(?i)\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+(\d{1,2})(?:st|nd|rd|th)?[,]?\s+(\d{4})\b";
-
-fn month_number(name: &str) -> Option<u32> {
-    Some(match name.to_ascii_lowercase().as_str() {
-        "jan" | "january" => 1,
-        "feb" | "february" => 2,
-        "mar" | "march" => 3,
-        "apr" | "april" => 4,
-        "may" => 5,
-        "jun" | "june" => 6,
-        "jul" | "july" => 7,
-        "aug" | "august" => 8,
-        "sep" | "sept" | "september" => 9,
-        "oct" | "october" => 10,
-        "nov" | "november" => 11,
-        "dec" | "december" => 12,
-        _ => return None,
-    })
-}
-
-/// Mirrors TS `parseExplicitDay` closely enough for the freshness-intent
-/// gate: a query carrying a day-level date belongs to the explicit-day
-/// parser, not the month-range prior.
-fn has_explicit_day(query: &str) -> bool {
-    if regex_lite::Regex::new(EXPLICIT_DAY_NUMERIC_PATTERN)
-        .ok()
-        .and_then(|re| re.captures(query))
-        .is_some_and(|caps| {
-            let (Some(year), Some(month), Some(day)) = (
-                caps.get(1).and_then(|m| m.as_str().parse::<i32>().ok()),
-                caps.get(2).and_then(|m| m.as_str().parse::<u32>().ok()),
-                caps.get(3).and_then(|m| m.as_str().parse::<u32>().ok()),
-            ) else {
-                return false;
-            };
-            chrono::NaiveDate::from_ymd_opt(year, month, day).is_some()
-        })
-    {
-        return true;
-    }
-    regex_lite::Regex::new(EXPLICIT_DAY_NAMED_PATTERN)
-        .ok()
-        .and_then(|re| re.captures(query))
-        .is_some_and(|caps| {
-            let (Some(month), Some(day), Some(year)) = (
-                month_number(caps.get(1).map_or("", |m| m.as_str())),
-                caps.get(2).and_then(|m| m.as_str().parse::<u32>().ok()),
-                caps.get(3).and_then(|m| m.as_str().parse::<i32>().ok()),
-            ) else {
-                return false;
-            };
-            // Like TS `localDayRange`, an invalid day (Feb 30) is not an
-            // explicit-day match and falls through to the month prior.
-            chrono::NaiveDate::from_ymd_opt(year, month, day).is_some()
-        })
-}
-
-fn local_month_start_ms(year: i32, month: u32) -> Option<i64> {
-    use chrono::{Local, TimeZone};
-    let (y, m) = if month > 12 {
-        (year + 1, 1)
-    } else {
-        (year, month)
-    };
-    match Local.with_ymd_and_hms(y, m, 1, 0, 0, 0) {
-        chrono::LocalResult::Single(dt) => Some(dt.timestamp_millis()),
-        _ => None,
-    }
-}
-
-/// Detect a temporal freshness prior from a free-text recall query, mirroring
-/// TS `parseFreshnessIntent`. `now` is injectable so callers and tests can
-/// pin the reference time instead of depending on the wall clock.
-pub fn parse_freshness_intent(
-    query: &str,
-    now: chrono::DateTime<chrono::Local>,
-) -> Option<FreshnessIntent> {
-    use chrono::Datelike;
-    if !has_explicit_day(query)
-        && let Some(caps) = regex_lite::Regex::new(MONTH_PATTERN)
-            .ok()
-            .and_then(|re| re.captures(query))
-        && let Some(month) = month_number(
-            caps.get(1)
-                .or_else(|| caps.get(3))
-                .map_or("", |m| m.as_str()),
-        )
-    {
-        let explicit_year = caps
-            .get(2)
-            .or_else(|| caps.get(4))
-            .and_then(|m| m.as_str().parse::<i32>().ok());
-        let mut year = explicit_year.unwrap_or_else(|| now.year());
-        // A month without an explicit year still ahead of `now` refers to
-        // last year's occurrence.
-        if explicit_year.is_none() && month > now.month() {
-            year -= 1;
-        }
-        if let (Some(since_ms), Some(until_ms)) = (
-            local_month_start_ms(year, month),
-            local_month_start_ms(year, month + 1),
-        ) {
-            return Some(FreshnessIntent::Range { since_ms, until_ms });
+        if let Some(freshness) = freshness
+            && let Some(timestamp) = parse_memory_timestamp_ms(created_at)
+        {
+            let age_days = ((freshness.now_ms - timestamp) as f64 / 86_400_000.0).max(0.0);
+            hit.score *= 1.0 + freshness.weight * 0.5_f64.powf(age_days / freshness.half_life_days);
         }
     }
 
-    if regex_lite::Regex::new(FRESHNESS_TERM_PATTERN)
-        .ok()
-        .is_some_and(|re| re.is_match(query))
-    {
-        return Some(FreshnessIntent::Freshness);
-    }
-    None
-}
-
-/// `Date.parse` equivalent for `memories.created_at`: RFC 3339 / ISO 8601
-/// first, then the SQLite `datetime('now')` layout (`%Y-%m-%d %H:%M:%S`,
-/// interpreted as UTC, matching `apply_rehearsal_boost`). Unparseable values
-/// leave the row untouched, matching the TS `Number.isNaN` guard.
-fn parse_created_at_ms(raw: &str) -> Option<i64> {
-    chrono::DateTime::parse_from_rfc3339(raw)
-        .ok()
-        .map(|dt| dt.timestamp_millis())
-        .or_else(|| {
-            chrono::NaiveDateTime::parse_from_str(raw, "%Y-%m-%d %H:%M:%S")
-                .ok()
-                .map(|dt| dt.and_utc().timestamp_millis())
-        })
-}
-
-/// Mirror of TS `loadCreatedAtMap`.
-fn load_created_at_map(conn: &Connection, ids: &[&str]) -> HashMap<String, String> {
-    if ids.is_empty() {
-        return HashMap::new();
-    }
-    let placeholders: String = ids
-        .iter()
-        .enumerate()
-        .map(|(i, _)| format!("?{}", i + 1))
-        .collect::<Vec<_>>()
-        .join(",");
-    let sql = format!("SELECT id, created_at FROM memories WHERE id IN ({placeholders})");
-    match conn.prepare(&sql) {
-        Ok(mut stmt) => {
-            let refs: Vec<&dyn rusqlite::types::ToSql> = ids
-                .iter()
-                .map(|s| s as &dyn rusqlite::types::ToSql)
-                .collect();
-            stmt.query_map(refs.as_slice(), |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-            })
-            .ok()
-            .map(|rows| rows.filter_map(|r| r.ok()).collect())
-            .unwrap_or_default()
-        }
-        Err(e) => {
-            warn!(err = %e, "temporal freshness prior created_at query failed");
-            HashMap::new()
-        }
-    }
-}
-
-/// Temporal freshness prior from TS `memory-search.ts`
-/// `applyTemporalFreshnessPrior`. Applied after dampening and before
-/// currentness bias; `currentness` is the shared map the currentness stage
-/// reuses (load it once in the caller for freshness intents).
-pub fn apply_temporal_freshness_prior(
-    conn: &Connection,
-    scored: &mut [ScoredHit],
-    intent: &FreshnessIntent,
-    now_ms: i64,
-    weight: f64,
-    half_life_days: f64,
-    currentness: &HashMap<String, CurrentnessInfo>,
-) {
-    if scored.is_empty() {
-        return;
-    }
-    let ids: Vec<&str> = scored.iter().map(|s| s.id.as_str()).collect();
-    let created_at = load_created_at_map(conn, &ids);
-    match intent {
-        FreshnessIntent::Range { since_ms, until_ms } => {
-            for hit in scored.iter_mut() {
-                let Some(ts) = created_at.get(&hit.id).and_then(|s| parse_created_at_ms(s)) else {
-                    continue;
-                };
-                if ts < *since_ms || ts >= *until_ms {
-                    hit.score *= TEMPORAL_RANGE_OUTSIDE_MULTIPLIER;
-                }
-            }
-        }
-        FreshnessIntent::Freshness => {
-            for hit in scored.iter_mut() {
-                if let Some(ts) = created_at.get(&hit.id).and_then(|s| parse_created_at_ms(s)) {
-                    let age_days = ((now_ms - ts) as f64 / 86_400_000.0).max(0.0);
-                    hit.score *= 1.0 + weight * 0.5_f64.powf(age_days / half_life_days);
-                }
-                // Rows whose structured facts are only superseded take a
-                // bigger hit when a freshness-aware query is in play.
-                if let Some(info) = currentness.get(&hit.id)
-                    && info.active.is_empty()
-                    && !info.superseded.is_empty()
-                {
-                    hit.score *= TEMPORAL_FRESHNESS_SUPERSEDED_MULTIPLIER;
-                }
-            }
-        }
-    }
     scored.sort_by(|a, b| {
         b.score
             .partial_cmp(&a.score)
@@ -2726,126 +2514,29 @@ mod tests {
     }
 
     // -------------------------------------------------------------------
-    // Temporal freshness prior (issue #903), mirrors
-    // platform/daemon/src/memory-search-temporal-prior.test.ts
+    // Freshness-aware rehearsal (issue #903), mirrors
+    // platform/daemon/src/memory-search-freshness.test.ts
     // -------------------------------------------------------------------
 
-    fn local_dt(year: i32, month: u32, day: u32) -> chrono::DateTime<chrono::Local> {
-        use chrono::TimeZone;
-        match chrono::Local.with_ymd_and_hms(year, month, day, 0, 0, 0) {
-            chrono::LocalResult::Single(dt) => dt,
-            _ => panic!("ambiguous local time"),
-        }
-    }
-
-    fn month_start_ms(year: i32, month: u32) -> i64 {
-        local_dt(year, month, 1).timestamp_millis()
-    }
-
     #[test]
-    fn freshness_intent_bare_month_current_year() {
-        let now = local_dt(2026, 7, 19);
-        let intent = parse_freshness_intent("What did we plan in March?", now);
-        assert_eq!(
-            intent,
-            Some(FreshnessIntent::Range {
-                since_ms: month_start_ms(2026, 3),
-                until_ms: month_start_ms(2026, 4),
-            })
-        );
-    }
-
-    #[test]
-    fn freshness_intent_bare_month_rolls_back_a_year() {
-        let now = local_dt(2026, 1, 15);
-        let intent = parse_freshness_intent("notes from March", now);
-        assert_eq!(
-            intent,
-            Some(FreshnessIntent::Range {
-                since_ms: month_start_ms(2025, 3),
-                until_ms: month_start_ms(2025, 4),
-            })
-        );
-    }
-
-    #[test]
-    fn freshness_intent_explicit_year() {
-        let now = local_dt(2026, 1, 15);
-        let intent = parse_freshness_intent("in march 2026", now);
-        assert_eq!(
-            intent,
-            Some(FreshnessIntent::Range {
-                since_ms: month_start_ms(2026, 3),
-                until_ms: month_start_ms(2026, 4),
-            })
-        );
-    }
-
-    #[test]
-    fn freshness_intent_abbreviated_month() {
-        let now = local_dt(2026, 7, 19);
-        let intent = parse_freshness_intent("what shipped in Sept", now);
-        assert_eq!(
-            intent,
-            Some(FreshnessIntent::Range {
-                since_ms: month_start_ms(2025, 9),
-                until_ms: month_start_ms(2025, 10),
-            })
-        );
-    }
-
-    #[test]
-    fn freshness_intent_freshness_terms() {
-        let now = local_dt(2026, 7, 19);
-        assert_eq!(
-            parse_freshness_intent("current status of heron", now),
-            Some(FreshnessIntent::Freshness)
-        );
-        assert_eq!(
-            parse_freshness_intent("what is the latest on heron", now),
-            Some(FreshnessIntent::Freshness)
-        );
-        assert_eq!(
-            parse_freshness_intent("heron news today", now),
-            Some(FreshnessIntent::Freshness)
-        );
-        assert_eq!(
-            parse_freshness_intent("heron status this week", now),
-            Some(FreshnessIntent::Freshness)
-        );
-    }
-
-    #[test]
-    fn freshness_intent_timeless_returns_none() {
-        let now = local_dt(2026, 7, 19);
-        assert_eq!(parse_freshness_intent("heron status level", now), None);
-    }
-
-    #[test]
-    fn freshness_intent_ignores_unanchored_month_words() {
-        let now = local_dt(2026, 7, 19);
-        assert_eq!(
-            parse_freshness_intent("what may block the heron release", now),
-            None
-        );
-        assert_eq!(
-            parse_freshness_intent("we march on with the migration", now),
-            None
-        );
-        assert!(matches!(
-            parse_freshness_intent("March 2026 retrospective", now),
-            Some(FreshnessIntent::Range { .. })
+    fn freshness_intent_detects_only_unambiguous_terms() {
+        assert!(has_freshness_intent("current status of heron"));
+        assert!(has_freshness_intent("what is the latest on heron"));
+        assert!(has_freshness_intent("heron news today"));
+        assert!(!has_freshness_intent("What did we plan in March?"));
+        assert!(!has_freshness_intent("March 2026 retrospective"));
+        assert!(!has_freshness_intent(
+            "how does the embedding pipeline work now"
         ));
     }
 
     #[test]
-    fn freshness_intent_day_level_returns_none() {
-        let now = local_dt(2026, 7, 19);
-        assert_eq!(
-            parse_freshness_intent("what happened on March 15, 2026", now),
-            None
-        );
-        assert_eq!(parse_freshness_intent("status on 2026-03-15", now), None);
+    fn freshness_intent_ignores_observed_timeless_queries() {
+        assert!(!has_freshness_intent(
+            "how does the embedding pipeline work"
+        ));
+        assert!(!has_freshness_intent("what is Signet architecture"));
+        assert!(!has_freshness_intent("GitHub bot configuration"));
     }
 
     fn insert_memory_at(conn: &Connection, id: &str, content: &str, created_at: &str) {
@@ -2873,7 +2564,7 @@ mod tests {
     }
 
     #[test]
-    fn temporal_prior_range_reweights_outside_rows() {
+    fn freshness_rehearsal_boosts_recent_rows() {
         let conn = setup();
         insert_memory_at(
             &conn,
@@ -2888,98 +2579,26 @@ mod tests {
             "2026-07-10T12:00:00.000Z",
         );
         let mut scored = tied_hits();
-        let intent = FreshnessIntent::Range {
-            since_ms: month_start_ms(2026, 3),
-            until_ms: month_start_ms(2026, 4),
-        };
-        apply_temporal_freshness_prior(
+        apply_rehearsal_boost(
             &conn,
             &mut scored,
-            &intent,
-            local_dt(2026, 7, 19).timestamp_millis(),
-            0.15,
+            0.0,
             14.0,
-            &HashMap::new(),
-        );
-        let march = scored.iter().find(|h| h.id == "march-fact").unwrap();
-        let july = scored.iter().find(|h| h.id == "july-fact").unwrap();
-        assert!((march.score - 1.0).abs() < 1e-9);
-        assert!((july.score - TEMPORAL_RANGE_OUTSIDE_MULTIPLIER).abs() < 1e-9);
-        assert_eq!(scored[0].id, "march-fact");
-    }
-
-    #[test]
-    fn temporal_prior_freshness_boosts_recent_rows() {
-        let conn = setup();
-        insert_memory_at(
-            &conn,
-            "march-fact",
-            "heron is red",
-            "2026-03-10T12:00:00.000Z",
-        );
-        insert_memory_at(
-            &conn,
-            "july-fact",
-            "heron is blue",
-            "2026-07-10T12:00:00.000Z",
-        );
-        let mut scored = tied_hits();
-        apply_temporal_freshness_prior(
-            &conn,
-            &mut scored,
-            &FreshnessIntent::Freshness,
-            // 2026-07-19T00:00:00Z, same pin as the TS test.
-            1_784_419_200_000,
-            0.15,
-            14.0,
-            &HashMap::new(),
+            Some(FreshnessBoost {
+                now_ms: 1_784_419_200_000,
+                weight: 0.15,
+                half_life_days: 14.0,
+            }),
         );
         assert_eq!(scored[0].id, "july-fact");
         let july = scored[0].score;
         let march = scored[1].score;
-        // 8.5 days old vs 130.5 days old at the pinned `now`.
         assert!((july - (1.0 + 0.15 * 0.5_f64.powf(8.5 / 14.0))).abs() < 1e-9);
         assert!((march - (1.0 + 0.15 * 0.5_f64.powf(130.5 / 14.0))).abs() < 1e-9);
     }
 
     #[test]
-    fn temporal_prior_freshness_penalizes_only_superseded_rows() {
-        let conn = setup();
-        insert_memory_at(
-            &conn,
-            "march-fact",
-            "heron is red",
-            "2026-07-10T12:00:00.000Z",
-        );
-        let mut scored = vec![ScoredHit {
-            id: "march-fact".into(),
-            score: 1.0,
-            source: SearchSource::Keyword,
-        }];
-        let mut currentness = HashMap::new();
-        currentness.insert(
-            "march-fact".to_string(),
-            CurrentnessInfo {
-                active: Vec::new(),
-                superseded: vec![("old fact".to_string(), None)],
-            },
-        );
-        apply_temporal_freshness_prior(
-            &conn,
-            &mut scored,
-            &FreshnessIntent::Freshness,
-            1_784_419_200_000,
-            0.15,
-            14.0,
-            &currentness,
-        );
-        let expected =
-            (1.0 + 0.15 * 0.5_f64.powf(8.5 / 14.0)) * TEMPORAL_FRESHNESS_SUPERSEDED_MULTIPLIER;
-        assert!((scored[0].score - expected).abs() < 1e-9);
-    }
-
-    #[test]
-    fn temporal_prior_leaves_unparseable_created_at_untouched() {
+    fn freshness_rehearsal_leaves_unparseable_created_at_untouched() {
         let conn = setup();
         insert_memory_at(&conn, "march-fact", "heron is red", "not-a-date");
         let mut scored = vec![ScoredHit {
@@ -2987,17 +2606,16 @@ mod tests {
             score: 1.0,
             source: SearchSource::Keyword,
         }];
-        apply_temporal_freshness_prior(
+        apply_rehearsal_boost(
             &conn,
             &mut scored,
-            &FreshnessIntent::Range {
-                since_ms: month_start_ms(2026, 3),
-                until_ms: month_start_ms(2026, 4),
-            },
-            1_784_419_200_000,
-            0.15,
+            0.0,
             14.0,
-            &HashMap::new(),
+            Some(FreshnessBoost {
+                now_ms: 1_784_419_200_000,
+                weight: 0.15,
+                half_life_days: 14.0,
+            }),
         );
         assert!((scored[0].score - 1.0).abs() < 1e-9);
     }

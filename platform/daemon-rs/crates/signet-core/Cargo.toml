@@ -15,7 +15,6 @@ serde_yml = { workspace = true }
 blake3 = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
-regex-lite = { workspace = true }
 tracing = { workspace = true }
 thiserror = { workspace = true }
 arc-swap = { workspace = true }

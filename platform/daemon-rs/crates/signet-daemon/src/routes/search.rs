@@ -11,13 +11,12 @@ use serde::{Deserialize, Serialize};
 use tracing::warn;
 
 use signet_core::search::{
-    FreshnessIntent, RecallFilter, annotate_currentness, apply_currentness_bias, apply_dampening,
-    apply_rehearsal_boost, apply_sec_lite, apply_temporal_freshness_prior,
-    apply_temporal_topic_evidence, authorize_scored_candidates, fts_search, fuse_traversal_primary,
+    FreshnessBoost, RecallFilter, annotate_currentness, apply_currentness_bias, apply_dampening,
+    apply_rehearsal_boost, apply_sec_lite, apply_temporal_topic_evidence,
+    authorize_scored_candidates, fts_search, fuse_traversal_primary, has_freshness_intent,
     hint_search, load_currentness_info, merge_recall_candidates, native_artifact_fallbacks,
-    parse_freshness_intent, source_chunk_vector_fallbacks, structured_path_candidates,
-    temporal_candidates_for_recall, touch_accessed, traversal_primary_candidates,
-    vec_search_scored,
+    source_chunk_vector_fallbacks, structured_path_candidates, temporal_candidates_for_recall,
+    touch_accessed, traversal_primary_candidates, vec_search_scored,
 };
 
 use crate::auth::middleware::{
@@ -691,48 +690,21 @@ pub async fn recall(
                 &traversal_hits,
                 min_score,
             );
-            apply_rehearsal_boost(conn, &mut scored, 0.08, 14.0);
+            let freshness_now_ms = chrono::Utc::now().timestamp_millis();
+            let freshness = (temporal_prior_enabled
+                && since.is_none()
+                && until.is_none()
+                && has_freshness_intent(&query))
+            .then_some(FreshnessBoost {
+                now_ms: freshness_now_ms,
+                weight: temporal_prior_weight,
+                half_life_days: temporal_prior_half_life_days,
+            });
+            apply_rehearsal_boost(conn, &mut scored, 0.08, 14.0, freshness);
             apply_dampening(conn, &mut scored, &query);
 
-            // Temporal freshness prior (issue #903, TS memory-search.ts
-            // `temporal_freshness_prior`): after dampening, before
-            // currentness. Skipped when the caller passed explicit
-            // since/until — the existing filter already handles those.
-            // Non-fatal by construction: core helpers swallow DB errors with
-            // a warn, matching the TS try/catch warn-and-continue.
-            let freshness_now = chrono::Local::now();
-            let freshness_intent = if temporal_prior_enabled && since.is_none() && until.is_none()
-            {
-                parse_freshness_intent(&query, freshness_now)
-            } else {
-                None
-            };
-            let mut currentness = std::collections::HashMap::new();
-            if let Some(intent) = freshness_intent.as_ref()
-                && !scored.is_empty()
-            {
-                // Freshness intent reuses currentness info for stronger
-                // supersession; load it once here and share it with the
-                // currentness stage below to avoid a double query.
-                if matches!(intent, FreshnessIntent::Freshness) {
-                    let ids: Vec<&str> = scored.iter().map(|s| s.id.as_str()).collect();
-                    currentness = load_currentness_info(conn, &ids, &agent_id);
-                }
-                apply_temporal_freshness_prior(
-                    conn,
-                    &mut scored,
-                    intent,
-                    freshness_now.timestamp_millis(),
-                    temporal_prior_weight,
-                    temporal_prior_half_life_days,
-                    &currentness,
-                );
-            }
-
             let scored_ids: Vec<&str> = scored.iter().map(|s| s.id.as_str()).collect();
-            if currentness.is_empty() {
-                currentness = load_currentness_info(conn, &scored_ids, &agent_id);
-            }
+            let currentness = load_currentness_info(conn, &scored_ids, &agent_id);
             apply_currentness_bias(&mut scored, &currentness);
 
             let pre_hydrate = if body.agent_id.is_some() || project.is_some() || scope.is_some() {

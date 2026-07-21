@@ -252,9 +252,9 @@ keyword (BM25) retrieval.
 | `alpha` | number | `0.7` | Vector weight 0-1. Higher = more semantic. |
 | `top_k` | number | `20` | Candidate count fetched from each source |
 | `min_score` | number | `0.3` | Minimum combined score to return a result |
-| `temporal_prior_enabled` | boolean | `true` | Enable the temporal freshness prior for queries with temporal intent (`current`, `latest`, month names, …) |
-| `temporal_prior_weight` | number | `0.15` | Max recency boost for freshness queries (0-1) |
-| `temporal_prior_half_life_days` | number | `14` | Recency boost half-life in days (1-365) |
+| `temporal_prior_enabled` | boolean | `true` | Enable the freshness-aware rehearsal boost for explicit recency queries (`current`, `latest`, `recent`, `today`, …) |
+| `temporal_prior_weight` | number | `0.15` | Maximum `created_at` recency boost for freshness queries (0-1) |
+| `temporal_prior_half_life_days` | number | `14` | Freshness-query recency half-life in days (1-365) |
 
 At `alpha: 0.9` results are heavily semantic, suitable for conceptual
 queries. At `alpha: 0.3` results skew toward keyword matching, better for

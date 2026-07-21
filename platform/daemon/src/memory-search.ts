@@ -47,12 +47,7 @@ import {
 } from "./pipeline/structured-path-evidence";
 import { type RecallDedupeMeta, applyRecallDedupe } from "./session-recall-dedupe";
 import { escapeLike } from "./sql-utils";
-import {
-	type FreshnessIntent,
-	type TemporalTimeOptions,
-	parseFreshnessIntent,
-	resolveTemporalRecall,
-} from "./temporal-recall";
+import { type TemporalTimeOptions, hasFreshnessIntent, resolveTemporalRecall } from "./temporal-recall";
 
 // ---------------------------------------------------------------------------
 // Public interfaces
@@ -99,7 +94,7 @@ export interface RecallParams {
 	excludeAggregateRecallMemories?: boolean;
 	/** Internal escape hatch for hooks that must track only injected rows elsewhere. */
 	trackRecallAccess?: boolean;
-	/** Internal test hook: pin the reference time used by the temporal freshness prior (ISO string). */
+	/** Internal test hook: pin the reference time used by freshness-aware rehearsal (ISO string). */
 	temporalNow?: string;
 }
 
@@ -576,8 +571,11 @@ export function expandRecallKeywordQuery(raw: string): string {
 function applyRehearsalBoost(
 	scored: Array<{ id: string; score: number; source: string }>,
 	search: MemorySearchConfig,
+	freshness: { readonly enabled: boolean; readonly nowMs: number },
 ): void {
-	if (!search.rehearsal_enabled || search.rehearsal_weight <= 0 || scored.length === 0) return;
+	const rehearsalEnabled = search.rehearsal_enabled && search.rehearsal_weight > 0;
+	const freshnessEnabled = freshness.enabled && search.temporal_prior_weight > 0;
+	if ((!rehearsalEnabled && !freshnessEnabled) || scored.length === 0) return;
 	try {
 		const ids = scored.map((s) => s.id);
 		const placeholders = ids.map(() => "?").join(", ");
@@ -585,7 +583,7 @@ function applyRehearsalBoost(
 			(db) =>
 				db
 					.prepare(
-						`SELECT id, access_count, last_accessed
+						`SELECT id, access_count, last_accessed, created_at
 						 FROM memories
 						 WHERE id IN (${placeholders})`,
 					)
@@ -593,25 +591,33 @@ function applyRehearsalBoost(
 					id: string;
 					access_count: number;
 					last_accessed: string | null;
+					created_at: string;
 				}>,
 		);
 
-		const nowMs = Date.now();
-		const rw = search.rehearsal_weight;
 		const accessMap = new Map(accessRows.map((r) => [r.id, r]));
 		for (const s of scored) {
 			const row = accessMap.get(s.id);
-			if (!row || row.access_count <= 0) continue;
-			const daysSinceAccess = row.last_accessed
-				? (nowMs - new Date(row.last_accessed).getTime()) / 86_400_000
-				: search.rehearsal_half_life_days;
-			const recencyFactor = 0.5 ** (daysSinceAccess / search.rehearsal_half_life_days);
-			const boost = rw * Math.log(row.access_count + 1) * recencyFactor;
-			s.score *= 1 + boost;
+			if (!row) continue;
+			if (rehearsalEnabled && row.access_count > 0) {
+				const daysSinceAccess = row.last_accessed
+					? (freshness.nowMs - new Date(row.last_accessed).getTime()) / 86_400_000
+					: search.rehearsal_half_life_days;
+				const recencyFactor = 0.5 ** (daysSinceAccess / search.rehearsal_half_life_days);
+				const boost = search.rehearsal_weight * Math.log(row.access_count + 1) * recencyFactor;
+				s.score *= 1 + boost;
+			}
+			if (freshnessEnabled) {
+				const createdAtMs = Date.parse(row.created_at);
+				if (!Number.isNaN(createdAtMs)) {
+					const ageDays = Math.max(0, (freshness.nowMs - createdAtMs) / 86_400_000);
+					s.score *= 1 + search.temporal_prior_weight * 0.5 ** (ageDays / search.temporal_prior_half_life_days);
+				}
+			}
 		}
 		scored.sort((a, b) => b.score - a.score);
 	} catch (e) {
-		logger.warn("memory", "Rehearsal boost failed (non-fatal)", {
+		logger.warn("memory", "Rehearsal/freshness boost failed (non-fatal)", {
 			error: e instanceof Error ? e.message : String(e),
 		});
 	}
@@ -771,62 +777,6 @@ function applyCurrentnessBias(
 		}
 		if (info.active.length > 0) {
 			row.score *= 1.03;
-		}
-	}
-	scored.sort((a, b) => b.score - a.score);
-}
-
-// Temporal freshness prior (issue #903): bounded corrections that break ties
-// toward the time window or recency implied by the query, never excluding rows.
-const TEMPORAL_RANGE_OUTSIDE_MULTIPLIER = 0.7;
-const TEMPORAL_FRESHNESS_SUPERSEDED_MULTIPLIER = 0.5;
-
-function loadCreatedAtMap(ids: readonly string[]): Map<string, string> {
-	if (ids.length === 0) return new Map();
-	const placeholders = ids.map(() => "?").join(", ");
-	return getDbAccessor().withReadDb((db) => {
-		const rows = db
-			.prepare(
-				`SELECT id, created_at FROM memories
-				 WHERE id IN (${placeholders})`,
-			)
-			.all(...ids) as Array<{ id: string; created_at: string }>;
-		return new Map(rows.map((row) => [row.id, row.created_at]));
-	});
-}
-
-function applyTemporalFreshnessPrior(
-	scored: Array<{ id: string; score: number; source: string }>,
-	intent: FreshnessIntent,
-	opts: {
-		readonly nowMs: number;
-		readonly weight: number;
-		readonly halfLifeDays: number;
-		readonly currentness?: ReadonlyMap<string, CurrentnessInfo>;
-	},
-): void {
-	const createdAt = loadCreatedAtMap(scored.map((row) => row.id));
-	if (intent.kind === "range") {
-		const sinceMs = Date.parse(intent.since);
-		const untilMs = Date.parse(intent.until);
-		for (const row of scored) {
-			const ts = Date.parse(createdAt.get(row.id) ?? "");
-			if (Number.isNaN(ts)) continue;
-			if (ts < sinceMs || ts >= untilMs) row.score *= TEMPORAL_RANGE_OUTSIDE_MULTIPLIER;
-		}
-	} else {
-		for (const row of scored) {
-			const ts = Date.parse(createdAt.get(row.id) ?? "");
-			if (!Number.isNaN(ts)) {
-				const ageDays = Math.max(0, (opts.nowMs - ts) / 86_400_000);
-				row.score *= 1 + opts.weight * 0.5 ** (ageDays / opts.halfLifeDays);
-			}
-			// Strengthen supersession when a freshness-aware query is in play:
-			// rows whose structured facts are only superseded take the bigger hit here.
-			const info = opts.currentness?.get(row.id);
-			if (info && info.active.length === 0 && info.superseded.length > 0) {
-				row.score *= TEMPORAL_FRESHNESS_SUPERSEDED_MULTIPLIER;
-			}
 		}
 	}
 	scored.sort((a, b) => b.score - a.score);
@@ -1330,14 +1280,11 @@ export async function hybridRecall(
 		[...temporalCandidateSet].map((id) => [id, Math.max(minScore, 0.05)]),
 	);
 
-	// Temporal freshness prior (issue #903): detect month-range or freshness
-	// intent from the raw query. Skipped when the caller passed explicit
-	// since/until bounds — the existing filter already handles those.
+	// Date ranges are handled by resolveTemporalRecall above. The existing
+	// rehearsal stage gets only the distinct, keyword-based freshness signal.
 	const temporalNowMs = params.temporalNow ? Date.parse(params.temporalNow) : Date.now();
 	const freshnessIntent =
-		cfg.search.temporal_prior_enabled && !params.since && !params.until
-			? parseFreshnessIntent(params.query, new Date(temporalNowMs))
-			: null;
+		cfg.search.temporal_prior_enabled && !params.since && !params.until && hasFreshnessIntent(params.query);
 
 	const expandedQuery = expandRecallKeywordQuery(query);
 	const keywordQuery = sanitizeFtsQuery((params.keywordQuery ?? expandedQuery).trim());
@@ -1991,7 +1938,7 @@ export async function hybridRecall(
 	}
 
 	timings.time("rehearsal_boost", () => {
-		applyRehearsalBoost(scored, cfg.search);
+		applyRehearsalBoost(scored, cfg.search, { enabled: freshnessIntent, nowMs: temporalNowMs });
 	});
 
 	// --- Optional reranker hook ---
@@ -2187,32 +2134,6 @@ export async function hybridRecall(
 	}
 
 	let currentness = new Map<string, CurrentnessInfo>();
-	if (freshnessIntent && scored.length > 0) {
-		const priorStart = performance.now();
-		try {
-			// Freshness intent reuses currentness info for stronger supersession;
-			// load it here once and pass it to both stages to avoid a double query.
-			if (freshnessIntent.kind === "freshness") {
-				currentness = loadCurrentnessInfo(
-					scored.map((row) => row.id),
-					params.agentId ?? "default",
-				);
-			}
-			applyTemporalFreshnessPrior(scored, freshnessIntent, {
-				nowMs: temporalNowMs,
-				weight: cfg.search.temporal_prior_weight,
-				halfLifeDays: cfg.search.temporal_prior_half_life_days,
-				currentness,
-			});
-		} catch (e) {
-			logger.warn("memory", "Temporal freshness prior failed (non-fatal)", {
-				error: e instanceof Error ? e.message : String(e),
-			});
-		} finally {
-			timings.record("temporal_freshness_prior", priorStart);
-		}
-	}
-
 	if (scored.length > 0) {
 		const currentnessStart = performance.now();
 		try {
