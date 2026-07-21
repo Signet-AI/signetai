@@ -11,6 +11,7 @@ import {
 } from "@signet/core";
 import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
 import { requireDependencyReason } from "./dependency-history";
+import { classifyEntityQuality } from "./entity-quality";
 import {
 	type OntologyEvidenceItem,
 	type OntologyEvidenceRef,
@@ -548,6 +549,20 @@ function resolveEntity(db: WriteDb, agentId: string, name: string): string | nul
 function resolveOrCreateEntity(db: WriteDb, agentId: string, name: string, type: EntityType): string {
 	const existing = resolveEntity(db, agentId, name);
 	if (existing !== null) return existing;
+	// Label-quality gate (#914/#904): reject generic / scaffolding /
+	// markdown-polluted labels at the graph-write boundary. txPersistEntities
+	// enforces the same gate via shouldPersistEntity (=== classifyEntityQuality
+	//(...).ok); mirror it here so the create_entity apply path — used by the
+	// unified ingest IngestPlan for graph writes — cannot regress label quality.
+	// Throw per-op so applyOntologyOperationBatch records the rejection in its
+	// errors list (and aborts a non-dry-run batch) rather than silently skipping.
+	const quality = classifyEntityQuality(name);
+	if (!quality.ok) {
+		throw new OntologyProposalError(
+			`payload.name is a rejected entity label (${quality.reason ?? "low quality"}): ${name}`,
+			400,
+		);
+	}
 	const id = crypto.randomUUID();
 	db.prepare(
 		`INSERT INTO entities

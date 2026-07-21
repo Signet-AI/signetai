@@ -25,8 +25,8 @@ const TS_MCP_INVOCATIONS_VERSION: u32 = 52;
 const TS_MCP_INVOCATIONS_NAME: &str = "mcp-invocations";
 const TS_PATH_FEEDBACK_VERSION: u32 = 41;
 const TS_PATH_FEEDBACK_NAME: &str = "path-feedback";
-const TS_DREAMING_STATE_VERSION: u32 = 55;
-const TS_DREAMING_STATE_NAME: &str = "dreaming-state";
+const TS_INGEST_QUEUE_VERSION: u32 = 88;
+const TS_INGEST_QUEUE_NAME: &str = "ingest-queue";
 const TS_AGENT_SCOPED_IDEMPOTENCY_VERSION: u32 = 72;
 const TS_AGENT_SCOPED_IDEMPOTENCY_NAME: &str = "agent-scoped-idempotency-key";
 const TS_ENTITY_ALIASES_VERSION: u32 = 77;
@@ -517,7 +517,6 @@ fn ensure_cross_daemon_parity_tables(conn: &Connection) -> Result<(), CoreError>
     conn.execute_batch(include_str!("sql/041-ontology-proposals.sql"))?;
     conn.execute_batch(include_str!("sql/042-entity-aliases.sql"))?;
     conn.execute_batch(include_str!("sql/043-mcp-invocations.sql"))?;
-    conn.execute_batch(include_str!("sql/044-dreaming-state.sql"))?;
     conn.execute_batch(include_str!("sql/045-agents-table.sql"))?;
     conn.execute_batch(include_str!("sql/046-cross-agent-runtime.sql"))?;
     conn.execute_batch(include_str!("sql/047-daily-reflections.sql"))?;
@@ -628,7 +627,6 @@ fn ensure_cross_daemon_parity_tables(conn: &Connection) -> Result<(), CoreError>
         TS_MEMORY_SEARCH_TELEMETRY_NAME,
     )?;
     stamp_typescript_parity_migration(conn, TS_MCP_INVOCATIONS_VERSION, TS_MCP_INVOCATIONS_NAME)?;
-    stamp_typescript_parity_migration(conn, TS_DREAMING_STATE_VERSION, TS_DREAMING_STATE_NAME)?;
     stamp_typescript_parity_migration(
         conn,
         TS_DAILY_REFLECTIONS_VERSION,
@@ -1285,6 +1283,44 @@ fn ensure_cross_daemon_parity_columns(conn: &Connection) -> Result<(), CoreError
         TS_SKILL_INVOCATIONS_HARNESS_VERSION,
         TS_SKILL_INVOCATIONS_HARNESS_NAME,
     )?;
+
+    // Unified ingest queue (parity with TS 088). Turns memory_jobs into the
+    // single durable queue with agent-scoped fenced leasing, priority lanes,
+    // and the agentic planning lifecycle. SQLite ALTER has no IF NOT EXISTS so
+    // the columns use add_column_if_missing; the 060 SQL file then creates the
+    // lease/reaper indexes once those columns exist (mirrors the 059 pattern).
+    add_column_if_missing(conn, "memory_jobs", "agent_id", "TEXT")?;
+    add_column_if_missing(conn, "memory_jobs", "lease_owner", "TEXT")?;
+    add_column_if_missing(conn, "memory_jobs", "lease_token", "TEXT")?;
+    add_column_if_missing(conn, "memory_jobs", "lease_expires_at", "TEXT")?;
+    add_column_if_missing(
+        conn,
+        "memory_jobs",
+        "priority",
+        "INTEGER NOT NULL DEFAULT 0",
+    )?;
+    add_column_if_missing(
+        conn,
+        "memory_jobs",
+        "planning_attempts",
+        "INTEGER NOT NULL DEFAULT 0",
+    )?;
+    add_column_if_missing(conn, "memory_jobs", "planning_started_at", "TEXT")?;
+    add_column_if_missing(conn, "memory_jobs", "last_planning_at", "TEXT")?;
+    add_column_if_missing(conn, "memory_jobs", "plan_hash", "TEXT")?;
+    // Backfill data ownership from the linked document/memory; documents.agent_id
+    // is ensured above by the document-scope-columns parity. Idempotent via the
+    // WHERE agent_id IS NULL guard, so re-running on every init is safe.
+    conn.execute_batch(
+        "UPDATE memory_jobs
+            SET agent_id = COALESCE(
+                (SELECT agent_id FROM documents WHERE id = memory_jobs.document_id),
+                (SELECT agent_id FROM memories  WHERE id = memory_jobs.memory_id),
+                'default')
+          WHERE agent_id IS NULL",
+    )?;
+    conn.execute_batch(include_str!("sql/060-ingest-queue.sql"))?;
+    stamp_typescript_parity_migration(conn, TS_INGEST_QUEUE_VERSION, TS_INGEST_QUEUE_NAME)?;
 
     let should_backfill_legacy_relations =
         !typescript_parity_migration_stamped(conn, TS_MEMORY_LIFECYCLE_REPAIR_VERSION)?;
@@ -2225,7 +2261,6 @@ mod tests {
         for (version, table) in [
             (43_i64, "agents"),
             (52_i64, "mcp_invocations"),
-            (55_i64, "dreaming_state"),
             (66_i64, "memory_search_telemetry"),
             (67_i64, "ontology_proposals"),
             (68_i64, "daily_reflections"),
@@ -2240,9 +2275,14 @@ mod tests {
 
         // Rust-created databases should present a complete TS migration ledger
         // through the current TS schema when every TS-declared artifact exists.
-        for version in 32_i64..=77_i64 {
+        // TS 088 (ingest-queue) removed the legacy version-55 tables, so version
+        // 55 is no longer stamped on a Rust-created database; skip it in the range.
+        for version in (32_i64..=77_i64).filter(|v| *v != 55) {
             assert_migration_stamped(&conn, version);
         }
+        // TS 088 (ingest-queue) is stamped standalone; daemon-rs has not yet
+        // caught up to the intervening 78..=87 TS versions.
+        assert_migration_stamped(&conn, 88);
     }
 
     #[test]
@@ -2269,8 +2309,6 @@ mod tests {
             "mcp_invocations",
             "skill_invocations",
             "task_scope_hints",
-            "dreaming_state",
-            "dreaming_passes",
             "memory_search_telemetry",
             "ontology_proposals",
             "daily_reflections",
@@ -2331,13 +2369,27 @@ mod tests {
             ("memory_artifacts", "source_external_id"),
             ("memory_artifacts", "source_parent_path"),
             ("memory_artifacts", "source_meta_json"),
+            ("memory_jobs", "agent_id"),
+            ("memory_jobs", "lease_owner"),
+            ("memory_jobs", "lease_token"),
+            ("memory_jobs", "lease_expires_at"),
+            ("memory_jobs", "priority"),
+            ("memory_jobs", "planning_attempts"),
+            ("memory_jobs", "planning_started_at"),
+            ("memory_jobs", "last_planning_at"),
+            ("memory_jobs", "plan_hash"),
         ] {
             assert_column_exists(&conn, table, column);
         }
 
-        for version in 32_i64..=77_i64 {
+        // TS 088 (ingest-queue) removed the legacy version-55 tables; version 55
+        // is no longer stamped on a Rust-created database, so skip it in the range.
+        for version in (32_i64..=77_i64).filter(|v| *v != 55) {
             assert_migration_stamped(&conn, version);
         }
+        // TS 088 (ingest-queue) columns are asserted above; the stamp is
+        // verified standalone (78..=87 are not yet mirrored in daemon-rs).
+        assert_migration_stamped(&conn, 88);
     }
 
     #[test]

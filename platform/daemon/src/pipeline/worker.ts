@@ -23,7 +23,7 @@ import { runShadowDecisions } from "./decision";
 import { type DurabilityConfig, assessDurability } from "./durability-gate";
 import { extractFactsAndEntities } from "./extraction";
 import { escalate } from "./extraction-escalation";
-import { cancelExtractionJobForForgottenMemory } from "./extraction-queue";
+import { cancelJobForForgottenMemory } from "./extraction-queue";
 import { txPersistEntities } from "./graph-transactions";
 import { invalidateTraversalCache } from "./graph-traversal";
 import { enqueueHintsJob } from "./prospective-index";
@@ -1344,7 +1344,7 @@ export function startWorker(
 		let sourceForgotten = false;
 		accessor.withWriteTx((db) => {
 			if (!memoryIsActive(db, job.memory_id)) {
-				cancelExtractionJobForForgottenMemory(db, job.id);
+				cancelJobForForgottenMemory(db, job.id);
 				sourceForgotten = true;
 				return;
 			}

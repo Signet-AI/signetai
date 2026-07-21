@@ -1,28 +1,59 @@
 import type { DbAccessor, WriteDb } from "../db-accessor";
+import { INGEST_JOB_TYPE } from "./ingest/lease";
 
 export const FORGOTTEN_MEMORY_JOB_ERROR = "Source memory forgotten";
 export const FORGOTTEN_MEMORY_JOB_RESULT = JSON.stringify({ cancelled: "memory_forgotten" });
 
-export function cancelExtractionJobsForForgottenMemory(db: WriteDb, memoryId: string, changedAt: string): number {
+/**
+ * Active (non-terminal) statuses a forgotten source's job may be in when it is
+ * cancelled. Union of the legacy extract lifecycle (pending/leased) and the
+ * unified ingest lifecycle (pending/leased/planning/applying — see
+ * ingest/lease.ts `IngestJobStatus`). A forgotten source must produce zero
+ * derived descendants (#895), so a queued OR in-flight job is dead-lettered
+ * regardless of phase. SQLite can't bind an IN-list, so this is a static
+ * fragment interpolated into the statement (never user input).
+ */
+const FORGOTTEN_MEMORY_CANCELLABLE_STATUSES = "('pending', 'leased', 'planning', 'applying')";
+
+/** Job types whose jobs are cancelled when their source memory is forgotten. */
+const FORGOTTEN_MEMORY_CANCELLABLE_JOB_TYPES = `('extract', '${INGEST_JOB_TYPE}')`;
+
+/**
+ * Dead-letter every queued or in-flight job for a forgotten source memory so it
+ * produces zero derived descendants (#895 / #910). Covers both the legacy
+ * `extract` lane and the unified `ingest` lane (#913) across every active
+ * status — pending, leased, planning, and applying. The mid-lease cases
+ * (leased/planning/applying) matter for the ingest path: a forgotten source
+ * whose job is already leased must not reach apply, and a stale lease token
+ * cannot resurrect a dead job (`verifyIngestLease` filters on active statuses).
+ */
+export function cancelJobsForForgottenMemory(db: WriteDb, memoryId: string, changedAt: string): number {
 	const result = db
 		.prepare(
 			`UPDATE memory_jobs
 			 SET status = 'dead', result = ?, error = ?, failed_at = ?, updated_at = ?
 			 WHERE memory_id = ?
-			   AND job_type = 'extract'
-			   AND status IN ('pending', 'leased')`,
+			   AND job_type IN ${FORGOTTEN_MEMORY_CANCELLABLE_JOB_TYPES}
+			   AND status IN ${FORGOTTEN_MEMORY_CANCELLABLE_STATUSES}`,
 		)
 		.run(FORGOTTEN_MEMORY_JOB_RESULT, FORGOTTEN_MEMORY_JOB_ERROR, changedAt, changedAt, memoryId);
 	return result.changes;
 }
 
-export function cancelExtractionJobForForgottenMemory(db: WriteDb, jobId: string): void {
+/**
+ * Dead-letter a single job for a forgotten source — the worker's mid-lease
+ * re-check path. Generalized from extraction-only: the apply re-check fires
+ * after lease, so the job may be in any active phase (leased/planning/applying
+ * on the unified ingest path), not just pending/leased. Does not increment
+ * `attempts`; the job is terminal, so no retry is owed.
+ */
+export function cancelJobForForgottenMemory(db: WriteDb, jobId: string): void {
 	const now = new Date().toISOString();
 	db.prepare(
 		`UPDATE memory_jobs
 		 SET status = 'dead', result = ?, error = ?, failed_at = ?, updated_at = ?
 		 WHERE id = ?
-		   AND status IN ('pending', 'leased')`,
+		   AND status IN ${FORGOTTEN_MEMORY_CANCELLABLE_STATUSES}`,
 	).run(FORGOTTEN_MEMORY_JOB_RESULT, FORGOTTEN_MEMORY_JOB_ERROR, now, now, jobId);
 }
 

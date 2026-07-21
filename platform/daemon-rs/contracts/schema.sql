@@ -654,6 +654,15 @@ CREATE TABLE "memory_jobs" (
 			created_at TEXT NOT NULL,
 			updated_at TEXT NOT NULL,
 			document_id TEXT,
+			agent_id TEXT,
+			lease_owner TEXT,
+			lease_token TEXT,
+			lease_expires_at TEXT,
+			priority INTEGER NOT NULL DEFAULT 0,
+			planning_attempts INTEGER NOT NULL DEFAULT 0,
+			planning_started_at TEXT,
+			last_planning_at TEXT,
+			plan_hash TEXT,
 			FOREIGN KEY (memory_id) REFERENCES memories(id)
 		);
 CREATE INDEX idx_memory_jobs_status
@@ -664,6 +673,11 @@ CREATE INDEX idx_memory_jobs_completed_at
 			ON memory_jobs(completed_at);
 CREATE INDEX idx_memory_jobs_failed_at
 			ON memory_jobs(failed_at);
+CREATE INDEX idx_memory_jobs_lease
+			ON memory_jobs(agent_id, status, priority DESC, created_at);
+CREATE INDEX idx_memory_jobs_stale
+			ON memory_jobs(status, lease_expires_at)
+			WHERE status IN ('leased','planning','applying');
 CREATE TABLE os_tray_entries (
             id TEXT PRIMARY KEY,
             state TEXT NOT NULL DEFAULT 'tray' CHECK(state IN ('tray', 'grid', 'dock')),

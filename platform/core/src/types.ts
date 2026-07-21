@@ -414,6 +414,23 @@ export interface PipelineV2Config {
 	readonly modelRegistry: PipelineModelRegistryConfig;
 	readonly hints?: PipelineHintsConfig;
 	readonly reflections: PipelineReflectionsConfig;
+	readonly ingest?: PipelineIngestConfig;
+}
+
+/**
+ * Unified ingest / Dreaming configuration (#913). When enabled, the daemon runs
+ * the in-process Dreaming runner over the unified ingest queue. When disabled,
+ * the operator points a harness cron at the dreaming skill (agentic Dreaming)
+ * which drives the same queue over the /api/ingest two-phase protocol. Off by
+ * default; the cutover promotes it.
+ */
+export interface PipelineIngestConfig {
+	readonly enabled: boolean;
+	/** Share of the model's context window used for input (default 0.8). */
+	readonly contextBudgetPct?: number;
+	readonly tickIntervalMs?: number;
+	/** Lease timeout for the agentic planning turn (longer than apply). */
+	readonly planningLeaseTimeoutMs?: number;
 }
 
 export interface ModelRegistryEntry {

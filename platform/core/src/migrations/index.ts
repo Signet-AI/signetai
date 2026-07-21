@@ -93,6 +93,7 @@ import { up as legacyMarkdownImportState } from "./084-legacy-markdown-import-st
 import { up as backfillRelationsToDependencies } from "./085-backfill-relations-to-dependencies";
 import { up as summaryJobsContentHash } from "./086-summary-jobs-content-hash";
 import { up as summaryJobsBoundaryReason } from "./087-summary-jobs-boundary-reason";
+import { up as ingestQueue } from "./088-ingest-queue";
 
 // -- Public interface consumed by Database.init() --
 
@@ -107,6 +108,15 @@ export interface MigrationDb {
 
 export interface MigrationArtifacts {
 	readonly tables?: readonly string[];
+	/**
+	 * Tables this migration intentionally drops (retiring a table an earlier
+	 * migration declared). The phantom-migration detector treats a missing
+	 * declared table as corruption and re-runs its creating migration; a table
+	 * listed here across any migration is exempt — it is an intentional
+	 * retirement, not corruption. Symmetric to the `optional` marker columns
+	 * already have.
+	 */
+	readonly dropped_tables?: readonly string[];
 	readonly columns?: readonly {
 		readonly table: string;
 		readonly column: string;
@@ -838,6 +848,25 @@ export const MIGRATIONS: readonly Migration[] = [
 			columns: [{ table: "summary_jobs", column: "boundary_reason" }],
 		},
 	},
+	{
+		version: 88,
+		name: "ingest-queue",
+		up: ingestQueue,
+		artifacts: {
+			dropped_tables: ["dreaming_state", "dreaming_passes"],
+			columns: [
+				{ table: "memory_jobs", column: "agent_id" },
+				{ table: "memory_jobs", column: "lease_owner" },
+				{ table: "memory_jobs", column: "lease_token" },
+				{ table: "memory_jobs", column: "lease_expires_at" },
+				{ table: "memory_jobs", column: "priority" },
+				{ table: "memory_jobs", column: "planning_attempts" },
+				{ table: "memory_jobs", column: "planning_started_at" },
+				{ table: "memory_jobs", column: "last_planning_at" },
+				{ table: "memory_jobs", column: "plan_hash" },
+			],
+		},
+	},
 ];
 
 /** Simple checksum for audit trail (hash of migration name + version). */
@@ -935,6 +964,21 @@ function tableColumns(db: MigrationDb, table: string, cache: Map<string, Set<str
  * Used by both hasPendingMigrations (detection only) and
  * repairPhantomMigrations (detection + deletion).
  */
+/**
+ * Tables intentionally retired by any migration's `dropped_tables` declaration.
+ * A missing table in this set is a deliberate schema evolution, not the
+ * corruption the phantom detector exists to catch, so it is exempt.
+ */
+function droppedTablesSet(): Set<string> {
+	const set = new Set<string>();
+	for (const m of MIGRATIONS) {
+		if (m.artifacts?.dropped_tables) {
+			for (const t of m.artifacts.dropped_tables) set.add(t);
+		}
+	}
+	return set;
+}
+
 function findPhantomVersions(
 	db: MigrationDb,
 	// Accepts a pre-fetched applied set to avoid a redundant query when
@@ -942,6 +986,7 @@ function findPhantomVersions(
 	precomputedApplied?: Set<number>,
 ): Set<number> {
 	const tables = existingTables(db);
+	const dropped = droppedTablesSet();
 	const colCache = new Map<string, Set<string>>();
 	const phantoms = new Set<number>();
 	const applied = precomputedApplied ?? appliedVersions(db);
@@ -959,6 +1004,8 @@ function findPhantomVersions(
 
 		if (migration.artifacts.tables) {
 			for (const t of migration.artifacts.tables) {
+				// Intentionally retired by a later migration — not corruption.
+				if (dropped.has(t)) continue;
 				if (!tables.has(t)) {
 					missing = true;
 					break;

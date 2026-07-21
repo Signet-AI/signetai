@@ -1450,11 +1450,26 @@ describe("migration framework", () => {
 		const tables = db.query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type='table'").all();
 		const tableNames = new Set(tables.map((t) => t.name));
 
+		// Tables intentionally retired by a later migration's `dropped_tables`
+		// declaration are exempt — they MUST be gone, not present.
+		const dropped = new Set<string>();
+		for (const m of MIGRATIONS) {
+			if (m.artifacts?.dropped_tables) {
+				for (const t of m.artifacts.dropped_tables) dropped.add(t);
+			}
+		}
+
 		for (const m of MIGRATIONS) {
 			if (!m.artifacts) continue;
 			if (m.artifacts.tables) {
 				for (const t of m.artifacts.tables) {
+					if (dropped.has(t)) continue;
 					expect(tableNames.has(t)).toBe(true);
+				}
+			}
+			if (m.artifacts.dropped_tables) {
+				for (const t of m.artifacts.dropped_tables) {
+					expect(tableNames.has(t)).toBe(false);
 				}
 			}
 			if (m.artifacts.columns) {

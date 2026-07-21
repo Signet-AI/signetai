@@ -267,6 +267,9 @@ export const DEFAULT_PIPELINE_V2: ResolvedPipelineV2Config = {
 		maxMemories: 50,
 		maxSummaries: 10,
 	},
+	ingest: {
+		enabled: false, // unified ingest / Dreaming runner — opt-in until cutover (#913)
+	},
 };
 
 export const DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434";
@@ -483,6 +486,7 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): ResolvedPipel
 	const modelRegistryRaw = raw.modelRegistry as Record<string, unknown> | undefined;
 	const hintsRaw = raw.hints as Record<string, unknown> | undefined;
 	const reflectionsRaw = raw.reflections as Record<string, unknown> | undefined;
+	const ingestRaw = raw.ingest as Record<string, unknown> | undefined;
 
 	// Helper: resolve with flat-fallback (non-extraction fields still nested-first)
 	const d = DEFAULT_PIPELINE_V2;
@@ -1086,6 +1090,22 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): ResolvedPipel
 			timeWindowHours: clampPositive(reflectionsRaw?.timeWindowHours, 1, 168, d.reflections.timeWindowHours),
 			maxMemories: clampPositive(reflectionsRaw?.maxMemories, 5, 500, d.reflections.maxMemories),
 			maxSummaries: clampPositive(reflectionsRaw?.maxSummaries, 1, 50, d.reflections.maxSummaries),
+		},
+
+		ingest: {
+			enabled: resolveBool(ingestRaw?.enabled, undefined, d.ingest?.enabled ?? false),
+			// Optional: unset lets the context builder apply its own default (0.8).
+			contextBudgetPct:
+				ingestRaw?.contextBudgetPct !== undefined
+					? clampFraction(ingestRaw?.contextBudgetPct, 0.8)
+					: d.ingest?.contextBudgetPct,
+			tickIntervalMs: clampPositive(ingestRaw?.tickIntervalMs, 1000, 300000, d.ingest?.tickIntervalMs ?? 5000),
+			planningLeaseTimeoutMs: clampPositive(
+				ingestRaw?.planningLeaseTimeoutMs,
+				10000,
+				3600000,
+				d.ingest?.planningLeaseTimeoutMs ?? 600000,
+			),
 		},
 	};
 }

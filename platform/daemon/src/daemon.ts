@@ -159,6 +159,7 @@ import { registerOntologyRoutes } from "./routes/ontology-routes.js";
 import { mountOsAgentRoutes } from "./routes/os-agent.js";
 import { mountOsChatRoutes } from "./routes/os-chat.js";
 import { registerPipelineRoutes } from "./routes/pipeline-routes.js";
+import { registerIngestRoutes } from "./routes/ingest-routes.js";
 import { registerPluginRoutes } from "./routes/plugins-routes.js";
 import { registerReflectionRoutes } from "./routes/reflection-routes.js";
 import { registerRepairRoutes } from "./routes/repair-routes.js";
@@ -223,6 +224,33 @@ registerSecretRoutes(app);
 registerSessionRoutes(app, { gitConfig, stopGitSyncTimer, startGitSyncTimer, getGitStatus, gitPull, gitPush, gitSync });
 registerSourcesRoutes(app);
 registerPipelineRoutes(app);
+// Unified ingest / agentic Dreaming two-phase protocol (#913). Config is
+// resolved per-request so a config change does not require a restart, mirroring
+// the dream routes. The daemon is the single writer; the skill/CLI are clients.
+registerIngestRoutes(app, () => {
+	const cfg = loadMemoryConfig(AGENTS_DIR);
+	const pipeline = cfg.pipelineV2;
+	const wg = pipeline.writeGate;
+	const dg = pipeline.durability;
+	return {
+		accessor: getDbAccessor(),
+		agentsDir: AGENTS_DIR,
+		getEmbedder: () => ({ embed: (text: string) => fetchEmbedding(text, cfg.embedding) }),
+		applyConfigBase: {
+			actor: "ingest",
+			minImportanceForWrite: 0.3,
+			writeGate: wg
+				? { enabled: wg.enabled, threshold: wg.threshold, continuityDiscount: wg.continuityDiscount ?? 0 }
+				: { enabled: false, threshold: 0.4, continuityDiscount: 0.15 },
+			durability: dg ? { enabled: dg.enabled } : { enabled: true },
+			sourceType: "ingest",
+			extractionModel: pipeline.extraction.model ?? null,
+			embeddingModel: cfg.embedding.model,
+		},
+		planningLeaseTimeoutMs: pipeline.ingest?.planningLeaseTimeoutMs ?? 600_000,
+		contextWindow: undefined, // model-registry resolution is a follow-up; 128k fallback applies
+	};
+});
 registerReflectionRoutes(app);
 registerTelemetryRoutes(app);
 registerDatabaseDiagnosticsRoutes(app);

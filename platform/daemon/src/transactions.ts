@@ -558,7 +558,7 @@ export function txForgetMemory(db: WriteDb, input: ForgetMemoryTxInput): ForgetM
 		     version = version + 1
 		 WHERE id = ?`,
 	).run(input.changedAt, input.changedAt, input.changedBy, input.memoryId);
-	cancelExtractionJobsForForgottenMemory(db, input.memoryId, input.changedAt);
+	cancelJobsForForgottenMemory(db, input.memoryId, input.changedAt);
 	deleteAggregateMemorySourceLinks(db, input.memoryId);
 
 	insertHistoryEvent(db, {
