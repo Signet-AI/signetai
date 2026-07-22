@@ -1,5 +1,5 @@
-import type { PipelineCommandConfig, PipelineExtractionConfig, PipelineSynthesisConfig } from "./types";
 import { defaultPipelineModel } from "./pipeline-providers";
+import type { PipelineCommandConfig, PipelineExtractionConfig, PipelineSynthesisConfig } from "./types";
 
 export const ROUTING_ACCOUNT_KINDS = ["subscription_session", "api"] as const;
 export const ROUTING_TARGET_KINDS = ["subscription_session", "api", "local", "gateway"] as const;
@@ -112,6 +112,7 @@ export interface RoutingAcpxConfig {
 	readonly format?: RoutingAcpxOutputFormat;
 	readonly captureEvents?: boolean;
 	readonly maxCapturedEvents?: number;
+	readonly emptyResponseRetries?: number;
 	readonly timeoutMs?: number;
 	readonly extraArgs?: readonly string[];
 }
@@ -566,6 +567,10 @@ function parseAcpxConfig(raw: unknown): RoutingAcpxConfig | undefined {
 		format: asAcpxOutputFormat(nested.format ?? nested.outputFormat ?? nested.output_format),
 		captureEvents: asBool(nested.captureEvents ?? nested.capture_events),
 		maxCapturedEvents: asPositiveInt(nested.maxCapturedEvents ?? nested.max_captured_events),
+		emptyResponseRetries: Math.min(
+			3,
+			asNonNegativeInt(nested.emptyResponseRetries ?? nested.empty_response_retries) ?? 1,
+		),
 		timeoutMs: asPositiveInt(nested.timeoutMs ?? nested.timeout_ms),
 		extraArgs: extraArgs.length > 0 ? extraArgs : undefined,
 	};

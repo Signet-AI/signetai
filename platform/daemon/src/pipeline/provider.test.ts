@@ -154,6 +154,211 @@ printf 'ok\\n'
 		}
 	});
 
+	it("retries a sterile quiet-mode empty completion in a fresh one-shot session", async () => {
+		const root = join(tmpdir(), `signet-acpx-empty-retry-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		mkdirSync(root, { recursive: true });
+		const bin = join(root, "fake-acpx-empty-then-valid.sh");
+		const countPath = join(root, "count.txt");
+		const argsPath = join(root, "args.txt");
+		writeFileSync(
+			bin,
+			`#!/usr/bin/env bash
+count=0
+[[ -f ${JSON.stringify(countPath)} ]] && count=$(cat ${JSON.stringify(countPath)})
+count=$((count + 1))
+printf '%s' "$count" > ${JSON.stringify(countPath)}
+printf '%s\n' "$@" >> ${JSON.stringify(argsPath)}
+cat >/dev/null
+if [[ "$count" -eq 1 ]]; then
+  printf '  \n'
+else
+  printf 'recovered answer\n'
+fi
+`,
+		);
+		chmodSync(bin, 0o755);
+		try {
+			const provider = createAcpxProvider({
+				agent: "codex",
+				bin,
+				mode: "session",
+				session: "persistent-background",
+				permissions: "deny-all",
+				hooks: "disabled",
+				allowedTools: [],
+				emptyResponseRetries: 1,
+			});
+
+			await expect(provider.generate("retry me", { timeoutMs: 2000 })).resolves.toBe("recovered answer");
+			expect(readFileSync(countPath, "utf8")).toBe("2");
+			const args = readFileSync(argsPath, "utf8").trim().split("\n");
+			expect(args.filter((arg) => arg === "persistent-background")).toHaveLength(1);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("reports structured diagnostics after repeated empty completions", async () => {
+		const root = join(tmpdir(), `signet-acpx-empty-terminal-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		mkdirSync(root, { recursive: true });
+		const bin = join(root, "fake-acpx-always-empty.sh");
+		const countPath = join(root, "count.txt");
+		writeFileSync(
+			bin,
+			`#!/usr/bin/env bash
+count=0
+[[ -f ${JSON.stringify(countPath)} ]] && count=$(cat ${JSON.stringify(countPath)})
+printf '%s' "$((count + 1))" > ${JSON.stringify(countPath)}
+cat >/dev/null
+printf '\n'
+printf '%s\n' '[acpx] tokens: input=20 output=1 total=21' >&2
+`,
+		);
+		chmodSync(bin, 0o755);
+		try {
+			const provider = createAcpxProvider({
+				agent: "codex",
+				bin,
+				permissions: "deny-all",
+				hooks: "disabled",
+				allowedTools: [],
+				emptyResponseRetries: 1,
+			});
+
+			await expect(provider.generate("retry me", { timeoutMs: 2000 })).rejects.toThrow(
+				/exitCode=0, stdoutBytes=1, stderrBytes=42, format=quiet, sessionId=unknown, stopReason=unknown, usage=input=20 output=1 total=21, retryCount=1, durationMs=\d+/,
+			);
+			expect(readFileSync(countPath, "utf8")).toBe("2");
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("retries JSON end_turn with zero assistant chunks and preserves ACP diagnostics", async () => {
+		const root = join(tmpdir(), `signet-acpx-json-empty-retry-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		mkdirSync(root, { recursive: true });
+		const bin = join(root, "fake-acpx-json-empty-then-valid.sh");
+		const countPath = join(root, "count.txt");
+		writeFileSync(
+			bin,
+			`#!/usr/bin/env bash
+count=0
+[[ -f ${JSON.stringify(countPath)} ]] && count=$(cat ${JSON.stringify(countPath)})
+count=$((count + 1))
+printf '%s' "$count" > ${JSON.stringify(countPath)}
+cat >/dev/null
+printf '%s\n' '{"jsonrpc":"2.0","id":0,"result":{"sessionId":"ses-empty"}}'
+if [[ "$count" -eq 1 ]]; then
+  printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"stopReason":"end_turn","usage":{"inputTokens":20,"outputTokens":1}}}'
+else
+  printf '%s\n' '{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"json recovered"}}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"stopReason":"end_turn"}}'
+fi
+`,
+		);
+		chmodSync(bin, 0o755);
+		try {
+			const provider = createAcpxProvider({
+				agent: "codex",
+				bin,
+				format: "json",
+				permissions: "deny-all",
+				hooks: "disabled",
+				allowedTools: [],
+			});
+
+			await expect(provider.generate("retry json", { timeoutMs: 2000 })).resolves.toBe("json recovered");
+			expect(readFileSync(countPath, "utf8")).toBe("2");
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("does not retry JSON output after observable tool activity", async () => {
+		const root = join(tmpdir(), `signet-acpx-json-side-effect-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		mkdirSync(root, { recursive: true });
+		const bin = join(root, "fake-acpx-json-tool.sh");
+		const countPath = join(root, "count.txt");
+		writeFileSync(
+			bin,
+			`#!/usr/bin/env bash
+printf '1' >> ${JSON.stringify(countPath)}
+cat >/dev/null
+printf '%s\n' '{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"tool_call","toolCallId":"call-1","title":"shell"}}}'
+printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"stopReason":"end_turn"}}'
+`,
+		);
+		chmodSync(bin, 0o755);
+		try {
+			const provider = createAcpxProvider({
+				agent: "codex",
+				bin,
+				format: "json",
+				permissions: "deny-all",
+				hooks: "disabled",
+				allowedTools: [],
+			});
+
+			await expect(provider.generate("do not retry", { timeoutMs: 2000 })).rejects.toThrow(
+				"codex via ACPX JSON output did not include a final response",
+			);
+			expect(readFileSync(countPath, "utf8")).toBe("1");
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("injects a tool-denying OpenCode profile and defaults sterile runs to JSON", async () => {
+		const root = join(tmpdir(), `signet-acpx-opencode-profile-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		mkdirSync(root, { recursive: true });
+		const bin = join(root, "fake-opencode-acpx.sh");
+		const argsPath = join(root, "args.txt");
+		const configPath = join(root, "opencode-config.json");
+		writeFileSync(
+			bin,
+			`#!/usr/bin/env bash
+printf '%s\n' "$@" > ${JSON.stringify(argsPath)}
+printf '%s' "$OPENCODE_CONFIG_CONTENT" > ${JSON.stringify(configPath)}
+cat >/dev/null
+printf '%s\n' '{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"sterile answer"}}}}'
+printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"stopReason":"end_turn"}}'
+`,
+		);
+		chmodSync(bin, 0o755);
+		const previousConfig = process.env.OPENCODE_CONFIG_CONTENT;
+		process.env.OPENCODE_CONFIG_CONTENT = JSON.stringify({ model: "provider/model" });
+		try {
+			const provider = createAcpxProvider({
+				agent: "opencode",
+				bin,
+				model: "routed/model",
+				permissions: "deny-all",
+				hooks: "disabled",
+				allowedTools: [],
+			});
+			await expect(provider.generate("sterile", { timeoutMs: 2000 })).resolves.toBe("sterile answer");
+			const args = readFileSync(argsPath, "utf8").trim().split("\n");
+			expect(args[args.indexOf("--format") + 1]).toBe("json");
+			expect(args).not.toContain("--model");
+			const overlay = JSON.parse(readFileSync(configPath, "utf8")) as {
+				model?: string;
+				tools?: Record<string, boolean>;
+				permission?: Record<string, string>;
+				agent?: { build?: { tools?: Record<string, boolean>; permission?: Record<string, string> } };
+			};
+			expect(overlay.model).toBe("routed/model");
+			expect(overlay.tools?.["*"]).toBe(false);
+			expect(overlay.permission?.["*"]).toBe("deny");
+			expect(overlay.agent?.build?.tools?.["*"]).toBe(false);
+			expect(overlay.agent?.build?.permission?.["*"]).toBe("deny");
+			expect(overlay.agent?.build).toMatchObject({ model: "routed/model" });
+		} finally {
+			if (previousConfig === undefined) Reflect.deleteProperty(process.env, "OPENCODE_CONFIG_CONTENT");
+			else process.env.OPENCODE_CONFIG_CONTENT = previousConfig;
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	it("cleans up detached Codex ACP agent processes after successful ACPX exec", async () => {
 		if (process.platform !== "linux") return;
 		const root = join(tmpdir(), `signet-acpx-success-cleanup-${Date.now()}-${Math.random().toString(36).slice(2)}`);

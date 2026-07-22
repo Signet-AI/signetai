@@ -657,12 +657,15 @@ export interface AcpxProviderConfig {
 	readonly format?: AcpxOutputFormat;
 	readonly captureEvents?: boolean;
 	readonly maxCapturedEvents?: number;
+	readonly emptyResponseRetries?: number;
 	readonly onEvent?: (event: AcpxJsonEvent) => void;
 	readonly timeoutMs?: number;
 	readonly extraArgs?: readonly string[];
 }
 
 const DEFAULT_ACPX_VERSION = "0.12.0";
+const DEFAULT_ACPX_EMPTY_RESPONSE_RETRIES = 1;
+const MAX_ACPX_EMPTY_RESPONSE_RETRIES = 3;
 
 function normalizeAcpxAgent(agent: string): string {
 	return agent === "claude-code" ? "claude" : agent;
@@ -681,13 +684,64 @@ function acpxPermissionArgs(mode: AcpxPermissionMode | undefined): string[] {
 	}
 }
 
-function acpxEnv(hooks: AcpxHooksMode | undefined, runId?: string): NodeJS.ProcessEnv {
+function isSterileAcpxTarget(config: AcpxProviderConfig): boolean {
+	return (
+		config.hooks === "disabled" &&
+		config.permissions === "deny-all" &&
+		(resolveAcpxAllowedTools(config)?.length ?? 0) === 0
+	);
+}
+
+function mergeSterileOpenCodeConfig(raw: string | undefined, model: string | undefined): string {
+	let existing: Record<string, unknown> = {};
+	if (raw?.trim()) {
+		let parsed: unknown;
+		try {
+			parsed = JSON.parse(raw);
+		} catch (error) {
+			throw new Error(
+				`Cannot secure OpenCode ACPX target: OPENCODE_CONFIG_CONTENT is invalid JSON (${error instanceof Error ? error.message : String(error)})`,
+			);
+		}
+		if (!isJsonRecord(parsed)) {
+			throw new Error("Cannot secure OpenCode ACPX target: OPENCODE_CONFIG_CONTENT must contain a JSON object");
+		}
+		existing = { ...parsed };
+	}
+	const existingTools = isJsonRecord(existing.tools) ? existing.tools : {};
+	const existingPermission = isJsonRecord(existing.permission) ? existing.permission : {};
+	const existingAgents = isJsonRecord(existing.agent) ? existing.agent : {};
+	const existingBuild = isJsonRecord(existingAgents.build) ? existingAgents.build : {};
+	return JSON.stringify({
+		...existing,
+		...(model ? { model } : {}),
+		tools: { ...existingTools, "*": false },
+		permission: { ...existingPermission, "*": "deny" },
+		agent: {
+			...existingAgents,
+			build: {
+				...existingBuild,
+				...(model ? { model } : {}),
+				tools: { ...(isJsonRecord(existingBuild.tools) ? existingBuild.tools : {}), "*": false },
+				permission: {
+					...(isJsonRecord(existingBuild.permission) ? existingBuild.permission : {}),
+					"*": "deny",
+				},
+			},
+		},
+	});
+}
+
+function acpxEnv(config: AcpxProviderConfig, runId?: string): NodeJS.ProcessEnv {
 	const env: NodeJS.ProcessEnv = { ...process.env };
-	if (hooks === "disabled") {
+	if (config.hooks === "disabled") {
 		env.SIGNET_NO_HOOKS = "1";
 		env.SIGNET_ENABLED = "false";
-	} else if (hooks === "enabled") {
+	} else if (config.hooks === "enabled") {
 		env.SIGNET_NO_HOOKS = undefined;
+	}
+	if (normalizeAcpxAgent(config.agent).toLowerCase() === "opencode" && isSterileAcpxTarget(config)) {
+		env.OPENCODE_CONFIG_CONTENT = mergeSterileOpenCodeConfig(env.OPENCODE_CONFIG_CONTENT, config.model);
 	}
 	if (runId) env.SIGNET_ACPX_RUN_ID = runId;
 	return env;
@@ -712,8 +766,12 @@ function resolveAcpxAllowedTools(
 	return config.hooks === "disabled" ? [] : undefined;
 }
 
-function resolveAcpxFormat(config: Pick<AcpxProviderConfig, "format" | "captureEvents">): AcpxOutputFormat {
-	return config.format ?? (config.captureEvents ? "json" : "quiet");
+function resolveAcpxFormat(config: AcpxProviderConfig): AcpxOutputFormat {
+	if (config.format) return config.format;
+	if (config.captureEvents) return "json";
+	return normalizeAcpxAgent(config.agent).toLowerCase() === "opencode" && isSterileAcpxTarget(config)
+		? "json"
+		: "quiet";
 }
 
 function buildAcpxCommand(
@@ -732,7 +790,9 @@ function buildAcpxCommand(
 	args.push("--format", resolveAcpxFormat(config));
 	args.push("--timeout", String(Math.max(1, Math.ceil(timeoutMs / 1000))));
 	if (cwd) args.push("--cwd", cwd);
-	if (config.model) args.push("--model", config.model);
+	const openCodeProfileOwnsModel =
+		normalizeAcpxAgent(config.agent).toLowerCase() === "opencode" && isSterileAcpxTarget(config);
+	if (config.model && !openCodeProfileOwnsModel) args.push("--model", config.model);
 	args.push(...acpxPermissionArgs(config.permissions));
 	if (config.terminal === "disabled") args.push("--no-terminal");
 	if (allowedTools) args.push("--allowed-tools", allowedTools.join(","));
@@ -884,14 +944,94 @@ function cleanupAcpxAgentProcesses(agent: string, runId: string): void {
 	}
 }
 
+interface AcpxParsedJsonOutput {
+	readonly text?: string;
+	readonly finalSeen: boolean;
+	readonly messageChunks: number;
+	readonly sideEffects: boolean;
+	readonly sessionId?: string;
+	readonly stopReason?: string;
+	readonly usage?: string;
+}
+
+interface AcpxAttemptDiagnostics {
+	readonly exitCode: number;
+	readonly stdoutBytes: number;
+	readonly stderrBytes: number;
+	readonly format: AcpxOutputFormat;
+	readonly durationMs: number;
+	readonly sideEffects: boolean;
+	readonly sessionId?: string;
+	readonly stopReason?: string;
+	readonly usage?: string;
+}
+
+class AcpxEmptyResponseError extends Error {
+	readonly diagnostics: AcpxAttemptDiagnostics;
+
+	constructor(agent: string, diagnostics: AcpxAttemptDiagnostics) {
+		super(`${agent} via ACPX returned empty response`);
+		this.name = "AcpxEmptyResponseError";
+		this.diagnostics = diagnostics;
+	}
+}
+
+function nestedAcpxRecord(event: AcpxJsonEvent, key: "result" | "params"): AcpxJsonEvent | undefined {
+	const value = event[key];
+	return isJsonRecord(value) ? value : undefined;
+}
+
+function extractAcpxSessionId(event: AcpxJsonEvent): string | undefined {
+	return (
+		acpxStringField(event, "sessionId") ??
+		acpxStringField(event, "session_id") ??
+		acpxStringField(nestedAcpxRecord(event, "result") ?? {}, "sessionId") ??
+		acpxStringField(nestedAcpxRecord(event, "result") ?? {}, "session_id") ??
+		acpxStringField(nestedAcpxRecord(event, "params") ?? {}, "sessionId") ??
+		acpxStringField(nestedAcpxRecord(event, "params") ?? {}, "session_id")
+	);
+}
+
+function extractAcpxStopReason(event: AcpxJsonEvent): string | undefined {
+	return (
+		acpxStringField(event, "stopReason") ??
+		acpxStringField(event, "stop_reason") ??
+		acpxStringField(nestedAcpxRecord(event, "result") ?? {}, "stopReason") ??
+		acpxStringField(nestedAcpxRecord(event, "result") ?? {}, "stop_reason")
+	);
+}
+
+function extractAcpxUsage(event: AcpxJsonEvent): string | undefined {
+	const result = nestedAcpxRecord(event, "result");
+	const usage = (result ?? event).usage;
+	if (!isJsonRecord(usage)) return undefined;
+	return JSON.stringify(usage).slice(0, 300);
+}
+
+function isAcpxSideEffectEvent(event: AcpxJsonEvent): boolean {
+	const method = acpxStringField(event, "method")?.toLowerCase();
+	if (method?.includes("permission") || method === "session/request_permission") return true;
+	if (method !== "session/update") return false;
+	const params = nestedAcpxRecord(event, "params");
+	const update = params && isJsonRecord(params.update) ? params.update : undefined;
+	const kind = update ? acpxStringField(update, "sessionUpdate")?.toLowerCase() : undefined;
+	return kind === "tool_call" || kind === "tool_call_update";
+}
+
 function parseAcpxJsonOutput(
 	stdout: string,
 	config: Pick<AcpxProviderConfig, "agent" | "captureEvents" | "maxCapturedEvents" | "onEvent">,
-): string {
+): AcpxParsedJsonOutput {
 	const maxCapturedEvents = Math.max(0, config.maxCapturedEvents ?? 200);
 	let emittedEvents = 0;
 	let finalText: string | undefined;
 	let streamedText = "";
+	let finalSeen = false;
+	let messageChunks = 0;
+	let sideEffects = false;
+	let sessionId: string | undefined;
+	let stopReason: string | undefined;
+	let usage: string | undefined;
 	const lines = stdout
 		.split(/\r?\n/)
 		.map((line) => line.trim())
@@ -911,8 +1051,16 @@ function parseAcpxJsonOutput(
 			throw new Error(`${config.agent} via ACPX emitted non-object JSON event on line ${index + 1}`);
 		}
 		const chunk = extractAcpxMessageChunk(parsed);
-		if (chunk !== undefined) streamedText += chunk;
+		if (chunk !== undefined) {
+			messageChunks += 1;
+			streamedText += chunk;
+		}
+		sideEffects ||= isAcpxSideEffectEvent(parsed);
+		sessionId ??= extractAcpxSessionId(parsed);
 		if (isAcpxFinalEvent(parsed)) {
+			finalSeen = true;
+			stopReason ??= extractAcpxStopReason(parsed);
+			usage ??= extractAcpxUsage(parsed);
 			const candidate = extractAcpxTextCandidate(parsed);
 			if (candidate?.trim()) {
 				finalText = candidate;
@@ -926,8 +1074,143 @@ function parseAcpxJsonOutput(
 		}
 	}
 
-	if (finalText?.trim()) return finalText.trim();
-	throw new Error(`${config.agent} via ACPX JSON output did not include a final response`);
+	return {
+		...(finalText?.trim() ? { text: finalText.trim() } : {}),
+		finalSeen,
+		messageChunks,
+		sideEffects,
+		...(sessionId ? { sessionId } : {}),
+		...(stopReason ? { stopReason } : {}),
+		...(usage ? { usage } : {}),
+	};
+}
+
+function resolveEmptyResponseRetries(config: AcpxProviderConfig): number {
+	const configured = config.emptyResponseRetries ?? DEFAULT_ACPX_EMPTY_RESPONSE_RETRIES;
+	return Math.min(MAX_ACPX_EMPTY_RESPONSE_RETRIES, Math.max(0, Math.floor(configured)));
+}
+
+function quietUsage(stderr: string): string | undefined {
+	return stderr.match(/^\[acpx\] tokens: (.+)$/m)?.[1]?.slice(0, 300);
+}
+
+function formatEmptyResponseError(
+	agent: string,
+	diagnostics: AcpxAttemptDiagnostics,
+	retryCount: number,
+	totalDurationMs: number,
+): Error {
+	const fields = [
+		`exitCode=${diagnostics.exitCode}`,
+		`stdoutBytes=${diagnostics.stdoutBytes}`,
+		`stderrBytes=${diagnostics.stderrBytes}`,
+		`format=${diagnostics.format}`,
+		`sessionId=${diagnostics.sessionId ?? "unknown"}`,
+		`stopReason=${diagnostics.stopReason ?? "unknown"}`,
+		`usage=${diagnostics.usage ?? "unknown"}`,
+		`retryCount=${retryCount}`,
+		`durationMs=${Math.round(totalDurationMs)}`,
+	];
+	return new Error(`${agent} via ACPX returned empty response (${fields.join(", ")})`);
+}
+
+function runAcpxAttempt(
+	config: AcpxProviderConfig,
+	prompt: string,
+	remainingMs: number,
+	signal: AbortSignal | undefined,
+): Promise<string> {
+	const { bin, args, cwd } = buildAcpxCommand(config, remainingMs);
+	const outputFormat = resolveAcpxFormat(config);
+	const runId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+	const startedAt = performance.now();
+	return new Promise<string>((resolve, reject) => {
+		let stdout = "";
+		let stderr = "";
+		let settled = false;
+		let aborted = false;
+		const child = nodeSpawn(bin, args, {
+			cwd,
+			env: acpxEnv(config, runId),
+			stdio: ["pipe", "pipe", "pipe"],
+			detached: process.platform !== "win32",
+			windowsHide: true,
+		});
+		const finish = (fn: () => void): void => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timer);
+			signal?.removeEventListener("abort", onAbort);
+			cleanupAcpxAgentProcesses(config.agent, runId);
+			fn();
+		};
+		const onAbort = (): void => {
+			aborted = true;
+			terminateChildProcessTreeWithEscalation(child);
+		};
+		if (signal?.aborted) onAbort();
+		else signal?.addEventListener("abort", onAbort, { once: true });
+		const timer = setTimeout(() => {
+			terminateChildProcessTreeWithEscalation(child);
+			finish(() => reject(new Error(`${config.agent} via ACPX timeout after ${Math.ceil(remainingMs)}ms`)));
+		}, remainingMs);
+		child.stdout?.setEncoding("utf8");
+		child.stderr?.setEncoding("utf8");
+		child.stdout?.on("data", (chunk) => {
+			stdout += String(chunk);
+		});
+		child.stderr?.on("data", (chunk) => {
+			stderr += String(chunk);
+		});
+		child.on("error", (error) => finish(() => reject(error)));
+		child.on("close", (code) =>
+			finish(() => {
+				if (aborted) {
+					reject(new Error(`${config.agent} via ACPX aborted`));
+					return;
+				}
+				if (code !== 0) {
+					reject(new Error(`${config.agent} via ACPX exited ${code}: ${stderr.slice(0, 300)}`));
+					return;
+				}
+				let text: string | undefined;
+				let parsed: AcpxParsedJsonOutput | undefined;
+				try {
+					if (outputFormat === "json") {
+						parsed = parseAcpxJsonOutput(stdout, config);
+						text = parsed.text;
+					} else {
+						text = stdout.trim();
+					}
+				} catch (error) {
+					reject(error);
+					return;
+				}
+				if (!text) {
+					if (parsed && (!parsed.finalSeen || parsed.sideEffects)) {
+						reject(new Error(`${config.agent} via ACPX JSON output did not include a final response`));
+						return;
+					}
+					reject(
+						new AcpxEmptyResponseError(config.agent, {
+							exitCode: 0,
+							stdoutBytes: Buffer.byteLength(stdout),
+							stderrBytes: Buffer.byteLength(stderr),
+							format: outputFormat,
+							durationMs: performance.now() - startedAt,
+							sideEffects: parsed?.sideEffects ?? false,
+							...(parsed?.sessionId ? { sessionId: parsed.sessionId } : {}),
+							...(parsed?.stopReason ? { stopReason: parsed.stopReason } : {}),
+							...(parsed?.usage || quietUsage(stderr) ? { usage: parsed?.usage ?? quietUsage(stderr) } : {}),
+						}),
+					);
+					return;
+				}
+				resolve(text);
+			}),
+		);
+		child.stdin?.end(prompt);
+	});
 }
 
 export function createAcpxProvider(config: AcpxProviderConfig): LlmProvider {
@@ -939,83 +1222,43 @@ export function createAcpxProvider(config: AcpxProviderConfig): LlmProvider {
 			const signal = generateSignal(opts);
 			return withLlmConcurrency(
 				async () => {
-					const remainingMs = deadline - performance.now();
-					if (remainingMs <= 0) {
-						throw new Error(
-							`${config.agent} via ACPX timeout after ${timeoutMs}ms (deadline exceeded waiting for semaphore)`,
-						);
-					}
-					const { bin, args, cwd } = buildAcpxCommand(config, remainingMs);
-					const outputFormat = resolveAcpxFormat(config);
-					const runId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
-					return new Promise<string>((resolve, reject) => {
-						let stdout = "";
-						let stderr = "";
-						let settled = false;
-						let aborted = false;
-						const child = nodeSpawn(bin, args, {
-							cwd,
-							env: acpxEnv(config.hooks, runId),
-							stdio: ["pipe", "pipe", "pipe"],
-							detached: process.platform !== "win32",
-							windowsHide: true,
-						});
-						const finish = (fn: () => void): void => {
-							if (settled) return;
-							settled = true;
-							clearTimeout(timer);
-							signal?.removeEventListener("abort", onAbort);
-							cleanupAcpxAgentProcesses(config.agent, runId);
-							fn();
-						};
-						const onAbort = (): void => {
-							aborted = true;
-							terminateChildProcessTreeWithEscalation(child);
-						};
-						if (signal?.aborted) {
-							onAbort();
-						} else {
-							signal?.addEventListener("abort", onAbort, { once: true });
+					const retries = isSterileAcpxTarget(config) ? resolveEmptyResponseRetries(config) : 0;
+					const startedAt = performance.now();
+					let lastEmpty: AcpxEmptyResponseError | undefined;
+					for (let attempt = 0; attempt <= retries; attempt += 1) {
+						const remainingMs = deadline - performance.now();
+						if (remainingMs <= 0) {
+							if (lastEmpty) {
+								throw formatEmptyResponseError(
+									config.agent,
+									lastEmpty.diagnostics,
+									attempt - 1,
+									performance.now() - startedAt,
+								);
+							}
+							throw new Error(
+								`${config.agent} via ACPX timeout after ${timeoutMs}ms (deadline exceeded waiting for semaphore)`,
+							);
 						}
-						const timer = setTimeout(() => {
-							terminateChildProcessTreeWithEscalation(child);
-							finish(() => reject(new Error(`${config.agent} via ACPX timeout after ${timeoutMs}ms`)));
-						}, remainingMs);
-						child.stdout?.setEncoding("utf8");
-						child.stderr?.setEncoding("utf8");
-						child.stdout?.on("data", (chunk) => {
-							stdout += String(chunk);
-						});
-						child.stderr?.on("data", (chunk) => {
-							stderr += String(chunk);
-						});
-						child.on("error", (error) => finish(() => reject(error)));
-						child.on("close", (code) =>
-							finish(() => {
-								if (aborted) {
-									reject(new Error(`${config.agent} via ACPX aborted`));
-									return;
-								}
-								if (code !== 0) {
-									reject(new Error(`${config.agent} via ACPX exited ${code}: ${stderr.slice(0, 300)}`));
-									return;
-								}
-								let text: string;
-								try {
-									text = outputFormat === "json" ? parseAcpxJsonOutput(stdout, config) : stdout.trim();
-								} catch (error) {
-									reject(error);
-									return;
-								}
-								if (!text) {
-									reject(new Error(`${config.agent} via ACPX returned empty response`));
-									return;
-								}
-								resolve(text);
-							}),
-						);
-						child.stdin?.end(prompt);
-					});
+						const attemptConfig = attempt === 0 ? config : { ...config, mode: "exec" as const, session: undefined };
+						try {
+							return await runAcpxAttempt(attemptConfig, prompt, remainingMs, signal);
+						} catch (error) {
+							if (!(error instanceof AcpxEmptyResponseError)) throw error;
+							lastEmpty = error;
+							if (attempt >= retries) {
+								throw formatEmptyResponseError(config.agent, error.diagnostics, attempt, performance.now() - startedAt);
+							}
+							logger.warn("inference", "Retrying sterile ACPX empty response", {
+								agent: config.agent,
+								attempt: attempt + 1,
+								format: error.diagnostics.format,
+								sessionId: error.diagnostics.sessionId ?? "unknown",
+								stopReason: error.diagnostics.stopReason ?? "unknown",
+							});
+						}
+					}
+					throw new Error(`${config.agent} via ACPX retry loop exhausted`);
 				},
 				timeoutMs,
 				"acpx",

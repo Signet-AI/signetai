@@ -478,6 +478,7 @@ describe("inference config + decision engine", () => {
 							format: "json",
 							captureEvents: true,
 							maxCapturedEvents: 128,
+							emptyResponseRetries: 9,
 						},
 						models: { default: { model: "gpt-5.4-mini" } },
 					},
@@ -490,6 +491,7 @@ describe("inference config + decision engine", () => {
 			format: "json",
 			captureEvents: true,
 			maxCapturedEvents: 128,
+			emptyResponseRetries: 3,
 		});
 	});
 

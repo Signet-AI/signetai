@@ -135,6 +135,7 @@ inference:
         format: json
         captureEvents: true
         maxCapturedEvents: 200
+        emptyResponseRetries: 1
       models:
         default:
           model: gpt-5.4-mini
@@ -150,6 +151,14 @@ API.
 to JSON when `format` is omitted. Provider-level callers can also attach an
 event callback; Signet limits callback delivery with `maxCapturedEvents`
 (default `200`) while still scanning the full stream for the final response.
+
+ACPX agents can occasionally finish with `end_turn` but no assistant message
+chunks. Signet retries that empty completion in a fresh one-shot session only
+when the target is sterile (`deny-all`, hooks disabled, and an empty tool
+catalog). `emptyResponseRetries` defaults to `1`, is capped at `3`, and can be
+set to `0` to disable the retry. Repeated empties report the output format,
+byte counts, stop metadata when JSON is available, retry count, and duration.
+Tool or permission activity is never retried as an empty completion.
 
 This is intentionally the first Zed-inspired step, not the whole session model:
 Signet now has a typed ACPX event parsing seam, but durable dashboard-visible
