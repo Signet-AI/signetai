@@ -14,7 +14,7 @@ import { syncVecInsert, vectorToBlob } from "../db-helpers";
 import { DEFAULT_PIPELINE_V2 } from "../memory-config";
 import type { PipelineV2Config } from "../memory-config";
 import type { DecisionConfig } from "./decision";
-import { ClaudeCodeCircuitOpenError, type LlmProvider, RateLimitExceededError } from "./provider";
+import { type LlmProvider, RateLimitExceededError } from "./provider";
 import { enqueueExtractionJob, recoverMemoryJobs, startWorker } from "./worker";
 
 // ---------------------------------------------------------------------------
@@ -604,40 +604,6 @@ describe("Worker processing", () => {
 		expect(job?.status).toBe("dead");
 		expect(job?.attempts).toBe(1);
 		expect(job?.error).toContain("Rate limit exceeded");
-	});
-
-	it("restores extraction leases without consuming attempts when Claude Code circuit is open", async () => {
-		insertMemory(
-			db,
-			"mem-claude-circuit",
-			"User prefers a safe Claude Code background extraction setup that does not spend API credits unexpectedly.",
-		);
-		enqueueExtractionJob(accessor, "mem-claude-circuit");
-		let calls = 0;
-		const circuitProvider: LlmProvider = {
-			name: "claude-code:haiku",
-			async generate() {
-				calls += 1;
-				throw new ClaudeCodeCircuitOpenError(
-					"claude-code cooldown active until 2099-01-01T00:00:00.000Z",
-					"usage_limit",
-					"2099-01-01T00:00:00.000Z",
-				);
-			},
-			async available() {
-				return true;
-			},
-		};
-
-		const worker = startWorker(accessor, circuitProvider, PIPELINE_CFG, DECISION_CFG);
-		await Bun.sleep(80);
-		await worker.stop();
-
-		const job = getJob(db, "mem-claude-circuit");
-		expect(calls).toBeGreaterThanOrEqual(1);
-		expect(job?.status).toBe("pending");
-		expect(job?.attempts).toBe(0);
-		expect(job?.error ?? null).toBeNull();
 	});
 
 	it("worker stop() waits for in-flight job", async () => {

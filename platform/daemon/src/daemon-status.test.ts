@@ -61,7 +61,6 @@ describe("daemon status contract", () => {
 		Bun.spawn = originalSpawn;
 		Bun.which = originalWhich;
 		const provider = await import("./pipeline/provider");
-		provider.resetClaudeCodeCircuit();
 		provider.configureLlmConcurrency(2);
 	});
 
@@ -215,44 +214,6 @@ describe("daemon status contract", () => {
 		await state.restartPipelineRuntimeRef?.(loadMemoryConfig(dir));
 
 		expect(getLlmConcurrencyStatus().limit).toBe(1);
-	});
-
-	it("exposes Claude Code circuit cooldown without reporting it as a running worker", async () => {
-		const providerModule = await import("./pipeline/provider");
-		Bun.which = (() => "/tmp/fake-claude") as typeof Bun.which;
-		Bun.spawn = (() =>
-			({
-				pid: 12345,
-				stdout: streamFromString(""),
-				stderr: streamFromString("Claude AI usage limit reached. Try again later.\n"),
-				exited: Promise.resolve(1),
-				kill() {},
-			}) as ReturnType<typeof Bun.spawn>) as typeof Bun.spawn;
-
-		const provider = providerModule.createClaudeCodeProvider({ model: "haiku", cooldownMs: 60_000 });
-		await expect(provider.generate("hello", { timeoutMs: 1000 })).rejects.toThrow(/usage limit/i);
-
-		const res = await app.request("http://localhost/api/pipeline/status");
-		expect(res.status).toBe(200);
-		const body = (await res.json()) as {
-			workers?: {
-				claudeCode?: {
-					running?: unknown;
-					circuit?: {
-						open?: unknown;
-						status?: unknown;
-						reason?: unknown;
-						scope?: unknown;
-					};
-				};
-			};
-		};
-
-		expect(body.workers?.claudeCode?.running).toBe(false);
-		expect(body.workers?.claudeCode?.circuit?.open).toBe(true);
-		expect(body.workers?.claudeCode?.circuit?.status).toBe("open");
-		expect(body.workers?.claudeCode?.circuit?.reason).toBe("usage_limit");
-		expect(body.workers?.claudeCode?.circuit?.scope).toBe("daemon");
 	});
 
 	it("counts non-errored connectors as active for heartbeat telemetry", () => {

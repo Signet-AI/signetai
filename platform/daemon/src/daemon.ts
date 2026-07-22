@@ -70,7 +70,7 @@ import { type DreamingWorkerHandle, startDreamingWorker } from "./pipeline/dream
 import type { WorkerInit } from "./pipeline/extraction-thread-protocol";
 import { invalidateTraversalCache } from "./pipeline/graph-traversal";
 import { stopModelRegistry } from "./pipeline/model-registry";
-import { configureLlmConcurrency, stopOpenCodeServer } from "./pipeline/provider";
+import { configureLlmConcurrency } from "./pipeline/provider";
 import { startReconciler } from "./pipeline/skill-reconciler";
 import { type RepairContext, structuralBackfill } from "./repair-actions";
 import { logFdSnapshot, startEventLoopMonitor, startFdPollMonitor, stopResourceMonitors } from "./resource-monitor";
@@ -1232,7 +1232,6 @@ async function stopPipelineRuntime(): Promise<void> {
 	} catch {}
 
 	closeInferenceProviderResolver();
-	stopOpenCodeServer();
 	stopModelRegistry();
 	invalidateDiagnosticsCache();
 }
