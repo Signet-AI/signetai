@@ -6,6 +6,9 @@ All notable changes to Signet are documented here.
 
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
+### 2026-07-22
+- **Breaking:** replace hand-rolled inference providers with Pi (`@earendil-works/pi-ai`) for direct API calls and ACPX for harness subprocess calls (#947). Existing installs must verify background pipeline operations after updating; see `docs/UPGRADING.md`. Removed executors: `claude-code`, `codex`, `opencode`, `command` (folded into `acpx`); `anthropic`/`openrouter`/`ollama`/`llama-cpp`/`openai-compatible` are now Pi-backed. `acpx` is now a bundled dependency (`0.12.0`). Removed the `platform/daemon-rs` parity merge gate.
+
 ### 2026-07-21
 - Bug fixes: update and verify active install.
 
