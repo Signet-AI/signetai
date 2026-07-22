@@ -65,9 +65,19 @@ export async function createRoutingProvider(opts: CreateRoutingProviderOptions):
 		model: model.model,
 		baseUrl: target.endpoint,
 		apiKey: credential,
-		reasoning:
-			target.openrouter?.reasoning?.enabled ??
-			(model.reasoning !== undefined ? model.reasoning === "deep" : undefined),
+		// Map routing intent to a pi-ai ThinkingLevel (forwarded per-call as
+		// options.reasoning). model.reasoning (RoutingReasoningDepth) defaults to
+		// "medium" for every parsed model, so it cannot alone signal "enable
+		// thinking" without flipping a costly default on for all routed calls.
+		// Treat only explicit non-default signals as intent to emit thinking:
+		// the documented OpenRouter reasoning block, or a deliberately-set
+		// "high" depth. Previously this compared to a nonexistent "deep"
+		// value (TS2367) and never produced a usable level.
+		reasoning: target.openrouter?.reasoning?.enabled
+			? "medium"
+			: model.reasoning === "high"
+				? "high"
+				: undefined,
 		contextWindow: model.contextWindow,
 		name: `${target.executor}:${model.model}`,
 		defaultTimeoutMs: 60_000,

@@ -331,4 +331,225 @@ describe("InferenceRouter legacy API credentials", () => {
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});
+
+	it("forwards per-call reasoning effort when OpenRouter reasoning is enabled (#959)", async () => {
+		// Regression guard for the reasoning fix: on `main`, the factory derived
+		// reasoning from `=== "deep"` (TS2367, never matched) and pi-provider.ts
+		// never forwarded options.reasoning, so thinking was always off. With the
+		// fix, OpenRouter reasoning.enabled produces reasoning: { effort: "medium" }
+		// on the wire. This test fails on main and passes at HEAD.
+		const dir = mkdtempSync(join(tmpdir(), "signet-router-openrouter-reasoning-on-"));
+		try {
+			mkdirSync(join(dir, "memory"), { recursive: true });
+			writeFileSync(
+				join(dir, "agent.yaml"),
+				`inference:
+  defaultPolicy: flash
+  accounts:
+    openrouter-api:
+      kind: api
+      providerFamily: openrouter
+      credentialRef: OPENROUTER_API_KEY
+  targets:
+    flash:
+      executor: openrouter
+      account: openrouter-api
+      openrouter:
+        reasoning:
+          enabled: true
+      models:
+        default:
+          model: deepseek/deepseek-v4-flash
+  policies:
+    flash:
+      mode: automatic
+      allow:
+        - flash/default
+      defaultTargets:
+        - flash/default
+  workloads:
+    sessionSynthesis:
+      target: flash/default
+      taskClass: session_synthesis
+`,
+			);
+
+			process.env.OPENROUTER_API_KEY = "test-openrouter-key";
+			let requestBody: Record<string, unknown> | null = null;
+			globalThis.fetch = mock((input: string | URL | Request, init?: RequestInit) => {
+				const url = String(input);
+				if (url.endsWith("/chat/completions") && typeof init?.body === "string") {
+					const parsed: unknown = JSON.parse(init.body);
+					if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+						requestBody = parsed as Record<string, unknown>;
+					}
+				}
+				if (url.endsWith("/models")) {
+					return Promise.resolve(new Response(JSON.stringify({ data: [] }), { status: 200 }));
+				}
+				return Promise.resolve(openAiSseResponse("flash answer"));
+			}) as unknown as typeof fetch;
+
+			const router = getOrCreateInferenceRouter(dir);
+			const result = await router.execute(
+				{ operation: "session_synthesis", promptPreview: "synthesize" },
+				"Summarize",
+				{ maxTokens: 64, timeoutMs: 1000 },
+			);
+
+			expect(result.ok).toBe(true);
+			// The fix forwards options.reasoning; pi-ai's openrouter thinkingFormat
+			// emits it as { effort: <level> }. Before the fix this was { effort: "none" }
+			// (disabled) or absent.
+			expect(requestBody?.reasoning).toEqual({ effort: "medium" });
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("does not enable reasoning for a medium-depth model by default (#959)", async () => {
+		// RoutingModelConfig.reasoning defaults to "medium" at parse time, so it
+		// must NOT be treated as intent to emit thinking (would flip a costly
+		// default on for every routed call). Only an explicit reasoning block or
+		// a "high" depth enables thinking.
+		const dir = mkdtempSync(join(tmpdir(), "signet-router-reasoning-medium-default-"));
+		try {
+			mkdirSync(join(dir, "memory"), { recursive: true });
+			writeFileSync(
+				join(dir, "agent.yaml"),
+				`inference:
+  defaultPolicy: med
+  accounts:
+    openrouter-api:
+      kind: api
+      providerFamily: openrouter
+      credentialRef: OPENROUTER_API_KEY
+  targets:
+    med:
+      executor: openrouter
+      account: openrouter-api
+      models:
+        default:
+          model: openai/gpt-4o-mini
+          # reasoning omitted -> parses to default "medium"
+  policies:
+    med:
+      mode: automatic
+      allow:
+        - med/default
+      defaultTargets:
+        - med/default
+  workloads:
+    sessionSynthesis:
+      target: med/default
+      taskClass: session_synthesis
+`,
+			);
+
+			process.env.OPENROUTER_API_KEY = "test-openrouter-key";
+			let requestBody: Record<string, unknown> | null = null;
+			globalThis.fetch = mock((input: string | URL | Request, init?: RequestInit) => {
+				const url = String(input);
+				if (url.endsWith("/chat/completions") && typeof init?.body === "string") {
+					const parsed: unknown = JSON.parse(init.body);
+					if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+						requestBody = parsed as Record<string, unknown>;
+					}
+				}
+				if (url.endsWith("/models")) {
+					return Promise.resolve(new Response(JSON.stringify({ data: [] }), { status: 200 }));
+				}
+				return Promise.resolve(openAiSseResponse("med answer"));
+			}) as unknown as typeof fetch;
+
+			const router = getOrCreateInferenceRouter(dir);
+			const result = await router.execute(
+				{ operation: "session_synthesis", promptPreview: "synthesize" },
+				"Summarize",
+				{ maxTokens: 64, timeoutMs: 1000 },
+			);
+
+			expect(result.ok).toBe(true);
+			// Default "medium" depth must NOT enable thinking. pi-ai emits
+			// { effort: "none" } (disabled) or omits — never "medium"/"high".
+			const effort = (requestBody?.reasoning as { effort?: string } | undefined)?.effort;
+			expect(effort === "medium" || effort === "high").toBe(false);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("aggregate_recall suppresses reasoning even on a reasoning:high target (#959)", async () => {
+		// aggregate_recall is latency-sensitive: it must never emit thinking tokens,
+		// even when routed to a target explicitly configured reasoning: high. The
+		// router passes reasoning:false at the call site (mirroring the ACPX
+		// exclusion). Without this guard the fix would regress aggregate-recall
+		// cost/latency whenever its workload target is a high-reasoning model.
+		const dir = mkdtempSync(join(tmpdir(), "signet-router-aggregate-reasoning-"));
+		try {
+			mkdirSync(join(dir, "memory"), { recursive: true });
+			writeFileSync(
+				join(dir, "agent.yaml"),
+				`inference:
+  defaultPolicy: deep
+  accounts:
+    openrouter-api:
+      kind: api
+      providerFamily: openrouter
+      credentialRef: OPENROUTER_API_KEY
+  targets:
+    deep:
+      executor: openrouter
+      account: openrouter-api
+      models:
+        default:
+          model: deepseek/deepseek-v4-flash
+          reasoning: high
+  policies:
+    deep:
+      mode: automatic
+      allow:
+        - deep/default
+      defaultTargets:
+        - deep/default
+  workloads:
+    aggregateRecall:
+      target: deep/default
+      taskClass: session_synthesis
+`,
+			);
+
+			process.env.OPENROUTER_API_KEY = "test-openrouter-key";
+			let requestBody: Record<string, unknown> | null = null;
+			globalThis.fetch = mock((input: string | URL | Request, init?: RequestInit) => {
+				const url = String(input);
+				if (url.endsWith("/chat/completions") && typeof init?.body === "string") {
+					const parsed: unknown = JSON.parse(init.body);
+					if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+						requestBody = parsed as Record<string, unknown>;
+					}
+				}
+				if (url.endsWith("/models")) {
+					return Promise.resolve(new Response(JSON.stringify({ data: [] }), { status: 200 }));
+				}
+				return Promise.resolve(openAiSseResponse("aggregate answer"));
+			}) as unknown as typeof fetch;
+
+			const router = getOrCreateInferenceRouter(dir);
+			const result = await router.execute(
+				{ operation: "aggregate_recall", promptPreview: "what is signet" },
+				"Synthesize",
+				{ maxTokens: 300, timeoutMs: 1000 },
+			);
+
+			expect(result.ok).toBe(true);
+			// The target is reasoning: high, but aggregate_recall must suppress it.
+			// Acceptable wire shapes: reasoning absent, or { effort: "none" }.
+			// A regression would emit { effort: "high" } or { effort: "medium" }.
+			const effort = (requestBody?.reasoning as { effort?: string } | undefined)?.effort;
+			expect(effort === "high" || effort === "medium").toBe(false);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
 });

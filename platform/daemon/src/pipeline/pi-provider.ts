@@ -14,6 +14,7 @@ import {
 	type Context,
 	type Model,
 	type OpenAICompletionsCompat,
+	type ThinkingLevel,
 	type Usage,
 	completeSimple,
 	streamSimple,
@@ -59,7 +60,16 @@ export interface PiModelProviderConfig {
 	readonly baseUrl?: string;
 	/** Resolved credential (API key). Omit for keyless local servers. */
 	readonly apiKey?: string;
-	readonly reasoning?: boolean;
+	/**
+	 * Per-call thinking level forwarded to pi-ai as `options.reasoning`.
+	 * Pi-ai has TWO reasoning fields: `Model.reasoning` (a boolean CAPABILITY
+	 * flag) and `options.reasoning` (a ThinkingLevel that actually turns
+	 * thinking on for the call). Setting the capability flag alone has no
+	 * observable effect — the per-call level must be forwarded too.
+	 * `RoutingReasoningDepth` ("low"|"medium"|"high") is a subset of
+	 * ThinkingLevel ("minimal"|"low"|"medium"|"high"|"xhigh").
+	 */
+	readonly reasoning?: ThinkingLevel;
 	readonly contextWindow?: number;
 	readonly maxTokens?: number;
 	readonly defaultTimeoutMs?: number;
@@ -101,7 +111,7 @@ export function resolvePiModel(config: PiModelProviderConfig): ResolvedModel {
 				api: "anthropic-messages",
 				provider: "anthropic",
 				baseUrl,
-				reasoning: config.reasoning ?? false,
+				reasoning: config.reasoning !== undefined,
 				input: ["text"],
 				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 				contextWindow: config.contextWindow ?? 200_000,
@@ -122,7 +132,7 @@ export function resolvePiModel(config: PiModelProviderConfig): ResolvedModel {
 				api: "openai-completions",
 				provider: "openrouter",
 				baseUrl,
-				reasoning: config.reasoning ?? false,
+				reasoning: config.reasoning !== undefined,
 				input: ["text"],
 				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 				contextWindow: config.contextWindow ?? 128_000,
@@ -154,7 +164,7 @@ export function resolvePiModel(config: PiModelProviderConfig): ResolvedModel {
 				api: "openai-completions",
 				provider: config.executor,
 				baseUrl,
-				reasoning: config.reasoning ?? false,
+				reasoning: config.reasoning !== undefined,
 				input: ["text"],
 				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 				contextWindow: config.contextWindow ?? 128_000,
@@ -238,6 +248,7 @@ export function createPiModelProvider(config: PiModelProviderConfig): StreamCapa
 	const { piModel, apiKey, label } = resolvePiModel(config);
 	const name = config.name ?? label;
 	const defaultTimeoutMs = config.defaultTimeoutMs ?? 60_000;
+	const reasoning = config.reasoning;
 
 	function buildContext(prompt: string): Context {
 		return {
@@ -250,12 +261,20 @@ export function createPiModelProvider(config: PiModelProviderConfig): StreamCapa
 		signal: AbortSignal;
 		maxTokens?: number;
 		temperature?: number;
+		reasoning?: ThinkingLevel;
 	} {
+		// Per-call reasoning override semantics:
+		//   opts.reasoning === false  -> suppress thinking entirely (latency-sensitive ops)
+		//   opts.reasoning is a level -> override the configured level for this call
+		//   opts.reasoning undefined   -> use the provider's configured level
+		const effectiveReasoning: ThinkingLevel | undefined =
+			opts?.reasoning === false ? undefined : (opts?.reasoning ?? reasoning);
 		return {
 			apiKey,
 			signal: abort.signal,
 			...(opts?.maxTokens ? { maxTokens: opts.maxTokens } : {}),
 			...(typeof opts?.temperature === "number" ? { temperature: opts.temperature } : {}),
+			...(effectiveReasoning !== undefined ? { reasoning: effectiveReasoning } : {}),
 		};
 	}
 
