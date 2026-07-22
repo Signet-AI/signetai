@@ -5,6 +5,7 @@ import {
 	type RouteRequest,
 	parseRoutingTargetRef,
 } from "@signet/core";
+import { getModels, getProviders } from "@earendil-works/pi-ai";
 import type { Hono } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import type { AuthMode, TokenClaims } from "../auth/index.js";
@@ -792,6 +793,42 @@ export function mountInferenceRoutes(app: Hono, opts: InferenceRouteOptions = {}
 		return c.json({
 			...result.value,
 			concurrency: concurrencyStatus(opts),
+		});
+	});
+
+	// Catalog of providers + models (pi-ai) and ACPX agents. Backs the dashboard
+	// inference settings redesign (#947). Pure read from the pi-ai catalog; does
+	// not touch credentials or make network calls.
+	app.get("/api/inference/catalog", (c) => {
+		const providers = getProviders();
+		const models: Record<string, Array<{
+			id: string;
+			name: string;
+			contextWindow: number;
+			input: readonly string[];
+			reasoning: boolean;
+		}>> = {};
+		for (const provider of providers) {
+			try {
+				models[provider] = getModels(provider).map((m) => ({
+					id: m.id,
+					name: m.name,
+					contextWindow: m.contextWindow,
+					input: m.input,
+					reasoning: m.reasoning,
+				}));
+			} catch {
+				// A provider whose catalog fails to resolve yields no models; the
+			// picker just shows none for it. Never fail the whole catalog.
+				models[provider] = [];
+			}
+		}
+		return c.json({
+			providers,
+			models,
+			// ACPX agent subcommands (acpx <agent> ...). Static — matches the
+			// agents createAcpxProvider drives. Mirrors `acpx --help` subcommands.
+			acpxAgents: ["claude", "codex", "opencode", "gemini", "pi", "openclaw"],
 		});
 	});
 

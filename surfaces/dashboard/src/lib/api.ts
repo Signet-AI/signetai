@@ -3692,3 +3692,23 @@ export async function getMcpServerAnalytics(
 	if (!response.ok) throw new Error("Failed to fetch server analytics");
 	return response.json();
 }
+
+// Inference catalog (pi-ai providers + models + ACPX agents). Backs the
+// dashboard inference settings redesign (#947).
+export interface CatalogModel {
+	id: string;
+	name: string;
+	contextWindow: number;
+	input: readonly string[];
+	reasoning: boolean;
+}
+export interface InferenceCatalog {
+	providers: readonly string[];
+	models: Record<string, CatalogModel[]>;
+	acpxAgents: readonly string[];
+}
+export async function getInferenceCatalog(): Promise<InferenceCatalog> {
+	const response = await authFetch(`${API_BASE}/api/inference/catalog`);
+	if (!response.ok) throw new Error("Failed to fetch inference catalog");
+	return response.json();
+}
