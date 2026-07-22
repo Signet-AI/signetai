@@ -8,7 +8,7 @@ import type { OpenClawMemoryCapability, OpenClawPluginApi, OpenClawToolDefinitio
 // mocking @signet/core globally, which otherwise leaks into later suites.
 const signet = await import("./index");
 const signetPlugin = signet.default;
-const { memoryStore, sessionSearch, _resetRegistration, _sanitization, cleanupTimedMap } = signet;
+const { memoryRecall, memoryStore, sessionSearch, _resetRegistration, _sanitization, cleanupTimedMap } = signet;
 
 type HookHandler = (event: Record<string, unknown>, ctx: unknown) => Promise<unknown> | unknown;
 type ToolRegistration = OpenClawToolDefinition;
@@ -323,6 +323,14 @@ afterEach(async () => {
 });
 
 describe("signet-memory-openclaw lifecycle hooks", () => {
+	it("delegates recall defaults and bounds to the canonical request builder", async () => {
+		await memoryRecall("default recall", { daemonUrl: "http://daemon.test" });
+		expect(lastMemoryRecallBody).toEqual({ query: "default recall", limit: 10 });
+
+		await memoryRecall("bounded recall", { daemonUrl: "http://daemon.test", limit: 5000 });
+		expect(lastMemoryRecallBody).toEqual({ query: "bounded recall", limit: 100 });
+	});
+
 	it("forwards session_search requests to the transcript search endpoint", async () => {
 		const result = await sessionSearch("Juniper trunk ports", {
 			daemonUrl: "http://daemon.test",

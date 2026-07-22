@@ -136,7 +136,8 @@ export interface RecallRequestOptions {
 	readonly session_key?: string;
 	readonly includeRecalled?: boolean;
 	readonly include_recalled?: boolean;
-	readonly scope?: "global" | "agent" | "session";
+	/** Exact daemon memory-scope string; agent/session isolation use their dedicated fields. */
+	readonly scope?: string;
 	readonly sourceOnly?: boolean;
 	readonly source_only?: boolean;
 	readonly aggregate?: boolean;
@@ -288,11 +289,10 @@ export function applyRecallScoreThreshold(raw: unknown, minScore?: number): unkn
 		...payload,
 		results: filtered,
 		meta: {
+			...(isRecord(payload.meta) ? payload.meta : {}),
 			totalReturned: filtered.length,
 			hasSupplementary: filtered.some((row) => row.supplementary === true),
 			noHits: filtered.length === 0,
-			...(isRecord(payload.meta) && isRecord(payload.meta.dedupe) ? { dedupe: payload.meta.dedupe } : {}),
-			...(isRecord(payload.meta) && isRecord(payload.meta.temporal) ? { temporal: payload.meta.temporal } : {}),
 		},
 	};
 }

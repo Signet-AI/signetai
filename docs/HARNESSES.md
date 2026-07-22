@@ -349,21 +349,20 @@ it during install by deleting the old file and scrubbing any
 
 ### Config File Detection
 
-The connector searches for an OpenCode config file in this order:
+The connector writes the highest-precedence global OpenCode config file:
 
-1. `~/.config/opencode/opencode.json`
-2. `~/.config/opencode/opencode.jsonc`
+1. `~/.config/opencode/opencode.jsonc`
+2. `~/.config/opencode/opencode.json`
 3. `~/.config/opencode/config.json`
 
-The first one found is used. If none exist, `opencode.json` is created
-as the default. JSONC files (with `//` comments and trailing commas)
-are parsed correctly — the connector strips comments and trailing
-commas before parsing.
+This matches OpenCode's load order, where `opencode.jsonc` is merged last. If
+none exist, `opencode.jsonc` is created. Config updates are targeted JSONC
+edits, so comments, trailing commas, and unrelated settings are preserved.
 
 ### MCP Tools
 
-OpenCode also gets MCP tool access via a local server entry registered
-in the config file during install:
+The plugin handles lifecycle hooks; MCP provides on-demand Signet tools. A
+local install without an explicit daemon URL uses the packaged stdio command:
 
 ```json
 {
@@ -377,7 +376,12 @@ in the config file during install:
 }
 ```
 
-The plugin handles lifecycle hooks; MCP provides on-demand memory tools.
+A standalone remote install with `--url` uses OpenCode's remote MCP transport
+instead, pointing at `<daemon-origin>/mcp`, setting `oauth: false`, and adding
+the supplied API key as a bearer header. The key is kept in a mode-0600 managed
+file referenced through OpenCode's `{file:}` substitution, not embedded in the
+config or plugin. This path does not require or create a local Signet identity
+workspace.
 
 ### Supported hooks
 

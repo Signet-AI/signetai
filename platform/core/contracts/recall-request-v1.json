@@ -1,0 +1,180 @@
+{
+	"version": 1,
+	"description": "Transport-neutral recall intent to daemon request contract.",
+	"vectors": [
+		{
+			"name": "canonical-defaults",
+			"clients": ["core", "openclaw", "opencode", "sdk", "hermes"],
+			"query": "graph",
+			"options": {},
+			"expected": {
+				"query": "graph",
+				"limit": 10
+			}
+		},
+		{
+			"name": "lower-limit-bound",
+			"clients": ["core", "openclaw", "opencode", "sdk", "hermes"],
+			"query": "graph",
+			"options": {
+				"limit": 0
+			},
+			"expected": {
+				"query": "graph",
+				"limit": 1
+			}
+		},
+		{
+			"name": "fractional-limit",
+			"clients": ["core", "openclaw", "opencode", "sdk", "hermes"],
+			"query": "graph",
+			"options": {
+				"limit": 12.9
+			},
+			"expected": {
+				"query": "graph",
+				"limit": 12
+			}
+		},
+		{
+			"name": "upper-limit-bound",
+			"clients": ["core", "openclaw", "opencode", "sdk", "hermes"],
+			"query": "graph",
+			"options": {
+				"limit": 5000
+			},
+			"expected": {
+				"query": "graph",
+				"limit": 100
+			}
+		},
+		{
+			"name": "huge-integer-limit",
+			"clients": ["core", "sdk", "hermes"],
+			"query": "graph",
+			"options": {
+				"limit": 10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+			},
+			"expected": {
+				"query": "graph",
+				"limit": 100
+			}
+		},
+		{
+			"name": "canonical-options",
+			"clients": ["core", "sdk"],
+			"query": "architecture",
+			"options": {
+				"keywordQuery": "architecture OR design",
+				"limit": 5,
+				"project": "/tmp/project",
+				"type": "decision",
+				"tags": "architecture",
+				"who": "codex",
+				"pinned": true,
+				"importance_min": 0.8,
+				"since": "2026-01-01",
+				"until": "2026-02-01",
+				"expand": true,
+				"agentId": "explicit-agent",
+				"contextAgentId": "context-agent",
+				"sessionKey": "session-a",
+				"includeRecalled": true,
+				"scope": "world:alpha",
+				"sourceOnly": true,
+				"aggregate": true,
+				"aggregateBudget": "large",
+				"saveAggregate": false
+			},
+			"expected": {
+				"query": "architecture",
+				"keywordQuery": "architecture OR design",
+				"limit": 5,
+				"project": "/tmp/project",
+				"type": "decision",
+				"tags": "architecture",
+				"who": "codex",
+				"pinned": true,
+				"importance_min": 0.8,
+				"since": "2026-01-01",
+				"until": "2026-02-01",
+				"expand": true,
+				"agentId": "explicit-agent",
+				"sessionKey": "session-a",
+				"includeRecalled": true,
+				"scope": "world:alpha",
+				"sourceOnly": true,
+				"aggregate": true,
+				"aggregateBudget": "large",
+				"saveAggregate": false
+			}
+		},
+		{
+			"name": "snake-case-aliases",
+			"clients": ["core"],
+			"query": "aliases",
+			"options": {
+				"keyword_query": "aliases OR normalization",
+				"agent_id": "agent-a",
+				"session_key": "session-a",
+				"include_recalled": true,
+				"source_only": true,
+				"aggregate_budget": "medium",
+				"save_aggregate": false
+			},
+			"expected": {
+				"query": "aliases",
+				"keywordQuery": "aliases OR normalization",
+				"limit": 10,
+				"agentId": "agent-a",
+				"sessionKey": "session-a",
+				"includeRecalled": true,
+				"sourceOnly": true,
+				"aggregateBudget": "medium",
+				"saveAggregate": false
+			}
+		},
+		{
+			"name": "false-flags-are-omitted",
+			"clients": ["core", "sdk", "hermes"],
+			"query": "flags",
+			"options": {
+				"pinned": false,
+				"expand": false,
+				"includeRecalled": false,
+				"sourceOnly": false,
+				"aggregate": false
+			},
+			"expected": {
+				"query": "flags",
+				"limit": 10
+			}
+		},
+		{
+			"name": "aggregate-save-false-is-preserved",
+			"clients": ["core", "openclaw", "opencode", "sdk", "hermes"],
+			"query": "history",
+			"options": {
+				"aggregate": true,
+				"aggregateBudget": "small",
+				"saveAggregate": false
+			},
+			"expected": {
+				"query": "history",
+				"limit": 10,
+				"aggregate": true,
+				"aggregateBudget": "small",
+				"saveAggregate": false
+			}
+		}
+	],
+	"overrides": {
+		"unreal": {
+			"defaultLimit": 6,
+			"minimumLimit": 1,
+			"maximumLimit": 20,
+			"includeRecalled": true,
+			"scope": "world-or-player"
+		}
+	}
+}

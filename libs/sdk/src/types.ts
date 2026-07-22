@@ -1,5 +1,4 @@
 // Response types for the Signet daemon HTTP API.
-// Standalone — no dependency on @signet/core.
 
 export interface MemoryRecord {
 	readonly id: string;
@@ -115,6 +114,44 @@ export interface RecallEntity {
 	readonly name: string;
 	readonly type: string;
 	readonly aspects: readonly RecallEntityAspect[];
+}
+
+export interface SdkRecallOptions {
+	readonly keywordQuery?: string;
+	readonly keyword_query?: string;
+	readonly limit?: number;
+	readonly project?: string;
+	readonly type?: string;
+	readonly tags?: string;
+	readonly who?: string;
+	readonly pinned?: boolean;
+	readonly importance_min?: number;
+	readonly since?: string;
+	readonly until?: string;
+	readonly time?: {
+		readonly start?: string;
+		readonly end?: string;
+		readonly facets?: readonly ("captured" | "session" | "source" | "observed" | "occurred" | "valid")[];
+		readonly mode?: "auto" | "timeline" | "filter";
+	};
+	readonly expand?: boolean;
+	readonly agentId?: string;
+	readonly agent_id?: string;
+	readonly contextAgentId?: string;
+	readonly sessionKey?: string;
+	readonly session_key?: string;
+	readonly includeRecalled?: boolean;
+	readonly include_recalled?: boolean;
+	readonly scope?: string;
+	readonly sourceOnly?: boolean;
+	readonly source_only?: boolean;
+	readonly aggregate?: boolean;
+	readonly aggregateBudget?: "small" | "medium" | "large";
+	readonly aggregate_budget?: "small" | "medium" | "large";
+	readonly saveAggregate?: boolean;
+	readonly save_aggregate?: boolean;
+	/** Applied to returned rows by the SDK; never sent to the daemon. */
+	readonly minScore?: number;
 }
 
 export interface RecallResponse {

@@ -96,7 +96,10 @@ const { results, query, method, meta } = await signet.recall("language preferenc
   limit: 10,
   time: { start: "2026-05-13T00:00:00Z", end: "2026-05-14T00:00:00Z" },
   expand: true,
+  scope: "world:alpha",
 });
+// Omitted limits are sent as 10; request limits are bounded to 1..100
+// scope is an exact daemon memory-scope string; use agentId/sessionKey for isolation
 // meta.timings?.stages — daemon-side recall stages and durations
 // meta.temporal — resolved temporal window when date recall is active
 ```
@@ -122,8 +125,11 @@ const result = await signet.recall("language preferences", {
 // result.meta.timings — present when the daemon returns recall stage timings
 ```
 
-`minScore` is applied client-side by the SDK after the daemon returns recall
-results. This keeps the API contract honest while preserving compatibility for
+`recall()` and `recallOrThrow()` use the canonical Signet request builder, so
+they share default, bound, alias, omission, session, agent, scope, and aggregate
+semantics with runtime integrations. `minScore` is applied client-side by the
+SDK after the daemon returns recall results and is never included in daemon
+JSON. This keeps the API contract honest while preserving compatibility for
 existing SDK callers that already rely on score thresholding.
 
 Explicit aggregate recall is available through the same method:
@@ -1806,7 +1812,8 @@ try {
   const { results, meta } = await signet.recallOrThrow("user preferences", {
     type: "preference",
     limit: 5,
-    minScore: 0.5,
+    minScore: 0.5, // applied locally; never sent to the daemon
+    agentId: "my-agent",
   });
   // Guaranteed to have at least one result
   // meta.totalReturned matches the filtered result count

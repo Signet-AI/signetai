@@ -3,6 +3,28 @@ import type { DaemonClient } from "./daemon-client.js";
 import { createTools } from "./tools.js";
 
 describe("createTools", () => {
+	test("memory_search uses canonical defaults, bounds, and scope serialization", async () => {
+		const captured: unknown[] = [];
+		const client = {
+			post: async (_path: string, body: unknown) => {
+				captured.push(body);
+				return { results: [], meta: { totalReturned: 0, hasSupplementary: false, noHits: true } };
+			},
+		} as unknown as DaemonClient;
+		const tools = createTools(client);
+
+		await tools.memory_search.execute({ query: "default recall" }, {} as never);
+		await tools.memory_search.execute(
+			{ query: "bounded recall", limit: 5000, scope: "world:alpha", include_recalled: true },
+			{} as never,
+		);
+
+		expect(captured).toEqual([
+			{ query: "default recall", limit: 10 },
+			{ query: "bounded recall", limit: 100, scope: "world:alpha", includeRecalled: true },
+		]);
+	});
+
 	test("session_search posts to the transcript search endpoint", async () => {
 		let capturedPath = "";
 		let capturedBody: unknown;

@@ -22,8 +22,23 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, relative } from "node:path";
-import { BaseConnector, type InstallResult, type UninstallResult, atomicWriteJson, isSignetGeneratedFile } from "@signet/connector-base";
-import { OPENCODE_PIPELINE_AGENT, OPENCODE_PIPELINE_SYSTEM_PROMPT, expandHome, hasValidIdentity, loadIdentityMode } from "@signet/core";
+import {
+	BaseConnector,
+	type InstallResult,
+	type UninstallResult,
+	atomicWriteJson,
+	atomicWriteText,
+	isSignetGeneratedFile,
+} from "@signet/connector-base";
+import {
+	OPENCODE_PIPELINE_AGENT,
+	OPENCODE_PIPELINE_SYSTEM_PROMPT,
+	expandHome,
+	hasValidIdentity,
+	loadIdentityMode,
+	resolveSignetDaemonUrl,
+} from "@signet/core";
+import { type ParseError, applyEdits, modify, parse } from "jsonc-parser/lib/esm/main.js";
 import { PLUGIN_BUNDLE } from "./plugin-bundle.js";
 
 // ============================================================================
@@ -31,6 +46,8 @@ import { PLUGIN_BUNDLE } from "./plugin-bundle.js";
 // ============================================================================
 
 type JsonObject = Record<string, unknown>;
+
+const API_KEY_FILE_NAME = ".signet-api-key";
 
 function isJsonObject(value: unknown): value is JsonObject {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -43,7 +60,7 @@ function readTrimmedEnv(name: string): string | undefined {
 
 function signetRuntimeEnv(): Record<string, string> {
 	const env: Record<string, string> = {};
-	const daemonUrl = readTrimmedEnv("SIGNET_DAEMON_URL");
+	const daemonUrl = configuredDaemonUrl();
 	const apiKey = readTrimmedEnv("SIGNET_API_KEY") ?? readTrimmedEnv("SIGNET_TOKEN");
 	const agentId = readTrimmedEnv("SIGNET_AGENT_ID");
 	if (daemonUrl) env.SIGNET_DAEMON_URL = daemonUrl;
@@ -52,159 +69,59 @@ function signetRuntimeEnv(): Record<string, string> {
 	return env;
 }
 
-function buildPluginBundle(): string {
+function buildPluginBundle(apiKeyFilePath?: string): string {
 	const env = signetRuntimeEnv();
-	const entries = Object.entries(env);
-	if (entries.length === 0) return PLUGIN_BUNDLE;
-	const bootstrap = entries
-		.map(([key, value]) => `process.env[${JSON.stringify(key)}] = ${JSON.stringify(value)};`)
-		.join("\n");
-	return `${bootstrap}\n${PLUGIN_BUNDLE}`;
-}
-
-function toStringArray(value: unknown): string[] {
-	if (!Array.isArray(value)) return [];
-
-	const strings: string[] = [];
-	for (const item of value) {
-		if (typeof item === "string") {
-			strings.push(item);
-		}
+	if (apiKeyFilePath) delete env.SIGNET_API_KEY;
+	const assignments = Object.entries(env).map(
+		([key, value]) => `process.env[${JSON.stringify(key)}] = ${JSON.stringify(value)};`,
+	);
+	if (apiKeyFilePath) {
+		assignments.unshift('import { readFileSync as __signetReadFileSync } from "node:fs";');
+		assignments.push(
+			`process.env["SIGNET_API_KEY"] = __signetReadFileSync(${JSON.stringify(apiKeyFilePath)}, "utf-8").trim();`,
+		);
 	}
-
-	return strings;
-}
-
-function stripJsonComments(source: string): string {
-	let result = "";
-	let inString = false;
-	let quote = '"';
-	let escaped = false;
-	let inSingleLineComment = false;
-	let inMultiLineComment = false;
-
-	for (let i = 0; i < source.length; i++) {
-		const ch = source[i];
-		const next = source[i + 1];
-
-		if (inSingleLineComment) {
-			if (ch === "\n") {
-				inSingleLineComment = false;
-				result += ch;
-			}
-			continue;
-		}
-
-		if (inMultiLineComment) {
-			if (ch === "*" && next === "/") {
-				inMultiLineComment = false;
-				i++;
-			}
-			continue;
-		}
-
-		if (inString) {
-			result += ch;
-			if (escaped) {
-				escaped = false;
-			} else if (ch === "\\") {
-				escaped = true;
-			} else if (ch === quote) {
-				inString = false;
-			}
-			continue;
-		}
-
-		if (ch === '"' || ch === "'") {
-			inString = true;
-			quote = ch;
-			result += ch;
-			continue;
-		}
-
-		if (ch === "/" && next === "/") {
-			inSingleLineComment = true;
-			i++;
-			continue;
-		}
-
-		if (ch === "/" && next === "*") {
-			inMultiLineComment = true;
-			i++;
-			continue;
-		}
-
-		result += ch;
-	}
-
-	return result;
-}
-
-function stripTrailingCommas(source: string): string {
-	let result = "";
-	let inString = false;
-	let quote = '"';
-	let escaped = false;
-
-	for (let i = 0; i < source.length; i++) {
-		const ch = source[i];
-
-		if (inString) {
-			result += ch;
-			if (escaped) {
-				escaped = false;
-			} else if (ch === "\\") {
-				escaped = true;
-			} else if (ch === quote) {
-				inString = false;
-			}
-			continue;
-		}
-
-		if (ch === '"' || ch === "'") {
-			inString = true;
-			quote = ch;
-			result += ch;
-			continue;
-		}
-
-		if (ch === ",") {
-			let j = i + 1;
-			while (j < source.length && /\s/.test(source[j])) {
-				j++;
-			}
-			if (source[j] === "}" || source[j] === "]") {
-				continue;
-			}
-		}
-
-		result += ch;
-	}
-
-	return result;
+	if (assignments.length === 0) return PLUGIN_BUNDLE;
+	return `${assignments.join("\n")}\n${PLUGIN_BUNDLE}`;
 }
 
 function parseJsonOrJsonc(raw: string): JsonObject {
-	const content = raw.replace(/^\uFEFF/, "");
-
-	try {
-		const parsed: unknown = JSON.parse(content);
-		if (isJsonObject(parsed)) {
-			return parsed;
-		}
-	} catch {
-		// Fall through to JSONC-compatible parse.
+	const errors: ParseError[] = [];
+	const parsed: unknown = parse(raw.replace(/^\uFEFF/, ""), errors, {
+		allowTrailingComma: true,
+		disallowComments: false,
+	});
+	if (errors.length > 0) {
+		const first = errors[0];
+		throw new Error(`Invalid OpenCode JSONC at offset ${first.offset} (code ${first.error})`);
 	}
-
-	const withoutComments = stripJsonComments(content);
-	const withoutTrailingCommas = stripTrailingCommas(withoutComments);
-	const parsed: unknown = JSON.parse(withoutTrailingCommas);
-
-	if (!isJsonObject(parsed)) {
-		throw new Error("OpenCode config must be a top-level object");
-	}
-
+	if (!isJsonObject(parsed)) throw new Error("OpenCode config must be a top-level object");
 	return parsed;
+}
+
+function formattingOptions(source: string): { insertSpaces: boolean; tabSize: number; eol: string } {
+	const indent = source.match(/(?:^|\r?\n)([\t ]+)"/)?.[1];
+	return {
+		insertSpaces: !indent?.includes("\t"),
+		tabSize: indent && !indent.includes("\t") ? indent.length : 2,
+		eol: source.includes("\r\n") ? "\r\n" : "\n",
+	};
+}
+
+function writeConfigValue(configPath: string, path: readonly (string | number)[], value: unknown): void {
+	const raw = readFileSync(configPath, "utf-8");
+	const hasBom = raw.startsWith("\uFEFF");
+	const source = hasBom ? raw.slice(1) : raw;
+	const edits = modify(source, [...path], value, { formattingOptions: formattingOptions(source) });
+	if (edits.length === 0) return;
+	const updated = applyEdits(source, edits);
+	atomicWriteText(configPath, hasBom ? `\uFEFF${updated}` : updated);
+}
+
+function configuredDaemonUrl(): string | undefined {
+	const daemonUrl = readTrimmedEnv("SIGNET_DAEMON_URL");
+	if (!daemonUrl) return undefined;
+	return resolveSignetDaemonUrl({ env: { SIGNET_DAEMON_URL: daemonUrl } });
 }
 
 // ============================================================================
@@ -232,7 +149,7 @@ export class OpenCodeConnector extends BaseConnector {
 				return candidate;
 			}
 		}
-		return join(opencodePath, "opencode.json");
+		return join(opencodePath, "opencode.jsonc");
 	}
 
 	private getPluginsPath(opencodePath: string): string {
@@ -241,6 +158,10 @@ export class OpenCodeConnector extends BaseConnector {
 
 	private getPluginFilePath(opencodePath: string): string {
 		return join(this.getPluginsPath(opencodePath), "signet.mjs");
+	}
+
+	private getApiKeyFilePath(opencodePath: string): string {
+		return join(this.getPluginsPath(opencodePath), API_KEY_FILE_NAME);
 	}
 
 	private getPluginConfigEntry(opencodePath: string): string {
@@ -259,10 +180,11 @@ export class OpenCodeConnector extends BaseConnector {
 	async install(basePath: string): Promise<InstallResult> {
 		const filesWritten: string[] = [];
 		const expandedBasePath = expandHome(basePath || join(homedir(), ".agents"));
+		const daemonUrl = configuredDaemonUrl();
+		const identityAvailable = hasValidIdentity(expandedBasePath);
+		const identityMode = identityAvailable ? loadIdentityMode(expandedBasePath) : undefined;
 
-		const identityMode = loadIdentityMode(expandedBasePath);
-
-		if (!hasValidIdentity(expandedBasePath)) {
+		if (!identityAvailable && !daemonUrl) {
 			return {
 				success: false,
 				message: `No valid Signet identity found at ${expandedBasePath}`,
@@ -270,13 +192,20 @@ export class OpenCodeConnector extends BaseConnector {
 			};
 		}
 
-		const strippedAgentsPath = this.stripLegacySignetBlock(expandedBasePath);
-		if (strippedAgentsPath !== null) {
-			filesWritten.push(strippedAgentsPath);
-		}
-
 		const opencodePath = this.getOpenCodePath();
 		const pluginsPath = this.getPluginsPath(opencodePath);
+
+		// OpenCode parses every global config layer. Validate all of them before
+		// mutating anything so a malformed lower-precedence file cannot leave a
+		// partial install or make the effective integration unloadable.
+		this.validateConfigCandidates(opencodePath);
+
+		if (identityAvailable) {
+			const strippedAgentsPath = this.stripLegacySignetBlock(expandedBasePath);
+			if (strippedAgentsPath !== null) {
+				filesWritten.push(strippedAgentsPath);
+			}
+		}
 
 		if (!existsSync(opencodePath)) {
 			mkdirSync(opencodePath, { recursive: true });
@@ -289,22 +218,36 @@ export class OpenCodeConnector extends BaseConnector {
 		// Migrate away from legacy memory.mjs before writing new plugin
 		this.migrateFromLegacy(opencodePath);
 
+		// Keep remote credentials out of the world-readable config and plugin.
+		// OpenCode expands the file token while loading config, and the lifecycle
+		// plugin reads the same mode-0600 file at runtime.
+		const apiKey = readTrimmedEnv("SIGNET_API_KEY") ?? readTrimmedEnv("SIGNET_TOKEN");
+		const apiKeyFilePath = this.getApiKeyFilePath(opencodePath);
+		if (apiKey) {
+			atomicWriteText(apiKeyFilePath, `${apiKey}\n`, 0o600);
+			filesWritten.push(apiKeyFilePath);
+		} else if (existsSync(apiKeyFilePath)) {
+			rmSync(apiKeyFilePath);
+		}
+
 		// Write bundled plugin and register it in config so runtime loading
 		// does not depend on undocumented auto-discovery behavior.
 		const pluginFilePath = this.getPluginFilePath(opencodePath);
-		writeFileSync(pluginFilePath, buildPluginBundle());
+		writeFileSync(pluginFilePath, buildPluginBundle(apiKey ? apiKeyFilePath : undefined));
 		filesWritten.push(pluginFilePath);
 		this.ensureConfigFile(opencodePath);
 		this.registerPlugin(opencodePath);
 
-		// Generate AGENTS.md from identity files only when identity is managed
+		// Generate AGENTS.md only from an available managed identity. Remote-only
+		// installs do not synthesize a local workspace or identity files.
 		if (identityMode === "managed") {
 			const agentsMdPath = await this.generateAgentsMd(expandedBasePath);
 			if (agentsMdPath) {
 				filesWritten.push(agentsMdPath);
 			}
 		} else {
-			// Clean up any previously Signet-generated AGENTS.md when identity is off/passthrough
+			// Clean up any previously Signet-generated AGENTS.md when identity is
+			// unavailable, off, or passthrough. User-owned files are untouched.
 			const staleAgentsMd = join(this.getOpenCodePath(), "AGENTS.md");
 			if (existsSync(staleAgentsMd)) {
 				try {
@@ -318,8 +261,9 @@ export class OpenCodeConnector extends BaseConnector {
 			}
 		}
 
-		// Register Signet MCP server in OpenCode config
-		this.registerMcpServer(opencodePath);
+		// Explicit daemon URLs use OpenCode's remote Streamable HTTP MCP client.
+		// Local installs retain the packaged signet-mcp stdio behavior.
+		this.registerMcpServer(opencodePath, daemonUrl, apiKey ? `./plugins/${API_KEY_FILE_NAME}` : undefined);
 
 		// Register pipeline agent for lightweight extraction sessions
 		this.registerPipelineAgent(opencodePath);
@@ -327,7 +271,7 @@ export class OpenCodeConnector extends BaseConnector {
 		// Symlink skills directory
 		const skillsSource = join(expandedBasePath, "skills");
 		const skillsDest = join(opencodePath, "skills");
-		if (existsSync(skillsSource)) {
+		if (identityAvailable && existsSync(skillsSource)) {
 			this.symlinkSkills(skillsSource, skillsDest);
 		}
 
@@ -349,6 +293,12 @@ export class OpenCodeConnector extends BaseConnector {
 		if (existsSync(pluginFilePath)) {
 			rmSync(pluginFilePath);
 			filesRemoved.push(pluginFilePath);
+		}
+
+		const apiKeyFilePath = this.getApiKeyFilePath(opencodePath);
+		if (existsSync(apiKeyFilePath)) {
+			rmSync(apiKeyFilePath);
+			filesRemoved.push(apiKeyFilePath);
 		}
 
 		const agentsMdPath = join(opencodePath, "AGENTS.md");
@@ -404,179 +354,149 @@ export class OpenCodeConnector extends BaseConnector {
 	// ============================================================================
 
 	/**
-	 * Remove legacy memory.mjs installation artifacts
-	 *
-	 * Deletes the old memory.mjs from the OpenCode root directory and scrubs
-	 * any file:// URL or path referencing it from all known config candidates.
+	 * Remove legacy memory.mjs installation artifacts.
 	 */
 	private migrateFromLegacy(opencodePath: string): void {
 		const legacyPluginPath = join(opencodePath, "memory.mjs");
-
-		if (existsSync(legacyPluginPath)) {
-			rmSync(legacyPluginPath);
-		}
+		if (existsSync(legacyPluginPath)) rmSync(legacyPluginPath);
 
 		for (const configPath of this.getConfigCandidates(opencodePath)) {
 			if (!existsSync(configPath)) continue;
-
-			let config: JsonObject;
-			try {
-				config = parseJsonOrJsonc(readFileSync(configPath, "utf-8"));
-			} catch {
-				continue;
-			}
-
-			const changed = this.removeMemoryMjsEntries(config);
-			if (changed) {
-				atomicWriteJson(configPath, config);
+			const config = this.readConfigForCleanup(configPath);
+			if (!config) continue;
+			for (const key of ["plugin", "plugins"] as const) {
+				const entries = Array.isArray(config[key]) ? config[key] : [];
+				this.removeArrayEntries(configPath, key, entries, (entry) => this.isLegacyPluginEntry(entry));
 			}
 		}
-	}
-
-	/**
-	 * Scrub any plugin entry that references memory.mjs from the config object.
-	 * Returns true if the config was modified.
-	 */
-	private removeMemoryMjsEntries(config: JsonObject): boolean {
-		const isLegacyEntry = (entry: string): boolean => {
-			const t = entry.trim();
-			if (t === "./memory.mjs" || t === "memory.mjs") return true;
-			if (t.endsWith("/memory.mjs")) return true;
-			return false;
-		};
-
-		let changed = false;
-
-		for (const key of ["plugin", "plugins"] as const) {
-			if (!(key in config)) continue;
-
-			const current = toStringArray(config[key]);
-			const filtered = current.filter((e) => !isLegacyEntry(e));
-
-			if (filtered.length !== current.length) {
-				config[key] = filtered;
-				changed = true;
-			}
-		}
-
-		return changed;
 	}
 
 	// ============================================================================
 	// Internal helpers
 	// ============================================================================
 
-	/**
-	 * Register Signet MCP server in OpenCode config file
-	 */
+	private readConfig(configPath: string): JsonObject {
+		try {
+			return parseJsonOrJsonc(readFileSync(configPath, "utf-8"));
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			throw new Error(`Cannot update OpenCode config ${configPath}: ${message}`);
+		}
+	}
+
+	private validateConfigCandidates(opencodePath: string): void {
+		for (const configPath of this.getConfigCandidates(opencodePath)) {
+			if (existsSync(configPath)) this.readConfig(configPath);
+		}
+	}
+
+	private readConfigForCleanup(configPath: string): JsonObject | undefined {
+		try {
+			return this.readConfig(configPath);
+		} catch (error) {
+			console.warn(`[signet] Warning: ${error instanceof Error ? error.message : String(error)}`);
+			return undefined;
+		}
+	}
+
+	private isLegacyPluginEntry(entry: unknown): boolean {
+		if (typeof entry !== "string") return false;
+		const trimmed = entry.trim();
+		return trimmed === "./memory.mjs" || trimmed === "memory.mjs" || trimmed.endsWith("/memory.mjs");
+	}
+
+	private pluginSpecifier(entry: unknown): string | undefined {
+		if (typeof entry === "string") return entry;
+		if (Array.isArray(entry) && typeof entry[0] === "string") return entry[0];
+		return undefined;
+	}
+
+	private removeArrayEntries(
+		configPath: string,
+		key: string,
+		entries: readonly unknown[],
+		shouldRemove: (entry: unknown) => boolean,
+	): void {
+		for (let index = entries.length - 1; index >= 0; index--) {
+			if (shouldRemove(entries[index])) writeConfigValue(configPath, [key, index], undefined);
+		}
+	}
+
 	private registerPlugin(opencodePath: string): void {
 		const pluginEntry = this.getPluginConfigEntry(opencodePath);
-
-		for (const configPath of this.getConfigCandidates(opencodePath)) {
-			if (!existsSync(configPath)) continue;
-
-			let config: JsonObject;
-			try {
-				config = parseJsonOrJsonc(readFileSync(configPath, "utf-8"));
-			} catch {
-				continue;
-			}
-
-			const existing = toStringArray(config.plugin);
-			if (!existing.includes(pluginEntry)) {
-				config.plugin = [...existing, pluginEntry];
-				atomicWriteJson(configPath, config);
-			}
-			return;
+		this.removePlugin(opencodePath);
+		const configPath = this.getConfigPath();
+		const config = this.readConfig(configPath);
+		const entries = Array.isArray(config.plugin) ? config.plugin : [];
+		if (Array.isArray(config.plugin)) {
+			writeConfigValue(configPath, ["plugin", entries.length], pluginEntry);
+		} else {
+			writeConfigValue(configPath, ["plugin"], [pluginEntry]);
 		}
 	}
 
 	private removePlugin(opencodePath: string): void {
 		const pluginEntry = this.getPluginConfigEntry(opencodePath);
-
 		for (const configPath of this.getConfigCandidates(opencodePath)) {
 			if (!existsSync(configPath)) continue;
+			const config = this.readConfigForCleanup(configPath);
+			if (!config) continue;
+			const entries = Array.isArray(config.plugin) ? config.plugin : [];
+			this.removeArrayEntries(configPath, "plugin", entries, (entry) => this.pluginSpecifier(entry) === pluginEntry);
+		}
+	}
 
-			let config: JsonObject;
-			try {
-				config = parseJsonOrJsonc(readFileSync(configPath, "utf-8"));
-			} catch {
-				continue;
-			}
+	private registerMcpServer(opencodePath: string, daemonUrl?: string, apiKeyFile?: string): void {
+		// Remove old local/remote Signet entries from every precedence layer first.
+		// Otherwise OpenCode's deep merge can retain incompatible local fields.
+		this.removeMcpServer(opencodePath);
+		const configPath = this.getConfigPath();
+		this.readConfig(configPath);
 
-			const existing = toStringArray(config.plugin);
-			const filtered = existing.filter((entry) => entry !== pluginEntry);
-			if (filtered.length !== existing.length) {
-				config.plugin = filtered;
-				atomicWriteJson(configPath, config);
-			}
+		if (daemonUrl) {
+			writeConfigValue(configPath, ["mcp", "signet"], {
+				type: "remote",
+				url: `${daemonUrl}/mcp`,
+				...(apiKeyFile ? { headers: { Authorization: `Bearer {file:${apiKeyFile}}` } } : {}),
+				oauth: false,
+				enabled: true,
+			});
 			return;
 		}
-	}
 
-	private registerMcpServer(opencodePath: string): void {
-		for (const configPath of this.getConfigCandidates(opencodePath)) {
-			if (!existsSync(configPath)) continue;
-
-			let config: JsonObject;
-			try {
-				config = parseJsonOrJsonc(readFileSync(configPath, "utf-8"));
-			} catch {
-				continue;
+		// On Windows, spawn() without shell:true cannot resolve .cmd wrappers,
+		// so use "node" + mcp-stdio.js path instead.
+		let mcpCommand: string[] = ["signet-mcp"];
+		if (process.platform === "win32") {
+			const cliEntry = process.argv[1] || "";
+			const mcpJs = join(cliEntry, "..", "..", "dist", "mcp-stdio.js");
+			if (existsSync(mcpJs)) {
+				mcpCommand = [process.execPath, mcpJs];
+			} else {
+				console.warn(
+					`[signet] Warning: could not resolve mcp-stdio.js from argv[1]="${cliEntry}". MCP server config will use "signet-mcp" which may fail on Windows without shell:true.`,
+				);
 			}
-
-			const existingMcp = isJsonObject(config.mcp) ? (config.mcp as JsonObject) : {};
-			// On Windows, spawn() without shell:true cannot resolve .cmd
-			// wrappers, so use "node" + mcp-stdio.js path instead.
-			let mcpCommand: string[] = ["signet-mcp"];
-			if (process.platform === "win32") {
-				const cliEntry = process.argv[1] || "";
-				const mcpJs = join(cliEntry, "..", "..", "dist", "mcp-stdio.js");
-				if (existsSync(mcpJs)) {
-					mcpCommand = [process.execPath, mcpJs];
-				} else {
-					console.warn(
-						`[signet] Warning: could not resolve mcp-stdio.js from argv[1]="${cliEntry}". ` +
-							`MCP server config will use "signet-mcp" which may fail on Windows without shell:true.`,
-					);
-				}
-			}
-			const environment = signetRuntimeEnv();
-			config.mcp = {
-				...existingMcp,
-				signet: {
-					type: "local",
-					command: mcpCommand,
-					...(Object.keys(environment).length > 0 ? { environment } : {}),
-					enabled: true,
-				},
-			};
-			atomicWriteJson(configPath, config);
-			return; // Only update first found config
 		}
+		const environment = signetRuntimeEnv();
+		if (apiKeyFile) environment.SIGNET_API_KEY = `{file:${apiKeyFile}}`;
+		writeConfigValue(configPath, ["mcp", "signet"], {
+			type: "local",
+			command: mcpCommand,
+			...(Object.keys(environment).length > 0 ? { environment } : {}),
+			enabled: true,
+		});
 	}
 
-	/**
-	 * Remove Signet MCP server from OpenCode config file
-	 */
 	private removeMcpServer(opencodePath: string): void {
 		for (const configPath of this.getConfigCandidates(opencodePath)) {
 			if (!existsSync(configPath)) continue;
-
-			let config: JsonObject;
-			try {
-				config = parseJsonOrJsonc(readFileSync(configPath, "utf-8"));
-			} catch {
-				continue;
-			}
-
-			if (isJsonObject(config.mcp)) {
-				const mcp = config.mcp as JsonObject;
-				delete mcp.signet;
-				if (Object.keys(mcp).length === 0) {
-					delete config.mcp;
-				}
-				atomicWriteJson(configPath, config);
+			const config = this.readConfigForCleanup(configPath);
+			if (!config || !isJsonObject(config.mcp) || !("signet" in config.mcp)) continue;
+			if (Object.keys(config.mcp).length === 1) {
+				writeConfigValue(configPath, ["mcp"], undefined);
+			} else {
+				writeConfigValue(configPath, ["mcp", "signet"], undefined);
 			}
 		}
 	}
@@ -590,49 +510,24 @@ export class OpenCodeConnector extends BaseConnector {
 	};
 
 	private registerPipelineAgent(opencodePath: string): void {
-		for (const configPath of this.getConfigCandidates(opencodePath)) {
-			if (!existsSync(configPath)) continue;
-
-			let config: JsonObject;
-			try {
-				config = parseJsonOrJsonc(readFileSync(configPath, "utf-8"));
-			} catch {
-				continue;
-			}
-
-			const agents = isJsonObject(config.agent) ? { ...(config.agent as JsonObject) } : {};
-			agents[OPENCODE_PIPELINE_AGENT] = { ...OpenCodeConnector.PIPELINE_AGENT_CONFIG };
-			config.agent = agents;
-			atomicWriteJson(configPath, config);
-			return;
-		}
+		this.removePipelineAgent(opencodePath);
+		const configPath = this.getConfigPath();
+		this.readConfig(configPath);
+		writeConfigValue(configPath, ["agent", OPENCODE_PIPELINE_AGENT], {
+			...OpenCodeConnector.PIPELINE_AGENT_CONFIG,
+		});
 	}
 
 	private removePipelineAgent(opencodePath: string): void {
 		for (const configPath of this.getConfigCandidates(opencodePath)) {
 			if (!existsSync(configPath)) continue;
-
-			let config: JsonObject;
-			try {
-				config = parseJsonOrJsonc(readFileSync(configPath, "utf-8"));
-			} catch {
-				continue;
-			}
-
-			if (!isJsonObject(config.agent)) continue;
-
-			const agents = config.agent as JsonObject;
-			if (!(OPENCODE_PIPELINE_AGENT in agents)) continue;
-
-			const { [OPENCODE_PIPELINE_AGENT]: _, ...rest } = agents;
-			if (Object.keys(rest).length === 0) {
-				const { agent: __, ...configWithoutAgent } = config;
-				atomicWriteJson(configPath, configWithoutAgent);
+			const config = this.readConfigForCleanup(configPath);
+			if (!config || !isJsonObject(config.agent) || !(OPENCODE_PIPELINE_AGENT in config.agent)) continue;
+			if (Object.keys(config.agent).length === 1) {
+				writeConfigValue(configPath, ["agent"], undefined);
 			} else {
-				config.agent = rest;
-				atomicWriteJson(configPath, config);
+				writeConfigValue(configPath, ["agent", OPENCODE_PIPELINE_AGENT], undefined);
 			}
-			return;
 		}
 	}
 
@@ -641,13 +536,16 @@ export class OpenCodeConnector extends BaseConnector {
 			if (existsSync(candidate)) return;
 		}
 		mkdirSync(opencodePath, { recursive: true });
-		atomicWriteJson(join(opencodePath, "opencode.json"), {});
+		atomicWriteJson(join(opencodePath, "opencode.jsonc"), {});
 	}
 
 	private getConfigCandidates(opencodePath: string): string[] {
+		// OpenCode loads config.json, opencode.json, then opencode.jsonc in
+		// increasing precedence. List candidates highest-first so a later file
+		// cannot replace Signet's plugin array.
 		return [
-			join(opencodePath, "opencode.json"),
 			join(opencodePath, "opencode.jsonc"),
+			join(opencodePath, "opencode.json"),
 			join(opencodePath, "config.json"),
 		];
 	}
