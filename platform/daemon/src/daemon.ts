@@ -36,7 +36,7 @@ import { resolveDaemonAgentId } from "./agent-id";
 import { yieldEvery } from "./async-yield";
 import { requirePermission } from "./auth";
 import { bindWithRetry } from "./bind-with-retry";
-import { migrateConfig } from "./config-migration";
+import { migrateConfig, migrateInferenceProviders } from "./config-migration";
 import { listConnectors } from "./connectors/registry";
 import { clearAllPresence } from "./cross-agent";
 import { closeDbAccessor, getDbAccessor, getVectorRuntimeStatus, initDbAccessorAsync } from "./db-accessor";
@@ -1829,6 +1829,7 @@ async function main() {
 
 	try {
 		migrateConfig(AGENTS_DIR);
+		migrateInferenceProviders(AGENTS_DIR);
 	} catch (err) {
 		logger.warn("config-migration", "Config migration failed; continuing startup", {
 			error: err instanceof Error ? err.message : String(err),

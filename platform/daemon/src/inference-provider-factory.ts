@@ -48,7 +48,8 @@ export async function createRoutingProvider(opts: CreateRoutingProviderOptions):
 		throw new Error(
 			`Routing executor "${target.executor}" has been folded into the Pi + ACPX backends (#947). ` +
 				`Reconfigure target "${opts.targetId}" to use one of: anthropic, openrouter, ollama, llama-cpp, openai-compatible, acpx. ` +
-				`Run the inference config migration to rewrite this automatically.`,
+				`For claude-code/codex/opencode use 'executor: acpx' with an 'acpx: { agent: <name> }' block; ` +
+				`see docs/UPGRADING.md. Restart the daemon to re-run the automatic one-time config migration.`,
 		);
 	}
 
