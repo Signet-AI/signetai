@@ -501,10 +501,6 @@ function getPredictedContextMemories(
 	);
 }
 
-function updateAccessTracking(ids: string[]): void {
-	memoryCandidates.updateAccessTracking(getMemoryDbPath(), ids);
-}
-
 // ============================================================================
 // Config Loading
 // ============================================================================
@@ -940,9 +936,14 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 
 	const exploredId: string | null = null;
 
-	// Update access tracking for served memories
-	const servedIds = memories.map((m) => m.id);
-	updateAccessTracking(servedIds);
+	// Do NOT bump access_count/last_accessed for session-start injected memories.
+	// Those columns drive rehearsal boost and retention decay, which must reflect
+	// genuine recall operations (CLI, MCP, or harness prompt-submit recall via
+	// hybridRecall), not the ~50-60 memories injected into the system prompt at
+	// session start. Bumping them here permanently inflates the boost for the
+	// injection set and resets last_accessed so the half-life never decays it.
+	// Injected rows are still recorded for the predictive scorer below via
+	// session_memories, so no telemetry is lost. See #971.
 
 	// Record all candidates + which were injected for predictive scorer
 	const injectedSet = new Set(memories.map((m) => m.id));

@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import type { AgentRosterReadPolicy } from "@signet/core";
-import { type WriteDb, getDbAccessor } from "./db-accessor";
+import { getDbAccessor } from "./db-accessor";
 import { logger } from "./logger";
 import { effectiveScore } from "./memory-classification";
 import { buildAgentScopeClause } from "./memory-search";
@@ -346,26 +346,6 @@ export function getPredictedContextMemories(
 			error: e instanceof Error ? e.message : String(e),
 		});
 		return [];
-	}
-}
-
-export function updateAccessTracking(memoryDbPath: string, ids: string[]): void {
-	if (ids.length === 0 || !existsSync(memoryDbPath)) return;
-
-	try {
-		getDbAccessor().withWriteTx((db: WriteDb) => {
-			const now = new Date().toISOString();
-			const stmt = db.prepare(
-				`UPDATE memories SET access_count = access_count + 1,
-				 last_accessed = ? WHERE id = ?`,
-			);
-
-			for (const id of ids) {
-				stmt.run(now, id);
-			}
-		});
-	} catch (e) {
-		logger.error("hooks", "Failed to update access tracking", e as Error);
 	}
 }
 

@@ -858,6 +858,44 @@ creature: digital assistant
 		expect(result.inject).toContain("Relevant Memories");
 	});
 
+	// Regression for #971: session-start injects ~50 memories into the system
+	// prompt for context, but the agent never recalled them. Bumping
+	// access_count/last_accessed here permanently inflates rehearsal boost for
+	// the injection set and resets last_accessed so the half-life never decays
+	// it. Those columns must only advance on genuine recall (CLI/MCP/harness
+	// prompt-submit recall via hybridRecall).
+	test.serial("session-start injection does not advance access_count/last_accessed", async () => {
+		createMemoryDb([{ content: "Injected startup memory", importance: 0.9 }]);
+		const injectedId = getDbAccessor().withReadDb(
+			(db) =>
+				(db.prepare("SELECT id FROM memories WHERE content = ?").get("Injected startup memory") as { id: string }).id,
+		);
+
+		const before = getDbAccessor().withReadDb(
+			(db) =>
+				db.prepare("SELECT access_count, last_accessed FROM memories WHERE id = ?").get(injectedId) as {
+					access_count: number;
+					last_accessed: string | null;
+				},
+		);
+		expect(before.access_count).toBe(0);
+		expect(before.last_accessed).toBeNull();
+
+		const result = await handleSessionStart({ harness: "claude-code", sessionKey: "access-tracking-971" });
+		expect(result.memories.length).toBe(1);
+		expect(result.inject).toContain("Injected startup memory");
+
+		const after = getDbAccessor().withReadDb(
+			(db) =>
+				db.prepare("SELECT access_count, last_accessed FROM memories WHERE id = ?").get(injectedId) as {
+					access_count: number;
+					last_accessed: string | null;
+				},
+		);
+		expect(after.access_count).toBe(0);
+		expect(after.last_accessed).toBeNull();
+	});
+
 	test.serial("includes MEMORY.md as working memory", async () => {
 		writeMemoryMd("# Working Memory\n\nCurrently working on hooks migration.");
 
