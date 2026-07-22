@@ -129,6 +129,21 @@
         "typescript": "^5.7.0",
       },
     },
+    "integrations/kimi/connector": {
+      "name": "@signet/connector-kimi",
+      "version": "0.147.21",
+      "bin": {
+        "signet-connector-kimi": "bin/install.js",
+      },
+      "dependencies": {
+        "@signet/connector-base": "0.147.21",
+        "@signet/core": "0.147.21",
+      },
+      "devDependencies": {
+        "@types/node": "^22.0.0",
+        "typescript": "^5.7.0",
+      },
+    },
     "integrations/oh-my-pi/connector": {
       "name": "@signet/connector-oh-my-pi",
       "version": "0.154.10",
