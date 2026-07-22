@@ -263,14 +263,18 @@ export function createPiModelProvider(config: PiModelProviderConfig): StreamCapa
 		temperature?: number;
 		reasoning?: ThinkingLevel;
 	} {
+		// Per-call reasoning override semantics:
+		//   opts.reasoning === false  -> suppress thinking entirely (latency-sensitive ops)
+		//   opts.reasoning is a level -> override the configured level for this call
+		//   opts.reasoning undefined   -> use the provider's configured level
+		const effectiveReasoning: ThinkingLevel | undefined =
+			opts?.reasoning === false ? undefined : (opts?.reasoning ?? reasoning);
 		return {
 			apiKey,
 			signal: abort.signal,
 			...(opts?.maxTokens ? { maxTokens: opts.maxTokens } : {}),
 			...(typeof opts?.temperature === "number" ? { temperature: opts.temperature } : {}),
-			// Forward the per-call thinking level. Without this, pi-ai never turns
-			// reasoning on even when Model.reasoning (capability) is true.
-			...(reasoning !== undefined ? { reasoning } : {}),
+			...(effectiveReasoning !== undefined ? { reasoning: effectiveReasoning } : {}),
 		};
 	}
 

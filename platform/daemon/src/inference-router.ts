@@ -656,6 +656,10 @@ export class InferenceRouter {
 				const result = await generateWithTracking(provider, prompt, {
 					timeoutMs: opts?.timeoutMs,
 					maxTokens: opts?.maxTokens,
+					// aggregate_recall is latency-sensitive (the routing engine already
+					// excludes ACPX subprocesses for it). Suppress thinking for the same
+					// reason: thinking tokens would dominate the synthesis budget.
+					reasoning: request.operation === "aggregate_recall" ? false : undefined,
 				});
 				this.clearObservedRuntimeState(loaded.value, targetRef);
 				attempts.push({
@@ -759,6 +763,9 @@ export class InferenceRouter {
 					timeoutMs: opts?.timeoutMs,
 					maxTokens: opts?.maxTokens,
 					abortSignal: opts?.abortSignal,
+					// aggregate_recall is latency-sensitive: suppress thinking tokens
+					// (mirrors the execute path and the routing engine's ACPX exclusion).
+					reasoning: request.operation === "aggregate_recall" ? false : undefined,
 				});
 
 				const router = this;

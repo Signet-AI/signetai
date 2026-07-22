@@ -20,6 +20,7 @@
 import { spawn as nodeSpawn } from "node:child_process";
 import { mkdirSync, readFileSync, readdirSync } from "node:fs";
 import { isAbsolute, join, resolve as resolvePath } from "node:path";
+import { type ThinkingLevel } from "@earendil-works/pi-ai";
 import {
 	DEFAULT_PROVIDER_RATE_LIMIT,
 	type LlmGenerateResult,
@@ -435,6 +436,16 @@ export type LlmProviderCallOptions = {
 	readonly temperature?: number;
 	readonly signal?: AbortSignal;
 	readonly abortSignal?: AbortSignal;
+	/**
+	 * Per-call thinking-level override for pi-ai-backed providers.
+	 * - `undefined`: use the provider's configured reasoning level.
+	 * - a `ThinkingLevel` ("minimal"|"low"|"medium"|"high"|"xhigh"): override
+	 *   the configured level for this call.
+	 * - `false`: explicitly suppress thinking for this call, even if the
+	 *   provider/target is configured for reasoning. Used by latency-sensitive
+	 *   operations (e.g. aggregate_recall) that must never emit thinking tokens.
+	 */
+	readonly reasoning?: ThinkingLevel | false;
 };
 
 export type LlmProviderStreamEvent =

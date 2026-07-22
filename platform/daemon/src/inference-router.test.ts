@@ -478,4 +478,78 @@ describe("InferenceRouter legacy API credentials", () => {
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});
+
+	it("aggregate_recall suppresses reasoning even on a reasoning:high target (#959)", async () => {
+		// aggregate_recall is latency-sensitive: it must never emit thinking tokens,
+		// even when routed to a target explicitly configured reasoning: high. The
+		// router passes reasoning:false at the call site (mirroring the ACPX
+		// exclusion). Without this guard the fix would regress aggregate-recall
+		// cost/latency whenever its workload target is a high-reasoning model.
+		const dir = mkdtempSync(join(tmpdir(), "signet-router-aggregate-reasoning-"));
+		try {
+			mkdirSync(join(dir, "memory"), { recursive: true });
+			writeFileSync(
+				join(dir, "agent.yaml"),
+				`inference:
+  defaultPolicy: deep
+  accounts:
+    openrouter-api:
+      kind: api
+      providerFamily: openrouter
+      credentialRef: OPENROUTER_API_KEY
+  targets:
+    deep:
+      executor: openrouter
+      account: openrouter-api
+      models:
+        default:
+          model: deepseek/deepseek-v4-flash
+          reasoning: high
+  policies:
+    deep:
+      mode: automatic
+      allow:
+        - deep/default
+      defaultTargets:
+        - deep/default
+  workloads:
+    aggregateRecall:
+      target: deep/default
+      taskClass: session_synthesis
+`,
+			);
+
+			process.env.OPENROUTER_API_KEY = "test-openrouter-key";
+			let requestBody: Record<string, unknown> | null = null;
+			globalThis.fetch = mock((input: string | URL | Request, init?: RequestInit) => {
+				const url = String(input);
+				if (url.endsWith("/chat/completions") && typeof init?.body === "string") {
+					const parsed: unknown = JSON.parse(init.body);
+					if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+						requestBody = parsed as Record<string, unknown>;
+					}
+				}
+				if (url.endsWith("/models")) {
+					return Promise.resolve(new Response(JSON.stringify({ data: [] }), { status: 200 }));
+				}
+				return Promise.resolve(openAiSseResponse("aggregate answer"));
+			}) as unknown as typeof fetch;
+
+			const router = getOrCreateInferenceRouter(dir);
+			const result = await router.execute(
+				{ operation: "aggregate_recall", promptPreview: "what is signet" },
+				"Synthesize",
+				{ maxTokens: 300, timeoutMs: 1000 },
+			);
+
+			expect(result.ok).toBe(true);
+			// The target is reasoning: high, but aggregate_recall must suppress it.
+			// Acceptable wire shapes: reasoning absent, or { effort: "none" }.
+			// A regression would emit { effort: "high" } or { effort: "medium" }.
+			const effort = (requestBody?.reasoning as { effort?: string } | undefined)?.effort;
+			expect(effort === "high" || effort === "medium").toBe(false);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
 });
