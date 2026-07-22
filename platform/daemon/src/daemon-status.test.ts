@@ -114,11 +114,13 @@ describe("daemon status contract", () => {
 		expect(extraction).toBeDefined();
 		expect(typeof extraction?.resolved).toBe("string");
 		expect(typeof extraction?.effective).toBe("string");
-		expect(
-			extraction?.fallbackProvider === "ollama" ||
-				extraction?.fallbackProvider === "llama-cpp" ||
-				extraction?.fallbackProvider === "none",
-		).toBe(true);
+		// fallbackProvider must always be present as a string. #949 dropped this field
+		// from the status object (it was sourcing from the retired flat config field),
+		// which made `signet status` print "fallback: unknown". The type was widened
+		// from the narrow "llama-cpp"|"ollama"|"none" enum to RuntimeProviderName
+		// because the routing registry's fallbackTargetRefs can resolve to any
+		// executor. Asserting presence + string type is the real regression guard.
+		expect(typeof extraction?.fallbackProvider).toBe("string");
 		expect(
 			extraction?.status === "active" ||
 				extraction?.status === "degraded" ||
@@ -175,11 +177,17 @@ describe("daemon status contract", () => {
 				providerResolution?: {
 					extraction?: {
 						effective?: unknown;
+						fallbackProvider?: unknown;
 						status?: unknown;
 					};
 				};
 			};
 			expect(body.providerResolution?.extraction?.effective).toBe("llama-cpp");
+			// #960: the routing cutover dropped fallbackProvider from the status object.
+			// With a legacy fallbackProvider: llama-cpp config (migrated to a routing
+			// fallback target), the field must report the fallback executor — not be
+			// undefined, which made `signet status` print "fallback: unknown".
+			expect(body.providerResolution?.extraction?.fallbackProvider).toBe("llama-cpp");
 			expect(["active", "degraded"]).toContain(body.providerResolution?.extraction?.status);
 		} finally {
 			globalThis.fetch = originalFetch;

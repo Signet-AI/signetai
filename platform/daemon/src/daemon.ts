@@ -1395,16 +1395,31 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 				synthesisDecision?.ok ? synthesisDecision.value.targetRef : undefined,
 			) as RuntimeSynthesisProviderName | null)) ??
 		(synthesisAvailable ? "inference" : null);
+	// After #949, the retired flat pipelineV2.extraction.fallbackProvider field
+	// was dropped from this status object, which made `signet status` print
+	// "fallback: unknown". Restore the field with runtime-derived semantics:
+	// when a fallback is in use (fallbackApplied), `effective` is the fallback
+	// executor; otherwise report "none". (The decision's fallbackTargetRefs is
+	// NOT the right source — it holds candidates remaining AFTER selection, so
+	// it is empty when the fallback became the selected target.) NOTE: this is
+	// an applied-vs-configured semantic shift from pre-#949 — in the "blocked"
+	// case the field reports "none" even if a fallback was configured but also
+	// failed, because the decision carries no candidates when blocked. The
+	// `reason` field carries the failure detail in that case.
+	const extractionFallbackProvider: RuntimeProviderName = extractionFallbackApplied
+		? extractionEffective
+		: "none";
 	providerRuntimeResolution.extraction = {
 		// Configured/resolved now derive from the routing registry (the workload
 		// binding's target executor), not the retired legacy flat fields.
 		configured: commandExtractionMode
 			? "command"
-			: (executorForTargetRef(statusValue, extractionBinding) as RuntimeExtractionProviderName | null),
-		resolved: commandExtractionMode
-			? "command"
-			: (extractionEffective as RuntimeExtractionProviderName | null),
+			: statusValue
+				? executorForTargetRef(statusValue, extractionBinding)
+				: null,
+		resolved: commandExtractionMode ? "command" : extractionEffective,
 		effective: extractionEffective,
+		fallbackProvider: commandExtractionMode ? "none" : extractionFallbackProvider,
 		status: extractionStatus,
 		degraded: extractionDegraded,
 		fallbackApplied: extractionFallbackApplied,
@@ -1424,11 +1439,14 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 	};
 	providerRuntimeResolution.synthesis = {
 		configured: synthesisAvailable
-			? ((executorForTargetRef(statusValue, synthesisDecision?.ok ? synthesisDecision.value.targetRef : undefined) as RuntimeSynthesisProviderName | null))
+			? statusValue
+				? executorForTargetRef(
+						statusValue,
+						synthesisDecision?.ok ? synthesisDecision.value.targetRef : undefined,
+					) ?? null
+				: null
 			: null,
-		resolved: synthesisAvailable
-			? (synthesisEffective as RuntimeSynthesisProviderName | null)
-			: null,
+		resolved: synthesisAvailable ? (synthesisEffective as RuntimeSynthesisProviderName | null) : null,
 		effective: synthesisEffective,
 	};
 

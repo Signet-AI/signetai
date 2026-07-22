@@ -244,7 +244,10 @@ export interface ProviderRuntimeResolution {
 		configured: string | null;
 		resolved: RuntimeProviderName;
 		effective: RuntimeProviderName;
-		fallbackProvider: "llama-cpp" | "ollama" | "none";
+		// Widened from "llama-cpp" | "ollama" | "none" after #949: the routing
+		// registry expresses fallback via fallbackTargetRefs, whose executor can be
+		// any RuntimeProviderName. Defaults to "none" when no fallback is configured.
+		fallbackProvider: RuntimeProviderName;
 		status: "active" | "degraded" | "blocked" | "disabled" | "paused";
 		degraded: boolean;
 		fallbackApplied: boolean;
