@@ -20,7 +20,7 @@
 import { spawn as nodeSpawn } from "node:child_process";
 import { mkdirSync, readFileSync, readdirSync } from "node:fs";
 import { isAbsolute, join, resolve as resolvePath } from "node:path";
-import { type ThinkingLevel } from "@earendil-works/pi-ai";
+import type { ThinkingLevel } from "@earendil-works/pi-ai";
 import {
 	DEFAULT_PROVIDER_RATE_LIMIT,
 	type LlmGenerateResult,
@@ -685,6 +685,7 @@ function acpxEnv(hooks: AcpxHooksMode | undefined, runId?: string): NodeJS.Proce
 	const env: NodeJS.ProcessEnv = { ...process.env };
 	if (hooks === "disabled") {
 		env.SIGNET_NO_HOOKS = "1";
+		env.SIGNET_ENABLED = "false";
 	} else if (hooks === "enabled") {
 		env.SIGNET_NO_HOOKS = undefined;
 	}

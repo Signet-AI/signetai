@@ -191,7 +191,7 @@ function readPartText(part: unknown): string | null {
 // ============================================================================
 
 export const SignetPlugin: Plugin = async ({ directory, client: oc }) => {
-	const enabled = readRuntimeEnv("SIGNET_ENABLED") !== "false";
+	const enabled = readRuntimeEnv("SIGNET_ENABLED") !== "false" && readRuntimeEnv("SIGNET_NO_HOOKS") !== "1";
 	if (!enabled) return {};
 
 	const daemonUrl = readRuntimeEnv("SIGNET_DAEMON_URL") ?? DAEMON_URL_DEFAULT;

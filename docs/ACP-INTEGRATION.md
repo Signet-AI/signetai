@@ -179,7 +179,7 @@ ACPX target config lives under `inference.targets.<name>.acpx`.
 | `mode` | `exec` or `session` | `exec` is the default. `session` only adds `-s <session>` before `exec --file -`. |
 | `session` | string | Named ACPX session used when `mode: session`. |
 | `permissions` | `inherit`, `deny-all`, `approve-reads`, or `approve-all` | Maps to ACPX permission flags. |
-| `hooks` | `inherit`, `disabled`, or `enabled` | `disabled` sets `SIGNET_NO_HOOKS=1`; `enabled` removes it; `inherit` leaves the environment alone. |
+| `hooks` | `inherit`, `disabled`, or `enabled` | `disabled` sets `SIGNET_NO_HOOKS=1` and `SIGNET_ENABLED=false`; `enabled` removes the no-hooks sentinel; `inherit` leaves the environment alone. |
 | `terminal` | boolean or string | `false` or `disabled` passes `--no-terminal`; `true` maps to `enabled`; string modes `inherit`, `disabled`, `enabled` are accepted. |
 | `allowedTools` | string[] | Passed as comma-separated `--allowed-tools`. |
 | `timeoutMs` | number | Per-call subprocess deadline in milliseconds. Also converted to ACPX `--timeout` seconds. |
@@ -196,8 +196,10 @@ background targets use:
 hooks: disabled
 ```
 
-That maps to `SIGNET_NO_HOOKS=1`, which prevents Signet harness hooks from
-injecting session-start context into the ACPX subprocess.
+That maps to `SIGNET_NO_HOOKS=1` and `SIGNET_ENABLED=false`, which prevents
+Signet harness plugins from registering hooks or injecting session-start
+context inside the ACPX subprocess. Plugins also honor the no-hooks sentinel
+for compatibility with existing sterile subprocess launchers.
 
 This is intentionally configurable, not global:
 

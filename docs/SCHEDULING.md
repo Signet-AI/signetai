@@ -102,8 +102,8 @@ immediately with a `"CLI binary not found on PATH"` error.
 Spawned processes inherit the daemon's environment with two modifications:
 
 - `CLAUDECODE` is stripped to avoid nested-session detection
-- `SIGNET_NO_HOOKS` is set to `"1"` to prevent hook loops (the spawned
-  agent shouldn't trigger Signet hooks back into the daemon)
+- `SIGNET_NO_HOOKS` is set to `"1"` to prevent hook loops (Signet harness
+  integrations treat the spawned agent as a sterile background process)
 
 ### Timeout Behavior
 

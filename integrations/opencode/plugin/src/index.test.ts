@@ -4,6 +4,8 @@ import { SignetPlugin } from "./index.js";
 const originalFetch = globalThis.fetch;
 const originalDaemonUrl = process.env.SIGNET_DAEMON_URL;
 const originalAgentId = process.env.SIGNET_AGENT_ID;
+const originalEnabled = process.env.SIGNET_ENABLED;
+const originalNoHooks = process.env.SIGNET_NO_HOOKS;
 
 interface RequestRecord {
 	readonly path: string;
@@ -77,9 +79,34 @@ afterEach(() => {
 	} else {
 		process.env.SIGNET_AGENT_ID = originalAgentId;
 	}
+	if (originalEnabled === undefined) {
+		process.env.SIGNET_ENABLED = undefined;
+	} else {
+		process.env.SIGNET_ENABLED = originalEnabled;
+	}
+	if (originalNoHooks === undefined) {
+		process.env.SIGNET_NO_HOOKS = undefined;
+	} else {
+		process.env.SIGNET_NO_HOOKS = originalNoHooks;
+	}
 });
 
 describe("SignetPlugin OpenCode lifecycle", () => {
+	test.each([
+		["SIGNET_ENABLED=false", "SIGNET_ENABLED", "false"],
+		["SIGNET_NO_HOOKS=1", "SIGNET_NO_HOOKS", "1"],
+	] as const)("does not register hooks or contact the daemon when %s", async (_label, name, value) => {
+		process.env.SIGNET_ENABLED = "true";
+		process.env.SIGNET_NO_HOOKS = undefined;
+		process.env[name] = value;
+		const records = installFetch();
+
+		const plugin = await SignetPlugin({ directory: "/repo" } as never);
+
+		expect(plugin).toEqual({});
+		expect(records).toEqual([]);
+	});
+
 	test("injects per-session start context when system transform runs before chat.message", async () => {
 		process.env.SIGNET_AGENT_ID = undefined;
 		const records = installFetch();

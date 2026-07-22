@@ -453,6 +453,9 @@ session-end) and exposes `/remember` and `/recall` as native tools.
 
 Install is handled automatically by `signet setup` or `signet connect opencode`.
 
+Set `SIGNET_ENABLED=false` or `SIGNET_NO_HOOKS=1` to prevent the plugin from
+registering hooks for a sterile background process.
+
 > **Legacy:** Earlier installations placed a fetch-based `memory.mjs` at
 > `~/.config/opencode/memory.mjs`. This path is deprecated. Running
 > `signet connect opencode` migrates the installation to the current

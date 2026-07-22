@@ -479,7 +479,7 @@ subscription-backed CLI session, or gateway.
 | `cwd` | string | Optional working directory for harness execution |
 | `session` | string | Optional ACPX session identifier when a persistent session is desired |
 | `permissions` | string | Optional ACPX permission policy passed through to the harness |
-| `hooks` | string | Set to `disabled` for sterile/background execution (`SIGNET_NO_HOOKS=1`) |
+| `hooks` | string | Set to `disabled` for sterile/background execution (`SIGNET_NO_HOOKS=1` and `SIGNET_ENABLED=false`) |
 | `terminal` | boolean | For ACPX, set `false` to pass `--no-terminal` |
 | `allowedTools` | array | Optional ACPX allowed-tool list |
 | `format` / `outputFormat` | string | ACPX output format. `quiet` is the default; `json` parses ACPX JSON events and extracts the final response |

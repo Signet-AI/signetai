@@ -11,7 +11,7 @@
 
 import { describe, expect, it } from "bun:test";
 import { spawn as nodeSpawn } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -76,7 +76,7 @@ describe("createAcpxProvider", () => {
 printf '%s\n' "$@" > ${JSON.stringify(argsPath)}
 printf '%s' "$PWD" > ${JSON.stringify(cwdPath)}
 cat > ${JSON.stringify(promptPath)}
-printf '%s' "\${SIGNET_NO_HOOKS:-}" > ${JSON.stringify(hooksPath)}
+printf '%s|%s' "\${SIGNET_NO_HOOKS:-}" "\${SIGNET_ENABLED:-}" > ${JSON.stringify(hooksPath)}
 printf '  acpx answer  \\n'
 `,
 		);
@@ -107,8 +107,8 @@ printf '  acpx answer  \\n'
 			const agentIndex = args.indexOf("codex");
 			expect(args.slice(agentIndex)).toEqual(["codex", "-s", "background", "exec", "--file", "-"]);
 			expect(readFileSync(promptPath, "utf-8")).toBe("hello acpx");
-			expect(readFileSync(hooksPath, "utf-8")).toBe("1");
-			expect(readFileSync(cwdPath, "utf-8")).toBe(join(root, ".daemon", "acpx-background"));
+			expect(readFileSync(hooksPath, "utf-8")).toBe("1|false");
+			expect(readFileSync(cwdPath, "utf-8")).toBe(realpathSync(join(root, ".daemon", "acpx-background")));
 		} finally {
 			if (previousSignetPath === undefined) Reflect.deleteProperty(process.env, "SIGNET_PATH");
 			else process.env.SIGNET_PATH = previousSignetPath;
