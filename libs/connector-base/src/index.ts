@@ -33,7 +33,7 @@
  */
 
 import { randomBytes } from "node:crypto";
-import { existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import {
@@ -254,11 +254,18 @@ export function isSignetGeneratedFile(raw: string): boolean {
 // then renames (atomic on POSIX, near-atomic on Windows).
 // ============================================================================
 
-export function atomicWriteJson(path: string, data: unknown, indent: number | string = 2): void {
-	const content = `${JSON.stringify(data, null, indent)}\n`;
+export function atomicWriteText(path: string, content: string, mode?: number): void {
 	const tmp = join(dirname(path), `.${randomBytes(6).toString("hex")}.tmp`);
+	let writeMode = mode;
+	if (writeMode === undefined) {
+		try {
+			writeMode = statSync(path).mode & 0o777;
+		} catch {
+			// New files use the process umask.
+		}
+	}
 	try {
-		writeFileSync(tmp, content, "utf-8");
+		writeFileSync(tmp, content, { encoding: "utf-8", mode: writeMode });
 		renameSync(tmp, path);
 	} catch (err) {
 		try {
@@ -266,6 +273,10 @@ export function atomicWriteJson(path: string, data: unknown, indent: number | st
 		} catch {}
 		throw err;
 	}
+}
+
+export function atomicWriteJson(path: string, data: unknown, indent: number | string = 2): void {
+	atomicWriteText(path, `${JSON.stringify(data, null, indent)}\n`);
 }
 
 // ============================================================================

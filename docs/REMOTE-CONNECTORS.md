@@ -339,6 +339,12 @@ npx -y @signetai/connector-opencode install \
   --agent-id opencode-mini-pc
 ```
 
+No local Signet workspace or identity files are required on the OpenCode
+machine. The installer registers the bundled lifecycle plugin in the effective
+OpenCode config and configures `http://signet-home.tailnet:3850/mcp` as a
+remote MCP server with bearer authentication. The API key is stored in a
+mode-0600 connector-managed file rather than embedded in the config or plugin.
+
 Start a new OpenCode session so it picks up the new plugin/config.
 
 ### Remote Pi connector

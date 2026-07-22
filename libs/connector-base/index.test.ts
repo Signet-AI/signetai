@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import {
 	BaseConnector,
 	type InstallResult,
 	type UninstallResult,
+	atomicWriteText,
 	removeManagedExtensionFile,
 	resolveSignetDaemonUrl,
 	resolveSignetWorkspacePath,
@@ -87,6 +88,20 @@ describe("BaseConnector.stripLegacySignetBlock", () => {
 		const strippedPath = connector.cleanup(dir);
 		expect(strippedPath).toBeNull();
 		expect(existsSync(join(dir, "AGENTS.md"))).toBe(false);
+	});
+});
+
+describe("atomicWriteText", () => {
+	it("replaces text without changing its contents", () => {
+		dir = mkdtempSync(join(tmpdir(), "signet-connector-base-atomic-"));
+		const file = join(dir, "config.jsonc");
+		writeFileSync(file, "old\n", "utf-8");
+		if (process.platform !== "win32") chmodSync(file, 0o600);
+
+		atomicWriteText(file, "{\n  // preserved\n}\n");
+
+		expect(readFileSync(file, "utf-8")).toBe("{\n  // preserved\n}\n");
+		if (process.platform !== "win32") expect(statSync(file).mode & 0o777).toBe(0o600);
 	});
 });
 
