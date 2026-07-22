@@ -4,6 +4,9 @@ import { join } from "node:path";
 
 const root = join(import.meta.dir, "..");
 const pluginRoot = join(root, "SignetUnreal");
+const recallContract = JSON.parse(
+	readFileSync(join(root, "../../../platform/core/contracts/recall-request-v1.json"), "utf8"),
+);
 
 function read(relativePath: string): string {
 	return readFileSync(join(pluginRoot, relativePath), "utf8");
@@ -31,11 +34,25 @@ describe("Signet Unreal plugin", () => {
 			"Source/SignetUnrealRuntime/Public/SignetUnrealTypes.h",
 			"Source/SignetUnrealRuntime/Private/SignetAgentComponent.cpp",
 			"Source/SignetUnrealRuntime/Private/SignetAsyncActions.cpp",
+			"Source/SignetUnrealRuntime/Private/SignetRecallRequest.cpp",
+			"Source/SignetUnrealRuntime/Private/SignetRecallRequest.h",
+			"Source/SignetUnrealRuntime/Private/Tests/SignetRecallRequestTest.cpp",
 			"Source/SignetUnrealRuntime/Private/SignetUnrealClient.cpp",
 			"Source/SignetUnrealRuntime/Private/SignetUnrealRuntimeModule.cpp",
 		]) {
 			expect(existsSync(join(pluginRoot, relativePath))).toBe(true);
 		}
+	});
+
+	it("keeps intentional NPC recall overrides aligned with the shared contract", () => {
+		const requestHeader = read("Source/SignetUnrealRuntime/Private/SignetRecallRequest.h");
+		const unreal = recallContract.overrides.unreal;
+		expect(requestHeader).toContain(`DefaultNpcLimit = ${unreal.defaultLimit}`);
+		expect(requestHeader).toContain(`MinimumNpcLimit = ${unreal.minimumLimit}`);
+		expect(requestHeader).toContain(`MaximumNpcLimit = ${unreal.maximumLimit}`);
+		expect(read("Source/SignetUnrealRuntime/Private/SignetRecallRequest.cpp")).toContain(
+			'Body->SetBoolField(TEXT("includeRecalled"), true)',
+		);
 	});
 
 	it("uses the existing Signet daemon API surface", () => {

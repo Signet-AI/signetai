@@ -115,7 +115,7 @@ private:
 	FString Situation;
 
 	UPROPERTY()
-	int32 Limit = 6;
+	int32 Limit = 0;
 
 	TArray<FSignetMemoryBlock> PendingMemories;
 	void RecallScope(const FString& Scope, TFunction<void(const FSignetOperationResult&)> Done);

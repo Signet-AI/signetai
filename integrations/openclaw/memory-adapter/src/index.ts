@@ -632,7 +632,7 @@ export async function memoryRecall(
 	const result = await daemonFetch<unknown>(daemonUrl, "/api/memory/recall", {
 		method: "POST",
 		body: buildRecallRequestBody(query, {
-			limit: options.limit ?? 10,
+			limit: options.limit,
 			type: options.type,
 			aggregate: options.aggregate,
 			aggregateBudget: options.aggregateBudget,

@@ -26,28 +26,26 @@ async function searchMemory(
 		readonly type?: string;
 		readonly min_score?: number;
 		readonly aggregate?: boolean;
-		readonly aggregate_budget?: string;
+		readonly aggregate_budget?: "small" | "medium" | "large";
 		readonly save_aggregate?: boolean;
 		readonly session_key?: string;
 		readonly agent_id?: string;
 		readonly include_recalled?: boolean;
+		readonly scope?: string;
 	},
 ): Promise<string> {
-	const aggregateBudget =
-		args.aggregate_budget === "medium" || args.aggregate_budget === "large" || args.aggregate_budget === "small"
-			? args.aggregate_budget
-			: undefined;
 	const result = await client.post<unknown>(
 		"/api/memory/recall",
 		buildRecallRequestBody(args.query, {
-			limit: args.limit ?? 10,
+			limit: args.limit,
 			type: args.type,
 			aggregate: args.aggregate,
-			aggregate_budget: aggregateBudget,
+			aggregate_budget: args.aggregate_budget,
 			save_aggregate: args.save_aggregate,
 			sessionKey: args.session_key,
 			agentId: args.agent_id,
 			includeRecalled: args.include_recalled,
+			scope: args.scope,
 		}),
 		READ_TIMEOUT,
 	);
@@ -123,11 +121,12 @@ export function createTools(client: DaemonClient): Record<string, ReturnType<typ
 				type: tool.schema.string().optional().describe("Filter by memory type"),
 				min_score: tool.schema.number().optional().describe("Minimum relevance score threshold"),
 				aggregate: tool.schema.boolean().optional().describe("Synthesize an aggregate answer from recall evidence"),
-				aggregate_budget: tool.schema.string().optional().describe("Aggregate recall budget: small, medium, or large"),
+				aggregate_budget: tool.schema.enum(["small", "medium", "large"]).optional().describe("Aggregate recall budget"),
 				save_aggregate: tool.schema.boolean().optional().describe("Save aggregate answers as memories"),
 				session_key: tool.schema.string().optional().describe("Session key for per-context recall dedupe"),
 				agent_id: tool.schema.string().optional().describe("Agent ID for scoped recall"),
 				include_recalled: tool.schema.boolean().optional().describe("Include rows already recalled in this context"),
+				scope: tool.schema.string().optional().describe("Exact daemon memory scope to recall"),
 			},
 			async execute(args): Promise<string> {
 				return searchMemory(client, args);

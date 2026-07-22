@@ -1,6 +1,6 @@
 # OpenCode Integration
 
-Signet connector for [OpenCode](https://github.com/opencode-ai/opencode).
+Signet connector for [OpenCode](https://github.com/anomalyco/opencode).
 
 ## What It Does
 
@@ -13,6 +13,7 @@ Integrates Signet's memory system with OpenCode via its plugin system.
 - Migrates away from the legacy `memory.mjs` approach on install/uninstall
 - Preserves JSONC comments and formatting while applying targeted config updates
 - Uses the daemon's authenticated remote MCP endpoint for remote-only installs
+- Normalizes `memory_search` requests through Signet's canonical recall contract; `scope` accepts an exact daemon memory scope such as `world:alpha`
 
 ## Installation
 

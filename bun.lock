@@ -274,6 +274,7 @@
       "name": "@signet/sdk",
       "version": "0.147.23",
       "devDependencies": {
+        "@signet/core": "workspace:*",
         "@types/react": "^19.0.0",
         "react": "^19.0.0",
       },

@@ -199,6 +199,7 @@ describe("SignetClientHelpers", () => {
 		await expect(client.recallOrThrow("nonexistent", { minScore: 0.5 })).rejects.toThrow(
 			'No memories found for query: "nonexistent"',
 		);
+		expect(lastRequest().body).toEqual({ query: "nonexistent", limit: 10 });
 	});
 
 	test("getMemoryOrThrow() returns memory when found", async () => {

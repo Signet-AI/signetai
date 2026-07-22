@@ -1,8 +1,9 @@
 /**
  * @signet/sdk — HTTP client for the Signet daemon API.
- * No native dependencies (no SQLite, no @signet/core).
+ * No native dependencies (no SQLite).
  */
 
+import { buildRecallRequestBody } from "@signet/core/recall";
 import { SignetClientP2 } from "./client-p2.js";
 import { SignetClientHelpers, applyRecallMinScore } from "./helpers.js";
 import { SignetTransport } from "./transport.js";
@@ -56,6 +57,7 @@ import type {
 	RecallResponse,
 	RecoverResult,
 	RememberResult,
+	SdkRecallOptions,
 	SecretExecJob,
 	SecretExecOptions,
 	SecretExecResult,
@@ -145,41 +147,11 @@ export class SignetClient extends SignetClientHelpers {
 		});
 	}
 
-	async recall(
-		query: string,
-		opts?: {
-			readonly keywordQuery?: string;
-			readonly limit?: number;
-			readonly project?: string;
-			readonly type?: string;
-			readonly tags?: string;
-			readonly who?: string;
-			readonly pinned?: boolean;
-			readonly importance_min?: number;
-			readonly since?: string;
-			readonly until?: string;
-			readonly time?: {
-				readonly start?: string;
-				readonly end?: string;
-				readonly facets?: readonly string[];
-				readonly mode?: "auto" | "timeline" | "filter";
-			};
-			readonly minScore?: number;
-			readonly expand?: boolean;
-			readonly agentId?: string;
-			readonly aggregate?: boolean;
-			readonly aggregateBudget?: "small" | "medium" | "large";
-			readonly saveAggregate?: boolean;
-			readonly sessionKey?: string;
-			readonly includeRecalled?: boolean;
-		},
-	): Promise<RecallResponse> {
+	async recall(query: string, opts?: SdkRecallOptions): Promise<RecallResponse> {
+		const { minScore, ...requestOptions } = opts ?? {};
 		return applyRecallMinScore(
-			await this.transport.post<RecallResponse>("/api/memory/recall", {
-				query,
-				...opts,
-			}),
-			opts?.minScore,
+			await this.transport.post<RecallResponse>("/api/memory/recall", buildRecallRequestBody(query, requestOptions)),
+			minScore,
 		);
 	}
 
@@ -1405,6 +1377,7 @@ export type {
 	RecallResponse,
 	RecallResult,
 	RecoverResult,
+	SdkRecallOptions,
 	RememberResult,
 	SecretExecJob,
 	SecretExecOptions,

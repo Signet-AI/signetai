@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import type { Server } from "bun";
 import { SignetClient } from "../index.js";
+import type { SdkRecallOptions } from "../types.js";
 
 interface RecordedRequest {
 	readonly method: string;
@@ -80,6 +81,19 @@ describe("SignetClient", () => {
 			type: "preference",
 			importance: 0.9,
 		});
+	});
+
+	test("recall() matches the shared request vectors exposed by the SDK", async () => {
+		const contract = await Bun.file(
+			new URL("../../../../platform/core/contracts/recall-request-v1.json", import.meta.url),
+		).json();
+		const { client } = mockDaemon();
+
+		for (const vector of contract.vectors) {
+			if (!vector.clients.includes("sdk")) continue;
+			await client.recall(vector.query, vector.options as SdkRecallOptions);
+			expect(lastRequest().body, vector.name).toEqual(vector.expected);
+		}
 	});
 
 	test("recall() sends POST /api/memory/recall with query", async () => {
@@ -184,7 +198,6 @@ describe("SignetClient", () => {
 		expect(req.body).toEqual({
 			query: "confidence",
 			limit: 5,
-			minScore: 0.8,
 			until: "2026-04-03T00:00:00Z",
 			project: "proj-a",
 			keywordQuery: "confidence",
