@@ -56,15 +56,17 @@ describe.skipIf(SKIP)("createPiModelProvider (live)", () => {
 		);
 		setTimeout(() => ctrl.abort(), 300);
 		let threw = false;
+		let doneSeen = false;
 		try {
 			for await (const ev of stream.stream) {
-				if (ev.type === "done") fail("unexpected done event");
+				if (ev.type === "done") doneSeen = true;
 			}
 		} catch {
 			threw = true;
 		}
 		stream.cancel();
 		expect(threw).toBe(true);
+		expect(doneSeen).toBe(false);
 	});
 
 	test("timeoutMs aborts a long generation", async () => {
