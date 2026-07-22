@@ -52,18 +52,29 @@ interface UserPromptSubmitResult {
 	readonly memoryCount?: number;
 }
 
-// Per-prompt inject cache: consumed once by system.transform after chat.message populates it.
-// Capped to prevent unbounded growth if sessions die between the two hooks.
-const MAX_PENDING = 64;
-const pendingInject = new Map<string, string>();
+// Per-turn inject cache: every LLM transform for a prompt receives the same context.
+// The next chat.message replaces it, and session end removes it. The cap prevents
+// unbounded growth if OpenCode never emits either lifecycle hook for a session.
+const MAX_ACTIVE_TURNS = 64;
+interface ActiveTurn {
+	inject: string;
+}
+const activeTurns = new Map<string, ActiveTurn>();
 
-function pendingInjectSet(sessionID: string, inject: string): void {
-	if (!pendingInject.has(sessionID) && pendingInject.size >= MAX_PENDING) {
-		const oldest = pendingInject.keys().next().value;
-		if (oldest !== undefined) pendingInject.delete(oldest);
+function beginTurn(sessionID: string): ActiveTurn {
+	if (activeTurns.size >= MAX_ACTIVE_TURNS) {
+		const oldest = activeTurns.keys().next().value;
+		if (oldest !== undefined) activeTurns.delete(oldest);
 	}
-	const existing = pendingInject.get(sessionID);
-	pendingInject.set(sessionID, existing ? `${existing}\n${inject}` : inject);
+	const turn = { inject: "" };
+	activeTurns.set(sessionID, turn);
+	return turn;
+}
+
+function appendTurnInject(sessionID: string, turn: ActiveTurn, inject: string): void {
+	const active = activeTurns.get(sessionID);
+	if (active !== turn) return;
+	active.inject = active.inject ? `${active.inject}\n${inject}` : inject;
 }
 
 function readRuntimeEnv(name: string): string | undefined {
@@ -214,10 +225,7 @@ export const SignetPlugin: Plugin = async ({ directory, client: oc }) => {
 	async function ensureSessionStarted(sessionID: string): Promise<string> {
 		if (startedSessions.has(sessionID)) return "";
 		const existing = startingSessions.get(sessionID);
-		if (existing) {
-			await existing;
-			return "";
-		}
+		if (existing) return await existing;
 
 		const startSession = client
 			.post<SessionStartResult>(
@@ -280,20 +288,21 @@ export const SignetPlugin: Plugin = async ({ directory, client: oc }) => {
 		// ------------------------------------------------------------------
 
 		"chat.message": async (input, output): Promise<void> => {
+			// Every message starts a new turn, including prompts without text parts.
+			activeTurns.delete(input.sessionID);
+
 			const userText = output.parts
 				.map((part) => readPartText(part))
 				.filter((text): text is string => text !== null)
 				.join("\n")
 				.trim();
 			if (!userText) return;
-
-			// Clear any unconsumed inject from a prior prompt for this session
-			pendingInject.delete(input.sessionID);
+			const turn = beginTurn(input.sessionID);
 
 			try {
 				try {
 					const startInject = await ensureSessionStarted(input.sessionID);
-					if (startInject) pendingInjectSet(input.sessionID, startInject);
+					if (startInject) appendTurnInject(input.sessionID, turn, startInject);
 				} catch {
 					// Session-start context is optional; still run prompt-submit so
 					// recall and transcript capture stay fail-open independently.
@@ -312,7 +321,7 @@ export const SignetPlugin: Plugin = async ({ directory, client: oc }) => {
 					promptSubmitTimeout(),
 				);
 				if (result?.inject) {
-					pendingInjectSet(input.sessionID, result.inject);
+					appendTurnInject(input.sessionID, turn, result.inject);
 				}
 			} catch {
 				// never block the user's message
@@ -320,7 +329,7 @@ export const SignetPlugin: Plugin = async ({ directory, client: oc }) => {
 		},
 
 		// ------------------------------------------------------------------
-		// Inject per-prompt context into the system prompt
+		// Inject per-turn context into every LLM request for the prompt
 		// ------------------------------------------------------------------
 		"experimental.chat.system.transform": async (input, output): Promise<void> => {
 			if (!input.sessionID) return;
@@ -330,13 +339,10 @@ export const SignetPlugin: Plugin = async ({ directory, client: oc }) => {
 			} catch {
 				// Signet context is optional; never break OpenCode prompt rendering.
 			}
-			const inject = pendingInject.get(input.sessionID);
-			const parts = [startInject, inject].filter((part) => part?.trim());
+			const inject = activeTurns.get(input.sessionID)?.inject;
+			const parts = [...new Set([startInject, inject].filter((part) => part?.trim()))];
 			if (parts.length > 0) {
 				output.system.push(parts.join("\n"));
-			}
-			if (inject) {
-				pendingInject.delete(input.sessionID);
 			}
 		},
 
@@ -416,7 +422,7 @@ export const SignetPlugin: Plugin = async ({ directory, client: oc }) => {
 					if (sid) {
 						startedSessions.delete(sid);
 						parentBySession.delete(sid);
-						pendingInject.delete(sid);
+						activeTurns.delete(sid);
 					}
 				}
 
