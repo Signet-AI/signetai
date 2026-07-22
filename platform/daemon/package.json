@@ -26,6 +26,7 @@
     "prebuild": "bun run copy:skills",
     "build": "bun run prebuild && bun run build.ts && bun run build:dashboard",
     "build:types": "tsc --emitDeclarationOnly --outDir dist",
+    "typecheck": "tsc --noEmit",
     "dev": "bun --watch src/daemon.ts",
     "start": "cd ../core && bun run build && cd ../daemon && bun src/daemon.ts",
     "install:service": "bun src/daemon.ts --install",

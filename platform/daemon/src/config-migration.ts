@@ -207,9 +207,14 @@ export function migrateInferenceProviders(agentsDir: string): void {
 }
 
 function stampConfigVersion(doc: Document.Parsed, version: number): void {
+	// Use Document.set (typed `key: any, value: unknown`) rather than the
+	// narrowed YAMLMap.set on `doc.contents`, which types its key as ParsedNode
+	// and rejects the string key "configVersion" (TS2345). Document.set
+	// delegates to contents.set when contents is a map, so behavior is
+	// identical for both branches.
 	const root = doc.contents;
 	if (isMap(root)) {
-		root.set("configVersion", version);
+		doc.set("configVersion", version);
 	} else {
 		// Empty or non-map document — wrap it.
 		doc.set("configVersion", version);
