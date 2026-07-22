@@ -585,11 +585,21 @@ permission. For the full execution model, see [Hybrid Recall](../MEMORY.md#hybri
   "saveAggregate": true,
   "agentId": "alice",
   "sessionKey": "session-uuid",
-  "includeRecalled": false
+  "includeRecalled": false,
+  "scope": "world:alpha"
 }
 ```
 
-Only `query` is required.
+Only `query` is required. Canonical clients serialize an omitted `limit` as
+`10` and bound request values to `1..100`. The search backend currently applies
+a separate execution cap of 50. `scope` is an exact daemon memory-scope string,
+not a selector for agent or session isolation. Use `agentId` and `sessionKey`
+for those behaviors. Domain clients may use namespaced values such as
+`world:alpha`.
+
+Canonical clients also accept snake-case aliases for compatibility but emit the
+camel-case wire fields shown above. False opt-in flags are omitted, except an
+explicit `saveAggregate: false`, which is significant for recall-only callers.
 
 Exact date phrases in `query`, such as `2026/05/13`, `2026-05-13`, or
 `May 13 2026`, activate temporal recall automatically. A date-only query
@@ -701,9 +711,11 @@ can still use aggregate mode by sending `saveAggregate: false`. Repeating the
 same agent/query/project/budget/source-memory set returns the same saved memory
 through the aggregate idempotency key.
 
-When aggregate synthesis cannot complete, the response is a no-hit recall
-shape with `results: []` and `aggregate.stoppedReason` set to `no_evidence`,
-`router_unavailable`, or `synthesis_failed`.
+When no evidence exists, aggregate recall returns a no-hit shape with
+`results: []` and `aggregate.stoppedReason: "no_evidence"`. When planning or
+synthesis is unavailable after evidence was retrieved, recall returns that
+evidence with `aggregate.partial: true`, a diagnostic message, and
+`aggregate.stoppedReason` set to `router_unavailable` or `synthesis_failed`.
 
 When the routed inference provider reports token or billing metadata,
 `aggregate.usage` includes planning/synthesis totals plus per-stage target,
@@ -770,6 +782,19 @@ auth:
 ```
 
 No additional permission level is required beyond `recall`.
+
+#### Client request compatibility
+
+| Client | Canonical default/bounds | Scope surface | Score threshold | Intentional override |
+|---|---|---|---|---|
+| Core, SDK | `10`, `1..100` | Any daemon scope string | SDK `minScore` is local | None |
+| OpenClaw | `10`, `1..100` | Not exposed by its tool schema | `min_score` is local | Product schema exposes a focused subset |
+| OpenCode | `10`, `1..100` | Exact daemon scope string | `min_score` is local | None |
+| Hermes Agent | `10`, `1..100` | Agent opt-in through `agent_scoped` | `score_min` is local | Product schema exposes a focused subset |
+| Unreal | NPC default `6`, `1..20` | World/player namespace | Not exposed | Always sets `includeRecalled: true` |
+
+The versioned cross-runtime request vectors live in
+`platform/core/contracts/recall-request-v1.json`.
 
 ### GET /api/memory/search
 

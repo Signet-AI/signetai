@@ -45,7 +45,10 @@ scope = world:{WorldId}:player:{PlayerId}
 ```
 
 World-scoped memories are recalled for the NPC in that world. Player-scoped
-memories are recalled only when a `PlayerId` is provided.
+memories are recalled only when a `PlayerId` is provided. NPC recall deliberately
+overrides the generic client policy: it defaults to 6 results, clamps requests
+to 1-20, and sets `includeRecalled: true` because repeated context can remain
+relevant across gameplay turns.
 
 ## Event IDs
 

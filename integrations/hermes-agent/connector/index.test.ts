@@ -805,6 +805,51 @@ describe("Hermes Agent bundled plugin", () => {
 		expect(plugin).toContain('if tool_name == "signet_session_search"');
 	});
 
+	it("matches the shared recall request vectors exposed by Hermes", () => {
+		const clientPath = join(import.meta.dir, "hermes-plugin", "client.py");
+		const contractPath = join(import.meta.dir, "../../../platform/core/contracts/recall-request-v1.json");
+		const script = String.raw`
+import importlib.util
+import json
+import sys
+
+spec = importlib.util.spec_from_file_location("signet_client", sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+with open(sys.argv[2], encoding="utf-8") as handle:
+    contract = json.load(handle)
+
+mapping = {
+    "project": "project",
+    "type": "memory_type",
+    "tags": "tags",
+    "who": "who",
+    "pinned": "pinned",
+    "importance_min": "importance_min",
+    "since": "since",
+    "until": "until",
+    "keywordQuery": "keyword_query",
+    "aggregate": "aggregate",
+    "aggregateBudget": "aggregate_budget",
+    "saveAggregate": "save_aggregate",
+}
+for vector in contract["vectors"]:
+    if "hermes" not in vector["clients"]:
+        continue
+    options = vector["options"]
+    kwargs = {"limit": options.get("limit")}
+    kwargs.update({target: options[source] for source, target in mapping.items() if source in options})
+    actual = module._build_recall_request_body(vector["query"], **kwargs)
+    if actual != vector["expected"]:
+        raise AssertionError(f"{vector['name']}: {actual!r} != {vector['expected']!r}")
+`;
+		const result = spawnSync(process.env.PYTHON?.trim() || "python3", ["-c", script, clientPath, contractPath], {
+			encoding: "utf-8",
+		});
+
+		expect(result.status, result.stderr || result.stdout).toBe(0);
+	});
+
 	it("returns Signet tool schemas before daemon initialization", () => {
 		const plugin = readFileSync(join(import.meta.dir, "hermes-plugin", "__init__.py"), "utf-8");
 		const schemasFn = plugin.slice(plugin.indexOf("def get_tool_schemas"), plugin.indexOf("def handle_tool_call"));
@@ -1061,8 +1106,8 @@ describe("Hermes Agent bundled plugin", () => {
 	it("does not force agentId into explicit recall requests", () => {
 		const client = readFileSync(join(import.meta.dir, "hermes-plugin", "client.py"), "utf-8");
 
-		expect(client).toContain("if agent_scoped and self._agent_id:");
-		expect(client).toContain('body["agentId"] = self._agent_id');
+		expect(client).toContain('agent_id=self._agent_id if agent_scoped else ""');
+		expect(client).toContain('"agentId": agent_id');
 		expect(client).not.toContain('"agentId": self._agent_id,\\n        }\\n        if min_score');
 	});
 

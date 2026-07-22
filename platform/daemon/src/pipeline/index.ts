@@ -18,7 +18,7 @@ import type { ExtractionThreadOpts } from "./extraction-thread-handle";
 import type { WorkerInit } from "./extraction-thread-protocol";
 import { type MaintenanceHandle, startMaintenanceWorker } from "./maintenance-worker";
 import { type HintsWorkerHandle, startHintsWorker } from "./prospective-index";
-import { configureLlmConcurrency, getClaudeCodeCircuitStatus, getLlmConcurrencyStatus } from "./provider";
+import { configureLlmConcurrency, getLlmConcurrencyStatus } from "./provider";
 import type { ReflectionWorkerHandle } from "./reflection-worker";
 import {
 	DEFAULT_RETENTION,
@@ -163,7 +163,6 @@ type WorkerStatusEntry = {
 };
 
 type LlmConcurrencyStatus = ReturnType<typeof getLlmConcurrencyStatus>;
-type ClaudeCodeCircuitStatus = ReturnType<typeof getClaudeCodeCircuitStatus>;
 
 export type PipelineWorkerStatus = {
 	readonly llmConcurrency: {
@@ -171,13 +170,6 @@ export type PipelineWorkerStatus = {
 		readonly concurrency: LlmConcurrencyStatus;
 		/** Backward-compatible alias for callers that read provider status from stats. */
 		readonly stats: LlmConcurrencyStatus;
-	};
-	readonly claudeCode: {
-		/** Claude Code has no daemon worker; circuit-open cooldown is reported under circuit. */
-		readonly running: false;
-		readonly circuit: ClaudeCodeCircuitStatus;
-		/** Backward-compatible alias for callers that read provider status from stats. */
-		readonly stats: ClaudeCodeCircuitStatus;
 	};
 	readonly extraction: WorkerStatusEntry;
 	readonly summary: WorkerStatusEntry;
@@ -196,17 +188,11 @@ export type PipelineWorkerStatus = {
 /** Snapshot of running state for each worker — used by /api/pipeline/status */
 export function getPipelineWorkerStatus(): PipelineWorkerStatus {
 	const llmConcurrency = getLlmConcurrencyStatus();
-	const claudeCodeCircuit = getClaudeCodeCircuitStatus();
 	return {
 		llmConcurrency: {
 			running: llmConcurrency.running > 0,
 			concurrency: llmConcurrency,
 			stats: llmConcurrency,
-		},
-		claudeCode: {
-			running: false,
-			circuit: claudeCodeCircuit,
-			stats: claudeCodeCircuit,
 		},
 		extraction: {
 			running: workerHandle !== null,
@@ -286,7 +272,7 @@ export function startPipeline(
 				pipelineCfg,
 			});
 		}
-		if (!synthesisWorkerHandle && pipelineCfg.synthesis.enabled && pipelineCfg.synthesis.provider !== "none") {
+		if (!synthesisWorkerHandle && pipelineCfg.synthesis.enabled) {
 			synthesisWorkerHandle = startSynthesisWorker(pipelineCfg.synthesis);
 		}
 		logger.info("pipeline", "Pipeline started in command extraction compatibility mode", {
@@ -344,7 +330,7 @@ export function startPipeline(
 	}
 
 	// Synthesis worker — session-activity-based MEMORY.md regeneration
-	if (!synthesisWorkerHandle && pipelineCfg.synthesis.enabled && pipelineCfg.synthesis.provider !== "none") {
+	if (!synthesisWorkerHandle && pipelineCfg.synthesis.enabled) {
 		synthesisWorkerHandle = startSynthesisWorker(pipelineCfg.synthesis);
 	}
 

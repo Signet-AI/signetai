@@ -1,6 +1,6 @@
 {
   "name": "@signet/sdk",
-  "version": "0.147.21",
+  "version": "0.148.0",
   "license": "Apache-2.0",
   "description": "HTTP client SDK for the Signet daemon API",
   "type": "module",
@@ -33,6 +33,7 @@
     "test": "bun test"
   },
   "devDependencies": {
+    "@signet/core": "workspace:*",
     "@types/react": "^19.0.0",
     "react": "^19.0.0"
   },

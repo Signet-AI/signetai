@@ -274,6 +274,22 @@ class SettingsStore {
 	aSetBool(path: string[], val: boolean) {
 		this.set(this.agent, path, val);
 	}
+	// Delete a key at path and prune now-empty parent objects up the chain.
+	// Used to remove stale fields (e.g. an `account` ref on a local target)
+	// so the YAML stays canonical and the routing parser doesn't see them.
+	aDel(path: string[]) {
+		const del = (obj: YamlObject, idx: number): void => {
+			if (idx === path.length - 1) {
+				delete obj[path[idx]];
+				return;
+			}
+			const next = obj[path[idx]];
+			if (next == null || typeof next !== "object" || Array.isArray(next)) return;
+			del(next as YamlObject, idx + 1);
+			if (Object.keys(next as YamlObject).length === 0) delete obj[path[idx]];
+		};
+		if (path.length > 0) del(this.agent, 0);
+	}
 
 	// Settings accessors: route to agent or config based on daemon's resolution
 	sStr(path: string[]) {

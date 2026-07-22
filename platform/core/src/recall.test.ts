@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import type { RecallRequestOptions } from "./recall";
 import {
 	applyRecallScoreThreshold,
 	buildRecallRequestBody,
@@ -8,7 +9,31 @@ import {
 	withHookRecallCompat,
 } from "./recall";
 
+interface RecallContractVector {
+	readonly name: string;
+	readonly query: string;
+	readonly options: RecallRequestOptions;
+	readonly expected: Record<string, unknown>;
+}
+
+interface RecallContract {
+	readonly version: number;
+	readonly vectors: readonly RecallContractVector[];
+}
+
+async function readRecallContract(): Promise<RecallContract> {
+	return Bun.file(new URL("../contracts/recall-request-v1.json", import.meta.url)).json();
+}
+
 describe("recall surface helpers", () => {
+	it("matches the versioned transport-neutral request contract", async () => {
+		const contract = await readRecallContract();
+		expect(contract.version).toBe(1);
+		for (const vector of contract.vectors) {
+			expect(buildRecallRequestBody(vector.query, vector.options), vector.name).toEqual(vector.expected);
+		}
+	});
+
 	it("formats daemon recall payloads with primary and supporting context", () => {
 		const text = formatRecallText({
 			method: "hybrid",

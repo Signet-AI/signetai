@@ -61,7 +61,7 @@ MEMORY_SEARCH_SCHEMA = {
                     "and timeframe when known; avoid diagnostic keyword soup."
                 ),
             },
-            "limit": {"type": "integer", "description": "Max results to return (default 10, max 50)."},
+            "limit": {"type": "integer", "description": "Max results to request (default 10, request max 100)."},
             "project": {"type": "string", "description": "Optional project path filter."},
             "type": {"type": "string", "description": "Filter by memory type."},
             "tags": {"type": "string", "description": "Filter by tags, comma-separated."},
@@ -910,7 +910,7 @@ class SignetMemoryProvider(MemoryProvider):
 
             result = self._client.recall(
                 query,
-                limit=_as_int(search_args.get("limit"), 10, minimum=1, maximum=50),
+                limit=search_args.get("limit"),
                 project=str(search_args.get("project", "") or ""),
                 memory_type=str(search_args.get("type", "") or ""),
                 tags=str(search_args.get("tags", "") or ""),

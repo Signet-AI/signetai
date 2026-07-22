@@ -26,6 +26,7 @@ export const ROUTING_OPERATION_KINDS = [
 	"code_reasoning",
 	"memory_extraction",
 	"session_synthesis",
+	"aggregate_recall",
 	"widget_generation",
 	"repair",
 	"os_agent",
@@ -179,6 +180,7 @@ export interface RoutingConfig {
 		readonly interactive?: RoutingWorkloadBinding;
 		readonly memoryExtraction?: RoutingWorkloadBinding;
 		readonly sessionSynthesis?: RoutingWorkloadBinding;
+		readonly aggregateRecall?: RoutingWorkloadBinding;
 		readonly widgetGeneration?: RoutingWorkloadBinding;
 		readonly repair?: RoutingWorkloadBinding;
 	};
@@ -929,6 +931,9 @@ export function parseRoutingConfig(raw: unknown, legacyConfig?: RoutingConfig): 
 		const sessionSynthesis = parseWorkloadBinding(
 			routingRaw.workloads.sessionSynthesis ?? routingRaw.workloads.session_synthesis,
 		);
+		const aggregateRecall = parseWorkloadBinding(
+			routingRaw.workloads.aggregateRecall ?? routingRaw.workloads.aggregate_recall,
+		);
 		const widgetGeneration = parseWorkloadBinding(
 			routingRaw.workloads.widgetGeneration ?? routingRaw.workloads.widget_generation,
 		);
@@ -937,6 +942,7 @@ export function parseRoutingConfig(raw: unknown, legacyConfig?: RoutingConfig): 
 		if (interactive) workloads.interactive = interactive;
 		if (memoryExtraction) workloads.memoryExtraction = memoryExtraction;
 		if (sessionSynthesis) workloads.sessionSynthesis = sessionSynthesis;
+		if (aggregateRecall) workloads.aggregateRecall = aggregateRecall;
 		if (widgetGeneration) workloads.widgetGeneration = widgetGeneration;
 		if (repair) workloads.repair = repair;
 	}
@@ -980,6 +986,8 @@ function workloadBindingForOperation(
 			return config.workloads?.memoryExtraction ?? config.workloads?.default;
 		case "session_synthesis":
 			return config.workloads?.sessionSynthesis ?? config.workloads?.default;
+		case "aggregate_recall":
+			return config.workloads?.aggregateRecall ?? config.workloads?.sessionSynthesis ?? config.workloads?.default;
 		case "widget_generation":
 			return config.workloads?.widgetGeneration ?? config.workloads?.sessionSynthesis ?? config.workloads?.default;
 		case "repair":
@@ -1361,9 +1369,28 @@ export function resolveRoutingDecision(
 		candidates: traces,
 	};
 
-	const allowed = traces.filter((candidate) => candidate.allowed);
+	// Per-operation executor constraints. aggregate_recall is latency-sensitive and
+	// pi-ai-only — it must never route through a subprocess (ACPX) harness, whose
+	// spawn latency would dominate the synthesis call.
+	const disallowedExecutors = request.operation === "aggregate_recall" ? new Set(["acpx"]) : null;
+	const executorForCandidate = (ref: string): string | undefined => {
+		const parsed = parseRoutingTargetRef(ref);
+		if (!parsed.ok) return undefined;
+		return config.targets[parsed.value.targetId]?.executor;
+	};
+	const allowed = traces.filter((candidate) => {
+		if (!candidate.allowed) return false;
+		if (disallowedExecutors) {
+			const exec = executorForCandidate(candidate.targetRef);
+			if (exec && disallowedExecutors.has(exec)) return false;
+		}
+		return true;
+	});
 	if (allowed.length === 0) {
-		return err("no-candidates", "All routing candidates were blocked by policy or runtime state.", {
+		const reason = disallowedExecutors
+			? `All routing candidates for '${request.operation}' were blocked: this operation cannot use a subprocess (ACPX) executor — it requires a direct pi-ai provider for latency.`
+			: "All routing candidates were blocked by policy or runtime state.";
+		return err("no-candidates", reason, {
 			trace,
 		});
 	}

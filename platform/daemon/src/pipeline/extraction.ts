@@ -14,7 +14,7 @@ import {
 } from "@signet/core";
 import { classifyEntityQuality, concreteEntityTypesForPrompt, normalizeEntityType } from "../entity-quality";
 import { logger } from "../logger";
-import { ClaudeCodeCircuitOpenError, type LlmProvider, RateLimitExceededError } from "./provider";
+import { type LlmProvider, RateLimitExceededError } from "./provider";
 
 // ---------------------------------------------------------------------------
 // Limits
@@ -497,14 +497,6 @@ export async function extractFactsAndEntities(
 				error: e.message,
 				provider: e.providerName,
 				maxCallsPerHour: e.maxCallsPerHour,
-			});
-			throw e;
-		}
-		if (e instanceof ClaudeCodeCircuitOpenError) {
-			logger.warn("pipeline", "Extraction LLM call deferred by Claude Code circuit", {
-				error: e.message,
-				reason: e.reason,
-				retryAt: e.retryAt,
 			});
 			throw e;
 		}

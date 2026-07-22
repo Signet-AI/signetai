@@ -8,9 +8,10 @@
  * - Error shortcuts
  */
 
+import { applyRecallScoreThreshold, buildRecallRequestBody } from "@signet/core/recall";
 import { SignetApiError } from "./errors.js";
 import type { SignetTransport } from "./transport.js";
-import type { DocumentRecord, JobStatus, MemoryRecord, RecallResponse } from "./types.js";
+import type { DocumentRecord, JobStatus, MemoryRecord, RecallResponse, SdkRecallOptions } from "./types.js";
 
 export interface WaitForJobOptions {
 	/** Maximum time to wait in milliseconds (default: 30_000) */
@@ -27,21 +28,7 @@ export interface BatchModifyProgress {
 }
 
 export function applyRecallMinScore(result: RecallResponse, minScore?: number): RecallResponse {
-	if (typeof minScore !== "number") {
-		return result;
-	}
-
-	const filtered = result.results.filter((row) => row.score >= minScore);
-	return {
-		...result,
-		results: filtered,
-		meta: {
-			...result.meta,
-			totalReturned: filtered.length,
-			hasSupplementary: filtered.some((row) => row.supplementary === true),
-			noHits: filtered.length === 0,
-		},
-	};
+	return applyRecallScoreThreshold(result, minScore) as RecallResponse;
 }
 
 export class SignetClientHelpers {
@@ -143,41 +130,11 @@ export class SignetClientHelpers {
 	 * });
 	 * ```
 	 */
-	async recallOrThrow(
-		query: string,
-		opts?: {
-			readonly keywordQuery?: string;
-			readonly limit?: number;
-			readonly project?: string;
-			readonly type?: string;
-			readonly tags?: string;
-			readonly who?: string;
-			readonly pinned?: boolean;
-			readonly importance_min?: number;
-			readonly since?: string;
-			readonly until?: string;
-			readonly time?: {
-				readonly start?: string;
-				readonly end?: string;
-				readonly facets?: readonly string[];
-				readonly mode?: "auto" | "timeline" | "filter";
-			};
-			readonly expand?: boolean;
-			readonly minScore?: number;
-			readonly agentId?: string;
-			readonly aggregate?: boolean;
-			readonly aggregateBudget?: "small" | "medium" | "large";
-			readonly saveAggregate?: boolean;
-			readonly sessionKey?: string;
-			readonly includeRecalled?: boolean;
-		},
-	): Promise<RecallResponse> {
+	async recallOrThrow(query: string, opts?: SdkRecallOptions): Promise<RecallResponse> {
+		const { minScore, ...requestOptions } = opts ?? {};
 		const result = applyRecallMinScore(
-			await this.transport.post<RecallResponse>("/api/memory/recall", {
-				query,
-				...opts,
-			}),
-			opts?.minScore,
+			await this.transport.post<RecallResponse>("/api/memory/recall", buildRecallRequestBody(query, requestOptions)),
+			minScore,
 		);
 
 		if (!result.results || result.results.length === 0) {

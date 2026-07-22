@@ -6,6 +6,11 @@ All notable changes to Signet are documented here.
 
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
+### 2026-07-22
+- Features: replace inference provisioning with pi-ai (#947).
+- Bug fixes: unblock main after #949 (build:core tsc error + retire rust-daemon-parity); retain memory across turn transforms; support remote-only connector installs.
+- Refactoring: align runtime request contracts.
+
 ### 2026-07-21
 - Bug fixes: update and verify active install.
 
@@ -27,11 +32,47 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Bug fixes: thread native asset paths into extraction worker; await in-flight init before first embed to prevent warm-up race (#920); register WASM onnxruntime in embedding worker's isolated globalThis; bound and cancel LLM inference; isolate native embedding in a worker so it cannot block /health; reject transient operational content with a durability gate.
 - Docs: update changelog highlights for v0.147.10 stable promotion; update changelog highlights for v0.147.9 stable promotion.
 
-### 2026-07-10
-- Bug fixes: reject markdown-polluted entity labels; gate summary jobs on runnable synthesis; cancel extraction for forgotten memories; embed connector assets in native releases; initialize ONNX WASM embeddings in compiled binary.
-- Docs: update changelog highlights for v0.147.1 stable promotion.
-
 ## Release Ledger
+
+## [0.148.0] - 2026-07-22
+
+Release summary: 1 feature and 1 bug fix.
+Tag range: `v0.147.24..v0.148.0`.
+
+### Features
+
+- **daemon**: replace inference provisioning with pi-ai (#947) (#949)
+
+### Bug Fixes
+
+- unblock main after #949 (build:core tsc error + retire rust-daemon-parity) (#962)
+
+## [0.147.24] - 2026-07-22
+
+Release summary: 1 refactor.
+Tag range: `v0.147.23..v0.147.24`.
+
+### Refactoring
+
+- **recall**: align runtime request contracts (#950)
+
+## [0.147.23] - 2026-07-22
+
+Release summary: 1 bug fix.
+Tag range: `v0.147.22..v0.147.23`.
+
+### Bug Fixes
+
+- **opencode**: retain memory across turn transforms (#951)
+
+## [0.147.22] - 2026-07-22
+
+Release summary: 1 bug fix.
+Tag range: `v0.147.21..v0.147.22`.
+
+### Bug Fixes
+
+- **opencode**: support remote-only connector installs
 
 ## [0.147.21] - 2026-07-21
 

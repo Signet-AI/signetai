@@ -27,7 +27,7 @@ import { cancelExtractionJobForForgottenMemory } from "./extraction-queue";
 import { txPersistEntities } from "./graph-transactions";
 import { invalidateTraversalCache } from "./graph-traversal";
 import { enqueueHintsJob } from "./prospective-index";
-import { ClaudeCodeCircuitOpenError, type LlmProvider, RateLimitExceededError, generateWithTracking } from "./provider";
+import { type LlmProvider, RateLimitExceededError, generateWithTracking } from "./provider";
 import { archiveToCold } from "./retention-worker";
 import { type SignificanceConfig, assessSignificance } from "./significance-gate";
 import { type StaleLeaseRecovery, recoverStaleLeases } from "./stale-leases";
@@ -1604,7 +1604,7 @@ export function startWorker(
 				analytics?.recordLatency("jobs", runtime.now() - jobStart);
 			} catch (e) {
 				const msg = e instanceof Error ? e.message : String(e);
-				if ((!running && isCancellationError(e)) || e instanceof ClaudeCodeCircuitOpenError) {
+				if (!running && isCancellationError(e)) {
 					accessor.withWriteTx((db) => restoreCancelledJobLease(db, job));
 					lastAttempt = runtime.now();
 					return;

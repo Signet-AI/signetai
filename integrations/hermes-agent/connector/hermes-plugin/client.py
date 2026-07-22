@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import ipaddress
 import urllib.error
@@ -33,6 +34,59 @@ _TRUSTED_ORIGINS_ENV = "SIGNET_TRUSTED_DAEMON_ORIGINS"
 def _sanitize(value: str) -> str:
     """Strip leading/trailing whitespace and embedded newlines from env values."""
     return value.strip().replace("\r", "").replace("\n", "")
+
+
+def _normalize_recall_limit(value: Any) -> int:
+    """Match the versioned Signet recall request contract."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return 10
+    if isinstance(value, float) and not math.isfinite(value):
+        return 10
+    return min(100, max(1, math.trunc(value)))
+
+
+def _build_recall_request_body(
+    query: str,
+    *,
+    limit: Any = None,
+    project: str = "",
+    memory_type: str = "",
+    tags: str = "",
+    who: str = "",
+    pinned: Optional[bool] = None,
+    importance_min: Optional[float] = None,
+    since: str = "",
+    until: str = "",
+    keyword_query: str = "",
+    aggregate: bool = False,
+    aggregate_budget: str = "",
+    save_aggregate: Optional[bool] = None,
+    agent_id: str = "",
+) -> Dict[str, Any]:
+    """Build canonical daemon JSON for the options exposed by Hermes."""
+    body: Dict[str, Any] = {"query": query, "limit": _normalize_recall_limit(limit)}
+    optional_strings = {
+        "project": project,
+        "type": memory_type,
+        "tags": tags,
+        "who": who,
+        "since": since,
+        "until": until,
+        "keywordQuery": keyword_query,
+        "agentId": agent_id,
+    }
+    body.update({key: value for key, value in optional_strings.items() if value})
+    if pinned is True:
+        body["pinned"] = True
+    if importance_min is not None:
+        body["importance_min"] = importance_min
+    if aggregate is True:
+        body["aggregate"] = True
+    if aggregate_budget in ("small", "medium", "large"):
+        body["aggregateBudget"] = aggregate_budget
+    if isinstance(save_aggregate, bool):
+        body["saveAggregate"] = save_aggregate
+    return body
 
 
 def _normalize_base_url(raw: str, source: str) -> str:
@@ -397,7 +451,7 @@ class SignetClient:
         self,
         query: str,
         *,
-        limit: int = 10,
+        limit: Any = None,
         project: str = "",
         memory_type: str = "",
         tags: str = "",
@@ -414,36 +468,23 @@ class SignetClient:
         agent_scoped: bool = False,
     ) -> Optional[Dict[str, Any]]:
         """Search memories via hybrid recall."""
-        body: Dict[str, Any] = {
-            "query": query,
-            "limit": limit,
-        }
-        if project:
-            body["project"] = project
-        if memory_type:
-            body["type"] = memory_type
-        if tags:
-            body["tags"] = tags
-        if who:
-            body["who"] = who
-        if pinned is not None:
-            body["pinned"] = pinned
-        if importance_min is not None:
-            body["importance_min"] = importance_min
-        if since:
-            body["since"] = since
-        if until:
-            body["until"] = until
-        if keyword_query:
-            body["keywordQuery"] = keyword_query
-        if aggregate:
-            body["aggregate"] = True
-            if aggregate_budget in ("small", "medium", "large"):
-                body["aggregateBudget"] = aggregate_budget
-            if save_aggregate is not None:
-                body["saveAggregate"] = save_aggregate
-        if agent_scoped and self._agent_id:
-            body["agentId"] = self._agent_id
+        body = _build_recall_request_body(
+            query,
+            limit=limit,
+            project=project,
+            memory_type=memory_type,
+            tags=tags,
+            who=who,
+            pinned=pinned,
+            importance_min=importance_min,
+            since=since,
+            until=until,
+            keyword_query=keyword_query,
+            aggregate=aggregate,
+            aggregate_budget=aggregate_budget,
+            save_aggregate=save_aggregate,
+            agent_id=self._agent_id if agent_scoped else "",
+        )
 
         result = self._post("/api/memory/recall", body, timeout=_RECALL_TIMEOUT_SECS)
         if (

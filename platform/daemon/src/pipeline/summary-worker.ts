@@ -38,7 +38,6 @@ import { isDurableBoundary, normalizeBoundaryReason } from "./boundary-reason";
 import { addDreamingTokens } from "./dreaming";
 import { enqueueExtractionJobInTx } from "./extraction-queue";
 import {
-	ClaudeCodeCircuitOpenError,
 	RateLimitExceededError,
 	SemaphoreTimeoutError,
 	awaitSubprocessWithDeadline,
@@ -1711,7 +1710,7 @@ export function startSummaryWorker(accessor: DbAccessor, options: SummaryWorkerO
 			const errorMessage = e instanceof Error ? e.message : String(e);
 			if (
 				leasedJob &&
-				(e instanceof ClaudeCodeCircuitOpenError || (stopped && /aborted|cancelled|canceled/i.test(errorMessage)))
+				(stopped && /aborted|cancelled|canceled/i.test(errorMessage))
 			) {
 				restoreUnprocessedSummaryLease(accessor, leasedJob);
 				return;

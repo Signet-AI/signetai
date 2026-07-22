@@ -9,6 +9,7 @@ import AgentSection from "./settings/AgentSection.svelte";
 import AppearanceSection from "./settings/AppearanceSection.svelte";
 import AuthSection from "./settings/AuthSection.svelte";
 import EmbeddingsSection from "./settings/EmbeddingsSection.svelte";
+import InferenceSection from "./settings/InferenceSection.svelte";
 import MemorySection from "./settings/MemorySection.svelte";
 import NetworkSection from "./settings/NetworkSection.svelte";
 import PipelineSection from "./settings/PipelineSection.svelte";
@@ -42,12 +43,6 @@ const sectionDefs: SectionDef[] = [
 		paths: [["network"]],
 	},
 	{
-		id: "embeddings",
-		title: "Embeddings",
-		source: "config",
-		paths: [["embedding"], ["memory", "embeddings"], ["embeddings"]],
-	},
-	{
 		id: "memory",
 		title: "Memory",
 		source: "config",
@@ -64,6 +59,12 @@ const sectionDefs: SectionDef[] = [
 		title: "Pipeline",
 		source: "agent",
 		paths: [["memory", "pipelineV2"]],
+	},
+	{
+		id: "inference",
+		title: "Inference",
+		source: "agent",
+		paths: [["inference"]],
 	},
 	{
 		id: "trust",
@@ -84,11 +85,6 @@ const sectionDefs: SectionDef[] = [
 		paths: [],
 	},
 ];
-
-const tabBtn =
-	"px-2.5 py-1 text-[10px] font-medium uppercase tracking-[0.06em] rounded-md transition-colors duration-150 border-none cursor-pointer whitespace-nowrap";
-const tabActive = `${tabBtn} text-[var(--sig-highlight)] bg-[color-mix(in_srgb,var(--sig-highlight),var(--sig-bg)_90%)] border border-[color-mix(in_srgb,var(--sig-highlight),transparent_85%)]`;
-const tabInactive = `${tabBtn} bg-transparent text-[var(--sig-text-muted)] hover:text-[var(--sig-highlight)] hover:bg-[color-mix(in_srgb,var(--sig-highlight),var(--sig-bg)_94%)]`;
 
 let activeSection = $state("agent");
 let discardDialogOpen = $state(false);
@@ -160,22 +156,23 @@ function formatSavedAt(raw: string | null): string {
 	{#if !st.hasFiles}
 		<div class="empty-state">No YAML config files found</div>
 	{:else}
-		<!-- Section tab bar -->
-		<header class="tab-bar">
-			<div class="tab-group">
+		<!-- Sidebar nav (OpenCode-style vertical) + content -->
+	<div class="settings-layout">
+		<nav class="sidebar">
+			<div class="sidebar-group">
 				{#each sectionDefs as def (def.id)}
 					<button
-						class={activeSection === def.id ? tabActive : tabInactive}
+						class={activeSection === def.id ? "nav-item active" : "nav-item"}
 						onclick={() => (activeSection = def.id)}
 					>
-						{def.title}
+						<span class="nav-label">{def.title}</span>
 						{#if sections.find((s) => s.id === def.id)?.dirty}
 							<span class="tab-dirty">&bull;</span>
 						{/if}
 					</button>
 				{/each}
 			</div>
-		</header>
+		</nav>
 
 		<!-- Main content: settings + identity panel -->
 		<div class="main-area">
@@ -192,6 +189,8 @@ function formatSavedAt(raw: string | null): string {
 					<MemorySection />
 				{:else if activeSection === "pipeline"}
 					<PipelineSection />
+				{:else if activeSection === "inference"}
+					<InferenceSection />
 				{:else if activeSection === "trust"}
 					<TrustSection />
 				{:else if activeSection === "auth"}
@@ -207,6 +206,7 @@ function formatSavedAt(raw: string | null): string {
 				onDirtyChange={(dirty) => (identityDirty = dirty)}
 			/>
 		</div>
+	</div>
 
 		<!-- Unified save bar -->
 		<footer class="save-bar">
@@ -281,6 +281,61 @@ function formatSavedAt(raw: string | null): string {
 		overflow: hidden;
 	}
 
+	.settings-layout {
+		display: flex;
+		flex: 1;
+		min-height: 0;
+	}
+
+	.sidebar {
+		display: flex;
+		flex-direction: column;
+		flex-shrink: 0;
+		width: 168px;
+		padding: var(--space-sm) 6px;
+		background: var(--sig-surface);
+		border-right: 1px solid var(--sig-border);
+		overflow-y: auto;
+	}
+
+	.sidebar-group {
+		display: flex;
+		flex-direction: column;
+		gap: 1px;
+	}
+
+	.nav-item {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		padding: 6px 10px;
+		font-family: var(--font-mono);
+		font-size: 11px;
+		letter-spacing: 0.04em;
+		text-transform: uppercase;
+		color: var(--sig-text-muted);
+		background: transparent;
+		border: none;
+		border-radius: 6px;
+		cursor: pointer;
+		text-align: left;
+		transition: background-color 0.12s ease, color 0.12s ease;
+	}
+
+	.nav-item:hover {
+		color: var(--sig-text);
+		background: color-mix(in srgb, var(--sig-highlight), var(--sig-bg) 94%);
+	}
+
+	.nav-item.active {
+		color: var(--sig-highlight);
+		background: color-mix(in srgb, var(--sig-highlight), var(--sig-bg) 88%);
+	}
+
+	.nav-label {
+		flex: 1;
+	}
+
 	.empty-state {
 		display: flex;
 		align-items: center;
@@ -289,26 +344,6 @@ function formatSavedAt(raw: string | null): string {
 		font-family: var(--font-body);
 		font-size: var(--font-size-sm);
 		color: var(--sig-text-muted);
-	}
-
-	.tab-bar {
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		padding: 2px var(--space-md) var(--space-sm);
-		background: transparent;
-		border-bottom: 1px solid var(--sig-border);
-		flex-shrink: 0;
-	}
-
-	.tab-group {
-		display: flex;
-		align-items: center;
-		gap: 2px;
-		background: var(--sig-bg);
-		border: 1px solid var(--sig-border);
-		border-radius: 0.5rem;
-		padding: 1px;
 	}
 
 	.tab-dirty {
@@ -474,8 +509,8 @@ function formatSavedAt(raw: string | null): string {
 	}
 
 	@media (max-width: 640px) {
-		.tab-group {
-			overflow-x: auto;
+		.sidebar {
+			width: 132px;
 		}
 	}
 </style>

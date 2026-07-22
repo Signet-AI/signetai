@@ -36,7 +36,7 @@ import { resolveDaemonAgentId } from "./agent-id";
 import { yieldEvery } from "./async-yield";
 import { requirePermission } from "./auth";
 import { bindWithRetry } from "./bind-with-retry";
-import { migrateConfig } from "./config-migration";
+import { migrateConfig, migrateInferenceProviders, migrateLegacyRoutingToRegistry } from "./config-migration";
 import { listConnectors } from "./connectors/registry";
 import { clearAllPresence } from "./cross-agent";
 import { closeDbAccessor, getDbAccessor, getVectorRuntimeStatus, initDbAccessorAsync } from "./db-accessor";
@@ -70,7 +70,7 @@ import { type DreamingWorkerHandle, startDreamingWorker } from "./pipeline/dream
 import type { WorkerInit } from "./pipeline/extraction-thread-protocol";
 import { invalidateTraversalCache } from "./pipeline/graph-traversal";
 import { stopModelRegistry } from "./pipeline/model-registry";
-import { configureLlmConcurrency, stopOpenCodeServer } from "./pipeline/provider";
+import { configureLlmConcurrency } from "./pipeline/provider";
 import { startReconciler } from "./pipeline/skill-reconciler";
 import { type RepairContext, structuralBackfill } from "./repair-actions";
 import { logFdSnapshot, startEventLoopMonitor, startFdPollMonitor, stopResourceMonitors } from "./resource-monitor";
@@ -1232,7 +1232,6 @@ async function stopPipelineRuntime(): Promise<void> {
 	} catch {}
 
 	closeInferenceProviderResolver();
-	stopOpenCodeServer();
 	stopModelRegistry();
 	invalidateDiagnosticsCache();
 }
@@ -1335,6 +1334,8 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 				return router.createWorkloadProvider("memory_extraction", defaultAgentId);
 			case "sessionSynthesis":
 				return router.createWorkloadProvider("session_synthesis", defaultAgentId);
+			case "aggregateRecall":
+				return router.createWorkloadProvider("aggregate_recall", defaultAgentId);
 			case "widgetGeneration":
 				return router.createWorkloadProvider("widget_generation", defaultAgentId);
 			case "repair":
@@ -1395,14 +1396,15 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 			) as RuntimeSynthesisProviderName | null)) ??
 		(synthesisAvailable ? "inference" : null);
 	providerRuntimeResolution.extraction = {
-		configured: memoryCfg.pipelineV2.extraction.provider,
+		// Configured/resolved now derive from the routing registry (the workload
+		// binding's target executor), not the retired legacy flat fields.
+		configured: commandExtractionMode
+			? "command"
+			: (executorForTargetRef(statusValue, extractionBinding) as RuntimeExtractionProviderName | null),
 		resolved: commandExtractionMode
 			? "command"
-			: explicitInference
-				? "inference"
-				: memoryCfg.pipelineV2.extraction.provider,
+			: (extractionEffective as RuntimeExtractionProviderName | null),
 		effective: extractionEffective,
-		fallbackProvider: memoryCfg.pipelineV2.extraction.fallbackProvider,
 		status: extractionStatus,
 		degraded: extractionDegraded,
 		fallbackApplied: extractionFallbackApplied,
@@ -1421,9 +1423,11 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 		since: statusSince,
 	};
 	providerRuntimeResolution.synthesis = {
-		configured: memoryCfg.pipelineV2.synthesis.enabled ? memoryCfg.pipelineV2.synthesis.provider : null,
+		configured: synthesisAvailable
+			? ((executorForTargetRef(statusValue, synthesisDecision?.ok ? synthesisDecision.value.targetRef : undefined) as RuntimeSynthesisProviderName | null))
+			: null,
 		resolved: synthesisAvailable
-			? ((explicitInference ? "inference" : memoryCfg.pipelineV2.synthesis.provider) as RuntimeSynthesisProviderName)
+			? (synthesisEffective as RuntimeSynthesisProviderName | null)
 			: null,
 		effective: synthesisEffective,
 	};
@@ -1830,6 +1834,8 @@ async function main() {
 
 	try {
 		migrateConfig(AGENTS_DIR);
+		migrateInferenceProviders(AGENTS_DIR);
+		migrateLegacyRoutingToRegistry(AGENTS_DIR);
 	} catch (err) {
 		logger.warn("config-migration", "Config migration failed; continuing startup", {
 			error: err instanceof Error ? err.message : String(err),
@@ -1884,7 +1890,7 @@ async function main() {
 						memoryCount,
 						connectorsActive: countConnectorsActive(connectors),
 						pipelineMode: readPipelineMode(liveCfg.pipelineV2),
-						extractionProvider: liveCfg.pipelineV2.extraction.provider,
+						extractionProvider: providerRuntimeResolution.extraction.effective,
 						embeddingProvider: liveCfg.embedding.provider,
 					});
 				} catch {}

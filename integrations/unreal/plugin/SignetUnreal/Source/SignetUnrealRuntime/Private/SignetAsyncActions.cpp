@@ -2,11 +2,11 @@
 
 #include "Json.h"
 #include "Misc/Guid.h"
+#include "SignetRecallRequest.h"
 #include "SignetUnrealClient.h"
 
 namespace
 {
-constexpr int32 DefaultRecallLimit = 6;
 
 FString BuildNpcIdentitySourceId(const FSignetNpcIdentity& Identity)
 {
@@ -87,17 +87,6 @@ TSharedRef<FJsonObject> MakeRememberBody(
 	Body->SetStringField(TEXT("visibility"), TEXT("global"));
 	Body->SetNumberField(TEXT("importance"), FMath::Clamp(Importance, 0.0f, 1.0f));
 	Body->SetBoolField(TEXT("pinned"), bPinned);
-	return Body;
-}
-
-TSharedRef<FJsonObject> MakeRecallBody(const FString& AgentId, const FString& Scope, const FString& Query, int32 Limit)
-{
-	TSharedRef<FJsonObject> Body = MakeShared<FJsonObject>();
-	Body->SetStringField(TEXT("query"), Query);
-	Body->SetStringField(TEXT("agentId"), AgentId);
-	Body->SetStringField(TEXT("scope"), Scope);
-	Body->SetNumberField(TEXT("limit"), FMath::Clamp(Limit, 1, 20));
-	Body->SetBoolField(TEXT("includeRecalled"), true);
 	return Body;
 }
 
@@ -275,7 +264,7 @@ USignetRecallNpcContextAsync* USignetRecallNpcContextAsync::RecallNpcContext(
 	Action->WorldId = InWorldId;
 	Action->PlayerId = InPlayerId;
 	Action->Situation = InSituation;
-	Action->Limit = InLimit > 0 ? InLimit : DefaultRecallLimit;
+	Action->Limit = InLimit > 0 ? InLimit : SignetRecallRequest::DefaultNpcLimit;
 	Action->RegisterWithGameInstance(WorldContextObject);
 	return Action;
 }
@@ -318,7 +307,7 @@ void USignetRecallNpcContextAsync::RecallScope(const FString& Scope, TFunction<v
 		*AgentId,
 		*Situation
 	);
-	TSharedRef<FJsonObject> Body = MakeRecallBody(AgentId, Scope, Query, Limit);
+	TSharedRef<FJsonObject> Body = SignetRecallRequest::BuildNpcBody(AgentId, Scope, Query, Limit);
 
 	FSignetUnrealClient::PostJson(
 		TEXT("/api/memory/recall"),
