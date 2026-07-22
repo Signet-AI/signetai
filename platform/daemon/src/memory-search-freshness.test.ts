@@ -7,9 +7,10 @@ import { type ResolvedMemoryConfig, loadMemoryConfig } from "./memory-config";
 import { hybridRecall } from "./memory-search";
 import { hasFreshnessIntent } from "./temporal-recall";
 
-const NOW_ISO = "2026-07-19T00:00:00.000Z";
-const MARCH_CREATED = "2026-03-10T12:00:00.000Z";
-const JULY_CREATED = "2026-07-10T12:00:00.000Z";
+const DAY_MS = 86_400_000;
+const TEST_NOW_MS = Date.now();
+const OLDER_CREATED = new Date(TEST_NOW_MS - 130 * DAY_MS).toISOString();
+const RECENT_CREATED = new Date(TEST_NOW_MS - 8 * DAY_MS).toISOString();
 
 describe("hasFreshnessIntent", () => {
 	it("detects explicit freshness terms", () => {
@@ -74,12 +75,12 @@ describe("hybridRecall freshness-aware rehearsal", () => {
 				`INSERT INTO memories (
 					id, content, type, agent_id, visibility, created_at, updated_at, updated_by
 				) VALUES (?, ?, 'fact', 'agent-a', 'global', ?, ?, 'test')`,
-			).run("march-fact", "heron status level is red", MARCH_CREATED, MARCH_CREATED);
+			).run("older-fact", "heron status level is red", OLDER_CREATED, OLDER_CREATED);
 			db.prepare(
 				`INSERT INTO memories (
 					id, content, type, agent_id, visibility, created_at, updated_at, updated_by
 				) VALUES (?, ?, 'fact', 'agent-a', 'global', ?, ?, 'test')`,
-			).run("july-fact", "heron status level is blue", JULY_CREATED, JULY_CREATED);
+			).run("recent-fact", "heron status level is blue", RECENT_CREATED, RECENT_CREATED);
 		});
 	}
 
@@ -93,7 +94,6 @@ describe("hybridRecall freshness-aware rehearsal", () => {
 				limit: 5,
 				agentId: "agent-a",
 				readPolicy: "isolated",
-				temporalNow: NOW_ISO,
 			},
 			cfg,
 			async () => null,
@@ -104,7 +104,7 @@ describe("hybridRecall freshness-aware rehearsal", () => {
 		seedFacts();
 		const res = await recall("current status of heron", testCfg());
 		expect(res.results.length).toBeGreaterThanOrEqual(2);
-		expect(res.results[0]?.id).toBe("july-fact");
+		expect(res.results[0]?.id).toBe("recent-fact");
 	});
 
 	it("does not change ordering for timeless queries", async () => {
@@ -132,13 +132,12 @@ describe("hybridRecall freshness-aware rehearsal", () => {
 				limit: 5,
 				agentId: "agent-a",
 				readPolicy: "isolated",
-				since: "2026-03-01T00:00:00.000Z",
-				until: "2026-04-01T00:00:00.000Z",
-				temporalNow: NOW_ISO,
+				since: new Date(Date.parse(OLDER_CREATED) - DAY_MS).toISOString(),
+				until: new Date(Date.parse(OLDER_CREATED) + DAY_MS).toISOString(),
 			},
 			testCfg(),
 			async () => null,
 		);
-		expect(res.results.map((row) => row.id)).toEqual(["march-fact"]);
+		expect(res.results.map((row) => row.id)).toEqual(["older-fact"]);
 	});
 });

@@ -1130,6 +1130,8 @@ export function loadMemoryConfig(agentsDir: string): ResolvedMemoryConfig {
 			rehearsal_enabled: true,
 			rehearsal_weight: 0.1,
 			rehearsal_half_life_days: 30,
+			// Default-on is deliberate for #903: explicit freshness language gets
+			// only a bounded near-tie boost, while timeless and ranged queries skip it.
 			temporal_prior_enabled: true,
 			temporal_prior_weight: 0.15,
 			temporal_prior_half_life_days: 14,

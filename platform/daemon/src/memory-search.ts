@@ -95,8 +95,6 @@ export interface RecallParams {
 	excludeAggregateRecallMemories?: boolean;
 	/** Internal escape hatch for hooks that must track only injected rows elsewhere. */
 	trackRecallAccess?: boolean;
-	/** Internal test hook: pin the reference time used by freshness-aware rehearsal (ISO string). */
-	temporalNow?: string;
 }
 
 export interface RecallResult {
@@ -1283,7 +1281,7 @@ export async function hybridRecall(
 
 	// Date ranges are handled by resolveTemporalRecall above. The existing
 	// rehearsal stage gets only the distinct, keyword-based freshness signal.
-	const temporalNowMs = params.temporalNow ? Date.parse(params.temporalNow) : Date.now();
+	const temporalNowMs = Date.now();
 	const freshnessIntent =
 		cfg.search.temporal_prior_enabled && !params.since && !params.until && hasFreshnessIntent(params.query);
 
@@ -2133,12 +2131,10 @@ export async function hybridRecall(
 	if (scored.length > 0) {
 		const currentnessStart = performance.now();
 		try {
-			if (currentness.size === 0) {
-				currentness = loadCurrentnessInfo(
-					scored.map((row) => row.id),
-					params.agentId ?? "default",
-				);
-			}
+			currentness = loadCurrentnessInfo(
+				scored.map((row) => row.id),
+				params.agentId ?? "default",
+			);
 			applyCurrentnessBias(scored, currentness);
 		} catch (e) {
 			logger.warn("memory", "Currentness shaping failed (non-fatal)", {

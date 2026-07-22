@@ -1483,6 +1483,8 @@ pub struct SearchConfig {
 }
 
 fn default_temporal_prior_enabled() -> bool {
+    // Deliberately default-on for #903: explicit freshness language receives
+    // only a bounded near-tie boost; timeless and ranged queries bypass it.
     true
 }
 
@@ -1516,6 +1518,23 @@ impl Default for SearchConfig {
             temporal_prior_weight: default_temporal_prior_weight(),
             temporal_prior_half_life_days: default_temporal_prior_half_life_days(),
         }
+    }
+}
+
+#[cfg(test)]
+mod search_config_tests {
+    use super::SearchConfig;
+
+    #[test]
+    fn temporal_prior_is_deliberately_default_on_and_can_be_disabled() {
+        let defaults = SearchConfig::default();
+        assert_eq!(defaults.temporal_prior(), (true, 0.15, 14.0));
+
+        let disabled = SearchConfig {
+            temporal_prior_enabled: false,
+            ..defaults
+        };
+        assert!(!disabled.temporal_prior().0);
     }
 }
 

@@ -97,6 +97,18 @@ describe("loadMemoryConfig", () => {
 		expect(cfg.embedding.promptSubmitTimeoutMs).toBe(MIN_PROMPT_SUBMIT_EMBEDDING_TIMEOUT_MS);
 	});
 
+	it("deliberately enables the bounded freshness prior by default and allows opt-out", () => {
+		const defaultDir = makeTempAgentsDir();
+		const defaults = loadMemoryConfig(defaultDir);
+		expect(defaults.search.temporal_prior_enabled).toBe(true);
+		expect(defaults.search.temporal_prior_weight).toBe(0.15);
+		expect(defaults.search.temporal_prior_half_life_days).toBe(14);
+
+		const disabledDir = makeTempAgentsDir();
+		writeFileSync(join(disabledDir, "agent.yaml"), "search:\n  temporal_prior_enabled: false\n");
+		expect(loadMemoryConfig(disabledDir).search.temporal_prior_enabled).toBe(false);
+	});
+
 	it("enables graph extraction writes by default", () => {
 		const agentsDir = makeTempAgentsDir();
 		const cfg = loadMemoryConfig(agentsDir);

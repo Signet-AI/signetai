@@ -900,7 +900,9 @@ those queries only, it applies a bounded `created_at` recency boost alongside
 its normal access-based decay. Date-range interpretation remains exclusively
 on the structural temporal-recall path, and bare `now` does not trigger
 freshness shaping. Timeless queries and callers with `since`/`until` bounds are
-unchanged.
+unchanged. This conservative behavior is deliberately enabled by default as a
+fix for stale near-ties; operators can disable it with
+`search.temporal_prior_enabled: false`.
 
 Structured currentness then applies a final correction before hydration.
 Active attributes remain eligible as current evidence, while memories whose
