@@ -289,9 +289,22 @@ export function createPiModelProvider(config: PiModelProviderConfig): StreamCapa
 			return callOnce(prompt, opts);
 		},
 		async available() {
-			// Local servers: best-effort reachability via a trivial call.
-			// Cloud providers: assume available (fail loudly on first real call).
-			return true;
+			// Reachability check: ping the OpenAI-compatible /models endpoint (or
+			// Anthropic /v1/models) so the router can skip unreachable targets before
+			// attempting a real call. Mirrors the legacy providers' availability probe.
+			const probeUrl = piModel.api === "anthropic-messages"
+				? `${piModel.baseUrl.replace(/\/+$/, "")}/v1/models`
+				: `${piModel.baseUrl.replace(/\/+$/, "")}/models`;
+			try {
+				const res = await fetch(probeUrl, {
+					method: "GET",
+					headers: apiKey ? { authorization: `Bearer ${apiKey}` } : {},
+					signal: AbortSignal.timeout(8_000),
+				});
+				return res.ok || res.status === 401;
+			} catch {
+				return false;
+			}
 		},
 	};
 

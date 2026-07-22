@@ -64,7 +64,9 @@ export async function createRoutingProvider(opts: CreateRoutingProviderOptions):
 		model: model.model,
 		baseUrl: target.endpoint,
 		apiKey: credential,
-		reasoning: target.openrouter?.reasoning ?? (model.reasoning !== undefined ? model.reasoning === "deep" : undefined),
+		reasoning:
+			target.openrouter?.reasoning?.enabled ??
+			(model.reasoning !== undefined ? model.reasoning === "deep" : undefined),
 		contextWindow: model.contextWindow,
 		name: `${target.executor}:${model.model}`,
 		defaultTimeoutMs: 60_000,
