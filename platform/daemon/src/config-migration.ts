@@ -221,3 +221,145 @@ function writeAtomic(path: string, contents: string): void {
 	writeFileSync(tmp, contents, "utf-8");
 	renameSync(tmp, path);
 }
+
+// ---------------------------------------------------------------------------
+// v4: retire legacy pipelineV2 routing fields -> inference registry
+// ---------------------------------------------------------------------------
+// Compiles memory.pipelineV2.extraction/synthesis routing fields into the
+// inference.accounts/targets/workloads registry (mirroring the daemon's
+// compileLegacyRoutingConfig), then NULLS the legacy routing keys (provider,
+// model, endpoint, fallbackProvider, command) so the registry is the single
+// source of truth. Tuning fields (timeout, maxTokens, enabled) are preserved.
+//
+// Guarded by configVersion: 4. Idempotent: a file already at v4+ is skipped.
+
+/** Map a legacy provider to the account name/id this migration creates. */
+function legacyAccountFor(provider: string): { name: string; family: string; cred: string } | null {
+	if (provider === "openrouter") return { name: "legacy-openrouter", family: "openrouter", cred: "OPENROUTER_API_KEY" };
+	if (provider === "anthropic") return { name: "legacy-anthropic", family: "anthropic", cred: "ANTHROPIC_API_KEY" };
+	return null; // local providers (ollama/llama-cpp/openai-compatible-local) need no account
+}
+
+export function migrateLegacyRoutingToRegistry(agentsDir: string): void {
+	const path = findConfigPath(agentsDir);
+	if (!path) return;
+
+	let text: string;
+	try {
+		text = readFileSync(path, "utf-8");
+	} catch {
+		return;
+	}
+
+	const vMatch = /^configVersion:\s*(\d+)/m.exec(text);
+	if (vMatch && Number(vMatch[1]) >= 4) return;
+
+	const doc = parseDocument(text);
+	if (doc.errors.length > 0) {
+		logger.warn("config-migration", "Skipping legacy-routing migration: agent.yaml has parse errors", {
+			file: path,
+			errors: doc.errors.map((e) => e.message).slice(0, 3),
+		});
+		return;
+	}
+
+	const extraction = doc.getIn(["memory", "pipelineV2", "extraction"], true);
+	const synthesis = doc.getIn(["memory", "pipelineV2", "synthesis"], true);
+	const hasLegacyRouting =
+		(isMap(extraction) && (extraction.has("provider") || extraction.has("model") || extraction.has("endpoint"))) ||
+		(isMap(synthesis) && (synthesis.has("provider") || synthesis.has("model") || synthesis.has("endpoint")));
+
+	if (!hasLegacyRouting) {
+		// Nothing to migrate; still stamp v4 so we don't re-parse every startup.
+		stampConfigVersion(doc, 4);
+		writeAtomic(path, doc.toString());
+		return;
+	}
+
+	const mutations: string[] = [];
+
+	// Ensure inference/accounts and inference/targets maps exist.
+	const inference =
+		doc.getIn(["inference"], true) ??
+		doc.setIn(["inference"], doc.createNode({})) ??
+		doc.getIn(["inference"], true);
+	if (!isMap(inference)) {
+		doc.setIn(["inference"], doc.createNode({}));
+	}
+	if (!doc.getIn(["inference", "targets"], true)) {
+		doc.setIn(["inference", "targets"], doc.createNode({}));
+	}
+	if (!doc.getIn(["inference", "accounts"], true)) {
+		doc.setIn(["inference", "accounts"], doc.createNode({}));
+	}
+	if (!doc.getIn(["inference", "workloads"], true)) {
+		doc.setIn(["inference", "workloads"], doc.createNode({}));
+	}
+
+	function compileTarget(
+		source: ReturnType<typeof doc.getIn>,
+		targetName: string,
+		workloadKey: "memoryExtraction" | "sessionSynthesis",
+	): void {
+		if (!isMap(source)) return;
+		const provider = String(source.get("provider", true) ?? "");
+		const model = source.get("model", true);
+		const endpoint = source.get("endpoint", true);
+		if (!provider || provider === "none" || provider === "command") return;
+		if (workloadKey === "sessionSynthesis" && !String(source.get("enabled", true) ?? "")) return;
+		if (workloadKey === "sessionSynthesis" && provider === "acpx") return;
+
+		// Create the account if the provider needs one.
+		const acct = legacyAccountFor(provider);
+		if (acct) {
+			doc.setIn(["inference", "accounts", acct.name], doc.createNode({
+				kind: "api",
+				providerFamily: acct.family,
+				credentialRef: acct.cred,
+			}));
+		}
+		// Create/update the target.
+		const targetNode = doc.createNode({
+			executor: provider,
+			...(acct ? { account: acct.name } : {}),
+			...(endpoint ? { endpoint: String(endpoint) } : {}),
+			models: { default: { model: model ? String(model) : "", reasoning: "medium" } },
+		});
+		doc.setIn(["inference", "targets", targetName], targetNode);
+		// Bind the workload to it.
+		doc.setIn(["inference", "workloads", workloadKey], doc.createNode({
+			target: `${targetName}/default`,
+		}));
+		mutations.push(`${workloadKey} -> inference.targets.${targetName} (executor: ${provider})`);
+	}
+
+	compileTarget(extraction, "legacy-extraction", "memoryExtraction");
+	compileTarget(synthesis, "legacy-synthesis", "sessionSynthesis");
+
+	// Null the legacy ROUTING keys (keep tuning: timeout, maxTokens, enabled).
+	function nullRoutingKeys(node: ReturnType<typeof doc.getIn>, label: string): void {
+		if (!isMap(node)) return;
+		// The command provider cannot be auto-mapped (arbitrary bin/args). Leave its
+		// entire block intact so the user can manually reconfigure it.
+		if (String(node.get("provider", true) ?? "") === "command") return;
+		for (const key of ["provider", "model", "endpoint", "fallbackProvider", "command", "baseUrl", "base_url"]) {
+			if (node.has(key)) {
+				node.delete(key);
+				mutations.push(`removed memory.pipelineV2.${label}.${key}`);
+			}
+		}
+	}
+	nullRoutingKeys(extraction, "extraction");
+	nullRoutingKeys(synthesis, "synthesis");
+
+	stampConfigVersion(doc, 4);
+	writeAtomic(path, doc.toString());
+
+	if (mutations.length > 0) {
+		logger.info("config-migration", "Migrated legacy routing fields to inference registry", {
+			mutations,
+			file: path,
+			note: "Routing now flows through inference.*; pipelineV2 tuning fields (timeout, maxTokens, enabled) preserved.",
+		});
+	}
+}

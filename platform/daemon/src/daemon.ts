@@ -36,7 +36,7 @@ import { resolveDaemonAgentId } from "./agent-id";
 import { yieldEvery } from "./async-yield";
 import { requirePermission } from "./auth";
 import { bindWithRetry } from "./bind-with-retry";
-import { migrateConfig, migrateInferenceProviders } from "./config-migration";
+import { migrateConfig, migrateInferenceProviders, migrateLegacyRoutingToRegistry } from "./config-migration";
 import { listConnectors } from "./connectors/registry";
 import { clearAllPresence } from "./cross-agent";
 import { closeDbAccessor, getDbAccessor, getVectorRuntimeStatus, initDbAccessorAsync } from "./db-accessor";
@@ -1394,14 +1394,15 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 			) as RuntimeSynthesisProviderName | null)) ??
 		(synthesisAvailable ? "inference" : null);
 	providerRuntimeResolution.extraction = {
-		configured: memoryCfg.pipelineV2.extraction.provider,
+		// Configured/resolved now derive from the routing registry (the workload
+		// binding's target executor), not the retired legacy flat fields.
+		configured: commandExtractionMode
+			? "command"
+			: (executorForTargetRef(statusValue, extractionBinding) as RuntimeExtractionProviderName | null),
 		resolved: commandExtractionMode
 			? "command"
-			: explicitInference
-				? "inference"
-				: memoryCfg.pipelineV2.extraction.provider,
+			: (extractionEffective as RuntimeExtractionProviderName | null),
 		effective: extractionEffective,
-		fallbackProvider: memoryCfg.pipelineV2.extraction.fallbackProvider,
 		status: extractionStatus,
 		degraded: extractionDegraded,
 		fallbackApplied: extractionFallbackApplied,
@@ -1420,9 +1421,11 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 		since: statusSince,
 	};
 	providerRuntimeResolution.synthesis = {
-		configured: memoryCfg.pipelineV2.synthesis.enabled ? memoryCfg.pipelineV2.synthesis.provider : null,
+		configured: synthesisAvailable
+			? ((executorForTargetRef(statusValue, synthesisDecision?.ok ? synthesisDecision.value.targetRef : undefined) as RuntimeSynthesisProviderName | null))
+			: null,
 		resolved: synthesisAvailable
-			? ((explicitInference ? "inference" : memoryCfg.pipelineV2.synthesis.provider) as RuntimeSynthesisProviderName)
+			? (synthesisEffective as RuntimeSynthesisProviderName | null)
 			: null,
 		effective: synthesisEffective,
 	};
@@ -1830,6 +1833,7 @@ async function main() {
 	try {
 		migrateConfig(AGENTS_DIR);
 		migrateInferenceProviders(AGENTS_DIR);
+		migrateLegacyRoutingToRegistry(AGENTS_DIR);
 	} catch (err) {
 		logger.warn("config-migration", "Config migration failed; continuing startup", {
 			error: err instanceof Error ? err.message : String(err),
@@ -1884,7 +1888,7 @@ async function main() {
 						memoryCount,
 						connectorsActive: countConnectorsActive(connectors),
 						pipelineMode: readPipelineMode(liveCfg.pipelineV2),
-						extractionProvider: liveCfg.pipelineV2.extraction.provider,
+						extractionProvider: providerRuntimeResolution.extraction.effective,
 						embeddingProvider: liveCfg.embedding.provider,
 					});
 				} catch {}

@@ -70,11 +70,15 @@ function bgExecutor(): string {
 }
 function bgSetExecutor(v: string): void {
 	if (!v) {
-		// Clearing: remove the target entirely.
+		// Clearing: remove the target + unbind the workload.
 		st.aSetStr(["inference", "targets", TARGET_NAME, "executor"], "");
+		st.aSetStr(["inference", "workloads", "memoryExtraction", "target"], "");
 		return;
 	}
 	st.aSetStr(["inference", "targets", TARGET_NAME, "executor"], v);
+	// Bind the memoryExtraction workload to this target so Pipeline V2
+	// resolves it through the routing registry (#947).
+	st.aSetStr(["inference", "workloads", "memoryExtraction", "target"], `${TARGET_NAME}/default`);
 }
 
 // For openai-compatible/ollama/llama-cpp/anthropic/openrouter: which provider

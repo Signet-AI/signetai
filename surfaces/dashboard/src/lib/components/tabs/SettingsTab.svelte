@@ -43,12 +43,6 @@ const sectionDefs: SectionDef[] = [
 		paths: [["network"]],
 	},
 	{
-		id: "embeddings",
-		title: "Embeddings",
-		source: "config",
-		paths: [["embedding"], ["memory", "embeddings"], ["embeddings"]],
-	},
-	{
 		id: "memory",
 		title: "Memory",
 		source: "config",

@@ -272,7 +272,7 @@ export function startPipeline(
 				pipelineCfg,
 			});
 		}
-		if (!synthesisWorkerHandle && pipelineCfg.synthesis.enabled && pipelineCfg.synthesis.provider !== "none") {
+		if (!synthesisWorkerHandle && pipelineCfg.synthesis.enabled) {
 			synthesisWorkerHandle = startSynthesisWorker(pipelineCfg.synthesis);
 		}
 		logger.info("pipeline", "Pipeline started in command extraction compatibility mode", {
@@ -330,7 +330,7 @@ export function startPipeline(
 	}
 
 	// Synthesis worker — session-activity-based MEMORY.md regeneration
-	if (!synthesisWorkerHandle && pipelineCfg.synthesis.enabled && pipelineCfg.synthesis.provider !== "none") {
+	if (!synthesisWorkerHandle && pipelineCfg.synthesis.enabled) {
 		synthesisWorkerHandle = startSynthesisWorker(pipelineCfg.synthesis);
 	}
 
