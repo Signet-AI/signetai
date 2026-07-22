@@ -1,129 +1,130 @@
 # Dashboard Inference Settings — Design Proposal (#947, workstream A follow-on)
 
-**Status:** DRAFT for sign-off. Pending a UX reference from Nicholai; the
-visual treatment section is the main thing it will shape. Scope and data model
-are locked (see Decisions).
+**Status:** DRAFT v2 for sign-off. Visual treatment now resolved — adopt the
+OpenCode desktop settings-v2 pattern (verified in
+`~/signet/signetai/references/opencode/packages/app/src/components/settings-v2/`).
+Solid/Svelte translation is mechanical; the *structure* is what we're adopting.
 
 ## Decisions locked
 
 - **Scope (C):** full redesign of the inference portion of the settings page.
 - **Config layer (1):** the UI edits the **routing registry**
   (`inference.accounts` / `inference.targets` / `inference.workloads`), the
-  graph `InferenceRouter` actually consumes. Round-trips existing configs
-  losslessly; makes ACPX agents + OAuth first-class.
+  graph `InferenceRouter` consumes.
 - **Model picker:** backed by **pi-ai** (`getProviders()` + `getModels(provider)`),
-  via a new `GET /api/inference/catalog` route — not our stale static
-  `modelPresetsForProvider`. Live, auto-refreshable.
-- **Write path unchanged:** dashboard still saves raw `agent.yaml` text via
-  `POST /api/config`; `SettingsStore` rebinds from `memory.pipelineV2.*` paths
-  to `inference.*` paths. No daemon config-write API changes.
+  via a new `GET /api/inference/catalog` route.
+- **Write path unchanged:** dashboard saves raw `agent.yaml` via `POST /api/config`;
+  `SettingsStore` rebinds from `memory.pipelineV2.*` to `inference.*` paths.
+- **Visual treatment (NEW, from OpenCode reference):** a vertical-tab settings
+  modal with three peer sections — **Providers**, **Models**, **Endpoints** —
+  where each section has exactly one job. This replaces my earlier single-form
+  "AccountManager/TargetManager" sketch with a cleaner separation that OpenCode
+  has already pressure-tested.
 
-## The three entities the UI manages
+## The OpenCode pattern (what we're adopting)
 
-The registry is a small graph, not a form. The UI is a resource manager over:
+OpenCode separates three concerns that Signet currently conflates into one
+`PipelineSection` dropdown. Verified by reading their source:
 
-### 1. Accounts (`inference.accounts.<name>`)
-Named credential stores. Two auth shapes, picked per provider family:
-- **API key** (`kind: api`, `credentialRef: <SECRET_NAME>`) — anthropic,
-  openai, openrouter, deepseek, groq, mistral, … The UI shows a secret-picker
-  (existing Signet secrets) + a "create new secret" affordance. Never displays
-  the key value.
-- **OAuth / subscription session** (`kind: subscription_session` /
-  `oauth_session`, `sessionRef`) — ChatGPT/Codex, Claude Pro/Max, Copilot,
-  Grok. The UI shows a **Login** button that kicks the OAuth flow; status
-  (connected / expired) surfaced from the session store.
+### Providers tab = auth/identity
+- Two sections: **Connected** (with Disconnect) and **Popular** (with Connect).
+- Each provider row: icon, name, a `Tag` for source
+  (`env` / `apiKey` / `config` / `custom`).
+- **Connect** opens a dialog that handles both API-key entry and OAuth login
+  (provider-dependent). **Disconnect** removes the credential.
+- A **Custom provider** row at the bottom for OpenAI-compatible gateways.
 
-Fields: `name`, `kind`, `providerFamily` (drives the auth shape + the model
-catalog), `label`, optional `usageTier`.
+### Models tab = visibility filter
+- One big **searchable list**, grouped by provider, each model a toggle
+  (visible/hidden in the picker). Not a create/edit form — a filter over the
+  catalog the connected providers expose.
+- `useFilteredList` with fuzzy search; groups sorted by "popular" then alpha.
 
-### 2. Targets (`inference.targets.<name>`)
-Named execution endpoints — the thing a workload actually calls.
-- `executor`: **anthropic | openrouter | ollama | llama-cp | openai-compatible | acpx**
-  (the only six that exist post-cutover).
-- `account`: ref into accounts (for the API/OAuth executors).
-- `endpoint`: custom base URL — the **OpenAI-compatible endpoint** field
-  (LM Studio, Ollama, llama.cpp, gateways). Shown for the openai-compat/local
-  executors; hidden for cloud.
-- `acpx: { agent }`: the **ACPX agent picker** (claude / codex / opencode /
-  gemini / …). Shown only when `executor: acpx`.
-- `privacy`: local_only / remote_ok (gates whether background work uses it).
-- `models.<id>`: per-target model entries — `model`, `reasoning`, `toolUse`,
-  `streaming`, `contextWindow`. The model id comes from the pi-ai catalog
-  picker.
+### Servers tab = connection endpoints
+- List of HTTP endpoints (URL + auth), each with a **health indicator**,
+  version, default badge, and an edit menu.
+- Add via a dialog (URL + optional username). This is where custom/local
+  OpenAI-compatible endpoints live.
 
-### 3. Workloads → targets (`inference.workloads.<op>`)
-Binds each daemon workload to a target (or policy). Workloads:
-`default`, `interactive`, `memoryExtraction`, `sessionSynthesis`,
-`widgetGeneration`, `repair`. This is the "which model does extraction use vs
-synthesis vs interactive" mapping — the thing the legacy flat
-`extraction.provider`/`synthesis.provider` was a degenerate single-target
-version of.
+## Mapping onto Signet's routing registry
 
-## Proposed component breakdown
+The OpenCode three-way split maps almost 1:1 onto our registry entities:
 
-Replaces the stale `PipelineSection.svelte` provider/model dropdowns with:
+| OpenCode concept | Signet registry entity | Notes |
+|---|---|---|
+| **Providers** (Connect/Disconnect, auth) | `inference.accounts.*` | API key → `kind: api`, `credentialRef`. OAuth → `kind: subscription_session`, `sessionRef`. |
+| **Models** (visibility toggle) | derived from pi-ai catalog, filtered by connected accounts | A model "visible" = listed in some target's `models.*`. Toggle adds/removes it from a default target. |
+| **Servers** (HTTP endpoints, health) | `inference.targets.*` with `executor: openai-compatible` / `ollama` / `llama-cpp` | Health = our `available()` probe (`/models` reachability, already implemented in pi-provider). |
+| (implicit: ACPX agents) | `inference.targets.*` with `executor: acpx` | ACPX targets surface as a fourth concept or a tag on Servers — see open question. |
+
+### The one wrinkle: targets vs OpenCode's "servers"
+
+OpenCode's Servers are purely HTTP endpoints. Our `inference.targets` are richer
+— they also carry the workload bindings and the executor kind (incl. ACPX).
+Two options for how to present targets:
+
+- **(a)** Keep OpenCode's shape: Servers = HTTP/local endpoints only; ACPX
+  targets appear under Providers (since ACPX is "connect a harness") or a
+  separate small section. Workload bindings live in an Advanced area.
+- **(b)** Generalize "Servers" → "Endpoints" that lists *all* targets (HTTP
+  and ACPX), tagged by kind, with workload binding as a per-endpoint field.
+
+I lean **(b)** — it keeps the registry's target concept intact and avoids
+splitting ACPX away from its peers. But this is the main thing to confirm.
+
+## Proposed component breakdown (revised)
+
+Replaces `PipelineSection.svelte`'s provider/model controls. Svelte
+equivalents of the OpenCode Solid components:
 
 ```
-InferenceSettingsSection (new)
-├── AccountManager          — list + add/edit/remove accounts
-│   ├── AccountEditor       — fields switch on providerFamily:
-│   │     • ApiKeyField     (secret picker)      when kind=api
-│   │     • OAuthLoginButton + status            when kind=subscription/oauth
-│   └── ProviderFamilyPicker (from pi-ai getProviders)
-├── TargetManager           — list + add/edit/remove targets
-│   ├── TargetEditor
-│   │     • ExecutorPicker  (the 6 executors)
-│   │     • AccountRefPicker (filtered to matching providerFamily)
-│   │     • EndpointField   (shown for openai-compat/local)
-│   │     • AcpxAgentPicker (shown for acpx)
-│   │     └── ModelEntries   (pi-ai getModels(provider) picker, per model)
-│   └── PrivacyToggle
-├── WorkloadBindings        — one row per workload, target dropdown
-└── (catalog route on the daemon: GET /api/inference/catalog)
+InferenceSettingsModal (vertical tabs)
+├── ProvidersTab
+│   ├── ConnectedList     (account rows: icon, name, auth-kind tag, Disconnect)
+│   ├── PopularList       (provider rows from pi-ai getProviders(), Connect button)
+│   └── ConnectDialog     (API-key field OR OAuth button, switched by provider)
+├── ModelsTab
+│   ├── SearchInput       (fuzzy filter)
+│   └── ModelList         (grouped by provider, toggle visible/hidden)
+├── EndpointsTab          [was "Servers"]
+│   ├── EndpointList      (target rows: name, executor tag, health dot, edit menu)
+│   └── EndpointDialog    (executor picker → conditional fields:
+│                          openai-compat/ollama/llama-cpp: URL + key + model
+│                          acpx: agent picker (claude/codex/opencode/…))
+└── (daemon) GET /api/inference/catalog  → { providers, models per provider, acpxAgents }
+    (daemon) GET /api/inference/health/:target  → reachability for the health dot
 ```
 
-`GET /api/inference/catalog` returns:
-```json
-{ "providers": ["anthropic","openai",...],
-  "models": { "anthropic": [{id,name,contextWindow,input,reasoning,cost}, ...], ... },
-  "acpxAgents": ["claude","codex","opencode","gemini",...] }
-```
-Server-side it calls pi-ai `getProviders()` / `getModels(provider)`; the acpx
-agent list is the static `acpx --help` subcommand set (or probed).
+## What this resolves (vs my v1 draft)
 
-## What the reference will resolve (open)
+- ✅ **Visual treatment** — adopted from OpenCode (was open #1).
+- ✅ **OAuth mechanics** — Connect/Disconnect dialog pattern, provider-switched
+  (was open #2). Exact OAuth callback wiring still to confirm against pi-ai,
+  but the UI shell is defined.
+- ⏳ **Simple-default shortcut** — OpenCode's "Models as visibility toggle"
+  *is* the simple mode: casual users connect one provider, toggle a model on,
+  done. No separate hybrid needed (was open #3, largely resolved).
 
-1. **Visual treatment.** A table-per-entity? Cards? A wizard for first-run?
-   Split-pane master-detail? The data model is fixed; the reference picks the
-   layout idiom.
-2. **OAuth button mechanics.** Whether the login flow opens an in-dashboard
-   modal or redirects. Depends on pi-ai's OAuth callback shape (to confirm
-   against the reference).
-3. **Whether workload bindings get a "simple default" shortcut.** The pure
-   registry (decision 1) means every workload is a row. If the reference
-   implies most users only set one target, we may add a non-config-writing
-   convenience that points all workloads at one target — UI-only, no config
-   duplication.
+## Open question to confirm with you
 
-## Out of scope for this redesign
-
-- The non-inference parts of `PipelineSection` (worker concurrency, continuity,
-  reranker toggles, retention) — those stay; only the provider/model/endpoint
-  controls move into the new section.
-- Editing `inference.policies` / `taskClasses` (advanced routing). Exposed only
-  if the reference calls for it; default is `mode: automatic` with workload
-  bindings.
-- The embeddings settings (`EmbeddingsSection`) — separate, untouched.
+**Targets presentation (the wrinkle above):** option (a) keep OpenCode's
+HTTP-only Servers + ACPX elsewhere, or (b) generalize to "Endpoints" listing
+all target kinds? I recommend (b).
 
 ## Risk / sequencing
 
-- **Largest risk:** the `SettingsStore` path-binding model assumes a stable
-  YAML tree; nested maps keyed by user-chosen names (accounts/targets) need
-  add/rename/delete semantics it may not have cleanly today. Verify before
-  building the editors.
-- **Build order:** catalog route → AccountManager → TargetManager →
-  WorkloadBindings. Each is independently testable against the daemon.
-- **Existing-config safety:** because the UI edits the registry directly, a
-  user with a working `inference.targets` config sees it populated correctly on
-  first load (round-trips). The legacy `memory.pipelineV2.*` fields become
-  ignored UI — we should hide that section once the registry has any target.
+- **SettingsStore:** add/edit of named keys works natively; **delete needs a
+  new `aDelete(path)` method** (small, bounded — confirmed against source).
+- **Build order:** catalog+health routes → ProvidersTab → ModelsTab →
+  EndpointsTab. Each independently testable.
+- **Existing-config safety:** a working `inference.accounts/targets` config
+  populates the tabs correctly on first load (round-trips). Hide the legacy
+  `memory.pipelineV2.*` provider controls once any account/target exists.
+
+## Out of scope
+
+- Non-inference parts of `PipelineSection` (worker concurrency, continuity,
+  reranker, retention) — stay.
+- `inference.policies` / `taskClasses` advanced routing — default
+  `mode: automatic`; expose only if needed later.
+- `EmbeddingsSection` — untouched.
