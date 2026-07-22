@@ -76,6 +76,51 @@ Inference concurrency limits can be tuned with:
 - `SIGNET_INFERENCE_MAX_CONCURRENT_GATEWAY_STREAMS`
 - `SIGNET_INFERENCE_MAX_CONCURRENT_TOTAL`
 
+### GET /api/inference/catalog
+
+Requires `diagnostics` permission in authenticated modes. Returns the provider
+and model registry from pi-ai, the OAuth provider registry, and ACPX agent
+names. `modelErrors` reports provider-specific catalog failures; failures are
+never represented as a silent empty model list.
+
+### GET /api/inference/oauth/providers
+
+Requires `diagnostics` permission in authenticated modes. Returns the OAuth
+providers registered by pi-ai and whether Signet has encrypted credentials for
+each provider. Access and refresh tokens are never returned.
+
+### POST /api/inference/oauth/login/:id
+
+Requires `admin` permission. Starts a bounded, daemon-owned OAuth login and
+returns a Server-Sent Events stream. The response's
+`X-Signet-OAuth-Session-Id` header identifies the login session.
+
+Events include `session`, `auth`, `device_code`, `prompt`, `select`, `manual_code`,
+`progress`, `connected`, `error`, and `done`. Interactive events include a
+`responseId` that must be answered through the completion route. The daemon
+stores credentials returned by pi-ai; clients never submit or receive OAuth
+credentials.
+
+### POST /api/inference/oauth/complete
+
+Requires `admin` permission. Answers one pending login interaction.
+
+```json
+{
+  "sessionId": "a login session UUID",
+  "responseId": "the event response UUID",
+  "value": "the prompt response, selected option id, or manual callback URL"
+}
+```
+
+Sessions and responses are single-use, expire after ten minutes, and reject
+empty values unless the provider explicitly allows them.
+
+### POST /api/inference/oauth/disconnect/:id
+
+Requires `admin` permission. Deletes the provider's encrypted OAuth credential.
+Subsequent inference requests treat the account as disconnected.
+
 ### GET /api/inference/history
 
 Requires `diagnostics` permission in authenticated modes.

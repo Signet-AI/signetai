@@ -1,5 +1,5 @@
-import type { PipelineCommandConfig, PipelineExtractionConfig, PipelineSynthesisConfig } from "./types";
 import { defaultPipelineModel } from "./pipeline-providers";
+import type { PipelineCommandConfig, PipelineExtractionConfig, PipelineSynthesisConfig } from "./types";
 
 export const ROUTING_ACCOUNT_KINDS = ["subscription_session", "api"] as const;
 export const ROUTING_TARGET_KINDS = ["subscription_session", "api", "local", "gateway"] as const;
@@ -15,6 +15,7 @@ export const ROUTING_EXECUTOR_KINDS = [
 	"openai-compatible",
 	"command",
 ] as const;
+const ROUTING_EXECUTOR_PATTERN = /^[a-z0-9][a-z0-9._-]{0,127}$/;
 export const ROUTING_POLICY_MODES = ["strict", "automatic", "hybrid"] as const;
 export const ROUTING_PRIVACY_TIERS = ["remote_ok", "restricted_remote", "local_only"] as const;
 export const ROUTING_REASONING_DEPTHS = ["low", "medium", "high"] as const;
@@ -34,7 +35,7 @@ export const ROUTING_OPERATION_KINDS = [
 
 export type RoutingAccountKind = (typeof ROUTING_ACCOUNT_KINDS)[number];
 export type RoutingTargetKind = (typeof ROUTING_TARGET_KINDS)[number];
-export type RoutingExecutorKind = (typeof ROUTING_EXECUTOR_KINDS)[number];
+export type RoutingExecutorKind = (typeof ROUTING_EXECUTOR_KINDS)[number] | (string & {});
 export type RoutingPolicyMode = (typeof ROUTING_POLICY_MODES)[number];
 export type RoutingPrivacyTier = (typeof ROUTING_PRIVACY_TIERS)[number];
 export type RoutingReasoningDepth = (typeof ROUTING_REASONING_DEPTHS)[number];
@@ -366,8 +367,10 @@ function inferTargetKind(executor: string): RoutingTargetKind {
 	if (executor === "ollama" || executor === "llama-cpp" || executor === "openai-compatible" || executor === "command") {
 		return executor === "openai-compatible" ? "gateway" : "local";
 	}
-	if (executor === "anthropic" || executor === "openrouter") return "api";
-	return "subscription_session";
+	if (executor === "acpx" || executor === "claude-code" || executor === "codex" || executor === "opencode") {
+		return "subscription_session";
+	}
+	return "api";
 }
 
 function inferLegacyTargetKind(executor: string, endpoint: string | undefined): RoutingTargetKind {
@@ -588,7 +591,7 @@ function parseOpenRouterConfig(raw: unknown): RoutingOpenRouterConfig | undefine
 function parseTargetConfig(raw: unknown): RoutingTargetConfig | null {
 	if (!isRecord(raw)) return null;
 	const executor = asString(raw.executor);
-	if (!executor || !(ROUTING_EXECUTOR_KINDS as readonly string[]).includes(executor)) return null;
+	if (!executor || !ROUTING_EXECUTOR_PATTERN.test(executor)) return null;
 	const modelsRaw = isRecord(raw.models) ? raw.models : null;
 	if (!modelsRaw) return null;
 	const models: Record<string, RoutingModelConfig> = {};

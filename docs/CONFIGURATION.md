@@ -369,6 +369,9 @@ inference:
       kind: api
       providerFamily: openrouter
       credentialRef: OPENROUTER_API_KEY
+    codex-subscription:
+      kind: subscription_session
+      providerFamily: openai-codex
 
   targets:
     opus:
@@ -402,6 +405,13 @@ inference:
           reasoning: medium
           streaming: true
           costTier: low
+    codex-direct:
+      executor: openai-codex
+      account: codex-subscription
+      models:
+        default:
+          model: gpt-5.4
+          reasoning: high
 
   policies:
     auto:
@@ -455,11 +465,19 @@ Named account or credential identities used by targets.
 | Field | Type | Description |
 |-------|------|-------------|
 | `kind` | string | `subscription_session` or `api` |
-| `providerFamily` | string | Provider family label, for example `anthropic`, `openai`, `openrouter` |
+| `providerFamily` | string | pi-ai provider id, for example `anthropic`, `openai-codex`, `github-copilot`, or `openrouter` |
 | `label` | string | Human-readable account label |
 | `credentialRef` | string | Secret name or env var name for API-backed targets |
 | `sessionRef` | string | Session identifier for subscription-backed targets |
 | `usageTier` | string | Optional account tier label |
+
+For an OAuth subscription, set `kind: subscription_session`, use the pi-ai
+OAuth provider id as `providerFamily`, and omit `credentialRef`. Connect the
+account through `/api/inference/oauth/login/:id`. Signet stores the resulting
+OAuth credential in its encrypted secret store and asks pi-ai to refresh it at
+request time. For a conventional API-key account, use `kind: api` and set
+`credentialRef`; environment variables continue to take precedence over the
+encrypted secret with the same name.
 
 ### inference.targets
 
@@ -468,7 +486,7 @@ subscription-backed CLI session, or gateway.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `executor` | string | `acpx`, `claude-code`, `codex`, `opencode`, `anthropic`, `openrouter`, `ollama`, `llama-cpp`, `openai-compatible`, or `command` |
+| `executor` | string | `acpx`, a local compatibility executor, or a provider id returned by `/api/inference/catalog` |
 | `kind` | string | Optional explicit target kind. Inferred when omitted |
 | `account` | string | Account id from `inference.accounts` |
 | `endpoint` | string | Optional base URL override |

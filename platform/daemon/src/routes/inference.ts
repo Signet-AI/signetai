@@ -1,3 +1,4 @@
+import { getModels, getProviders } from "@earendil-works/pi-ai";
 import {
 	ROUTING_COST_TIERS,
 	ROUTING_OPERATION_KINDS,
@@ -5,11 +6,17 @@ import {
 	type RouteRequest,
 	parseRoutingTargetRef,
 } from "@signet/core";
-import { getModels, getProviders } from "@earendil-works/pi-ai";
 import type { Hono } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import type { AuthMode, TokenClaims } from "../auth/index.js";
 import { checkScope } from "../auth/index.js";
+import {
+	completeOAuthInteraction,
+	disconnectOAuthProvider,
+	isOAuthProviderConnected,
+	listOAuthProviderMetadata,
+	startOAuthLogin,
+} from "../inference-oauth.js";
 import { getInferenceRouterOrNull } from "../inference-router.js";
 import type { TelemetryCollector, TelemetryEvent, TelemetryProperties } from "../telemetry.js";
 
@@ -784,6 +791,28 @@ function buildUsagePayload(
 	};
 }
 
+async function oauthProviderStatus(provider: {
+	readonly id: string;
+	readonly name: string;
+	readonly usesCallbackServer: boolean;
+}): Promise<{
+	readonly id: string;
+	readonly name: string;
+	readonly usesCallbackServer: boolean;
+	readonly connected: boolean;
+	readonly error?: string;
+}> {
+	try {
+		return { ...provider, connected: await isOAuthProviderConnected(provider.id) };
+	} catch (error) {
+		return {
+			...provider,
+			connected: false,
+			error: error instanceof Error ? error.message.slice(0, 300) : "OAuth credential status failed",
+		};
+	}
+}
+
 export function mountInferenceRoutes(app: Hono, opts: InferenceRouteOptions = {}): void {
 	app.get("/api/inference/status", async (c) => {
 		const router = getInferenceRouterOrNull();
@@ -797,17 +826,22 @@ export function mountInferenceRoutes(app: Hono, opts: InferenceRouteOptions = {}
 	});
 
 	// Catalog of providers + models (pi-ai) and ACPX agents. Backs the dashboard
-	// inference settings redesign (#947). Pure read from the pi-ai catalog; does
-	// not touch credentials or make network calls.
-	app.get("/api/inference/catalog", (c) => {
+	// inference settings redesign (#947). Reads only provider/model metadata and
+	// encrypted credential presence; it never returns credential values or makes
+	// provider network calls.
+	app.get("/api/inference/catalog", async (c) => {
 		const providers = getProviders();
-		const models: Record<string, Array<{
-			id: string;
-			name: string;
-			contextWindow: number;
-			input: readonly string[];
-			reasoning: boolean;
-		}>> = {};
+		const models: Record<
+			string,
+			Array<{
+				id: string;
+				name: string;
+				contextWindow: number;
+				input: readonly string[];
+				reasoning: boolean;
+			}>
+		> = {};
+		const modelErrors: Record<string, string> = {};
 		for (const provider of providers) {
 			try {
 				models[provider] = getModels(provider).map((m) => ({
@@ -817,19 +851,70 @@ export function mountInferenceRoutes(app: Hono, opts: InferenceRouteOptions = {}
 					input: m.input,
 					reasoning: m.reasoning,
 				}));
-			} catch {
-				// A provider whose catalog fails to resolve yields no models; the
-			// picker just shows none for it. Never fail the whole catalog.
-				models[provider] = [];
+			} catch (error) {
+				modelErrors[provider] = error instanceof Error ? error.message : "model catalog resolution failed";
 			}
 		}
+		const oauthProviders = await Promise.all(listOAuthProviderMetadata().map(oauthProviderStatus));
 		return c.json({
 			providers,
 			models,
+			modelErrors,
+			oauthProviders,
 			// ACPX agent subcommands (acpx <agent> ...). Static — matches the
 			// agents createAcpxProvider drives. Mirrors `acpx --help` subcommands.
 			acpxAgents: ["claude", "codex", "opencode", "gemini", "pi", "openclaw"],
 		});
+	});
+
+	app.get("/api/inference/oauth/providers", async (c) => {
+		const providers = await Promise.all(listOAuthProviderMetadata().map(oauthProviderStatus));
+		return c.json({ providers });
+	});
+
+	app.post("/api/inference/oauth/login/:id", (c) => {
+		try {
+			const login = startOAuthLogin(c.req.param("id"), () => getInferenceRouterOrNull()?.invalidateCredentialState());
+			return new Response(login.stream, {
+				headers: {
+					"Content-Type": "text/event-stream",
+					"Cache-Control": "no-cache, no-transform",
+					Connection: "keep-alive",
+					"X-Signet-OAuth-Session-Id": login.sessionId,
+				},
+			});
+		} catch (error) {
+			const message = error instanceof Error ? error.message : "Failed to start OAuth login";
+			return c.json({ error: message }, /unknown|invalid/i.test(message) ? 404 : 429);
+		}
+	});
+
+	app.post("/api/inference/oauth/complete", async (c) => {
+		const body = await readJsonObject(c, 16 * 1024);
+		if (!body.ok) return c.json({ error: body.message, details: body.details ?? null }, body.status);
+		const sessionId = parseTrimmedString(body.value.sessionId);
+		const responseId = parseTrimmedString(body.value.responseId);
+		const value = typeof body.value.value === "string" ? body.value.value : undefined;
+		if (!sessionId || !responseId || value === undefined) {
+			return c.json({ error: "sessionId, responseId, and string value are required" }, 400);
+		}
+		try {
+			completeOAuthInteraction(sessionId, responseId, value);
+			return c.json({ success: true });
+		} catch (error) {
+			return c.json({ error: error instanceof Error ? error.message : "OAuth response failed" }, 400);
+		}
+	});
+
+	app.post("/api/inference/oauth/disconnect/:id", async (c) => {
+		try {
+			const disconnected = await disconnectOAuthProvider(c.req.param("id"));
+			getInferenceRouterOrNull()?.invalidateCredentialState();
+			return c.json({ success: true, disconnected });
+		} catch (error) {
+			const message = error instanceof Error ? error.message : "OAuth disconnect failed";
+			return c.json({ error: message }, /unknown|invalid/i.test(message) ? 404 : 500);
+		}
 	});
 
 	app.get("/api/inference/history", (c) => {

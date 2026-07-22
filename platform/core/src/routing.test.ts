@@ -642,6 +642,28 @@ describe("inference config + decision engine", () => {
 		});
 	});
 
+	it("accepts pi-ai provider ids without duplicating its dynamic catalog", () => {
+		const parsed = parseRoutingConfig({
+			inference: {
+				accounts: {
+					codex: { kind: "subscription_session", providerFamily: "openai-codex" },
+				},
+				targets: {
+					codex: {
+						executor: "openai-codex",
+						account: "codex",
+						models: { default: { model: "gpt-5.4" } },
+					},
+				},
+			},
+		});
+
+		expect(parsed.ok).toBe(true);
+		if (!parsed.ok) return;
+		expect(parsed.value.targets.codex?.executor).toBe("openai-codex");
+		expect(parsed.value.targets.codex?.kind).toBe("api");
+	});
+
 	it("does not allow explicit target overrides outside the agent roster", () => {
 		const parsed = parseRoutingConfig({
 			inference: {
