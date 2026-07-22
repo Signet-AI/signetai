@@ -141,8 +141,6 @@ Prevent these proactively.
 - Do not duplicate constants, maps, dependency types, config defaults,
   package lists, or descriptions across files.
 - Extract a shared source of truth when duplication would create drift.
-- `platform/daemon` changes must be mirrored and verified for parity in
-  `platform/daemon-rs` always.
 - Connector install-time code and daemon runtime connector code are
   different surfaces; do not conflate them.
 
@@ -161,8 +159,10 @@ Prevent these proactively.
 
 - Shadow fine-tuning, federated learning, or any "learn what to remember"
   framing that ships user context off the user's machine.
-- Runtime shims, silent compat for old/malformed config keys, or
-  parallel fallback readers. Runtime reads canonical config only.
+- Runtime shims or parallel fallback readers. Runtime reads canonical config
+  only (a one-time migration that rewrites old config in place to the
+  canonical form is allowed, since after it runs the runtime reads canonical
+  config only).
 - JSON/JSONL/TXT/sidecar files as the default for app state, caches,
   queues, indexes, cursors, or plugin scratch data. SQLite is the
   default storage. JSON/JSONL sidecars are acceptable for genuine
