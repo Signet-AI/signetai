@@ -72,8 +72,15 @@ jobs:
         run: |
           echo "## Daemon Typecheck (non-blocking)" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
+          OUTCOME="${{ steps.tsc.outcome }}"
           COUNT="${{ steps.tsc.outputs.error_count }}"
-          if [ -z "$COUNT" ] || [ "$COUNT" = "0" ]; then
+          if [ "$OUTCOME" != "success" ]; then
+            # Distinguish "0 errors" from "typecheck step skipped/broken"
+            # (failed install, tsc OOM/timeout) — otherwise an unset COUNT
+            # would falsely print "✅ clean".
+            echo "⚠️ Daemon typecheck step did not complete (outcome: $OUTCOME)." >> "$GITHUB_STEP_SUMMARY"
+            echo "Cannot report an error count; investigate the job logs." >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$COUNT" = "0" ]; then
             echo "✅ Daemon \`tsc --noEmit\` is clean." >> "$GITHUB_STEP_SUMMARY"
           else
             echo "⚠️ Daemon \`tsc --noEmit\` reports **$COUNT** error(s)." >> "$GITHUB_STEP_SUMMARY"
