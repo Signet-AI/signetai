@@ -8,6 +8,7 @@ import {
 	getOAuthProvider,
 	getOAuthProviders,
 } from "@earendil-works/pi-ai/oauth";
+import { logger } from "./logger";
 import { deleteSecretFromActiveProvider, getSecret, putSecret } from "./secrets";
 
 const OAUTH_SECRET_PREFIX = "SIGNET_OAUTH_";
@@ -153,7 +154,19 @@ export async function resolveOAuthCredential(providerId: string): Promise<Resolv
 	const pending = (async () => {
 		const credentials = await loadOAuthCredentials(normalized);
 		if (!credentials) return null;
-		const result = await getOAuthApiKey(normalized, { [normalized]: credentials });
+		let result: Awaited<ReturnType<typeof getOAuthApiKey>>;
+		try {
+			result = await getOAuthApiKey(normalized, { [normalized]: credentials });
+		} catch (error) {
+			if (!(error instanceof Error) || error.message !== `Failed to refresh OAuth token for ${normalized}`) {
+				throw error;
+			}
+			logger.warn("inference", "OAuth credential refresh failed", {
+				providerId: normalized,
+				error: safeError(error),
+			});
+			return null;
+		}
 		if (!result) return null;
 		if (JSON.stringify(result.newCredentials) !== JSON.stringify(credentials)) {
 			await storeOAuthCredentials(normalized, result.newCredentials);

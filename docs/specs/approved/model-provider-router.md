@@ -257,6 +257,10 @@ OAuth provider discovery, interactive login, encrypted credential storage,
 disconnect, and request-time token refresh are delivered by #966 using pi-ai's
 provider registry. The daemon preserves the existing account/target/workload
 routing model while accepting pi-ai provider ids dynamically.
+Dynamic provider ids therefore pass config parsing before registry/model
+resolution; unsupported executors or models fail explicitly during provider
+construction. The provider resolver's default error remains the exhaustiveness
+safeguard for ids that are not statically known.
 
 These items remain intentionally deferred because the phase 2 hardening wave
 focused on making the daemon-owned router safe enough for broader harness

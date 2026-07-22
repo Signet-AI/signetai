@@ -122,6 +122,22 @@ describe("inference OAuth", () => {
 		expect((await loadOAuthCredentials(PROVIDER_ID))?.access).toBe("access-refreshed");
 	});
 
+	test("treats a rejected token refresh as an unavailable credential", async () => {
+		const refreshToken = mock(async () => {
+			throw new Error("revoked refresh token");
+		});
+		registerOAuthProvider(provider({ refreshToken }));
+		await storeOAuthCredentials(PROVIDER_ID, {
+			refresh: "refresh-revoked",
+			access: "access-expired",
+			expires: Date.now() - 1,
+		});
+
+		expect(await resolveOAuthCredential(PROVIDER_ID)).toBeNull();
+		expect(refreshToken).toHaveBeenCalledTimes(1);
+		expect((await loadOAuthCredentials(PROVIDER_ID))?.access).toBe("access-expired");
+	});
+
 	test("rejects invalid provider ids before touching secret storage", async () => {
 		await expect(loadOAuthCredentials("../../escape")).rejects.toThrow("Invalid OAuth provider id");
 		expect(() => startOAuthLogin("missing-provider")).toThrow("Unknown OAuth provider");

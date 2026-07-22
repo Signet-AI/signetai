@@ -227,6 +227,14 @@ function isRuntimeBlocked(state: RoutingRuntimeState): boolean {
 	);
 }
 
+function isOAuthBackedAccount(account: RoutingAccountConfig | undefined): account is RoutingAccountConfig {
+	return (
+		account !== undefined &&
+		isOAuthProvider(account.providerFamily) &&
+		(account.kind === "subscription_session" || !account.credentialRef)
+	);
+}
+
 function buildPromptFromMessages(messages: ReadonlyArray<{ readonly role: string; readonly content: string }>): string {
 	return messages.map((message) => `${message.role.toUpperCase()}:\n${message.content}`).join("\n\n");
 }
@@ -464,11 +472,7 @@ export class InferenceRouter {
 	private async resolveCredential(
 		account: RoutingAccountConfig | undefined,
 	): Promise<ResolvedInferenceCredential | undefined> {
-		if (
-			account &&
-			isOAuthProvider(account.providerFamily) &&
-			(account.kind === "subscription_session" || !account.credentialRef)
-		) {
+		if (isOAuthBackedAccount(account)) {
 			const oauth = await resolveOAuthCredential(account.providerFamily);
 			if (oauth) return { apiKey: oauth.apiKey, oauthCredentials: oauth.credentials };
 		}
@@ -494,10 +498,7 @@ export class InferenceRouter {
 		const cacheKey = `${loaded.signature}:${targetId}/${modelId}:${acpxHooks ?? "configured-hooks"}`;
 		const target = loaded.config.targets[targetId];
 		const account = target?.account ? loaded.config.accounts[target.account] : undefined;
-		const oauthBacked =
-			account !== undefined &&
-			isOAuthProvider(account.providerFamily) &&
-			(account.kind === "subscription_session" || !account.credentialRef);
+		const oauthBacked = isOAuthBackedAccount(account);
 		if (!oauthBacked) {
 			const cached = this.providerCache.get(cacheKey);
 			if (cached) return cached;
@@ -543,10 +544,7 @@ export class InferenceRouter {
 			};
 		}
 		const account = target.account ? loaded.config.accounts[target.account] : undefined;
-		const oauthCredentialAccount =
-			account !== undefined &&
-			isOAuthProvider(account.providerFamily) &&
-			(account.kind === "subscription_session" || !account.credentialRef);
+		const oauthCredentialAccount = isOAuthBackedAccount(account);
 		const needsCredential =
 			oauthCredentialAccount ||
 			target.executor === "anthropic" ||
@@ -568,7 +566,7 @@ export class InferenceRouter {
 					available: false,
 					health: "blocked",
 					circuitOpen: false,
-					accountState: "missing",
+					accountState: target.kind === "subscription_session" ? "expired" : "missing",
 					unavailableReason: `missing credential${target.account ? ` for ${target.account}` : ""}`,
 				};
 			}
