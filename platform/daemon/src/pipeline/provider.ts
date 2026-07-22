@@ -646,7 +646,7 @@ export interface AcpxProviderConfig {
 	readonly extraArgs?: readonly string[];
 }
 
-const DEFAULT_ACPX_VERSION = "0.7.0";
+const DEFAULT_ACPX_VERSION = "0.12.0";
 
 function normalizeAcpxAgent(agent: string): string {
 	return agent === "claude-code" ? "claude" : agent;
