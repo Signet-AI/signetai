@@ -209,7 +209,7 @@ export function migrateInferenceProviders(agentsDir: string): void {
 function stampConfigVersion(doc: Document.Parsed, version: number): void {
 	const root = doc.contents;
 	if (isMap(root)) {
-		root.set("configVersion", version);
+		root.set("configVersion", doc.createNode(version));
 	} else {
 		// Empty or non-map document — wrap it.
 		doc.set("configVersion", version);

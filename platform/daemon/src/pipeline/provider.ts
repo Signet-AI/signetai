@@ -288,10 +288,14 @@ const RATE_LIMIT_PROVIDERS: ReadonlySet<string> = new Set([
 	"openrouter",
 	"codex",
 	"opencode",
+	"openai-compatible",
 ]);
 
-// Compile-time check: if a new remote provider is added to the union but
-// omitted from the set above, this produces a type error.
+// Compile-time check: if a new remote provider is added to the RemoteProvider
+// union but omitted from the _exhaustiveCheck Record above, this produces a
+// type error. NOTE: this only enforces that the Record keys cover the union —
+// keeping RATE_LIMIT_PROVIDERS in sync with the Record remains a human
+// discipline step (the Set is untyped ReadonlySet<string>).
 const _exhaustiveCheck: Record<RemoteProvider, true> = {
 	acpx: true,
 	"claude-code": true,
@@ -299,6 +303,7 @@ const _exhaustiveCheck: Record<RemoteProvider, true> = {
 	openrouter: true,
 	codex: true,
 	opencode: true,
+	"openai-compatible": true,
 };
 void _exhaustiveCheck;
 
