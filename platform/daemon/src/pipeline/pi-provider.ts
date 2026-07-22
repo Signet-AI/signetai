@@ -19,7 +19,15 @@ import {
 	completeSimple,
 	streamSimple,
 } from "@earendil-works/pi-ai";
+import {
+	AuthStorage,
+	ModelRegistry,
+	SessionManager,
+	createAgentSession,
+	type ToolDefinition,
+} from "@earendil-works/pi-coding-agent";
 import type { LlmGenerateResult, LlmProvider, LlmUsage } from "@signet/core";
+import type { DreamingAgentSession, DreamingAgentSessionProvider } from "./ingest/agent-planner";
 import { logger } from "../logger";
 import type {
 	LlmProviderCallOptions,
@@ -74,6 +82,14 @@ export interface PiModelProviderConfig {
 	readonly maxTokens?: number;
 	readonly defaultTimeoutMs?: number;
 	readonly name?: string;
+}
+
+export interface PiDreamingAgentProvider extends DreamingAgentSessionProvider {
+	readonly isPiDreamingAgentProvider: true;
+}
+
+export function isPiDreamingAgentProvider(provider: LlmProvider): provider is LlmProvider & PiDreamingAgentProvider {
+	return "isPiDreamingAgentProvider" in provider && provider.isPiDreamingAgentProvider === true;
 }
 
 interface ResolvedModel {
@@ -244,7 +260,7 @@ function callerAbort(opts: LlmProviderCallOptions | undefined, defaultTimeoutMs:
 	};
 }
 
-export function createPiModelProvider(config: PiModelProviderConfig): StreamCapableLlmProvider {
+export function createPiModelProvider(config: PiModelProviderConfig): StreamCapableLlmProvider & PiDreamingAgentProvider {
 	const { piModel, apiKey, label } = resolvePiModel(config);
 	const name = config.name ?? label;
 	const defaultTimeoutMs = config.defaultTimeoutMs ?? 60_000;
@@ -381,5 +397,23 @@ export function createPiModelProvider(config: PiModelProviderConfig): StreamCapa
 		},
 	};
 
-	return streamCapable;
+	return {
+		...streamCapable,
+		isPiDreamingAgentProvider: true,
+		async createDreamingAgentSession(tools: readonly ToolDefinition[]): Promise<DreamingAgentSession> {
+			const authStorage = AuthStorage.inMemory({
+				[piModel.provider]: { type: "api_key", key: apiKey ?? KEYLESS_API_KEY },
+			});
+			const modelRegistry = ModelRegistry.inMemory(authStorage);
+			const { session } = await createAgentSession({
+				model: piModel,
+				authStorage,
+				modelRegistry,
+				sessionManager: SessionManager.inMemory(),
+				noTools: "builtin",
+				customTools: [...tools],
+			});
+			return session;
+		},
+	};
 }

@@ -26,7 +26,9 @@
 
 import { createHash } from "node:crypto";
 import type { LlmProvider } from "../provider";
+import { isPiDreamingAgentProvider } from "../pi-provider";
 import { logger } from "../../logger";
+import { planIngestWithAgent } from "./agent-planner";
 import type { IngestContext } from "./context";
 import { INGEST_GRAPH_OPERATIONS, parseIngestPlan, type IngestPlan } from "./ingest-plan";
 
@@ -142,32 +144,37 @@ function buildPlanPrompt(ctx: IngestContext): string {
 export async function planIngest(ctx: IngestContext, opts: PlanIngestOptions): Promise<PlanIngestResult> {
 	const prompt = buildPlanPrompt(ctx);
 
-	let raw: string;
-	try {
-		raw = await opts.provider.generate(prompt, {
-			signal: opts.signal,
-			responseFormat: "json",
-			timeoutMs: opts.timeoutMs,
-			maxTokens: opts.maxTokens,
-			think: false,
-		});
-	} catch (e) {
-		const message = e instanceof Error ? e.message : String(e);
-		logger.warn("pipeline", "planner provider call failed", { message, jobId: ctx.jobId });
-		return { ok: false, reason: "provider-error", message };
-	}
-
-	const jsonText = extractJsonObject(raw);
-	if (!jsonText) {
-		return { ok: false, reason: "malformed", message: "No JSON object found in planner response" };
-	}
-
 	let body: unknown;
-	try {
-		body = JSON.parse(jsonText);
-	} catch (e) {
-		const message = e instanceof Error ? e.message : String(e);
-		return { ok: false, reason: "malformed", message: `Planner JSON parse failed: ${message}` };
+	if (isPiDreamingAgentProvider(opts.provider)) {
+		const planned = await planIngestWithAgent(ctx, opts.provider);
+		if (!planned.ok) return { ok: false, reason: "provider-error", message: planned.message };
+		body = planned.body;
+	} else {
+		let raw: string;
+		try {
+			raw = await opts.provider.generate(prompt, {
+				signal: opts.signal,
+				responseFormat: "json",
+				timeoutMs: opts.timeoutMs,
+				maxTokens: opts.maxTokens,
+				think: false,
+			});
+		} catch (e) {
+			const message = e instanceof Error ? e.message : String(e);
+			logger.warn("pipeline", "planner provider call failed", { message, jobId: ctx.jobId });
+			return { ok: false, reason: "provider-error", message };
+		}
+
+		const jsonText = extractJsonObject(raw);
+		if (!jsonText) {
+			return { ok: false, reason: "malformed", message: "No JSON object found in planner response" };
+		}
+		try {
+			body = JSON.parse(jsonText);
+		} catch (e) {
+			const message = e instanceof Error ? e.message : String(e);
+			return { ok: false, reason: "malformed", message: `Planner JSON parse failed: ${message}` };
+		}
 	}
 
 	// Attach the envelope (computed from the context, never model-authored) and

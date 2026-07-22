@@ -38,6 +38,7 @@
   "dependencies": {
     "@1password/sdk": "^0.3.0",
     "@earendil-works/pi-ai": "0.79.2",
+    "@earendil-works/pi-coding-agent": "0.79.2",
     "@hono/node-server": "^1.14.0",
     "@huggingface/transformers": "^3.4.0",
     "@modelcontextprotocol/sdk": "^1.26.0",
@@ -54,6 +55,7 @@
     "libsodium-wrappers": "^0.8.2",
     "onnxruntime-node": "1.21.0",
     "sharp": "^0.34.1",
+    "typebox": "1.1.38",
     "umap-js": "^1.4.0",
     "yaml": "^2.8.2",
     "yauzl": "2.10.0",
