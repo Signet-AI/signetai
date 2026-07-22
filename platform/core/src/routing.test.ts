@@ -392,7 +392,7 @@ describe("inference config + decision engine", () => {
 		expect(legacy.policies["legacy-default"]?.fallbackTargets).toEqual([]);
 	});
 
-	it("compiles kimi as a harness-subscription legacy target with restricted privacy", () => {
+	it("compiles kimi through the retained ACPX harness backend", () => {
 		const legacy = compileLegacyRoutingConfig({
 			extraction: {
 				provider: "kimi",
@@ -407,11 +407,13 @@ describe("inference config + decision engine", () => {
 			},
 		});
 
-		expect(legacy.targets["legacy-extraction"]?.executor).toBe("kimi");
+		expect(legacy.targets["legacy-extraction"]?.executor).toBe("acpx");
+		expect(legacy.targets["legacy-extraction"]?.acpx?.agent).toBe("kimi");
 		expect(legacy.targets["legacy-extraction"]?.kind).toBe("subscription_session");
 		expect(legacy.targets["legacy-extraction"]?.privacy).toBe("restricted_remote");
 		expect(legacy.targets["legacy-extraction"]?.account).toBeUndefined();
-		expect(legacy.targets["legacy-synthesis"]?.executor).toBe("kimi");
+		expect(legacy.targets["legacy-synthesis"]?.executor).toBe("acpx");
+		expect(legacy.targets["legacy-synthesis"]?.acpx?.agent).toBe("kimi");
 		expect(legacy.targets["legacy-synthesis"]?.kind).toBe("subscription_session");
 		expect(legacy.targets["legacy-synthesis"]?.privacy).toBe("restricted_remote");
 	});

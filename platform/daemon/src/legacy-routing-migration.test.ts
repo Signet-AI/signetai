@@ -88,6 +88,28 @@ describe("migrateLegacyRoutingToRegistry (#947 v4, #1004 v5 cleanup)", () => {
 		}
 	});
 
+	it("migrates kimi provider blocks to the retained ACPX kimi agent", () => {
+		const dir = setupDir();
+		try {
+			writeFileSync(
+				join(dir, "agent.yaml"),
+				`memory:
+  pipelineV2:
+    extraction:
+      provider: kimi
+      model: kimi-code/kimi-for-coding
+`,
+			);
+			migrateLegacyRoutingToRegistry(dir);
+			const after = readFileSync(join(dir, "agent.yaml"), "utf-8");
+			expect(after).toMatch(/legacy-extraction:\s*\n\s+executor: acpx/);
+			expect(after).toMatch(/acpx:\s*\n\s+agent: kimi/);
+			expect(after).not.toContain("executor: kimi");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	it("leaves the command provider intact for manual reconfiguration", () => {
 		const dir = setupDir();
 		try {

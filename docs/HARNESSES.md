@@ -363,12 +363,12 @@ Hook timeouts use the same budgets as the other hook-driven harnesses:
 
 ### Pipeline and task-runner provider
 
-Kimi can be selected as the extraction provider in `agent.yaml` or
-Settings → Pipeline (default managed model `kimi-code/kimi-for-coding`)
-and as the session synthesis provider. Custom model aliases configured in
-Kimi remain available through the custom model field. The synthesis provider
-also serves as the dreaming provider. On the dashboard Tasks page, Kimi is
-available as a task-runner harness.
+Kimi can be selected as the extraction provider in legacy `agent.yaml`
+pipeline settings; Signet compiles that value to the retained ACPX backend
+with `acpx.agent: kimi` and the default model
+`kimi-code/kimi-for-coding`. New configurations select ACPX and Kimi under
+Settings → Inference. The same target can run session synthesis and dreaming.
+On the dashboard Tasks page, Kimi is also available as a task-runner harness.
 
 ### Prerequisites
 

@@ -338,9 +338,12 @@ export function migrateLegacyRoutingToRegistry(agentsDir: string): void {
 				}),
 			);
 		}
+		// Harness subscriptions run through the retained ACPX backend after #947.
+		const executor = provider === "kimi" ? "acpx" : provider;
 		// Create/update the target.
 		const targetNode = doc.createNode({
-			executor: provider,
+			executor,
+			...(provider === "kimi" ? { acpx: { agent: "kimi" } } : {}),
 			...(acct ? { account: acct.name } : {}),
 			...(endpoint ? { endpoint: String(endpoint) } : {}),
 			models: { default: { model: model ? String(model) : "", reasoning: "medium" } },
@@ -353,7 +356,7 @@ export function migrateLegacyRoutingToRegistry(agentsDir: string): void {
 				target: `${targetName}/default`,
 			}),
 		);
-		mutations.push(`${workloadKey} -> inference.targets.${targetName} (executor: ${provider})`);
+		mutations.push(`${workloadKey} -> inference.targets.${targetName} (executor: ${executor})`);
 	}
 
 	if (hasNestedLegacyRouting) {

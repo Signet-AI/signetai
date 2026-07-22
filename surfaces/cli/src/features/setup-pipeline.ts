@@ -2,7 +2,7 @@ import { defaultPipelineModel } from "@signet/core";
 import type { ExtractionProviderChoice, HarnessChoice } from "./setup-shared.js";
 
 export const EXTRACTION_SAFETY_WARNING =
-	"Extraction is intended for Claude Code (haiku), Codex CLI (gpt-5.4-mini) on a Pro/Max subscription, or local llama.cpp / Ollama with qwen3:4b or larger. Remote API extraction can rack up extreme usage fees fast. On a VPS, set the provider to none unless you explicitly want background extraction.";
+	"Extraction is intended for Claude Code (haiku), Codex CLI (gpt-5.4-mini) on a Pro/Max subscription, Kimi CLI (Kimi for Coding), or local llama.cpp / Ollama with qwen3:4b or larger. Remote API extraction can rack up extreme usage fees fast. On a VPS, set the provider to none unless you explicitly want background extraction.";
 
 export interface SetupPipelineConfig {
 	readonly enabled: boolean;
@@ -93,9 +93,9 @@ export interface SetupInferenceConfig {
 	readonly workloads: Record<string, unknown>;
 }
 
-export type SetupAcpxAgent = "codex" | "claude" | "opencode";
+export type SetupAcpxAgent = "codex" | "claude" | "kimi" | "opencode";
 
-function toAcpxAgent(provider: Extract<HarnessChoice, "codex" | "claude-code" | "opencode">): SetupAcpxAgent {
+function toAcpxAgent(provider: Extract<HarnessChoice, "codex" | "claude-code" | "kimi" | "opencode">): SetupAcpxAgent {
 	return provider === "claude-code" ? "claude" : provider;
 }
 
@@ -104,10 +104,14 @@ function selectAcpxAgent(
 	availableProviders: readonly ExtractionProviderChoice[] = [],
 ): SetupAcpxAgent {
 	for (const harness of harnesses) {
-		if (harness === "codex" || harness === "claude-code" || harness === "opencode") return toAcpxAgent(harness);
+		if (harness === "codex" || harness === "claude-code" || harness === "kimi" || harness === "opencode") {
+			return toAcpxAgent(harness);
+		}
 	}
 	for (const provider of availableProviders) {
-		if (provider === "codex" || provider === "claude-code" || provider === "opencode") return toAcpxAgent(provider);
+		if (provider === "codex" || provider === "claude-code" || provider === "kimi" || provider === "opencode") {
+			return toAcpxAgent(provider);
+		}
 	}
 	return "codex";
 }
@@ -118,6 +122,8 @@ export function defaultAcpxModelForAgent(agent: SetupAcpxAgent): string {
 			return defaultPipelineModel("claude-code");
 		case "opencode":
 			return defaultPipelineModel("opencode");
+		case "kimi":
+			return defaultPipelineModel("kimi");
 		case "codex":
 			return defaultPipelineModel("codex");
 	}

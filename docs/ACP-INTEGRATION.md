@@ -339,6 +339,7 @@ legacy direct harness provider
 
 explicit ACPX inference target
   inference.targets.<name>.executor: acpx
+  inference.targets.<name>.acpx.agent: codex | kimi | claude | opencode
   inference.workloads.memoryExtraction.target: <name>/<model>
 
         ↓

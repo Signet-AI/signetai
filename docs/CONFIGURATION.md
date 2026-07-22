@@ -488,7 +488,7 @@ subscription-backed CLI session, or gateway.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `executor` | string | `acpx`, a local compatibility executor, or a provider id returned by `/api/inference/catalog` |
+| `executor` | string | `acpx`, a local compatibility executor, or a provider id returned by `/api/inference/catalog`. Use `executor: acpx` with `acpx.agent: kimi` for Kimi. |
 | `kind` | string | Optional explicit target kind. Inferred when omitted |
 | `account` | string | Account id from `inference.accounts` |
 | `endpoint` | string | Optional base URL override |
@@ -755,10 +755,10 @@ this means the limiter cannot protect against a burst of calls right
 after startup. Set `burstSize` conservatively if your daemon restarts
 often under load.
 
-When using `ollama`, the model must be available locally. When using
-`claude-code`, the Claude Code CLI must be on PATH. `codex` uses the
-Codex CLI as the extraction provider. `kimi` uses the Kimi CLI
-(models Kimi K3 / K2.7 / K2.6, default Kimi K2.7). Lower `minConfidence` to capture
+When using `ollama`, the model must be available locally. Legacy harness
+provider values are migrated to ACPX targets. In particular, `kimi` runs as
+`executor: acpx` with `acpx.agent: kimi` (default model
+`kimi-code/kimi-for-coding`). Lower `minConfidence` to capture
 more facts at the cost of noise; raise it to write only high-confidence
 facts.
 

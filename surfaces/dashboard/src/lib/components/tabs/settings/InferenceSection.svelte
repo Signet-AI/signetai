@@ -241,7 +241,7 @@ async function onProviderChanged(): Promise<void> {
 const TARGET_NAME = "background";
 const ACCOUNT_NAME = "background";
 
-const ACPX_AGENTS = ["claude", "codex", "opencode", "gemini", "pi", "openclaw"];
+const ACPX_AGENTS = ["claude", "codex", "kimi", "opencode", "gemini", "pi", "openclaw"];
 
 function bgExecutor(): string {
 	return st.aStr(["inference", "targets", TARGET_NAME, "executor"]);

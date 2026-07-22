@@ -158,6 +158,16 @@ describe("buildSetupInference", () => {
 			acpx: { agent: "claude" },
 		});
 	});
+
+	it("maps Kimi harness/provider selection to ACPX's kimi connector", () => {
+		const inference = buildSetupInference("acpx", undefined, ["kimi"], ["kimi"], "/usr/bin/bunx");
+
+		expect(inference?.targets["background-acpx"]).toMatchObject({
+			executor: "acpx",
+			acpx: { agent: "kimi" },
+			models: { default: { model: "kimi-code/kimi-for-coding" } },
+		});
+	});
 	it("does not emit ACPX routing without a resolved launcher", () => {
 		expect(buildSetupInference("acpx", "haiku", ["codex"], ["acpx"])).toBeUndefined();
 	});

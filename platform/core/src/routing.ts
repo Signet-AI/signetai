@@ -7,7 +7,6 @@ export const ROUTING_EXECUTOR_KINDS = [
 	"acpx",
 	"claude-code",
 	"codex",
-	"kimi",
 	"opencode",
 	"anthropic",
 	"openrouter",
@@ -413,7 +412,6 @@ function inferTargetPrivacy(executor: string, endpoint?: string): RoutingPrivacy
 		executor === "acpx" ||
 		executor === "claude-code" ||
 		executor === "codex" ||
-		executor === "kimi" ||
 		executor === "opencode"
 	)
 		return "restricted_remote";
@@ -791,13 +789,15 @@ export function compileLegacyRoutingConfig(opts: {
 		opts.extraction.provider !== "command" &&
 		opts.extraction.provider !== "acpx"
 	) {
+		const executor = opts.extraction.provider === "kimi" ? "acpx" : opts.extraction.provider;
 		targets["legacy-extraction"] = {
-			kind: inferLegacyTargetKind(opts.extraction.provider, opts.extraction.endpoint),
-			executor: opts.extraction.provider,
-			account: legacyAccountForProvider(opts.extraction.provider, opts.extraction.endpoint),
+			kind: inferLegacyTargetKind(executor, opts.extraction.endpoint),
+			executor,
+			acpx: opts.extraction.provider === "kimi" ? { agent: "kimi" } : undefined,
+			account: legacyAccountForProvider(executor, opts.extraction.endpoint),
 			endpoint: opts.extraction.endpoint,
 			command: opts.extraction.command,
-			privacy: inferTargetPrivacy(opts.extraction.provider, opts.extraction.endpoint),
+			privacy: inferTargetPrivacy(executor, opts.extraction.endpoint),
 			models: {
 				default: {
 					model: opts.extraction.model,
@@ -836,12 +836,14 @@ export function compileLegacyRoutingConfig(opts: {
 	}
 
 	if (opts.synthesis.enabled && opts.synthesis.provider !== "none" && opts.synthesis.provider !== "acpx") {
+		const executor = opts.synthesis.provider === "kimi" ? "acpx" : opts.synthesis.provider;
 		targets["legacy-synthesis"] = {
-			kind: inferLegacyTargetKind(opts.synthesis.provider, opts.synthesis.endpoint),
-			executor: opts.synthesis.provider,
-			account: legacyAccountForProvider(opts.synthesis.provider, opts.synthesis.endpoint),
+			kind: inferLegacyTargetKind(executor, opts.synthesis.endpoint),
+			executor,
+			acpx: opts.synthesis.provider === "kimi" ? { agent: "kimi" } : undefined,
+			account: legacyAccountForProvider(executor, opts.synthesis.endpoint),
 			endpoint: opts.synthesis.endpoint,
-			privacy: inferTargetPrivacy(opts.synthesis.provider, opts.synthesis.endpoint),
+			privacy: inferTargetPrivacy(executor, opts.synthesis.endpoint),
 			models: {
 				default: {
 					model: opts.synthesis.model,

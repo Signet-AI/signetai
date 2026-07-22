@@ -50,8 +50,8 @@
         "signet-connector-claude-code": "bin/install.js",
       },
       "dependencies": {
-        "@signet/connector-base": "0.142.4",
-        "@signet/core": "0.142.4",
+        "@signet/connector-base": "0.154.10",
+        "@signet/core": "0.154.10",
       },
       "devDependencies": {
         "@types/node": "^22.0.0",
@@ -65,8 +65,8 @@
         "signet-connector-codex": "bin/install.js",
       },
       "dependencies": {
-        "@signet/connector-base": "0.142.4",
-        "@signet/core": "0.142.4",
+        "@signet/connector-base": "0.154.10",
+        "@signet/core": "0.154.10",
       },
       "devDependencies": {
         "@types/node": "^22.0.0",
@@ -91,8 +91,8 @@
         "signet-connector-forge": "bin/install.js",
       },
       "dependencies": {
-        "@signet/connector-base": "0.142.4",
-        "@signet/core": "0.142.4",
+        "@signet/connector-base": "0.154.10",
+        "@signet/core": "0.154.10",
       },
       "devDependencies": {
         "@types/node": "^22.0.0",
@@ -106,8 +106,8 @@
         "signet-connector-gemini": "bin/install.js",
       },
       "dependencies": {
-        "@signet/connector-base": "0.142.4",
-        "@signet/core": "0.142.4",
+        "@signet/connector-base": "0.154.10",
+        "@signet/core": "0.154.10",
       },
       "devDependencies": {
         "@types/node": "^22.0.0",
@@ -121,8 +121,8 @@
         "signet-connector-hermes-agent": "bin/install.js",
       },
       "dependencies": {
-        "@signet/connector-base": "0.142.4",
-        "@signet/core": "0.142.4",
+        "@signet/connector-base": "0.154.10",
+        "@signet/core": "0.154.10",
       },
       "devDependencies": {
         "@types/node": "^22.0.0",
@@ -131,13 +131,13 @@
     },
     "integrations/kimi/connector": {
       "name": "@signet/connector-kimi",
-      "version": "0.147.21",
+      "version": "0.154.10",
       "bin": {
         "signet-connector-kimi": "bin/install.js",
       },
       "dependencies": {
-        "@signet/connector-base": "0.147.21",
-        "@signet/core": "0.147.21",
+        "@signet/connector-base": "0.154.10",
+        "@signet/core": "0.154.10",
       },
       "devDependencies": {
         "@types/node": "^22.0.0",
@@ -151,8 +151,8 @@
         "signet-connector-oh-my-pi": "bin/install.js",
       },
       "dependencies": {
-        "@signet/connector-base": "0.142.4",
-        "@signet/core": "0.142.4",
+        "@signet/connector-base": "0.154.10",
+        "@signet/core": "0.154.10",
       },
       "devDependencies": {
         "@types/node": "^22.0.0",
@@ -180,8 +180,8 @@
         "signet-connector-openclaw": "bin/install.js",
       },
       "dependencies": {
-        "@signet/connector-base": "0.142.4",
-        "@signet/core": "0.142.4",
+        "@signet/connector-base": "0.154.10",
+        "@signet/core": "0.154.10",
       },
       "devDependencies": {
         "@types/node": "^22.0.0",
@@ -213,8 +213,8 @@
         "signet-connector-opencode": "bin/install.js",
       },
       "dependencies": {
-        "@signet/connector-base": "0.142.4",
-        "@signet/core": "0.142.4",
+        "@signet/connector-base": "0.154.10",
+        "@signet/core": "0.154.10",
         "jsonc-parser": "3.3.1",
       },
       "devDependencies": {
@@ -239,8 +239,8 @@
         "signet-connector-pi": "bin/install.js",
       },
       "dependencies": {
-        "@signet/connector-base": "0.142.4",
-        "@signet/core": "0.142.4",
+        "@signet/connector-base": "0.154.10",
+        "@signet/core": "0.154.10",
       },
       "devDependencies": {
         "@types/node": "^22.0.0",
@@ -277,7 +277,7 @@
       "name": "@signet/connector-base",
       "version": "0.154.10",
       "dependencies": {
-        "@signet/core": "0.142.4",
+        "@signet/core": "0.154.10",
         "json5": "^2.2.3",
         "jsonc-parser": "3.3.1",
       },
@@ -347,6 +347,12 @@
         "sqlite-vec-linux-x64": "^0.1.7-alpha.2",
         "sqlite-vec-windows-x64": "^0.1.7-alpha.2",
       },
+      "peerDependencies": {
+        "better-sqlite3": "*",
+      },
+      "optionalPeers": [
+        "better-sqlite3",
+      ],
     },
     "platform/daemon": {
       "name": "@signet/daemon",
@@ -415,6 +421,7 @@
         "@signet/connector-forge": "workspace:*",
         "@signet/connector-gemini": "workspace:*",
         "@signet/connector-hermes-agent": "workspace:*",
+        "@signet/connector-kimi": "workspace:*",
         "@signet/connector-oh-my-pi": "workspace:*",
         "@signet/connector-openclaw": "workspace:*",
         "@signet/connector-opencode": "workspace:*",
@@ -1509,6 +1516,8 @@
     "@signet/connector-gemini": ["@signet/connector-gemini@workspace:integrations/gemini/connector"],
 
     "@signet/connector-hermes-agent": ["@signet/connector-hermes-agent@workspace:integrations/hermes-agent/connector"],
+
+    "@signet/connector-kimi": ["@signet/connector-kimi@workspace:integrations/kimi/connector"],
 
     "@signet/connector-oh-my-pi": ["@signet/connector-oh-my-pi@workspace:integrations/oh-my-pi/connector"],
 
@@ -4122,6 +4131,8 @@
 
     "@signet/connector-hermes-agent/@types/node": ["@types/node@22.19.17", "", { "dependencies": { "undici-types": "~6.21.0" } }, "sha512-wGdMcf+vPYM6jikpS/qhg6WiqSV/OhG+jeeHT/KlVqxYfD40iYJf9/AE1uQxVWFvU7MipKRkRv8NSHiCGgPr8Q=="],
 
+    "@signet/connector-kimi/@types/node": ["@types/node@22.19.17", "", { "dependencies": { "undici-types": "~6.21.0" } }, "sha512-wGdMcf+vPYM6jikpS/qhg6WiqSV/OhG+jeeHT/KlVqxYfD40iYJf9/AE1uQxVWFvU7MipKRkRv8NSHiCGgPr8Q=="],
+
     "@signet/connector-oh-my-pi/@types/node": ["@types/node@22.19.17", "", { "dependencies": { "undici-types": "~6.21.0" } }, "sha512-wGdMcf+vPYM6jikpS/qhg6WiqSV/OhG+jeeHT/KlVqxYfD40iYJf9/AE1uQxVWFvU7MipKRkRv8NSHiCGgPr8Q=="],
 
     "@signet/connector-openclaw/@types/node": ["@types/node@22.19.17", "", { "dependencies": { "undici-types": "~6.21.0" } }, "sha512-wGdMcf+vPYM6jikpS/qhg6WiqSV/OhG+jeeHT/KlVqxYfD40iYJf9/AE1uQxVWFvU7MipKRkRv8NSHiCGgPr8Q=="],
@@ -4677,6 +4688,8 @@
     "@signet/connector-gemini/@types/node/undici-types": ["undici-types@6.21.0", "", {}, "sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ=="],
 
     "@signet/connector-hermes-agent/@types/node/undici-types": ["undici-types@6.21.0", "", {}, "sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ=="],
+
+    "@signet/connector-kimi/@types/node/undici-types": ["undici-types@6.21.0", "", {}, "sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ=="],
 
     "@signet/connector-oh-my-pi/@types/node/undici-types": ["undici-types@6.21.0", "", {}, "sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ=="],
 
