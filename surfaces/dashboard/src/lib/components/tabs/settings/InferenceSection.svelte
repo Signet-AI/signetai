@@ -57,19 +57,61 @@ function bgExecutor(): string {
 	return st.aStr(["inference", "targets", TARGET_NAME, "executor"]);
 }
 function bgSetExecutor(v: string): void {
-	if (!v) {
-		st.aSetStr(["inference", "targets", TARGET_NAME, "executor"], "");
-		st.aSetStr(["inference", "workloads", "memoryExtraction", "target"], "");
-		return;
-	}
-	st.aSetStr(["inference", "targets", TARGET_NAME, "executor"], v);
-	st.aSetStr(["inference", "workloads", "memoryExtraction", "target"], `${TARGET_NAME}/default`);
+	writeTarget({ targetName: TARGET_NAME, accountName: ACCOUNT_NAME, workloadKey: "memoryExtraction", executor: v });
 }
 
 function providerFamilyForExecutor(exec: string): string {
 	if (exec === "anthropic") return "anthropic";
 	if (exec === "openrouter") return "openrouter";
 	return "openai";
+}
+
+// Local executors never need an account — the router's `needsCredential` is
+// false for ollama/llama-cpp and local openai-compatible endpoints, and a
+// dangling `account:` ref on the target blocks it ("account ... not found").
+function executorIsLocal(exec: string, endpoint: string): boolean {
+	if (exec === "ollama" || exec === "llama-cpp") return true;
+	if (exec === "acpx") return false;
+	return /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?(\/|$)/.test(endpoint);
+}
+
+// Ensure the account has the shape parseAccountConfig accepts: it returns null
+// (silently dropping the account) if `kind` or `providerFamily` is absent, which
+// would block every API target with "account ... not found".
+function ensureAccount(accountName: string, executor: string): void {
+	st.aSetStr(["inference", "accounts", accountName, "kind"], "api");
+	st.aSetStr(["inference", "accounts", accountName, "providerFamily"], providerFamilyForExecutor(executor));
+}
+
+// Write the complete, routing-valid target + account shape for an executor.
+// Local/acpx targets get NO account; API targets get a linked account with the
+// valid { kind, providerFamily, credentialRef } shape.
+function writeTarget(opts: {
+	targetName: string;
+	accountName: string;
+	workloadKey: string;
+	executor: string;
+}): void {
+	const { targetName, accountName, workloadKey, executor } = opts;
+	const targetBase = ["inference", "targets", targetName];
+	const accountBase = ["inference", "accounts", accountName];
+	const workloadBase = ["inference", "workloads", workloadKey];
+	if (!executor) {
+		st.aDel([...targetBase, "executor"]);
+		st.aDel(accountBase);
+		st.aDel(workloadBase);
+		return;
+	}
+	st.aSetStr([...targetBase, "executor"], executor);
+	st.aSetStr([...workloadBase, "target"], `${targetName}/default`);
+	const endpoint = st.aStr([...targetBase, "endpoint"]);
+	if (executor === "acpx" || executorIsLocal(executor, endpoint)) {
+		st.aDel([...targetBase, "account"]);
+		st.aDel(accountBase);
+	} else {
+		st.aSetStr([...targetBase, "account"], accountName);
+		ensureAccount(accountName, executor);
+	}
 }
 
 function bgModelId(): string {
@@ -98,6 +140,7 @@ function bgApiKey(): string {
 }
 function bgSetApiKey(v: string): void {
 	st.aSetStr(["inference", "accounts", ACCOUNT_NAME, "credentialRef"], v);
+	if (v) ensureAccount(ACCOUNT_NAME, bgExecutor());
 }
 
 function bgModelOptions(): Array<{ value: string; label: string }> {
@@ -119,13 +162,7 @@ function aggExecutor(): string {
 	return st.aStr(["inference", "targets", AGG_TARGET_NAME, "executor"]);
 }
 function aggSetExecutor(v: string): void {
-	if (!v) {
-		st.aSetStr(["inference", "targets", AGG_TARGET_NAME, "executor"], "");
-		st.aSetStr(["inference", "workloads", "aggregateRecall", "target"], "");
-		return;
-	}
-	st.aSetStr(["inference", "targets", AGG_TARGET_NAME, "executor"], v);
-	st.aSetStr(["inference", "workloads", "aggregateRecall", "target"], `${AGG_TARGET_NAME}/default`);
+	writeTarget({ targetName: AGG_TARGET_NAME, accountName: AGG_ACCOUNT_NAME, workloadKey: "aggregateRecall", executor: v });
 }
 function aggModelId(): string {
 	return st.aStr(["inference", "targets", AGG_TARGET_NAME, "models", "default", "model"]);
@@ -144,6 +181,7 @@ function aggApiKey(): string {
 }
 function aggSetApiKey(v: string): void {
 	st.aSetStr(["inference", "accounts", AGG_ACCOUNT_NAME, "credentialRef"], v);
+	if (v) ensureAccount(AGG_ACCOUNT_NAME, aggExecutor());
 }
 function aggModelOptions(): Array<{ value: string; label: string }> {
 	if (!catalog) return [];

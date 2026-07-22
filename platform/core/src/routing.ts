@@ -986,6 +986,8 @@ function workloadBindingForOperation(
 			return config.workloads?.memoryExtraction ?? config.workloads?.default;
 		case "session_synthesis":
 			return config.workloads?.sessionSynthesis ?? config.workloads?.default;
+		case "aggregate_recall":
+			return config.workloads?.aggregateRecall ?? config.workloads?.sessionSynthesis ?? config.workloads?.default;
 		case "widget_generation":
 			return config.workloads?.widgetGeneration ?? config.workloads?.sessionSynthesis ?? config.workloads?.default;
 		case "repair":
