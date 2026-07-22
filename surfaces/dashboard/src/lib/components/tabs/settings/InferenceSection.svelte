@@ -66,13 +66,24 @@ function providerFamilyForExecutor(exec: string): string {
 	return "openai";
 }
 
-// Local executors never need an account — the router's `needsCredential` is
-// false for ollama/llama-cpp and local openai-compatible endpoints, and a
-// dangling `account:` ref on the target blocks it ("account ... not found").
-function executorIsLocal(exec: string, endpoint: string): boolean {
-	if (exec === "ollama" || exec === "llama-cpp") return true;
-	if (exec === "acpx") return false;
-	return /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?(\/|$)/.test(endpoint);
+// Mirror the router's needsCredential (inference-router.ts): anthropic and
+// openrouter always need a credential; openai-compatible needs one only when
+// the endpoint is remote; ollama/llama-cpp/acpx never do. isLocalEndpoint is
+// inlined here (not imported from @signet/core) because the dashboard is a
+// browser bundle and cannot pull core's Node-only runtime (better-sqlite3).
+// Keep this in sync with platform/core/src/routing.ts isLocalInferenceEndpoint.
+function isLocalEndpoint(endpoint: string): boolean {
+	if (!endpoint) return true;
+	try {
+		return ["127.0.0.1", "localhost", "::1", "[::1]"].includes(new URL(endpoint).hostname);
+	} catch {
+		return false;
+	}
+}
+function targetNeedsAccount(exec: string, endpoint: string): boolean {
+	if (exec === "anthropic" || exec === "openrouter") return true;
+	if (exec === "openai-compatible") return !isLocalEndpoint(endpoint);
+	return false;
 }
 
 // Ensure the account has the shape parseAccountConfig accepts: it returns null
@@ -97,7 +108,14 @@ function writeTarget(opts: {
 	const accountBase = ["inference", "accounts", accountName];
 	const workloadBase = ["inference", "workloads", workloadKey];
 	if (!executor) {
+		// Reset the whole target: clear every field so allTargetRefs (which
+		// enumerates via targets.*.models) does not surface an orphaned ref that
+		// would block with "account ... not found". aDel prunes empty parents.
 		st.aDel([...targetBase, "executor"]);
+		st.aDel([...targetBase, "account"]);
+		st.aDel([...targetBase, "models"]);
+		st.aDel([...targetBase, "endpoint"]);
+		st.aDel([...targetBase, "acpx"]);
 		st.aDel(accountBase);
 		st.aDel(workloadBase);
 		return;
@@ -105,7 +123,7 @@ function writeTarget(opts: {
 	st.aSetStr([...targetBase, "executor"], executor);
 	st.aSetStr([...workloadBase, "target"], `${targetName}/default`);
 	const endpoint = st.aStr([...targetBase, "endpoint"]);
-	if (executor === "acpx" || executorIsLocal(executor, endpoint)) {
+	if (!targetNeedsAccount(executor, endpoint)) {
 		st.aDel([...targetBase, "account"]);
 		st.aDel(accountBase);
 	} else {
@@ -189,7 +207,11 @@ function aggModelOptions(): Array<{ value: string; label: string }> {
 	return (catalog.models[family] ?? []).map((m) => ({ value: m.id, label: `${m.name} (${m.id})` }));
 }
 const aggIsLocal = $derived(["openai-compatible", "ollama", "llama-cpp"].includes(aggExecutor()));
-const aggNeedsApiKey = $derived(["anthropic", "openrouter"].includes(aggExecutor()));
+const aggNeedsApiKey = $derived(
+	aggExecutor() === "anthropic" ||
+	aggExecutor() === "openrouter" ||
+	(aggExecutor() === "openai-compatible" && !isLocalEndpoint(aggEndpoint())),
+);
 
 // Embeddings (folded in)
 const EMBEDDING_PROVIDER_OPTIONS = [
@@ -223,7 +245,11 @@ function embSetEndpoint(v: string): void {
 }
 
 const isLocalExecutor = $derived(["openai-compatible", "ollama", "llama-cpp"].includes(bgExecutor()));
-const needsApiKey = $derived(["anthropic", "openrouter"].includes(bgExecutor()));
+const needsApiKey = $derived(
+	bgExecutor() === "anthropic" ||
+	bgExecutor() === "openrouter" ||
+	(bgExecutor() === "openai-compatible" && !isLocalEndpoint(bgEndpoint())),
+);
 const embNonNative = $derived(embProvider() && embProvider() !== "native" && embProvider() !== "");
 </script>
 

@@ -167,4 +167,34 @@ inference:
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});
+
+	it("does not create a synthesis target when synthesis.enabled is false", () => {
+		// Regression: the old code used String(scalarNode) which returns "false"
+		// (a truthy string), so the guard never fired and a disabled synthesis was
+		// silently re-enabled — destructive for a migration that nulls routing keys.
+		const dir = setupDir();
+		try {
+			writeFileSync(
+				join(dir, "agent.yaml"),
+				`memory:
+  pipelineV2:
+    synthesis:
+      enabled: false
+      provider: openrouter
+      model: anthropic/claude-sonnet
+    extraction:
+      provider: openrouter
+      model: anthropic/claude-haiku
+`,
+			);
+			migrateLegacyRoutingToRegistry(dir);
+			const after = readFileSync(join(dir, "agent.yaml"), "utf-8");
+			// Extraction target created; synthesis target must NOT be.
+			expect(after).toContain("legacy-extraction");
+			expect(after).not.toContain("sessionSynthesis");
+			expect(after).not.toContain("legacy-synthesis");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
 });

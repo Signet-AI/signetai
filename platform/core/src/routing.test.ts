@@ -408,6 +408,48 @@ describe("inference config + decision engine", () => {
 		]);
 	});
 
+	it("rejects ACPX targets for aggregate_recall (latency-sensitive, pi-ai-only)", () => {
+		// aggregate_recall must never route through a subprocess — spawn latency
+		// would dominate the synthesis call. Even when an acpx target is the only
+		// candidate bound to the workload, resolveRoutingDecision must filter it out.
+		const parsed = parseRoutingConfig({
+			inference: {
+				defaultPolicy: "acpx-only",
+				targets: {
+					harness: {
+						executor: "acpx",
+						acpx: { agent: "codex" },
+						models: { default: { model: "gpt-5.4-mini" } },
+					},
+				},
+				policies: {
+					"acpx-only": {
+						mode: "automatic",
+						defaultTargets: [makeRoutingTargetRef("harness", "default")],
+					},
+				},
+				workloads: {
+					aggregateRecall: { target: makeRoutingTargetRef("harness", "default") },
+				},
+			},
+		});
+		expect(parsed.ok).toBe(true);
+		if (!parsed.ok) return;
+		const decision = resolveRoutingDecision(
+			parsed.value,
+			{ operation: "aggregate_recall" },
+			{
+				targets: {
+					[makeRoutingTargetRef("harness", "default")]: ready,
+				},
+			},
+		);
+		// The only candidate is acpx — it must be filtered out, leaving no candidates.
+		expect(decision.ok).toBe(false);
+		if (decision.ok) return;
+		expect(decision.error.code).toBe("no-candidates");
+	});
+
 	it("parses documented ACPX terminal booleans into terminal modes", () => {
 		const parsed = parseRoutingConfig({
 			inference: {

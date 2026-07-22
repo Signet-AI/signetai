@@ -145,7 +145,9 @@ export function resolvePiModel(config: PiModelProviderConfig): ResolvedModel {
 			// ollama/llama-cpp always get /v1; openai-compatible respects a provided path.
 			const baseUrl =
 				config.executor === "openai-compatible" ? withVersionPath(rawBase) : withVersionPath(rawBase);
-			const keyless = !config.apiKey || isLocalBaseUrl(rawBase);
+			// Keyless only when the server is local AND no explicit key was provided.
+			// A local gateway/proxy that requires a bearer token keeps its real key.
+			const keyless = !config.apiKey && isLocalBaseUrl(rawBase);
 			const piModel: Model<"openai-completions"> = {
 				id: config.model,
 				name: config.model,
@@ -330,7 +332,7 @@ export function createPiModelProvider(config: PiModelProviderConfig): StreamCapa
 								controller.enqueue({ type: "done", text: fullText, usage: finalUsage });
 							} else if (ev.type === "error") {
 								finalUsage = { ...mapUsage(ev.error.usage), totalDurationMs: Date.now() - t0 };
-								controller.error(toError(name, { stopReason: ev.reason, errorMessage: undefined }));
+								controller.error(toError(name, { stopReason: ev.reason, errorMessage: ev.error.errorMessage }));
 								return;
 							}
 						}
@@ -352,7 +354,10 @@ export function createPiModelProvider(config: PiModelProviderConfig): StreamCapa
 
 			return {
 				stream,
-				cancel: () => abort.cleanup(),
+				cancel: () => {
+					abort.abort();
+					abort.cleanup();
+				},
 			};
 		},
 	};

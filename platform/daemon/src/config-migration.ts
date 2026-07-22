@@ -306,7 +306,12 @@ export function migrateLegacyRoutingToRegistry(agentsDir: string): void {
 		const model = source.get("model", true);
 		const endpoint = source.get("endpoint", true);
 		if (!provider || provider === "none" || provider === "command") return;
-		if (workloadKey === "sessionSynthesis" && !String(source.get("enabled", true) ?? "")) return;
+		// Read `enabled` as a real boolean (defaulting to true when absent, matching
+		// the runtime default). The raw YAML node's String() returns the source text
+		// (e.g. "false"), which would never short-circuit and silently re-enable a
+		// disabled synthesis — destructive for a migration that nulls routing keys.
+		const enabled = source.get("enabled");
+		if (workloadKey === "sessionSynthesis" && enabled === false) return;
 		if (workloadKey === "sessionSynthesis" && provider === "acpx") return;
 
 		// Create the account if the provider needs one.
