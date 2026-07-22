@@ -1,3 +1,6 @@
+import { existsSync, readdirSync } from "node:fs";
+import { homedir } from "node:os";
+import { basename, join } from "node:path";
 import {
 	STATIC_IDENTITY_SESSION_START_TIMEOUT_STATUS,
 	resolvePromptSubmitTimeoutMs,
@@ -630,6 +633,39 @@ export function buildCompactionCompleteBody(
 	};
 }
 
+export function resolveKimiTranscriptPath(sessionId: string): string {
+	const trimmed = sessionId.trim();
+	if (!trimmed || basename(trimmed) !== trimmed || trimmed === "." || trimmed === "..") return "";
+
+	const home = process.env.HOME?.trim() || homedir();
+	const explicitRoots = [process.env.KIMI_SHARE_DIR?.trim(), process.env.KIMI_CODE_HOME?.trim()].filter(
+		(value, index, values): value is string => Boolean(value) && values.indexOf(value) === index,
+	);
+	const roots = explicitRoots.length > 0 ? explicitRoots : [join(home, ".kimi"), join(home, ".kimi-code")];
+	const sessionNames = [trimmed, trimmed.startsWith("session_") ? trimmed : `session_${trimmed}`];
+
+	for (const root of roots) {
+		const sessionsRoot = join(root, "sessions");
+		let workDirs: string[];
+		try {
+			workDirs = readdirSync(sessionsRoot, { withFileTypes: true })
+				.filter((entry) => entry.isDirectory())
+				.map((entry) => entry.name);
+		} catch {
+			continue;
+		}
+		for (const workDir of workDirs) {
+			for (const sessionName of sessionNames) {
+				const sessionDir = join(sessionsRoot, workDir, sessionName);
+				for (const candidate of [join(sessionDir, "context.jsonl"), join(sessionDir, "agents", "main", "wire.jsonl")]) {
+					if (existsSync(candidate)) return candidate;
+				}
+			}
+		}
+	}
+	return "";
+}
+
 export function buildSessionEndBody(
 	input: Record<string, unknown> | null,
 	harness: string,
@@ -647,6 +683,9 @@ export function buildSessionEndBody(
 	const body = input ?? {};
 	const sessionKey = pickSessionKey(body);
 	const sessionId = pickString(body.session_id, body.sessionId, sessionKey);
+	const explicitTranscriptPath = pickString(body.transcript_path, body.transcriptPath);
+	const transcriptPath =
+		explicitTranscriptPath || (harness.trim().toLowerCase() === "kimi" ? resolveKimiTranscriptPath(sessionId) : "");
 	const nativeAgentId = harness === "claude-code" ? pickString(body.agent_id) : "";
 	const agentId = pickString(
 		body.signet_agent_id,
@@ -656,7 +695,7 @@ export function buildSessionEndBody(
 	);
 	return {
 		harness,
-		transcriptPath: pickString(body.transcript_path, body.transcriptPath),
+		transcriptPath,
 		transcript: pickString(body.transcript),
 		sessionId,
 		sessionKey,

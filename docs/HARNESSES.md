@@ -326,17 +326,20 @@ than a local Ollama instance.
 ## Kimi
 
 Kimi is Moonshot AI's terminal coding agent (Kimi CLI / Kimi Code). It
-reads configuration from `~/.kimi-code/`. Signet integrates with Kimi
-through lifecycle hooks installed as `[[hooks]]` entries in
-`~/.kimi-code/config.toml` and a Signet MCP stdio server registered in
-`~/.kimi-code/mcp.json`.
+reads configuration from `~/.kimi/` (or `KIMI_SHARE_DIR`). Signet also
+supports legacy Kimi Code 0.x installations under `~/.kimi-code/` (or
+`KIMI_CODE_HOME`). It integrates through lifecycle hooks installed as
+`[[hooks]]` entries in `config.toml` and a Signet MCP stdio server registered
+in `mcp.json`.
 
 ### Files managed by Signet
 
 | File | Description |
 |------|-------------|
-| `~/.kimi-code/config.toml` | `[[hooks]]` entries for SessionStart, UserPromptSubmit, and SessionEnd |
-| `~/.kimi-code/mcp.json` | `signet` MCP stdio server registration |
+| `~/.kimi/config.toml` | `[[hooks]]` entries for SessionStart, UserPromptSubmit, and SessionEnd |
+| `~/.kimi/mcp.json` | `signet` MCP stdio server registration |
+
+For legacy Kimi Code 0.x, the same files are managed under `~/.kimi-code/`.
 
 ### How it works
 
@@ -361,17 +364,17 @@ Hook timeouts use the same budgets as the other hook-driven harnesses:
 ### Pipeline and task-runner provider
 
 Kimi can be selected as the extraction provider in `agent.yaml` or
-Settings → Pipeline (models Kimi K3, Kimi K2.7, and Kimi K2.6; default
-Kimi K2.7) and as the session synthesis provider (K3, K2.7). The
-synthesis provider also serves as the dreaming provider. On the
-dashboard Tasks page, Kimi is available as a task-runner harness,
-running `kimi -p ... --output-format stream-json` (default model
-`kimi-k2.7`).
+Settings → Pipeline (default managed model `kimi-code/kimi-for-coding`)
+and as the session synthesis provider. Custom model aliases configured in
+Kimi remain available through the custom model field. The synthesis provider
+also serves as the dreaming provider. On the dashboard Tasks page, Kimi is
+available as a task-runner harness.
 
 ### Prerequisites
 
 - Kimi CLI (`kimi`) installed and in `PATH`
-- `~/.kimi-code/` config directory (or `KIMI_CODE_HOME` override)
+- `~/.kimi/` config directory (or `KIMI_SHARE_DIR` override); legacy
+  `~/.kimi-code/` / `KIMI_CODE_HOME` is also supported
 - Signet daemon running (`signet daemon start`)
 
 ### Uninstall

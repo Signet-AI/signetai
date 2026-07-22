@@ -138,7 +138,7 @@ describe("pipeline-settings synthesis resolution", () => {
 
 		expect(hasExplicitSynthesisProvider(agent)).toBe(true);
 		expect(resolveSynthesisProvider(agent)).toBe("kimi");
-		expect(resolveSynthesisModel(agent)).toBe("kimi-k2.7");
+		expect(resolveSynthesisModel(agent)).toBe("kimi-code/kimi-for-coding");
 		expect(resolveSynthesisEnabled(agent)).toBe(true);
 	});
 

@@ -7,11 +7,17 @@ import { spawnTask } from "./spawn";
 describe("spawnTask", () => {
 	const originalPath = process.env.PATH;
 	const originalWhich = Bun.which;
+	const originalKimiShareDir = process.env.KIMI_SHARE_DIR;
+	const originalKimiCodeHome = process.env.KIMI_CODE_HOME;
 	const tempDirs: string[] = [];
 
 	afterEach(() => {
 		process.env.PATH = originalPath;
 		Bun.which = originalWhich;
+		if (originalKimiShareDir === undefined) Reflect.deleteProperty(process.env, "KIMI_SHARE_DIR");
+		else process.env.KIMI_SHARE_DIR = originalKimiShareDir;
+		if (originalKimiCodeHome === undefined) Reflect.deleteProperty(process.env, "KIMI_CODE_HOME");
+		else process.env.KIMI_CODE_HOME = originalKimiCodeHome;
 		for (const dir of tempDirs.splice(0)) {
 			rmSync(dir, { recursive: true, force: true });
 		}
@@ -63,8 +69,10 @@ printf 'ok'
 		chmodSync(binPath, 0o755);
 		process.env.PATH = `${dir}:${originalPath ?? ""}`;
 		Bun.which = ((bin: string) => (bin === "kimi" ? binPath : originalWhich(bin))) as typeof Bun.which;
+		process.env.KIMI_CODE_HOME = dir;
+		Reflect.deleteProperty(process.env, "KIMI_SHARE_DIR");
 
-		const result = await spawnTask("kimi", "summarize this", dir, 5000, undefined, "kimi-k2.7");
+		const result = await spawnTask("kimi", "summarize this", dir, 5000, undefined, "kimi-code/kimi-for-coding");
 
 		expect(result.exitCode).toBe(0);
 		expect(readFileSync(outPath, "utf8").trim().split("\n")).toEqual([
@@ -73,11 +81,11 @@ printf 'ok'
 			"--output-format",
 			"stream-json",
 			"-m",
-			"kimi-k2.7",
+			"kimi-code/kimi-for-coding",
 		]);
 	});
 
-	it("omits the model flag for kimi scheduled tasks when no model is configured", async () => {
+	it("uses current Kimi print mode when KIMI_SHARE_DIR is configured", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "signet-spawn-test-"));
 		tempDirs.push(dir);
 
@@ -93,6 +101,40 @@ printf 'ok'
 		chmodSync(binPath, 0o755);
 		process.env.PATH = `${dir}:${originalPath ?? ""}`;
 		Bun.which = ((bin: string) => (bin === "kimi" ? binPath : originalWhich(bin))) as typeof Bun.which;
+		process.env.KIMI_SHARE_DIR = dir;
+		Reflect.deleteProperty(process.env, "KIMI_CODE_HOME");
+
+		const result = await spawnTask("kimi", "summarize this", dir, 5000);
+
+		expect(result.exitCode).toBe(0);
+		expect(readFileSync(outPath, "utf8").trim().split("\n")).toEqual([
+			"--print",
+			"--final-message-only",
+			"-p",
+			"summarize this",
+			"--output-format",
+			"stream-json",
+		]);
+	});
+
+	it("omits the model flag for legacy kimi scheduled tasks when no model is configured", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "signet-spawn-test-"));
+		tempDirs.push(dir);
+
+		const outPath = join(dir, "args.txt");
+		const binPath = join(dir, "kimi");
+		writeFileSync(
+			binPath,
+			`#!/bin/sh
+printf '%s\n' "$@" > ${JSON.stringify(outPath)}
+printf 'ok'
+`,
+		);
+		chmodSync(binPath, 0o755);
+		process.env.PATH = `${dir}:${originalPath ?? ""}`;
+		Bun.which = ((bin: string) => (bin === "kimi" ? binPath : originalWhich(bin))) as typeof Bun.which;
+		process.env.KIMI_CODE_HOME = dir;
+		Reflect.deleteProperty(process.env, "KIMI_SHARE_DIR");
 
 		const result = await spawnTask("kimi", "summarize this", dir, 5000);
 

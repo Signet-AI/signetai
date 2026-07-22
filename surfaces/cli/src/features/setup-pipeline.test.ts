@@ -16,8 +16,8 @@ describe("defaultExtractionModel", () => {
 		expect(defaultExtractionModel("ollama")).toBe("qwen3:4b");
 	});
 
-	it("uses kimi-k2.7 as the Kimi CLI default", () => {
-		expect(defaultExtractionModel("kimi")).toBe("kimi-k2.7");
+	it("uses the managed Kimi coding model as the CLI default", () => {
+		expect(defaultExtractionModel("kimi")).toBe("kimi-code/kimi-for-coding");
 	});
 });
 

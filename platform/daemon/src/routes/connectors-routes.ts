@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { CONNECTOR_PROVIDERS, type ConnectorConfig, type SyncCursor } from "@signet/core";
+import { CONNECTOR_PROVIDERS, type ConnectorConfig, type SyncCursor, resolveKimiHomePath } from "@signet/core";
 import type { Hono } from "hono";
 import { requirePermission } from "../auth";
 import { createFilesystemConnector } from "../connectors/filesystem.js";
@@ -372,8 +372,8 @@ export function registerConnectorRoutes(app: Hono): void {
 			{
 				name: "Kimi CLI",
 				id: "kimi",
-				path: join(homedir(), ".kimi-code", "config.toml"),
-				exists: existsSync(join(homedir(), ".kimi-code", "config.toml")),
+				path: join(resolveKimiHomePath(), "config.toml"),
+				exists: existsSync(join(resolveKimiHomePath(), "config.toml")),
 			},
 		];
 

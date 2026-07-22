@@ -4,14 +4,15 @@
  * Integrates Signet's memory system with Kimi's lifecycle hooks.
  *
  * Kimi facts (from the official Kimi Code docs):
- * - Config home: ~/.kimi-code/ (env override KIMI_CODE_HOME)
- * - Hooks: [[hooks]] array-of-tables in ~/.kimi-code/config.toml.
+ * - Current config home: ~/.kimi/ (env override KIMI_SHARE_DIR).
+ * - Legacy Kimi Code 0.x uses ~/.kimi-code/ (env override KIMI_CODE_HOME).
+ * - Hooks: [[hooks]] array-of-tables in the selected config.toml.
  *   Allowed fields: event (required), matcher (optional regex),
  *   command (required), timeout (optional). Extra fields break config load.
  * - Hook payload arrives as JSON on STDIN (snake_case fields).
  * - For UserPromptSubmit, hook STDOUT text is appended to the model context;
  *   SessionStart STDOUT is also appended. SessionEnd is observation-only.
- * - MCP servers: JSON file ~/.kimi-code/mcp.json with shape
+ * - MCP servers: JSON file mcp.json in the selected Kimi home, with shape
  *   {"mcpServers": {"signet": {"command": ..., "args": [...]}}} for stdio.
  *
  * Usage:
@@ -322,7 +323,16 @@ export class KimiConnector extends BaseConnector {
 	readonly harnessId = "kimi";
 
 	protected getKimiHome(): string {
-		return readEnv("KIMI_CODE_HOME") ?? join(homedir(), ".kimi-code");
+		const currentOverride = readEnv("KIMI_SHARE_DIR");
+		if (currentOverride) return currentOverride;
+		const legacyOverride = readEnv("KIMI_CODE_HOME");
+		if (legacyOverride) return legacyOverride;
+
+		const currentHome = join(homedir(), ".kimi");
+		const legacyHome = join(homedir(), ".kimi-code");
+		if (existsSync(currentHome)) return currentHome;
+		if (existsSync(legacyHome)) return legacyHome;
+		return currentHome;
 	}
 
 	getConfigPath(): string {
@@ -352,8 +362,8 @@ export class KimiConnector extends BaseConnector {
 			configsPatched.push(configPath);
 		}
 
-		// 2. Symlink skills directory (each subdir of the workspace becomes a
-		// symlink in ~/.kimi-code, including skills/)
+		// 2. Symlink skills into the selected Kimi home. Current Kimi also
+		// discovers ~/.agents/skills directly, while this keeps legacy support.
 		const skillsResult = this.symlinkSkills(expandedBasePath, kimiHome);
 		if (skillsResult.errors.length > 0) {
 			warnings.push("Failed to symlink skills directory");

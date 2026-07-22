@@ -262,6 +262,61 @@ async fn cli_provider_checks_explicit_relative_missing_executable_paths() {
     );
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn cli_provider_can_pass_prompt_as_required_option_argument() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = std::env::temp_dir().join(format!("signet-kimi-cli-{}", Uuid::new_v4()));
+    std::fs::create_dir_all(&root).expect("create temp root");
+    let script = root.join("kimi");
+    let args_path = root.join("args.txt");
+    let agent_copy_path = root.join("agent-copy.yaml");
+    let quoted_args_path = args_path.to_string_lossy().replace('\'', "'\\''");
+    let quoted_agent_copy_path = agent_copy_path.to_string_lossy().replace('\'', "'\\''");
+    std::fs::write(
+        &script,
+        format!(
+            "#!/bin/sh\nif [ \"$1\" = '--agent-file' ]; then cat \"$2\" > '{quoted_agent_copy_path}'; shift 2; fi\nprintf '%s\\n' \"$@\" > '{quoted_args_path}'\nprintf 'ok'\n"
+        ),
+    )
+    .expect("write fake kimi");
+    let mut permissions = std::fs::metadata(&script)
+        .expect("script metadata")
+        .permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&script, permissions).expect("make fake kimi executable");
+
+    let provider = CliProvider::new_with_prompt_argument_and_no_tools(
+        script.to_str().expect("utf8 script path"),
+        &[
+            "--output-format",
+            "text",
+            "-m",
+            "kimi-code/kimi-for-coding",
+            "-p",
+        ],
+        1_000,
+        "kimi",
+    );
+    let result = provider
+        .generate("summarize this", &GenerateOpts::default())
+        .await
+        .expect("fake kimi succeeds");
+
+    assert_eq!(result.text, "ok");
+    assert_eq!(
+        std::fs::read_to_string(&args_path).expect("captured args"),
+        "--output-format\ntext\n-m\nkimi-code/kimi-for-coding\n-p\nsummarize this\n"
+    );
+    assert!(
+        std::fs::read_to_string(&agent_copy_path)
+            .expect("captured agent")
+            .contains("tools: []")
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
 async fn seed_summary_job(pool: &DbPool, id: &str, session_key: &str, agent_id: &str) {
     let id = id.to_string();
     let session_key = session_key.to_string();

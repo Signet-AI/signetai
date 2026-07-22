@@ -396,13 +396,13 @@ describe("inference config + decision engine", () => {
 		const legacy = compileLegacyRoutingConfig({
 			extraction: {
 				provider: "kimi",
-				model: "kimi-k2.7",
+				model: "kimi-code/kimi-for-coding",
 				endpoint: undefined,
 			},
 			synthesis: {
 				enabled: true,
 				provider: "kimi",
-				model: "kimi-k3",
+				model: "team/kimi-custom",
 				endpoint: undefined,
 			},
 		});

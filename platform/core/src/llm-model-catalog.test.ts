@@ -6,15 +6,15 @@ describe("modelPresetsForProvider", () => {
 		expect(modelPresetsForProvider("codex").map((preset) => preset.value)).toContain("gpt-5.4-mini");
 	});
 
-	it("returns the kimi presets with harness source", () => {
+	it("returns the managed Kimi model with harness source", () => {
 		const presets = modelPresetsForProvider("kimi");
-		expect(presets.map((preset) => preset.value)).toEqual(["kimi-k3", "kimi-k2.7", "kimi-k2.6"]);
-		expect(presets.map((preset) => preset.label)).toEqual(["Kimi K3", "Kimi K2.7", "Kimi K2.6"]);
+		expect(presets.map((preset) => preset.value)).toEqual(["kimi-code/kimi-for-coding"]);
+		expect(presets.map((preset) => preset.label)).toEqual(["Kimi for Coding"]);
 		expect(presets.every((preset) => preset.source === "harness")).toBe(true);
 	});
 
-	it("defaults kimi to kimi-k2.7", () => {
-		expect(MODEL_DEFAULTS.kimi).toBe("kimi-k2.7");
+	it("defaults kimi to its managed coding model", () => {
+		expect(MODEL_DEFAULTS.kimi).toBe("kimi-code/kimi-for-coding");
 	});
 
 	it("ignores inherited object keys instead of indexing prototype values", () => {

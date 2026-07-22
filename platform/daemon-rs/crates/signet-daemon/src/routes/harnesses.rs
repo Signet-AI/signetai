@@ -19,7 +19,19 @@ pub async fn list(State(state): State<Arc<AppState>>) -> Json<serde_json::Value>
     let opencode_path = home.join(".config").join("opencode").join("AGENTS.md");
     let openclaw_path = state.config.base_path.join("AGENTS.md");
     let gemini_path = home.join(".gemini").join("settings.json");
-    let kimi_path = home.join(".kimi-code").join("config.toml");
+    let kimi_current_path = std::env::var_os("KIMI_SHARE_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| home.join(".kimi"))
+        .join("config.toml");
+    let kimi_legacy_path = std::env::var_os("KIMI_CODE_HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| home.join(".kimi-code"))
+        .join("config.toml");
+    let kimi_path = if kimi_current_path.exists() || !kimi_legacy_path.exists() {
+        kimi_current_path
+    } else {
+        kimi_legacy_path
+    };
     let claude_exists = claude_path.exists();
     let opencode_exists = opencode_path.exists();
     let openclaw_exists = openclaw_path.exists();

@@ -118,16 +118,18 @@ describe("resolveTaskModel", () => {
 		try {
 			writeFileSync(
 				join(agentsDir, "agent.yaml"),
-				["memory:", "  pipelineV2:", "    extraction:", "      provider: kimi", "      model: kimi-k3"].join("\n"),
+				["memory:", "  pipelineV2:", "    extraction:", "      provider: kimi", "      model: team/kimi-custom"].join(
+					"\n",
+				),
 			);
 
-			expect(resolveTaskModel("kimi", agentsDir)).toBe("kimi-k3");
+			expect(resolveTaskModel("kimi", agentsDir)).toBe("team/kimi-custom");
 		} finally {
 			rmSync(agentsDir, { recursive: true, force: true });
 		}
 	});
 
-	it("defaults kimi tasks to kimi-k2.7 when the extraction provider is not kimi", () => {
+	it("defaults kimi tasks to the managed coding model when the extraction provider is not kimi", () => {
 		const agentsDir = mkdtempSync(join(tmpdir(), "signet-agents-"));
 		try {
 			writeFileSync(
@@ -137,7 +139,7 @@ describe("resolveTaskModel", () => {
 				),
 			);
 
-			expect(resolveTaskModel("kimi", agentsDir)).toBe("kimi-k2.7");
+			expect(resolveTaskModel("kimi", agentsDir)).toBe("kimi-code/kimi-for-coding");
 			expect(resolveTaskModel("codex", agentsDir)).toBe("gpt-5.3-codex");
 			expect(resolveTaskModel("claude-code", agentsDir)).toBeUndefined();
 		} finally {

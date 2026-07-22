@@ -273,7 +273,11 @@ function detectInstalledHarnesses(): string[] {
 	if (existsSync(join(home, ".config", "signet", "bin", "codex")) || existsSync(join(home, ".codex", "config.toml"))) {
 		found.push("codex");
 	}
-	if (existsSync(join(home, ".kimi-code")) || resolveCommandPath("kimi") !== undefined) {
+	if (
+		existsSync(process.env.KIMI_SHARE_DIR?.trim() || join(home, ".kimi")) ||
+		existsSync(process.env.KIMI_CODE_HOME?.trim() || join(home, ".kimi-code")) ||
+		resolveCommandPath("kimi") !== undefined
+	) {
 		found.push("kimi");
 	}
 	if (existsSync(join(home, ".config", "opencode"))) {

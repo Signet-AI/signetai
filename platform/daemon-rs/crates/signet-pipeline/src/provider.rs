@@ -699,11 +699,44 @@ impl LlmProvider for OpenAiCompatProvider {
 // CLI subprocess provider (covers claude-code, codex, acpx, command)
 // ---------------------------------------------------------------------------
 
+/// A temporary current-Kimi agent definition with no tools. Pipeline prompts
+/// can contain untrusted transcript text, so extraction must not expose shell,
+/// filesystem, network, or subagent tools to that text.
+struct TemporaryKimiAgent {
+    root: std::path::PathBuf,
+    agent_file: std::path::PathBuf,
+}
+
+impl TemporaryKimiAgent {
+    fn create() -> std::io::Result<Self> {
+        let root = std::env::temp_dir().join(format!("signet-kimi-agent-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root)?;
+        std::fs::write(
+            root.join("system.md"),
+            "You are a data extraction system. Follow the user prompt and return only the requested result.\n",
+        )?;
+        let agent_file = root.join("agent.yaml");
+        std::fs::write(
+            &agent_file,
+            "version: 1\nagent:\n  name: signet-pipeline\n  system_prompt_path: ./system.md\n  tools: []\n",
+        )?;
+        Ok(Self { root, agent_file })
+    }
+}
+
+impl Drop for TemporaryKimiAgent {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
+}
+
 /// LLM provider that spawns a CLI subprocess, pipes the prompt to stdin,
 /// and reads the response from stdout.
 pub struct CliProvider {
     binary: String,
     args: Vec<String>,
+    prompt_as_argument: bool,
+    no_tools_agent: bool,
     provider_name: &'static str,
     default_timeout_ms: u64,
     health: Mutex<HealthTracker>,
@@ -714,6 +747,42 @@ impl CliProvider {
         Self {
             binary: binary.to_string(),
             args: args.iter().map(|s| s.to_string()).collect(),
+            prompt_as_argument: false,
+            no_tools_agent: false,
+            provider_name,
+            default_timeout_ms: timeout_ms,
+            health: Mutex::new(HealthTracker::new()),
+        }
+    }
+
+    pub fn new_with_prompt_argument(
+        binary: &str,
+        args: &[&str],
+        timeout_ms: u64,
+        provider_name: &'static str,
+    ) -> Self {
+        Self {
+            binary: binary.to_string(),
+            args: args.iter().map(|s| s.to_string()).collect(),
+            prompt_as_argument: true,
+            no_tools_agent: false,
+            provider_name,
+            default_timeout_ms: timeout_ms,
+            health: Mutex::new(HealthTracker::new()),
+        }
+    }
+
+    pub fn new_with_prompt_argument_and_no_tools(
+        binary: &str,
+        args: &[&str],
+        timeout_ms: u64,
+        provider_name: &'static str,
+    ) -> Self {
+        Self {
+            binary: binary.to_string(),
+            args: args.iter().map(|s| s.to_string()).collect(),
+            prompt_as_argument: true,
+            no_tools_agent: true,
             provider_name,
             default_timeout_ms: timeout_ms,
             health: Mutex::new(HealthTracker::new()),
@@ -732,10 +801,27 @@ impl CliProvider {
         let start = Instant::now();
         let timeout = Duration::from_millis(opts.timeout_ms.unwrap_or(self.default_timeout_ms));
 
+        let temp_agent = if self.no_tools_agent {
+            Some(TemporaryKimiAgent::create().map_err(|error| {
+                ProviderError::Other(format!("failed to create restricted Kimi agent: {error}"))
+            })?)
+        } else {
+            None
+        };
+
         let mut cmd = tokio::process::Command::new(&self.binary);
-        cmd.args(&self.args)
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
+        if let Some(agent) = &temp_agent {
+            cmd.arg("--agent-file")
+                .arg(&agent.agent_file)
+                .current_dir(&agent.root);
+        }
+        cmd.args(&self.args);
+        if self.prompt_as_argument {
+            cmd.arg(prompt).stdin(std::process::Stdio::null());
+        } else {
+            cmd.stdin(std::process::Stdio::piped());
+        }
+        cmd.stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
 
         let mut child = cmd.spawn().map_err(|e| {
@@ -745,11 +831,13 @@ impl CliProvider {
             ProviderError::Unavailable(format!("failed to spawn {}: {}", self.binary, e))
         })?;
 
-        // Write prompt to stdin
+        // Most CLIs accept stdin. Kimi requires the value of its -p option.
         use tokio::io::AsyncWriteExt;
-        if let Some(mut stdin) = child.stdin.take() {
-            let _ = stdin.write_all(prompt.as_bytes()).await;
-            drop(stdin); // close stdin to signal EOF
+        if !self.prompt_as_argument {
+            if let Some(mut stdin) = child.stdin.take() {
+                let _ = stdin.write_all(prompt.as_bytes()).await;
+                drop(stdin); // close stdin to signal EOF
+            }
         }
 
         // Wait with timeout
@@ -1163,12 +1251,30 @@ pub fn from_config(cfg: &LlmProviderConfig) -> Arc<dyn LlmProvider> {
         }
         "kimi" => {
             info!(provider = "kimi", model = %cfg.model, timeout_ms = timeout, "LLM provider initialized");
-            Arc::new(CliProvider::new(
-                "kimi",
-                &["-p", "--output-format", "stream-json"],
-                timeout,
-                "kimi",
-            ))
+            let home = std::env::var_os("HOME")
+                .or_else(|| std::env::var_os("USERPROFILE"))
+                .map(std::path::PathBuf::from);
+            let legacy_override = std::env::var_os("KIMI_CODE_HOME").is_some();
+            let current_or_fresh_home = home
+                .as_ref()
+                .map(|home| home.join(".kimi").exists() || !home.join(".kimi-code").exists())
+                .unwrap_or(true);
+            let current_cli = std::env::var_os("KIMI_SHARE_DIR").is_some()
+                || (!legacy_override && current_or_fresh_home);
+            let mut args = Vec::new();
+            if current_cli {
+                args.extend(["--print", "--final-message-only"]);
+            }
+            args.extend(["--output-format", "text", "-m", cfg.model.as_str(), "-p"]);
+            if current_cli {
+                Arc::new(CliProvider::new_with_prompt_argument_and_no_tools(
+                    "kimi", &args, timeout, "kimi",
+                ))
+            } else {
+                Arc::new(CliProvider::new_with_prompt_argument(
+                    "kimi", &args, timeout, "kimi",
+                ))
+            }
         }
         "acpx" => {
             info!(provider = "acpx", model = %cfg.model, timeout_ms = timeout, "LLM provider initialized");

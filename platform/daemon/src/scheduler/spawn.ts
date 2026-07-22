@@ -4,12 +4,23 @@
  */
 
 import { spawn as nodeSpawn } from "node:child_process";
+import { existsSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import type { TaskHarness } from "@signet/core";
 import { logger } from "../logger";
 import { which } from "../which";
 
 const MAX_OUTPUT_CHARS = 1_048_576;
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
+
+function usesCurrentKimiCli(): boolean {
+	if (process.env.KIMI_SHARE_DIR?.trim()) return true;
+	if (process.env.KIMI_CODE_HOME?.trim()) return false;
+	const home = process.env.HOME?.trim() || homedir();
+	if (existsSync(join(home, ".kimi"))) return true;
+	return !existsSync(join(home, ".kimi-code"));
+}
 
 export interface SpawnHooks {
 	readonly onStdoutChunk?: (chunk: string) => void;
@@ -43,7 +54,13 @@ function buildCommand(harness: TaskHarness, prompt: string, model?: string): rea
 			return ["codex", args];
 		}
 		case "kimi": {
-			const args = ["-p", prompt, "--output-format", "stream-json"];
+			const args = [
+				...(usesCurrentKimiCli() ? ["--print", "--final-message-only"] : []),
+				"-p",
+				prompt,
+				"--output-format",
+				"stream-json",
+			];
 			if (model) {
 				args.push("-m", model);
 			}

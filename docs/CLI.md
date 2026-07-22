@@ -292,7 +292,7 @@ If harnesses are selected, their configs are also created:
 - **OpenCode**: `~/.config/opencode/plugins/signet.mjs` plugin, `~/.config/opencode/AGENTS.md`
 - **OpenClaw**: `$SIGNET_WORKSPACE/hooks/agent-memory/` hook directory
 - **Codex**: wrapper installed at `~/.config/signet/bin/codex` with session hooks
-- **Kimi**: `~/.kimi-code/config.toml` hooks, `~/.kimi-code/mcp.json` MCP server
+- **Kimi**: `~/.kimi/config.toml` hooks and `~/.kimi/mcp.json` MCP server (`KIMI_SHARE_DIR`; legacy `~/.kimi-code` / `KIMI_CODE_HOME` supported)
 
 ---
 

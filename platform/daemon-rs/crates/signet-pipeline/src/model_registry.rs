@@ -147,23 +147,11 @@ const OPENCODE: &[PipelineModelPreset] = &[
         tier: ModelTier::Mid,
     },
 ];
-const KIMI: &[PipelineModelPreset] = &[
-    PipelineModelPreset {
-        value: "kimi-k3",
-        label: "Kimi K3",
-        tier: ModelTier::High,
-    },
-    PipelineModelPreset {
-        value: "kimi-k2.7",
-        label: "Kimi K2.7",
-        tier: ModelTier::Mid,
-    },
-    PipelineModelPreset {
-        value: "kimi-k2.6",
-        label: "Kimi K2.6",
-        tier: ModelTier::Low,
-    },
-];
+const KIMI: &[PipelineModelPreset] = &[PipelineModelPreset {
+    value: "kimi-code/kimi-for-coding",
+    label: "Kimi for Coding",
+    tier: ModelTier::Mid,
+}];
 const ANTHROPIC: &[PipelineModelPreset] = &[
     PipelineModelPreset {
         value: "claude-3-5-haiku-20241022",

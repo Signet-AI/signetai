@@ -294,10 +294,18 @@ function userHome(): string {
 	return process.env.HOME?.trim() || homedir();
 }
 
-/** Resolve the Kimi Code CLI config home (~/.kimi-code, overridable via KIMI_CODE_HOME). */
+/** Resolve current Kimi CLI storage, with fallback for legacy Kimi Code 0.x. */
 export function resolveKimiHomePath(): string {
-	const kimiHome = process.env.KIMI_CODE_HOME?.trim();
-	return kimiHome || join(userHome(), ".kimi-code");
+	const currentOverride = process.env.KIMI_SHARE_DIR?.trim();
+	if (currentOverride) return currentOverride;
+	const legacyOverride = process.env.KIMI_CODE_HOME?.trim();
+	if (legacyOverride) return legacyOverride;
+
+	const currentHome = join(userHome(), ".kimi");
+	const legacyHome = join(userHome(), ".kimi-code");
+	if (existsSync(currentHome)) return currentHome;
+	if (existsSync(legacyHome)) return legacyHome;
+	return currentHome;
 }
 
 function isBinaryOnPath(bin: string): boolean {

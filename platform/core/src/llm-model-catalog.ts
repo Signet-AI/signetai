@@ -54,9 +54,12 @@ export const PIPELINE_MODEL_CATALOG = {
 		{ value: "openai/gpt-5.4", label: "openai/gpt-5.4", tier: "mid", source: "harness" },
 	],
 	kimi: [
-		{ value: "kimi-k3", label: "Kimi K3", tier: "high", source: "harness" },
-		{ value: "kimi-k2.7", label: "Kimi K2.7", tier: "mid", source: "harness" },
-		{ value: "kimi-k2.6", label: "Kimi K2.6", tier: "low", source: "harness" },
+		{
+			value: "kimi-code/kimi-for-coding",
+			label: "Kimi for Coding",
+			tier: "mid",
+			source: "harness",
+		},
 	],
 	anthropic: [
 		{ value: "claude-3-5-haiku-20241022", label: "Claude 3.5 Haiku", tier: "low", source: "provider" },
@@ -82,7 +85,7 @@ export const MODEL_DEFAULTS = {
 	ollama: "qwen3:4b",
 	"claude-code": "haiku",
 	codex: "gpt-5.4-mini",
-	kimi: "kimi-k2.7",
+	kimi: "kimi-code/kimi-for-coding",
 	opencode: "google/gemini-2.5-flash",
 	anthropic: "claude-3-5-haiku-20241022",
 	openrouter: "openai/gpt-4o-mini",

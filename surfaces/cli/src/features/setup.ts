@@ -68,15 +68,6 @@ import {
 import type { FreshSetupConfig, SetupDeps, SetupWizardOptions } from "./setup-types.js";
 
 function modelChoices(provider: ExtractionProviderChoice): Array<{ value: string; name: string }> {
-	// Kimi is not (yet) part of core's model catalog, so its presets are
-	// declared here rather than through modelPresetsForProvider.
-	if (provider === "kimi") {
-		return [
-			{ value: "kimi-k3", name: "kimi-k3" },
-			{ value: "kimi-k2.7", name: "kimi-k2.7 (default)" },
-			{ value: "kimi-k2.6", name: "kimi-k2.6" },
-		];
-	}
 	return modelPresetsForProvider(provider).map((preset) => ({ value: preset.value, name: preset.label }));
 }
 
@@ -981,7 +972,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 			},
 			{
 				value: "kimi",
-				name: `Kimi (kimi-k2.7, uses your local Kimi CLI)${detectedProvider === "kimi" ? " — detected" : ""}`,
+				name: `Kimi (Kimi for Coding, uses your local Kimi CLI)${detectedProvider === "kimi" ? " — detected" : ""}`,
 			},
 			{
 				value: "ollama",

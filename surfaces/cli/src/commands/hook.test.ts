@@ -1,4 +1,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Command } from "commander";
 import {
 	buildCodexHookOutput,
@@ -10,6 +13,7 @@ import {
 	buildUserPromptSubmitBody,
 	pickSessionKey,
 	registerHookCommands,
+	resolveKimiTranscriptPath,
 	resolvePromptSubmitTimeout,
 	resolveSessionStartTimeout,
 	shouldReadCompactionInput,
@@ -235,6 +239,34 @@ describe("buildSessionEndBody", () => {
 				"claude-code",
 			).agentId,
 		).toBe("research-agent");
+	});
+
+	test("resolves current and legacy Kimi session transcripts", () => {
+		const root = join(tmpdir(), `signet-kimi-session-${crypto.randomUUID()}`);
+		const previousShareDir = process.env.KIMI_SHARE_DIR;
+		const previousCodeHome = process.env.KIMI_CODE_HOME;
+		try {
+			process.env.KIMI_SHARE_DIR = root;
+			Reflect.deleteProperty(process.env, "KIMI_CODE_HOME");
+			const current = join(root, "sessions", "work-hash", "abc", "context.jsonl");
+			mkdirSync(join(current, ".."), { recursive: true });
+			writeFileSync(current, '{"role":"user","content":"hello"}\n');
+			expect(resolveKimiTranscriptPath("abc")).toBe(current);
+			expect(buildSessionEndBody({ session_id: "abc" }, "kimi").transcriptPath).toBe(current);
+
+			rmSync(current);
+			const legacy = join(root, "sessions", "work-hash", "session_abc", "agents", "main", "wire.jsonl");
+			mkdirSync(join(legacy, ".."), { recursive: true });
+			writeFileSync(legacy, '{"role":"assistant","content":"hi"}\n');
+			expect(resolveKimiTranscriptPath("abc")).toBe(legacy);
+			expect(resolveKimiTranscriptPath("../abc")).toBe("");
+		} finally {
+			if (previousShareDir === undefined) Reflect.deleteProperty(process.env, "KIMI_SHARE_DIR");
+			else process.env.KIMI_SHARE_DIR = previousShareDir;
+			if (previousCodeHome === undefined) Reflect.deleteProperty(process.env, "KIMI_CODE_HOME");
+			else process.env.KIMI_CODE_HOME = previousCodeHome;
+			rmSync(root, { recursive: true, force: true });
+		}
 	});
 });
 
