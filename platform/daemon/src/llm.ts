@@ -12,6 +12,7 @@ export type InferenceWorkload =
 	| "default"
 	| "memoryExtraction"
 	| "sessionSynthesis"
+	| "aggregateRecall"
 	| "interactive"
 	| "widgetGeneration"
 	| "repair";

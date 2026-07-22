@@ -684,7 +684,7 @@ async function planQueries(input: {
 	const result = await input.router.execute(
 		{
 			agentId: input.params.agentId,
-			operation: "session_synthesis",
+			operation: "aggregate_recall",
 			promptPreview: input.params.query,
 			expectedOutputTokens: 300,
 		},
@@ -723,7 +723,7 @@ async function synthesize(input: {
 	const result = await input.router.execute(
 		{
 			agentId: input.params.agentId,
-			operation: "session_synthesis",
+			operation: "aggregate_recall",
 			promptPreview: input.params.query,
 			expectedOutputTokens: 700,
 		},

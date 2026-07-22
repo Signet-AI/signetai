@@ -1334,6 +1334,8 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 				return router.createWorkloadProvider("memory_extraction", defaultAgentId);
 			case "sessionSynthesis":
 				return router.createWorkloadProvider("session_synthesis", defaultAgentId);
+			case "aggregateRecall":
+				return router.createWorkloadProvider("aggregate_recall", defaultAgentId);
 			case "widgetGeneration":
 				return router.createWorkloadProvider("widget_generation", defaultAgentId);
 			case "repair":

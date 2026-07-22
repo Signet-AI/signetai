@@ -49,6 +49,10 @@ const EXECUTOR_OPTIONS = [
 
 const ACPX_AGENTS = ["claude", "codex", "opencode", "gemini", "pi", "openclaw"];
 
+// Aggregation executor options EXCLUDE acpx — aggregate recall is latency-
+// sensitive and pi-ai-only (subprocess spawn latency would dominate).
+const AGGREGATION_EXECUTOR_OPTIONS = EXECUTOR_OPTIONS.filter((o) => o.value !== "acpx");
+
 function bgExecutor(): string {
 	return st.aStr(["inference", "targets", TARGET_NAME, "executor"]);
 }
@@ -101,6 +105,53 @@ function bgModelOptions(): Array<{ value: string; label: string }> {
 	const family = providerFamilyForExecutor(bgExecutor());
 	return (catalog.models[family] ?? []).map((m) => ({ value: m.id, label: `${m.name} (${m.id})` }));
 }
+
+// ---------------------------------------------------------------------------
+// Aggregation (separate latency-optimized path, pi-ai-only — no ACPX).
+// Aggregate recall is query-time evidence synthesis; it depends on inference
+// speed, not raw intelligence or cost, so it gets its own target bound to the
+// aggregate_recall workload. The router enforces no-ACPX at the routing layer.
+// ---------------------------------------------------------------------------
+const AGG_TARGET_NAME = "aggregation";
+const AGG_ACCOUNT_NAME = "aggregation";
+
+function aggExecutor(): string {
+	return st.aStr(["inference", "targets", AGG_TARGET_NAME, "executor"]);
+}
+function aggSetExecutor(v: string): void {
+	if (!v) {
+		st.aSetStr(["inference", "targets", AGG_TARGET_NAME, "executor"], "");
+		st.aSetStr(["inference", "workloads", "aggregateRecall", "target"], "");
+		return;
+	}
+	st.aSetStr(["inference", "targets", AGG_TARGET_NAME, "executor"], v);
+	st.aSetStr(["inference", "workloads", "aggregateRecall", "target"], `${AGG_TARGET_NAME}/default`);
+}
+function aggModelId(): string {
+	return st.aStr(["inference", "targets", AGG_TARGET_NAME, "models", "default", "model"]);
+}
+function aggSetModelId(v: string): void {
+	st.aSetStr(["inference", "targets", AGG_TARGET_NAME, "models", "default", "model"], v);
+}
+function aggEndpoint(): string {
+	return st.aStr(["inference", "targets", AGG_TARGET_NAME, "endpoint"]);
+}
+function aggSetEndpoint(v: string): void {
+	st.aSetStr(["inference", "targets", AGG_TARGET_NAME, "endpoint"], v);
+}
+function aggApiKey(): string {
+	return st.aStr(["inference", "accounts", AGG_ACCOUNT_NAME, "credentialRef"]);
+}
+function aggSetApiKey(v: string): void {
+	st.aSetStr(["inference", "accounts", AGG_ACCOUNT_NAME, "credentialRef"], v);
+}
+function aggModelOptions(): Array<{ value: string; label: string }> {
+	if (!catalog) return [];
+	const family = providerFamilyForExecutor(aggExecutor());
+	return (catalog.models[family] ?? []).map((m) => ({ value: m.id, label: `${m.name} (${m.id})` }));
+}
+const aggIsLocal = $derived(["openai-compatible", "ollama", "llama-cpp"].includes(aggExecutor()));
+const aggNeedsApiKey = $derived(["anthropic", "openrouter"].includes(aggExecutor()));
 
 // Embeddings (folded in)
 const EMBEDDING_PROVIDER_OPTIONS = [
@@ -224,6 +275,84 @@ const embNonNative = $derived(embProvider() && embProvider() !== "native" && emb
 						value={bgApiKey()}
 						placeholder="ANTHROPIC_API_KEY"
 						oninput={(e) => bgSetApiKey(e.currentTarget.value)}
+					/>
+				</SettingRow>
+			{/if}
+		{/if}
+	</SettingList>
+
+	<!-- ============================================================ -->
+	<!-- Aggregation (separate latency-optimized path, pi-ai-only)    -->
+	<!-- ============================================================ -->
+	<SettingList title="Aggregation">
+		<SettingRow
+			title="Backend"
+			description="Which backend runs aggregate recall (query-time evidence synthesis). Latency-sensitive and pi-ai-only — ACPX subprocesses are excluded because spawn latency would dominate."
+		>
+			<Select.Root type="single" value={aggExecutor()} onValueChange={(v) => aggSetExecutor(v)}>
+				<Select.Trigger class={selectTriggerClass}>
+					{AGGREGATION_EXECUTOR_OPTIONS.find((o) => o.value === aggExecutor())?.label ?? "— none —"}
+				</Select.Trigger>
+				<Select.Content class={selectContentClass}>
+					{#each AGGREGATION_EXECUTOR_OPTIONS as opt (opt.value)}
+						<Select.Item class={selectItemClass} value={opt.value} label={opt.label} />
+					{/each}
+				</Select.Content>
+			</Select.Root>
+		</SettingRow>
+
+		{#if aggExecutor() && aggExecutor() !== ""}
+			<SettingRow
+				title="Model"
+				description="From the pi-ai catalog. Favor a fast/cheap model — aggregation is latency-bound, not intelligence-bound."
+			>
+				<div class="flex flex-col gap-2 w-full">
+					{#if aggModelOptions().length > 0}
+						<Select.Root type="single" value={aggModelId()} onValueChange={(v) => aggSetModelId(v)}>
+							<Select.Trigger class={selectTriggerClass}>
+								{aggModelId() || "— select —"}
+							</Select.Trigger>
+							<Select.Content class={selectContentClass}>
+								<Select.Item class={selectItemClass} value="" label="— select —" />
+								{#each aggModelOptions() as opt (opt.value)}
+									<Select.Item class={selectItemClass} value={opt.value} label={opt.label} />
+								{/each}
+							</Select.Content>
+						</Select.Root>
+					{/if}
+					<Input
+						class={inputClass}
+						value={aggModelId()}
+						placeholder="custom model id"
+						oninput={(e) => aggSetModelId(e.currentTarget.value)}
+					/>
+				</div>
+			</SettingRow>
+
+			{#if aggIsLocal}
+				<SettingRow
+					title="Endpoint"
+					description="Base URL of the OpenAI-compatible server."
+				>
+					<Input
+						class={inputClass}
+						value={aggEndpoint()}
+						placeholder="http://localhost:1234/v1"
+						oninput={(e) => aggSetEndpoint(e.currentTarget.value)}
+					/>
+				</SettingRow>
+			{/if}
+
+			{#if aggNeedsApiKey}
+				<SettingRow
+					title="API key (secret name)"
+					description="The Signet secret holding the key."
+				>
+					<Input
+						class={inputClass}
+						value={aggApiKey()}
+						placeholder="ANTHROPIC_API_KEY"
+						oninput={(e) => aggSetApiKey(e.currentTarget.value)}
 					/>
 				</SettingRow>
 			{/if}
