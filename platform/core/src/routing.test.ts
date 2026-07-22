@@ -446,7 +446,7 @@ describe("inference config + decision engine", () => {
 		);
 		// The only candidate is acpx — it must be filtered out, leaving no candidates.
 		expect(decision.ok).toBe(false);
-		if (decision.ok) return;
+		if (!("error" in decision)) return;
 		expect(decision.error.code).toBe("no-candidates");
 	});
 
