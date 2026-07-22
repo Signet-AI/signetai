@@ -1692,17 +1692,53 @@ pub fn native_artifact_fallbacks(
 // Post-processing boosts
 // ---------------------------------------------------------------------------
 
-/// Rehearsal boost: frequently-accessed memories with recency decay.
-///
-/// Boost = `weight * ln(access_count + 1) * 0.5^(days_since / half_life)`.
-/// Multiplicative: `score *= (1 + boost)`.
+/// Detect unambiguous freshness language. Date-range interpretation remains
+/// exclusively in the existing temporal recall path. Bare "now" is
+/// intentionally excluded because it commonly appears in timeless queries.
+pub fn has_freshness_intent(query: &str) -> bool {
+    let words: Vec<String> = query
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .map(str::to_ascii_lowercase)
+        .collect();
+    words.iter().any(|word| {
+        matches!(
+            word.as_str(),
+            "current" | "currently" | "latest" | "recent" | "recently" | "today"
+        )
+    }) || words
+        .windows(2)
+        .any(|pair| pair[0] == "this" && matches!(pair[1].as_str(), "week" | "month"))
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct FreshnessBoost {
+    pub now_ms: i64,
+    pub weight: f64,
+    pub half_life_days: f64,
+}
+
+fn parse_memory_timestamp_ms(raw: &str) -> Option<i64> {
+    chrono::DateTime::parse_from_rfc3339(raw)
+        .ok()
+        .map(|dt| dt.timestamp_millis())
+        .or_else(|| {
+            chrono::NaiveDateTime::parse_from_str(raw, "%Y-%m-%d %H:%M:%S")
+                .ok()
+                .map(|dt| dt.and_utc().timestamp_millis())
+        })
+}
+
+/// Apply access rehearsal and, only for freshness-aware queries, a bounded
+/// created-at recency boost in the same existing scoring stage.
 pub fn apply_rehearsal_boost(
     conn: &Connection,
     scored: &mut [ScoredHit],
     weight: f64,
     half_life_days: f64,
+    freshness: Option<FreshnessBoost>,
 ) {
-    if scored.is_empty() || weight <= 0.0 {
+    if scored.is_empty() || (weight <= 0.0 && freshness.is_none()) {
         return;
     }
 
@@ -1713,12 +1749,11 @@ pub fn apply_rehearsal_boost(
         .map(|(i, _)| format!("?{}", i + 1))
         .collect::<Vec<_>>()
         .join(",");
-
     let sql = format!(
-        "SELECT id, access_count, last_accessed FROM memories WHERE id IN ({placeholders})"
+        "SELECT id, access_count, last_accessed, created_at FROM memories WHERE id IN ({placeholders})"
     );
 
-    let access: HashMap<String, (i64, Option<String>)> = match conn.prepare(&sql) {
+    let access: HashMap<String, (i64, Option<String>, String)> = match conn.prepare(&sql) {
         Ok(mut stmt) => {
             let refs: Vec<&dyn rusqlite::types::ToSql> = ids
                 .iter()
@@ -1730,6 +1765,7 @@ pub fn apply_rehearsal_boost(
                     (
                         row.get::<_, i64>(1).unwrap_or(0),
                         row.get::<_, Option<String>>(2)?,
+                        row.get::<_, String>(3)?,
                     ),
                 ))
             })
@@ -1738,33 +1774,31 @@ pub fn apply_rehearsal_boost(
             .unwrap_or_default()
         }
         Err(e) => {
-            warn!(err = %e, "rehearsal boost query failed");
+            warn!(err = %e, "rehearsal/freshness boost query failed");
             return;
         }
     };
 
-    let now = chrono::Utc::now();
+    let now_ms = chrono::Utc::now().timestamp_millis();
     for hit in scored.iter_mut() {
-        if let Some((count, last)) = access.get(&hit.id) {
-            if *count <= 0 {
-                continue;
-            }
+        let Some((count, last, created_at)) = access.get(&hit.id) else {
+            continue;
+        };
+        if weight > 0.0 && *count > 0 {
             let days_since = last
                 .as_deref()
-                .and_then(|s| {
-                    chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S")
-                        .ok()
-                        .or_else(|| {
-                            chrono::DateTime::parse_from_rfc3339(s)
-                                .ok()
-                                .map(|dt| dt.naive_utc())
-                        })
-                })
-                .map(|dt| (now.naive_utc() - dt).num_seconds() as f64 / 86_400.0)
+                .and_then(parse_memory_timestamp_ms)
+                .map(|timestamp| (now_ms - timestamp) as f64 / 86_400_000.0)
                 .unwrap_or(half_life_days);
             let recency = 0.5_f64.powf(days_since / half_life_days);
             let boost = weight * (*count as f64 + 1.0).ln() * recency;
             hit.score *= 1.0 + boost;
+        }
+        if let Some(freshness) = freshness
+            && let Some(timestamp) = parse_memory_timestamp_ms(created_at)
+        {
+            let age_days = ((freshness.now_ms - timestamp) as f64 / 86_400_000.0).max(0.0);
+            hit.score *= 1.0 + freshness.weight * 0.5_f64.powf(age_days / freshness.half_life_days);
         }
     }
 
@@ -2477,5 +2511,112 @@ mod tests {
         assert!(!results.is_empty());
         assert_eq!(results[0].0, "m1");
         assert!(results[0].1 > 0.9);
+    }
+
+    // -------------------------------------------------------------------
+    // Freshness-aware rehearsal (issue #903), mirrors
+    // platform/daemon/src/memory-search-freshness.test.ts
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn freshness_intent_detects_only_unambiguous_terms() {
+        assert!(has_freshness_intent("current status of heron"));
+        assert!(has_freshness_intent("what is the latest on heron"));
+        assert!(has_freshness_intent("heron news today"));
+        assert!(!has_freshness_intent("What did we plan in March?"));
+        assert!(!has_freshness_intent("March 2026 retrospective"));
+        assert!(!has_freshness_intent(
+            "how does the embedding pipeline work now"
+        ));
+    }
+
+    #[test]
+    fn freshness_intent_ignores_observed_timeless_queries() {
+        assert!(!has_freshness_intent(
+            "how does the embedding pipeline work"
+        ));
+        assert!(!has_freshness_intent("what is Signet architecture"));
+        assert!(!has_freshness_intent("GitHub bot configuration"));
+    }
+
+    fn insert_memory_at(conn: &Connection, id: &str, content: &str, created_at: &str) {
+        conn.execute(
+            "INSERT INTO memories (id, content, type, created_at, updated_at, updated_by, importance, agent_id, visibility)
+             VALUES (?1, ?2, 'fact', ?3, ?3, 'test', 0.5, 'default', 'global')",
+            params![id, content, created_at],
+        )
+        .unwrap();
+    }
+
+    fn tied_hits() -> Vec<ScoredHit> {
+        vec![
+            ScoredHit {
+                id: "march-fact".into(),
+                score: 1.0,
+                source: SearchSource::Keyword,
+            },
+            ScoredHit {
+                id: "july-fact".into(),
+                score: 1.0,
+                source: SearchSource::Keyword,
+            },
+        ]
+    }
+
+    #[test]
+    fn freshness_rehearsal_boosts_recent_rows() {
+        let conn = setup();
+        insert_memory_at(
+            &conn,
+            "march-fact",
+            "heron is red",
+            "2026-03-10T12:00:00.000Z",
+        );
+        insert_memory_at(
+            &conn,
+            "july-fact",
+            "heron is blue",
+            "2026-07-10T12:00:00.000Z",
+        );
+        let mut scored = tied_hits();
+        apply_rehearsal_boost(
+            &conn,
+            &mut scored,
+            0.0,
+            14.0,
+            Some(FreshnessBoost {
+                now_ms: 1_784_419_200_000,
+                weight: 0.15,
+                half_life_days: 14.0,
+            }),
+        );
+        assert_eq!(scored[0].id, "july-fact");
+        let july = scored[0].score;
+        let march = scored[1].score;
+        assert!((july - (1.0 + 0.15 * 0.5_f64.powf(8.5 / 14.0))).abs() < 1e-9);
+        assert!((march - (1.0 + 0.15 * 0.5_f64.powf(130.5 / 14.0))).abs() < 1e-9);
+    }
+
+    #[test]
+    fn freshness_rehearsal_leaves_unparseable_created_at_untouched() {
+        let conn = setup();
+        insert_memory_at(&conn, "march-fact", "heron is red", "not-a-date");
+        let mut scored = vec![ScoredHit {
+            id: "march-fact".into(),
+            score: 1.0,
+            source: SearchSource::Keyword,
+        }];
+        apply_rehearsal_boost(
+            &conn,
+            &mut scored,
+            0.0,
+            14.0,
+            Some(FreshnessBoost {
+                now_ms: 1_784_419_200_000,
+                weight: 0.15,
+                half_life_days: 14.0,
+            }),
+        );
+        assert!((scored[0].score - 1.0).abs() < 1e-9);
     }
 }

@@ -333,6 +333,9 @@ const DECISION_CFG: DecisionConfig = {
 		rehearsal_enabled: false,
 		rehearsal_weight: 0,
 		rehearsal_half_life_days: 7,
+		temporal_prior_enabled: false,
+		temporal_prior_weight: 0,
+		temporal_prior_half_life_days: 14,
 	},
 	async fetchEmbedding() {
 		return null;

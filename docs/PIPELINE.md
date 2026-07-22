@@ -894,6 +894,16 @@ dampening pipeline
 before the final sort. The goal is to break score bunching where relevant
 and irrelevant results land at similar fusion scores.
 
+The existing rehearsal stage also recognizes explicit freshness terms
+(`current`, `latest`, `recent`, `today`, `this week`, and `this month`). For
+those queries only, it applies a bounded `created_at` recency boost alongside
+its normal access-based decay. Date-range interpretation remains exclusively
+on the structural temporal-recall path, and bare `now` does not trigger
+freshness shaping. Timeless queries and callers with `since`/`until` bounds are
+unchanged. This conservative behavior is deliberately enabled by default as a
+fix for stale near-ties; operators can disable it with
+`search.temporal_prior_enabled: false`.
+
 Structured currentness then applies a final correction before hydration.
 Active attributes remain eligible as current evidence, while memories whose
 structured attributes have been superseded are downweighted and annotated

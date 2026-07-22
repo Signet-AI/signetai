@@ -31,6 +31,9 @@ export interface MemorySearchConfig {
 	rehearsal_enabled: boolean;
 	rehearsal_weight: number;
 	rehearsal_half_life_days: number;
+	temporal_prior_enabled: boolean;
+	temporal_prior_weight: number;
+	temporal_prior_half_life_days: number;
 }
 
 export { PIPELINE_FLAGS };
@@ -1127,6 +1130,11 @@ export function loadMemoryConfig(agentsDir: string): ResolvedMemoryConfig {
 			rehearsal_enabled: true,
 			rehearsal_weight: 0.1,
 			rehearsal_half_life_days: 30,
+			// Default-on is deliberate for #903: explicit freshness language gets
+			// only a bounded near-tie boost, while timeless and ranged queries skip it.
+			temporal_prior_enabled: true,
+			temporal_prior_weight: 0.15,
+			temporal_prior_half_life_days: 14,
 		},
 		pipelineV2: { ...DEFAULT_PIPELINE_V2 },
 		dreaming: { ...DEFAULT_DREAMING },
@@ -1198,6 +1206,15 @@ export function loadMemoryConfig(agentsDir: string): ResolvedMemoryConfig {
 			}
 			if (typeof srch.rehearsal_half_life_days === "number") {
 				defaults.search.rehearsal_half_life_days = Math.max(1, srch.rehearsal_half_life_days);
+			}
+			if (srch.temporal_prior_enabled !== undefined) {
+				defaults.search.temporal_prior_enabled = srch.temporal_prior_enabled === true;
+			}
+			if (typeof srch.temporal_prior_weight === "number") {
+				defaults.search.temporal_prior_weight = Math.max(0, Math.min(1, srch.temporal_prior_weight));
+			}
+			if (typeof srch.temporal_prior_half_life_days === "number") {
+				defaults.search.temporal_prior_half_life_days = Math.max(1, Math.min(365, srch.temporal_prior_half_life_days));
 			}
 
 			defaults.pipelineV2 = loadPipelineConfig(yaml);

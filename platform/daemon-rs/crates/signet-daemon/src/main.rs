@@ -2381,7 +2381,11 @@ async fn health_ready(State(state): State<Arc<AppState>>) -> (StatusCode, Json<s
         Ok((migrations_ok, queue)) => (true, migrations_ok, queue),
         Err(err) => {
             reasons.push(format!("database unavailable: {err}"));
-            (false, false, serde_json::json!({ "error": "database unavailable" }))
+            (
+                false,
+                false,
+                serde_json::json!({ "error": "database unavailable" }),
+            )
         }
     };
     if db_ok && !migrations_ok {
@@ -2763,14 +2767,13 @@ mod tests {
 
     use super::{
         QUEUE_MAX_DEPTH, append_api_path, dead_letter_pending_extraction_jobs, health_ready,
-        host_in_trusted_override_list,
-        host_matches_trusted_override, normalize_endpoint_base, preflight_extraction,
-        provider_endpoint_is_trusted_for_secret_probe,
+        host_in_trusted_override_list, host_matches_trusted_override, normalize_endpoint_base,
+        preflight_extraction, provider_endpoint_is_trusted_for_secret_probe,
         provider_is_unsupported_for_daemon_startup_preflight, queue_health,
-        resolve_runtime_extraction_endpoint,
-        resolve_runtime_extraction_model, resume_extraction_check, start_extraction_worker,
-        start_extraction_worker_inner, status, stop_extraction_worker, stop_summary_worker,
-        stop_synthesis_worker, worker_supports_extraction_provider,
+        resolve_runtime_extraction_endpoint, resolve_runtime_extraction_model,
+        resume_extraction_check, start_extraction_worker, start_extraction_worker_inner, status,
+        stop_extraction_worker, stop_summary_worker, stop_synthesis_worker,
+        worker_supports_extraction_provider,
     };
 
     fn test_state_with_pipeline_config(

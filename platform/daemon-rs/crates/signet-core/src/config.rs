@@ -1472,6 +1472,40 @@ pub struct SearchConfig {
     pub alpha: f64,
     pub top_k: usize,
     pub min_score: f64,
+    /// Temporal freshness prior (issue #903), mirrors TS
+    /// `memory-config.ts` `search.temporal_prior_*` (defaults true/0.15/14).
+    #[serde(default = "default_temporal_prior_enabled")]
+    pub temporal_prior_enabled: bool,
+    #[serde(default = "default_temporal_prior_weight")]
+    pub temporal_prior_weight: f64,
+    #[serde(default = "default_temporal_prior_half_life_days")]
+    pub temporal_prior_half_life_days: f64,
+}
+
+fn default_temporal_prior_enabled() -> bool {
+    // Deliberately default-on for #903: explicit freshness language receives
+    // only a bounded near-tie boost; timeless and ranged queries bypass it.
+    true
+}
+
+fn default_temporal_prior_weight() -> f64 {
+    0.15
+}
+
+fn default_temporal_prior_half_life_days() -> f64 {
+    14.0
+}
+
+impl SearchConfig {
+    /// Resolved temporal-prior knobs with TS load-time clamps applied
+    /// (weight 0..=1, half-life 1..=365).
+    pub fn temporal_prior(&self) -> (bool, f64, f64) {
+        (
+            self.temporal_prior_enabled,
+            self.temporal_prior_weight.clamp(0.0, 1.0),
+            self.temporal_prior_half_life_days.clamp(1.0, 365.0),
+        )
+    }
 }
 
 impl Default for SearchConfig {
@@ -1480,7 +1514,27 @@ impl Default for SearchConfig {
             alpha: DEFAULT_HYBRID_ALPHA,
             top_k: 20,
             min_score: 0.1,
+            temporal_prior_enabled: default_temporal_prior_enabled(),
+            temporal_prior_weight: default_temporal_prior_weight(),
+            temporal_prior_half_life_days: default_temporal_prior_half_life_days(),
         }
+    }
+}
+
+#[cfg(test)]
+mod search_config_tests {
+    use super::SearchConfig;
+
+    #[test]
+    fn temporal_prior_is_deliberately_default_on_and_can_be_disabled() {
+        let defaults = SearchConfig::default();
+        assert_eq!(defaults.temporal_prior(), (true, 0.15, 14.0));
+
+        let disabled = SearchConfig {
+            temporal_prior_enabled: false,
+            ..defaults
+        };
+        assert!(!disabled.temporal_prior().0);
     }
 }
 

@@ -48,7 +48,7 @@ import {
 } from "./pipeline/structured-path-evidence";
 import { type RecallDedupeMeta, applyRecallDedupe } from "./session-recall-dedupe";
 import { escapeLike } from "./sql-utils";
-import { type TemporalTimeOptions, resolveTemporalRecall } from "./temporal-recall";
+import { type TemporalTimeOptions, hasFreshnessIntent, resolveTemporalRecall } from "./temporal-recall";
 
 // ---------------------------------------------------------------------------
 // Public interfaces
@@ -570,8 +570,11 @@ export function expandRecallKeywordQuery(raw: string): string {
 function applyRehearsalBoost(
 	scored: Array<{ id: string; score: number; source: string }>,
 	search: MemorySearchConfig,
+	freshness: { readonly enabled: boolean; readonly nowMs: number },
 ): void {
-	if (!search.rehearsal_enabled || search.rehearsal_weight <= 0 || scored.length === 0) return;
+	const rehearsalEnabled = search.rehearsal_enabled && search.rehearsal_weight > 0;
+	const freshnessEnabled = freshness.enabled && search.temporal_prior_weight > 0;
+	if ((!rehearsalEnabled && !freshnessEnabled) || scored.length === 0) return;
 	try {
 		const ids = scored.map((s) => s.id);
 		const placeholders = ids.map(() => "?").join(", ");
@@ -579,7 +582,7 @@ function applyRehearsalBoost(
 			(db) =>
 				db
 					.prepare(
-						`SELECT id, access_count, last_accessed
+						`SELECT id, access_count, last_accessed, created_at
 						 FROM memories
 						 WHERE id IN (${placeholders})`,
 					)
@@ -587,25 +590,33 @@ function applyRehearsalBoost(
 					id: string;
 					access_count: number;
 					last_accessed: string | null;
+					created_at: string;
 				}>,
 		);
 
-		const nowMs = Date.now();
-		const rw = search.rehearsal_weight;
 		const accessMap = new Map(accessRows.map((r) => [r.id, r]));
 		for (const s of scored) {
 			const row = accessMap.get(s.id);
-			if (!row || row.access_count <= 0) continue;
-			const daysSinceAccess = row.last_accessed
-				? (nowMs - new Date(row.last_accessed).getTime()) / 86_400_000
-				: search.rehearsal_half_life_days;
-			const recencyFactor = 0.5 ** (daysSinceAccess / search.rehearsal_half_life_days);
-			const boost = rw * Math.log(row.access_count + 1) * recencyFactor;
-			s.score *= 1 + boost;
+			if (!row) continue;
+			if (rehearsalEnabled && row.access_count > 0) {
+				const daysSinceAccess = row.last_accessed
+					? (freshness.nowMs - new Date(row.last_accessed).getTime()) / 86_400_000
+					: search.rehearsal_half_life_days;
+				const recencyFactor = 0.5 ** (daysSinceAccess / search.rehearsal_half_life_days);
+				const boost = search.rehearsal_weight * Math.log(row.access_count + 1) * recencyFactor;
+				s.score *= 1 + boost;
+			}
+			if (freshnessEnabled) {
+				const createdAtMs = Date.parse(row.created_at);
+				if (!Number.isNaN(createdAtMs)) {
+					const ageDays = Math.max(0, (freshness.nowMs - createdAtMs) / 86_400_000);
+					s.score *= 1 + search.temporal_prior_weight * 0.5 ** (ageDays / search.temporal_prior_half_life_days);
+				}
+			}
 		}
 		scored.sort((a, b) => b.score - a.score);
 	} catch (e) {
-		logger.warn("memory", "Rehearsal boost failed (non-fatal)", {
+		logger.warn("memory", "Rehearsal/freshness boost failed (non-fatal)", {
 			error: e instanceof Error ? e.message : String(e),
 		});
 	}
@@ -621,15 +632,25 @@ function mergeCandidate(
 	}
 }
 
-function hasColumn(db: { prepare: (sql: string) => { all: () => Array<{ name?: unknown }> } }, table: string, column: string): boolean {
+function hasColumn(
+	db: { prepare: (sql: string) => { all: () => Array<{ name?: unknown }> } },
+	table: string,
+	column: string,
+): boolean {
 	try {
-		return db.prepare(`PRAGMA table_info(${table})`).all().some((row) => row.name === column);
+		return db
+			.prepare(`PRAGMA table_info(${table})`)
+			.all()
+			.some((row) => row.name === column);
 	} catch {
 		return false;
 	}
 }
 
-function memorySupersessionSql(db: { prepare: (sql: string) => { all: () => Array<{ name?: unknown }> } }, alias = "m"): string {
+function memorySupersessionSql(
+	db: { prepare: (sql: string) => { all: () => Array<{ name?: unknown }> } },
+	alias = "m",
+): string {
 	return hasColumn(db, "memories", "superseded_by") ? ` AND ${alias}.superseded_by IS NULL` : "";
 }
 
@@ -1258,6 +1279,12 @@ export async function hybridRecall(
 		[...temporalCandidateSet].map((id) => [id, Math.max(minScore, 0.05)]),
 	);
 
+	// Date ranges are handled by resolveTemporalRecall above. The existing
+	// rehearsal stage gets only the distinct, keyword-based freshness signal.
+	const temporalNowMs = Date.now();
+	const freshnessIntent =
+		cfg.search.temporal_prior_enabled && !params.since && !params.until && hasFreshnessIntent(params.query);
+
 	const expandedQuery = expandRecallKeywordQuery(query);
 	const keywordQuery = sanitizeFtsQuery((params.keywordQuery ?? expandedQuery).trim());
 	const queryVecPromise = (() => {
@@ -1405,9 +1432,9 @@ export async function hybridRecall(
 				getDbAccessor().withReadDb((db) => {
 					const vecResults = vectorSearch(db, queryVector, {
 						limit: vecLimit,
-					type: params.type,
-					excludeAggregateRecall,
-				});
+						type: params.type,
+						excludeAggregateRecall,
+					});
 					for (const r of vecResults) {
 						vectorMap.set(r.id, r.score);
 					}
@@ -1905,7 +1932,7 @@ export async function hybridRecall(
 	}
 
 	timings.time("rehearsal_boost", () => {
-		applyRehearsalBoost(scored, cfg.search);
+		applyRehearsalBoost(scored, cfg.search, { enabled: freshnessIntent, nowMs: temporalNowMs });
 	});
 
 	// --- Optional reranker hook ---

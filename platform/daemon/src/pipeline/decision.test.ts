@@ -99,7 +99,7 @@ function makeDecisionConfig(): DecisionConfig {
 			dimensions: 768,
 			base_url: "http://localhost:11434",
 		},
-		search: { alpha: 0.7, top_k: 20, min_score: 0.0, rehearsal_enabled: false, rehearsal_weight: 0, rehearsal_half_life_days: 7 },
+		search: { alpha: 0.7, top_k: 20, min_score: 0.0, rehearsal_enabled: false, rehearsal_weight: 0, rehearsal_half_life_days: 7, temporal_prior_enabled: false, temporal_prior_weight: 0, temporal_prior_half_life_days: 14 },
 		async fetchEmbedding() {
 			// Return null so vector path is skipped; BM25 only.
 			return null;

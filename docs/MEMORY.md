@@ -280,8 +280,9 @@ Every major stage records timing data in `meta.timings`. Slow recalls log a
 stage breakdown so latency regressions can be localized without guessing.
 
 Secondary channels are deliberately best-effort. Embedding, vector search,
-graph traversal, structured evidence, reranking, dampening, currentness,
-source fallback, and LLM summary failures are logged and skipped. The caller
+graph traversal, structured evidence, reranking, dampening, freshness-aware
+rehearsal, currentness, source fallback, and LLM summary failures
+are logged and skipped. The caller
 should receive the best safe recall response the daemon can produce from the
 remaining channels.
 
