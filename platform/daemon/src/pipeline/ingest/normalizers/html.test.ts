@@ -139,4 +139,12 @@ c   d
 		if (!res.ok) return;
 		expect(res.source.text).toBe("- parent\n  - child\n");
 	});
+
+	test("escapes pipes and backslashes in table cells so markdown cells cannot be split or escaped", () => {
+		const html = "<table><tr><th>Path</th></tr><tr><td>C:\\logs|archive</td></tr></table>";
+		const res = normalizeSource(html);
+		expect(res.ok).toBe(true);
+		if (!res.ok) return;
+		expect(res.source.text).toContain("| C:\\\\logs\\|archive |");
+	});
 });

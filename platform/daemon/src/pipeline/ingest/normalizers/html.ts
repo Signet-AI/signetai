@@ -552,7 +552,10 @@ function renderTable(tableNode: ElementNode): string {
 
 function cellText(cell: ElementNode): string {
 	const text = inlineText(cell.children).replace(/\s+/g, " ").trim();
-	return text.replace(/\|/g, "\\|");
+	// Escape backslashes before pipes: a source `\\|` must stay a literal
+	// backslash plus a literal pipe, never become a table delimiter or escape
+	// sequence in the rendered Markdown.
+	return text.replace(/\\/g, "\\\\").replace(/\|/g, "\\|");
 }
 
 // ---------------------------------------------------------------------------
