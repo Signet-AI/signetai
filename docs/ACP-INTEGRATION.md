@@ -121,6 +121,14 @@ npx -y acpx@0.7.0 \
 The prompt is written to stdin. The final text response is read from stdout and
 returned to the current `LlmProvider` abstraction.
 
+`modelSelection` controls who applies the routed model. `acp` passes
+`--model` to ACPX and requires the agent to advertise compatible ACP model
+selection. `agent` omits the flag and relies on the harness's native model
+configuration; `signet route doctor` warns operators to verify that external
+configuration. OpenCode defaults to `agent` because installations may not
+advertise ACP model negotiation, while other agents default to `acp`. Set the
+mode explicitly to override either default.
+
 ### JSON event capture
 
 Signet can also ask ACPX for JSON output:
@@ -132,6 +140,7 @@ inference:
       executor: acpx
       acpx:
         agent: codex
+        modelSelection: acp
         format: json
         captureEvents: true
         maxCapturedEvents: 200
@@ -173,6 +182,7 @@ ACPX target config lives under `inference.targets.<name>.acpx`.
 | Field | Type | Description |
 |---|---|---|
 | `agent` | string | ACPX agent command, for example `codex`, `claude` for Claude Code, or `opencode`. Legacy `claude-code` values are normalized to `claude` before spawning ACPX. |
+| `modelSelection` | `acp` or `agent` | `acp` passes the routed model through ACPX negotiation. `agent` omits `--model` and relies on the agent's native configuration. Defaults to `agent` for OpenCode and `acp` otherwise. |
 | `version` / `acpxVersion` | string | ACPX npm package version. Defaults to Signet's pinned `0.7.0`. |
 | `bin` | string | Optional executable override. If omitted, Signet runs `npx -y acpx@<version>`. |
 | `cwd` | string | Working directory for ACPX and the harness. |
