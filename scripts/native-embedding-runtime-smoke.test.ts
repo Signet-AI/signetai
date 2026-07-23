@@ -10,6 +10,29 @@ const root = join(import.meta.dir, "..");
 const enabled = process.env.SIGNET_NATIVE_EMBEDDING_SMOKE === "1";
 const tempDirs: string[] = [];
 const children: ChildProcessWithoutNullStreams[] = [];
+const CHILD_KILL_REAP_MS = 2_000;
+const CHILD_TERM_GRACE_MS = 2_000;
+
+interface StoppableChild {
+	readonly exitCode: number | null;
+	kill(signal: "SIGTERM" | "SIGKILL"): void;
+	once(event: "close", listener: () => void): void;
+}
+
+interface StopTimings {
+	readonly termGraceMs: number;
+	readonly killReapMs: number;
+}
+
+function closesWithin(closed: Promise<true>, timeoutMs: number): Promise<boolean> {
+	return new Promise((resolve) => {
+		const timer = setTimeout(() => resolve(false), timeoutMs);
+		void closed.then(() => {
+			clearTimeout(timer);
+			resolve(true);
+		});
+	});
+}
 
 /** Resolve the compiled native binary to smoke-test.
  *  Honors an explicit SIGNET_NATIVE_SMOKE_BINARY override (release CI builds to
@@ -60,22 +83,19 @@ function floatVector(value: unknown): Float32Array {
 	return new Float32Array(value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength));
 }
 
-async function stopChild(child: ChildProcessWithoutNullStreams): Promise<void> {
+async function stopChild(
+	child: StoppableChild,
+	timings: StopTimings = { termGraceMs: CHILD_TERM_GRACE_MS, killReapMs: CHILD_KILL_REAP_MS },
+): Promise<void> {
 	if (child.exitCode !== null) return;
+	const closed = new Promise<true>((resolve) => child.once("close", () => resolve(true)));
 	child.kill("SIGTERM");
-	// Keep the SIGTERM grace window well under bun's default afterEach timeout
-	// (5s). A healthy daemon honors SIGTERM in milliseconds; only a deliberately
-	// wedged child (the isolation test pins it on a blackhole fetch) holds out,
-	// and SIGKILL at 2s is safe on a throwaway process. At 5s the grace window
-	// collided with the hook timeout, so the slowest runner (darwin-arm64)
-	// deterministically reported "a beforeEach/afterEach hook timed out" even
-	// though the test body passed.
-	await Promise.race([
-		new Promise<void>((resolve) => child.once("close", () => resolve())),
-		Bun.sleep(2_000).then(() => {
-			if (child.exitCode === null) child.kill("SIGKILL");
-		}),
-	]);
+	if (await closesWithin(closed, timings.termGraceMs)) return;
+
+	if (child.exitCode === null) child.kill("SIGKILL");
+	if (!(await closesWithin(closed, timings.killReapMs))) {
+		throw new Error(`native smoke child did not close within ${timings.killReapMs}ms after SIGKILL`);
+	}
 }
 
 const blackholeServers: Server[] = [];
@@ -101,6 +121,46 @@ afterEach(async () => {
 	for (const child of children.splice(0)) await stopChild(child);
 	for (const server of blackholeServers.splice(0)) server.close();
 	for (const path of tempDirs.splice(0)) rmSync(path, { recursive: true, force: true });
+}, 30_000);
+
+describe("native embedding smoke teardown", () => {
+	test("waits for close after escalating a SIGTERM-resistant child", async () => {
+		const signals: string[] = [];
+		let closed = false;
+		let onClose: (() => void) | undefined;
+		const child: StoppableChild = {
+			exitCode: null,
+			kill(signal) {
+				signals.push(signal);
+				if (signal === "SIGKILL") {
+					setTimeout(() => {
+						closed = true;
+						onClose?.();
+					}, 10);
+				}
+			},
+			once(_event, listener) {
+				onClose = listener;
+			},
+		};
+
+		await stopChild(child, { termGraceMs: 1, killReapMs: 100 });
+
+		expect(signals).toEqual(["SIGTERM", "SIGKILL"]);
+		expect(closed).toBe(true);
+	});
+
+	test("fails within the reap bound when a killed child never closes", async () => {
+		const child: StoppableChild = {
+			exitCode: null,
+			kill() {},
+			once() {},
+		};
+
+		await expect(stopChild(child, { termGraceMs: 1, killReapMs: 5 })).rejects.toThrow(
+			"native smoke child did not close within 5ms after SIGKILL",
+		);
+	});
 });
 
 describe("compiled native embedding runtime", () => {
