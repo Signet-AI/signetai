@@ -97,9 +97,16 @@ export type RoutingAcpxHooksMode = "inherit" | "disabled" | "enabled";
 export type RoutingAcpxTerminalMode = "inherit" | "disabled" | "enabled";
 export type RoutingAcpxSessionMode = "exec" | "session";
 export type RoutingAcpxOutputFormat = "quiet" | "json";
+export type AcpxModelSelection = "acp" | "agent";
+
+export function resolveAcpxModelSelection(agent: string, configured?: AcpxModelSelection): AcpxModelSelection {
+	if (configured) return configured;
+	return agent.trim().toLowerCase() === "opencode" ? "agent" : "acp";
+}
 
 export interface RoutingAcpxConfig {
 	readonly agent: string;
+	readonly modelSelection?: AcpxModelSelection;
 	readonly version?: string;
 	readonly bin?: string;
 	readonly package?: string;
@@ -547,6 +554,10 @@ function asAcpxOutputFormat(value: unknown): RoutingAcpxOutputFormat | undefined
 		: undefined;
 }
 
+function asAcpxModelSelection(value: unknown): AcpxModelSelection | undefined {
+	return typeof value === "string" && ["acp", "agent"].includes(value) ? (value as AcpxModelSelection) : undefined;
+}
+
 function parseAcpxConfig(raw: unknown): RoutingAcpxConfig | undefined {
 	if (!isRecord(raw)) return undefined;
 	const nested = isRecord(raw.acpx) ? raw.acpx : raw;
@@ -556,6 +567,10 @@ function parseAcpxConfig(raw: unknown): RoutingAcpxConfig | undefined {
 	const extraArgs = asStringArray(nested.extraArgs ?? nested.extra_args);
 	return {
 		agent,
+		modelSelection: resolveAcpxModelSelection(
+			agent,
+			asAcpxModelSelection(nested.modelSelection ?? nested.model_selection),
+		),
 		version: asString(nested.version ?? nested.acpxVersion ?? nested.acpx_version),
 		bin: asString(nested.bin ?? nested.command),
 		package: asString(nested.package ?? nested.packageRef ?? nested.package_ref),

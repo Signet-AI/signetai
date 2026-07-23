@@ -99,6 +99,8 @@ printf '  acpx answer  \\n'
 			const args = readFileSync(argsPath, "utf-8").trim().split("\n");
 			expect(args).toContain("--format");
 			expect(args).toContain("quiet");
+			expect(args).toContain("--model");
+			expect(args[args.indexOf("--model") + 1]).toBe("gpt-5.4-mini");
 			expect(args).toContain("--deny-all");
 			expect(args).toContain("--no-terminal");
 			expect(args).toContain("--allowed-tools");
@@ -112,6 +114,45 @@ printf '  acpx answer  \\n'
 		} finally {
 			if (previousSignetPath === undefined) Reflect.deleteProperty(process.env, "SIGNET_PATH");
 			else process.env.SIGNET_PATH = previousSignetPath;
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("lets OpenCode use its native model config unless ACP selection is explicit", async () => {
+		const root = join(tmpdir(), `signet-acpx-opencode-model-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		mkdirSync(root, { recursive: true });
+		const bin = join(root, "fake-acpx.sh");
+		const argsPath = join(root, "args.txt");
+		writeFileSync(
+			bin,
+			`#!/usr/bin/env bash
+printf '%s\n' "$@" > ${JSON.stringify(argsPath)}
+cat >/dev/null
+printf 'ok\n'
+`,
+		);
+		chmodSync(bin, 0o755);
+		try {
+			const agentManaged = createAcpxProvider({
+				agent: "opencode",
+				model: "minimax-coding-plan/MiniMax-M3",
+				bin,
+			});
+			await expect(agentManaged.generate("hello", { timeoutMs: 1000 })).resolves.toBe("ok");
+			let args = readFileSync(argsPath, "utf-8").trim().split("\n");
+			expect(args).not.toContain("--model");
+
+			const acpManaged = createAcpxProvider({
+				agent: "opencode",
+				model: "minimax-coding-plan/MiniMax-M3",
+				modelSelection: "acp",
+				bin,
+			});
+			await expect(acpManaged.generate("hello", { timeoutMs: 1000 })).resolves.toBe("ok");
+			args = readFileSync(argsPath, "utf-8").trim().split("\n");
+			expect(args).toContain("--model");
+			expect(args[args.indexOf("--model") + 1]).toBe("minimax-coding-plan/MiniMax-M3");
+		} finally {
 			rmSync(root, { recursive: true, force: true });
 		}
 	});

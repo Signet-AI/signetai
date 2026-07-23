@@ -905,6 +905,23 @@ describe("inference route hardening", () => {
 			expect(args).toContain("--deny-all");
 			expect(args).toContain("--no-terminal");
 			expect(args.slice(-4)).toEqual(["codex", "exec", "--file", "-"]);
+
+			const statusRes = await app.request(
+				new Request("http://localhost/api/inference/status", {
+					headers: { Authorization: `Bearer ${adminToken}` },
+				}),
+			);
+			expect(statusRes.status).toBe(200);
+			const statusBody = (await statusRes.json()) as {
+				readonly targets?: Record<
+					string,
+					{ readonly acpx?: { readonly agent?: string; readonly modelSelection?: string } }
+				>;
+			};
+			expect(statusBody.targets?.["background-acpx"]?.acpx).toEqual({
+				agent: "codex",
+				modelSelection: "acp",
+			});
 		} finally {
 			resetInferenceRouterForTests();
 			rmSync(root, { recursive: true, force: true });

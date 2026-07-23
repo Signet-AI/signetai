@@ -237,4 +237,58 @@ describe("registerRouteCommands", () => {
 		expect(yaml).toContain("pinnedTargets:");
 		expect(yaml).toContain("default: primary/fast");
 	});
+
+	test("route doctor warns when an ACPX target relies on agent-managed model selection", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "signet-route-command-"));
+		tempDirs.push(dir);
+		const lines: string[] = [];
+		const previousExitCode = process.exitCode;
+		process.exitCode = undefined;
+		console.log = (line?: unknown) => {
+			lines.push(String(line ?? ""));
+		};
+		const program = new Command();
+		registerRouteCommands(program, {
+			AGENTS_DIR: dir,
+			fetchFromDaemon: async () => ({
+				enabled: true,
+				source: "explicit",
+				defaultAgentId: "default",
+				policies: [],
+				taskClasses: [],
+				targetRefs: ["opencode-background/default"],
+				workloadBindings: {},
+				accounts: {},
+				targets: {
+					"opencode-background": {
+						kind: "subscription_session",
+						executor: "acpx",
+						models: { default: { model: "minimax-coding-plan/MiniMax-M3" } },
+						acpx: { agent: "opencode", modelSelection: "agent" },
+					},
+				},
+				agents: ["default"],
+				runtimeSnapshot: {
+					targets: {
+						"opencode-background/default": {
+							available: true,
+							health: "healthy",
+							accountState: "ready",
+						},
+					},
+				},
+			}),
+			secretApiCall: async () => ({ ok: false, data: null }),
+		});
+
+		try {
+			await program.parseAsync(["node", "test", "route", "doctor"]);
+
+			expect(lines.join("\n")).toContain("model selection is agent-managed for opencode");
+			expect(lines.join("\n")).toContain("verify the agent's native configuration");
+			expect(process.exitCode).toBeUndefined();
+		} finally {
+			process.exitCode = previousExitCode;
+		}
+	});
 });
