@@ -1,0 +1,51 @@
+{
+  "id": "queue-diagnostics-dead-summary",
+  "source": {
+    "file": "platform/daemon/src/routes/queue-diagnostics.test.ts",
+    "testName": "/api/diagnostics/queue > returns per-queue counts, oldest deads, and thresholds",
+    "line": 100
+  },
+  "classification": {
+    "family": "diagnostics/queue",
+    "convertibility": "http-db",
+    "tags": ["diagnostics", "queue", "summary", "issue-901"]
+  },
+  "environment": {
+    "agentYaml": "name: ReplayQueue\nembedding:\n  provider: none\nmemory:\n  pipelineV2:\n    enabled: false\n",
+    "env": {},
+    "clock": "2026-01-15T00:00:00.000Z",
+    "uuidSeed": "queue-diagnostics-dead-summary"
+  },
+  "seed": {
+    "schema": "migrations-current",
+    "sql": "cases/queue-diagnostics-dead-summary.seed.sql",
+    "redactions": ["OPENAI_API_KEY", "GITHUB_TOKEN", "SIGNET_AUTH_SECRET"]
+  },
+  "request": {
+    "method": "GET",
+    "path": "/api/diagnostics/queue",
+    "headers": { "x-signet-admin-token": "" }
+  },
+  "expectedResponse": {
+    "status": 200,
+    "headers": { "content-type": { "contains": "application/json" } },
+    "jsonPathAssertions": [
+      {
+        "path": "$.queues.summary.dead",
+        "equals": 2
+      },
+      {
+        "path": "$.queues.memory.dead",
+        "equals": 1
+      },
+      {
+        "path": "$.oldestDeadSummaryJob.id",
+        "equals": "dead-sum-1"
+      },
+      {
+        "path": "$.thresholds.summaryDeadWarn",
+        "equals": 50
+      }
+    ]
+  }
+}

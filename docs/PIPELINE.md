@@ -533,6 +533,46 @@ consecutive runs that do not improve the health score, the action is halted
 for the lifetime of the worker. The tracker resets when a cycle produces no
 recommendations (i.e., health is good).
 
+### Queue Health and Repair (issue #901)
+
+Two tables hold a backlog that the legacy `QueueHealth` aggregate never
+exposed: `summary_jobs` (the durable summary queue) and the `extraction`
+slice of `memory_jobs` (filtered by `job_type = 'extraction'`). Operators
+saw a green health score with thousands of dead rows beneath it.
+
+`/api/diagnostics/queue` returns a structured per-queue report:
+
+```json
+{
+  "timestamp": "...",
+  "queues": {
+    "memory":     { "pending": 0, "leased": 0, "completed": 0, "failed": 0, "dead": 0, "oldestAgeSec": 0, "oldestDeadAgeSec": 0, "lastError": null },
+    "summary":    { "...": "..." },
+    "extraction": { "...": "..." }
+  },
+  "oldestDeadSummaryJob":    { "id": "...", "harness": "...", "sessionKey": "...", "createdAt": "...", "attempts": 0, "error": null },
+  "oldestDeadMemoryJob":     { "...": "..." },
+  "oldestDeadExtractionJob": { "...": "..." },
+  "thresholds": { "summaryDeadWarn": 50, "summaryDeadFail": 500, "summaryOldestPendingWarnSec": 300, "..." }
+}
+```
+
+`signet status` renders the same queues as a `Pipeline queues` block
+below the extraction section, with each queue's `dead` and
+`oldest dead` highlighted when `dead > 0`.
+
+Three repair commands cover the issue's "Suggested fix":
+
+| CLI | HTTP action | Behavior |
+| --- | --- | --- |
+| `signet repair queue requeue [--ids …] [--tables …] [--older-than …] [--error-pattern …] [--apply]` | `requeue` | Reset matching dead rows to `pending`; reuses `requeueDeadJobs` semantics (cooldown + hourly budget). |
+| `signet repair queue cancel [--tables …] [--older-than 30d] [--apply]` | `cancel` | Copy matching dead/completed rows to `job_cancellations`, flip source `status` to `cancelled`. Audit-preserving. |
+| `signet repair queue prune  [--tables …] [--older-than 90d] [--apply]` | `prune`  | Copy matching terminal rows to `job_archive`, then hard delete. Archive-preserving. 1000-row hard cap per call. |
+
+All three default to **dry-run** and require `--apply` to mutate. The
+preview includes the first 100 matching ids and the total match count.
+Provenance migrations: `089-job-cancellations`, `090-job-archive`.
+
 
 Provider Abstraction
 ---

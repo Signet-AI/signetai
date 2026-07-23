@@ -121,6 +121,10 @@ const TS_MEMORY_LIFECYCLE_REPAIR_VERSION: u32 = 83;
 const TS_MEMORY_LIFECYCLE_REPAIR_NAME: &str = "memory-lifecycle-repair";
 const TS_LEGACY_MARKDOWN_IMPORT_STATE_VERSION: u32 = 84;
 const TS_LEGACY_MARKDOWN_IMPORT_STATE_NAME: &str = "legacy-markdown-import-state";
+const TS_JOB_CANCELLATIONS_VERSION: u32 = 89;
+const TS_JOB_CANCELLATIONS_NAME: &str = "job-cancellations";
+const TS_JOB_ARCHIVE_VERSION: u32 = 90;
+const TS_JOB_ARCHIVE_NAME: &str = "job-archive";
 
 /// Simple checksum matching the TS implementation (hash of "version:name").
 fn checksum(version: u32, name: &str) -> String {
@@ -613,7 +617,40 @@ fn ensure_cross_daemon_parity_tables(conn: &Connection) -> Result<(), CoreError>
         );
 
         CREATE INDEX IF NOT EXISTS idx_legacy_markdown_chunks_memory
-            ON legacy_markdown_chunks(memory_id);",
+            ON legacy_markdown_chunks(memory_id);
+
+        CREATE TABLE IF NOT EXISTS job_cancellations (
+            id TEXT PRIMARY KEY,
+            source_table TEXT NOT NULL,
+            source_id TEXT NOT NULL,
+            status_before TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            reason TEXT,
+            actor TEXT NOT NULL,
+            actor_type TEXT NOT NULL,
+            request_id TEXT,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_job_cancellations_source
+            ON job_cancellations(source_table, source_id);
+        CREATE INDEX IF NOT EXISTS idx_job_cancellations_created_at
+            ON job_cancellations(created_at);
+
+        CREATE TABLE IF NOT EXISTS job_archive (
+            id TEXT PRIMARY KEY,
+            source_table TEXT NOT NULL,
+            source_id TEXT NOT NULL,
+            status TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            archived_at TEXT NOT NULL,
+            archived_by TEXT NOT NULL,
+            reason TEXT,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_job_archive_source
+            ON job_archive(source_table, source_id);
+        CREATE INDEX IF NOT EXISTS idx_job_archive_archived_at
+            ON job_archive(archived_at);",
     )?;
 
     // Stamp all TS migration versions whose artifacts are already present in a
@@ -783,6 +820,12 @@ fn ensure_cross_daemon_parity_tables(conn: &Connection) -> Result<(), CoreError>
         TS_LEGACY_MARKDOWN_IMPORT_STATE_VERSION,
         TS_LEGACY_MARKDOWN_IMPORT_STATE_NAME,
     )?;
+    stamp_typescript_parity_migration(
+        conn,
+        TS_JOB_CANCELLATIONS_VERSION,
+        TS_JOB_CANCELLATIONS_NAME,
+    )?;
+    stamp_typescript_parity_migration(conn, TS_JOB_ARCHIVE_VERSION, TS_JOB_ARCHIVE_NAME)?;
     Ok(())
 }
 
@@ -2231,6 +2274,8 @@ mod tests {
             (68_i64, "daily_reflections"),
             (69_i64, "daily_reflections"),
             (77_i64, "entity_aliases"),
+            (89_i64, "job_cancellations"),
+            (90_i64, "job_archive"),
         ] {
             assert_table_exists(&conn, table);
             assert_migration_stamped(&conn, version);
@@ -2280,6 +2325,8 @@ mod tests {
             "aggregate_memory_sources",
             "temporal_edges",
             "entity_aliases",
+            "job_cancellations",
+            "job_archive",
         ] {
             assert_table_exists(&conn, table);
         }

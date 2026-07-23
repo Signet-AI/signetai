@@ -19,6 +19,12 @@ import {
 	getQueueHealth,
 	getStorageHealth,
 } from "./diagnostics";
+import {
+	DEFAULT_QUEUE_THRESHOLDS,
+	EMPTY_QUEUE_COUNTS,
+	getQueueDiagnosticsSnapshot,
+	scoreCountsWithThresholds,
+} from "./diagnostics-queue";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -148,6 +154,34 @@ describe("getQueueHealth", () => {
 		const result = getQueueHealth(asReadDb(db));
 		expect(result.deadRate).toBe(0);
 		expect(result.status).toBe("healthy");
+	});
+});
+
+describe("expanded queue diagnostics", () => {
+	test("scores healthy, degraded, and unhealthy threshold states", () => {
+		expect(scoreCountsWithThresholds(EMPTY_QUEUE_COUNTS, "summary")).toEqual({ score: 1, status: "healthy" });
+		expect(
+			scoreCountsWithThresholds(
+				{ ...EMPTY_QUEUE_COUNTS, dead: DEFAULT_QUEUE_THRESHOLDS.summaryDeadWarn + 1 },
+				"summary",
+			).status,
+		).toBe("degraded");
+		expect(
+			scoreCountsWithThresholds({ ...EMPTY_QUEUE_COUNTS, dead: DEFAULT_QUEUE_THRESHOLDS.summaryDeadFail }, "summary")
+				.status,
+		).toBe("unhealthy");
+	});
+
+	test("caches status snapshots while allowing fresh diagnostics reads", () => {
+		const readDb = asReadDb(db);
+		const initial = getQueueDiagnosticsSnapshot(readDb, { fresh: true });
+		expect(initial.memory.dead).toBe(0);
+
+		insertMemory(db, "mem-cache");
+		insertJob(db, "job-cache", "mem-cache", "dead");
+
+		expect(getQueueDiagnosticsSnapshot(readDb).memory.dead).toBe(0);
+		expect(getQueueDiagnosticsSnapshot(readDb, { fresh: true }).memory.dead).toBe(1);
 	});
 });
 

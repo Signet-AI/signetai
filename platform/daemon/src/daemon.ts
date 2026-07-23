@@ -46,11 +46,7 @@ import { initFeatureFlags } from "./feature-flags";
 import { writeFileIfChangedAsync } from "./file-sync";
 import { createSignetHttpServer } from "./http-server";
 import { syncAgentWorkspaces } from "./identity-sync";
-import {
-	type BackgroundInferenceQuiescence,
-	type InferenceStatusSummary,
-	getOrCreateInferenceRouter,
-} from "./inference-router.js";
+import { type InferenceStatusSummary, getOrCreateInferenceRouter } from "./inference-router.js";
 import { closeInferenceProviderResolver, getInferenceProvider, initInferenceProviderResolver } from "./llm";
 import { logger } from "./logger";
 import { type ResolvedMemoryConfig, loadMemoryConfig, shouldWarnGraphExtractionWritesDisabled } from "./memory-config";
@@ -125,7 +121,6 @@ import {
 } from "./source-index-progress";
 import { type TelemetryCollector, createTelemetryCollector } from "./telemetry";
 import { type TranscriptCaptureWorkerHandle, startTranscriptCaptureWorker } from "./transcript-capture-worker";
-import { type TranscriptRecoveryWorkerHandle, startTranscriptRecoveryWorker } from "./transcript-recovery-worker";
 
 import {
 	getSynthesisWorker as getSynthesisRenderWorker,
@@ -165,6 +160,7 @@ import { mountOsAgentRoutes } from "./routes/os-agent.js";
 import { mountOsChatRoutes } from "./routes/os-chat.js";
 import { registerPipelineRoutes } from "./routes/pipeline-routes.js";
 import { registerPluginRoutes } from "./routes/plugins-routes.js";
+import { registerQueueDiagnosticsRoutes } from "./routes/queue-diagnostics.js";
 import { registerReflectionRoutes } from "./routes/reflection-routes.js";
 import { registerRepairRoutes } from "./routes/repair-routes.js";
 import { registerSecretRoutes } from "./routes/secrets-routes.js";
@@ -189,7 +185,6 @@ let embeddingTrackerHandle: EmbeddingTrackerHandle | null = null;
 let skillReconcilerHandle: ReturnType<typeof startReconciler> | null = null;
 let schedulerHandle: { stop(): Promise<void> } | null = null;
 let transcriptCaptureWorkerHandle: TranscriptCaptureWorkerHandle | null = null;
-let transcriptRecoveryWorkerHandle: TranscriptRecoveryWorkerHandle | null = null;
 let structuralBackfillTimer: ReturnType<typeof setTimeout> | null = null;
 // These are mirrored into state.ts via setters for read access by
 // route modules. Only daemon.ts should assign or clear them.
@@ -232,6 +227,7 @@ registerPipelineRoutes(app);
 registerReflectionRoutes(app);
 registerTelemetryRoutes(app);
 registerDatabaseDiagnosticsRoutes(app);
+registerQueueDiagnosticsRoutes(app);
 registerMiscRoutes(app);
 app.use("/api/inference", async (c, next) => {
 	if (c.req.method === "GET") return requirePermission("diagnostics", authConfig)(c, next);
@@ -1178,9 +1174,8 @@ function clearStructuralBackfillTimer(): void {
 	structuralBackfillTimer = null;
 }
 
-async function stopPipelineRuntime(): Promise<BackgroundInferenceQuiescence> {
+async function stopPipelineRuntime(): Promise<void> {
 	clearStructuralBackfillTimer();
-	const quiescence = await getOrCreateInferenceRouter(AGENTS_DIR).quiesceBackgroundInference();
 
 	if (skillReconcilerHandle) {
 		try {
@@ -1233,12 +1228,6 @@ async function stopPipelineRuntime(): Promise<BackgroundInferenceQuiescence> {
 		} catch {}
 		transcriptCaptureWorkerHandle = null;
 	}
-	if (transcriptRecoveryWorkerHandle) {
-		try {
-			await transcriptRecoveryWorkerHandle.stop();
-		} catch {}
-		transcriptRecoveryWorkerHandle = null;
-	}
 
 	try {
 		await stopPipeline();
@@ -1247,16 +1236,11 @@ async function stopPipelineRuntime(): Promise<BackgroundInferenceQuiescence> {
 	closeInferenceProviderResolver();
 	stopModelRegistry();
 	invalidateDiagnosticsCache();
-	return quiescence;
 }
 
-async function restartPipelineRuntime(
-	memoryCfg: ResolvedMemoryConfig,
-	telemetry?: TelemetryCollector,
-): Promise<BackgroundInferenceQuiescence> {
-	const quiescence = await stopPipelineRuntime();
+async function restartPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?: TelemetryCollector): Promise<void> {
+	await stopPipelineRuntime();
 	await startPipelineRuntime(memoryCfg, telemetry);
-	return quiescence;
 }
 
 export async function stopDaemonRuntimeForTests(): Promise<void> {
@@ -1343,16 +1327,8 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 	if (!transcriptCaptureWorkerHandle) {
 		transcriptCaptureWorkerHandle = startTranscriptCaptureWorker(getDbAccessor(), AGENTS_DIR);
 	}
-	if (!transcriptRecoveryWorkerHandle) {
-		transcriptRecoveryWorkerHandle = startTranscriptRecoveryWorker(getDbAccessor(), AGENTS_DIR, resolveDaemonAgentId());
-	}
 
 	const router = getOrCreateInferenceRouter(AGENTS_DIR);
-	if (pipelinePaused) {
-		await router.quiesceBackgroundInference(0);
-	} else {
-		router.resumeBackgroundInference();
-	}
 	const defaultAgentId = resolveDaemonAgentId();
 	initInferenceProviderResolver((workload) => {
 		switch (workload) {

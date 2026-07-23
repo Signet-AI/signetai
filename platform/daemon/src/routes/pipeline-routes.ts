@@ -5,6 +5,7 @@ import type { Context, Hono } from "hono";
 import { resolveAgentId, resolveDaemonAgentId } from "../agent-id.js";
 import { requirePermission, requireRateLimit } from "../auth";
 import { getDbAccessor } from "../db-accessor.js";
+import { type QueueCounts, getQueueDiagnosticsSnapshot } from "../diagnostics-queue.js";
 import { DreamPromotionError, promoteDreamingEvidence } from "../dream-promotion.js";
 import { getInferenceProviderOrNull, getLlmProvider } from "../llm.js";
 import { loadMemoryConfig } from "../memory-config.js";
@@ -58,6 +59,46 @@ import {
 	telemetryRef,
 } from "./state.js";
 import { STATUS_CACHE_TTL, cachedEmbeddingStatus, resolveScopedAgentId, statusCacheTime } from "./utils.js";
+
+interface PipelineQueueBlock {
+	readonly memory: QueueCounts;
+	readonly summary: QueueCounts;
+	readonly extraction: QueueCounts;
+	readonly oldestDeadSummaryJob: ReturnType<typeof getQueueDiagnosticsSnapshot>["oldestDeadSummaryJob"];
+}
+
+const EMPTY_QUEUE_COUNTS_SHAPE: QueueCounts = {
+	pending: 0,
+	leased: 0,
+	completed: 0,
+	failed: 0,
+	dead: 0,
+	oldestAgeSec: 0,
+	oldestDeadAgeSec: 0,
+	lastError: null,
+};
+
+function pipelineQueueBlock(): PipelineQueueBlock {
+	try {
+		const accessor = getDbAccessor();
+		return accessor.withReadDb((db) => {
+			const snapshot = getQueueDiagnosticsSnapshot(db);
+			return {
+				memory: snapshot.memory,
+				summary: snapshot.summary,
+				extraction: snapshot.extraction,
+				oldestDeadSummaryJob: snapshot.oldestDeadSummaryJob,
+			};
+		});
+	} catch {
+		return {
+			memory: { ...EMPTY_QUEUE_COUNTS_SHAPE },
+			summary: { ...EMPTY_QUEUE_COUNTS_SHAPE },
+			extraction: { ...EMPTY_QUEUE_COUNTS_SHAPE },
+			oldestDeadSummaryJob: null,
+		};
+	}
+}
 
 const pipelineAdminGuard = async (c: Context, next: () => Promise<void>): Promise<Response | undefined> => {
 	const permDenied = await requirePermission("admin", authConfig)(c, () => Promise.resolve());
@@ -118,15 +159,11 @@ async function togglePipelinePause(c: Context, paused: boolean): Promise<Respons
 	try {
 		const changed = prev.paused !== paused;
 		const next = changed ? setPipelinePaused(AGENTS_DIR, paused) : prev;
-		let quiescence: Awaited<ReturnType<NonNullable<typeof restartPipelineRuntimeRef>>> | undefined;
 		if (changed) {
 			if (!restartPipelineRuntimeRef) {
 				throw new Error("Pipeline runtime not initialized");
 			}
-			quiescence = await restartPipelineRuntimeRef(loadMemoryConfig(AGENTS_DIR), telemetryRef);
-			if (paused && quiescence.remaining > 0) {
-				throw new Error(`Pipeline pause timed out with ${quiescence.remaining} background inference call(s) still active`);
-			}
+			await restartPipelineRuntimeRef(loadMemoryConfig(AGENTS_DIR), telemetryRef);
 		}
 		const liveCfg = loadMemoryConfig(AGENTS_DIR);
 		return c.json({
@@ -135,7 +172,6 @@ async function togglePipelinePause(c: Context, paused: boolean): Promise<Respons
 			paused: next.paused,
 			file: next.file,
 			mode: readPipelineMode(liveCfg.pipelineV2),
-			...(quiescence ? { quiescence } : {}),
 		});
 	} catch (err) {
 		const { logger } = await import("../logger.js");
@@ -245,6 +281,7 @@ export function registerPipelineRoutes(app: Hono): void {
 					overloadSince: extractionWorker.stats?.overloadSince ?? null,
 					nextTickInMs: extractionWorker.stats?.nextTickInMs ?? null,
 				},
+				queue: pipelineQueueBlock(),
 			},
 			providerResolution: providerRuntimeResolution,
 			logging: {

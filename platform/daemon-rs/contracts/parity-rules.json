@@ -809,6 +809,47 @@
           "passId"
         ],
         "note": "Generated pass identifiers are runtime-specific."
+      },
+      "GET /api/diagnostics/queue": {
+        "deterministic": [
+          "queues.memory.dead",
+          "queues.summary.dead",
+          "queues.extraction.dead",
+          "oldestDeadSummaryJob.id",
+          "thresholds.summaryDeadWarn",
+          "thresholds.summaryDeadFail"
+        ],
+        "ignoreFields": [
+          "timestamp",
+          "queues.memory.lastError",
+          "queues.summary.lastError",
+          "queues.extraction.lastError",
+          "oldestDeadSummaryJob.createdAt",
+          "oldestDeadSummaryJob.error",
+          "oldestDeadSummaryJob.attempts",
+          "oldestDeadMemoryJob",
+          "oldestDeadExtractionJob",
+          "queues.memory.oldestAgeSec",
+          "queues.summary.oldestAgeSec",
+          "queues.memory.oldestDeadAgeSec",
+          "queues.summary.oldestDeadAgeSec",
+          "queues.extraction.oldestAgeSec",
+          "queues.extraction.oldestDeadAgeSec"
+        ],
+        "note": "Issue #901: per-queue counts and thresholds deterministic; runtime-derived ages and timestamps ignored."
+      },
+      "POST /api/diagnostics/queue/repair": {
+        "deterministic": [
+          "action",
+          "success"
+        ],
+        "ignoreFields": [
+          "affected",
+          "message",
+          "preview",
+          "totalMatching"
+        ],
+        "note": "Issue #901: repair dispatcher returns dry-run preview + apply counts that depend on operator-targeted rows; field set is shape-stable, numeric values are operator-dependent."
       }
     }
   },

@@ -230,6 +230,9 @@ fn is_admin_required_path(path: &str) -> bool {
         // #4 REVIEW FIX: TS requires admin for plugins and graphiq too.
         || path.starts_with("/api/plugins")
         || path.starts_with("/api/graphiq/")
+        // Queue diagnostics expose job errors and can mutate queue state.
+        || path == "/api/diagnostics/queue"
+        || path == "/api/diagnostics/queue/repair"
 }
 
 // ---------------------------------------------------------------------------
@@ -380,5 +383,18 @@ pub fn resolve_scoped_agent(
         Ok(agent_id)
     } else {
         Err(decision.reason.unwrap_or_else(|| "scope violation".into()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_admin_required_path;
+
+    #[test]
+    fn queue_diagnostics_routes_require_admin_permission() {
+        assert!(is_admin_required_path("/api/diagnostics/queue"));
+        assert!(is_admin_required_path("/api/diagnostics/queue/repair"));
+        assert!(!is_admin_required_path("/api/diagnostics/queue-preview"));
+        assert!(!is_admin_required_path("/api/diagnostics"));
     }
 }

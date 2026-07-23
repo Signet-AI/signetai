@@ -6,6 +6,9 @@ All notable changes to Signet are documented here.
 
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
+### Unreleased
+- Features: surface dead summary-job backlog (#901) via `GET /api/diagnostics/queue`, `POST /api/diagnostics/queue/repair`, additive `pipeline.queue` block on `GET /api/status`, `signet status` “Pipeline queues” row, and new `signet repair queue {requeue|cancel|prune}` subcommands. Add dry-run / selective filters to `requeueDeadJobs` and two new actions — `cancelObsoleteJobs` (audit-preserving soft cancel) and `pruneTerminalJobs` (archive-preserving hard prune). Rust daemon mirrors both new routes with parity rules and replay fixtures. Migrations `089-job-cancellations` and `090-job-archive` add provenance tables.
+
 ### 2026-07-23
 - Features: recover missed native transcripts; inference settings density + hierarchy refactor; select connected providers as backends + compact rows.
 - Bug fixes: harden native WASM inference; quiesce background inference on pause; harden sterile OpenCode inference; provider wall completeness, optional keys, OAuth window; support agent-managed models; parse JSON after model preambles; bound llama.cpp inputs; remove invalid hook ownership markers; stop native embedding smoke child within bun's afterEach budget; integrate pi-ai OAuth providers; make maintenance supersession sweep non-fatal without a provider; enable Astro ClientRouter for client-side navigation.

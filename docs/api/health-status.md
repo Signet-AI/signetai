@@ -252,6 +252,94 @@ use `GET /api/diagnostics/transcripts` for detailed artifact/audit diagnostics.
 Use `GET /api/inference/status` for the shared inference control plane status.
 
 
+### GET /api/diagnostics/queue
+
+Per-queue counts (memory / summary / extraction), oldest-dead job
+references, and threshold metadata. Backend path uses the same shared
+threshold constants that `GET /api/status` and `/health/ready` consume.
+
+Admin permission required.
+
+**Response**
+
+```json
+{
+  "timestamp": "2026-07-19T00:00:00.000Z",
+  "queues": {
+    "memory":     { "pending": 0, "leased": 0, "completed": 1, "failed": 0, "dead": 1667, "oldestAgeSec": 0, "oldestDeadAgeSec": 5.4e6, "lastError": null },
+    "summary":    { "pending": 0, "leased": 0, "completed": 92,  "failed": 0, "dead": 1667, "oldestAgeSec": 0, "oldestDeadAgeSec": 5.4e6, "lastError": "boom" },
+    "extraction": { "pending": 0, "leased": 0, "completed": 1,  "failed": 0, "dead": 0,    "oldestAgeSec": 0, "oldestDeadAgeSec": 0,    "lastError": null }
+  },
+  "oldestDeadSummaryJob":    { "id": "...", "harness": "codex", "sessionKey": "...", "createdAt": "...", "attempts": 3, "error": "boom" },
+  "oldestDeadMemoryJob":     { "...": "..." },
+  "oldestDeadExtractionJob": { "...": "..." },
+  "thresholds": {
+    "summaryDeadWarn": 50, "summaryDeadFail": 500,
+    "summaryOldestPendingWarnSec": 300, "summaryOldestPendingFailSec": 1800,
+    "summaryOldestDeadWarnSec": 86400,
+    "memoryDeadWarn": 50, "memoryDeadFail": 500,
+    "memoryOldestPendingWarnSec": 300, "memoryOldestPendingFailSec": 1800,
+    "extractionDeadWarn": 10, "extractionDeadFail": 100
+  }
+}
+```
+
+Counts default to `0` and `null` if a table does not exist on the running
+database (older installs before the
+`summary_jobs` migration landed).
+
+
+### POST /api/diagnostics/queue/repair
+
+Dispatches a queue repair action. Admin permission required. The body
+shape covers `requeue` (extending `requeueDeadJobs`), `cancel`
+(audit-preserving soft cancel into `job_cancellations`), and `prune`
+(archive-preserving hard delete into `job_archive`).
+
+**Request body**
+
+```json
+{
+  "action": "cancel",
+  "dryRun": true,
+  "tables": ["summary"],
+  "olderThanMs": 2592000000,
+  "errorPattern": "timeout"
+}
+```
+
+- `action` — one of `requeue`, `cancel`, `prune`.
+- `dryRun` — boolean; defaults to `true` (safe preview).
+- `ids` — optional array of row ids; bypasses filter for max precision.
+- `tables` — optional array of `memory` and/or `summary` (default: both).
+- `olderThanMs` — only match rows whose `created_at` is older than `now - olderThanMs`.
+- `errorPattern` — optional `LIKE %pattern%` over the `error` column.
+- `retentionMs` — optional override for `prune`'s default 90-day window.
+- `maxBatch` — optional hard cap on rows touched (default: 50 for
+  requeue; 1000 for cancel/prune).
+
+**Response**
+
+```json
+{
+  "action": "cancelObsoleteJobs",
+  "success": true,
+  "affected": 0,
+  "message": "dry-run: 1667 job(s) match cancel filter; preview shows 100",
+  "preview": ["summary_jobs:abc", "summary_jobs:def"],
+  "totalMatching": 1667
+}
+```
+
+Both queue endpoints require the `admin` permission in authenticated modes.
+When the policy gate denies an action, the response carries `success: false`
+and HTTP `429` (cooldown active / hourly budget exhausted / agents without
+`autonomous.enabled`). Wrong `action` values or malformed JSON return `400`.
+Cancel and prune apply requests require migrations 089 and 090; neither daemon
+creates audit tables from the request path, and a missing table is reported as
+a migration error.
+
+
 ### GET /api/features
 
 Returns all runtime feature flags.

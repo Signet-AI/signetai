@@ -94,6 +94,8 @@ import { up as backfillRelationsToDependencies } from "./085-backfill-relations-
 import { up as summaryJobsContentHash } from "./086-summary-jobs-content-hash";
 import { up as summaryJobsBoundaryReason } from "./087-summary-jobs-boundary-reason";
 import { up as transcriptRecoveryFiles } from "./088-transcript-recovery-files";
+import { up as jobCancellations } from "./089-job-cancellations";
+import { up as jobArchive } from "./090-job-archive";
 
 // -- Public interface consumed by Database.init() --
 
@@ -845,6 +847,22 @@ export const MIGRATIONS: readonly Migration[] = [
 		up: transcriptRecoveryFiles,
 		artifacts: {
 			tables: ["transcript_recovery_files"],
+		},
+	},
+	{
+		version: 89,
+		name: "job-cancellations",
+		up: jobCancellations,
+		artifacts: {
+			tables: ["job_cancellations"],
+		},
+	},
+	{
+		version: 90,
+		name: "job-archive",
+		up: jobArchive,
+		artifacts: {
+			tables: ["job_archive"],
 		},
 	},
 ];

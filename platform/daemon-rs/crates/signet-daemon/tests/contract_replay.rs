@@ -5259,6 +5259,68 @@ async fn diagnostics_endpoints() {
 
     let resp = server.get("/api/diagnostics/queue").await;
     assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert!(body["queues"]["summary"]["oldestDeadAgeSec"].is_number());
+    assert_eq!(body["thresholds"]["summaryDeadWarn"], 50);
+    assert!(body.get("oldestDeadSummaryJob").is_some());
+
+    let conn = rusqlite::Connection::open(server.db_path()).expect("open replay db");
+    for (id, created_at) in [
+        ("queue-repair-oldest", "2025-01-01T00:00:00Z"),
+        ("queue-repair-next", "2025-01-02T00:00:00Z"),
+    ] {
+        conn.execute(
+            "INSERT INTO summary_jobs
+             (id, session_key, harness, project, transcript, status, attempts, max_attempts, created_at, error)
+             VALUES (?1, ?1, 'codex', 'demo', 'transcript payload', 'dead', 3, 3, ?2, 'boom')",
+            rusqlite::params![id, created_at],
+        )
+        .expect("insert dead summary job");
+    }
+    drop(conn);
+
+    let resp = server
+        .post(
+            "/api/diagnostics/queue/repair",
+            json!({
+                "action": "requeue",
+                "dryRun": false,
+                "tables": ["summary"],
+                "maxBatch": 1
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["affected"], 1);
+
+    let resp = server
+        .post(
+            "/api/diagnostics/queue/repair",
+            json!({
+                "action": "cancel",
+                "dryRun": false,
+                "tables": ["summary"],
+                "olderThanMs": 1
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["affected"], 1);
+
+    let conn = rusqlite::Connection::open(server.db_path()).expect("open replay db");
+    let (audit_status, payload_json): (String, String) = conn
+        .query_row(
+            "SELECT status_before, payload_json FROM job_cancellations
+             WHERE source_table = 'summary_jobs' AND source_id = 'queue-repair-next'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("read cancellation audit status");
+    assert_eq!(audit_status, "dead");
+    let payload: serde_json::Value = serde_json::from_str(&payload_json).unwrap();
+    assert_eq!(payload["transcript"], "transcript payload");
 
     let resp = server.get("/api/diagnostics/index").await;
     assert_eq!(resp.status(), 200);
@@ -6707,6 +6769,24 @@ async fn phase2b_misc_auth_secrets_replay_smoke() {
     let body = server.json(resp).await;
     assert_eq!(body["version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(body["runtime"], "rust");
+
+    let operator_token = TestServer::scoped_role_token("default", "operator");
+    let resp = server
+        .get_bearer("/api/diagnostics/queue", &operator_token)
+        .await;
+    assert_eq!(resp.status(), 403);
+    let resp = server
+        .post_bearer(
+            "/api/diagnostics/queue/repair",
+            json!({"action": "cancel"}),
+            &operator_token,
+        )
+        .await;
+    assert_eq!(resp.status(), 403);
+    let resp = server
+        .get_bearer("/api/diagnostics/queue", &admin_token)
+        .await;
+    assert_eq!(resp.status(), 200);
 }
 
 #[tokio::test]

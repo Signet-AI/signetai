@@ -431,6 +431,38 @@ pub struct CheckFtsBody {
     pub repair: bool,
 }
 
+fn fts_consistency(
+    conn: &rusqlite::Connection,
+    do_repair: bool,
+) -> Result<serde_json::Value, signet_core::CoreError> {
+    let fts_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM memories_fts", [], |r| r.get(0))
+        .unwrap_or(0);
+    let active_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM memories WHERE deleted = 0", [], |r| {
+            r.get(0)
+        })
+        .unwrap_or(0);
+
+    let mismatch = (fts_count - active_count).unsigned_abs();
+
+    if do_repair && mismatch > 0 {
+        // Rebuild FTS
+        conn.execute("DELETE FROM memories_fts", [])?;
+        conn.execute(
+            "INSERT INTO memories_fts(rowid, content) SELECT rowid, content FROM memories WHERE deleted = 0",
+            [],
+        )?;
+    }
+
+    Ok(serde_json::json!({
+        "fts_count": fts_count,
+        "active_count": active_count,
+        "mismatch": mismatch,
+        "repaired": do_repair && mismatch > 0,
+    }))
+}
+
 /// POST /api/repair/check-fts — verify/repair FTS index consistency.
 pub async fn check_fts(
     State(state): State<Arc<AppState>>,
@@ -441,34 +473,7 @@ pub async fn check_fts(
     let result = state
         .pool
         .write(signet_core::db::Priority::Low, move |conn| {
-            let fts_count: i64 = conn
-                .query_row("SELECT COUNT(*) FROM memories_fts", [], |r| r.get(0))
-                .unwrap_or(0);
-            let active_count: i64 = conn
-                .query_row(
-                    "SELECT COUNT(*) FROM memories WHERE deleted = 0",
-                    [],
-                    |r| r.get(0),
-                )
-                .unwrap_or(0);
-
-            let mismatch = (fts_count - active_count).unsigned_abs();
-
-            if do_repair && mismatch > 0 {
-                // Rebuild FTS
-                conn.execute("DELETE FROM memories_fts", [])?;
-                conn.execute(
-                    "INSERT INTO memories_fts(rowid, content) SELECT rowid, content FROM memories WHERE deleted = 0",
-                    [],
-                )?;
-            }
-
-            Ok(serde_json::json!({
-                "fts_count": fts_count,
-                "active_count": active_count,
-                "mismatch": mismatch,
-                "repaired": do_repair && mismatch > 0,
-            }))
+            fts_consistency(conn, do_repair)
         })
         .await;
 
@@ -493,6 +498,176 @@ pub async fn check_fts(
             Json(repair_result("check_fts", false, 0, &e.to_string())),
         ),
     }
+}
+
+/// GET /api/repair/integrity-check — run PRAGMA integrity_check.
+pub async fn integrity_check(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let result = state.pool.read(run_integrity_check).await;
+
+    match result {
+        Ok(report) => (StatusCode::OK, Json(report)),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "ok": false,
+                "messages": [e.to_string()],
+            })),
+        ),
+    }
+}
+
+fn run_integrity_check(
+    conn: &rusqlite::Connection,
+) -> Result<serde_json::Value, signet_core::CoreError> {
+    let mut stmt = conn.prepare("PRAGMA integrity_check")?;
+    let messages = stmt
+        .query_map([], |row| row.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+
+    if messages.len() == 1 && messages[0] == "ok" {
+        Ok(serde_json::json!({ "ok": true, "messages": [] }))
+    } else {
+        Ok(serde_json::json!({ "ok": false, "messages": messages }))
+    }
+}
+
+/// POST /api/repair/rebuild-indexes — coordinated repair of derived indexes:
+/// integrity check, FTS rebuild, and re-embedding of missing memories.
+pub async fn rebuild_indexes(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let integrity = match state.pool.read(run_integrity_check).await {
+        Ok(report) => report,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            );
+        }
+    };
+
+    let fts = match state
+        .pool
+        .write(signet_core::db::Priority::Low, |conn| {
+            fts_consistency(conn, true)
+        })
+        .await
+    {
+        Ok(info) => {
+            let repaired = info["repaired"].as_bool().unwrap_or(false);
+            let mismatch = info["mismatch"].as_u64().unwrap_or(0) as usize;
+            let message = if repaired {
+                format!("FTS index rebuilt, {mismatch} entries corrected")
+            } else if mismatch > 0 {
+                format!("FTS mismatch detected: {mismatch} entries differ")
+            } else {
+                "FTS index consistent".into()
+            };
+            serde_json::json!({ "repaired": repaired, "message": message })
+        }
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            );
+        }
+    };
+
+    // Re-embed up to 200 memories missing embeddings (single batch, no sweep).
+    let (written, selected) = match reembed_batch(&state, 200).await {
+        Ok(counts) => counts,
+        Err(message) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": message })),
+            );
+        }
+    };
+
+    let integrity_ok = integrity["ok"].as_bool().unwrap_or(false);
+    let integrity_issues = integrity["messages"]
+        .as_array()
+        .map(|messages| messages.len())
+        .unwrap_or(0);
+    let fts_repaired = fts["repaired"].as_bool().unwrap_or(false);
+
+    let mut parts = Vec::new();
+    if integrity_ok {
+        parts.push("integrity: ok".to_string());
+    } else {
+        parts.push(format!("integrity: {integrity_issues} issue(s)"));
+    }
+    if fts_repaired {
+        parts.push("FTS: repaired".to_string());
+    } else {
+        parts.push("FTS: consistent".to_string());
+    }
+    parts.push(format!(
+        "embeddings: re-embedded {written} of {selected} missing"
+    ));
+
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "integrity": integrity,
+            "fts": fts,
+            "embeddings": {
+                "reembedded": written,
+                "totalMissing": selected.saturating_sub(written),
+            },
+            "summary": parts.join(" · "),
+        })),
+    )
+}
+
+async fn reembed_batch(state: &Arc<AppState>, batch_size: i64) -> Result<(usize, usize), String> {
+    let rows = state
+        .pool
+        .read(move |conn| Ok(list_unembedded_memories(conn, batch_size)?))
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let selected = rows.len();
+    if selected == 0 {
+        return Ok((0, 0));
+    }
+
+    let Some(provider) = state.embedding.read().await.clone() else {
+        return Ok((0, selected));
+    };
+    let embedding_model = state
+        .config
+        .manifest
+        .embedding
+        .as_ref()
+        .map(|embedding| embedding.model.clone());
+
+    let mut vectors = Vec::new();
+    for row in rows {
+        if let Some(vector) = provider.embed(&row.content).await {
+            if vector.len() == provider.dimensions() {
+                vectors.push((row, vector));
+            }
+        }
+    }
+
+    if vectors.is_empty() {
+        return Ok((0, selected));
+    }
+
+    let written = state
+        .pool
+        .write(signet_core::db::Priority::Low, move |conn| {
+            Ok(serde_json::json!(write_embedding_batch(
+                conn,
+                &vectors,
+                embedding_model.as_deref(),
+            )?))
+        })
+        .await
+        .map_err(|e| e.to_string())?
+        .as_u64()
+        .unwrap_or(0) as usize;
+
+    Ok((written, selected))
 }
 
 fn sqlite_table_exists(conn: &rusqlite::Connection, table: &str) -> rusqlite::Result<bool> {
@@ -1331,209 +1506,6 @@ pub async fn re_embed(
     )
 }
 
-/// Run `PRAGMA integrity_check` and reduce it to the TypeScript shape:
-/// ok=true with an empty message list for a single "ok" row, otherwise
-/// ok=false with the reported violations.
-async fn pragma_integrity_check(
-    state: &AppState,
-) -> Result<(bool, Vec<String>), signet_core::CoreError> {
-    let messages = state
-        .pool
-        .read(|conn| {
-            let mut stmt = conn.prepare("PRAGMA integrity_check")?;
-            let messages = stmt
-                .query_map([], |row| row.get::<_, String>(0))?
-                .collect::<rusqlite::Result<Vec<String>>>()?;
-            Ok(messages)
-        })
-        .await?;
-    let ok = messages.len() == 1 && messages[0] == "ok";
-    Ok((ok, if ok { Vec::new() } else { messages }))
-}
-
-/// GET /api/repair/integrity-check — run PRAGMA integrity_check.
-pub async fn integrity_check(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    match pragma_integrity_check(&state).await {
-        Ok((ok, messages)) => (
-            StatusCode::OK,
-            Json(serde_json::json!({ "ok": ok, "messages": messages })),
-        ),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "ok": false, "messages": [e.to_string()] })),
-        ),
-    }
-}
-
-/// POST /api/repair/rebuild-indexes — coordinated rebuild of derived indexes:
-/// integrity check, FTS consistency repair, then re-embed up to 200 gaps.
-pub async fn rebuild_indexes(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    // Step 1: SQLite integrity check.
-    let (integrity_ok, integrity_messages) = match pragma_integrity_check(&state).await {
-        Ok(result) => result,
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": e.to_string() })),
-            );
-        }
-    };
-
-    // Step 2: FTS consistency check with repair, mirroring the TypeScript
-    // checkFtsConsistency threshold (ftsCount > memCount * 1.1).
-    let fts = state
-        .pool
-        .write(signet_core::db::Priority::Low, |conn| {
-            let mem_count: i64 = conn.query_row(
-                "SELECT COUNT(*) FROM memories WHERE COALESCE(is_deleted, 0) = 0",
-                [],
-                |row| row.get(0),
-            )?;
-            let fts_count: i64 = conn
-                .query_row("SELECT COUNT(*) FROM memories_fts", [], |row| row.get(0))
-                .unwrap_or(0);
-            let mismatch = mem_count > 0 && (fts_count as f64) > mem_count as f64 * 1.1;
-            if mismatch {
-                conn.execute(
-                    "INSERT INTO memories_fts(memories_fts) VALUES('rebuild')",
-                    [],
-                )?;
-            }
-            let message = if mismatch {
-                format!(
-                    "FTS mismatch: {mem_count} active memories vs {fts_count} FTS rows — rebuilt"
-                )
-            } else {
-                format!("FTS consistent: {mem_count} active, {fts_count} FTS rows")
-            };
-            Ok(serde_json::json!({ "repaired": mismatch, "message": message }))
-        })
-        .await;
-    let fts = match fts {
-        Ok(value) => value,
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": e.to_string() })),
-            );
-        }
-    };
-    let fts_repaired = fts["repaired"].as_bool().unwrap_or(false);
-    let fts_message = fts["message"].as_str().unwrap_or("").to_string();
-
-    // Step 3: re-embed a single batch of up to 200 memories missing vectors.
-    let rows = match state
-        .pool
-        .read(|conn| {
-            let rows = list_unembedded_memories(conn, 200)?;
-            Ok(serde_json::Value::Array(
-                rows.into_iter()
-                    .map(|row| {
-                        serde_json::json!({
-                            "id": row.id,
-                            "content": row.content,
-                            "contentHash": row.content_hash,
-                        })
-                    })
-                    .collect::<Vec<_>>(),
-            ))
-        })
-        .await
-    {
-        Ok(value) => value
-            .as_array()
-            .cloned()
-            .unwrap_or_default()
-            .into_iter()
-            .filter_map(|value| {
-                Some(UnembeddedMemory {
-                    id: value.get("id")?.as_str()?.to_string(),
-                    content: value.get("content")?.as_str()?.to_string(),
-                    content_hash: value
-                        .get("contentHash")
-                        .and_then(serde_json::Value::as_str)
-                        .map(ToOwned::to_owned),
-                })
-            })
-            .collect::<Vec<_>>(),
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": e.to_string() })),
-            );
-        }
-    };
-
-    let selected = rows.len();
-    let mut written = 0usize;
-    if !rows.is_empty() {
-        if let Some(provider) = state.embedding.read().await.clone() {
-            let mut vectors = Vec::new();
-            for row in rows {
-                match provider.embed(&row.content).await {
-                    Some(vector) if vector.len() == provider.dimensions() => {
-                        vectors.push((row, vector));
-                    }
-                    Some(_) | None => {}
-                }
-            }
-            let model = state
-                .config
-                .manifest
-                .embedding
-                .as_ref()
-                .map(|embedding| embedding.model.clone());
-            if !vectors.is_empty() {
-                match state
-                    .pool
-                    .write(signet_core::db::Priority::Low, move |conn| {
-                        Ok(serde_json::json!(write_embedding_batch(
-                            conn,
-                            &vectors,
-                            model.as_deref(),
-                        )?))
-                    })
-                    .await
-                {
-                    Ok(value) => written = value.as_u64().unwrap_or(0) as usize,
-                    Err(e) => {
-                        return (
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(serde_json::json!({ "error": e.to_string() })),
-                        );
-                    }
-                }
-            }
-        }
-    }
-    let total_missing = selected - written;
-
-    let mut parts: Vec<String> = Vec::new();
-    if integrity_ok {
-        parts.push("integrity: ok".to_string());
-    } else {
-        parts.push(format!("integrity: {} issue(s)", integrity_messages.len()));
-    }
-    parts.push(if fts_repaired {
-        "FTS: repaired".to_string()
-    } else {
-        "FTS: consistent".to_string()
-    });
-    parts.push(format!(
-        "embeddings: re-embedded {written} of {selected} missing"
-    ));
-
-    (
-        StatusCode::OK,
-        Json(serde_json::json!({
-            "integrity": { "ok": integrity_ok, "messages": integrity_messages },
-            "fts": { "repaired": fts_repaired, "message": fts_message },
-            "embeddings": { "reembedded": written, "totalMissing": total_missing },
-            "summary": parts.join(" · "),
-        })),
-    )
-}
-
 /// POST /api/repair/resync-vec — rebuild vector index.
 pub async fn resync_vec(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let result = state
@@ -2117,6 +2089,14 @@ impl RepairActorType {
             "agent" => Self::Agent,
             "daemon" => Self::Daemon,
             _ => Self::Operator,
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Operator => "operator",
+            Self::Agent => "agent",
+            Self::Daemon => "daemon",
         }
     }
 }
@@ -4093,5 +4073,590 @@ mod tests {
         fn dimensions(&self) -> usize {
             768
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Issue #901 — `/api/diagnostics/queue/repair`
+//
+// Dispatcher that accepts `{ action, dryRun, ids, tables, olderThanMs, ... }`
+// and applies it against `memory_jobs` and `summary_jobs`. Dry-run returns a
+// preview without mutating. Cancelled and pruned rows go to
+// `job_cancellations` / `job_archive` for provenance.
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QueueRepairRequest {
+    pub action: String,
+    #[serde(default)]
+    pub dry_run: Option<bool>,
+    #[serde(default)]
+    pub ids: Option<Vec<String>>,
+    #[serde(default)]
+    pub tables: Option<Vec<String>>,
+    #[serde(default)]
+    pub older_than_ms: Option<i64>,
+    #[serde(default)]
+    pub error_pattern: Option<String>,
+    #[serde(default)]
+    pub retention_ms: Option<i64>,
+    #[serde(default)]
+    pub max_batch: Option<i64>,
+}
+
+const PREVIEW_CAP: usize = 100;
+
+fn validated_queue_table(table: &str) -> Result<&str, signet_core::CoreError> {
+    match table {
+        "memory_jobs" | "summary_jobs" => Ok(table),
+        _ => Err(signet_core::CoreError::Invalid(format!(
+            "unsupported queue table: {table}"
+        ))),
+    }
+}
+
+fn select_matching_queue_ids(
+    conn: &rusqlite::Connection,
+    table: &str,
+    where_sql: &str,
+    params: &[rusqlite::types::Value],
+    limit: usize,
+) -> Result<Vec<String>, signet_core::CoreError> {
+    let table = validated_queue_table(table)?;
+    if limit == 0 {
+        return Ok(Vec::new());
+    }
+    let sql = format!("SELECT id FROM {table} WHERE {where_sql} ORDER BY created_at ASC LIMIT ?");
+    let limit_value = rusqlite::types::Value::Integer(limit as i64);
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(
+        rusqlite::params_from_iter(params.iter().chain(std::iter::once(&limit_value))),
+        |row| row.get::<_, String>("id"),
+    )?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct QueueJobStatus {
+    id: String,
+    status: String,
+}
+
+fn select_queue_job_statuses(
+    conn: &rusqlite::Connection,
+    table: &str,
+    where_sql: &str,
+    params: &[rusqlite::types::Value],
+    limit: usize,
+) -> Result<Vec<QueueJobStatus>, signet_core::CoreError> {
+    let table = validated_queue_table(table)?;
+    let sql =
+        format!("SELECT id, status FROM {table} WHERE {where_sql} ORDER BY created_at ASC LIMIT ?");
+    let limit_value = rusqlite::types::Value::Integer(limit as i64);
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(
+        rusqlite::params_from_iter(params.iter().chain(std::iter::once(&limit_value))),
+        |row| {
+            Ok(QueueJobStatus {
+                id: row.get("id")?,
+                status: row.get("status")?,
+            })
+        },
+    )?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+fn queue_job_payload_json(
+    conn: &rusqlite::Connection,
+    table: &str,
+    id: &str,
+) -> Result<String, signet_core::CoreError> {
+    let table = validated_queue_table(table)?;
+    let mut stmt = conn.prepare(&format!("SELECT * FROM {table} WHERE id = ?1"))?;
+    let column_names = stmt
+        .column_names()
+        .iter()
+        .map(|name| (*name).to_string())
+        .collect::<Vec<_>>();
+    let payload = stmt.query_row([id], |row| {
+        let mut object = serde_json::Map::new();
+        for (index, name) in column_names.iter().enumerate() {
+            let value = match row.get_ref(index)? {
+                rusqlite::types::ValueRef::Null => serde_json::Value::Null,
+                rusqlite::types::ValueRef::Integer(value) => serde_json::json!(value),
+                rusqlite::types::ValueRef::Real(value) => serde_json::json!(value),
+                rusqlite::types::ValueRef::Text(value) => {
+                    serde_json::Value::String(String::from_utf8_lossy(value).into_owned())
+                }
+                rusqlite::types::ValueRef::Blob(value) => serde_json::Value::Array(
+                    value.iter().map(|byte| serde_json::json!(byte)).collect(),
+                ),
+            };
+            object.insert(name.clone(), value);
+        }
+        Ok(serde_json::Value::Object(object))
+    })?;
+    Ok(serde_json::to_string(&payload)?)
+}
+
+fn requeue_selected_jobs(
+    conn: &rusqlite::Connection,
+    table: &str,
+    ids: &[String],
+) -> Result<usize, signet_core::CoreError> {
+    let table = validated_queue_table(table)?;
+    if ids.is_empty() {
+        return Ok(0);
+    }
+    let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+    let assignments = if table == "memory_jobs" {
+        "status='pending', attempts=0, updated_at=datetime('now')"
+    } else {
+        "status='pending', attempts=0, error=NULL"
+    };
+    let sql = format!("UPDATE {table} SET {assignments} WHERE id IN ({placeholders})");
+    Ok(conn.execute(&sql, rusqlite::params_from_iter(ids.iter()))?)
+}
+
+fn effective_retention_ms(requested: Option<i64>, default_ms: i64) -> i64 {
+    requested.filter(|value| *value > 0).unwrap_or(default_ms)
+}
+
+fn require_queue_audit_table(
+    conn: &rusqlite::Connection,
+    table: &str,
+) -> Result<(), signet_core::CoreError> {
+    if sqlite_table_exists(conn, table)? {
+        return Ok(());
+    }
+    Err(signet_core::CoreError::Migration(format!(
+        "{table} table missing; run migrations"
+    )))
+}
+
+fn where_clause_memory(
+    opts: &QueueRepairRequest,
+    status_list: &str,
+) -> (String, Vec<rusqlite::types::Value>) {
+    let mut clauses: Vec<String> = vec![format!("status IN ({status_list})")];
+    let mut params: Vec<rusqlite::types::Value> = Vec::new();
+    if let Some(ids) = &opts.ids {
+        if !ids.is_empty() {
+            let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+            clauses.push(format!("id IN ({placeholders})"));
+            for id in ids {
+                params.push(rusqlite::types::Value::Text(id.clone()));
+            }
+        }
+    }
+    if let Some(ms) = opts.older_than_ms {
+        if ms > 0 {
+            let cutoff = chrono::Utc::now() - chrono::Duration::milliseconds(ms);
+            clauses.push("created_at < ?".to_string());
+            params.push(rusqlite::types::Value::Text(cutoff.to_rfc3339()));
+        }
+    }
+    if let Some(pat) = &opts.error_pattern {
+        if !pat.is_empty() {
+            clauses.push("error LIKE ?".to_string());
+            params.push(rusqlite::types::Value::Text(format!("%{pat}%")));
+        }
+    }
+    (clauses.join(" AND "), params)
+}
+
+fn wants_table(opts: &QueueRepairRequest, name: &str) -> bool {
+    match &opts.tables {
+        Some(list) if !list.is_empty() => list.iter().any(|t| t == name),
+        _ => true,
+    }
+}
+
+pub async fn queue_repair(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(req): Json<QueueRepairRequest>,
+) -> impl IntoResponse {
+    let action = req.action.to_ascii_lowercase();
+    if !matches!(action.as_str(), "requeue" | "cancel" | "prune") {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(repair_result(
+                "queue_repair",
+                false,
+                0,
+                "missing or invalid action",
+            )),
+        );
+    }
+    let dry_run = req.dry_run.unwrap_or(true);
+    let max_batch = req
+        .max_batch
+        .map(|n| n.max(0) as usize)
+        .unwrap_or(usize::MAX)
+        .min(if action == "requeue" { 50 } else { 1000 });
+
+    let action_name = match action.as_str() {
+        "requeue" => "requeueDeadJobs",
+        "cancel" => "cancelObsoleteJobs",
+        _ => "pruneTerminalJobs",
+    };
+    let repair_ctx = resolve_repair_context(&headers);
+    let repair_cfg = pipeline_config(&state);
+    if let Err(message) = check_repair_gate(
+        &state,
+        &repair_ctx,
+        action_name,
+        repair_cfg.repair.requeue_cooldown_ms,
+        repair_cfg.repair.requeue_hourly_budget,
+    ) {
+        return (
+            repair_status_for_error(&message),
+            Json(repair_result(action_name, false, 0, &message)),
+        );
+    }
+
+    let outcome = state
+        .pool
+        .write_tx(signet_core::db::Priority::Low, move |conn| {
+            let mut total_affected = 0usize;
+            let mut total_matching = 0usize;
+            let mut total_selected = 0usize;
+            let mut preview_ids: Vec<String> = Vec::new();
+
+            if action == "requeue" {
+                let (where_sql, params) = where_clause_memory(&req, "'dead'");
+                let mut selected: Vec<(&str, String)> = Vec::new();
+
+                for (request_name, table) in
+                    [("memory", "memory_jobs"), ("summary", "summary_jobs")]
+                {
+                    if !wants_table(&req, request_name) || !sqlite_table_exists(conn, table)? {
+                        continue;
+                    }
+                    let count_sql = format!("SELECT COUNT(*) FROM {table} WHERE {where_sql}");
+                    total_matching += conn.query_row(
+                        &count_sql,
+                        rusqlite::params_from_iter(params.iter()),
+                        |row| row.get::<_, i64>(0),
+                    )? as usize;
+
+                    let remaining = max_batch.saturating_sub(selected.len());
+                    for id in
+                        select_matching_queue_ids(conn, table, &where_sql, &params, remaining)?
+                    {
+                        selected.push((table, id));
+                    }
+                }
+
+                preview_ids.extend(
+                    selected
+                        .iter()
+                        .take(PREVIEW_CAP)
+                        .map(|(table, id)| format!("{table}:{id}")),
+                );
+                if dry_run {
+                    return Ok(serde_json::json!({
+                        "action": action_name,
+                        "success": true,
+                        "affected": 0,
+                        "message": format!("dry-run: {total_matching} job(s) match requeue filter"),
+                        "preview": preview_ids,
+                        "totalMatching": total_matching,
+                    }));
+                }
+
+                for table in ["memory_jobs", "summary_jobs"] {
+                    let ids = selected
+                        .iter()
+                        .filter(|(selected_table, _)| *selected_table == table)
+                        .map(|(_, id)| id.clone())
+                        .collect::<Vec<_>>();
+                    total_affected += requeue_selected_jobs(conn, table, &ids)?;
+                }
+                let message = format!("requeued {total_affected} dead job(s) to pending");
+                write_repair_audit(conn, action_name, &repair_ctx, total_affected, &message)?;
+                record_rate_limit(action_name).map_err(signet_core::CoreError::Invalid)?;
+                return Ok(serde_json::json!({
+                    "action": action_name,
+                    "success": true,
+                    "affected": total_affected,
+                    "message": message,
+                }));
+            }
+
+            // cancel + prune share the selection pattern
+            let cancel_status_list = "'dead','completed'";
+            let prune_status_list = "'dead','cancelled','completed'";
+            let (status_list, age_ms) = if action == "cancel" {
+                (
+                    cancel_status_list,
+                    effective_retention_ms(req.older_than_ms, 30 * 24 * 60 * 60 * 1000i64),
+                )
+            } else {
+                (
+                    prune_status_list,
+                    effective_retention_ms(req.retention_ms, 90 * 24 * 60 * 60 * 1000i64),
+                )
+            };
+            let mut cancel_opts = req.clone();
+            cancel_opts.older_than_ms = Some(age_ms);
+
+            let (where_sql, params) = where_clause_memory(&cancel_opts, status_list);
+
+            if action == "cancel" {
+                require_queue_audit_table(conn, "job_cancellations")?;
+            } else {
+                require_queue_audit_table(conn, "job_archive")?;
+            }
+
+            let tables = ["memory_jobs", "summary_jobs"];
+            for table in &tables {
+                let request_name = if *table == "memory_jobs" {
+                    "memory"
+                } else {
+                    "summary"
+                };
+                if !wants_table(&req, request_name) || !sqlite_table_exists(conn, table)? {
+                    continue;
+                }
+                let source_table = validated_queue_table(table)?;
+                let count_sql = format!("SELECT COUNT(*) FROM {source_table} WHERE {where_sql}");
+                let matching = conn.query_row(
+                    &count_sql,
+                    rusqlite::params_from_iter(params.iter()),
+                    |row| row.get::<_, i64>(0),
+                )?;
+                total_matching += matching.max(0) as usize;
+
+                let remaining = max_batch.saturating_sub(total_selected);
+                let selected_rows =
+                    select_queue_job_statuses(conn, source_table, &where_sql, &params, remaining)?;
+                total_selected += selected_rows.len();
+                if dry_run {
+                    preview_ids.extend(
+                        selected_rows
+                            .iter()
+                            .take(PREVIEW_CAP.saturating_sub(preview_ids.len()))
+                            .map(|row| format!("{source_table}:{}", row.id)),
+                    );
+                    continue;
+                }
+
+                for row in selected_rows {
+                    let id = row.id;
+                    let status_before = row.status;
+                    let payload_json = queue_job_payload_json(conn, source_table, &id)?;
+
+                    if action == "cancel" {
+                        let cancel_id = format!(
+                            "cancel-{source_table}-{id}-{}",
+                            chrono::Utc::now().timestamp_millis()
+                        );
+                        conn.execute(
+                            "INSERT INTO job_cancellations \
+                             (id, source_table, source_id, status_before, payload_json, \
+                              reason, actor, actor_type, request_id, created_at) \
+                             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                            rusqlite::params![
+                                cancel_id,
+                                source_table,
+                                id,
+                                status_before,
+                                payload_json,
+                                repair_ctx.reason,
+                                repair_ctx.actor,
+                                repair_ctx.actor_type.as_str(),
+                                repair_ctx.request_id,
+                                chrono::Utc::now().to_rfc3339(),
+                            ],
+                        )?;
+                        conn.execute(
+                            &format!("UPDATE {source_table} SET status='cancelled' WHERE id = ?1"),
+                            rusqlite::params![id],
+                        )?;
+                    } else {
+                        let archive_id = format!(
+                            "archive-{source_table}-{id}-{}",
+                            chrono::Utc::now().timestamp_millis()
+                        );
+                        conn.execute(
+                            "INSERT INTO job_archive \
+                             (id, source_table, source_id, status, payload_json, \
+                              archived_at, archived_by, reason, created_at) \
+                             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                            rusqlite::params![
+                                archive_id,
+                                source_table,
+                                id,
+                                status_before,
+                                payload_json,
+                                chrono::Utc::now().to_rfc3339(),
+                                repair_ctx.actor,
+                                repair_ctx.reason,
+                                chrono::Utc::now().to_rfc3339(),
+                            ],
+                        )?;
+                        conn.execute(
+                            &format!("DELETE FROM {source_table} WHERE id = ?1"),
+                            rusqlite::params![id],
+                        )?;
+                    }
+                    total_affected += 1;
+                    if preview_ids.len() < PREVIEW_CAP {
+                        preview_ids.push(format!("{source_table}:{id}"));
+                    }
+                }
+            }
+
+            if !dry_run {
+                let message = if action == "cancel" {
+                    format!("cancelled {total_affected} obsolete job(s)")
+                } else {
+                    format!("pruned {total_affected} terminal job(s) (archived)")
+                };
+                write_repair_audit(conn, action_name, &repair_ctx, total_affected, &message)?;
+                record_rate_limit(action_name).map_err(signet_core::CoreError::Invalid)?;
+            }
+
+            if dry_run {
+                Ok(serde_json::json!({
+                    "action": action_name,
+                    "success": true,
+                    "affected": 0,
+                    "message": format!(
+                        "dry-run: {total_matching} job(s) match {} filter",
+                        if action == "cancel" { "cancel" } else { "prune" }
+                    ),
+                    "preview": preview_ids,
+                    "totalMatching": total_matching,
+                }))
+            } else if action == "cancel" {
+                Ok(serde_json::json!({
+                    "action": action_name,
+                    "success": true,
+                    "affected": total_affected,
+                    "message": format!("cancelled {total_affected} obsolete job(s)"),
+                    "preview": preview_ids,
+                    "totalMatching": total_matching,
+                }))
+            } else {
+                Ok(serde_json::json!({
+                    "action": action_name,
+                    "success": true,
+                    "affected": total_affected,
+                    "message": format!("pruned {total_affected} terminal job(s) (archived)"),
+                    "preview": preview_ids,
+                    "totalMatching": total_matching,
+                }))
+            }
+        })
+        .await;
+
+    match outcome {
+        Ok(value) => (StatusCode::OK, Json(value)),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(repair_result(action_name, false, 0, &err.to_string())),
+        ),
+    }
+}
+
+#[cfg(test)]
+mod queue_repair_tests {
+    use super::*;
+
+    fn queue_test_db() -> rusqlite::Connection {
+        let conn = rusqlite::Connection::open_in_memory().expect("open in-memory db");
+        conn.execute_batch(
+            "CREATE TABLE memory_jobs (
+                id TEXT PRIMARY KEY,
+                status TEXT NOT NULL,
+                attempts INTEGER NOT NULL,
+                error TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT
+            );
+            CREATE TABLE summary_jobs (
+                id TEXT PRIMARY KEY,
+                session_key TEXT,
+                harness TEXT NOT NULL,
+                project TEXT,
+                transcript TEXT NOT NULL,
+                status TEXT NOT NULL,
+                attempts INTEGER NOT NULL,
+                error TEXT,
+                created_at TEXT NOT NULL
+            );",
+        )
+        .expect("create queue tables");
+        conn
+    }
+
+    #[test]
+    fn requeue_selects_ids_before_bounded_update() {
+        let conn = queue_test_db();
+        for (id, day) in [("first", 1), ("second", 2)] {
+            conn.execute(
+                "INSERT INTO memory_jobs (id, status, attempts, created_at) VALUES (?1, 'dead', 3, ?2)",
+                rusqlite::params![id, format!("2026-01-{day:02}T00:00:00Z")],
+            )
+            .expect("insert dead job");
+        }
+        let ids = select_matching_queue_ids(&conn, "memory_jobs", "status = 'dead'", &[], 1)
+            .expect("select bounded ids");
+        assert_eq!(ids, vec!["first"]);
+        assert_eq!(
+            requeue_selected_jobs(&conn, "memory_jobs", &ids).unwrap(),
+            1
+        );
+        let statuses = conn
+            .prepare("SELECT status FROM memory_jobs ORDER BY created_at")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(0))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        assert_eq!(statuses, vec!["pending", "dead"]);
+    }
+
+    #[test]
+    fn summary_status_selection_ignores_different_column_order() {
+        let conn = queue_test_db();
+        conn.execute(
+            "INSERT INTO summary_jobs
+             (id, session_key, harness, project, transcript, status, attempts, created_at)
+             VALUES ('summary-1', 'session-1', 'codex', 'demo', 'transcript text', 'dead', 3, '2026-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+        let rows = select_queue_job_statuses(&conn, "summary_jobs", "status = 'dead'", &[], 10)
+            .expect("select summary status");
+        assert_eq!(
+            rows,
+            vec![QueueJobStatus {
+                id: "summary-1".to_string(),
+                status: "dead".to_string(),
+            }]
+        );
+        let payload: serde_json::Value = serde_json::from_str(
+            &queue_job_payload_json(&conn, "summary_jobs", "summary-1").unwrap(),
+        )
+        .unwrap();
+        assert_eq!(payload["status"], "dead");
+        assert_eq!(payload["transcript"], "transcript text");
+    }
+
+    #[test]
+    fn retention_override_and_migration_owned_audit_tables_are_enforced() {
+        assert_eq!(
+            effective_retention_ms(Some(86_400_000), 90 * 86_400_000),
+            86_400_000
+        );
+        let conn = queue_test_db();
+        let err = require_queue_audit_table(&conn, "job_archive").unwrap_err();
+        assert!(err.to_string().contains("run migrations"));
+        assert!(!sqlite_table_exists(&conn, "job_archive").unwrap());
     }
 }

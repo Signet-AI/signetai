@@ -1927,3 +1927,294 @@ mod tests {
         assert!(!result.restart_required);
     }
 }
+
+// ---------------------------------------------------------------------------
+// Issue #901 — `/api/diagnostics/queue` (per-queue counts + oldest deads)
+// ---------------------------------------------------------------------------
+
+use std::sync::OnceLock;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QueueCounts {
+    pub pending: i64,
+    pub leased: i64,
+    pub completed: i64,
+    pub failed: i64,
+    pub dead: i64,
+    pub oldest_age_sec: f64,
+    pub oldest_dead_age_sec: f64,
+    pub last_error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OldestDeadJob {
+    pub id: String,
+    pub harness: Option<String>,
+    pub session_key: Option<String>,
+    pub created_at: String,
+    pub attempts: i64,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QueueThresholds {
+    pub summary_dead_warn: i64,
+    pub summary_dead_fail: i64,
+    pub summary_oldest_pending_warn_sec: i64,
+    pub summary_oldest_pending_fail_sec: i64,
+    pub summary_oldest_dead_warn_sec: i64,
+    pub memory_dead_warn: i64,
+    pub memory_dead_fail: i64,
+    pub memory_oldest_pending_warn_sec: i64,
+    pub memory_oldest_pending_fail_sec: i64,
+    pub extraction_dead_warn: i64,
+    pub extraction_dead_fail: i64,
+}
+
+impl Default for QueueThresholds {
+    fn default() -> Self {
+        Self {
+            summary_dead_warn: 50,
+            summary_dead_fail: 500,
+            summary_oldest_pending_warn_sec: 300,
+            summary_oldest_pending_fail_sec: 1800,
+            summary_oldest_dead_warn_sec: 86_400,
+            memory_dead_warn: 50,
+            memory_dead_fail: 500,
+            memory_oldest_pending_warn_sec: 300,
+            memory_oldest_pending_fail_sec: 1800,
+            extraction_dead_warn: 10,
+            extraction_dead_fail: 100,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QueueDiagnosticsResponse {
+    pub timestamp: String,
+    pub queues: QueueDiagnosticQueues,
+    pub oldest_dead_summary_job: Option<OldestDeadJob>,
+    pub oldest_dead_memory_job: Option<OldestDeadJob>,
+    pub oldest_dead_extraction_job: Option<OldestDeadJob>,
+    pub thresholds: QueueThresholds,
+}
+
+#[derive(Debug, Serialize)]
+pub struct QueueDiagnosticQueues {
+    pub memory: QueueCounts,
+    pub summary: QueueCounts,
+    pub extraction: QueueCounts,
+}
+
+fn now_iso() -> String {
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    chrono::DateTime::<chrono::Utc>::from_timestamp(secs as i64, 0)
+        .map(|d| d.to_rfc3339())
+        .unwrap_or_else(|| "1970-01-01T00:00:00Z".to_string())
+}
+
+fn age_seconds(iso: &Option<String>) -> f64 {
+    let Some(s) = iso.as_ref() else {
+        return 0.0;
+    };
+    let Ok(t) = chrono::DateTime::parse_from_rfc3339(s) else {
+        return 0.0;
+    };
+    let now = chrono::Utc::now();
+    let delta = now - t.with_timezone(&chrono::Utc);
+    delta.num_milliseconds().max(0) as f64 / 1000.0
+}
+
+fn zero_counts() -> QueueCounts {
+    QueueCounts {
+        pending: 0,
+        leased: 0,
+        completed: 0,
+        failed: 0,
+        dead: 0,
+        oldest_age_sec: 0.0,
+        oldest_dead_age_sec: 0.0,
+        last_error: None,
+    }
+}
+
+fn count_for_table(conn: &rusqlite::Connection, table: &str) -> QueueCounts {
+    if !table_exists(conn, table) {
+        return zero_counts();
+    }
+    // Validate table name (alnum+underscore only) before interpolation.
+    if !table.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return zero_counts();
+    }
+    let sql = format!(
+        "SELECT \
+            SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END), \
+            SUM(CASE WHEN status = 'leased' THEN 1 ELSE 0 END), \
+            SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END), \
+            SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), \
+            SUM(CASE WHEN status = 'dead' THEN 1 ELSE 0 END), \
+            MIN(CASE WHEN status IN ('pending','leased') THEN created_at END), \
+            MIN(CASE WHEN status = 'dead' THEN created_at END), \
+            (SELECT error FROM {table} WHERE status IN ('pending','leased','dead') AND error IS NOT NULL \
+             ORDER BY rowid DESC LIMIT 1) \
+         FROM {table}",
+    );
+    let row = conn.query_row(&sql, [], |r| {
+        Ok((
+            r.get::<_, Option<i64>>(0)?.unwrap_or(0),
+            r.get::<_, Option<i64>>(1)?.unwrap_or(0),
+            r.get::<_, Option<i64>>(2)?.unwrap_or(0),
+            r.get::<_, Option<i64>>(3)?.unwrap_or(0),
+            r.get::<_, Option<i64>>(4)?.unwrap_or(0),
+            r.get::<_, Option<String>>(5)?,
+            r.get::<_, Option<String>>(6)?,
+            r.get::<_, Option<String>>(7)?,
+        ))
+    });
+    let Ok((pending, leased, completed, failed, dead, oldest, oldest_dead, last_error)) = row
+    else {
+        return zero_counts();
+    };
+    QueueCounts {
+        pending,
+        leased,
+        completed,
+        failed,
+        dead,
+        oldest_age_sec: age_seconds(&oldest),
+        oldest_dead_age_sec: age_seconds(&oldest_dead),
+        last_error,
+    }
+}
+
+fn oldest_dead_summary(conn: &rusqlite::Connection) -> Option<OldestDeadJob> {
+    if !table_exists(conn, "summary_jobs") {
+        return None;
+    }
+    conn.query_row(
+        "SELECT id, harness, session_key, created_at, attempts, error \
+         FROM summary_jobs WHERE status = 'dead' ORDER BY created_at ASC LIMIT 1",
+        [],
+        |r| {
+            Ok(OldestDeadJob {
+                id: r.get(0)?,
+                harness: r.get(1)?,
+                session_key: r.get(2)?,
+                created_at: r.get(3)?,
+                attempts: r.get::<_, i64>(4).unwrap_or(0),
+                error: r.get(5)?,
+            })
+        },
+    )
+    .ok()
+}
+
+fn oldest_dead_memory(conn: &rusqlite::Connection, extraction: bool) -> Option<OldestDeadJob> {
+    if !table_exists(conn, "memory_jobs") {
+        return None;
+    }
+    let sql = if extraction {
+        "SELECT id, job_type, memory_id, created_at, attempts, error FROM memory_jobs \
+         WHERE status = 'dead' AND job_type = 'extraction' \
+         ORDER BY created_at ASC LIMIT 1"
+    } else {
+        "SELECT id, job_type, memory_id, created_at, attempts, error FROM memory_jobs \
+         WHERE status = 'dead' \
+         ORDER BY created_at ASC LIMIT 1"
+    };
+    conn.query_row(sql, [], |r| {
+        Ok(OldestDeadJob {
+            id: r.get(0)?,
+            harness: r.get(1)?,
+            session_key: r.get(2)?,
+            created_at: r.get(3)?,
+            attempts: r.get::<_, i64>(4).unwrap_or(0),
+            error: r.get(5)?,
+        })
+    })
+    .ok()
+}
+
+/// GET /api/diagnostics/queue — issue #901.
+pub async fn queue_diagnostics(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let result: Result<QueueDiagnosticsResponse, signet_core::CoreError> = state.pool.read(|conn| {
+        let extraction = if !table_exists(conn, "memory_jobs") {
+            zero_counts()
+        } else {
+            let row = conn.query_row(
+                "SELECT \
+                    SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END), \
+                    SUM(CASE WHEN status = 'leased' THEN 1 ELSE 0 END), \
+                    SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END), \
+                    SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), \
+                    SUM(CASE WHEN status = 'dead' THEN 1 ELSE 0 END), \
+                    MIN(CASE WHEN status IN ('pending','leased') THEN created_at END), \
+                    MIN(CASE WHEN status = 'dead' THEN created_at END), \
+                    (SELECT error FROM memory_jobs \
+                     WHERE job_type = 'extraction' AND status IN ('pending','leased','dead') AND error IS NOT NULL \
+                     ORDER BY rowid DESC LIMIT 1) \
+                 FROM memory_jobs WHERE job_type = 'extraction'",
+                [],
+                |r| {
+                    Ok((
+                        r.get::<_, Option<i64>>(0)?.unwrap_or(0),
+                        r.get::<_, Option<i64>>(1)?.unwrap_or(0),
+                        r.get::<_, Option<i64>>(2)?.unwrap_or(0),
+                        r.get::<_, Option<i64>>(3)?.unwrap_or(0),
+                        r.get::<_, Option<i64>>(4)?.unwrap_or(0),
+                        r.get::<_, Option<String>>(5)?,
+                        r.get::<_, Option<String>>(6)?,
+                        r.get::<_, Option<String>>(7)?,
+                    ))
+                },
+            );
+            match row {
+                Ok((pending, leased, completed, failed, dead, oldest, oldest_dead, last_error)) => {
+                    QueueCounts {
+                        pending,
+                        leased,
+                        completed,
+                        failed,
+                        dead,
+                        oldest_age_sec: age_seconds(&oldest),
+                        oldest_dead_age_sec: age_seconds(&oldest_dead),
+                        last_error,
+                    }
+                }
+                Err(_) => zero_counts(),
+            }
+        };
+
+        Ok(QueueDiagnosticsResponse {
+            timestamp: now_iso(),
+            queues: QueueDiagnosticQueues {
+                memory: count_for_table(conn, "memory_jobs"),
+                summary: count_for_table(conn, "summary_jobs"),
+                extraction,
+            },
+            oldest_dead_summary_job: oldest_dead_summary(conn),
+            oldest_dead_memory_job: oldest_dead_memory(conn, false),
+            oldest_dead_extraction_job: oldest_dead_memory(conn, true),
+            thresholds: QueueThresholds::default(),
+        })
+    }).await;
+    match result {
+        Ok(body) => (StatusCode::OK, Json(body)).into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": err.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+#[allow(dead_code)]
+static DIAGNOSTICS_MODULE_INIT: OnceLock<()> = OnceLock::new();

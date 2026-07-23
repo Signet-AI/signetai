@@ -14,6 +14,7 @@ import chalk from "chalk";
 import { daemonAccessLines } from "../lib/network.js";
 import { getGitRemoteState, getSnapshotProtection, hasOpenClawWorkspaceLink } from "../lib/workspace-protection.js";
 import Database from "../sqlite.js";
+import { getDaemonBaseUrl } from "./repair-queue.js";
 
 interface Existing {
 	readonly agentsDir: boolean;
@@ -273,6 +274,11 @@ export async function showStatus(options: { path?: string; json?: boolean }, dep
 		}
 	}
 
+	// Issue #901 — pipeline queue block (memory / summary / extraction).
+	if (report.daemon.running) {
+		await renderPipelineQueuesBlock(deps);
+	}
+
 	console.log();
 
 	for (const file of report.files) {
@@ -316,6 +322,83 @@ export async function showStatus(options: { path?: string; json?: boolean }, dep
 	}
 	console.log();
 }
+
+interface QueueCountsForDisplay {
+	readonly pending: number;
+	readonly leased: number;
+	readonly completed: number;
+	readonly failed: number;
+	readonly dead: number;
+	readonly oldestAgeSec: number;
+	readonly oldestDeadAgeSec: number;
+	readonly lastError: string | null;
+}
+
+interface PipelineQueueDisplayReport {
+	readonly timestamp: string;
+	readonly queues: {
+		readonly memory: QueueCountsForDisplay;
+		readonly summary: QueueCountsForDisplay;
+		readonly extraction: QueueCountsForDisplay;
+	};
+}
+
+async function fetchPipelineQueueReport(baseUrl: string): Promise<PipelineQueueDisplayReport | null> {
+	try {
+		const res = await fetch(`${baseUrl}/api/diagnostics/queue`, {
+			signal: AbortSignal.timeout(2000),
+		});
+		if (!res.ok) return null;
+		return (await res.json()) as PipelineQueueDisplayReport;
+	} catch {
+		return null;
+	}
+}
+
+function formatAge(seconds: number): string {
+	if (seconds <= 0) return "—";
+	if (seconds < 60) return `${Math.round(seconds)}s`;
+	if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
+	if (seconds < 86400) return `${(seconds / 3600).toFixed(1)}h`;
+	return `${(seconds / 86400).toFixed(1)}d`;
+}
+
+function renderQueueRow(label: string, counts: QueueCountsForDisplay): string {
+	const deadColor = counts.dead > 0 ? chalk.red : chalk.dim;
+	const failColor = counts.failed > 0 ? chalk.yellow : chalk.dim;
+	const cells: string[] = [
+		`p=${counts.pending}`,
+		`l=${counts.leased}`,
+		`c=${counts.completed}`,
+		failColor(`f=${counts.failed}`),
+		deadColor(`d=${counts.dead}`),
+		chalk.dim(`oldest=${formatAge(counts.oldestAgeSec)}`),
+		chalk.dim(`dead=${formatAge(counts.oldestDeadAgeSec)}`),
+	];
+	return `    ${chalk.bold(label.padEnd(10))} ${cells.join(" ")}`;
+}
+
+export async function renderPipelineQueuesBlock(deps: { defaultPort: number }): Promise<void> {
+	const base = getDaemonBaseUrl(deps.defaultPort);
+	const report = await fetchPipelineQueueReport(base);
+	if (!report?.queues) return;
+	const { memory, summary, extraction } = report.queues;
+	if (!memory || !summary || !extraction) return;
+	const deadTotal = memory.dead + summary.dead + extraction.dead;
+	const heading = deadTotal > 0 ? chalk.yellow("Pipeline queues (dead jobs present)") : "Pipeline queues";
+	console.log("");
+	console.log(`  ${heading}`);
+	console.log(renderQueueRow("memory", memory));
+	console.log(renderQueueRow("summary", summary));
+	console.log(renderQueueRow("extraction", extraction));
+	if (summary.lastError || extraction.lastError) {
+		const err = summary.lastError ?? extraction.lastError;
+		if (err) console.log(chalk.dim(`    last error: ${String(err).slice(0, 120)}`));
+	}
+	console.log(chalk.dim("    (use 'signet repair queue {requeue|cancel|prune} [--apply]' to clean up)"));
+}
+
+export { getDaemonBaseUrl };
 
 export function getExtractionStatusNotice(
 	daemon: DaemonStatus,

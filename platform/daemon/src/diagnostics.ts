@@ -6,6 +6,14 @@
  */
 
 import type { ReadDb } from "./db-accessor";
+import {
+	DEFAULT_QUEUE_THRESHOLDS,
+	type OldestDeadJob,
+	type QueueCounts,
+	getQueueDiagnosticsSnapshot,
+	scoreCountsWithThresholds,
+	worstQueueScore,
+} from "./diagnostics-queue";
 import type { UpdateState } from "./update-system";
 
 // ---------------------------------------------------------------------------
@@ -18,10 +26,24 @@ export interface HealthScore {
 }
 
 export interface QueueHealth extends HealthScore {
+	/** Legacy aggregate depth (memory_jobs pending). Kept for back-compat. */
 	readonly depth: number;
+	/** Legacy aggregate oldest pending age (memory_jobs). Kept for back-compat. */
 	readonly oldestAgeSec: number;
+	/** Legacy aggregate dead rate within QUEUE_RECENT_WINDOW_MS. Kept for back-compat. */
 	readonly deadRate: number;
+	/** Legacy aggregate count of stale leased rows. Kept for back-compat. */
 	readonly leaseAnomalies: number;
+	/** Per-queue counts (memory / summary / extraction). Issue #901. */
+	readonly memory: QueueCounts;
+	readonly summary: QueueCounts;
+	readonly extraction: QueueCounts;
+	/** Oldest dead summary job for the diagnostics surface. */
+	readonly oldestDeadSummaryJob: OldestDeadJob | null;
+	/** Oldest dead memory job (job_type != extraction). */
+	readonly oldestDeadMemoryJob: OldestDeadJob | null;
+	/** Oldest dead extraction job (memory_jobs WHERE job_type='extraction'). */
+	readonly oldestDeadExtractionJob: OldestDeadJob | null;
 }
 
 export interface StorageHealth extends HealthScore {
@@ -245,20 +267,43 @@ export function getQueueHealth(db: ReadDb): QueueHealth {
 
 	const leaseAnomalies = anomalyRow?.cnt ?? 0;
 
+	// Issue #901 — per-queue breakdown and oldest-dead lookup. The
+	// expansion is cached because status and maintenance surfaces can call
+	// diagnostics repeatedly within a short interval.
+	const { memory, summary, extraction, oldestDeadSummaryJob, oldestDeadMemoryJob, oldestDeadExtractionJob } =
+		getQueueDiagnosticsSnapshot(db);
+
+	// Composite score mixes legacy penalty math with the new
+	// threshold-based per-queue penalties (worst of all queues).
+	const memoryScore = scoreCountsWithThresholds(memory, "memory", DEFAULT_QUEUE_THRESHOLDS);
+	const summaryScore = scoreCountsWithThresholds(summary, "summary", DEFAULT_QUEUE_THRESHOLDS);
+	const extractionScore = scoreCountsWithThresholds(extraction, "extraction", DEFAULT_QUEUE_THRESHOLDS);
+	const queueScore = worstQueueScore([memoryScore, summaryScore, extractionScore]);
+
 	let score = 1.0;
 	if (depth > QUEUE_MAX_DEPTH) score -= 0.3;
 	if (deadRate > QUEUE_MAX_DEAD_RATE) score -= 0.3;
 	if (oldestAgeSec > QUEUE_MAX_OLDEST_AGE_SEC) score -= 0.2;
 	if (leaseAnomalies > 0) score -= 0.2;
-
 	score = clamp(score);
+
+	// Blend legacy and per-queue scores — conservative: take the lower.
+	const blended = clamp(Math.min(score, queueScore.score));
+	const status = worstStatus([scoreStatus(blended), queueScore.status]);
+
 	return {
-		score,
-		status: scoreStatus(score),
+		score: blended,
+		status,
 		depth,
 		oldestAgeSec,
 		deadRate,
 		leaseAnomalies,
+		memory,
+		summary,
+		extraction,
+		oldestDeadSummaryJob,
+		oldestDeadMemoryJob,
+		oldestDeadExtractionJob,
 	};
 }
 

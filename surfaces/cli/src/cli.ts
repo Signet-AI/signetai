@@ -75,6 +75,7 @@ import { registerMcpCommands } from "./commands/mcp.js";
 import { registerMemoryCommands } from "./commands/memory.js";
 import { registerOntologyCommands } from "./commands/ontology.js";
 import { registerPortableCommands } from "./commands/portable.js";
+import { registerRepairQueueCommands } from "./commands/repair-queue.js";
 import { registerRouteCommands } from "./commands/route.js";
 import { registerSecretCommands } from "./commands/secret.js";
 import { registerSessionCommands } from "./commands/session.js";
@@ -1037,6 +1038,8 @@ registerGraphiqCommands(program, {
 	agentsDir: AGENTS_DIR,
 });
 
+// (issue #901) Repair queue CLI is registered after secretApiCall below.
+
 // ============================================================================
 // signet secret - Secrets management
 // ============================================================================
@@ -1047,6 +1050,11 @@ async function ensureDaemonForSecrets(): Promise<boolean> {
 
 const { fetchFromDaemon, fetchDaemonResult, secretApiCall } = createDaemonClient(DEFAULT_PORT);
 const SKILLS_DIR = join(AGENTS_DIR, "skills");
+
+registerRepairQueueCommands(program, {
+	baseUrl: `http://localhost:${DEFAULT_PORT}`,
+	apiCall: secretApiCall,
+});
 
 registerSecretCommands(program, {
 	ensureDaemonForSecrets,
