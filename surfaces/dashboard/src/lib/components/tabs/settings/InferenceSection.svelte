@@ -110,9 +110,12 @@ function closeConnect(): void {
 	connecting = null;
 }
 
-// After a connect/disconnect, re-read the catalog (OAuth connected state lives
-// daemon-side) and refresh settings so account writes are reflected.
+// After a connect/disconnect, persist any config writes (account entries are
+// in-memory until st.save()), then re-read the catalog + refresh. Order matters:
+// save() writes agent.yaml, then invalidateAll() re-reads it — so the account
+// wiring survives the refresh instead of being clobbered by st.init() from disk.
 async function onProviderChanged(): Promise<void> {
+	if (st.isDirty) await st.save();
 	catalog = await loadCatalog();
 	try {
 		await invalidateAll();

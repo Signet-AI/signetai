@@ -22,10 +22,12 @@ describe("api key validation", () => {
 	});
 
 	test("falls back leniently for providers without a known prefix", () => {
-		// A provider we have no strict pattern for: trust length, don't pretend
-		// to know the format.
+		// A provider we have no strict pattern for: never disable Connect on a
+		// non-empty key (legitimate short keys for custom gateways / some Bedrock
+		// shapes). Surface "unsure" so the hint shows and the button stays on.
 		expect(validateApiKey("amazon-bedrock", "a".repeat(24))).toBe("unsure");
-		expect(validateApiKey("amazon-bedrock", "short")).toBe("empty");
+		expect(validateApiKey("amazon-bedrock", "short")).toBe("unsure");
+		expect(validateApiKey("amazon-bedrock", "")).toBe("empty");
 		expect(apiKeyFormat("amazon-bedrock")).toBeNull();
 		// Providers with a lenient length-only pattern still validate honestly.
 		expect(validateApiKey("together", "a".repeat(24))).toBe("valid");

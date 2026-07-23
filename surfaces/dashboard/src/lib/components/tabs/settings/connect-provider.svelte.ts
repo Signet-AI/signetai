@@ -36,6 +36,7 @@ export interface PendingPrompt {
 	readonly kind: "text" | "select" | "manual_code";
 	readonly message: string;
 	readonly placeholder?: string;
+	readonly allowEmpty?: boolean;
 	readonly options?: ReadonlyArray<{ readonly id: string; readonly label: string }>;
 }
 
@@ -43,7 +44,7 @@ export interface ConnectOptions {
 	readonly provider: OAuthProviderStatus | { readonly id: string; readonly name: string; readonly connected: boolean };
 	readonly supportsOAuth: boolean;
 	readonly supportsApiKey: boolean;
-	readonly onSaved?: () => void;
+	readonly onSaved?: () => void | Promise<void>;
 	/** Called when an OAuth login completes so the caller can write the
 	 * `subscription_session` account entry the router resolves against. */
 	readonly linkOAuthAccount?: () => void;
@@ -56,7 +57,7 @@ export class ConnectProviderController {
 
 	private readonly supportsOAuth: boolean;
 	private readonly supportsApiKey: boolean;
-	private readonly onSaved?: () => void;
+	private readonly onSaved?: () => void | Promise<void>;
 	private readonly linkOAuthAccount?: () => void;
 	private login: Awaited<ReturnType<typeof startOAuthLogin>> | null = null;
 
@@ -113,6 +114,7 @@ export class ConnectProviderController {
 						kind: "text",
 						message: event.message,
 						placeholder: event.placeholder,
+						allowEmpty: event.allowEmpty === true,
 					};
 					this.phase = { kind: "oauth-running", url, deviceCode, progress, prompt };
 					break;
@@ -185,9 +187,11 @@ export class ConnectProviderController {
 	}
 
 	async disconnect(): Promise<boolean> {
-		const ok = await disconnectOAuthProvider(this.providerId);
-		if (ok) this.onSaved?.();
-		return ok;
+		// Daemon-side disconnect only. The caller (dialog) owns the single
+		// onSaved notification so it can persist the account-entry removal in
+		// the same refresh — firing onSaved here would save the pre-removal state
+		// first and double the refresh.
+		return disconnectOAuthProvider(this.providerId);
 	}
 
 	// ---- API-key flow ----------------------------------------------------

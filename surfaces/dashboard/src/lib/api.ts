@@ -3721,7 +3721,17 @@ export interface InferenceCatalog {
 export async function getInferenceCatalog(): Promise<InferenceCatalog> {
 	const response = await authFetch(`${API_BASE}/api/inference/catalog`);
 	if (!response.ok) throw new Error("Failed to fetch inference catalog");
-	return response.json();
+	const raw = await response.json();
+	// Default #968 fields so a pre-#968 daemon (which omits oauthProviders/
+	// modelErrors) doesn't break direct callers — the type declares them
+	// required, so honor that contract here rather than at every call site.
+	return {
+		providers: raw.providers ?? [],
+		models: raw.models ?? {},
+		modelErrors: raw.modelErrors ?? {},
+		oauthProviders: raw.oauthProviders ?? [],
+		acpxAgents: raw.acpxAgents ?? [],
+	};
 }
 
 // Bounded live OAuth login stream. The daemon runs the provider's interactive

@@ -37,7 +37,12 @@ export function validateApiKey(providerFamily: string, value: string): KeyValida
 	const trimmed = value.trim();
 	if (!trimmed) return "empty";
 	const format = apiKeyFormat(providerFamily);
-	if (!format) return trimmed.length >= 12 ? "unsure" : "empty";
+	if (!format) {
+		// No known format: never disable Connect for a non-empty key (that would
+		// silently block legitimate short keys for custom gateways / some Bedrock
+		// shapes). Surface it as "unsure" so the hint shows and the button stays on.
+		return "unsure";
+	}
 	return format.pattern.test(trimmed) ? "valid" : "unsure";
 }
 

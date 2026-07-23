@@ -11,7 +11,7 @@ interface Props {
 	supportsOAuth: boolean;
 	supportsApiKey: boolean;
 	onclose: () => void;
-	onsaved: () => void;
+	onsaved: () => void | Promise<void>;
 }
 
 let {
@@ -37,8 +37,6 @@ let verifying = $state(false);
 let verifyResult = $state<{ ok: boolean; message: string } | null>(null);
 let otp = $state("");
 let promptInput = $state("");
-let closeTimer: ReturnType<typeof setTimeout> | null = null;
-let hasSavedKey = $state(false);
 
 const format = apiKeyFormat(provider.id);
 const phase = $derived(controller.phase);
@@ -52,39 +50,30 @@ onMount(() => {
 
 onDestroy(() => {
 	controller.dispose();
-	if (closeTimer) clearTimeout(closeTimer);
 });
 
+// The connected phase lingers (no auto-close) so the user can verify the
+// connection and dismiss deliberately.
 function handleKeydown(e: KeyboardEvent): void {
 	if (e.key === "Escape") handleClose();
 }
 
 function handleClose(): void {
 	controller.dispose();
-	if (closeTimer) clearTimeout(closeTimer);
 	onclose();
 }
-
-// After a successful connect, linger on the success state briefly, then close.
-function scheduleClose(): void {
-	if (closeTimer) clearTimeout(closeTimer);
-	closeTimer = setTimeout(handleClose, 1400);
-}
-
-// React to phase reaching "connected" — linger then close.
-$effect(() => {
-	if (phase.kind === "connected") scheduleClose();
-});
 
 function linkAccountForApiKey(): void {
 	// Wire inference.accounts.<provider> as a key-bearing API account so the
 	// router resolves credentialRef → stored secret. Matches the shape
 	// parseAccountConfig requires (kind + providerFamily) and the router's
-	// resolveCredential precedence (env, then secret).
+	// resolveCredential precedence (env, then secret). The secret name MUST
+	// match what saveKey stored (providerKeySecretName) — reuse the helper so
+	// the two can never drift.
 	const base = ["inference", "accounts", provider.id];
 	st.aSetStr([...base, "kind"], "api");
 	st.aSetStr([...base, "providerFamily"], provider.id);
-	st.aSetStr([...base, "credentialRef"], `SIGNET_KEY_${provider.id.replace(/[^A-Z0-9_]/gi, "_").toUpperCase()}`);
+	st.aSetStr([...base, "credentialRef"], providerKeySecretName(provider.id));
 }
 
 function linkOAuthAccountForProvider(): void {
@@ -100,17 +89,9 @@ function linkOAuthAccountForProvider(): void {
 
 async function handleSaveKey(): Promise<void> {
 	await controller.saveKey(linkAccountForApiKey);
-	if (controller.phase.kind === "connected") hasSavedKey = true;
 }
 
 async function handleVerify(): Promise<void> {
-	// There is no dedicated "test this key" route; the router probes *targets*
-	// (keyed `targetId/modelId`, not provider family). Only verify once a key is
-	// actually saved — otherwise we'd falsely claim success.
-	if (!hasSavedKey) {
-		verifyResult = { ok: false, message: "Save the key first, then verify." };
-		return;
-	}
 	verifying = true;
 	verifyResult = null;
 	const status = await getInferenceStatus(true);
@@ -151,21 +132,25 @@ async function handleVerify(): Promise<void> {
 }
 
 async function handleDisconnect(): Promise<void> {
-	await controller.disconnect();
-	// Also drop the stored API key (OAuth disconnect only clears creds daemon-side;
-	// the API-key secret would otherwise orphan in the vault).
+	// daemon-side: clear OAuth creds + delete the stored API key (persist now).
 	await deleteSecret(providerKeySecretName(provider.id));
+	await controller.disconnect();
+	// config-side: remove the account entry, THEN persist + refresh. The aDel
+	// must be saved (not just in-memory) or agent.yaml keeps a credentialRef
+	// pointing at the now-deleted secret — a broken "Connected" card on reload.
 	const base = ["inference", "accounts", provider.id];
 	st.aDel([...base, "kind"]);
 	st.aDel([...base, "providerFamily"]);
 	st.aDel([...base, "credentialRef"]);
 	st.aDel(base);
+	await onsaved();
 	handleClose();
 }
 
 function submitPrompt(): void {
+	const allowEmpty = phase.kind === "oauth-running" && phase.prompt?.allowEmpty === true;
 	const value = promptInput.trim();
-	if (!value) return;
+	if (!value && !allowEmpty) return;
 	void controller.answerPrompt(value);
 	promptInput = "";
 }
@@ -182,6 +167,14 @@ function hostnameOf(uri: string): string {
 	} catch {
 		return uri;
 	}
+}
+
+// Allowlist http(s) for any daemon-sourced URL we bind to href. Svelte escapes
+// attribute text but does not block javascript:/data: schemes; a poisoned OAuth
+// stream could otherwise inject a click-to-execute link. Defense-in-depth.
+function safeHref(uri: string | undefined): string | null {
+	if (!uri) return null;
+	return /^https?:\/\//i.test(uri) ? uri : null;
 }
 </script>
 
@@ -260,7 +253,7 @@ function hostnameOf(uri: string): string {
 										autocomplete="off"
 										spellcheck="false"
 									/>
-									<button class="btn btn--primary" type="submit" disabled={!promptInput.trim()}>
+									<button class="btn btn--primary" type="submit" disabled={!promptInput.trim() && !(phase.prompt?.allowEmpty === true)}>
 										Continue
 									</button>
 								</div>
@@ -271,9 +264,13 @@ function hostnameOf(uri: string): string {
 				{:else if phase.url}
 					<div class="auth-block">
 						<p class="lede">A login page should have opened in your browser.</p>
-						<a class="btn btn--primary auth-link" href={phase.url} target="_blank" rel="noopener noreferrer">
-							<ExternalLink class="size-3.5" /> Open login page
-						</a>
+						{#if safeHref(phase.url)}
+							<a class="btn btn--primary auth-link" href={safeHref(phase.url)} target="_blank" rel="noopener noreferrer">
+								<ExternalLink class="size-3.5" /> Open login page
+							</a>
+						{:else}
+							<p class="format-hint">Login URL: {phase.url}</p>
+						{/if}
 						<div class="waiting">
 							<Loader class="size-3.5 spin" />
 							<span>Waiting for you to finish signing in…</span>
@@ -285,9 +282,13 @@ function hostnameOf(uri: string): string {
 					<div class="device-block">
 						<p class="lede">Enter this code, then approve the login:</p>
 						<div class="device-code" role="textbox" aria-label="Device code" tabindex="-1">{phase.deviceCode.userCode}</div>
-						<a class="btn btn--secondary auth-link" href={phase.deviceCode.verificationUri} target="_blank" rel="noopener noreferrer">
-							<ExternalLink class="size-3.5" /> Open {hostnameOf(phase.deviceCode.verificationUri)}
-						</a>
+						{#if safeHref(phase.deviceCode.verificationUri)}
+							<a class="btn btn--secondary auth-link" href={safeHref(phase.deviceCode.verificationUri)} target="_blank" rel="noopener noreferrer">
+								<ExternalLink class="size-3.5" /> Open {hostnameOf(phase.deviceCode.verificationUri)}
+							</a>
+						{:else}
+							<p class="format-hint">Verification URL: {phase.deviceCode.verificationUri}</p>
+						{/if}
 						<div class="waiting">
 							<Loader class="size-3.5 spin" />
 							<span>Waiting for approval…</span>
@@ -360,6 +361,19 @@ function hostnameOf(uri: string): string {
 				<div class="success-block">
 					<CheckCircle class="size-6" />
 					<p>{provider.name} is connected.</p>
+					{#if verifyResult}
+						<p class="key-status {verifyResult.ok ? "key-status--ok" : "key-status--unsure"}">
+							{#if verifyResult.ok}<CheckCircle class="size-3.5" />{:else}<TriangleAlertIcon class="size-3.5" />{/if}
+							{verifyResult.message}
+						</p>
+					{/if}
+					<div class="key-actions">
+						<button class="btn btn--ghost" onclick={handleVerify} disabled={verifying}>
+							{#if verifying}<Loader class="size-3.5 spin" />{:else}<RefreshCw class="size-3.5" />{/if}
+							Verify
+						</button>
+						<button class="btn btn--primary" onclick={handleClose}>Done</button>
+					</div>
 				</div>
 			{:else if phase.kind === "error"}
 				<div class="error-block">
