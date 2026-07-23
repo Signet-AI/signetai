@@ -253,6 +253,7 @@ export interface ProviderRuntimeResolution {
 		degraded: boolean;
 		fallbackApplied: boolean;
 		reason: string | null;
+		blockedBy: readonly string[];
 		since: string | null;
 	};
 	synthesis: {
@@ -273,6 +274,7 @@ export const providerRuntimeResolution: ProviderRuntimeResolution = {
 		degraded: false,
 		fallbackApplied: false,
 		reason: null,
+		blockedBy: [],
 		since: null,
 	},
 	synthesis: {

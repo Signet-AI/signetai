@@ -40,6 +40,7 @@ interface DaemonStatus {
 		readonly status: string | null;
 		readonly degraded: boolean;
 		readonly reason: string | null;
+		readonly blockedBy?: readonly string[];
 		readonly since: string | null;
 	} | null;
 	readonly extractionWorker: {
@@ -416,10 +417,14 @@ export function getExtractionStatusNotice(
 ): { level: "warn" | "error"; title: string; detail: string } | null {
 	const extraction = daemon.extraction;
 	if (extraction && daemon.running && extraction.status === "blocked") {
+		const blockedBy =
+			extraction.blockedBy && extraction.blockedBy.length > 0
+				? ` — blocked by: ${extraction.blockedBy.join("; ")}`
+				: "";
 		return {
 			level: "error",
 			title: "Extraction blocked",
-			detail: `configured: ${extraction.configured ?? "unknown"}, fallback: ${extraction.fallbackProvider ?? "unknown"}${extraction.reason ? ` — ${extraction.reason}` : ""}`,
+			detail: `configured: ${extraction.configured ?? "unknown"}, fallback: ${extraction.fallbackProvider ?? "unknown"}${extraction.reason ? ` — ${extraction.reason}` : ""}${blockedBy}`,
 		};
 	}
 

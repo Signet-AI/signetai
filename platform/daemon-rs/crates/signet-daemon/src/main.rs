@@ -2618,6 +2618,9 @@ async fn status(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
                 "degraded": es.degraded,
                 "fallbackApplied": es.fallback_applied,
                 "reason": es.reason,
+                // daemon-rs uses direct provider preflight rather than the shared
+                // inference router, so it has no candidate gate trace to expose.
+                "blockedBy": [],
                 "since": es.since,
             })
         })
@@ -3426,6 +3429,10 @@ mod tests {
         assert_eq!(
             body["providerResolution"]["extraction"]["reason"],
             serde_json::Value::Null
+        );
+        assert_eq!(
+            body["providerResolution"]["extraction"]["blockedBy"],
+            serde_json::json!([])
         );
     }
 

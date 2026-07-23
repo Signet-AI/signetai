@@ -656,6 +656,7 @@ describe("getExtractionStatusNotice", () => {
 				status: "blocked",
 				degraded: true,
 				reason: "Claude Code CLI not found during extraction startup preflight; fallbackProvider is none",
+				blockedBy: ["missing credential for extraction", "account state missing"],
 				since: "2026-03-26T00:00:00.000Z",
 			},
 			extractionWorker: null,
@@ -663,7 +664,9 @@ describe("getExtractionStatusNotice", () => {
 
 		expect(notice?.level).toBe("error");
 		expect(notice?.title).toBe("Extraction blocked");
-		expect(notice?.detail).toContain("fallback: none");
+		expect(notice?.detail).toBe(
+			"configured: claude-code, fallback: none — Claude Code CLI not found during extraction startup preflight; fallbackProvider is none — blocked by: missing credential for extraction; account state missing",
+		);
 	});
 
 	it("returns a warning when extraction worker is load-shedding", () => {

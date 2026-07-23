@@ -406,6 +406,7 @@ describe("getDaemonStatus", () => {
 							status: "degraded",
 							degraded: true,
 							reason: "Claude Code CLI not found during extraction startup preflight",
+							blockedBy: ["missing credential", 42, "", "account state missing"],
 							since: "2026-03-26T00:00:00.000Z",
 						},
 					},
@@ -437,6 +438,7 @@ describe("getDaemonStatus", () => {
 			status: "degraded",
 			degraded: true,
 			reason: "Claude Code CLI not found during extraction startup preflight",
+			blockedBy: ["missing credential", "account state missing"],
 			since: "2026-03-26T00:00:00.000Z",
 		});
 		expect(status.extractionWorker).toEqual({

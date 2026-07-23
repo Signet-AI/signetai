@@ -230,6 +230,7 @@ silent fallback or hard-blocked extraction after boot.
       "degraded": false,
       "fallbackApplied": false,
       "reason": null,
+      "blockedBy": [],
       "since": null
     }
   },
@@ -268,6 +269,9 @@ bypass enabled (see [Sessions and hooks API](./sessions-hooks.md#sessions)).
 Monitor `providerResolution.extraction.status` for `degraded` or `blocked`
 states when the configured extraction provider is unavailable or routed to a
 fallback target.
+When extraction is blocked, `providerResolution.extraction.blockedBy` contains
+the first routing candidate's policy and runtime gate reasons in evaluation
+order. The array is empty for non-blocked states.
 When `pipeline.extraction.overloaded` is `true`, the extraction worker is
 intentionally backing off for `overloadBackoffMs` between polls.
 `transcripts.capture` exposes compact durable transcript-capture queue counts;

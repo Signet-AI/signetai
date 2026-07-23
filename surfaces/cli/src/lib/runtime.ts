@@ -70,6 +70,7 @@ interface DaemonInstance {
 		readonly status: string | null;
 		readonly degraded: boolean;
 		readonly reason: string | null;
+		readonly blockedBy: readonly string[];
 		readonly since: string | null;
 	} | null;
 	readonly extractionWorker: {
@@ -364,6 +365,7 @@ async function getDaemonInstances(): Promise<DaemonInstance[]> {
 								status?: string | null;
 								degraded?: boolean;
 								reason?: string | null;
+								blockedBy?: unknown;
 								since?: string | null;
 							};
 						};
@@ -418,6 +420,11 @@ async function getDaemonInstances(): Promise<DaemonInstance[]> {
 									status: extraction.status ?? null,
 									degraded: extraction.degraded === true,
 									reason: extraction.reason ?? null,
+									blockedBy: Array.isArray(extraction.blockedBy)
+										? extraction.blockedBy.filter(
+												(reason): reason is string => typeof reason === "string" && reason.trim().length > 0,
+											)
+										: [],
 									since: extraction.since ?? null,
 								}
 							: null,

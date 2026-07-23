@@ -42,6 +42,7 @@ import { clearAllPresence } from "./cross-agent";
 import { closeDbAccessor, getDbAccessor, getVectorRuntimeStatus, initDbAccessorAsync } from "./db-accessor";
 import { fetchEmbedding } from "./embedding-fetch";
 import { type EmbeddingTrackerHandle, startEmbeddingTracker } from "./embedding-tracker";
+import { firstCandidateBlockedBy } from "./extraction-status";
 import { initFeatureFlags } from "./feature-flags";
 import { writeFileIfChangedAsync } from "./file-sync";
 import { createSignetHttpServer } from "./http-server";
@@ -1408,9 +1409,7 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 	// case the field reports "none" even if a fallback was configured but also
 	// failed, because the decision carries no candidates when blocked. The
 	// `reason` field carries the failure detail in that case.
-	const extractionFallbackProvider: RuntimeProviderName = extractionFallbackApplied
-		? extractionEffective
-		: "none";
+	const extractionFallbackProvider: RuntimeProviderName = extractionFallbackApplied ? extractionEffective : "none";
 	providerRuntimeResolution.extraction = {
 		// Configured/resolved now derive from the routing registry (the workload
 		// binding's target executor), not the retired legacy flat fields.
@@ -1437,15 +1436,17 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 						? (runtimeReasonForTarget(extractionDecision, extractionBinding) ??
 							`Configured extraction provider unavailable; using ${extractionEffective} fallback`)
 						: (extractionSelectedRuntime?.unavailableReason ?? null),
+		blockedBy:
+			extractionStatus === "blocked" && extractionDecision && !extractionDecision.ok
+				? firstCandidateBlockedBy(extractionDecision.error.details)
+				: [],
 		since: statusSince,
 	};
 	providerRuntimeResolution.synthesis = {
 		configured: synthesisAvailable
 			? statusValue
-				? executorForTargetRef(
-						statusValue,
-						synthesisDecision?.ok ? synthesisDecision.value.targetRef : undefined,
-					) ?? null
+				? (executorForTargetRef(statusValue, synthesisDecision?.ok ? synthesisDecision.value.targetRef : undefined) ??
+					null)
 				: null
 			: null,
 		resolved: synthesisAvailable ? (synthesisEffective as RuntimeSynthesisProviderName | null) : null,
