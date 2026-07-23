@@ -14,6 +14,38 @@ const ready = {
 	accountState: "ready",
 } as const;
 
+const compatibleTargetRef = makeRoutingTargetRef("compatible", "default");
+
+function parseRestrictedCompatibleRouting(endpoint: string) {
+	return parseRoutingConfig({
+		inference: {
+			defaultPolicy: "auto",
+			targets: {
+				compatible: {
+					executor: "openai-compatible",
+					endpoint,
+					models: {
+						default: {
+							model: "compatible-model",
+						},
+					},
+				},
+			},
+			policies: {
+				auto: {
+					mode: "automatic",
+					defaultTargets: [compatibleTargetRef],
+				},
+			},
+			taskClasses: {
+				memory_extraction: {
+					privacy: "restricted_remote",
+				},
+			},
+		},
+	});
+}
+
 describe("inference config + decision engine", () => {
 	it("classifies loopback inference endpoints as local", () => {
 		expect(isLocalInferenceEndpoint(undefined)).toBe(true);
@@ -21,6 +53,97 @@ describe("inference config + decision engine", () => {
 		expect(isLocalInferenceEndpoint("http://localhost:1234/v1")).toBe(true);
 		expect(isLocalInferenceEndpoint("http://[::1]:1234/v1")).toBe(true);
 		expect(isLocalInferenceEndpoint("https://gateway.example.test/v1")).toBe(false);
+	});
+
+	it("allows local openai-compatible targets for restricted_remote task classes", () => {
+		const parsed = parseRestrictedCompatibleRouting("http://127.0.0.1:1234/v1");
+		expect(parsed.ok).toBe(true);
+		if (!parsed.ok) return;
+		expect(parsed.value.targets.compatible?.privacy).toBe("local_only");
+
+		const decision = resolveRoutingDecision(
+			parsed.value,
+			{ operation: "memory_extraction" },
+			{ targets: { [compatibleTargetRef]: ready } },
+		);
+		expect(decision.ok).toBe(true);
+		if (!decision.ok) return;
+		expect(decision.value.targetRef).toBe(compatibleTargetRef);
+
+		const parsedTarget = parsed.value.targets.compatible;
+		expect(parsedTarget).toBeDefined();
+		if (!parsedTarget) return;
+		const targetWithoutParsedPrivacy = {
+			...parsedTarget,
+			privacy: undefined,
+		};
+		const directConfigDecision = resolveRoutingDecision(
+			{
+				...parsed.value,
+				targets: {
+					...parsed.value.targets,
+					compatible: targetWithoutParsedPrivacy,
+				},
+			},
+			{ operation: "memory_extraction" },
+			{ targets: { [compatibleTargetRef]: ready } },
+		);
+		expect(directConfigDecision.ok).toBe(true);
+	});
+
+	it("keeps remote openai-compatible targets behind the restricted_remote privacy gate", () => {
+		const parsed = parseRestrictedCompatibleRouting("https://gateway.example.test/v1");
+		expect(parsed.ok).toBe(true);
+		if (!parsed.ok) return;
+		expect(parsed.value.targets.compatible?.privacy).toBe("remote_ok");
+
+		const decision = resolveRoutingDecision(
+			parsed.value,
+			{ operation: "memory_extraction" },
+			{ targets: { [compatibleTargetRef]: ready } },
+		);
+		expect(decision.ok).toBe(false);
+		if (!("error" in decision)) return;
+		expect(decision.error.code).toBe("no-candidates");
+		const trace = decision.error.details?.trace as
+			| { readonly candidates: readonly { readonly blockedBy: readonly string[] }[] }
+			| undefined;
+		expect(trace?.candidates[0]?.blockedBy).toContain("privacy gate (restricted_remote)");
+	});
+
+	it("honors an explicit privacy override on a loopback endpoint (no proxy-to-cloud leak)", () => {
+		// Regression for the safety valve: endpoint-based privacy is a default,
+		// not a forced classification. A user can explicitly mark a loopback
+		// target as `remote_ok` (e.g. a local reverse-proxy forwarding to a real
+		// cloud API). The privacy gate must honor that override and keep the
+		// target gated for `restricted_remote` tasks — it must NOT auto-relax to
+		// `local_only` just because the address is 127.0.0.1.
+		const parsed = parseRestrictedCompatibleRouting("http://127.0.0.1:1234/v1");
+		expect(parsed.ok).toBe(true);
+		if (!parsed.ok) return;
+		const baseTarget = parsed.value.targets.compatible;
+		expect(baseTarget).toBeDefined();
+		if (!baseTarget) return;
+
+		const overridden = {
+			...parsed.value,
+			targets: {
+				...parsed.value.targets,
+				compatible: { ...baseTarget, privacy: "remote_ok" as const },
+			},
+		};
+		const decision = resolveRoutingDecision(
+			overridden,
+			{ operation: "memory_extraction" },
+			{ targets: { [compatibleTargetRef]: ready } },
+		);
+		expect(decision.ok).toBe(false);
+		if (!("error" in decision)) return;
+		expect(decision.error.code).toBe("no-candidates");
+		const trace = decision.error.details?.trace as
+			| { readonly candidates: readonly { readonly blockedBy: readonly string[] }[] }
+			| undefined;
+		expect(trace?.candidates[0]?.blockedBy).toContain("privacy gate (restricted_remote)");
 	});
 
 	it("prefers local targets for local_only task classes", () => {

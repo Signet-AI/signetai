@@ -386,16 +386,12 @@ function inferLegacyTargetKind(executor: string, endpoint: string | undefined): 
 	return inferTargetKind(executor);
 }
 
-function inferTargetPrivacy(executor: string): RoutingPrivacyTier {
+function inferTargetPrivacy(executor: string, endpoint?: string): RoutingPrivacyTier {
+	if (executor === "openai-compatible" && isLocalInferenceEndpoint(endpoint)) return "local_only";
 	if (executor === "ollama" || executor === "llama-cpp") return "local_only";
 	if (executor === "acpx" || executor === "claude-code" || executor === "codex" || executor === "opencode")
 		return "restricted_remote";
 	return "remote_ok";
-}
-
-function inferLegacyTargetPrivacy(executor: string, endpoint: string | undefined): RoutingPrivacyTier {
-	if (executor === "openai-compatible" && isLocalInferenceEndpoint(endpoint)) return "local_only";
-	return inferTargetPrivacy(executor);
 }
 
 function mergeUnique(base: readonly string[], extra: readonly string[]): readonly string[] {
@@ -623,6 +619,7 @@ function parseTargetConfig(raw: unknown): RoutingTargetConfig | null {
 	const acpx = executor === "acpx" ? parseAcpxConfig(raw) : undefined;
 	if (executor === "acpx" && !acpx) return null;
 	const openrouter = executor === "openrouter" ? parseOpenRouterConfig(raw) : undefined;
+	const endpoint = asString(raw.endpoint ?? raw.baseUrl ?? raw.base_url);
 	return {
 		kind: (() => {
 			const parsed = asString(raw.kind);
@@ -633,11 +630,11 @@ function parseTargetConfig(raw: unknown): RoutingTargetConfig | null {
 		})(),
 		executor: executor as RoutingExecutorKind,
 		account: asString(raw.account),
-		endpoint: asString(raw.endpoint ?? raw.baseUrl ?? raw.base_url),
+		endpoint,
 		command: parseCommandConfig(raw.command),
 		acpx,
 		openrouter,
-		privacy: asRoutingPrivacyTier(raw.privacy, inferTargetPrivacy(executor)),
+		privacy: asRoutingPrivacyTier(raw.privacy, inferTargetPrivacy(executor, endpoint)),
 		models,
 	};
 }
@@ -774,7 +771,7 @@ export function compileLegacyRoutingConfig(opts: {
 			account: legacyAccountForProvider(opts.extraction.provider, opts.extraction.endpoint),
 			endpoint: opts.extraction.endpoint,
 			command: opts.extraction.command,
-			privacy: inferLegacyTargetPrivacy(opts.extraction.provider, opts.extraction.endpoint),
+			privacy: inferTargetPrivacy(opts.extraction.provider, opts.extraction.endpoint),
 			models: {
 				default: {
 					model: opts.extraction.model,
@@ -818,7 +815,7 @@ export function compileLegacyRoutingConfig(opts: {
 			executor: opts.synthesis.provider,
 			account: legacyAccountForProvider(opts.synthesis.provider, opts.synthesis.endpoint),
 			endpoint: opts.synthesis.endpoint,
-			privacy: inferLegacyTargetPrivacy(opts.synthesis.provider, opts.synthesis.endpoint),
+			privacy: inferTargetPrivacy(opts.synthesis.provider, opts.synthesis.endpoint),
 			models: {
 				default: {
 					model: opts.synthesis.model,
@@ -1242,7 +1239,7 @@ function buildCandidateTrace(
 	const reasons: string[] = [];
 	let score = 0;
 	const requiredPrivacy = request.privacy ?? config.taskClasses[classification.taskClass]?.privacy ?? "remote_ok";
-	const targetPrivacy = target.privacy ?? inferTargetPrivacy(target.executor);
+	const targetPrivacy = target.privacy ?? inferTargetPrivacy(target.executor, target.endpoint);
 	if (privacyRank(targetPrivacy) < privacyRank(requiredPrivacy)) {
 		blockedBy.push(`privacy gate (${requiredPrivacy})`);
 	}
