@@ -506,6 +506,7 @@ subscription-backed CLI session, or gateway.
 | `captureEvents` | boolean | When true, defaults ACPX to JSON output and enables the provider event-capture path |
 | `maxCapturedEvents` | number | Maximum number of JSON events delivered to the provider-side event callback; defaults to 200 |
 | `emptyResponseRetries` | number | Fresh-session retries after an exit-0 empty response. Defaults to 1 and is capped at 3; retries run only for sterile deny-all targets with hooks and tools disabled |
+| `modelSelection` | string | `acp` passes the routed model through ACPX negotiation; `agent` lets the ACP agent's native configuration choose it. Defaults to `agent` for OpenCode and `acp` for other agents |
 | `timeoutMs` | number | Per-call ACPX subprocess deadline |
 | `extraArgs` | array | Additional ACPX CLI args appended after Signet-managed args |
 | `privacy` | string | `remote_ok`, `restricted_remote`, or `local_only` |

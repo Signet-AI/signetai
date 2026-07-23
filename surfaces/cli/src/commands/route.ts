@@ -43,6 +43,7 @@ interface RouteStatusResponse {
 			readonly account?: string;
 			readonly privacy?: string;
 			readonly models: Record<string, { readonly model: string; readonly label?: string }>;
+			readonly acpx?: { readonly agent: string; readonly modelSelection: "acp" | "agent" };
 		}
 	>;
 	readonly agents: readonly string[];
@@ -256,12 +257,19 @@ export function registerRouteCommands(program: Command, deps: RouteDeps): void {
 				if (!runtime || runtime.available) return [];
 				return [`${targetRef}: ${runtime.unavailableReason ?? runtime.health}`];
 			});
+			const warnings = Object.entries(status.targets).flatMap(([targetId, target]) => {
+				if (target.executor !== "acpx" || target.acpx?.modelSelection !== "agent") return [];
+				return [
+					`${targetId}: ACPX model selection is agent-managed for ${target.acpx.agent}; verify the agent's native configuration matches the routed model`,
+				];
+			});
 			const summary = {
 				enabled: status.enabled,
 				source: status.source,
 				defaultPolicy: status.defaultPolicy ?? null,
 				defaultAgentId: status.defaultAgentId,
 				issues,
+				warnings,
 			};
 			if ((options as { json?: boolean }).json) {
 				console.log(JSON.stringify(summary, null, 2));
@@ -271,15 +279,18 @@ export function registerRouteCommands(program: Command, deps: RouteDeps): void {
 			console.log(chalk.dim(`  Enabled:        ${status.enabled ? "yes" : "no"}`));
 			console.log(chalk.dim(`  Source:         ${status.source}`));
 			console.log(chalk.dim(`  Default policy: ${status.defaultPolicy ?? "-"}`));
-			if (issues.length === 0) {
+			if (issues.length === 0 && warnings.length === 0) {
 				console.log(chalk.green("\n  No broken route targets detected.\n"));
 				return;
+			}
+			for (const warning of warnings) {
+				console.log(chalk.yellow(`  - ${warning}`));
 			}
 			for (const issue of issues) {
 				console.log(chalk.red(`  - ${issue}`));
 			}
 			console.log();
-			process.exitCode = 1;
+			if (issues.length > 0) process.exitCode = 1;
 		});
 	withJson(doctorCmd);
 

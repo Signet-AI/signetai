@@ -467,6 +467,35 @@ describe("inference config + decision engine", () => {
 		expect(parsed.value.targets.background?.acpx?.terminal).toBe("disabled");
 	});
 
+	it("defaults OpenCode to agent-managed models and preserves explicit ACP model selection", () => {
+		const parsed = parseRoutingConfig({
+			inference: {
+				targets: {
+					opencode: {
+						executor: "acpx",
+						acpx: { agent: "OpenCode" },
+						models: { default: { model: "minimax-coding-plan/MiniMax-M3" } },
+					},
+					codex: {
+						executor: "acpx",
+						acpx: { agent: "codex" },
+						models: { default: { model: "gpt-5.4-mini" } },
+					},
+					opencodeExplicit: {
+						executor: "acpx",
+						acpx: { agent: "opencode", model_selection: "acp" },
+						models: { default: { model: "minimax-coding-plan/MiniMax-M3" } },
+					},
+				},
+			},
+		});
+		expect(parsed.ok).toBe(true);
+		if (!parsed.ok) return;
+		expect(parsed.value.targets.opencode?.acpx?.modelSelection).toBe("agent");
+		expect(parsed.value.targets.codex?.acpx?.modelSelection).toBe("acp");
+		expect(parsed.value.targets.opencodeExplicit?.acpx?.modelSelection).toBe("acp");
+	});
+
 	it("parses ACPX event capture configuration", () => {
 		const parsed = parseRoutingConfig({
 			inference: {

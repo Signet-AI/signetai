@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type {
+	AcpxModelSelection,
 	LlmGenerateResult,
 	LlmProvider,
 	LlmUsage,
@@ -20,6 +21,7 @@ import {
 	parseRoutingConfig,
 	parseRoutingTargetRef,
 	parseYamlDocument,
+	resolveAcpxModelSelection,
 	resolveRoutingDecision,
 } from "@signet/core";
 import { isOAuthProvider, resolveOAuthCredential } from "./inference-oauth";
@@ -100,6 +102,10 @@ export interface InferenceTargetSummary {
 	readonly account?: string;
 	readonly privacy?: string;
 	readonly models: Readonly<Record<string, { readonly model: string; readonly label?: string }>>;
+	readonly acpx?: {
+		readonly agent: string;
+		readonly modelSelection: AcpxModelSelection;
+	};
 }
 
 export interface InferenceStatusSummary {
@@ -1001,6 +1007,14 @@ export class InferenceRouter {
 				{
 					kind: target.kind,
 					executor: target.executor,
+					...(target.acpx
+						? {
+								acpx: {
+									agent: target.acpx.agent,
+									modelSelection: resolveAcpxModelSelection(target.acpx.agent, target.acpx.modelSelection),
+								},
+							}
+						: {}),
 					...(target.account ? { account: target.account } : {}),
 					...(target.privacy ? { privacy: target.privacy } : {}),
 					models: Object.fromEntries(

@@ -445,9 +445,11 @@ export {
 	compileLegacyRoutingConfig,
 	parseRoutingConfig,
 	allTargetRefs,
+	resolveAcpxModelSelection,
 	resolveRoutingDecision,
 } from "./routing";
 export type {
+	AcpxModelSelection,
 	RoutingAccountKind,
 	RoutingTargetKind,
 	RoutingExecutorKind,

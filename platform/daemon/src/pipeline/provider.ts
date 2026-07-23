@@ -22,12 +22,14 @@ import { mkdirSync, readFileSync, readdirSync } from "node:fs";
 import { isAbsolute, join, resolve as resolvePath } from "node:path";
 import type { ThinkingLevel } from "@earendil-works/pi-ai";
 import {
+	type AcpxModelSelection,
 	DEFAULT_PROVIDER_RATE_LIMIT,
 	type LlmGenerateResult,
 	type LlmProvider,
 	type LlmUsage,
 	type PipelineExtractionConfig,
 	type ProviderRateLimitConfig,
+	resolveAcpxModelSelection,
 	resolveDefaultBasePath,
 } from "@signet/core";
 import { logger } from "../logger";
@@ -644,6 +646,7 @@ export type AcpxJsonEvent = Readonly<Record<string, unknown>>;
 export interface AcpxProviderConfig {
 	readonly agent: string;
 	readonly model?: string;
+	readonly modelSelection?: AcpxModelSelection;
 	readonly version?: string;
 	readonly bin?: string;
 	readonly package?: string;
@@ -741,7 +744,9 @@ function acpxEnv(config: AcpxProviderConfig, runId?: string): NodeJS.ProcessEnv 
 		env.SIGNET_NO_HOOKS = undefined;
 	}
 	if (normalizeAcpxAgent(config.agent).toLowerCase() === "opencode" && isSterileAcpxTarget(config)) {
-		env.OPENCODE_CONFIG_CONTENT = mergeSterileOpenCodeConfig(env.OPENCODE_CONFIG_CONTENT, config.model);
+		const profileModel =
+			resolveAcpxModelSelection(config.agent, config.modelSelection) === "agent" ? config.model : undefined;
+		env.OPENCODE_CONFIG_CONTENT = mergeSterileOpenCodeConfig(env.OPENCODE_CONFIG_CONTENT, profileModel);
 	}
 	if (runId) env.SIGNET_ACPX_RUN_ID = runId;
 	return env;
@@ -790,9 +795,9 @@ function buildAcpxCommand(
 	args.push("--format", resolveAcpxFormat(config));
 	args.push("--timeout", String(Math.max(1, Math.ceil(timeoutMs / 1000))));
 	if (cwd) args.push("--cwd", cwd);
-	const openCodeProfileOwnsModel =
-		normalizeAcpxAgent(config.agent).toLowerCase() === "opencode" && isSterileAcpxTarget(config);
-	if (config.model && !openCodeProfileOwnsModel) args.push("--model", config.model);
+	if (config.model && resolveAcpxModelSelection(config.agent, config.modelSelection) === "acp") {
+		args.push("--model", config.model);
+	}
 	args.push(...acpxPermissionArgs(config.permissions));
 	if (config.terminal === "disabled") args.push("--no-terminal");
 	if (allowedTools) args.push("--allowed-tools", allowedTools.join(","));
