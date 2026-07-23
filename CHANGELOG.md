@@ -7,7 +7,7 @@ All notable changes to Signet are documented here.
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
 ### 2026-07-23
-- Bug fixes: support agent-managed models; parse JSON after model preambles; bound llama.cpp inputs; remove invalid hook ownership markers; stop native embedding smoke child within bun's afterEach budget; integrate pi-ai OAuth providers; make maintenance supersession sweep non-fatal without a provider; enable Astro ClientRouter for client-side navigation.
+- Bug fixes: provider wall completeness, optional keys, OAuth window; support agent-managed models; parse JSON after model preambles; bound llama.cpp inputs; remove invalid hook ownership markers; stop native embedding smoke child within bun's afterEach budget; integrate pi-ai OAuth providers; make maintenance supersession sweep non-fatal without a provider; enable Astro ClientRouter for client-side navigation.
 
 ### 2026-07-22
 - Features: replace inference provisioning with pi-ai (#947).
@@ -32,6 +32,15 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Bug fixes: tolerate immutable-artifact conflict on summary retry; add boundary reason semantics to session synthesis.
 
 ## Release Ledger
+
+## [0.148.10] - 2026-07-23
+
+Release summary: 1 bug fix.
+Tag range: `v0.148.9..v0.148.10`.
+
+### Bug Fixes
+
+- **dashboard**: provider wall completeness, optional keys, OAuth window (#995)
 
 ## [0.148.9] - 2026-07-23
 
