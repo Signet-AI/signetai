@@ -543,6 +543,73 @@ describe("doctor concurrent Signet installations", () => {
 	});
 });
 
+describe("doctor physical memory diagnostics", () => {
+	it("warns when daemon physical footprint exceeds one GiB", async () => {
+		const root = mkdtempSync(join(tmpdir(), "health-physical-memory-"));
+		const lines: string[] = [];
+		const oldLog = console.log;
+		try {
+			mkdirSync(root, { recursive: true });
+			console.log = (...args: unknown[]) => {
+				lines.push(args.join(" "));
+			};
+
+			await showDoctor(
+				{ json: true },
+				{
+					...depsFor(root),
+					getDaemonStatus: async () => ({
+						running: true,
+						pid: 42,
+						uptime: 3600,
+						version: "0.148.0",
+						host: "127.0.0.1",
+						bindHost: "127.0.0.1",
+						networkMode: "local",
+						resources: {
+							rss: 169,
+							heapUsed: 106,
+							physicalFootprint: 6963,
+							peakPhysicalFootprint: 7782,
+						},
+						extraction: null,
+						extractionWorker: null,
+						transcripts: null,
+						probe: {
+							status: "healthy",
+							detail: "/health responded",
+							url: "http://127.0.0.1:3850",
+							listenerPresent: true,
+							processPid: 42,
+							stalePid: null,
+						},
+						openclaw: null,
+					}),
+					detectInstallations: () => ({
+						target: { kind: "unsupported", executablePath: "/tmp/signet", reason: "test fixture" },
+						installations: [],
+						inactive: [],
+					}),
+				},
+			);
+
+			const output = JSON.parse(lines.join("\n")) as {
+				findings?: Array<{ code?: string; message?: string; fix?: string }>;
+			};
+			expect(output.findings).toContainEqual(
+				expect.objectContaining({
+					code: "high_daemon_physical_memory",
+					message: expect.stringContaining("6.8 GiB"),
+					fix: expect.stringContaining("signet daemon restart"),
+				}),
+			);
+		} finally {
+			console.log = oldLog;
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+});
+
 describe("getExtractionStatusNotice", () => {
 	it("returns a warning for degraded extraction", () => {
 		const notice = getExtractionStatusNotice({

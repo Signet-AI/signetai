@@ -25,6 +25,7 @@ import {
 	getRegistryStatus,
 	refreshRegistry,
 } from "../pipeline/model-registry.js";
+import { getResourceSnapshot } from "../resource-monitor.js";
 import { getSecret } from "../secrets.js";
 import { activeSessionCount, getBypassedSessionKeys } from "../session-tracker.js";
 import { getTranscriptCaptureStatus } from "../transcript-capture-worker.js";
@@ -270,6 +271,7 @@ export function registerPipelineRoutes(app: Hono): void {
 			agentId: resolveDaemonAgentId(),
 			agentsDir: AGENTS_DIR,
 			memoryDb: existsSync(MEMORY_DB),
+			resources: getResourceSnapshot(),
 			pipelineV2: config.pipelineV2,
 			pipeline: {
 				extraction: {

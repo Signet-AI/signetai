@@ -392,6 +392,12 @@ describe("getDaemonStatus", () => {
 					host: "127.0.0.1",
 					bindHost: "127.0.0.1",
 					networkMode: "local",
+					resources: {
+						rss: 169,
+						heapUsed: 106,
+						physicalFootprint: 2867,
+						peakPhysicalFootprint: 3584,
+					},
 					providerResolution: {
 						extraction: {
 							configured: "claude-code",
@@ -441,6 +447,12 @@ describe("getDaemonStatus", () => {
 			overloadBackoffMs: 30000,
 			overloadSince: "2026-03-26T00:00:02.000Z",
 			nextTickInMs: 28000,
+		});
+		expect(status.resources).toEqual({
+			rss: 169,
+			heapUsed: 106,
+			physicalFootprint: 2867,
+			peakPhysicalFootprint: 3584,
 		});
 		expect(status.openclaw).toEqual({
 			status: "connected",

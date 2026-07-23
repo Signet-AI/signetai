@@ -161,5 +161,10 @@ describe("GET /health (back-compat)", () => {
 		expect(typeof body.uptime).toBe("number");
 		expect(typeof body.pid).toBe("number");
 		expect(typeof body.version).toBe("string");
+		const resources = body.resources as Record<string, unknown>;
+		expect(typeof resources.rss).toBe("number");
+		expect(typeof resources.heapUsed).toBe("number");
+		expect(resources.physicalFootprint === null || typeof resources.physicalFootprint === "number").toBe(true);
+		expect(resources.peakPhysicalFootprint === null || typeof resources.peakPhysicalFootprint === "number").toBe(true);
 	});
 });

@@ -92,6 +92,27 @@ describe("daemon status contract", () => {
 		expect(extraction).toHaveProperty("nextTickInMs");
 	});
 
+	it("exposes process memory metrics on /api/status", async () => {
+		const res = await app.request("http://localhost/api/status");
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as {
+			resources?: {
+				rss?: unknown;
+				heapUsed?: unknown;
+				physicalFootprint?: unknown;
+				peakPhysicalFootprint?: unknown;
+			};
+		};
+		expect(typeof body.resources?.rss).toBe("number");
+		expect(typeof body.resources?.heapUsed).toBe("number");
+		expect(body.resources?.physicalFootprint === null || typeof body.resources?.physicalFootprint === "number").toBe(
+			true,
+		);
+		expect(
+			body.resources?.peakPhysicalFootprint === null || typeof body.resources?.peakPhysicalFootprint === "number",
+		).toBe(true);
+	});
+
 	it("exposes providerResolution.extraction runtime fields on /api/status", async () => {
 		const res = await app.request("http://localhost/api/status");
 		expect(res.status).toBe(200);

@@ -12,6 +12,7 @@ import {
 } from "@signet/core";
 import chalk from "chalk";
 import { daemonAccessLines } from "../lib/network.js";
+import type { DaemonResourceUsage } from "../lib/runtime.js";
 import { getGitRemoteState, getSnapshotProtection, hasOpenClawWorkspaceLink } from "../lib/workspace-protection.js";
 import Database from "../sqlite.js";
 import { getDaemonBaseUrl } from "./repair-queue.js";
@@ -31,6 +32,7 @@ interface DaemonStatus {
 	readonly host: string | null;
 	readonly bindHost: string | null;
 	readonly networkMode: string | null;
+	readonly resources?: DaemonResourceUsage | null;
 	readonly extraction: {
 		readonly configured: string | null;
 		readonly effective: string | null;
@@ -113,6 +115,8 @@ interface DoctorFinding {
 	readonly message: string;
 	readonly fix?: string;
 }
+
+const HIGH_PHYSICAL_MEMORY_MIB = 1024;
 
 interface StatusDeps {
 	readonly agentsDir: string;
@@ -229,6 +233,13 @@ export async function showStatus(options: { path?: string; json?: boolean }, dep
 		console.log(
 			chalk.dim(`    Uptime: ${report.daemon.uptime === null ? "unknown" : deps.formatUptime(report.daemon.uptime)}`),
 		);
+		const resources = report.daemon.resources;
+		if (resources?.physicalFootprint !== null && resources?.physicalFootprint !== undefined) {
+			const rss = resources.rss === null ? "" : ` (${formatMemory(resources.rss)} RSS)`;
+			const peak =
+				resources.peakPhysicalFootprint === null ? "" : `, peak ${formatMemory(resources.peakPhysicalFootprint)}`;
+			console.log(chalk.dim(`    Memory: ${formatMemory(resources.physicalFootprint)} physical${rss}${peak}`));
+		}
 		for (const line of daemonAccessLines(deps.defaultPort, report.daemon)) {
 			console.log(chalk.dim(`    ${line}`));
 		}
@@ -636,6 +647,22 @@ function addConcurrentInstallationFindings(report: SignetInstallationReport, fin
 	}
 }
 
+function addPhysicalMemoryFinding(report: StatusReport, findings: DoctorFinding[]): void {
+	const resources = report.daemon.resources;
+	const physical = resources?.physicalFootprint;
+	if (!report.daemon.running || physical === null || physical === undefined || physical < HIGH_PHYSICAL_MEMORY_MIB) {
+		return;
+	}
+
+	const rss = resources.rss === null ? "" : `; RSS reports ${formatMemory(resources.rss)}`;
+	findings.push({
+		level: "warn",
+		code: "high_daemon_physical_memory",
+		message: `Daemon physical memory is high: ${formatMemory(physical)}${rss}.`,
+		fix: "Run `signet daemon restart` to reclaim it, then report recurring growth with the physical-footprint values from `/health`.",
+	});
+}
+
 function getDoctorFindings(report: StatusReport, installations: SignetInstallationReport): DoctorFinding[] {
 	const findings: DoctorFinding[] = [];
 	addConcurrentInstallationFindings(installations, findings);
@@ -706,6 +733,7 @@ function getDoctorFindings(report: StatusReport, installations: SignetInstallati
 
 	addOpenClawRuntimeFindings(report, findings);
 	addOpenClawHeartbeatFindings(report, findings);
+	addPhysicalMemoryFinding(report, findings);
 
 	if (report.openclawWorkspaceUnprotected) {
 		findings.push({
@@ -717,6 +745,10 @@ function getDoctorFindings(report: StatusReport, installations: SignetInstallati
 	}
 
 	return findings;
+}
+
+function formatMemory(valueMiB: number): string {
+	return valueMiB >= 1024 ? `${(valueMiB / 1024).toFixed(1)} GiB` : `${valueMiB} MiB`;
 }
 
 function readCount(db: ReturnType<typeof Database>, sql: string, deps: StatusDeps): number | null {

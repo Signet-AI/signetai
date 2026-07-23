@@ -39,6 +39,8 @@ describe("getResourceSnapshot", () => {
 		for (const key of keys) {
 			expect(typeof snap[key]).toBe("number");
 		}
+		expect(snap.physicalFootprint === null || typeof snap.physicalFootprint === "number").toBe(true);
+		expect(snap.peakPhysicalFootprint === null || typeof snap.peakPhysicalFootprint === "number").toBe(true);
 	});
 
 	it("reports rss and heapUsed in MB (positive integers)", () => {
@@ -47,6 +49,25 @@ describe("getResourceSnapshot", () => {
 		expect(snap.heapUsed).toBeGreaterThan(0);
 		expect(Number.isInteger(snap.rss)).toBe(true);
 		expect(Number.isInteger(snap.heapUsed)).toBe(true);
+	});
+
+	it("reports physical footprint and lifetime peak in MB when available", () => {
+		const snap = getResourceSnapshot(() => ({ current: 1536, peak: 2048 }));
+		expect(snap.physicalFootprint).toBe(1536);
+		expect(snap.peakPhysicalFootprint).toBe(2048);
+	});
+
+	it("uses null when physical footprint is unavailable", () => {
+		const snap = getResourceSnapshot(() => null);
+		expect(snap.physicalFootprint).toBeNull();
+		expect(snap.peakPhysicalFootprint).toBeNull();
+	});
+
+	it("reads the current macOS process physical footprint", () => {
+		if (process.platform !== "darwin") return;
+		const snap = getResourceSnapshot();
+		expect(snap.physicalFootprint).toBeGreaterThan(0);
+		expect(snap.peakPhysicalFootprint).toBeGreaterThanOrEqual(snap.physicalFootprint ?? 0);
 	});
 
 	it("FD category counts sum to total on Linux", () => {

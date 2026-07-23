@@ -2568,6 +2568,8 @@ fn resource_snapshot() -> serde_json::Value {
         "other": other,
         "rss": rss,
         "heapUsed": 0,
+        "physicalFootprint": serde_json::Value::Null,
+        "peakPhysicalFootprint": serde_json::Value::Null,
     })
 }
 
@@ -2753,6 +2755,7 @@ async fn status(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
             "timerActive": false,
         },
         "embedding": embedding,
+        "resources": resource_snapshot(),
     }))
 }
 
@@ -2976,6 +2979,15 @@ mod tests {
         assert_eq!(body["pipeline"]["extraction"]["overloaded"], false);
         assert_eq!(body["pipeline"]["extraction"]["maxLoadPerCpu"], 0.8);
         assert_eq!(body["pipeline"]["extraction"]["overloadBackoffMs"], 30000);
+        assert!(body["resources"]["rss"].is_number());
+        assert_eq!(
+            body["resources"]["physicalFootprint"],
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            body["resources"]["peakPhysicalFootprint"],
+            serde_json::Value::Null
+        );
     }
 
     #[test]

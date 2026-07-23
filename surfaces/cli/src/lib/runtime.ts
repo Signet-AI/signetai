@@ -47,6 +47,13 @@ export interface DaemonOpenClawHealthSummary {
 	readonly lastError: string | null;
 }
 
+export interface DaemonResourceUsage {
+	readonly rss: number | null;
+	readonly heapUsed: number | null;
+	readonly physicalFootprint: number | null;
+	readonly peakPhysicalFootprint: number | null;
+}
+
 interface DaemonInstance {
 	readonly baseUrl: string;
 	readonly pid: number | null;
@@ -55,6 +62,7 @@ interface DaemonInstance {
 	readonly host: string | null;
 	readonly bindHost: string | null;
 	readonly networkMode: string | null;
+	readonly resources: DaemonResourceUsage | null;
 	readonly extraction: {
 		readonly configured: string | null;
 		readonly effective: string | null;
@@ -342,6 +350,12 @@ async function getDaemonInstances(): Promise<DaemonInstance[]> {
 						host?: string;
 						bindHost?: string;
 						networkMode?: string;
+						resources?: {
+							rss?: number | null;
+							heapUsed?: number | null;
+							physicalFootprint?: number | null;
+							peakPhysicalFootprint?: number | null;
+						};
 						providerResolution?: {
 							extraction?: {
 								configured?: string | null;
@@ -375,6 +389,7 @@ async function getDaemonInstances(): Promise<DaemonInstance[]> {
 					const extraction = data.providerResolution?.extraction;
 					const extractionWorker = data.pipeline?.extraction;
 					const transcripts = data.transcripts?.capture;
+					const resources = data.resources;
 					const openclawReport = await fetchJsonOrNull<unknown>(baseUrl, "/api/diagnostics/openclaw");
 					const readiness = await fetchDaemonReadiness(baseUrl);
 					return {
@@ -385,6 +400,16 @@ async function getDaemonInstances(): Promise<DaemonInstance[]> {
 						host: data.host ?? null,
 						bindHost: data.bindHost ?? null,
 						networkMode: data.networkMode ?? null,
+						resources: resources
+							? {
+									rss: typeof resources.rss === "number" ? resources.rss : null,
+									heapUsed: typeof resources.heapUsed === "number" ? resources.heapUsed : null,
+									physicalFootprint:
+										typeof resources.physicalFootprint === "number" ? resources.physicalFootprint : null,
+									peakPhysicalFootprint:
+										typeof resources.peakPhysicalFootprint === "number" ? resources.peakPhysicalFootprint : null,
+								}
+							: null,
 						extraction: extraction
 							? {
 									configured: extraction.configured ?? null,
@@ -433,6 +458,7 @@ async function getDaemonInstances(): Promise<DaemonInstance[]> {
 				host: null,
 				bindHost: null,
 				networkMode: null,
+				resources: null,
 				extraction: null,
 				extractionWorker: null,
 				transcripts: null,
@@ -552,6 +578,7 @@ export async function getDaemonStatus(): Promise<{
 	host: string | null;
 	bindHost: string | null;
 	networkMode: string | null;
+	resources: DaemonResourceUsage | null;
 	extraction: DaemonInstance["extraction"];
 	extractionWorker: DaemonInstance["extractionWorker"];
 	transcripts: DaemonInstance["transcripts"];
@@ -570,6 +597,7 @@ export async function getDaemonStatus(): Promise<{
 			host: preferred.host,
 			bindHost: preferred.bindHost,
 			networkMode: preferred.networkMode,
+			resources: preferred.resources,
 			extraction: preferred.extraction,
 			extractionWorker: preferred.extractionWorker,
 			transcripts: preferred.transcripts,
@@ -590,6 +618,7 @@ export async function getDaemonStatus(): Promise<{
 		host: null,
 		bindHost: null,
 		networkMode: null,
+		resources: null,
 		extraction: null,
 		extractionWorker: null,
 		transcripts: null,

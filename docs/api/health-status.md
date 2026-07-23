@@ -39,9 +39,26 @@ and `GET /health/ready` for readiness.
     "extractionPending": 0,
     "extractionBackoffMs": 0
   },
-  "resources": { "...": "..." }
+  "resources": {
+    "total": -1,
+    "memoryMd": 0,
+    "sockets": 0,
+    "inotify": 0,
+    "pipes": 0,
+    "db": 0,
+    "other": 0,
+    "rss": 169,
+    "heapUsed": 106,
+    "physicalFootprint": 2867,
+    "peakPhysicalFootprint": 3584
+  }
 }
 ```
+
+Memory resource values are MiB. On macOS, `physicalFootprint` and
+`peakPhysicalFootprint` come from `proc_pid_rusage` and include compressed
+and driver-backed memory that RSS can miss. They are `null` on platforms
+where this metric is unavailable.
 
 ### GET /health/live
 
@@ -168,6 +185,12 @@ silent fallback or hard-blocked extraction after boot.
   "agentId": "default",
   "agentsDir": "/home/user/.agents",
   "memoryDb": true,
+  "resources": {
+    "rss": 169,
+    "heapUsed": 106,
+    "physicalFootprint": 2867,
+    "peakPhysicalFootprint": 3584
+  },
   "pipelineV2": {
     "enabled": true,
     "paused": false,
