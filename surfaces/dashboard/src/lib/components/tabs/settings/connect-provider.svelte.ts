@@ -48,6 +48,12 @@ export interface ConnectOptions {
 	/** Called when an OAuth login completes so the caller can write the
 	 * `subscription_session` account entry the router resolves against. */
 	readonly linkOAuthAccount?: () => void;
+	/** Fired when the daemon emits a URL the user must open in their browser
+	 * (the OAuth auth URL, OR a device-code verification URL). The caller uses it
+	 * to navigate a popup window it opened synchronously in the user gesture —
+	 * browsers block window.open outside a click, so the window must already
+	 * exist when this (async) URL arrives. */
+	onNavigate?: (url: string) => void;
 }
 
 export class ConnectProviderController {
@@ -59,6 +65,7 @@ export class ConnectProviderController {
 	private readonly supportsApiKey: boolean;
 	private readonly onSaved?: () => void | Promise<void>;
 	private readonly linkOAuthAccount?: () => void;
+	private readonly onNavigate?: (url: string) => void;
 	private login: Awaited<ReturnType<typeof startOAuthLogin>> | null = null;
 
 	constructor(opts: ConnectOptions) {
@@ -68,6 +75,7 @@ export class ConnectProviderController {
 		this.supportsApiKey = opts.supportsApiKey;
 		this.onSaved = opts.onSaved;
 		this.linkOAuthAccount = opts.linkOAuthAccount;
+		this.onNavigate = opts.onNavigate;
 	}
 
 	/** True when only one path exists — the dialog can auto-start it. */
@@ -102,10 +110,12 @@ export class ConnectProviderController {
 			switch (event.type) {
 				case "auth":
 					url = event.url;
+					this.onNavigate?.(event.url);
 					this.phase = { kind: "oauth-running", url, deviceCode, progress, prompt };
 					break;
 				case "device_code":
 					deviceCode = { userCode: event.userCode, verificationUri: event.verificationUri };
+					this.onNavigate?.(event.verificationUri);
 					this.phase = { kind: "oauth-running", url, deviceCode, progress, prompt };
 					break;
 				case "prompt":
