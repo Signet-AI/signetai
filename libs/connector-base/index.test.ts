@@ -8,7 +8,9 @@ import {
 	type UninstallResult,
 	atomicWriteText,
 	removeManagedExtensionFile,
+	resolveSignetCliCommand,
 	resolveSignetDaemonUrl,
+	resolveSignetMcpCommand,
 	resolveSignetWorkspacePath,
 } from "./src/index";
 
@@ -102,6 +104,55 @@ describe("atomicWriteText", () => {
 
 		expect(readFileSync(file, "utf-8")).toBe("{\n  // preserved\n}\n");
 		if (process.platform !== "win32") expect(statSync(file).mode & 0o777).toBe(0o600);
+	});
+});
+
+describe("packaged Signet command resolution", () => {
+	const originalPlatform = process.platform;
+	const originalArgv = process.argv;
+	const originalExecPath = process.execPath;
+	const originalWarn = console.warn;
+
+	afterEach(() => {
+		process.platform = originalPlatform;
+		process.argv = originalArgv;
+		process.execPath = originalExecPath;
+		console.warn = originalWarn;
+	});
+
+	it("uses bare commands outside Windows", () => {
+		process.platform = "darwin";
+
+		expect(resolveSignetMcpCommand()).toEqual({ command: "signet-mcp", args: [] });
+		expect(resolveSignetCliCommand()).toEqual({ command: "signet", args: [] });
+	});
+
+	it("resolves packaged Windows entry points from the Signet CLI path", () => {
+		dir = mkdtempSync(join(tmpdir(), "signet-command-resolution-"));
+		const cliEntry = join(dir, "bin", "signet.js");
+		const mcpEntry = join(dir, "dist", "mcp-stdio.js");
+		mkdirSync(join(dir, "bin"), { recursive: true });
+		mkdirSync(join(dir, "dist"), { recursive: true });
+		writeFileSync(cliEntry, "", "utf8");
+		writeFileSync(mcpEntry, "", "utf8");
+		process.platform = "win32";
+		process.argv = ["node", cliEntry];
+		process.execPath = "C:\\Program Files\\nodejs\\node.exe";
+
+		expect(resolveSignetMcpCommand()).toEqual({ command: process.execPath, args: [mcpEntry] });
+		expect(resolveSignetCliCommand()).toEqual({ command: process.execPath, args: [cliEntry] });
+	});
+
+	it("warns once and returns the bare MCP command when the Windows entry point is missing", () => {
+		const warnings: string[] = [];
+		process.platform = "win32";
+		process.argv = ["node", "C:\\missing\\signetai\\bin\\signet.js"];
+		console.warn = (message?: unknown) => warnings.push(String(message));
+
+		expect(resolveSignetMcpCommand()).toEqual({ command: "signet-mcp", args: [] });
+		expect(warnings).toEqual([
+			'[signet] Warning: could not resolve mcp-stdio.js from argv[1]="C:\\missing\\signetai\\bin\\signet.js". MCP server config will use "signet-mcp" which may fail on Windows without shell:true.',
+		]);
 	});
 });
 

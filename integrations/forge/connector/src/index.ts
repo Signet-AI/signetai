@@ -18,6 +18,7 @@ import {
 	atomicWriteJson,
 	isSignetGeneratedFile,
 	resolveSignetApiKey,
+	resolveSignetMcpCommand,
 	resolveSignetWorkspacePath,
 } from "@signet/connector-base";
 import { expandHome, hasValidIdentity, loadIdentityMode, resolveSignetDaemonUrl } from "@signet/core";
@@ -85,18 +86,6 @@ function resolveRemoteDaemonUrl(): string | null {
 	return readTrimmedEnv("SIGNET_DAEMON_URL") ? resolveSignetDaemonUrl() : null;
 }
 
-function resolveSignetMcp(): ForgeMcpStdioServer {
-	if (process.platform !== "win32") return { command: "signet-mcp", args: [] };
-	const cliEntry = process.argv[1] || "";
-	const mcpJs = join(cliEntry, "..", "..", "dist", "mcp-stdio.js");
-	if (existsSync(mcpJs)) return { command: process.execPath, args: [mcpJs] };
-	console.warn(
-		`[signet] Warning: could not resolve mcp-stdio.js from argv[1]="${cliEntry}". ` +
-			`MCP server config will use "signet-mcp" which may fail on Windows without shell:true.`,
-	);
-	return { command: "signet-mcp", args: [] };
-}
-
 function buildMcpServer(basePath: string): ForgeMcpServer {
 	const remoteDaemonUrl = resolveRemoteDaemonUrl();
 	if (remoteDaemonUrl) {
@@ -106,7 +95,7 @@ function buildMcpServer(basePath: string): ForgeMcpServer {
 			...(apiKey ? { headers: { Authorization: `Bearer ${apiKey}` } } : {}),
 		};
 	}
-	const mcp = resolveSignetMcp();
+	const mcp = resolveSignetMcpCommand();
 	return {
 		command: mcp.command,
 		...(mcp.args && mcp.args.length > 0 ? { args: mcp.args } : {}),
@@ -319,7 +308,7 @@ export class ForgeConnector extends BaseConnector {
 		if (!("signet" in servers)) return false;
 		const { signet: _, ...rest } = servers;
 		if (Object.keys(rest).length === 0) {
-			delete config.mcpServers;
+			Reflect.deleteProperty(config, "mcpServers");
 		} else {
 			config.mcpServers = rest;
 		}

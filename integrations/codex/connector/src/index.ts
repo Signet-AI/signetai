@@ -3,7 +3,14 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { BaseConnector, type InstallResult, type UninstallResult, atomicWriteJson } from "@signet/connector-base";
+import {
+	BaseConnector,
+	type InstallResult,
+	type UninstallResult,
+	atomicWriteJson,
+	resolveSignetCliCommand,
+	resolveSignetMcpCommand,
+} from "@signet/connector-base";
 import {
 	expandHome,
 	resolvePromptSubmitTimeoutMs,
@@ -49,11 +56,8 @@ interface NativePluginCommandResult {
  *  Windows: navigates from argv[1] (e.g. <pkg>/bin/signet.js) up two levels to find
  *  the bin directory. Falls back to bare "signet" if the layout doesn't match (shims, junctions). */
 function resolveSignetArgs(): string[] {
-	if (process.platform !== "win32") return ["signet"];
-	const entry = process.argv[1] || "";
-	const signetJs = join(entry, "..", "..", "bin", "signet.js");
-	if (existsSync(signetJs)) return [process.execPath, signetJs];
-	return ["signet"];
+	const resolved = resolveSignetCliCommand();
+	return [resolved.command, ...resolved.args];
 }
 
 /** Resolve signet-mcp as { command, args } for Codex config.toml.
@@ -69,11 +73,7 @@ function resolveSignetMcp(): SignetMcpConfig {
 			...(apiKey ? { httpHeaders: { Authorization: `Bearer ${apiKey}` } } : {}),
 		};
 	}
-	if (process.platform !== "win32") return { command: "signet-mcp", args: [] };
-	const entry = process.argv[1] || "";
-	const mcpJs = join(entry, "..", "..", "bin", "mcp-stdio.js");
-	if (existsSync(mcpJs)) return { command: process.execPath, args: [mcpJs] };
-	return { command: "signet-mcp", args: [] };
+	return resolveSignetMcpCommand();
 }
 
 function readEnv(name: string): string | undefined {

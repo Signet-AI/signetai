@@ -29,6 +29,7 @@ import {
 	atomicWriteJson,
 	atomicWriteText,
 	isSignetGeneratedFile,
+	resolveSignetMcpCommand,
 } from "@signet/connector-base";
 import {
 	OPENCODE_PIPELINE_AGENT,
@@ -71,7 +72,7 @@ function signetRuntimeEnv(): Record<string, string> {
 
 function buildPluginBundle(apiKeyFilePath?: string): string {
 	const env = signetRuntimeEnv();
-	if (apiKeyFilePath) delete env.SIGNET_API_KEY;
+	if (apiKeyFilePath) Reflect.deleteProperty(env, "SIGNET_API_KEY");
 	const assignments = Object.entries(env).map(
 		([key, value]) => `process.env[${JSON.stringify(key)}] = ${JSON.stringify(value)};`,
 	);
@@ -464,20 +465,8 @@ export class OpenCodeConnector extends BaseConnector {
 			return;
 		}
 
-		// On Windows, spawn() without shell:true cannot resolve .cmd wrappers,
-		// so use "node" + mcp-stdio.js path instead.
-		let mcpCommand: string[] = ["signet-mcp"];
-		if (process.platform === "win32") {
-			const cliEntry = process.argv[1] || "";
-			const mcpJs = join(cliEntry, "..", "..", "dist", "mcp-stdio.js");
-			if (existsSync(mcpJs)) {
-				mcpCommand = [process.execPath, mcpJs];
-			} else {
-				console.warn(
-					`[signet] Warning: could not resolve mcp-stdio.js from argv[1]="${cliEntry}". MCP server config will use "signet-mcp" which may fail on Windows without shell:true.`,
-				);
-			}
-		}
+		const resolvedMcp = resolveSignetMcpCommand();
+		const mcpCommand = [resolvedMcp.command, ...resolvedMcp.args];
 		const environment = signetRuntimeEnv();
 		if (apiKeyFile) environment.SIGNET_API_KEY = `{file:${apiKeyFile}}`;
 		writeConfigValue(configPath, ["mcp", "signet"], {

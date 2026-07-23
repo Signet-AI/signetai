@@ -16,7 +16,14 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { BaseConnector, type InstallResult, type UninstallResult, atomicWriteJson, isSignetGeneratedFile } from "@signet/connector-base";
+import {
+	BaseConnector,
+	type InstallResult,
+	type UninstallResult,
+	atomicWriteJson,
+	isSignetGeneratedFile,
+	resolveSignetMcpCommand,
+} from "@signet/connector-base";
 import { expandHome, resolvePromptSubmitTimeoutMs, resolveSessionStartTimeoutMs } from "@signet/core";
 
 // ============================================================================
@@ -448,33 +455,15 @@ export class ClaudeCodeConnector extends BaseConnector {
 			}
 		}
 
-		// On Windows, Node.js spawn() without shell:true cannot resolve .cmd
-		// wrappers, so "signet-mcp" fails with ENOENT. Use "node" as the
-		// command and pass the mcp-stdio.js entry point as an argument instead.
-		let mcpCommand = "signet-mcp";
-		let mcpArgs: string[] = [];
-		if (process.platform === "win32") {
-			const cliEntry = process.argv[1] || "";
-			// cliEntry is e.g. .../signetai/bin/signet.js
-			// mcp-stdio.js lives at .../signetai/dist/mcp-stdio.js
-			const mcpJs = join(cliEntry, "..", "..", "dist", "mcp-stdio.js");
-			if (existsSync(mcpJs)) {
-				mcpCommand = process.execPath;
-				mcpArgs = [mcpJs];
-			} else {
-				console.warn(
-					`[signet] Warning: could not resolve mcp-stdio.js from argv[1]="${cliEntry}". MCP server config will use "signet-mcp" which may fail on Windows without shell:true.`,
-				);
-			}
-		}
+		const mcp = resolveSignetMcpCommand();
 
 		const existingMcp = (config.mcpServers as Record<string, unknown> | undefined) ?? {};
 		config.mcpServers = {
 			...existingMcp,
 			signet: {
 				type: "stdio",
-				command: mcpCommand,
-				args: mcpArgs,
+				command: mcp.command,
+				args: mcp.args,
 				env: {},
 			},
 		};

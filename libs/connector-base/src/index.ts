@@ -242,9 +242,7 @@ export function isSignetGeneratedFile(raw: string): boolean {
 			// Daemon-generated: "# AUTO-GENERATED from <path> by Signet"
 			/^#\s+AUTO-GENERATED\s+from\s+.*\s+by\s+Signet/i.test(line) ||
 			// Connector-generated: "# Auto-generated from <path>" followed by "# Source: <path>" on the next line
-			(/^#\s+Auto-generated\s+from\s+/.test(line) &&
-				i + 1 < lines.length &&
-				/^#\s+Source:\s+/.test(lines[i + 1])),
+			(/^#\s+Auto-generated\s+from\s+/.test(line) && i + 1 < lines.length && /^#\s+Source:\s+/.test(lines[i + 1])),
 	);
 }
 
@@ -277,6 +275,39 @@ export function atomicWriteText(path: string, content: string, mode?: number): v
 
 export function atomicWriteJson(path: string, data: unknown, indent: number | string = 2): void {
 	atomicWriteText(path, `${JSON.stringify(data, null, indent)}\n`);
+}
+
+export type ResolvedCommand = { readonly command: string; readonly args: readonly string[] };
+
+function resolvePackagedSignetCommand(
+	bareCommand: string,
+	scriptDirectory: "bin" | "dist",
+	scriptName: string,
+	warnOnFallback: boolean,
+): ResolvedCommand {
+	if (process.platform !== "win32") return { command: bareCommand, args: [] };
+
+	const cliEntry = process.argv[1] ?? "";
+	const scriptPath = join(cliEntry, "..", "..", scriptDirectory, scriptName);
+	if (cliEntry && existsSync(scriptPath)) return { command: process.execPath, args: [scriptPath] };
+
+	if (warnOnFallback) {
+		console.warn(
+			`[signet] Warning: could not resolve ${scriptName} from argv[1]="${cliEntry}". ` +
+				`MCP server config will use "${bareCommand}" which may fail on Windows without shell:true.`,
+		);
+	}
+	return { command: bareCommand, args: [] };
+}
+
+/** Resolve the signet-mcp stdio command, including the packaged Windows entry point. */
+export function resolveSignetMcpCommand(): ResolvedCommand {
+	return resolvePackagedSignetCommand("signet-mcp", "dist", "mcp-stdio.js", true);
+}
+
+/** Resolve the Signet CLI command for hook invocation. */
+export function resolveSignetCliCommand(): ResolvedCommand {
+	return resolvePackagedSignetCommand("signet", "bin", "signet.js", false);
 }
 
 // ============================================================================
