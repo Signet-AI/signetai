@@ -125,6 +125,7 @@ import {
 } from "./source-index-progress";
 import { type TelemetryCollector, createTelemetryCollector } from "./telemetry";
 import { type TranscriptCaptureWorkerHandle, startTranscriptCaptureWorker } from "./transcript-capture-worker";
+import { type TranscriptRecoveryWorkerHandle, startTranscriptRecoveryWorker } from "./transcript-recovery-worker";
 
 import {
 	getSynthesisWorker as getSynthesisRenderWorker,
@@ -188,6 +189,7 @@ let embeddingTrackerHandle: EmbeddingTrackerHandle | null = null;
 let skillReconcilerHandle: ReturnType<typeof startReconciler> | null = null;
 let schedulerHandle: { stop(): Promise<void> } | null = null;
 let transcriptCaptureWorkerHandle: TranscriptCaptureWorkerHandle | null = null;
+let transcriptRecoveryWorkerHandle: TranscriptRecoveryWorkerHandle | null = null;
 let structuralBackfillTimer: ReturnType<typeof setTimeout> | null = null;
 // These are mirrored into state.ts via setters for read access by
 // route modules. Only daemon.ts should assign or clear them.
@@ -1231,6 +1233,12 @@ async function stopPipelineRuntime(): Promise<BackgroundInferenceQuiescence> {
 		} catch {}
 		transcriptCaptureWorkerHandle = null;
 	}
+	if (transcriptRecoveryWorkerHandle) {
+		try {
+			await transcriptRecoveryWorkerHandle.stop();
+		} catch {}
+		transcriptRecoveryWorkerHandle = null;
+	}
 
 	try {
 		await stopPipeline();
@@ -1334,6 +1342,9 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 	reloadAuthState(AGENTS_DIR);
 	if (!transcriptCaptureWorkerHandle) {
 		transcriptCaptureWorkerHandle = startTranscriptCaptureWorker(getDbAccessor(), AGENTS_DIR);
+	}
+	if (!transcriptRecoveryWorkerHandle) {
+		transcriptRecoveryWorkerHandle = startTranscriptRecoveryWorker(getDbAccessor(), AGENTS_DIR, resolveDaemonAgentId());
 	}
 
 	const router = getOrCreateInferenceRouter(AGENTS_DIR);

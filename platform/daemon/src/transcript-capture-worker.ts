@@ -87,7 +87,24 @@ export function enqueueTranscriptCaptureJob(dbAccessor: DbAccessor, input: Trans
 	const id = transcriptCaptureJobId(input);
 	const createdAt = nowIso();
 	const maxAttempts = normalizeMaxAttempts(input.maxAttempts);
+	let resolvedId = id;
 	dbAccessor.withWriteTx((db) => {
+		// capturedAt is delivery time for hooks but file mtime for recovery scans.
+		// Treat the stable snapshot identity + content as authoritative so a
+		// hook/recovery race cannot create two jobs for the same snapshot.
+		const existing = db
+			.prepare(
+				`SELECT id
+				 FROM transcript_capture_jobs
+				 WHERE agent_id = ? AND session_id = ? AND transcript = ?
+				   AND status <> 'dead'
+				 LIMIT 1`,
+			)
+			.get(input.agentId, input.sessionId, input.transcript) as { id?: unknown } | undefined;
+		if (typeof existing?.id === "string") {
+			resolvedId = existing.id;
+			return;
+		}
 		db.prepare(
 			`INSERT INTO transcript_capture_jobs (
 				id, agent_id, harness, session_key, session_id, project, transcript, raw_transcript,
@@ -131,7 +148,7 @@ export function enqueueTranscriptCaptureJob(dbAccessor: DbAccessor, input: Trans
 			createdAt,
 		);
 	});
-	return id;
+	return resolvedId;
 }
 
 function resetInterruptedJobs(db: WriteDb): void {

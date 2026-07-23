@@ -121,4 +121,31 @@ describe("transcript capture worker", () => {
 		) as { status: string; attempts: number; error: string | null } | undefined;
 		expect(row).toEqual({ status: "pending", attempts: 0, error: null });
 	});
+
+	it("deduplicates stable session snapshots across delivery timestamps", () => {
+		const base = {
+			agentId: "agent-a",
+			harness: "claude-code",
+			sessionKey: "session-stable",
+			sessionId: "snapshot-stable",
+			project: "/repo",
+			transcript: "User: stable\nAssistant: snapshot",
+			rawTranscript: '{"sessionId":"session-stable"}',
+			transcriptPath: "/tmp/session-stable.jsonl",
+			endedAt: "2026-06-20T10:00:00.000Z",
+		} as const;
+		const first = enqueueTranscriptCaptureJob(getDbAccessor(), {
+			...base,
+			capturedAt: "2026-06-20T10:00:00.000Z",
+		});
+		const second = enqueueTranscriptCaptureJob(getDbAccessor(), {
+			...base,
+			capturedAt: "2026-06-20T10:05:00.000Z",
+		});
+
+		expect(second).toBe(first);
+		expect(
+			getDbAccessor().withReadDb((db) => db.prepare("SELECT COUNT(*) AS count FROM transcript_capture_jobs").get()),
+		).toEqual({ count: 1 });
+	});
 });

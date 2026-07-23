@@ -90,6 +90,7 @@ specs:
       - "Every supported harness writes or backfills into `$SIGNET_WORKSPACE/memory/{harness}/transcripts/transcript.jsonl`"
       - "Prompt-submit writes live JSONL turns when the harness does not provide a native transcript snapshot"
       - "Session-end and transcript snapshot hooks replace the session slice in canonical JSONL so final transcripts become the durable source of truth"
+      - "A bounded recovery worker backfills settled Claude Code and Codex JSONL session logs missed by lifecycle hooks without duplicating hook-sourced snapshots or rewriting native logs"
       - "Existing markdown transcript artifacts and `session_transcripts` rows backfill canonical JSONL history without losing backward compatibility"
     decision: null
 
