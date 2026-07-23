@@ -55,20 +55,38 @@ $effect(() => {
 // these only through their OAuth login.
 const OAUTH_ONLY_PROVIDERS = new Set(["openai-codex", "github-copilot"]);
 
-// Curated featured set shown in the wall, in display order. Intersected with
-// the live catalog so a provider missing from the installed pi-ai build never
-// appears. Each entry maps the pi-ai provider family to a friendly name.
-const FEATURED: ReadonlyArray<{ id: string; name: string }> = [
-	{ id: "anthropic", name: "Anthropic (Claude)" },
-	{ id: "openai-codex", name: "ChatGPT / Codex" },
-	{ id: "github-copilot", name: "GitHub Copilot" },
-	{ id: "openrouter", name: "OpenRouter" },
-	{ id: "openai", name: "OpenAI" },
-	{ id: "google", name: "Google (Gemini)" },
-	{ id: "xai", name: "xAI (Grok)" },
-	{ id: "groq", name: "Groq" },
-	{ id: "mistral", name: "Mistral" },
-	{ id: "deepseek", name: "DeepSeek" },
+// Friendly names for known provider families. Anything not listed falls back to
+// a title-cased id. The wall is built from the LIVE catalog, not this list, so a
+// provider added upstream (e.g. zai, kimi-coding) shows up without a dashboard
+// change — this map only controls display name + ordering.
+const PROVIDER_NAMES: Record<string, string> = {
+	anthropic: "Anthropic (Claude)",
+	"openai-codex": "ChatGPT / Codex",
+	"github-copilot": "GitHub Copilot",
+	openrouter: "OpenRouter",
+	openai: "OpenAI",
+	google: "Google (Gemini)",
+	xai: "xAI (Grok)",
+	groq: "Groq",
+	mistral: "Mistral",
+	deepseek: "DeepSeek",
+	zai: "ZAI",
+	"zai-coding-cn": "ZAI Coding (CN)",
+};
+// Known providers float to the top in this order; everything else sorts after.
+const FEATURED_ORDER = [
+	"anthropic",
+	"openai-codex",
+	"github-copilot",
+	"openrouter",
+	"openai",
+	"google",
+	"xai",
+	"groq",
+	"mistral",
+	"deepseek",
+	"zai",
+	"zai-coding-cn",
 ];
 
 interface ConnectableProvider {
@@ -82,19 +100,44 @@ interface ConnectableProvider {
 
 let connecting = $state<{ provider: ConnectableProvider } | null>(null);
 
+function titleCase(id: string): string {
+	return id
+		.replace(/[-_]/g, " ")
+		.replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
 function connectableProviders(): ConnectableProvider[] {
 	if (!catalog) return [];
-	const oauthIds = new Set(catalog.oauthProviders.map((p) => p.id));
-	const catalogIds = new Set(catalog.providers);
-	const oauthStatus = new Map(catalog.oauthProviders.map((p) => [p.id, p] as const));
-	return FEATURED.filter((f) => oauthIds.has(f.id) || catalogIds.has(f.id)).map((f) => {
-		const supportsOAuth = oauthIds.has(f.id);
-		const isOAuthOnly = OAUTH_ONLY_PROVIDERS.has(f.id);
-		const supportsApiKey = catalogIds.has(f.id) && !isOAuthOnly;
+	const cat = catalog;
+	const oauthIds = new Set(cat.oauthProviders.map((p) => p.id));
+	const oauthStatus = new Map(cat.oauthProviders.map((p) => [p.id, p] as const));
+	// Every provider the catalog knows about is connectable — no hand-picked allowlist.
+	// A provider is "connectable" if it's in the model catalog OR it's an OAuth provider.
+	const allIds = new Set<string>([...cat.providers, ...oauthIds]);
+	const sortedIds = [...allIds].sort((a, b) => {
+		const ia = FEATURED_ORDER.indexOf(a);
+		const ib = FEATURED_ORDER.indexOf(b);
+		if (ia !== -1 && ib !== -1) return ia - ib;
+		if (ia !== -1) return -1;
+		if (ib !== -1) return 1;
+		return a.localeCompare(b);
+	});
+	return sortedIds.map((id) => {
+		const supportsOAuth = oauthIds.has(id);
+		const isOAuthOnly = OAUTH_ONLY_PROVIDERS.has(id);
+		// API-key path needs model entries (the catalog maps provider→models).
+		const supportsApiKey = cat.providers.includes(id) && !isOAuthOnly;
 		const connected = supportsOAuth
-			? (oauthStatus.get(f.id)?.connected ?? false) || hasApiKeyAccount(f.id)
-			: hasApiKeyAccount(f.id);
-		return { id: f.id, name: f.name, supportsOAuth, supportsApiKey, connected, isOAuth: supportsOAuth };
+			? (oauthStatus.get(id)?.connected ?? false) || hasApiKeyAccount(id)
+			: hasApiKeyAccount(id);
+		return {
+			id,
+			name: PROVIDER_NAMES[id] ?? titleCase(id),
+			supportsOAuth,
+			supportsApiKey,
+			connected,
+			isOAuth: supportsOAuth,
+		};
 	});
 }
 
@@ -157,18 +200,21 @@ function providerFamilyForExecutor(exec: string): string {
 	return "openai";
 }
 
-function isLocalEndpoint(endpoint: string): boolean {
-	if (!endpoint) return true;
-	try {
-		return ["127.0.0.1", "localhost", "::1", "[::1]"].includes(new URL(endpoint).hostname);
-	} catch {
-		return false;
-	}
+// Executors that REQUIRE an API key / account to function at all.
+function executorRequiresAccount(exec: string): boolean {
+	return exec === "anthropic" || exec === "openrouter";
 }
-function targetNeedsAccount(exec: string, endpoint: string): boolean {
-	if (exec === "anthropic" || exec === "openrouter") return true;
-	if (exec === "openai-compatible") return !isLocalEndpoint(endpoint);
-	return false;
+// openai-compatible MAY take an optional key (local servers are keyless by
+// default; remote gateways may want one but it's not enforced).
+function executorAllowsOptionalKey(exec: string): boolean {
+	return exec === "openai-compatible";
+}
+
+// Conventional secret name for a provider family (used only as the placeholder
+// hint — never hardcode ANTHROPIC_API_KEY for every provider).
+function secretNameFor(exec: string): string {
+	const family = providerFamilyForExecutor(exec);
+	return `${family.replace(/-/g, "_").toUpperCase()}_API_KEY`;
 }
 
 function ensureAccount(accountName: string, executor: string): void {
@@ -198,8 +244,17 @@ function writeTarget(opts: {
 	}
 	st.aSetStr([...targetBase, "executor"], executor);
 	st.aSetStr([...workloadBase, "target"], `${targetName}/default`);
-	const endpoint = st.aStr([...targetBase, "endpoint"]);
-	if (!targetNeedsAccount(executor, endpoint)) {
+	const hasKey = !!st.aStr([...accountBase, "credentialRef"]);
+	// Account linkage rule:
+	//  - anthropic/openrouter: always need an account (key required).
+	//  - openai-compatible: link an account only when a key is present (optional
+	//    key — keyless local servers stay account-free).
+	//  - ollama/llama-cpp/acpx: never need an account — drop it even if a stale
+	//    key lingers from a prior executor, so a key isn't injected into a
+	//    keyless provider. executorAllowsOptionalKey gates the keep-on-hasKey
+	//    behavior so only the optional-key executor honors a leftover key.
+	const needsAccount = executorRequiresAccount(executor) || (executorAllowsOptionalKey(executor) && hasKey);
+	if (!needsAccount) {
 		st.aDel([...targetBase, "account"]);
 		st.aDel(accountBase);
 	} else {
@@ -233,8 +288,19 @@ function bgApiKey(): string {
 	return st.aStr(["inference", "accounts", ACCOUNT_NAME, "credentialRef"]);
 }
 function bgSetApiKey(v: string): void {
-	st.aSetStr(["inference", "accounts", ACCOUNT_NAME, "credentialRef"], v);
-	if (v) ensureAccount(ACCOUNT_NAME, bgExecutor());
+	const targetBase = ["inference", "targets", TARGET_NAME];
+	const accountBase = ["inference", "accounts", ACCOUNT_NAME];
+	st.aSetStr([...accountBase, "credentialRef"], v);
+	if (v) {
+		// A key was provided: ensure the account shape + link it to the target
+		// (even for local openai-compatible, which is otherwise keyless).
+		ensureAccount(ACCOUNT_NAME, bgExecutor());
+		st.aSetStr([...targetBase, "account"], ACCOUNT_NAME);
+	} else if (bgExecutor() === "openai-compatible") {
+		// Optional key removed on a keyless-capable executor: drop the account.
+		st.aDel([...targetBase, "account"]);
+		st.aDel(accountBase);
+	}
 }
 
 function bgModelOptions(): Array<{ value: string; label: string }> {
@@ -268,8 +334,16 @@ function aggApiKey(): string {
 	return st.aStr(["inference", "accounts", AGG_ACCOUNT_NAME, "credentialRef"]);
 }
 function aggSetApiKey(v: string): void {
-	st.aSetStr(["inference", "accounts", AGG_ACCOUNT_NAME, "credentialRef"], v);
-	if (v) ensureAccount(AGG_ACCOUNT_NAME, aggExecutor());
+	const targetBase = ["inference", "targets", AGG_TARGET_NAME];
+	const accountBase = ["inference", "accounts", AGG_ACCOUNT_NAME];
+	st.aSetStr([...accountBase, "credentialRef"], v);
+	if (v) {
+		ensureAccount(AGG_ACCOUNT_NAME, aggExecutor());
+		st.aSetStr([...targetBase, "account"], AGG_ACCOUNT_NAME);
+	} else if (aggExecutor() === "openai-compatible") {
+		st.aDel([...targetBase, "account"]);
+		st.aDel(accountBase);
+	}
 }
 function aggModelOptions(): Array<{ value: string; label: string }> {
 	if (!catalog) return [];
@@ -277,10 +351,12 @@ function aggModelOptions(): Array<{ value: string; label: string }> {
 	return (catalog.models[family] ?? []).map((m) => ({ value: m.id, label: `${m.name} (${m.id})` }));
 }
 const aggIsLocal = $derived(["openai-compatible", "ollama", "llama-cpp"].includes(aggExecutor()));
+// #3: openai-compatible aggregation shows an OPTIONAL key field always (local
+// servers stay keyless, but the field is there for gateways that need auth).
 const aggNeedsApiKey = $derived(
 	aggExecutor() === "anthropic" ||
 	aggExecutor() === "openrouter" ||
-	(aggExecutor() === "openai-compatible" && !isLocalEndpoint(aggEndpoint())),
+	aggExecutor() === "openai-compatible",
 );
 
 const EMBEDDING_PROVIDER_OPTIONS = [
@@ -314,10 +390,11 @@ function embSetEndpoint(v: string): void {
 }
 
 const isLocalExecutor = $derived(["openai-compatible", "ollama", "llama-cpp"].includes(bgExecutor()));
+// #3: openai-compatible background also shows an optional key field always.
 const needsApiKey = $derived(
 	bgExecutor() === "anthropic" ||
 	bgExecutor() === "openrouter" ||
-	(bgExecutor() === "openai-compatible" && !isLocalEndpoint(bgEndpoint())),
+	bgExecutor() === "openai-compatible",
 );
 const embNonNative = $derived(embProvider() && embProvider() !== "native" && embProvider() !== "");
 </script>
@@ -453,12 +530,12 @@ const embNonNative = $derived(embProvider() && embProvider() !== "native" && emb
 			{#if needsApiKey}
 				<SettingRow
 					title="API key (secret name)"
-					description="The Signet secret holding the key, e.g. ANTHROPIC_API_KEY. Or connect via the Providers panel above to skip this. The key value is never shown."
+				description="The Signet secret holding the key. Or connect via the Providers panel above to skip this. The key value is never shown."
 				>
 					<Input
 						class={inputClass}
 						value={bgApiKey()}
-						placeholder="ANTHROPIC_API_KEY"
+						placeholder={secretNameFor(bgExecutor())}
 						oninput={(e) => bgSetApiKey(e.currentTarget.value)}
 					/>
 				</SettingRow>
@@ -536,7 +613,7 @@ const embNonNative = $derived(embProvider() && embProvider() !== "native" && emb
 					<Input
 						class={inputClass}
 						value={aggApiKey()}
-						placeholder="ANTHROPIC_API_KEY"
+						placeholder={secretNameFor(aggExecutor())}
 						oninput={(e) => aggSetApiKey(e.currentTarget.value)}
 					/>
 				</SettingRow>

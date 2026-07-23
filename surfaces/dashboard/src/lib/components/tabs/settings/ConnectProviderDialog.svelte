@@ -30,6 +30,7 @@ let controller = $state(
 		supportsApiKey,
 		onSaved: onsaved,
 		linkOAuthAccount: linkOAuthAccountForProvider,
+		onNavigate: navigateOAuthWindow,
 	}),
 );
 
@@ -37,18 +38,62 @@ let verifying = $state(false);
 let verifyResult = $state<{ ok: boolean; message: string } | null>(null);
 let otp = $state("");
 let promptInput = $state("");
+// OAuth popup handle. Opened SYNCHRONOUSLY inside the sign-in click (the only
+// way browsers permit window.open), then navigated once the daemon emits the
+// auth URL. The daemon runs a local callback server (e.g. localhost:53692 for
+// Claude, localhost:1455 for Codex); the provider redirects there after login,
+// the daemon captures the code, and the SSE stream emits `connected`.
+let oauthWindow: Window | null = null;
+
+function openOAuthWindow(): boolean {
+	if (oauthWindow && !oauthWindow.closed) return true;
+	// NOTE: do NOT pass noopener — that makes window.open return null (spec),
+	// which would discard the handle and leave the popup stranded on about:blank.
+	// We need the handle to navigate the popup to the auth URL once it arrives.
+	oauthWindow = window.open("about:blank", "signet-oauth", "width=640,height=760");
+	if (!oauthWindow) {
+		// Popup blocker prevented the window. The UI still renders a clickable
+		// link when the URL arrives, so the user can open it manually.
+		oauthWindow = null;
+		return false;
+	}
+	return true;
+}
+
+function navigateOAuthWindow(url: string): void {
+	if (!oauthWindow || oauthWindow.closed) return;
+	try {
+		oauthWindow.location.href = url;
+	} catch {
+		// Cross-origin guard — can happen briefly on some browsers; the clickable
+		// link in the dialog is the fallback.
+	}
+}
+
+function closeOAuthWindow(): void {
+	if (oauthWindow && !oauthWindow.closed) {
+		try {
+			oauthWindow.close();
+		} catch {
+			/* ignore */
+		}
+	}
+	oauthWindow = null;
+}
 
 const format = apiKeyFormat(provider.id);
 const phase = $derived(controller.phase);
 
 onMount(() => {
-	// Auto-start when there's exactly one path (no method screen needed).
+	// Only auto-enter API-key mode (no window needed). OAuth is NEVER auto-
+	// started: window.open must run inside a real user gesture (the Sign in
+	// click), which onMount is not, so the popup would be blocked.
 	const path = controller.singlePath;
-	if (path === "oauth") controller.startOAuth();
-	else if (path === "key") controller.enterKeyMode();
+	if (path === "key") controller.enterKeyMode();
 });
 
 onDestroy(() => {
+	closeOAuthWindow();
 	controller.dispose();
 });
 
@@ -59,9 +104,24 @@ function handleKeydown(e: KeyboardEvent): void {
 }
 
 function handleClose(): void {
+	closeOAuthWindow();
 	controller.dispose();
 	onclose();
 }
+
+// Sign-in entry point: open the browser window FIRST (synchronously, inside
+// the click) so the popup is allowed, then start the daemon-side OAuth flow;
+// when the auth URL arrives it navigates the already-open window.
+function beginSignIn(): void {
+	openOAuthWindow();
+	controller.startOAuth();
+}
+
+// Close the popup once OAuth resolves (connected/error/cancel). Kept as an
+// effect so every exit path is covered without scattering closeOAuthWindow().
+$effect(() => {
+	if (phase.kind !== "oauth-running") closeOAuthWindow();
+});
 
 function linkAccountForApiKey(): void {
 	// Wire inference.accounts.<provider> as a key-bearing API account so the
@@ -207,7 +267,7 @@ function safeHref(uri: string | undefined): string | null {
 				<p class="lede">Choose how to connect {provider.name}.</p>
 				<div class="method-list">
 					{#if supportsOAuth}
-						<button class="method-card" onclick={() => controller.startOAuth()}>
+						<button class="method-card" onclick={() => beginSignIn()}>
 							<div class="method-icon"><RefreshCw class="size-4" /></div>
 							<div class="method-text">
 								<span class="method-label">Sign in</span>

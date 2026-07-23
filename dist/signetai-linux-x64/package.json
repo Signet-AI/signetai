@@ -1,6 +1,6 @@
 {
   "name": "signetai-linux-x64",
-  "version": "0.148.9",
+  "version": "0.148.10",
   "description": "Signet native binary for Linux x64",
   "os": [
     "linux"
