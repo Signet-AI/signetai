@@ -943,6 +943,10 @@ Check the configured embedding provider's availability. Results are cached for
 ```
 
 On failure, `available` is `false` and `error` contains a description.
+If a native inference call times out, Signet disables that native worker for
+the rest of the daemon session and reports it unavailable here. Signet probes
+local llama.cpp and Ollama fallbacks once; when neither is ready, later
+embedding requests degrade without repeating those probes.
 
 ### GET /api/embeddings/health
 

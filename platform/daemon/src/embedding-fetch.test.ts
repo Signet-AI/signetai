@@ -272,6 +272,40 @@ describe("fetchEmbedding", () => {
 		expect(capturedUrl).toContain("localhost:11434");
 	});
 
+	it("single-flights failed local fallback discovery and negative-caches the result", async () => {
+		let nativeCalls = 0;
+		let llamaModelProbes = 0;
+		let ollamaProbes = 0;
+		globalThis.fetch = mock((url: string | URL | Request) => {
+			const value = url.toString();
+			if (value.includes("/v1/models")) llamaModelProbes++;
+			if (value.includes("/api/embeddings")) ollamaProbes++;
+			return Promise.resolve(new Response("unreachable", { status: 503 }));
+		}) as unknown as typeof fetch;
+
+		setNativeEmbeddingProviderForTest(async () => {
+			nativeCalls++;
+			throw new Error("native worker timed out");
+		});
+		const cfg = {
+			provider: "native" as const,
+			model: "nomic-embed-text-v1.5",
+			dimensions: 768,
+			base_url: "",
+		};
+
+		const results = await Promise.all(Array.from({ length: 20 }, (_, index) => fetchEmbedding(`text-${index}`, cfg)));
+		expect(results.every((result) => result === null)).toBe(true);
+		expect(nativeCalls).toBe(20);
+		expect(llamaModelProbes).toBe(1);
+		expect(ollamaProbes).toBe(1);
+
+		await expect(fetchEmbedding("after-negative-cache", cfg)).resolves.toBeNull();
+		expect(nativeCalls).toBe(20);
+		expect(llamaModelProbes).toBe(1);
+		expect(ollamaProbes).toBe(1);
+	});
+
 	it("returns null when native provider is 'none'", async () => {
 		const result = await fetchEmbedding("test", {
 			provider: "none",

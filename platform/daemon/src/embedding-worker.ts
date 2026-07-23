@@ -20,6 +20,7 @@
 
 import { mkdirSync } from "node:fs";
 import { isMainThread, parentPort, workerData } from "node:worker_threads";
+import { type EmbeddingWasmConfig, configureEmbeddingWasm } from "./embedding-wasm-config";
 import type { EmbeddingWorkerInit, MainToWorkerMessage, WorkerToMainMessage } from "./embedding-worker-protocol";
 
 // Lazy, narrow transformers typing — keeps the contract we use without
@@ -32,7 +33,7 @@ interface TransformersEnv {
 	remoteHost?: string;
 	backends?: {
 		onnx?: {
-			wasm?: { wasmPaths?: string };
+			wasm?: EmbeddingWasmConfig;
 		};
 	};
 }
@@ -164,10 +165,7 @@ async function doInit(): Promise<void> {
 		if (init.remoteHostOverride) {
 			transformers.env.remoteHost = init.remoteHostOverride;
 		}
-		if (init.wasmDir) {
-			const wasm = transformers.env.backends?.onnx?.wasm;
-			if (wasm) wasm.wasmPaths = `${init.wasmDir}/`;
-		}
+		configureEmbeddingWasm(transformers.env.backends?.onnx?.wasm, init.wasmDir);
 
 		log("info", `Initializing ${init.modelId} (q8 quantization)`, {
 			cachePath: init.cacheDir,

@@ -189,6 +189,8 @@ export async function createEmbeddingWorkerHandle(opts: EmbeddingHandleOptions =
 	let lastError: string | null = null;
 	let lastFailureAt = 0;
 	let stopped = false;
+	let disabled = false;
+	let embedQueue: Promise<void> = Promise.resolve();
 
 	let resolveReady: () => void = () => {};
 	const ready = new Promise<void>((resolve) => {
@@ -234,12 +236,29 @@ export async function createEmbeddingWorkerHandle(opts: EmbeddingHandleOptions =
 					const timer = setTimeout(() => {
 						if (pending.has(id)) {
 							clearPending(id);
-							const message = `${kind} timed out after ${timeoutMs}ms (worker isolated; provider marked unavailable)`;
+							const message =
+								kind === "embed"
+									? `embed timed out after ${timeoutMs}ms (worker isolated; provider disabled until daemon restart)`
+									: `checkAvailable timed out after ${timeoutMs}ms (worker isolated; provider marked unavailable)`;
 							lastError = message;
 							lastFailureAt = Date.now();
 							status = { ...status, initialized: false, initializing: false, error: message };
 							logger.warn("native-embedding", message);
 							reject(new Error(message));
+							if (kind === "embed") {
+								disabled = true;
+								// A timed-out inference has left the worker unable to
+								// service further RPCs. Terminate it so the stuck WASM
+								// runtime cannot retain threads or memory indefinitely.
+								try {
+									const result = worker.terminate();
+									if (result && typeof (result as Promise<unknown>).then === "function") {
+										void Promise.resolve(result).catch(() => {});
+									}
+								} catch {
+									// best-effort
+								}
+							}
 						}
 					}, timeoutMs);
 					pending.set(id, { resolve: resolve as (v: unknown) => void, reject, timer });
@@ -315,7 +334,7 @@ export async function createEmbeddingWorkerHandle(opts: EmbeddingHandleOptions =
 	});
 
 	worker.on("exit", (code: number) => {
-		if (!stopped && code !== 0) {
+		if (!stopped && !disabled && code !== 0) {
 			logger.warn("native-embedding", "Embedding worker exited unexpectedly", { code });
 		}
 		status = {
@@ -333,14 +352,34 @@ export async function createEmbeddingWorkerHandle(opts: EmbeddingHandleOptions =
 
 	const handle: EmbeddingWorkerHandle = {
 		async embed(text: string): Promise<number[]> {
-			if (stopped) throw new Error("Native embedding provider shut down");
-			if (inCooldown()) throw new Error(lastError ?? "Native embedding init on cooldown");
-			return rpc<number[]>("embed", embedTimeoutMs, { text });
+			const run = embedQueue.then(() => {
+				if (stopped) throw new Error("Native embedding provider shut down");
+				if (disabled) throw new Error(lastError ?? "Native embedding provider disabled until daemon restart");
+				if (inCooldown()) throw new Error(lastError ?? "Native embedding init on cooldown");
+				return rpc<number[]>("embed", embedTimeoutMs, { text });
+			});
+			// ONNX Runtime's WASM session is process-global and has shown
+			// non-reentrant hangs under concurrent inference. Preserve caller
+			// concurrency while serializing the worker RPCs; failures do not
+			// poison the tail, and queued calls observe cooldown before posting.
+			embedQueue = run.then(
+				() => {},
+				() => {},
+			);
+			return run;
 		},
 
 		async checkAvailable(): Promise<EmbeddingProviderStatus> {
 			if (stopped) {
 				return { available: false, error: "Native embedding provider shut down", dimensions, modelCached: false };
+			}
+			if (disabled) {
+				return {
+					available: false,
+					error: lastError ?? "Native embedding provider disabled until daemon restart",
+					dimensions,
+					modelCached: false,
+				};
 			}
 			if (inCooldown()) {
 				return {

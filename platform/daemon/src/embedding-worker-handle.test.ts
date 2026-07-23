@@ -218,21 +218,46 @@ describe("embedding-worker-handle", () => {
 		await expect(p).rejects.toThrow(/exited/);
 	});
 
-	it("concurrent embeds get distinct RPC ids and resolve independently", async () => {
+	it("serializes concurrent embeds so ONNX never runs the shared session concurrently", async () => {
 		const { worker, factory } = fakePair();
 		const handle = await makeHandle(worker, factory);
 
 		const a = handle.embed("a");
 		const b = handle.embed("b");
 		await flush();
-		const ids = worker.posted.filter((m) => m.type === "embed").map((m) => (m.type === "embed" ? m.id : -1));
-		expect(new Set(ids).size).toBe(2);
+		let requests = worker.posted.filter((m) => m.type === "embed");
+		expect(requests).toHaveLength(1);
+		const firstId = requests[0]?.type === "embed" ? requests[0].id : -1;
 
-		worker.emit({ type: "embed_result", id: ids[0], vector: vec(0.01) });
-		worker.emit({ type: "embed_result", id: ids[1], vector: vec(0.02) });
+		worker.emit({ type: "embed_result", id: firstId, vector: vec(0.01) });
+		await flush();
+		requests = worker.posted.filter((m) => m.type === "embed");
+		expect(requests).toHaveLength(2);
+		const secondId = requests[1]?.type === "embed" ? requests[1].id : -1;
+		expect(secondId).not.toBe(firstId);
+
+		worker.emit({ type: "embed_result", id: secondId, vector: vec(0.02) });
 		const [ra, rb] = await Promise.all([a, b]);
 		expect(ra[0]).toBeCloseTo(0.01, 5);
 		expect(rb[0]).toBeCloseTo(0.02, 5);
+	});
+
+	it("does not post queued embeds after an earlier inference times out", async () => {
+		const { worker, factory } = fakePair();
+		const handle = await makeHandle(worker, factory, { embedTimeoutMs: 40, cooldownMs: 5_000 });
+
+		const first = handle.embed("stuck");
+		const queued = handle.embed("queued");
+		const outcomes = Promise.allSettled([first, queued]);
+		await flush();
+		expect(worker.posted.filter((m) => m.type === "embed")).toHaveLength(1);
+
+		const [firstResult, queuedResult] = await outcomes;
+		expect(firstResult.status).toBe("rejected");
+		expect(String(firstResult.status === "rejected" ? firstResult.reason : "")).toMatch(/timed out/);
+		expect(queuedResult.status).toBe("rejected");
+		expect(String(queuedResult.status === "rejected" ? queuedResult.reason : "")).toMatch(/timed out|disabled/);
+		expect(worker.posted.filter((m) => m.type === "embed")).toHaveLength(1);
 	});
 
 	it("stop() posts shutdown, terminates the worker, and rejects further embeds", async () => {
@@ -245,16 +270,16 @@ describe("embedding-worker-handle", () => {
 		await expect(handle.embed("after")).rejects.toThrow(/shut down/);
 	});
 
-	it("retries after the cooldown window elapses", async () => {
+	it("keeps a timed-out inference worker disabled after the cooldown window", async () => {
 		const { worker, factory } = fakePair();
 		const handle = await makeHandle(worker, factory, { embedTimeoutMs: 40, cooldownMs: 80 });
 
-		await expect(handle.embed("first")).rejects.toThrow(/timed out/); // -> cooldown
+		await expect(handle.embed("first")).rejects.toThrow(/timed out/);
+		const posted = worker.posted.length;
 		await Bun.sleep(120); // past cooldown
-		const p = handle.embed("retry");
-		await flush();
-		worker.emit({ type: "embed_result", id: lastEmbedId(worker), vector: vec() });
-		await expect(p).resolves.toHaveLength(DIM);
+		await expect(handle.embed("retry")).rejects.toThrow(/timed out|disabled/);
+		expect(worker.posted).toHaveLength(posted);
+		expect(worker.terminated).toBe(true);
 	});
 
 	// Regression test for #922: when the embedding worker handle is created

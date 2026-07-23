@@ -924,6 +924,7 @@ export async function checkEmbeddingProvider(cfg: EmbeddingConfig): Promise<Embe
 			if (nativeStatus.available) {
 				status.available = true;
 				status.dimensions = nativeStatus.dimensions;
+				setNativeFallbackProvider(null);
 			} else {
 				logger.warn("embedding", `Native provider unavailable: ${nativeStatus.error ?? "unknown"}`);
 				try {
@@ -964,6 +965,7 @@ export async function checkEmbeddingProvider(cfg: EmbeddingConfig): Promise<Embe
 				} catch {
 					status.error = `Native: ${nativeStatus.error ?? "not ready"}. Local providers not reachable.`;
 				}
+				if (!status.available) setNativeFallbackProvider("unavailable");
 			}
 		} else if (cfg.provider === "llama-cpp") {
 			const res = await fetch(`${cfg.base_url.replace(/\/$/, "")}/v1/models`, {
