@@ -1,6 +1,6 @@
 {
   "name": "@signet/connector-opencode",
-  "version": "0.148.8",
+  "version": "0.148.9",
   "description": "Signet connector for OpenCode - installs hooks and generates config",
   "type": "module",
   "main": "./dist/index.js",
@@ -25,8 +25,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@signet/connector-base": "0.148.8",
-    "@signet/core": "0.148.8",
+    "@signet/connector-base": "0.148.9",
+    "@signet/core": "0.148.9",
     "jsonc-parser": "3.3.1"
   },
   "devDependencies": {
