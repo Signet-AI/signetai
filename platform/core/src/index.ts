@@ -6,6 +6,12 @@
 export { Signet } from "./signet";
 export { Database, findSqliteVecExtension, loadSqliteVec } from "./database";
 export {
+	DEFAULT_NATIVE_EMBEDDING_DIMENSIONS,
+	DEFAULT_NATIVE_EMBEDDING_IDLE_UNLOAD_MS,
+	DEFAULT_NATIVE_EMBEDDING_MODEL,
+	EDGE_NATIVE_EMBEDDING_IDLE_UNLOAD_MS,
+} from "./embedding-defaults";
+export {
 	MEMORY_TYPES,
 	EXTRACTION_STATUSES,
 	JOB_STATUSES,

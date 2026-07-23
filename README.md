@@ -393,9 +393,12 @@ Requirements:
 
 Embeddings (choose one):
 
-- **Built-in** (recommended) — no extra setup, runs locally via ONNX (`nomic-embed-text-v1.5`)
+- **Built-in** (recommended) — no extra setup, runs locally via ONNX (`Xenova/all-MiniLM-L6-v2`, 384d)
 - **Ollama** — alternative local option, requires `nomic-embed-text` model
 - **OpenAI** — cloud option, requires `OPENAI_API_KEY`
+
+For constrained 64-bit ARM devices, including the Raspberry Pi 3B+, use the
+documented [edge installation](./docs/EDGE.md).
 
 ## Contributing
 

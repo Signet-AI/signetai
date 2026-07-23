@@ -1,5 +1,10 @@
 import { OpenClawConnector } from "@signet/connector-openclaw";
-import type { SetupDetection, WorkspaceSourceRepoSyncResult } from "@signet/core";
+import {
+	DEFAULT_NATIVE_EMBEDDING_DIMENSIONS,
+	DEFAULT_NATIVE_EMBEDDING_MODEL,
+	type SetupDetection,
+	type WorkspaceSourceRepoSyncResult,
+} from "@signet/core";
 import chalk from "chalk";
 
 export type HarnessChoice =
@@ -46,7 +51,13 @@ export const SETUP_HARNESS_CHOICES: readonly HarnessChoice[] = [
 	"hermes-agent",
 	"gemini",
 ];
-export const EMBEDDING_PROVIDER_CHOICES: readonly EmbeddingProviderChoice[] = ["native", "llama-cpp", "ollama", "openai", "none"];
+export const EMBEDDING_PROVIDER_CHOICES: readonly EmbeddingProviderChoice[] = [
+	"native",
+	"llama-cpp",
+	"ollama",
+	"openai",
+	"none",
+];
 export const EXTRACTION_PROVIDER_CHOICES: readonly ExtractionProviderChoice[] = [
 	"acpx",
 	"claude-code",
@@ -60,7 +71,12 @@ export const EXTRACTION_PROVIDER_CHOICES: readonly ExtractionProviderChoice[] = 
 ];
 export const OPENCLAW_RUNTIME_CHOICES: readonly OpenClawRuntimeChoice[] = ["plugin", "legacy"];
 export const DEPLOYMENT_TYPE_CHOICES: readonly DeploymentTypeChoice[] = ["local", "vps", "server"];
-const VPS_NON_LOCAL_EXTRACTION_PROVIDERS: readonly ExtractionProviderChoice[] = ["acpx", "claude-code", "codex", "opencode"];
+const VPS_NON_LOCAL_EXTRACTION_PROVIDERS: readonly ExtractionProviderChoice[] = [
+	"acpx",
+	"claude-code",
+	"codex",
+	"opencode",
+];
 const DETECTED_EXTRACTION_PROVIDER_ORDER: readonly ExtractionProviderChoice[] = [
 	"acpx",
 	"llama-cpp",
@@ -192,8 +208,9 @@ export function failNonInteractiveSetup(message: string): never {
 
 export function getEmbeddingDimensions(model: string): number {
 	switch (model) {
+		case DEFAULT_NATIVE_EMBEDDING_MODEL:
 		case "all-minilm":
-			return 384;
+			return DEFAULT_NATIVE_EMBEDDING_DIMENSIONS;
 		case "mxbai-embed-large":
 			return 1024;
 		case "text-embedding-3-large":

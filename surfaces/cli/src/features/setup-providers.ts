@@ -1,6 +1,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import { platform } from "node:os";
 import { confirm, select } from "@inquirer/prompts";
+import { DEFAULT_NATIVE_EMBEDDING_DIMENSIONS, DEFAULT_NATIVE_EMBEDDING_MODEL } from "@signet/core";
 import chalk from "chalk";
 import ora from "ora";
 import { getEmbeddingDimensions, readErr } from "./setup-shared.js";
@@ -78,7 +79,11 @@ export async function preflightOllamaEmbedding(model: string): Promise<{
 				const fallback = await promptOllamaFailureFallback();
 				if (fallback === "retry") continue;
 				if (fallback === "native") {
-					return { provider: "native", model: "nomic-embed-text-v1.5", dimensions: 768 };
+					return {
+						provider: "native",
+						model: DEFAULT_NATIVE_EMBEDDING_MODEL,
+						dimensions: DEFAULT_NATIVE_EMBEDDING_DIMENSIONS,
+					};
 				}
 				if (fallback === "openai") {
 					return promptOpenAIEmbeddingModel();
@@ -96,7 +101,11 @@ export async function preflightOllamaEmbedding(model: string): Promise<{
 			const fallback = await promptOllamaFailureFallback();
 			if (fallback === "retry") continue;
 			if (fallback === "native") {
-				return { provider: "native", model: "nomic-embed-text-v1.5", dimensions: 768 };
+				return {
+					provider: "native",
+					model: DEFAULT_NATIVE_EMBEDDING_MODEL,
+					dimensions: DEFAULT_NATIVE_EMBEDDING_DIMENSIONS,
+				};
 			}
 			if (fallback === "openai") {
 				return promptOpenAIEmbeddingModel();
@@ -121,7 +130,11 @@ export async function preflightOllamaEmbedding(model: string): Promise<{
 			const fallback = await promptOllamaFailureFallback();
 			if (fallback === "retry") continue;
 			if (fallback === "native") {
-				return { provider: "native", model: "nomic-embed-text-v1.5", dimensions: 768 };
+				return {
+					provider: "native",
+					model: DEFAULT_NATIVE_EMBEDDING_MODEL,
+					dimensions: DEFAULT_NATIVE_EMBEDDING_DIMENSIONS,
+				};
 			}
 			if (fallback === "openai") {
 				return promptOpenAIEmbeddingModel();

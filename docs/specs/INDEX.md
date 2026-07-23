@@ -743,6 +743,7 @@ Legend:
 | `predictive-memory-scorer` | approved | `docs/specs/approved/predictive-memory-scorer.md` | `memory-pipeline-v2`, `knowledge-architecture-schema`, `session-continuity-protocol` | - | |
 | `multi-agent-support` | approved | `docs/specs/approved/multi-agent-support.md` | `memory-pipeline-v2` | - | |
 | `signet-runtime` | approved | `docs/specs/approved/signet-runtime.md` | `memory-pipeline-v2` | - | |
+| `edge-runtime-profile` | approved | `docs/specs/approved/edge-runtime-profile.md` | `signet-runtime` | - | Raspberry Pi 3B+ resource contract: source-runtime install, lazy MiniLM embeddings, fixed-file polling, and repeatable RSS/latency gates. |
 | `model-provider-router` | approved | `docs/specs/approved/model-provider-router.md` | `signet-runtime` | - | Shared inference control plane for per-agent rosters, daemon workloads, native RPC, and OpenAI-compatible gateway routing |
 | `pipeline-pause-control` | complete | `docs/specs/complete/pipeline-pause-control.md` | `memory-pipeline-v2` | - | CLI and dashboard pause/resume shipped on top of live daemon pause/resume API, paused-mode observability, and local Ollama unload |
 | `daemon-startup-responsiveness` | planning | `docs/specs/planning/daemon-startup-responsiveness.md` | `memory-pipeline-v2` | - | Incident-driven stub for issue #331: keep /health responsive during large-db startup recovery and recover stale managed daemon processes cleanly |

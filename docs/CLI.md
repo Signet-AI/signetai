@@ -250,7 +250,7 @@ Wizard steps:
    - OpenAI API
    - Skip embeddings
 9. **Embedding Model** - Based on provider:
-   - Built-in: `nomic-embed-text-v1.5`
+   - Built-in: `Xenova/all-MiniLM-L6-v2` (384d)
    - Ollama: `nomic-embed-text`, `all-minilm`, `mxbai-embed-large`
    - OpenAI: text-embedding-3-small, text-embedding-3-large
    - Ollama selections run preflight checks for binary availability,

@@ -21,11 +21,16 @@
  * ready handshake with timeout, injectable workerFactory for tests.
  */
 
+import { fork } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Worker, type WorkerOptions } from "node:worker_threads";
-import { resolveDefaultBasePath } from "@signet/core";
+import {
+	DEFAULT_NATIVE_EMBEDDING_DIMENSIONS,
+	DEFAULT_NATIVE_EMBEDDING_MODEL,
+	resolveDefaultBasePath,
+} from "@signet/core";
 import type {
 	EmbeddingWorkerInit,
 	EmbeddingWorkerStatus,
@@ -39,8 +44,6 @@ import { materializeEmbeddedWasmAssets, resolveEmbeddedWorkerPath } from "./nati
 // Constants (overridable via options for deterministic tests)
 // ---------------------------------------------------------------------------
 
-const DEFAULT_MODEL_ID = "nomic-ai/nomic-embed-text-v1.5";
-const DEFAULT_DIMENSIONS = 768;
 const READY_TIMEOUT_MS = 30_000;
 const INIT_TIMEOUT_MS = 90_000; // first-run model download can take a while
 const EMBED_TIMEOUT_MS = 15_000;
@@ -71,10 +74,17 @@ export interface EmbeddingHandleOptions {
 	/** Test seam: point transformers env.remoteHost at a local blackhole. */
 	readonly remoteHostOverride?: string;
 	readonly workerFactory?: EmbeddingWorkerFactory;
+	/** Test seam for the edge child-process adapter. */
+	readonly processFactory?: EmbeddingWorkerFactory;
 	readonly readyTimeoutMs?: number;
 	readonly initTimeoutMs?: number;
 	readonly embedTimeoutMs?: number;
 	readonly cooldownMs?: number;
+	/**
+	 * Run the worker inside a child process so terminating an idle provider
+	 * returns native runtime/model pages to the OS. Used by the edge profile.
+	 */
+	readonly isolateProcess?: boolean;
 	/**
 	 * Pre-resolved embedding worker executable path. When provided (including
 	 * null), skips the native asset registry resolution. Needed when this
@@ -128,8 +138,8 @@ export interface EmbeddingWorkerHandle {
 // ---------------------------------------------------------------------------
 
 export async function createEmbeddingWorkerHandle(opts: EmbeddingHandleOptions = {}): Promise<EmbeddingWorkerHandle> {
-	const modelId = opts.modelId ?? DEFAULT_MODEL_ID;
-	const dimensions = opts.expectedDimensions ?? DEFAULT_DIMENSIONS;
+	const modelId = opts.modelId ?? DEFAULT_NATIVE_EMBEDDING_MODEL;
+	const dimensions = opts.expectedDimensions ?? DEFAULT_NATIVE_EMBEDDING_DIMENSIONS;
 	const readyTimeoutMs = opts.readyTimeoutMs ?? READY_TIMEOUT_MS;
 	const initTimeoutMs = opts.initTimeoutMs ?? INIT_TIMEOUT_MS;
 	const embedTimeoutMs = opts.embedTimeoutMs ?? EMBED_TIMEOUT_MS;
@@ -181,7 +191,14 @@ export async function createEmbeddingWorkerHandle(opts: EmbeddingHandleOptions =
 				? bundled
 				: (resolveEmbeddedWorkerPath("embedding-worker") ?? join(__dirname, "embedding-worker.ts"));
 	const workerOptions = { workerData: init, type: "module" } as const;
-	const worker = (opts.workerFactory ?? createNodeWorker)(workerPath, init, workerOptions);
+	const processPath = existsSync(join(__dirname, "embedding-process.js"))
+		? join(__dirname, "embedding-process.js")
+		: join(__dirname, "embedding-process.ts");
+	const worker = opts.workerFactory
+		? opts.workerFactory(workerPath, init, workerOptions)
+		: opts.isolateProcess
+			? (opts.processFactory ?? createNodeProcessWorker)(processPath, init, workerOptions)
+			: createNodeWorker(workerPath, init, workerOptions);
 
 	let nextId = 1;
 	const pending = new Map<number, PendingRpc>();
@@ -448,4 +465,39 @@ function createNodeWorker(workerPath: string, _init: EmbeddingWorkerInit, option
 	// node:worker_threads Worker structurally satisfies EmbeddingWorkerLike
 	// (on/postMessage/terminate). Exposed as a factory so tests inject a fake.
 	return new Worker(workerPath, options) as unknown as EmbeddingWorkerLike;
+}
+
+function createNodeProcessWorker(
+	processPath: string,
+	init: EmbeddingWorkerInit,
+	_options: WorkerOptions,
+): EmbeddingWorkerLike {
+	const child = fork(processPath, [], {
+		env: {
+			...process.env,
+			SIGNET_EMBEDDING_PROCESS_INIT: Buffer.from(JSON.stringify(init), "utf8").toString("base64url"),
+		},
+		stdio: ["ignore", "inherit", "inherit", "ipc"],
+	});
+
+	return {
+		on(event, listener) {
+			if (event === "message") {
+				child.on("message", listener as (message: unknown) => void);
+			} else {
+				child.on(event, listener);
+			}
+			return child;
+		},
+		postMessage(message) {
+			child.send(message);
+		},
+		terminate() {
+			if (child.exitCode !== null || child.signalCode !== null) return 0;
+			return new Promise<number>((resolve) => {
+				child.once("exit", (code) => resolve(code ?? 0));
+				child.kill();
+			});
+		},
+	};
 }

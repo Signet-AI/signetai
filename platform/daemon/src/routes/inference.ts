@@ -1,4 +1,3 @@
-import { getModels, getProviders } from "@earendil-works/pi-ai";
 import {
 	ROUTING_COST_TIERS,
 	ROUTING_OPERATION_KINDS,
@@ -830,6 +829,7 @@ export function mountInferenceRoutes(app: Hono, opts: InferenceRouteOptions = {}
 	// encrypted credential presence; it never returns credential values or makes
 	// provider network calls.
 	app.get("/api/inference/catalog", async (c) => {
+		const { getModels, getProviders } = await import("@earendil-works/pi-ai");
 		const providers = getProviders();
 		const models: Record<
 			string,
@@ -855,7 +855,7 @@ export function mountInferenceRoutes(app: Hono, opts: InferenceRouteOptions = {}
 				modelErrors[provider] = error instanceof Error ? error.message : "model catalog resolution failed";
 			}
 		}
-		const oauthProviders = await Promise.all(listOAuthProviderMetadata().map(oauthProviderStatus));
+		const oauthProviders = await Promise.all((await listOAuthProviderMetadata()).map(oauthProviderStatus));
 		return c.json({
 			providers,
 			models,
@@ -868,13 +868,15 @@ export function mountInferenceRoutes(app: Hono, opts: InferenceRouteOptions = {}
 	});
 
 	app.get("/api/inference/oauth/providers", async (c) => {
-		const providers = await Promise.all(listOAuthProviderMetadata().map(oauthProviderStatus));
+		const providers = await Promise.all((await listOAuthProviderMetadata()).map(oauthProviderStatus));
 		return c.json({ providers });
 	});
 
-	app.post("/api/inference/oauth/login/:id", (c) => {
+	app.post("/api/inference/oauth/login/:id", async (c) => {
 		try {
-			const login = startOAuthLogin(c.req.param("id"), () => getInferenceRouterOrNull()?.invalidateCredentialState());
+			const login = await startOAuthLogin(c.req.param("id"), () =>
+				getInferenceRouterOrNull()?.invalidateCredentialState(),
+			);
 			return new Response(login.stream, {
 				headers: {
 					"Content-Type": "text/event-stream",

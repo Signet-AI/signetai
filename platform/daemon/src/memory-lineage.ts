@@ -5,8 +5,6 @@ import { mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/promi
 import { basename, join } from "node:path";
 import type { LlmProvider } from "@signet/core";
 import { resolveDefaultBasePath } from "@signet/core";
-import { Tiktoken } from "js-tiktoken/lite";
-import cl100k_base from "js-tiktoken/ranks/cl100k_base";
 import { getAgentScope } from "./agent-id";
 import { yieldEvery } from "./async-yield";
 import type { WriteDb } from "./db-accessor";
@@ -15,6 +13,7 @@ import { logger } from "./logger";
 import { MEMORY_HEAD_MAX_TOKENS } from "./memory-head";
 import { buildAgentScopeClause } from "./memory-search";
 import { NATIVE_MEMORY_BRIDGE_SOURCE_NODE_ID } from "./native-memory-constants";
+import { countTokens } from "./pipeline/tokenizer";
 import { isNoiseSession, isTempProject } from "./session-noise";
 import { canonicalTranscriptRelativePath } from "./transcript-jsonl";
 
@@ -37,7 +36,6 @@ export const NOISE_PURGE_REASON = "automatic projection cleanup for temp/test se
 const REINDEX_BATCH_SIZE = 50;
 
 const BASE32 = "abcdefghijklmnopqrstuvwxyz234567";
-let projTok: Tiktoken | null = null;
 const purgeSeen = new Set<string>();
 
 // Incremental index cache: outer key = agentId or "*" for global, inner key = absolute path, value = stat fingerprint
@@ -48,12 +46,6 @@ const lastChangedManifestsByAgent = new Map<string, Set<string>>();
 
 // Tracks which manifest rel paths were referenced in the previous ledger render per agent
 const prevLedgerRefsByAgent = new Map<string, Set<string>>();
-
-function getProjectionTokenizer(): Tiktoken {
-	if (projTok) return projTok;
-	projTok = new Tiktoken(cl100k_base);
-	return projTok;
-}
 
 export type ArtifactKind = "summary" | "transcript" | "compaction" | "manifest";
 type SentenceQuality = "ok" | "fallback";
@@ -300,7 +292,7 @@ function pickAnchor(body: string, project: string | null, harness: string | null
 }
 
 function tokenCount(text: string): number {
-	return getProjectionTokenizer().encode(text).length;
+	return countTokens(text);
 }
 
 function joinParts(parts: ReadonlyArray<string>): string {

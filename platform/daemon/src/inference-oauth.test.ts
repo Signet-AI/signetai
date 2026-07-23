@@ -70,13 +70,13 @@ describe("inference OAuth", () => {
 	});
 
 	test("streams interactive login events and stores credentials only in the daemon", async () => {
-		expect(listOAuthProviderMetadata()).toContainEqual({
+		expect(await listOAuthProviderMetadata()).toContainEqual({
 			id: PROVIDER_ID,
 			name: "Signet test OAuth",
 			usesCallbackServer: false,
 		});
 
-		const login = startOAuthLogin(PROVIDER_ID);
+		const login = await startOAuthLogin(PROVIDER_ID);
 		const reader = login.stream.getReader();
 		const initial = await readUntil(reader, (text) => text.includes('"type":"prompt"'));
 		expect(initial).toContain("https://example.test/login");
@@ -140,7 +140,7 @@ describe("inference OAuth", () => {
 
 	test("rejects invalid provider ids before touching secret storage", async () => {
 		await expect(loadOAuthCredentials("../../escape")).rejects.toThrow("Invalid OAuth provider id");
-		expect(() => startOAuthLogin("missing-provider")).toThrow("Unknown OAuth provider");
+		await expect(startOAuthLogin("missing-provider")).rejects.toThrow("Unknown OAuth provider");
 	});
 
 	test("accepts only selection values offered by the OAuth provider", async () => {
@@ -155,7 +155,7 @@ describe("inference OAuth", () => {
 				},
 			}),
 		);
-		const login = startOAuthLogin(PROVIDER_ID);
+		const login = await startOAuthLogin(PROVIDER_ID);
 		const reader = login.stream.getReader();
 		const initial = await readUntil(reader, (text) => text.includes('"type":"select"'));
 		const selectData = initial

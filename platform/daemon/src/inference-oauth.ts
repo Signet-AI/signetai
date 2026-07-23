@@ -1,15 +1,20 @@
 import { randomUUID } from "node:crypto";
-import {
-	type OAuthCredentials,
-	type OAuthLoginCallbacks,
-	type OAuthPrompt,
-	type OAuthSelectPrompt,
-	getOAuthApiKey,
-	getOAuthProvider,
-	getOAuthProviders,
+import type {
+	OAuthCredentials,
+	OAuthLoginCallbacks,
+	OAuthPrompt,
+	OAuthSelectPrompt,
 } from "@earendil-works/pi-ai/oauth";
 import { logger } from "./logger";
 import { deleteSecretFromActiveProvider, getSecret, putSecret } from "./secrets";
+
+let oauthRuntime: Promise<typeof import("@earendil-works/pi-ai/oauth")> | null = null;
+
+function getOAuthRuntime(): Promise<typeof import("@earendil-works/pi-ai/oauth")> {
+	if (oauthRuntime) return oauthRuntime;
+	oauthRuntime = import("@earendil-works/pi-ai/oauth");
+	return oauthRuntime;
+}
 
 const OAUTH_SECRET_PREFIX = "SIGNET_OAUTH_";
 const OAUTH_SESSION_TTL_MS = 10 * 60_000;
@@ -93,20 +98,19 @@ function safeError(error: unknown): string {
 		.slice(0, 500);
 }
 
-export function listOAuthProviderMetadata(): Array<{
-	readonly id: string;
-	readonly name: string;
-	readonly usesCallbackServer: boolean;
-}> {
-	return getOAuthProviders().map((provider) => ({
+export async function listOAuthProviderMetadata(): Promise<
+	Array<{
+		readonly id: string;
+		readonly name: string;
+		readonly usesCallbackServer: boolean;
+	}>
+> {
+	const runtime = await getOAuthRuntime();
+	return runtime.getOAuthProviders().map((provider) => ({
 		id: provider.id,
 		name: provider.name,
 		usesCallbackServer: provider.usesCallbackServer === true,
 	}));
-}
-
-export function isOAuthProvider(providerId: string): boolean {
-	return getOAuthProvider(providerId) !== undefined;
 }
 
 export async function loadOAuthCredentials(providerId: string): Promise<OAuthCredentials | null> {
@@ -132,13 +136,15 @@ export async function loadOAuthCredentials(providerId: string): Promise<OAuthCre
 }
 
 export async function storeOAuthCredentials(providerId: string, credentials: OAuthCredentials): Promise<void> {
-	if (!getOAuthProvider(validateProviderId(providerId))) throw new Error(`Unknown OAuth provider: ${providerId}`);
+	if (!(await getOAuthRuntime()).getOAuthProvider(validateProviderId(providerId)))
+		throw new Error(`Unknown OAuth provider: ${providerId}`);
 	if (!isOAuthCredentials(credentials)) throw new Error(`Invalid OAuth credentials for ${providerId}`);
 	await putSecret(secretName(providerId), JSON.stringify(credentials));
 }
 
 export async function disconnectOAuthProvider(providerId: string): Promise<boolean> {
-	if (!getOAuthProvider(validateProviderId(providerId))) throw new Error(`Unknown OAuth provider: ${providerId}`);
+	if (!(await getOAuthRuntime()).getOAuthProvider(validateProviderId(providerId)))
+		throw new Error(`Unknown OAuth provider: ${providerId}`);
 	return deleteSecretFromActiveProvider(secretName(providerId));
 }
 
@@ -154,9 +160,9 @@ export async function resolveOAuthCredential(providerId: string): Promise<Resolv
 	const pending = (async () => {
 		const credentials = await loadOAuthCredentials(normalized);
 		if (!credentials) return null;
-		let result: Awaited<ReturnType<typeof getOAuthApiKey>>;
+		let result: Awaited<ReturnType<typeof import("@earendil-works/pi-ai/oauth")["getOAuthApiKey"]>>;
 		try {
-			result = await getOAuthApiKey(normalized, { [normalized]: credentials });
+			result = await (await getOAuthRuntime()).getOAuthApiKey(normalized, { [normalized]: credentials });
 		} catch (error) {
 			if (!(error instanceof Error) || error.message !== `Failed to refresh OAuth token for ${normalized}`) {
 				throw error;
@@ -203,15 +209,15 @@ function cleanupSession(session: OAuthLoginSession, reason?: string): void {
 	session.pending.clear();
 }
 
-export function startOAuthLogin(
+export async function startOAuthLogin(
 	providerId: string,
 	onCredentialsChanged?: () => void,
-): {
+): Promise<{
 	readonly sessionId: string;
 	readonly stream: ReadableStream<Uint8Array>;
-} {
+}> {
 	const normalized = validateProviderId(providerId);
-	const provider = getOAuthProvider(normalized);
+	const provider = (await getOAuthRuntime()).getOAuthProvider(normalized);
 	if (!provider) throw new Error(`Unknown OAuth provider: ${normalized}`);
 	if (activeSessions.size >= MAX_ACTIVE_OAUTH_SESSIONS) throw new Error("Too many active OAuth login sessions");
 

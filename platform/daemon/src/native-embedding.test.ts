@@ -54,15 +54,28 @@ class FakeWorker implements EmbeddingWorkerLike {
 // and reset — the properties callers rely on.
 describe("native-embedding facade (worker-backed)", () => {
 	let worker: FakeWorker;
+	let init: EmbeddingWorkerInit | null;
 
 	beforeEach(() => {
 		worker = new FakeWorker();
+		init = null;
 		const factory: EmbeddingWorkerFactory = (
 			_path: string,
-			_init: EmbeddingWorkerInit,
+			workerInit: EmbeddingWorkerInit,
 			_options: WorkerOptions,
-		): EmbeddingWorkerLike => worker;
+		): EmbeddingWorkerLike => {
+			init = workerInit;
+			return worker;
+		};
 		__setEmbeddingWorkerFactoryForTests(factory);
+		configureNativeEmbeddingAssets({
+			embeddingWorkerPath: null,
+			wasmDir: null,
+			transformersRuntimePath: null,
+			modelId: "test/native-model",
+			expectedDimensions: DIM,
+			idleUnloadMs: 60_000,
+		});
 	});
 
 	afterEach(async () => {
@@ -85,6 +98,30 @@ describe("native-embedding facade (worker-backed)", () => {
 		worker.emit({ type: "embed_result", id: req?.type === "embed" ? req.id : -1, vector: vec() });
 		const result = await p;
 		expect(result).toHaveLength(DIM);
+		expect(init?.modelId).toBe("test/native-model");
+		expect(init?.expectedDimensions).toBe(DIM);
+	});
+
+	it("unloads the worker after the configured idle interval", async () => {
+		configureNativeEmbeddingAssets({
+			embeddingWorkerPath: null,
+			wasmDir: null,
+			transformersRuntimePath: null,
+			idleUnloadMs: 10,
+		});
+		const pending = nativeEmbed("idle");
+		await flush();
+		worker.emit({ type: "ready" });
+		await flush();
+		const request = worker.posted.find((message) => message.type === "embed");
+		worker.emit({
+			type: "embed_result",
+			id: request?.type === "embed" ? request.id : -1,
+			vector: vec(),
+		});
+		await pending;
+		await Bun.sleep(30);
+		expect(worker.posted.some((message) => message.type === "shutdown")).toBe(true);
 	});
 
 	it("checkNativeProvider resolves with available:false on init failure (does not reject)", async () => {
@@ -176,6 +213,7 @@ describe("native-embedding facade (worker-backed)", () => {
 			type: "check_result",
 			id: checkReq?.type === "checkAvailable" ? checkReq.id : -1,
 			available: true,
+			error: null,
 		});
 		await checkP;
 		await flush();

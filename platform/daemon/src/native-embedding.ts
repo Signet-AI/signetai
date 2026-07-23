@@ -17,6 +17,11 @@
  */
 
 import {
+	DEFAULT_NATIVE_EMBEDDING_DIMENSIONS,
+	DEFAULT_NATIVE_EMBEDDING_IDLE_UNLOAD_MS,
+	DEFAULT_NATIVE_EMBEDDING_MODEL,
+} from "@signet/core";
+import {
 	type EmbeddingProviderSnapshot,
 	type EmbeddingProviderStatus,
 	type EmbeddingWorkerFactory,
@@ -34,6 +39,7 @@ export type NativeProviderSnapshot = EmbeddingProviderSnapshot;
 let handlePromise: Promise<EmbeddingWorkerHandle> | null = null;
 let resolvedHandle: EmbeddingWorkerHandle | null = null;
 let workerFactoryOverride: EmbeddingWorkerFactory | null = null;
+let idleTimer: ReturnType<typeof setTimeout> | null = null;
 
 /**
  * Pre-resolved native asset paths, set by configureNativeEmbeddingAssets()
@@ -48,6 +54,12 @@ let assetPathsOverride: {
 	readonly wasmAssetDir: string | null;
 	readonly transformersRuntimeAssetPath: string | null;
 } | null = null;
+let providerConfig = {
+	modelId: DEFAULT_NATIVE_EMBEDDING_MODEL,
+	expectedDimensions: DEFAULT_NATIVE_EMBEDDING_DIMENSIONS,
+	idleUnloadMs: DEFAULT_NATIVE_EMBEDDING_IDLE_UNLOAD_MS,
+	isolateProcess: false,
+};
 
 /**
  * Configure pre-resolved native asset paths for the embedding worker. Called
@@ -62,8 +74,18 @@ export function configureNativeEmbeddingAssets(paths: {
 	readonly embeddingWorkerPath: string | null;
 	readonly wasmAssetDir: string | null;
 	readonly transformersRuntimeAssetPath: string | null;
+	readonly modelId?: string;
+	readonly expectedDimensions?: number;
+	readonly idleUnloadMs?: number;
+	readonly isolateProcess?: boolean;
 }): void {
 	assetPathsOverride = paths;
+	providerConfig = {
+		modelId: paths.modelId ?? providerConfig.modelId,
+		expectedDimensions: paths.expectedDimensions ?? providerConfig.expectedDimensions,
+		idleUnloadMs: paths.idleUnloadMs ?? providerConfig.idleUnloadMs,
+		isolateProcess: paths.isolateProcess ?? providerConfig.isolateProcess,
+	};
 }
 
 // Tracks the most recent init/warm-up attempt. When the daemon's startup
@@ -75,24 +97,43 @@ export function configureNativeEmbeddingAssets(paths: {
 let initPromise: Promise<unknown> | null = null;
 
 function getHandle(): Promise<EmbeddingWorkerHandle> {
+	if (idleTimer) {
+		clearTimeout(idleTimer);
+		idleTimer = null;
+	}
 	if (!handlePromise) {
 		// SIGNET_EMBEDDING_REMOTE_HOST: test/debug seam that redirects the
 		// transformers model fetch (env.remoteHost). The event-loop isolation
 		// test points it at a local blackhole so first-run download "hangs"
 		// hermetically, without real network.
 		const remoteHostOverride = process.env.SIGNET_EMBEDDING_REMOTE_HOST?.trim() || undefined;
-		handlePromise = createEmbeddingWorkerHandle(
-			workerFactoryOverride
-				? { workerFactory: workerFactoryOverride }
-				: remoteHostOverride
-					? { remoteHostOverride, ...(assetPathsOverride ?? {}) }
-					: { ...(assetPathsOverride ?? {}) },
-		).then((h) => {
+		handlePromise = createEmbeddingWorkerHandle({
+			...providerConfig,
+			...(workerFactoryOverride ? { workerFactory: workerFactoryOverride } : {}),
+			...(remoteHostOverride ? { remoteHostOverride } : {}),
+			...(assetPathsOverride
+				? {
+						embeddingWorkerPath: assetPathsOverride.embeddingWorkerPath,
+						wasmAssetDir: assetPathsOverride.wasmAssetDir,
+						transformersRuntimeAssetPath: assetPathsOverride.transformersRuntimeAssetPath,
+					}
+				: {}),
+		}).then((h) => {
 			resolvedHandle = h;
 			return h;
 		});
 	}
 	return handlePromise;
+}
+
+function scheduleIdleShutdown(): void {
+	if (providerConfig.idleUnloadMs <= 0) return;
+	if (idleTimer) clearTimeout(idleTimer);
+	idleTimer = setTimeout(() => {
+		idleTimer = null;
+		void shutdownNativeProvider();
+	}, providerConfig.idleUnloadMs);
+	idleTimer.unref?.();
 }
 
 // ---------------------------------------------------------------------------
@@ -110,7 +151,11 @@ export async function nativeEmbed(text: string): Promise<number[]> {
 		await initPromise.catch(() => {});
 		initPromise = null;
 	}
-	return handle.embed(text);
+	try {
+		return await handle.embed(text);
+	} finally {
+		scheduleIdleShutdown();
+	}
 }
 
 export async function checkNativeProvider(): Promise<NativeProviderStatus> {
@@ -121,7 +166,11 @@ export async function checkNativeProvider(): Promise<NativeProviderStatus> {
 	p.finally(() => {
 		if (initPromise === p) initPromise = null;
 	});
-	return p;
+	try {
+		return await p;
+	} finally {
+		scheduleIdleShutdown();
+	}
 }
 
 export function getNativeProviderStatus(): NativeProviderSnapshot {
@@ -132,6 +181,10 @@ export function getNativeProviderStatus(): NativeProviderSnapshot {
 }
 
 export async function shutdownNativeProvider(): Promise<void> {
+	if (idleTimer) {
+		clearTimeout(idleTimer);
+		idleTimer = null;
+	}
 	const pending = handlePromise;
 	handlePromise = null;
 	initPromise = null;
@@ -165,4 +218,10 @@ export async function __resetEmbeddingProviderForTests(): Promise<void> {
 	await shutdownNativeProvider();
 	workerFactoryOverride = null;
 	assetPathsOverride = null;
+	providerConfig = {
+		modelId: DEFAULT_NATIVE_EMBEDDING_MODEL,
+		expectedDimensions: DEFAULT_NATIVE_EMBEDDING_DIMENSIONS,
+		idleUnloadMs: DEFAULT_NATIVE_EMBEDDING_IDLE_UNLOAD_MS,
+		isolateProcess: false,
+	};
 }

@@ -30,13 +30,17 @@ import {
 	resolveDefaultBasePath,
 	stripSignetBlock,
 } from "@signet/core";
-import { watch } from "chokidar";
 import { Hono } from "hono";
 import { resolveDaemonAgentId } from "./agent-id";
 import { yieldEvery } from "./async-yield";
 import { requirePermission } from "./auth";
 import { bindWithRetry } from "./bind-with-retry";
-import { migrateConfig, migrateInferenceProviders, migrateLegacyRoutingToRegistry } from "./config-migration";
+import {
+	migrateConfig,
+	migrateInferenceProviders,
+	migrateLegacyRoutingToRegistry,
+	migrateNativeEmbeddingModel,
+} from "./config-migration";
 import { listConnectors } from "./connectors/registry";
 import { clearAllPresence } from "./cross-agent";
 import { closeDbAccessor, getDbAccessor, getVectorRuntimeStatus, initDbAccessorAsync } from "./db-accessor";
@@ -73,6 +77,7 @@ import { invalidateTraversalCache } from "./pipeline/graph-traversal";
 import { stopModelRegistry } from "./pipeline/model-registry";
 import { configureLlmConcurrency } from "./pipeline/provider";
 import { startReconciler } from "./pipeline/skill-reconciler";
+import { startPollingFileWatcher } from "./polling-file-watcher";
 import { type RepairContext, structuralBackfill } from "./repair-actions";
 import { logFdSnapshot, startEventLoopMonitor, startFdPollMonitor, stopResourceMonitors } from "./resource-monitor";
 import {
@@ -106,6 +111,7 @@ import {
 	embeddingTrackerHandle as sharedEmbeddingTrackerHandle,
 	shuttingDown,
 } from "./routes/state.js";
+import { type RuntimeProfileConfig, loadRuntimeProfile } from "./runtime-profile";
 import { startSchedulerWorker } from "./scheduler";
 import { getSecret } from "./secrets.js";
 import { flushPendingCheckpoints, initCheckpointFlush, pruneCheckpoints } from "./session-checkpoints";
@@ -267,7 +273,7 @@ setupDashboardRoutes(app);
 // File Watcher
 // ============================================================================
 
-let watcher: ReturnType<typeof watch> | null = null;
+let watcher: { close(): Promise<void> | void } | null = null;
 let nativeMemoryBridge: NativeMemoryBridgeHandle | null = null;
 
 // Fast in-process cache layered on top of the persistent legacy_markdown_imports
@@ -1004,40 +1010,30 @@ function stopMemoryImportPoller(): void {
 	memoryImportInFlight = false;
 }
 
-function startFileWatcher() {
+async function startFileWatcher(runtime: RuntimeProfileConfig): Promise<void> {
 	// Do NOT watch the memory/ directory directly — Bun's fs.watch()
 	// opens one O_RDONLY FD per file in a watched directory and never
 	// releases them on close(), leaking ~8 000 FDs with canonical
 	// artifacts present. Canonical artifacts and backups are intentionally
 	// ignored; rare legacy non-artifact memory markdown imports are handled
 	// by the lightweight poller started after daemon readiness.
-	watcher = watch(
-		[
-			join(AGENTS_DIR, "agent.yaml"),
-			join(AGENTS_DIR, "AGENT.yaml"),
-			join(AGENTS_DIR, "config.yaml"),
-			join(AGENTS_DIR, "AGENTS.md"),
-			join(AGENTS_DIR, "SOUL.md"),
-			join(AGENTS_DIR, "MEMORY.md"),
-			join(AGENTS_DIR, "IDENTITY.md"),
-			join(AGENTS_DIR, "USER.md"),
-			join(AGENTS_DIR, "SIGNET-ARCHITECTURE.md"),
-			join(AGENTS_DIR, ".sigignore"),
-			join(AGENTS_DIR, "agents"),
-		],
-		{
-			persistent: true,
-			ignoreInitial: true,
-			ignored: createAgentsWatcherIgnoreMatcher(AGENTS_DIR),
-		},
-	);
-
-	watcher.on("error", (error) => {
+	const fixedPaths = [
+		join(AGENTS_DIR, "agent.yaml"),
+		join(AGENTS_DIR, "AGENT.yaml"),
+		join(AGENTS_DIR, "config.yaml"),
+		join(AGENTS_DIR, "AGENTS.md"),
+		join(AGENTS_DIR, "SOUL.md"),
+		join(AGENTS_DIR, "MEMORY.md"),
+		join(AGENTS_DIR, "IDENTITY.md"),
+		join(AGENTS_DIR, "USER.md"),
+		join(AGENTS_DIR, "SIGNET-ARCHITECTURE.md"),
+		join(AGENTS_DIR, ".sigignore"),
+	];
+	const onError = (error: unknown) => {
 		logger.error("watcher", "File watcher error", error instanceof Error ? error : new Error(String(error)));
-	});
-
-	watcher.on("change", (path) => {
-		logger.info("watcher", "File changed", { path });
+	};
+	const onChange = (path: string) => {
+		logger.info("watcher", "File changed", { path, profile: runtime.profile });
 		scheduleAutoCommit(path);
 
 		const base = basename(path);
@@ -1079,17 +1075,15 @@ function startFileWatcher() {
 				}),
 			);
 		}
-	});
-
-	watcher.on("unlink", (path) => {
+	};
+	const onUnlink = (path: string) => {
 		logger.info("watcher", "File removed", { path });
 		if (path.endsWith("SIGNET-ARCHITECTURE.md")) {
 			void ensureArchitectureDoc();
 		}
 		scheduleAutoCommit(path);
-	});
-
-	watcher.on("add", (path) => {
+	};
+	const onAdd = (path: string) => {
 		logger.info("watcher", "File added", { path });
 		scheduleAutoCommit(path);
 
@@ -1106,7 +1100,33 @@ function startFileWatcher() {
 				}),
 			);
 		}
+	};
+
+	if (runtime.watcher === "poll") {
+		watcher = await startPollingFileWatcher({
+			paths: fixedPaths,
+			intervalMs: 30_000,
+			onError,
+			onEvent(event, path) {
+				if (event === "change") onChange(path);
+				else if (event === "add") onAdd(path);
+				else onUnlink(path);
+			},
+		});
+		return;
+	}
+
+	const { watch } = await import("chokidar");
+	const chokidarWatcher = watch([...fixedPaths, join(AGENTS_DIR, "agents")], {
+		persistent: true,
+		ignoreInitial: true,
+		ignored: createAgentsWatcherIgnoreMatcher(AGENTS_DIR),
 	});
+	chokidarWatcher.on("error", onError);
+	chokidarWatcher.on("change", onChange);
+	chokidarWatcher.on("unlink", onUnlink);
+	chokidarWatcher.on("add", onAdd);
+	watcher = chokidarWatcher;
 }
 
 // ============================================================================
@@ -1309,6 +1329,7 @@ function syncAgentRoster(agentsDir: string): void {
 
 async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?: TelemetryCollector): Promise<void> {
 	const pipelinePaused = memoryCfg.pipelineV2.paused;
+	const runtimeProfile = loadRuntimeProfile(AGENTS_DIR);
 	configureLlmConcurrency(memoryCfg.pipelineV2.worker.maxLlmConcurrency);
 	clearStructuralBackfillTimer();
 	if (shouldWarnGraphExtractionWritesDisabled(memoryCfg)) {
@@ -1323,6 +1344,18 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 		model: memoryCfg.embedding.model,
 		dimensions: memoryCfg.embedding.dimensions,
 	});
+	if (memoryCfg.embedding.provider === "native") {
+		const { configureNativeEmbeddingAssets } = await import("./native-embedding");
+		configureNativeEmbeddingAssets({
+			embeddingWorkerPath: resolveEmbeddedWorkerPath("embedding-worker"),
+			wasmAssetDir: materializeEmbeddedWasmAssets(),
+			transformersRuntimeAssetPath: resolveEmbeddedWorkerPath("embedding-worker-transformers-runtime"),
+			modelId: memoryCfg.embedding.model,
+			expectedDimensions: memoryCfg.embedding.dimensions,
+			idleUnloadMs: runtimeProfile.embeddingIdleUnloadMs,
+			isolateProcess: runtimeProfile.embeddingIsolation === "process",
+		});
+	}
 
 	reloadAuthState(AGENTS_DIR);
 	if (!transcriptCaptureWorkerHandle) {
@@ -1353,13 +1386,24 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 		}
 	});
 
-	const routerStatus = await router.status(false);
-	const statusValue = routerStatus.ok ? routerStatus.value : null;
+	const hasSummaryConsumers = memoryCfg.pipelineV2.enabled || memoryCfg.dreaming.enabled;
+	// A disabled background pipeline does not need provider availability at
+	// startup. Deferring the status probe is important on edge systems because
+	// credential providers (and their crypto runtimes) otherwise become part
+	// of the pure-idle footprint. Inference API requests still resolve the same
+	// router on demand.
+	const shouldResolveBackgroundInference = !pipelinePaused && hasSummaryConsumers;
+	const routerStatus = shouldResolveBackgroundInference ? await router.status(false) : null;
+	const statusValue = routerStatus?.ok ? routerStatus.value : null;
 	const explicitInference = statusValue?.source === "explicit";
 	const commandExtractionConfigured = memoryCfg.pipelineV2.extraction.provider === "command";
-	const commandExtractionMode = memoryCfg.pipelineV2.enabled && commandExtractionConfigured;
-	const extractionWorkloadConfigured = commandExtractionConfigured || (await router.hasWorkload("memory_extraction"));
-	const synthesisWorkloadConfigured = await router.hasWorkload("session_synthesis");
+	const commandExtractionMode = memoryCfg.pipelineV2.enabled && memoryCfg.pipelineV2.extraction.provider === "command";
+	const extractionWorkloadConfigured =
+		memoryCfg.pipelineV2.enabled &&
+		!pipelinePaused &&
+		(commandExtractionMode || (await router.hasWorkload("memory_extraction")));
+	const synthesisWorkloadConfigured =
+		hasSummaryConsumers && !pipelinePaused && (await router.hasWorkload("session_synthesis"));
 	const extractionDecision =
 		!commandExtractionConfigured && extractionWorkloadConfigured
 			? await router.explain({ agentId: defaultAgentId, operation: "memory_extraction" })
@@ -1475,7 +1519,6 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 	// without synthesis; all other queued work requires an effective route.
 	const isSummarySynthesisAvailable = async (): Promise<boolean> =>
 		(await router.explain({ agentId: defaultAgentId, operation: "session_synthesis" }, true)).ok;
-	const hasSummaryConsumers = memoryCfg.pipelineV2.enabled || memoryCfg.dreaming.enabled;
 	const summarySynthesisAvailable = hasSummaryConsumers ? await isSummarySynthesisAvailable() : false;
 	if (hasSummaryConsumers && !pipelinePaused && (commandExtractionMode || summarySynthesisAvailable)) {
 		ensureSummaryWorker(getDbAccessor(), {
@@ -1496,7 +1539,17 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 	}
 
 	if (memoryCfg.pipelineV2.enabled && !pipelinePaused && extractionAvailable) {
-		const workerInit: WorkerInit | undefined = memoryCfg.pipelineV2.worker.threadedExtraction
+		const pipelineRuntimeCfg =
+			runtimeProfile.profile === "edge"
+				? {
+						...memoryCfg.pipelineV2,
+						worker: {
+							...memoryCfg.pipelineV2.worker,
+							threadedExtraction: false,
+						},
+					}
+				: memoryCfg.pipelineV2;
+		const workerInit: WorkerInit | undefined = pipelineRuntimeCfg.worker.threadedExtraction
 			? {
 					dbPath: MEMORY_DB,
 					vecExtensionPath: getVectorRuntimeStatus().extensionPath ?? "",
@@ -1523,7 +1576,7 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 
 		startPipeline(
 			getDbAccessor(),
-			memoryCfg.pipelineV2,
+			pipelineRuntimeCfg,
 			memoryCfg.embedding,
 			fetchEmbedding,
 			memoryCfg.search,
@@ -1533,18 +1586,6 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 			telemetry,
 			workerInit,
 		);
-
-		// Configure the main thread's own native embedding handle with the
-		// same pre-resolved asset paths. This is not strictly necessary on
-		// the main thread (it has the asset globals), but it ensures
-		// consistency and makes the main thread path identical to the
-		// extraction-thread path (#922).
-		const { configureNativeEmbeddingAssets } = await import("./native-embedding");
-		configureNativeEmbeddingAssets({
-			embeddingWorkerPath: resolveEmbeddedWorkerPath("embedding-worker"),
-			wasmAssetDir: materializeEmbeddedWasmAssets(),
-			transformersRuntimeAssetPath: resolveEmbeddedWorkerPath("embedding-worker-transformers-runtime"),
-		});
 	} else {
 		ensureRetentionWorker(getDbAccessor(), DEFAULT_RETENTION);
 	}
@@ -1630,6 +1671,7 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 				}
 			},
 			agentsDir: AGENTS_DIR,
+			watchFiles: runtimeProfile.watcher !== "poll",
 		});
 	}
 
@@ -1774,6 +1816,7 @@ process.on("unhandledRejection", (reason) => {
 // ============================================================================
 
 async function main() {
+	const runtimeProfile = loadRuntimeProfile(AGENTS_DIR);
 	logger.info("daemon", "Signet Daemon starting");
 	logger.info("daemon", "Agents directory", { path: AGENTS_DIR });
 	logger.info("daemon", "Network configured", { port: PORT, host: HOST, bindHost: BIND_HOST });
@@ -1788,19 +1831,23 @@ async function main() {
 	startFdPollMonitor();
 
 	const { extensionPath } = getVectorRuntimeStatus();
-	const bundled = join(__dirname, "synthesis-render-worker.js");
-	const workerPath = existsSync(bundled)
-		? bundled
-		: (resolveEmbeddedWorkerPath("synthesis-render-worker") ?? join(__dirname, "synthesis-render-worker.ts"));
 	let synthWorker: Worker | null = null;
-	try {
-		synthWorker = new Worker(workerPath, { type: "module" });
-	} catch (err) {
-		logger.warn(
-			"daemon",
-			"synthesis worker creation failed — using sync rendering",
-			err instanceof Error ? err : undefined,
-		);
+	if (runtimeProfile.profile === "standard") {
+		const bundled = join(__dirname, "synthesis-render-worker.js");
+		const workerPath = existsSync(bundled)
+			? bundled
+			: (resolveEmbeddedWorkerPath("synthesis-render-worker") ?? join(__dirname, "synthesis-render-worker.ts"));
+		try {
+			synthWorker = new Worker(workerPath, { type: "module" });
+		} catch (err) {
+			logger.warn(
+				"daemon",
+				"synthesis worker creation failed — using sync rendering",
+				err instanceof Error ? err : undefined,
+			);
+		}
+	} else {
+		logger.info("daemon", "Edge profile uses on-demand synthesis rendering");
 	}
 	let synthWorkerReady = false;
 	if (synthWorker) {
@@ -1866,6 +1913,7 @@ async function main() {
 		migrateConfig(AGENTS_DIR);
 		migrateInferenceProviders(AGENTS_DIR);
 		migrateLegacyRoutingToRegistry(AGENTS_DIR);
+		migrateNativeEmbeddingModel(AGENTS_DIR);
 	} catch (err) {
 		logger.warn("config-migration", "Config migration failed; continuing startup", {
 			error: err instanceof Error ? err.message : String(err),
@@ -1876,8 +1924,8 @@ async function main() {
 		scheduleAutoCommit(join(AGENTS_DIR, ".gitignore"));
 	}
 
-	startFileWatcher();
-	logger.info("watcher", "File watcher started");
+	await startFileWatcher(runtimeProfile);
+	logger.info("watcher", "File watcher started", { profile: runtimeProfile.profile, mode: runtimeProfile.watcher });
 	logFdSnapshot("post-watcher");
 
 	await ensureArchitectureDoc();
@@ -2109,7 +2157,13 @@ async function main() {
 		}
 
 		const startupCfg = loadMemoryConfig(AGENTS_DIR);
-		if (startupCfg.embedding.provider !== "none") {
+		const startupRuntimeProfile = loadRuntimeProfile(AGENTS_DIR);
+		if (startupCfg.embedding.provider === "native" && !startupRuntimeProfile.probeEmbeddingAtStartup) {
+			logger.info("daemon", "Native embedding model will load on first use", {
+				profile: startupRuntimeProfile.profile,
+				model: startupCfg.embedding.model,
+			});
+		} else if (startupCfg.embedding.provider !== "none") {
 			checkEmbeddingProvider(startupCfg.embedding)
 				.then((embeddingStatus) => {
 					if (!embeddingStatus.available) {

@@ -157,17 +157,22 @@ export function startEmbeddingTracker(
 		if (!running) return;
 
 		try {
-			// 1. Check provider health (uses existing 30s cache)
+			// Query first so an idle, fully-embedded workspace does not load the
+			// native model merely to prove there is no work.
+			const staleRows = accessor.withReadDb((db) => {
+				return listStaleEmbeddingRows(db, embeddingCfg.model, trackerCfg.batchSize) as StaleRow[];
+			});
+			lastQueueDepth = staleRows.length;
+			lastCycleAt = new Date().toISOString();
+			if (staleRows.length === 0) return;
+
+			// Check provider health only when work exists (uses existing 30s cache).
 			const health = await checkProviderFn(embeddingCfg);
 			if (!health.available) {
 				skippedCycles++;
 				return;
 			}
 
-			// 2. Query stale/missing embeddings (read-only)
-			const staleRows = accessor.withReadDb((db) => {
-				return listStaleEmbeddingRows(db, embeddingCfg.model, trackerCfg.batchSize) as StaleRow[];
-			});
 			const cycle = await processEmbeddingCycle(staleRows, failures, embeddingCfg, trackerCfg.pollMs, fetchEmbeddingFn);
 
 			lastQueueDepth = cycle.queueDepth;

@@ -41,7 +41,6 @@ export function selectWithTokenBudget<T extends { content: string }>(rows: Reado
 }
 
 const TRUNCATED_MARKER = "\n[context truncated]";
-const TRUNCATED_MARKER_TOKENS = countTokens(TRUNCATED_MARKER);
 
 /**
  * Truncate `inject` to fit within `mainBudget` tokens.
@@ -52,7 +51,8 @@ const TRUNCATED_MARKER_TOKENS = countTokens(TRUNCATED_MARKER);
 export function applyTokenBudget(inject: string, mainBudget: number): string {
 	if (mainBudget <= 0) return "";
 	if (countTokens(inject) <= mainBudget) return inject;
+	const truncatedMarkerTokens = countTokens(TRUNCATED_MARKER);
 	// Budget too tight to fit content + marker — truncate without marker.
-	if (mainBudget <= TRUNCATED_MARKER_TOKENS) return truncateToTokens(inject, mainBudget);
-	return truncateToTokens(inject, mainBudget - TRUNCATED_MARKER_TOKENS) + TRUNCATED_MARKER;
+	if (mainBudget <= truncatedMarkerTokens) return truncateToTokens(inject, mainBudget);
+	return truncateToTokens(inject, mainBudget - truncatedMarkerTokens) + TRUNCATED_MARKER;
 }

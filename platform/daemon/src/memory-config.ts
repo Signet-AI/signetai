@@ -1,6 +1,8 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+	DEFAULT_NATIVE_EMBEDDING_DIMENSIONS,
+	DEFAULT_NATIVE_EMBEDDING_MODEL,
 	DEFAULT_PIPELINE_TIMEOUT_MS,
 	DEFAULT_PROVIDER_RATE_LIMIT,
 	type DreamingConfig,
@@ -279,6 +281,9 @@ export const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
 export const DEFAULT_PROMPT_SUBMIT_EMBEDDING_TIMEOUT_MS = 1000;
 export const MIN_PROMPT_SUBMIT_EMBEDDING_TIMEOUT_MS = 1000;
 export const MAX_PROMPT_SUBMIT_EMBEDDING_TIMEOUT_MS = 300000;
+export const MIN_EMBEDDING_DIMENSIONS = 1;
+export const MAX_EMBEDDING_DIMENSIONS = 65_536;
+export const MAX_EMBEDDING_MODEL_LENGTH = 512;
 
 export interface ResolvedMemoryConfig {
 	embedding: EmbeddingConfig;
@@ -1122,8 +1127,8 @@ export function loadMemoryConfig(agentsDir: string): ResolvedMemoryConfig {
 	const defaults: ResolvedMemoryConfig = {
 		embedding: {
 			provider: "native",
-			model: "nomic-embed-text-v1.5",
-			dimensions: 768,
+			model: DEFAULT_NATIVE_EMBEDDING_MODEL,
+			dimensions: DEFAULT_NATIVE_EMBEDDING_DIMENSIONS,
 			base_url: "",
 			promptSubmitTimeoutMs: DEFAULT_PROMPT_SUBMIT_EMBEDDING_TIMEOUT_MS,
 			llamaCppMaxInputTokens: DEFAULT_LLAMACPP_MAX_INPUT_TOKENS,
@@ -1178,8 +1183,33 @@ export function loadMemoryConfig(agentsDir: string): ResolvedMemoryConfig {
 				const rawProvider = String(emb.provider);
 				defaults.embedding.provider =
 					rawProvider === "local" ? "native" : (rawProvider as "native" | "llama-cpp" | "ollama" | "openai");
-				defaults.embedding.model = (emb.model as string | undefined) ?? defaults.embedding.model;
-				defaults.embedding.dimensions = Number.parseInt(String(emb.dimensions ?? "768"), 10);
+				const configuredModel = typeof emb.model === "string" ? emb.model.trim() : "";
+				if (configuredModel && configuredModel.length <= MAX_EMBEDDING_MODEL_LENGTH) {
+					defaults.embedding.model = configuredModel;
+				} else if (configuredModel) {
+					logger.warn("config", "Ignoring invalid embedding.model", {
+						length: configuredModel.length,
+						maxLength: MAX_EMBEDDING_MODEL_LENGTH,
+						fallback: defaults.embedding.model,
+					});
+				}
+				if (emb.dimensions !== undefined) {
+					const dimensions = Number(emb.dimensions);
+					if (
+						Number.isSafeInteger(dimensions) &&
+						dimensions >= MIN_EMBEDDING_DIMENSIONS &&
+						dimensions <= MAX_EMBEDDING_DIMENSIONS
+					) {
+						defaults.embedding.dimensions = dimensions;
+					} else {
+						logger.warn("config", "Ignoring invalid embedding.dimensions", {
+							value: emb.dimensions,
+							min: MIN_EMBEDDING_DIMENSIONS,
+							max: MAX_EMBEDDING_DIMENSIONS,
+							fallback: defaults.embedding.dimensions,
+						});
+					}
+				}
 				const explicitBaseUrl =
 					(typeof emb.base_url === "string" ? emb.base_url : undefined) ??
 					(typeof emb.endpoint === "string" ? emb.endpoint : undefined);

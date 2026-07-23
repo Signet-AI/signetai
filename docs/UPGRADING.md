@@ -1,4 +1,23 @@
-# Upgrade Guide — Inference Provisioning Cutover (#947)
+# Upgrade Guide
+
+## Native embedding default and edge profile (#921)
+
+Existing configs using the exact built-in `nomic-embed-text-v1.5`/768d
+default migrate once to `Xenova/all-MiniLM-L6-v2`/384d. Custom native models,
+custom dimensions, Ollama, llama.cpp, OpenAI, and disabled embeddings are not
+changed. Source memories remain intact; the existing embedding tracker
+re-embeds rows whose model or dimensions no longer match.
+
+The model is now loaded from `embedding.model` and validated against
+`embedding.dimensions`, so custom native settings are no longer ignored.
+Verify that custom native model IDs are valid Transformers.js repositories and
+that their configured dimensions match their output.
+
+The optional `runtime.profile: edge` path is documented in
+[EDGE.md](./EDGE.md). It uses the source/Bun daemon rather than the
+self-contained release binary.
+
+## Inference provisioning cutover (#947)
 
 **Breaking change.** This release replaces Signet's hand-rolled inference
 providers with two backends: **Pi** (`@earendil-works/pi-ai`) for every direct

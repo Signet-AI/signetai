@@ -11,6 +11,7 @@
  */
 import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { DEFAULT_NATIVE_EMBEDDING_DIMENSIONS, DEFAULT_NATIVE_EMBEDDING_MODEL } from "@signet/core";
 import { type Document, isMap, isPair, parseDocument } from "yaml";
 import { logger } from "./logger";
 
@@ -404,6 +405,63 @@ export function migrateLegacyRoutingToRegistry(agentsDir: string): void {
 			mutations,
 			file: path,
 			note: "Routing now flows through inference.*; pipelineV2 tuning fields (timeout, maxTokens, enabled) preserved.",
+		});
+	}
+}
+
+// ---------------------------------------------------------------------------
+// v5: move the built-in embedding default to MiniLM (#921)
+// ---------------------------------------------------------------------------
+
+const LEGACY_NATIVE_MODELS = new Set(["nomic-embed-text-v1.5", "nomic-ai/nomic-embed-text-v1.5"]);
+
+export function migrateNativeEmbeddingModel(agentsDir: string): void {
+	const path = findConfigPath(agentsDir);
+	if (!path) return;
+
+	let text: string;
+	try {
+		text = readFileSync(path, "utf-8");
+	} catch {
+		return;
+	}
+	const vMatch = /^configVersion:\s*(\d+)/m.exec(text);
+	if (vMatch && Number(vMatch[1]) >= 5) return;
+
+	const doc = parseDocument(text);
+	if (doc.errors.length > 0) {
+		logger.warn("config-migration", "Skipping native embedding migration: agent.yaml has parse errors", {
+			file: path,
+			errors: doc.errors.map((error) => error.message).slice(0, 3),
+		});
+		return;
+	}
+
+	const embedding = doc.getIn(["embedding"], true);
+	let migrated = false;
+	if (isMap(embedding)) {
+		const provider = String(embedding.get("provider") ?? "");
+		const model = String(embedding.get("model") ?? "");
+		const dimensions = embedding.get("dimensions");
+		if (
+			(provider === "native" || provider === "local") &&
+			LEGACY_NATIVE_MODELS.has(model) &&
+			(dimensions === undefined || dimensions === 768)
+		) {
+			embedding.set("model", DEFAULT_NATIVE_EMBEDDING_MODEL);
+			embedding.set("dimensions", DEFAULT_NATIVE_EMBEDDING_DIMENSIONS);
+			migrated = true;
+		}
+	}
+
+	stampConfigVersion(doc, 5);
+	writeAtomic(path, doc.toString());
+	if (migrated) {
+		logger.info("config-migration", "Migrated native embedding model to the edge default", {
+			file: path,
+			model: DEFAULT_NATIVE_EMBEDDING_MODEL,
+			dimensions: DEFAULT_NATIVE_EMBEDDING_DIMENSIONS,
+			note: "Existing rows are re-embedded by the embedding tracker without deleting source memories.",
 		});
 	}
 }

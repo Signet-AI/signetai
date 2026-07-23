@@ -6,7 +6,6 @@ import { fetchEmbedding } from "../embedding-fetch.js";
 import { linkMemoryToEntities, previewMemoryEntityLinks } from "../inline-entity-linker.js";
 import { getLlmProvider } from "../llm.js";
 import { loadMemoryConfig } from "../memory-config.js";
-import { clusterEntities } from "../pipeline/community-detection.js";
 import { DEFAULT_RETENTION, runRetentionSweepOnce } from "../pipeline/retention-worker.js";
 import {
 	type RepairContext,
@@ -407,7 +406,8 @@ export function registerRepairRoutes(
 		);
 	});
 
-	app.post("/api/repair/cluster-entities", (c) => {
+	app.post("/api/repair/cluster-entities", async (c) => {
+		const { clusterEntities } = await import("../pipeline/community-detection.js");
 		const agentId = resolveRepairAgentId(c);
 		const result = getDbAccessor().withWriteTx((db) => clusterEntities(db, agentId));
 		return c.json(result);

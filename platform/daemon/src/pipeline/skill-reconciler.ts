@@ -12,7 +12,6 @@
 
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { watch } from "chokidar";
 import type { DbAccessor } from "../db-accessor.js";
 import { logger } from "../logger.js";
 import type { EmbeddingConfig, PipelineV2Config } from "../memory-config.js";
@@ -31,6 +30,7 @@ export interface ReconcilerDeps {
 	readonly fetchEmbedding: (text: string, cfg: EmbeddingConfig) => Promise<number[] | null>;
 	readonly getProvider: () => LlmProvider | null;
 	readonly agentsDir: string;
+	readonly watchFiles?: boolean;
 }
 
 export interface ReconcilerHandle {
@@ -231,41 +231,50 @@ export function startReconciler(deps: ReconcilerDeps): ReconcilerHandle {
 	}, intervalMs);
 
 	// File watcher for low-latency reconciliation
-	let watcher: ReturnType<typeof watch> | null = null;
+	let watcher: { close(): Promise<void> | void } | null = null;
+	let stopped = false;
 
-	if (existsSync(dir)) {
-		watcher = watch(join(dir, "*", "SKILL.md"), {
-			ignoreInitial: true,
-			awaitWriteFinish: { stabilityThreshold: 500 },
-		});
-
-		watcher.on("add", (filePath) => {
-			const skillName = basename(dirname(filePath));
-			logger.info("reconciler", "SKILL.md added", { skill: skillName });
-			reconcileSkill(skillName, filePath, deps);
-		});
-
-		watcher.on("change", (filePath) => {
-			const skillName = basename(dirname(filePath));
-			logger.info("reconciler", "SKILL.md changed", { skill: skillName });
-			reconcileSkill(skillName, filePath, deps);
-		});
-
-		watcher.on("unlink", (filePath) => {
-			const skillName = basename(dirname(filePath));
-			logger.info("reconciler", "SKILL.md removed", { skill: skillName });
-			uninstallSkillNode({ skillName }, deps.accessor);
-		});
+	if (deps.watchFiles !== false && existsSync(dir)) {
+		void import("chokidar")
+			.then(({ watch }) => {
+				if (stopped) return;
+				const active = watch(join(dir, "*", "SKILL.md"), {
+					ignoreInitial: true,
+					awaitWriteFinish: { stabilityThreshold: 500 },
+				});
+				active.on("add", (filePath) => {
+					const skillName = basename(dirname(filePath));
+					logger.info("reconciler", "SKILL.md added", { skill: skillName });
+					reconcileSkill(skillName, filePath, deps);
+				});
+				active.on("change", (filePath) => {
+					const skillName = basename(dirname(filePath));
+					logger.info("reconciler", "SKILL.md changed", { skill: skillName });
+					reconcileSkill(skillName, filePath, deps);
+				});
+				active.on("unlink", (filePath) => {
+					const skillName = basename(dirname(filePath));
+					logger.info("reconciler", "SKILL.md removed", { skill: skillName });
+					uninstallSkillNode({ skillName }, deps.accessor);
+				});
+				watcher = active;
+			})
+			.catch((error) => {
+				logger.error("reconciler", "Failed to start skill watcher", error instanceof Error ? error : undefined, {
+					error: String(error),
+				});
+			});
 	}
 
 	logger.info("reconciler", "Skill reconciler started", {
 		intervalMs,
 		skillsDir: dir,
-		watcherActive: watcher !== null,
+		watcherRequested: deps.watchFiles !== false && existsSync(dir),
 	});
 
 	return {
 		stop() {
+			stopped = true;
 			clearInterval(timer);
 			if (watcher) {
 				watcher.close();

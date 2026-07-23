@@ -31,6 +31,7 @@ import { OpenClawConnector } from "@signet/connector-openclaw";
 import { OpenCodeConnector } from "@signet/connector-opencode";
 import { PiConnector } from "@signet/connector-pi";
 import {
+	DEFAULT_NATIVE_EMBEDDING_MODEL,
 	IDENTITY_FILES,
 	type ImportResult,
 	type MigrationResult,
@@ -614,6 +615,8 @@ async function syncNativeEmbeddingModel(basePath: string): Promise<{
 						};
 					} else {
 						const active = typeof body.provider === "string" ? body.provider : "unknown";
+						const activeModel =
+							typeof body.model === "string" && body.model.trim() ? body.model : DEFAULT_NATIVE_EMBEDDING_MODEL;
 						const available = body.available === true;
 						const err = typeof body.error === "string" ? body.error : null;
 						const reported = body.modelCached === true;
@@ -643,9 +646,7 @@ async function syncNativeEmbeddingModel(basePath: string): Promise<{
 							} else {
 								result = {
 									status: !hadCache && hasCache ? "updated" : "current",
-									message: hasCache
-										? "nomic-ai/nomic-embed-text-v1.5"
-										: "nomic-ai/nomic-embed-text-v1.5 (runtime cache)",
+									message: hasCache ? activeModel : `${activeModel} (runtime cache)`,
 								};
 							}
 						}

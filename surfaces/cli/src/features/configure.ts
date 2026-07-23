@@ -1,7 +1,12 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { checkbox, confirm, input, select } from "@inquirer/prompts";
-import { parseSimpleYaml, readNetworkMode } from "@signet/core";
+import {
+	DEFAULT_NATIVE_EMBEDDING_DIMENSIONS,
+	DEFAULT_NATIVE_EMBEDDING_MODEL,
+	parseSimpleYaml,
+	readNetworkMode,
+} from "@signet/core";
 import chalk from "chalk";
 import {
 	chooseWorkspaceCandidate,
@@ -303,8 +308,9 @@ async function configureEmbedding(yaml: string): Promise<string> {
 	let dims = 768;
 
 	if (provider === "native") {
-		model = "nomic-embed-text-v1.5";
-		console.log("  Embedding model: nomic-embed-text-v1.5 (768d)");
+		model = DEFAULT_NATIVE_EMBEDDING_MODEL;
+		dims = DEFAULT_NATIVE_EMBEDDING_DIMENSIONS;
+		console.log(`  Embedding model: ${DEFAULT_NATIVE_EMBEDDING_MODEL} (${DEFAULT_NATIVE_EMBEDDING_DIMENSIONS}d)`);
 	} else if (provider === "llama-cpp") {
 		const selected = await select({
 			message: "Model:",

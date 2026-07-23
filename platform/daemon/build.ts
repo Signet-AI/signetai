@@ -27,6 +27,8 @@ const targets: Array<{
 	{ entrypoint: "./src/mcp-stdio.ts", outfile: "./dist/mcp-stdio.js" },
 	{ entrypoint: "./src/index.ts", outfile: "./dist/index.js" },
 	{ entrypoint: "./src/synthesis-render-worker.ts", outfile: "./dist/synthesis-render-worker.js" },
+	{ entrypoint: "./src/embedding-process.ts", outfile: "./dist/embedding-process.js" },
+	{ entrypoint: "./src/embedding-worker.ts", outfile: "./dist/embedding-worker.js" },
 	{ entrypoint: "./src/pipeline/extraction-thread.ts", outfile: "./dist/extraction-thread.js" },
 ];
 

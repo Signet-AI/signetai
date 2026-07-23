@@ -228,6 +228,23 @@ specs:
       - "Signet operates as a standalone runtime channel independent of harness-specific connectors"
     decision: null
 
+  - id: edge-runtime-profile
+    status: approved
+    path: docs/specs/approved/edge-runtime-profile.md
+    hard_depends_on:
+      - signet-runtime
+    soft_depends_on: []
+    blocks: []
+    informed_by:
+      - https://github.com/Signet-AI/signetai/issues/921
+    success_criteria:
+      - "A Raspberry Pi 3B+ edge installation settles below 100 MB RSS before the lazily loaded embedding model is used"
+      - "The built-in embedding provider honors the configured model and dimensions and defaults new and legacy-default installs to Xenova/all-MiniLM-L6-v2 at 384 dimensions"
+      - "One query embedding completes in low single-digit seconds on a Raspberry Pi 3B+ using the native ONNX Runtime ARM64 backend"
+      - "The edge profile avoids recursive native file watchers, eagerly loaded visualization libraries, and startup embedding inference"
+      - "The edge install and measurement procedure is documented and repeatable"
+    decision: null
+
   - id: model-provider-router
     status: approved
     path: docs/specs/approved/model-provider-router.md

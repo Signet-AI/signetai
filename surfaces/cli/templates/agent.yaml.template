@@ -31,21 +31,27 @@ harnesses:
   - opencode
   - openclaw
 
+# Runtime profile: "standard" or "edge".
+# Edge uses fixed-file polling and lazy native embeddings on constrained ARM.
+runtime:
+  profile: standard
+
 # ============================================================================
 # Embedding Configuration
 # ============================================================================
 
 embedding:
-  # Provider: "ollama" (local) or "openai"
-  provider: ollama
+  # Provider: "native", "llama-cpp", "ollama", "openai", or "none"
+  provider: native
   
   # Model name
+  # Native: Xenova/all-MiniLM-L6-v2
   # Ollama: nomic-embed-text, all-minilm, mxbai-embed-large
   # OpenAI: text-embedding-3-small, text-embedding-3-large
-  model: nomic-embed-text
+  model: Xenova/all-MiniLM-L6-v2
   
   # Vector dimensions (must match model output)
-  dimensions: 768
+  dimensions: 384
   
   # API endpoint (optional, defaults to standard URLs)
   # base_url: http://localhost:11434

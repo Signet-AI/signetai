@@ -87,11 +87,14 @@ harnesses:
   - openclaw
   - opencode
 
+runtime:
+  # "standard" or "edge" (fixed-file polling + lazy native embeddings)
+  profile: standard
+
 embedding:
-  provider: ollama
-  model: nomic-embed-text
-  dimensions: 768
-  base_url: http://localhost:11434
+  provider: native
+  model: Xenova/all-MiniLM-L6-v2
+  dimensions: 384
   promptSubmitTimeoutMs: 1000
   # llama.cpp only: truncate inputs to stay below its physical batch limit
   llamaCppMaxInputTokens: 1400
@@ -210,10 +213,10 @@ Vector embedding configuration for semantic memory search.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `provider` | string | `"ollama"` | `"ollama"` or `"openai"` |
-| `model` | string | `"nomic-embed-text"` | Embedding model name |
-| `dimensions` | number | `768` | Output vector dimensions |
-| `base_url` | string | `"http://localhost:11434"` | Ollama API base URL |
+| `provider` | string | `"native"` | `"native"`, `"llama-cpp"`, `"ollama"`, `"openai"`, or `"none"` |
+| `model` | string | `"Xenova/all-MiniLM-L6-v2"` | Embedding model name; honored by the native worker |
+| `dimensions` | number | `384` | Output vector dimensions (1-65536) |
+| `base_url` | string | provider-specific | External provider API base URL |
 | `api_key` | string | — | API key or `$secret:NAME` reference |
 | `promptSubmitTimeoutMs` | number | `1000` | Explicit recall embedding timeout retained for compatibility, range 1000-300000 ms |
 
@@ -228,6 +231,15 @@ Recommended Ollama models:
 | `nomic-embed-text` | 768 | Default; good quality/speed balance |
 | `all-minilm` | 384 | Faster, smaller vectors |
 | `mxbai-embed-large` | 1024 | Better quality, more resource usage |
+
+### runtime
+
+`runtime.profile` accepts `standard` (default) or `edge`. The edge profile is
+for the documented source-runtime install on constrained 64-bit ARM devices:
+it uses fixed-file polling, skips the startup native-embedding probe, unloads
+the isolated embedding child process after 30 seconds idle, and leaves
+visualization libraries unloaded until their endpoints are called. See
+[EDGE.md](./EDGE.md).
 
 Recommended OpenAI models:
 

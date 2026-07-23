@@ -3,6 +3,8 @@ import { join } from "node:path";
 import { checkbox, confirm, input, select } from "@inquirer/prompts";
 import { OpenClawConnector } from "@signet/connector-openclaw";
 import {
+	DEFAULT_NATIVE_EMBEDDING_DIMENSIONS,
+	DEFAULT_NATIVE_EMBEDDING_MODEL,
 	IDENTITY_MODES,
 	IDENTITY_PRESETS,
 	type IdentityContextFileEntry,
@@ -836,8 +838,8 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 	let embeddingDimensions = 768;
 
 	if (embeddingProvider === "native") {
-		embeddingModel = "nomic-embed-text-v1.5";
-		embeddingDimensions = 768;
+		embeddingModel = DEFAULT_NATIVE_EMBEDDING_MODEL;
+		embeddingDimensions = DEFAULT_NATIVE_EMBEDDING_DIMENSIONS;
 	} else if (embeddingProvider === "llama-cpp") {
 		if (nonInteractive) {
 			const configuredModel =
@@ -877,8 +879,8 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 				console.log(chalk.yellow(`  ⚠ ${ollamaCheck.error ?? "Ollama embedding model not available"}`));
 				console.log(chalk.yellow("  Downgrading embedding provider to 'native' (built-in ONNX)."));
 				embeddingProvider = "native";
-				embeddingModel = "nomic-embed-text-v1.5";
-				embeddingDimensions = 768;
+				embeddingModel = DEFAULT_NATIVE_EMBEDDING_MODEL;
+				embeddingDimensions = DEFAULT_NATIVE_EMBEDDING_DIMENSIONS;
 			}
 		} else {
 			console.log();

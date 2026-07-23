@@ -2,9 +2,11 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DEFAULT_NATIVE_EMBEDDING_DIMENSIONS, DEFAULT_NATIVE_EMBEDDING_MODEL } from "@signet/core";
 import {
 	DEFAULT_LLAMACPP_MAX_INPUT_TOKENS,
 	DEFAULT_PIPELINE_V2,
+	MAX_EMBEDDING_MODEL_LENGTH,
 	MAX_LLAMACPP_MAX_INPUT_TOKENS,
 	MAX_PROMPT_SUBMIT_EMBEDDING_TIMEOUT_MS,
 	MIN_LLAMACPP_MAX_INPUT_TOKENS,
@@ -95,10 +97,31 @@ describe("loadMemoryConfig", () => {
 		const agentsDir = makeTempAgentsDir();
 		const cfg = loadMemoryConfig(agentsDir);
 		expect(cfg.embedding.provider).toBe("native");
-		expect(cfg.embedding.model).toBe("nomic-embed-text-v1.5");
-		expect(cfg.embedding.dimensions).toBe(768);
+		expect(cfg.embedding.model).toBe(DEFAULT_NATIVE_EMBEDDING_MODEL);
+		expect(cfg.embedding.dimensions).toBe(DEFAULT_NATIVE_EMBEDDING_DIMENSIONS);
 		expect(cfg.embedding.promptSubmitTimeoutMs).toBe(MIN_PROMPT_SUBMIT_EMBEDDING_TIMEOUT_MS);
 		expect(cfg.embedding.llamaCppMaxInputTokens).toBe(DEFAULT_LLAMACPP_MAX_INPUT_TOKENS);
+	});
+
+	it("bounds invalid embedding dimensions to the provider default", () => {
+		const agentsDir = makeTempAgentsDir();
+		writeFileSync(
+			join(agentsDir, "agent.yaml"),
+			"embedding:\n  provider: native\n  model: Xenova/all-MiniLM-L6-v2\n  dimensions: -1\n",
+		);
+		expect(loadMemoryConfig(agentsDir).embedding.dimensions).toBe(DEFAULT_NATIVE_EMBEDDING_DIMENSIONS);
+	});
+
+	it("bounds embedding model identifiers before passing config to a worker process", () => {
+		const agentsDir = makeTempAgentsDir();
+		writeFileSync(
+			join(agentsDir, "agent.yaml"),
+			`embedding:
+  provider: native
+  model: ${"m".repeat(MAX_EMBEDDING_MODEL_LENGTH + 1)}
+`,
+		);
+		expect(loadMemoryConfig(agentsDir).embedding.model).toBe(DEFAULT_NATIVE_EMBEDDING_MODEL);
 	});
 
 	it("deliberately enables the bounded freshness prior by default and allows opt-out", () => {

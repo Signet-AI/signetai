@@ -26,7 +26,6 @@ import { parseFeedback, recordAgentFeedback } from "../session-memories";
 import { upsertSessionTranscript } from "../session-transcripts";
 import { createTemporalEdgeId, normalizeTemporalTimestamp, validateTemporalTimeOptions } from "../temporal-recall";
 import { txForgetMemory, txIngestEnvelope, txModifyMemory, txRecoverMemory, txSupersedeMemory } from "../transactions";
-import { cacheProjection, computeProjection, computeProjectionForQuery, getCachedProjection } from "../umap-projection";
 import {
 	AGENTS_DIR,
 	INTERNAL_SELF_HOST,
@@ -3261,6 +3260,9 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 	// GET /api/embeddings/projection
 	// =========================================================================
 	app.get("/api/embeddings/projection", async (c) => {
+		const { cacheProjection, computeProjection, computeProjectionForQuery, getCachedProjection } = await import(
+			"../umap-projection"
+		);
 		const dimParam = c.req.query("dimensions");
 		const nComponents: 2 | 3 = dimParam === "3" ? 3 : 2;
 		const limit = parseOptionalBoundedInt(c.req.query("limit"), 1, 5000);

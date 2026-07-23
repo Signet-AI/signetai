@@ -120,7 +120,7 @@ describe("embedding-worker-handle", () => {
 		const p = handle.checkAvailable();
 		await flush();
 		worker.emit({ type: "status", status: { initialized: true, initializing: false, modelCached: true, error: null } });
-		worker.emit({ type: "check_result", id: lastCheckId(worker), available: true });
+		worker.emit({ type: "check_result", id: lastCheckId(worker), available: true, error: null });
 
 		const status = await p;
 		expect(status.available).toBe(true);
@@ -268,6 +268,27 @@ describe("embedding-worker-handle", () => {
 		expect(worker.posted.some((m) => m.type === "shutdown")).toBe(true);
 		expect(worker.terminated).toBe(true);
 		await expect(handle.embed("after")).rejects.toThrow(/shut down/);
+	});
+
+	it("selects the process-isolated host for the edge profile", async () => {
+		const { worker, factory: processFactory } = fakePair();
+		let capturedPath = "";
+		const trackingProcessFactory: EmbeddingWorkerFactory = (path, init, options) => {
+			capturedPath = path;
+			return processFactory(path, init, options);
+		};
+		const handle = await createEmbeddingWorkerHandle({
+			processFactory: trackingProcessFactory,
+			isolateProcess: true,
+			expectedDimensions: DIM,
+		});
+		worker.emit({ type: "ready" });
+		handles.push(handle);
+
+		expect(capturedPath).toMatch(/embedding-process\.(?:js|ts)$/);
+		await handle.stop();
+		expect(worker.posted.some((message) => message.type === "shutdown")).toBe(true);
+		expect(worker.terminated).toBe(true);
 	});
 
 	it("keeps a timed-out inference worker disabled after the cooldown window", async () => {

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import { computeEmbeddingRetryBackoffMs, processEmbeddingCycle } from "./embedding-tracker";
+import type { DbAccessor } from "./db-accessor";
+import { computeEmbeddingRetryBackoffMs, processEmbeddingCycle, startEmbeddingTracker } from "./embedding-tracker";
 
 const cfg = {
 	provider: "ollama",
@@ -88,5 +89,29 @@ describe("processEmbeddingCycle", () => {
 		expect(retry.results).toHaveLength(1);
 		expect(after.results).toHaveLength(1);
 		expect(after.failed).toBe(0);
+	});
+});
+
+describe("startEmbeddingTracker", () => {
+	it("does not probe or load the provider when no stale rows exist", async () => {
+		let providerChecks = 0;
+		const accessor = {
+			withReadDb<T>(callback: (db: { prepare(): { all(): unknown[] } }) => T): T {
+				return callback({ prepare: () => ({ all: () => [] }) });
+			},
+		} as unknown as DbAccessor;
+		const handle = startEmbeddingTracker(
+			accessor,
+			{ provider: "native", model: "test", dimensions: 3, base_url: "" },
+			{ enabled: true, pollMs: 5, batchSize: 8 },
+			async () => null,
+			async () => {
+				providerChecks++;
+				return { available: true };
+			},
+		);
+		await Bun.sleep(20);
+		await handle.stop();
+		expect(providerChecks).toBe(0);
 	});
 });

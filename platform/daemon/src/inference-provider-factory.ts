@@ -1,7 +1,6 @@
-import { type Api, type Model, type OAuthCredentials, getModels, getProviders } from "@earendil-works/pi-ai";
-import { getOAuthProvider } from "@earendil-works/pi-ai/oauth";
+import type { Api, Model, OAuthCredentials } from "@earendil-works/pi-ai";
 import type { PipelineClaudeCodeConfig, RoutingAccountConfig, RoutingConfig } from "@signet/core";
-import { type PiExecutorKind, createPiModelProvider } from "./pipeline/pi-provider";
+import type { PiExecutorKind } from "./pipeline/pi-provider";
 import type { AcpxHooksMode, StreamCapableLlmProvider } from "./pipeline/provider";
 import { createAcpxProvider } from "./pipeline/provider";
 
@@ -32,10 +31,12 @@ function catalogModel(
 	providerFamily: string,
 	modelId: string,
 	credential: ResolvedInferenceCredential | undefined,
+	pi: typeof import("@earendil-works/pi-ai"),
+	oauth: typeof import("@earendil-works/pi-ai/oauth"),
 ): Model<Api> | undefined {
-	if (!(getProviders() as readonly string[]).includes(providerFamily)) return undefined;
-	let models = (getModels as (provider: string) => Model<Api>[])(providerFamily);
-	const oauthProvider = getOAuthProvider(providerFamily);
+	if (!(pi.getProviders() as readonly string[]).includes(providerFamily)) return undefined;
+	let models = (pi.getModels as (provider: string) => Model<Api>[])(providerFamily);
+	const oauthProvider = oauth.getOAuthProvider(providerFamily);
 	if (oauthProvider?.modifyModels && credential?.oauthCredentials) {
 		models = oauthProvider.modifyModels(models, credential.oauthCredentials);
 	}
@@ -66,14 +67,19 @@ export async function createRoutingProvider(opts: CreateRoutingProviderOptions):
 
 	const account = target.account ? opts.config.accounts[target.account] : undefined;
 	const providerFamily = account?.providerFamily ?? target.executor;
-	if (!CUSTOM_PI_EXECUTORS.has(target.executor) && !(getProviders() as readonly string[]).includes(providerFamily)) {
+	const [pi, oauth, { createPiModelProvider }] = await Promise.all([
+		import("@earendil-works/pi-ai"),
+		import("@earendil-works/pi-ai/oauth"),
+		import("./pipeline/pi-provider"),
+	]);
+	if (!CUSTOM_PI_EXECUTORS.has(target.executor) && !(pi.getProviders() as readonly string[]).includes(providerFamily)) {
 		throw new Error(`Unsupported routing executor "${target.executor}" for target ${opts.targetId}`);
 	}
 
 	const credential = await opts.resolveCredential(account);
 	const piModel = CUSTOM_PI_EXECUTORS.has(target.executor)
 		? undefined
-		: catalogModel(providerFamily, model.model, credential);
+		: catalogModel(providerFamily, model.model, credential, pi, oauth);
 	if (!piModel && !CUSTOM_PI_EXECUTORS.has(target.executor)) {
 		throw new Error(`Unknown pi-ai model "${model.model}" for provider "${providerFamily}"`);
 	}

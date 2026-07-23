@@ -26,7 +26,7 @@ import {
 	resolveRoutingDecision,
 	validateRoutingReferences,
 } from "@signet/core";
-import { isOAuthProvider, resolveOAuthCredential } from "./inference-oauth";
+import { resolveOAuthCredential } from "./inference-oauth";
 import { type ResolvedInferenceCredential, createRoutingProvider } from "./inference-provider-factory";
 import { logger } from "./logger";
 import { loadMemoryConfig } from "./memory-config";
@@ -245,12 +245,8 @@ function isRuntimeBlocked(state: RoutingRuntimeState): boolean {
 	);
 }
 
-function isOAuthBackedAccount(account: RoutingAccountConfig | undefined): account is RoutingAccountConfig {
-	return (
-		account !== undefined &&
-		isOAuthProvider(account.providerFamily) &&
-		(account.kind === "subscription_session" || !account.credentialRef)
-	);
+function isOAuthBackedAccount(account: RoutingAccountConfig | undefined): boolean {
+	return account?.kind === "subscription_session";
 }
 
 function buildPromptFromMessages(messages: ReadonlyArray<{ readonly role: string; readonly content: string }>): string {
@@ -592,7 +588,7 @@ export class InferenceRouter {
 	private async resolveCredential(
 		account: RoutingAccountConfig | undefined,
 	): Promise<ResolvedInferenceCredential | undefined> {
-		if (isOAuthBackedAccount(account)) {
+		if (account && isOAuthBackedAccount(account)) {
 			const oauth = await resolveOAuthCredential(account.providerFamily);
 			if (oauth) return { apiKey: oauth.apiKey, oauthCredentials: oauth.credentials };
 		}
