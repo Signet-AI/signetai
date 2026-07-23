@@ -5,7 +5,7 @@ import FormSection from "$lib/components/config/FormSection.svelte";
 import SettingList from "$lib/components/config/SettingList.svelte";
 import SettingRow from "$lib/components/config/SettingRow.svelte";
 import { type InferenceCatalog, getInferenceCatalog } from "$lib/api";
-import { CheckCircle, KeyRound, Plus, TriangleAlertIcon } from "$lib/icons";
+import { CheckCircle, Plus, TriangleAlertIcon } from "$lib/icons";
 import { st } from "$lib/stores/settings.svelte";
 import { invalidateAll } from "$app/navigation";
 import ConnectProviderDialog from "./ConnectProviderDialog.svelte";
@@ -142,7 +142,38 @@ function connectableProviders(): ConnectableProvider[] {
 }
 
 function hasApiKeyAccount(providerFamily: string): boolean {
-	return !!st.aStr(["inference", "accounts", providerFamily, "credentialRef"]);
+	return isProviderConnected(providerFamily);
+}
+
+// Accounts aren't always named after their provider family (e.g. a legacy
+// `openrouter-api` account backs the `openrouter` family), so detection and
+// backend linking must scan accounts by providerFamily, not by literal name.
+function accountsObj(): Record<string, { kind?: string; providerFamily?: string; credentialRef?: string }> {
+	const v = st.get(st.agent, "inference", "accounts");
+	return v && typeof v === "object" && !Array.isArray(v)
+		? (v as Record<string, { kind?: string; providerFamily?: string; credentialRef?: string }>)
+		: {};
+}
+
+// True if any account backs this provider family with usable credentials
+// (api with a credentialRef, or an OAuth subscription_session).
+function isProviderConnected(family: string): boolean {
+	for (const a of Object.values(accountsObj())) {
+		if (a.providerFamily !== family) continue;
+		if (a.kind === "subscription_session") return true;
+		if (a.kind === "api" && a.credentialRef) return true;
+	}
+	return false;
+}
+
+// Pick the account name to reference when a target uses this provider family.
+// Prefer an account literally named after the family (the connect wall's
+// convention), else the first account with that family.
+function accountForFamily(family: string): string | null {
+	const accts = accountsObj();
+	const names = Object.keys(accts).filter((n) => accts[n].providerFamily === family);
+	if (names.length === 0) return null;
+	return names.includes(family) ? family : names[0];
 }
 
 function openConnect(provider: ConnectableProvider): void {
@@ -173,19 +204,7 @@ async function onProviderChanged(): Promise<void> {
 const TARGET_NAME = "background";
 const ACCOUNT_NAME = "background";
 
-const EXECUTOR_OPTIONS = [
-	{ value: "", label: "— none —" },
-	{ value: "openai-compatible", label: "OpenAI-compatible (LM Studio / Ollama / gateway)" },
-	{ value: "anthropic", label: "Anthropic (direct API)" },
-	{ value: "openrouter", label: "OpenRouter" },
-	{ value: "ollama", label: "Ollama (local)" },
-	{ value: "llama-cpp", label: "llama.cpp (local)" },
-	{ value: "acpx", label: "ACPX (harness: Claude / Codex / OpenCode)" },
-] as const;
-
 const ACPX_AGENTS = ["claude", "codex", "opencode", "gemini", "pi", "openclaw"];
-
-const AGGREGATION_EXECUTOR_OPTIONS = EXECUTOR_OPTIONS.filter((o) => o.value !== "acpx");
 
 function bgExecutor(): string {
 	return st.aStr(["inference", "targets", TARGET_NAME, "executor"]);
@@ -194,37 +213,68 @@ function bgSetExecutor(v: string): void {
 	writeTarget({ targetName: TARGET_NAME, accountName: ACCOUNT_NAME, workloadKey: "memoryExtraction", executor: v });
 }
 
-function providerFamilyForExecutor(exec: string): string {
-	if (exec === "anthropic") return "anthropic";
-	if (exec === "openrouter") return "openrouter";
-	return "openai";
+// Backend taxonomy. After #947/#968 the daemon accepts any catalog provider
+// family as an executor (the allowlist is a regex now), so a connected
+// provider can run background/aggregation work directly. The backend picker
+// is driven by (a) connected providers and (b) the local + ACPX executors.
+const LOCAL_EXECUTORS = [
+	{ value: "openai-compatible", label: "OpenAI-compatible (LM Studio / gateway)" },
+	{ value: "ollama", label: "Ollama (local)" },
+	{ value: "llama-cpp", label: "llama.cpp (local)" },
+] as const;
+
+// Classify a stored executor value into a backend kind.
+function backendKind(exec: string): "none" | "provider" | "local" | "acpx" {
+	if (!exec) return "none";
+	if (exec === "acpx") return "acpx";
+	if (LOCAL_EXECUTORS.some((e) => e.value === exec)) return "local";
+	return "provider"; // any catalog provider family
 }
 
-// Executors that REQUIRE an API key / account to function at all.
-function executorRequiresAccount(exec: string): boolean {
-	return exec === "anthropic" || exec === "openrouter";
-}
-// openai-compatible MAY take an optional key (local servers are keyless by
-// default; remote gateways may want one but it's not enforced).
-function executorAllowsOptionalKey(exec: string): boolean {
-	return exec === "openai-compatible";
+// Catalog family whose models apply to a given executor. Provider backends use
+// the family itself; openai-compatible local servers map to the OpenAI catalog
+// (LM Studio etc. expose OpenAI-shaped ids). ollama/llama-cpp have no catalog.
+function backendFamily(exec: string): string {
+	if (backendKind(exec) === "local") return exec === "openai-compatible" ? "openai" : "";
+	return exec;
 }
 
-// Conventional secret name for a provider family (used only as the placeholder
-// hint — never hardcode ANTHROPIC_API_KEY for every provider).
+function modelOptionsFor(exec: string): Array<{ value: string; label: string }> {
+	if (!catalog) return [];
+	const family = backendFamily(exec);
+	if (!family) return [];
+	return (catalog.models[family] ?? []).map((m) => ({ value: m.id, label: `${m.name} (${m.id})` }));
+}
+
+// Build the backend dropdown. Connected providers come first (you can only run
+// a backend you've connected), then local servers, then ACPX. The current
+// value is always included so a disconnected provider's trigger still renders.
+function backendOptions(current: string, includeAcpx: boolean): Array<{ value: string; label: string }> {
+	const opts: Array<{ value: string; label: string }> = [{ value: "", label: "— none —" }];
+	for (const p of connectableProviders().filter((p) => p.connected)) opts.push({ value: p.id, label: p.name });
+	for (const e of LOCAL_EXECUTORS) opts.push({ value: e.value, label: e.label });
+	if (includeAcpx) opts.push({ value: "acpx", label: "ACPX (harness subprocess)" });
+	if (current && !opts.some((o) => o.value === current)) {
+		opts.push({ value: current, label: `${PROVIDER_NAMES[current] ?? titleCase(current)} (disconnected)` });
+	}
+	return opts;
+}
+
+// Conventional secret name for an executor's provider family (placeholder hint
+// only — the connect wall owns real credential storage).
 function secretNameFor(exec: string): string {
-	const family = providerFamilyForExecutor(exec);
+	const family = backendFamily(exec) || "KEY";
 	return `${family.replace(/-/g, "_").toUpperCase()}_API_KEY`;
 }
 
-function ensureAccount(accountName: string, executor: string): void {
+function ensureAccount(accountName: string, family: string): void {
 	st.aSetStr(["inference", "accounts", accountName, "kind"], "api");
-	st.aSetStr(["inference", "accounts", accountName, "providerFamily"], providerFamilyForExecutor(executor));
+	st.aSetStr(["inference", "accounts", accountName, "providerFamily"], family);
 }
 
 function writeTarget(opts: {
 	targetName: string;
-	accountName: string;
+	accountName: string; // per-target account used for local openai-compatible keys
 	workloadKey: string;
 	executor: string;
 }): void {
@@ -244,22 +294,35 @@ function writeTarget(opts: {
 	}
 	st.aSetStr([...targetBase, "executor"], executor);
 	st.aSetStr([...workloadBase, "target"], `${targetName}/default`);
+	const kind = backendKind(executor);
+	// Clear fields that don't apply so stale config from a prior selection can't
+	// leak (endpoint on a provider backend, account on acpx, acpx on a provider…).
+	if (kind !== "acpx") st.aDel([...targetBase, "acpx"]);
+	if (kind !== "local") st.aDel([...targetBase, "endpoint"]);
+	if (kind === "provider") {
+		// Reference a connected account for this family (resolved by family, not
+		// literal name, since accounts may be named e.g. `openrouter-api`).
+		// Credentials live in the connect wall — no inline key here.
+		const acct = accountForFamily(executor) ?? executor;
+		st.aSetStr([...targetBase, "account"], acct);
+		st.aDel(accountBase); // never use the per-target account for a provider backend
+		return;
+	}
+	if (kind === "acpx") {
+		st.aDel([...targetBase, "account"]);
+		st.aDel(accountBase);
+		return;
+	}
+	// local: ollama/llama-cpp are keyless; openai-compatible links a per-target
+	// account only when a key is present (optional key).
 	const hasKey = !!st.aStr([...accountBase, "credentialRef"]);
-	// Account linkage rule:
-	//  - anthropic/openrouter: always need an account (key required).
-	//  - openai-compatible: link an account only when a key is present (optional
-	//    key — keyless local servers stay account-free).
-	//  - ollama/llama-cpp/acpx: never need an account — drop it even if a stale
-	//    key lingers from a prior executor, so a key isn't injected into a
-	//    keyless provider. executorAllowsOptionalKey gates the keep-on-hasKey
-	//    behavior so only the optional-key executor honors a leftover key.
-	const needsAccount = executorRequiresAccount(executor) || (executorAllowsOptionalKey(executor) && hasKey);
+	const needsAccount = executor === "openai-compatible" && hasKey;
 	if (!needsAccount) {
 		st.aDel([...targetBase, "account"]);
 		st.aDel(accountBase);
 	} else {
 		st.aSetStr([...targetBase, "account"], accountName);
-		ensureAccount(accountName, executor);
+		ensureAccount(accountName, "openai");
 	}
 }
 
@@ -304,9 +367,7 @@ function bgSetApiKey(v: string): void {
 }
 
 function bgModelOptions(): Array<{ value: string; label: string }> {
-	if (!catalog) return [];
-	const family = providerFamilyForExecutor(bgExecutor());
-	return (catalog.models[family] ?? []).map((m) => ({ value: m.id, label: `${m.name} (${m.id})` }));
+	return modelOptionsFor(bgExecutor());
 }
 
 const AGG_TARGET_NAME = "aggregation";
@@ -346,18 +407,12 @@ function aggSetApiKey(v: string): void {
 	}
 }
 function aggModelOptions(): Array<{ value: string; label: string }> {
-	if (!catalog) return [];
-	const family = providerFamilyForExecutor(aggExecutor());
-	return (catalog.models[family] ?? []).map((m) => ({ value: m.id, label: `${m.name} (${m.id})` }));
+	return modelOptionsFor(aggExecutor());
 }
-const aggIsLocal = $derived(["openai-compatible", "ollama", "llama-cpp"].includes(aggExecutor()));
-// #3: openai-compatible aggregation shows an OPTIONAL key field always (local
-// servers stay keyless, but the field is there for gateways that need auth).
-const aggNeedsApiKey = $derived(
-	aggExecutor() === "anthropic" ||
-	aggExecutor() === "openrouter" ||
-	aggExecutor() === "openai-compatible",
-);
+const aggIsLocal = $derived(backendKind(aggExecutor()) === "local");
+// The inline API-key field only applies to local openai-compatible servers
+// (provider backends get their key from the connect wall).
+const aggNeedsApiKey = $derived(aggExecutor() === "openai-compatible");
 
 const EMBEDDING_PROVIDER_OPTIONS = [
 	{ value: "", label: "— select —" },
@@ -389,13 +444,8 @@ function embSetEndpoint(v: string): void {
 	st.sSetStr([...embPath(), "baseUrl"], v);
 }
 
-const isLocalExecutor = $derived(["openai-compatible", "ollama", "llama-cpp"].includes(bgExecutor()));
-// #3: openai-compatible background also shows an optional key field always.
-const needsApiKey = $derived(
-	bgExecutor() === "anthropic" ||
-	bgExecutor() === "openrouter" ||
-	bgExecutor() === "openai-compatible",
-);
+const isLocalExecutor = $derived(backendKind(bgExecutor()) === "local");
+const needsApiKey = $derived(bgExecutor() === "openai-compatible");
 const embNonNative = $derived(embProvider() && embProvider() !== "native" && embProvider() !== "");
 </script>
 
@@ -405,32 +455,22 @@ const embNonNative = $derived(embProvider() && embProvider() !== "native" && emb
 	<!-- Provider connect wall                                         -->
 	<!-- ============================================================ -->
 	<SettingList title="Providers">
-		<div class="provider-grid">
+		<div class="provider-list">
 			{#each connectableProviders() as provider (provider.id)}
 				<button
-					class="provider-card {provider.connected ? "provider-card--connected" : ""}"
+					class="provider-row {provider.connected ? "provider-row--connected" : ""}"
 					onclick={() => openConnect(provider)}
 				>
-					<div class="provider-card-head">
-						<span class="provider-name">{provider.name}</span>
-						{#if provider.connected}
-							<span class="status-badge status-badge--ok"><CheckCircle class="size-3" /> Connected</span>
-						{:else}
-							<span class="status-badge status-badge--off"><Plus class="size-3" /> Connect</span>
-						{/if}
-					</div>
-					<div class="provider-card-meta">
-						{#if provider.supportsOAuth && provider.supportsApiKey}
-							<span class="meta-pill">Sign in or API key</span>
-						{:else if provider.supportsOAuth}
-							<span class="meta-pill"><KeyRound class="size-2.5" /> Sign in</span>
-						{:else}
-							<span class="meta-pill"><KeyRound class="size-2.5" /> API key</span>
-						{/if}
-						{#if catalog?.models[provider.id]?.length}
-							<span class="meta-count">{catalog.models[provider.id].length} models</span>
-						{/if}
-					</div>
+					<span class="provider-row-name">{provider.name}</span>
+					<span class="provider-row-meta">
+						{#if provider.supportsOAuth && provider.supportsApiKey}Sign in or key{:else if provider.supportsOAuth}Sign in{:else}API key{/if}
+						{#if catalog?.models[provider.id]?.length}· {catalog.models[provider.id].length} models{/if}
+					</span>
+					{#if provider.connected}
+						<span class="status-badge status-badge--ok"><CheckCircle class="size-3" /> Connected</span>
+					{:else}
+						<span class="status-badge status-badge--off"><Plus class="size-3" /> Connect</span>
+					{/if}
 				</button>
 			{:else}
 				{#if catalogFailed}
@@ -462,10 +502,10 @@ const embNonNative = $derived(embProvider() && embProvider() !== "native" && emb
 		>
 			<Select.Root type="single" value={bgExecutor()} onValueChange={(v) => bgSetExecutor(v)}>
 				<Select.Trigger class={selectTriggerClass}>
-					{EXECUTOR_OPTIONS.find((o) => o.value === bgExecutor())?.label ?? "— none —"}
+					{backendOptions(bgExecutor(), true).find((o) => o.value === bgExecutor())?.label ?? "— none —"}
 				</Select.Trigger>
 				<Select.Content class={selectContentClass}>
-					{#each EXECUTOR_OPTIONS as opt (opt.value)}
+					{#each backendOptions(bgExecutor(), true) as opt (opt.value)}
 						<Select.Item class={selectItemClass} value={opt.value} label={opt.label} />
 					{/each}
 				</Select.Content>
@@ -553,10 +593,10 @@ const embNonNative = $derived(embProvider() && embProvider() !== "native" && emb
 		>
 			<Select.Root type="single" value={aggExecutor()} onValueChange={(v) => aggSetExecutor(v)}>
 				<Select.Trigger class={selectTriggerClass}>
-					{AGGREGATION_EXECUTOR_OPTIONS.find((o) => o.value === aggExecutor())?.label ?? "— none —"}
+					{backendOptions(aggExecutor(), false).find((o) => o.value === aggExecutor())?.label ?? "— none —"}
 				</Select.Trigger>
 				<Select.Content class={selectContentClass}>
-					{#each AGGREGATION_EXECUTOR_OPTIONS as opt (opt.value)}
+					{#each backendOptions(aggExecutor(), false) as opt (opt.value)}
 						<Select.Item class={selectItemClass} value={opt.value} label={opt.label} />
 					{/each}
 				</Select.Content>
@@ -676,49 +716,55 @@ const embNonNative = $derived(embProvider() && embProvider() !== "native" && emb
 	:global(.setting-list-wrap + .setting-list-wrap) {
 		margin-top: var(--space-lg);
 	}
-	.provider-grid {
-		display: grid;
-		grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-		gap: 10px;
-		width: 100%;
-	}
-	.provider-card {
+	.provider-list {
 		display: flex;
 		flex-direction: column;
-		gap: 8px;
-		padding: 11px 12px;
+		gap: 4px;
+		width: 100%;
+	}
+	.provider-row {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		padding: 5px 9px;
 		border: 1px solid var(--sig-border);
-		border-radius: 9px;
+		border-radius: 7px;
 		background: var(--sig-bg);
 		cursor: pointer;
 		text-align: left;
 		transition: border-color 0.12s, background 0.12s;
 	}
-	.provider-card:hover {
+	.provider-row:hover {
 		border-color: var(--sig-accent);
 		background: var(--sig-surface-raised);
 	}
-	.provider-card--connected {
+	.provider-row--connected {
 		border-color: rgba(74, 222, 128, 0.35);
 	}
-	.provider-card-head {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		gap: 8px;
-	}
-	.provider-name {
+	.provider-row-name {
+		flex: 0 0 auto;
 		font-family: var(--font-body);
-		font-size: 12px;
+		font-size: 11.5px;
 		font-weight: 600;
 		color: var(--sig-text);
+		white-space: nowrap;
+	}
+	.provider-row-meta {
+		flex: 1 1 auto;
+		font-family: var(--font-body);
+		font-size: 10px;
+		color: var(--sig-text-muted);
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
 	}
 	.status-badge {
+		flex: 0 0 auto;
 		display: inline-flex;
 		align-items: center;
 		gap: 3px;
 		font-family: var(--font-body);
-		font-size: 9.5px;
+		font-size: 9px;
 		font-weight: 500;
 		padding: 2px 6px;
 		border-radius: 999px;
@@ -732,31 +778,11 @@ const embNonNative = $derived(embProvider() && embProvider() !== "native" && emb
 		color: var(--sig-text-muted);
 		background: var(--sig-surface-raised);
 	}
-	.provider-card-meta {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-	}
-	.meta-pill {
-		display: inline-flex;
-		align-items: center;
-		gap: 3px;
-		font-family: var(--font-body);
-		font-size: 9.5px;
-		color: var(--sig-text-muted);
-	}
-	.meta-count {
-		font-family: var(--font-mono);
-		font-size: 9.5px;
-		color: var(--sig-text-muted);
-		opacity: 0.7;
-	}
 	.provider-empty {
 		font-family: var(--font-body);
 		font-size: 11px;
 		color: var(--sig-text-muted);
-		padding: 12px;
-		grid-column: 1 / -1;
+		padding: 8px;
 	}
 	.catalog-warnings {
 		display: flex;
