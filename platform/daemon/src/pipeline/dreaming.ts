@@ -19,6 +19,7 @@ import {
 } from "@signet/core";
 import type { DbAccessor, ReadDb, WriteDb } from "../db-accessor";
 import { logger } from "../logger";
+import { extractBalancedJsonObjects } from "./extraction";
 import { countTokens } from "./tokenizer";
 
 // ---------------------------------------------------------------------------
@@ -646,21 +647,27 @@ function insertAttr(
 }
 
 function parseDreamingResult(raw: string): DreamingResult {
-	// Strip markdown code fences if present
-	let cleaned = raw.trim();
-	if (cleaned.startsWith("```")) {
-		const first = cleaned.indexOf("\n");
-		const last = cleaned.lastIndexOf("```");
-		if (first > 0 && last > first) {
-			cleaned = cleaned.slice(first + 1, last).trim();
+	const cleaned = raw.trim();
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(cleaned);
+	} catch (rawParseError) {
+		for (const candidate of extractBalancedJsonObjects(cleaned)) {
+			try {
+				parsed = JSON.parse(candidate);
+				break;
+			} catch {
+				// Keep scanning: prose may contain braces before the response object.
+			}
 		}
+		if (parsed === undefined) throw rawParseError;
 	}
 
-	const parsed = JSON.parse(cleaned) as {
+	const result = parsed as {
 		mutations?: unknown[];
 		summary?: string;
 	};
-	const all = Array.isArray(parsed.mutations) ? parsed.mutations : [];
+	const all = Array.isArray(result.mutations) ? result.mutations : [];
 	const mutations = all.filter(isValidMutation);
 	const invalidMutations = all.length - mutations.length;
 	if (invalidMutations > 0) {
@@ -674,7 +681,7 @@ function parseDreamingResult(raw: string): DreamingResult {
 	}
 	return {
 		mutations,
-		summary: typeof parsed.summary === "string" ? parsed.summary : "No summary provided",
+		summary: typeof result.summary === "string" ? result.summary : "No summary provided",
 		tokensConsumed: countTokens(raw),
 		invalidMutations,
 	};
