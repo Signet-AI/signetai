@@ -8,7 +8,8 @@
  * intent, or reviewed repair/normalization passes.
  */
 
-import type { WriteDb } from "./db-accessor";
+import type { ReadDb, WriteDb } from "./db-accessor";
+import { countChanges } from "./db-helpers";
 
 // ---------------------------------------------------------------------------
 // Decision pattern detection
@@ -256,7 +257,7 @@ export function extractCandidateNames(text: string): string[] {
 // Existing entity resolution
 // ---------------------------------------------------------------------------
 
-function resolveKnownEntity(db: WriteDb, name: string, agentId: string, now: string): string {
+function findKnownEntityId(db: ReadDb, name: string, agentId: string): string {
 	const canonical = name.trim().toLowerCase().replace(/\s+/g, " ");
 	if (canonical.length < 3) return "";
 
@@ -268,12 +269,14 @@ function resolveKnownEntity(db: WriteDb, name: string, agentId: string, now: str
 		)
 		.get(canonical, name, agentId) as { id: string } | undefined;
 
-	if (existing) {
-		db.prepare("UPDATE entities SET mentions = mentions + 1, updated_at = ? WHERE id = ?").run(now, existing.id);
-		return existing.id;
-	}
+	return existing?.id ?? "";
+}
 
-	return "";
+function resolveKnownEntity(db: WriteDb, name: string, agentId: string, now: string): string {
+	const entityId = findKnownEntityId(db, name, agentId);
+	if (!entityId) return "";
+	db.prepare("UPDATE entities SET mentions = mentions + 1, updated_at = ? WHERE id = ?").run(now, entityId);
+	return entityId;
 }
 
 // ---------------------------------------------------------------------------
@@ -285,6 +288,26 @@ export interface LinkResult {
 	readonly entityIds: string[];
 	readonly aspects: number;
 	readonly attributes: number;
+}
+
+/** Preview the links `linkMemoryToEntities` would create without mutating graph state. */
+export function previewMemoryEntityLinks(db: ReadDb, memoryId: string, content: string, agentId: string): LinkResult {
+	const names = extractCandidateNames(content);
+	if (names.length === 0) return { linked: 0, entityIds: [], aspects: 0, attributes: 0 };
+
+	let linked = 0;
+	const entityIds: string[] = [];
+	for (const name of names) {
+		const entityId = findKnownEntityId(db, name, agentId);
+		if (!entityId) continue;
+		entityIds.push(entityId);
+		const existingMention = db
+			.prepare("SELECT 1 FROM memory_entity_mentions WHERE memory_id = ? AND entity_id = ? LIMIT 1")
+			.get(memoryId, entityId);
+		if (!existingMention) linked++;
+	}
+
+	return { linked, entityIds, aspects: 0, attributes: 0 };
 }
 
 /**
@@ -316,7 +339,7 @@ export function linkMemoryToEntities(db: WriteDb, memoryId: string, content: str
 			 VALUES (?, ?, ?, 0.8, ?)`,
 			)
 			.run(memoryId, entityId, name, now);
-		if (ins.changes > 0) linked++;
+		if (countChanges(ins) > 0) linked++;
 	}
 
 	return { linked, entityIds, aspects: 0, attributes: 0 };

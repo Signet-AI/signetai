@@ -1,9 +1,9 @@
 import type { Context, Hono } from "hono";
 import { resolveAgentId, resolveDaemonAgentId } from "../agent-id";
-import { requirePermission } from "../auth";
-import { getDbAccessor } from "../db-accessor.js";
+import { type AuthConfig, requirePermission } from "../auth";
+import { type DbAccessor, getDbAccessor } from "../db-accessor.js";
 import { fetchEmbedding } from "../embedding-fetch.js";
-import { linkMemoryToEntities } from "../inline-entity-linker.js";
+import { linkMemoryToEntities, previewMemoryEntityLinks } from "../inline-entity-linker.js";
 import { getLlmProvider } from "../llm.js";
 import { loadMemoryConfig } from "../memory-config.js";
 import { clusterEntities } from "../pipeline/community-detection.js";
@@ -23,8 +23,8 @@ import {
 	pruneChunkGroupEntities,
 	pruneGenericEntities,
 	pruneSingletonExtractedEntities,
-	reclassifyEntities,
 	rebuildDerivedIndexes,
+	reclassifyEntities,
 	reembedMissingMemories,
 	releaseStaleLeases,
 	requeueDeadJobs,
@@ -78,13 +78,19 @@ function resolveRepairAgentId(c: Context, body: Readonly<Record<string, unknown>
 	});
 }
 
-export function registerRepairRoutes(app: Hono): void {
+export function registerRepairRoutes(
+	app: Hono,
+	deps: {
+		readonly authConfig?: AuthConfig;
+		readonly getDbAccessor?: () => DbAccessor;
+	} = {},
+): void {
 	// Permission guards
 	app.use("/api/repair/*", async (c, next) => {
-		return requirePermission("admin", authConfig)(c, next);
+		return requirePermission("admin", deps.authConfig ?? authConfig)(c, next);
 	});
 	app.use("/api/troubleshoot/*", async (c, next) => {
-		return requirePermission("admin", authConfig)(c, next);
+		return requirePermission("admin", deps.authConfig ?? authConfig)(c, next);
 	});
 
 	app.post("/api/repair/requeue-dead", (c) => {
@@ -390,15 +396,19 @@ export function registerRepairRoutes(app: Hono): void {
 
 	app.post("/api/repair/relink-entities", async (c) => {
 		let batchSize = 500;
+		let dryRun = false;
 		let body: Record<string, unknown> = {};
 		try {
 			body = asRecord(await c.req.json());
-			if (typeof body?.batchSize === "number") batchSize = body.batchSize;
+			if (typeof body.batchSize === "number" && Number.isFinite(body.batchSize) && body.batchSize > 0) {
+				batchSize = Math.min(Math.floor(body.batchSize), 500);
+			}
+			if (typeof body.dryRun === "boolean") dryRun = body.dryRun;
 		} catch {
 			// defaults
 		}
 		const agentId = resolveRepairAgentId(c, body);
-		const accessor = getDbAccessor();
+		const accessor = deps.getDbAccessor?.() ?? getDbAccessor();
 
 		const unlinked = accessor.withReadDb(
 			(db) =>
@@ -414,7 +424,63 @@ export function registerRepairRoutes(app: Hono): void {
 		);
 
 		if (unlinked.length === 0) {
-			return c.json({ action: "relink-entities", linked: 0, remaining: 0, message: "all memories linked" });
+			return c.json({
+				action: "relink-entities",
+				dryRun,
+				processed: 0,
+				linked: 0,
+				entities: 0,
+				aspects: 0,
+				attributes: 0,
+				remaining: 0,
+				...(dryRun ? { projectedRemaining: 0 } : {}),
+				message: "all memories linked",
+			});
+		}
+
+		if (dryRun) {
+			const preview = accessor.withReadDb((db) => {
+				let linked = 0;
+				let entities = 0;
+				let aspects = 0;
+				let attributes = 0;
+				let linkedMemories = 0;
+
+				for (const mem of unlinked) {
+					const result = previewMemoryEntityLinks(db, mem.id, mem.content, agentId);
+					linked += result.linked;
+					entities += result.entityIds.length;
+					aspects += result.aspects;
+					attributes += result.attributes;
+					if (result.linked > 0) linkedMemories++;
+				}
+
+				const remaining = (
+					db
+						.prepare(
+							`SELECT COUNT(*) as cnt FROM memories
+			 WHERE is_deleted = 0
+			   AND COALESCE(NULLIF(agent_id, ''), 'default') = ?
+			   AND id NOT IN (SELECT DISTINCT memory_id FROM memory_entity_mentions)`,
+						)
+						.get(agentId) as { cnt: number }
+				).cnt;
+
+				return { linked, entities, aspects, attributes, linkedMemories, remaining };
+			});
+			const projectedRemaining = Math.max(0, preview.remaining - preview.linkedMemories);
+			return c.json({
+				action: "relink-entities",
+				dryRun: true,
+				processed: unlinked.length,
+				linked: preview.linked,
+				entities: preview.entities,
+				aspects: preview.aspects,
+				attributes: preview.attributes,
+				remaining: preview.remaining,
+				projectedRemaining,
+				message: `dry run: ${preview.linked} link(s) would be added across ${preview.linkedMemories} memories; ${projectedRemaining} would remain unlinked`,
+			});
 		}
 
 		let linked = 0;
@@ -446,6 +512,7 @@ export function registerRepairRoutes(app: Hono): void {
 
 		return c.json({
 			action: "relink-entities",
+			dryRun: false,
 			processed: unlinked.length,
 			linked,
 			entities,

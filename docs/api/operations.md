@@ -468,6 +468,44 @@ top of hash-based dedup.
 }
 ```
 
+### POST /api/repair/relink-entities
+
+Attach unlinked memories to existing entities whose names appear in the memory
+content. The operation is agent-scoped and never creates new entities.
+
+**Request body**
+
+```json
+{
+  "agentId": "default",
+  "batchSize": 500,
+  "dryRun": true
+}
+```
+
+`batchSize` defaults to and is capped at `500`. The default remains
+`dryRun: false` for compatibility. With `dryRun: true`, Signet performs the
+same entity matching without changing mention rows or entity counters.
+`remaining` is the current persisted count, while `projectedRemaining` is the
+count that would remain if the preview were applied.
+
+**Dry-run response**
+
+```json
+{
+  "action": "relink-entities",
+  "dryRun": true,
+  "processed": 500,
+  "linked": 398,
+  "entities": 398,
+  "aspects": 0,
+  "attributes": 0,
+  "remaining": 7267,
+  "projectedRemaining": 6869,
+  "message": "dry run: 398 link(s) would be added across 398 memories; 6869 would remain unlinked"
+}
+```
+
 
 ## Pipeline
 
