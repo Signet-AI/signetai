@@ -210,7 +210,7 @@ describe("OpenClawConnector config patching", () => {
 		});
 
 		expect(result.configsPatched).not.toContain(configPath);
-		expect(result.warnings?.some((w) => w.includes("could not parse JSON/JSON5 config"))).toBe(true);
+		expect(result.warnings?.some((w) => w.includes("Invalid OpenClaw config at offset"))).toBe(true);
 		expect(connector.getDiscoveredWorkspacePaths()).toHaveLength(0);
 	});
 

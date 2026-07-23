@@ -338,7 +338,7 @@ describe("OpenCodeConnector — pipeline agent registration", () => {
 		const connector = new TestableConnector(ocPath());
 
 		await expect(connector.install(tmpRoot)).rejects.toThrow(
-			`Cannot update OpenCode config ${legacyPath}`,
+			`Cannot update OpenCode config ${legacyPath}: Invalid OpenCode config at offset`,
 		);
 		expect(readFileSync(jsoncPath, "utf-8")).toBe('{ "provider": {} }\n');
 		expect(readFileSync(legacyPath, "utf-8")).toBe("{ invalid");

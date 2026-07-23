@@ -13,6 +13,7 @@ import {
 	resolveSignetMcpCommand,
 	resolveSignetWorkspacePath,
 } from "./src/index";
+import { parseLenientJsonObject } from "./src/lenient-json";
 
 class TestConnector extends BaseConnector {
 	readonly name = "Test";
@@ -153,6 +154,37 @@ describe("packaged Signet command resolution", () => {
 		expect(warnings).toEqual([
 			'[signet] Warning: could not resolve mcp-stdio.js from argv[1]="C:\\missing\\signetai\\bin\\signet.js". MCP server config will use "signet-mcp" which may fail on Windows without shell:true.',
 		]);
+	});
+});
+
+describe("parseLenientJsonObject", () => {
+	it("parses BOM-prefixed JSONC with line and block comments and trailing commas", () => {
+		const parsed = parseLenientJsonObject(
+			'\uFEFF{\n  // line comment\n  "nested": {\n    /* block comment */\n    "enabled": true,\n  },\n}\n',
+			{ label: "Test config" },
+		);
+
+		expect(parsed).toEqual({ nested: { enabled: true } });
+	});
+
+	it("preserves OpenClaw JSON5 compatibility for unquoted keys and single-quoted strings", () => {
+		const parsed = parseLenientJsonObject("{ gateway: { mode: 'local' } }", {
+			label: "OpenClaw config",
+		});
+
+		expect(parsed).toEqual({ gateway: { mode: "local" } });
+	});
+
+	it.each(["[]", "null", '"value"', "42"])("rejects a non-object top level: %s", (raw) => {
+		expect(() => parseLenientJsonObject(raw, { label: "Test config" })).toThrow(
+			"Invalid Test config: expected a top-level object",
+		);
+	});
+
+	it("reports malformed input with the caller label, offset, and parse code", () => {
+		expect(() => parseLenientJsonObject("{ invalid", { label: "OpenCode config" })).toThrow(
+			/^Invalid OpenCode config at offset \d+ \([A-Za-z]+\)$/,
+		);
 	});
 });
 

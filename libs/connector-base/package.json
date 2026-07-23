@@ -9,6 +9,10 @@
     ".": {
       "import": "./dist/index.js",
       "types": "./dist/index.d.ts"
+    },
+    "./lenient-json": {
+      "import": "./dist/lenient-json.js",
+      "types": "./dist/lenient-json.d.ts"
     }
   },
   "files": [
@@ -17,12 +21,14 @@
     "!dist/**/__tests__/**"
   ],
   "scripts": {
-    "build": "bun build ./src/index.ts --outdir ./dist --target node --external better-sqlite3 && bun run build:types",
+    "build": "bun build ./src/index.ts ./src/lenient-json.ts --outdir ./dist --target node --external better-sqlite3 && bun run build:types",
     "build:types": "tsc --emitDeclarationOnly --declaration --outDir dist",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@signet/core": "0.154.0"
+    "@signet/core": "0.154.0",
+    "json5": "^2.2.3",
+    "jsonc-parser": "3.3.1"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

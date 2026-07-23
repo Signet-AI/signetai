@@ -167,7 +167,6 @@
       "dependencies": {
         "@signet/connector-base": "0.142.4",
         "@signet/core": "0.142.4",
-        "json5": "^2.2.3",
       },
       "devDependencies": {
         "@types/node": "^22.0.0",
@@ -264,6 +263,8 @@
       "version": "0.154.0",
       "dependencies": {
         "@signet/core": "0.142.4",
+        "json5": "^2.2.3",
+        "jsonc-parser": "3.3.1",
       },
       "devDependencies": {
         "@types/node": "^22.0.0",

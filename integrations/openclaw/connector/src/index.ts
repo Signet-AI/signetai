@@ -25,14 +25,15 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { homedir, tmpdir } from "node:os";
 import { delimiter, join, resolve } from "node:path";
 import { BaseConnector, type InstallResult, type UninstallResult, atomicWriteJson } from "@signet/connector-base";
+import { parseLenientJsonObject } from "@signet/connector-base/lenient-json";
 import { expandHome } from "@signet/core";
-import { parse as parseJson5 } from "json5";
 
 // ============================================================================
 // Deep merge helper
 // ============================================================================
 
 type JsonObject = Record<string, unknown>;
+const OPENCLAW_PARSE_OPTIONS = { label: "OpenClaw config" } as const;
 
 function isJsonObject(value: unknown): value is JsonObject {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -110,71 +111,6 @@ function deepMerge(target: JsonObject, source: JsonObject): JsonObject {
 	return target;
 }
 
-function stripJsonComments(source: string): string {
-	let result = "";
-	let inString = false;
-	let quote = '"';
-	let escaped = false;
-	let inSingleLineComment = false;
-	let inMultiLineComment = false;
-
-	for (let i = 0; i < source.length; i++) {
-		const ch = source[i];
-		const next = source[i + 1];
-
-		if (inSingleLineComment) {
-			if (ch === "\n") {
-				inSingleLineComment = false;
-				result += ch;
-			}
-			continue;
-		}
-
-		if (inMultiLineComment) {
-			if (ch === "*" && next === "/") {
-				inMultiLineComment = false;
-				i++;
-			}
-			continue;
-		}
-
-		if (inString) {
-			result += ch;
-			if (escaped) {
-				escaped = false;
-			} else if (ch === "\\") {
-				escaped = true;
-			} else if (ch === quote) {
-				inString = false;
-			}
-			continue;
-		}
-
-		if (ch === '"' || ch === "'") {
-			inString = true;
-			quote = ch;
-			result += ch;
-			continue;
-		}
-
-		if (ch === "/" && next === "/") {
-			inSingleLineComment = true;
-			i++;
-			continue;
-		}
-
-		if (ch === "/" && next === "*") {
-			inMultiLineComment = true;
-			i++;
-			continue;
-		}
-
-		result += ch;
-	}
-
-	return result;
-}
-
 function mergePluginAllow(pluginsObj: JsonObject, pluginName: string): { changed: boolean; warning?: string } {
 	const rawAllow = pluginsObj.allow;
 	if (rawAllow === undefined) {
@@ -221,89 +157,6 @@ function removePluginAllow(pluginsObj: JsonObject, pluginName: string): { change
 		pluginsObj.allow = next;
 	}
 	return { changed: !unchanged };
-}
-
-function stripTrailingCommas(source: string): string {
-	let result = "";
-	let inString = false;
-	let quote = '"';
-	let escaped = false;
-
-	for (let i = 0; i < source.length; i++) {
-		const ch = source[i];
-
-		if (inString) {
-			result += ch;
-			if (escaped) {
-				escaped = false;
-			} else if (ch === "\\") {
-				escaped = true;
-			} else if (ch === quote) {
-				inString = false;
-			}
-			continue;
-		}
-
-		if (ch === '"' || ch === "'") {
-			inString = true;
-			quote = ch;
-			result += ch;
-			continue;
-		}
-
-		if (ch === ",") {
-			let j = i + 1;
-			while (j < source.length && /\s/.test(source[j])) j++;
-			if (source[j] === "}" || source[j] === "]") {
-				continue;
-			}
-		}
-
-		result += ch;
-	}
-
-	return result;
-}
-
-function parseJsonOrJson5(raw: string): JsonObject {
-	const content = raw.replace(/^\uFEFF/, "");
-	let lastError: Error | null = null;
-
-	try {
-		const parsed: unknown = JSON.parse(content);
-		if (!isJsonObject(parsed)) {
-			throw new Error("Top-level config must be an object");
-		}
-		return parsed;
-	} catch (error) {
-		lastError = error instanceof Error ? error : new Error(String(error));
-		// Fallback to JSON5-like parsing.
-	}
-
-	const withoutComments = stripJsonComments(content);
-	const withoutTrailingCommas = stripTrailingCommas(withoutComments);
-
-	try {
-		const parsed: unknown = JSON.parse(withoutTrailingCommas);
-		if (!isJsonObject(parsed)) {
-			throw new Error("Top-level config must be an object");
-		}
-		return parsed;
-	} catch (error) {
-		lastError = error instanceof Error ? error : new Error(String(error));
-	}
-
-	try {
-		const parsed: unknown = parseJson5(withoutComments);
-		if (!isJsonObject(parsed)) {
-			throw new Error("Top-level config must be an object");
-		}
-		return parsed;
-	} catch (error) {
-		const json5Error = error instanceof Error ? error : new Error(String(error));
-		const priorError = lastError ? `; prior parse error: ${lastError.message}` : "";
-		throw new Error(`could not parse JSON/JSON5 config (${json5Error.message}${priorError})`);
-	}
 }
 
 /**
@@ -494,7 +347,7 @@ export class OpenClawConnector extends BaseConnector {
 		for (const configPath of this.getDiscoveredConfigPaths()) {
 			try {
 				const raw = readFileSync(configPath, "utf-8");
-				const config = parseJsonOrJson5(raw);
+				const config = parseLenientJsonObject(raw, OPENCLAW_PARSE_OPTIONS);
 				const indent = this.detectIndent(raw);
 
 				// Preserve pre-existing OpenClaw agents not managed by Signet.
@@ -543,7 +396,10 @@ export class OpenClawConnector extends BaseConnector {
 
 		for (const configPath of this.getDiscoveredConfigPaths()) {
 			try {
-				const config = parseJsonOrJson5(readFileSync(configPath, "utf-8")) as OpenClawConfigShape;
+				const config = parseLenientJsonObject(
+					readFileSync(configPath, "utf-8"),
+					OPENCLAW_PARSE_OPTIONS,
+				) as OpenClawConfigShape;
 				const rawWorkspace = config.agents?.defaults?.workspace;
 				if (typeof rawWorkspace !== "string") {
 					continue;
@@ -635,7 +491,7 @@ export class OpenClawConnector extends BaseConnector {
 		for (const configPath of this.getDiscoveredConfigPaths()) {
 			try {
 				const raw = readFileSync(configPath, "utf-8");
-				const config = parseJsonOrJson5(raw);
+				const config = parseLenientJsonObject(raw, OPENCLAW_PARSE_OPTIONS);
 				const indent = this.detectIndent(raw);
 
 				if (Array.isArray(config.plugins)) {
@@ -678,7 +534,10 @@ export class OpenClawConnector extends BaseConnector {
 	isInstalled(): boolean {
 		for (const configPath of this.getDiscoveredConfigPaths()) {
 			try {
-				const config = parseJsonOrJson5(readFileSync(configPath, "utf-8")) as OpenClawConfigShape;
+				const config = parseLenientJsonObject(
+					readFileSync(configPath, "utf-8"),
+					OPENCLAW_PARSE_OPTIONS,
+				) as OpenClawConfigShape;
 				// Legacy hook system
 				if (config.hooks?.internal?.entries?.["signet-memory"]?.enabled === true) {
 					return true;
@@ -704,7 +563,10 @@ export class OpenClawConnector extends BaseConnector {
 
 		for (const configPath of this.getDiscoveredConfigPaths()) {
 			try {
-				const config = parseJsonOrJson5(readFileSync(configPath, "utf-8")) as OpenClawConfigShape;
+				const config = parseLenientJsonObject(
+					readFileSync(configPath, "utf-8"),
+					OPENCLAW_PARSE_OPTIONS,
+				) as OpenClawConfigShape;
 
 				const pluginEntry =
 					config.plugins?.entries?.["signet-memory-openclaw"]?.enabled === true ||
@@ -922,7 +784,7 @@ export class OpenClawConnector extends BaseConnector {
 		for (const configPath of this.getDiscoveredConfigPaths()) {
 			try {
 				const raw = readFileSync(configPath, "utf-8");
-				const config = parseJsonOrJson5(raw);
+				const config = parseLenientJsonObject(raw, OPENCLAW_PARSE_OPTIONS);
 				const indent = this.detectIndent(raw);
 
 				// Migrate legacy array-style plugins to object format
@@ -1020,12 +882,7 @@ export class OpenClawConnector extends BaseConnector {
 
 	private patchConfig(configPath: string, patch: JsonObject): void {
 		const raw = readFileSync(configPath, "utf-8");
-		let config: JsonObject;
-		try {
-			config = parseJsonOrJson5(raw);
-		} catch (e) {
-			throw new Error(`could not parse JSON/JSON5 config (${(e as Error).message})`);
-		}
+		const config = parseLenientJsonObject(raw, OPENCLAW_PARSE_OPTIONS);
 
 		const indent = this.detectIndent(raw);
 		backupConfig(configPath, raw);
@@ -1050,7 +907,7 @@ export class OpenClawConnector extends BaseConnector {
 		for (const configPath of this.getDiscoveredConfigPaths()) {
 			try {
 				const raw = readFileSync(configPath, "utf-8");
-				const config = parseJsonOrJson5(raw);
+				const config = parseLenientJsonObject(raw, OPENCLAW_PARSE_OPTIONS);
 				const indent = this.detectIndent(raw);
 
 				// Legacy configs store plugins as an array of strings. The

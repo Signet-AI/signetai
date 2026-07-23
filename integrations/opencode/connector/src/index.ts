@@ -31,6 +31,7 @@ import {
 	isSignetGeneratedFile,
 	resolveSignetMcpCommand,
 } from "@signet/connector-base";
+import { parseLenientJsonObject } from "@signet/connector-base/lenient-json";
 import {
 	OPENCODE_PIPELINE_AGENT,
 	OPENCODE_PIPELINE_SYSTEM_PROMPT,
@@ -39,7 +40,7 @@ import {
 	loadIdentityMode,
 	resolveSignetDaemonUrl,
 } from "@signet/core";
-import { type ParseError, applyEdits, modify, parse } from "jsonc-parser/lib/esm/main.js";
+import { applyEdits, modify } from "jsonc-parser/lib/esm/main.js";
 import { PLUGIN_BUNDLE } from "./plugin-bundle.js";
 
 // ============================================================================
@@ -84,20 +85,6 @@ function buildPluginBundle(apiKeyFilePath?: string): string {
 	}
 	if (assignments.length === 0) return PLUGIN_BUNDLE;
 	return `${assignments.join("\n")}\n${PLUGIN_BUNDLE}`;
-}
-
-function parseJsonOrJsonc(raw: string): JsonObject {
-	const errors: ParseError[] = [];
-	const parsed: unknown = parse(raw.replace(/^\uFEFF/, ""), errors, {
-		allowTrailingComma: true,
-		disallowComments: false,
-	});
-	if (errors.length > 0) {
-		const first = errors[0];
-		throw new Error(`Invalid OpenCode JSONC at offset ${first.offset} (code ${first.error})`);
-	}
-	if (!isJsonObject(parsed)) throw new Error("OpenCode config must be a top-level object");
-	return parsed;
 }
 
 function formattingOptions(source: string): { insertSpaces: boolean; tabSize: number; eol: string } {
@@ -378,7 +365,7 @@ export class OpenCodeConnector extends BaseConnector {
 
 	private readConfig(configPath: string): JsonObject {
 		try {
-			return parseJsonOrJsonc(readFileSync(configPath, "utf-8"));
+			return parseLenientJsonObject(readFileSync(configPath, "utf-8"), { label: "OpenCode config" });
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			throw new Error(`Cannot update OpenCode config ${configPath}: ${message}`);
