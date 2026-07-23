@@ -10,7 +10,7 @@ function setupDir(): string {
 	return dir;
 }
 
-describe("migrateLegacyRoutingToRegistry (#947 v4)", () => {
+describe("migrateLegacyRoutingToRegistry (#947 v4, #1004 v5 cleanup)", () => {
 	it("compiles legacy extraction + synthesis into inference registry and nulls routing keys", () => {
 		const dir = setupDir();
 		try {
@@ -59,7 +59,7 @@ describe("migrateLegacyRoutingToRegistry (#947 v4)", () => {
 			expect(after).toContain("maxTokens: 1024");
 
 			// Version stamped.
-			expect(after).toMatch(/^configVersion: 4/m);
+			expect(after).toMatch(/^configVersion: 5/m);
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
@@ -134,7 +134,7 @@ describe("migrateLegacyRoutingToRegistry (#947 v4)", () => {
 		}
 	});
 
-	it("stamps v4 even when there is no legacy routing to migrate", () => {
+	it("stamps v5 even when there is no legacy routing to migrate", () => {
 		const dir = setupDir();
 		try {
 			writeFileSync(
@@ -150,9 +150,79 @@ inference:
 			);
 			migrateLegacyRoutingToRegistry(dir);
 			const after = readFileSync(join(dir, "agent.yaml"), "utf-8");
-			expect(after).toMatch(/^configVersion: 4/m);
+			expect(after).toMatch(/^configVersion: 5/m);
 			// Existing inference block untouched.
 			expect(after).toContain("background:");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("cleans flat routing keys from already-migrated v4 configs while preserving tuning", () => {
+		const dir = setupDir();
+		try {
+			writeFileSync(
+				join(dir, "agent.yaml"),
+				`configVersion: 4
+memory:
+  pipelineV2:
+    enabled: true
+    extractionProvider: acpx
+    extractionModel: gpt-5.3-codex-spark
+    extractionStrength: medium
+    extractionTimeout: 45000
+    extraction:
+      harness: codex
+      timeout: 90000
+      strength: low
+inference:
+  targets:
+    background-acpx:
+      executor: acpx
+      models:
+        default:
+          model: gpt-5.3-codex-spark
+  workloads:
+    memoryExtraction:
+      target: background-acpx/default
+`,
+			);
+
+			migrateLegacyRoutingToRegistry(dir);
+			const after = readFileSync(join(dir, "agent.yaml"), "utf-8");
+
+			expect(after).toMatch(/^configVersion: 5/m);
+			expect(after).not.toContain("extractionProvider:");
+			expect(after).not.toContain("extractionModel:");
+			expect(after).not.toContain("extractionStrength:");
+			expect(after).toMatch(/extraction:\s*\n\s+harness: codex\s*\n\s+timeout: 90000\s*\n\s+strength: medium/);
+			expect(after).toContain("extractionTimeout: 45000");
+			expect(after).toContain("enabled: true");
+			expect(after).toContain("target: background-acpx/default");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("keeps canonical strength when the legacy flat value is null", () => {
+		const dir = setupDir();
+		try {
+			writeFileSync(
+				join(dir, "agent.yaml"),
+				`configVersion: 4
+memory:
+  pipelineV2:
+    extractionStrength: null
+    extraction:
+      strength: high
+`,
+			);
+
+			migrateLegacyRoutingToRegistry(dir);
+			const after = readFileSync(join(dir, "agent.yaml"), "utf-8");
+
+			expect(after).not.toContain("extractionStrength:");
+			expect(after).toContain("strength: high");
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}

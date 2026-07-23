@@ -11,7 +11,7 @@
  */
 import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { isMap, isPair, parseDocument, type Document } from "yaml";
+import { type Document, isMap, isPair, parseDocument } from "yaml";
 import { logger } from "./logger";
 
 // Flat keys: flip false → true
@@ -178,8 +178,9 @@ export function migrateInferenceProviders(agentsDir: string): void {
 			if (!isMap(target)) continue;
 			const execNode = target.get("executor", true);
 			const executor = execNode ? String(execNode) : undefined;
-			if (!executor || !(executor in EXECUTOR_AGENT_MAP)) continue;
-			const agent = EXECUTOR_AGENT_MAP[executor]!;
+			if (!executor) continue;
+			const agent = EXECUTOR_AGENT_MAP[executor];
+			if (!agent) continue;
 			// Only insert an acpx block if one isn't already present (avoid duplicates).
 			if (!target.has("acpx")) {
 				target.set("acpx", doc.createNode({ agent }));
@@ -228,7 +229,7 @@ function writeAtomic(path: string, contents: string): void {
 }
 
 // ---------------------------------------------------------------------------
-// v4: retire legacy pipelineV2 routing fields -> inference registry
+// v4/v5: retire legacy pipelineV2 routing fields -> inference registry
 // ---------------------------------------------------------------------------
 // Compiles memory.pipelineV2.extraction/synthesis routing fields into the
 // inference.accounts/targets/workloads registry (mirroring the daemon's
@@ -236,7 +237,11 @@ function writeAtomic(path: string, contents: string): void {
 // model, endpoint, fallbackProvider, command) so the registry is the single
 // source of truth. Tuning fields (timeout, maxTokens, enabled) are preserved.
 //
-// Guarded by configVersion: 4. Idempotent: a file already at v4+ is skipped.
+// v5 completes the v4 cleanup by removing legacy flat routing keys. It must
+// rerun for v4 configs because the incomplete migration shipped to users.
+// Idempotent: a file already at v5+ is skipped.
+
+const LEGACY_FLAT_KEYS = ["extractionProvider", "extractionModel", "extractionStrength"] as const;
 
 /** Map a legacy provider to the account name/id this migration creates. */
 function legacyAccountFor(provider: string): { name: string; family: string; cred: string } | null {
@@ -257,7 +262,7 @@ export function migrateLegacyRoutingToRegistry(agentsDir: string): void {
 	}
 
 	const vMatch = /^configVersion:\s*(\d+)/m.exec(text);
-	if (vMatch && Number(vMatch[1]) >= 4) return;
+	if (vMatch && Number(vMatch[1]) >= 5) return;
 
 	const doc = parseDocument(text);
 	if (doc.errors.length > 0) {
@@ -268,37 +273,39 @@ export function migrateLegacyRoutingToRegistry(agentsDir: string): void {
 		return;
 	}
 
+	const pipeline = doc.getIn(["memory", "pipelineV2"], true);
 	const extraction = doc.getIn(["memory", "pipelineV2", "extraction"], true);
 	const synthesis = doc.getIn(["memory", "pipelineV2", "synthesis"], true);
-	const hasLegacyRouting =
+	const hasLegacyFlatKeys = isMap(pipeline) && LEGACY_FLAT_KEYS.some((key) => pipeline.has(key));
+	const hasNestedLegacyRouting =
 		(isMap(extraction) && (extraction.has("provider") || extraction.has("model") || extraction.has("endpoint"))) ||
 		(isMap(synthesis) && (synthesis.has("provider") || synthesis.has("model") || synthesis.has("endpoint")));
 
-	if (!hasLegacyRouting) {
-		// Nothing to migrate; still stamp v4 so we don't re-parse every startup.
-		stampConfigVersion(doc, 4);
+	if (!hasNestedLegacyRouting && !hasLegacyFlatKeys) {
+		// Nothing to migrate; still stamp v5 so we don't re-parse every startup.
+		stampConfigVersion(doc, 5);
 		writeAtomic(path, doc.toString());
 		return;
 	}
 
 	const mutations: string[] = [];
 
-	// Ensure inference/accounts and inference/targets maps exist.
-	const inference =
-		doc.getIn(["inference"], true) ??
-		doc.setIn(["inference"], doc.createNode({})) ??
-		doc.getIn(["inference"], true);
-	if (!isMap(inference)) {
-		doc.setIn(["inference"], doc.createNode({}));
-	}
-	if (!doc.getIn(["inference", "targets"], true)) {
-		doc.setIn(["inference", "targets"], doc.createNode({}));
-	}
-	if (!doc.getIn(["inference", "accounts"], true)) {
-		doc.setIn(["inference", "accounts"], doc.createNode({}));
-	}
-	if (!doc.getIn(["inference", "workloads"], true)) {
-		doc.setIn(["inference", "workloads"], doc.createNode({}));
+	if (hasNestedLegacyRouting) {
+		// Ensure inference/accounts and inference/targets maps exist.
+		const inference =
+			doc.getIn(["inference"], true) ?? doc.setIn(["inference"], doc.createNode({})) ?? doc.getIn(["inference"], true);
+		if (!isMap(inference)) {
+			doc.setIn(["inference"], doc.createNode({}));
+		}
+		if (!doc.getIn(["inference", "targets"], true)) {
+			doc.setIn(["inference", "targets"], doc.createNode({}));
+		}
+		if (!doc.getIn(["inference", "accounts"], true)) {
+			doc.setIn(["inference", "accounts"], doc.createNode({}));
+		}
+		if (!doc.getIn(["inference", "workloads"], true)) {
+			doc.setIn(["inference", "workloads"], doc.createNode({}));
+		}
 	}
 
 	function compileTarget(
@@ -322,11 +329,14 @@ export function migrateLegacyRoutingToRegistry(agentsDir: string): void {
 		// Create the account if the provider needs one.
 		const acct = legacyAccountFor(provider);
 		if (acct) {
-			doc.setIn(["inference", "accounts", acct.name], doc.createNode({
-				kind: "api",
-				providerFamily: acct.family,
-				credentialRef: acct.cred,
-			}));
+			doc.setIn(
+				["inference", "accounts", acct.name],
+				doc.createNode({
+					kind: "api",
+					providerFamily: acct.family,
+					credentialRef: acct.cred,
+				}),
+			);
 		}
 		// Create/update the target.
 		const targetNode = doc.createNode({
@@ -337,14 +347,19 @@ export function migrateLegacyRoutingToRegistry(agentsDir: string): void {
 		});
 		doc.setIn(["inference", "targets", targetName], targetNode);
 		// Bind the workload to it.
-		doc.setIn(["inference", "workloads", workloadKey], doc.createNode({
-			target: `${targetName}/default`,
-		}));
+		doc.setIn(
+			["inference", "workloads", workloadKey],
+			doc.createNode({
+				target: `${targetName}/default`,
+			}),
+		);
 		mutations.push(`${workloadKey} -> inference.targets.${targetName} (executor: ${provider})`);
 	}
 
-	compileTarget(extraction, "legacy-extraction", "memoryExtraction");
-	compileTarget(synthesis, "legacy-synthesis", "sessionSynthesis");
+	if (hasNestedLegacyRouting) {
+		compileTarget(extraction, "legacy-extraction", "memoryExtraction");
+		compileTarget(synthesis, "legacy-synthesis", "sessionSynthesis");
+	}
 
 	// Null the legacy ROUTING keys (keep tuning: timeout, maxTokens, enabled).
 	function nullRoutingKeys(node: ReturnType<typeof doc.getIn>, label: string): void {
@@ -362,7 +377,26 @@ export function migrateLegacyRoutingToRegistry(agentsDir: string): void {
 	nullRoutingKeys(extraction, "extraction");
 	nullRoutingKeys(synthesis, "synthesis");
 
-	stampConfigVersion(doc, 4);
+	if (isMap(pipeline)) {
+		const flatStrength = pipeline.get("extractionStrength");
+		if (flatStrength !== undefined && flatStrength !== null) {
+			const canonicalExtraction = isMap(extraction) ? extraction : doc.createNode({ strength: flatStrength });
+			if (!isMap(extraction)) {
+				pipeline.set("extraction", canonicalExtraction);
+			} else {
+				canonicalExtraction.set("strength", flatStrength);
+			}
+			mutations.push("moved memory.pipelineV2.extractionStrength -> extraction.strength");
+		}
+		for (const key of LEGACY_FLAT_KEYS) {
+			if (pipeline.has(key)) {
+				pipeline.delete(key);
+				mutations.push(`removed memory.pipelineV2.${key}`);
+			}
+		}
+	}
+
+	stampConfigVersion(doc, 5);
 	writeAtomic(path, doc.toString());
 
 	if (mutations.length > 0) {
