@@ -2,11 +2,16 @@ import { afterEach, describe, expect, it, mock } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { registerOAuthProvider, unregisterOAuthProvider } from "@earendil-works/pi-ai/oauth";
+import { resetOAuthStateForTests, storeOAuthCredentials } from "./inference-oauth";
 import { getOrCreateInferenceRouter, resetInferenceRouterForTests } from "./inference-router";
+import { invalidateSecretsCache } from "./secrets";
 
 const originalFetch = globalThis.fetch;
 const originalOpenRouterApiKey = process.env.OPENROUTER_API_KEY;
 const originalOpenAiApiKey = process.env.OPENAI_API_KEY;
+const originalSignetPath = process.env.SIGNET_PATH;
+const REVOKED_OAUTH_PROVIDER_ID = "signet-router-review-oauth";
 
 /** Build an OpenAI-compatible SSE streaming response (pi-ai's openai-completions transport streams). */
 function openAiSseResponse(
@@ -23,6 +28,11 @@ function openAiSseResponse(
 
 afterEach(() => {
 	globalThis.fetch = originalFetch;
+	resetOAuthStateForTests();
+	unregisterOAuthProvider(REVOKED_OAUTH_PROVIDER_ID);
+	invalidateSecretsCache();
+	if (originalSignetPath === undefined) Reflect.deleteProperty(process.env, "SIGNET_PATH");
+	else process.env.SIGNET_PATH = originalSignetPath;
 	if (originalOpenRouterApiKey === undefined) {
 		process.env.OPENROUTER_API_KEY = undefined;
 	} else {
@@ -37,6 +47,94 @@ afterEach(() => {
 });
 
 describe("InferenceRouter legacy API credentials", () => {
+	it("isolates a rejected OAuth refresh from healthy fallback targets", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "signet-router-oauth-refresh-"));
+		try {
+			mkdirSync(join(dir, "memory"), { recursive: true });
+			writeFileSync(
+				join(dir, "agent.yaml"),
+				`inference:
+  defaultPolicy: auto
+  accounts:
+    revoked:
+      kind: subscription_session
+      providerFamily: ${REVOKED_OAUTH_PROVIDER_ID}
+  targets:
+    revoked:
+      kind: subscription_session
+      executor: ${REVOKED_OAUTH_PROVIDER_ID}
+      account: revoked
+      models:
+        default:
+          model: unavailable
+    healthy:
+      executor: openai-compatible
+      endpoint: http://127.0.0.1:1234/v1
+      models:
+        default:
+          model: healthy-local
+  policies:
+    auto:
+      mode: automatic
+      defaultTargets:
+        - revoked/default
+        - healthy/default
+  workloads:
+    interactive:
+      policy: auto
+`,
+			);
+
+			process.env.SIGNET_PATH = dir;
+			invalidateSecretsCache();
+			registerOAuthProvider({
+				id: REVOKED_OAUTH_PROVIDER_ID,
+				name: "Revoked review OAuth",
+				async login() {
+					throw new Error("login not used");
+				},
+				async refreshToken() {
+					throw new Error("revoked refresh token");
+				},
+				getApiKey(credentials) {
+					return credentials.access;
+				},
+			});
+			await storeOAuthCredentials(REVOKED_OAUTH_PROVIDER_ID, {
+				refresh: "refresh-revoked",
+				access: "access-expired",
+				expires: Date.now() - 1,
+			});
+
+			globalThis.fetch = mock((input: string | URL | Request) => {
+				const url = String(input);
+				if (url.endsWith("/models")) {
+					return Promise.resolve(new Response(JSON.stringify({ data: [] }), { status: 200 }));
+				}
+				return Promise.resolve(openAiSseResponse("healthy fallback answer"));
+			}) as unknown as typeof fetch;
+
+			const router = getOrCreateInferenceRouter(dir);
+			const status = await router.status(true);
+			expect(status.ok).toBe(true);
+			if (!status.ok) return;
+			expect(status.value.runtimeSnapshot.targets["revoked/default"]?.accountState).toBe("expired");
+			expect(status.value.runtimeSnapshot.targets["healthy/default"]?.accountState).toBe("ready");
+
+			const result = await router.execute(
+				{ operation: "interactive", promptPreview: "fallback after revoked OAuth" },
+				"Answer through the healthy target",
+				{ maxTokens: 64, timeoutMs: 1000 },
+			);
+			expect(result.ok).toBe(true);
+			if (!result.ok) return;
+			expect(result.value.text).toBe("healthy fallback answer");
+			expect(result.value.decision.targetRef).toBe("healthy/default");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	it("uses OPENROUTER_API_KEY for legacy pipeline OpenRouter synthesis targets", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "signet-router-openrouter-"));
 		try {

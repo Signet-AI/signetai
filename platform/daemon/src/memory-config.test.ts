@@ -3,8 +3,11 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+	DEFAULT_LLAMACPP_MAX_INPUT_TOKENS,
 	DEFAULT_PIPELINE_V2,
+	MAX_LLAMACPP_MAX_INPUT_TOKENS,
 	MAX_PROMPT_SUBMIT_EMBEDDING_TIMEOUT_MS,
+	MIN_LLAMACPP_MAX_INPUT_TOKENS,
 	MIN_PROMPT_SUBMIT_EMBEDDING_TIMEOUT_MS,
 	loadMemoryConfig,
 	loadPipelineConfig,
@@ -95,6 +98,7 @@ describe("loadMemoryConfig", () => {
 		expect(cfg.embedding.model).toBe("nomic-embed-text-v1.5");
 		expect(cfg.embedding.dimensions).toBe(768);
 		expect(cfg.embedding.promptSubmitTimeoutMs).toBe(MIN_PROMPT_SUBMIT_EMBEDDING_TIMEOUT_MS);
+		expect(cfg.embedding.llamaCppMaxInputTokens).toBe(DEFAULT_LLAMACPP_MAX_INPUT_TOKENS);
 	});
 
 	it("deliberately enables the bounded freshness prior by default and allows opt-out", () => {
@@ -179,6 +183,23 @@ describe("loadMemoryConfig", () => {
 		const highDir = makeTempAgentsDir();
 		writeFileSync(join(highDir, "agent.yaml"), "embedding:\n  provider: ollama\n  promptSubmitTimeoutMs: 999999\n");
 		expect(loadMemoryConfig(highDir).embedding.promptSubmitTimeoutMs).toBe(MAX_PROMPT_SUBMIT_EMBEDDING_TIMEOUT_MS);
+	});
+
+	it("loads and clamps the llama.cpp input token limit", () => {
+		const configuredDir = makeTempAgentsDir();
+		writeFileSync(
+			join(configuredDir, "agent.yaml"),
+			"embedding:\n  provider: llama-cpp\n  llamaCppMaxInputTokens: 1800\n",
+		);
+		expect(loadMemoryConfig(configuredDir).embedding.llamaCppMaxInputTokens).toBe(1800);
+
+		const lowDir = makeTempAgentsDir();
+		writeFileSync(join(lowDir, "agent.yaml"), "embedding:\n  llamaCppMaxInputTokens: 1\n");
+		expect(loadMemoryConfig(lowDir).embedding.llamaCppMaxInputTokens).toBe(MIN_LLAMACPP_MAX_INPUT_TOKENS);
+
+		const highDir = makeTempAgentsDir();
+		writeFileSync(join(highDir, "agent.yaml"), "embedding:\n  llamaCppMaxInputTokens: 999999\n");
+		expect(loadMemoryConfig(highDir).embedding.llamaCppMaxInputTokens).toBe(MAX_LLAMACPP_MAX_INPUT_TOKENS);
 	});
 
 	it("respects ollama+nomic-embed-text config without overriding", () => {

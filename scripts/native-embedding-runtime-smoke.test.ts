@@ -63,9 +63,16 @@ function floatVector(value: unknown): Float32Array {
 async function stopChild(child: ChildProcessWithoutNullStreams): Promise<void> {
 	if (child.exitCode !== null) return;
 	child.kill("SIGTERM");
+	// Keep the SIGTERM grace window well under bun's default afterEach timeout
+	// (5s). A healthy daemon honors SIGTERM in milliseconds; only a deliberately
+	// wedged child (the isolation test pins it on a blackhole fetch) holds out,
+	// and SIGKILL at 2s is safe on a throwaway process. At 5s the grace window
+	// collided with the hook timeout, so the slowest runner (darwin-arm64)
+	// deterministically reported "a beforeEach/afterEach hook timed out" even
+	// though the test body passed.
 	await Promise.race([
 		new Promise<void>((resolve) => child.once("close", () => resolve())),
-		Bun.sleep(5_000).then(() => {
+		Bun.sleep(2_000).then(() => {
 			if (child.exitCode === null) child.kill("SIGKILL");
 		}),
 	]);

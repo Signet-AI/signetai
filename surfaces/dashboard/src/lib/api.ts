@@ -3702,13 +3702,223 @@ export interface CatalogModel {
 	input: readonly string[];
 	reasoning: boolean;
 }
+export interface OAuthProviderMeta {
+	readonly id: string;
+	readonly name: string;
+	readonly usesCallbackServer: boolean;
+}
+export interface OAuthProviderStatus extends OAuthProviderMeta {
+	readonly connected: boolean;
+	readonly error?: string;
+}
 export interface InferenceCatalog {
 	providers: readonly string[];
 	models: Record<string, CatalogModel[]>;
+	modelErrors: Record<string, string>;
+	oauthProviders: readonly OAuthProviderStatus[];
 	acpxAgents: readonly string[];
 }
 export async function getInferenceCatalog(): Promise<InferenceCatalog> {
 	const response = await authFetch(`${API_BASE}/api/inference/catalog`);
 	if (!response.ok) throw new Error("Failed to fetch inference catalog");
-	return response.json();
+	const raw = await response.json();
+	// Default #968 fields so a pre-#968 daemon (which omits oauthProviders/
+	// modelErrors) doesn't break direct callers — the type declares them
+	// required, so honor that contract here rather than at every call site.
+	return {
+		providers: raw.providers ?? [],
+		models: raw.models ?? {},
+		modelErrors: raw.modelErrors ?? {},
+		oauthProviders: raw.oauthProviders ?? [],
+		acpxAgents: raw.acpxAgents ?? [],
+	};
 }
+
+// Bounded live OAuth login stream. The daemon runs the provider's interactive
+// flow and emits events (auth url, device code, prompts, select, connected,
+// error, done). Mirrors the SSE shape from inference-oauth.ts. POST-based
+// because the login route mutates daemon state; browsers cannot attach the
+// dashboard auth header to a native EventSource.
+export type OAuthLoginEvent =
+	| { readonly type: "session"; readonly sessionId: string; readonly providerId: string }
+	| { readonly type: "auth"; readonly url: string; readonly instructions?: string }
+	| {
+			readonly type: "device_code";
+			readonly userCode: string;
+			readonly verificationUri: string;
+			readonly intervalSeconds?: number;
+			readonly expiresInSeconds?: number;
+	  }
+	| ({ readonly type: "prompt"; readonly responseId: string } & {
+			readonly message: string;
+			readonly placeholder?: string;
+			readonly allowEmpty?: boolean;
+	  })
+	| ({ readonly type: "select"; readonly responseId: string } & {
+			readonly message: string;
+			options: ReadonlyArray<{ readonly id: string; readonly label: string }>;
+	  })
+	| { readonly type: "manual_code"; readonly responseId: string; readonly message: string }
+	| { readonly type: "progress"; readonly message: string }
+	| { readonly type: "connected"; readonly providerId: string }
+	| { readonly type: "error"; readonly error: string }
+	| { readonly type: "done" };
+
+export interface OAuthLoginHandle {
+	readonly sessionId: string | null;
+	onEvent(handler: (event: OAuthLoginEvent) => void): void;
+	onError(handler: (message: string) => void): void;
+	close(): void;
+}
+
+export async function startOAuthLogin(
+	providerId: string,
+	onConnected?: () => void,
+): Promise<OAuthLoginHandle> {
+	const handlers: Array<(event: OAuthLoginEvent) => void> = [];
+	const errorHandlers: Array<(message: string) => void> = [];
+	const controller = new AbortController();
+	let closed = false;
+	let capturedSessionId: string | null = null;
+	let sawDone = false;
+
+	const pump = authFetch(`${API_BASE}/api/inference/oauth/login/${encodeURIComponent(providerId)}`, {
+		method: "POST",
+		headers: { Accept: "text/event-stream" },
+		signal: controller.signal,
+	})
+		.then(async (response) => {
+			if (!response.ok || !response.body) {
+				let message = `OAuth login failed (HTTP ${response.status})`;
+				try {
+					const body = await response.json();
+					if (body?.error) message = body.error;
+				} catch {
+					/* keep status message */
+				}
+				throw new Error(message);
+			}
+			if (response.headers.get("X-Signet-OAuth-Session-Id")) {
+				capturedSessionId = response.headers.get("X-Signet-OAuth-Session-Id");
+			}
+			const reader = response.body.getReader();
+			const decoder = new TextDecoder();
+			let buffer = "";
+			while (!closed) {
+				const { value, done } = await reader.read();
+				if (done) break;
+				buffer += decoder.decode(value, { stream: true });
+				buffer = buffer.replace(/\r\n/g, "\n");
+				let boundary = buffer.indexOf("\n\n");
+				while (boundary !== -1) {
+					const rawEvent = buffer.slice(0, boundary);
+					buffer = buffer.slice(boundary + 2);
+					const data = rawEvent
+						.split(/\r?\n/)
+						.filter((line) => line.startsWith("data:"))
+						.map((line) => line.slice(5).trimStart())
+						.join("\n");
+					if (data) {
+						try {
+							const event = JSON.parse(data) as OAuthLoginEvent;
+							if (event.type === "session") capturedSessionId = event.sessionId;
+							if (event.type === "connected") onConnected?.();
+							if (event.type === "done") sawDone = true;
+							for (const handler of handlers) handler(event);
+						} catch {
+							/* skip malformed frame */
+						}
+					}
+					boundary = buffer.indexOf("\n\n");
+				}
+			}
+			if (!closed && !sawDone) {
+				for (const handler of errorHandlers) handler("OAuth login stream ended unexpectedly");
+			}
+		})
+		.catch((error) => {
+			if (closed || controller.signal.aborted) return;
+			const message = error instanceof Error ? error.message : "OAuth login failed";
+			for (const handler of errorHandlers) handler(message);
+		});
+
+	void pump;
+	return {
+		get sessionId() {
+			return capturedSessionId;
+		},
+		onEvent(handler) {
+			handlers.push(handler);
+		},
+		onError(handler) {
+			errorHandlers.push(handler);
+		},
+		close() {
+			if (closed) return;
+			closed = true;
+			controller.abort();
+		},
+	};
+}
+
+export async function completeOAuthInteraction(
+	sessionId: string,
+	responseId: string,
+	value: string,
+): Promise<boolean> {
+	const response = await authFetch(`${API_BASE}/api/inference/oauth/complete`, {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({ sessionId, responseId, value }),
+	});
+	return response.ok;
+}
+
+export async function disconnectOAuthProvider(providerId: string): Promise<boolean> {
+	const response = await authFetch(`${API_BASE}/api/inference/oauth/disconnect/${encodeURIComponent(providerId)}`, {
+		method: "POST",
+	});
+	return response.ok;
+}
+
+// Inference router runtime status. refresh=1 forces a fresh availability probe
+// per target (used by the "verify connection" button after saving a key).
+export interface InferenceRuntimeTarget {
+	readonly available: boolean;
+	readonly health: "healthy" | "blocked" | "degraded" | "unknown" | string;
+	readonly circuitOpen: boolean;
+	readonly accountState: "ready" | "missing" | "expired" | "unknown" | string;
+	readonly unavailableReason?: string;
+}
+export interface InferenceStatus {
+	readonly enabled: boolean;
+	readonly source?: string;
+	readonly defaultPolicy?: string;
+	readonly defaultAgentId?: string;
+	readonly policies?: readonly string[];
+	readonly targetRefs?: readonly string[];
+	readonly runtimeSnapshot?: { readonly targets: Record<string, InferenceRuntimeTarget> };
+	readonly concurrency?: unknown;
+	readonly error?: string;
+}
+export async function getInferenceStatus(refresh = false): Promise<InferenceStatus | null> {
+	try {
+		const query = refresh ? "?refresh=1" : "";
+		const response = await authFetch(`${API_BASE}/api/inference/status${query}`);
+		if (!response.ok) return null;
+		return response.json();
+	} catch {
+		return null;
+	}
+}
+
+// Per-provider API-key format hints + validation. Re-exported from the
+// dependency-free inference-keys module so the logic is unit-testable outside
+// the SvelteKit runtime (this file pulls in $app/environment via auth.ts).
+export {
+	apiKeyFormat,
+	providerKeySecretName,
+	validateApiKey,
+	type ApiKeyFormat,
+	type KeyValidationState,
+} from "./inference-keys";

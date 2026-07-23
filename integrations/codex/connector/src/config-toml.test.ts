@@ -319,7 +319,7 @@ describe("CodexConnector.install — config.toml MCP registration", () => {
 		expect(content).toContain("[mcp_servers.signet.http_headers]");
 		expect(content).toContain("Authorization = 'Bearer sig_sk_codex_old_secret'");
 
-		delete process.env.SIGNET_API_KEY;
+		Reflect.deleteProperty(process.env, "SIGNET_API_KEY");
 		await connector().install(tempHome);
 
 		content = readFileSync(configPath, "utf-8");
@@ -393,9 +393,19 @@ describe("CodexConnector.install — native plugin bundle", () => {
 			"plugin.json",
 		);
 		const mcpPath = join(codexDir, ".tmp", "signet-plugin-marketplace", "plugins", "signet", ".mcp.json");
+		const pluginHooksPath = join(
+			codexDir,
+			".tmp",
+			"signet-plugin-marketplace",
+			"plugins",
+			"signet",
+			"hooks",
+			"hooks.json",
+		);
 		expect(existsSync(marketplacePath)).toBe(true);
 		expect(existsSync(pluginManifestPath)).toBe(true);
 		expect(existsSync(mcpPath)).toBe(true);
+		expect(codexHookContractErrors(JSON.parse(readFileSync(pluginHooksPath, "utf-8")))).toEqual([]);
 		expect(result.filesWritten).toContain(pluginManifestPath);
 
 		const config = readFileSync(configPath, "utf-8");
@@ -635,10 +645,69 @@ function readHooksJson(): Record<string, unknown> {
 	return JSON.parse(readFileSync(hooksPath, "utf-8"));
 }
 
+const CODEX_HOOK_EVENTS = new Set([
+	"PreToolUse",
+	"PermissionRequest",
+	"PostToolUse",
+	"PreCompact",
+	"PostCompact",
+	"SessionStart",
+	"SessionEnd",
+	"UserPromptSubmit",
+	"SubagentStart",
+	"SubagentStop",
+	"Stop",
+]);
+
+function codexHookContractErrors(value: unknown): string[] {
+	const errors: string[] = [];
+	if (typeof value !== "object" || value === null || Array.isArray(value)) return ["root must be an object"];
+	const root = value as Record<string, unknown>;
+	for (const key of Object.keys(root)) {
+		if (key !== "description" && key !== "hooks") errors.push(`unknown root field: ${key}`);
+	}
+	if (root.description !== undefined && typeof root.description !== "string")
+		errors.push("description must be a string");
+	if (typeof root.hooks !== "object" || root.hooks === null || Array.isArray(root.hooks)) {
+		errors.push("hooks must be an object");
+		return errors;
+	}
+	for (const [event, groups] of Object.entries(root.hooks as Record<string, unknown>)) {
+		if (!CODEX_HOOK_EVENTS.has(event)) errors.push(`unknown hook event: ${event}`);
+		if (!Array.isArray(groups)) {
+			errors.push(`${event} must be an array`);
+			continue;
+		}
+		for (const [groupIndex, group] of groups.entries()) {
+			if (typeof group !== "object" || group === null || Array.isArray(group)) {
+				errors.push(`${event}[${groupIndex}] must be an object`);
+				continue;
+			}
+			const matcherGroup = group as Record<string, unknown>;
+			for (const key of Object.keys(matcherGroup)) {
+				if (key !== "matcher" && key !== "hooks") errors.push(`unknown matcher field: ${event}[${groupIndex}].${key}`);
+			}
+			if (!Array.isArray(matcherGroup.hooks)) errors.push(`${event}[${groupIndex}].hooks must be an array`);
+		}
+	}
+	return errors;
+}
+
 describe("CodexConnector.install — hooks.json schema", () => {
+	test("contract fixture rejects private ownership fields", () => {
+		const errors = codexHookContractErrors({
+			_signet: true,
+			hooks: { SessionStart: [{ _signet: true, hooks: [] }] },
+		});
+
+		expect(errors).toContain("unknown root field: _signet");
+		expect(errors).toContain("unknown matcher field: SessionStart[0]._signet");
+	});
+
 	test("writes hooks under a top-level 'hooks' key with PascalCase event names", async () => {
 		await connector().install(tempHome);
 		const json = readHooksJson();
+		expect(codexHookContractErrors(json)).toEqual([]);
 
 		expect(json.hooks).toBeDefined();
 		expect(typeof json.hooks).toBe("object");
@@ -743,16 +812,16 @@ describe("CodexConnector.install — hooks.json schema", () => {
 		const hooks = json.hooks as Record<string, Record<string, unknown>[]>;
 		const startHandler = ((hooks.SessionStart[0] as Record<string, unknown>).hooks as Record<string, unknown>[])[0];
 
+		expect(codexHookContractErrors(json)).toEqual([]);
 		expect(startHandler.timeout).toBe(20);
 	});
 
-	test("preserves unrelated top-level keys when refreshing only Signet hooks", async () => {
+	test("preserves the schema-supported description when refreshing Signet hooks", async () => {
 		writeFileSync(
 			hooksPath,
 			JSON.stringify({
 				_signet: true,
-				version: 1,
-				metadata: { owner: "third-party" },
+				description: "third-party hooks",
 				hooks: {
 					SessionStart: [
 						{ _signet: true, hooks: [{ type: "command", command: "signet hook session-start -H codex", timeout: 10 }] },
@@ -766,8 +835,9 @@ describe("CodexConnector.install — hooks.json schema", () => {
 		const hooks = json.hooks as Record<string, Record<string, unknown>[]>;
 		const startHandler = ((hooks.SessionStart[0] as Record<string, unknown>).hooks as Record<string, unknown>[])[0];
 
-		expect(json.version).toBe(1);
-		expect(json.metadata).toEqual({ owner: "third-party" });
+		expect(json.description).toBe("third-party hooks");
+		expect(json._signet).toBeUndefined();
+		expect(codexHookContractErrors(json)).toEqual([]);
 		expect(startHandler.timeout).toBe(20);
 	});
 
@@ -793,6 +863,7 @@ describe("CodexConnector.install — hooks.json schema", () => {
 
 		await connector().install(tempHome);
 		const json = readHooksJson();
+		expect(JSON.stringify(json)).not.toContain('"_signet"');
 		const hooks = json.hooks as Record<string, Record<string, unknown>[]>;
 		const startGroups = hooks.SessionStart;
 		const signetHandlers = startGroups.flatMap((group) =>
@@ -862,10 +933,17 @@ describe("CodexConnector.install — hooks.json schema", () => {
 		expect(json.stop).toBeUndefined();
 	});
 
-	test("sets _signet marker", async () => {
+	test("does not serialize private ownership markers", async () => {
 		await connector().install(tempHome);
 		const json = readHooksJson();
-		expect(json._signet).toBe(true);
+		expect(JSON.stringify(json)).not.toContain('"_signet"');
+	});
+
+	test("bundled plugin hooks satisfy the Codex contract", () => {
+		const bundledPath = join(import.meta.dir, "..", "..", "plugin", "plugins", "signet", "hooks", "hooks.json");
+		const bundled = JSON.parse(readFileSync(bundledPath, "utf-8"));
+
+		expect(codexHookContractErrors(bundled)).toEqual([]);
 	});
 
 	test("idempotent: re-running install produces identical hooks.json", async () => {
@@ -900,6 +978,7 @@ describe("CodexConnector.install — hooks.json schema", () => {
 
 		expect(c.isInstalled()).toBe(true);
 		const json = readHooksJson();
+		expect(json._signet).toBeUndefined();
 		const hooks = json.hooks as Record<string, unknown>;
 		expect(hooks.SessionStart).toBeDefined();
 		expect(hooks.UserPromptSubmit).toBeDefined();
@@ -924,6 +1003,7 @@ describe("CodexConnector.install — hooks.json legacy migration", () => {
 		await connector().install(tempHome);
 		const json = readHooksJson();
 
+		expect(codexHookContractErrors(json)).toEqual([]);
 		expect(json.hooks).toBeDefined();
 		expect(json.sessionStart).toBeUndefined();
 		expect(json.userPromptSubmit).toBeUndefined();
@@ -977,7 +1057,7 @@ describe("CodexConnector.uninstall — hooks.json cleanup", () => {
 		const json = readHooksJson();
 		const hooks = json.hooks as Record<string, unknown[]>;
 		(hooks as Record<string, unknown>).PreToolUse = [
-			{ hooks: [{ type: "command", command: "echo pre-tool", timeout: 5 }] },
+			{ _signet: true, hooks: [{ type: "command", command: "echo pre-tool", timeout: 5 }] },
 		];
 		writeFileSync(hooksPath, JSON.stringify(json));
 
@@ -987,6 +1067,7 @@ describe("CodexConnector.uninstall — hooks.json cleanup", () => {
 		const remaining = JSON.parse(readFileSync(hooksPath, "utf-8"));
 		const remHooks = remaining.hooks as Record<string, unknown[]>;
 		expect(remHooks.PreToolUse).toBeDefined();
+		expect(JSON.stringify(remaining)).not.toContain('"_signet"');
 		expect(remHooks.SessionStart).toBeUndefined();
 		expect(remHooks.UserPromptSubmit).toBeUndefined();
 		expect(remHooks.Stop).toBeUndefined();
@@ -994,6 +1075,21 @@ describe("CodexConnector.uninstall — hooks.json cleanup", () => {
 });
 
 describe("CodexConnector.isInstalled", () => {
+	test("does not treat legacy markers on third-party hooks as ownership", () => {
+		writeFileSync(
+			hooksPath,
+			JSON.stringify({
+				hooks: {
+					SessionStart: [
+						{ _signet: true, hooks: [{ type: "command", command: "echo third-party", timeout: 5 }] },
+					],
+				},
+			}),
+		);
+
+		expect(connector().isInstalled()).toBe(false);
+	});
+
 	test("returns true after install", async () => {
 		const c = connector();
 		expect(c.isInstalled()).toBe(false);

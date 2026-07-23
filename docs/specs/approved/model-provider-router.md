@@ -253,6 +253,15 @@ the spec stays useful as both contract and progress tracker.
 
 ### Deferred / phase 3
 
+OAuth provider discovery, interactive login, encrypted credential storage,
+disconnect, and request-time token refresh are delivered by #966 using pi-ai's
+provider registry. The daemon preserves the existing account/target/workload
+routing model while accepting pi-ai provider ids dynamically.
+Dynamic provider ids therefore pass config parsing before registry/model
+resolution; unsupported executors or models fail explicitly during provider
+construction. The provider resolver's default error remains the exhaustiveness
+safeguard for ids that are not statically known.
+
 These items remain intentionally deferred because the phase 2 hardening wave
 focused on making the daemon-owned router safe enough for broader harness
 adoption. They should become follow-up specs or sprint briefs rather than
@@ -262,7 +271,6 @@ blocking the current router foundation.
   - persisted account health records
   - persisted quota/cost ledgers
   - durable expiry / invalidation state transitions
-  - refresh or revalidation flows where supported
 - Schema and provider-abstraction parity with the full target design:
   - canonical top-level `models:` map with reusable capability metadata
   - richer `RouteRequest` metadata for harness, subtask, tool, and runtime

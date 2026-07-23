@@ -257,4 +257,34 @@ describe("maintenance-worker", () => {
 		expect(sweepCalled).toBe(true);
 		db.close();
 	});
+
+	it("does not abort the cycle when the inference provider is not initialised", async () => {
+		// Regression: the retroactive supersession sweep called getLlmProvider()
+		// unguarded, which throws when no resolver is set. With the defaults
+		// (graph + feedback + supersession all enabled) this aborted the entire
+		// maintenance cycle, skipping retention, dedup, dead-memory scan, and
+		// feedback telemetry. The sweep must be best-effort/non-fatal.
+		const db = freshDb();
+		const accessor = asAccessor(db);
+		const tracker = createProviderTracker();
+
+		// Dead jobs → non-empty recommendations → exercises the execute branch
+		// where the supersession sweep runs after repairs.
+		for (let i = 0; i < 2; i++) {
+			db.prepare(
+				`INSERT INTO memory_jobs (id, memory_id, job_type, status, attempts, max_attempts, failed_at, created_at, updated_at)
+				 VALUES (?, ?, 'extract', 'dead', 3, 3, ?, ?, ?)`,
+			).run(`dead-noprovider-${i}`, `mem-noprovider-${i}`, now, now, now);
+		}
+
+		const handle = startMaintenanceWorker(accessor, BASE_CFG, tracker, null);
+		handle.stop();
+
+		// No initInferenceProviderResolver() call — emulates a boot where the
+		// provider is not yet wired up. tick() must resolve, not reject.
+		const result = await handle.tick();
+		expect(result.recommendations.length).toBeGreaterThan(0);
+		expect(result.executed.length).toBeGreaterThan(0);
+		db.close();
+	});
 });

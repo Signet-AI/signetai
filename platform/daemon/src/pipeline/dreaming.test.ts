@@ -500,6 +500,47 @@ describe("dreaming", () => {
 			expect(passes[0]?.status).toBe("failed");
 		});
 
+		it("accepts valid JSON after a reasoning preamble and resets the token counter", async () => {
+			addDreamingTokens(accessor, AGENT, 120_000);
+			seedEntity(db, "ent-1", "Test", "concept");
+			const response = JSON.stringify({ mutations: [], summary: "Reviewed graph after reasoning" });
+			const generate = async () => `Looking at {graph} before deciding...\n${response}\nDone.`;
+
+			const result = await runDreamingPass(accessor, generate, defaultCfg(), "/tmp", AGENT, "incremental");
+
+			expect(result.summary).toBe("Reviewed graph after reasoning");
+			expect(getDreamingState(accessor, AGENT).tokensSinceLastPass).toBe(0);
+		});
+
+		it("accepts fenced JSON after a reasoning preamble", async () => {
+			seedEntity(db, "ent-1", "Test", "concept");
+			const response = JSON.stringify({ mutations: [], summary: "Reviewed fenced result" });
+			const generate = async () => `Looking at the graph...\n\`\`\`json\n${response}\n\`\`\``;
+
+			const result = await runDreamingPass(accessor, generate, defaultCfg(), "/tmp", AGENT, "incremental");
+
+			expect(result.summary).toBe("Reviewed fenced result");
+		});
+
+		it("keeps braces, escaped quotes, and backslashes inside JSON strings balanced", async () => {
+			seedEntity(db, "ent-1", "Test", "concept");
+			const summary = 'Reviewed {draft}, the "quoted" value, and C:\\temp';
+			const response = JSON.stringify({ mutations: [], summary });
+			const generate = async () => `Reasoning first.\n${response}`;
+
+			const result = await runDreamingPass(accessor, generate, defaultCfg(), "/tmp", AGENT, "incremental");
+
+			expect(result.summary).toBe(summary);
+		});
+
+		it("rejects malformed balanced output after a preamble", async () => {
+			seedEntity(db, "ent-1", "Test", "concept");
+			const generate = async () => 'Looking...\n{"mutations": nope, "summary": "broken"}';
+
+			await expect(runDreamingPass(accessor, generate, defaultCfg(), "/tmp", AGENT, "incremental")).rejects.toThrow();
+			expect(getDreamingPasses(accessor, AGENT)[0]?.status).toBe("failed");
+		});
+
 		it("resets token counter after successful pass", async () => {
 			addDreamingTokens(accessor, AGENT, 120_000);
 			seedEntity(db, "ent-1", "Test", "concept");
