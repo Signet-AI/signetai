@@ -7,6 +7,7 @@ import type {
 	RouteDecision,
 	RouteRequest,
 	RouterResult,
+	RoutingAccountConfig,
 	RoutingConfig,
 	RoutingOperationKind,
 	RoutingRuntimeSnapshot,
@@ -21,7 +22,8 @@ import {
 	parseYamlDocument,
 	resolveRoutingDecision,
 } from "@signet/core";
-import { createRoutingProvider } from "./inference-provider-factory";
+import { isOAuthProvider, resolveOAuthCredential } from "./inference-oauth";
+import { type ResolvedInferenceCredential, createRoutingProvider } from "./inference-provider-factory";
 import { logger } from "./logger";
 import { loadMemoryConfig } from "./memory-config";
 import {
@@ -222,6 +224,14 @@ function isRuntimeBlocked(state: RoutingRuntimeState): boolean {
 		state.accountState === "missing" ||
 		state.accountState === "expired" ||
 		state.accountState === "rate_limited"
+	);
+}
+
+function isOAuthBackedAccount(account: RoutingAccountConfig | undefined): account is RoutingAccountConfig {
+	return (
+		account !== undefined &&
+		isOAuthProvider(account.providerFamily) &&
+		(account.kind === "subscription_session" || !account.credentialRef)
 	);
 }
 
@@ -459,14 +469,21 @@ export class InferenceRouter {
 		}
 	}
 
-	private async resolveCredential(credentialRef: string | undefined): Promise<string | undefined> {
+	private async resolveCredential(
+		account: RoutingAccountConfig | undefined,
+	): Promise<ResolvedInferenceCredential | undefined> {
+		if (isOAuthBackedAccount(account)) {
+			const oauth = await resolveOAuthCredential(account.providerFamily);
+			if (oauth) return { apiKey: oauth.apiKey, oauthCredentials: oauth.credentials };
+		}
+		const credentialRef = account?.credentialRef;
 		if (!credentialRef) return undefined;
 		const envValue = process.env[credentialRef];
 		if (typeof envValue === "string" && envValue.trim().length > 0) {
-			return envValue.trim();
+			return { apiKey: envValue.trim() };
 		}
 		try {
-			return await getSecret(credentialRef);
+			return { apiKey: await getSecret(credentialRef) };
 		} catch {
 			return undefined;
 		}
@@ -479,8 +496,13 @@ export class InferenceRouter {
 		acpxHooks?: AcpxHooksMode,
 	): Promise<StreamCapableLlmProvider> {
 		const cacheKey = `${loaded.signature}:${targetId}/${modelId}:${acpxHooks ?? "configured-hooks"}`;
-		const cached = this.providerCache.get(cacheKey);
-		if (cached) return cached;
+		const target = loaded.config.targets[targetId];
+		const account = target?.account ? loaded.config.accounts[target.account] : undefined;
+		const oauthBacked = isOAuthBackedAccount(account);
+		if (!oauthBacked) {
+			const cached = this.providerCache.get(cacheKey);
+			if (cached) return cached;
+		}
 
 		const build = (async (): Promise<StreamCapableLlmProvider> => {
 			return createRoutingProvider({
@@ -489,11 +511,11 @@ export class InferenceRouter {
 				modelId,
 				acpxHooks,
 				claudeCode: loadMemoryConfig(this.agentsDir).pipelineV2.claudeCode,
-				resolveCredential: (credentialRef) => this.resolveCredential(credentialRef),
+				resolveCredential: (candidateAccount) => this.resolveCredential(candidateAccount),
 			});
 		})();
 
-		this.providerCache.set(cacheKey, build);
+		if (!oauthBacked) this.providerCache.set(cacheKey, build);
 		return build;
 	}
 
@@ -522,7 +544,9 @@ export class InferenceRouter {
 			};
 		}
 		const account = target.account ? loaded.config.accounts[target.account] : undefined;
+		const oauthCredentialAccount = isOAuthBackedAccount(account);
 		const needsCredential =
+			oauthCredentialAccount ||
 			target.executor === "anthropic" ||
 			target.executor === "openrouter" ||
 			(target.executor === "openai-compatible" && !isLocalInferenceEndpoint(target.endpoint));
@@ -536,13 +560,13 @@ export class InferenceRouter {
 			};
 		}
 		if (needsCredential) {
-			const credential = await this.resolveCredential(account?.credentialRef);
+			const credential = await this.resolveCredential(account);
 			if (!credential) {
 				return {
 					available: false,
 					health: "blocked",
 					circuitOpen: false,
-					accountState: "missing",
+					accountState: target.kind === "subscription_session" ? "expired" : "missing",
 					unavailableReason: `missing credential${target.account ? ` for ${target.account}` : ""}`,
 				};
 			}
@@ -567,6 +591,13 @@ export class InferenceRouter {
 				unavailableReason: formatExecutionError(error),
 			};
 		}
+	}
+
+	invalidateCredentialState(): void {
+		this.providerCache.clear();
+		this.observedTargetState.clear();
+		this.observedAccountState.clear();
+		this.resetRuntimeCaches();
 	}
 
 	private async runtimeSnapshot(loaded: LoadedRoutingConfig, refresh = false): Promise<RoutingRuntimeSnapshot> {

@@ -630,6 +630,57 @@ describe("inference routing api", () => {
 		expect(body.policies).toContain("auto");
 	});
 
+	it("exposes the pi-ai provider, OAuth, and model catalog without hiding resolver failures", async () => {
+		const res = await app.request(
+			new Request("http://localhost/api/inference/catalog", {
+				headers: { Authorization: `Bearer ${auth}` },
+			}),
+		);
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as {
+			providers: string[];
+			oauthProviders: Array<{ id: string; name: string }>;
+			models: Record<string, Array<{ id: string }>>;
+			modelErrors: Record<string, string>;
+		};
+		expect(body.providers).toContain("openrouter");
+		expect(body.oauthProviders.some((provider) => provider.id === "anthropic")).toBe(true);
+		expect(body.models.openrouter?.length).toBeGreaterThan(0);
+		expect(body.modelErrors).toEqual({});
+	});
+
+	it("validates OAuth route inputs and never returns credential fields", async () => {
+		const providersRes = await app.request(
+			new Request("http://localhost/api/inference/oauth/providers", {
+				headers: { Authorization: `Bearer ${auth}` },
+			}),
+		);
+		expect(providersRes.status).toBe(200);
+		const providersText = await providersRes.text();
+		expect(providersText).not.toContain('"access"');
+		expect(providersText).not.toContain('"refresh"');
+
+		const unknownLogin = await app.request(
+			new Request("http://localhost/api/inference/oauth/login/missing-provider", {
+				method: "POST",
+				headers: { Authorization: `Bearer ${auth}` },
+			}),
+		);
+		expect(unknownLogin.status).toBe(404);
+
+		const invalidComplete = await app.request(
+			new Request("http://localhost/api/inference/oauth/complete", {
+				method: "POST",
+				headers: {
+					Authorization: `Bearer ${auth}`,
+					"content-type": "application/json",
+				},
+				body: JSON.stringify({ sessionId: "missing" }),
+			}),
+		);
+		expect(invalidComplete.status).toBe(400);
+	});
+
 	it("lists gateway models including automatic routing alias", async () => {
 		const res = await app.request(
 			new Request("http://localhost/v1/models", {
@@ -673,6 +724,21 @@ describe("inference route hardening", () => {
 				}),
 			);
 			expect(executeRes.status).toBe(403);
+
+			const providersRes = await app.request(
+				new Request("http://localhost/api/inference/oauth/providers", {
+					headers: { Authorization: `Bearer ${operatorToken}` },
+				}),
+			);
+			expect(providersRes.status).toBe(200);
+
+			const disconnectRes = await app.request(
+				new Request("http://localhost/api/inference/oauth/disconnect/anthropic", {
+					method: "POST",
+					headers: { Authorization: `Bearer ${operatorToken}` },
+				}),
+			);
+			expect(disconnectRes.status).toBe(403);
 		} finally {
 			resetInferenceRouterForTests();
 			rmSync(root, { recursive: true, force: true });

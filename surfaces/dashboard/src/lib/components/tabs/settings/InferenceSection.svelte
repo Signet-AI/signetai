@@ -5,17 +5,15 @@ import FormSection from "$lib/components/config/FormSection.svelte";
 import SettingList from "$lib/components/config/SettingList.svelte";
 import SettingRow from "$lib/components/config/SettingRow.svelte";
 import { type InferenceCatalog, getInferenceCatalog } from "$lib/api";
+import { CheckCircle, KeyRound, Plus, TriangleAlertIcon } from "$lib/icons";
 import { st } from "$lib/stores/settings.svelte";
+import { invalidateAll } from "$app/navigation";
+import ConnectProviderDialog from "./ConnectProviderDialog.svelte";
 
-// Inference settings (#947). Rebuilt to match the OpenCode settings-v2 rhythm:
-// SettingList containers with SettingRows (title+description left, control
-// right). Three concerns, each its own list:
-//   1. Background executor — which backend runs Pipeline V2 extraction.
-//   2. Model — which model that executor uses.
-//   3. Embeddings — provider/model/endpoint for the vector store.
-//
-// Writes the routing registry (inference.*) so Pipeline V2 reads it directly,
-// plus the workload binding (inference.workloads.memoryExtraction.target).
+// Inference settings (#947/#966/#968). A provider connect wall sits above the
+// target pickers: connect Claude Max / ChatGPT / Copilot via OAuth, or any API
+// provider via a pasted key (stored encrypted, never surfaced as a "secret
+// name"). Background + aggregation targets then draw from connected providers.
 
 const selectTriggerClass =
 	"font-mono text-[11px] text-[var(--sig-text)] bg-[var(--sig-bg)] border-[var(--sig-border-strong)] rounded-lg w-full h-auto min-h-[30px] px-2 py-[5px] box-border focus-visible:border-[var(--sig-accent)]";
@@ -25,15 +23,110 @@ const selectItemClass = "font-mono text-[11px] rounded-lg";
 const inputClass =
 	"font-mono text-[11px] text-[var(--sig-text)] bg-[var(--sig-bg)] border-[var(--sig-border-strong)] rounded-lg w-full h-auto min-h-[30px] px-2 py-[5px] box-border focus-visible:border-[var(--sig-accent)]";
 
-// pi-ai catalog
+// pi-ai catalog (providers + OAuth providers + models)
 let catalog = $state<InferenceCatalog | null>(null);
+let catalogFailed = $state(false);
+// Defensive: a daemon predating #968 omits oauthProviders/modelErrors. Default
+// them so an older runtime doesn't break the panel — it just shows fewer cards.
+async function loadCatalog(): Promise<InferenceCatalog | null> {
+	try {
+		const c = await getInferenceCatalog();
+		catalogFailed = false;
+		return {
+			providers: c.providers ?? [],
+			models: c.models ?? {},
+			modelErrors: c.modelErrors ?? {},
+			oauthProviders: c.oauthProviders ?? [],
+			acpxAgents: c.acpxAgents ?? [],
+		};
+	} catch {
+		catalogFailed = true;
+		return null;
+	}
+}
 $effect(() => {
-	void getInferenceCatalog().then(
-		(c) => (catalog = c),
-		() => (catalog = null),
-	);
+	void loadCatalog().then((c) => (catalog = c));
 });
 
+// ---------------------------------------------------------------------------
+// Provider connect wall
+// ---------------------------------------------------------------------------
+// OAuth-only subscription providers (no direct API key path). pi-ai reaches
+// these only through their OAuth login.
+const OAUTH_ONLY_PROVIDERS = new Set(["openai-codex", "github-copilot"]);
+
+// Curated featured set shown in the wall, in display order. Intersected with
+// the live catalog so a provider missing from the installed pi-ai build never
+// appears. Each entry maps the pi-ai provider family to a friendly name.
+const FEATURED: ReadonlyArray<{ id: string; name: string }> = [
+	{ id: "anthropic", name: "Anthropic (Claude)" },
+	{ id: "openai-codex", name: "ChatGPT / Codex" },
+	{ id: "github-copilot", name: "GitHub Copilot" },
+	{ id: "openrouter", name: "OpenRouter" },
+	{ id: "openai", name: "OpenAI" },
+	{ id: "google", name: "Google (Gemini)" },
+	{ id: "xai", name: "xAI (Grok)" },
+	{ id: "groq", name: "Groq" },
+	{ id: "mistral", name: "Mistral" },
+	{ id: "deepseek", name: "DeepSeek" },
+];
+
+interface ConnectableProvider {
+	id: string;
+	name: string;
+	supportsOAuth: boolean;
+	supportsApiKey: boolean;
+	connected: boolean;
+	isOAuth: boolean;
+}
+
+let connecting = $state<{ provider: ConnectableProvider } | null>(null);
+
+function connectableProviders(): ConnectableProvider[] {
+	if (!catalog) return [];
+	const oauthIds = new Set(catalog.oauthProviders.map((p) => p.id));
+	const catalogIds = new Set(catalog.providers);
+	const oauthStatus = new Map(catalog.oauthProviders.map((p) => [p.id, p] as const));
+	return FEATURED.filter((f) => oauthIds.has(f.id) || catalogIds.has(f.id)).map((f) => {
+		const supportsOAuth = oauthIds.has(f.id);
+		const isOAuthOnly = OAUTH_ONLY_PROVIDERS.has(f.id);
+		const supportsApiKey = catalogIds.has(f.id) && !isOAuthOnly;
+		const connected = supportsOAuth
+			? (oauthStatus.get(f.id)?.connected ?? false) || hasApiKeyAccount(f.id)
+			: hasApiKeyAccount(f.id);
+		return { id: f.id, name: f.name, supportsOAuth, supportsApiKey, connected, isOAuth: supportsOAuth };
+	});
+}
+
+function hasApiKeyAccount(providerFamily: string): boolean {
+	return !!st.aStr(["inference", "accounts", providerFamily, "credentialRef"]);
+}
+
+function openConnect(provider: ConnectableProvider): void {
+	connecting = { provider };
+}
+
+function closeConnect(): void {
+	connecting = null;
+}
+
+// After a connect/disconnect, persist any config writes (account entries are
+// in-memory until st.save()), then re-read the catalog + refresh. Order matters:
+// save() writes agent.yaml, then invalidateAll() re-reads it — so the account
+// wiring survives the refresh instead of being clobbered by st.init() from disk.
+async function onProviderChanged(): Promise<void> {
+	if (st.isDirty) await st.save();
+	catalog = await loadCatalog();
+	try {
+		await invalidateAll();
+	} catch {
+		/* navigation may not be ready in all contexts */
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Background / aggregation target helpers (unchanged logic)
+// ---------------------------------------------------------------------------
 const TARGET_NAME = "background";
 const ACCOUNT_NAME = "background";
 
@@ -49,8 +142,6 @@ const EXECUTOR_OPTIONS = [
 
 const ACPX_AGENTS = ["claude", "codex", "opencode", "gemini", "pi", "openclaw"];
 
-// Aggregation executor options EXCLUDE acpx — aggregate recall is latency-
-// sensitive and pi-ai-only (subprocess spawn latency would dominate).
 const AGGREGATION_EXECUTOR_OPTIONS = EXECUTOR_OPTIONS.filter((o) => o.value !== "acpx");
 
 function bgExecutor(): string {
@@ -66,12 +157,6 @@ function providerFamilyForExecutor(exec: string): string {
 	return "openai";
 }
 
-// Mirror the router's needsCredential (inference-router.ts): anthropic and
-// openrouter always need a credential; openai-compatible needs one only when
-// the endpoint is remote; ollama/llama-cpp/acpx never do. isLocalEndpoint is
-// inlined here (not imported from @signet/core) because the dashboard is a
-// browser bundle and cannot pull core's Node-only runtime (better-sqlite3).
-// Keep this in sync with platform/core/src/routing.ts isLocalInferenceEndpoint.
 function isLocalEndpoint(endpoint: string): boolean {
 	if (!endpoint) return true;
 	try {
@@ -86,17 +171,11 @@ function targetNeedsAccount(exec: string, endpoint: string): boolean {
 	return false;
 }
 
-// Ensure the account has the shape parseAccountConfig accepts: it returns null
-// (silently dropping the account) if `kind` or `providerFamily` is absent, which
-// would block every API target with "account ... not found".
 function ensureAccount(accountName: string, executor: string): void {
 	st.aSetStr(["inference", "accounts", accountName, "kind"], "api");
 	st.aSetStr(["inference", "accounts", accountName, "providerFamily"], providerFamilyForExecutor(executor));
 }
 
-// Write the complete, routing-valid target + account shape for an executor.
-// Local/acpx targets get NO account; API targets get a linked account with the
-// valid { kind, providerFamily, credentialRef } shape.
 function writeTarget(opts: {
 	targetName: string;
 	accountName: string;
@@ -108,9 +187,6 @@ function writeTarget(opts: {
 	const accountBase = ["inference", "accounts", accountName];
 	const workloadBase = ["inference", "workloads", workloadKey];
 	if (!executor) {
-		// Reset the whole target: clear every field so allTargetRefs (which
-		// enumerates via targets.*.models) does not surface an orphaned ref that
-		// would block with "account ... not found". aDel prunes empty parents.
 		st.aDel([...targetBase, "executor"]);
 		st.aDel([...targetBase, "account"]);
 		st.aDel([...targetBase, "models"]);
@@ -167,12 +243,6 @@ function bgModelOptions(): Array<{ value: string; label: string }> {
 	return (catalog.models[family] ?? []).map((m) => ({ value: m.id, label: `${m.name} (${m.id})` }));
 }
 
-// ---------------------------------------------------------------------------
-// Aggregation (separate latency-optimized path, pi-ai-only — no ACPX).
-// Aggregate recall is query-time evidence synthesis; it depends on inference
-// speed, not raw intelligence or cost, so it gets its own target bound to the
-// aggregate_recall workload. The router enforces no-ACPX at the routing layer.
-// ---------------------------------------------------------------------------
 const AGG_TARGET_NAME = "aggregation";
 const AGG_ACCOUNT_NAME = "aggregation";
 
@@ -213,7 +283,6 @@ const aggNeedsApiKey = $derived(
 	(aggExecutor() === "openai-compatible" && !isLocalEndpoint(aggEndpoint())),
 );
 
-// Embeddings (folded in)
 const EMBEDDING_PROVIDER_OPTIONS = [
 	{ value: "", label: "— select —" },
 	{ value: "native", label: "native (built-in nomic)" },
@@ -253,9 +322,61 @@ const needsApiKey = $derived(
 const embNonNative = $derived(embProvider() && embProvider() !== "native" && embProvider() !== "");
 </script>
 
-<FormSection description="Inference backends. Pick the backend + model that runs background memory work, and configure embeddings. Everything here saves with the Save bar.">
+<FormSection description="Connect AI providers, then choose which one runs background memory work. Connect once; keys live encrypted and never leave the daemon.">
+
 	<!-- ============================================================ -->
-	<!-- Background executor + model + endpoint + key                 -->
+	<!-- Provider connect wall                                         -->
+	<!-- ============================================================ -->
+	<SettingList title="Providers">
+		<div class="provider-grid">
+			{#each connectableProviders() as provider (provider.id)}
+				<button
+					class="provider-card {provider.connected ? "provider-card--connected" : ""}"
+					onclick={() => openConnect(provider)}
+				>
+					<div class="provider-card-head">
+						<span class="provider-name">{provider.name}</span>
+						{#if provider.connected}
+							<span class="status-badge status-badge--ok"><CheckCircle class="size-3" /> Connected</span>
+						{:else}
+							<span class="status-badge status-badge--off"><Plus class="size-3" /> Connect</span>
+						{/if}
+					</div>
+					<div class="provider-card-meta">
+						{#if provider.supportsOAuth && provider.supportsApiKey}
+							<span class="meta-pill">Sign in or API key</span>
+						{:else if provider.supportsOAuth}
+							<span class="meta-pill"><KeyRound class="size-2.5" /> Sign in</span>
+						{:else}
+							<span class="meta-pill"><KeyRound class="size-2.5" /> API key</span>
+						{/if}
+						{#if catalog?.models[provider.id]?.length}
+							<span class="meta-count">{catalog.models[provider.id].length} models</span>
+						{/if}
+					</div>
+				</button>
+			{:else}
+				{#if catalogFailed}
+					<div class="provider-empty">Couldn't load the provider catalog. Update the daemon and retry.</div>
+				{:else}
+					<div class="provider-empty">Loading providers…</div>
+				{/if}
+			{/each}
+		</div>
+		{#if catalog?.modelErrors && Object.keys(catalog.modelErrors).length > 0}
+			<div class="catalog-warnings">
+				{#each Object.entries(catalog.modelErrors) as [providerId, message] (providerId)}
+					<div class="catalog-warning">
+						<TriangleAlertIcon class="size-3" />
+						<span>{providerId}: {message}</span>
+					</div>
+				{/each}
+			</div>
+		{/if}
+	</SettingList>
+
+	<!-- ============================================================ -->
+	<!-- Background executor + model + endpoint + key                  -->
 	<!-- ============================================================ -->
 	<SettingList title="Background inference">
 		<SettingRow
@@ -332,7 +453,7 @@ const embNonNative = $derived(embProvider() && embProvider() !== "native" && emb
 			{#if needsApiKey}
 				<SettingRow
 					title="API key (secret name)"
-					description="The Signet secret holding the key, e.g. ANTHROPIC_API_KEY. The key value is never shown."
+					description="The Signet secret holding the key, e.g. ANTHROPIC_API_KEY. Or connect via the Providers panel above to skip this. The key value is never shown."
 				>
 					<Input
 						class={inputClass}
@@ -464,8 +585,114 @@ const embNonNative = $derived(embProvider() && embProvider() !== "native" && emb
 	</SettingList>
 </FormSection>
 
+{#if connecting}
+	<ConnectProviderDialog
+		provider={connecting.provider}
+		supportsOAuth={connecting.provider.supportsOAuth}
+		supportsApiKey={connecting.provider.supportsApiKey}
+		onclose={closeConnect}
+		onsaved={() => onProviderChanged()}
+	/>
+{/if}
+
 <style>
 	:global(.setting-list-wrap + .setting-list-wrap) {
 		margin-top: var(--space-lg);
+	}
+	.provider-grid {
+		display: grid;
+		grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+		gap: 10px;
+		width: 100%;
+	}
+	.provider-card {
+		display: flex;
+		flex-direction: column;
+		gap: 8px;
+		padding: 11px 12px;
+		border: 1px solid var(--sig-border);
+		border-radius: 9px;
+		background: var(--sig-bg);
+		cursor: pointer;
+		text-align: left;
+		transition: border-color 0.12s, background 0.12s;
+	}
+	.provider-card:hover {
+		border-color: var(--sig-accent);
+		background: var(--sig-surface-raised);
+	}
+	.provider-card--connected {
+		border-color: rgba(74, 222, 128, 0.35);
+	}
+	.provider-card-head {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 8px;
+	}
+	.provider-name {
+		font-family: var(--font-body);
+		font-size: 12px;
+		font-weight: 600;
+		color: var(--sig-text);
+	}
+	.status-badge {
+		display: inline-flex;
+		align-items: center;
+		gap: 3px;
+		font-family: var(--font-body);
+		font-size: 9.5px;
+		font-weight: 500;
+		padding: 2px 6px;
+		border-radius: 999px;
+		white-space: nowrap;
+	}
+	.status-badge--ok {
+		color: #4ade80;
+		background: rgba(74, 222, 128, 0.12);
+	}
+	.status-badge--off {
+		color: var(--sig-text-muted);
+		background: var(--sig-surface-raised);
+	}
+	.provider-card-meta {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+	}
+	.meta-pill {
+		display: inline-flex;
+		align-items: center;
+		gap: 3px;
+		font-family: var(--font-body);
+		font-size: 9.5px;
+		color: var(--sig-text-muted);
+	}
+	.meta-count {
+		font-family: var(--font-mono);
+		font-size: 9.5px;
+		color: var(--sig-text-muted);
+		opacity: 0.7;
+	}
+	.provider-empty {
+		font-family: var(--font-body);
+		font-size: 11px;
+		color: var(--sig-text-muted);
+		padding: 12px;
+		grid-column: 1 / -1;
+	}
+	.catalog-warnings {
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
+		margin-top: 4px;
+	}
+	.catalog-warning {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		font-family: var(--font-body);
+		font-size: 10.5px;
+		color: #fbbf24;
 	}
 </style>

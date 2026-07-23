@@ -22,6 +22,7 @@ export interface EmbeddingConfig {
 	base_url: string;
 	api_key?: string;
 	promptSubmitTimeoutMs?: number;
+	llamaCppMaxInputTokens?: number;
 }
 
 export interface MemorySearchConfig {
@@ -271,6 +272,9 @@ export const DEFAULT_PIPELINE_V2: ResolvedPipelineV2Config = {
 
 export const DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434";
 export const DEFAULT_LLAMACPP_BASE_URL = "http://localhost:8080";
+export const DEFAULT_LLAMACPP_MAX_INPUT_TOKENS = 1400;
+export const MIN_LLAMACPP_MAX_INPUT_TOKENS = 128;
+export const MAX_LLAMACPP_MAX_INPUT_TOKENS = 131072;
 export const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
 export const DEFAULT_PROMPT_SUBMIT_EMBEDDING_TIMEOUT_MS = 1000;
 export const MIN_PROMPT_SUBMIT_EMBEDDING_TIMEOUT_MS = 1000;
@@ -1122,6 +1126,7 @@ export function loadMemoryConfig(agentsDir: string): ResolvedMemoryConfig {
 			dimensions: 768,
 			base_url: "",
 			promptSubmitTimeoutMs: DEFAULT_PROMPT_SUBMIT_EMBEDDING_TIMEOUT_MS,
+			llamaCppMaxInputTokens: DEFAULT_LLAMACPP_MAX_INPUT_TOKENS,
 		},
 		search: {
 			alpha: 0.7,
@@ -1159,6 +1164,12 @@ export function loadMemoryConfig(agentsDir: string): ResolvedMemoryConfig {
 				MIN_PROMPT_SUBMIT_EMBEDDING_TIMEOUT_MS,
 				MAX_PROMPT_SUBMIT_EMBEDDING_TIMEOUT_MS,
 				defaults.embedding.promptSubmitTimeoutMs ?? DEFAULT_PROMPT_SUBMIT_EMBEDDING_TIMEOUT_MS,
+			);
+			defaults.embedding.llamaCppMaxInputTokens = clampPositive(
+				emb.llamaCppMaxInputTokens,
+				MIN_LLAMACPP_MAX_INPUT_TOKENS,
+				MAX_LLAMACPP_MAX_INPUT_TOKENS,
+				defaults.embedding.llamaCppMaxInputTokens ?? DEFAULT_LLAMACPP_MAX_INPUT_TOKENS,
 			);
 
 			if (emb.provider === "none") {
