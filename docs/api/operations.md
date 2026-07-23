@@ -513,9 +513,20 @@ Returns `409` if another pause/resume transition is already running.
   "changed": true,
   "paused": true,
   "file": "/home/user/.agents/agent.yaml",
-  "mode": "paused"
+  "mode": "paused",
+  "quiescence": {
+    "activeAtStart": 1,
+    "aborted": 1,
+    "remaining": 0,
+    "timedOut": false
+  }
 }
 ```
+
+After a successful pause, background extraction, session synthesis (including
+dreaming), and repair inference admission is closed. Active provider calls are
+aborted and boundedly drained before this response. `remaining: 0` confirms
+that no tracked background inference call remains active.
 
 ### POST /api/pipeline/resume
 

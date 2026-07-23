@@ -38,6 +38,14 @@ const OBSERVED_RATE_LIMIT_TTL_MS = 60_000;
 const OBSERVED_AUTH_TTL_MS = 5 * 60_000;
 const OBSERVED_MISSING_TTL_MS = 60_000;
 const REDACTED_UPSTREAM_DETAIL = "[redacted upstream detail]";
+const BACKGROUND_OPERATIONS = new Set<RoutingOperationKind>(["memory_extraction", "session_synthesis", "repair"]);
+
+export interface BackgroundInferenceQuiescence {
+	readonly activeAtStart: number;
+	readonly aborted: number;
+	readonly remaining: number;
+	readonly timedOut: boolean;
+}
 
 export interface InferenceExecutionAttempt {
 	readonly targetRef: string;
@@ -235,8 +243,63 @@ export class InferenceRouter {
 	private readonly observedTargetState = new Map<string, ObservedRuntimeOverride>();
 	private readonly observedAccountState = new Map<string, ObservedRuntimeOverride>();
 	private providerCacheSignature: string | null = null;
+	private backgroundAdmissionsOpen = true;
+	private readonly activeBackgroundExecutions = new Map<number, AbortController>();
+	private readonly backgroundSettledWaiters = new Set<() => void>();
+	private nextBackgroundExecutionId = 1;
 
 	constructor(private readonly agentsDir: string) {}
+
+	resumeBackgroundInference(): void {
+		this.backgroundAdmissionsOpen = true;
+	}
+
+	async quiesceBackgroundInference(timeoutMs = 5_000): Promise<BackgroundInferenceQuiescence> {
+		this.backgroundAdmissionsOpen = false;
+		const activeAtStart = this.activeBackgroundExecutions.size;
+		for (const controller of this.activeBackgroundExecutions.values()) controller.abort();
+		if (this.activeBackgroundExecutions.size === 0) {
+			return { activeAtStart, aborted: activeAtStart, remaining: 0, timedOut: false };
+		}
+
+		let timeout: ReturnType<typeof setTimeout> | null = null;
+		let timedOut = false;
+		let settledWaiter: (() => void) | null = null;
+		await Promise.race([
+			new Promise<void>((resolve) => {
+				settledWaiter = resolve;
+				this.backgroundSettledWaiters.add(resolve);
+			}),
+			new Promise<void>((resolve) => {
+				timeout = setTimeout(() => {
+					timedOut = true;
+					resolve();
+				}, timeoutMs);
+			}),
+		]);
+		if (timeout) clearTimeout(timeout);
+		if (settledWaiter) this.backgroundSettledWaiters.delete(settledWaiter);
+		return { activeAtStart, aborted: activeAtStart, remaining: this.activeBackgroundExecutions.size, timedOut };
+	}
+
+	private beginBackgroundExecution(
+		operation: RoutingOperationKind,
+	): { readonly id: number; readonly signal: AbortSignal } | null | undefined {
+		if (!BACKGROUND_OPERATIONS.has(operation)) return undefined;
+		if (!this.backgroundAdmissionsOpen) return null;
+		const id = this.nextBackgroundExecutionId++;
+		const controller = new AbortController();
+		this.activeBackgroundExecutions.set(id, controller);
+		return { id, signal: controller.signal };
+	}
+
+	private finishBackgroundExecution(id: number | undefined): void {
+		if (id === undefined) return;
+		this.activeBackgroundExecutions.delete(id);
+		if (this.activeBackgroundExecutions.size !== 0) return;
+		for (const resolve of this.backgroundSettledWaiters) resolve();
+		this.backgroundSettledWaiters.clear();
+	}
 
 	private async loadConfig(): Promise<RouterResult<LoadedRoutingConfig>> {
 		let raw: unknown = {};
@@ -617,6 +680,39 @@ export class InferenceRouter {
 			readonly maxTokens?: number;
 			readonly refresh?: boolean;
 			readonly acpxHooks?: AcpxHooksMode;
+			readonly signal?: AbortSignal;
+			readonly abortSignal?: AbortSignal;
+		},
+	): Promise<RouterResult<InferenceExecutionResult>> {
+		const background = this.beginBackgroundExecution(request.operation);
+		if (background === null) {
+			return {
+				ok: false,
+				error: { code: "execution-failed", message: "Background inference is paused." },
+			};
+		}
+		const callerSignal = opts?.signal ?? opts?.abortSignal;
+		const signal = background
+			? callerSignal
+				? AbortSignal.any([background.signal, callerSignal])
+				: background.signal
+			: callerSignal;
+		try {
+			return await this.executeRouted(request, prompt, { ...opts, signal });
+		} finally {
+			this.finishBackgroundExecution(background?.id);
+		}
+	}
+
+	private async executeRouted(
+		request: RouteRequest,
+		prompt: string,
+		opts?: {
+			readonly timeoutMs?: number;
+			readonly maxTokens?: number;
+			readonly refresh?: boolean;
+			readonly acpxHooks?: AcpxHooksMode;
+			readonly signal?: AbortSignal;
 		},
 	): Promise<RouterResult<InferenceExecutionResult>> {
 		const loaded = await this.loadConfig();
@@ -625,6 +721,7 @@ export class InferenceRouter {
 		if (!decision.ok) return decision;
 		const attempts: InferenceExecutionAttempt[] = [];
 		for (const targetRef of [decision.value.targetRef, ...decision.value.fallbackTargetRefs]) {
+			if (opts?.signal?.aborted) break;
 			const parsed = parseRoutingTargetRef(targetRef);
 			if (!parsed.ok) {
 				attempts.push({
@@ -656,6 +753,7 @@ export class InferenceRouter {
 				const result = await generateWithTracking(provider, prompt, {
 					timeoutMs: opts?.timeoutMs,
 					maxTokens: opts?.maxTokens,
+					signal: opts?.signal,
 					// aggregate_recall is latency-sensitive (the routing engine already
 					// excludes ACPX subprocesses for it). Suppress thinking for the same
 					// reason: thinking tokens would dominate the synthesis budget.
@@ -690,6 +788,7 @@ export class InferenceRouter {
 					durationMs: Date.now() - startedAt,
 					error: message,
 				});
+				if (opts?.signal?.aborted) break;
 			}
 		}
 		return {

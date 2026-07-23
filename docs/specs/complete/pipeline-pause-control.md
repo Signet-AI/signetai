@@ -5,6 +5,7 @@ informed_by:
 success_criteria:
   - "Operators can pause extraction work from the CLI or dashboard without losing later backlog processing"
   - "While paused, new memories still persist and queue for later extraction instead of being dropped"
+  - "A successful pause closes background inference admission and aborts or drains every active background provider call"
   - "Resuming restores normal worker startup and backlog draining with no schema migration"
 scope_boundary: "Temporary operator control for background pipeline activity only; does not add schedules, per-stage pausing, or new memory semantics"
 ---
@@ -67,6 +68,12 @@ When `enabled = true` and `paused = true`:
 - do keep retention-only startup behavior
 - do report pipeline mode as `paused`
 
+The live pause transition first closes router admission for extraction,
+summary/synthesis, repair, and dreaming inference. Active calls receive an
+abort signal (including ACPX subprocess trees), and the endpoint does not
+report success until they settle or the bounded quiescence wait expires. The
+response reports the active, aborted, remaining, and timeout counts.
+
 ### C) CLI control
 
 Add:
@@ -123,6 +130,8 @@ pipeline is paused, then drain after resume.
 - `/api/pipeline/status` reports `mode = "paused"` when applicable
 - `/api/pipeline/pause` and `/api/pipeline/resume` expose live operator control
   with structured mutation responses
+- successful pause responses include a `quiescence` result; `remaining = 0`
+  is the observable completion contract
 
 ## 6) Validation and tests
 
@@ -133,3 +142,5 @@ pipeline is paused, then drain after resume.
 - Paused mode reports correctly in status/observability
 - Resume clears the flag and restores normal startup path
 - Dashboard pause/resume helpers surface structured success and error results
+- Router quiescence aborts active background inference, blocks new admission,
+  and prevents an aborted target from spawning a fallback provider

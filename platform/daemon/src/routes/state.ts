@@ -13,6 +13,7 @@ import { type AuthConfig, AuthRateLimiter, loadOrCreateSecret, parseAuthConfig }
 import { getDbAccessor } from "../db-accessor";
 import { type DiagnosticsOptions, type DiagnosticsReport, createProviderTracker, getDiagnostics } from "../diagnostics";
 import type { EmbeddingTrackerHandle } from "../embedding-tracker";
+import type { BackgroundInferenceQuiescence } from "../inference-router";
 import { logger } from "../logger";
 import { type ResolvedMemoryConfig, loadMemoryConfig } from "../memory-config";
 import { enqueueExtractionJob as enqueueExtractionJobBase } from "../pipeline";
@@ -22,7 +23,7 @@ import type { TelemetryCollector } from "../telemetry";
 import { getUpdateState } from "../update-system";
 
 export let restartPipelineRuntimeRef:
-	| ((memoryCfg: ResolvedMemoryConfig, telemetry?: TelemetryCollector) => Promise<void>)
+	| ((memoryCfg: ResolvedMemoryConfig, telemetry?: TelemetryCollector) => Promise<BackgroundInferenceQuiescence>)
 	| null = null;
 
 // Paths
@@ -518,7 +519,7 @@ function readPipelineMode(cfg: ResolvedMemoryConfig["pipelineV2"]): string {
 export { readPipelineMode };
 
 export function setRestartPipelineRuntime(
-	fn: (memoryCfg: ResolvedMemoryConfig, telemetry?: TelemetryCollector) => Promise<void>,
+	fn: (memoryCfg: ResolvedMemoryConfig, telemetry?: TelemetryCollector) => Promise<BackgroundInferenceQuiescence>,
 ): void {
 	restartPipelineRuntimeRef = fn;
 }

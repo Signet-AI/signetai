@@ -553,3 +553,99 @@ describe("InferenceRouter legacy API credentials", () => {
 		}
 	});
 });
+
+describe("InferenceRouter background quiescence", () => {
+	it("aborts active routed inference and rejects new work until resumed", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "signet-router-quiescence-"));
+		try {
+			mkdirSync(join(dir, "memory"), { recursive: true });
+			writeFileSync(
+				join(dir, "agent.yaml"),
+				`inference:
+  defaultPolicy: background
+  accounts:
+    openrouter-api:
+      kind: api
+      providerFamily: openrouter
+      credentialRef: OPENROUTER_API_KEY
+  targets:
+    background:
+      executor: openrouter
+      account: openrouter-api
+      models:
+        default:
+          model: openai/gpt-4o-mini
+    fallback:
+      executor: openrouter
+      account: openrouter-api
+      models:
+        default:
+          model: openai/gpt-4o-mini
+  policies:
+    background:
+      mode: automatic
+      allow: [background/default, fallback/default]
+      defaultTargets: [background/default, fallback/default]
+  workloads:
+    memoryExtraction:
+      policy: background
+      taskClass: memory_extraction
+`,
+			);
+
+			process.env.OPENROUTER_API_KEY = "test-openrouter-key";
+			let chatRequests = 0;
+			let completeChat = false;
+			let markStarted: (() => void) | undefined;
+			const started = new Promise<void>((resolve) => {
+				markStarted = resolve;
+			});
+			globalThis.fetch = mock((input: string | URL | Request, init?: RequestInit) => {
+				if (String(input).endsWith("/models")) {
+					return Promise.resolve(new Response(JSON.stringify({ data: [] }), { status: 200 }));
+				}
+				chatRequests += 1;
+				markStarted?.();
+				if (completeChat) return Promise.resolve(openAiSseResponse("resumed answer"));
+				return new Promise<Response>((_resolve, reject) => {
+					if (init?.signal?.aborted) {
+						reject(new DOMException("aborted", "AbortError"));
+						return;
+					}
+					init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), {
+						once: true,
+					});
+				});
+			}) as unknown as typeof fetch;
+
+			const router = getOrCreateInferenceRouter(dir);
+			const active = router.execute({ operation: "memory_extraction", promptPreview: "extract" }, "Extract facts", {
+				timeoutMs: 30_000,
+			});
+			await started;
+
+			expect(await router.quiesceBackgroundInference(1_000)).toEqual({
+				activeAtStart: 1,
+				aborted: 1,
+				remaining: 0,
+				timedOut: false,
+			});
+			expect((await active).ok).toBe(false);
+			expect((await router.execute({ operation: "memory_extraction", promptPreview: "blocked" }, "Must not start")).ok).toBe(
+				false,
+			);
+			expect(chatRequests).toBe(1);
+
+			completeChat = true;
+			router.resumeBackgroundInference();
+			const resumed = await router.execute(
+				{ operation: "memory_extraction", promptPreview: "resumed" },
+				"Start after resume",
+			);
+			expect(resumed.ok).toBe(true);
+			expect(chatRequests).toBe(2);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});

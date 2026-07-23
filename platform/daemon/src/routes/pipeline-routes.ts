@@ -118,11 +118,15 @@ async function togglePipelinePause(c: Context, paused: boolean): Promise<Respons
 	try {
 		const changed = prev.paused !== paused;
 		const next = changed ? setPipelinePaused(AGENTS_DIR, paused) : prev;
+		let quiescence: Awaited<ReturnType<NonNullable<typeof restartPipelineRuntimeRef>>> | undefined;
 		if (changed) {
 			if (!restartPipelineRuntimeRef) {
 				throw new Error("Pipeline runtime not initialized");
 			}
-			await restartPipelineRuntimeRef(loadMemoryConfig(AGENTS_DIR), telemetryRef);
+			quiescence = await restartPipelineRuntimeRef(loadMemoryConfig(AGENTS_DIR), telemetryRef);
+			if (paused && quiescence.remaining > 0) {
+				throw new Error(`Pipeline pause timed out with ${quiescence.remaining} background inference call(s) still active`);
+			}
 		}
 		const liveCfg = loadMemoryConfig(AGENTS_DIR);
 		return c.json({
@@ -131,6 +135,7 @@ async function togglePipelinePause(c: Context, paused: boolean): Promise<Respons
 			paused: next.paused,
 			file: next.file,
 			mode: readPipelineMode(liveCfg.pipelineV2),
+			...(quiescence ? { quiescence } : {}),
 		});
 	} catch (err) {
 		const { logger } = await import("../logger.js");

@@ -46,7 +46,11 @@ import { initFeatureFlags } from "./feature-flags";
 import { writeFileIfChangedAsync } from "./file-sync";
 import { createSignetHttpServer } from "./http-server";
 import { syncAgentWorkspaces } from "./identity-sync";
-import { type InferenceStatusSummary, getOrCreateInferenceRouter } from "./inference-router.js";
+import {
+	type BackgroundInferenceQuiescence,
+	type InferenceStatusSummary,
+	getOrCreateInferenceRouter,
+} from "./inference-router.js";
 import { closeInferenceProviderResolver, getInferenceProvider, initInferenceProviderResolver } from "./llm";
 import { logger } from "./logger";
 import { type ResolvedMemoryConfig, loadMemoryConfig, shouldWarnGraphExtractionWritesDisabled } from "./memory-config";
@@ -1172,8 +1176,9 @@ function clearStructuralBackfillTimer(): void {
 	structuralBackfillTimer = null;
 }
 
-async function stopPipelineRuntime(): Promise<void> {
+async function stopPipelineRuntime(): Promise<BackgroundInferenceQuiescence> {
 	clearStructuralBackfillTimer();
+	const quiescence = await getOrCreateInferenceRouter(AGENTS_DIR).quiesceBackgroundInference();
 
 	if (skillReconcilerHandle) {
 		try {
@@ -1234,11 +1239,16 @@ async function stopPipelineRuntime(): Promise<void> {
 	closeInferenceProviderResolver();
 	stopModelRegistry();
 	invalidateDiagnosticsCache();
+	return quiescence;
 }
 
-async function restartPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?: TelemetryCollector): Promise<void> {
-	await stopPipelineRuntime();
+async function restartPipelineRuntime(
+	memoryCfg: ResolvedMemoryConfig,
+	telemetry?: TelemetryCollector,
+): Promise<BackgroundInferenceQuiescence> {
+	const quiescence = await stopPipelineRuntime();
 	await startPipelineRuntime(memoryCfg, telemetry);
+	return quiescence;
 }
 
 export async function stopDaemonRuntimeForTests(): Promise<void> {
@@ -1327,6 +1337,11 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 	}
 
 	const router = getOrCreateInferenceRouter(AGENTS_DIR);
+	if (pipelinePaused) {
+		await router.quiesceBackgroundInference(0);
+	} else {
+		router.resumeBackgroundInference();
+	}
 	const defaultAgentId = resolveDaemonAgentId();
 	initInferenceProviderResolver((workload) => {
 		switch (workload) {
