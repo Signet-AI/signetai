@@ -99,6 +99,32 @@ interface ConnectableProvider {
 }
 
 let connecting = $state<{ provider: ConnectableProvider } | null>(null);
+let showPicker = $state(false);
+
+// Picker modal focus management: autofocus into the panel on open, restore
+// focus to the Add button on close, and listen for Escape at window level (a
+// backdrop-only listener misses when focus is outside the modal subtree).
+let pickerCloseBtn: HTMLButtonElement | null = $state(null);
+let lastFocused: HTMLElement | null = null;
+
+$effect(() => {
+	if (!showPicker) return;
+	lastFocused = document.activeElement as HTMLElement | null;
+	// Defer until the panel renders.
+	const id = requestAnimationFrame(() => pickerCloseBtn?.focus());
+	const onKey = (e: KeyboardEvent) => {
+		if (e.key === "Escape") {
+			e.preventDefault();
+			showPicker = false;
+		}
+	};
+	window.addEventListener("keydown", onKey);
+	return () => {
+		cancelAnimationFrame(id);
+		window.removeEventListener("keydown", onKey);
+		lastFocused?.focus?.();
+	};
+});
 
 function titleCase(id: string): string {
 	return id
@@ -177,11 +203,21 @@ function accountForFamily(family: string): string | null {
 }
 
 function openConnect(provider: ConnectableProvider): void {
+	showPicker = false;
 	connecting = { provider };
 }
 
 function closeConnect(): void {
 	connecting = null;
+}
+
+// Connected providers shown in the compact list; the rest are reachable via
+// the "+ Add provider" picker so the section doesn't balloon to 30+ rows.
+function connectedList(): ConnectableProvider[] {
+	return connectableProviders().filter((p) => p.connected);
+}
+function availableList(): ConnectableProvider[] {
+	return connectableProviders().filter((p) => !p.connected);
 }
 
 // After a connect/disconnect, persist any config writes (account entries are
@@ -449,16 +485,16 @@ const needsApiKey = $derived(bgExecutor() === "openai-compatible");
 const embNonNative = $derived(embProvider() && embProvider() !== "native" && embProvider() !== "");
 </script>
 
-<FormSection description="Connect AI providers, then choose which one runs background memory work. Connect once; keys live encrypted and never leave the daemon.">
+<FormSection>
 
 	<!-- ============================================================ -->
-	<!-- Provider connect wall                                         -->
+	<!-- Providers (connected only + Add picker)                       -->
 	<!-- ============================================================ -->
 	<SettingList title="Providers">
 		<div class="provider-list">
-			{#each connectableProviders() as provider (provider.id)}
+			{#each connectedList() as provider (provider.id)}
 				<button
-					class="provider-row {provider.connected ? "provider-row--connected" : ""}"
+					class="provider-row provider-row--connected"
 					onclick={() => openConnect(provider)}
 				>
 					<span class="provider-row-name">{provider.name}</span>
@@ -466,20 +502,21 @@ const embNonNative = $derived(embProvider() && embProvider() !== "native" && emb
 						{#if provider.supportsOAuth && provider.supportsApiKey}Sign in or key{:else if provider.supportsOAuth}Sign in{:else}API key{/if}
 						{#if catalog?.models[provider.id]?.length}· {catalog.models[provider.id].length} models{/if}
 					</span>
-					{#if provider.connected}
-						<span class="status-badge status-badge--ok"><CheckCircle class="size-3" /> Connected</span>
-					{:else}
-						<span class="status-badge status-badge--off"><Plus class="size-3" /> Connect</span>
-					{/if}
+					<span class="status-badge status-badge--ok"><CheckCircle class="size-3" /> Connected</span>
 				</button>
 			{:else}
 				{#if catalogFailed}
 					<div class="provider-empty">Couldn't load the provider catalog. Update the daemon and retry.</div>
-				{:else}
+				{:else if !catalog}
 					<div class="provider-empty">Loading providers…</div>
+				{:else}
+					<div class="provider-empty">No providers connected yet.</div>
 				{/if}
 			{/each}
 		</div>
+		<button class="add-provider-btn" onclick={() => (showPicker = true)}>
+			<Plus class="size-3.5" /> Add provider
+		</button>
 		{#if catalog?.modelErrors && Object.keys(catalog.modelErrors).length > 0}
 			<div class="catalog-warnings">
 				{#each Object.entries(catalog.modelErrors) as [providerId, message] (providerId)}
@@ -493,10 +530,11 @@ const embNonNative = $derived(embProvider() && embProvider() !== "native" && emb
 	</SettingList>
 
 	<!-- ============================================================ -->
-	<!-- Background executor + model + endpoint + key                  -->
+	<!-- Background + Aggregation (two-column)                         -->
 	<!-- ============================================================ -->
+	<div class="workload-grid">
 	<SettingList title="Background inference">
-		<SettingRow
+		<SettingRow compact
 			title="Backend"
 			description="Which backend runs memory extraction and synthesis. Direct API providers (Anthropic/OpenRouter) are powered by pi-ai; local servers (LM Studio/Ollama/llama.cpp) connect via an OpenAI-compatible endpoint; ACPX drives a harness subprocess (Claude/Codex/OpenCode)."
 		>
@@ -514,7 +552,7 @@ const embNonNative = $derived(embProvider() && embProvider() !== "native" && emb
 
 		{#if bgExecutor() && bgExecutor() !== ""}
 			{#if bgExecutor() === "acpx"}
-				<SettingRow title="ACPX agent" description="The harness ACPX drives.">
+				<SettingRow compact title="ACPX agent" description="The harness ACPX drives.">
 					<Select.Root type="single" value={bgAcpxAgent()} onValueChange={(v) => bgSetAcpxAgent(v)}>
 						<Select.Trigger class={selectTriggerClass}>{bgAcpxAgent()}</Select.Trigger>
 						<Select.Content class={selectContentClass}>
@@ -525,7 +563,7 @@ const embNonNative = $derived(embProvider() && embProvider() !== "native" && emb
 					</Select.Root>
 				</SettingRow>
 			{:else}
-				<SettingRow
+				<SettingRow compact
 					title="Model"
 					description="From the pi-ai catalog. For local servers, type the model id your server exposes."
 				>
@@ -554,7 +592,7 @@ const embNonNative = $derived(embProvider() && embProvider() !== "native" && emb
 			{/if}
 
 			{#if isLocalExecutor}
-				<SettingRow
+				<SettingRow compact
 					title="Endpoint"
 					description="Base URL of the OpenAI-compatible server. LM Studio: http://localhost:1234/v1 · Ollama: http://localhost:11434 · llama.cpp: http://localhost:8080/v1"
 				>
@@ -568,7 +606,7 @@ const embNonNative = $derived(embProvider() && embProvider() !== "native" && emb
 			{/if}
 
 			{#if needsApiKey}
-				<SettingRow
+				<SettingRow compact
 					title="API key (secret name)"
 				description="The Signet secret holding the key. Or connect via the Providers panel above to skip this. The key value is never shown."
 				>
@@ -587,7 +625,7 @@ const embNonNative = $derived(embProvider() && embProvider() !== "native" && emb
 	<!-- Aggregation (separate latency-optimized path, pi-ai-only)    -->
 	<!-- ============================================================ -->
 	<SettingList title="Aggregation">
-		<SettingRow
+		<SettingRow compact
 			title="Backend"
 			description="Which backend runs aggregate recall (query-time evidence synthesis). Latency-sensitive and pi-ai-only — ACPX subprocesses are excluded because spawn latency would dominate."
 		>
@@ -604,7 +642,7 @@ const embNonNative = $derived(embProvider() && embProvider() !== "native" && emb
 		</SettingRow>
 
 		{#if aggExecutor() && aggExecutor() !== ""}
-			<SettingRow
+			<SettingRow compact
 				title="Model"
 				description="From the pi-ai catalog. Favor a fast/cheap model — aggregation is latency-bound, not intelligence-bound."
 			>
@@ -632,7 +670,7 @@ const embNonNative = $derived(embProvider() && embProvider() !== "native" && emb
 			</SettingRow>
 
 			{#if aggIsLocal}
-				<SettingRow
+				<SettingRow compact
 					title="Endpoint"
 					description="Base URL of the OpenAI-compatible server."
 				>
@@ -646,7 +684,7 @@ const embNonNative = $derived(embProvider() && embProvider() !== "native" && emb
 			{/if}
 
 			{#if aggNeedsApiKey}
-				<SettingRow
+				<SettingRow compact
 					title="API key (secret name)"
 					description="The Signet secret holding the key."
 				>
@@ -660,12 +698,13 @@ const embNonNative = $derived(embProvider() && embProvider() !== "native" && emb
 			{/if}
 		{/if}
 	</SettingList>
+	</div><!-- /workload-grid -->
 
 	<!-- ============================================================ -->
 	<!-- Embeddings                                                   -->
 	<!-- ============================================================ -->
 	<SettingList title="Embeddings">
-		<SettingRow
+		<SettingRow compact
 			title="Provider"
 			description="Changing provider or model will re-embed your entire memory database."
 		>
@@ -682,7 +721,7 @@ const embNonNative = $derived(embProvider() && embProvider() !== "native" && emb
 		</SettingRow>
 
 		{#if embNonNative}
-			<SettingRow title="Model" description="The model id your embedding provider exposes.">
+			<SettingRow compact title="Model" description="The model id your embedding provider exposes.">
 				<Input
 					class={inputClass}
 					value={embModel()}
@@ -690,7 +729,7 @@ const embNonNative = $derived(embProvider() && embProvider() !== "native" && emb
 					oninput={(e) => embSetModel(e.currentTarget.value)}
 				/>
 			</SettingRow>
-			<SettingRow title="Endpoint" description="Base URL of the embedding server.">
+			<SettingRow compact title="Endpoint" description="Base URL of the embedding server.">
 				<Input
 					class={inputClass}
 					value={embEndpoint()}
@@ -701,6 +740,37 @@ const embNonNative = $derived(embProvider() && embProvider() !== "native" && emb
 		{/if}
 	</SettingList>
 </FormSection>
+
+{#if showPicker}
+	<div
+		class="dialog-backdrop"
+		role="presentation"
+		onclick={(e) => {
+			if (e.target === e.currentTarget) showPicker = false;
+		}}
+	>
+		<div class="picker-panel" role="dialog" aria-modal="true" aria-label="Add a provider">
+			<header class="picker-head">
+				<h2 class="picker-title">Add a provider</h2>
+				<button bind:this={pickerCloseBtn} class="picker-close" onclick={() => (showPicker = false)} aria-label="Close">✕</button>
+			</header>
+			<div class="picker-list">
+				{#each availableList() as provider (provider.id)}
+					<button class="picker-row" onclick={() => openConnect(provider)}>
+						<span class="picker-row-name">{provider.name}</span>
+						<span class="picker-row-meta">
+							{#if provider.supportsOAuth && provider.supportsApiKey}Sign in or key{:else if provider.supportsOAuth}Sign in{:else}API key{/if}
+							{#if catalog?.models[provider.id]?.length}· {catalog.models[provider.id].length} models{/if}
+						</span>
+						<Plus class="size-3" />
+					</button>
+				{:else}
+					<div class="provider-empty">No more providers available.</div>
+				{/each}
+			</div>
+		</div>
+	</div>
+{/if}
 
 {#if connecting}
 	<ConnectProviderDialog
@@ -774,10 +844,6 @@ const embNonNative = $derived(embProvider() && embProvider() !== "native" && emb
 		color: #4ade80;
 		background: rgba(74, 222, 128, 0.12);
 	}
-	.status-badge--off {
-		color: var(--sig-text-muted);
-		background: var(--sig-surface-raised);
-	}
 	.provider-empty {
 		font-family: var(--font-body);
 		font-size: 11px;
@@ -797,5 +863,128 @@ const embNonNative = $derived(embProvider() && embProvider() !== "native" && emb
 		font-family: var(--font-body);
 		font-size: 10.5px;
 		color: #fbbf24;
+	}
+
+	/* Two-column workload grid: background + aggregation side by side.
+	   Stacks on narrow viewports. Embeddings stays full-width below. */
+	.workload-grid {
+		display: grid;
+		grid-template-columns: 1fr 1fr;
+		gap: var(--space-lg);
+		align-items: start;
+	}
+	@media (max-width: 900px) {
+		.workload-grid {
+			grid-template-columns: 1fr;
+		}
+	}
+
+	.add-provider-btn {
+		display: inline-flex;
+		align-items: center;
+		gap: 5px;
+		margin-top: 6px;
+		padding: 5px 10px;
+		border: 1px dashed var(--sig-border-strong);
+		border-radius: 7px;
+		background: transparent;
+		color: var(--sig-text-muted);
+		font-family: var(--font-body);
+		font-size: 11px;
+		font-weight: 500;
+		cursor: pointer;
+		transition: border-color 0.12s, color 0.12s;
+	}
+	.add-provider-btn:hover {
+		border-color: var(--sig-accent);
+		color: var(--sig-text);
+	}
+
+	/* Add-provider picker modal */
+	.dialog-backdrop {
+		position: fixed;
+		inset: 0;
+		z-index: 100;
+		background: rgba(0, 0, 0, 0.6);
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		padding: 16px;
+	}
+	.picker-panel {
+		background: var(--sig-surface);
+		border: 1px solid var(--sig-border-strong);
+		border-radius: 12px;
+		width: 100%;
+		max-width: 480px;
+		max-height: 70vh;
+		overflow: hidden;
+		display: flex;
+		flex-direction: column;
+	}
+	.picker-head {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		padding: 12px 16px;
+		border-bottom: 1px solid var(--sig-border);
+	}
+	.picker-title {
+		font-family: var(--font-mono);
+		font-size: 13px;
+		font-weight: 600;
+		color: var(--sig-text);
+		margin: 0;
+	}
+	.picker-close {
+		background: none;
+		border: none;
+		color: var(--sig-text-muted);
+		cursor: pointer;
+		font-size: 14px;
+		padding: 4px;
+		border-radius: 4px;
+	}
+	.picker-close:hover {
+		color: var(--sig-text);
+		background: var(--sig-surface-raised);
+	}
+	.picker-list {
+		overflow-y: auto;
+		padding: 6px;
+		display: flex;
+		flex-direction: column;
+		gap: 3px;
+	}
+	.picker-row {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		padding: 6px 9px;
+		border: 1px solid var(--sig-border);
+		border-radius: 7px;
+		background: var(--sig-bg);
+		cursor: pointer;
+		text-align: left;
+		color: var(--sig-text);
+	}
+	.picker-row:hover {
+		border-color: var(--sig-accent);
+		background: var(--sig-surface-raised);
+	}
+	.picker-row-name {
+		font-family: var(--font-body);
+		font-size: 11.5px;
+		font-weight: 600;
+		white-space: nowrap;
+	}
+	.picker-row-meta {
+		flex: 1 1 auto;
+		font-family: var(--font-body);
+		font-size: 10px;
+		color: var(--sig-text-muted);
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
 	}
 </style>
