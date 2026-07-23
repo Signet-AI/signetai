@@ -1,9 +1,7 @@
 {
-  "_signet": true,
   "hooks": {
     "SessionStart": [
       {
-        "_signet": true,
         "hooks": [
           {
             "type": "command",
@@ -15,7 +13,6 @@
     ],
     "UserPromptSubmit": [
       {
-        "_signet": true,
         "hooks": [
           {
             "type": "command",
@@ -27,7 +24,6 @@
     ],
     "Stop": [
       {
-        "_signet": true,
         "hooks": [
           {
             "type": "command",

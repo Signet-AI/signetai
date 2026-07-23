@@ -5,6 +5,7 @@ import {
 	setNativeEmbeddingProviderForTest,
 	setNativeFallbackProvider,
 } from "./embedding-fetch";
+import { countTokens } from "./pipeline/tokenizer";
 
 const originalFetch = globalThis.fetch;
 const originalOpenAiApiKey = process.env.OPENAI_API_KEY;
@@ -152,6 +153,26 @@ describe("fetchEmbedding", () => {
 		expect(capturedBody).toContain("nomic-embed-text");
 	});
 
+	it("bounds cached llama.cpp fallback inputs with the configured limit", async () => {
+		let capturedInput = "";
+		globalThis.fetch = mock((_url: string | URL | Request, init?: RequestInit) => {
+			capturedInput = (JSON.parse(String(init?.body)) as { input: string }).input;
+			return Promise.resolve(Response.json({ data: [{ embedding: [0.8, 0.9] }] }));
+		}) as unknown as typeof fetch;
+
+		setNativeFallbackProvider("llama-cpp");
+		const result = await fetchEmbedding("token ".repeat(1000), {
+			provider: "native",
+			model: "nomic-embed-text",
+			dimensions: 2,
+			base_url: "",
+			llamaCppMaxInputTokens: 256,
+		});
+
+		expect(result).toEqual([0.8, 0.9]);
+		expect(countTokens(capturedInput)).toBeLessThanOrEqual(256);
+	});
+
 	it("returns null when llama.cpp fallback provider is set but server unreachable", async () => {
 		globalThis.fetch = mock(() => {
 			return Promise.resolve(new Response("not found", { status: 500 }));
@@ -170,6 +191,7 @@ describe("fetchEmbedding", () => {
 
 	it("falls back to llama.cpp when native fails, skipping ollama", async () => {
 		let capturedUrl: string | undefined;
+		let capturedInput = "";
 		globalThis.fetch = mock((url: string | URL | Request, init?: RequestInit) => {
 			const urlStr = url.toString();
 			if (urlStr.includes("localhost:8080")) {
@@ -177,6 +199,7 @@ describe("fetchEmbedding", () => {
 					return Promise.resolve(Response.json({ data: [{ id: "nomic-embed-text" }] }));
 				}
 				capturedUrl = urlStr;
+				capturedInput = (JSON.parse(String(init?.body)) as { input: string }).input;
 				return Promise.resolve(Response.json({ data: [{ embedding: [0.1, 0.2] }] }));
 			}
 			return Promise.resolve(new Response("unreachable", { status: 503 }));
@@ -186,15 +209,38 @@ describe("fetchEmbedding", () => {
 		setNativeEmbeddingProviderForTest(async () => {
 			throw new Error("native unavailable");
 		});
-		const result = await fetchEmbedding("test", {
+		const result = await fetchEmbedding("token ".repeat(1000), {
 			provider: "native",
 			model: "nomic-embed-text-v1.5",
 			dimensions: 2,
 			base_url: "",
+			llamaCppMaxInputTokens: 300,
 		});
 
 		expect(result).toEqual([0.1, 0.2]);
 		expect(capturedUrl).toContain("localhost:8080");
+		expect(countTokens(capturedInput)).toBeLessThanOrEqual(300);
+	});
+
+	it("bounds configured llama.cpp inputs while preserving short inputs", async () => {
+		const capturedInputs: string[] = [];
+		globalThis.fetch = mock((_url: string | URL | Request, init?: RequestInit) => {
+			capturedInputs.push((JSON.parse(String(init?.body)) as { input: string }).input);
+			return Promise.resolve(Response.json({ data: [{ embedding: [0.1, 0.2] }] }));
+		}) as unknown as typeof fetch;
+		const cfg = {
+			provider: "llama-cpp" as const,
+			model: "nomic-embed-text",
+			dimensions: 2,
+			base_url: "http://localhost:8080",
+			llamaCppMaxInputTokens: 256,
+		};
+
+		await fetchEmbedding("short input", cfg);
+		await fetchEmbedding("token ".repeat(1000), cfg);
+
+		expect(capturedInputs[0]).toBe("short input");
+		expect(countTokens(capturedInputs[1] ?? "")).toBeLessThanOrEqual(256);
 	});
 
 	it("falls back to ollama when both native and llama.cpp fail", async () => {

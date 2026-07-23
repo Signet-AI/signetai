@@ -29,12 +29,7 @@ import type {
 } from "./provider";
 
 /** Executors that route through pi-ai. `acpx` is handled separately. */
-export type PiExecutorKind =
-	| "anthropic"
-	| "openrouter"
-	| "ollama"
-	| "llama-cpp"
-	| "openai-compatible";
+export type PiExecutorKind = "anthropic" | "openrouter" | "ollama" | "llama-cpp" | "openai-compatible" | (string & {});
 
 const DEFAULT_ANTHROPIC_BASE_URL = "https://api.anthropic.com";
 const DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
@@ -56,7 +51,12 @@ const LOCAL_COMPAT: OpenAICompletionsCompat = {
 
 export interface PiModelProviderConfig {
 	readonly executor: PiExecutorKind;
+	readonly providerFamily?: string;
 	readonly model: string;
+	/** Model metadata supplied by pi-ai for native providers. */
+	readonly piModel?: Model<Api>;
+	/** Native pi-ai providers do not share a portable unauthenticated health endpoint. */
+	readonly skipAvailabilityProbe?: boolean;
 	readonly baseUrl?: string;
 	/** Resolved credential (API key). Omit for keyless local servers. */
 	readonly apiKey?: string;
@@ -96,6 +96,19 @@ function withVersionPath(baseUrl: string): string {
 export function resolvePiModel(config: PiModelProviderConfig): ResolvedModel {
 	const timeoutMs = config.defaultTimeoutMs ?? 60_000;
 	void timeoutMs;
+	if (config.piModel) {
+		const piModel: Model<Api> = {
+			...config.piModel,
+			...(config.baseUrl ? { baseUrl: config.baseUrl } : {}),
+			...(config.contextWindow ? { contextWindow: config.contextWindow } : {}),
+			...(config.maxTokens ? { maxTokens: config.maxTokens } : {}),
+		};
+		return {
+			piModel,
+			apiKey: config.apiKey,
+			label: `${config.providerFamily ?? config.executor}:${config.model}`,
+		};
+	}
 	switch (config.executor) {
 		case "anthropic": {
 			const baseUrl = config.baseUrl ?? DEFAULT_ANTHROPIC_BASE_URL;
@@ -153,8 +166,7 @@ export function resolvePiModel(config: PiModelProviderConfig): ResolvedModel {
 						: DEFAULT_OPENAI_COMPATIBLE_BASE_URL;
 			const rawBase = config.baseUrl ?? defaultBase;
 			// ollama/llama-cpp always get /v1; openai-compatible respects a provided path.
-			const baseUrl =
-				config.executor === "openai-compatible" ? withVersionPath(rawBase) : withVersionPath(rawBase);
+			const baseUrl = config.executor === "openai-compatible" ? withVersionPath(rawBase) : withVersionPath(rawBase);
 			// Keyless only when the server is local AND no explicit key was provided.
 			// A local gateway/proxy that requires a bearer token keeps its real key.
 			const keyless = !config.apiKey && isLocalBaseUrl(rawBase);
@@ -178,6 +190,8 @@ export function resolvePiModel(config: PiModelProviderConfig): ResolvedModel {
 				label: `${config.executor}:${config.model}`,
 			};
 		}
+		default:
+			throw new Error(`Provider ${config.providerFamily ?? config.executor} requires a model from the pi-ai catalog`);
 	}
 }
 
@@ -217,7 +231,10 @@ function toError(label: string, message: { stopReason: string; errorMessage?: st
 }
 
 /** Create an AbortController that fires on caller signal OR timeout. */
-function callerAbort(opts: LlmProviderCallOptions | undefined, defaultTimeoutMs: number): {
+function callerAbort(
+	opts: LlmProviderCallOptions | undefined,
+	defaultTimeoutMs: number,
+): {
 	signal: AbortSignal;
 	abort: () => void;
 	cleanup: () => void;
@@ -256,7 +273,10 @@ export function createPiModelProvider(config: PiModelProviderConfig): StreamCapa
 		};
 	}
 
-	function buildOptions(opts: LlmProviderCallOptions | undefined, abort: { signal: AbortSignal }): {
+	function buildOptions(
+		opts: LlmProviderCallOptions | undefined,
+		abort: { signal: AbortSignal },
+	): {
 		apiKey: string | undefined;
 		signal: AbortSignal;
 		maxTokens?: number;
@@ -310,12 +330,14 @@ export function createPiModelProvider(config: PiModelProviderConfig): StreamCapa
 			return callOnce(prompt, opts);
 		},
 		async available() {
+			if (config.skipAvailabilityProbe) return true;
 			// Reachability check: ping the OpenAI-compatible /models endpoint (or
 			// Anthropic /v1/models) so the router can skip unreachable targets before
 			// attempting a real call. Mirrors the legacy providers' availability probe.
-			const probeUrl = piModel.api === "anthropic-messages"
-				? `${piModel.baseUrl.replace(/\/+$/, "")}/v1/models`
-				: `${piModel.baseUrl.replace(/\/+$/, "")}/models`;
+			const probeUrl =
+				piModel.api === "anthropic-messages"
+					? `${piModel.baseUrl.replace(/\/+$/, "")}/v1/models`
+					: `${piModel.baseUrl.replace(/\/+$/, "")}/models`;
 			try {
 				const res = await fetch(probeUrl, {
 					method: "GET",

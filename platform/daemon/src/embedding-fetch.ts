@@ -1,6 +1,12 @@
 import { logger } from "./logger";
 import type { EmbeddingConfig } from "./memory-config";
-import { DEFAULT_LLAMACPP_BASE_URL, DEFAULT_OLLAMA_BASE_URL, DEFAULT_OPENAI_BASE_URL } from "./memory-config";
+import {
+	DEFAULT_LLAMACPP_BASE_URL,
+	DEFAULT_LLAMACPP_MAX_INPUT_TOKENS,
+	DEFAULT_OLLAMA_BASE_URL,
+	DEFAULT_OPENAI_BASE_URL,
+} from "./memory-config";
+import { countTokens, truncateToTokens } from "./pipeline/tokenizer";
 import { getSecret } from "./secrets.js";
 
 export function resolveOllamaUrl(): string {
@@ -130,6 +136,45 @@ async function fetchOllamaEmbedding(
 	return data.embedding ?? null;
 }
 
+function boundLlamaCppEmbeddingInput(text: string, maxInputTokens: number): string {
+	const tokenCount = countTokens(text);
+	if (tokenCount <= maxInputTokens) return text;
+	logger.warn("embedding", "Truncating llama.cpp embedding input to physical-batch safety limit", {
+		inputTokens: tokenCount,
+		maxInputTokens,
+	});
+	return truncateToTokens(text, maxInputTokens);
+}
+
+async function fetchLlamaCppEmbedding(
+	text: string,
+	baseUrl: string,
+	model: string,
+	opts: EmbeddingFetchOptions,
+	timeoutMs: number,
+	maxInputTokens = DEFAULT_LLAMACPP_MAX_INPUT_TOKENS,
+): Promise<number[] | null> {
+	const res = await fetchWithEmbeddingTimeout(
+		`${baseUrl.replace(/\/$/, "")}/v1/embeddings`,
+		{
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ input: boundLlamaCppEmbeddingInput(text, maxInputTokens), model }),
+		},
+		opts,
+		resolveEmbeddingTimeoutMs(opts, timeoutMs),
+	);
+	if (!res.ok) {
+		logger.warn("embedding", "llama.cpp embedding request failed", {
+			status: res.status,
+			model,
+		});
+		return null;
+	}
+	const data = (await res.json()) as { data?: Array<{ embedding: number[] }> };
+	return data.data?.[0]?.embedding ?? null;
+}
+
 export function resolveEmbeddingBaseUrl(cfg: EmbeddingConfig): string {
 	if (cfg.provider === "openai") {
 		return cfg.base_url.trim() || DEFAULT_OPENAI_BASE_URL;
@@ -174,21 +219,14 @@ export async function fetchEmbedding(
 			}
 			if (nativeFallbackProvider === "llama-cpp") {
 				const fallbackModel = nativeFallbackModel ?? "nomic-embed-text";
-				const llamaCppRes = await fetchWithEmbeddingTimeout(
-					`${DEFAULT_LLAMACPP_BASE_URL.replace(/\/$/, "")}/v1/embeddings`,
-					{
-						method: "POST",
-						headers: { "Content-Type": "application/json" },
-						body: JSON.stringify({ input: text, model: fallbackModel }),
-					},
+				return fetchLlamaCppEmbedding(
+					text,
+					DEFAULT_LLAMACPP_BASE_URL,
+					fallbackModel,
 					opts,
-					resolveEmbeddingTimeoutMs(opts, 5000),
+					5000,
+					cfg.llamaCppMaxInputTokens,
 				);
-				if (llamaCppRes.ok) {
-					const data = (await llamaCppRes.json()) as { data?: Array<{ embedding: number[] }> };
-					if (data.data?.[0]?.embedding) return data.data[0].embedding;
-				}
-				return null;
 			}
 			try {
 				if (!cachedNativeEmbed) {
@@ -208,27 +246,22 @@ export async function fetchEmbedding(
 					if (!discoveredModel) {
 						logger.warn("embedding", "llama.cpp server reachable but no supported embedding model loaded");
 					} else {
-						const llamaCppRes = await fetchWithEmbeddingTimeout(
-							`${DEFAULT_LLAMACPP_BASE_URL.replace(/\/$/, "")}/v1/embeddings`,
-							{
-								method: "POST",
-								headers: { "Content-Type": "application/json" },
-								body: JSON.stringify({ input: text, model: discoveredModel }),
-							},
+						const embedding = await fetchLlamaCppEmbedding(
+							text,
+							DEFAULT_LLAMACPP_BASE_URL,
+							discoveredModel,
 							opts,
-							resolveEmbeddingTimeoutMs(opts, 5000),
+							5000,
+							cfg.llamaCppMaxInputTokens,
 						);
-						if (llamaCppRes.ok) {
+						if (embedding) {
 							nativeFallbackProvider = "llama-cpp";
 							nativeFallbackModel = discoveredModel;
-							const data = (await llamaCppRes.json()) as { data?: Array<{ embedding: number[] }> };
-							if (data.data?.[0]?.embedding) {
-								logger.info(
-									"embedding",
-									`llama.cpp fallback succeeded (model: ${discoveredModel}) — will use llama.cpp for remaining embeddings this session`,
-								);
-								return data.data[0].embedding;
-							}
+							logger.info(
+								"embedding",
+								`llama.cpp fallback succeeded (model: ${discoveredModel}) — will use llama.cpp for remaining embeddings this session`,
+							);
+							return embedding;
 						}
 					}
 				} catch {
@@ -257,25 +290,7 @@ export async function fetchEmbedding(
 
 		if (cfg.provider === "llama-cpp") {
 			const baseUrl = cfg.base_url.trim() || DEFAULT_LLAMACPP_BASE_URL;
-			const res = await fetchWithEmbeddingTimeout(
-				`${baseUrl.replace(/\/$/, "")}/v1/embeddings`,
-				{
-					method: "POST",
-					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify({ model: cfg.model, input: text }),
-				},
-				opts,
-				resolveEmbeddingTimeoutMs(opts, 30000),
-			);
-			if (!res.ok) {
-				logger.warn("embedding", "llama.cpp embedding request failed", {
-					status: res.status,
-					model: cfg.model,
-				});
-				return null;
-			}
-			const data = (await res.json()) as { data: Array<{ embedding: number[] }> };
-			return data.data?.[0]?.embedding ?? null;
+			return fetchLlamaCppEmbedding(text, baseUrl, cfg.model, opts, 30000, cfg.llamaCppMaxInputTokens);
 		}
 
 		const apiKey = await resolveEmbeddingApiKey(cfg.api_key);

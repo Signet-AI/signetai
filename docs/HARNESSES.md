@@ -212,6 +212,11 @@ patching.
 | `~/.codex/hooks.json` | Compatibility lifecycle hooks — SessionStart, UserPromptSubmit, Stop |
 | `~/.codex/skills` | Compatibility symlink to `$SIGNET_WORKSPACE/skills` when plugin support is unavailable |
 
+Generated Codex hook manifests contain only fields from Codex's hook schema.
+Signet identifies its entries by their hook command when reinstalling or
+uninstalling, so unrelated hook groups remain untouched without private metadata
+inside Codex-owned configuration.
+
 ### Native memory bridge
 
 Signet indexes Codex-owned memory artifacts without rewriting them or turning

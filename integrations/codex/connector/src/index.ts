@@ -278,7 +278,6 @@ const CODEX_PROMPT_SUBMIT_GRACE_SECONDS = 2;
 const SESSION_END_TIMEOUT_SECONDS = 30;
 
 interface MatcherGroup {
-	_signet?: boolean;
 	matcher?: string;
 	hooks: HandlerConfig[];
 }
@@ -290,7 +289,7 @@ interface HandlerConfig {
 }
 
 interface HooksFile {
-	_signet?: boolean;
+	description?: string;
 	hooks?: Record<string, MatcherGroup[]>;
 	[key: string]: unknown;
 }
@@ -348,7 +347,6 @@ function withRemoteDaemonEnv(command: string, remoteDaemonUrl: string | null): s
 
 function buildHooksFile(signetArgs: string[], remoteDaemonUrl: string | null = resolveRemoteDaemonUrl()): HooksFile {
 	const cmd = (subcommand: string, secs: number, codexJson = true): MatcherGroup => ({
-		_signet: true,
 		hooks: [
 			{
 				type: "command",
@@ -361,7 +359,6 @@ function buildHooksFile(signetArgs: string[], remoteDaemonUrl: string | null = r
 		],
 	});
 	return {
-		_signet: true,
 		hooks: {
 			SessionStart: [cmd("session-start", resolveCodexSessionStartTimeoutSeconds())],
 			UserPromptSubmit: [cmd("user-prompt-submit", resolveCodexPromptSubmitTimeoutSeconds())],
@@ -382,8 +379,8 @@ function readHooksFile(path: string): HooksFile | null {
 	}
 }
 
-function isSignetOwned(file: HooksFile): boolean {
-	return file._signet === true;
+function hasLegacySignetMarker(file: HooksFile): boolean {
+	return Object.hasOwn(file, "_signet");
 }
 
 function writeHooksFile(path: string, file: HooksFile): void {
@@ -421,7 +418,6 @@ function isSignetHookCommand(cmd: string): boolean {
 
 function isSignetMatcherGroup(group: unknown): boolean {
 	if (typeof group !== "object" || group === null) return false;
-	if ((group as Record<string, unknown>)._signet === true) return true;
 	const hooksArr = (group as Record<string, unknown>).hooks;
 	if (!Array.isArray(hooksArr)) return false;
 	for (const handler of hooksArr) {
@@ -449,14 +445,21 @@ function isLegacySignetMatcherGroup(group: unknown): boolean {
 }
 
 function removeSignetEntries(file: HooksFile): HooksFile {
-	const cleaned: HooksFile = { ...file, hooks: file.hooks ? structuredClone(file.hooks) : undefined };
+	const { _signet: _legacyMarker, ...withoutMarker } = file;
+	const cleaned: HooksFile = { ...withoutMarker, hooks: file.hooks ? structuredClone(file.hooks) : undefined };
 	const events = cleaned.hooks;
 	if (!events || typeof events !== "object") return cleaned;
 
 	for (const key of Object.keys(events)) {
 		const groups = events[key];
 		if (!Array.isArray(groups)) continue;
-		const filtered = groups.filter((g) => !isSignetMatcherGroup(g) && !isLegacySignetMatcherGroup(g));
+		const filtered = groups
+			.filter((g) => !isSignetMatcherGroup(g) && !isLegacySignetMatcherGroup(g))
+			.map((group) => {
+				if (typeof group !== "object" || group === null) return group;
+				const { _signet: _legacyGroupMarker, ...preserved } = group as MatcherGroup & Record<string, unknown>;
+				return preserved as MatcherGroup;
+			});
 		if (filtered.length === 0) {
 			delete events[key];
 		} else {
@@ -465,13 +468,6 @@ function removeSignetEntries(file: HooksFile): HooksFile {
 	}
 
 	if (Object.keys(events).length === 0) cleaned.hooks = undefined;
-
-	const hasSignet = cleaned.hooks
-		? Object.values(cleaned.hooks as Record<string, unknown[]>).some(
-				(groups) => Array.isArray(groups) && groups.some(isSignetMatcherGroup),
-			)
-		: false;
-	if (!hasSignet) cleaned._signet = undefined;
 	return cleaned;
 }
 
@@ -604,9 +600,7 @@ function removeHookTrustState(path: string, entries: readonly HookTrustEntry[]):
 	return true;
 }
 
-function migrateLegacyHooksFile(file: HooksFile, signetArgs: string[]): HooksFile {
-	if (isSignetOwned(file) && file.hooks && Object.keys(file.hooks).length > 0) return file;
-
+function migrateLegacyHooksFile(file: HooksFile): HooksFile {
 	const legacyKeys = ["sessionStart", "userPromptSubmit", "stop"] as const;
 	const hasLegacy = legacyKeys.some(
 		(k) =>
@@ -615,20 +609,9 @@ function migrateLegacyHooksFile(file: HooksFile, signetArgs: string[]): HooksFil
 	);
 	if (!hasLegacy) return file;
 
-	const fresh = buildHooksFile(signetArgs);
-	if (!file.hooks || typeof file.hooks !== "object") {
-		fresh.hooks = { ...fresh.hooks };
-	} else {
-		for (const key of HOOK_EVENT_KEYS) {
-			const existing = (file.hooks as Record<string, unknown[]>)[key];
-			if (!Array.isArray(existing)) continue;
-			const kept = existing.filter((g) => !isSignetMatcherGroup(g) && !isLegacySignetMatcherGroup(g));
-			const ours = fresh.hooks?.[key] ?? [];
-			(fresh.hooks as Record<string, unknown>)[key] = [...kept, ...ours];
-		}
-	}
-	for (const k of legacyKeys) delete (fresh as Record<string, unknown>)[k];
-	return fresh;
+	const migrated = structuredClone(file);
+	for (const key of legacyKeys) delete migrated[key];
+	return migrated;
 }
 
 // ---------------------------------------------------------------------------
@@ -860,12 +843,12 @@ export class CodexConnector extends BaseConnector {
 		const existing = readHooksFile(hooksPath);
 
 		if (existing) {
-			const migrated = migrateLegacyHooksFile(existing, signetArgs);
+			const migrated = migrateLegacyHooksFile(existing);
 			const cleaned = removeSignetEntries(migrated);
 			const hasHooks = cleaned.hooks && Object.keys(cleaned.hooks).length > 0;
 			if (hasHooks) {
 				const signet = buildHooksFile(signetArgs);
-				const merged: HooksFile = { ...cleaned, _signet: true };
+				const merged: HooksFile = { ...cleaned };
 				merged.hooks = { ...(cleaned.hooks as Record<string, MatcherGroup[]>) };
 				for (const key of HOOK_EVENT_KEYS) {
 					const current = merged.hooks[key] ?? [];
@@ -876,7 +859,7 @@ export class CodexConnector extends BaseConnector {
 				warnings.push("Merged Signet hooks into existing hooks.json — existing hooks preserved");
 			} else {
 				const signet = buildHooksFile(signetArgs);
-				writeHooksFile(hooksPath, { ...cleaned, _signet: true, hooks: signet.hooks });
+				writeHooksFile(hooksPath, { ...cleaned, hooks: signet.hooks });
 			}
 		} else {
 			writeHooksFile(hooksPath, buildHooksFile(signetArgs));
@@ -899,7 +882,7 @@ export class CodexConnector extends BaseConnector {
 		const existing = readHooksFile(hooksPath);
 		const hookTrustEntries = existing ? buildHookTrustEntries(hooksPath, existing) : [];
 		if (existing) {
-			const hasMarker = isSignetOwned(existing);
+			const hasMarker = hasLegacySignetMarker(existing);
 			const events = existing.hooks;
 			const hasHandlers =
 				events &&
@@ -909,7 +892,7 @@ export class CodexConnector extends BaseConnector {
 				);
 			if (hasMarker || hasHandlers) {
 				const cleaned = removeSignetEntries(existing);
-				const remaining = Object.keys(cleaned).filter((k) => k !== "_signet" && k !== "hooks");
+				const remaining = Object.keys(cleaned).filter((k) => k !== "hooks");
 				const hooksRemain = cleaned.hooks && Object.keys(cleaned.hooks as Record<string, unknown>).length > 0;
 				if (remaining.length === 0 && !hooksRemain) {
 					rmSync(hooksPath, { force: true });
@@ -1029,7 +1012,7 @@ export class CodexConnector extends BaseConnector {
 		const existing = readHooksFile(hooksPath);
 		const hookTrustEntries = existing ? buildHookTrustEntries(hooksPath, existing) : [];
 		if (existing) {
-			const hasMarker = isSignetOwned(existing);
+			const hasMarker = hasLegacySignetMarker(existing);
 			const events = existing.hooks;
 			const hasHandlers =
 				events &&
@@ -1039,7 +1022,7 @@ export class CodexConnector extends BaseConnector {
 				);
 			if (hasMarker || hasHandlers) {
 				const cleaned = removeSignetEntries(existing);
-				const remaining = Object.keys(cleaned).filter((k) => k !== "_signet" && k !== "hooks");
+				const remaining = Object.keys(cleaned).filter((k) => k !== "hooks");
 				const hooksRemain = cleaned.hooks && Object.keys(cleaned.hooks as Record<string, unknown>).length > 0;
 				if (remaining.length === 0 && !hooksRemain) {
 					rmSync(hooksPath, { force: true });

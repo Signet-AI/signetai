@@ -6,6 +6,9 @@ All notable changes to Signet are documented here.
 
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
+### 2026-07-23
+- Bug fixes: parse JSON after model preambles; bound llama.cpp inputs; remove invalid hook ownership markers; stop native embedding smoke child within bun's afterEach budget; integrate pi-ai OAuth providers; make maintenance supersession sweep non-fatal without a provider; enable Astro ClientRouter for client-side navigation.
+
 ### 2026-07-22
 - Features: replace inference provisioning with pi-ai (#947).
 - Bug fixes: prevent recursive background hooks; stop session-start injection from advancing access tracking; restore provider-status contract after #949 (#960); add temporal intent / freshness prior to hybrid recall; forward per-call reasoning ThinkingLevel to pi-ai (#959); unblock main after #949 (build:core tsc error + retire rust-daemon-parity); retain memory across turn transforms; support remote-only connector installs.
@@ -28,11 +31,38 @@ Surface summary of the most recent release dates. See the release ledger below f
 ### 2026-07-12
 - Bug fixes: tolerate immutable-artifact conflict on summary retry; add boundary reason semantics to session synthesis.
 
-### 2026-07-11
-- Bug fixes: thread native asset paths into extraction worker; await in-flight init before first embed to prevent warm-up race (#920); register WASM onnxruntime in embedding worker's isolated globalThis; bound and cancel LLM inference; isolate native embedding in a worker so it cannot block /health; reject transient operational content with a durability gate.
-- Docs: update changelog highlights for v0.147.10 stable promotion; update changelog highlights for v0.147.9 stable promotion.
-
 ## Release Ledger
+
+## [0.148.8] - 2026-07-23
+
+Release summary: 3 bug fixes.
+Tag range: `v0.148.7..v0.148.8`.
+
+### Bug Fixes
+
+- **dreaming**: parse JSON after model preambles (#989)
+- **embedding**: bound llama.cpp inputs (#987)
+- **codex**: remove invalid hook ownership markers (#993)
+
+## [0.148.7] - 2026-07-23
+
+Release summary: 1 bug fix.
+Tag range: `v0.148.6..v0.148.7`.
+
+### Bug Fixes
+
+- **test**: stop native embedding smoke child within bun's afterEach budget (#994)
+
+## [0.148.6] - 2026-07-23
+
+Release summary: 3 bug fixes.
+Tag range: `v0.148.5..v0.148.6`.
+
+### Bug Fixes
+
+- **daemon**: integrate pi-ai OAuth providers (#968)
+- **pipeline**: make maintenance supersession sweep non-fatal without a provider (#990)
+- **web**: enable Astro ClientRouter for client-side navigation (#983)
 
 ## [0.148.5] - 2026-07-22
 
