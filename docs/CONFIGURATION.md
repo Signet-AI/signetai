@@ -93,6 +93,8 @@ embedding:
   dimensions: 768
   base_url: http://localhost:11434
   promptSubmitTimeoutMs: 1000
+  # llama.cpp only: truncate inputs to stay below its physical batch limit
+  llamaCppMaxInputTokens: 1400
 
 search:
   alpha: 0.7
