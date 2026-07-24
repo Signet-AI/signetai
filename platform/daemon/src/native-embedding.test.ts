@@ -1,11 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import type { WorkerOptions } from "node:worker_threads";
-import type { EmbeddingWorkerFactory, EmbeddingWorkerLike } from "./embedding-worker-handle";
+import {
+	createEmbeddingWorkerHandle,
+	type EmbeddingWorkerFactory,
+	type EmbeddingWorkerLike,
+} from "./embedding-worker-handle";
 import type { EmbeddingWorkerInit, MainToWorkerMessage, WorkerToMainMessage } from "./embedding-worker-protocol";
 import {
 	__resetEmbeddingProviderForTests,
 	__setEmbeddingWorkerFactoryForTests,
 	checkNativeProvider,
+	configureNativeEmbeddingAssets,
 	getNativeProviderStatus,
 	nativeEmbed,
 	shutdownNativeProvider,
@@ -238,5 +243,79 @@ describe("native-embedding facade (worker-backed)", () => {
 			Bun.sleep(2000).then(() => "hung"),
 		]);
 		expect(result).not.toBe("hung");
+	});
+});
+
+describe("asset path override wiring (#1018 regression)", () => {
+	let capturedInits: EmbeddingWorkerInit[];
+
+	beforeEach(() => {
+		capturedInits = [];
+	});
+
+	afterEach(async () => {
+		await __resetEmbeddingProviderForTests();
+		configureNativeEmbeddingAssets({
+			embeddingWorkerPath: null,
+			wasmAssetDir: null,
+			transformersRuntimeAssetPath: null,
+		});
+	});
+
+	function capturingFactory(): EmbeddingWorkerFactory {
+		const w = new FakeWorker();
+		return (_path, init) => {
+			capturedInits.push(init);
+			return w;
+		};
+	}
+
+	async function settle(worker: FakeWorker): Promise<void> {
+		await flush();
+		worker.emit({ type: "ready" });
+		await flush();
+	}
+
+	it("maps wasmAssetDir/transformersRuntimeAssetPath options to init.wasmDir/.transformersRuntimePath", async () => {
+		const worker = new FakeWorker();
+		const factory: EmbeddingWorkerFactory = (_path, init) => {
+			capturedInits.push(init);
+			return worker;
+		};
+
+		const handle = await createEmbeddingWorkerHandle({
+			workerFactory: factory,
+			wasmAssetDir: "/tmp/test-wasm",
+			transformersRuntimeAssetPath: "/tmp/test-transformers-runtime.mjs",
+		});
+
+		await settle(worker);
+
+		expect(capturedInits).toHaveLength(1);
+		expect(capturedInits[0].wasmDir).toBe("/tmp/test-wasm");
+		expect(capturedInits[0].transformersRuntimePath).toBe("/tmp/test-transformers-runtime.mjs");
+
+		await handle.stop();
+	});
+
+	it("omitted asset path options fall through to null (test/source mode, no global assets)", async () => {
+		const worker = new FakeWorker();
+		const factory: EmbeddingWorkerFactory = (_path, init) => {
+			capturedInits.push(init);
+			return worker;
+		};
+
+		const handle = await createEmbeddingWorkerHandle({
+			workerFactory: factory,
+			// wasmAssetDir and transformersRuntimeAssetPath intentionally omitted
+		});
+
+		await settle(worker);
+
+		expect(capturedInits).toHaveLength(1);
+		expect(capturedInits[0].wasmDir).toBeNull();
+		expect(capturedInits[0].transformersRuntimePath).toBeNull();
+
+		await handle.stop();
 	});
 });

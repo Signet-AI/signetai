@@ -45,8 +45,8 @@ let workerFactoryOverride: EmbeddingWorkerFactory | null = null;
  */
 let assetPathsOverride: {
 	readonly embeddingWorkerPath: string | null;
-	readonly wasmDir: string | null;
-	readonly transformersRuntimePath: string | null;
+	readonly wasmAssetDir: string | null;
+	readonly transformersRuntimeAssetPath: string | null;
 } | null = null;
 
 /**
@@ -60,8 +60,8 @@ let assetPathsOverride: {
  */
 export function configureNativeEmbeddingAssets(paths: {
 	readonly embeddingWorkerPath: string | null;
-	readonly wasmDir: string | null;
-	readonly transformersRuntimePath: string | null;
+	readonly wasmAssetDir: string | null;
+	readonly transformersRuntimeAssetPath: string | null;
 }): void {
 	assetPathsOverride = paths;
 }

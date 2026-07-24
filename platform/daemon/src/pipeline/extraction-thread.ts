@@ -164,8 +164,8 @@ async function bootstrap(): Promise<void> {
 		) {
 			configureNativeEmbeddingAssets({
 				embeddingWorkerPath: init.nativeEmbeddingWorkerPath ?? null,
-				wasmDir: init.nativeWasmDir ?? null,
-				transformersRuntimePath: init.nativeTransformersRuntimePath ?? null,
+				wasmAssetDir: init.nativeWasmDir ?? null,
+				transformersRuntimeAssetPath: init.nativeTransformersRuntimePath ?? null,
 			});
 		}
 

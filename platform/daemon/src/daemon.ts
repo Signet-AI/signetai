@@ -1533,8 +1533,8 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 		const { configureNativeEmbeddingAssets } = await import("./native-embedding");
 		configureNativeEmbeddingAssets({
 			embeddingWorkerPath: resolveEmbeddedWorkerPath("embedding-worker"),
-			wasmDir: materializeEmbeddedWasmAssets(),
-			transformersRuntimePath: resolveEmbeddedWorkerPath("embedding-worker-transformers-runtime"),
+			wasmAssetDir: materializeEmbeddedWasmAssets(),
+			transformersRuntimeAssetPath: resolveEmbeddedWorkerPath("embedding-worker-transformers-runtime"),
 		});
 	} else {
 		ensureRetentionWorker(getDbAccessor(), DEFAULT_RETENTION);
