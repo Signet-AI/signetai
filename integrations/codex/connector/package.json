@@ -1,6 +1,6 @@
 {
   "name": "@signet/connector-codex",
-  "version": "0.154.3",
+  "version": "0.154.4",
   "description": "Signet connector for Codex CLI",
   "type": "module",
   "main": "./dist/index.js",
@@ -24,8 +24,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@signet/connector-base": "0.154.3",
-    "@signet/core": "0.154.3"
+    "@signet/connector-base": "0.154.4",
+    "@signet/core": "0.154.4"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

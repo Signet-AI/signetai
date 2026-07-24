@@ -8,7 +8,7 @@ Surface summary of the most recent release dates. See the release ledger below f
 
 ### 2026-07-24
 - Features: rework agents as identity & custody cards; rename Tasks→Agents, add identity and access config view; add dreaming view with pass brief and history timeline; add mobile responsive layout to redesign mockup.
-- Bug fixes: never report 100% embedding coverage while gaps remain (#906); await native smoke child teardown; rework agents — dense cards, session count, tactile chips; compact agent cards — spec bar, prompt tags, focus telemetry; dissolve dreaming card head, normalize code spans; surface extraction route blockers; replace emoji mutation symbols with typographic glyphs; unbox dreaming view, git-style mutation symbols, normalize prose; remove pass history ledger, rename Dreaming→Dreams with moon icon; dreaming brief leads with narrative summary, ledger demoted; quiet dreaming entity text, minimal buffer gauge, single summary line; unbox dreaming mutations, add buffer bar and entity pills; clean legacy config and honor repair dry runs; infer compatible privacy from endpoint.
+- Bug fixes: validate routing config references on load (#1005); never report 100% embedding coverage while gaps remain (#906); await native smoke child teardown; rework agents — dense cards, session count, tactile chips; compact agent cards — spec bar, prompt tags, focus telemetry; dissolve dreaming card head, normalize code spans; surface extraction route blockers; replace emoji mutation symbols with typographic glyphs; unbox dreaming view, git-style mutation symbols, normalize prose; remove pass history ledger, rename Dreaming→Dreams with moon icon; dreaming brief leads with narrative summary, ledger demoted; quiet dreaming entity text, minimal buffer gauge, single summary line; unbox dreaming mutations, add buffer bar and entity pills; clean legacy config and honor repair dry runs; infer compatible privacy from endpoint.
 - Refactoring: share lenient JSON parsing; centralize MCP command resolution.
 
 ### 2026-07-23
@@ -36,6 +36,15 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Bug fixes: centralize canonical recall requests.
 
 ## Release Ledger
+
+## [0.154.4] - 2026-07-24
+
+Release summary: 1 bug fix.
+Tag range: `v0.154.3..v0.154.4`.
+
+### Bug Fixes
+
+- **daemon**: validate routing config references on load (#1005) (#1019)
 
 ## [0.154.3] - 2026-07-24
 
