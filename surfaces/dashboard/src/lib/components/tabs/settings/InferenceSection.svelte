@@ -8,6 +8,7 @@ import { type InferenceCatalog, getInferenceCatalog } from "$lib/api";
 import { CheckCircle, Plus, TriangleAlertIcon } from "$lib/icons";
 import { st } from "$lib/stores/settings.svelte";
 import { invalidateAll } from "$app/navigation";
+import { extractionLabelForRoutingTarget } from "./pipeline-settings";
 import ConnectProviderDialog from "./ConnectProviderDialog.svelte";
 
 // Inference settings (#947/#966/#968). A provider connect wall sits above the
@@ -247,6 +248,7 @@ function bgExecutor(): string {
 }
 function bgSetExecutor(v: string): void {
 	writeTarget({ targetName: TARGET_NAME, accountName: ACCOUNT_NAME, workloadKey: "memoryExtraction", executor: v });
+	syncExtractionLabel();
 }
 
 // Backend taxonomy. After #947/#968 the daemon accepts any catalog provider
@@ -328,6 +330,15 @@ function writeTarget(opts: {
 		st.aDel(workloadBase);
 		return;
 	}
+	// A model is only valid for its own provider family, so a backend switch
+	// must clear the stale model (and its legacy label) to force a re-pick —
+	// otherwise switching ollama:gemma3 -> anthropic would leave the routing
+	// target and the extraction_model DB label on a model the new backend never
+	// serves (#1017).
+	const priorExecutor = st.aStr([...targetBase, "executor"]);
+	if (priorExecutor && priorExecutor !== executor) {
+		st.aDel([...targetBase, "models"]);
+	}
 	st.aSetStr([...targetBase, "executor"], executor);
 	st.aSetStr([...workloadBase, "target"], `${targetName}/default`);
 	const kind = backendKind(executor);
@@ -367,6 +378,23 @@ function bgModelId(): string {
 }
 function bgSetModelId(v: string): void {
 	st.aSetStr(["inference", "targets", TARGET_NAME, "models", "default", "model"], v);
+	syncExtractionLabel();
+}
+
+// Keep the legacy extraction label (memory.pipelineV2.extraction{Provider,Model})
+// in sync with the background routing target so pipeline logs, telemetry, and
+// the extraction_model DB column report the model actually in use instead of
+// the qwen3:4b default (#1017). Routing stays authoritative post-#947; this
+// label is purely informational. Mirrors applyAcpxDashboardSetup for the non-ACPX
+// path. InferenceSection is the sole live writer of this label; PipelineSection's
+// extraction provider/model setters are retained but currently unbound.
+function syncExtractionLabel(): void {
+	const { provider, model } = extractionLabelForRoutingTarget(bgExecutor(), bgModelId());
+	const base = ["memory", "pipelineV2"];
+	if (provider) st.aSetStr([...base, "extractionProvider"], provider);
+	else st.aDel([...base, "extractionProvider"]);
+	if (model) st.aSetStr([...base, "extractionModel"], model);
+	else st.aDel([...base, "extractionModel"]);
 }
 
 function bgEndpoint(): string {
@@ -380,7 +408,14 @@ function bgAcpxAgent(): string {
 	return st.aStr(["inference", "targets", TARGET_NAME, "acpx", "agent"]) || "claude";
 }
 function bgSetAcpxAgent(v: string): void {
+	const prior = bgAcpxAgent();
 	st.aSetStr(["inference", "targets", TARGET_NAME, "acpx", "agent"], v);
+	// An ACPX agent switch changes which models can run (claude:haiku vs codex:gpt),
+	// so clear the stale model and re-sync the label exactly like a backend switch.
+	if (prior && prior !== v) {
+		st.aDel(["inference", "targets", TARGET_NAME, "models"]);
+		syncExtractionLabel();
+	}
 }
 
 function bgApiKey(): string {

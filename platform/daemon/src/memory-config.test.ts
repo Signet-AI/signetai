@@ -789,6 +789,21 @@ describe("loadPipelineConfig", () => {
 		expect(result.extraction.model).toBe("qwen3:8b");
 	});
 
+	it("preserves the extraction model label for a provider family outside the legacy vocab (#1017)", () => {
+		// The dashboard writes the routing target (inference.targets.background)
+		// and mirrors only the model into the legacy label when the executor is a
+		// provider family (e.g. minimax) the narrower pipeline vocab can't express.
+		// The model — the only field logs/telemetry/DB read — must propagate.
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					extractionModel: "MiniMax-M2.7",
+				},
+			},
+		});
+		expect(result.extraction.model).toBe("MiniMax-M2.7");
+	});
+
 	it("nested provider used when no flat key is set", () => {
 		const result = loadPipelineConfig({
 			memory: {

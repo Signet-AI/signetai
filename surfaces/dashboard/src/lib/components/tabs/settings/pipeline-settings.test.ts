@@ -5,6 +5,7 @@ import {
 	DEFAULT_OPENAI_COMPATIBLE_ENDPOINT,
 	applyAcpxDashboardSetup,
 	defaultAcpxDashboardAgent,
+	extractionLabelForRoutingTarget,
 	hasExplicitSynthesisConfig,
 	hasExplicitSynthesisProvider,
 	resolveExtractionEndpoint,
@@ -242,5 +243,41 @@ describe("pipeline-settings ACPX dashboard setup", () => {
 				sessionSynthesis: { target: "background-acpx/default", taskClass: "session_synthesis" },
 			},
 		});
+	});
+});
+
+describe("extraction label sync for routing targets (#1017)", () => {
+	it("mirrors an in-vocabulary executor and its model into the legacy label", () => {
+		expect(extractionLabelForRoutingTarget("ollama", "gemma3:4b")).toEqual({
+			provider: "ollama",
+			model: "gemma3:4b",
+		});
+		expect(extractionLabelForRoutingTarget("acpx", "haiku")).toEqual({
+			provider: "acpx",
+			model: "haiku",
+		});
+		expect(extractionLabelForRoutingTarget("openai-compatible", "lmstudio-model")).toEqual({
+			provider: "openai-compatible",
+			model: "lmstudio-model",
+		});
+	});
+
+	it("keeps the model label for a provider family the legacy vocab cannot represent", () => {
+		// minimax/google-style provider backends aren't in PIPELINE_PROVIDER_CHOICES;
+		// the model label (the only field logs/telemetry/DB read) must still sync.
+		expect(extractionLabelForRoutingTarget("minimax", "MiniMax-M2.7")).toEqual({
+			provider: undefined,
+			model: "MiniMax-M2.7",
+		});
+	});
+
+	it("resets the label when the backend is cleared", () => {
+		expect(extractionLabelForRoutingTarget("", "gemma3:4b")).toEqual({ provider: undefined, model: undefined });
+		expect(extractionLabelForRoutingTarget("", "")).toEqual({ provider: undefined, model: undefined });
+	});
+
+	it("drops an empty model rather than writing a blank label", () => {
+		expect(extractionLabelForRoutingTarget("ollama", "")).toEqual({ provider: "ollama", model: undefined });
+		expect(extractionLabelForRoutingTarget("ollama", "   ")).toEqual({ provider: "ollama", model: undefined });
 	});
 });

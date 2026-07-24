@@ -84,6 +84,28 @@ export function resolveExtractionEndpoint(agent: unknown): string {
 	return provider === "openai-compatible" ? DEFAULT_OPENAI_COMPATIBLE_ENDPOINT : "";
 }
 
+/**
+ * Compute the legacy extraction label (`memory.pipelineV2.extraction{Provider,Model}`)
+ * that should mirror a routing target so pipeline logs, telemetry, and the
+ * `extraction_model` DB column report the model actually in use instead of the
+ * `qwen3:4b` default (#1017). Routing is authoritative post-#947; this label is
+ * purely informational and feeds `compileLegacyRoutingConfig`.
+ *
+ * Returns the value to write for each key, or `undefined` to delete it (e.g.
+ * when the backend is cleared, or when the executor is a provider family the
+ * narrower legacy vocabulary can't represent — the model label is still kept).
+ */
+export function extractionLabelForRoutingTarget(
+	executor: string,
+	model: string,
+): { readonly provider: string | undefined; readonly model: string | undefined } {
+	if (!executor) return { provider: undefined, model: undefined };
+	return {
+		provider: isPipelineProvider(executor) ? executor : undefined,
+		model: model.trim() || undefined,
+	};
+}
+
 export function resolveSynthesisProvider(agent: unknown): PipelineProviderChoice {
 	const pipeline = readPipeline(agent);
 	const explicit = readString(pipeline, "synthesis", "provider");
