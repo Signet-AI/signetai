@@ -324,9 +324,29 @@ export function readManagedTrimmedEnv(name: string): string | undefined {
 	return trimmed.length > 0 ? trimmed : undefined;
 }
 
+function isExistingDirectory(path: string): boolean {
+	try {
+		return statSync(path).isDirectory();
+	} catch {
+		return false;
+	}
+}
+
 export function resolveSignetWorkspacePath(home = homedir()): string {
 	const configured = readManagedTrimmedEnv("SIGNET_PATH");
-	if (configured) return resolve(expandHome(configured));
+	if (configured) {
+		const resolved = resolve(expandHome(configured));
+		if (isExistingDirectory(resolved)) return resolved;
+		// Defense-in-depth against the managed-extension feedback loop (issue
+		// #1016): a stale SIGNET_PATH baked into a migrated/legacy extension
+		// points at a directory that no longer exists on this machine. Trusting
+		// it would re-embed the wrong path on the next sync, so fall through to
+		// the homedir/config resolution, which can always re-derive a valid
+		// default workspace. Warn so the override being ignored is diagnosable.
+		console.warn(
+			`[signet] SIGNET_PATH="${configured}" does not point to an existing workspace directory; using the default workspace resolution instead.`,
+		);
+	}
 
 	const defaultWorkspace = join(home, ".agents");
 	const configHome = readManagedTrimmedEnv("XDG_CONFIG_HOME") ?? join(home, ".config");
@@ -353,6 +373,13 @@ export function resolveSignetWorkspacePath(home = homedir()): string {
 	return resolve(expandHome(workspace.trim()));
 }
 
+// NOTE: unlike the SIGNET_PATH env branch above, the persisted workspace.json
+// value is intentionally trusted without an existence check. It is an explicit,
+// admin-authored override (written by `signet workspace set`), not a value that
+// can be silently injected by a migrated/legacy extension. buildManagedExtensionEnvBootstrap
+// additionally re-checks existence before baking any path into an extension, so a
+// stale config value still cannot be re-embedded via the feedback loop.
+
 export function resolveSignetDaemonUrl(): string {
 	return resolveCoreSignetDaemonUrl();
 }
@@ -371,10 +398,33 @@ export function buildManagedExtensionEnvBootstrap(env: {
 	readonly agentId: string;
 	readonly apiKey?: string;
 }): string {
-	const workspace = JSON.stringify(env.signetPath);
 	const daemonUrl = JSON.stringify(env.daemonUrl);
 	const agentId = JSON.stringify(env.agentId);
 	const apiKey = env.apiKey ? JSON.stringify(env.apiKey) : null;
+
+	// Decide whether to bake SIGNET_PATH into the extension:
+	//  - default workspace (homedir/.agents): never bake it. The managed
+	//    pi/oh-my-pi extension derives join(homedir(), ".agents") at runtime when
+	//    SIGNET_PATH is unset, and any signet subprocess it spawns falls back to
+	//    the same default via the CLI/core resolution. Omitting the setter keeps
+	//    a synced or cloned agents directory valid across machines whose home
+	//    directory differs from the install host (issue #1015).
+	//  - a path that does not exist on disk: never bake it, so a stale path from
+	//    a migrated/legacy extension is not re-embedded on the next sync (the
+	//    self-perpetuating feedback loop, issue #1016). The extension/runtime
+	//    then resolves a valid default workspace instead.
+	// Only an explicitly configured, existing workspace is baked in.
+	const isDefaultWorkspace = env.signetPath === join(homedir(), ".agents");
+	const workspaceExists = isExistingDirectory(env.signetPath);
+	if (!isDefaultWorkspace && !workspaceExists) {
+		console.warn(
+			`[signet] resolved workspace "${env.signetPath}" does not exist; not embedding it in the managed extension to avoid propagating a stale path (issue #1016).`,
+		);
+	}
+	const signetPathBlock =
+		isDefaultWorkspace || !workspaceExists
+			? ""
+			: `\t\tif (!__signetReadEnv("SIGNET_PATH")) {\n\t\t\tReflect.set(__signetRuntimeEnv, "SIGNET_PATH", ${JSON.stringify(env.signetPath)});\n\t\t}\n`;
 
 	return `const __signetRuntimeProcess = Reflect.get(globalThis, "process");
 if (__signetRuntimeProcess && typeof __signetRuntimeProcess === "object") {
@@ -385,10 +435,7 @@ if (__signetRuntimeProcess && typeof __signetRuntimeProcess === "object") {
 		return typeof value === "string" && value.trim().length > 0 ? value : undefined;
 	};
 	if (__signetRuntimeEnv && typeof __signetRuntimeEnv === "object") {
-		if (!__signetReadEnv("SIGNET_PATH")) {
-			Reflect.set(__signetRuntimeEnv, "SIGNET_PATH", ${workspace});
-		}
-		if (!__signetReadEnv("SIGNET_DAEMON_URL")) {
+${signetPathBlock}		if (!__signetReadEnv("SIGNET_DAEMON_URL")) {
 			Reflect.set(__signetRuntimeEnv, "SIGNET_DAEMON_URL", ${daemonUrl});
 		}
 		if (!__signetReadEnv("SIGNET_AGENT_ID")) {

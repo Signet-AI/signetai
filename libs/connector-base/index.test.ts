@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
@@ -7,6 +7,7 @@ import {
 	type InstallResult,
 	type UninstallResult,
 	atomicWriteText,
+	buildManagedExtensionEnvBootstrap,
 	removeManagedExtensionFile,
 	resolveSignetCliCommand,
 	resolveSignetDaemonUrl,
@@ -245,11 +246,36 @@ describe("resolveSignetDaemonUrl", () => {
 });
 
 describe("resolveSignetWorkspacePath", () => {
-	it("normalizes SIGNET_PATH when provided directly", () => {
-		const relativeWorkspace = "./tmp/signet-workspace";
-		process.env.SIGNET_PATH = relativeWorkspace;
+	// Config/default-path tests below rely on SIGNET_PATH being absent so the
+	// config-file and homedir fallbacks are exercised; clear it up front so the
+	// suite is deterministic regardless of the host environment.
+	beforeEach(() => {
+		Reflect.deleteProperty(process.env, "SIGNET_PATH");
+	});
 
-		expect(resolveSignetWorkspacePath()).toBe(resolve(relativeWorkspace));
+	it("trusts and normalizes SIGNET_PATH when it points to an existing directory", () => {
+		dir = mkdtempSync(join(tmpdir(), "signet-connector-base-env-"));
+		const workspace = join(dir, "workspace");
+		mkdirSync(workspace, { recursive: true });
+		process.env.SIGNET_PATH = workspace;
+
+		expect(resolveSignetWorkspacePath()).toBe(resolve(workspace));
+	});
+
+	it("ignores a stale SIGNET_PATH that does not exist and falls back to the default (issue #1016)", () => {
+		dir = mkdtempSync(join(tmpdir(), "signet-connector-base-stale-"));
+		process.env.XDG_CONFIG_HOME = dir;
+		process.env.SIGNET_PATH = "/nonexistent/stale/path/.agents";
+
+		const warnings: string[] = [];
+		const originalWarn = console.warn;
+		console.warn = (message?: unknown) => warnings.push(String(message));
+		try {
+			expect(resolveSignetWorkspacePath()).toBe(join(homedir(), ".agents"));
+		} finally {
+			console.warn = originalWarn;
+		}
+		expect(warnings.join("\n")).toContain("does not point to an existing workspace directory");
 	});
 
 	it("uses the default workspace path when no persisted config exists", () => {
@@ -298,6 +324,53 @@ describe("resolveSignetWorkspacePath", () => {
 		writeFileSync(join(cfgDir, "workspace.json"), JSON.stringify({ version: 1, workspace: "  " }), "utf-8");
 
 		expect(() => resolveSignetWorkspacePath()).toThrow("workspace must be a non-empty string");
+	});
+});
+
+describe("buildManagedExtensionEnvBootstrap", () => {
+	it("omits the SIGNET_PATH setter for the default workspace so it is derived at runtime (issue #1015)", () => {
+		const bootstrap = buildManagedExtensionEnvBootstrap({
+			signetPath: join(homedir(), ".agents"),
+			daemonUrl: "http://127.0.0.1:3850",
+			agentId: "default",
+		});
+
+		expect(bootstrap).not.toContain("SIGNET_PATH");
+		expect(bootstrap).toContain('Reflect.set(__signetRuntimeEnv, "SIGNET_DAEMON_URL", "http://127.0.0.1:3850")');
+		expect(bootstrap).toContain('Reflect.set(__signetRuntimeEnv, "SIGNET_AGENT_ID", "default")');
+	});
+
+	it("bakes the literal SIGNET_PATH for an explicitly configured, existing workspace", () => {
+		dir = mkdtempSync(join(tmpdir(), "signet-connector-base-bootstrap-custom-"));
+		const custom = join(dir, "custom-agents");
+		mkdirSync(custom, { recursive: true });
+		const bootstrap = buildManagedExtensionEnvBootstrap({
+			signetPath: custom,
+			daemonUrl: "http://127.0.0.1:3850",
+			agentId: "default",
+		});
+
+		expect(bootstrap).toContain(`Reflect.set(__signetRuntimeEnv, "SIGNET_PATH", ${JSON.stringify(custom)})`);
+		expect(bootstrap).toContain('Reflect.set(__signetRuntimeEnv, "SIGNET_DAEMON_URL", "http://127.0.0.1:3850")');
+	});
+
+	it("omits a stale (non-existent) workspace path instead of baking it, and warns (issue #1016)", () => {
+		const warnings: string[] = [];
+		const originalWarn = console.warn;
+		console.warn = (message?: unknown) => warnings.push(String(message));
+		try {
+			const bootstrap = buildManagedExtensionEnvBootstrap({
+				signetPath: "/nonexistent/stale/path/.agents",
+				daemonUrl: "http://127.0.0.1:3850",
+				agentId: "default",
+			});
+
+			expect(bootstrap).not.toContain("SIGNET_PATH");
+			expect(bootstrap).toContain('Reflect.set(__signetRuntimeEnv, "SIGNET_DAEMON_URL", "http://127.0.0.1:3850")');
+		} finally {
+			console.warn = originalWarn;
+		}
+		expect(warnings.join("\n")).toContain("does not exist");
 	});
 });
 

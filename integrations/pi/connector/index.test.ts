@@ -75,6 +75,21 @@ describe("PiConnector", () => {
 		expect(content.length).toBeGreaterThan(1_000);
 	});
 
+	it("writes a portable extension with no baked-in SIGNET_PATH for the default workspace (#1015)", async () => {
+		const connector = new PiConnector();
+		// An empty basePath resolves to the default workspace join(homedir(), ".agents").
+		await connector.install("");
+		const content = readFileSync(join(tmpRoot, "agent", "extensions", "signet-pi.js"), "utf8");
+
+		// The default workspace must not be baked in as an absolute path so a
+		// synced/cloned agents directory stays valid on a machine whose home
+		// directory differs from the install host. The extension derives
+		// join(homedir(), ".agents") at runtime when SIGNET_PATH is unset.
+		expect(content).not.toContain('Reflect.set(__signetRuntimeEnv, "SIGNET_PATH"');
+		expect(content).not.toContain(tmpRoot);
+		expect(content).toContain('Reflect.set(__signetRuntimeEnv, "SIGNET_DAEMON_URL"');
+	});
+
 	it("falls back to default agent id when none is configured at install time", async () => {
 		Reflect.deleteProperty(process.env, "SIGNET_AGENT_ID");
 		const connector = new PiConnector();
