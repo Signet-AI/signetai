@@ -13,6 +13,7 @@ import type {
 	RoutingOperationKind,
 	RoutingRuntimeSnapshot,
 	RoutingRuntimeState,
+	RoutingValidationIssue,
 } from "@signet/core";
 import {
 	allTargetRefs,
@@ -23,6 +24,7 @@ import {
 	parseYamlDocument,
 	resolveAcpxModelSelection,
 	resolveRoutingDecision,
+	validateRoutingReferences,
 } from "@signet/core";
 import { isOAuthProvider, resolveOAuthCredential } from "./inference-oauth";
 import { type ResolvedInferenceCredential, createRoutingProvider } from "./inference-provider-factory";
@@ -135,6 +137,7 @@ export interface InferenceStatusSummary {
 	readonly accounts: Readonly<Record<string, InferenceAccountSummary>>;
 	readonly targets: Readonly<Record<string, InferenceTargetSummary>>;
 	readonly agents: readonly string[];
+	readonly configIssues: readonly RoutingValidationIssue[];
 	readonly runtimeSnapshot: RoutingRuntimeSnapshot;
 }
 
@@ -142,6 +145,7 @@ interface LoadedRoutingConfig {
 	readonly config: RoutingConfig;
 	readonly signature: string;
 	readonly path: string | null;
+	readonly configIssues: readonly RoutingValidationIssue[];
 }
 
 interface SnapshotCacheEntry {
@@ -259,12 +263,28 @@ export class InferenceRouter {
 	private readonly observedTargetState = new Map<string, ObservedRuntimeOverride>();
 	private readonly observedAccountState = new Map<string, ObservedRuntimeOverride>();
 	private providerCacheSignature: string | null = null;
+	private lastValidationSignature: string | null = null;
 	private backgroundAdmissionsOpen = true;
 	private readonly activeBackgroundExecutions = new Map<number, AbortController>();
 	private readonly backgroundSettledWaiters = new Set<() => void>();
 	private nextBackgroundExecutionId = 1;
 
 	constructor(private readonly agentsDir: string) {}
+
+	/**
+	 * Eagerly load + validate the routing config once at daemon boot so broken
+	 * references are surfaced in the log before any route is attempted (#1005).
+	 * Never throws: a missing/invalid config is reported via the structured log.
+	 */
+	async validateConfigReferences(): Promise<void> {
+		try {
+			const loaded = await this.loadConfig();
+			if (!loaded.ok) return; // loadConfig already logged the structured error.
+		} catch (error) {
+			logger.error("inference", "Routing config boot validation failed", error as Error);
+		}
+	}
+
 
 	resumeBackgroundInference(): void {
 		this.backgroundAdmissionsOpen = true;
@@ -355,7 +375,15 @@ export class InferenceRouter {
 		}
 
 		const parsed = parseRoutingConfig(raw, legacy);
-		if (!parsed.ok) return parsed;
+		if (!parsed.ok) {
+			this.logConfigError(parsed.error, signature);
+			return parsed;
+		}
+
+		const configIssues = validateRoutingReferences(parsed.value);
+		if (signature !== this.lastValidationSignature) {
+			this.logConfigIssues(configIssues, signature);
+		}
 
 		if (this.providerCacheSignature !== signature) {
 			this.providerCache.clear();
@@ -371,8 +399,31 @@ export class InferenceRouter {
 				config: parsed.value,
 				signature,
 				path,
+				configIssues,
 			},
 		};
+	}
+
+	private logConfigIssues(issues: readonly RoutingValidationIssue[], signature: string): void {
+		this.lastValidationSignature = signature;
+		if (issues.length === 0) return;
+		for (const issue of issues) {
+			const data = { field: issue.field, ref: issue.ref };
+			if (issue.severity === "error") {
+				logger.error("inference", `Routing config error: ${issue.message}`, undefined, data);
+			} else {
+				logger.warn("inference", `Routing config warning: ${issue.message}`, data);
+			}
+		}
+	}
+
+	private logConfigError(
+		error: { readonly message: string; readonly details?: Readonly<Record<string, unknown>> },
+		signature: string,
+	): void {
+		if (signature === this.lastValidationSignature) return;
+		this.lastValidationSignature = signature;
+		logger.error("inference", `Routing config failed to load: ${error.message}`, undefined, error.details as Record<string, unknown> | undefined);
 	}
 
 	private resetRuntimeCaches(): void {
@@ -1153,6 +1204,7 @@ export class InferenceRouter {
 				accounts,
 				targets,
 				agents: Object.keys(loaded.value.config.agents),
+				configIssues: loaded.value.configIssues,
 				runtimeSnapshot: snapshot,
 			},
 		};

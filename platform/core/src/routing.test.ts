@@ -5,6 +5,7 @@ import {
 	makeRoutingTargetRef,
 	parseRoutingConfig,
 	resolveRoutingDecision,
+	validateRoutingReferences,
 } from "./routing";
 
 const ready = {
@@ -885,3 +886,273 @@ describe("inference config + decision engine", () => {
 		expect(decision.error.code).toBe("no-candidates");
 	});
 });
+
+describe("routing reference validation (#1005)", () => {
+	// A complete, valid baseline: every reference resolves. Individual tests
+	// mutate one field to introduce exactly one broken reference.
+	function validConfig() {
+		const localRef = makeRoutingTargetRef("local", "default");
+		const remoteRef = makeRoutingTargetRef("remote", "sonnet");
+		return parseRoutingConfig({
+			inference: {
+				accounts: {
+					anthropic: { kind: "api", providerFamily: "anthropic", credentialRef: "ANTHROPIC_API_KEY" },
+				},
+				targets: {
+					local: {
+						executor: "ollama",
+						models: { default: { model: "gemma" } },
+					},
+					remote: {
+						executor: "anthropic",
+						account: "anthropic",
+						models: { sonnet: { model: "claude-sonnet", toolUse: true } },
+					},
+				},
+				policies: {
+					auto: {
+						mode: "automatic",
+						defaultTargets: [remoteRef, localRef],
+						fallbackTargets: [localRef],
+						taskTargets: { code_reasoning: [remoteRef] },
+						allow: [remoteRef, localRef],
+					},
+				},
+				taskClasses: {
+					interactive: { reasoning: "medium", preferredTargets: [remoteRef] },
+					code_reasoning: { reasoning: "high" },
+				},
+				agents: {
+					rose: {
+						defaultPolicy: "auto",
+						roster: [remoteRef, localRef],
+						preferredTargets: { interactive: [remoteRef] },
+						pinnedTargets: { interactive: remoteRef },
+					},
+				},
+				workloads: {
+					default: { policy: "auto", taskClass: "interactive" },
+					memoryExtraction: { target: remoteRef },
+				},
+				defaultPolicy: "auto",
+			},
+		});
+	}
+
+	it("accepts a fully-resolved config with no issues", () => {
+		const parsed = validConfig();
+		expect(parsed.ok).toBe(true);
+		if (!parsed.ok) return;
+		expect(validateRoutingReferences(parsed.value)).toEqual([]);
+	});
+
+	it("refuses to load when defaultPolicy points at a renamed/missing policy", () => {
+		// Reproduces #1005: defaultPolicy: background-acpx after rename to background.
+		const parsed = parseRoutingConfig({
+			inference: {
+				targets: {
+					background: { executor: "acpx", acpx: { agent: "codex" }, models: { default: { model: "gpt" } } },
+				},
+				policies: { background: { mode: "automatic", defaultTargets: [makeRoutingTargetRef("background", "default")] } },
+				defaultPolicy: "background-acpx",
+			},
+		});
+		expect(parsed.ok).toBe(false);
+		if (!("error" in parsed)) throw new Error("expected config parse failure");
+		expect(parsed.error.code).toBe("invalid-config");
+		expect(parsed.error.message).toContain('defaultPolicy="background-acpx"');
+		expect(parsed.error.details?.issues).toHaveLength(1);
+	});
+
+	it("warns (but still loads) when a workload pins a missing target", () => {
+		const parsed = validConfig();
+		if (!parsed.ok) return;
+		const broken = {
+			...parsed.value,
+			workloads: { ...parsed.value.workloads!, memoryExtraction: { target: "ghost/default" } },
+		};
+		const issues = validateRoutingReferences(broken);
+		expect(issues.every((i) => i.severity === "warning")).toBe(true);
+		expect(issues.some((i) => i.field === "workloads.memoryExtraction.target" && i.ref === "ghost/default")).toBe(true);
+	});
+
+	it("warns (but still loads) when a workload references a missing policy", () => {
+		const parsed = validConfig();
+		if (!parsed.ok) return;
+		const broken = {
+			...parsed.value,
+			workloads: { ...parsed.value.workloads!, default: { policy: "nope", taskClass: "interactive" } },
+		};
+		const issues = validateRoutingReferences(broken);
+		expect(issues.every((i) => i.severity === "warning")).toBe(true);
+		expect(issues.some((i) => i.field === "workloads.default.policy" && i.ref === "nope")).toBe(true);
+	});
+
+	it("warns (but still loads) when policy defaultTargets reference a missing target", () => {
+		const parsed = validConfig();
+		if (!parsed.ok) return;
+		const broken = {
+			...parsed.value,
+			policies: {
+				...parsed.value.policies,
+				auto: { ...parsed.value.policies.auto!, defaultTargets: ["ghost/default"] },
+			},
+		};
+		const issues = validateRoutingReferences(broken);
+		expect(issues.every((i) => i.severity === "warning")).toBe(true);
+		expect(issues.some((i) => i.field === "policies.auto.defaultTargets" && i.ref === "ghost/default")).toBe(true);
+	});
+
+	it("warns when a target references a missing account", () => {
+		const parsed = validConfig();
+		if (!parsed.ok) return;
+		const broken = {
+			...parsed.value,
+			targets: { ...parsed.value.targets, remote: { ...parsed.value.targets.remote!, account: "ghost-account" } },
+		};
+		const issues = validateRoutingReferences(broken);
+		expect(issues.every((i) => i.severity === "warning")).toBe(true);
+		expect(issues.some((i) => i.field === "targets.remote.account" && i.ref === "ghost-account")).toBe(true);
+	});
+
+	it("warns on dangling agent roster / pinned / preferred references", () => {
+		const parsed = validConfig();
+		if (!parsed.ok) return;
+		const broken = {
+			...parsed.value,
+			agents: {
+				rose: {
+					defaultPolicy: "ghost-policy",
+					roster: ["ghost/default"],
+					preferredTargets: { interactive: ["ghost2/default"] },
+					pinnedTargets: { interactive: "ghost3/default" },
+				},
+			},
+		};
+		const issues = validateRoutingReferences(broken);
+		const fields = issues.map((i) => i.field);
+		expect(fields).toContain("agents.rose.defaultPolicy");
+		expect(fields).toContain("agents.rose.roster");
+		expect(fields).toContain("agents.rose.preferredTargets.interactive");
+		expect(fields).toContain("agents.rose.pinnedTargets.interactive");
+		expect(issues.every((i) => i.severity === "warning")).toBe(true);
+	});
+
+	it("collects multiple broken references at once instead of failing on the first", () => {
+		const parsed = validConfig();
+		if (!parsed.ok) return;
+		const broken = {
+			...parsed.value,
+			workloads: {
+				...parsed.value.workloads!,
+				memoryExtraction: { target: "ghost-a/default" },
+				sessionSynthesis: { target: "ghost-b/default" },
+			},
+			defaultPolicy: "ghost-policy",
+		};
+		const issues = validateRoutingReferences(broken);
+		const refs = issues.map((i) => i.ref).sort();
+		expect(refs).toEqual(["ghost-a/default", "ghost-b/default", "ghost-policy"]);
+	});
+
+	it("does NOT block config load for a stale workload pin (routes via fallback)", () => {
+		// Regression guard (#1005 review): a stale workloads.<name>.target must not
+		// refuse the whole config, since routing falls back to the policy chain.
+		const parsed = parseRoutingConfig({
+			inference: {
+				targets: {
+					real: { executor: "ollama", models: { default: { model: "gemma" } } },
+				},
+				policies: {
+					auto: {
+						mode: "automatic",
+						defaultTargets: [makeRoutingTargetRef("real", "default")],
+						fallbackTargets: [makeRoutingTargetRef("real", "default")],
+					},
+				},
+				workloads: { memoryExtraction: { target: "ghost/default" } },
+				defaultPolicy: "auto",
+			},
+		});
+		expect(parsed.ok).toBe(true);
+		if (!parsed.ok) return;
+		const issues = validateRoutingReferences(parsed.value);
+		expect(issues.every((i) => i.severity === "warning")).toBe(true);
+		expect(issues.some((i) => i.field === "workloads.memoryExtraction.target")).toBe(true);
+	});
+
+	it("warns on dangling taskClass keys in policy taskTargets / agent pinned/preferred", () => {
+		const parsed = validConfig();
+		if (!parsed.ok) return;
+		const broken = {
+			...parsed.value,
+			policies: {
+				...parsed.value.policies,
+				auto: { ...parsed.value.policies.auto!, taskTargets: { code_reasining: [makeRoutingTargetRef("remote", "sonnet")] } },
+			},
+			agents: {
+				rose: {
+					...parsed.value.agents.rose!,
+					preferredTargets: { intaractive: [makeRoutingTargetRef("remote", "sonnet")] },
+					pinnedTargets: { intaractive: makeRoutingTargetRef("remote", "sonnet") },
+				},
+			},
+		};
+		const issues = validateRoutingReferences(broken);
+		const fields = issues.map((i) => i.field);
+		expect(fields).toContain("policies.auto.taskTargets.code_reasining");
+		expect(fields).toContain("agents.rose.preferredTargets.intaractive");
+		expect(fields).toContain("agents.rose.pinnedTargets.intaractive");
+		expect(issues.every((i) => i.severity === "warning")).toBe(true);
+	});
+
+	it("does not flag classifier-synthetic taskClass keys (hard_coding / local_sensitive)", () => {
+		const parsed = validConfig();
+		if (!parsed.ok) return;
+		const remoteRef = makeRoutingTargetRef("remote", "sonnet");
+		const cfg = {
+			...parsed.value,
+			policies: {
+				...parsed.value.policies,
+				auto: { ...parsed.value.policies.auto!, taskTargets: { hard_coding: [remoteRef] } },
+			},
+			agents: {
+				rose: { ...parsed.value.agents.rose!, pinnedTargets: { local_sensitive: remoteRef } },
+			},
+		};
+		const issues = validateRoutingReferences(cfg);
+		expect(issues.filter((i) => i.field.includes("hard_coding") || i.field.includes("local_sensitive"))).toEqual([]);
+	});
+
+	it("tolerates a dangling defaultPolicy when no policies are declared (CLI no-legacy path)", () => {
+		// Regression guard (#1005 review): the CLI `route pin`/`unpin` commands
+		// parse config with no legacy merge, so a mid-setup agent.yaml may set
+		// defaultPolicy before any policies block exists. This must not block load.
+		const parsed = parseRoutingConfig({
+			inference: {
+				defaultPolicy: "nonexistent",
+				targets: { t: { executor: "ollama", models: { default: { model: "x" } } } },
+			},
+		});
+		expect(parsed.ok).toBe(true);
+		if (!parsed.ok) return;
+		// And the validator must not flag it either.
+		expect(validateRoutingReferences(parsed.value).filter((i) => i.field === "defaultPolicy")).toEqual([]);
+	});
+
+	it("does not flag agents.<id>.pinnedTargets.default (engine fallback pin key)", () => {
+		// Regression guard (#1005 review): the CLI `route pin` writes
+		// pinnedTargets.default by default, and the engine reads it as a fallback
+		// pin, so it must not warn even when taskClasses.default is undeclared.
+		const parsed = parseRoutingConfig({
+			inference: {
+				targets: { primary: { executor: "ollama", models: { fast: { model: "x" } } } },
+				agents: { default: { pinnedTargets: { default: "primary/fast" } } },
+			},
+		});
+		expect(parsed.ok).toBe(true);
+		if (!parsed.ok) return;
+		expect(validateRoutingReferences(parsed.value)).toEqual([]);
+	});
+});
+

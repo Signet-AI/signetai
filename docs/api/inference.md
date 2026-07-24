@@ -42,6 +42,14 @@ current runtime snapshot for each route target.
     "memoryExtraction": "memory-pipeline",
     "sessionSynthesis": "memory-pipeline"
   },
+  "configIssues": [
+    {
+      "severity": "warning",
+      "field": "policies.auto.defaultTargets",
+      "ref": "ghost/default",
+      "message": "Target ref \"ghost/default\" referenced by policies.auto.defaultTargets does not exist."
+    }
+  ],
   "runtimeSnapshot": {
     "targets": {
       "sonnet/default": {
@@ -75,6 +83,34 @@ Inference concurrency limits can be tuned with:
 - `SIGNET_INFERENCE_MAX_CONCURRENT_NATIVE_STREAMS`
 - `SIGNET_INFERENCE_MAX_CONCURRENT_GATEWAY_STREAMS`
 - `SIGNET_INFERENCE_MAX_CONCURRENT_TOTAL`
+
+`configIssues` lists broken cross-references discovered when the config was
+loaded (#1005). Most entries are `severity: "warning"` — the config loads but
+the reference degrades routing (dangling policy target lists, agent rosters,
+target accounts, and stale workload policy/target pins, which the router
+falls back around). A `severity: "error"` makes routing structurally
+non-functional (only a broken `defaultPolicy`) — the endpoint then returns
+HTTP 400 with the structured error instead of a status body:
+
+```json
+{
+  "error": "Routing config has 1 broken reference(s): defaultPolicy=\"background-acpx\"",
+  "details": {
+    "issues": [
+      {
+        "severity": "error",
+        "field": "defaultPolicy",
+        "ref": "background-acpx",
+        "message": "Policy \"background-acpx\" referenced by defaultPolicy does not exist."
+      }
+    ],
+    "warnings": []
+  }
+}
+```
+
+The same references are logged (at boot and whenever the config file changes)
+before any route is attempted.
 
 ### GET /api/inference/catalog
 
