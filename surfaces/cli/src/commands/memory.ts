@@ -204,14 +204,15 @@ export function registerMemoryCommands(program: Command, deps: MemoryDeps): void
 			const stats = typeof data === "object" && data !== null ? data : {};
 			const total = typeof stats.total === "number" ? stats.total : 0;
 			const unembedded = typeof stats.unembedded === "number" ? stats.unembedded : 0;
+			const embedded = typeof stats.embedded === "number" ? stats.embedded : Math.max(0, total - unembedded);
+			const complete = stats.complete === true;
 			const coverage = typeof stats.coverage === "string" ? stats.coverage : "0%";
 
 			if (options.json) {
-				console.log(JSON.stringify({ total, unembedded, coverage }, null, 2));
+				console.log(JSON.stringify({ total, embedded, unembedded, complete, coverage }, null, 2));
 				return;
 			}
 
-			const embedded = total - unembedded;
 			const coverageColor = unembedded === 0 ? chalk.green : unembedded > total * 0.3 ? chalk.red : chalk.yellow;
 			console.log(chalk.bold("\n  Embedding Coverage Audit\n"));
 			console.log(`  Total memories:    ${chalk.cyan(total)}`);

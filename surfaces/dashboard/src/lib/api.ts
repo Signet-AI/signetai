@@ -1212,6 +1212,8 @@ export interface RepairActionResult {
 export interface EmbeddingGapStats {
 	unembedded: number;
 	total: number;
+	embedded: number;
+	complete: boolean;
 	coverage: string;
 }
 
@@ -1299,6 +1301,8 @@ export async function getEmbeddingGapStats(): Promise<EmbeddingGapStats | null> 
 		return {
 			unembedded: body.unembedded,
 			total: body.total,
+			embedded: typeof body.embedded === "number" ? body.embedded : Math.max(0, body.total - body.unembedded),
+			complete: body.complete === true,
 			coverage: body.coverage,
 		};
 	} catch {
