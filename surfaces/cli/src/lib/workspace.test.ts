@@ -8,14 +8,20 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null;
 }
 
+// Strip both workspace env vars from the host so precedence/fallback tests are
+// deterministic regardless of the developer shell (the resolver honors
+// SIGNET_PATH then SIGNET_WORKSPACE).
+function cleanEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+	return { ...process.env, SIGNET_PATH: "", SIGNET_WORKSPACE: "", ...overrides };
+}
+
 describe("workspace path resolution", () => {
 	it("prefers SIGNET_PATH over stored config", () => {
 		const root = mkdtempSync(join(tmpdir(), "signet-workspace-env-"));
-		const env = {
-			...process.env,
+		const env = cleanEnv({
 			XDG_CONFIG_HOME: root,
 			SIGNET_PATH: join(root, "from-env"),
-		};
+		});
 		writeConfiguredWorkspacePath(join(root, "from-config"), env);
 
 		const resolved = resolveAgentsDir(env);
@@ -25,11 +31,10 @@ describe("workspace path resolution", () => {
 
 	it("uses stored config when env override is absent", () => {
 		const root = mkdtempSync(join(tmpdir(), "signet-workspace-config-"));
-		const env = {
-			...process.env,
+		const env = cleanEnv({
 			XDG_CONFIG_HOME: root,
 			SIGNET_PATH: "",
-		};
+		});
 		writeConfiguredWorkspacePath(join(root, "agent-home"), env);
 
 		const resolved = resolveAgentsDir(env);
@@ -39,11 +44,10 @@ describe("workspace path resolution", () => {
 
 	it("falls back to ~/.agents when no env or config is present", () => {
 		const root = mkdtempSync(join(tmpdir(), "signet-workspace-default-"));
-		const env = {
-			...process.env,
+		const env = cleanEnv({
 			XDG_CONFIG_HOME: root,
 			SIGNET_PATH: "",
-		};
+		});
 
 		const resolved = resolveAgentsDir(env);
 		expect(resolved.source).toBe("default");
@@ -52,10 +56,9 @@ describe("workspace path resolution", () => {
 
 	it("writes workspace config payload to expected file", () => {
 		const root = mkdtempSync(join(tmpdir(), "signet-workspace-write-"));
-		const env = {
-			...process.env,
+		const env = cleanEnv({
 			XDG_CONFIG_HOME: root,
-		};
+		});
 		const target = join(root, "target-workspace");
 		const cfgPath = writeConfiguredWorkspacePath(target, env);
 		const expected = getWorkspaceConfigPath(env);

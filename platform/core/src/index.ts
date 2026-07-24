@@ -128,6 +128,18 @@ export { loadConfiguredHarnesses, parseHarnessList } from "./harness-config";
 export { resolveSignetDaemonUrl } from "./daemon-url";
 export type { SignetDaemonUrlOptions } from "./daemon-url";
 export {
+	type WorkspaceSource,
+	type WorkspaceResolution,
+	type ResolveWorkspacePathOptions,
+	WORKSPACE_ENV_KEYS,
+	normalizeWorkspacePath,
+	getWorkspaceConfigPath,
+	readConfiguredWorkspacePath,
+	writeConfiguredWorkspacePath,
+	clearConfiguredWorkspacePath,
+	resolveWorkspacePath,
+} from "./workspace";
+export {
 	search,
 	vectorSearch,
 	keywordSearch,

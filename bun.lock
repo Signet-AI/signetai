@@ -464,6 +464,7 @@
       "name": "@signet/desktop",
       "version": "0.154.6",
       "dependencies": {
+        "@signet/core": "workspace:*",
         "@signet/tray": "workspace:*",
         "electron-updater": "^6.8.3",
       },

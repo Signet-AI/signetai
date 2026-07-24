@@ -20,6 +20,7 @@
 		"test": "bun test"
 	},
 	"dependencies": {
+		"@signet/core": "workspace:*",
 		"@signet/tray": "workspace:*",
 		"electron-updater": "^6.8.3"
 	},

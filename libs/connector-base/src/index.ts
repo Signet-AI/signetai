@@ -35,12 +35,12 @@
 import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join } from "node:path";
 import {
 	type SymlinkOptions,
 	type SymlinkResult,
-	expandHome,
 	resolveSignetDaemonUrl as resolveCoreSignetDaemonUrl,
+	resolveWorkspacePath,
 	stripSignetBlock,
 	symlinkSkills,
 } from "@signet/core";
@@ -333,52 +333,15 @@ function isExistingDirectory(path: string): boolean {
 }
 
 export function resolveSignetWorkspacePath(home = homedir()): string {
-	const configured = readManagedTrimmedEnv("SIGNET_PATH");
-	if (configured) {
-		const resolved = resolve(expandHome(configured));
-		if (isExistingDirectory(resolved)) return resolved;
-		// Defense-in-depth against the managed-extension feedback loop (issue
-		// #1016): a stale SIGNET_PATH baked into a migrated/legacy extension
-		// points at a directory that no longer exists on this machine. Trusting
-		// it would re-embed the wrong path on the next sync, so fall through to
-		// the homedir/config resolution, which can always re-derive a valid
-		// default workspace. Warn so the override being ignored is diagnosable.
-		console.warn(
-			`[signet] SIGNET_PATH="${configured}" does not point to an existing workspace directory; using the default workspace resolution instead.`,
-		);
-	}
-
-	const defaultWorkspace = join(home, ".agents");
-	const configHome = readManagedTrimmedEnv("XDG_CONFIG_HOME") ?? join(home, ".config");
-	const workspaceConfigPath = join(configHome, "signet", "workspace.json");
-	if (!existsSync(workspaceConfigPath)) return defaultWorkspace;
-
-	let raw: unknown;
-	try {
-		raw = JSON.parse(readFileSync(workspaceConfigPath, "utf8"));
-	} catch (err) {
-		const detail = err instanceof Error ? err.message : String(err);
-		throw new Error(`Invalid Signet workspace config at ${workspaceConfigPath}: ${detail}`);
-	}
-
-	if (typeof raw !== "object" || raw === null || !("workspace" in raw)) {
-		throw new Error(`Invalid Signet workspace config at ${workspaceConfigPath}: missing workspace`);
-	}
-
-	const workspace = raw.workspace;
-	if (typeof workspace !== "string" || workspace.trim().length === 0) {
-		throw new Error(`Invalid Signet workspace config at ${workspaceConfigPath}: workspace must be a non-empty string`);
-	}
-
-	return resolve(expandHome(workspace.trim()));
+	// Delegates to the canonical resolver in @signet/core (issue #956). Connectors
+	// are install-time operations, so they fail loud on a malformed workspace.json
+	// (strict) and treat a stale env override as unset so it is not re-embedded
+	// into a managed extension (requireExistingEnvPath, issue #1016). A persisted
+	// workspace.json value is still trusted verbatim: it is an explicit,
+	// admin-authored override, and buildManagedExtensionEnvBootstrap re-checks
+	// existence before baking any path into an extension.
+	return resolveWorkspacePath({ home, strict: true, requireExistingEnvPath: true }).path;
 }
-
-// NOTE: unlike the SIGNET_PATH env branch above, the persisted workspace.json
-// value is intentionally trusted without an existence check. It is an explicit,
-// admin-authored override (written by `signet workspace set`), not a value that
-// can be silently injected by a migrated/legacy extension. buildManagedExtensionEnvBootstrap
-// additionally re-checks existence before baking any path into an extension, so a
-// stale config value still cannot be re-embedded via the feedback loop.
 
 export function resolveSignetDaemonUrl(): string {
 	return resolveCoreSignetDaemonUrl();
