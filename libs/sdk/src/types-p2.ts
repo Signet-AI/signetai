@@ -362,8 +362,10 @@ export interface RepairActionResponse {
 
 export interface EmbeddingGapsResponse {
 	readonly total: number;
+	readonly embedded: number;
 	readonly unembedded: number;
-	readonly oldestUnembedded: string | null;
+	readonly complete: boolean;
+	readonly coverage: string;
 }
 
 export interface DedupStatsResponse {

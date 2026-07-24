@@ -1010,6 +1010,94 @@ describe("cleanOrphanedEmbeddings", () => {
 // getDedupStats
 // ---------------------------------------------------------------------------
 
+describe("getEmbeddingGapStats", () => {
+	let db: Database;
+	let accessor: DbAccessor;
+
+	beforeEach(() => {
+		db = new Database(":memory:");
+		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
+		accessor = asAccessor(db);
+	});
+
+	afterEach(() => {
+		db.close();
+	});
+
+	// Seeds `total` active memories, embedding `total - gaps` of them via a
+	// per-row embedding (source_id match). The remaining `gaps` memories have no
+	// embedding and no matching hash, so they stay unembedded.
+	function seedCoverage(total: number, gaps: number): void {
+		ensureVecTable(db);
+		const now = new Date().toISOString();
+		const embeddedCount = total - gaps;
+		db.exec("BEGIN");
+		const insertMemory = db.prepare(
+			`INSERT INTO memories (id, content, type, created_at, updated_at, updated_by)
+			 VALUES (?, ?, 'fact', ?, ?, 'test')`,
+		);
+		const insertEmbeddingRow = db.prepare(
+			`INSERT INTO embeddings (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at)
+			 VALUES (?, ?, ?, ?, 'memory', ?, ?, ?)`,
+		);
+		for (let i = 0; i < embeddedCount; i++) {
+			const id = `mem-emb-${i}`;
+			insertMemory.run(id, `embedded content ${i}`, now, now);
+			insertEmbeddingRow.run(`emb-${i}`, `hash-${i}`, vectorBlob([1, 2, 3]), 3, id, `chunk ${i}`, now);
+		}
+		for (let i = 0; i < gaps; i++) {
+			insertMemory.run(`mem-gap-${i}`, `missing content ${i}`, now, now);
+		}
+		db.exec("COMMIT");
+	}
+
+	it("reports complete=true and exact 100% when every memory is embedded", () => {
+		seedCoverage(10, 0);
+		const stats = getEmbeddingGapStats(accessor);
+		expect(stats.total).toBe(10);
+		expect(stats.embedded).toBe(10);
+		expect(stats.unembedded).toBe(0);
+		expect(stats.complete).toBe(true);
+		expect(stats.coverage).toBe("100.0%");
+	});
+
+	it("never reports 100% or complete=true while gaps remain (issue #906 scenario: 2251 memories, 5 gaps)", () => {
+		// 5 gaps -> 99.78% already renders below 100% even under the old code, so
+		// this guards the sub-100% + complete=false invariant and exact-count
+		// parity for the issue's stated scenario. The round-up boundary itself
+		// (1 gap -> 99.96% -> old "100.0%") is covered by the test below.
+		seedCoverage(2251, 5);
+		const stats = getEmbeddingGapStats(accessor);
+		expect(stats.total).toBe(2251);
+		expect(stats.embedded).toBe(2246);
+		expect(stats.unembedded).toBe(5);
+		expect(stats.complete).toBe(false);
+		expect(stats.coverage).not.toBe("100.0%");
+		expect(stats.coverage).not.toBe("100%");
+		const pct = Number.parseFloat(stats.coverage.replace("%", ""));
+		expect(Number.isFinite(pct)).toBe(true);
+		expect(pct).toBeLessThan(100);
+	});
+
+	it("floors a single gap in a large store below 100% instead of rounding up", () => {
+		// (2250/2251)*100 = 99.9556% would render as "100.0%" with naive toFixed(1).
+		seedCoverage(2251, 1);
+		const stats = getEmbeddingGapStats(accessor);
+		expect(stats.unembedded).toBe(1);
+		expect(stats.complete).toBe(false);
+		expect(stats.coverage).toBe("99.9%");
+	});
+
+	it("reports complete coverage on an empty store", () => {
+		const stats = getEmbeddingGapStats(accessor);
+		expect(stats.total).toBe(0);
+		expect(stats.embedded).toBe(0);
+		expect(stats.unembedded).toBe(0);
+		expect(stats.complete).toBe(true);
+		expect(stats.coverage).toBe("100.0%");
+	});
+});
+
 describe("getDedupStats", () => {
 	let db: Database;
 	let accessor: DbAccessor;

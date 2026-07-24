@@ -747,3 +747,113 @@ describe("InferenceRouter background quiescence", () => {
 		}
 	});
 });
+
+describe("InferenceRouter config reference validation (#1005)", () => {
+	it("surfaces no configIssues for a fully-resolved config", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "signet-router-valid-"));
+		try {
+			mkdirSync(join(dir, "memory"), { recursive: true });
+			writeFileSync(
+				join(dir, "agent.yaml"),
+				`inference:
+  defaultPolicy: auto
+  accounts:
+    anthropic:
+      kind: api
+      providerFamily: anthropic
+      credentialRef: ANTHROPIC_API_KEY
+  targets:
+    remote:
+      executor: anthropic
+      account: anthropic
+      models:
+        sonnet:
+          model: claude-sonnet
+  policies:
+    auto:
+      mode: automatic
+      defaultTargets:
+        - remote/sonnet
+`,
+			);
+			const router = getOrCreateInferenceRouter(dir);
+			await router.validateConfigReferences();
+			const status = await router.status(true);
+			expect(status.ok).toBe(true);
+			if (!status.ok) return;
+			expect(status.value.configIssues).toEqual([]);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("loads a config with dangling policy defaultTargets and surfaces them as warning configIssues", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "signet-router-dangling-"));
+		try {
+			mkdirSync(join(dir, "memory"), { recursive: true });
+			writeFileSync(
+				join(dir, "agent.yaml"),
+				`inference:
+  defaultPolicy: auto
+  targets:
+    real:
+      executor: ollama
+      models:
+        default:
+          model: gemma
+  policies:
+    auto:
+      mode: automatic
+      defaultTargets:
+        - ghost/default
+        - real/default
+`,
+			);
+			const router = getOrCreateInferenceRouter(dir);
+			const status = await router.status(true);
+			expect(status.ok).toBe(true);
+			if (!status.ok) return;
+			const fields = status.value.configIssues.map((i) => i.field);
+			expect(fields).toContain("policies.auto.defaultTargets");
+			expect(status.value.configIssues.every((i) => i.severity === "warning")).toBe(true);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("returns a structured invalid-config error from status when defaultPolicy points at a missing policy", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "signet-router-broken-"));
+		try {
+			mkdirSync(join(dir, "memory"), { recursive: true });
+			writeFileSync(
+				join(dir, "agent.yaml"),
+				`inference:
+  defaultPolicy: background-acpx
+  targets:
+    background:
+      executor: acpx
+      acpx:
+        agent: codex
+      models:
+        default:
+          model: gpt
+  policies:
+    background:
+      mode: automatic
+      defaultTargets:
+        - background/default
+`,
+			);
+			const router = getOrCreateInferenceRouter(dir);
+			// Boot validation must not throw; it logs the structured error.
+			await router.validateConfigReferences();
+			const status = await router.status(true);
+			expect(status.ok).toBe(false);
+			if (status.ok) return;
+			expect(status.error.code).toBe("invalid-config");
+			expect(status.error.message).toContain('defaultPolicy="background-acpx"');
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});

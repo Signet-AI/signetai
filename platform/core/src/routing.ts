@@ -42,6 +42,16 @@ export type RoutingReasoningDepth = (typeof ROUTING_REASONING_DEPTHS)[number];
 export type RoutingCostTier = (typeof ROUTING_COST_TIERS)[number];
 export type RoutingOperationKind = (typeof ROUTING_OPERATION_KINDS)[number];
 
+/**
+ * Task classes the classifier can emit that are NOT declared in config.taskClasses.
+ * Configs may legitimately key policy.taskTargets / agent.preferredTargets /
+ * agent.pinnedTargets by these, so reference validation must treat them as valid.
+ */
+export const ROUTING_CLASSIFIER_TASK_CLASSES = {
+	codeReasoning: "hard_coding",
+	localSensitive: "local_sensitive",
+} as const;
+
 export type RoutingTargetRef = string & { readonly __brand: "RoutingTargetRef" };
 export type RoutingPolicyId = string & { readonly __brand: "RoutingPolicyId" };
 export type RoutingAgentId = string & { readonly __brand: "RoutingAgentId" };
@@ -56,6 +66,15 @@ export interface RouterError {
 		| "execution-failed";
 	readonly message: string;
 	readonly details?: Readonly<Record<string, unknown>>;
+}
+
+export interface RoutingValidationIssue {
+	readonly severity: "error" | "warning";
+	/** Dotted path to the reference site, e.g. "workloads.memoryExtraction.target". */
+	readonly field: string;
+	/** The broken reference value. */
+	readonly ref: string;
+	readonly message: string;
 }
 
 export type RouterResult<T> =
@@ -879,6 +898,115 @@ function emptyRoutingConfig(source: RoutingConfig["source"]): RoutingConfig {
 	};
 }
 
+/**
+ * Validate that every cross-reference inside a routing config resolves.
+ *
+ * Error-severity issues make routing structurally non-functional and refuse
+ * config load. Only a broken `defaultPolicy` qualifies: it is treated as a
+ * structural anchor even though workload/agent policies can shadow it, because
+ * a stale defaultPolicy almost always signals a rename the user forgot to
+ * propagate (the #1005 case). This mirrors the pre-existing parse-time check.
+ *
+ * Warning-severity issues degrade routing for the affected path without
+ * blocking load: dangling target refs are filtered out at route time, while a
+ * stale policy reference (e.g. an agent defaultPolicy) surfaces as a per-route
+ * policy-not-found error rather than silently misrouting.
+ */
+export function validateRoutingReferences(config: RoutingConfig): readonly RoutingValidationIssue[] {
+	const issues: RoutingValidationIssue[] = [];
+	const policyIds = new Set(Object.keys(config.policies));
+	const taskClassIds = new Set<string>([
+		...Object.keys(config.taskClasses),
+		...Object.values(ROUTING_CLASSIFIER_TASK_CLASSES),
+		// Operation-fallback task classes the classifier emits independent of
+		// declaration; configs may legitimately key maps by these too.
+		"memory_extraction",
+		"session_synthesis",
+		"interactive",
+	]);
+	const accountIds = new Set(Object.keys(config.accounts));
+	const validTargetRefs = new Set(allTargetRefs(config));
+
+	const missingTarget = (field: string, ref: string, severity: "error" | "warning"): void => {
+		if (!validTargetRefs.has(ref)) {
+			issues.push({ severity, field, ref, message: `Target ref "${ref}" referenced by ${field} does not exist.` });
+		}
+	};
+	const missingPolicy = (field: string, ref: string, severity: "error" | "warning"): void => {
+		if (!policyIds.has(ref)) {
+			issues.push({ severity, field, ref, message: `Policy "${ref}" referenced by ${field} does not exist.` });
+		}
+	};
+	const missingTaskClass = (field: string, ref: string): void => {
+		if (!taskClassIds.has(ref)) {
+			issues.push({ severity: "warning", field, ref, message: `Task class "${ref}" referenced by ${field} does not exist.` });
+		}
+	};
+	const missingAccount = (field: string, ref: string): void => {
+		if (!accountIds.has(ref)) {
+			issues.push({ severity: "warning", field, ref, message: `Account "${ref}" referenced by ${field} does not exist.` });
+		}
+	};
+
+	if (config.defaultPolicy && policyIds.size > 0) {
+		missingPolicy("defaultPolicy", config.defaultPolicy, "error");
+	}
+
+	for (const [targetId, target] of Object.entries(config.targets)) {
+		if (target.account) missingAccount(`targets.${targetId}.account`, target.account);
+	}
+
+	if (config.workloads) {
+		for (const [name, binding] of Object.entries(config.workloads)) {
+			if (!binding) continue;
+			const field = `workloads.${name}`;
+			// Workload policy/target pins are not load-blocking: when a pin is stale the
+			// router still falls back to the policy default/fallback target chain, so a
+			// single stale pin must not disable the whole config (#1005).
+			if (binding.policy) missingPolicy(`${field}.policy`, binding.policy, "warning");
+			if (binding.target) missingTarget(`${field}.target`, binding.target, "warning");
+			if (binding.taskClass) missingTaskClass(`${field}.taskClass`, binding.taskClass);
+		}
+	}
+
+	for (const [policyId, policy] of Object.entries(config.policies)) {
+		for (const ref of policy.allow ?? []) missingTarget(`policies.${policyId}.allow`, ref, "warning");
+		for (const ref of policy.defaultTargets ?? []) {
+			missingTarget(`policies.${policyId}.defaultTargets`, ref, "warning");
+		}
+		for (const ref of policy.fallbackTargets ?? []) {
+			missingTarget(`policies.${policyId}.fallbackTargets`, ref, "warning");
+		}
+		for (const [taskClass, refs] of Object.entries(policy.taskTargets ?? {})) {
+			missingTaskClass(`policies.${policyId}.taskTargets.${taskClass}`, taskClass);
+			for (const ref of refs) missingTarget(`policies.${policyId}.taskTargets.${taskClass}`, ref, "warning");
+		}
+	}
+
+	for (const [agentId, agent] of Object.entries(config.agents)) {
+		if (agent.defaultPolicy) missingPolicy(`agents.${agentId}.defaultPolicy`, agent.defaultPolicy, "warning");
+		for (const ref of agent.roster ?? []) missingTarget(`agents.${agentId}.roster`, ref, "warning");
+		for (const [taskClass, refs] of Object.entries(agent.preferredTargets ?? {})) {
+			missingTaskClass(`agents.${agentId}.preferredTargets.${taskClass}`, taskClass);
+			for (const ref of refs) missingTarget(`agents.${agentId}.preferredTargets.${taskClass}`, ref, "warning");
+		}
+		for (const [taskClass, ref] of Object.entries(agent.pinnedTargets ?? {})) {
+			// "default" is the engine's pinnedTargets fallback key (read when no
+			// taskClass-specific pin matches), so it is valid even if undeclared.
+			if (taskClass !== "default") missingTaskClass(`agents.${agentId}.pinnedTargets.${taskClass}`, taskClass);
+			missingTarget(`agents.${agentId}.pinnedTargets.${taskClass}`, ref, "warning");
+		}
+	}
+
+	for (const [taskClassId, taskClass] of Object.entries(config.taskClasses)) {
+		for (const ref of taskClass.preferredTargets ?? []) {
+			missingTarget(`taskClasses.${taskClassId}.preferredTargets`, ref, "warning");
+		}
+	}
+
+	return issues;
+}
+
 export function parseRoutingConfig(raw: unknown, legacyConfig?: RoutingConfig): RouterResult<RoutingConfig> {
 	const base = legacyConfig ?? emptyRoutingConfig("explicit");
 	if (!isRecord(raw)) {
@@ -971,13 +1099,7 @@ export function parseRoutingConfig(raw: unknown, legacyConfig?: RoutingConfig): 
 	const enabled = asBool(routingRaw.enabled) ?? (Object.keys(targets).length > 0 || base.enabled);
 	const defaultPolicy = explicitDefaultPolicy ?? base.defaultPolicy ?? Object.keys(policies)[0];
 
-	if (defaultPolicy && !policies[defaultPolicy] && Object.keys(policies).length > 0) {
-		return err("invalid-config", `Routing default policy \"${defaultPolicy}\" was not found.`, {
-			availablePolicies: Object.keys(policies),
-		});
-	}
-
-	return ok({
+	const config: RoutingConfig = {
 		source: embeddedInference || standaloneInference ? "explicit" : base.source,
 		enabled,
 		...(defaultPolicy ? { defaultPolicy } : {}),
@@ -987,7 +1109,19 @@ export function parseRoutingConfig(raw: unknown, legacyConfig?: RoutingConfig): 
 		taskClasses,
 		agents,
 		...(Object.keys(workloads).length > 0 ? { workloads } : {}),
-	});
+	};
+
+	const issues = validateRoutingReferences(config);
+	const errors = issues.filter((issue) => issue.severity === "error");
+	if (errors.length > 0) {
+		const summary = errors.map((issue) => `${issue.field}="${issue.ref}"`).join("; ");
+		return err("invalid-config", `Routing config has ${errors.length} broken reference(s): ${summary}`, {
+			issues: errors,
+			warnings: issues.filter((issue) => issue.severity === "warning"),
+		});
+	}
+
+	return ok(config);
 }
 
 function workloadBindingForOperation(
@@ -1057,7 +1191,7 @@ function classifyRouteRequest(config: RoutingConfig, request: RouteRequest): Rou
 		/\b(function|typescript|javascript|stack trace|traceback|error:|tsx|tsx|rust|python|bun)\b/.test(preview)
 	) {
 		return {
-			taskClass: "hard_coding",
+			taskClass: ROUTING_CLASSIFIER_TASK_CLASSES.codeReasoning,
 			reasoning: "high",
 			source: "classifier",
 			signals: ["prompt=code-like"],
@@ -1065,7 +1199,7 @@ function classifyRouteRequest(config: RoutingConfig, request: RouteRequest): Rou
 	}
 	if (request.privacy === "local_only") {
 		return {
-			taskClass: "local_sensitive",
+			taskClass: ROUTING_CLASSIFIER_TASK_CLASSES.localSensitive,
 			reasoning: "medium",
 			source: "classifier",
 			signals: ["privacy=local_only"],

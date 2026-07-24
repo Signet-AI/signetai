@@ -564,6 +564,8 @@ export function triggerRetentionSweep(
 export interface EmbeddingGapStats {
 	readonly unembedded: number;
 	readonly total: number;
+	readonly embedded: number;
+	readonly complete: boolean;
 	readonly coverage: string;
 }
 
@@ -572,12 +574,20 @@ export function getEmbeddingGapStats(accessor: DbAccessor): EmbeddingGapStats {
 		const totalRow = db.prepare("SELECT COUNT(*) as n FROM memories WHERE is_deleted = 0").get() as { n: number };
 		const total = totalRow.n;
 		const unembedded = countUnembeddedMemories(db);
-		const pct = total > 0 ? ((total - unembedded) / total) * 100 : 100;
+		const embedded = total - unembedded;
+		const complete = unembedded === 0;
+		// Floor to one decimal so a near-complete store never rounds up to
+		// 100% while embeddings are still missing (issue #906). When the
+		// store is complete the ratio is exactly 100%.
+		const pct = total > 0 ? (embedded / total) * 100 : 100;
+		const displayed = complete ? pct : Math.floor(pct * 10) / 10;
 
 		return {
 			unembedded,
 			total,
-			coverage: `${pct.toFixed(1)}%`,
+			embedded,
+			complete,
+			coverage: `${displayed.toFixed(1)}%`,
 		};
 	});
 }

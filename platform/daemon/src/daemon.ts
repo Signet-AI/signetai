@@ -1330,6 +1330,9 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 	}
 
 	const router = getOrCreateInferenceRouter(AGENTS_DIR);
+	// Surface broken routing references (defaultPolicy, workload targets, etc.) at
+	// boot before any route is attempted (#1005). Never blocks daemon startup.
+	void router.validateConfigReferences();
 	const defaultAgentId = resolveDaemonAgentId();
 	initInferenceProviderResolver((workload) => {
 		switch (workload) {
