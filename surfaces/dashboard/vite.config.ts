@@ -1,73 +1,28 @@
-import { resolve } from "node:path";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { sveltekit } from "@sveltejs/kit/vite";
+import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { defineConfig } from "vite";
 
-const root = fileURLToPath(new URL(".", import.meta.url));
-const daemonProxyTarget = process.env.SIGNET_DAEMON_URL ?? "http://localhost:3850";
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+// Dashboard build contract (issue #948):
+// - Emits to `build/index.html` (+ hashed assets under build/assets).
+// - `base: "/"` resolves under both the daemon (http://host/) and the Electron
+//   privileged scheme (app://signet/) since both map root-relative paths to the
+//   dashboard root with SPA fallback to index.html.
+// - Do not change `build.outDir`; scripts/prepare-dashboard-bundle.ts,
+//   platform/daemon/src/routes/dashboard.ts and surfaces/desktop/src/main.ts
+//   all key off `surfaces/dashboard/build/index.html`.
 export default defineConfig({
-	plugins: [tailwindcss(), sveltekit()],
-	server: {
-		proxy: {
-			"/api": daemonProxyTarget,
-			"/health": daemonProxyTarget,
-			"/memory": daemonProxyTarget,
-		},
-	},
+	plugins: [react(), tailwindcss()],
 	resolve: {
 		alias: {
-			"@signet/core/llm-model-catalog": resolve(root, "../../platform/core/src/llm-model-catalog.ts"),
-			"@signet/core/pipeline-providers": resolve(root, "../../platform/core/src/pipeline-providers.ts"),
+			"@": path.resolve(__dirname, "./src"),
 		},
 	},
 	build: {
-		chunkSizeWarningLimit: 1200,
-		rollupOptions: {
-			output: {
-				manualChunks(id) {
-					if (!id.includes("node_modules")) return;
-
-					if (id.includes("/three-forcegraph/") || id.includes("/three-spritetext/")) {
-						return "vendor-forcegraph3d";
-					}
-
-					if (id.includes("/3d-force-graph/") || id.includes("/three-render-objects/")) {
-						return "vendor-3d-force";
-					}
-
-					if (id.includes("/three/")) {
-						return "vendor-three";
-					}
-
-					if (id.includes("/d3-force/")) {
-						return "vendor-embeddings-2d";
-					}
-
-					if (
-						id.includes("/@codemirror/view/") ||
-						id.includes("/@codemirror/state/") ||
-						id.includes("/@codemirror/commands/") ||
-						id.includes("/@codemirror/search/") ||
-						id.includes("/@codemirror/lang-") ||
-						id.includes("/@codemirror/autocomplete/") ||
-						id.includes("/@codemirror/language/") ||
-						id.includes("/@lezer/") ||
-						id.includes("/codemirror/")
-					) {
-						return "vendor-codemirror";
-					}
-
-					if (id.includes("/bits-ui/") || id.includes("/svelte-sonner/")) {
-						return "vendor-ui";
-					}
-
-					if (id.includes("/yaml/") || id.includes("/marked/")) {
-						return "vendor-utils";
-					}
-				},
-			},
-		},
+		outDir: "build",
+		sourcemap: false,
 	},
 });

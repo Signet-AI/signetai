@@ -1,0 +1,448 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+/*
+ * Signet dashboard design system (issue #948).
+ * Source of truth: web/marketing/public/redesign-home-mockup.html
+ * - Neutral monochrome oklch, radius 0.3rem, flat shadows.
+ * - Light is :root; dark is the `.dark` class (next-themes attribute="class").
+ * - Geist / Geist Mono self-hosted via @fontsource (offline Electron).
+ * Bespoke effects with no Tailwind equivalent (mask-composite key-light border,
+ * JS cursor-tracking radial glow) live in @layer components as `.sig-surface`.
+ */
+
+@custom-variant dark (&:is(.dark *));
+
+/* ---- LIGHT (default :root) ---- */
+:root {
+	--radius: 0.3rem;
+
+	--background: oklch(0.99 0 0);
+	--foreground: oklch(0.18 0 0);
+	--card: oklch(1 0 0);
+	--card-foreground: oklch(0.18 0 0);
+	--popover: oklch(1 0 0);
+	--popover-foreground: oklch(0.18 0 0);
+	--primary: oklch(0.21 0 0);
+	--primary-foreground: oklch(0.985 0 0);
+	--secondary: oklch(0.965 0 0);
+	--secondary-foreground: oklch(0.21 0 0);
+	--muted: oklch(0.968 0 0);
+	--muted-foreground: oklch(0.52 0 0);
+	--accent: oklch(0.95 0 0);
+	--accent-foreground: oklch(0.21 0 0);
+	--destructive: oklch(0.577 0.245 27.325);
+	--success: oklch(0.6 0.13 152);
+	--warning: oklch(0.72 0.14 75);
+	--border: oklch(0.918 0 0);
+	--input: oklch(0.918 0 0);
+	--ring: oklch(0.7 0 0);
+
+	--sidebar: oklch(0.982 0 0);
+	--sidebar-foreground: oklch(0.18 0 0);
+	--sidebar-border: oklch(0.918 0 0);
+	--sidebar-accent: oklch(0.95 0 0);
+	--sidebar-accent-foreground: oklch(0.18 0 0);
+
+	--shadow-flat: 0 1px 0 0 oklch(0.4 0 0 / 0.05);
+
+	/* Promoted overlay tokens (mockup re-derived these as one-off color-mix). */
+	--hover-overlay: color-mix(in oklch, var(--foreground) 7%, transparent);
+	--active-overlay: color-mix(in oklch, var(--foreground) 10%, transparent);
+	--accent-subtle: color-mix(in oklch, var(--foreground) 5%, transparent);
+	--border-glow: color-mix(in oklch, var(--foreground) 12%, transparent);
+
+	/* Surface treatment primitives (light defaults). */
+	--sig-keylight: linear-gradient(180deg, oklch(0 0 0 / 0.18), oklch(0 0 0 / 0.04));
+	--sig-surface-shadow: inset 0 1px 0 oklch(1 0 0 / 0.8), 0 1px 1px oklch(0 0 0 / 0.04);
+	--sig-surface-border: oklch(0 0 0 / 0.06);
+	--sig-glow-color: oklch(0 0 0 / 0.4);
+	--sig-dotted-grid: radial-gradient(oklch(0 0 0 / 0.03) 1px, transparent 1px);
+}
+
+/* ---- DARK (.dark) ---- */
+.dark {
+	--background: oklch(0.16 0 0);
+	--foreground: oklch(0.97 0 0);
+	--card: oklch(0.203 0 0);
+	--card-foreground: oklch(0.97 0 0);
+	--popover: oklch(0.203 0 0);
+	--popover-foreground: oklch(0.97 0 0);
+	--primary: oklch(0.93 0 0);
+	--primary-foreground: oklch(0.205 0 0);
+	--secondary: oklch(0.262 0 0);
+	--secondary-foreground: oklch(0.97 0 0);
+	--muted: oklch(0.252 0 0);
+	--muted-foreground: oklch(0.8 0 0);
+	--accent: oklch(0.27 0 0);
+	--accent-foreground: oklch(0.97 0 0);
+	--destructive: oklch(0.704 0.191 22.216);
+	--success: oklch(0.72 0.14 152);
+	--warning: oklch(0.8 0.14 80);
+	--border: oklch(1 0 0 / 0.09);
+	--input: oklch(1 0 0 / 0.09);
+	--ring: oklch(0.556 0 0);
+
+	--sidebar: oklch(0.183 0 0);
+	--sidebar-foreground: oklch(0.97 0 0);
+	--sidebar-border: oklch(1 0 0 / 0.08);
+	--sidebar-accent: oklch(0.26 0 0);
+	--sidebar-accent-foreground: oklch(0.97 0 0);
+
+	--shadow-flat: 0 1px 0 0 oklch(0 0 0 / 0.4);
+
+	--sig-keylight: linear-gradient(180deg, oklch(1 0 0 / 0.22), oklch(1 0 0 / 0.05));
+	--sig-surface-shadow: inset 0 1px 0 oklch(1 0 0 / 0.05), 0 1px 0 0 oklch(0 0 0 / 0.2);
+	--sig-surface-border: oklch(1 0 0 / 0.05);
+	--sig-glow-color: oklch(0.85 0 0 / 0.4);
+	--sig-dotted-grid: radial-gradient(oklch(1 0 0 / 0.03) 1px, transparent 1px);
+}
+
+@theme inline {
+	--color-background: var(--background);
+	--color-foreground: var(--foreground);
+	--color-card: var(--card);
+	--color-card-foreground: var(--card-foreground);
+	--color-popover: var(--popover);
+	--color-popover-foreground: var(--popover-foreground);
+	--color-primary: var(--primary);
+	--color-primary-foreground: var(--primary-foreground);
+	--color-secondary: var(--secondary);
+	--color-secondary-foreground: var(--secondary-foreground);
+	--color-muted: var(--muted);
+	--color-muted-foreground: var(--muted-foreground);
+	--color-accent: var(--accent);
+	--color-accent-foreground: var(--accent-foreground);
+	--color-destructive: var(--destructive);
+	--color-success: var(--success);
+	--color-warning: var(--warning);
+	--color-border: var(--border);
+	--color-input: var(--input);
+	--color-ring: var(--ring);
+	--color-sidebar: var(--sidebar);
+	--color-sidebar-foreground: var(--sidebar-foreground);
+	--color-sidebar-border: var(--sidebar-border);
+	--color-sidebar-accent: var(--sidebar-accent);
+	--color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+
+	--font-sans: "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+	--font-mono: "Geist Mono", ui-monospace, "SF Mono", "Menlo", monospace;
+
+	--radius-sm: calc(var(--radius) - 4px);
+	--radius-md: calc(var(--radius) - 2px);
+	--radius-lg: var(--radius);
+	/* xl is used for the large floating surfaces (content card, modal) which the
+	   mockup rounds at 12px, not radius+4. */
+	--radius-xl: 0.75rem;
+}
+
+@layer base {
+	* {
+		@apply border-border outline-ring/50;
+	}
+	html,
+	body,
+	#root {
+		height: 100%;
+	}
+	body {
+		@apply bg-background text-foreground;
+		font-family: var(--font-sans);
+		font-size: 14px;
+		line-height: 1.5;
+		-webkit-font-smoothing: antialiased;
+		text-rendering: optimizeLegibility;
+		font-feature-settings: "cv11", "ss01";
+	}
+	/* Electron frameless window drag regions (inert in a plain browser). */
+	.sig-drag {
+		-webkit-app-region: drag;
+		user-select: none;
+	}
+	.sig-no-drag {
+		-webkit-app-region: no-drag;
+	}
+}
+
+@layer components {
+	/*
+	 * `.sig-content` — the floating content card. Same key-light border as
+	 * `.sig-surface` but a distinct, larger shadow/radius (12px). Used once.
+	 */
+	.sig-content::before {
+		content: "";
+		position: absolute;
+		inset: 0;
+		border-radius: inherit;
+		padding: 1px;
+		background: linear-gradient(180deg, oklch(1 0 0 / 0.2), oklch(1 0 0 / 0.04));
+		-webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+		mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+		-webkit-mask-composite: xor;
+		mask-composite: exclude;
+		pointer-events: none;
+	}
+	:root:not(.dark) .sig-content::before {
+		background: linear-gradient(180deg, oklch(0 0 0 / 0.16), oklch(0 0 0 / 0.03));
+	}
+
+	/*
+	 * `.sig-modal` — settings modal. Dramatic lift shadow + top-lit gradient
+	 * edge (bright top → deep bottom). Matches the mockup `.modal`.
+	 */
+	.sig-modal {
+		box-shadow: 0 40px 100px oklch(0 0 0 / 0.7), 0 12px 32px oklch(0 0 0 / 0.5),
+			inset 0 1px 0 oklch(1 0 0 / 0.1);
+	}
+	:root:not(.dark) .sig-modal {
+		box-shadow: 0 40px 100px oklch(0 0 0 / 0.3), 0 12px 32px oklch(0 0 0 / 0.15),
+			inset 0 1px 0 oklch(1 0 0 / 0.8);
+	}
+	.sig-modal::before {
+		content: "";
+		position: absolute;
+		inset: 0;
+		border-radius: inherit;
+		padding: 1px;
+		pointer-events: none;
+		z-index: 1;
+		background: linear-gradient(180deg, oklch(1 0 0 / 0.28), oklch(1 0 0 / 0.04) 30%, oklch(0 0 0 / 0.3));
+		-webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+		mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+		-webkit-mask-composite: xor;
+		mask-composite: exclude;
+	}
+	:root:not(.dark) .sig-modal::before {
+		background: linear-gradient(180deg, oklch(1 0 0 / 0.9), oklch(0 0 0 / 0.04) 40%, oklch(0 0 0 / 0.12));
+	}
+
+	/* Settings "stage-drop": backdrop blur + darker dim on the dialog overlay, and
+	   the shell scales down 0.96 while open (driven by body.settings-open). */
+	[data-slot="dialog-overlay"] {
+		background: oklch(0 0 0 / 0.55) !important;
+		backdrop-filter: blur(10px) !important;
+		-webkit-backdrop-filter: blur(10px) !important;
+	}
+	body.settings-open .shell-stage {
+		transform: scale(0.96);
+		transform-origin: 50% 42%;
+		transition: transform 0.2s ease;
+	}
+	.shell-stage {
+		transition: transform 0.2s ease;
+		transform-origin: 50% 42%;
+	}
+
+	/*
+	 * Switch — restyle the radix primitive to the mockup's emerald glowing
+	 * capsule (38×22px, success-tinted track + glowing thumb on). Keeps radix
+	 * a11y; overrides shadcn's monochrome default sizing/look.
+	 */
+	[data-slot="switch"] {
+		height: 22px !important;
+		width: 38px !important;
+		border-radius: 999px !important;
+		border: 1px solid oklch(1 0 0 / 0.18) !important;
+		background: color-mix(in oklch, var(--foreground) 12%, transparent) !important;
+		box-shadow: inset 0 1px 2px oklch(0 0 0 / 0.4) !important;
+	}
+	:root:not(.dark) [data-slot="switch"] {
+		border-color: oklch(0 0 0 / 0.16) !important;
+		box-shadow: inset 0 1px 2px oklch(0 0 0 / 0.1) !important;
+	}
+	[data-slot="switch"][data-state="checked"] {
+		background: color-mix(in oklch, var(--success) 45%, transparent) !important;
+		border-color: color-mix(in oklch, var(--success) 55%, transparent) !important;
+		box-shadow: inset 0 1px 2px oklch(0 0 0 / 0.2), 0 0 8px color-mix(in oklch, var(--success) 30%, transparent) !important;
+	}
+	[data-slot="switch-thumb"] {
+		width: 16px !important;
+		height: 16px !important;
+		background: oklch(0.7 0 0) !important;
+		box-shadow: 0 1px 3px oklch(0 0 0 / 0.5) !important;
+		transform: translateX(2px) !important;
+	}
+	[data-slot="switch"][data-state="checked"] [data-slot="switch-thumb"] {
+		transform: translateX(18px) !important;
+		background: oklch(0.95 0.06 150) !important;
+		box-shadow: 0 0 6px color-mix(in oklch, var(--success) 60%, transparent), 0 1px 2px oklch(0 0 0 / 0.3) !important;
+	}
+
+	/* Sidebar nav item — active/hover treatments with per-theme values.
+	   (Mockup `.nav__item` + `.nav__item.is-active`; light overrides via :root:not(.dark).) */
+	.sig-nav-active {
+		background: color-mix(in oklch, var(--foreground) 7%, transparent);
+		--tw-ring-color: oklch(1 0 0 / 0.08);
+		box-shadow: inset 0 1px 0 oklch(1 0 0 / 0.1), 0 2px 8px oklch(0 0 0 / 0.35), 0 0 16px oklch(0.85 0 0 / 0.04);
+	}
+	:root:not(.dark) .sig-nav-active {
+		background: color-mix(in oklch, var(--foreground) 5%, transparent);
+		--tw-ring-color: oklch(0 0 0 / 0.08);
+		box-shadow: inset 0 1px 0 oklch(1 0 0 / 0.8), 0 2px 6px oklch(0 0 0 / 0.08);
+	}
+	.sig-nav-icon-active {
+		color: oklch(0.97 0 0);
+		filter: drop-shadow(0 0 6px oklch(0.85 0 0 / 0.25));
+	}
+	:root:not(.dark) .sig-nav-icon-active {
+		color: oklch(0.12 0 0);
+		filter: drop-shadow(0 0 4px oklch(0 0 0 / 0.1));
+	}
+	.sig-nav-resting {
+		color: oklch(0.82 0 0);
+	}
+	:root:not(.dark) .sig-nav-resting {
+		color: oklch(0.34 0 0);
+	}
+
+	/*
+	 * `.sig-surface` — the card primitive shared by KPI cards, daily brief,
+	 * panels, activity card, memory feed items, source cards. Renders the
+	 * mask-composite "key-light" gradient border (::before) and the
+	 * cursor-tracking radial glow (::after). The glow follows --mx/--my, which
+	 * the useCursorGlow hook updates on mousemove; absent those vars it stays
+	 * off-screen and invisible.
+	 */
+	.sig-surface {
+		position: relative;
+		border: 1px solid var(--sig-surface-border);
+		box-shadow: var(--sig-surface-shadow);
+	}
+	.sig-surface::before {
+		content: "";
+		position: absolute;
+		inset: 0;
+		border-radius: inherit;
+		padding: 1px;
+		background: var(--sig-keylight);
+		-webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+		mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+		-webkit-mask-composite: xor;
+		mask-composite: exclude;
+		pointer-events: none;
+	}
+	.sig-surface::after {
+		content: "";
+		position: absolute;
+		inset: -1px;
+		border-radius: calc(var(--radius) + 1px);
+		padding: 1px;
+		background: radial-gradient(
+			160px circle at var(--mx, -200px) var(--my, -200px),
+			var(--sig-glow-color),
+			transparent 60%
+		);
+		-webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+		mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+		-webkit-mask-composite: xor;
+		mask-composite: exclude;
+		pointer-events: none;
+		opacity: 0;
+		transition: opacity 0.2s;
+	}
+	.sig-surface:hover::after {
+		opacity: 1;
+	}
+	@media (prefers-reduced-motion: reduce) {
+		.sig-surface::after {
+			transition: none;
+		}
+	}
+
+	/*
+	 * Per-element keylight variants. The memory feed item and source card use
+	 * a shorter fade (→transparent at 40%/50%) rather than the generic
+	 * 0.22→0.05. Apply via the `.sig-keylight-*` modifier on a `.sig-surface`.
+	 */
+	.sig-keylight-feed::before {
+		background: linear-gradient(180deg, oklch(1 0 0 / 0.18), transparent 40%) !important;
+	}
+	:root:not(.dark) .sig-keylight-feed::before {
+		background: linear-gradient(180deg, oklch(0 0 0 / 0.14), transparent 40%) !important;
+	}
+	.sig-keylight-src::before {
+		background: linear-gradient(180deg, oklch(1 0 0 / 0.18), transparent 50%) !important;
+	}
+	:root:not(.dark) .sig-keylight-src::before {
+		background: linear-gradient(180deg, oklch(0 0 0 / 0.14), transparent 50%) !important;
+	}
+
+	/* Source card hover lift (heavier than the generic card shadow). */
+	.sig-src-card:hover {
+		border-color: oklch(1 0 0 / 0.14) !important;
+		box-shadow: inset 0 1px 0 oklch(1 0 0 / 0.04), 0 4px 16px oklch(0 0 0 / 0.4) !important;
+	}
+	:root:not(.dark) .sig-src-card:hover {
+		border-color: oklch(0 0 0 / 0.14) !important;
+	}
+
+	/* Settings field group — contained surface (`.mcard`). */
+	.sig-mcard {
+		background: color-mix(in oklch, var(--foreground) 3%, transparent);
+		border: 1px solid oklch(1 0 0 / 0.06);
+		border-radius: 8px;
+		padding: 6px;
+		box-shadow: inset 0 1px 0 oklch(1 0 0 / 0.03);
+	}
+	:root:not(.dark) .sig-mcard {
+		background: color-mix(in oklch, var(--foreground) 2%, transparent);
+		border-color: oklch(0 0 0 / 0.06);
+	}
+
+	/* Esc hint pill (settings modal header). */
+	.sig-esc-pill {
+		display: inline-flex;
+		align-items: center;
+		gap: 4px;
+		font-family: var(--font-mono);
+		font-size: 9.5px;
+		color: var(--muted-foreground);
+		padding: 2px 6px;
+		border: 1px solid oklch(1 0 0 / 0.12);
+		border-radius: 4px;
+	}
+	:root:not(.dark) .sig-esc-pill {
+		border-color: oklch(0 0 0 / 0.1);
+	}
+}
+
+/* Account-row system-health dot pulse (used in the sidebar account row). */
+@keyframes health-pulse {
+	0%,
+	100% {
+		box-shadow: 0 0 0 0 color-mix(in oklch, var(--success) 45%, transparent);
+	}
+	50% {
+		box-shadow: 0 0 0 4px color-mix(in oklch, var(--success) 0%, transparent);
+	}
+}
+@media (prefers-reduced-motion: reduce) {
+	@keyframes health-pulse {
+		0%,
+		100% {
+			box-shadow: 0 0 0 0 color-mix(in oklch, var(--success) 45%, transparent);
+		}
+	}
+}
+
+/* Provider-card connected dot — ambient emerald glow pulse (mockup `dot-pulse`).
+   Distinct from health-pulse: glow-size grows rather than an expanding ring. */
+@keyframes dot-pulse {
+	0%,
+	100% {
+		box-shadow: 0 0 0 3px color-mix(in oklch, var(--success) 16%, transparent),
+			0 0 8px color-mix(in oklch, var(--success) 60%, transparent);
+	}
+	50% {
+		box-shadow: 0 0 0 5px color-mix(in oklch, var(--success) 8%, transparent),
+			0 0 12px color-mix(in oklch, var(--success) 80%, transparent);
+	}
+}
+@media (prefers-reduced-motion: reduce) {
+	@keyframes dot-pulse {
+		0%,
+		100% {
+			box-shadow: 0 0 0 3px color-mix(in oklch, var(--success) 16%, transparent);
+		}
+	}
+}
