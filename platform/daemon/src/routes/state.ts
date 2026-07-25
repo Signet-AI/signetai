@@ -263,6 +263,37 @@ export interface ProviderRuntimeResolution {
 	};
 }
 
+export type ExtractionWorkloadState = ProviderRuntimeResolution["extraction"] & {
+	readonly enabled: boolean;
+	readonly paused: boolean;
+	readonly workerRunning: boolean;
+	readonly ready: boolean;
+	readonly blockedReason: string | null;
+};
+
+/**
+ * Canonical extraction workload state shared by status, health, diagnostics,
+ * and CLI consumers. A resolved provider alone never means that jobs run.
+ */
+export function getExtractionWorkloadState(input: {
+	readonly enabled: boolean;
+	readonly paused: boolean;
+	readonly workerRunning: boolean;
+}): ExtractionWorkloadState {
+	const base = providerRuntimeResolution.extraction;
+	const status = !input.enabled ? "disabled" : input.paused ? "paused" : base.status;
+	const blockedReason = status === "blocked" ? base.reason : null;
+	return {
+		...base,
+		status,
+		enabled: input.enabled,
+		paused: input.paused,
+		workerRunning: input.workerRunning,
+		ready: (status === "active" || status === "degraded") && input.workerRunning,
+		blockedReason,
+	};
+}
+
 // Runtime state singletons
 export const providerRuntimeResolution: ProviderRuntimeResolution = {
 	extraction: {

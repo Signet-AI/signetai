@@ -231,7 +231,12 @@ silent fallback or hard-blocked extraction after boot.
       "fallbackApplied": false,
       "reason": null,
       "blockedBy": [],
-      "since": null
+      "since": null,
+      "enabled": true,
+      "paused": false,
+      "workerRunning": true,
+      "ready": true,
+      "blockedReason": null
     }
   },
   "logging": {
@@ -266,9 +271,13 @@ silent fallback or hard-blocked extraction after boot.
 
 The `bypassedSessions` field reports how many active sessions currently have
 bypass enabled (see [Sessions and hooks API](./sessions-hooks.md#sessions)).
-Monitor `providerResolution.extraction.status` for `degraded` or `blocked`
-states when the configured extraction provider is unavailable or routed to a
-fallback target.
+`providerResolution.extraction` is the canonical workload-state object. Its
+`configured`, `resolved`, and `effective` labels describe provider selection;
+they do not imply that jobs are being serviced. Use `enabled`, `paused`,
+`workerRunning`, and `ready` to determine whether extraction is actually
+available for work. `blockedReason` is populated only for a blocked route.
+Monitor `status` for `degraded` or `blocked` states when the configured
+extraction provider is unavailable or routed to a fallback target.
 When extraction is blocked, `providerResolution.extraction.blockedBy` contains
 the first routing candidate's policy and runtime gate reasons in evaluation
 order. The array is empty for non-blocked states.

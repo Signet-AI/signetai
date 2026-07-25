@@ -65,6 +65,7 @@ interface DaemonInstance {
 	readonly resources: DaemonResourceUsage | null;
 	readonly extraction: {
 		readonly configured: string | null;
+		readonly resolved: string | null;
 		readonly effective: string | null;
 		readonly fallbackProvider: string | null;
 		readonly status: string | null;
@@ -72,6 +73,12 @@ interface DaemonInstance {
 		readonly reason: string | null;
 		readonly blockedBy: readonly string[];
 		readonly since: string | null;
+		readonly enabled: boolean;
+		readonly paused: boolean;
+		readonly workerRunning: boolean;
+		readonly ready: boolean;
+		readonly blockedReason: string | null;
+		readonly hasWorkloadState: boolean;
 	} | null;
 	readonly extractionWorker: {
 		readonly running: boolean;
@@ -360,6 +367,7 @@ async function getDaemonInstances(): Promise<DaemonInstance[]> {
 						providerResolution?: {
 							extraction?: {
 								configured?: string | null;
+								resolved?: string | null;
 								effective?: string | null;
 								fallbackProvider?: string | null;
 								status?: string | null;
@@ -367,6 +375,11 @@ async function getDaemonInstances(): Promise<DaemonInstance[]> {
 								reason?: string | null;
 								blockedBy?: unknown;
 								since?: string | null;
+								enabled?: boolean;
+								paused?: boolean;
+								workerRunning?: boolean;
+								ready?: boolean;
+								blockedReason?: string | null;
 							};
 						};
 						pipeline?: {
@@ -415,6 +428,7 @@ async function getDaemonInstances(): Promise<DaemonInstance[]> {
 						extraction: extraction
 							? {
 									configured: extraction.configured ?? null,
+									resolved: extraction.resolved ?? null,
 									effective: extraction.effective ?? null,
 									fallbackProvider: extraction.fallbackProvider ?? null,
 									status: extraction.status ?? null,
@@ -426,6 +440,12 @@ async function getDaemonInstances(): Promise<DaemonInstance[]> {
 											)
 										: [],
 									since: extraction.since ?? null,
+									enabled: extraction.enabled === true,
+									paused: extraction.paused === true,
+									workerRunning: extraction.workerRunning === true,
+									ready: extraction.ready === true,
+									blockedReason: extraction.blockedReason ?? null,
+									hasWorkloadState: typeof extraction.ready === "boolean",
 								}
 							: null,
 						extractionWorker: extractionWorker

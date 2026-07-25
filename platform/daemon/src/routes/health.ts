@@ -19,6 +19,7 @@ import {
 	CURRENT_VERSION,
 	PORT,
 	getCurrentAgentsDir,
+	getExtractionWorkloadState,
 	providerRuntimeResolution,
 	shuttingDown,
 } from "./state.js";
@@ -143,7 +144,12 @@ interface InferenceCheck {
 
 /** Inference gates readiness only when the extraction route is fully blocked; degraded still serves. */
 function checkInference(): { ok: boolean; detail: InferenceCheck; reason: string | null } {
-	const extraction = providerRuntimeResolution.extraction;
+	const cfg = loadMemoryConfig(AGENTS_DIR);
+	const extraction = getExtractionWorkloadState({
+		enabled: cfg.pipelineV2.enabled,
+		paused: cfg.pipelineV2.paused,
+		workerRunning: getPipelineWorkerStatus().extraction.running,
+	});
 	const detail: InferenceCheck = {
 		status: extraction.status,
 		configured: extraction.configured,

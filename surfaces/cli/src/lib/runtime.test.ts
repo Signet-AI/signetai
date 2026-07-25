@@ -401,6 +401,7 @@ describe("getDaemonStatus", () => {
 					providerResolution: {
 						extraction: {
 							configured: "claude-code",
+							resolved: "claude-code",
 							effective: "ollama",
 							fallbackProvider: "ollama",
 							status: "degraded",
@@ -408,6 +409,11 @@ describe("getDaemonStatus", () => {
 							reason: "Claude Code CLI not found during extraction startup preflight",
 							blockedBy: ["missing credential", 42, "", "account state missing"],
 							since: "2026-03-26T00:00:00.000Z",
+							enabled: true,
+							paused: false,
+							workerRunning: true,
+							ready: true,
+							blockedReason: null,
 						},
 					},
 					pipeline: {
@@ -433,6 +439,7 @@ describe("getDaemonStatus", () => {
 		expect(status.probe.readinessReasons).toBeUndefined();
 		expect(status.extraction).toEqual({
 			configured: "claude-code",
+			resolved: "claude-code",
 			effective: "ollama",
 			fallbackProvider: "ollama",
 			status: "degraded",
@@ -440,6 +447,11 @@ describe("getDaemonStatus", () => {
 			reason: "Claude Code CLI not found during extraction startup preflight",
 			blockedBy: ["missing credential", "account state missing"],
 			since: "2026-03-26T00:00:00.000Z",
+			enabled: true,
+			paused: false,
+			workerRunning: true,
+			ready: true,
+			blockedReason: null,
 		});
 		expect(status.extractionWorker).toEqual({
 			running: true,

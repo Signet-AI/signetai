@@ -1356,20 +1356,20 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 	const routerStatus = await router.status(false);
 	const statusValue = routerStatus.ok ? routerStatus.value : null;
 	const explicitInference = statusValue?.source === "explicit";
-	const commandExtractionMode = memoryCfg.pipelineV2.enabled && memoryCfg.pipelineV2.extraction.provider === "command";
-	const extractionWorkloadConfigured =
-		!pipelinePaused && (commandExtractionMode || (await router.hasWorkload("memory_extraction")));
-	const synthesisWorkloadConfigured = !pipelinePaused && (await router.hasWorkload("session_synthesis"));
+	const commandExtractionConfigured = memoryCfg.pipelineV2.extraction.provider === "command";
+	const commandExtractionMode = memoryCfg.pipelineV2.enabled && commandExtractionConfigured;
+	const extractionWorkloadConfigured = commandExtractionConfigured || (await router.hasWorkload("memory_extraction"));
+	const synthesisWorkloadConfigured = await router.hasWorkload("session_synthesis");
 	const extractionDecision =
-		!pipelinePaused && !commandExtractionMode && extractionWorkloadConfigured
+		!commandExtractionConfigured && extractionWorkloadConfigured
 			? await router.explain({ agentId: defaultAgentId, operation: "memory_extraction" })
 			: null;
 	const synthesisDecision =
 		!pipelinePaused && synthesisWorkloadConfigured
 			? await router.explain({ agentId: defaultAgentId, operation: "session_synthesis" })
 			: null;
-	const extractionAvailable = !pipelinePaused && (commandExtractionMode || Boolean(extractionDecision?.ok));
-	const synthesisAvailable = !pipelinePaused && Boolean(synthesisDecision?.ok);
+	const extractionAvailable = commandExtractionConfigured || Boolean(extractionDecision?.ok);
+	const synthesisAvailable = Boolean(synthesisDecision?.ok);
 	const extractionBinding = statusValue?.workloadBindings.memoryExtraction;
 	const extractionSelectedRef = extractionDecision?.ok ? extractionDecision.value.targetRef : undefined;
 	const extractionSelectedRuntime = extractionSelectedRef
@@ -1379,21 +1379,25 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 		extractionSelectedRef && extractionBinding?.includes("/") && extractionSelectedRef !== extractionBinding,
 	);
 	const extractionDegraded = extractionFallbackApplied || extractionSelectedRuntime?.health === "degraded";
-	const extractionStatus = pipelinePaused
-		? "paused"
-		: !extractionWorkloadConfigured
-			? "disabled"
-			: extractionDecision?.ok
-				? extractionDegraded
-					? "degraded"
-					: "active"
-				: "blocked";
+	const extractionStatus = !memoryCfg.pipelineV2.enabled
+		? "disabled"
+		: pipelinePaused
+			? "paused"
+			: !extractionWorkloadConfigured
+				? "disabled"
+				: extractionDecision?.ok
+					? extractionDegraded
+						? "degraded"
+						: "active"
+					: "blocked";
 	const statusSince =
 		extractionStatus === "active" || extractionStatus === "disabled" ? null : new Date().toISOString();
-	const extractionEffective = commandExtractionMode
+	const extractionResolved = commandExtractionConfigured
 		? "command"
 		: ((statusValue && executorForTargetRef(statusValue, extractionSelectedRef)) ??
-			(extractionAvailable ? "inference" : "none"));
+			(statusValue && executorForTargetRef(statusValue, extractionBinding)) ??
+			"none");
+	const extractionEffective = extractionAvailable ? extractionResolved : "none";
 	const synthesisEffective =
 		(statusValue &&
 			(executorForTargetRef(
@@ -1416,29 +1420,31 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 	providerRuntimeResolution.extraction = {
 		// Configured/resolved now derive from the routing registry (the workload
 		// binding's target executor), not the retired legacy flat fields.
-		configured: commandExtractionMode
+		configured: commandExtractionConfigured
 			? "command"
 			: statusValue
 				? executorForTargetRef(statusValue, extractionBinding)
 				: null,
-		resolved: commandExtractionMode ? "command" : extractionEffective,
+		resolved: extractionResolved,
 		effective: extractionEffective,
-		fallbackProvider: commandExtractionMode ? "none" : extractionFallbackProvider,
+		fallbackProvider: commandExtractionConfigured ? "none" : extractionFallbackProvider,
 		status: extractionStatus,
 		degraded: extractionDegraded,
 		fallbackApplied: extractionFallbackApplied,
-		reason: pipelinePaused
-			? "Pipeline paused"
-			: extractionStatus === "disabled"
-				? "No inference workload is configured for memoryExtraction"
-				: extractionStatus === "blocked"
-					? extractionDecision && !extractionDecision.ok
-						? extractionDecision.error.message
-						: "No memoryExtraction route available"
-					: extractionFallbackApplied
-						? (runtimeReasonForTarget(extractionDecision, extractionBinding) ??
-							`Configured extraction provider unavailable; using ${extractionEffective} fallback`)
-						: (extractionSelectedRuntime?.unavailableReason ?? null),
+		reason: !memoryCfg.pipelineV2.enabled
+			? "Pipeline disabled"
+			: pipelinePaused
+				? "Pipeline paused"
+				: extractionStatus === "disabled"
+					? "No inference workload is configured for memoryExtraction"
+					: extractionStatus === "blocked"
+						? extractionDecision && !extractionDecision.ok
+							? extractionDecision.error.message
+							: "No memoryExtraction route available"
+						: extractionFallbackApplied
+							? (runtimeReasonForTarget(extractionDecision, extractionBinding) ??
+								`Configured extraction provider unavailable; using ${extractionEffective} fallback`)
+							: (extractionSelectedRuntime?.unavailableReason ?? null),
 		blockedBy:
 			extractionStatus === "blocked" && extractionDecision && !extractionDecision.ok
 				? firstCandidateBlockedBy(extractionDecision.error.details)

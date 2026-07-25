@@ -44,6 +44,7 @@ import {
 	authConfig,
 	buildOpenClawHealth,
 	getCachedDiagnosticsReport,
+	getExtractionWorkloadState,
 	getUpdateState,
 	invalidateDiagnosticsCache,
 	openClawHeartbeat,
@@ -208,6 +209,11 @@ export function registerPipelineRoutes(app: Hono): void {
 		const config = loadMemoryConfig(AGENTS_DIR);
 		const workerStatus = getPipelineWorkerStatus();
 		const extractionWorker = workerStatus.extraction;
+		const extractionWorkload = getExtractionWorkloadState({
+			enabled: config.pipelineV2.enabled,
+			paused: config.pipelineV2.paused,
+			workerRunning: extractionWorker.running,
+		});
 		const configuredLogFile = readEnvTrimmed("SIGNET_LOG_FILE");
 		const configuredLogDir = readEnvTrimmed("SIGNET_LOG_DIR") ?? LOG_DIR;
 		const datedLogFile = join(configuredLogDir, `signet-${new Date().toISOString().slice(0, 10)}.log`);
@@ -285,7 +291,7 @@ export function registerPipelineRoutes(app: Hono): void {
 				},
 				queue: pipelineQueueBlock(),
 			},
-			providerResolution: providerRuntimeResolution,
+			providerResolution: { ...providerRuntimeResolution, extraction: extractionWorkload },
 			logging: {
 				logDir: configuredLogFile ? dirname(configuredLogFile) : configuredLogDir,
 				logFile: configuredLogFile ?? datedLogFile,
@@ -458,10 +464,19 @@ export function registerPipelineRoutes(app: Hono): void {
 		const diagnostics = getCachedDiagnosticsReport();
 
 		const pipelineV2 = cfg.pipelineV2;
+		const workers = getPipelineWorkerStatus();
 		const mode = readPipelineMode(pipelineV2);
 
 		return c.json({
-			workers: getPipelineWorkerStatus(),
+			workers,
+			providerResolution: {
+				...providerRuntimeResolution,
+				extraction: getExtractionWorkloadState({
+					enabled: pipelineV2.enabled,
+					paused: pipelineV2.paused,
+					workerRunning: workers.extraction.running,
+				}),
+			},
 			queues: dbData.queues,
 			diagnostics,
 			latency: analyticsCollector.getLatency(),

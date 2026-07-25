@@ -241,6 +241,31 @@ describe("daemon status contract", () => {
 
 		expect(state.restartPipelineRuntimeRef).toBeDefined();
 		await state.restartPipelineRuntimeRef?.(loadMemoryConfig(dir));
+		const res = await app.request("http://localhost/api/status");
+		const body = (await res.json()) as {
+			providerResolution?: {
+				extraction?: {
+					configured?: unknown;
+					resolved?: unknown;
+					effective?: unknown;
+					status?: unknown;
+					enabled?: unknown;
+					paused?: unknown;
+					workerRunning?: unknown;
+					ready?: unknown;
+					blockedReason?: unknown;
+				};
+			};
+		};
+		expect(res.status).toBe(200);
+		expect(body.providerResolution?.extraction).toMatchObject({
+			status: "disabled",
+			enabled: false,
+			paused: false,
+			workerRunning: false,
+			ready: false,
+			blockedReason: null,
+		});
 
 		expect(getLlmConcurrencyStatus().limit).toBe(1);
 	});

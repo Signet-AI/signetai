@@ -35,6 +35,7 @@ interface DaemonStatus {
 	readonly resources?: DaemonResourceUsage | null;
 	readonly extraction: {
 		readonly configured: string | null;
+		readonly resolved: string | null;
 		readonly effective: string | null;
 		readonly fallbackProvider: string | null;
 		readonly status: string | null;
@@ -42,6 +43,12 @@ interface DaemonStatus {
 		readonly reason: string | null;
 		readonly blockedBy?: readonly string[];
 		readonly since: string | null;
+		readonly enabled: boolean;
+		readonly paused: boolean;
+		readonly workerRunning: boolean;
+		readonly ready: boolean;
+		readonly blockedReason: string | null;
+		readonly hasWorkloadState: boolean;
 	} | null;
 	readonly extractionWorker: {
 		readonly running: boolean;
@@ -416,6 +423,20 @@ export function getExtractionStatusNotice(
 	daemon: DaemonStatus,
 ): { level: "warn" | "error"; title: string; detail: string } | null {
 	const extraction = daemon.extraction;
+	if (extraction && daemon.running && extraction.hasWorkloadState && !extraction.ready) {
+		const title = !extraction.enabled
+			? "Pipeline disabled"
+			: extraction.paused
+				? "Pipeline paused"
+				: extraction.status === "blocked"
+					? "Extraction blocked"
+					: "Extraction worker stopped";
+		return {
+			level: extraction.status === "blocked" ? "error" : "warn",
+			title,
+			detail: `configured: ${extraction.configured ?? "none"}, resolved: ${extraction.resolved ?? "none"}, effective: ${extraction.effective ?? "none"}, worker running: ${extraction.workerRunning}${extraction.blockedReason ? ` — ${extraction.blockedReason}` : ""}`,
+		};
+	}
 	if (extraction && daemon.running && extraction.status === "blocked") {
 		const blockedBy =
 			extraction.blockedBy && extraction.blockedBy.length > 0
