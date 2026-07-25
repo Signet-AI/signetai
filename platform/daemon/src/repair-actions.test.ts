@@ -21,6 +21,7 @@ import {
 	getEmbeddingGapStats,
 	pruneGenericEntities,
 	reembedMissingMemories,
+	reembedModelMigration,
 	releaseStaleLeases,
 	requeueDeadJobs,
 	resyncVectorIndex,
@@ -672,6 +673,8 @@ describe("reembedMissingMemories", () => {
 			TEST_EMBEDDING_CFG,
 			10,
 			false,
+			false,
+			"default",
 		);
 
 		expect(result.success).toBe(true);
@@ -922,6 +925,50 @@ describe("reembedMissingMemories", () => {
 			)
 			.get() as { n: number };
 		expect(remaining.n).toBe(0);
+	});
+});
+
+describe("reembedModelMigration", () => {
+	it("replaces complete vectors when the stored model differs", async () => {
+		const db = new Database(":memory:");
+		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
+		ensureVecTable(db);
+		const accessor = asAccessor(db);
+		const now = new Date().toISOString();
+		db.prepare(
+			`INSERT INTO memories (id, content, content_hash, embedding_model, type, created_at, updated_at, updated_by) VALUES ('model-a', 'old vector', 'hash-a', 'model-a', 'fact', ?, ?, 'test')`,
+		).run(now, now);
+		insertEmbedding(db, { id: "emb-a", sourceId: "model-a", contentHash: "hash-a", vector: [0.1, 0.2, 0.3] });
+		expect(getEmbeddingGapStats(accessor).unembedded).toBe(0);
+		const result = await reembedModelMigration(
+			accessor,
+			TEST_CFG,
+			CTX_OPERATOR,
+			createRateLimiter(),
+			async () => [0.4, 0.5, 0.6],
+			{ ...TEST_EMBEDDING_CFG, model: "model-b" },
+			"default",
+			10,
+			false,
+			false,
+		);
+		expect(result.success).toBe(true);
+		expect(result.affected).toBe(1);
+		expect(result.totalMatching).toBe(1);
+		expect(result.details).toMatchObject({
+			selected: 1,
+			estimatedBatches: 1,
+			vectorIndexRebuildRequired: false,
+			target: { provider: "ollama", model: "model-b", dimensions: 3 },
+		});
+		expect(getEmbeddingGapStats(accessor).unembedded).toBe(0);
+		expect(db.prepare("SELECT embedding_model FROM memories WHERE id = 'model-a'").get()).toEqual({
+			embedding_model: "model-b",
+		});
+		expect(db.prepare("SELECT vector FROM embeddings WHERE source_id = 'model-a'").get() as { vector: Buffer }).toEqual(
+			{ vector: vectorBlob([0.4, 0.5, 0.6]) },
+		);
+		db.close();
 	});
 });
 

@@ -23,7 +23,14 @@ import {
 	tableExists,
 	vectorToBlob,
 } from "./db-helpers";
-import { type UnembeddedRow, countUnembeddedMemories, listUnembeddedMemories } from "./embedding-coverage";
+import {
+	type UnembeddedRow,
+	countEmbeddingMigrationRows,
+	countUnembeddedMemories,
+	listEmbeddingMigrationRows,
+	listEmbeddingMigrationSources,
+	listUnembeddedMemories,
+} from "./embedding-coverage";
 import { classifyEntityQuality } from "./entity-quality";
 import { logger } from "./logger";
 import type { EmbeddingConfig } from "./memory-config";
@@ -51,6 +58,7 @@ export interface RepairResult {
 	readonly preview?: readonly string[];
 	/** Count of rows that matched the filter (capped for log size). */
 	readonly totalMatching?: number;
+	readonly details?: Readonly<Record<string, unknown>>;
 }
 
 /** Filters accepted by `requeueDeadJobs` / `cancelObsoleteJobs` / `pruneTerminalJobs`. */
@@ -859,6 +867,103 @@ export async function reembedMissingMemories(
 	} finally {
 		reembedInProgress = false;
 	}
+}
+
+export async function reembedModelMigration(
+	accessor: DbAccessor,
+	cfg: PipelineV2Config,
+	ctx: RepairContext,
+	limiter: RateLimiter,
+	embeddingFn: (content: string, cfg: EmbeddingConfig) => Promise<number[] | null>,
+	embeddingCfg: EmbeddingConfig,
+	agentId: string,
+	batchSize = DEFAULT_REEMBED_BATCH,
+	dryRun = false,
+	all = false,
+): Promise<RepairResult> {
+	const action = "reembedModelMigration";
+	const gate = checkRepairGate(cfg, ctx, limiter, action, 0, cfg.repair.reembedHourlyBudget);
+	if (!gate.allowed) return { action, success: false, affected: 0, message: gate.reason ?? "denied by policy gate" };
+	const size =
+		Number.isFinite(batchSize) && batchSize > 0 ? Math.min(500, Math.floor(batchSize)) : DEFAULT_REEMBED_BATCH;
+	const { rows, totalMatching, sources } = accessor.withReadDb((db) => ({
+		rows: listEmbeddingMigrationRows(db, embeddingCfg.model, embeddingCfg.dimensions, all, size, agentId),
+		totalMatching: countEmbeddingMigrationRows(db, embeddingCfg.model, embeddingCfg.dimensions, all, agentId),
+		sources: listEmbeddingMigrationSources(db, embeddingCfg.model, embeddingCfg.dimensions, all, agentId),
+	}));
+	const details = {
+		selected: totalMatching,
+		selectedThisBatch: rows.length,
+		agentId,
+		// Provider identity was not persisted by historical schemas. Report that
+		// explicitly rather than implying a provider mismatch can be inferred.
+		sources: sources.map((source) => ({ ...source, provider: "not-recorded" })),
+		target: { provider: embeddingCfg.provider, model: embeddingCfg.model, dimensions: embeddingCfg.dimensions },
+		estimatedBatches: Math.ceil(totalMatching / size),
+		vectorIndexRebuildRequired: sources.some(
+			(source) => source.dimensions !== null && source.dimensions !== embeddingCfg.dimensions,
+		),
+	};
+	if (dryRun)
+		return {
+			action,
+			success: true,
+			affected: 0,
+			message: `dry run: ${totalMatching} memories selected; ${rows.length} in the next batch`,
+			totalMatching,
+			details,
+		};
+	let written = 0;
+	let failed = 0;
+	for (const row of rows) {
+		let vector: number[] | null;
+		try {
+			vector = await embeddingFn(row.content, embeddingCfg);
+		} catch (error) {
+			failed++;
+			logger.warn("pipeline", "re-embed migration: embedding failed", {
+				memoryId: row.id,
+				error: error instanceof Error ? error.message : String(error),
+			});
+			continue;
+		}
+		if (!vector || vector.length !== embeddingCfg.dimensions) {
+			failed++;
+			continue;
+		}
+		accessor.withWriteTx((db) => {
+			const current = db.prepare("SELECT content_hash FROM memories WHERE id = ? AND is_deleted = 0").get(row.id) as
+				| { content_hash: string }
+				| undefined;
+			if (!current) return;
+			const id = crypto.randomUUID();
+			db.prepare(
+				`INSERT INTO embeddings (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at) VALUES (?, ?, ?, ?, 'memory', ?, ?, datetime('now')) ON CONFLICT(content_hash) DO UPDATE SET vector=excluded.vector, dimensions=excluded.dimensions, source_id=excluded.source_id, chunk_text=excluded.chunk_text, created_at=excluded.created_at`,
+			).run(id, current.content_hash, vectorToBlob(vector), vector.length, row.id, row.content);
+			const embedding = db.prepare("SELECT id FROM embeddings WHERE content_hash = ?").get(current.content_hash) as
+				| { id: string }
+				| undefined;
+			if (!embedding) return;
+			syncVecInsert(db, embedding.id, vector);
+			db.prepare("UPDATE memories SET embedding_model = ? WHERE id = ?").run(embeddingCfg.model, row.id);
+			written++;
+		});
+	}
+	const message = `re-embedded ${written} of ${rows.length} selected memories${
+		failed > 0 ? ` (${failed} failed)` : ""
+	}`;
+	if (written > 0) {
+		accessor.withWriteTx((db) => writeRepairAudit(db, action, ctx, written, message));
+		limiter.record(action);
+	}
+	return {
+		action,
+		success: failed === 0,
+		affected: written,
+		message,
+		totalMatching,
+		details: { ...details, failed },
+	};
 }
 
 // ---------------------------------------------------------------------------

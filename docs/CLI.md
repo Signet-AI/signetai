@@ -1064,6 +1064,8 @@ Manage memory embeddings. Requires the daemon to be running.
 signet embed backfill
 signet embed backfill --batch-size 100
 signet embed backfill --dry-run
+signet embed backfill --model-mismatch --dry-run
+signet embed backfill --all --dry-run
 signet embed gaps
 ```
 
@@ -1071,7 +1073,7 @@ Subcommands:
 
 | Command | Description |
 |---------|-------------|
-| `signet embed backfill` | Re-embed memories missing vector embeddings |
+| `signet embed backfill` | Generate missing vectors; use `--model-mismatch` for a model/dimension migration or `--all` to force active memories |
 | `signet embed gaps` | Show count of memories missing embeddings |
 
 `signet embed backfill` options:
@@ -1080,6 +1082,10 @@ Subcommands:
 |--------|-------------|
 | `--batch-size <n>` | Memories per batch (default: 50) |
 | `--dry-run` | Preview without calling the embedding provider |
+| `--model-mismatch` | Re-embed vectors whose stored model or dimensions differ from the configured target |
+| `--all` | Re-embed all active memories in bounded resumable batches |
+
+Migration dry runs report source model/dimension labels (historical provider identity is not recorded), the configured target, estimated batches, and whether dimensions require a vector-index rebuild.
 
 After `backfill` completes, coverage is printed:
 

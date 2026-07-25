@@ -26,6 +26,7 @@ import {
 	rebuildDerivedIndexes,
 	reclassifyEntities,
 	reembedMissingMemories,
+	reembedModelMigration,
 	releaseStaleLeases,
 	requeueDeadJobs,
 	resyncVectorIndex,
@@ -174,6 +175,24 @@ export function registerRepairRoutes(
 			fullSweep && ctx.actorType === "operator" ? 0 : undefined,
 		);
 
+		return c.json(result, repairHttpStatus(result));
+	});
+
+	app.post("/api/repair/re-embed-migration", async (c) => {
+		const cfg = loadMemoryConfig(AGENTS_DIR);
+		const body = asRecord(await c.req.json().catch(() => ({})));
+		const result = await reembedModelMigration(
+			getDbAccessor(),
+			cfg.pipelineV2,
+			resolveRepairContext(c),
+			repairLimiter,
+			fetchEmbedding,
+			cfg.embedding,
+			resolveRepairAgentId(c, body),
+			typeof body.batchSize === "number" ? body.batchSize : 50,
+			body.dryRun === true,
+			body.all === true,
+		);
 		return c.json(result, repairHttpStatus(result));
 	});
 

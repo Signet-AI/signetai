@@ -230,18 +230,34 @@ export function registerMemoryCommands(program: Command, deps: MemoryDeps): void
 
 	embedCmd
 		.command("backfill")
-		.description("Generate embeddings for memories that are missing them")
+		.description("Generate missing embeddings or migrate existing vectors to the configured model")
 		.option("--dry-run", "Preview what would be embedded without making changes")
+		.option("--model-mismatch", "Select vectors stored under a different model or dimensions")
+		.option("--all", "Select all active memories (requires --dry-run or an explicit migration run)")
 		.option("--batch-size <n>", "Number of memories to embed per batch", Number.parseInt, 50)
 		.option("--json", "Output as JSON")
 		.action(async (options) => {
 			if (!(await deps.ensureDaemonForSecrets())) return;
 
-			const spinner = ora(options.dryRun ? "Checking missing embeddings..." : "Backfilling embeddings...").start();
-			const { ok, data } = await deps.secretApiCall("POST", "/api/repair/re-embed", {
-				batchSize: options.batchSize,
-				dryRun: options.dryRun === true,
-			});
+			const migration = options.modelMismatch === true || options.all === true;
+			const spinner = ora(
+				options.dryRun
+					? migration
+						? "Previewing embedding migration..."
+						: "Checking missing embeddings..."
+					: migration
+						? "Migrating embeddings..."
+						: "Backfilling embeddings...",
+			).start();
+			const { ok, data } = await deps.secretApiCall(
+				"POST",
+				migration ? "/api/repair/re-embed-migration" : "/api/repair/re-embed",
+				{
+					batchSize: options.batchSize,
+					dryRun: options.dryRun === true,
+					...(migration ? { all: options.all === true } : {}),
+				},
+			);
 			const err = typeof data === "object" && data !== null && "error" in data ? data.error : undefined;
 			if (!ok || typeof err === "string") {
 				spinner.fail(typeof err === "string" ? err : "Backfill failed");
@@ -255,13 +271,38 @@ export function registerMemoryCommands(program: Command, deps: MemoryDeps): void
 			const message = typeof result.message === "string" ? result.message : "Backfill complete";
 
 			if (options.json) {
-				console.log(JSON.stringify({ success, affected, message }, null, 2));
+				console.log(
+					JSON.stringify(
+						{ success, affected, message, totalMatching: result.totalMatching, details: result.details },
+						null,
+						2,
+					),
+				);
 				return;
 			}
 
 			if (success) {
 				console.log(chalk.bold(options.dryRun ? "\n  Dry Run Results\n" : "\n  Backfill Results\n"));
 				console.log(`  ${message}`);
+				if (migration && typeof result.details === "object" && result.details !== null) {
+					const details = result.details as Record<string, unknown>;
+					const target = details.target as Record<string, unknown> | undefined;
+					const sources = Array.isArray(details.sources) ? details.sources : [];
+					for (const source of sources) {
+						if (typeof source !== "object" || source === null) continue;
+						const label = source as Record<string, unknown>;
+						console.log(
+							`  Source: ${label.provider}/${label.model ?? "unknown"} (${label.dimensions ?? "unknown"} dimensions) × ${label.count ?? 0}`,
+						);
+					}
+					if (target) console.log(`  Target: ${target.provider}/${target.model} (${target.dimensions} dimensions)`);
+					if (typeof details.estimatedBatches === "number") {
+						console.log(`  Estimated batches: ${details.estimatedBatches}`);
+					}
+					if (typeof details.vectorIndexRebuildRequired === "boolean") {
+						console.log(`  Vector index rebuild required: ${details.vectorIndexRebuildRequired ? "yes" : "no"}`);
+					}
+				}
 				if (!options.dryRun && affected > 0) {
 					console.log(chalk.dim("\n  Run `signet embed audit` to check updated coverage"));
 				}

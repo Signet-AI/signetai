@@ -414,6 +414,50 @@ embedded without calling the embedding provider.
 }
 ```
 
+### POST /api/repair/re-embed-migration
+
+Re-embeds a bounded batch of active memories whose stored model or vector
+dimensions differ from the configured embedding target. Set `all: true` to
+force a bounded batch even when metadata already matches. Requires `admin`
+permission. Existing vectors remain in place until a replacement vector has
+been fetched and validated.
+
+**Request body**
+
+```json
+{
+  "batchSize": 50,
+  "dryRun": true,
+  "all": false,
+  "agentId": "default"
+}
+```
+
+`dryRun: true` reports the full matching count, source model/dimension labels,
+target provider/model/dimensions, estimated batches, and whether a dimension
+change requires rebuilding the vector index. Provider identity is not present
+in historical embedding metadata and is reported as `not-recorded`.
+The request is scoped to `agentId`; when omitted it uses the daemon's active
+agent.
+
+**Response**
+
+```json
+{
+  "action": "reembedModelMigration",
+  "success": true,
+  "affected": 0,
+  "totalMatching": 120,
+  "details": {
+    "selected": 120,
+    "selectedThisBatch": 50,
+    "target": { "provider": "ollama", "model": "nomic-embed-text", "dimensions": 768 },
+    "estimatedBatches": 3,
+    "vectorIndexRebuildRequired": false
+  }
+}
+```
+
 ### POST /api/repair/clean-orphans
 
 Remove embedding rows that reference memories which no longer exist.
