@@ -216,7 +216,7 @@ jobs:
         shell: bash
         run: test -s ./dist/native/"$RELEASE_ASSET"
 
-      - name: Native embedding smoke
+      - name: Native release runtime smoke
         shell: bash
         env:
           SIGNET_NATIVE_EMBEDDING_SMOKE: "1"

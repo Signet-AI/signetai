@@ -1,10 +1,11 @@
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
-import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { type ChildProcessWithoutNullStreams, spawn, spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { type Server, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { MIGRATIONS } from "../platform/core/src/migrations";
 
 const root = join(import.meta.dir, "..");
 const enabled = process.env.SIGNET_NATIVE_EMBEDDING_SMOKE === "1";
@@ -165,6 +166,87 @@ describe("native embedding smoke teardown", () => {
 
 describe("compiled native embedding runtime", () => {
 	const smoke = enabled ? test : test.skip;
+
+	smoke(
+		"serves embedded dashboard assets, connector assets, and fresh workspace migrations",
+		async () => {
+			const binary = nativeSmokeBinary();
+			if (!existsSync(binary)) {
+				throw new Error(`native binary not found at ${binary}; build it first (bun run build:native-bun)`);
+			}
+
+			const home = tempDir();
+			const workspace = join(home, ".agents");
+			const hermesHome = join(home, ".hermes");
+			mkdirSync(workspace, { recursive: true });
+			mkdirSync(hermesHome, { recursive: true });
+			writeFileSync(
+				join(workspace, "agent.yaml"),
+				"version: 1\nschema: signet/v1\nagent:\n  name: Native Release Smoke\nharnesses:\n  - hermes-agent\nmemory:\n  database: memory/memories.db\n  pipelineV2:\n    enabled: false\nembedding:\n  provider: none\n",
+			);
+
+			const port = await freePort();
+			const origin = `http://127.0.0.1:${port}`;
+			const daemonEnv: NodeJS.ProcessEnv = {
+				...process.env,
+				HOME: home,
+				HERMES_HOME: hermesHome,
+				SIGNET_DAEMON_ENTRYPOINT: "1",
+				SIGNET_PATH: workspace,
+				SIGNET_PORT: String(port),
+				SIGNET_BIND: "127.0.0.1",
+				SIGNET_SKIP_AGENT_REGISTER: "1",
+			};
+			// biome-ignore lint/performance/noDelete: prove the binary materializes its own embedded connector tree
+			delete daemonEnv.SIGNET_CONNECTOR_ASSETS_DIR;
+			// biome-ignore lint/performance/noDelete: avoid source-install connector fallbacks
+			delete daemonEnv.SIGNET_DIR;
+
+			const child = spawn(binary, [], { env: daemonEnv, stdio: ["ignore", "pipe", "pipe"] });
+			children.push(child);
+			const output: Buffer[] = [];
+			child.stdout.on("data", (chunk) => output.push(Buffer.from(chunk)));
+			child.stderr.on("data", (chunk) => output.push(Buffer.from(chunk)));
+
+			try {
+				await waitForHealth(origin, child);
+
+				const dashboard = await fetch(`${origin}/`, { signal: AbortSignal.timeout(10_000) });
+				expect(dashboard.ok).toBe(true);
+				expect(dashboard.headers.get("content-type")).toContain("text/html");
+				const dashboardHtml = await dashboard.text();
+				expect(dashboardHtml.toLowerCase()).toContain("<!doctype html>");
+				expect(dashboardHtml).toContain("/_app/immutable/");
+
+				const db = new Database(join(workspace, "memory", "memories.db"), { readonly: true });
+				const applied = db.query("SELECT version FROM schema_migrations ORDER BY version").all() as Array<{
+					version: number;
+				}>;
+				db.close();
+				expect(applied.map((migration) => migration.version)).toEqual(MIGRATIONS.map((migration) => migration.version));
+
+				const cliEnv = { ...daemonEnv };
+				// biome-ignore lint/performance/noDelete: run the CLI rather than another daemon entrypoint
+				delete cliEnv.SIGNET_DAEMON_ENTRYPOINT;
+				const sync = spawnSync(binary, ["sync"], {
+					cwd: home,
+					env: cliEnv,
+					encoding: "utf8",
+					timeout: 30_000,
+				});
+				expect(sync.status, `${sync.stdout}\n${sync.stderr}`).toBe(0);
+				for (const name of ["__init__.py", "client.py", "plugin.yaml", "README.md", "signet.install.json"]) {
+					expect(existsSync(join(hermesHome, "plugins", "signet", name)), name).toBe(true);
+				}
+			} catch (error) {
+				const logs = Buffer.concat(output).toString("utf8");
+				throw new Error(`${error instanceof Error ? error.message : String(error)}\n\nNative daemon output:\n${logs}`, {
+					cause: error,
+				});
+			}
+		},
+		60_000,
+	);
 
 	smoke(
 		"embeds and recalls a fixed sentence through the compiled native binary",
