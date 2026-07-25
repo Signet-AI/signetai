@@ -1,8 +1,8 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import {
 	BaseConnector,
 	type InstallResult,
@@ -55,14 +55,22 @@ interface NativePluginCommandResult {
 /** Resolve signet command for hook invocation. Returns array form for hooks.json command field.
  *  Windows: navigates from argv[1] (e.g. <pkg>/bin/signet.js) up two levels to find
  *  the bin directory. Falls back to bare "signet" if the layout doesn't match (shims, junctions). */
-function resolveSignetArgs(): string[] {
+function resolveSignetEntry(): string | null {
+	const entry = process.argv[1];
+	if (!entry || basename(entry) !== "signet.js" || !existsSync(entry)) return null;
+	return entry;
+}
+
+function resolveSignetArgs(runtime: string | null = null): string[] {
+	const entry = resolveSignetEntry();
+	if (runtime && entry) return [runtime, entry];
 	const resolved = resolveSignetCliCommand();
 	return [resolved.command, ...resolved.args];
 }
 
 /** Resolve signet-mcp as { command, args } for Codex config.toml.
  *  Codex expects `command` as a string and `args` as a separate array. */
-function resolveSignetMcp(): SignetMcpConfig {
+function resolveSignetMcp(runtime: string | null = null): SignetMcpConfig {
 	const remoteDaemonUrl = resolveRemoteDaemonUrl();
 	if (remoteDaemonUrl) {
 		const apiKey = readAuthTokenEnv();
@@ -73,6 +81,9 @@ function resolveSignetMcp(): SignetMcpConfig {
 			...(apiKey ? { httpHeaders: { Authorization: `Bearer ${apiKey}` } } : {}),
 		};
 	}
+	const entry = resolveSignetEntry();
+	const mcpEntry = entry ? join(dirname(entry), "..", "dist", "mcp-stdio.js") : null;
+	if (runtime && mcpEntry && existsSync(mcpEntry)) return { command: runtime, args: [mcpEntry] };
 	return resolveSignetMcpCommand();
 }
 
@@ -87,6 +98,44 @@ function resolveRemoteDaemonUrl(): string | null {
 	const explicit = readEnv("SIGNET_DAEMON_URL");
 	if (!explicit) return null;
 	return resolveSignetDaemonUrl();
+}
+
+const CODEX_DESKTOP_APP_PATHS = [join(homedir(), "Applications", "Codex.app"), "/Applications/Codex.app"];
+const CODEX_RUNTIME_SCAN_DEPTH = 8;
+
+function codexDesktopNodeCandidates(root: string, depth = 0): string[] {
+	if (depth > CODEX_RUNTIME_SCAN_DEPTH || !existsSync(root)) return [];
+	const candidates: string[] = [];
+	for (const entry of readdirSync(root, { withFileTypes: true })) {
+		const path = join(root, entry.name);
+		if (entry.isFile() && entry.name === "node") candidates.push(path);
+		if (entry.isDirectory() && entry.name !== "app.asar")
+			candidates.push(...codexDesktopNodeCandidates(path, depth + 1));
+	}
+	return candidates;
+}
+
+function isUsableNodeRuntime(path: string): boolean {
+	try {
+		if (!statSync(path).isFile()) return false;
+		const result = spawnSync(path, ["--version"], { encoding: "utf-8", timeout: 5_000 });
+		return result.status === 0 && /^v\d+\.\d+\.\d+/.test(result.stdout.trim());
+	} catch {
+		return false;
+	}
+}
+
+export function resolveCodexDesktopNode(
+	appPaths: readonly string[] = CODEX_DESKTOP_APP_PATHS,
+	validate: (path: string) => boolean = isUsableNodeRuntime,
+): string | null {
+	for (const appPath of appPaths) {
+		const candidates = codexDesktopNodeCandidates(join(appPath, "Contents", "Resources"));
+		for (const candidate of candidates) {
+			if (validate(candidate)) return candidate;
+		}
+	}
+	return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -427,6 +476,23 @@ function isSignetMatcherGroup(group: unknown): boolean {
 		if (isSignetHookCommand(cmd)) return true;
 	}
 	return false;
+}
+
+function hasMissingSignetRuntime(file: HooksFile | null, configPath: string): boolean {
+	const hookCommands = Object.values(file?.hooks ?? {}).flatMap((groups) =>
+		groups.flatMap((group) => group.hooks.map((handler) => handler.command)),
+	);
+	const config = existsSync(configPath) ? readFileSync(configPath, "utf-8") : "";
+	const commands = [
+		...hookCommands,
+		...[...config.matchAll(/^command\s*=\s*['\"]([^'\"]+)['\"]/gm)].map((match) => match[1] ?? ""),
+	];
+	return commands.some((command) => {
+		if (!isSignetHookCommand(command) && !command.includes("signet-mcp") && !command.includes("mcp-stdio.js"))
+			return false;
+		const node = command.match(/(?:^|\s)(['\"]?)([^'\"\s]*[\\/]node(?:\.exe)?)(?:\1)(?=\s|$)/i)?.[2];
+		return Boolean(node && !existsSync(node));
+	});
 }
 
 function isLegacySignetMatcherGroup(group: unknown): boolean {
@@ -785,6 +851,14 @@ export class CodexConnector extends BaseConnector {
 		return join(homedir(), ".codex");
 	}
 
+	protected getCodexDesktopAppPaths(): readonly string[] {
+		return CODEX_DESKTOP_APP_PATHS;
+	}
+
+	protected resolveCodexDesktopNode(): string | null {
+		return resolveCodexDesktopNode(this.getCodexDesktopAppPaths());
+	}
+
 	protected supportsNativePluginInstall(): boolean {
 		if (readEnv("SIGNET_CODEX_DISABLE_NATIVE_PLUGIN") === "1") return false;
 		const result = spawnSync("codex", ["plugin", "--help"], {
@@ -924,8 +998,16 @@ export class CodexConnector extends BaseConnector {
 		const codexHome = this.getCodexHome();
 		mkdirSync(codexHome, { recursive: true });
 
-		const signetArgs = resolveSignetArgs();
-		const mcp = resolveSignetMcp();
+		const configPath = this.getConfigPath();
+		const staleRuntime = hasMissingSignetRuntime(readHooksFile(this.getHooksJsonPath()), configPath);
+		const runtime = this.resolveCodexDesktopNode();
+		const signetArgs = resolveSignetArgs(runtime);
+		const mcp = resolveSignetMcp(runtime);
+		if (staleRuntime) {
+			warnings.push(
+				"Detected a missing Signet Codex runtime path; refreshed only Signet-owned hooks and MCP configuration.",
+			);
+		}
 		const nativePluginSupported = this.supportsNativePluginInstall();
 
 		if (nativePluginSupported) {
@@ -981,7 +1063,6 @@ export class CodexConnector extends BaseConnector {
 		}
 
 		// 3. Register MCP server in config.toml
-		const configPath = this.getConfigPath();
 		if (patchConfigToml(configPath, mcp)) {
 			configsPatched.push(configPath);
 		}
