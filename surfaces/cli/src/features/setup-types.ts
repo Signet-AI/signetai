@@ -1,11 +1,5 @@
-import type {
-	IdentityContextFileEntry,
-	IdentityPresetName,
-	IdentitySpecialFileEntry,
-	SetupDetection,
-	WorkspaceSourceRepoSyncResult,
-} from "@signet/core";
-import type { EmbeddingProviderChoice, ExtractionProviderChoice, OpenClawRuntimeChoice } from "./setup-shared.js";
+import type { SetupDetection, WorkspaceSourceRepoSyncResult } from "@signet/core";
+import type { OpenClawRuntimeChoice } from "./setup-shared.js";
 
 export interface SetupWizardOptions {
 	path?: string;
@@ -32,6 +26,7 @@ export interface SetupWizardOptions {
 	disableGraphiq?: boolean;
 	identityPreset?: string;
 	identityMode?: string;
+	schema?: boolean;
 }
 
 export interface SetupDeps {
@@ -72,40 +67,4 @@ export interface SetupDeps {
 		basePath: string,
 	) => Promise<{ readonly status: "updated" | "current" | "skipped" | "error"; readonly message: string }>;
 	readonly loadConfiguredHarnesses?: (basePath: string) => readonly string[];
-}
-
-export interface FreshSetupConfig {
-	readonly basePath: string;
-	readonly agentName: string;
-	readonly agentDescription: string;
-	readonly networkMode: "localhost" | "tailscale";
-	readonly harnesses: string[];
-	readonly openclawRuntimePath: OpenClawRuntimeChoice;
-	readonly configureOpenClawWs: boolean;
-	readonly openclawConfigCount: number;
-	readonly embeddingProvider: EmbeddingProviderChoice;
-	readonly embeddingModel: string;
-	readonly embeddingDimensions: number;
-	readonly extractionProvider: ExtractionProviderChoice;
-	readonly extractionModel: string;
-	readonly extractionEndpoint?: string;
-	readonly availableExtractionProviders: readonly ExtractionProviderChoice[];
-	readonly acpxBin?: string;
-	readonly searchBalance: number;
-	readonly searchTopK: number;
-	readonly searchMinScore: number;
-	readonly memorySessionBudget: number;
-	readonly memoryDecayRate: number;
-	readonly gitEnabled: boolean;
-	readonly existingAgentsDir: boolean;
-	readonly nonInteractive: boolean;
-	readonly openDashboard: boolean;
-	readonly allowUnprotectedWorkspace: boolean;
-	readonly createLocalBackup: boolean;
-	readonly signetSecretsEnabled: boolean;
-	readonly graphiqEnabled: boolean;
-	readonly identityMode: "managed" | "passthrough" | "off";
-	readonly identityPreset: IdentityPresetName;
-	readonly startupIdentityFiles: readonly IdentityContextFileEntry[];
-	readonly specialIdentityFiles: readonly IdentitySpecialFileEntry[];
 }

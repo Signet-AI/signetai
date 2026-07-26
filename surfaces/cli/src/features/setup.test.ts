@@ -631,4 +631,27 @@ describe("setupWizard non-interactive harness hooks", () => {
 		const agentYaml = readFileSync(join(basePath, "agent.yaml"), "utf-8");
 		expect(agentYaml).toContain("mode: off");
 	});
+
+	it("prints the setup plan JSON Schema and exits before any wizard work when --schema is set", async () => {
+		const logSpy = spyOn(console, "log").mockImplementation(() => {});
+		try {
+			const signetLogo = mock(() => "SHOULD-NOT-APPEAR");
+			const detectExistingSetup = mock(() => fakeDetection());
+			const deps = stubDeps({ signetLogo, detectExistingSetup });
+
+			await setupWizard({ schema: true }, deps);
+
+			// Emits a JSON Schema document.
+			const printed = logSpy.mock.calls[0]?.[0] as string;
+			const parsed = JSON.parse(printed);
+			expect(parsed.$schema).toContain("json-schema.org");
+			expect(parsed.properties.agentName).toBeDefined();
+			expect(parsed.properties.networkMode.enum).toEqual(["localhost", "tailscale"]);
+			// Wizard body never ran.
+			expect(signetLogo).not.toHaveBeenCalled();
+			expect(detectExistingSetup).not.toHaveBeenCalled();
+		} finally {
+			logSpy.mockRestore();
+		}
+	});
 });

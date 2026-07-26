@@ -25,6 +25,8 @@ import { installGraphiqPlugin } from "./graphiq.js";
 import { runFreshSetup } from "./setup-fresh.js";
 import { runExistingSetupWizard } from "./setup-migrate.js";
 import { EXTRACTION_SAFETY_WARNING, defaultAcpxModel, defaultExtractionModel } from "./setup-pipeline.js";
+import { setupPlanJsonSchema } from "./setup-plan.js";
+import type { SetupApplyContext, SetupPlan } from "./setup-plan.js";
 import { readSetupCorePluginEnabled, writeSetupCorePluginRegistry } from "./setup-plugins.js";
 import { enforceSetupProtection, printSetupProtectionSummary } from "./setup-protection.js";
 import {
@@ -64,7 +66,7 @@ import {
 	readString,
 	resolveSetupExtractionProvider,
 } from "./setup-shared.js";
-import type { FreshSetupConfig, SetupDeps, SetupWizardOptions } from "./setup-types.js";
+import type { SetupDeps, SetupWizardOptions } from "./setup-types.js";
 
 function modelChoices(provider: ExtractionProviderChoice): Array<{ value: string; name: string }> {
 	return modelPresetsForProvider(provider).map((preset) => ({ value: preset.value, name: preset.label }));
@@ -181,6 +183,11 @@ async function promptIdentityMode(defaultIdentityMode: IdentityMode): Promise<Id
 }
 
 export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps): Promise<void> {
+	if (options.schema) {
+		console.log(JSON.stringify(setupPlanJsonSchema(), null, 2));
+		return;
+	}
+
 	console.log(deps.signetLogo());
 	console.log();
 
@@ -1176,34 +1183,25 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		gitEnabled = initGit;
 	}
 
-	const cfg: FreshSetupConfig = {
-		basePath,
+	const plan: SetupPlan = {
 		agentName,
 		agentDescription,
 		networkMode,
 		harnesses,
 		openclawRuntimePath,
 		configureOpenClawWs,
-		openclawConfigCount,
 		embeddingProvider,
 		embeddingModel,
 		embeddingDimensions,
 		extractionProvider,
 		extractionModel,
 		extractionEndpoint,
-		availableExtractionProviders: availableToolExtractionProviders,
-		acpxBin,
 		searchBalance,
 		searchTopK,
 		searchMinScore,
 		memorySessionBudget,
 		memoryDecayRate,
 		gitEnabled,
-		existingAgentsDir: existing.agentsDir,
-		nonInteractive,
-		openDashboard: options.openDashboard === true,
-		allowUnprotectedWorkspace: options.allowUnprotectedWorkspace === true,
-		createLocalBackup: options.createLocalBackup === true,
 		signetSecretsEnabled,
 		graphiqEnabled,
 		identityMode,
@@ -1212,7 +1210,19 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		specialIdentityFiles,
 	};
 
-	await runFreshSetup(cfg, deps);
+	const context: SetupApplyContext = {
+		basePath,
+		existingAgentsDir: existing.agentsDir,
+		nonInteractive,
+		allowUnprotectedWorkspace: options.allowUnprotectedWorkspace === true,
+		createLocalBackup: options.createLocalBackup === true,
+		availableExtractionProviders: availableToolExtractionProviders,
+		acpxBin,
+		openclawConfigCount,
+		openDashboard: options.openDashboard === true,
+	};
+
+	await runFreshSetup(plan, context, deps);
 }
 
 async function resolveGraphiqPluginSelection(

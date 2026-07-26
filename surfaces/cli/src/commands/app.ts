@@ -24,6 +24,7 @@ interface SetupOptions {
 	disableSignetSecrets?: boolean;
 	withGraphiq?: boolean;
 	disableGraphiq?: boolean;
+	schema?: boolean;
 }
 
 interface PathOptions {
@@ -118,14 +119,12 @@ export function registerAppCommands(program: Command, deps: AppDeps): void {
 		)
 		.option("--with-graphiq", "Install and enable the optional GraphIQ code retrieval plugin")
 		.option("--disable-graphiq", "Leave the optional GraphIQ plugin disabled during setup")
+		.option("--schema", "Print the JSON Schema for the setup plan (for --json/--file payloads) and exit")
 		.option(
 			"--identity-preset <preset>",
 			"Identity preset for startup/special prompt files (minimal, hermes, openclaw, custom)",
 		)
-		.option(
-			"--identity-mode <mode>",
-			"Identity management mode in non-interactive mode (managed, passthrough, off)",
-		)
+		.option("--identity-mode <mode>", "Identity management mode in non-interactive mode (managed, passthrough, off)")
 		.action(deps.setupWizard);
 
 	const dashboard = program
