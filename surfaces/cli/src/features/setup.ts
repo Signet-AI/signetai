@@ -274,6 +274,58 @@ async function buildHeadlessApplyContext(
 	};
 }
 
+/**
+ * Render a SetupPlan as a human-readable, sectioned summary for the interactive
+ * review screen. Pure (no side effects); returns a plain string.
+ */
+export function renderSetupPlanSummary(plan: SetupPlan): string {
+	const lines: string[] = [
+		chalk.bold("  Setup plan"),
+		chalk.dim(
+			"  \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+		),
+	];
+	const section = (title: string) => {
+		lines.push("");
+		lines.push(chalk.cyan(`  ${title}`));
+	};
+	const row = (label: string, value: string) => lines.push(`    ${label.padEnd(13)}${value}`);
+
+	section("Identity");
+	row("Agent:", plan.agentName);
+	row("Description:", plan.agentDescription);
+	row("Mode:", plan.identityMode === "managed" ? `managed (${plan.identityPreset})` : plan.identityMode);
+
+	section("Harnesses");
+	lines.push(`    ${plan.harnesses.length > 0 ? plan.harnesses.join(", ") : chalk.dim("(none)")}`);
+
+	section("Memory & search");
+	if (plan.embeddingProvider === "none") {
+		row("Embeddings:", chalk.dim("disabled"));
+	} else {
+		row("Embeddings:", `${plan.embeddingProvider} (${plan.embeddingModel}, ${plan.embeddingDimensions}d)`);
+	}
+	row("Search:", `balance ${plan.searchBalance}, top_k ${plan.searchTopK}, min_score ${plan.searchMinScore}`);
+	row("Memory:", `budget ${plan.memorySessionBudget}, decay ${plan.memoryDecayRate}`);
+
+	section("Extraction");
+	if (plan.extractionProvider === "none") {
+		row("Provider:", chalk.dim("disabled"));
+	} else {
+		row("Provider:", plan.extractionProvider);
+		row("Model:", plan.extractionModel || chalk.dim("(default)"));
+		if (plan.extractionEndpoint) row("Endpoint:", plan.extractionEndpoint);
+	}
+
+	section("Plugins & network");
+	row("Secrets:", plan.signetSecretsEnabled ? "enabled" : "disabled");
+	row("GraphIQ:", plan.graphiqEnabled ? "enabled" : "disabled");
+	row("Network:", plan.networkMode);
+	row("Git:", plan.gitEnabled ? "enabled" : "disabled");
+
+	return lines.join("\n");
+}
+
 export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps): Promise<void> {
 	if (options.schema) {
 		console.log(JSON.stringify(setupPlanJsonSchema(), null, 2));
@@ -1333,6 +1385,17 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 	if (options.dryRun) {
 		console.log(JSON.stringify(plan, null, 2));
 		return;
+	}
+
+	if (!nonInteractive) {
+		console.log();
+		console.log(renderSetupPlanSummary(plan));
+		console.log();
+		const applyNow = await confirm({ message: "Apply this plan?", default: true });
+		if (!applyNow) {
+			console.log(chalk.dim("  Setup cancelled. No changes were made."));
+			return;
+		}
 	}
 
 	await runFreshSetup(plan, context, deps);

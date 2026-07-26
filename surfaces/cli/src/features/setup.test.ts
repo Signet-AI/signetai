@@ -11,7 +11,7 @@ import {
 } from "@signet/core";
 import { detectedHarnessesForExistingSetup, runExistingSetupWizard } from "./setup-migrate.js";
 import type { SetupDeps } from "./setup-types.js";
-import { setupWizard } from "./setup.js";
+import { renderSetupPlanSummary, setupWizard } from "./setup.js";
 
 const NO_HARNESSES = {
 	claudeCode: false,
@@ -845,5 +845,60 @@ describe("setupWizard headless plan path", () => {
 			errorSpy.mockRestore();
 			Object.defineProperty(process.stdout, "isTTY", { value: originalTty, configurable: true });
 		}
+	});
+});
+
+describe("renderSetupPlanSummary", () => {
+	const plan = {
+		agentName: "My Agent",
+		agentDescription: "Personal AI assistant",
+		networkMode: "localhost" as const,
+		harnesses: ["claude-code", "codex"],
+		openclawRuntimePath: "plugin" as const,
+		configureOpenClawWs: false,
+		embeddingProvider: "native",
+		embeddingModel: "nomic-embed-text-v1.5",
+		embeddingDimensions: 768,
+		extractionProvider: "claude-code",
+		extractionModel: "haiku",
+		extractionEndpoint: undefined,
+		searchBalance: 0.7,
+		searchTopK: 20,
+		searchMinScore: 0.3,
+		memorySessionBudget: 2000,
+		memoryDecayRate: 0.95,
+		gitEnabled: true,
+		signetSecretsEnabled: true,
+		graphiqEnabled: false,
+		identityMode: "managed" as const,
+		identityPreset: "minimal" as const,
+		startupIdentityFiles: [{ path: "AGENTS.md" }],
+		specialIdentityFiles: [{ path: "DREAMING.md", kind: "dreaming" as const }],
+	};
+
+	it("groups plan fields into labeled sections", () => {
+		const summary = renderSetupPlanSummary(plan);
+		expect(summary).toContain("Identity");
+		expect(summary).toContain("Harnesses");
+		expect(summary).toContain("Memory & search");
+		expect(summary).toContain("Extraction");
+		expect(summary).toContain("Plugins & network");
+	});
+
+	it("includes the agent name, preset, and harness list", () => {
+		const summary = renderSetupPlanSummary(plan);
+		expect(summary).toContain("My Agent");
+		expect(summary).toContain("managed (minimal)");
+		expect(summary).toContain("claude-code, codex");
+	});
+
+	it("shows disabled state for none providers", () => {
+		const summary = renderSetupPlanSummary({
+			...plan,
+			embeddingProvider: "none",
+			extractionProvider: "none",
+		});
+		expect(summary).toContain("Embeddings:");
+		expect(summary).toContain("disabled");
 	});
 });
