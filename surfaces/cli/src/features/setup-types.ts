@@ -34,6 +34,7 @@ export interface SetupWizardOptions {
 	json?: string;
 	dryRun?: boolean;
 	enableDreaming?: boolean;
+	agent?: string[];
 }
 
 export interface SetupDeps {

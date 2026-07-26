@@ -92,6 +92,15 @@ export const setupPlanSchema = z
 		startupIdentityFiles: z.array(identityContextFileSchema),
 		specialIdentityFiles: z.array(identitySpecialFileSchema),
 		dreamingEnabled: z.boolean().optional(),
+		agents: z
+			.array(
+				z.strictObject({
+					name: z.string(),
+					memoryPolicy: z.enum(["isolated", "shared", "group"]),
+					memoryGroup: z.string().optional(),
+				}),
+			)
+			.optional(),
 	})
 	.superRefine((plan, ctx) => {
 		// openai-compatible extraction has no implicit endpoint; the interactive

@@ -2,6 +2,7 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from
 import { join } from "node:path";
 import { OpenClawConnector } from "@signet/connector-openclaw";
 import {
+	buildAgentMemoryConfig,
 	disableGraphiqState,
 	ensureUnifiedSchema,
 	formatYaml,
@@ -173,6 +174,15 @@ export async function runFreshSetup(plan: SetupPlan, context: SetupApplyContext,
 			context.acpxBin,
 		);
 		applySetupInferenceRoute(config, inference);
+
+		if (plan.agents && plan.agents.length > 0) {
+			config.agents = {
+				roster: plan.agents.map((agent) => ({
+					name: agent.name,
+					memory: buildAgentMemoryConfig(agent.memoryPolicy, agent.memoryGroup),
+				})),
+			};
+		}
 
 		writeFileSync(join(context.basePath, "agent.yaml"), formatYaml(config));
 

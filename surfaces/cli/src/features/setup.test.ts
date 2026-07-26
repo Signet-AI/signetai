@@ -721,6 +721,28 @@ describe("setupWizard headless plan path", () => {
 		expect(existsSync(join(basePath, "memory", "memories.db"))).toBe(true);
 	});
 
+	it("writes a multi-agent roster from a plan file", async () => {
+		root = mkdtempSync(join(tmpdir(), "setup-headless-roster-"));
+		const basePath = join(root, "agents");
+		const templatesPath = join(root, "templates");
+		writeIdentityTemplates(templatesPath);
+		const planPath = writePlanFile(root, {
+			agents: [
+				{ name: "researcher", memoryPolicy: "isolated" },
+				{ name: "writer", memoryPolicy: "group", memoryGroup: "docs" },
+			],
+		});
+		const deps = freshDeps(basePath, templatesPath);
+
+		await setupWizard({ file: planPath }, deps);
+
+		const agentYaml = readFileSync(join(basePath, "agent.yaml"), "utf-8");
+		expect(agentYaml).toContain("roster:");
+		expect(agentYaml).toContain("name: researcher");
+		expect(agentYaml).toContain("name: writer");
+		expect(agentYaml).toContain("group: docs");
+	});
+
 	it("enables dreaming when the plan sets dreamingEnabled", async () => {
 		root = mkdtempSync(join(tmpdir(), "setup-headless-dreaming-"));
 		const basePath = join(root, "agents");

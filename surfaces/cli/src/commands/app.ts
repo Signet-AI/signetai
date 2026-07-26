@@ -32,6 +32,7 @@ interface SetupOptions {
 	json?: string;
 	dryRun?: boolean;
 	enableDreaming?: boolean;
+	agent?: string[];
 }
 
 interface PathOptions {
@@ -134,6 +135,12 @@ export function registerAppCommands(program: Command, deps: AppDeps): void {
 		.option("--json <plan>", "Apply an inline setup plan JSON string (headless, no prompts)")
 		.option("--dry-run", "Resolve and print the setup plan, then exit without applying")
 		.option("--enable-dreaming", "Enable background memory consolidation (dreaming)")
+		.option(
+			"--agent <name:policy[:group]>",
+			"Add a named agent to the roster (repeatable). policy: isolated|shared|group",
+			deps.collectListOption,
+			[],
+		)
 		.option(
 			"--identity-preset <preset>",
 			"Identity preset for startup/special prompt files (minimal, hermes, openclaw, custom)",

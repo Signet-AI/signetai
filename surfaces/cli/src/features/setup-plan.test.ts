@@ -116,6 +116,22 @@ describe("setupPlanSchema", () => {
 		expect(parseSetupPlan(plan).synthesisProvider).toBe("openrouter");
 	});
 
+	it("accepts a multi-agent roster", () => {
+		const plan = basePlan({
+			agents: [
+				{ name: "researcher", memoryPolicy: "isolated" },
+				{ name: "writer", memoryPolicy: "group", memoryGroup: "docs" },
+			],
+		});
+		const parsed = parseSetupPlan(plan);
+		expect(parsed.agents).toHaveLength(2);
+		expect(parsed.agents?.[1].memoryGroup).toBe("docs");
+	});
+
+	it("rejects an invalid agent memory policy", () => {
+		expect(() => parseSetupPlan(basePlan({ agents: [{ name: "x", memoryPolicy: "open" as never }] }))).toThrow();
+	});
+
 	it("rejects openai-compatible synthesis without an endpoint", () => {
 		expect(() => parseSetupPlan(basePlan({ synthesisProvider: "openai-compatible" }))).toThrow("synthesisEndpoint");
 	});

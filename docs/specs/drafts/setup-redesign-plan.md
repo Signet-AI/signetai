@@ -196,10 +196,25 @@ moves to small section modules. Net non-test LOC should drop.
 
 - No Signet Cloud branch (product doesn't exist).
 - No identity interview engine (stubs + `/onboarding` pointer).
-- No new config semantics yet — `skills.selected`, `dreaming.enabled`,
-  `secrets.backend`, `synthesis.*` are written to `agent.yaml` but runtime
-  honoring lands in phase 2 alongside the daemon/core changes.
 - `setup-migrate.ts` (existing-identity path) untouched.
+
+## Phase 2 findings (code-verified)
+
+Implemented (config-driven, runtime-honored):
+- **Distinct synthesis route** — `synthesisProvider/Model/Endpoint`; daemon
+  routes a separate `session_synthesis` workload (`routing.ts`, verified).
+- **dreaming toggle** — `dreamingEnabled` → `memory.dreaming.enabled`;
+  `loadDreamingConfig` reads it (`DEFAULT_DREAMING.enabled=false`, verified).
+
+Deferred with rationale (NOT setup config keys):
+- **secrets.backend** — the active provider is RUNTIME state, not config:
+  `setActiveSecretProvider` writes `SIGNET_SECRETS_ACTIVE_PROVIDER` to the
+  secrets store; 1Password uses a stored service-account token. There is no
+  `agent.yaml` key the daemon reads to select the backend, so it is not a
+  SetupPlan field. Backend selection stays a post-setup dashboard/API action.
+- **skills.selected** — the `skills` allowlist lives on `AgentDefinition`
+  (per roster entry, `agents.ts`), not the flat top-level config. It belongs
+  in phase 3 (multi-agent roster), not the single-agent fresh plan.
 
 ## Open questions
 

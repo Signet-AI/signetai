@@ -191,6 +191,23 @@ interface ExtractionEnvironment {
 }
 
 /**
+ * Parse a non-interactive --agent flag: "name:policy" or "name:policy:group".
+ * policy is isolated|shared|group. Returns null on a malformed value.
+ */
+function parseAgentFlag(
+	raw: string,
+): { name: string; memoryPolicy: "isolated" | "shared" | "group"; memoryGroup?: string } | null {
+	const parts = raw
+		.split(":")
+		.map((p) => p.trim())
+		.filter(Boolean);
+	if (parts.length < 2) return null;
+	const [name, policyRaw, group] = parts;
+	if (policyRaw !== "isolated" && policyRaw !== "shared" && policyRaw !== "group") return null;
+	return { name, memoryPolicy: policyRaw, memoryGroup: group || undefined };
+}
+
+/**
  * Probe the local machine for extraction-capable tools (claude/codex/ollama/
  * opencode CLIs, llama.cpp server, acpx runner). Shared by the interactive
  * wizard and the headless plan path so detection never diverges.
@@ -326,6 +343,9 @@ export function renderSetupPlanSummary(plan: SetupPlan): string {
 	row("Network:", plan.networkMode);
 	row("Git:", plan.gitEnabled ? "enabled" : "disabled");
 	if (plan.dreamingEnabled) row("Dreaming:", "enabled");
+	if (plan.agents && plan.agents.length > 0) {
+		row("Agents:", `${plan.agents.length} (${plan.agents.map((a) => a.name).join(", ")})`);
+	}
 
 	return lines.join("\n");
 }
@@ -1408,6 +1428,38 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		gitEnabled = initGit;
 	}
 
+	// Multi-agent roster: additional named agents beyond the default. Each gets
+	// a memory read-policy; the daemon reconciles agents.roster into the
+	// `agents` table at boot (syncAgentRoster).
+	const agents: { name: string; memoryPolicy: "isolated" | "shared" | "group"; memoryGroup?: string }[] = [];
+	if (nonInteractive) {
+		for (const raw of options.agent ?? []) {
+			const parsed = parseAgentFlag(raw);
+			if (parsed) agents.push(parsed);
+		}
+	} else {
+		let adding = await confirm({ message: "Add a named agent to the roster?", default: false });
+		while (adding) {
+			const name = await input({ message: "Agent name:" });
+			if (!name.trim()) break;
+			const memoryPolicy = await select({
+				message: `Memory policy for ${name}:`,
+				choices: [
+					{ value: "isolated", name: "Isolated — private memory scope" },
+					{ value: "shared", name: "Shared — reads the default agent's memory" },
+					{ value: "group", name: "Group — shared memory scope with a group" },
+				],
+				default: "isolated",
+			});
+			let memoryGroup: string | undefined;
+			if (memoryPolicy === "group") {
+				memoryGroup = (await input({ message: "Group name:", default: name })) || name;
+			}
+			agents.push({ name: name.trim(), memoryPolicy, memoryGroup });
+			adding = await confirm({ message: "Add another agent?", default: false });
+		}
+	}
+
 	const plan: SetupPlan = {
 		agentName,
 		agentDescription,
@@ -1437,6 +1489,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		startupIdentityFiles,
 		specialIdentityFiles,
 		dreamingEnabled,
+		agents: agents.length > 0 ? agents : undefined,
 	};
 
 	const context: SetupApplyContext = {
