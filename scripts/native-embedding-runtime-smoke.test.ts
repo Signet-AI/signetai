@@ -201,6 +201,8 @@ describe("compiled native embedding runtime", () => {
 			delete daemonEnv.SIGNET_CONNECTOR_ASSETS_DIR;
 			// biome-ignore lint/performance/noDelete: avoid source-install connector fallbacks
 			delete daemonEnv.SIGNET_DIR;
+			// biome-ignore lint/performance/noDelete: prove the binary serves its own embedded dashboard, not a leaked on-disk dir
+			delete daemonEnv.SIGNET_DASHBOARD_DIR;
 
 			const child = spawn(binary, [], { env: daemonEnv, stdio: ["ignore", "pipe", "pipe"] });
 			children.push(child);
