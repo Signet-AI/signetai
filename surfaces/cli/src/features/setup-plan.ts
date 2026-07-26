@@ -119,6 +119,43 @@ export const setupPlanSchema = z
 				path: ["synthesisEndpoint"],
 			});
 		}
+		// synthesisModel/Endpoint are meaningless without a provider to apply them to.
+		if ((plan.synthesisModel || plan.synthesisEndpoint) && !plan.synthesisProvider) {
+			ctx.addIssue({
+				code: "custom",
+				message: "synthesisModel/synthesisEndpoint require synthesisProvider",
+				path: ["synthesisProvider"],
+			});
+		}
+		// The daemon gates the synthesis worker on pipelineV2.enabled, so a
+		// synthesis provider without extraction is dead config.
+		if (plan.extractionProvider === "none" && plan.synthesisProvider && plan.synthesisProvider !== "none") {
+			ctx.addIssue({
+				code: "custom",
+				message: "synthesis requires extraction to be enabled (the daemon gates synthesis on the extraction pipeline)",
+				path: ["synthesisProvider"],
+			});
+		}
+		if (plan.agents) {
+			const seen = new Set<string>();
+			plan.agents.forEach((agent, i) => {
+				if (agent.memoryPolicy === "group" && !agent.memoryGroup) {
+					ctx.addIssue({
+						code: "custom",
+						message: "group memory policy requires memoryGroup",
+						path: ["agents", i, "memoryGroup"],
+					});
+				}
+				if (seen.has(agent.name)) {
+					ctx.addIssue({
+						code: "custom",
+						message: `duplicate agent name "${agent.name}"`,
+						path: ["agents", i, "name"],
+					});
+				}
+				seen.add(agent.name);
+			});
+		}
 	});
 
 export type SetupPlan = z.infer<typeof setupPlanSchema>;

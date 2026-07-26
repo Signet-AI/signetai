@@ -721,6 +721,31 @@ describe("setupWizard headless plan path", () => {
 		expect(existsSync(join(basePath, "memory", "memories.db"))).toBe(true);
 	});
 
+	it("rejects a malformed --agent flag instead of silently dropping it", async () => {
+		root = mkdtempSync(join(tmpdir(), "setup-headless-badagent-"));
+		const basePath = join(root, "agents");
+		mkdirSync(basePath, { recursive: true });
+		const deps = stubDeps({
+			AGENTS_DIR: basePath,
+			normalizeAgentPath: mock((p: string) => p),
+			detectExistingSetup: mock(() => ({ ...fakeDetection(basePath), agentsDir: false, memoryDb: false })),
+		});
+
+		const exitSpy = spyOn(process, "exit").mockImplementation(((code?: string | number | null) => {
+			throw new Error(`process.exit:${code ?? ""}`);
+		}) as never);
+		const errorSpy = spyOn(console, "error").mockImplementation(() => {});
+		try {
+			await expect(setupWizard({ nonInteractive: true, agent: ["researcher"] }, deps)).rejects.toThrow(
+				"process.exit:1",
+			);
+			expect(String(errorSpy.mock.calls[0]?.[0] ?? "")).toContain("Expected name:policy");
+		} finally {
+			exitSpy.mockRestore();
+			errorSpy.mockRestore();
+		}
+	});
+
 	it("writes a multi-agent roster from a plan file", async () => {
 		root = mkdtempSync(join(tmpdir(), "setup-headless-roster-"));
 		const basePath = join(root, "agents");

@@ -132,6 +132,33 @@ describe("setupPlanSchema", () => {
 		expect(() => parseSetupPlan(basePlan({ agents: [{ name: "x", memoryPolicy: "open" as never }] }))).toThrow();
 	});
 
+	it("rejects group policy without a group", () => {
+		expect(() => parseSetupPlan(basePlan({ agents: [{ name: "x", memoryPolicy: "group" }] }))).toThrow("memoryGroup");
+	});
+
+	it("rejects duplicate agent names", () => {
+		expect(() =>
+			parseSetupPlan(
+				basePlan({
+					agents: [
+						{ name: "x", memoryPolicy: "isolated" },
+						{ name: "x", memoryPolicy: "shared" },
+					],
+				}),
+			),
+		).toThrow("duplicate");
+	});
+
+	it("rejects synthesis without extraction (dead config)", () => {
+		expect(() =>
+			parseSetupPlan(basePlan({ extractionProvider: "none", synthesisProvider: "openrouter", synthesisModel: "x" })),
+		).toThrow("synthesis");
+	});
+
+	it("rejects synthesis model without a provider", () => {
+		expect(() => parseSetupPlan(basePlan({ synthesisModel: "x" }))).toThrow("synthesisProvider");
+	});
+
 	it("rejects openai-compatible synthesis without an endpoint", () => {
 		expect(() => parseSetupPlan(basePlan({ synthesisProvider: "openai-compatible" }))).toThrow("synthesisEndpoint");
 	});

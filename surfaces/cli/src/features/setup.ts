@@ -21,6 +21,7 @@ import {
 import chalk from "chalk";
 import open from "open";
 import ora from "ora";
+import { validateName } from "../commands/agent.js";
 import { installGraphiqPlugin } from "./graphiq.js";
 import { runFreshSetup } from "./setup-fresh.js";
 import { runExistingSetupWizard } from "./setup-migrate.js";
@@ -192,18 +193,34 @@ interface ExtractionEnvironment {
 
 /**
  * Parse a non-interactive --agent flag: "name:policy" or "name:policy:group".
- * policy is isolated|shared|group. Returns null on a malformed value.
+ * policy is isolated|shared|group. Fails loudly on malformed input rather than
+ * silently dropping it.
  */
-function parseAgentFlag(
-	raw: string,
-): { name: string; memoryPolicy: "isolated" | "shared" | "group"; memoryGroup?: string } | null {
+function parseAgentFlag(raw: string): {
+	name: string;
+	memoryPolicy: "isolated" | "shared" | "group";
+	memoryGroup?: string;
+} {
 	const parts = raw
 		.split(":")
 		.map((p) => p.trim())
 		.filter(Boolean);
-	if (parts.length < 2) return null;
+	if (parts.length < 2) {
+		failSetupValidation(
+			`Invalid --agent value: "${raw}". Expected name:policy[:group] (policy: isolated|shared|group).`,
+		);
+	}
 	const [name, policyRaw, group] = parts;
-	if (policyRaw !== "isolated" && policyRaw !== "shared" && policyRaw !== "group") return null;
+	const nameErr = validateName(name);
+	if (nameErr) {
+		failSetupValidation(`Invalid --agent name "${name}": ${nameErr}`);
+	}
+	if (policyRaw !== "isolated" && policyRaw !== "shared" && policyRaw !== "group") {
+		failSetupValidation(`Invalid --agent policy "${policyRaw}" in "${raw}". Expected isolated|shared|group.`);
+	}
+	if (policyRaw === "group" && !group) {
+		failSetupValidation(`--agent "${name}:group" requires a group name: "${name}:group:<group>".`);
+	}
 	return { name, memoryPolicy: policyRaw, memoryGroup: group || undefined };
 }
 
@@ -1326,7 +1343,9 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 	if (nonInteractive) {
 		synthesisProvider = requestedSynthesisProvider ?? undefined;
 		synthesisModel = deps.normalizeStringValue(options.synthesisModel) ?? undefined;
-		synthesisEndpoint = requestedSynthesisEndpoint ?? undefined;
+		synthesisEndpoint =
+			requestedSynthesisEndpoint ??
+			(requestedSynthesisProvider === "openai-compatible" ? DEFAULT_OPENAI_COMPATIBLE_ENDPOINT : undefined);
 	} else if (extractionProvider !== "none") {
 		const distinctSynthesis = await confirm({
 			message: "Use a different provider for session summaries (synthesis)?",
@@ -1433,15 +1452,27 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 	// `agents` table at boot (syncAgentRoster).
 	const agents: { name: string; memoryPolicy: "isolated" | "shared" | "group"; memoryGroup?: string }[] = [];
 	if (nonInteractive) {
+		const seen = new Set<string>();
 		for (const raw of options.agent ?? []) {
 			const parsed = parseAgentFlag(raw);
-			if (parsed) agents.push(parsed);
+			if (seen.has(parsed.name)) continue;
+			seen.add(parsed.name);
+			agents.push(parsed);
 		}
 	} else {
 		let adding = await confirm({ message: "Add a named agent to the roster?", default: false });
 		while (adding) {
 			const name = await input({ message: "Agent name:" });
 			if (!name.trim()) break;
+			const nameErr = validateName(name.trim());
+			if (nameErr) {
+				console.log(chalk.yellow(`  ⚠ ${nameErr}`));
+				continue;
+			}
+			if (agents.some((a) => a.name === name.trim())) {
+				console.log(chalk.yellow(`  ⚠ An agent named "${name.trim()}" is already in the roster.`));
+				continue;
+			}
 			const memoryPolicy = await select({
 				message: `Memory policy for ${name}:`,
 				choices: [

@@ -72,7 +72,7 @@ function removeFromRoster(dir: string, name: string): void {
 }
 
 /** Validate agent name: lowercase alphanumeric + hyphens, not 'default'. */
-function validateName(name: string): string | null {
+export function validateName(name: string): string | null {
 	if (name === "default") return "Cannot use reserved name 'default'";
 	if (!/^[a-z0-9][a-z0-9-]*$/.test(name)) return "Name must be lowercase alphanumeric + hyphens only";
 	return null;
