@@ -27,6 +27,9 @@ export interface SetupWizardOptions {
 	identityPreset?: string;
 	identityMode?: string;
 	schema?: boolean;
+	file?: string;
+	json?: string;
+	dryRun?: boolean;
 }
 
 export interface SetupDeps {

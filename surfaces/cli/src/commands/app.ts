@@ -25,6 +25,9 @@ interface SetupOptions {
 	withGraphiq?: boolean;
 	disableGraphiq?: boolean;
 	schema?: boolean;
+	file?: string;
+	json?: string;
+	dryRun?: boolean;
 }
 
 interface PathOptions {
@@ -120,6 +123,9 @@ export function registerAppCommands(program: Command, deps: AppDeps): void {
 		.option("--with-graphiq", "Install and enable the optional GraphIQ code retrieval plugin")
 		.option("--disable-graphiq", "Leave the optional GraphIQ plugin disabled during setup")
 		.option("--schema", "Print the JSON Schema for the setup plan (for --json/--file payloads) and exit")
+		.option("--file <path>", "Apply a setup plan from a JSON file (headless, no prompts)")
+		.option("--json <plan>", "Apply an inline setup plan JSON string (headless, no prompts)")
+		.option("--dry-run", "Resolve and print the setup plan, then exit without applying")
 		.option(
 			"--identity-preset <preset>",
 			"Identity preset for startup/special prompt files (minimal, hermes, openclaw, custom)",

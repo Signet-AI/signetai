@@ -25,7 +25,7 @@ import { installGraphiqPlugin } from "./graphiq.js";
 import { runFreshSetup } from "./setup-fresh.js";
 import { runExistingSetupWizard } from "./setup-migrate.js";
 import { EXTRACTION_SAFETY_WARNING, defaultAcpxModel, defaultExtractionModel } from "./setup-pipeline.js";
-import { setupPlanJsonSchema } from "./setup-plan.js";
+import { parseSetupPlan, setupPlanJsonSchema } from "./setup-plan.js";
 import type { SetupApplyContext, SetupPlan } from "./setup-plan.js";
 import { readSetupCorePluginEnabled, writeSetupCorePluginRegistry } from "./setup-plugins.js";
 import { enforceSetupProtection, printSetupProtectionSummary } from "./setup-protection.js";
@@ -61,6 +61,7 @@ import {
 	hasExistingAgentState,
 	hasExistingIdentityFiles,
 	normalizeHarnessList,
+	readErr,
 	readHarnesses,
 	readRecord,
 	readString,
@@ -182,10 +183,126 @@ async function promptIdentityMode(defaultIdentityMode: IdentityMode): Promise<Id
 	});
 }
 
+interface ExtractionEnvironment {
+	readonly availableExtractionProviders: ExtractionProviderChoice[];
+	readonly acpxBin: string | undefined;
+	readonly detectedProvider: ExtractionProviderChoice;
+	readonly llamaCppServerAvailable: boolean;
+}
+
+/**
+ * Probe the local machine for extraction-capable tools (claude/codex/ollama/
+ * opencode CLIs, llama.cpp server, acpx runner). Shared by the interactive
+ * wizard and the headless plan path so detection never diverges.
+ */
+async function probeExtractionEnvironment(): Promise<ExtractionEnvironment> {
+	const hasClaudeCommand = hasCommand("claude");
+	const hasCodexCommand = hasCommand("codex");
+	const hasOllamaCommand = hasCommand("ollama");
+	const hasOpenCodeCommand = hasCommand("opencode");
+	const acpxBin = resolveCommandPath("bunx") ?? resolveCommandPath("npx");
+	const llamaCppServerAvailable = await hasLlamaCppServer();
+	const availableExtractionProviders: ExtractionProviderChoice[] = [];
+	if (acpxBin && (hasClaudeCommand || hasCodexCommand || hasOpenCodeCommand)) availableExtractionProviders.push("acpx");
+	if (llamaCppServerAvailable) availableExtractionProviders.push("llama-cpp");
+	if (hasClaudeCommand) availableExtractionProviders.push("claude-code");
+	if (hasCodexCommand) availableExtractionProviders.push("codex");
+	if (hasOllamaCommand) availableExtractionProviders.push("ollama");
+	if (hasOpenCodeCommand) availableExtractionProviders.push("opencode");
+	const detectedProvider = detectExtractionProviderFromAvailable(availableExtractionProviders);
+	return { availableExtractionProviders, acpxBin, detectedProvider, llamaCppServerAvailable };
+}
+
+/**
+ * Load and validate a {@link SetupPlan} from `--file` or `--json`. Headless only —
+ * the returned plan carries no runtime context, which is built separately by
+ * {@link buildHeadlessApplyContext}.
+ */
+function loadPlanFromOptions(options: SetupWizardOptions): SetupPlan {
+	if (options.file && options.json) {
+		failSetupValidation("Pass either --file or --json, not both.");
+	}
+	let raw: string;
+	if (options.file) {
+		try {
+			raw = readFileSync(options.file, "utf-8");
+		} catch (err) {
+			failSetupValidation(`Could not read plan file ${options.file}: ${readErr(err)}`);
+		}
+	} else {
+		raw = options.json ?? "";
+	}
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(raw);
+	} catch (err) {
+		failSetupValidation(`Setup plan is not valid JSON: ${readErr(err)}`);
+	}
+	try {
+		return parseSetupPlan(parsed);
+	} catch (err) {
+		failSetupValidation(err instanceof Error ? err.message : String(err));
+	}
+}
+
+/**
+ * Build the runtime {@link SetupApplyContext} for a headless plan by probing the
+ * environment (tool detection, OpenClaw configs) the same way the wizard does.
+ */
+async function buildHeadlessApplyContext(
+	options: SetupWizardOptions,
+	basePath: string,
+	plan: SetupPlan,
+	deps: SetupDeps,
+): Promise<SetupApplyContext> {
+	const existing = deps.detectExistingSetup(basePath);
+	const { availableExtractionProviders, acpxBin } = await probeExtractionEnvironment();
+	let openclawConfigCount = 0;
+	if (plan.harnesses.includes("openclaw")) {
+		openclawConfigCount = new OpenClawConnector().getDiscoveredConfigPaths().length;
+	}
+	return {
+		basePath,
+		existingAgentsDir: existing.agentsDir,
+		nonInteractive: true,
+		allowUnprotectedWorkspace: options.allowUnprotectedWorkspace === true,
+		createLocalBackup: options.createLocalBackup === true,
+		availableExtractionProviders,
+		acpxBin,
+		openclawConfigCount,
+		openDashboard: options.openDashboard === true,
+	};
+}
+
 export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps): Promise<void> {
 	if (options.schema) {
 		console.log(JSON.stringify(setupPlanJsonSchema(), null, 2));
 		return;
+	}
+
+	// Headless plan path: apply a validated plan from --file/--json with no
+	// prompts. The runtime context is probed from the environment.
+	if (options.file || options.json) {
+		const explicitPath = deps.normalizeStringValue(options.path);
+		const basePath = deps.normalizeAgentPath(explicitPath ?? deps.AGENTS_DIR);
+		const plan = loadPlanFromOptions(options);
+		if (options.dryRun) {
+			console.log(JSON.stringify(plan, null, 2));
+			return;
+		}
+		const context = await buildHeadlessApplyContext(options, basePath, plan, deps);
+		await runFreshSetup(plan, context, deps);
+		return;
+	}
+
+	// Fail closed: never block on an interactive prompt when stdin/stdout is not a
+	// TTY (piped, agent, CI). Headless callers must opt in via --non-interactive
+	// (flags) or --file/--json (plan).
+	if (!options.nonInteractive && !process.stdout.isTTY) {
+		failSetupValidation(
+			"signet setup is interactive and requires a TTY.",
+			"For headless use, pass --non-interactive with explicit flags, or --file/--json with a setup plan (see --schema).",
+		);
 	}
 
 	console.log(deps.signetLogo());
@@ -277,21 +394,12 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 			`Unknown --identity-preset value: ${options.identityPreset}. Valid choices: ${IDENTITY_PRESET_CHOICES.join(", ")}.`,
 		);
 	}
-	const hasClaudeCommand = hasCommand("claude");
-	const hasCodexCommand = hasCommand("codex");
-	const hasOllamaCommand = hasCommand("ollama");
-	const hasOpenCodeCommand = hasCommand("opencode");
-	const acpxBin = resolveCommandPath("bunx") ?? resolveCommandPath("npx");
-	const llamaCppServerAvailable = await hasLlamaCppServer();
-	const availableToolExtractionProviders: ExtractionProviderChoice[] = [];
-	if (acpxBin && (hasClaudeCommand || hasCodexCommand || hasOpenCodeCommand))
-		availableToolExtractionProviders.push("acpx");
-	if (llamaCppServerAvailable) availableToolExtractionProviders.push("llama-cpp");
-	if (hasClaudeCommand) availableToolExtractionProviders.push("claude-code");
-	if (hasCodexCommand) availableToolExtractionProviders.push("codex");
-	if (hasOllamaCommand) availableToolExtractionProviders.push("ollama");
-	if (hasOpenCodeCommand) availableToolExtractionProviders.push("opencode");
-	const detectedProvider = detectExtractionProviderFromAvailable(availableToolExtractionProviders);
+	const {
+		availableExtractionProviders: availableToolExtractionProviders,
+		acpxBin,
+		detectedProvider,
+		llamaCppServerAvailable,
+	} = await probeExtractionEnvironment();
 
 	if (rawDeploymentType && !requestedDeploymentType) {
 		failSetupValidation(
@@ -1221,6 +1329,11 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		openclawConfigCount,
 		openDashboard: options.openDashboard === true,
 	};
+
+	if (options.dryRun) {
+		console.log(JSON.stringify(plan, null, 2));
+		return;
+	}
 
 	await runFreshSetup(plan, context, deps);
 }

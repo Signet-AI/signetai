@@ -655,3 +655,195 @@ describe("setupWizard non-interactive harness hooks", () => {
 		}
 	});
 });
+
+describe("setupWizard headless plan path", () => {
+	let root: string;
+
+	function writePlanFile(dir: string, overrides: Record<string, unknown> = {}): string {
+		const planPath = join(dir, "plan.json");
+		const plan = {
+			agentName: "Headless Agent",
+			agentDescription: "From a plan file",
+			networkMode: "localhost",
+			harnesses: ["claude-code"],
+			openclawRuntimePath: "plugin",
+			configureOpenClawWs: false,
+			embeddingProvider: "native",
+			embeddingModel: "nomic-embed-text-v1.5",
+			embeddingDimensions: 768,
+			extractionProvider: "none",
+			extractionModel: "",
+			searchBalance: 0.7,
+			searchTopK: 20,
+			searchMinScore: 0.3,
+			memorySessionBudget: 2000,
+			memoryDecayRate: 0.95,
+			gitEnabled: false,
+			signetSecretsEnabled: true,
+			graphiqEnabled: false,
+			identityMode: "managed",
+			identityPreset: "minimal",
+			startupIdentityFiles: [{ path: "AGENTS.md" }],
+			specialIdentityFiles: [{ path: "DREAMING.md", kind: "dreaming" }],
+			...overrides,
+		};
+		writeFileSync(planPath, JSON.stringify(plan));
+		return planPath;
+	}
+
+	function freshDeps(basePath: string, templatesPath: string): SetupDeps {
+		const freshDetection: SetupDetection = { ...fakeDetection(basePath), agentsDir: false, memoryDb: false };
+		return stubDeps({
+			AGENTS_DIR: basePath,
+			getTemplatesDir: mock(() => templatesPath),
+			normalizeAgentPath: mock((p: string) => p),
+			detectExistingSetup: mock(() => freshDetection),
+		});
+	}
+
+	afterEach(() => {
+		if (root) rmSync(root, { recursive: true, force: true });
+	});
+
+	it("applies a plan from --file without prompts", async () => {
+		root = mkdtempSync(join(tmpdir(), "setup-headless-file-"));
+		const basePath = join(root, "agents");
+		const templatesPath = join(root, "templates");
+		writeIdentityTemplates(templatesPath);
+		const planPath = writePlanFile(root);
+		const deps = freshDeps(basePath, templatesPath);
+
+		await setupWizard({ file: planPath }, deps);
+
+		const agentYaml = readFileSync(join(basePath, "agent.yaml"), "utf-8");
+		expect(agentYaml).toContain("name: Headless Agent");
+		expect(agentYaml).toContain("mode: localhost");
+		expect(existsSync(join(basePath, "memory", "memories.db"))).toBe(true);
+	});
+
+	it("applies a plan from an inline --json string", async () => {
+		root = mkdtempSync(join(tmpdir(), "setup-headless-json-"));
+		const basePath = join(root, "agents");
+		const templatesPath = join(root, "templates");
+		writeIdentityTemplates(templatesPath);
+		const deps = freshDeps(basePath, templatesPath);
+		const planJson = JSON.stringify({
+			agentName: "Inline Agent",
+			agentDescription: "d",
+			networkMode: "localhost",
+			harnesses: [],
+			openclawRuntimePath: "plugin",
+			configureOpenClawWs: false,
+			embeddingProvider: "none",
+			embeddingModel: "",
+			embeddingDimensions: 768,
+			extractionProvider: "none",
+			extractionModel: "",
+			searchBalance: 0.7,
+			searchTopK: 20,
+			searchMinScore: 0.3,
+			memorySessionBudget: 2000,
+			memoryDecayRate: 0.95,
+			gitEnabled: false,
+			signetSecretsEnabled: false,
+			graphiqEnabled: false,
+			identityMode: "off",
+			identityPreset: "minimal",
+			startupIdentityFiles: [],
+			specialIdentityFiles: [],
+		});
+
+		await setupWizard({ json: planJson }, deps);
+
+		const agentYaml = readFileSync(join(basePath, "agent.yaml"), "utf-8");
+		expect(agentYaml).toContain("name: Inline Agent");
+		expect(agentYaml).toContain("mode: off");
+	});
+
+	it("--dry-run prints the plan and applies nothing", async () => {
+		root = mkdtempSync(join(tmpdir(), "setup-headless-dryrun-"));
+		const basePath = join(root, "agents");
+		const templatesPath = join(root, "templates");
+		writeIdentityTemplates(templatesPath);
+		const planPath = writePlanFile(root, { agentName: "Dry Run Agent" });
+		const deps = freshDeps(basePath, templatesPath);
+
+		const logSpy = spyOn(console, "log").mockImplementation(() => {});
+		try {
+			await setupWizard({ file: planPath, dryRun: true }, deps);
+
+			const printed = logSpy.mock.calls[0]?.[0] as string;
+			const parsed = JSON.parse(printed);
+			expect(parsed.agentName).toBe("Dry Run Agent");
+			// Nothing was applied.
+			expect(existsSync(join(basePath, "agent.yaml"))).toBe(false);
+		} finally {
+			logSpy.mockRestore();
+		}
+	});
+
+	it("rejects an invalid plan JSON with a structured error", async () => {
+		root = mkdtempSync(join(tmpdir(), "setup-headless-bad-"));
+		const basePath = join(root, "agents");
+		const badPath = join(root, "bad.json");
+		writeFileSync(badPath, "{not valid json");
+		const deps = freshDeps(basePath, root);
+
+		const exitSpy = spyOn(process, "exit").mockImplementation(((code?: string | number | null) => {
+			throw new Error(`process.exit:${code ?? ""}`);
+		}) as never);
+		const errorSpy = spyOn(console, "error").mockImplementation(() => {});
+		try {
+			await expect(setupWizard({ file: badPath }, deps)).rejects.toThrow("process.exit:1");
+			expect(String(errorSpy.mock.calls[0]?.[0] ?? "")).toContain("not valid JSON");
+		} finally {
+			exitSpy.mockRestore();
+			errorSpy.mockRestore();
+		}
+	});
+
+	it("rejects a plan that fails validation", async () => {
+		root = mkdtempSync(join(tmpdir(), "setup-headless-invalid-"));
+		const basePath = join(root, "agents");
+		const planPath = writePlanFile(root, { searchBalance: 5 });
+		const deps = freshDeps(basePath, root);
+
+		const exitSpy = spyOn(process, "exit").mockImplementation(((code?: string | number | null) => {
+			throw new Error(`process.exit:${code ?? ""}`);
+		}) as never);
+		const errorSpy = spyOn(console, "error").mockImplementation(() => {});
+		try {
+			await expect(setupWizard({ file: planPath }, deps)).rejects.toThrow("process.exit:1");
+			expect(String(errorSpy.mock.calls[0]?.[0] ?? "")).toContain("searchBalance");
+		} finally {
+			exitSpy.mockRestore();
+			errorSpy.mockRestore();
+		}
+	});
+
+	it("fails closed when invoked interactively without a TTY", async () => {
+		root = mkdtempSync(join(tmpdir(), "setup-notty-"));
+		const basePath = join(root, "agents");
+		mkdirSync(basePath, { recursive: true });
+		const deps = stubDeps({
+			AGENTS_DIR: basePath,
+			normalizeAgentPath: mock((p: string) => p),
+			detectExistingSetup: mock(() => fakeDetection(basePath)),
+		});
+
+		const originalTty = process.stdout.isTTY;
+		Object.defineProperty(process.stdout, "isTTY", { value: false, configurable: true });
+		const exitSpy = spyOn(process, "exit").mockImplementation(((code?: string | number | null) => {
+			throw new Error(`process.exit:${code ?? ""}`);
+		}) as never);
+		const errorSpy = spyOn(console, "error").mockImplementation(() => {});
+		try {
+			await expect(setupWizard({}, deps)).rejects.toThrow("process.exit:1");
+			expect(String(errorSpy.mock.calls[0]?.[0] ?? "")).toContain("requires a TTY");
+		} finally {
+			exitSpy.mockRestore();
+			errorSpy.mockRestore();
+			Object.defineProperty(process.stdout, "isTTY", { value: originalTty, configurable: true });
+		}
+	});
+});
