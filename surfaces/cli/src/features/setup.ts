@@ -325,6 +325,7 @@ export function renderSetupPlanSummary(plan: SetupPlan): string {
 	row("GraphIQ:", plan.graphiqEnabled ? "enabled" : "disabled");
 	row("Network:", plan.networkMode);
 	row("Git:", plan.gitEnabled ? "enabled" : "disabled");
+	if (plan.dreamingEnabled) row("Dreaming:", "enabled");
 
 	return lines.join("\n");
 }
@@ -1365,6 +1366,13 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		memoryDecayRate = Number.parseFloat(decayInput) || 0.95;
 	}
 
+	const dreamingEnabled = nonInteractive
+		? options.enableDreaming === true
+		: await confirm({
+				message: "Enable dreaming (background memory consolidation)?",
+				default: false,
+			});
+
 	let gitEnabled = false;
 	const shouldSkipGit = nonInteractive && options.skipGit === true;
 
@@ -1428,6 +1436,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		identityPreset,
 		startupIdentityFiles,
 		specialIdentityFiles,
+		dreamingEnabled,
 	};
 
 	const context: SetupApplyContext = {

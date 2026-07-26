@@ -721,6 +721,21 @@ describe("setupWizard headless plan path", () => {
 		expect(existsSync(join(basePath, "memory", "memories.db"))).toBe(true);
 	});
 
+	it("enables dreaming when the plan sets dreamingEnabled", async () => {
+		root = mkdtempSync(join(tmpdir(), "setup-headless-dreaming-"));
+		const basePath = join(root, "agents");
+		const templatesPath = join(root, "templates");
+		writeIdentityTemplates(templatesPath);
+		const planPath = writePlanFile(root, { dreamingEnabled: true });
+		const deps = freshDeps(basePath, templatesPath);
+
+		await setupWizard({ file: planPath }, deps);
+
+		const agentYaml = readFileSync(join(basePath, "agent.yaml"), "utf-8");
+		expect(agentYaml).toContain("dreaming:");
+		expect(agentYaml).toContain("enabled: true");
+	});
+
 	it("writes a distinct synthesis provider from a plan file", async () => {
 		root = mkdtempSync(join(tmpdir(), "setup-headless-synthesis-"));
 		const basePath = join(root, "agents");

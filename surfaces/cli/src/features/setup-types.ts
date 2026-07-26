@@ -33,6 +33,7 @@ export interface SetupWizardOptions {
 	file?: string;
 	json?: string;
 	dryRun?: boolean;
+	enableDreaming?: boolean;
 }
 
 export interface SetupDeps {

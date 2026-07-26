@@ -161,6 +161,9 @@ export async function runFreshSetup(plan: SetupPlan, context: SetupApplyContext,
 					}
 				: undefined,
 		);
+		if (plan.dreamingEnabled) {
+			memory.dreaming = { enabled: true };
+		}
 		config.memory = memory;
 		const inference = buildSetupInference(
 			plan.extractionProvider,
