@@ -14,6 +14,9 @@ interface SetupOptions {
 	extractionProvider?: string;
 	extractionModel?: string;
 	extractionEndpoint?: string;
+	synthesisProvider?: string;
+	synthesisModel?: string;
+	synthesisEndpoint?: string;
 	searchBalance?: string;
 	openclawRuntimePath?: string;
 	configureOpenclawWorkspace?: boolean;
@@ -100,6 +103,9 @@ export function registerAppCommands(program: Command, deps: AppDeps): void {
 		)
 		.option("--extraction-model <model>", "Extraction model in non-interactive mode")
 		.option("--extraction-endpoint <url>", "OpenAI-compatible extraction endpoint in non-interactive mode")
+		.option("--synthesis-provider <provider>", "Distinct synthesis provider (non-interactive mode)")
+		.option("--synthesis-model <model>", "Distinct synthesis model (non-interactive mode)")
+		.option("--synthesis-endpoint <url>", "OpenAI-compatible synthesis endpoint (non-interactive mode)")
 		.option("--search-balance <alpha>", "Search balance alpha in non-interactive mode (0-1)")
 		.option("--openclaw-runtime-path <mode>", "OpenClaw runtime path in non-interactive mode (plugin, legacy)")
 		.option(

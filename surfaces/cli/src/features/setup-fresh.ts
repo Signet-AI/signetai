@@ -149,7 +149,18 @@ export async function runFreshSetup(plan: SetupPlan, context: SetupApplyContext,
 		}
 
 		const memory = readRecord(config.memory);
-		memory.pipelineV2 = buildSetupPipeline(plan.extractionProvider, plan.extractionModel, plan.extractionEndpoint);
+		memory.pipelineV2 = buildSetupPipeline(
+			plan.extractionProvider,
+			plan.extractionModel,
+			plan.extractionEndpoint,
+			plan.synthesisProvider || plan.synthesisModel || plan.synthesisEndpoint
+				? {
+						provider: plan.synthesisProvider,
+						model: plan.synthesisModel,
+						endpoint: plan.synthesisEndpoint,
+					}
+				: undefined,
+		);
 		config.memory = memory;
 		const inference = buildSetupInference(
 			plan.extractionProvider,

@@ -721,6 +721,27 @@ describe("setupWizard headless plan path", () => {
 		expect(existsSync(join(basePath, "memory", "memories.db"))).toBe(true);
 	});
 
+	it("writes a distinct synthesis provider from a plan file", async () => {
+		root = mkdtempSync(join(tmpdir(), "setup-headless-synthesis-"));
+		const basePath = join(root, "agents");
+		const templatesPath = join(root, "templates");
+		writeIdentityTemplates(templatesPath);
+		const planPath = writePlanFile(root, {
+			extractionProvider: "claude-code",
+			extractionModel: "haiku",
+			synthesisProvider: "openrouter",
+			synthesisModel: "anthropic/claude-3.5-sonnet",
+		});
+		const deps = freshDeps(basePath, templatesPath);
+
+		await setupWizard({ file: planPath }, deps);
+
+		const agentYaml = readFileSync(join(basePath, "agent.yaml"), "utf-8");
+		expect(agentYaml).toContain("provider: openrouter");
+		expect(agentYaml).toContain("anthropic/claude-3.5-sonnet");
+		expect(agentYaml).toContain("provider: claude-code");
+	});
+
 	it("applies a plan from an inline --json string", async () => {
 		root = mkdtempSync(join(tmpdir(), "setup-headless-json-"));
 		const basePath = join(root, "agents");

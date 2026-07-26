@@ -38,14 +38,21 @@ export function defaultExtractionModel(provider: DirectExtractionProviderChoice)
 	return defaultPipelineModel(provider);
 }
 
+export interface SetupSynthesisOverride {
+	readonly provider?: ExtractionProviderChoice;
+	readonly model?: string;
+	readonly endpoint?: string;
+}
+
 export function buildSetupPipeline(
 	provider: ExtractionProviderChoice,
 	model?: string,
 	endpoint?: string,
+	synthesis?: SetupSynthesisOverride,
 ): SetupPipelineConfig {
 	const resolved = model?.trim() || (provider === "acpx" ? "" : defaultExtractionModel(provider));
 	const resolvedEndpoint = endpoint?.trim() || undefined;
-	if (provider === "none") {
+	if (provider === "none" && (!synthesis || !synthesis.provider || synthesis.provider === "none")) {
 		return {
 			enabled: false,
 			extraction: {
@@ -61,18 +68,26 @@ export function buildSetupPipeline(
 		};
 	}
 
+	// Synthesis provider: an explicit override decouples session summaries from
+	// the extraction model. When absent, synthesis mirrors extraction (legacy).
+	const synthProvider = synthesis?.provider ?? provider;
+	const synthModel = synthesis?.provider
+		? synthesis.model?.trim() || (synthProvider === "acpx" ? "" : defaultExtractionModel(synthProvider))
+		: resolved;
+	const synthEndpoint = synthesis?.provider ? synthesis.endpoint?.trim() || undefined : resolvedEndpoint;
+
 	return {
-		enabled: true,
+		enabled: provider !== "none",
 		extraction: {
 			provider,
 			model: resolved,
 			...(resolvedEndpoint ? { endpoint: resolvedEndpoint } : {}),
 		},
 		synthesis: {
-			enabled: true,
-			provider,
-			model: resolved,
-			...(resolvedEndpoint ? { endpoint: resolvedEndpoint } : {}),
+			enabled: synthProvider !== "none",
+			provider: synthProvider,
+			model: synthModel,
+			...(synthEndpoint ? { endpoint: synthEndpoint } : {}),
 			timeout: 120000,
 		},
 		semanticContradictionEnabled: true,

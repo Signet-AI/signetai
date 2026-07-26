@@ -84,6 +84,26 @@ describe("buildSetupPipeline", () => {
 		});
 	});
 
+	it("decouples synthesis from extraction when an override provider is given", () => {
+		const pipeline = buildSetupPipeline("claude-code", "haiku", undefined, {
+			provider: "openrouter",
+			model: "anthropic/claude-3.5-sonnet",
+		});
+		expect(pipeline.extraction).toMatchObject({ provider: "claude-code", model: "haiku" });
+		expect(pipeline.synthesis).toMatchObject({
+			enabled: true,
+			provider: "openrouter",
+			model: "anthropic/claude-3.5-sonnet",
+		});
+	});
+
+	it("defaults a distinct synthesis model when only the provider is overridden", () => {
+		const pipeline = buildSetupPipeline("claude-code", "haiku", undefined, { provider: "codex" });
+		expect(pipeline.synthesis.provider).toBe("codex");
+		expect(pipeline.synthesis.model).not.toBe("haiku");
+		expect(pipeline.synthesis.model.length).toBeGreaterThan(0);
+	});
+
 	it("does not invent a generic ACPX model when no harness agent is known", () => {
 		expect(buildSetupPipeline("acpx").extraction.model).toBe("");
 		expect(buildSetupPipeline("acpx").synthesis?.model).toBe("");

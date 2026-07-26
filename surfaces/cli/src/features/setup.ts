@@ -316,6 +316,9 @@ export function renderSetupPlanSummary(plan: SetupPlan): string {
 		row("Model:", plan.extractionModel || chalk.dim("(default)"));
 		if (plan.extractionEndpoint) row("Endpoint:", plan.extractionEndpoint);
 	}
+	if (plan.synthesisProvider && plan.synthesisProvider !== plan.extractionProvider) {
+		row("Synthesis:", `${plan.synthesisProvider}${plan.synthesisModel ? ` (${plan.synthesisModel})` : ""}`);
+	}
 
 	section("Plugins & network");
 	row("Secrets:", plan.signetSecretsEnabled ? "enabled" : "disabled");
@@ -433,6 +436,13 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 	const requestedExtractionProvider = deps.normalizeChoice(rawExtractionProvider, EXTRACTION_PROVIDER_CHOICES);
 	const rawExtractionEndpoint = deps.normalizeStringValue(options.extractionEndpoint);
 	const requestedExtractionEndpoint = normalizeHttpEndpoint(rawExtractionEndpoint);
+	const requestedSynthesisProvider = deps.normalizeChoice(options.synthesisProvider, EXTRACTION_PROVIDER_CHOICES);
+	const requestedSynthesisEndpoint = normalizeHttpEndpoint(deps.normalizeStringValue(options.synthesisEndpoint));
+	if (options.synthesisProvider && !requestedSynthesisProvider) {
+		failSetupValidation(
+			`Unknown --synthesis-provider value: ${options.synthesisProvider}. Valid choices: ${EXTRACTION_PROVIDER_CHOICES.join(", ")}.`,
+		);
+	}
 	const existingName = readString(existingConfig.name) ?? readString(existingAgent.name) ?? "My Agent";
 	const existingDesc =
 		readString(existingConfig.description) ?? readString(existingAgent.description) ?? "Personal AI assistant";
@@ -1287,6 +1297,45 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		extractionEndpoint = normalizeHttpEndpoint(endpointInput) ?? DEFAULT_OPENAI_COMPATIBLE_ENDPOINT;
 	}
 
+	// Optional distinct synthesis provider (session summaries). When unset,
+	// synthesis mirrors extraction.
+	let synthesisProvider: ExtractionProviderChoice | undefined;
+	let synthesisModel: string | undefined;
+	let synthesisEndpoint: string | undefined;
+	if (nonInteractive) {
+		synthesisProvider = requestedSynthesisProvider ?? undefined;
+		synthesisModel = deps.normalizeStringValue(options.synthesisModel) ?? undefined;
+		synthesisEndpoint = requestedSynthesisEndpoint ?? undefined;
+	} else if (extractionProvider !== "none") {
+		const distinctSynthesis = await confirm({
+			message: "Use a different provider for session summaries (synthesis)?",
+			default: false,
+		});
+		if (distinctSynthesis) {
+			console.log();
+			synthesisProvider = await select({
+				message: "Synthesis provider:",
+				choices: EXTRACTION_PROVIDER_CHOICES.filter((p) => p !== "none").map((p) => ({
+					value: p,
+					name: p,
+				})),
+			});
+			console.log();
+			synthesisModel = await select({
+				message: "Which model for synthesis?",
+				choices: modelChoices(synthesisProvider),
+			});
+			if (synthesisProvider === "openai-compatible") {
+				const epInput = await input({
+					message: "Synthesis endpoint:",
+					default: synthesisEndpoint ?? DEFAULT_OPENAI_COMPATIBLE_ENDPOINT,
+					validate: (value) => normalizeHttpEndpoint(value) !== undefined || "Enter an http:// or https:// URL.",
+				});
+				synthesisEndpoint = normalizeHttpEndpoint(epInput) ?? DEFAULT_OPENAI_COMPATIBLE_ENDPOINT;
+			}
+		}
+	}
+
 	const wantAdvanced = nonInteractive
 		? false
 		: await confirm({
@@ -1364,6 +1413,9 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		extractionProvider,
 		extractionModel,
 		extractionEndpoint,
+		synthesisProvider,
+		synthesisModel,
+		synthesisEndpoint,
 		searchBalance,
 		searchTopK,
 		searchMinScore,

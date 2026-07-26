@@ -111,6 +111,15 @@ describe("setupPlanSchema", () => {
 		expect(parseSetupPlan(plan).extractionProvider).toBe("openai-compatible");
 	});
 
+	it("accepts a distinct synthesis provider", () => {
+		const plan = basePlan({ synthesisProvider: "openrouter", synthesisModel: "anthropic/claude-3.5-sonnet" });
+		expect(parseSetupPlan(plan).synthesisProvider).toBe("openrouter");
+	});
+
+	it("rejects openai-compatible synthesis without an endpoint", () => {
+		expect(() => parseSetupPlan(basePlan({ synthesisProvider: "openai-compatible" }))).toThrow("synthesisEndpoint");
+	});
+
 	it("rejects unknown top-level keys (strict contract)", () => {
 		const plan = { ...basePlan(), typoField: true };
 		expect(() => parseSetupPlan(plan)).toThrow();

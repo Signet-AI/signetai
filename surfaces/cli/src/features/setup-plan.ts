@@ -76,6 +76,9 @@ export const setupPlanSchema = z
 		extractionProvider: extractionProviderSchema,
 		extractionModel: z.string(),
 		extractionEndpoint: httpEndpointSchema,
+		synthesisProvider: extractionProviderSchema.optional(),
+		synthesisModel: z.string().optional(),
+		synthesisEndpoint: httpEndpointSchema,
 		searchBalance: z.number().min(0).max(1),
 		searchTopK: z.number().int().positive(),
 		searchMinScore: z.number().min(0).max(1),
@@ -97,6 +100,13 @@ export const setupPlanSchema = z
 				code: "custom",
 				message: "openai-compatible extraction requires extractionEndpoint",
 				path: ["extractionEndpoint"],
+			});
+		}
+		if (plan.synthesisProvider === "openai-compatible" && !plan.synthesisEndpoint) {
+			ctx.addIssue({
+				code: "custom",
+				message: "openai-compatible synthesis requires synthesisEndpoint",
+				path: ["synthesisEndpoint"],
 			});
 		}
 	});
