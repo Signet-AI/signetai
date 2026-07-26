@@ -802,6 +802,34 @@ describe("setupWizard headless plan path", () => {
 		}
 	});
 
+	it("refuses to overwrite an existing installation", async () => {
+		root = mkdtempSync(join(tmpdir(), "setup-headless-existing-"));
+		const basePath = join(root, "agents");
+		const templatesPath = join(root, "templates");
+		writeIdentityTemplates(templatesPath);
+		const planPath = writePlanFile(root);
+		const deps = stubDeps({
+			AGENTS_DIR: basePath,
+			getTemplatesDir: mock(() => templatesPath),
+			normalizeAgentPath: mock((p: string) => p),
+			detectExistingSetup: mock(() => fakeDetection(basePath)),
+		});
+
+		const exitSpy = spyOn(process, "exit").mockImplementation(((code?: string | number | null) => {
+			throw new Error(`process.exit:${code ?? ""}`);
+		}) as never);
+		const errorSpy = spyOn(console, "error").mockImplementation(() => {});
+		try {
+			await expect(setupWizard({ file: planPath }, deps)).rejects.toThrow("process.exit:1");
+			expect(String(errorSpy.mock.calls[0]?.[0] ?? "")).toContain("existing Signet installation");
+			// Nothing was written.
+			expect(existsSync(join(basePath, "agent.yaml"))).toBe(false);
+		} finally {
+			exitSpy.mockRestore();
+			errorSpy.mockRestore();
+		}
+	});
+
 	it("rejects a plan that fails validation", async () => {
 		root = mkdtempSync(join(tmpdir(), "setup-headless-invalid-"));
 		const basePath = join(root, "agents");
@@ -831,8 +859,8 @@ describe("setupWizard headless plan path", () => {
 			detectExistingSetup: mock(() => fakeDetection(basePath)),
 		});
 
-		const originalTty = process.stdout.isTTY;
-		Object.defineProperty(process.stdout, "isTTY", { value: false, configurable: true });
+		const originalTty = process.stdin.isTTY;
+		Object.defineProperty(process.stdin, "isTTY", { value: false, configurable: true });
 		const exitSpy = spyOn(process, "exit").mockImplementation(((code?: string | number | null) => {
 			throw new Error(`process.exit:${code ?? ""}`);
 		}) as never);
@@ -843,7 +871,7 @@ describe("setupWizard headless plan path", () => {
 		} finally {
 			exitSpy.mockRestore();
 			errorSpy.mockRestore();
-			Object.defineProperty(process.stdout, "isTTY", { value: originalTty, configurable: true });
+			Object.defineProperty(process.stdin, "isTTY", { value: originalTty, configurable: true });
 		}
 	});
 });

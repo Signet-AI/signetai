@@ -42,7 +42,7 @@ const identityPresetSchema = z.enum(
 );
 const identitySessionKindSchema = z.enum(["dreaming", "heartbeat", "bootstrap"]);
 
-const identityContextFileSchema = z.object({
+const identityContextFileSchema = z.strictObject({
 	path: z.string(),
 	role: z.string().optional(),
 	budget: z.number().optional(),
@@ -53,38 +53,53 @@ const identitySpecialFileSchema = identityContextFileSchema.extend({
 	kind: identitySessionKindSchema,
 });
 
+// Single regex enforced identically by both parseSetupPlan (runtime) and the
+// published --schema (pattern). Avoids zod .url(), whose constraint does not
+// round-trip into z.toJSONSchema.
 const httpEndpointSchema = z
 	.string()
-	.url()
-	.regex(/^https?:\/\//, "must be an http:// or https:// URL")
+	.regex(/^https?:\/\/\S+$/, "must be an http:// or https:// URL")
+	.describe("Required when extractionProvider is 'openai-compatible'")
 	.optional();
 
-export const setupPlanSchema = z.object({
-	agentName: z.string(),
-	agentDescription: z.string(),
-	networkMode: networkModeSchema,
-	harnesses: z.array(harnessSchema),
-	openclawRuntimePath: openclawRuntimeSchema,
-	configureOpenClawWs: z.boolean(),
-	embeddingProvider: embeddingProviderSchema,
-	embeddingModel: z.string(),
-	embeddingDimensions: z.number().int().nonnegative(),
-	extractionProvider: extractionProviderSchema,
-	extractionModel: z.string(),
-	extractionEndpoint: httpEndpointSchema,
-	searchBalance: z.number().min(0).max(1),
-	searchTopK: z.number().int().positive(),
-	searchMinScore: z.number().min(0).max(1),
-	memorySessionBudget: z.number().int().positive(),
-	memoryDecayRate: z.number().min(0).max(1),
-	gitEnabled: z.boolean(),
-	signetSecretsEnabled: z.boolean(),
-	graphiqEnabled: z.boolean(),
-	identityMode: identityModeSchema,
-	identityPreset: identityPresetSchema,
-	startupIdentityFiles: z.array(identityContextFileSchema),
-	specialIdentityFiles: z.array(identitySpecialFileSchema),
-});
+export const setupPlanSchema = z
+	.strictObject({
+		agentName: z.string(),
+		agentDescription: z.string(),
+		networkMode: networkModeSchema,
+		harnesses: z.array(harnessSchema),
+		openclawRuntimePath: openclawRuntimeSchema,
+		configureOpenClawWs: z.boolean(),
+		embeddingProvider: embeddingProviderSchema,
+		embeddingModel: z.string(),
+		embeddingDimensions: z.number().int().nonnegative(),
+		extractionProvider: extractionProviderSchema,
+		extractionModel: z.string(),
+		extractionEndpoint: httpEndpointSchema,
+		searchBalance: z.number().min(0).max(1),
+		searchTopK: z.number().int().positive(),
+		searchMinScore: z.number().min(0).max(1),
+		memorySessionBudget: z.number().int().positive(),
+		memoryDecayRate: z.number().min(0).max(1),
+		gitEnabled: z.boolean(),
+		signetSecretsEnabled: z.boolean(),
+		graphiqEnabled: z.boolean(),
+		identityMode: identityModeSchema,
+		identityPreset: identityPresetSchema,
+		startupIdentityFiles: z.array(identityContextFileSchema),
+		specialIdentityFiles: z.array(identitySpecialFileSchema),
+	})
+	.superRefine((plan, ctx) => {
+		// openai-compatible extraction has no implicit endpoint; the interactive
+		// wizard defaults one, but a headless --file plan must state it.
+		if (plan.extractionProvider === "openai-compatible" && !plan.extractionEndpoint) {
+			ctx.addIssue({
+				code: "custom",
+				message: "openai-compatible extraction requires extractionEndpoint",
+				path: ["extractionEndpoint"],
+			});
+		}
+	});
 
 export type SetupPlan = z.infer<typeof setupPlanSchema>;
 

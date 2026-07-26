@@ -254,8 +254,8 @@ async function buildHeadlessApplyContext(
 	basePath: string,
 	plan: SetupPlan,
 	deps: SetupDeps,
+	existingAgentsDir: boolean,
 ): Promise<SetupApplyContext> {
-	const existing = deps.detectExistingSetup(basePath);
 	const { availableExtractionProviders, acpxBin } = await probeExtractionEnvironment();
 	let openclawConfigCount = 0;
 	if (plan.harnesses.includes("openclaw")) {
@@ -263,7 +263,7 @@ async function buildHeadlessApplyContext(
 	}
 	return {
 		basePath,
-		existingAgentsDir: existing.agentsDir,
+		existingAgentsDir,
 		nonInteractive: true,
 		allowUnprotectedWorkspace: options.allowUnprotectedWorkspace === true,
 		createLocalBackup: options.createLocalBackup === true,
@@ -342,15 +342,23 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 			console.log(JSON.stringify(plan, null, 2));
 			return;
 		}
-		const context = await buildHeadlessApplyContext(options, basePath, plan, deps);
+		const existing = deps.detectExistingSetup(basePath);
+		if (hasExistingAgentState(existing)) {
+			failSetupValidation(
+				`An existing Signet installation was found at ${basePath}.`,
+				"--file/--json performs a fresh setup. To reconfigure an existing install, run the interactive wizard or use --non-interactive with flags.",
+			);
+		}
+		const context = await buildHeadlessApplyContext(options, basePath, plan, deps, existing.agentsDir);
 		await runFreshSetup(plan, context, deps);
 		return;
 	}
 
-	// Fail closed: never block on an interactive prompt when stdin/stdout is not a
-	// TTY (piped, agent, CI). Headless callers must opt in via --non-interactive
-	// (flags) or --file/--json (plan).
-	if (!options.nonInteractive && !process.stdout.isTTY) {
+	// Fail closed: never block on an interactive prompt when stdin is not a TTY
+	// (piped, agent, CI). Headless callers must opt in via --non-interactive
+	// (flags) or --file/--json (plan). Checking stdin (not stdout) still allows
+	// `signet setup | tee log` where stdin remains interactive.
+	if (!options.nonInteractive && !process.stdin.isTTY) {
 		failSetupValidation(
 			"signet setup is interactive and requires a TTY.",
 			"For headless use, pass --non-interactive with explicit flags, or --file/--json with a setup plan (see --schema).",

@@ -99,6 +99,30 @@ describe("setupPlanSchema", () => {
 		expect(() => parseSetupPlan(bad)).toThrow("kind");
 	});
 
+	it("rejects openai-compatible extraction without an endpoint", () => {
+		expect(() => parseSetupPlan(basePlan({ extractionProvider: "openai-compatible" }))).toThrow("extractionEndpoint");
+	});
+
+	it("accepts openai-compatible extraction with an endpoint", () => {
+		const plan = basePlan({
+			extractionProvider: "openai-compatible",
+			extractionEndpoint: "http://127.0.0.1:1234/v1",
+		});
+		expect(parseSetupPlan(plan).extractionProvider).toBe("openai-compatible");
+	});
+
+	it("rejects unknown top-level keys (strict contract)", () => {
+		const plan = { ...basePlan(), typoField: true };
+		expect(() => parseSetupPlan(plan)).toThrow();
+	});
+
+	it("rejects unknown keys in identity file entries", () => {
+		const plan = basePlan({
+			startupIdentityFiles: [{ path: "AGENTS.md", bogus: true } as never],
+		});
+		expect(() => parseSetupPlan(plan)).toThrow();
+	});
+
 	it("rejects a non-http extraction endpoint", () => {
 		expect(() => parseSetupPlan(basePlan({ extractionEndpoint: "ftp://example.test/v1" }))).toThrow(
 			"extractionEndpoint",
