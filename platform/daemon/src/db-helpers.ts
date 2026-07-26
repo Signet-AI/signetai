@@ -3,7 +3,7 @@
  */
 
 import { createRequire } from "node:module";
-import type { WriteDb } from "./db-accessor";
+import { type ReadDb, type WriteDb, readVecEmbeddingDimensions } from "./db-accessor";
 
 // Try to load native Rust implementation, fall back to pure TS
 let native: typeof import("@signet/native") | null = null;
@@ -63,6 +63,26 @@ function vecTableExists(db: WriteDb): boolean {
 	} catch {
 		return false;
 	}
+}
+
+/**
+ * Read the dimension the live vec_embeddings virtual table is pinned to, parsed
+ * from its CREATE schema. Returns null when the table is missing or its schema
+ * does not declare a FLOAT[N] embedding column (e.g. the test double, or a
+ * non-sqlite-vec fallback). Callers use this to detect a dimension mismatch
+ * BEFORE writing: syncVecInsert silently swallows the vec0 dimension error,
+ * which would otherwise leave vec_embeddings serving stale vectors.
+ */
+export function readLiveVecDimensions(db: ReadDb): number | null {
+	let row: { sql: string } | undefined;
+	try {
+		row = db.prepare("SELECT sql FROM sqlite_master WHERE name = 'vec_embeddings' AND type = 'table'").get() as
+			| { sql: string }
+			| undefined;
+	} catch {
+		return null;
+	}
+	return readVecEmbeddingDimensions(row?.sql);
 }
 
 /**
@@ -149,9 +169,6 @@ export function syncVecDeleteBySourceExceptHash(
  * Check whether a table exists in the SQLite database.
  * Replaces 8+ local copies across the daemon codebase.
  */
-export function tableExists(
-	db: { prepare(sql: string): { get(...args: unknown[]): unknown } },
-	name: string,
-): boolean {
+export function tableExists(db: { prepare(sql: string): { get(...args: unknown[]): unknown } }, name: string): boolean {
 	return db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(name) !== undefined;
 }

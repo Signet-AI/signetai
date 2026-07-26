@@ -17,6 +17,7 @@ import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
 import { toFtsSchemaQueryDb } from "./db-accessor";
 import {
 	countChanges,
+	readLiveVecDimensions,
 	syncVecDeleteByEmbeddingIds,
 	syncVecDeleteBySourceExceptHash,
 	syncVecInsert,
@@ -880,17 +881,20 @@ export async function reembedModelMigration(
 	batchSize = DEFAULT_REEMBED_BATCH,
 	dryRun = false,
 	all = false,
+	readVecDimensions: (db: ReadDb) => number | null = readLiveVecDimensions,
 ): Promise<RepairResult> {
 	const action = "reembedModelMigration";
 	const gate = checkRepairGate(cfg, ctx, limiter, action, 0, cfg.repair.reembedHourlyBudget);
 	if (!gate.allowed) return { action, success: false, affected: 0, message: gate.reason ?? "denied by policy gate" };
 	const size =
 		Number.isFinite(batchSize) && batchSize > 0 ? Math.min(500, Math.floor(batchSize)) : DEFAULT_REEMBED_BATCH;
-	const { rows, totalMatching, sources } = accessor.withReadDb((db) => ({
+	const { rows, totalMatching, sources, liveVecDimensions } = accessor.withReadDb((db) => ({
 		rows: listEmbeddingMigrationRows(db, embeddingCfg.model, embeddingCfg.dimensions, all, size, agentId),
 		totalMatching: countEmbeddingMigrationRows(db, embeddingCfg.model, embeddingCfg.dimensions, all, agentId),
 		sources: listEmbeddingMigrationSources(db, embeddingCfg.model, embeddingCfg.dimensions, all, agentId),
+		liveVecDimensions: readVecDimensions(db),
 	}));
+	const vecDimensionMismatch = liveVecDimensions !== null && liveVecDimensions !== embeddingCfg.dimensions;
 	const details = {
 		selected: totalMatching,
 		selectedThisBatch: rows.length,
@@ -900,6 +904,7 @@ export async function reembedModelMigration(
 		sources: sources.map((source) => ({ ...source, provider: "not-recorded" })),
 		target: { provider: embeddingCfg.provider, model: embeddingCfg.model, dimensions: embeddingCfg.dimensions },
 		estimatedBatches: Math.ceil(totalMatching / size),
+		vecDimensions: liveVecDimensions,
 		vectorIndexRebuildRequired: sources.some(
 			(source) => source.dimensions !== null && source.dimensions !== embeddingCfg.dimensions,
 		),
@@ -913,6 +918,22 @@ export async function reembedModelMigration(
 			totalMatching,
 			details,
 		};
+	// Refuse a live run when the vec_embeddings virtual table is pinned to a
+	// different dimension than the configured target. syncVecInsert would
+	// otherwise throw a dimension mismatch that db-helpers silently swallows,
+	// leaving embeddings updated but vec_embeddings serving stale vectors until
+	// a daemon restart. The operator must restart the daemon (which rebuilds
+	// the vec table at the new dimension) and then re-run the migration.
+	if (vecDimensionMismatch) {
+		return {
+			action,
+			success: false,
+			affected: 0,
+			message: `vector index is FLOAT[${liveVecDimensions}] but the configured target is FLOAT[${embeddingCfg.dimensions}]; restart the daemon to resize the vector index, then re-run the migration`,
+			totalMatching,
+			details,
+		};
+	}
 	let written = 0;
 	let failed = 0;
 	for (const row of rows) {
@@ -931,29 +952,46 @@ export async function reembedModelMigration(
 			failed++;
 			continue;
 		}
-		accessor.withWriteTx((db) => {
-			const current = db.prepare("SELECT content_hash FROM memories WHERE id = ? AND is_deleted = 0").get(row.id) as
-				| { content_hash: string }
-				| undefined;
-			if (!current) return;
-			const id = crypto.randomUUID();
-			db.prepare(
-				`INSERT INTO embeddings (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at) VALUES (?, ?, ?, ?, 'memory', ?, ?, datetime('now')) ON CONFLICT(content_hash) DO UPDATE SET vector=excluded.vector, dimensions=excluded.dimensions, source_id=excluded.source_id, chunk_text=excluded.chunk_text, created_at=excluded.created_at`,
-			).run(id, current.content_hash, vectorToBlob(vector), vector.length, row.id, row.content);
-			const embedding = db.prepare("SELECT id FROM embeddings WHERE content_hash = ?").get(current.content_hash) as
-				| { id: string }
-				| undefined;
-			if (!embedding) return;
-			syncVecInsert(db, embedding.id, vector);
-			db.prepare("UPDATE memories SET embedding_model = ? WHERE id = ?").run(embeddingCfg.model, row.id);
-			written++;
-		});
+		try {
+			const wrote = accessor.withWriteTx((db): boolean => {
+				const current = db.prepare("SELECT content_hash FROM memories WHERE id = ? AND is_deleted = 0").get(row.id) as
+					| { content_hash: string }
+					| undefined;
+				if (!current) return false;
+				const id = crypto.randomUUID();
+				db.prepare(
+					`INSERT INTO embeddings (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at) VALUES (?, ?, ?, ?, 'memory', ?, ?, datetime('now')) ON CONFLICT(content_hash) DO UPDATE SET vector=excluded.vector, dimensions=excluded.dimensions, source_id=excluded.source_id, chunk_text=excluded.chunk_text, created_at=excluded.created_at`,
+				).run(id, current.content_hash, vectorToBlob(vector), vector.length, row.id, row.content);
+				const embedding = db.prepare("SELECT id FROM embeddings WHERE content_hash = ?").get(current.content_hash) as
+					| { id: string }
+					| undefined;
+				if (!embedding) return false;
+				syncVecInsert(db, embedding.id, vector);
+				db.prepare("UPDATE memories SET embedding_model = ? WHERE id = ?").run(embeddingCfg.model, row.id);
+				return true;
+			});
+			if (wrote) written++;
+		} catch (error) {
+			failed++;
+			logger.warn("pipeline", "re-embed migration: write failed", {
+				memoryId: row.id,
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
 	}
 	const message = `re-embedded ${written} of ${rows.length} selected memories${
 		failed > 0 ? ` (${failed} failed)` : ""
 	}`;
 	if (written > 0) {
-		accessor.withWriteTx((db) => writeRepairAudit(db, action, ctx, written, message));
+		try {
+			accessor.withWriteTx((db) => writeRepairAudit(db, action, ctx, written, message));
+		} catch (error) {
+			// The repair work is already committed per-row; a failed audit write
+			// must not discard the partial-progress result the caller needs.
+			logger.warn("pipeline", "re-embed migration: audit write failed", {
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
 		limiter.record(action);
 	}
 	return {

@@ -306,3 +306,98 @@ describe("registerMemoryCommands recall", () => {
 		expect(capturedTimeout).toBe(30_000);
 	});
 });
+
+describe("registerMemoryCommands embed backfill --all guard", () => {
+	test("refuses --all without --dry-run or --model-mismatch and does not call the daemon", async () => {
+		let calledPath: string | undefined;
+		let calledBody: unknown;
+		const program = new Command();
+		registerMemoryCommands(program, {
+			ensureDaemonForSecrets: async () => true,
+			secretApiCall: async (_method, path, body) => {
+				calledPath = path;
+				calledBody = body;
+				return { ok: true, data: {} };
+			},
+		});
+
+		const prevErr = console.error;
+		let errText = "";
+		console.error = (msg: string) => {
+			errText = msg;
+		};
+		try {
+			await program.parseAsync(["node", "test", "embed", "backfill", "--all"]);
+		} finally {
+			console.error = prevErr;
+		}
+
+		// The bulk operation must not reach the daemon.
+		expect(calledPath).toBeUndefined();
+		expect(calledBody).toBeUndefined();
+		expect(errText).toContain("--all");
+		expect(errText).toContain("--dry-run");
+		expect(process.exitCode).toBe(1);
+		process.exitCode = undefined;
+	});
+
+	test("allows --all with --model-mismatch (explicit migration)", async () => {
+		let calledBody: unknown;
+		const program = new Command();
+		registerMemoryCommands(program, {
+			ensureDaemonForSecrets: async () => true,
+			secretApiCall: async (_method, _path, body) => {
+				calledBody = body;
+				return { ok: true, data: { success: true, affected: 0, message: "ok" } };
+			},
+		});
+
+		await program.parseAsync(["node", "test", "embed", "backfill", "--all", "--model-mismatch"]);
+
+		expect(calledBody).toMatchObject({ all: true });
+	});
+
+	test("surfaces a structured failure message (e.g. dimension-mismatch refusal) to the user", async () => {
+		// Regression guard: repairHttpStatus maps success:false to HTTP 500, so
+		// ok:false arrives with a RepairResult body (message/details, no `error`).
+		// The CLI must surface `message` rather than the generic "Backfill failed",
+		// or the operator never sees the "restart the daemon" guidance.
+		const program = new Command();
+		registerMemoryCommands(program, {
+			ensureDaemonForSecrets: async () => true,
+			secretApiCall: async () => ({
+				ok: false,
+				data: {
+					success: false,
+					message: "vector index is FLOAT[768] but the configured target is FLOAT[3]; restart the daemon",
+				},
+			}),
+		});
+
+		// The !ok branch calls process.exit(1); stub it to throw so the test can
+		// observe the printed message without terminating the runner.
+		const exitSentinel = Symbol("exit");
+		const prevExit = process.exit;
+		const prevStderrWrite = process.stderr.write.bind(process.stderr);
+		let printed = "";
+		process.exit = (() => {
+			throw exitSentinel;
+		}) as unknown as typeof process.exit;
+		process.stderr.write = ((chunk: unknown) => {
+			printed += String(chunk);
+			return true;
+		}) as typeof process.stderr.write;
+		try {
+			await program.parseAsync(["node", "test", "embed", "backfill", "--model-mismatch"]);
+			throw new Error("expected process.exit(1) to have been called");
+		} catch (e) {
+			if (e !== exitSentinel) throw e;
+		} finally {
+			process.exit = prevExit;
+			process.stderr.write = prevStderrWrite;
+		}
+
+		expect(printed).toContain("restart the daemon");
+		expect(printed).toContain("FLOAT[768]");
+	});
+});

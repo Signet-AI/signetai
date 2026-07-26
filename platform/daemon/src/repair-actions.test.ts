@@ -968,6 +968,116 @@ describe("reembedModelMigration", () => {
 		expect(db.prepare("SELECT vector FROM embeddings WHERE source_id = 'model-a'").get() as { vector: Buffer }).toEqual(
 			{ vector: vectorBlob([0.4, 0.5, 0.6]) },
 		);
+	});
+
+	it("refuses a live run and leaves vectors untouched when the vec index is pinned to a different dimension", async () => {
+		// Regression guard: without the pre-check, syncVecInsert's dimension
+		// mismatch error is silently swallowed (db-helpers catch{}), leaving
+		// `embeddings` updated to the new model/dims while `vec_embeddings`
+		// keeps stale vectors under the same id until a daemon restart. The
+		// migration must detect FLOAT[D_old] != target and refuse.
+		const db = new Database(":memory:");
+		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
+		ensureVecTable(db);
+		const accessor = asAccessor(db);
+		const now = new Date().toISOString();
+		db.prepare(
+			`INSERT INTO memories (id, content, content_hash, embedding_model, type, created_at, updated_at, updated_by) VALUES ('model-a', 'old vector', 'hash-a', 'model-a', 'fact', ?, ?, 'test')`,
+		).run(now, now);
+		insertEmbedding(db, { id: "emb-a", sourceId: "model-a", contentHash: "hash-a", vector: [0.1, 0.2, 0.3] });
+
+		const result = await reembedModelMigration(
+			accessor,
+			TEST_CFG,
+			CTX_OPERATOR,
+			createRateLimiter(),
+			async () => [0.4, 0.5, 0.6], // returns 3-dim vectors
+			{ ...TEST_EMBEDDING_CFG, model: "model-b", dimensions: 3 }, // target FLOAT[3]
+			"default",
+			10,
+			false, // live run
+			false,
+			// Inject the live vec dimension the daemon booted under, as if the
+			// operator changed embedding.dimensions in config without restarting.
+			// (sqlite_master is not writable in bun:sqlite, so we inject directly.)
+			() => 768,
+		);
+
+		expect(result.success).toBe(false);
+		expect(result.affected).toBe(0);
+		expect(result.totalMatching).toBe(1);
+		expect(result.message).toContain("restart the daemon");
+		expect(result.details).toMatchObject({ vecDimensions: 768 });
+		// No silent corruption: the memory and its vector are unchanged.
+		expect(db.prepare("SELECT embedding_model FROM memories WHERE id = 'model-a'").get()).toEqual({
+			embedding_model: "model-a",
+		});
+		expect(db.prepare("SELECT vector FROM embeddings WHERE source_id = 'model-a'").get() as { vector: Buffer }).toEqual(
+			{ vector: vectorBlob([0.1, 0.2, 0.3]) },
+		);
+		db.close();
+	});
+
+	it("survives a per-row write failure, records partial progress, and still returns a structured result", async () => {
+		// Regression guard: without try/catch around withWriteTx, a single
+		// transaction failure (SQLITE_BUSY / disk error) propagated as an
+		// opaque 500, skipped the audit write, and lost all counts. The loop
+		// must now record the failure and return partial success.
+		const db = new Database(":memory:");
+		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
+		ensureVecTable(db);
+		const now = new Date().toISOString();
+		db.prepare(
+			`INSERT INTO memories (id, content, content_hash, embedding_model, type, created_at, updated_at, updated_by) VALUES ('m-fail', 'a', 'hash-fail', 'model-a', 'fact', ?, ?, 'test')`,
+		).run(now, now);
+		const later = new Date(new Date(now).getTime() + 1000).toISOString();
+		db.prepare(
+			`INSERT INTO memories (id, content, content_hash, embedding_model, type, created_at, updated_at, updated_by) VALUES ('m-ok', 'b', 'hash-ok', 'model-a', 'fact', ?, ?, 'test')`,
+		).run(later, later);
+		insertEmbedding(db, { id: "emb-fail", sourceId: "m-fail", contentHash: "hash-fail", vector: [0.1, 0.2, 0.3] });
+		insertEmbedding(db, { id: "emb-ok", sourceId: "m-ok", contentHash: "hash-ok", vector: [0.1, 0.2, 0.3] });
+
+		const inner = asAccessor(db);
+		let writeCalls = 0;
+		const flaky: DbAccessor = {
+			withWriteTx<T>(fn: (wdb: WriteDb) => T): T {
+				writeCalls++;
+				// First per-row write (m-fail) throws; the rest (m-ok + audit) delegate.
+				if (writeCalls === 1) throw new Error("simulated write failure");
+				return inner.withWriteTx(fn);
+			},
+			withReadDb<T>(fn: (rdb: ReadDb) => T): T {
+				return inner.withReadDb(fn);
+			},
+			close() {
+				inner.close();
+			},
+		};
+
+		const result = await reembedModelMigration(
+			flaky,
+			TEST_CFG,
+			CTX_OPERATOR,
+			createRateLimiter(),
+			async () => [0.4, 0.5, 0.6],
+			{ ...TEST_EMBEDDING_CFG, model: "model-b" },
+			"default",
+			10,
+			false,
+			false,
+		);
+
+		expect(result.success).toBe(false); // one row failed
+		expect(result.affected).toBe(1); // partial progress
+		expect((result.details as { failed: number }).failed).toBe(1);
+		expect(result.message).toContain("1 failed");
+		// The non-failing row was updated; the failing row was not.
+		expect(db.prepare("SELECT embedding_model FROM memories WHERE id = 'm-ok'").get()).toEqual({
+			embedding_model: "model-b",
+		});
+		expect(db.prepare("SELECT embedding_model FROM memories WHERE id = 'm-fail'").get()).toEqual({
+			embedding_model: "model-a",
+		});
 		db.close();
 	});
 });

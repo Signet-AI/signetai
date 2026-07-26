@@ -239,6 +239,18 @@ export function registerMemoryCommands(program: Command, deps: MemoryDeps): void
 		.action(async (options) => {
 			if (!(await deps.ensureDaemonForSecrets())) return;
 
+			// Guard the bulk operation: --all re-embeds every active memory for the
+			// agent, so require an explicit migration (--model-mismatch) or a
+			// preview (--dry-run). Without this, a stray `--all` silently spends
+			// embedding-provider budget and overwrites every vector.
+			if (options.all === true && options.dryRun !== true && options.modelMismatch !== true) {
+				console.error(
+					"--all re-embeds every active memory; pass --dry-run to preview or --model-mismatch to confirm a migration.",
+				);
+				process.exitCode = 1;
+				return;
+			}
+
 			const migration = options.modelMismatch === true || options.all === true;
 			const spinner = ora(
 				options.dryRun
@@ -258,9 +270,15 @@ export function registerMemoryCommands(program: Command, deps: MemoryDeps): void
 					...(migration ? { all: options.all === true } : {}),
 				},
 			);
-			const err = typeof data === "object" && data !== null && "error" in data ? data.error : undefined;
-			if (!ok || typeof err === "string") {
-				spinner.fail(typeof err === "string" ? err : "Backfill failed");
+			const dataObj = typeof data === "object" && data !== null ? (data as Record<string, unknown>) : {};
+			const err = typeof dataObj.error === "string" ? dataObj.error : undefined;
+			const failureMessage = typeof dataObj.message === "string" ? dataObj.message : undefined;
+			// Failure when the request did not succeed, or a legacy `error` field is
+			// present even on a 2xx. Surface `message` (e.g. "restart the daemon")
+			// when no dedicated `error` text is set, so structured refusals and
+			// partial-failure results reach the user instead of "Backfill failed".
+			if (!ok || err !== undefined) {
+				spinner.fail(err ?? failureMessage ?? "Backfill failed");
 				process.exit(1);
 			}
 
@@ -296,6 +314,16 @@ export function registerMemoryCommands(program: Command, deps: MemoryDeps): void
 						);
 					}
 					if (target) console.log(`  Target: ${target.provider}/${target.model} (${target.dimensions} dimensions)`);
+					if (
+						typeof details.vecDimensions === "number" &&
+						details.vecDimensions !== (target?.dimensions as number | undefined)
+					) {
+						console.log(
+							chalk.yellow(
+								`  Live vec index is FLOAT[${details.vecDimensions}] — restart the daemon before a live run to resize it.`,
+							),
+						);
+					}
 					if (typeof details.estimatedBatches === "number") {
 						console.log(`  Estimated batches: ${details.estimatedBatches}`);
 					}
