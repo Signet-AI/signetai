@@ -452,6 +452,7 @@ describe("getDaemonStatus", () => {
 			workerRunning: true,
 			ready: true,
 			blockedReason: null,
+			hasWorkloadState: true,
 		});
 		expect(status.extractionWorker).toEqual({
 			running: true,

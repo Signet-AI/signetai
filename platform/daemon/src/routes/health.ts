@@ -144,7 +144,17 @@ interface InferenceCheck {
 
 /** Inference gates readiness only when the extraction route is fully blocked; degraded still serves. */
 function checkInference(): { ok: boolean; detail: InferenceCheck; reason: string | null } {
-	const cfg = loadMemoryConfig(AGENTS_DIR);
+	let cfg: ReturnType<typeof loadMemoryConfig>;
+	try {
+		cfg = loadMemoryConfig(getCurrentAgentsDir());
+	} catch (err) {
+		const msg = err instanceof Error ? err.message : String(err);
+		return {
+			ok: false,
+			detail: { status: "unknown", configured: null, effective: "none", reason: msg },
+			reason: `inference config unavailable: ${msg}`,
+		};
+	}
 	const extraction = getExtractionWorkloadState({
 		enabled: cfg.pipelineV2.enabled,
 		paused: cfg.pipelineV2.paused,

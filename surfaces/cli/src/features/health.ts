@@ -434,7 +434,11 @@ export function getExtractionStatusNotice(
 		return {
 			level: extraction.status === "blocked" ? "error" : "warn",
 			title,
-			detail: `configured: ${extraction.configured ?? "none"}, resolved: ${extraction.resolved ?? "none"}, effective: ${extraction.effective ?? "none"}, worker running: ${extraction.workerRunning}${extraction.blockedReason ? ` — ${extraction.blockedReason}` : ""}`,
+			detail: `configured: ${extraction.configured ?? "none"}, resolved: ${extraction.resolved ?? "none"}, effective: ${extraction.effective ?? "none"}, worker running: ${extraction.workerRunning}${extraction.blockedReason ? ` — ${extraction.blockedReason}` : ""}${
+				extraction.status === "blocked" && extraction.blockedBy && extraction.blockedBy.length > 0
+					? ` — blocked by: ${extraction.blockedBy.join("; ")}`
+					: ""
+			}`,
 		};
 	}
 	if (extraction && daemon.running && extraction.status === "blocked") {

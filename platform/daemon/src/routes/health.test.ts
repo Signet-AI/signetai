@@ -149,6 +149,34 @@ describe("GET /health/ready", () => {
 			expect(typeof reason).toBe("string");
 		}
 	});
+
+	test("returns a structured 503 (not a 500) when loadMemoryConfig throws on a misconfigured agent.yaml", async () => {
+		// Regression guard: checkInference calls loadMemoryConfig on every probe.
+		// A misconfigured pipeline (extraction.provider='command' with no command
+		// block) throws PipelineConfigValidationError; without a try/catch this
+		// turned /health/ready into an unhandled 500. It must stay a structured 503.
+		writeFileSync(
+			join(dir, "agent.yaml"),
+			"memory:\n  pipelineV2:\n    enabled: true\n    extraction:\n      provider: command\n",
+		);
+
+		const app = makeApp();
+		const res = await app.request("http://localhost/health/ready");
+
+		expect(res.status).toBe(503);
+		const body = (await res.json()) as {
+			status: string;
+			reasons: string[];
+			checks: { inference: { status: string } };
+		};
+		expect(body.status).toBe("not_ready");
+		expect(Array.isArray(body.reasons)).toBe(true);
+		// The misconfig is caught by whichever of checkEmbedding/checkInference runs
+		// first (both call loadMemoryConfig); either way the endpoint must return a
+		// structured 503 with a config-unavailable reason, never an unhandled 500.
+		expect(body.reasons.some((r) => /config unavailable/i.test(r))).toBe(true);
+		expect(body.checks.inference.status).toBe("unknown");
+	});
 });
 
 describe("GET /health (back-compat)", () => {
