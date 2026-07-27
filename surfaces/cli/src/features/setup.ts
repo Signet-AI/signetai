@@ -1395,7 +1395,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 			if (synthesisProvider === "openai-compatible") {
 				const epInput = await input({
 					message: "Synthesis endpoint:",
-					default: synthesisEndpoint ?? DEFAULT_OPENAI_COMPATIBLE_ENDPOINT,
+					default: DEFAULT_OPENAI_COMPATIBLE_ENDPOINT,
 					validate: (value) => normalizeHttpEndpoint(value) !== undefined || "Enter an http:// or https:// URL.",
 				});
 				synthesisEndpoint = normalizeHttpEndpoint(epInput) ?? DEFAULT_OPENAI_COMPATIBLE_ENDPOINT;
