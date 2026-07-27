@@ -410,10 +410,13 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		);
 	}
 
-	console.log(deps.signetLogo());
-	console.log();
-
 	const nonInteractive = options.nonInteractive === true;
+	if (!nonInteractive) {
+		console.log(deps.signetBanner());
+	} else {
+		console.log(deps.signetLogo());
+	}
+	console.log();
 	const explicitPath = deps.normalizeStringValue(options.path);
 	let basePath = deps.normalizeAgentPath(explicitPath ?? deps.AGENTS_DIR);
 

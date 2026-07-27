@@ -70,6 +70,7 @@ function stubDeps(overrides: Partial<SetupDeps> = {}): SetupDeps {
 		parseSearchBalanceValue: mock(() => null),
 		showStatus: mock(async () => {}),
 		signetLogo: mock(() => ""),
+		signetBanner: mock(() => ""),
 		startDaemon: mock(async () => true),
 		getSkillsSourceDir: mock(() => "/tmp/skills"),
 		syncBuiltinSkills: mock(() => ({ installed: [], updated: [], skipped: [] })),

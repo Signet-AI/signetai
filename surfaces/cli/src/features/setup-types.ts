@@ -66,6 +66,7 @@ export interface SetupDeps {
 	readonly parseSearchBalanceValue: (value: unknown) => number | null;
 	readonly showStatus: (options: { path?: string; json?: boolean }) => Promise<void>;
 	readonly signetLogo: () => string;
+	readonly signetBanner: () => string;
 	readonly startDaemon: (agentsDir?: string) => Promise<boolean>;
 	readonly getSkillsSourceDir: () => string;
 	readonly syncBuiltinSkills: (

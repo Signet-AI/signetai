@@ -1004,6 +1004,7 @@ registerAppCommands(program, {
 			parseSearchBalanceValue,
 			showStatus: (statusOptions) => showStatus(statusOptions, healthDeps),
 			signetLogo,
+			signetBanner: () => signetBanner({ version: VERSION }),
 			startDaemon,
 			syncBuiltinSkills,
 			syncNativeEmbeddingModel,
