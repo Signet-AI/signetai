@@ -36,6 +36,7 @@ export interface SetupWizardOptions {
 	enableDreaming?: boolean;
 	agent?: string[];
 	remoteUrl?: string;
+	obsidianSource?: string[];
 }
 
 export interface SetupDeps {

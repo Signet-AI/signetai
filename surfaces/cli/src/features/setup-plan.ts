@@ -96,6 +96,15 @@ export const setupPlanSchema = z
 			.string()
 			.regex(/^https?:\/\/\S+$/, "must be an http:// or https:// URL")
 			.optional(),
+		sources: z
+			.array(
+				z.strictObject({
+					type: z.literal("obsidian"),
+					path: z.string(),
+					name: z.string().optional(),
+				}),
+			)
+			.optional(),
 		agents: z
 			.array(
 				z.strictObject({

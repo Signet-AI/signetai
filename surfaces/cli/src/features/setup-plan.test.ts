@@ -168,6 +168,11 @@ describe("setupPlanSchema", () => {
 		expect(() => parseSetupPlan(basePlan({ daemonUrl: "ftp://x" }))).toThrow("daemonUrl");
 	});
 
+	it("accepts obsidian sources", () => {
+		const plan = basePlan({ sources: [{ type: "obsidian", path: "/tmp/vault", name: "vault" }] });
+		expect(parseSetupPlan(plan).sources?.[0].path).toBe("/tmp/vault");
+	});
+
 	it("rejects openai-compatible synthesis without an endpoint", () => {
 		expect(() => parseSetupPlan(basePlan({ synthesisProvider: "openai-compatible" }))).toThrow("synthesisEndpoint");
 	});

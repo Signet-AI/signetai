@@ -364,6 +364,9 @@ export function renderSetupPlanSummary(plan: SetupPlan): string {
 	if (plan.agents && plan.agents.length > 0) {
 		row("Agents:", `${plan.agents.length} (${plan.agents.map((a) => a.name).join(", ")})`);
 	}
+	if (plan.sources && plan.sources.length > 0) {
+		row("Sources:", `${plan.sources.length} obsidian vault(s)`);
+	}
 
 	return lines.join("\n");
 }
@@ -1515,6 +1518,24 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		}
 	}
 
+	// Obsidian vault sources (config files the daemon indexes at boot).
+	const sources: { type: "obsidian"; path: string; name?: string }[] = [];
+	if (nonInteractive) {
+		for (const raw of options.obsidianSource ?? []) {
+			const [path, name] = raw.split("::").map((p) => p.trim());
+			if (path) sources.push({ type: "obsidian", path, name: name || undefined });
+		}
+	} else {
+		let addingSource = await confirm({ message: "Connect an Obsidian vault?", default: false });
+		while (addingSource) {
+			const path = await input({ message: "Vault path:", default: basePath });
+			if (!path.trim()) break;
+			const name = (await input({ message: "Source name (optional):" })).trim() || undefined;
+			sources.push({ type: "obsidian", path: path.trim(), name });
+			addingSource = await confirm({ message: "Connect another vault?", default: false });
+		}
+	}
+
 	const plan: SetupPlan = {
 		agentName,
 		agentDescription,
@@ -1546,6 +1567,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		dreamingEnabled,
 		daemonUrl,
 		agents: agents.length > 0 ? agents : undefined,
+		sources: sources.length > 0 ? sources : undefined,
 	};
 
 	const context: SetupApplyContext = {

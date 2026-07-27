@@ -2,6 +2,7 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from
 import { join } from "node:path";
 import { OpenClawConnector } from "@signet/connector-openclaw";
 import {
+	addObsidianSource,
 	buildAgentMemoryConfig,
 	disableGraphiqState,
 	ensureUnifiedSchema,
@@ -189,6 +190,20 @@ export async function runFreshSetup(plan: SetupPlan, context: SetupApplyContext,
 		}
 
 		writeFileSync(join(context.basePath, "agent.yaml"), formatYaml(config));
+
+		// Connect configured sources (config files the daemon indexes at boot).
+		if (plan.sources && plan.sources.length > 0) {
+			for (const src of plan.sources) {
+				if (src.type === "obsidian") {
+					const result = addObsidianSource({ root: src.path, name: src.name }, context.basePath);
+					if (result.ok) {
+						console.log(chalk.dim(`  ✓ Obsidian source: ${result.source.name}`));
+					} else {
+						console.warn(chalk.yellow(`  ⚠ Could not add Obsidian source ${src.path}: ${result.error}`));
+					}
+				}
+			}
+		}
 
 		writeSetupCorePluginRegistry(context.basePath, {
 			signetSecretsEnabled: plan.signetSecretsEnabled,

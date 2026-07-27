@@ -746,6 +746,24 @@ describe("setupWizard headless plan path", () => {
 		}
 	});
 
+	it("connects an obsidian vault source from a plan file", async () => {
+		root = mkdtempSync(join(tmpdir(), "setup-headless-obsidian-"));
+		const basePath = join(root, "agents");
+		const templatesPath = join(root, "templates");
+		const vaultPath = join(root, "vault");
+		writeIdentityTemplates(templatesPath);
+		mkdirSync(vaultPath, { recursive: true });
+		writeFileSync(join(vaultPath, "note.md"), "# note");
+		const planPath = writePlanFile(root, { sources: [{ type: "obsidian", path: vaultPath, name: "my-vault" }] });
+		const deps = freshDeps(basePath, templatesPath);
+
+		await setupWizard({ file: planPath }, deps);
+
+		const sourcesConfig = readFileSync(join(basePath, "sources.json"), "utf-8");
+		expect(sourcesConfig).toContain("my-vault");
+		expect(sourcesConfig).toContain(vaultPath);
+	});
+
 	it("writes a remote daemon URL and skips local daemon start", async () => {
 		root = mkdtempSync(join(tmpdir(), "setup-headless-remote-"));
 		const basePath = join(root, "agents");
