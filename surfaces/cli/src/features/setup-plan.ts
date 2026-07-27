@@ -147,6 +147,17 @@ export const setupPlanSchema = z
 				path: ["aggregateRecallProvider"],
 			});
 		}
+		// Aggregate recall synthesizes extracted memories at query time. With the
+		// pipeline disabled (extraction none) there is nothing to synthesize, so a
+		// distinct aggregate-recall provider would be dead config.
+		if (plan.extractionProvider === "none" && plan.aggregateRecallProvider) {
+			ctx.addIssue({
+				code: "custom",
+				message:
+					"aggregateRecallProvider requires extraction to be enabled (nothing to synthesize without the extraction pipeline)",
+				path: ["aggregateRecallProvider"],
+			});
+		}
 		if (plan.agents) {
 			const seen = new Set<string>();
 			plan.agents.forEach((agent, i) => {

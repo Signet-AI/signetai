@@ -201,8 +201,15 @@ moves to small section modules. Net non-test LOC should drop.
 ## Phase 2 findings (code-verified)
 
 Implemented (config-driven, runtime-honored):
-- **Distinct synthesis route** — `synthesisProvider/Model/Endpoint`; daemon
-  routes a separate `session_synthesis` workload (`routing.ts`, verified).
+- **Distinct aggregate-recall provider** — `aggregateRecallProvider/Model/Endpoint`.
+  Aggregate recall is query-time evidence synthesis; it is the only per-operation
+  override over the extraction provider (the dashboard's main selector reads "memory
+  extraction and synthesis" — session synthesis is NOT a separate provider).
+  Setup writes a modern `inference.targets.aggregation` target bound to
+  `workloads.aggregateRecall`; the daemon merges `inference.*` atop the legacy
+  `pipeline.*` base, so extraction/session-synthesis are unaffected
+  (`parseRoutingConfig`, `inference-router.ts`, verified). pi-ai-only
+  (no harness subprocess — spawn latency would dominate).
 - **dreaming toggle** — `dreamingEnabled` → `memory.dreaming.enabled`;
   `loadDreamingConfig` reads it (`DEFAULT_DREAMING.enabled=false`, verified).
 

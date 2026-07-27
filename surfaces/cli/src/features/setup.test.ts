@@ -862,6 +862,8 @@ describe("setupWizard headless plan path", () => {
 		expect(agentYaml).toContain("aggregateRecall:");
 		expect(agentYaml).toContain("target: aggregation/default");
 		expect(agentYaml).toContain("anthropic/claude-3.5-sonnet");
+		// openrouter must be backed by a resolvable account or the daemon blocks it.
+		expect(agentYaml).toContain("credentialRef: OPENROUTER_API_KEY");
 	});
 
 	it("applies a plan from an inline --json string", async () => {

@@ -262,29 +262,36 @@ function isGeneratedAcpxWorkload(value: unknown): boolean {
  * (parseRoutingConfig overlays inference.* atop the legacy pipeline.* base),
  * so extraction/session-synthesis keep working from the extraction provider.
  *
- * Credentials are not wired inline — provider backends reference an account
- * by family that the user connects separately (same model as extraction).
+ * Mirrors the dashboard's InferenceSection writer: a target bound to
+ * workloads.aggregateRecall (target only, no taskClass — the daemon validates
+ * taskClasses and 'aggregate_recall' is not declared). For the openrouter
+ * family we also create the account block (credentialRef OPENROUTER_API_KEY)
+ * the way compileLegacyRoutingConfig does for extraction, so the daemon can
+ * resolve the credential instead of hard-blocking the target as 'missing'.
  */
 export function buildSetupAggregateRecall(
 	provider: AggregateRecallProviderChoice,
 	model?: string,
 	endpoint?: string,
-): { targets: Record<string, unknown>; workloads: Record<string, unknown> } {
+): { targets: Record<string, unknown>; accounts?: Record<string, unknown>; workloads: Record<string, unknown> } {
 	const resolvedModel = model?.trim() || defaultPipelineModel(provider);
 	const target: Record<string, unknown> = {
 		executor: provider,
 		models: { default: { model: resolvedModel, reasoning: "medium" } },
 	};
+	let accounts: Record<string, unknown> | undefined;
 	if (provider === "openai-compatible") {
 		target.endpoint = endpoint?.trim() || "http://localhost:1234/v1";
 	} else if (provider === "openrouter") {
-		// Reference a connected account by family; the credential is connected
-		// separately (connect wall / secrets), exactly like extraction.
-		target.account = "openrouter";
+		// Reference an account backed by the same env key extraction uses, so the
+		// daemon resolves the credential at call time instead of blocking the target.
+		target.account = "aggregation";
+		accounts = { aggregation: { kind: "api", providerFamily: "openrouter", credentialRef: "OPENROUTER_API_KEY" } };
 	}
 	return {
 		targets: { aggregation: target },
-		workloads: { aggregateRecall: { target: "aggregation/default", taskClass: "aggregate_recall" } },
+		...(accounts ? { accounts } : {}),
+		workloads: { aggregateRecall: { target: "aggregation/default" } },
 	};
 }
 
@@ -292,10 +299,17 @@ export function buildSetupAggregateRecall(
  * acpx route did not). */
 export function applyAggregateRecallRoute(
 	config: Record<string, unknown>,
-	aggregateRecall: { targets: Record<string, unknown>; workloads: Record<string, unknown> },
+	aggregateRecall: {
+		targets: Record<string, unknown>;
+		accounts?: Record<string, unknown>;
+		workloads: Record<string, unknown>;
+	},
 ): void {
 	const existing = (config.inference ?? {}) as Record<string, unknown>;
 	const targets = { ...((existing.targets as Record<string, unknown>) ?? {}), ...aggregateRecall.targets };
 	const workloads = { ...((existing.workloads as Record<string, unknown>) ?? {}), ...aggregateRecall.workloads };
-	config.inference = { ...existing, targets, workloads };
+	const accounts = aggregateRecall.accounts
+		? { ...((existing.accounts as Record<string, unknown>) ?? {}), ...aggregateRecall.accounts }
+		: (existing.accounts as Record<string, unknown> | undefined);
+	config.inference = { ...existing, targets, workloads, ...(accounts ? { accounts } : {}) };
 }

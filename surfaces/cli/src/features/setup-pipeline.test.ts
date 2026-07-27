@@ -237,10 +237,10 @@ describe("buildSetupAggregateRecall", () => {
 			executor: "ollama",
 			models: { default: { model: "qwen3:4b", reasoning: "medium" } },
 		});
-		expect(ar.workloads.aggregateRecall).toEqual({
-			target: "aggregation/default",
-			taskClass: "aggregate_recall",
-		});
+		// No taskClass — the daemon validates taskClasses and 'aggregate_recall' is
+		// not declared; mirror the dashboard writer (target only).
+		expect(ar.workloads.aggregateRecall).toEqual({ target: "aggregation/default" });
+		expect(ar.accounts).toBeUndefined();
 	});
 
 	it("defaults the model when none is given", () => {
@@ -250,14 +250,18 @@ describe("buildSetupAggregateRecall", () => {
 		).toBeGreaterThan(0);
 	});
 
-	it("requires an endpoint for openai-compatible and references an account for openrouter", () => {
+	it("requires an endpoint for openai-compatible and backs openrouter with a resolvable account", () => {
 		expect(buildSetupAggregateRecall("openai-compatible", "m", "http://gw:8000/v1").targets.aggregation).toMatchObject({
 			executor: "openai-compatible",
 			endpoint: "http://gw:8000/v1",
 		});
-		expect(buildSetupAggregateRecall("openrouter", "m").targets.aggregation).toMatchObject({
-			executor: "openrouter",
-			account: "openrouter",
+		const or = buildSetupAggregateRecall("openrouter", "m");
+		expect(or.targets.aggregation).toMatchObject({ executor: "openrouter", account: "aggregation" });
+		// The account must exist or the daemon hard-blocks the target as 'missing'.
+		expect(or.accounts?.aggregation).toMatchObject({
+			kind: "api",
+			providerFamily: "openrouter",
+			credentialRef: "OPENROUTER_API_KEY",
 		});
 	});
 });

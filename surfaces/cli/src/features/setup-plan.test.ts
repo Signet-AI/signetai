@@ -181,6 +181,12 @@ describe("setupPlanSchema", () => {
 		);
 	});
 
+	it("rejects aggregate recall when extraction is disabled (nothing to synthesize)", () => {
+		expect(() =>
+			parseSetupPlan(basePlan({ extractionProvider: "none", aggregateRecallProvider: "ollama", aggregateRecallModel: "qwen3:4b" })),
+		).toThrow("aggregateRecallProvider");
+	});
+
 	it("rejects unknown top-level keys (strict contract)", () => {
 		const plan = { ...basePlan(), typoField: true };
 		expect(() => parseSetupPlan(plan)).toThrow();
