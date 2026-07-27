@@ -1,6 +1,8 @@
 import { describe, expect, it } from "bun:test";
 import {
+	applyAggregateRecallRoute,
 	applySetupInferenceRoute,
+	buildSetupAggregateRecall,
 	buildSetupInference,
 	buildSetupPipeline,
 	defaultAcpxModel,
@@ -84,29 +86,9 @@ describe("buildSetupPipeline", () => {
 		});
 	});
 
-	it("decouples synthesis from extraction when an override provider is given", () => {
-		const pipeline = buildSetupPipeline("claude-code", "haiku", undefined, {
-			provider: "openrouter",
-			model: "anthropic/claude-3.5-sonnet",
-		});
-		expect(pipeline.extraction).toMatchObject({ provider: "claude-code", model: "haiku" });
-		expect(pipeline.synthesis).toMatchObject({
-			enabled: true,
-			provider: "openrouter",
-			model: "anthropic/claude-3.5-sonnet",
-		});
-	});
-
-	it("defaults a distinct synthesis model when only the provider is overridden", () => {
-		const pipeline = buildSetupPipeline("claude-code", "haiku", undefined, { provider: "codex" });
-		expect(pipeline.synthesis.provider).toBe("codex");
-		expect(pipeline.synthesis.model).not.toBe("haiku");
-		expect(pipeline.synthesis.model.length).toBeGreaterThan(0);
-	});
-
 	it("does not invent a generic ACPX model when no harness agent is known", () => {
 		expect(buildSetupPipeline("acpx").extraction.model).toBe("");
-		expect(buildSetupPipeline("acpx").synthesis?.model).toBe("");
+		expect(buildSetupPipeline("acpx").synthesis.model).toBe("");
 	});
 });
 
@@ -245,5 +227,65 @@ describe("buildSetupInference", () => {
 				custom_review: { reasoning: "high", toolsRequired: true, privacy: "local" },
 			},
 		});
+	});
+});
+
+describe("buildSetupAggregateRecall", () => {
+	it("binds a local ollama target to the aggregateRecall workload", () => {
+		const ar = buildSetupAggregateRecall("ollama", "qwen3:4b");
+		expect(ar.targets.aggregation).toMatchObject({
+			executor: "ollama",
+			models: { default: { model: "qwen3:4b", reasoning: "medium" } },
+		});
+		expect(ar.workloads.aggregateRecall).toEqual({
+			target: "aggregation/default",
+			taskClass: "aggregate_recall",
+		});
+	});
+
+	it("defaults the model when none is given", () => {
+		const ar = buildSetupAggregateRecall("openrouter");
+		expect(
+			(ar.targets.aggregation as { models: { default: { model: string } } }).models.default.model.length,
+		).toBeGreaterThan(0);
+	});
+
+	it("requires an endpoint for openai-compatible and references an account for openrouter", () => {
+		expect(buildSetupAggregateRecall("openai-compatible", "m", "http://gw:8000/v1").targets.aggregation).toMatchObject({
+			executor: "openai-compatible",
+			endpoint: "http://gw:8000/v1",
+		});
+		expect(buildSetupAggregateRecall("openrouter", "m").targets.aggregation).toMatchObject({
+			executor: "openrouter",
+			account: "openrouter",
+		});
+	});
+});
+
+describe("applyAggregateRecallRoute", () => {
+	it("creates config.inference when absent", () => {
+		const config: Record<string, unknown> = {};
+		applyAggregateRecallRoute(config, buildSetupAggregateRecall("ollama", "qwen3:4b"));
+		expect(
+			(config.inference as { workloads: { aggregateRecall: { target: string } } }).workloads.aggregateRecall.target,
+		).toBe("aggregation/default");
+	});
+
+	it("merges into an existing inference block without clobbering other targets", () => {
+		const config: Record<string, unknown> = {
+			inference: {
+				targets: { "background-acpx": { executor: "acpx" } },
+				workloads: { memoryExtraction: { target: "background-acpx/default" } },
+			},
+		};
+		applyAggregateRecallRoute(config, buildSetupAggregateRecall("ollama", "qwen3:4b"));
+		const inference = config.inference as {
+			targets: Record<string, unknown>;
+			workloads: Record<string, unknown>;
+		};
+		expect(inference.targets["background-acpx"]).toBeDefined();
+		expect(inference.targets.aggregation).toBeDefined();
+		expect(inference.workloads.memoryExtraction).toBeDefined();
+		expect(inference.workloads.aggregateRecall).toBeDefined();
 	});
 });

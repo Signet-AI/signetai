@@ -7,6 +7,7 @@ import {
 	NETWORK_MODES,
 } from "@signet/core";
 import { z } from "zod";
+import { AGGREGATE_RECALL_PROVIDER_CHOICES } from "./setup-pipeline.js";
 import {
 	EMBEDDING_PROVIDER_CHOICES,
 	EXTRACTION_PROVIDER_CHOICES,
@@ -33,6 +34,7 @@ const networkModeSchema = z.enum(NETWORK_MODES);
 const harnessSchema = z.enum(SETUP_HARNESS_CHOICES);
 const embeddingProviderSchema = z.enum(EMBEDDING_PROVIDER_CHOICES);
 const extractionProviderSchema = z.enum(EXTRACTION_PROVIDER_CHOICES);
+const aggregateRecallProviderSchema = z.enum(AGGREGATE_RECALL_PROVIDER_CHOICES);
 const openclawRuntimeSchema = z.enum(OPENCLAW_RUNTIME_CHOICES);
 
 const identityModeSchema = z.enum(IDENTITY_MODES);
@@ -76,9 +78,9 @@ export const setupPlanSchema = z
 		extractionProvider: extractionProviderSchema,
 		extractionModel: z.string(),
 		extractionEndpoint: httpEndpointSchema,
-		synthesisProvider: extractionProviderSchema.optional(),
-		synthesisModel: z.string().optional(),
-		synthesisEndpoint: httpEndpointSchema,
+		aggregateRecallProvider: aggregateRecallProviderSchema.optional(),
+		aggregateRecallModel: z.string().optional(),
+		aggregateRecallEndpoint: httpEndpointSchema,
 		searchBalance: z.number().min(0).max(1),
 		searchTopK: z.number().int().positive(),
 		searchMinScore: z.number().min(0).max(1),
@@ -128,28 +130,21 @@ export const setupPlanSchema = z
 				path: ["extractionEndpoint"],
 			});
 		}
-		if (plan.synthesisProvider === "openai-compatible" && !plan.synthesisEndpoint) {
+		// Aggregate recall is a distinct provider for query-time evidence
+		// synthesis. It is pi-ai-only (no harness subprocess) and optional —
+		// when unset it falls through to the default policy (extraction).
+		if (plan.aggregateRecallProvider === "openai-compatible" && !plan.aggregateRecallEndpoint) {
 			ctx.addIssue({
 				code: "custom",
-				message: "openai-compatible synthesis requires synthesisEndpoint",
-				path: ["synthesisEndpoint"],
+				message: "openai-compatible aggregate recall requires aggregateRecallEndpoint",
+				path: ["aggregateRecallEndpoint"],
 			});
 		}
-		// synthesisModel/Endpoint are meaningless without a provider to apply them to.
-		if ((plan.synthesisModel || plan.synthesisEndpoint) && !plan.synthesisProvider) {
+		if ((plan.aggregateRecallModel || plan.aggregateRecallEndpoint) && !plan.aggregateRecallProvider) {
 			ctx.addIssue({
 				code: "custom",
-				message: "synthesisModel/synthesisEndpoint require synthesisProvider",
-				path: ["synthesisProvider"],
-			});
-		}
-		// The daemon gates the synthesis worker on pipelineV2.enabled, so a
-		// synthesis provider without extraction is dead config.
-		if (plan.extractionProvider === "none" && plan.synthesisProvider && plan.synthesisProvider !== "none") {
-			ctx.addIssue({
-				code: "custom",
-				message: "synthesis requires extraction to be enabled (the daemon gates synthesis on the extraction pipeline)",
-				path: ["synthesisProvider"],
+				message: "aggregateRecallModel/aggregateRecallEndpoint require aggregateRecallProvider",
+				path: ["aggregateRecallProvider"],
 			});
 		}
 		if (plan.agents) {

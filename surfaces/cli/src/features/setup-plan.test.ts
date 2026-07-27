@@ -111,9 +111,12 @@ describe("setupPlanSchema", () => {
 		expect(parseSetupPlan(plan).extractionProvider).toBe("openai-compatible");
 	});
 
-	it("accepts a distinct synthesis provider", () => {
-		const plan = basePlan({ synthesisProvider: "openrouter", synthesisModel: "anthropic/claude-3.5-sonnet" });
-		expect(parseSetupPlan(plan).synthesisProvider).toBe("openrouter");
+	it("accepts a distinct aggregate-recall provider", () => {
+		const plan = basePlan({
+			aggregateRecallProvider: "openrouter",
+			aggregateRecallModel: "anthropic/claude-3.5-sonnet",
+		});
+		expect(parseSetupPlan(plan).aggregateRecallProvider).toBe("openrouter");
 	});
 
 	it("accepts a multi-agent roster", () => {
@@ -149,14 +152,8 @@ describe("setupPlanSchema", () => {
 		).toThrow("duplicate");
 	});
 
-	it("rejects synthesis without extraction (dead config)", () => {
-		expect(() =>
-			parseSetupPlan(basePlan({ extractionProvider: "none", synthesisProvider: "openrouter", synthesisModel: "x" })),
-		).toThrow("synthesis");
-	});
-
-	it("rejects synthesis model without a provider", () => {
-		expect(() => parseSetupPlan(basePlan({ synthesisModel: "x" }))).toThrow("synthesisProvider");
+	it("rejects aggregate-recall model without a provider", () => {
+		expect(() => parseSetupPlan(basePlan({ aggregateRecallModel: "x" }))).toThrow("aggregateRecallProvider");
 	});
 
 	it("accepts a remote daemon URL", () => {
@@ -178,8 +175,10 @@ describe("setupPlanSchema", () => {
 		expect(parseSetupPlan(plan).sources?.[0].path).toBe("/tmp/vault");
 	});
 
-	it("rejects openai-compatible synthesis without an endpoint", () => {
-		expect(() => parseSetupPlan(basePlan({ synthesisProvider: "openai-compatible" }))).toThrow("synthesisEndpoint");
+	it("rejects openai-compatible aggregate recall without an endpoint", () => {
+		expect(() => parseSetupPlan(basePlan({ aggregateRecallProvider: "openai-compatible" }))).toThrow(
+			"aggregateRecallEndpoint",
+		);
 	});
 
 	it("rejects unknown top-level keys (strict contract)", () => {

@@ -747,8 +747,8 @@ describe("setupWizard headless plan path", () => {
 		}
 	});
 
-	it("enforces synthesis-requires-extraction on the flag path too", async () => {
-		root = mkdtempSync(join(tmpdir(), "setup-flag-deadconfig-"));
+	it("runs flag-path plans through parseSetupPlan (aggregate-recall model without provider)", async () => {
+		root = mkdtempSync(join(tmpdir(), "setup-flag-aggrecall-"));
 		const basePath = join(root, "agents");
 		mkdirSync(basePath, { recursive: true });
 		const deps = stubDeps({
@@ -762,13 +762,10 @@ describe("setupWizard headless plan path", () => {
 		}) as never);
 		const errorSpy = spyOn(console, "error").mockImplementation(() => {});
 		try {
-			await expect(
-				setupWizard(
-					{ nonInteractive: true, extractionProvider: "none", synthesisProvider: "openrouter", synthesisModel: "x" },
-					deps,
-				),
-			).rejects.toThrow("process.exit:1");
-			expect(String(errorSpy.mock.calls[0]?.[0] ?? "")).toContain("synthesis");
+			await expect(setupWizard({ nonInteractive: true, aggregateRecallModel: "x" }, deps)).rejects.toThrow(
+				"process.exit:1",
+			);
+			expect(String(errorSpy.mock.calls[0]?.[0] ?? "")).toContain("aggregateRecallProvider");
 		} finally {
 			exitSpy.mockRestore();
 			errorSpy.mockRestore();
@@ -846,25 +843,25 @@ describe("setupWizard headless plan path", () => {
 		expect(agentYaml).toContain("enabled: true");
 	});
 
-	it("writes a distinct synthesis provider from a plan file", async () => {
-		root = mkdtempSync(join(tmpdir(), "setup-headless-synthesis-"));
+	it("writes a distinct aggregate-recall target from a plan file", async () => {
+		root = mkdtempSync(join(tmpdir(), "setup-headless-aggrecall-"));
 		const basePath = join(root, "agents");
 		const templatesPath = join(root, "templates");
 		writeIdentityTemplates(templatesPath);
 		const planPath = writePlanFile(root, {
 			extractionProvider: "claude-code",
 			extractionModel: "haiku",
-			synthesisProvider: "openrouter",
-			synthesisModel: "anthropic/claude-3.5-sonnet",
+			aggregateRecallProvider: "openrouter",
+			aggregateRecallModel: "anthropic/claude-3.5-sonnet",
 		});
 		const deps = freshDeps(basePath, templatesPath);
 
 		await setupWizard({ file: planPath }, deps);
 
 		const agentYaml = readFileSync(join(basePath, "agent.yaml"), "utf-8");
-		expect(agentYaml).toContain("provider: openrouter");
+		expect(agentYaml).toContain("aggregateRecall:");
+		expect(agentYaml).toContain("target: aggregation/default");
 		expect(agentYaml).toContain("anthropic/claude-3.5-sonnet");
-		expect(agentYaml).toContain("provider: claude-code");
 	});
 
 	it("applies a plan from an inline --json string", async () => {

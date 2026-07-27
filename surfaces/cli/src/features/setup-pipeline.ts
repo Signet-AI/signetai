@@ -4,6 +4,16 @@ import type { ExtractionProviderChoice, HarnessChoice } from "./setup-shared.js"
 export const EXTRACTION_SAFETY_WARNING =
 	"Extraction is intended for Claude Code (haiku), Codex CLI (gpt-5.4-mini) on a Pro/Max subscription, or local llama.cpp / Ollama with qwen3:4b or larger. Remote API extraction can rack up extreme usage fees fast. On a VPS, set the provider to none unless you explicitly want background extraction.";
 
+/**
+ * Providers eligible for the distinct aggregate-recall workload. Aggregate
+ * recall is latency-sensitive and pi-ai-only — harness subprocesss (acpx /
+ * claude-code / codex / opencode) are excluded because spawn latency would
+ * dominate (see dashboard InferenceSection). Setup offers the non-subprocess
+ * providers it already knows how to configure.
+ */
+export const AGGREGATE_RECALL_PROVIDER_CHOICES = ["openrouter", "openai-compatible", "ollama", "llama-cpp"] as const;
+export type AggregateRecallProviderChoice = (typeof AGGREGATE_RECALL_PROVIDER_CHOICES)[number];
+
 export interface SetupPipelineConfig {
 	readonly enabled: boolean;
 	readonly extraction: {
@@ -11,7 +21,7 @@ export interface SetupPipelineConfig {
 		readonly model: string;
 		readonly endpoint?: string;
 	};
-	readonly synthesis?: {
+	readonly synthesis: {
 		readonly enabled: boolean;
 		readonly provider: ExtractionProviderChoice;
 		readonly model: string;
@@ -38,21 +48,14 @@ export function defaultExtractionModel(provider: DirectExtractionProviderChoice)
 	return defaultPipelineModel(provider);
 }
 
-export interface SetupSynthesisOverride {
-	readonly provider?: ExtractionProviderChoice;
-	readonly model?: string;
-	readonly endpoint?: string;
-}
-
 export function buildSetupPipeline(
 	provider: ExtractionProviderChoice,
 	model?: string,
 	endpoint?: string,
-	synthesis?: SetupSynthesisOverride,
 ): SetupPipelineConfig {
 	const resolved = model?.trim() || (provider === "acpx" ? "" : defaultExtractionModel(provider));
 	const resolvedEndpoint = endpoint?.trim() || undefined;
-	if (provider === "none" && (!synthesis || !synthesis.provider || synthesis.provider === "none")) {
+	if (provider === "none") {
 		return {
 			enabled: false,
 			extraction: {
@@ -68,14 +71,9 @@ export function buildSetupPipeline(
 		};
 	}
 
-	// Synthesis provider: an explicit override decouples session summaries from
-	// the extraction model. When absent, synthesis mirrors extraction (legacy).
-	const synthProvider = synthesis?.provider ?? provider;
-	const synthModel = synthesis?.provider
-		? synthesis.model?.trim() || (synthProvider === "acpx" ? "" : defaultExtractionModel(synthProvider))
-		: resolved;
-	const synthEndpoint = synthesis?.provider ? synthesis.endpoint?.trim() || undefined : resolvedEndpoint;
-
+	// Session synthesis runs on the same provider as extraction — there is no
+	// distinct "synthesis provider". The only per-operation override is
+	// aggregate recall, configured separately via the routing config.
 	return {
 		enabled: provider !== "none",
 		extraction: {
@@ -84,10 +82,10 @@ export function buildSetupPipeline(
 			...(resolvedEndpoint ? { endpoint: resolvedEndpoint } : {}),
 		},
 		synthesis: {
-			enabled: synthProvider !== "none",
-			provider: synthProvider,
-			model: synthModel,
-			...(synthEndpoint ? { endpoint: synthEndpoint } : {}),
+			enabled: provider !== "none",
+			provider,
+			model: resolved,
+			...(resolvedEndpoint ? { endpoint: resolvedEndpoint } : {}),
 			timeout: 120000,
 		},
 		semanticContradictionEnabled: true,
@@ -256,4 +254,48 @@ function isGeneratedAcpxWorkload(value: unknown): boolean {
 		!Array.isArray(value) &&
 		(value as { target?: unknown }).target === "background-acpx/default"
 	);
+}
+
+/**
+ * Build the modern routing-config fragment that binds a distinct provider to
+ * the aggregate-recall workload. Merged into config.inference by the daemon
+ * (parseRoutingConfig overlays inference.* atop the legacy pipeline.* base),
+ * so extraction/session-synthesis keep working from the extraction provider.
+ *
+ * Credentials are not wired inline — provider backends reference an account
+ * by family that the user connects separately (same model as extraction).
+ */
+export function buildSetupAggregateRecall(
+	provider: AggregateRecallProviderChoice,
+	model?: string,
+	endpoint?: string,
+): { targets: Record<string, unknown>; workloads: Record<string, unknown> } {
+	const resolvedModel = model?.trim() || defaultPipelineModel(provider);
+	const target: Record<string, unknown> = {
+		executor: provider,
+		models: { default: { model: resolvedModel, reasoning: "medium" } },
+	};
+	if (provider === "openai-compatible") {
+		target.endpoint = endpoint?.trim() || "http://localhost:1234/v1";
+	} else if (provider === "openrouter") {
+		// Reference a connected account by family; the credential is connected
+		// separately (connect wall / secrets), exactly like extraction.
+		target.account = "openrouter";
+	}
+	return {
+		targets: { aggregation: target },
+		workloads: { aggregateRecall: { target: "aggregation/default", taskClass: "aggregate_recall" } },
+	};
+}
+
+/** Merge an aggregate-recall fragment into config.inference (creating it if the
+ * acpx route did not). */
+export function applyAggregateRecallRoute(
+	config: Record<string, unknown>,
+	aggregateRecall: { targets: Record<string, unknown>; workloads: Record<string, unknown> },
+): void {
+	const existing = (config.inference ?? {}) as Record<string, unknown>;
+	const targets = { ...((existing.targets as Record<string, unknown>) ?? {}), ...aggregateRecall.targets };
+	const workloads = { ...((existing.workloads as Record<string, unknown>) ?? {}), ...aggregateRecall.workloads };
+	config.inference = { ...existing, targets, workloads };
 }

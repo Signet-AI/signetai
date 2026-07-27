@@ -25,7 +25,13 @@ import { validateName } from "../commands/agent.js";
 import { installGraphiqPlugin } from "./graphiq.js";
 import { runFreshSetup } from "./setup-fresh.js";
 import { runExistingSetupWizard } from "./setup-migrate.js";
-import { EXTRACTION_SAFETY_WARNING, defaultAcpxModel, defaultExtractionModel } from "./setup-pipeline.js";
+import {
+	AGGREGATE_RECALL_PROVIDER_CHOICES,
+	type AggregateRecallProviderChoice,
+	EXTRACTION_SAFETY_WARNING,
+	defaultAcpxModel,
+	defaultExtractionModel,
+} from "./setup-pipeline.js";
 import { parseSetupPlan, setupPlanJsonSchema } from "./setup-plan.js";
 import type { SetupApplyContext, SetupPlan } from "./setup-plan.js";
 import { readSetupCorePluginEnabled, writeSetupCorePluginRegistry } from "./setup-plugins.js";
@@ -350,8 +356,11 @@ export function renderSetupPlanSummary(plan: SetupPlan): string {
 		row("Model:", plan.extractionModel || chalk.dim("(default)"));
 		if (plan.extractionEndpoint) row("Endpoint:", plan.extractionEndpoint);
 	}
-	if (plan.synthesisProvider && plan.synthesisProvider !== plan.extractionProvider) {
-		row("Synthesis:", `${plan.synthesisProvider}${plan.synthesisModel ? ` (${plan.synthesisModel})` : ""}`);
+	if (plan.aggregateRecallProvider && plan.aggregateRecallProvider !== plan.extractionProvider) {
+		row(
+			"Aggregate recall:",
+			`${plan.aggregateRecallProvider}${plan.aggregateRecallModel ? ` (${plan.aggregateRecallModel})` : ""}`,
+		);
 	}
 
 	section("Plugins & network");
@@ -481,11 +490,13 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 	const requestedExtractionProvider = deps.normalizeChoice(rawExtractionProvider, EXTRACTION_PROVIDER_CHOICES);
 	const rawExtractionEndpoint = deps.normalizeStringValue(options.extractionEndpoint);
 	const requestedExtractionEndpoint = normalizeHttpEndpoint(rawExtractionEndpoint);
-	const requestedSynthesisProvider = deps.normalizeChoice(options.synthesisProvider, EXTRACTION_PROVIDER_CHOICES);
-	const requestedSynthesisEndpoint = normalizeHttpEndpoint(deps.normalizeStringValue(options.synthesisEndpoint));
-	if (options.synthesisProvider && !requestedSynthesisProvider) {
+	const requestedAggregateRecallProvider = deps.normalizeChoice(
+		options.aggregateRecallProvider,
+		AGGREGATE_RECALL_PROVIDER_CHOICES,
+	);
+	if (options.aggregateRecallProvider && !requestedAggregateRecallProvider) {
 		failSetupValidation(
-			`Unknown --synthesis-provider value: ${options.synthesisProvider}. Valid choices: ${EXTRACTION_PROVIDER_CHOICES.join(", ")}.`,
+			`Unknown --aggregate-recall-provider value: ${options.aggregateRecallProvider}. Valid choices: ${AGGREGATE_RECALL_PROVIDER_CHOICES.join(", ")}.`,
 		);
 	}
 	const existingName = readString(existingConfig.name) ?? readString(existingAgent.name) ?? "My Agent";
@@ -1365,43 +1376,45 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		extractionEndpoint = normalizeHttpEndpoint(endpointInput) ?? DEFAULT_OPENAI_COMPATIBLE_ENDPOINT;
 	}
 
-	// Optional distinct synthesis provider (session summaries). When unset,
-	// synthesis mirrors extraction.
-	let synthesisProvider: ExtractionProviderChoice | undefined;
-	let synthesisModel: string | undefined;
-	let synthesisEndpoint: string | undefined;
+	// Optional distinct provider for aggregate recall (query-time evidence
+	// synthesis). pi-ai-only (no harness subprocess). When unset, aggregate
+	// recall falls through to the default policy (the extraction provider).
+	let aggregateRecallProvider: AggregateRecallProviderChoice | undefined;
+	let aggregateRecallModel: string | undefined;
+	let aggregateRecallEndpoint: string | undefined;
 	if (nonInteractive) {
-		synthesisProvider = requestedSynthesisProvider ?? undefined;
-		synthesisModel = deps.normalizeStringValue(options.synthesisModel) ?? undefined;
-		synthesisEndpoint =
-			requestedSynthesisEndpoint ??
-			(requestedSynthesisProvider === "openai-compatible" ? DEFAULT_OPENAI_COMPATIBLE_ENDPOINT : undefined);
+		aggregateRecallProvider = (deps.normalizeChoice(
+			options.aggregateRecallProvider,
+			AGGREGATE_RECALL_PROVIDER_CHOICES,
+		) ?? undefined) as AggregateRecallProviderChoice | undefined;
+		aggregateRecallModel = deps.normalizeStringValue(options.aggregateRecallModel) ?? undefined;
+		aggregateRecallEndpoint =
+			normalizeHttpEndpoint(deps.normalizeStringValue(options.aggregateRecallEndpoint)) ??
+			(aggregateRecallProvider === "openai-compatible" ? DEFAULT_OPENAI_COMPATIBLE_ENDPOINT : undefined);
 	} else if (extractionProvider !== "none") {
-		const distinctSynthesis = await confirm({
-			message: "Use a different provider for session summaries (synthesis)?",
+		const distinctAggregateRecall = await confirm({
+			message: "Use a different provider for aggregate recall?",
+			description: "Query-time evidence synthesis. Latency-sensitive; defaults to your extraction provider.",
 			default: false,
 		});
-		if (distinctSynthesis) {
+		if (distinctAggregateRecall) {
 			console.log();
-			synthesisProvider = await select({
-				message: "Synthesis provider:",
-				choices: EXTRACTION_PROVIDER_CHOICES.filter((p) => p !== "none").map((p) => ({
-					value: p,
-					name: p,
-				})),
+			aggregateRecallProvider = await select({
+				message: "Aggregate-recall provider:",
+				choices: AGGREGATE_RECALL_PROVIDER_CHOICES.map((p) => ({ value: p, name: p })),
 			});
 			console.log();
-			synthesisModel = await select({
-				message: "Which model for synthesis?",
-				choices: modelChoices(synthesisProvider),
+			aggregateRecallModel = await select({
+				message: "Which model for aggregate recall?",
+				choices: modelChoices(aggregateRecallProvider),
 			});
-			if (synthesisProvider === "openai-compatible") {
+			if (aggregateRecallProvider === "openai-compatible") {
 				const epInput = await input({
-					message: "Synthesis endpoint:",
+					message: "Aggregate-recall endpoint:",
 					default: DEFAULT_OPENAI_COMPATIBLE_ENDPOINT,
 					validate: (value) => normalizeHttpEndpoint(value) !== undefined || "Enter an http:// or https:// URL.",
 				});
-				synthesisEndpoint = normalizeHttpEndpoint(epInput) ?? DEFAULT_OPENAI_COMPATIBLE_ENDPOINT;
+				aggregateRecallEndpoint = normalizeHttpEndpoint(epInput) ?? DEFAULT_OPENAI_COMPATIBLE_ENDPOINT;
 			}
 		}
 	}
@@ -1555,9 +1568,9 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		extractionProvider,
 		extractionModel,
 		extractionEndpoint,
-		synthesisProvider,
-		synthesisModel,
-		synthesisEndpoint,
+		aggregateRecallProvider,
+		aggregateRecallModel,
+		aggregateRecallEndpoint,
 		searchBalance,
 		searchTopK,
 		searchMinScore,

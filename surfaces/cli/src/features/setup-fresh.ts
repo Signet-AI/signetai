@@ -16,7 +16,13 @@ import ora from "ora";
 import { daemonAccessLines } from "../lib/network.js";
 import Database from "../sqlite.js";
 import { installGraphiqPlugin } from "./graphiq.js";
-import { applySetupInferenceRoute, buildSetupInference, buildSetupPipeline } from "./setup-pipeline.js";
+import {
+	applyAggregateRecallRoute,
+	applySetupInferenceRoute,
+	buildSetupAggregateRecall,
+	buildSetupInference,
+	buildSetupPipeline,
+} from "./setup-pipeline.js";
 import type { SetupApplyContext, SetupPlan } from "./setup-plan.js";
 import { writeSetupCorePluginRegistry } from "./setup-plugins.js";
 import { enforceSetupProtection, printSetupProtectionSummary, refreshSnapshotProtection } from "./setup-protection.js";
@@ -151,18 +157,7 @@ export async function runFreshSetup(plan: SetupPlan, context: SetupApplyContext,
 		}
 
 		const memory = readRecord(config.memory);
-		memory.pipelineV2 = buildSetupPipeline(
-			plan.extractionProvider,
-			plan.extractionModel,
-			plan.extractionEndpoint,
-			plan.synthesisProvider || plan.synthesisModel || plan.synthesisEndpoint
-				? {
-						provider: plan.synthesisProvider,
-						model: plan.synthesisModel,
-						endpoint: plan.synthesisEndpoint,
-					}
-				: undefined,
-		);
+		memory.pipelineV2 = buildSetupPipeline(plan.extractionProvider, plan.extractionModel, plan.extractionEndpoint);
 		if (plan.dreamingEnabled) {
 			memory.dreaming = { enabled: true };
 		}
@@ -175,6 +170,20 @@ export async function runFreshSetup(plan: SetupPlan, context: SetupApplyContext,
 			context.acpxBin,
 		);
 		applySetupInferenceRoute(config, inference);
+
+		// Optional distinct provider for aggregate recall (query-time evidence
+		// synthesis). Overlaid on config.inference; the daemon merges it atop the
+		// legacy pipeline.* base, so extraction/session-synthesis are unaffected.
+		if (plan.aggregateRecallProvider) {
+			applyAggregateRecallRoute(
+				config,
+				buildSetupAggregateRecall(
+					plan.aggregateRecallProvider,
+					plan.aggregateRecallModel,
+					plan.aggregateRecallEndpoint,
+				),
+			);
+		}
 
 		if (plan.agents && plan.agents.length > 0) {
 			config.agents = {

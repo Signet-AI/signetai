@@ -14,9 +14,9 @@ export interface SetupWizardOptions {
 	extractionProvider?: string;
 	extractionModel?: string;
 	extractionEndpoint?: string;
-	synthesisProvider?: string;
-	synthesisModel?: string;
-	synthesisEndpoint?: string;
+	aggregateRecallProvider?: string;
+	aggregateRecallModel?: string;
+	aggregateRecallEndpoint?: string;
 	searchBalance?: string;
 	skipGit?: boolean;
 	openDashboard?: boolean;
