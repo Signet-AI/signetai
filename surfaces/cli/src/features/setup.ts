@@ -1482,7 +1482,10 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		const seen = new Set<string>();
 		for (const raw of options.agent ?? []) {
 			const parsed = parseAgentFlag(raw);
-			if (seen.has(parsed.name)) continue;
+			if (seen.has(parsed.name)) {
+				console.warn(chalk.yellow(`  ⚠ duplicate --agent "${parsed.name}" ignored`));
+				continue;
+			}
 			seen.add(parsed.name);
 			agents.push(parsed);
 		}
@@ -1581,6 +1584,14 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		openclawConfigCount,
 		openDashboard: options.openDashboard === true,
 	};
+
+	// Enforce the same cross-field invariants the headless --file path gets via
+	// parseSetupPlan (e.g. synthesis requires extraction; group needs a group).
+	try {
+		parseSetupPlan(plan);
+	} catch (err) {
+		failSetupValidation(err instanceof Error ? err.message : String(err));
+	}
 
 	if (options.dryRun) {
 		console.log(JSON.stringify(plan, null, 2));

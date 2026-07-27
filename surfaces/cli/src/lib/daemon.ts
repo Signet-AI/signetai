@@ -146,11 +146,19 @@ export function createDaemonClient(
 }
 
 function resolveDaemonClientUrl(port: number, agentsDir?: string): string {
-	return resolveSignetDaemonUrl({
-		defaultHost: "localhost",
-		defaultPort: port,
-		configUrl: agentsDir ? readDaemonUrlConfig(agentsDir) : undefined,
-	});
+	const configUrl = agentsDir ? readDaemonUrlConfig(agentsDir) : undefined;
+	try {
+		return resolveSignetDaemonUrl({ defaultHost: "localhost", defaultPort: port, configUrl });
+	} catch (err) {
+		// A malformed daemon.url must never brick every CLI command (the client is
+		// built at module load). Fall back to env/default resolution and warn.
+		if (configUrl) {
+			console.warn(
+				chalk.yellow(`Ignoring invalid daemon.url "${configUrl}": ${err instanceof Error ? err.message : err}`),
+			);
+		}
+		return resolveSignetDaemonUrl({ defaultHost: "localhost", defaultPort: port });
+	}
 }
 
 /** Read the persisted `daemon.url` from agent.yaml, if any. */

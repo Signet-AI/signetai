@@ -168,6 +168,11 @@ describe("setupPlanSchema", () => {
 		expect(() => parseSetupPlan(basePlan({ daemonUrl: "ftp://x" }))).toThrow("daemonUrl");
 	});
 
+	it("rejects a daemon URL with a path or query (must be a bare origin)", () => {
+		expect(() => parseSetupPlan(basePlan({ daemonUrl: "https://host/signet" }))).toThrow("daemonUrl");
+		expect(() => parseSetupPlan(basePlan({ daemonUrl: "https://host?token=1" }))).toThrow("daemonUrl");
+	});
+
 	it("accepts obsidian sources", () => {
 		const plan = basePlan({ sources: [{ type: "obsidian", path: "/tmp/vault", name: "vault" }] });
 		expect(parseSetupPlan(plan).sources?.[0].path).toBe("/tmp/vault");

@@ -94,7 +94,10 @@ export const setupPlanSchema = z
 		dreamingEnabled: z.boolean().optional(),
 		daemonUrl: z
 			.string()
-			.regex(/^https?:\/\/\S+$/, "must be an http:// or https:// URL")
+			// Match normalizeDaemonUrl's rules: a bare origin (no path, query,
+			// fragment, or credentials) so a persisted daemon.url cannot brick the
+			// module-load daemon client.
+			.regex(/^https?:\/\/[\w.:-]+\/?$/, "must be a bare http(s) origin (no path, query, or credentials)")
 			.optional(),
 		sources: z
 			.array(

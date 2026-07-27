@@ -746,6 +746,34 @@ describe("setupWizard headless plan path", () => {
 		}
 	});
 
+	it("enforces synthesis-requires-extraction on the flag path too", async () => {
+		root = mkdtempSync(join(tmpdir(), "setup-flag-deadconfig-"));
+		const basePath = join(root, "agents");
+		mkdirSync(basePath, { recursive: true });
+		const deps = stubDeps({
+			AGENTS_DIR: basePath,
+			normalizeAgentPath: mock((p: string) => p),
+			detectExistingSetup: mock(() => ({ ...fakeDetection(basePath), agentsDir: false, memoryDb: false })),
+		});
+
+		const exitSpy = spyOn(process, "exit").mockImplementation(((code?: string | number | null) => {
+			throw new Error(`process.exit:${code ?? ""}`);
+		}) as never);
+		const errorSpy = spyOn(console, "error").mockImplementation(() => {});
+		try {
+			await expect(
+				setupWizard(
+					{ nonInteractive: true, extractionProvider: "none", synthesisProvider: "openrouter", synthesisModel: "x" },
+					deps,
+				),
+			).rejects.toThrow("process.exit:1");
+			expect(String(errorSpy.mock.calls[0]?.[0] ?? "")).toContain("synthesis");
+		} finally {
+			exitSpy.mockRestore();
+			errorSpy.mockRestore();
+		}
+	});
+
 	it("connects an obsidian vault source from a plan file", async () => {
 		root = mkdtempSync(join(tmpdir(), "setup-headless-obsidian-"));
 		const basePath = join(root, "agents");

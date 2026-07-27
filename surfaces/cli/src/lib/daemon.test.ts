@@ -1,4 +1,7 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createDaemonClient } from "./daemon.js";
 
 const originalFetch = globalThis.fetch;
@@ -60,6 +63,25 @@ describe("createDaemonClient", () => {
 		} finally {
 			if (previous === undefined) Reflect.deleteProperty(process.env, "SIGNET_DAEMON_URL");
 			else process.env.SIGNET_DAEMON_URL = previous;
+		}
+	});
+
+	test("a malformed persisted daemon.url falls back gracefully instead of bricking the client", () => {
+		const dir = join(tmpdir(), `daemon-badurl-${Date.now()}`);
+		mkdirSync(dir, { recursive: true });
+		writeFileSync(join(dir, "agent.yaml"), "daemon:\n  url: https://host.example/signet\n");
+		const previousUrl = process.env.SIGNET_DAEMON_URL;
+		Reflect.deleteProperty(process.env, "SIGNET_DAEMON_URL");
+		const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+		try {
+			const client = createDaemonClient(3850, dir);
+			expect(client.url).toBe("http://localhost:3850");
+			expect(String(warnSpy.mock.calls[0]?.[0] ?? "")).toContain("Ignoring invalid daemon.url");
+		} finally {
+			warnSpy.mockRestore();
+			if (previousUrl === undefined) Reflect.deleteProperty(process.env, "SIGNET_DAEMON_URL");
+			else process.env.SIGNET_DAEMON_URL = previousUrl;
+			rmSync(dir, { recursive: true, force: true });
 		}
 	});
 
