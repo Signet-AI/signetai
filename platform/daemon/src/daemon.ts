@@ -291,7 +291,7 @@ const SYNC_DEBOUNCE_MS = 2000;
 async function syncHarnessConfigs() {
 	const identityMode = loadIdentityMode(AGENTS_DIR);
 	if (!identityModeManagesFiles(identityMode)) {
-		// Clean up stale generated harness identity files when mode is off/passthrough
+		// Clean up stale generated harness identity files when mode is off
 		await cleanupStaleHarnessIdentity();
 		await ensureArchitectureDoc();
 		return;
@@ -384,7 +384,7 @@ ${fileList}
 }
 
 /**
- * Remove Signet-generated harness identity files when identity mode is off/passthrough.
+ * Remove Signet-generated harness identity files when identity mode is off.
  * Only deletes files whose first lines match Signet-generated markers.
  */
 async function cleanupStaleHarnessIdentity(): Promise<void> {

@@ -36,9 +36,9 @@ export function resolveAgentBasePath(agentName: string, workspaceDir: string): s
  */
 export type IdentityPresetName = "minimal" | "hermes" | "openclaw" | "custom";
 
-export type IdentityMode = "managed" | "passthrough" | "off";
+export type IdentityMode = "managed" | "off";
 
-export const IDENTITY_MODES = ["managed", "passthrough", "off"] as const;
+export const IDENTITY_MODES = ["managed", "off"] as const;
 
 export type IdentityFileContext = "startup" | "session";
 
@@ -506,7 +506,7 @@ export function loadIdentityFilesSync(basePath: string): IdentityMap {
 
 /**
  * Check if a directory has the minimum required identity files.
- * Returns false when identity mode is off or passthrough — those modes
+ * Returns false when identity mode is off — that mode
  * intentionally omit identity files.
  */
 export function hasValidIdentity(basePath: string): boolean {
@@ -523,7 +523,7 @@ export function hasValidIdentity(basePath: string): boolean {
 
 /**
  * Get list of missing required identity files.
- * Returns an empty list when identity mode is off or passthrough.
+ * Returns an empty list when identity mode is off.
  */
 export function getMissingIdentityFiles(basePath: string): string[] {
 	const mode = loadIdentityMode(basePath);
@@ -580,9 +580,13 @@ export function resolveIdentityModeFromConfig(config: unknown): IdentityMode {
 	const capabilities = readRecord(root.capabilities);
 	const capabilityIdentity = readRecord(capabilities.identity);
 	if (isIdentityMode(capabilityIdentity.mode)) return capabilityIdentity.mode;
+	// Legacy configs may still carry "passthrough" (collapsed into "off" — the two
+	// were redundant: passthrough only read existing files, off ignores them).
+	if (capabilityIdentity.mode === "passthrough") return "off";
 
 	const identity = readRecord(root.identity);
 	if (isIdentityMode(identity.mode)) return identity.mode;
+	if (identity.mode === "passthrough") return "off";
 	if (identity.enabled === false) return "off";
 
 	// Existing installs predate capability modules and should keep the current

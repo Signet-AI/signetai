@@ -147,7 +147,7 @@ function writeCapabilitySelection(
 }
 
 /**
- * Scaffold minimal identity files when switching from off/passthrough to managed.
+ * Scaffold minimal identity files when switching from off to managed.
  * Only creates files that do not already exist.
  */
 function scaffoldIdentityIfNeeded(basePath: string, identityMode: IdentityMode, previousMode: IdentityMode): void {
@@ -179,11 +179,6 @@ async function promptIdentityMode(defaultIdentityMode: IdentityMode): Promise<Id
 				value: "off",
 				name: "Off — use Signet only for memory, recall, sources, and secrets",
 				description: "Best when your harness already owns personality and instructions.",
-			},
-			{
-				value: "passthrough",
-				name: "Passthrough — reserve identity for existing harness files",
-				description: "Signet will not author or sync identity files.",
 			},
 		],
 		default: defaultIdentityMode,
@@ -584,7 +579,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 
 			const resolvedIdentityMode = configuredIdentityMode ?? existingIdentityMode;
 
-			// When identity mode changes to off/passthrough, run stale identity cleanup
+			// When identity mode changes to off, run stale identity cleanup
 			// for all detected and configured harnesses even if --harness was not passed.
 			if (resolvedIdentityMode !== "managed" && existingIdentityMode === "managed") {
 				const h = existing.harnesses;

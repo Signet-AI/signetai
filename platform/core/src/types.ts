@@ -166,7 +166,7 @@ export interface AgentManifest {
 					enabled?: boolean;
 				};
 				identity?: {
-					mode?: "managed" | "passthrough" | "off";
+					mode?: "managed" | "off";
 				};
 		  };
 	harnessCompatibility?: string[];
