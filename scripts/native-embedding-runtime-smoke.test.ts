@@ -4,7 +4,7 @@ import { type ChildProcessWithoutNullStreams, spawn, spawnSync } from "node:chil
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { type Server, createServer } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import { MIGRATIONS } from "../platform/core/src/migrations";
 
 const root = join(import.meta.dir, "..");
@@ -38,10 +38,16 @@ function closesWithin(closed: Promise<true>, timeoutMs: number): Promise<boolean
 /** Resolve the compiled native binary to smoke-test.
  *  Honors an explicit SIGNET_NATIVE_SMOKE_BINARY override (release CI builds to
  *  dist/native/$RELEASE_ASSET); otherwise derives the asset name for the current
- *  platform so one test covers every release leg. */
-function nativeSmokeBinary(): string {
+ *  platform so one test covers every release leg.
+ *
+ *  The override is resolved against the repo root and returned as an absolute
+ *  path. Release CI sets a relative value (`./dist/native/$RELEASE_ASSET`);
+ *  without absolutizing, the `signet sync` spawnSync below fails with ENOENT
+ *  because it runs with `cwd: <tempdir>`, and Node resolves a relative command
+ *  path against that cwd rather than the repo root. */
+export function nativeSmokeBinary(): string {
 	const override = process.env.SIGNET_NATIVE_SMOKE_BINARY;
-	if (override) return override;
+	if (override) return resolve(root, override);
 	const key = `${process.platform}-${process.arch}`;
 	const name = `signet-${key}`;
 	return join(root, "dist", "native", key.startsWith("win32-") ? `${name}.exe` : name);
@@ -123,6 +129,33 @@ afterEach(async () => {
 	for (const server of blackholeServers.splice(0)) server.close();
 	for (const path of tempDirs.splice(0)) rmSync(path, { recursive: true, force: true });
 }, 30_000);
+
+describe("native smoke binary path", () => {
+	test("resolves a relative SIGNET_NATIVE_SMOKE_BINARY override to an absolute path", () => {
+		const prev = process.env.SIGNET_NATIVE_SMOKE_BINARY;
+		process.env.SIGNET_NATIVE_SMOKE_BINARY = join(".", "dist", "native", "signet-test-binary");
+		try {
+			const binary = nativeSmokeBinary();
+			expect(isAbsolute(binary), binary).toBe(true);
+			expect(binary).toBe(join(root, "dist", "native", "signet-test-binary"));
+		} finally {
+			if (prev === undefined) delete process.env.SIGNET_NATIVE_SMOKE_BINARY;
+			else process.env.SIGNET_NATIVE_SMOKE_BINARY = prev;
+		}
+	});
+
+	test("respects an absolute SIGNET_NATIVE_SMOKE_BINARY override unchanged", () => {
+		const prev = process.env.SIGNET_NATIVE_SMOKE_BINARY;
+		const abs = join(root, "dist", "native", "signet-abs-binary");
+		process.env.SIGNET_NATIVE_SMOKE_BINARY = abs;
+		try {
+			expect(nativeSmokeBinary()).toBe(abs);
+		} finally {
+			if (prev === undefined) delete process.env.SIGNET_NATIVE_SMOKE_BINARY;
+			else process.env.SIGNET_NATIVE_SMOKE_BINARY = prev;
+		}
+	});
+});
 
 describe("native embedding smoke teardown", () => {
 	test("waits for close after escalating a SIGTERM-resistant child", async () => {
