@@ -1049,7 +1049,7 @@ async function ensureDaemonForSecrets(): Promise<boolean> {
 	return ensureDaemonRunning(isDaemonRunning);
 }
 
-const { fetchFromDaemon, fetchDaemonResult, secretApiCall } = createDaemonClient(DEFAULT_PORT);
+const { fetchFromDaemon, fetchDaemonResult, secretApiCall } = createDaemonClient(DEFAULT_PORT, AGENTS_DIR);
 const SKILLS_DIR = join(AGENTS_DIR, "skills");
 
 registerRepairQueueCommands(program, {

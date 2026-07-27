@@ -1,4 +1,6 @@
-import { resolveSignetDaemonUrl } from "@signet/core";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { parseSimpleYaml, resolveSignetDaemonUrl } from "@signet/core";
 import chalk from "chalk";
 
 export type DaemonFetch = <T>(path: string, opts?: RequestInit & { timeout?: number }) => Promise<T | null>;
@@ -49,7 +51,10 @@ function withAuthHeaders(headers?: HeadersInit): Headers {
 	return merged;
 }
 
-export function createDaemonClient(port: number): {
+export function createDaemonClient(
+	port: number,
+	agentsDir?: string,
+): {
 	readonly url: string;
 	readonly fetchFromDaemon: DaemonFetch;
 	readonly fetchDaemonResult: <T>(
@@ -58,7 +63,7 @@ export function createDaemonClient(port: number): {
 	) => Promise<DaemonFetchResult<T>>;
 	readonly secretApiCall: DaemonApiCall;
 } {
-	const url = resolveDaemonClientUrl(port);
+	const url = resolveDaemonClientUrl(port, agentsDir);
 
 	const fetchDaemonResult = async <T>(
 		path: string,
@@ -140,8 +145,26 @@ export function createDaemonClient(port: number): {
 	};
 }
 
-function resolveDaemonClientUrl(port: number): string {
-	return resolveSignetDaemonUrl({ defaultHost: "localhost", defaultPort: port });
+function resolveDaemonClientUrl(port: number, agentsDir?: string): string {
+	return resolveSignetDaemonUrl({
+		defaultHost: "localhost",
+		defaultPort: port,
+		configUrl: agentsDir ? readDaemonUrlConfig(agentsDir) : undefined,
+	});
+}
+
+/** Read the persisted `daemon.url` from agent.yaml, if any. */
+function readDaemonUrlConfig(agentsDir: string): string | undefined {
+	const file = join(agentsDir, "agent.yaml");
+	if (!existsSync(file)) return undefined;
+	try {
+		const cfg = parseSimpleYaml(readFileSync(file, "utf-8")) as Record<string, unknown>;
+		const daemon = cfg.daemon as Record<string, unknown> | undefined;
+		const url = daemon?.url;
+		return typeof url === "string" && url.trim() ? url.trim() : undefined;
+	} catch {
+		return undefined;
+	}
 }
 
 export async function ensureDaemonRunning(

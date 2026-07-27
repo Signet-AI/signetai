@@ -359,6 +359,7 @@ export function renderSetupPlanSummary(plan: SetupPlan): string {
 	row("GraphIQ:", plan.graphiqEnabled ? "enabled" : "disabled");
 	row("Network:", plan.networkMode);
 	row("Git:", plan.gitEnabled ? "enabled" : "disabled");
+	if (plan.daemonUrl) row("Daemon:", `remote (${plan.daemonUrl})`);
 	if (plan.dreamingEnabled) row("Dreaming:", "enabled");
 	if (plan.agents && plan.agents.length > 0) {
 		row("Agents:", `${plan.agents.length} (${plan.agents.map((a) => a.name).join(", ")})`);
@@ -1016,6 +1017,29 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		});
 	}
 
+	// Remote instance: point this workspace at a daemon running elsewhere
+	// instead of starting a local one. Persisted as daemon.url in agent.yaml.
+	let daemonUrl: string | undefined;
+	const requestedRemoteUrl = normalizeHttpEndpoint(deps.normalizeStringValue(options.remoteUrl));
+	if (options.remoteUrl && !requestedRemoteUrl) {
+		failSetupValidation("--remote-url must be an http:// or https:// URL.");
+	}
+	if (nonInteractive) {
+		daemonUrl = requestedRemoteUrl ?? undefined;
+	} else {
+		const useRemote = await confirm({
+			message: "Use a remote daemon instead of starting a local one?",
+			default: false,
+		});
+		if (useRemote) {
+			const urlInput = await input({
+				message: "Remote daemon URL:",
+				validate: (value) => normalizeHttpEndpoint(value) !== undefined || "Enter an http:// or https:// URL.",
+			});
+			daemonUrl = normalizeHttpEndpoint(urlInput) ?? undefined;
+		}
+	}
+
 	let deploymentType: DeploymentTypeChoice;
 	if (nonInteractive) {
 		deploymentType = requestedDeploymentType ?? "local";
@@ -1520,6 +1544,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		startupIdentityFiles,
 		specialIdentityFiles,
 		dreamingEnabled,
+		daemonUrl,
 		agents: agents.length > 0 ? agents : undefined,
 	};
 

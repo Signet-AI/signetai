@@ -159,6 +159,15 @@ describe("setupPlanSchema", () => {
 		expect(() => parseSetupPlan(basePlan({ synthesisModel: "x" }))).toThrow("synthesisProvider");
 	});
 
+	it("accepts a remote daemon URL", () => {
+		const plan = basePlan({ daemonUrl: "https://signet.remote.example:8443" });
+		expect(parseSetupPlan(plan).daemonUrl).toBe("https://signet.remote.example:8443");
+	});
+
+	it("rejects a non-http daemon URL", () => {
+		expect(() => parseSetupPlan(basePlan({ daemonUrl: "ftp://x" }))).toThrow("daemonUrl");
+	});
+
 	it("rejects openai-compatible synthesis without an endpoint", () => {
 		expect(() => parseSetupPlan(basePlan({ synthesisProvider: "openai-compatible" }))).toThrow("synthesisEndpoint");
 	});

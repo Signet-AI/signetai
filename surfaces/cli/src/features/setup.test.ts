@@ -746,6 +746,22 @@ describe("setupWizard headless plan path", () => {
 		}
 	});
 
+	it("writes a remote daemon URL and skips local daemon start", async () => {
+		root = mkdtempSync(join(tmpdir(), "setup-headless-remote-"));
+		const basePath = join(root, "agents");
+		const templatesPath = join(root, "templates");
+		writeIdentityTemplates(templatesPath);
+		const planPath = writePlanFile(root, { daemonUrl: "https://signet.remote.example:8443" });
+		const startDaemon = mock(async () => true);
+		const deps = { ...freshDeps(basePath, templatesPath), startDaemon };
+
+		await setupWizard({ file: planPath }, deps);
+
+		const agentYaml = readFileSync(join(basePath, "agent.yaml"), "utf-8");
+		expect(agentYaml).toContain("url: https://signet.remote.example:8443");
+		expect(startDaemon).not.toHaveBeenCalled();
+	});
+
 	it("writes a multi-agent roster from a plan file", async () => {
 		root = mkdtempSync(join(tmpdir(), "setup-headless-roster-"));
 		const basePath = join(root, "agents");

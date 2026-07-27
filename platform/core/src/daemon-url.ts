@@ -2,6 +2,14 @@ export interface SignetDaemonUrlOptions {
 	readonly env?: Record<string, string | undefined>;
 	readonly defaultHost?: string;
 	readonly defaultPort?: number;
+	/**
+	 * Persisted daemon URL from config (e.g. agent.yaml `daemon.url`). Used only
+	 * when no SIGNET_DAEMON_URL env override is present; still below the env
+	 * override but above SIGNET_HOST/PORT. Keeping the resolver pure (no fs)
+	 * means the caller loads config once and threads it in — one resolution
+	 * path, no parallel reader.
+	 */
+	readonly configUrl?: string;
 }
 
 function readEnv(env: Record<string, string | undefined>, name: string): string | undefined {
@@ -70,6 +78,7 @@ export function resolveSignetDaemonUrl(opts: SignetDaemonUrlOptions = {}): strin
 	const fallbackPort = opts.defaultPort ?? 3850;
 	const explicit = readEnv(env, "SIGNET_DAEMON_URL");
 	if (explicit) return normalizeDaemonUrl(explicit, "SIGNET_DAEMON_URL");
+	if (opts.configUrl) return normalizeDaemonUrl(opts.configUrl, "daemon.url");
 
 	const host = readEnv(env, "SIGNET_HOST") ?? fallbackHost;
 	assertPlainHost(host);

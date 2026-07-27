@@ -92,6 +92,10 @@ export const setupPlanSchema = z
 		startupIdentityFiles: z.array(identityContextFileSchema),
 		specialIdentityFiles: z.array(identitySpecialFileSchema),
 		dreamingEnabled: z.boolean().optional(),
+		daemonUrl: z
+			.string()
+			.regex(/^https?:\/\/\S+$/, "must be an http:// or https:// URL")
+			.optional(),
 		agents: z
 			.array(
 				z.strictObject({

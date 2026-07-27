@@ -35,6 +35,7 @@ export interface SetupWizardOptions {
 	dryRun?: boolean;
 	enableDreaming?: boolean;
 	agent?: string[];
+	remoteUrl?: string;
 }
 
 export interface SetupDeps {

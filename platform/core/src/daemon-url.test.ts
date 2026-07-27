@@ -51,4 +51,30 @@ describe("resolveSignetDaemonUrl", () => {
 		);
 		expect(() => resolveSignetDaemonUrl({ env: { SIGNET_PORT: "70000" } })).toThrow("SIGNET_PORT must be an integer");
 	});
+
+	test("honors a persisted configUrl below the env override", () => {
+		expect(resolveSignetDaemonUrl({ configUrl: "https://remote.signet.example:8443" })).toBe(
+			"https://remote.signet.example:8443",
+		);
+		// SIGNET_DAEMON_URL wins over configUrl.
+		expect(
+			resolveSignetDaemonUrl({
+				env: { SIGNET_DAEMON_URL: "http://127.0.0.1:3850" },
+				configUrl: "https://remote.signet.example:8443",
+			}),
+		).toBe("http://127.0.0.1:3850");
+	});
+
+	test("configUrl beats SIGNET_HOST/PORT env", () => {
+		expect(
+			resolveSignetDaemonUrl({
+				env: { SIGNET_HOST: "127.0.0.1", SIGNET_PORT: "3850" },
+				configUrl: "http://10.0.0.5:4000",
+			}),
+		).toBe("http://10.0.0.5:4000");
+	});
+
+	test("rejects an invalid configUrl", () => {
+		expect(() => resolveSignetDaemonUrl({ configUrl: "ftp://x" })).toThrow("daemon.url must use http or https");
+	});
 });

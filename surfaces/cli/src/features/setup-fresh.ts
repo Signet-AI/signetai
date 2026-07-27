@@ -184,6 +184,10 @@ export async function runFreshSetup(plan: SetupPlan, context: SetupApplyContext,
 			};
 		}
 
+		if (plan.daemonUrl) {
+			config.daemon = { url: plan.daemonUrl };
+		}
+
 		writeFileSync(join(context.basePath, "agent.yaml"), formatYaml(config));
 
 		writeSetupCorePluginRegistry(context.basePath, {
@@ -270,10 +274,18 @@ export async function runFreshSetup(plan: SetupPlan, context: SetupApplyContext,
 			committed = await deps.gitAddAndCommit(context.basePath, `${date}_signet-setup`);
 		}
 
-		spinner.text = "Starting daemon...";
-		const daemonStarted = await deps.startDaemon(context.basePath);
+		const remoteDaemon = Boolean(plan.daemonUrl);
+		let daemonStarted: boolean;
+		if (remoteDaemon) {
+			// Remote instance: no local daemon to start; the CLI/connector clients
+			// resolve daemon.url from config at runtime.
+			daemonStarted = true;
+		} else {
+			spinner.text = "Starting daemon...";
+			daemonStarted = await deps.startDaemon(context.basePath);
+		}
 
-		if (daemonStarted && plan.embeddingProvider === "native") {
+		if (!remoteDaemon && daemonStarted && plan.embeddingProvider === "native") {
 			spinner.text = "Warming native embedding model...";
 			const nativeResult = await deps.syncNativeEmbeddingModel(context.basePath);
 			if (nativeResult.status === "error") {
@@ -330,9 +342,13 @@ export async function runFreshSetup(plan: SetupPlan, context: SetupApplyContext,
 
 		if (daemonStarted) {
 			console.log();
-			console.log(chalk.green("  ● Daemon running"));
-			for (const line of daemonAccessLines(deps.DEFAULT_PORT, plan.networkMode)) {
-				console.log(chalk.dim(`    ${line}`));
+			if (remoteDaemon) {
+				console.log(chalk.green(`  ● Using remote daemon: ${plan.daemonUrl}`));
+			} else {
+				console.log(chalk.green("  ● Daemon running"));
+				for (const line of daemonAccessLines(deps.DEFAULT_PORT, plan.networkMode)) {
+					console.log(chalk.dim(`    ${line}`));
+				}
 			}
 		}
 
