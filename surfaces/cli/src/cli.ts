@@ -102,6 +102,7 @@ import { importFromGitHub } from "./features/import.js";
 import { installNativeBinary, printNativeInstallResult } from "./features/native-install.js";
 import { setupWizard } from "./features/setup.js";
 import { copyDirRecursive, syncBuiltinSkills, syncTemplates } from "./features/sync.js";
+import { signetBanner } from "./lib/banner.js";
 import { createDaemonClient, ensureDaemonRunning } from "./lib/daemon.js";
 import { gitAddAndCommit, gitInit, isGitRepo } from "./lib/git.js";
 import {
@@ -882,7 +883,7 @@ function createExtensionSymlink(stateDir: string, globalPath: string, silent?: b
 // CLI Definition
 // ============================================================================
 
-program.name("signet").description("Own your agent. Bring it anywhere.").version(VERSION);
+program.name("signet").version(VERSION);
 program.showHelpAfterError();
 program.addHelpText(
 	"after",
@@ -1193,6 +1194,9 @@ registerBrowseCommand(program);
 
 // Default action when no command specified
 program.action(async () => {
+	if (process.stdout.isTTY) {
+		console.log(signetBanner({ version: VERSION }));
+	}
 	program.outputHelp();
 	const report = await getStatusReport(AGENTS_DIR, healthDeps);
 	console.log();

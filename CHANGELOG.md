@@ -7,6 +7,7 @@ All notable changes to Signet are documented here.
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
 ### 2026-07-26
+- Features: show ASCII brand banner on bare signet invocation.
 - Bug fixes: refuse migration on vec dimension mismatch + harden backfill; add migration backfill; guard checkInference and complete workload-state contract; separate extraction workload state.
 
 ### 2026-07-25
@@ -34,6 +35,15 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Bug fixes: restore plugin discovery and lifecycle hooks.
 
 ## Release Ledger
+
+## [0.155.0] - 2026-07-26
+
+Release summary: 1 feature.
+Tag range: `v0.154.10..v0.155.0`.
+
+### Features
+
+- **cli**: show ASCII brand banner on bare signet invocation
 
 ## [0.154.10] - 2026-07-26
 
