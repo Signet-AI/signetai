@@ -91,18 +91,11 @@ inference:
       reasoning: medium
       toolsRequired: true
       privacy: restricted_remote
-    session_synthesis:
-      reasoning: medium
-      toolsRequired: true
-      privacy: restricted_remote
 
   workloads:
     memoryExtraction:
       target: background-acpx/default
       taskClass: memory_extraction
-    sessionSynthesis:
-      target: background-acpx/default
-      taskClass: session_synthesis
 ```
 
 When a routed workload uses that target, the daemon builds a command equivalent

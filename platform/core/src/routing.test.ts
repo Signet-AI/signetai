@@ -666,7 +666,7 @@ describe("inference config + decision engine", () => {
 
 		expect(commandLegacy.targets["legacy-extraction"]).toBeUndefined();
 		expect(commandLegacy.workloads?.memoryExtraction).toBeUndefined();
-		expect(commandLegacy.targets["legacy-synthesis"]?.executor).toBe("ollama");
+		expect(commandLegacy.targets["legacy-synthesis"]).toBeUndefined();
 
 		const acpxLegacy = compileLegacyRoutingConfig({
 			extraction: {
@@ -686,7 +686,6 @@ describe("inference config + decision engine", () => {
 		expect(acpxLegacy.targets["legacy-extraction"]).toBeUndefined();
 		expect(acpxLegacy.targets["legacy-synthesis"]).toBeUndefined();
 		expect(acpxLegacy.workloads?.memoryExtraction).toBeUndefined();
-		expect(acpxLegacy.workloads?.sessionSynthesis).toBeUndefined();
 		expect(acpxLegacy.enabled).toBe(false);
 	});
 
@@ -711,13 +710,8 @@ describe("inference config + decision engine", () => {
 			providerFamily: "anthropic",
 			credentialRef: "ANTHROPIC_API_KEY",
 		});
-		expect(legacy.accounts["legacy-openrouter"]).toMatchObject({
-			kind: "api",
-			providerFamily: "openrouter",
-			credentialRef: "OPENROUTER_API_KEY",
-		});
 		expect(legacy.targets["legacy-extraction"]?.account).toBe("legacy-anthropic");
-		expect(legacy.targets["legacy-synthesis"]?.account).toBe("legacy-openrouter");
+		expect(legacy.targets["legacy-synthesis"]).toBeUndefined();
 
 		const compatible = compileLegacyRoutingConfig({
 			extraction: {
@@ -760,10 +754,7 @@ describe("inference config + decision engine", () => {
 		expect(localCompatible.targets["legacy-extraction"]?.kind).toBe("local");
 		expect(localCompatible.targets["legacy-extraction"]?.privacy).toBe("local_only");
 		expect(localCompatible.targets["legacy-extraction"]?.account).toBeUndefined();
-		expect(localCompatible.targets["legacy-synthesis"]?.executor).toBe("openai-compatible");
-		expect(localCompatible.targets["legacy-synthesis"]?.kind).toBe("local");
-		expect(localCompatible.targets["legacy-synthesis"]?.privacy).toBe("local_only");
-		expect(localCompatible.targets["legacy-synthesis"]?.account).toBeUndefined();
+		expect(localCompatible.targets["legacy-synthesis"]).toBeUndefined();
 	});
 
 	it("parses OpenRouter reasoning controls on explicit targets", () => {
@@ -885,6 +876,31 @@ describe("inference config + decision engine", () => {
 		}
 		expect(decision.error.code).toBe("no-candidates");
 	});
+});
+
+it("ignores obsolete sessionSynthesis bindings and routes internal session work through memoryExtraction", () => {
+	const parsed = parseRoutingConfig({
+		inference: {
+			targets: {
+				memory: { executor: "ollama", models: { default: { model: "qwen3:4b" } } },
+				legacy: { executor: "llama-cpp", models: { default: { model: "qwen3:4b" } } },
+			},
+			policies: { auto: { mode: "automatic", defaultTargets: ["memory/default"] } },
+			workloads: {
+				memoryExtraction: { target: "memory/default" },
+				sessionSynthesis: { target: "legacy/default" },
+			},
+			defaultPolicy: "auto",
+		},
+	});
+	expect(parsed.ok).toBe(true);
+	if (!parsed.ok) return;
+	expect("sessionSynthesis" in (parsed.value.workloads ?? {})).toBe(false);
+	const decision = resolveRoutingDecision(parsed.value, { operation: "session_synthesis" }, {
+		targets: { "memory/default": ready, "legacy/default": ready },
+	});
+	expect(decision.ok).toBe(true);
+	if (decision.ok) expect(decision.value.targetRef).toBe("memory/default");
 });
 
 describe("routing reference validation (#1005)", () => {
@@ -1046,7 +1062,7 @@ describe("routing reference validation (#1005)", () => {
 			workloads: {
 				...parsed.value.workloads!,
 				memoryExtraction: { target: "ghost-a/default" },
-				sessionSynthesis: { target: "ghost-b/default" },
+				aggregateRecall: { target: "ghost-b/default" },
 			},
 			defaultPolicy: "ghost-policy",
 		};

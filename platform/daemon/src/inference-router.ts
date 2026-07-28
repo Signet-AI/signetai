@@ -130,7 +130,6 @@ export interface InferenceStatusSummary {
 		readonly default?: string;
 		readonly interactive?: string;
 		readonly memoryExtraction?: string;
-		readonly sessionSynthesis?: string;
 		readonly widgetGeneration?: string;
 		readonly repair?: string;
 	};
@@ -360,10 +359,7 @@ export class InferenceRouter {
 		let legacy: RoutingConfig;
 		try {
 			const memoryCfg = loadMemoryConfig(this.agentsDir);
-			legacy = compileLegacyRoutingConfig({
-				extraction: memoryCfg.pipelineV2.extraction,
-				synthesis: memoryCfg.pipelineV2.synthesis,
-			});
+			legacy = compileLegacyRoutingConfig({ extraction: memoryCfg.pipelineV2.extraction });
 		} catch (error) {
 			return {
 				ok: false,
@@ -567,11 +563,11 @@ export class InferenceRouter {
 			case "memory_extraction":
 				return Boolean(config.workloads?.memoryExtraction ?? config.workloads?.default ?? config.defaultPolicy);
 			case "session_synthesis":
-				return Boolean(config.workloads?.sessionSynthesis ?? config.workloads?.default ?? config.defaultPolicy);
+				return Boolean(config.workloads?.memoryExtraction ?? config.workloads?.default ?? config.defaultPolicy);
 			case "widget_generation":
 				return Boolean(
 					config.workloads?.widgetGeneration ??
-						config.workloads?.sessionSynthesis ??
+						config.workloads?.memoryExtraction ??
 						config.workloads?.default ??
 						config.defaultPolicy,
 				);
@@ -1193,9 +1189,6 @@ export class InferenceRouter {
 					memoryExtraction:
 						loaded.value.config.workloads?.memoryExtraction?.policy ??
 						loaded.value.config.workloads?.memoryExtraction?.target,
-					sessionSynthesis:
-						loaded.value.config.workloads?.sessionSynthesis?.policy ??
-						loaded.value.config.workloads?.sessionSynthesis?.target,
 					widgetGeneration:
 						loaded.value.config.workloads?.widgetGeneration?.policy ??
 						loaded.value.config.workloads?.widgetGeneration?.target,

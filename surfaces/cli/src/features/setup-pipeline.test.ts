@@ -190,7 +190,6 @@ describe("buildSetupInference", () => {
 				...buildSetupInference("acpx", "haiku", ["codex"], ["acpx"], "/usr/local/bin/bunx"),
 				taskClasses: {
 					memory_extraction: { reasoning: "medium", toolsRequired: true, privacy: "restricted_remote" },
-					session_synthesis: { reasoning: "medium", toolsRequired: true, privacy: "restricted_remote" },
 					custom_review: { reasoning: "high", toolsRequired: true, privacy: "local" },
 				},
 			},
@@ -211,11 +210,9 @@ describe("buildSetupInference", () => {
 				...buildSetupInference("acpx", "haiku", ["codex"], ["acpx"], "/usr/local/bin/bunx"),
 				workloads: {
 					memoryExtraction: { target: "background-acpx/default" },
-					sessionSynthesis: { target: "background-acpx/default" },
 				},
 				taskClasses: {
 					memory_extraction: { reasoning: "medium", toolsRequired: true, privacy: "restricted_remote" },
-					session_synthesis: { reasoning: "medium", toolsRequired: true, privacy: "restricted_remote" },
 					custom_review: { reasoning: "high", toolsRequired: true, privacy: "local" },
 				},
 			},

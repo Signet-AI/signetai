@@ -207,7 +207,6 @@ export interface RoutingConfig {
 		readonly default?: RoutingWorkloadBinding;
 		readonly interactive?: RoutingWorkloadBinding;
 		readonly memoryExtraction?: RoutingWorkloadBinding;
-		readonly sessionSynthesis?: RoutingWorkloadBinding;
 		readonly aggregateRecall?: RoutingWorkloadBinding;
 		readonly widgetGeneration?: RoutingWorkloadBinding;
 		readonly repair?: RoutingWorkloadBinding;
@@ -717,7 +716,8 @@ export function compileLegacyRoutingConfig(opts: {
 		PipelineExtractionConfig,
 		"provider" | "model" | "endpoint" | "command" | "fallbackProvider"
 	>;
-	readonly synthesis: Pick<PipelineSynthesisConfig, "enabled" | "provider" | "model" | "endpoint">;
+	/** Accepted only for legacy callers; it never creates a route. */
+	readonly synthesis?: Pick<PipelineSynthesisConfig, "enabled" | "provider" | "model" | "endpoint">;
 }): RoutingConfig {
 	const accounts: Record<string, RoutingAccountConfig> = {};
 	const targets: Record<string, RoutingTargetConfig> = {};
@@ -732,15 +732,11 @@ export function compileLegacyRoutingConfig(opts: {
 		memory_extraction: {
 			reasoning: "medium",
 		},
-		session_synthesis: {
-			reasoning: "medium",
-		},
 	};
 	const workloads: {
 		default?: RoutingWorkloadBinding;
 		interactive?: RoutingWorkloadBinding;
 		memoryExtraction?: RoutingWorkloadBinding;
-		sessionSynthesis?: RoutingWorkloadBinding;
 		widgetGeneration?: RoutingWorkloadBinding;
 		repair?: RoutingWorkloadBinding;
 	} = {};
@@ -828,29 +824,6 @@ export function compileLegacyRoutingConfig(opts: {
 		}
 	}
 
-	if (opts.synthesis.enabled && opts.synthesis.provider !== "none" && opts.synthesis.provider !== "acpx") {
-		targets["legacy-synthesis"] = {
-			kind: inferLegacyTargetKind(opts.synthesis.provider, opts.synthesis.endpoint),
-			executor: opts.synthesis.provider,
-			account: legacyAccountForProvider(opts.synthesis.provider, opts.synthesis.endpoint),
-			endpoint: opts.synthesis.endpoint,
-			privacy: inferTargetPrivacy(opts.synthesis.provider, opts.synthesis.endpoint),
-			models: {
-				default: {
-					model: opts.synthesis.model,
-					label: opts.synthesis.model,
-					reasoning: "medium",
-				},
-			},
-		};
-		const ref = makeRoutingTargetRef("legacy-synthesis", "default");
-		workloads.sessionSynthesis = {
-			target: ref,
-			taskClass: "session_synthesis",
-		};
-		defaultTargets = [ref, ...defaultTargets];
-	}
-
 	policies["legacy-default"] = {
 		mode: "automatic",
 		defaultTargets,
@@ -866,7 +839,7 @@ export function compileLegacyRoutingConfig(opts: {
 	};
 	workloads.widgetGeneration = {
 		policy: "legacy-default",
-		taskClass: "session_synthesis",
+		taskClass: "memory_extraction",
 	};
 	workloads.repair = {
 		policy: "legacy-default",
@@ -1076,9 +1049,6 @@ export function parseRoutingConfig(raw: unknown, legacyConfig?: RoutingConfig): 
 		const memoryExtraction = parseWorkloadBinding(
 			routingRaw.workloads.memoryExtraction ?? routingRaw.workloads.memory_extraction,
 		);
-		const sessionSynthesis = parseWorkloadBinding(
-			routingRaw.workloads.sessionSynthesis ?? routingRaw.workloads.session_synthesis,
-		);
 		const aggregateRecall = parseWorkloadBinding(
 			routingRaw.workloads.aggregateRecall ?? routingRaw.workloads.aggregate_recall,
 		);
@@ -1089,7 +1059,6 @@ export function parseRoutingConfig(raw: unknown, legacyConfig?: RoutingConfig): 
 		if (defaultBinding) workloads.default = defaultBinding;
 		if (interactive) workloads.interactive = interactive;
 		if (memoryExtraction) workloads.memoryExtraction = memoryExtraction;
-		if (sessionSynthesis) workloads.sessionSynthesis = sessionSynthesis;
 		if (aggregateRecall) workloads.aggregateRecall = aggregateRecall;
 		if (widgetGeneration) workloads.widgetGeneration = widgetGeneration;
 		if (repair) workloads.repair = repair;
@@ -1139,11 +1108,11 @@ function workloadBindingForOperation(
 		case "memory_extraction":
 			return config.workloads?.memoryExtraction ?? config.workloads?.default;
 		case "session_synthesis":
-			return config.workloads?.sessionSynthesis ?? config.workloads?.default;
+			return config.workloads?.memoryExtraction ?? config.workloads?.default;
 		case "aggregate_recall":
-			return config.workloads?.aggregateRecall ?? config.workloads?.sessionSynthesis ?? config.workloads?.default;
+			return config.workloads?.aggregateRecall ?? config.workloads?.memoryExtraction ?? config.workloads?.default;
 		case "widget_generation":
-			return config.workloads?.widgetGeneration ?? config.workloads?.sessionSynthesis ?? config.workloads?.default;
+			return config.workloads?.widgetGeneration ?? config.workloads?.memoryExtraction ?? config.workloads?.default;
 		case "repair":
 			return config.workloads?.repair ?? config.workloads?.memoryExtraction ?? config.workloads?.default;
 	}

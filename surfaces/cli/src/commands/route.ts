@@ -29,7 +29,6 @@ interface RouteStatusResponse {
 	readonly workloadBindings: {
 		readonly interactive?: string;
 		readonly memoryExtraction?: string;
-		readonly sessionSynthesis?: string;
 	};
 	readonly accounts: Record<
 		string,
@@ -175,7 +174,7 @@ function printStatus(status: RouteStatusResponse): void {
 	console.log(chalk.dim(`  Task classes:   ${status.taskClasses.join(", ") || "-"}`));
 	console.log(
 		chalk.dim(
-			`  Workloads:      interactive=${status.workloadBindings.interactive ?? "-"}, extraction=${status.workloadBindings.memoryExtraction ?? "-"}, synthesis=${status.workloadBindings.sessionSynthesis ?? "-"}`,
+			`  Workloads:      interactive=${status.workloadBindings.interactive ?? "-"}, extraction=${status.workloadBindings.memoryExtraction ?? "-"}`,
 		),
 	);
 	console.log();

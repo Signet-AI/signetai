@@ -247,8 +247,6 @@ export function applyAcpxDashboardSetup(
 	};
 	const taskClasses = ensureRecord(inference, "taskClasses");
 	taskClasses.memory_extraction = { reasoning: "medium", toolsRequired: true, privacy: "restricted_remote" };
-	taskClasses.session_synthesis = { reasoning: "medium", toolsRequired: true, privacy: "restricted_remote" };
 	const workloads = ensureRecord(inference, "workloads");
 	workloads.memoryExtraction = { target: "background-acpx/default", taskClass: "memory_extraction" };
-	workloads.sessionSynthesis = { target: "background-acpx/default", taskClass: "session_synthesis" };
 }

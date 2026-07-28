@@ -135,7 +135,7 @@ describe("InferenceRouter legacy API credentials", () => {
 		}
 	});
 
-	it("uses OPENROUTER_API_KEY for legacy pipeline OpenRouter synthesis targets", async () => {
+	it("uses OPENROUTER_API_KEY for legacy pipeline OpenRouter extraction targets", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "signet-router-openrouter-"));
 		try {
 			mkdirSync(join(dir, "memory"), { recursive: true });
@@ -144,9 +144,6 @@ describe("InferenceRouter legacy API credentials", () => {
 				`memory:
   pipelineV2:
     extraction:
-      provider: none
-    synthesis:
-      enabled: true
       provider: openrouter
       model: openai/gpt-4o-mini
       endpoint: https://openrouter.ai/api/v1
@@ -179,7 +176,7 @@ describe("InferenceRouter legacy API credentials", () => {
 			expect(result.ok).toBe(true);
 			if (!result.ok) return;
 			expect(result.value.text).toBe("aggregate recall answer");
-			expect(result.value.decision.targetRef).toBe("legacy-synthesis/default");
+			expect(result.value.decision.targetRef).toBe("legacy-extraction/default");
 			expect(seen.every((entry) => entry.authorization === "Bearer test-openrouter-key")).toBe(true);
 			expect(seen.map((entry) => entry.url)).toContain("https://openrouter.ai/api/v1/models");
 			expect(seen.map((entry) => entry.url)).toContain("https://openrouter.ai/api/v1/chat/completions");
@@ -384,9 +381,9 @@ describe("InferenceRouter legacy API credentials", () => {
       defaultTargets:
         - mercury/default
   workloads:
-    sessionSynthesis:
+    memoryExtraction:
       target: mercury/default
-      taskClass: session_synthesis
+      taskClass: memory_extraction
 `,
 			);
 
@@ -466,9 +463,9 @@ describe("InferenceRouter legacy API credentials", () => {
       defaultTargets:
         - flash/default
   workloads:
-    sessionSynthesis:
+    memoryExtraction:
       target: flash/default
-      taskClass: session_synthesis
+      taskClass: memory_extraction
 `,
 			);
 
@@ -538,9 +535,9 @@ describe("InferenceRouter legacy API credentials", () => {
       defaultTargets:
         - med/default
   workloads:
-    sessionSynthesis:
+    memoryExtraction:
       target: med/default
-      taskClass: session_synthesis
+      taskClass: memory_extraction
 `,
 			);
 
