@@ -33,14 +33,35 @@ bun run build
 bun test
 ```
 
-Before submitting changes, run the full check suite:
+Before submitting changes, install the repository pre-commit hook once:
+
+```bash
+bun run hooks:install
+```
+
+Then run the checks that match your change:
 
 ```bash
 bun run typecheck   # TypeScript strict mode check
 bun run lint        # Biome static analysis
-bun run format      # Biome auto-format
-bun test            # All tests
+bun test            # All TypeScript/JavaScript tests
+bun run check:publish-manifests  # Publish metadata and workspace dependency contract
+bun run lint:dead-code           # Knip baseline report
+bun run lint:packages            # publint + Are the Types Wrong package API checks
+cd platform/daemon-rs && cargo fmt --all -- --check
+cd platform/daemon-rs && cargo clippy --workspace --all-targets --all-features -- -D warnings
+cd platform/daemon-rs && cargo test --workspace --all-features
+cd platform/daemon-rs && cargo deny check advisories bans licenses sources
 ```
+
+CI runs the quality workflow on Linux and macOS. Its lint, test, publish
+manifest, Rust format/Clippy/check/test, dependency-policy, and automation
+meta-lint jobs are intended to become required checks for `main`. The
+workspace TypeScript gate remains advisory only while [#969](https://github.com/Signet-AI/signetai/issues/969)
+is open; it becomes required when that backlog is cleared. At the same time,
+repository administrators must require these checks, require review, and block
+direct pushes to `main` in branch protection. A PR-body checklist cannot bypass
+any of these executable checks.
 
 Common local loops:
 

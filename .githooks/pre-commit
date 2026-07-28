@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-bunx biome check --staged
+if git diff --cached --name-only --diff-filter=ACMR | grep -Eq '\.(cjs|cts|js|json|jsonc|jsx|mjs|mts|ts|tsx)$'; then
+  bunx biome check --staged
+fi
 
 if git diff --cached --name-only | grep -Eq '(^|/)(Cargo\.toml|Cargo\.lock|.*\.rs)$'; then
   (
