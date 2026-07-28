@@ -28,11 +28,13 @@ const DISCORD_GATEWAY_INTENTS =
 const GATEWAY_RECONNECT_DELAY_MS = 1_000;
 const GATEWAY_SHOULD_CONTINUE_POLL_MS = 250;
 
+type BivariantEventHandler<Event> = { bivarianceHack(event: Event): void }["bivarianceHack"];
+
 interface DiscordGatewaySocket {
-	onopen: ((event: unknown) => void) | null;
-	onmessage: ((event: { readonly data: unknown }) => void) | null;
-	onerror: ((event: unknown) => void) | null;
-	onclose: ((event: { readonly code?: number; readonly reason?: string }) => void) | null;
+	onopen: BivariantEventHandler<Event> | null;
+	onmessage: BivariantEventHandler<MessageEvent> | null;
+	onerror: BivariantEventHandler<Event> | null;
+	onclose: BivariantEventHandler<CloseEvent> | null;
 	send(data: string): void;
 	close(code?: number, reason?: string): void;
 }

@@ -85,6 +85,7 @@ export type {
 	EpistemicAssertion,
 	TaskHarness,
 	EntityAspect,
+	EntityAlias,
 	EntityAttribute,
 	EntityDependency,
 	TaskMeta,

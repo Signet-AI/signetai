@@ -1907,7 +1907,7 @@ export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionE
 				transcript: retainedTranscript,
 				sessionKey,
 				sessionId,
-				project: req.cwd ?? null,
+				project: req.cwd,
 				agentId,
 				trigger: "session_end",
 				boundaryReason: "session_closed",
@@ -1958,12 +1958,14 @@ export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionE
 	setImmediate(() => {
 		let work: Promise<void>;
 		try {
-			work = runTranscriptCaptureOnce(getDbAccessor(), getAgentsDir()).catch((error) => {
-				logger.warn("hooks", "Deferred transcript capture job failed", {
-					error: error instanceof Error ? error.message : String(error),
-					sessionKey,
+			work = runTranscriptCaptureOnce(getDbAccessor(), getAgentsDir())
+				.then(() => undefined)
+				.catch((error) => {
+					logger.warn("hooks", "Deferred transcript capture job failed", {
+						error: error instanceof Error ? error.message : String(error),
+						sessionKey,
+					});
 				});
-			});
 		} catch (error) {
 			logger.warn("hooks", "Deferred transcript capture job failed", {
 				error: error instanceof Error ? error.message : String(error),

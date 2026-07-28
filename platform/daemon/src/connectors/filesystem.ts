@@ -6,7 +6,7 @@
  * embedding, and indexing are handled downstream by the document worker.
  */
 
-import { readFileSync, readdirSync } from "node:fs";
+import { type Dirent, readFileSync, readdirSync } from "node:fs";
 import { constants, access, stat } from "node:fs/promises";
 import { basename, join, relative, resolve } from "node:path";
 import type {
@@ -73,7 +73,7 @@ async function* walkDir(
 	relativePrefix = "",
 	dot = false,
 ): AsyncGenerator<string> {
-	let entries: ReturnType<typeof readdirSync>;
+	let entries: Dirent<string>[];
 	try {
 		entries = readdirSync(dir, { withFileTypes: true });
 	} catch {

@@ -1799,7 +1799,7 @@ async function main() {
 		: (resolveEmbeddedWorkerPath("synthesis-render-worker") ?? join(__dirname, "synthesis-render-worker.ts"));
 	let synthWorker: Worker | null = null;
 	try {
-		synthWorker = new Worker(workerPath, { type: "module" });
+		synthWorker = new Worker(workerPath);
 	} catch (err) {
 		logger.warn(
 			"daemon",

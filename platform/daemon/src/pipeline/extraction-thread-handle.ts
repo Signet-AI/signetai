@@ -231,7 +231,7 @@ export function startExtractionThread(opts: ExtractionThreadOpts): Promise<Worke
 }
 
 export function createExtractionWorkerOptions(init: WorkerInit): WorkerOptions {
-	return { workerData: init, type: "module" };
+	return { workerData: init };
 }
 
 function createNodeWorker(workerPath: string, _init: WorkerInit, options: WorkerOptions): ExtractionWorker {

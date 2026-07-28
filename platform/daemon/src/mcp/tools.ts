@@ -667,11 +667,11 @@ export async function refreshMarketplaceProxyTools(
 // GraphIQ backward-compat aliases
 // ---------------------------------------------------------------------------
 
-function registerGraphiqCompatAliases(server: McpServer, pluginHostProvider: GraphiqPluginPolicyHost): void {
+function registerGraphiqCompatAliases(server: McpServer, pluginHostProvider: GraphiqPluginPolicyHostProvider): void {
 	const compatDefs: ReadonlyArray<{
 		alias: string;
 		canonical: string;
-		schema: z.SomeZodObject | z.ZodObject<z.ZodRecord<z.ZodString>>;
+		schema: z.ZodType;
 		buildArgs: (args: Record<string, unknown>) => string[];
 		label: string;
 	}> = [
@@ -769,7 +769,7 @@ function registerGraphiqCompatAliases(server: McpServer, pluginHostProvider: Gra
 				description: `Backward-compat alias for \`${def.canonical}\`. Will be removed in a future release.`,
 				inputSchema: def.schema,
 			},
-			(args) =>
+			(args: unknown) =>
 				graphIqToolResult(def.buildArgs(args as Record<string, unknown>), def.label, def.canonical, pluginHostProvider),
 		);
 	}

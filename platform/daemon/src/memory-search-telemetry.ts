@@ -258,7 +258,7 @@ export function recordMemorySearchTelemetry(db: DbAccessor, input: MemorySearchT
 				input.response.meta.timings.totalMs,
 				stringifyJson(input.response.meta.timings, '{"totalMs":0,"stages":[]}'),
 				stringifyJson(results, "[]"),
-				input.response.sources ? stringifyJson(input.response.sources, "{}") : null,
+				null,
 			);
 			w.prepare("DELETE FROM memory_search_telemetry WHERE created_at < ?").run(cutoff);
 		});

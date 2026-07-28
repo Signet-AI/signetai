@@ -310,6 +310,12 @@ export async function checkAndSupersedeForAttributes(
 				importance: row.importance as number,
 				status: row.status as "active" | "superseded" | "deleted",
 				supersededBy: (row.superseded_by as string) ?? null,
+				sourceKind: (row.source_kind as string) ?? null,
+				sourceId: (row.source_id as string) ?? null,
+				sourcePath: (row.source_path as string) ?? null,
+				sourceRoot: (row.source_root as string) ?? null,
+				proposalId: (row.proposal_id as string) ?? null,
+				proposalEvidence: [],
 				createdAt: row.created_at as string,
 				updatedAt: row.updated_at as string,
 			} satisfies EntityAttribute;

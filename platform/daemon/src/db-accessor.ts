@@ -43,7 +43,7 @@ export interface SqliteRunResult {
 export type SqliteStatement = {
 	run(...params: unknown[]): SqliteRunResult;
 	get(...params: unknown[]): Record<string, unknown> | undefined;
-	all(...params: unknown[]): Record<string, unknown>[];
+	all<Row = unknown>(...params: unknown[]): Row[];
 };
 
 export interface TypedSqliteStatement<Row extends object> {

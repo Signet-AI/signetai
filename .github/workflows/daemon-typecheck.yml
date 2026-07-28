@@ -1,16 +1,9 @@
 name: Daemon Typecheck
 
-# Non-blocking daemon tsc gate (#961).
+# Blocking daemon production typecheck gate (#969).
 #
-# The daemon historically shipped with dormant type errors because it had no
-# `typecheck` script and `build:types` emits despite errors (noEmitOnError
-# defaults to false). This workflow surfaces the daemon's tsc status without
-# blocking main or PRs (continue-on-error), so:
-#   - the existing backlog (tracked in its own issue) is visible, and
-#   - NEW type errors introduced by a PR show up here for the author/reviewer.
-#
-# Once the backlog is cleared to green in a follow-up, flip `continue-on-error`
-# to false to make this a hard gate.
+# Tests run through the Bun test suite; this project checks the daemon sources
+# that ship to users and excludes test-only mocks and fixtures.
 on:
   pull_request:
     paths:
@@ -32,9 +25,8 @@ permissions:
 
 jobs:
   typecheck:
-    name: Daemon tsc --noEmit (non-blocking)
+    name: Daemon production tsc --noEmit
     runs-on: ubuntu-latest
-    continue-on-error: true
 
     steps:
       - uses: actions/checkout@v4
@@ -54,36 +46,33 @@ jobs:
         shell: bash
         run: |
           set +e
-          # Mirror the daemon's local typecheck script (tsc --noEmit from
-          # platform/daemon, which picks up daemon/tsconfig.json). Exclude the
-          # rootDir cross-package TS6059 noise that tsc emits when core source
-          # is pulled in via path maps — those are not real daemon errors.
+          # The daemon tsconfig excludes test-only mocks/fixtures; those are
+          # exercised by the Bun test suite. Keep the rootDir cross-package
+          # TS6059 noise out of this production source gate.
           cd platform/daemon
-          npx tsc --noEmit 2>&1 | grep -v "TS6059" | tee /tmp/tsc-out.txt
-          # Count real errors (exclude the rootDir noise + the per-file "is in
-          # the program because" follow-up lines).
-          ERR_COUNT=$(grep -c "error TS" /tmp/tsc-out.txt || true)
-          echo "error_count=$ERR_COUNT" >> "$GITHUB_OUTPUT"
-          echo "::warning file=platform/daemon::Daemon tsc reports $ERR_COUNT type error(s). This job is non-blocking (see #961). New errors introduced by this PR should be fixed before merge."
+          set +e
+          npx tsc --noEmit > /tmp/daemon-tsc-raw.txt 2>&1
+          TSC_STATUS=$?
+          grep -v "TS6059" /tmp/daemon-tsc-raw.txt > /tmp/daemon-tsc.txt || true
+          cat /tmp/daemon-tsc.txt
+          if grep -q "error TS" /tmp/daemon-tsc.txt; then
+            exit 1
+          fi
+          # Preserve failures that did not produce a TypeScript diagnostic
+          # (for example, an invocation or resource failure).
+          if [ "$TSC_STATUS" -ne 0 ] && ! grep -q "TS6059" /tmp/daemon-tsc-raw.txt; then
+            exit "$TSC_STATUS"
+          fi
 
       - name: Summary
         if: always()
         shell: bash
         run: |
-          echo "## Daemon Typecheck (non-blocking)" >> "$GITHUB_STEP_SUMMARY"
+          echo "## Daemon Production Typecheck" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           OUTCOME="${{ steps.tsc.outcome }}"
-          COUNT="${{ steps.tsc.outputs.error_count }}"
           if [ "$OUTCOME" != "success" ]; then
-            # Distinguish "0 errors" from "typecheck step skipped/broken"
-            # (failed install, tsc OOM/timeout) — otherwise an unset COUNT
-            # would falsely print "✅ clean".
-            echo "⚠️ Daemon typecheck step did not complete (outcome: $OUTCOME)." >> "$GITHUB_STEP_SUMMARY"
-            echo "Cannot report an error count; investigate the job logs." >> "$GITHUB_STEP_SUMMARY"
-          elif [ "$COUNT" = "0" ]; then
-            echo "✅ Daemon \`tsc --noEmit\` is clean." >> "$GITHUB_STEP_SUMMARY"
+            echo "❌ Daemon production typecheck failed (outcome: $OUTCOME)." >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "⚠️ Daemon \`tsc --noEmit\` reports **$COUNT** error(s)." >> "$GITHUB_STEP_SUMMARY"
-            echo "" >> "$GITHUB_STEP_SUMMARY"
-            echo "This job is **non-blocking** (continue-on-error) per #961. The existing backlog is tracked separately; please ensure your PR does not *add* new errors." >> "$GITHUB_STEP_SUMMARY"
+            echo "✅ Daemon production \`tsc --noEmit\` is clean." >> "$GITHUB_STEP_SUMMARY"
           fi

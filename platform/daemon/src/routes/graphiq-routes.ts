@@ -150,7 +150,11 @@ function isGraphiqInstalled(): boolean {
 	return resolveGraphiqBinary() !== null;
 }
 
-async function installGraphiq(): Promise<{ success: boolean; source?: string; error?: string }> {
+async function installGraphiq(): Promise<{
+	success: boolean;
+	source?: "source" | "homebrew" | "script" | "existing";
+	error?: string;
+}> {
 	const script = getInstallScriptPath();
 	if (!existsSync(script)) {
 		return { success: false, error: `Install script not found: ${script}` };

@@ -364,8 +364,9 @@ function parseRateLimitConfig(raw: unknown): PipelineV2Config["extraction"]["rat
 
 function resolveMaxLlmConcurrency(rawValue: unknown, defaultValue: number): number {
 	const env = process.env.SIGNET_MAX_LLM_CONCURRENCY;
-	const candidate = env !== undefined ? Number(env) : rawValue;
-	if (env !== undefined && (!Number.isSafeInteger(candidate) || candidate < 1)) {
+	const candidate: unknown = env !== undefined ? Number(env) : rawValue;
+	const isValidCandidate = typeof candidate === "number" && Number.isSafeInteger(candidate) && candidate >= 1;
+	if (env !== undefined && !isValidCandidate) {
 		logger.warn("pipeline", "SIGNET_MAX_LLM_CONCURRENCY is not a valid positive integer, using config/default", {
 			value: env,
 		});

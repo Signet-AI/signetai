@@ -13,6 +13,12 @@
  */
 import { Duplex } from "node:stream";
 
+declare module "node:stream" {
+	interface Duplex {
+		destroySoon(): void;
+	}
+}
+
 export function applyPolyfill(): void {
 	if (typeof Duplex.prototype.destroySoon === "function") return;
 	Duplex.prototype.destroySoon = function destroySoon() {

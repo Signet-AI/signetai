@@ -557,13 +557,7 @@ export function registerPipelineRoutes(app: Hono): void {
 				/* ignore */
 			}
 		}
-		await refreshRegistry(
-			resolveRegistryOllamaBaseUrl(cfg.pipelineV2.extraction.provider, cfg.pipelineV2.extraction.endpoint),
-			anthropicKey,
-			openRouterKey,
-			resolveRegistryOpenRouterBaseUrl(cfg.pipelineV2.extraction.provider, cfg.pipelineV2.extraction.endpoint),
-			resolveRegistryLlamaCppBaseUrl(cfg.pipelineV2.extraction.provider, cfg.pipelineV2.extraction.endpoint),
-		);
+		await refreshRegistry();
 		return c.json({
 			models: getModelsByProvider(),
 			registry: getRegistryStatus(),
