@@ -77,7 +77,15 @@ export async function runOAuthLogin(
 		onManualCodeInput: async () => ui.promptText("Paste the final redirect URL or authorization code"),
 	};
 	return new Promise<OAuthCredentials>((resolve, reject) => {
-		const cleanup = () => process.off("unhandledRejection", onUnhandled);
+		const cleanup = () => {
+			clearInterval(keepalive);
+			process.off("unhandledRejection", onUnhandled);
+		};
+		// Hold the event loop open for the duration of the interactive login. pi-ai's
+		// callback server + browser race are async and may not ref the loop (the
+		// browser is a detached process), so without this bun can exit cleanly
+		// mid-login after the last inquirer prompt resolves.
+		const keepalive = setInterval(() => {}, 1000);
 		const onUnhandled = (reason: unknown) => {
 			cleanup();
 			const msg = reason instanceof Error ? reason.message : String(reason);
