@@ -1304,6 +1304,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 						name: `ACPX (harness subprocess)${detectedProvider === "acpx" ? " — detected" : ""}`,
 					},
 					{ value: "openai-compatible", name: "Custom endpoint (OpenAI-compatible URL)" },
+					{ value: "none", name: "Disable background inference" },
 				],
 			});
 			if (chosen === "__oauth__") {
