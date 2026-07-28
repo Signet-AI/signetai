@@ -12,6 +12,7 @@
  * HTTP + UI are injected so the state machine is unit-testable without a live
  * daemon or TTY.
  */
+import { type OAuthCredentials, type OAuthLoginCallbacks, getOAuthProvider } from "@earendil-works/pi-ai/oauth";
 import { oauthSecretName, providerKeySecretName } from "./setup-inference-connect.js";
 
 export interface ConnectHttp {
@@ -24,8 +25,6 @@ export interface ConnectHttp {
 	readonly getJson: (
 		path: string,
 	) => Promise<{ readonly ok: boolean; readonly data?: unknown; readonly error?: string }>;
-	/** POST that returns the raw SSE body stream for OAuth login. */
-	readonly postStream: (path: string, body: unknown) => Promise<ReadableStream<Uint8Array>>;
 }
 
 export interface ConnectUi {
@@ -64,100 +63,63 @@ export async function connectApiKey(http: ConnectHttp, family: string, key: stri
 	return { ok: true, method: "api" };
 }
 
-interface SseEvent {
-	readonly type: string;
-	readonly data: Record<string, unknown>;
-}
+/** Acquire OAuth credentials via pi-ai's login() — injectable for tests. */
+export type OAuthLoginFn = (callbacks: OAuthLoginCallbacks) => Promise<OAuthCredentials>;
 
-/** Parse one SSE frame (`event: t\ndata: {...}\n\n`) into { type, data }. */
-function parseSseFrame(chunk: string): SseEvent | null {
-	let type = "message";
-	let dataLine = "";
-	for (const line of chunk.split("\n")) {
-		const trimmed = line.trim();
-		if (trimmed.startsWith("event:")) type = trimmed.slice(6).trim();
-		else if (trimmed.startsWith("data:")) dataLine += trimmed.slice(5).trim();
-	}
-	if (!dataLine) return null;
-	try {
-		return { type, data: JSON.parse(dataLine) as Record<string, unknown> };
-	} catch {
-		return null;
-	}
+function defaultLogin(providerId: string): OAuthLoginFn {
+	return (callbacks) => {
+		const provider = getOAuthProvider(providerId);
+		if (!provider) throw new Error(`Unknown OAuth provider: ${providerId}`);
+		return provider.login(callbacks);
+	};
 }
 
 /**
- * Drive an OAuth login to completion via the daemon's SSE stream. Mirrors the
- * dashboard's ConnectProviderController.runOAuth: opens the auth/device URL,
- * answers prompt/select/manual_code via inquirer-style callbacks, and POSTs
- * each answer to /api/inference/oauth/complete. The daemon stores the
- * resulting credential in the SIGNET_OAUTH_* secret.
+ * Drive an OAuth login to completion using pi-ai's own login() — the same
+ * self-contained flow the SDK ships (it spins its own localhost callback
+ * server for browser-callback providers and handles device codes for the
+ * rest). The dashboard proxies this through the daemon only because a browser
+ * can't run node:http; the CLI calls the SDK directly. The resulting
+ * credential is stored under the canonical SIGNET_OAUTH_* secret so the
+ * daemon resolves it at call time.
  */
-export async function connectOAuth(http: ConnectHttp, ui: ConnectUi, providerId: string): Promise<ConnectResult> {
-	let stream: ReadableStream<Uint8Array>;
+export async function connectOAuth(
+	http: ConnectHttp,
+	ui: ConnectUi,
+	providerId: string,
+	deps?: { readonly login: OAuthLoginFn },
+): Promise<ConnectResult> {
+	const login = deps?.login ?? defaultLogin(providerId);
+
+	let credentials: OAuthCredentials;
 	try {
-		stream = await http.postStream(`/api/inference/oauth/login/${encodeURIComponent(providerId)}`, {});
+		credentials = await login({
+			onAuth: (info) => ui.openUrl(info.url),
+			onDeviceCode: (info) => ui.showDeviceCode(info.userCode, info.verificationUri),
+			onPrompt: async (prompt) => ui.promptText(prompt.message),
+			onSelect: async (prompt) =>
+				ui.promptSelect(
+					prompt.message,
+					prompt.options.map((o) => ({ id: o.id, label: o.label })),
+				),
+			onProgress: (message) => ui.onProgress?.(message),
+			onManualCodeInput: async () => ui.promptText("Paste the final redirect URL or authorization code"),
+		});
 	} catch (err) {
-		return { ok: false, error: err instanceof Error ? err.message : "OAuth login request failed" };
+		const msg = err instanceof Error ? err.message : "OAuth login failed";
+		ui.onError?.(msg);
+		return { ok: false, error: msg };
 	}
 
-	const reader = stream.getReader();
-	const decoder = new TextDecoder();
-	let buffer = "";
-	let sessionId: string | undefined;
-
-	// Outstanding prompt the daemon is waiting on; resolved when the UI answers.
-	let pending: { readonly responseId: string; readonly kind: "text" | "select" | "manual_code" } | undefined;
-
-	const answer = async (responseId: string, value: string): Promise<void> => {
-		await http.postJson("/api/inference/oauth/complete", { sessionId, responseId, value });
-	};
-
-	for (;;) {
-		const { done, value } = await reader.read();
-		if (done) break;
-		buffer += decoder.decode(value, { stream: true });
-
-		let nl: number;
-		// Frames are separated by a blank line (\n\n).
-		while ((nl = buffer.indexOf("\n\n")) >= 0) {
-			const frame = buffer.slice(0, nl);
-			buffer = buffer.slice(nl + 2);
-			const event = parseSseFrame(frame);
-			if (!event) continue;
-			const d = event.data;
-
-			if (event.type === "session") sessionId = typeof d.sessionId === "string" ? d.sessionId : sessionId;
-			else if (event.type === "auth" && typeof d.url === "string") ui.openUrl(d.url);
-			else if (event.type === "device_code" && typeof d.userCode === "string" && typeof d.verificationUri === "string")
-				ui.showDeviceCode(d.userCode, d.verificationUri);
-			else if (event.type === "progress" && typeof d.message === "string") ui.onProgress?.(d.message);
-			else if (event.type === "connected") return { ok: true, method: "oauth" };
-			else if (event.type === "error" && typeof d.error === "string") {
-				ui.onError?.(d.error);
-				return { ok: false, error: d.error };
-			} else if (event.type === "prompt" && typeof d.responseId === "string") {
-				pending = { responseId: d.responseId, kind: "text" };
-				const msg = typeof d.message === "string" ? d.message : "Enter a value";
-				const val = await ui.promptText(msg);
-				await answer(d.responseId, val);
-				pending = undefined;
-			} else if (event.type === "select" && typeof d.responseId === "string" && Array.isArray(d.options)) {
-				const options = (d.options as ReadonlyArray<Record<string, unknown>>).map((o) => ({
-					id: String(o.id),
-					label: String(o.label ?? o.id),
-				}));
-				const chosen = await ui.promptSelect(typeof d.message === "string" ? d.message : "Select an option", options);
-				await answer(d.responseId, chosen);
-			} else if (event.type === "manual_code" && typeof d.responseId === "string") {
-				const val = await ui.promptText("Paste the final redirect URL or authorization code");
-				await answer(d.responseId, val);
-			}
-		}
+	const name = oauthSecretName(providerId);
+	const res = await http.postJson(`/api/secrets/${encodeURIComponent(name)}`, {
+		value: JSON.stringify(credentials),
+	});
+	if (!res.ok) {
+		const nested = (res.data as { error?: string } | undefined)?.error;
+		return { ok: false, error: res.error ?? nested ?? "Failed to store OAuth credentials" };
 	}
-	return pending
-		? { ok: false, error: "OAuth login ended with a pending prompt" }
-		: { ok: false, error: "OAuth login ended unexpectedly" };
+	return { ok: true, method: "oauth" };
 }
 
 export interface CatalogModel {

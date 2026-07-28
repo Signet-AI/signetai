@@ -159,15 +159,6 @@ function buildConnectExtraction(
 		const http: ConnectHttp = {
 			postJson: (path, body) => client.secretApiCall("POST", path, body),
 			getJson: (path) => client.secretApiCall("GET", path),
-			postStream: async (path, body) => {
-				const res = await fetch(`${client.url}${path}`, {
-					method: "POST",
-					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify(body),
-				});
-				if (!res.ok || !res.body) throw new Error(`daemon ${path} returned ${res.status}`);
-				return res.body;
-			},
 		};
 		if (method === "api") {
 			const key = (await password({ message: `Paste your ${family} API key:`, mask: "*" })).trim();
@@ -1172,7 +1163,6 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 			message: "How should memories be embedded for search?",
 			choices: [
 				{ value: "native", name: "Built-in (recommended, no setup required)" },
-				{ value: "llama-cpp", name: "llama.cpp (local — nomic-embed-text)" },
 				{ value: "ollama", name: "Ollama (local, requires ollama install)" },
 				{ value: "openai", name: "OpenAI API" },
 				{ value: "none", name: "Skip embeddings for now" },
@@ -1186,31 +1176,6 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 	if (embeddingProvider === "native") {
 		embeddingModel = "nomic-embed-text-v1.5";
 		embeddingDimensions = 768;
-	} else if (embeddingProvider === "llama-cpp") {
-		if (nonInteractive) {
-			const configuredModel =
-				deps.normalizeStringValue(options.embeddingModel) ||
-				deps.normalizeStringValue(existingEmbedding.model) ||
-				"nomic-embed-text";
-			embeddingModel = configuredModel;
-			embeddingDimensions = getEmbeddingDimensions(configuredModel);
-		} else {
-			console.log();
-			const model = await select({
-				message: "Which embedding model?",
-				choices: [
-					{ value: "nomic-embed-text", name: "nomic-embed-text (768d, recommended)" },
-					{ value: "all-minilm", name: "all-minilm (384d, faster)" },
-					{ value: "mxbai-embed-large", name: "mxbai-embed-large (1024d, better quality)" },
-				],
-			});
-			embeddingModel = model;
-			embeddingDimensions = getEmbeddingDimensions(model);
-			if (!llamaCppServerAvailable) {
-				console.log(chalk.yellow("  No llama.cpp server detected on http://localhost:8080."));
-				console.log(chalk.yellow("  Embeddings will fail until llama.cpp is running."));
-			}
-		}
 	} else if (embeddingProvider === "ollama") {
 		if (nonInteractive) {
 			const configuredModel =
