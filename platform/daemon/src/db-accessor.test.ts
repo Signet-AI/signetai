@@ -61,6 +61,19 @@ describe("DbAccessor", () => {
 		expect(result?.val).toBe("hello");
 	});
 
+	test("write statements expose the number of affected rows", () => {
+		const dbPath = tmpDbPath();
+		cleanupDirs.push(join(dbPath, ".."));
+		initDbAccessor(dbPath);
+
+		const changes = getDbAccessor().withWriteTx((db) => {
+			db.exec("CREATE TABLE write_result_test (id INTEGER PRIMARY KEY, val TEXT)");
+			return db.prepare("INSERT INTO write_result_test (id, val) VALUES (?, ?)").run(1, "written").changes;
+		});
+
+		expect(changes).toBe(1);
+	});
+
 	test("withReadDb provides working read access", () => {
 		const dbPath = tmpDbPath();
 		cleanupDirs.push(join(dbPath, ".."));
