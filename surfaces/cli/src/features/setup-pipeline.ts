@@ -5,14 +5,11 @@ export const EXTRACTION_SAFETY_WARNING =
 	"Extraction is intended for Claude Code (haiku), Codex CLI (gpt-5.4-mini) on a Pro/Max subscription, or local llama.cpp / Ollama with qwen3:4b or larger. Remote API extraction can rack up extreme usage fees fast. On a VPS, set the provider to none unless you explicitly want background extraction.";
 
 /**
- * Providers eligible for the distinct aggregate-recall workload. Aggregate
- * recall is latency-sensitive and pi-ai-only — harness subprocesss (acpx /
- * claude-code / codex / opencode) are excluded because spawn latency would
- * dominate (see dashboard InferenceSection). Setup offers the non-subprocess
- * providers it already knows how to configure.
+ * Providers eligible for the distinct aggregate-recall workload are sourced
+ * from pi-ai via aggregateRecallProviderIds() in setup-inference-connect
+ * (pi-ai families + local servers; ACPX is excluded — aggregate recall is
+ * latency-sensitive, and spawn latency would dominate).
  */
-export const AGGREGATE_RECALL_PROVIDER_CHOICES = ["openrouter", "openai-compatible", "ollama", "llama-cpp"] as const;
-export type AggregateRecallProviderChoice = (typeof AGGREGATE_RECALL_PROVIDER_CHOICES)[number];
 
 export interface SetupPipelineConfig {
 	readonly enabled: boolean;
@@ -270,7 +267,7 @@ function isGeneratedAcpxWorkload(value: unknown): boolean {
  * resolve the credential instead of hard-blocking the target as 'missing'.
  */
 export function buildSetupAggregateRecall(
-	provider: AggregateRecallProviderChoice,
+	provider: string,
 	model?: string,
 	endpoint?: string,
 ): { targets: Record<string, unknown>; accounts?: Record<string, unknown>; workloads: Record<string, unknown> } {

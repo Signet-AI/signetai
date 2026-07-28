@@ -1,6 +1,6 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { checkbox, confirm, input, password, select } from "@inquirer/prompts";
+import { checkbox, confirm, input, password, search, select } from "@inquirer/prompts";
 import { OpenClawConnector } from "@signet/connector-openclaw";
 import {
 	IDENTITY_MODES,
@@ -27,14 +27,15 @@ import { installGraphiqPlugin } from "./graphiq.js";
 import { connectApiKey, connectOAuth } from "./setup-connect.js";
 import type { ConnectHttp, ConnectUi } from "./setup-connect.js";
 import { runFreshSetup } from "./setup-fresh.js";
-import { apiKeyProviderOptions, modelOptions, oauthProviderOptions } from "./setup-inference-connect.js";
-import { runExistingSetupWizard } from "./setup-migrate.js";
 import {
-	AGGREGATE_RECALL_PROVIDER_CHOICES,
-	type AggregateRecallProviderChoice,
-	defaultAcpxModel,
-	defaultExtractionModel,
-} from "./setup-pipeline.js";
+	LOCAL_SERVERS,
+	aggregateRecallProviderIds,
+	apiKeyProviderOptions,
+	modelOptions,
+	oauthProviderOptions,
+} from "./setup-inference-connect.js";
+import { runExistingSetupWizard } from "./setup-migrate.js";
+import { defaultAcpxModel, defaultExtractionModel } from "./setup-pipeline.js";
 import { parseSetupPlan, setupPlanJsonSchema } from "./setup-plan.js";
 import type { SetupApplyContext, SetupPlan } from "./setup-plan.js";
 import { readSetupCorePluginEnabled, writeSetupCorePluginRegistry } from "./setup-plugins.js";
@@ -83,6 +84,42 @@ function modelChoices(provider: ExtractionProviderChoice): Array<{ value: string
 }
 
 /**
+ * Pick a model from pi-ai's real catalog for a provider family. Uses a plain
+ * select for short lists and a searchable `search` prompt for large ones
+ * (e.g. openrouter's 253 models) so the user can type to find what they want.
+ * Falls back to free text only if the catalog has no models for the family.
+ */
+async function pickModel(
+	family: string,
+	prompts: {
+		readonly select: typeof import("@inquirer/prompts").select;
+		readonly search: typeof import("@inquirer/prompts").search;
+		readonly input: typeof import("@inquirer/prompts").input;
+	},
+): Promise<string> {
+	const models = modelOptions(family);
+	if (models.length === 0) {
+		return (
+			await prompts.input({ message: "Model:", validate: (v) => v.trim().length > 0 || "Enter a model id" })
+		).trim();
+	}
+	const choices = models.map((m) => ({ value: m.id, name: `${m.name} (${m.id})` }));
+	if (models.length <= 12) {
+		return prompts.select({ message: "Model:", choices });
+	}
+	return prompts.search({
+		message: "Model (type to search):",
+		source: (term) => {
+			const t = (term ?? "").trim().toLowerCase();
+			const filtered = t
+				? choices.filter((c) => c.value.toLowerCase().includes(t) || c.name.toLowerCase().includes(t))
+				: choices;
+			return filtered.slice(0, 50);
+		},
+	});
+}
+
+/**
  * Connect sub-flows for background inference. The METHOD (OAuth vs API key)
  * is chosen by the top-level menu, so each helper just picks a provider from
  * the matching capability set and a model. Credential entry happens after the
@@ -94,6 +131,7 @@ async function pickConnectedProvider(
 	connectMethod: "api" | "oauth",
 	prompts: {
 		readonly select: typeof import("@inquirer/prompts").select;
+		readonly search: typeof import("@inquirer/prompts").search;
 		readonly input: typeof import("@inquirer/prompts").input;
 	},
 ): Promise<{ family: string; connectMethod: "api" | "oauth"; model: string } | undefined> {
@@ -102,20 +140,7 @@ async function pickConnectedProvider(
 		choices: [...providers.map((p) => ({ value: p.id, name: p.name })), { value: "__back__", name: "← back" }],
 	});
 	if (provider === "__back__") return undefined;
-	// Real model list from pi-ai (same as the dashboard) — never a guess.
-	const models = modelOptions(provider);
-	const model =
-		models.length > 0
-			? await prompts.select({
-					message: "Model:",
-					choices: models.map((m) => ({ value: m.id, name: `${m.name} (${m.id})` })),
-				})
-			: (
-					await prompts.input({
-						message: "Model:",
-						validate: (v) => v.trim().length > 0 || "Enter a model id",
-					})
-				).trim();
+	const model = await pickModel(provider, prompts);
 	return { family: provider, connectMethod, model };
 }
 
@@ -576,11 +601,11 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 	const requestedExtractionEndpoint = normalizeHttpEndpoint(rawExtractionEndpoint);
 	const requestedAggregateRecallProvider = deps.normalizeChoice(
 		options.aggregateRecallProvider,
-		AGGREGATE_RECALL_PROVIDER_CHOICES,
+		aggregateRecallProviderIds(),
 	);
 	if (options.aggregateRecallProvider && !requestedAggregateRecallProvider) {
 		failSetupValidation(
-			`Unknown --aggregate-recall-provider value: ${options.aggregateRecallProvider}. Valid choices: ${AGGREGATE_RECALL_PROVIDER_CHOICES.join(", ")}.`,
+			`Unknown --aggregate-recall-provider value: ${options.aggregateRecallProvider}. Valid choices: ${aggregateRecallProviderIds().join(", ")}.`,
 		);
 	}
 	const existingName = readString(existingConfig.name) ?? readString(existingAgent.name) ?? "My Agent";
@@ -1287,7 +1312,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 				],
 			});
 			if (chosen === "__oauth__") {
-				const connected = await pickConnectedProvider(oauthProviderOptions(), "oauth", { select, input });
+				const connected = await pickConnectedProvider(oauthProviderOptions(), "oauth", { select, search, input });
 				if (connected) {
 					extractionConnect = connected;
 					extractionModel = connected.model;
@@ -1295,7 +1320,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 					break;
 				}
 			} else if (chosen === "__apikey__") {
-				const connected = await pickConnectedProvider(apiKeyProviderOptions(), "api", { select, input });
+				const connected = await pickConnectedProvider(apiKeyProviderOptions(), "api", { select, search, input });
 				if (connected) {
 					extractionConnect = connected;
 					extractionModel = connected.model;
@@ -1431,14 +1456,12 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 	// Optional distinct provider for aggregate recall (query-time evidence
 	// synthesis). pi-ai-only (no harness subprocess). When unset, aggregate
 	// recall falls through to the default policy (the extraction provider).
-	let aggregateRecallProvider: AggregateRecallProviderChoice | undefined;
+	let aggregateRecallProvider: string | undefined;
 	let aggregateRecallModel: string | undefined;
 	let aggregateRecallEndpoint: string | undefined;
 	if (nonInteractive) {
-		aggregateRecallProvider = (deps.normalizeChoice(
-			options.aggregateRecallProvider,
-			AGGREGATE_RECALL_PROVIDER_CHOICES,
-		) ?? undefined) as AggregateRecallProviderChoice | undefined;
+		aggregateRecallProvider =
+			deps.normalizeChoice(options.aggregateRecallProvider, aggregateRecallProviderIds()) ?? undefined ?? undefined;
 		aggregateRecallModel = deps.normalizeStringValue(options.aggregateRecallModel) ?? undefined;
 		aggregateRecallEndpoint =
 			normalizeHttpEndpoint(deps.normalizeStringValue(options.aggregateRecallEndpoint)) ??
@@ -1451,15 +1474,17 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		});
 		if (distinctAggregateRecall) {
 			console.log();
+			// Same pi-ai catalog as the connect flow (pi-ai-only — no ACPX, since
+			// aggregate recall is latency-sensitive), plus local servers.
+			const aggProviders = [...oauthProviderOptions(), ...apiKeyProviderOptions(), ...LOCAL_SERVERS].filter(
+				(p, i, arr) => arr.findIndex((q) => q.id === p.id) === i,
+			);
 			aggregateRecallProvider = await select({
 				message: "Aggregate-recall provider:",
-				choices: AGGREGATE_RECALL_PROVIDER_CHOICES.map((p) => ({ value: p, name: p })),
+				choices: aggProviders.map((p) => ({ value: p.id, name: p.name })),
 			});
 			console.log();
-			aggregateRecallModel = await select({
-				message: "Which model for aggregate recall?",
-				choices: modelChoices(aggregateRecallProvider),
-			});
+			aggregateRecallModel = await pickModel(aggregateRecallProvider, { select, search, input });
 			if (aggregateRecallProvider === "openai-compatible") {
 				const epInput = await input({
 					message: "Aggregate-recall endpoint:",

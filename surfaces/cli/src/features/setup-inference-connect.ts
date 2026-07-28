@@ -64,6 +64,12 @@ export function connectableProviderIds(): readonly string[] {
 	return [...new Set([...getProviders(), ...getOAuthProviders().map((p) => p.id)])];
 }
 
+/** Provider ids valid for aggregate recall — pi-ai families plus local servers
+ * (ollama/llama-cpp/openai-compatible). ACPX is excluded (latency-sensitive). */
+export function aggregateRecallProviderIds(): readonly string[] {
+	return [...new Set([...connectableProviderIds(), ...LOCAL_SERVERS.map((s) => s.id)])];
+}
+
 /** Local keyless servers offered as extraction backends. */
 export const LOCAL_SERVERS = [
 	{ id: "ollama", name: "Ollama (local)" },

@@ -7,8 +7,7 @@ import {
 	NETWORK_MODES,
 } from "@signet/core";
 import { z } from "zod";
-import { connectableProviderIds } from "./setup-inference-connect.js";
-import { AGGREGATE_RECALL_PROVIDER_CHOICES } from "./setup-pipeline.js";
+import { aggregateRecallProviderIds, connectableProviderIds } from "./setup-inference-connect.js";
 import {
 	EMBEDDING_PROVIDER_CHOICES,
 	EXTRACTION_PROVIDER_CHOICES,
@@ -39,7 +38,8 @@ const embeddingProviderSchema = z.enum(EMBEDDING_PROVIDER_CHOICES);
 // pi-ai's catalog, all valid routing executors the daemon handles.
 const EXTRACTION_PROVIDER_IDS = [...new Set([...EXTRACTION_PROVIDER_CHOICES, ...connectableProviderIds()])] as const;
 const extractionProviderSchema = z.enum(EXTRACTION_PROVIDER_IDS);
-const aggregateRecallProviderSchema = z.enum(AGGREGATE_RECALL_PROVIDER_CHOICES);
+// Aggregate recall is pi-ai-only; accept any connectable pi-ai family + local servers.
+const aggregateRecallProviderSchema = z.enum(aggregateRecallProviderIds());
 const openclawRuntimeSchema = z.enum(OPENCLAW_RUNTIME_CHOICES);
 
 const identityModeSchema = z.enum(IDENTITY_MODES);
