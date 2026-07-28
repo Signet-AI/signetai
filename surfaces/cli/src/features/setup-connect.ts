@@ -21,6 +21,10 @@ export interface ConnectHttp {
 		path: string,
 		body: unknown,
 	) => Promise<{ readonly ok: boolean; readonly data?: unknown; readonly error?: string }>;
+	/** JSON GET to the daemon (e.g. the catalog). */
+	readonly getJson: (
+		path: string,
+	) => Promise<{ readonly ok: boolean; readonly data?: unknown; readonly error?: string }>;
 	/** POST that returns the raw SSE body stream for OAuth login. */
 	readonly postStream: (path: string, body: unknown) => Promise<ReadableStream<Uint8Array>>;
 }
@@ -52,7 +56,12 @@ export type ConnectResult =
 export async function connectApiKey(http: ConnectHttp, family: string, key: string): Promise<ConnectResult> {
 	const name = providerKeySecretName(family);
 	const res = await http.postJson(`/api/secrets/${encodeURIComponent(name)}`, { value: key });
-	if (!res.ok) return { ok: false, error: res.error ?? "Failed to store API key" };
+	if (!res.ok) {
+		// secretApiCall nests the daemon error at res.data.error; fall back to the
+		// top-level error field, then a generic message.
+		const nested = (res.data as { error?: string } | undefined)?.error;
+		return { ok: false, error: res.error ?? nested ?? "Failed to store API key" };
+	}
 	return { ok: true, method: "api" };
 }
 
@@ -159,8 +168,7 @@ export interface CatalogModel {
 
 /** Fetch the live model list for a provider family from the daemon catalog. */
 export async function fetchModels(http: ConnectHttp, family: string): Promise<CatalogModel[]> {
-	// Reuse postJson against the GET catalog endpoint (body ignored).
-	const res = await http.postJson("/api/inference/catalog", {});
+	const res = await http.getJson("/api/inference/catalog");
 	if (!res.ok || !res.data) return [];
 	const models = (res.data as { models?: Record<string, CatalogModel[]> }).models?.[family];
 	return Array.isArray(models) ? models : [];

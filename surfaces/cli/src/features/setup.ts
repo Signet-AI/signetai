@@ -84,18 +84,34 @@ function modelChoices(provider: ExtractionProviderChoice): Array<{ value: string
 	return modelPresetsForProvider(provider).map((preset) => ({ value: preset.value, name: preset.label }));
 }
 
+/** Per-family extraction model defaults (small/fast/cheap, extraction-grade).
+ * The dashboard picks from the live catalog; the CLI wizard runs before the
+ * daemon, so we suggest a known-good id and let the user override. */
+const CONNECT_MODEL_DEFAULTS: Record<string, string> = {
+	anthropic: "claude-3-5-haiku-20241022",
+	openrouter: "anthropic/claude-3.5-haiku",
+	openai: "gpt-4o-mini",
+	"openai-codex": "gpt-4o-mini",
+	"github-copilot": "gpt-4o-mini",
+	google: "gemini-2.0-flash",
+	xai: "grok-2-latest",
+	groq: "llama-3.1-8b-instant",
+	deepseek: "deepseek-chat",
+	mistral: "mistral-small-latest",
+};
+
 /**
  * Interactive sub-flow matching the dashboard's connect-provider wall: pick a
- * cloud provider, then choose API-key vs OAuth login (when both are offered).
- * Returns the connect decision, or undefined if the user backs out. Credential
- * entry happens after the daemon starts (the daemon owns the secrets store +
- * OAuth endpoints, exactly like the browser dashboard).
+ * cloud provider, choose API-key vs OAuth login (when both are offered), and
+ * pick a model. Returns the connect decision, or undefined if the user backs
+ * out. Credential entry happens after the daemon starts (the daemon owns the
+ * secrets store + OAuth endpoints, exactly like the browser dashboard).
  */
 async function connectExtractionProvider(prompts: {
 	readonly select: typeof import("@inquirer/prompts").select;
 	readonly confirm: typeof import("@inquirer/prompts").confirm;
 	readonly input: typeof import("@inquirer/prompts").input;
-}): Promise<{ family: string; connectMethod: "api" | "oauth" } | undefined> {
+}): Promise<{ family: string; connectMethod: "api" | "oauth"; model: string } | undefined> {
 	const provider = await prompts.select<{
 		id: string;
 		name: string;
@@ -123,7 +139,15 @@ async function connectExtractionProvider(prompts: {
 	} else {
 		connectMethod = choice === "oauth" ? "oauth" : "api";
 	}
-	return { family: provider.id, connectMethod };
+	const modelDefault = CONNECT_MODEL_DEFAULTS[provider.id] ?? "";
+	const model = (
+		await prompts.input({
+			message: `Model for ${provider.name} (extraction):`,
+			default: modelDefault,
+			validate: (v) => v.trim().length > 0 || "Enter a model id",
+		})
+	).trim();
+	return { family: provider.id, connectMethod, model };
 }
 
 /**
@@ -140,6 +164,7 @@ function buildConnectExtraction(
 		const client = createDaemonClient(port, basePath);
 		const http: ConnectHttp = {
 			postJson: (path, body) => client.secretApiCall("POST", path, body),
+			getJson: (path) => client.secretApiCall("GET", path),
 			postStream: async (path, body) => {
 				const res = await fetch(`${client.url}${path}`, {
 					method: "POST",
@@ -1357,9 +1382,10 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 			const connected = await connectExtractionProvider({ select, confirm, input });
 			if (connected) {
 				extractionConnect = connected;
+				extractionModel = connected.model;
 				// pipelineV2 must stay enabled for the worker; the modern inference.*
 				// route (written in apply) overrides the actual target/credential.
-				extractionProvider = (connected.family as ExtractionProviderChoice) ?? "openrouter";
+				extractionProvider = connected.family as ExtractionProviderChoice;
 			} else {
 				extractionProvider = await select({
 					message: "Memory extraction provider:",
@@ -1372,7 +1398,10 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 	}
 
 	let extractionModel = "haiku";
-	if (extractionProvider === "acpx") {
+	if (extractionConnect) {
+		// Model was chosen in the connect sub-flow; skip the legacy per-provider
+		// model branches (they don't cover the connect families).
+	} else if (extractionProvider === "acpx") {
 		if (nonInteractive) {
 			extractionModel =
 				deps.normalizeStringValue(options.extractionModel) ||

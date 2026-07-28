@@ -6,6 +6,7 @@ import type { ConnectableProvider } from "./setup-providers";
 function mockHttp(overrides: Partial<ConnectHttp> = {}): ConnectHttp {
 	return {
 		postJson: mock(async () => ({ ok: true })),
+		getJson: mock(async () => ({ ok: true })),
 		postStream: mock(
 			async () =>
 				new ReadableStream({
@@ -150,13 +151,13 @@ describe("connectOAuth", () => {
 describe("fetchModels", () => {
 	it("returns the model list for a family", async () => {
 		const http = mockHttp({
-			postJson: mock(async () => ({ ok: true, data: { models: { openrouter: [{ id: "m1", name: "M1" }] } } })),
+			getJson: mock(async () => ({ ok: true, data: { models: { openrouter: [{ id: "m1", name: "M1" }] } } })),
 		});
 		expect(await fetchModels(http, "openrouter")).toEqual([{ id: "m1", name: "M1" }]);
 	});
 
 	it("returns [] when the family is absent", async () => {
-		const http = mockHttp({ postJson: mock(async () => ({ ok: true, data: { models: {} } })) });
+		const http = mockHttp({ getJson: mock(async () => ({ ok: true, data: { models: {} } })) });
 		expect(await fetchModels(http, "nope")).toEqual([]);
 	});
 });

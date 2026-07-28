@@ -850,7 +850,7 @@ describe("setupWizard headless plan path", () => {
 		writeIdentityTemplates(templatesPath);
 		const planPath = writePlanFile(root, {
 			extractionProvider: "openrouter",
-			extractionModel: "anthropic/claude-3.5-sonnet",
+			extractionModel: "anthropic/claude-3.5-haiku",
 			extractionConnect: { family: "openrouter", connectMethod: "api" },
 		});
 		const deps = freshDeps(basePath, templatesPath);
@@ -864,6 +864,25 @@ describe("setupWizard headless plan path", () => {
 		expect(agentYaml).toContain("executor: openrouter");
 		// API-key connect writes an api account referencing the key secret.
 		expect(agentYaml).toContain("SIGNET_KEY_OPENROUTER");
+	});
+
+	it("accepts a non-legacy connect family (anthropic OAuth) and writes a subscription_session account", async () => {
+		root = mkdtempSync(join(tmpdir(), "setup-headless-connect-anthropic-"));
+		const basePath = join(root, "agents");
+		const templatesPath = join(root, "templates");
+		writeIdentityTemplates(templatesPath);
+		const planPath = writePlanFile(root, {
+			extractionProvider: "anthropic",
+			extractionModel: "claude-3-5-haiku-20241022",
+			extractionConnect: { family: "anthropic", connectMethod: "oauth" },
+		});
+		const deps = freshDeps(basePath, templatesPath);
+
+		await setupWizard({ file: planPath }, deps);
+
+		const agentYaml = readFileSync(join(basePath, "agent.yaml"), "utf-8");
+		expect(agentYaml).toContain("executor: anthropic");
+		expect(agentYaml).toContain("subscription_session");
 	});
 
 	it("writes a distinct aggregate-recall target from a plan file", async () => {

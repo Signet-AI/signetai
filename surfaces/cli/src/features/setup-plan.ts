@@ -7,6 +7,7 @@ import {
 	NETWORK_MODES,
 } from "@signet/core";
 import { z } from "zod";
+import { CONNECTABLE_PROVIDERS } from "./setup-inference-connect.js";
 import { AGGREGATE_RECALL_PROVIDER_CHOICES } from "./setup-pipeline.js";
 import {
 	EMBEDDING_PROVIDER_CHOICES,
@@ -33,7 +34,13 @@ import {
 const networkModeSchema = z.enum(NETWORK_MODES);
 const harnessSchema = z.enum(SETUP_HARNESS_CHOICES);
 const embeddingProviderSchema = z.enum(EMBEDDING_PROVIDER_CHOICES);
-const extractionProviderSchema = z.enum(EXTRACTION_PROVIDER_CHOICES);
+// Extraction provider accepts both the legacy CLI choices and the dashboard
+// connect families (anthropic, openai-codex, github-copilot, …) — all are
+// valid routing executors the daemon's routing compiler handles.
+const EXTRACTION_PROVIDER_IDS = [
+	...new Set([...EXTRACTION_PROVIDER_CHOICES, ...CONNECTABLE_PROVIDERS.map((p) => p.id)]),
+] as const;
+const extractionProviderSchema = z.enum(EXTRACTION_PROVIDER_IDS);
 const aggregateRecallProviderSchema = z.enum(AGGREGATE_RECALL_PROVIDER_CHOICES);
 const openclawRuntimeSchema = z.enum(OPENCLAW_RUNTIME_CHOICES);
 
