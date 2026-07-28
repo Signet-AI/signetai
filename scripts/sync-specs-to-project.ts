@@ -241,7 +241,7 @@ function addDraft(title: string): string {
 mutation {
   addProjectV2DraftIssue(input: {
     projectId: "${PROJECT_ID}"
-    title: "${title.replace(/"/g, '\\"')}"
+    title: ${JSON.stringify(title)}
   }) {
     projectItem { id }
   }
@@ -256,7 +256,7 @@ mutation {
     projectId: "${PROJECT_ID}"
     itemId: "${itemId}"
     fieldId: "${fieldId}"
-    value: { text: "${value.replace(/"/g, '\\"')}" }
+    value: { text: ${JSON.stringify(value)} }
   }) {
     projectV2Item { id }
   }
