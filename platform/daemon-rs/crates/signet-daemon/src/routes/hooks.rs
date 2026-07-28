@@ -916,7 +916,10 @@ fn pipeline_enabled(state: &AppState) -> bool {
 /// The TS daemon relies on the global auth middleware for this boundary;
 /// daemon-rs enforces it explicitly here.
 fn transcript_path_allowed(canonical: &Path) -> bool {
-    canonical.starts_with("/tmp/signet")
+    let staging_root = Path::new("/tmp/signet");
+    let canonical_staging_root =
+        fs::canonicalize(staging_root).unwrap_or_else(|_| staging_root.into());
+    canonical.starts_with(canonical_staging_root)
 }
 
 fn load_guarded_transcript_path(

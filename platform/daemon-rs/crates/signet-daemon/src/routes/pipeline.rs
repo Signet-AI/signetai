@@ -20,7 +20,7 @@ use crate::auth::middleware::{
 use crate::auth::types::Permission;
 use crate::state::AppState;
 
-const PIPELINE_CONFIG_FILES: [&str; 3] = ["agent.yaml", "AGENT.yaml", "config.yaml"];
+const PIPELINE_CONFIG_FILES: [&str; 3] = ["AGENT.yaml", "agent.yaml", "config.yaml"];
 
 #[derive(Clone, Copy)]
 struct PipelineMode {
