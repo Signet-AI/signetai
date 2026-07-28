@@ -50,7 +50,13 @@ function defaultLogin(providerId: string): OAuthLoginFn {
  * Run the OAuth login NOW (during the wizard) using pi-ai's self-contained
  * login() — the browser opens / a device code is shown, and the user
  * authenticates. Returns the credential to persist (storage happens later via
- * storeOAuthCredentials, once the daemon is running). Throws on failure.
+ * storeOAuthCredentials, once the daemon is running). Rejects on failure.
+ *
+ * pi-ai's login races a local callback server against manual input and can
+ * emit unhandled rejections from its internal async ops (e.g. a bind or fetch
+ * failure on the callback race) that would otherwise kill the process
+ * silently. Those are captured here and surfaced as a normal rejection so the
+ * wizard can fail gracefully (message + return to menu) instead of quitting.
  */
 export async function runOAuthLogin(
 	ui: ConnectUi,
@@ -58,7 +64,7 @@ export async function runOAuthLogin(
 	deps?: { readonly login: OAuthLoginFn },
 ): Promise<OAuthCredentials> {
 	const login = deps?.login ?? defaultLogin(providerId);
-	return login({
+	const callbacks: OAuthLoginCallbacks = {
 		onAuth: (info) => ui.openUrl(info.url),
 		onDeviceCode: (info) => ui.showDeviceCode(info.userCode, info.verificationUri),
 		onPrompt: async (prompt) => ui.promptText(prompt.message),
@@ -69,6 +75,26 @@ export async function runOAuthLogin(
 			),
 		onProgress: (message) => ui.onProgress?.(message),
 		onManualCodeInput: async () => ui.promptText("Paste the final redirect URL or authorization code"),
+	};
+	return new Promise<OAuthCredentials>((resolve, reject) => {
+		const cleanup = () => process.off("unhandledRejection", onUnhandled);
+		const onUnhandled = (reason: unknown) => {
+			cleanup();
+			const msg = reason instanceof Error ? reason.message : String(reason);
+			ui.onError?.(msg);
+			reject(reason instanceof Error ? reason : new Error(msg));
+		};
+		process.on("unhandledRejection", onUnhandled);
+		login(callbacks).then(
+			(creds) => {
+				cleanup();
+				resolve(creds);
+			},
+			(err) => {
+				cleanup();
+				reject(err);
+			},
+		);
 	});
 }
 
