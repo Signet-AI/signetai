@@ -1,30 +1,30 @@
-import { describe, test, expect, beforeEach, afterEach, it } from "bun:test";
 import { Database } from "bun:sqlite";
+import { afterEach, beforeEach, describe, expect, it, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
-import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { runMigrations } from "../../core/src/migrations/index";
+import type { ContinuityState } from "./continuity-state";
+import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
 import {
-	writeCheckpoint,
+	type CheckpointRow,
+	type WriteCheckpointParams,
+	flushPendingCheckpoints,
+	formatPeriodicDigest,
+	formatPreCompactionDigest,
+	formatRecoveryDigest,
+	formatSessionEndDigest,
+	getCheckpointsByProject,
+	getCheckpointsBySession,
 	getLatestCheckpoint,
 	getLatestCheckpointBySession,
-	getCheckpointsBySession,
-	getCheckpointsByProject,
-	pruneCheckpoints,
-	redactSecrets,
-	redactCheckpointRow,
-	formatPeriodicDigest,
-	queueCheckpointWrite,
-	flushPendingCheckpoints,
 	initCheckpointFlush,
-	type WriteCheckpointParams,
-	formatRecoveryDigest,
-	formatPreCompactionDigest,
-	formatSessionEndDigest,
-	type CheckpointRow,
+	pruneCheckpoints,
+	queueCheckpointWrite,
+	redactCheckpointRow,
+	redactSecrets,
+	writeCheckpoint,
 } from "./session-checkpoints";
-import type { DbAccessor, WriteDb, ReadDb } from "./db-accessor";
-import type { ContinuityState } from "./continuity-state";
 
 function makeState(overrides: Partial<ContinuityState> = {}): ContinuityState {
 	return {
@@ -55,7 +55,7 @@ function createTestDbAccessor(dbPath: string): DbAccessor {
 		withWriteTx<T>(fn: (wdb: WriteDb) => T): T {
 			db.run("BEGIN IMMEDIATE");
 			try {
-			const result = fn(db as unknown as WriteDb);
+				const result = fn(db as unknown as WriteDb);
 				db.run("COMMIT");
 				return result;
 			} catch (err) {
@@ -64,7 +64,7 @@ function createTestDbAccessor(dbPath: string): DbAccessor {
 			}
 		},
 		withReadDb<T>(fn: (rdb: ReadDb) => T): T {
-		return fn(db as unknown as ReadDb);
+			return fn(db as unknown as ReadDb);
 		},
 		close() {
 			db.close();
