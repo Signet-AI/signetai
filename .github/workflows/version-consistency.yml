@@ -21,6 +21,10 @@ jobs:
 
       - name: Verify bun.lock matches manifests
         shell: bash
+        env:
+          # This job validates manifests and the lockfile; it does not run
+          # Electron. Avoid a network-only binary postinstall failure.
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
         run: bun install --frozen-lockfile
 
       - name: Verify Docker build pipeline stays aligned
