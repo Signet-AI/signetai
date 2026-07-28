@@ -54,6 +54,9 @@ if [ "\${1:-}" = "install" ]; then
 	echo '{"installed":true}'
 	exit 0
 fi
+if [ "\${SIGNET_PRINT_WRAPPER_DIR:-}" = "1" ]; then
+	echo "signet wrapper \${SIGNET_WRAPPER_DIR:-}"
+fi
 echo "fake native signet $*"
 `);
 }
@@ -546,8 +549,12 @@ describe("native install smoke", () => {
 		writeFileSync(nativePackageBin, fakeNativeBinary());
 		chmodSync(nativePackageBin, 0o755);
 
-		const directWrapper = await runCommand("node", [join(packageDir, "bin", "signet.js"), "--version"], process.env);
+		const directWrapper = await runCommand("node", [join(packageDir, "bin", "signet.js"), "--version"], {
+			...process.env,
+			SIGNET_PRINT_WRAPPER_DIR: "1",
+		});
 		expect(directWrapper.status).toBe(0);
+		expect(directWrapper.stdout).toContain(`signet wrapper ${packageDir}`);
 		expect(directWrapper.stdout).toContain("fake native signet --version");
 
 		const install = await runCommand("node", [join(packageDir, "scripts", "install-native.js")], process.env);

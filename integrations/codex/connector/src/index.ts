@@ -55,10 +55,16 @@ interface NativePluginCommandResult {
 /** Resolve the packaged Signet entry used by the compiled CLI.
  *
  * Bun-compiled binaries expose a virtual bunfs path in argv[1], so it cannot be
- * used to locate the installed package. The binary itself remains on disk at
- * <package>/bin/signet, making its sibling signet.js entry reliable instead. */
+ * used to locate the installed package. The npm wrapper passes its package root
+ * explicitly because it can launch an optional-dependency binary outside that
+ * package when postinstall did not link a local native binary. */
 function resolveSignetEntry(): string | null {
-	const candidates = [join(dirname(process.execPath), "..", "bin", "signet.js"), process.argv[1]];
+	const wrapperDir = readEnv("SIGNET_WRAPPER_DIR") ?? readEnv("SIGNET_DIR");
+	const candidates = [
+		wrapperDir ? join(wrapperDir, "bin", "signet.js") : null,
+		join(dirname(process.execPath), "..", "bin", "signet.js"),
+		process.argv[1],
+	];
 	for (const entry of candidates) {
 		if (entry && basename(entry) === "signet.js" && existsSync(entry)) return entry;
 	}
@@ -486,28 +492,42 @@ function isSignetMatcherGroup(group: unknown): boolean {
 	return false;
 }
 
+function hasMissingNodeRuntime(command: string): boolean {
+	const node = command.match(/(?:^|\s)(['\"]?)([^'\"\s]*[\\/]node(?:\.exe)?)(?:\1)(?=\s|$)/i)?.[2];
+	return Boolean(node && !existsSync(node));
+}
+
 function hasMissingSignetRuntime(file: HooksFile | null, configPath: string): boolean {
-	const hookCommands: string[] = [];
 	for (const groups of Object.values(file?.hooks ?? {})) {
 		if (!Array.isArray(groups)) continue;
 		for (const group of groups) {
 			if (typeof group !== "object" || group === null || !Array.isArray(group.hooks)) continue;
 			for (const handler of group.hooks) {
-				if (typeof handler?.command === "string") hookCommands.push(handler.command);
+				if (
+					typeof handler?.command === "string" &&
+					isSignetHookCommand(handler.command) &&
+					hasMissingNodeRuntime(handler.command)
+				) {
+					return true;
+				}
 			}
 		}
 	}
-	const config = existsSync(configPath) ? readFileSync(configPath, "utf-8") : "";
-	const commands = [
-		...hookCommands,
-		...[...config.matchAll(/^command\s*=\s*['\"]([^'\"]+)['\"]/gm)].map((match) => match[1] ?? ""),
-	];
-	return commands.some((command) => {
-		if (!isSignetHookCommand(command) && !command.includes("signet-mcp") && !command.includes("mcp-stdio.js"))
-			return false;
-		const node = command.match(/(?:^|\s)(['\"]?)([^'\"\s]*[\\/]node(?:\.exe)?)(?:\1)(?=\s|$)/i)?.[2];
-		return Boolean(node && !existsSync(node));
-	});
+
+	if (!existsSync(configPath)) return false;
+	let inSignetMcpSection = false;
+	for (const line of readFileSync(configPath, "utf-8").split("\n")) {
+		const trimmed = line.trim();
+		if (trimmed === "[mcp_servers.signet]") {
+			inSignetMcpSection = true;
+			continue;
+		}
+		if (inSignetMcpSection && trimmed.startsWith("[")) break;
+		if (!inSignetMcpSection) continue;
+		const command = trimmed.match(/^command\s*=\s*['\"]([^'\"]+)['\"]/)?.[1];
+		if (typeof command === "string") return hasMissingNodeRuntime(command);
+	}
+	return false;
 }
 
 function isLegacySignetMatcherGroup(group: unknown): boolean {
