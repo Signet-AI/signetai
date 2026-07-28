@@ -6,6 +6,10 @@ All notable changes to Signet are documented here.
 
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
+### 2026-07-27
+- Bug fixes: absolutize native smoke binary override path.
+- Docs: add plan-driven setup redesign draft spec.
+
 ### 2026-07-26
 - Features: show ASCII brand banner on bare signet invocation.
 - Bug fixes: refuse migration on vec dimension mismatch + harden backfill; add migration backfill; guard checkInference and complete workload-state contract; separate extraction workload state.
@@ -31,10 +35,20 @@ Surface summary of the most recent release dates. See the release ledger below f
 ### 2026-07-21
 - Bug fixes: update and verify active install.
 
-### 2026-07-20
-- Bug fixes: restore plugin discovery and lifecycle hooks.
-
 ## Release Ledger
+
+## [0.155.1] - 2026-07-27
+
+Release summary: 1 bug fix and 1 docs update.
+Tag range: `v0.155.0..v0.155.1`.
+
+### Bug Fixes
+
+- **release**: absolutize native smoke binary override path
+
+### Docs
+
+- **specs**: add plan-driven setup redesign draft spec
 
 ## [0.155.0] - 2026-07-26
 
