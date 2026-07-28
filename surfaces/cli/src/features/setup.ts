@@ -27,7 +27,7 @@ import { installGraphiqPlugin } from "./graphiq.js";
 import { connectApiKey, connectOAuth } from "./setup-connect.js";
 import type { ConnectHttp, ConnectUi } from "./setup-connect.js";
 import { runFreshSetup } from "./setup-fresh.js";
-import { CONNECTABLE_PROVIDERS, CONNECT_MODEL_DEFAULTS } from "./setup-inference-connect.js";
+import { apiKeyProviderOptions, modelOptions, oauthProviderOptions } from "./setup-inference-connect.js";
 import { runExistingSetupWizard } from "./setup-migrate.js";
 import {
 	AGGREGATE_RECALL_PROVIDER_CHOICES,
