@@ -55,7 +55,7 @@ function createTestDbAccessor(dbPath: string): DbAccessor {
 		withWriteTx<T>(fn: (wdb: WriteDb) => T): T {
 			db.run("BEGIN IMMEDIATE");
 			try {
-				const result = fn(db);
+			const result = fn(db as unknown as WriteDb);
 				db.run("COMMIT");
 				return result;
 			} catch (err) {
@@ -64,7 +64,7 @@ function createTestDbAccessor(dbPath: string): DbAccessor {
 			}
 		},
 		withReadDb<T>(fn: (rdb: ReadDb) => T): T {
-			return fn(db);
+		return fn(db as unknown as ReadDb);
 		},
 		close() {
 			db.close();
