@@ -6,10 +6,10 @@
  * temp directory so the real ~/.codex is never touched.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CodexConnector, buildMcpBlock } from "./index.js";
+import { CodexConnector, buildMcpBlock, resolveCodexDesktopNode } from "./index.js";
 
 class TempConnector extends CodexConnector {
 	constructor(private home: string) {
@@ -88,6 +88,7 @@ let previousApiKey: string | undefined;
 let previousToken: string | undefined;
 let previousForceCompatHooks: string | undefined;
 let previousArgvEntry: string | undefined;
+let previousExecPath: string;
 
 function restoreEnv(name: string, value: string | undefined): void {
 	if (value === undefined) {
@@ -106,6 +107,7 @@ beforeEach(() => {
 	previousToken = process.env.SIGNET_TOKEN;
 	previousForceCompatHooks = process.env.SIGNET_CODEX_FORCE_COMPAT_HOOKS;
 	previousArgvEntry = process.argv[1];
+	previousExecPath = process.execPath;
 	Reflect.deleteProperty(process.env, "SIGNET_SESSION_START_TIMEOUT");
 	Reflect.deleteProperty(process.env, "SIGNET_FETCH_TIMEOUT");
 	Reflect.deleteProperty(process.env, "SIGNET_PROMPT_SUBMIT_TIMEOUT");
@@ -130,6 +132,7 @@ afterEach(() => {
 	restoreEnv("SIGNET_CODEX_FORCE_COMPAT_HOOKS", previousForceCompatHooks);
 	if (previousArgvEntry === undefined) process.argv.splice(1, 1);
 	else process.argv[1] = previousArgvEntry;
+	process.execPath = previousExecPath;
 	rmSync(tempHome, { recursive: true, force: true });
 });
 
@@ -910,7 +913,10 @@ describe("CodexConnector.install — hooks.json schema", () => {
 		mkdirSync(join(mcpEntry, ".."), { recursive: true });
 		writeFileSync(signetEntry, "// fixture\n", "utf-8");
 		writeFileSync(mcpEntry, "// fixture\n", "utf-8");
-		process.argv[1] = signetEntry;
+		const signetBinary = join(packageRoot, "bin", "signet");
+		writeFileSync(signetBinary, "binary fixture\n", "utf-8");
+		process.execPath = signetBinary;
+		process.argv[1] = "/$bunfs/root/signet";
 
 		writeFileSync(
 			hooksPath,
@@ -942,6 +948,35 @@ describe("CodexConnector.install — hooks.json schema", () => {
 		expect(result.warnings).toContain(
 			"Detected a missing Signet Codex runtime path; refreshed only Signet-owned hooks and MCP configuration.",
 		);
+	});
+
+	test("discovers symlinked Codex Desktop runtimes", async () => {
+		const appPath = join(tempHome, "Applications", "Codex.app");
+		const resourcesDir = join(appPath, "Contents", "Resources");
+		const runtimeDir = join(tempHome, "node-runtime");
+		const versionedNode = join(runtimeDir, "node-v22.14.0");
+		const runtime = join(runtimeDir, "node");
+		mkdirSync(runtimeDir, { recursive: true });
+		writeFileSync(versionedNode, "#!/bin/sh\necho v22.14.0\n", "utf-8");
+		chmodSync(versionedNode, 0o755);
+		symlinkSync("node-v22.14.0", runtime);
+		mkdirSync(resourcesDir, { recursive: true });
+		symlinkSync(runtimeDir, join(resourcesDir, "runtime"));
+
+		expect(resolveCodexDesktopNode([appPath], (path) => path === join(resourcesDir, "runtime", "node"))).toBe(
+			join(resourcesDir, "runtime", "node"),
+		);
+	});
+
+	test("installs with malformed but valid hooks.json", async () => {
+		for (const hooks of [
+			{ SessionStart: "x" },
+			{ SessionStart: [{ hooks: "x" }] },
+			{ SessionStart: [{ hooks: [null] }] },
+		]) {
+			writeFileSync(hooksPath, JSON.stringify({ hooks }));
+			await expect(connector().install(tempHome)).resolves.toMatchObject({ success: true });
+		}
 	});
 
 	test("preserves third-party commands that only mention hook subcommands", async () => {

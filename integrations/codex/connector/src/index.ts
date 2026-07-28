@@ -52,13 +52,17 @@ interface NativePluginCommandResult {
 // Signet command resolution
 // ---------------------------------------------------------------------------
 
-/** Resolve signet command for hook invocation. Returns array form for hooks.json command field.
- *  Windows: navigates from argv[1] (e.g. <pkg>/bin/signet.js) up two levels to find
- *  the bin directory. Falls back to bare "signet" if the layout doesn't match (shims, junctions). */
+/** Resolve the packaged Signet entry used by the compiled CLI.
+ *
+ * Bun-compiled binaries expose a virtual bunfs path in argv[1], so it cannot be
+ * used to locate the installed package. The binary itself remains on disk at
+ * <package>/bin/signet, making its sibling signet.js entry reliable instead. */
 function resolveSignetEntry(): string | null {
-	const entry = process.argv[1];
-	if (!entry || basename(entry) !== "signet.js" || !existsSync(entry)) return null;
-	return entry;
+	const candidates = [join(dirname(process.execPath), "..", "bin", "signet.js"), process.argv[1]];
+	for (const entry of candidates) {
+		if (entry && basename(entry) === "signet.js" && existsSync(entry)) return entry;
+	}
+	return null;
 }
 
 function resolveSignetArgs(runtime: string | null = null): string[] {
@@ -108,9 +112,13 @@ function codexDesktopNodeCandidates(root: string, depth = 0): string[] {
 	const candidates: string[] = [];
 	for (const entry of readdirSync(root, { withFileTypes: true })) {
 		const path = join(root, entry.name);
-		if (entry.isFile() && entry.name === "node") candidates.push(path);
-		if (entry.isDirectory() && entry.name !== "app.asar")
+		if ((entry.isFile() || entry.isSymbolicLink()) && entry.name === "node") candidates.push(path);
+		try {
+			if (!statSync(path).isDirectory()) continue;
 			candidates.push(...codexDesktopNodeCandidates(path, depth + 1));
+		} catch {
+			// Ignore broken symlinks and files that disappear while scanning.
+		}
 	}
 	return candidates;
 }
@@ -479,9 +487,16 @@ function isSignetMatcherGroup(group: unknown): boolean {
 }
 
 function hasMissingSignetRuntime(file: HooksFile | null, configPath: string): boolean {
-	const hookCommands = Object.values(file?.hooks ?? {}).flatMap((groups) =>
-		groups.flatMap((group) => group.hooks.map((handler) => handler.command)),
-	);
+	const hookCommands: string[] = [];
+	for (const groups of Object.values(file?.hooks ?? {})) {
+		if (!Array.isArray(groups)) continue;
+		for (const group of groups) {
+			if (typeof group !== "object" || group === null || !Array.isArray(group.hooks)) continue;
+			for (const handler of group.hooks) {
+				if (typeof handler?.command === "string") hookCommands.push(handler.command);
+			}
+		}
+	}
 	const config = existsSync(configPath) ? readFileSync(configPath, "utf-8") : "";
 	const commands = [
 		...hookCommands,
@@ -1005,7 +1020,9 @@ export class CodexConnector extends BaseConnector {
 		const mcp = resolveSignetMcp(runtime);
 		if (staleRuntime) {
 			warnings.push(
-				"Detected a missing Signet Codex runtime path; refreshed only Signet-owned hooks and MCP configuration.",
+				runtime
+					? "Detected a missing Signet Codex runtime path; refreshed only Signet-owned hooks and MCP configuration."
+					: "Detected a missing Signet Codex runtime path; no replacement Codex runtime was found, so Signet commands use the PATH fallback.",
 			);
 		}
 		const nativePluginSupported = this.supportsNativePluginInstall();
