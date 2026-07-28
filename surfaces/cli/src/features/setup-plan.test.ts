@@ -119,6 +119,11 @@ describe("setupPlanSchema", () => {
 		expect(parseSetupPlan(plan).aggregateRecallProvider).toBe("openrouter");
 	});
 
+	it("accepts a connected extraction provider decision", () => {
+		const plan = basePlan({ extractionConnect: { family: "anthropic", connectMethod: "oauth" } });
+		expect(parseSetupPlan(plan).extractionConnect).toEqual({ family: "anthropic", connectMethod: "oauth" });
+	});
+
 	it("accepts a multi-agent roster", () => {
 		const plan = basePlan({
 			agents: [
@@ -183,7 +188,9 @@ describe("setupPlanSchema", () => {
 
 	it("rejects aggregate recall when extraction is disabled (nothing to synthesize)", () => {
 		expect(() =>
-			parseSetupPlan(basePlan({ extractionProvider: "none", aggregateRecallProvider: "ollama", aggregateRecallModel: "qwen3:4b" })),
+			parseSetupPlan(
+				basePlan({ extractionProvider: "none", aggregateRecallProvider: "ollama", aggregateRecallModel: "qwen3:4b" }),
+			),
 		).toThrow("aggregateRecallProvider");
 	});
 

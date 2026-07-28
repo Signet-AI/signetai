@@ -843,6 +843,29 @@ describe("setupWizard headless plan path", () => {
 		expect(agentYaml).toContain("enabled: true");
 	});
 
+	it("writes a connected cloud extraction target from a plan file", async () => {
+		root = mkdtempSync(join(tmpdir(), "setup-headless-connect-"));
+		const basePath = join(root, "agents");
+		const templatesPath = join(root, "templates");
+		writeIdentityTemplates(templatesPath);
+		const planPath = writePlanFile(root, {
+			extractionProvider: "openrouter",
+			extractionModel: "anthropic/claude-3.5-sonnet",
+			extractionConnect: { family: "openrouter", connectMethod: "api" },
+		});
+		const deps = freshDeps(basePath, templatesPath);
+
+		await setupWizard({ file: planPath }, deps);
+
+		const agentYaml = readFileSync(join(basePath, "agent.yaml"), "utf-8");
+		// Modern inference.* route is the source of truth for the connected target.
+		expect(agentYaml).toContain("memoryExtraction:");
+		expect(agentYaml).toContain("target: background/default");
+		expect(agentYaml).toContain("executor: openrouter");
+		// API-key connect writes an api account referencing the key secret.
+		expect(agentYaml).toContain("SIGNET_KEY_OPENROUTER");
+	});
+
 	it("writes a distinct aggregate-recall target from a plan file", async () => {
 		root = mkdtempSync(join(tmpdir(), "setup-headless-aggrecall-"));
 		const basePath = join(root, "agents");

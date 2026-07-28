@@ -16,6 +16,7 @@ import ora from "ora";
 import { daemonAccessLines } from "../lib/network.js";
 import Database from "../sqlite.js";
 import { installGraphiqPlugin } from "./graphiq.js";
+import { applyInferenceRoute, buildExtractionRoute } from "./setup-inference-connect.js";
 import {
 	applyAggregateRecallRoute,
 	applySetupInferenceRoute,
@@ -170,6 +171,23 @@ export async function runFreshSetup(plan: SetupPlan, context: SetupApplyContext,
 			context.acpxBin,
 		);
 		applySetupInferenceRoute(config, inference);
+
+		// Dashboard-style connected cloud provider: the modern inference.* route is
+		// the source of truth (target + connected account). pipelineV2 stays enabled
+		// so the extraction worker runs; the daemon merges inference.* atop the
+		// legacy base, so this target overrides the legacy extraction target.
+		if (plan.extractionConnect) {
+			applyInferenceRoute(
+				config,
+				buildExtractionRoute({
+					kind: "cloud",
+					executor: plan.extractionConnect.family,
+					family: plan.extractionConnect.family,
+					connectMethod: plan.extractionConnect.connectMethod,
+					model: plan.extractionModel || "default",
+				}),
+			);
+		}
 
 		// Optional distinct provider for aggregate recall (query-time evidence
 		// synthesis). Overlaid on config.inference; the daemon merges it atop the
@@ -373,6 +391,22 @@ export async function runFreshSetup(plan: SetupPlan, context: SetupApplyContext,
 				for (const line of daemonAccessLines(deps.DEFAULT_PORT, plan.networkMode)) {
 					console.log(chalk.dim(`    ${line}`));
 				}
+			}
+		}
+
+		// Connect the chosen cloud provider now that the daemon is running (the
+		// daemon owns the secrets store + OAuth endpoints, like the dashboard).
+		if (plan.extractionConnect && context.connectExtraction && !remoteDaemon) {
+			spinner.text = `Connecting ${plan.extractionConnect.family}...`;
+			const ok = await context.connectExtraction(plan.extractionConnect.family, plan.extractionConnect.connectMethod);
+			if (ok) {
+				console.log(chalk.green(`  ✓ Connected ${plan.extractionConnect.family}`));
+			} else {
+				console.log(
+					chalk.yellow(
+						`  ⚠ Could not connect ${plan.extractionConnect.family} now — finish connecting via the dashboard.`,
+					),
+				);
 			}
 		}
 

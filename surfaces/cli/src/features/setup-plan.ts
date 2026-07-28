@@ -94,6 +94,15 @@ export const setupPlanSchema = z
 		startupIdentityFiles: z.array(identityContextFileSchema),
 		specialIdentityFiles: z.array(identitySpecialFileSchema),
 		dreamingEnabled: z.boolean().optional(),
+		// Dashboard-style provider connect: when set, extraction runs on a connected
+		// cloud provider (API key or OAuth). The modern inference.* route is the
+		// source of truth; pipelineV2 stays enabled so the extraction worker runs.
+		extractionConnect: z
+			.strictObject({
+				family: z.string(),
+				connectMethod: z.enum(["api", "oauth"]),
+			})
+			.optional(),
 		daemonUrl: z
 			.string()
 			// Match normalizeDaemonUrl's rules: a bare origin (no path, query,
@@ -197,6 +206,10 @@ export interface SetupApplyContext {
 	readonly acpxBin?: string;
 	readonly openclawConfigCount: number;
 	readonly openDashboard: boolean;
+	/** Run the provider connect (API-key entry / OAuth) against the now-running
+	 * daemon. Provided by the interactive wizard; undefined for headless plans
+	 * (the provider is connected later via the dashboard). */
+	readonly connectExtraction?: (family: string, method: "api" | "oauth") => Promise<boolean>;
 }
 
 /**

@@ -125,8 +125,7 @@ export function buildExtractionRoute(opts: ExtractionRouteOptions): ExtractionRo
 		// resolved from the secret the connect step wrote.
 		target.account = family;
 		accounts = {
-			[family]:
-				opts.connectMethod === "oauth" ? oauthAccountEntry(family) : apiAccountEntry(family),
+			[family]: opts.connectMethod === "oauth" ? oauthAccountEntry(family) : apiAccountEntry(family),
 		};
 	} else if (opts.kind === "local") {
 		if (opts.executor === "openai-compatible") {
@@ -147,4 +146,20 @@ export function buildExtractionRoute(opts: ExtractionRouteOptions): ExtractionRo
 /** Find a connectable provider by id (OAuth/API-key menu uses this). */
 export function findConnectableProvider(id: string): ConnectableProvider | undefined {
 	return CONNECTABLE_PROVIDERS.find((p) => p.id === id);
+}
+
+/** Merge an inference route fragment (targets/accounts/workloads) into
+ * config.inference, creating it if absent. Used for the extraction target and
+ * (via buildSetupAggregateRecall) the aggregate-recall target. */
+export function applyInferenceRoute(
+	config: Record<string, unknown>,
+	route: { targets: Record<string, unknown>; accounts?: Record<string, unknown>; workloads: Record<string, unknown> },
+): void {
+	const existing = (config.inference ?? {}) as Record<string, unknown>;
+	const targets = { ...((existing.targets as Record<string, unknown>) ?? {}), ...route.targets };
+	const workloads = { ...((existing.workloads as Record<string, unknown>) ?? {}), ...route.workloads };
+	const accounts = route.accounts
+		? { ...((existing.accounts as Record<string, unknown>) ?? {}), ...route.accounts }
+		: (existing.accounts as Record<string, unknown> | undefined);
+	config.inference = { ...existing, targets, workloads, ...(accounts ? { accounts } : {}) };
 }

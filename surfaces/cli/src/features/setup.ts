@@ -1,6 +1,6 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { checkbox, confirm, input, select } from "@inquirer/prompts";
+import { checkbox, confirm, input, password, select } from "@inquirer/prompts";
 import { OpenClawConnector } from "@signet/connector-openclaw";
 import {
 	IDENTITY_MODES,
@@ -22,8 +22,12 @@ import chalk from "chalk";
 import open from "open";
 import ora from "ora";
 import { validateName } from "../commands/agent.js";
+import { createDaemonClient } from "../lib/daemon.js";
 import { installGraphiqPlugin } from "./graphiq.js";
+import { connectApiKey, connectChoice, connectOAuth } from "./setup-connect.js";
+import type { ConnectHttp, ConnectUi } from "./setup-connect.js";
 import { runFreshSetup } from "./setup-fresh.js";
+import { CONNECTABLE_PROVIDERS } from "./setup-inference-connect.js";
 import { runExistingSetupWizard } from "./setup-migrate.js";
 import {
 	AGGREGATE_RECALL_PROVIDER_CHOICES,
@@ -78,6 +82,97 @@ import type { SetupDeps, SetupWizardOptions } from "./setup-types.js";
 
 function modelChoices(provider: ExtractionProviderChoice): Array<{ value: string; name: string }> {
 	return modelPresetsForProvider(provider).map((preset) => ({ value: preset.value, name: preset.label }));
+}
+
+/**
+ * Interactive sub-flow matching the dashboard's connect-provider wall: pick a
+ * cloud provider, then choose API-key vs OAuth login (when both are offered).
+ * Returns the connect decision, or undefined if the user backs out. Credential
+ * entry happens after the daemon starts (the daemon owns the secrets store +
+ * OAuth endpoints, exactly like the browser dashboard).
+ */
+async function connectExtractionProvider(prompts: {
+	readonly select: typeof import("@inquirer/prompts").select;
+	readonly confirm: typeof import("@inquirer/prompts").confirm;
+	readonly input: typeof import("@inquirer/prompts").input;
+}): Promise<{ family: string; connectMethod: "api" | "oauth" } | undefined> {
+	const provider = await prompts.select<{
+		id: string;
+		name: string;
+		supportsOAuth: boolean;
+		supportsApiKey: boolean;
+	}>({
+		message: "Connect a cloud provider for memory extraction:",
+		choices: [
+			...CONNECTABLE_PROVIDERS.map((p) => ({ value: p, name: p.name })),
+			{ value: { id: "__back__", name: "← back", supportsOAuth: false, supportsApiKey: false }, name: "← back" },
+		],
+	});
+	if (provider.id === "__back__") return undefined;
+
+	const choice = connectChoice(provider);
+	let connectMethod: "api" | "oauth";
+	if (choice === "choice") {
+		connectMethod = await prompts.select<"api" | "oauth">({
+			message: `How do you want to connect ${provider.name}?`,
+			choices: [
+				{ value: "oauth", name: "Log in (subscription / OAuth)" },
+				{ value: "api", name: "Paste an API key" },
+			],
+		});
+	} else {
+		connectMethod = choice === "oauth" ? "oauth" : "api";
+	}
+	return { family: provider.id, connectMethod };
+}
+
+/**
+ * Build the post-daemon-start connect callback. Talks to the daemon the same
+ * way the dashboard does (the daemon owns the secrets store + OAuth SSE
+ * endpoints), with terminal UI: a password prompt for API keys, `open()` +
+ * inquirer for the OAuth dance. Returns true on success.
+ */
+function buildConnectExtraction(
+	basePath: string,
+	port: number,
+): (family: string, method: "api" | "oauth") => Promise<boolean> {
+	return async (family, method) => {
+		const client = createDaemonClient(port, basePath);
+		const http: ConnectHttp = {
+			postJson: (path, body) => client.secretApiCall("POST", path, body),
+			postStream: async (path, body) => {
+				const res = await fetch(`${client.url}${path}`, {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify(body),
+				});
+				if (!res.ok || !res.body) throw new Error(`daemon ${path} returned ${res.status}`);
+				return res.body;
+			},
+		};
+		if (method === "api") {
+			const key = (await password({ message: `Paste your ${family} API key:`, mask: "*" })).trim();
+			if (!key) return false;
+			const res = await connectApiKey(http, family, key);
+			return res.ok;
+		}
+		const ui: ConnectUi = {
+			openUrl: (url) => {
+				console.log(chalk.cyan(`  Opening browser: ${url}`));
+				void open(url).catch(() => {});
+			},
+			showDeviceCode: (userCode, verificationUri) => {
+				console.log(chalk.cyan(`  Enter this code at ${verificationUri}:`));
+				console.log(chalk.bold(`    ${userCode}`));
+			},
+			promptText: (message) => input({ message }),
+			promptSelect: (message, options) =>
+				select({ message, choices: options.map((o) => ({ value: o.id, name: o.label })) }),
+			onProgress: (m) => console.log(chalk.dim(`    ${m}`)),
+		};
+		const res = await connectOAuth(http, ui, family);
+		return res.ok;
+	};
 }
 
 const DEFAULT_OPENAI_COMPATIBLE_ENDPOINT = "http://127.0.0.1:1234/v1";
@@ -1188,6 +1283,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		deps.normalizeChoice(existingPipeline.extractionProvider, EXTRACTION_PROVIDER_CHOICES) ||
 		deps.normalizeChoice(existingExtraction.provider, EXTRACTION_PROVIDER_CHOICES);
 	let extractionProvider: ExtractionProviderChoice;
+	let extractionConnect: { family: string; connectMethod: "api" | "oauth" } | undefined;
 	if (nonInteractive) {
 		extractionProvider = resolveSetupExtractionProvider({
 			deploymentType,
@@ -1242,7 +1338,12 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 				name: "OpenAI-compatible endpoint (advanced, uses OPENAI_API_KEY and extraction endpoint config)",
 			},
 		];
-		extractionProvider = await select({
+		// Dashboard-style connect option: cloud provider via API key or OAuth.
+		choices.unshift({
+			value: "__connect__" as ExtractionProviderChoice,
+			name: "Connect a cloud provider (API key or login — Anthropic, OpenRouter, OpenAI, …)",
+		});
+		const chosen = await select<ExtractionProviderChoice>({
 			message: "Memory extraction provider (analyzes conversations):",
 			choices,
 			default: defaultExtractionProviderForDeployment(
@@ -1252,6 +1353,22 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 				harnesses,
 			),
 		});
+		if (chosen === ("__connect__" as ExtractionProviderChoice)) {
+			const connected = await connectExtractionProvider({ select, confirm, input });
+			if (connected) {
+				extractionConnect = connected;
+				// pipelineV2 must stay enabled for the worker; the modern inference.*
+				// route (written in apply) overrides the actual target/credential.
+				extractionProvider = (connected.family as ExtractionProviderChoice) ?? "openrouter";
+			} else {
+				extractionProvider = await select({
+					message: "Memory extraction provider:",
+					choices: choices.filter((c) => c.value !== ("__connect__" as ExtractionProviderChoice)),
+				});
+			}
+		} else {
+			extractionProvider = chosen;
+		}
 	}
 
 	let extractionModel = "haiku";
@@ -1563,6 +1680,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		extractionProvider,
 		extractionModel,
 		extractionEndpoint,
+		extractionConnect,
 		aggregateRecallProvider,
 		aggregateRecallModel,
 		aggregateRecallEndpoint,
@@ -1594,6 +1712,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		acpxBin,
 		openclawConfigCount,
 		openDashboard: options.openDashboard === true,
+		connectExtraction: nonInteractive ? undefined : buildConnectExtraction(basePath, deps.DEFAULT_PORT),
 	};
 
 	// Enforce the same cross-field invariants the headless --file path gets via
