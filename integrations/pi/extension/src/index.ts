@@ -425,7 +425,7 @@ export function parseRememberArgs(raw: string): RememberArgs {
 
 	const tagMatch = content.match(/^\[([^\]]+)\]:\s*/);
 	if (tagMatch) {
-		tags.push(...tagMatch[1].split(",").map((t) => t.trim()));
+		tags.push(...tagMatch[1]?.split(",").map((t) => t.trim()) ?? []);
 		content = content.slice(tagMatch[0].length);
 	}
 
