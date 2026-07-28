@@ -27,7 +27,7 @@ import { installGraphiqPlugin } from "./graphiq.js";
 import { connectApiKey, connectChoice, connectOAuth } from "./setup-connect.js";
 import type { ConnectHttp, ConnectUi } from "./setup-connect.js";
 import { runFreshSetup } from "./setup-fresh.js";
-import { CONNECTABLE_PROVIDERS } from "./setup-inference-connect.js";
+import { CONNECTABLE_PROVIDERS, CONNECT_MODEL_DEFAULTS } from "./setup-inference-connect.js";
 import { runExistingSetupWizard } from "./setup-migrate.js";
 import {
 	AGGREGATE_RECALL_PROVIDER_CHOICES,
@@ -83,22 +83,6 @@ import type { SetupDeps, SetupWizardOptions } from "./setup-types.js";
 function modelChoices(provider: ExtractionProviderChoice): Array<{ value: string; name: string }> {
 	return modelPresetsForProvider(provider).map((preset) => ({ value: preset.value, name: preset.label }));
 }
-
-/** Per-family extraction model defaults (small/fast/cheap, extraction-grade).
- * The dashboard picks from the live catalog; the CLI wizard runs before the
- * daemon, so we suggest a known-good id and let the user override. */
-const CONNECT_MODEL_DEFAULTS: Record<string, string> = {
-	anthropic: "claude-3-5-haiku-20241022",
-	openrouter: "anthropic/claude-3.5-haiku",
-	openai: "gpt-4o-mini",
-	"openai-codex": "gpt-4o-mini",
-	"github-copilot": "gpt-4o-mini",
-	google: "gemini-2.0-flash",
-	xai: "grok-2-latest",
-	groq: "llama-3.1-8b-instant",
-	deepseek: "deepseek-chat",
-	mistral: "mistral-small-latest",
-};
 
 /**
  * Interactive sub-flow matching the dashboard's connect-provider wall: pick a
@@ -1309,6 +1293,10 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		deps.normalizeChoice(existingExtraction.provider, EXTRACTION_PROVIDER_CHOICES);
 	let extractionProvider: ExtractionProviderChoice;
 	let extractionConnect: { family: string; connectMethod: "api" | "oauth" } | undefined;
+	// Declared before the provider-selection block so the connect sub-flow can
+	// assign it (avoids a temporal-dead-zone ReferenceError); the per-provider
+	// model branches below overwrite it for non-connect providers.
+	let extractionModel = "haiku";
 	if (nonInteractive) {
 		extractionProvider = resolveSetupExtractionProvider({
 			deploymentType,
@@ -1397,7 +1385,6 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		}
 	}
 
-	let extractionModel = "haiku";
 	if (extractionConnect) {
 		// Model was chosen in the connect sub-flow; skip the legacy per-provider
 		// model branches (they don't cover the connect families).
@@ -1534,8 +1521,8 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 			(aggregateRecallProvider === "openai-compatible" ? DEFAULT_OPENAI_COMPATIBLE_ENDPOINT : undefined);
 	} else if (extractionProvider !== "none") {
 		const distinctAggregateRecall = await confirm({
-			message: "Use a different provider for aggregate recall?",
-			description: "Query-time evidence synthesis. Latency-sensitive; defaults to your extraction provider.",
+			message:
+				"Use a different provider for aggregate recall? (query-time evidence synthesis — defaults to your extraction provider)",
 			default: false,
 		});
 		if (distinctAggregateRecall) {

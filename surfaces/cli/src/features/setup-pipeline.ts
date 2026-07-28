@@ -75,14 +75,14 @@ export function buildSetupPipeline(
 	// distinct "synthesis provider". The only per-operation override is
 	// aggregate recall, configured separately via the routing config.
 	return {
-		enabled: provider !== "none",
+		enabled: true,
 		extraction: {
 			provider,
 			model: resolved,
 			...(resolvedEndpoint ? { endpoint: resolvedEndpoint } : {}),
 		},
 		synthesis: {
-			enabled: provider !== "none",
+			enabled: true,
 			provider,
 			model: resolved,
 			...(resolvedEndpoint ? { endpoint: resolvedEndpoint } : {}),

@@ -16,7 +16,7 @@ import ora from "ora";
 import { daemonAccessLines } from "../lib/network.js";
 import Database from "../sqlite.js";
 import { installGraphiqPlugin } from "./graphiq.js";
-import { applyInferenceRoute, buildExtractionRoute } from "./setup-inference-connect.js";
+import { CONNECT_MODEL_DEFAULTS, applyInferenceRoute, buildExtractionRoute } from "./setup-inference-connect.js";
 import {
 	applyAggregateRecallRoute,
 	applySetupInferenceRoute,
@@ -184,7 +184,9 @@ export async function runFreshSetup(plan: SetupPlan, context: SetupApplyContext,
 					executor: plan.extractionConnect.family,
 					family: plan.extractionConnect.family,
 					connectMethod: plan.extractionConnect.connectMethod,
-					model: plan.extractionModel || "default",
+					// extractionModel is validated non-empty for connect plans (superRefine);
+					// fall back to a per-family default rather than a literal placeholder.
+					model: plan.extractionModel || CONNECT_MODEL_DEFAULTS[plan.extractionConnect.family] || "haiku",
 				}),
 			);
 		}

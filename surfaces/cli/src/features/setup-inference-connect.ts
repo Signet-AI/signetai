@@ -48,6 +48,22 @@ export const LOCAL_SERVERS = [
 	{ id: "openai-compatible", name: "OpenAI-compatible (LM Studio / gateway)" },
 ] as const;
 
+/** Per-family extraction model defaults (small/fast/cheap, extraction-grade).
+ * The dashboard picks from the live catalog; the CLI wizard runs before the
+ * daemon, so we suggest a known-good id and let the user override. */
+export const CONNECT_MODEL_DEFAULTS: Record<string, string> = {
+	anthropic: "claude-3-5-haiku-20241022",
+	openrouter: "anthropic/claude-3.5-haiku",
+	openai: "gpt-4o-mini",
+	"openai-codex": "gpt-4o-mini",
+	"github-copilot": "gpt-4o-mini",
+	google: "gemini-2.0-flash",
+	xai: "grok-2-latest",
+	groq: "llama-3.1-8b-instant",
+	deepseek: "deepseek-chat",
+	mistral: "mistral-small-latest",
+};
+
 export type ExtractionBackendKind = "cloud" | "local" | "acpx" | "none";
 
 /**
