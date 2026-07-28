@@ -394,6 +394,7 @@
       "version": "0.155.3",
       "bin": "./dist/cli.js",
       "dependencies": {
+        "@earendil-works/pi-ai": "0.79.2",
         "@inquirer/prompts": "^7.0.0",
         "@signet/connector-claude-code": "workspace:*",
         "@signet/connector-codex": "workspace:*",

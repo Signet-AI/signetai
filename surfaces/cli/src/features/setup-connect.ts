@@ -12,7 +12,6 @@
  * HTTP + UI are injected so the state machine is unit-testable without a live
  * daemon or TTY.
  */
-import type { ConnectableProvider } from "./setup-inference-connect.js";
 import { oauthSecretName, providerKeySecretName } from "./setup-inference-connect.js";
 
 export interface ConnectHttp {
@@ -172,14 +171,6 @@ export async function fetchModels(http: ConnectHttp, family: string): Promise<Ca
 	if (!res.ok || !res.data) return [];
 	const models = (res.data as { models?: Record<string, CatalogModel[]> }).models?.[family];
 	return Array.isArray(models) ? models : [];
-}
-
-/** Whether a provider offers a choice between OAuth and API key. */
-export function connectChoice(provider: ConnectableProvider): "oauth" | "key" | "choice" | null {
-	if (provider.supportsOAuth && !provider.supportsApiKey) return "oauth";
-	if (provider.supportsApiKey && !provider.supportsOAuth) return "key";
-	if (provider.supportsOAuth && provider.supportsApiKey) return "choice";
-	return null;
 }
 
 export { oauthSecretName };

@@ -16,7 +16,7 @@ import ora from "ora";
 import { daemonAccessLines } from "../lib/network.js";
 import Database from "../sqlite.js";
 import { installGraphiqPlugin } from "./graphiq.js";
-import { CONNECT_MODEL_DEFAULTS, applyInferenceRoute, buildExtractionRoute } from "./setup-inference-connect.js";
+import { applyInferenceRoute, buildExtractionRoute, modelOptions } from "./setup-inference-connect.js";
 import {
 	applyAggregateRecallRoute,
 	applySetupInferenceRoute,
@@ -184,9 +184,9 @@ export async function runFreshSetup(plan: SetupPlan, context: SetupApplyContext,
 					executor: plan.extractionConnect.family,
 					family: plan.extractionConnect.family,
 					connectMethod: plan.extractionConnect.connectMethod,
-					// extractionModel is validated non-empty for connect plans (superRefine);
-					// fall back to a per-family default rather than a literal placeholder.
-					model: plan.extractionModel || CONNECT_MODEL_DEFAULTS[plan.extractionConnect.family] || "haiku",
+					// extractionModel comes from the pi-ai model dropdown (non-empty for
+					// connect plans); fall back to the family's first catalog model.
+					model: plan.extractionModel || modelOptions(plan.extractionConnect.family)[0]?.id || "haiku",
 				}),
 			);
 		}

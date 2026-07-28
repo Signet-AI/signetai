@@ -97,22 +97,26 @@ async function pickConnectedProvider(
 		readonly input: typeof import("@inquirer/prompts").input;
 	},
 ): Promise<{ family: string; connectMethod: "api" | "oauth"; model: string } | undefined> {
-	const provider = await prompts.select<{ id: string; name: string }>({
+	const provider = await prompts.select<string>({
 		message: connectMethod === "oauth" ? "Log in with:" : "Provider:",
-		choices: [
-			...providers.map((p) => ({ value: p, name: p.name })),
-			{ value: { id: "__back__", name: "← back" }, name: "← back" },
-		],
+		choices: [...providers.map((p) => ({ value: p.id, name: p.name })), { value: "__back__", name: "← back" }],
 	});
-	if (provider.id === "__back__") return undefined;
-	const model = (
-		await prompts.input({
-			message: "Model:",
-			default: CONNECT_MODEL_DEFAULTS[provider.id] ?? "",
-			validate: (v) => v.trim().length > 0 || "Enter a model id",
-		})
-	).trim();
-	return { family: provider.id, connectMethod, model };
+	if (provider === "__back__") return undefined;
+	// Real model list from pi-ai (same as the dashboard) — never a guess.
+	const models = modelOptions(provider);
+	const model =
+		models.length > 0
+			? await prompts.select({
+					message: "Model:",
+					choices: models.map((m) => ({ value: m.id, name: `${m.name} (${m.id})` })),
+				})
+			: (
+					await prompts.input({
+						message: "Model:",
+						validate: (v) => v.trim().length > 0 || "Enter a model id",
+					})
+				).trim();
+	return { family: provider, connectMethod, model };
 }
 
 /**
@@ -1283,11 +1287,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 				],
 			});
 			if (chosen === "__oauth__") {
-				const connected = await pickConnectedProvider(
-					CONNECTABLE_PROVIDERS.filter((p) => p.supportsOAuth),
-					"oauth",
-					{ select, input },
-				);
+				const connected = await pickConnectedProvider(oauthProviderOptions(), "oauth", { select, input });
 				if (connected) {
 					extractionConnect = connected;
 					extractionModel = connected.model;
@@ -1295,11 +1295,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 					break;
 				}
 			} else if (chosen === "__apikey__") {
-				const connected = await pickConnectedProvider(
-					CONNECTABLE_PROVIDERS.filter((p) => p.supportsApiKey),
-					"api",
-					{ select, input },
-				);
+				const connected = await pickConnectedProvider(apiKeyProviderOptions(), "api", { select, input });
 				if (connected) {
 					extractionConnect = connected;
 					extractionModel = connected.model;

@@ -1,7 +1,6 @@
 import { describe, expect, it, mock } from "bun:test";
-import { connectApiKey, connectChoice, connectOAuth, fetchModels } from "./setup-connect";
+import { connectApiKey, connectOAuth, fetchModels } from "./setup-connect";
 import type { ConnectHttp, ConnectUi } from "./setup-connect";
-import type { ConnectableProvider } from "./setup-providers";
 
 function mockHttp(overrides: Partial<ConnectHttp> = {}): ConnectHttp {
 	return {
@@ -159,20 +158,5 @@ describe("fetchModels", () => {
 	it("returns [] when the family is absent", async () => {
 		const http = mockHttp({ getJson: mock(async () => ({ ok: true, data: { models: {} } })) });
 		expect(await fetchModels(http, "nope")).toEqual([]);
-	});
-});
-
-describe("connectChoice", () => {
-	const mk = (id: string, oauth: boolean, key: boolean): ConnectableProvider => ({
-		id,
-		name: id,
-		supportsOAuth: oauth,
-		supportsApiKey: key,
-	});
-	it("classifies oauth-only, key-only, and choice providers", () => {
-		expect(connectChoice(mk("openai-codex", true, false))).toBe("oauth");
-		expect(connectChoice(mk("openrouter", false, true))).toBe("key");
-		expect(connectChoice(mk("anthropic", true, true))).toBe("choice");
-		expect(connectChoice(mk("none", false, false))).toBeNull();
 	});
 });

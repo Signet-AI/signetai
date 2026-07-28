@@ -1,28 +1,37 @@
 import { describe, expect, it } from "bun:test";
 import {
-	CONNECTABLE_PROVIDERS,
 	apiAccountEntry,
+	apiKeyProviderOptions,
 	buildExtractionRoute,
-	findConnectableProvider,
+	modelOptions,
 	oauthAccountEntry,
+	oauthProviderOptions,
 	oauthSecretName,
 	providerKeySecretName,
 } from "./setup-inference-connect";
 
-describe("provider catalog", () => {
-	it("marks the three pi-ai OAuth providers", () => {
-		const oauth = CONNECTABLE_PROVIDERS.filter((p) => p.supportsOAuth).map((p) => p.id);
-		expect(oauth.sort()).toEqual(["anthropic", "github-copilot", "openai-codex"]);
+describe("provider catalog (sourced from pi-ai)", () => {
+	it("lists the OAuth-login providers from pi-ai", () => {
+		const ids = oauthProviderOptions()
+			.map((p) => p.id)
+			.sort();
+		// pi-ai's OAuth registry: anthropic, openai-codex, github-copilot.
+		expect(ids).toEqual(["anthropic", "github-copilot", "openai-codex"]);
 	});
 
-	it("lets anthropic choose between OAuth and API key", () => {
-		const anthropic = findConnectableProvider("anthropic");
-		expect(anthropic?.supportsOAuth).toBe(true);
-		expect(anthropic?.supportsApiKey).toBe(true);
+	it("excludes OAuth-only providers from the API-key list but keeps anthropic", () => {
+		const ids = apiKeyProviderOptions().map((p) => p.id);
+		expect(ids).toContain("anthropic");
+		expect(ids).toContain("openrouter");
+		// openai-codex / github-copilot are subscription-only (no API key).
+		expect(ids).not.toContain("openai-codex");
+		expect(ids).not.toContain("github-copilot");
 	});
 
-	it("findConnectableProvider returns undefined for unknown ids", () => {
-		expect(findConnectableProvider("nope")).toBeUndefined();
+	it("returns the real model list for a family (no guesses)", () => {
+		const models = modelOptions("anthropic");
+		expect(models.length).toBeGreaterThan(0);
+		expect(models.some((m) => m.id.includes("claude"))).toBe(true);
 	});
 });
 
@@ -37,7 +46,6 @@ describe("secret naming (mirrors dashboard/daemon)", () => {
 		expect(oauthSecretName("anthropic")).toBe(
 			`SIGNET_OAUTH_${Buffer.from("anthropic", "utf8").toString("hex").toUpperCase()}`,
 		);
-		// daemon resolves the same name, so the credential round-trips.
 		expect(oauthSecretName("anthropic")).not.toBe(oauthSecretName("openai-codex"));
 	});
 });
@@ -93,13 +101,6 @@ describe("buildExtractionRoute", () => {
 		expect(route.accounts?.anthropic).toEqual({ kind: "subscription_session", providerFamily: "anthropic" });
 	});
 
-	it("local ollama is keyless with no account", () => {
-		const route = buildExtractionRoute({ kind: "local", executor: "ollama", model: "qwen3:4b" });
-		expect(route.targets.background).toMatchObject({ executor: "ollama" });
-		expect(route.targets.background).not.toHaveProperty("account");
-		expect(route.accounts).toBeUndefined();
-	});
-
 	it("local openai-compatible carries an endpoint", () => {
 		const route = buildExtractionRoute({
 			kind: "local",
@@ -108,15 +109,5 @@ describe("buildExtractionRoute", () => {
 			endpoint: "http://gw:8000/v1",
 		});
 		expect(route.targets.background).toMatchObject({ executor: "openai-compatible", endpoint: "http://gw:8000/v1" });
-	});
-
-	it("acpx carries the agent block", () => {
-		const route = buildExtractionRoute({
-			kind: "acpx",
-			executor: "acpx",
-			model: "haiku",
-			acpx: { agent: "claude", bin: "/usr/bin/bunx" },
-		});
-		expect(route.targets.background).toMatchObject({ executor: "acpx", acpx: { agent: "claude" } });
 	});
 });

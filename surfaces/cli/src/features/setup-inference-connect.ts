@@ -1,45 +1,68 @@
 /**
- * Provider-connect model for `signet setup` — mirrors the dashboard's
- * InferenceSection so the CLI offers the same provider/login UX.
+ * Provider-connect model for `signet setup` — sources providers and models
+ * directly from pi-ai (the SAME catalog the dashboard and daemon use), so
+ * there is a single source of truth and no hand-maintained list to drift.
  *
- * The dashboard drives everything through the daemon HTTP API against a live
- * daemon. This module holds the PURE pieces (catalog, naming, config shapes)
- * so they are unit-testable; the imperative connect steps (OAuth SSE, secret
- * writes) live in setup-connect.ts and talk to the daemon the same way the
- * dashboard does. Nothing here touches the network or filesystem.
+ * The dashboard drives connect through the daemon HTTP API; this module holds
+ * the PURE pieces (catalog lookups, naming, config shapes) for unit testing.
+ * The imperative connect steps (OAuth SSE, secret writes) live in
+ * setup-connect.ts and talk to the daemon the same way the dashboard does.
  *
  * Config shapes are verified against:
  *  - dashboard `InferenceSection.writeTarget` / `ensureAccount`
  *  - dashboard `ConnectProviderDialog.linkAccountForApiKey` / `linkOAuthAccountForProvider`
  *  - daemon `inference-oauth.secretName` (SIGNET_OAUTH_<hex>) and `secrets.putSecret`
  */
+import { getModels, getProviders } from "@earendil-works/pi-ai";
+import { getOAuthProviders } from "@earendil-works/pi-ai/oauth";
 
-/** A cloud provider the user can connect via API key and/or OAuth login. */
-export interface ConnectableProvider {
-	readonly id: string; // pi-ai family id; also the routing executor
+export interface ProviderOption {
+	readonly id: string;
 	readonly name: string;
-	readonly supportsOAuth: boolean;
-	readonly supportsApiKey: boolean;
+}
+
+function titleCase(id: string): string {
+	return id
+		.split(/[-_]/)
+		.map((w) => (w.length > 0 ? w[0].toUpperCase() + w.slice(1) : w))
+		.join(" ");
 }
 
 /**
- * Curated connectable providers. Mirrors the dashboard's featured list +
- * auth capabilities (pi-ai OAuth providers: anthropic, openai-codex,
- * github-copilot). The live model catalog is fetched from the daemon after it
- * starts; this list only drives the selection menu.
+ * Providers that accept a login (OAuth subscription) — from pi-ai's OAuth
+ * registry (Claude Max / ChatGPT / GitHub Copilot). These are the only ids the
+ * daemon's `/api/inference/oauth/login/:id` will accept.
  */
-export const CONNECTABLE_PROVIDERS: readonly ConnectableProvider[] = [
-	{ id: "anthropic", name: "Anthropic (Claude)", supportsOAuth: true, supportsApiKey: true },
-	{ id: "openai-codex", name: "ChatGPT / Codex (subscription)", supportsOAuth: true, supportsApiKey: false },
-	{ id: "github-copilot", name: "GitHub Copilot", supportsOAuth: true, supportsApiKey: false },
-	{ id: "openrouter", name: "OpenRouter", supportsOAuth: false, supportsApiKey: true },
-	{ id: "openai", name: "OpenAI", supportsOAuth: false, supportsApiKey: true },
-	{ id: "google", name: "Google (Gemini)", supportsOAuth: false, supportsApiKey: true },
-	{ id: "xai", name: "xAI (Grok)", supportsOAuth: false, supportsApiKey: true },
-	{ id: "groq", name: "Groq", supportsOAuth: false, supportsApiKey: true },
-	{ id: "deepseek", name: "DeepSeek", supportsOAuth: false, supportsApiKey: true },
-	{ id: "mistral", name: "Mistral", supportsOAuth: false, supportsApiKey: true },
-];
+export function oauthProviderOptions(): ProviderOption[] {
+	return getOAuthProviders().map((p) => ({ id: p.id, name: p.name }));
+}
+
+/**
+ * Providers that accept a pasted API key — the pi-ai catalog families, minus the
+ * OAuth-only subscription providers (which have no API-key surface). anthropic
+ * is kept because it accepts BOTH OAuth and an API key.
+ */
+export function apiKeyProviderOptions(): ProviderOption[] {
+	const oauthOnly = getOAuthProviders()
+		.map((p) => p.id)
+		.filter((id) => id !== "anthropic");
+	return getProviders()
+		.filter((id) => !oauthOnly.includes(id))
+		.map((id) => ({ id, name: titleCase(id) }));
+}
+
+/**
+ * The real model list for a provider family — from pi-ai's model registry, the
+ * same data the dashboard's model picker uses. Never a guess.
+ */
+export function modelOptions(family: string): ProviderOption[] {
+	return getModels(family).map((m) => ({ id: m.id, name: m.name || m.id }));
+}
+
+/** All connectable provider ids (OAuth + API-key families). */
+export function connectableProviderIds(): readonly string[] {
+	return [...new Set([...getProviders(), ...getOAuthProviders().map((p) => p.id)])];
+}
 
 /** Local keyless servers offered as extraction backends. */
 export const LOCAL_SERVERS = [
@@ -47,22 +70,6 @@ export const LOCAL_SERVERS = [
 	{ id: "llama-cpp", name: "llama.cpp (local)" },
 	{ id: "openai-compatible", name: "OpenAI-compatible (LM Studio / gateway)" },
 ] as const;
-
-/** Per-family extraction model defaults (small/fast/cheap, extraction-grade).
- * The dashboard picks from the live catalog; the CLI wizard runs before the
- * daemon, so we suggest a known-good id and let the user override. */
-export const CONNECT_MODEL_DEFAULTS: Record<string, string> = {
-	anthropic: "claude-3-5-haiku-20241022",
-	openrouter: "anthropic/claude-3.5-haiku",
-	openai: "gpt-4o-mini",
-	"openai-codex": "gpt-4o-mini",
-	"github-copilot": "gpt-4o-mini",
-	google: "gemini-2.0-flash",
-	xai: "grok-2-latest",
-	groq: "llama-3.1-8b-instant",
-	deepseek: "deepseek-chat",
-	mistral: "mistral-small-latest",
-};
 
 export type ExtractionBackendKind = "cloud" | "local" | "acpx" | "none";
 
@@ -157,11 +164,6 @@ export function buildExtractionRoute(opts: ExtractionRouteOptions): ExtractionRo
 		...(accounts ? { accounts } : {}),
 		workloads: { memoryExtraction: { target: `${targetName}/default` } },
 	};
-}
-
-/** Find a connectable provider by id (OAuth/API-key menu uses this). */
-export function findConnectableProvider(id: string): ConnectableProvider | undefined {
-	return CONNECTABLE_PROVIDERS.find((p) => p.id === id);
 }
 
 /** Merge an inference route fragment (targets/accounts/workloads) into
