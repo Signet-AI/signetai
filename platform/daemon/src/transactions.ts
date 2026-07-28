@@ -7,7 +7,13 @@
  */
 
 import type { WriteDb } from "./db-accessor";
-import { syncVecDeleteBySourceExceptHash, syncVecDeleteBySourceId, syncVecInsert, tableExists, vectorToBlob } from "./db-helpers";
+import {
+	syncVecDeleteBySourceExceptHash,
+	syncVecDeleteBySourceId,
+	syncVecInsert,
+	tableExists,
+	vectorToBlob,
+} from "./db-helpers";
 import { cancelExtractionJobsForForgottenMemory } from "./pipeline/extraction-queue";
 
 // ---------------------------------------------------------------------------

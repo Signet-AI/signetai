@@ -10,14 +10,7 @@ export const SECTION_ORDER = [
 ] as const;
 
 /** Sections not shown in the public sidebar */
-const HIDDEN_SECTIONS = new Set([
-	"Specs",
-	"Research",
-	"Architecture",
-	"Development",
-	"Internal",
-	"Other",
-]);
+const HIDDEN_SECTIONS = new Set(["Specs", "Research", "Architecture", "Development", "Internal", "Other"]);
 
 export interface DocNavItem {
 	readonly title: string;

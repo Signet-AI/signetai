@@ -1,15 +1,16 @@
 <script lang="ts">
+import { onDestroy, onMount } from "svelte";
 import {
-	type GitHubSourceResourceType,
-	type SignetSourceEntry,
 	addDiscordSource,
 	addGitHubSource,
 	addObsidianSource,
+	type GitHubSourceResourceType,
 	getSourceSnapshot,
 	getSources,
 	importSourceSnapshot,
 	pickSourceDirectory,
 	removeSource,
+	type SignetSourceEntry,
 } from "$lib/api";
 import { getDesktopShell } from "$lib/desktop-shell";
 import {
@@ -29,7 +30,6 @@ import {
 	X,
 } from "$lib/icons";
 import { sourceHasChunkCoverageWarning } from "$lib/issue-848-format";
-import { onDestroy, onMount } from "svelte";
 
 type SourceKind =
 	| "obsidian"

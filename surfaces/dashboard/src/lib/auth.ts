@@ -38,7 +38,12 @@ function mergeAuthHeader(init: RequestInit | undefined): RequestInit | undefined
 }
 
 function isProtectedDaemonPath(pathname: string): boolean {
-	return pathname.startsWith("/api/") || pathname.startsWith("/memory/") || pathname === "/mcp" || pathname.startsWith("/v1/");
+	return (
+		pathname.startsWith("/api/") ||
+		pathname.startsWith("/memory/") ||
+		pathname === "/mcp" ||
+		pathname.startsWith("/v1/")
+	);
 }
 
 export function setDashboardAuthApiBase(apiBase: string): void {
@@ -48,7 +53,13 @@ export function setDashboardAuthApiBase(apiBase: string): void {
 function shouldAttachAuth(input: RequestInfo | URL, apiBase: string): boolean {
 	const raw = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
 	if (raw.startsWith("/") && isProtectedDaemonPath(raw)) return true;
-	if (apiBase && (raw.startsWith(`${apiBase}/api/`) || raw.startsWith(`${apiBase}/memory/`) || raw === `${apiBase}/mcp` || raw.startsWith(`${apiBase}/v1/`))) {
+	if (
+		apiBase &&
+		(raw.startsWith(`${apiBase}/api/`) ||
+			raw.startsWith(`${apiBase}/memory/`) ||
+			raw === `${apiBase}/mcp` ||
+			raw.startsWith(`${apiBase}/v1/`))
+	) {
 		return true;
 	}
 	try {

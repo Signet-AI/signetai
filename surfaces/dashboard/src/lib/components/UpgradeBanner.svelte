@@ -1,7 +1,7 @@
 <script lang="ts">
-import { ExternalLink, X } from "$lib/icons";
 import { browser } from "$app/environment";
 import { type DaemonStatus, fetchChangelog } from "$lib/api";
+import { ExternalLink, X } from "$lib/icons";
 
 const STORAGE_KEY_PREFIX = "signet-upgrade-banner-dismissed-";
 const CHANGELOG_URL = "https://github.com/Signet-AI/signetai/blob/main/CHANGELOG.md";

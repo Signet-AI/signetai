@@ -23,26 +23,15 @@
  * Output: <root>/dist/native/signet-connectors-<version>.tar.gz
  */
 
-import {
-	createHash,
-} from "node:crypto";
-import {
-	copyFileSync,
-	existsSync,
-	mkdirSync,
-	readdirSync,
-	readFileSync,
-	rmSync,
-	statSync,
-} from "node:fs";
-import { join } from "node:path";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { join } from "node:path";
 
 const root = join(import.meta.dir, "..");
 const nativeDir = join(root, "dist", "native");
 const version =
-	process.env.SIGNET_VERSION?.trim() ||
-	JSON.parse(readFileSync(join(root, "package.json"), "utf8")).version;
+	process.env.SIGNET_VERSION?.trim() || JSON.parse(readFileSync(join(root, "package.json"), "utf8")).version;
 const stagingRoot = join(nativeDir, "connectors-staging");
 const tarballName = `signet-connectors-${version}.tar.gz`;
 const tarballPath = join(nativeDir, tarballName);
@@ -63,14 +52,7 @@ const SKIP_NAMES = new Set([
 	".gitignore",
 ]);
 
-const ASSET_FILE_SUFFIXES = [
-	".py",
-	".yaml",
-	".yml",
-	".md",
-	".txt",
-	".json",
-];
+const ASSET_FILE_SUFFIXES = [".py", ".yaml", ".yml", ".md", ".txt", ".json"];
 
 interface AssetEntry {
 	readonly harness: string;
@@ -122,19 +104,10 @@ function collectAssetEntries(harness: string): AssetEntry[] {
 }
 
 function stageAsset(entry: AssetEntry, stagingRoot: string): void {
-	const targetDir = join(
-		stagingRoot,
-		"runtime",
-		"connectors",
-		entry.harness,
-		entry.assetDir,
-	);
+	const targetDir = join(stagingRoot, "runtime", "connectors", entry.harness, entry.assetDir);
 	mkdirSync(targetDir, { recursive: true });
 	for (const file of entry.files) {
-		copyFileSync(
-			join(root, "integrations", entry.harness, "connector", entry.assetDir, file),
-			join(targetDir, file),
-		);
+		copyFileSync(join(root, "integrations", entry.harness, "connector", entry.assetDir, file), join(targetDir, file));
 	}
 }
 
@@ -176,20 +149,14 @@ function main(): void {
 	}
 
 	for (const entry of entries) {
-		console.log(
-			`staged ${entry.files.length} file(s) for ${entry.harness}/${entry.assetDir}`,
-		);
+		console.log(`staged ${entry.files.length} file(s) for ${entry.harness}/${entry.assetDir}`);
 	}
 
 	tarGz(stagingRoot, tarballPath);
 
 	const bytes = statSync(tarballPath).size;
-	const sha256 = createHash("sha256")
-		.update(readFileSync(tarballPath))
-		.digest("hex");
-	console.log(
-		`wrote ${tarballPath} (${bytes} bytes, sha256=${sha256.slice(0, 16)}…)`,
-	);
+	const sha256 = createHash("sha256").update(readFileSync(tarballPath)).digest("hex");
+	console.log(`wrote ${tarballPath} (${bytes} bytes, sha256=${sha256.slice(0, 16)}…)`);
 }
 
 main();

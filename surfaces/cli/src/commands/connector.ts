@@ -57,7 +57,7 @@ export function registerConnectorCommands(program: Command, deps: ConnectorDeps)
 		(harness: string, options: ConnectorInstallOptions) => installConnector(harness, options, deps),
 	);
 
-	addInstallOptions(program.command("connect <harness>").description("Install a harness connector (alias for connector install)")).action(
-		(harness: string, options: ConnectorInstallOptions) => installConnector(harness, options, deps),
-	);
+	addInstallOptions(
+		program.command("connect <harness>").description("Install a harness connector (alias for connector install)"),
+	).action((harness: string, options: ConnectorInstallOptions) => installConnector(harness, options, deps));
 }

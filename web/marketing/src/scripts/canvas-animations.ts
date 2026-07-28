@@ -14,7 +14,9 @@ const renderers: Set<Renderer> = new Set();
 
 export function registerRenderer(fn: Renderer): () => void {
 	renderers.add(fn);
-	return () => { renderers.delete(fn); };
+	return () => {
+		renderers.delete(fn);
+	};
 }
 
 type Node = {
@@ -44,7 +46,7 @@ function initLatentTopology() {
 	const canvasEl = document.getElementById("latent-topology");
 	const asciiCanvasEl = document.getElementById("ascii-dither");
 	const barsCanvasEl = document.getElementById("hero-bg-bars");
-	
+
 	if (!(canvasEl instanceof HTMLCanvasElement)) return;
 	if (!(asciiCanvasEl instanceof HTMLCanvasElement)) return;
 	if (!(barsCanvasEl instanceof HTMLCanvasElement)) return;
@@ -58,12 +60,12 @@ function initLatentTopology() {
 
 	const isDark = document.documentElement.getAttribute("data-theme") === "dark";
 	const accentColor = getComputedStyle(document.documentElement).getPropertyValue("--color-accent").trim() || "#c8ff00";
-	
+
 	const nodeColor = isDark ? "rgba(138, 138, 150, 0.4)" : "rgba(106, 102, 96, 0.4)";
 	const edgeColor = isDark ? "rgba(255, 255, 255, 0.08)" : "rgba(0, 0, 0, 0.08)";
 	const highlightColor = accentColor;
 	const ditherColor = isDark ? "rgba(255, 255, 255, 0.02)" : "rgba(0, 0, 0, 0.03)";
-	
+
 	const lowPowerMode =
 		window.matchMedia("(prefers-reduced-motion: reduce)").matches ||
 		window.matchMedia("(max-width: 900px)").matches ||
@@ -77,7 +79,7 @@ function initLatentTopology() {
 			x: (i / numBars) * width * 2,
 			width: 60 + Math.random() * 120,
 			speed: 0.1 + Math.random() * 0.3,
-			opacity: 0.04 + Math.random() * 0.08
+			opacity: 0.04 + Math.random() * 0.08,
 		});
 	}
 
@@ -99,7 +101,10 @@ function initLatentTopology() {
 		const z = Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
 
 		nodes.push({
-			id: `0x${Math.floor(Math.random() * 65535).toString(16).toUpperCase().padStart(4, "0")}`,
+			id: `0x${Math.floor(Math.random() * 65535)
+				.toString(16)
+				.toUpperCase()
+				.padStart(4, "0")}`,
 			x: cluster.x + z * (cluster.r / 2),
 			y: cluster.y + (Math.random() - 0.5) * cluster.r,
 			vx: (Math.random() - 0.5) * 0.1,
@@ -118,7 +123,7 @@ function initLatentTopology() {
 		width = window.innerWidth;
 		height = window.innerHeight;
 
-		[canvasEl, asciiCanvasEl, barsCanvasEl].forEach(c => {
+		[canvasEl, asciiCanvasEl, barsCanvasEl].forEach((c) => {
 			c.width = width * dpr;
 			c.height = height * dpr;
 			const context = c.getContext("2d")!;
@@ -141,7 +146,7 @@ function initLatentTopology() {
 
 	function drawBars() {
 		barsCtx.clearRect(0, 0, width, height);
-		
+
 		barsCtx.save();
 		barsCtx.rotate(-Math.PI / 4);
 		barsCtx.translate(-width, 0);
@@ -153,10 +158,15 @@ function initLatentTopology() {
 
 			const gradient = barsCtx.createLinearGradient(bar.x, 0, bar.x + bar.width, 0);
 			const baseColor = accentColor;
-			
+
 			// Softer gradient transition
 			gradient.addColorStop(0, "transparent");
-			gradient.addColorStop(0.5, `${baseColor}${Math.floor(bar.opacity * 255).toString(16).padStart(2, '0')}`);
+			gradient.addColorStop(
+				0.5,
+				`${baseColor}${Math.floor(bar.opacity * 255)
+					.toString(16)
+					.padStart(2, "0")}`,
+			);
 			gradient.addColorStop(1, "transparent");
 
 			barsCtx.fillStyle = gradient;
@@ -165,10 +175,17 @@ function initLatentTopology() {
 		barsCtx.restore();
 
 		// More aggressive vignette mask for atmospheric focus
-		const mask = barsCtx.createRadialGradient(width / 2, height * 0.3, width * 0.1, width / 2, height * 0.3, width * 0.6);
+		const mask = barsCtx.createRadialGradient(
+			width / 2,
+			height * 0.3,
+			width * 0.1,
+			width / 2,
+			height * 0.3,
+			width * 0.6,
+		);
 		mask.addColorStop(0, "rgba(0,0,0,0.8)");
 		mask.addColorStop(1, "rgba(0,0,0,0)");
-		
+
 		barsCtx.globalCompositeOperation = "destination-in";
 		barsCtx.fillStyle = mask;
 		barsCtx.fillRect(0, 0, width, height);
@@ -204,8 +221,9 @@ function initLatentTopology() {
 		let hoveredNode: Node | null = null;
 		let minDist = 60;
 
-		nodes.forEach(n => {
-			n.x += n.vx; n.y += n.vy;
+		nodes.forEach((n) => {
+			n.x += n.vx;
+			n.y += n.vy;
 			n.x += (n.baseX - n.x) * 0.01;
 			n.y += (n.baseY - n.y) * 0.01;
 			n.pulse += 0.02;
@@ -216,7 +234,10 @@ function initLatentTopology() {
 			if (d < 150) {
 				n.x -= (dx / d) * 0.5;
 				n.y -= (dy / d) * 0.5;
-				if (d < minDist) { minDist = d; hoveredNode = n; }
+				if (d < minDist) {
+					minDist = d;
+					hoveredNode = n;
+				}
 			}
 		});
 
@@ -224,19 +245,26 @@ function initLatentTopology() {
 		for (let i = 0; i < nodes.length; i++) {
 			let connections = 0;
 			for (let j = i + 1; j < nodes.length; j++) {
-				const a = nodes[i], b = nodes[j];
-				const dx = a.x - b.x, dy = a.y - b.y;
+				const a = nodes[i],
+					b = nodes[j];
+				const dx = a.x - b.x,
+					dy = a.y - b.y;
 				if (dx * dx + dy * dy < 15000 && connections < 3) {
 					const isHoveredEdge = hoveredNode === a || hoveredNode === b;
 					ctx.strokeStyle = isHoveredEdge ? highlightColor : edgeColor;
 					ctx.globalAlpha = isHoveredEdge ? 0.4 : 0.3;
-					ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+					ctx.beginPath();
+					ctx.moveTo(a.x, a.y);
+					ctx.lineTo(b.x, b.y);
+					ctx.stroke();
 					if (isHoveredEdge || (i + j) % 11 === 0) {
 						const speed = 3000;
 						const t = ((Date.now() + i * 500) % speed) / speed;
 						ctx.fillStyle = isHoveredEdge ? highlightColor : accentColor;
 						ctx.globalAlpha = isHoveredEdge ? 0.8 : 0.2;
-						ctx.beginPath(); ctx.arc(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, isHoveredEdge ? 2 : 1, 0, Math.PI * 2); ctx.fill();
+						ctx.beginPath();
+						ctx.arc(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, isHoveredEdge ? 2 : 1, 0, Math.PI * 2);
+						ctx.fill();
 					}
 					connections++;
 				}
@@ -244,22 +272,33 @@ function initLatentTopology() {
 		}
 
 		ctx.globalAlpha = 1;
-		nodes.forEach(n => {
+		nodes.forEach((n) => {
 			const isHovered = n === hoveredNode;
 			ctx.strokeStyle = isHovered ? highlightColor : nodeColor;
 			ctx.lineWidth = isHovered ? 1.5 : 1;
 			const size = n.isHub ? 4 : 2;
 			const p = Math.sin(n.pulse) * 2;
 			if (n.isHub || isHovered) {
-				ctx.beginPath(); ctx.arc(n.x, n.y, size + 2 + p, 0, Math.PI * 2);
-				ctx.strokeStyle = isHovered ? highlightColor : edgeColor; ctx.stroke();
+				ctx.beginPath();
+				ctx.arc(n.x, n.y, size + 2 + p, 0, Math.PI * 2);
+				ctx.strokeStyle = isHovered ? highlightColor : edgeColor;
+				ctx.stroke();
 			}
-			ctx.beginPath(); ctx.moveTo(n.x - size, n.y); ctx.lineTo(n.x + size, n.y);
-			ctx.moveTo(n.x, n.y - size); ctx.lineTo(n.x, n.y + size); ctx.stroke();
+			ctx.beginPath();
+			ctx.moveTo(n.x - size, n.y);
+			ctx.lineTo(n.x + size, n.y);
+			ctx.moveTo(n.x, n.y - size);
+			ctx.lineTo(n.x, n.y + size);
+			ctx.stroke();
 			if (isHovered) {
-				ctx.fillStyle = "rgba(0,0,0,0.8)"; ctx.strokeStyle = highlightColor;
-				ctx.beginPath(); ctx.roundRect(n.x + 10, n.y - 40, 90, 30, 4); ctx.fill(); ctx.stroke();
-				ctx.fillStyle = highlightColor; ctx.font = '700 8px "IBM Plex Mono", monospace';
+				ctx.fillStyle = "rgba(0,0,0,0.8)";
+				ctx.strokeStyle = highlightColor;
+				ctx.beginPath();
+				ctx.roundRect(n.x + 10, n.y - 40, 90, 30, 4);
+				ctx.fill();
+				ctx.stroke();
+				ctx.fillStyle = highlightColor;
+				ctx.font = '700 8px "IBM Plex Mono", monospace';
 				ctx.fillText(`ID: ${n.id}`, n.x + 18, n.y - 28);
 				ctx.font = '400 7px "IBM Plex Mono", monospace';
 				ctx.fillText(`LOC: ${Math.round(n.x)},${Math.round(n.y)}`, n.x + 18, n.y - 18);

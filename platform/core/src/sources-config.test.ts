@@ -1,15 +1,15 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+	addDiscordSource,
+	addGitHubSource,
+	addObsidianSource,
 	DEFAULT_DISCORD_MAX_ATTACHMENT_TEXT_BYTES,
 	DEFAULT_DISCORD_MAX_MESSAGES_PER_CHANNEL,
 	DEFAULT_GITHUB_RESOURCE_TYPES_NO_TOKEN,
 	DEFAULT_OBSIDIAN_EXCLUDE_GLOBS,
-	addDiscordSource,
-	addGitHubSource,
-	addObsidianSource,
 	getSourcesConfigPath,
 	loadSourcesConfig,
 	markSourceIndexed,

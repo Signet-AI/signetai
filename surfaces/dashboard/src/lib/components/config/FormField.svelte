@@ -1,6 +1,6 @@
 <script lang="ts">
-import { Label } from "$lib/components/ui/label/index.js";
 import type { Snippet } from "svelte";
+import { Label } from "$lib/components/ui/label/index.js";
 
 interface Props {
 	label: string;

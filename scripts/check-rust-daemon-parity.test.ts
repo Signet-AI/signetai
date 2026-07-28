@@ -34,9 +34,7 @@ describe("rust daemon route parity manifest", () => {
 	});
 
 	test("has no missing or malformed extracted routes", () => {
-		const manifest = JSON.parse(
-			readFileSync("platform/daemon-rs/contracts/route-parity.json", "utf8"),
-		) as Manifest;
+		const manifest = JSON.parse(readFileSync("platform/daemon-rs/contracts/route-parity.json", "utf8")) as Manifest;
 
 		const missing = manifest.routes.filter((route) => route.status === "missing");
 		const malformed = manifest.routes.filter((route) => route.path.includes("{"));
@@ -56,9 +54,7 @@ describe("rust daemon route parity manifest", () => {
 	});
 
 	test("shadow rules compare prompt-submit injected context", () => {
-		const rules = JSON.parse(
-			readFileSync("platform/daemon-rs/contracts/parity-rules.json", "utf8"),
-		) as ParityRules;
+		const rules = JSON.parse(readFileSync("platform/daemon-rs/contracts/parity-rules.json", "utf8")) as ParityRules;
 
 		const promptSubmit = rules.rules.endpoints["POST /api/hooks/user-prompt-submit"];
 
@@ -72,7 +68,7 @@ describe("rust daemon route parity manifest", () => {
 
 		expect(shadowReplay).toContain('"status"[[:space:]]*:[[:space:]]*"healthy"');
 		expect(cutover).toContain('"status"[[:space:]]*:[[:space:]]*"healthy"');
-		expect(shadowReplay).not.toContain('grep -q \'"ok"\'');
+		expect(shadowReplay).not.toContain("grep -q '\"ok\"'");
 		expect(cutover).not.toContain('grep -q "ok"');
 	});
 });

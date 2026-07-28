@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { type Server, createServer } from "node:net";
+import { createServer, type Server } from "node:net";
 import { bindWithRetry } from "./bind-with-retry";
 
 function freePort(): Promise<number> {

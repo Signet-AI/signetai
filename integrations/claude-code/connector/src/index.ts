@@ -17,12 +17,12 @@ import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "
 import { homedir } from "node:os";
 import { join } from "node:path";
 import {
+	atomicWriteJson,
 	BaseConnector,
 	type InstallResult,
-	type UninstallResult,
-	atomicWriteJson,
 	isSignetGeneratedFile,
 	resolveSignetMcpCommand,
+	type UninstallResult,
 } from "@signet/connector-base";
 import { expandHome, resolvePromptSubmitTimeoutMs, resolveSessionStartTimeoutMs } from "@signet/core";
 

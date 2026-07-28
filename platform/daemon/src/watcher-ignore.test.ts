@@ -79,13 +79,7 @@ describe("createAgentsWatcherIgnoreMatcher", () => {
 		const agentsDir = makeTempAgentsDir();
 		writeFileSync(
 			join(agentsDir, ".sigignore"),
-			[
-				"# Runtime files managed outside Signet",
-				"agents/*/runtime/",
-				"*.sock",
-				"!agents/*/keep.sock",
-				"",
-			].join("\n"),
+			["# Runtime files managed outside Signet", "agents/*/runtime/", "*.sock", "!agents/*/keep.sock", ""].join("\n"),
 		);
 		const shouldIgnore = createAgentsWatcherIgnoreMatcher(agentsDir);
 

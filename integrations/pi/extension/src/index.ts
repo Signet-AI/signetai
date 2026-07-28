@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import type { RecallPayload } from "@signet/core";
 import {
 	buildRecallRequestBody,
 	buildRememberRequestBody,
@@ -7,21 +8,20 @@ import {
 	parseRecallPayload,
 	resolvePiAgentDir,
 } from "@signet/core";
-import type { RecallPayload } from "@signet/core";
 import { readRuntimeEnv, readTrimmedRuntimeEnv, readTrimmedString } from "@signet/pi-extension-base";
 import { Type } from "@sinclair/typebox";
 import { createDaemonClient } from "./daemon-client.js";
 import {
-	type LifecycleDeps,
-	PI_LIFECYCLE_CONFIG,
 	currentSessionRef,
 	endCurrentSession,
 	endPreviousSession,
 	ensureSessionContext,
+	type LifecycleDeps,
+	PI_LIFECYCLE_CONFIG,
 	refreshSessionStart,
 	requestRecallForPrompt,
 } from "./lifecycle.js";
-import { type PiSessionState, createSessionState } from "./session-state.js";
+import { createSessionState, type PiSessionState } from "./session-state.js";
 import {
 	DAEMON_URL_DEFAULT,
 	HARNESS,

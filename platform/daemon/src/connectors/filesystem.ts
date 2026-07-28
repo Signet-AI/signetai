@@ -6,8 +6,8 @@
  * embedding, and indexing are handled downstream by the document worker.
  */
 
-import { readFileSync, readdirSync } from "node:fs";
-import { constants, access, stat } from "node:fs/promises";
+import { readdirSync, readFileSync } from "node:fs";
+import { access, constants, stat } from "node:fs/promises";
 import { basename, join, relative, resolve } from "node:path";
 import type {
 	ConnectorConfig,

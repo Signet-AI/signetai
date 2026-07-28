@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import { vectorToBlob } from "./db-helpers";
 import { handleUserPromptSubmit } from "./hooks";
-import { SIGNET_SECRETS_PLUGIN_ID, getDefaultPluginHost, resetDefaultPluginHostForTests } from "./plugins/index";
+import { getDefaultPluginHost, resetDefaultPluginHostForTests, SIGNET_SECRETS_PLUGIN_ID } from "./plugins/index";
 
 type PromptDeps = Required<NonNullable<Parameters<typeof handleUserPromptSubmit>[1]>>;
 

@@ -1,27 +1,27 @@
 <script lang="ts">
-import { MessageSquare, RefreshCw } from "$lib/icons";
+import { onDestroy, onMount } from "svelte";
 import { API_BASE } from "$lib/api";
-import { openAuthEventStream, type AuthEventStream } from "$lib/auth";
+import { type AuthEventStream, openAuthEventStream } from "$lib/auth";
 import AgentChat from "$lib/components/os/AgentChat.svelte";
 import AppDock from "$lib/components/os/AppDock.svelte";
 import SidebarGroups from "$lib/components/os/SidebarGroups.svelte";
 import WidgetGrid from "$lib/components/os/WidgetGrid.svelte";
+import { MessageSquare, RefreshCw } from "$lib/icons";
 import {
-	os,
-	type GridPosition,
 	fetchTrayEntries,
 	fetchWidgetHtml,
 	findFreeGridPosition,
+	type GridPosition,
 	getDockApps,
 	getGridApps,
 	getTrayApps,
 	loadGroups,
 	moveToGrid,
 	onWidgetGenerated,
+	os,
 	requestWidgetGen,
 	widgetHtmlCache,
 } from "$lib/stores/os.svelte";
-import { onDestroy, onMount } from "svelte";
 
 let showChat = $state(false);
 

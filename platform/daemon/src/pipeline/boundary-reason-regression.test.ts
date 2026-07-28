@@ -13,8 +13,8 @@ import { join } from "node:path";
 import { runMigrations } from "../../../core/src/migrations";
 import type { DbAccessor, ReadDb, WriteDb } from "../db-accessor";
 import { isDurableBoundary, normalizeBoundaryReason } from "./boundary-reason";
-import { enqueueSummaryJob, insertSummaryFacts, tracksSessionSummaryArtifact } from "./summary-worker";
 import type { SummaryJobRow } from "./summary-worker";
+import { enqueueSummaryJob, insertSummaryFacts, tracksSessionSummaryArtifact } from "./summary-worker";
 
 function makeAccessor(db: Database): DbAccessor {
 	return {

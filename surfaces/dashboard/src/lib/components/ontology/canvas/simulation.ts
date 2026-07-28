@@ -1,4 +1,4 @@
-import { type Simulation, forceCollide, forceLink, forceManyBody, forceSimulation, forceX, forceY } from "d3-force";
+import { forceCollide, forceLink, forceManyBody, forceSimulation, forceX, forceY, type Simulation } from "d3-force";
 import type { GraphCanvasEdge, GraphCanvasNode } from "./types";
 
 export interface ForceSimulationOptions {

@@ -1,6 +1,6 @@
 <script lang="ts">
-import { ChevronRight } from "$lib/icons";
 import type { Snippet } from "svelte";
+import { ChevronRight } from "$lib/icons";
 
 interface Props {
 	title?: string;

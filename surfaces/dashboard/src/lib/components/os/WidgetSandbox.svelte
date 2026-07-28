@@ -1,7 +1,7 @@
 <script lang="ts">
+import { onDestroy, onMount } from "svelte";
 import { API_BASE } from "$lib/api";
 import { getWidgetAction, registerWidgetSandbox, unregisterWidgetSandbox } from "$lib/stores/os.svelte";
-import { onDestroy, onMount } from "svelte";
 import { broadcastWidgetEvent, getLastEvent } from "./widget-events.svelte";
 import { buildSrcdoc } from "./widget-theme";
 

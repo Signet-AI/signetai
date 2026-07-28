@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
+import type { ResourceSnapshot } from "./resource-monitor";
 import {
 	getResourceSnapshot,
 	logFdSnapshot,
@@ -6,7 +7,6 @@ import {
 	startFdPollMonitor,
 	stopResourceMonitors,
 } from "./resource-monitor";
-import type { ResourceSnapshot } from "./resource-monitor";
 
 afterEach(() => {
 	stopResourceMonitors();

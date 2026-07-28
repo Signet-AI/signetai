@@ -1,4 +1,6 @@
 <script lang="ts">
+import { modelPresetsForProvider } from "@signet/core/llm-model-catalog";
+import { defaultPipelineModel } from "@signet/core/pipeline-providers";
 import AdvancedSection from "$lib/components/config/AdvancedSection.svelte";
 import FormField from "$lib/components/config/FormField.svelte";
 import FormSection from "$lib/components/config/FormSection.svelte";
@@ -16,13 +18,11 @@ import {
 	PIPELINE_WORKER_NUMS,
 	st,
 } from "$lib/stores/settings.svelte";
-import { modelPresetsForProvider } from "@signet/core/llm-model-catalog";
-import { defaultPipelineModel } from "@signet/core/pipeline-providers";
 import {
 	ACPX_DASHBOARD_AGENT_OPTIONS,
 	type AcpxDashboardAgent,
-	DEFAULT_OPENAI_COMPATIBLE_ENDPOINT,
 	applyAcpxDashboardSetup,
+	DEFAULT_OPENAI_COMPATIBLE_ENDPOINT,
 	defaultAcpxDashboardAgent,
 	defaultAcpxDashboardModel,
 	hasExplicitSynthesisConfig,

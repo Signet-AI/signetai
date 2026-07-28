@@ -24,7 +24,11 @@
 			"types": "./dist/recall.d.ts"
 		}
 	},
-	"files": ["dist", "!dist/**/*.test.*", "!dist/**/__tests__/**"],
+	"files": [
+		"dist",
+		"!dist/**/*.test.*",
+		"!dist/**/__tests__/**"
+	],
 	"scripts": {
 		"build": "bun build ./src/index.ts ./src/pipeline-providers.ts ./src/llm-model-catalog.ts ./src/recall.ts --outdir ./dist --target node --external better-sqlite3 && bun run build:types",
 		"build:types": "tsc --emitDeclarationOnly --declaration --outDir dist",

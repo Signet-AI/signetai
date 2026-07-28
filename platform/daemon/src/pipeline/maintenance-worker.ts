@@ -16,14 +16,14 @@ import { getLlmProvider } from "../llm";
 import { logger } from "../logger";
 import type { PipelineV2Config } from "../memory-config";
 import {
-	type RateLimiter,
-	DEAD_MEMORY_DEFAULT_ACCESS_DAYS,
-	DEAD_MEMORY_DEFAULT_CONFIDENCE,
-	type RepairContext,
-	type RepairResult,
 	checkFtsConsistency,
 	createRateLimiter,
+	DEAD_MEMORY_DEFAULT_ACCESS_DAYS,
+	DEAD_MEMORY_DEFAULT_CONFIDENCE,
 	deduplicateMemories,
+	type RateLimiter,
+	type RepairContext,
+	type RepairResult,
 	releaseStaleLeases,
 	requeueDeadJobs,
 	triggerRetentionSweep,

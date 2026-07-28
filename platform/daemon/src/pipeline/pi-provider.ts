@@ -12,12 +12,12 @@
 import {
 	type Api,
 	type Context,
+	completeSimple,
 	type Model,
 	type OpenAICompletionsCompat,
+	streamSimple,
 	type ThinkingLevel,
 	type Usage,
-	completeSimple,
-	streamSimple,
 } from "@earendil-works/pi-ai";
 import type { LlmGenerateResult, LlmProvider, LlmUsage } from "@signet/core";
 import { logger } from "../logger";

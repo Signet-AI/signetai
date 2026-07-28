@@ -1,7 +1,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { closeSync, existsSync, mkdirSync, openSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { type WorkspaceMismatch, healthWorkspaceMismatch } from "./daemon-workspace.js";
+import { healthWorkspaceMismatch, type WorkspaceMismatch } from "./daemon-workspace.js";
 import { bunPath, daemonEntry, daemonRoot } from "./paths.js";
 
 export type DaemonMode = "attached" | "bundled" | "none";
@@ -224,11 +224,19 @@ export class DaemonManager {
 
 	#closeFds(): void {
 		if (this.#stdoutFd !== null) {
-			try { closeSync(this.#stdoutFd); } catch { /* ignore */ }
+			try {
+				closeSync(this.#stdoutFd);
+			} catch {
+				/* ignore */
+			}
 			this.#stdoutFd = null;
 		}
 		if (this.#stderrFd !== null) {
-			try { closeSync(this.#stderrFd); } catch { /* ignore */ }
+			try {
+				closeSync(this.#stderrFd);
+			} catch {
+				/* ignore */
+			}
 			this.#stderrFd = null;
 		}
 	}

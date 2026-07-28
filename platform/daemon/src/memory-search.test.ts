@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
-import { type ResolvedMemoryConfig, loadMemoryConfig } from "./memory-config";
+import { loadMemoryConfig, type ResolvedMemoryConfig } from "./memory-config";
 import { indexExternalMemoryArtifact } from "./memory-lineage";
 import { buildAgentScopeClause, expandRecallKeywordQuery, hybridRecall, transcriptExcerpt } from "./memory-search";
 

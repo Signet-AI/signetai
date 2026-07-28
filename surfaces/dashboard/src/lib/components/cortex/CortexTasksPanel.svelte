@@ -1,8 +1,10 @@
 <script lang="ts">
+import { onMount } from "svelte";
 import { API_BASE } from "$lib/api";
 import TaskBoard from "$lib/components/tasks/TaskBoard.svelte";
 import TaskDetail from "$lib/components/tasks/TaskDetail.svelte";
 import TaskForm from "$lib/components/tasks/TaskForm.svelte";
+import { Plus } from "$lib/icons";
 import {
 	closeDetail,
 	closeForm,
@@ -14,8 +16,6 @@ import {
 	openForm,
 	ts,
 } from "$lib/stores/tasks.svelte";
-import { Plus } from "$lib/icons";
-import { onMount } from "svelte";
 
 // biome-ignore lint/style/useConst: Mutated from template callback.
 let selectedColumn = $state(0);

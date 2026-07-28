@@ -1,7 +1,7 @@
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { DbAccessor } from "./db-accessor";
-import { type TranscriptCaptureStatusSummary, getTranscriptCaptureStatus } from "./transcript-capture-worker";
+import { getTranscriptCaptureStatus, type TranscriptCaptureStatusSummary } from "./transcript-capture-worker";
 
 export interface TranscriptHealthReport {
 	readonly ok: boolean;
@@ -81,7 +81,7 @@ function readManifestValue(path: string, key: string): string | null {
 		if (!match) return null;
 		const raw = (match[1] ?? "").trim();
 		if (!raw || raw === "null" || raw === "~") return null;
-		return raw.replace(/^['\"]|['\"]$/g, "");
+		return raw.replace(/^['"]|['"]$/g, "");
 	} catch {
 		return null;
 	}

@@ -8,8 +8,8 @@
  *   GET  /api/os/events/stats  — bus diagnostics
  */
 
-import type { Hono } from "hono";
 import type { SignetOSEvent } from "@signet/core";
+import type { Hono } from "hono";
 import { eventBus } from "../event-bus.js";
 
 /**

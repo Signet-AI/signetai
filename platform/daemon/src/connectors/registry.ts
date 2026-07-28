@@ -5,8 +5,8 @@
  * Timestamps are ISO strings; IDs are random UUIDs.
  */
 
-import type { DbAccessor } from "../db-accessor";
 import type { ConnectorConfig, ConnectorRow, ConnectorStatus, SyncCursor } from "@signet/core";
+import type { DbAccessor } from "../db-accessor";
 
 // ---------------------------------------------------------------------------
 // Write operations

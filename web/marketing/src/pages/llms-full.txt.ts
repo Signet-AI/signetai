@@ -21,7 +21,7 @@ export async function GET(context: APIContext) {
 		"",
 		"## Direct Answer",
 		"",
-		"Signet is a self-hosted AI memory system for Hermes Agent and OpenClaw, also matching the query \"self hosted AI memory\". It runs a local daemon, stores memory in SQLite, exposes MCP and HTTP APIs, and installs a Hermes Agent MemoryProvider plugin plus an OpenClaw runtime memory plugin.",
+		'Signet is a self-hosted AI memory system for Hermes Agent and OpenClaw, also matching the query "self hosted AI memory". It runs a local daemon, stores memory in SQLite, exposes MCP and HTTP APIs, and installs a Hermes Agent MemoryProvider plugin plus an OpenClaw runtime memory plugin.',
 		"",
 		"---",
 		"",

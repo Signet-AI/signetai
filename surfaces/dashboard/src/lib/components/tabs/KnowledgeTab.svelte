@@ -1,17 +1,8 @@
 <script lang="ts">
-import { CalendarIcon, Network, Pin, RefreshCw } from "$lib/icons";
+import { CalendarDate, type DateValue } from "@internationalized/date";
+import { onMount } from "svelte";
 import {
 	type EntityHealth,
-	type KnowledgeAspectWithCounts,
-	type KnowledgeAttribute,
-	type KnowledgeDependencyEdge,
-	type KnowledgeEntityDetail,
-	type KnowledgeEntityListItem,
-	type KnowledgeStats,
-	type PredictorEntitySlice,
-	type PredictorProjectSlice,
-	type PredictorTrainingRun,
-	type TraversalStatusSnapshot,
 	getKnowledgeAspects,
 	getKnowledgeAttributes,
 	getKnowledgeDependencies,
@@ -23,12 +14,22 @@ import {
 	getPredictorEntitySlices,
 	getPredictorProjectSlices,
 	getPredictorTrainingRuns,
+	type KnowledgeAspectWithCounts,
+	type KnowledgeAttribute,
+	type KnowledgeDependencyEdge,
+	type KnowledgeEntityDetail,
+	type KnowledgeEntityListItem,
+	type KnowledgeStats,
+	type PredictorEntitySlice,
+	type PredictorProjectSlice,
+	type PredictorTrainingRun,
 	pinKnowledgeEntity,
+	type TraversalStatusSnapshot,
 	unpinKnowledgeEntity,
 } from "$lib/api";
 import PageBanner from "$lib/components/layout/PageBanner.svelte";
-import TabGroupBar from "$lib/components/layout/TabGroupBar.svelte";
 import { MEMORY_TAB_ITEMS } from "$lib/components/layout/page-headers";
+import TabGroupBar from "$lib/components/layout/TabGroupBar.svelte";
 import { Badge } from "$lib/components/ui/badge/index.js";
 import { Button } from "$lib/components/ui/button/index.js";
 import { Calendar } from "$lib/components/ui/calendar/index.js";
@@ -38,10 +39,9 @@ import * as Popover from "$lib/components/ui/popover/index.js";
 import * as Select from "$lib/components/ui/select/index.js";
 import { Skeleton } from "$lib/components/ui/skeleton/index.js";
 import * as Table from "$lib/components/ui/table/index.js";
+import { CalendarIcon, Network, Pin, RefreshCw } from "$lib/icons";
 import { nav } from "$lib/stores/navigation.svelte";
 import { focusMemoryTab } from "$lib/stores/tab-group-focus.svelte";
-import { CalendarDate, type DateValue } from "@internationalized/date";
-import { onMount } from "svelte";
 
 const ENTITY_TYPES = ["all", "project", "person", "system", "tool", "concept", "skill", "task"] as const;
 

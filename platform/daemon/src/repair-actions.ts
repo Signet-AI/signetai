@@ -25,17 +25,16 @@ import {
 	vectorToBlob,
 } from "./db-helpers";
 import {
-	type UnembeddedRow,
 	countEmbeddingMigrationRows,
 	countUnembeddedMemories,
 	listEmbeddingMigrationRows,
 	listEmbeddingMigrationSources,
 	listUnembeddedMemories,
+	type UnembeddedRow,
 } from "./embedding-coverage";
 import { classifyEntityQuality } from "./entity-quality";
 import { logger } from "./logger";
-import type { EmbeddingConfig } from "./memory-config";
-import type { PipelineV2Config } from "./memory-config";
+import type { EmbeddingConfig, PipelineV2Config } from "./memory-config";
 import { recoverStaleLeases } from "./pipeline/stale-leases";
 import { insertHistoryEvent } from "./transactions";
 

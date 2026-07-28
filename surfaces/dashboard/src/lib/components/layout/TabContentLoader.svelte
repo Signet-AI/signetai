@@ -1,8 +1,8 @@
 <script lang="ts">
+import { fade } from "svelte/transition";
 import type { ConfigFile, DaemonStatus, Harness, Identity, Memory, MemoryStats } from "$lib/api";
 import { Skeleton } from "$lib/components/ui/skeleton/index.js";
 import type { TabId } from "$lib/stores/navigation.svelte";
-import { fade } from "svelte/transition";
 
 interface Props {
 	activeTab: TabId;

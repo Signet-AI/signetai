@@ -13,14 +13,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseExecutableVersion, parseNativeReleaseManifest, verifyExecutableVersion } from "./update-install";
 import {
-	MAX_UPDATE_INTERVAL_SECONDS,
-	MIN_UPDATE_INTERVAL_SECONDS,
 	canUpdateDesktopFromSourceSync,
 	categorizeUpdateError,
 	detectDesktopInstall,
 	finalizeSuccessfulUpdateInstall,
 	getUpdateState,
 	initUpdateSystem,
+	MAX_UPDATE_INTERVAL_SECONDS,
+	MIN_UPDATE_INTERVAL_SECONDS,
 	normalizeTargetVersion,
 	npmTagForUpdateChannel,
 	parseBooleanFlag,

@@ -5,9 +5,9 @@
  * graph index to public/contentIndex.json for the client-side graph viewer.
  */
 
-import type { AstroIntegration } from "astro";
 import { writeFileSync } from "node:fs";
 import { resolve } from "node:path";
+import type { AstroIntegration } from "astro";
 import { buildContentIndex } from "../lib/content-graph";
 
 export default function graphIndex(): AstroIntegration {

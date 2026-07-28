@@ -107,9 +107,15 @@ export function registerApiKeyCommands(program: Command, deps: ApiKeyDeps): void
 			}
 			for (const item of keys) {
 				if (!isRecord(item)) continue;
-				const status = item.revokedAt ? chalk.red("revoked") : item.expiresAt ? chalk.yellow("expires") : chalk.green("active");
+				const status = item.revokedAt
+					? chalk.red("revoked")
+					: item.expiresAt
+						? chalk.yellow("expires")
+						: chalk.green("active");
 				console.log(`${item.id}  ${item.prefix}  ${status}  ${item.name}`);
-				console.log(`  role=${item.role} connector=${formatNullable(item.connector)} lastUsed=${formatNullable(item.lastUsedAt)}`);
+				console.log(
+					`  role=${item.role} connector=${formatNullable(item.connector)} lastUsed=${formatNullable(item.lastUsedAt)}`,
+				);
 			}
 		});
 	withJson(list);

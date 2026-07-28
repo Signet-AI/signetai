@@ -1,7 +1,7 @@
 import {
-	STATIC_IDENTITY_SESSION_START_TIMEOUT_STATUS,
 	resolvePromptSubmitTimeoutMs,
 	resolveSessionStartTimeoutMs,
+	STATIC_IDENTITY_SESSION_START_TIMEOUT_STATUS,
 } from "@signet/core";
 import chalk from "chalk";
 import type { Command } from "commander";

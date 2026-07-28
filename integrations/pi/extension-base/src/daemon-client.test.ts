@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { type DaemonClientConfig, createDaemonClient } from "./daemon-client.js";
+import { createDaemonClient, type DaemonClientConfig } from "./daemon-client.js";
 
 const originalFetch = globalThis.fetch;
 const originalApiKey = process.env.SIGNET_API_KEY;

@@ -1,7 +1,7 @@
 <script lang="ts">
 import type { Snippet } from "svelte";
-import { InfoIcon } from "$lib/icons";
 import * as Tooltip from "$lib/components/ui/tooltip/index.js";
+import { InfoIcon } from "$lib/icons";
 
 // Shared settings row. Default = OpenCode settings-v2 rhythm (title+desc left,
 // control right). Pass `compact` for a dense vertical stack: label on top (with

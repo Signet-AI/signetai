@@ -13,8 +13,7 @@
 import { isMainThread, parentPort, workerData } from "node:worker_threads";
 import type { LlmProvider } from "@signet/core";
 import type { AnalyticsCollector } from "../analytics";
-import { getDbAccessor } from "../db-accessor";
-import { initDbAccessorLite } from "../db-accessor";
+import { getDbAccessor, initDbAccessorLite } from "../db-accessor";
 import { fetchEmbedding } from "../embedding-fetch";
 import type { EmbeddingConfig, MemorySearchConfig, PipelineV2Config } from "../memory-config";
 import { configureNativeEmbeddingAssets } from "../native-embedding";

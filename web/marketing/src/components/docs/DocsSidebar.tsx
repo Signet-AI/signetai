@@ -1,5 +1,5 @@
-import { useState } from "react";
 import { ChevronRight, Menu } from "lucide-react";
+import { useState } from "react";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../ui/collapsible";
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "../ui/sheet";
 import DocSearch from "./DocSearch";

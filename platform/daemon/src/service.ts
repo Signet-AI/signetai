@@ -3,11 +3,11 @@
  * Handles systemd (Linux), launchd (macOS), and Windows service management
  */
 
+import { resolveDefaultBasePath } from "@signet/core";
 import { execSync, spawn } from "child_process";
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "fs";
 import { homedir, platform } from "os";
 import { join } from "path";
-import { resolveDefaultBasePath } from "@signet/core";
 
 const AGENTS_DIR = resolveDefaultBasePath();
 const DAEMON_DIR = join(AGENTS_DIR, ".daemon");

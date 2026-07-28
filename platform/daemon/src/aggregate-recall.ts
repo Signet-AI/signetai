@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { LlmUsage, RouteRequest, RouterResult } from "@signet/core";
 import { normalizeAndHashContent } from "./content-normalization";
-import { type WriteDb, getDbAccessor } from "./db-accessor";
+import { getDbAccessor, type WriteDb } from "./db-accessor";
 import { syncVecDeleteBySourceId, syncVecInsert, vectorToBlob } from "./db-helpers";
 import { logger } from "./logger";
 import type { EmbeddingConfig, ResolvedMemoryConfig } from "./memory-config";
@@ -9,11 +9,11 @@ import {
 	type AggregateRecallUsage,
 	type AggregateRecallUsageStage,
 	type EmbedFn,
+	hybridRecall,
 	type RecallParams,
 	type RecallResponse,
 	type RecallResult,
 	type RecallTimings,
-	hybridRecall,
 } from "./memory-search";
 import { enqueueExtractionJobInTx } from "./pipeline/extraction-queue";
 import { type IngestEnvelope, txIngestEnvelope } from "./transactions";

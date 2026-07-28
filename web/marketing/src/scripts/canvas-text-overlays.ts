@@ -1,18 +1,10 @@
 // Canvas text overlays rendered via pretext. Registers into the rAF loop
 // from canvas-animations.ts via registerRenderer().
 
-import { registerRenderer, type AnimState } from "./canvas-animations";
-import { prepareText, layoutText, resolveSiteFont, clearPretextCache } from "./pretext-utils";
+import { type AnimState, registerRenderer } from "./canvas-animations";
+import { clearPretextCache, layoutText, prepareText, resolveSiteFont } from "./pretext-utils";
 
-const CLUSTER_LABELS = [
-	"EXTRACTION",
-	"RETENTION",
-	"SYNTHESIS",
-	"INDEXING",
-	"RETRIEVAL",
-	"ENCODING",
-	"DECAY",
-];
+const CLUSTER_LABELS = ["EXTRACTION", "RETENTION", "SYNTHESIS", "INDEXING", "RETRIEVAL", "ENCODING", "DECAY"];
 
 const CLUSTER_OFFSETS = [
 	{ rx: 0.62, ry: 0.24 },

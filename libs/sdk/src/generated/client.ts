@@ -413,7 +413,6 @@ export class GeneratedClient {
 		return this.transport.get<unknown>("/api/pipeline/status", query);
 	}
 
-
 	async postApiRepairRequeueDead(opts?: Record<string, unknown>): Promise<unknown> {
 		return this.transport.post<unknown>("/api/repair/requeue-dead", opts);
 	}
@@ -557,12 +556,6 @@ export class GeneratedClient {
 	async getApiAnalyticsContinuityLatest(query?: Record<string, unknown>): Promise<unknown> {
 		return this.transport.get<unknown>("/api/analytics/continuity/latest", query);
 	}
-
-
-
-
-
-
 
 	async getApiTelemetryEvents(query?: Record<string, unknown>): Promise<unknown> {
 		return this.transport.get<unknown>("/api/telemetry/events", query);

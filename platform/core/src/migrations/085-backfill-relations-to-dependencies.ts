@@ -42,7 +42,7 @@ export function up(db: MigrationDb): void {
 	const colParts: string[] = ["id", "source_entity_id", "target_entity_id"];
 
 	// dependency_type <- relation_type
-	selectParts.push("relation_type");  // value only, no alias needed
+	selectParts.push("relation_type"); // value only, no alias needed
 	colParts.push("dependency_type");
 
 	// strength, created_at

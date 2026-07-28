@@ -18,9 +18,11 @@ const mockHandleSynthesisRequest = mock(
 		indexBlock: "",
 	}),
 );
-const mockWriteMemoryMd = mock((_content: string, _opts?: { agentId?: string; owner?: string }): WriteResult => ({
-	ok: true as const,
-}));
+const mockWriteMemoryMd = mock(
+	(_content: string, _opts?: { agentId?: string; owner?: string }): WriteResult => ({
+		ok: true as const,
+	}),
+);
 const mockActiveSessionCount = mock(() => 0);
 const baseCfg = {
 	enabled: true,

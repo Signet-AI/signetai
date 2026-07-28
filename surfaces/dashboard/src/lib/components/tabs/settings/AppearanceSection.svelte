@@ -1,8 +1,8 @@
 <script lang="ts">
-import { AppWindowMac, EyeOff, Monitor, RotateCcw, ZoomIn, ZoomOut } from "$lib/icons";
 import FormField from "$lib/components/config/FormField.svelte";
 import FormSection from "$lib/components/config/FormSection.svelte";
 import { isDesktopShell } from "$lib/desktop-shell";
+import { AppWindowMac, EyeOff, Monitor, RotateCcw, ZoomIn, ZoomOut } from "$lib/icons";
 import { type DecorationMode, titlebar } from "$lib/stores/titlebar.svelte";
 import { uiScale } from "$lib/stores/ui-scale.svelte";
 

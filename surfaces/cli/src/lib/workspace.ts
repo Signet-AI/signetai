@@ -1,11 +1,11 @@
 import {
-	type WorkspaceResolution,
-	type WorkspaceSource,
 	clearConfiguredWorkspacePath as clearCore,
 	getWorkspaceConfigPath as getCore,
 	normalizeWorkspacePath as normalizeCore,
 	readConfiguredWorkspacePath as readCore,
 	resolveWorkspacePath,
+	type WorkspaceResolution,
+	type WorkspaceSource,
 	writeConfiguredWorkspacePath as writeCore,
 } from "@signet/core";
 
@@ -15,7 +15,7 @@ import {
 // shared implementation, so the CLI, desktop shell, and connectors can no
 // longer drift on env-var precedence or the workspace.json schema.
 
-export type { WorkspaceSource, WorkspaceResolution };
+export type { WorkspaceResolution, WorkspaceSource };
 
 export function normalizeWorkspacePath(pathValue: string): string {
 	return normalizeCore(pathValue);

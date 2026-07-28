@@ -4,7 +4,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, write
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { HermesAgentConnector, diagnoseHermesIntegration } from "./src/index.js";
+import { diagnoseHermesIntegration, HermesAgentConnector } from "./src/index.js";
 
 const originalEnv = {
 	HOME: process.env.HOME,

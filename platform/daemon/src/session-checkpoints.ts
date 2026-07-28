@@ -4,8 +4,8 @@
  * user-prompt-submit hot path.
  */
 
-import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
 import type { ContinuityState, StructuralSnapshot } from "./continuity-state";
+import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
 import { logger } from "./logger";
 
 // ============================================================================
@@ -65,7 +65,7 @@ const SECRET_PATTERNS: ReadonlyArray<RegExp> = [
 	// Bearer tokens
 	/Bearer\s+[A-Za-z0-9\-._~+/]+=*/gi,
 	// API key formats (sk-, pk-, key-, api_key=, etc.)
-	/\b(sk|pk|api[_-]?key|token|secret|password|credential)[_\-]?[=:\s]+\S{8,}/gi,
+	/\b(sk|pk|api[_-]?key|token|secret|password|credential)[_-]?[=:\s]+\S{8,}/gi,
 	// Base64-encoded blobs that look like credentials (32+ chars)
 	/\b[A-Za-z0-9+/]{32,}={0,2}\b/g,
 	// Environment variable references with values

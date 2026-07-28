@@ -1,10 +1,10 @@
 import {
-	type MarketplaceReview,
-	type MarketplaceReviewTargetType,
 	createMarketplaceReview,
 	deleteMarketplaceReview,
 	getMarketplaceReviewConfig,
 	getMarketplaceReviews,
+	type MarketplaceReview,
+	type MarketplaceReviewTargetType,
 	syncMarketplaceReviews,
 	updateMarketplaceReviewConfig,
 } from "$lib/api";

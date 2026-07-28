@@ -5,7 +5,7 @@
  * and coordinates focus transitions for seamless keyboard navigation.
  */
 
-import { type TabId, nav } from "./navigation.svelte";
+import { nav, type TabId } from "./navigation.svelte";
 
 export type FocusZone = "sidebar-menu" | "sidebar-footer" | "page-content";
 

@@ -1,4 +1,4 @@
-import { type DaemonClient, createDaemonClient as createBaseDaemonClient } from "@signet/pi-extension-base";
+import { createDaemonClient as createBaseDaemonClient, type DaemonClient } from "@signet/pi-extension-base";
 import { READ_TIMEOUT, RUNTIME_PATH } from "./types.js";
 
 export type { DaemonClient };

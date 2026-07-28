@@ -12,9 +12,7 @@ describe("structured payload validation", () => {
 	// Duplicated here as pure validation tests since the route handler
 	// requires full Hono + DB setup.
 
-	function validateStructured(body: {
-		structured?: unknown;
-	}): { valid: true } | { valid: false; error: string } {
+	function validateStructured(body: { structured?: unknown }): { valid: true } | { valid: false; error: string } {
 		if (!("structured" in body)) {
 			return { valid: true };
 		}
@@ -123,7 +121,9 @@ describe("project scope check", () => {
 	});
 
 	it("allows admin tokens to write any project", () => {
-		expect(checkProjectScope({ tokenProject: "project-a", bodyProject: "project-b", isAdmin: true }).allowed).toBe(true);
+		expect(checkProjectScope({ tokenProject: "project-a", bodyProject: "project-b", isAdmin: true }).allowed).toBe(
+			true,
+		);
 	});
 
 	it("rejects project-scoped token writing without project", () => {
@@ -138,6 +138,8 @@ describe("project scope check", () => {
 	});
 
 	it("allows project-scoped token writing matching project", () => {
-		expect(checkProjectScope({ tokenProject: "project-a", bodyProject: "project-a", isAdmin: false }).allowed).toBe(true);
+		expect(checkProjectScope({ tokenProject: "project-a", bodyProject: "project-a", isAdmin: false }).allowed).toBe(
+			true,
+		);
 	});
 });

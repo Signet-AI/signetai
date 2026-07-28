@@ -1,9 +1,9 @@
 <script lang="ts">
+import { onMount } from "svelte";
 import type { Memory } from "$lib/api";
 import { API_BASE } from "$lib/api";
-import { setTab } from "$lib/stores/navigation.svelte";
 import { Brain } from "$lib/icons";
-import { onMount } from "svelte";
+import { setTab } from "$lib/stores/navigation.svelte";
 
 interface Props {
 	memories: Memory[];

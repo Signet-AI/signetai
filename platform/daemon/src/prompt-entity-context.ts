@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { cosineSimilarity } from "@signet/core";
 import { selectWithBudgetSkippingOversized } from "./context-budget";
-import { type ReadDb, getDbAccessor, hasDbAccessor } from "./db-accessor";
+import { getDbAccessor, hasDbAccessor, type ReadDb } from "./db-accessor";
 import { logger } from "./logger";
 import type { EmbeddingConfig } from "./memory-config";
 import { countPromptTermOverlap, extractSubstantiveWords, stripUntrustedMetadata } from "./prompt-text";

@@ -2,12 +2,12 @@ import { readFileSync, writeFileSync } from "node:fs";
 import {
 	type AddDiscordSourceInput,
 	type AddGitHubSourceInput,
-	type SignetSourceEntry,
 	addDiscordSource,
 	addGitHubSource,
 	addObsidianSource,
 	loadSourcesConfig,
 	removeSource,
+	type SignetSourceEntry,
 } from "@signet/core";
 import chalk from "chalk";
 

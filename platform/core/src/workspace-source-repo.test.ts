@@ -3,9 +3,9 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-	type WorkspaceSourceRepoSyncResult,
 	resolveWorkspaceSourceRepoPath,
 	syncWorkspaceSourceRepo,
+	type WorkspaceSourceRepoSyncResult,
 } from "./workspace-source-repo";
 
 const tmpDirs: string[] = [];

@@ -154,9 +154,7 @@ describe("pipeline pause config", () => {
 		const dir = makeTempDir("signet-pipeline-pause-release-");
 		writeFileSync(
 			join(dir, "agent.yaml"),
-			["memory:", "  pipelineV2:", "    extraction:", "      provider: ollama", "      model: qwen3:4b", ""].join(
-				"\n",
-			),
+			["memory:", "  pipelineV2:", "    extraction:", "      provider: ollama", "      model: qwen3:4b", ""].join("\n"),
 		);
 
 		const seen: Array<{ readonly body: string; readonly url: string }> = [];

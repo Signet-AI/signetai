@@ -3,9 +3,8 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AutoCardResource, AutoCardToolAction, SignetAppManifest } from "@signet/core";
-import type { Hono } from "hono";
-
 import { resolveDefaultBasePath } from "@signet/core";
+import type { Hono } from "hono";
 import { logger } from "../logger.js";
 import { loadAppTray, loadProbeResult, probeServer, reprobeServer, storeProbeResult } from "../mcp-probe.js";
 import { isPrivateHostname } from "../url-validation.js";

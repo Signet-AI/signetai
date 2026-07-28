@@ -9,11 +9,11 @@ import { type LogCategory, type LogEntry, logger } from "../logger.js";
 import { listMemorySearchTelemetry } from "../memory-search-telemetry.js";
 import { getCheckpointsByProject, getCheckpointsBySession, redactCheckpointRow } from "../session-checkpoints.js";
 import type { TelemetryEventType } from "../telemetry.js";
-import { type TimelineSources, buildTimeline } from "../timeline.js";
+import { buildTimeline, type TimelineSources } from "../timeline.js";
 import {
-	CURRENT_VERSION,
 	analyticsCollector,
 	authConfig,
+	CURRENT_VERSION,
 	getDiagnosticsOptions,
 	getUpdateState,
 	providerTracker,

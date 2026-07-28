@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { SignetTransport } from "../transport.js";
-import { SignetApiError, SignetNetworkError, SignetTimeoutError } from "../errors.js";
 import type { Server } from "bun";
+import { SignetApiError, SignetNetworkError, SignetTimeoutError } from "../errors.js";
+import { SignetTransport } from "../transport.js";
 
 let servers: Server[] = [];
 

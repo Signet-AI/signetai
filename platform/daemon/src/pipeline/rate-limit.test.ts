@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import type { LlmProvider } from "@signet/core";
-import { RateLimitExceededError, TokenBucketRateLimiter, generateWithTracking, withRateLimit } from "./provider";
+import { generateWithTracking, RateLimitExceededError, TokenBucketRateLimiter, withRateLimit } from "./provider";
 
 function mockProvider(name = "test"): LlmProvider {
 	return {

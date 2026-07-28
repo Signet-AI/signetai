@@ -155,8 +155,13 @@ function stripCodeFence(text: string): string {
 	return match ? match[1].trim() : trimmed;
 }
 
-function truncateAtCharacterLimit(text: string, maxChars: number): { readonly text: string; readonly truncated: boolean } {
-	const normalized = stripCodeFence(text).replace(/\n{3,}/g, "\n\n").trim();
+function truncateAtCharacterLimit(
+	text: string,
+	maxChars: number,
+): { readonly text: string; readonly truncated: boolean } {
+	const normalized = stripCodeFence(text)
+		.replace(/\n{3,}/g, "\n\n")
+		.trim();
 	if (normalized.length <= maxChars) return { text: normalized, truncated: false };
 	const slice = normalized.slice(0, maxChars).trimEnd();
 	return { text: slice, truncated: true };

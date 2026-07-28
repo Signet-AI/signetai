@@ -1,10 +1,10 @@
 import {
-	type PluginAuditEvent,
-	type PluginDiagnostics,
-	type PluginRegistryRecord,
 	getPluginDiagnostics,
 	listPluginAuditEvents,
 	listPlugins,
+	type PluginAuditEvent,
+	type PluginDiagnostics,
+	type PluginRegistryRecord,
 	setPluginEnabled,
 } from "$lib/api";
 import { createLatestRequestGate } from "$lib/stores/latest-request";

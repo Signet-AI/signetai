@@ -10,10 +10,10 @@
  * Filters out bot messages, join/leave events, and noise.
  */
 
-import { existsSync, readFileSync, readdirSync, statSync } from "fs";
-import { join, basename } from "path";
-import type { ParsedDocument, ParsedSection } from "./types";
+import { existsSync, readdirSync, readFileSync, statSync } from "fs";
+import { basename, join } from "path";
 import { batchByTimeGap } from "./chat-utils";
+import type { ParsedDocument, ParsedSection } from "./types";
 
 // ---------------------------------------------------------------------------
 // Slack JSON types (subset of the export schema)

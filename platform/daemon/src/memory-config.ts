@@ -4,11 +4,11 @@ import {
 	DEFAULT_PIPELINE_TIMEOUT_MS,
 	DEFAULT_PROVIDER_RATE_LIMIT,
 	type DreamingConfig,
+	defaultPipelineModel,
+	isPipelineProvider,
 	PIPELINE_FLAGS,
 	type PipelineFlag,
 	type PipelineV2Config,
-	defaultPipelineModel,
-	isPipelineProvider,
 	parseSimpleYaml,
 } from "@signet/core";
 import { type AuthConfig, parseAuthConfig } from "./auth";
@@ -37,8 +37,8 @@ export interface MemorySearchConfig {
 	temporal_prior_half_life_days: number;
 }
 
+export type { DreamingConfig, PipelineFlag, PipelineV2Config };
 export { PIPELINE_FLAGS };
-export type { PipelineFlag, PipelineV2Config, DreamingConfig };
 
 export const DEFAULT_DREAMING: DreamingConfig = {
 	enabled: false,

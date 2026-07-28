@@ -226,7 +226,9 @@ describe("reflection worker", () => {
 
 		const reflection = getDbAccessor().withReadDb(
 			(db) =>
-				db.prepare("SELECT summary, question, model, memory_ids FROM daily_reflections WHERE agent_id = ?").get("default") as {
+				db
+					.prepare("SELECT summary, question, model, memory_ids FROM daily_reflections WHERE agent_id = ?")
+					.get("default") as {
 					summary: string;
 					question: string | null;
 					model: string;

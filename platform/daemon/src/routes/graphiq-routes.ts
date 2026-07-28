@@ -1,4 +1,4 @@
-import { constants, accessSync, existsSync, readFileSync, statSync } from "node:fs";
+import { accessSync, constants, existsSync, readFileSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import {
 	disableGraphiqState,

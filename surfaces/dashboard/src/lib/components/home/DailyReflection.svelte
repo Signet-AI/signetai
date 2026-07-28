@@ -1,8 +1,8 @@
 <script lang="ts">
+import { onMount } from "svelte";
 import type { DailyReflection } from "$lib/api";
 import { answerReflection, generateReflection, getTodayReflection } from "$lib/api";
 import { toast } from "$lib/stores/toast.svelte";
-import { onMount } from "svelte";
 
 interface Props {
 	agentId: string;

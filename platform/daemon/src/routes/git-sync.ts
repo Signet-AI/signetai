@@ -3,16 +3,16 @@ import { spawn } from "node:child_process";
 import { existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import {
-	SIGNET_GIT_PROTECTED_PATHS,
 	isSignetGitProtectedPath,
 	isSignetGitTrackedPath,
 	mergeSignetGitignoreEntries,
+	SIGNET_GIT_PROTECTED_PATHS,
 } from "@signet/core";
 import { logger } from "../logger";
 import { getSecret, hasSecret } from "../secrets.js";
+import { clampGitSyncIntervalSeconds, type GitConfig, gitConfig } from "./git-config";
 import { AGENTS_DIR } from "./state";
 
-import { clampGitSyncIntervalSeconds, type GitConfig, gitConfig } from "./git-config";
 export { gitConfig };
 
 let gitSyncTimer: ReturnType<typeof setInterval> | null = null;
@@ -796,9 +796,13 @@ function ensureProtectedGitignore(dir: string): boolean {
 }
 
 async function gitUntrackProtectedFiles(dir: string): Promise<void> {
-	await runGitCommand(["rm", "-r", "--cached", "--ignore-unmatch", "--quiet", "--", ...SIGNET_GIT_PROTECTED_PATHS], dir, {
-		timeoutMs: MUTATING_GIT_TIMEOUT_MS,
-	});
+	await runGitCommand(
+		["rm", "-r", "--cached", "--ignore-unmatch", "--quiet", "--", ...SIGNET_GIT_PROTECTED_PATHS],
+		dir,
+		{
+			timeoutMs: MUTATING_GIT_TIMEOUT_MS,
+		},
+	);
 }
 
 async function listStagedProtectedRemovals(dir: string): Promise<string[]> {
@@ -819,7 +823,9 @@ async function listStagedPaths(dir: string): Promise<string[]> {
 
 async function restoreStagedPaths(dir: string, paths: readonly string[]): Promise<void> {
 	if (paths.length === 0) return;
-	await runGitCommand(["restore", "--staged", "--", ...literalPathspecs(paths)], dir, { timeoutMs: DEFAULT_GIT_TIMEOUT_MS });
+	await runGitCommand(["restore", "--staged", "--", ...literalPathspecs(paths)], dir, {
+		timeoutMs: DEFAULT_GIT_TIMEOUT_MS,
+	});
 }
 
 function literalPathspecs(paths: readonly string[]): string[] {
@@ -877,7 +883,9 @@ async function gitAutoCommit(dir: string, changedFiles: string[]): Promise<void>
 			protectedRemovals = [];
 		}
 
-		const candidateFiles = changedFiles.map((file) => toRelativeGitPath(dir, file)).filter((file): file is string => Boolean(file));
+		const candidateFiles = changedFiles
+			.map((file) => toRelativeGitPath(dir, file))
+			.filter((file): file is string => Boolean(file));
 		const relativeFiles = Array.from(new Set(candidateFiles.filter(isSignetGitTrackedPath)));
 		const commitFiles = Array.from(new Set([...relativeFiles, ...protectedRemovals]));
 		const droppedChanges = changedFiles.length - relativeFiles.length;
@@ -903,9 +911,10 @@ async function gitAutoCommit(dir: string, changedFiles: string[]): Promise<void>
 			}
 		}
 
-		const commitArgs = protectedRemovals.length > 0
-			? ["commit", "-m", message]
-			: ["commit", "-m", message, "--", ...literalPathspecs(commitFiles)];
+		const commitArgs =
+			protectedRemovals.length > 0
+				? ["commit", "-m", message]
+				: ["commit", "-m", message, "--", ...literalPathspecs(commitFiles)];
 		if (protectedRemovals.length === 0) {
 			const statusResult = await runGitCommand(["status", "--porcelain", "--", ...literalPathspecs(commitFiles)], dir, {
 				timeoutMs: DEFAULT_GIT_TIMEOUT_MS,

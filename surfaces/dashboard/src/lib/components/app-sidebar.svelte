@@ -1,4 +1,5 @@
 <script lang="ts">
+import { onMount } from "svelte";
 import type { DaemonStatus, Harness, Identity } from "$lib/api";
 import * as Sidebar from "$lib/components/ui/sidebar/index.js";
 import {
@@ -16,17 +17,16 @@ import {
 	Sun,
 } from "$lib/icons";
 import {
-	type SidebarFocusItem,
 	focus,
 	focusFirstPageElement,
 	navigateSidebarNext,
 	navigateSidebarPrev,
+	type SidebarFocusItem,
 	setFocusZone,
 	setSidebarItem,
 	setSidebarNavigationOrder,
 } from "$lib/stores/focus.svelte";
-import { type TabId, nav, setTab } from "$lib/stores/navigation.svelte";
-import { onMount } from "svelte";
+import { nav, setTab, type TabId } from "$lib/stores/navigation.svelte";
 
 const { useSidebar } = Sidebar;
 

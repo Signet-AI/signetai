@@ -1,13 +1,13 @@
 import type { SQLQueryBindings } from "bun:sqlite";
-import { type MigrationDb, hasPendingMigrations } from "@signet/core";
+import { hasPendingMigrations, type MigrationDb } from "@signet/core";
 import type { Hono } from "hono";
-import { type ReadDb, getDbAccessor } from "../db-accessor";
+import { getDbAccessor, type ReadDb } from "../db-accessor";
 import {
+	getQueueHealth,
 	QUEUE_MAX_DEAD_RATE,
 	QUEUE_MAX_DEPTH,
 	QUEUE_MAX_OLDEST_AGE_SEC,
 	type QueueHealth,
-	getQueueHealth,
 } from "../diagnostics";
 import { getAllFeatureFlags } from "../feature-flags";
 import { loadMemoryConfig } from "../memory-config";
@@ -17,9 +17,9 @@ import { getUpdateState } from "../update-system";
 import {
 	AGENTS_DIR,
 	CURRENT_VERSION,
-	PORT,
 	getCurrentAgentsDir,
 	getExtractionWorkloadState,
+	PORT,
 	providerRuntimeResolution,
 	shuttingDown,
 } from "./state.js";

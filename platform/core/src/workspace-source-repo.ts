@@ -826,7 +826,7 @@ function parsePorcelainStatusPath(line: string): string | null {
 	const path = rawPath.includes(renameSeparator)
 		? rawPath.slice(rawPath.lastIndexOf(renameSeparator) + renameSeparator.length)
 		: rawPath;
-	return path.replace(/^\"|\"$/g, "");
+	return path.replace(/^"|"$/g, "");
 }
 
 function readUpstreamBranchWith(run: typeof runGit, repoPath: string, timeoutMs: number): string | null;

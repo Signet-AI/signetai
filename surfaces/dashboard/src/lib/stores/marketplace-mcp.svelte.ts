@@ -1,14 +1,14 @@
 import {
-	type MarketplaceMcpCatalogEntry,
-	type MarketplaceMcpConfig,
-	type MarketplaceMcpServer,
-	type MarketplaceMcpServerHealth,
-	type MarketplaceMcpTool,
 	browseMarketplaceMcpServers,
 	deleteMarketplaceMcpServer,
 	getMarketplaceMcpServers,
 	getMarketplaceMcpTools,
 	installMarketplaceMcpServer,
+	type MarketplaceMcpCatalogEntry,
+	type MarketplaceMcpConfig,
+	type MarketplaceMcpServer,
+	type MarketplaceMcpServerHealth,
+	type MarketplaceMcpTool,
 	updateMarketplaceMcpServer,
 } from "$lib/api";
 import { toast } from "$lib/stores/toast.svelte";

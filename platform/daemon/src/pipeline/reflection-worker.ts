@@ -232,9 +232,8 @@ export function parseDailyBriefInsights(text: string, limit = 1): DailyBriefInsi
 	flush();
 
 	if (insights.length === 0) {
-		const hasStructuredLabel = /^\s*(?:[-*]\s*)?(?:ASK|BRIEF|FOCUS|GAP|INSIGHT|PATTERNS|QUESTION|SUMMARY|TAGS)\s*:/im.test(
-			text,
-		);
+		const hasStructuredLabel =
+			/^\s*(?:[-*]\s*)?(?:ASK|BRIEF|FOCUS|GAP|INSIGHT|PATTERNS|QUESTION|SUMMARY|TAGS)\s*:/im.test(text);
 		const fallback = trimLine(text, 560);
 		if (!hasStructuredLabel && fallback) {
 			const question = isQuestionLedInsight(fallback) ? fallback : undefined;

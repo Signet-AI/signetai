@@ -18,24 +18,43 @@ describe("destroySoon polyfill", () => {
 	});
 
 	test("Duplex lacks destroySoon before polyfill (simulates Bun HTTP socket)", () => {
-		const socket = new Duplex({ read() {}, write(_c, _e, cb) { cb(); } });
+		const socket = new Duplex({
+			read() {},
+			write(_c, _e, cb) {
+				cb();
+			},
+		});
 		expect(typeof socket.destroySoon).toBe("undefined");
 	});
 
 	test("polyfill adds destroySoon to Duplex prototype", () => {
 		applyPolyfill();
-		const socket = new Duplex({ read() {}, write(_c, _e, cb) { cb(); } });
+		const socket = new Duplex({
+			read() {},
+			write(_c, _e, cb) {
+				cb();
+			},
+		});
 		expect(typeof socket.destroySoon).toBe("function");
 	});
 
 	test("destroySoon calls end() on writable socket then destroys after finish", async () => {
 		applyPolyfill();
-		const socket = new Duplex({ read() {}, write(_c, _e, cb) { cb(); } });
+		const socket = new Duplex({
+			read() {},
+			write(_c, _e, cb) {
+				cb();
+			},
+		});
 
 		let ended = false;
 		let destroyed = false;
-		socket.on("finish", () => { ended = true; });
-		socket.on("close", () => { destroyed = true; });
+		socket.on("finish", () => {
+			ended = true;
+		});
+		socket.on("close", () => {
+			destroyed = true;
+		});
 
 		socket.destroySoon();
 
@@ -46,13 +65,20 @@ describe("destroySoon polyfill", () => {
 
 	test("destroySoon destroys immediately if already finished writing", async () => {
 		applyPolyfill();
-		const socket = new Duplex({ read() {}, write(_c, _e, cb) { cb(); } });
+		const socket = new Duplex({
+			read() {},
+			write(_c, _e, cb) {
+				cb();
+			},
+		});
 
 		socket.end();
 		await new Promise((r) => socket.once("finish", r));
 
 		let destroyed = false;
-		socket.on("close", () => { destroyed = true; });
+		socket.on("close", () => {
+			destroyed = true;
+		});
 
 		socket.destroySoon();
 		await new Promise((r) => setTimeout(r, 50));

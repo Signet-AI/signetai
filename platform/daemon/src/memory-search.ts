@@ -28,10 +28,10 @@ import { buildAgentScopeClause } from "./memory-access-scope";
 import type { EmbeddingConfig, MemorySearchConfig, ResolvedMemoryConfig } from "./memory-config";
 import { NATIVE_MEMORY_BRIDGE_SOURCE_NODE_ID } from "./native-memory-constants";
 import { constructContextBlocks } from "./pipeline/context-construction";
-import { DEFAULT_DAMPENING, type ScoredRow, applyDampening } from "./pipeline/dampening";
+import { applyDampening, DEFAULT_DAMPENING, type ScoredRow } from "./pipeline/dampening";
 import { getGraphBoostIds, tokenizeGraphQuery } from "./pipeline/graph-search";
 import { resolveFocalEntities, setTraversalStatus, traverseKnowledgeGraph } from "./pipeline/graph-traversal";
-import { type RerankCandidate, noopReranker, rerank } from "./pipeline/reranker";
+import { noopReranker, type RerankCandidate, rerank } from "./pipeline/reranker";
 import { createEmbeddingReranker } from "./pipeline/reranker-embedding";
 import { createLlmReranker, summarizeRecallWithLlm } from "./pipeline/reranker-llm";
 import { FTS_STOP } from "./pipeline/stop-words";
@@ -41,14 +41,14 @@ import {
 	shapeStructuredEvidence,
 } from "./pipeline/structured-evidence";
 import {
-	type StructuredClaimCandidate,
 	findStructuredClaimCandidates,
 	findStructuredPathCandidates,
+	type StructuredClaimCandidate,
 	scoreStructuredPathEvidence,
 } from "./pipeline/structured-path-evidence";
-import { type RecallDedupeMeta, applyRecallDedupe } from "./session-recall-dedupe";
+import { applyRecallDedupe, type RecallDedupeMeta } from "./session-recall-dedupe";
 import { escapeLike } from "./sql-utils";
-import { type TemporalTimeOptions, hasFreshnessIntent, resolveTemporalRecall } from "./temporal-recall";
+import { hasFreshnessIntent, resolveTemporalRecall, type TemporalTimeOptions } from "./temporal-recall";
 
 // ---------------------------------------------------------------------------
 // Public interfaces

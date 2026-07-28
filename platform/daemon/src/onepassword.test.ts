@@ -1,10 +1,10 @@
 import { describe, expect, it } from "bun:test";
 import {
-	type OnePasswordClientFactory,
-	type OnePasswordField,
 	buildImportedSecretName,
 	extractSecretFieldsFromItem,
 	importOnePasswordSecrets,
+	type OnePasswordClientFactory,
+	type OnePasswordField,
 } from "./onepassword";
 
 describe("buildImportedSecretName", () => {

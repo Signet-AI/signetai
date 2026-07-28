@@ -148,11 +148,11 @@ export class ViewportState {
 	private stepPan(targetPanX: number, targetPanY: number): boolean {
 		const dx = targetPanX - this.panX;
 		const dy = targetPanY - this.panY;
-			if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5) {
-				this.panX += dx * this.panLerp;
-				this.panY += dy * this.panLerp;
+		if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5) {
+			this.panX += dx * this.panLerp;
+			this.panY += dy * this.panLerp;
 			return false;
-			}
+		}
 		this.panX = targetPanX;
 		this.panY = targetPanY;
 		return true;

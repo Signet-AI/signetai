@@ -1,19 +1,16 @@
 import { createHash } from "node:crypto";
 import {
 	type GitHubSourceSettings,
+	parseGitHubSettings,
 	type SignetSourceEntry,
 	type SourceFailureState,
 	type SourceProviderKind,
-	parseGitHubSettings,
 } from "@signet/core";
 import { resolveDaemonAgentId } from "./agent-id";
 import { yieldEvery } from "./async-yield";
 import { getDbAccessor } from "./db-accessor";
 import { countChanges } from "./db-helpers";
 import {
-	type GitHubComment,
-	type GitHubFetchConfig,
-	type GitHubResource,
 	expandRepoGlob,
 	fetchDiscussionComments,
 	fetchDiscussions,
@@ -24,6 +21,9 @@ import {
 	fetchPullRequestsBySearch,
 	fetchRepoDocs,
 	fetchRepoInfo,
+	type GitHubComment,
+	type GitHubFetchConfig,
+	type GitHubResource,
 	logGitHubFetchError,
 } from "./github-source-fetch";
 import { logger } from "./logger";

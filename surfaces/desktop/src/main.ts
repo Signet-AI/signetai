@@ -1,7 +1,7 @@
 import { stat } from "node:fs/promises";
 import { extname, normalize, relative, sep } from "node:path";
 import { pathToFileURL } from "node:url";
-import { BrowserWindow, Menu, type OpenDialogOptions, app, dialog, ipcMain, net, protocol, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, net, type OpenDialogOptions, protocol, shell } from "electron";
 import { DaemonManager } from "./daemon-manager.js";
 import { checkForDesktopUpdate, configureDesktopUpdates } from "./desktop-updates.js";
 import { dashboardRoot, iconPath, preloadPath } from "./paths.js";

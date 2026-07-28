@@ -9,18 +9,24 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import {
-	type PackageManagerFamily,
-	type SignetInstallMethod,
-	type SignetInstallationReport,
-	type WorkspaceSourceRepoSyncResult,
 	detectSignetInstallations,
+	type PackageManagerFamily,
 	parseSimpleYaml,
 	resolveGlobalPackagePath,
 	resolvePrimaryPackageManager,
+	type SignetInstallationReport,
+	type SignetInstallMethod,
 	syncWorkspaceSourceRepoAsync,
+	type WorkspaceSourceRepoSyncResult,
 } from "@signet/core";
 import { logger } from "./logger";
 import {
+	clipUpdateOutput,
+	cliSubprocessEnvironment,
+	installUpdateTarget,
+	normalizeExactSemver,
+	remainingUpdateTimeout,
+	runUpdateProcess,
 	UPDATE_INSTALL_TIMEOUT_MS,
 	type UpdateInstallDeps,
 	type UpdateInstallErrorCode,
@@ -28,12 +34,6 @@ import {
 	type UpdateProcessOptions,
 	type UpdateProcessResult,
 	VERSION_VERIFY_TIMEOUT_MS,
-	cliSubprocessEnvironment,
-	clipUpdateOutput,
-	installUpdateTarget,
-	normalizeExactSemver,
-	remainingUpdateTimeout,
-	runUpdateProcess,
 	verifyExecutableVersion,
 } from "./update-install";
 import { compareVersions, isMajorUpgrade, isVersionNewer } from "./version";
@@ -1057,11 +1057,10 @@ export function stopUpdateTimer(): void {
 // Config mutation (used by route handler)
 // ---------------------------------------------------------------------------
 
-export function setUpdateConfig(patch: {
-	autoInstall?: boolean;
-	checkInterval?: number;
-	channel?: UpdateChannel;
-}): { config: UpdateConfig; persisted: boolean } {
+export function setUpdateConfig(patch: { autoInstall?: boolean; checkInterval?: number; channel?: UpdateChannel }): {
+	config: UpdateConfig;
+	persisted: boolean;
+} {
 	if (patch.autoInstall !== undefined) {
 		updateConfig.autoInstall = patch.autoInstall;
 	}

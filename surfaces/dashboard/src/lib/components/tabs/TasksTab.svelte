@@ -1,7 +1,9 @@
 <script lang="ts">
+import { onMount } from "svelte";
 import TaskBoard from "$lib/components/tasks/TaskBoard.svelte";
 import TaskDetail from "$lib/components/tasks/TaskDetail.svelte";
 import TaskForm from "$lib/components/tasks/TaskForm.svelte";
+import { Plus } from "$lib/icons";
 import { returnToSidebar, setFocusZone } from "$lib/stores/focus.svelte";
 import { nav } from "$lib/stores/navigation.svelte";
 import {
@@ -15,8 +17,6 @@ import {
 	openForm,
 	ts,
 } from "$lib/stores/tasks.svelte";
-import { Plus } from "$lib/icons";
-import { onMount } from "svelte";
 
 // Track position as [columnIndex, taskIndex]
 let selectedColumn = $state(0);

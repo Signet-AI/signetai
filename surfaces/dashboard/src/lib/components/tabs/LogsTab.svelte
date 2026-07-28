@@ -1,10 +1,11 @@
 <script lang="ts">
+import { onMount, tick } from "svelte";
 import { browser } from "$app/environment";
 import { API_BASE, type BlackBoxEvent, type BlackBoxRef, type BlackBoxSession, getBlackBoxSession } from "$lib/api";
 import { type AuthEventStream, openAuthEventStream } from "$lib/auth";
 import PageBanner from "$lib/components/layout/PageBanner.svelte";
-import TabGroupBar from "$lib/components/layout/TabGroupBar.svelte";
 import { ENGINE_TAB_ITEMS } from "$lib/components/layout/page-headers";
+import TabGroupBar from "$lib/components/layout/TabGroupBar.svelte";
 import { Button } from "$lib/components/ui/button/index.js";
 import { Checkbox } from "$lib/components/ui/checkbox/index.js";
 import { ScrollArea } from "$lib/components/ui/scroll-area/index.js";
@@ -12,7 +13,6 @@ import * as Select from "$lib/components/ui/select/index.js";
 import { nav } from "$lib/stores/navigation.svelte";
 import { focusEngineTab } from "$lib/stores/tab-group-focus.svelte";
 import { ActionLabels } from "$lib/ui/action-labels";
-import { onMount, tick } from "svelte";
 
 interface LogEntry {
 	timestamp: string;

@@ -9,8 +9,8 @@ import type { DbAccessor } from "../db-accessor";
 import { getSynthesisProvider } from "../llm";
 import { logger } from "../logger";
 import {
-	type DreamingMode,
 	createDreamingPass,
+	type DreamingMode,
 	getDreamingState,
 	recordDreamingFailure,
 	runDreamingPass,

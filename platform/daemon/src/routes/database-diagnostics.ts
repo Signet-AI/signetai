@@ -1,6 +1,6 @@
 import type { Hono } from "hono";
 import { requirePermission } from "../auth";
-import { type DbAccessor, type ReadDb, getDbAccessor } from "../db-accessor";
+import { type DbAccessor, getDbAccessor, type ReadDb } from "../db-accessor";
 import { authConfig } from "./state";
 import { parseBoundedInt } from "./utils";
 

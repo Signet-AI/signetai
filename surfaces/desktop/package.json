@@ -36,7 +36,10 @@
 		"artifactName": "Signet-${version}-${os}-${arch}.${ext}",
 		"asar": true,
 		"npmRebuild": false,
-		"files": ["dist/**/*", "package.json"],
+		"files": [
+			"dist/**/*",
+			"package.json"
+		],
 		"extraResources": [
 			{
 				"from": "resources",
@@ -50,16 +53,24 @@
 		"mac": {
 			"category": "public.app-category.productivity",
 			"icon": "icons/icon.icns",
-			"target": ["dmg", "zip"]
+			"target": [
+				"dmg",
+				"zip"
+			]
 		},
 		"win": {
 			"icon": "icons/icon.ico",
-			"target": ["nsis"]
+			"target": [
+				"nsis"
+			]
 		},
 		"linux": {
 			"category": "Utility",
 			"icon": "icons/icon.png",
-			"target": ["AppImage", "deb"]
+			"target": [
+				"AppImage",
+				"deb"
+			]
 		},
 		"directories": {
 			"output": "release"

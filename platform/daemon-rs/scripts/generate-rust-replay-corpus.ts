@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import ts from "typescript";
 
@@ -111,15 +111,14 @@ function lineOf(sourceFile: ts.SourceFile, node: ts.Node): number {
 }
 
 function snippet(sourceFile: ts.SourceFile, node: ts.Node): string {
-	return node
-		.getText(sourceFile)
-		.replace(/\s+/g, " ")
-		.slice(0, 180);
+	return node.getText(sourceFile).replace(/\s+/g, " ").slice(0, 180);
 }
 
 function addSignal(target: Signal[], sourceFile: ts.SourceFile, node: ts.Node, kind: string): void {
 	const signal = { line: lineOf(sourceFile, node), kind, snippet: snippet(sourceFile, node) };
-	if (!target.some((item) => item.line === signal.line && item.kind === signal.kind && item.snippet === signal.snippet)) {
+	if (
+		!target.some((item) => item.line === signal.line && item.kind === signal.kind && item.snippet === signal.snippet)
+	) {
 		target.push(signal);
 	}
 }
@@ -129,7 +128,8 @@ function routeCandidatesFromText(value: string): string[] {
 	const methodRoute = /\b(GET|POST|PUT|PATCH|DELETE|OPTIONS|HEAD)\s+(\/(?:api|memory|health|v1)[^\s"'`)},]*)/g;
 	for (const match of value.matchAll(methodRoute)) routes.add(`${match[1]} ${match[2]}`);
 
-	const route = /(?:https?:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?)?(\/(?:api|memory|health|v1)[A-Za-z0-9_./:;?=&%+~#-]*)/g;
+	const route =
+		/(?:https?:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?)?(\/(?:api|memory|health|v1)[A-Za-z0-9_./:;?=&%+~#-]*)/g;
 	for (const match of value.matchAll(route)) routes.add(match[1]);
 	return [...routes];
 }
@@ -174,10 +174,18 @@ function collectSignals(sourceFile: ts.SourceFile, node: ts.Node) {
 			) {
 				addSignal(fileSetup, sourceFile, current, name);
 			}
-			if (/(setTimeout|setInterval|clearTimeout|clearInterval|useFakeTimers|setSystemTime|mock\.date|sleep)/.test(expressionText)) {
+			if (
+				/(setTimeout|setInterval|clearTimeout|clearInterval|useFakeTimers|setSystemTime|mock\.date|sleep)/.test(
+					expressionText,
+				)
+			) {
 				addSignal(timerSetup, sourceFile, current, name);
 			}
-			if (/(mock\.module|spyOn|mock\(|fetchMock|MockAgent|createServer|provider|embedding|OpenAI|Ollama|Discord|GitHub)/i.test(expressionText)) {
+			if (
+				/(mock\.module|spyOn|mock\(|fetchMock|MockAgent|createServer|provider|embedding|OpenAI|Ollama|Discord|GitHub)/i.test(
+					expressionText,
+				)
+			) {
 				addSignal(providerMocks, sourceFile, current, name);
 			}
 		}
@@ -199,7 +207,9 @@ function collectSignals(sourceFile: ts.SourceFile, node: ts.Node) {
 function unionSignals(a: Signal[], b: Signal[], max = 80): Signal[] {
 	const merged: Signal[] = [];
 	for (const signal of [...a, ...b]) {
-		if (!merged.some((item) => item.line === signal.line && item.kind === signal.kind && item.snippet === signal.snippet)) {
+		if (
+			!merged.some((item) => item.line === signal.line && item.kind === signal.kind && item.snippet === signal.snippet)
+		) {
 			merged.push(signal);
 		}
 	}
@@ -210,8 +220,10 @@ function inferFamily(file: string, testName: string, manifest?: ManifestEntry): 
 	if (manifest?.manifestFamily) return manifest.manifestFamily;
 	const text = `${file} ${testName} ${manifest?.behavior ?? ""}`.toLowerCase();
 	if (/auth|secret|api-key|bitwarden|onepassword/.test(text)) return "auth/secrets";
-	if (/recall|search|ranking|timeline|temporal|umap|context-budget|subagent-context/.test(text)) return "recall/ranking";
-	if (/pipeline|embedding|provider|model|worker|retention|maintenance|decision|extraction|synthesis|dream/.test(text)) return "pipeline stages";
+	if (/recall|search|ranking|timeline|temporal|umap|context-budget|subagent-context/.test(text))
+		return "recall/ranking";
+	if (/pipeline|embedding|provider|model|worker|retention|maintenance|decision|extraction|synthesis|dream/.test(text))
+		return "pipeline stages";
 	if (/memory|transaction|lineage|mutation|head|session-memory/.test(text)) return "memory/lineage";
 	if (/ontology|knowledge|graph|entity|assertion|proposal|dependency/.test(text)) return "ontology";
 	if (/scope|agent-id|request-scope|task-scope/.test(text)) return "scoping";
@@ -317,7 +329,8 @@ for (const absoluteFile of files) {
 	const fileSignals = collectSignals(sourceFile, sourceFile);
 	const tests = findTests(sourceFile);
 
-	const cases = tests.length > 0 ? tests : [{ name: "<file-level>", line: 1, node: sourceFile as unknown as ts.CallExpression }];
+	const cases =
+		tests.length > 0 ? tests : [{ name: "<file-level>", line: 1, node: sourceFile as unknown as ts.CallExpression }];
 	for (const testCase of cases) {
 		coveredFiles.add(repoFile);
 		const testSignals = collectSignals(sourceFile, testCase.node);
@@ -325,11 +338,19 @@ for (const absoluteFile of files) {
 		const detected = {
 			routeStrings,
 			httpCalls: unionSignals(testSignals.httpCalls, testSignals.httpCalls.length ? [] : fileSignals.httpCalls, 12),
-			dbSeedCalls: unionSignals(testSignals.dbSeedCalls, testSignals.dbSeedCalls.length ? [] : fileSignals.dbSeedCalls, 20),
+			dbSeedCalls: unionSignals(
+				testSignals.dbSeedCalls,
+				testSignals.dbSeedCalls.length ? [] : fileSignals.dbSeedCalls,
+				20,
+			),
 			fileSetup: unionSignals(testSignals.fileSetup, testSignals.fileSetup.length ? [] : fileSignals.fileSetup, 20),
 			envSetup: unionSignals(testSignals.envSetup, testSignals.envSetup.length ? [] : fileSignals.envSetup, 12),
 			timerSetup: unionSignals(testSignals.timerSetup, testSignals.timerSetup.length ? [] : fileSignals.timerSetup, 12),
-			providerMocks: unionSignals(testSignals.providerMocks, testSignals.providerMocks.length ? [] : fileSignals.providerMocks, 12),
+			providerMocks: unionSignals(
+				testSignals.providerMocks,
+				testSignals.providerMocks.length ? [] : fileSignals.providerMocks,
+				12,
+			),
 		};
 		const behavioralFamily = inferFamily(repoFile, testCase.name, manifestEntry);
 		inventory.push({
@@ -353,5 +374,7 @@ const convertibilityCounts = inventory.reduce<Record<string, number>>((acc, item
 
 const warning = files.length === expectedTestFileCount ? "" : ` (expected ${expectedTestFileCount})`;
 console.log(`wrote ${relative(repoRoot, outputPath)}`);
-console.log(`classified testFiles=${files.length}${warning} coveredFiles=${coveredFiles.size} cases=${inventory.length}`);
+console.log(
+	`classified testFiles=${files.length}${warning} coveredFiles=${coveredFiles.size} cases=${inventory.length}`,
+);
 console.log(`convertibility=${JSON.stringify(convertibilityCounts)}`);

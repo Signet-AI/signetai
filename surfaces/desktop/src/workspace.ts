@@ -1,5 +1,5 @@
 import { homedir } from "node:os";
-import { type WorkspaceResolution, type WorkspaceSource, resolveWorkspacePath } from "@signet/core";
+import { resolveWorkspacePath, type WorkspaceResolution, type WorkspaceSource } from "@signet/core";
 
 // Canonical Signet workspace resolution lives in @signet/core (issue #956).
 // The desktop shell delegates to the single shared implementation so env-var

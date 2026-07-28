@@ -1,10 +1,10 @@
-import { describe, expect, it } from "bun:test";
 import { Database } from "bun:sqlite";
+import { describe, expect, it } from "bun:test";
 import { runMigrations } from "../../../core/src/migrations";
 import type { DbAccessor, ReadDb, WriteDb } from "../db-accessor";
-import { DEFAULT_PIPELINE_V2 } from "../memory-config";
-import type { PipelineV2Config } from "../memory-config";
 import { createProviderTracker } from "../diagnostics";
+import type { PipelineV2Config } from "../memory-config";
+import { DEFAULT_PIPELINE_V2 } from "../memory-config";
 import { startMaintenanceWorker } from "./maintenance-worker";
 
 // ---------------------------------------------------------------------------

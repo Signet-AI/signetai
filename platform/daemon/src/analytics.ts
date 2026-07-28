@@ -166,11 +166,7 @@ export interface AnalyticsCollector {
 
 	getUsage(): UsageCounters;
 
-	getErrors(opts?: {
-		stage?: ErrorStage;
-		since?: string;
-		limit?: number;
-	}): readonly ErrorEntry[];
+	getErrors(opts?: { stage?: ErrorStage; since?: string; limit?: number }): readonly ErrorEntry[];
 
 	getErrorSummary(): Readonly<Record<string, number>>;
 

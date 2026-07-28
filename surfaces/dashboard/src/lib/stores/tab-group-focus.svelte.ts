@@ -6,11 +6,11 @@
  */
 
 import {
-	SIDEBAR_ORDER,
-	type SidebarFocusItem,
 	focus,
 	focusFirstPageElement,
 	returnToSidebar,
+	SIDEBAR_ORDER,
+	type SidebarFocusItem,
 	setFocusZone,
 } from "$lib/stores/focus.svelte";
 import { mem } from "$lib/stores/memory.svelte";

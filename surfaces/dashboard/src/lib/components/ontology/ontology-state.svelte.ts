@@ -13,7 +13,6 @@ import type {
 	ProjectionResponse,
 } from "$lib/api";
 import {
-	type KnowledgeStats,
 	getConstellationOverlay,
 	getEmbeddings,
 	getKnowledgeAspects,
@@ -23,18 +22,19 @@ import {
 	getKnowledgeStats,
 	getMemories,
 	getProjection,
+	type KnowledgeStats,
 } from "$lib/api";
 import {
+	buildGraphFromConstellation,
 	DEFAULT_EDGE_FILTER,
 	DEFAULT_NODE_FILTER,
 	type OntologyEdge,
 	type OntologyEdgeKind,
 	type OntologyNode,
 	type OntologyNodeKind,
+	relatedIdsForEntity,
 	TABLE_EDGE_FILTER,
 	TABLE_NODE_FILTER,
-	buildGraphFromConstellation,
-	relatedIdsForEntity,
 } from "./ontology-data";
 
 export interface SelectedNode {

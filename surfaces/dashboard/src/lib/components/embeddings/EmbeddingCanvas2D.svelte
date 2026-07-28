@@ -2,20 +2,20 @@
 import { forceCollide, forceLink, forceManyBody, forceSimulation, forceX, forceY } from "d3-force";
 import type { EmbeddingPoint } from "../../api";
 import {
-	type GraphEdge,
-	type GraphNode,
-	type GraphPhysicsConfig,
-	NodeColorCache,
-	type NodeColorMode,
-	type RelationKind,
-	SpatialGrid,
 	clampGraphPhysics,
 	dependencyEdgeStyle,
 	edgeStrokeStyle,
 	embeddingLabel,
 	entityFillFast,
+	type GraphEdge,
+	type GraphNode,
+	type GraphPhysicsConfig,
 	hexPath,
 	isNewSinceLastSeen,
+	NodeColorCache,
+	type NodeColorMode,
+	type RelationKind,
+	SpatialGrid,
 	tierChargeStrength,
 } from "./embedding-graph";
 

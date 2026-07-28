@@ -1,5 +1,4 @@
 <script lang="ts">
-import { AlertTriangle, X } from "$lib/icons";
 import type { CronPreset, ScheduledTask, Skill } from "$lib/api";
 import { getSkills } from "$lib/api";
 import { Button } from "$lib/components/ui/button/index.js";
@@ -8,6 +7,7 @@ import { Label } from "$lib/components/ui/label/index.js";
 import * as Select from "$lib/components/ui/select/index.js";
 import * as Sheet from "$lib/components/ui/sheet/index.js";
 import { Textarea } from "$lib/components/ui/textarea/index.js";
+import { AlertTriangle, X } from "$lib/icons";
 import { doCreate, doUpdate } from "$lib/stores/tasks.svelte";
 import { TASK_PRESETS, type TaskPreset } from "./task-presets";
 

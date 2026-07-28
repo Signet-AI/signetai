@@ -1,9 +1,9 @@
 <script lang="ts">
-import { FileText, FolderOpen, Network, PlugZap } from "$lib/icons";
+import { onMount } from "svelte";
 import type { DocumentConnector, SignetSourceEntry } from "$lib/api";
 import { getConnectors, getSources } from "$lib/api";
+import { FileText, FolderOpen, Network, PlugZap } from "$lib/icons";
 import { nav } from "$lib/stores/navigation.svelte";
-import { onMount } from "svelte";
 
 type KnowledgeBase = {
 	readonly id: string;

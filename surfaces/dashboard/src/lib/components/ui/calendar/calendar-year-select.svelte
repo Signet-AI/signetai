@@ -1,7 +1,7 @@
 <script lang="ts">
-import { type WithoutChildrenOrChild, cn } from "$lib/utils.js";
-import { ChevronDownIcon } from "$lib/icons";
 import { Calendar as CalendarPrimitive } from "bits-ui";
+import { ChevronDownIcon } from "$lib/icons";
+import { cn, type WithoutChildrenOrChild } from "$lib/utils.js";
 
 let {
 	ref = $bindable(null),

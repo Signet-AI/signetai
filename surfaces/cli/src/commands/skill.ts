@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { getSkillsRunnerCommand, resolvePrimaryPackageManager } from "@signet/core";
 import chalk from "chalk";

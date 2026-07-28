@@ -1,9 +1,20 @@
 <script lang="ts">
+import { onDestroy, onMount } from "svelte";
 import type { OAuthProviderStatus } from "$lib/api";
 import { apiKeyFormat, deleteSecret, getInferenceStatus, providerKeySecretName } from "$lib/api";
-import { CheckCircle, ExternalLink, Eye, EyeOff, KeyRound, Loader, RefreshCw, TriangleAlertIcon, Unlink, X } from "$lib/icons";
+import {
+	CheckCircle,
+	ExternalLink,
+	Eye,
+	EyeOff,
+	KeyRound,
+	Loader,
+	RefreshCw,
+	TriangleAlertIcon,
+	Unlink,
+	X,
+} from "$lib/icons";
 import { st } from "$lib/stores/settings.svelte";
-import { onDestroy, onMount } from "svelte";
 import { ConnectProviderController } from "./connect-provider.svelte";
 
 interface Props {
@@ -14,13 +25,7 @@ interface Props {
 	onsaved: () => void | Promise<void>;
 }
 
-let {
-	provider,
-	supportsOAuth,
-	supportsApiKey,
-	onclose,
-	onsaved,
-}: Props = $props();
+let { provider, supportsOAuth, supportsApiKey, onclose, onsaved }: Props = $props();
 
 // Controller owns all flow state. The component is a thin render over phase.
 let controller = $state(

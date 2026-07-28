@@ -1,15 +1,15 @@
 import type { SignetSourceEntry } from "@signet/core";
 import type { Command } from "commander";
 import {
-	type DaemonAddSourceResult,
-	type SourcesDeps,
 	addDiscordSourceFromCli,
 	addGitHubSourceFromCli,
 	addObsidianVaultSource,
+	type DaemonAddSourceResult,
 	exportConfiguredSourceSnapshot,
 	importConfiguredSourceSnapshot,
 	listSources,
 	removeConfiguredSource,
+	type SourcesDeps,
 } from "../features/sources.js";
 import type { DaemonApiCall } from "../lib/daemon.js";
 

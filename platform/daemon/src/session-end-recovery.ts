@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { type ReadDb, type WriteDb, getDbAccessor } from "./db-accessor";
+import { getDbAccessor, type ReadDb, type WriteDb } from "./db-accessor";
 import { logger } from "./logger";
 import type { ResolvedMemoryConfig } from "./memory-config";
 import { isNoiseSession } from "./session-noise";

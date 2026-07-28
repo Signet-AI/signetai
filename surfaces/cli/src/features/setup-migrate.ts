@@ -4,19 +4,19 @@ import { join } from "node:path";
 import { confirm } from "@inquirer/prompts";
 import {
 	Database as CoreDatabase,
-	type IdentityMode,
-	type ImportResult,
-	type SetupDetection,
-	type SkillsResult,
 	disableGraphiqState,
 	ensureUnifiedSchema,
 	formatYaml,
+	type IdentityMode,
+	type ImportResult,
 	importMemoryLogs,
+	readNetworkMode,
 	resolvePrimaryPackageManager,
 	runMigrations,
+	type SetupDetection,
+	type SkillsResult,
 	unifySkills,
 } from "@signet/core";
-import { readNetworkMode } from "@signet/core";
 import chalk from "chalk";
 import open from "open";
 import ora from "ora";

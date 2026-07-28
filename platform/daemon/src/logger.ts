@@ -14,8 +14,8 @@ import {
 	appendFileSync,
 	existsSync,
 	mkdirSync,
-	readFileSync,
 	readdirSync,
+	readFileSync,
 	renameSync,
 	statSync,
 	unlinkSync,
@@ -133,10 +133,7 @@ const DEFAULT_CONFIG: LoggerConfig = {
 	jsonFormat: true,
 };
 
-export function resolveLoggerConfig(
-	env: NodeJS.ProcessEnv = process.env,
-	homeDir = homedir(),
-): Partial<LoggerConfig> {
+export function resolveLoggerConfig(env: NodeJS.ProcessEnv = process.env, homeDir = homedir()): Partial<LoggerConfig> {
 	const envLogFile = env.SIGNET_LOG_FILE?.trim();
 	if (envLogFile) {
 		return { logFilePath: envLogFile, logDir: dirname(envLogFile) };
@@ -500,14 +497,7 @@ class Logger extends EventEmitter {
 	};
 
 	// Get recent logs (reads across all log files, not just current day)
-	getRecent(
-		options: {
-			limit?: number;
-			level?: LogLevel;
-			category?: LogCategory;
-			since?: Date;
-		} = {},
-	): LogEntry[] {
+	getRecent(options: { limit?: number; level?: LogLevel; category?: LogCategory; since?: Date } = {}): LogEntry[] {
 		const { limit = 100, level, category, since } = options;
 		const results: LogEntry[] = [];
 

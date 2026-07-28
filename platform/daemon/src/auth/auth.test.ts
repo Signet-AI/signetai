@@ -1,15 +1,14 @@
-import { describe, test, expect, beforeEach } from "bun:test";
+import { beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Hono } from "hono";
-
-import { generateSecret, loadOrCreateSecret, createToken, verifyToken } from "./tokens";
+import { parseAuthConfig } from "./config";
+import { createAuthMiddleware, requirePermission, requireRateLimit } from "./middleware";
 import { hashPassword, verifyPasswordHash } from "./password";
 import { checkPermission, checkScope } from "./policy";
 import { AuthRateLimiter } from "./rate-limiter";
-import { createAuthMiddleware, requirePermission, requireRateLimit } from "./middleware";
-import { parseAuthConfig } from "./config";
+import { createToken, generateSecret, loadOrCreateSecret, verifyToken } from "./tokens";
 import type { TokenClaims, TokenRole } from "./types";
 
 // =============================================================================
@@ -701,7 +700,10 @@ describe("parseAuthConfig", () => {
 			{
 				mode: "team",
 				login: {
-					password: { username: "owner", passwordHash: "pbkdf2-sha256$10000$aaaaaaaaaaa$bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" },
+					password: {
+						username: "owner",
+						passwordHash: "pbkdf2-sha256$10000$aaaaaaaaaaa$bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+					},
 					sso: { enabled: true },
 					saml: { enabled: true },
 				},

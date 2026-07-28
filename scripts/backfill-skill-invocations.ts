@@ -14,7 +14,7 @@
  *   bun scripts/backfill-skill-invocations.ts --db ~/.agents/memory/memories.db --agent-id <id>
  */
 import { Database } from "bun:sqlite";
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import { readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { type ParsedSkillInvocation, parseTranscriptSkills } from "../platform/core/src/skill-transcript";

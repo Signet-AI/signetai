@@ -9,8 +9,7 @@ import { dirname, join } from "node:path";
 import { arch, platform } from "node:process";
 import { fileURLToPath } from "node:url";
 import { runMigrations } from "./migrations/index";
-import type { Conversation, Embedding, Memory } from "./types";
-import type { MemoryHistory, MemoryJob } from "./types";
+import type { Conversation, Embedding, Memory, MemoryHistory, MemoryJob } from "./types";
 
 // Compute __dirname at runtime so bun's bundler doesn't bake in a static path
 const __filename = fileURLToPath(import.meta.url);

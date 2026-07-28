@@ -20,7 +20,7 @@
 
 import { mkdirSync } from "node:fs";
 import { isMainThread, parentPort, workerData } from "node:worker_threads";
-import { type EmbeddingWasmConfig, configureEmbeddingWasm } from "./embedding-wasm-config";
+import { configureEmbeddingWasm, type EmbeddingWasmConfig } from "./embedding-wasm-config";
 import type { EmbeddingWorkerInit, MainToWorkerMessage, WorkerToMainMessage } from "./embedding-worker-protocol";
 
 // Lazy, narrow transformers typing — keeps the contract we use without

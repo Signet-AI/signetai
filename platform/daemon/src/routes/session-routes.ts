@@ -6,11 +6,11 @@ import { listAgentPresence, touchAgentPresence } from "../cross-agent.js";
 import { getDbAccessor } from "../db-accessor.js";
 import { logger } from "../logger.js";
 import {
-	type RuntimePath,
 	bypassSession,
 	getActiveSessions,
 	isSessionBypassed,
 	normalizeSessionKey,
+	type RuntimePath,
 	renewSession,
 	unbypassSession,
 } from "../session-tracker.js";

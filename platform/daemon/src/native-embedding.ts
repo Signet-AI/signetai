@@ -17,11 +17,11 @@
  */
 
 import {
+	createEmbeddingWorkerHandle,
 	type EmbeddingProviderSnapshot,
 	type EmbeddingProviderStatus,
 	type EmbeddingWorkerFactory,
 	type EmbeddingWorkerHandle,
-	createEmbeddingWorkerHandle,
 } from "./embedding-worker-handle";
 
 export type NativeProviderStatus = EmbeddingProviderStatus;

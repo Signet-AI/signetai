@@ -384,9 +384,7 @@ function upsertDependency(
 				   AND agent_id = ?
 				 LIMIT 1`,
 			)
-			.get(sourceEntityId, targetEntityId, dependencyType, agentId) as
-			| { id: string; confidence: number }
-			| undefined;
+			.get(sourceEntityId, targetEntityId, dependencyType, agentId) as { id: string; confidence: number } | undefined;
 		if (existing) {
 			const avg = (existing.confidence + confidence) / 2;
 			db.prepare(
@@ -444,8 +442,16 @@ export function txPersistEntities(db: WriteDb, input: PersistEntitiesInput): Per
 
 		// Also write to the current control-plane link table so extracted
 		// edges are visible to graph diagnostics and traversal.
-		upsertDependency(db, source.id, target.id, triple.relationship, triple.confidence, input.agentId, now,
-			`extracted from memory ${input.sourceMemoryId}`);
+		upsertDependency(
+			db,
+			source.id,
+			target.id,
+			triple.relationship,
+			triple.confidence,
+			input.agentId,
+			now,
+			`extracted from memory ${input.sourceMemoryId}`,
+		);
 
 		// Link mentions to source memory (INSERT OR IGNORE for idempotency)
 		const mentionPairs: Array<{ entityId: string; text: string }> = [

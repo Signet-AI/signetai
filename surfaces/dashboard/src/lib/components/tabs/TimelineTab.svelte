@@ -1,18 +1,18 @@
 <script lang="ts">
-import { ChevronLeft, ChevronRight, RotateCcw } from "$lib/icons";
+import { onMount } from "svelte";
 import {
-	type MarketplaceMcpServer,
-	type Memory,
-	type MemoryTimelineBucket,
-	type Skill,
 	getMarketplaceMcpServers,
 	getMemories,
 	getMemoryTimeline,
 	getSkills,
+	type MarketplaceMcpServer,
+	type Memory,
+	type MemoryTimelineBucket,
+	type Skill,
 } from "$lib/api";
 import PageBanner from "$lib/components/layout/PageBanner.svelte";
 import { Button } from "$lib/components/ui/button/index.js";
-import { onMount } from "svelte";
+import { ChevronLeft, ChevronRight, RotateCcw } from "$lib/icons";
 
 interface Props {
 	ontimelinegeneratedforchange?: (generatedFor: string) => void;
@@ -20,8 +20,7 @@ interface Props {
 
 let { ontimelinegeneratedforchange }: Props = $props();
 
-const railButtonBase =
-	"h-8 px-3 rounded-lg border text-[10px] uppercase tracking-[0.08em] font-mono transition-colors";
+const railButtonBase = "h-8 px-3 rounded-lg border text-[10px] uppercase tracking-[0.08em] font-mono transition-colors";
 
 let loading = $state(false);
 let error = $state<string | null>(null);
@@ -393,8 +392,8 @@ function getRangeChipLabel(bucket: MemoryTimelineBucket): string {
 	return "Today";
 }
 
-import TabGroupBar from "$lib/components/layout/TabGroupBar.svelte";
 import { MEMORY_TAB_ITEMS } from "$lib/components/layout/page-headers";
+import TabGroupBar from "$lib/components/layout/TabGroupBar.svelte";
 import { nav, setTab } from "$lib/stores/navigation.svelte";
 import { focusMemoryTab } from "$lib/stores/tab-group-focus.svelte";
 

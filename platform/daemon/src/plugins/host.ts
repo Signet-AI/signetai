@@ -1,11 +1,10 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { SIGNET_PLUGIN_REGISTRY_DIR, SIGNET_PLUGIN_REGISTRY_FILE, resolveDefaultBasePath } from "@signet/core";
+import { resolveDefaultBasePath, SIGNET_PLUGIN_REGISTRY_DIR, SIGNET_PLUGIN_REGISTRY_FILE } from "@signet/core";
 import { logger } from "../logger.js";
 import { truncateToTokens } from "../pipeline/tokenizer.js";
 import { recordPluginAuditEvent } from "./audit.js";
 import { runtimeSupportedInV1, unsupportedRuntimeReason, validatePluginManifest } from "./manifest.js";
-import { EMPTY_PLUGIN_SURFACES } from "./types.js";
 import type {
 	PluginCapabilityCheckV1,
 	PluginDiagnosticsV1,
@@ -20,6 +19,7 @@ import type {
 	PluginSurfaceBaseV1,
 	PluginSurfaceSummaryV1,
 } from "./types.js";
+import { EMPTY_PLUGIN_SURFACES } from "./types.js";
 
 interface PersistedPluginStateV1 {
 	readonly [key: string]: unknown;
@@ -256,11 +256,7 @@ export class PluginHostV1 {
 	}
 
 	promptContributions(
-		opts: {
-			readonly target?: PluginPromptTargetV1;
-			readonly pluginId?: string;
-			readonly activeOnly?: boolean;
-		} = {},
+		opts: { readonly target?: PluginPromptTargetV1; readonly pluginId?: string; readonly activeOnly?: boolean } = {},
 	): readonly PluginPromptContributionV1[] {
 		const activeOnly = opts.activeOnly ?? true;
 		const contributions: PluginPromptContributionV1[] = [];
@@ -360,11 +356,7 @@ export class PluginHostV1 {
 }
 
 export function getDefaultPluginRegistryPath(): string {
-	return join(
-		resolveDefaultBasePath(),
-		SIGNET_PLUGIN_REGISTRY_DIR,
-		SIGNET_PLUGIN_REGISTRY_FILE,
-	);
+	return join(resolveDefaultBasePath(), SIGNET_PLUGIN_REGISTRY_DIR, SIGNET_PLUGIN_REGISTRY_FILE);
 }
 
 function resolveState(

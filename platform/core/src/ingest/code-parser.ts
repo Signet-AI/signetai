@@ -13,11 +13,11 @@
  * patterns, and recent development activity.
  */
 
-import { existsSync, readFileSync, readdirSync, statSync } from "fs";
-import { join, basename, extname, relative } from "path";
 import { execFileSync } from "child_process";
-import type { ParsedDocument, ParsedSection } from "./types";
+import { existsSync, readdirSync, readFileSync, statSync } from "fs";
+import { basename, extname, join, relative } from "path";
 import { findGit } from "./git-utils";
+import type { ParsedDocument, ParsedSection } from "./types";
 
 // ---------------------------------------------------------------------------
 // Configuration

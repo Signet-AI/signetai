@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import type { Context, Hono } from "hono";
 import { requirePermission } from "../auth";
@@ -6,14 +6,14 @@ import { checkPermission } from "../auth/policy";
 import { getDbAccessor } from "../db-accessor.js";
 import { type LogCategory, type LogEntry, logger } from "../logger.js";
 import {
-	CONFIG_FILE_CANDIDATES,
-	RollbackError,
 	appendProviderTransitions,
+	CONFIG_FILE_CANDIDATES,
 	detectProviderTransitions,
 	executeProviderRollback,
 	isRemotePipelineProviderForEndpoint,
 	parseProviderSafetyRole,
 	preserveLockInYaml,
+	RollbackError,
 	readProviderSafetySnapshot,
 	readProviderTransitions,
 	resolveRollbackFilePath,
@@ -31,10 +31,10 @@ import {
 import { emitTaskStream, getTaskStreamSnapshot, subscribeTaskStream } from "../scheduler/task-stream.js";
 import { readScopedTask, readTaskAgentId } from "../task-scope.js";
 import {
-	MAX_UPDATE_INTERVAL_SECONDS,
-	MIN_UPDATE_INTERVAL_SECONDS,
 	checkForUpdates as checkForUpdatesImpl,
 	getUpdateState,
+	MAX_UPDATE_INTERVAL_SECONDS,
+	MIN_UPDATE_INTERVAL_SECONDS,
 	parseBooleanFlag,
 	parseUpdateChannel,
 	parseUpdateInterval,

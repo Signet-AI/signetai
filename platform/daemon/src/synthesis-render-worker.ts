@@ -2,13 +2,13 @@ import { parentPort } from "node:worker_threads";
 import { initDbAccessorLite } from "./db-accessor";
 import { renderMemoryProjection } from "./memory-lineage";
 import {
+	isInitRequest,
+	isRenderRequest,
 	type ReadyResponse,
 	type RenderError,
 	type RenderResult,
 	type WorkerRequest,
 	type WorkerResponse,
-	isInitRequest,
-	isRenderRequest,
 } from "./synthesis-worker-protocol";
 
 function postMessage(message: WorkerResponse): void {

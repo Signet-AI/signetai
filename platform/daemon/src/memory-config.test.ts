@@ -5,12 +5,12 @@ import { join } from "node:path";
 import {
 	DEFAULT_LLAMACPP_MAX_INPUT_TOKENS,
 	DEFAULT_PIPELINE_V2,
+	loadMemoryConfig,
+	loadPipelineConfig,
 	MAX_LLAMACPP_MAX_INPUT_TOKENS,
 	MAX_PROMPT_SUBMIT_EMBEDDING_TIMEOUT_MS,
 	MIN_LLAMACPP_MAX_INPUT_TOKENS,
 	MIN_PROMPT_SUBMIT_EMBEDDING_TIMEOUT_MS,
-	loadMemoryConfig,
-	loadPipelineConfig,
 	shouldWarnGraphExtractionWritesDisabled,
 } from "./memory-config";
 

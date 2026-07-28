@@ -15,7 +15,7 @@
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { runMigrations } from "../../../core/src/migrations";
-import type { DbAccessor, WriteDb, ReadDb } from "../db-accessor";
+import type { DbAccessor, ReadDb, WriteDb } from "../db-accessor";
 
 // ---------------------------------------------------------------------------
 // Helpers

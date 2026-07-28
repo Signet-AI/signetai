@@ -23,8 +23,8 @@ import type {
 	ConstellationResponse,
 	ContinuityLatestResponse,
 	ContinuityResponse,
-	DedupStatsResponse,
 	DeduplicateResponse,
+	DedupStatsResponse,
 	EmbeddingGapsResponse,
 	EntityAspectsResponse,
 	EntityDependenciesResponse,
@@ -412,10 +412,7 @@ export class SignetClientP2 {
 	 * @example
 	 * const { scores, summary } = await client.getContinuity({ project: 'my-project', limit: 50 });
 	 */
-	async getContinuity(opts?: {
-		readonly project?: string;
-		readonly limit?: number;
-	}): Promise<ContinuityResponse> {
+	async getContinuity(opts?: { readonly project?: string; readonly limit?: number }): Promise<ContinuityResponse> {
 		return this.transport.get<ContinuityResponse>("/api/analytics/continuity", opts);
 	}
 
@@ -468,9 +465,7 @@ export class SignetClientP2 {
 	 * @example
 	 * const entities = await client.getPinnedEntities();
 	 */
-	async getPinnedEntities(opts?: {
-		readonly agentId?: string;
-	}): Promise<KnowledgeEntityListResponse> {
+	async getPinnedEntities(opts?: { readonly agentId?: string }): Promise<KnowledgeEntityListResponse> {
 		return this.transport.get<KnowledgeEntityListResponse>("/api/knowledge/entities/pinned", opts);
 	}
 
@@ -604,9 +599,7 @@ export class SignetClientP2 {
 	 * @example
 	 * const result = await client.reembedMissing({ limit: 100 });
 	 */
-	async reembedMissing(opts?: {
-		readonly limit?: number;
-	}): Promise<RepairActionResponse> {
+	async reembedMissing(opts?: { readonly limit?: number }): Promise<RepairActionResponse> {
 		return this.transport.post<RepairActionResponse>("/api/repair/re-embed", opts ?? {});
 	}
 
@@ -638,9 +631,7 @@ export class SignetClientP2 {
 	 * @example
 	 * const result = await client.deduplicateMemories({ dryRun: false });
 	 */
-	async deduplicateMemories(opts?: {
-		readonly dryRun?: boolean;
-	}): Promise<DeduplicateResponse> {
+	async deduplicateMemories(opts?: { readonly dryRun?: boolean }): Promise<DeduplicateResponse> {
 		return this.transport.post<DeduplicateResponse>("/api/repair/deduplicate", opts ?? {});
 	}
 
@@ -664,9 +655,7 @@ export class SignetClientP2 {
 	 * @example
 	 * const result = await client.pruneSingletonEntities({ minMentions: 2 });
 	 */
-	async pruneSingletonEntities(opts?: {
-		readonly minMentions?: number;
-	}): Promise<RepairActionResponse> {
+	async pruneSingletonEntities(opts?: { readonly minMentions?: number }): Promise<RepairActionResponse> {
 		return this.transport.post<RepairActionResponse>("/api/repair/prune-singleton-entities", opts ?? {});
 	}
 
@@ -787,10 +776,7 @@ export class SignetClientP2 {
 	}
 
 	/** @deprecated Signet predictor APIs were removed in 0.112. */
-	async listTrainingRuns(_opts?: {
-		readonly agentId?: string;
-		readonly limit?: number;
-	}): Promise<never> {
+	async listTrainingRuns(_opts?: { readonly agentId?: string; readonly limit?: number }): Promise<never> {
 		this.predictorDeprecated();
 	}
 
@@ -800,9 +786,7 @@ export class SignetClientP2 {
 	}
 
 	/** @deprecated Signet predictor APIs were removed in 0.112. */
-	async trainPredictor(_opts?: {
-		readonly force?: boolean;
-	}): Promise<never> {
+	async trainPredictor(_opts?: { readonly force?: boolean }): Promise<never> {
 		this.predictorDeprecated();
 	}
 }

@@ -1,13 +1,13 @@
-import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
+import { copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { OpenClawConnector } from "@signet/connector-openclaw";
 import {
-	type WorkspaceSourceRepoSyncResult,
 	getOhMyPiConfigPath,
 	getPiConfigPath,
 	loadConfiguredHarnesses,
 	resolveHermesRepoPath,
+	type WorkspaceSourceRepoSyncResult,
 } from "@signet/core";
 import chalk from "chalk";
 

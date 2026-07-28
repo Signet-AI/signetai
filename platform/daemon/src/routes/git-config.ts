@@ -16,7 +16,8 @@ export const MIN_GIT_SYNC_INTERVAL_SECONDS = 60;
 export const MAX_GIT_SYNC_INTERVAL_SECONDS = 24 * 60 * 60;
 
 export function clampGitSyncIntervalSeconds(value: unknown): number | null {
-	const parsed = typeof value === "number" ? value : typeof value === "string" ? Number.parseInt(value, 10) : Number.NaN;
+	const parsed =
+		typeof value === "number" ? value : typeof value === "string" ? Number.parseInt(value, 10) : Number.NaN;
 	if (!Number.isFinite(parsed)) return null;
 	return Math.min(MAX_GIT_SYNC_INTERVAL_SECONDS, Math.max(MIN_GIT_SYNC_INTERVAL_SECONDS, Math.trunc(parsed)));
 }

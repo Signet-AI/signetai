@@ -5,8 +5,8 @@ import {
 	lstatSync,
 	mkdirSync,
 	mkdtempSync,
-	readFileSync,
 	readdirSync,
+	readFileSync,
 	renameSync,
 	rmSync,
 	symlinkSync,
@@ -240,7 +240,7 @@ describe("linux desktop install", () => {
 			expect(launcher).toContain(`export SIGNET_PATH='${workspace}'`);
 			expect(launcher).toContain(`exec '${result.appImage}' "$@"`);
 			expect(readFileSync(result.desktopEntry, "utf8")).toContain("Name=Signet");
-			expect(readFileSync(result.desktopEntry, "utf8")).toContain(`Exec=\"${result.binary}\" %U`);
+			expect(readFileSync(result.desktopEntry, "utf8")).toContain(`Exec="${result.binary}" %U`);
 			expect(existsSync(result.icon)).toBe(true);
 			expect(result.workspace).toBe(workspace);
 		} finally {

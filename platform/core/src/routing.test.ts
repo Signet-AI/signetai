@@ -953,7 +953,9 @@ describe("routing reference validation (#1005)", () => {
 				targets: {
 					background: { executor: "acpx", acpx: { agent: "codex" }, models: { default: { model: "gpt" } } },
 				},
-				policies: { background: { mode: "automatic", defaultTargets: [makeRoutingTargetRef("background", "default")] } },
+				policies: {
+					background: { mode: "automatic", defaultTargets: [makeRoutingTargetRef("background", "default")] },
+				},
 				defaultPolicy: "background-acpx",
 			},
 		});
@@ -1088,7 +1090,10 @@ describe("routing reference validation (#1005)", () => {
 			...parsed.value,
 			policies: {
 				...parsed.value.policies,
-				auto: { ...parsed.value.policies.auto!, taskTargets: { code_reasining: [makeRoutingTargetRef("remote", "sonnet")] } },
+				auto: {
+					...parsed.value.policies.auto!,
+					taskTargets: { code_reasining: [makeRoutingTargetRef("remote", "sonnet")] },
+				},
 			},
 			agents: {
 				rose: {
@@ -1155,4 +1160,3 @@ describe("routing reference validation (#1005)", () => {
 		expect(validateRoutingReferences(parsed.value)).toEqual([]);
 	});
 });
-

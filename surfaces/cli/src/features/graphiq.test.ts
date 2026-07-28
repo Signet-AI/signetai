@@ -6,9 +6,9 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-	SIGNET_GRAPHIQ_PLUGIN_ID,
 	getGraphiqProjectDbPath,
 	readGraphiqState,
+	SIGNET_GRAPHIQ_PLUGIN_ID,
 	updateGraphiqActiveProject,
 	writeGraphiqState,
 } from "@signet/core";

@@ -3,16 +3,16 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, st
 import { homedir, tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import {
-	BaseConnector,
-	type InstallResult,
-	type UninstallResult,
 	atomicWriteText,
+	BaseConnector,
 	buildManagedExtensionEnvBootstrap,
+	type InstallResult,
 	removeManagedExtensionFile,
 	resolveSignetCliCommand,
 	resolveSignetDaemonUrl,
 	resolveSignetMcpCommand,
 	resolveSignetWorkspacePath,
+	type UninstallResult,
 } from "./src/index";
 import { parseLenientJsonObject } from "./src/lenient-json";
 

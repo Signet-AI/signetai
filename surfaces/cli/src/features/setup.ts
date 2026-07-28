@@ -3,17 +3,17 @@ import { join } from "node:path";
 import { checkbox, confirm, input, select } from "@inquirer/prompts";
 import { OpenClawConnector } from "@signet/connector-openclaw";
 import {
+	disableGraphiqState,
+	formatYaml,
 	IDENTITY_MODES,
 	IDENTITY_PRESETS,
 	type IdentityContextFileEntry,
 	type IdentityMode,
 	type IdentityPresetName,
 	type IdentitySpecialFileEntry,
+	modelPresetsForProvider,
 	NETWORK_MODES,
 	type NetworkMode,
-	disableGraphiqState,
-	formatYaml,
-	modelPresetsForProvider,
 	parseSimpleYaml,
 	readNetworkMode,
 	resolveIdentityModeFromConfig,
@@ -24,7 +24,7 @@ import ora from "ora";
 import { installGraphiqPlugin } from "./graphiq.js";
 import { runFreshSetup } from "./setup-fresh.js";
 import { runExistingSetupWizard } from "./setup-migrate.js";
-import { EXTRACTION_SAFETY_WARNING, defaultAcpxModel, defaultExtractionModel } from "./setup-pipeline.js";
+import { defaultAcpxModel, defaultExtractionModel, EXTRACTION_SAFETY_WARNING } from "./setup-pipeline.js";
 import { readSetupCorePluginEnabled, writeSetupCorePluginRegistry } from "./setup-plugins.js";
 import { enforceSetupProtection, printSetupProtectionSummary } from "./setup-protection.js";
 import {
@@ -38,31 +38,31 @@ import {
 import {
 	DEPLOYMENT_TYPE_CHOICES,
 	type DeploymentTypeChoice,
-	EMBEDDING_PROVIDER_CHOICES,
-	EXTRACTION_PROVIDER_CHOICES,
-	type EmbeddingProviderChoice,
-	type ExtractionProviderChoice,
-	type HarnessChoice,
-	OPENCLAW_RUNTIME_CHOICES,
-	type OpenClawRuntimeChoice,
-	SETUP_HARNESS_CHOICES,
 	defaultEmbeddingProviderForDeployment,
 	defaultExtractionProviderForDeployment,
 	detectExtractionProviderFromAvailable,
 	detectPreferredOpenClawWorkspace,
+	EMBEDDING_PROVIDER_CHOICES,
+	type EmbeddingProviderChoice,
+	EXTRACTION_PROVIDER_CHOICES,
+	type ExtractionProviderChoice,
 	failNonInteractiveSetup,
 	failSetupValidation,
 	findUnknownHarnessValues,
 	formatDetectionSummary,
 	getDeploymentExtractionGuidance,
 	getEmbeddingDimensions,
+	type HarnessChoice,
 	hasExistingAgentState,
 	hasExistingIdentityFiles,
 	normalizeHarnessList,
+	OPENCLAW_RUNTIME_CHOICES,
+	type OpenClawRuntimeChoice,
 	readHarnesses,
 	readRecord,
 	readString,
 	resolveSetupExtractionProvider,
+	SETUP_HARNESS_CHOICES,
 } from "./setup-shared.js";
 import type { FreshSetupConfig, SetupDeps, SetupWizardOptions } from "./setup-types.js";
 

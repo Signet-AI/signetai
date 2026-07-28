@@ -1,8 +1,8 @@
 <script lang="ts">
-import { Activity, ChevronDown, Info, Loader, Terminal, Trash2, Wrench } from "$lib/icons";
+import { tick } from "svelte";
 import { API_BASE } from "$lib/api";
 import * as Select from "$lib/components/ui/select/index.js";
-import { tick } from "svelte";
+import { Activity, ChevronDown, Info, Loader, Terminal, Trash2, Wrench } from "$lib/icons";
 
 type CmdKind = "cli" | "api";
 
@@ -295,16 +295,16 @@ function escapeHtml(s: string): string {
 	return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
-const ANSI_BLOCK = new RegExp("\\u001b\\[(\\d+)m([\\s\\S]*?)\\u001b\\[0m", "g");
-const ANSI_CODE = new RegExp("\\u001b\\[\\d+m", "g");
+const ANSI_BLOCK = /\u001b\[(\d+)m([\s\S]*?)\u001b\[0m/g;
+const ANSI_CODE = /\u001b\[\d+m/g;
 
 function ansiToHtml(text: string): string {
 	const colors: Record<string, string> = {
-		"31": "var(--sig-danger)",
-		"32": "var(--sig-success)",
-		"33": "var(--sig-warning, #e8a832)",
-		"90": "var(--sig-text-muted)",
-		"36": "var(--sig-accent)",
+		31: "var(--sig-danger)",
+		32: "var(--sig-success)",
+		33: "var(--sig-warning, #e8a832)",
+		90: "var(--sig-text-muted)",
+		36: "var(--sig-accent)",
 	};
 	// Escape all HTML first to prevent XSS, then apply styling
 	let result = escapeHtml(text);

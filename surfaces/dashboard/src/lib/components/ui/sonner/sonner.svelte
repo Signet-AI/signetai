@@ -1,8 +1,7 @@
 <script lang="ts">
-import { CircleCheckIcon, InfoIcon, Loader2Icon, OctagonXIcon, TriangleAlertIcon } from "$lib/icons";
-
 import { mode } from "mode-watcher";
 import { Toaster as Sonner, type ToasterProps as SonnerProps } from "svelte-sonner";
+import { CircleCheckIcon, InfoIcon, Loader2Icon, OctagonXIcon, TriangleAlertIcon } from "$lib/icons";
 
 let { ...restProps }: SonnerProps = $props();
 </script>

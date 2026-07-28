@@ -1,6 +1,6 @@
 <script lang="ts">
-import { fetchMcpAnalytics, mcpAnalytics } from "$lib/stores/mcp-analytics.svelte";
 import { onMount } from "svelte";
+import { fetchMcpAnalytics, mcpAnalytics } from "$lib/stores/mcp-analytics.svelte";
 
 onMount(() => {
 	void fetchMcpAnalytics();

@@ -1,5 +1,5 @@
 import { homedir } from "node:os";
-import { type SignetInstallationReport, inactivePackageManagerInstallations } from "@signet/core";
+import { inactivePackageManagerInstallations, type SignetInstallationReport } from "@signet/core";
 import chalk from "chalk";
 
 function displayPath(path: string, home: string): string {

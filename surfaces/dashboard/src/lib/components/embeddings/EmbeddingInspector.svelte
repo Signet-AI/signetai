@@ -9,13 +9,13 @@ import type {
 } from "../../api";
 import {
 	type EmbeddingRelation,
-	type GraphNode,
-	type NodeType,
-	type RelationKind,
 	embeddingLabel,
 	embeddingSourceLabel,
 	entityFillStyle,
 	entityTypeColor,
+	type GraphNode,
+	type NodeType,
+	type RelationKind,
 } from "./embedding-graph";
 
 interface Props {

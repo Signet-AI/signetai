@@ -1,4 +1,4 @@
-import { type McpAnalyticsSummary, getMcpAnalytics } from "$lib/api";
+import { getMcpAnalytics, type McpAnalyticsSummary } from "$lib/api";
 
 export const mcpAnalytics = $state({
 	data: null as McpAnalyticsSummary | null,
@@ -6,10 +6,7 @@ export const mcpAnalytics = $state({
 	error: null as string | null,
 });
 
-export async function fetchMcpAnalytics(params?: {
-	server?: string;
-	since?: string;
-}): Promise<void> {
+export async function fetchMcpAnalytics(params?: { server?: string; since?: string }): Promise<void> {
 	mcpAnalytics.loading = true;
 	mcpAnalytics.error = null;
 	try {

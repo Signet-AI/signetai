@@ -1,7 +1,8 @@
 <script lang="ts">
-import { ChevronRight, Filter } from "$lib/icons";
 import { ScrollArea } from "$lib/components/ui/scroll-area/index.js";
+import { ChevronRight, Filter } from "$lib/icons";
 import {
+	allVisibleTables,
 	GROUP_LABELS,
 	NODE_COLORS,
 	type OntologyEdgeKind,
@@ -10,7 +11,6 @@ import {
 	type SchemaGroup,
 	TABLE_EDGE_FILTER,
 	TABLE_NODE_FILTER,
-	allVisibleTables,
 } from "./ontology-data";
 import { ontology, selectSchemaTable, toggleEdgeKind, toggleNodeKind } from "./ontology-state.svelte";
 

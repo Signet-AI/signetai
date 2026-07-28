@@ -307,7 +307,7 @@ describe("OpenCodeConnector — pipeline agent registration", () => {
 
 		const plugin = readFileSync(join(ocPath(), "plugins", "signet.mjs"), "utf-8");
 		expect(plugin).toContain('process.env["SIGNET_DAEMON_URL"] = "https://daemon.example.test:3850";');
-		expect(plugin).toContain('__signetReadFileSync');
+		expect(plugin).toContain("__signetReadFileSync");
 		expect(plugin).not.toContain("sig_sk_opencode_test_secret");
 		expect(plugin).toContain('process.env["SIGNET_AGENT_ID"] = "opencode-remote";');
 		const apiKeyFile = join(ocPath(), "plugins", ".signet-api-key");

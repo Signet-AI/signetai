@@ -7,8 +7,8 @@ import * as Select from "$lib/components/ui/select/index.js";
 import * as Sheet from "$lib/components/ui/sheet/index.js";
 import { Switch } from "$lib/components/ui/switch/index.js";
 import { Textarea } from "$lib/components/ui/textarea/index.js";
-import { closeEditForm, doDeleteMemory, doUpdateMemory } from "$lib/stores/memory.svelte";
 import { AlertTriangle } from "$lib/icons";
+import { closeEditForm, doDeleteMemory, doUpdateMemory } from "$lib/stores/memory.svelte";
 
 interface Props {
 	open: boolean;
@@ -48,7 +48,7 @@ const knownTypes = [
 ] as const;
 
 // Track last initialised ID to avoid re-init on same memory
-let lastInitializedId: string | undefined | null = undefined;
+let lastInitializedId: string | undefined | null;
 
 $effect(() => {
 	if (open && editing) {

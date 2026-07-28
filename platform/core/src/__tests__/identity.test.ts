@@ -4,13 +4,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildAgentMemoryConfig, getAgentIdentityFiles, normalizeAgentRosterEntry, scaffoldAgent } from "../agents";
 import {
-	STATIC_IDENTITY_SESSION_START_TIMEOUT_STATUS,
 	detectExistingSetup,
 	loadIdentityMode,
 	readStaticIdentity,
 	resolvePromptSubmitTimeoutMs,
 	resolveSessionStartTimeoutMs,
 	resolveStartupIdentityFiles,
+	STATIC_IDENTITY_SESSION_START_TIMEOUT_STATUS,
 } from "../identity";
 import { parseSimpleYaml } from "../yaml";
 

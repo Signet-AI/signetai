@@ -7,8 +7,7 @@
  */
 
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
-import type { Context } from "hono";
-import type { Hono } from "hono";
+import type { Context, Hono } from "hono";
 import { createMcpServer } from "./tools.js";
 
 export function mountMcpRoute(app: Hono): void {
@@ -41,10 +40,7 @@ export function mountMcpRoute(app: Hono): void {
 		await server.connect(transport);
 
 		try {
-			const response = await transport.handleRequest(
-				c.req.raw,
-				parsedBody === undefined ? undefined : { parsedBody },
-			);
+			const response = await transport.handleRequest(c.req.raw, parsedBody === undefined ? undefined : { parsedBody });
 			return response;
 		} finally {
 			await transport.close();

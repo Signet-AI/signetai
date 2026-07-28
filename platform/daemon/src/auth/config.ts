@@ -3,8 +3,8 @@
  */
 
 import { join } from "node:path";
-import type { AuthMode } from "./types";
 import { DEFAULT_RATE_LIMITS, type RateLimitConfig } from "./rate-limiter";
+import type { AuthMode } from "./types";
 
 export interface PasswordLoginConfig {
 	readonly username: string;
@@ -67,11 +67,15 @@ function parseLoginConfig(raw: Record<string, unknown>): AuthLoginConfig {
 		login.password && typeof login.password === "object" ? (login.password as Record<string, unknown>) : {};
 	const sso = login.sso && typeof login.sso === "object" ? (login.sso as Record<string, unknown>) : {};
 	const saml = login.saml && typeof login.saml === "object" ? (login.saml as Record<string, unknown>) : {};
-	const legacyAdmin = raw.adminUser && typeof raw.adminUser === "object" ? (raw.adminUser as Record<string, unknown>) : {};
+	const legacyAdmin =
+		raw.adminUser && typeof raw.adminUser === "object" ? (raw.adminUser as Record<string, unknown>) : {};
 
 	return {
 		password: {
-			username: nonEmptyString(password.username) ?? nonEmptyString(legacyAdmin.username) ?? DEFAULT_LOGIN_CONFIG.password.username,
+			username:
+				nonEmptyString(password.username) ??
+				nonEmptyString(legacyAdmin.username) ??
+				DEFAULT_LOGIN_CONFIG.password.username,
 			passwordHash: nonEmptyString(password.passwordHash) ?? nonEmptyString(legacyAdmin.passwordHash),
 		},
 		sso: { enabled: sso.enabled === true },

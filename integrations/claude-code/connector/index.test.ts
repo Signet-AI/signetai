@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
 	ClaudeCodeConnector,
-	type SessionEndFireAndForgetPayload,
 	dispatchSessionEndFireAndForget,
+	type SessionEndFireAndForgetPayload,
 } from "./src/index.js";
 
 const origHome = process.env.HOME;

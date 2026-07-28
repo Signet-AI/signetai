@@ -72,15 +72,7 @@ export async function memoryTools(client: SignetClient) {
 				type: z.string().optional().describe("Memory type"),
 				importance: z.number().optional().describe("0-1 importance"),
 			}),
-			execute: async ({
-				content,
-				type,
-				importance,
-			}: {
-				content: string;
-				type?: string;
-				importance?: number;
-			}) => {
+			execute: async ({ content, type, importance }: { content: string; type?: string; importance?: number }) => {
 				return client.remember(content, { type, importance });
 			},
 		},

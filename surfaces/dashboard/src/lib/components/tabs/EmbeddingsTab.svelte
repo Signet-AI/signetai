@@ -1,61 +1,60 @@
 <script lang="ts">
+import { onMount, tick } from "svelte";
 import {
 	type ConstellationGraph,
 	type EmbeddingCheckResult,
 	type EmbeddingHealthReport,
 	type EmbeddingPoint,
-	type Memory,
-	type ProjectionNode,
-	type ProjectionQueryOptions,
-	type RepairActionResult,
 	getConstellationOverlay,
 	getDistinctWho,
 	getEmbeddingGapStats,
 	getEmbeddingHealth,
 	getProjection,
 	getSimilarMemories,
+	type Memory,
+	type ProjectionNode,
+	type ProjectionQueryOptions,
+	type RepairActionResult,
 	repairCleanOrphans,
 	repairReEmbed,
 	repairResyncVectorIndex,
 	setMemoryPinned,
 } from "$lib/api";
 import PageBanner from "$lib/components/layout/PageBanner.svelte";
-import TabGroupBar from "$lib/components/layout/TabGroupBar.svelte";
 import { MEMORY_TAB_ITEMS } from "$lib/components/layout/page-headers";
+import TabGroupBar from "$lib/components/layout/TabGroupBar.svelte";
 import * as Collapsible from "$lib/components/ui/collapsible/index.js";
+import { ChevronDown } from "$lib/icons";
 import { mem } from "$lib/stores/memory.svelte";
 import { nav, setTab } from "$lib/stores/navigation.svelte";
 import { focusMemoryTab } from "$lib/stores/tab-group-focus.svelte";
 import { toast } from "$lib/stores/toast.svelte";
 import { syncLayoutToStorage, workspaceLayout } from "$lib/stores/workspace-layout.svelte";
 import { ActionLabels } from "$lib/ui/action-labels";
-import { ChevronDown } from "$lib/icons";
-import { tick } from "svelte";
-import { onMount } from "svelte";
 // biome-ignore lint/style/useImportType: Svelte component tags need value imports.
 import EmbeddingCanvas2D from "../embeddings/EmbeddingCanvas2D.svelte";
 import EmbeddingInspector from "../embeddings/EmbeddingInspector.svelte";
 import {
+	aspectRadius,
+	attributeRadius,
+	clampGraphPhysics,
 	DEFAULT_EMBEDDING_LIMIT,
 	DEFAULT_GRAPH_PHYSICS,
 	type EmbeddingRelation,
+	embeddingLabel,
+	entityFillStyle,
+	entityRadius,
+	entityTypeColors,
 	GRAPH_PHYSICS_STORAGE_KEY,
 	type GraphEdge,
 	type GraphNode,
 	type GraphPhysicsConfig,
 	MAX_EMBEDDING_LIMIT,
 	type NodeColorMode,
-	type RelationKind,
-	aspectRadius,
-	attributeRadius,
-	clampGraphPhysics,
-	embeddingLabel,
-	entityFillStyle,
-	entityRadius,
-	entityTypeColors,
 	newnessFillStyle,
 	newnessIntensity,
 	parseCreatedMs,
+	type RelationKind,
 	sourceColorRgba,
 	sourceRgbaFast,
 	tierChargeStrength,

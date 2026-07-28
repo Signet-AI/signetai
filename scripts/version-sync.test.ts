@@ -4,11 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
-	VERSION_SYNC_PACKAGE_GLOBS,
 	collectCargoLockMismatches,
 	findCargoLockPackageVersion,
 	resolveWorkspaceProtocols,
 	syncSignetNativeOptionalDependencies,
+	VERSION_SYNC_PACKAGE_GLOBS,
 } from "./version-sync";
 
 describe("version-sync", () => {

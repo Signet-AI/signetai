@@ -1,4 +1,5 @@
 <script lang="ts">
+import { onMount } from "svelte";
 import type { SkillSearchResult } from "$lib/api";
 import McpServersTab from "$lib/components/marketplace/McpServersTab.svelte";
 import PluginsPanel from "$lib/components/plugins/PluginsPanel.svelte";
@@ -44,7 +45,6 @@ import {
 	toggleCompare,
 } from "$lib/stores/skills.svelte";
 import { toast } from "$lib/stores/toast.svelte";
-import { onMount } from "svelte";
 
 type MarketplaceSection = "skills" | "mcp" | "plugins";
 

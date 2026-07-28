@@ -10,7 +10,6 @@ function canonicalizeTranscriptLookup(value: string): string {
 	return OMP_UUID_LIKE_SESSION_ID.test(trimmed) ? trimmed.replace(/:/g, "-") : trimmed;
 }
 
-
 export interface SubagentContextRequest {
 	readonly harness: string;
 	readonly project?: string;
@@ -295,13 +294,13 @@ export function searchSessionTranscripts(params: {
 			].join("\n"),
 		)
 		.all(params.agentId, ...exactAliases, ...(hasSessionId ? exactAliases : []), params.project ?? "", limit) as Array<{
-			readonly session_key: string;
-			readonly project: string | null;
-			readonly updated_at: string;
-			readonly content: string;
-			readonly excerpt: string;
-			readonly rank: number;
-		}>;
+		readonly session_key: string;
+		readonly project: string | null;
+		readonly updated_at: string;
+		readonly content: string;
+		readonly excerpt: string;
+		readonly rank: number;
+	}>;
 	if (exactRows.length > 0) {
 		return exactRows.map((row) => ({
 			sessionKey: row.session_key,

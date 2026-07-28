@@ -10,7 +10,7 @@
  * Idempotent — matched by canonical name + frontmatter content hash.
  */
 
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { watch } from "chokidar";
 import type { DbAccessor } from "../db-accessor.js";

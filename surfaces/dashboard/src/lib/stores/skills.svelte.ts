@@ -4,13 +4,13 @@
  */
 
 import {
-	type Skill,
-	type SkillDetail,
-	type SkillSearchResult,
 	browseSkills,
 	getSkill,
 	getSkills,
 	installSkill,
+	type Skill,
+	type SkillDetail,
+	type SkillSearchResult,
 	searchSkills,
 	uninstallSkill,
 } from "$lib/api";

@@ -1,14 +1,14 @@
 import { spawn } from "node:child_process";
-import { constants, accessSync, existsSync, rmSync } from "node:fs";
+import { accessSync, constants, existsSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-	SIGNET_GRAPHIQ_PLUGIN_ID,
 	disableGraphiqState,
 	enableGraphiqState,
 	getGraphiqProjectDbPath,
 	readGraphiqState,
+	SIGNET_GRAPHIQ_PLUGIN_ID,
 	updateGraphiqActiveProject,
 } from "@signet/core";
 import chalk from "chalk";

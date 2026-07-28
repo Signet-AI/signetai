@@ -10,13 +10,13 @@
  * Run: bun test platform/daemon/src/pipeline/graph-traversal-compare.test.ts
  */
 
+import type { Database } from "bun:sqlite";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { type Database } from "bun:sqlite";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { traverseKnowledgeGraph as traverseKnowledgeGraph_NEW, resolveFocalEntities } from "./graph-traversal.js";
 import type { ReadDb } from "../db-accessor.js";
+import { resolveFocalEntities, traverseKnowledgeGraph as traverseKnowledgeGraph_NEW } from "./graph-traversal.js";
 
 // ---------------------------------------------------------------------------
 // Types (shared)
@@ -76,7 +76,16 @@ function traverseKnowledgeGraph_OLD(
 ) {
 	const focalIds = sanitizeEntityIds(focalEntityIds);
 	if (focalIds.length === 0) {
-		return { memoryIds: new Set<string>(), memoryScores: new Map<string, number>(), memoryPaths: new Map<string, TraversalPath>(), constraints: [], entityCount: 0, timedOut: false, activeAspectIds: [] as string[], focalEntityIds: [] as string[] };
+		return {
+			memoryIds: new Set<string>(),
+			memoryScores: new Map<string, number>(),
+			memoryPaths: new Map<string, TraversalPath>(),
+			constraints: [],
+			entityCount: 0,
+			timedOut: false,
+			activeAspectIds: [] as string[],
+			focalEntityIds: [] as string[],
+		};
 	}
 
 	const memoryIds = new Set<string>();
@@ -87,8 +96,16 @@ function traverseKnowledgeGraph_OLD(
 	const constraintKeys = new Set<string>();
 	const visitedEntities = new Set<string>();
 
-	const toPath = (entityId: string, sourceEntityId?: string, aspectId?: string, dependencyId?: string): TraversalPath => ({
-		entityIds: typeof sourceEntityId === "string" && sourceEntityId.length > 0 && sourceEntityId !== entityId ? [sourceEntityId, entityId] : [entityId],
+	const toPath = (
+		entityId: string,
+		sourceEntityId?: string,
+		aspectId?: string,
+		dependencyId?: string,
+	): TraversalPath => ({
+		entityIds:
+			typeof sourceEntityId === "string" && sourceEntityId.length > 0 && sourceEntityId !== entityId
+				? [sourceEntityId, entityId]
+				: [entityId],
 		aspectIds: typeof aspectId === "string" && aspectId.length > 0 ? [aspectId] : [],
 		dependencyIds: typeof dependencyId === "string" && dependencyId.length > 0 ? [dependencyId] : [],
 	});
@@ -106,17 +123,33 @@ function traverseKnowledgeGraph_OLD(
 		visitedEntities.add(entityId);
 
 		// Constraints
-		const cRows = db.prepare(
-			`SELECT e.name as entity_name, ea.content, ea.importance FROM entity_aspects asp INDEXED BY idx_entity_aspects_entity CROSS JOIN entity_attributes ea INDEXED BY idx_entity_attributes_aspect ON ea.aspect_id = asp.id JOIN entities e ON e.id = asp.entity_id WHERE asp.entity_id = ? AND asp.agent_id = ? AND ea.agent_id = ? AND ea.kind = 'constraint' AND ea.status = 'active' ORDER BY ea.importance DESC`,
-		).all(entityId, agentId, agentId) as Array<{ entity_name: string; content: string; importance: number }>;
-		for (const r of cRows) { const k = `${r.entity_name}::${r.content}`; if (!constraintKeys.has(k)) { constraintKeys.add(k); constraints.push({ entityName: r.entity_name, content: r.content, importance: r.importance }); } }
+		const cRows = db
+			.prepare(
+				`SELECT e.name as entity_name, ea.content, ea.importance FROM entity_aspects asp INDEXED BY idx_entity_aspects_entity CROSS JOIN entity_attributes ea INDEXED BY idx_entity_attributes_aspect ON ea.aspect_id = asp.id JOIN entities e ON e.id = asp.entity_id WHERE asp.entity_id = ? AND asp.agent_id = ? AND ea.agent_id = ? AND ea.kind = 'constraint' AND ea.status = 'active' ORDER BY ea.importance DESC`,
+			)
+			.all(entityId, agentId, agentId) as Array<{ entity_name: string; content: string; importance: number }>;
+		for (const r of cRows) {
+			const k = `${r.entity_name}::${r.content}`;
+			if (!constraintKeys.has(k)) {
+				constraintKeys.add(k);
+				constraints.push({ entityName: r.entity_name, content: r.content, importance: r.importance });
+			}
+		}
 
 		// Aspects
-		const aRows = db.prepare(`SELECT id FROM entity_aspects INDEXED BY idx_entity_aspects_entity WHERE entity_id = ? AND agent_id = ? ORDER BY weight DESC LIMIT ?`).all(entityId, agentId, config.maxAspectsPerEntity) as Array<{ id: string }>;
+		const aRows = db
+			.prepare(
+				`SELECT id FROM entity_aspects INDEXED BY idx_entity_aspects_entity WHERE entity_id = ? AND agent_id = ? ORDER BY weight DESC LIMIT ?`,
+			)
+			.all(entityId, agentId, config.maxAspectsPerEntity) as Array<{ id: string }>;
 		for (const asp of aRows) {
 			if (memoryIds.size >= budget) break;
 			activeAspectIds.add(asp.id);
-			const attrRows = db.prepare(`SELECT memory_id, importance FROM entity_attributes INDEXED BY idx_entity_attributes_aspect WHERE aspect_id = ? AND agent_id = ? AND status = 'active' ORDER BY importance DESC LIMIT ?`).all(asp.id, agentId, config.maxAttributesPerAspect) as Array<{ memory_id: string | null; importance: number }>;
+			const attrRows = db
+				.prepare(
+					`SELECT memory_id, importance FROM entity_attributes INDEXED BY idx_entity_attributes_aspect WHERE aspect_id = ? AND agent_id = ? AND status = 'active' ORDER BY importance DESC LIMIT ?`,
+				)
+				.all(asp.id, agentId, config.maxAttributesPerAspect) as Array<{ memory_id: string | null; importance: number }>;
 			for (const r of attrRows) {
 				if (!r.memory_id) continue;
 				memoryIds.add(r.memory_id);
@@ -130,7 +163,11 @@ function traverseKnowledgeGraph_OLD(
 		if (memoryIds.size >= budget) return;
 		const mBud = Math.min(config.maxAttributesPerAspect, budget - memoryIds.size);
 		if (mBud <= 0) return;
-		const mRows = db.prepare(`SELECT mem.memory_id, COALESCE(m.importance, 0.5) AS importance FROM memory_entity_mentions mem JOIN memories m ON m.id = mem.memory_id WHERE mem.entity_id = ? AND m.is_deleted = 0 ORDER BY mem.confidence DESC, m.importance DESC LIMIT ?`).all(entityId, mBud) as Array<{ memory_id: string; importance: number }>;
+		const mRows = db
+			.prepare(
+				`SELECT mem.memory_id, COALESCE(m.importance, 0.5) AS importance FROM memory_entity_mentions mem JOIN memories m ON m.id = mem.memory_id WHERE mem.entity_id = ? AND m.is_deleted = 0 ORDER BY mem.confidence DESC, m.importance DESC LIMIT ?`,
+			)
+			.all(entityId, mBud) as Array<{ memory_id: string; importance: number }>;
 		for (const r of mRows) {
 			memoryIds.add(r.memory_id);
 			recordPath(r.memory_id, entityId, sourceEntityId, undefined, dependencyId);
@@ -139,16 +176,41 @@ function traverseKnowledgeGraph_OLD(
 		}
 	};
 
-	for (const eid of focalIds) { if (memoryIds.size >= budget) break; collectForEntity(eid); }
+	for (const eid of focalIds) {
+		if (memoryIds.size >= budget) break;
+		collectForEntity(eid);
+	}
 
 	if (memoryIds.size < budget) {
 		const ph = focalIds.map(() => "?").join(", ");
-		const dRows = db.prepare(`SELECT id, source_entity_id, target_entity_id FROM entity_dependencies INDEXED BY idx_entity_dependencies_source WHERE agent_id = ? AND source_entity_id IN (${ph}) AND (COALESCE(confidence, 0.7) * strength) >= ? AND COALESCE(confidence, 0.7) >= ? ORDER BY (COALESCE(confidence, 0.7) * strength) DESC LIMIT ?`).all(agentId, ...focalIds, config.minDependencyStrength, config.minConfidence, config.maxBranching * focalIds.length) as Array<{ id: string; source_entity_id: string; target_entity_id: string }>;
-		for (const r of dRows) { if (memoryIds.size >= budget) break; collectForEntity(r.target_entity_id, r.source_entity_id, r.id); }
+		const dRows = db
+			.prepare(
+				`SELECT id, source_entity_id, target_entity_id FROM entity_dependencies INDEXED BY idx_entity_dependencies_source WHERE agent_id = ? AND source_entity_id IN (${ph}) AND (COALESCE(confidence, 0.7) * strength) >= ? AND COALESCE(confidence, 0.7) >= ? ORDER BY (COALESCE(confidence, 0.7) * strength) DESC LIMIT ?`,
+			)
+			.all(
+				agentId,
+				...focalIds,
+				config.minDependencyStrength,
+				config.minConfidence,
+				config.maxBranching * focalIds.length,
+			) as Array<{ id: string; source_entity_id: string; target_entity_id: string }>;
+		for (const r of dRows) {
+			if (memoryIds.size >= budget) break;
+			collectForEntity(r.target_entity_id, r.source_entity_id, r.id);
+		}
 	}
 
 	constraints.sort((a, b) => b.importance - a.importance);
-	return { memoryIds, memoryScores, memoryPaths, constraints, entityCount: visitedEntities.size, timedOut: false, activeAspectIds: [...activeAspectIds], focalEntityIds: focalIds };
+	return {
+		memoryIds,
+		memoryScores,
+		memoryPaths,
+		constraints,
+		entityCount: visitedEntities.size,
+		timedOut: false,
+		activeAspectIds: [...activeAspectIds],
+		focalEntityIds: focalIds,
+	};
 }
 
 // ---------------------------------------------------------------------------
@@ -163,10 +225,14 @@ describe.skipIf(!existsSync(dbPath))("traversal comparison (old vs new)", () => 
 
 	beforeAll(() => {
 		// eslint-disable-next-line @typescript-eslint/no-require-imports
-		db = new (require("bun:sqlite") as unknown as { Database: new (path: string, opts: { readonly: boolean }) => Database }).Database(dbPath, { readonly: true });
+		db = new (
+			require("bun:sqlite") as unknown as { Database: new (path: string, opts: { readonly: boolean }) => Database }
+		).Database(dbPath, { readonly: true });
 	});
 
-	afterAll(() => { db?.close?.(); });
+	afterAll(() => {
+		db?.close?.();
+	});
 
 	function compareResults(project: string): void {
 		const focal = resolveFocalEntities(db as unknown as ReadDb, agentId, { project });
@@ -258,7 +324,9 @@ describe.skipIf(!existsSync(dbPath))("traversal comparison (old vs new)", () => 
 		// the new code will produce a different (broader) memory set.
 		// This is expected — the new code doesn't silently skip entities.
 		if (oldResult.entityCount < newResult.entityCount) {
-			console.log(`\n  ℹ️  OLD visited ${oldResult.entityCount} entity(s), NEW visited ${newResult.entityCount} — memory differences expected`);
+			console.log(
+				`\n  ℹ️  OLD visited ${oldResult.entityCount} entity(s), NEW visited ${newResult.entityCount} — memory differences expected`,
+			);
 		} else if (onlyInOld.length === 0 && onlyInNew.length === 0) {
 			console.log(`\n  ✅ IDENTICAL memory IDs`);
 		} else {

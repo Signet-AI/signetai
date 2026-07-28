@@ -1,7 +1,7 @@
 import type { Database } from "bun:sqlite";
-import { SOURCE_CHUNK_SOURCE_TYPE, type SignetSourceEntry } from "@signet/core";
-import { getDbAccessor } from "./db-accessor";
+import { type SignetSourceEntry, SOURCE_CHUNK_SOURCE_TYPE } from "@signet/core";
 import type { WriteDb } from "./db-accessor";
+import { getDbAccessor } from "./db-accessor";
 import { syncVecDeleteByEmbeddingIds } from "./db-helpers";
 import { hashNormalizedBody } from "./memory-lineage";
 import { indexSourceArtifactStructureInTx } from "./source-artifact-graph";
@@ -537,10 +537,7 @@ function isLocalDiscordArtifact(input: {
 	}
 }
 
-function isLocalDiscordChunk(input: {
-	readonly source_id: string;
-	readonly chunk_text: string | null;
-}): boolean {
+function isLocalDiscordChunk(input: { readonly source_id: string; readonly chunk_text: string | null }): boolean {
 	if (input.source_id.includes("discord-cache://guild/@me/")) return true;
 	if (!input.chunk_text) return false;
 	return (

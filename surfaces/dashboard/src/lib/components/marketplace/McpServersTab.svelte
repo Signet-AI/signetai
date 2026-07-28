@@ -1,4 +1,6 @@
 <script lang="ts">
+import { onMount } from "svelte";
+import { SvelteSet } from "svelte/reactivity";
 import type { MarketplaceMcpCatalogEntry, MarketplaceMcpServer } from "$lib/api";
 import { getAvatarFromSource, getAvatarUrl, getMonogram, getMonogramBg } from "$lib/card-utils";
 import McpDetailSheet from "$lib/components/marketplace/McpDetailSheet.svelte";
@@ -8,29 +10,23 @@ import { Button } from "$lib/components/ui/button/index.js";
 import * as Select from "$lib/components/ui/select/index.js";
 import * as Tabs from "$lib/components/ui/tabs/index.js";
 import {
-	type McpCatalogSort,
-	type McpCatalogSourceFilter,
 	fetchMarketplaceMcpCatalog,
 	fetchMarketplaceMcpInstalled,
 	getFilteredMarketplaceMcpCatalog,
 	getMarketplaceMcpSourceOptions,
+	type McpCatalogSort,
+	type McpCatalogSourceFilter,
 	mcpMarket,
 	refreshMarketplaceMcpTools,
 	removeMarketplaceMcpServer,
 } from "$lib/stores/marketplace-mcp.svelte";
-import { onMount } from "svelte";
-import { SvelteSet } from "svelte/reactivity";
 
 interface Props {
 	embedded?: boolean;
 	showViewTabs?: boolean;
 	currentView?: "browse" | "installed";
 	onviewchange?: (view: "browse" | "installed") => void;
-	onreviewrequest?: (payload: {
-		targetType: "mcp";
-		targetId: string;
-		targetLabel: string;
-	}) => void | Promise<void>;
+	onreviewrequest?: (payload: { targetType: "mcp"; targetId: string; targetLabel: string }) => void | Promise<void>;
 }
 
 let { embedded = false, showViewTabs = true, currentView = "browse", onviewchange }: Props = $props();

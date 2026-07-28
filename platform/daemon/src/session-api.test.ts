@@ -1,8 +1,8 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
-import type { Hono } from "hono";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { Hono } from "hono";
 import { clearAllPresence, upsertAgentPresence } from "./cross-agent";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import { isSessionBypassed, unbypassSession } from "./session-tracker";
@@ -202,5 +202,4 @@ describe("session API", () => {
 		expect(transcriptRes.status).toBe(200);
 		expect(transcriptJson.content).toBe("stored transcript content");
 	});
-
 });

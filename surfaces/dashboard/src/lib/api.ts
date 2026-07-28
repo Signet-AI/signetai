@@ -3,10 +3,10 @@
  * Handles communication with the Signet daemon
  */
 
-import { authFetch, setDashboardAuthApiBase } from "$lib/auth";
-import { desktopApiBase } from "$lib/desktop-shell";
 import type { ModelRegistryEntry } from "@signet/core";
 import { marked } from "marked";
+import { authFetch, setDashboardAuthApiBase } from "$lib/auth";
+import { desktopApiBase } from "$lib/desktop-shell";
 
 // When served by the daemon or Vite dev server, use relative URLs.
 // The Electron desktop shell loads from file://, so it needs an absolute daemon URL.
@@ -2464,9 +2464,7 @@ export async function getMarketplaceMcpTools(refresh = false): Promise<{
 	}
 }
 
-export async function testMarketplaceMcpConfig(input: {
-	config: MarketplaceMcpConfig;
-}): Promise<{
+export async function testMarketplaceMcpConfig(input: { config: MarketplaceMcpConfig }): Promise<{
 	success: boolean;
 	toolCount?: number;
 	tools?: string[];
@@ -3013,13 +3011,7 @@ export interface EntityHealth {
 }
 
 export async function getKnowledgeEntities(
-	filters: {
-		type?: string;
-		query?: string;
-		limit?: number;
-		offset?: number;
-		agentId?: string;
-	} = {},
+	filters: { type?: string; query?: string; limit?: number; offset?: number; agentId?: string } = {},
 ): Promise<{ items: KnowledgeEntityListItem[]; limit: number; offset: number }> {
 	try {
 		const params = new URLSearchParams();
@@ -3170,11 +3162,7 @@ export async function unpinKnowledgeEntity(id: string, agentId = "default"): Pro
 }
 
 export async function getKnowledgeEntityHealth(
-	filters: {
-		agentId?: string;
-		since?: string;
-		minComparisons?: number;
-	} = {},
+	filters: { agentId?: string; since?: string; minComparisons?: number } = {},
 ): Promise<EntityHealth[]> {
 	try {
 		const params = new URLSearchParams();
@@ -3775,10 +3763,7 @@ export interface OAuthLoginHandle {
 	close(): void;
 }
 
-export async function startOAuthLogin(
-	providerId: string,
-	onConnected?: () => void,
-): Promise<OAuthLoginHandle> {
+export async function startOAuthLogin(providerId: string, onConnected?: () => void): Promise<OAuthLoginHandle> {
 	const handlers: Array<(event: OAuthLoginEvent) => void> = [];
 	const errorHandlers: Array<(message: string) => void> = [];
 	const controller = new AbortController();
@@ -3865,11 +3850,7 @@ export async function startOAuthLogin(
 	};
 }
 
-export async function completeOAuthInteraction(
-	sessionId: string,
-	responseId: string,
-	value: string,
-): Promise<boolean> {
+export async function completeOAuthInteraction(sessionId: string, responseId: string, value: string): Promise<boolean> {
 	const response = await authFetch(`${API_BASE}/api/inference/oauth/complete`, {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
@@ -3920,9 +3901,9 @@ export async function getInferenceStatus(refresh = false): Promise<InferenceStat
 // dependency-free inference-keys module so the logic is unit-testable outside
 // the SvelteKit runtime (this file pulls in $app/environment via auth.ts).
 export {
+	type ApiKeyFormat,
 	apiKeyFormat,
+	type KeyValidationState,
 	providerKeySecretName,
 	validateApiKey,
-	type ApiKeyFormat,
-	type KeyValidationState,
 } from "./inference-keys";

@@ -819,7 +819,7 @@ export function parseModifyPatch(
 	let changed = false;
 	let contentForEmbedding: string | null = null;
 
-	const hasField = (field: string): boolean => Object.prototype.hasOwnProperty.call(payload, field);
+	const hasField = (field: string): boolean => Object.hasOwn(payload, field);
 
 	if (hasField("content")) {
 		if (typeof payload.content !== "string") {

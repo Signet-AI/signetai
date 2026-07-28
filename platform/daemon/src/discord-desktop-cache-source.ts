@@ -1,4 +1,4 @@
-import { type Stats, existsSync, lstatSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, readFileSync, type Stats } from "node:fs";
 import { basename, join, relative } from "node:path";
 import { gunzipSync } from "node:zlib";
 import type { SignetSourceEntry } from "@signet/core";

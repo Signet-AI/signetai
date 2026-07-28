@@ -209,7 +209,7 @@ export function expandTemporalNode(
 				 LEFT JOIN memories m ON m.id = ssm.memory_id
 				 WHERE ssm.summary_id = ? AND ss.agent_id = ?${
 						opts?.project ? " AND ss.project = ? AND (m.id IS NULL OR COALESCE(m.project, ss.project) = ?)" : ""
-					}
+}
 				 ORDER BY created_at DESC
 				 LIMIT 25`,
 			)

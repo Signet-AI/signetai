@@ -16,22 +16,22 @@ import { logger } from "../logger";
 import type { PipelineV2Config } from "../memory-config";
 import type { TelemetryCollector } from "../telemetry";
 import { txForgetMemory, txIngestEnvelope, txModifyMemory } from "../transactions";
-import { PROSPECTIVE_ANTONYM_PAIRS, hasAntonymConflict, hasNegation, overlapCount, tokenize } from "./antonyms";
+import { hasAntonymConflict, hasNegation, overlapCount, PROSPECTIVE_ANTONYM_PAIRS, tokenize } from "./antonyms";
 import { detectSemanticContradiction } from "./contradiction";
 import type { DecisionConfig, FactDecisionProposal } from "./decision";
 import { runShadowDecisions } from "./decision";
-import { type DurabilityConfig, assessDurability } from "./durability-gate";
+import { assessDurability, type DurabilityConfig } from "./durability-gate";
 import { extractFactsAndEntities } from "./extraction";
 import { escalate } from "./extraction-escalation";
 import { cancelExtractionJobForForgottenMemory } from "./extraction-queue";
 import { txPersistEntities } from "./graph-transactions";
 import { invalidateTraversalCache } from "./graph-traversal";
 import { enqueueHintsJob } from "./prospective-index";
-import { type LlmProvider, RateLimitExceededError, generateWithTracking } from "./provider";
+import { generateWithTracking, type LlmProvider, RateLimitExceededError } from "./provider";
 import { archiveToCold } from "./retention-worker";
-import { type SignificanceConfig, assessSignificance } from "./significance-gate";
-import { type StaleLeaseRecovery, recoverStaleLeases } from "./stale-leases";
-import { type WriteGateConfig, assessWriteGate } from "./write-gate";
+import { assessSignificance, type SignificanceConfig } from "./significance-gate";
+import { recoverStaleLeases, type StaleLeaseRecovery } from "./stale-leases";
+import { assessWriteGate, type WriteGateConfig } from "./write-gate";
 
 // ---------------------------------------------------------------------------
 // Types

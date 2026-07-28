@@ -25,7 +25,7 @@ import {
 	unpinEntity,
 } from "../knowledge-graph";
 import { getKnowledgeHygieneReport } from "../knowledge-graph-hygiene";
-import { type ResolvedMemoryConfig, loadMemoryConfig } from "../memory-config";
+import { loadMemoryConfig, type ResolvedMemoryConfig } from "../memory-config";
 import { getTraversalStatus, resolveFocalEntities, traverseKnowledgeGraph } from "../pipeline/graph-traversal";
 import { AGENTS_DIR, authConfig } from "./state";
 import { resolveScopedAgentId, resolveScopedProject } from "./utils";

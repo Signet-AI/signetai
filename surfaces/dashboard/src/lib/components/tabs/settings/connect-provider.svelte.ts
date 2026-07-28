@@ -12,11 +12,11 @@
  * pi-ai's streaming event model.
  */
 import {
+	completeOAuthInteraction,
+	disconnectOAuthProvider,
 	type KeyValidationState,
 	type OAuthLoginEvent,
 	type OAuthProviderStatus,
-	completeOAuthInteraction,
-	disconnectOAuthProvider,
 	providerKeySecretName,
 	putSecret,
 	startOAuthLogin,
@@ -25,7 +25,13 @@ import {
 
 export type ConnectPhase =
 	| { kind: "method" }
-	| { kind: "oauth-running"; url?: string; deviceCode?: { userCode: string; verificationUri: string }; prompt?: PendingPrompt; progress?: string }
+	| {
+			kind: "oauth-running";
+			url?: string;
+			deviceCode?: { userCode: string; verificationUri: string };
+			prompt?: PendingPrompt;
+			progress?: string;
+	  }
 	| { kind: "key-entry"; key: string; reveal: boolean; validation: KeyValidationState; testing: boolean }
 	| { kind: "saving" }
 	| { kind: "connected" }

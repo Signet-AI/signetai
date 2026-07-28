@@ -46,7 +46,13 @@ export const SETUP_HARNESS_CHOICES: readonly HarnessChoice[] = [
 	"hermes-agent",
 	"gemini",
 ];
-export const EMBEDDING_PROVIDER_CHOICES: readonly EmbeddingProviderChoice[] = ["native", "llama-cpp", "ollama", "openai", "none"];
+export const EMBEDDING_PROVIDER_CHOICES: readonly EmbeddingProviderChoice[] = [
+	"native",
+	"llama-cpp",
+	"ollama",
+	"openai",
+	"none",
+];
 export const EXTRACTION_PROVIDER_CHOICES: readonly ExtractionProviderChoice[] = [
 	"acpx",
 	"claude-code",
@@ -60,7 +66,12 @@ export const EXTRACTION_PROVIDER_CHOICES: readonly ExtractionProviderChoice[] = 
 ];
 export const OPENCLAW_RUNTIME_CHOICES: readonly OpenClawRuntimeChoice[] = ["plugin", "legacy"];
 export const DEPLOYMENT_TYPE_CHOICES: readonly DeploymentTypeChoice[] = ["local", "vps", "server"];
-const VPS_NON_LOCAL_EXTRACTION_PROVIDERS: readonly ExtractionProviderChoice[] = ["acpx", "claude-code", "codex", "opencode"];
+const VPS_NON_LOCAL_EXTRACTION_PROVIDERS: readonly ExtractionProviderChoice[] = [
+	"acpx",
+	"claude-code",
+	"codex",
+	"opencode",
+];
 const DETECTED_EXTRACTION_PROVIDER_ORDER: readonly ExtractionProviderChoice[] = [
 	"acpx",
 	"llama-cpp",

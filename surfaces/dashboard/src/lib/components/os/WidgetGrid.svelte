@@ -1,7 +1,7 @@
 <script lang="ts">
-import type { AppTrayEntry, GridPosition } from "$lib/stores/os.svelte";
-import { os, collapseWidget, findFreeGridPosition, moveToTray, updateGridPosition } from "$lib/stores/os.svelte";
 import { onDestroy, onMount } from "svelte";
+import type { AppTrayEntry, GridPosition } from "$lib/stores/os.svelte";
+import { collapseWidget, findFreeGridPosition, moveToTray, os, updateGridPosition } from "$lib/stores/os.svelte";
 import WidgetCard from "./WidgetCard.svelte";
 
 interface Props {

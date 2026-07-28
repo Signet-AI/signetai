@@ -4,27 +4,26 @@ import { getDbAccessor } from "../db-accessor";
 import { archiveEntityAlias, createEntityAlias, listEntityAliases } from "../knowledge-graph";
 import { getInferenceProviderOrNull } from "../llm";
 import {
-	OntologyAssertionError,
 	archiveEpistemicAssertion,
 	createEpistemicAssertion,
 	getEpistemicAssertion,
 	linkEpistemicAssertionClaim,
 	listEpistemicAssertions,
+	OntologyAssertionError,
 	parseEpistemicAssertionPredicate,
 	parseEpistemicAssertionStatus,
 	supersedeEpistemicAssertion,
 } from "../ontology-assertions";
 import {
-	OntologyClaimEvidenceError,
 	getOntologyClaimEvidence,
+	OntologyClaimEvidenceError,
 	parseOntologyClaimAttributeKind,
 	parseOntologyClaimAttributeStatus,
 } from "../ontology-claim-evidence";
-import { OntologyConsolidationError, consolidateOntologyProposals } from "../ontology-consolidation";
-import { OntologyExtractionError, extractOntologyProposals } from "../ontology-extraction";
-import { OntologyLinkEvidenceError, getOntologyLinkEvidence } from "../ontology-link-evidence";
+import { consolidateOntologyProposals, OntologyConsolidationError } from "../ontology-consolidation";
+import { extractOntologyProposals, OntologyExtractionError } from "../ontology-extraction";
+import { getOntologyLinkEvidence, OntologyLinkEvidenceError } from "../ontology-link-evidence";
 import {
-	OntologyProposalError,
 	applyOntologyOperation,
 	applyOntologyOperationBatch,
 	applyOntologyProposal,
@@ -37,6 +36,7 @@ import {
 	listClaimVersions,
 	listOntologyProposalConflicts,
 	listOntologyProposals,
+	OntologyProposalError,
 	parseOntologyProposalStatus,
 	proposeDuplicateEntityMerges,
 	rejectOntologyProposal,

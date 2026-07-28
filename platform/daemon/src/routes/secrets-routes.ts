@@ -8,12 +8,11 @@ import {
 	migrateLocalSecretsToBitwarden,
 } from "../bitwarden.js";
 import { logger } from "../logger.js";
-import { ONEPASSWORD_SERVICE_ACCOUNT_SECRET, importOnePasswordSecrets, listOnePasswordVaults } from "../onepassword.js";
+import { importOnePasswordSecrets, listOnePasswordVaults, ONEPASSWORD_SERVICE_ACCOUNT_SECRET } from "../onepassword.js";
 import { recordPluginAuditEvent } from "../plugins/audit.js";
-import { SIGNET_SECRETS_PLUGIN_ID, getDefaultPluginHost } from "../plugins/index.js";
 import type { PluginHostV1 } from "../plugins/index.js";
+import { getDefaultPluginHost, SIGNET_SECRETS_PLUGIN_ID } from "../plugins/index.js";
 import {
-	SecretExecQueueFullError,
 	deleteLocalSecretForMigration,
 	deleteSecret,
 	deleteSecretFromActiveProvider,
@@ -26,6 +25,7 @@ import {
 	listSecrets,
 	normalizeSecretExecTimeoutMs,
 	putSecret,
+	SecretExecQueueFullError,
 	setActiveSecretProvider,
 	startSecretExecJob,
 } from "../secrets.js";

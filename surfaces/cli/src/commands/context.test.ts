@@ -1,12 +1,8 @@
+import { describe, expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "bun:test";
-import {
-	buildContextCompilePrompt,
-	compileContextPrompt,
-	readContextSources,
-} from "./context";
+import { buildContextCompilePrompt, compileContextPrompt, readContextSources } from "./context";
 
 function tempWorkspace(): string {
 	return mkdtempSync(join(tmpdir(), "signet-context-compile-"));

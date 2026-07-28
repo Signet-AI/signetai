@@ -2,8 +2,8 @@
  * Shared git binary resolution for parsers that shell out to git.
  */
 
-import { existsSync } from "fs";
 import { execFileSync } from "child_process";
+import { existsSync } from "fs";
 
 /**
  * Find the git binary path. Checks common locations, then falls back to `which`.

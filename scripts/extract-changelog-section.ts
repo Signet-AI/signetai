@@ -7,7 +7,7 @@
  * Prints the matching section to stdout (used by CI for GitHub release body).
  */
 
-import { readFileSync, existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 
 const CHANGELOG_PATH = "CHANGELOG.md";
 

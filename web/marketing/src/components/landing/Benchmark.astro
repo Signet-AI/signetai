@@ -1,11 +1,14 @@
 ---
 const stats = [
-  { value: "87.5%", label: "Answer Accuracy", context: "LoCoMo long-conversation benchmark, 8-question full-stack sample" },
-  { value: "100%", label: "Hit@10 Retrieval", context: "Every relevant memory found in the top 10 candidates" },
-  { value: "0.615", label: "MRR", context: "Mean Reciprocal Rank — how high the right answer appears" },
-  { value: "LOCAL", label: "No LLM at Search Time", context: "Retrieval and ranking run entirely on-device" }
+	{
+		value: "87.5%",
+		label: "Answer Accuracy",
+		context: "LoCoMo long-conversation benchmark, 8-question full-stack sample",
+	},
+	{ value: "100%", label: "Hit@10 Retrieval", context: "Every relevant memory found in the top 10 candidates" },
+	{ value: "0.615", label: "MRR", context: "Mean Reciprocal Rank — how high the right answer appears" },
+	{ value: "LOCAL", label: "No LLM at Search Time", context: "Retrieval and ranking run entirely on-device" },
 ];
-
 ---
 
 <section id="benchmark" class="container" style="border-top: 1px solid var(--color-border)">

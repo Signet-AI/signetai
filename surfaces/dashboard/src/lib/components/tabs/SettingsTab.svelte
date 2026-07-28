@@ -1,10 +1,10 @@
 <script lang="ts">
+import { untrack } from "svelte";
 import { invalidateAll } from "$app/navigation";
 import type { ConfigFile } from "$lib/api";
 import IdentityPanel from "$lib/components/config/IdentityPanel.svelte";
 import { st } from "$lib/stores/settings.svelte";
 import { setSettingsDirty } from "$lib/stores/unsaved-changes.svelte";
-import { untrack } from "svelte";
 import AgentSection from "./settings/AgentSection.svelte";
 import AppearanceSection from "./settings/AppearanceSection.svelte";
 import AuthSection from "./settings/AuthSection.svelte";

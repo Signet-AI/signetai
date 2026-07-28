@@ -1,24 +1,24 @@
 <script lang="ts">
+import { onMount } from "svelte";
 import {
 	type DocumentConnector,
-	type Harness,
 	getConnectors,
 	getHarnesses,
+	type Harness,
 	regenerateHarnesses,
 	resyncConnectors,
 	syncConnector,
 	syncConnectorFull,
 } from "$lib/api";
 import PageBanner from "$lib/components/layout/PageBanner.svelte";
-import TabGroupBar from "$lib/components/layout/TabGroupBar.svelte";
 import { ENGINE_TAB_ITEMS } from "$lib/components/layout/page-headers";
+import TabGroupBar from "$lib/components/layout/TabGroupBar.svelte";
 import { Badge } from "$lib/components/ui/badge/index.js";
 import { Button } from "$lib/components/ui/button/index.js";
 import * as Popover from "$lib/components/ui/popover/index.js";
 import { nav } from "$lib/stores/navigation.svelte";
 import { focusEngineTab } from "$lib/stores/tab-group-focus.svelte";
 import { toast } from "$lib/stores/toast.svelte";
-import { onMount } from "svelte";
 
 let harnesses = $state<Harness[]>([]);
 let connectors = $state<DocumentConnector[]>([]);

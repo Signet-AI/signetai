@@ -1,13 +1,13 @@
 import { describe, expect, it } from "bun:test";
 import {
 	DEPLOYMENT_TYPE_CHOICES,
-	SETUP_HARNESS_CHOICES,
 	defaultEmbeddingProviderForDeployment,
 	defaultExtractionProviderForDeployment,
 	detectExtractionProviderFromAvailable,
 	getDeploymentExtractionGuidance,
 	normalizeHarnessList,
 	resolveSetupExtractionProvider,
+	SETUP_HARNESS_CHOICES,
 } from "./setup-shared.js";
 
 describe("setup deployment defaults", () => {
@@ -43,12 +43,12 @@ describe("setup deployment defaults", () => {
 	});
 
 	it("prefers selected harnesses through ACPX before other detected tooling on vps", () => {
-		expect(defaultExtractionProviderForDeployment("vps", "claude-code", ["acpx", "claude-code", "codex"], ["codex"])).toBe(
-			"acpx",
-		);
-		expect(defaultExtractionProviderForDeployment("vps", "none", ["acpx", "opencode", "claude-code"], ["opencode"])).toBe(
-			"acpx",
-		);
+		expect(
+			defaultExtractionProviderForDeployment("vps", "claude-code", ["acpx", "claude-code", "codex"], ["codex"]),
+		).toBe("acpx");
+		expect(
+			defaultExtractionProviderForDeployment("vps", "none", ["acpx", "opencode", "claude-code"], ["opencode"]),
+		).toBe("acpx");
 	});
 
 	it("falls back when selected harness extraction tooling is unavailable on vps", () => {

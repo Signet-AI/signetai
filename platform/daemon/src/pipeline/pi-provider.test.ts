@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { type Api, type Model, getModels } from "@earendil-works/pi-ai";
+import { type Api, getModels, type Model } from "@earendil-works/pi-ai";
 import { githubCopilotOAuthProvider } from "@earendil-works/pi-ai/oauth";
 import { resolvePiModel } from "./pi-provider";
 

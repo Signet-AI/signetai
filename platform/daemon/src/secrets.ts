@@ -29,7 +29,7 @@ import {
 	readBitwardenReference,
 } from "./bitwarden.js";
 import { logger } from "./logger.js";
-import { ONEPASSWORD_SERVICE_ACCOUNT_SECRET, isOnePasswordReference, readOnePasswordReference } from "./onepassword.js";
+import { isOnePasswordReference, ONEPASSWORD_SERVICE_ACCOUNT_SECRET, readOnePasswordReference } from "./onepassword.js";
 import { recordPluginAuditEvent } from "./plugins/audit.js";
 import { SIGNET_SECRETS_PLUGIN_ID } from "./plugins/bundled/secrets.js";
 

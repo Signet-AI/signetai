@@ -20,11 +20,7 @@ type Props = {
 	onemptyaction?: (action: "primary" | "secondary") => void;
 	compareSelectedKeys?: string[];
 	oncomparetoggle?: (key: string) => void;
-	onreviewrequest?: (payload: {
-		targetType: "skill";
-		targetId: string;
-		targetLabel: string;
-	}) => void | Promise<void>;
+	onreviewrequest?: (payload: { targetType: "skill"; targetId: string; targetLabel: string }) => void | Promise<void>;
 };
 
 const {

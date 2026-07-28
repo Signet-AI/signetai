@@ -1,21 +1,20 @@
 import type { Context, Hono, Next } from "hono";
 import {
-	type Permission,
-	type TokenRole,
-	type TokenScope,
 	createApiKey,
 	createToken,
 	getPeerAddress,
 	listApiKeys,
+	type Permission,
 	requirePermission,
 	requireRateLimit,
 	revokeApiKey,
+	type TokenRole,
+	type TokenScope,
 	verifyPasswordHash,
 	verifyPlainPassword,
 } from "../auth";
 import { getDbAccessor } from "../db-accessor.js";
-import { readEnvTrimmed } from "./state.js";
-import { authAdminLimiter, authConfig, authLoginLimiter, authSecret } from "./state.js";
+import { authAdminLimiter, authConfig, authLoginLimiter, authSecret, readEnvTrimmed } from "./state.js";
 
 const MAX_USERNAME_LENGTH = 128;
 const MAX_PASSWORD_LENGTH = 1024;

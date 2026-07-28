@@ -201,11 +201,9 @@ this skill helps verify metadata reconciliation.`,
 			getDbAccessor().withReadDb(
 				(dbh) =>
 					dbh
-						.prepare(
-							"SELECT content_hash FROM embeddings WHERE source_type = 'skill' AND source_id = ?",
-						)
+						.prepare("SELECT content_hash FROM embeddings WHERE source_type = 'skill' AND source_id = ?")
 						.get(first.entityId) as { content_hash: string } | undefined,
-					)?.content_hash,
+			)?.content_hash,
 		).toBe(
 			skillEmbeddingHash(first.entityId, {
 				...raw,

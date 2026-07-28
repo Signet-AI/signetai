@@ -18,7 +18,7 @@
 // On Windows, use node:child_process spawn with windowsHide to prevent
 // console window flashing. Bun.spawn doesn't support windowsHide.
 import { spawn as nodeSpawn } from "node:child_process";
-import { mkdirSync, readFileSync, readdirSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { isAbsolute, join, resolve as resolvePath } from "node:path";
 import type { ThinkingLevel } from "@earendil-works/pi-ai";
 import {
@@ -382,9 +382,10 @@ export function withRateLimit(provider: LlmProvider, config?: ProviderRateLimitC
  * Resolve the caller-supplied abort signal (preferring `signal` over the
  * legacy `abortSignal` alias).
  */
-function generateSignal(opts?: { readonly signal?: AbortSignal; readonly abortSignal?: AbortSignal }):
-	| AbortSignal
-	| undefined {
+function generateSignal(opts?: {
+	readonly signal?: AbortSignal;
+	readonly abortSignal?: AbortSignal;
+}): AbortSignal | undefined {
 	return opts?.signal ?? opts?.abortSignal;
 }
 
@@ -435,7 +436,7 @@ async function acquireLlmConcurrencyPermit(
 // Streaming-capable provider types
 // ---------------------------------------------------------------------------
 
-export type { LlmProvider, LlmGenerateResult } from "@signet/core";
+export type { LlmGenerateResult, LlmProvider } from "@signet/core";
 
 export type LlmProviderCallOptions = {
 	readonly timeoutMs?: number;

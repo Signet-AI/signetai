@@ -2,8 +2,8 @@ import {
 	existsSync,
 	lstatSync,
 	mkdirSync,
-	readFileSync,
 	readdirSync,
+	readFileSync,
 	readlinkSync,
 	rmSync,
 	unlinkSync,
@@ -12,14 +12,14 @@ import {
 import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
+	atomicWriteJson,
 	BaseConnector,
 	type InstallResult,
-	type UninstallResult,
-	atomicWriteJson,
 	isSignetGeneratedFile,
 	resolveSignetApiKey,
 	resolveSignetMcpCommand,
 	resolveSignetWorkspacePath,
+	type UninstallResult,
 } from "@signet/connector-base";
 import { expandHome, hasValidIdentity, loadIdentityMode, resolveSignetDaemonUrl } from "@signet/core";
 

@@ -1,5 +1,10 @@
 import { describe, expect, it } from "bun:test";
-import { applyTokenBudget, selectWithBudget, selectWithBudgetSkippingOversized, selectWithTokenBudget } from "./context-budget";
+import {
+	applyTokenBudget,
+	selectWithBudget,
+	selectWithBudgetSkippingOversized,
+	selectWithTokenBudget,
+} from "./context-budget";
 import { countTokens } from "./pipeline/tokenizer";
 
 describe("context budget helpers", () => {

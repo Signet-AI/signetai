@@ -1,9 +1,9 @@
 ---
 import { getCollection } from "astro:content";
-import Base from "../../layouts/Base.astro";
-import Nav from "../../components/Nav.astro";
 import Footer from "../../components/Footer.astro";
+import Nav from "../../components/Nav.astro";
 import StructuredData from "../../components/StructuredData.astro";
+import Base from "../../layouts/Base.astro";
 import "../../styles/blog.css";
 
 const posts = (await getCollection("blog"))
@@ -16,10 +16,10 @@ const featured = posts[0];
 const rest = posts.slice(1);
 
 function formatDate(date: Date) {
-	return date.toLocaleDateString('en-US', {
-		year: 'numeric',
-		month: 'long',
-		day: 'numeric',
+	return date.toLocaleDateString("en-US", {
+		year: "numeric",
+		month: "long",
+		day: "numeric",
 	});
 }
 ---

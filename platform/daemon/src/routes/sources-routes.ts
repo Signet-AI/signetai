@@ -5,19 +5,19 @@ import { homedir } from "node:os";
 import { dirname } from "node:path";
 import { promisify } from "node:util";
 import {
-	LEGACY_OBSIDIAN_CHUNK_SOURCE_TYPE,
-	SOURCE_CHUNK_SOURCE_TYPE,
-	type SignetSourceEntry,
 	addDiscordSource,
 	addGitHubSource,
 	addObsidianSource,
+	LEGACY_OBSIDIAN_CHUNK_SOURCE_TYPE,
 	loadSourcesConfig,
 	markSourceIndexed,
 	removeSource,
+	type SignetSourceEntry,
+	SOURCE_CHUNK_SOURCE_TYPE,
 } from "@signet/core";
 import type { Hono } from "hono";
 import { resolveDaemonAgentId } from "../agent-id";
-import { type ReadDb, getDbAccessor } from "../db-accessor";
+import { getDbAccessor, type ReadDb } from "../db-accessor";
 import { fetchEmbedding } from "../embedding-fetch";
 import { loadMemoryConfig } from "../memory-config";
 import {
@@ -27,7 +27,6 @@ import {
 	startNativeMemoryBridge,
 } from "../native-memory-sources";
 import {
-	type SourceIndexJob,
 	beginSourceIndexJob,
 	cancelSourceIndexJob,
 	clearSourceIndexInFlight,
@@ -39,6 +38,7 @@ import {
 	isSourceIndexInFlight,
 	markSourceIndexInFlight,
 	markSourceIndexJobRunning,
+	type SourceIndexJob,
 	updateSourceIndexJobProgress,
 } from "../source-index-progress";
 import { getSourceProvider } from "../source-providers";

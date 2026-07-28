@@ -4,12 +4,12 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { homedir } from "node:os";
 import { join } from "node:path";
 import {
+	atomicWriteJson,
 	BaseConnector,
 	type InstallResult,
-	type UninstallResult,
-	atomicWriteJson,
 	resolveSignetCliCommand,
 	resolveSignetMcpCommand,
+	type UninstallResult,
 } from "@signet/connector-base";
 import {
 	expandHome,

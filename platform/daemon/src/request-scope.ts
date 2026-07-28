@@ -1,5 +1,5 @@
-import { checkScope } from "./auth";
 import type { AuthMode, TokenClaims } from "./auth";
+import { checkScope } from "./auth";
 
 function normalize(value: string | undefined): string | undefined {
 	const text = value?.trim();

@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, posix, win32 } from "node:path";
-import { type SignetUpdateTarget, getGlobalInstallCommand } from "@signet/core";
+import { getGlobalInstallCommand, type SignetUpdateTarget } from "@signet/core";
 import { logger } from "./logger";
 
 export type UpdateInstallErrorCode =
@@ -227,7 +227,7 @@ export async function verifyExecutableVersion(
 			: `verification exceeded ${timeoutMs}ms before the executable could be started`;
 		const windowsAdvice =
 			platform === "win32"
-				? ` after ${attempts} attempt${attempts === 1 ? "" : "s"}. The replacement may already have succeeded; stop or restart the daemon, then run \"${executablePath}\" --version before retrying the install`
+				? ` after ${attempts} attempt${attempts === 1 ? "" : "s"}. The replacement may already have succeeded; stop or restart the daemon, then run "${executablePath}" --version before retrying the install`
 				: "";
 		return {
 			ok: false,

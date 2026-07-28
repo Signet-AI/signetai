@@ -1,5 +1,5 @@
 <script lang="ts">
-import { type SessionInfo, fetchSessions, toggleSessionBypass } from "$lib/api";
+import { fetchSessions, type SessionInfo, toggleSessionBypass } from "$lib/api";
 import { Badge } from "$lib/components/ui/badge/index.js";
 import { Switch } from "$lib/components/ui/switch/index.js";
 import { toast } from "$lib/stores/toast.svelte";

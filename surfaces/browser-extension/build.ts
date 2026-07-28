@@ -3,7 +3,7 @@
  * Outputs to dist/chrome/ and dist/firefox/
  */
 
-import { existsSync, mkdirSync, cpSync, writeFileSync, readFileSync, watch } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, watch, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 const ROOT = resolve(import.meta.dirname ?? ".");

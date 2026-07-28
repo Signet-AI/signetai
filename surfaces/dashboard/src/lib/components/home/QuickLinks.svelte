@@ -1,7 +1,7 @@
 <script lang="ts">
-import { Activity, BookOpen, Brain, Cog, ListChecks, Network, Orbit } from "$lib/icons";
 import { Button } from "$lib/components/ui/button/index.js";
-import { type TabId, setTab } from "$lib/stores/navigation.svelte";
+import { Activity, BookOpen, Brain, Cog, ListChecks, Network, Orbit } from "$lib/icons";
+import { setTab, type TabId } from "$lib/stores/navigation.svelte";
 
 interface QuickLink {
 	label: string;

@@ -526,8 +526,12 @@ describe("backfill replaces live-only sessions", () => {
 		const lines = readJsonlLines(root);
 		expect(lines.some((line) => line.session_key === "live-session" && line.source_format === "live")).toBe(false);
 		expect(lines.some((line) => line.session_key === "live-session" && line.source_format === "markdown")).toBe(true);
-		expect(lines.some((line) => line.session_key === "live-session" && line.content.includes("fuller migrated reply"))).toBe(true);
-		expect(lines.some((line) => line.session_key === "live-session" && line.content.includes("partial live prompt"))).toBe(false);
+		expect(
+			lines.some((line) => line.session_key === "live-session" && line.content.includes("fuller migrated reply")),
+		).toBe(true);
+		expect(
+			lines.some((line) => line.session_key === "live-session" && line.content.includes("partial live prompt")),
+		).toBe(false);
 	});
 
 	test("does not duplicate a session when DB backfill follows markdown live-only promotion", async () => {
@@ -550,24 +554,23 @@ describe("backfill replaces live-only sessions", () => {
 			transcript: "User: markdown prompt\nAssistant: markdown reply",
 		});
 
-		getDbAccessor()
-			.withWriteTx((db) =>
-				db
-					.prepare(
-						`INSERT INTO session_transcripts (
+		getDbAccessor().withWriteTx((db) =>
+			db
+				.prepare(
+					`INSERT INTO session_transcripts (
 							session_key, content, harness, project, agent_id, created_at, updated_at
 						) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-					)
-					.run(
-						"shared-session",
-						"User: db prompt\nAssistant: db reply",
-						"codex",
-						null,
-						"default",
-						"2026-04-29T00:01:00.000Z",
-						"2026-04-29T00:01:00.000Z",
-					),
-			);
+				)
+				.run(
+					"shared-session",
+					"User: db prompt\nAssistant: db reply",
+					"codex",
+					null,
+					"default",
+					"2026-04-29T00:01:00.000Z",
+					"2026-04-29T00:01:00.000Z",
+				),
+		);
 
 		await ensureCanonicalTranscriptHistory(root, "default");
 
@@ -615,14 +618,19 @@ describe("backfill replaces live-only sessions", () => {
 		await ensureCanonicalTranscriptHistory(root, "default");
 
 		const lines = readJsonlLines(root);
-		expect(lines.some((line) => line.session_key === "canonical-session" && line.content.includes("canonical source reply"))).toBe(
-			true,
-		);
-		expect(lines.some((line) => line.session_key === "canonical-session" && line.content.includes("markdown should not replace canonical"))).toBe(
-			false,
-		);
+		expect(
+			lines.some((line) => line.session_key === "canonical-session" && line.content.includes("canonical source reply")),
+		).toBe(true);
+		expect(
+			lines.some(
+				(line) =>
+					line.session_key === "canonical-session" && line.content.includes("markdown should not replace canonical"),
+			),
+		).toBe(false);
 		expect(lines.some((line) => line.session_key === "live-session" && line.source_format === "live")).toBe(false);
-		expect(lines.some((line) => line.session_key === "live-session" && line.content.includes("markdown replacement reply"))).toBe(true);
+		expect(
+			lines.some((line) => line.session_key === "live-session" && line.content.includes("markdown replacement reply")),
+		).toBe(true);
 	});
 
 	test("new sessions still appended normally", async () => {
@@ -647,8 +655,12 @@ describe("backfill replaces live-only sessions", () => {
 		await ensureCanonicalTranscriptHistory(root, "default");
 
 		const lines = readJsonlLines(root);
-		expect(lines.some((line) => line.session_key === "existing-session" && line.content.includes("existing reply"))).toBe(true);
-		expect(lines.some((line) => line.session_key === "new-session" && line.content.includes("new markdown reply"))).toBe(true);
+		expect(
+			lines.some((line) => line.session_key === "existing-session" && line.content.includes("existing reply")),
+		).toBe(true);
+		expect(
+			lines.some((line) => line.session_key === "new-session" && line.content.includes("new markdown reply")),
+		).toBe(true);
 	});
 
 	test("handles many live-only sessions without full-file parse (OOM guard)", async () => {
@@ -859,13 +871,22 @@ describe("rewriteReplacingLiveOnlySessions", () => {
 		const lines = readFileSync(jsonlPath, "utf8")
 			.split(/\r?\n/)
 			.filter((line) => line.trim().length > 0)
-			.map((line) => JSON.parse(line) as { readonly session_key: string | null; readonly source_format: string; readonly content: string });
+			.map(
+				(line) =>
+					JSON.parse(line) as {
+						readonly session_key: string | null;
+						readonly source_format: string;
+						readonly content: string;
+					},
+			);
 
 		expect(lines.some((line) => line.session_key === "session-a" && line.content.includes("A prompt"))).toBe(true);
 		expect(lines.some((line) => line.session_key === "session-c" && line.content.includes("C prompt"))).toBe(true);
 		expect(lines.some((line) => line.session_key === "session-b" && line.source_format === "live")).toBe(false);
 		expect(lines.some((line) => line.session_key === "session-b" && line.content.includes("B canonical"))).toBe(true);
-		expect(lines.filter((line) => line.session_key === "session-b").every((line) => line.source_format === "db")).toBe(true);
+		expect(lines.filter((line) => line.session_key === "session-b").every((line) => line.source_format === "db")).toBe(
+			true,
+		);
 	});
 
 	test("preserves chronological file order after replacement", async () => {
@@ -927,7 +948,9 @@ describe("rewriteReplacingLiveOnlySessions", () => {
 		expect(firstC).toBeGreaterThanOrEqual(0);
 		expect(firstA).toBeLessThan(firstB);
 		expect(firstB).toBeLessThan(firstC);
-		expect(lines.filter((line) => line.session_key === "session-b").every((line) => line.source_format === "db")).toBe(true);
+		expect(lines.filter((line) => line.session_key === "session-b").every((line) => line.source_format === "db")).toBe(
+			true,
+		);
 	});
 
 	test("overwrites stale rewrite-tmp file from interrupted previous rewrite", async () => {
@@ -954,7 +977,9 @@ describe("rewriteReplacingLiveOnlySessions", () => {
 		};
 		const replaced = await rewriteReplacingLiveOnlySessions(
 			jsonlPath,
-			new Map([[sessionSeqCacheKey(identity), { identity, transcript: "User: complete one\nAssistant: complete two" }]]),
+			new Map([
+				[sessionSeqCacheKey(identity), { identity, transcript: "User: complete one\nAssistant: complete two" }],
+			]),
 		);
 
 		expect(replaced).toBe(1);
@@ -1014,9 +1039,7 @@ describe("rewriteReplacingLiveOnlySessions", () => {
 			sourceFormat: "db" as const,
 		};
 		const key = sessionSeqCacheKey(identity);
-		const replacements = new Map([
-			[key, { identity, transcript: "User: db replacement\nAssistant: db reply" }],
-		]);
+		const replacements = new Map([[key, { identity, transcript: "User: db replacement\nAssistant: db reply" }]]);
 
 		await rewriteReplacingLiveOnlySessions(jsonlPath, replacements);
 
@@ -1057,9 +1080,7 @@ describe("rewriteReplacingLiveOnlySessions", () => {
 		const key = sessionSeqCacheKey(identity);
 
 		// Replacement has only 2 turns — would clobber seq to 2 if cache is updated.
-		const replacements = new Map([
-			[key, { identity, transcript: "User: short\nAssistant: short reply" }],
-		]);
+		const replacements = new Map([[key, { identity, transcript: "User: short\nAssistant: short reply" }]]);
 
 		const count = await rewriteReplacingLiveOnlySessions(jsonlPath, replacements);
 		// Session was already healed (non-live), replacement skipped.
@@ -1076,7 +1097,10 @@ describe("rewriteReplacingLiveOnlySessions", () => {
 		});
 
 		const content = readFileSync(jsonlPath, "utf8");
-		const records = content.trim().split("\n").map((l) => JSON.parse(l));
+		const records = content
+			.trim()
+			.split("\n")
+			.map((l) => JSON.parse(l));
 		const liveTurn = records.find((r: Record<string, unknown>) => r.content === "live turn six");
 		expect(liveTurn).toBeTruthy();
 		expect(liveTurn.seq).toBe(6);
@@ -1100,7 +1124,10 @@ describe("rewriteReplacingLiveOnlySessions", () => {
 			harness: "codex",
 			sessionKey: "session-1",
 			sourceFormat: "normalized",
-			turns: [{ role: "user", content: "canonical full" }, { role: "assistant", content: "canonical reply" }],
+			turns: [
+				{ role: "user", content: "canonical full" },
+				{ role: "assistant", content: "canonical reply" },
+			],
 		});
 
 		const jsonlPath = canonicalTranscriptPath(root, "codex");
@@ -1112,9 +1139,7 @@ describe("rewriteReplacingLiveOnlySessions", () => {
 			sourceFormat: "db" as const,
 		};
 		const key = sessionSeqCacheKey(identity);
-		const replacements = new Map([
-			[key, { identity, transcript: "User: db version\nAssistant: db reply" }],
-		]);
+		const replacements = new Map([[key, { identity, transcript: "User: db version\nAssistant: db reply" }]]);
 
 		const count = await rewriteReplacingLiveOnlySessions(jsonlPath, replacements);
 
@@ -1146,9 +1171,7 @@ describe("rewriteReplacingLiveOnlySessions", () => {
 			sourceFormat: "db" as const,
 		};
 		const key = sessionSeqCacheKey(identity);
-		const replacements = new Map([
-			[key, { identity, transcript: "" }],
-		]);
+		const replacements = new Map([[key, { identity, transcript: "" }]]);
 
 		const count = await rewriteReplacingLiveOnlySessions(jsonlPath, replacements);
 

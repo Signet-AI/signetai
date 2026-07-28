@@ -2,7 +2,7 @@
 // Assigns CSS order values for balanced CSS multi-column layout.
 // Degrades gracefully: without JS, cards render in natural order.
 
-import { prepareText, layoutText, resolveSiteFont } from "./pretext-utils";
+import { layoutText, prepareText, resolveSiteFont } from "./pretext-utils";
 
 const CARD_PADDING = 48; // vertical padding inside card
 const IMAGE_HEIGHT = 160; // approximate image block height (aspect 2:1 at ~320px col)

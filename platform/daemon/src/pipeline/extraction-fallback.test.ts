@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it } from "bun:test";
 import Database from "bun:sqlite";
+import { beforeEach, describe, expect, it } from "bun:test";
 import type { DbAccessor, WriteDb } from "../db-accessor";
 import { deadLetterExtractionJob, deadLetterPendingExtractionJobs } from "./extraction-fallback";
 

@@ -1,6 +1,6 @@
+import { getContext, setContext } from "svelte";
 import { isDesktopShell } from "$lib/desktop-shell";
 import { IsMobile } from "$lib/hooks/is-mobile.svelte.js";
-import { getContext, setContext } from "svelte";
 import { SIDEBAR_KEYBOARD_SHORTCUT } from "./constants.js";
 
 type Getter<T> = () => T;

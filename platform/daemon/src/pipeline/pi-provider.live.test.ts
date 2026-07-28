@@ -50,10 +50,9 @@ describe.skipIf(SKIP)("createPiModelProvider (live)", () => {
 
 	test("abort signal propagates and throws", async () => {
 		const ctrl = new AbortController();
-		const stream = await provider.streamWithUsage!(
-			"Write a 500-word essay about oceans. Be very verbose.",
-			{ signal: ctrl.signal },
-		);
+		const stream = await provider.streamWithUsage!("Write a 500-word essay about oceans. Be very verbose.", {
+			signal: ctrl.signal,
+		});
 		setTimeout(() => ctrl.abort(), 300);
 		let threw = false;
 		let doneSeen = false;

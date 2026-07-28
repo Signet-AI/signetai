@@ -8,9 +8,9 @@
 import type { ReadDb } from "./db-accessor";
 import {
 	DEFAULT_QUEUE_THRESHOLDS,
+	getQueueDiagnosticsSnapshot,
 	type OldestDeadJob,
 	type QueueCounts,
-	getQueueDiagnosticsSnapshot,
 	scoreCountsWithThresholds,
 	worstQueueScore,
 } from "./diagnostics-queue";

@@ -9,7 +9,6 @@ import { consolidateOntologyProposals } from "./ontology-consolidation";
 import { extractOntologyProposals } from "./ontology-extraction";
 import { getOntologyLinkEvidence } from "./ontology-link-evidence";
 import {
-	OntologyProposalError,
 	applyOntologyOperation,
 	applyOntologyOperationBatch,
 	applyOntologyProposal,
@@ -22,6 +21,7 @@ import {
 	listClaimVersions,
 	listOntologyProposalConflicts,
 	listOntologyProposals,
+	OntologyProposalError,
 	proposeDuplicateEntityMerges,
 	rejectOntologyProposal,
 } from "./ontology-proposals";

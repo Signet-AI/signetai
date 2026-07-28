@@ -1,15 +1,15 @@
 <script lang="ts">
-import { Input } from "$lib/components/ui/input/index.js";
-import * as Select from "$lib/components/ui/select/index.js";
+import { invalidateAll } from "$app/navigation";
+import { getInferenceCatalog, type InferenceCatalog } from "$lib/api";
 import FormSection from "$lib/components/config/FormSection.svelte";
 import SettingList from "$lib/components/config/SettingList.svelte";
 import SettingRow from "$lib/components/config/SettingRow.svelte";
-import { type InferenceCatalog, getInferenceCatalog } from "$lib/api";
+import { Input } from "$lib/components/ui/input/index.js";
+import * as Select from "$lib/components/ui/select/index.js";
 import { CheckCircle, Plus, TriangleAlertIcon } from "$lib/icons";
 import { st } from "$lib/stores/settings.svelte";
-import { invalidateAll } from "$app/navigation";
-import { extractionLabelForRoutingTarget } from "./pipeline-settings";
 import ConnectProviderDialog from "./ConnectProviderDialog.svelte";
+import { extractionLabelForRoutingTarget } from "./pipeline-settings";
 
 // Inference settings (#947/#966/#968). A provider connect wall sits above the
 // target pickers: connect Claude Max / ChatGPT / Copilot via OAuth, or any API
@@ -128,9 +128,7 @@ $effect(() => {
 });
 
 function titleCase(id: string): string {
-	return id
-		.replace(/[-_]/g, " ")
-		.replace(/\b\w/g, (c) => c.toUpperCase());
+	return id.replace(/[-_]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 function connectableProviders(): ConnectableProvider[] {
@@ -448,7 +446,12 @@ function aggExecutor(): string {
 	return st.aStr(["inference", "targets", AGG_TARGET_NAME, "executor"]);
 }
 function aggSetExecutor(v: string): void {
-	writeTarget({ targetName: AGG_TARGET_NAME, accountName: AGG_ACCOUNT_NAME, workloadKey: "aggregateRecall", executor: v });
+	writeTarget({
+		targetName: AGG_TARGET_NAME,
+		accountName: AGG_ACCOUNT_NAME,
+		workloadKey: "aggregateRecall",
+		executor: v,
+	});
 }
 function aggModelId(): string {
 	return st.aStr(["inference", "targets", AGG_TARGET_NAME, "models", "default", "model"]);

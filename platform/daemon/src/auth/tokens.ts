@@ -5,9 +5,9 @@
  * Token format: {base64url(payload)}.{base64url(hmac)}
  */
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
-import { dirname } from "node:path";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 import type { AuthResult, TokenClaims, TokenRole, TokenScope } from "./types";
 import { TOKEN_ROLES } from "./types";
 

@@ -27,15 +27,15 @@ import {
 	validateRoutingReferences,
 } from "@signet/core";
 import { isOAuthProvider, resolveOAuthCredential } from "./inference-oauth";
-import { type ResolvedInferenceCredential, createRoutingProvider } from "./inference-provider-factory";
+import { createRoutingProvider, type ResolvedInferenceCredential } from "./inference-provider-factory";
 import { logger } from "./logger";
 import { loadMemoryConfig } from "./memory-config";
 import {
 	type AcpxHooksMode,
+	generateWithTracking,
 	type LlmProviderStreamEvent,
 	type LlmProviderStreamResult,
 	type StreamCapableLlmProvider,
-	generateWithTracking,
 } from "./pipeline/provider";
 import { getSecret } from "./secrets";
 
@@ -285,7 +285,6 @@ export class InferenceRouter {
 		}
 	}
 
-
 	resumeBackgroundInference(): void {
 		this.backgroundAdmissionsOpen = true;
 	}
@@ -423,7 +422,12 @@ export class InferenceRouter {
 	): void {
 		if (signature === this.lastValidationSignature) return;
 		this.lastValidationSignature = signature;
-		logger.error("inference", `Routing config failed to load: ${error.message}`, undefined, error.details as Record<string, unknown> | undefined);
+		logger.error(
+			"inference",
+			`Routing config failed to load: ${error.message}`,
+			undefined,
+			error.details as Record<string, unknown> | undefined,
+		);
 	}
 
 	private resetRuntimeCaches(): void {

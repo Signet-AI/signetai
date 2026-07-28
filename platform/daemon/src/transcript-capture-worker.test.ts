@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
@@ -16,7 +16,7 @@ function manifestValue(path: string, key: string): string | null {
 	const match = readFileSync(path, "utf8").match(new RegExp(`^${key}:\\s*(.*)$`, "m"));
 	if (!match) return null;
 	const raw = (match[1] ?? "").trim();
-	return raw && raw !== "null" ? raw.replace(/^['\"]|['\"]$/g, "") : null;
+	return raw && raw !== "null" ? raw.replace(/^['"]|['"]$/g, "") : null;
 }
 
 describe("transcript capture worker", () => {

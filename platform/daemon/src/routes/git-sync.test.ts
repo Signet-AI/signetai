@@ -14,7 +14,7 @@ import {
 	stopGitSyncTimer,
 	toRelativeGitPathForTests,
 } from "./git-sync";
-import { type GitConfig, applyGitConfigPatch } from "./session-routes";
+import { applyGitConfigPatch, type GitConfig } from "./session-routes";
 
 describe("loadGitConfig", () => {
 	it("keeps background git automation disabled by default", () => {

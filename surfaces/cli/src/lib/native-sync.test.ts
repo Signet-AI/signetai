@@ -46,10 +46,7 @@ describe("embeddingProvider", () => {
 
 	it("reads provider from embedding.provider in agent.yaml", () => {
 		root = mkdtempSync(join(tmpdir(), "embed-provider-"));
-		writeFileSync(
-			join(root, "agent.yaml"),
-			"embedding:\n  provider: ollama\n  model: nomic-embed-text\n",
-		);
+		writeFileSync(join(root, "agent.yaml"), "embedding:\n  provider: ollama\n  model: nomic-embed-text\n");
 		expect(embeddingProvider(root)).toBe("ollama");
 	});
 
@@ -67,10 +64,7 @@ describe("embeddingProvider", () => {
 
 	it("reads from memory.embeddings.provider (nested path)", () => {
 		root = mkdtempSync(join(tmpdir(), "embed-provider-"));
-		writeFileSync(
-			join(root, "agent.yaml"),
-			"memory:\n  embeddings:\n    provider: openai\n",
-		);
+		writeFileSync(join(root, "agent.yaml"), "memory:\n  embeddings:\n    provider: openai\n");
 		expect(embeddingProvider(root)).toBe("openai");
 	});
 
@@ -82,10 +76,7 @@ describe("embeddingProvider", () => {
 
 	it("prefers embedding.provider over legacy paths", () => {
 		root = mkdtempSync(join(tmpdir(), "embed-provider-"));
-		writeFileSync(
-			join(root, "agent.yaml"),
-			"embedding:\n  provider: native\nembeddings:\n  provider: ollama\n",
-		);
+		writeFileSync(join(root, "agent.yaml"), "embedding:\n  provider: native\nembeddings:\n  provider: ollama\n");
 		expect(embeddingProvider(root)).toBe("native");
 	});
 

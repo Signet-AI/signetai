@@ -1,6 +1,6 @@
 <script lang="ts">
-import { AppWindowMac, Copy, EyeOff, Minus, Monitor, Square, X } from "$lib/icons";
 import { getDesktopShell, isDesktopShell } from "$lib/desktop-shell";
+import { AppWindowMac, Copy, EyeOff, Minus, Monitor, Square, X } from "$lib/icons";
 import { type DecorationMode, titlebar } from "$lib/stores/titlebar.svelte";
 
 const isDesktop = isDesktopShell();

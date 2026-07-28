@@ -1,6 +1,6 @@
 <script lang="ts">
-import { getConstellationOverlay } from "$lib/api";
 import { onMount } from "svelte";
+import { getConstellationOverlay } from "$lib/api";
 import { SpatialIndex } from "./canvas/hit-test";
 import { GraphInputHandler } from "./canvas/input-handler";
 import { isNodeVisibleAtLod, renderFrame } from "./canvas/renderer";
@@ -8,6 +8,7 @@ import { KnowledgeForceSimulation } from "./canvas/simulation";
 import type { GraphCanvasEdge, GraphCanvasNode, GraphRenderColors } from "./canvas/types";
 import { ViewportState } from "./canvas/viewport";
 import {
+	buildKnowledgeMapFromConstellation,
 	KNOWLEDGE_NODE_COLORS,
 	KNOWLEDGE_NODE_COLORS_DIM,
 	KNOWLEDGE_RELATED_GLOW,
@@ -15,7 +16,6 @@ import {
 	type KnowledgeMapEdgeKind,
 	type KnowledgeMapNode,
 	type KnowledgeMapNodeKind,
-	buildKnowledgeMapFromConstellation,
 } from "./knowledge-map-data";
 
 interface Props {

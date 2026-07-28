@@ -6,8 +6,8 @@
 
 import { spawn } from "child_process";
 import { existsSync, readdirSync, readFileSync } from "fs";
-import { join } from "path";
 import { homedir, platform } from "os";
+import { join } from "path";
 
 export interface PythonVersion {
 	major: number;

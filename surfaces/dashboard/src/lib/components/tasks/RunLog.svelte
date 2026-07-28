@@ -1,8 +1,8 @@
 <script lang="ts">
+import { tick } from "svelte";
 import type { TaskRun } from "$lib/api";
 import { Badge } from "$lib/components/ui/badge/index.js";
 import * as Card from "$lib/components/ui/card/index.js";
-import { tick } from "svelte";
 
 interface Props {
 	run: TaskRun;
@@ -40,13 +40,13 @@ function escapeHtml(s: string): string {
 }
 
 const ANSI_COLORS: Record<string, string> = {
-	"31": "var(--sig-error, #ef4444)",
-	"32": "var(--sig-success)",
-	"33": "var(--sig-warning, #e8a832)",
-	"90": "var(--sig-text-muted)",
-	"36": "var(--sig-accent)",
-	"34": "var(--sig-highlight)",
-	"35": "var(--sig-accent)",
+	31: "var(--sig-error, #ef4444)",
+	32: "var(--sig-success)",
+	33: "var(--sig-warning, #e8a832)",
+	90: "var(--sig-text-muted)",
+	36: "var(--sig-accent)",
+	34: "var(--sig-highlight)",
+	35: "var(--sig-accent)",
 };
 
 // INVARIANT: escapeHtml must run on the raw input before any HTML tags are

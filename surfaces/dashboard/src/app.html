@@ -16,7 +16,7 @@
 		<link rel="preload" href="/fonts/Tiny5-Regular.woff2" as="font" type="font/woff2" crossorigin>
 		<script>
 			// Set theme before first paint to prevent flash
-			(function() {
+			(() => {
 				var t = localStorage.getItem('signet-theme');
 				if (!t) {
 					t = window.matchMedia('(prefers-color-scheme: light)').matches

@@ -40,6 +40,7 @@ interface MemoryRow {
 	readonly agent_id: unknown;
 	readonly [key: string]: unknown;
 }
+
 import { countChanges, syncVecDeleteByEmbeddingIds } from "../db-helpers";
 import { logger } from "../logger";
 import { txDecrementEntityMentions } from "./graph-transactions";

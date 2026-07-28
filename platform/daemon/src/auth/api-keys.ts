@@ -105,7 +105,10 @@ function safeStringArray(raw: string | null): readonly string[] {
 	}
 }
 
-function normalizePermissions(values: readonly string[] | undefined, fallback: readonly Permission[]): readonly Permission[] {
+function normalizePermissions(
+	values: readonly string[] | undefined,
+	fallback: readonly Permission[],
+): readonly Permission[] {
 	if (!values) return fallback;
 	const normalized = values.filter((value): value is Permission => (PERMISSIONS as readonly string[]).includes(value));
 	return normalized.length > 0 ? normalized : fallback;
@@ -184,7 +187,10 @@ export function createApiKey(accessor: DbAccessor, input: ApiKeyCreateInput): Cr
 	const role = input.role ?? "agent";
 	const connector = normalizeOptionalString(input.connector);
 	const harness = normalizeOptionalString(input.harness) ?? connector;
-	const permissions = normalizePermissions(input.permissions, connector || harness ? DEFAULT_CONNECTOR_PERMISSIONS : []);
+	const permissions = normalizePermissions(
+		input.permissions,
+		connector || harness ? DEFAULT_CONNECTOR_PERMISSIONS : [],
+	);
 	const expiresAt = normalizeIsoTimestamp(input.expiresAt);
 
 	accessor.withWriteTx((db) => {
@@ -275,7 +281,8 @@ export function verifyApiKey(accessor: DbAccessor, token: string): AuthResult {
 			return { authenticated: false, claims: null, error: "invalid api key" };
 		}
 		if (row.revoked_at) return { authenticated: false, claims: null, error: "api key revoked" };
-		if (row.expires_at && row.expires_at <= now) return { authenticated: false, claims: null, error: "api key expired" };
+		if (row.expires_at && row.expires_at <= now)
+			return { authenticated: false, claims: null, error: "api key expired" };
 
 		db.prepare("UPDATE api_keys SET last_used_at = ? WHERE id = ?").run(now, row.id);
 		const role = normalizeRole(row.role);

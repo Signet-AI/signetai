@@ -1,4 +1,4 @@
-import { type ModelRegistryEntry, type PipelineModelPreset, PIPELINE_MODEL_CATALOG } from "@signet/core";
+import { type ModelRegistryEntry, PIPELINE_MODEL_CATALOG, type PipelineModelPreset } from "@signet/core";
 
 function toEntry(provider: string, preset: PipelineModelPreset): ModelRegistryEntry {
 	return {
@@ -11,7 +11,7 @@ function toEntry(provider: string, preset: PipelineModelPreset): ModelRegistryEn
 }
 
 function catalogEntries(provider: string): ModelRegistryEntry[] {
-	const presets = Object.prototype.hasOwnProperty.call(PIPELINE_MODEL_CATALOG, provider)
+	const presets = Object.hasOwn(PIPELINE_MODEL_CATALOG, provider)
 		? PIPELINE_MODEL_CATALOG[provider as keyof typeof PIPELINE_MODEL_CATALOG]
 		: [];
 	return presets.map((preset) => toEntry(provider, preset));

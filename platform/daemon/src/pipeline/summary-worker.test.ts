@@ -4,15 +4,12 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, wr
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runMigrations } from "../../../core/src/migrations";
-import { type DbAccessor, type ReadDb, type WriteDb, closeDbAccessor, initDbAccessor } from "../db-accessor";
+import { closeDbAccessor, type DbAccessor, initDbAccessor, type ReadDb, type WriteDb } from "../db-accessor";
 import { loadMemoryConfig } from "../memory-config";
 import { IMMUTABLE_ARTIFACT_ERROR_PREFIX, writeSummaryArtifact } from "../memory-lineage";
-import { RateLimitExceededError } from "./provider";
 import type { LlmProvider } from "./provider";
+import { RateLimitExceededError } from "./provider";
 import {
-	SUMMARY_WORKER_UPDATED_BY,
-	type SummaryJobRow,
-	type SummaryWorkerHandle,
 	canProcessSummaryJobs,
 	clearCommandStageRunning,
 	getCommandStageStatus,
@@ -27,6 +24,9 @@ import {
 	resolveFailedSummaryJobStatus,
 	resolveSummaryHeadingDate,
 	runSummaryCommandProvider,
+	SUMMARY_WORKER_UPDATED_BY,
+	type SummaryJobRow,
+	type SummaryWorkerHandle,
 	scoreContinuity,
 	shouldRunSignificanceGateForJob,
 	startSummaryRecovery,

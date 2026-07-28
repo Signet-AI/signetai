@@ -42,10 +42,7 @@ export async function prepareText(text: string, font: string): Promise<PreparedT
 	return prepared;
 }
 
-export async function prepareTextWithSegments(
-	text: string,
-	font: string,
-): Promise<PreparedTextWithSegments> {
+export async function prepareTextWithSegments(text: string, font: string): Promise<PreparedTextWithSegments> {
 	const key = `seg::${font}::${text}`;
 	const hit = cache.get(key);
 	if (hit) return hit as PreparedTextWithSegments;

@@ -5,7 +5,7 @@ import type { Context, Hono } from "hono";
 import { resolveAgentId, resolveDaemonAgentId } from "../agent-id.js";
 import { requirePermission, requireRateLimit } from "../auth";
 import { getDbAccessor } from "../db-accessor.js";
-import { type QueueCounts, getQueueDiagnosticsSnapshot } from "../diagnostics-queue.js";
+import { getQueueDiagnosticsSnapshot, type QueueCounts } from "../diagnostics-queue.js";
 import { DreamPromotionError, promoteDreamingEvidence } from "../dream-promotion.js";
 import { getInferenceProviderOrNull, getLlmProvider } from "../llm.js";
 import { loadMemoryConfig } from "../memory-config.js";
@@ -32,22 +32,22 @@ import { getTranscriptCaptureStatus } from "../transcript-capture-worker.js";
 import { getTranscriptHealthReport } from "../transcript-health.js";
 import {
 	AGENTS_DIR,
-	BIND_HOST,
-	CURRENT_VERSION,
-	HOST,
-	LOG_DIR,
-	MEMORY_DB,
-	NETWORK_MODE,
-	PORT,
 	analyticsCollector,
 	authAdminLimiter,
 	authConfig,
+	BIND_HOST,
 	buildOpenClawHealth,
+	CURRENT_VERSION,
 	getCachedDiagnosticsReport,
 	getExtractionWorkloadState,
 	getUpdateState,
+	HOST,
 	invalidateDiagnosticsCache,
+	LOG_DIR,
+	MEMORY_DB,
+	NETWORK_MODE,
 	openClawHeartbeat,
+	PORT,
 	pipelineTransition,
 	providerRuntimeResolution,
 	readEnvTrimmed,
@@ -60,7 +60,7 @@ import {
 	setPipelineTransition,
 	telemetryRef,
 } from "./state.js";
-import { STATUS_CACHE_TTL, cachedEmbeddingStatus, resolveScopedAgentId, statusCacheTime } from "./utils.js";
+import { cachedEmbeddingStatus, resolveScopedAgentId, STATUS_CACHE_TTL, statusCacheTime } from "./utils.js";
 
 interface PipelineQueueBlock {
 	readonly memory: QueueCounts;

@@ -2,8 +2,8 @@
 import { describe, expect, it } from "bun:test";
 import { DEFAULT_PIPELINE_TIMEOUT_MS } from "@signet/core/pipeline-providers";
 import {
-	DEFAULT_OPENAI_COMPATIBLE_ENDPOINT,
 	applyAcpxDashboardSetup,
+	DEFAULT_OPENAI_COMPATIBLE_ENDPOINT,
 	defaultAcpxDashboardAgent,
 	extractionLabelForRoutingTarget,
 	hasExplicitSynthesisConfig,

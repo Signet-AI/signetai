@@ -4,8 +4,8 @@ import { setMemoryPinned, updateMemory } from "$lib/api";
 import { Button } from "$lib/components/ui/button/index.js";
 import * as Popover from "$lib/components/ui/popover/index.js";
 import { Textarea } from "$lib/components/ui/textarea/index.js";
-import { toast } from "$lib/stores/toast.svelte";
 import { RefreshCw } from "$lib/icons";
+import { toast } from "$lib/stores/toast.svelte";
 
 interface Props {
 	memories: Memory[];

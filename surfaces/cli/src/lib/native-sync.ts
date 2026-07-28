@@ -3,8 +3,8 @@ import {
 	existsSync,
 	mkdirSync,
 	openSync,
-	readFileSync,
 	readdirSync,
+	readFileSync,
 	rmSync,
 	statSync,
 	writeFileSync,
@@ -17,13 +17,7 @@ const NATIVE_SYNC_LOCK_FILENAME = "sync-native.lock";
 
 type EmbeddingProvider = "native" | "llama-cpp" | "ollama" | "openai" | "none";
 
-const VALID_PROVIDERS: readonly EmbeddingProvider[] = [
-	"native",
-	"llama-cpp",
-	"ollama",
-	"openai",
-	"none",
-];
+const VALID_PROVIDERS: readonly EmbeddingProvider[] = ["native", "llama-cpp", "ollama", "openai", "none"];
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null;

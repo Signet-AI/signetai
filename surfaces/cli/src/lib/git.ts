@@ -1,12 +1,12 @@
+import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import {
-	SIGNET_GIT_PROTECTED_PATHS,
 	isSignetGitProtectedPath,
 	isSignetGitTrackedPath,
 	mergeSignetGitignoreEntries,
+	SIGNET_GIT_PROTECTED_PATHS,
 } from "@signet/core";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 
 const GIT_COMMAND_TIMEOUT_MS = 30_000;
 
@@ -56,9 +56,10 @@ export async function gitAddAndCommit(dir: string, message: string): Promise<boo
 		if (status.code !== 0 || status.stdout.trim().length === 0) return status.code === 0;
 	}
 
-	const commitArgs = protectedRemovals.length > 0
-		? ["commit", "-m", message]
-		: ["commit", "-m", message, "--", ...literalPathspecs(commitPaths)];
+	const commitArgs =
+		protectedRemovals.length > 0
+			? ["commit", "-m", message]
+			: ["commit", "-m", message, "--", ...literalPathspecs(commitPaths)];
 	return (await runGit(dir, commitArgs)).code === 0;
 }
 

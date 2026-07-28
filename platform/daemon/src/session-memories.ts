@@ -9,7 +9,7 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { resolveDefaultBasePath } from "@signet/core";
-import { type WriteDb, getDbAccessor } from "./db-accessor";
+import { getDbAccessor, type WriteDb } from "./db-accessor";
 import { logger } from "./logger";
 
 function getMemoryDbPath(): string {

@@ -1,7 +1,7 @@
-import { type Api, type Model, type OAuthCredentials, getModels, getProviders } from "@earendil-works/pi-ai";
+import { type Api, getModels, getProviders, type Model, type OAuthCredentials } from "@earendil-works/pi-ai";
 import { getOAuthProvider } from "@earendil-works/pi-ai/oauth";
 import type { PipelineClaudeCodeConfig, RoutingAccountConfig, RoutingConfig } from "@signet/core";
-import { type PiExecutorKind, createPiModelProvider } from "./pipeline/pi-provider";
+import { createPiModelProvider, type PiExecutorKind } from "./pipeline/pi-provider";
 import type { AcpxHooksMode, StreamCapableLlmProvider } from "./pipeline/provider";
 import { createAcpxProvider } from "./pipeline/provider";
 

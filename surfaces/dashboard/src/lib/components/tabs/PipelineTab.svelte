@@ -1,8 +1,9 @@
 <script lang="ts">
+import { onMount } from "svelte";
 import { pausePipeline, resumePipeline } from "$lib/api";
 import PageBanner from "$lib/components/layout/PageBanner.svelte";
-import TabGroupBar from "$lib/components/layout/TabGroupBar.svelte";
 import { ENGINE_TAB_ITEMS } from "$lib/components/layout/page-headers";
+import TabGroupBar from "$lib/components/layout/TabGroupBar.svelte";
 import PipelineDetailSheet from "$lib/components/pipeline/PipelineDetailSheet.svelte";
 import PipelineGraph from "$lib/components/pipeline/PipelineGraph.svelte";
 import {
@@ -24,7 +25,6 @@ import { nav } from "$lib/stores/navigation.svelte";
 import { focusEngineTab } from "$lib/stores/tab-group-focus.svelte";
 import { toast } from "$lib/stores/toast.svelte";
 import { syncLayoutToStorage, workspaceLayout } from "$lib/stores/workspace-layout.svelte";
-import { onMount } from "svelte";
 
 function handleSelectNode(id: string) {
 	selectNode(pipeline.selectedNodeId === id ? null : id);

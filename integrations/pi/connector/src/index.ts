@@ -2,12 +2,11 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
 	BaseConnector,
+	buildManagedExtensionEnvBootstrap,
 	type InstallResult,
+	isManagedExtensionFile,
 	MANAGED_AGENT_ID_DEFAULT,
 	MANAGED_DAEMON_URL_DEFAULT,
-	type UninstallResult,
-	buildManagedExtensionEnvBootstrap,
-	isManagedExtensionFile,
 	managedExtensionFilePath,
 	readManagedTrimmedEnv,
 	removeManagedExtensionFile,
@@ -15,6 +14,7 @@ import {
 	resolveSignetApiKey,
 	resolveSignetDaemonUrl,
 	resolveSignetWorkspacePath,
+	type UninstallResult,
 } from "@signet/connector-base";
 import {
 	clearConfiguredPiAgentDir,

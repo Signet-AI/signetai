@@ -1,8 +1,8 @@
 import { describe, expect, it } from "bun:test";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { readdir, stat } from "node:fs/promises";
-import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { yieldEvery } from "./async-yield";
 
 describe("event-loop responsiveness during async file processing", () => {

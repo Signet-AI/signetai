@@ -5,8 +5,8 @@ const DEFAULT_EXTRACTION_MODEL = "qwen3:4b";
 const DEFAULT_SYNTHESIS_MODEL = "qwen3:4b";
 const DEFAULT_EMBEDDING_MODEL = "nomic-embed-text-v1.5";
 
-export { readPipelinePauseState, setPipelinePaused };
 export type { PipelinePauseState } from "@signet/core";
+export { readPipelinePauseState, setPipelinePaused };
 
 export interface OllamaReleaseTarget {
 	readonly baseUrl: string;

@@ -1,16 +1,16 @@
 import { readRuntimeEnv, readTrimmedRuntimeEnv, readTrimmedString } from "@signet/pi-extension-base";
 import { createDaemonClient } from "./daemon-client.js";
 import {
-	type LifecycleDeps,
-	OMP_LIFECYCLE_CONFIG,
 	currentSessionRef,
 	endCurrentSession,
 	endPreviousSession,
 	ensureSessionContext,
+	type LifecycleDeps,
+	OMP_LIFECYCLE_CONFIG,
 	refreshSessionStart,
 	requestRecallForPrompt,
 } from "./lifecycle.js";
-import { type OmpSessionState, createSessionState } from "./session-state.js";
+import { createSessionState, type OmpSessionState } from "./session-state.js";
 import {
 	DAEMON_URL_DEFAULT,
 	HARNESS,

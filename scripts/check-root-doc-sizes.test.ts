@@ -58,12 +58,7 @@ describe("root doc size budget", () => {
 		test(`${limit.label} reports budget usage`, () => {
 			const size = byteSize(absolutePath);
 			const pct = (size / limit.capBytes) * 100;
-			const tier =
-				size > limit.capBytes
-					? "OVER"
-					: size > limit.softBytes
-						? "WARN"
-						: "HEALTHY";
+			const tier = size > limit.capBytes ? "OVER" : size > limit.softBytes ? "WARN" : "HEALTHY";
 
 			// Bun's test runner does not have a built-in warning tier,
 			// so surface the budget via a console message and pass

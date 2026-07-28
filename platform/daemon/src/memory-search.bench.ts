@@ -31,7 +31,7 @@ import { join, resolve } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import { fetchEmbedding } from "./embedding-fetch";
 import { loadMemoryConfig } from "./memory-config";
-import { type RecallStageTiming, hybridRecall } from "./memory-search";
+import { hybridRecall, type RecallStageTiming } from "./memory-search";
 
 const TEST_DIR = join(tmpdir(), `signet-recall-bench-${Date.now()}`);
 const MEMORY_COUNT = parseEnvInt("SIGNET_RECALL_BENCH_MEMORIES", 2000);

@@ -213,7 +213,7 @@ describe("sources CLI features", () => {
 				agentsDir: dir,
 				importSourceSnapshotToDaemon: async (sourceId, snapshot, options) => ({
 					ok: true,
-					imported: sourceId === "discord:source" && options.includeLocalDiscord && !!snapshot ? 3 : 0,
+					imported: sourceId === "discord:source" && options.includeLocalDiscord && snapshot ? 3 : 0,
 					skippedLocalDiscordArtifacts: 0,
 				}),
 			},

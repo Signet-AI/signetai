@@ -12,8 +12,8 @@
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import type { RecallPayload, RecallRow } from "@signet/core";
 import {
-	STATIC_IDENTITY_SESSION_START_TIMEOUT_STATUS,
 	applyRecallScoreThreshold,
 	buildRecallRequestBody,
 	buildRememberRequestBody,
@@ -21,8 +21,8 @@ import {
 	parseRecallPayload,
 	readStaticIdentity,
 	resolveSessionStartTimeoutMs,
+	STATIC_IDENTITY_SESSION_START_TIMEOUT_STATUS,
 } from "@signet/core";
-import type { RecallPayload, RecallRow } from "@signet/core";
 import { SignetClient } from "@signet/sdk";
 import { Type } from "@sinclair/typebox";
 import type {
@@ -715,12 +715,7 @@ export async function memoryGet(id: string, options: { daemonUrl?: string } = {}
 }
 
 export async function memoryList(
-	options: {
-		daemonUrl?: string;
-		limit?: number;
-		offset?: number;
-		type?: string;
-	} = {},
+	options: { daemonUrl?: string; limit?: number; offset?: number; type?: string } = {},
 ): Promise<{ memories: MemoryRecord[]; stats: Record<string, number> }> {
 	const daemonUrl = options.daemonUrl || DEFAULT_DAEMON_URL;
 	const params = new URLSearchParams();

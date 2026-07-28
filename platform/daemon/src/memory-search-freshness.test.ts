@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
-import { type ResolvedMemoryConfig, loadMemoryConfig } from "./memory-config";
+import { loadMemoryConfig, type ResolvedMemoryConfig } from "./memory-config";
 import { hybridRecall } from "./memory-search";
 import { hasFreshnessIntent } from "./temporal-recall";
 

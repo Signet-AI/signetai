@@ -11,7 +11,7 @@
  * Config: max ~2000 tokens (~8000 chars), min ~100 tokens, overlap ~200 tokens
  */
 
-import type { ParsedDocument, ParsedSection, ChunkResult } from "./types";
+import type { ChunkResult, ParsedDocument, ParsedSection } from "./types";
 
 // ---------------------------------------------------------------------------
 // Configuration

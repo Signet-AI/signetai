@@ -10,10 +10,10 @@ import {
 	copyFileSync,
 	existsSync,
 	mkdirSync,
-	readFileSync,
 	readdirSync,
-	statSync,
+	readFileSync,
 	statfsSync,
+	statSync,
 	unlinkSync,
 } from "node:fs";
 import { copyFile as copyFileAsync, unlink as unlinkAsync } from "node:fs/promises";
@@ -21,8 +21,8 @@ import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import {
-	DEFAULT_EMBEDDING_DIMENSIONS,
 	createMemoriesFts,
+	DEFAULT_EMBEDDING_DIMENSIONS,
 	findSqliteVecExtension,
 	hasPendingMigrations,
 	memoriesFtsNeedsTokenizerRepair,

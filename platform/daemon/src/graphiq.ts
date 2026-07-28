@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { constants, accessSync, existsSync } from "node:fs";
+import { accessSync, constants, existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
 import { readGraphiqState, resolveDefaultBasePath } from "@signet/core";

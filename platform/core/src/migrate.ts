@@ -28,23 +28,20 @@ async function migrateChatGPT(_inputPath: string): Promise<void> {
 	// TODO: Parse ChatGPT export (conversations.json)
 	// Extract: user preferences, facts mentioned, project context
 	throw new Error(
-		"ChatGPT migration is not yet implemented. " +
-			"See https://github.com/Signet-AI/signetai/issues for tracking.",
+		"ChatGPT migration is not yet implemented. " + "See https://github.com/Signet-AI/signetai/issues for tracking.",
 	);
 }
 
 async function migrateClaude(_inputPath: string): Promise<void> {
 	// TODO: Parse Claude.ai export
 	throw new Error(
-		"Claude.ai migration is not yet implemented. " +
-			"See https://github.com/Signet-AI/signetai/issues for tracking.",
+		"Claude.ai migration is not yet implemented. " + "See https://github.com/Signet-AI/signetai/issues for tracking.",
 	);
 }
 
 async function migrateGemini(_inputPath: string): Promise<void> {
 	// TODO: Parse Gemini export
 	throw new Error(
-		"Gemini migration is not yet implemented. " +
-			"See https://github.com/Signet-AI/signetai/issues for tracking.",
+		"Gemini migration is not yet implemented. " + "See https://github.com/Signet-AI/signetai/issues for tracking.",
 	);
 }

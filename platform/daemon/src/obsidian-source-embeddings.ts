@@ -295,16 +295,17 @@ export async function indexObsidianSourceEmbeddings(
 
 	getDbAccessor().withWriteTx((db) => {
 		const prefix = `${input.sourceId}:${relPath(normalizePath(input.root).replace(/\/$/, ""), normalizePath(input.filePath))}#`;
-		const stale = OBSIDIAN_CHUNK_SOURCE_TYPES.flatMap((sourceType) =>
-			db
-				.prepare(
-					"SELECT id, source_type, content_hash FROM embeddings WHERE source_type = ? AND source_id >= ? AND source_id < ? AND agent_id = ?",
-				)
-				.all(sourceType, prefix, prefixUpperBound(prefix), input.agentId) as Array<{
-				id: string;
-				source_type: string;
-				content_hash: string;
-			}>,
+		const stale = OBSIDIAN_CHUNK_SOURCE_TYPES.flatMap(
+			(sourceType) =>
+				db
+					.prepare(
+						"SELECT id, source_type, content_hash FROM embeddings WHERE source_type = ? AND source_id >= ? AND source_id < ? AND agent_id = ?",
+					)
+					.all(sourceType, prefix, prefixUpperBound(prefix), input.agentId) as Array<{
+					id: string;
+					source_type: string;
+					content_hash: string;
+				}>,
 		);
 		const staleIds = stale
 			.filter((row) => row.source_type === LEGACY_OBSIDIAN_CHUNK_SOURCE_TYPE || !currentHashes.has(row.content_hash))

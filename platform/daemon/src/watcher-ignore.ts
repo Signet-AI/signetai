@@ -1,5 +1,4 @@
-import { readFileSync, statSync, writeFileSync } from "node:fs";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { basename, isAbsolute, join, normalize, relative, resolve } from "node:path";
 import { resolveWorkspaceSourceRepoPath } from "@signet/core";
 

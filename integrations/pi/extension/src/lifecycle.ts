@@ -1,12 +1,12 @@
 import {
-	type LifecycleConfig,
-	type LifecycleDeps,
 	currentSessionRef,
 	defaultStaticFallback,
 	endCurrentSession,
 	endPreviousSession,
 	ensureSessionContext,
 	flushPendingSessionEnds,
+	type LifecycleConfig,
+	type LifecycleDeps,
 	refreshSessionStart,
 	requestRecallForPrompt,
 } from "@signet/pi-extension-base";

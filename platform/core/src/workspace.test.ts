@@ -3,12 +3,12 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-	type WorkspaceResolution,
 	clearConfiguredWorkspacePath,
 	getWorkspaceConfigPath,
 	normalizeWorkspacePath,
 	readConfiguredWorkspacePath,
 	resolveWorkspacePath,
+	type WorkspaceResolution,
 	writeConfiguredWorkspacePath,
 } from "./workspace";
 

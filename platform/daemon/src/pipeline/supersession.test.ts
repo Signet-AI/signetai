@@ -4,12 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
 import { upsertAspect } from "../knowledge-graph";
+import type { PipelineV2Config } from "../memory-config";
 import {
-	detectAttributeContradiction,
 	checkAndSupersedeForAttributes,
+	detectAttributeContradiction,
 	sweepRetroactiveSupersession,
 } from "./supersession";
-import type { PipelineV2Config } from "../memory-config";
 
 // ---------------------------------------------------------------------------
 // Helpers

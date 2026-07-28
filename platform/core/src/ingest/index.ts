@@ -10,72 +10,71 @@
  *   const result = await ingestPath("~/Documents/notes/", { db, verbose: true });
  */
 
-import { existsSync, statSync, readdirSync } from "fs";
-import { join, extname, resolve, basename } from "path";
+import { existsSync, readdirSync, readFileSync, statSync } from "fs";
+import { basename, extname, join, resolve } from "path";
 import type { LlmProvider } from "../types";
-import type {
-	DatabaseLike,
-	IngestOptions,
-	IngestResult,
-	FileIngestResult,
-	ParsedDocument,
-	ChunkResult,
-	ExtractionResult,
-	ProgressCallback,
-} from "./types";
-import { readFileSync } from "fs";
-import { parseMarkdown, parseTxt, parseCode } from "./markdown-parser";
-import { parsePdf } from "./pdf-parser";
-import { parseSlackExport } from "./slack-parser";
-import { parseDiscordExport } from "./discord-parser";
-import { parseCodeRepository } from "./code-parser";
-import { parseEntireRepo, hasEntireBranch } from "./entire-parser";
 import { chunkDocument, DEFAULT_CHUNKER_CONFIG } from "./chunker";
-import { extractFromChunks, DEFAULT_EXTRACTOR_CONFIG } from "./extractor";
+import { parseCodeRepository } from "./code-parser";
+import { parseDiscordExport } from "./discord-parser";
+import { hasEntireBranch, parseEntireRepo } from "./entire-parser";
 import type { ExtractionOptions } from "./extractor";
+import { DEFAULT_EXTRACTOR_CONFIG, extractFromChunks } from "./extractor";
+import { parseCode, parseMarkdown, parseTxt } from "./markdown-parser";
+import { parsePdf } from "./pdf-parser";
 import {
-	computeFileHash,
+	buildProvenance,
 	checkAlreadyIngested,
+	computeFileHash,
 	createIngestionJob,
 	updateIngestionJob,
-	buildProvenance,
 } from "./provenance";
-
-// Re-export all types
-export type {
+import { parseSlackExport } from "./slack-parser";
+import type {
+	ChunkResult,
 	DatabaseLike,
+	ExtractionResult,
+	FileIngestResult,
 	IngestOptions,
 	IngestResult,
-	FileIngestResult,
 	ParsedDocument,
-	ParsedSection,
+	ProgressCallback,
+} from "./types";
+
+export type { ChatExtractorConfig } from "./chat-extractor";
+export { extractFromConversation, extractFromConversations, extractParticipants } from "./chat-extractor";
+export { batchByTimeGap, TIME_GAP_MS } from "./chat-utils";
+export type { ChunkerConfig } from "./chunker";
+export { chunkDocument, DEFAULT_CHUNKER_CONFIG } from "./chunker";
+export { parseCodeRepository } from "./code-parser";
+export { parseDiscordExport } from "./discord-parser";
+export type { EntireExtractorConfig } from "./entire-extractor";
+export { extractFromEntireSession, extractFromEntireSessions } from "./entire-extractor";
+export { hasEntireBranch, parseEntireRepo } from "./entire-parser";
+export type { ExtractionOptions, ExtractorConfig } from "./extractor";
+export { DEFAULT_EXTRACTOR_CONFIG, extractFromChunk, extractFromChunks } from "./extractor";
+export { findGit } from "./git-utils";
+export { parseCode, parseMarkdown, parseMarkdownContent, parseTxt } from "./markdown-parser";
+export { parsePdf } from "./pdf-parser";
+export { buildProvenance, computeFileHash } from "./provenance";
+export type { ParseOptions } from "./response-parser";
+export { parseExtractionResponse } from "./response-parser";
+export { parseSlackExport } from "./slack-parser";
+// Re-export all types
+export type {
 	ChunkResult,
-	ExtractionResult,
+	DatabaseLike,
 	ExtractedItem,
 	ExtractedRelation,
-	ProvenanceRecord,
+	ExtractionResult,
+	FileIngestResult,
+	IngestOptions,
+	IngestResult,
+	ParsedDocument,
+	ParsedSection,
 	ProgressCallback,
 	ProgressEvent,
+	ProvenanceRecord,
 } from "./types";
-export { chunkDocument, DEFAULT_CHUNKER_CONFIG } from "./chunker";
-export type { ChunkerConfig } from "./chunker";
-export { extractFromChunk, extractFromChunks, DEFAULT_EXTRACTOR_CONFIG } from "./extractor";
-export type { ExtractionOptions, ExtractorConfig } from "./extractor";
-export { parseMarkdown, parseMarkdownContent, parseTxt, parseCode } from "./markdown-parser";
-export { parsePdf } from "./pdf-parser";
-export { parseSlackExport } from "./slack-parser";
-export { parseDiscordExport } from "./discord-parser";
-export { parseCodeRepository } from "./code-parser";
-export { parseEntireRepo, hasEntireBranch } from "./entire-parser";
-export { extractFromEntireSession, extractFromEntireSessions } from "./entire-extractor";
-export type { EntireExtractorConfig } from "./entire-extractor";
-export { extractFromConversation, extractFromConversations, extractParticipants } from "./chat-extractor";
-export type { ChatExtractorConfig } from "./chat-extractor";
-export { computeFileHash, buildProvenance } from "./provenance";
-export { parseExtractionResponse } from "./response-parser";
-export type { ParseOptions } from "./response-parser";
-export { findGit } from "./git-utils";
-export { batchByTimeGap, TIME_GAP_MS } from "./chat-utils";
 
 // ---------------------------------------------------------------------------
 // File type detection

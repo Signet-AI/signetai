@@ -9,8 +9,8 @@ import { runMigrations } from "../../core/src/migrations";
 import { normalizeAndHashContent } from "./content-normalization";
 import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
 import { toFtsSchemaQueryDb } from "./db-accessor";
-import { DEFAULT_PIPELINE_V2 } from "./memory-config";
 import type { EmbeddingConfig, PipelineV2Config } from "./memory-config";
+import { DEFAULT_PIPELINE_V2 } from "./memory-config";
 import {
 	checkFtsConsistency,
 	checkRepairGate,

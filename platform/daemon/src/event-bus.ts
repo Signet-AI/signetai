@@ -97,11 +97,7 @@ class SignetEventBus {
 	/**
 	 * Get recent events from the rolling window.
 	 */
-	getRecentEvents(opts?: {
-		windowMs?: number;
-		type?: string;
-		limit?: number;
-	}): readonly SignetOSEvent[] {
+	getRecentEvents(opts?: { windowMs?: number; type?: string; limit?: number }): readonly SignetOSEvent[] {
 		const windowMs = opts?.windowMs ?? DEFAULT_WINDOW_MS;
 		const limit = opts?.limit ?? MAX_BUFFER_SIZE;
 		const cutoff = Date.now() - windowMs;

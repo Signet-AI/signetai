@@ -8,11 +8,11 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import {
-	SIGNET_GRAPHIQ_PLUGIN_ID,
 	applyRecallScoreThreshold,
 	buildRecallRequestBody,
 	buildRememberRequestBody,
 	formatRecallText,
+	SIGNET_GRAPHIQ_PLUGIN_ID,
 } from "@signet/core";
 import { z } from "zod";
 import { getActiveGraphiqDbPath, runGraphiqCli } from "../graphiq.js";

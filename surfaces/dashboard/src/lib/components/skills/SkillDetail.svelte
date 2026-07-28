@@ -1,5 +1,6 @@
 <script lang="ts">
-import { type MarketplaceReview, createMarketplaceReview, getMarketplaceReviews } from "$lib/api";
+import { marked } from "marked";
+import { createMarketplaceReview, getMarketplaceReviews, type MarketplaceReview } from "$lib/api";
 import { Badge } from "$lib/components/ui/badge/index.js";
 import { Button } from "$lib/components/ui/button/index.js";
 import * as Collapsible from "$lib/components/ui/collapsible/index.js";
@@ -7,11 +8,10 @@ import { Input } from "$lib/components/ui/input/index.js";
 import * as Select from "$lib/components/ui/select/index.js";
 import * as Sheet from "$lib/components/ui/sheet/index.js";
 import { Textarea } from "$lib/components/ui/textarea/index.js";
+import { ChevronDown } from "$lib/icons";
 import { computeTrustProfile } from "$lib/skills/risk-profile";
 import { closeDetail, doInstall, doUninstall, sk } from "$lib/stores/skills.svelte";
 import { toast } from "$lib/stores/toast.svelte";
-import { ChevronDown } from "$lib/icons";
-import { marked } from "marked";
 
 const REVIEW_DISPLAY_NAME_KEY = "signet:marketplace:reviews:display-name";
 

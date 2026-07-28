@@ -9,8 +9,8 @@
 
 import type { LlmProvider, PipelineHintsConfig } from "@signet/core";
 import type { DbAccessor, WriteDb } from "../db-accessor";
-import type { PipelineV2Config } from "../memory-config";
 import { logger } from "../logger";
+import type { PipelineV2Config } from "../memory-config";
 
 // ---------------------------------------------------------------------------
 // Types

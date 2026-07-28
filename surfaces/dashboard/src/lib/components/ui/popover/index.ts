@@ -1,19 +1,19 @@
+import Root from "./popover.svelte";
 import Close from "./popover-close.svelte";
 import Content from "./popover-content.svelte";
 import Portal from "./popover-portal.svelte";
 import Trigger from "./popover-trigger.svelte";
-import Root from "./popover.svelte";
 
 export {
-	Root,
-	Content,
-	Trigger,
 	Close,
+	Close as PopoverClose,
+	Content,
+	Content as PopoverContent,
 	Portal,
+	Portal as PopoverPortal,
+	Root,
 	//
 	Root as Popover,
-	Content as PopoverContent,
+	Trigger,
 	Trigger as PopoverTrigger,
-	Close as PopoverClose,
-	Portal as PopoverPortal,
 };

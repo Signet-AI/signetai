@@ -1,17 +1,17 @@
 <script lang="ts">
-import { Bot, Cpu, ExternalLink, Send, User, Wrench } from "$lib/icons";
+import { tick } from "svelte";
 import { API_BASE } from "$lib/api";
 import { openAuthEventStream } from "$lib/auth";
+import { Bot, Cpu, ExternalLink, Send, User, Wrench } from "$lib/icons";
 import {
-	os,
 	fetchTrayEntries,
 	fetchWidgetHtml,
 	getWidgetSandbox,
 	moveToGrid,
+	os,
 	sendWidgetAction,
 	setAgentSession,
 } from "$lib/stores/os.svelte";
-import { tick } from "svelte";
 
 interface ToolCall {
 	tool: string;
@@ -147,106 +147,106 @@ async function executeAgentTask(serverId: string, task: string): Promise<string>
 			let result = "Agent task completed";
 			const evtSource = openAuthEventStream(`${API_BASE}/api/os/agent-events?session=${sessionId}`, {
 				onmessage: async (e) => {
-				try {
-					const event = JSON.parse(e.data);
+					try {
+						const event = JSON.parse(e.data);
 
-					if (event.type === "connected") return;
+						if (event.type === "connected") return;
 
-					if (event.type === "agentStart") {
-						// Tell the widget iframe to show the mask/cursor
-						const sandbox = getWidgetSandbox(event.serverId);
-						if (sandbox) sandbox.agentStart();
-						return;
-					}
-
-					if (event.type === "agentStop") {
-						// Tell the widget iframe to hide the mask/cursor
-						const sandbox = getWidgetSandbox(event.serverId);
-						if (sandbox) sandbox.agentStop();
-						return;
-					}
-
-					if (event.type === "getDomState") {
-						// Daemon is requesting DOM state — get it from the widget
-						const sandbox = getWidgetSandbox(event.serverId);
-						if (!sandbox) {
-							await fetch(`${API_BASE}/api/os/agent-state`, {
-								method: "POST",
-								headers: { "Content-Type": "application/json" },
-								body: JSON.stringify({
-									sessionId,
-									domState: { success: false, error: "Widget sandbox not found" },
-								}),
-							});
+						if (event.type === "agentStart") {
+							// Tell the widget iframe to show the mask/cursor
+							const sandbox = getWidgetSandbox(event.serverId);
+							if (sandbox) sandbox.agentStart();
 							return;
 						}
 
-						try {
-							const domState = await sandbox.getDomState();
-							await fetch(`${API_BASE}/api/os/agent-state`, {
-								method: "POST",
-								headers: { "Content-Type": "application/json" },
-								body: JSON.stringify({ sessionId, domState }),
-							});
-						} catch (err) {
-							await fetch(`${API_BASE}/api/os/agent-state`, {
-								method: "POST",
-								headers: { "Content-Type": "application/json" },
-								body: JSON.stringify({
-									sessionId,
-									domState: { success: false, error: err instanceof Error ? err.message : String(err) },
-								}),
-							});
+						if (event.type === "agentStop") {
+							// Tell the widget iframe to hide the mask/cursor
+							const sandbox = getWidgetSandbox(event.serverId);
+							if (sandbox) sandbox.agentStop();
+							return;
 						}
-						return;
-					}
 
-					if (event.type === "executeAction") {
-						// Daemon wants us to execute an action in the widget
-						const sandbox = getWidgetSandbox(event.serverId);
-						if (sandbox && event.data?.action) {
-							try {
-								await sandbox.executeAction(event.data.action);
-							} catch (err) {
-								console.warn("executeAction error:", err);
+						if (event.type === "getDomState") {
+							// Daemon is requesting DOM state — get it from the widget
+							const sandbox = getWidgetSandbox(event.serverId);
+							if (!sandbox) {
+								await fetch(`${API_BASE}/api/os/agent-state`, {
+									method: "POST",
+									headers: { "Content-Type": "application/json" },
+									body: JSON.stringify({
+										sessionId,
+										domState: { success: false, error: "Widget sandbox not found" },
+									}),
+								});
+								return;
 							}
+
+							try {
+								const domState = await sandbox.getDomState();
+								await fetch(`${API_BASE}/api/os/agent-state`, {
+									method: "POST",
+									headers: { "Content-Type": "application/json" },
+									body: JSON.stringify({ sessionId, domState }),
+								});
+							} catch (err) {
+								await fetch(`${API_BASE}/api/os/agent-state`, {
+									method: "POST",
+									headers: { "Content-Type": "application/json" },
+									body: JSON.stringify({
+										sessionId,
+										domState: { success: false, error: err instanceof Error ? err.message : String(err) },
+									}),
+								});
+							}
+							return;
 						}
-						return;
-					}
 
-					if (event.type === "status") {
-						const d = event.data as { step?: number; status?: string; message?: string };
-						loadingStatus = d?.message || `step ${d?.step}...`;
-						setAgentSession({
-							serverId: event.serverId,
-							status: (d?.status as "observing" | "thinking" | "acting") || "starting",
-							currentStep: d?.step || 0,
-							totalSteps: 20,
-							lastAction: d?.message,
-						});
-						scrollToBottom();
-						return;
-					}
+						if (event.type === "executeAction") {
+							// Daemon wants us to execute an action in the widget
+							const sandbox = getWidgetSandbox(event.serverId);
+							if (sandbox && event.data?.action) {
+								try {
+									await sandbox.executeAction(event.data.action);
+								} catch (err) {
+									console.warn("executeAction error:", err);
+								}
+							}
+							return;
+						}
 
-					if (event.type === "done") {
-						const d = event.data as { summary?: string };
-						result = d?.summary || "Task completed";
-						setAgentSession(null);
-						evtSource.close();
-						resolve(result);
-						return;
-					}
+						if (event.type === "status") {
+							const d = event.data as { step?: number; status?: string; message?: string };
+							loadingStatus = d?.message || `step ${d?.step}...`;
+							setAgentSession({
+								serverId: event.serverId,
+								status: (d?.status as "observing" | "thinking" | "acting") || "starting",
+								currentStep: d?.step || 0,
+								totalSteps: 20,
+								lastAction: d?.message,
+							});
+							scrollToBottom();
+							return;
+						}
 
-					if (event.type === "error") {
-						const d = event.data as { error?: string };
-						setAgentSession(null);
-						evtSource.close();
-						reject(new Error(d?.error || "Agent error"));
-						return;
+						if (event.type === "done") {
+							const d = event.data as { summary?: string };
+							result = d?.summary || "Task completed";
+							setAgentSession(null);
+							evtSource.close();
+							resolve(result);
+							return;
+						}
+
+						if (event.type === "error") {
+							const d = event.data as { error?: string };
+							setAgentSession(null);
+							evtSource.close();
+							reject(new Error(d?.error || "Agent error"));
+							return;
+						}
+					} catch (err) {
+						console.warn("Agent SSE parse error:", err);
 					}
-				} catch (err) {
-					console.warn("Agent SSE parse error:", err);
-				}
 				},
 				onerror: () => {
 					setAgentSession(null);

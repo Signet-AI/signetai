@@ -8,15 +8,15 @@ import { ensureAgentRegistered, getAgentScope, resolveAgentId } from "../agent-i
 import { aggregateRecall, parseAggregateRecallBudget, readAggregateRecallBudgetInput } from "../aggregate-recall";
 import { checkScope, requirePermission, requireRateLimit } from "../auth";
 import { normalizeAndHashContent } from "../content-normalization";
-import { type ReadDb, type WriteDb, getDbAccessor, prepareTypedStatement } from "../db-accessor";
+import { getDbAccessor, prepareTypedStatement, type ReadDb, type WriteDb } from "../db-accessor";
 import { syncVecDeleteBySourceId, syncVecInsert, vectorToBlob } from "../db-helpers";
 import { fetchEmbedding } from "../embedding-fetch";
 import { buildEmbeddingHealth } from "../embedding-health";
 import { getInferenceRouterOrNull } from "../inference-router";
 import { linkMemoryToEntities } from "../inline-entity-linker";
 import { logger } from "../logger";
-import { type ResolvedMemoryConfig, loadMemoryConfig } from "../memory-config";
-import { type RecallParams, type RecallResponse, buildAgentScopeClause, hybridRecall } from "../memory-search";
+import { loadMemoryConfig, type ResolvedMemoryConfig } from "../memory-config";
+import { buildAgentScopeClause, hybridRecall, type RecallParams, type RecallResponse } from "../memory-search";
 import { recordMemorySearchTelemetry } from "../memory-search-telemetry";
 import { resolveMemorySearchTelemetryProject } from "../memory-search-telemetry-project";
 import { buildMemoryTimeline } from "../memory-timeline";
@@ -29,9 +29,6 @@ import { txForgetMemory, txIngestEnvelope, txModifyMemory, txRecoverMemory, txSu
 import { cacheProjection, computeProjection, computeProjectionForQuery, getCachedProjection } from "../umap-projection";
 import {
 	AGENTS_DIR,
-	INTERNAL_SELF_HOST,
-	PORT,
-	PROJECTION_ERROR_TTL_MS,
 	authBatchForgetLimiter,
 	authConfig,
 	authForgetLimiter,
@@ -39,19 +36,22 @@ import {
 	authRecallLlmLimiter,
 	embeddingTrackerHandle,
 	hasMemoriesSessionIdColumnCache,
+	INTERNAL_SELF_HOST,
+	PORT,
+	PROJECTION_ERROR_TTL_MS,
 	projectionErrors,
 	projectionInFlight,
 	queueExtractionJob,
 } from "./state";
 import {
-	type FilterParams,
-	type ForgetCandidatesRequest,
 	blobToVector,
 	buildForgetConfirmToken,
 	buildWhere,
 	buildWhereRaw,
 	checkEmbeddingProvider,
 	chunkBySentence,
+	type FilterParams,
+	type ForgetCandidatesRequest,
 	inferType,
 	isMissingEmbeddingsTableError,
 	loadForgetCandidates,
@@ -1190,7 +1190,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		ensureAgentRegistered(agentId);
 		const visibility: RememberDedupeScope["visibility"] = body.visibility === "private" ? "private" : "global";
 		const dedupeScope: RememberDedupeScope = { agentId, visibility, project: body.project ?? null, scope };
-		const hasBodyTags = Object.prototype.hasOwnProperty.call(body, "tags");
+		const hasBodyTags = Object.hasOwn(body, "tags");
 		const bodyTags = hasBodyTags ? parseTagsMutation(body.tags) : undefined;
 		if (hasBodyTags && bodyTags === undefined) {
 			return c.json({ error: "tags must be a string, string array, or null" }, 400);
@@ -2111,7 +2111,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			return c.json({ error: "reason is required" }, 400);
 		}
 
-		const hasIfVersionInBody = Object.prototype.hasOwnProperty.call(payload, "if_version");
+		const hasIfVersionInBody = Object.hasOwn(payload, "if_version");
 		const ifVersionBody = parseOptionalInt(payload.if_version);
 		if (hasIfVersionInBody && ifVersionBody === undefined) {
 			return c.json({ error: "if_version must be a positive integer" }, 400);
@@ -2208,7 +2208,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			return c.json({ error: "reason is required" }, 400);
 		}
 
-		const hasIfVersion = Object.prototype.hasOwnProperty.call(payload, "if_version");
+		const hasIfVersion = Object.hasOwn(payload, "if_version");
 		const ifVersion = parseOptionalInt(payload.if_version);
 		if (hasIfVersion && ifVersion === undefined) {
 			return c.json({ error: "if_version must be a positive integer" }, 400);
@@ -2320,7 +2320,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			return c.json({ error: "reason is required" }, 400);
 		}
 
-		const hasForceInBody = Object.prototype.hasOwnProperty.call(payload, "force");
+		const hasForceInBody = Object.hasOwn(payload, "force");
 		const forceFromBody = parseOptionalBoolean(payload.force);
 		if (hasForceInBody && forceFromBody === undefined) {
 			return c.json({ error: "force must be a boolean" }, 400);
@@ -2328,7 +2328,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		const forceFromQuery = parseOptionalBoolean(c.req.query("force"));
 		const force = forceFromBody ?? forceFromQuery ?? false;
 
-		const hasIfVersionInBody = Object.prototype.hasOwnProperty.call(payload, "if_version");
+		const hasIfVersionInBody = Object.hasOwn(payload, "if_version");
 		const ifVersionBody = parseOptionalInt(payload.if_version);
 		if (hasIfVersionInBody && ifVersionBody === undefined) {
 			return c.json({ error: "if_version must be a positive integer" }, 400);
@@ -2577,7 +2577,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			return c.json({ error: "mode must be preview or execute" }, 400);
 		}
 
-		const hasLimit = Object.prototype.hasOwnProperty.call(payload, "limit");
+		const hasLimit = Object.hasOwn(payload, "limit");
 		const parsedLimit = parseOptionalInt(payload.limit);
 		if (hasLimit && parsedLimit === undefined) {
 			return c.json({ error: "limit must be a positive integer" }, 400);
@@ -2585,7 +2585,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		const limit = Math.max(1, Math.min(parsedLimit ?? 20, MAX_MUTATION_BATCH));
 
 		let ids: string[] = [];
-		if (Object.prototype.hasOwnProperty.call(payload, "ids")) {
+		if (Object.hasOwn(payload, "ids")) {
 			if (!Array.isArray(payload.ids)) {
 				return c.json({ error: "ids must be an array of strings" }, 400);
 			}
@@ -2654,13 +2654,13 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			return c.json({ error: "reason is required for execute mode" }, 400);
 		}
 
-		const hasForce = Object.prototype.hasOwnProperty.call(payload, "force");
+		const hasForce = Object.hasOwn(payload, "force");
 		const force = parseOptionalBoolean(payload.force);
 		if (hasForce && force === undefined) {
 			return c.json({ error: "force must be a boolean" }, 400);
 		}
 
-		if (Object.prototype.hasOwnProperty.call(payload, "if_version")) {
+		if (Object.hasOwn(payload, "if_version")) {
 			return c.json(
 				{
 					error: "if_version is not supported for batch forget; use DELETE /api/memory/:id for version-guarded deletes",
@@ -2797,7 +2797,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				continue;
 			}
 
-			const hasIfVersion = Object.prototype.hasOwnProperty.call(patchPayload, "if_version");
+			const hasIfVersion = Object.hasOwn(patchPayload, "if_version");
 			const ifVersion = parseOptionalInt(patchPayload.if_version);
 			if (hasIfVersion && ifVersion === undefined) {
 				results.push({

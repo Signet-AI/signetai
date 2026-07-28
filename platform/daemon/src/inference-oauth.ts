@@ -1,12 +1,12 @@
 import { randomUUID } from "node:crypto";
 import {
+	getOAuthApiKey,
+	getOAuthProvider,
+	getOAuthProviders,
 	type OAuthCredentials,
 	type OAuthLoginCallbacks,
 	type OAuthPrompt,
 	type OAuthSelectPrompt,
-	getOAuthApiKey,
-	getOAuthProvider,
-	getOAuthProviders,
 } from "@earendil-works/pi-ai/oauth";
 import { logger } from "./logger";
 import { deleteSecretFromActiveProvider, getSecret, putSecret } from "./secrets";

@@ -1,8 +1,8 @@
-import { afterEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
+import { afterEach, describe, expect, test } from "bun:test";
 import type { DbAccessor } from "../db-accessor";
-import { checkPermission } from "./policy";
 import { createApiKey, listApiKeys, revokeApiKey, verifyApiKey } from "./api-keys";
+import { checkPermission } from "./policy";
 
 function makeAccessor(): { accessor: DbAccessor; close: () => void } {
 	const db = new Database(":memory:");

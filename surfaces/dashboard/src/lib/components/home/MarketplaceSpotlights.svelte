@@ -1,22 +1,12 @@
 <script lang="ts">
-import type {
-	MarketplaceMcpServer,
-	Skill,
-	SkillAnalyticsSummary,
-	McpAnalyticsSummary,
-} from "$lib/api";
+import { onMount } from "svelte";
+import { SvelteSet } from "svelte/reactivity";
+import type { MarketplaceMcpServer, McpAnalyticsSummary, Skill, SkillAnalyticsSummary } from "$lib/api";
+import { getMarketplaceMcpServers, getMcpAnalytics, getSkillAnalytics, getSkills } from "$lib/api";
 import { getAvatarFromSource, getAvatarUrl, getMonogram, getMonogramBg } from "$lib/card-utils";
-import {
-	getMcpAnalytics,
-	getMarketplaceMcpServers,
-	getSkillAnalytics,
-	getSkills,
-} from "$lib/api";
 import { fetchMarketplaceMcpCatalog, mcpMarket } from "$lib/stores/marketplace-mcp.svelte";
 import { nav } from "$lib/stores/navigation.svelte";
 import { fetchCatalog, sk } from "$lib/stores/skills.svelte";
-import { onMount } from "svelte";
-import { SvelteSet } from "svelte/reactivity";
 
 type SpotlightEntry = {
 	readonly kind: "skill" | "mcp";

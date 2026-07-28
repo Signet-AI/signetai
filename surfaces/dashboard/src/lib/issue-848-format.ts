@@ -29,7 +29,11 @@ export function humanizeConfigKey(key: string): string {
 }
 
 export function normalizeSecretNameInput(value: string): string {
-	return value.trim().replace(/[\s.-]+/g, "_").replace(/[^A-Za-z0-9_]/g, "").replace(/_+/g, "_");
+	return value
+		.trim()
+		.replace(/[\s.-]+/g, "_")
+		.replace(/[^A-Za-z0-9_]/g, "")
+		.replace(/_+/g, "_");
 }
 
 export function validateSecretName(name: string): string | null {

@@ -2,13 +2,13 @@
  * Tests for the analytics collector and timeline builder.
  */
 
-import { describe, it, expect, beforeEach } from "bun:test";
 import { Database } from "bun:sqlite";
+import { beforeEach, describe, expect, it } from "bun:test";
 import { runMigrations } from "../../core/src/migrations";
-import { createAnalyticsCollector, type AnalyticsCollector, type ErrorEntry } from "./analytics";
-import { buildTimeline, type TimelineSources } from "./timeline";
+import { type AnalyticsCollector, createAnalyticsCollector, type ErrorEntry } from "./analytics";
 import type { ReadDb } from "./db-accessor";
 import type { LogEntry } from "./logger";
+import { buildTimeline, type TimelineSources } from "./timeline";
 
 // ---------------------------------------------------------------------------
 // Analytics Collector Tests

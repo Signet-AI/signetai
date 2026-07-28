@@ -1,5 +1,5 @@
 import type { AgentRosterReadPolicy } from "@signet/core";
-import { type ReadDb, prepareTypedStatement } from "./db-accessor";
+import { prepareTypedStatement, type ReadDb } from "./db-accessor";
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 

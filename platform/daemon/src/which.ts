@@ -1,4 +1,4 @@
-import { constants, accessSync, statSync } from "node:fs";
+import { accessSync, constants, statSync } from "node:fs";
 import { isAbsolute, resolve, sep } from "node:path";
 
 const isBun = typeof (globalThis as Record<string, unknown>).Bun !== "undefined";

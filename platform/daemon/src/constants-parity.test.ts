@@ -9,11 +9,7 @@
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import {
-	QUEUE_MAX_DEAD_RATE,
-	QUEUE_MAX_DEPTH,
-	QUEUE_MAX_OLDEST_AGE_SEC,
-} from "./diagnostics";
+import { QUEUE_MAX_DEAD_RATE, QUEUE_MAX_DEPTH, QUEUE_MAX_OLDEST_AGE_SEC } from "./diagnostics";
 
 const RUST_MAIN_RS = join(import.meta.dir, "..", "..", "daemon-rs", "crates", "signet-daemon", "src", "main.rs");
 const rustSource = readFileSync(RUST_MAIN_RS, "utf-8");

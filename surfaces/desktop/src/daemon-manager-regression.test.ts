@@ -196,9 +196,7 @@ describe("DaemonManager dual-mode regressions (#606 / PR #615)", () => {
 		};
 
 		const fs = await import("node:fs");
-		spyOn(fs, "openSync").mockImplementation(
-			(_path: fs.PathLike | number, _flags: fs.OpenMode): number => 99,
-		);
+		spyOn(fs, "openSync").mockImplementation((_path: fs.PathLike | number, _flags: fs.OpenMode): number => 99);
 		spyOn(fs, "existsSync").mockReturnValue(true);
 		spyOn(fs, "mkdirSync").mockReturnValue(undefined);
 

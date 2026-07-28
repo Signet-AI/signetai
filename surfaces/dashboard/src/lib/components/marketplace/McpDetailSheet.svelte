@@ -7,8 +7,8 @@ import { Input } from "$lib/components/ui/input/index.js";
 import * as Select from "$lib/components/ui/select/index.js";
 import * as Sheet from "$lib/components/ui/sheet/index.js";
 import { Textarea } from "$lib/components/ui/textarea/index.js";
-import { toast } from "$lib/stores/toast.svelte";
 import { ChevronDown } from "$lib/icons";
+import { toast } from "$lib/stores/toast.svelte";
 
 interface McpDetailItem {
 	targetId: string;

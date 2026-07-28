@@ -1,4 +1,4 @@
-import { type WriteDb, getDbAccessor } from "./db-accessor";
+import { getDbAccessor, type WriteDb } from "./db-accessor";
 import { logger } from "./logger";
 
 export interface RecallDedupeItem {

@@ -1,5 +1,5 @@
 <script lang="ts">
-import { ChevronLeft, ChevronRight, Database, RefreshCw, Search } from "$lib/icons";
+import { onMount } from "svelte";
 import {
 	type DatabaseSchemaGroup,
 	type DatabaseSchemaResponse,
@@ -10,7 +10,7 @@ import {
 } from "$lib/api";
 import { ScrollArea } from "$lib/components/ui/scroll-area/index.js";
 import * as Table from "$lib/components/ui/table/index.js";
-import { onMount } from "svelte";
+import { ChevronLeft, ChevronRight, Database, RefreshCw, Search } from "$lib/icons";
 
 const GROUP_ORDER: readonly DatabaseSchemaGroup[] = ["core", "provenance", "runtime", "internal", "other"];
 const GROUP_LABELS: Record<DatabaseSchemaGroup, string> = {

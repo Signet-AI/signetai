@@ -84,7 +84,7 @@ export const MODEL_DEFAULTS = {
 } as const satisfies Record<ModelCatalogProvider, string>;
 
 export function modelPresetsForProvider(provider: string): readonly PipelineModelPreset[] {
-	return Object.prototype.hasOwnProperty.call(PIPELINE_MODEL_CATALOG, provider)
+	return Object.hasOwn(PIPELINE_MODEL_CATALOG, provider)
 		? PIPELINE_MODEL_CATALOG[provider as ModelCatalogProvider]
 		: [];
 }

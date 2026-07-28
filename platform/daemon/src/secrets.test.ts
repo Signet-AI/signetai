@@ -8,19 +8,19 @@ import {
 	type BitwardenClient,
 	setBitwardenClientFactoryForTests,
 } from "./bitwarden.js";
-import { SIGNET_SECRETS_PLUGIN_ID, getDefaultPluginHost, resetDefaultPluginHostForTests } from "./plugins/index.js";
+import { getDefaultPluginHost, resetDefaultPluginHostForTests, SIGNET_SECRETS_PLUGIN_ID } from "./plugins/index.js";
 import {
 	deleteSecret,
 	execWithSecrets,
 	getSecret,
 	getSecretExecJob,
 	hasSecret,
+	invalidateSecretsCache,
 	listSecrets,
 	localSecretProvider,
 	putSecret,
 	resetSecretExecJobsForTests,
 	startSecretExecJob,
-	invalidateSecretsCache,
 } from "./secrets.js";
 
 const originalSignetPath = process.env.SIGNET_PATH;

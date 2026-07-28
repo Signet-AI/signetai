@@ -16,9 +16,7 @@ export function readScopedTask(
 		const row = db.prepare(sql).get(taskId) as ScopedTaskRow | null;
 		return row ?? undefined;
 	}
-	const row = db.prepare(`${sql} AND COALESCE(h.agent_id, 'default') = ?`).get(taskId, agentId) as
-		| ScopedTaskRow
-		| null;
+	const row = db.prepare(`${sql} AND COALESCE(h.agent_id, 'default') = ?`).get(taskId, agentId) as ScopedTaskRow | null;
 	return row ?? undefined;
 }
 

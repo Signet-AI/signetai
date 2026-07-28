@@ -15,7 +15,7 @@ import { up as threadHeadsMigration } from "./048-thread-heads";
 import { up as ontologyControlPlaneState } from "./070-ontology-control-plane-state";
 import { up as documentScopeColumns } from "./080-document-scope-columns";
 import { up as memoryLifecycleRepair } from "./083-memory-lifecycle-repair";
-import { MIGRATIONS, hasPendingMigrations, runMigrations } from "./index";
+import { hasPendingMigrations, MIGRATIONS, runMigrations } from "./index";
 
 function createFreshDb(): Database {
 	return new Database(":memory:");

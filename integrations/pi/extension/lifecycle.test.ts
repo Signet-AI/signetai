@@ -3,11 +3,11 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-	type LifecycleDeps,
-	PI_LIFECYCLE_CONFIG,
 	endCurrentSession,
 	endPreviousSession,
 	flushPendingSessionEnds,
+	type LifecycleDeps,
+	PI_LIFECYCLE_CONFIG,
 } from "./src/lifecycle.js";
 import { createSessionState } from "./src/session-state.js";
 

@@ -1,8 +1,8 @@
 import {
+	parseDiscordSettings,
 	type SignetSourceEntry,
 	type SourceFailureState,
 	type SourceProviderKind,
-	parseDiscordSettings,
 } from "@signet/core";
 import { resolveDaemonAgentId } from "./agent-id";
 import { getDbAccessor } from "./db-accessor";
@@ -1026,7 +1026,7 @@ function consumeBlankLine(lines: readonly string[], index: number): number {
 }
 
 function hasOwn(record: Readonly<Record<string, unknown>>, key: string): boolean {
-	return Object.prototype.hasOwnProperty.call(record, key);
+	return Object.hasOwn(record, key);
 }
 
 function mentionArtifact(guild: DiscordGuild, channel: DiscordChannel, msg: DiscordMessage): DiscordArtifact {

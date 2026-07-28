@@ -6,16 +6,16 @@
 import {
 	API_BASE,
 	type CronPreset,
-	type ScheduledTask,
-	type TaskRun,
 	createTask,
 	deleteTask,
 	getTask,
 	getTasks,
+	type ScheduledTask,
+	type TaskRun,
 	triggerTaskRun,
 	updateTask,
 } from "$lib/api";
-import { openAuthEventStream, type AuthEventStream } from "$lib/auth";
+import { type AuthEventStream, openAuthEventStream } from "$lib/auth";
 import { toast } from "$lib/stores/toast.svelte";
 
 export const ts = $state({

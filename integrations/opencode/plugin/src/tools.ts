@@ -13,8 +13,8 @@ import {
 	formatRecallText,
 } from "@signet/core";
 import type { DaemonClient } from "./daemon-client.js";
-import { HARNESS, READ_TIMEOUT, WRITE_TIMEOUT } from "./types.js";
 import type { MemoryRecord } from "./types.js";
+import { HARNESS, READ_TIMEOUT, WRITE_TIMEOUT } from "./types.js";
 
 const DAEMON_OFFLINE_MSG = "Signet daemon not running. Start with: signet daemon start";
 

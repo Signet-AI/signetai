@@ -127,7 +127,7 @@ export function buildGroups(lines: readonly string[]): Map<string, string[]> {
 		if (line.startsWith("chore: release")) continue;
 		const commit = parseCommit(line);
 		if (commit === null) continue;
-		if (!Object.prototype.hasOwnProperty.call(INCLUDE_TYPES, commit.type)) continue;
+		if (!Object.hasOwn(INCLUDE_TYPES, commit.type)) continue;
 
 		const entry = formatEntry(commit);
 		const existing = groups.get(commit.type);

@@ -6,14 +6,14 @@
  */
 
 import { API_BASE, getPipelineStatus } from "$lib/api";
-import { openAuthEventStream, type AuthEventStream } from "$lib/auth";
+import { type AuthEventStream, openAuthEventStream } from "$lib/auth";
 import {
+	createDefaultNodeState,
 	type HealthStatus,
 	type LogEntry,
 	PIPELINE_NODES,
 	type PipelineNodeState,
 	type PipelineStatusResponse,
-	createDefaultNodeState,
 } from "./pipeline-types";
 
 // ---------------------------------------------------------------------------

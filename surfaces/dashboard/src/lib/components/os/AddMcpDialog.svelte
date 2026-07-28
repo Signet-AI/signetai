@@ -1,8 +1,8 @@
 <script lang="ts">
-import { CheckCircle, Loader, X } from "$lib/icons";
-import { installMcp } from "$lib/api";
-import { fetchTrayEntries } from "$lib/stores/os.svelte";
 import { onDestroy } from "svelte";
+import { installMcp } from "$lib/api";
+import { CheckCircle, Loader, X } from "$lib/icons";
+import { fetchTrayEntries } from "$lib/stores/os.svelte";
 
 interface Props {
 	open: boolean;

@@ -3,7 +3,7 @@
  */
 
 import { createRequire } from "node:module";
-import { type ReadDb, type WriteDb, readVecEmbeddingDimensions } from "./db-accessor";
+import { type ReadDb, readVecEmbeddingDimensions, type WriteDb } from "./db-accessor";
 
 // Try to load native Rust implementation, fall back to pure TS
 let native: typeof import("@signet/native") | null = null;

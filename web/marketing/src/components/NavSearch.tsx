@@ -159,7 +159,9 @@ export default function NavSearch() {
 									>
 										<a href={r.item.url} onClick={() => setOpen(false)}>
 											<span className="nav-search-result-title">{r.item.title}</span>
-											<span className="nav-search-result-section">{r.item.sectionTitle || r.item.section || "Docs"}</span>
+											<span className="nav-search-result-section">
+												{r.item.sectionTitle || r.item.section || "Docs"}
+											</span>
 										</a>
 									</div>
 								);

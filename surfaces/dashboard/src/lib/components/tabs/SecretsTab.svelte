@@ -1,7 +1,6 @@
 <script lang="ts">
+import { onMount } from "svelte";
 import {
-	type OnePasswordStatus,
-	type OnePasswordVault,
 	connectOnePassword,
 	deleteSecret,
 	disconnectOnePassword,
@@ -9,6 +8,8 @@ import {
 	getSecrets,
 	importOnePasswordSecrets,
 	listOnePasswordVaults,
+	type OnePasswordStatus,
+	type OnePasswordVault,
 	putSecret,
 } from "$lib/api";
 import { Checkbox } from "$lib/components/ui/checkbox/index.js";
@@ -18,7 +19,6 @@ import { normalizeSecretNameInput, validateSecretName } from "$lib/issue-848-for
 import { returnToSidebar } from "$lib/stores/focus.svelte";
 import { nav } from "$lib/stores/navigation.svelte";
 import { toast } from "$lib/stores/toast.svelte";
-import { onMount } from "svelte";
 
 let secrets = $state<string[]>([]);
 let secretsLoading = $state(false);

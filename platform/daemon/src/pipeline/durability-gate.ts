@@ -39,7 +39,7 @@ const TRANSIENT_PATTERNS: ReadonlyArray<readonly [string, RegExp]> = [
 	// Temporary / runtime filesystem artifacts. Deliberately NOT all paths —
 	// durable config locations ($HOME/.agents, /etc, /usr/local) must survive.
 	["temporary_path", /(^|\s)(\/tmp\/|\/var\/folders\/|\/private\/tmp\/|\/private\/var\/folders\/|\$TMPDIR\/)/],
-	["temporary_path", /\b(runtime|temp|tmp)[\/\\][^\s]*\.(log|pid|tmp|out)\b/i],
+	["temporary_path", /\b(runtime|temp|tmp)[/\\][^\s]*\.(log|pid|tmp|out)\b/i],
 
 	// Queue / process / resource counts (operational state, goes stale fast).
 	[

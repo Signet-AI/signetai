@@ -103,13 +103,13 @@ function listCargoFiles(): string[] {
 function readCargoVersion(filePath: string): string | null {
 	const raw = readFileSync(filePath, "utf8");
 	// Match [package] or [workspace.package] section
-	const match = raw.match(/\[(?:workspace\.)?package\][^\[]*version\s*=\s*"([^"]+)"/s);
+	const match = raw.match(/\[(?:workspace\.)?package\][^[]*version\s*=\s*"([^"]+)"/s);
 	return match ? match[1] : null;
 }
 
 function readCargoPackageName(filePath: string): string | null {
 	const raw = readFileSync(filePath, "utf8");
-	const match = raw.match(/\[package\][^\[]*name\s*=\s*"([^"]+)"/s);
+	const match = raw.match(/\[package\][^[]*name\s*=\s*"([^"]+)"/s);
 	return match ? match[1] : null;
 }
 
@@ -129,7 +129,7 @@ function findNearestWorkspaceVersion(filePath: string): string | null {
 		const cargoFile = join(dir, "Cargo.toml");
 		if (existsSync(cargoFile)) {
 			const raw = readFileSync(cargoFile, "utf8");
-			const match = raw.match(/\[workspace\.package\][^\[]*version\s*=\s*"([^"]+)"/s);
+			const match = raw.match(/\[workspace\.package\][^[]*version\s*=\s*"([^"]+)"/s);
 			if (match) return match[1];
 		}
 		dir = dirname(dir);
@@ -174,7 +174,7 @@ export function collectCargoLockMismatches(cargoFiles: readonly string[], target
 
 function usesWorkspaceVersion(raw: string): boolean {
 	// Only match version.workspace inside [package], not in dependency tables
-	return /\[package\][^\[]*version\.workspace\s*=\s*true/s.test(raw);
+	return /\[package\][^[]*version\.workspace\s*=\s*true/s.test(raw);
 }
 
 function updateCargoVersion(filePath: string, targetVersion: string, checkOnly: boolean): boolean {
@@ -182,7 +182,7 @@ function updateCargoVersion(filePath: string, targetVersion: string, checkOnly: 
 	// Crates that inherit version from workspace root — nothing to update
 	if (usesWorkspaceVersion(raw)) return false;
 	// Match [package] or [workspace.package] section
-	const versionPattern = /(\[(?:workspace\.)?package\][^\[]*version\s*=\s*")([^"]+)(")/s;
+	const versionPattern = /(\[(?:workspace\.)?package\][^[]*version\s*=\s*")([^"]+)(")/s;
 	if (!versionPattern.test(raw)) {
 		throw new Error(`Could not find [package] version in ${filePath}`);
 	}

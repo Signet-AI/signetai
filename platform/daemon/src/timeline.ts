@@ -6,9 +6,9 @@
  * across memory_history, memory_jobs, logger, and error buffer.
  */
 
+import type { ErrorEntry } from "./analytics";
 import type { ReadDb } from "./db-accessor";
 import type { LogEntry } from "./logger";
-import type { ErrorEntry } from "./analytics";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -224,12 +224,8 @@ function predictorToEvents(sessionKey: string, db: ReadDb): TimelineEvent[] {
 
 export interface TimelineSources {
 	readonly db: ReadDb;
-	readonly getRecentLogs: (opts: {
-		limit?: number;
-	}) => readonly LogEntry[];
-	readonly getRecentErrors: (opts?: {
-		limit?: number;
-	}) => readonly ErrorEntry[];
+	readonly getRecentLogs: (opts: { limit?: number }) => readonly LogEntry[];
+	readonly getRecentErrors: (opts?: { limit?: number }) => readonly ErrorEntry[];
 }
 
 export function buildTimeline(sources: TimelineSources, entityId: string): Timeline {

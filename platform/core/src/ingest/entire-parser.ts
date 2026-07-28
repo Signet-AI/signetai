@@ -23,11 +23,11 @@
  *   {"uuid":"...","type":"assistant","message":{"content":[{"type":"text","text":"..."}]},"timestamp":"..."}
  */
 
+import { execFileSync } from "child_process";
 import { existsSync } from "fs";
 import { join } from "path";
-import { execFileSync } from "child_process";
-import type { ParsedDocument, ParsedSection } from "./types";
 import { findGit } from "./git-utils";
+import type { ParsedDocument, ParsedSection } from "./types";
 
 // ---------------------------------------------------------------------------
 // Branch name (matches Entire CLI's paths.MetadataBranchName)

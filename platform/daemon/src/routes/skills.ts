@@ -13,8 +13,8 @@ import {
 	lstatSync,
 	mkdirSync,
 	mkdtempSync,
-	readFileSync,
 	readdirSync,
+	readFileSync,
 	renameSync,
 	rmSync,
 	writeFileSync,
@@ -30,7 +30,7 @@ import type { AuthMode } from "../auth/index.js";
 import { type DbAccessor, getDbAccessor } from "../db-accessor.js";
 import { getLlmProvider } from "../llm.js";
 import { logger } from "../logger.js";
-import { type EmbeddingConfig, type PipelineV2Config, loadMemoryConfig } from "../memory-config.js";
+import { type EmbeddingConfig, loadMemoryConfig, type PipelineV2Config } from "../memory-config.js";
 import type { LlmProvider } from "../pipeline/provider.js";
 import { parseSkillFile, patchSkillFrontmatter } from "../pipeline/skill-frontmatter.js";
 import { installSkillNode, uninstallSkillNode } from "../pipeline/skill-graph.js";
@@ -224,11 +224,7 @@ function inferSkillCategory(input: string): string {
 	return "Other";
 }
 
-function calculateSkillPopularity(input: {
-	installsRaw: number;
-	stars?: number;
-	verified?: boolean;
-}): number {
+function calculateSkillPopularity(input: { installsRaw: number; stars?: number; verified?: boolean }): number {
 	const stars = input.stars ?? 0;
 	const verifiedBoost = input.verified ? 5_000 : 0;
 	return input.installsRaw + stars * 200 + verifiedBoost;

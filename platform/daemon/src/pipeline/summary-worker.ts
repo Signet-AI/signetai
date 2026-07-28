@@ -23,10 +23,10 @@ import { countChanges } from "../db-helpers";
 import { getInferenceProvider } from "../llm";
 import { logger } from "../logger";
 import { inferType, isDuplicate } from "../memory-classification";
-import { type ResolvedMemoryConfig, loadMemoryConfig } from "../memory-config";
+import { loadMemoryConfig, type ResolvedMemoryConfig } from "../memory-config";
 import {
-	IMMUTABLE_ARTIFACT_ERROR_PREFIX,
 	ensureCanonicalManifest,
+	IMMUTABLE_ARTIFACT_ERROR_PREFIX,
 	updateManifest,
 	writeSummaryArtifact,
 } from "../memory-lineage";
@@ -37,12 +37,8 @@ import { upsertThreadHead } from "../thread-heads";
 import { isDurableBoundary, normalizeBoundaryReason } from "./boundary-reason";
 import { addDreamingTokens } from "./dreaming";
 import { enqueueExtractionJobInTx } from "./extraction-queue";
-import {
-	RateLimitExceededError,
-	SemaphoreTimeoutError,
-	awaitSubprocessWithDeadline,
-} from "./provider";
-import { type SignificanceConfig, assessSignificance } from "./significance-gate";
+import { awaitSubprocessWithDeadline, RateLimitExceededError, SemaphoreTimeoutError } from "./provider";
+import { assessSignificance, type SignificanceConfig } from "./significance-gate";
 import { countTokens } from "./tokenizer";
 
 // ---------------------------------------------------------------------------
@@ -1708,10 +1704,7 @@ export function startSummaryWorker(accessor: DbAccessor, options: SummaryWorkerO
 		} catch (e) {
 			const terminal = isTerminalSummaryJobError(e instanceof Error ? e : String(e));
 			const errorMessage = e instanceof Error ? e.message : String(e);
-			if (
-				leasedJob &&
-				(stopped && /aborted|cancelled|canceled/i.test(errorMessage))
-			) {
+			if (leasedJob && stopped && /aborted|cancelled|canceled/i.test(errorMessage)) {
 				restoreUnprocessedSummaryLease(accessor, leasedJob);
 				return;
 			}

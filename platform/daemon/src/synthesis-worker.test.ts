@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Worker } from "node:worker_threads";
 import { findSqliteVecExtension } from "@signet/core";
 import { closeDbAccessor, getDbAccessor, hasDbAccessor, initDbAccessorLite } from "./db-accessor";
-import { type SynthesisRequest, getSynthesisWorker, handleSynthesisRequest, setSynthesisWorker } from "./hooks";
+import { getSynthesisWorker, handleSynthesisRequest, type SynthesisRequest, setSynthesisWorker } from "./hooks";
 
 const AGENTS_DIR = process.env.SIGNET_PATH?.trim() || join(homedir(), ".agents");
 const DB_PATH = join(AGENTS_DIR, "memory", "memories.db");

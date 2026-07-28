@@ -1,8 +1,8 @@
-import { confirm, input } from "@inquirer/prompts";
-import chalk from "chalk";
+import { spawnSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { spawnSync } from "node:child_process";
+import { confirm, input } from "@inquirer/prompts";
+import chalk from "chalk";
 import ora from "ora";
 
 interface Deps {

@@ -188,9 +188,7 @@ describe("Obsidian source embeddings", () => {
 
 		const rows = getDbAccessor().withReadDb(
 			(db) =>
-				db
-					.prepare("SELECT source_type FROM embeddings ORDER BY source_type")
-					.all() as Array<{ source_type: string }>,
+				db.prepare("SELECT source_type FROM embeddings ORDER BY source_type").all() as Array<{ source_type: string }>,
 		);
 		expect(rows.map((row) => row.source_type)).toEqual(["source_chunk"]);
 	});

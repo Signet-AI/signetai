@@ -1,14 +1,14 @@
 <script lang="ts">
-import type { EmbeddingPoint } from "../../api";
 import type { ForceGraph3DInstance, LinkObject, NodeObject } from "3d-force-graph";
+import type { EmbeddingPoint } from "../../api";
 import {
-	GRAPH_K,
-	type NodeColorMode,
-	type RelationKind,
 	buildKnnEdges,
 	edgeColor3D,
 	embeddingLabel,
+	GRAPH_K,
+	type NodeColorMode,
 	nodeColor3D,
+	type RelationKind,
 } from "./embedding-graph";
 
 interface Props {

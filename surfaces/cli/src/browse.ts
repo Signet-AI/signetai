@@ -7,8 +7,8 @@
  * Phase 1a implementation (Buba)
  */
 
-import { Command } from "commander";
 import chalk from "chalk";
+import type { Command } from "commander";
 
 // ============================================================================
 // Types

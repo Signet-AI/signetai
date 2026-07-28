@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 
-import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -96,8 +96,14 @@ function pathMatches(pattern: string, candidate: string): boolean {
 function extractTsRoutes(): Route[] {
 	const files = [
 		join(repoRoot, "platform/daemon/src/daemon.ts"),
-		...listFiles(join(repoRoot, "platform/daemon/src/routes"), (path) => path.endsWith(".ts") && !path.endsWith(".test.ts")),
-		...listFiles(join(repoRoot, "platform/daemon/src/mcp"), (path) => path.endsWith(".ts") && !path.endsWith(".test.ts")),
+		...listFiles(
+			join(repoRoot, "platform/daemon/src/routes"),
+			(path) => path.endsWith(".ts") && !path.endsWith(".test.ts"),
+		),
+		...listFiles(
+			join(repoRoot, "platform/daemon/src/mcp"),
+			(path) => path.endsWith(".ts") && !path.endsWith(".test.ts"),
+		),
 	];
 	const routes = new Map<string, Route>();
 	const routeCall = /\bapp\.(get|post|put|delete|patch|all)\(\s*["`]([^"`]+)["`]/g;
@@ -194,10 +200,12 @@ function extractParityRules(): Set<string> {
 	const rulesPath = join(repoRoot, "platform/daemon-rs/contracts/parity-rules.json");
 	const parsed = JSON.parse(read(rulesPath)) as { rules?: { endpoints?: Record<string, unknown> } };
 	const endpoints = parsed.rules?.endpoints ?? {};
-	return new Set(Object.keys(endpoints).map((key) => {
-		const [method, ...pathParts] = key.split(" ");
-		return routeKey(method, pathParts.join(" "));
-	}));
+	return new Set(
+		Object.keys(endpoints).map((key) => {
+			const [method, ...pathParts] = key.split(" ");
+			return routeKey(method, pathParts.join(" "));
+		}),
+	);
 }
 
 function classify(rustMounted: boolean, contractReplay: boolean, parityRule: boolean): Status {
@@ -240,10 +248,12 @@ function buildManifest(): Manifest {
 		generatedBy: "bun scripts/check-rust-daemon-parity.ts --write",
 		statusLegend: {
 			"native-rust-replay-proven": "Mounted by daemon-rs and exercised by contract_replay.rs.",
-			"native-rust-unit-only": "Mounted by daemon-rs and covered by parity-rules.json, but not yet replayed end to end.",
+			"native-rust-unit-only":
+				"Mounted by daemon-rs and covered by parity-rules.json, but not yet replayed end to end.",
 			"mounted-shallow": "Mounted by daemon-rs without replay evidence or endpoint-specific parity rules.",
 			missing: "Public TypeScript daemon route is not mounted by daemon-rs.",
-			"deprecated-remove-from-ts-too": "Route is intentionally unsupported and must be removed or hidden from both daemons.",
+			"deprecated-remove-from-ts-too":
+				"Route is intentionally unsupported and must be removed or hidden from both daemons.",
 		},
 		summary,
 		routes,

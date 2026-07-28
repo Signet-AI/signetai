@@ -1,7 +1,7 @@
 <script lang="ts">
-import { CheckIcon, MinusIcon } from "$lib/icons";
-import { type WithoutChildrenOrChild, cn } from "$lib/utils.js";
 import { Checkbox as CheckboxPrimitive } from "bits-ui";
+import { CheckIcon, MinusIcon } from "$lib/icons";
+import { cn, type WithoutChildrenOrChild } from "$lib/utils.js";
 
 let {
 	ref = $bindable(null),

@@ -1,5 +1,5 @@
-import { type DaemonState, type RecentMemory, type TrayUpdate, buildTrayUpdate } from "@signet/tray";
-import { BrowserWindow, Menu, type MenuItemConstructorOptions, Tray, app, nativeImage } from "electron";
+import { buildTrayUpdate, type DaemonState, type RecentMemory, type TrayUpdate } from "@signet/tray";
+import { app, BrowserWindow, Menu, type MenuItemConstructorOptions, nativeImage, Tray } from "electron";
 import type { DaemonManager } from "./daemon-manager.js";
 import { iconPath, preloadPath } from "./paths.js";
 

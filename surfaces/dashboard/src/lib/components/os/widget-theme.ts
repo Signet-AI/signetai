@@ -302,8 +302,8 @@ export function buildSrcdoc(html: string, serverId: string): string {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <style>${theme}\n${WIDGET_BASE_CSS}</style>
-<script>${WIDGET_BRIDGE_SCRIPT}<\/script>
-<script>${PAGE_AGENT_SCRIPT}<\/script>
+<script>${WIDGET_BRIDGE_SCRIPT}</script>
+<script>${PAGE_AGENT_SCRIPT}</script>
 </head>
 <body data-server-id="${serverId.replace(/"/g, "&quot;")}">
 ${html}

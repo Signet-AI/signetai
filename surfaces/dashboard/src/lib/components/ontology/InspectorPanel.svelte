@@ -4,7 +4,7 @@ import { Badge } from "$lib/components/ui/badge/index.js";
 import { ScrollArea } from "$lib/components/ui/scroll-area/index.js";
 import { ArrowLeft, CircleDot, Hexagon, Table2, User } from "$lib/icons";
 import { summarizeOntologyText } from "$lib/issue-848-format";
-import { NODE_COLORS, entityNameFromGraph } from "./ontology-data";
+import { entityNameFromGraph, NODE_COLORS } from "./ontology-data";
 import { loadAspectDetail, loadEntityDetail, ontology, selectNode } from "./ontology-state.svelte";
 
 interface Props {

@@ -482,7 +482,7 @@ export function parseRoutingTargetRef(
 	const trimmed = value.trim();
 	const slash = trimmed.indexOf("/");
 	if (slash <= 0 || slash === trimmed.length - 1) {
-		return err("invalid-target-ref", `Invalid target ref \"${value}\". Expected target/model.`);
+		return err("invalid-target-ref", `Invalid target ref "${value}". Expected target/model.`);
 	}
 	return ok({
 		targetId: trimmed.slice(0, slash),
@@ -939,12 +939,22 @@ export function validateRoutingReferences(config: RoutingConfig): readonly Routi
 	};
 	const missingTaskClass = (field: string, ref: string): void => {
 		if (!taskClassIds.has(ref)) {
-			issues.push({ severity: "warning", field, ref, message: `Task class "${ref}" referenced by ${field} does not exist.` });
+			issues.push({
+				severity: "warning",
+				field,
+				ref,
+				message: `Task class "${ref}" referenced by ${field} does not exist.`,
+			});
 		}
 	};
 	const missingAccount = (field: string, ref: string): void => {
 		if (!accountIds.has(ref)) {
-			issues.push({ severity: "warning", field, ref, message: `Account "${ref}" referenced by ${field} does not exist.` });
+			issues.push({
+				severity: "warning",
+				field,
+				ref,
+				message: `Account "${ref}" referenced by ${field} does not exist.`,
+			});
 		}
 	};
 
@@ -1250,7 +1260,7 @@ function orderedPreferenceLists(
 	if (!policy) {
 		return {
 			code: "policy-not-found",
-			message: `Routing policy \"${policyId}\" was not found.`,
+			message: `Routing policy "${policyId}" was not found.`,
 		};
 	}
 

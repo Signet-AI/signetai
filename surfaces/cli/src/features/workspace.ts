@@ -1,12 +1,12 @@
 import { createHash } from "node:crypto";
-import { closeSync, copyFileSync, existsSync, lstatSync, mkdirSync, openSync, readSync, readdirSync } from "node:fs";
+import { closeSync, copyFileSync, existsSync, lstatSync, mkdirSync, openSync, readdirSync, readSync } from "node:fs";
 import { dirname, join, sep } from "node:path";
 import { OpenClawConnector } from "@signet/connector-openclaw";
 import { detectExistingSetup } from "@signet/core";
 import {
-	type WorkspaceResolution,
 	normalizeWorkspacePath,
 	resolveAgentsDir,
+	type WorkspaceResolution,
 	writeConfiguredWorkspacePath,
 } from "../lib/workspace.js";
 

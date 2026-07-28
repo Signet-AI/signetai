@@ -1,12 +1,12 @@
 <script lang="ts">
 import { Folder, FolderOpen, LayoutGrid, Plus, Trash2 } from "$lib/icons";
 import {
-	os,
-	type SidebarGroup,
 	addToGroup,
 	createGroup,
 	deleteGroup,
+	os,
 	renameGroup,
+	type SidebarGroup,
 	setActiveGroup,
 } from "$lib/stores/os.svelte";
 

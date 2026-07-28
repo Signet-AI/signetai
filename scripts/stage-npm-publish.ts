@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 
-import { cpSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 export const NPM_PACKAGE_RENAMES: ReadonlyMap<string, string> = new Map([

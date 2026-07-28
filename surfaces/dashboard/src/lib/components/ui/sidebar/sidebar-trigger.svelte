@@ -1,9 +1,8 @@
 <script lang="ts">
+import type { ComponentProps, Snippet } from "svelte";
 import { Button } from "$lib/components/ui/button/index.js";
-import { cn } from "$lib/utils.js";
 import { PanelLeftIcon } from "$lib/icons";
-import type { ComponentProps } from "svelte";
-import type { Snippet } from "svelte";
+import { cn } from "$lib/utils.js";
 import { useSidebar } from "./context.svelte.js";
 
 let {

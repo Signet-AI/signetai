@@ -13,8 +13,8 @@ import type { DecisionConfig } from "./decision";
 import { type DependencySynthesisHandle, startDependencySynthesisWorker } from "./dependency-synthesis";
 import { type DocumentWorkerHandle, startDocumentWorker } from "./document-worker";
 import type { DreamingWorkerHandle } from "./dreaming-worker";
-import { startExtractionThread } from "./extraction-thread-handle";
 import type { ExtractionThreadOpts } from "./extraction-thread-handle";
+import { startExtractionThread } from "./extraction-thread-handle";
 import type { WorkerInit } from "./extraction-thread-protocol";
 import { type MaintenanceHandle, startMaintenanceWorker } from "./maintenance-worker";
 import { type HintsWorkerHandle, startHintsWorker } from "./prospective-index";
@@ -35,27 +35,26 @@ import {
 	startSummaryWorker,
 } from "./summary-worker";
 import { type SynthesisWorkerHandle, startSynthesisWorker } from "./synthesis-worker";
-import { type WorkerHandle, type WorkerProgressStats, type WorkerStats, startWorker } from "./worker";
+import { startWorker, type WorkerHandle, type WorkerProgressStats, type WorkerStats } from "./worker";
 
-export { enqueueExtractionJob } from "./extraction-queue";
-export type { WorkerStats } from "./worker";
-export { enqueueDocumentIngestJob } from "./document-worker";
-export {
-	startRetentionWorker,
-	DEFAULT_RETENTION,
-} from "./retention-worker";
-export type { WorkerHandle } from "./worker";
-export type { DocumentWorkerHandle } from "./document-worker";
-export type { LlmProvider } from "./provider";
 export { getLlmProvider } from "../llm";
-export type { RetentionHandle, RetentionConfig } from "./retention-worker";
-export type { MaintenanceHandle } from "./maintenance-worker";
-export { startSummaryWorker, enqueueSummaryJob } from "./summary-worker";
-export type { SummaryWorkerHandle } from "./summary-worker";
-export { startSynthesisWorker, readLastSynthesisTime } from "./synthesis-worker";
-export type { SynthesisWorkerHandle } from "./synthesis-worker";
-export { addDreamingTokens, getDreamingState, getDreamingPasses, recordDreamingFailure } from "./dreaming";
+export type { DocumentWorkerHandle } from "./document-worker";
+export { enqueueDocumentIngestJob } from "./document-worker";
+export { addDreamingTokens, getDreamingPasses, getDreamingState, recordDreamingFailure } from "./dreaming";
 export type { DreamingWorkerHandle } from "./dreaming-worker";
+export { enqueueExtractionJob } from "./extraction-queue";
+export type { MaintenanceHandle } from "./maintenance-worker";
+export type { LlmProvider } from "./provider";
+export type { RetentionConfig, RetentionHandle } from "./retention-worker";
+export {
+	DEFAULT_RETENTION,
+	startRetentionWorker,
+} from "./retention-worker";
+export type { SummaryWorkerHandle } from "./summary-worker";
+export { enqueueSummaryJob, startSummaryWorker } from "./summary-worker";
+export type { SynthesisWorkerHandle } from "./synthesis-worker";
+export { readLastSynthesisTime, startSynthesisWorker } from "./synthesis-worker";
+export type { WorkerHandle, WorkerStats } from "./worker";
 
 /** Get the active synthesis worker handle (for API routes). */
 export function getSynthesisWorker(): SynthesisWorkerHandle | null {

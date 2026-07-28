@@ -15,12 +15,12 @@
  * attempts must succeed). This accounts for LLM output variability.
  */
 
-import { describe, test, expect, beforeAll } from "bun:test";
+import { beforeAll, describe, expect, test } from "bun:test";
 import {
-	SMALL_TRANSCRIPT,
-	MEDIUM_TRANSCRIPT,
 	LARGE_TRANSCRIPT,
+	MEDIUM_TRANSCRIPT,
 	MINIMAL_TRANSCRIPT,
+	SMALL_TRANSCRIPT,
 	UNICODE_TRANSCRIPT,
 } from "./fixtures/transcripts";
 

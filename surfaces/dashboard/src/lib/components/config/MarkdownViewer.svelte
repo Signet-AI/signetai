@@ -1,8 +1,8 @@
 <script lang="ts">
-import { Eye, Pencil } from "$lib/icons";
+import { marked } from "marked";
 import CodeEditor from "$lib/components/CodeEditor.svelte";
 import { Button } from "$lib/components/ui/button/index.js";
-import { marked } from "marked";
+import { Eye, Pencil } from "$lib/icons";
 
 interface Props {
 	content: string;

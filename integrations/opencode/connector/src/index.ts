@@ -23,21 +23,21 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { homedir } from "node:os";
 import { join, relative } from "node:path";
 import {
-	BaseConnector,
-	type InstallResult,
-	type UninstallResult,
 	atomicWriteJson,
 	atomicWriteText,
+	BaseConnector,
+	type InstallResult,
 	isSignetGeneratedFile,
 	resolveSignetMcpCommand,
+	type UninstallResult,
 } from "@signet/connector-base";
 import { parseLenientJsonObject } from "@signet/connector-base/lenient-json";
 import {
-	OPENCODE_PIPELINE_AGENT,
-	OPENCODE_PIPELINE_SYSTEM_PROMPT,
 	expandHome,
 	hasValidIdentity,
 	loadIdentityMode,
+	OPENCODE_PIPELINE_AGENT,
+	OPENCODE_PIPELINE_SYSTEM_PROMPT,
 	resolveSignetDaemonUrl,
 } from "@signet/core";
 import { applyEdits, modify } from "jsonc-parser/lib/esm/main.js";

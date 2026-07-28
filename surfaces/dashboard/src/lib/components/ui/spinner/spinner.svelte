@@ -1,7 +1,7 @@
 <script lang="ts">
-import { cn } from "$lib/utils.js";
-import { Loader2Icon } from "$lib/icons";
 import type { ComponentProps } from "svelte";
+import { Loader2Icon } from "$lib/icons";
+import { cn } from "$lib/utils.js";
 
 let { class: className, ...restProps }: ComponentProps<typeof Loader2Icon> = $props();
 </script>

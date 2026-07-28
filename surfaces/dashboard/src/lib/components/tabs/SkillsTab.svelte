@@ -1,15 +1,14 @@
 <script lang="ts">
+import { onMount } from "svelte";
 import type { SkillSearchResult } from "$lib/api";
+import { getFeaturedOfficialSkills, omitFeaturedSkills } from "$lib/components/skills/featured-skills";
 import SkillDetail from "$lib/components/skills/SkillDetail.svelte";
 import SkillGrid from "$lib/components/skills/SkillGrid.svelte";
 import SkillsComparePanel from "$lib/components/skills/SkillsComparePanel.svelte";
-import { getFeaturedOfficialSkills, omitFeaturedSkills } from "$lib/components/skills/featured-skills";
 import * as Select from "$lib/components/ui/select/index.js";
 import * as Tabs from "$lib/components/ui/tabs/index.js";
 import { skillIdentityKey } from "$lib/skills/skill-identity";
 import {
-	type ProviderFilter,
-	type SkillsView,
 	clearCompare,
 	closeDetail,
 	doInstall,
@@ -19,21 +18,18 @@ import {
 	getFilteredCatalog,
 	getFilteredResults,
 	openDetail,
+	type ProviderFilter,
 	resetFilters,
+	type SkillsView,
 	setQuery,
 	sk,
 	toggleCompare,
 } from "$lib/stores/skills.svelte";
-import { onMount } from "svelte";
 
 interface Props {
 	embedded?: boolean;
 	showViewTabs?: boolean;
-	onreviewrequest?: (payload: {
-		targetType: "skill";
-		targetId: string;
-		targetLabel: string;
-	}) => void | Promise<void>;
+	onreviewrequest?: (payload: { targetType: "skill"; targetId: string; targetLabel: string }) => void | Promise<void>;
 }
 
 const { embedded = false, showViewTabs = true, onreviewrequest }: Props = $props();

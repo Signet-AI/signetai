@@ -18,9 +18,9 @@
  */
 
 import type { LlmProvider } from "../types";
-import type { ChunkResult, ExtractionResult } from "./types";
 import type { ExtractionOptions } from "./extractor";
-import { parseExtractionResponse as sharedParseExtractionResponse, type ParseOptions } from "./response-parser";
+import { type ParseOptions, parseExtractionResponse as sharedParseExtractionResponse } from "./response-parser";
+import type { ChunkResult, ExtractionResult } from "./types";
 
 // ---------------------------------------------------------------------------
 // Configuration

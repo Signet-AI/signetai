@@ -147,8 +147,10 @@ describe("Docker build pipeline regression guard", () => {
 
 	it("fails stable Docker release CI when GHCR latest is not publicly pullable", () => {
 		expect(dockerImageWorkflow).toContain("Verify public GHCR latest pull");
-		expect(dockerImageWorkflow).toContain('if: ${{ !contains(github.ref_name, \'-\') }}');
-		expect(dockerImageWorkflow).toContain("DOCKER_CONFIG=\"${tmp_config}\" docker manifest inspect ghcr.io/signet-ai/signet:latest");
+		expect(dockerImageWorkflow).toContain("if: ${{ !contains(github.ref_name, '-') }}");
+		expect(dockerImageWorkflow).toContain(
+			'DOCKER_CONFIG="${tmp_config}" docker manifest inspect ghcr.io/signet-ai/signet:latest',
+		);
 		expect(dockerImageWorkflow).toContain("is not publicly pullable");
 	});
 });

@@ -8,23 +8,30 @@ import "./bun-socket-polyfill";
 import type { ChildProcess } from "node:child_process";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
-import { realpathSync } from "node:fs";
-import { readFile as readFileAsync, unlink as unlinkAsync } from "node:fs/promises";
-import { readdir } from "node:fs/promises";
+import {
+	copyFileSync,
+	existsSync,
+	mkdirSync,
+	readFileSync,
+	realpathSync,
+	statSync,
+	unlinkSync,
+	writeFileSync,
+} from "node:fs";
+import { readdir, readFile as readFileAsync, unlink as unlinkAsync } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Worker } from "node:worker_threads";
 import {
 	type AgentDefinition,
-	type PipelineSynthesisConfig,
 	buildArchitectureDoc,
 	identityModeManagesFiles,
 	loadConfiguredHarnesses,
 	loadIdentityMode,
 	loadSourcesConfig,
 	normalizeAgentRosterEntry,
+	type PipelineSynthesisConfig,
 	parseRoutingTargetRef,
 	parseSimpleYaml,
 	resolveDefaultBasePath,
@@ -45,12 +52,17 @@ import { type EmbeddingTrackerHandle, startEmbeddingTracker } from "./embedding-
 import { firstCandidateBlockedBy } from "./extraction-status";
 import { initFeatureFlags } from "./feature-flags";
 import { writeFileIfChangedAsync } from "./file-sync";
+import {
+	getSynthesisWorker as getSynthesisRenderWorker,
+	setSynthesisWorker as setSynthesisRenderWorker,
+} from "./hooks";
 import { createSignetHttpServer } from "./http-server";
 import { syncAgentWorkspaces } from "./identity-sync";
-import { type InferenceStatusSummary, getOrCreateInferenceRouter } from "./inference-router.js";
+import { getOrCreateInferenceRouter, type InferenceStatusSummary } from "./inference-router.js";
 import { closeInferenceProviderResolver, getInferenceProvider, initInferenceProviderResolver } from "./llm";
 import { logger } from "./logger";
-import { type ResolvedMemoryConfig, loadMemoryConfig, shouldWarnGraphExtractionWritesDisabled } from "./memory-config";
+import { mountMcpRoute } from "./mcp";
+import { loadMemoryConfig, type ResolvedMemoryConfig, shouldWarnGraphExtractionWritesDisabled } from "./memory-config";
 import { registerGlobalMiddleware } from "./middleware";
 import {
 	type NativeMemoryBridgeHandle,
@@ -75,59 +87,6 @@ import { configureLlmConcurrency } from "./pipeline/provider";
 import { startReconciler } from "./pipeline/skill-reconciler";
 import { type RepairContext, structuralBackfill } from "./repair-actions";
 import { logFdSnapshot, startEventLoopMonitor, startFdPollMonitor, stopResourceMonitors } from "./resource-monitor";
-import {
-	AGENTS_DIR,
-	BIND_HOST,
-	CURRENT_VERSION,
-	DAEMON_DIR,
-	HOST,
-	INTERNAL_SELF_HOST,
-	LOG_DIR,
-	MEMORY_DB,
-	PID_FILE,
-	PORT,
-	type RuntimeProviderName,
-	type RuntimeSynthesisProviderName,
-	analyticsCollector,
-	authConfig,
-	bindAbort,
-	invalidateDiagnosticsCache,
-	providerRuntimeResolution,
-	providerTracker,
-	readEnvTrimmed,
-	reloadAuthState,
-	repairLimiter,
-	setCheckpointPruneTimer,
-	setEmbeddingTrackerHandle,
-	setHeartbeatTimer,
-	setRestartPipelineRuntime,
-	setShuttingDown,
-	setTelemetryRef,
-	embeddingTrackerHandle as sharedEmbeddingTrackerHandle,
-	shuttingDown,
-} from "./routes/state.js";
-import { startSchedulerWorker } from "./scheduler";
-import { getSecret } from "./secrets.js";
-import { flushPendingCheckpoints, initCheckpointFlush, pruneCheckpoints } from "./session-checkpoints";
-import { releaseAllSessions, startSessionCleanup, stopSessionCleanup } from "./session-tracker";
-import { createSingleFlightRunner } from "./single-flight-runner";
-import {
-	beginSourceIndexJob,
-	clearSourceIndexInFlight,
-	completeSourceIndexJobFromProgress,
-	failSourceIndexJob,
-	markSourceIndexInFlight,
-	markSourceIndexJobRunning,
-	updateSourceIndexJobProgress,
-} from "./source-index-progress";
-import { type TelemetryCollector, createTelemetryCollector } from "./telemetry";
-import { type TranscriptCaptureWorkerHandle, startTranscriptCaptureWorker } from "./transcript-capture-worker";
-
-import {
-	getSynthesisWorker as getSynthesisRenderWorker,
-	setSynthesisWorker as setSynthesisRenderWorker,
-} from "./hooks";
-import { mountMcpRoute } from "./mcp";
 import { mountAppTrayRoutes } from "./routes/app-tray.js";
 import { registerAuthRoutes } from "./routes/auth-routes.js";
 import { mountChangelogRoutes } from "./routes/changelog.js";
@@ -151,8 +110,8 @@ import { mountHealthRoutes } from "./routes/health.js";
 import { registerHooksRoutes } from "./routes/hooks-routes.js";
 import { mountInferenceRoutes } from "./routes/inference.js";
 import { registerKnowledgeRoutes } from "./routes/knowledge-routes.js";
-import { mountMarketplaceReviewsRoutes } from "./routes/marketplace-reviews.js";
 import { mountMarketplaceRoutes } from "./routes/marketplace.js";
+import { mountMarketplaceReviewsRoutes } from "./routes/marketplace-reviews.js";
 import { mountMcpAnalyticsRoutes } from "./routes/mcp-analytics.js";
 import { registerMemoryRoutes } from "./routes/memory-routes.js";
 import { registerMiscRoutes } from "./routes/misc-routes.js";
@@ -169,10 +128,57 @@ import { registerSessionRoutes } from "./routes/session-routes.js";
 import { mountSkillAnalyticsRoutes } from "./routes/skill-analytics.js";
 import { mountSkillsRoutes, setFetchEmbedding } from "./routes/skills.js";
 import { registerSourcesRoutes } from "./routes/sources-routes.js";
+import {
+	AGENTS_DIR,
+	analyticsCollector,
+	authConfig,
+	BIND_HOST,
+	bindAbort,
+	CURRENT_VERSION,
+	DAEMON_DIR,
+	HOST,
+	INTERNAL_SELF_HOST,
+	invalidateDiagnosticsCache,
+	LOG_DIR,
+	MEMORY_DB,
+	PID_FILE,
+	PORT,
+	providerRuntimeResolution,
+	providerTracker,
+	type RuntimeProviderName,
+	type RuntimeSynthesisProviderName,
+	readEnvTrimmed,
+	reloadAuthState,
+	repairLimiter,
+	setCheckpointPruneTimer,
+	setEmbeddingTrackerHandle,
+	setHeartbeatTimer,
+	setRestartPipelineRuntime,
+	setShuttingDown,
+	setTelemetryRef,
+	embeddingTrackerHandle as sharedEmbeddingTrackerHandle,
+	shuttingDown,
+} from "./routes/state.js";
 import { registerTelemetryRoutes } from "./routes/telemetry-routes.js";
 import { checkEmbeddingProvider } from "./routes/utils.js";
 import { mountWidgetRoutes } from "./routes/widget.js";
+import { startSchedulerWorker } from "./scheduler";
+import { getSecret } from "./secrets.js";
+import { flushPendingCheckpoints, initCheckpointFlush, pruneCheckpoints } from "./session-checkpoints";
+import { releaseAllSessions, startSessionCleanup, stopSessionCleanup } from "./session-tracker";
+import { createSingleFlightRunner } from "./single-flight-runner";
+import {
+	beginSourceIndexJob,
+	clearSourceIndexInFlight,
+	completeSourceIndexJobFromProgress,
+	failSourceIndexJob,
+	markSourceIndexInFlight,
+	markSourceIndexJobRunning,
+	updateSourceIndexJobProgress,
+} from "./source-index-progress";
 import { isReadyResponse } from "./synthesis-worker-protocol";
+import { createTelemetryCollector, type TelemetryCollector } from "./telemetry";
+import { startTranscriptCaptureWorker, type TranscriptCaptureWorkerHandle } from "./transcript-capture-worker";
 import { initUpdateSystem, startUpdateTimer, stopUpdateTimer } from "./update-system";
 import { createAgentsWatcherIgnoreMatcher } from "./watcher-ignore";
 

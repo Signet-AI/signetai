@@ -162,7 +162,9 @@ describe("InferenceRouter legacy API credentials", () => {
 				if (url.endsWith("/models")) {
 					return Promise.resolve(new Response(JSON.stringify({ data: [] }), { status: 200 }));
 				}
-				return Promise.resolve(openAiSseResponse("aggregate recall answer", { prompt_tokens: 3, completion_tokens: 4 }));
+				return Promise.resolve(
+					openAiSseResponse("aggregate recall answer", { prompt_tokens: 3, completion_tokens: 4 }),
+				);
 			}) as unknown as typeof fetch;
 
 			const router = getOrCreateInferenceRouter(dir);
@@ -214,7 +216,9 @@ describe("InferenceRouter legacy API credentials", () => {
 				if (url.endsWith("/models")) {
 					return Promise.resolve(new Response(JSON.stringify({ data: [] }), { status: 200 }));
 				}
-				return Promise.resolve(openAiSseResponse("compatible gateway answer", { prompt_tokens: 5, completion_tokens: 6 }));
+				return Promise.resolve(
+					openAiSseResponse("compatible gateway answer", { prompt_tokens: 5, completion_tokens: 6 }),
+				);
 			}) as unknown as typeof fetch;
 
 			const router = getOrCreateInferenceRouter(dir);
@@ -270,7 +274,9 @@ describe("InferenceRouter legacy API credentials", () => {
 				if (url.endsWith("/models")) {
 					return Promise.resolve(new Response(JSON.stringify({ data: [] }), { status: 200 }));
 				}
-				return Promise.resolve(openAiSseResponse("local compatible answer", { prompt_tokens: 7, completion_tokens: 8 }));
+				return Promise.resolve(
+					openAiSseResponse("local compatible answer", { prompt_tokens: 7, completion_tokens: 8 }),
+				);
 			}) as unknown as typeof fetch;
 
 			const router = getOrCreateInferenceRouter(dir);
@@ -326,7 +332,9 @@ describe("InferenceRouter legacy API credentials", () => {
 					return Promise.resolve(new Response(JSON.stringify({ data: [] }), { status: 200 }));
 				}
 				if (url === "http://127.0.0.1:8080/v1/chat/completions" && typeof init?.body === "string") {
-					return Promise.resolve(openAiSseResponse("local fallback answer", { prompt_tokens: 9, completion_tokens: 10 }));
+					return Promise.resolve(
+						openAiSseResponse("local fallback answer", { prompt_tokens: 9, completion_tokens: 10 }),
+					);
 				}
 				return Promise.resolve(new Response("unexpected fetch", { status: 500 }));
 			}) as unknown as typeof fetch;
@@ -729,9 +737,9 @@ describe("InferenceRouter background quiescence", () => {
 				timedOut: false,
 			});
 			expect((await active).ok).toBe(false);
-			expect((await router.execute({ operation: "memory_extraction", promptPreview: "blocked" }, "Must not start")).ok).toBe(
-				false,
-			);
+			expect(
+				(await router.execute({ operation: "memory_extraction", promptPreview: "blocked" }, "Must not start")).ok,
+			).toBe(false);
 			expect(chatRequests).toBe(1);
 
 			completeChat = true;

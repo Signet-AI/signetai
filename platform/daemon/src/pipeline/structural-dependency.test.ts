@@ -20,7 +20,7 @@ import { DEPENDENCY_TYPES } from "@signet/core";
 // Uses the actual pipeline parsing — validates that stripFences handles
 // verbose model output (unfenced JSON arrays, explanation-then-JSON, etc.)
 import { stripFences, tryParseJson } from "./extraction";
-import { DEP_DESCRIPTIONS, buildDependencyPrompt } from "./structural-dependency";
+import { buildDependencyPrompt, DEP_DESCRIPTIONS } from "./structural-dependency";
 
 // ---------------------------------------------------------------------------
 // Ollama helper

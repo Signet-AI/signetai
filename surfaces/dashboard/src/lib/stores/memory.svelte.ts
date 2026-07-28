@@ -5,10 +5,10 @@
  */
 
 import {
-	type Memory,
 	deleteMemory,
 	getDistinctWho,
 	getSimilarMemories,
+	type Memory,
 	recallMemories,
 	searchMemories,
 	updateMemory,

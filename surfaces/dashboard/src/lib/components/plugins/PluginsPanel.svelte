@@ -1,5 +1,5 @@
 <script lang="ts">
-import { ChevronDown, RefreshCw } from "$lib/icons";
+import { onMount } from "svelte";
 import type {
 	PluginCommandSummary,
 	PluginConnectorSummary,
@@ -12,17 +12,17 @@ import type {
 	PluginToolSummary,
 } from "$lib/api";
 import {
-	type GraphiqStatus,
 	installGraphiq as apiInstallGraphiq,
 	uninstallGraphiq as apiUninstallGraphiq,
 	updateGraphiq as apiUpdateGraphiq,
+	type GraphiqStatus,
 	getGraphiqStatus,
 	indexProjectWithGraphiq,
 } from "$lib/api";
 import { Button } from "$lib/components/ui/button/index.js";
+import { ChevronDown, RefreshCw } from "$lib/icons";
 import { clampPage } from "$lib/stores/plugin-pagination";
 import {
-	SIGNET_SECRETS_PLUGIN_ID,
 	formatPluginState,
 	getSelectedPlugin,
 	loadPluginAuditEvents,
@@ -30,10 +30,10 @@ import {
 	loadPlugins,
 	loadSelectedPluginDetails,
 	pluginsStore,
+	SIGNET_SECRETS_PLUGIN_ID,
 	selectPlugin,
 	togglePlugin,
 } from "$lib/stores/plugins.svelte";
-import { onMount } from "svelte";
 
 const SIGNET_GRAPHIQ_PLUGIN_ID = "signet.graphiq";
 

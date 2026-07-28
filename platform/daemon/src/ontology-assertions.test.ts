@@ -5,12 +5,12 @@ import { join } from "node:path";
 import { Hono } from "hono";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import {
-	OntologyAssertionError,
 	archiveEpistemicAssertion,
 	createEpistemicAssertion,
 	getEpistemicAssertion,
 	linkEpistemicAssertionClaim,
 	listEpistemicAssertions,
+	OntologyAssertionError,
 	supersedeEpistemicAssertion,
 } from "./ontology-assertions";
 import { registerOntologyRoutes } from "./routes/ontology-routes";

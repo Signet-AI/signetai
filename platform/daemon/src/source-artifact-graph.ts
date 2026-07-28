@@ -111,7 +111,7 @@ function safeDecodeURIComponent(value: string): string {
 
 function displayNameFromPath(path: string): string {
 	const clean = canonicalSegment(path);
-	const tail = clean.split(/[\/#]/).filter(Boolean).at(-1);
+	const tail = clean.split(/[/#]/).filter(Boolean).at(-1);
 	return tail ? safeDecodeURIComponent(tail).replace(/\.[a-z0-9]+$/i, "") : path;
 }
 

@@ -1,5 +1,5 @@
 <script lang="ts">
-import { loginWithPassword, type AuthProviderInfo } from "$lib/api";
+import { type AuthProviderInfo, loginWithPassword } from "$lib/api";
 import { setDashboardAuthToken } from "$lib/auth";
 
 interface Props {

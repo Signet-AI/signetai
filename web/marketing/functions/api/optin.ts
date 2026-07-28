@@ -76,10 +76,10 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
 		// Create/update contact in GoHighLevel (v2 API)
 		if (!context.env.GHL_API_KEY || !context.env.GHL_LOCATION_ID) {
 			console.error("Missing GHL_API_KEY or GHL_LOCATION_ID");
-			return new Response(
-				JSON.stringify({ error: "Server misconfigured", detail: "Missing GHL credentials" }),
-				{ status: 500, headers },
-			);
+			return new Response(JSON.stringify({ error: "Server misconfigured", detail: "Missing GHL credentials" }), {
+				status: 500,
+				headers,
+			});
 		}
 
 		const ghlRes = await fetch("https://services.leadconnectorhq.com/contacts/upsert", {
@@ -97,19 +97,14 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
 				...(phoneDigits ? { phone: `+1${phoneDigits}` } : {}),
 				tags: ["signet new lead"],
 				source: "signetai.sh",
-				customFields: [
-					{ key: "newsletter_optin", field_value: optin ? "yes" : "no" },
-				],
+				customFields: [{ key: "newsletter_optin", field_value: optin ? "yes" : "no" }],
 			}),
 		});
 
 		if (!ghlRes.ok) {
 			const err = await ghlRes.text();
 			console.error("GHL error:", ghlRes.status, err);
-			return new Response(
-				JSON.stringify({ error: "Signup failed", detail: err }),
-				{ status: 502, headers },
-			);
+			return new Response(JSON.stringify({ error: "Signup failed", detail: err }), { status: 502, headers });
 		}
 
 		return new Response(JSON.stringify({ ok: true }), { status: 200, headers });

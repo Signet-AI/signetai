@@ -11,10 +11,10 @@
  * Produces a ParsedDocument with sections grouped by conversation thread/time.
  */
 
-import { existsSync, readFileSync, readdirSync, statSync } from "fs";
-import { join, basename, extname } from "path";
-import type { ParsedDocument, ParsedSection } from "./types";
+import { existsSync, readdirSync, readFileSync, statSync } from "fs";
+import { basename, extname, join } from "path";
 import { batchByTimeGap } from "./chat-utils";
+import type { ParsedDocument, ParsedSection } from "./types";
 
 // ---------------------------------------------------------------------------
 // DiscordChatExporter JSON types
@@ -401,7 +401,7 @@ function threadToSection(thread: ConversationThread, channelName: string): Parse
 	for (const msg of thread.messages) {
 		const speaker = msg.author.nickname || msg.author.name;
 		const timestamp = msg.timestamp.slice(0, 16).replace("T", " ");
-		let text = msg.content;
+		const text = msg.content;
 
 		// Include reply context
 		if (msg.reference?.messageId) {

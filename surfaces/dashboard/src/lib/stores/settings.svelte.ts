@@ -1,6 +1,6 @@
+import { parse, stringify } from "yaml";
 import { type ConfigFile, saveConfigFileResult } from "$lib/api";
 import { toast } from "$lib/stores/toast.svelte";
-import { parse, stringify } from "yaml";
 
 export const KNOWN_HARNESSES = ["claude-code", "codex", "openclaw", "opencode"];
 

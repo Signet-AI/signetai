@@ -3,15 +3,15 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-	SIGNET_SECRETS_PLUGIN_ID,
-	type SetupDetection,
 	detectExistingSetup,
 	readGraphiqState,
+	type SetupDetection,
+	SIGNET_SECRETS_PLUGIN_ID,
 	updateGraphiqActiveProject,
 } from "@signet/core";
+import { setupWizard } from "./setup.js";
 import { detectedHarnessesForExistingSetup, runExistingSetupWizard } from "./setup-migrate.js";
 import type { SetupDeps } from "./setup-types.js";
-import { setupWizard } from "./setup.js";
 
 const NO_HARNESSES = {
 	claudeCode: false,

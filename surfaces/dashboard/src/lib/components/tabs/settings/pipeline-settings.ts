@@ -1,8 +1,8 @@
 import {
 	DEFAULT_PIPELINE_TIMEOUT_MS,
-	type PipelineProviderChoice,
 	defaultPipelineModel,
 	isPipelineProvider,
+	type PipelineProviderChoice,
 } from "@signet/core/pipeline-providers";
 
 export const DEFAULT_OPENAI_COMPATIBLE_ENDPOINT = "http://127.0.0.1:1234/v1";

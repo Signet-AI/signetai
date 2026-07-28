@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import type { WorkerOptions } from "node:worker_threads";
 import {
+	createEmbeddingWorkerHandle,
 	type EmbeddingWorkerFactory,
 	type EmbeddingWorkerLike,
-	createEmbeddingWorkerHandle,
 } from "./embedding-worker-handle";
 import type { EmbeddingWorkerInit, MainToWorkerMessage, WorkerToMainMessage } from "./embedding-worker-protocol";
 

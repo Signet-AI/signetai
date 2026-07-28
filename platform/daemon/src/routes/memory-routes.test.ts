@@ -28,11 +28,11 @@ describe("writeCodexNativeNote", () => {
 
 		const first = writeCodexNativeNote(
 			{ content: "first durable note", title: "Collision", tags: "codex" },
-			{ now, uniqueSuffix: () => `retry-${(suffix += 1).toString()}` },
+			{ now, uniqueSuffix: () => `retry-${((suffix += 1)).toString()}` },
 		);
 		const second = writeCodexNativeNote(
 			{ content: "second durable note", title: "Collision", tags: "codex" },
-			{ now, uniqueSuffix: () => `retry-${(suffix += 1).toString()}` },
+			{ now, uniqueSuffix: () => `retry-${((suffix += 1)).toString()}` },
 		);
 
 		expect(first).not.toBe(second);

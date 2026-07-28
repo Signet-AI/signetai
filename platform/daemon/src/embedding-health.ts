@@ -6,7 +6,7 @@
  * All functions accept a ReadDb and return plain data structs.
  */
 
-import { type ReadDb, type VectorRuntimeStatus, getVectorRuntimeStatus } from "./db-accessor";
+import { getVectorRuntimeStatus, type ReadDb, type VectorRuntimeStatus } from "./db-accessor";
 import type { EmbeddingConfig } from "./memory-config";
 
 // ---------------------------------------------------------------------------
