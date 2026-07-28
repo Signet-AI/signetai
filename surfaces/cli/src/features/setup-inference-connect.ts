@@ -14,7 +14,7 @@
  *  - daemon `inference-oauth.secretName` (SIGNET_OAUTH_<hex>) and `secrets.putSecret`
  */
 import { getModels, getProviders } from "@earendil-works/pi-ai";
-import { getOAuthProviders } from "@earendil-works/pi-ai/oauth";
+import { type OAuthCredentials, getOAuthProvider, getOAuthProviders } from "@earendil-works/pi-ai/oauth";
 
 export interface ProviderOption {
 	readonly id: string;
@@ -53,10 +53,17 @@ export function apiKeyProviderOptions(): ProviderOption[] {
 
 /**
  * The real model list for a provider family — from pi-ai's model registry, the
- * same data the dashboard's model picker uses. Never a guess.
+ * same data the dashboard's model picker uses. When OAuth credentials are
+ * supplied, the provider's modifyModels() is applied (e.g. GitHub Copilot
+ * adjusts its model set based on the authenticated account). Never a guess.
  */
-export function modelOptions(family: string): ProviderOption[] {
-	return getModels(family).map((m) => ({ id: m.id, name: m.name || m.id }));
+export function modelOptions(family: string, credentials?: OAuthCredentials): ProviderOption[] {
+	let models = getModels(family);
+	if (credentials) {
+		const provider = getOAuthProvider(family);
+		if (provider?.modifyModels) models = provider.modifyModels(models, credentials);
+	}
+	return models.map((m) => ({ id: m.id, name: m.name || m.id }));
 }
 
 /** All connectable provider ids (OAuth + API-key families). */

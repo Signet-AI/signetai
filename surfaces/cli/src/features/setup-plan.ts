@@ -214,7 +214,7 @@ export interface SetupApplyContext {
 	/** Run the provider connect (API-key entry / OAuth) against the now-running
 	 * daemon. Provided by the interactive wizard; undefined for headless plans
 	 * (the provider is connected later via the dashboard). */
-	readonly connectExtraction?: (family: string, method: "api" | "oauth") => Promise<boolean>;
+	readonly connectExtraction?: () => Promise<boolean>;
 }
 
 /**

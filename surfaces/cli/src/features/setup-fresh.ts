@@ -400,7 +400,7 @@ export async function runFreshSetup(plan: SetupPlan, context: SetupApplyContext,
 		// daemon owns the secrets store + OAuth endpoints, like the dashboard).
 		if (plan.extractionConnect && context.connectExtraction && !remoteDaemon) {
 			spinner.text = `Connecting ${plan.extractionConnect.family}...`;
-			const ok = await context.connectExtraction(plan.extractionConnect.family, plan.extractionConnect.connectMethod);
+			const ok = await context.connectExtraction();
 			if (ok) {
 				console.log(chalk.green(`  ✓ Connected ${plan.extractionConnect.family}`));
 			} else {

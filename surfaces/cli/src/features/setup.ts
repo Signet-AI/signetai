@@ -24,8 +24,8 @@ import ora from "ora";
 import { validateName } from "../commands/agent.js";
 import { createDaemonClient } from "../lib/daemon.js";
 import { installGraphiqPlugin } from "./graphiq.js";
-import { connectApiKey, connectOAuth } from "./setup-connect.js";
-import type { ConnectHttp, ConnectUi } from "./setup-connect.js";
+import { runOAuthLogin, storeApiKey, storeOAuthCredentials } from "./setup-connect.js";
+import type { ConnectUi } from "./setup-connect.js";
 import { runFreshSetup } from "./setup-fresh.js";
 import {
 	LOCAL_SERVERS,
@@ -84,20 +84,18 @@ function modelChoices(provider: ExtractionProviderChoice): Array<{ value: string
 }
 
 /**
- * Pick a model from pi-ai's real catalog for a provider family. Uses a plain
- * select for short lists and a searchable `search` prompt for large ones
- * (e.g. openrouter's 253 models) so the user can type to find what they want.
- * Falls back to free text only if the catalog has no models for the family.
+ * Pick a model from a list of pi-ai model options. Plain select for short
+ * lists, searchable `search` prompt for large ones (e.g. openrouter's 253) so
+ * the user can type to find what they want — all results are shown, not capped.
  */
 async function pickModel(
-	family: string,
+	models: readonly { id: string; name: string }[],
 	prompts: {
 		readonly select: typeof import("@inquirer/prompts").select;
 		readonly search: typeof import("@inquirer/prompts").search;
 		readonly input: typeof import("@inquirer/prompts").input;
 	},
 ): Promise<string> {
-	const models = modelOptions(family);
 	if (models.length === 0) {
 		return (
 			await prompts.input({ message: "Model:", validate: (v) => v.trim().length > 0 || "Enter a model id" })
@@ -111,20 +109,44 @@ async function pickModel(
 		message: "Model (type to search):",
 		source: (term) => {
 			const t = (term ?? "").trim().toLowerCase();
-			const filtered = t
-				? choices.filter((c) => c.value.toLowerCase().includes(t) || c.name.toLowerCase().includes(t))
-				: choices;
-			return filtered.slice(0, 50);
+			return t ? choices.filter((c) => c.value.toLowerCase().includes(t) || c.name.toLowerCase().includes(t)) : choices;
 		},
 	});
 }
 
+/** Terminal UI for the OAuth dance (pi-ai login callbacks). */
+function connectUi(): ConnectUi {
+	return {
+		openUrl: (url) => {
+			console.log(chalk.cyan(`  Opening browser: ${url}`));
+			void open(url).catch(() => {});
+		},
+		showDeviceCode: (userCode, verificationUri) => {
+			console.log(chalk.cyan(`  Enter this code at ${verificationUri}:`));
+			console.log(chalk.bold(`    ${userCode}`));
+		},
+		promptText: (message) => input({ message }),
+		promptSelect: (message, options) =>
+			select({ message, choices: options.map((o) => ({ value: o.id, name: o.label })) }),
+		onProgress: (m) => console.log(chalk.dim(`    ${m}`)),
+	};
+}
+
+/** A captured provider credential (held in the wizard, stored after the daemon starts). */
+interface CapturedCredential {
+	readonly family: string;
+	readonly connectMethod: "api" | "oauth";
+	readonly apiKey?: string;
+	readonly oauthCredentials?: unknown;
+}
+
 /**
- * Connect sub-flows for background inference. The METHOD (OAuth vs API key)
- * is chosen by the top-level menu, so each helper just picks a provider from
- * the matching capability set and a model. Credential entry happens after the
- * daemon starts (the daemon owns the secrets store + OAuth endpoints, like the
- * browser dashboard). Returns undefined if the user backs out.
+ * Connect sub-flow: the user authenticates FIRST (OAuth login via pi-ai, or an
+ * API-key prompt), THEN picks a model from the authenticated catalog. pi-ai's
+ * login() is self-contained (spins its own callback server), so the OAuth
+ * dance runs here in the wizard — no daemon needed. The captured credential
+ * is stored after the daemon starts. Returns the decision + credential, or
+ * undefined if the user backs out.
  */
 async function pickConnectedProvider(
 	providers: readonly { id: string; name: string }[],
@@ -134,54 +156,61 @@ async function pickConnectedProvider(
 		readonly search: typeof import("@inquirer/prompts").search;
 		readonly input: typeof import("@inquirer/prompts").input;
 	},
-): Promise<{ family: string; connectMethod: "api" | "oauth"; model: string } | undefined> {
+): Promise<({ family: string; connectMethod: "api" | "oauth"; model: string } & CapturedCredential) | undefined> {
 	const provider = await prompts.select<string>({
 		message: connectMethod === "oauth" ? "Log in with:" : "Provider:",
 		choices: [...providers.map((p) => ({ value: p.id, name: p.name })), { value: "__back__", name: "← back" }],
 	});
 	if (provider === "__back__") return undefined;
-	const model = await pickModel(provider, prompts);
-	return { family: provider, connectMethod, model };
+
+	let credential: CapturedCredential;
+	if (connectMethod === "oauth") {
+		console.log();
+		console.log(chalk.cyan(`  Starting ${provider} login…`));
+		try {
+			const oauthCredentials = await runOAuthLogin(connectUi(), provider);
+			credential = { family: provider, connectMethod: "oauth", oauthCredentials };
+			console.log(chalk.green(`  ✓ Logged in to ${provider}`));
+		} catch (err) {
+			console.log(chalk.red(`  ✗ Login failed: ${err instanceof Error ? err.message : err}`));
+			return undefined;
+		}
+	} else {
+		const apiKey = (await password({ message: `Paste your ${provider} API key:`, mask: "*" })).trim();
+		if (!apiKey) return undefined;
+		credential = { family: provider, connectMethod: "api", apiKey };
+	}
+
+	console.log();
+	// Authenticated model list (pi-ai; modifyModels applied for OAuth providers).
+	const model = await pickModel(modelOptions(provider, credential.oauthCredentials as never), prompts);
+	return { family: provider, connectMethod, model, ...credential };
 }
 
 /**
- * Build the post-daemon-start connect callback. Talks to the daemon the same
- * way the dashboard does (the daemon owns the secrets store + OAuth SSE
- * endpoints), with terminal UI: a password prompt for API keys, `open()` +
- * inquirer for the OAuth dance. Returns true on success.
+ * Build the post-daemon-start store callback. The login already happened in
+ * the wizard (pi-ai's login() captured the credential); this just persists it
+ * to the daemon secrets store once the daemon is running. Returns true on
+ * success. If no credential was captured (e.g. back-out), it's a no-op true.
  */
 function buildConnectExtraction(
 	basePath: string,
 	port: number,
-): (family: string, method: "api" | "oauth") => Promise<boolean> {
-	return async (family, method) => {
+	credential: CapturedCredential | undefined,
+): () => Promise<boolean> {
+	return async () => {
+		if (!credential) return true;
 		const client = createDaemonClient(port, basePath);
-		const http: ConnectHttp = {
-			postJson: (path, body) => client.secretApiCall("POST", path, body),
-			getJson: (path) => client.secretApiCall("GET", path),
-		};
-		if (method === "api") {
-			const key = (await password({ message: `Paste your ${family} API key:`, mask: "*" })).trim();
-			if (!key) return false;
-			const res = await connectApiKey(http, family, key);
+		const http = { postJson: (path: string, body: unknown) => client.secretApiCall("POST", path, body) };
+		if (credential.connectMethod === "oauth" && credential.oauthCredentials) {
+			const res = await storeOAuthCredentials(http, credential.family, credential.oauthCredentials as never);
 			return res.ok;
 		}
-		const ui: ConnectUi = {
-			openUrl: (url) => {
-				console.log(chalk.cyan(`  Opening browser: ${url}`));
-				void open(url).catch(() => {});
-			},
-			showDeviceCode: (userCode, verificationUri) => {
-				console.log(chalk.cyan(`  Enter this code at ${verificationUri}:`));
-				console.log(chalk.bold(`    ${userCode}`));
-			},
-			promptText: (message) => input({ message }),
-			promptSelect: (message, options) =>
-				select({ message, choices: options.map((o) => ({ value: o.id, name: o.label })) }),
-			onProgress: (m) => console.log(chalk.dim(`    ${m}`)),
-		};
-		const res = await connectOAuth(http, ui, family);
-		return res.ok;
+		if (credential.connectMethod === "api" && credential.apiKey) {
+			const res = await storeApiKey(http, credential.family, credential.apiKey);
+			return res.ok;
+		}
+		return true;
 	};
 }
 
@@ -1243,6 +1272,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		deps.normalizeChoice(existingExtraction.provider, EXTRACTION_PROVIDER_CHOICES);
 	let extractionProvider: ExtractionProviderChoice;
 	let extractionConnect: { family: string; connectMethod: "api" | "oauth" } | undefined;
+	let extractionCredential: CapturedCredential | undefined;
 	// Declared before the provider-selection block so the connect sub-flow can
 	// assign it (avoids a temporal-dead-zone ReferenceError); the per-provider
 	// model branches below overwrite it for non-connect providers.
@@ -1280,6 +1310,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 				const connected = await pickConnectedProvider(oauthProviderOptions(), "oauth", { select, search, input });
 				if (connected) {
 					extractionConnect = { family: connected.family, connectMethod: connected.connectMethod };
+					extractionCredential = connected;
 					extractionModel = connected.model;
 					extractionProvider = connected.family as ExtractionProviderChoice;
 					break;
@@ -1288,6 +1319,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 				const connected = await pickConnectedProvider(apiKeyProviderOptions(), "api", { select, search, input });
 				if (connected) {
 					extractionConnect = { family: connected.family, connectMethod: connected.connectMethod };
+					extractionCredential = connected;
 					extractionModel = connected.model;
 					extractionProvider = connected.family as ExtractionProviderChoice;
 					break;
@@ -1642,7 +1674,9 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		acpxBin,
 		openclawConfigCount,
 		openDashboard: options.openDashboard === true,
-		connectExtraction: nonInteractive ? undefined : buildConnectExtraction(basePath, deps.DEFAULT_PORT),
+		connectExtraction: nonInteractive
+			? undefined
+			: buildConnectExtraction(basePath, deps.DEFAULT_PORT, extractionCredential),
 	};
 
 	// Enforce the same cross-field invariants the headless --file path gets via
