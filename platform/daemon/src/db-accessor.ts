@@ -35,14 +35,19 @@ import { loadMemoryConfig } from "./memory-config";
 const isBun = typeof (globalThis as Record<string, unknown>).Bun !== "undefined";
 const require = createRequire(import.meta.url);
 
+export interface SqliteRunResult {
+	readonly changes: number;
+	readonly lastInsertRowid?: number | bigint;
+}
+
 export type SqliteStatement = {
-	run(...params: unknown[]): void;
+	run(...params: unknown[]): SqliteRunResult;
 	get(...params: unknown[]): Record<string, unknown> | undefined;
 	all(...params: unknown[]): Record<string, unknown>[];
 };
 
 export interface TypedSqliteStatement<Row extends object> {
-	run(...params: unknown[]): void;
+	run(...params: unknown[]): SqliteRunResult;
 	get(...params: unknown[]): Row | undefined;
 	all(...params: unknown[]): Row[];
 }

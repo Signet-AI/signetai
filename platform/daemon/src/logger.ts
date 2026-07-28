@@ -32,6 +32,7 @@ export type LogCategory =
 	| "memory" // Memory operations (save, recall, search)
 	| "sync" // Harness sync operations
 	| "git" // Git auto-commits
+	| "github-source" // GitHub source ingestion and fetch diagnostics
 	| "watcher" // File watcher events
 	| "embedding" // Embedding operations
 	| "harness" // Harness configuration
@@ -133,10 +134,7 @@ const DEFAULT_CONFIG: LoggerConfig = {
 	jsonFormat: true,
 };
 
-export function resolveLoggerConfig(
-	env: NodeJS.ProcessEnv = process.env,
-	homeDir = homedir(),
-): Partial<LoggerConfig> {
+export function resolveLoggerConfig(env: NodeJS.ProcessEnv = process.env, homeDir = homedir()): Partial<LoggerConfig> {
 	const envLogFile = env.SIGNET_LOG_FILE?.trim();
 	if (envLogFile) {
 		return { logFilePath: envLogFile, logDir: dirname(envLogFile) };

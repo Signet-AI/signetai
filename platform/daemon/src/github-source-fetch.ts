@@ -213,7 +213,7 @@ export async function fetchIssues(
 	labels?: readonly string[],
 ): Promise<GitHubFetchResult> {
 	const resources: GitHubResource[] = [];
-	const errors: GitHubFetchResult["errors"] = [];
+	const errors: Array<{ message: string; retryable: boolean }> = [];
 	const scanLimit = Math.min(
 		Math.max(maxItems * MAX_FILTERED_SCAN_MULTIPLIER, MAX_FILTERED_SCAN_FLOOR),
 		MAX_FILTERED_SCAN_CEILING,
@@ -255,7 +255,7 @@ export async function fetchPullRequests(
 	maxItems = 500,
 ): Promise<GitHubFetchResult> {
 	const resources: GitHubResource[] = [];
-	const errors: GitHubFetchResult["errors"] = [];
+	const errors: Array<{ message: string; retryable: boolean }> = [];
 	let page = 1;
 	while (resources.length < maxItems) {
 		const url = new URL(`${GITHUB_API_BASE}/repos/${config.owner}/${config.repo}/pulls`);
@@ -283,7 +283,7 @@ export async function fetchPullRequestsBySearch(
 	maxItems = 500,
 ): Promise<GitHubFetchResult> {
 	const resources: GitHubResource[] = [];
-	const errors: GitHubFetchResult["errors"] = [];
+	const errors: Array<{ message: string; retryable: boolean }> = [];
 	const statePart = state === "all" ? "" : ` state:${state}`;
 	const labelPart = labels.map((label) => ` label:${quoteSearchValue(label)}`).join("");
 	const q = `repo:${config.owner}/${config.repo} is:pr${statePart}${labelPart}`;
@@ -372,7 +372,7 @@ export async function fetchDiscussions(
 	maxItems = 500,
 ): Promise<GitHubFetchResult> {
 	const resources: GitHubResource[] = [];
-	const errors: GitHubFetchResult["errors"] = [];
+	const errors: Array<{ message: string; retryable: boolean }> = [];
 	const scanLimit = Math.min(
 		Math.max(maxItems * MAX_FILTERED_SCAN_MULTIPLIER, MAX_FILTERED_SCAN_FLOOR),
 		MAX_FILTERED_SCAN_CEILING,
@@ -499,7 +499,7 @@ export async function fetchRepoDocs(
 	maxItems = 500,
 ): Promise<GitHubFetchResult> {
 	const resources: GitHubResource[] = [];
-	const errors: GitHubFetchResult["errors"] = [];
+	const errors: Array<{ message: string; retryable: boolean }> = [];
 	for (const path of paths) {
 		if (resources.length >= maxItems) break;
 		try {
