@@ -160,6 +160,29 @@ describe("black box session replay", () => {
 		expect(sessions[1]?.recallEvents).toBe(1);
 	});
 
+	it("merges typed telemetry and artifact aggregates for one session", () => {
+		insertSearchTelemetry({
+			agentId: "default",
+			sessionKey: "combined-session",
+			createdAt: "2026-06-20T10:00:00.000Z",
+		});
+		insertArtifact({
+			agentId: "default",
+			sessionKey: "combined-session",
+			capturedAt: "2026-06-20T10:02:00.000Z",
+			path: "memory/sessions/combined-session.md",
+		});
+
+		const [session] = listBlackBoxSessions(getDbAccessor(), { agentId: "default" });
+
+		expect(session).toMatchObject({
+			sessionKey: "combined-session",
+			recallEvents: 1,
+			artifactEvents: 1,
+			lastAt: "2026-06-20T10:02:00.000Z",
+		});
+	});
+
 	it("filters replay data by project when project scope is supplied", () => {
 		insertSearchTelemetry({
 			agentId: "default",
