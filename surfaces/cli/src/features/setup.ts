@@ -1137,25 +1137,11 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		}
 	}
 
-	let deploymentType: DeploymentTypeChoice;
-	if (nonInteractive) {
-		deploymentType = requestedDeploymentType ?? "local";
-	} else if (requestedDeploymentType) {
-		deploymentType = requestedDeploymentType;
-		console.log();
-		console.log(chalk.dim(`  Using deployment type from CLI: ${requestedDeploymentType}`));
-	} else {
-		console.log();
-		deploymentType = await select({
-			message: "Where is Signet running?",
-			choices: [
-				{ value: "local", name: "Local machine (dev / personal)" },
-				{ value: "vps", name: "VPS or cloud server (shared / constrained resources)" },
-				{ value: "server", name: "Self-hosted server (dedicated hardware)" },
-			],
-			default: "local",
-		});
-	}
+	// Deployment type only tailors non-interactive/reconfigure defaults (e.g.
+	// VPS prefers non-local extraction providers). It has no effect in the
+	// interactive fresh-setup flow, so we don't prompt for it — the flag still
+	// works for non-interactive use.
+	const deploymentType: DeploymentTypeChoice = requestedDeploymentType ?? "local";
 
 	let embeddingProvider: EmbeddingProviderChoice;
 	if (nonInteractive) {
