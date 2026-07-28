@@ -15,6 +15,7 @@ export function parseLenientJsonObject(raw: string, options: { readonly label: s
 			parsed = parseJson5(source);
 		} catch {
 			const first = errors[0];
+			if (!first) throw new Error(`Invalid ${options.label}`);
 			throw new Error(`Invalid ${options.label} at offset ${first.offset} (${printParseErrorCode(first.error)})`);
 		}
 	}

@@ -27,10 +27,10 @@ bun test
 Before submitting changes, run the full check suite:
 
 ```bash
-bun run typecheck   # TypeScript strict mode check
+bun run typecheck   # Workspace typecheck (includes the daemon backlog tracked in #969)
 bun run lint        # Biome static analysis
 bun run format      # Biome auto-format
-bun test            # All tests
+bun test            # All maintained repository tests (excludes vendored references/)
 ```
 
 Common local loops:
@@ -148,9 +148,15 @@ Conventions
 **Package manager:** Bun everywhere. Do not use npm or pnpm.
 
 **Linting and formatting:** Biome. Run `bun run lint` and
-`bun run format` before committing. CI will enforce this.
+`bun run format` before committing. The mandatory CI enforcement is delivered
+by the follow-up quality-gates PR.
 
-**TypeScript:** Strict mode is enforced by convention. Specifically:
+**TypeScript:** `strict` and `noUncheckedIndexedAccess` are the shared baseline
+for configs that extend the root `tsconfig.json`. The daemon has a known
+typecheck backlog tracked in [#969](https://github.com/Signet-AI/signetai/issues/969)
+and remains a visible, non-blocking check until that backlog is cleared. All
+other TypeScript changes must preserve the applicable strict configuration.
+Specifically:
 no `any` (use `unknown` with narrowing), no `as` casts (fix the types),
 no non-null assertions (`!`), explicit return types on all exported
 functions, `readonly` where mutation is not intended, `as const` unions

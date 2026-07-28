@@ -237,13 +237,15 @@ export abstract class BaseConnector {
  */
 export function isSignetGeneratedFile(raw: string): boolean {
 	const lines = raw.split("\n").slice(0, 6);
-	return lines.some(
-		(line, i) =>
+	return lines.some((line, i) => {
+		const nextLine = lines[i + 1];
+		return (
 			// Daemon-generated: "# AUTO-GENERATED from <path> by Signet"
 			/^#\s+AUTO-GENERATED\s+from\s+.*\s+by\s+Signet/i.test(line) ||
 			// Connector-generated: "# Auto-generated from <path>" followed by "# Source: <path>" on the next line
-			(/^#\s+Auto-generated\s+from\s+/.test(line) && i + 1 < lines.length && /^#\s+Source:\s+/.test(lines[i + 1])),
-	);
+			(/^#\s+Auto-generated\s+from\s+/.test(line) && /^#\s+Source:\s+/.test(nextLine ?? ""))
+		);
+	});
 }
 
 // ============================================================================
