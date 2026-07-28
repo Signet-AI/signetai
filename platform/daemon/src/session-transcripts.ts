@@ -44,7 +44,6 @@ export function canonicalizeTranscriptLookup(value: string): string {
 	return OMP_UUID_LIKE_SESSION_ID.test(trimmed) ? trimmed.replace(/:/g, "-") : trimmed;
 }
 
-
 export interface StoredTranscriptInfo {
 	readonly sessionKey: string;
 	readonly agentId: string;
@@ -248,7 +247,7 @@ async function backfillDatabaseTranscripts(
 						FROM session_transcripts
 						ORDER BY agent_id, harness, session_key, rowid
 						LIMIT ? OFFSET ?`;
-				return db.prepare(sql).all(PAGE_SIZE, offset) as StoredTranscriptBackfillRow[];
+				return db.prepare(sql).all(PAGE_SIZE, offset) as unknown as StoredTranscriptBackfillRow[];
 			});
 			if (rows.length === 0) break;
 			for (const row of rows) {
@@ -490,13 +489,13 @@ export function getStoredSessionTranscriptInfo(sessionKey: string, agentId: stri
 				)
 				.get(agentId, ...aliases, sessionKey) as
 				| {
-					session_key: string;
-					agent_id: string;
-					harness: string | null;
-					project: string | null;
-					created_at: string;
-					updated_at?: string | null;
-				}
+						session_key: string;
+						agent_id: string;
+						harness: string | null;
+						project: string | null;
+						created_at: string;
+						updated_at?: string | null;
+				  }
 				| undefined;
 			if (!row) return undefined;
 			return {
@@ -556,7 +555,14 @@ export function searchTranscriptFallback(params: {
 		const keyPredicates = [`st.session_key IN (${placeholders})`];
 		if (hasSessionId) keyPredicates.push(`st.session_id IN (${placeholders})`);
 		const exactRows = getDbAccessor().withReadDb((db) => {
-			const args: unknown[] = [params.agentId, ...aliases, ...(hasSessionId ? aliases : []), exactQuery, params.project ?? "", limit];
+			const args: unknown[] = [
+				params.agentId,
+				...aliases,
+				...(hasSessionId ? aliases : []),
+				exactQuery,
+				params.project ?? "",
+				limit,
+			];
 			return db
 				.prepare(
 					[
@@ -567,7 +573,7 @@ export function searchTranscriptFallback(params: {
 						`ORDER BY CASE WHEN st.session_key = ? THEN 0 ELSE 1 END, CASE WHEN st.project = ? THEN 0 ELSE 1 END, ${seenExpr} DESC LIMIT ?`,
 					].join("\n"),
 				)
-				.all(...args) as TranscriptRow[];
+				.all(...args) as unknown as TranscriptRow[];
 		});
 		if (exactRows.length > 0) {
 			return exactRows
@@ -608,7 +614,7 @@ export function searchTranscriptFallback(params: {
 						}
 						parts.push(`ORDER BY rank ASC, ${seenExpr} DESC LIMIT ?`);
 						args.push(limit * 2);
-						return db.prepare(parts.join("\n")).all(...args) as TranscriptRow[];
+						return db.prepare(parts.join("\n")).all(...args) as unknown as TranscriptRow[];
 					});
 
 					const hits = rows
@@ -676,7 +682,7 @@ export function searchTranscriptFallback(params: {
 			}
 			parts.push(`ORDER BY rank DESC, ${seenExpr} DESC LIMIT ?`);
 			args.push(limit);
-			return db.prepare(parts.join("\n")).all(...args) as TranscriptRow[];
+			return db.prepare(parts.join("\n")).all(...args) as unknown as TranscriptRow[];
 		});
 
 		return rows

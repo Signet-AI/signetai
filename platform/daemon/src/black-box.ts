@@ -194,7 +194,7 @@ function listTelemetryEvents(
 			 ORDER BY created_at ASC
 			 LIMIT ?`,
 		)
-		.all(agentId, sessionKey, project ?? null, project ?? null, limit) as readonly TelemetryRow[];
+		.all(agentId, sessionKey, project ?? null, project ?? null, limit) as unknown as readonly TelemetryRow[];
 
 	const events: BlackBoxEvent[] = [];
 	for (const row of rows) {
@@ -250,7 +250,7 @@ function listSessionRecallEvents(
 			 ORDER BY created_at ASC
 			 LIMIT ?`,
 		)
-		.all(agentId, sessionKey, limit) as readonly RecallEventRow[];
+		.all(agentId, sessionKey, limit) as unknown as readonly RecallEventRow[];
 	return rows.map((row) => ({
 		id: `context:${row.created_at}:${row.item_kind}:${row.item_id}`,
 		kind: "context.recalled",
@@ -296,7 +296,7 @@ function listArtifactEvents(
 			sessionKey,
 			sessionKey,
 			limit,
-		) as readonly ArtifactRow[];
+		) as unknown as readonly ArtifactRow[];
 	return rows.map((row) => ({
 		id: `artifact:${row.source_path}`,
 		kind: "artifact.written",
@@ -346,7 +346,7 @@ function listAssertionEvents(
 					 ORDER BY ea.asserted_at ASC
 					 LIMIT ?`,
 				)
-				.all(agentId, project, sessionKey, sessionKey, sessionKey, limit) as readonly AssertionRow[])
+				.all(agentId, project, sessionKey, sessionKey, sessionKey, limit) as unknown as readonly AssertionRow[])
 		: (db
 				.prepare(
 					`SELECT id, subject_entity_id, predicate, content, source_kind, source_id, source_path,
@@ -357,7 +357,7 @@ function listAssertionEvents(
 					 ORDER BY asserted_at ASC
 					 LIMIT ?`,
 				)
-				.all(agentId, sessionKey, sessionKey, limit) as readonly AssertionRow[]);
+				.all(agentId, sessionKey, sessionKey, limit) as unknown as readonly AssertionRow[]);
 	return rows.map((row) => ({
 		id: `assertion:${row.id}`,
 		kind: "assertion.created",
@@ -473,7 +473,12 @@ export function listBlackBoxSessions(
 				 ORDER BY last_at DESC
 				 LIMIT ?`,
 			)
-			.all(input.agentId, input.project ?? null, input.project ?? null, limit) as readonly SessionAggregateRow[];
+			.all(
+				input.agentId,
+				input.project ?? null,
+				input.project ?? null,
+				limit,
+			) as unknown as readonly SessionAggregateRow[];
 		for (const row of telemetryRows) {
 			if (!row.session_key || !row.last_at) continue;
 			bySession.set(row.session_key, {
@@ -496,7 +501,12 @@ export function listBlackBoxSessions(
 				 ORDER BY last_at DESC
 				 LIMIT ?`,
 			)
-			.all(input.agentId, input.project ?? null, input.project ?? null, limit) as readonly SessionAggregateRow[];
+			.all(
+				input.agentId,
+				input.project ?? null,
+				input.project ?? null,
+				limit,
+			) as unknown as readonly SessionAggregateRow[];
 		for (const row of artifactRows) {
 			if (!row.session_key || !row.last_at) continue;
 			const existing = bySession.get(row.session_key);

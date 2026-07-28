@@ -170,7 +170,7 @@ export function createTelemetryCollector(
 						 ORDER BY timestamp ASC
 						 LIMIT ?`,
 					)
-					.all(limit) as readonly {
+					.all(limit) as unknown as readonly {
 					id: string;
 					event: string;
 					timestamp: string;
@@ -323,7 +323,7 @@ export function createTelemetryCollector(
 							 ORDER BY timestamp DESC
 							 LIMIT ?`,
 						)
-						.all(...params, limit) as readonly {
+						.all(...params, limit) as unknown as readonly {
 						id: string;
 						event: string;
 						timestamp: string;

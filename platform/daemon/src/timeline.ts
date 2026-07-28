@@ -6,9 +6,9 @@
  * across memory_history, memory_jobs, logger, and error buffer.
  */
 
+import type { ErrorEntry } from "./analytics";
 import type { ReadDb } from "./db-accessor";
 import type { LogEntry } from "./logger";
-import type { ErrorEntry } from "./analytics";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -198,7 +198,7 @@ function predictorToEvents(sessionKey: string, db: ReadDb): TimelineEvent[] {
 				 WHERE session_key = ?
 				 ORDER BY created_at ASC`,
 			)
-			.all(sessionKey) as ComparisonRow[];
+			.all(sessionKey) as unknown as ComparisonRow[];
 
 		return rows.map((r) => ({
 			timestamp: r.created_at,
@@ -247,7 +247,7 @@ export function buildTimeline(sources: TimelineSources, entityId: string): Timel
 				 WHERE memory_id = ?
 				 ORDER BY created_at ASC`,
 			)
-			.all(detection.memoryId) as HistoryRow[];
+			.all(detection.memoryId) as unknown as HistoryRow[];
 		allEvents.push(...historyToEvents(historyRows));
 
 		// Gather job events
@@ -260,7 +260,7 @@ export function buildTimeline(sources: TimelineSources, entityId: string): Timel
 				 WHERE memory_id = ?
 				 ORDER BY created_at ASC`,
 			)
-			.all(detection.memoryId) as JobRow[];
+			.all(detection.memoryId) as unknown as JobRow[];
 		allEvents.push(...jobToEvents(jobRows));
 	}
 
