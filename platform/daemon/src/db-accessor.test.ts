@@ -465,7 +465,9 @@ describe("vec_embeddings schema repair", () => {
 
 	test("reads vec0 embedding dimensions from the virtual table SQL", () => {
 		expect(readVecEmbeddingDimensions(currentSql)).toBe(1536);
-		expect(readVecEmbeddingDimensions("CREATE VIRTUAL TABLE vec_embeddings USING vec0(id TEXT PRIMARY KEY)")).toBeNull();
+		expect(
+			readVecEmbeddingDimensions("CREATE VIRTUAL TABLE vec_embeddings USING vec0(id TEXT PRIMARY KEY)"),
+		).toBeNull();
 	});
 
 	test("repairs stale vector dimensions instead of keeping a wrong FLOAT size", () => {
