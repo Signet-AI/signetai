@@ -2,7 +2,11 @@
 name = "signet-shadow"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 description = "Shadow replay proxy for validating Rust daemon against TS daemon"
+
+[lints]
+workspace = true
 
 [[bin]]
 name = "signet-shadow"

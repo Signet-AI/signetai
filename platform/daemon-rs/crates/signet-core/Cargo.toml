@@ -2,7 +2,11 @@
 name = "signet-core"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 description = "Core types, config, DB, migrations, search, embeddings"
+
+[lints]
+workspace = true
 
 [dependencies]
 rusqlite = { workspace = true }

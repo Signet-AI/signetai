@@ -16,6 +16,42 @@ edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/Signet-AI/signetai"
 
+[workspace.lints.rust]
+warnings = "deny"
+
+[workspace.lints.clippy]
+# Legacy refactors are tracked separately; retain these narrow exceptions while
+# making every other default Clippy diagnostic a hard error.
+collapsible_if = "allow"
+collapsible_match = "allow"
+collapsible_str_replace = "allow"
+doc_lazy_continuation = "allow"
+field_reassign_with_default = "allow"
+len_zero = "allow"
+let_and_return = "allow"
+items_after_test_module = "allow"
+needless_borrow = "allow"
+needless_borrows_for_generic_args = "allow"
+needless_lifetimes = "allow"
+needless_return = "allow"
+nonminimal_bool = "allow"
+obfuscated_if_else = "allow"
+option_as_ref_deref = "allow"
+redundant_closure = "allow"
+result_large_err = "allow"
+question_mark = "allow"
+single_match = "allow"
+too_many_arguments = "allow"
+type_complexity = "allow"
+unnecessary_map_or = "allow"
+unnecessary_lazy_evaluations = "allow"
+useless_asref = "allow"
+useless_format = "allow"
+wrong_self_convention = "allow"
+bool_assert_comparison = "allow"
+derivable_impls = "allow"
+assertions_on_constants = "allow"
+
 [workspace.dependencies]
 # Async runtime
 tokio = { version = "1", features = ["full"] }

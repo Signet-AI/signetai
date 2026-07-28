@@ -200,7 +200,7 @@ pub async fn run_sweep(pool: &DbPool, config: &RetentionConfig) -> Result<Retent
 
     // Step 7: transcript_capture_jobs (TS retention-worker.ts:309).
     // Try/catch for missing table — older DBs may not have it.
-    let transcript_jobs_purged = purge_transcript_capture_jobs(
+    let _transcript_jobs_purged = purge_transcript_capture_jobs(
         pool,
         completed_job_cutoff,
         dead_job_cutoff,

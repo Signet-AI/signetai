@@ -22,7 +22,7 @@ pub fn is_memory_backup_filename(filename: &str) -> bool {
     MEMORY_BACKUP_PREFIXES.iter().any(|prefix| {
         filename
             .strip_prefix(prefix)
-            .is_some_and(|rest| rest.len() >= ".md".len() + 1 && rest.ends_with(".md"))
+            .is_some_and(|rest| rest.len() > ".md".len() && rest.ends_with(".md"))
     })
 }
 

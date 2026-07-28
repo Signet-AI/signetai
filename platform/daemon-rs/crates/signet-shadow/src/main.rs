@@ -211,7 +211,7 @@ async fn proxy(State(state): State<Arc<ProxyState>>, req: Request<Body>) -> Resp
     let request_id = headers
         .get("x-request-id")
         .and_then(|value| value.to_str().ok())
-        .map(|raw| sanitize_request_id(raw));
+        .map(sanitize_request_id);
 
     tokio::spawn(async move {
         let shadow_start = Instant::now();
@@ -449,7 +449,7 @@ fn run_analysis(path: &std::path::Path) {
     if !by_endpoint.is_empty() {
         println!("By endpoint:");
         let mut sorted: Vec<_> = by_endpoint.into_iter().collect();
-        sorted.sort_by(|a, b| b.1.0.cmp(&a.1.0));
+        sorted.sort_by_key(|entry| std::cmp::Reverse(entry.1.0));
         for (endpoint, (crit, exp)) in &sorted {
             let marker = if *crit > 0 { "!!" } else { "  " };
             println!("  {marker} {endpoint}: {crit} critical, {exp} expected");

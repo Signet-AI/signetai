@@ -2,6 +2,10 @@
 name = "signet-mcp-stdio"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
 
 [[bin]]
 name = "signet-mcp"

@@ -173,10 +173,8 @@ pub fn is_known_abstract_type(etype: Option<&str>) -> bool {
 /// Normalize an entity name for canonical comparison.
 pub fn normalize_entity_name(name: &str) -> String {
     name.trim()
-        .replace('\u{201c}', "\"")
-        .replace('\u{201d}', "\"")
-        .replace('\u{2018}', "'")
-        .replace('\u{2019}', "'")
+        .replace(['\u{201c}', '\u{201d}'], "\"")
+        .replace(['\u{2018}', '\u{2019}'], "'")
         .trim_matches(|c: char| !c.is_alphanumeric())
         .to_lowercase()
         .split_whitespace()
@@ -393,18 +391,16 @@ pub fn classify_entity_quality(name: &str, etype: Option<&str>) -> EntityQuality
     }
 
     if let Some(t) = normalized_type {
-        if t != "extracted" && t != "unknown" {
-            if !is_concrete_entity_type(Some(t)) {
-                let reason = if is_known_abstract_type(Some(t)) {
-                    "non_concrete_entity_type"
-                } else {
-                    "unknown_entity_type"
-                };
-                return EntityQualityResult {
-                    ok: false,
-                    reason: Some(reason),
-                };
-            }
+        if t != "extracted" && t != "unknown" && !is_concrete_entity_type(Some(t)) {
+            let reason = if is_known_abstract_type(Some(t)) {
+                "non_concrete_entity_type"
+            } else {
+                "unknown_entity_type"
+            };
+            return EntityQualityResult {
+                ok: false,
+                reason: Some(reason),
+            };
         }
         if t == "event" && !has_date_or_time_signal(&canonical) && !has_event_signal(&canonical) {
             return EntityQualityResult {

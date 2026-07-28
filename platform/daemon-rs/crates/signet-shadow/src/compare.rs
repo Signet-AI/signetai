@@ -978,9 +978,7 @@ fn deterministic_memory_history_key(
             continue;
         }
 
-        let Some(value) = object.get(column) else {
-            return None;
-        };
+        let value = object.get(column)?;
         let safe_value = redact_internal_value(column, value, rules);
         parts.push(format!("{column}={}", stable_json_string(&safe_value)));
     }
@@ -1446,8 +1444,7 @@ fn is_log_safe_scalar_field(field: &str) -> bool {
             | "inotify"
             | "pipes"
             | "other"
-            | "total"
-            | "memorymd"
+			| "memorymd"
             | "feature"
             | "features"
             | "name"
@@ -1767,7 +1764,7 @@ fn path_matches_pattern(path: &str, pattern: &str) -> bool {
     path.ends_with(suffix)
 }
 
-fn tolerance_for_path<'a>(tolerances: Option<&'a HashMap<String, f64>>, path: &str) -> Option<f64> {
+fn tolerance_for_path(tolerances: Option<&HashMap<String, f64>>, path: &str) -> Option<f64> {
     tolerances.and_then(|map| {
         map.iter().find_map(|(pattern, tolerance)| {
             let matches = path == pattern

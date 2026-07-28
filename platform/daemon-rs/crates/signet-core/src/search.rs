@@ -1142,9 +1142,9 @@ pub fn apply_sec_lite(
         shaped = clamp01(shaped);
         if shaped >= min_score {
             row.score = shaped;
-            row.source = if t > 0.0 && (l > 0.0 || s > 0.0 || h > 0.0 || st > 0.0) {
-                SearchSource::Sec
-            } else if st > 0.0 && (l > 0.0 || s > 0.0 || h > 0.0) {
+            row.source = if (t > 0.0 && (l > 0.0 || s > 0.0 || h > 0.0 || st > 0.0))
+                || (st > 0.0 && (l > 0.0 || s > 0.0 || h > 0.0))
+            {
                 SearchSource::Sec
             } else if st > 0.0 && t == 0.0 {
                 SearchSource::Structured
@@ -1336,6 +1336,8 @@ fn shorten_currentness_content(content: &str) -> String {
 }
 
 /// Currentness loading and bias from TS `memory-search.ts:1950`.
+type CurrentnessQueryRow = (String, String, String, Option<String>);
+
 pub fn load_currentness_info(
     conn: &Connection,
     ids: &[&str],
@@ -1358,7 +1360,7 @@ pub fn load_currentness_info(
          ORDER BY ea.importance DESC, ea.created_at DESC",
         ids.len() + 1
     );
-    let result = (|| -> Result<Vec<(String, String, String, Option<String>)>, rusqlite::Error> {
+    let result = (|| -> Result<Vec<CurrentnessQueryRow>, rusqlite::Error> {
         let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = ids
             .iter()
             .map(|id| Box::new((*id).to_string()) as Box<dyn rusqlite::types::ToSql>)
@@ -1465,8 +1467,8 @@ fn cosine_from_blob(query_vec: &[f32], blob: &[u8]) -> f64 {
     let mut dot = 0.0f64;
     let mut qn = 0.0f64;
     let mut mn = 0.0f64;
-    for i in 0..len {
-        let q = query_vec[i] as f64;
+    for (i, query_value) in query_vec.iter().take(len).enumerate() {
+        let q = *query_value as f64;
         let start = i * 4;
         let m = f32::from_le_bytes([
             blob[start],
@@ -1598,20 +1600,21 @@ pub fn native_artifact_fallbacks(
     sql.push_str(&format!(
         " ORDER BY rank ASC, updated_at DESC LIMIT ?{limit_param}"
     ));
-    params.push(Box::new((limit.max(2).min(50)) as i64));
+    params.push(Box::new(limit.clamp(2, 50) as i64));
+    type SourceFallbackQueryRow = (
+        i64,
+        String,
+        String,
+        Option<String>,
+        Option<String>,
+        String,
+        String,
+        f64,
+    );
     let result = (|| -> Result<Vec<SourceFallbackHit>, rusqlite::Error> {
         let refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|b| b.as_ref()).collect();
         let mut stmt = conn.prepare(&sql)?;
-        let rows: Vec<(
-            i64,
-            String,
-            String,
-            Option<String>,
-            Option<String>,
-            String,
-            String,
-            f64,
-        )> = stmt
+        let rows: Vec<SourceFallbackQueryRow> = stmt
             .query_map(refs.as_slice(), |row| {
                 Ok((
                     row.get(0)?,

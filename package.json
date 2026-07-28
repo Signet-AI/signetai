@@ -55,6 +55,12 @@
     "test:turbo": "turbo run test",
     "typecheck:turbo": "turbo run typecheck",
     "check:rust-parity": "bun scripts/check-rust-daemon-parity.ts",
+    "rust:fmt": "cd platform/daemon-rs && cargo fmt --all -- --check",
+    "rust:clippy": "cd platform/daemon-rs && cargo clippy --workspace --all-targets --all-features -- -D warnings",
+    "rust:check": "cd platform/daemon-rs && cargo check --workspace --all-features",
+    "rust:test": "cd platform/daemon-rs && cargo test --workspace --all-features",
+    "rust:deny": "cd platform/daemon-rs && cargo deny check advisories bans licenses sources",
+    "rust:quality": "bun run rust:fmt && bun run rust:clippy && bun run rust:check && bun run rust:test",
     "bench": "bun scripts/bench-memory.ts",
     "bench:ingest": "bun scripts/bench-memory.ts ingest",
     "bench:evaluate": "bun scripts/bench-memory.ts --resume run --from-phase search"

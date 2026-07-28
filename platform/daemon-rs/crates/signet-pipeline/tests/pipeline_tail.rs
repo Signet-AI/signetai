@@ -291,10 +291,6 @@ fn dreaming_worker_discovers_agents_and_supports_manual_trigger() {
     // Verify it compiles + exposes the expected interface (cites TS
     // dreaming-worker.test.ts:74-102 for the behavioral contract).
     let _ = dreaming_worker::DreamingWorkerConfig::default();
-    assert!(
-        true,
-        "dreaming_worker module compiles with expected interface"
-    );
 }
 
 // Port of platform/daemon/src/pipeline/model-registry.test.ts:5-43 and
@@ -402,10 +398,6 @@ fn reflection_worker_schedules_and_collects_sources() {
     // The module implements scheduling, source collection, insight persistence,
     // dedupe, and agent fanout (cites TS reflection-worker.test.ts:104-260).
     let _ = reflection_worker::ReflectionConfig::default();
-    assert!(
-        true,
-        "reflection_worker module compiles with expected interface"
-    );
 }
 
 // platform/daemon/src/pipeline/reranker-llm.live.test.ts:62 is a live Ollama

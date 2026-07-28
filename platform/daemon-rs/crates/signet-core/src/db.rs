@@ -483,7 +483,7 @@ mod tests {
 
     #[tokio::test]
     async fn open_in_memory() {
-        let tmp = std::env::temp_dir().join("signet_db_test.db");
+        let tmp = std::env::temp_dir().join(format!("signet_db_test-{}.db", uuid::Uuid::new_v4()));
         let _ = std::fs::remove_file(&tmp);
 
         let (pool, _handle) = DbPool::open(&tmp).expect("failed to open DB");
@@ -523,7 +523,10 @@ mod tests {
 
     #[tokio::test]
     async fn open_uses_configured_embedding_dimensions_for_empty_vec_table() {
-        let tmp = std::env::temp_dir().join("signet_db_dimensions_test.db");
+        let tmp = std::env::temp_dir().join(format!(
+            "signet_db_dimensions_test-{}.db",
+            uuid::Uuid::new_v4()
+        ));
         let _ = std::fs::remove_file(&tmp);
 
         let (_pool, _handle) =

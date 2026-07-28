@@ -750,7 +750,7 @@ fn pipeline_models_returns_static_catalog_matching_ts() {
         "static model catalog should be non-empty"
     );
     assert!(
-        catalog.iter().all(|m| m.label.len() > 0),
+        catalog.iter().all(|m| !m.label.is_empty()),
         "all models have names"
     );
 }

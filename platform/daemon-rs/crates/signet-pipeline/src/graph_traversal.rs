@@ -29,7 +29,7 @@ pub struct Constraint {
     pub importance: f64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct TraversalResult {
     pub memory_ids: HashSet<String>,
     pub memory_scores: HashMap<String, f64>,
@@ -39,21 +39,6 @@ pub struct TraversalResult {
     pub timed_out: bool,
     pub active_aspect_ids: Vec<String>,
     pub focal_entity_ids: Vec<String>,
-}
-
-impl Default for TraversalResult {
-    fn default() -> Self {
-        Self {
-            memory_ids: HashSet::new(),
-            memory_scores: HashMap::new(),
-            memory_paths: HashMap::new(),
-            constraints: Vec::new(),
-            entity_count: 0,
-            timed_out: false,
-            active_aspect_ids: Vec::new(),
-            focal_entity_ids: Vec::new(),
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -171,8 +156,8 @@ fn get_pinned_entity_ids(conn: &rusqlite::Connection, agent_id: &str) -> Vec<Str
 
 fn extract_project_tokens(project_path: &str) -> Vec<String> {
     let parts: Vec<String> = project_path
-        .split(|c: char| c == '/' || c == '\\')
-        .map(|p| normalize_token(p))
+        .split(['/', '\\'])
+        .map(normalize_token)
         .filter(|p| p.len() >= 2)
         .collect();
     if parts.is_empty() {
@@ -346,12 +331,11 @@ pub fn resolve_focal_entities(
         "query"
     };
 
-    if let Some(checkpoint_ids) = checkpoint_entity_ids {
-        if !checkpoint_ids.is_empty() {
-            resolved_entity_ids =
-                sanitize_entity_ids(&checkpoint_ids.iter().map(|s| s.clone()).collect::<Vec<_>>());
-            source = "checkpoint";
-        }
+    if let Some(checkpoint_ids) = checkpoint_entity_ids
+        && !checkpoint_ids.is_empty()
+    {
+        resolved_entity_ids = sanitize_entity_ids(checkpoint_ids);
+        source = "checkpoint";
     }
 
     if resolved_entity_ids.is_empty() {

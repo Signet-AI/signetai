@@ -340,6 +340,7 @@ fn single_flight_runner_prevents_duplicate_concurrent_runs() {
     // Module exists in signet_pipeline::single_flight (see its own test file
     // for behavioral coverage). This proves the module compiles + is accessible.
     let _: () = {
+        #[allow(unused_imports)]
         use signet_pipeline::single_flight;
     };
 }
@@ -353,6 +354,7 @@ fn watcher_ignore_matches_db_journals_and_generated_files() {
     // Port of platform/daemon/src/watcher-ignore.test.ts:12-174.
     // Module exists in signet_pipeline::watcher_ignore.
     let _: () = {
+        #[allow(unused_imports)]
         use signet_pipeline::watcher_ignore;
     };
 }
@@ -366,6 +368,7 @@ fn structural_features_builds_candidate_feature_vectors() {
     // Port of platform/daemon/src/structural-features.test.ts:23-201.
     // Module exists in signet_pipeline::structural_features.
     let _: () = {
+        #[allow(unused_imports)]
         use signet_pipeline::structural_features;
     };
 }
@@ -375,12 +378,13 @@ fn identity_context_loads_profile_sections() {
     // Port of platform/daemon/src/identity-context.test.ts:18-127.
     // Module exists in signet_pipeline::identity_context.
     let _: () = {
+        #[allow(unused_imports)]
         use signet_pipeline::identity_context;
     };
 }
 
 fn ephemeral_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0")
+    TcpListener::bind("127.0.0.1:0")
         .expect("bind ephemeral port")
         .local_addr()
         .expect("local addr")

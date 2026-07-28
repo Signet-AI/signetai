@@ -2,7 +2,11 @@
 name = "signet-daemon"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 description = "Signet daemon: HTTP API, MCP server, file watcher, pipeline"
+
+[lints]
+workspace = true
 
 [[bin]]
 name = "signet-daemon"

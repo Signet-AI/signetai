@@ -110,7 +110,7 @@ pub enum ClaimResult {
 }
 
 impl SessionTracker {
-    fn normalize_key<'a>(key: &'a str) -> &'a str {
+    fn normalize_key(key: &str) -> &str {
         key.strip_prefix("session:").unwrap_or(key)
     }
 
@@ -246,7 +246,7 @@ impl SessionTracker {
         claims
             .iter()
             .filter(|(_, c)| !c.is_stale())
-            .filter(|(_, c)| agent_id.map_or(true, |aid| c.agent_id == aid))
+            .filter(|(_, c)| agent_id.is_none_or(|aid| c.agent_id == aid))
             .map(|(key, claim)| SessionInfo {
                 key: key.clone(),
                 agent_id: claim.agent_id.clone(),
@@ -579,11 +579,12 @@ impl DedupState {
     ) -> bool {
         let key = Self::session_start_scope_key(agent_id, harness, project, session_key);
         let mut seen = self.session_start_seen.lock().unwrap();
-        if seen.contains_key(&key) {
-            true
-        } else {
-            seen.insert(key, true);
-            false
+        match seen.entry(key) {
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert(true);
+                false
+            }
+            std::collections::hash_map::Entry::Occupied(_) => true,
         }
     }
 

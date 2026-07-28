@@ -2,7 +2,11 @@
 name = "signet-pipeline"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 description = "LLM providers, embedding providers, workers, predictor, extraction"
+
+[lints]
+workspace = true
 
 [dependencies]
 signet-core = { workspace = true }

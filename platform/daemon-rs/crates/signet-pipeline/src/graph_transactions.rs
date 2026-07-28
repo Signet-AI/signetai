@@ -317,11 +317,9 @@ fn upsert_aspect(
 
 struct StoredAttribute {
     id: String,
-    content: String,
     normalized_content: String,
     group_key: Option<String>,
     claim_key: String,
-    memory_id: Option<String>,
     created_at: String,
 }
 
@@ -333,7 +331,7 @@ fn mark_superseded_siblings(
     now: &str,
 ) -> usize {
     let mut stmt = match conn.prepare_cached(
-        "SELECT id, content, normalized_content, group_key, claim_key, memory_id, created_at
+        "SELECT id, normalized_content, group_key, claim_key, created_at
          FROM entity_attributes
          WHERE aspect_id = ?1 AND agent_id = ?2
            AND (group_key = ?3 OR (group_key IS NULL AND ?3 IS NULL))
@@ -357,12 +355,10 @@ fn mark_superseded_siblings(
         |row| {
             Ok(StoredAttribute {
                 id: row.get(0)?,
-                content: row.get(1)?,
-                normalized_content: row.get(2)?,
-                group_key: row.get(3)?,
-                claim_key: row.get(4)?,
-                memory_id: row.get(5)?,
-                created_at: row.get(6)?,
+                normalized_content: row.get(1)?,
+                group_key: row.get(2)?,
+                claim_key: row.get(3)?,
+                created_at: row.get(4)?,
             })
         },
     ) {
@@ -468,7 +464,7 @@ pub fn persist_structured(
                 |row| row.get(0),
             )
             .ok();
-        if let Some(_) = existing_rel {
+        if existing_rel.is_some() {
             result.relations_updated += 1;
         } else {
             let rel_id = Uuid::new_v4().to_string();
@@ -601,11 +597,9 @@ pub fn persist_structured(
                             conn,
                             &StoredAttribute {
                                 id: attribute_id,
-                                content: attr.content.clone(),
                                 normalized_content: normalized,
                                 group_key,
                                 claim_key: claim_key.unwrap_or_default(),
-                                memory_id: Some(source_memory_id.to_string()),
                                 created_at: now.to_string(),
                             },
                             &aspect_id,
