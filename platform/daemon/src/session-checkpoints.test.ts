@@ -448,7 +448,7 @@ describe("formatRecoveryDigest", () => {
 				"Traversal memories: 24",
 				"",
 				"### Recent Prompts",
-				"- " + "x".repeat(400),
+				`- ${"x".repeat(400)}`,
 			].join("\n"),
 			prompt_count: 12,
 			memory_queries: null,
