@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
+import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type {
 	LlmGenerateResult,
 	LlmProvider,
@@ -22,6 +23,12 @@ import {
 	resolveRoutingDecision,
 } from "@signet/core";
 import { createRoutingProvider } from "./inference-provider-factory";
+import { isPiDreamingAgentProvider } from "./pipeline/pi-provider";
+import type {
+	DreamingAgentCapableProvider,
+	DreamingAgentSession,
+	DreamingAgentSessionOptions,
+} from "./pipeline/ingest/agent-planner";
 import { logger } from "./logger";
 import { loadMemoryConfig } from "./memory-config";
 import {
@@ -910,10 +917,32 @@ export class InferenceRouter {
 		};
 	}
 
-	createWorkloadProvider(operation: RoutingOperationKind, defaultAgentId?: string): LlmProvider {
+	createWorkloadProvider(
+		operation: RoutingOperationKind,
+		defaultAgentId?: string,
+	): LlmProvider & DreamingAgentCapableProvider {
 		const router = this;
+		const createDreamingAgentSession = async (
+			tools: readonly ToolDefinition[],
+			opts?: DreamingAgentSessionOptions,
+		): Promise<DreamingAgentSession | null> => {
+			const loaded = await router.loadConfig();
+			if (!loaded.ok) return null;
+			const decision = await router.explain(
+				{ agentId: defaultAgentId, operation, promptPreview: "AgentSession planning" },
+				false,
+			);
+			if (!decision.ok) return null;
+			const target = parseRoutingTargetRef(decision.value.targetRef);
+			if (!target.ok) return null;
+			const provider = await router.createProvider(loaded.value, target.value.targetId, target.value.modelId);
+			if (!isPiDreamingAgentProvider(provider)) return null;
+			return provider.createDreamingAgentSession(tools, opts);
+		};
 		return {
 			name: `routing:${operation}`,
+			dreamingTimeoutMs: 60_000,
+			createDreamingAgentSession,
 			async generate(prompt, opts): Promise<string> {
 				const result = await router.execute(
 					{

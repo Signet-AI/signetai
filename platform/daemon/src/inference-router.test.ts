@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, it, mock } from "bun:test";
+import { defineTool } from "@earendil-works/pi-coding-agent";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Type } from "typebox";
+import { isDreamingAgentSessionProvider } from "./pipeline/ingest/agent-planner";
 import { getOrCreateInferenceRouter, resetInferenceRouterForTests } from "./inference-router";
 
 const originalFetch = globalThis.fetch;
@@ -85,6 +88,52 @@ describe("InferenceRouter legacy API credentials", () => {
 			expect(seen.every((entry) => entry.authorization === "Bearer test-openrouter-key")).toBe(true);
 			expect(seen.map((entry) => entry.url)).toContain("https://openrouter.ai/api/v1/models");
 			expect(seen.map((entry) => entry.url)).toContain("https://openrouter.ai/api/v1/chat/completions");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("forwards Pi AgentSession planning through the memory extraction workload", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "signet-router-dreaming-session-"));
+		try {
+			mkdirSync(join(dir, "memory"), { recursive: true });
+			writeFileSync(
+				join(dir, "agent.yaml"),
+				`memory:
+  pipelineV2:
+    extraction:
+      provider: openai-compatible
+      model: test-model
+      endpoint: http://127.0.0.1:1234/v1
+    synthesis:
+      enabled: false
+`,
+			);
+			globalThis.fetch = mock((input: string | URL | Request) => {
+				if (String(input) === "http://127.0.0.1:1234/v1/models") {
+					return Promise.resolve(new Response(JSON.stringify({ data: [] }), { status: 200 }));
+				}
+				return Promise.resolve(new Response("unexpected fetch", { status: 500 }));
+			}) as unknown as typeof fetch;
+			const provider = getOrCreateInferenceRouter(dir).createWorkloadProvider("memory_extraction");
+			expect(isDreamingAgentSessionProvider(provider)).toBe(true);
+			if (!isDreamingAgentSessionProvider(provider)) return;
+			const tool = defineTool({
+				name: "inspect_dream_context",
+				label: "Inspect dreaming context",
+				description: "test",
+				parameters: Type.Object({}),
+				async execute() {
+					return { content: [], details: {} };
+				},
+			});
+			const session = await provider.createDreamingAgentSession([tool]);
+			expect(session).not.toBeNull();
+			try {
+				expect(session?.getActiveToolNames()).toEqual(["inspect_dream_context"]);
+			} finally {
+				session?.dispose();
+			}
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}

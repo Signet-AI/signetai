@@ -21,13 +21,19 @@ import {
 } from "@earendil-works/pi-ai";
 import {
 	AuthStorage,
+	DefaultResourceLoader,
 	ModelRegistry,
 	SessionManager,
+	SettingsManager,
 	createAgentSession,
 	type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import type { LlmGenerateResult, LlmProvider, LlmUsage } from "@signet/core";
-import type { DreamingAgentSession, DreamingAgentSessionProvider } from "./ingest/agent-planner";
+import type {
+	DreamingAgentSession,
+	DreamingAgentSessionOptions,
+	DreamingAgentSessionProvider,
+} from "./ingest/agent-planner";
 import { logger } from "../logger";
 import type {
 	LlmProviderCallOptions,
@@ -86,6 +92,7 @@ export interface PiModelProviderConfig {
 
 export interface PiDreamingAgentProvider extends DreamingAgentSessionProvider {
 	readonly isPiDreamingAgentProvider: true;
+	readonly dreamingTimeoutMs: number;
 }
 
 export function isPiDreamingAgentProvider(provider: LlmProvider): provider is LlmProvider & PiDreamingAgentProvider {
@@ -400,20 +407,57 @@ export function createPiModelProvider(config: PiModelProviderConfig): StreamCapa
 	return {
 		...streamCapable,
 		isPiDreamingAgentProvider: true,
-		async createDreamingAgentSession(tools: readonly ToolDefinition[]): Promise<DreamingAgentSession> {
+		dreamingTimeoutMs: defaultTimeoutMs,
+		async createDreamingAgentSession(
+			tools: readonly ToolDefinition[],
+			opts: DreamingAgentSessionOptions = {},
+		): Promise<DreamingAgentSession> {
 			const authStorage = AuthStorage.inMemory({
 				[piModel.provider]: { type: "api_key", key: apiKey ?? KEYLESS_API_KEY },
 			});
 			const modelRegistry = ModelRegistry.inMemory(authStorage);
+			const settingsManager = SettingsManager.inMemory();
+			const resourceLoader = new DefaultResourceLoader({
+				cwd: process.cwd(),
+				agentDir: process.cwd(),
+				settingsManager,
+				noExtensions: true,
+				noSkills: true,
+				noPromptTemplates: true,
+				noThemes: true,
+				noContextFiles: true,
+				systemPrompt:
+					"You are Signet's dreaming planner. Inspect the provided context and submit one validated ingest plan. You can use only the supplied tools.",
+			});
+			await resourceLoader.reload();
 			const { session } = await createAgentSession({
-				model: piModel,
+				model: opts.maxTokens ? { ...piModel, maxTokens: opts.maxTokens } : piModel,
 				authStorage,
 				modelRegistry,
 				sessionManager: SessionManager.inMemory(),
-				noTools: "builtin",
+				settingsManager,
+				resourceLoader,
+				tools: tools.map((tool) => tool.name),
 				customTools: [...tools],
 			});
-			return session;
+			return {
+				prompt: (text) => session.prompt(text),
+				abort: () => session.abort(),
+				dispose: () => session.dispose(),
+				getActiveToolNames: () => session.getActiveToolNames(),
+				getSystemPrompt: () => session.systemPrompt,
+				getFailureMessage: () => {
+					for (const message of [...session.messages].reverse()) {
+						if (
+							message.role === "assistant" &&
+							(message.stopReason === "error" || message.stopReason === "aborted" || message.stopReason === "length")
+						) {
+							return message.errorMessage ?? `Pi agent ${message.stopReason} without submit_ingest_plan`;
+						}
+					}
+					return undefined;
+				},
+			};
 		},
 	};
 }

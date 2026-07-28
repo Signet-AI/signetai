@@ -26,9 +26,8 @@
 
 import { createHash } from "node:crypto";
 import type { LlmProvider } from "../provider";
-import { isPiDreamingAgentProvider } from "../pi-provider";
 import { logger } from "../../logger";
-import { planIngestWithAgent } from "./agent-planner";
+import { isDreamingAgentSessionProvider, planIngestWithAgent } from "./agent-planner";
 import type { IngestContext } from "./context";
 import { INGEST_GRAPH_OPERATIONS, parseIngestPlan, type IngestPlan } from "./ingest-plan";
 
@@ -145,11 +144,20 @@ export async function planIngest(ctx: IngestContext, opts: PlanIngestOptions): P
 	const prompt = buildPlanPrompt(ctx);
 
 	let body: unknown;
-	if (isPiDreamingAgentProvider(opts.provider)) {
-		const planned = await planIngestWithAgent(ctx, opts.provider);
-		if (!planned.ok) return { ok: false, reason: "provider-error", message: planned.message };
-		body = planned.body;
-	} else {
+	let usedAgentPlanner = false;
+	if (isDreamingAgentSessionProvider(opts.provider)) {
+		const planned = await planIngestWithAgent(ctx, opts.provider, {
+			signal: opts.signal,
+			timeoutMs: opts.timeoutMs ?? opts.provider.dreamingTimeoutMs,
+			maxTokens: opts.maxTokens,
+		});
+		if (!planned.ok && !planned.unsupported) return { ok: false, reason: "provider-error", message: planned.message };
+		if (planned.ok) {
+			body = planned.body;
+			usedAgentPlanner = true;
+		}
+	}
+	if (!usedAgentPlanner) {
 		let raw: string;
 		try {
 			raw = await opts.provider.generate(prompt, {
