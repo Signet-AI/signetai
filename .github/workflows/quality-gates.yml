@@ -1,0 +1,108 @@
+name: Quality Gates
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  typescript-and-rust:
+    name: Quality (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    if: github.event_name == 'push' || github.event.pull_request.draft == false
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.96.1
+          components: rustfmt, clippy
+
+      - name: Install dependencies without Puppeteer browser download
+        env:
+          PUPPETEER_SKIP_DOWNLOAD: "1"
+        run: bun install --frozen-lockfile
+
+      - name: JavaScript and TypeScript lint
+        run: bunx biome check .
+
+      - name: Build shared JavaScript test dependencies
+        run: bun run build:core && bun run build:connector-base
+
+      - name: JavaScript and TypeScript tests
+        run: bun test
+
+      - name: Publish manifest validation
+        run: bun run check:publish-manifests
+
+      # The workspace-wide TypeScript gate becomes blocking after #969 clears
+      # the existing daemon backlog. Keep the result visible until then.
+      - name: TypeScript typecheck (advisory until #969)
+        continue-on-error: true
+        run: bun run typecheck
+
+      - name: Dead-code analysis (advisory baseline)
+        continue-on-error: true
+        run: bun run lint:dead-code
+
+      - name: Package API lint (advisory baseline)
+        continue-on-error: true
+        run: bun run lint:packages
+
+      - name: Rust formatting
+        working-directory: platform/daemon-rs
+        run: cargo fmt --all -- --check
+
+      - name: Rust Clippy
+        working-directory: platform/daemon-rs
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      - name: Rust compilation
+        working-directory: platform/daemon-rs
+        run: cargo check --workspace --all-features
+
+      - name: Rust tests
+        working-directory: platform/daemon-rs
+        run: cargo test --workspace --all-features
+
+      - name: Rust dependency policy
+        working-directory: platform/daemon-rs
+        run: cargo install cargo-deny --locked && cargo deny check advisories bans licenses sources
+
+  automation:
+    name: Automation meta-lint
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' || github.event.pull_request.draft == false
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: GitHub Actions workflow lint
+        run: docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:latest -color
+
+      - name: Shell script lint
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(git ls-files '*.sh')
+          if ((${#files[@]})); then
+            docker run --rm -v "$PWD:/repo" -w /repo koalaman/shellcheck-alpine:stable "${files[@]}"
+          fi
+
+      - name: Dockerfile lint
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(git ls-files 'Dockerfile*' '*Dockerfile')
+          for file in "${files[@]}"; do
+            docker run --rm -i hadolint/hadolint < "$file"
+          done

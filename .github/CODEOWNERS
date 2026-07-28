@@ -1,0 +1,11 @@
+# Quality-critical paths require an owner review.
+* @aaf2tbz
+
+/.github/ @aaf2tbz
+/biome.json @aaf2tbz
+/package.json @aaf2tbz
+/bun.lock @aaf2tbz
+/platform/daemon-rs/ @aaf2tbz
+/platform/core/src/migrations/ @aaf2tbz
+/scripts/ @aaf2tbz
+/deploy/ @aaf2tbz

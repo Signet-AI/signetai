@@ -19,14 +19,6 @@ jobs:
         with:
           script: |
             const pr = context.payload.pull_request;
-            const labels = (pr.labels || []).map((l) => l.name);
-            if (labels.includes("checklist-exception")) {
-              core.notice(
-                "Bypassing mandatory readiness checklist because PR has label: checklist-exception",
-              );
-              return;
-            }
-
             const body = pr.body || "";
             const required = [
               "Spec alignment validated (`INDEX.md` + `dependencies.yaml`)",
@@ -51,7 +43,7 @@ jobs:
                   "Missing required checked PR readiness items:",
                   ...missing.map((m) => `- ${m}`),
                   "",
-                  "Please update the PR body checklist in .github/pull_request_template.md.\nTo bypass intentionally, apply label: checklist-exception",
+                  "Please update the PR body checklist in .github/pull_request_template.md.",
                 ].join("\n"),
               );
             }

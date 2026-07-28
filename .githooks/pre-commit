@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+bunx biome check --staged
+
+if git diff --cached --name-only | grep -Eq '(^|/)(Cargo\.toml|Cargo\.lock|.*\.rs)$'; then
+  (
+    cd platform/daemon-rs
+    cargo fmt --all -- --check
+    cargo clippy --workspace --all-targets --all-features -- -D warnings
+  )
+fi

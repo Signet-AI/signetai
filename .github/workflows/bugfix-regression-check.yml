@@ -20,11 +20,6 @@ jobs:
           script: |
             const pr = context.payload.pull_request;
             const labels = (pr.labels || []).map((l) => l.name.toLowerCase());
-            if (labels.includes('checklist-exception')) {
-              core.notice('Bypassing bugfix regression guard due to checklist-exception label.');
-              return;
-            }
-
             const title = (pr.title || '').toLowerCase();
             const isBugfix = title.startsWith('fix') || labels.includes('bug') || labels.includes('bugfix');
             if (!isBugfix) {
@@ -47,6 +42,6 @@ jobs:
                 'Bugfix PRs must include regression test changes.',
                 'No changed test files were detected in this PR.',
                 'Add/update at least one test that fails before the fix and passes after.',
-                'If this is an intentional exception, apply label: checklist-exception',
+                'Regression coverage is required for every bugfix PR.',
               ].join('\n'));
             }

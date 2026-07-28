@@ -19,12 +19,6 @@ jobs:
         with:
           script: |
             const pr = context.payload.pull_request;
-            const labels = (pr.labels || []).map((l) => l.name.toLowerCase());
-            if (labels.includes('checklist-exception')) {
-              core.notice('Bypassing migration guard due to checklist-exception label.');
-              return;
-            }
-
             const files = await github.paginate(github.rest.pulls.listFiles, {
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -60,6 +54,6 @@ jobs:
                 ...missing.map((m) => `- ${m}`),
                 '',
                 'Fill the "Migration Notes (if applicable)" section in the PR template.',
-                'If this is an intentional exception, apply label: checklist-exception',
+                'Migration notes are required whenever schema migrations change.',
               ].join('\n'));
             }
