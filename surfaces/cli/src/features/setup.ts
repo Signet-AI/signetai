@@ -1091,49 +1091,38 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 	const signetSecretsEnabled = await resolveSignetSecretsCorePluginSelection(basePath, nonInteractive, options);
 	const graphiqEnabled = await resolveGraphiqPluginSelection(basePath, nonInteractive, options);
 
+	// One question covers both how a local daemon binds AND whether to skip a
+	// local daemon entirely in favor of a remote one. (networkMode is irrelevant
+	// when remote — no local daemon is started.)
 	let networkMode: NetworkMode;
-	if (nonInteractive) {
-		networkMode = deps.normalizeChoice(options.networkMode, NETWORK_MODES) ?? existingNetworkMode;
-	} else {
-		console.log();
-		networkMode = await select({
-			message: "How should the daemon be hosted?",
-			choices: [
-				{
-					value: "localhost",
-					name: "localhost only (default)",
-					description: "Bind to 127.0.0.1 only",
-				},
-				{
-					value: "tailscale",
-					name: "Tailscale / remote",
-					description: "Keep localhost working and also bind 0.0.0.0",
-				},
-			],
-			default: existingNetworkMode,
-		});
-	}
-
-	// Remote instance: point this workspace at a daemon running elsewhere
-	// instead of starting a local one. Persisted as daemon.url in agent.yaml.
 	let daemonUrl: string | undefined;
 	const requestedRemoteUrl = normalizeHttpEndpoint(deps.normalizeStringValue(options.remoteUrl));
 	if (options.remoteUrl && !requestedRemoteUrl) {
 		failSetupValidation("--remote-url must be an http:// or https:// URL.");
 	}
 	if (nonInteractive) {
+		networkMode = deps.normalizeChoice(options.networkMode, NETWORK_MODES) ?? existingNetworkMode;
 		daemonUrl = requestedRemoteUrl ?? undefined;
 	} else {
-		const useRemote = await confirm({
-			message: "Use a remote daemon instead of starting a local one?",
-			default: false,
+		console.log();
+		const hosting = await select({
+			message: "How should the daemon run?",
+			choices: [
+				{ value: "local", name: "Local — this machine (localhost only)" },
+				{ value: "tailscale", name: "Local — this machine (Tailscale / network)" },
+				{ value: "remote", name: "Remote — connect to a daemon elsewhere" },
+			],
+			default: existingNetworkMode === "tailscale" ? "tailscale" : "local",
 		});
-		if (useRemote) {
+		if (hosting === "remote") {
 			const urlInput = await input({
 				message: "Remote daemon URL:",
 				validate: (value) => normalizeHttpEndpoint(value) !== undefined || "Enter an http:// or https:// URL.",
 			});
 			daemonUrl = normalizeHttpEndpoint(urlInput) ?? undefined;
+			networkMode = "localhost"; // no local daemon to bind
+		} else {
+			networkMode = hosting === "tailscale" ? "tailscale" : "localhost";
 		}
 	}
 
