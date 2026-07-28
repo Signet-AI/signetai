@@ -1279,7 +1279,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 			if (chosen === "__oauth__") {
 				const connected = await pickConnectedProvider(oauthProviderOptions(), "oauth", { select, search, input });
 				if (connected) {
-					extractionConnect = connected;
+					extractionConnect = { family: connected.family, connectMethod: connected.connectMethod };
 					extractionModel = connected.model;
 					extractionProvider = connected.family as ExtractionProviderChoice;
 					break;
@@ -1287,7 +1287,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 			} else if (chosen === "__apikey__") {
 				const connected = await pickConnectedProvider(apiKeyProviderOptions(), "api", { select, search, input });
 				if (connected) {
-					extractionConnect = connected;
+					extractionConnect = { family: connected.family, connectMethod: connected.connectMethod };
 					extractionModel = connected.model;
 					extractionProvider = connected.family as ExtractionProviderChoice;
 					break;

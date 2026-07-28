@@ -124,6 +124,20 @@ describe("setupPlanSchema", () => {
 		expect(parseSetupPlan(plan).extractionConnect).toEqual({ family: "anthropic", connectMethod: "oauth" });
 	});
 
+	it("rejects a model key on extractionConnect (the model lives in extractionModel)", () => {
+		// Regression: the wizard used to assign the whole {family,connectMethod,model}
+		// object, which the strict schema rejected with 'Unrecognized key: model'.
+		expect(() =>
+			parseSetupPlan(
+				basePlan({
+					extractionProvider: "openai-codex",
+					extractionModel: "gpt-5.5",
+					extractionConnect: { family: "openai-codex", connectMethod: "oauth", model: "gpt-5.5" } as never,
+				}),
+			),
+		).toThrow("model");
+	});
+
 	it("accepts a multi-agent roster", () => {
 		const plan = basePlan({
 			agents: [
