@@ -131,7 +131,7 @@
     },
     "integrations/kimi/connector": {
       "name": "@signet/connector-kimi",
-      "version": "0.154.10",
+      "version": "0.155.1",
       "bin": {
         "signet-connector-kimi": "bin/install.js",
       },
@@ -347,12 +347,6 @@
         "sqlite-vec-linux-x64": "^0.1.7-alpha.2",
         "sqlite-vec-windows-x64": "^0.1.7-alpha.2",
       },
-      "peerDependencies": {
-        "better-sqlite3": "*",
-      },
-      "optionalPeers": [
-        "better-sqlite3",
-      ],
     },
     "platform/daemon": {
       "name": "@signet/daemon",
