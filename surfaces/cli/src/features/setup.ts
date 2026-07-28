@@ -24,7 +24,7 @@ import ora from "ora";
 import { validateName } from "../commands/agent.js";
 import { createDaemonClient } from "../lib/daemon.js";
 import { installGraphiqPlugin } from "./graphiq.js";
-import { connectApiKey, connectChoice, connectOAuth } from "./setup-connect.js";
+import { connectApiKey, connectOAuth } from "./setup-connect.js";
 import type { ConnectHttp, ConnectUi } from "./setup-connect.js";
 import { runFreshSetup } from "./setup-fresh.js";
 import { CONNECTABLE_PROVIDERS, CONNECT_MODEL_DEFAULTS } from "./setup-inference-connect.js";
@@ -32,7 +32,6 @@ import { runExistingSetupWizard } from "./setup-migrate.js";
 import {
 	AGGREGATE_RECALL_PROVIDER_CHOICES,
 	type AggregateRecallProviderChoice,
-	EXTRACTION_SAFETY_WARNING,
 	defaultAcpxModel,
 	defaultExtractionModel,
 } from "./setup-pipeline.js";
@@ -60,7 +59,6 @@ import {
 	type OpenClawRuntimeChoice,
 	SETUP_HARNESS_CHOICES,
 	defaultEmbeddingProviderForDeployment,
-	defaultExtractionProviderForDeployment,
 	detectExtractionProviderFromAvailable,
 	detectPreferredOpenClawWorkspace,
 	failNonInteractiveSetup,
@@ -85,49 +83,32 @@ function modelChoices(provider: ExtractionProviderChoice): Array<{ value: string
 }
 
 /**
- * Interactive sub-flow matching the dashboard's connect-provider wall: pick a
- * cloud provider, choose API-key vs OAuth login (when both are offered), and
- * pick a model. Returns the connect decision, or undefined if the user backs
- * out. Credential entry happens after the daemon starts (the daemon owns the
- * secrets store + OAuth endpoints, exactly like the browser dashboard).
+ * Connect sub-flows for background inference. The METHOD (OAuth vs API key)
+ * is chosen by the top-level menu, so each helper just picks a provider from
+ * the matching capability set and a model. Credential entry happens after the
+ * daemon starts (the daemon owns the secrets store + OAuth endpoints, like the
+ * browser dashboard). Returns undefined if the user backs out.
  */
-async function connectExtractionProvider(prompts: {
-	readonly select: typeof import("@inquirer/prompts").select;
-	readonly confirm: typeof import("@inquirer/prompts").confirm;
-	readonly input: typeof import("@inquirer/prompts").input;
-}): Promise<{ family: string; connectMethod: "api" | "oauth"; model: string } | undefined> {
-	const provider = await prompts.select<{
-		id: string;
-		name: string;
-		supportsOAuth: boolean;
-		supportsApiKey: boolean;
-	}>({
-		message: "Connect a cloud provider for memory extraction:",
+async function pickConnectedProvider(
+	providers: readonly { id: string; name: string }[],
+	connectMethod: "api" | "oauth",
+	prompts: {
+		readonly select: typeof import("@inquirer/prompts").select;
+		readonly input: typeof import("@inquirer/prompts").input;
+	},
+): Promise<{ family: string; connectMethod: "api" | "oauth"; model: string } | undefined> {
+	const provider = await prompts.select<{ id: string; name: string }>({
+		message: connectMethod === "oauth" ? "Log in with:" : "Provider:",
 		choices: [
-			...CONNECTABLE_PROVIDERS.map((p) => ({ value: p, name: p.name })),
-			{ value: { id: "__back__", name: "← back", supportsOAuth: false, supportsApiKey: false }, name: "← back" },
+			...providers.map((p) => ({ value: p, name: p.name })),
+			{ value: { id: "__back__", name: "← back" }, name: "← back" },
 		],
 	});
 	if (provider.id === "__back__") return undefined;
-
-	const choice = connectChoice(provider);
-	let connectMethod: "api" | "oauth";
-	if (choice === "choice") {
-		connectMethod = await prompts.select<"api" | "oauth">({
-			message: `How do you want to connect ${provider.name}?`,
-			choices: [
-				{ value: "oauth", name: "Log in (subscription / OAuth)" },
-				{ value: "api", name: "Paste an API key" },
-			],
-		});
-	} else {
-		connectMethod = choice === "oauth" ? "oauth" : "api";
-	}
-	const modelDefault = CONNECT_MODEL_DEFAULTS[provider.id] ?? "";
 	const model = (
 		await prompts.input({
-			message: `Model for ${provider.name} (extraction):`,
-			default: modelDefault,
+			message: "Model:",
+			default: CONNECT_MODEL_DEFAULTS[provider.id] ?? "",
 			validate: (v) => v.trim().length > 0 || "Enter a model id",
 		})
 	).trim();
@@ -1309,79 +1290,50 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		});
 	} else {
 		console.log();
-		console.log(chalk.cyan("  Deployment guidance:"));
-		for (const line of getDeploymentExtractionGuidance(deploymentType)) {
-			console.log(chalk.dim(`    ${line}`));
-		}
+		console.log(chalk.yellow("  Background inference runs continuously — remote APIs can incur usage costs."));
 		console.log();
-		console.log(chalk.yellow(`  Warning: ${EXTRACTION_SAFETY_WARNING}`));
-		console.log();
-		const choices: Array<{ value: ExtractionProviderChoice; name: string }> = [
-			{
-				value: "acpx",
-				name: `ACPX (recommended default, uses your selected Codex/Claude/OpenCode harness with pinned acpx@0.7.0)${detectedProvider === "acpx" ? " — detected" : ""}`,
-			},
-			{
-				value: "llama-cpp",
-				name: `llama.cpp (local, recommended — qwen3:4b minimum)${detectedProvider === "llama-cpp" ? " — detected" : ""}`,
-			},
-			{
-				value: "claude-code",
-				name: `Claude Code (Haiku, recommended if you already have Pro/Max)${detectedProvider === "claude-code" ? " — detected" : ""}`,
-			},
-			{
-				value: "codex",
-				name: `Codex (gpt-5.4-mini, recommended if you already have Pro/Max)${detectedProvider === "codex" ? " — detected" : ""}`,
-			},
-			{
-				value: "ollama",
-				name: `Ollama (local, qwen3:4b minimum)${detectedProvider === "ollama" ? " — detected" : ""}`,
-			},
-			{ value: "none", name: "Disable extraction pipeline" },
-			{
-				value: "opencode",
-				name: `OpenCode (advanced, can route to paid APIs)${detectedProvider === "opencode" ? " — detected" : ""}`,
-			},
-			{
-				value: "openrouter",
-				name: "OpenRouter (cloud API, billed usage, expensive if left running)",
-			},
-			{
-				value: "openai-compatible",
-				name: "OpenAI-compatible endpoint (advanced, uses OPENAI_API_KEY and extraction endpoint config)",
-			},
-		];
-		// Dashboard-style connect option: cloud provider via API key or OAuth.
-		choices.unshift({
-			value: "__connect__" as ExtractionProviderChoice,
-			name: "Connect a cloud provider (API key or login — Anthropic, OpenRouter, OpenAI, …)",
-		});
-		const chosen = await select<ExtractionProviderChoice>({
-			message: "Memory extraction provider (analyzes conversations):",
-			choices,
-			default: defaultExtractionProviderForDeployment(
-				deploymentType,
-				detectedProvider,
-				availableToolExtractionProviders,
-				harnesses,
-			),
-		});
-		if (chosen === ("__connect__" as ExtractionProviderChoice)) {
-			const connected = await connectExtractionProvider({ select, confirm, input });
-			if (connected) {
-				extractionConnect = connected;
-				extractionModel = connected.model;
-				// pipelineV2 must stay enabled for the worker; the modern inference.*
-				// route (written in apply) overrides the actual target/credential.
-				extractionProvider = connected.family as ExtractionProviderChoice;
+		// Loop so a connect sub-flow can return to this menu on "← back".
+		for (;;) {
+			const chosen = await select<string>({
+				message: "Background inference provider:",
+				choices: [
+					{ value: "__oauth__", name: "Log in (Claude Max, ChatGPT, GitHub Copilot)" },
+					{ value: "__apikey__", name: "API key (Anthropic, OpenRouter, OpenAI, …)" },
+					{
+						value: "acpx",
+						name: `ACPX (harness subprocess)${detectedProvider === "acpx" ? " — detected" : ""}`,
+					},
+					{ value: "openai-compatible", name: "Custom endpoint (OpenAI-compatible URL)" },
+				],
+			});
+			if (chosen === "__oauth__") {
+				const connected = await pickConnectedProvider(
+					CONNECTABLE_PROVIDERS.filter((p) => p.supportsOAuth),
+					"oauth",
+					{ select, input },
+				);
+				if (connected) {
+					extractionConnect = connected;
+					extractionModel = connected.model;
+					extractionProvider = connected.family as ExtractionProviderChoice;
+					break;
+				}
+			} else if (chosen === "__apikey__") {
+				const connected = await pickConnectedProvider(
+					CONNECTABLE_PROVIDERS.filter((p) => p.supportsApiKey),
+					"api",
+					{ select, input },
+				);
+				if (connected) {
+					extractionConnect = connected;
+					extractionModel = connected.model;
+					extractionProvider = connected.family as ExtractionProviderChoice;
+					break;
+				}
 			} else {
-				extractionProvider = await select({
-					message: "Memory extraction provider:",
-					choices: choices.filter((c) => c.value !== ("__connect__" as ExtractionProviderChoice)),
-				});
+				extractionProvider = chosen as ExtractionProviderChoice;
+				break;
 			}
-		} else {
-			extractionProvider = chosen;
 		}
 	}
 

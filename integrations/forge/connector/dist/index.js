@@ -6,48 +6,65 @@ import {
   readFileSync as readFileSync2,
   readdirSync,
   readlinkSync,
-  rmSync,
+  rmSync as rmSync2,
   unlinkSync as unlinkSync3,
-  writeFileSync as writeFileSync2
+  writeFileSync as writeFileSync3
 } from "node:fs";
-import { homedir as homedir4 } from "node:os";
+import { homedir as homedir5 } from "node:os";
 import { isAbsolute, join as join6, relative, resolve as resolve2, sep } from "node:path";
 
 // ../../../libs/connector-base/dist/index.js
 import { randomBytes } from "node:crypto";
-import { existsSync, readFileSync, renameSync, unlinkSync as unlinkSync2, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, renameSync, statSync as statSync2, unlinkSync as unlinkSync2, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname as dirname2, join as join3, resolve } from "node:path";
+import { dirname as dirname3, join as join3 } from "node:path";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir as homedir2 } from "os";
 import { join as join2 } from "path";
+import { existsSync as existsSync4, mkdirSync as mkdirSync2, readFileSync as readFileSync3, rmSync, statSync, writeFileSync as writeFileSync2 } from "node:fs";
+import { homedir as homedir3 } from "node:os";
+import { dirname as dirname2, join as join5, resolve } from "node:path";
 import { createRequire as createRequire2 } from "node:module";
-import { homedir as homedir3, platform as platform2 } from "node:os";
-import { basename, dirname as dirname3, resolve as resolve3 } from "node:path";
-import { homedir as homedir7 } from "node:os";
-import { existsSync as existsSync12, lstatSync, mkdirSync as mkdirSync8, readdirSync as readdirSync6, symlinkSync, unlinkSync } from "node:fs";
-import { join as join12 } from "node:path";
-var __create = Object.create;
-var __getProtoOf = Object.getPrototypeOf;
-var __defProp = Object.defineProperty;
-var __getOwnPropNames = Object.getOwnPropertyNames;
-var __hasOwnProp = Object.prototype.hasOwnProperty;
-var __toESM = (mod, isNodeMode, target) => {
-  target = mod != null ? __create(__getProtoOf(mod)) : {};
-  const to = isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target;
-  for (let key of __getOwnPropNames(mod))
-    if (!__hasOwnProp.call(to, key))
-      __defProp(to, key, {
-        get: () => mod[key],
+import { homedir as homedir4, platform as platform2 } from "node:os";
+import { basename, dirname as dirname4, resolve as resolve4 } from "node:path";
+import { homedir as homedir8 } from "node:os";
+import { existsSync as existsSync13, lstatSync, mkdirSync as mkdirSync9, readdirSync as readdirSync6, symlinkSync, unlinkSync } from "node:fs";
+import { join as join13 } from "node:path";
+var __create2 = Object.create;
+var __getProtoOf2 = Object.getPrototypeOf;
+var __defProp2 = Object.defineProperty;
+var __getOwnPropNames2 = Object.getOwnPropertyNames;
+var __hasOwnProp2 = Object.prototype.hasOwnProperty;
+function __accessProp2(key) {
+  return this[key];
+}
+var __toESMCache_node2;
+var __toESMCache_esm2;
+var __toESM2 = (mod, isNodeMode, target) => {
+  var canCache = mod != null && typeof mod === "object";
+  if (canCache) {
+    var cache = isNodeMode ? __toESMCache_node2 ??= new WeakMap : __toESMCache_esm2 ??= new WeakMap;
+    var cached = cache.get(mod);
+    if (cached)
+      return cached;
+  }
+  target = mod != null ? __create2(__getProtoOf2(mod)) : {};
+  const to = isNodeMode || !mod || !mod.__esModule ? __defProp2(target, "default", { value: mod, enumerable: true }) : target;
+  for (let key of __getOwnPropNames2(mod))
+    if (!__hasOwnProp2.call(to, key))
+      __defProp2(to, key, {
+        get: __accessProp2.bind(mod, key),
         enumerable: true
       });
+  if (canCache)
+    cache.set(mod, to);
   return to;
 };
-var __commonJS = (cb, mod) => () => (mod || cb((mod = { exports: {} }).exports, mod), mod.exports);
+var __commonJS2 = (cb, mod) => () => (mod || cb((mod = { exports: {} }).exports, mod), mod.exports);
 var __require = /* @__PURE__ */ createRequire(import.meta.url);
-var require_identity = __commonJS((exports) => {
+var require_identity = __commonJS2((exports) => {
   var ALIAS = Symbol.for("yaml.alias");
   var DOC = Symbol.for("yaml.document");
   var MAP = Symbol.for("yaml.map");
@@ -99,7 +116,7 @@ var require_identity = __commonJS((exports) => {
   exports.isScalar = isScalar;
   exports.isSeq = isSeq;
 });
-var require_visit = __commonJS((exports) => {
+var require_visit = __commonJS2((exports) => {
   var identity = require_identity();
   var BREAK = Symbol("break visit");
   var SKIP = Symbol("skip children");
@@ -252,7 +269,7 @@ var require_visit = __commonJS((exports) => {
   exports.visit = visit;
   exports.visitAsync = visitAsync;
 });
-var require_directives = __commonJS((exports) => {
+var require_directives = __commonJS2((exports) => {
   var identity = require_identity();
   var visit = require_visit();
   var escapeChars = {
@@ -402,7 +419,7 @@ var require_directives = __commonJS((exports) => {
   Directives.defaultTags = { "!!": "tag:yaml.org,2002:" };
   exports.Directives = Directives;
 });
-var require_anchors = __commonJS((exports) => {
+var require_anchors = __commonJS2((exports) => {
   var identity = require_identity();
   var visit = require_visit();
   function anchorIsValid(anchor) {
@@ -462,7 +479,7 @@ var require_anchors = __commonJS((exports) => {
   exports.createNodeAnchors = createNodeAnchors;
   exports.findNewAnchor = findNewAnchor;
 });
-var require_applyReviver = __commonJS((exports) => {
+var require_applyReviver = __commonJS2((exports) => {
   function applyReviver(reviver, obj, key, val) {
     if (val && typeof val === "object") {
       if (Array.isArray(val)) {
@@ -507,7 +524,7 @@ var require_applyReviver = __commonJS((exports) => {
   }
   exports.applyReviver = applyReviver;
 });
-var require_toJS = __commonJS((exports) => {
+var require_toJS = __commonJS2((exports) => {
   var identity = require_identity();
   function toJS(value, arg, ctx) {
     if (Array.isArray(value))
@@ -532,7 +549,7 @@ var require_toJS = __commonJS((exports) => {
   }
   exports.toJS = toJS;
 });
-var require_Node = __commonJS((exports) => {
+var require_Node = __commonJS2((exports) => {
   var applyReviver = require_applyReviver();
   var identity = require_identity();
   var toJS = require_toJS();
@@ -567,7 +584,7 @@ var require_Node = __commonJS((exports) => {
   }
   exports.NodeBase = NodeBase;
 });
-var require_Alias = __commonJS((exports) => {
+var require_Alias = __commonJS2((exports) => {
   var anchors = require_anchors();
   var visit = require_visit();
   var identity = require_identity();
@@ -673,7 +690,7 @@ var require_Alias = __commonJS((exports) => {
   }
   exports.Alias = Alias;
 });
-var require_Scalar = __commonJS((exports) => {
+var require_Scalar = __commonJS2((exports) => {
   var identity = require_identity();
   var Node = require_Node();
   var toJS = require_toJS();
@@ -699,7 +716,7 @@ var require_Scalar = __commonJS((exports) => {
   exports.Scalar = Scalar;
   exports.isScalarValue = isScalarValue;
 });
-var require_createNode = __commonJS((exports) => {
+var require_createNode = __commonJS2((exports) => {
   var Alias = require_Alias();
   var identity = require_identity();
   var Scalar = require_Scalar();
@@ -769,7 +786,7 @@ var require_createNode = __commonJS((exports) => {
   }
   exports.createNode = createNode;
 });
-var require_Collection = __commonJS((exports) => {
+var require_Collection = __commonJS2((exports) => {
   var createNode = require_createNode();
   var identity = require_identity();
   var Node = require_Node();
@@ -882,7 +899,7 @@ var require_Collection = __commonJS((exports) => {
   exports.collectionFromPath = collectionFromPath;
   exports.isEmptyPath = isEmptyPath;
 });
-var require_stringifyComment = __commonJS((exports) => {
+var require_stringifyComment = __commonJS2((exports) => {
   var stringifyComment = (str) => str.replace(/^(?!$)(?: $)?/gm, "#");
   function indentComment(comment, indent) {
     if (/^\n+$/.test(comment))
@@ -897,7 +914,7 @@ var require_stringifyComment = __commonJS((exports) => {
   exports.lineComment = lineComment;
   exports.stringifyComment = stringifyComment;
 });
-var require_foldFlowLines = __commonJS((exports) => {
+var require_foldFlowLines = __commonJS2((exports) => {
   var FOLD_FLOW = "flow";
   var FOLD_BLOCK = "block";
   var FOLD_QUOTED = "quoted";
@@ -1032,7 +1049,7 @@ ${indent}${text.slice(fold + 1, end2)}`;
   exports.FOLD_QUOTED = FOLD_QUOTED;
   exports.foldFlowLines = foldFlowLines;
 });
-var require_stringifyString = __commonJS((exports) => {
+var require_stringifyString = __commonJS2((exports) => {
   var Scalar = require_Scalar();
   var foldFlowLines = require_foldFlowLines();
   var getFoldOptions = (ctx, isBlock) => ({
@@ -1328,7 +1345,7 @@ ${indent}`);
   }
   exports.stringifyString = stringifyString;
 });
-var require_stringify = __commonJS((exports) => {
+var require_stringify = __commonJS2((exports) => {
   var anchors = require_anchors();
   var identity = require_identity();
   var stringifyComment = require_stringifyComment();
@@ -1447,7 +1464,7 @@ ${ctx.indent}${str}`;
   exports.createStringifyContext = createStringifyContext;
   exports.stringify = stringify;
 });
-var require_stringifyPair = __commonJS((exports) => {
+var require_stringifyPair = __commonJS2((exports) => {
   var identity = require_identity();
   var Scalar = require_Scalar();
   var stringify = require_stringify();
@@ -1581,7 +1598,7 @@ ${ctx.indent}`;
   }
   exports.stringifyPair = stringifyPair;
 });
-var require_log = __commonJS((exports) => {
+var require_log = __commonJS2((exports) => {
   var node_process = __require("process");
   function debug(logLevel, ...messages) {
     if (logLevel === "debug")
@@ -1598,7 +1615,7 @@ var require_log = __commonJS((exports) => {
   exports.debug = debug;
   exports.warn = warn;
 });
-var require_merge = __commonJS((exports) => {
+var require_merge = __commonJS2((exports) => {
   var identity = require_identity();
   var Scalar = require_Scalar();
   var MERGE_KEY = "<<";
@@ -1650,7 +1667,7 @@ var require_merge = __commonJS((exports) => {
   exports.isMergeKey = isMergeKey;
   exports.merge = merge;
 });
-var require_addPairToJSMap = __commonJS((exports) => {
+var require_addPairToJSMap = __commonJS2((exports) => {
   var log = require_log();
   var merge = require_merge();
   var stringify = require_stringify();
@@ -1709,7 +1726,7 @@ var require_addPairToJSMap = __commonJS((exports) => {
   }
   exports.addPairToJSMap = addPairToJSMap;
 });
-var require_Pair = __commonJS((exports) => {
+var require_Pair = __commonJS2((exports) => {
   var createNode = require_createNode();
   var stringifyPair = require_stringifyPair();
   var addPairToJSMap = require_addPairToJSMap();
@@ -1745,7 +1762,7 @@ var require_Pair = __commonJS((exports) => {
   exports.Pair = Pair;
   exports.createPair = createPair;
 });
-var require_stringifyCollection = __commonJS((exports) => {
+var require_stringifyCollection = __commonJS2((exports) => {
   var identity = require_identity();
   var stringify = require_stringify();
   var stringifyComment = require_stringifyComment();
@@ -1895,7 +1912,7 @@ ${indent}${end}`;
   }
   exports.stringifyCollection = stringifyCollection;
 });
-var require_YAMLMap = __commonJS((exports) => {
+var require_YAMLMap = __commonJS2((exports) => {
   var stringifyCollection = require_stringifyCollection();
   var addPairToJSMap = require_addPairToJSMap();
   var Collection = require_Collection();
@@ -2020,7 +2037,7 @@ var require_YAMLMap = __commonJS((exports) => {
   exports.YAMLMap = YAMLMap;
   exports.findPair = findPair;
 });
-var require_map = __commonJS((exports) => {
+var require_map = __commonJS2((exports) => {
   var identity = require_identity();
   var YAMLMap = require_YAMLMap();
   var map = {
@@ -2037,7 +2054,7 @@ var require_map = __commonJS((exports) => {
   };
   exports.map = map;
 });
-var require_YAMLSeq = __commonJS((exports) => {
+var require_YAMLSeq = __commonJS2((exports) => {
   var createNode = require_createNode();
   var stringifyCollection = require_stringifyCollection();
   var Collection = require_Collection();
@@ -2128,7 +2145,7 @@ var require_YAMLSeq = __commonJS((exports) => {
   }
   exports.YAMLSeq = YAMLSeq;
 });
-var require_seq = __commonJS((exports) => {
+var require_seq = __commonJS2((exports) => {
   var identity = require_identity();
   var YAMLSeq = require_YAMLSeq();
   var seq = {
@@ -2145,7 +2162,7 @@ var require_seq = __commonJS((exports) => {
   };
   exports.seq = seq;
 });
-var require_string = __commonJS((exports) => {
+var require_string = __commonJS2((exports) => {
   var stringifyString = require_stringifyString();
   var string = {
     identify: (value) => typeof value === "string",
@@ -2159,7 +2176,7 @@ var require_string = __commonJS((exports) => {
   };
   exports.string = string;
 });
-var require_null = __commonJS((exports) => {
+var require_null = __commonJS2((exports) => {
   var Scalar = require_Scalar();
   var nullTag = {
     identify: (value) => value == null,
@@ -2172,7 +2189,7 @@ var require_null = __commonJS((exports) => {
   };
   exports.nullTag = nullTag;
 });
-var require_bool = __commonJS((exports) => {
+var require_bool = __commonJS2((exports) => {
   var Scalar = require_Scalar();
   var boolTag = {
     identify: (value) => typeof value === "boolean",
@@ -2191,7 +2208,7 @@ var require_bool = __commonJS((exports) => {
   };
   exports.boolTag = boolTag;
 });
-var require_stringifyNumber = __commonJS((exports) => {
+var require_stringifyNumber = __commonJS2((exports) => {
   function stringifyNumber({ format, minFractionDigits, tag, value }) {
     if (typeof value === "bigint")
       return String(value);
@@ -2213,7 +2230,7 @@ var require_stringifyNumber = __commonJS((exports) => {
   }
   exports.stringifyNumber = stringifyNumber;
 });
-var require_float = __commonJS((exports) => {
+var require_float = __commonJS2((exports) => {
   var Scalar = require_Scalar();
   var stringifyNumber = require_stringifyNumber();
   var floatNaN = {
@@ -2254,7 +2271,7 @@ var require_float = __commonJS((exports) => {
   exports.floatExp = floatExp;
   exports.floatNaN = floatNaN;
 });
-var require_int = __commonJS((exports) => {
+var require_int = __commonJS2((exports) => {
   var stringifyNumber = require_stringifyNumber();
   var intIdentify = (value) => typeof value === "bigint" || Number.isInteger(value);
   var intResolve = (str, offset, radix, { intAsBigInt }) => intAsBigInt ? BigInt(str) : parseInt(str.substring(offset), radix);
@@ -2294,7 +2311,7 @@ var require_int = __commonJS((exports) => {
   exports.intHex = intHex;
   exports.intOct = intOct;
 });
-var require_schema = __commonJS((exports) => {
+var require_schema = __commonJS2((exports) => {
   var map = require_map();
   var _null = require_null();
   var seq = require_seq();
@@ -2317,7 +2334,7 @@ var require_schema = __commonJS((exports) => {
   ];
   exports.schema = schema;
 });
-var require_schema2 = __commonJS((exports) => {
+var require_schema2 = __commonJS2((exports) => {
   var Scalar = require_Scalar();
   var map = require_map();
   var seq = require_seq();
@@ -2379,7 +2396,7 @@ var require_schema2 = __commonJS((exports) => {
   var schema = [map.map, seq.seq].concat(jsonScalars, jsonError);
   exports.schema = schema;
 });
-var require_binary = __commonJS((exports) => {
+var require_binary = __commonJS2((exports) => {
   var node_buffer = __require("buffer");
   var Scalar = require_Scalar();
   var stringifyString = require_stringifyString();
@@ -2432,7 +2449,7 @@ var require_binary = __commonJS((exports) => {
   };
   exports.binary = binary;
 });
-var require_pairs = __commonJS((exports) => {
+var require_pairs = __commonJS2((exports) => {
   var identity = require_identity();
   var Pair = require_Pair();
   var Scalar = require_Scalar();
@@ -2505,7 +2522,7 @@ ${cn.comment}` : item.comment;
   exports.pairs = pairs;
   exports.resolvePairs = resolvePairs;
 });
-var require_omap = __commonJS((exports) => {
+var require_omap = __commonJS2((exports) => {
   var identity = require_identity();
   var toJS = require_toJS();
   var YAMLMap = require_YAMLMap();
@@ -2575,7 +2592,7 @@ var require_omap = __commonJS((exports) => {
   exports.YAMLOMap = YAMLOMap;
   exports.omap = omap;
 });
-var require_bool2 = __commonJS((exports) => {
+var require_bool2 = __commonJS2((exports) => {
   var Scalar = require_Scalar();
   function boolStringify({ value, source }, ctx) {
     const boolObj = value ? trueTag : falseTag;
@@ -2602,7 +2619,7 @@ var require_bool2 = __commonJS((exports) => {
   exports.falseTag = falseTag;
   exports.trueTag = trueTag;
 });
-var require_float2 = __commonJS((exports) => {
+var require_float2 = __commonJS2((exports) => {
   var Scalar = require_Scalar();
   var stringifyNumber = require_stringifyNumber();
   var floatNaN = {
@@ -2646,7 +2663,7 @@ var require_float2 = __commonJS((exports) => {
   exports.floatExp = floatExp;
   exports.floatNaN = floatNaN;
 });
-var require_int2 = __commonJS((exports) => {
+var require_int2 = __commonJS2((exports) => {
   var stringifyNumber = require_stringifyNumber();
   var intIdentify = (value) => typeof value === "bigint" || Number.isInteger(value);
   function intResolve(str, offset, radix, { intAsBigInt }) {
@@ -2720,7 +2737,7 @@ var require_int2 = __commonJS((exports) => {
   exports.intHex = intHex;
   exports.intOct = intOct;
 });
-var require_set = __commonJS((exports) => {
+var require_set = __commonJS2((exports) => {
   var identity = require_identity();
   var Pair = require_Pair();
   var YAMLMap = require_YAMLMap();
@@ -2801,7 +2818,7 @@ var require_set = __commonJS((exports) => {
   exports.YAMLSet = YAMLSet;
   exports.set = set;
 });
-var require_timestamp = __commonJS((exports) => {
+var require_timestamp = __commonJS2((exports) => {
   var stringifyNumber = require_stringifyNumber();
   function parseSexagesimal(str, asBigInt) {
     const sign = str[0];
@@ -2881,7 +2898,7 @@ var require_timestamp = __commonJS((exports) => {
   exports.intTime = intTime;
   exports.timestamp = timestamp;
 });
-var require_schema3 = __commonJS((exports) => {
+var require_schema3 = __commonJS2((exports) => {
   var map = require_map();
   var _null = require_null();
   var seq = require_seq();
@@ -2920,7 +2937,7 @@ var require_schema3 = __commonJS((exports) => {
   ];
   exports.schema = schema;
 });
-var require_tags = __commonJS((exports) => {
+var require_tags = __commonJS2((exports) => {
   var map = require_map();
   var _null = require_null();
   var seq = require_seq();
@@ -3009,7 +3026,7 @@ var require_tags = __commonJS((exports) => {
   exports.coreKnownTags = coreKnownTags;
   exports.getTags = getTags;
 });
-var require_Schema = __commonJS((exports) => {
+var require_Schema = __commonJS2((exports) => {
   var identity = require_identity();
   var map = require_map();
   var seq = require_seq();
@@ -3037,7 +3054,7 @@ var require_Schema = __commonJS((exports) => {
   }
   exports.Schema = Schema;
 });
-var require_stringifyDocument = __commonJS((exports) => {
+var require_stringifyDocument = __commonJS2((exports) => {
   var identity = require_identity();
   var stringify = require_stringify();
   var stringifyComment = require_stringifyComment();
@@ -3115,7 +3132,7 @@ var require_stringifyDocument = __commonJS((exports) => {
   }
   exports.stringifyDocument = stringifyDocument;
 });
-var require_Document = __commonJS((exports) => {
+var require_Document = __commonJS2((exports) => {
   var Alias = require_Alias();
   var Collection = require_Collection();
   var identity = require_identity();
@@ -3348,7 +3365,7 @@ var require_Document = __commonJS((exports) => {
   }
   exports.Document = Document;
 });
-var require_errors = __commonJS((exports) => {
+var require_errors = __commonJS2((exports) => {
 
   class YAMLError extends Error {
     constructor(name, pos, code, message) {
@@ -3412,7 +3429,7 @@ ${pointer}
   exports.YAMLWarning = YAMLWarning;
   exports.prettifyError = prettifyError;
 });
-var require_resolve_props = __commonJS((exports) => {
+var require_resolve_props = __commonJS2((exports) => {
   function resolveProps(tokens, { flow, indicator, next, offset, onError, parentIndent, startOnNewline }) {
     let spaceBefore = false;
     let atNewline = startOnNewline;
@@ -3540,7 +3557,7 @@ var require_resolve_props = __commonJS((exports) => {
   }
   exports.resolveProps = resolveProps;
 });
-var require_util_contains_newline = __commonJS((exports) => {
+var require_util_contains_newline = __commonJS2((exports) => {
   function containsNewline(key) {
     if (!key)
       return null;
@@ -3578,7 +3595,7 @@ var require_util_contains_newline = __commonJS((exports) => {
   }
   exports.containsNewline = containsNewline;
 });
-var require_util_flow_indent_check = __commonJS((exports) => {
+var require_util_flow_indent_check = __commonJS2((exports) => {
   var utilContainsNewline = require_util_contains_newline();
   function flowIndentCheck(indent, fc, onError) {
     if (fc?.type === "flow-collection") {
@@ -3591,7 +3608,7 @@ var require_util_flow_indent_check = __commonJS((exports) => {
   }
   exports.flowIndentCheck = flowIndentCheck;
 });
-var require_util_map_includes = __commonJS((exports) => {
+var require_util_map_includes = __commonJS2((exports) => {
   var identity = require_identity();
   function mapIncludes(ctx, items, search) {
     const { uniqueKeys } = ctx.options;
@@ -3602,7 +3619,7 @@ var require_util_map_includes = __commonJS((exports) => {
   }
   exports.mapIncludes = mapIncludes;
 });
-var require_resolve_block_map = __commonJS((exports) => {
+var require_resolve_block_map = __commonJS2((exports) => {
   var Pair = require_Pair();
   var YAMLMap = require_YAMLMap();
   var resolveProps = require_resolve_props();
@@ -3707,7 +3724,7 @@ var require_resolve_block_map = __commonJS((exports) => {
   }
   exports.resolveBlockMap = resolveBlockMap;
 });
-var require_resolve_block_seq = __commonJS((exports) => {
+var require_resolve_block_seq = __commonJS2((exports) => {
   var YAMLSeq = require_YAMLSeq();
   var resolveProps = require_resolve_props();
   var utilFlowIndentCheck = require_util_flow_indent_check();
@@ -3753,7 +3770,7 @@ var require_resolve_block_seq = __commonJS((exports) => {
   }
   exports.resolveBlockSeq = resolveBlockSeq;
 });
-var require_resolve_end = __commonJS((exports) => {
+var require_resolve_end = __commonJS2((exports) => {
   function resolveEnd(end, offset, reqSpace, onError) {
     let comment = "";
     if (end) {
@@ -3791,7 +3808,7 @@ var require_resolve_end = __commonJS((exports) => {
   }
   exports.resolveEnd = resolveEnd;
 });
-var require_resolve_flow_collection = __commonJS((exports) => {
+var require_resolve_flow_collection = __commonJS2((exports) => {
   var identity = require_identity();
   var Pair = require_Pair();
   var YAMLMap = require_YAMLMap();
@@ -3980,7 +3997,7 @@ var require_resolve_flow_collection = __commonJS((exports) => {
   }
   exports.resolveFlowCollection = resolveFlowCollection;
 });
-var require_compose_collection = __commonJS((exports) => {
+var require_compose_collection = __commonJS2((exports) => {
   var identity = require_identity();
   var Scalar = require_Scalar();
   var YAMLMap = require_YAMLMap();
@@ -4040,7 +4057,7 @@ var require_compose_collection = __commonJS((exports) => {
   }
   exports.composeCollection = composeCollection;
 });
-var require_resolve_block_scalar = __commonJS((exports) => {
+var require_resolve_block_scalar = __commonJS2((exports) => {
   var Scalar = require_Scalar();
   function resolveBlockScalar(ctx, scalar, onError) {
     const start = scalar.offset;
@@ -4231,7 +4248,7 @@ var require_resolve_block_scalar = __commonJS((exports) => {
   }
   exports.resolveBlockScalar = resolveBlockScalar;
 });
-var require_resolve_flow_scalar = __commonJS((exports) => {
+var require_resolve_flow_scalar = __commonJS2((exports) => {
   var Scalar = require_Scalar();
   var resolveEnd = require_resolve_end();
   function resolveFlowScalar(scalar, strict, onError) {
@@ -4445,7 +4462,7 @@ var require_resolve_flow_scalar = __commonJS((exports) => {
   }
   exports.resolveFlowScalar = resolveFlowScalar;
 });
-var require_compose_scalar = __commonJS((exports) => {
+var require_compose_scalar = __commonJS2((exports) => {
   var identity = require_identity();
   var Scalar = require_Scalar();
   var resolveBlockScalar = require_resolve_block_scalar();
@@ -4521,7 +4538,7 @@ var require_compose_scalar = __commonJS((exports) => {
   }
   exports.composeScalar = composeScalar;
 });
-var require_util_empty_scalar_position = __commonJS((exports) => {
+var require_util_empty_scalar_position = __commonJS2((exports) => {
   function emptyScalarPosition(offset, before, pos) {
     if (before) {
       pos ?? (pos = before.length);
@@ -4546,7 +4563,7 @@ var require_util_empty_scalar_position = __commonJS((exports) => {
   }
   exports.emptyScalarPosition = emptyScalarPosition;
 });
-var require_compose_node = __commonJS((exports) => {
+var require_compose_node = __commonJS2((exports) => {
   var Alias = require_Alias();
   var identity = require_identity();
   var composeCollection = require_compose_collection();
@@ -4647,7 +4664,7 @@ var require_compose_node = __commonJS((exports) => {
   exports.composeEmptyNode = composeEmptyNode;
   exports.composeNode = composeNode;
 });
-var require_compose_doc = __commonJS((exports) => {
+var require_compose_doc = __commonJS2((exports) => {
   var Document = require_Document();
   var composeNode = require_compose_node();
   var resolveEnd = require_resolve_end();
@@ -4685,7 +4702,7 @@ var require_compose_doc = __commonJS((exports) => {
   }
   exports.composeDoc = composeDoc;
 });
-var require_composer = __commonJS((exports) => {
+var require_composer = __commonJS2((exports) => {
   var node_process = __require("process");
   var directives = require_directives();
   var Document = require_Document();
@@ -4872,7 +4889,7 @@ ${end.comment}` : end.comment;
   }
   exports.Composer = Composer;
 });
-var require_cst_scalar = __commonJS((exports) => {
+var require_cst_scalar = __commonJS2((exports) => {
   var resolveBlockScalar = require_resolve_block_scalar();
   var resolveFlowScalar = require_resolve_flow_scalar();
   var errors = require_errors();
@@ -5060,7 +5077,7 @@ var require_cst_scalar = __commonJS((exports) => {
   exports.resolveAsScalar = resolveAsScalar;
   exports.setScalarValue = setScalarValue;
 });
-var require_cst_stringify = __commonJS((exports) => {
+var require_cst_stringify = __commonJS2((exports) => {
   var stringify = (cst) => ("type" in cst) ? stringifyToken(cst) : stringifyItem(cst);
   function stringifyToken(token) {
     switch (token.type) {
@@ -5116,7 +5133,7 @@ var require_cst_stringify = __commonJS((exports) => {
   }
   exports.stringify = stringify;
 });
-var require_cst_visit = __commonJS((exports) => {
+var require_cst_visit = __commonJS2((exports) => {
   var BREAK = Symbol("break visit");
   var SKIP = Symbol("skip children");
   var REMOVE = Symbol("remove item");
@@ -5173,7 +5190,7 @@ var require_cst_visit = __commonJS((exports) => {
   }
   exports.visit = visit;
 });
-var require_cst = __commonJS((exports) => {
+var require_cst = __commonJS2((exports) => {
   var cstScalar = require_cst_scalar();
   var cstStringify = require_cst_stringify();
   var cstVisit = require_cst_visit();
@@ -5272,7 +5289,7 @@ var require_cst = __commonJS((exports) => {
   exports.prettyToken = prettyToken;
   exports.tokenType = tokenType;
 });
-var require_lexer = __commonJS((exports) => {
+var require_lexer = __commonJS2((exports) => {
   var cst = require_cst();
   function isEmpty(ch) {
     switch (ch) {
@@ -5856,7 +5873,7 @@ var require_lexer = __commonJS((exports) => {
   }
   exports.Lexer = Lexer;
 });
-var require_line_counter = __commonJS((exports) => {
+var require_line_counter = __commonJS2((exports) => {
 
   class LineCounter {
     constructor() {
@@ -5883,7 +5900,7 @@ var require_line_counter = __commonJS((exports) => {
   }
   exports.LineCounter = LineCounter;
 });
-var require_parser = __commonJS((exports) => {
+var require_parser = __commonJS2((exports) => {
   var node_process = __require("process");
   var cst = require_cst();
   var lexer = require_lexer();
@@ -6730,7 +6747,7 @@ var require_parser = __commonJS((exports) => {
   }
   exports.Parser = Parser;
 });
-var require_public_api = __commonJS((exports) => {
+var require_public_api = __commonJS2((exports) => {
   var composer = require_composer();
   var Document = require_Document();
   var errors = require_errors();
@@ -6822,7 +6839,7 @@ var require_public_api = __commonJS((exports) => {
   exports.parseDocument = parseDocument;
   exports.stringify = stringify;
 });
-var require_dist = __commonJS((exports) => {
+var require_dist = __commonJS2((exports) => {
   var composer = require_composer();
   var Document = require_Document();
   var Schema = require_Schema();
@@ -9462,6 +9479,494 @@ function up78(db) {
 			ON api_keys(connector, harness);
 	`);
 }
+function up79(db) {
+  db.exec(`
+		CREATE TABLE IF NOT EXISTS transcript_capture_jobs (
+			id TEXT PRIMARY KEY,
+			agent_id TEXT NOT NULL DEFAULT 'default',
+			harness TEXT NOT NULL,
+			session_key TEXT,
+			session_id TEXT NOT NULL,
+			project TEXT,
+			transcript TEXT NOT NULL,
+			raw_transcript TEXT,
+			transcript_path TEXT,
+			captured_at TEXT NOT NULL,
+			ended_at TEXT,
+			summary_status TEXT NOT NULL DEFAULT 'not_requested',
+			status TEXT NOT NULL DEFAULT 'pending',
+			attempts INTEGER NOT NULL DEFAULT 0,
+			max_attempts INTEGER NOT NULL DEFAULT 5,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			completed_at TEXT,
+			error TEXT
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_transcript_capture_jobs_status
+			ON transcript_capture_jobs(status, created_at);
+
+		CREATE INDEX IF NOT EXISTS idx_transcript_capture_jobs_agent_session
+			ON transcript_capture_jobs(agent_id, session_key, created_at);
+	`);
+}
+function hasColumn10(db, table, column) {
+  const rows = db.prepare(`PRAGMA table_info(${table})`).all();
+  return rows.some((row) => row.name === column);
+}
+function up80(db) {
+  if (!hasColumn10(db, "documents", "agent_id")) {
+    db.exec("ALTER TABLE documents ADD COLUMN agent_id TEXT NOT NULL DEFAULT 'default'");
+  }
+  if (!hasColumn10(db, "documents", "project")) {
+    db.exec("ALTER TABLE documents ADD COLUMN project TEXT");
+  }
+  db.exec(`
+		UPDATE documents
+		SET agent_id = NULLIF(TRIM(json_extract(metadata_json, '$.signet.agentId')), '')
+		WHERE metadata_json IS NOT NULL
+		  AND json_valid(metadata_json)
+		  AND json_type(metadata_json, '$.signet.agentId') = 'text'
+		  AND NULLIF(TRIM(json_extract(metadata_json, '$.signet.agentId')), '') IS NOT NULL
+	`);
+  db.exec(`
+		UPDATE documents
+		SET project = NULLIF(TRIM(json_extract(metadata_json, '$.signet.project')), '')
+		WHERE metadata_json IS NOT NULL
+		  AND json_valid(metadata_json)
+		  AND json_type(metadata_json, '$.signet.project') = 'text'
+	`);
+  db.exec(`
+		WITH linked_scope AS (
+			SELECT
+				dm.document_id,
+				m.agent_id,
+				m.project,
+				ROW_NUMBER() OVER (
+					PARTITION BY dm.document_id
+					ORDER BY COUNT(*) DESC, m.agent_id, COALESCE(m.project, '')
+				) AS rank
+			FROM document_memories dm
+			JOIN memories m ON m.id = dm.memory_id
+			WHERE m.agent_id IS NOT NULL
+			  AND NULLIF(TRIM(m.agent_id), '') IS NOT NULL
+			GROUP BY dm.document_id, m.agent_id, m.project
+		)
+		UPDATE documents
+		SET
+			agent_id = COALESCE((
+				SELECT agent_id FROM linked_scope
+				WHERE linked_scope.document_id = documents.id AND rank = 1
+			), agent_id),
+			project = (
+				SELECT project FROM linked_scope
+				WHERE linked_scope.document_id = documents.id AND rank = 1
+			)
+		WHERE EXISTS (
+			SELECT 1 FROM linked_scope
+			WHERE linked_scope.document_id = documents.id AND rank = 1
+		)
+		AND NOT (
+			metadata_json IS NOT NULL
+			AND json_valid(metadata_json)
+			AND json_type(metadata_json, '$.signet.agentId') = 'text'
+			AND NULLIF(TRIM(json_extract(metadata_json, '$.signet.agentId')), '') IS NOT NULL
+		)
+	`);
+  if (hasColumn10(db, "memories", "visibility") && hasColumn10(db, "memories", "type") && hasColumn10(db, "memories", "source_type")) {
+    db.exec(`
+			UPDATE memories
+			SET visibility = 'private'
+			WHERE id IN (SELECT memory_id FROM document_memories)
+			  AND type = 'document_chunk'
+			  AND source_type = 'document'
+			  AND (visibility IS NULL OR visibility = 'global')
+		`);
+  }
+  if (hasColumn10(db, "memories", "content_hash") && hasColumn10(db, "memories", "agent_id") && hasColumn10(db, "memories", "project") && hasColumn10(db, "memories", "scope") && hasColumn10(db, "memories", "visibility") && hasColumn10(db, "memories", "is_deleted")) {
+    db.exec("DROP INDEX IF EXISTS idx_memories_content_hash_unique");
+    db.exec(`
+			CREATE UNIQUE INDEX idx_memories_content_hash_unique
+			ON memories(
+				content_hash,
+				COALESCE(NULLIF(agent_id, ''), 'default'),
+				COALESCE(project, ''),
+				COALESCE(scope, '__NULL__'),
+				COALESCE(visibility, 'global')
+			)
+			WHERE content_hash IS NOT NULL AND is_deleted = 0
+		`);
+  }
+  db.exec("CREATE INDEX IF NOT EXISTS idx_documents_agent_project ON documents(agent_id, project)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_documents_source_scope ON documents(source_url, agent_id, project)");
+}
+function up81(db) {
+  db.exec(`
+		CREATE TABLE IF NOT EXISTS aggregate_evidence_sources (
+			aggregate_memory_id TEXT NOT NULL,
+			source_kind TEXT NOT NULL,
+			source_id TEXT NOT NULL,
+			source_path TEXT,
+			agent_id TEXT NOT NULL DEFAULT 'default',
+			created_at TEXT NOT NULL,
+			PRIMARY KEY (aggregate_memory_id, source_kind, source_id)
+		);
+		CREATE INDEX IF NOT EXISTS idx_aggregate_evidence_sources_agent
+			ON aggregate_evidence_sources(agent_id, aggregate_memory_id);
+		CREATE INDEX IF NOT EXISTS idx_aggregate_evidence_sources_source
+			ON aggregate_evidence_sources(source_kind, source_id);
+	`);
+}
+function hasColumn11(db, table, column) {
+  const rows = db.prepare(`PRAGMA table_info(${table})`).all();
+  return rows.some((row) => row.name === column);
+}
+var COLUMNS = ["harness", "session_id", "tool_use_id", "cwd", "origin", "args"];
+function up82(db) {
+  for (const column of COLUMNS) {
+    if (!hasColumn11(db, "skill_invocations", column)) {
+      db.exec(`ALTER TABLE skill_invocations ADD COLUMN ${column} TEXT`);
+    }
+  }
+  db.exec("DROP INDEX IF EXISTS idx_skill_inv_dedupe");
+  db.exec(`
+		CREATE UNIQUE INDEX idx_skill_inv_dedupe
+		ON skill_invocations(agent_id, harness, session_id, tool_use_id)
+		WHERE harness IS NOT NULL AND session_id IS NOT NULL AND tool_use_id IS NOT NULL
+	`);
+  db.exec("CREATE INDEX IF NOT EXISTS idx_skill_inv_harness ON skill_invocations(harness, created_at)");
+}
+var DEPENDENCY_TYPES = new Set([
+  "uses",
+  "requires",
+  "owned_by",
+  "owns",
+  "blocks",
+  "informs",
+  "maintains",
+  "implements",
+  "built",
+  "depends_on",
+  "related_to",
+  "learned_from",
+  "teaches",
+  "knows",
+  "assumes",
+  "supports_claim",
+  "authored_by",
+  "links_to",
+  "contains",
+  "contains_note",
+  "contradicts",
+  "supersedes",
+  "part_of",
+  "produced_artifact",
+  "precedes",
+  "follows",
+  "triggers",
+  "may_execute",
+  "requires_approval_from",
+  "impacts",
+  "produces",
+  "consumes"
+]);
+function sqlStringList(values) {
+  return [...values].map((value) => `'${value}'`).join(", ");
+}
+function hasTable3(db, table) {
+  return Boolean(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(table));
+}
+function hasColumn12(db, table, column) {
+  const rows = db.prepare(`PRAGMA table_info(${table})`).all();
+  return rows.some((row) => row.name === column);
+}
+function addColumnIfMissing20(db, table, column, definition) {
+  if (!hasColumn12(db, table, column))
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+}
+function documentScopeColumnsPreservingExisting(db) {
+  const preserveAgentId = hasColumn12(db, "documents", "agent_id");
+  const preserveProject = hasColumn12(db, "documents", "project");
+  if (preserveAgentId) {
+    db.exec(`
+			CREATE TEMP TABLE __signet_doc_agent_guard AS
+			SELECT id, agent_id FROM documents
+			WHERE NULLIF(TRIM(agent_id), '') IS NOT NULL
+			  AND NULLIF(TRIM(agent_id), '') <> 'default'
+		`);
+  }
+  if (preserveProject) {
+    db.exec(`
+			CREATE TEMP TABLE __signet_doc_project_guard AS
+			SELECT id, project FROM documents
+			WHERE NULLIF(TRIM(project), '') IS NOT NULL
+		`);
+  }
+  try {
+    up80(db);
+    if (preserveAgentId) {
+      db.exec(`
+				UPDATE documents
+				SET agent_id = (SELECT agent_id FROM __signet_doc_agent_guard WHERE __signet_doc_agent_guard.id = documents.id)
+				WHERE EXISTS (SELECT 1 FROM __signet_doc_agent_guard WHERE __signet_doc_agent_guard.id = documents.id)
+			`);
+    }
+    if (preserveProject) {
+      db.exec(`
+				UPDATE documents
+				SET project = (SELECT project FROM __signet_doc_project_guard WHERE __signet_doc_project_guard.id = documents.id)
+				WHERE EXISTS (SELECT 1 FROM __signet_doc_project_guard WHERE __signet_doc_project_guard.id = documents.id)
+			`);
+    }
+  } finally {
+    db.exec("DROP TABLE IF EXISTS temp.__signet_doc_agent_guard");
+    db.exec("DROP TABLE IF EXISTS temp.__signet_doc_project_guard");
+  }
+}
+function up83(db) {
+  up79(db);
+  if (hasTable3(db, "documents")) {
+    documentScopeColumnsPreservingExisting(db);
+  }
+  up81(db);
+  addColumnIfMissing20(db, "memories", "superseded_by", "TEXT");
+  addColumnIfMissing20(db, "memories", "superseded_at", "TEXT");
+  addColumnIfMissing20(db, "memories", "superseded_reason", "TEXT");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_memories_superseded_by ON memories(superseded_by)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_memories_active_supersession ON memories(is_deleted, superseded_by)");
+  if (!hasTable3(db, "relations") || !hasTable3(db, "entity_dependencies"))
+    return;
+  addColumnIfMissing20(db, "entity_dependencies", "confidence", "REAL");
+  addColumnIfMissing20(db, "entity_dependencies", "reason", "TEXT");
+  addColumnIfMissing20(db, "entity_dependencies", "source_id", "TEXT");
+  addColumnIfMissing20(db, "entity_dependencies", "source_kind", "TEXT");
+  addColumnIfMissing20(db, "entity_dependencies", "proposal_evidence", "TEXT NOT NULL DEFAULT '[]'");
+  addColumnIfMissing20(db, "entity_dependencies", "status", "TEXT NOT NULL DEFAULT 'active'");
+  const relationConfidence = hasColumn12(db, "relations", "confidence") ? "r.confidence" : "NULL";
+  const relationUpdatedAt = hasColumn12(db, "relations", "updated_at") ? "r.updated_at" : "r.created_at";
+  const sourceAgentId = hasColumn12(db, "entities", "agent_id") ? "COALESCE(NULLIF(TRIM(src.agent_id), ''), 'default')" : "'default'";
+  const targetAgentId = hasColumn12(db, "entities", "agent_id") ? "COALESCE(NULLIF(TRIM(dst.agent_id), ''), 'default')" : "'default'";
+  db.exec(`
+		INSERT OR IGNORE INTO entity_dependencies (
+			id,
+			source_entity_id,
+			target_entity_id,
+			agent_id,
+			dependency_type,
+			strength,
+			confidence,
+			reason,
+			created_at,
+			updated_at,
+			source_id,
+			source_kind,
+			proposal_evidence,
+			status
+		)
+		SELECT
+			'relation:' || r.id,
+			r.source_entity_id,
+			r.target_entity_id,
+			COALESCE(${sourceAgentId}, ${targetAgentId}, 'default'),
+			CASE WHEN r.relation_type IN (${sqlStringList(DEPENDENCY_TYPES)}) THEN r.relation_type ELSE 'related_to' END,
+			MAX(0.1, MIN(1.0, COALESCE(r.strength, 0.5))),
+			MAX(0.1, MIN(1.0, COALESCE(${relationConfidence}, 0.7))),
+			'legacy relation backfill: ' || r.relation_type,
+			COALESCE(r.created_at, datetime('now')),
+			COALESCE(${relationUpdatedAt}, r.created_at, datetime('now')),
+			r.id,
+			'relation',
+			'[]',
+			'active'
+		FROM relations r
+		JOIN entities src ON src.id = r.source_entity_id
+		JOIN entities dst ON dst.id = r.target_entity_id
+		WHERE r.source_entity_id <> r.target_entity_id
+		  AND ${sourceAgentId} = ${targetAgentId}
+	`);
+}
+function up84(db) {
+  db.exec(`
+		CREATE TABLE IF NOT EXISTS legacy_markdown_imports (
+			path TEXT PRIMARY KEY,
+			mtime_ms INTEGER NOT NULL,
+			ctime_ms INTEGER NOT NULL,
+			size INTEGER NOT NULL,
+			content_hash TEXT NOT NULL,
+			importer_version INTEGER NOT NULL,
+			chunk_count INTEGER NOT NULL DEFAULT 0,
+			last_imported_at TEXT NOT NULL,
+			last_seen_at TEXT NOT NULL,
+			status TEXT NOT NULL DEFAULT 'imported',
+			error TEXT
+		);
+
+		CREATE TABLE IF NOT EXISTS legacy_markdown_chunks (
+			file_path TEXT NOT NULL,
+			chunk_hash TEXT NOT NULL,
+			chunk_index INTEGER NOT NULL,
+			memory_id TEXT,
+			source_id TEXT,
+			created_at TEXT NOT NULL,
+			PRIMARY KEY (file_path, chunk_hash)
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_legacy_markdown_chunks_memory_id
+			ON legacy_markdown_chunks(memory_id);
+	`);
+}
+function up85(db) {
+  const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('relations', 'entity_dependencies')").all();
+  const tableNames = new Set(tables.map((r) => String(r.name)));
+  if (!tableNames.has("relations") || !tableNames.has("entity_dependencies"))
+    return;
+  const relCols = db.prepare("PRAGMA table_info(relations)").all();
+  const depCols = db.prepare("PRAGMA table_info(entity_dependencies)").all();
+  const rel = new Set(relCols.map((c) => String(c.name)));
+  const dep = new Set(depCols.map((c) => String(c.name)));
+  if (!rel.has("source_entity_id") || !rel.has("relation_type"))
+    return;
+  if (!dep.has("source_entity_id") || !dep.has("dependency_type") || !dep.has("agent_id"))
+    return;
+  const hasRelConfidence = rel.has("confidence");
+  const hasRelUpdated = rel.has("updated_at");
+  const hasDepConfidence = dep.has("confidence");
+  const hasDepReason = dep.has("reason");
+  const hasDepStatus = dep.has("status");
+  const selectParts = ["id", "source_entity_id", "target_entity_id"];
+  const colParts = ["id", "source_entity_id", "target_entity_id"];
+  selectParts.push("relation_type");
+  colParts.push("dependency_type");
+  selectParts.push("strength", "created_at");
+  colParts.push("strength", "created_at");
+  selectParts.push("'default'");
+  colParts.push("agent_id");
+  selectParts.push("NULL");
+  colParts.push("aspect_id");
+  if (hasRelConfidence && hasDepConfidence) {
+    selectParts.push("confidence");
+    colParts.push("confidence");
+  }
+  if (hasDepReason) {
+    selectParts.push("'extracted'");
+    colParts.push("reason");
+  }
+  if (hasDepStatus) {
+    selectParts.push("'active'");
+    colParts.push("status");
+  }
+  if (hasRelUpdated && dep.has("updated_at")) {
+    selectParts.push("updated_at");
+    colParts.push("updated_at");
+  }
+  const selectClause = selectParts.join(", ");
+  const colsClause = colParts.join(", ");
+  db.exec(`INSERT OR IGNORE INTO entity_dependencies (${colsClause})
+		 SELECT ${selectClause}
+		 FROM relations
+		 WHERE source_entity_id IS NOT NULL
+		   AND target_entity_id IS NOT NULL
+		   AND relation_type IS NOT NULL`);
+}
+function addColumnIfMissing21(db, table, column, definition) {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all();
+  if (cols.some((col) => col.name === column))
+    return;
+  db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+}
+function up86(db) {
+  addColumnIfMissing21(db, "summary_jobs", "content_hash", "TEXT");
+  db.exec(`
+		CREATE INDEX IF NOT EXISTS idx_summary_jobs_agent_session_content_hash
+		ON summary_jobs(agent_id, session_key, content_hash)
+	`);
+}
+function addColumnIfMissing22(db, table, column, definition) {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all();
+  if (cols.some((col) => col.name === column))
+    return;
+  db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+}
+function up87(db) {
+  addColumnIfMissing22(db, "summary_jobs", "boundary_reason", "TEXT");
+  db.exec(`
+		CREATE INDEX IF NOT EXISTS idx_summary_jobs_boundary_reason
+		ON summary_jobs(agent_id, session_key, boundary_reason)
+	`);
+}
+function up88(db) {
+  db.exec(`
+		CREATE TABLE IF NOT EXISTS transcript_recovery_files (
+			agent_id TEXT NOT NULL,
+			source_path TEXT NOT NULL,
+			harness TEXT NOT NULL,
+			size_bytes INTEGER NOT NULL,
+			mtime_ms INTEGER NOT NULL,
+			content_sha256 TEXT NOT NULL,
+			session_id TEXT NOT NULL,
+			last_scanned_at TEXT NOT NULL,
+			PRIMARY KEY (agent_id, source_path)
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_transcript_capture_jobs_agent_session_id
+			ON transcript_capture_jobs(agent_id, session_id, status);
+	`);
+}
+function up89(db) {
+  db.exec(`
+		CREATE TABLE IF NOT EXISTS job_cancellations (
+			id TEXT PRIMARY KEY,
+			source_table TEXT NOT NULL,
+			source_id TEXT NOT NULL,
+			status_before TEXT NOT NULL,
+			payload_json TEXT NOT NULL,
+			reason TEXT,
+			actor TEXT NOT NULL,
+			actor_type TEXT NOT NULL,
+			request_id TEXT,
+			created_at TEXT NOT NULL
+		)
+	`);
+  if (!indexExists(db, "job_cancellations", "idx_job_cancellations_source")) {
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_job_cancellations_source
+			 ON job_cancellations(source_table, source_id)`);
+  }
+  if (!indexExists(db, "job_cancellations", "idx_job_cancellations_created_at")) {
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_job_cancellations_created_at
+			 ON job_cancellations(created_at)`);
+  }
+}
+function indexExists(db, table, indexName) {
+  const rows = db.prepare(`PRAGMA index_list(${table})`).all();
+  return rows.some((row) => row.name === indexName);
+}
+function up90(db) {
+  db.exec(`
+		CREATE TABLE IF NOT EXISTS job_archive (
+			id TEXT PRIMARY KEY,
+			source_table TEXT NOT NULL,
+			source_id TEXT NOT NULL,
+			status TEXT NOT NULL,
+			payload_json TEXT NOT NULL,
+			archived_at TEXT NOT NULL,
+			archived_by TEXT NOT NULL,
+			reason TEXT,
+			created_at TEXT NOT NULL
+		)
+	`);
+  if (!indexExists2(db, "job_archive", "idx_job_archive_source")) {
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_job_archive_source
+			 ON job_archive(source_table, source_id)`);
+  }
+  if (!indexExists2(db, "job_archive", "idx_job_archive_archived_at")) {
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_job_archive_archived_at
+			 ON job_archive(archived_at)`);
+  }
+}
+function indexExists2(db, table, indexName) {
+  const rows = db.prepare(`PRAGMA index_list(${table})`).all();
+  return rows.some((row) => row.name === indexName);
+}
 var MIGRATIONS = [
   {
     version: 1,
@@ -10088,12 +10593,121 @@ var MIGRATIONS = [
     artifacts: {
       tables: ["api_keys"]
     }
+  },
+  {
+    version: 79,
+    name: "transcript-capture-jobs",
+    up: up79,
+    artifacts: {
+      tables: ["transcript_capture_jobs"]
+    }
+  },
+  {
+    version: 80,
+    name: "document-scope-columns",
+    up: up80,
+    artifacts: {
+      columns: [
+        { table: "documents", column: "agent_id" },
+        { table: "documents", column: "project" }
+      ]
+    }
+  },
+  {
+    version: 81,
+    name: "aggregate-evidence-sources",
+    up: up81,
+    artifacts: {
+      tables: ["aggregate_evidence_sources"]
+    }
+  },
+  {
+    version: 82,
+    name: "skill-invocations-harness",
+    up: up82,
+    artifacts: {
+      columns: [
+        { table: "skill_invocations", column: "harness" },
+        { table: "skill_invocations", column: "tool_use_id" }
+      ]
+    }
+  },
+  {
+    version: 83,
+    name: "memory-lifecycle-repair",
+    up: up83,
+    artifacts: {
+      tables: ["transcript_capture_jobs", "aggregate_evidence_sources", "entity_dependencies"],
+      columns: [
+        { table: "documents", column: "agent_id" },
+        { table: "documents", column: "project" },
+        { table: "memories", column: "superseded_by" },
+        { table: "memories", column: "superseded_at" },
+        { table: "memories", column: "superseded_reason" }
+      ]
+    }
+  },
+  {
+    version: 84,
+    name: "legacy-markdown-import-state",
+    up: up84,
+    artifacts: {
+      tables: ["legacy_markdown_imports", "legacy_markdown_chunks"]
+    }
+  },
+  {
+    version: 85,
+    name: "backfill-relations-to-dependencies",
+    up: up85,
+    artifacts: {
+      tables: ["entity_dependencies"]
+    }
+  },
+  {
+    version: 86,
+    name: "summary-jobs-content-hash",
+    up: up86,
+    artifacts: {
+      columns: [{ table: "summary_jobs", column: "content_hash" }]
+    }
+  },
+  {
+    version: 87,
+    name: "summary-jobs-boundary-reason",
+    up: up87,
+    artifacts: {
+      columns: [{ table: "summary_jobs", column: "boundary_reason" }]
+    }
+  },
+  {
+    version: 88,
+    name: "transcript-recovery-files",
+    up: up88,
+    artifacts: {
+      tables: ["transcript_recovery_files"]
+    }
+  },
+  {
+    version: 89,
+    name: "job-cancellations",
+    up: up89,
+    artifacts: {
+      tables: ["job_cancellations"]
+    }
+  },
+  {
+    version: 90,
+    name: "job-archive",
+    up: up90,
+    artifacts: {
+      tables: ["job_archive"]
+    }
   }
 ];
 var LATEST_SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1]?.version ?? 0;
 var __filename2 = fileURLToPath(import.meta.url);
 var __dirname2 = dirname(__filename2);
-var import_yaml = __toESM(require_dist(), 1);
+var import_yaml = __toESM2(require_dist(), 1);
 function expandHome(p, home = homedir2()) {
   if (p === "~")
     return home;
@@ -10102,19 +10716,177 @@ function expandHome(p, home = homedir2()) {
   return p;
 }
 var LOCAL_BINDS = new Set(["127.0.0.1", "localhost", "::1", "::ffff:127.0.0.1"]);
-var import_yaml2 = __toESM(require_dist(), 1);
+var import_yaml2 = __toESM2(require_dist(), 1);
+var WORKSPACE_ENV_KEYS = ["SIGNET_PATH", "SIGNET_WORKSPACE"];
+var DEFAULT_AGENTS_DIRNAME = ".agents";
+function normalizeWorkspacePath(pathValue, home = homedir3()) {
+  return resolve(expandHome(pathValue.trim(), home));
+}
+function readTrimmedEnv(env, name) {
+  const value = env[name];
+  if (typeof value !== "string")
+    return;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+function readConfigHome(env, home) {
+  const raw = env.XDG_CONFIG_HOME;
+  if (typeof raw !== "string")
+    return join5(home, ".config");
+  const trimmed = raw.trim();
+  return trimmed.length > 0 ? normalizeWorkspacePath(trimmed, home) : join5(home, ".config");
+}
+function isExistingDirectory(path) {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+function isRecord4(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function getWorkspaceConfigPath(env = process.env, home = homedir3()) {
+  return join5(readConfigHome(env, home), "signet", "workspace.json");
+}
+function readConfiguredWorkspacePath(env = process.env, home = homedir3(), options = {}) {
+  const strict = options.strict ?? false;
+  const configPath = getWorkspaceConfigPath(env, home);
+  if (!existsSync4(configPath))
+    return null;
+  let raw;
+  try {
+    raw = JSON.parse(readFileSync3(configPath, "utf-8"));
+  } catch (err) {
+    if (strict) {
+      const detail = err instanceof Error ? err.message : String(err);
+      throw new Error(`Invalid Signet workspace config at ${configPath}: ${detail}`);
+    }
+    return null;
+  }
+  if (!isRecord4(raw) || !("workspace" in raw)) {
+    if (strict)
+      throw new Error(`Invalid Signet workspace config at ${configPath}: missing workspace`);
+    return null;
+  }
+  const workspace = raw.workspace;
+  if (typeof workspace !== "string" || workspace.trim().length === 0) {
+    if (strict)
+      throw new Error(`Invalid Signet workspace config at ${configPath}: workspace must be a non-empty string`);
+    return null;
+  }
+  return normalizeWorkspacePath(workspace, home);
+}
+function resolveWorkspacePath(options = {}) {
+  const env = options.env ?? process.env;
+  const home = options.home ?? homedir3();
+  const strict = options.strict ?? false;
+  const requireExistingEnvPath = options.requireExistingEnvPath ?? false;
+  const configPath = getWorkspaceConfigPath(env, home);
+  const envPath = resolveEnvWorkspace(env, home, requireExistingEnvPath);
+  const configValue = readConfiguredWorkspacePath(env, home, { strict: envPath ? false : strict });
+  if (envPath) {
+    return {
+      path: envPath,
+      source: "env",
+      configPath,
+      configuredPath: configValue
+    };
+  }
+  if (configValue) {
+    return {
+      path: configValue,
+      source: "config",
+      configPath,
+      configuredPath: configValue
+    };
+  }
+  return {
+    path: join5(home, DEFAULT_AGENTS_DIRNAME),
+    source: "default",
+    configPath,
+    configuredPath: configValue
+  };
+}
+function resolveEnvWorkspace(env, home, requireExisting) {
+  for (const key of WORKSPACE_ENV_KEYS) {
+    const raw = readTrimmedEnv(env, key);
+    if (!raw)
+      continue;
+    const normalized = normalizeWorkspacePath(raw, home);
+    if (!requireExisting || isExistingDirectory(normalized))
+      return normalized;
+    console.warn(`[signet] ${key}="${raw}" does not point to an existing workspace directory; using the default workspace resolution instead.`);
+  }
+  return null;
+}
 var native = null;
 try {
   const esmRequire = createRequire2(import.meta.url);
   native = esmRequire("@signet/native");
 } catch {}
 var SIGNET_SOURCE_CHECKOUT_DIRNAME = "signetai";
+var SIGNET_GIT_ALLOWED_DIRECTORIES = ["skills", "tools", "dreaming"];
 var SIGNET_GIT_PROTECTED_PATHS = [
+  ".daemon",
+  ".shadow",
+  "node_modules",
+  ":(glob)**/node_modules/**",
+  `${SIGNET_SOURCE_CHECKOUT_DIRNAME}`,
+  "memory/backups",
   "memory/memories.db",
-  "memory/memories.db-wal",
-  "memory/memories.db-shm",
-  "memory/memories.db-journal",
-  `${SIGNET_SOURCE_CHECKOUT_DIRNAME}/`
+  ":(glob)memory/memories.db*",
+  ":(glob)memory/**/*.db",
+  ":(glob)memory/**/*.db-*",
+  ":(glob)memory/**/*.db-journal",
+  ":(glob)memory/**/*.db-shm",
+  ":(glob)memory/**/*.db-wal",
+  ":(glob)memory/**/*.sqlite",
+  ":(glob)memory/**/*.sqlite3",
+  ":(glob)**/*.db",
+  ":(glob)**/*.db-*",
+  ":(glob)**/*.db-journal",
+  ":(glob)**/*.db-shm",
+  ":(glob)**/*.db-wal",
+  ":(glob)**/*.sqlite",
+  ":(glob)**/*.sqlite3"
+];
+var SIGNET_GIT_TRACKED_PATHS = [
+  "*.md",
+  ":(glob)**/*.md",
+  "*.json",
+  ":(glob)**/*.json",
+  "*.jsonl",
+  ":(glob)**/*.jsonl",
+  "*.html",
+  ":(glob)**/*.html",
+  "*.yaml",
+  ":(glob)**/*.yaml",
+  "*.yml",
+  ":(glob)**/*.yml",
+  ...SIGNET_GIT_ALLOWED_DIRECTORIES
+];
+var SIGNET_GITIGNORE_PROTECTED_PATTERNS = [
+  ".daemon/",
+  ".shadow/",
+  "node_modules/",
+  `${SIGNET_SOURCE_CHECKOUT_DIRNAME}/`,
+  "memory/memories.db*",
+  "memory/**/*.db",
+  "memory/**/*.db-*",
+  "memory/**/*.db-journal",
+  "memory/**/*.db-shm",
+  "memory/**/*.db-wal",
+  "memory/**/*.sqlite",
+  "memory/**/*.sqlite3",
+  "memory/backups/",
+  "*.db",
+  "*.db-*",
+  "*.db-journal",
+  "*.db-shm",
+  "*.db-wal",
+  "*.sqlite",
+  "*.sqlite3"
 ];
 var DEFAULT_DISCORD_DESKTOP_CACHE_PATH = defaultDiscordDesktopCachePath();
 var DEFAULT_GITHUB_RESOURCE_TYPES = ["issues", "pulls", "discussions", "docs"];
@@ -10122,11 +10894,11 @@ var VALID_GITHUB_RESOURCE_TYPES = new Set(DEFAULT_GITHUB_RESOURCE_TYPES);
 function defaultDiscordDesktopCachePath() {
   switch (platform2()) {
     case "darwin":
-      return resolve3(homedir3(), "Library", "Application Support", "discord");
+      return resolve4(homedir4(), "Library", "Application Support", "discord");
     case "win32":
-      return resolve3(process.env.APPDATA || resolve3(homedir3(), "AppData", "Roaming"), "discord");
+      return resolve4(process.env.APPDATA || resolve4(homedir4(), "AppData", "Roaming"), "discord");
     default:
-      return resolve3(process.env.XDG_CONFIG_HOME || resolve3(homedir3(), ".config"), "discord");
+      return resolve4(process.env.XDG_CONFIG_HOME || resolve4(homedir4(), ".config"), "discord");
   }
 }
 var IDENTITY_FILES = {
@@ -10194,15 +10966,15 @@ function symlinkSkills(sourceDir, targetDir, options = {}) {
     skipped: [],
     errors: []
   };
-  if (!existsSync12(sourceDir)) {
+  if (!existsSync13(sourceDir)) {
     return result;
   }
-  const targetParent = join12(targetDir, "..");
-  if (!existsSync12(targetParent)) {
-    mkdirSync8(targetParent, { recursive: true });
+  const targetParent = join13(targetDir, "..");
+  if (!existsSync13(targetParent)) {
+    mkdirSync9(targetParent, { recursive: true });
   }
-  if (!existsSync12(targetDir)) {
-    mkdirSync8(targetDir, { recursive: true });
+  if (!existsSync13(targetDir)) {
+    mkdirSync9(targetDir, { recursive: true });
   }
   let entries;
   try {
@@ -10215,8 +10987,8 @@ function symlinkSkills(sourceDir, targetDir, options = {}) {
     return result;
   }
   for (const entry of entries) {
-    const srcPath = join12(sourceDir, entry);
-    const destPath = join12(targetDir, entry);
+    const srcPath = join13(sourceDir, entry);
+    const destPath = join13(targetDir, entry);
     try {
       const src = lstatSync(srcPath);
       if (src.isSymbolicLink() || !src.isDirectory()) {
@@ -10257,7 +11029,7 @@ function symlinkSkills(sourceDir, targetDir, options = {}) {
   }
   return result;
 }
-var home = homedir7();
+var home = homedir8();
 var SIGNET_BLOCK_START = "<!-- SIGNET:START -->";
 var SIGNET_BLOCK_END = "<!-- SIGNET:END -->";
 function stripSignetBlock(content) {
@@ -10414,7 +11186,7 @@ class BaseConnector {
   generateHeader(sourcePath, targetName) {
     const name = targetName || this.name;
     const safe = (p) => p.replace(/[\n\r]/g, "");
-    const root = dirname2(sourcePath);
+    const root = dirname3(sourcePath);
     return `# Auto-generated from ${safe(sourcePath)}
 # Source: ${safe(sourcePath)}
 # Generated: ${new Date().toISOString()}
@@ -10450,12 +11222,16 @@ function isSignetGeneratedFile(raw) {
 `).slice(0, 6);
   return lines.some((line, i) => /^#\s+AUTO-GENERATED\s+from\s+.*\s+by\s+Signet/i.test(line) || /^#\s+Auto-generated\s+from\s+/.test(line) && i + 1 < lines.length && /^#\s+Source:\s+/.test(lines[i + 1]));
 }
-function atomicWriteJson(path, data, indent = 2) {
-  const content = `${JSON.stringify(data, null, indent)}
-`;
-  const tmp = join3(dirname2(path), `.${randomBytes(6).toString("hex")}.tmp`);
+function atomicWriteText(path, content, mode) {
+  const tmp = join3(dirname3(path), `.${randomBytes(6).toString("hex")}.tmp`);
+  let writeMode = mode;
+  if (writeMode === undefined) {
+    try {
+      writeMode = statSync2(path).mode & 511;
+    } catch {}
+  }
   try {
-    writeFileSync(tmp, content, "utf-8");
+    writeFileSync(tmp, content, { encoding: "utf-8", mode: writeMode });
     renameSync(tmp, path);
   } catch (err) {
     try {
@@ -10463,6 +11239,25 @@ function atomicWriteJson(path, data, indent = 2) {
     } catch {}
     throw err;
   }
+}
+function atomicWriteJson(path, data, indent = 2) {
+  atomicWriteText(path, `${JSON.stringify(data, null, indent)}
+`);
+}
+function resolvePackagedSignetCommand(bareCommand, scriptDirectory, scriptName, warnOnFallback) {
+  if (process.platform !== "win32")
+    return { command: bareCommand, args: [] };
+  const cliEntry = process.argv[1] ?? "";
+  const scriptPath = join3(cliEntry, "..", "..", scriptDirectory, scriptName);
+  if (cliEntry && existsSync(scriptPath))
+    return { command: process.execPath, args: [scriptPath] };
+  if (warnOnFallback) {
+    console.warn(`[signet] Warning: could not resolve ${scriptName} from argv[1]="${cliEntry}". ` + `MCP server config will use "${bareCommand}" which may fail on Windows without shell:true.`);
+  }
+  return { command: bareCommand, args: [] };
+}
+function resolveSignetMcpCommand() {
+  return resolvePackagedSignetCommand("signet-mcp", "dist", "mcp-stdio.js", true);
 }
 function readManagedTrimmedEnv(name) {
   const value = process.env[name];
@@ -10472,29 +11267,7 @@ function readManagedTrimmedEnv(name) {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 function resolveSignetWorkspacePath(home2 = homedir()) {
-  const configured = readManagedTrimmedEnv("SIGNET_PATH");
-  if (configured)
-    return resolve(expandHome(configured));
-  const defaultWorkspace = join3(home2, ".agents");
-  const configHome = readManagedTrimmedEnv("XDG_CONFIG_HOME") ?? join3(home2, ".config");
-  const workspaceConfigPath = join3(configHome, "signet", "workspace.json");
-  if (!existsSync(workspaceConfigPath))
-    return defaultWorkspace;
-  let raw;
-  try {
-    raw = JSON.parse(readFileSync(workspaceConfigPath, "utf8"));
-  } catch (err) {
-    const detail = err instanceof Error ? err.message : String(err);
-    throw new Error(`Invalid Signet workspace config at ${workspaceConfigPath}: ${detail}`);
-  }
-  if (typeof raw !== "object" || raw === null || !("workspace" in raw)) {
-    throw new Error(`Invalid Signet workspace config at ${workspaceConfigPath}: missing workspace`);
-  }
-  const workspace = raw.workspace;
-  if (typeof workspace !== "string" || workspace.trim().length === 0) {
-    throw new Error(`Invalid Signet workspace config at ${workspaceConfigPath}: workspace must be a non-empty string`);
-  }
-  return resolve(expandHome(workspace.trim()));
+  return resolveWorkspacePath({ home: home2, strict: true, requireExistingEnvPath: true }).path;
 }
 function resolveSignetApiKey() {
   return readManagedTrimmedEnv("SIGNET_API_KEY") ?? readManagedTrimmedEnv("SIGNET_TOKEN");
@@ -10502,35 +11275,49 @@ function resolveSignetApiKey() {
 
 // ../../../platform/core/dist/index.js
 import { createRequire as createRequire3 } from "node:module";
-import { dirname as dirname4, join as join4 } from "node:path";
+import { dirname as dirname5, join as join4 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 import { homedir as homedir22 } from "os";
 import { join as join22 } from "path";
 import { createRequire as createRequire22 } from "node:module";
-import { homedir as homedir32, platform as platform22 } from "node:os";
-import { basename as basename2, dirname as dirname32, resolve as resolve32 } from "node:path";
-import { existsSync as existsSync10, readFileSync as readFileSync8, readdirSync as readdirSync4, realpathSync, statSync as statSync4 } from "node:fs";
-import { dirname as dirname6, join as join10 } from "node:path";
-import { homedir as homedir72 } from "node:os";
-var __create2 = Object.create;
-var __getProtoOf2 = Object.getPrototypeOf;
-var __defProp2 = Object.defineProperty;
-var __getOwnPropNames2 = Object.getOwnPropertyNames;
-var __hasOwnProp2 = Object.prototype.hasOwnProperty;
-var __toESM2 = (mod, isNodeMode, target) => {
-  target = mod != null ? __create2(__getProtoOf2(mod)) : {};
-  const to = isNodeMode || !mod || !mod.__esModule ? __defProp2(target, "default", { value: mod, enumerable: true }) : target;
-  for (let key of __getOwnPropNames2(mod))
-    if (!__hasOwnProp2.call(to, key))
-      __defProp2(to, key, {
-        get: () => mod[key],
+import { homedir as homedir42, platform as platform22 } from "node:os";
+import { basename as basename2, dirname as dirname42, resolve as resolve42 } from "node:path";
+import { existsSync as existsSync11, readFileSync as readFileSync9, readdirSync as readdirSync4, realpathSync, statSync as statSync5 } from "node:fs";
+import { dirname as dirname7, join as join11 } from "node:path";
+import { homedir as homedir82 } from "node:os";
+var __create = Object.create;
+var __getProtoOf = Object.getPrototypeOf;
+var __defProp = Object.defineProperty;
+var __getOwnPropNames = Object.getOwnPropertyNames;
+var __hasOwnProp = Object.prototype.hasOwnProperty;
+function __accessProp(key) {
+  return this[key];
+}
+var __toESMCache_node;
+var __toESMCache_esm;
+var __toESM = (mod, isNodeMode, target) => {
+  var canCache = mod != null && typeof mod === "object";
+  if (canCache) {
+    var cache = isNodeMode ? __toESMCache_node ??= new WeakMap : __toESMCache_esm ??= new WeakMap;
+    var cached = cache.get(mod);
+    if (cached)
+      return cached;
+  }
+  target = mod != null ? __create(__getProtoOf(mod)) : {};
+  const to = isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target;
+  for (let key of __getOwnPropNames(mod))
+    if (!__hasOwnProp.call(to, key))
+      __defProp(to, key, {
+        get: __accessProp.bind(mod, key),
         enumerable: true
       });
+  if (canCache)
+    cache.set(mod, to);
   return to;
 };
-var __commonJS2 = (cb, mod) => () => (mod || cb((mod = { exports: {} }).exports, mod), mod.exports);
+var __commonJS = (cb, mod) => () => (mod || cb((mod = { exports: {} }).exports, mod), mod.exports);
 var __require2 = /* @__PURE__ */ createRequire3(import.meta.url);
-var require_identity2 = __commonJS2((exports) => {
+var require_identity2 = __commonJS((exports) => {
   var ALIAS = Symbol.for("yaml.alias");
   var DOC = Symbol.for("yaml.document");
   var MAP = Symbol.for("yaml.map");
@@ -10582,7 +11369,7 @@ var require_identity2 = __commonJS2((exports) => {
   exports.isScalar = isScalar;
   exports.isSeq = isSeq;
 });
-var require_visit2 = __commonJS2((exports) => {
+var require_visit2 = __commonJS((exports) => {
   var identity = require_identity2();
   var BREAK = Symbol("break visit");
   var SKIP = Symbol("skip children");
@@ -10735,7 +11522,7 @@ var require_visit2 = __commonJS2((exports) => {
   exports.visit = visit;
   exports.visitAsync = visitAsync;
 });
-var require_directives2 = __commonJS2((exports) => {
+var require_directives2 = __commonJS((exports) => {
   var identity = require_identity2();
   var visit = require_visit2();
   var escapeChars = {
@@ -10885,7 +11672,7 @@ var require_directives2 = __commonJS2((exports) => {
   Directives.defaultTags = { "!!": "tag:yaml.org,2002:" };
   exports.Directives = Directives;
 });
-var require_anchors2 = __commonJS2((exports) => {
+var require_anchors2 = __commonJS((exports) => {
   var identity = require_identity2();
   var visit = require_visit2();
   function anchorIsValid(anchor) {
@@ -10945,7 +11732,7 @@ var require_anchors2 = __commonJS2((exports) => {
   exports.createNodeAnchors = createNodeAnchors;
   exports.findNewAnchor = findNewAnchor;
 });
-var require_applyReviver2 = __commonJS2((exports) => {
+var require_applyReviver2 = __commonJS((exports) => {
   function applyReviver(reviver, obj, key, val) {
     if (val && typeof val === "object") {
       if (Array.isArray(val)) {
@@ -10990,7 +11777,7 @@ var require_applyReviver2 = __commonJS2((exports) => {
   }
   exports.applyReviver = applyReviver;
 });
-var require_toJS2 = __commonJS2((exports) => {
+var require_toJS2 = __commonJS((exports) => {
   var identity = require_identity2();
   function toJS(value, arg, ctx) {
     if (Array.isArray(value))
@@ -11015,7 +11802,7 @@ var require_toJS2 = __commonJS2((exports) => {
   }
   exports.toJS = toJS;
 });
-var require_Node2 = __commonJS2((exports) => {
+var require_Node2 = __commonJS((exports) => {
   var applyReviver = require_applyReviver2();
   var identity = require_identity2();
   var toJS = require_toJS2();
@@ -11050,7 +11837,7 @@ var require_Node2 = __commonJS2((exports) => {
   }
   exports.NodeBase = NodeBase;
 });
-var require_Alias2 = __commonJS2((exports) => {
+var require_Alias2 = __commonJS((exports) => {
   var anchors = require_anchors2();
   var visit = require_visit2();
   var identity = require_identity2();
@@ -11156,7 +11943,7 @@ var require_Alias2 = __commonJS2((exports) => {
   }
   exports.Alias = Alias;
 });
-var require_Scalar2 = __commonJS2((exports) => {
+var require_Scalar2 = __commonJS((exports) => {
   var identity = require_identity2();
   var Node = require_Node2();
   var toJS = require_toJS2();
@@ -11182,7 +11969,7 @@ var require_Scalar2 = __commonJS2((exports) => {
   exports.Scalar = Scalar;
   exports.isScalarValue = isScalarValue;
 });
-var require_createNode2 = __commonJS2((exports) => {
+var require_createNode2 = __commonJS((exports) => {
   var Alias = require_Alias2();
   var identity = require_identity2();
   var Scalar = require_Scalar2();
@@ -11252,7 +12039,7 @@ var require_createNode2 = __commonJS2((exports) => {
   }
   exports.createNode = createNode;
 });
-var require_Collection2 = __commonJS2((exports) => {
+var require_Collection2 = __commonJS((exports) => {
   var createNode = require_createNode2();
   var identity = require_identity2();
   var Node = require_Node2();
@@ -11365,7 +12152,7 @@ var require_Collection2 = __commonJS2((exports) => {
   exports.collectionFromPath = collectionFromPath;
   exports.isEmptyPath = isEmptyPath;
 });
-var require_stringifyComment2 = __commonJS2((exports) => {
+var require_stringifyComment2 = __commonJS((exports) => {
   var stringifyComment = (str) => str.replace(/^(?!$)(?: $)?/gm, "#");
   function indentComment(comment, indent) {
     if (/^\n+$/.test(comment))
@@ -11380,7 +12167,7 @@ var require_stringifyComment2 = __commonJS2((exports) => {
   exports.lineComment = lineComment;
   exports.stringifyComment = stringifyComment;
 });
-var require_foldFlowLines2 = __commonJS2((exports) => {
+var require_foldFlowLines2 = __commonJS((exports) => {
   var FOLD_FLOW = "flow";
   var FOLD_BLOCK = "block";
   var FOLD_QUOTED = "quoted";
@@ -11515,7 +12302,7 @@ ${indent}${text.slice(fold + 1, end2)}`;
   exports.FOLD_QUOTED = FOLD_QUOTED;
   exports.foldFlowLines = foldFlowLines;
 });
-var require_stringifyString2 = __commonJS2((exports) => {
+var require_stringifyString2 = __commonJS((exports) => {
   var Scalar = require_Scalar2();
   var foldFlowLines = require_foldFlowLines2();
   var getFoldOptions = (ctx, isBlock) => ({
@@ -11811,7 +12598,7 @@ ${indent}`);
   }
   exports.stringifyString = stringifyString;
 });
-var require_stringify2 = __commonJS2((exports) => {
+var require_stringify2 = __commonJS((exports) => {
   var anchors = require_anchors2();
   var identity = require_identity2();
   var stringifyComment = require_stringifyComment2();
@@ -11930,7 +12717,7 @@ ${ctx.indent}${str}`;
   exports.createStringifyContext = createStringifyContext;
   exports.stringify = stringify;
 });
-var require_stringifyPair2 = __commonJS2((exports) => {
+var require_stringifyPair2 = __commonJS((exports) => {
   var identity = require_identity2();
   var Scalar = require_Scalar2();
   var stringify = require_stringify2();
@@ -12064,7 +12851,7 @@ ${ctx.indent}`;
   }
   exports.stringifyPair = stringifyPair;
 });
-var require_log2 = __commonJS2((exports) => {
+var require_log2 = __commonJS((exports) => {
   var node_process = __require2("process");
   function debug(logLevel, ...messages) {
     if (logLevel === "debug")
@@ -12081,7 +12868,7 @@ var require_log2 = __commonJS2((exports) => {
   exports.debug = debug;
   exports.warn = warn;
 });
-var require_merge2 = __commonJS2((exports) => {
+var require_merge2 = __commonJS((exports) => {
   var identity = require_identity2();
   var Scalar = require_Scalar2();
   var MERGE_KEY = "<<";
@@ -12133,7 +12920,7 @@ var require_merge2 = __commonJS2((exports) => {
   exports.isMergeKey = isMergeKey;
   exports.merge = merge;
 });
-var require_addPairToJSMap2 = __commonJS2((exports) => {
+var require_addPairToJSMap2 = __commonJS((exports) => {
   var log = require_log2();
   var merge = require_merge2();
   var stringify = require_stringify2();
@@ -12192,7 +12979,7 @@ var require_addPairToJSMap2 = __commonJS2((exports) => {
   }
   exports.addPairToJSMap = addPairToJSMap;
 });
-var require_Pair2 = __commonJS2((exports) => {
+var require_Pair2 = __commonJS((exports) => {
   var createNode = require_createNode2();
   var stringifyPair = require_stringifyPair2();
   var addPairToJSMap = require_addPairToJSMap2();
@@ -12228,7 +13015,7 @@ var require_Pair2 = __commonJS2((exports) => {
   exports.Pair = Pair;
   exports.createPair = createPair;
 });
-var require_stringifyCollection2 = __commonJS2((exports) => {
+var require_stringifyCollection2 = __commonJS((exports) => {
   var identity = require_identity2();
   var stringify = require_stringify2();
   var stringifyComment = require_stringifyComment2();
@@ -12378,7 +13165,7 @@ ${indent}${end}`;
   }
   exports.stringifyCollection = stringifyCollection;
 });
-var require_YAMLMap2 = __commonJS2((exports) => {
+var require_YAMLMap2 = __commonJS((exports) => {
   var stringifyCollection = require_stringifyCollection2();
   var addPairToJSMap = require_addPairToJSMap2();
   var Collection = require_Collection2();
@@ -12503,7 +13290,7 @@ var require_YAMLMap2 = __commonJS2((exports) => {
   exports.YAMLMap = YAMLMap;
   exports.findPair = findPair;
 });
-var require_map2 = __commonJS2((exports) => {
+var require_map2 = __commonJS((exports) => {
   var identity = require_identity2();
   var YAMLMap = require_YAMLMap2();
   var map = {
@@ -12520,7 +13307,7 @@ var require_map2 = __commonJS2((exports) => {
   };
   exports.map = map;
 });
-var require_YAMLSeq2 = __commonJS2((exports) => {
+var require_YAMLSeq2 = __commonJS((exports) => {
   var createNode = require_createNode2();
   var stringifyCollection = require_stringifyCollection2();
   var Collection = require_Collection2();
@@ -12611,7 +13398,7 @@ var require_YAMLSeq2 = __commonJS2((exports) => {
   }
   exports.YAMLSeq = YAMLSeq;
 });
-var require_seq2 = __commonJS2((exports) => {
+var require_seq2 = __commonJS((exports) => {
   var identity = require_identity2();
   var YAMLSeq = require_YAMLSeq2();
   var seq = {
@@ -12628,7 +13415,7 @@ var require_seq2 = __commonJS2((exports) => {
   };
   exports.seq = seq;
 });
-var require_string2 = __commonJS2((exports) => {
+var require_string2 = __commonJS((exports) => {
   var stringifyString = require_stringifyString2();
   var string = {
     identify: (value) => typeof value === "string",
@@ -12642,7 +13429,7 @@ var require_string2 = __commonJS2((exports) => {
   };
   exports.string = string;
 });
-var require_null2 = __commonJS2((exports) => {
+var require_null2 = __commonJS((exports) => {
   var Scalar = require_Scalar2();
   var nullTag = {
     identify: (value) => value == null,
@@ -12655,7 +13442,7 @@ var require_null2 = __commonJS2((exports) => {
   };
   exports.nullTag = nullTag;
 });
-var require_bool3 = __commonJS2((exports) => {
+var require_bool3 = __commonJS((exports) => {
   var Scalar = require_Scalar2();
   var boolTag = {
     identify: (value) => typeof value === "boolean",
@@ -12674,7 +13461,7 @@ var require_bool3 = __commonJS2((exports) => {
   };
   exports.boolTag = boolTag;
 });
-var require_stringifyNumber2 = __commonJS2((exports) => {
+var require_stringifyNumber2 = __commonJS((exports) => {
   function stringifyNumber({ format, minFractionDigits, tag, value }) {
     if (typeof value === "bigint")
       return String(value);
@@ -12696,7 +13483,7 @@ var require_stringifyNumber2 = __commonJS2((exports) => {
   }
   exports.stringifyNumber = stringifyNumber;
 });
-var require_float3 = __commonJS2((exports) => {
+var require_float3 = __commonJS((exports) => {
   var Scalar = require_Scalar2();
   var stringifyNumber = require_stringifyNumber2();
   var floatNaN = {
@@ -12737,7 +13524,7 @@ var require_float3 = __commonJS2((exports) => {
   exports.floatExp = floatExp;
   exports.floatNaN = floatNaN;
 });
-var require_int3 = __commonJS2((exports) => {
+var require_int3 = __commonJS((exports) => {
   var stringifyNumber = require_stringifyNumber2();
   var intIdentify = (value) => typeof value === "bigint" || Number.isInteger(value);
   var intResolve = (str, offset, radix, { intAsBigInt }) => intAsBigInt ? BigInt(str) : parseInt(str.substring(offset), radix);
@@ -12777,7 +13564,7 @@ var require_int3 = __commonJS2((exports) => {
   exports.intHex = intHex;
   exports.intOct = intOct;
 });
-var require_schema4 = __commonJS2((exports) => {
+var require_schema4 = __commonJS((exports) => {
   var map = require_map2();
   var _null = require_null2();
   var seq = require_seq2();
@@ -12800,7 +13587,7 @@ var require_schema4 = __commonJS2((exports) => {
   ];
   exports.schema = schema;
 });
-var require_schema22 = __commonJS2((exports) => {
+var require_schema22 = __commonJS((exports) => {
   var Scalar = require_Scalar2();
   var map = require_map2();
   var seq = require_seq2();
@@ -12862,7 +13649,7 @@ var require_schema22 = __commonJS2((exports) => {
   var schema = [map.map, seq.seq].concat(jsonScalars, jsonError);
   exports.schema = schema;
 });
-var require_binary2 = __commonJS2((exports) => {
+var require_binary2 = __commonJS((exports) => {
   var node_buffer = __require2("buffer");
   var Scalar = require_Scalar2();
   var stringifyString = require_stringifyString2();
@@ -12915,7 +13702,7 @@ var require_binary2 = __commonJS2((exports) => {
   };
   exports.binary = binary;
 });
-var require_pairs2 = __commonJS2((exports) => {
+var require_pairs2 = __commonJS((exports) => {
   var identity = require_identity2();
   var Pair = require_Pair2();
   var Scalar = require_Scalar2();
@@ -12988,7 +13775,7 @@ ${cn.comment}` : item.comment;
   exports.pairs = pairs;
   exports.resolvePairs = resolvePairs;
 });
-var require_omap2 = __commonJS2((exports) => {
+var require_omap2 = __commonJS((exports) => {
   var identity = require_identity2();
   var toJS = require_toJS2();
   var YAMLMap = require_YAMLMap2();
@@ -13058,7 +13845,7 @@ var require_omap2 = __commonJS2((exports) => {
   exports.YAMLOMap = YAMLOMap;
   exports.omap = omap;
 });
-var require_bool22 = __commonJS2((exports) => {
+var require_bool22 = __commonJS((exports) => {
   var Scalar = require_Scalar2();
   function boolStringify({ value, source }, ctx) {
     const boolObj = value ? trueTag : falseTag;
@@ -13085,7 +13872,7 @@ var require_bool22 = __commonJS2((exports) => {
   exports.falseTag = falseTag;
   exports.trueTag = trueTag;
 });
-var require_float22 = __commonJS2((exports) => {
+var require_float22 = __commonJS((exports) => {
   var Scalar = require_Scalar2();
   var stringifyNumber = require_stringifyNumber2();
   var floatNaN = {
@@ -13129,7 +13916,7 @@ var require_float22 = __commonJS2((exports) => {
   exports.floatExp = floatExp;
   exports.floatNaN = floatNaN;
 });
-var require_int22 = __commonJS2((exports) => {
+var require_int22 = __commonJS((exports) => {
   var stringifyNumber = require_stringifyNumber2();
   var intIdentify = (value) => typeof value === "bigint" || Number.isInteger(value);
   function intResolve(str, offset, radix, { intAsBigInt }) {
@@ -13203,7 +13990,7 @@ var require_int22 = __commonJS2((exports) => {
   exports.intHex = intHex;
   exports.intOct = intOct;
 });
-var require_set2 = __commonJS2((exports) => {
+var require_set2 = __commonJS((exports) => {
   var identity = require_identity2();
   var Pair = require_Pair2();
   var YAMLMap = require_YAMLMap2();
@@ -13284,7 +14071,7 @@ var require_set2 = __commonJS2((exports) => {
   exports.YAMLSet = YAMLSet;
   exports.set = set;
 });
-var require_timestamp2 = __commonJS2((exports) => {
+var require_timestamp2 = __commonJS((exports) => {
   var stringifyNumber = require_stringifyNumber2();
   function parseSexagesimal(str, asBigInt) {
     const sign = str[0];
@@ -13364,7 +14151,7 @@ var require_timestamp2 = __commonJS2((exports) => {
   exports.intTime = intTime;
   exports.timestamp = timestamp;
 });
-var require_schema32 = __commonJS2((exports) => {
+var require_schema32 = __commonJS((exports) => {
   var map = require_map2();
   var _null = require_null2();
   var seq = require_seq2();
@@ -13403,7 +14190,7 @@ var require_schema32 = __commonJS2((exports) => {
   ];
   exports.schema = schema;
 });
-var require_tags2 = __commonJS2((exports) => {
+var require_tags2 = __commonJS((exports) => {
   var map = require_map2();
   var _null = require_null2();
   var seq = require_seq2();
@@ -13492,7 +14279,7 @@ var require_tags2 = __commonJS2((exports) => {
   exports.coreKnownTags = coreKnownTags;
   exports.getTags = getTags;
 });
-var require_Schema2 = __commonJS2((exports) => {
+var require_Schema2 = __commonJS((exports) => {
   var identity = require_identity2();
   var map = require_map2();
   var seq = require_seq2();
@@ -13520,7 +14307,7 @@ var require_Schema2 = __commonJS2((exports) => {
   }
   exports.Schema = Schema;
 });
-var require_stringifyDocument2 = __commonJS2((exports) => {
+var require_stringifyDocument2 = __commonJS((exports) => {
   var identity = require_identity2();
   var stringify = require_stringify2();
   var stringifyComment = require_stringifyComment2();
@@ -13598,7 +14385,7 @@ var require_stringifyDocument2 = __commonJS2((exports) => {
   }
   exports.stringifyDocument = stringifyDocument;
 });
-var require_Document2 = __commonJS2((exports) => {
+var require_Document2 = __commonJS((exports) => {
   var Alias = require_Alias2();
   var Collection = require_Collection2();
   var identity = require_identity2();
@@ -13831,7 +14618,7 @@ var require_Document2 = __commonJS2((exports) => {
   }
   exports.Document = Document;
 });
-var require_errors2 = __commonJS2((exports) => {
+var require_errors2 = __commonJS((exports) => {
 
   class YAMLError extends Error {
     constructor(name, pos, code, message) {
@@ -13895,7 +14682,7 @@ ${pointer}
   exports.YAMLWarning = YAMLWarning;
   exports.prettifyError = prettifyError;
 });
-var require_resolve_props2 = __commonJS2((exports) => {
+var require_resolve_props2 = __commonJS((exports) => {
   function resolveProps(tokens, { flow, indicator, next, offset, onError, parentIndent, startOnNewline }) {
     let spaceBefore = false;
     let atNewline = startOnNewline;
@@ -14023,7 +14810,7 @@ var require_resolve_props2 = __commonJS2((exports) => {
   }
   exports.resolveProps = resolveProps;
 });
-var require_util_contains_newline2 = __commonJS2((exports) => {
+var require_util_contains_newline2 = __commonJS((exports) => {
   function containsNewline(key) {
     if (!key)
       return null;
@@ -14061,7 +14848,7 @@ var require_util_contains_newline2 = __commonJS2((exports) => {
   }
   exports.containsNewline = containsNewline;
 });
-var require_util_flow_indent_check2 = __commonJS2((exports) => {
+var require_util_flow_indent_check2 = __commonJS((exports) => {
   var utilContainsNewline = require_util_contains_newline2();
   function flowIndentCheck(indent, fc, onError) {
     if (fc?.type === "flow-collection") {
@@ -14074,7 +14861,7 @@ var require_util_flow_indent_check2 = __commonJS2((exports) => {
   }
   exports.flowIndentCheck = flowIndentCheck;
 });
-var require_util_map_includes2 = __commonJS2((exports) => {
+var require_util_map_includes2 = __commonJS((exports) => {
   var identity = require_identity2();
   function mapIncludes(ctx, items, search) {
     const { uniqueKeys } = ctx.options;
@@ -14085,7 +14872,7 @@ var require_util_map_includes2 = __commonJS2((exports) => {
   }
   exports.mapIncludes = mapIncludes;
 });
-var require_resolve_block_map2 = __commonJS2((exports) => {
+var require_resolve_block_map2 = __commonJS((exports) => {
   var Pair = require_Pair2();
   var YAMLMap = require_YAMLMap2();
   var resolveProps = require_resolve_props2();
@@ -14190,7 +14977,7 @@ var require_resolve_block_map2 = __commonJS2((exports) => {
   }
   exports.resolveBlockMap = resolveBlockMap;
 });
-var require_resolve_block_seq2 = __commonJS2((exports) => {
+var require_resolve_block_seq2 = __commonJS((exports) => {
   var YAMLSeq = require_YAMLSeq2();
   var resolveProps = require_resolve_props2();
   var utilFlowIndentCheck = require_util_flow_indent_check2();
@@ -14236,7 +15023,7 @@ var require_resolve_block_seq2 = __commonJS2((exports) => {
   }
   exports.resolveBlockSeq = resolveBlockSeq;
 });
-var require_resolve_end2 = __commonJS2((exports) => {
+var require_resolve_end2 = __commonJS((exports) => {
   function resolveEnd(end, offset, reqSpace, onError) {
     let comment = "";
     if (end) {
@@ -14274,7 +15061,7 @@ var require_resolve_end2 = __commonJS2((exports) => {
   }
   exports.resolveEnd = resolveEnd;
 });
-var require_resolve_flow_collection2 = __commonJS2((exports) => {
+var require_resolve_flow_collection2 = __commonJS((exports) => {
   var identity = require_identity2();
   var Pair = require_Pair2();
   var YAMLMap = require_YAMLMap2();
@@ -14463,7 +15250,7 @@ var require_resolve_flow_collection2 = __commonJS2((exports) => {
   }
   exports.resolveFlowCollection = resolveFlowCollection;
 });
-var require_compose_collection2 = __commonJS2((exports) => {
+var require_compose_collection2 = __commonJS((exports) => {
   var identity = require_identity2();
   var Scalar = require_Scalar2();
   var YAMLMap = require_YAMLMap2();
@@ -14523,7 +15310,7 @@ var require_compose_collection2 = __commonJS2((exports) => {
   }
   exports.composeCollection = composeCollection;
 });
-var require_resolve_block_scalar2 = __commonJS2((exports) => {
+var require_resolve_block_scalar2 = __commonJS((exports) => {
   var Scalar = require_Scalar2();
   function resolveBlockScalar(ctx, scalar, onError) {
     const start = scalar.offset;
@@ -14714,7 +15501,7 @@ var require_resolve_block_scalar2 = __commonJS2((exports) => {
   }
   exports.resolveBlockScalar = resolveBlockScalar;
 });
-var require_resolve_flow_scalar2 = __commonJS2((exports) => {
+var require_resolve_flow_scalar2 = __commonJS((exports) => {
   var Scalar = require_Scalar2();
   var resolveEnd = require_resolve_end2();
   function resolveFlowScalar(scalar, strict, onError) {
@@ -14928,7 +15715,7 @@ var require_resolve_flow_scalar2 = __commonJS2((exports) => {
   }
   exports.resolveFlowScalar = resolveFlowScalar;
 });
-var require_compose_scalar2 = __commonJS2((exports) => {
+var require_compose_scalar2 = __commonJS((exports) => {
   var identity = require_identity2();
   var Scalar = require_Scalar2();
   var resolveBlockScalar = require_resolve_block_scalar2();
@@ -15004,7 +15791,7 @@ var require_compose_scalar2 = __commonJS2((exports) => {
   }
   exports.composeScalar = composeScalar;
 });
-var require_util_empty_scalar_position2 = __commonJS2((exports) => {
+var require_util_empty_scalar_position2 = __commonJS((exports) => {
   function emptyScalarPosition(offset, before, pos) {
     if (before) {
       pos ?? (pos = before.length);
@@ -15029,7 +15816,7 @@ var require_util_empty_scalar_position2 = __commonJS2((exports) => {
   }
   exports.emptyScalarPosition = emptyScalarPosition;
 });
-var require_compose_node2 = __commonJS2((exports) => {
+var require_compose_node2 = __commonJS((exports) => {
   var Alias = require_Alias2();
   var identity = require_identity2();
   var composeCollection = require_compose_collection2();
@@ -15130,7 +15917,7 @@ var require_compose_node2 = __commonJS2((exports) => {
   exports.composeEmptyNode = composeEmptyNode;
   exports.composeNode = composeNode;
 });
-var require_compose_doc2 = __commonJS2((exports) => {
+var require_compose_doc2 = __commonJS((exports) => {
   var Document = require_Document2();
   var composeNode = require_compose_node2();
   var resolveEnd = require_resolve_end2();
@@ -15168,7 +15955,7 @@ var require_compose_doc2 = __commonJS2((exports) => {
   }
   exports.composeDoc = composeDoc;
 });
-var require_composer2 = __commonJS2((exports) => {
+var require_composer2 = __commonJS((exports) => {
   var node_process = __require2("process");
   var directives = require_directives2();
   var Document = require_Document2();
@@ -15355,7 +16142,7 @@ ${end.comment}` : end.comment;
   }
   exports.Composer = Composer;
 });
-var require_cst_scalar2 = __commonJS2((exports) => {
+var require_cst_scalar2 = __commonJS((exports) => {
   var resolveBlockScalar = require_resolve_block_scalar2();
   var resolveFlowScalar = require_resolve_flow_scalar2();
   var errors = require_errors2();
@@ -15543,7 +16330,7 @@ var require_cst_scalar2 = __commonJS2((exports) => {
   exports.resolveAsScalar = resolveAsScalar;
   exports.setScalarValue = setScalarValue;
 });
-var require_cst_stringify2 = __commonJS2((exports) => {
+var require_cst_stringify2 = __commonJS((exports) => {
   var stringify = (cst) => ("type" in cst) ? stringifyToken(cst) : stringifyItem(cst);
   function stringifyToken(token) {
     switch (token.type) {
@@ -15599,7 +16386,7 @@ var require_cst_stringify2 = __commonJS2((exports) => {
   }
   exports.stringify = stringify;
 });
-var require_cst_visit2 = __commonJS2((exports) => {
+var require_cst_visit2 = __commonJS((exports) => {
   var BREAK = Symbol("break visit");
   var SKIP = Symbol("skip children");
   var REMOVE = Symbol("remove item");
@@ -15656,7 +16443,7 @@ var require_cst_visit2 = __commonJS2((exports) => {
   }
   exports.visit = visit;
 });
-var require_cst2 = __commonJS2((exports) => {
+var require_cst2 = __commonJS((exports) => {
   var cstScalar = require_cst_scalar2();
   var cstStringify = require_cst_stringify2();
   var cstVisit = require_cst_visit2();
@@ -15755,7 +16542,7 @@ var require_cst2 = __commonJS2((exports) => {
   exports.prettyToken = prettyToken;
   exports.tokenType = tokenType;
 });
-var require_lexer2 = __commonJS2((exports) => {
+var require_lexer2 = __commonJS((exports) => {
   var cst = require_cst2();
   function isEmpty(ch) {
     switch (ch) {
@@ -16339,7 +17126,7 @@ var require_lexer2 = __commonJS2((exports) => {
   }
   exports.Lexer = Lexer;
 });
-var require_line_counter2 = __commonJS2((exports) => {
+var require_line_counter2 = __commonJS((exports) => {
 
   class LineCounter {
     constructor() {
@@ -16366,7 +17153,7 @@ var require_line_counter2 = __commonJS2((exports) => {
   }
   exports.LineCounter = LineCounter;
 });
-var require_parser2 = __commonJS2((exports) => {
+var require_parser2 = __commonJS((exports) => {
   var node_process = __require2("process");
   var cst = require_cst2();
   var lexer = require_lexer2();
@@ -17213,7 +18000,7 @@ var require_parser2 = __commonJS2((exports) => {
   }
   exports.Parser = Parser;
 });
-var require_public_api2 = __commonJS2((exports) => {
+var require_public_api2 = __commonJS((exports) => {
   var composer = require_composer2();
   var Document = require_Document2();
   var errors = require_errors2();
@@ -17305,7 +18092,7 @@ var require_public_api2 = __commonJS2((exports) => {
   exports.parseDocument = parseDocument;
   exports.stringify = stringify;
 });
-var require_dist2 = __commonJS2((exports) => {
+var require_dist2 = __commonJS((exports) => {
   var composer = require_composer2();
   var Document = require_Document2();
   var Schema = require_Schema2();
@@ -17418,7 +18205,7 @@ function memoriesFtsNeedsTokenizerRepair2(sql) {
     return true;
   return !normalized.includes(`tokenize='${MEMORIES_FTS_TOKENIZER2}'`);
 }
-function up79(db) {
+function up91(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS schema_migrations (
 			version INTEGER PRIMARY KEY,
@@ -17507,31 +18294,31 @@ function up79(db) {
   } catch {}
   createMemoriesFts2(db);
 }
-function hasColumn10(db, table, column) {
+function hasColumn13(db, table, column) {
   const rows = db.prepare(`PRAGMA table_info(${table})`).all();
   return rows.some((r) => r.name === column);
 }
-function addColumnIfMissing20(db, table, column, definition) {
-  if (!hasColumn10(db, table, column)) {
+function addColumnIfMissing23(db, table, column, definition) {
+  if (!hasColumn13(db, table, column)) {
     db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
   }
 }
 function up210(db) {
-  addColumnIfMissing20(db, "memories", "content_hash", "TEXT");
-  addColumnIfMissing20(db, "memories", "normalized_content", "TEXT");
-  addColumnIfMissing20(db, "memories", "is_deleted", "INTEGER DEFAULT 0");
-  addColumnIfMissing20(db, "memories", "deleted_at", "TEXT");
-  addColumnIfMissing20(db, "memories", "extraction_status", "TEXT DEFAULT 'none'");
-  addColumnIfMissing20(db, "memories", "embedding_model", "TEXT");
-  addColumnIfMissing20(db, "memories", "extraction_model", "TEXT");
-  addColumnIfMissing20(db, "memories", "update_count", "INTEGER DEFAULT 0");
-  addColumnIfMissing20(db, "memories", "who", "TEXT");
-  addColumnIfMissing20(db, "memories", "why", "TEXT");
-  addColumnIfMissing20(db, "memories", "project", "TEXT");
-  addColumnIfMissing20(db, "memories", "pinned", "INTEGER DEFAULT 0");
-  addColumnIfMissing20(db, "memories", "importance", "REAL DEFAULT 0.5");
-  addColumnIfMissing20(db, "memories", "last_accessed", "TEXT");
-  addColumnIfMissing20(db, "memories", "access_count", "INTEGER DEFAULT 0");
+  addColumnIfMissing23(db, "memories", "content_hash", "TEXT");
+  addColumnIfMissing23(db, "memories", "normalized_content", "TEXT");
+  addColumnIfMissing23(db, "memories", "is_deleted", "INTEGER DEFAULT 0");
+  addColumnIfMissing23(db, "memories", "deleted_at", "TEXT");
+  addColumnIfMissing23(db, "memories", "extraction_status", "TEXT DEFAULT 'none'");
+  addColumnIfMissing23(db, "memories", "embedding_model", "TEXT");
+  addColumnIfMissing23(db, "memories", "extraction_model", "TEXT");
+  addColumnIfMissing23(db, "memories", "update_count", "INTEGER DEFAULT 0");
+  addColumnIfMissing23(db, "memories", "who", "TEXT");
+  addColumnIfMissing23(db, "memories", "why", "TEXT");
+  addColumnIfMissing23(db, "memories", "project", "TEXT");
+  addColumnIfMissing23(db, "memories", "pinned", "INTEGER DEFAULT 0");
+  addColumnIfMissing23(db, "memories", "importance", "REAL DEFAULT 0.5");
+  addColumnIfMissing23(db, "memories", "last_accessed", "TEXT");
+  addColumnIfMissing23(db, "memories", "access_count", "INTEGER DEFAULT 0");
   db.exec(`
 		CREATE TABLE IF NOT EXISTS memory_history (
 			id TEXT PRIMARY KEY,
@@ -17627,7 +18414,7 @@ function up210(db) {
 			ON memory_entity_mentions(entity_id);
 	`);
 }
-function addColumnIfMissing22(db, table, column, definition) {
+function addColumnIfMissing24(db, table, column, definition) {
   const rows = db.prepare(`PRAGMA table_info(${table})`).all();
   if (rows.some((r) => r.name === column))
     return false;
@@ -17635,8 +18422,8 @@ function addColumnIfMissing22(db, table, column, definition) {
   return true;
 }
 function up310(db) {
-  addColumnIfMissing22(db, "memories", "why", "TEXT");
-  addColumnIfMissing22(db, "memories", "project", "TEXT");
+  addColumnIfMissing24(db, "memories", "why", "TEXT");
+  addColumnIfMissing24(db, "memories", "project", "TEXT");
   db.exec(`DROP INDEX IF EXISTS idx_memories_content_hash`);
   db.exec(`
 		UPDATE memories
@@ -17793,7 +18580,7 @@ function up710(db) {
     db.exec("ALTER TABLE memory_jobs ADD COLUMN document_id TEXT");
   }
 }
-function up82(db) {
+function up810(db) {
   const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='embeddings'").all();
   if (tables.length === 0)
     return;
@@ -19062,7 +19849,7 @@ function up492(db) {
 		);
 	`);
 }
-function hasTable3(db, name) {
+function hasTable4(db, name) {
   return db.prepare(`SELECT name
 			 FROM sqlite_master
 			 WHERE type = 'table' AND name = ?
@@ -19092,7 +19879,7 @@ function up502(db) {
 		CREATE INDEX IF NOT EXISTS idx_entity_dependency_history_created
 			ON entity_dependency_history(created_at DESC);
 	`);
-  if (!hasTable3(db, "entity_dependencies"))
+  if (!hasTable4(db, "entity_dependencies"))
     return;
   db.exec("DROP TRIGGER IF EXISTS trg_entity_dependencies_related_to_reason_insert");
   db.exec("DROP TRIGGER IF EXISTS trg_entity_dependencies_related_to_reason_update");
@@ -19945,11 +20732,499 @@ function up782(db) {
 			ON api_keys(connector, harness);
 	`);
 }
+function up792(db) {
+  db.exec(`
+		CREATE TABLE IF NOT EXISTS transcript_capture_jobs (
+			id TEXT PRIMARY KEY,
+			agent_id TEXT NOT NULL DEFAULT 'default',
+			harness TEXT NOT NULL,
+			session_key TEXT,
+			session_id TEXT NOT NULL,
+			project TEXT,
+			transcript TEXT NOT NULL,
+			raw_transcript TEXT,
+			transcript_path TEXT,
+			captured_at TEXT NOT NULL,
+			ended_at TEXT,
+			summary_status TEXT NOT NULL DEFAULT 'not_requested',
+			status TEXT NOT NULL DEFAULT 'pending',
+			attempts INTEGER NOT NULL DEFAULT 0,
+			max_attempts INTEGER NOT NULL DEFAULT 5,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			completed_at TEXT,
+			error TEXT
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_transcript_capture_jobs_status
+			ON transcript_capture_jobs(status, created_at);
+
+		CREATE INDEX IF NOT EXISTS idx_transcript_capture_jobs_agent_session
+			ON transcript_capture_jobs(agent_id, session_key, created_at);
+	`);
+}
+function hasColumn102(db, table, column) {
+  const rows = db.prepare(`PRAGMA table_info(${table})`).all();
+  return rows.some((row) => row.name === column);
+}
+function up802(db) {
+  if (!hasColumn102(db, "documents", "agent_id")) {
+    db.exec("ALTER TABLE documents ADD COLUMN agent_id TEXT NOT NULL DEFAULT 'default'");
+  }
+  if (!hasColumn102(db, "documents", "project")) {
+    db.exec("ALTER TABLE documents ADD COLUMN project TEXT");
+  }
+  db.exec(`
+		UPDATE documents
+		SET agent_id = NULLIF(TRIM(json_extract(metadata_json, '$.signet.agentId')), '')
+		WHERE metadata_json IS NOT NULL
+		  AND json_valid(metadata_json)
+		  AND json_type(metadata_json, '$.signet.agentId') = 'text'
+		  AND NULLIF(TRIM(json_extract(metadata_json, '$.signet.agentId')), '') IS NOT NULL
+	`);
+  db.exec(`
+		UPDATE documents
+		SET project = NULLIF(TRIM(json_extract(metadata_json, '$.signet.project')), '')
+		WHERE metadata_json IS NOT NULL
+		  AND json_valid(metadata_json)
+		  AND json_type(metadata_json, '$.signet.project') = 'text'
+	`);
+  db.exec(`
+		WITH linked_scope AS (
+			SELECT
+				dm.document_id,
+				m.agent_id,
+				m.project,
+				ROW_NUMBER() OVER (
+					PARTITION BY dm.document_id
+					ORDER BY COUNT(*) DESC, m.agent_id, COALESCE(m.project, '')
+				) AS rank
+			FROM document_memories dm
+			JOIN memories m ON m.id = dm.memory_id
+			WHERE m.agent_id IS NOT NULL
+			  AND NULLIF(TRIM(m.agent_id), '') IS NOT NULL
+			GROUP BY dm.document_id, m.agent_id, m.project
+		)
+		UPDATE documents
+		SET
+			agent_id = COALESCE((
+				SELECT agent_id FROM linked_scope
+				WHERE linked_scope.document_id = documents.id AND rank = 1
+			), agent_id),
+			project = (
+				SELECT project FROM linked_scope
+				WHERE linked_scope.document_id = documents.id AND rank = 1
+			)
+		WHERE EXISTS (
+			SELECT 1 FROM linked_scope
+			WHERE linked_scope.document_id = documents.id AND rank = 1
+		)
+		AND NOT (
+			metadata_json IS NOT NULL
+			AND json_valid(metadata_json)
+			AND json_type(metadata_json, '$.signet.agentId') = 'text'
+			AND NULLIF(TRIM(json_extract(metadata_json, '$.signet.agentId')), '') IS NOT NULL
+		)
+	`);
+  if (hasColumn102(db, "memories", "visibility") && hasColumn102(db, "memories", "type") && hasColumn102(db, "memories", "source_type")) {
+    db.exec(`
+			UPDATE memories
+			SET visibility = 'private'
+			WHERE id IN (SELECT memory_id FROM document_memories)
+			  AND type = 'document_chunk'
+			  AND source_type = 'document'
+			  AND (visibility IS NULL OR visibility = 'global')
+		`);
+  }
+  if (hasColumn102(db, "memories", "content_hash") && hasColumn102(db, "memories", "agent_id") && hasColumn102(db, "memories", "project") && hasColumn102(db, "memories", "scope") && hasColumn102(db, "memories", "visibility") && hasColumn102(db, "memories", "is_deleted")) {
+    db.exec("DROP INDEX IF EXISTS idx_memories_content_hash_unique");
+    db.exec(`
+			CREATE UNIQUE INDEX idx_memories_content_hash_unique
+			ON memories(
+				content_hash,
+				COALESCE(NULLIF(agent_id, ''), 'default'),
+				COALESCE(project, ''),
+				COALESCE(scope, '__NULL__'),
+				COALESCE(visibility, 'global')
+			)
+			WHERE content_hash IS NOT NULL AND is_deleted = 0
+		`);
+  }
+  db.exec("CREATE INDEX IF NOT EXISTS idx_documents_agent_project ON documents(agent_id, project)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_documents_source_scope ON documents(source_url, agent_id, project)");
+}
+function up812(db) {
+  db.exec(`
+		CREATE TABLE IF NOT EXISTS aggregate_evidence_sources (
+			aggregate_memory_id TEXT NOT NULL,
+			source_kind TEXT NOT NULL,
+			source_id TEXT NOT NULL,
+			source_path TEXT,
+			agent_id TEXT NOT NULL DEFAULT 'default',
+			created_at TEXT NOT NULL,
+			PRIMARY KEY (aggregate_memory_id, source_kind, source_id)
+		);
+		CREATE INDEX IF NOT EXISTS idx_aggregate_evidence_sources_agent
+			ON aggregate_evidence_sources(agent_id, aggregate_memory_id);
+		CREATE INDEX IF NOT EXISTS idx_aggregate_evidence_sources_source
+			ON aggregate_evidence_sources(source_kind, source_id);
+	`);
+}
+function hasColumn112(db, table, column) {
+  const rows = db.prepare(`PRAGMA table_info(${table})`).all();
+  return rows.some((row) => row.name === column);
+}
+var COLUMNS2 = ["harness", "session_id", "tool_use_id", "cwd", "origin", "args"];
+function up822(db) {
+  for (const column of COLUMNS2) {
+    if (!hasColumn112(db, "skill_invocations", column)) {
+      db.exec(`ALTER TABLE skill_invocations ADD COLUMN ${column} TEXT`);
+    }
+  }
+  db.exec("DROP INDEX IF EXISTS idx_skill_inv_dedupe");
+  db.exec(`
+		CREATE UNIQUE INDEX idx_skill_inv_dedupe
+		ON skill_invocations(agent_id, harness, session_id, tool_use_id)
+		WHERE harness IS NOT NULL AND session_id IS NOT NULL AND tool_use_id IS NOT NULL
+	`);
+  db.exec("CREATE INDEX IF NOT EXISTS idx_skill_inv_harness ON skill_invocations(harness, created_at)");
+}
+var DEPENDENCY_TYPES2 = new Set([
+  "uses",
+  "requires",
+  "owned_by",
+  "owns",
+  "blocks",
+  "informs",
+  "maintains",
+  "implements",
+  "built",
+  "depends_on",
+  "related_to",
+  "learned_from",
+  "teaches",
+  "knows",
+  "assumes",
+  "supports_claim",
+  "authored_by",
+  "links_to",
+  "contains",
+  "contains_note",
+  "contradicts",
+  "supersedes",
+  "part_of",
+  "produced_artifact",
+  "precedes",
+  "follows",
+  "triggers",
+  "may_execute",
+  "requires_approval_from",
+  "impacts",
+  "produces",
+  "consumes"
+]);
+function sqlStringList2(values) {
+  return [...values].map((value) => `'${value}'`).join(", ");
+}
+function hasTable32(db, table) {
+  return Boolean(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(table));
+}
+function hasColumn122(db, table, column) {
+  const rows = db.prepare(`PRAGMA table_info(${table})`).all();
+  return rows.some((row) => row.name === column);
+}
+function addColumnIfMissing202(db, table, column, definition) {
+  if (!hasColumn122(db, table, column))
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+}
+function documentScopeColumnsPreservingExisting2(db) {
+  const preserveAgentId = hasColumn122(db, "documents", "agent_id");
+  const preserveProject = hasColumn122(db, "documents", "project");
+  if (preserveAgentId) {
+    db.exec(`
+			CREATE TEMP TABLE __signet_doc_agent_guard AS
+			SELECT id, agent_id FROM documents
+			WHERE NULLIF(TRIM(agent_id), '') IS NOT NULL
+			  AND NULLIF(TRIM(agent_id), '') <> 'default'
+		`);
+  }
+  if (preserveProject) {
+    db.exec(`
+			CREATE TEMP TABLE __signet_doc_project_guard AS
+			SELECT id, project FROM documents
+			WHERE NULLIF(TRIM(project), '') IS NOT NULL
+		`);
+  }
+  try {
+    up802(db);
+    if (preserveAgentId) {
+      db.exec(`
+				UPDATE documents
+				SET agent_id = (SELECT agent_id FROM __signet_doc_agent_guard WHERE __signet_doc_agent_guard.id = documents.id)
+				WHERE EXISTS (SELECT 1 FROM __signet_doc_agent_guard WHERE __signet_doc_agent_guard.id = documents.id)
+			`);
+    }
+    if (preserveProject) {
+      db.exec(`
+				UPDATE documents
+				SET project = (SELECT project FROM __signet_doc_project_guard WHERE __signet_doc_project_guard.id = documents.id)
+				WHERE EXISTS (SELECT 1 FROM __signet_doc_project_guard WHERE __signet_doc_project_guard.id = documents.id)
+			`);
+    }
+  } finally {
+    db.exec("DROP TABLE IF EXISTS temp.__signet_doc_agent_guard");
+    db.exec("DROP TABLE IF EXISTS temp.__signet_doc_project_guard");
+  }
+}
+function up832(db) {
+  up792(db);
+  if (hasTable32(db, "documents")) {
+    documentScopeColumnsPreservingExisting2(db);
+  }
+  up812(db);
+  addColumnIfMissing202(db, "memories", "superseded_by", "TEXT");
+  addColumnIfMissing202(db, "memories", "superseded_at", "TEXT");
+  addColumnIfMissing202(db, "memories", "superseded_reason", "TEXT");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_memories_superseded_by ON memories(superseded_by)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_memories_active_supersession ON memories(is_deleted, superseded_by)");
+  if (!hasTable32(db, "relations") || !hasTable32(db, "entity_dependencies"))
+    return;
+  addColumnIfMissing202(db, "entity_dependencies", "confidence", "REAL");
+  addColumnIfMissing202(db, "entity_dependencies", "reason", "TEXT");
+  addColumnIfMissing202(db, "entity_dependencies", "source_id", "TEXT");
+  addColumnIfMissing202(db, "entity_dependencies", "source_kind", "TEXT");
+  addColumnIfMissing202(db, "entity_dependencies", "proposal_evidence", "TEXT NOT NULL DEFAULT '[]'");
+  addColumnIfMissing202(db, "entity_dependencies", "status", "TEXT NOT NULL DEFAULT 'active'");
+  const relationConfidence = hasColumn122(db, "relations", "confidence") ? "r.confidence" : "NULL";
+  const relationUpdatedAt = hasColumn122(db, "relations", "updated_at") ? "r.updated_at" : "r.created_at";
+  const sourceAgentId = hasColumn122(db, "entities", "agent_id") ? "COALESCE(NULLIF(TRIM(src.agent_id), ''), 'default')" : "'default'";
+  const targetAgentId = hasColumn122(db, "entities", "agent_id") ? "COALESCE(NULLIF(TRIM(dst.agent_id), ''), 'default')" : "'default'";
+  db.exec(`
+		INSERT OR IGNORE INTO entity_dependencies (
+			id,
+			source_entity_id,
+			target_entity_id,
+			agent_id,
+			dependency_type,
+			strength,
+			confidence,
+			reason,
+			created_at,
+			updated_at,
+			source_id,
+			source_kind,
+			proposal_evidence,
+			status
+		)
+		SELECT
+			'relation:' || r.id,
+			r.source_entity_id,
+			r.target_entity_id,
+			COALESCE(${sourceAgentId}, ${targetAgentId}, 'default'),
+			CASE WHEN r.relation_type IN (${sqlStringList2(DEPENDENCY_TYPES2)}) THEN r.relation_type ELSE 'related_to' END,
+			MAX(0.1, MIN(1.0, COALESCE(r.strength, 0.5))),
+			MAX(0.1, MIN(1.0, COALESCE(${relationConfidence}, 0.7))),
+			'legacy relation backfill: ' || r.relation_type,
+			COALESCE(r.created_at, datetime('now')),
+			COALESCE(${relationUpdatedAt}, r.created_at, datetime('now')),
+			r.id,
+			'relation',
+			'[]',
+			'active'
+		FROM relations r
+		JOIN entities src ON src.id = r.source_entity_id
+		JOIN entities dst ON dst.id = r.target_entity_id
+		WHERE r.source_entity_id <> r.target_entity_id
+		  AND ${sourceAgentId} = ${targetAgentId}
+	`);
+}
+function up842(db) {
+  db.exec(`
+		CREATE TABLE IF NOT EXISTS legacy_markdown_imports (
+			path TEXT PRIMARY KEY,
+			mtime_ms INTEGER NOT NULL,
+			ctime_ms INTEGER NOT NULL,
+			size INTEGER NOT NULL,
+			content_hash TEXT NOT NULL,
+			importer_version INTEGER NOT NULL,
+			chunk_count INTEGER NOT NULL DEFAULT 0,
+			last_imported_at TEXT NOT NULL,
+			last_seen_at TEXT NOT NULL,
+			status TEXT NOT NULL DEFAULT 'imported',
+			error TEXT
+		);
+
+		CREATE TABLE IF NOT EXISTS legacy_markdown_chunks (
+			file_path TEXT NOT NULL,
+			chunk_hash TEXT NOT NULL,
+			chunk_index INTEGER NOT NULL,
+			memory_id TEXT,
+			source_id TEXT,
+			created_at TEXT NOT NULL,
+			PRIMARY KEY (file_path, chunk_hash)
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_legacy_markdown_chunks_memory_id
+			ON legacy_markdown_chunks(memory_id);
+	`);
+}
+function up852(db) {
+  const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('relations', 'entity_dependencies')").all();
+  const tableNames = new Set(tables.map((r) => String(r.name)));
+  if (!tableNames.has("relations") || !tableNames.has("entity_dependencies"))
+    return;
+  const relCols = db.prepare("PRAGMA table_info(relations)").all();
+  const depCols = db.prepare("PRAGMA table_info(entity_dependencies)").all();
+  const rel = new Set(relCols.map((c) => String(c.name)));
+  const dep = new Set(depCols.map((c) => String(c.name)));
+  if (!rel.has("source_entity_id") || !rel.has("relation_type"))
+    return;
+  if (!dep.has("source_entity_id") || !dep.has("dependency_type") || !dep.has("agent_id"))
+    return;
+  const hasRelConfidence = rel.has("confidence");
+  const hasRelUpdated = rel.has("updated_at");
+  const hasDepConfidence = dep.has("confidence");
+  const hasDepReason = dep.has("reason");
+  const hasDepStatus = dep.has("status");
+  const selectParts = ["id", "source_entity_id", "target_entity_id"];
+  const colParts = ["id", "source_entity_id", "target_entity_id"];
+  selectParts.push("relation_type");
+  colParts.push("dependency_type");
+  selectParts.push("strength", "created_at");
+  colParts.push("strength", "created_at");
+  selectParts.push("'default'");
+  colParts.push("agent_id");
+  selectParts.push("NULL");
+  colParts.push("aspect_id");
+  if (hasRelConfidence && hasDepConfidence) {
+    selectParts.push("confidence");
+    colParts.push("confidence");
+  }
+  if (hasDepReason) {
+    selectParts.push("'extracted'");
+    colParts.push("reason");
+  }
+  if (hasDepStatus) {
+    selectParts.push("'active'");
+    colParts.push("status");
+  }
+  if (hasRelUpdated && dep.has("updated_at")) {
+    selectParts.push("updated_at");
+    colParts.push("updated_at");
+  }
+  const selectClause = selectParts.join(", ");
+  const colsClause = colParts.join(", ");
+  db.exec(`INSERT OR IGNORE INTO entity_dependencies (${colsClause})
+		 SELECT ${selectClause}
+		 FROM relations
+		 WHERE source_entity_id IS NOT NULL
+		   AND target_entity_id IS NOT NULL
+		   AND relation_type IS NOT NULL`);
+}
+function addColumnIfMissing212(db, table, column, definition) {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all();
+  if (cols.some((col) => col.name === column))
+    return;
+  db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+}
+function up862(db) {
+  addColumnIfMissing212(db, "summary_jobs", "content_hash", "TEXT");
+  db.exec(`
+		CREATE INDEX IF NOT EXISTS idx_summary_jobs_agent_session_content_hash
+		ON summary_jobs(agent_id, session_key, content_hash)
+	`);
+}
+function addColumnIfMissing222(db, table, column, definition) {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all();
+  if (cols.some((col) => col.name === column))
+    return;
+  db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+}
+function up872(db) {
+  addColumnIfMissing222(db, "summary_jobs", "boundary_reason", "TEXT");
+  db.exec(`
+		CREATE INDEX IF NOT EXISTS idx_summary_jobs_boundary_reason
+		ON summary_jobs(agent_id, session_key, boundary_reason)
+	`);
+}
+function up882(db) {
+  db.exec(`
+		CREATE TABLE IF NOT EXISTS transcript_recovery_files (
+			agent_id TEXT NOT NULL,
+			source_path TEXT NOT NULL,
+			harness TEXT NOT NULL,
+			size_bytes INTEGER NOT NULL,
+			mtime_ms INTEGER NOT NULL,
+			content_sha256 TEXT NOT NULL,
+			session_id TEXT NOT NULL,
+			last_scanned_at TEXT NOT NULL,
+			PRIMARY KEY (agent_id, source_path)
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_transcript_capture_jobs_agent_session_id
+			ON transcript_capture_jobs(agent_id, session_id, status);
+	`);
+}
+function up892(db) {
+  db.exec(`
+		CREATE TABLE IF NOT EXISTS job_cancellations (
+			id TEXT PRIMARY KEY,
+			source_table TEXT NOT NULL,
+			source_id TEXT NOT NULL,
+			status_before TEXT NOT NULL,
+			payload_json TEXT NOT NULL,
+			reason TEXT,
+			actor TEXT NOT NULL,
+			actor_type TEXT NOT NULL,
+			request_id TEXT,
+			created_at TEXT NOT NULL
+		)
+	`);
+  if (!indexExists3(db, "job_cancellations", "idx_job_cancellations_source")) {
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_job_cancellations_source
+			 ON job_cancellations(source_table, source_id)`);
+  }
+  if (!indexExists3(db, "job_cancellations", "idx_job_cancellations_created_at")) {
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_job_cancellations_created_at
+			 ON job_cancellations(created_at)`);
+  }
+}
+function indexExists3(db, table, indexName) {
+  const rows = db.prepare(`PRAGMA index_list(${table})`).all();
+  return rows.some((row) => row.name === indexName);
+}
+function up902(db) {
+  db.exec(`
+		CREATE TABLE IF NOT EXISTS job_archive (
+			id TEXT PRIMARY KEY,
+			source_table TEXT NOT NULL,
+			source_id TEXT NOT NULL,
+			status TEXT NOT NULL,
+			payload_json TEXT NOT NULL,
+			archived_at TEXT NOT NULL,
+			archived_by TEXT NOT NULL,
+			reason TEXT,
+			created_at TEXT NOT NULL
+		)
+	`);
+  if (!indexExists22(db, "job_archive", "idx_job_archive_source")) {
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_job_archive_source
+			 ON job_archive(source_table, source_id)`);
+  }
+  if (!indexExists22(db, "job_archive", "idx_job_archive_archived_at")) {
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_job_archive_archived_at
+			 ON job_archive(archived_at)`);
+  }
+}
+function indexExists22(db, table, indexName) {
+  const rows = db.prepare(`PRAGMA index_list(${table})`).all();
+  return rows.some((row) => row.name === indexName);
+}
 var MIGRATIONS2 = [
   {
     version: 1,
     name: "baseline",
-    up: up79,
+    up: up91,
     artifacts: { tables: ["memories", "conversations", "embeddings"] }
   },
   {
@@ -19998,7 +21273,7 @@ var MIGRATIONS2 = [
   {
     version: 8,
     name: "embeddings-unique-hash",
-    up: up82
+    up: up810
   },
   {
     version: 9,
@@ -20571,12 +21846,121 @@ var MIGRATIONS2 = [
     artifacts: {
       tables: ["api_keys"]
     }
+  },
+  {
+    version: 79,
+    name: "transcript-capture-jobs",
+    up: up792,
+    artifacts: {
+      tables: ["transcript_capture_jobs"]
+    }
+  },
+  {
+    version: 80,
+    name: "document-scope-columns",
+    up: up802,
+    artifacts: {
+      columns: [
+        { table: "documents", column: "agent_id" },
+        { table: "documents", column: "project" }
+      ]
+    }
+  },
+  {
+    version: 81,
+    name: "aggregate-evidence-sources",
+    up: up812,
+    artifacts: {
+      tables: ["aggregate_evidence_sources"]
+    }
+  },
+  {
+    version: 82,
+    name: "skill-invocations-harness",
+    up: up822,
+    artifacts: {
+      columns: [
+        { table: "skill_invocations", column: "harness" },
+        { table: "skill_invocations", column: "tool_use_id" }
+      ]
+    }
+  },
+  {
+    version: 83,
+    name: "memory-lifecycle-repair",
+    up: up832,
+    artifacts: {
+      tables: ["transcript_capture_jobs", "aggregate_evidence_sources", "entity_dependencies"],
+      columns: [
+        { table: "documents", column: "agent_id" },
+        { table: "documents", column: "project" },
+        { table: "memories", column: "superseded_by" },
+        { table: "memories", column: "superseded_at" },
+        { table: "memories", column: "superseded_reason" }
+      ]
+    }
+  },
+  {
+    version: 84,
+    name: "legacy-markdown-import-state",
+    up: up842,
+    artifacts: {
+      tables: ["legacy_markdown_imports", "legacy_markdown_chunks"]
+    }
+  },
+  {
+    version: 85,
+    name: "backfill-relations-to-dependencies",
+    up: up852,
+    artifacts: {
+      tables: ["entity_dependencies"]
+    }
+  },
+  {
+    version: 86,
+    name: "summary-jobs-content-hash",
+    up: up862,
+    artifacts: {
+      columns: [{ table: "summary_jobs", column: "content_hash" }]
+    }
+  },
+  {
+    version: 87,
+    name: "summary-jobs-boundary-reason",
+    up: up872,
+    artifacts: {
+      columns: [{ table: "summary_jobs", column: "boundary_reason" }]
+    }
+  },
+  {
+    version: 88,
+    name: "transcript-recovery-files",
+    up: up882,
+    artifacts: {
+      tables: ["transcript_recovery_files"]
+    }
+  },
+  {
+    version: 89,
+    name: "job-cancellations",
+    up: up892,
+    artifacts: {
+      tables: ["job_cancellations"]
+    }
+  },
+  {
+    version: 90,
+    name: "job-archive",
+    up: up902,
+    artifacts: {
+      tables: ["job_archive"]
+    }
   }
 ];
 var LATEST_SCHEMA_VERSION2 = MIGRATIONS2[MIGRATIONS2.length - 1]?.version ?? 0;
 var __filename22 = fileURLToPath2(import.meta.url);
-var __dirname22 = dirname4(__filename22);
-var import_yaml3 = __toESM2(require_dist2(), 1);
+var __dirname22 = dirname5(__filename22);
+var import_yaml3 = __toESM(require_dist2(), 1);
 function expandHome2(p, home2 = homedir22()) {
   if (p === "~")
     return home2;
@@ -20585,7 +21969,7 @@ function expandHome2(p, home2 = homedir22()) {
   return p;
 }
 var LOCAL_BINDS2 = new Set(["127.0.0.1", "localhost", "::1", "::ffff:127.0.0.1"]);
-var import_yaml22 = __toESM2(require_dist2(), 1);
+var import_yaml22 = __toESM(require_dist2(), 1);
 function parseSimpleYaml(text) {
   try {
     const parsed = import_yaml22.default.parse(text);
@@ -20660,6 +22044,8 @@ function resolveSignetDaemonUrl(opts = {}) {
   const explicit = readEnv(env, "SIGNET_DAEMON_URL");
   if (explicit)
     return normalizeDaemonUrl(explicit, "SIGNET_DAEMON_URL");
+  if (opts.configUrl)
+    return normalizeDaemonUrl(opts.configUrl, "daemon.url");
   const host = readEnv(env, "SIGNET_HOST") ?? fallbackHost;
   assertPlainHost(host);
   const port = normalizePort(readEnv(env, "SIGNET_PORT"), fallbackPort);
@@ -20671,12 +22057,67 @@ try {
   native2 = esmRequire("@signet/native");
 } catch {}
 var SIGNET_SOURCE_CHECKOUT_DIRNAME2 = "signetai";
+var SIGNET_GIT_ALLOWED_DIRECTORIES2 = ["skills", "tools", "dreaming"];
 var SIGNET_GIT_PROTECTED_PATHS2 = [
+  ".daemon",
+  ".shadow",
+  "node_modules",
+  ":(glob)**/node_modules/**",
+  `${SIGNET_SOURCE_CHECKOUT_DIRNAME2}`,
+  "memory/backups",
   "memory/memories.db",
-  "memory/memories.db-wal",
-  "memory/memories.db-shm",
-  "memory/memories.db-journal",
-  `${SIGNET_SOURCE_CHECKOUT_DIRNAME2}/`
+  ":(glob)memory/memories.db*",
+  ":(glob)memory/**/*.db",
+  ":(glob)memory/**/*.db-*",
+  ":(glob)memory/**/*.db-journal",
+  ":(glob)memory/**/*.db-shm",
+  ":(glob)memory/**/*.db-wal",
+  ":(glob)memory/**/*.sqlite",
+  ":(glob)memory/**/*.sqlite3",
+  ":(glob)**/*.db",
+  ":(glob)**/*.db-*",
+  ":(glob)**/*.db-journal",
+  ":(glob)**/*.db-shm",
+  ":(glob)**/*.db-wal",
+  ":(glob)**/*.sqlite",
+  ":(glob)**/*.sqlite3"
+];
+var SIGNET_GIT_TRACKED_PATHS2 = [
+  "*.md",
+  ":(glob)**/*.md",
+  "*.json",
+  ":(glob)**/*.json",
+  "*.jsonl",
+  ":(glob)**/*.jsonl",
+  "*.html",
+  ":(glob)**/*.html",
+  "*.yaml",
+  ":(glob)**/*.yaml",
+  "*.yml",
+  ":(glob)**/*.yml",
+  ...SIGNET_GIT_ALLOWED_DIRECTORIES2
+];
+var SIGNET_GITIGNORE_PROTECTED_PATTERNS2 = [
+  ".daemon/",
+  ".shadow/",
+  "node_modules/",
+  `${SIGNET_SOURCE_CHECKOUT_DIRNAME2}/`,
+  "memory/memories.db*",
+  "memory/**/*.db",
+  "memory/**/*.db-*",
+  "memory/**/*.db-journal",
+  "memory/**/*.db-shm",
+  "memory/**/*.db-wal",
+  "memory/**/*.sqlite",
+  "memory/**/*.sqlite3",
+  "memory/backups/",
+  "*.db",
+  "*.db-*",
+  "*.db-journal",
+  "*.db-shm",
+  "*.db-wal",
+  "*.sqlite",
+  "*.sqlite3"
 ];
 var DEFAULT_DISCORD_DESKTOP_CACHE_PATH2 = defaultDiscordDesktopCachePath2();
 var DEFAULT_GITHUB_RESOURCE_TYPES2 = ["issues", "pulls", "discussions", "docs"];
@@ -20684,14 +22125,14 @@ var VALID_GITHUB_RESOURCE_TYPES2 = new Set(DEFAULT_GITHUB_RESOURCE_TYPES2);
 function defaultDiscordDesktopCachePath2() {
   switch (platform22()) {
     case "darwin":
-      return resolve32(homedir32(), "Library", "Application Support", "discord");
+      return resolve42(homedir42(), "Library", "Application Support", "discord");
     case "win32":
-      return resolve32(process.env.APPDATA || resolve32(homedir32(), "AppData", "Roaming"), "discord");
+      return resolve42(process.env.APPDATA || resolve42(homedir42(), "AppData", "Roaming"), "discord");
     default:
-      return resolve32(process.env.XDG_CONFIG_HOME || resolve32(homedir32(), ".config"), "discord");
+      return resolve42(process.env.XDG_CONFIG_HOME || resolve42(homedir42(), ".config"), "discord");
   }
 }
-var IDENTITY_MODES = ["managed", "passthrough", "off"];
+var IDENTITY_MODES = ["managed", "off"];
 var IDENTITY_FILES2 = {
   agents: {
     path: "AGENTS.md",
@@ -20753,7 +22194,7 @@ function hasValidIdentity(basePath) {
     return true;
   for (const key of REQUIRED_IDENTITY_KEYS2) {
     const spec = IDENTITY_FILES2[key];
-    if (!existsSync10(join10(basePath, spec.path))) {
+    if (!existsSync11(join11(basePath, spec.path))) {
       return false;
     }
   }
@@ -20771,24 +22212,28 @@ function resolveIdentityModeFromConfig(config) {
   const capabilityIdentity = readRecord(capabilities.identity);
   if (isIdentityMode(capabilityIdentity.mode))
     return capabilityIdentity.mode;
+  if (capabilityIdentity.mode === "passthrough")
+    return "off";
   const identity = readRecord(root.identity);
   if (isIdentityMode(identity.mode))
     return identity.mode;
+  if (identity.mode === "passthrough")
+    return "off";
   if (identity.enabled === false)
     return "off";
   return "managed";
 }
 function loadIdentityMode(agentsDir) {
-  const agentYaml = join10(agentsDir, "agent.yaml");
-  if (!existsSync10(agentYaml))
+  const agentYaml = join11(agentsDir, "agent.yaml");
+  if (!existsSync11(agentYaml))
     return "managed";
   try {
-    return resolveIdentityModeFromConfig(parseSimpleYaml(readFileSync8(agentYaml, "utf-8")));
+    return resolveIdentityModeFromConfig(parseSimpleYaml(readFileSync9(agentYaml, "utf-8")));
   } catch {
     return "managed";
   }
 }
-var home2 = homedir72();
+var home2 = homedir82();
 var SKIP_SUBTYPES2 = new Set([
   "channel_join",
   "channel_leave",
@@ -20911,7 +22356,7 @@ var SIGNET_FORGE_MARKER = "Managed by Signet (@signet/connector-forge)";
 function isJsonObject(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-function readTrimmedEnv(name) {
+function readTrimmedEnv2(name) {
   const value = process.env[name];
   if (typeof value !== "string")
     return;
@@ -20919,8 +22364,8 @@ function readTrimmedEnv(name) {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 function getHomeDir() {
-  const home3 = readTrimmedEnv("HOME");
-  return home3 ?? homedir4();
+  const home3 = readTrimmedEnv2("HOME");
+  return home3 ?? homedir5();
 }
 function readJsonObject(path) {
   if (!existsSync2(path))
@@ -20940,9 +22385,9 @@ function readMcpServers(config) {
 }
 function signetRuntimeEnv(basePath) {
   const env = { SIGNET_PATH: basePath };
-  const daemonUrl = readTrimmedEnv("SIGNET_DAEMON_URL");
-  const apiKey = readTrimmedEnv("SIGNET_API_KEY") ?? readTrimmedEnv("SIGNET_TOKEN");
-  const agentId = readTrimmedEnv("SIGNET_AGENT_ID");
+  const daemonUrl = readTrimmedEnv2("SIGNET_DAEMON_URL");
+  const apiKey = readTrimmedEnv2("SIGNET_API_KEY") ?? readTrimmedEnv2("SIGNET_TOKEN");
+  const agentId = readTrimmedEnv2("SIGNET_AGENT_ID");
   if (daemonUrl)
     env.SIGNET_DAEMON_URL = daemonUrl;
   if (apiKey)
@@ -20952,17 +22397,7 @@ function signetRuntimeEnv(basePath) {
   return env;
 }
 function resolveRemoteDaemonUrl() {
-  return readTrimmedEnv("SIGNET_DAEMON_URL") ? resolveSignetDaemonUrl() : null;
-}
-function resolveSignetMcp() {
-  if (process.platform !== "win32")
-    return { command: "signet-mcp", args: [] };
-  const cliEntry = process.argv[1] || "";
-  const mcpJs = join6(cliEntry, "..", "..", "dist", "mcp-stdio.js");
-  if (existsSync2(mcpJs))
-    return { command: process.execPath, args: [mcpJs] };
-  console.warn(`[signet] Warning: could not resolve mcp-stdio.js from argv[1]="${cliEntry}". ` + `MCP server config will use "signet-mcp" which may fail on Windows without shell:true.`);
-  return { command: "signet-mcp", args: [] };
+  return readTrimmedEnv2("SIGNET_DAEMON_URL") ? resolveSignetDaemonUrl() : null;
 }
 function buildMcpServer(basePath) {
   const remoteDaemonUrl = resolveRemoteDaemonUrl();
@@ -20973,7 +22408,7 @@ function buildMcpServer(basePath) {
       ...apiKey ? { headers: { Authorization: `Bearer ${apiKey}` } } : {}
     };
   }
-  const mcp = resolveSignetMcp();
+  const mcp = resolveSignetMcpCommand();
   return {
     command: mcp.command,
     ...mcp.args && mcp.args.length > 0 ? { args: mcp.args } : {},
@@ -20989,7 +22424,7 @@ class ForgeConnector extends BaseConnector {
   name = "ForgeCode";
   harnessId = "forge";
   getForgeHome() {
-    const configured = readTrimmedEnv("FORGE_CONFIG");
+    const configured = readTrimmedEnv2("FORGE_CONFIG");
     if (configured)
       return resolve2(expandHome2(configured));
     const legacyPath = join6(getHomeDir(), "forge");
@@ -21040,7 +22475,7 @@ class ForgeConnector extends BaseConnector {
         try {
           const raw = readFileSync2(staleAgentsPath, "utf-8");
           if (isSignetGeneratedFile(raw) || raw.includes(SIGNET_FORGE_MARKER))
-            rmSync(staleAgentsPath);
+            rmSync2(staleAgentsPath);
         } catch {}
       }
     }
@@ -21076,7 +22511,7 @@ class ForgeConnector extends BaseConnector {
       try {
         const raw = readFileSync2(agentsPath, "utf-8");
         if (isSignetGeneratedFile(raw) || raw.includes(SIGNET_FORGE_MARKER)) {
-          rmSync(agentsPath, { force: true });
+          rmSync2(agentsPath, { force: true });
           filesRemoved.push(agentsPath);
         }
       } catch {}
@@ -21096,7 +22531,7 @@ class ForgeConnector extends BaseConnector {
         const patched = this.removeMcpServer(config);
         if (patched) {
           if (Object.keys(config).length === 0) {
-            rmSync(this.getMcpConfigPath(), { force: true });
+            rmSync2(this.getMcpConfigPath(), { force: true });
             filesRemoved.push(this.getMcpConfigPath());
           } else {
             atomicWriteJson(this.getMcpConfigPath(), config);
@@ -21117,7 +22552,7 @@ class ForgeConnector extends BaseConnector {
   }
   static isHarnessInstalled() {
     const home3 = getHomeDir();
-    return existsSync2(readTrimmedEnv("FORGE_CONFIG") ?? "") || existsSync2(join6(home3, "forge", ".mcp.json")) || existsSync2(join6(home3, ".forge", ".mcp.json")) || existsSync2(join6(home3, "forge")) || existsSync2(join6(home3, ".forge"));
+    return existsSync2(readTrimmedEnv2("FORGE_CONFIG") ?? "") || existsSync2(join6(home3, "forge", ".mcp.json")) || existsSync2(join6(home3, ".forge", ".mcp.json")) || existsSync2(join6(home3, "forge")) || existsSync2(join6(home3, ".forge"));
   }
   getAgentsPath() {
     return join6(this.getForgeHome(), "AGENTS.md");
@@ -21138,7 +22573,7 @@ class ForgeConnector extends BaseConnector {
     const body = extras ? `${userContent}${extras}` : userContent;
     const header = this.generateHeader(sourcePath, this.name);
     const targetPath = this.getAgentsPath();
-    writeFileSync2(targetPath, `# ${SIGNET_FORGE_MARKER}
+    writeFileSync3(targetPath, `# ${SIGNET_FORGE_MARKER}
 ${header}${body}
 `, "utf-8");
     return targetPath;
@@ -21154,7 +22589,7 @@ ${header}${body}
       return false;
     const { signet: _, ...rest } = servers;
     if (Object.keys(rest).length === 0) {
-      delete config.mcpServers;
+      Reflect.deleteProperty(config, "mcpServers");
     } else {
       config.mcpServers = rest;
     }
@@ -21199,7 +22634,7 @@ ${header}${body}
     }
     try {
       if (readdirSync(skillsDir).length === 0)
-        rmSync(skillsDir, { recursive: true, force: true });
+        rmSync2(skillsDir, { recursive: true, force: true });
     } catch {}
   }
 }
