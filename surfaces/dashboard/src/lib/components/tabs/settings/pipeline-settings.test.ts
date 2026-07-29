@@ -240,7 +240,6 @@ describe("pipeline-settings ACPX dashboard setup", () => {
 			},
 			workloads: {
 				memoryExtraction: { target: "background-acpx/default", taskClass: "memory_extraction" },
-				sessionSynthesis: { target: "background-acpx/default", taskClass: "session_synthesis" },
 			},
 		});
 	});

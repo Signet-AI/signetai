@@ -1,8 +1,8 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import {
 	BaseConnector,
 	type InstallResult,
@@ -52,17 +52,35 @@ interface NativePluginCommandResult {
 // Signet command resolution
 // ---------------------------------------------------------------------------
 
-/** Resolve signet command for hook invocation. Returns array form for hooks.json command field.
- *  Windows: navigates from argv[1] (e.g. <pkg>/bin/signet.js) up two levels to find
- *  the bin directory. Falls back to bare "signet" if the layout doesn't match (shims, junctions). */
-function resolveSignetArgs(): string[] {
+/** Resolve the packaged Signet entry used by the compiled CLI.
+ *
+ * Bun-compiled binaries expose a virtual bunfs path in argv[1], so it cannot be
+ * used to locate the installed package. The npm wrapper passes its package root
+ * explicitly because it can launch an optional-dependency binary outside that
+ * package when postinstall did not link a local native binary. */
+function resolveSignetEntry(): string | null {
+	const wrapperDir = readEnv("SIGNET_WRAPPER_DIR") ?? readEnv("SIGNET_DIR");
+	const candidates = [
+		wrapperDir ? join(wrapperDir, "bin", "signet.js") : null,
+		join(dirname(process.execPath), "..", "bin", "signet.js"),
+		process.argv[1],
+	];
+	for (const entry of candidates) {
+		if (entry && basename(entry) === "signet.js" && existsSync(entry)) return entry;
+	}
+	return null;
+}
+
+function resolveSignetArgs(runtime: string | null = null): string[] {
+	const entry = resolveSignetEntry();
+	if (runtime && entry) return [runtime, entry];
 	const resolved = resolveSignetCliCommand();
 	return [resolved.command, ...resolved.args];
 }
 
 /** Resolve signet-mcp as { command, args } for Codex config.toml.
  *  Codex expects `command` as a string and `args` as a separate array. */
-function resolveSignetMcp(): SignetMcpConfig {
+function resolveSignetMcp(runtime: string | null = null): SignetMcpConfig {
 	const remoteDaemonUrl = resolveRemoteDaemonUrl();
 	if (remoteDaemonUrl) {
 		const apiKey = readAuthTokenEnv();
@@ -73,6 +91,9 @@ function resolveSignetMcp(): SignetMcpConfig {
 			...(apiKey ? { httpHeaders: { Authorization: `Bearer ${apiKey}` } } : {}),
 		};
 	}
+	const entry = resolveSignetEntry();
+	const mcpEntry = entry ? join(dirname(entry), "..", "dist", "mcp-stdio.js") : null;
+	if (runtime && mcpEntry && existsSync(mcpEntry)) return { command: runtime, args: [mcpEntry] };
 	return resolveSignetMcpCommand();
 }
 
@@ -87,6 +108,48 @@ function resolveRemoteDaemonUrl(): string | null {
 	const explicit = readEnv("SIGNET_DAEMON_URL");
 	if (!explicit) return null;
 	return resolveSignetDaemonUrl();
+}
+
+const CODEX_DESKTOP_APP_PATHS = [join(homedir(), "Applications", "Codex.app"), "/Applications/Codex.app"];
+const CODEX_RUNTIME_SCAN_DEPTH = 8;
+
+function codexDesktopNodeCandidates(root: string, depth = 0): string[] {
+	if (depth > CODEX_RUNTIME_SCAN_DEPTH || !existsSync(root)) return [];
+	const candidates: string[] = [];
+	for (const entry of readdirSync(root, { withFileTypes: true })) {
+		const path = join(root, entry.name);
+		if ((entry.isFile() || entry.isSymbolicLink()) && entry.name === "node") candidates.push(path);
+		try {
+			if (!statSync(path).isDirectory()) continue;
+			candidates.push(...codexDesktopNodeCandidates(path, depth + 1));
+		} catch {
+			// Ignore broken symlinks and files that disappear while scanning.
+		}
+	}
+	return candidates;
+}
+
+function isUsableNodeRuntime(path: string): boolean {
+	try {
+		if (!statSync(path).isFile()) return false;
+		const result = spawnSync(path, ["--version"], { encoding: "utf-8", timeout: 5_000 });
+		return result.status === 0 && /^v\d+\.\d+\.\d+/.test(result.stdout.trim());
+	} catch {
+		return false;
+	}
+}
+
+export function resolveCodexDesktopNode(
+	appPaths: readonly string[] = CODEX_DESKTOP_APP_PATHS,
+	validate: (path: string) => boolean = isUsableNodeRuntime,
+): string | null {
+	for (const appPath of appPaths) {
+		const candidates = codexDesktopNodeCandidates(join(appPath, "Contents", "Resources"));
+		for (const candidate of candidates) {
+			if (validate(candidate)) return candidate;
+		}
+	}
+	return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -425,6 +488,44 @@ function isSignetMatcherGroup(group: unknown): boolean {
 		const cmd = (handler as Record<string, unknown>).command;
 		if (typeof cmd !== "string") continue;
 		if (isSignetHookCommand(cmd)) return true;
+	}
+	return false;
+}
+
+function hasMissingNodeRuntime(command: string): boolean {
+	const node = command.match(/(?:^|\s)(['\"]?)([^'\"\s]*[\\/]node(?:\.exe)?)(?:\1)(?=\s|$)/i)?.[2];
+	return Boolean(node && !existsSync(node));
+}
+
+function hasMissingSignetRuntime(file: HooksFile | null, configPath: string): boolean {
+	for (const groups of Object.values(file?.hooks ?? {})) {
+		if (!Array.isArray(groups)) continue;
+		for (const group of groups) {
+			if (typeof group !== "object" || group === null || !Array.isArray(group.hooks)) continue;
+			for (const handler of group.hooks) {
+				if (
+					typeof handler?.command === "string" &&
+					isSignetHookCommand(handler.command) &&
+					hasMissingNodeRuntime(handler.command)
+				) {
+					return true;
+				}
+			}
+		}
+	}
+
+	if (!existsSync(configPath)) return false;
+	let inSignetMcpSection = false;
+	for (const line of readFileSync(configPath, "utf-8").split("\n")) {
+		const trimmed = line.trim();
+		if (trimmed === "[mcp_servers.signet]") {
+			inSignetMcpSection = true;
+			continue;
+		}
+		if (inSignetMcpSection && trimmed.startsWith("[")) break;
+		if (!inSignetMcpSection) continue;
+		const command = trimmed.match(/^command\s*=\s*['\"]([^'\"]+)['\"]/)?.[1];
+		if (typeof command === "string") return hasMissingNodeRuntime(command);
 	}
 	return false;
 }
@@ -785,6 +886,14 @@ export class CodexConnector extends BaseConnector {
 		return join(homedir(), ".codex");
 	}
 
+	protected getCodexDesktopAppPaths(): readonly string[] {
+		return CODEX_DESKTOP_APP_PATHS;
+	}
+
+	protected resolveCodexDesktopNode(): string | null {
+		return resolveCodexDesktopNode(this.getCodexDesktopAppPaths());
+	}
+
 	protected supportsNativePluginInstall(): boolean {
 		if (readEnv("SIGNET_CODEX_DISABLE_NATIVE_PLUGIN") === "1") return false;
 		const result = spawnSync("codex", ["plugin", "--help"], {
@@ -924,8 +1033,18 @@ export class CodexConnector extends BaseConnector {
 		const codexHome = this.getCodexHome();
 		mkdirSync(codexHome, { recursive: true });
 
-		const signetArgs = resolveSignetArgs();
-		const mcp = resolveSignetMcp();
+		const configPath = this.getConfigPath();
+		const staleRuntime = hasMissingSignetRuntime(readHooksFile(this.getHooksJsonPath()), configPath);
+		const runtime = this.resolveCodexDesktopNode();
+		const signetArgs = resolveSignetArgs(runtime);
+		const mcp = resolveSignetMcp(runtime);
+		if (staleRuntime) {
+			warnings.push(
+				runtime
+					? "Detected a missing Signet Codex runtime path; refreshed only Signet-owned hooks and MCP configuration."
+					: "Detected a missing Signet Codex runtime path; no replacement Codex runtime was found, so Signet commands use the PATH fallback.",
+			);
+		}
 		const nativePluginSupported = this.supportsNativePluginInstall();
 
 		if (nativePluginSupported) {
@@ -981,7 +1100,6 @@ export class CodexConnector extends BaseConnector {
 		}
 
 		// 3. Register MCP server in config.toml
-		const configPath = this.getConfigPath();
 		if (patchConfigToml(configPath, mcp)) {
 			configsPatched.push(configPath);
 		}

@@ -445,9 +445,6 @@ inference:
     memoryExtraction:
       policy: auto
       taskClass: casual_chat
-    sessionSynthesis:
-      policy: auto
-      taskClass: casual_chat
 
   agents:
     rose:
@@ -549,9 +546,9 @@ inference:
           model: gpt-5.4-mini
           reasoning: medium
   workloads:
-    sessionSynthesis:
+    memoryExtraction:
       target: codex-cli/default
-      taskClass: session_synthesis
+      taskClass: memory_extraction
 ```
 
 Signet marks the target unavailable unless `codex --version` works and either `CODEX_HOME/auth.json`
@@ -613,7 +610,6 @@ Supported workload keys:
 
 - `interactive`
 - `memoryExtraction`
-- `sessionSynthesis`
 
 Each workload can define:
 
@@ -643,9 +639,10 @@ LLM-based fact extraction against incoming conversation text, then decides
 whether to write new memories, update existing ones, or skip. Config lives
 under `memory.pipelineV2` in `agent.yaml`.
 
-Inference selection for extraction and session synthesis can also be routed
-through the top-level `inference.workloads` bindings. When explicit routing is
-enabled for `default`, `memoryExtraction`, `sessionSynthesis`, `widgetGeneration`, or `repair`, those workloads use the
+Inference selection for extraction can be routed through the top-level
+`inference.workloads` bindings. Session processing follows the
+`memoryExtraction` route and is not independently configurable. When explicit routing is
+enabled for `default`, `memoryExtraction`, `widgetGeneration`, or `repair`, those workloads use the
 shared inference control plane. Legacy extraction and synthesis fields are treated as load-time compatibility input, not separate runtime providers.
 
 The config uses a nested structure with grouped sub-objects. Legacy flat
@@ -1374,7 +1371,7 @@ signet context compile --profile coding --max-chars 2200
 ```
 
 The compiler reads `AGENTS.md`, `USER.md`, `IDENTITY.md`, and `SOUL.md`,
-runs the configured inference `session_synthesis` route, hard-caps the
+runs the configured inference `memoryExtraction` route, hard-caps the
 result, and writes `context-profiles/coding/AGENTS.md`. Session-start
 hooks only read that artifact; they do not perform model synthesis at
 runtime.

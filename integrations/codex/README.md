@@ -18,6 +18,9 @@ available, with a compatibility path for older Codex installs.
   Codex-generated `MEMORY.md` or `memory_summary.md`
 - Configurable timeout grace periods (5 s for SessionStart, 2 s for UserPromptSubmit)
 - Supports remote daemon URL via `SIGNET_DAEMON_URL` environment variable
+- On macOS, discovers and validates the bundled Codex Desktop Node runtime on
+  install and refreshes only stale Signet-owned hook and MCP commands after a
+  Codex Desktop packaging update
 
 ## Installation
 

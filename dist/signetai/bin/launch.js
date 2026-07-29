@@ -48,7 +48,7 @@ export function launchSignet() {
 	// doesn't carry inline. The env is only set when the wrapper actually
 	// has a runtime tree to share; the binary's own bootstrap can derive
 	// its own path otherwise.
-	const env = { ...process.env };
+	const env = { ...process.env, SIGNET_WRAPPER_DIR: packageDir };
 	if (!env.SIGNET_DIR && existsSync(join(packageDir, "runtime", "connectors"))) {
 		env.SIGNET_DIR = packageDir;
 	}

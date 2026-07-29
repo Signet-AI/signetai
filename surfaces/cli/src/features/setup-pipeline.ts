@@ -175,11 +175,9 @@ export function buildSetupInference(
 		},
 		taskClasses: {
 			memory_extraction: { reasoning: "medium", toolsRequired: true, privacy: "restricted_remote" },
-			session_synthesis: { reasoning: "medium", toolsRequired: true, privacy: "restricted_remote" },
 		},
 		workloads: {
 			memoryExtraction: { target: targetRef, taskClass: "memory_extraction" },
-			sessionSynthesis: { target: targetRef, taskClass: "session_synthesis" },
 		},
 	};
 }
@@ -210,10 +208,6 @@ export function applySetupInferenceRoute(
 		generatedTaskClasses.add(getAcpxWorkloadTaskClass(route.workloads.memoryExtraction, "memory_extraction"));
 		Reflect.deleteProperty(route.workloads, "memoryExtraction");
 	}
-	if (route.workloads?.sessionSynthesis && isGeneratedAcpxWorkload(route.workloads.sessionSynthesis)) {
-		generatedTaskClasses.add(getAcpxWorkloadTaskClass(route.workloads.sessionSynthesis, "session_synthesis"));
-		Reflect.deleteProperty(route.workloads, "sessionSynthesis");
-	}
 	for (const taskClass of generatedTaskClasses) {
 		if (isGeneratedAcpxTaskClass(taskClass, route.taskClasses?.[taskClass])) {
 			Reflect.deleteProperty(route.taskClasses, taskClass);
@@ -234,7 +228,7 @@ function getAcpxWorkloadTaskClass(value: unknown, fallback: string): string {
 }
 
 function isGeneratedAcpxTaskClass(taskClass: string, value: unknown): boolean {
-	if (taskClass !== "memory_extraction" && taskClass !== "session_synthesis") return false;
+	if (taskClass !== "memory_extraction") return false;
 	if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
 	const record = value as { reasoning?: unknown; toolsRequired?: unknown; privacy?: unknown };
 	return record.reasoning === "medium" && record.toolsRequired === true && record.privacy === "restricted_remote";

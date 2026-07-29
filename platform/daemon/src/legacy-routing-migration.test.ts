@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { migrateLegacyRoutingToRegistry } from "./config-migration";
+import { migrateLegacyRoutingToRegistry, migrateSessionSynthesisRoute } from "./config-migration";
 
 function setupDir(): string {
 	const dir = mkdtempSync(join(tmpdir(), "signet-legacy-routing-migration-"));
@@ -40,7 +40,6 @@ describe("migrateLegacyRoutingToRegistry (#947 v4, #1004 v5 cleanup)", () => {
 			expect(after).toMatch(/accounts:\s*\n\s+legacy-openrouter:/);
 			expect(after).toMatch(/providerFamily: openrouter/);
 			expect(after).toMatch(/credentialRef: OPENROUTER_API_KEY/);
-			expect(after).toMatch(/legacy-anthropic:/);
 
 			// Targets carry executor + model + account.
 			expect(after).toMatch(/legacy-extraction:/);
@@ -48,9 +47,10 @@ describe("migrateLegacyRoutingToRegistry (#947 v4, #1004 v5 cleanup)", () => {
 			expect(after).toMatch(/account: legacy-openrouter/);
 			expect(after).toMatch(/model: anthropic\/claude-haiku/);
 
-			// Workloads bound to the targets.
+			// Only extraction has a configurable workload; session processing follows it.
 			expect(after).toMatch(/memoryExtraction:\s*\n\s+target: legacy-extraction\/default/);
-			expect(after).toMatch(/sessionSynthesis:\s*\n\s+target: legacy-synthesis\/default/);
+			expect(after).not.toContain("sessionSynthesis");
+			expect(after).not.toContain("legacy-synthesis");
 
 			// Legacy ROUTING keys gone, tuning preserved.
 			expect(after).not.toMatch(/provider: openrouter/);
@@ -233,6 +233,50 @@ memory:
 		try {
 			writeFileSync(join(dir, "agent.yaml"), "memory:\n  [unterminated");
 			expect(() => migrateLegacyRoutingToRegistry(dir)).not.toThrow();
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("removes stale session synthesis routing in v6 and is idempotent", () => {
+		const dir = setupDir();
+		try {
+			writeFileSync(
+				join(dir, "agent.yaml"),
+				`configVersion: 5
+inference:
+  targets:
+    legacy-synthesis:
+      executor: llama-cpp
+      models:
+        default:
+          model: qwen3:4b
+    aggregation:
+      executor: openrouter
+      models:
+        default:
+          model: deepseek/deepseek-v4-flash
+  workloads:
+    memoryExtraction:
+      target: background/default
+    sessionSynthesis:
+      target: legacy-synthesis/default
+    aggregateRecall:
+      target: aggregation/default
+  taskClasses:
+    session_synthesis:
+      reasoning: medium
+`,
+			);
+			migrateSessionSynthesisRoute(dir);
+			const after = readFileSync(join(dir, "agent.yaml"), "utf-8");
+			expect(after).toMatch(/^configVersion: 6/m);
+			expect(after).not.toContain("sessionSynthesis");
+			expect(after).not.toContain("legacy-synthesis");
+			expect(after).not.toContain("session_synthesis");
+			expect(after).toContain("target: aggregation/default");
+			migrateSessionSynthesisRoute(dir);
+			expect(readFileSync(join(dir, "agent.yaml"), "utf-8")).toBe(after);
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}

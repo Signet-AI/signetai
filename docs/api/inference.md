@@ -39,8 +39,7 @@ current runtime snapshot for each route target.
   "targetRefs": ["sonnet/default", "gpt/gpt54", "local/gemma4"],
   "workloadBindings": {
     "interactive": "auto",
-    "memoryExtraction": "memory-pipeline",
-    "sessionSynthesis": "memory-pipeline"
+    "memoryExtraction": "memory-pipeline"
   },
   "configIssues": [
     {

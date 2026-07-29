@@ -311,21 +311,13 @@ export function migrateLegacyRoutingToRegistry(agentsDir: string): void {
 	function compileTarget(
 		source: ReturnType<typeof doc.getIn>,
 		targetName: string,
-		workloadKey: "memoryExtraction" | "sessionSynthesis",
+		workloadKey: "memoryExtraction",
 	): void {
 		if (!isMap(source)) return;
 		const provider = String(source.get("provider", true) ?? "");
 		const model = source.get("model", true);
 		const endpoint = source.get("endpoint", true);
 		if (!provider || provider === "none" || provider === "command") return;
-		// Read `enabled` as a real boolean (defaulting to true when absent, matching
-		// the runtime default). The raw YAML node's String() returns the source text
-		// (e.g. "false"), which would never short-circuit and silently re-enable a
-		// disabled synthesis — destructive for a migration that nulls routing keys.
-		const enabled = source.get("enabled");
-		if (workloadKey === "sessionSynthesis" && enabled === false) return;
-		if (workloadKey === "sessionSynthesis" && provider === "acpx") return;
-
 		// Create the account if the provider needs one.
 		const acct = legacyAccountFor(provider);
 		if (acct) {
@@ -358,7 +350,6 @@ export function migrateLegacyRoutingToRegistry(agentsDir: string): void {
 
 	if (hasNestedLegacyRouting) {
 		compileTarget(extraction, "legacy-extraction", "memoryExtraction");
-		compileTarget(synthesis, "legacy-synthesis", "sessionSynthesis");
 	}
 
 	// Null the legacy ROUTING keys (keep tuning: timeout, maxTokens, enabled).
@@ -405,5 +396,58 @@ export function migrateLegacyRoutingToRegistry(agentsDir: string): void {
 			file: path,
 			note: "Routing now flows through inference.*; pipelineV2 tuning fields (timeout, maxTokens, enabled) preserved.",
 		});
+	}
+}
+
+// ---------------------------------------------------------------------------
+// v6: remove the obsolete session-synthesis inference route
+// ---------------------------------------------------------------------------
+// Session processing is internal and follows memoryExtraction/default routing.
+// Older migrations created workloads.sessionSynthesis -> legacy-synthesis/default,
+// which permanently preserved an unavailable local target after upgrades.
+export function migrateSessionSynthesisRoute(agentsDir: string): void {
+	const path = findConfigPath(agentsDir);
+	if (!path) return;
+
+	let text: string;
+	try {
+		text = readFileSync(path, "utf-8");
+	} catch {
+		return;
+	}
+
+	const vMatch = /^configVersion:\s*(\d+)/m.exec(text);
+	if (vMatch && Number(vMatch[1]) >= 6) return;
+
+	const doc = parseDocument(text);
+	if (doc.errors.length > 0) {
+		logger.warn("config-migration", "Skipping session-route migration: agent.yaml has parse errors", {
+			file: path,
+			errors: doc.errors.map((error) => error.message).slice(0, 3),
+		});
+		return;
+	}
+
+	const mutations: string[] = [];
+	const workloads = doc.getIn(["inference", "workloads"], true);
+	if (isMap(workloads) && workloads.has("sessionSynthesis")) {
+		workloads.delete("sessionSynthesis");
+		mutations.push("removed inference.workloads.sessionSynthesis");
+	}
+	const targets = doc.getIn(["inference", "targets"], true);
+	if (isMap(targets) && targets.has("legacy-synthesis")) {
+		targets.delete("legacy-synthesis");
+		mutations.push("removed inference.targets.legacy-synthesis");
+	}
+	const taskClasses = doc.getIn(["inference", "taskClasses"], true);
+	if (isMap(taskClasses) && taskClasses.has("session_synthesis")) {
+		taskClasses.delete("session_synthesis");
+		mutations.push("removed inference.taskClasses.session_synthesis");
+	}
+
+	stampConfigVersion(doc, 6);
+	writeAtomic(path, doc.toString());
+	if (mutations.length > 0) {
+		logger.info("config-migration", "Removed obsolete session synthesis route", { mutations, file: path });
 	}
 }

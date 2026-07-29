@@ -6,6 +6,9 @@ All notable changes to Signet are documented here.
 
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
+### 2026-07-28
+- Bug fixes: resolve wrapper entry after skipped postinstall; harden desktop runtime migration; migrate stale desktop runtimes; remove session synthesis routing.
+
 ### 2026-07-27
 - Bug fixes: absolutize native smoke binary override path.
 - Docs: add plan-driven setup redesign draft spec.
@@ -32,10 +35,27 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Bug fixes: prevent recursive background hooks; stop session-start injection from advancing access tracking; restore provider-status contract after #949 (#960); add temporal intent / freshness prior to hybrid recall; forward per-call reasoning ThinkingLevel to pi-ai (#959); unblock main after #949 (build:core tsc error + retire rust-daemon-parity); retain memory across turn transforms; support remote-only connector installs.
 - Refactoring: align runtime request contracts.
 
-### 2026-07-21
-- Bug fixes: update and verify active install.
-
 ## Release Ledger
+
+## [0.155.3] - 2026-07-28
+
+Release summary: 3 bug fixes.
+Tag range: `v0.155.2..v0.155.3`.
+
+### Bug Fixes
+
+- **codex**: resolve wrapper entry after skipped postinstall
+- **codex**: harden desktop runtime migration
+- **codex**: migrate stale desktop runtimes
+
+## [0.155.2] - 2026-07-28
+
+Release summary: 1 bug fix.
+Tag range: `v0.155.1..v0.155.2`.
+
+### Bug Fixes
+
+- **inference**: remove session synthesis routing
 
 ## [0.155.1] - 2026-07-27
 
