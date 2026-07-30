@@ -170,5 +170,5 @@ export function syncVecDeleteBySourceExceptHash(
  * Replaces 8+ local copies across the daemon codebase.
  */
 export function tableExists(db: { prepare(sql: string): { get(...args: unknown[]): unknown } }, name: string): boolean {
-	return db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(name) !== undefined;
+	return db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(name) != null;
 }
