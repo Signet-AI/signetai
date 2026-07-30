@@ -24,9 +24,9 @@ Local-first context · source-backed recall · repairable memory · portable acr
 
 ---
 
-Models change. Providers change. Harnesses change. The context provided to each should not. 
+Models change. Providers change. Harnesses change. The context provided to each should not.
 
-Signet is a local-first memory and context layer for AI agents. It syncs memories, identity files, session transcripts and secrets between all all of your favorite harnesses and models.
+Signet is a local-first memory and context layer for AI agents. It syncs memories, identity files, session transcripts and secrets between all of your favorite harnesses and models.
 
 ## Why Signet
 
@@ -39,7 +39,7 @@ Signet is a local-first memory and context layer for AI agents. It syncs memorie
 | Team deployment primitives | Signet includes scoped agents, visibility, auth policy, retention controls, secrets storage, and audit-friendly APIs |
 | Proven recall | Signet scores a 97.6% average on LongMemEval, it is one of the only local-first SOTA memory systems in the world. |
 
-Agent memory has never been about just recall quality. Signet is designed for **scale**, it tracks where context lives, where it came from, who can see it, and how/when it can be forgotten, all in a living ontology on your device. 
+Agent memory has never been about just recall quality. Signet is designed for **scale**, it tracks where context lives, where it came from, who can see it, and how/when it can be forgotten, all in a living ontology on your device.
 
 ## Quick start (about 5 minutes)
 
