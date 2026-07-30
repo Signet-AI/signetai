@@ -207,7 +207,7 @@ function upsertDependency(
 		readonly type: string;
 		readonly strength: number;
 		readonly confidence: number;
-		readonly reason: string;
+		readonly reason: string | null;
 		readonly sourceId: string;
 		readonly sourceRoot: string;
 		readonly sourcePath: string;
