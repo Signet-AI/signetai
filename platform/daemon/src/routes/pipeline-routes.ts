@@ -26,7 +26,6 @@ import {
 	refreshRegistry,
 } from "../pipeline/model-registry.js";
 import { getResourceSnapshot } from "../resource-monitor.js";
-import { getSecret } from "../secrets.js";
 import { activeSessionCount, getBypassedSessionKeys } from "../session-tracker.js";
 import { getTranscriptCaptureStatus } from "../transcript-capture-worker.js";
 import { getTranscriptHealthReport } from "../transcript-health.js";
@@ -52,9 +51,6 @@ import {
 	providerRuntimeResolution,
 	readEnvTrimmed,
 	readPipelineMode,
-	resolveRegistryLlamaCppBaseUrl,
-	resolveRegistryOllamaBaseUrl,
-	resolveRegistryOpenRouterBaseUrl,
 	restartPipelineRuntimeRef,
 	setOpenClawHeartbeat,
 	setPipelineTransition,
@@ -540,23 +536,6 @@ export function registerPipelineRoutes(app: Hono): void {
 			);
 		}
 		lastRefreshRequestAt = now;
-		const cfg = loadMemoryConfig(AGENTS_DIR);
-		let anthropicKey: string | undefined = process.env.ANTHROPIC_API_KEY;
-		if (!anthropicKey) {
-			try {
-				anthropicKey = (await getSecret("ANTHROPIC_API_KEY")) ?? undefined;
-			} catch {
-				/* ignore */
-			}
-		}
-		let openRouterKey: string | undefined = process.env.OPENROUTER_API_KEY;
-		if (!openRouterKey) {
-			try {
-				openRouterKey = (await getSecret("OPENROUTER_API_KEY")) ?? undefined;
-			} catch {
-				/* ignore */
-			}
-		}
 		await refreshRegistry();
 		return c.json({
 			models: getModelsByProvider(),

@@ -238,7 +238,7 @@ describe("aggregateRecall", () => {
 		);
 
 		expect(calls).toEqual(["what happened", "follow up one", "follow up two"]);
-		expect(router.calls.map((call) => call.operation)).toEqual(["session_synthesis", "session_synthesis"]);
+		expect(router.calls.map((call) => call.operation)).toEqual(["aggregate_recall", "aggregate_recall"]);
 		expect(router.opts.map((opts) => opts.acpxHooks)).toEqual(["disabled", "disabled"]);
 		expect(router.prompts[1]).toContain("one concise atomic memory note");
 		expect(router.prompts[1]).toContain("not as a direct reply");
@@ -348,7 +348,12 @@ memory:
 				chatCalls === 1
 					? JSON.stringify({ queries: [] })
 					: "Aggregate recall can synthesize directly through an OpenAI-compatible API target.";
-			return Promise.resolve(new Response(JSON.stringify({ choices: [{ message: { content } }] }), { status: 200 }));
+			const stream = [
+				`data: ${JSON.stringify({ choices: [{ delta: { content } }] })}\n\n`,
+				`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "stop" }] })}\n\n`,
+				"data: [DONE]\n\n",
+			].join("");
+			return Promise.resolve(new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } }));
 		}) as unknown as typeof fetch;
 
 		const result = await aggregateRecall(
