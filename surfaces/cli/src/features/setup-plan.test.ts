@@ -198,6 +198,15 @@ describe("setupPlanSchema", () => {
 		expect(parseSetupPlan(plan).daemonUrl).toBe("https://signet.remote.example:8443");
 	});
 
+	it("accepts a bracketed IPv6 remote daemon URL", () => {
+		const plan = basePlan({ daemonUrl: "http://[fd00:dead:beef::1]:3850" });
+		expect(parseSetupPlan(plan).daemonUrl).toBe("http://[fd00:dead:beef::1]:3850");
+	});
+
+	it("rejects a malformed bracketed IPv6 remote daemon URL", () => {
+		expect(() => parseSetupPlan(basePlan({ daemonUrl: "http://[:::1]" }))).toThrow("daemonUrl");
+	});
+
 	it("rejects a non-http daemon URL", () => {
 		expect(() => parseSetupPlan(basePlan({ daemonUrl: "ftp://x" }))).toThrow("daemonUrl");
 	});

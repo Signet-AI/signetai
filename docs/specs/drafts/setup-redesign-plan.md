@@ -204,8 +204,11 @@ Implemented (config-driven, runtime-honored):
 - **Distinct aggregate-recall provider** — `aggregateRecallProvider/Model/Endpoint`.
   Aggregate recall is query-time evidence synthesis; it is the only per-operation
   override over the extraction provider. Fresh setup offers keyless local servers
-  plus OpenRouter, which uses the router's established `OPENROUTER_API_KEY`
-  contract. Other cloud providers must be connected in the dashboard first.
+  plus OpenRouter. An unconnected OpenRouter route uses the router's established
+  `OPENROUTER_API_KEY` contract; when the setup connect flow configured
+  OpenRouter extraction, aggregate recall reuses that connected account and its
+  stored `SIGNET_KEY_OPENROUTER` credential. Other cloud providers must be
+  connected in the dashboard first.
   A model is required for every aggregate-recall route.
   Setup writes a modern `inference.targets.aggregation` target bound to
   `workloads.aggregateRecall`; the daemon merges `inference.*` atop the legacy
@@ -216,6 +219,10 @@ Implemented (config-driven, runtime-honored):
   `loadDreamingConfig` reads it (`DEFAULT_DREAMING.enabled=false`, verified).
 
 Deferred with rationale (NOT setup config keys):
+- **Legacy `passthrough` identity** — no longer offered or written for new
+  setup plans, but existing workspaces keep its read-without-stewardship
+  behavior until an operator explicitly reconfigures identity. This avoids a
+  silent identity-injection behavior change on upgrade.
 - **secrets.backend** — the active provider is RUNTIME state, not config:
   `setActiveSecretProvider` writes `SIGNET_SECRETS_ACTIVE_PROVIDER` to the
   secrets store; 1Password uses a stored service-account token. There is no

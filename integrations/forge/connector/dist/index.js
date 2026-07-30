@@ -22206,19 +22206,18 @@ function readRecord(value) {
 function isIdentityMode(value) {
   return typeof value === "string" && IDENTITY_MODES.includes(value);
 }
+function isResolvedIdentityMode(value) {
+  return isIdentityMode(value) || value === "passthrough";
+}
 function resolveIdentityModeFromConfig(config) {
   const root = readRecord(config);
   const capabilities = readRecord(root.capabilities);
   const capabilityIdentity = readRecord(capabilities.identity);
-  if (isIdentityMode(capabilityIdentity.mode))
+  if (isResolvedIdentityMode(capabilityIdentity.mode))
     return capabilityIdentity.mode;
-  if (capabilityIdentity.mode === "passthrough")
-    return "off";
   const identity = readRecord(root.identity);
-  if (isIdentityMode(identity.mode))
+  if (isResolvedIdentityMode(identity.mode))
     return identity.mode;
-  if (identity.mode === "passthrough")
-    return "off";
   if (identity.enabled === false)
     return "off";
   return "managed";

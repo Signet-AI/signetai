@@ -262,14 +262,15 @@ function isGeneratedAcpxWorkload(value: unknown): boolean {
  * Mirrors the dashboard's InferenceSection writer: a target bound to
  * workloads.aggregateRecall (target only, no taskClass — the daemon validates
  * taskClasses and 'aggregate_recall' is not declared). For the openrouter
- * family we also create the account block (credentialRef OPENROUTER_API_KEY)
- * the way compileLegacyRoutingConfig does for extraction, so the daemon can
- * resolve the credential instead of hard-blocking the target as 'missing'.
+ * family we either reuse the connected extraction account or create the
+ * established OPENROUTER_API_KEY-backed account. Both shapes ensure the daemon
+ * can resolve the credential instead of hard-blocking the target as 'missing'.
  */
 export function buildSetupAggregateRecall(
 	provider: string,
 	model: string,
 	endpoint?: string,
+	reuseConnectedOpenRouterAccount = false,
 ): { targets: Record<string, unknown>; accounts?: Record<string, unknown>; workloads: Record<string, unknown> } {
 	const resolvedModel = model.trim();
 	const target: Record<string, unknown> = {
@@ -280,10 +281,15 @@ export function buildSetupAggregateRecall(
 	if (provider === "openai-compatible") {
 		target.endpoint = endpoint?.trim() || "http://localhost:1234/v1";
 	} else if (provider === "openrouter") {
-		// Reference an account backed by the same env key extraction uses, so the
-		// daemon resolves the credential at call time instead of blocking the target.
-		target.account = "aggregation";
-		accounts = { aggregation: { kind: "api", providerFamily: "openrouter", credentialRef: "OPENROUTER_API_KEY" } };
+		// The interactive connect flow stores its API key as SIGNET_KEY_OPENROUTER
+		// on the extraction account. Reuse that account rather than creating an
+		// aggregation account that points at the unrelated legacy env variable.
+		if (reuseConnectedOpenRouterAccount) {
+			target.account = "openrouter";
+		} else {
+			target.account = "aggregation";
+			accounts = { aggregation: { kind: "api", providerFamily: "openrouter", credentialRef: "OPENROUTER_API_KEY" } };
+		}
 	}
 	return {
 		targets: { aggregation: target },

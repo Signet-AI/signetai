@@ -201,6 +201,7 @@ export async function runFreshSetup(plan: SetupPlan, context: SetupApplyContext,
 					plan.aggregateRecallProvider,
 					plan.aggregateRecallModel ?? "",
 					plan.aggregateRecallEndpoint,
+					plan.extractionConnect?.family === "openrouter" && plan.aggregateRecallProvider === "openrouter",
 				),
 			);
 		}

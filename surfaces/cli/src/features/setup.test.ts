@@ -808,6 +808,30 @@ describe("setupWizard headless plan path", () => {
 		expect(startDaemon).not.toHaveBeenCalled();
 	});
 
+	it("rejects a remote daemon URL with a path before building a setup plan", async () => {
+		root = mkdtempSync(join(tmpdir(), "setup-remote-url-"));
+		const basePath = join(root, "agents");
+		mkdirSync(basePath, { recursive: true });
+		const deps = stubDeps({
+			AGENTS_DIR: basePath,
+			normalizeAgentPath: mock((p: string) => p),
+			detectExistingSetup: mock(() => ({ ...fakeDetection(basePath), agentsDir: false, memoryDb: false })),
+		});
+		const exitSpy = spyOn(process, "exit").mockImplementation(((code?: string | number | null) => {
+			throw new Error(`process.exit:${code ?? ""}`);
+		}) as never);
+		const errorSpy = spyOn(console, "error").mockImplementation(() => {});
+		try {
+			await expect(
+				setupWizard({ nonInteractive: true, remoteUrl: "https://signet.remote.example/api" }, deps),
+			).rejects.toThrow("process.exit:1");
+			expect(String(errorSpy.mock.calls[0]?.[0] ?? "")).toContain("bare http:// or https:// origin");
+		} finally {
+			exitSpy.mockRestore();
+			errorSpy.mockRestore();
+		}
+	});
+
 	it("stores an interactive provider credential on the configured remote daemon", async () => {
 		root = mkdtempSync(join(tmpdir(), "setup-remote-connect-"));
 		const basePath = join(root, "agents");
@@ -817,6 +841,8 @@ describe("setupWizard headless plan path", () => {
 			extractionProvider: "openrouter",
 			extractionModel: "anthropic/claude-3.5-haiku",
 			extractionConnect: { family: "openrouter", connectMethod: "api" },
+			aggregateRecallProvider: "openrouter",
+			aggregateRecallModel: "anthropic/claude-3.5-sonnet",
 			daemonUrl: "https://signet.remote.example:8443",
 		});
 		const connectExtraction = mock(async () => true);
@@ -842,6 +868,10 @@ describe("setupWizard headless plan path", () => {
 
 		expect(startDaemon).not.toHaveBeenCalled();
 		expect(connectExtraction).toHaveBeenCalledTimes(1);
+		const agentYaml = readFileSync(join(basePath, "agent.yaml"), "utf-8");
+		expect(agentYaml).toContain("aggregateRecall:");
+		expect(agentYaml).toContain("account: openrouter");
+		expect(agentYaml).not.toContain("credentialRef: OPENROUTER_API_KEY");
 	});
 
 	it("writes a multi-agent roster from a plan file", async () => {

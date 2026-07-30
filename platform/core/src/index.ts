@@ -356,6 +356,7 @@ export type {
 	IdentityFileSpec,
 	IdentityPresetName,
 	IdentityMode,
+	ResolvedIdentityMode,
 	IdentityFileContext,
 	IdentitySessionKind,
 	IdentityContextFileEntry,

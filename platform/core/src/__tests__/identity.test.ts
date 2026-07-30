@@ -158,17 +158,16 @@ describe("readStaticIdentity", () => {
 		expect(readStaticIdentity(TMP)).toBeNull();
 	});
 
-	test("legacy passthrough mode collapses to off (ignores identity files)", () => {
+	test("legacy passthrough mode reads existing startup identity without managing it", () => {
 		writeFileSync(
 			join(TMP, "agent.yaml"),
 			"capabilities:\n  identity:\n    mode: passthrough\nidentity:\n  preset: minimal\n  startup:\n    load:\n      - path: AGENTS.md\n        role: operating_instructions\n",
 		);
 		writeFileSync(join(TMP, "AGENTS.md"), "agents");
 
-		// passthrough was collapsed into off — it no longer reads identity files.
-		expect(loadIdentityMode(TMP)).toBe("off");
-		expect(resolveStartupIdentityFiles(TMP)).toEqual([]);
-		expect(readStaticIdentity(TMP)).toBeNull();
+		expect(loadIdentityMode(TMP)).toBe("passthrough");
+		expect(resolveStartupIdentityFiles(TMP).map((entry) => entry.path)).toEqual(["AGENTS.md"]);
+		expect(readStaticIdentity(TMP)).toContain("agents");
 	});
 
 	test("respects configured startup identity file order", () => {

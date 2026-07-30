@@ -38,6 +38,10 @@ export type IdentityPresetName = "minimal" | "hermes" | "openclaw" | "custom";
 
 export type IdentityMode = "managed" | "off";
 
+/** Runtime-only compatibility mode for workspaces created before setup removed
+ * the passthrough choice. New setup plans must use {@link IdentityMode}. */
+export type ResolvedIdentityMode = IdentityMode | "passthrough";
+
 export const IDENTITY_MODES = ["managed", "off"] as const;
 
 export type IdentityFileContext = "startup" | "session";
@@ -575,18 +579,18 @@ function isIdentityMode(value: unknown): value is IdentityMode {
 	return typeof value === "string" && (IDENTITY_MODES as readonly string[]).includes(value);
 }
 
-export function resolveIdentityModeFromConfig(config: unknown): IdentityMode {
+function isResolvedIdentityMode(value: unknown): value is ResolvedIdentityMode {
+	return isIdentityMode(value) || value === "passthrough";
+}
+
+export function resolveIdentityModeFromConfig(config: unknown): ResolvedIdentityMode {
 	const root = readRecord(config);
 	const capabilities = readRecord(root.capabilities);
 	const capabilityIdentity = readRecord(capabilities.identity);
-	if (isIdentityMode(capabilityIdentity.mode)) return capabilityIdentity.mode;
-	// Legacy configs may still carry "passthrough" (collapsed into "off" — the two
-	// were redundant: passthrough only read existing files, off ignores them).
-	if (capabilityIdentity.mode === "passthrough") return "off";
+	if (isResolvedIdentityMode(capabilityIdentity.mode)) return capabilityIdentity.mode;
 
 	const identity = readRecord(root.identity);
-	if (isIdentityMode(identity.mode)) return identity.mode;
-	if (identity.mode === "passthrough") return "off";
+	if (isResolvedIdentityMode(identity.mode)) return identity.mode;
 	if (identity.enabled === false) return "off";
 
 	// Existing installs predate capability modules and should keep the current
@@ -594,7 +598,7 @@ export function resolveIdentityModeFromConfig(config: unknown): IdentityMode {
 	return "managed";
 }
 
-export function loadIdentityMode(agentsDir: string): IdentityMode {
+export function loadIdentityMode(agentsDir: string): ResolvedIdentityMode {
 	const agentYaml = join(agentsDir, "agent.yaml");
 	if (!existsSync(agentYaml)) return "managed";
 	try {
@@ -604,11 +608,11 @@ export function loadIdentityMode(agentsDir: string): IdentityMode {
 	}
 }
 
-export function identityModeManagesFiles(mode: IdentityMode): boolean {
+export function identityModeManagesFiles(mode: ResolvedIdentityMode): boolean {
 	return mode === "managed";
 }
 
-export function identityModeReadsFiles(mode: IdentityMode): boolean {
+export function identityModeReadsFiles(mode: ResolvedIdentityMode): boolean {
 	return mode !== "off";
 }
 

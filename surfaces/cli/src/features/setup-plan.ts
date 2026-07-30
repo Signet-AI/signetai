@@ -69,6 +69,26 @@ const httpEndpointSchema = z
 	.describe("Required when extractionProvider is 'openai-compatible'")
 	.optional();
 
+/** A daemon URL is a bare origin, not an API path or credential-bearing URL. */
+export const BARE_DAEMON_ORIGIN_PATTERN = /^https?:\/\/(?:[\w.-]+|\[[0-9A-Fa-f:.]+\])(?::\d+)?\/?$/;
+
+export function isBareDaemonOrigin(value: string): boolean {
+	if (!BARE_DAEMON_ORIGIN_PATTERN.test(value)) return false;
+	try {
+		const parsed = new URL(value);
+		return (
+			(parsed.protocol === "http:" || parsed.protocol === "https:") &&
+			!parsed.username &&
+			!parsed.password &&
+			!parsed.search &&
+			!parsed.hash &&
+			(parsed.pathname === "/" || parsed.pathname === "")
+		);
+	} catch {
+		return false;
+	}
+}
+
 export const setupPlanSchema = z
 	.strictObject({
 		agentName: z.string(),
@@ -113,7 +133,7 @@ export const setupPlanSchema = z
 			// Match normalizeDaemonUrl's rules: a bare origin (no path, query,
 			// fragment, or credentials) so a persisted daemon.url cannot brick the
 			// module-load daemon client.
-			.regex(/^https?:\/\/[\w.:-]+\/?$/, "must be a bare http(s) origin (no path, query, or credentials)")
+			.regex(BARE_DAEMON_ORIGIN_PATTERN, "must be a bare http(s) origin (no path, query, or credentials)")
 			.optional(),
 		sources: z
 			.array(
@@ -135,6 +155,17 @@ export const setupPlanSchema = z
 			.optional(),
 	})
 	.superRefine((plan, ctx) => {
+		// The published regex admits bracketed IPv6 origins but cannot fully encode
+		// IPv6 grammar. Apply URL parsing at the plan boundary too, so --file and
+		// --json match the interactive/flag path rather than persisting a daemon
+		// URL the runtime will reject.
+		if (plan.daemonUrl && BARE_DAEMON_ORIGIN_PATTERN.test(plan.daemonUrl) && !isBareDaemonOrigin(plan.daemonUrl)) {
+			ctx.addIssue({
+				code: "custom",
+				message: "must be a valid bare http(s) origin",
+				path: ["daemonUrl"],
+			});
+		}
 		// openai-compatible extraction has no implicit endpoint; the interactive
 		// wizard defaults one, but a headless --file plan must state it.
 		if (plan.extractionProvider === "openai-compatible" && !plan.extractionEndpoint) {

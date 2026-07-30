@@ -243,7 +243,7 @@ describe("buildSetupAggregateRecall", () => {
 		expect(ar.accounts).toBeUndefined();
 	});
 
-	it("requires an endpoint for openai-compatible and backs openrouter with a resolvable account", () => {
+	it("requires an endpoint for openai-compatible and backs unconnected openrouter with a resolvable account", () => {
 		expect(buildSetupAggregateRecall("openai-compatible", "m", "http://gw:8000/v1").targets.aggregation).toMatchObject({
 			executor: "openai-compatible",
 			endpoint: "http://gw:8000/v1",
@@ -256,6 +256,12 @@ describe("buildSetupAggregateRecall", () => {
 			providerFamily: "openrouter",
 			credentialRef: "OPENROUTER_API_KEY",
 		});
+	});
+
+	it("reuses the interactive OpenRouter extraction account", () => {
+		const or = buildSetupAggregateRecall("openrouter", "m", undefined, true);
+		expect(or.targets.aggregation).toMatchObject({ executor: "openrouter", account: "openrouter" });
+		expect(or.accounts).toBeUndefined();
 	});
 });
 

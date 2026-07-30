@@ -36,7 +36,7 @@ import {
 } from "./setup-inference-connect.js";
 import { runExistingSetupWizard } from "./setup-migrate.js";
 import { defaultAcpxModel, defaultExtractionModel } from "./setup-pipeline.js";
-import { parseSetupPlan, setupPlanJsonSchema } from "./setup-plan.js";
+import { isBareDaemonOrigin, parseSetupPlan, setupPlanJsonSchema } from "./setup-plan.js";
 import type { SetupApplyContext, SetupPlan } from "./setup-plan.js";
 import { readSetupCorePluginEnabled, writeSetupCorePluginRegistry } from "./setup-plugins.js";
 import { enforceSetupProtection, printSetupProtectionSummary } from "./setup-protection.js";
@@ -226,6 +226,11 @@ function normalizeHttpEndpoint(value: string | null | undefined): string | undef
 	} catch {
 		return undefined;
 	}
+}
+
+function normalizeDaemonOrigin(value: string | null | undefined): string | undefined {
+	const endpoint = normalizeHttpEndpoint(value);
+	return endpoint && isBareDaemonOrigin(endpoint) ? endpoint : undefined;
 }
 
 function resolveSetupExtractionEndpoint(options: {
@@ -643,6 +648,9 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 	const existingIdentity = readRecord(existingConfig.identity);
 	const configuredIdentityMode = deps.normalizeChoice(options.identityMode, IDENTITY_MODE_CHOICES);
 	const existingIdentityMode = resolveIdentityModeFromConfig(existingConfig);
+	// Passthrough remains readable for existing installs, but fresh setup no
+	// longer writes or offers it. Reconfiguring explicitly selects a current mode.
+	const existingSetupIdentityMode: IdentityMode = existingIdentityMode === "passthrough" ? "off" : existingIdentityMode;
 	const configuredIdentityPreset = deps.normalizeChoice(options.identityPreset, IDENTITY_PRESET_CHOICES);
 	const existingIdentityPreset = deps.normalizeChoice(existingIdentity.preset, IDENTITY_PRESET_CHOICES);
 	if (options.identityMode && !configuredIdentityMode) {
@@ -705,10 +713,14 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 				writeCapabilitySelection(
 					basePath,
 					existingConfig,
-					configuredIdentityMode ?? existingIdentityMode,
+					configuredIdentityMode ?? existingSetupIdentityMode,
 					signetSecretsEnabled,
 				);
-				scaffoldIdentityIfNeeded(basePath, configuredIdentityMode ?? existingIdentityMode, existingIdentityMode);
+				scaffoldIdentityIfNeeded(
+					basePath,
+					configuredIdentityMode ?? existingSetupIdentityMode,
+					existingSetupIdentityMode,
+				);
 			}
 			writeSetupCorePluginRegistry(basePath, { signetSecretsEnabled, graphiqEnabled });
 			if (graphiqEnabled) {
@@ -717,7 +729,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 				disableGraphiqState(basePath);
 			}
 
-			const resolvedIdentityMode = configuredIdentityMode ?? existingIdentityMode;
+			const resolvedIdentityMode = configuredIdentityMode ?? existingSetupIdentityMode;
 
 			// When identity mode changes to off, run stale identity cleanup
 			// for all detected and configured harnesses even if --harness was not passed.
@@ -871,7 +883,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 
 			await runExistingSetupWizard(basePath, existing, existingConfig, deps, {
 				nonInteractive: true,
-				identityMode: configuredIdentityMode ?? existingIdentityMode,
+				identityMode: configuredIdentityMode ?? existingSetupIdentityMode,
 				openDashboard: options.openDashboard === true,
 				skipGit: options.skipGit === true,
 				allowUnprotectedWorkspace: options.allowUnprotectedWorkspace === true,
@@ -963,7 +975,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 
 			const signetSecretsEnabled = await resolveSignetSecretsCorePluginSelection(basePath, false, options);
 			const graphiqEnabled = await resolveGraphiqPluginSelection(basePath, false, options);
-			const migrationIdentityMode = configuredIdentityMode ?? (await promptIdentityMode(existingIdentityMode));
+			const migrationIdentityMode = configuredIdentityMode ?? (await promptIdentityMode(existingSetupIdentityMode));
 
 			await runExistingSetupWizard(basePath, existing, existingConfig, deps, {
 				identityMode: migrationIdentityMode,
@@ -1006,7 +1018,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		console.log();
 	}
 
-	const defaultIdentityMode: IdentityMode = configuredIdentityMode ?? existingIdentityMode ?? "managed";
+	const defaultIdentityMode: IdentityMode = configuredIdentityMode ?? existingSetupIdentityMode;
 	const identityMode: IdentityMode = nonInteractive
 		? defaultIdentityMode
 		: await promptIdentityMode(defaultIdentityMode);
@@ -1151,9 +1163,9 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 	// when remote — no local daemon is started.)
 	let networkMode: NetworkMode;
 	let daemonUrl: string | undefined;
-	const requestedRemoteUrl = normalizeHttpEndpoint(deps.normalizeStringValue(options.remoteUrl));
+	const requestedRemoteUrl = normalizeDaemonOrigin(deps.normalizeStringValue(options.remoteUrl));
 	if (options.remoteUrl && !requestedRemoteUrl) {
-		failSetupValidation("--remote-url must be an http:// or https:// URL.");
+		failSetupValidation("--remote-url must be a bare http:// or https:// origin (no path, query, or credentials).");
 	}
 	if (nonInteractive) {
 		networkMode = deps.normalizeChoice(options.networkMode, NETWORK_MODES) ?? existingNetworkMode;
@@ -1172,9 +1184,11 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		if (hosting === "remote") {
 			const urlInput = await input({
 				message: "Remote daemon URL:",
-				validate: (value) => normalizeHttpEndpoint(value) !== undefined || "Enter an http:// or https:// URL.",
+				validate: (value) =>
+					normalizeDaemonOrigin(value) !== undefined ||
+					"Enter a bare http:// or https:// origin (no path, query, or credentials).",
 			});
-			daemonUrl = normalizeHttpEndpoint(urlInput) ?? undefined;
+			daemonUrl = normalizeDaemonOrigin(urlInput) ?? undefined;
 			networkMode = "localhost"; // no local daemon to bind
 		} else {
 			networkMode = hosting === "tailscale" ? "tailscale" : "localhost";
