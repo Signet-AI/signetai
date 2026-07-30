@@ -2,8 +2,8 @@ import { randomUUID } from "node:crypto";
 import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
 import { vectorToBlob } from "./db-helpers";
 import {
-	type PersistedEmbeddingProfile,
 	type EmbeddingIndexState,
+	type PersistedEmbeddingProfile,
 	readEmbeddingIndexState,
 } from "./embedding-index-state";
 import { beginEmbeddingIndexBuild, failEmbeddingIndexBuild } from "./embedding-index-state";
@@ -297,15 +297,15 @@ export function startEmbeddingIndexMigration(input: {
 
 	const before = input.accessor.withReadDb((db) => readEmbeddingIndexState(db));
 	const initial = input.accessor.withWriteTx((db) => beginEmbeddingIndexBuild(db, input.configured));
-	if (initial.state !== "building" || !initial.staging) return null;
-	const resumeExistingBuild =
-		before?.state === "building" && before.staging?.fingerprint === initial.staging.fingerprint;
+	const staging = initial.staging;
+	if (initial.state !== "building" || !staging) return null;
+	const resumeExistingBuild = before?.state === "building" && before.staging?.fingerprint === staging.fingerprint;
 	try {
 		if (resumeExistingBuild) {
 			const hasStagingVectorIndex = input.accessor.withReadDb((db) => tableExists(db, STAGING_VECTOR_TABLE));
 			if (!hasStagingVectorIndex) throw new Error("Staging vector index is unavailable while resuming a build");
 		} else {
-			input.accessor.withWriteTx((db) => resetStagingVectorIndex(db, initial.staging.dimensions));
+			input.accessor.withWriteTx((db) => resetStagingVectorIndex(db, staging.dimensions));
 		}
 	} catch (error) {
 		input.accessor.withWriteTx((db) =>

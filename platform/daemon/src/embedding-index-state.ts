@@ -1,6 +1,6 @@
 import { DEFAULT_EMBEDDING_DIMENSIONS } from "@signet/core";
-import { embeddingProfileFingerprint, recommendedEmbeddingProfileId } from "./embedding-profile";
 import type { ReadDb, WriteDb } from "./db-accessor";
+import { embeddingProfileFingerprint, recommendedEmbeddingProfileId } from "./embedding-profile";
 import type { EmbeddingConfig } from "./memory-config";
 
 export type EmbeddingIndexBuildState = "ready" | "building" | "failed";
@@ -70,12 +70,15 @@ export function isActiveEmbeddingConfig(db: ReadDb, cfg: EmbeddingConfig): boole
 function parseProfile(value: string): PersistedEmbeddingProfile | null {
 	try {
 		const parsed = JSON.parse(value) as Partial<PersistedEmbeddingProfile>;
+		const dimensions = parsed.dimensions;
 		if (
 			typeof parsed.fingerprint !== "string" ||
 			typeof parsed.model !== "string" ||
 			typeof parsed.baseUrl !== "string" ||
-			!Number.isInteger(parsed.dimensions) ||
-			parsed.dimensions <= 0 ||
+			!Number.isInteger(dimensions) ||
+			// `Number.isInteger` does not narrow `number | undefined` for TypeScript.
+			dimensions === undefined ||
+			dimensions <= 0 ||
 			!isEmbeddingProvider(parsed.provider)
 		)
 			return null;
@@ -83,7 +86,7 @@ function parseProfile(value: string): PersistedEmbeddingProfile | null {
 			fingerprint: parsed.fingerprint,
 			provider: parsed.provider,
 			model: parsed.model,
-			dimensions: parsed.dimensions,
+			dimensions,
 			baseUrl: parsed.baseUrl,
 			...(typeof parsed.profile === "string" ? { profile: parsed.profile } : {}),
 		};

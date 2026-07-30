@@ -221,6 +221,14 @@ Increase the embedding timeout when local embedding models are slow to
 cold-load. For example, Ollama with `mxbai-embed-large` may need `10000` ms
 to avoid aborted explicit recall embeddings.
 
+Changing the embedding provider, model, dimensions, or base URL starts a
+background index migration. Existing semantic recall remains on the active
+index until Signet has re-embedded every active memory and source chunk with
+the new profile; only then is the new index promoted. Check
+`GET /api/embeddings/status` for the active/staging profile and migration
+coverage. If the daemon restarts, the incomplete staged build resumes; a
+failed build leaves the active index unchanged.
+
 Recommended Ollama models:
 
 | Model | Dimensions | Notes |
