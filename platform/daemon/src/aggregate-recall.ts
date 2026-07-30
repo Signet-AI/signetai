@@ -684,7 +684,7 @@ async function planQueries(input: {
 	const result = await input.router.execute(
 		{
 			agentId: input.params.agentId,
-			operation: "session_synthesis",
+			operation: "aggregate_recall",
 			promptPreview: input.params.query,
 			expectedOutputTokens: 300,
 		},
@@ -723,7 +723,7 @@ async function synthesize(input: {
 	const result = await input.router.execute(
 		{
 			agentId: input.params.agentId,
-			operation: "session_synthesis",
+			operation: "aggregate_recall",
 			promptPreview: input.params.query,
 			expectedOutputTokens: 700,
 		},
@@ -792,8 +792,7 @@ export async function aggregateRecall(
 		recall(aggregateRecallParams, cfg, deps.embedFn),
 	);
 
-	const router = deps.router;
-	if (!router) {
+	if (!deps.router) {
 		const firstEvidence = uniqueEvidence(first.results);
 		const sourceMemoryIds = linkableSourceMemoryIds(firstEvidence);
 		if (firstEvidence.length > 0) {
@@ -814,7 +813,7 @@ export async function aggregateRecall(
 
 	const planned = await timings.timeAsync("aggregate_planning", () =>
 		planQueries({
-			router,
+			router: deps.router,
 			params,
 			budget,
 			maxQueries,
@@ -854,7 +853,9 @@ export async function aggregateRecall(
 		return finish(emptyAggregateResponse(params, budget, queries, [], "no_evidence"));
 	}
 
-	const synthesized = await timings.timeAsync("aggregate_synthesis", () => synthesize({ router, params, evidence }));
+	const synthesized = await timings.timeAsync("aggregate_synthesis", () =>
+		synthesize({ router: deps.router, params, evidence }),
+	);
 	if (synthesized.usage) usageStages.push(synthesized.usage);
 	const answer = synthesized.answer;
 	if (!answer) {
@@ -950,20 +951,19 @@ export async function aggregateRecall(
 				return loadAggregateMemory(db, id);
 			}),
 		);
-		const savedRow = row;
-		if (savedRow && !deduped) {
+		if (row && !deduped) {
 			let embedded = false;
 			let embeddingError: unknown;
 			try {
 				embedded = await timings.timeAsync("aggregate_embedding", () =>
-					embedAggregateMemory(savedRow.id, savedRow.content, normalized.contentHash, now, cfg.embedding, deps.embedFn),
+					embedAggregateMemory(row.id, row.content, normalized.contentHash, now, cfg.embedding, deps.embedFn),
 				);
 			} catch (err) {
 				embeddingError = err;
 			}
 			if (!embedded) {
 				log.warn("memory", "Aggregate recall memory saved without embedding", {
-					memoryId: savedRow.id,
+					memoryId: row.id,
 					agentId,
 					project,
 					sourceId: key,

@@ -348,12 +348,7 @@ memory:
 				chatCalls === 1
 					? JSON.stringify({ queries: [] })
 					: "Aggregate recall can synthesize directly through an OpenAI-compatible API target.";
-			const stream = [
-				`data: ${JSON.stringify({ choices: [{ delta: { content } }] })}\n\n`,
-				`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "stop" }] })}\n\n`,
-				"data: [DONE]\n\n",
-			].join("");
-			return Promise.resolve(new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } }));
+			return Promise.resolve(new Response(JSON.stringify({ choices: [{ message: { content } }] }), { status: 200 }));
 		}) as unknown as typeof fetch;
 
 		const result = await aggregateRecall(
