@@ -21,7 +21,6 @@ export function normalizeDependencyReason(dependencyType: DependencyType, reason
 	return text;
 }
 
-export function requireDependencyReason(dependencyType: DependencyType, reason: string): string;
 export function requireDependencyReason(dependencyType: DependencyType, reason?: string | null): string | null;
 export function requireDependencyReason(dependencyType: DependencyType, reason?: string | null): string | null {
 	const text = normalizeDependencyReason(dependencyType, reason);
