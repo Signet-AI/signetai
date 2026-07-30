@@ -268,10 +268,10 @@ function isGeneratedAcpxWorkload(value: unknown): boolean {
  */
 export function buildSetupAggregateRecall(
 	provider: string,
-	model?: string,
+	model: string,
 	endpoint?: string,
 ): { targets: Record<string, unknown>; accounts?: Record<string, unknown>; workloads: Record<string, unknown> } {
-	const resolvedModel = model?.trim() || defaultPipelineModel(provider);
+	const resolvedModel = model.trim();
 	const target: Record<string, unknown> = {
 		executor: provider,
 		models: { default: { model: resolvedModel, reasoning: "medium" } },

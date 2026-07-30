@@ -161,6 +161,13 @@ export const setupPlanSchema = z
 				path: ["aggregateRecallProvider"],
 			});
 		}
+		if (plan.aggregateRecallProvider && !plan.aggregateRecallModel?.trim()) {
+			ctx.addIssue({
+				code: "custom",
+				message: "aggregateRecallProvider requires aggregateRecallModel",
+				path: ["aggregateRecallModel"],
+			});
+		}
 		// Aggregate recall synthesizes extracted memories at query time. With the
 		// pipeline disabled (extraction none) there is nothing to synthesize, so a
 		// distinct aggregate-recall provider would be dead config.
@@ -171,6 +178,22 @@ export const setupPlanSchema = z
 					"aggregateRecallProvider requires extraction to be enabled (nothing to synthesize without the extraction pipeline)",
 				path: ["aggregateRecallProvider"],
 			});
+		}
+		if (plan.extractionConnect) {
+			if (!connectableProviderIds().includes(plan.extractionConnect.family)) {
+				ctx.addIssue({
+					code: "custom",
+					message: `unknown connected provider "${plan.extractionConnect.family}"`,
+					path: ["extractionConnect", "family"],
+				});
+			}
+			if (plan.extractionConnect.family !== plan.extractionProvider) {
+				ctx.addIssue({
+					code: "custom",
+					message: "extractionConnect.family must match extractionProvider",
+					path: ["extractionConnect", "family"],
+				});
+			}
 		}
 		if (plan.agents) {
 			const seen = new Set<string>();

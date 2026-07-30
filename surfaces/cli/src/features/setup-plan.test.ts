@@ -120,7 +120,10 @@ describe("setupPlanSchema", () => {
 	});
 
 	it("accepts a connected extraction provider decision", () => {
-		const plan = basePlan({ extractionConnect: { family: "anthropic", connectMethod: "oauth" } });
+		const plan = basePlan({
+			extractionProvider: "anthropic",
+			extractionConnect: { family: "anthropic", connectMethod: "oauth" },
+		});
 		expect(parseSetupPlan(plan).extractionConnect).toEqual({ family: "anthropic", connectMethod: "oauth" });
 	});
 
@@ -173,6 +176,21 @@ describe("setupPlanSchema", () => {
 
 	it("rejects aggregate-recall model without a provider", () => {
 		expect(() => parseSetupPlan(basePlan({ aggregateRecallModel: "x" }))).toThrow("aggregateRecallProvider");
+	});
+
+	it("rejects aggregate-recall provider without a model", () => {
+		expect(() => parseSetupPlan(basePlan({ aggregateRecallProvider: "openrouter" }))).toThrow("aggregateRecallModel");
+	});
+
+	it("rejects a connected provider whose family differs from extractionProvider", () => {
+		expect(() =>
+			parseSetupPlan(
+				basePlan({
+					extractionProvider: "anthropic",
+					extractionConnect: { family: "openrouter", connectMethod: "api" },
+				}),
+			),
+		).toThrow("extractionConnect.family");
 	});
 
 	it("accepts a remote daemon URL", () => {

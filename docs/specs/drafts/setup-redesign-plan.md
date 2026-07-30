@@ -11,7 +11,7 @@ success_criteria:
   - "`signet setup --dry-run` prints the plan and the files it would write without mutating anything"
   - "Non-TTY invocation never blocks on a prompt; incomplete input fails with a structured error"
   - "The wizard can add roster agents via the same code path as `signet agent add`, reconciled into the agents table at daemon boot"
-  - "Setup can write a distinct synthesis provider route and a secrets backend selection that the daemon already supports"
+  - "Setup can write an optional aggregate-recall route for supported fresh-setup providers"
 scope_boundary: "CLI onboarding UX and headless setup payload only; does not specify Signet Cloud onboarding, dashboard onboarding UI (#948 consumes the same plan shape), an in-CLI identity interview engine, or runtime semantics for new config keys (phase 2)"
 ---
 
@@ -62,7 +62,7 @@ interface SetupPlan {
   }>;
 
   identity: {
-    mode: "managed" | "passthrough" | "off";
+    mode: "managed" | "off";
     preset: "minimal" | "hermes" | "openclaw" | "custom";
     // No interview engine in CLI. Stubs are written; output points to
     // the /onboarding skill for the guided identity interview.
@@ -76,7 +76,7 @@ interface SetupPlan {
 
   pipeline: {
     extraction: { provider: ExtractionProviderChoice; model: string; endpoint?: string };
-    synthesis: { mode: "same" } | { mode: "custom"; provider: string; model: string; endpoint?: string };
+    aggregateRecall?: { provider: "openrouter" | "ollama" | "llama-cpp" | "openai-compatible"; model: string; endpoint?: string };
     dreaming: { enabled: boolean }; // default true
   };
 
@@ -142,8 +142,8 @@ Grouped sections, each a small pure-ish async fn `plan -> plan`:
    Then loop: "Add another agent?" → name/description/preset/read-policy.
 3. **Harness detection**: scan PATH for harness CLIs, multi-select with
    detected ones pre-checked ("We see Claude Code and OpenCode...").
-4. **Provider & pipeline**: extraction provider+model → synthesis
-   (same-as-extraction default) → dreaming confirm (default on).
+4. **Provider & pipeline**: extraction provider+model → optional aggregate
+   recall override → dreaming confirm (default on).
 5. **Embeddings**: native default; ollama/llama-cpp/openai model prompts.
 6. **Skills**: checkbox of builtins, all on, dreaming locked on.
 7. **Sources**: optional Obsidian path / ChatGPT export path / skip
@@ -203,11 +203,13 @@ moves to small section modules. Net non-test LOC should drop.
 Implemented (config-driven, runtime-honored):
 - **Distinct aggregate-recall provider** — `aggregateRecallProvider/Model/Endpoint`.
   Aggregate recall is query-time evidence synthesis; it is the only per-operation
-  override over the extraction provider (the dashboard's main selector reads "memory
-  extraction and synthesis" — session synthesis is NOT a separate provider).
+  override over the extraction provider. Fresh setup offers keyless local servers
+  plus OpenRouter, which uses the router's established `OPENROUTER_API_KEY`
+  contract. Other cloud providers must be connected in the dashboard first.
+  A model is required for every aggregate-recall route.
   Setup writes a modern `inference.targets.aggregation` target bound to
   `workloads.aggregateRecall`; the daemon merges `inference.*` atop the legacy
-  `pipeline.*` base, so extraction/session-synthesis are unaffected
+  `pipeline.*` base, so extraction is unaffected
   (`parseRoutingConfig`, `inference-router.ts`, verified). pi-ai-only
   (no harness subprocess — spawn latency would dominate).
 - **dreaming toggle** — `dreamingEnabled` → `memory.dreaming.enabled`;
@@ -250,14 +252,7 @@ Deferred with rationale (NOT setup config keys):
    URL into agent.yaml (e.g. `daemon.url`) and teach
    `resolveSignetDaemonUrl` a config fallback, install connectors with
    `--url`, skip local daemon start.
-4. **Synthesis provider — runtime already supports it.** Two independent
-   mechanisms: (a) `PipelineSynthesisConfig` has its own
-   `provider/model/endpoint` separate from extraction
-   (`platform/core/src/types.ts` L438); (b) the daemon routes synthesis as
-   a distinct workload — `session_synthesis` vs `memory_extraction` —
-   through the inference routing layer (`platform/daemon/src/daemon.ts`
-   ~L1342-1471), and setup already writes per-workload routes
-   (`applySetupInferenceRoute` in `setup-pipeline.ts` handles both
-   `workloads.memoryExtraction` and `workloads.sessionSynthesis`). The
-   wizard just needs to ask, and write a second route/config block when
-   the user picks a distinct synthesis provider.
+4. **Session synthesis routing is obsolete.** The daemon routes internal
+   session work through `memoryExtraction`/the default policy. Setup must not
+   add a separate session-synthesis target; `aggregateRecall` is the only
+   optional distinct workload route in this plan.

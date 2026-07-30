@@ -521,6 +521,12 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		const explicitPath = deps.normalizeStringValue(options.path);
 		const basePath = deps.normalizeAgentPath(explicitPath ?? deps.AGENTS_DIR);
 		const plan = loadPlanFromOptions(options);
+		if (plan.extractionConnect) {
+			failSetupValidation(
+				"A headless setup plan cannot use extractionConnect because credentials are not part of SetupPlan.",
+				"Use a supported non-interactive extraction provider with its configured credential, or run interactive setup to connect the provider.",
+			);
+		}
 		if (options.dryRun) {
 			console.log(JSON.stringify(plan, null, 2));
 			return;
@@ -1471,17 +1477,16 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		});
 		if (distinctAggregateRecall) {
 			console.log();
-			// Same pi-ai catalog as the connect flow (pi-ai-only — no ACPX, since
-			// aggregate recall is latency-sensitive), plus local servers.
-			const aggProviders = [...oauthProviderOptions(), ...apiKeyProviderOptions(), ...LOCAL_SERVERS].filter(
-				(p, i, arr) => arr.findIndex((q) => q.id === p.id) === i,
-			);
+			// Fresh setup can safely configure keyless local servers and OpenRouter,
+			// whose existing OPENROUTER_API_KEY environment contract the router uses.
+			// Other cloud families must be connected in the dashboard first.
+			const aggProviders = [{ id: "openrouter", name: "OpenRouter" }, ...LOCAL_SERVERS];
 			aggregateRecallProvider = await select({
 				message: "Aggregate-recall provider:",
 				choices: aggProviders.map((p) => ({ value: p.id, name: p.name })),
 			});
 			console.log();
-			aggregateRecallModel = await pickModel(aggregateRecallProvider, { select, search, input });
+			aggregateRecallModel = await pickModel(modelOptions(aggregateRecallProvider), { select, search, input });
 			if (aggregateRecallProvider === "openai-compatible") {
 				const epInput = await input({
 					message: "Aggregate-recall endpoint:",

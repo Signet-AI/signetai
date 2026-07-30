@@ -71,10 +71,16 @@ export function connectableProviderIds(): readonly string[] {
 	return [...new Set([...getProviders(), ...getOAuthProviders().map((p) => p.id)])];
 }
 
-/** Provider ids valid for aggregate recall — pi-ai families plus local servers
- * (ollama/llama-cpp/openai-compatible). ACPX is excluded (latency-sensitive). */
+/**
+ * Provider ids valid for aggregate recall during fresh setup.
+ *
+ * The dashboard can route any provider that is already connected. Fresh setup
+ * cannot safely serialize a second provider credential into a headless plan,
+ * so it only offers the keyless local servers plus OpenRouter, whose existing
+ * `OPENROUTER_API_KEY` environment contract is understood by the router.
+ */
 export function aggregateRecallProviderIds(): readonly string[] {
-	return [...new Set([...connectableProviderIds(), ...LOCAL_SERVERS.map((s) => s.id)])];
+	return ["openrouter", ...LOCAL_SERVERS.map((server) => server.id)];
 }
 
 /** Local keyless servers offered as extraction backends. */

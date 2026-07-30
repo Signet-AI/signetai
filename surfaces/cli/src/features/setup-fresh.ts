@@ -199,7 +199,7 @@ export async function runFreshSetup(plan: SetupPlan, context: SetupApplyContext,
 				config,
 				buildSetupAggregateRecall(
 					plan.aggregateRecallProvider,
-					plan.aggregateRecallModel,
+					plan.aggregateRecallModel ?? "",
 					plan.aggregateRecallEndpoint,
 				),
 			);
@@ -398,7 +398,7 @@ export async function runFreshSetup(plan: SetupPlan, context: SetupApplyContext,
 
 		// Connect the chosen cloud provider now that the daemon is running (the
 		// daemon owns the secrets store + OAuth endpoints, like the dashboard).
-		if (plan.extractionConnect && context.connectExtraction && !remoteDaemon) {
+		if (plan.extractionConnect && context.connectExtraction) {
 			spinner.text = `Connecting ${plan.extractionConnect.family}...`;
 			const ok = await context.connectExtraction();
 			if (ok) {

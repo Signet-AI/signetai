@@ -243,13 +243,6 @@ describe("buildSetupAggregateRecall", () => {
 		expect(ar.accounts).toBeUndefined();
 	});
 
-	it("defaults the model when none is given", () => {
-		const ar = buildSetupAggregateRecall("openrouter");
-		expect(
-			(ar.targets.aggregation as { models: { default: { model: string } } }).models.default.model.length,
-		).toBeGreaterThan(0);
-	});
-
 	it("requires an endpoint for openai-compatible and backs openrouter with a resolvable account", () => {
 		expect(buildSetupAggregateRecall("openai-compatible", "m", "http://gw:8000/v1").targets.aggregation).toMatchObject({
 			executor: "openai-compatible",

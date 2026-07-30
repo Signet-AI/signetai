@@ -9,7 +9,9 @@ import {
 	readGraphiqState,
 	updateGraphiqActiveProject,
 } from "@signet/core";
+import { runFreshSetup } from "./setup-fresh.js";
 import { detectedHarnessesForExistingSetup, runExistingSetupWizard } from "./setup-migrate.js";
+import { parseSetupPlan } from "./setup-plan.js";
 import type { SetupDeps } from "./setup-types.js";
 import { renderSetupPlanSummary, setupWizard } from "./setup.js";
 
@@ -806,6 +808,42 @@ describe("setupWizard headless plan path", () => {
 		expect(startDaemon).not.toHaveBeenCalled();
 	});
 
+	it("stores an interactive provider credential on the configured remote daemon", async () => {
+		root = mkdtempSync(join(tmpdir(), "setup-remote-connect-"));
+		const basePath = join(root, "agents");
+		const templatesPath = join(root, "templates");
+		writeIdentityTemplates(templatesPath);
+		const planPath = writePlanFile(root, {
+			extractionProvider: "openrouter",
+			extractionModel: "anthropic/claude-3.5-haiku",
+			extractionConnect: { family: "openrouter", connectMethod: "api" },
+			daemonUrl: "https://signet.remote.example:8443",
+		});
+		const connectExtraction = mock(async () => true);
+		const startDaemon = mock(async () => true);
+		const deps = { ...freshDeps(basePath, templatesPath), startDaemon };
+		const plan = parseSetupPlan(JSON.parse(readFileSync(planPath, "utf-8")));
+
+		await runFreshSetup(
+			plan,
+			{
+				basePath,
+				existingAgentsDir: false,
+				nonInteractive: true,
+				allowUnprotectedWorkspace: true,
+				createLocalBackup: false,
+				availableExtractionProviders: [],
+				openclawConfigCount: 0,
+				openDashboard: false,
+				connectExtraction,
+			},
+			deps,
+		);
+
+		expect(startDaemon).not.toHaveBeenCalled();
+		expect(connectExtraction).toHaveBeenCalledTimes(1);
+	});
+
 	it("writes a multi-agent roster from a plan file", async () => {
 		root = mkdtempSync(join(tmpdir(), "setup-headless-roster-"));
 		const basePath = join(root, "agents");
@@ -843,7 +881,7 @@ describe("setupWizard headless plan path", () => {
 		expect(agentYaml).toContain("enabled: true");
 	});
 
-	it("writes a connected cloud extraction target from a plan file", async () => {
+	it("rejects a connected cloud extraction target from a headless plan", async () => {
 		root = mkdtempSync(join(tmpdir(), "setup-headless-connect-"));
 		const basePath = join(root, "agents");
 		const templatesPath = join(root, "templates");
@@ -855,18 +893,20 @@ describe("setupWizard headless plan path", () => {
 		});
 		const deps = freshDeps(basePath, templatesPath);
 
-		await setupWizard({ file: planPath }, deps);
-
-		const agentYaml = readFileSync(join(basePath, "agent.yaml"), "utf-8");
-		// Modern inference.* route is the source of truth for the connected target.
-		expect(agentYaml).toContain("memoryExtraction:");
-		expect(agentYaml).toContain("target: background/default");
-		expect(agentYaml).toContain("executor: openrouter");
-		// API-key connect writes an api account referencing the key secret.
-		expect(agentYaml).toContain("SIGNET_KEY_OPENROUTER");
+		const exitSpy = spyOn(process, "exit").mockImplementation(((code?: string | number | null) => {
+			throw new Error(`process.exit:${code ?? ""}`);
+		}) as never);
+		const errorSpy = spyOn(console, "error").mockImplementation(() => {});
+		try {
+			await expect(setupWizard({ file: planPath }, deps)).rejects.toThrow("process.exit:1");
+			expect(String(errorSpy.mock.calls[0]?.[0] ?? "")).toContain("cannot use extractionConnect");
+		} finally {
+			exitSpy.mockRestore();
+			errorSpy.mockRestore();
+		}
 	});
 
-	it("accepts a non-legacy connect family (anthropic OAuth) and writes a subscription_session account", async () => {
+	it("rejects a non-legacy connected provider from a headless plan", async () => {
 		root = mkdtempSync(join(tmpdir(), "setup-headless-connect-anthropic-"));
 		const basePath = join(root, "agents");
 		const templatesPath = join(root, "templates");
@@ -878,11 +918,17 @@ describe("setupWizard headless plan path", () => {
 		});
 		const deps = freshDeps(basePath, templatesPath);
 
-		await setupWizard({ file: planPath }, deps);
-
-		const agentYaml = readFileSync(join(basePath, "agent.yaml"), "utf-8");
-		expect(agentYaml).toContain("executor: anthropic");
-		expect(agentYaml).toContain("subscription_session");
+		const exitSpy = spyOn(process, "exit").mockImplementation(((code?: string | number | null) => {
+			throw new Error(`process.exit:${code ?? ""}`);
+		}) as never);
+		const errorSpy = spyOn(console, "error").mockImplementation(() => {});
+		try {
+			await expect(setupWizard({ file: planPath }, deps)).rejects.toThrow("process.exit:1");
+			expect(String(errorSpy.mock.calls[0]?.[0] ?? "")).toContain("cannot use extractionConnect");
+		} finally {
+			exitSpy.mockRestore();
+			errorSpy.mockRestore();
+		}
 	});
 
 	it("writes a distinct aggregate-recall target from a plan file", async () => {
