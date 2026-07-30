@@ -71,7 +71,7 @@ export async function GET(context: APIContext) {
 
 	return rss({
 		title: "SignetAI",
-		description: "Local-first identity, memory, and secrets for AI agents. Portable state across models and harnesses.",
+		description: "Local-first memory and secrets for AI agents. Portable across models and harnesses.",
 		site: context.site?.toString() ?? "https://signetai.sh",
 		items,
 		customData: "<language>en-us</language>",

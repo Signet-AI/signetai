@@ -26,9 +26,7 @@
     "links": [
       "docs/daemon",
       "docs/configuration",
-      "docs/auth",
-      "docs/memory",
-      "docs/sdk"
+      "docs/auth"
     ],
     "collection": "docs"
   },
@@ -52,6 +50,7 @@
     "tags": [],
     "links": [
       "docs/daemon",
+      "docs/remote-connectors",
       "docs/api",
       "docs/configuration"
     ],
@@ -81,7 +80,8 @@
       "docs/quickstart",
       "docs/secrets",
       "docs/skills",
-      "docs/harnesses"
+      "docs/harnesses",
+      "docs/remote-connectors"
     ],
     "collection": "docs"
   },
@@ -106,7 +106,8 @@
     "links": [
       "docs/documents",
       "docs/daemon",
-      "docs/api"
+      "docs/api",
+      "docs/remote-connectors"
     ],
     "collection": "docs"
   },
@@ -180,6 +181,7 @@
     "url": "/docs/harnesses/",
     "tags": [],
     "links": [
+      "docs/remote-connectors",
       "docs/daemon",
       "docs/hooks",
       "docs/cli"
@@ -295,6 +297,18 @@
     "links": [],
     "collection": "docs"
   },
+  "docs/remote-connectors": {
+    "title": "Remote Harness Connectors",
+    "url": "/docs/remote-connectors/",
+    "tags": [],
+    "links": [
+      "docs/self-hosting",
+      "docs/auth",
+      "docs/harnesses",
+      "docs/cli"
+    ],
+    "collection": "docs"
+  },
   "docs/repo_map": {
     "title": "repo_map",
     "url": "/docs/repo_map/",
@@ -380,6 +394,13 @@
     "links": [],
     "collection": "docs"
   },
+  "docs/upgrading": {
+    "title": "upgrading",
+    "url": "/docs/upgrading/",
+    "tags": [],
+    "links": [],
+    "collection": "docs"
+  },
   "docs/what-is-signet": {
     "title": "What Is Signet",
     "url": "/docs/what-is-signet/",
@@ -434,16 +455,16 @@
     "url": "/blog/introducing-signet/",
     "tags": [
       "vision",
-      "identity",
+      "memory",
       "architecture",
       "announcement"
     ],
     "links": [
       "docs/memory",
       "docs/secrets",
-      "docs/skills",
       "blog/knowledge-architecture",
       "docs/knowledge-architecture",
+      "docs/skills",
       "blog/why-local-first-memory"
     ],
     "collection": "blog"
@@ -588,26 +609,15 @@
     "collection": "blog"
   },
   "blog/you-think-signet-is-a-memory-system": {
-    "title": "You Think Signet Is a Memory System",
+    "title": "Signet Is More Than a Memory API",
     "url": "/blog/you-think-signet-is-a-memory-system/",
     "tags": [
       "positioning",
       "architecture",
-      "identity"
+      "memory",
+      "secrets"
     ],
-    "links": [
-      "docs/dashboard",
-      "blog/introducing-signet",
-      "docs/memory",
-      "docs/secrets",
-      "docs/skills",
-      "docs/daemon",
-      "docs/harnesses",
-      "docs/pipeline",
-      "blog/knowledge-architecture",
-      "docs/knowledge-architecture",
-      "blog/why-local-first-memory"
-    ],
+    "links": [],
     "collection": "blog"
   }
 }

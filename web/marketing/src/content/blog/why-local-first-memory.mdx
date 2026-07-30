@@ -21,7 +21,7 @@ This isn't hypothetical. We've watched it happen. Platforms deprecate features, 
 
 ## SQLite is the Source of Truth
 
-In Signet, a SQLite database on your machine is the source of truth for everything. Your memories, your agent's identity, its [[skills]] — all stored locally in a format you can inspect, back up, and version control.
+In Signet, a SQLite database on your machine is the source of truth for structured memory. Memories, workspace instructions, and [[skills]] stay local in formats you can inspect, back up, and version control.
 
 Markdown files like `AGENTS.md` and `MEMORY.md` are generated *outputs* from that database. The [[daemon]] watches for changes and regenerates [[harnesses|harness-specific configs]] for whatever platforms you use — Claude Code, OpenCode, Cursor, whatever comes next. The database is canonical. Everything else is a view.
 
@@ -37,7 +37,7 @@ This isn't just a privacy stance — it's a reliability stance. Your agent works
 
 Because the database is local and the format is open, you're never locked in. Signet connectors generate platform-specific configs from the same source of truth. Switch from Claude Code to Cursor? Your agent comes with you. Try out a new coding assistant? Signet adapts.
 
-This is what "portable identity" actually means. Not "export your data as a JSON blob and hope the next platform can parse it." Actual, live synchronization across every tool you use, powered by a daemon that watches your local database and keeps everything in sync.
+This is what portable memory means. Not "export your data as a JSON blob and hope the next platform can parse it." Actual, live synchronization across every tool you use, powered by a daemon that watches your local database and keeps everything in sync.
 
 ## Fast, Private, Verifiable
 
@@ -53,6 +53,6 @@ Local-first isn't just about philosophy. It's practical.
 
 We believe the future of AI agents is local-first, user-owned, and platform-agnostic. Not because it's the easiest path — cloud is always easier to ship — but because it's the right one.
 
-Your agent should be yours. Your memories should be yours. Your identity should be yours.
+Your agent should be yours. Your memories and secrets should be yours.
 
 That's what we're building.

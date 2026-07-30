@@ -1880,7 +1880,7 @@
                   <div class="insight__tag">observation · inference-routing · raised by Mira</div>
                 </div>
                 <div class="brief__pane" hidden>
-                  <div class="insight__txt">Your reading on <b>"infrastructure-forward positioning"</b> is converging. Six sources now point at the same headline territory (<i>persistent identity for intelligent systems</i>). This looks ready to commit as messaging.</div>
+                  <div class="insight__txt">Your reading on <b>"infrastructure-forward positioning"</b> is converging. Six sources now point at the same headline territory (<i>portable memory and secure access across AI tools</i>). This looks ready to commit as messaging.</div>
                   <div class="insight__tag">convergence · 6 sources · positioning</div>
                 </div>
                 <div class="brief__caption mono">Synthesized from 126 memories · 3 insights</div>
@@ -2211,7 +2211,7 @@
                     </div>
                   </div>
                   <div class="q">
-                    <div class="q__txt">Is <b>"Kestrel"</b> the same identity as the ops bot, or a new agent?</div>
+                    <div class="q__txt">Is <b>"Kestrel"</b> the same agent scope as the ops bot, or a new one?</div>
                     <div class="q__actions">
                       <button class="mini-btn mini-btn--ghost">Merge</button>
                       <button class="mini-btn mini-btn--primary">New agent</button>
@@ -2956,7 +2956,7 @@
         const MEMORIES = [
           { id: "mem-948-decision", who: "Nicholai", type: "decision", workflow: "semantic", importance: 0.92, pinned: true, source: "obsidian", srcLabel: "Obsidian", via: "Vault \u00b7 Nicholai", tags: ["dashboard", "#948", "react"], created: "2026-07-22T06:40:00Z", content: "Dashboard rewrite moves to Vite + React 19 + shadcn/ui. Svelte is out. Decided on the static-SPA app:// contract as the deciding factor for Electron compatibility." },
           { id: "mem-948-tension", who: "Mira", type: "observation", workflow: "episodic", importance: 0.71, pinned: false, source: "agent", srcLabel: "Mira", via: "claude-code \u00b7 recall", tags: ["inference", "local-first"], created: "2026-07-22T03:12:00Z", content: "Flagged tension: keeps reaching for hosted inference while insisting on local-first ownership. Notes contradict on this 4 times this week." },
-          { id: "mem-positioning", who: "Nicholai", type: "learning", workflow: "semantic", importance: 0.68, pinned: false, source: "notion", srcLabel: "Notion", via: "Product workspace", tags: ["positioning", "marketing"], created: "2026-07-21T14:05:00Z", content: "Infrastructure-forward positioning is converging. Six sources point at headline territory: persistent identity for intelligent systems." },
+          { id: "mem-positioning", who: "Nicholai", type: "learning", workflow: "semantic", importance: 0.68, pinned: false, source: "notion", srcLabel: "Notion", via: "Product workspace", tags: ["positioning", "marketing"], created: "2026-07-21T14:05:00Z", content: "Infrastructure-forward positioning is converging. Six sources point at headline territory: portable memory and secure access across AI tools." },
           { id: "mem-palette", who: "Ant", type: "preference", workflow: "procedural", importance: 0.55, pinned: false, source: "agent", srcLabel: "Ant", via: "pi \u00b7 session", tags: ["design", "oklch"], created: "2026-07-21T11:30:00Z", content: "Neutral monochrome oklch baseline for the dashboard. Radius 0.3rem, flat shadows. Geist / Geist Mono fonts. No retro-tech, no SaaS slop." },
           { id: "mem-pipeline", who: "Kestrel", type: "fact", workflow: "procedural", importance: 0.62, pinned: false, source: "github", srcLabel: "GitHub", via: "Signet-AI/signetai", tags: ["pipeline", "daemon"], created: "2026-07-20T19:18:00Z", content: "Daemon pipeline stages: extraction, decision, optional knowledge graph, retention decay, document ingest, maintenance, session summary." },
           { id: "mem-issue-422", who: "Ant", type: "issue", workflow: "episodic", importance: 0.84, pinned: true, source: "slack", srcLabel: "Slack", via: "#engineering", tags: ["bug", "scoping"], created: "2026-07-20T09:22:00Z", content: "Cross-agent memory reads must thread both agent_id and agentId. Hardcoding 'default' for scoped paths is a scoping leak." },
@@ -3420,11 +3420,11 @@
         ];
         // markdown content per skill (realistic excerpts)
         const CONTENT = {
-          onboarding: { path: "skills/onboarding/SKILL.md", tags: ["builtin", "invocable"], html: `<h1>/onboarding</h1><p>Interactive interview to set up your Signet workspace (~5-10 minutes). Writes identity files to <code>~/.agents/</code> — does not access external APIs, send data anywhere, or execute arbitrary code.</p><h2>What This Skill Does</h2><p>This skill writes configuration files to <code>~/.agents/</code>. Specifically:</p><ul><li><code>agent.yaml</code> — agent config and model defaults</li><li><code>AGENTS.md</code> — repo-level AI operating instructions</li><li><code>SOUL.md</code> — agent personality and values</li><li><code>IDENTITY.md</code> — agent name and identity</li><li><code>USER.md</code> — user context and preferences</li></ul><blockquote>Use when user runs <code>/onboarding</code> or says 'set up my agent'.</blockquote>` },
+          onboarding: { path: "skills/onboarding/SKILL.md", tags: ["builtin", "invocable"], html: `<h1>/onboarding</h1><p>Interactive interview to set up your Signet workspace (~5-10 minutes). Writes workspace instruction files to <code>~/.agents/</code> — does not access external APIs, send data anywhere, or execute arbitrary code.</p><h2>What This Skill Does</h2><p>This skill writes configuration files to <code>~/.agents/</code>. Specifically:</p><ul><li><code>agent.yaml</code> — config and model defaults</li><li><code>AGENTS.md</code> — operating instructions</li><li><code>SOUL.md</code> — working style and values</li><li><code>IDENTITY.md</code> — workspace name and metadata</li><li><code>USER.md</code> — user context and preferences</li></ul><blockquote>Use when user runs <code>/onboarding</code> or says 'set up my agent'.</blockquote>` },
           recall: { path: "skills/recall/SKILL.md", tags: ["builtin", "invocable"], html: `<h1>/recall</h1><p>Use this skill for targeted explicit recall. It is not the same surface as prompt-submit context injection.</p><p>Signet's canonical explicit recall endpoint is <code>POST /api/memory/recall</code>. The CLI, MCP, and hook recall surfaces should stay thin wrappers around that endpoint.</p><h2>Usage</h2><pre><code>POST /api/memory/recall\n{ "query": "dashboard design decisions",\n  "limit": 5,\n  "agentId": "default" }</code></pre><p>Returns scored results with provenance — <code>source</code>, <code>score</code>, <code>created_at</code>, and supplementary context.</p>` },
           remember: { path: "skills/remember/SKILL.md", tags: ["builtin", "invocable"], html: `<h1>/remember</h1><p>Save an explicit scoped memory through Signet. Use only when the user clearly asks to remember something or when a tool/harness must persist an explicit memory row.</p><h2>Memory Types</h2><table><tr><th>Type</th><th>Use for</th></tr><tr><td>fact</td><td>Durable knowledge the agent owns</td></tr><tr><td>decision</td><td>Choices that should persist</td></tr><tr><td>preference</td><td>User style/workflow preferences</td></tr><tr><td>learning</td><td>Insights and observations</td></tr></table><p>Memories are scoped by <code>agent_id</code> and carry provenance metadata.</p>` },
           "memory-debug": { path: "skills/memory-debug/SKILL.md", tags: ["builtin"], html: `<h1>memory-debug</h1><p>Diagnose Signet memory, recall, source, session, embedding, and graph issues from runtime truth without bypassing scope or provenance.</p><h2>Common Issues</h2><ul><li><b>Empty recall</b> — check embedding provider, verify <code>sqlite-vec</code> availability</li><li><b>Missing source hits</b> — verify source is enabled and indexed</li><li><b>Stale graph</b> — check ontology apply pipeline and entity_dependencies</li><li><b>Cosine fallback</b> — <code>sqlite-vec</code> not loaded, daemon-side fallback active</li></ul>` },
-          signet: { path: "skills/signet/SKILL.md", tags: ["builtin"], html: `<h1>signet</h1><p>Operate Signet as the local source-backed substrate for agent identity, scoped memory, provenance, ontology, skills, secrets, sources, and harness integrations.</p><h2>Core Concepts</h2><p>Signet is a <b>local-first</b> substrate. All data lives in <code>$SIGNET_WORKSPACE</code> (default <code>~/.agents/</code>). Nothing leaves the machine unless explicitly configured.</p><blockquote>The source stays canonical. Signet reads from the vault — it does not edit notes, rewrite frontmatter, or create files inside the source directory.</blockquote>` },
+          signet: { path: "skills/signet/SKILL.md", tags: ["builtin"], html: `<h1>signet</h1><p>Operate Signet as the local source-backed memory and secrets layer, with scoped recall, provenance, ontology, skills, sources, and harness integrations.</p><h2>Core Concepts</h2><p>Signet is a <b>local-first</b> substrate. All data lives in <code>$SIGNET_WORKSPACE</code> (default <code>~/.agents/</code>). Nothing leaves the machine unless explicitly configured.</p><blockquote>The source stays canonical. Signet reads from the vault — it does not edit notes, rewrite frontmatter, or create files inside the source directory.</blockquote>` },
           "skill-creator": { path: "skills/skill-creator/SKILL.md", tags: ["builtin"], html: `<h1>skill-creator</h1><p>Guide for discovering, installing, and creating effective skills. This skill should be used when users want to discover and install existing skills or create a new skill that extends capabilities with specialized knowledge, workflows, or tool integrations.</p><h2>Skill Structure</h2><pre><code>skills/my-skill/\n└── SKILL.md</code></pre><p>Each <code>SKILL.md</code> has YAML frontmatter:</p><pre><code>---\nname: my-skill\ndescription: "When to use this skill"\nuser_invocable: false\nbuiltin: false\n---</code></pre>` },
           "web-design": { path: "skills/web-design/SKILL.md", tags: ["custom"], html: `<h1>web-design</h1><p>Web design — distinctive, production-grade frontend interfaces and high-converting landing pages. Use when building web components, pages, applications, landing pages, or any web UI.</p><h2>Coverage</h2><ul><li>Aesthetic direction, typography, color, motion</li><li>Spatial composition and conversion optimization</li><li>Hero sections, CTA psychology, above-the-fold design</li><li>F-pattern reading and visual hierarchy</li></ul><blockquote>NOT for dashboards or admin panels — use <code>interface-design</code>.</blockquote>` },
           "astro-portfolio-site": { path: "skills/astro-portfolio-site/SKILL.md", tags: ["custom"], html: `<h1>astro-portfolio-site</h1><p>Build a complete indie studio, small business, or creative portfolio website from a client brief and brand assets. Produces a production-ready Astro 5 + React 19 + Tailwind CSS 4 + GSAP site deployed to Cloudflare Pages.</p><h2>Stack</h2><table><tr><th>Layer</th><th>Choice</th></tr><tr><td>Framework</td><td>Astro 5</td></tr><tr><td>UI</td><td>React 19</td></tr><tr><td>Styling</td><td>Tailwind CSS 4</td></tr><tr><td>Motion</td><td>GSAP</td></tr><tr><td>Deploy</td><td>Cloudflare Pages</td></tr></table>` },
@@ -3605,7 +3605,7 @@
           "DREAMING.md": "# DREAMING\n\nRead accumulated source evidence and turn it into\nontology structure. Apply first with provenance.\nHigh-confidence maintenance should use audited\noperation handlers. Do not rewrite raw transcripts.",
           "MEMORY.md": "# MEMORY\n\nProcedurally generated working ledger. Do not hand-edit\n\u2014 the synthesis hook regenerates this file from the\ntemporal DAG after each compaction.",
         };
-        const DEFAULT_PREVIEW = "# " + "\n\nThis identity file has not been configured yet.\nClick Edit to define the agent prompt.";
+        const DEFAULT_PREVIEW = "# " + "\n\nThis workspace file has not been configured yet.\nClick Edit to define the prompt.";
         let activeFile = null;
         function detailHtml(a) {
           const connLabel = a.connections > 0 ? a.connections + " active connections" : "No active connections";
@@ -3634,7 +3634,7 @@
             "</div>",
             '<div class="ag-detail__body">',
               '<div class="ag-section"><div class="ag-section__label">Connected harnesses</div><div class="ag-harnesses">' + harnessHtml + "</div></div>",
-              '<div class="ag-section"><div class="ag-section__label">Identity stack</div><div class="ag-tags">' + tags + "</div></div>",
+              '<div class="ag-section"><div class="ag-section__label">Workspace memory</div><div class="ag-tags">' + tags + "</div></div>",
               '<div class="ag-section ag-section--grow"><div class="ag-editor"><div class="ag-editor__bar"><b>' + showFile + '</b><span class="sep">\u00b7</span>' + fileSize + ' bytes<span class="sep">\u00b7</span>Read-only</div><div class="ag-editor__surface">' + editorLines + "</div></div></div>",
             "</div>",
             '<div class="ag-custody">',
@@ -3688,7 +3688,7 @@
           { id: "m-frameless", label: "frameless chrome", kind: "memory", cluster: "dashboard", mentions: 1 },
           // cluster: positioning
           { id: "e-positioning", label: "infrastructure-forward", kind: "entity", cluster: "positioning", mentions: 28 },
-          { id: "a-headline", label: "persistent identity", kind: "aspect", cluster: "positioning", mentions: 14 },
+          { id: "a-headline", label: "portable memory", kind: "aspect", cluster: "positioning", mentions: 14 },
           { id: "a-local-first", label: "local-first", kind: "aspect", cluster: "positioning", mentions: 16 },
           { id: "m-pos", label: "positioning convergence", kind: "memory", cluster: "positioning", mentions: 1 },
           { id: "m-oss-trust", label: "OSS trust story", kind: "memory", cluster: "positioning", mentions: 1 },
@@ -3710,12 +3710,12 @@
           { id: "a-visibility", label: "visibility filter", kind: "aspect", cluster: "scoping", mentions: 4 },
           { id: "m-issue422", label: "agent_id leak", kind: "memory", cluster: "scoping", mentions: 1 },
           // cluster: identity stack
-          { id: "e-identity", label: "identity system", kind: "entity", cluster: "identity", mentions: 19 },
+          { id: "e-identity", label: "workspace memory", kind: "entity", cluster: "identity", mentions: 19 },
           { id: "a-soul", label: "SOUL.md", kind: "aspect", cluster: "identity", mentions: 11 },
           { id: "a-agents-md", label: "AGENTS.md", kind: "aspect", cluster: "identity", mentions: 14 },
           { id: "a-identity-md", label: "IDENTITY.md", kind: "aspect", cluster: "identity", mentions: 8 },
           { id: "a-user-md", label: "USER.md", kind: "aspect", cluster: "identity", mentions: 6 },
-          { id: "a-presets", label: "identity presets", kind: "aspect", cluster: "identity", mentions: 7 },
+          { id: "a-presets", label: "workspace presets", kind: "aspect", cluster: "identity", mentions: 7 },
           // cluster: pipeline & dreaming
           { id: "e-pipeline", label: "daemon pipeline", kind: "entity", cluster: "pipeline", mentions: 24 },
           { id: "a-extract", label: "extraction stage", kind: "aspect", cluster: "pipeline", mentions: 8 },
@@ -4260,7 +4260,7 @@
             cites: [{ color: "#22d3ee", txt: "Dashboard rewrite moves to Vite + React 19 + shadcn/ui.", meta: "mem-948 \u00b7 obsidian" }],
             log: ["recall(hybrid, top=8) \u2192 3 matches", "cluster resolved (5 nodes)"] },
           { q: ["positioning", "headline", "marketing", "infrastructure"], focus: "e-positioning", title: "Positioning convergence", a: "<b>Infrastructure-forward positioning</b> converging across 6 sources.", src: "6 memories \u00b7 positioning cluster",
-            cites: [{ color: "#22d3ee", txt: "Persistent identity for intelligent systems.", meta: "mem-positioning \u00b7 notion" }],
+            cites: [{ color: "#22d3ee", txt: "Portable memory and secure access across AI tools.", meta: "mem-positioning \u00b7 notion" }],
             log: ["recall(hybrid, top=8) \u2192 6 matches", "cluster resolved (3 nodes)"] },
           { q: ["inference", "model", "hosted", "local", "tension"], focus: "e-inference", title: "Inference tension", a: "<b>Mira flagged a tension</b>: hosted inference vs local-first ownership.", src: "2 memories \u00b7 inference cluster",
             cites: [{ color: "#22d3ee", txt: "Hosted inference vs local-first ownership.", meta: "mem-tension \u00b7 agent:Mira" }],

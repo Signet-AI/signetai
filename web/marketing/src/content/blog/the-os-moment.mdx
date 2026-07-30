@@ -21,7 +21,7 @@ NemoClaw answers the question: *how do we safely run agents?*
 
 It does not answer: *how do agents remember?*
 
-NemoClaw is explicitly stateless between sessions. No memory extraction. No knowledge graph. No session persistence. No identity continuity. It secures the runtime and trusts OpenClaw to handle everything else.
+NemoClaw is explicitly stateless between sessions. No memory extraction. No knowledge graph. No session persistence. No cross-session context. It secures the runtime and trusts OpenClaw to handle everything else.
 
 The problem is that OpenClaw's memory is broken. And everyone knows it.
 
@@ -83,12 +83,12 @@ The same thing is happening now.
 applications
 agents
 execution security       ← NemoClaw
-persistent cognition     ← Signet
+memory + secrets         ← Signet
 models
 hardware
 ```
 
-NemoClaw secures the runtime. Signet provides the mind. They're not competing layers — they're complementary. An agent running inside NemoClaw's sandbox still has no memory between sessions, no identity continuity, no predictive context. An agent running with Signet but no sandbox has memory but no security guarantees.
+NemoClaw secures the runtime. Signet provides memory and secrets. They're not competing layers — they're complementary. An agent running inside NemoClaw's sandbox still has no memory between sessions or predictive context. An agent running with Signet but no sandbox has memory but no security guarantees.
 
 The full stack needs both.
 
@@ -96,7 +96,7 @@ The full stack needs both.
 
 Jensen's Linux analogy is more useful than he probably intended.
 
-On Linux, `/home` is where your identity lives. Your dotfiles, your SSH keys, your shell configuration, your editor preferences. You can reinstall the OS, swap the kernel, change distributions entirely — and your home directory carries your identity forward.
+On Linux, `/home` is where your working state lives. Your dotfiles, your SSH keys, your shell configuration, your editor preferences. You can reinstall the OS, swap the kernel, change distributions entirely — and your home directory carries that state forward.
 
 Signet is `~/.agents/`. Plain files. Version-controlled. Human-readable.
 
@@ -105,7 +105,7 @@ Signet is `~/.agents/`. Plain files. Version-controlled. Human-readable.
   agent.yaml      # runtime config
   AGENTS.md       # operating instructions
   SOUL.md         # personality and voice
-  IDENTITY.md     # structured identity
+  IDENTITY.md     # workspace name and metadata
   USER.md         # operator profile
   MEMORY.md       # synthesized working knowledge
   skills/         # installed capabilities
@@ -118,9 +118,9 @@ This isn't a feature. It's an architecture that treats agent continuity as a fir
 
 ## The timing
 
-The agent ecosystem just declared itself modular. NVIDIA validated the layered model by building a security layer on top of an open runtime. That's the same bet we made when we built Signet as a cognitive layer that plugs into any harness.
+The agent ecosystem just declared itself modular. NVIDIA validated the layered model by building a security layer on top of an open runtime. That's the same bet we made when we built Signet as a memory and secrets layer that plugs into any harness.
 
-Jensen is right that every company needs an OpenClaw strategy. But an OpenClaw strategy without persistent cognition is a strategy for agents that start over every morning. Agents that lose context mid-conversation. Agents that can't learn from yesterday's mistakes.
+Jensen is right that every company needs an OpenClaw strategy. But an OpenClaw strategy without portable memory is a strategy for agents that start over every morning. Agents that lose context mid-conversation. Agents that can't learn from yesterday's mistakes.
 
 The OS moment is here. The question is whether the stack ships with a home directory or not.
 

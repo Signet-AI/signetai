@@ -1,15 +1,14 @@
 ---
-import Base from "../layouts/Base.astro";
-import Nav from "../components/Nav.astro";
 import Footer from "../components/Footer.astro";
+import Nav from "../components/Nav.astro";
 import StructuredData from "../components/StructuredData.astro";
+import ArchCta from "../components/architecture/ArchCta.astro";
+import ArchDataFlow from "../components/architecture/ArchDataFlow.astro";
+import ArchHarnesses from "../components/architecture/ArchHarnesses.astro";
 import ArchHero from "../components/architecture/ArchHero.astro";
 import ArchOverview from "../components/architecture/ArchOverview.astro";
-import ArchDataFlow from "../components/architecture/ArchDataFlow.astro";
 import ArchPipeline from "../components/architecture/ArchPipeline.astro";
-import ArchHarnesses from "../components/architecture/ArchHarnesses.astro";
-import ArchIdentity from "../components/architecture/ArchIdentity.astro";
-import ArchCta from "../components/architecture/ArchCta.astro";
+import Base from "../layouts/Base.astro";
 import "../styles/architecture.css";
 
 const siteUrl = Astro.site?.toString().replace(/\/$/, "") ?? "https://signetai.sh";
@@ -17,7 +16,7 @@ const siteUrl = Astro.site?.toString().replace(/\/$/, "") ?? "https://signetai.s
 
 <Base
   title="How Signet Works — SignetAI"
-  description="Architecture overview of Signet: local-first memory pipeline, platform connectors, decentralized identity, and encrypted sync for AI agents."
+  description="Architecture overview of Signet: local-first memory, platform connectors, and encrypted secrets for AI agents."
 >
   <Nav />
   <main class="arch-page">
@@ -26,7 +25,6 @@ const siteUrl = Astro.site?.toString().replace(/\/$/, "") ?? "https://signetai.s
     <ArchDataFlow />
     <ArchPipeline />
     <ArchHarnesses />
-    <ArchIdentity />
     <ArchCta />
   </main>
   <Footer />
@@ -34,7 +32,7 @@ const siteUrl = Astro.site?.toString().replace(/\/$/, "") ?? "https://signetai.s
     '@context': 'https://schema.org',
     '@type': 'TechArticle',
     headline: 'How Signet Works',
-    description: 'Architecture overview of Signet: local-first memory pipeline, platform connectors, and decentralized identity for AI agents.',
+    description: 'Architecture overview of Signet: local-first memory, platform connectors, and encrypted secrets for AI agents.',
     url: `${siteUrl}/how-it-works`,
     publisher: {
       '@type': 'Organization',

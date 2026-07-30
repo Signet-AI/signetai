@@ -75,13 +75,13 @@ Write-time intelligence, read-time speed. That's the trade.
 
 All of this is still about retrieval. And retrieval is only one dimension of what makes an agent persistent.
 
-Consider what happens after you solve retrieval perfectly. Your agent can find any fact from any past conversation with 100% accuracy. Now ask: does it know who it is? Does it maintain personality across sessions? Does it remember *why* it chose one architecture over another three weeks ago? Can it work in Claude Code, then continue in Cursor, then pick up in OpenCode, as the same entity, with the same knowledge, the same values, the same understanding of your work?
+Consider what happens after you solve retrieval perfectly. Your agent can find any fact from any past conversation with 100% accuracy. Now ask: does it preserve your instructions and preferences across sessions? Does it remember *why* one architecture was chosen over another three weeks ago? Can it work in Claude Code, then continue in Cursor, then pick up in OpenCode with the same knowledge and understanding of your work?
 
-These are not retrieval problems. They're persistence problems. Identity problems. Continuity problems. They live in a layer of the stack that most memory systems don't address because they've framed the entire challenge as "find the fact."
+These are not retrieval problems. They're persistence and continuity problems. They live in a layer of the stack that most memory systems don't address because they've framed the entire challenge as "find the fact."
 
 Signet addresses them because we think they're the actual hard problem.
 
-**Identity persistence.** Agents in Signet have identity files that define who they are, their personality, values, and behavioral guidelines. These files travel with the agent across platforms. The model is a guest in a persistent environment, not the center of the system. We wrote about this architecture in [[blog/you-think-signet-is-a-memory-system|You Think Signet Is a Memory System]].
+**Durable instructions.** Signet treats workspace instructions, preferences, and behavioral guidelines as memory. These files travel across platforms with the rest of the context. The model is a guest in a persistent environment, not the owner of it. We wrote about this architecture in [[blog/you-think-signet-is-a-memory-system|Signet Is More Than a Memory API]].
 
 **Decision tracking.** Fourteen regex patterns detect decision language at write time: "chose X over Y," "switched from," "going with," "opted for." Detected decisions auto-promote to constraints, knowledge that *always* surfaces in recall regardless of relevance scoring. The agent doesn't forget why it made a choice. It carries that forward, forever.
 
@@ -115,7 +115,7 @@ Honesty matters more than optics.
 
 Signet's retrieval is strong. 100% Hit@10 across configurations. The graph-based architecture scales, runs locally, and requires no per-query LLM calls. We're confident in the approach.
 
-Many of the capabilities that sit on top of retrieval, identity persistence, knowledge distillation, decision tracking, and cross-platform continuity, are real and shipping. Others, especially the learned scoring layer, are the convergence point the current substrate is building toward. The important claim is not that every part is perfectly mature today. It is that the architecture is aimed at a bigger problem than retrieval.
+Many of the capabilities that sit on top of retrieval, durable instructions, knowledge distillation, decision tracking, and cross-platform continuity are real and shipping. Others, especially the learned scoring layer, are the convergence point the current substrate is building toward. The important claim is not that every part is perfectly mature today. It is that the architecture is aimed at a bigger problem than retrieval.
 
 What we don't have yet is large-scale benchmark validation of the full-stack accuracy number. We need to run the complete 50+ question suite with all architectural improvements enabled and get a clean number. That work is in progress. We'll publish it when it's ready, with full methodology, reproducibility instructions, and MemScore format.
 

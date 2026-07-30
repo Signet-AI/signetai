@@ -15,7 +15,7 @@ export async function GET(context: APIContext) {
 	const sections: string[] = [
 		"# SignetAI — Full Documentation",
 		"",
-		"> Self-hosted AI memory, identity, and secrets for AI agents. Portable state across models and harnesses including Hermes Agent and OpenClaw.",
+		"> Self-hosted memory and secrets for AI agents. Portable across models and harnesses including Hermes Agent and OpenClaw.",
 		"",
 		`Source: ${site}`,
 		"",

@@ -27,9 +27,9 @@ non-interactive flags. Never silently choose harness/provider settings.
 
 ## What is Signet?
 
-Signet is the open standard for portable AI agent identity. It gives
-you — the agent — persistent memory, a stable identity, a secrets
-vault, and installable skills that travel with you across platforms.
+Signet is a portable memory and secrets layer for AI tools. It gives
+you persistent memory, a secrets vault, and installable skills that
+work across platforms.
 
 The version of Signet you are installing is **not** a framework, SDK, 
 or API wrapper. It is a background
@@ -50,14 +50,14 @@ WAIT FOR THEM TO CONFIRM BEFORE PROCEEDING.
 
 ### Where data lives
 
-All agent data lives at `~/.agents/`:
+All Signet data lives at `~/.agents/`:
 
 ```
 ~/.agents/
   agent.yaml       # Configuration manifest
   AGENTS.md        # Operational instructions (you)
   SOUL.md          # Personality and tone
-  IDENTITY.md      # Structured identity metadata
+  IDENTITY.md      # Workspace name and metadata
   USER.md          # User profile
   MEMORY.md        # Working memory summary (auto-generated)
   memory/
@@ -243,8 +243,8 @@ Signet only writes to these locations inside the home directory:
 ## Installation
 
 > GATE: Before proceeding, tell your user:
-> "I'm going to install Signet, which will give me persistent memory,
-> an identity system, and a secrets vault. The installer uses the compiled
+> "I'm going to install Signet, which will give me persistent memory
+> and a secrets vault. The installer uses the compiled
 > Signet binary and runs a small background daemon on port 3850. It only
 > writes to directories inside your home folder — never system files,
 > never with sudo. Ready to proceed?"
@@ -377,7 +377,7 @@ If you do not have those choices, install first, ask the user, then run
 `signet setup`.
 
 The wizard will ask:
-1. **Agent name and description** — the identity for your agent
+1. **Workspace name and description**
 2. **Platform selection** — which harnesses to configure (Claude Code,
    OpenClaw, OpenCode). Select all that apply.
 3. **Embedding provider** — Ollama (local, recommended), OpenAI
@@ -452,13 +452,13 @@ If `signet status` shows the daemon is not running, start it with
 
 ## Migration from Existing Setup
 
-If the agent already has identity files (from a Clawdbot workspace,
+If the workspace already has instruction files (from a Clawdbot workspace,
 custom AGENTS.md, SOUL.md, etc.), the setup wizard handles migration
 automatically.
 
-> GATE: If you detect that the user already has agent identity files
+> GATE: If you detect that the user already has workspace instruction files
 > (AGENTS.md, SOUL.md, memory logs, etc.), tell them:
-> "I can see you already have agent identity files set up. Signet's
+> "I can see you already have workspace instruction files set up. Signet's
 > setup wizard will detect these and offer to migrate them into the
 > unified `~/.agents/` directory. This preserves all your existing
 > files — nothing gets deleted. The wizard will import your memory
@@ -470,7 +470,7 @@ automatically.
 
 ### What happens during migration
 
-1. The wizard detects existing identity files in common locations
+1. The wizard detects existing workspace instruction files in common locations
 2. It shows what it found and presents a migration plan
 3. With user confirmation, it:
    - Creates `~/.agents/` as the new home directory
@@ -544,7 +544,7 @@ of what Signet is supposed to fix.
 4. Sets `memorySearch.enabled: false` — this is the critical line
    that disables OpenClaw's built-in memory search.
 
-5. Sets the workspace to `~/.agents/` so OpenClaw reads identity
+5. Sets the workspace to `~/.agents/` so OpenClaw reads workspace instructions
    files directly (no generated output file needed).
 
 **Two runtime paths:**
@@ -605,7 +605,7 @@ true`, plus `agents.defaults.memorySearch.enabled: false`.
 
 The Claude Code connector installs:
 - **Session hooks** in `~/.claude/settings.json`:
-  - `SessionStart` — loads identity, instructions, and relevant memories
+  - `SessionStart` — loads workspace instructions and relevant memories
   - `UserPromptSubmit` — injects matching memories per prompt
   - `SessionEnd` — queues transcript for memory extraction
 - **Generated CLAUDE.md** at `~/.claude/CLAUDE.md` from your
@@ -651,7 +651,7 @@ make during installation. Do not repeat them.
 | Defaulting embedding/extraction providers without asking | In non-interactive setup, ask the user which providers they want and pass both flags explicitly. |
 | Building a custom HTTP integration | Use the setup wizard's connector selection. It handles everything. |
 | Treating Clawdbot/Moltbot as separate from OpenClaw | They are the same platform. One connector handles all three. |
-| Skipping setup or manually writing files | Setup configures connectors, hooks, skills, and identity. Use interactive or `--non-interactive`, but do not hand-roll files. |
+| Skipping setup or manually writing files | Setup configures connectors, hooks, skills, memory, and secrets. Use interactive or `--non-interactive`, but do not hand-roll files. |
 | Manually editing `~/.claude/settings.json` hooks | The Claude Code connector manages these. Run setup to install them. |
 | Cloning the git repository to install | Signet is installed via npm/bun as a global package, not by cloning. |
 

@@ -255,7 +255,7 @@ function formatSavedAt(raw: string | null): string {
 				<div class="dialog" role="dialog" aria-modal="true" aria-labelledby="discard-dialog-title">
 					<div class="dialog-title" id="discard-dialog-title">Discard changes?</div>
 					<div class="dialog-body">
-						This will revert all unsaved changes to settings and identity files.
+						This will revert all unsaved changes to settings and workspace files.
 						This cannot be undone.
 					</div>
 					<div class="dialog-actions">

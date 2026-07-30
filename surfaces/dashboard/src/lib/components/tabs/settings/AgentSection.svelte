@@ -30,7 +30,7 @@ function handleAddCustom(): void {
 </script>
 
 {#if st.agentFile}
-	<FormSection description="Core identity metadata and harness configuration. Created by signet setup, synced to all active harnesses on change.">
+	<FormSection description="Core workspace metadata and harness configuration. Created by signet setup, synced to all active harnesses on change.">
 		<FormField label="Name" description="Display name shown in harness configs and session context.">
 			<Input value={st.aStr(["agent", "name"])} oninput={setStr(["agent", "name"])} />
 		</FormField>

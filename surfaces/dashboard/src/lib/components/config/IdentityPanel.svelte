@@ -174,7 +174,7 @@ export function discard(): void {
 			type="button"
 			class="collapse-toggle"
 			onclick={expandPanel}
-			title="Open identity panel"
+			title="Open workspace files"
 		>
 			<PanelLeft size={14} />
 		</button>
@@ -271,7 +271,7 @@ export function discard(): void {
 				/>
 			</div>
 		{:else if mdFiles.length === 0}
-			<div class="panel-empty">No identity files found</div>
+			<div class="panel-empty">No workspace files found</div>
 		{/if}
 	</div>
 {/if}

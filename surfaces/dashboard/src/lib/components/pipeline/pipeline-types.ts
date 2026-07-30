@@ -161,7 +161,7 @@ export const PIPELINE_NODES: readonly PipelineNodeDef[] = [
 		logCategories: ["sync"],
 		diagnosticDomain: "connector",
 		icon: "refresh-cw",
-		description: "Generate CLAUDE.md, AGENTS.md from identity files",
+		description: "Generate CLAUDE.md, AGENTS.md from workspace files",
 	},
 
 	// -- Pipeline workers --
@@ -261,7 +261,7 @@ export const PIPELINE_NODES: readonly PipelineNodeDef[] = [
 	// -- Files --
 	{
 		id: "files",
-		label: "Identity Files",
+		label: "Workspace Files",
 		group: "files",
 		x: 710,
 		y: 430,

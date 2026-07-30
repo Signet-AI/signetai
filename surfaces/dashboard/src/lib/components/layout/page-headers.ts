@@ -12,7 +12,7 @@ export const PAGE_HEADERS = {
 	},
 	settings: {
 		title: "Settings",
-		eyebrow: "Configuration and identity",
+		eyebrow: "Workspace configuration",
 	},
 	memory: {
 		title: "Ontology",

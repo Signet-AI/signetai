@@ -78,14 +78,14 @@ For agents, the harder questions are:
 
 - Which runtime owns the memory?
 - What happens when you switch from Hermes Agent to OpenClaw?
-- Can the agent keep the same identity and instructions?
+- Can the same memory and instructions work across both tools?
 - Can you inspect or repair what was remembered?
 - Does memory get saved automatically when sessions end?
 - Can search combine keywords, semantic similarity, and structured
   relationships?
 
-Signet treats memory as part of a broader portable context layer:
-identity, memory, secrets, skills, provenance, and harness lifecycle hooks.
+Signet treats memory and secrets as shared infrastructure, with provenance,
+workspace instructions, skills, and harness lifecycle hooks built around them.
 That is why it fits this Hermes Agent plus OpenClaw use case better than a
 standalone vector database.
 

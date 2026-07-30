@@ -25,7 +25,7 @@ function setStr(path: string[]) {
 </script>
 
 {#if st.agentFile}
-	<FormSection description="Identity verification method. Controls how the agent proves its identity to peers and registries.">
+	<FormSection description="Verification method. Controls how the agent is verified by peers and registries.">
 		<FormField label="Verification" description="none = local only. erc8128 = wallet-based (recommended). gpg/did = alternative signing. registry = contract-based lookup.">
 			<Select.Root
 				type="single"
@@ -44,7 +44,7 @@ function setStr(path: string[]) {
 			</Select.Root>
 		</FormField>
 		{#if st.aStr(["trust", "verification"]) === "registry"}
-			<FormField label="Registry URL" description="Registry contract address or ENS name for identity lookups.">
+			<FormField label="Registry URL" description="Registry contract address or ENS name used to verify the agent.">
 				<Input value={st.aStr(["trust", "registry"])} oninput={setStr(["trust", "registry"])} />
 			</FormField>
 		{/if}

@@ -3,7 +3,7 @@ title: "What Is Signet"
 description: "A plain-language explanation of what Signet is, how it works, and what it's building toward."
 date: 2026-02-21
 author: "Nicholai & Mr. Claude"
-tags: ["vision", "identity", "architecture", "announcement"]
+tags: ["vision", "memory", "architecture", "announcement"]
 image: /blog/introducing-signet.png
 ---
 
@@ -11,7 +11,7 @@ Signet is the layer between AI agents and AI models.
 
 Models are reasoning engines. They're powerful, but stateless — every session starts fresh, every tool switch resets everything, and the model has no memory of who you are or what you've been working on.
 
-Signet fixes that by giving agents a persistent home. [[identity|Identity]], [[memory|knowledge]], [[secrets]], and [[skills]] all live in that home, independent of whichever model happens to be running. The model is a guest. It reads what it needs, does its work, and writes back what it learned. Swap the model out entirely and the agent stays the same entity.
+Signet fixes that by giving agents a persistent home. [[memory|Memory]] and [[secrets]] live there, independent of whichever model or harness happens to be running. Workspace instructions are part of that durable memory. The model is a guest: it reads what it needs, does its work, and writes back what it learned.
 
 The simplest analogy: Signet is a home directory for AI agents.
 
@@ -20,7 +20,7 @@ The simplest analogy: Signet is a home directory for AI agents.
 
 Today, your AI assistant is tied to a platform. ChatGPT's memory belongs to OpenAI. Claude's memory belongs to Anthropic. Switch tools and you start over. Cancel your subscription and everything disappears.
 
-Signet moves the center of gravity from the AI company to the user. Your agent's identity and knowledge live on your machine, in files and a database you own. You can inspect every memory, back up everything, and carry it to any tool that supports the standard.
+Signet moves the center of gravity from the AI company to the user. Memory and secrets live on your machine, in files and a database you own. You can inspect every memory, back up everything, and carry the same context and secure access to any supported tool.
 
 The agent becomes portable. The model becomes interchangeable.
 
@@ -40,7 +40,7 @@ Signet introduces a layer that doesn't exist yet:
 ```
 applications
 agents
-persistent cognition layer  ← Signet
+memory + secrets            ← Signet
 models
 hardware
 ```
@@ -106,16 +106,20 @@ This is a safety boundary between the model and your infrastructure. The agent c
 
 ## Continuity
 
-An agent running across five sessions at once, on three different platforms, is still one agent. Its experiences branch and merge like version control — same history, different heads, converging back into a single identity.
+An agent running across five sessions at once, on three different platforms, should still use coherent memory. Its experiences branch and merge like version control — same history, different heads, converging back into one durable record.
 
 This is the hard problem. Not just remembering across sessions, but maintaining coherence when the agent is active in multiple places simultaneously. Signet treats continuity as a first-class concern, not an afterthought.
 
 
-## Identity and Trust
+## Secrets and Trust
 
-Signet is building toward a cryptographic identity and trust layer for agents. The goal is portable verification: agents that can be discovered, verified, and authorized across environments without collapsing back into platform lock-in.
+Memory tells an AI tool what matters. Secrets let it act. Neither layer should
+be locked inside a harness.
 
-This isn't about cryptocurrency. It's about provable identity. When an agent acts on your behalf online, there needs to be a trust layer that verifies who it is and what it's authorized to do.
+Signet keeps credentials encrypted and outside model context, then injects
+them only into approved subprocesses. This gives tools practical access
+without turning every prompt, transcript, or plugin into another copy of the
+secret.
 
 
 ## Local-First, Open Standard
@@ -135,7 +139,7 @@ An agent that is yours.
 
 ---
 
-*The difference between a tool that remembers and a mind that persists.*
+**Own your agent. Bring it anywhere.**
 
 ---
 

@@ -8,7 +8,7 @@
 
 # Signet AI
 
-**Own your agent's context.**
+**Own your agent. Bring it anywhere.**
 
 <a href="https://github.com/Signet-AI/signetai/releases"><img src="https://img.shields.io/github/v/release/Signet-AI/signetai?include_prereleases&style=for-the-badge" alt="GitHub release"></a>
 <a href="https://www.npmjs.com/package/signetai"><img src="https://img.shields.io/npm/v/signetai?style=for-the-badge" alt="npm"></a>
@@ -31,9 +31,9 @@ conversations, preferences, mistakes, routines, and private working context.
 
 That memory is no longer a feature. It is infrastructure — and custody matters.
 
-Signet is a local-first context layer for AI agents: memory, optional identity,
-transcripts, source records, provenance, agent instructions, secrets, and
-repair tools in infrastructure you control.
+Signet is a local-first memory and secrets layer for AI tools: durable memory,
+transcripts, source records, provenance, secure credential access, and repair
+tools in infrastructure you control.
 
 Hosted memory APIs are fastest until memory becomes part of your product
 contract: deletion, provenance, repair, portability, and custody of private
@@ -46,7 +46,7 @@ the durable layer underneath your agents.
 
 | Claim | Why it matters |
 |---|---|
-| Local-first custody | SQLite, readable workspace files, transcripts, source records, memories, optional identity files, and secrets metadata live where you control them |
+| Local-first custody | SQLite, readable workspace files, transcripts, source records, memories, and secrets metadata live where you control them |
 | Source-backed recall | Every useful memory can point back to where it came from |
 | Repairable memory | Inspect, edit, supersede, delete, reclassify, and scope bad context |
 | Portable across agents | One layer works across Claude Code, Codex, OpenCode, OpenClaw, Gemini CLI, Hermes Agent, MCP, SDKs, and apps |
@@ -63,7 +63,7 @@ tools change.
 ```bash
 curl -fsSL https://signetai.sh/install.sh | bash
 signet setup                         # interactive setup wizard
-signet setup --identity-mode off     # memory + secrets without Signet-managed identity
+signet setup --identity-mode off     # memory + secrets only
 signet status                        # confirm daemon + pipeline health
 signet dashboard                     # open memory + retrieval inspector
 ```
@@ -111,7 +111,7 @@ Daemon lifecycle: modify · forget · recover
 |---|---|---|
 | Hosted memory APIs | Fast prototypes and managed memory | Signet keeps storage, provenance, ranking policy, repair, deletion, and self-hosting under your control |
 | Harness-specific plugins | Improving memory inside one agent shell | Signet runs underneath many harnesses, so context survives tool churn |
-| Vector/RAG memory | Searching notes and documents | Signet keeps transcripts, identity, source records, repair history, and scoped recall |
+| Vector/RAG memory | Searching notes and documents | Signet keeps transcripts, source records, repair history, and scoped recall |
 | Lightweight local stores | Simple private persistence | Signet adds provenance, dashboard inspection, team policy, connectors, MCP, SDKs, and daemon APIs |
 
 | Stay hosted if... | Switch to Signet when... |
@@ -160,7 +160,7 @@ the tools people already use and gives them one owned memory layer.
 | [Hermes Agent](https://github.com/NousResearch/hermes-agent) | Memory provider plugin | `memory_*`, `recall`, and `remember` tools |
 | [Pi](https://github.com/mariozechner/pi-coding-agent) | Extension + hooks | Memory commands and agent-callable tools |
 | Oh My Pi | Managed extension | Lifecycle recall injection through the managed extension |
-| [Gemini CLI](https://github.com/google-gemini/gemini-cli) | MCP + GEMINI.md sync | On-demand tools plus identity sync |
+| [Gemini CLI](https://github.com/google-gemini/gemini-cli) | MCP + GEMINI.md sync | On-demand tools plus workspace instruction sync |
 
 
 > Don't see your favorite harness? file an [issue](https://github.com/Signet-AI/signetai/issues) and request that it be added!
@@ -233,9 +233,9 @@ signet recall "coding preferences"
 
 ### Multi-agent
 
-Multiple named agents share one daemon and database. Each agent gets its
-own identity directory (`~/.agents/agents/<name>/`) and configurable
-memory visibility:
+Multiple named agents share one daemon and database. Each named scope gets its
+own workspace directory (`~/.agents/agents/<name>/`) and configurable memory
+visibility:
 
 ```bash
 signet agent add alice --memory isolated   # alice sees only her own memories
@@ -245,7 +245,7 @@ signet agent add ci --memory group --group eng  # ci sees memories from the eng 
 signet agent list                          # roster + policies
 signet remember "deploy window is Fridays" --agent alice --private
 signet recall "deploy window" --agent alice  # scoped to alice's visible memories
-signet agent info alice                    # identity files, policy, memory count
+signet agent info alice                    # workspace files, policy, memory count
 ```
 
 Use the secrets subsystem for credentials. Do not store tokens or keys as
@@ -268,7 +268,7 @@ Signet separates memory into three layers:
 
 ```text
 workspace / transcripts
-  truth layer: raw files, identity docs, source records, session history
+  truth layer: raw files, workspace instructions, source records, session history
 
 semantic memory
   navigation layer: summaries, entities, decisions, constraints, relations
@@ -292,7 +292,7 @@ Read more: [Why Signet](./docs/QUICKSTART.md#why-signet) · [Architecture](./doc
 ```text
 Workspace (~/.agents/)
   AGENTS.md, SOUL.md, IDENTITY.md, USER.md, MEMORY.md, transcripts, memory files
-  readable source records and agent identity files
+  readable source records and workspace instruction files
 
 CLI (signet)
   setup, knowledge, secrets, skills, hooks, git sync, service mgmt
@@ -300,7 +300,7 @@ CLI (signet)
 Daemon (@signet/daemon, localhost:3850)
   |-- HTTP API (memory, retrieval, auth, skills, updates, tooling)
   |-- File Watcher
-  |     identity sync, per-agent workspace sync, git auto-commit
+  |     instruction sync, per-agent workspace sync, git auto-commit
   |-- Distillation Layer
   |     extraction -> decision -> graph -> retention
   |-- Retrieval
@@ -319,7 +319,7 @@ Daemon (@signet/daemon, localhost:3850)
         roster sync, agent_id scoping, read-policy SQL enforcement
 
 Core (@signet/core)
-  types, identity, SQLite storage/query, hybrid search, graph traversal
+  types, workspace config, SQLite storage/query, hybrid search, graph traversal
 
 SDK (@signet/sdk)
   typed client, React hooks, Vercel/OpenAI helpers, plugin-facing primitives

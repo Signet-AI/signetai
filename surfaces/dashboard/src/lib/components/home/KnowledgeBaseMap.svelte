@@ -22,7 +22,7 @@ const SIGNET_MEMORY_BASE: KnowledgeBase = {
 	name: "Signet Memory",
 	kind: "memory",
 	provider: "signet",
-	detail: "Native identity memory",
+	detail: "Native memory layer",
 	status: "online",
 	updatedAt: null,
 	x: 14,
@@ -153,7 +153,7 @@ function openSources(): void {
 				</span>
 				<span class="kb-core-copy">
 					<strong>Signet Memory</strong>
-					<small>native identity graph · always on</small>
+					<small>native memory graph · always on</small>
 				</span>
 			</button>
 			<svg class="kb-links" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
@@ -598,4 +598,3 @@ function openSources(): void {
 		}
 	}
 </style>
-
