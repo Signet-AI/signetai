@@ -7,6 +7,7 @@ import type { DbAccessor } from "../db-accessor";
 import type { ProviderTracker } from "../diagnostics";
 import { getLlmProvider } from "../llm";
 import { logger } from "../logger";
+import type { EmbeddingRole } from "../embedding-profile";
 import type { EmbeddingConfig, MemorySearchConfig, PipelineV2Config } from "../memory-config";
 import type { TelemetryCollector } from "../telemetry";
 import type { DecisionConfig } from "./decision";
@@ -236,7 +237,7 @@ export function startPipeline(
 	accessor: DbAccessor,
 	pipelineCfg: PipelineV2Config,
 	embeddingCfg: EmbeddingConfig,
-	fetchEmbedding: (text: string, cfg: EmbeddingConfig) => Promise<number[] | null>,
+	fetchEmbedding: (text: string, cfg: EmbeddingConfig, role?: EmbeddingRole) => Promise<number[] | null>,
 	searchCfg: MemorySearchConfig,
 	agentId: string,
 	providerTracker?: ProviderTracker,

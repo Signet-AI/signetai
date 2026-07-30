@@ -11,6 +11,7 @@ import { DECISION_ACTIONS, buildFtsMatchQuery, type DecisionAction, type Extract
 import { type DbAccessor, isVectorRuntimeUsable } from "../db-accessor";
 import { logger } from "../logger";
 import type { EmbeddingConfig, MemorySearchConfig } from "../memory-config";
+import type { EmbeddingRole } from "../embedding-profile";
 import type { LlmProvider } from "./provider";
 
 // ---------------------------------------------------------------------------
@@ -34,7 +35,7 @@ export interface DecisionConfig {
 	readonly embedding: EmbeddingConfig;
 	readonly search: MemorySearchConfig;
 	readonly timeoutMs?: number;
-	readonly fetchEmbedding: (text: string, cfg: EmbeddingConfig) => Promise<number[] | null>;
+	readonly fetchEmbedding: (text: string, cfg: EmbeddingConfig, role?: EmbeddingRole) => Promise<number[] | null>;
 }
 
 export interface FactDecisionProposal {
@@ -112,7 +113,7 @@ async function findCandidatesVector(
 	const vectorLimit =
 		scope.scope !== null || scope.visibility !== "global" ? limit * VECTOR_OVERFETCH_MULTIPLIER : limit;
 	try {
-		const queryVec = await cfg.fetchEmbedding(query, cfg.embedding);
+		const queryVec = await cfg.fetchEmbedding(query, cfg.embedding, "query");
 		if (queryVec) {
 			const qf32 = new Float32Array(queryVec);
 			accessor.withReadDb((db) => {

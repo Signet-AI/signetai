@@ -31,6 +31,7 @@ import {
 	runMigrations,
 } from "@signet/core";
 import { loadMemoryConfig } from "./memory-config";
+import { ensureEmbeddingIndexState } from "./embedding-index-state";
 
 const isBun = typeof (globalThis as Record<string, unknown>).Bun !== "undefined";
 const require = createRequire(import.meta.url);
@@ -716,11 +717,20 @@ function finishDbAccessorInit(writeConn: SqliteDatabase, opts?: { readonly agent
 	// Ensure FTS5 virtual table exists — may be missing on upgrades from
 	// older installs where the table was dropped or never created.
 	ensureFtsTable(writeConn);
+	const configuredEmbedding = loadMemoryConfig(opts?.agentsDir ?? resolveSqliteAgentsDir()).embedding;
+	const legacyVecSql = writeConn.prepare("SELECT sql FROM sqlite_master WHERE name = 'vec_embeddings' AND type = 'table'").get() as
+		| { sql?: string }
+		| undefined;
+	const legacyDimensions = readVecEmbeddingDimensions(legacyVecSql?.sql);
+	const embeddingIndexState = ensureEmbeddingIndexState(
+		writeConn,
+		legacyDimensions === null ? configuredEmbedding : { ...configuredEmbedding, dimensions: legacyDimensions },
+	);
 
 	// Ensure vec_embeddings virtual table exists with the configured dimensions.
 	// Older tables may lack the TEXT id column or carry stale FLOAT[N] dims.
 	if (vecExtPath) {
-		const vecDimensions = resolveVecEmbeddingDimensions(opts?.agentsDir);
+		const vecDimensions = embeddingIndexState.active.dimensions;
 		try {
 			ensureVecTable(writeConn, vecDimensions);
 		} catch (err) {

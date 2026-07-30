@@ -11,6 +11,7 @@ import type { PipelineEmbeddingTrackerConfig } from "@signet/core";
 import type { DbAccessor } from "./db-accessor";
 import { syncVecDeleteBySourceExceptHash, syncVecInsert, vectorToBlob } from "./db-helpers";
 import { listStaleEmbeddingRows } from "./embedding-coverage";
+import { isActiveEmbeddingConfig } from "./embedding-index-state";
 import { logger } from "./logger";
 import type { EmbeddingConfig } from "./memory-config";
 
@@ -179,6 +180,9 @@ export function startEmbeddingTracker(
 
 			// 4. Batch write in a single write transaction
 			accessor.withWriteTx((db) => {
+				// A promotion may commit while this batch is encoding. Never let a
+				// tracker closed over the previous generation overwrite its vectors.
+				if (!isActiveEmbeddingConfig(db, embeddingCfg)) return;
 				for (const { row, vector, contentHash } of cycle.results) {
 					// Delete stale embeddings for this source
 					syncVecDeleteBySourceExceptHash(db, "memory", row.id, contentHash);

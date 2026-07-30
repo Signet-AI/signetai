@@ -892,12 +892,28 @@ export function parseModifyPatch(
 export let cachedEmbeddingStatus: EmbeddingStatus | null = null;
 export let statusCacheTime = 0;
 export const STATUS_CACHE_TTL = 30000;
+const embeddingStatusCache = new Map<string, { readonly status: EmbeddingStatus; readonly checkedAt: number }>();
+
+function embeddingStatusCacheKey(cfg: EmbeddingConfig): string {
+	return `${cfg.provider}\u0000${cfg.model}\u0000${resolveEmbeddingBaseUrl(cfg)}`;
+}
+
+function cacheEmbeddingStatus(key: string, status: EmbeddingStatus, now: number): void {
+	embeddingStatusCache.set(key, { status, checkedAt: now });
+	// Preserve the existing exported latest-status diagnostics surface.
+	cachedEmbeddingStatus = status;
+	statusCacheTime = now;
+}
 
 export async function checkEmbeddingProvider(cfg: EmbeddingConfig): Promise<EmbeddingStatus> {
 	const now = Date.now();
+	const cacheKey = embeddingStatusCacheKey(cfg);
+	const cached = embeddingStatusCache.get(cacheKey);
 
-	if (cachedEmbeddingStatus && now - statusCacheTime < STATUS_CACHE_TTL) {
-		return cachedEmbeddingStatus;
+	if (cached && now - cached.checkedAt < STATUS_CACHE_TTL) {
+		cachedEmbeddingStatus = cached.status;
+		statusCacheTime = cached.checkedAt;
+		return cached.status;
 	}
 
 	const status: EmbeddingStatus = {
@@ -911,8 +927,7 @@ export async function checkEmbeddingProvider(cfg: EmbeddingConfig): Promise<Embe
 	if (cfg.provider === "none") {
 		status.available = false;
 		status.error = "Embedding provider set to 'none' — vector search disabled";
-		cachedEmbeddingStatus = status;
-		statusCacheTime = now;
+		cacheEmbeddingStatus(cacheKey, status, now);
 		return status;
 	}
 
@@ -1008,8 +1023,7 @@ export async function checkEmbeddingProvider(cfg: EmbeddingConfig): Promise<Embe
 			const apiKey = await resolveEmbeddingApiKey(cfg.api_key);
 			if (!apiKey) {
 				status.error = "Missing OpenAI API key";
-				cachedEmbeddingStatus = status;
-				statusCacheTime = now;
+				cacheEmbeddingStatus(cacheKey, status, now);
 				return status;
 			}
 			const testResult = await fetchEmbedding("test", cfg);
@@ -1024,8 +1038,7 @@ export async function checkEmbeddingProvider(cfg: EmbeddingConfig): Promise<Embe
 		status.error = err instanceof Error ? err.message : "Unknown error";
 	}
 
-	cachedEmbeddingStatus = status;
-	statusCacheTime = now;
+	cacheEmbeddingStatus(cacheKey, status, now);
 	return status;
 }
 

@@ -4,9 +4,10 @@ import { selectWithBudgetSkippingOversized } from "./context-budget";
 import { type ReadDb, getDbAccessor, hasDbAccessor } from "./db-accessor";
 import { logger } from "./logger";
 import type { EmbeddingConfig } from "./memory-config";
+import type { EmbeddingRole } from "./embedding-profile";
 import { countPromptTermOverlap, extractSubstantiveWords, stripUntrustedMetadata } from "./prompt-text";
 
-type FetchEmbedding = (text: string, cfg: EmbeddingConfig) => Promise<number[] | null>;
+type FetchEmbedding = (text: string, cfg: EmbeddingConfig, role?: EmbeddingRole) => Promise<number[] | null>;
 
 type PromptEntityMatch = {
 	readonly entityId: string;
@@ -665,7 +666,7 @@ export async function buildEntityPromptContext({
 		if (!semanticQuery) continue;
 		let queryVector: Float32Array | null = null;
 		try {
-			const vector = await fetchEmbedding(semanticQuery, embedding);
+			const vector = await fetchEmbedding(semanticQuery, embedding, "query");
 			if (vector) queryVector = new Float32Array(vector);
 		} catch (error) {
 			logger.warn("hooks", "Entity attribute semantic scoring failed; using lexical attribute scoring", {

@@ -56,6 +56,28 @@ describe("fetchEmbedding", () => {
 		});
 	});
 
+	it("uses the query formatter when role is passed before request options", async () => {
+		let capturedInput = "";
+		globalThis.fetch = mock((_url: string | URL | Request, init?: RequestInit) => {
+			capturedInput = (JSON.parse(String(init?.body)) as { input: string }).input;
+			return Promise.resolve(Response.json({ data: [{ embedding: [0.1, 0.2, 0.3] }] }));
+		}) as unknown as typeof fetch;
+
+		await fetchEmbedding(
+			"where is my note?",
+			{
+				provider: "openai",
+				model: "nomic-embed-text-v1.5",
+				dimensions: 3,
+				base_url: "http://localhost:1234/v1",
+				profile: "nomic-embed-text-v1.5",
+			},
+			"query",
+		);
+
+		expect(capturedInput).toBe("search_query: where is my note?");
+	});
+
 	it("composes caller abort signals with provider timeouts", async () => {
 		const controller = new AbortController();
 		let capturedSignal: AbortSignal | null | undefined;

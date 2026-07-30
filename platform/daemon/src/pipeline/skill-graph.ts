@@ -12,6 +12,7 @@
 import { createHash } from "node:crypto";
 import type { DbAccessor, WriteDb } from "../db-accessor";
 import { syncVecDeleteByEmbeddingIds, syncVecInsert, vectorToBlob } from "../db-helpers";
+import { isActiveEmbeddingConfig, resolveActiveEmbeddingConfig } from "../embedding-index-state";
 import { logger } from "../logger";
 import type { EmbeddingConfig, PipelineV2Config } from "../memory-config";
 import { extractFactsAndEntities } from "./extraction";
@@ -277,14 +278,16 @@ export async function installSkillNode(
 	// Step 3: Generate embedding from enriched frontmatter
 	let embeddingCreated = false;
 	const embeddingText = buildEmbeddingText(fm);
-	const embVec = await fetchEmbedding(embeddingText, embeddingCfg);
+	const writeConfig = accessor.withReadDb((db) => resolveActiveEmbeddingConfig(db, embeddingCfg));
+	const embVec = await fetchEmbedding(embeddingText, writeConfig);
 
 	if (embVec && embVec.length > 0) {
 		const embId = crypto.randomUUID();
 		const blob = vectorToBlob(embVec);
 		const embHash = skillEmbeddingHash(entityId, input.frontmatter);
 
-		accessor.withWriteTx((db) => {
+		embeddingCreated = accessor.withWriteTx((db) => {
+			if (!isActiveEmbeddingConfig(db, writeConfig)) return false;
 			// Remove any old skill embeddings
 			const oldEmbs = db
 				.prepare(`SELECT id FROM embeddings WHERE source_type = 'skill' AND source_id = ?`)
@@ -314,9 +317,8 @@ export async function installSkillNode(
 			// existing id, not the one we generated above.
 			const actualRow = db.prepare("SELECT id FROM embeddings WHERE content_hash = ?").get(embHash) as { id: string };
 			syncVecInsert(db, actualRow.id, embVec);
+			return true;
 		});
-
-		embeddingCreated = true;
 	}
 
 	// Step 4: Extract entities from SKILL.md body for graph relations

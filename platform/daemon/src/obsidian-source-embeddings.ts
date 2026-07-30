@@ -4,6 +4,7 @@ import { LEGACY_OBSIDIAN_CHUNK_SOURCE_TYPE, SOURCE_CHUNK_SOURCE_TYPE } from "@si
 import { yieldEvery } from "./async-yield";
 import { getDbAccessor } from "./db-accessor";
 import { syncVecDeleteByEmbeddingIds, syncVecInsert, vectorToBlob } from "./db-helpers";
+import { isActiveEmbeddingConfig, resolveActiveEmbeddingConfig } from "./embedding-index-state";
 import type { EmbeddingConfig } from "./memory-config";
 
 export const OBSIDIAN_CHUNK_SOURCE_TYPE = SOURCE_CHUNK_SOURCE_TYPE;
@@ -227,7 +228,10 @@ export function buildObsidianSourceChunks(input: {
 export async function indexObsidianSourceEmbeddings(
 	input: IndexObsidianSourceEmbeddingsInput,
 ): Promise<IndexObsidianSourceEmbeddingsResult> {
-	if (input.embeddingConfig.provider === "none") return { chunks: 0, embedded: 0, skipped: 0 };
+	// Source watchers outlive a config edit. Keep their writes compatible with
+	// active recall while the requested profile is built in the inactive slot.
+	const embeddingConfig = getDbAccessor().withReadDb((db) => resolveActiveEmbeddingConfig(db, input.embeddingConfig));
+	if (embeddingConfig.provider === "none") return { chunks: 0, embedded: 0, skipped: 0 };
 	const chunks = buildObsidianSourceChunks(input);
 	const currentHashes = new Set<string>();
 	const yielder = yieldEvery(1);
@@ -244,24 +248,25 @@ export async function indexObsidianSourceEmbeddings(
 			await sleep(OBSIDIAN_SOURCE_CHUNK_DELAY_MS);
 			continue;
 		}
-		const vector = await input.fetchEmbedding(chunk.chunkText, input.embeddingConfig);
-		if (!vector || vector.length === 0) {
-			skipped++;
-			await yielder();
-			await sleep(OBSIDIAN_SOURCE_CHUNK_DELAY_MS);
-			continue;
-		}
-		getDbAccessor().withWriteTx((db) => {
-			const embId = hash(`${OBSIDIAN_CHUNK_SOURCE_TYPE}:${input.agentId}:${chunk.id}`).slice(0, 32);
-			const existingForId = db.prepare("SELECT content_hash FROM embeddings WHERE id = ?").get(embId) as
-				| { content_hash: string }
-				| undefined;
-			if (existingForId && existingForId.content_hash !== contentHash) {
-				syncVecDeleteByEmbeddingIds(db, [embId]);
-				db.prepare("DELETE FROM embeddings WHERE id = ?").run(embId);
-			}
-			db.prepare(
-				`INSERT INTO embeddings
+		let stored = false;
+		for (let attempt = 0; attempt < 2 && !stored; attempt += 1) {
+			const writeConfig = getDbAccessor().withReadDb((db) => resolveActiveEmbeddingConfig(db, input.embeddingConfig));
+			const vector = await input.fetchEmbedding(chunk.chunkText, writeConfig);
+			if (!vector || vector.length === 0) break;
+			stored = getDbAccessor().withWriteTx((db) => {
+				// Recheck after the asynchronous provider call: promotion may have
+				// committed a new active space while this chunk was encoding.
+				if (!isActiveEmbeddingConfig(db, writeConfig)) return false;
+				const embId = hash(`${OBSIDIAN_CHUNK_SOURCE_TYPE}:${input.agentId}:${chunk.id}`).slice(0, 32);
+				const existingForId = db.prepare("SELECT content_hash FROM embeddings WHERE id = ?").get(embId) as
+					| { content_hash: string }
+					| undefined;
+				if (existingForId && existingForId.content_hash !== contentHash) {
+					syncVecDeleteByEmbeddingIds(db, [embId]);
+					db.prepare("DELETE FROM embeddings WHERE id = ?").run(embId);
+				}
+				db.prepare(
+					`INSERT INTO embeddings
 				 (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id)
 				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 				 ON CONFLICT(content_hash) DO UPDATE SET
@@ -272,22 +277,30 @@ export async function indexObsidianSourceEmbeddings(
 				   chunk_text = excluded.chunk_text,
 				   created_at = excluded.created_at,
 				   agent_id = excluded.agent_id`,
-			).run(
-				embId,
-				contentHash,
-				vectorToBlob(vector),
-				vector.length,
-				OBSIDIAN_CHUNK_SOURCE_TYPE,
-				chunk.id,
-				chunk.chunkText,
-				now,
-				input.agentId,
-			);
-			const stored = db.prepare("SELECT id FROM embeddings WHERE content_hash = ?").get(contentHash) as
-				| { id: string }
-				| undefined;
-			syncVecInsert(db, stored?.id ?? embId, vector);
-		});
+				).run(
+					embId,
+					contentHash,
+					vectorToBlob(vector),
+					vector.length,
+					OBSIDIAN_CHUNK_SOURCE_TYPE,
+					chunk.id,
+					chunk.chunkText,
+					now,
+					input.agentId,
+				);
+				const stored = db.prepare("SELECT id FROM embeddings WHERE content_hash = ?").get(contentHash) as
+					| { id: string }
+					| undefined;
+				syncVecInsert(db, stored?.id ?? embId, vector);
+				return true;
+			});
+		}
+		if (!stored) {
+			skipped++;
+			await yielder();
+			await sleep(OBSIDIAN_SOURCE_CHUNK_DELAY_MS);
+			continue;
+		}
 		embedded++;
 		await yielder();
 		await sleep(OBSIDIAN_SOURCE_CHUNK_DELAY_MS);
@@ -295,16 +308,17 @@ export async function indexObsidianSourceEmbeddings(
 
 	getDbAccessor().withWriteTx((db) => {
 		const prefix = `${input.sourceId}:${relPath(normalizePath(input.root).replace(/\/$/, ""), normalizePath(input.filePath))}#`;
-		const stale = OBSIDIAN_CHUNK_SOURCE_TYPES.flatMap((sourceType) =>
-			db
-				.prepare(
-					"SELECT id, source_type, content_hash FROM embeddings WHERE source_type = ? AND source_id >= ? AND source_id < ? AND agent_id = ?",
-				)
-				.all(sourceType, prefix, prefixUpperBound(prefix), input.agentId) as Array<{
-				id: string;
-				source_type: string;
-				content_hash: string;
-			}>,
+		const stale = OBSIDIAN_CHUNK_SOURCE_TYPES.flatMap(
+			(sourceType) =>
+				db
+					.prepare(
+						"SELECT id, source_type, content_hash FROM embeddings WHERE source_type = ? AND source_id >= ? AND source_id < ? AND agent_id = ?",
+					)
+					.all(sourceType, prefix, prefixUpperBound(prefix), input.agentId) as Array<{
+					id: string;
+					source_type: string;
+					content_hash: string;
+				}>,
 		);
 		const staleIds = stale
 			.filter((row) => row.source_type === LEGACY_OBSIDIAN_CHUNK_SOURCE_TYPE || !currentHashes.has(row.content_hash))

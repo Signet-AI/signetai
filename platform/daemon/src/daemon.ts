@@ -46,6 +46,8 @@ import { listConnectors } from "./connectors/registry";
 import { clearAllPresence } from "./cross-agent";
 import { closeDbAccessor, getDbAccessor, getVectorRuntimeStatus, initDbAccessorAsync } from "./db-accessor";
 import { fetchEmbedding } from "./embedding-fetch";
+import { resolveActiveEmbeddingConfig } from "./embedding-index-state";
+import { type EmbeddingIndexMigrationHandle, startEmbeddingIndexMigration } from "./embedding-index-migration";
 import { type EmbeddingTrackerHandle, startEmbeddingTracker } from "./embedding-tracker";
 import { firstCandidateBlockedBy } from "./extraction-status";
 import { initFeatureFlags } from "./feature-flags";
@@ -188,6 +190,7 @@ let httpServer: import("node:net").Server | null = null;
 let dreamingWorkerHandle: DreamingWorkerHandle | null = null;
 let shadowProcess: ChildProcess | null = null;
 let embeddingTrackerHandle: EmbeddingTrackerHandle | null = null;
+let embeddingIndexMigrationHandle: EmbeddingIndexMigrationHandle | null = null;
 let skillReconcilerHandle: ReturnType<typeof startReconciler> | null = null;
 let schedulerHandle: { stop(): Promise<void> } | null = null;
 let transcriptCaptureWorkerHandle: TranscriptCaptureWorkerHandle | null = null;
@@ -1204,6 +1207,12 @@ async function stopPipelineRuntime(): Promise<void> {
 		embeddingTrackerHandle = null;
 		setEmbeddingTrackerHandle(null);
 	}
+	if (embeddingIndexMigrationHandle) {
+		try {
+			await embeddingIndexMigrationHandle.stop();
+		} catch {}
+		embeddingIndexMigrationHandle = null;
+	}
 	if (sharedEmbeddingTrackerHandle) {
 		try {
 			await sharedEmbeddingTrackerHandle.stop();
@@ -1314,6 +1323,7 @@ function syncAgentRoster(agentsDir: string): void {
 
 async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?: TelemetryCollector): Promise<void> {
 	const pipelinePaused = memoryCfg.pipelineV2.paused;
+	const activeEmbeddingCfg = getDbAccessor().withReadDb((db) => resolveActiveEmbeddingConfig(db, memoryCfg.embedding));
 	configureLlmConcurrency(memoryCfg.pipelineV2.worker.maxLlmConcurrency);
 	clearStructuralBackfillTimer();
 	if (shouldWarnGraphExtractionWritesDisabled(memoryCfg)) {
@@ -1508,11 +1518,11 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 					agentsDir: AGENTS_DIR,
 					agentId: defaultAgentId,
 					embeddingConfig: {
-						provider: memoryCfg.embedding.provider,
-						model: memoryCfg.embedding.model,
-						dimensions: memoryCfg.embedding.dimensions ?? 768,
-						base_url: memoryCfg.embedding.base_url,
-						api_key: memoryCfg.embedding.api_key,
+						provider: activeEmbeddingCfg.provider,
+						model: activeEmbeddingCfg.model,
+						dimensions: activeEmbeddingCfg.dimensions ?? 768,
+						base_url: activeEmbeddingCfg.base_url,
+						api_key: activeEmbeddingCfg.api_key,
 					},
 					pipelineConfig: memoryCfg.pipelineV2 as unknown as Record<string, unknown>,
 					searchConfig: memoryCfg.search as unknown as Record<string, unknown>,
@@ -1529,7 +1539,7 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 		startPipeline(
 			getDbAccessor(),
 			memoryCfg.pipelineV2,
-			memoryCfg.embedding,
+			activeEmbeddingCfg,
 			fetchEmbedding,
 			memoryCfg.search,
 			defaultAgentId,
@@ -1554,15 +1564,36 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 		ensureRetentionWorker(getDbAccessor(), DEFAULT_RETENTION);
 	}
 
-	if (memoryCfg.embedding.provider !== "none" && memoryCfg.pipelineV2.embeddingTracker.enabled && !pipelinePaused) {
+	if (activeEmbeddingCfg.provider !== "none" && memoryCfg.pipelineV2.embeddingTracker.enabled && !pipelinePaused) {
 		embeddingTrackerHandle = startEmbeddingTracker(
 			getDbAccessor(),
-			memoryCfg.embedding,
+			activeEmbeddingCfg,
 			memoryCfg.pipelineV2.embeddingTracker,
 			fetchEmbedding,
 			checkEmbeddingProvider,
 		);
 		setEmbeddingTrackerHandle(embeddingTrackerHandle);
+	}
+
+	if (!pipelinePaused) {
+		embeddingIndexMigrationHandle = startEmbeddingIndexMigration({
+			accessor: getDbAccessor(),
+			configured: memoryCfg.embedding,
+			fetchEmbedding,
+			checkProvider: checkEmbeddingProvider,
+			pollMs: memoryCfg.pipelineV2.embeddingTracker.pollMs,
+			batchSize: memoryCfg.pipelineV2.embeddingTracker.batchSize,
+			onPromoted: () => {
+				// The tracker and extraction worker hold their embedding config at
+				// construction time. Recreate them only after the new generation is
+				// committed, never while the active slot is still serving recall.
+				void restartPipelineRuntime(loadMemoryConfig(AGENTS_DIR), telemetry).catch((error) => {
+					logger.error("embedding", "Promoted index but could not restart embedding workers", undefined, {
+						error: error instanceof Error ? error.message : String(error),
+					});
+				});
+			},
+		});
 	}
 
 	if (memoryCfg.dreaming.enabled && !pipelinePaused && !memoryCfg.pipelineV2.mutationsFrozen) {

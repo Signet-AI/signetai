@@ -12,6 +12,12 @@ import { type ReadDb, type WriteDb, getDbAccessor, prepareTypedStatement } from 
 import { syncVecDeleteBySourceId, syncVecInsert, vectorToBlob } from "../db-helpers";
 import { fetchEmbedding } from "../embedding-fetch";
 import { buildEmbeddingHealth } from "../embedding-health";
+import {
+	isActiveEmbeddingConfig,
+	readEmbeddingIndexState,
+	resolveActiveEmbeddingConfig,
+} from "../embedding-index-state";
+import { stagingCoverage } from "../embedding-index-migration";
 import { getInferenceRouterOrNull } from "../inference-router";
 import { linkMemoryToEntities } from "../inline-entity-linker";
 import { logger } from "../logger";
@@ -43,6 +49,7 @@ import {
 	projectionInFlight,
 	queueExtractionJob,
 } from "./state";
+
 import {
 	type FilterParams,
 	type ForgetCandidatesRequest,
@@ -77,6 +84,10 @@ import {
 	toRecord,
 	validateSessionAgentBinding,
 } from "./utils";
+
+function withActiveEmbeddingConfig(cfg: ResolvedMemoryConfig): ResolvedMemoryConfig {
+	return { ...cfg, embedding: getDbAccessor().withReadDb((db) => resolveActiveEmbeddingConfig(db, cfg.embedding)) };
+}
 
 const MAX_MUTATION_BATCH = 200;
 const FORGET_CONFIRM_THRESHOLD = 25;
@@ -1197,7 +1208,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		}
 
 		// Pipeline v2 kill switch: refuse writes when mutations are frozen
-		const fullCfg = loadMemoryConfig(AGENTS_DIR);
+		const fullCfg = withActiveEmbeddingConfig(loadMemoryConfig(AGENTS_DIR));
 		const pipelineCfg = fullCfg.pipelineV2;
 		if (pipelineCfg.mutationsFrozen) {
 			return c.json({ error: "Mutations are frozen (kill switch active)" }, 503);
@@ -1424,6 +1435,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 								const blob = vectorToBlob(vec);
 								const embHash = scope ? `${plan.normalized.contentHash}:${scope}` : plan.normalized.contentHash;
 								getDbAccessor().withWriteTx((db) => {
+									if (!isActiveEmbeddingConfig(db, fullCfg.embedding)) return;
 									syncVecDeleteBySourceId(db, "memory", chunkId);
 									db.prepare(`DELETE FROM embeddings WHERE source_type = 'memory' AND source_id = ?`).run(chunkId);
 									db.prepare(`
@@ -1647,7 +1659,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		// Generate embedding asynchronously
 		let embedded = false;
 		try {
-			const cfg = loadMemoryConfig(AGENTS_DIR);
+			const cfg = withActiveEmbeddingConfig(loadMemoryConfig(AGENTS_DIR));
 			const vec = await fetchEmbedding(normalizedContent.storageContent, cfg.embedding);
 			if (vec) {
 				if (vec.length !== cfg.embedding.dimensions) {
@@ -1662,6 +1674,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 					const embId = crypto.randomUUID();
 
 					getDbAccessor().withWriteTx((db) => {
+						if (!isActiveEmbeddingConfig(db, cfg.embedding)) return;
 						syncVecDeleteBySourceId(db, "memory", id);
 						db.prepare(`DELETE FROM embeddings WHERE source_type = 'memory' AND source_id = ?`).run(id);
 						db.prepare(`
@@ -2124,7 +2137,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		}
 		const ifVersion = ifVersionBody ?? ifVersionQuery;
 
-		const cfg = loadMemoryConfig(AGENTS_DIR);
+		const cfg = withActiveEmbeddingConfig(loadMemoryConfig(AGENTS_DIR));
 		if (cfg.pipelineV2.mutationsFrozen) {
 			return c.json({ error: "Mutations are frozen (kill switch active)" }, 503);
 		}
@@ -2219,7 +2232,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			return c.json({ error: parsedPatch.error }, 400);
 		}
 
-		const cfg = loadMemoryConfig(AGENTS_DIR);
+		const cfg = withActiveEmbeddingConfig(loadMemoryConfig(AGENTS_DIR));
 		if (cfg.pipelineV2.mutationsFrozen) {
 			return c.json({ error: "Mutations are frozen (kill switch active)" }, 503);
 		}
@@ -2243,6 +2256,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				extractionModelOnContentChange: null,
 				embeddingModelOnContentChange: cfg.embedding.model,
 				embeddingVector,
+				embeddingConfig: cfg.embedding,
 				ctx: actor,
 			}),
 		);
@@ -2341,7 +2355,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		}
 		const ifVersion = ifVersionBody ?? ifVersionQuery;
 
-		const cfg = loadMemoryConfig(AGENTS_DIR);
+		const cfg = withActiveEmbeddingConfig(loadMemoryConfig(AGENTS_DIR));
 		if (cfg.pipelineV2.mutationsFrozen) {
 			return c.json({ error: "Mutations are frozen (kill switch active)" }, 503);
 		}
@@ -2423,7 +2437,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		const memoryId = c.req.param("id")?.trim();
 		if (!memoryId) return c.json({ error: "memory id is required" }, 400);
 
-		const cfg = loadMemoryConfig(AGENTS_DIR);
+		const cfg = withActiveEmbeddingConfig(loadMemoryConfig(AGENTS_DIR));
 		if (cfg.pipelineV2.mutationsFrozen) return c.json({ error: "Mutations are frozen (kill switch active)" }, 503);
 		const scopeDecision = authorizeMemoryMutationScope(c, [memoryId]);
 		if (scopeDecision.error) return c.json({ error: scopeDecision.error }, 403);
@@ -2684,7 +2698,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			}
 		}
 
-		const cfg = loadMemoryConfig(AGENTS_DIR);
+		const cfg = withActiveEmbeddingConfig(loadMemoryConfig(AGENTS_DIR));
 		if (cfg.pipelineV2.mutationsFrozen) {
 			return c.json({ error: "Mutations are frozen (kill switch active)" }, 503);
 		}
@@ -2746,7 +2760,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			);
 		}
 
-		const cfg = loadMemoryConfig(AGENTS_DIR);
+		const cfg = withActiveEmbeddingConfig(loadMemoryConfig(AGENTS_DIR));
 		if (cfg.pipelineV2.mutationsFrozen) {
 			return c.json({ error: "Mutations are frozen (kill switch active)" }, 503);
 		}
@@ -2835,6 +2849,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 					extractionModelOnContentChange: null,
 					embeddingModelOnContentChange: cfg.embedding.model,
 					embeddingVector,
+					embeddingConfig: cfg.embedding,
 					ctx: actor,
 				}),
 			);
@@ -2885,7 +2900,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			if (denied) return denied;
 		}
 
-		const cfg = loadMemoryConfig(AGENTS_DIR);
+		const cfg = withActiveEmbeddingConfig(loadMemoryConfig(AGENTS_DIR));
 		if (
 			((cfg.pipelineV2.reranker.enabled && cfg.pipelineV2.reranker.useExtractionModel) || body.aggregate === true) &&
 			authConfig.mode !== "local"
@@ -2983,7 +2998,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		const project = c.req.query("project");
 		const includeRecalled = c.req.query("includeRecalled") ?? c.req.query("include_recalled");
 
-		const cfg = loadMemoryConfig(AGENTS_DIR);
+		const cfg = withActiveEmbeddingConfig(loadMemoryConfig(AGENTS_DIR));
 		const scopeProject = c.get("auth")?.claims?.scope?.project;
 		try {
 			const sessionKeyRaw =
@@ -3241,10 +3256,14 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 	// GET /api/embeddings/status
 	// =========================================================================
 	app.get("/api/embeddings/status", async (c) => {
-		const config = loadMemoryConfig(AGENTS_DIR);
+		const config = withActiveEmbeddingConfig(loadMemoryConfig(AGENTS_DIR));
 		const status = await checkEmbeddingProvider(config.embedding);
 		const tracker = embeddingTrackerHandle?.getStats() ?? null;
-		return c.json({ ...status, tracker });
+		const index = getDbAccessor().withReadDb((db) => {
+			const state = readEmbeddingIndexState(db);
+			return state?.staging ? { ...state, coverage: stagingCoverage(db, state.staging.dimensions) } : state;
+		});
+		return c.json({ ...status, tracker, index });
 	});
 
 	// =========================================================================

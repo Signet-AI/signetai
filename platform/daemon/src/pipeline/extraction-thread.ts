@@ -184,7 +184,7 @@ async function bootstrap(): Promise<void> {
 			embedding: embeddingCfg,
 			search: searchCfg,
 			timeoutMs: pipelineCfg.extraction.timeout,
-			fetchEmbedding: (text: string, cfg: EmbeddingConfig) => fetchEmbedding(text, cfg),
+			fetchEmbedding: (text: string, cfg: EmbeddingConfig, role) => fetchEmbedding(text, cfg, role),
 		};
 
 		// 4. Start extraction worker with IPC-backed instrumentation

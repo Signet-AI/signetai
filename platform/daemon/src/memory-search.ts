@@ -26,6 +26,7 @@ import { getLlmProvider } from "./llm";
 import { logger } from "./logger";
 import { buildAgentScopeClause } from "./memory-access-scope";
 import type { EmbeddingConfig, MemorySearchConfig, ResolvedMemoryConfig } from "./memory-config";
+import type { EmbeddingRole } from "./embedding-profile";
 import { NATIVE_MEMORY_BRIDGE_SOURCE_NODE_ID } from "./native-memory-constants";
 import { constructContextBlocks } from "./pipeline/context-construction";
 import { DEFAULT_DAMPENING, type ScoredRow, applyDampening } from "./pipeline/dampening";
@@ -165,7 +166,7 @@ export interface AggregateRecallUsageStage extends LlmUsage {
 	readonly fallbackCount: number;
 }
 
-export type EmbedFn = (text: string, cfg: EmbeddingConfig) => Promise<number[] | null>;
+export type EmbedFn = (text: string, cfg: EmbeddingConfig, role?: EmbeddingRole) => Promise<number[] | null>;
 
 export interface RecallStageTiming {
 	name: string;
@@ -1291,7 +1292,7 @@ export async function hybridRecall(
 		const embeddingStart = performance.now();
 		let promise: Promise<number[] | null>;
 		try {
-			promise = Promise.resolve(embedFn(query, cfg.embedding));
+			promise = Promise.resolve(embedFn(query, cfg.embedding, "query"));
 		} catch (e) {
 			promise = Promise.reject(e);
 		}

@@ -96,6 +96,8 @@ import { up as summaryJobsBoundaryReason } from "./087-summary-jobs-boundary-rea
 import { up as transcriptRecoveryFiles } from "./088-transcript-recovery-files";
 import { up as jobCancellations } from "./089-job-cancellations";
 import { up as jobArchive } from "./090-job-archive";
+import { up as embeddingIndexGenerations } from "./091-embedding-index-generations";
+import { up as embeddingStagingStore } from "./092-embedding-staging-store";
 
 // -- Public interface consumed by Database.init() --
 
@@ -864,6 +866,18 @@ export const MIGRATIONS: readonly Migration[] = [
 		artifacts: {
 			tables: ["job_archive"],
 		},
+	},
+	{
+		version: 91,
+		name: "embedding-index-generations",
+		up: embeddingIndexGenerations,
+		artifacts: { tables: ["embedding_index_state"] },
+	},
+	{
+		version: 92,
+		name: "embedding-staging-store",
+		up: embeddingStagingStore,
+		artifacts: { tables: ["embeddings_staging"] },
 	},
 ];
 

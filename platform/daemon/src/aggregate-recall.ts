@@ -3,6 +3,7 @@ import type { LlmUsage, RouteRequest, RouterResult } from "@signet/core";
 import { normalizeAndHashContent } from "./content-normalization";
 import { type WriteDb, getDbAccessor } from "./db-accessor";
 import { syncVecDeleteBySourceId, syncVecInsert, vectorToBlob } from "./db-helpers";
+import { isActiveEmbeddingConfig, resolveActiveEmbeddingConfig } from "./embedding-index-state";
 import { logger } from "./logger";
 import type { EmbeddingConfig, ResolvedMemoryConfig } from "./memory-config";
 import {
@@ -627,9 +628,17 @@ async function embedAggregateMemory(
 	cfg: EmbeddingConfig,
 	embedFn: EmbedFn,
 ): Promise<boolean> {
-	const vec = await embedFn(content, cfg);
-	if (!vec || vec.length !== cfg.dimensions) return false;
-	getDbAccessor().withWriteTx((db) => {
+	// Aggregate saves can originate from hooks with the desired config while a
+	// new index is staging. They must stay in the active vector space until
+	// promotion; the staging worker independently copies every active row.
+	const activeCfg = getDbAccessor().withReadDb((db) => resolveActiveEmbeddingConfig(db, cfg));
+	const vec = await embedFn(content, activeCfg, "document");
+	if (!vec || vec.length !== activeCfg.dimensions) return false;
+	const written = getDbAccessor().withWriteTx((db) => {
+		// Promotion can commit while the provider call above is in flight. Do
+		// not contaminate the new generation with an old-space vector; the
+		// normal tracker will enqueue this memory against the new active model.
+		if (!isActiveEmbeddingConfig(db, activeCfg)) return false;
 		const embId = randomUUID();
 		syncVecDeleteBySourceId(db, "memory", memoryId);
 		db.prepare("DELETE FROM embeddings WHERE source_type = 'memory' AND source_id = ?").run(memoryId);
@@ -639,9 +648,10 @@ async function embedAggregateMemory(
 			VALUES (?, ?, ?, ?, 'memory', ?, ?, ?)
 		`).run(embId, contentHash, vectorToBlob(vec), vec.length, memoryId, content, createdAt);
 		syncVecInsert(db, embId, vec);
-		db.prepare("UPDATE memories SET embedding_model = ? WHERE id = ?").run(cfg.model, memoryId);
+		db.prepare("UPDATE memories SET embedding_model = ? WHERE id = ?").run(activeCfg.model, memoryId);
+		return true;
 	});
-	return true;
+	return written;
 }
 
 function unsavedAggregateResult(content: string, key: string, project: string | null): RecallResult {

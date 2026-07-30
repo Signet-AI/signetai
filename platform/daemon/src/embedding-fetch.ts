@@ -1,4 +1,7 @@
 import { logger } from "./logger";
+import { getDbAccessor, hasDbAccessor } from "./db-accessor";
+import { resolveActiveEmbeddingConfig } from "./embedding-index-state";
+import { formatEmbeddingInput, type EmbeddingRole } from "./embedding-profile";
 import type { EmbeddingConfig } from "./memory-config";
 import {
 	DEFAULT_LLAMACPP_BASE_URL,
@@ -313,42 +316,74 @@ export async function resolveEmbeddingApiKey(rawApiKey: string | undefined): Pro
 	return configured || process.env.OPENAI_API_KEY || "";
 }
 
+export function fetchEmbedding(
+	text: string,
+	cfg: EmbeddingConfig,
+	role?: EmbeddingRole,
+	opts?: EmbeddingFetchOptions,
+): Promise<number[] | null>;
+/** @deprecated Pass the role before options. Kept for callers using the former options position. */
+export function fetchEmbedding(
+	text: string,
+	cfg: EmbeddingConfig,
+	opts?: EmbeddingFetchOptions,
+	role?: EmbeddingRole,
+): Promise<number[] | null>;
 export async function fetchEmbedding(
 	text: string,
 	cfg: EmbeddingConfig,
-	opts: EmbeddingFetchOptions = {},
+	roleOrOpts: EmbeddingRole | EmbeddingFetchOptions = "document",
+	optsOrRole: EmbeddingFetchOptions | EmbeddingRole = {},
 ): Promise<number[] | null> {
-	if (cfg.provider === "none") return null;
+	// Ordinary callers always resolve the generation at request time. This
+	// prevents an in-flight writer that captured yesterday's active config from
+	// inserting old-space vectors after an atomic promotion. Only the isolated
+	// migration worker is allowed to address its staging generation directly.
+	const effectiveCfg =
+		cfg.indexGeneration === "staging" || !hasDbAccessor()
+			? cfg
+			: getDbAccessor().withReadDb((db) => resolveActiveEmbeddingConfig(db, cfg));
+	if (effectiveCfg.provider === "none") return null;
+	const role = typeof roleOrOpts === "string" ? roleOrOpts : typeof optsOrRole === "string" ? optsOrRole : "document";
+	const opts = typeof roleOrOpts === "string" ? (typeof optsOrRole === "string" ? {} : optsOrRole) : roleOrOpts;
+	const formattedText = formatEmbeddingInput(text, effectiveCfg, role);
 	try {
-		if (cfg.provider === "native") {
+		if (effectiveCfg.provider === "native") {
 			if (nativeFallbackProvider === "unavailable") return null;
-			if (nativeFallbackProvider) return fetchNativeFallback(nativeFallbackProvider, text, cfg, opts);
+			if (nativeFallbackProvider) return fetchNativeFallback(nativeFallbackProvider, formattedText, effectiveCfg, opts);
 			try {
 				if (!cachedNativeEmbed) {
 					const mod = await import("./native-embedding");
 					cachedNativeEmbed = mod.nativeEmbed;
 				}
-				return await cachedNativeEmbed(text);
+				return await cachedNativeEmbed(formattedText);
 			} catch (nativeErr) {
 				return resolveNativeFallback(
-					text,
-					cfg,
+					formattedText,
+					effectiveCfg,
 					opts,
 					nativeErr instanceof Error ? nativeErr.message : String(nativeErr),
 				);
 			}
 		}
-		if (cfg.provider === "ollama") {
-			return await fetchOllamaEmbedding(text, cfg.base_url, cfg.model, opts);
+		if (effectiveCfg.provider === "ollama") {
+			return await fetchOllamaEmbedding(formattedText, effectiveCfg.base_url, effectiveCfg.model, opts);
 		}
 
-		if (cfg.provider === "llama-cpp") {
-			const baseUrl = cfg.base_url.trim() || DEFAULT_LLAMACPP_BASE_URL;
-			return fetchLlamaCppEmbedding(text, baseUrl, cfg.model, opts, 30000, cfg.llamaCppMaxInputTokens);
+		if (effectiveCfg.provider === "llama-cpp") {
+			const baseUrl = effectiveCfg.base_url.trim() || DEFAULT_LLAMACPP_BASE_URL;
+			return fetchLlamaCppEmbedding(
+				formattedText,
+				baseUrl,
+				effectiveCfg.model,
+				opts,
+				30000,
+				effectiveCfg.llamaCppMaxInputTokens,
+			);
 		}
 
-		const apiKey = await resolveEmbeddingApiKey(cfg.api_key);
-		const baseUrl = resolveEmbeddingBaseUrl(cfg);
+		const apiKey = await resolveEmbeddingApiKey(effectiveCfg.api_key);
+		const baseUrl = resolveEmbeddingBaseUrl(effectiveCfg);
 		if (!apiKey && requiresOpenAiApiKey(baseUrl)) {
 			logger.warn("embedding", "No API key configured for OpenAI embeddings, skipping request to api.openai.com");
 			return null;
@@ -361,7 +396,7 @@ export async function fetchEmbedding(
 					"Content-Type": "application/json",
 					...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
 				},
-				body: JSON.stringify({ model: cfg.model, input: text }),
+				body: JSON.stringify({ model: effectiveCfg.model, input: formattedText }),
 			},
 			opts,
 			resolveEmbeddingTimeoutMs(opts, 30000),
@@ -369,8 +404,8 @@ export async function fetchEmbedding(
 		if (!res.ok) {
 			logger.warn("embedding", "Embedding API request failed", {
 				status: res.status,
-				provider: cfg.provider,
-				model: cfg.model,
+				provider: effectiveCfg.provider,
+				model: effectiveCfg.model,
 			});
 			return null;
 		}
@@ -380,8 +415,8 @@ export async function fetchEmbedding(
 		return data.data?.[0]?.embedding ?? null;
 	} catch (e) {
 		logger.warn("embedding", "Embedding fetch error", {
-			provider: cfg.provider,
-			model: cfg.model,
+			provider: effectiveCfg.provider,
+			model: effectiveCfg.model,
 			error: e instanceof Error ? e.message : String(e),
 		});
 		return null;

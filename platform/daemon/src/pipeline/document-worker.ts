@@ -12,6 +12,7 @@
 import { normalizeAndHashContent } from "../content-normalization";
 import type { DbAccessor, WriteDb } from "../db-accessor";
 import { syncVecInsert, vectorToBlob } from "../db-helpers";
+import { isActiveEmbeddingConfig } from "../embedding-index-state";
 import { logger } from "../logger";
 import type { EmbeddingConfig, PipelineV2Config } from "../memory-config";
 import { txIngestEnvelope } from "../transactions";
@@ -308,6 +309,7 @@ async function processDocument(deps: DocumentWorkerDeps, job: DocumentJobRow): P
 				return;
 			}
 			const normalized = normalizeAndHashContent(chunkText);
+			const canStoreVector = vector !== null && isActiveEmbeddingConfig(db, embeddingCfg);
 
 			// Dedup: skip if exact content already linked to this document
 			const existingLink = db
@@ -353,7 +355,7 @@ async function processDocument(deps: DocumentWorkerDeps, job: DocumentJobRow): P
 					pinned: 0,
 					isDeleted: 0,
 					extractionStatus: "none",
-					embeddingModel: vector ? embeddingCfg.model : null,
+					embeddingModel: canStoreVector ? embeddingCfg.model : null,
 					extractionModel: null,
 					updatedBy: "document-worker",
 					sourceType: "document",
@@ -372,7 +374,7 @@ async function processDocument(deps: DocumentWorkerDeps, job: DocumentJobRow): P
 			).run(docId, memId, i);
 
 			// Store embedding if we got one (with dimension validation)
-			if (vector) {
+			if (canStoreVector && vector) {
 				if (vector.length !== embeddingCfg.dimensions) {
 					logger.warn("document-worker", "Embedding dimension mismatch, skipping vector insert", {
 						got: vector.length,

@@ -7,7 +7,15 @@
  */
 
 import type { WriteDb } from "./db-accessor";
-import { syncVecDeleteBySourceExceptHash, syncVecDeleteBySourceId, syncVecInsert, tableExists, vectorToBlob } from "./db-helpers";
+import {
+	syncVecDeleteBySourceExceptHash,
+	syncVecDeleteBySourceId,
+	syncVecInsert,
+	tableExists,
+	vectorToBlob,
+} from "./db-helpers";
+import { isActiveEmbeddingConfig } from "./embedding-index-state";
+import type { EmbeddingConfig } from "./memory-config";
 import { cancelExtractionJobsForForgottenMemory } from "./pipeline/extraction-queue";
 
 // ---------------------------------------------------------------------------
@@ -89,6 +97,8 @@ export interface ModifyMemoryTxInput {
 	extractionModelOnContentChange?: string | null;
 	embeddingModelOnContentChange?: string | null;
 	embeddingVector?: readonly number[] | null;
+	/** Generation that produced embeddingVector, when the caller has one. */
+	embeddingConfig?: EmbeddingConfig;
 	ctx?: MutationContext;
 }
 
@@ -337,6 +347,9 @@ export function txModifyMemory(db: WriteDb, input: ModifyMemoryTxInput): ModifyM
 	let contentChanged = false;
 	let finalContent = existing.content;
 
+	const embeddingGenerationActive =
+		!input.embeddingVector || input.embeddingConfig === undefined || isActiveEmbeddingConfig(db, input.embeddingConfig);
+
 	if (input.patch.content !== undefined && input.patch.content !== existing.content) {
 		contentChanged = true;
 		finalContent = input.patch.content;
@@ -384,7 +397,9 @@ export function txModifyMemory(db: WriteDb, input: ModifyMemoryTxInput): ModifyM
 		args.push(input.extractionModelOnContentChange ?? null);
 		updates.push("embedding_model = ?");
 		args.push(
-			input.embeddingVector && input.embeddingVector.length > 0 ? (input.embeddingModelOnContentChange ?? null) : null,
+			input.embeddingVector && input.embeddingVector.length > 0 && embeddingGenerationActive
+				? (input.embeddingModelOnContentChange ?? null)
+				: null,
 		);
 		changedFields.push("content");
 	}
@@ -447,7 +462,7 @@ export function txModifyMemory(db: WriteDb, input: ModifyMemoryTxInput): ModifyM
 			).run(input.memoryId);
 		}
 
-		if (newHash && input.embeddingVector && input.embeddingVector.length > 0) {
+		if (newHash && input.embeddingVector && input.embeddingVector.length > 0 && embeddingGenerationActive) {
 			const embId = crypto.randomUUID();
 			const blob = vectorToBlob(input.embeddingVector);
 			db.prepare(

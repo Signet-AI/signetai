@@ -12,8 +12,9 @@ import type { AnalyticsCollector } from "../analytics";
 import { normalizeAndHashContent } from "../content-normalization";
 import type { DbAccessor, WriteDb } from "../db-accessor";
 import { countChanges, syncVecDeleteBySourceExceptHash, syncVecInsert, vectorToBlob } from "../db-helpers";
+import { isActiveEmbeddingConfig } from "../embedding-index-state";
 import { logger } from "../logger";
-import type { PipelineV2Config } from "../memory-config";
+import type { EmbeddingConfig, PipelineV2Config } from "../memory-config";
 import type { TelemetryCollector } from "../telemetry";
 import { txForgetMemory, txIngestEnvelope, txModifyMemory } from "../transactions";
 import { PROSPECTIVE_ANTONYM_PAIRS, hasAntonymConflict, hasNegation, overlapCount, tokenize } from "./antonyms";
@@ -364,8 +365,10 @@ function insertMemoryEmbedding(
 	content: string,
 	vector: readonly number[],
 	now: string,
+	embeddingConfig: EmbeddingConfig,
 	expectedDimensions?: number,
 ): boolean {
+	if (!isActiveEmbeddingConfig(db, embeddingConfig)) return false;
 	if (expectedDimensions !== undefined && vector.length !== expectedDimensions) {
 		logger.warn("pipeline", "Embedding dimension mismatch, skipping vector insert", {
 			got: vector.length,
@@ -416,6 +419,7 @@ function applyPhaseCWrites(
 		readonly minFactConfidenceForWrite: number;
 		readonly allowUpdateDelete: boolean;
 		readonly expectedEmbeddingDimensions: number;
+		readonly embeddingConfig: EmbeddingConfig;
 		readonly sourceAgentId: string;
 		readonly sourceProject: string | null;
 		readonly sourceScope: string | null;
@@ -630,6 +634,7 @@ function applyPhaseCWrites(
 					storageContent,
 					vector,
 					now,
+					meta.embeddingConfig,
 					meta.expectedEmbeddingDimensions,
 				);
 				if (insertedEmbedding) {
@@ -727,6 +732,7 @@ function applyPhaseCWrites(
 					extractionModelOnContentChange: meta.extractionModel,
 					embeddingModelOnContentChange: vector ? meta.embeddingModel : null,
 					embeddingVector: vector,
+					embeddingConfig: meta.embeddingConfig,
 					ctx: { actorType: "pipeline" },
 				});
 
@@ -1361,6 +1367,7 @@ export function startWorker(
 						minFactConfidenceForWrite: extractionCfg.minConfidence,
 						allowUpdateDelete: autonomousCfg.allowUpdateDelete,
 						expectedEmbeddingDimensions: decisionCfg.embedding.dimensions,
+						embeddingConfig: decisionCfg.embedding,
 						sourceAgentId: agentId,
 						sourceProject,
 						sourceScope,

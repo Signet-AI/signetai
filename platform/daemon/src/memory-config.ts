@@ -20,6 +20,10 @@ export interface EmbeddingConfig {
 	model: string;
 	dimensions: number;
 	base_url: string;
+	/** Internal retrieval formatting contract. Omitted means legacy raw text until a generation migration promotes a profile. */
+	profile?: string;
+	/** Internal marker: only the migration worker may bypass active resolution. */
+	indexGeneration?: "staging";
 	api_key?: string;
 	promptSubmitTimeoutMs?: number;
 	llamaCppMaxInputTokens?: number;
