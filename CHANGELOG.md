@@ -8,7 +8,7 @@ Surface summary of the most recent release dates. See the release ledger below f
 
 ### 2026-07-30
 - Features: run OAuth via pi-ai SDK directly; drop llama.cpp embeddings; add 'Disable background inference' option to the menu; dashboard-matching provider connect for memory extraction; provider-connect toolkit for dashboard-matching extraction UX; show full brand banner on interactive signet setup; connect obsidian vault sources during setup; remote-instance config (daemon.url); multi-agent roster loop + phase-2 findings; dreaming toggle (memory.dreaming.enabled); distinct synthesis provider route; reviewable summary screen before apply; headless plan path (--file/--json), --dry-run, non-TTY guard.
-- Bug fixes: address review findings; harden provider route setup; keep the event loop alive during the OAuth login; OAuth login fails gracefully instead of quitting silently; run OAuth during the wizard (pi-ai login) before listing models; don't put the model key in extractionConnect; aggregate-recall uses pi-ai catalog + searchable models; wire the pi-ai catalog imports into the wizard (runtime crash); source providers + models from pi-ai, not a hand-rolled catalog; TDZ crash on interactive connect + model/catalog cleanups (autoreview); connect flow — accept all provider families, fix model + catalog (autoreview); make aggregate-recall provider resolvable + daemon-valid (autoreview); drop dead synthesisEndpoint read in wizard prompt; malformed daemon.url no longer bricks the CLI (autoreview); harden synthesis/agent validation (autoreview findings); schema/runtime contract parity, existing-install guard, stdin TTY.
+- Bug fixes: type query row boundaries; address review findings; harden provider route setup; keep the event loop alive during the OAuth login; OAuth login fails gracefully instead of quitting silently; run OAuth during the wizard (pi-ai login) before listing models; don't put the model key in extractionConnect; aggregate-recall uses pi-ai catalog + searchable models; wire the pi-ai catalog imports into the wizard (runtime crash); source providers + models from pi-ai, not a hand-rolled catalog; TDZ crash on interactive connect + model/catalog cleanups (autoreview); connect flow — accept all provider families, fix model + catalog (autoreview); make aggregate-recall provider resolvable + daemon-valid (autoreview); drop dead synthesisEndpoint read in wizard prompt; malformed daemon.url no longer bricks the CLI (autoreview); harden synthesis/agent validation (autoreview findings); schema/runtime contract parity, existing-install guard, stdin TTY.
 - Refactoring: merge daemon-hosting and remote-daemon into one prompt; drop the 'Where is Signet running?' prompt from interactive setup; trim background-inference menu to four options; collapse passthrough into off; replace synthesis route with aggregate-recall provider; introduce SetupPlan seam (zod) with --schema introspection.
 
 ### 2026-07-28
@@ -36,6 +36,15 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Docs: update roadmap to reflect current priorities (dashboard, desktop, config UX).
 
 ## Release Ledger
+
+## [0.156.1] - 2026-07-30
+
+Release summary: 1 bug fix.
+Tag range: `v0.156.0..v0.156.1`.
+
+### Bug Fixes
+
+- **daemon**: type query row boundaries
 
 ## [0.156.0] - 2026-07-30
 

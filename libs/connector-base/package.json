@@ -1,6 +1,6 @@
 {
   "name": "@signet/connector-base",
-  "version": "0.156.0",
+  "version": "0.156.1",
   "description": "Base class for Signet harness connectors",
   "type": "module",
   "main": "./dist/index.js",
@@ -26,7 +26,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@signet/core": "0.156.0",
+    "@signet/core": "0.156.1",
     "json5": "^2.2.3",
     "jsonc-parser": "3.3.1"
   },
