@@ -26,7 +26,7 @@ export function parseSearchArgs(args: string[]): SearchArgs | null {
   }
 
   // runId is required for search (must have ingested first)
-  if (!parsed.runId) {
+  if (!parsed.runId || !/^[a-zA-Z0-9_-]+$/.test(parsed.runId)) {
     return null
   }
 
