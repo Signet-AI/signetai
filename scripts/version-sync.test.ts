@@ -124,6 +124,9 @@ dependencies = [
 	});
 
 	test("flags stale Cargo.lock versions for workspace packages", () => {
+		// Synthetic fixture: `example-rs` / `signet-example` are NOT real packages.
+		// They exercise collectCargoLockMismatches generically (workspace.version +
+		// stale Cargo.lock), independent of any live Cargo workspace in the repo.
 		const root = mkdtempSync(join(tmpdir(), "signet-version-sync-"));
 		try {
 			const workspace = join(root, "platform", "example-rs");

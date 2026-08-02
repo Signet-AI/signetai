@@ -61,6 +61,14 @@ systemctl --user enable signet.service   # enable on boot
 Configuration
 -------------
 
+### Runtime
+
+The daemon is a single TypeScript/Bun runtime (`@signet/daemon`). The
+experimental Rust daemon rewrite (`platform/daemon-rs`) and the
+`SIGNET_DAEMON_RUNTIME` selector have been removed; Rust is used only for
+native accelerators (`@signet/native`), which load transparently with a
+TypeScript fallback.
+
 ### Environment Variables
 
 | Variable | Default | Description |
