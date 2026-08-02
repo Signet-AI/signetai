@@ -152,7 +152,6 @@ function testPipelineCfg(): PipelineV2Config {
 		enabled: true,
 		paused: false,
 		shadowMode: false,
-		nativeShadowEnabled: false,
 		mutationsFrozen: false,
 		semanticContradictionEnabled: false,
 		semanticContradictionTimeoutMs: 5000,

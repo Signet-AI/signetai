@@ -5,10 +5,9 @@
  */
 
 import "./bun-socket-polyfill";
-import type { ChildProcess } from "node:child_process";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { realpathSync } from "node:fs";
 import { readFile as readFileAsync, unlink as unlinkAsync } from "node:fs/promises";
 import { readdir } from "node:fs/promises";
@@ -188,7 +187,6 @@ const __dirname = dirname(__filename);
 
 let httpServer: import("node:net").Server | null = null;
 let dreamingWorkerHandle: DreamingWorkerHandle | null = null;
-let shadowProcess: ChildProcess | null = null;
 let embeddingTrackerHandle: EmbeddingTrackerHandle | null = null;
 let embeddingIndexMigrationHandle: EmbeddingIndexMigrationHandle | null = null;
 let skillReconcilerHandle: ReturnType<typeof startReconciler> | null = null;
@@ -214,7 +212,7 @@ export function countConnectorsActive(connectors: readonly { readonly status: st
 
 export const app = new Hono();
 
-registerGlobalMiddleware(app, { getShadowProcess: () => shadowProcess });
+registerGlobalMiddleware(app);
 getOrCreateInferenceRouter(resolveDefaultBasePath());
 
 mountHealthRoutes(app);
@@ -1118,53 +1116,6 @@ function startFileWatcher() {
 }
 
 // ============================================================================
-// Shadow daemon helpers
-// ============================================================================
-
-function resolveDaemonBinary(): string | null {
-	const ext = process.platform === "win32" ? ".exe" : "";
-	const arch = process.arch;
-	const plat = process.platform;
-	const monoRoot = join(__dirname, "..", "..", "..");
-	const devPaths = [
-		join(monoRoot, "platform", "daemon-rs", "target", "release", `signet-daemon${ext}`),
-		join(monoRoot, "platform", "daemon-rs", "target", "debug", `signet-daemon${ext}`),
-		join(process.cwd(), "platform", "daemon-rs", "target", "release", `signet-daemon${ext}`),
-	];
-	for (const p of devPaths) {
-		if (existsSync(p)) return p;
-	}
-	const name = `signet-daemon-${plat}-${arch}${ext}`;
-	const npmPath = join(__dirname, "..", "bin", name);
-	if (existsSync(npmPath)) return npmPath;
-	return null;
-}
-
-function setupShadowDb(agentsDir: string): string {
-	const shadowRoot = join(agentsDir, ".shadow");
-	const shadowMemDir = join(shadowRoot, "memory");
-	mkdirSync(shadowMemDir, { recursive: true });
-
-	const mainDb = join(agentsDir, "memory", "memories.db");
-	const shadowDb = join(shadowMemDir, "memories.db");
-	const stale = !existsSync(shadowDb) || Date.now() - statSync(shadowDb).mtimeMs > 24 * 60 * 60 * 1000;
-	if (stale && existsSync(mainDb)) {
-		copyFileSync(mainDb, shadowDb);
-		for (const ext of ["-wal", "-shm"]) {
-			const src = mainDb + ext;
-			if (existsSync(src)) copyFileSync(src, shadowDb + ext);
-		}
-		logger.info("shadow", "Shadow DB refreshed");
-	}
-
-	const mainCfg = join(agentsDir, "agent.yaml");
-	const shadowCfg = join(shadowRoot, "agent.yaml");
-	if (existsSync(mainCfg)) copyFileSync(mainCfg, shadowCfg);
-
-	return shadowRoot;
-}
-
-// ============================================================================
 // Pipeline runtime
 // ============================================================================
 
@@ -1172,7 +1123,6 @@ function readPipelineMode(cfg: ResolvedMemoryConfig["pipelineV2"]): string {
 	if (!cfg.enabled) return "disabled";
 	if (cfg.paused) return "paused";
 	if (cfg.mutationsFrozen) return "frozen";
-	if (cfg.nativeShadowEnabled) return "shadow";
 	if (cfg.shadowMode) return "shadow";
 	return "controlled-write";
 }
@@ -1191,13 +1141,6 @@ async function stopPipelineRuntime(): Promise<void> {
 			await Promise.resolve(skillReconcilerHandle.stop());
 		} catch {}
 		skillReconcilerHandle = null;
-	}
-
-	if (shadowProcess) {
-		try {
-			shadowProcess.kill();
-		} catch {}
-		shadowProcess = null;
 	}
 
 	if (embeddingTrackerHandle) {
@@ -1631,25 +1574,6 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 				});
 			}
 		}, 10_000);
-	}
-
-	if (memoryCfg.pipelineV2.nativeShadowEnabled) {
-		const binary = resolveDaemonBinary();
-		if (binary) {
-			const shadowAgentsDir = setupShadowDb(AGENTS_DIR);
-			shadowProcess = spawn(binary, [], {
-				env: { ...process.env, SIGNET_PORT: "3851", SIGNET_PATH: shadowAgentsDir },
-				stdio: "ignore",
-				windowsHide: true,
-			});
-			shadowProcess.unref();
-			logger.info("shadow", "Rust daemon shadow started", {
-				pid: shadowProcess.pid,
-				port: 3851,
-			});
-		} else {
-			logger.warn("shadow", "shadowEnabled but signet-daemon binary not found — skipping");
-		}
 	}
 
 	if (memoryCfg.pipelineV2.procedural.enabled && !pipelinePaused) {

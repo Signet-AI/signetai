@@ -75,7 +75,6 @@ export const DEFAULT_PIPELINE_V2: ResolvedPipelineV2Config = {
 	enabled: true,
 	paused: false,
 	shadowMode: false,
-	nativeShadowEnabled: false,
 	mutationsFrozen: false,
 	semanticContradictionEnabled: true,
 	semanticContradictionTimeoutMs: 120000,
@@ -649,7 +648,6 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): ResolvedPipel
 		enabled: typeof raw.enabled === "boolean" ? raw.enabled : d.enabled,
 		paused: typeof raw.paused === "boolean" ? raw.paused : d.paused,
 		shadowMode: typeof raw.shadowMode === "boolean" ? raw.shadowMode : d.shadowMode,
-		nativeShadowEnabled: typeof raw.nativeShadowEnabled === "boolean" ? raw.nativeShadowEnabled : d.nativeShadowEnabled,
 		mutationsFrozen: typeof raw.mutationsFrozen === "boolean" ? raw.mutationsFrozen : d.mutationsFrozen,
 		semanticContradictionEnabled:
 			typeof raw.semanticContradictionEnabled === "boolean"

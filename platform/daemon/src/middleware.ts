@@ -1,18 +1,14 @@
 /**
  * Global Hono middleware extracted from daemon.ts.
- * Registers CORS, shutdown guard, auth, request logging, and shadow divergence.
+ * Registers CORS, shutdown guard, auth, and request logging.
  */
 
-import type { ChildProcess } from "node:child_process";
-import { appendFileSync } from "node:fs";
-import { join } from "node:path";
 import type { Hono } from "hono";
 import { cors } from "hono/cors";
 import { createAuthMiddleware, verifyApiKey } from "./auth";
 import { getDbAccessor } from "./db-accessor";
 import { logger } from "./logger";
 import {
-	AGENTS_DIR,
 	analyticsCollector,
 	authConfig,
 	authSecret,
@@ -20,26 +16,7 @@ import {
 	shuttingDown,
 } from "./routes/state.js";
 
-interface MiddlewareDeps {
-	getShadowProcess: () => ChildProcess | null;
-}
-
-function appendDivergence(agentsDir: string, entry: Record<string, unknown>): void {
-	const logPath = join(agentsDir, ".daemon", "logs", "shadow-divergences.jsonl");
-	appendFileSync(logPath, `${JSON.stringify({ ts: new Date().toISOString(), ...entry })}\n`);
-}
-
-const SHADOW_HEADER_ALLOWLIST = new Set(["accept", "content-type", "user-agent", "x-signet-runtime-path"]);
-
-function shadowForwardHeaders(headers: Headers): Headers {
-	const safe = new Headers();
-	for (const [name, value] of headers) {
-		if (SHADOW_HEADER_ALLOWLIST.has(name.toLowerCase())) safe.set(name, value);
-	}
-	return safe;
-}
-
-export function registerGlobalMiddleware(app: Hono, deps: MiddlewareDeps): void {
+export function registerGlobalMiddleware(app: Hono): void {
 	// MW-1: CORS
 	app.use(
 		"*",
@@ -87,44 +64,5 @@ export function registerGlobalMiddleware(app: Hono, deps: MiddlewareDeps): void 
 		} else if (p.includes("/modify") || p.includes("/forget") || p.includes("/recover")) {
 			analyticsCollector.recordLatency("mutate", duration);
 		}
-	});
-
-	// MW-5: Shadow divergence logging
-	app.use("*", async (c, next) => {
-		const method = c.req.method;
-		const shadowProcess = deps.getShadowProcess();
-		const reqPath = c.req.path;
-		if (!shadowProcess || reqPath.startsWith("/api/auth/") || reqPath.startsWith("/api/secrets")) {
-			await next();
-			return;
-		}
-		const bodyP = ["POST", "PUT", "PATCH"].includes(method)
-			? c.req.text().catch(() => undefined)
-			: Promise.resolve(undefined);
-		await next();
-		if (!deps.getShadowProcess()) return;
-		const search = new URL(c.req.url).search;
-		const primaryStatus = c.res.status;
-		bodyP
-			.then((rawBody) =>
-				fetch(`http://localhost:3851${reqPath}${search}`, {
-					method,
-					headers: shadowForwardHeaders(c.req.raw.headers),
-					body: rawBody,
-					signal: AbortSignal.timeout(5000),
-				}),
-			)
-			.then((shadow) => {
-				if (primaryStatus !== shadow.status) {
-					appendDivergence(AGENTS_DIR, {
-						path: reqPath,
-						method,
-						primaryStatus,
-						shadowStatus: shadow.status,
-					});
-				}
-				return shadow.body?.cancel();
-			})
-			.catch(() => {});
 	});
 }

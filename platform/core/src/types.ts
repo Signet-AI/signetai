@@ -382,7 +382,6 @@ export interface PipelineV2Config {
 	readonly enabled: boolean;
 	readonly paused: boolean;
 	readonly shadowMode: boolean;
-	readonly nativeShadowEnabled: boolean;
 	readonly mutationsFrozen: boolean;
 	readonly semanticContradictionEnabled: boolean;
 	readonly semanticContradictionTimeoutMs: number;
