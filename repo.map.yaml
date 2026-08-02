@@ -3,7 +3,7 @@ updated_at: "2026-04-19"
 
 areas:
   platform:
-    purpose: "Engine/runtime code: core data model, daemon, Rust daemon parity, predictor, native accelerators."
+    purpose: "Engine/runtime code: core data model, daemon, predictor, native accelerators."
     risk:
       - "agent_id and visibility scoping"
       - "auth and rate limits on mutation/admin routes"
@@ -16,8 +16,6 @@ areas:
         name: "@signet/daemon"
       - path: platform/native
         name: "@signet/native"
-      - path: platform/daemon-rs
-        name: "daemon-rs"
 
   surfaces:
     purpose: "Human-facing ways to operate Signet."

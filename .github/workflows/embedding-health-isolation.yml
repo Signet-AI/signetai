@@ -7,7 +7,7 @@ name: Embedding Health Isolation
 # handling, sync status) and the end-to-end isolation test (real daemon over
 # HTTP, model fetch stalled at a local blackhole, /health SLA asserted).
 #
-# Mirrors rust-daemon-parity.yml (path-scoped pull_request + push-to-main).
+# Path-scoped pull_request + push-to-main.
 
 on:
   pull_request:

@@ -59,7 +59,6 @@
 <!-- Fill this section only when migrations are touched. -->
 
 - [ ] Migration is idempotent
-- [ ] Daemon Rust parity reviewed or explicitly N/A
 - [ ] Rollback / compatibility note included in PR description
 
 ## Testing
