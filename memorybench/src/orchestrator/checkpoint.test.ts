@@ -15,6 +15,14 @@ describe("CheckpointManager question metadata", () => {
     rmSync(dir, { recursive: true, force: true })
   })
 
+  test("rejects run IDs that could escape the runs directory", () => {
+    const manager = new CheckpointManager(dir)
+
+    expect(() => manager.getRunPath("../../outside")).toThrow("Invalid run ID")
+    expect(() => manager.getRunPath("run/child")).toThrow("Invalid run ID")
+    expect(manager.getRunPath("valid-run_1")).toBe(join(dir, "valid-run_1"))
+  })
+
   test("stores question dates for temporal answer prompts", () => {
     const manager = new CheckpointManager(dir)
     const checkpoint = manager.create(

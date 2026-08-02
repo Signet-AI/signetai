@@ -1,6 +1,7 @@
 import type { ProviderName } from "../../types/provider"
 import type { BenchmarkName } from "../../types/benchmark"
-import { orchestrator, CheckpointManager } from "../../orchestrator"
+import { orchestrator } from "../../orchestrator"
+import { CheckpointManager, isValidRunId } from "../../orchestrator/checkpoint"
 import { getAvailableProviders } from "../../providers"
 import { getAvailableBenchmarks } from "../../benchmarks"
 import { listAvailableModels } from "../../utils/models"
@@ -38,7 +39,7 @@ export function parseTestArgs(args: string[]): TestArgs | null {
   }
 
   // runId and questionId are always required
-  if (!parsed.runId || !parsed.questionId) {
+  if (!parsed.runId || !isValidRunId(parsed.runId) || !parsed.questionId) {
     return null
   }
 

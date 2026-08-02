@@ -23,6 +23,11 @@ import { PHASE_ORDER } from "../types/checkpoint"
 import { logger } from "../utils/logger"
 
 const RUNS_DIR = "./data/runs"
+const RUN_ID_PATTERN = /^[a-zA-Z0-9_-]+$/
+
+export function isValidRunId(runId: string): boolean {
+  return RUN_ID_PATTERN.test(runId)
+}
 
 export class CheckpointManager {
   private basePath: string
@@ -33,6 +38,9 @@ export class CheckpointManager {
   }
 
   getRunPath(runId: string): string {
+    if (!isValidRunId(runId)) {
+      throw new Error(`Invalid run ID: ${runId}`)
+    }
     return join(this.basePath, runId)
   }
 

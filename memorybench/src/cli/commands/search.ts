@@ -1,6 +1,7 @@
 import type { ProviderName } from "../../types/provider"
 import type { BenchmarkName } from "../../types/benchmark"
-import { orchestrator, CheckpointManager } from "../../orchestrator"
+import { orchestrator } from "../../orchestrator"
+import { CheckpointManager, isValidRunId } from "../../orchestrator/checkpoint"
 import { getAvailableProviders } from "../../providers"
 import { getAvailableBenchmarks } from "../../benchmarks"
 import { logger } from "../../utils/logger"
@@ -26,7 +27,7 @@ export function parseSearchArgs(args: string[]): SearchArgs | null {
   }
 
   // runId is required for search (must have ingested first)
-  if (!parsed.runId || !/^[a-zA-Z0-9_-]+$/.test(parsed.runId)) {
+  if (!parsed.runId || !isValidRunId(parsed.runId)) {
     return null
   }
 
