@@ -2,21 +2,18 @@ import { type SpawnSyncReturns, spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
 	appendFileSync,
-	chmodSync,
 	closeSync,
 	existsSync,
 	mkdirSync,
 	openSync,
 	readFileSync,
 	rmSync,
-	unlinkSync,
 	writeFileSync,
 } from "node:fs";
 import { connect } from "node:net";
 import { homedir } from "node:os";
 import { basename, delimiter, dirname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
-import { parseSimpleYaml } from "@signet/core";
 import chalk from "chalk";
 import { resolveDaemonNetwork } from "./network.js";
 import { resolveAgentsDir } from "./workspace.js";
@@ -119,19 +116,10 @@ function pidFile(agentsDir: string): string {
 	return join(agentsDir, ".daemon", "pid");
 }
 
-function rustDaemonRuntimeEnabled(env: NodeJS.ProcessEnv): boolean {
-	return env.SIGNET_DAEMON_RUNTIME?.trim().toLowerCase() === "rust";
-}
-
 export function resolveDaemonPaths(env: NodeJS.ProcessEnv = process.env): string[] {
 	const currentNativeExecutable = currentNativeExecutablePath();
-	const bundledNativeDaemon = env.SIGNET_DIR
-		? join(env.SIGNET_DIR, "runtime", "daemon-rs", process.platform === "win32" ? "signet-daemon.exe" : "signet-daemon")
-		: null;
 	const bundledJsDaemon = env.SIGNET_DIR ? join(env.SIGNET_DIR, "runtime", "daemon-js", "daemon.js") : null;
-	const bundledRuntimePaths = rustDaemonRuntimeEnabled(env)
-		? [bundledNativeDaemon, bundledJsDaemon]
-		: [bundledJsDaemon];
+	const bundledRuntimePaths = [bundledJsDaemon];
 	return [
 		currentNativeExecutable,
 		...bundledRuntimePaths,
@@ -151,8 +139,6 @@ function daemonPaths(): string[] {
 function daemonMarks(paths: readonly string[]): string[] {
 	return [
 		...paths,
-		"/runtime/daemon-rs/signet-daemon",
-		"\\runtime\\daemon-rs\\signet-daemon.exe",
 		"/signetai/dist/daemon.js",
 		"/platform/daemon/dist/daemon.js",
 		"/platform/daemon/src/daemon.ts",
@@ -654,68 +640,6 @@ export async function getDaemonStatus(): Promise<{
 	};
 }
 
-async function downloadDaemonBinary(): Promise<void> {
-	let version: string | undefined;
-	try {
-		const raw = readFileSync(join(pkgDir, "package.json"), "utf8");
-		version = (JSON.parse(raw) as { version?: string }).version;
-	} catch {
-		return;
-	}
-	if (!version) return;
-
-	const plat = process.platform;
-	const arch = process.arch;
-	const supported = new Set(["linux:x64", "darwin:x64", "darwin:arm64", "win32:x64", "win32:arm64"]);
-	if (!supported.has(`${plat}:${arch}`)) return;
-
-	const ext = plat === "win32" ? ".exe" : "";
-	const name = `signet-daemon-${plat}-${arch}${ext}`;
-	const binDir = join(pkgDir, "bin");
-	const dest = join(binDir, name);
-	if (existsSync(dest)) return;
-
-	const base = `https://github.com/Signet-AI/signetai/releases/download/v${version}`;
-	process.stdout.write(`  Downloading Rust daemon binary (${name})...`);
-
-	try {
-		const checksumRes = await fetch(`${base}/${name}.sha256`, {
-			redirect: "follow",
-			signal: AbortSignal.timeout(10_000),
-		});
-		if (!checksumRes.ok) {
-			process.stdout.write(` skipped (checksum unavailable: ${checksumRes.status})\n`);
-			return;
-		}
-		const expectedHash = (await checksumRes.text()).trim().split(/\s+/)[0];
-
-		const res = await fetch(`${base}/${name}`, { redirect: "follow", signal: AbortSignal.timeout(30_000) });
-		if (!res.ok) {
-			process.stdout.write(` skipped (${res.status})\n`);
-			return;
-		}
-		mkdirSync(binDir, { recursive: true });
-		const bytes = await res.arrayBuffer();
-		const buf = Buffer.from(bytes);
-		const actualHash = sha256(buf);
-		if (actualHash !== expectedHash) {
-			process.stdout.write(" skipped (checksum mismatch — possible tampering)\n");
-			return;
-		}
-
-		writeFileSync(dest, buf);
-		if (plat !== "win32") chmodSync(dest, 0o755);
-		process.stdout.write(" done\n");
-	} catch {
-		process.stdout.write(" skipped (download failed)\n");
-		try {
-			unlinkSync(dest);
-		} catch {
-			// Ignore.
-		}
-	}
-}
-
 export interface DaemonStartArgsInput {
 	readonly daemonPath: string;
 	readonly agentsDir: string;
@@ -923,7 +847,6 @@ export function buildLaunchdDaemonPlist(input: LaunchdDaemonPlistInput): string 
 		SIGNET_PATH: input.agentsDir,
 		SIGNET_DAEMON_ENTRYPOINT: "1",
 		...(process.env.SIGNET_DIR ? { SIGNET_DIR: process.env.SIGNET_DIR } : {}),
-		...(process.env.SIGNET_DAEMON_RUNTIME ? { SIGNET_DAEMON_RUNTIME: process.env.SIGNET_DAEMON_RUNTIME } : {}),
 		...(process.env.SIGNET_DASHBOARD_DIR ? { SIGNET_DASHBOARD_DIR: process.env.SIGNET_DASHBOARD_DIR } : {}),
 		HOME: process.env.HOME ?? homedir(),
 		PATH: process.env.PATH ?? "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
@@ -990,17 +913,6 @@ export async function startDaemon(agentsDir: string = AGENTS_DIR): Promise<boole
 		if (!stopped) {
 			return false;
 		}
-	}
-
-	try {
-		const raw = parseSimpleYaml(readFileSync(join(agentsDir, "agent.yaml"), "utf8"));
-		const mem = raw?.memory as Record<string, unknown> | undefined;
-		const p2 = mem?.pipelineV2 as Record<string, unknown> | undefined;
-		if (p2?.nativeShadowEnabled === true) {
-			await downloadDaemonBinary();
-		}
-	} catch {
-		// Non-fatal — agent.yaml may not exist yet.
 	}
 
 	const net = resolveDaemonNetwork(agentsDir, process.env);
