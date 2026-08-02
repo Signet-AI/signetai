@@ -4,7 +4,7 @@ Signet is organized by developer intent rather than by one generic `packages/`
 bucket.
 
 ```text
-platform/      engine/runtime code: core, daemon, daemon-rs, predictor, native
+platform/      engine/runtime code: core, daemon, predictor, native
 surfaces/      human-facing ways to operate Signet: CLI, dashboard, desktop, tray, extension
 integrations/  external harness integrations grouped by tool
 plugins/       Signet-native plugins loaded by Signet
@@ -34,7 +34,6 @@ setup and `plugin/` for the runtime plugin loaded by OpenCode.
 |---|---|
 | `@signet/core` | `platform/core/` |
 | `@signet/daemon` | `platform/daemon/` |
-| `platform/daemon-rs` | `platform/daemon-rs/` |
 | `@signet/native` | `platform/native/` |
 | `@signet/cli` | `surfaces/cli/` |
 | `signet-dashboard` | `surfaces/dashboard/` |

@@ -419,16 +419,6 @@ specs:
     success_criteria: []
     decision: null
 
-  - id: daemon-rust-rewrite
-    status: planning
-    path: docs/specs/planning/daemon-rust-rewrite.md
-    hard_depends_on:
-      - memory-pipeline-v2
-    soft_depends_on: []
-    blocks: []
-    informed_by: []
-    success_criteria: []
-    decision: deferred
 
   - id: signet-roadmap-spec
     status: planning
@@ -815,18 +805,6 @@ specs:
     decision: null
 
 
-  - id: rust-daemon-parity-cutover
-    status: planning
-    path: docs/specs/planning/rust-daemon-parity-cutover.md
-    hard_depends_on:
-      - daemon-rust-rewrite
-      - memory-pipeline-v2
-    soft_depends_on: []
-    blocks: []
-    informed_by: []
-    success_criteria:
-      - "Rust daemon reaches feature parity with JS daemon and becomes primary runtime"
-    decision: null
 
 
   - id: deep-memory-search

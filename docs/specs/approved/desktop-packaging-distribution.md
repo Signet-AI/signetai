@@ -15,6 +15,9 @@ success_criteria:
 scope_boundary: "Desktop packaging, runtime bundling preference, CI workflows, and Arch metadata generation. Does not replace npm package publishing flows."
 ---
 
+> **Deprecated context:** The daemon-rs Rust daemon rewrite has been removed. References below to daemon-rs parity or mirroring are historical.
+
+
 # Desktop Packaging and Distribution
 
 ## Context

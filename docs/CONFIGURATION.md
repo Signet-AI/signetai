@@ -908,7 +908,7 @@ control.
 | `leaseTimeoutMs` | `300000` | 10000-600000 ms | Time before an uncompleted job lease expires |
 | `maxLoadPerCpu` | `0.8` | 0.1-8.0 | Load-per-CPU threshold above which extraction polling is deferred |
 | `overloadBackoffMs` | `30000` | 1000-300000 ms | Delay between poll attempts while host load stays above threshold |
-| `maxLlmConcurrency` | `2` | 1-16 | Shared cap for live LLM calls across extraction, synthesis, reranking, inference streaming, and daemon route provider calls such as skills, ontology consolidation, and diagnostics greetings. `SIGNET_MAX_LLM_CONCURRENCY` overrides YAML when set, matching the TypeScript daemon and Rust daemon runtime behavior for wired provider paths. |
+| `maxLlmConcurrency` | `2` | 1-16 | Shared cap for live LLM calls across extraction, synthesis, reranking, inference streaming, and daemon route provider calls such as skills, ontology consolidation, and diagnostics greetings. `SIGNET_MAX_LLM_CONCURRENCY` overrides YAML when set, matching the TypeScript daemon behavior for wired provider paths. |
 
 A job that exceeds `maxRetries` moves to dead-letter status and is
 eventually purged by the retention worker.
@@ -1424,7 +1424,6 @@ editing the config file is impractical.
 | `SIGNET_LOG_FILE` | — | Optional explicit daemon log file path |
 | `SIGNET_LOG_DIR` | `$SIGNET_WORKSPACE/.daemon/logs` | Optional daemon log directory override |
 | `SIGNET_SQLITE_PATH` | — | macOS explicit SQLite dylib override used before Bun opens the database |
-| `SIGNET_DAEMON_RUNTIME` | `typescript` | Installed daemon runtime selector. Set to `rust` only for explicit daemon-rs parity testing; route parity alone is not a production cutover. |
 | `SIGNET_SESSION_START_TIMEOUT` | `15000` | Session-start daemon wait budget in ms for Signet-managed clients. Generated Claude Code hook config writes this value directly. Generated Codex hook config rounds up to seconds and adds 5 seconds of harness grace |
 | `SIGNET_FETCH_TIMEOUT` | `15000` | Legacy fallback for session-start timeout in ms when `SIGNET_SESSION_START_TIMEOUT` is unset |
 | `SIGNET_PROMPT_SUBMIT_TIMEOUT` | `5000` | Prompt-submit daemon wait budget in ms; OpenCode uses this value directly, generated Claude Code hook config writes this value + 2000 ms grace, and generated Codex hook config rounds up to seconds and adds 2 seconds of harness grace |
@@ -1444,12 +1443,7 @@ it is unset, Signet checks `$SIGNET_WORKSPACE/libsqlite3.dylib`, where
 trying standard Homebrew SQLite locations and finally falling back to
 Apple's system SQLite.
 
-`SIGNET_DAEMON_RUNTIME=rust` is an explicit test opt-in for installed bundles
-that include `runtime/daemon-rs/signet-daemon`. Leave it unset for normal
-operation; the TypeScript/Bun daemon remains the default until daemon-rs has
-stateful subsystem and rollback proof, not just endpoint-shape parity.
-
-For non-loopback Anthropic endpoint overrides, daemon-rs
+For non-loopback Anthropic endpoint overrides, the daemon
 only sends provider credentials during startup preflight when the host
 is trusted. Official provider hosts are trusted by default. Add trusted
 proxy/gateway hosts through `SIGNET_TRUSTED_PROVIDER_ENDPOINT_HOSTS`.

@@ -10,136 +10,131 @@ section: "Project"
 Roadmap
 ===
 
-This is the public roadmap for Signet, updated manually as priorities
-shift. It captures what we're actively building, what's committed next,
-and what we're still shaping. For implementation sequencing, dependency
-contracts, and status truth, see [Spec Index](specs/INDEX.md).
+Updated 2026-07-23. This gets updated as priorities shift.
 
-Status markers: `[done]` shipped, `[wip]` in progress, `[next]` planned,
-`[stub]` intentionally tracked but not fully planned, `[idea]` exploring.
+What the markers mean: `[done]` shipped, `[wip]` working on it now, `[next]` next in line, `[backlog]` want to do it but not yet scheduled.
 
-
-Current Focus (0.124.x)
 ---
 
-- [wip] Public positioning and documentation correctness
-  - align README, docs, and website language around portable agent state,
-    local ownership, source truth, and behavioral context portability
-- [wip] Source-native substrate
-  - preserve source artifacts as ground truth, derive semantic memory with
-    provenance, and make claims rebuildable from their evidence
-- [wip] Source events as agent triggers
-  - treat sources as live event surfaces, not only passive recall inputs:
-    events should carry source truth, policy, context, and a result artifact
-- [wip] Skills over substrate
-  - keep deterministic substrate in Signet and move repeated cognition into
-    loadable, inspectable, portable skills with their own working trails
-- [wip] Proving-ground loop
-  - use one source ecosystem, one recurring job-to-be-done, one visible
-    metric, and one tight loop where bad memory visibly hurts
-- [wip] Reliability and performance as product integrity
-  - reduce daemon fragility, runtime cost, and resource waste because local
-    ownership should not push access debt back onto users
-- [wip] Authority, permissions, and secrets boundary
-  - agent-blind secrets, RBAC, token policy, rate limits, capability scoping,
-    and source-backed authority across protocols and MCP tools
+What we're building now
 
-
-Planned Next
 ---
 
-- [next] Universal source layer
-  - make it easy for an agent to connect Obsidian, repos, transcripts,
-    Discord, Fitbit, servers, devices, and other sources through one common
-    source-artifact contract
-- [next] Pipeline V3 as skills over substrate
-  - run scheduled and event-triggered skill sessions over source artifacts,
-    transcripts, failures, and prior decisions; emit proposed graph, memory,
-    identity, skill, source, or authority changes with provenance
-- [next] Dreaming as background semantic QA
-  - judge memory maintenance by downstream behavior: fewer repeated
-    investigations, fewer repeated mistakes, cleaner source-backed memory,
-    better entity density, and visible mutation diffs
-- [next] Obsidian proving ground
-  - harden the clipping-to-literature workflow as the first bathtub: raw
-    source, adversarial intake, provenance, synthesis, backlinks, indexes,
-    operations logs, skill formation, and user taste in one inspectable loop
-- [next] Hermes Agent production hardening
-  - validate real install flows, gateway session routing, and cross-platform
-    memory continuity; borrow the stronger skill layer where it fits Signet
-- [next] Capability-scoped tool permissions
-  - distinguish read-only, destructive, credentialed, and approval-gated
-    actions across harnesses and MCP tools
-- [next] Signet Cloud baseline inference and sync
-  - keep the open-source product complete while exploring managed sync,
-    background inference, and stronger embedding models as hosted help
-- [next] Rust daemon parity + primary runtime cutover
-  - parity first, cutover second, with divergence logging, rollback paths,
-    and performance wins validated before the TypeScript daemon gives way
+The core memory system works. The pipeline drains. Recall is fast. What's missing is the part where normal people can install it and not feel lost.
 
+**[wip] Dashboard redesign (#948)**
 
-Strategic Stub Backlog (tracked, planning incomplete)
+The old dashboard was never given a proper design pass. It grew piece by piece without a plan. We're replacing it completely.
+
+The new one is React 19 with shadcn/ui and Geist fonts. One design, light and dark mode, system-default. The design is already locked -- there's an HTML mockup at `surfaces/dashboard/redesign-home-mockup.html`. The React build has to match it pixel for pixel. First milestone proves the build works inside Electron. After that, every page gets rebuilt: home, memory browsing, settings, harness config, sources, journal.
+
+**[wip] Desktop app (#1001)**
+
+Right now Signet is a command-line tool. That works for developers. It doesn't work for everyone else.
+
+The desktop app is an Electron shell that wraps the same compiled binary headless installs use. It manages the daemon in the background, shows a tray icon, and updates itself. Ships as .dmg, .exe, and .AppImage from GitHub releases. No app store.
+
+Headless installs (`npm i -g signetai`, curl-install) still work. The data lives in `~/.agents/` no matter how you install it, so switching from headless to desktop is seamless -- the desktop app detects your existing setup and adopts it.
+
+**[wip] Config system that doesn't suck**
+
+The router blocks targets with opaque error messages. The privacy check for local models is broken. Old config fields get left behind after migration. These all came up during real use and need to be fixed before the settings panel in the dashboard can ship.
+
+**[next] Setup wizard (#967)**
+
+New users shouldn't have to hand-edit a YAML file to get started. The wizard walks through harness connections, inference targets, and workspace setup.
+
+**[next] Transcript export (#984)**
+
+Export session transcripts in a format suitable for training. Powers the dataset work below.
+
 ---
 
-- [stub] Behavioral context portability / OAS working draft
-  - define export/import expectations for identity, memory, provenance,
-    skills, source metadata, and secrets metadata without tying the standard
-    to one harness
-- [stub] Distributed harness and multi-remote orchestration
-- [stub] Remember/Recall skill parity refresh with current schema
-- [stub] Per-user neural query surface
-  - train a disposable small model on a user's artifact history as a future
-    query layer, while keeping source artifacts underneath as ground truth
-- [stub] Deep memory search as an optional escalation path
-  - multi-agent or LLM-assisted search only when primary retrieval cannot
-    answer with enough confidence
-- [stub] MCP CLI bridge + usage analytics in dashboard
-  - reference direction: MC Porter-style command visibility
-- [stub] Git-based marketplace monorepo for skills + MCP servers
-  - GitHub-authenticated PR publishing/reviews, JSON review artifacts
-- [stub] Adaptive skill lifecycle
-  - usage tracking, maintenance suggestions, and procedural memory links
-- [stub] Cryptographic identity roadmap
-  - agent passports, artifact signing, and verifiable identity without
-    requiring a specific chain or vendor identity provider
-- [stub] Plugin API + app ecosystem integrations
-  - dashboard and CLI surfaces for third-party integrations
-- [stub] Unified realtime constellation / embedding / entity viewer
-  - replace slow current 3D path and make provenance inspectable by default
-- [stub] Dashboard IA refactor
-  - settings as standalone page, breadcrumb-first navigation model
-- [stub] Post-install behavior migration audit
-  - ensure daemon/CLI own critical install flows consistently
+Making the pipeline coherent
 
-
-Recently Shipped
 ---
 
-- [done] Readable changelog generation and release-note correctness
-  - release entries now use the bumped version and include a highlights
-    layer plus exact release ledger
-- [done] Workspace source checkout sync
-  - managed source checkout, clean-branch update behavior, and watcher
-    ignore coverage
-- [done] Connector expansion and hardening
-  - Hermes Agent integration, OpenClaw runtime
-    hardening, and request normalization
-- [done] Recall surface alignment
-  - CLI, MCP, SDK, and hook recall paths now share more of the same filter
-    and response contract
-- [done] Documentation site quality pass
-  - section-aware docs search, normal markdown link rewriting, TOC fixes,
-    and clearer contributor/user workflow docs
-- [done] Multi-agent support baseline
-  - roster/scoping/runtime routing foundation complete; polish phases remain
-    active in current focus
+Extraction works, but the architecture between the pipeline and dreaming is tangled. Both should draw from the same queue and produce the same kind of graph changes, so users can pick whichever approach fits their hardware.
 
+**[wip] Unify pipeline and dreaming (#913)**
 
-Notes
+One queue for everything -- summaries, transcripts, imported content. Pipeline distillation and agentic dreaming both read from it and write to the same graph operations. You turn one on, you turn the other off, or you run both. The system doesn't care.
+
+**[next] Dreaming as a proper agent inside the daemon (#947 B)**
+
+Pi is a TypeScript library that gives us auth, model selection, and 30+ providers out of the box. Embedding it in the daemon means the dreaming agent gets real graph tools and produces runbook logs. Replaces the current fragile chain of five separate LLM calls with a single agent that can wander the graph, check its assumptions, and write back.
+
+**[next] Temporal claims (#945)**
+
+When someone saves "going to Venezuela in March," the system should remember to follow up when March passes. A `review_after` timestamp on the memory makes this possible without scanning everything.
+
+**[next] Cross-agent notifications (#944)**
+
+Messages that jump between agent sessions in different harnesses without polling. Each harness declares which hooks it exposes. The module routes through the next available one.
+
 ---
 
-- The old predictor-centered roadmap is retired as a public framing. Learned
-  ranking can remain experimental, but Signet's product claim is portable
-  agent state with inspectable extraction, provenance, and context selection.
-- This roadmap is directional. [Spec Index](specs/INDEX.md) remains
-  the execution contract and dependency source of truth.
+Cloud, scale, and the long tail
+
+---
+
+The cloud is not a replacement for the local product. It's optional infrastructure the daemon connects to if you want it. The app is free and local. You pay for sync and hosted services on top. Same model as Obsidian.
+
+**[backlog] Cloud inference API (#647, #1001)**
+
+Background pipeline tasks run on cloud GPUs instead of your local machine. Small free monthly allowance. Paid tier (~$4-8/mo) for more. Separate private repo.
+
+**[backlog] Cross-device sync**
+
+Memory, config, and sources sync between your machines. The daemon opens an outbound connection to the relay. No firewall issues.
+
+**[backlog] Full hosted daemon**
+
+The daemon runs in the cloud so your background pipeline keeps going even when your laptop is closed. Not for v1.
+
+**[backlog] Training dataset and reasoning model**
+
+Fine-tune a small reasoning model from 20k collected conversations. PII sanitized. Mythos-style reasoning traces for extraction and synthesis. Open source the dataset.
+
+---
+
+Operations
+
+---
+
+**[wip] Strict quality gates (#919)**
+
+Make lint, typecheck, and test gates mandatory across TypeScript and Rust. Clear the backlog so the gate can go hard-required.
+
+**[wip] Release pipeline**
+
+Nightly releases produce all three distribution artifacts (npm package, compiled binary, desktop installer). Non-blocking CI.
+
+**[next] Status clarity (#908)**
+
+Status currently mixes up configured, resolved, effective, and running states. Needs to be cleaner.
+
+**[next] Raspberry Pi target (#921)**
+
+Test and optimize for Pi 3B+. Target idle RSS under 100MB.
+
+---
+
+Recently shipped
+
+---
+
+- **[done]** Inference cutover to pi-ai + ACPX (#947 / #949). All hand-rolled providers deleted. -5853 lines of code.
+- **[done]** Distribution model spec (#1001). Three install shapes, cloud architecture, locked.
+- **[done]** Dashboard redesign HTML mockup. The design spec for the React rewrite.
+- **[done]** Multi-agent support baseline.
+- **[done]** Connector expansion (Hermes Agent, OpenClaw).
+- **[done]** Readable changelog and release notes.
+- **[done]** Recall alignment across CLI, MCP, SDK, and hooks.
+- **[done]** Documentation site improvements.
+
+---
+
+What changed from the old roadmap
+
+The old roadmap talked about "skills over substrate," "source events as agent triggers," and a "proving-ground loop." Those aren't wrong directions, but they're not what we're shipping right now. What we're shipping is a dashboard that doesn't confuse people, a desktop app that installs like a real application, and a pipeline that doesn't need hand-holding. Once those are solid, the bigger ideas have a foundation to land on.

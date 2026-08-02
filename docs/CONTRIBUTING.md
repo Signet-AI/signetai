@@ -61,7 +61,7 @@ Project Structure
 This is a Bun workspace monorepo organized by intent:
 
 ```
-platform/               # engine/runtime: core, daemon, daemon-rs, native
+platform/               # engine/runtime: core, daemon, native
 surfaces/               # human-facing surfaces: CLI, dashboard, desktop, tray, browser extension
 integrations/           # external harness integrations grouped by tool
 libs/                   # reusable developer libraries: SDK, connector-base
@@ -76,7 +76,6 @@ Key packages:
 ```
 platform/core/                         # @signet/core — types, database, search, identity
 platform/daemon/                       # @signet/daemon — HTTP API, file watcher, pipeline
-platform/daemon-rs/                    # Rust shadow daemon/parity runtime
 surfaces/cli/                          # @signet/cli — setup wizard and daemon management
 surfaces/dashboard/                    # signet-dashboard — Svelte dashboard
 surfaces/desktop/                      # @signet/desktop — Electron desktop application

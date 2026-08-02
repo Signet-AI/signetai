@@ -14,6 +14,9 @@ scope_boundary: "Completed targeted bug fix and config surface from PR #396. Thi
 draft_quality: "completed bug-fix record"
 ---
 
+> **Deprecated context:** The daemon-rs Rust daemon rewrite has been removed. References below to daemon-rs parity or mirroring are historical.
+
+
 # Recall Confidence Gate
 
 ## Summary

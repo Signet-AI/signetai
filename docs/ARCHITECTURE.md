@@ -344,7 +344,7 @@ entities or active aliases, uses that entity match as the search scope, and
 injects compact current-view attributes only when scoped attribute relevance
 clears the configured confidence gate. Any future recall surface, including CLI
 shortcuts, SDK helpers, desktop UI search,
-connector-specific recall, or daemon-rs parity work, must either call the
+connector-specific recall, must either call the
 daemon recall API or implement the same evidence-channel contract. Do not add a
 separate recall path that bypasses lexical, semantic, prospective hint, and
 traversal evidence shaping.

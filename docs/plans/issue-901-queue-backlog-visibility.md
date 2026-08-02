@@ -51,7 +51,6 @@ that today are invisible or unsafe:
   provenance preserved.
 - Keep `/health` byte-for-byte compatible with #932 (legacy probes
   untouched).
-- Achieve Rust daemon parity for every new HTTP route.
 
 ## Non-goals
 
@@ -86,13 +85,6 @@ that today are invisible or unsafe:
 - `surfaces/cli/src/features/health.ts` — `signet status` renders
   `health.status`, `health.composite`, extraction-degraded banner.
   No `pipeline queues` block today.
-- `platform/daemon-rs/crates/signet-daemon/src/routes/repair.rs:331`
-  — Rust handler for `POST /api/repair/requeue-dead` already mirrors
-  TypeScript shape; precedent for parity on repair endpoints.
-- `platform/daemon-rs/contracts/route-parity.json` —
-  328 routes, 319 `native-rust-replay-proven`, 7 `mounted-shallow`,
-  2 `missing`. New routes must land `native-rust-replay-proven` to
-  satisfy PR-readiness gates.
 
 ---
 
@@ -249,34 +241,7 @@ that today are invisible or unsafe:
       dead rows render correctly; CLI dry-run vs apply paths hit the
       right endpoint with the right body.
 
-## Phase 6 — Rust daemon parity
-
-> Every new HTTP route lands `native-rust-replay-proven` so the
-> `bun run check:rust-parity` gate is green.
-
-- [ ] `platform/daemon-rs/crates/signet-daemon/src/routes/diagnostics.rs`:
-      add `queue_diagnostics` returning the same `{queues, oldestDead*,
-      lastProviderError, thresholds}` shape derived from the SQLite
-      handle (`memories` table extracted from `signet_core::queries`
-      the same way the `get_diagnostics` handler does today).
-- [ ] Same file: add `queue_repair` that dispatches on `action`
-      (`requeue`/`cancel`/`prune`) and returns the same `RepairResult`
-      JSON shape as `repair.rs:33`.
-- [ ] Mount both in `crates/signet-daemon/src/main.rs` next to the
-      existing `/api/diagnostics/*` and `/api/repair/*` mounts.
-      Update `isAuthOpenPath` so admin-only routes stay gated.
-- [ ] `platform/daemon-rs/contracts/route-parity.json`: add the two
-      new routes with `status: "native-rust-replay-proven"`.
-- [ ] `platform/daemon-rs/contracts/parity-rules.json`: add per-endpoint
-      `ignoreFields` so non-deterministic fields (`pid`, `uptime`,
-      `version`, etc.) are tolerated.
-- [ ] `platform/daemon-rs/contracts/replay-corpus/cases/`: add replay
-      fixtures for both routes; mirror them in
-      `platform/daemon-rs/parity/01-route-inventory.md`.
-- [ ] Update `parity/00-correspondence-map.md` and `02-behavioral-cores.md`
-      to note queue diagnostics.
-
-## Phase 7 — `/api/status` parity
+## Phase 6 — `/api/status` parity
 
 - [ ] Update `parity-rules.json` so the new
       `pipeline.queue.*` fields fall under deterministic compare
@@ -284,7 +249,7 @@ that today are invisible or unsafe:
 - [ ] Replay fixture for `/api/status` updated to include
       `pipeline.queue` block.
 
-## Phase 8 — Regression tests
+## Phase 7 — Regression tests
 
 > Per PR template: "Regression tests added for each bug fix."
 
@@ -312,7 +277,7 @@ that today are invisible or unsafe:
       `/api/pipeline/status` pre/post. Reusable as a starting point
       for future backlog probes.
 
-## Phase 9 — Documentation
+## Phase 8 — Documentation
 
 - [ ] `docs/PIPELINE.md` — add a "Queue health and repair" section
       with thresholds + the new CLI + HTTP surfaces.
@@ -323,7 +288,7 @@ that today are invisible or unsafe:
       endpoints.
 - [ ] `CHANGELOG.md` — entry under `Unreleased` referencing #901.
 
-## Phase 10 — Self-review & ship
+## Phase 9 — Self-review & ship
 
 - [ ] `bun run typecheck`
 - [ ] `bun run lint`

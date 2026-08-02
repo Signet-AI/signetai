@@ -99,7 +99,7 @@ Make lint, typecheck, and test gates mandatory across TypeScript and Rust. Clear
 
 **[wip] Release pipeline**
 
-Nightly releases produce all three distribution artifacts (npm package, compiled binary, desktop installer). Non-blocking CI. Daemon-rs parity is follow-up, not a merge gate.
+Nightly releases produce all three distribution artifacts (npm package, compiled binary, desktop installer). Non-blocking CI.
 
 **[next] Status clarity (#908)**
 

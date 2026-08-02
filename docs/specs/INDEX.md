@@ -37,7 +37,6 @@ flowchart TD
   EIPT[Engram-Informed Predictor Track]
   SST[SSM Temporal Backbone]
   SSG[SSM Graph Traversal Model]
-  DRR[Daemon Rust Rewrite]
   PAF[Predictor Agent Feedback]
   SACC[Sub-Agent Context Continuity]
   DMC[Dreaming Memory Consolidation]
@@ -46,7 +45,6 @@ flowchart TD
     DHO[Distributed Harness Orchestration]
     SNH[Signet Native Harness]
     RRP[Remember/Recall Skill Parity]
-    RDC[Rust Daemon Parity Cutover]
     DMS[Deep Memory Search]
     MCB[MCP CLI Bridge + Usage Analytics]
     GMM[Git Marketplace Monorepo]
@@ -106,8 +104,6 @@ flowchart TD
   DHO --> SNH
   SR --> SNH
   PM --> RRP
-  DRR --> RDC
-  MP --> RDC
   DP --> DMS
   SSF --> DMS
   SR --> MCB
@@ -667,8 +663,6 @@ Phase ordering based on hard dependencies and integration contracts.
   - keep prompt-submit lightweight and stop consumer renderers from discarding metadata
 - **Semantic Prospective Hints** (`semantic-prospective-hints`)
   - extend prospective indexing with hint embeddings and semantic recall over predicted future cues
-- **Rust Daemon Parity and Runtime Cutover** (`rust-daemon-parity-cutover`)
-  - parity completion and primary-runtime switch strategy
 - **Deep Memory Search** (`deep-memory-search`)
   - optional multi-agent LLM memory search path (not primary retrieval)
 - **MCP CLI Bridge and Usage Analytics** (`mcp-cli-bridge-and-usage-analytics`)
@@ -755,7 +749,6 @@ Legend:
 | `daemon-provider-fallback-status` | complete | `docs/specs/complete/daemon-provider-fallback-status.md` | `memory-pipeline-v2` | - | Issue #320 complete: extraction fallback/block state now persists in status surfaces with explicit fallbackProvider control and startup dead-lettering on hard block |
 | `daemon-refactor` | planning | `docs/specs/planning/daemon-refactor.md` | - | `daemon-refactor-plan` | |
 | `daemon-refactor-plan` | planning | `docs/specs/planning/daemon-refactor-plan.md` | `daemon-refactor` | - | |
-| `daemon-rust-rewrite` | planning | `docs/specs/planning/daemon-rust-rewrite.md` | `memory-pipeline-v2` | - | deferred — complexity cost exceeds current benefit |
 | `signet-roadmap-spec` | planning | `docs/specs/planning/signet-roadmap-spec.md` | - | - | superseded by INDEX.md as active roadmap |
 | `setup-deployment-awareness` | planning | `docs/specs/planning/setup-deployment-awareness.md` | `signet-runtime` | - | deployment context prompt, non-interactive `--deployment-type` inference, and docs alignment for native embeddings |
 | `openclaw-integration-strategy` | complete | `docs/specs/complete/openclaw-integration-strategy.md` | - | `openclaw-importance-scoring-pr` | |
@@ -780,7 +773,6 @@ Legend:
 | `distributed-harness-orchestration` | planning | `docs/specs/planning/distributed-harness-orchestration.md` | `multi-agent-support`, `signet-runtime` | `signet-native-harness` | Stub: multi-remote harness/agent/memory orchestration |
 | `signet-native-harness` | planning | `docs/specs/planning/signet-native-harness.md` | `distributed-harness-orchestration`, `signet-runtime` | - | Stub: first-party harness track (Hermes-agent informed) |
 | `remember-recall-skill-parity` | planning | `docs/specs/planning/remember-recall-skill-parity.md` | `procedural-memory-plan` | - | Stub: /remember and /recall architecture/schema parity |
-| `rust-daemon-parity-cutover` | planning | `docs/specs/planning/rust-daemon-parity-cutover.md` | `daemon-rust-rewrite`, `memory-pipeline-v2` | - | Stub: rust daemon parity and primary-runtime cutover |
 | `deep-memory-search` | planning | `docs/specs/planning/deep-memory-search.md` | `desire-paths-epic`, `ssm-foundation-evaluation` | - | Stub: optional supermemory-style deep memory escalation |
 | `mcp-cli-bridge-and-usage-analytics` | approved | `docs/specs/approved/mcp-cli-bridge-and-usage-analytics.md` | `signet-runtime` | - | Phase 1: CLI bridge, invocation tracking, analytics API, dashboard panel |
 | `overview-usage-analytics` | approved | `docs/specs/approved/overview-usage-analytics.md` | `mcp-cli-bridge-and-usage-analytics`, `procedural-memory-plan` | - | Home overview card ranks most-used MCP servers and skills from real analytics instead of catalog popularity |

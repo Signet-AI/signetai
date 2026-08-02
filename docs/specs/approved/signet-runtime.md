@@ -7,6 +7,9 @@ success_criteria:
 scope_boundary: "Adapter contract and CLI/HTTP channels — does not define a monorepo-owned native runtime"
 ---
 
+> **Deprecated context:** The daemon-rs Rust daemon rewrite has been removed. References below to daemon-rs parity or mirroring are historical.
+
+
 Signet Runtime Adapter Contract
 ===============================
 

@@ -10,6 +10,9 @@ success_criteria:
 scope_boundary: "OpenClaw adapter, TS/Rust daemon hooks, temporal synthesis — no OpenClaw core changes"
 ---
 
+> **Deprecated context:** The daemon-rs Rust daemon rewrite has been removed. References below to daemon-rs parity or mirroring are historical.
+
+
 # OpenClaw Connector Hardening
 
 Three targeted improvements to the OpenClaw runtime plugin identified

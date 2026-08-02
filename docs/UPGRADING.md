@@ -103,11 +103,12 @@ inference:
           model: claude-sonnet-4
 ```
 
-## daemon-rs parity
+## daemon-rs removed
 
-The `platform/daemon-rs` parity requirement has been removed from `AGENTS.md`
-for this release. The Rust shadow runtime may lag the TypeScript daemon; treat
-the TypeScript daemon as authoritative until parity catches up.
+The experimental Rust daemon rewrite (`platform/daemon-rs`) and its shadow
+proxy, CLI runtime switch (`SIGNET_DAEMON_RUNTIME`), and route-parity harness
+have been removed. The TypeScript/Bun daemon is the sole runtime. Rust
+accelerators (`@signet/native`) are unaffected.
 
 ## Need help
 

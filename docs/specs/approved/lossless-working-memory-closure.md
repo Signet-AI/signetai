@@ -16,6 +16,9 @@ success_criteria:
 scope_boundary: "Closes the runtime and documentation gaps around lossless working memory, and mirrors touched daemon hook contracts into daemon-rs in the same work wave. Full daemon-rs cutover remains a separate program."
 ---
 
+> **Deprecated context:** The daemon-rs Rust daemon rewrite has been removed. References below to daemon-rs parity or mirroring are historical.
+
+
 # Lossless Working Memory Closure
 
 ## Why this exists

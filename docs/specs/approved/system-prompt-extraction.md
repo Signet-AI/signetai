@@ -15,6 +15,9 @@ success_criteria:
 scope_boundary: "This spec covers the system prompt content, its injection mechanism, and the migration path for existing users. It does not cover changes to MEMORY.md rendering, session-end hooks, or the extraction pipeline."
 ---
 
+> **Deprecated context:** The daemon-rs Rust daemon rewrite has been removed. References below to daemon-rs parity or mirroring are historical.
+
+
 System Prompt Extraction from Identity Files
 =============================================
 

@@ -62,19 +62,15 @@ mode expectations across harness paths.
 | Harness path | Prompt retrieval order | Thread-head continuity | Compaction artifact persistence | Forced post-event MEMORY refresh |
 |---|---|---|---|---|
 | TS daemon (primary) | entity current-view injection; transcripts via explicit `session_search` | yes | yes | yes (session-summary + compaction-complete) |
-| daemon-rs shadow | entity current-view injection | yes (agent-scoped retrieval path) | partial (hook route persistence only) | degraded (full event-driven refresh parity follows rust cutover wave) |
 
 Degraded mode rules:
 
 - When a harness/runtime path cannot emit every lifecycle event, Signet must
   document the missing surface explicitly instead of implying full parity.
-- Compaction/session-summary forced-refresh guarantees are currently full in
-  TS daemon and degraded in daemon-rs shadow path.
+- Compaction/session-summary forced-refresh guarantees are full in the TS daemon.
 - Watcher-driven harness identity sync (batched `AGENTS.md` / `USER.md` /
   `MEMORY.md` propagation, queued reruns during active sync, and generated
-  `SIGNET-ARCHITECTURE.md` refresh) is currently full in the TS daemon and
-  degraded in the daemon-rs shadow path, which does not yet own that watcher
-  pipeline.
+  `SIGNET-ARCHITECTURE.md` refresh) is full in the TS daemon.
 - Prompt-time anti-bleed scoping remains mandatory across all paths.
 
 ---
