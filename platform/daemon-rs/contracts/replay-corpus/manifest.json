@@ -1,8 +1,0 @@
-{
-    "cases": [
-        "cases/memory-remember-idempotency-dedupe.json",
-        "cases/memory-recall-agent-visibility-scope.json",
-        "cases/auth-api-key-create-list.json",
-        "cases/queue-diagnostics-dead-summary.json"
-    ]
-}

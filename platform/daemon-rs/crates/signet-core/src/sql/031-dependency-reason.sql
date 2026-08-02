@@ -1,9 +1,0 @@
--- Migration 031: Add reason to entity_dependencies, last_synthesized_at to entities
---
--- entity_dependencies.reason: LLM-provided explanation of why a dependency
---   exists, surfaced in the dashboard for auditability.
--- entities.last_synthesized_at: tracks when the cross-entity dependency
---   synthesis worker last processed an entity; used to find stale entities
---   that need re-synthesis when their facts change.
---
--- Both are nullable TEXT; handled via add_column_if_missing in migrations.rs.
