@@ -126,8 +126,8 @@ dependencies = [
 	test("flags stale Cargo.lock versions for workspace packages", () => {
 		const root = mkdtempSync(join(tmpdir(), "signet-version-sync-"));
 		try {
-			const workspace = join(root, "platform", "daemon-rs");
-			const crateDir = join(workspace, "crates", "signet-daemon");
+			const workspace = join(root, "platform", "example-rs");
+			const crateDir = join(workspace, "crates", "signet-example");
 			const crate = join(crateDir, "Cargo.toml");
 			mkdirSync(crateDir, { recursive: true });
 			writeFileSync(
@@ -139,7 +139,7 @@ version = "0.115.1"
 			writeFileSync(
 				crate,
 				`[package]
-name = "signet-daemon"
+name = "signet-example"
 version.workspace = true
 `,
 			);
@@ -148,13 +148,13 @@ version.workspace = true
 				`version = 4
 
 [[package]]
-name = "signet-daemon"
+name = "signet-example"
 version = "0.82.5"
 `,
 			);
 
 			expect(collectCargoLockMismatches([crate], "0.115.1")).toEqual([
-				`${join(workspace, "Cargo.lock")} package signet-daemon (0.82.5)`,
+				`${join(workspace, "Cargo.lock")} package signet-example (0.82.5)`,
 			]);
 		} finally {
 			rmSync(root, { force: true, recursive: true });

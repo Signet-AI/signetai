@@ -1250,10 +1250,7 @@ export function startWorker(
 					})
 				: { proposals: [], warnings: [] };
 
-		const controlledWritesEnabled =
-			pipelineCfg.enabled &&
-			!pipelineCfg.shadowMode &&
-			!pipelineCfg.mutationsFrozen;
+		const controlledWritesEnabled = pipelineCfg.enabled && !pipelineCfg.shadowMode && !pipelineCfg.mutationsFrozen;
 
 		// Convenience aliases for nested config
 		const { extraction: extractionCfg, autonomous: autonomousCfg } = pipelineCfg;
@@ -1796,9 +1793,7 @@ export function startWorker(
 		maxRetries: pipelineCfg.worker.maxRetries,
 		model: pipelineCfg.extraction.model,
 		mode:
-			pipelineCfg.enabled && !pipelineCfg.shadowMode && !pipelineCfg.mutationsFrozen
-				? "controlled-write"
-				: "shadow",
+			pipelineCfg.enabled && !pipelineCfg.shadowMode && !pipelineCfg.mutationsFrozen ? "controlled-write" : "shadow",
 	});
 
 	function pendingCount(): number {
