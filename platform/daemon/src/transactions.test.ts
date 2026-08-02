@@ -2,6 +2,7 @@ import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { runMigrations } from "../../core/src/migrations";
 import type { WriteDb } from "./db-accessor";
+import { beginEmbeddingIndexBuild, ensureEmbeddingIndexState } from "./embedding-index-state";
 import { txApplyDecision, txForgetMemory, txIngestEnvelope, txModifyMemory, txRecoverMemory } from "./transactions";
 
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
@@ -503,6 +504,59 @@ describe("transactions: txModifyMemory + txForgetMemory + txRecoverMemory", () =
 
 		const row = db.prepare("SELECT is_deleted FROM memories WHERE id = ?").get("mem-expired") as { is_deleted: number };
 		expect(row.is_deleted).toBe(1);
+	});
+
+	it("writes the embedding even when the caller's resolved config raced a building->ready promotion", () => {
+		// Regression: txModifyMemory re-resolves the active embedding config inside
+		// the transaction. Previously it checked the caller-supplied (already
+		// resolved) config, so a startup building->ready promotion between the
+		// caller's resolve and this write skipped the insert and silently dropped
+		// the vector (the API still reported embedded=true).
+		const embeddingConfig = {
+			provider: "native" as const,
+			model: "nomic-embed-text-v1.5",
+			dimensions: 768,
+			base_url: "",
+		};
+		ensureEmbeddingIndexState(asWriteDb(db), embeddingConfig);
+		db.exec(
+			"CREATE TABLE IF NOT EXISTS embeddings_staging (id TEXT PRIMARY KEY, content_hash TEXT UNIQUE, vector BLOB, dimensions INTEGER, source_type TEXT, source_id TEXT, chunk_text TEXT, created_at TEXT, agent_id TEXT)",
+		);
+		beginEmbeddingIndexBuild(asWriteDb(db), embeddingConfig);
+		// Promote staging -> active, simulating the startup build completing so
+		// the active profile becomes the recommended nomic profile.
+		db.prepare(
+			"UPDATE embedding_index_state SET active_profile_json = staging_profile_json, staging_profile_json = NULL, state = 'ready' WHERE id = 1",
+		).run();
+
+		insertMemory(db, { id: "mem-race", content: "original content", contentHash: "hash-race-old" });
+
+		const result = txModifyMemory(asWriteDb(db), {
+			memoryId: "mem-race",
+			patch: {
+				content: "updated content",
+				normalizedContent: "updated content",
+				contentHash: "hash-race-new",
+			},
+			reason: "race regression",
+			changedBy: "test",
+			changedAt: new Date().toISOString(),
+			embeddingVector: new Array(768).fill(0.1),
+			embeddingModelOnContentChange: "nomic-embed-text-v1.5",
+			extractionStatusOnContentChange: "none",
+			extractionModelOnContentChange: null,
+			// Stale: caller resolved this during building (no profile -> identity),
+			// but active is now the promoted nomic profile. Without the in-tx
+			// re-resolve this write would be skipped.
+			embeddingConfig: { ...embeddingConfig, profile: undefined },
+		});
+
+		expect(result.status).toBe("updated");
+		expect(result.contentChanged).toBe(true);
+		const row = db
+			.prepare("SELECT dimensions FROM embeddings WHERE source_type = 'memory' AND source_id = ?")
+			.get("mem-race") as { dimensions?: number } | undefined;
+		expect(row?.dimensions).toBe(768);
 	});
 });
 

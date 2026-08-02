@@ -14,7 +14,7 @@ import {
 	tableExists,
 	vectorToBlob,
 } from "./db-helpers";
-import { isActiveEmbeddingConfig } from "./embedding-index-state";
+import { isActiveEmbeddingConfig, resolveActiveEmbeddingConfig } from "./embedding-index-state";
 import type { EmbeddingConfig } from "./memory-config";
 import { cancelExtractionJobsForForgottenMemory } from "./pipeline/extraction-queue";
 
@@ -347,8 +347,17 @@ export function txModifyMemory(db: WriteDb, input: ModifyMemoryTxInput): ModifyM
 	let contentChanged = false;
 	let finalContent = existing.content;
 
+	// Re-resolve the active embedding config inside this transaction so the
+	// active-config check cannot race a startup building->ready promotion: the
+	// caller resolves the config before the (slow) model call, and the index can
+	// promote before this write. Strip the pre-resolved profile so it re-reads
+	// the current active state.
+	const activeEmbeddingCfg =
+		input.embeddingConfig === undefined
+			? undefined
+			: resolveActiveEmbeddingConfig(db, { ...input.embeddingConfig, profile: undefined });
 	const embeddingGenerationActive =
-		!input.embeddingVector || input.embeddingConfig === undefined || isActiveEmbeddingConfig(db, input.embeddingConfig);
+		!input.embeddingVector || activeEmbeddingCfg === undefined || isActiveEmbeddingConfig(db, activeEmbeddingCfg);
 
 	if (input.patch.content !== undefined && input.patch.content !== existing.content) {
 		contentChanged = true;

@@ -1208,7 +1208,8 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		}
 
 		// Pipeline v2 kill switch: refuse writes when mutations are frozen
-		const fullCfg = withActiveEmbeddingConfig(loadMemoryConfig(AGENTS_DIR));
+		const fullCfgBase = loadMemoryConfig(AGENTS_DIR);
+		const fullCfg = withActiveEmbeddingConfig(fullCfgBase);
 		const pipelineCfg = fullCfg.pipelineV2;
 		if (pipelineCfg.mutationsFrozen) {
 			return c.json({ error: "Mutations are frozen (kill switch active)" }, 503);
@@ -1435,7 +1436,8 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 								const blob = vectorToBlob(vec);
 								const embHash = scope ? `${plan.normalized.contentHash}:${scope}` : plan.normalized.contentHash;
 								getDbAccessor().withWriteTx((db) => {
-									if (!isActiveEmbeddingConfig(db, fullCfg.embedding)) return;
+									const activeCfg = resolveActiveEmbeddingConfig(db, fullCfgBase.embedding);
+									if (!isActiveEmbeddingConfig(db, activeCfg)) return;
 									syncVecDeleteBySourceId(db, "memory", chunkId);
 									db.prepare(`DELETE FROM embeddings WHERE source_type = 'memory' AND source_id = ?`).run(chunkId);
 									db.prepare(`
@@ -1659,7 +1661,8 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		// Generate embedding asynchronously
 		let embedded = false;
 		try {
-			const cfg = withActiveEmbeddingConfig(loadMemoryConfig(AGENTS_DIR));
+			const baseCfg = loadMemoryConfig(AGENTS_DIR);
+			const cfg = withActiveEmbeddingConfig(baseCfg);
 			const vec = await fetchEmbedding(normalizedContent.storageContent, cfg.embedding);
 			if (vec) {
 				if (vec.length !== cfg.embedding.dimensions) {
@@ -1673,8 +1676,14 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 					const blob = vectorToBlob(vec);
 					const embId = crypto.randomUUID();
 
-					getDbAccessor().withWriteTx((db) => {
-						if (!isActiveEmbeddingConfig(db, cfg.embedding)) return;
+					// Re-resolve the active embedding config and gate on it inside the same
+					// transaction. Previously the config was resolved once (before the model
+					// call) and re-checked later, so a startup building->ready promotion
+					// between the two could skip the insert while still reporting
+					// embedded=true. `embedded` now reflects whether the vector was written.
+					embedded = getDbAccessor().withWriteTx((db) => {
+						const activeCfg = resolveActiveEmbeddingConfig(db, baseCfg.embedding);
+						if (!isActiveEmbeddingConfig(db, activeCfg)) return false;
 						syncVecDeleteBySourceId(db, "memory", id);
 						db.prepare(`DELETE FROM embeddings WHERE source_type = 'memory' AND source_id = ?`).run(id);
 						db.prepare(`
@@ -1684,8 +1693,8 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 						`).run(embId, embHash, blob, vec.length, id, normalizedContent.storageContent, now);
 						syncVecInsert(db, embId, vec);
 						db.prepare("UPDATE memories SET embedding_model = ? WHERE id = ?").run(cfg.embedding.model, id);
+						return true;
 					});
-					embedded = true;
 				}
 			}
 		} catch (e) {
