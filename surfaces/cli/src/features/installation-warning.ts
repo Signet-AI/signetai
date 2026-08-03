@@ -24,7 +24,10 @@ export function concurrentInstallationWarningLines(
 	for (const duplicate of duplicates) {
 		lines.push(`Inactive: ${displayPath(duplicate.executablePath, home)} (${duplicate.method})`);
 	}
-	lines.push("", "After verifying the active installation, remove the duplicate manually:");
+	lines.push(
+		"",
+		"After verifying the active installation, remove only the duplicate launcher (this keeps signet-mcp available):",
+	);
 	for (const command of new Set(
 		duplicates.flatMap((duplicate) => (duplicate.removalCommand ? [duplicate.removalCommand] : [])),
 	)) {

@@ -1017,11 +1017,12 @@ Subcommands:
 | `-i, --interval <seconds>` | Check interval in seconds (default: 21600; range: 300-604800) |
 
 After `signet update install` completes, a daemon restart is required to
-run the new version: `signet daemon restart`. The command updates the active
-install method rather than selecting another package manager from PATH. If a
-direct native install and an inactive npm/Bun/pnpm/Yarn wrapper coexist, the
-CLI prints the exact manual uninstall command after the update; `signet
-doctor` reports the same conflict. Signet never removes the duplicate
+run the new version: `signet daemon restart`. When a direct native install
+coexists with an npm/Bun/pnpm/Yarn wrapper, the updater uses the native binary
+instead of selecting a package manager from PATH. The CLI prints an exact
+command that removes only the duplicate launcher after the update; `signet
+doctor` reports the same conflict. Do not uninstall the whole package, because
+it may also provide `signet-mcp`. Signet never removes the duplicate
 automatically.
 
 ---

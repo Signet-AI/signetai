@@ -45,8 +45,8 @@ import { listConnectors } from "./connectors/registry";
 import { clearAllPresence } from "./cross-agent";
 import { closeDbAccessor, getDbAccessor, getVectorRuntimeStatus, initDbAccessorAsync } from "./db-accessor";
 import { fetchEmbedding } from "./embedding-fetch";
-import { resolveActiveEmbeddingConfig } from "./embedding-index-state";
 import { type EmbeddingIndexMigrationHandle, startEmbeddingIndexMigration } from "./embedding-index-migration";
+import { resolveActiveEmbeddingConfig } from "./embedding-index-state";
 import { type EmbeddingTrackerHandle, startEmbeddingTracker } from "./embedding-tracker";
 import { firstCandidateBlockedBy } from "./extraction-status";
 import { initFeatureFlags } from "./feature-flags";
@@ -1916,7 +1916,7 @@ async function main() {
 	setCheckpointPruneTimer(checkpointPruneTimer);
 
 	startGitSyncTimer();
-	initUpdateSystem(CURRENT_VERSION, AGENTS_DIR, () => {
+	initUpdateSystem(CURRENT_VERSION, AGENTS_DIR, (preferredExecutablePath) => {
 		const daemonScript = process.argv[1] ?? "";
 		if (!daemonScript) {
 			logger.warn("daemon", "Cannot self-restart: process.argv[1] is empty, falling back to clean exit");
@@ -1927,11 +1927,11 @@ async function main() {
 		}
 
 		logger.info("daemon", "Spawning replacement daemon process", {
-			execPath: process.execPath,
+			execPath: preferredExecutablePath ?? process.execPath,
 			script: daemonScript,
 		});
 
-		const replacement = spawn(process.execPath, [daemonScript], {
+		const replacement = spawn(preferredExecutablePath ?? process.execPath, [daemonScript], {
 			detached: true,
 			stdio: "ignore",
 			windowsHide: true,

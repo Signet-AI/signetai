@@ -671,7 +671,7 @@ function addConcurrentInstallationFindings(report: SignetInstallationReport, fin
 			code: "duplicate_signet_installation",
 			message: `Another Signet installation is inactive: ${duplicate.executablePath} (${duplicate.method}). Active: ${report.target.executablePath} (native).`,
 			fix: duplicate.removalCommand
-				? `After verifying the active installation, remove the duplicate manually: ${duplicate.removalCommand}`
+				? `After verifying the active installation, remove only the duplicate launcher (this keeps signet-mcp available): ${duplicate.removalCommand}`
 				: undefined,
 		});
 	}

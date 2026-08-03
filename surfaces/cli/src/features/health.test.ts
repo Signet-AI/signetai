@@ -515,7 +515,7 @@ describe("doctor concurrent Signet installations", () => {
 								executablePath: join(root, ".npm-global", "bin", "signet"),
 								packagePath: join(root, ".npm-global", "lib", "node_modules", "signetai"),
 								active: false,
-								removalCommand: "npm uninstall -g signetai",
+								removalCommand: `rm -f -- '${join(root, ".npm-global", "bin", "signet")}'`,
 							},
 						],
 					}),
@@ -533,7 +533,7 @@ describe("doctor concurrent Signet installations", () => {
 			expect(output.findings).toContainEqual(
 				expect.objectContaining({
 					code: "duplicate_signet_installation",
-					fix: expect.stringContaining("npm uninstall -g signetai"),
+					fix: expect.stringContaining("rm -f --"),
 				}),
 			);
 		} finally {

@@ -17,6 +17,7 @@ interface UpdateDeps {
 	readonly isOpenClawInstalled: () => boolean;
 	readonly isOhMyPiInstalled: () => boolean;
 	readonly isPiInstalled: () => boolean;
+	readonly reconcileDaemon?: () => Promise<boolean>;
 	readonly getSkillsSourceDir: () => string;
 	readonly syncBuiltinSkills: (
 		skillsSourceDir: string,
@@ -105,6 +106,10 @@ export function registerUpdateCommands(program: Command, deps: UpdateDeps): void
 		.command("install")
 		.description("Install the latest update")
 		.action(async () => {
+			if (deps.reconcileDaemon && !(await deps.reconcileDaemon())) {
+				console.error(chalk.red("Could not switch the daemon to the current Signet installation"));
+				process.exit(1);
+			}
 			const printInstallationWarning = (): void => {
 				printConcurrentInstallationWarning((deps.detectInstallations ?? detectSignetInstallations)());
 			};
@@ -300,6 +305,10 @@ export function registerUpdateCommands(program: Command, deps: UpdateDeps): void
 			"21600",
 		)
 		.action(async (options) => {
+			if (deps.reconcileDaemon && !(await deps.reconcileDaemon())) {
+				console.error(chalk.red("Could not switch the daemon to the current Signet installation"));
+				process.exit(1);
+			}
 			const interval = Number.parseInt(options.interval, 10);
 			if (
 				!Number.isFinite(interval) ||

@@ -7,6 +7,7 @@ import {
 	mkdirSync,
 	openSync,
 	readFileSync,
+	realpathSync,
 	rmSync,
 	writeFileSync,
 } from "node:fs";
@@ -130,6 +131,11 @@ export function resolveDaemonPaths(env: NodeJS.ProcessEnv = process.env): string
 	]
 		.filter((path): path is string => path !== null)
 		.filter((path, index, items) => items.indexOf(path) === index);
+}
+
+/** Resolve the daemon executable that the current CLI would launch. */
+export function resolveDaemonPath(env: NodeJS.ProcessEnv = process.env): string | null {
+	return resolveDaemonPaths(env).find((path) => existsSync(path)) ?? null;
 }
 
 function daemonPaths(): string[] {
@@ -496,6 +502,32 @@ function normalizeCmd(value: string): string {
 	return normalize(value).replaceAll("\\", "/").toLowerCase();
 }
 
+function executablePathVariants(executablePath: string): readonly string[] {
+	const variants = [executablePath];
+	try {
+		variants.push(realpathSync(executablePath));
+	} catch {
+		// The executable may have been replaced during an update. The command
+		// line still gives us the best available ownership signal in that case.
+	}
+	return [...new Set(variants.map(normalizeCmd))];
+}
+
+/** Return whether a daemon command line contains the requested executable. */
+export function daemonCommandUsesExecutable(command: string, executablePath: string): boolean {
+	const normalizedCommand = normalizeCmd(command);
+	return executablePathVariants(executablePath).some((candidate) => normalizedCommand.includes(candidate));
+}
+
+/**
+ * A running daemon may outlive the CLI installation that started it. Rebind
+ * only when its command line is known and points at a different executable;
+ * an unreadable command line is left alone for safety.
+ */
+export function shouldRebindDaemon(currentCommand: string | null, desiredExecutablePath: string): boolean {
+	return currentCommand !== null && !daemonCommandUsesExecutable(currentCommand, desiredExecutablePath);
+}
+
 function matchesDaemon(cmd: string, paths: readonly string[]): boolean {
 	const normalizedCmd = normalizeCmd(cmd);
 	return daemonMarks(paths).some((path) => normalizedCmd.includes(normalizeCmd(path)));
@@ -510,6 +542,22 @@ function readCmd(pid: number): string | null {
 		}
 	} catch {
 		// Fall through.
+	}
+
+	if (process.platform === "win32") {
+		const script = `$process = Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}"; if ($process) { $process.CommandLine }`;
+		for (const command of ["powershell.exe", "pwsh"]) {
+			try {
+				const proc = spawnSync(command, ["-NoProfile", "-NonInteractive", "-Command", script], {
+					encoding: "utf-8",
+					windowsHide: true,
+					timeout: 3000,
+				});
+				if (proc.status === 0 && proc.stdout.trim()) return proc.stdout.trim();
+			} catch {
+				// Try the next available PowerShell command.
+			}
+		}
 	}
 
 	try {
@@ -638,6 +686,35 @@ export async function getDaemonStatus(): Promise<{
 		probe,
 		openclaw: null,
 	};
+}
+
+interface DaemonOwnershipStatus {
+	readonly running: boolean;
+	readonly pid: number | null;
+}
+
+export type DaemonRebindResult = "not-running" | "already-current" | "unknown" | "restarted" | "failed";
+
+/**
+ * Switch a healthy daemon to the executable selected by the current CLI when
+ * an older daemon was started from another Signet installation.
+ */
+export async function rebindDaemonIfNeeded(
+	desiredExecutablePath: string,
+	deps: {
+		readonly getDaemonStatus: () => Promise<DaemonOwnershipStatus>;
+		readonly readCommand: (pid: number) => string | null;
+		readonly stopDaemon: (pid: number) => Promise<boolean>;
+	},
+): Promise<DaemonRebindResult> {
+	const status = await deps.getDaemonStatus();
+	if (!status.running) return "not-running";
+	if (status.pid === null) return "unknown";
+
+	const currentCommand = deps.readCommand(status.pid);
+	if (!shouldRebindDaemon(currentCommand, desiredExecutablePath)) return currentCommand ? "already-current" : "unknown";
+
+	return (await deps.stopDaemon(status.pid)) ? "restarted" : "failed";
 }
 
 export interface DaemonStartArgsInput {
@@ -903,9 +980,26 @@ export function didSystemdDaemonStart(result: Pick<SpawnSyncReturns<Buffer>, "st
 
 export const didLaunchdDaemonStart = didSystemdDaemonStart;
 
-export async function startDaemon(agentsDir: string = AGENTS_DIR): Promise<boolean> {
-	if (await isDaemonRunning()) {
+export async function startDaemon(agentsDir: string = AGENTS_DIR, preferredDaemonPath?: string): Promise<boolean> {
+	const daemonPath = preferredDaemonPath ?? resolveDaemonPath();
+	if (!daemonPath) {
+		console.error(chalk.red("Daemon not found. Try reinstalling signet."));
+		return false;
+	}
+
+	const rebindResult = await rebindDaemonIfNeeded(daemonPath, {
+		getDaemonStatus,
+		readCommand: (pid) => readCmd(pid),
+		stopDaemon: (pid) => stopDaemon(agentsDir, pid),
+	});
+	if (rebindResult === "already-current" || rebindResult === "unknown") {
 		return true;
+	}
+	if (rebindResult === "failed") {
+		return false;
+	}
+	if (rebindResult === "restarted") {
+		console.error(chalk.dim("  Existing daemon uses another Signet installation; switching to the current one."));
 	}
 
 	if (await hasDaemonProcess(agentsDir)) {
@@ -921,23 +1015,6 @@ export async function startDaemon(agentsDir: string = AGENTS_DIR): Promise<boole
 	const logDir = join(daemonDir, "logs");
 	mkdirSync(daemonDir, { recursive: true });
 	mkdirSync(logDir, { recursive: true });
-
-	// In dev, runtime.ts lives in lib/ so cliDir (dirname(__dirname)) = src/.
-	// In the published bundle, everything flattens into dist/cli.js so
-	// __dirname already points at dist/ — check it first to handle the
-	// bundled layout where cliDir overshoots to the package root.
-	let daemonPath: string | null = null;
-	for (const loc of daemonPaths()) {
-		if (existsSync(loc)) {
-			daemonPath = loc;
-			break;
-		}
-	}
-
-	if (!daemonPath) {
-		console.error(chalk.red("Daemon not found. Try reinstalling signet."));
-		return false;
-	}
 
 	const attributionNotice = macOSLaunchAgentAttributionNotice(daemonPath);
 	if (attributionNotice) {
@@ -1118,7 +1195,7 @@ export async function startDaemon(agentsDir: string = AGENTS_DIR): Promise<boole
 	return false;
 }
 
-export async function stopDaemon(agentsDir: string = AGENTS_DIR): Promise<boolean> {
+export async function stopDaemon(agentsDir: string = AGENTS_DIR, preferredPid?: number): Promise<boolean> {
 	if (process.platform === "darwin") {
 		spawnSync("launchctl", buildLaunchdDaemonStopArgs(), {
 			stdio: "ignore",
@@ -1127,7 +1204,7 @@ export async function stopDaemon(agentsDir: string = AGENTS_DIR): Promise<boolea
 		});
 	}
 
-	const pids = new Set<number>();
+	const pids = new Set<number>(preferredPid === undefined ? [] : [preferredPid]);
 	const managed = readManagedDaemonPid(agentsDir);
 	if (managed !== null) {
 		pids.add(managed);

@@ -113,6 +113,17 @@ export function packageManagerRemovalCommand(family: PackageManagerFamily): stri
 	}
 }
 
+function quotePosix(value: string): string {
+	return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+function packageManagerEntryPointRemovalCommand(path: string, platform: NodeJS.Platform): string {
+	if (platform === "win32") {
+		return `del /f /q "${path.replaceAll('"', '""')}"`;
+	}
+	return `rm -f -- ${quotePosix(path)}`;
+}
+
 export function detectSignetInstallations(options: SignetInstallationDetectionOptions = {}): SignetInstallationReport {
 	const env = options.env ?? process.env;
 	const home = options.home ?? homedir();
@@ -172,7 +183,9 @@ export function detectSignetInstallations(options: SignetInstallationDetectionOp
 				executablePath: candidate.executablePath,
 				...(candidate.packagePath ? { packagePath: candidate.packagePath } : {}),
 				active: false,
-				...(method !== "native" ? { removalCommand: packageManagerRemovalCommand(method) } : {}),
+				...(method !== "native"
+					? { removalCommand: packageManagerEntryPointRemovalCommand(candidate.executablePath, platform) }
+					: {}),
 			},
 		];
 	});

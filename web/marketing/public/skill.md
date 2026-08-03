@@ -302,10 +302,12 @@ These are the supported install methods. Do not use:
 - `sudo npm install` — never use sudo
 - Cloning the repository — that is for contributors, not users
 
-Choose one install method. `signet update install` updates the active method,
-and `signet doctor` reports inactive npm/Bun/pnpm/Yarn duplicates with a
-manual uninstall command. Signet never removes another installation
-automatically.
+Choose one install method. `signet update install` prefers a direct native
+install over an inactive package-manager wrapper, and `signet doctor` reports
+inactive npm/Bun/pnpm/Yarn duplicates with a command that removes only the
+duplicate launcher. Do not uninstall the whole package, because it may also
+provide `signet-mcp`. Signet never removes
+another installation automatically.
 
 > GATE: After the install command completes, verify it worked:
 > ```bash

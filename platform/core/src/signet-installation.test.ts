@@ -36,7 +36,7 @@ describe("detectSignetInstallations", () => {
 				executablePath: npmBin,
 				packagePath: npmPackage,
 				active: false,
-				removalCommand: "npm uninstall -g signetai",
+				removalCommand: `rm -f -- '${npmBin}'`,
 			},
 		]);
 	});
@@ -100,7 +100,13 @@ describe("detectSignetInstallations", () => {
 		});
 
 		expect(report.target.kind).toBe("native");
-		expect(report.inactive).toMatchObject([{ method: "npm", executablePath: npmBin }]);
+		expect(report.inactive).toMatchObject([
+			{
+				method: "npm",
+				executablePath: npmBin,
+				removalCommand: `del /f /q "${npmBin}"`,
+			},
+		]);
 	});
 
 	it("recognizes the native package binary launched by a default Windows npm wrapper", () => {

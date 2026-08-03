@@ -973,7 +973,14 @@ registerAppCommands(program, {
 			signetLogo,
 		}),
 	installNative: async (options) => {
-		printNativeInstallResult(installNativeBinary(options), options.json);
+		const result = installNativeBinary(options);
+		printNativeInstallResult(result, options.json);
+		if (await isDaemonRunning()) {
+			const rebound = await startDaemon(AGENTS_DIR, result.target);
+			if (!rebound) {
+				console.error("Signet binary installed, but the running daemon could not be switched to it.");
+			}
+		}
 	},
 	launchDashboard: (options) => launchDashboard(options, daemonDeps),
 	migrateSchema: (options) => migrateSchema(options, daemonDeps),
@@ -1136,6 +1143,11 @@ registerHookCommands(program, {
 
 const MIN_AUTO_UPDATE_INTERVAL = 300;
 const MAX_AUTO_UPDATE_INTERVAL = 604800;
+const reconcileDaemonInstallation = async (): Promise<boolean> => {
+	if (!(await isDaemonRunning())) return true;
+	return await startDaemon(AGENTS_DIR);
+};
+
 registerUpdateCommands(program, {
 	AGENTS_DIR,
 	MAX_AUTO_UPDATE_INTERVAL,
@@ -1147,6 +1159,7 @@ registerUpdateCommands(program, {
 	isOpenClawInstalled: () => new OpenClawConnector().isInstalled(),
 	isOhMyPiInstalled: () => new OhMyPiConnector().isInstalled(),
 	isPiInstalled: () => new PiConnector().isInstalled(),
+	reconcileDaemon: reconcileDaemonInstallation,
 	syncBuiltinSkills,
 	syncWorkspaceSourceRepo,
 });

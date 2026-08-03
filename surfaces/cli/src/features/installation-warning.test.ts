@@ -16,7 +16,7 @@ describe("concurrentInstallationWarningLines", () => {
 						executablePath: "/home/test/.npm-global/bin/signet",
 						packagePath: "/home/test/.npm-global/lib/node_modules/signetai",
 						active: false,
-						removalCommand: "npm uninstall -g signetai",
+						removalCommand: "rm -f -- '/home/test/.npm-global/bin/signet'",
 					},
 				],
 			},
@@ -25,8 +25,8 @@ describe("concurrentInstallationWarningLines", () => {
 
 		expect(lines.join("\n")).toContain("Active:   ~/.local/bin/signet (native)");
 		expect(lines.join("\n")).toContain("Inactive: ~/.npm-global/bin/signet (npm)");
-		expect(lines.join("\n")).toContain("npm uninstall -g signetai");
-		expect(lines.join("\n")).not.toContain("deprecated");
+		expect(lines.join("\n")).toContain("rm -f -- '/home/test/.npm-global/bin/signet'");
+		expect(lines.join("\n")).toContain("keeps signet-mcp available");
 	});
 
 	it("stays silent for a package-manager-only installation", () => {

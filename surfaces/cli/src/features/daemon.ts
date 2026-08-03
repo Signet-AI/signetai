@@ -192,15 +192,11 @@ export async function doStart(options: PathOptions, deps: Deps): Promise<void> {
 	console.log(deps.signetLogo());
 	const basePath = readPath(options, deps);
 	const running = await deps.isDaemonRunning();
-	if (running) {
-		console.log(chalk.yellow("  Daemon is already running"));
-		return;
-	}
 
 	const spinner = ora("Starting daemon...").start();
 	const started = await deps.startDaemon(basePath);
 	if (started) {
-		spinner.succeed("Daemon started");
+		spinner.succeed(running ? "Daemon ready" : "Daemon started");
 		const status = await deps.getDaemonStatus();
 		for (const line of daemonAccessLines(deps.defaultPort, status)) {
 			console.log(chalk.dim(`  ${line}`));

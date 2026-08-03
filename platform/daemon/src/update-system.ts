@@ -12,6 +12,7 @@ import {
 	type PackageManagerFamily,
 	type SignetInstallMethod,
 	type SignetInstallationReport,
+	type SignetUpdateTarget,
 	type WorkspaceSourceRepoSyncResult,
 	detectSignetInstallations,
 	parseSimpleYaml,
@@ -166,13 +167,17 @@ let updateConfig: UpdateConfig = {
 	checkInterval: DEFAULT_UPDATE_INTERVAL_SECONDS,
 	channel: "stable" as const,
 };
-let restartCallback: (() => void) | null = null;
+let restartCallback: ((preferredExecutablePath?: string) => void) | null = null;
 
 // ---------------------------------------------------------------------------
 // Init / accessors
 // ---------------------------------------------------------------------------
 
-export function initUpdateSystem(version: string, dir: string, onRestartNeeded?: () => void): void {
+export function initUpdateSystem(
+	version: string,
+	dir: string,
+	onRestartNeeded?: (preferredExecutablePath?: string) => void,
+): void {
 	currentVersion = version;
 	agentsDir = dir;
 	updateConfig = loadUpdateConfig();
@@ -557,6 +562,18 @@ function updateFailure(
 	};
 }
 
+/**
+ * When a package-manager daemon coexists with a direct native install, keep
+ * the native installation authoritative. This is the common mixed-install
+ * shape where npm is needed for `signet-mcp` but should not own Signet updates.
+ */
+export function selectUpdateTarget(report: SignetInstallationReport): SignetUpdateTarget {
+	if (report.target.kind !== "package-manager") return report.target;
+
+	const native = report.inactive.find((installation) => installation.method === "native");
+	return native ? { kind: "native", executablePath: native.executablePath } : report.target;
+}
+
 interface DesktopInstallDetectionDeps {
 	readonly existsSync: (path: string) => boolean;
 	readonly readFileSync: (path: string, encoding: BufferEncoding) => string;
@@ -827,7 +844,7 @@ export async function runUpdate(targetVersion?: string, deps: RunUpdateDeps = {}
 		}
 
 		const report = (deps.detectInstallations ?? (() => detectSignetInstallations()))();
-		const target = report.target;
+		const target = selectUpdateTarget(report);
 		if (target.kind === "unsupported") {
 			return updateFailure(
 				"unsupported_installation",
@@ -992,7 +1009,7 @@ async function runAutoUpdateCycle(): Promise<void> {
 
 			if (restartCallback) {
 				logger.info("update", "Invoking restart callback to spawn replacement daemon");
-				restartCallback();
+				restartCallback(installResult.success ? installResult.activeExecutablePath : undefined);
 			} else {
 				// Fallback: clean exit — systemd/launchd Restart=always will respawn.
 				// Without a restart callback, the daemon simply exits.

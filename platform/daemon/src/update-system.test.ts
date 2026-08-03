@@ -27,6 +27,7 @@ import {
 	parseUpdateChannel,
 	parseUpdateInterval,
 	runUpdate,
+	selectUpdateTarget,
 	updateDesktopInstallAfterUpdate,
 } from "./update-system";
 
@@ -55,6 +56,26 @@ describe("Bug 5: pendingRestartVersion is set only after successful verification
 });
 
 describe("Issue 322: verify installed version after update install", () => {
+	it("prefers the direct native install when an npm daemon coexists with it", () => {
+		expect(
+			selectUpdateTarget({
+				target: {
+					kind: "package-manager",
+					family: "npm",
+					executablePath: "/opt/homebrew/lib/node_modules/signetai/native/signet",
+				},
+				installations: [],
+				inactive: [
+					{
+						method: "native",
+						executablePath: "/Users/test/.local/bin/signet",
+						active: false,
+					},
+				],
+			}),
+		).toEqual({ kind: "native", executablePath: "/Users/test/.local/bin/signet" });
+	});
+
 	it("pins install command to targetVersion when provided", () => {
 		expect(UPDATE_INSTALL_SRC).toContain("const installPackage = `${settings.packageName}@${version}`");
 		expect(UPDATE_SYSTEM_SRC).toContain("detectSignetInstallations()");
@@ -332,7 +353,7 @@ describe("active executable update targeting", () => {
 						executablePath: "/home/test/.npm-global/bin/signet",
 						packagePath: "/home/test/.npm-global/lib/node_modules/signetai",
 						active: false,
-						removalCommand: "npm uninstall -g signetai",
+						removalCommand: "rm -f -- '/home/test/.npm-global/bin/signet'",
 					},
 				],
 				inactive: [],

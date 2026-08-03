@@ -87,6 +87,21 @@ function makeDeps(overrides?: Partial<Parameters<typeof doRestart>[1]>): Paramet
 }
 
 describe("daemon lifecycle recovery", () => {
+	it("lets an already-running daemon reconcile its installation owner", async () => {
+		let started = false;
+		const deps = makeDeps({
+			isDaemonRunning: async () => true,
+			startDaemon: async () => {
+				started = true;
+				return true;
+			},
+		});
+
+		await doStart({}, deps);
+
+		expect(started).toBe(true);
+	});
+
 	it("restart stops a stale daemon process even when health checks say stopped", async () => {
 		const calls: string[] = [];
 		const deps = makeDeps({

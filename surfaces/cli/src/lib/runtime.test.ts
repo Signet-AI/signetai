@@ -14,9 +14,11 @@ import {
 	macOSLaunchAgentAttributionNotice,
 	readDaemonStartFailureDiagnostics,
 	readManagedDaemonPid,
+	rebindDaemonIfNeeded,
 	resolveDaemonLaunchCommand,
 	resolveDaemonPaths,
 	resolveDaemonRuntimeCommand,
+	shouldRebindDaemon,
 } from "./runtime.js";
 
 const originalFetch = globalThis.fetch;
@@ -29,6 +31,46 @@ describe("resolveDaemonPaths", () => {
 	it("keeps the JavaScript daemon bundle as the default when SIGNET_DIR is set", () => {
 		const paths = resolveDaemonPaths({ SIGNET_DIR: "/opt/signet" });
 		expect(paths[0]).toBe("/opt/signet/runtime/daemon-js/daemon.js");
+	});
+});
+
+describe("daemon installation ownership", () => {
+	it("rebinds an npm-launched daemon when the native CLI is now active", () => {
+		const nativeExecutable = "/Users/test/.local/bin/signet";
+		const npmExecutable = "/opt/homebrew/lib/node_modules/signetai/native/signet";
+
+		expect(shouldRebindDaemon(`${npmExecutable} daemon`, nativeExecutable)).toBe(true);
+		expect(shouldRebindDaemon(`${nativeExecutable} daemon`, nativeExecutable)).toBe(false);
+	});
+
+	it("restarts a mismatched healthy daemon instead of leaving the old install in charge", async () => {
+		const calls: string[] = [];
+		const result = await rebindDaemonIfNeeded("/Users/test/.local/bin/signet", {
+			getDaemonStatus: async () => ({ running: true, pid: 42 }),
+			readCommand: () => "/opt/homebrew/lib/node_modules/signetai/native/signet daemon",
+			stopDaemon: async (pid) => {
+				calls.push(`stop:${pid}`);
+				return true;
+			},
+		});
+
+		expect(result).toBe("restarted");
+		expect(calls).toEqual(["stop:42"]);
+	});
+
+	it("does not restart a daemon already using the current executable", async () => {
+		let stopped = false;
+		const result = await rebindDaemonIfNeeded("/Users/test/.local/bin/signet", {
+			getDaemonStatus: async () => ({ running: true, pid: 42 }),
+			readCommand: () => "/Users/test/.local/bin/signet daemon",
+			stopDaemon: async () => {
+				stopped = true;
+				return true;
+			},
+		});
+
+		expect(result).toBe("already-current");
+		expect(stopped).toBe(false);
 	});
 });
 
@@ -47,9 +89,7 @@ describe("resolveDaemonRuntimeCommand", () => {
 
 describe("resolveDaemonLaunchCommand", () => {
 	it("launches native daemon binaries directly", () => {
-		expect(resolveDaemonLaunchCommand("/opt/signet/bin/signet")).toEqual([
-			"/opt/signet/bin/signet",
-		]);
+		expect(resolveDaemonLaunchCommand("/opt/signet/bin/signet")).toEqual(["/opt/signet/bin/signet"]);
 	});
 
 	it("launches JavaScript daemon scripts through the runtime command", () => {
@@ -185,7 +225,6 @@ describe("buildLaunchdDaemonPlist", () => {
 			"/Users/user/Library/LaunchAgents/ai.signet.daemon.plist",
 		);
 	});
-
 
 	it("uses launchctl bootstrap against the current user launchd domain", () => {
 		const args = buildLaunchdDaemonStartArgs("/Users/user/Library/LaunchAgents/ai.signet.daemon.plist");

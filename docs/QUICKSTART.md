@@ -134,10 +134,12 @@ place; if scripts are disabled, the wrapper resolves the native package
 directly. They do not install Bun, rebuild Signet, or install daemon
 dependencies.
 
-Choose one installation method per machine. `signet update install` preserves
-the active method, and `signet doctor` warns when an inactive package-manager
-wrapper coexists with a direct native install. Duplicate installs are never
-removed automatically.
+Choose one installation method per machine. `signet update install` uses a
+direct native install when it coexists with a package-manager wrapper, and
+`signet doctor` warns about the inactive wrapper. If a daemon is still running
+from another install, the native CLI rebinds it before starting or updating.
+Doctor's cleanup command removes only the duplicate launcher, not the package
+that may also provide `signet-mcp`.
 
 Published native binaries currently cover Linux x64, Linux arm64, macOS x64,
 macOS arm64, and Windows x64. Windows direct installs should use
