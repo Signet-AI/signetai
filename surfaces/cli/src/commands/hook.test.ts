@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { Readable } from "node:stream";
 import { Command } from "commander";
 import {
 	buildCodexHookOutput,
@@ -8,6 +9,7 @@ import {
 	buildSessionStartFallback,
 	buildUserPromptSubmitBody,
 	pickSessionKey,
+	readJson,
 	registerHookCommands,
 	resolvePromptSubmitTimeout,
 	resolveSessionStartTimeout,
@@ -658,6 +660,16 @@ describe("shouldReadCompactionInput", () => {
 				sessionKey: "sess-1",
 			}),
 		).toBeFalse();
+	});
+});
+
+describe("readJson cleanup", () => {
+	test("closes stdin after the timeout so an abandoned hook cannot keep running", async () => {
+		const input = new Readable({ read() {} });
+
+		expect(await readJson(input)).toBeNull();
+		expect(input.destroyed).toBe(true);
+		expect(input.listenerCount("end")).toBe(0);
 	});
 });
 

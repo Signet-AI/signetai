@@ -1,3 +1,4 @@
+import type { Readable } from "node:stream";
 import {
 	STATIC_IDENTITY_SESSION_START_TIMEOUT_STATUS,
 	resolvePromptSubmitTimeoutMs,
@@ -20,6 +21,11 @@ const SESSION_START_TIMEOUT_MS = resolveSessionStartTimeout();
 const PROMPT_SUBMIT_TIMEOUT_MS = resolvePromptSubmitTimeout();
 const LEGACY_RUNTIME_PATH = "legacy" as const;
 const STDIN_TIMEOUT_MS = 2000;
+
+type HookInput = Readable & {
+	readonly isTTY?: boolean;
+	unref?: () => void;
+};
 
 function legacyHookHeaders(headers?: HeadersInit): Headers {
 	const merged = new Headers(headers);
@@ -418,26 +424,35 @@ export function shouldReadCompactionInput(
 	return true;
 }
 
-async function readJson(): Promise<Record<string, unknown> | null> {
+export async function readJson(input: HookInput = process.stdin): Promise<Record<string, unknown> | null> {
+	if (input.isTTY) return null;
+	const chunks: Buffer[] = [];
+	const stdinDone = (async (): Promise<void> => {
+		for await (const chunk of input) {
+			chunks.push(chunk);
+		}
+	})();
 	try {
-		if (process.stdin.isTTY) return null;
-		const chunks: Buffer[] = [];
-		const stdinDone = (async (): Promise<void> => {
-			for await (const chunk of process.stdin) {
-				chunks.push(chunk);
-			}
-		})();
 		const timedOut = new Promise<never>((_, reject) => {
 			const timer = setTimeout(() => reject(new Error("stdin timeout")), STDIN_TIMEOUT_MS);
 			timer.unref();
 		});
 		await Promise.race([stdinDone, timedOut]);
-		const input = Buffer.concat(chunks).toString("utf-8").trim();
-		if (!input) return null;
-		const parsed = JSON.parse(input);
+		const rawInput = Buffer.concat(chunks).toString("utf-8").trim();
+		if (!rawInput) return null;
+		const parsed = JSON.parse(rawInput);
 		return toRecord(parsed);
 	} catch {
 		return null;
+	} finally {
+		// The stdin iterator survives a timeout unless the stream is explicitly
+		// closed. Hook processes are one-shot, so destroy it after consuming the
+		// available input and before waiting for the daemon.
+		input.pause();
+		input.destroy();
+		await stdinDone.catch(() => undefined);
+		input.removeAllListeners();
+		input.unref?.();
 	}
 }
 
