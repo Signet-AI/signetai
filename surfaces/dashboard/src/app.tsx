@@ -11,7 +11,8 @@ import { HomeView } from "@/views/home";
 import { MemoryView } from "@/views/memory";
 import { SourcesView } from "@/views/sources";
 import { SecretsView } from "@/views/secrets";
-import { GraphView, SkillsView, DreamsView, AgentsView } from "@/views/stubs";
+import { SkillsView, DreamsView, AgentsView } from "@/views/stubs";
+import { GraphView } from "@/views/graph";
 import { cn } from "@/lib/utils";
 
 export function App() {
@@ -32,9 +33,9 @@ function Shell() {
 	return (
 		<div className="shell-stage grid h-full grid-cols-1 bg-background text-foreground md:grid-cols-[248px_1fr]">
 			{/* Sidebar — fixed on desktop, drawer on mobile */}
-			<div className={cn("max-md:fixed max-md:inset-y-0 max-md:left-0 max-md:z-50 max-md:w-[248px] max-md:transition-transform", navOpen ? "max-md:translate-x-0" : "max-md:-translate-x-full")}>
+			<div className={cn("flex flex-col max-md:fixed max-md:inset-y-0 max-md:left-0 max-md:z-50 max-md:w-[248px] max-md:transition-transform", navOpen ? "max-md:translate-x-0" : "max-md:-translate-x-full")}>
 				<WindowChrome />
-				<Sidebar />
+				<Sidebar onNavigate={() => setNavOpen(false)} />
 			</div>
 			{navOpen && (
 				<button
@@ -45,7 +46,7 @@ function Shell() {
 				/>
 			)}
 
-			<main className="flex min-w-0 flex-col">
+			<main className="flex min-h-0 min-w-0 flex-col">
 				<Topbar onMenuClick={() => setNavOpen(true)} />
 				<div className="sig-content relative m-0 mb-3.5 flex min-h-0 flex-1 flex-col gap-4 overflow-hidden rounded-[12px] border border-[oklch(1_0_0/0.05)] bg-sidebar px-5.5 pb-4 pt-4.5 shadow-[0_1px_0_0_oklch(0_0_0/0.25),inset_0_1px_0_oklch(1_0_0/0.04)] [html:not(.dark)_&]:border-[oklch(0_0_0/0.06)] [html:not(.dark)_&]:shadow-[0_1px_2px_oklch(0_0_0/0.05),inset_0_1px_0_oklch(1_0_0/0.8)] md:mx-3.5">
 					<ViewSwitch />

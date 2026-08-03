@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
 
 /** Settings modal open/close + active section, driven from the account row. */
-type SettingsSection = "network" | "inference" | "logs";
+type SettingsSection = "network" | "inference" | "logs" | "advanced";
 export type { SettingsSection };
 
 interface SettingsCtx {

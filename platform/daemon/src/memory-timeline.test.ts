@@ -129,6 +129,12 @@ describe("buildMemoryTimeline", () => {
 			expect(oneMonth.memoriesAdded).toBe(3);
 			expect(oneMonth.evolved).toBe(2);
 			expect(oneMonth.recovered).toBe(1);
+
+			expect(timeline.dailyBuckets).toHaveLength(252);
+			expect(timeline.dailyBuckets.at(-1)).toMatchObject({
+				date: "2026-03-04",
+				memoriesAdded: 1,
+			});
 		} finally {
 			db.close();
 		}

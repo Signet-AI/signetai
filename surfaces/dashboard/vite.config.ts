@@ -5,6 +5,7 @@ import tailwindcss from "@tailwindcss/vite";
 import { defineConfig } from "vite";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const daemonProxyTarget = process.env.SIGNET_DAEMON_URL ?? "http://localhost:3850";
 
 // Dashboard build contract (issue #948):
 // - Emits to `build/index.html` (+ hashed assets under build/assets).
@@ -19,6 +20,13 @@ export default defineConfig({
 	resolve: {
 		alias: {
 			"@": path.resolve(__dirname, "./src"),
+		},
+	},
+	server: {
+		proxy: {
+			"/api": daemonProxyTarget,
+			"/health": daemonProxyTarget,
+			"/memory": daemonProxyTarget,
 		},
 	},
 	build: {

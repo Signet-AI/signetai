@@ -1,10 +1,11 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { Filter, Maximize2 } from "lucide-react";
 import { Surface } from "@/components/ui/surface";
 import { ActivityHeatmap, KpiRow, useDateString, type DayBucket, type KpiData } from "@/components/home/kpi";
 import { DailyBrief } from "@/components/home/daily-brief";
 import { Panel } from "@/components/home/panel";
 import { sourceLogo } from "@/components/icons";
-import { api, type SignetSource } from "@/lib/api";
+import { api } from "@/lib/api";
 import { useAsync } from "@/lib/use-async";
 import { cn } from "@/lib/utils";
 
@@ -12,8 +13,14 @@ export function HomeView() {
 	const today = useDateString("");
 	const status = useAsync(() => api.getStatus(), { intervalMs: 30000 });
 	const stats = useAsync(() => api.getKnowledgeStats(), { intervalMs: 30000 }).data;
-	const { sources } = useAsync(() => api.getSources(), { intervalMs: 30000 }).data ?? {};
-	const timeline = useAsync(() => api.getMemoryTimeline()).data;
+	const sourcesQuery = useAsync(() => api.getSources(), { intervalMs: 30000 });
+	const fetchedSources = sourcesQuery.data?.sources;
+	const [lastSources, setLastSources] = useState<typeof fetchedSources>();
+	useEffect(() => {
+		if (fetchedSources) setLastSources(fetchedSources);
+	}, [fetchedSources]);
+	const sources = fetchedSources ?? lastSources;
+	const timeline = useAsync(() => api.getMemoryTimeline(new Date().getTimezoneOffset())).data;
 
 	const kpis: KpiData[] = useMemo(() => {
 		const totalMemories = timeline?.totalMemories ?? stats?.entityCount;
@@ -30,99 +37,62 @@ export function HomeView() {
 			{
 				label: "Sources",
 				value: sources ? String(sources.length) : "—",
-				sub: `${sources?.filter((s) => s.enabled).length ?? 0} active`,
+				sub: `${sources?.filter((s) => s.enabled).length ?? 0} of ${sources?.length ?? 0} syncing`,
 				ring: { value: sources ? sources.filter((s) => s.enabled).length / Math.max(1, sources.length) : 0, sub: "" },
 			},
 		];
 	}, [timeline, stats?.entityCount, sources]);
 
-	// Build a 5-week heatmap from the memory timeline buckets (daily granularity).
+	// The reference uses a full 36×7 contribution grid. Older daemons omit
+	// dailyBuckets, so retain the visual shape until they are upgraded.
 	const days: DayBucket[] = useMemo(() => {
-		if (!timeline?.buckets?.length) {
-			// fallback: 35 zero cells so the grid holds its shape while loading
-			return Array.from({ length: 35 }, (_, i) => ({ date: `d${i}`, count: 0 }));
+		if (timeline?.dailyBuckets?.length) {
+			return timeline.dailyBuckets.map((bucket) => ({ date: bucket.date, count: bucket.memoriesAdded }));
 		}
-		// Flatten buckets to per-day counts where available; otherwise synthesize
-		// from the last 35 days around the buckets' memoryAdded totals.
-		const out: DayBucket[] = [];
-		const now = new Date();
-		for (let i = 34; i >= 0; i--) {
-			const d = new Date(now);
-			d.setDate(now.getDate() - i);
-			const key = d.toISOString().slice(0, 10);
-			const bucket = timeline.buckets.find((b) => b.start.slice(0, 10) === key);
-			out.push({ date: key, count: bucket?.memoriesAdded ?? 0 });
-		}
-		return out;
+		return Array.from({ length: 252 }, (_, index) => ({ date: `d${index}`, count: 0 }));
 	}, [timeline]);
 
 	return (
-		<div className="flex flex-col gap-4">
-			<div className="flex items-center justify-between gap-4">
-				<div className="flex items-center gap-4">
-					<h1 className="m-0 text-[19px] font-semibold leading-none tracking-[-0.02em]">Home</h1>
-					<span className="text-[12.5px] leading-none text-muted-foreground">{today}</span>
-				</div>
-				<HomeControls />
+		<div className="flex flex-col gap-3.5">
+			<div className="flex shrink-0 items-center justify-between gap-4">
+				<h1 className="m-0 text-[19px] font-semibold leading-none tracking-[-0.02em]">
+					Home
+				</h1>
+				<span className="text-[12.5px] leading-none text-muted-foreground">
+					{today}
+				</span>
 			</div>
+			<KpiRow cards={kpis}>
+				<HomeControls />
+			</KpiRow>
 
-			<KpiRow cards={kpis} />
-
-			<div className="grid flex-1 grid-cols-1 gap-6 pt-1 lg:grid-cols-[1.45fr_1fr]">
+			<div className="grid grid-cols-1 items-start gap-6 pt-1 lg:grid-cols-[1.45fr_1fr]">
 				<div className="flex flex-col gap-4.5">
-					<DailyBrief
-						insights={[
-							{
-								text: (
-									<>
-										You've been deep in the <b>dashboard rewrite (#948)</b> for three days running.
-										Your stance hardened overnight —{" "}
-										<b>Svelte is out, Vite + React + shadcn/ui is in.</b> You cited the Electron{" "}
-										<span className="mono">app://</span> static-SPA contract as the deciding factor.
-									</>
-								),
-								tag: "41 related memories · decision · source: #948",
-							},
-							{
-								text: (
-									<>
-										<b>Mira flagged a tension twice this week:</b> you keep reaching for hosted
-										inference while insisting on local-first ownership. It's worth a deliberate call
-										before it becomes a habit — your own notes contradict on this 4 times.
-									</>
-								),
-								tag: "observation · inference-routing · raised by Mira",
-							},
-							{
-								text: (
-									<>
-										Your reading on <b>"infrastructure-forward positioning"</b> is converging. Six
-										sources now point at the same headline territory (
-										<i>persistent identity for intelligent systems</i>). This looks ready to commit
-										as messaging.
-									</>
-								),
-								tag: "convergence · 6 sources · positioning",
-							},
-						]}
-						caption="Synthesized from 126 memories · 3 insights"
-					/>
-
-					<Surface className="mt-5 flex flex-col gap-3 px-4 pt-3.5 pb-3.25">
-						<div className="flex items-center justify-between">
-							<span className="text-[12px] font-semibold tracking-tight">Activity</span>
-							<span className="font-mono text-[10px] text-muted-foreground">
-								{timeline?.totalMemories.toLocaleString() ?? "—"} memories · 14d
-							</span>
-						</div>
-						<ActivityHeatmap days={days} />
-						<div className="flex items-center gap-2 pt-4 font-mono text-[11px] text-muted-foreground">
+					<DailyBrief agentId={status.data?.agentId} agentSettled={!status.loading}>
+						<Surface className="group mt-4 flex flex-col px-4 pt-3.5 pb-3.25">
+							<div className="mb-2 flex items-center justify-between">
+								<span className="text-[12px] font-semibold tracking-tight">Activity</span>
+								<span className="font-mono text-[10px] text-muted-foreground">
+									{timeline?.totalMemories.toLocaleString() ?? "—"} memories · 36w
+								</span>
+								<div className="flex gap-0.5 opacity-0 transition-opacity group-hover:opacity-60">
+									<span className="grid size-5.5 place-items-center rounded text-muted-foreground hover:bg-accent hover:text-foreground">
+										<Filter className="size-3" />
+									</span>
+									<span className="grid size-5.5 place-items-center rounded text-muted-foreground hover:bg-accent hover:text-foreground">
+										<Maximize2 className="size-3" />
+									</span>
+								</div>
+							</div>
+							<ActivityHeatmap days={days} />
+						</Surface>
+						<div className="mt-4 flex items-center gap-2 border-t border-border pt-3 font-mono text-[11px] text-muted-foreground">
 							<span>last sync 2m ago</span>
 							<span> · </span>
 							<span>{status.data?.pipelineV2?.paused ? "pipeline paused" : "pipeline active"}</span>
 							<div className="flex-1" />
 						</div>
-					</Surface>
+					</DailyBrief>
 				</div>
 
 				<div className="flex flex-col gap-4.5">
@@ -130,18 +100,38 @@ export function HomeView() {
 						title="Sources"
 						meta={`${sources?.filter((s) => s.enabled).length ?? 0} connected · 24h`}
 					>
-						<div className="flex flex-col">
-							{(sources ?? MOCK_SOURCES).slice(0, 4).map((s, idx) => (
+						{sourcesQuery.loading ? (
+							<div className="grid min-h-[210px] place-items-center">
+								<span className="font-mono text-[10.5px] text-muted-foreground">Loading sources…</span>
+							</div>
+						) : !sources ? (
+							<div className="grid min-h-[210px] place-items-center text-center">
+								<div className="flex flex-col items-center gap-1.5">
+									<span className="font-mono text-[10.5px] text-muted-foreground">Couldn’t load sources</span>
+									<span className="text-[11px] text-muted-foreground">Check the daemon connection and try again.</span>
+								</div>
+							</div>
+						) : sources?.length ? (
+							<div className="flex flex-col">
+								{sources.slice(0, 4).map((s, idx) => (
 								<SourceRow
 									key={s.id}
 									logo={sourceLogo(s.kind)}
 									name={s.name}
 									acct={s.root}
 									delta={s.stats?.indexed}
-									last={idx === Math.min(3, (sources ?? MOCK_SOURCES).length - 1)}
+									last={idx === Math.min(3, sources.length - 1)}
 								/>
 							))}
-						</div>
+							</div>
+						) : (
+							<div className="grid min-h-[210px] place-items-center text-center">
+								<div className="flex flex-col items-center gap-1.5">
+									<span className="font-mono text-[10.5px] text-muted-foreground">No sources connected</span>
+									<span className="text-[11px] text-muted-foreground">Connect a source to begin indexing.</span>
+								</div>
+							</div>
+						)}
 					</Panel>
 
 					<Panel title="Review suggestions" meta="3 pending">
@@ -196,15 +186,13 @@ function SourceRow({
 	);
 }
 
-const REVIEW_ACTIONS = ["Discard", "Confirm", "Merge", "Skip", "Link", "New agent"] as const;
-
 function ReviewRow({
 	text,
-	primary,
+	actions,
 	last,
 }: {
 	text: React.ReactNode;
-	primary?: number;
+	actions: readonly [string, string];
 	last: boolean;
 }) {
 	return (
@@ -216,18 +204,18 @@ function ReviewRow({
 		>
 			<div className="text-[12.5px] leading-[1.4] [&_b]:font-semibold">{text}</div>
 			<div className="flex justify-end gap-1.5">
-				{REVIEW_ACTIONS.map((a, i) => (
+				{actions.map((action, index) => (
 					<button
-						key={a}
+						key={action}
 						type="button"
 						className={cn(
-							"min-w-[74px] whitespace-nowrap rounded-[var(--radius)] border px-2 py-1.25 font-mono text-[11.5px] font-medium transition-colors",
-							i === primary
+							"min-w-[74px] whitespace-nowrap rounded-[var(--radius)] border px-2 py-[5px] text-[11.5px] font-medium transition-colors",
+							index === 1
 								? "border-primary bg-primary text-primary-foreground"
-								: "border-[oklch(1_0_0/0.2)] text-muted-foreground hover:border-[oklch(1_0_0/0.34)] hover:bg-[oklch(1_0_0/0.07)] hover:text-foreground",
+								: "border-[oklch(1_0_0/0.2)] text-muted-foreground hover:border-[oklch(1_0_0/0.34)] hover:bg-[oklch(1_0_0/0.07)] hover:text-foreground [html:not(.dark)_&]:border-[oklch(0_0_0/0.16)] [html:not(.dark)_&]:hover:border-[oklch(0_0_0/0.28)] [html:not(.dark)_&]:hover:bg-[oklch(0_0_0/0.05)]",
 						)}
 					>
-						{a}
+						{action}
 					</button>
 				))}
 			</div>
@@ -235,14 +223,14 @@ function ReviewRow({
 	);
 }
 
-const REVIEW_ROWS: { text: React.ReactNode; primary?: number }[] = [
+const REVIEW_ROWS: { text: React.ReactNode; actions: readonly [string, string] }[] = [
 	{
 		text: (
 			<>
 				<b>signet</b> and <b>dashboard</b> are the same entity across 4 sources. Merge?
 			</>
 		),
-		primary: 2,
+		actions: ["Discard", "Confirm"],
 	},
 	{
 		text: (
@@ -250,7 +238,7 @@ const REVIEW_ROWS: { text: React.ReactNode; primary?: number }[] = [
 				New recurring actor <b>Mira</b> detected in 12 memories — create an agent?
 			</>
 		),
-		primary: 5,
+		actions: ["Merge", "New agent"],
 	},
 	{
 		text: (
@@ -258,11 +246,9 @@ const REVIEW_ROWS: { text: React.ReactNode; primary?: number }[] = [
 				<b>local-first</b> and <b>hosted inference</b> appear contradictory in recent notes.
 			</>
 		),
-		primary: 4,
+		actions: ["Skip", "Link"],
 	},
 ];
-
-const MOCK_SOURCES: SignetSource[] = [];
 
 /** Page-head controls: time-range segmented control + ⌘K command trigger + refresh. */
 function HomeControls() {

@@ -2,6 +2,7 @@ import type { AgentRosterReadPolicy } from "@signet/core";
 import { type ReadDb, prepareTypedStatement } from "./db-accessor";
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
+const ACTIVITY_DAY_COUNT = 252;
 
 const EVOLVED_EVENTS = new Set(["updated", "merged", "recovered"]);
 const STRENGTHENED_REASON_PATTERN = /(reinfor|strength|consolidat|stabiliz|promot|confidence|refin)/i;
@@ -21,6 +22,11 @@ interface HistoryRow {
 	readonly event: string;
 	readonly reason: string | null;
 	readonly created_at: string;
+}
+
+interface ActivityRow {
+	readonly date: string | null;
+	readonly count: number;
 }
 
 interface RangeSpec {
@@ -75,6 +81,12 @@ export interface MemoryTimelineBucket {
 	readonly topTags: readonly TimelineMetric[];
 }
 
+export interface MemoryTimelineDay {
+	/** Calendar day in the requested timezone (YYYY-MM-DD). */
+	readonly date: string;
+	readonly memoriesAdded: number;
+}
+
 export interface MemoryTimelineResponse {
 	readonly generatedAt: string;
 	readonly generatedFor: string;
@@ -84,6 +96,8 @@ export interface MemoryTimelineResponse {
 	readonly invalidMemoryTimestamps: number;
 	readonly invalidHistoryTimestamps: number;
 	readonly buckets: readonly MemoryTimelineBucket[];
+	/** Daily activity cells, oldest first, for the 36×7 dashboard heatmap. */
+	readonly dailyBuckets: readonly MemoryTimelineDay[];
 }
 
 interface MutableBucket {
@@ -114,6 +128,11 @@ function startOfLocalDay(ms: number, tzOffsetMin = 0): number {
 	const d = new Date(local);
 	const dayStart = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
 	return dayStart + tzOffsetMin * 60_000;
+}
+
+function localDateKey(ms: number, tzOffsetMin: number): string {
+	const local = new Date(ms - tzOffsetMin * 60_000);
+	return `${local.getUTCFullYear()}-${String(local.getUTCMonth() + 1).padStart(2, "0")}-${String(local.getUTCDate()).padStart(2, "0")}`;
 }
 
 function parseTimestamp(raw: string): number | null {
@@ -240,7 +259,11 @@ export function buildMemoryTimeline(
 	const nowStartMs = startOfLocalDay(now.getTime(), tzOffsetMin);
 	const buckets = createBuckets(nowStartMs);
 
-	// Widest bucket is 30 days — filter SQL to avoid full table scan
+	// Widest bucket is 30 days — filter SQL to avoid full table scan. The
+	// dashboard activity grid is 36 weeks wide, so the daily cells query gets
+	// its own deeper cutoff; summary buckets stay on the 30-day window.
+	const activityStartMs = nowStartMs - (ACTIVITY_DAY_COUNT - 1) * MS_PER_DAY;
+	const activityCutoffIso = new Date(activityStartMs).toISOString();
 	const cutoffMs = nowStartMs - 29 * MS_PER_DAY;
 	const cutoffIso = new Date(cutoffMs).toISOString();
 
@@ -261,6 +284,15 @@ export function buildMemoryTimeline(
 		}
 	}
 	const scopeSql = scopePredicates.length > 0 ? ` AND ${scopePredicates.join(" AND ")}` : "";
+	const localTimeModifier = `${-tzOffsetMin} minutes`;
+	const activityRows = prepareTypedStatement<ActivityRow>(
+		db,
+		`SELECT strftime('%Y-%m-%d', datetime(created_at, ?)) AS date, COUNT(*) AS count
+			 FROM memories
+			 WHERE is_deleted = 0
+			   AND created_at >= ?${scopeSql}
+			 GROUP BY date`,
+	).all(localTimeModifier, activityCutoffIso, ...scopeParams);
 
 	const memoryRows = prepareTypedStatement<MemoryRow>(
 		db,
@@ -283,6 +315,7 @@ export function buildMemoryTimeline(
 
 	let invalidMemoryTimestamps = 0;
 	let invalidHistoryTimestamps = 0;
+	const activityCounts = new Map(activityRows.filter((row) => row.date).map((row) => [row.date as string, row.count]));
 
 	for (const row of memoryRows) {
 		const ts = parseTimestamp(row.created_at);
@@ -375,5 +408,9 @@ export function buildMemoryTimeline(
 		invalidMemoryTimestamps,
 		invalidHistoryTimestamps,
 		buckets: responseBuckets,
+		dailyBuckets: Array.from({ length: ACTIVITY_DAY_COUNT }, (_, index) => {
+			const date = localDateKey(activityStartMs + index * MS_PER_DAY, tzOffsetMin);
+			return { date, memoriesAdded: activityCounts.get(date) ?? 0 };
+		}),
 	};
 }

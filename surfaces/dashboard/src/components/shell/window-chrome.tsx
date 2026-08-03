@@ -29,7 +29,10 @@ export function WindowChrome() {
 			</div>
 		);
 	}
-	return null; // win/linux chrome renders in the topbar (see Topbar)
+	// win/linux: mockup reserves a slim 12px strip (`.sidebar__titlebar`)
+	// so the sidebar rhythm matches across platforms; caption buttons
+	// render in the topbar instead of dots here.
+	return <div className="sig-drag h-[12px] shrink-0" />;
 }
 
 export function CaptionButtons() {

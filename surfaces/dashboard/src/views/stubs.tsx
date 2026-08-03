@@ -19,20 +19,6 @@ function Placeholder({ title, description }: { title: string; description: strin
 	);
 }
 
-export function GraphView() {
-	return (
-		<div className="relative flex flex-1 min-h-0 overflow-hidden">
-			<div
-				className="absolute inset-0"
-				style={{ backgroundImage: "var(--sig-dotted-grid)", backgroundSize: "28px 28px" }}
-			/>
-			<div className="relative flex flex-1 items-center justify-center">
-				<Placeholder title="Memory graph" description="The knowledge graph explorer renders here once the graph view design is finalized. The mockup stages this as an empty canvas." />
-			</div>
-		</div>
-	);
-}
-
 export function SkillsView() {
 	return (
 		<div className="flex flex-1 min-h-0 items-center justify-center">

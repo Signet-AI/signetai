@@ -13,12 +13,15 @@ export interface KpiData {
 	live?: boolean;
 }
 
-export function KpiRow({ cards }: { cards: KpiData[] }) {
+export function KpiRow({ cards, children }: { cards: KpiData[]; children?: React.ReactNode }) {
 	return (
 		<div className="grid shrink-0 grid-cols-2 gap-2.5 sm:grid-cols-4">
 			{cards.map((c) => (
 				<KpiCard key={c.label} {...c} />
 			))}
+			{/* Trailing controls land in row 2, col 1 — mirrors the mockup's
+			    `.kpirow` where `.controls` is the 5th grid item. */}
+			{children}
 		</div>
 	);
 }
@@ -102,7 +105,7 @@ export function ActivityHeatmap({ days }: { days: DayBucket[] }) {
 		<div className="flex flex-col gap-2">
 			<div
 				role="img"
-				aria-label="Memory activity, last 5 weeks"
+				aria-label="Memory activity, last 36 weeks"
 				className="grid w-full gap-[3px]"
 				style={{ gridTemplateRows: "repeat(7, 1fr)", gridAutoFlow: "column", gridAutoColumns: "1fr", aspectRatio: "36 / 7" }}
 			>
@@ -111,16 +114,16 @@ export function ActivityHeatmap({ days }: { days: DayBucket[] }) {
 						key={i}
 						title={`${d.date}: ${d.count}`}
 						className={cn(
-							"rounded-[2px] transition-transform hover:z-[1] hover:scale-[1.3] hover:outline hover:outline-1 hover:outline-foreground",
+							"rounded-[2px] transition-[background-color,transform] duration-[120ms] hover:z-[1] hover:scale-[1.3] hover:outline hover:outline-1 hover:outline-foreground",
 							HEATMAP_LEVELS[level(d.count)],
 						)}
 					/>
 				))}
 			</div>
-			<div className="mt-1 flex items-center justify-between gap-3 font-mono text-[9px] text-muted-foreground">
+			<div className="flex shrink-0 items-center justify-between gap-3 font-mono text-[9px] text-muted-foreground">
 				<div className="flex gap-3.5">
-					<span>5w ago</span>
-					<span>2w ago</span>
+					<span>36w ago</span>
+					<span>18w ago</span>
 					<span>today</span>
 				</div>
 				<div className="flex items-center gap-1">

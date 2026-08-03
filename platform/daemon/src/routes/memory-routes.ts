@@ -934,6 +934,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 					invalidMemoryTimestamps: 0,
 					invalidHistoryTimestamps: 0,
 					buckets: [],
+					dailyBuckets: [],
 				},
 				500,
 			);

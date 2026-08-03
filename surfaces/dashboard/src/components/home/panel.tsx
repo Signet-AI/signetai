@@ -41,8 +41,8 @@ export function Panel({
 }) {
 	return (
 		<Surface className={cn("group", className)}>
-			<div className="px-4 pt-3">{<PanelHead title={title} meta={meta} />}</div>
-			<div className="px-4 pb-3.5 pt-1">{children}</div>
+			<div className="px-4 pt-3.5">{<PanelHead title={title} meta={meta} />}</div>
+			<div className="px-4 pb-3.5 pt-3">{children}</div>
 		</Surface>
 	);
 }
