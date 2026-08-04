@@ -119,25 +119,15 @@ describe("drainWriteBatches", () => {
 				for (const item of batch) db.prepare("INSERT INTO items (id) VALUES (?)").run(item.id);
 			},
 			{ label: "test-pressure", maxPerTx: 50 },
-		).then((r) => { drainDone = true; return r; });
+		).then((r) => { drainDone = true; return r; })
+			.catch(() => { /* drain aborted by test teardown — expected */ });
 
 		// Give it a moment — it should be paused, not done.
 		await new Promise((resolve) => setTimeout(resolve, 200));
 		expect(drainDone).toBe(false);
 
-		// The pressure signal auto-clears after the cooldown (5s). For the test,
-		// we can't wait that long — but we can verify it's still waiting.
-		// Instead, let the timeout path (30s) handle it... actually that's too long.
-		// Clear pressure manually by waiting for cooldown.
-		// The cooldown is 5s — let's verify the drain is blocked, then abort.
-		expect(drainDone).toBe(false);
-
-		// Don't actually wait 30s — the test proves the pause by showing
-		// drainDone is false after 200ms while pressure is critical.
-		// Clean up by clearing the event loop.
-		reportEventLoopLag(0); // this won't clear (lag < threshold doesn't reset)
-		// Force clear by waiting past cooldown.
-		// For test speed, we'll just let the promise's timeout handle it eventually.
-		// But 30s is too long for a unit test — so we'll abort.
+		// Don't actually wait for the drain to complete — the test proves the
+		// pause by showing drainDone is false after 200ms while pressure is
+		// critical. The .catch() on drainPromise handles teardown.
 	}, 1000); // 1s timeout — proves it pauses, doesn't need to finish
 });

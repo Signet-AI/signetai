@@ -38,10 +38,7 @@ let startupGraceUntil = 0;
 export function reportStartupGrace(durationMs = 10_000): void {
 	startupGraceUntil = Date.now() + durationMs;
 	if (currentLevel === "normal") currentLevel = "elevated";
-	logger.info(
-		"system-pressure",
-		`Startup grace period active for ${Math.round(durationMs / 1000)}s — background workers deferred`,
-	);
+	logger.info("system-pressure", `Startup grace period active for ${Math.round(durationMs / 1000)}s — background workers deferred`);
 }
 
 /**
@@ -65,25 +62,30 @@ export function reportEventLoopLag(lagMs: number): void {
 	}
 }
 
-/** Current pressure level, auto-clearing after the cooldown if no new lag. */
-export function getSystemPressure(): PressureLevel {
-	// Startup grace: keep elevated until the grace period expires, regardless
-	// of lag detection. The cooldown timer should not clear it early.
-	if (Date.now() < startupGraceUntil) {
-		return currentLevel === "normal" ? "elevated" : currentLevel;
+/**
+ * Advance the pressure state machine. Called by the event-loop monitor on its
+ * 2s cadence (or manually in tests). This is the ONLY function that clears
+ * pressure — reads are pure, so telemetry/health callers never accidentally
+ * clear the signal by observing it.
+ */
+export function tickPressureState(): void {
+	const now = Date.now();
+	if (startupGraceUntil !== 0 && now >= startupGraceUntil) {
+		startupGraceUntil = 0;
 	}
-	if (Date.now() >= startupGraceUntil && startupGraceUntil !== 0) {
-		startupGraceUntil = 0; // grace expired — fall through to normal cooldown logic
-	}
-	if (currentLevel !== "normal" && Date.now() - lastLagAt > CLEAR_COOLDOWN_MS) {
+	if (currentLevel !== "normal" && now >= startupGraceUntil && now - lastLagAt > CLEAR_COOLDOWN_MS) {
 		currentLevel = "normal";
 	}
+}
+
+/** Pure read of the current pressure level. Never mutates state. */
+export function getSystemPressure(): PressureLevel {
 	return currentLevel;
 }
 
 /** True when background work should pause to let the event loop recover. */
 export function isSystemPressureHigh(): boolean {
-	return getSystemPressure() !== "normal";
+	return currentLevel !== "normal";
 }
 
 /**
@@ -92,10 +94,11 @@ export function isSystemPressureHigh(): boolean {
  * better than a deadlocked one, and the watchdog will catch a true hang).
  */
 export async function awaitPressureClear(timeoutMs = 30_000): Promise<boolean> {
-	if (getSystemPressure() === "normal") return true;
+	if (currentLevel === "normal") return true;
 	const deadline = Date.now() + timeoutMs;
 	while (Date.now() < deadline) {
 		await new Promise<void>((resolve) => setTimeout(resolve, 500));
+		tickPressureState();
 		if (getSystemPressure() === "normal") return true;
 	}
 	logger.warn("system-pressure", `Pressure did not clear within ${timeoutMs}ms — proceeding`);

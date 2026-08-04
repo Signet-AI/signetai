@@ -23,8 +23,8 @@
  */
 
 import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
-import { isSystemPressureHigh, awaitPressureClear } from "./system-pressure";
 import { logger } from "./logger";
+import { awaitPressureClear, isSystemPressureHigh } from "./system-pressure";
 
 /** Yield a macrotask so pending HTTP handlers (and the event-loop monitor) can run. */
 const yieldToEventLoop = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
@@ -47,7 +47,7 @@ export interface DrainResult {
 	readonly processed: number;
 	readonly batches: number;
 	readonly paused: number;
-	readonly stopped: "exhausted" | "capped" | "pressure-timeout";
+	readonly stopped: "exhausted" | "capped";
 }
 
 /**
@@ -90,10 +90,8 @@ export async function drainWriteBatches<Item>(
 
 		// 2. Check pressure — pause background work if the event loop is degraded.
 		if (isSystemPressureHigh()) {
-			const cleared = await awaitPressureClear();
-			if (!cleared) paused++;
-			// Even on timeout we proceed with the batch; a delayed pass beats a
-			// deadlocked one. But log it so the pressure pattern is visible.
+			paused++;
+			await awaitPressureClear();
 		}
 
 		// 3. Process in one short transaction.
@@ -108,8 +106,5 @@ export async function drainWriteBatches<Item>(
 		}
 	}
 
-	if (processed >= maxTotal) {
-		logger.debug("yielding-writes", `${options.label}: hit maxTotal cap (${maxTotal})`, { processed, batches });
-	}
-	return { processed, batches, paused, stopped: processed >= maxTotal ? "capped" : "exhausted" };
+	return { processed, batches, paused, stopped: "capped" };
 }
