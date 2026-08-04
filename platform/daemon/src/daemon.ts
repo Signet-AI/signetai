@@ -1413,15 +1413,18 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 			telemetry,
 		);
 
-		// Configure the main thread's own native embedding handle with the
-		// pre-resolved asset paths. This ensures consistency with any
-		// background embedding consumers (tracker, index migration).
-		const { configureNativeEmbeddingAssets } = await import("./native-embedding");
-		configureNativeEmbeddingAssets({
-			embeddingWorkerPath: resolveEmbeddedWorkerPath("embedding-worker"),
-			wasmAssetDir: materializeEmbeddedWasmAssets(),
-			transformersRuntimeAssetPath: resolveEmbeddedWorkerPath("embedding-worker-transformers-runtime"),
-		});
+		// Configure the main thread's own native embedding handle — but ONLY when
+		// the provider is actually native. On x86_64, native ONNX warmup wedges
+		// the event loop for 70+ seconds even when provider is ollama/openai
+		// (#1073). A non-native provider must not trigger native warming.
+		if (activeEmbeddingCfg.provider === "native") {
+			const { configureNativeEmbeddingAssets } = await import("./native-embedding");
+			configureNativeEmbeddingAssets({
+				embeddingWorkerPath: resolveEmbeddedWorkerPath("embedding-worker"),
+				wasmAssetDir: materializeEmbeddedWasmAssets(),
+				transformersRuntimeAssetPath: resolveEmbeddedWorkerPath("embedding-worker-transformers-runtime"),
+			});
+		}
 	} else {
 		ensureRetentionWorker(getDbAccessor(), DEFAULT_RETENTION);
 	}
