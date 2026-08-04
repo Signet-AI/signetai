@@ -16,9 +16,9 @@ import { getLlmProvider } from "../llm";
 import { logger } from "../logger";
 import type { PipelineV2Config } from "../memory-config";
 import {
-	type RateLimiter,
 	DEAD_MEMORY_DEFAULT_ACCESS_DAYS,
 	DEAD_MEMORY_DEFAULT_CONFIDENCE,
+	type RateLimiter,
 	type RepairContext,
 	type RepairResult,
 	checkFtsConsistency,
@@ -28,6 +28,7 @@ import {
 	requeueDeadJobs,
 	triggerRetentionSweep,
 } from "../repair-actions";
+import { isSystemPressureHigh } from "../system-pressure";
 import { decayAspectWeights, recordFeedbackTelemetry } from "./aspect-feedback";
 import { invalidateTraversalCache } from "./graph-traversal";
 import { checkAndCondense } from "./summary-condensation";
@@ -216,6 +217,10 @@ export function startMaintenanceWorker(
 	};
 
 	async function doTick(): Promise<MaintenanceCycleResult> {
+		if (isSystemPressureHigh()) {
+			const report = accessor.withReadDb((db) => getDiagnostics(db, tracker));
+			return { report, recommendations: [], executed: [], feedbackDecayedAspects: 0, feedbackPropagatedAttributes: 0 };
+		}
 		const report = accessor.withReadDb((db) => getDiagnostics(db, tracker));
 
 		const recommendations = buildRecommendations(report);

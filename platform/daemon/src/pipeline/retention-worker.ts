@@ -42,6 +42,7 @@ interface MemoryRow {
 }
 import { countChanges, syncVecDeleteByEmbeddingIds } from "../db-helpers";
 import { logger } from "../logger";
+import { isSystemPressureHigh } from "../system-pressure";
 import { txDecrementEntityMentions } from "./graph-transactions";
 import { invalidateTraversalCache } from "./graph-traversal";
 
@@ -438,6 +439,7 @@ export function startRetentionWorker(accessor: DbAccessor, cfg: RetentionConfig 
 
 	timer = setInterval(() => {
 		if (!running) return;
+		if (isSystemPressureHigh()) return;
 		try {
 			doSweep();
 		} catch (e) {

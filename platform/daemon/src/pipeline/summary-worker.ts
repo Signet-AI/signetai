@@ -27,6 +27,7 @@ import {
 import { recordPathFeedback } from "../path-feedback";
 import { isNoiseSession } from "../session-noise";
 import { upsertSessionTranscript } from "../session-transcripts";
+import { isSystemPressureHigh } from "../system-pressure";
 import { upsertThreadHead } from "../thread-heads";
 import { isDurableBoundary, normalizeBoundaryReason } from "./boundary-reason";
 import { RateLimitExceededError } from "./provider";
@@ -47,10 +48,7 @@ export interface SummaryWorkerOptions {
 	readonly isSynthesisAvailable?: () => Promise<boolean>;
 }
 
-export function canProcessSummaryJobs(
-	synthesisAvailable: boolean,
-	paused = false,
-): boolean {
+export function canProcessSummaryJobs(synthesisAvailable: boolean, paused = false): boolean {
 	return !paused && synthesisAvailable;
 }
 
@@ -1205,6 +1203,10 @@ export function startSummaryWorker(accessor: DbAccessor, options: SummaryWorkerO
 
 	async function tick(): Promise<void> {
 		if (stopped) return;
+		if (isSystemPressureHigh()) {
+			scheduleTick(POLL_INTERVAL_MS);
+			return;
+		}
 
 		// Re-check config each tick — respect runtime config changes
 		const cfg = loadMemoryConfig(AGENTS_DIR);
@@ -1220,10 +1222,7 @@ export function startSummaryWorker(accessor: DbAccessor, options: SummaryWorkerO
 			const isSynthesisAvailable = options.isSynthesisAvailable ?? (async () => false);
 			const isWorkloadAvailable = async (): Promise<boolean> => {
 				const latest = loadMemoryConfig(AGENTS_DIR);
-				return canProcessSummaryJobs(
-					await isSynthesisAvailable(),
-					latest.pipelineV2.paused,
-				);
+				return canProcessSummaryJobs(await isSynthesisAvailable(), latest.pipelineV2.paused);
 			};
 			const job = await leaseSummaryJobWhenAvailable(accessor, isWorkloadAvailable);
 

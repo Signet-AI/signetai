@@ -14,6 +14,7 @@ import { listStaleEmbeddingRows } from "./embedding-coverage";
 import { isActiveEmbeddingConfig } from "./embedding-index-state";
 import { logger } from "./logger";
 import type { EmbeddingConfig } from "./memory-config";
+import { isSystemPressureHigh } from "./system-pressure";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -156,6 +157,10 @@ export function startEmbeddingTracker(
 
 	async function tick(): Promise<void> {
 		if (!running) return;
+		if (isSystemPressureHigh()) {
+			skippedCycles++;
+			return;
+		}
 
 		try {
 			// 1. Check provider health (uses existing 30s cache)

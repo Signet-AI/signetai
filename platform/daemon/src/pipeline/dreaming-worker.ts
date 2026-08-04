@@ -9,9 +9,10 @@ import type { DbAccessor } from "../db-accessor";
 import { getQueueHealth } from "../diagnostics";
 import { getOrCreateInferenceRouter } from "../inference-router";
 import { logger } from "../logger";
+import { isSystemPressureHigh } from "../system-pressure";
 import {
-	type DreamingMode,
 	type DreamingAgentExecutor,
+	type DreamingMode,
 	createDreamingPass,
 	enqueueDreamingHygieneAttention,
 	getDreamingEpisodicTokenBacklog,
@@ -147,12 +148,12 @@ export function startDreamingWorker(
 				if (!result.ok) {
 					const attempts = Array.isArray(result.error.details?.attempts)
 						? result.error.details.attempts
-							.map((attempt) => {
-								if (!attempt || typeof attempt !== "object") return "unknown target";
-								const value = attempt as { targetRef?: unknown; error?: unknown };
-								return `${typeof value.targetRef === "string" ? value.targetRef : "unknown"}: ${typeof value.error === "string" ? value.error : "failed"}`;
-							})
-							.join("; ")
+								.map((attempt) => {
+									if (!attempt || typeof attempt !== "object") return "unknown target";
+									const value = attempt as { targetRef?: unknown; error?: unknown };
+									return `${typeof value.targetRef === "string" ? value.targetRef : "unknown"}: ${typeof value.error === "string" ? value.error : "failed"}`;
+								})
+								.join("; ")
 						: "";
 					throw new Error(attempts ? `${result.error.message} (${attempts})` : result.error.message);
 				}
@@ -210,6 +211,7 @@ export function startDreamingWorker(
 
 	async function check(): Promise<void> {
 		if (stopped || active) return;
+		if (isSystemPressureHigh()) return;
 		if (shouldDeferDreamingSweep(accessor)) {
 			logger.info("dreaming-worker", "Deferring dreaming sweep while queues are under pressure");
 			return;

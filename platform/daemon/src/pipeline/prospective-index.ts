@@ -9,8 +9,9 @@
 
 import type { LlmProvider, PipelineHintsConfig } from "@signet/core";
 import type { DbAccessor, WriteDb } from "../db-accessor";
-import type { PipelineV2Config } from "../memory-config";
 import { logger } from "../logger";
+import type { PipelineV2Config } from "../memory-config";
+import { isSystemPressureHigh } from "../system-pressure";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -213,6 +214,10 @@ export function startHintsWorker(deps: {
 
 	async function tick(): Promise<void> {
 		if (!running) return;
+		if (isSystemPressureHigh()) {
+			schedule();
+			return;
+		}
 
 		let job: HintJobRow | null = null;
 		try {

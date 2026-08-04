@@ -15,6 +15,7 @@ import { syncVecInsert, vectorToBlob } from "../db-helpers";
 import { isActiveEmbeddingConfig } from "../embedding-index-state";
 import { logger } from "../logger";
 import type { EmbeddingConfig, PipelineV2Config } from "../memory-config";
+import { isSystemPressureHigh } from "../system-pressure";
 import { txIngestEnvelope } from "../transactions";
 import { fetchUrlContent } from "./url-fetcher";
 
@@ -447,6 +448,7 @@ export function startDocumentWorker(deps: DocumentWorkerDeps): DocumentWorkerHan
 
 	async function tick(): Promise<void> {
 		if (!running) return;
+		if (isSystemPressureHigh()) return;
 
 		const job = deps.accessor.withWriteTx((db) => leaseDocumentJob(db, deps.pipelineCfg.worker.maxRetries));
 
