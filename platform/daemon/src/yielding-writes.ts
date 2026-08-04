@@ -41,6 +41,9 @@ export interface DrainOptions {
 	readonly yieldEvery?: number;
 	/** Hard cap on total items processed in one drain call. Default 10_000. */
 	readonly maxTotal?: number;
+	/** Skip pressure checks entirely (for startup recovery where no workers
+	 *  or HTTP handlers are running to compete with). Default false. */
+	readonly skipPressure?: boolean;
 }
 
 export interface DrainResult {
@@ -89,7 +92,7 @@ export async function drainWriteBatches<Item>(
 		}
 
 		// 2. Check pressure — pause background work if the event loop is degraded.
-		if (isSystemPressureHigh()) {
+		if (!options.skipPressure && isSystemPressureHigh()) {
 			paused++;
 			await awaitPressureClear();
 		}

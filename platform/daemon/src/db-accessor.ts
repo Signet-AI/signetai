@@ -133,6 +133,10 @@ export interface DbAccessor {
 	/** Open a readonly connection, run `fn`, close it. */
 	withReadDb<T>(fn: (db: ReadDb) => T): T;
 
+	/** Checkpoint the WAL into the main DB file on the write connection,
+	 *  outside any transaction. Safe to call periodically or on startup. */
+	checkpointWal(): void;
+
 	/** Close all held connections. Safe to call multiple times. */
 	close(): void;
 }
@@ -1033,6 +1037,11 @@ function createAccessor(writeConn: SqliteDatabase): DbAccessor {
 			} finally {
 				releaseRead(conn);
 			}
+		},
+
+		checkpointWal(): void {
+			if (closed) throw new Error("DbAccessor is closed");
+			writeConn.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get();
 		},
 
 		close(): void {

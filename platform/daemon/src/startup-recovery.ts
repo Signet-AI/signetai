@@ -45,12 +45,10 @@ export async function runStartupRecovery(accessor: DbAccessor): Promise<StartupR
 	// 1. WAL checkpoint — flush accumulated WAL pages into the main DB file.
 	// Under a crash loop, the WAL grows without checkpointing (153M observed
 	// in production). A large WAL slows every read and increases memory use.
-	// Must run outside a write transaction (PRAGMA wal_checkpoint needs no
-	// transaction wrapper and conflicts with BEGIN IMMEDIATE).
+	// Must run on the write connection outside a transaction (readonly
+	// connections get SQLITE_IOERR_WRITE, and BEGIN IMMEDIATE conflicts).
 	try {
-		accessor.withReadDb((db) => {
-			db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get();
-		});
+		accessor.checkpointWal();
 		walCheckpointed = true;
 	} catch (err) {
 		logger.warn("startup-recovery", "WAL checkpoint failed", {
@@ -61,57 +59,81 @@ export async function runStartupRecovery(accessor: DbAccessor): Promise<StartupR
 	// 2. Purge old dead jobs — crash loops leave thousands of dead extract/
 	// document/summary jobs that serve no purpose and inflate diagnostics.
 	const cutoff = new Date(Date.now() - DEAD_JOB_RETENTION_DAYS * 86_400_000).toISOString();
-	const deadJobResult = await drainWriteBatches(
-		accessor,
-		(db: ReadDb, limit: number) =>
-			db
-				.prepare(
-					`SELECT id FROM memory_jobs
-					 WHERE status = 'dead' AND created_at < ?
-					 ORDER BY created_at
-					 LIMIT ?`,
-				)
-				.all(cutoff, limit) as Array<{ id: string }>,
-		(db: WriteDb, batch: readonly { id: string }[]) => {
-			if (batch.length === 0) return;
-			const placeholders = batch.map(() => "?").join(",");
-			db.prepare(`DELETE FROM memory_jobs WHERE id IN (${placeholders})`).run(...batch.map((b) => b.id));
-		},
-		{ label: "dead-job-purge", maxPerTx: JOB_BATCH_SIZE, maxTotal: JOB_MAX_TOTAL },
-	);
+	let deadJobResult: DrainResult = { processed: 0, batches: 0, paused: 0, stopped: "exhausted" };
+	try {
+		deadJobResult = await drainWriteBatches(
+			accessor,
+			(db: ReadDb, limit: number) =>
+				db
+					.prepare(
+						`SELECT id FROM memory_jobs
+						 WHERE status = 'dead' AND created_at < ?
+						 ORDER BY created_at
+						 LIMIT ?`,
+					)
+					.all(cutoff, limit) as Array<{ id: string }>,
+			(db: WriteDb, batch: readonly { id: string }[]) => {
+				if (batch.length === 0) return;
+				const placeholders = batch.map(() => "?").join(",");
+				db.prepare(`DELETE FROM memory_jobs WHERE id IN (${placeholders})`).run(...batch.map((b) => b.id));
+			},
+			{ label: "dead-job-purge", maxPerTx: JOB_BATCH_SIZE, maxTotal: JOB_MAX_TOTAL, skipPressure: true },
+		);
+	} catch (err) {
+		logger.warn("startup-recovery", "Dead job purge failed", {
+			error: err instanceof Error ? err.message : String(err),
+		});
+	}
 
-	// 3. Clean redundant embeddings_staging rows. Under a crash loop, the
-	// staging buffer grows without draining (106k rows observed). Most rows
-	// are redundant — their vectors already live in embeddings. Delete those;
-	// keep genuinely new rows (not yet promoted) for the normal drain path.
-	// We check by content_hash: if a row with the same hash exists in
-	// embeddings, the staging copy is redundant.
-	const stagingResult = await drainWriteBatches(
-		accessor,
-		(db: ReadDb, limit: number) => {
-			// Only clean if the table exists (it may not on fresh installs).
+	// 3. Clean stale embeddings_staging rows — but ONLY when no embedding
+	// index migration is in progress. embeddings_staging is written by the
+	// embedding index migration to hold new-model vectors; during a 'building'
+	// state, those rows are migration progress, not redundant data. Deleting
+	// them would discard all migration work and force a full re-encode.
+	let stagingResult: DrainResult = { processed: 0, batches: 0, paused: 0, stopped: "exhausted" };
+	try {
+		const migrationInProgress = accessor.withReadDb((db) => {
 			const tableExists = db
-				.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'embeddings_staging'")
-				.get() as { n: number };
-			if (tableExists?.n === 0) return null;
-			return db
-				.prepare(
-					`SELECT s.id FROM embeddings_staging s
-					 WHERE EXISTS (
-					   SELECT 1 FROM embeddings e WHERE e.content_hash = s.content_hash
-					 )
-					 ORDER BY s.created_at
-					 LIMIT ?`,
-				)
-				.all(limit) as Array<{ id: string }>;
-		},
-		(db: WriteDb, batch: readonly { id: string }[]) => {
-			if (batch.length === 0) return;
-			const placeholders = batch.map(() => "?").join(",");
-			db.prepare(`DELETE FROM embeddings_staging WHERE id IN (${placeholders})`).run(...batch.map((b) => b.id));
-		},
-		{ label: "staging-cleanup", maxPerTx: STAGING_BATCH_SIZE, maxTotal: STAGING_MAX_TOTAL },
-	);
+				.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'embedding_index_state'")
+				.get() as { n: number } | undefined;
+			if (!tableExists?.n) return false;
+			const state = db.prepare("SELECT state FROM embedding_index_state WHERE id = 1").get() as { state: string } | undefined;
+			return state?.state === "building";
+		});
+
+		if (migrationInProgress) {
+			logger.info("startup-recovery", "Skipping staging cleanup — embedding index migration in progress");
+		} else {
+			stagingResult = await drainWriteBatches(
+				accessor,
+				(db: ReadDb, limit: number) => {
+					const tableExists = db
+						.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'embeddings_staging'")
+						.get() as { n: number } | undefined;
+					if (!tableExists?.n) return null;
+					return db
+						.prepare(
+							`SELECT s.id FROM embeddings_staging s
+							 WHERE EXISTS (
+							   SELECT 1 FROM embeddings e WHERE e.content_hash = s.content_hash
+							 )
+							 LIMIT ?`,
+						)
+						.all(limit) as Array<{ id: string }>;
+				},
+				(db: WriteDb, batch: readonly { id: string }[]) => {
+					if (batch.length === 0) return;
+					const placeholders = batch.map(() => "?").join(",");
+				db.prepare(`DELETE FROM embeddings_staging WHERE id IN (${placeholders})`).run(...batch.map((b) => b.id));
+				},
+				{ label: "staging-cleanup", maxPerTx: STAGING_BATCH_SIZE, maxTotal: STAGING_MAX_TOTAL, skipPressure: true },
+			);
+		}
+	} catch (err) {
+		logger.warn("startup-recovery", "Staging cleanup failed", {
+			error: err instanceof Error ? err.message : String(err),
+		});
+	}
 
 	// 4. Sweep orphaned dreaming passes (status = 'running' from a crash).
 	// The dreaming worker already does this, but running it here too ensures
