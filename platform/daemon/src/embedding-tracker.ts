@@ -183,7 +183,14 @@ export function startEmbeddingTracker(
 
 			if (cycle.results.length === 0) return;
 
-			// 4. Batch write in a single write transaction
+			// 4. Re-check pressure after the async embedding work — the event loop
+			// may have degraded during the awaits above.
+			if (isSystemPressureHigh()) {
+				skippedCycles++;
+				return;
+			}
+
+			// 5. Batch write in a single write transaction
 			accessor.withWriteTx((db) => {
 				// A promotion may commit while this batch is encoding. Never let a
 				// tracker closed over the previous generation overwrite its vectors.
