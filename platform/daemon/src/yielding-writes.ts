@@ -23,8 +23,8 @@
  */
 
 import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
-import { logger } from "./logger";
 import { awaitPressureClear, isSystemPressureHigh } from "./system-pressure";
+import { logger } from "./logger";
 
 /** Yield a macrotask so pending HTTP handlers (and the event-loop monitor) can run. */
 const yieldToEventLoop = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
@@ -109,5 +109,6 @@ export async function drainWriteBatches<Item>(
 		}
 	}
 
+	logger.debug("yielding-writes", `${options.label}: hit maxTotal cap (${maxTotal})`, { processed, batches });
 	return { processed, batches, paused, stopped: "capped" };
 }

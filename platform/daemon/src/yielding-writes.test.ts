@@ -111,7 +111,7 @@ describe("drainWriteBatches", () => {
 
 		// Start the drain — it should pause on the first batch.
 		let drainDone = false;
-		const drainPromise = drainWriteBatches(
+		drainWriteBatches(
 			getDbAccessor(),
 			(db: ReadDb, limit: number) =>
 				db.prepare("SELECT id FROM work WHERE id NOT IN (SELECT id FROM items) ORDER BY id LIMIT ?").all(limit) as Array<{ id: number }>,
@@ -119,7 +119,7 @@ describe("drainWriteBatches", () => {
 				for (const item of batch) db.prepare("INSERT INTO items (id) VALUES (?)").run(item.id);
 			},
 			{ label: "test-pressure", maxPerTx: 50 },
-		).then((r) => { drainDone = true; return r; })
+		).then(() => { drainDone = true; })
 			.catch(() => { /* drain aborted by test teardown — expected */ });
 
 		// Give it a moment — it should be paused, not done.
