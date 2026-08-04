@@ -262,10 +262,11 @@ export function startDreamingWorker(
 		}, CHECK_INTERVAL_MS);
 	}
 
-	// Start the periodic check
-	for (const agentId of getDreamingWorkerAgentIds(accessor, defaultAgentId)) {
-		enqueueDreamingHygieneAttention(accessor, agentId);
-	}
+	// Start the periodic check. Hygiene attention is enqueued during regular
+	// check() ticks, NOT here — the hygiene scan does 6 SQL queries per agent
+	// that can take minutes on large graphs (30k entities = 2s/query on cold
+	// cache). Running it at startup blocks the event loop before the HTTP
+	// server binds, making the daemon appear to fail to start.
 	schedule();
 
 	logger.info("dreaming-worker", "Dreaming worker started", {
