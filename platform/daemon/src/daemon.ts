@@ -1660,8 +1660,11 @@ async function main() {
 	startFdPollMonitor();
 
 	// Clean accumulated crash-loop damage (dead jobs, stagnant staging buffer,
-	// WAL bloat) before any worker starts. Bounded, pressure-aware, idempotent.
-	await runStartupRecovery(getDbAccessor());
+	// WAL bloat) before any worker starts. Fully synchronous — no yielding to
+	// the event loop — because pending boot operations (plugin init, route
+	// registration) would interfere with the DB write connection if allowed
+	// to run between recovery batches (#1059).
+	runStartupRecovery(getDbAccessor());
 
 	const { extensionPath } = getVectorRuntimeStatus();
 	const bundled = join(__dirname, "synthesis-render-worker.js");

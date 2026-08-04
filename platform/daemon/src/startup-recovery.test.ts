@@ -93,7 +93,7 @@ describe("runStartupRecovery", () => {
 			insertJob(db, "pending-1", "pending", recent);
 		});
 
-		const report = await runStartupRecovery(getDbAccessor());
+		const report = runStartupRecovery(getDbAccessor());
 
 		expect(report.deadJobsPurged).toBe(2);
 		expect(countRows("memory_jobs")).toBe(2); // dead-recent + pending-1
@@ -108,7 +108,7 @@ describe("runStartupRecovery", () => {
 			insertEmbedding(db, "stage-2", "hash-B", "embeddings_staging");
 		});
 
-		const report = await runStartupRecovery(getDbAccessor());
+		const report = runStartupRecovery(getDbAccessor());
 
 		expect(report.stagingRowsCleaned).toBe(1);
 		expect(countRows("embeddings_staging")).toBe(1); // only the new row remains
@@ -121,7 +121,7 @@ describe("runStartupRecovery", () => {
 			insertPass(db, "completed-1", "completed");
 		});
 
-		const report = await runStartupRecovery(getDbAccessor());
+		const report = runStartupRecovery(getDbAccessor());
 
 		expect(report.orphanedPassesSwept).toBe(2);
 		const failedCount = getDbAccessor().withReadDb(
@@ -133,13 +133,13 @@ describe("runStartupRecovery", () => {
 
 	it("is idempotent — a clean workspace cleans nothing", async () => {
 		// Run recovery on a fresh workspace with no damage.
-		const report1 = await runStartupRecovery(getDbAccessor());
+		const report1 = runStartupRecovery(getDbAccessor());
 		expect(report1.deadJobsPurged).toBe(0);
 		expect(report1.stagingRowsCleaned).toBe(0);
 		expect(report1.orphanedPassesSwept).toBe(0);
 
 		// Run again — still nothing.
-		const report2 = await runStartupRecovery(getDbAccessor());
+		const report2 = runStartupRecovery(getDbAccessor());
 		expect(report2.deadJobsPurged).toBe(0);
 		expect(report2.stagingRowsCleaned).toBe(0);
 	});

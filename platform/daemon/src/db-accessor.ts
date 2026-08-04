@@ -1041,7 +1041,7 @@ function createAccessor(writeConn: SqliteDatabase): DbAccessor {
 
 		checkpointWal(): void {
 			if (closed) throw new Error("DbAccessor is closed");
-			writeConn.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get();
+			writeConn.exec("PRAGMA wal_checkpoint(TRUNCATE)");
 		},
 
 		close(): void {

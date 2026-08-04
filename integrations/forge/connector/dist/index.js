@@ -602,6 +602,8 @@ var require_Alias = __commonJS2((exports) => {
       });
     }
     resolve(doc, ctx) {
+      if (ctx?.maxAliasCount === 0)
+        throw new ReferenceError("Alias resolution is disabled");
       let nodes;
       if (ctx?.aliasResolveCache) {
         nodes = ctx.aliasResolveCache;
@@ -1631,18 +1633,18 @@ var require_merge = __commonJS2((exports) => {
   };
   var isMergeKey = (ctx, key) => (merge.identify(key) || identity.isScalar(key) && (!key.type || key.type === Scalar.Scalar.PLAIN) && merge.identify(key.value)) && ctx?.doc.schema.tags.some((tag) => tag.tag === merge.tag && tag.default);
   function addMergeToJSMap(ctx, map, value) {
-    value = ctx && identity.isAlias(value) ? value.resolve(ctx.doc) : value;
-    if (identity.isSeq(value))
-      for (const it of value.items)
+    const source = resolveAliasValue(ctx, value);
+    if (identity.isSeq(source))
+      for (const it of source.items)
         mergeValue(ctx, map, it);
-    else if (Array.isArray(value))
-      for (const it of value)
+    else if (Array.isArray(source))
+      for (const it of source)
         mergeValue(ctx, map, it);
     else
-      mergeValue(ctx, map, value);
+      mergeValue(ctx, map, source);
   }
   function mergeValue(ctx, map, value) {
-    const source = ctx && identity.isAlias(value) ? value.resolve(ctx.doc) : value;
+    const source = resolveAliasValue(ctx, value);
     if (!identity.isMap(source))
       throw new Error("Merge sources must be maps or map aliases");
     const srcMap = source.toJSON(null, ctx, Map);
@@ -1662,6 +1664,9 @@ var require_merge = __commonJS2((exports) => {
       }
     }
     return map;
+  }
+  function resolveAliasValue(ctx, value) {
+    return ctx && identity.isAlias(value) ? value.resolve(ctx.doc, ctx) : value;
   }
   exports.addMergeToJSMap = addMergeToJSMap;
   exports.isMergeKey = isMergeKey;
@@ -2216,7 +2221,7 @@ var require_stringifyNumber = __commonJS2((exports) => {
     if (!isFinite(num))
       return isNaN(num) ? ".nan" : num < 0 ? "-.inf" : ".inf";
     let n = Object.is(value, -0) ? "-0" : JSON.stringify(value);
-    if (!format && minFractionDigits && (!tag || tag === "tag:yaml.org,2002:float") && /^\d/.test(n)) {
+    if (!format && minFractionDigits && (!tag || tag === "tag:yaml.org,2002:float") && /^-?\d/.test(n) && !n.includes("e")) {
       let i = n.indexOf(".");
       if (i < 0) {
         i = n.length;
@@ -4384,7 +4389,7 @@ var require_resolve_flow_scalar = __commonJS2((exports) => {
           while (next === " " || next === "\t")
             next = source[++i + 1];
         } else if (next === "x" || next === "u" || next === "U") {
-          const length = { x: 2, u: 4, U: 8 }[next];
+          const length = next === "x" ? 2 : next === "u" ? 4 : 8;
           res += parseCharCode(source, i + 1, length, onError);
           i += length;
         } else {
@@ -4453,12 +4458,13 @@ var require_resolve_flow_scalar = __commonJS2((exports) => {
     const cc = source.substr(offset, length);
     const ok = cc.length === length && /^[0-9a-fA-F]+$/.test(cc);
     const code = ok ? parseInt(cc, 16) : NaN;
-    if (isNaN(code)) {
+    try {
+      return String.fromCodePoint(code);
+    } catch {
       const raw = source.substr(offset - 2, length + 2);
       onError(offset - 2, "BAD_DQ_ESCAPE", `Invalid escape sequence ${raw}`);
       return raw;
     }
-    return String.fromCodePoint(code);
   }
   exports.resolveFlowScalar = resolveFlowScalar;
 });
@@ -4787,8 +4793,10 @@ ${cb}` : comment;
         }
       }
       if (afterDoc) {
-        Array.prototype.push.apply(doc.errors, this.errors);
-        Array.prototype.push.apply(doc.warnings, this.warnings);
+        for (let i = 0;i < this.errors.length; ++i)
+          doc.errors.push(this.errors[i]);
+        for (let i = 0;i < this.warnings.length; ++i)
+          doc.warnings.push(this.warnings[i]);
       } else {
         doc.errors = this.errors;
         doc.warnings = this.warnings;
@@ -5490,7 +5498,7 @@ var require_lexer = __commonJS2((exports) => {
         const n = (yield* this.pushCount(1)) + (yield* this.pushSpaces(true));
         this.indentNext = this.indentValue + 1;
         this.indentValue += n;
-        return yield* this.parseBlockStart();
+        return "block-start";
       }
       return "doc";
     }
@@ -5797,26 +5805,37 @@ var require_lexer = __commonJS2((exports) => {
       return 0;
     }
     *pushIndicators() {
-      switch (this.charAt(0)) {
-        case "!":
-          return (yield* this.pushTag()) + (yield* this.pushSpaces(true)) + (yield* this.pushIndicators());
-        case "&":
-          return (yield* this.pushUntil(isNotAnchorChar)) + (yield* this.pushSpaces(true)) + (yield* this.pushIndicators());
-        case "-":
-        case "?":
-        case ":": {
-          const inFlow = this.flowLevel > 0;
-          const ch1 = this.charAt(1);
-          if (isEmpty(ch1) || inFlow && flowIndicatorChars.has(ch1)) {
-            if (!inFlow)
-              this.indentNext = this.indentValue + 1;
-            else if (this.flowKey)
-              this.flowKey = false;
-            return (yield* this.pushCount(1)) + (yield* this.pushSpaces(true)) + (yield* this.pushIndicators());
+      let n = 0;
+      loop:
+        while (true) {
+          switch (this.charAt(0)) {
+            case "!":
+              n += yield* this.pushTag();
+              n += yield* this.pushSpaces(true);
+              continue loop;
+            case "&":
+              n += yield* this.pushUntil(isNotAnchorChar);
+              n += yield* this.pushSpaces(true);
+              continue loop;
+            case "-":
+            case "?":
+            case ":": {
+              const inFlow = this.flowLevel > 0;
+              const ch1 = this.charAt(1);
+              if (isEmpty(ch1) || inFlow && flowIndicatorChars.has(ch1)) {
+                if (!inFlow)
+                  this.indentNext = this.indentValue + 1;
+                else if (this.flowKey)
+                  this.flowKey = false;
+                n += yield* this.pushCount(1);
+                n += yield* this.pushSpaces(true);
+                continue loop;
+              }
+            }
           }
+          break loop;
         }
-      }
-      return 0;
+      return n;
     }
     *pushTag() {
       if (this.charAt(1) === "<") {
@@ -5967,6 +5986,13 @@ var require_parser = __commonJS2((exports) => {
     while (prev[++i]?.type === "space") {}
     return prev.splice(i, prev.length);
   }
+  function arrayPushArray(target, source) {
+    if (source.length < 1e5)
+      Array.prototype.push.apply(target, source);
+    else
+      for (let i = 0;i < source.length; ++i)
+        target.push(source[i]);
+  }
   function fixFlowSeqItems(fc) {
     if (fc.start.type === "flow-seq-start") {
       for (const it of fc.items) {
@@ -5976,11 +6002,11 @@ var require_parser = __commonJS2((exports) => {
           delete it.key;
           if (isFlowToken(it.value)) {
             if (it.value.end)
-              Array.prototype.push.apply(it.value.end, it.sep);
+              arrayPushArray(it.value.end, it.sep);
             else
               it.value.end = it.sep;
           } else
-            Array.prototype.push.apply(it.start, it.sep);
+            arrayPushArray(it.start, it.sep);
           delete it.sep;
         }
       }
@@ -6320,7 +6346,7 @@ var require_parser = __commonJS2((exports) => {
               const prev = map.items[map.items.length - 2];
               const end = prev?.value?.end;
               if (Array.isArray(end)) {
-                Array.prototype.push.apply(end, it.start);
+                arrayPushArray(end, it.start);
                 end.push(this.sourceToken);
                 map.items.pop();
                 return;
@@ -6508,7 +6534,7 @@ var require_parser = __commonJS2((exports) => {
               const prev = seq.items[seq.items.length - 2];
               const end = prev?.value?.end;
               if (Array.isArray(end)) {
-                Array.prototype.push.apply(end, it.start);
+                arrayPushArray(end, it.start);
                 end.push(this.sourceToken);
                 seq.items.pop();
                 return;
@@ -6902,6 +6928,7 @@ var PIPELINE_PROVIDER_CHOICES = [
 var SYNTHESIS_PROVIDER_CHOICES = PIPELINE_PROVIDER_CHOICES.filter((provider) => provider !== "command");
 var PIPELINE_PROVIDER_SET = new Set(PIPELINE_PROVIDER_CHOICES);
 var SYNTHESIS_PROVIDER_SET = new Set(SYNTHESIS_PROVIDER_CHOICES);
+var DAEMON_DERIVED_MEMORY_SOURCE_TYPES = ["extract", "aggregate-recall", "session_end", "checkpoint"];
 var MEMORIES_FTS_TOKENIZER = "unicode61";
 function normalizeSql(sql) {
   return sql.replace(/\s+/g, " ").trim().toLowerCase();
@@ -9967,6 +9994,127 @@ function indexExists2(db, table, indexName) {
   const rows = db.prepare(`PRAGMA index_list(${table})`).all();
   return rows.some((row) => row.name === indexName);
 }
+function up91(db) {
+  db.exec(`
+		CREATE TABLE IF NOT EXISTS embedding_index_state (
+			id INTEGER PRIMARY KEY CHECK (id = 1),
+			active_profile_json TEXT NOT NULL,
+			staging_profile_json TEXT,
+			state TEXT NOT NULL CHECK (state IN ('ready', 'building', 'failed')) DEFAULT 'ready',
+			last_error TEXT,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)
+	`);
+}
+function up92(db) {
+  db.exec(`
+		CREATE TABLE IF NOT EXISTS embeddings_staging (
+			id TEXT PRIMARY KEY,
+			content_hash TEXT NOT NULL UNIQUE,
+			vector BLOB NOT NULL,
+			dimensions INTEGER NOT NULL,
+			source_type TEXT NOT NULL,
+			source_id TEXT NOT NULL,
+			chunk_text TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			agent_id TEXT
+		);
+		CREATE INDEX IF NOT EXISTS idx_embeddings_staging_source
+			ON embeddings_staging(source_type, source_id);
+		CREATE INDEX IF NOT EXISTS idx_embeddings_staging_agent_source
+			ON embeddings_staging(agent_id, source_type, source_id);
+	`);
+}
+function up93(db) {
+  const columns = db.prepare("PRAGMA table_info(dreaming_state)").all();
+  if (!columns.some((column) => column.name === "evidence_cursor")) {
+    db.exec("ALTER TABLE dreaming_state ADD COLUMN evidence_cursor TEXT");
+  }
+}
+var DERIVED_SOURCE_TYPES = DAEMON_DERIVED_MEMORY_SOURCE_TYPES;
+function hasColumn13(db, table, column) {
+  const rows = db.prepare(`PRAGMA table_info(${table})`).all();
+  return rows.some((r) => r.name === column);
+}
+function up94(db) {
+  const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = 'memories'").all();
+  if (tables.length === 0)
+    return;
+  if (!hasColumn13(db, "memories", "memory_kind")) {
+    db.exec("ALTER TABLE memories ADD COLUMN memory_kind TEXT");
+  }
+  if (!hasColumn13(db, "memories", "evidence_meta")) {
+    db.exec("ALTER TABLE memories ADD COLUMN evidence_meta TEXT");
+  }
+  if (hasColumn13(db, "memories", "source_type")) {
+    const placeholders = DERIVED_SOURCE_TYPES.map(() => "?").join(", ");
+    db.prepare(`UPDATE memories
+				 SET memory_kind = 'episodic'
+				 WHERE memory_kind IS NULL
+				   AND (source_type IS NULL OR source_type NOT IN (${placeholders}))`).run(...DERIVED_SOURCE_TYPES);
+  } else {
+    db.exec(`UPDATE memories
+			 SET memory_kind = 'episodic'
+			 WHERE memory_kind IS NULL`);
+  }
+}
+function hasColumn14(db, table, column) {
+  return db.prepare(`PRAGMA table_info(${table})`).all().some((row) => row.name === column);
+}
+function up95(db) {
+  const hasMemories = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memories'").get();
+  if (!hasMemories || !hasColumn14(db, "memories", "memory_kind") || !hasColumn14(db, "memories", "type"))
+    return;
+  db.exec("UPDATE memories SET memory_kind = NULL WHERE type = 'session_summary'");
+}
+function up96(db) {
+  db.exec("DROP TABLE IF EXISTS ingestion_jobs");
+}
+function up97(db) {
+  const columns = db.prepare("PRAGMA table_info(dreaming_state)").all();
+  if (!columns.some((column) => column.name === "last_failure_at")) {
+    db.exec("ALTER TABLE dreaming_state ADD COLUMN last_failure_at TEXT");
+  }
+  db.exec("UPDATE dreaming_state SET last_failure_at = updated_at WHERE consecutive_failures > 0 AND last_failure_at IS NULL");
+}
+function up98(db) {
+  db.exec(`
+		CREATE TABLE IF NOT EXISTS dreaming_evidence_exclusions (
+			agent_id TEXT NOT NULL,
+			source_kind TEXT NOT NULL CHECK (source_kind IN ('memory', 'artifact', 'transcript', 'summary')),
+			source_id TEXT NOT NULL,
+			reason TEXT NOT NULL,
+			pass_id TEXT NOT NULL,
+			excluded_at TEXT NOT NULL DEFAULT (datetime('now')),
+			requeue_requested_at TEXT,
+			resolved_at TEXT,
+			PRIMARY KEY (agent_id, source_kind, source_id)
+		);
+		CREATE INDEX IF NOT EXISTS idx_dreaming_evidence_exclusions_active
+			ON dreaming_evidence_exclusions (agent_id, resolved_at, requeue_requested_at, excluded_at DESC);
+	`);
+}
+function up99(db) {
+  db.exec(`
+		CREATE TABLE IF NOT EXISTS dreaming_tool_calls (
+			id TEXT PRIMARY KEY,
+			agent_id TEXT NOT NULL,
+			pass_id TEXT NOT NULL,
+			sequence INTEGER NOT NULL,
+			tool_call_id TEXT,
+			tool_name TEXT NOT NULL,
+			input_json TEXT NOT NULL,
+			output_json TEXT NOT NULL,
+			success INTEGER NOT NULL,
+			latency_ms INTEGER NOT NULL,
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			UNIQUE(agent_id, pass_id, sequence)
+		);
+		CREATE INDEX IF NOT EXISTS idx_dreaming_tool_calls_pass
+			ON dreaming_tool_calls (agent_id, pass_id, sequence ASC);
+	`);
+}
 var MIGRATIONS = [
   {
     version: 1,
@@ -10051,7 +10199,6 @@ var MIGRATIONS = [
     name: "ingestion-tracking",
     up: up13,
     artifacts: {
-      tables: ["ingestion_jobs"],
       columns: [
         { table: "memories", column: "source_path" },
         { table: "memories", column: "source_section" }
@@ -10702,6 +10849,63 @@ var MIGRATIONS = [
     artifacts: {
       tables: ["job_archive"]
     }
+  },
+  {
+    version: 91,
+    name: "embedding-index-generations",
+    up: up91,
+    artifacts: { tables: ["embedding_index_state"] }
+  },
+  {
+    version: 92,
+    name: "embedding-staging-store",
+    up: up92,
+    artifacts: { tables: ["embeddings_staging"] }
+  },
+  {
+    version: 93,
+    name: "dreaming-evidence-cursor",
+    up: up93,
+    artifacts: { columns: [{ table: "dreaming_state", column: "evidence_cursor" }] }
+  },
+  {
+    version: 94,
+    name: "memory-kind",
+    up: up94,
+    artifacts: {
+      columns: [
+        { table: "memories", column: "memory_kind" },
+        { table: "memories", column: "evidence_meta" }
+      ]
+    }
+  },
+  {
+    version: 95,
+    name: "compaction-recall-projections",
+    up: up95
+  },
+  {
+    version: 96,
+    name: "retire-legacy-ingestion",
+    up: up96
+  },
+  {
+    version: 97,
+    name: "dreaming-failure-backoff",
+    up: up97,
+    artifacts: { columns: [{ table: "dreaming_state", column: "last_failure_at" }] }
+  },
+  {
+    version: 98,
+    name: "dreaming-evidence-exclusions",
+    up: up98,
+    artifacts: { tables: ["dreaming_evidence_exclusions"] }
+  },
+  {
+    version: 99,
+    name: "dreaming-tool-calls",
+    up: up99,
+    artifacts: { tables: ["dreaming_tool_calls"] }
   }
 ];
 var LATEST_SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1]?.version ?? 0;
@@ -11039,122 +11243,6 @@ function stripSignetBlock(content) {
 function escapeRegex(str) {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
-var SKIP_SUBTYPES = new Set([
-  "channel_join",
-  "channel_leave",
-  "channel_topic",
-  "channel_purpose",
-  "channel_name",
-  "channel_archive",
-  "channel_unarchive",
-  "group_join",
-  "group_leave",
-  "group_topic",
-  "group_purpose",
-  "group_name",
-  "group_archive",
-  "group_unarchive",
-  "pinned_item",
-  "unpinned_item",
-  "bot_add",
-  "bot_remove",
-  "tombstone",
-  "file_comment",
-  "sh_room_created",
-  "sh_room_shared"
-]);
-var SKIP_TYPES = new Set([
-  "RecipientAdd",
-  "RecipientRemove",
-  "ChannelNameChange",
-  "ChannelIconChange",
-  "ChannelPinnedMessage",
-  "GuildMemberJoin",
-  "UserPremiumGuildSubscription",
-  "UserPremiumGuildSubscriptionTier1",
-  "UserPremiumGuildSubscriptionTier2",
-  "UserPremiumGuildSubscriptionTier3",
-  "ChannelFollowAdd",
-  "GuildDiscoveryDisqualified",
-  "GuildDiscoveryRequalified",
-  "GuildDiscoveryGracePeriodInitialWarning",
-  "GuildDiscoveryGracePeriodFinalWarning",
-  "ThreadCreated",
-  "ApplicationCommand"
-]);
-var SKIP_DIRS = new Set([
-  "node_modules",
-  ".git",
-  "dist",
-  "build",
-  "out",
-  "target",
-  ".next",
-  ".nuxt",
-  "__pycache__",
-  ".tox",
-  ".mypy_cache",
-  ".pytest_cache",
-  "venv",
-  ".venv",
-  "env",
-  "vendor",
-  "coverage",
-  ".cache",
-  ".turbo"
-]);
-var DOCUMENT_VALID_TYPES = new Set([
-  "fact",
-  "decision",
-  "rationale",
-  "preference",
-  "procedural",
-  "semantic",
-  "system",
-  "configuration",
-  "architectural",
-  "relationship",
-  "episodic",
-  "daily-log"
-]);
-var ENTIRE_VALID_TYPES = new Set(["skill", "preference", "decision", "rationale", "procedural", "semantic", "fact"]);
-var CHAT_VALID_TYPES = new Set(["fact", "decision", "rationale", "preference", "procedural", "semantic", "system"]);
-var MARKDOWN_EXTS = new Set([".md", ".mdx", ".markdown"]);
-var TXT_EXTS = new Set([".txt", ".text", ".log", ".rst"]);
-var PDF_EXTS = new Set([".pdf"]);
-var CODE_EXTS = new Set([
-  ".ts",
-  ".tsx",
-  ".js",
-  ".jsx",
-  ".py",
-  ".rs",
-  ".go",
-  ".java",
-  ".rb",
-  ".php",
-  ".swift",
-  ".kt",
-  ".scala",
-  ".c",
-  ".cpp",
-  ".h",
-  ".hpp",
-  ".sh",
-  ".bash",
-  ".zsh",
-  ".sql",
-  ".yaml",
-  ".yml",
-  ".toml",
-  ".json",
-  ".xml",
-  ".css",
-  ".scss",
-  ".html",
-  ".htm"
-]);
-var SKIP_FILES = new Set([".DS_Store", "Thumbs.db", ".gitkeep", "node_modules", ".git", ".env", ".env.local"]);
 
 class BaseConnector {
   stripSignetBlock(content) {
@@ -11855,6 +11943,8 @@ var require_Alias2 = __commonJS((exports) => {
       });
     }
     resolve(doc, ctx) {
+      if (ctx?.maxAliasCount === 0)
+        throw new ReferenceError("Alias resolution is disabled");
       let nodes;
       if (ctx?.aliasResolveCache) {
         nodes = ctx.aliasResolveCache;
@@ -12884,18 +12974,18 @@ var require_merge2 = __commonJS((exports) => {
   };
   var isMergeKey = (ctx, key) => (merge.identify(key) || identity.isScalar(key) && (!key.type || key.type === Scalar.Scalar.PLAIN) && merge.identify(key.value)) && ctx?.doc.schema.tags.some((tag) => tag.tag === merge.tag && tag.default);
   function addMergeToJSMap(ctx, map, value) {
-    value = ctx && identity.isAlias(value) ? value.resolve(ctx.doc) : value;
-    if (identity.isSeq(value))
-      for (const it of value.items)
+    const source = resolveAliasValue(ctx, value);
+    if (identity.isSeq(source))
+      for (const it of source.items)
         mergeValue(ctx, map, it);
-    else if (Array.isArray(value))
-      for (const it of value)
+    else if (Array.isArray(source))
+      for (const it of source)
         mergeValue(ctx, map, it);
     else
-      mergeValue(ctx, map, value);
+      mergeValue(ctx, map, source);
   }
   function mergeValue(ctx, map, value) {
-    const source = ctx && identity.isAlias(value) ? value.resolve(ctx.doc) : value;
+    const source = resolveAliasValue(ctx, value);
     if (!identity.isMap(source))
       throw new Error("Merge sources must be maps or map aliases");
     const srcMap = source.toJSON(null, ctx, Map);
@@ -12915,6 +13005,9 @@ var require_merge2 = __commonJS((exports) => {
       }
     }
     return map;
+  }
+  function resolveAliasValue(ctx, value) {
+    return ctx && identity.isAlias(value) ? value.resolve(ctx.doc, ctx) : value;
   }
   exports.addMergeToJSMap = addMergeToJSMap;
   exports.isMergeKey = isMergeKey;
@@ -13469,7 +13562,7 @@ var require_stringifyNumber2 = __commonJS((exports) => {
     if (!isFinite(num))
       return isNaN(num) ? ".nan" : num < 0 ? "-.inf" : ".inf";
     let n = Object.is(value, -0) ? "-0" : JSON.stringify(value);
-    if (!format && minFractionDigits && (!tag || tag === "tag:yaml.org,2002:float") && /^\d/.test(n)) {
+    if (!format && minFractionDigits && (!tag || tag === "tag:yaml.org,2002:float") && /^-?\d/.test(n) && !n.includes("e")) {
       let i = n.indexOf(".");
       if (i < 0) {
         i = n.length;
@@ -15637,7 +15730,7 @@ var require_resolve_flow_scalar2 = __commonJS((exports) => {
           while (next === " " || next === "\t")
             next = source[++i + 1];
         } else if (next === "x" || next === "u" || next === "U") {
-          const length = { x: 2, u: 4, U: 8 }[next];
+          const length = next === "x" ? 2 : next === "u" ? 4 : 8;
           res += parseCharCode(source, i + 1, length, onError);
           i += length;
         } else {
@@ -15706,12 +15799,13 @@ var require_resolve_flow_scalar2 = __commonJS((exports) => {
     const cc = source.substr(offset, length);
     const ok = cc.length === length && /^[0-9a-fA-F]+$/.test(cc);
     const code = ok ? parseInt(cc, 16) : NaN;
-    if (isNaN(code)) {
+    try {
+      return String.fromCodePoint(code);
+    } catch {
       const raw = source.substr(offset - 2, length + 2);
       onError(offset - 2, "BAD_DQ_ESCAPE", `Invalid escape sequence ${raw}`);
       return raw;
     }
-    return String.fromCodePoint(code);
   }
   exports.resolveFlowScalar = resolveFlowScalar;
 });
@@ -16040,8 +16134,10 @@ ${cb}` : comment;
         }
       }
       if (afterDoc) {
-        Array.prototype.push.apply(doc.errors, this.errors);
-        Array.prototype.push.apply(doc.warnings, this.warnings);
+        for (let i = 0;i < this.errors.length; ++i)
+          doc.errors.push(this.errors[i]);
+        for (let i = 0;i < this.warnings.length; ++i)
+          doc.warnings.push(this.warnings[i]);
       } else {
         doc.errors = this.errors;
         doc.warnings = this.warnings;
@@ -16743,7 +16839,7 @@ var require_lexer2 = __commonJS((exports) => {
         const n = (yield* this.pushCount(1)) + (yield* this.pushSpaces(true));
         this.indentNext = this.indentValue + 1;
         this.indentValue += n;
-        return yield* this.parseBlockStart();
+        return "block-start";
       }
       return "doc";
     }
@@ -17050,26 +17146,37 @@ var require_lexer2 = __commonJS((exports) => {
       return 0;
     }
     *pushIndicators() {
-      switch (this.charAt(0)) {
-        case "!":
-          return (yield* this.pushTag()) + (yield* this.pushSpaces(true)) + (yield* this.pushIndicators());
-        case "&":
-          return (yield* this.pushUntil(isNotAnchorChar)) + (yield* this.pushSpaces(true)) + (yield* this.pushIndicators());
-        case "-":
-        case "?":
-        case ":": {
-          const inFlow = this.flowLevel > 0;
-          const ch1 = this.charAt(1);
-          if (isEmpty(ch1) || inFlow && flowIndicatorChars.has(ch1)) {
-            if (!inFlow)
-              this.indentNext = this.indentValue + 1;
-            else if (this.flowKey)
-              this.flowKey = false;
-            return (yield* this.pushCount(1)) + (yield* this.pushSpaces(true)) + (yield* this.pushIndicators());
+      let n = 0;
+      loop:
+        while (true) {
+          switch (this.charAt(0)) {
+            case "!":
+              n += yield* this.pushTag();
+              n += yield* this.pushSpaces(true);
+              continue loop;
+            case "&":
+              n += yield* this.pushUntil(isNotAnchorChar);
+              n += yield* this.pushSpaces(true);
+              continue loop;
+            case "-":
+            case "?":
+            case ":": {
+              const inFlow = this.flowLevel > 0;
+              const ch1 = this.charAt(1);
+              if (isEmpty(ch1) || inFlow && flowIndicatorChars.has(ch1)) {
+                if (!inFlow)
+                  this.indentNext = this.indentValue + 1;
+                else if (this.flowKey)
+                  this.flowKey = false;
+                n += yield* this.pushCount(1);
+                n += yield* this.pushSpaces(true);
+                continue loop;
+              }
+            }
           }
+          break loop;
         }
-      }
-      return 0;
+      return n;
     }
     *pushTag() {
       if (this.charAt(1) === "<") {
@@ -17220,6 +17327,13 @@ var require_parser2 = __commonJS((exports) => {
     while (prev[++i]?.type === "space") {}
     return prev.splice(i, prev.length);
   }
+  function arrayPushArray(target, source) {
+    if (source.length < 1e5)
+      Array.prototype.push.apply(target, source);
+    else
+      for (let i = 0;i < source.length; ++i)
+        target.push(source[i]);
+  }
   function fixFlowSeqItems(fc) {
     if (fc.start.type === "flow-seq-start") {
       for (const it of fc.items) {
@@ -17229,11 +17343,11 @@ var require_parser2 = __commonJS((exports) => {
           delete it.key;
           if (isFlowToken(it.value)) {
             if (it.value.end)
-              Array.prototype.push.apply(it.value.end, it.sep);
+              arrayPushArray(it.value.end, it.sep);
             else
               it.value.end = it.sep;
           } else
-            Array.prototype.push.apply(it.start, it.sep);
+            arrayPushArray(it.start, it.sep);
           delete it.sep;
         }
       }
@@ -17573,7 +17687,7 @@ var require_parser2 = __commonJS((exports) => {
               const prev = map.items[map.items.length - 2];
               const end = prev?.value?.end;
               if (Array.isArray(end)) {
-                Array.prototype.push.apply(end, it.start);
+                arrayPushArray(end, it.start);
                 end.push(this.sourceToken);
                 map.items.pop();
                 return;
@@ -17761,7 +17875,7 @@ var require_parser2 = __commonJS((exports) => {
               const prev = seq.items[seq.items.length - 2];
               const end = prev?.value?.end;
               if (Array.isArray(end)) {
-                Array.prototype.push.apply(end, it.start);
+                arrayPushArray(end, it.start);
                 end.push(this.sourceToken);
                 seq.items.pop();
                 return;
@@ -18155,6 +18269,7 @@ var PIPELINE_PROVIDER_CHOICES2 = [
 var SYNTHESIS_PROVIDER_CHOICES2 = PIPELINE_PROVIDER_CHOICES2.filter((provider) => provider !== "command");
 var PIPELINE_PROVIDER_SET2 = new Set(PIPELINE_PROVIDER_CHOICES2);
 var SYNTHESIS_PROVIDER_SET2 = new Set(SYNTHESIS_PROVIDER_CHOICES2);
+var DAEMON_DERIVED_MEMORY_SOURCE_TYPES2 = ["extract", "aggregate-recall", "session_end", "checkpoint"];
 var MEMORIES_FTS_TOKENIZER2 = "unicode61";
 function normalizeSql2(sql) {
   return sql.replace(/\s+/g, " ").trim().toLowerCase();
@@ -18205,7 +18320,7 @@ function memoriesFtsNeedsTokenizerRepair2(sql) {
     return true;
   return !normalized.includes(`tokenize='${MEMORIES_FTS_TOKENIZER2}'`);
 }
-function up91(db) {
+function up100(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS schema_migrations (
 			version INTEGER PRIMARY KEY,
@@ -18294,12 +18409,12 @@ function up91(db) {
   } catch {}
   createMemoriesFts2(db);
 }
-function hasColumn13(db, table, column) {
+function hasColumn15(db, table, column) {
   const rows = db.prepare(`PRAGMA table_info(${table})`).all();
   return rows.some((r) => r.name === column);
 }
 function addColumnIfMissing23(db, table, column, definition) {
-  if (!hasColumn13(db, table, column)) {
+  if (!hasColumn15(db, table, column)) {
     db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
   }
 }
@@ -18597,7 +18712,7 @@ function up810(db) {
 			ON embeddings(content_hash)
 	`);
 }
-function up92(db) {
+function up910(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS summary_jobs (
 			id TEXT PRIMARY KEY,
@@ -21220,11 +21335,132 @@ function indexExists22(db, table, indexName) {
   const rows = db.prepare(`PRAGMA index_list(${table})`).all();
   return rows.some((row) => row.name === indexName);
 }
+function up912(db) {
+  db.exec(`
+		CREATE TABLE IF NOT EXISTS embedding_index_state (
+			id INTEGER PRIMARY KEY CHECK (id = 1),
+			active_profile_json TEXT NOT NULL,
+			staging_profile_json TEXT,
+			state TEXT NOT NULL CHECK (state IN ('ready', 'building', 'failed')) DEFAULT 'ready',
+			last_error TEXT,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)
+	`);
+}
+function up922(db) {
+  db.exec(`
+		CREATE TABLE IF NOT EXISTS embeddings_staging (
+			id TEXT PRIMARY KEY,
+			content_hash TEXT NOT NULL UNIQUE,
+			vector BLOB NOT NULL,
+			dimensions INTEGER NOT NULL,
+			source_type TEXT NOT NULL,
+			source_id TEXT NOT NULL,
+			chunk_text TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			agent_id TEXT
+		);
+		CREATE INDEX IF NOT EXISTS idx_embeddings_staging_source
+			ON embeddings_staging(source_type, source_id);
+		CREATE INDEX IF NOT EXISTS idx_embeddings_staging_agent_source
+			ON embeddings_staging(agent_id, source_type, source_id);
+	`);
+}
+function up932(db) {
+  const columns = db.prepare("PRAGMA table_info(dreaming_state)").all();
+  if (!columns.some((column) => column.name === "evidence_cursor")) {
+    db.exec("ALTER TABLE dreaming_state ADD COLUMN evidence_cursor TEXT");
+  }
+}
+var DERIVED_SOURCE_TYPES2 = DAEMON_DERIVED_MEMORY_SOURCE_TYPES2;
+function hasColumn132(db, table, column) {
+  const rows = db.prepare(`PRAGMA table_info(${table})`).all();
+  return rows.some((r) => r.name === column);
+}
+function up942(db) {
+  const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = 'memories'").all();
+  if (tables.length === 0)
+    return;
+  if (!hasColumn132(db, "memories", "memory_kind")) {
+    db.exec("ALTER TABLE memories ADD COLUMN memory_kind TEXT");
+  }
+  if (!hasColumn132(db, "memories", "evidence_meta")) {
+    db.exec("ALTER TABLE memories ADD COLUMN evidence_meta TEXT");
+  }
+  if (hasColumn132(db, "memories", "source_type")) {
+    const placeholders = DERIVED_SOURCE_TYPES2.map(() => "?").join(", ");
+    db.prepare(`UPDATE memories
+				 SET memory_kind = 'episodic'
+				 WHERE memory_kind IS NULL
+				   AND (source_type IS NULL OR source_type NOT IN (${placeholders}))`).run(...DERIVED_SOURCE_TYPES2);
+  } else {
+    db.exec(`UPDATE memories
+			 SET memory_kind = 'episodic'
+			 WHERE memory_kind IS NULL`);
+  }
+}
+function hasColumn142(db, table, column) {
+  return db.prepare(`PRAGMA table_info(${table})`).all().some((row) => row.name === column);
+}
+function up952(db) {
+  const hasMemories = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memories'").get();
+  if (!hasMemories || !hasColumn142(db, "memories", "memory_kind") || !hasColumn142(db, "memories", "type"))
+    return;
+  db.exec("UPDATE memories SET memory_kind = NULL WHERE type = 'session_summary'");
+}
+function up962(db) {
+  db.exec("DROP TABLE IF EXISTS ingestion_jobs");
+}
+function up972(db) {
+  const columns = db.prepare("PRAGMA table_info(dreaming_state)").all();
+  if (!columns.some((column) => column.name === "last_failure_at")) {
+    db.exec("ALTER TABLE dreaming_state ADD COLUMN last_failure_at TEXT");
+  }
+  db.exec("UPDATE dreaming_state SET last_failure_at = updated_at WHERE consecutive_failures > 0 AND last_failure_at IS NULL");
+}
+function up982(db) {
+  db.exec(`
+		CREATE TABLE IF NOT EXISTS dreaming_evidence_exclusions (
+			agent_id TEXT NOT NULL,
+			source_kind TEXT NOT NULL CHECK (source_kind IN ('memory', 'artifact', 'transcript', 'summary')),
+			source_id TEXT NOT NULL,
+			reason TEXT NOT NULL,
+			pass_id TEXT NOT NULL,
+			excluded_at TEXT NOT NULL DEFAULT (datetime('now')),
+			requeue_requested_at TEXT,
+			resolved_at TEXT,
+			PRIMARY KEY (agent_id, source_kind, source_id)
+		);
+		CREATE INDEX IF NOT EXISTS idx_dreaming_evidence_exclusions_active
+			ON dreaming_evidence_exclusions (agent_id, resolved_at, requeue_requested_at, excluded_at DESC);
+	`);
+}
+function up992(db) {
+  db.exec(`
+		CREATE TABLE IF NOT EXISTS dreaming_tool_calls (
+			id TEXT PRIMARY KEY,
+			agent_id TEXT NOT NULL,
+			pass_id TEXT NOT NULL,
+			sequence INTEGER NOT NULL,
+			tool_call_id TEXT,
+			tool_name TEXT NOT NULL,
+			input_json TEXT NOT NULL,
+			output_json TEXT NOT NULL,
+			success INTEGER NOT NULL,
+			latency_ms INTEGER NOT NULL,
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			UNIQUE(agent_id, pass_id, sequence)
+		);
+		CREATE INDEX IF NOT EXISTS idx_dreaming_tool_calls_pass
+			ON dreaming_tool_calls (agent_id, pass_id, sequence ASC);
+	`);
+}
 var MIGRATIONS2 = [
   {
     version: 1,
     name: "baseline",
-    up: up91,
+    up: up100,
     artifacts: { tables: ["memories", "conversations", "embeddings"] }
   },
   {
@@ -21278,7 +21514,7 @@ var MIGRATIONS2 = [
   {
     version: 9,
     name: "summary-jobs",
-    up: up92,
+    up: up910,
     artifacts: { tables: ["summary_jobs"] }
   },
   {
@@ -21304,7 +21540,6 @@ var MIGRATIONS2 = [
     name: "ingestion-tracking",
     up: up132,
     artifacts: {
-      tables: ["ingestion_jobs"],
       columns: [
         { table: "memories", column: "source_path" },
         { table: "memories", column: "source_section" }
@@ -21955,6 +22190,63 @@ var MIGRATIONS2 = [
     artifacts: {
       tables: ["job_archive"]
     }
+  },
+  {
+    version: 91,
+    name: "embedding-index-generations",
+    up: up912,
+    artifacts: { tables: ["embedding_index_state"] }
+  },
+  {
+    version: 92,
+    name: "embedding-staging-store",
+    up: up922,
+    artifacts: { tables: ["embeddings_staging"] }
+  },
+  {
+    version: 93,
+    name: "dreaming-evidence-cursor",
+    up: up932,
+    artifacts: { columns: [{ table: "dreaming_state", column: "evidence_cursor" }] }
+  },
+  {
+    version: 94,
+    name: "memory-kind",
+    up: up942,
+    artifacts: {
+      columns: [
+        { table: "memories", column: "memory_kind" },
+        { table: "memories", column: "evidence_meta" }
+      ]
+    }
+  },
+  {
+    version: 95,
+    name: "compaction-recall-projections",
+    up: up952
+  },
+  {
+    version: 96,
+    name: "retire-legacy-ingestion",
+    up: up962
+  },
+  {
+    version: 97,
+    name: "dreaming-failure-backoff",
+    up: up972,
+    artifacts: { columns: [{ table: "dreaming_state", column: "last_failure_at" }] }
+  },
+  {
+    version: 98,
+    name: "dreaming-evidence-exclusions",
+    up: up982,
+    artifacts: { tables: ["dreaming_evidence_exclusions"] }
+  },
+  {
+    version: 99,
+    name: "dreaming-tool-calls",
+    up: up992,
+    artifacts: { tables: ["dreaming_tool_calls"] }
   }
 ];
 var LATEST_SCHEMA_VERSION2 = MIGRATIONS2[MIGRATIONS2.length - 1]?.version ?? 0;
@@ -22233,122 +22525,6 @@ function loadIdentityMode(agentsDir) {
   }
 }
 var home2 = homedir82();
-var SKIP_SUBTYPES2 = new Set([
-  "channel_join",
-  "channel_leave",
-  "channel_topic",
-  "channel_purpose",
-  "channel_name",
-  "channel_archive",
-  "channel_unarchive",
-  "group_join",
-  "group_leave",
-  "group_topic",
-  "group_purpose",
-  "group_name",
-  "group_archive",
-  "group_unarchive",
-  "pinned_item",
-  "unpinned_item",
-  "bot_add",
-  "bot_remove",
-  "tombstone",
-  "file_comment",
-  "sh_room_created",
-  "sh_room_shared"
-]);
-var SKIP_TYPES2 = new Set([
-  "RecipientAdd",
-  "RecipientRemove",
-  "ChannelNameChange",
-  "ChannelIconChange",
-  "ChannelPinnedMessage",
-  "GuildMemberJoin",
-  "UserPremiumGuildSubscription",
-  "UserPremiumGuildSubscriptionTier1",
-  "UserPremiumGuildSubscriptionTier2",
-  "UserPremiumGuildSubscriptionTier3",
-  "ChannelFollowAdd",
-  "GuildDiscoveryDisqualified",
-  "GuildDiscoveryRequalified",
-  "GuildDiscoveryGracePeriodInitialWarning",
-  "GuildDiscoveryGracePeriodFinalWarning",
-  "ThreadCreated",
-  "ApplicationCommand"
-]);
-var SKIP_DIRS2 = new Set([
-  "node_modules",
-  ".git",
-  "dist",
-  "build",
-  "out",
-  "target",
-  ".next",
-  ".nuxt",
-  "__pycache__",
-  ".tox",
-  ".mypy_cache",
-  ".pytest_cache",
-  "venv",
-  ".venv",
-  "env",
-  "vendor",
-  "coverage",
-  ".cache",
-  ".turbo"
-]);
-var DOCUMENT_VALID_TYPES2 = new Set([
-  "fact",
-  "decision",
-  "rationale",
-  "preference",
-  "procedural",
-  "semantic",
-  "system",
-  "configuration",
-  "architectural",
-  "relationship",
-  "episodic",
-  "daily-log"
-]);
-var ENTIRE_VALID_TYPES2 = new Set(["skill", "preference", "decision", "rationale", "procedural", "semantic", "fact"]);
-var CHAT_VALID_TYPES2 = new Set(["fact", "decision", "rationale", "preference", "procedural", "semantic", "system"]);
-var MARKDOWN_EXTS2 = new Set([".md", ".mdx", ".markdown"]);
-var TXT_EXTS2 = new Set([".txt", ".text", ".log", ".rst"]);
-var PDF_EXTS2 = new Set([".pdf"]);
-var CODE_EXTS2 = new Set([
-  ".ts",
-  ".tsx",
-  ".js",
-  ".jsx",
-  ".py",
-  ".rs",
-  ".go",
-  ".java",
-  ".rb",
-  ".php",
-  ".swift",
-  ".kt",
-  ".scala",
-  ".c",
-  ".cpp",
-  ".h",
-  ".hpp",
-  ".sh",
-  ".bash",
-  ".zsh",
-  ".sql",
-  ".yaml",
-  ".yml",
-  ".toml",
-  ".json",
-  ".xml",
-  ".css",
-  ".scss",
-  ".html",
-  ".htm"
-]);
-var SKIP_FILES2 = new Set([".DS_Store", "Thumbs.db", ".gitkeep", "node_modules", ".git", ".env", ".env.local"]);
 
 // src/index.ts
 var SIGNET_FORGE_MARKER = "Managed by Signet (@signet/connector-forge)";
