@@ -29,7 +29,7 @@ And one capability is already further along than the rest: Signet secrets. Signe
 
 ### What we ship in 2026
 
-- a desktop app and a dashboard, a non-developer can use. Alongside the headless install developers already have. 
+- a desktop app and a dashboard a non-developer can use. Alongside the headless install developers already have. 
 - One memory engine: A single ingest queue with customizable interfaces for dreaming.
 - Temporal claims that age gracefully, and recall that reads the full ontology.
 - Benchmarks and evals as a receipt, not just a pitch. Recall quality is verified on shared eval harnesses from Supermemory with our testing methodology attached. Signet does not advertise self-invented numbers. 
@@ -40,7 +40,7 @@ AI is becoming the interface to a person's life. Frontier products already show 
 
 We don't think the trade is necessary.
 
-Signet's endgame is to become a secure personal database that sits between a person and every AI they use with the plumbing to grant measured, revicable, provenance-backed access to the data in it. Role-based access control for AI over your life, operated by you. The secret system is the proof of concept, an agent can use a credential without ever seeing it. Apply that same shape to health records, finances, private writing, relationships, the whole memory ontology and a person can get the real benefits of an AI that knows them without handing custody of their data to anyone. 
+Signet's endgame is to become a secure personal database that sits between a person and every AI they use with the plumbing to grant measured, revocable, provenance-backed access to the data in it. Role-based access control for AI over your life, operated by you. The secret system is the proof of concept, an agent can use a credential without ever seeing it. Apply that same shape to health records, finances, private writing, relationships, the whole memory ontology and a person can get the real benefits of an AI that knows them without handing custody of their data to anyone. 
 
 That is the direction memory points once it's solved. An agent that remembers everything about you is only acceptable if the memory is yours. Stored where you can read it, delete it, and take it elsewhere. Signet builds the memory layer first because it's the hard technical core and because every harness needs it today. The vault is what the memory layer becomes. 
 
