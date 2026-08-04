@@ -89,6 +89,7 @@ export type LogCategory =
 	| "checkpoints" // Session checkpoint management
 	| "system-pressure" // Event-loop pressure signal and backpressure
 	| "yielding-writes" // Bounded write-batch drain with cooperative yielding
+	| "startup-recovery" // Automatic crash-loop damage cleanup on boot
 	| "transcripts" // Lossless transcript storage
 	| "shadow"; // Shadow logs for sensitive data (not written to disk, only emitted for real-time streaming)
 

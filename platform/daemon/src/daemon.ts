@@ -126,6 +126,7 @@ import {
 	markSourceIndexJobRunning,
 	updateSourceIndexJobProgress,
 } from "./source-index-progress";
+import { runStartupRecovery } from "./startup-recovery";
 import { reportStartupGrace } from "./system-pressure";
 import { type TelemetryCollector, createTelemetryCollector } from "./telemetry";
 import { type TranscriptCaptureWorkerHandle, startTranscriptCaptureWorker } from "./transcript-capture-worker";
@@ -1657,6 +1658,10 @@ async function main() {
 	logFdSnapshot("post-db-init");
 	startEventLoopMonitor();
 	startFdPollMonitor();
+
+	// Clean accumulated crash-loop damage (dead jobs, stagnant staging buffer,
+	// WAL bloat) before any worker starts. Bounded, pressure-aware, idempotent.
+	await runStartupRecovery(getDbAccessor());
 
 	const { extensionPath } = getVectorRuntimeStatus();
 	const bundled = join(__dirname, "synthesis-render-worker.js");
