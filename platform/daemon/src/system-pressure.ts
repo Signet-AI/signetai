@@ -26,6 +26,23 @@ const CLEAR_COOLDOWN_MS = 5_000;
 
 let currentLevel: PressureLevel = "normal";
 let lastLagAt = 0;
+let startupGraceUntil = 0;
+
+/**
+ * Set a startup grace period during which background workers skip their ticks.
+ * Called once after migrations complete and workers are about to start.
+ * Prevents the thundering herd of all workers firing their first tick
+ * simultaneously on a fresh daemon start before the event-loop monitor has
+ * had time to calibrate.
+ */
+export function reportStartupGrace(durationMs = 10_000): void {
+	startupGraceUntil = Date.now() + durationMs;
+	if (currentLevel === "normal") currentLevel = "elevated";
+	logger.info(
+		"system-pressure",
+		`Startup grace period active for ${Math.round(durationMs / 1000)}s — background workers deferred`,
+	);
+}
 
 /**
  * Called by the event-loop monitor when it detects lag. The lag value is the
@@ -50,6 +67,14 @@ export function reportEventLoopLag(lagMs: number): void {
 
 /** Current pressure level, auto-clearing after the cooldown if no new lag. */
 export function getSystemPressure(): PressureLevel {
+	// Startup grace: keep elevated until the grace period expires, regardless
+	// of lag detection. The cooldown timer should not clear it early.
+	if (Date.now() < startupGraceUntil) {
+		return currentLevel === "normal" ? "elevated" : currentLevel;
+	}
+	if (Date.now() >= startupGraceUntil && startupGraceUntil !== 0) {
+		startupGraceUntil = 0; // grace expired — fall through to normal cooldown logic
+	}
 	if (currentLevel !== "normal" && Date.now() - lastLagAt > CLEAR_COOLDOWN_MS) {
 		currentLevel = "normal";
 	}

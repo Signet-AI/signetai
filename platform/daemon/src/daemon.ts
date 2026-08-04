@@ -126,6 +126,7 @@ import {
 	markSourceIndexJobRunning,
 	updateSourceIndexJobProgress,
 } from "./source-index-progress";
+import { reportStartupGrace } from "./system-pressure";
 import { type TelemetryCollector, createTelemetryCollector } from "./telemetry";
 import { type TranscriptCaptureWorkerHandle, startTranscriptCaptureWorker } from "./transcript-capture-worker";
 
@@ -1457,10 +1458,10 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 					authorizationTokenForAgent: (agentId) =>
 						authSecret
 							? createToken(
-								authSecret,
-								{ sub: `dreaming:${agentId}`, role: "agent", scope: { agent: agentId } },
-								Math.max(900, Math.ceil(memoryCfg.dreaming.timeout / 1000) + 60),
-							)
+									authSecret,
+									{ sub: `dreaming:${agentId}`, role: "agent", scope: { agent: agentId } },
+									Math.max(900, Math.ceil(memoryCfg.dreaming.timeout / 1000) + 60),
+								)
 							: undefined,
 				},
 			});
@@ -1790,6 +1791,10 @@ async function main() {
 		setHeartbeatTimer(heartbeatTimer);
 	}
 
+	// Grace period: defer all background workers for 10s after startup so the
+	// event-loop monitor can calibrate and migrations can settle before any
+	// background write work piles on (#1059 thundering-herd prevention).
+	reportStartupGrace();
 	await startPipelineRuntime(memoryCfg, telemetryCollector);
 	logFdSnapshot("post-pipeline");
 
