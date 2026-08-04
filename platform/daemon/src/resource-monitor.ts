@@ -5,6 +5,7 @@ import { dlopen, ptr } from "bun:ffi";
 import { readdirSync, readlinkSync } from "node:fs";
 import { join } from "node:path";
 import { logger } from "./logger";
+import { reportEventLoopLag } from "./system-pressure";
 
 const pid = process.pid;
 const fdDir = `/proc/${pid}/fd`;
@@ -170,6 +171,8 @@ export function startEventLoopMonitor(intervalMs = 2000): void {
 				actualMs: now - lastTick,
 			});
 		}
+		// Feed the pressure signal so background write loops can yield/pause.
+		reportEventLoopLag(lag);
 		lastTick = now;
 	}, intervalMs);
 	// Don't keep process alive just for monitoring

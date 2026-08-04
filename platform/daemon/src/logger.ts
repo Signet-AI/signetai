@@ -87,6 +87,8 @@ export type LogCategory =
 	| "telemetry" // Telemetry collection
 	| "temporal-fallback" // Temporal fallback retrieval
 	| "checkpoints" // Session checkpoint management
+	| "system-pressure" // Event-loop pressure signal and backpressure
+	| "yielding-writes" // Bounded write-batch drain with cooperative yielding
 	| "transcripts" // Lossless transcript storage
 	| "shadow"; // Shadow logs for sensitive data (not written to disk, only emitted for real-time streaming)
 
