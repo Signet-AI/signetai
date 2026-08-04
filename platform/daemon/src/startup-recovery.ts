@@ -63,19 +63,15 @@ export function runStartupRecovery(accessor: DbAccessor): StartupRecoveryReport 
 	const startedAt = Date.now();
 	logger.info("startup-recovery", "Running startup recovery");
 
-	let walCheckpointed = false;
+	// NOTE: WAL checkpoint intentionally omitted. An explicit
+	// PRAGMA wal_checkpoint(TRUNCATE) during startup blocks the event loop for
+	// ~8 seconds on legacy databases and leaves the write connection in a
+	// locked state that causes "SQLiteError: database is locked" on every
+	// subsequent BEGIN IMMEDIATE. SQLite's built-in auto-checkpoint handles
+	// WAL management without blocking. The checkpointWal() method is kept on
+	// DbAccessor for post-startup callers but must not be called during boot.
 
-	// 1. WAL checkpoint — flush accumulated WAL pages into the main DB file.
-	try {
-		accessor.checkpointWal();
-		walCheckpointed = true;
-	} catch (err) {
-		logger.warn("startup-recovery", "WAL checkpoint failed", {
-			error: err instanceof Error ? err.message : String(err),
-		});
-	}
-
-	// 2. Purge old dead jobs.
+	// 1. Purge old dead jobs.
 	const cutoff = new Date(Date.now() - DEAD_JOB_RETENTION_DAYS * 86_400_000).toISOString();
 	let deadJobsPurged = 0;
 	try {
@@ -176,7 +172,7 @@ export function runStartupRecovery(accessor: DbAccessor): StartupRecoveryReport 
 
 	const durationMs = Date.now() - startedAt;
 	const report: StartupRecoveryReport = {
-		walCheckpointed,
+		walCheckpointed: false,
 		deadJobsPurged,
 		stagingRowsCleaned,
 		orphanedPassesSwept,
@@ -184,7 +180,7 @@ export function runStartupRecovery(accessor: DbAccessor): StartupRecoveryReport 
 	};
 
 	const totalCleaned = deadJobsPurged + stagingRowsCleaned + orphanedPassesSwept;
-	if (totalCleaned > 0 || !walCheckpointed) {
+	if (totalCleaned > 0) {
 		logger.info("startup-recovery", "Recovery complete", { ...report });
 	} else {
 		logger.debug("startup-recovery", "Recovery complete (workspace was clean)", { durationMs });
