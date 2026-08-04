@@ -7,7 +7,7 @@
 import "./bun-socket-polyfill";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { realpathSync } from "node:fs";
 import { readFile as readFileAsync, unlink as unlinkAsync } from "node:fs/promises";
 import { readdir } from "node:fs/promises";
@@ -1642,6 +1642,19 @@ async function main() {
 	mkdirSync(DAEMON_DIR, { recursive: true });
 	mkdirSync(LOG_DIR, { recursive: true });
 
+	// Acquire an exclusive lock to prevent multiple daemon instances from
+	// competing for the SQLite write lock. Without this, a respawn (systemd,
+	// launchd, or a script calling `signet daemon start`) starts a second
+	// instance that fights the first for the DB lock, causing
+	// "SQLiteError: database is locked" crashes on every write.
+	const lockPath = join(DAEMON_DIR, "daemon.lock");
+	const lockFd = openSync(lockPath, "w");
+	if (!tryLockSync(lockFd)) {
+		logger.error("daemon", "Another daemon instance is already running — exiting");
+		process.exit(0);
+	}
+	process.on("exit", () => { try { closeSync(lockFd); } catch {} });
+
 	// Config migrations must precede every initialization path that resolves
 	// memory config, including DB setup below.
 	try {
@@ -2035,6 +2048,20 @@ async function main() {
 		},
 		onListening,
 	});
+}
+
+/** Try to acquire an exclusive flock on fd. Returns false if held. */
+function tryLockSync(fd: number): boolean {
+	try {
+		const fs = require("node:fs") as { flockSync?: (fd: number, op: string) => void };
+		if (typeof fs.flockSync === "function") {
+			fs.flockSync(fd, "exnb"); // LOCK_EX | LOCK_NB
+			return true;
+		}
+		return true; // no flock available — allow startup (best effort)
+	} catch {
+		return false;
+	}
 }
 
 function isMainEntrypoint(): boolean {
