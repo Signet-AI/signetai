@@ -157,6 +157,22 @@ async function isDaemonHealthyAt(baseUrl: string): Promise<boolean> {
 	}
 }
 
+/**
+ * Cheap liveness check: hits /health/live which never touches the DB.
+ * Used during startup polling so a daemon running migrations or recovery
+ * (where /health may be slow or unavailable) is still detected as alive.
+ */
+async function isDaemonAliveAt(baseUrl: string): Promise<boolean> {
+	try {
+		const response = await fetch(`${baseUrl}/health/live`, {
+			signal: AbortSignal.timeout(1200),
+		});
+		return response.ok;
+	} catch {
+		return false;
+	}
+}
+
 interface DaemonReadiness {
 	readonly ready: boolean;
 	readonly reasons: string[];
@@ -1127,13 +1143,21 @@ export async function startDaemon(agentsDir: string = AGENTS_DIR, preferredDaemo
 	}
 
 	// Use wall-clock deadline instead of iteration count so the budget
-	// is always ~15 real seconds regardless of how long each health
-	// probe takes (connection-refused can stall up to 1.2s per probe).
+	// is always sufficient regardless of how long each health probe takes.
+	// A large/legacy workspace may need 30-40s for migrations + startup
+	// recovery before the HTTP server binds. 60s covers the worst case
+	// while still failing fast on a genuinely broken daemon.
 	// If the spawned process exits early (fast failure), break immediately.
-	const deadline = Date.now() + 15_000;
+	const deadline = Date.now() + 60_000;
 	while (Date.now() < deadline) {
 		await sleep(250);
 		if (procExited) break;
+		// Check liveness first (cheap, DB-free /health/live), then health
+		// (DB-touching /health). On a fresh start the server may bind before
+		// migrations finish — /health/live catches that case.
+		for (const baseUrl of DAEMON_BASE_URLS) {
+			if (await isDaemonAliveAt(baseUrl)) return true;
+		}
 		if (await isDaemonRunning()) {
 			return true;
 		}
