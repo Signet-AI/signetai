@@ -40,23 +40,11 @@ export async function runStartupRecovery(accessor: DbAccessor): Promise<StartupR
 	const startedAt = Date.now();
 	logger.info("startup-recovery", "Running startup recovery");
 
-	let walCheckpointed = false;
-
-	// 1. WAL checkpoint — flush accumulated WAL pages into the main DB file.
-	// Under a crash loop, the WAL grows without checkpointing (153M observed
-	// in production). A large WAL slows every read and increases memory use.
-	// Must run on the write connection outside a transaction (readonly
-	// connections get SQLITE_IOERR_WRITE, and BEGIN IMMEDIATE conflicts).
-	try {
-		accessor.checkpointWal();
-		walCheckpointed = true;
-	} catch (err) {
-		logger.warn("startup-recovery", "WAL checkpoint failed", {
-			error: err instanceof Error ? err.message : String(err),
-		});
-	}
-
-	// 2. Purge old dead jobs — crash loops leave thousands of dead extract/
+	// The WAL auto-checkpoints via SQLite's built-in mechanism; an explicit
+	// checkpoint during startup recovery caused database lock contention on
+	// some installs (bun:sqlite prepared-statement lock leak with PRAGMA).
+	// If needed, callers can use accessor.checkpointWal() post-startup.
+	// 1. Purge old dead jobs — crash loops leave thousands of dead extract/
 	// document/summary jobs that serve no purpose and inflate diagnostics.
 	const cutoff = new Date(Date.now() - DEAD_JOB_RETENTION_DAYS * 86_400_000).toISOString();
 	let deadJobResult: DrainResult = { processed: 0, batches: 0, paused: 0, stopped: "exhausted" };
@@ -85,7 +73,7 @@ export async function runStartupRecovery(accessor: DbAccessor): Promise<StartupR
 		});
 	}
 
-	// 3. Clean stale embeddings_staging rows — but ONLY when no embedding
+	// 2. Clean stale embeddings_staging rows — but ONLY when no embedding
 	// index migration is in progress. embeddings_staging is written by the
 	// embedding index migration to hold new-model vectors; during a 'building'
 	// state, those rows are migration progress, not redundant data. Deleting
@@ -135,7 +123,7 @@ export async function runStartupRecovery(accessor: DbAccessor): Promise<StartupR
 		});
 	}
 
-	// 4. Sweep orphaned dreaming passes (status = 'running' from a crash).
+	// 3. Sweep orphaned dreaming passes
 	// The dreaming worker already does this, but running it here too ensures
 	// the passes table is clean before the worker starts.
 	let orphanedPassesSwept = 0;
@@ -163,7 +151,7 @@ export async function runStartupRecovery(accessor: DbAccessor): Promise<StartupR
 
 	const durationMs = Date.now() - startedAt;
 	const report: StartupRecoveryReport = {
-		walCheckpointed,
+		walCheckpointed: false,
 		deadJobsPurged: deadJobResult.processed,
 		stagingRowsCleaned: stagingResult.processed,
 		orphanedPassesSwept,
@@ -171,7 +159,7 @@ export async function runStartupRecovery(accessor: DbAccessor): Promise<StartupR
 	};
 
 	const totalCleaned = report.deadJobsPurged + report.stagingRowsCleaned + report.orphanedPassesSwept;
-	if (totalCleaned > 0 || !walCheckpointed) {
+	if (totalCleaned > 0) {
 		logger.info("startup-recovery", "Recovery complete", { ...report });
 	} else {
 		logger.debug("startup-recovery", "Recovery complete (workspace was clean)", { durationMs });
