@@ -9,6 +9,7 @@ import {
 	MAX_PROMPT_SUBMIT_EMBEDDING_TIMEOUT_MS,
 	MIN_LLAMACPP_MAX_INPUT_TOKENS,
 	MIN_PROMPT_SUBMIT_EMBEDDING_TIMEOUT_MS,
+	detectLocalTimeZone,
 	loadDreamingConfig,
 	loadMemoryConfig,
 	loadPipelineConfig,
@@ -526,6 +527,36 @@ describe("loadPipelineConfig", () => {
 			},
 		});
 		expect(result.synthesis.endpoint).toBe("http://172.17.0.1:11434");
+	});
+
+	it("defaults reflections to 6am in the detected local timezone with 3 briefs", () => {
+		const result = loadPipelineConfig({});
+		expect(result.reflections.schedule).toBe("0 6 * * *");
+		expect(result.reflections.count).toBe(3);
+		expect(result.reflections.timezone).toBe(detectLocalTimeZone());
+	});
+
+	it("honors the reflections count and timezone and bounds invalid values", () => {
+		const clamped = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					reflections: {
+						count: 9,
+						timezone: "Not/AZone",
+						schedule: "0 9 * * *",
+					},
+				},
+			},
+		});
+		expect(clamped.reflections.count).toBe(6); // clamped to the route cap
+		expect(clamped.reflections.timezone).toBe(detectLocalTimeZone()); // invalid IANA falls back
+		expect(clamped.reflections.schedule).toBe("0 9 * * *");
+
+		const valid = loadPipelineConfig({
+			memory: { pipelineV2: { reflections: { timezone: "Europe/Berlin", count: 2 } } },
+		});
+		expect(valid.reflections.timezone).toBe("Europe/Berlin");
+		expect(valid.reflections.count).toBe(2);
 	});
 
 	it("accepts openrouter synthesis provider", () => {

@@ -467,7 +467,12 @@ export interface PipelineReflectionsConfig {
 	readonly model: string;
 	readonly timeout: number;
 	readonly maxTokens: number;
+	/** Daily cron in `M H * * *` form, evaluated in `timezone`. */
 	readonly schedule: string;
+	/** IANA timezone the daily schedule fires in; defaults to the daemon's detected local timezone. */
+	readonly timezone: string;
+	/** How many briefs one scheduled (or default manual) generation writes. */
+	readonly count: number;
 	readonly timeWindowHours: number;
 	readonly maxMemories: number;
 	readonly maxSummaries: number;

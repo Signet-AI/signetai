@@ -1,21 +1,23 @@
+import { Surface } from "@/components/ui/surface";
+import { type DailyReflection, api } from "@/lib/api";
+import { cn } from "@/lib/utils";
+import { ChevronLeft, ChevronRight, RotateCw } from "lucide-react";
 /**
- * Daily brief — daemon-generated reflection questions, ported from the old
- * Svelte DailyReflection: load today's, auto-generate one when none exists,
- * manual regenerate, and the write-back answer flow (saved into the memory
- * thread via POST /api/reflections/:id/answer). Pager visual per the mockup.
+ * Daily brief — daemon-generated plain-language briefs (up to 3/day at 6am in
+ * the user's timezone, per pipeline.reflections config): load today's,
+ * auto-generate the day's set when none exists, manual "one more" regenerate,
+ * and the write-back answer flow (saved into the memory thread via
+ * POST /api/reflections/:id/answer). Pager visual per the mockup.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ChevronLeft, ChevronRight, RotateCw } from "lucide-react";
-import { Surface } from "@/components/ui/surface";
-import { api, type DailyReflection } from "@/lib/api";
-import { cn } from "@/lib/utils";
 
 /**
  * Mockup-sized card: the fake insights in the mockup are all ~210-230 chars
- * (three lines at 16px). Cap real questions to the same budget so the card
- * never resizes with generated content. Full text remains on hover.
+ * (three lines at 16px). The daemon caps generated briefs at 236
+ * (BRIEF_MAX_CHARS in reflection-worker.ts); this mirrors that budget so the
+ * card never resizes with generated content. Full text remains on hover.
  */
-const BRIEF_CHAR_BUDGET = 240;
+const BRIEF_CHAR_BUDGET = 236;
 
 function budgetText(text: string, budget: number): string {
 	if (text.length <= budget) return text;
@@ -47,39 +49,46 @@ export function DailyBrief({
 	const [submitting, setSubmitting] = useState(false);
 	const generationToken = useRef(0);
 
-	const questions = reflections.filter((r) => r.question);
-	const clamped = questions.length === 0 ? 0 : Math.min(i, questions.length - 1);
-	const current = questions[clamped] ?? null;
+	// Every row has a summary (question is optional legacy metadata); the card
+	// shows all of today's briefs, question-shaped or not.
+	const items = reflections;
+	const clamped = items.length === 0 ? 0 : Math.min(i, items.length - 1);
+	const current = items[clamped] ?? null;
 
-	const generate = useCallback(async () => {
-		const token = ++generationToken.current;
-		setGenerating(true);
-		setSlow(false);
-		setError(null);
-		const slowTimer = setTimeout(() => {
-			if (generationToken.current === token) setSlow(true);
-		}, 10_000);
-		const result = await api.generateReflections(agentId, 1);
-		clearTimeout(slowTimer);
-		if (generationToken.current !== token) return;
-		setGenerating(false);
-		setSlow(false);
-		if (result.error) {
-			setError(result.error);
-			return;
-		}
-		const next = (result.reflections ?? (result.reflection ? [result.reflection] : [])).filter((r) => r.question);
-		if (next.length > 0) {
-			setReflections((existing) => {
-				const seen = new Set(existing.map((r) => r.id));
-				return [...next.filter((r) => !seen.has(r.id)), ...existing];
-			});
-			setI(0); // newest question first
-			setEmptyMsg(null);
-		} else {
-			setEmptyMsg(result.message ?? "No new question found yet");
-		}
-	}, [agentId]);
+	const generate = useCallback(
+		async (count?: number) => {
+			const token = ++generationToken.current;
+			setGenerating(true);
+			setSlow(false);
+			setError(null);
+			const slowTimer = setTimeout(() => {
+				if (generationToken.current === token) setSlow(true);
+			}, 10_000);
+			// Omitted count asks the daemon for its configured daily brief count;
+			// explicit counts (the manual button) add a single new brief.
+			const result = await api.generateReflections(agentId, count);
+			clearTimeout(slowTimer);
+			if (generationToken.current !== token) return;
+			setGenerating(false);
+			setSlow(false);
+			if (result.error) {
+				setError(result.error);
+				return;
+			}
+			const next = (result.reflections ?? (result.reflection ? [result.reflection] : [])).filter((r) => r.summary);
+			if (next.length > 0) {
+				setReflections((existing) => {
+					const seen = new Set(existing.map((r) => r.id));
+					return [...next.filter((r) => !seen.has(r.id)), ...existing];
+				});
+				setI(0); // newest brief first
+				setEmptyMsg(null);
+			} else {
+				setEmptyMsg(result.message ?? "No new brief found yet");
+			}
+		},
+		[agentId],
+	);
 
 	// Svelte method: load today's reflections; auto-generate when none has a question.
 	useEffect(() => {
@@ -92,7 +101,9 @@ export function DailyBrief({
 			const items = today?.reflections ?? (today?.reflection ? [today.reflection] : []);
 			setReflections(items);
 			setLoading(false);
-			if (!items.some((r) => r.question)) void generate();
+			// Auto-fill the day's set only when nothing exists yet; the daemon's
+			// scheduled 6am run owns the normal daily generation.
+			if (items.length === 0) void generate();
 		})();
 		return () => {
 			active = false;
@@ -113,9 +124,7 @@ export function DailyBrief({
 		if (result.success) {
 			const saved = answerText.trim();
 			setReflections((existing) =>
-				existing.map((r) =>
-					r.id === item.id ? { ...r, answer: saved, answerMemoryId: result.memoryId ?? null } : r,
-				),
+				existing.map((r) => (r.id === item.id ? { ...r, answer: saved, answerMemoryId: result.memoryId ?? null } : r)),
 			);
 			setAnswerText("");
 			setDraftFor(null);
@@ -125,21 +134,21 @@ export function DailyBrief({
 	};
 
 	const pad = (n: number) => String(n + 1).padStart(2, "0");
-	const show = (n: number) => setI(((n % questions.length) + questions.length) % questions.length);
+	const show = (n: number) => setI(((n % items.length) + items.length) % items.length);
 
 	return (
 		<Surface className="flex flex-col gap-3.5 px-4.5 py-3.5">
 			<div className="flex shrink-0 items-center justify-between gap-3">
 				<span className="text-[13px] font-semibold tracking-tight text-foreground">Daily brief</span>
 				<div className="flex items-center gap-2.5">
-					{questions.length > 0 && (
+					{items.length > 0 && (
 						<span className="font-mono text-[11px] text-muted-foreground">
-							{pad(clamped)} / {pad(questions.length - 1)}
+							{pad(clamped)} / {pad(items.length - 1)}
 						</span>
 					)}
-					{questions.length > 1 && (
+					{items.length > 1 && (
 						<div className="flex gap-[5px]">
-							{questions.map((q, idx) => (
+							{items.map((q, idx) => (
 								<i
 									key={q.id}
 									className={cn(
@@ -152,15 +161,15 @@ export function DailyBrief({
 					)}
 					<button
 						type="button"
-						aria-label="Generate a new question"
-						title={draftFor ? "Save or cancel your draft before refreshing" : "Generate a new question"}
+						aria-label="Generate a new brief"
+						title={draftFor ? "Save or cancel your draft before refreshing" : "Generate a new brief"}
 						disabled={generating || loading || draftFor !== null}
-						onClick={() => void generate()}
+						onClick={() => void generate(1)}
 						className="grid size-6 place-items-center rounded-[var(--radius)] border border-border bg-card text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-40"
 					>
 						<RotateCw className={cn("size-3.5", generating && "animate-spin")} />
 					</button>
-					{questions.length > 1 && (
+					{items.length > 1 && (
 						<>
 							<button
 								type="button"
@@ -288,7 +297,7 @@ export function DailyBrief({
 						{generating
 							? slow
 								? "Still thinking — generation can take a minute…"
-								: "Generating today's question from your recent memories…"
+								: "Generating today's briefs from your recent memories…"
 							: (error ?? emptyMsg ?? "No daily brief yet.")}
 					</p>
 					{!generating && (
@@ -298,7 +307,7 @@ export function DailyBrief({
 								onClick={() => void generate()}
 								className="h-6 rounded-[var(--radius)] border border-[oklch(1_0_0/0.16)] bg-[color-mix(in_oklch,var(--foreground)_6%,transparent)] px-2.5 text-[11px] font-medium transition-colors hover:border-[oklch(1_0_0/0.3)] hover:bg-[color-mix(in_oklch,var(--foreground)_10%,transparent)]"
 							>
-								Generate today's question
+								Generate today's briefs
 							</button>
 						</div>
 					)}

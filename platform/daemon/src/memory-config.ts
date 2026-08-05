@@ -44,6 +44,24 @@ export interface MemorySearchConfig {
 export { PIPELINE_FLAGS };
 export type { PipelineFlag, PipelineV2Config, DreamingConfig };
 
+/** IANA timezone of the machine the daemon runs on. Falls back to UTC on any failure. */
+export function detectLocalTimeZone(): string {
+	try {
+		return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+	} catch {
+		return "UTC";
+	}
+}
+
+function isValidTimeZone(timeZone: string): boolean {
+	try {
+		new Intl.DateTimeFormat("en-US", { timeZone });
+		return true;
+	} catch {
+		return false;
+	}
+}
+
 export const DEFAULT_DREAMING: DreamingConfig = {
 	tokenThreshold: 100_000,
 	maxInterval: 6 * 60 * 60 * 1_000,
@@ -230,7 +248,9 @@ export const DEFAULT_PIPELINE_V2: ResolvedPipelineV2Config = {
 		model: "qwen3:4b",
 		timeout: 120000,
 		maxTokens: 4000,
-		schedule: "0 8 * * *",
+		schedule: "0 6 * * *",
+		timezone: detectLocalTimeZone(),
+		count: 3,
 		timeWindowHours: 24,
 		maxMemories: 50,
 		maxSummaries: 10,
@@ -903,6 +923,11 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): ResolvedPipel
 				typeof reflectionsRaw?.schedule === "string" && reflectionsRaw.schedule.trim().length > 0
 					? reflectionsRaw.schedule
 					: d.reflections.schedule,
+			timezone:
+				typeof reflectionsRaw?.timezone === "string" && isValidTimeZone(reflectionsRaw.timezone)
+					? reflectionsRaw.timezone
+					: d.reflections.timezone,
+			count: clampPositive(reflectionsRaw?.count, 1, 6, d.reflections.count),
 			timeWindowHours: clampPositive(reflectionsRaw?.timeWindowHours, 1, 168, d.reflections.timeWindowHours),
 			maxMemories: clampPositive(reflectionsRaw?.maxMemories, 5, 500, d.reflections.maxMemories),
 			maxSummaries: clampPositive(reflectionsRaw?.maxSummaries, 1, 50, d.reflections.maxSummaries),

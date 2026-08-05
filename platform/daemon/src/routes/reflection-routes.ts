@@ -7,7 +7,7 @@ import { getDbAccessor } from "../db-accessor";
 import { getInferenceProvider } from "../llm";
 import { logger } from "../logger";
 import { loadMemoryConfig } from "../memory-config";
-import { generateDailyBriefInsights } from "../pipeline/reflection-worker";
+import { generateDailyBriefInsights, todayDateInTimeZone } from "../pipeline/reflection-worker";
 import { txIngestEnvelope } from "../transactions";
 import { authConfig } from "./state";
 
@@ -32,10 +32,10 @@ function parseReflectionLimit(raw: string | undefined): number {
 	return Math.min(parsed, MAX_REFLECTION_LIMIT);
 }
 
-function parseGenerateCount(raw: string | undefined): number {
-	if (raw === undefined) return 1;
+function parseGenerateCount(raw: string | undefined, fallback: number): number {
+	if (raw === undefined) return fallback;
 	const parsed = Number.parseInt(raw, 10);
-	if (!Number.isFinite(parsed) || parsed <= 0) return 1;
+	if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
 	return Math.min(parsed, 6);
 }
 
@@ -87,7 +87,10 @@ export function registerReflectionRoutes(app: Hono, deps: ReflectionRouteDeps = 
 
 	app.get("/api/reflections/today", (c) => {
 		const agentId = c.req.query("agentId") ?? "default";
-		const date = new Date().toISOString().slice(0, 10);
+		// Calendar day in the configured brief timezone so rows written at 6am
+		// local show up as "today" rather than under the UTC day.
+		const pipelineCfg = loadMemoryConfig(deps.agentsDir ?? getAgentsDir()).pipelineV2;
+		const date = todayDateInTimeZone(pipelineCfg.reflections.timezone);
 		const limit = parseReflectionLimit(c.req.query("limit"));
 
 		try {
@@ -132,7 +135,6 @@ export function registerReflectionRoutes(app: Hono, deps: ReflectionRouteDeps = 
 
 	app.post("/api/reflections/generate", async (c) => {
 		const agentId = c.req.query("agentId") ?? "default";
-		const count = parseGenerateCount(c.req.query("count"));
 		const date = new Date().toISOString().slice(0, 10);
 
 		const pipelineCfg = loadMemoryConfig(deps.agentsDir ?? getAgentsDir()).pipelineV2;
@@ -140,6 +142,9 @@ export function registerReflectionRoutes(app: Hono, deps: ReflectionRouteDeps = 
 		if (!cfg?.enabled) {
 			return c.json({ error: "Reflections are disabled in pipeline config" }, 400);
 		}
+		// Omitted count falls back to the configured daily brief count so the
+		// dashboard's auto-fill and the scheduled run generate the same set.
+		const count = parseGenerateCount(c.req.query("count"), cfg.count);
 
 		let ids: string[];
 		try {

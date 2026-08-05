@@ -78,6 +78,7 @@ import { retireLegacyExtractionJobs } from "./pipeline/extraction-fallback";
 import { invalidateTraversalCache } from "./pipeline/graph-traversal";
 import { stopModelRegistry } from "./pipeline/model-registry";
 import { configureLlmConcurrency } from "./pipeline/provider";
+import { type ReflectionWorkerHandle, startReflectionWorker } from "./pipeline/reflection-worker";
 import { startReconciler } from "./pipeline/skill-reconciler";
 import { logFdSnapshot, startEventLoopMonitor, startFdPollMonitor, stopResourceMonitors } from "./resource-monitor";
 import {
@@ -189,6 +190,7 @@ const __dirname = dirname(__filename);
 
 let httpServer: import("node:net").Server | null = null;
 let dreamingWorkerHandle: DreamingWorkerHandle | null = null;
+let reflectionWorkerHandle: ReflectionWorkerHandle | null = null;
 let embeddingTrackerHandle: EmbeddingTrackerHandle | null = null;
 let embeddingIndexMigrationHandle: EmbeddingIndexMigrationHandle | null = null;
 let embeddingPromotionRestart: Promise<void> | null = null;
@@ -1167,6 +1169,11 @@ async function stopPipelineRuntime(): Promise<void> {
 		setDreamingWorker(null);
 	}
 
+	if (reflectionWorkerHandle) {
+		reflectionWorkerHandle.stop();
+		reflectionWorkerHandle = null;
+	}
+
 	if (schedulerHandle) {
 		try {
 			await schedulerHandle.stop();
@@ -1477,6 +1484,16 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 		}
 	}
 
+	if (memoryCfg.pipelineV2.reflections.enabled && !pipelinePaused) {
+		try {
+			reflectionWorkerHandle = startReflectionWorker(memoryCfg.pipelineV2.reflections);
+		} catch (err) {
+			logger.warn("reflections", "Failed to start reflection worker (non-fatal)", {
+				error: err instanceof Error ? err.message : String(err),
+			});
+		}
+	}
+
 	if (memoryCfg.pipelineV2.procedural.enabled && !pipelinePaused) {
 		skillReconcilerHandle = startReconciler({
 			accessor: getDbAccessor(),
@@ -1646,7 +1663,11 @@ async function main() {
 		logger.error("daemon", "Another daemon instance is already running — exiting");
 		process.exit(0);
 	}
-	process.on("exit", () => { try { closeSync(lockFd); } catch {} });
+	process.on("exit", () => {
+		try {
+			closeSync(lockFd);
+		} catch {}
+	});
 
 	// Config migrations must precede every initialization path that resolves
 	// memory config, including DB setup below.

@@ -20,9 +20,9 @@ const DEFAULT_DEPS: ReflectionDeps = {
 };
 
 const POLL_INTERVAL_MS = 300_000;
-const MINUTE_MS = 60_000;
-const DAY_MS = 24 * 60 * MINUTE_MS;
 const DAILY_BRIEF_MEMORY_BATCH_SIZE = 50;
+/** Hard ceiling per brief, enforced at parse time and requested in the prompt. */
+export const BRIEF_MAX_CHARS = 236;
 
 function getAgentsDir(): string {
 	return resolveDefaultBasePath();
@@ -56,11 +56,87 @@ function writeLastReflectionTime(agentId: string, date: string): void {
 	}
 }
 
-function todayDate(now = new Date()): string {
-	return now.toISOString().slice(0, 10);
+// -- Timezone-aware calendar math -------------------------------------------
+// The daily schedule fires in the user's detected timezone (daemon local time
+// by default). Plain setHours() + toISOString() mixes local and UTC calendar
+// days, so "today" and "6am" must be computed through Intl with the configured
+// IANA timezone, DST included.
+
+type ZonedParts = {
+	readonly year: number;
+	readonly month: number;
+	readonly day: number;
+	readonly hour: number;
+	readonly minute: number;
+	readonly second: number;
+};
+
+const zonedFormatterCache = new Map<string, Intl.DateTimeFormat>();
+
+function zonedFormatter(timeZone: string): Intl.DateTimeFormat {
+	let formatter = zonedFormatterCache.get(timeZone);
+	if (!formatter) {
+		formatter = new Intl.DateTimeFormat("en-US", {
+			timeZone,
+			year: "numeric",
+			month: "2-digit",
+			day: "2-digit",
+			hour: "2-digit",
+			minute: "2-digit",
+			second: "2-digit",
+			hour12: false,
+		});
+		zonedFormatterCache.set(timeZone, formatter);
+	}
+	return formatter;
 }
 
-function scheduledTimeFor(schedule: string, now = new Date()): Date | null {
+function zonedParts(timeZone: string, instant: Date): ZonedParts {
+	const values: Record<string, string> = {};
+	for (const part of zonedFormatter(timeZone).formatToParts(instant)) {
+		if (part.type !== "literal") values[part.type] = part.value;
+	}
+	return {
+		year: Number(values.year),
+		month: Number(values.month),
+		day: Number(values.day),
+		hour: Number(values.hour) % 24,
+		minute: Number(values.minute),
+		second: Number(values.second),
+	};
+}
+
+/**
+ * The instant whose wall clock in `timeZone` reads (y, m0, d) at hh:mm.
+ * Refines the UTC offset by round-tripping through Intl, which converges in
+ * two or three iterations and stays correct across DST boundaries.
+ */
+function zonedDateTime(
+	timeZone: string,
+	year: number,
+	month0: number,
+	day: number,
+	hour: number,
+	minute: number,
+): Date {
+	const targetAsUtc = Date.UTC(year, month0, day, hour, minute);
+	let guess = targetAsUtc;
+	for (let i = 0; i < 3; i += 1) {
+		const parts = zonedParts(timeZone, new Date(guess));
+		const offset = Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute, parts.second) - guess;
+		guess = targetAsUtc - offset;
+	}
+	return new Date(guess);
+}
+
+/** Calendar date (YYYY-MM-DD) of `now` in `timeZone`. */
+export function todayDateInTimeZone(timeZone: string, now = new Date()): string {
+	const parts = zonedParts(timeZone, now);
+	return `${parts.year}-${String(parts.month).padStart(2, "0")}-${String(parts.day).padStart(2, "0")}`;
+}
+
+/** Today's wall-clock occurrence of `M H * * *` in `timeZone`; null for non-daily schedules. */
+function scheduledTimeFor(schedule: string, timeZone: string, now = new Date()): Date | null {
 	const parts = schedule.trim().split(/\s+/);
 	if (parts.length !== 5 || parts[2] !== "*" || parts[3] !== "*" || parts[4] !== "*") return null;
 	const minute = Number(parts[0]);
@@ -68,17 +144,37 @@ function scheduledTimeFor(schedule: string, now = new Date()): Date | null {
 	if (!Number.isInteger(minute) || !Number.isInteger(hour) || minute < 0 || minute > 59 || hour < 0 || hour > 23) {
 		return null;
 	}
-	const scheduled = new Date(now);
-	scheduled.setHours(hour, minute, 0, 0);
-	return scheduled;
+	const local = zonedParts(timeZone, now);
+	// Today's occurrence, even when already past: the delay logic uses the
+	// pastness to decide "due now" (catch up after the slot was missed).
+	return zonedDateTime(timeZone, local.year, local.month - 1, local.day, hour, minute);
 }
 
-export function nextReflectionDelayMs(schedule: string, lastDate: string | null, now = new Date()): number {
-	const scheduled = scheduledTimeFor(schedule, now);
+export function nextReflectionDelayMs(
+	schedule: string,
+	timeZone: string,
+	lastDate: string | null,
+	now = new Date(),
+): number {
+	const scheduled = scheduledTimeFor(schedule, timeZone, now);
 	if (!scheduled) return POLL_INTERVAL_MS;
 
-	const date = todayDate(now);
-	if (lastDate === date) return Math.max(0, scheduled.getTime() + DAY_MS - now.getTime());
+	const date = todayDateInTimeZone(timeZone, now);
+	if (lastDate === date) {
+		// Already generated today: sleep until tomorrow's slot, computed in the
+		// same timezone so DST transitions do not drift the wake-up by an hour.
+		const local = zonedParts(timeZone, now);
+		const scheduledParts = zonedParts(timeZone, scheduled);
+		const tomorrow = zonedDateTime(
+			timeZone,
+			local.year,
+			local.month - 1,
+			local.day + 1,
+			scheduledParts.hour,
+			scheduledParts.minute,
+		);
+		return Math.max(0, tomorrow.getTime() - now.getTime());
+	}
 	if (now.getTime() < scheduled.getTime()) return Math.max(0, scheduled.getTime() - now.getTime());
 	return POLL_INTERVAL_MS;
 }
@@ -131,30 +227,30 @@ function isQuestionLedInsight(text: string): boolean {
 }
 
 export function buildReflectionPrompt(context: ReflectionSourceContext, count = 1): string {
-	const plural = count === 1 ? "question" : "questions";
+	const plural = count === 1 ? "brief" : "briefs";
 	const lines: string[] = [
-		"You are the question generator for a daily memory brief.",
-		"You will receive a mechanically selected bundle of recent user memories. It is not curated for a topic. Treat it as raw memory evidence.",
+		"You write the daily brief for a local memory tool. Below is a raw bundle of the user's recent saved memories, picked mechanically, not curated for a topic. Treat it as evidence, not a theme.",
 		"",
-		`Goal: write ${count} ${plural} the user might actually want to answer today.`,
+		`Write ${count} ${plural}. Each brief is ONE short, plain observation, said the way you would to a smart friend who does not work in your field. They should get it on first read.`,
 		"",
-		"Pattern to prefer:",
-		"- Find an earlier/later pair, repeated thread, or gentle mismatch in the memories.",
-		'- Shape: "You wrote/said X, and later Y showed up. How does that fit/feel now?"',
-		"- The question should be a memory prompt, not a task prompt.",
+		"Good briefs look like one of these:",
+		"- An old thought returned plainly: something the user wrote that is worth carrying today.",
+		"- A real change worth noticing: what the user said, and what showed up after it.",
+		"- A small practical correction: something concrete that is off or worth adjusting.",
+		"A direct observation is enough. Do not force a pattern or a thesis.",
 		"",
 		"Rules:",
-		"- Address the user by name only if the name is clear from the memories.",
-		"- Use concrete details from the memories: people, projects, quotes, places, dates, or repeated phrases.",
-		"- Ask about a real remembered tension, change, or open feeling.",
+		"- Plain words, short sentences, one idea per brief.",
+		"- Use concrete details from the memories: names, projects, places, dates, repeated phrases.",
+		"- No jargon, no vague labels, no 'same mechanism' or 'same shape' connectors.",
+		"- Do not perform a verdict on the user's life. No armchair psychology.",
+		"- Do not invent facts, feelings, or motives. If the memories do not say it, leave it out.",
 		"- Do not ask what Signet, an agent, or a tool should do.",
-		"- Do not ask for productivity planning unless the memories themselves clearly center on an active decision.",
-		"- Do not invent hypotheticals or future scenarios.",
-		'- Do not over-compress into vague labels like "hidden mess," "small kind thing," or "relationship architecture."',
-		"- Keep each question natural and answerable on first read. 45-85 words is fine.",
+		"- No productivity planning unless the memories center on an active decision.",
+		`- Hard limit: each brief is at most ${BRIEF_MAX_CHARS} characters.`,
 		"",
 		"Output only lines in this format:",
-		"QUESTION: <daily brief question>",
+		"BRIEF: <the brief>",
 		"",
 	];
 
@@ -200,7 +296,7 @@ export function parseDailyBriefInsights(text: string, limit = 1): DailyBriefInsi
 
 	function flush(): void {
 		if (!pending) return;
-		const summary = trimLine(pending, 560);
+		const summary = trimLine(pending, BRIEF_MAX_CHARS);
 		if (summary) {
 			const question = pendingIsQuestion || isQuestionLedInsight(summary) ? summary : undefined;
 			insights.push({ summary, question, patterns });
@@ -232,10 +328,9 @@ export function parseDailyBriefInsights(text: string, limit = 1): DailyBriefInsi
 	flush();
 
 	if (insights.length === 0) {
-		const hasStructuredLabel = /^\s*(?:[-*]\s*)?(?:ASK|BRIEF|FOCUS|GAP|INSIGHT|PATTERNS|QUESTION|SUMMARY|TAGS)\s*:/im.test(
-			text,
-		);
-		const fallback = trimLine(text, 560);
+		const hasStructuredLabel =
+			/^\s*(?:[-*]\s*)?(?:ASK|BRIEF|FOCUS|GAP|INSIGHT|PATTERNS|QUESTION|SUMMARY|TAGS)\s*:/im.test(text);
+		const fallback = trimLine(text, BRIEF_MAX_CHARS);
 		if (!hasStructuredLabel && fallback) {
 			const question = isQuestionLedInsight(fallback) ? fallback : undefined;
 			insights.push({ summary: fallback, question, patterns: [] });
@@ -300,7 +395,7 @@ export function collectReflectionContext(
 export async function generateDailyBriefInsights(
 	agentId: string,
 	config: PipelineReflectionsConfig,
-	count = 1,
+	count = config.count,
 	deps: ReflectionDeps = DEFAULT_DEPS,
 ): Promise<string[]> {
 	const context = collectReflectionContext(agentId, config, deps);
@@ -327,7 +422,7 @@ export async function generateDailyBriefInsights(
 	if (insights.length === 0) return [];
 
 	const now = new Date().toISOString();
-	const date = todayDate();
+	const date = todayDateInTimeZone(config.timezone);
 	const memoryIds = JSON.stringify(context.memories.map((m) => m.id).filter(Boolean));
 	const summaryIds = JSON.stringify(context.summaries.map((s) => s.id).filter(Boolean));
 	const ids: string[] = [];
@@ -379,13 +474,13 @@ export function startReflectionWorker(
 
 	async function runReflection(agentId: string): Promise<void> {
 		try {
-			const ids = await generateDailyBriefInsights(agentId, config, 1, deps);
+			const ids = await generateDailyBriefInsights(agentId, config, config.count, deps);
 			if (ids.length === 0) {
 				deps.logger.debug("reflections", "No source material or fresh insight to reflect on", { agentId });
 				return;
 			}
-			writeLastReflectionTime(agentId, todayDate());
-			deps.logger.info("reflections", "Generated daily brief question", { agentId, count: ids.length });
+			writeLastReflectionTime(agentId, todayDateInTimeZone(config.timezone));
+			deps.logger.info("reflections", "Generated daily briefs", { agentId, count: ids.length });
 		} catch (e) {
 			deps.logger.warn("reflections", "Generation failed", {
 				error: e instanceof Error ? e.message : String(e),
@@ -408,10 +503,10 @@ export function startReflectionWorker(
 	}
 
 	async function runDueAgents(): Promise<void> {
-		const date = todayDate();
+		const date = todayDateInTimeZone(config.timezone);
 		for (const agentId of listActiveAgentIds()) {
 			const lastDate = readLastReflectionTime(agentId);
-			if (lastDate !== date && nextReflectionDelayMs(config.schedule, lastDate) === POLL_INTERVAL_MS) {
+			if (lastDate !== date && nextReflectionDelayMs(config.schedule, config.timezone, lastDate) === POLL_INTERVAL_MS) {
 				await runReflection(agentId);
 			}
 		}
@@ -419,7 +514,9 @@ export function startReflectionWorker(
 
 	function nextWorkerDelayMs(): number {
 		return Math.min(
-			...listActiveAgentIds().map((agentId) => nextReflectionDelayMs(config.schedule, readLastReflectionTime(agentId))),
+			...listActiveAgentIds().map((agentId) =>
+				nextReflectionDelayMs(config.schedule, config.timezone, readLastReflectionTime(agentId)),
+			),
 		);
 	}
 

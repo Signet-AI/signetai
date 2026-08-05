@@ -435,12 +435,14 @@ export const api = {
 		const q = agentId && agentId !== "default" ? `?agentId=${encodeURIComponent(agentId)}` : "";
 		return getJSON<TodayReflectionResponse>(`/api/reflections/today${q}`);
 	},
-	/** POST /api/reflections/generate — LLM daily brief question(s); slow by nature (up to ~2min). */
-	generateReflections: async (agentId: string | undefined, count = 1): Promise<TodayReflectionResponse> => {
+	/** POST /api/reflections/generate — LLM daily brief(s); slow by nature (up to ~2min).
+	 *  Omitted count falls back to the daemon's configured daily brief count. */
+	generateReflections: async (agentId: string | undefined, count?: number): Promise<TodayReflectionResponse> => {
 		const agentQ = agentId && agentId !== "default" ? `?agentId=${encodeURIComponent(agentId)}` : "";
 		const sep = agentQ ? "&" : "?";
+		const countQ = count === undefined ? "" : `${sep}count=${count}`;
 		try {
-			const res = await fetch(`${API_BASE}/api/reflections/generate${agentQ}${sep}count=${count}`, {
+			const res = await fetch(`${API_BASE}/api/reflections/generate${agentQ}${countQ}`, {
 				method: "POST",
 				headers: authHeaders(),
 			});

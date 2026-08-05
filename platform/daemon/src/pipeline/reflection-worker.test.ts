@@ -14,6 +14,7 @@ import {
 	nextReflectionDelayMs,
 	parseDailyBriefInsights,
 	startReflectionWorker,
+	todayDateInTimeZone,
 } from "./reflection-worker";
 
 let dir: string;
@@ -25,6 +26,8 @@ const config: PipelineReflectionsConfig = {
 	maxMemories: 10,
 	maxSummaries: 10,
 	schedule: "daily",
+	timezone: "UTC",
+	count: 3,
 	timeout: 1000,
 	maxTokens: 200,
 	model: "test-model",
@@ -104,10 +107,42 @@ afterEach(() => {
 });
 
 describe("reflection worker", () => {
-	it("uses cron-style daily schedule delays", () => {
-		expect(nextReflectionDelayMs("0 8 * * *", null, new Date(2026, 4, 13, 7, 30))).toBe(30 * 60 * 1000);
-		expect(nextReflectionDelayMs("0 8 * * *", null, new Date(2026, 4, 13, 8, 30))).toBe(300_000);
-		expect(nextReflectionDelayMs("0 8 * * *", "2026-05-13", new Date(2026, 4, 13, 8, 30))).toBe(23.5 * 60 * 60 * 1000);
+	it("uses cron-style daily schedule delays in the configured timezone", () => {
+		// UTC: 6am slot, before and after the hour.
+		expect(nextReflectionDelayMs("0 6 * * *", "UTC", null, new Date("2026-05-13T05:30:00.000Z"))).toBe(30 * 60 * 1000);
+		expect(nextReflectionDelayMs("0 6 * * *", "UTC", null, new Date("2026-05-13T06:30:00.000Z"))).toBe(300_000);
+		expect(nextReflectionDelayMs("0 6 * * *", "UTC", "2026-05-13", new Date("2026-05-13T06:30:00.000Z"))).toBe(
+			23.5 * 60 * 60 * 1000,
+		);
+	});
+
+	it("fires the daily slot at 6am in the user's timezone, not UTC", () => {
+		// 2026-05-13T07:30Z is 01:30 MDT; 6am Denver is 12:00Z → 4.5h away.
+		expect(nextReflectionDelayMs("0 6 * * *", "America/Denver", null, new Date("2026-05-13T07:30:00.000Z"))).toBe(
+			4.5 * 60 * 60 * 1000,
+		);
+		// 23:30Z is 17:30 MDT — today's slot passed, so the worker is due now.
+		expect(nextReflectionDelayMs("0 6 * * *", "America/Denver", null, new Date("2026-05-13T23:30:00.000Z"))).toBe(
+			300_000,
+		);
+	});
+
+	it("keeps the daily date boundary in the configured timezone", () => {
+		// 2026-05-14T01:30Z is still May 13 in Denver (19:30 MDT).
+		expect(todayDateInTimeZone("America/Denver", new Date("2026-05-14T01:30:00.000Z"))).toBe("2026-05-13");
+		expect(todayDateInTimeZone("UTC", new Date("2026-05-14T01:30:00.000Z"))).toBe("2026-05-14");
+	});
+
+	it("stays DST-correct across offset changes", () => {
+		// Denver is MDT (UTC-6) in June and MST (UTC-7) in December; 6am is
+		// 12:00Z vs 13:00Z. A naive fixed-offset scheduler would be an hour off
+		// on one side of the year.
+		expect(nextReflectionDelayMs("0 6 * * *", "America/Denver", null, new Date("2026-12-13T12:30:00.000Z"))).toBe(
+			30 * 60 * 1000,
+		);
+		expect(nextReflectionDelayMs("0 6 * * *", "America/Denver", null, new Date("2026-06-13T11:30:00.000Z"))).toBe(
+			30 * 60 * 1000,
+		);
 	});
 
 	it("does not mark the day complete when there is no source material", async () => {
@@ -148,7 +183,7 @@ describe("reflection worker", () => {
 		expect(context.graphFacts).toEqual([]);
 	});
 
-	it("builds a memory-question prompt over saved memories", () => {
+	it("builds a plain-language brief prompt over saved memories", () => {
 		const prompt = buildReflectionPrompt(
 			{
 				memories: [
@@ -165,14 +200,17 @@ describe("reflection worker", () => {
 				graphFacts: [],
 				existingReflections: [],
 			},
-			1,
+			3,
 		);
 
-		expect(prompt).toContain("mechanically selected bundle of recent user memories");
-		expect(prompt).toContain("You wrote/said X, and later Y showed up. How does that fit/feel now?");
+		expect(prompt).toContain("raw bundle of the user's recent saved memories");
+		expect(prompt).toContain("A direct observation is enough. Do not force a pattern or a thesis.");
+		expect(prompt).toContain("Do not perform a verdict on the user's life. No armchair psychology.");
 		expect(prompt).toContain("Do not ask what Signet, an agent, or a tool should do.");
+		expect(prompt).toContain("each brief is at most 236 characters");
 		expect(prompt).toContain("Recent saved memories:");
-		expect(prompt).toContain("QUESTION: <daily brief question>");
+		expect(prompt).toContain("BRIEF: <the brief>");
+		expect(prompt).toContain("Write 3 briefs");
 	});
 
 	it("parses daily brief questions and preserves legacy insight output", () => {
@@ -226,7 +264,9 @@ describe("reflection worker", () => {
 
 		const reflection = getDbAccessor().withReadDb(
 			(db) =>
-				db.prepare("SELECT summary, question, model, memory_ids FROM daily_reflections WHERE agent_id = ?").get("default") as {
+				db
+					.prepare("SELECT summary, question, model, memory_ids FROM daily_reflections WHERE agent_id = ?")
+					.get("default") as {
 					summary: string;
 					question: string | null;
 					model: string;
@@ -249,6 +289,52 @@ describe("reflection worker", () => {
 				).count,
 		);
 		expect(questionCount).toBe(0);
+	});
+
+	it("truncates any brief that exceeds the 236-character ceiling", () => {
+		const longBrief = `BRIEF: ${"x".repeat(300)}`;
+		const insights = parseDailyBriefInsights(longBrief, 1);
+		expect(insights).toHaveLength(1);
+		expect(insights[0].summary.length).toBeLessThanOrEqual(236);
+		expect(insights[0].summary.endsWith("…")).toBe(true);
+
+		const shortBrief = "BRIEF: You wrote that note and it still holds.";
+		expect(parseDailyBriefInsights(shortBrief, 1)[0].summary).toBe("You wrote that note and it still holds.");
+	});
+
+	it("generates the configured daily count of briefs in one scheduled run", async () => {
+		seedMemory("default");
+		const worker = startReflectionWorker(config, {
+			getDbAccessor,
+			getInferenceProvider: () =>
+				provider(
+					[
+						"BRIEF: You shipped the fix and moved on.",
+						"BRIEF: The Venice plates arrived in 02_incoming.",
+						"BRIEF: That old note still reads true.",
+					].join("\n"),
+				),
+			logger,
+		});
+
+		try {
+			await worker.triggerNow();
+		} finally {
+			worker.stop();
+		}
+
+		const rows = getDbAccessor().withReadDb((db) => {
+			return db.prepare("SELECT summary FROM daily_reflections WHERE agent_id = ? ORDER BY summary").all("default") as {
+				summary: string;
+			}[];
+		});
+		expect(rows).toHaveLength(3);
+		expect(rows.map((r) => r.summary)).toEqual([
+			"That old note still reads true.",
+			"The Venice plates arrived in 02_incoming.",
+			"You shipped the fix and moved on.",
+		]);
+		expect(existsSync(join(dir, ".daemon", "last-reflection.default.json"))).toBe(true);
 	});
 
 	it("allows multiple same-day insights but de-duplicates repeated brief text", async () => {
@@ -347,7 +433,13 @@ describe("reflection worker", () => {
 				memory_ids: string;
 			}[];
 		});
-		expect(rows).toEqual([{ agent_id: "agent-c", memory_ids: JSON.stringify([memoryId]) }]);
+		// The provider response carries two insights (SUMMARY + QUESTION), so
+		// the configured count of 3 allows both rows — every one scoped to the
+		// active agent, never "default".
+		expect(rows).toEqual([
+			{ agent_id: "agent-c", memory_ids: JSON.stringify([memoryId]) },
+			{ agent_id: "agent-c", memory_ids: JSON.stringify([memoryId]) },
+		]);
 		expect(existsSync(join(dir, ".daemon", "last-reflection.agent-c.json"))).toBe(true);
 	});
 });
