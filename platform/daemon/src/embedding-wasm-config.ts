@@ -1,6 +1,11 @@
 export interface EmbeddingWasmConfig {
 	numThreads?: number;
 	wasmPaths?: string;
+	/** Preloaded wasm binary — onnxruntime-web 1.26 loads the .wasm via fetch()
+	 *  instead of the 1.22-era fs.readFileSync, so the compiled binary must
+	 *  hand the materialized binary over directly or session creation dies
+	 *  with `fetch() URL is invalid` on the filesystem path. */
+	wasmBinary?: ArrayBuffer;
 }
 
 export function configureEmbeddingWasm(wasm: EmbeddingWasmConfig | undefined, wasmDir: string | null): void {

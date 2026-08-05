@@ -193,6 +193,62 @@ const nodeDeviceDefault = /defaultDevices = \["cpu"\];/g;
 if ((patchedTransformersWebRuntimeSource.match(nodeDeviceDefault) ?? []).length !== 1) {
 	throw new Error("Unsupported @huggingface/transformers web runtime: Node device default changed");
 }
+// Transformers.js 4.x ALSO decides the null-device default in selectDevice
+// through a module-level DEFAULT_DEVICE const, separate from defaultDevices.
+// The compiled binary reports a Node-like environment, so without this pin
+// selectDevice(null) returns "cpu" and the patched WASM-only runtime throws
+// `Unsupported device: "cpu". Should be one of: wasm.` when the embedding
+// worker initializes a pipeline. Keep the unique-anchor guard so a future
+// restructure of this default fails loudly instead of shipping a broken binary.
+const deviceDefault = /var DEFAULT_DEVICE = apis\.IS_NODE_ENV \? "cpu" : "wasm";/g;
+if ((patchedTransformersWebRuntimeSource.match(deviceDefault) ?? []).length !== 1) {
+	throw new Error("Unsupported @huggingface/transformers web runtime: DEFAULT_DEVICE changed");
+}
+patchedTransformersWebRuntimeSource = patchedTransformersWebRuntimeSource.replace(
+	deviceDefault,
+	'var DEFAULT_DEVICE = "wasm";',
+);
+// Transformers.js 4.x web build stubs node:fs/path/url as empty objects
+// (`// ignore-modules:node:fs` + `var node_fs_default = {};`), which forces
+// env.useFS=false and breaks local model loading in the compiled binary:
+// getFile() falls through to fetch() on a bare filesystem path, throwing
+// `ERR_INVALID_URL` and failing pipeline init with "Unable to get model file
+// path or buffer". The 3.8.1 web build shipped real fs modules; wire the
+// Node builtins back in so FileResponse can read the model cache from disk.
+// Unique-anchor guards keep a future stub restructure loud.
+for (const [name, specifier] of [
+	["fs", "node:fs"],
+	["path", "node:path"],
+	["url", "node:url"],
+] as const) {
+	const nodeStub = new RegExp(`// ignore-modules:node:${name}\\nvar node_${name}_default = \\{\\};`, "g");
+	if ((patchedTransformersWebRuntimeSource.match(nodeStub) ?? []).length !== 1) {
+		throw new Error(`Unsupported @huggingface/transformers web runtime: node:${name} stub changed`);
+	}
+	patchedTransformersWebRuntimeSource = patchedTransformersWebRuntimeSource.replace(
+		nodeStub,
+		`import node_${name}_default from ${JSON.stringify(specifier)};`,
+	);
+}
+// Transformers.js 4.x treats a Node-like environment as able to hand model
+// files to onnxruntime by PATH (getCoreModelFile/getModelDataFiles pass
+// return_path = apis.IS_NODE_ENV). onnxruntime-web 1.26's session glue loads
+// a string path with fetch() (1.22 read it with fs.readFileSync), so the
+// compiled binary dies with `fetch() URL is invalid` once the model downloads.
+// Force return_path=false so the model bytes are handed to the session, which
+// never touches the filesystem for the onnx input.
+for (const returnPathAnchor of [
+	"const return_path = apis.IS_NODE_ENV;",
+	"return await getModelFile(pretrained_model_name_or_path, fullPath, true, options, apis.IS_NODE_ENV);",
+]) {
+	if ((patchedTransformersWebRuntimeSource.split(returnPathAnchor).length ?? 0) !== 2) {
+		throw new Error("Unsupported @huggingface/transformers web runtime: return_path anchor changed");
+	}
+	patchedTransformersWebRuntimeSource = patchedTransformersWebRuntimeSource.replace(
+		returnPathAnchor,
+		returnPathAnchor.replace("apis.IS_NODE_ENV", "false"),
+	);
+}
 const patchedTransformersWebRuntimePath = join(buildDir, "transformers.web.js");
 writeFileSync(patchedTransformersWebRuntimePath, patchedTransformersWebRuntimeSource);
 const wasmAssets = ["ort-wasm-simd-threaded.mjs", "ort-wasm-simd-threaded.wasm"].map((name) => ({

@@ -18,7 +18,8 @@
  *     workerData (the worker cannot read the main-thread asset globals).
  */
 
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { isMainThread, parentPort, workerData } from "node:worker_threads";
 import { type EmbeddingWasmConfig, configureEmbeddingWasm } from "./embedding-wasm-config";
 import type { EmbeddingWorkerInit, MainToWorkerMessage, WorkerToMainMessage } from "./embedding-worker-protocol";
@@ -166,6 +167,17 @@ async function doInit(): Promise<void> {
 			transformers.env.remoteHost = init.remoteHostOverride;
 		}
 		configureEmbeddingWasm(transformers.env.backends?.onnx?.wasm, init.wasmDir);
+		if (init.wasmDir && transformers.env.backends?.onnx?.wasm) {
+			// onnxruntime-web 1.26's emscripten glue fetches the .wasm file
+			// (1.22 read it with fs.readFileSync), which cannot resolve the
+			// materialized filesystem path inside the compiled binary. Load it
+			// here and pass the binary so session creation never fetches it.
+			const wasmBytes = readFileSync(join(init.wasmDir, "ort-wasm-simd-threaded.wasm"));
+			transformers.env.backends.onnx.wasm.wasmBinary = wasmBytes.buffer.slice(
+				wasmBytes.byteOffset,
+				wasmBytes.byteOffset + wasmBytes.byteLength,
+			) as ArrayBuffer;
+		}
 
 		log("info", `Initializing ${init.modelId} (q8 quantization)`, {
 			cachePath: init.cacheDir,
