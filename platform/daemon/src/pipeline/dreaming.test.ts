@@ -8,9 +8,9 @@ import { runMigrations } from "../../../core/src/migrations";
 import type { DbAccessor } from "../db-accessor";
 import {
 	_testParseEpisodicCursor,
+	enqueueDreamingHygieneAttention,
 	getDreamingEpisodicTokenBacklog,
 	getDreamingEvidenceExclusions,
-	enqueueDreamingHygieneAttention,
 	getDreamingPasses,
 	getDreamingState,
 	getDreamingToolCalls,
@@ -207,6 +207,7 @@ describe("Dreaming", () => {
 		expect(result.summary).toBe("Reviewed due claim");
 		expect(prompt).toContain("<semantic_attention>");
 		expect(prompt).toContain("entity:aster");
+		expect(prompt).toContain('provenance: "attention:');
 		expect(getDreamingAttention(accessor, AGENT)).toEqual([]);
 	});
 
@@ -242,7 +243,11 @@ describe("Dreaming", () => {
 			seedSummary(db, "identity-read-error", "Signet is a memory system.", 10);
 			const result = await runDreamingAgentPass(
 				accessor,
-				{ async run() { return { summary: "Completed despite unreadable optional context" }; } },
+				{
+					async run() {
+						return { summary: "Completed despite unreadable optional context" };
+					},
+				},
 				defaultCfg(),
 				agentsDir,
 				AGENT,

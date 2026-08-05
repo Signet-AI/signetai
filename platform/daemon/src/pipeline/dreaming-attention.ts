@@ -150,13 +150,14 @@ export function enqueueDreamingAttentionInTx(
 		/** Leave unchanged deterministic work resolved; reopen it if its state changes or it is explicitly requeued. */
 		readonly reopen?: boolean;
 	},
-): void {
+): string {
 	if (!DREAMING_ATTENTION_KINDS.includes(input.kind)) {
 		throw new Error(`Unsupported Dreaming attention kind: ${input.kind}`);
 	}
 	const subjectRef = normalizedSubjectRef(input.subjectRef);
 	const details = JSON.stringify(normalizedDetails(input.details));
 	const reopen = input.reopen !== false ? 1 : 0;
+	const attentionId = randomUUID();
 	db.prepare(
 		`INSERT INTO dreaming_attention
 		 (id, agent_id, kind, subject_ref, details_json, priority)
@@ -168,7 +169,7 @@ export function enqueueDreamingAttentionInTx(
 		   resolved_at = CASE WHEN ? = 1 OR dreaming_attention.details_json <> excluded.details_json THEN NULL ELSE dreaming_attention.resolved_at END,
 		   resolved_by_pass_id = CASE WHEN ? = 1 OR dreaming_attention.details_json <> excluded.details_json THEN NULL ELSE dreaming_attention.resolved_by_pass_id END`,
 	).run(
-		randomUUID(),
+		attentionId,
 		input.agentId,
 		input.kind,
 		subjectRef,
@@ -178,6 +179,12 @@ export function enqueueDreamingAttentionInTx(
 		reopen,
 		reopen,
 	);
+	// The upsert keeps the original id on conflict, so re-read the stored id to
+	// return a citable handle for the caller (e.g. provenance: attention:<id>).
+	const stored = db
+		.prepare("SELECT id FROM dreaming_attention WHERE agent_id = ? AND kind = ? AND subject_ref = ?")
+		.get(input.agentId, input.kind, subjectRef) as { id: string } | null;
+	return stored?.id ?? attentionId;
 }
 
 export function resolveDreamingAttentionInTx(

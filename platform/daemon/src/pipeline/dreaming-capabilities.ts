@@ -7,6 +7,7 @@
  */
 import { z } from "zod";
 import type { DbAccessor } from "../db-accessor";
+import { classifyEntityQuality } from "../entity-quality";
 import { searchEpisodicSources } from "../episodic-sources";
 import {
 	getAttributesForAspectFiltered,
@@ -18,11 +19,15 @@ import {
 import { getOntologyClaimEvidence } from "../ontology-claim-evidence";
 import { getOntologyLinkEvidence } from "../ontology-link-evidence";
 import { findDuplicateEntityMerges } from "../ontology-proposals";
-import { classifyEntityQuality } from "../entity-quality";
-import type { DreamingAgentEvidence } from "./dreaming-evidence";
-import { applyDreamingOperations, type ApplyDreamingOperationsResult, type DreamingOperationRequest } from "./dreaming-operations";
-import { DREAMING_ONTOLOGY_OPERATION_SCHEMA } from "./dreaming-operation-contract";
 import { detectProspectiveContradictionRisk } from "./antonyms";
+import { enqueueDreamingAttentionInTx } from "./dreaming-attention";
+import type { DreamingAgentEvidence } from "./dreaming-evidence";
+import { DREAMING_ONTOLOGY_OPERATION_SCHEMA } from "./dreaming-operation-contract";
+import {
+	type ApplyDreamingOperationsResult,
+	type DreamingOperationRequest,
+	applyDreamingOperations,
+} from "./dreaming-operations";
 import { readDreamingRunbook, writeDreamingRunbook } from "./dreaming-runbook";
 
 const bounded = (value: number | undefined, fallback: number, max: number): number =>
@@ -31,6 +36,15 @@ const bounded = (value: number | undefined, fallback: number, max: number): numb
 const pagination = {
 	limit: z.number().finite().optional(),
 	offset: z.number().finite().optional(),
+};
+
+/** Required details keys per hygiene subjectRef prefix, matching the apply gate. */
+const HYGIENE_SUBJECT_DETAIL_KEYS: Readonly<Record<string, readonly string[]>> = {
+	entity: ["entityId"],
+	aspect: ["entityId", "aspectId"],
+	attribute: ["attributeId"],
+	link: ["linkId"],
+	duplicate: ["canonicalName"],
 };
 
 export const DREAMING_CAPABILITY_IDS = [
@@ -46,6 +60,7 @@ export const DREAMING_CAPABILITY_IDS = [
 	"check_contradiction",
 	"runbook_read",
 	"runbook_write",
+	"record_hygiene_attention",
 	"apply_ontology_ops",
 ] as const;
 
@@ -228,7 +243,13 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 			"Get claim evidence",
 			"Resolve provenance for a scoped claim path.",
 			true,
-			z.object({ entity: z.string().min(1), aspect: z.string().min(1), group: z.string().min(1), claim: z.string().min(1), ...pagination }),
+			z.object({
+				entity: z.string().min(1),
+				aspect: z.string().min(1),
+				group: z.string().min(1),
+				claim: z.string().min(1),
+				...pagination,
+			}),
 			async ({ entity, aspect, group, claim, limit, offset }) => ({
 				ok: true,
 				result: getOntologyClaimEvidence(accessor, { agentId, entity, aspect, group, claim, limit, offset }),
@@ -319,9 +340,34 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 			},
 		),
 		capability(
+			"record_hygiene_attention",
+			"Record hygiene attention",
+			'Record that an inspected scoped entity, aspect, claim attribute, link, or duplicate group was flagged for hygiene. The returned id is valid provenance (provenance: "attention:<id>") for archive_entity, archive_aspect, archive_claim_value, archive_link, and merge_entities on the flagged target — no episodic source text required. Content-bearing writes still require exact episodic quotes.',
+			false,
+			z
+				.object({
+					subjectRef: z.string().trim().min(1).max(512),
+					details: z.record(z.string(), z.string()).optional(),
+					priority: z.number().finite().min(0).max(100).optional(),
+				})
+				.refine((value) => {
+					const prefix = value.subjectRef.split(":")[0];
+					const required = HYGIENE_SUBJECT_DETAIL_KEYS[prefix];
+					if (!required) return false;
+					const details = value.details ?? {};
+					return required.every((key) => typeof details[key] === "string" && details[key].trim().length > 0);
+				}, "subjectRef must start with entity:, aspect:, attribute:, link:, or duplicate: and details must include the matching target id (entityId, aspectId, attributeId, linkId, or canonicalName)"),
+			async ({ subjectRef, details, priority }) => {
+				const id = accessor.withWriteTx((db) =>
+					enqueueDreamingAttentionInTx(db, { agentId, kind: "hygiene", subjectRef, details, priority }),
+				);
+				return { ok: true, id, subjectRef, kind: "hygiene" };
+			},
+		),
+		capability(
 			"apply_ontology_ops",
 			"Apply ontology operations",
-			"Apply every semantic write through the daemon audit seam. Inspect relevant scoped graph state first; every operation needs an exact quote and source_ref from canonical episodic evidence.",
+			'Apply every semantic write through the daemon audit seam. Inspect relevant scoped graph state first. Content-bearing writes need an exact quote and source_ref from canonical episodic evidence. Hygiene archives/merges of inspected targets may instead cite provenance: "attention:<id>" using an id from <semantic_attention> or from record_hygiene_attention.',
 			false,
 			z.object({ operations: z.array(DREAMING_ONTOLOGY_OPERATION_SCHEMA).min(1).max(100) }),
 			async ({ operations }) => {

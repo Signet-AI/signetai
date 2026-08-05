@@ -4,9 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ONTOLOGY_PROPOSAL_OPERATIONS } from "@signet/core";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
-import {
-	createDreamingAgentTools,
-} from "./dreaming-agent-tools";
+import { createDreamingAgentTools } from "./dreaming-agent-tools";
 import { DREAMING_CAPABILITY_IDS, getDreamingCapabilityManifest } from "./dreaming-capabilities";
 import type { DreamingAgentEvidence } from "./dreaming-evidence";
 
@@ -131,11 +129,29 @@ describe("dreaming-agent-tools", () => {
 		insertActiveAttribute("e-atlas", "a-configuration", "Feature is enabled by default.", "owner");
 		const tools = createDreamingAgentTools({ accessor: getDbAccessor(), agentId: "owner", actor: "owner" });
 
-		const label = readResult(await findTool(tools, "check_entity_label").execute("label", { name: "Status" }, undefined, undefined, {} as never));
-		expect(label).toMatchObject({ tool: "check_entity_label", ok: true, result: { ok: false, reason: "generic_or_scaffolding_name" } });
+		const label = readResult(
+			await findTool(tools, "check_entity_label").execute(
+				"label",
+				{ name: "Status" },
+				undefined,
+				undefined,
+				{} as never,
+			),
+		);
+		expect(label).toMatchObject({
+			tool: "check_entity_label",
+			ok: true,
+			result: { ok: false, reason: "generic_or_scaffolding_name" },
+		});
 
 		const duplicates = readResult(
-			await findTool(tools, "find_duplicate_entities").execute("duplicates", { name: "Atlas" }, undefined, undefined, {} as never),
+			await findTool(tools, "find_duplicate_entities").execute(
+				"duplicates",
+				{ name: "Atlas" },
+				undefined,
+				undefined,
+				{} as never,
+			),
 		);
 		expect(duplicates).toMatchObject({ tool: "find_duplicate_entities", ok: true });
 		expect((duplicates.items as Array<{ target: { id: string }; sources: Array<{ id: string }> }>)[0]).toMatchObject({
@@ -356,10 +372,11 @@ describe("dreaming-agent-tools", () => {
 		expect(items[2]!.ok).toBe(true);
 
 		// The valid ops committed despite the middle failure.
-		const names = getDbAccessor().withReadDb((db) =>
-			db
-				.prepare("SELECT name FROM entities WHERE agent_id = ? ORDER BY name ASC")
-				.all("ant") as Array<{ name: string }>,
+		const names = getDbAccessor().withReadDb(
+			(db) =>
+				db.prepare("SELECT name FROM entities WHERE agent_id = ? ORDER BY name ASC").all("ant") as Array<{
+					name: string;
+				}>,
 		);
 		const nameSet = new Set(names.map((n) => n.name));
 		expect(nameSet.has("First Entity")).toBe(true);
@@ -397,5 +414,141 @@ describe("dreaming-agent-tools", () => {
 		expect(parsed.tool).toBe("apply_ontology_ops");
 		expect(parsed.ok).toBe(true);
 		expect(parsed.items[0].result.entityId).toBeDefined();
+	});
+
+	it("records hygiene attention and archives the flagged entity with its returned id", async () => {
+		insertEntity("e-husk", "Legacy Husk", "legacy husk", "owner");
+		const tools = createDreamingAgentTools({ accessor: getDbAccessor(), agentId: "owner", actor: "owner", evidence });
+
+		const record = readResult(
+			await findTool(tools, "record_hygiene_attention").execute(
+				"record",
+				{ subjectRef: "entity:e-husk", details: { entityId: "e-husk", reason: "zero_active_attributes" } },
+				undefined,
+				undefined,
+				{} as never,
+			),
+		);
+		expect(record).toMatchObject({
+			tool: "record_hygiene_attention",
+			ok: true,
+			subjectRef: "entity:e-husk",
+			kind: "hygiene",
+		});
+		const attentionId = record.id as string;
+		expect(typeof attentionId).toBe("string");
+		expect(attentionId.length).toBeGreaterThan(0);
+
+		// Re-recording the same flagged target returns the same id (upsert keeps the original row).
+		const again = readResult(
+			await findTool(tools, "record_hygiene_attention").execute(
+				"record",
+				{
+					subjectRef: "entity:e-husk",
+					details: { entityId: "e-husk", reason: "zero_active_attributes", note: "rechecked" },
+				},
+				undefined,
+				undefined,
+				{} as never,
+			),
+		);
+		expect(again.ok).toBe(true);
+		expect(again.id).toBe(attentionId);
+
+		// The returned id is citable provenance for the hygiene archive, no episodic quote needed.
+		const apply = readResult(
+			await findTool(tools, "apply_ontology_ops").execute(
+				"apply",
+				{
+					operations: [
+						{
+							operation: "archive_entity",
+							payload: { entity_id: "e-husk", reason: "Zero active attributes; non-concrete entity." },
+							provenance: `attention:${attentionId}`,
+						},
+					],
+				},
+				undefined,
+				undefined,
+				{} as never,
+			),
+		);
+		expect(apply.ok).toBe(true);
+		expect(
+			getDbAccessor().withReadDb((db) => db.prepare("SELECT status FROM entities WHERE id = ?").get("e-husk")),
+		).toEqual({ status: "archived" });
+		const evidenceRow = getDbAccessor().withReadDb(
+			(db) =>
+				db.prepare("SELECT evidence FROM ontology_proposals WHERE agent_id = ?").get("owner") as { evidence: string },
+		);
+		expect(evidenceRow.evidence).toContain(`attention:${attentionId}`);
+	});
+
+	it("rejects an archive whose attention record names a different target", async () => {
+		insertEntity("e-flagged", "Flagged", "flagged", "owner");
+		insertEntity("e-unrelated", "Unrelated", "unrelated", "owner");
+		const tools = createDreamingAgentTools({ accessor: getDbAccessor(), agentId: "owner", actor: "owner", evidence });
+
+		const record = readResult(
+			await findTool(tools, "record_hygiene_attention").execute(
+				"record",
+				{ subjectRef: "entity:e-flagged", details: { entityId: "e-flagged", reason: "zero_active_attributes" } },
+				undefined,
+				undefined,
+				{} as never,
+			),
+		);
+		const attentionId = record.id as string;
+
+		const apply = readResult(
+			await findTool(tools, "apply_ontology_ops").execute(
+				"apply",
+				{
+					operations: [
+						{
+							operation: "archive_entity",
+							payload: { entity_id: "e-unrelated" },
+							provenance: `attention:${attentionId}`,
+						},
+					],
+				},
+				undefined,
+				undefined,
+				{} as never,
+			),
+		);
+		expect(apply.ok).toBe(false);
+		expect(apply.error).toBe("Every operation must cite an exact quote from scoped episodic evidence");
+		expect(
+			getDbAccessor().withReadDb((db) => db.prepare("SELECT status FROM entities WHERE id = ?").get("e-unrelated")),
+		).toEqual({ status: "active" });
+	});
+
+	it("rejects hygiene attention records without a valid subjectRef or target details", async () => {
+		const tools = createDreamingAgentTools({ accessor: getDbAccessor(), agentId: "owner", actor: "owner", evidence });
+
+		const badPrefix = readResult(
+			await findTool(tools, "record_hygiene_attention").execute(
+				"record",
+				{ subjectRef: "bogus:1", details: { entityId: "e-husk" } },
+				undefined,
+				undefined,
+				{} as never,
+			),
+		);
+		expect(badPrefix.ok).toBe(false);
+		expect(badPrefix.error).toContain("subjectRef must start with");
+
+		const missingDetails = readResult(
+			await findTool(tools, "record_hygiene_attention").execute(
+				"record",
+				{ subjectRef: "entity:e-husk", details: { reason: "zero_active_attributes" } },
+				undefined,
+				undefined,
+				{} as never,
+			),
+		);
+		expect(missingDetails.ok).toBe(false);
+		expect(missingDetails.error).toContain("entityId");
 	});
 });
