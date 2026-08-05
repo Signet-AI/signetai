@@ -78,24 +78,30 @@ function normalizeAgentId(agentId: string | undefined, fallback: string): string
 
 export function getDreamingWorkerAgentIds(accessor: DbAccessor, defaultAgentId: string): readonly string[] {
 	return accessor.withReadDb((db) => {
+		// UNION ALL + app-side dedup instead of UNION: the caller collapses
+		// rows into a Set, so the cross-branch sort/merge UNION performs is
+		// pure waste. UNION ALL concatenates the per-table index scans
+		// (every branch resolves through an agent_id-prefix or covering
+		// index), bounding the query by index size rather than table
+		// content (#1094).
 		const rows = db
 			.prepare(
-				`SELECT id FROM agents
-				 UNION
+				`SELECT id AS id FROM agents
+				 UNION ALL
 				 SELECT DISTINCT agent_id AS id FROM dreaming_state
-				 UNION
+				 UNION ALL
 				 SELECT DISTINCT agent_id AS id FROM dreaming_passes
-				 UNION
+				 UNION ALL
 				 SELECT DISTINCT agent_id AS id FROM memories WHERE is_deleted = 0
-				 UNION
+				 UNION ALL
 				 SELECT DISTINCT agent_id AS id FROM session_summaries
-				 UNION
+				 UNION ALL
 				 SELECT DISTINCT agent_id AS id FROM memory_artifacts WHERE is_deleted = 0
-				 UNION
+				 UNION ALL
 				 SELECT DISTINCT agent_id AS id FROM session_transcripts
-				 UNION
+				 UNION ALL
 				 SELECT DISTINCT agent_id AS id FROM dreaming_attention WHERE resolved_at IS NULL
-				 UNION
+				 UNION ALL
 				 SELECT DISTINCT agent_id AS id FROM entities`,
 			)
 			.all() as Array<{ id: string | null }>;
@@ -305,6 +311,24 @@ export function startDreamingWorker(
 	// server binds, making the daemon appear to fail to start.
 	schedule();
 
+	// Warm the agent-scope snapshot shortly after startup instead of letting
+	// the first check (5 min out) resolve it cold on the main loop
+	// (#1094). The union itself is index-fast; the warm-up moves first
+	// resolution off the sweep, surfaces DB problems before the first
+	// check, and the delay lands after the HTTP server binds.
+	let warmupTimer: ReturnType<typeof setTimeout> | null = setTimeout(() => {
+		warmupTimer = null;
+		if (stopped) return;
+		try {
+			const scopes = getAgentScopes();
+			logger.info("dreaming-worker", "Agent scope snapshot primed", { scopes: scopes.length });
+		} catch (e) {
+			logger.warn("dreaming-worker", "Agent scope snapshot warm-up failed; first check will retry", {
+				error: e instanceof Error ? e.message : String(e),
+			});
+		}
+	}, 15_000);
+
 	logger.info("dreaming-worker", "Dreaming worker started", {
 		threshold: cfg.tokenThreshold,
 	});
@@ -318,6 +342,10 @@ export function startDreamingWorker(
 			if (timer) {
 				clearTimeout(timer);
 				timer = null;
+			}
+			if (warmupTimer) {
+				clearTimeout(warmupTimer);
+				warmupTimer = null;
 			}
 		},
 
