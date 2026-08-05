@@ -216,15 +216,15 @@
 		background: linear-gradient(180deg, oklch(1 0 0 / 0.9), oklch(0 0 0 / 0.04) 40%, oklch(0 0 0 / 0.12));
 	}
 
-	/* Settings "stage-drop": backdrop blur + darker dim on the dialog overlay, and
-	   the shell scales down 0.96 while open (driven by body.settings-open). */
+	/* Settings "stage-drop": a restrained backdrop dim/blur and a 1% shell
+	   scale-down while open (driven by body.settings-open). */
 	[data-slot="dialog-overlay"] {
-		background: oklch(0 0 0 / 0.55) !important;
-		backdrop-filter: blur(10px) !important;
-		-webkit-backdrop-filter: blur(10px) !important;
+		background: oklch(0 0 0 / 0.42) !important;
+		backdrop-filter: blur(4px) !important;
+		-webkit-backdrop-filter: blur(4px) !important;
 	}
 	body.settings-open .shell-stage {
-		transform: scale(0.96);
+		transform: scale(0.99);
 		transform-origin: 50% 42%;
 		transition: transform 0.2s ease;
 	}
