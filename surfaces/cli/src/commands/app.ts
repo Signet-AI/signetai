@@ -165,12 +165,17 @@ export function registerAppCommands(program: Command, deps: AppDeps): void {
 		.action(deps.launchDashboard);
 	withPath(dashboard);
 
-	const status = program.command("status").description("Show agent and daemon status").action(deps.showStatus);
+	const status = program
+		.command("status")
+		.allowExcessArguments(false)
+		.description("Show agent and daemon status")
+		.action(deps.showStatus);
 	withJson(withPath(status));
 
 	const doctor = program
 		.command("doctor")
 		.argument("[target]", "Optional doctor target (hermes)")
+		.allowExcessArguments(false)
 		.description("Run local health checks and suggest fixes")
 		.action((target: string | undefined, options: StatusOptions) => deps.showDoctor({ ...options, target }));
 	withJson(withPath(doctor));

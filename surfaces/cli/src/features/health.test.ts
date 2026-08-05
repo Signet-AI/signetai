@@ -932,8 +932,7 @@ describe("doctor unknown target", () => {
 			expect(lines.join("\n")).toContain("Supported targets: hermes");
 		} finally {
 			console.log = oldLog;
-			if (previousExitCode === undefined) Reflect.deleteProperty(process, "exitCode");
-			else process.exitCode = previousExitCode;
+			process.exitCode = previousExitCode ?? 0;
 		}
 	});
 });

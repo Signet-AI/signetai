@@ -46,6 +46,38 @@ describe("registerAppCommands", () => {
 
 		expect(calls).toEqual([{ json: true, target: "hermes" }]);
 	});
+
+	test("rejects excess positional arguments for status and doctor", async () => {
+		const cases = [
+			["status", "unexpected"],
+			["doctor", "hermes", "unexpected"],
+		] as const;
+
+		for (const args of cases) {
+			const program = new Command();
+			program.exitOverride();
+			registerAppCommands(program, {
+				collectListOption: (value, previous) => [...previous, value],
+				configureAgent: async () => {},
+				launchDashboard: async () => {},
+				migrateSchema: async () => {},
+				setupWizard: async () => {},
+				showDoctor: async () => {},
+				showStatus: async () => {},
+				syncTemplates: async () => {},
+			});
+
+			let error: unknown;
+			try {
+				await program.parseAsync(["node", "test", ...args]);
+			} catch (caught) {
+				error = caught;
+			}
+
+			expect(error).toBeInstanceOf(CommanderError);
+			expect((error as CommanderError).exitCode).toBe(1);
+		}
+	});
 });
 
 describe("registerDefaultAction", () => {
