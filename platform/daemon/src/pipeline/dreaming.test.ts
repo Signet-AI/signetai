@@ -208,6 +208,10 @@ describe("Dreaming", () => {
 		expect(prompt).toContain("<semantic_attention>");
 		expect(prompt).toContain("entity:aster");
 		expect(prompt).toContain('provenance: "attention:');
+		expect(prompt).toContain("Complete this hygiene work FIRST");
+		expect(prompt.indexOf("<semantic_attention>")).toBeLessThan(
+			prompt.indexOf("<episodic_evidence>") === -1 ? prompt.length : prompt.indexOf("<episodic_evidence>"),
+		);
 		expect(getDreamingAttention(accessor, AGENT)).toEqual([]);
 	});
 
