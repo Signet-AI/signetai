@@ -158,7 +158,12 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 			"Search entities",
 			"Search the knowledge graph for one agent scope by entity name fragment and optional type. Pass the agentId of the scope you are addressing.",
 			true,
-			z.object({ agentId: z.string().min(1), query: z.string().optional(), type: z.string().optional(), ...pagination }),
+			z.object({
+				agentId: z.string().min(1),
+				query: z.string().optional(),
+				type: z.string().optional(),
+				...pagination,
+			}),
 			async ({ agentId: scopeId, query, type, limit, offset }) => ({
 				ok: true,
 				items: listKnowledgeEntities(accessor, {
@@ -244,7 +249,11 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 			"Walk dependency links",
 			"Walk incoming and/or outgoing dependency links for an entity in one agent scope.",
 			true,
-			z.object({ agentId: z.string().min(1), entityId: z.string().min(1), direction: z.enum(["incoming", "outgoing", "both"]).optional() }),
+			z.object({
+				agentId: z.string().min(1),
+				entityId: z.string().min(1),
+				direction: z.enum(["incoming", "outgoing", "both"]).optional(),
+			}),
 			async ({ agentId: scopeId, entityId, direction }) => ({
 				ok: true,
 				items: getEntityDependenciesDetailed(accessor, { entityId, agentId: scopeId, direction: direction ?? "both" }),

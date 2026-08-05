@@ -684,7 +684,9 @@ export async function runDreamingAgentPass(
 
 		// SQLite-format watermark so string comparisons against stored source
 		// dates stay consistent (ISO timestamps would mis-order).
-		const cutoff = accessor.withReadDb((db) => (db.prepare("SELECT datetime('now') AS now").get() as { now: string }).now);
+		const cutoff = accessor.withReadDb(
+			(db) => (db.prepare("SELECT datetime('now') AS now").get() as { now: string }).now,
+		);
 
 		// One Dreaming pass covers the whole install: it only runs when some
 		// scope has pending attention or an episodic backlog. Scheduled checks
