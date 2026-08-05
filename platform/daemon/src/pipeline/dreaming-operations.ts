@@ -1,9 +1,9 @@
 import { ONTOLOGY_PROPOSAL_OPERATIONS, SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES } from "@signet/core";
 import type { DbAccessor } from "../db-accessor";
 import { readEpisodicSource } from "../episodic-sources";
-import { applyOntologyOperationBatchInTx, type OntologyOperationInput } from "../ontology-proposals";
-import { getDreamingAttentionById } from "./dreaming-attention";
-import { createDreamingAgentEvidence, type DreamingAgentEvidence } from "./dreaming-evidence";
+import { type OntologyOperationInput, applyOntologyOperationBatchInTx } from "../ontology-proposals";
+import { type DreamingAttention, getDreamingAttentionById } from "./dreaming-attention";
+import { type DreamingAgentEvidence, createDreamingAgentEvidence } from "./dreaming-evidence";
 
 export interface DreamingOperationRequest {
 	readonly operation: string;
@@ -84,6 +84,32 @@ function noSelectors(payload: Readonly<Record<string, unknown>>, keys: readonly 
 	return keys.every((key) => payload[key] === undefined || payload[key] === null);
 }
 
+/** Accepted selector values that denote the flagged entity itself. */
+function acceptedTargetValues(attention: DreamingAttention, ...keys: readonly string[]): string[] {
+	return keys
+		.map((key) => attention.details[key])
+		.filter((value): value is string => typeof value === "string" && value.length > 0);
+}
+
+/**
+ * True when every present selector field names the flagged target itself.
+ * Downstream selector resolution prefers `selector`/`entity`/`name` over
+ * `entity_id`, so a stray selector naming a different row would hit the wrong
+ * target despite a matching id. Accept only the target's id or the name the
+ * attention record captured; anything else is rejected.
+ */
+function selectorsNameFlaggedTarget(
+	payload: Readonly<Record<string, unknown>>,
+	fields: readonly { readonly key: string; readonly accepted: readonly string[] }[],
+): boolean {
+	for (const { key, accepted } of fields) {
+		const value = payload[key];
+		if (typeof value !== "string" || value.length === 0) continue;
+		if (!accepted.includes(value)) return false;
+	}
+	return true;
+}
+
 function forceRequested(value: unknown): boolean {
 	return value === true || value === 1 || value === "1" || value === "true";
 }
@@ -125,19 +151,34 @@ function attentionProvenance(
 	if (forceRequested(payload.force)) return null;
 	let expectedTarget = false;
 	if (operation.operation === "archive_entity") {
+		// Redundant selectors are tolerated only when they name the flagged
+		// entity itself (the agent echoes the name from attention details);
+		// a selector naming a different row still cannot ride along.
+		const entityValues = acceptedTargetValues(attention, "entityId", "name");
 		expectedTarget =
 			typeof payload.entity_id === "string" &&
 			payload.entity_id === attention.details.entityId &&
-			noSelectors(payload, ["selector", "entity", "name"]) &&
-			attention.subjectRef === `entity:${payload.entity_id}`;
+			attention.subjectRef === `entity:${payload.entity_id}` &&
+			selectorsNameFlaggedTarget(payload, [
+				{ key: "selector", accepted: entityValues },
+				{ key: "entity", accepted: entityValues },
+				{ key: "name", accepted: entityValues },
+			]);
 	} else if (operation.operation === "archive_aspect") {
+		const entityValues = acceptedTargetValues(attention, "entityId", "name");
+		const aspectValues = acceptedTargetValues(attention, "aspectId", "aspectName");
 		expectedTarget =
 			typeof payload.entity_id === "string" &&
 			typeof payload.aspect_id === "string" &&
 			payload.entity_id === attention.details.entityId &&
 			payload.aspect_id === attention.details.aspectId &&
-			noSelectors(payload, ["entity", "selector", "aspect", "name"]) &&
-			attention.subjectRef === `aspect:${payload.aspect_id}`;
+			attention.subjectRef === `aspect:${payload.aspect_id}` &&
+			selectorsNameFlaggedTarget(payload, [
+				{ key: "selector", accepted: entityValues },
+				{ key: "entity", accepted: entityValues },
+				{ key: "name", accepted: entityValues },
+				{ key: "aspect", accepted: aspectValues },
+			]);
 	} else if (operation.operation === "archive_claim_value") {
 		expectedTarget =
 			typeof payload.attribute_id === "string" &&

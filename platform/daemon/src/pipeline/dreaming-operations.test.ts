@@ -161,6 +161,47 @@ describe("dreaming operations", () => {
 		).toContain(`attention:${attentionId}`);
 	});
 
+	it("accepts an attention-cited archive that echoes the flagged name alongside entity_id", () => {
+		// Regression: the Dreaming agent submitted archive_entity payloads with
+		// both `entity: <name>` (echoed from attention details) and the required
+		// `entity_id`. The id match pins the flagged target, so the redundant
+		// selector must not reject the op.
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO entities
+				 (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
+				 VALUES ('legacy-husk', 'Legacy Husk', 'legacy husk', 'project', 'agent-a', 5, datetime('now'), datetime('now'))`,
+			).run();
+			enqueueDreamingAttentionInTx(db, {
+				agentId: "agent-a",
+				kind: "hygiene",
+				subjectRef: "entity:legacy-husk",
+				details: { entityId: "legacy-husk", name: "Legacy Husk", reason: "zero_active_attributes" },
+				priority: 90,
+			});
+		});
+		const attentionId = getDbAccessor().withReadDb(
+			(db) => db.prepare("SELECT id FROM dreaming_attention WHERE agent_id = ?").get("agent-a") as { id: string },
+		).id;
+		const result = applyDreamingOperations({
+			accessor: getDbAccessor(),
+			agentId: "agent-a",
+			actor: "dreaming",
+			operations: [
+				{
+					operation: "archive_entity",
+					payload: { entity: "Legacy Husk", entity_id: "legacy-husk", force: false },
+					provenance: `attention:${attentionId}`,
+					confidence: 1,
+				},
+			],
+		});
+		expect(result.ok).toBe(true);
+		expect(
+			getDbAccessor().withReadDb((db) => db.prepare("SELECT status FROM entities WHERE id = ?").get("legacy-husk")),
+		).toEqual({ status: "archived" });
+	});
+
 	it("does not let attention provenance create claims or archive unrelated entities", () => {
 		getDbAccessor().withWriteTx((db) => {
 			for (const id of ["flagged", "unrelated"]) {
