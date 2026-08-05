@@ -58,28 +58,42 @@ interface Deps {
 	readonly fetch?: FetchLike;
 	readonly isInteractive?: () => boolean;
 	readonly syncTemplates?: (basePath: string) => Promise<void>;
+	readonly openUrl?: (url: string) => Promise<unknown>;
 }
 
 export async function launchDashboard(options: PathOptions, deps: Deps): Promise<void> {
 	console.log(deps.signetLogo());
 	const basePath = readPath(options, deps);
-	const running = await deps.isDaemonRunning();
+	const before = await deps.getDaemonStatus();
 
-	if (!running) {
+	if (!before.running) {
 		console.log(chalk.yellow("  Daemon is not running. Starting..."));
 		const started = await deps.startDaemon(basePath);
-		if (!started) {
+		const after = await deps.getDaemonStatus();
+
+		if (!started || !after.running) {
 			console.error(chalk.red("  Failed to start daemon"));
 			process.exit(1);
 		}
-		console.log(chalk.green("  Daemon started"));
+
+		// The health probe can transiently false-negative (e.g. an event-loop
+		// block) while the daemon process itself was alive the whole time.
+		// startDaemon short-circuits to "already running" in that case, so the
+		// same PID before and after means we did not start anything — do not
+		// claim we did (issue #1045).
+		if (before.pid !== null && before.pid === after.pid) {
+			console.log(chalk.dim("  Daemon is running"));
+		} else {
+			console.log(chalk.green("  Daemon started"));
+		}
 	}
 
 	console.log();
 	console.log(`  ${chalk.cyan(`http://localhost:${deps.defaultPort}`)}`);
 	console.log();
 
-	await open(`http://localhost:${deps.defaultPort}`);
+	const openUrl = deps.openUrl ?? open;
+	await openUrl(`http://localhost:${deps.defaultPort}`);
 }
 
 export async function migrateSchema(options: PathOptions, deps: Deps): Promise<void> {
