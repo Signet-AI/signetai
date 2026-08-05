@@ -782,6 +782,25 @@ export async function runDreamingAgentPass(
 const MAX_FAILURE_BACKOFF_MULTIPLIER = 6;
 const FAILURE_BACKOFF_BASE_MS = 5 * 60 * 1000;
 
+// A scope that fails this many consecutive passes is halted: automatic
+// scheduling stops for the cooldown below instead of retrying forever on
+// the backoff ceiling (~5.3h per attempt). Explicit triggers bypass the
+// gate, and any successful pass resets the counter, so a halt self-heals
+// on the next forced or post-cooldown pass (#1059).
+export const DREAMING_FAILURE_HALT_THRESHOLD = 5;
+export const DREAMING_HALT_COOLDOWN_MS = 24 * 60 * 60 * 1000;
+
+export function isDreamingScopeHalted(state: DreamingState, nowMs = Date.now()): boolean {
+	if (state.consecutiveFailures < DREAMING_FAILURE_HALT_THRESHOLD) return false;
+	const failedAt = state.lastFailureAt === null ? Number.NaN : Date.parse(state.lastFailureAt);
+	return Number.isFinite(failedAt) && nowMs - failedAt < DREAMING_HALT_COOLDOWN_MS;
+}
+
+/** Cheap sweep pre-check: one indexed dreaming_state row, no attention scan. */
+export function isDreamingHaltActive(accessor: DbAccessor, agentId: string, nowMs = Date.now()): boolean {
+	return isDreamingScopeHalted(getDreamingState(accessor, agentId), nowMs);
+}
+
 /**
  * The worker's backlog is the episodic evidence it has not yet reasoned over,
  * not a separately maintained token counter. This keeps the trigger aligned
@@ -821,6 +840,10 @@ export function shouldTriggerDreaming(
 ): boolean {
 	const state = getDreamingState(accessor, agentId);
 	const hasAttention = accessor.withReadDb((db) => getDreamingAttentionInDb(db, agentId, 1).length > 0);
+
+	// Hard halt after repeated consecutive failures: no automatic scheduling
+	// for the cooldown window. Explicit operator triggers bypass this gate.
+	if (isDreamingScopeHalted(state, nowMs)) return false;
 
 	// Back off by wall clock, not by evidence volume. A transient provider outage
 	// must not require exponentially more incoming evidence before recovery.

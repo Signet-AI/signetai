@@ -6,8 +6,13 @@ import { join } from "node:path";
 import type { DreamingConfig } from "@signet/core";
 import { runMigrations } from "../../../core/src/migrations";
 import type { DbAccessor } from "../db-accessor";
-import { DREAMING_AGENT_PROMPT } from "./dreaming";
-import { getDreamingWorkerAgentIds, shouldDeferDreamingSweep, startDreamingWorker } from "./dreaming-worker";
+import { DREAMING_AGENT_PROMPT, enqueueDreamingHygieneAttention } from "./dreaming";
+import {
+	createAgentScopeSnapshot,
+	getDreamingWorkerAgentIds,
+	shouldDeferDreamingSweep,
+	startDreamingWorker,
+} from "./dreaming-worker";
 
 function defaultCfg(overrides?: Partial<DreamingConfig>): DreamingConfig {
 	return {
@@ -97,6 +102,28 @@ describe("dreaming worker agent scope", () => {
 		]);
 	});
 
+	it("serves the agent-scope union from a snapshot refreshed on a cadence", () => {
+		let resolves = 0;
+		let now = 0;
+		const scopes = createAgentScopeSnapshot(
+			1_000,
+			() => {
+				resolves += 1;
+				return ["default", "new-scope"];
+			},
+			() => now,
+		);
+		expect(scopes()).toEqual(["default", "new-scope"]);
+		// Within the refresh window the union query does not run again.
+		now = 999;
+		expect(scopes()).toEqual(["default", "new-scope"]);
+		expect(resolves).toBe(1);
+		// Past the window the next read re-resolves the union.
+		now = 1_000;
+		expect(scopes()).toEqual(["default", "new-scope"]);
+		expect(resolves).toBe(2);
+	});
+
 	it("defers a sweep while the shared queue health watermark is exceeded", () => {
 		const now = new Date().toISOString();
 		for (let index = 0; index <= 50; index += 1) {
@@ -130,21 +157,20 @@ describe("dreaming worker agent scope", () => {
 		}
 	});
 
-	it("seeds deterministic hygiene attention for legacy graph rows at worker startup", () => {
+	it("seeds deterministic hygiene attention for legacy graph rows", () => {
+		// Hygiene attention is enqueued during regular check() ticks, not at
+		// worker startup (startup scans block the event loop before the HTTP
+		// server binds). Exercise the enqueue contract directly.
 		db.prepare(
 			`INSERT INTO entities
 			 (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
 			 VALUES ('legacy-husk', 'Legacy Husk', 'legacy husk', 'project', 'default', 5, datetime('now'), datetime('now'))`,
 		).run();
-		const worker = startDreamingWorker(accessor, defaultCfg(), agentsDir, "default");
-		try {
-			expect(db.prepare("SELECT kind, subject_ref FROM dreaming_attention WHERE agent_id = ?").get("default")).toEqual({
-				kind: "hygiene",
-				subject_ref: "entity:legacy-husk",
-			});
-		} finally {
-			worker.stop();
-		}
+		enqueueDreamingHygieneAttention(accessor, "default");
+		expect(db.prepare("SELECT kind, subject_ref FROM dreaming_attention WHERE agent_id = ?").get("default")).toEqual({
+			kind: "hygiene",
+			subject_ref: "entity:legacy-husk",
+		});
 	});
 
 	it("runs one universe pass over every agent scope and keeps semantic rows agent-isolated (#946)", async () => {

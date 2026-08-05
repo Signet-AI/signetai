@@ -5,12 +5,17 @@ import { runMigrations } from "../../../core/src/migrations";
 import type { DbAccessor } from "../db-accessor";
 import {
 	DREAMING_AGENT_PROMPT,
+	DREAMING_FAILURE_HALT_THRESHOLD,
+	DREAMING_HALT_COOLDOWN_MS,
+	type DreamingState,
 	_testParseEpisodicCursor,
 	enqueueDreamingHygieneAttention,
 	getDreamingEpisodicTokenBacklog,
 	getDreamingPasses,
 	getDreamingState,
 	getDreamingToolCalls,
+	isDreamingHaltActive,
+	isDreamingScopeHalted,
 	recordDreamingFailure,
 	requestDreamingEvidenceRequeue,
 	runDreamingAgentPass,
@@ -128,6 +133,64 @@ describe("Dreaming", () => {
 		expect(shouldTriggerDreaming(accessor, cfg, AGENT, failedAt + 10 * 60 * 1000 - 1)).toBe(false);
 		seedSummary(db, "later", "episodic source ".repeat(3_000), 3_000);
 		expect(shouldTriggerDreaming(accessor, cfg, AGENT, failedAt + 10 * 60 * 1000)).toBe(true);
+	});
+
+	it("halts automatic scheduling after repeated consecutive failures", () => {
+		seedSummary(db, "first", "episodic source", 10);
+		for (let i = 0; i < DREAMING_FAILURE_HALT_THRESHOLD; i += 1) {
+			recordDreamingFailure(accessor, AGENT);
+		}
+		const failedAt = Date.parse(getDreamingState(accessor, AGENT).lastFailureAt ?? "");
+		const cfg = defaultCfg({ tokenThreshold: 1, backfillOnFirstRun: false });
+		// Halted: a large backlog and fresh attention must not trigger a pass
+		// inside the cooldown window.
+		seedSummary(db, "later", "episodic source ".repeat(3_000), 3_000);
+		expect(shouldTriggerDreaming(accessor, cfg, AGENT, failedAt + 60 * 1000)).toBe(false);
+		// Cooldown elapsed: scheduling resumes (the next failure re-halts).
+		expect(shouldTriggerDreaming(accessor, cfg, AGENT, failedAt + DREAMING_HALT_COOLDOWN_MS + 1_000)).toBe(true);
+	});
+
+	it("isDreamingScopeHalted gates on the failure threshold and cooldown", () => {
+		const base = (overrides: Partial<DreamingState>): DreamingState => ({
+			consecutiveFailures: 0,
+			lastFailureAt: null,
+			lastPassAt: null,
+			evidenceCursor: null,
+			lastPassId: null,
+			lastPassMode: null,
+			...overrides,
+		});
+		const fresh = { lastFailureAt: "2026-08-05 12:00:00" };
+		expect(
+			isDreamingScopeHalted(
+				base({ ...fresh, consecutiveFailures: DREAMING_FAILURE_HALT_THRESHOLD - 1 }),
+				Date.parse("2026-08-05 12:30:00"),
+			),
+		).toBe(false);
+		expect(
+			isDreamingScopeHalted(
+				base({ ...fresh, consecutiveFailures: DREAMING_FAILURE_HALT_THRESHOLD }),
+				Date.parse("2026-08-05 12:30:00"),
+			),
+		).toBe(true);
+		expect(
+			isDreamingScopeHalted(
+				base({ ...fresh, consecutiveFailures: DREAMING_FAILURE_HALT_THRESHOLD }),
+				Date.parse("2026-08-05 12:00:00") + DREAMING_HALT_COOLDOWN_MS + 1_000,
+			),
+		).toBe(false);
+		expect(
+			isDreamingScopeHalted(base({ lastFailureAt: null, consecutiveFailures: 99 }), Date.parse("2026-08-05 12:30:00")),
+		).toBe(false);
+	});
+
+	it("isDreamingHaltActive reads the halt state through the accessor", () => {
+		for (let i = 0; i < DREAMING_FAILURE_HALT_THRESHOLD - 1; i += 1) {
+			recordDreamingFailure(accessor, AGENT);
+		}
+		expect(isDreamingHaltActive(accessor, AGENT)).toBe(false);
+		recordDreamingFailure(accessor, AGENT);
+		expect(isDreamingHaltActive(accessor, AGENT)).toBe(true);
 	});
 
 	it("runs a low-volume episodic backlog once its maximum wait elapses", () => {
