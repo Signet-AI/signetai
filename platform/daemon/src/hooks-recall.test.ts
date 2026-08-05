@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Hono } from "hono";
+import { __setPromptSubmitAdmissionForTests, createPromptSubmitAdmission } from "./routes/hooks-routes";
 
 let app: Hono;
 let dir = "";
@@ -660,5 +661,35 @@ memory:
 		expect(body.results.map((row: { id: string }) => row.id)).not.toContain("mem-type-fact");
 		expect(body.memories).toEqual(body.results);
 		expect(body.count).toBe(body.results.length);
+	});
+});
+
+describe("/api/hooks/user-prompt-submit admission cap (#1059)", () => {
+	it("acquires up to the cap, rejects past it, and re-acquires after release", () => {
+		const admission = createPromptSubmitAdmission(2);
+		expect(admission.acquire()).toBe(true);
+		expect(admission.acquire()).toBe(true);
+		expect(admission.acquire()).toBe(false);
+		expect(admission.inFlight()).toBe(2);
+		admission.release();
+		expect(admission.inFlight()).toBe(1);
+		expect(admission.acquire()).toBe(true);
+		expect(admission.inFlight()).toBe(2);
+	});
+
+	it("rejects with 503 while the cap is saturated and recovers after release", async () => {
+		__setPromptSubmitAdmissionForTests(createPromptSubmitAdmission(0));
+		try {
+			const resp = await app.request("/api/hooks/user-prompt-submit", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ harness: "codex", userMessage: "hello" }),
+			});
+			expect(resp.status).toBe(503);
+			const body = (await resp.json()) as { error?: string };
+			expect(body.error).toContain("concurrent prompt submissions");
+		} finally {
+			__setPromptSubmitAdmissionForTests(null);
+		}
 	});
 });

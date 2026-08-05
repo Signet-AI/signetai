@@ -88,6 +88,12 @@ recall tools. Raw transcript search is not injected on prompt-submit; use the
 dedicated `session_search` MCP/API surface when a caller needs transcript
 evidence.
 
+Under sustained concurrency (many harnesses submitting at once), the daemon
+caps in-flight prompt-submit work: once more than 8 submissions are processing
+concurrently, the hook returns `503` with a `Retry shortly` error instead of
+queueing indefinitely. Callers should treat `503` as backpressure and retry
+with backoff.
+
 ### POST /api/hooks/session-end
 
 Called at session end. Captures immutable episodic transcript evidence for

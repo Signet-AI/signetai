@@ -39,7 +39,6 @@ import {
 	resetSessionStartDedupe,
 	writeMemoryMd,
 } from "../hooks.js";
-import { getTranscriptCaptureJobStatus } from "../transcript-capture-worker";
 import { getInferenceRouterOrNull } from "../inference-router";
 import { logger } from "../logger";
 import { loadMemoryConfig } from "../memory-config";
@@ -65,6 +64,7 @@ import { recordSkillInvocation } from "../skill-invocations";
 import { recordSkillsFromTranscript } from "../skill-transcript-scan";
 import { validateTemporalTimeOptions } from "../temporal-recall";
 import { upsertThreadHead } from "../thread-heads";
+import { getTranscriptCaptureJobStatus } from "../transcript-capture-worker";
 import { autoConnectGraphiq } from "./graphiq-routes.js";
 import {
 	AGENTS_DIR,
@@ -313,6 +313,43 @@ function registerSessionStart(app: Hono): void {
 	});
 }
 
+// Bound concurrent prompt-submit work. Subagent-heavy sessions fire many
+// user-prompt-submit hooks at once; without a cap the requests stack on the
+// single event loop, /health starves, and the watchdog kills the daemon
+// (#1059). Past the cap the hook rejects with 503 so callers retry instead
+// of queueing indefinitely.
+export const PROMPT_SUBMIT_MAX_IN_FLIGHT = 8;
+
+export interface PromptSubmitAdmission {
+	acquire(): boolean;
+	release(): void;
+	inFlight(): number;
+}
+
+export function createPromptSubmitAdmission(maxInFlight: number): PromptSubmitAdmission {
+	let inFlight = 0;
+	return {
+		acquire(): boolean {
+			if (inFlight >= maxInFlight) return false;
+			inFlight += 1;
+			return true;
+		},
+		release(): void {
+			inFlight -= 1;
+		},
+		inFlight(): number {
+			return inFlight;
+		},
+	};
+}
+
+let promptSubmitAdmission: PromptSubmitAdmission = createPromptSubmitAdmission(PROMPT_SUBMIT_MAX_IN_FLIGHT);
+
+/** Test seam; mirrors native-embedding's __*ForTests pattern. */
+export function __setPromptSubmitAdmissionForTests(admission: PromptSubmitAdmission | null): void {
+	promptSubmitAdmission = admission ?? createPromptSubmitAdmission(PROMPT_SUBMIT_MAX_IN_FLIGHT);
+}
+
 // User prompt submit hook - inject relevant memories per prompt
 function registerUserPromptSubmit(app: Hono): void {
 	app.post("/api/hooks/user-prompt-submit", async (c) => {
@@ -372,7 +409,20 @@ function registerUserPromptSubmit(app: Hono): void {
 				return c.json({ inject: "", memoryCount: 0, bypassed: true });
 			}
 
-			const result = await handleUserPromptSubmit(body);
+			if (!promptSubmitAdmission.acquire()) {
+				return c.json(
+					{
+						error: `Too many concurrent prompt submissions (max ${PROMPT_SUBMIT_MAX_IN_FLIGHT}); retry shortly`,
+					},
+					503,
+				);
+			}
+			let result: Awaited<ReturnType<typeof handleUserPromptSubmit>>;
+			try {
+				result = await handleUserPromptSubmit(body);
+			} finally {
+				promptSubmitAdmission.release();
+			}
 			return c.json({ ...result, sessionKnown: known });
 		} catch (e) {
 			logger.error("hooks", "User prompt submit hook failed", e as Error);
