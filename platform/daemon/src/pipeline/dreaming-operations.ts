@@ -1,6 +1,6 @@
 import { SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES } from "@signet/core";
 import type { DbAccessor, ReadDb } from "../db-accessor";
-import { readEpisodicSource } from "../episodic-sources";
+import { findEpisodicSourceAgentIds, readEpisodicSource } from "../episodic-sources";
 import { type OntologyOperationInput, applyOntologyOperationBatchInTx } from "../ontology-proposals";
 import { type DreamingAttention, enqueueDreamingAttentionInTx, getDreamingAttentionById } from "./dreaming-attention";
 import { type DreamingAgentEvidence, createDreamingAgentEvidence } from "./dreaming-evidence";
@@ -71,23 +71,31 @@ function citationRecord(value: unknown): {
  * validate against the same immutable store the search tools read, so an
  * agent can cite any in-scope source it found and quoted verbatim.
  */
-function citeEvidence(accessor: DbAccessor, agentId: string, citation: unknown): DreamingAgentEvidence | null {
+interface CitationResolution {
+	readonly evidence: DreamingAgentEvidence | null;
+	readonly sourceAgentIds: readonly string[];
+}
+
+function citeEvidence(accessor: DbAccessor, agentId: string, citation: unknown): CitationResolution {
 	const requested = citationRecord(citation);
-	if (requested === null) return null;
-	const evidence = accessor.withReadDb((db) => {
+	if (requested === null) return { evidence: null, sourceAgentIds: [] };
+	const result = accessor.withReadDb((db) => {
 		const source = readEpisodicSource(db, { agentId, from: requested.sourceRef });
-		return source === null ? [] : createDreamingAgentEvidence([source]);
+		if (source !== null) return { evidence: createDreamingAgentEvidence([source]), sourceAgentIds: [] };
+		return { evidence: [], sourceAgentIds: findEpisodicSourceAgentIds(db, requested.sourceRef) };
 	});
-	return (
-		evidence.find(
-			(record) =>
-				record.sourceRef === requested.sourceRef &&
-				record.sourceKind === requested.sourceKind &&
-				record.sourceId === requested.sourceId &&
-				(requested.sourcePath === null || record.sourcePath === requested.sourcePath) &&
-				record.content.includes(requested.quote),
-		) ?? null
-	);
+	return {
+		evidence:
+			result.evidence.find(
+				(record) =>
+					record.sourceRef === requested.sourceRef &&
+					record.sourceKind === requested.sourceKind &&
+					record.sourceId === requested.sourceId &&
+					(requested.sourcePath === null || record.sourcePath === requested.sourcePath) &&
+					record.content.includes(requested.quote),
+			) ?? null,
+		sourceAgentIds: result.sourceAgentIds,
+	};
 }
 
 type DreamingOperationProvenance = {
@@ -243,23 +251,35 @@ function provenanceForEvidence(
 	accessor: DbAccessor,
 	agentId: string,
 	operation: DreamingOperationRequest,
-): DreamingOperationProvenance | null {
+): { readonly provenance: DreamingOperationProvenance | null; readonly scopeMismatch: string | null } {
 	const citations = operation.evidence ?? [];
-	if (citations.length === 0) return null;
+	if (citations.length === 0) return { provenance: null, scopeMismatch: null };
 	const matched: DreamingAgentEvidence[] = [];
 	for (const citation of citations) {
-		const record = citeEvidence(accessor, agentId, citation);
-		if (record === null) return null;
-		matched.push(record);
+		const resolution = citeEvidence(accessor, agentId, citation);
+		if (resolution.evidence === null) {
+			if (resolution.sourceAgentIds.length > 0) {
+				const scopes = resolution.sourceAgentIds.map((sourceAgentId) => `'${sourceAgentId}'`).join(", ");
+				return {
+					provenance: null,
+					scopeMismatch: `Cited evidence belongs to scope${resolution.sourceAgentIds.length === 1 ? "" : "s"} ${scopes} but this operation targets '${agentId}'. Search evidence in the target scope before applying the operation.`,
+				};
+			}
+			return { provenance: null, scopeMismatch: null };
+		}
+		matched.push(resolution.evidence);
 	}
 	const provenance = matched.find((source) => source.sourceEntryId !== null) ?? matched[0];
-	if (!provenance) return null;
+	if (!provenance) return { provenance: null, scopeMismatch: null };
 	return {
-		evidence: citations,
-		sourceKind: provenance.sourceKind,
-		sourceId: provenance.sourceEntryId ?? provenance.sourceId,
-		sourcePath: provenance.sourcePath,
-		sourceRoot: "dreaming",
+		provenance: {
+			evidence: citations,
+			sourceKind: provenance.sourceKind,
+			sourceId: provenance.sourceEntryId ?? provenance.sourceId,
+			sourcePath: provenance.sourcePath,
+			sourceRoot: "dreaming",
+		},
+		scopeMismatch: null,
 	};
 }
 
@@ -505,12 +525,14 @@ export function applyDreamingOperations(params: {
 				};
 			}
 		} else {
-			provenance = provenanceForEvidence(params.accessor, params.agentId, operation);
+			const evidenceResult = provenanceForEvidence(params.accessor, params.agentId, operation);
+			provenance = evidenceResult.provenance;
 			if (provenance === null) {
 				return {
 					ok: false,
 					items: [],
-					error: "Every operation must cite an exact quote from scoped episodic evidence",
+					error:
+						evidenceResult.scopeMismatch ?? "Every operation must cite an exact quote from scoped episodic evidence",
 				};
 			}
 		}

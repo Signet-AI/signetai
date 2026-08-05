@@ -579,6 +579,69 @@ export function readEpisodicSource(db: ReadDb, options: ReadEpisodicSourceOption
 	);
 }
 
+/** Find scopes that own a resolvable source without exposing their contents. */
+export function findEpisodicSourceAgentIds(db: ReadDb, from: string): readonly string[] {
+	const trimmed = from.trim();
+	const colon = trimmed.indexOf(":");
+	if (colon <= 0) return [];
+	const kind = trimmed.slice(0, colon);
+	const sourceId = trimmed.slice(colon + 1);
+	const ids = sourceIdCandidates(sourceId);
+	const placeholders = ids.map(() => "?").join(", ");
+	let rows: Array<{ agent_id: string | null }>;
+
+	if (kind === "memory") {
+		rows = db
+			.prepare(
+				`SELECT DISTINCT agent_id
+				 FROM memories
+				 WHERE memory_kind = 'episodic'
+				   AND COALESCE(is_deleted, 0) = 0
+				   AND visibility != 'archived'
+				   AND scope IS NULL
+				   AND id IN (${placeholders})`,
+			)
+			.all(...ids) as Array<{ agent_id: string | null }>;
+	} else if (kind === "artifact" || kind === "source") {
+		rows = db
+			.prepare(
+				`SELECT DISTINCT agent_id
+				 FROM memory_artifacts
+				 WHERE COALESCE(is_deleted, 0) = 0
+				   AND (
+				     source_path = ?
+				     OR source_node_id IN (${placeholders})
+				     OR session_id IN (${placeholders})
+				     OR session_key IN (${placeholders})
+				     OR session_token IN (${placeholders})
+				   )`,
+			)
+			.all(sourceId, ...ids, ...ids, ...ids, ...ids) as Array<{ agent_id: string | null }>;
+	} else if (kind === "transcript" || kind === "session") {
+		rows = db
+			.prepare(
+				`SELECT DISTINCT agent_id
+				 FROM session_transcripts
+				 WHERE session_key IN (${placeholders})`,
+			)
+			.all(...ids) as Array<{ agent_id: string | null }>;
+	} else if (kind === "summary") {
+		rows = db
+			.prepare(
+				`SELECT DISTINCT agent_id
+				 FROM session_summaries
+				 WHERE depth = 0
+				   AND COALESCE(source_type, 'summary') IN ('summary', 'compaction', 'checkpoint')
+				   AND (id IN (${placeholders}) OR source_ref IN (${placeholders}))`,
+			)
+			.all(...ids, ...ids) as Array<{ agent_id: string | null }>;
+	} else {
+		return [];
+	}
+
+	return [...new Set(rows.map((row) => row.agent_id).filter((agentId): agentId is string => Boolean(agentId)))].sort();
+}
+
 /**
  * Search immutable episodic evidence without falling back to semantic memory.
  *

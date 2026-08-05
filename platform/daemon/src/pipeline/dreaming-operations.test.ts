@@ -256,6 +256,33 @@ describe("dreaming operations", () => {
 		expect(result.error).toBe("Every operation must cite an exact quote from scoped episodic evidence");
 	});
 
+	it("rejects evidence cited from another agent scope with a corrective error", () => {
+		insertEpisodicMemory("mem-other", "The source belongs to the default scope.", "default");
+		const result = applyDreamingOperations({
+			accessor: getDbAccessor(),
+			agentId: "hermes-agent",
+			actor: "dreaming",
+			operations: [
+				{
+					operation: "create_entity",
+					payload: { name: "Wrong Scope", type: "project" },
+					evidence: [
+						{
+							source_ref: "memory:mem-other",
+							source_kind: "manual",
+							source_id: "mem-other",
+							quote: "The source belongs to the default scope.",
+						},
+					],
+				},
+			],
+		});
+		expect(result.ok).toBe(false);
+		expect(result.error).toBe(
+			"Cited evidence belongs to scope 'default' but this operation targets 'hermes-agent'. Search evidence in the target scope before applying the operation.",
+		);
+	});
+
 	it("rejects a content op without evidence", () => {
 		const result = applyDreamingOperations({
 			accessor: getDbAccessor(),

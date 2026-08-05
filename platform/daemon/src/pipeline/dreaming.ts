@@ -632,7 +632,7 @@ An install may have several agent scopes (listed in <agent_scopes> when there is
    - If you discover junk the queue did not flag, mint a flag op and archive in the same batch.
 3. Only when the hygiene queue is clear: find new evidence since the cutoff. First LIST recent sources with search_evidence — pass since and omit the query so it returns the newest sources; only after seeing what is there, narrow with a query if the list is large. For each new source:
    - search_entities for subjects it establishes.
-   - Extract/update claims with exact-quote evidence from that source.
+   - Extract/update claims with exact-quote evidence from that source. The evidence source and the graph target must use the same agent scope: search evidence with the agentId of the entity you will update, then pass that same agentId to apply_ontology_ops. A source found in another scope cannot support a write here.
    - create_entity only for durable subjects clearly established by the source.
    - Validate before writing (validate_proposal).
 4. Write the pass log (runbook_write): what changed, which sources were viewed, anything deferred with exact names.
@@ -739,7 +739,7 @@ An install may have several agent scopes (listed in <agent_scopes> when there is
 1. Read the pass log (runbook_read). Establish cutoff: sources viewed, changes applied, deferred items.
 2. Find new evidence since the cutoff. First LIST recent sources with search_evidence — pass since and omit the query so it returns the newest sources; only after seeing what is there, narrow with a query if the list is large. For each new source:
    - search_entities for subjects it establishes.
-   - Extract/update claims with exact-quote evidence from that source.
+   - Extract/update claims with exact-quote evidence from that source. The evidence source and the graph target must use the same agent scope: search evidence with the agentId of the entity you will update, then pass that same agentId to apply_ontology_ops. A source found in another scope cannot support a write here.
    - create_entity only for durable subjects clearly established by the source.
    - Validate before writing (validate_proposal).
 3. Write the pass log (runbook_write): what changed, which sources were viewed, anything deferred with exact names.
@@ -760,7 +760,7 @@ An install may have several agent scopes (listed in <agent_scopes> when there is
 
 ### Verification (before finishing)
 
-- Every write in the batch cites an exact quote from scoped episodic evidence.
+- Every write in the batch cites an exact quote from episodic evidence in the same agent scope as the graph target.
 - Pass log written with sources viewed + changes applied (this is the next pass's dedup).
 - No claims without exact quotes, no relationships the source does not state.
 - No writes attempted against pinned or source-root entities.
