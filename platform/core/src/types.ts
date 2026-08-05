@@ -433,8 +433,6 @@ export interface PipelineProceduralConfig {
 	readonly decayRate: number;
 	readonly minImportance: number;
 	readonly importanceOnInstall: number;
-	readonly enrichOnInstall: boolean;
-	readonly enrichMinDescription: number;
 	readonly reconcileIntervalMs: number;
 }
 

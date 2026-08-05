@@ -53,7 +53,7 @@ extraction or decision worker.
 Direct LLM fact/entity extraction from raw memory content was retired under
 the Dreaming cutover (#946). `platform/daemon/src/pipeline/extraction.ts`
 now holds only shared JSON recovery and parsing helpers consumed across the
-pipeline (reranker, skill enrichment, contradiction, dreaming) and by the
+pipeline (reranker, contradiction, dreaming) and by the
 ontology modules. Semantic graph authorship flows through the audited
 Dreaming apply path, not a per-memory extraction stage.
 

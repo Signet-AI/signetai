@@ -28,11 +28,9 @@ import type { Entry, ZipFile } from "yauzl";
 import * as yauzl from "yauzl";
 import type { AuthMode } from "../auth/index.js";
 import { type DbAccessor, getDbAccessor } from "../db-accessor.js";
-import { getLlmProvider } from "../llm.js";
 import { logger } from "../logger.js";
 import { type EmbeddingConfig, type PipelineV2Config, loadMemoryConfig } from "../memory-config.js";
-import type { LlmProvider } from "../pipeline/provider.js";
-import { parseSkillFile, patchSkillFrontmatter } from "../pipeline/skill-frontmatter.js";
+import { parseSkillFile } from "../pipeline/skill-frontmatter.js";
 import { installSkillNode, uninstallSkillNode } from "../pipeline/skill-graph.js";
 
 function getAgentsDir(): string {
@@ -406,14 +404,6 @@ function getAccessorSafe(): DbAccessor | null {
 	}
 }
 
-function getProviderSafe(): LlmProvider | null {
-	try {
-		return getLlmProvider();
-	} catch {
-		return null;
-	}
-}
-
 type SkillInstallPlan =
 	| {
 			kind: "skills-cli";
@@ -763,7 +753,7 @@ async function installClawhubSkill(
 	}
 }
 
-// Per-skill lock to prevent concurrent enrichment writes to SKILL.md
+// Per-skill lock to serialize graph node creation for the same skill
 const skillLocks = new Map<string, Promise<void>>();
 
 function withSkillLock(skillName: string, fn: () => Promise<void>): Promise<void> {
@@ -816,69 +806,11 @@ async function onSkillInstalledInner(skillName: string): Promise<void> {
 			memoryCfg.pipelineV2,
 			memoryCfg.embedding,
 			fetchEmbeddingFn,
-			getProviderSafe(),
 		);
-
-		// Write enrichment back to SKILL.md if enriched
-		if (result.enriched) {
-			const freshContent = readFileSync(skillMdPath, "utf-8");
-			const freshParsed = parseSkillFile(freshContent);
-			if (freshParsed) {
-				// Get the enriched frontmatter from the installed node
-				const enrichedFm = accessor.withReadDb(
-					(db) =>
-						db.prepare("SELECT triggers, tags FROM skill_meta WHERE entity_id = ?").get(result.entityId) as
-							| { triggers: string | null; tags: string | null }
-							| undefined,
-				);
-
-				if (enrichedFm) {
-					// Build a properly typed patch from DB values
-					let patchDescription: string | undefined;
-					let patchTriggers: readonly string[] | undefined;
-					let patchTags: readonly string[] | undefined;
-
-					const entity = accessor.withReadDb(
-						(db) =>
-							db.prepare("SELECT description FROM entities WHERE id = ?").get(result.entityId) as
-								| { description: string | null }
-								| undefined,
-					);
-					if (entity?.description) patchDescription = entity.description;
-					if (enrichedFm.triggers) {
-						try {
-							const parsed: unknown = JSON.parse(enrichedFm.triggers);
-							if (Array.isArray(parsed)) patchTriggers = parsed.filter((v): v is string => typeof v === "string");
-						} catch {
-							/* skip */
-						}
-					}
-					if (enrichedFm.tags) {
-						try {
-							const parsed: unknown = JSON.parse(enrichedFm.tags);
-							if (Array.isArray(parsed)) patchTags = parsed.filter((v): v is string => typeof v === "string");
-						} catch {
-							/* skip */
-						}
-					}
-
-					const patched = patchSkillFrontmatter(freshContent, {
-						description: patchDescription,
-						triggers: patchTriggers,
-						tags: patchTags,
-					});
-					if (patched) {
-						writeFileSync(skillMdPath, patched, "utf-8");
-						logger.info("skills", "Wrote enrichment back to SKILL.md", { skill: skillName });
-					}
-				}
-			}
-		}
 
 		logger.info("skills", "Graph node created for skill", {
 			skill: skillName,
 			entityId: result.entityId,
-			enriched: result.enriched,
 			embeddingCreated: result.embeddingCreated,
 		});
 	} catch (e) {

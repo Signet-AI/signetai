@@ -54,7 +54,7 @@ import { writeFileIfChangedAsync } from "./file-sync";
 import { createSignetHttpServer } from "./http-server";
 import { syncAgentWorkspaces } from "./identity-sync";
 import { type InferenceStatusSummary, getOrCreateInferenceRouter } from "./inference-router.js";
-import { closeInferenceProviderResolver, getInferenceProvider, initInferenceProviderResolver } from "./llm";
+import { closeInferenceProviderResolver, initInferenceProviderResolver } from "./llm";
 import { logger } from "./logger";
 import { type ResolvedMemoryConfig, loadMemoryConfig } from "./memory-config";
 import { registerGlobalMiddleware } from "./middleware";
@@ -1483,13 +1483,6 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 			pipelineConfig: memoryCfg.pipelineV2,
 			embeddingConfig: memoryCfg.embedding,
 			fetchEmbedding,
-			getProvider: () => {
-				try {
-					return getInferenceProvider("repair");
-				} catch {
-					return null;
-				}
-			},
 			agentsDir: AGENTS_DIR,
 		});
 	}

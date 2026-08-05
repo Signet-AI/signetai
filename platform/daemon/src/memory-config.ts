@@ -196,8 +196,6 @@ export const DEFAULT_PIPELINE_V2: ResolvedPipelineV2Config = {
 		decayRate: 0.99,
 		minImportance: 0.3,
 		importanceOnInstall: 0.7,
-		enrichOnInstall: true,
-		enrichMinDescription: 30,
 		reconcileIntervalMs: 60000,
 	},
 	feedback: {
@@ -426,6 +424,11 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): ResolvedPipel
 	) {
 		throw new PipelineConfigValidationError(
 			"memory.pipelineV2.writeGate and durability configuration is retired; Dreaming is the sole semantic writer.",
+		);
+	}
+	if (proceduralRaw?.enrichOnInstall !== undefined || proceduralRaw?.enrichMinDescription !== undefined) {
+		throw new PipelineConfigValidationError(
+			"memory.pipelineV2.procedural enrichment configuration is retired; skill frontmatter is used as authored.",
 		);
 	}
 
@@ -840,13 +843,6 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): ResolvedPipel
 			decayRate: clampFraction(proceduralRaw?.decayRate, d.procedural.decayRate),
 			minImportance: clampFraction(proceduralRaw?.minImportance, d.procedural.minImportance),
 			importanceOnInstall: clampFraction(proceduralRaw?.importanceOnInstall, d.procedural.importanceOnInstall),
-			enrichOnInstall: resolveBool(proceduralRaw?.enrichOnInstall, undefined, d.procedural.enrichOnInstall),
-			enrichMinDescription: clampPositive(
-				proceduralRaw?.enrichMinDescription,
-				10,
-				500,
-				d.procedural.enrichMinDescription,
-			),
 			reconcileIntervalMs: clampPositive(
 				proceduralRaw?.reconcileIntervalMs,
 				10000,

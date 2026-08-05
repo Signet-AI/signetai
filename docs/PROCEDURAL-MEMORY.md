@@ -45,7 +45,7 @@ Created by migration 018. Schema:
 | `triggers` | TEXT | JSON array of trigger phrases |
 | `tags` | TEXT | JSON array of domain tags |
 | `permissions` | TEXT | JSON array of declared permissions |
-| `enriched` | INTEGER | 1 if LLM enrichment ran; 0 otherwise |
+| `enriched` | INTEGER | Always 0; retained for schema compatibility. LLM frontmatter enrichment is retired, skill frontmatter is used as authored |
 | `installed_at` | TEXT | ISO timestamp of first install |
 | `last_used_at` | TEXT | ISO timestamp of most recent tracked use |
 | `use_count` | INTEGER | Number of tracked skill invocations |
@@ -59,28 +59,14 @@ so each skill has exactly one entity node.
 
 ## How Skills Become Memory
 
-### Skill Enrichment
+### Skill Frontmatter Is Used As Authored
 
-Source: `platform/daemon/src/pipeline/skill-enrichment.ts`
-
-When a skill is installed with thin frontmatter (description shorter than
-`procCfg.enrichMinDescription` characters, or no triggers defined), the enrichment
-step calls the configured LLM provider to generate richer metadata.
-
-The prompt asks the model for three outputs:
-- `description` — 1-2 sentences explaining what the skill does and when to use it
-- `triggers` — 3-8 short phrases a user might say when they need the skill
-  (discovery keywords, not commands)
-- `tags` — 2-5 lowercase domain tags
-
-The enriched values are merged into the in-memory frontmatter before writing to
-the graph. The original SKILL.md file is not modified by enrichment; the enriched
-data lives only in `skill_meta`.
-
-The enrichment result is parsed with `<think>` tag stripping and JSON fence
-unwrapping before being validated. If the LLM call fails or returns unparseable
-output, enrichment is skipped silently and the skill is still installed with
-whatever frontmatter is available.
+LLM-based frontmatter enrichment was retired: the description, triggers, and
+tags authored in the SKILL.md frontmatter are the discovery metadata, used
+verbatim. Installed skills with thin frontmatter simply get a thinner
+embedding; no LLM call is made during install or reconcile. (The enrichment
+pass previously added an LLM call per skill per reconcile cycle and was a
+primary driver of the skill reconciler hot-loop, Signet-AI/signetai#1086.)
 
 ### YAML Frontmatter Parsing
 
@@ -92,23 +78,21 @@ the `yaml` package's Document API. It recognizes both `name` and `title` fields
 arrays or comma-separated strings.
 
 `patchSkillFrontmatter(fileContent, patch)` rewrites frontmatter in a round-trip
-preserving manner — comments and unrelated fields are kept. This is used if
-enrichment data needs to be written back to the file (currently only used
-externally; the reconciler does not patch SKILL.md files).
+preserving manner — comments and unrelated fields are kept. It is no longer used
+by the daemon (the enrichment write-back path was removed) and remains available
+for external callers.
 
 ### Skill Graph Nodes
 
 Source: `platform/daemon/src/pipeline/skill-graph.ts`
 
-`installSkillNode(input, accessor, config, embeddingCfg, fetchEmbedding, provider)`
+`installSkillNode(input, accessor, config, embeddingCfg, fetchEmbedding)`
 performs the full install sequence:
 
-1. **Enrich** (optional) — if enrichment is enabled and the frontmatter is thin,
-   calls `enrichSkillFrontmatter`
-2. **Write entity + skill_meta** — in a single `withWriteTx`. If the entity ID
+1. **Write entity + skill_meta** — in a single `withWriteTx`. If the entity ID
    already exists, updates `entities.description` and all `skill_meta` fields;
    otherwise inserts both rows. Sets `entity_type = 'skill'` on the entity
-3. **Generate embedding** — builds embedding text as
+2. **Generate embedding** — builds embedding text as
    `"{name} — {description} — {triggers joined by ', '}"`, fetches the vector,
    replaces any existing `source_type = 'skill'` embedding for this entity, and
    syncs to the vec table
@@ -139,7 +123,12 @@ It runs in three modes:
 
 2. **Periodic reconciliation** — `setInterval` runs `reconcileOnce` at
    `procCfg.reconcileIntervalMs`. Guarded against overlapping runs with a
-   `reconciling` flag
+   `reconciling` flag. Skills that fail to reconcile keep a per-skill failure
+   counter: after three consecutive failures the skill enters exponential
+   backoff (10s base, capped at 10min) and is skipped until the window elapses,
+   so a wedged skill cannot re-run the install pipeline (or saturate the daemon
+   event loop) every cycle. A successful pass or a watcher event clears the
+   state (#1086).
 
 3. **Chokidar file watcher** — watches `$SIGNET_WORKSPACE/skills/*/SKILL.md` for add,
    change, and unlink events. On add/change, calls `reconcileSkill` (single-skill
@@ -178,7 +167,7 @@ to let unused skills fade.
 ## Current Status
 
 - **P1 (complete)**: `skill_meta` table (migration 018), YAML frontmatter parsing,
-  LLM enrichment, skill graph node install/uninstall, skill reconciler with startup
+  skill graph node install/uninstall, skill reconciler with startup
   backfill + periodic + chokidar watcher
 - **P2 (partial)**: Usage tracking ledger + `skill_meta` updates shipped. Importance
   decay application and richer cross-memory linking still pending

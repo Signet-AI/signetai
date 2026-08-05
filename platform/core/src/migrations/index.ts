@@ -110,6 +110,7 @@ import { up as dreamingAttention } from "./101-dreaming-attention";
 import { up as attributeSemanticMemories } from "./102-attribute-semantic-memories";
 import { up as semanticMemoryKind } from "./103-semantic-memory-kind";
 import { up as derivedMemoryProvenance } from "./104-derived-memory-provenance";
+import { up as agentScopedEntityName } from "./105-agent-scoped-entity-name";
 
 // -- Public interface consumed by Database.init() --
 
@@ -970,6 +971,11 @@ export const MIGRATIONS: readonly Migration[] = [
 			tables: ["derived_memory_sources"],
 			columns: [{ table: "memories", column: "stale_at" }],
 		},
+	},
+	{
+		version: 105,
+		name: "agent-scoped-entity-name",
+		up: agentScopedEntityName,
 	},
 ];
 

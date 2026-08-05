@@ -4,7 +4,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
 import { DEFAULT_PIPELINE_V2, type EmbeddingConfig, type PipelineV2Config } from "../memory-config";
-import type { LlmProvider } from "./provider";
 import { installSkillNode, skillEmbeddingHash } from "./skill-graph";
 
 function dbPath(): string {
@@ -17,7 +16,6 @@ function cfg(): PipelineV2Config {
 	return {
 		...DEFAULT_PIPELINE_V2,
 		graph: { ...DEFAULT_PIPELINE_V2.graph, enabled: false },
-		procedural: { ...DEFAULT_PIPELINE_V2.procedural, enrichOnInstall: false },
 	};
 }
 
@@ -25,30 +23,6 @@ function graphEnabledCfg(): PipelineV2Config {
 	return {
 		...DEFAULT_PIPELINE_V2,
 		graph: { ...DEFAULT_PIPELINE_V2.graph, enabled: true },
-		procedural: { ...DEFAULT_PIPELINE_V2.procedural, enrichOnInstall: false },
-	};
-}
-
-/**
- * A provider that *would* perform semantic entity extraction from a SKILL.md
- * body if the install path still invoked the extractor. Returning a populated
- * JSON payload here lets the regression test prove that install no longer
- * routes the body through the LLM extractor at all (#946 semantic-writer
- * cutover): no extracted entities or relations should ever be persisted.
- */
-function extractingProvider(): LlmProvider {
-	return {
-		name: "test-extractor",
-		available: async () => true,
-		generate: async () =>
-			JSON.stringify({
-				entities: [
-					{ name: "GitHub", entity_type: "service" },
-					{ name: "Astro", entity_type: "framework" },
-				],
-				facts: [],
-				warnings: [],
-			}),
 	};
 }
 
@@ -100,7 +74,6 @@ describe("installSkillNode", () => {
 			cfg(),
 			emb,
 			async () => null,
-			null,
 		);
 
 		const row = getDbAccessor().withReadDb(
@@ -151,7 +124,6 @@ describe("installSkillNode semantic-writer cutover (#946)", () => {
 			graphEnabledCfg(),
 			emb,
 			async () => null,
-			extractingProvider(),
 		);
 
 		// The result contract no longer reports extracted entities.
@@ -213,7 +185,6 @@ describe("installSkillNode semantic-writer cutover (#946)", () => {
 			graphEnabledCfg(),
 			emb,
 			async () => null,
-			extractingProvider(),
 		);
 
 		const accessor = getDbAccessor();

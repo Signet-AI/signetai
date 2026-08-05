@@ -19,6 +19,7 @@ import { up as memoryKind } from "./094-memory-kind";
 import { up as compactionRecallProjections } from "./095-compaction-recall-projections";
 import { up as retireLegacyIngestion } from "./096-retire-legacy-ingestion";
 import { up as dreamingRunbook } from "./100-dreaming-runbook";
+import { up as agentScopedEntityName } from "./105-agent-scoped-entity-name";
 import { MIGRATIONS, hasPendingMigrations, runMigrations } from "./index";
 
 function createFreshDb(): Database {
@@ -775,6 +776,112 @@ describe("migration framework", () => {
 		const indexes = db.query("PRAGMA index_list(memory_artifacts)").all() as Array<{ name: string }>;
 		expect(indexes.map((row) => row.name)).toContain("idx_memory_artifacts_agent_source");
 		expect(indexes.map((row) => row.name)).toContain("idx_memory_artifacts_agent_source_root");
+	});
+
+	test("migration 105 scopes entity name uniqueness to the agent (#1070)", () => {
+		db = createFreshDb();
+		runMigrations(db);
+
+		const insert = (id: string, name: string, agentId: string): void => {
+			db.query(
+				`INSERT INTO entities (id, name, canonical_name, entity_type, agent_id, description, created_at, updated_at)
+				 VALUES (?, ?, ?, 'skill', ?, 'd', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')`,
+			).run(id, name, name.toLowerCase(), agentId);
+		};
+
+		// A skill under 'default' and an extracted entity under another agent
+		// may now share a name. Pre-fix the global UNIQUE on entities.name
+		// rejected the second insert, which made the skill reconciler retry
+		// forever (#1086).
+		insert("skill:default:dreaming", "dreaming", "default");
+		insert("entity:hermes-agent:dreaming", "dreaming", "hermes-agent");
+
+		// Same agent + same name is still rejected.
+		expect(() => insert("skill:default:dreaming-2", "dreaming", "default")).toThrow(/UNIQUE/i);
+	});
+
+	test("migration 105 rebuilds entities, preserving rows, indexes, and FTS triggers", () => {
+		db = createFreshDb();
+		db.exec(`
+			CREATE TABLE entity_communities (id TEXT PRIMARY KEY);
+			CREATE TABLE entities (
+				id TEXT PRIMARY KEY,
+				name TEXT NOT NULL UNIQUE,
+				entity_type TEXT NOT NULL,
+				description TEXT,
+				created_at TEXT NOT NULL,
+				updated_at TEXT NOT NULL,
+				canonical_name TEXT,
+				mentions INTEGER DEFAULT 0,
+				embedding BLOB,
+				agent_id TEXT NOT NULL DEFAULT 'default',
+				pinned INTEGER NOT NULL DEFAULT 0,
+				pinned_at TEXT,
+				last_synthesized_at TEXT,
+				community_id TEXT REFERENCES entity_communities(id),
+				source_id TEXT,
+				source_kind TEXT,
+				source_path TEXT,
+				source_root TEXT,
+				status TEXT NOT NULL DEFAULT 'active',
+				archived_at TEXT,
+				archived_by TEXT,
+				archive_reason TEXT,
+				proposal_id TEXT,
+				proposal_evidence TEXT NOT NULL DEFAULT '[]'
+			);
+			CREATE VIRTUAL TABLE entities_fts USING fts5(
+				name, canonical_name,
+				content='entities', content_rowid='rowid'
+			);
+			INSERT INTO entities (id, name, canonical_name, entity_type, agent_id, description, created_at, updated_at)
+			VALUES ('entity:hermes-agent:dreaming', 'dreaming', 'dreaming', 'system', 'hermes-agent',
+				'owned by harness', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z');
+		`);
+
+		agentScopedEntityName(db);
+
+		// Data survives the rebuild.
+		const row = db.query("SELECT id, name, agent_id FROM entities WHERE id = 'entity:hermes-agent:dreaming'").get() as {
+			id: string;
+			name: string;
+			agent_id: string;
+		};
+		expect(row.agent_id).toBe("hermes-agent");
+		expect(row.name).toBe("dreaming");
+
+		// The constraint is now agent-scoped: a second agent may use the name.
+		db.query(
+			`INSERT INTO entities (id, name, canonical_name, entity_type, agent_id, description, created_at, updated_at)
+			 VALUES ('skill:default:dreaming', 'dreaming', 'dreaming', 'skill', 'default',
+				'd', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')`,
+		).run();
+
+		// The full index set is restored.
+		const indexes = db.query("PRAGMA index_list(entities)").all() as Array<{ name: string }>;
+		const indexNames = indexes.map((i) => i.name);
+		for (const expected of [
+			"idx_entities_canonical_name",
+			"idx_entities_agent",
+			"idx_entities_pinned",
+			"idx_entities_order",
+			"idx_entities_extracted_mentions",
+			"idx_entities_source",
+			"idx_entities_status",
+			"idx_entities_proposal",
+		]) {
+			expect(indexNames).toContain(expected);
+		}
+
+		// The FTS triggers are restored and the index repopulated.
+		const triggers = db
+			.query("SELECT name FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'entities_fts_%'")
+			.all() as Array<{ name: string }>;
+		expect(triggers.map((t) => t.name).sort()).toEqual(["entities_fts_ad", "entities_fts_ai", "entities_fts_au"]);
+
+		const ftsCount = db.query("SELECT COUNT(*) AS n FROM entities_fts").get() as { n: number };
+		const entityCount = db.query("SELECT COUNT(*) AS n FROM entities").get() as { n: number };
+		expect(ftsCount.n).toBe(entityCount.n);
 	});
 
 	test("migration 070 adds ontology control-plane status and version state safely", () => {
@@ -1704,6 +1811,8 @@ describe("migration framework", () => {
 		dreamingRunbook(db as unknown as Parameters<typeof dreamingRunbook>[0]);
 		dreamingRunbook(db as unknown as Parameters<typeof dreamingRunbook>[0]);
 		const columns = db.query("PRAGMA table_info(dreaming_passes)").all() as Array<{ name: string }>;
-		expect(columns.map((column) => column.name)).toEqual(expect.arrayContaining(["evidence_window_json", "runbook_json"]));
+		expect(columns.map((column) => column.name)).toEqual(
+			expect.arrayContaining(["evidence_window_json", "runbook_json"]),
+		);
 	});
 });

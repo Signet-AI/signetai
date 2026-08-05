@@ -5,7 +5,7 @@
  * when skills are installed or uninstalled. Each skill gets:
  * - An entity row (entity_type = 'skill') — source/native topology
  * - A skill_meta row with installation metadata
- * - An embedding from enriched frontmatter
+ * - An embedding from the authored frontmatter
  *
  * Skill nodes are source topology: the SKILL.md frontmatter is the
  * authoritative source, and this module writes the skill entity and its
@@ -21,8 +21,6 @@ import { syncVecDeleteByEmbeddingIds, syncVecInsert, vectorToBlob } from "../db-
 import { isActiveEmbeddingConfig, resolveActiveEmbeddingConfig } from "../embedding-index-state";
 import { logger } from "../logger";
 import type { EmbeddingConfig, PipelineV2Config } from "../memory-config";
-import type { LlmProvider } from "./provider";
-import { enrichSkillFrontmatter } from "./skill-enrichment";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -50,7 +48,6 @@ export interface SkillInstallInput {
 
 export interface SkillInstallResult {
 	readonly entityId: string;
-	readonly enriched: boolean;
 	readonly embeddingCreated: boolean;
 }
 
@@ -124,45 +121,15 @@ export async function installSkillNode(
 	config: PipelineV2Config,
 	embeddingCfg: EmbeddingConfig,
 	fetchEmbedding: (text: string, cfg: EmbeddingConfig) => Promise<number[] | null>,
-	provider: LlmProvider | null,
 ): Promise<SkillInstallResult> {
 	const agentId = input.agentId ?? "default";
 	let entityId = skillEntityId(agentId, input.frontmatter.name);
 	const now = new Date().toISOString();
 	const procCfg = config.procedural;
 
-	let fm = input.frontmatter;
-	let enriched = false;
+	const fm = input.frontmatter;
 
-	// Step 1: Enrich if needed
-	const needsEnrichment =
-		fm.description.length < procCfg.enrichMinDescription || !fm.triggers || fm.triggers.length === 0;
-
-	if (procCfg.enrichOnInstall && needsEnrichment && provider === null) {
-		logger.warn("pipeline", "Skill enrichment skipped — LLM provider not available", {
-			skill: fm.name,
-			descriptionLength: fm.description.length,
-			hasTriggers: Boolean(fm.triggers && fm.triggers.length > 0),
-		});
-	}
-
-	if (procCfg.enrichOnInstall && needsEnrichment && provider !== null) {
-		const enrichResult = await enrichSkillFrontmatter(
-			{ name: fm.name, description: fm.description, body: input.body },
-			provider,
-		);
-		if (enrichResult) {
-			fm = {
-				...fm,
-				description: enrichResult.description || fm.description,
-				triggers: enrichResult.triggers.length > 0 ? enrichResult.triggers : fm.triggers,
-				tags: enrichResult.tags.length > 0 ? enrichResult.tags : fm.tags,
-			};
-			enriched = true;
-		}
-	}
-
-	// Step 2: Create entity + skill_meta in a write transaction
+	// Step 1: Create entity + skill_meta in a write transaction
 	accessor.withWriteTx((db) => {
 		// Check if entity already exists by id or name (idempotent)
 		const existing = db
@@ -206,7 +173,7 @@ export async function installSkillNode(
 				fm.triggers ? JSON.stringify(fm.triggers) : null,
 				fm.tags ? JSON.stringify(fm.tags) : null,
 				fm.permissions ? JSON.stringify(fm.permissions) : null,
-				enriched ? 1 : 0,
+				0,
 				now,
 				procCfg.importanceOnInstall,
 				procCfg.decayRate,
@@ -267,7 +234,7 @@ export async function installSkillNode(
 				fm.triggers ? JSON.stringify(fm.triggers) : null,
 				fm.tags ? JSON.stringify(fm.tags) : null,
 				fm.permissions ? JSON.stringify(fm.permissions) : null,
-				enriched ? 1 : 0,
+				0,
 				now,
 				procCfg.importanceOnInstall,
 				procCfg.decayRate,
@@ -277,7 +244,7 @@ export async function installSkillNode(
 		}
 	});
 
-	// Step 3: Generate embedding from enriched frontmatter
+	// Step 2: Generate embedding from the authored frontmatter
 	let embeddingCreated = false;
 	const embeddingText = buildEmbeddingText(fm);
 	const writeConfig = accessor.withReadDb((db) => resolveActiveEmbeddingConfig(db, embeddingCfg));
@@ -326,11 +293,10 @@ export async function installSkillNode(
 	logger.info("pipeline", "Skill node installed", {
 		skill: fm.name,
 		entityId,
-		enriched,
 		embeddingCreated,
 	});
 
-	return { entityId, enriched, embeddingCreated };
+	return { entityId, embeddingCreated };
 }
 
 // ---------------------------------------------------------------------------

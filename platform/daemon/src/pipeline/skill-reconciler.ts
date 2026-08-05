@@ -16,7 +16,6 @@ import { watch } from "chokidar";
 import type { DbAccessor } from "../db-accessor.js";
 import { logger } from "../logger.js";
 import type { EmbeddingConfig, PipelineV2Config } from "../memory-config.js";
-import type { LlmProvider } from "./provider.js";
 import { parseSkillFile } from "./skill-frontmatter.js";
 import { installSkillNode, skillEmbeddingHash, uninstallSkillNode } from "./skill-graph.js";
 
@@ -29,7 +28,6 @@ export interface ReconcilerDeps {
 	readonly pipelineConfig: PipelineV2Config;
 	readonly embeddingConfig: EmbeddingConfig;
 	readonly fetchEmbedding: (text: string, cfg: EmbeddingConfig) => Promise<number[] | null>;
-	readonly getProvider: () => LlmProvider | null;
 	readonly agentsDir: string;
 }
 
@@ -43,6 +41,42 @@ export interface ReconcilerHandle {
 
 function skillsDir(agentsDir: string): string {
 	return join(agentsDir, "skills");
+}
+
+// ---------------------------------------------------------------------------
+// Per-skill failure backoff
+// ---------------------------------------------------------------------------
+
+/**
+ * A skill whose reconcile fails deterministically (schema conflict, provider
+ * outage, unreadable file) must not re-run the full install pipeline every
+ * interval: each attempt re-reads the file, rewrites the graph, and can
+ * saturate the daemon event loop (Signet-AI/signetai#1086). After
+ * SKILL_BACKOFF_FAILURES consecutive failures the skill is skipped until its
+ * backoff window elapses; the window doubles per subsequent failure up to
+ * SKILL_BACKOFF_MAX_MS. Any pass that completes without throwing clears the
+ * state, as does a watcher event (new content is a fresh signal).
+ */
+const SKILL_BACKOFF_BASE_MS = 10_000;
+const SKILL_BACKOFF_MAX_MS = 10 * 60_000;
+const SKILL_BACKOFF_FAILURES = 3;
+
+const skillFailureState = new Map<string, { consecutiveFailures: number; nextAttemptAt: number }>();
+
+/** Backoff delay after `consecutiveFailures` failures (0 until the threshold). */
+export function skillBackoffDelayMs(
+	consecutiveFailures: number,
+	baseMs: number = SKILL_BACKOFF_BASE_MS,
+	maxMs: number = SKILL_BACKOFF_MAX_MS,
+): number {
+	if (consecutiveFailures <= SKILL_BACKOFF_FAILURES) return 0;
+	const delay = baseMs * 2 ** (consecutiveFailures - SKILL_BACKOFF_FAILURES - 1);
+	return Math.min(delay, maxMs);
+}
+
+/** Clear a skill's failure state after a successful pass or watcher event. */
+export function resetSkillFailureState(skillName: string): void {
+	skillFailureState.delete(skillName);
 }
 
 // ---------------------------------------------------------------------------
@@ -84,6 +118,11 @@ export async function reconcileOnce(deps: ReconcilerDeps): Promise<{
 
 	// 2. Check each disk skill against the graph
 	for (const [name, mdPath] of diskSkills) {
+		const failureState = skillFailureState.get(name);
+		if (failureState && failureState.nextAttemptAt > Date.now()) {
+			continue;
+		}
+
 		try {
 			const content = readFileSync(mdPath, "utf-8");
 			const parsed = parseSkillFile(content);
@@ -112,7 +151,6 @@ export async function reconcileOnce(deps: ReconcilerDeps): Promise<{
 					deps.pipelineConfig,
 					deps.embeddingConfig,
 					deps.fetchEmbedding,
-					deps.getProvider(),
 				);
 				installed++;
 				logger.info("reconciler", "Backfilled skill node", { skill: name });
@@ -128,9 +166,9 @@ export async function reconcileOnce(deps: ReconcilerDeps): Promise<{
 				);
 				const rawHash = skillEmbeddingHash(actualId, parsed.frontmatter);
 
-				// Compare the raw on-disk frontmatter fingerprint. Installs may
-				// enrich description/triggers before generating embeddings, so
-				// comparing against chunk_text causes infinite update loops.
+				// Compare the raw on-disk frontmatter fingerprint against the
+				// stored one, not the embedding chunk text, so metadata-only
+				// changes reinstall without creating update loops.
 				if (storedEmb && storedEmb.content_hash !== rawHash) {
 					await installSkillNode(
 						{
@@ -143,18 +181,32 @@ export async function reconcileOnce(deps: ReconcilerDeps): Promise<{
 						deps.pipelineConfig,
 						deps.embeddingConfig,
 						deps.fetchEmbedding,
-						deps.getProvider(),
 					);
 					updated++;
 					logger.info("reconciler", "Updated changed skill node", { skill: name });
 				}
 			}
+
+			// Reaching here means this pass handled the skill without
+			// throwing — clear any accumulated failure state.
+			resetSkillFailureState(name);
 		} catch (e) {
 			const msg = e instanceof Error ? e.message : String(e);
 			logger.warn("reconciler", "Failed to reconcile skill", {
 				skill: name,
 				error: msg,
 			});
+
+			const consecutiveFailures = (failureState?.consecutiveFailures ?? 0) + 1;
+			const backoffMs = skillBackoffDelayMs(consecutiveFailures);
+			skillFailureState.set(name, { consecutiveFailures, nextAttemptAt: Date.now() + backoffMs });
+			if (backoffMs > 0) {
+				logger.warn("reconciler", "Skill reconcile failed repeatedly; entering backoff", {
+					skill: name,
+					consecutiveFailures,
+					backoffMs,
+				});
+			}
 		}
 	}
 
@@ -242,18 +294,21 @@ export function startReconciler(deps: ReconcilerDeps): ReconcilerHandle {
 		watcher.on("add", (filePath) => {
 			const skillName = basename(dirname(filePath));
 			logger.info("reconciler", "SKILL.md added", { skill: skillName });
+			resetSkillFailureState(skillName);
 			reconcileSkill(skillName, filePath, deps);
 		});
 
 		watcher.on("change", (filePath) => {
 			const skillName = basename(dirname(filePath));
 			logger.info("reconciler", "SKILL.md changed", { skill: skillName });
+			resetSkillFailureState(skillName);
 			reconcileSkill(skillName, filePath, deps);
 		});
 
 		watcher.on("unlink", (filePath) => {
 			const skillName = basename(dirname(filePath));
 			logger.info("reconciler", "SKILL.md removed", { skill: skillName });
+			resetSkillFailureState(skillName);
 			uninstallSkillNode({ skillName }, deps.accessor);
 		});
 	}
@@ -324,7 +379,6 @@ async function reconcileSkill(skillName: string, mdPath: string, deps: Reconcile
 			deps.pipelineConfig,
 			deps.embeddingConfig,
 			deps.fetchEmbedding,
-			deps.getProvider(),
 		);
 
 		logger.debug("reconciler", "Skill reconciled via watcher", { skill: skillName });

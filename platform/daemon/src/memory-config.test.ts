@@ -1001,6 +1001,14 @@ describe("loadPipelineConfig", () => {
 		}
 	});
 
+	it("rejects retired procedural enrichment configuration", () => {
+		for (const procedural of [{ enrichOnInstall: true }, { enrichMinDescription: 30 }]) {
+			expect(() => loadPipelineConfig({ memory: { pipelineV2: { procedural } } })).toThrow(
+				"procedural enrichment configuration is retired",
+			);
+		}
+	});
+
 	it("loads graph boost and reranker fields (flat keys)", () => {
 		const result = loadPipelineConfig({
 			memory: {
