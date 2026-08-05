@@ -104,6 +104,15 @@ describe("Dreaming", () => {
 		).toEqual({ capturedAt: "2026-03-01T00:00:00.000Z", kind: "summary", id: "fragment" });
 	});
 
+	it("states the evidence scope-consistency rule in the agent prompt (#1120)", () => {
+		// The runbook must tell the agent that evidence and op target must
+		// share a scope, and that cross-scope citations are unsafe — that is
+		// the corrective signal that keeps content passes from repeating the
+		// same failed pairing.
+		expect(DREAMING_AGENT_PROMPT).toContain("evidence must be cited from the same scope as the op target");
+		expect(DREAMING_AGENT_PROMPT).toContain("Cite evidence from a different agent scope than the op target");
+	});
+
 	it("uses the fixed agent prompt and resets the evidence backlog each pass", async () => {
 		seedSummary(db, "s1", "durable episodic evidence for the backlog.", 500);
 		expect(getDreamingEpisodicTokenBacklog(accessor, AGENT)).toBeGreaterThan(0);

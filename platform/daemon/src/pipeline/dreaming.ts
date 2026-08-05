@@ -630,7 +630,7 @@ An install may have several agent scopes (listed in <agent_scopes> when there is
    - Inspect the flagged target (get_entity — check aspects, claims, pinned).
    - Archive or merge it, citing its attention id (provenance: "attention:<uuid>", or attention:$<index> for a flag you minted in the same batch).
    - If you discover junk the queue did not flag, mint a flag op and archive in the same batch.
-3. Only when the hygiene queue is clear: find new evidence since the cutoff. First LIST recent sources with search_evidence — pass since and omit the query so it returns the newest sources; only after seeing what is there, narrow with a query if the list is large. For each new source:
+3. Only when the hygiene queue is clear: find new evidence since the cutoff. First LIST recent sources with search_evidence — pass since and omit the query so it returns the newest sources; only after seeing what is there, narrow with a query if the list is large. Search in the same agent scope as the entity you will update (pass the target entity's agentId to search_evidence): evidence must be cited from the same scope as the op target. For each new source:
    - search_entities for subjects it establishes.
    - Extract/update claims with exact-quote evidence from that source.
    - create_entity only for durable subjects clearly established by the source.
@@ -641,7 +641,7 @@ An install may have several agent scopes (listed in <agent_scopes> when there is
 
 - Archive attention-flagged entities that are non-concrete (zero active aspects/claims, non-concrete type, legacy-only deps).
 - Merge exact-canonical duplicates (same canonical name, same scope).
-- Add/set/supersede claims with exact quotes from an episodic source.
+- Add/set/supersede claims with exact quotes from an episodic source in the same scope as the target entity.
 - Create entities for durable subjects the source clearly establishes.
 - Rename/update entities only with evidence.
 
@@ -650,6 +650,7 @@ An install may have several agent scopes (listed in <agent_scopes> when there is
 - Archive any entity with active aspects/claims.
 - Merge entities across agent scopes.
 - Any write without provenance: hygiene ops need an attention id; content ops need an exact quote.
+- Cite evidence from a different agent scope than the op target — search the evidence in the scope of the entity you are updating.
 - Claims without exact quotes, or relationships the source does not state.
 - Touch pinned entities, source-root entities, or topology entities.
 - Rewrite existing claims without evidence that supersedes them.
@@ -737,7 +738,7 @@ An install may have several agent scopes (listed in <agent_scopes> when there is
 ### Per-pass process
 
 1. Read the pass log (runbook_read). Establish cutoff: sources viewed, changes applied, deferred items.
-2. Find new evidence since the cutoff. First LIST recent sources with search_evidence — pass since and omit the query so it returns the newest sources; only after seeing what is there, narrow with a query if the list is large. For each new source:
+2. Find new evidence since the cutoff. First LIST recent sources with search_evidence — pass since and omit the query so it returns the newest sources; only after seeing what is there, narrow with a query if the list is large. Search in the same agent scope as the entity you will update (pass the target entity's agentId to search_evidence): evidence must be cited from the same scope as the op target. For each new source:
    - search_entities for subjects it establishes.
    - Extract/update claims with exact-quote evidence from that source.
    - create_entity only for durable subjects clearly established by the source.
@@ -746,13 +747,14 @@ An install may have several agent scopes (listed in <agent_scopes> when there is
 
 ### Safe
 
-- Add/set/supersede claims with exact quotes from an episodic source.
+- Add/set/supersede claims with exact quotes from an episodic source in the same scope as the target entity.
 - Create entities for durable subjects the source clearly establishes.
 - Rename/update entities only with evidence.
 
 ### Unsafe
 
 - Any write without provenance: content ops need an exact quote.
+- Cite evidence from a different agent scope than the op target — search the evidence in the scope of the entity you are updating.
 - Claims without exact quotes, or relationships the source does not state.
 - Hygiene archives/merges: they need attention records, which hygiene passes process.
 - Touch pinned entities, source-root entities, or topology entities.

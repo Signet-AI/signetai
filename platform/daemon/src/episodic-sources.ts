@@ -580,6 +580,33 @@ export function readEpisodicSource(db: ReadDb, options: ReadEpisodicSourceOption
 }
 
 /**
+ * Find which agent scopes actually own a given source reference. The scoped
+ * readers resolve a source only within one agent scope, so a cross-scope
+ * citation (evidence found under scope A cited by an op targeting scope B)
+ * silently fails the exact-quote gate with no corrective signal. This helper
+ * enumerates the scopes that own the source so callers can emit a scope-aware
+ * rejection (issue #1120).
+ *
+ * Returns the owning scopes, or an empty array when the source resolves
+ * nowhere or under no scope at all.
+ */
+export function findEpisodicSourceOwnerScopes(
+	db: ReadDb,
+	from: string,
+	candidateScopes: readonly string[],
+): readonly string[] {
+	const trimmed = from.trim();
+	if (!trimmed) return [];
+	const owners: string[] = [];
+	for (const scope of candidateScopes) {
+		if (readEpisodicSource(db, { agentId: scope, from: trimmed }) !== null) {
+			owners.push(scope);
+		}
+	}
+	return owners;
+}
+
+/**
  * Search immutable episodic evidence without falling back to semantic memory.
  *
  * This belongs beside the canonical cross-store reader so every Dreaming

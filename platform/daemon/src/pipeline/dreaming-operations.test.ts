@@ -267,6 +267,60 @@ describe("dreaming operations", () => {
 		expect(result.error).toBe("Every operation must cite an exact quote from scoped episodic evidence");
 	});
 
+	it("rejects a cross-scope citation with a scope-aware message (#1120)", () => {
+		// The quote lives in agent-b's episodic store, but the op targets
+		// agent-a. The gate used to reject with the generic message, giving
+		// the agent no corrective signal.
+		insertEpisodicMemory("mem-1", "Acme switched its deployment target to edge runtime in Q2.", "agent-b");
+		const result = applyDreamingOperations({
+			accessor: getDbAccessor(),
+			agentId: "agent-a",
+			actor: "dreaming",
+			operations: [
+				{
+					operation: "create_entity",
+					payload: { name: "Acme", type: "project" },
+					evidence: [
+						{
+							source_ref: "memory:mem-1",
+							source_kind: "manual",
+							source_id: "mem-1",
+							quote: "Acme switched its deployment target to edge runtime in Q2.",
+						},
+					],
+				},
+			],
+		});
+		expect(result.ok).toBe(false);
+		expect(result.error).toBe("cited evidence belongs to scope 'agent-b' but this op targets 'agent-a'");
+	});
+
+	it("keeps the generic exact-quote rejection when the quote resolves nowhere (#1120)", () => {
+		// A quote that matches no source in ANY scope is not a scope-mixing
+		// problem — the generic message must be preserved.
+		const result = applyDreamingOperations({
+			accessor: getDbAccessor(),
+			agentId: "agent-a",
+			actor: "dreaming",
+			operations: [
+				{
+					operation: "create_entity",
+					payload: { name: "Acme", type: "project" },
+					evidence: [
+						{
+							source_ref: "memory:missing",
+							source_kind: "manual",
+							source_id: "missing",
+							quote: "This source does not exist in any scope.",
+						},
+					],
+				},
+			],
+		});
+		expect(result.ok).toBe(false);
+		expect(result.error).toBe("Every operation must cite an exact quote from scoped episodic evidence");
+	});
+
 	it("supersedes the current active claim for a key without an explicit attribute id", () => {
 		insertEntity("e-acme", "Acme", "acme");
 		insertAspect("a-main", "e-acme", "general");

@@ -1,6 +1,6 @@
 import { SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES } from "@signet/core";
 import type { DbAccessor, ReadDb } from "../db-accessor";
-import { readEpisodicSource } from "../episodic-sources";
+import { readEpisodicSource, findEpisodicSourceOwnerScopes } from "../episodic-sources";
 import { type OntologyOperationInput, applyOntologyOperationBatchInTx } from "../ontology-proposals";
 import { type DreamingAttention, enqueueDreamingAttentionInTx, getDreamingAttentionById } from "./dreaming-attention";
 import { type DreamingAgentEvidence, createDreamingAgentEvidence } from "./dreaming-evidence";
@@ -265,6 +265,60 @@ function provenanceForEvidence(
 
 // --- model payload -> shared applicator payload mapping --------------------
 
+/**
+ * Enumerate the agent scopes that could own episodic evidence: the op's own
+ * scope, the implicit default scope, plus every scope that has ever written
+ * an episodic row. Used only on the rejection path to diagnose cross-scope
+ * citations (#1120), so the cost of a few indexed scans is acceptable.
+ */
+function listEpisodicAgentScopes(db: ReadDb, agentId: string): readonly string[] {
+	const rows = db
+		.prepare(
+			`SELECT DISTINCT agent_id AS id FROM (
+				SELECT id AS agent_id FROM agents
+				UNION ALL SELECT agent_id FROM memories WHERE is_deleted = 0
+				UNION ALL SELECT agent_id FROM session_transcripts
+				UNION ALL SELECT agent_id FROM session_summaries
+				UNION ALL SELECT agent_id FROM memory_artifacts WHERE is_deleted = 0
+			) WHERE agent_id IS NOT NULL AND agent_id != ''`,
+		)
+		.all() as Array<{ id: string }>;
+	const ids = new Set<string>([agentId, "default"]);
+	for (const row of rows) ids.add(row.id);
+	return [...ids];
+}
+
+/**
+ * When the exact-quote gate rejects a content op, diagnose whether the cited
+ * evidence actually resolves under a *different* agent scope than the op
+ * target. A cross-scope citation (evidence found in scope A, op targeting
+ * scope B) fails the scoped reader with no corrective signal; surface the
+ * owning scope so the agent can re-search in the target's scope and
+ * self-correct instead of repeating the same failed pairing (#1120).
+ */
+function crossScopeEvidenceHint(
+	accessor: DbAccessor,
+	agentId: string,
+	operation: DreamingOperationRequest,
+): string | null {
+	const citations = operation.evidence ?? [];
+	if (citations.length === 0) return null;
+	return accessor.withReadDb((db) => {
+		const scopes = listEpisodicAgentScopes(db, agentId);
+		for (const citation of citations) {
+			const requested = citationRecord(citation);
+			if (requested === null) continue;
+			const owners = findEpisodicSourceOwnerScopes(db, requested.sourceRef, scopes);
+			for (const owner of owners) {
+				if (owner !== agentId) {
+					return `cited evidence belongs to scope '${owner}' but this op targets '${agentId}'`;
+				}
+			}
+		}
+		return null;
+	});
+}
+
 function lookupString(db: ReadDb, sql: string, ...params: unknown[]): string | null {
 	const row = db.prepare(sql).get(...params) as { value: string | null } | undefined;
 	return row?.value ?? null;
@@ -507,10 +561,15 @@ export function applyDreamingOperations(params: {
 		} else {
 			provenance = provenanceForEvidence(params.accessor, params.agentId, operation);
 			if (provenance === null) {
+				// The quote gate failed: distinguish a genuinely missing or
+				// unquotable source from a citation that resolves under a
+				// different agent scope, so the agent gets a corrective
+				// signal instead of the generic rejection (#1120).
+				const scopeHint = crossScopeEvidenceHint(params.accessor, params.agentId, operation);
 				return {
 					ok: false,
 					items: [],
-					error: "Every operation must cite an exact quote from scoped episodic evidence",
+					error: scopeHint ?? "Every operation must cite an exact quote from scoped episodic evidence",
 				};
 			}
 		}
