@@ -1,8 +1,8 @@
-import { Menu, Bell } from "lucide-react";
 import { CaptionButtons } from "@/components/shell/window-chrome";
-import { useView } from "@/lib/view-context";
-import { cn } from "@/lib/utils";
 import { detectPlatform } from "@/lib/platform";
+import { cn } from "@/lib/utils";
+import { useView } from "@/lib/view-context";
+import { Bell, Menu } from "lucide-react";
 
 export function Topbar({ onMenuClick }: { onMenuClick: () => void }) {
 	const { view, label } = useView();
@@ -24,7 +24,7 @@ export function Topbar({ onMenuClick }: { onMenuClick: () => void }) {
 				<Menu className="size-4" />
 			</button>
 			<div className="sig-no-drag flex items-center gap-2 text-[13px]">
-				<span className="text-muted-foreground">Nicholai /</span>
+				<span className="text-muted-foreground">Signet /</span>
 				<span>{label(view)}</span>
 			</div>
 			<div className="flex-1" />
@@ -34,9 +34,6 @@ export function Topbar({ onMenuClick }: { onMenuClick: () => void }) {
 			>
 				<Bell className="size-[17px]" />
 				<span className="absolute top-[7px] right-[7px] size-1.5 rounded-full bg-primary" />
-			</div>
-			<div className="sig-no-drag grid size-7.5 place-items-center rounded-full bg-gradient-to-br from-[oklch(0.6_0.02_270)] to-[oklch(0.35_0.02_270)] text-[12px] font-semibold text-white">
-				NV
 			</div>
 			{platform !== "mac" && <CaptionButtons />}
 		</header>

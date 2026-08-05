@@ -1,31 +1,27 @@
-/**
- * Secrets vault — mockup sec-view: a decorative lock gate (the daemon gates on
- * the dashboard admin token; there is no vault password endpoint, so any
- * non-empty entry unlocks, exactly like the mockup) over the real vault: hero
- * telemetry, 1Password integration panel, and the secret card grid backed by
- * /api/secrets (names only — values are never read back).
- */
-import { useState } from "react";
-import { Lock, Plus } from "lucide-react";
+import { AddSecretDialog } from "@/components/secrets/add-secret-dialog";
+import { OnePasswordPanel } from "@/components/secrets/onepassword-panel";
+import { SecretCard } from "@/components/secrets/secret-card";
 import { api } from "@/lib/api";
 import { useAsync } from "@/lib/use-async";
 import { cn } from "@/lib/utils";
-import { SecretCard } from "@/components/secrets/secret-card";
-import { AddSecretDialog } from "@/components/secrets/add-secret-dialog";
-import { OnePasswordPanel } from "@/components/secrets/onepassword-panel";
+import { Lock, Plus } from "lucide-react";
+/**
+ * Secrets vault — mockup sec-view: the decorative lock gate is disabled (there
+ * is no vault password endpoint; the daemon gates on the dashboard admin
+ * token), so the vault renders directly. The LockGate component is kept for
+ * the mockup parity and future auth, but never blocks entry.
+ */
+import { useState } from "react";
 
 export function SecretsView() {
-	const [unlocked, setUnlocked] = useState(false);
+	// Gate disabled: no auth logic exists, so the vault is always reachable.
+	// LockGate stays defined below for mockup parity and future auth.
 	const [addOpen, setAddOpen] = useState(false);
 	const secrets = useAsync(() => api.getSecrets(), { deps: [] });
 
 	const refresh = () => void secrets.refresh();
 	const names = secrets.data?.secrets ?? [];
 	const provider = secrets.data?.provider ?? "local";
-
-	if (!unlocked) {
-		return <LockGate count={secrets.data ? names.length : null} onUnlock={() => setUnlocked(true)} />;
-	}
 
 	return (
 		<div className="sec-vault-enter flex h-full min-h-0 flex-1 flex-col gap-3">
@@ -43,8 +39,9 @@ export function SecretsView() {
 				<span className="flex-1" />
 				<button
 					type="button"
-					onClick={() => setUnlocked(false)}
-					className="inline-flex items-center gap-1.5 font-mono text-[10px] text-muted-foreground transition-colors hover:text-foreground"
+					disabled
+					aria-disabled="true"
+					className="inline-flex cursor-not-allowed items-center gap-1.5 font-mono text-[10px] text-muted-foreground opacity-60 transition-colors"
 				>
 					<Lock className="size-3" /> Lock
 				</button>
@@ -56,17 +53,14 @@ export function SecretsView() {
 			<div className="sec-grid-mask grid min-h-0 flex-1 auto-rows-min grid-cols-1 content-start gap-2.5 overflow-y-auto pb-3 md:grid-cols-2">
 				{secrets.data === null ? (
 					<div className="col-span-full grid h-32 place-items-center font-mono text-[11px] text-muted-foreground">
-						{/* loading or daemon unreachable — no spinner in the mockup family */}
-						…
+						{/* loading or daemon unreachable — no spinner in the mockup family */}…
 					</div>
 				) : names.length === 0 ? (
 					<div className="col-span-full grid h-32 place-items-center text-center">
 						<span className="text-[12px] text-muted-foreground">No secrets stored yet.</span>
 					</div>
 				) : (
-					names.map((name) => (
-						<SecretCard key={name} name={name} provider={provider} onDeleted={refresh} />
-					))
+					names.map((name) => <SecretCard key={name} name={name} provider={provider} onDeleted={refresh} />)
 				)}
 
 				{/* inline add tile */}
@@ -135,15 +129,16 @@ function LockGate({ count, onUnlock }: { count: number | null; onUnlock: () => v
 					placeholder="Password"
 					autoComplete="off"
 					aria-label="Vault password"
-					autoFocus
+					disabled
 					className={cn(
-						"h-[38px] w-[280px] max-w-[calc(100vw-120px)] rounded-[var(--radius)] border border-[oklch(1_0_0/0.12)] bg-[color-mix(in_oklch,var(--card)_60%,transparent)] px-3.5 text-[13px] text-foreground outline-none backdrop-blur transition-colors placeholder:text-muted-foreground focus:border-[color-mix(in_oklch,var(--success)_45%,transparent)] [:root:not(.dark)_&]:border-[oklch(0_0_0/0.12)]",
+						"h-[38px] w-[280px] max-w-[calc(100vw-120px)] cursor-not-allowed rounded-[var(--radius)] border border-[oklch(1_0_0/0.12)] bg-[color-mix(in_oklch,var(--card)_60%,transparent)] px-3.5 text-[13px] text-foreground opacity-60 outline-none backdrop-blur transition-colors placeholder:text-muted-foreground focus:border-[color-mix(in_oklch,var(--success)_45%,transparent)] [:root:not(.dark)_&]:border-[oklch(0_0_0/0.12)]",
 						shaking && "sec-shake",
 					)}
 				/>
 				<button
 					type="submit"
-					className="h-[38px] rounded-[var(--radius)] bg-foreground px-4 text-[12.5px] font-medium text-[oklch(0.15_0_0)] transition-opacity hover:opacity-88"
+					disabled
+					className="h-[38px] cursor-not-allowed rounded-[var(--radius)] bg-foreground px-4 text-[12.5px] font-medium text-[oklch(0.15_0_0)] opacity-60 transition-opacity hover:opacity-88"
 				>
 					Unlock
 				</button>

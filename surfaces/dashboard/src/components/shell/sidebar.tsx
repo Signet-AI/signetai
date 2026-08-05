@@ -1,18 +1,21 @@
-import type { ReactNode } from "react";
 import { SignetMark } from "@/components/icons";
 import { ModeToggle } from "@/components/mode-toggle";
 import { Button } from "@/components/ui/button";
-import { useView, type ViewId } from "@/lib/view-context";
-import { useSettings } from "@/lib/settings-context";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { api } from "@/lib/api";
+import { useSettings } from "@/lib/settings-context";
 import { useAsync } from "@/lib/use-async";
 import { cn } from "@/lib/utils";
+import { type ViewId, useView } from "@/lib/view-context";
+import type { ReactNode } from "react";
 
 interface NavItem {
 	view: ViewId;
 	label: string;
 	icon: (props: { className?: string }) => ReactNode;
 	badge?: string;
+	/** Disabled nav rows render greyed out, unselectable, with a "coming soon" tooltip. */
+	disabled?: boolean;
 }
 
 /**
@@ -89,7 +92,7 @@ const GROUPS: { label: string; items: NavItem[] }[] = [
 		label: "System",
 		items: [
 			{ view: "home", label: "Home", icon: HomeIcon },
-			{ view: "agents", label: "Agents", icon: AgentsIcon, badge: "3" },
+			{ view: "agents", label: "Agents", icon: AgentsIcon, badge: "3", disabled: true },
 		],
 	},
 	{
@@ -103,7 +106,7 @@ const GROUPS: { label: string; items: NavItem[] }[] = [
 		label: "Knowledge engine",
 		items: [
 			{ view: "graph", label: "Graph", icon: GraphIcon, badge: "2.4k" },
-			{ view: "dreaming", label: "Dreams", icon: DreamsIcon, badge: "14" },
+			{ view: "dreaming", label: "Dreams", icon: DreamsIcon, badge: "14", disabled: true },
 		],
 	},
 ];
@@ -137,9 +140,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
 					<SignetMark className="h-[22px] w-5 shrink-0" />
 					<span className="flex flex-1 flex-col gap-px overflow-hidden leading-[1.15]">
 						<span className="truncate text-sm leading-[1.15] font-semibold tracking-tight">Signet</span>
-						<span className="truncate font-mono text-[10.5px] text-muted-foreground">
-							Personal · 3 agents
-						</span>
+						<span className="truncate font-mono text-[10.5px] text-muted-foreground">Personal · 3 agents</span>
 					</span>
 					<ChevronIcon className="size-[15px] shrink-0 text-muted-foreground" />
 				</button>
@@ -165,7 +166,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
 					</div>
 					<ul className="flex flex-col gap-px">
 						<NavRow
-							item={{ view: "skills", label: "Skills", icon: SkillsIcon, badge: "120" }}
+							item={{ view: "skills", label: "Skills", icon: SkillsIcon, badge: "120", disabled: true }}
 							active={view === "skills"}
 							onClick={() => navigate("skills")}
 						/>
@@ -195,7 +196,37 @@ function compactCount(value: number): string {
 }
 
 function NavRow({ item, active, onClick }: { item: NavItem; active: boolean; onClick: () => void }) {
-	const { icon: Icon } = item;
+	const { icon: Icon, disabled } = item;
+
+	if (disabled) {
+		return (
+			<li>
+				<Tooltip>
+					<TooltipTrigger asChild>
+						{/* A native `disabled` button suppresses pointer events, which would
+						    also suppress the Radix tooltip trigger. The span carries the
+						    pointer events; the button stays inert. */}
+						<span className="flex w-full">
+							<button
+								type="button"
+								disabled
+								aria-disabled="true"
+								className="flex w-full cursor-not-allowed items-center gap-2.5 rounded-[var(--radius)] px-2.5 py-1.5 text-[13px] text-muted-foreground/60 opacity-60 [html:not(.dark)_&]:text-muted-foreground/50"
+							>
+								<Icon className="size-4 shrink-0 text-current" />
+								<span className="flex-1 text-left">{item.label}</span>
+								{item.badge && <NavBadge active={false}>{item.badge}</NavBadge>}
+							</button>
+						</span>
+					</TooltipTrigger>
+					<TooltipContent side="right" sideOffset={8}>
+						Coming soon
+					</TooltipContent>
+				</Tooltip>
+			</li>
+		);
+	}
+
 	return (
 		<li>
 			<button
@@ -211,7 +242,8 @@ function NavRow({ item, active, onClick }: { item: NavItem; active: boolean; onC
 				<Icon
 					className={cn(
 						"size-4 shrink-0 text-muted-foreground transition-colors",
-						active && "text-sidebar-foreground drop-shadow-[0_0_6px_oklch(0.85_0_0/0.25)] [html:not(.dark)_&]:text-foreground [html:not(.dark)_&]:drop-shadow-[0_0_4px_oklch(0_0_0/0.1)]",
+						active &&
+							"text-sidebar-foreground drop-shadow-[0_0_6px_oklch(0.85_0_0/0.25)] [html:not(.dark)_&]:text-foreground [html:not(.dark)_&]:drop-shadow-[0_0_4px_oklch(0_0_0/0.1)]",
 					)}
 				/>
 				<span className="flex-1 text-left">{item.label}</span>
@@ -249,7 +281,7 @@ function AccountRow() {
 					<span className="absolute -bottom-px -right-px size-2 rounded-full border-2 border-background bg-success [animation:health-pulse_2.4s_ease-in-out_infinite]" />
 				</span>
 				<span className="flex flex-1 flex-col gap-px leading-tight">
-					<span className="truncate text-[12.5px] font-medium text-sidebar-foreground">Nicholai</span>
+					<span className="truncate text-[12.5px] font-medium text-sidebar-foreground">Signet</span>
 					<span className="truncate font-mono text-[10px] text-muted-foreground">daemon running</span>
 				</span>
 				<span className="flex shrink-0 items-center gap-px">
@@ -273,7 +305,15 @@ function AccountRow() {
 /* ── inline icons (mockup uses custom strokes) ── */
 function ChevronIcon({ className }: { className?: string }) {
 	return (
-		<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className={className}>
+		<svg
+			viewBox="0 0 24 24"
+			fill="none"
+			stroke="currentColor"
+			strokeWidth={2}
+			strokeLinecap="round"
+			strokeLinejoin="round"
+			className={className}
+		>
 			<path d="m7 9 5-5 5 5" />
 			<path d="m7 15 5 5 5-5" />
 		</svg>
@@ -281,7 +321,15 @@ function ChevronIcon({ className }: { className?: string }) {
 }
 function SettingsIcon({ className }: { className?: string }) {
 	return (
-		<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round" className={className}>
+		<svg
+			viewBox="0 0 24 24"
+			fill="none"
+			stroke="currentColor"
+			strokeWidth={1.75}
+			strokeLinecap="round"
+			strokeLinejoin="round"
+			className={className}
+		>
 			<circle cx="12" cy="12" r="3" />
 			<path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
 		</svg>
