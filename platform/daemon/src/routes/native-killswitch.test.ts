@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { describe, expect, it } from "bun:test";
 import { checkEmbeddingProvider } from "./utils";
 
 describe("checkEmbeddingProvider native kill-switch (#1073)", () => {
