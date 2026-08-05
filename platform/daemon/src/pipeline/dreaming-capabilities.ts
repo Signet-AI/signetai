@@ -3,7 +3,9 @@
  *
  * Pi sessions invoke these handlers in-process; MCP and CLI invoke the daemon
  * capability route. The registry is therefore the one owner of capability
- * names, schemas, scope, validation, and graph/evidence reads.
+ * names, schemas, scope, validation, and graph/evidence reads. The surface is
+ * deliberately bounded: the agent can only do what these methods define
+ * (search, validate, apply, log) — no open-ended escape hatches.
  */
 import { z } from "zod";
 import type { DbAccessor } from "../db-accessor";
@@ -20,7 +22,7 @@ import { getOntologyClaimEvidence } from "../ontology-claim-evidence";
 import { getOntologyLinkEvidence } from "../ontology-link-evidence";
 import { findDuplicateEntityMerges } from "../ontology-proposals";
 import { detectProspectiveContradictionRisk } from "./antonyms";
-import { enqueueDreamingAttentionInTx } from "./dreaming-attention";
+import { getDreamingAttentionScoped } from "./dreaming-attention";
 import type { DreamingAgentEvidence } from "./dreaming-evidence";
 import { DREAMING_ONTOLOGY_OPERATION_SCHEMA } from "./dreaming-operation-contract";
 import {
@@ -38,29 +40,17 @@ const pagination = {
 	offset: z.number().finite().optional(),
 };
 
-/** Required details keys per hygiene subjectRef prefix, matching the apply gate. */
-const HYGIENE_SUBJECT_DETAIL_KEYS: Readonly<Record<string, readonly string[]>> = {
-	entity: ["entityId"],
-	aspect: ["entityId", "aspectId"],
-	attribute: ["attributeId"],
-	link: ["linkId"],
-	duplicate: ["canonicalName"],
-};
-
 export const DREAMING_CAPABILITY_IDS = [
 	"search_entities",
 	"get_entity",
 	"list_aspect_claims",
 	"walk_links",
-	"get_claim_evidence",
-	"get_link_evidence",
+	"get_evidence",
 	"search_evidence",
-	"check_entity_label",
-	"find_duplicate_entities",
-	"check_contradiction",
+	"validate_proposal",
 	"runbook_read",
 	"runbook_write",
-	"record_hygiene_attention",
+	"attention_list",
 	"apply_ontology_ops",
 ] as const;
 
@@ -77,6 +67,13 @@ type DreamingCapabilityOutput = {
 	readonly ok: boolean;
 	readonly error?: string;
 	readonly [key: string]: unknown;
+};
+
+/** Mutable build-time variant of the capability output (registry handlers). */
+type MutableCapabilityOutput = {
+	ok: boolean;
+	error?: string;
+	[key: string]: unknown;
 };
 
 export interface DreamingToolCallTrace {
@@ -102,7 +99,6 @@ export interface CreateDreamingCapabilitiesParams {
 	readonly actor: string;
 	/** Present only for a live Dreaming pass; protects runbook writes. */
 	readonly passId?: string;
-	readonly evidence?: readonly DreamingAgentEvidence[];
 	readonly onOperationsApplied?: (
 		result: ApplyDreamingOperationsResult,
 		operations: readonly DreamingOperationRequest[],
@@ -156,7 +152,6 @@ function capability<T extends z.ZodType>(
 /** The one scope-bound handler registry used by Pi, daemon HTTP, MCP, and CLI. */
 export function createDreamingCapabilities(params: CreateDreamingCapabilitiesParams): readonly DreamingCapability[] {
 	const { accessor, agentId, actor } = params;
-	const evidence = params.evidence ?? [];
 	return [
 		capability(
 			"search_entities",
@@ -176,6 +171,7 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 					id: item.entity.id,
 					name: item.entity.name,
 					entityType: item.entity.entityType,
+					pinned: item.entity.pinned,
 					aspectCount: item.aspectCount,
 					attributeCount: item.attributeCount,
 					constraintCount: item.constraintCount,
@@ -186,26 +182,41 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 		capability(
 			"get_entity",
 			"Get entity detail",
-			"Fetch one scoped entity and its aspects with attribute and constraint counts.",
+			"Fetch one scoped entity with attribute/constraint counts and pinned status, optionally hydrated with its aspect claims and/or dependency links in the same call.",
 			true,
-			z.object({ entityId: z.string().min(1) }),
-			async ({ entityId }) => {
+			z.object({
+				entityId: z.string().min(1),
+				include: z.array(z.enum(["aspects", "links"])).optional(),
+				direction: z.enum(["incoming", "outgoing", "both"]).optional(),
+			}),
+			async ({ entityId, include, direction }) => {
 				const detail = getKnowledgeEntityDetail(accessor, entityId, agentId);
 				if (!detail) return { ok: false, error: "Entity not found" };
-				return {
+				const result: MutableCapabilityOutput = {
 					ok: true,
 					entity: detail.entity,
+					pinned: detail.entity.pinned === true,
 					aspectCount: detail.aspectCount,
 					attributeCount: detail.attributeCount,
 					constraintCount: detail.constraintCount,
 					dependencyCount: detail.dependencyCount,
-					aspects: getEntityAspectsWithCounts(accessor, entityId, agentId).map((aspect) => ({
+				};
+				if (include?.includes("aspects")) {
+					result.aspects = getEntityAspectsWithCounts(accessor, entityId, agentId).map((aspect) => ({
 						id: aspect.aspect.id,
 						name: aspect.aspect.name,
 						attributeCount: aspect.attributeCount,
 						constraintCount: aspect.constraintCount,
-					})),
-				};
+					}));
+				}
+				if (include?.includes("links")) {
+					result.links = getEntityDependenciesDetailed(accessor, {
+						entityId,
+						agentId,
+						direction: direction ?? "both",
+					});
+				}
+				return result;
 			},
 		),
 		capability(
@@ -239,79 +250,95 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 			}),
 		),
 		capability(
-			"get_claim_evidence",
-			"Get claim evidence",
-			"Resolve provenance for a scoped claim path.",
+			"get_evidence",
+			"Get evidence",
+			"Resolve provenance for a scoped claim path or a scoped dependency link by stable id.",
 			true,
 			z.object({
-				entity: z.string().min(1),
-				aspect: z.string().min(1),
-				group: z.string().min(1),
-				claim: z.string().min(1),
+				ref: z.union([
+					z.object({
+						type: z.literal("claim"),
+						entity: z.string().min(1),
+						aspect: z.string().min(1),
+						group: z.string().min(1),
+						claim: z.string().min(1),
+					}),
+					z.object({ type: z.literal("link"), id: z.string().min(1) }),
+				]),
 				...pagination,
 			}),
-			async ({ entity, aspect, group, claim, limit, offset }) => ({
-				ok: true,
-				result: getOntologyClaimEvidence(accessor, { agentId, entity, aspect, group, claim, limit, offset }),
-			}),
-		),
-		capability(
-			"get_link_evidence",
-			"Get link evidence",
-			"Resolve provenance for a scoped dependency link by stable id.",
-			true,
-			z.object({ id: z.string().min(1) }),
-			async ({ id }) => ({ ok: true, result: getOntologyLinkEvidence(accessor, { agentId, id }) }),
+			async ({ ref, limit, offset }) => {
+				if (ref.type === "claim") {
+					return {
+						ok: true,
+						result: getOntologyClaimEvidence(accessor, {
+							agentId,
+							entity: ref.entity,
+							aspect: ref.aspect,
+							group: ref.group,
+							claim: ref.claim,
+							limit,
+							offset,
+						}),
+					};
+				}
+				return { ok: true, result: getOntologyLinkEvidence(accessor, { agentId, id: ref.id }) };
+			},
 		),
 		capability(
 			"search_evidence",
 			"Search episodic evidence",
-			"Full-text search immutable episodic memories, artifacts, transcripts, and summaries in this scope.",
+			"Full-text search immutable episodic memories, artifacts, transcripts, and summaries in this scope. Artifacts are deduped by content hash: content-identical files across vault paths collapse to one canonical entry.",
 			true,
-			z.object({ query: z.string().min(1), limit: z.number().finite().optional() }),
-			async ({ query, limit }) => ({
+			z.object({
+				query: z.string().optional(),
+				since: z.string().optional(),
+				before: z.string().optional(),
+				kind: z.enum(["memory", "artifact", "transcript", "summary"]).optional(),
+				limit: z.number().finite().optional(),
+			}),
+			async ({ query, since, before, kind, limit }) => ({
 				ok: true,
-				items: accessor.withReadDb((db) => searchEpisodicSources(db, { agentId, query, limit })),
+				items: accessor.withReadDb((db) =>
+					searchEpisodicSources(db, { agentId, query: query ?? "", since, before, kind, limit }),
+				),
 			}),
 		),
 		capability(
-			"check_entity_label",
-			"Check entity label",
-			"Run the daemon's deterministic entity-label gate before proposing an entity name.",
+			"validate_proposal",
+			"Validate proposal",
+			"Run the daemon's deterministic pre-write guards in one pass: entity-label gate, duplicate-entity check, and/or contradiction check against active aspect values.",
 			true,
-			z.object({ name: z.string(), type: z.string().optional() }),
-			async ({ name, type }) => ({ ok: true, result: classifyEntityQuality(name, type) }),
-		),
-		capability(
-			"find_duplicate_entities",
-			"Find duplicate entities",
-			"Find exact-canonical duplicate entity merge candidates in this agent scope without writing a proposal.",
-			true,
-			z.object({ name: z.string().min(1) }),
-			async ({ name }) => ({ ok: true, items: findDuplicateEntityMerges(accessor, { agentId, name }) }),
-		),
-		capability(
-			"check_contradiction",
-			"Check claim contradiction",
-			"Compare a proposed claim value with active values in one scoped aspect using the daemon's conservative deterministic guard.",
-			true,
-			z.object({ entityId: z.string().min(1), aspectId: z.string().min(1), value: z.string().min(1) }),
-			async ({ entityId, aspectId, value }) => ({
-				ok: true,
-				items: getAttributesForAspectFiltered(accessor, {
-					entityId,
-					aspectId,
-					agentId,
-					kind: "attribute",
-					status: "active",
-					limit: 200,
-					offset: 0,
-				}).map((attribute) => ({
-					attributeId: attribute.id,
-					content: attribute.content,
-					...detectProspectiveContradictionRisk(value, attribute.content),
-				})),
+			z.object({
+				name: z.string().optional(),
+				type: z.string().optional(),
+				entityId: z.string().optional(),
+				aspectId: z.string().optional(),
+				value: z.string().optional(),
 			}),
+			async ({ name, type, entityId, aspectId, value }) => {
+				const result: MutableCapabilityOutput = { ok: true };
+				if (name !== undefined) {
+					result.label = classifyEntityQuality(name, type);
+					result.duplicates = findDuplicateEntityMerges(accessor, { agentId, name });
+				}
+				if (entityId !== undefined && aspectId !== undefined && value !== undefined) {
+					result.contradiction = getAttributesForAspectFiltered(accessor, {
+						entityId,
+						aspectId,
+						agentId,
+						kind: "attribute",
+						status: "active",
+						limit: 200,
+						offset: 0,
+					}).map((attribute) => ({
+						attributeId: attribute.id,
+						content: attribute.content,
+						...detectProspectiveContradictionRisk(value, attribute.content),
+					}));
+				}
+				return result;
+			},
 		),
 		capability(
 			"runbook_read",
@@ -340,38 +367,38 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 			},
 		),
 		capability(
-			"record_hygiene_attention",
-			"Record hygiene attention",
-			'Record that an inspected scoped entity, aspect, claim attribute, link, or duplicate group was flagged for hygiene. The returned id is valid provenance (provenance: "attention:<id>") for archive_entity, archive_aspect, archive_claim_value, archive_link, and merge_entities on the flagged target — no episodic source text required. Content-bearing writes still require exact episodic quotes.',
-			false,
-			z
-				.object({
-					subjectRef: z.string().trim().min(1).max(512),
-					details: z.record(z.string(), z.string()).optional(),
-					priority: z.number().finite().min(0).max(100).optional(),
-				})
-				.refine((value) => {
-					const prefix = value.subjectRef.split(":")[0];
-					const required = HYGIENE_SUBJECT_DETAIL_KEYS[prefix];
-					if (!required) return false;
-					const details = value.details ?? {};
-					return required.every((key) => typeof details[key] === "string" && details[key].trim().length > 0);
-				}, "subjectRef must start with entity:, aspect:, attribute:, link:, or duplicate: and details must include the matching target id (entityId, aspectId, attributeId, linkId, or canonicalName)"),
-			async ({ subjectRef, details, priority }) => {
-				const id = accessor.withWriteTx((db) =>
-					enqueueDreamingAttentionInTx(db, { agentId, kind: "hygiene", subjectRef, details, priority }),
-				);
-				return { ok: true, id, subjectRef, kind: "hygiene" };
-			},
+			"attention_list",
+			"List attention",
+			"List scoped attention records (the hygiene queue) by kind and resolution status.",
+			true,
+			z.object({
+				kind: z.string().optional(),
+				status: z.enum(["pending", "resolved"]).optional(),
+				limit: z.number().finite().optional(),
+			}),
+			async ({ kind, status, limit }) => ({
+				ok: true,
+				items: getDreamingAttentionScoped(accessor, agentId, {
+					kind,
+					status: status ?? "pending",
+					limit: bounded(limit, 20, 100),
+				}),
+			}),
 		),
 		capability(
 			"apply_ontology_ops",
 			"Apply ontology operations",
-			'Apply every semantic write through the daemon audit seam. Inspect relevant scoped graph state first. Content-bearing writes need an exact quote and source_ref from canonical episodic evidence. Hygiene archives/merges of inspected targets may instead cite provenance: "attention:<id>" using an id from <semantic_attention> or from record_hygiene_attention.',
+			'Apply every semantic write through the daemon audit seam in one batch. Ops are processed in array order. Hygiene ops (flag, archive_*, merge_entities) cite provenance: "attention:$<index>" for a flag earlier in the same batch, or "attention:<uuid>" from a prior batch. Content-bearing ops cite evidence with exact quotes from canonical episodic evidence.',
 			false,
 			z.object({ operations: z.array(DREAMING_ONTOLOGY_OPERATION_SCHEMA).min(1).max(100) }),
 			async ({ operations }) => {
-				const result = applyDreamingOperations({ accessor, agentId, actor, operations, allowedEvidence: evidence });
+				const result = applyDreamingOperations({
+					accessor,
+					agentId,
+					actor,
+					operations,
+					passId: params.passId,
+				});
 				params.onOperationsApplied?.(result, operations);
 				return { ok: result.ok, ...(result.error ? { error: result.error } : {}), items: result.items };
 			},

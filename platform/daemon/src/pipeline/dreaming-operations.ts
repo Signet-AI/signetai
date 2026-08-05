@@ -1,9 +1,10 @@
-import { ONTOLOGY_PROPOSAL_OPERATIONS, SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES } from "@signet/core";
-import type { DbAccessor } from "../db-accessor";
+import { SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES } from "@signet/core";
+import type { DbAccessor, ReadDb } from "../db-accessor";
 import { readEpisodicSource } from "../episodic-sources";
 import { type OntologyOperationInput, applyOntologyOperationBatchInTx } from "../ontology-proposals";
-import { type DreamingAttention, getDreamingAttentionById } from "./dreaming-attention";
+import { type DreamingAttention, enqueueDreamingAttentionInTx, getDreamingAttentionById } from "./dreaming-attention";
 import { type DreamingAgentEvidence, createDreamingAgentEvidence } from "./dreaming-evidence";
+import { DREAMING_OPERATION_IDS } from "./dreaming-operation-contract";
 
 export interface DreamingOperationRequest {
 	readonly operation: string;
@@ -29,6 +30,15 @@ export interface ApplyDreamingOperationsResult {
 	readonly error?: string;
 }
 
+const FLAG_OP = "flag";
+const HYGIENE_ARCHIVE_OPS = new Set([
+	"archive_entity",
+	"archive_aspect",
+	"archive_claim_value",
+	"archive_link",
+	"merge_entities",
+]);
+
 function citationRecord(value: unknown): {
 	readonly sourceRef: string;
 	readonly sourceKind: string;
@@ -46,20 +56,19 @@ function citationRecord(value: unknown): {
 	return sourceRef && sourceKind && sourceId && quote ? { sourceRef, sourceKind, sourceId, sourcePath, quote } : null;
 }
 
-function citeEvidence(
-	accessor: DbAccessor,
-	agentId: string,
-	citation: unknown,
-	allowedEvidence: readonly DreamingAgentEvidence[] | undefined,
-): DreamingAgentEvidence | null {
+/**
+ * Resolve an exact-quote citation against the episodic source store itself.
+ * The Dreaming pass no longer receives an injected evidence window: citations
+ * validate against the same immutable store the search tools read, so an
+ * agent can cite any in-scope source it found and quoted verbatim.
+ */
+function citeEvidence(accessor: DbAccessor, agentId: string, citation: unknown): DreamingAgentEvidence | null {
 	const requested = citationRecord(citation);
 	if (requested === null) return null;
-	const evidence =
-		allowedEvidence ??
-		accessor.withReadDb((db) => {
-			const source = readEpisodicSource(db, { agentId, from: requested.sourceRef });
-			return source === null ? [] : createDreamingAgentEvidence([source]);
-		});
+	const evidence = accessor.withReadDb((db) => {
+		const source = readEpisodicSource(db, { agentId, from: requested.sourceRef });
+		return source === null ? [] : createDreamingAgentEvidence([source]);
+	});
 	return (
 		evidence.find(
 			(record) =>
@@ -80,40 +89,6 @@ type DreamingOperationProvenance = {
 	readonly sourceRoot: string;
 };
 
-function noSelectors(payload: Readonly<Record<string, unknown>>, keys: readonly string[]): boolean {
-	return keys.every((key) => payload[key] === undefined || payload[key] === null);
-}
-
-/** Accepted selector values that denote the flagged entity itself. */
-function acceptedTargetValues(attention: DreamingAttention, ...keys: readonly string[]): string[] {
-	return keys
-		.map((key) => attention.details[key])
-		.filter((value): value is string => typeof value === "string" && value.length > 0);
-}
-
-/**
- * True when every present selector field names the flagged target itself.
- * Downstream selector resolution prefers `selector`/`entity`/`name` over
- * `entity_id`, so a stray selector naming a different row would hit the wrong
- * target despite a matching id. Accept only the target's id or the name the
- * attention record captured; anything else is rejected.
- */
-function selectorsNameFlaggedTarget(
-	payload: Readonly<Record<string, unknown>>,
-	fields: readonly { readonly key: string; readonly accepted: readonly string[] }[],
-): boolean {
-	for (const { key, accepted } of fields) {
-		const value = payload[key];
-		if (typeof value !== "string" || value.length === 0) continue;
-		if (!accepted.includes(value)) return false;
-	}
-	return true;
-}
-
-function forceRequested(value: unknown): boolean {
-	return value === true || value === 1 || value === "1" || value === "true";
-}
-
 function semanticDuplicateIds(accessor: DbAccessor, agentId: string, canonicalName: string): ReadonlySet<string> {
 	const placeholders = SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES.map(() => "?").join(", ");
 	return accessor.withReadDb((db) => {
@@ -130,104 +105,128 @@ function semanticDuplicateIds(accessor: DbAccessor, agentId: string, canonicalNa
 	});
 }
 
+function asStringRecord(value: unknown): Readonly<Record<string, string>> | undefined {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+	const record: Record<string, string> = {};
+	for (const [key, entry] of Object.entries(value)) {
+		if (typeof entry === "string") record[key] = entry;
+	}
+	return Object.keys(record).length > 0 ? record : undefined;
+}
+
+/**
+ * Mint hygiene attention for every flag op in the batch, in one write tx.
+ * Returns operation index -> minted attention id, so later ops in the same
+ * batch can cite provenance "attention:$<index>".
+ */
+function mintFlags(
+	accessor: DbAccessor,
+	agentId: string,
+	operations: readonly DreamingOperationRequest[],
+): Map<number, string> {
+	const minted = new Map<number, string>();
+	accessor.withWriteTx((db) => {
+		for (let index = 0; index < operations.length; index += 1) {
+			const operation = operations[index]!;
+			if (operation.operation !== FLAG_OP) continue;
+			const subjectRef = typeof operation.payload.subjectRef === "string" ? operation.payload.subjectRef.trim() : "";
+			if (!subjectRef) continue;
+			const priority = typeof operation.payload.priority === "number" ? operation.payload.priority : undefined;
+			const attentionId = enqueueDreamingAttentionInTx(db, {
+				agentId,
+				kind: "hygiene",
+				subjectRef,
+				details: asStringRecord(operation.payload.details),
+				priority,
+			});
+			minted.set(index, attentionId);
+		}
+	});
+	return minted;
+}
+
+/**
+ * Resolve attention provenance for a hygiene archive/merge op. The target
+ * must be exactly the flagged row: the id match and subjectRef pin the target,
+ * so the op cannot redirect to anything the flag did not name.
+ */
 function attentionProvenance(
 	accessor: DbAccessor,
 	agentId: string,
 	operation: DreamingOperationRequest,
-): DreamingOperationProvenance | null {
+	mintedById: ReadonlyMap<number, string>,
+): { readonly provenance: DreamingOperationProvenance; readonly attentionId: string } | null {
 	const reference = operation.provenance?.trim();
 	if (!reference?.startsWith("attention:")) return null;
-	if (
-		!new Set(["archive_entity", "archive_aspect", "archive_claim_value", "archive_link", "merge_entities"]).has(
-			operation.operation,
-		)
-	)
-		return null;
-	const attentionId = reference.slice("attention:".length);
-	if (!attentionId) return null;
-	const attention = getDreamingAttentionById(accessor, { agentId, id: attentionId });
-	if (attention?.kind !== "hygiene") return null;
+	if (!HYGIENE_ARCHIVE_OPS.has(operation.operation)) return null;
 	const payload = operation.payload;
-	if (forceRequested(payload.force)) return null;
+
+	let attention: DreamingAttention | null = null;
+	const sameBatch = reference.match(/^attention:\$(\d+)$/);
+	if (sameBatch !== null) {
+		const attentionId = mintedById.get(Number.parseInt(sameBatch[1]!, 10));
+		if (attentionId !== undefined) attention = getDreamingAttentionById(accessor, { agentId, id: attentionId });
+	} else {
+		const attentionId = reference.slice("attention:".length);
+		if (attentionId) attention = getDreamingAttentionById(accessor, { agentId, id: attentionId });
+	}
+	if (attention === null || attention.kind !== "hygiene") return null;
+
 	let expectedTarget = false;
 	if (operation.operation === "archive_entity") {
-		// Redundant selectors are tolerated only when they name the flagged
-		// entity itself (the agent echoes the name from attention details);
-		// a selector naming a different row still cannot ride along.
-		const entityValues = acceptedTargetValues(attention, "entityId", "name");
 		expectedTarget =
-			typeof payload.entity_id === "string" &&
-			payload.entity_id === attention.details.entityId &&
-			attention.subjectRef === `entity:${payload.entity_id}` &&
-			selectorsNameFlaggedTarget(payload, [
-				{ key: "selector", accepted: entityValues },
-				{ key: "entity", accepted: entityValues },
-				{ key: "name", accepted: entityValues },
-			]);
+			typeof payload.target === "string" &&
+			payload.target === attention.details.entityId &&
+			attention.subjectRef === `entity:${payload.target}`;
 	} else if (operation.operation === "archive_aspect") {
-		const entityValues = acceptedTargetValues(attention, "entityId", "name");
-		const aspectValues = acceptedTargetValues(attention, "aspectId", "aspectName");
 		expectedTarget =
-			typeof payload.entity_id === "string" &&
-			typeof payload.aspect_id === "string" &&
-			payload.entity_id === attention.details.entityId &&
-			payload.aspect_id === attention.details.aspectId &&
-			attention.subjectRef === `aspect:${payload.aspect_id}` &&
-			selectorsNameFlaggedTarget(payload, [
-				{ key: "selector", accepted: entityValues },
-				{ key: "entity", accepted: entityValues },
-				{ key: "name", accepted: entityValues },
-				{ key: "aspect", accepted: aspectValues },
-			]);
+			typeof payload.target === "string" &&
+			payload.target === attention.details.aspectId &&
+			attention.subjectRef === `aspect:${payload.target}`;
 	} else if (operation.operation === "archive_claim_value") {
 		expectedTarget =
-			typeof payload.attribute_id === "string" &&
-			payload.attribute_id === attention.details.attributeId &&
-			attention.subjectRef === `attribute:${payload.attribute_id}`;
+			typeof payload.target === "string" &&
+			payload.target === attention.details.attributeId &&
+			attention.subjectRef === `attribute:${payload.target}`;
 	} else if (operation.operation === "archive_link") {
-		const linkId = payload.id ?? payload.dependency_id ?? payload.link_id;
 		expectedTarget =
-			typeof linkId === "string" && linkId === attention.details.linkId && attention.subjectRef === `link:${linkId}`;
+			typeof payload.target === "string" &&
+			payload.target === attention.details.linkId &&
+			attention.subjectRef === `link:${payload.target}`;
 	} else if (operation.operation === "merge_entities") {
-		const targetId = payload.target_entity_id;
-		const sourceIds = payload.source_entity_ids;
+		const targets = Array.isArray(payload.targets)
+			? payload.targets.filter((value): value is string => typeof value === "string")
+			: [];
+		const survivor = typeof payload.survivor === "string" ? payload.survivor : "";
 		const groupIds = semanticDuplicateIds(accessor, agentId, attention.details.canonicalName ?? "");
 		expectedTarget =
 			attention.subjectRef === `duplicate:${attention.details.canonicalName}` &&
-			typeof targetId === "string" &&
-			noSelectors(payload, [
-				"target_entity",
-				"target",
-				"target_id",
-				"source_entities",
-				"sources",
-				"source_entity",
-				"source",
-				"source_ids",
-				"source_entity_id",
-				"source_id",
-			]) &&
 			groupIds.size > 1 &&
-			groupIds.has(targetId) &&
-			Array.isArray(sourceIds) &&
-			sourceIds.length > 0 &&
-			sourceIds.every((id) => typeof id === "string" && groupIds.has(id) && id !== targetId);
+			groupIds.has(survivor) &&
+			targets.length >= 2 &&
+			targets.every((id) => groupIds.has(id)) &&
+			targets.includes(survivor) &&
+			targets.some((id) => id !== survivor);
 	}
 	if (!expectedTarget) return null;
+
 	return {
-		evidence: [
-			{
-				source_ref: reference,
-				source_kind: "attention",
-				source_id: attention.id,
-				subject_ref: attention.subjectRef,
-				details: attention.details,
-			},
-		],
-		sourceKind: "attention",
-		sourceId: attention.id,
-		sourcePath: attention.subjectRef,
-		sourceRoot: "dreaming_attention",
+		provenance: {
+			evidence: [
+				{
+					source_ref: reference,
+					source_kind: "attention",
+					source_id: attention.id,
+					subject_ref: attention.subjectRef,
+					details: attention.details,
+				},
+			],
+			sourceKind: "attention",
+			sourceId: attention.id,
+			sourcePath: attention.subjectRef,
+			sourceRoot: "dreaming_attention",
+		},
+		attentionId: attention.id,
 	};
 }
 
@@ -235,13 +234,12 @@ function provenanceForEvidence(
 	accessor: DbAccessor,
 	agentId: string,
 	operation: DreamingOperationRequest,
-	allowedEvidence: readonly DreamingAgentEvidence[] | undefined,
 ): DreamingOperationProvenance | null {
 	const citations = operation.evidence ?? [];
 	if (citations.length === 0) return null;
 	const matched: DreamingAgentEvidence[] = [];
 	for (const citation of citations) {
-		const record = citeEvidence(accessor, agentId, citation, allowedEvidence);
+		const record = citeEvidence(accessor, agentId, citation);
 		if (record === null) return null;
 		matched.push(record);
 	}
@@ -256,21 +254,207 @@ function provenanceForEvidence(
 	};
 }
 
+// --- model payload -> shared applicator payload mapping --------------------
+
+function lookupString(db: ReadDb, sql: string, ...params: unknown[]): string | null {
+	const row = db.prepare(sql).get(...params) as { value: string | null } | undefined;
+	return row?.value ?? null;
+}
+
+function lookupEntityName(accessor: DbAccessor, agentId: string, entityId: string): string | null {
+	return accessor.withReadDb((db) =>
+		lookupString(
+			db,
+			"SELECT name AS value FROM entities WHERE id = ? AND agent_id = ? AND COALESCE(status,'active') = 'active'",
+			entityId,
+			agentId,
+		),
+	);
+}
+
+function lookupAspectName(accessor: DbAccessor, agentId: string, entityId: string, aspectId: string): string | null {
+	return accessor.withReadDb((db) =>
+		lookupString(
+			db,
+			"SELECT name AS value FROM entity_aspects WHERE id = ? AND entity_id = ? AND agent_id = ? AND COALESCE(status,'active') = 'active'",
+			aspectId,
+			entityId,
+			agentId,
+		),
+	);
+}
+
+function lookupAspectEntityId(accessor: DbAccessor, agentId: string, aspectId: string): string | null {
+	return accessor.withReadDb((db) =>
+		lookupString(
+			db,
+			"SELECT entity_id AS value FROM entity_aspects WHERE id = ? AND agent_id = ? AND COALESCE(status,'active') = 'active'",
+			aspectId,
+			agentId,
+		),
+	);
+}
+
+function lookupActiveClaimAttributeId(
+	accessor: DbAccessor,
+	agentId: string,
+	aspectId: string,
+	claimKey: string,
+): string | null {
+	return accessor.withReadDb((db) =>
+		lookupString(
+			db,
+			"SELECT id AS value FROM entity_attributes WHERE aspect_id = ? AND agent_id = ? AND claim_key = ? AND status = 'active' ORDER BY created_at DESC, id ASC LIMIT 1",
+			aspectId,
+			agentId,
+			claimKey,
+		),
+	);
+}
+
+function stringField(payload: Readonly<Record<string, unknown>>, key: string): string | null {
+	const value = payload[key];
+	return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
+function stringArrayField(payload: Readonly<Record<string, unknown>>, key: string): string[] | null {
+	const value = payload[key];
+	if (!Array.isArray(value)) return null;
+	const items = value
+		.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+		.map((s) => s.trim());
+	return items.length > 0 ? items : null;
+}
+
 /**
- * The sole daemon-owned apply seam for Dreaming agents. Pi passes the bounded
- * evidence window it gave the session; MCP/CLI callers resolve citations back
- * through the canonical episodic selector. Neither executor writes SQLite.
+ * Convert a model-facing payload to the shared applicator shape. Returns null
+ * when a referenced row cannot be resolved — the caller rejects the op rather
+ * than letting name-based applicators implicitly create rows from raw ids.
+ */
+function toApplicatorPayload(
+	accessor: DbAccessor,
+	agentId: string,
+	operation: string,
+	payload: Readonly<Record<string, unknown>>,
+): Readonly<Record<string, unknown>> | null {
+	const target = stringField(payload, "target");
+	const reason = stringField(payload, "reason") ?? undefined;
+	switch (operation) {
+		case "archive_entity":
+			return target === null ? null : { entity_id: target, reason };
+		case "archive_aspect": {
+			if (target === null) return null;
+			const entityId = lookupAspectEntityId(accessor, agentId, target);
+			return entityId === null ? null : { entity_id: entityId, aspect_id: target, reason };
+		}
+		case "archive_claim_value":
+			return target === null ? null : { attribute_id: target, reason };
+		case "archive_link":
+			return target === null ? null : { id: target, reason };
+		case "merge_entities": {
+			const targets = stringArrayField(payload, "targets");
+			const survivor = stringField(payload, "survivor");
+			if (targets === null || survivor === null) return null;
+			const sourceIds = targets.filter((id) => id !== survivor);
+			return { target_entity_id: survivor, source_entity_ids: sourceIds };
+		}
+		case "create_entity": {
+			const name = stringField(payload, "name");
+			const type = stringField(payload, "type");
+			return name === null || type === null ? null : { name, entity_type: type };
+		}
+		case "add_claim_value":
+		case "set_claim_value": {
+			const entityId = stringField(payload, "entityId");
+			const aspectId = stringField(payload, "aspectId");
+			const claimKey = stringField(payload, "claimKey");
+			const value = stringField(payload, "value");
+			if (entityId === null || aspectId === null || claimKey === null || value === null) return null;
+			const name = lookupEntityName(accessor, agentId, entityId);
+			const aspect = lookupAspectName(accessor, agentId, entityId, aspectId);
+			return name === null || aspect === null ? null : { entity: name, aspect, claim_key: claimKey, value };
+		}
+		case "supersede_claim_value": {
+			const entityId = stringField(payload, "entityId");
+			const aspectId = stringField(payload, "aspectId");
+			const claimKey = stringField(payload, "claimKey");
+			const value = stringField(payload, "value");
+			if (entityId === null || aspectId === null || claimKey === null || value === null) return null;
+			const name = lookupEntityName(accessor, agentId, entityId);
+			const aspect = lookupAspectName(accessor, agentId, entityId, aspectId);
+			const attributeId =
+				stringField(payload, "attributeId") ?? lookupActiveClaimAttributeId(accessor, agentId, aspectId, claimKey);
+			return name === null || aspect === null || attributeId === null
+				? null
+				: { entity: name, aspect, claim_key: claimKey, attribute_id: attributeId, new_value: value };
+		}
+		case "rename_entity": {
+			const entityId = stringField(payload, "entityId");
+			const newName = stringField(payload, "newName");
+			return entityId === null || newName === null ? null : { entity_id: entityId, new_name: newName };
+		}
+		case "create_aspect": {
+			const entityId = stringField(payload, "entityId");
+			const name = stringField(payload, "name");
+			return entityId === null || name === null ? null : { entity_id: entityId, name };
+		}
+		case "rename_aspect": {
+			const entityId = stringField(payload, "entityId");
+			const aspectId = stringField(payload, "aspectId");
+			const newName = stringField(payload, "newName");
+			return entityId === null || aspectId === null || newName === null
+				? null
+				: { entity_id: entityId, aspect_id: aspectId, new_name: newName };
+		}
+		case "create_link": {
+			const fromEntityId = stringField(payload, "fromEntityId");
+			const toEntityId = stringField(payload, "toEntityId");
+			const linkType = stringField(payload, "linkType");
+			return fromEntityId === null || toEntityId === null || linkType === null
+				? null
+				: { source_entity_id: fromEntityId, target_entity_id: toEntityId, link_type: linkType };
+		}
+		case "update_link": {
+			const linkId = stringField(payload, "linkId");
+			const linkType = stringField(payload, "linkType") ?? undefined;
+			return linkId === null ? null : { id: linkId, link_type: linkType, reason };
+		}
+		case "create_policy": {
+			const entityId = stringField(payload, "entityId");
+			const name = stringField(payload, "name");
+			const definition = stringField(payload, "definition");
+			return entityId === null || name === null || definition === null
+				? null
+				: { entity_id: entityId, kind: name, content: definition };
+		}
+		case "create_action_type": {
+			const name = stringField(payload, "name");
+			return name === null ? null : { name };
+		}
+		case "create_interface": {
+			const name = stringField(payload, "name");
+			return name === null ? null : { name };
+		}
+		default:
+			return payload;
+	}
+}
+
+/**
+ * The sole daemon-owned apply seam for Dreaming agents. Flag ops mint hygiene
+ * attention in-batch; hygiene archives/merges cite attention provenance;
+ * content ops cite exact quotes resolved against the episodic store. Payloads
+ * are mapped to the shared applicator contracts; every write is audited.
  */
 export function applyDreamingOperations(params: {
 	readonly accessor: DbAccessor;
 	readonly agentId: string;
 	readonly actor: string;
 	readonly operations: readonly DreamingOperationRequest[];
-	readonly allowedEvidence?: readonly DreamingAgentEvidence[];
+	readonly passId?: string;
 }): ApplyDreamingOperationsResult {
 	if (params.operations.length === 0) return { ok: false, items: [], error: "operations are required" };
-	const allowedOperations = new Set<string>(ONTOLOGY_PROPOSAL_OPERATIONS);
-	const validated: OntologyOperationInput[] = [];
+	const allowedOperations = new Set<string>(DREAMING_OPERATION_IDS);
 	for (const operation of params.operations) {
 		if (!allowedOperations.has(operation.operation)) {
 			return { ok: false, items: [], error: `Unsupported ontology proposal operation: ${operation.operation}` };
@@ -281,41 +465,94 @@ export function applyDreamingOperations(params: {
 		) {
 			return { ok: false, items: [], error: "confidence must be a finite number between 0 and 1" };
 		}
-		const provenance = provenanceForEvidence(params.accessor, params.agentId, operation, params.allowedEvidence);
-		const resolvedProvenance = provenance ?? attentionProvenance(params.accessor, params.agentId, operation);
-		if (resolvedProvenance === null) {
-			return {
-				ok: false,
-				items: [],
-				error: "Every operation must cite an exact quote from scoped episodic evidence",
-			};
+	}
+
+	const minted = mintFlags(params.accessor, params.agentId, params.operations);
+
+	const validated: Array<{
+		readonly input: OntologyOperationInput | null;
+		readonly attentionId: string | null;
+	}> = [];
+	for (let index = 0; index < params.operations.length; index += 1) {
+		const operation = params.operations[index]!;
+		if (operation.operation === FLAG_OP) {
+			const attentionId = minted.get(index) ?? null;
+			validated.push({ input: null, attentionId });
+			continue;
+		}
+		let provenance: DreamingOperationProvenance | null = null;
+		let attentionId: string | null = null;
+		if (HYGIENE_ARCHIVE_OPS.has(operation.operation)) {
+			const resolved = attentionProvenance(params.accessor, params.agentId, operation, minted);
+			if (resolved !== null) {
+				provenance = resolved.provenance;
+				attentionId = resolved.attentionId;
+			}
+			if (provenance === null) {
+				return {
+					ok: false,
+					items: [],
+					error: "Hygiene archives require attention provenance (attention:$<index> or attention:<uuid>)",
+				};
+			}
+		} else {
+			provenance = provenanceForEvidence(params.accessor, params.agentId, operation);
+			if (provenance === null) {
+				return {
+					ok: false,
+					items: [],
+					error: "Every operation must cite an exact quote from scoped episodic evidence",
+				};
+			}
+		}
+		const payload = toApplicatorPayload(params.accessor, params.agentId, operation.operation, operation.payload);
+		if (payload === null) {
+			return { ok: false, items: [], error: `Could not resolve operation target: ${operation.operation}` };
 		}
 		validated.push({
-			operation: operation.operation,
-			payload: operation.payload,
-			reason: operation.reason,
-			evidence: resolvedProvenance.evidence,
-			confidence: operation.confidence,
-			risk: operation.risk ?? null,
-			sourceKind: resolvedProvenance.sourceKind,
-			sourceId: resolvedProvenance.sourceId,
-			sourcePath: resolvedProvenance.sourcePath,
-			sourceRoot: resolvedProvenance.sourceRoot,
+			input: {
+				operation: operation.operation,
+				payload,
+				reason: operation.reason,
+				evidence: provenance.evidence,
+				confidence: operation.confidence,
+				risk: operation.risk ?? null,
+				sourceKind: provenance.sourceKind,
+				sourceId: provenance.sourceId,
+				sourcePath: provenance.sourcePath,
+				sourceRoot: provenance.sourceRoot,
+			},
+			attentionId,
 		});
 	}
 
 	const items: DreamingOperationItem[] = [];
 	params.accessor.withWriteTx((db) => {
 		for (let index = 0; index < validated.length; index += 1) {
+			const entry = validated[index]!;
+			if (entry.input === null) {
+				// flag op: nothing to apply; surface the minted attention id
+				items.push({ index, ok: true, result: { attentionId: entry.attentionId } });
+				continue;
+			}
 			const savepoint = `signet_dream_op_${index}`;
 			db.exec(`SAVEPOINT ${savepoint}`);
 			try {
 				const batch = applyOntologyOperationBatchInTx(db, {
 					agentId: params.agentId,
 					actor: params.actor,
-					operations: [validated[index]!],
+					operations: [entry.input],
 				});
 				db.exec(`RELEASE SAVEPOINT ${savepoint}`);
+				if (entry.attentionId !== null) {
+					// The flag was consumed: resolve it in the same tx so the
+					// queue does not re-surface a handled target next pass.
+					db.prepare(
+						`UPDATE dreaming_attention
+						 SET resolved_at = datetime('now'), resolved_by_pass_id = ?
+						 WHERE id = ? AND agent_id = ? AND resolved_at IS NULL`,
+					).run(params.passId ?? null, entry.attentionId, params.agentId);
+				}
 				items.push({ index, ok: true, proposal: batch.items[0]?.proposal, result: batch.items[0]?.result });
 			} catch (error) {
 				db.exec(`ROLLBACK TO SAVEPOINT ${savepoint}`);

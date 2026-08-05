@@ -6,6 +6,7 @@ import { join } from "node:path";
 import type { DreamingConfig } from "@signet/core";
 import { runMigrations } from "../../../core/src/migrations";
 import type { DbAccessor } from "../db-accessor";
+import { DREAMING_AGENT_PROMPT } from "./dreaming";
 import { getDreamingWorkerAgentIds, shouldDeferDreamingSweep, startDreamingWorker } from "./dreaming-worker";
 
 function defaultCfg(overrides?: Partial<DreamingConfig>): DreamingConfig {
@@ -137,9 +138,10 @@ describe("dreaming worker agent scope", () => {
 		).run();
 		const worker = startDreamingWorker(accessor, defaultCfg(), agentsDir, "default");
 		try {
-			expect(
-				db.prepare("SELECT kind, subject_ref FROM dreaming_attention WHERE agent_id = ?").get("default"),
-			).toEqual({ kind: "hygiene", subject_ref: "entity:legacy-husk" });
+			expect(db.prepare("SELECT kind, subject_ref FROM dreaming_attention WHERE agent_id = ?").get("default")).toEqual({
+				kind: "hygiene",
+				subject_ref: "entity:legacy-husk",
+			});
 		} finally {
 			worker.stop();
 		}
@@ -172,59 +174,39 @@ describe("dreaming worker agent scope", () => {
 			         datetime('now'), datetime('now'), datetime('now'))`,
 		).run(BETA, betaEvidence);
 
-		// Deterministic provider: inspect the prompt to emit an operation that
-		// cites only the evidence present in THIS agent's prompt. Since each
-		// pass is bound to one agent_id, only that agent's summary appears.
+		// Deterministic provider: emit an operation that cites only THIS agent's
+		// evidence (each pass is bound to one agent_id). The fixed prompt no
+		// longer carries evidence; citations resolve against the store.
 		const seenPrompts: string[] = [];
-		const executorFactory = () => ({
-			async run(input: { prompt: string; tools: ReadonlyArray<{ name: string; execute: (...args: unknown[]) => Promise<unknown> }> }) {
+		const executorFactory = (agentId: string) => ({
+			async run(input: {
+				prompt: string;
+				tools: ReadonlyArray<{ name: string; execute: (...args: unknown[]) => Promise<unknown> }>;
+			}) {
 				const prompt = input.prompt;
 				seenPrompts.push(prompt);
 				const apply = input.tools.find((tool) => tool.name === "apply_ontology_ops");
 				if (!apply) throw new Error("Missing apply_ontology_ops");
-				if (prompt.includes(alphaEvidence) && !prompt.includes(betaEvidence)) {
-					await apply.execute("call", {
-						operations: [
-							{
-								operation: "create_entity",
-								payload: { name: "Apex", entity_type: "project" },
-								reason: "The evidence identifies the Apex project.",
-								confidence: 0.9,
-								evidence: [
-									{
-										source_ref: "summary:summary-alpha",
-										source_kind: "summary",
-										source_id: "summary-alpha",
-										quote: alphaEvidence,
-									},
-								],
-							},
-						],
-					});
-					return { summary: "Consolidated alpha evidence" };
-				}
-				if (prompt.includes(betaEvidence) && !prompt.includes(alphaEvidence)) {
-					await apply.execute("call", {
-						operations: [
-							{
-								operation: "create_entity",
-								payload: { name: "Zenith", entity_type: "project" },
-								reason: "The evidence identifies the Zenith project.",
-								confidence: 0.9,
-								evidence: [
-									{
-										source_ref: "summary:summary-beta",
-										source_kind: "summary",
-										source_id: "summary-beta",
-										quote: betaEvidence,
-									},
-								],
-							},
-						],
-					});
-					return { summary: "Consolidated beta evidence" };
-				}
-				return { summary: "No recognized evidence" };
+				const isAlpha = agentId === ALPHA;
+				await apply.execute("call", {
+					operations: [
+						{
+							operation: "create_entity",
+							payload: { name: isAlpha ? "Apex" : "Zenith", type: "project" },
+							reason: "The evidence identifies the project.",
+							confidence: 0.9,
+							evidence: [
+								{
+									source_ref: isAlpha ? "summary:summary-alpha" : "summary:summary-beta",
+									source_kind: "summary",
+									source_id: isAlpha ? "summary-alpha" : "summary-beta",
+									quote: isAlpha ? alphaEvidence : betaEvidence,
+								},
+							],
+						},
+					],
+				});
+				return { summary: isAlpha ? "Consolidated alpha evidence" : "Consolidated beta evidence" };
 			},
 		});
 
@@ -246,46 +228,54 @@ describe("dreaming worker agent scope", () => {
 			// Two passes recorded, one per agent.
 			const alphaPass = db
 				.prepare("SELECT agent_id, status, mode FROM dreaming_passes WHERE agent_id = ?")
-			.get(ALPHA) as { agent_id: string; status: string; mode: string };
+				.get(ALPHA) as { agent_id: string; status: string; mode: string };
 			const betaPass = db
 				.prepare("SELECT agent_id, status, mode FROM dreaming_passes WHERE agent_id = ?")
-			.get(BETA) as { agent_id: string; status: string; mode: string };
+				.get(BETA) as { agent_id: string; status: string; mode: string };
 			expect(alphaPass).toEqual({ agent_id: ALPHA, status: "completed", mode: "incremental" });
 			expect(betaPass).toEqual({ agent_id: BETA, status: "completed", mode: "incremental" });
 
-			// Each pass saw only its own agent's evidence (no cross-agent leak).
+			// Each pass ran with the fixed prompt; no cross-agent evidence is
+			// injected, and the citations above resolved against each agent's
+			// own store.
 			expect(seenPrompts).toHaveLength(2);
-			const alphaPrompt = seenPrompts.find((p) => p.includes(alphaEvidence));
-			const betaPrompt = seenPrompts.find((p) => p.includes(betaEvidence));
-			expect(alphaPrompt).toBeDefined();
-			expect(betaPrompt).toBeDefined();
-			expect(alphaPrompt).not.toContain(betaEvidence);
-			expect(betaPrompt).not.toContain(alphaEvidence);
+			expect(seenPrompts[0]).toBe(DREAMING_AGENT_PROMPT);
+			expect(seenPrompts[1]).toBe(DREAMING_AGENT_PROMPT);
 
 			// Semantic rows are agent-isolated: each agent only owns its entity.
 			const alphaEntities = (
-				db.prepare("SELECT canonical_name FROM entities WHERE agent_id = ? ORDER BY canonical_name").all(ALPHA) as Array<{
-				canonical_name: string;
-			}>
+				db
+					.prepare("SELECT canonical_name FROM entities WHERE agent_id = ? ORDER BY canonical_name")
+					.all(ALPHA) as Array<{
+					canonical_name: string;
+				}>
 			).map((r) => r.canonical_name);
 			const betaEntities = (
-				db.prepare("SELECT canonical_name FROM entities WHERE agent_id = ? ORDER BY canonical_name").all(BETA) as Array<{
-				canonical_name: string;
-			}>
+				db
+					.prepare("SELECT canonical_name FROM entities WHERE agent_id = ? ORDER BY canonical_name")
+					.all(BETA) as Array<{
+					canonical_name: string;
+				}>
 			).map((r) => r.canonical_name);
 			expect(alphaEntities).toEqual(["apex"]);
 			expect(betaEntities).toEqual(["zenith"]);
 
 			// No entity was written to the wrong agent.
 			expect(
-				(db.prepare("SELECT COUNT(*) AS n FROM entities WHERE agent_id = ? AND canonical_name = 'zenith'").get(ALPHA) as {
-					n: number;
-				}).n,
+				(
+					db
+						.prepare("SELECT COUNT(*) AS n FROM entities WHERE agent_id = ? AND canonical_name = 'zenith'")
+						.get(ALPHA) as {
+						n: number;
+					}
+				).n,
 			).toBe(0);
 			expect(
-				(db.prepare("SELECT COUNT(*) AS n FROM entities WHERE agent_id = ? AND canonical_name = 'apex'").get(BETA) as {
-					n: number;
-				}).n,
+				(
+					db.prepare("SELECT COUNT(*) AS n FROM entities WHERE agent_id = ? AND canonical_name = 'apex'").get(BETA) as {
+						n: number;
+					}
+				).n,
 			).toBe(0);
 		} finally {
 			worker.stop();

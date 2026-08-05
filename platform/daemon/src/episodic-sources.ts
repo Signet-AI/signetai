@@ -347,8 +347,7 @@ export function readRecentEpisodicSources(
 	const requeuePredicate = (kind: EpisodicSourceKind, idColumn: string): string =>
 		!hasExclusions
 			? "0"
-			:
-		`EXISTS (
+			: `EXISTS (
 			SELECT 1 FROM dreaming_evidence_exclusions AS dee
 			WHERE dee.agent_id = ?
 			  AND dee.source_kind = '${kind}'
@@ -590,43 +589,94 @@ export function readEpisodicSource(db: ReadDb, options: ReadEpisodicSourceOption
  */
 export function searchEpisodicSources(
 	db: ReadDb,
-	params: { readonly agentId: string; readonly query: string; readonly limit?: number },
+	params: {
+		readonly agentId: string;
+		readonly query: string;
+		readonly since?: string;
+		readonly before?: string;
+		readonly kind?: "memory" | "artifact" | "transcript" | "summary";
+		readonly limit?: number;
+	},
 ): EpisodicSourceRecord[] {
 	const query = params.query.trim();
-	if (!query) return [];
 	const limit = Math.max(1, Math.min(Math.floor(params.limit ?? 20), 50));
 	const like = `%${query}%`;
+	// An empty query still lists recent sources (runbook cutoff pattern); the
+	// LIKE below degrades to a match-all and the outer ORDER BY picks newest.
+	const timeArgs: unknown[] = [];
+	if (params.since !== undefined) timeArgs.push(params.since);
+	if (params.before !== undefined) timeArgs.push(params.before);
+
+	const branches: Array<{ sql: string; args: unknown[] }> = [];
+	if (params.kind === undefined || params.kind === "memory") {
+		branches.push({
+			sql: `SELECT 'memory' AS kind, id, created_at AS captured_at
+			      FROM memories
+			      WHERE agent_id = ? AND memory_kind = 'episodic'
+			        AND COALESCE(is_deleted, 0) = 0 AND visibility != 'archived' AND scope IS NULL
+			        AND COALESCE(type, '') != 'session_summary' AND content LIKE ?
+			        ${params.since ? "AND created_at >= ?" : ""} ${params.before ? "AND created_at <= ?" : ""}`,
+			args: [params.agentId, like, ...timeArgs],
+		});
+	}
+	if (params.kind === undefined || params.kind === "artifact") {
+		branches.push({
+			// Artifacts are deduped by content hash: content-identical files
+			// across vault paths collapse to one canonical row (most recent
+			// captured_at; tie-break by path). Empty placeholder artifacts are
+			// excluded entirely.
+			sql: `SELECT 'artifact' AS kind, ma.source_path AS id, ma.captured_at AS captured_at
+			      FROM memory_artifacts ma
+			      WHERE ma.agent_id = ? AND COALESCE(ma.is_deleted, 0) = 0
+			        AND length(ma.content) > 0 AND ma.content LIKE ?
+			        ${params.since ? "AND ma.captured_at >= ?" : ""} ${params.before ? "AND ma.captured_at <= ?" : ""}
+			        AND (ma.source_sha256 IS NULL OR ma.source_sha256 = ''
+			             OR (ma.agent_id, ma.source_path) = (
+			               SELECT ma2.agent_id, ma2.source_path FROM memory_artifacts ma2
+			               WHERE ma2.agent_id = ma.agent_id AND COALESCE(ma2.is_deleted, 0) = 0
+			                 AND ma2.source_sha256 = ma.source_sha256
+			               ORDER BY ma2.captured_at DESC, ma2.source_path ASC
+			               LIMIT 1
+			             ))`,
+			args: [params.agentId, like, ...timeArgs],
+		});
+	}
+	if (params.kind === undefined || params.kind === "transcript") {
+		branches.push({
+			sql: `SELECT 'transcript' AS kind, session_key AS id, COALESCE(updated_at, created_at) AS captured_at
+			      FROM session_transcripts
+			      WHERE agent_id = ? AND content LIKE ?
+			        ${params.since ? "AND COALESCE(updated_at, created_at) >= ?" : ""}
+			        ${params.before ? "AND COALESCE(updated_at, created_at) <= ?" : ""}`,
+			args: [params.agentId, like, ...timeArgs],
+		});
+	}
+	if (params.kind === undefined || params.kind === "summary") {
+		branches.push({
+			sql: `SELECT 'summary' AS kind, id, latest_at AS captured_at
+			      FROM session_summaries
+			      WHERE agent_id = ? AND depth = 0
+			        AND COALESCE(source_type, 'summary') IN ('summary', 'compaction', 'checkpoint')
+			        AND content LIKE ?
+			        ${params.since ? "AND latest_at >= ?" : ""} ${params.before ? "AND latest_at <= ?" : ""}`,
+			args: [params.agentId, like, ...timeArgs],
+		});
+	}
+
+	const union = branches.map((branch) => branch.sql).join("\nUNION ALL\n");
 	const rows = db
 		.prepare(
 			`SELECT kind, id
 			 FROM (
-				SELECT 'memory' AS kind, id, created_at AS captured_at
-				FROM memories
-				WHERE agent_id = ? AND memory_kind = 'episodic'
-				  AND COALESCE(is_deleted, 0) = 0 AND visibility != 'archived' AND scope IS NULL
-				  AND COALESCE(type, '') != 'session_summary' AND content LIKE ?
-				UNION ALL
-				SELECT 'artifact' AS kind, source_path AS id, captured_at
-				FROM memory_artifacts
-				WHERE agent_id = ? AND COALESCE(is_deleted, 0) = 0 AND content LIKE ?
-				UNION ALL
-				SELECT 'transcript' AS kind, session_key AS id, COALESCE(updated_at, created_at) AS captured_at
-				FROM session_transcripts
-				WHERE agent_id = ? AND content LIKE ?
-				UNION ALL
-				SELECT 'summary' AS kind, id, latest_at AS captured_at
-				FROM session_summaries
-				WHERE agent_id = ? AND depth = 0
-				  AND COALESCE(source_type, 'summary') IN ('summary', 'compaction', 'checkpoint')
-				  AND content LIKE ?
+			 ${union}
 			 )
 			 ORDER BY julianday(captured_at) DESC, kind ASC, id ASC
 			 LIMIT ?`,
 		)
-		.all(params.agentId, like, params.agentId, like, params.agentId, like, params.agentId, like, limit) as Array<{
-			kind: EpisodicSourceKind;
-			id: string;
-		}>;
+		.all(...branches.flatMap((branch) => branch.args), limit) as Array<{
+		kind: EpisodicSourceKind;
+		id: string;
+	}>;
 	return rows
 		.map((row) => readEpisodicSource(db, { agentId: params.agentId, from: `${row.kind}:${row.id}` }))
 		.filter((source): source is EpisodicSourceRecord => source !== null);
