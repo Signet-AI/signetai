@@ -1,14 +1,18 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import {
+	type SessionEvictionHandler,
+	_expireSessionForTest,
 	bypassSession,
 	claimSession,
 	getBypassedSessionKeys,
 	getEndedSession,
+	getSessionTrackerStats,
 	isSessionBypassed,
 	markSessionEnded,
 	renewSession,
 	resetSessions,
 	runStaleCleanup,
+	setSessionEvictionHandler,
 } from "./session-tracker";
 
 afterEach(() => {
@@ -164,5 +168,70 @@ describe("ended session tombstones", () => {
 		claimSession("reused-sess", "plugin");
 
 		expect(getEndedSession("reused-sess")).toBeUndefined();
+	});
+});
+
+describe("TTL eviction lifecycle handler (#902)", () => {
+	it("invokes the handler with the evicted claim and increments expired", () => {
+		const seen: Array<{ key: string; agentId: string; runtimePath: string }> = [];
+		const handler: SessionEvictionHandler = (info) => {
+			seen.push({ key: info.sessionKey, agentId: info.agentId, runtimePath: info.runtimePath });
+		};
+		setSessionEvictionHandler(handler);
+		claimSession("ttl-sess-1", "plugin", "agent-a");
+		_expireSessionForTest("ttl-sess-1");
+
+		runStaleCleanup();
+
+		expect(seen).toEqual([{ key: "ttl-sess-1", agentId: "agent-a", runtimePath: "plugin" }]);
+		expect(getSessionTrackerStats().expired).toBe(1);
+		expect(getSessionTrackerStats().unfinalized).toBe(0);
+	});
+
+	it("counts a handler 'skipped' outcome as unfinalized", () => {
+		setSessionEvictionHandler(() => "skipped");
+		claimSession("ttl-sess-2", "legacy", "agent-b");
+		_expireSessionForTest("ttl-sess-2");
+
+		runStaleCleanup();
+
+		expect(getSessionTrackerStats().expired).toBe(1);
+		expect(getSessionTrackerStats().unfinalized).toBe(1);
+	});
+
+	it("does not count a 'finalized' outcome as unfinalized", () => {
+		setSessionEvictionHandler(() => "finalized");
+		claimSession("ttl-sess-3", "plugin", "agent-c");
+		_expireSessionForTest("ttl-sess-3");
+
+		runStaleCleanup();
+
+		expect(getSessionTrackerStats().expired).toBe(1);
+		expect(getSessionTrackerStats().unfinalized).toBe(0);
+	});
+
+	it("counts expired sessions even without a registered handler", () => {
+		setSessionEvictionHandler(null);
+		claimSession("ttl-sess-4", "plugin");
+		_expireSessionForTest("ttl-sess-4");
+
+		runStaleCleanup();
+
+		expect(getSessionTrackerStats().expired).toBe(1);
+		expect(getSessionTrackerStats().unfinalized).toBe(0);
+	});
+
+	it("does not invoke the handler for a live (unexpired) claim", () => {
+		let calls = 0;
+		setSessionEvictionHandler(() => {
+			calls++;
+			return "finalized";
+		});
+		claimSession("ttl-live", "plugin");
+
+		runStaleCleanup();
+
+		expect(calls).toBe(0);
+		expect(getSessionTrackerStats().expired).toBe(0);
 	});
 });

@@ -9,20 +9,20 @@ import { type QueueCounts, getQueueDiagnosticsSnapshot } from "../diagnostics-qu
 import { getLlmProvider } from "../llm.js";
 import { loadMemoryConfig } from "../memory-config.js";
 import {
-	getDreamingEpisodicTokenBacklog,
 	getDreamingAttention,
+	getDreamingEpisodicTokenBacklog,
 	getDreamingEvidenceExclusions,
 	getDreamingPasses,
+	getDreamingQualityReport,
 	getDreamingState,
 	getDreamingToolCalls,
-	getDreamingQualityReport,
 	getDreamingWorker,
 	getPipelineWorkerStatus,
 	requestDreamingEvidenceRequeue,
 } from "../pipeline";
-import { applyDreamingOperations } from "../pipeline/dreaming-operations.js";
-import { getDreamingCapability, getDreamingCapabilityManifest } from "../pipeline/dreaming-capabilities.js";
 import { getFeedbackTelemetry } from "../pipeline/aspect-feedback.js";
+import { getDreamingCapability, getDreamingCapabilityManifest } from "../pipeline/dreaming-capabilities.js";
+import { applyDreamingOperations } from "../pipeline/dreaming-operations.js";
 import { AlreadyRunningError } from "../pipeline/dreaming-worker.js";
 import { getTraversalStatus } from "../pipeline/graph-traversal.js";
 import {
@@ -32,7 +32,7 @@ import {
 	refreshRegistry,
 } from "../pipeline/model-registry.js";
 import { getResourceSnapshot } from "../resource-monitor.js";
-import { activeSessionCount, getBypassedSessionKeys } from "../session-tracker.js";
+import { activeSessionCount, getBypassedSessionKeys, getSessionTrackerStats } from "../session-tracker.js";
 import { getTranscriptCaptureStatus } from "../transcript-capture-worker.js";
 import { getTranscriptHealthReport } from "../transcript-health.js";
 import {
@@ -299,6 +299,7 @@ export function registerPipelineRoutes(app: Hono): void {
 			},
 			activeSessions: activeSessionCount(),
 			bypassedSessions: getBypassedSessionKeys().size,
+			sessions: { lifecycle: getSessionTrackerStats() },
 			...(transcriptCapture ? { transcripts: { capture: transcriptCapture } } : {}),
 			agentCreatedAt,
 			...(health ? { health } : {}),
@@ -559,7 +560,8 @@ export function registerPipelineRoutes(app: Hono): void {
 			c.req.path === "/api/dream/operations" ||
 			c.req.path === "/api/dream/tools" ||
 			c.req.path.startsWith("/api/dream/tools/")
-		) return next();
+		)
+			return next();
 		return requirePermission("admin", authConfig)(c, next);
 	});
 
@@ -607,7 +609,11 @@ export function registerPipelineRoutes(app: Hono): void {
 		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
 		const passId = c.req.param("passId").trim();
 		if (!passId) return c.json({ error: "Missing Dreaming pass id" }, 400);
-		return c.json({ agentId: scopedAgent.agentId, passId, items: getDreamingToolCalls(getDbAccessor(), scopedAgent.agentId, passId) });
+		return c.json({
+			agentId: scopedAgent.agentId,
+			passId,
+			items: getDreamingToolCalls(getDbAccessor(), scopedAgent.agentId, passId),
+		});
 	});
 
 	/** Deterministic semantic-quality measurements for the scoped Dreaming graph. */
@@ -622,7 +628,12 @@ export function registerPipelineRoutes(app: Hono): void {
 		if (raw === null) return c.json({ error: "Malformed JSON body" }, 400);
 		const body = asRecord(raw);
 		const sourceKind = readString(body, "sourceKind");
-		if (sourceKind !== "memory" && sourceKind !== "artifact" && sourceKind !== "transcript" && sourceKind !== "summary") {
+		if (
+			sourceKind !== "memory" &&
+			sourceKind !== "artifact" &&
+			sourceKind !== "transcript" &&
+			sourceKind !== "summary"
+		) {
 			return c.json({ error: "Invalid episodic source kind" }, 400);
 		}
 		const sourceId = readString(body, "sourceId");

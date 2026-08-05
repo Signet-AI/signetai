@@ -18,7 +18,8 @@ export type CheckpointTrigger =
 	| "session_end"
 	| "mid_session_extract"
 	| "agent"
-	| "explicit";
+	| "explicit"
+	| "ttl_expired";
 
 export interface CheckpointRow {
 	readonly id: string;

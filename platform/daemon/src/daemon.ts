@@ -56,7 +56,7 @@ import { syncAgentWorkspaces } from "./identity-sync";
 import { type InferenceStatusSummary, getOrCreateInferenceRouter } from "./inference-router.js";
 import { closeInferenceProviderResolver, initInferenceProviderResolver } from "./llm";
 import { logger } from "./logger";
-import { type ResolvedMemoryConfig, loadMemoryConfig } from "./memory-config";
+import { DEFAULT_PIPELINE_V2, type ResolvedMemoryConfig, loadMemoryConfig } from "./memory-config";
 import { registerGlobalMiddleware } from "./middleware";
 import {
 	type NativeMemoryBridgeHandle,
@@ -116,7 +116,13 @@ import {
 import { startSchedulerWorker } from "./scheduler";
 import { getSecret } from "./secrets.js";
 import { flushPendingCheckpoints, initCheckpointFlush, pruneCheckpoints } from "./session-checkpoints";
-import { releaseAllSessions, startSessionCleanup, stopSessionCleanup } from "./session-tracker";
+import {
+	releaseAllSessions,
+	setSessionEvictionHandler,
+	startSessionCleanup,
+	stopSessionCleanup,
+} from "./session-tracker";
+import { createTtlEvictionHandler } from "./session-ttl-finalizer";
 import { createSingleFlightRunner } from "./single-flight-runner";
 import {
 	beginSourceIndexJob,
@@ -1685,6 +1691,16 @@ async function main() {
 
 	await initDbAccessorAsync(MEMORY_DB, { agentsDir: AGENTS_DIR });
 	startSessionCleanup();
+	// Formal TTL lifecycle (#902): when stale-session cleanup evicts a claim
+	// whose harness never sent session-end, checkpoint the residual continuity
+	// state and enqueue idempotent summary finalization instead of silently
+	// dropping the in-memory lifecycle state.
+	setSessionEvictionHandler(
+		createTtlEvictionHandler({
+			accessor: getDbAccessor(),
+			maxCheckpointsPerSession: DEFAULT_PIPELINE_V2.continuity.maxCheckpointsPerSession,
+		}),
+	);
 	logFdSnapshot("post-db-init");
 	startEventLoopMonitor();
 	startFdPollMonitor();

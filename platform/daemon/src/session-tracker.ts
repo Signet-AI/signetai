@@ -44,6 +44,24 @@ interface EndedSession {
 
 type ClaimResult = { readonly ok: true } | { readonly ok: false; readonly claimedBy: RuntimePath };
 
+/** Session lifecycle info handed to the TTL-eviction handler (#902). */
+export interface EvictedSessionInfo {
+	readonly sessionKey: string;
+	readonly agentId: string;
+	readonly runtimePath: RuntimePath;
+	readonly claimedAt: string;
+}
+
+/**
+ * Optional handler invoked when a stale session claim is evicted by TTL
+ * cleanup. Returns "finalized" when the handler applied a formal lifecycle
+ * transition (checkpoint + finalization), "skipped" when finalization was
+ * intentionally skipped (e.g. synthesis disabled), or undefined when the
+ * handler did not classify the outcome. Counters exposed via
+ * `getSessionTrackerStats` are updated accordingly (#902).
+ */
+export type SessionEvictionHandler = (info: EvictedSessionInfo) => "finalized" | "skipped" | undefined;
+
 const STALE_SESSION_MS = 4 * 60 * 60 * 1000; // 4 hours
 const ENDED_SESSION_TOMBSTONE_MS = 30 * 60 * 1000; // 30 minutes
 const CLEANUP_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes
@@ -59,6 +77,10 @@ const warnedSessions = new Set<string>();
 let cleanupTimer: ReturnType<typeof setInterval> | null = null;
 // Synchronous guard — prevents double-start during concurrent async init.
 let cleanupStarted = false;
+// TTL-eviction lifecycle hook + counters (#902).
+let evictionHandler: SessionEvictionHandler | null = null;
+let expiredCount = 0;
+let unfinalizedCount = 0;
 
 export function normalizeSessionKey(sessionKey: string): string {
 	const trimmed = sessionKey.trim();
@@ -323,11 +345,27 @@ function cleanupStaleSessions(): void {
 			bypassedSessions.delete(key);
 			warnedSessions.delete(key);
 			cleaned++;
+			expiredCount++;
 			logger.warn("session-tracker", "Session evicted (TTL expired)", {
 				sessionKey: key,
 				runtimePath: claim.runtimePath,
 				claimedAt: claim.claimedAt,
 			});
+			// Formal lifecycle transition (#902): hand the evicted claim to
+			// the daemon-registered handler so it can checkpoint the latest
+			// transcript and enqueue idempotent finalization before the
+			// in-memory state is gone. A "skipped" outcome means the
+			// finalization was intentionally not applied (e.g. synthesis
+			// disabled) and is counted as unfinalized.
+			if (evictionHandler) {
+				const outcome = evictionHandler({
+					sessionKey: key,
+					agentId: claim.agentId,
+					runtimePath: claim.runtimePath,
+					claimedAt: claim.claimedAt,
+				});
+				if (outcome === "skipped") unfinalizedCount++;
+			}
 		}
 	}
 
@@ -397,10 +435,46 @@ export function activeSessionCount(): number {
 	return sessions.size;
 }
 
+/**
+ * Register the TTL-eviction lifecycle handler (or clear it with null). The
+ * daemon wires this to a finalizer that checkpoints and enqueues idempotent
+ * summary work before an expired session's in-memory state is dropped (#902).
+ */
+export function setSessionEvictionHandler(handler: SessionEvictionHandler | null): void {
+	evictionHandler = handler;
+}
+
+/** Expired/unfinalized session counters for diagnostics (#902). */
+export function getSessionTrackerStats(): {
+	readonly active: number;
+	readonly ended: number;
+	readonly bypassed: number;
+	readonly expired: number;
+	readonly unfinalized: number;
+} {
+	return {
+		active: sessions.size,
+		ended: endedSessions.size,
+		bypassed: bypassedSessions.size,
+		expired: expiredCount,
+		unfinalized: unfinalizedCount,
+	};
+}
+
 /** Reset all sessions (for testing). */
 export function resetSessions(): void {
 	sessions.clear();
 	endedSessions.clear();
 	bypassedSessions.clear();
 	warnedSessions.clear();
+	evictionHandler = null;
+	expiredCount = 0;
+	unfinalizedCount = 0;
+}
+
+/** Test-only: force a session claim's expiry so cleanup evicts it. */
+export function _expireSessionForTest(sessionKey: string): void {
+	const key = normalizeSessionKey(sessionKey);
+	const claim = sessions.get(key);
+	if (claim) claim.expiresAt = Date.now() - 1;
 }
