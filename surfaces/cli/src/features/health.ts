@@ -410,6 +410,12 @@ export function getExtractionStatusNotice(
 ): { level: "warn" | "error"; title: string; detail: string } | null {
 	const extraction = daemon.extraction;
 	if (extraction && daemon.running && extraction.hasWorkloadState && !extraction.ready) {
+		// The legacy auto-extraction pipeline was deliberately retired in favor
+		// of Dreaming, which owns all semantic writes. Retired states are not a
+		// fault and are not surfaced as a pipeline notice at all.
+		if (!extraction.enabled && extraction.status === "disabled" && extraction.reason) {
+			return null;
+		}
 		const title = !extraction.enabled
 			? "Pipeline disabled"
 			: extraction.paused

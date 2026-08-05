@@ -723,7 +723,7 @@ describe("getExtractionStatusNotice", () => {
 		expect(notice).toBeNull();
 	});
 
-	it("warns that the pipeline is disabled under the Dreaming cutover", () => {
+	it("does not surface a pipeline notice when the extraction pipeline is retired", () => {
 		const notice = getExtractionStatusNotice({
 			running: true,
 			pid: 1,
@@ -740,6 +740,37 @@ describe("getExtractionStatusNotice", () => {
 				status: "disabled",
 				degraded: false,
 				reason: "Dreaming cutover owns semantic writes",
+				blockedBy: [],
+				since: null,
+				enabled: false,
+				paused: false,
+				workerRunning: false,
+				ready: false,
+				blockedReason: null,
+				hasWorkloadState: true,
+			},
+		});
+
+		expect(notice).toBeNull();
+	});
+
+	it("still warns that the pipeline is disabled when no retirement reason is present", () => {
+		const notice = getExtractionStatusNotice({
+			running: true,
+			pid: 1,
+			uptime: 10,
+			version: "0.0.1",
+			host: "127.0.0.1",
+			bindHost: "127.0.0.1",
+			networkMode: "local",
+			extraction: {
+				configured: null,
+				resolved: null,
+				effective: null,
+				fallbackProvider: "none",
+				status: "disabled",
+				degraded: false,
+				reason: null,
 				blockedBy: [],
 				since: null,
 				enabled: false,
