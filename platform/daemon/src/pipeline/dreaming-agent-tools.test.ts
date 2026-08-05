@@ -30,13 +30,19 @@ describe("dreaming-agent-tools", () => {
 		});
 	}
 
-	function insertActiveAttribute(entityId: string, aspectId: string, content: string, agentId: string): void {
+	function insertActiveAttribute(
+		entityId: string,
+		aspectId: string,
+		content: string,
+		agentId: string,
+		aspectName = "configuration",
+	): void {
 		getDbAccessor().withWriteTx((db) => {
 			db.prepare(
 				`INSERT INTO entity_aspects
 				 (id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at)
-				 VALUES (?, ?, ?, 'configuration', 'configuration', 0.5, datetime('now'), datetime('now'))`,
-			).run(aspectId, entityId, agentId);
+				 VALUES (?, ?, ?, ?, ?, 0.5, datetime('now'), datetime('now'))`,
+			).run(aspectId, entityId, agentId, aspectName, aspectName.toLowerCase());
 			db.prepare(
 				`INSERT INTO entity_attributes
 				 (id, aspect_id, agent_id, kind, content, normalized_content,
@@ -67,7 +73,7 @@ describe("dreaming-agent-tools", () => {
 		return JSON.parse(text);
 	}
 
-	function findTool(tools: readonly ReturnType<typeof createDreamingAgentTools>, name: string) {
+	function findTool(tools: ReturnType<typeof createDreamingAgentTools>, name: string) {
 		const tool = tools.find((t) => t.name === name);
 		if (!tool) throw new Error(`tool ${name} not registered`);
 		return tool;
@@ -122,6 +128,101 @@ describe("dreaming-agent-tools", () => {
 		);
 		expect(hydrated.ok).toBe(true);
 		expect((hydrated.aspects as Array<{ id: string }>).map((a) => a.id)).toEqual(["a-config"]);
+	});
+
+	it("bounds content-pass tool results when evidence and entity provenance are large", async () => {
+		const largeContent = `${"context ".repeat(2_000)}Needle in the middle of a large source.`;
+		insertEpisodicMemory("mem-large", largeContent);
+		insertEntity("e-large", "Large Entity", "large entity", "owner");
+		for (let index = 0; index < 60; index += 1) {
+			insertActiveAttribute("e-large", `a-large-${index}`, `Large aspect ${index}`, "owner", `aspect-${index}`);
+		}
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare("UPDATE entities SET proposal_evidence = ? WHERE id = ? AND agent_id = ?").run(
+				JSON.stringify(["evidence ".repeat(20_000)]),
+				"e-large",
+				"owner",
+			);
+		});
+
+		const tools = createDreamingAgentTools({ accessor: getDbAccessor(), agentId: "owner", actor: "owner" });
+		const evidence = readResult(
+			await findTool(tools, "search_evidence").execute(
+				"call",
+				{ agentId: "owner", query: "Needle", kind: "memory", limit: 1 },
+				undefined,
+				undefined,
+				{} as never,
+			),
+		);
+		const item = (
+			evidence.items as Array<{
+				content: string;
+				contentLength: number;
+				contentTruncated: boolean;
+				contentHasPrevious: boolean;
+				contentHasNext: boolean;
+				sourceRef: string;
+			}>
+		)[0];
+		expect(item).toMatchObject({ sourceRef: "memory:mem-large", contentTruncated: true });
+		expect(item.content.length).toBeLessThanOrEqual(2_000);
+		expect(largeContent).toContain(item.content);
+		expect(item.content).toContain("Needle");
+		expect(item.contentLength).toBe(largeContent.length);
+		expect(item.contentHasPrevious).toBe(true);
+		expect(item.contentHasNext).toBe(false);
+
+		const firstFragment = readResult(
+			await findTool(tools, "search_evidence").execute(
+				"call",
+				{ agentId: "owner", sourceRef: item.sourceRef, offset: 0, chunkSize: 2_000 },
+				undefined,
+				undefined,
+				{} as never,
+			),
+		);
+		const firstFragmentItem = (
+			firstFragment.items as Array<{ content: string; contentOffset: number; contentHasNext: boolean }>
+		)[0];
+		expect(firstFragmentItem.contentOffset).toBe(0);
+		expect(firstFragmentItem.content.length).toBeLessThanOrEqual(2_000);
+		expect(firstFragmentItem.contentHasNext).toBe(true);
+		expect(largeContent).toContain(firstFragmentItem.content);
+
+		const secondFragment = readResult(
+			await findTool(tools, "search_evidence").execute(
+				"call",
+				{
+					agentId: "owner",
+					sourceRef: item.sourceRef,
+					offset: firstFragmentItem.contentOffset + firstFragmentItem.content.length,
+					chunkSize: 2_000,
+				},
+				undefined,
+				undefined,
+				{} as never,
+			),
+		);
+		const secondFragmentItem = (secondFragment.items as Array<{ contentOffset: number }>)[0];
+		expect(secondFragmentItem.contentOffset).toBe(firstFragmentItem.content.length);
+
+		const entity = readResult(
+			await findTool(tools, "get_entity").execute(
+				"call",
+				{ agentId: "owner", entityId: "e-large", include: ["aspects"] },
+				undefined,
+				undefined,
+				{} as never,
+			),
+		);
+		expect(entity.aspects).toHaveLength(50);
+		expect(entity.aspectsTruncated).toBe(true);
+		expect(
+			(entity.entity as { proposalEvidence?: unknown[]; proposalEvidenceCount: number }).proposalEvidence,
+		).toBeUndefined();
+		expect((entity.entity as { proposalEvidenceCount: number }).proposalEvidenceCount).toBe(1);
+		expect(JSON.stringify(entity).length).toBeLessThan(10_000);
 	});
 
 	it("get_evidence resolves claim provenance and link provenance through one tool", async () => {
@@ -307,7 +408,7 @@ describe("dreaming-agent-tools", () => {
 			input: { agentId: "owner", query: "owner" },
 			output: { tool: "search_entities", ok: true },
 		});
-		expect(traces[0]!.latencyMs).toBeGreaterThanOrEqual(0);
+		expect(traces[0]?.latencyMs).toBeGreaterThanOrEqual(0);
 	});
 
 	it("get_entity returns null result for an entity owned by another agent", async () => {

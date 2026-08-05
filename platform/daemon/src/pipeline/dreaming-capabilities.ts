@@ -7,10 +7,12 @@
  * deliberately bounded: the agent can only do what these methods define
  * (search, validate, apply, log) — no open-ended escape hatches.
  */
+import type { Entity } from "@signet/core";
 import { z } from "zod";
 import type { DbAccessor } from "../db-accessor";
 import { classifyEntityQuality } from "../entity-quality";
-import { searchEpisodicSources } from "../episodic-sources";
+import type { EpisodicSourceRecord } from "../episodic-sources";
+import { readEpisodicSource, searchEpisodicSources } from "../episodic-sources";
 import {
 	getAttributesForAspectFiltered,
 	getEntityAspectsWithCounts,
@@ -23,6 +25,7 @@ import { getOntologyLinkEvidence } from "../ontology-link-evidence";
 import { findDuplicateEntityMerges } from "../ontology-proposals";
 import { detectProspectiveContradictionRisk } from "./antonyms";
 import { getDreamingAttentionAcrossScopes, getDreamingAttentionScoped } from "./dreaming-attention";
+import { nextDreamingEvidenceFragment, renderDreamingEvidence } from "./dreaming-evidence";
 import type { DreamingAgentEvidence } from "./dreaming-evidence";
 import { DREAMING_ONTOLOGY_OPERATION_SCHEMA } from "./dreaming-operation-contract";
 import {
@@ -34,6 +37,101 @@ import { readDreamingRunbook, writeDreamingRunbook } from "./dreaming-runbook";
 
 const bounded = (value: number | undefined, fallback: number, max: number): number =>
 	Math.min(Math.max(Math.floor(value ?? fallback), 1), max);
+
+const MAX_EVIDENCE_EXCERPT_CHARS = 2_000;
+const MAX_EVIDENCE_RESULT_CHARS = 16_000;
+const MAX_HYDRATED_ITEMS = 50;
+const MAX_ENTITY_TEXT_CHARS = 2_000;
+
+function boundedText(value: string | undefined, maxChars: number): string | undefined {
+	if (value === undefined || value.length <= maxChars) return value;
+	return value.slice(0, maxChars);
+}
+
+function evidenceExcerptStart(content: string, query: string, maxChars: number): number {
+	const terms = query
+		.toLowerCase()
+		.split(/\W+/)
+		.filter((term) => term.length >= 3)
+		.slice(0, 8);
+	const lower = content.toLowerCase();
+	for (const term of terms) {
+		const match = lower.indexOf(term);
+		if (match >= 0) return Math.max(0, match - Math.floor(maxChars * 0.35));
+	}
+	return 0;
+}
+
+function projectEvidenceItem(
+	source: EpisodicSourceRecord,
+	content: string,
+	contentOffset: number,
+	contentLength: number,
+): Record<string, unknown> {
+	return {
+		sourceRef: `${source.kind}:${source.id}`,
+		kind: source.kind,
+		id: source.id,
+		content,
+		contentOffset,
+		contentLength,
+		contentTruncated: contentOffset > 0 || contentOffset + content.length < contentLength,
+		contentHasPrevious: contentOffset > 0,
+		contentHasNext: contentOffset + content.length < contentLength,
+		sourceKind: source.sourceKind,
+		sourceId: source.sourceId,
+		sourcePath: source.sourcePath,
+		sourceEntryId: source.sourceEntryId,
+		project: source.project,
+		harness: source.harness,
+		capturedAt: source.capturedAt,
+	};
+}
+
+function projectEvidence(sources: readonly EpisodicSourceRecord[], query: string): readonly Record<string, unknown>[] {
+	let remaining = MAX_EVIDENCE_RESULT_CHARS;
+	return sources.map((source) => {
+		const rendered = renderDreamingEvidence(source);
+		const offset = evidenceExcerptStart(rendered, query, MAX_EVIDENCE_EXCERPT_CHARS);
+		const excerptLength = Math.min(MAX_EVIDENCE_EXCERPT_CHARS, remaining, rendered.length - offset);
+		const content = excerptLength > 0 ? rendered.slice(offset, offset + excerptLength) : "";
+		remaining = Math.max(0, remaining - content.length);
+		return projectEvidenceItem(source, content, content.length > 0 ? offset : 0, rendered.length);
+	});
+}
+
+function projectEvidenceFragment(
+	source: EpisodicSourceRecord,
+	offset: number,
+	chunkSize: number,
+): Record<string, unknown> | null {
+	const fragment = nextDreamingEvidenceFragment(source, offset, chunkSize);
+	return fragment === null
+		? null
+		: projectEvidenceItem(source, fragment.content, fragment.start, fragment.sourceLength);
+}
+
+function projectEntity(entity: Entity): Record<string, unknown> {
+	return {
+		id: entity.id,
+		name: entity.name,
+		canonicalName: entity.canonicalName,
+		entityType: entity.entityType,
+		agentId: entity.agentId,
+		description: boundedText(entity.description, MAX_ENTITY_TEXT_CHARS),
+		mentions: entity.mentions,
+		pinned: entity.pinned,
+		pinnedAt: entity.pinnedAt,
+		status: entity.status,
+		archivedAt: entity.archivedAt,
+		archivedBy: entity.archivedBy,
+		archiveReason: boundedText(entity.archiveReason ?? undefined, MAX_ENTITY_TEXT_CHARS),
+		proposalId: entity.proposalId,
+		proposalEvidenceCount: entity.proposalEvidence?.length ?? 0,
+		createdAt: entity.createdAt,
+		updatedAt: entity.updatedAt,
+	};
+}
 
 const pagination = {
 	limit: z.number().finite().optional(),
@@ -187,20 +285,24 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 		capability(
 			"get_entity",
 			"Get entity detail",
-			"Fetch one entity in one agent scope with attribute/constraint counts and pinned status, optionally hydrated with its aspect claims and/or dependency links in the same call.",
+			"Fetch one entity in one agent scope with attribute/constraint counts and pinned status, optionally hydrated with bounded aspect summaries and/or dependency links. Use limit and offset to page hydrated items; the response reports when a hydration list is truncated.",
 			true,
 			z.object({
 				agentId: z.string().min(1),
 				entityId: z.string().min(1),
 				include: z.array(z.enum(["aspects", "links"])).optional(),
 				direction: z.enum(["incoming", "outgoing", "both"]).optional(),
+				limit: z.number().finite().optional(),
+				offset: z.number().finite().optional(),
 			}),
-			async ({ agentId: scopeId, entityId, include, direction }) => {
+			async ({ agentId: scopeId, entityId, include, direction, limit, offset }) => {
 				const detail = getKnowledgeEntityDetail(accessor, entityId, scopeId);
 				if (!detail) return { ok: false, error: "Entity not found" };
+				const hydrationLimit = bounded(limit, 50, MAX_HYDRATED_ITEMS);
+				const hydrationOffset = Math.max(0, Math.floor(offset ?? 0));
 				const result: MutableCapabilityOutput = {
 					ok: true,
-					entity: detail.entity,
+					entity: projectEntity(detail.entity),
 					pinned: detail.entity.pinned === true,
 					aspectCount: detail.aspectCount,
 					attributeCount: detail.attributeCount,
@@ -208,19 +310,30 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 					dependencyCount: detail.dependencyCount,
 				};
 				if (include?.includes("aspects")) {
-					result.aspects = getEntityAspectsWithCounts(accessor, entityId, scopeId).map((aspect) => ({
+					const aspects = getEntityAspectsWithCounts(accessor, entityId, scopeId);
+					const hydratedAspects = aspects.slice(hydrationOffset, hydrationOffset + hydrationLimit).map((aspect) => ({
 						id: aspect.aspect.id,
-						name: aspect.aspect.name,
+						name: boundedText(aspect.aspect.name, MAX_ENTITY_TEXT_CHARS),
 						attributeCount: aspect.attributeCount,
 						constraintCount: aspect.constraintCount,
 					}));
+					result.aspects = hydratedAspects;
+					result.aspectsOffset = hydrationOffset;
+					result.aspectsTruncated = hydrationOffset + hydratedAspects.length < aspects.length;
 				}
 				if (include?.includes("links")) {
-					result.links = getEntityDependenciesDetailed(accessor, {
+					const links = getEntityDependenciesDetailed(accessor, {
 						entityId,
 						agentId: scopeId,
 						direction: direction ?? "both",
 					});
+					const hydratedLinks = links.slice(hydrationOffset, hydrationOffset + hydrationLimit).map((link) => ({
+						...link,
+						reason: boundedText(link.reason ?? undefined, MAX_ENTITY_TEXT_CHARS) ?? null,
+					}));
+					result.links = hydratedLinks;
+					result.linksOffset = hydrationOffset;
+					result.linksTruncated = hydrationOffset + hydratedLinks.length < links.length;
 				}
 				return result;
 			},
@@ -312,7 +425,7 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 		capability(
 			"search_evidence",
 			"Search episodic evidence",
-			"Full-text search immutable episodic memories, artifacts, transcripts, and summaries in one agent scope. Omit the query to list the most recent sources (e.g. with since as a cutoff). Artifacts are deduped by content hash: content-identical files across vault paths collapse to one canonical entry.",
+			"Full-text search immutable episodic memories, artifacts, transcripts, and summaries in one agent scope. Results contain exact bounded excerpts of the rendered evidence with contentOffset/contentLength; use sourceRef for citations, which are validated against the complete canonical source. If contentTruncated is true, page exact fragments with the same sourceRef and chunkSize: start at offset=0 when contentHasPrevious is true, then use offset=contentOffset+content.length from the fragment just returned until contentHasNext is false. Omit the query to list the most recent sources (e.g. with since as a cutoff). Artifacts are deduped by content hash: content-identical files across vault paths collapse to one canonical entry.",
 			true,
 			z.object({
 				agentId: z.string().min(1),
@@ -321,13 +434,34 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 				before: z.string().optional(),
 				kind: z.enum(["memory", "artifact", "transcript", "summary"]).optional(),
 				limit: z.number().finite().optional(),
+				sourceRef: z.string().min(1).optional(),
+				offset: z.number().finite().optional(),
+				chunkSize: z.number().finite().optional(),
 			}),
-			async ({ agentId: scopeId, query, since, before, kind, limit }) => ({
-				ok: true,
-				items: accessor.withReadDb((db) =>
-					searchEpisodicSources(db, { agentId: scopeId, query: query ?? "", since, before, kind, limit }),
-				),
-			}),
+			async ({ agentId: scopeId, query, since, before, kind, limit, sourceRef, offset, chunkSize }) =>
+				accessor.withReadDb((db) => {
+					if (sourceRef !== undefined) {
+						const source = readEpisodicSource(db, { agentId: scopeId, from: sourceRef });
+						if (source === null) return { ok: false, error: "Evidence source not found" };
+						const fragment = projectEvidenceFragment(
+							source,
+							Math.max(0, Math.floor(offset ?? 0)),
+							Math.min(Math.max(Math.floor(chunkSize ?? MAX_EVIDENCE_EXCERPT_CHARS), 1), MAX_EVIDENCE_EXCERPT_CHARS),
+						);
+						return fragment === null
+							? { ok: false, error: "Evidence fragment offset is outside the source" }
+							: { ok: true, items: [fragment] };
+					}
+					const sources = searchEpisodicSources(db, {
+						agentId: scopeId,
+						query: query ?? "",
+						since,
+						before,
+						kind,
+						limit,
+					});
+					return { ok: true, items: projectEvidence(sources, query ?? "") };
+				}),
 		),
 		capability(
 			"validate_proposal",
