@@ -252,7 +252,7 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 		capability(
 			"get_evidence",
 			"Get evidence",
-			"Resolve provenance for a scoped claim path or a scoped dependency link by stable id.",
+			"Resolve provenance for a scoped claim path (entity/aspect by stable id or name) or a scoped dependency link by stable id.",
 			true,
 			z.object({
 				ref: z.union([
@@ -269,12 +269,25 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 			}),
 			async ({ ref, limit, offset }) => {
 				if (ref.type === "claim") {
+					let entityName = ref.entity;
+					let aspectName = ref.aspect;
+					// Accept stable ids as well as names for the claim path:
+					// search results surface ids, and the path resolver is
+					// name-based.
+					const detail = getKnowledgeEntityDetail(accessor, ref.entity, agentId);
+					if (detail) {
+						entityName = detail.entity.name;
+						const aspect = getEntityAspectsWithCounts(accessor, ref.entity, agentId).find(
+							(candidate) => candidate.aspect.id === ref.aspect || candidate.aspect.name === ref.aspect,
+						);
+						if (aspect) aspectName = aspect.aspect.name;
+					}
 					return {
 						ok: true,
 						result: getOntologyClaimEvidence(accessor, {
 							agentId,
-							entity: ref.entity,
-							aspect: ref.aspect,
+							entity: entityName,
+							aspect: aspectName,
 							group: ref.group,
 							claim: ref.claim,
 							limit,

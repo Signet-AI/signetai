@@ -98,7 +98,7 @@ const operationBase = {
 	evidence: z
 		.array(z.unknown())
 		.describe(
-			"Content-bearing ops only: exact-quote citations from canonical episodic evidence, each {quote, source_ref}.",
+			'Content-bearing ops only: exact-quote citations from canonical episodic evidence, each {quote, source_ref} where source_ref is "kind:id" (e.g. transcript:abc) as returned by search_evidence.',
 		)
 		.optional(),
 	provenance: z

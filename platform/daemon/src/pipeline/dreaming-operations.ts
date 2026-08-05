@@ -53,7 +53,16 @@ function citationRecord(value: unknown): {
 	const sourceId = typeof citation.source_id === "string" ? citation.source_id.trim() : "";
 	const sourcePath = typeof citation.source_path === "string" ? citation.source_path.trim() : null;
 	const quote = typeof citation.quote === "string" ? citation.quote.trim() : "";
-	return sourceRef && sourceKind && sourceId && quote ? { sourceRef, sourceKind, sourceId, sourcePath, quote } : null;
+	// The canonical source_ref is "kind:id" (e.g. transcript:abc). When the
+	// agent supplies only {quote, source_ref}, derive kind and id from it.
+	let kind = sourceKind;
+	let id = sourceId;
+	const colon = sourceRef.indexOf(":");
+	if (colon > 0) {
+		if (!kind) kind = sourceRef.slice(0, colon);
+		if (!id) id = sourceRef.slice(colon + 1);
+	}
+	return sourceRef && kind && id && quote ? { sourceRef, sourceKind: kind, sourceId: id, sourcePath, quote } : null;
 }
 
 /**
