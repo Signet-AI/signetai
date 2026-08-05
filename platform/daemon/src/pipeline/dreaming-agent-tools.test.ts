@@ -85,7 +85,7 @@ describe("dreaming-agent-tools", () => {
 
 		const tools = createDreamingAgentTools({ accessor: getDbAccessor(), agentId: "owner", actor: "owner" });
 		const search = findTool(tools, "search_entities");
-		const res = readResult(await search.execute("call", { query: "entity" }, undefined, undefined, {} as never));
+		const res = readResult(await search.execute("call", { agentId: "owner", query: "entity" }, undefined, undefined, {} as never));
 		expect(res.ok).toBe(true);
 		const items = res.items as Array<{ id: string }>;
 		expect(items.map((i) => i.id)).toEqual(["e-owner"]);
@@ -98,7 +98,7 @@ describe("dreaming-agent-tools", () => {
 		const tools = createDreamingAgentTools({ accessor: getDbAccessor(), agentId: "owner", actor: "owner" });
 
 		const plain = readResult(
-			await findTool(tools, "get_entity").execute("call", { entityId: "e-atlas" }, undefined, undefined, {} as never),
+			await findTool(tools, "get_entity").execute("call", { agentId: "owner", entityId: "e-atlas" }, undefined, undefined, {} as never),
 		);
 		expect(plain).toMatchObject({ ok: true, pinned: false, aspectCount: 1 });
 		expect(plain.aspects).toBeUndefined();
@@ -106,7 +106,7 @@ describe("dreaming-agent-tools", () => {
 		const hydrated = readResult(
 			await findTool(tools, "get_entity").execute(
 				"call",
-				{ entityId: "e-atlas", include: ["aspects"] },
+				{ agentId: "owner", entityId: "e-atlas", include: ["aspects"] },
 				undefined,
 				undefined,
 				{} as never,
@@ -124,7 +124,7 @@ describe("dreaming-agent-tools", () => {
 		const claim = readResult(
 			await findTool(tools, "get_evidence").execute(
 				"call",
-				{ ref: { type: "claim", entity: "Atlas", aspect: "configuration", group: "configuration", claim: "default" } },
+				{ agentId: "owner", ref: { type: "claim", entity: "Atlas", aspect: "configuration", group: "configuration", claim: "default" } },
 				undefined,
 				undefined,
 				{} as never,
@@ -135,7 +135,7 @@ describe("dreaming-agent-tools", () => {
 		const link = readResult(
 			await findTool(tools, "get_evidence").execute(
 				"call",
-				{ ref: { type: "link", id: "missing-link" } },
+				{ agentId: "owner", ref: { type: "link", id: "missing-link" } },
 				undefined,
 				undefined,
 				{} as never,
@@ -155,7 +155,7 @@ describe("dreaming-agent-tools", () => {
 		const res = readResult(
 			await findTool(tools, "validate_proposal").execute(
 				"call",
-				{ name: "Atlas", entityId: "e-atlas", aspectId: "a-config", value: "Feature is disabled by default." },
+				{ agentId: "owner", name: "Atlas", entityId: "e-atlas", aspectId: "a-config", value: "Feature is disabled by default." },
 				undefined,
 				undefined,
 				{} as never,
@@ -174,6 +174,7 @@ describe("dreaming-agent-tools", () => {
 		await findTool(tools, "apply_ontology_ops").execute(
 			"call",
 			{
+				agentId: "owner",
 				operations: [
 					{
 						operation: "flag",
@@ -213,6 +214,7 @@ describe("dreaming-agent-tools", () => {
 			await findTool(tools, "apply_ontology_ops").execute(
 				"call",
 				{
+					agentId: "owner",
 					operations: [
 						{
 							operation: "flag",
@@ -243,7 +245,8 @@ describe("dreaming-agent-tools", () => {
 			await findTool(tools, "apply_ontology_ops").execute(
 				"call",
 				{
-					operations: [
+					agentId: "owner",
+						operations: [
 						{
 							operation: "create_entity",
 							payload: { name: "Acme", type: "project" },
@@ -279,12 +282,12 @@ describe("dreaming-agent-tools", () => {
 			},
 		});
 		const search = findTool(tools, "search_entities");
-		await search.execute("pi-call-1", { query: "owner" }, undefined, undefined, {} as never);
+		await search.execute("pi-call-1", { agentId: "owner", query: "owner" }, undefined, undefined, {} as never);
 
 		expect(traces).toHaveLength(1);
 		expect(traces[0]).toMatchObject({
 			tool: "search_entities",
-			input: { query: "owner" },
+			input: { agentId: "owner", query: "owner" },
 			output: { tool: "search_entities", ok: true },
 		});
 		expect(traces[0]!.latencyMs).toBeGreaterThanOrEqual(0);
@@ -295,7 +298,7 @@ describe("dreaming-agent-tools", () => {
 
 		const tools = createDreamingAgentTools({ accessor: getDbAccessor(), agentId: "owner", actor: "owner" });
 		const getEntity = findTool(tools, "get_entity");
-		const res = readResult(await getEntity.execute("call", { entityId: "e-other" }, undefined, undefined, {} as never));
+		const res = readResult(await getEntity.execute("call", { agentId: "owner", entityId: "e-other" }, undefined, undefined, {} as never));
 		expect(res.ok).toBe(false);
 		expect(res.error).toBe("Entity not found");
 	});

@@ -22,7 +22,7 @@ import { getOntologyClaimEvidence } from "../ontology-claim-evidence";
 import { getOntologyLinkEvidence } from "../ontology-link-evidence";
 import { findDuplicateEntityMerges } from "../ontology-proposals";
 import { detectProspectiveContradictionRisk } from "./antonyms";
-import { getDreamingAttentionScoped } from "./dreaming-attention";
+import { getDreamingAttentionAcrossScopes, getDreamingAttentionScoped } from "./dreaming-attention";
 import type { DreamingAgentEvidence } from "./dreaming-evidence";
 import { DREAMING_ONTOLOGY_OPERATION_SCHEMA } from "./dreaming-operation-contract";
 import {
@@ -156,13 +156,13 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 		capability(
 			"search_entities",
 			"Search entities",
-			"Search the scoped knowledge graph by entity name fragment and optional type.",
+			"Search the knowledge graph for one agent scope by entity name fragment and optional type. Pass the agentId of the scope you are addressing.",
 			true,
-			z.object({ query: z.string().optional(), type: z.string().optional(), ...pagination }),
-			async ({ query, type, limit, offset }) => ({
+			z.object({ agentId: z.string().min(1), query: z.string().optional(), type: z.string().optional(), ...pagination }),
+			async ({ agentId: scopeId, query, type, limit, offset }) => ({
 				ok: true,
 				items: listKnowledgeEntities(accessor, {
-					agentId,
+					agentId: scopeId,
 					query,
 					type,
 					limit: bounded(limit, 20, 100),
@@ -182,15 +182,16 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 		capability(
 			"get_entity",
 			"Get entity detail",
-			"Fetch one scoped entity with attribute/constraint counts and pinned status, optionally hydrated with its aspect claims and/or dependency links in the same call.",
+			"Fetch one entity in one agent scope with attribute/constraint counts and pinned status, optionally hydrated with its aspect claims and/or dependency links in the same call.",
 			true,
 			z.object({
+				agentId: z.string().min(1),
 				entityId: z.string().min(1),
 				include: z.array(z.enum(["aspects", "links"])).optional(),
 				direction: z.enum(["incoming", "outgoing", "both"]).optional(),
 			}),
-			async ({ entityId, include, direction }) => {
-				const detail = getKnowledgeEntityDetail(accessor, entityId, agentId);
+			async ({ agentId: scopeId, entityId, include, direction }) => {
+				const detail = getKnowledgeEntityDetail(accessor, entityId, scopeId);
 				if (!detail) return { ok: false, error: "Entity not found" };
 				const result: MutableCapabilityOutput = {
 					ok: true,
@@ -202,7 +203,7 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 					dependencyCount: detail.dependencyCount,
 				};
 				if (include?.includes("aspects")) {
-					result.aspects = getEntityAspectsWithCounts(accessor, entityId, agentId).map((aspect) => ({
+					result.aspects = getEntityAspectsWithCounts(accessor, entityId, scopeId).map((aspect) => ({
 						id: aspect.aspect.id,
 						name: aspect.aspect.name,
 						attributeCount: aspect.attributeCount,
@@ -212,7 +213,7 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 				if (include?.includes("links")) {
 					result.links = getEntityDependenciesDetailed(accessor, {
 						entityId,
-						agentId,
+						agentId: scopeId,
 						direction: direction ?? "both",
 					});
 				}
@@ -222,15 +223,15 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 		capability(
 			"list_aspect_claims",
 			"List aspect claims",
-			"List active claim attributes for one scoped entity aspect by stable ids.",
+			"List active claim attributes for one entity aspect in one agent scope by stable ids.",
 			true,
-			z.object({ entityId: z.string().min(1), aspectId: z.string().min(1), ...pagination }),
-			async ({ entityId, aspectId, limit, offset }) => ({
+			z.object({ agentId: z.string().min(1), entityId: z.string().min(1), aspectId: z.string().min(1), ...pagination }),
+			async ({ agentId: scopeId, entityId, aspectId, limit, offset }) => ({
 				ok: true,
 				items: getAttributesForAspectFiltered(accessor, {
 					entityId,
 					aspectId,
-					agentId,
+					agentId: scopeId,
 					kind: "attribute",
 					status: "active",
 					limit: bounded(limit, 50, 200),
@@ -241,20 +242,21 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 		capability(
 			"walk_links",
 			"Walk dependency links",
-			"Walk incoming and/or outgoing scoped dependency links for an entity.",
+			"Walk incoming and/or outgoing dependency links for an entity in one agent scope.",
 			true,
-			z.object({ entityId: z.string().min(1), direction: z.enum(["incoming", "outgoing", "both"]).optional() }),
-			async ({ entityId, direction }) => ({
+			z.object({ agentId: z.string().min(1), entityId: z.string().min(1), direction: z.enum(["incoming", "outgoing", "both"]).optional() }),
+			async ({ agentId: scopeId, entityId, direction }) => ({
 				ok: true,
-				items: getEntityDependenciesDetailed(accessor, { entityId, agentId, direction: direction ?? "both" }),
+				items: getEntityDependenciesDetailed(accessor, { entityId, agentId: scopeId, direction: direction ?? "both" }),
 			}),
 		),
 		capability(
 			"get_evidence",
 			"Get evidence",
-			"Resolve provenance for a scoped claim path (entity/aspect by stable id or name) or a scoped dependency link by stable id.",
+			"Resolve provenance for a claim path in one agent scope (entity/aspect by stable id or name) or a dependency link by stable id.",
 			true,
 			z.object({
+				agentId: z.string().min(1),
 				ref: z.union([
 					z.object({
 						type: z.literal("claim"),
@@ -267,17 +269,17 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 				]),
 				...pagination,
 			}),
-			async ({ ref, limit, offset }) => {
+			async ({ agentId: scopeId, ref, limit, offset }) => {
 				if (ref.type === "claim") {
 					let entityName = ref.entity;
 					let aspectName = ref.aspect;
 					// Accept stable ids as well as names for the claim path:
 					// search results surface ids, and the path resolver is
 					// name-based.
-					const detail = getKnowledgeEntityDetail(accessor, ref.entity, agentId);
+					const detail = getKnowledgeEntityDetail(accessor, ref.entity, scopeId);
 					if (detail) {
 						entityName = detail.entity.name;
-						const aspect = getEntityAspectsWithCounts(accessor, ref.entity, agentId).find(
+						const aspect = getEntityAspectsWithCounts(accessor, ref.entity, scopeId).find(
 							(candidate) => candidate.aspect.id === ref.aspect || candidate.aspect.name === ref.aspect,
 						);
 						if (aspect) aspectName = aspect.aspect.name;
@@ -285,7 +287,7 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 					return {
 						ok: true,
 						result: getOntologyClaimEvidence(accessor, {
-							agentId,
+							agentId: scopeId,
 							entity: entityName,
 							aspect: aspectName,
 							group: ref.group,
@@ -295,51 +297,53 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 						}),
 					};
 				}
-				return { ok: true, result: getOntologyLinkEvidence(accessor, { agentId, id: ref.id }) };
+				return { ok: true, result: getOntologyLinkEvidence(accessor, { agentId: scopeId, id: ref.id }) };
 			},
 		),
 		capability(
 			"search_evidence",
 			"Search episodic evidence",
-			"Full-text search immutable episodic memories, artifacts, transcripts, and summaries in this scope. Artifacts are deduped by content hash: content-identical files across vault paths collapse to one canonical entry.",
+			"Full-text search immutable episodic memories, artifacts, transcripts, and summaries in one agent scope. Artifacts are deduped by content hash: content-identical files across vault paths collapse to one canonical entry.",
 			true,
 			z.object({
+				agentId: z.string().min(1),
 				query: z.string().optional(),
 				since: z.string().optional(),
 				before: z.string().optional(),
 				kind: z.enum(["memory", "artifact", "transcript", "summary"]).optional(),
 				limit: z.number().finite().optional(),
 			}),
-			async ({ query, since, before, kind, limit }) => ({
+			async ({ agentId: scopeId, query, since, before, kind, limit }) => ({
 				ok: true,
 				items: accessor.withReadDb((db) =>
-					searchEpisodicSources(db, { agentId, query: query ?? "", since, before, kind, limit }),
+					searchEpisodicSources(db, { agentId: scopeId, query: query ?? "", since, before, kind, limit }),
 				),
 			}),
 		),
 		capability(
 			"validate_proposal",
 			"Validate proposal",
-			"Run the daemon's deterministic pre-write guards in one pass: entity-label gate, duplicate-entity check, and/or contradiction check against active aspect values.",
+			"Run the daemon's deterministic pre-write guards in one pass for one agent scope: entity-label gate, duplicate-entity check, and/or contradiction check against active aspect values.",
 			true,
 			z.object({
+				agentId: z.string().min(1),
 				name: z.string().optional(),
 				type: z.string().optional(),
 				entityId: z.string().optional(),
 				aspectId: z.string().optional(),
 				value: z.string().optional(),
 			}),
-			async ({ name, type, entityId, aspectId, value }) => {
+			async ({ agentId: scopeId, name, type, entityId, aspectId, value }) => {
 				const result: MutableCapabilityOutput = { ok: true };
 				if (name !== undefined) {
 					result.label = classifyEntityQuality(name, type);
-					result.duplicates = findDuplicateEntityMerges(accessor, { agentId, name });
+					result.duplicates = findDuplicateEntityMerges(accessor, { agentId: scopeId, name });
 				}
 				if (entityId !== undefined && aspectId !== undefined && value !== undefined) {
 					result.contradiction = getAttributesForAspectFiltered(accessor, {
 						entityId,
 						aspectId,
-						agentId,
+						agentId: scopeId,
 						kind: "attribute",
 						status: "active",
 						limit: 200,
@@ -382,32 +386,43 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 		capability(
 			"attention_list",
 			"List attention",
-			"List scoped attention records (the hygiene queue) by kind and resolution status.",
+			"List attention records (the hygiene queue) by kind and resolution status. Omit agentId to see the whole install's queue (each record carries its owning agentId); pass agentId to narrow to one scope.",
 			true,
 			z.object({
+				agentId: z.string().optional(),
 				kind: z.string().optional(),
 				status: z.enum(["pending", "resolved"]).optional(),
 				limit: z.number().finite().optional(),
 			}),
-			async ({ kind, status, limit }) => ({
+			async ({ agentId: scopeId, kind, status, limit }) => ({
 				ok: true,
-				items: getDreamingAttentionScoped(accessor, agentId, {
-					kind,
-					status: status ?? "pending",
-					limit: bounded(limit, 20, 100),
-				}),
+				items:
+					scopeId !== undefined
+						? getDreamingAttentionScoped(accessor, scopeId, {
+								kind,
+								status: status ?? "pending",
+								limit: bounded(limit, 20, 100),
+							})
+						: getDreamingAttentionAcrossScopes(accessor, {
+								kind,
+								status: status ?? "pending",
+								limit: bounded(limit, 50, 200),
+							}),
 			}),
 		),
 		capability(
 			"apply_ontology_ops",
 			"Apply ontology operations",
-			'Apply every semantic write through the daemon audit seam in one batch. Ops are processed in array order. Hygiene ops (flag, archive_*, merge_entities) cite provenance: "attention:$<index>" for a flag earlier in the same batch, or "attention:<uuid>" from a prior batch. Content-bearing ops cite evidence with exact quotes from canonical episodic evidence.',
+			'Apply every semantic write through the daemon audit seam in one batch, in one agent scope (pass the agentId whose graph you are maintaining — hygiene attention records belong to the agent that flagged them). Ops are processed in array order. Hygiene ops (flag, archive_*, merge_entities) cite provenance: "attention:$<index>" for a flag earlier in the same batch, or "attention:<uuid>" from a prior batch. Content-bearing ops cite evidence with exact quotes from canonical episodic evidence in that scope.',
 			false,
-			z.object({ operations: z.array(DREAMING_ONTOLOGY_OPERATION_SCHEMA).min(1).max(100) }),
-			async ({ operations }) => {
+			z.object({
+				agentId: z.string().min(1),
+				operations: z.array(DREAMING_ONTOLOGY_OPERATION_SCHEMA).min(1).max(100),
+			}),
+			async ({ agentId: scopeId, operations }) => {
 				const result = applyDreamingOperations({
 					accessor,
-					agentId,
+					agentId: scopeId,
 					actor,
 					operations,
 					passId: params.passId,

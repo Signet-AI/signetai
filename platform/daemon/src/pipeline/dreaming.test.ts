@@ -110,6 +110,7 @@ describe("Dreaming", () => {
 			defaultCfg(),
 			"/tmp",
 			AGENT,
+			[AGENT],
 			"incremental",
 		);
 		expect(result.summary).toBe("Done");
@@ -167,6 +168,7 @@ describe("Dreaming", () => {
 			defaultCfg(),
 			"/tmp",
 			AGENT,
+			[AGENT],
 			"incremental",
 		);
 
@@ -199,6 +201,7 @@ describe("Dreaming", () => {
 			defaultCfg(),
 			"/tmp",
 			AGENT,
+			[AGENT],
 			"incremental",
 		);
 		expect(prompt).toBe(DREAMING_AGENT_PROMPT);
@@ -285,6 +288,7 @@ describe("Dreaming", () => {
 				defaultCfg(),
 				"/tmp",
 				AGENT,
+				[AGENT],
 				"incremental",
 			),
 		).rejects.toThrow("provider unavailable");
@@ -319,6 +323,7 @@ describe("Dreaming", () => {
 			defaultCfg(),
 			"/tmp",
 			AGENT,
+			[AGENT],
 			"incremental",
 		);
 
@@ -358,6 +363,7 @@ describe("Dreaming", () => {
 					await apply.execute(
 						"call",
 						{
+							agentId: AGENT,
 							operations: [
 								{
 									operation: "create_entity",
@@ -384,6 +390,7 @@ describe("Dreaming", () => {
 			defaultCfg(),
 			"/tmp",
 			AGENT,
+			[AGENT],
 			"incremental",
 		);
 		expect(result).toMatchObject({ applied: 1, failed: 0, summary: "Created Aster" });
@@ -433,6 +440,7 @@ describe("Dreaming", () => {
 			defaultCfg(),
 			"/tmp",
 			AGENT,
+			[AGENT],
 			"incremental",
 		);
 		const stored = db.prepare("SELECT runbook_json FROM dreaming_passes WHERE id = ?").get(first.passId) as {
@@ -452,6 +460,7 @@ describe("Dreaming", () => {
 			defaultCfg(),
 			"/tmp",
 			AGENT,
+			[AGENT],
 			"compact",
 		);
 		// The pass prompt is fixed; the agent reads prior notes via runbook_read.
@@ -487,6 +496,7 @@ describe("Dreaming", () => {
 			defaultCfg(),
 			"/tmp",
 			AGENT,
+			[AGENT],
 			"incremental",
 		);
 		expect(result).toMatchObject({ applied: 0, failed: 1 });
@@ -503,6 +513,7 @@ describe("Dreaming", () => {
 			defaultCfg(),
 			"/tmp",
 			AGENT,
+			[AGENT],
 			"incremental",
 		);
 		expect(empty.summary).toBe("No new episodic evidence or semantic attention to process");
@@ -527,6 +538,7 @@ describe("Dreaming", () => {
 				defaultCfg(),
 				"/tmp",
 				AGENT,
+				[AGENT],
 				"incremental",
 			),
 		).rejects.toThrow("agent timeout");

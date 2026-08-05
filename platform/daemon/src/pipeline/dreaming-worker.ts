@@ -187,12 +187,14 @@ export function startDreamingWorker(
 		if (active) throw new AlreadyRunningError();
 		active = true;
 		activeAgent = runAgentId;
+		const scopes = getDreamingWorkerAgentIds(accessor, defaultAgentId);
 		const p = runDreamingAgentPass(
 			accessor,
 			executorForAgent(runAgentId),
 			cfg,
 			agentsDir,
 			runAgentId,
+			scopes,
 			mode,
 			existingPassId,
 		);
@@ -217,41 +219,33 @@ export function startDreamingWorker(
 			return;
 		}
 
-		for (const runAgentId of getDreamingWorkerAgentIds(accessor, defaultAgentId)) {
+		// One Dreaming universe: a single pass covers every agent scope. The
+		// sweep runs one pass when any scope has attention or a backlog; the
+		// pass itself addresses scopes via the per-call agentId on its tools.
+		let triggered = false;
+		for (const scopeId of getDreamingWorkerAgentIds(accessor, defaultAgentId)) {
 			if (stopped || active) return;
-			let attemptedPass = false;
 			try {
-				enqueueDreamingHygieneAttention(accessor, runAgentId);
-				const episodicTokens = getDreamingEpisodicTokenBacklog(accessor, runAgentId);
-				if (!shouldTriggerDreaming(accessor, cfg, runAgentId, Date.now(), episodicTokens)) continue;
-				// A first backfill integrates the full episodic window. Compact mode is
-				// an explicit maintenance action, not an automatic substitute for it.
-				const mode: DreamingMode = "incremental";
-
+				enqueueDreamingHygieneAttention(accessor, scopeId);
+				const episodicTokens = getDreamingEpisodicTokenBacklog(accessor, scopeId);
+				if (!shouldTriggerDreaming(accessor, cfg, scopeId, Date.now(), episodicTokens)) continue;
+				triggered = true;
 				logger.info("dreaming-worker", "Episodic evidence threshold reached, starting dreaming pass", {
-					agentId: runAgentId,
+					scopeId,
 					episodicTokens,
 					threshold: cfg.tokenThreshold,
-					mode,
 				});
-
-				attemptedPass = true;
-				await runPass(runAgentId, mode);
-				// Keep one expensive, deferrable pass per five-minute sweep. The
-				// next tick advances another eligible agent without burst-starting
-				// every backlogged workspace at once.
-				return;
+				break;
 			} catch (e) {
 				if (e instanceof AlreadyRunningError) return;
-				logger.error("dreaming-worker", "Dreaming check failed", undefined, {
-					agentId: runAgentId,
+				logger.error("dreaming-worker", "Dreaming scope check failed", undefined, {
+					agentId: scopeId,
 					error: e instanceof Error ? e.message : String(e),
 				});
-				// A provider failure is still an expensive attempt. Do not turn one
-				// unhealthy sweep into a burst across every remaining agent.
-				if (attemptedPass) return;
 			}
 		}
+		if (!triggered) return;
+		await runPass(defaultAgentId, "incremental");
 	}
 
 	function schedule(): void {
@@ -295,7 +289,16 @@ export function startDreamingWorker(
 			const passId = createDreamingPass(accessor, runAgentId, mode);
 			active = true;
 			activeAgent = runAgentId;
-			const p = runDreamingAgentPass(accessor, executorForAgent(runAgentId), cfg, agentsDir, runAgentId, mode, passId);
+			const p = runDreamingAgentPass(
+				accessor,
+				executorForAgent(runAgentId),
+				cfg,
+				agentsDir,
+				runAgentId,
+				getDreamingWorkerAgentIds(accessor, defaultAgentId),
+				mode,
+				passId,
+			);
 			activePassPromise = p;
 			p.catch((e) => {
 				recordDreamingFailure(accessor, runAgentId);

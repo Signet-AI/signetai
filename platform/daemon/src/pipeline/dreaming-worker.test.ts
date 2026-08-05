@@ -147,14 +147,11 @@ describe("dreaming worker agent scope", () => {
 		}
 	});
 
-	it("keeps multi-agent check-cycle passes and semantic rows agent-isolated (#946)", async () => {
-		// Behavioral regression: one worker check cycle over two agents must
-		// produce a separate pass per agent, each consolidating only its own
-		// evidence into its own agent-scoped semantic rows. The agent_id is
-		// the hard boundary; no cross-agent evidence leaks into another
-		// agent's prompt or derived graph. This mirrors the private check()
-		// loop: getDreamingWorkerAgentIds -> one runPass(runAgentId, mode) per
-		// discovered agent, using a deterministic provider.
+	it("runs one universe pass over every agent scope and keeps semantic rows agent-isolated (#946)", async () => {
+		// Behavioral regression: one Dreaming pass covers the whole install.
+		// The pass addresses each agent scope via the per-call agentId on its
+		// tools; every write is attributed to the agent named on the call, and
+		// no cross-agent evidence leaks into another scope's derived graph.
 		const ALPHA = "alpha";
 		const BETA = "beta";
 		const alphaEvidence = "Alpha is building the Apex platform.";
@@ -174,43 +171,60 @@ describe("dreaming worker agent scope", () => {
 			         datetime('now'), datetime('now'), datetime('now'))`,
 		).run(BETA, betaEvidence);
 
-		// Deterministic provider: emit an operation that cites only THIS agent's
-		// evidence (each pass is bound to one agent_id). The fixed prompt no
-		// longer carries evidence; citations resolve against the store.
+		// Deterministic provider: one universe pass consolidates BOTH scopes
+		// in a single invocation, each apply batch carrying the agentId whose
+		// graph it maintains and citing that scope's own evidence.
 		const seenPrompts: string[] = [];
 		const executorFactory = (agentId: string) => ({
 			async run(input: {
 				prompt: string;
 				tools: ReadonlyArray<{ name: string; execute: (...args: unknown[]) => Promise<unknown> }>;
 			}) {
-				const prompt = input.prompt;
-				seenPrompts.push(prompt);
+				seenPrompts.push(input.prompt);
 				const apply = input.tools.find((tool) => tool.name === "apply_ontology_ops");
 				if (!apply) throw new Error("Missing apply_ontology_ops");
-				const isAlpha = agentId === ALPHA;
 				await apply.execute("call", {
+					agentId: ALPHA,
 					operations: [
 						{
 							operation: "create_entity",
-							payload: { name: isAlpha ? "Apex" : "Zenith", type: "project" },
+							payload: { name: "Apex", type: "project" },
 							reason: "The evidence identifies the project.",
 							confidence: 0.9,
 							evidence: [
 								{
-									source_ref: isAlpha ? "summary:summary-alpha" : "summary:summary-beta",
+									source_ref: "summary:summary-alpha",
 									source_kind: "summary",
-									source_id: isAlpha ? "summary-alpha" : "summary-beta",
-									quote: isAlpha ? alphaEvidence : betaEvidence,
+									source_id: "summary-alpha",
+									quote: alphaEvidence,
 								},
 							],
 						},
 					],
 				});
-				return { summary: isAlpha ? "Consolidated alpha evidence" : "Consolidated beta evidence" };
+				await apply.execute("call", {
+					agentId: BETA,
+					operations: [
+						{
+							operation: "create_entity",
+							payload: { name: "Zenith", type: "project" },
+							reason: "The evidence identifies the project.",
+							confidence: 0.9,
+							evidence: [
+								{
+									source_ref: "summary:summary-beta",
+									source_kind: "summary",
+									source_id: "summary-beta",
+									quote: betaEvidence,
+								},
+							],
+						},
+					],
+				});
+				return { summary: "Consolidated both scopes" };
 			},
 		});
 
-		// Mirror one check cycle: discover agents, run one pass per agent.
 		const worker = startDreamingWorker(
 			accessor,
 			defaultCfg({ tokenThreshold: 1, backfillOnFirstRun: true }),
@@ -219,28 +233,21 @@ describe("dreaming worker agent scope", () => {
 			{ executorFactory },
 		);
 		try {
-			for (const agentId of getDreamingWorkerAgentIds(accessor, "default")) {
-				// Only alpha and beta have episodic evidence worth consolidating.
-				if (agentId !== ALPHA && agentId !== BETA) continue;
-				await worker.trigger("incremental", agentId);
-			}
+			// One trigger = one pass covering every discovered scope.
+			await worker.trigger("incremental", "default");
 
-			// Two passes recorded, one per agent.
-			const alphaPass = db
-				.prepare("SELECT agent_id, status, mode FROM dreaming_passes WHERE agent_id = ?")
-				.get(ALPHA) as { agent_id: string; status: string; mode: string };
-			const betaPass = db
-				.prepare("SELECT agent_id, status, mode FROM dreaming_passes WHERE agent_id = ?")
-				.get(BETA) as { agent_id: string; status: string; mode: string };
-			expect(alphaPass).toEqual({ agent_id: ALPHA, status: "completed", mode: "incremental" });
-			expect(betaPass).toEqual({ agent_id: BETA, status: "completed", mode: "incremental" });
+			// A single pass row on the primary agent.
+			const passes = db
+				.prepare("SELECT agent_id, status, mode FROM dreaming_passes ORDER BY created_at")
+				.all() as Array<{ agent_id: string; status: string; mode: string }>;
+			expect(passes).toEqual([{ agent_id: "default", status: "completed", mode: "incremental" }]);
 
-			// Each pass ran with the fixed prompt; no cross-agent evidence is
-			// injected, and the citations above resolved against each agent's
-			// own store.
-			expect(seenPrompts).toHaveLength(2);
-			expect(seenPrompts[0]).toBe(DREAMING_AGENT_PROMPT);
-			expect(seenPrompts[1]).toBe(DREAMING_AGENT_PROMPT);
+			// One invocation, and the prompt names every scope in the install.
+			expect(seenPrompts).toHaveLength(1);
+			expect(seenPrompts[0]).toContain(DREAMING_AGENT_PROMPT);
+			expect(seenPrompts[0]).toContain("<agent_scopes>");
+			expect(seenPrompts[0]).toContain(ALPHA);
+			expect(seenPrompts[0]).toContain(BETA);
 
 			// Semantic rows are agent-isolated: each agent only owns its entity.
 			const alphaEntities = (

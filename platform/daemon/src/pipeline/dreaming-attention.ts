@@ -139,6 +139,51 @@ export function getDreamingAttentionScoped(
 	});
 }
 
+/**
+ * Universe-wide attention query: one Dreaming pass addresses every agent
+ * scope, so the queue is not partitioned by agent — each record carries its
+ * owning agentId as provenance for downstream attribution.
+ */
+export function getDreamingAttentionAcrossScopes(
+	accessor: DbAccessor,
+	options: {
+		readonly kind?: string;
+		readonly status?: "pending" | "resolved";
+		readonly limit?: number;
+	},
+): readonly (DreamingAttention & { readonly agentId: string })[] {
+	const boundedLimit = Math.max(1, Math.min(Math.floor(options.limit ?? 50), 200));
+	const kindFilter = typeof options.kind === "string" && options.kind.length > 0 ? "AND kind = ?" : "";
+	const statusFilter = options.status === "resolved" ? "AND resolved_at IS NOT NULL" : "AND resolved_at IS NULL";
+	const params: unknown[] = [];
+	if (kindFilter) params.push(options.kind);
+	params.push(boundedLimit);
+	return accessor.withReadDb((db) => {
+		const rows = db
+			.prepare(
+				`SELECT agent_id AS agentId, id, kind, subject_ref AS subjectRef, details_json AS detailsJson,
+				        priority, created_at AS createdAt
+				 FROM dreaming_attention
+				 WHERE 1=1 ${kindFilter} ${statusFilter}
+				 ORDER BY priority DESC, created_at ASC, id ASC
+				 LIMIT ?`,
+			)
+			.all(...params) as Array<{
+			agentId: string;
+			id: string;
+			kind: DreamingAttentionKind;
+			subjectRef: string;
+			detailsJson: string;
+			priority: number;
+			createdAt: string;
+		}>;
+		return rows.map(({ detailsJson, ...attention }) => ({
+			...attention,
+			details: parseDetails(detailsJson),
+		}));
+	});
+}
+
 export function getDreamingAttentionById(
 	accessor: DbAccessor,
 	input: { readonly agentId: string; readonly id: string },

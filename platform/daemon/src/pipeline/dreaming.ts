@@ -607,6 +607,8 @@ export const DREAMING_AGENT_PROMPT = `You are a bounded Signet maintenance agent
 
 Purpose: maintain durable, evidence-cited semantic understanding in the knowledge graph. The graph is a derived structure; every write carries provenance (an attention id for hygiene, an exact quote from episodic evidence for content). Use the pass log (runbook_read) as the dedup source: the previous pass's viewed sources and changes are the cutoff.
 
+An install may have several agent scopes (listed in <agent_scopes> when there is more than one): the scoped tools take an agentId, so address any scope you need — each write is attributed to the agent you name. attention_list without an agentId lists the whole install's hygiene queue, with each record carrying its owning agentId.
+
 ### State targets
 
 - Hygiene queue: dreaming_attention pending records (kind=hygiene)
@@ -668,24 +670,31 @@ export async function runDreamingAgentPass(
 	cfg: DreamingConfig,
 	agentsDir: string,
 	agentId: string,
+	scopes: readonly string[],
 	mode: DreamingMode,
 	existingPassId?: string,
 ): Promise<{ passId: string; applied: number; skipped: number; failed: number; summary: string }> {
 	const passId = existingPassId ?? createDreamingPass(accessor, agentId, mode);
 	const passStartedAt = new Date().toISOString();
 	try {
-		const prompt = DREAMING_AGENT_PROMPT;
+		const prompt =
+			scopes.length > 1
+				? `${DREAMING_AGENT_PROMPT}\n\n<agent_scopes>\n${scopes.join("\n")}\n</agent_scopes>`
+				: DREAMING_AGENT_PROMPT;
 
 		// SQLite-format watermark so string comparisons against stored source
 		// dates stay consistent (ISO timestamps would mis-order).
 		const cutoff = accessor.withReadDb((db) => (db.prepare("SELECT datetime('now') AS now").get() as { now: string }).now);
 
-		// Incremental passes only invoke the agent when there is work: pending
-		// attention or an episodic backlog. Scheduled checks are already gated
-		// by shouldTriggerDreaming; this protects manual triggers and compact
-		// runs from spending tokens on nothing.
-		const hasPendingAttention = accessor.withReadDb((db) => getDreamingAttentionInDb(db, agentId, 1).length > 0);
-		if (mode === "incremental" && !hasPendingAttention && getDreamingEpisodicTokenBacklog(accessor, agentId) === 0) {
+		// One Dreaming pass covers the whole install: it only runs when some
+		// scope has pending attention or an episodic backlog. Scheduled checks
+		// are already gated by shouldTriggerDreaming; this protects manual
+		// triggers and compact runs from spending tokens on nothing.
+		const hasPendingAttention = scopes.some((scope) =>
+			accessor.withReadDb((db) => getDreamingAttentionInDb(db, scope, 1).length > 0),
+		);
+		const totalBacklog = scopes.reduce((total, scope) => total + getDreamingEpisodicTokenBacklog(accessor, scope), 0);
+		if (mode === "incremental" && !hasPendingAttention && totalBacklog === 0) {
 			const summary = "No new episodic evidence or semantic attention to process";
 			accessor.withWriteTx((db) => {
 				db.prepare(
@@ -693,7 +702,7 @@ export async function runDreamingAgentPass(
 					 tokens_consumed = 0, mutations_applied = 0, mutations_skipped = 0,
 					 mutations_failed = 0, summary = ? WHERE id = ?`,
 				).run(summary, passId);
-				resetDreamingTokens(db, agentId, passId, mode, null, cutoff);
+				for (const scope of scopes) resetDreamingTokens(db, scope, passId, mode, null, cutoff);
 			});
 			return { passId, applied: 0, skipped: 0, failed: 0, summary };
 		}
@@ -748,10 +757,11 @@ export async function runDreamingAgentPass(
 				 mutations_failed = ?, summary = ? WHERE id = ?`,
 			).run(tokensConsumed, applied, 0, failed, summary, passId);
 			recordDreamingEvidenceExclusionsInTx(db, agentId, passId, rejectedEvidence, "semantic_operation_rejected");
-			// The evidence queue resets to the pass watermark: the next pass's
-			// backlog counts only sources captured after this pass began. The
-			// agent's own pass log (runbook_write) carries the viewed-source dedup.
-			resetDreamingTokens(db, agentId, passId, mode, null, cutoff);
+			// The evidence queue resets to the pass watermark for EVERY scope:
+			// the next pass's backlog counts only sources captured after this
+			// pass began. The agent's own pass log (runbook_write) carries the
+			// viewed-source dedup.
+			for (const scope of scopes) resetDreamingTokens(db, scope, passId, mode, null, cutoff);
 		});
 		return { passId, applied, skipped: 0, failed, summary };
 	} catch (error) {
