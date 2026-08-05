@@ -56,6 +56,113 @@ describe("skillBackoffDelayMs", () => {
 });
 
 describe("reconcileOnce", () => {
+	it("removes legacy skill entities and tombstones stale metadata (#1106)", async () => {
+		const paths = setup();
+		root = paths.root;
+		db = paths.db;
+		initDbAccessor(db);
+
+		const now = new Date().toISOString();
+		const legacySkill = "legacy-skill";
+		const legacyEntityId = "1c93cb26-legacy-skill";
+		const namespaceId = `skill:default:${legacySkill}`;
+		const legacyPath = join(root, "skills", legacySkill, "SKILL.md");
+		getDbAccessor().withWriteTx((dbh) => {
+			dbh
+				.prepare(
+					`INSERT INTO entities (id, name, canonical_name, entity_type, agent_id, description, created_at, updated_at)
+					 VALUES (?, ?, ?, 'skill', 'default', ?, ?, ?)`,
+				)
+				.run(legacyEntityId, legacySkill, legacySkill, "legacy skill", now, now);
+			dbh
+				.prepare(
+					`INSERT INTO skill_meta (entity_id, agent_id, source, role, installed_at, fs_path, enriched)
+					 VALUES (?, 'default', 'reconciler', 'utility', ?, ?, 0)`,
+				)
+				.run(namespaceId, now, legacyPath);
+		});
+
+		const staleSkill = "stale-skill";
+		const staleNamespaceId = `skill:default:${staleSkill}`;
+		const stalePath = join(root, "skills", staleSkill, "SKILL.md");
+		getDbAccessor().withWriteTx((dbh) => {
+			dbh
+				.prepare(
+					`INSERT INTO skill_meta (entity_id, agent_id, source, role, installed_at, fs_path, enriched)
+					 VALUES (?, 'default', 'reconciler', 'utility', ?, ?, 0)`,
+				)
+				.run(staleNamespaceId, now, stalePath);
+		});
+
+		const pass = await reconcileOnce({
+			accessor: getDbAccessor(),
+			pipelineConfig: cfg(),
+			embeddingConfig: emb,
+			fetchEmbedding: async () => [0.1, 0.2, 0.3],
+			agentsDir: root,
+		});
+
+		expect(pass).toEqual({ installed: 0, updated: 0, removed: 1 });
+		expect(
+			getDbAccessor().withReadDb((dbh) => dbh.prepare("SELECT id FROM entities WHERE id = ?").get(legacyEntityId)),
+		).toBeNull();
+		expect(
+			getDbAccessor().withReadDb((dbh) =>
+				dbh.prepare("SELECT entity_id FROM skill_meta WHERE entity_id = ?").get(namespaceId),
+			),
+		).toBeNull();
+
+		const tombstone = getDbAccessor().withReadDb(
+			(dbh) =>
+				dbh.prepare("SELECT uninstalled_at FROM skill_meta WHERE entity_id = ?").get(staleNamespaceId) as
+					| { uninstalled_at: string | null }
+					| undefined,
+		);
+		expect(tombstone?.uninstalled_at).toBeString();
+
+		const repeat = await reconcileOnce({
+			accessor: getDbAccessor(),
+			pipelineConfig: cfg(),
+			embeddingConfig: emb,
+			fetchEmbedding: async () => [0.1, 0.2, 0.3],
+			agentsDir: root,
+		});
+		expect(repeat).toEqual({ installed: 0, updated: 0, removed: 0 });
+	});
+
+	it("can skip the unchanged filesystem scan while still checking orphan metadata (#1106)", async () => {
+		const paths = setup();
+		root = paths.root;
+		db = paths.db;
+		initDbAccessor(db);
+
+		const skillDir = join(root, "skills", "deferred-skill");
+		mkdirSync(skillDir, { recursive: true });
+		writeFileSync(
+			join(skillDir, "SKILL.md"),
+			`---
+name: deferred-skill
+description: deferred scan
+---
+body`,
+		);
+
+		const pass = await reconcileOnce(
+			{
+				accessor: getDbAccessor(),
+				pipelineConfig: cfg(),
+				embeddingConfig: emb,
+				fetchEmbedding: async () => {
+					throw new Error("filesystem scan should be skipped");
+				},
+				agentsDir: root,
+			},
+			{ scanFilesystem: false },
+		);
+
+		expect(pass).toEqual({ installed: 0, updated: 0, removed: 0 });
+	});
+
 	it("does not reinstall an unchanged skill on the next pass", async () => {
 		const paths = setup();
 		root = paths.root;

@@ -54,6 +54,7 @@ export interface SkillInstallResult {
 export interface SkillUninstallInput {
 	readonly skillName: string;
 	readonly agentId?: string;
+	readonly entityId?: string;
 }
 
 export interface SkillUninstallResult {
@@ -67,6 +68,37 @@ export interface SkillUninstallResult {
 
 function skillEntityId(agentId: string, name: string): string {
 	return `skill:${agentId}:${name}`;
+}
+
+function findSkillEntityId(input: SkillUninstallInput, accessor: DbAccessor): string | null {
+	const agentId = input.agentId ?? "default";
+	const canonicalId = skillEntityId(agentId, input.skillName);
+
+	return accessor.withReadDb((db) => {
+		if (input.entityId) {
+			const explicit = db
+				.prepare("SELECT id FROM entities WHERE id = ? AND agent_id = ?")
+				.get(input.entityId, agentId) as { id: string } | undefined;
+			if (explicit) return explicit.id;
+		}
+
+		const canonical = db.prepare("SELECT id FROM entities WHERE id = ? AND agent_id = ?").get(canonicalId, agentId) as
+			| { id: string }
+			| undefined;
+		if (canonical) return canonical.id;
+
+		const adopted = db
+			.prepare("SELECT id FROM entities WHERE name = ? AND agent_id = ? AND entity_type = 'skill' LIMIT 1")
+			.get(input.skillName, agentId) as { id: string } | undefined;
+		return adopted?.id ?? null;
+	});
+}
+
+function skillMetaIds(input: SkillUninstallInput): readonly string[] {
+	const agentId = input.agentId ?? "default";
+	const ids = new Set([skillEntityId(agentId, input.skillName)]);
+	if (input.entityId) ids.add(input.entityId);
+	return [...ids];
 }
 
 function buildEmbeddingText(fm: SkillFrontmatter): string {
@@ -305,13 +337,18 @@ export async function installSkillNode(
 
 export function uninstallSkillNode(input: SkillUninstallInput, accessor: DbAccessor): SkillUninstallResult {
 	const agentId = input.agentId ?? "default";
-	const entityId = skillEntityId(agentId, input.skillName);
+	const entityId = findSkillEntityId(input, accessor);
+	const metaIds = skillMetaIds(input);
 
-	const exists = accessor.withReadDb(
-		(db) => db.prepare("SELECT id FROM entities WHERE id = ?").get(entityId) as { id: string } | undefined,
-	);
-
-	if (!exists) {
+	if (!entityId) {
+		const now = new Date().toISOString();
+		accessor.withWriteTx((db) => {
+			for (const metaId of metaIds) {
+				db.prepare(
+					"UPDATE skill_meta SET uninstalled_at = ?, updated_at = ? WHERE entity_id = ? AND agent_id = ? AND uninstalled_at IS NULL",
+				).run(now, now, metaId, agentId);
+			}
+		});
 		return { removed: false, entityId: null };
 	}
 
@@ -339,7 +376,9 @@ export function uninstallSkillNode(input: SkillUninstallInput, accessor: DbAcces
 		}
 
 		// 4. Hard-delete skill_meta + entity in same transaction
-		db.prepare("DELETE FROM skill_meta WHERE entity_id = ?").run(entityId);
+		for (const metaId of metaIds) {
+			db.prepare("DELETE FROM skill_meta WHERE entity_id = ? AND agent_id = ?").run(metaId, agentId);
+		}
 		db.prepare("DELETE FROM entities WHERE id = ?").run(entityId);
 	});
 

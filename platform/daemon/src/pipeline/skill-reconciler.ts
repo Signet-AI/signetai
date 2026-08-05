@@ -10,7 +10,7 @@
  * Idempotent — matched by canonical name + frontmatter content hash.
  */
 
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { watch } from "chokidar";
 import type { DbAccessor } from "../db-accessor.js";
@@ -33,6 +33,10 @@ export interface ReconcilerDeps {
 
 export interface ReconcilerHandle {
 	stop(): void;
+}
+
+export interface ReconcileOptions {
+	readonly scanFilesystem?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -91,7 +95,10 @@ export function resetSkillFailureState(skillName: string): void {
  *    - If entity exists but frontmatter changed → re-install
  * 3. For each skill_meta row with no matching file → uninstall
  */
-export async function reconcileOnce(deps: ReconcilerDeps): Promise<{
+export async function reconcileOnce(
+	deps: ReconcilerDeps,
+	options: ReconcileOptions = {},
+): Promise<{
 	installed: number;
 	updated: number;
 	removed: number;
@@ -101,18 +108,16 @@ export async function reconcileOnce(deps: ReconcilerDeps): Promise<{
 	let updated = 0;
 	let removed = 0;
 
-	if (!existsSync(dir)) {
-		return { installed, updated, removed };
-	}
-
 	// 1. Scan filesystem
 	const diskSkills = new Map<string, string>(); // name → SKILL.md path
-	const entries = readdirSync(dir, { withFileTypes: true });
-	for (const entry of entries) {
-		if (!entry.isDirectory()) continue;
-		const skillMdPath = join(dir, entry.name, "SKILL.md");
-		if (existsSync(skillMdPath)) {
-			diskSkills.set(entry.name, skillMdPath);
+	if (options.scanFilesystem !== false && existsSync(dir)) {
+		const entries = readdirSync(dir, { withFileTypes: true });
+		for (const entry of entries) {
+			if (!entry.isDirectory()) continue;
+			const skillMdPath = join(dir, entry.name, "SKILL.md");
+			if (existsSync(skillMdPath)) {
+				diskSkills.set(entry.name, skillMdPath);
+			}
 		}
 	}
 
@@ -220,11 +225,14 @@ export async function reconcileOnce(deps: ReconcilerDeps): Promise<{
 
 	for (const row of graphSkills) {
 		if (!existsSync(row.fs_path)) {
-			// Extract skill name from entity_id: "skill:default:{name}"
+			// Prefer the namespace id, but retain the filesystem name for legacy
+			// rows whose entity_id does not use the skill namespace.
 			const parts = row.entity_id.split(":");
-			const skillName = parts.slice(2).join(":");
+			const skillName = parts[0] === "skill" ? parts.slice(2).join(":") : basename(dirname(row.fs_path));
 			if (skillName) {
-				uninstallSkillNode({ skillName }, deps.accessor);
+				const result = uninstallSkillNode({ skillName, entityId: row.entity_id }, deps.accessor);
+				if (!result.removed) continue;
+
 				removed++;
 				logger.info("reconciler", "Removed orphaned skill node", {
 					skill: skillName,
@@ -259,9 +267,25 @@ export function startReconciler(deps: ReconcilerDeps): ReconcilerHandle {
 	const intervalMs = deps.pipelineConfig.procedural.reconcileIntervalMs;
 	const dir = skillsDir(deps.agentsDir);
 	let reconciling = false;
+	let lastScannedDirMtimeMs: number | null | undefined;
+
+	const directoryMtimeMs = (): number | null => {
+		try {
+			return statSync(dir).mtimeMs;
+		} catch {
+			return null;
+		}
+	};
+
+	const reconcileIfChanged = async (): Promise<void> => {
+		const currentMtimeMs = directoryMtimeMs();
+		const scanFilesystem = currentMtimeMs !== lastScannedDirMtimeMs;
+		await reconcileOnce(deps, { scanFilesystem });
+		lastScannedDirMtimeMs = currentMtimeMs;
+	};
 
 	// Immediate backfill (async, doesn't block startup)
-	reconcileOnce(deps).catch((e) => {
+	reconcileIfChanged().catch((e) => {
 		logger.error("reconciler", "Startup backfill failed", e instanceof Error ? e : undefined, {
 			error: String(e),
 		});
@@ -271,7 +295,7 @@ export function startReconciler(deps: ReconcilerDeps): ReconcilerHandle {
 	const timer = setInterval(() => {
 		if (reconciling) return;
 		reconciling = true;
-		reconcileOnce(deps)
+		reconcileIfChanged()
 			.catch((e) => {
 				logger.error("reconciler", "Periodic reconciliation failed", e instanceof Error ? e : undefined, {
 					error: String(e),
