@@ -14,7 +14,7 @@ scoring.
 Config:
   - SIGNET_HOST / SIGNET_PORT env vars (default: localhost:3850)
   - SIGNET_DAEMON_URL env var for full URL override
-  - SIGNET_AGENT_ID env var for agent scoping (default: "hermes-agent")
+  - SIGNET_AGENT_ID env var for agent scoping (unset: daemon's configured agent, usually "default")
   - SIGNET_AGENT_WORKSPACE env var for the active named-agent workspace
 """
 
@@ -303,7 +303,7 @@ def _resolve_agent_workspace(agent_id: str, kwargs: Dict[str, Any]) -> str:
 
     signet_path = _sanitize_env(os.environ.get("SIGNET_PATH", ""))
     agents_root = Path(signet_path).expanduser() if signet_path else Path.home() / ".agents"
-    if agent_id and agent_id not in ("default", "hermes-agent"):
+    if agent_id and agent_id not in ("default",):
         candidate = agents_root / "agents" / agent_id
         if candidate.exists():
             return str(candidate)
@@ -379,8 +379,8 @@ class SignetMemoryProvider(MemoryProvider):
             },
             {
                 "key": "agent_id",
-                "description": "Agent scope identifier",
-                "default": "hermes-agent",
+                "description": "Agent scope identifier. Leave empty to use the daemon's configured agent.",
+                "default": "",
                 "env_var": "SIGNET_AGENT_ID",
             },
         ]
@@ -396,12 +396,19 @@ class SignetMemoryProvider(MemoryProvider):
             return
 
         agent_id = os.environ.get("SIGNET_AGENT_ID", "").strip()
-        if not agent_id:
+        if agent_id == "hermes-agent":
+            # The harness name is provenance, never an agent scope. A stale
+            # value from an older connector install is healed by letting the
+            # daemon resolve the workspace's configured agent instead.
             logger.warning(
-                "SIGNET_AGENT_ID is not set; memory will be stored under the 'hermes-agent' "
-                "scope. Set SIGNET_AGENT_ID to scope memories to a specific agent."
+                "SIGNET_AGENT_ID='hermes-agent' is the harness name, not an agent scope; "
+                "the daemon's configured agent will be used instead."
             )
-            agent_id = "hermes-agent"
+            agent_id = ""
+        if not agent_id:
+            # No explicit agent id: the daemon resolves its configured agent
+            # (its own SIGNET_AGENT_ID, or 'default' for the default workspace).
+            logger.debug("SIGNET_AGENT_ID is not set; the daemon's configured agent scope applies.")
 
         # Skip for cron/flush contexts — no memory injection needed
         agent_context = kwargs.get("agent_context", "")

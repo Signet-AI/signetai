@@ -715,6 +715,90 @@ describe("HermesAgentConnector.install()", () => {
 		expect(envContent).toContain(`SIGNET_AGENT_WORKSPACE=${join(tmpRoot, "agents", "dot")}`);
 	});
 
+	it("resolves SIGNET_AGENT_ID from the daemon status when the env var is unset (#1084)", async () => {
+		const originalFetch = globalThis.fetch;
+		globalThis.fetch = (async (url: string | URL | Request, _init?: RequestInit): Promise<Response> => {
+			if (String(url).endsWith("/api/status")) {
+				return new Response(JSON.stringify({ agentId: "research" }), { status: 200 });
+			}
+			return new Response(JSON.stringify({ error: "not found" }), { status: 404 });
+		}) as typeof fetch;
+
+		try {
+			const hermesRepo = join(tmpRoot, "hermes-agent");
+			mkdirSync(join(hermesRepo, "plugins", "memory"), { recursive: true });
+			const hermesHome = join(tmpRoot, ".hermes");
+			process.env.HERMES_REPO = hermesRepo;
+			process.env.HERMES_HOME = hermesHome;
+			// biome-ignore lint/performance/noDelete: exercise the daemon-resolved fallback
+			delete process.env.SIGNET_AGENT_ID;
+
+			const result = await new HermesAgentConnector().install(tmpRoot);
+
+			expect(result.success).toBe(true);
+			const envContent = await Bun.file(join(hermesHome, ".env")).text();
+			expect(envContent).toContain("SIGNET_AGENT_ID=research");
+			expect(envContent).not.toContain("hermes-agent");
+		} finally {
+			globalThis.fetch = originalFetch;
+		}
+	});
+
+	it("writes SIGNET_AGENT_ID=default, never the harness name, when the daemon is unreachable (#1084)", async () => {
+		const originalFetch = globalThis.fetch;
+		globalThis.fetch = (async (url: string | URL | Request, _init?: RequestInit): Promise<Response> => {
+			throw new TypeError("fetch failed");
+		}) as typeof fetch;
+
+		try {
+			const hermesRepo = join(tmpRoot, "hermes-agent");
+			mkdirSync(join(hermesRepo, "plugins", "memory"), { recursive: true });
+			const hermesHome = join(tmpRoot, ".hermes");
+			process.env.HERMES_REPO = hermesRepo;
+			process.env.HERMES_HOME = hermesHome;
+			// biome-ignore lint/performance/noDelete: exercise the default fallback
+			delete process.env.SIGNET_AGENT_ID;
+
+			const result = await new HermesAgentConnector().install(tmpRoot);
+
+			expect(result.success).toBe(true);
+			const envContent = await Bun.file(join(hermesHome, ".env")).text();
+			expect(envContent).toContain("SIGNET_AGENT_ID=default");
+			expect(envContent).not.toContain("hermes-agent");
+		} finally {
+			globalThis.fetch = originalFetch;
+		}
+	});
+
+	it("heals a stale SIGNET_AGENT_ID=hermes-agent instead of honoring it (#1084)", async () => {
+		const originalFetch = globalThis.fetch;
+		globalThis.fetch = (async (url: string | URL | Request, _init?: RequestInit): Promise<Response> => {
+			if (String(url).endsWith("/api/status")) {
+				return new Response(JSON.stringify({ agentId: "research" }), { status: 200 });
+			}
+			return new Response(JSON.stringify({ error: "not found" }), { status: 404 });
+		}) as typeof fetch;
+
+		try {
+			const hermesRepo = join(tmpRoot, "hermes-agent");
+			mkdirSync(join(hermesRepo, "plugins", "memory"), { recursive: true });
+			const hermesHome = join(tmpRoot, ".hermes");
+			process.env.HERMES_REPO = hermesRepo;
+			process.env.HERMES_HOME = hermesHome;
+			process.env.SIGNET_AGENT_ID = "hermes-agent";
+
+			const result = await new HermesAgentConnector().install(tmpRoot);
+
+			expect(result.success).toBe(true);
+			const envContent = await Bun.file(join(hermesHome, ".env")).text();
+			expect(envContent).toContain("SIGNET_AGENT_ID=research");
+			expect(envContent).not.toContain("SIGNET_AGENT_ID=hermes-agent");
+			expect(result.warnings.some((w) => w.includes("harness name, not an agent scope"))).toBe(true);
+		} finally {
+			globalThis.fetch = originalFetch;
+		}
+	});
+
 	it("uses SIGNET_TOKEN and configured read policy when registering named agents", async () => {
 		const originalFetch = globalThis.fetch;
 		const calls: Array<{ url: string; init?: RequestInit }> = [];
@@ -1269,7 +1353,7 @@ for vector in contract["vectors"]:
 		expect(client).toContain("TimeoutError, ValueError");
 		expect(client).toContain('_safe_score(row.get("score"))');
 		expect(client).toContain('"noHits": len(kept) == 0');
-		expect(plugin).toContain('agent_id not in ("default", "hermes-agent")');
+		expect(plugin).toContain('agent_id not in ("default",)');
 	});
 });
 

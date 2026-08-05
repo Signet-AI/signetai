@@ -648,6 +648,37 @@ function configuredAgentReadPolicy(warnings: string[]): AgentReadPolicy {
 	return "shared";
 }
 
+/**
+ * Resolve the daemon's configured agent id from `/api/status`.
+ *
+ * The daemon resolves its agent id from its own `SIGNET_AGENT_ID`, falling
+ * back to `default` (see `platform/daemon/src/agent-id.ts`). This is the
+ * workspace's real agent scope, which is what the plugin inherits when no
+ * explicit agent id is set. Returns null when the daemon is unreachable or
+ * reports none, so callers fall back to `default`.
+ */
+async function resolveDaemonAgentId(daemonUrl: string): Promise<string | null> {
+	try {
+		const baseUrl = trimTrailingSlashes(daemonUrl);
+		const token = sanitizedAuthTokenEnv();
+		const headers: Record<string, string> = {};
+		if (token) {
+			headers.Authorization = `Bearer ${token}`;
+		}
+		const resp = await fetch(`${baseUrl}/api/status`, {
+			headers,
+			signal: AbortSignal.timeout(1_000),
+		});
+		if (!resp.ok) return null;
+		const body = (await resp.json()) as { agentId?: unknown };
+		const agentId = typeof body.agentId === "string" ? body.agentId.trim() : "";
+		return agentId || null;
+	} catch {
+		// Daemon offline or still starting — caller falls back to "default".
+		return null;
+	}
+}
+
 async function ensureNamedAgentRegistered(daemonUrl: string, agentId: string, warnings: string[]): Promise<void> {
 	if (!agentId || agentId === "default" || agentId === "hermes-agent") return;
 	if (process.env.SIGNET_SKIP_AGENT_REGISTER === "1") return;
@@ -786,7 +817,7 @@ export class HermesAgentConnector extends BaseConnector {
 
 		// 2. Write env config for the Signet daemon connection
 		const envPath = join(hermesHome, ".env");
-		let configuredSignetAgentId = "hermes-agent";
+		let configuredSignetAgentId = "default";
 		const configuredDaemonUrl = (process.env.SIGNET_DAEMON_URL?.trim() || "http://localhost:3850").replace(
 			/[\r\n]+/g,
 			"",
@@ -805,16 +836,28 @@ export class HermesAgentConnector extends BaseConnector {
 			if (process.env.SIGNET_TRUSTED_DAEMON_ORIGINS) {
 				signetVars.SIGNET_TRUSTED_DAEMON_ORIGINS = sanitizedEnv("SIGNET_TRUSTED_DAEMON_ORIGINS");
 			}
-			// Always write SIGNET_AGENT_ID — never allow the plugin to fall back to the
-			// shared "default" scope (AGENTS.md: never hardcode "default" for scoped paths).
-			const signetAgentId = sanitizedEnv("SIGNET_AGENT_ID") || "hermes-agent";
+			// Always write SIGNET_AGENT_ID. Resolution order: explicit env, then
+			// the daemon's configured agent (its own SIGNET_AGENT_ID or "default"),
+			// then "default" for the default workspace. The harness name
+			// ("hermes-agent") is provenance, never an agent id — a stale value
+			// from an older install is healed instead of honored.
+			let signetAgentId = sanitizedEnv("SIGNET_AGENT_ID");
+			if (signetAgentId === "hermes-agent") {
+				warnings.push(
+					"SIGNET_AGENT_ID='hermes-agent' is the harness name, not an agent scope. Re-resolving from the daemon.",
+				);
+				signetAgentId = "";
+			}
+			if (!signetAgentId) {
+				signetAgentId = (await resolveDaemonAgentId(configuredDaemonUrl)) || "default";
+			}
 			configuredSignetAgentId = signetAgentId;
 			signetVars.SIGNET_AGENT_ID = signetAgentId;
 
 			const explicitAgentWorkspace = process.env.SIGNET_AGENT_WORKSPACE?.trim();
 			if (explicitAgentWorkspace) {
 				signetVars.SIGNET_AGENT_WORKSPACE = expandHome(explicitAgentWorkspace).replace(/[\r\n]+/g, "");
-			} else if (signetAgentId && signetAgentId !== "hermes-agent" && signetAgentId !== "default") {
+			} else if (signetAgentId && signetAgentId !== "default") {
 				const agentWorkspace = join(expandedBasePath, "agents", signetAgentId);
 				if (existsSync(agentWorkspace)) {
 					signetVars.SIGNET_AGENT_WORKSPACE = agentWorkspace;
