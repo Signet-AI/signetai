@@ -623,7 +623,7 @@ An install may have several agent scopes (listed in <agent_scopes> when there is
    - Inspect the flagged target (get_entity — check aspects, claims, pinned).
    - Archive or merge it, citing its attention id (provenance: "attention:<uuid>", or attention:$<index> for a flag you minted in the same batch).
    - If you discover junk the queue did not flag, mint a flag op and archive in the same batch.
-3. Only when the hygiene queue is clear: find new evidence since the cutoff (search_evidence with since). For each new source:
+3. Only when the hygiene queue is clear: find new evidence since the cutoff. First LIST recent sources with search_evidence — pass since and omit the query so it returns the newest sources; only after seeing what is there, narrow with a query if the list is large. For each new source:
    - search_entities for subjects it establishes.
    - Extract/update claims with exact-quote evidence from that source.
    - create_entity only for durable subjects clearly established by the source.

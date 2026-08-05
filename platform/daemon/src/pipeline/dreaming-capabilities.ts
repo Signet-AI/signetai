@@ -312,7 +312,7 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 		capability(
 			"search_evidence",
 			"Search episodic evidence",
-			"Full-text search immutable episodic memories, artifacts, transcripts, and summaries in one agent scope. Artifacts are deduped by content hash: content-identical files across vault paths collapse to one canonical entry.",
+			"Full-text search immutable episodic memories, artifacts, transcripts, and summaries in one agent scope. Omit the query to list the most recent sources (e.g. with since as a cutoff). Artifacts are deduped by content hash: content-identical files across vault paths collapse to one canonical entry.",
 			true,
 			z.object({
 				agentId: z.string().min(1),
