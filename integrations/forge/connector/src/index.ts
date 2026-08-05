@@ -10,13 +10,16 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { join, resolve } from "node:path";
 import {
 	BaseConnector,
 	type InstallResult,
 	type UninstallResult,
 	atomicWriteJson,
+	isChildOf,
+	isJsonObject,
 	isSignetGeneratedFile,
+	readTrimmedEnv,
 	resolveSignetApiKey,
 	resolveSignetMcpCommand,
 	resolveSignetWorkspacePath,
@@ -39,17 +42,6 @@ interface ForgeMcpHttpServer {
 }
 
 type ForgeMcpServer = ForgeMcpStdioServer | ForgeMcpHttpServer;
-
-function isJsonObject(value: unknown): value is JsonObject {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function readTrimmedEnv(name: string): string | undefined {
-	const value = process.env[name];
-	if (typeof value !== "string") return undefined;
-	const trimmed = value.trim().replace(/[\r\n]+/g, "");
-	return trimmed.length > 0 ? trimmed : undefined;
-}
 
 function getHomeDir(): string {
 	const home = readTrimmedEnv("HOME");
@@ -101,11 +93,6 @@ function buildMcpServer(basePath: string): ForgeMcpServer {
 		...(mcp.args && mcp.args.length > 0 ? { args: mcp.args } : {}),
 		env: signetRuntimeEnv(basePath),
 	};
-}
-
-function isChildOf(candidate: string, parent: string): boolean {
-	const rel = relative(parent, candidate);
-	return rel !== "" && rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
 }
 
 export class ForgeConnector extends BaseConnector {

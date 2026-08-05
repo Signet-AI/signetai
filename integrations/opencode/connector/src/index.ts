@@ -28,7 +28,9 @@ import {
 	type UninstallResult,
 	atomicWriteJson,
 	atomicWriteText,
+	isJsonObject,
 	isSignetGeneratedFile,
+	readTrimmedEnv,
 	resolveSignetMcpCommand,
 } from "@signet/connector-base";
 import { parseLenientJsonObject } from "@signet/connector-base/lenient-json";
@@ -50,15 +52,6 @@ import { PLUGIN_BUNDLE } from "./plugin-bundle.js";
 type JsonObject = Record<string, unknown>;
 
 const API_KEY_FILE_NAME = ".signet-api-key";
-
-function isJsonObject(value: unknown): value is JsonObject {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function readTrimmedEnv(name: string): string | undefined {
-	const value = process.env[name];
-	return typeof value === "string" && value.trim().length > 0 ? value.trim().replace(/[\r\n]+/g, "") : undefined;
-}
 
 function signetRuntimeEnv(): Record<string, string> {
 	const env: Record<string, string> = {};

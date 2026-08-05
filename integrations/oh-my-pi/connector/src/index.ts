@@ -6,10 +6,9 @@ import {
 	MANAGED_AGENT_ID_DEFAULT,
 	MANAGED_DAEMON_URL_DEFAULT,
 	type UninstallResult,
-	buildManagedExtensionEnvBootstrap,
+	buildManagedExtensionContent,
 	isManagedExtensionFile,
 	managedExtensionFilePath,
-	readManagedTrimmedEnv,
 	removeManagedExtensionFile,
 	resolveSignetAgentId,
 	resolveSignetApiKey,
@@ -33,31 +32,19 @@ const OH_MY_PI_MANAGED_FILENAME = "signet-oh-my-pi.js";
 const OH_MY_PI_LEGACY_MANAGED_FILENAME = "signet-oh-my-pi.mjs";
 const OH_MY_PI_MANAGED_MARKER = "SIGNET_MANAGED_OH_MY_PI_EXTENSION";
 
-function bundledExtensionContent(): string {
-	if (EXTENSION_BUNDLE.length === 0) {
-		throw new Error(
-			`Bundled Oh My Pi extension content is empty. Rebuild ${OH_MY_PI_EXTENSION_PACKAGE} and rerun the connector build so ${OH_MY_PI_EXTENSION_ENTRY} is embedded.`,
-		);
-	}
-	return EXTENSION_BUNDLE;
-}
-
-function buildManagedExtensionContent(env: {
+function buildManagedOhMyPiExtensionContent(env: {
 	readonly signetPath: string;
 	readonly daemonUrl: string;
 	readonly agentId: string;
 	readonly apiKey?: string;
 }): string {
-	const bundle = bundledExtensionContent();
-	const bootstrap = buildManagedExtensionEnvBootstrap(env);
-	return `// ${OH_MY_PI_MANAGED_MARKER}
-// Managed by Signet (${OH_MY_PI_EXTENSION_PACKAGE})
-// Source: ${OH_MY_PI_EXTENSION_ENTRY}
-// DO NOT EDIT - this file is overwritten by Signet setup/sync.
-
-${bootstrap}
-
-${bundle}`;
+	return buildManagedExtensionContent({
+		bundle: EXTENSION_BUNDLE,
+		marker: OH_MY_PI_MANAGED_MARKER,
+		packageName: OH_MY_PI_EXTENSION_PACKAGE,
+		entry: OH_MY_PI_EXTENSION_ENTRY,
+		env,
+	});
 }
 
 export class OhMyPiConnector extends BaseConnector {
@@ -107,7 +94,7 @@ export class OhMyPiConnector extends BaseConnector {
 		}
 
 		mkdirSync(dirname(targetPath), { recursive: true });
-		const managedContent = buildManagedExtensionContent({
+		const managedContent = buildManagedOhMyPiExtensionContent({
 			signetPath: expandedBasePath,
 			daemonUrl: resolveSignetDaemonUrl() || MANAGED_DAEMON_URL_DEFAULT,
 			agentId: resolveSignetAgentId(),

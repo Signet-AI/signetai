@@ -24,7 +24,13 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { delimiter, join, resolve } from "node:path";
-import { BaseConnector, type InstallResult, type UninstallResult, atomicWriteJson } from "@signet/connector-base";
+import {
+	BaseConnector,
+	type InstallResult,
+	type UninstallResult,
+	atomicWriteJson,
+	isJsonObject,
+} from "@signet/connector-base";
 import { parseLenientJsonObject } from "@signet/connector-base/lenient-json";
 import { expandHome } from "@signet/core";
 
@@ -34,10 +40,6 @@ import { expandHome } from "@signet/core";
 
 type JsonObject = Record<string, unknown>;
 const OPENCLAW_PARSE_OPTIONS = { label: "OpenClaw config" } as const;
-
-function isJsonObject(value: unknown): value is JsonObject {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 interface OpenClawConfigShape {
 	hooks?: {

@@ -10,27 +10,20 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, resolve, sep } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import {
 	BaseConnector,
 	type InstallResult,
 	type UninstallResult,
 	atomicWriteJson,
+	isChildOf,
+	isJsonObject,
 	isSignetGeneratedFile,
 	resolveSignetWorkspacePath,
 } from "@signet/connector-base";
 import { expandHome, hasValidIdentity, loadIdentityMode } from "@signet/core";
 
 type JsonObject = Record<string, unknown>;
-
-function isJsonObject(value: unknown): value is JsonObject {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isChildOf(candidate: string, parent: string): boolean {
-	const prefix = resolve(parent) + sep;
-	return candidate.startsWith(prefix);
-}
 
 function readGeminiSettings(settingsPath: string): JsonObject | null {
 	if (!existsSync(settingsPath)) return null;
