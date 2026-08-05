@@ -46,6 +46,12 @@ describe("desktop update packaging", () => {
 		expect(workflow).toContain("surfaces/desktop/release/latest*.yml");
 	});
 
+	test("uses a Linux-safe Electron executable name", () => {
+		const packageJson = JSON.parse(readFileSync(join(desktopRoot, "package.json"), "utf8"));
+		expect(packageJson.build.executableName).toBe("signet");
+		expect(packageJson.build.executableName).toMatch(/^[A-Za-z0-9._ -]+$/);
+	});
+
 	test("ships a full macOS app iconset", () => {
 		if (process.platform !== "darwin") return;
 

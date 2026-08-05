@@ -33,6 +33,7 @@
 	"build": {
 		"appId": "ai.signet.app",
 		"productName": "Signet",
+		"executableName": "signet",
 		"artifactName": "Signet-${version}-${os}-${arch}.${ext}",
 		"asar": true,
 		"npmRebuild": false,
