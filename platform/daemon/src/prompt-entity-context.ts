@@ -2,9 +2,9 @@ import { existsSync } from "node:fs";
 import { cosineSimilarity } from "@signet/core";
 import { selectWithBudgetSkippingOversized } from "./context-budget";
 import { type ReadDb, getDbAccessor, hasDbAccessor } from "./db-accessor";
+import type { EmbeddingRole } from "./embedding-profile";
 import { logger } from "./logger";
 import type { EmbeddingConfig } from "./memory-config";
-import type { EmbeddingRole } from "./embedding-profile";
 import { countPromptTermOverlap, extractSubstantiveWords, stripUntrustedMetadata } from "./prompt-text";
 
 type FetchEmbedding = (text: string, cfg: EmbeddingConfig, role?: EmbeddingRole) => Promise<number[] | null>;
@@ -128,8 +128,17 @@ function promptEntityTermMatches(promptTerm: string, phraseTerm: string): boolea
 	);
 }
 
-function promptPhraseSpan(prompt: string, phrase: string): { readonly start: number; readonly end: number } | null {
-	const promptTerms = promptEntityTerms(prompt);
+/**
+ * Locate a phrase's token span inside precomputed prompt terms.
+ *
+ * Callers tokenize the prompt once and pass the terms in: tokenizing the
+ * prompt here would re-run the same regex pass per entity row, making
+ * prompt-submit O(rows x prompt length) on large graphs (#1059).
+ */
+export function promptPhraseSpan(
+	promptTerms: readonly string[],
+	phrase: string,
+): { readonly start: number; readonly end: number } | null {
 	const phraseTerms = promptEntityTerms(phrase);
 	if (phraseTerms.join(" ").length < MIN_PROMPT_ENTITY_MATCH_CHARS) return null;
 	if (phraseTerms.length === 0 || phraseTerms.length > promptTerms.length) return null;
@@ -286,11 +295,14 @@ function resolvePromptEntityMatches(db: ReadDb, agentId: string, userMessage: st
 	}>;
 
 	const candidatesByPhrase = new Map<string, PromptEntityCandidate[]>();
+	// Tokenize the prompt once: promptPhraseSpan takes precomputed terms, so
+	// the full-prompt regex pass does not repeat per entity row (#1059).
+	const promptTerms = promptEntityTerms(userMessage);
 	for (const row of rows) {
 		if (!isPromptEntityContextTypeAllowed(row.entity_type)) continue;
 		if (isPromptRoleEntity(row)) continue;
 		if (isPromptGenericEntityPhrase(promptEntityTerms(row.matched_text))) continue;
-		const span = promptPhraseSpan(userMessage, row.matched_text);
+		const span = promptPhraseSpan(promptTerms, row.matched_text);
 		if (!span) continue;
 		const normalizedPhrase = normalizePromptEntityText(row.matched_text);
 		const candidate: PromptEntityCandidate = {
@@ -656,36 +668,23 @@ export async function buildEntityPromptContext({
 	const matches = getDbAccessor().withReadDb((db) => resolvePromptEntityMatches(db, agentId, userMessage));
 	if (matches.length === 0) return { lines: [], memories: [], memoryCount: 0, engine: "no-entity" };
 
-	const vectorsByEntity = new Map<
-		string,
-		{ readonly semanticQuery: string; readonly queryVector: Float32Array | null }
-	>();
 	const sharedSemanticQuery = queryWithoutPromptEntities(userMessage, matches);
-	for (const entity of matches) {
-		const semanticQuery = sharedSemanticQuery;
-		if (!semanticQuery) continue;
-		let queryVector: Float32Array | null = null;
-		try {
-			const vector = await fetchEmbedding(semanticQuery, embedding, "query");
-			if (vector) queryVector = new Float32Array(vector);
-		} catch (error) {
-			logger.warn("hooks", "Entity attribute semantic scoring failed; using lexical attribute scoring", {
-				error: error instanceof Error ? error.message : String(error),
-			});
-		}
-		vectorsByEntity.set(entity.entityId, { semanticQuery, queryVector });
+	if (!sharedSemanticQuery) return { lines: [], memories: [], memoryCount: 0, engine: "no-aspect-hit" };
+	// Embed the invariant query once, not once per matched entity: every match
+	// is scored against the same vector, so per-entity fetches are identical
+	// calls that multiply embedding latency by the match count (#1059).
+	let sharedQueryVector: Float32Array | null = null;
+	try {
+		const vector = await fetchEmbedding(sharedSemanticQuery, embedding, "query");
+		if (vector) sharedQueryVector = new Float32Array(vector);
+	} catch (error) {
+		logger.warn("hooks", "Entity attribute semantic scoring failed; using lexical attribute scoring", {
+			error: error instanceof Error ? error.message : String(error),
+		});
 	}
-	if (vectorsByEntity.size === 0) return { lines: [], memories: [], memoryCount: 0, engine: "no-aspect-hit" };
 	return getDbAccessor().withReadDb((db) => {
 		const lines = matches.flatMap((entity) =>
-			loadEntityContextLines(
-				db,
-				entity,
-				agentId,
-				vectorsByEntity.get(entity.entityId)?.semanticQuery ?? "",
-				minScore,
-				vectorsByEntity.get(entity.entityId)?.queryVector ?? null,
-			),
+			loadEntityContextLines(db, entity, agentId, sharedSemanticQuery, minScore, sharedQueryVector),
 		);
 		if (lines.length === 0) return { lines: [], memories: [], memoryCount: 0, engine: "no-aspect-hit" };
 		const selected = selectWithBudgetSkippingOversized(
