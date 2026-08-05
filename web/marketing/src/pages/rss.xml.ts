@@ -1,14 +1,16 @@
 import { readdirSync, statSync } from "node:fs";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { resolve } from "node:path";
 import { getCollection } from "astro:content";
 import rss from "@astrojs/rss";
 import type { APIContext } from "astro";
 
 export const prerender = true;
 
-const thisDir = dirname(fileURLToPath(import.meta.url));
-const docsDir = resolve(thisDir, "../../../../docs");
+// Anchor the docs dir to the package root via process.cwd() (every build/dev
+// invocation runs from web/marketing — CI, dev:web, deploy:web). import.meta.url
+// is unreliable here: astro 7 prerenders the bundled chunk from
+// dist/.prerender/chunks, shifting the relative depth.
+const docsDir = resolve(process.cwd(), "../../docs");
 
 // Build a lookup from lowercase-no-ext ID to actual file path
 function buildFileIndex(dir: string, base: string = dir): Map<string, string> {

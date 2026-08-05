@@ -22,6 +22,12 @@
   "peerDependencies": {
     "@opencode-ai/plugin": ">=0.1.0"
   },
+  "devDependencies": {
+    "@opencode-ai/plugin": "^1.18.13",
+    "@types/node": "^22.0.0",
+    "bun-types": "latest",
+    "typescript": "^5.7.0"
+  },
   "keywords": [
     "signet",
     "opencode",

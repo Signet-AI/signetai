@@ -13,8 +13,8 @@
  *  - dashboard `ConnectProviderDialog.linkAccountForApiKey` / `linkOAuthAccountForProvider`
  *  - daemon `inference-oauth.secretName` (SIGNET_OAUTH_<hex>) and `secrets.putSecret`
  */
-import { getModels, getProviders } from "@earendil-works/pi-ai";
-import { type OAuthCredentials, getOAuthProvider, getOAuthProviders } from "@earendil-works/pi-ai/oauth";
+import type { Api, Model, OAuthCredentials } from "@earendil-works/pi-ai";
+import { builtinProviders, getBuiltinModels as getModels } from "@earendil-works/pi-ai/providers/all";
 
 export interface ProviderOption {
 	readonly id: string;
@@ -34,7 +34,9 @@ function titleCase(id: string): string {
  * daemon's `/api/inference/oauth/login/:id` will accept.
  */
 export function oauthProviderOptions(): ProviderOption[] {
-	return getOAuthProviders().map((p) => ({ id: p.id, name: p.name }));
+	return builtinProviders()
+		.filter((provider) => provider.auth.oauth !== undefined)
+		.map((provider) => ({ id: provider.id, name: provider.name }));
 }
 
 /**
@@ -43,12 +45,9 @@ export function oauthProviderOptions(): ProviderOption[] {
  * is kept because it accepts BOTH OAuth and an API key.
  */
 export function apiKeyProviderOptions(): ProviderOption[] {
-	const oauthOnly = getOAuthProviders()
-		.map((p) => p.id)
-		.filter((id) => id !== "anthropic");
-	return getProviders()
-		.filter((id) => !oauthOnly.includes(id))
-		.map((id) => ({ id, name: titleCase(id) }));
+	return builtinProviders()
+		.filter((provider) => provider.auth.apiKey !== undefined)
+		.map((provider) => ({ id: provider.id, name: titleCase(provider.id) }));
 }
 
 /**
@@ -58,17 +57,19 @@ export function apiKeyProviderOptions(): ProviderOption[] {
  * adjusts its model set based on the authenticated account). Never a guess.
  */
 export function modelOptions(family: string, credentials?: OAuthCredentials): ProviderOption[] {
-	let models = getModels(family);
+	let models = getModels(family as Parameters<typeof getModels>[0]) as readonly Model<Api>[];
 	if (credentials) {
-		const provider = getOAuthProvider(family);
-		if (provider?.modifyModels) models = provider.modifyModels(models, credentials);
+		const provider = builtinProviders().find((candidate) => candidate.id === family);
+		if (provider?.filterModels) {
+			models = provider.filterModels(models, { type: "oauth", ...credentials });
+		}
 	}
 	return models.map((m) => ({ id: m.id, name: m.name || m.id }));
 }
 
 /** All connectable provider ids (OAuth + API-key families). */
 export function connectableProviderIds(): readonly string[] {
-	return [...new Set([...getProviders(), ...getOAuthProviders().map((p) => p.id)])];
+	return builtinProviders().map((provider) => provider.id);
 }
 
 /**

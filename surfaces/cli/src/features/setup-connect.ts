@@ -6,7 +6,9 @@
  * because a browser can't run node:http; the CLI calls the SDK directly during
  * the wizard, before listing models.
  */
-import { type OAuthCredentials, type OAuthLoginCallbacks, getOAuthProvider } from "@earendil-works/pi-ai/oauth";
+import type { AuthInteraction, OAuthCredentials } from "@earendil-works/pi-ai";
+import type { OAuthLoginCallbacks } from "@earendil-works/pi-ai/oauth";
+import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import { oauthSecretName, providerKeySecretName } from "./setup-inference-connect.js";
 
 export interface ConnectHttp {
@@ -40,9 +42,30 @@ export type OAuthLoginFn = (callbacks: OAuthLoginCallbacks) => Promise<OAuthCred
 
 function defaultLogin(providerId: string): OAuthLoginFn {
 	return (callbacks) => {
-		const provider = getOAuthProvider(providerId);
-		if (!provider) throw new Error(`Unknown OAuth provider: ${providerId}`);
-		return provider.login(callbacks);
+		const oauth = builtinProviders().find((provider) => provider.id === providerId)?.auth.oauth;
+		if (!oauth) throw new Error(`Unknown OAuth provider: ${providerId}`);
+		// pi-ai 0.83+ drives login through AuthInteraction (notify/prompt) instead
+		// of the legacy callback surface; the compat callbacks are mapped here.
+		const interaction: AuthInteraction = {
+			signal: callbacks.signal,
+			notify: (event) => {
+				if (event.type === "auth_url") callbacks.onAuth({ url: event.url, instructions: event.instructions });
+				else if (event.type === "device_code")
+					callbacks.onDeviceCode({
+						userCode: event.userCode,
+						verificationUri: event.verificationUri,
+						intervalSeconds: event.intervalSeconds,
+						expiresInSeconds: event.expiresInSeconds,
+					});
+				else callbacks.onProgress?.(event.message);
+			},
+			prompt: async (prompt) => {
+				if (prompt.type === "select")
+					return (await callbacks.onSelect({ message: prompt.message, options: [...prompt.options] })) ?? "";
+				return callbacks.onPrompt({ message: prompt.message, placeholder: prompt.placeholder });
+			},
+		};
+		return oauth.login(interaction);
 	};
 }
 

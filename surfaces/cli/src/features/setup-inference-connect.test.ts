@@ -15,17 +15,18 @@ describe("provider catalog (sourced from pi-ai)", () => {
 		const ids = oauthProviderOptions()
 			.map((p) => p.id)
 			.sort();
-		// pi-ai's OAuth registry: anthropic, openai-codex, github-copilot.
-		expect(ids).toEqual(["anthropic", "github-copilot", "openai-codex"]);
+		// pi-ai 0.83 OAuth catalog (auth.oauth on the runtime providers):
+		// anthropic, openai-codex, github-copilot, xai, radius, kimi-coding, openrouter.
+		expect(ids).toEqual(["anthropic", "github-copilot", "kimi-coding", "openai-codex", "openrouter", "radius", "xai"]);
 	});
 
 	it("excludes OAuth-only providers from the API-key list but keeps anthropic", () => {
 		const ids = apiKeyProviderOptions().map((p) => p.id);
 		expect(ids).toContain("anthropic");
 		expect(ids).toContain("openrouter");
-		// openai-codex / github-copilot are subscription-only (no API key).
+		expect(ids).toContain("github-copilot");
+		// openai-codex is the only subscription-only provider with no API-key surface.
 		expect(ids).not.toContain("openai-codex");
-		expect(ids).not.toContain("github-copilot");
 	});
 
 	it("returns the real model list for a family (no guesses)", () => {

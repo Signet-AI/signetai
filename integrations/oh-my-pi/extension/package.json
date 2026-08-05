@@ -18,7 +18,6 @@
     "dev": "bun --watch src/index.ts"
   },
   "dependencies": {
-    "@oh-my-pi/pi-coding-agent": "^13.16.4",
     "@signet/core": "workspace:*",
     "@signet/pi-extension-base": "workspace:*"
   },

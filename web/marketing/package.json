@@ -10,19 +10,20 @@
 		"dev:full": "astro build && wrangler pages dev ./dist --ip 0.0.0.0"
 	},
 	"dependencies": {
-		"@astrojs/mdx": "^4.3.13",
-		"@astrojs/react": "^4.4.2",
-		"@astrojs/rss": "^4.0.15",
-		"@astrojs/sitemap": "^3.7.0",
-		"@chenglou/pretext": "^0.0.3",
+		"@astrojs/mdx": "^7.0.5",
+		"@astrojs/react": "^6.0.2",
+		"@astrojs/rss": "^4.0.19",
+		"@astrojs/sitemap": "^3.7.3",
+		"@chenglou/pretext": "^0.0.8",
 		"@radix-ui/react-slot": "^1.2.4",
 		"@types/d3-drag": "^3.0.7",
 		"@types/d3-force": "^3.0.10",
 		"@types/d3-selection": "^3.0.11",
 		"@types/d3-zoom": "^3.0.8",
-		"astro": "^5.0.0",
+		"astro": "^7.1.6",
 		"class-variance-authority": "^0.7.1",
 		"clsx": "^2.1.1",
+		"cookie": "^2.0.1",
 		"d3-drag": "^3.0.0",
 		"d3-force": "^3.0.0",
 		"d3-selection": "^3.0.0",
@@ -46,6 +47,6 @@
 		"@types/unist": "^3.0.3",
 		"typescript": "^5.5.2",
 		"unified": "^11.0.5",
-		"wrangler": "^4.67.0"
+		"wrangler": "^4.119.0"
 	}
 }
