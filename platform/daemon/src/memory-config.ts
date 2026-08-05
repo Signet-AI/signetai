@@ -47,7 +47,7 @@ export type { PipelineFlag, PipelineV2Config, DreamingConfig };
 export const DEFAULT_DREAMING: DreamingConfig = {
 	tokenThreshold: 100_000,
 	maxInterval: 6 * 60 * 60 * 1_000,
-	timeout: 300_000,
+	timeout: 600_000,
 	maxInputTokens: 128_000,
 	maxOutputTokens: 16_000,
 	backfillOnFirstRun: true,
