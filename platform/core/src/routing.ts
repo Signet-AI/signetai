@@ -916,6 +916,29 @@ export function parseRoutingConfig(raw: unknown): RouterResult<RoutingConfig> {
 	}
 
 	const explicitDefaultPolicy = asString(routingRaw.defaultPolicy ?? routingRaw.default_policy);
+
+	// A targets-bearing config with zero policies must not dead-end every routed
+	// generation path in "No routing policy is configured." (#1072): the connect
+	// flow and aggregate-recall route emit targets/accounts/workloads but no
+	// policy. Synthesize an implicit default policy over all configured targets,
+	// mirroring the defaultPolicy auto-resolution below. `validateRoutingReferences`
+	// runs after this, so the synthetic refs are validated like any other policy.
+	// A dangling *explicit* defaultPolicy is left alone (#1005 tolerance: a
+	// mid-setup agent.yaml may name a policy before its block exists).
+	if (!explicitDefaultPolicy && Object.keys(policies).length === 0 && Object.keys(targets).length > 0) {
+		const refs: string[] = [];
+		for (const [targetId, target] of Object.entries(targets)) {
+			for (const modelId of Object.keys(target.models)) {
+				refs.push(makeRoutingTargetRef(targetId, modelId));
+			}
+		}
+		policies.default = {
+			mode: "automatic",
+			defaultTargets: refs,
+			fallbackTargets: refs,
+		};
+	}
+
 	const enabled = asBool(routingRaw.enabled) ?? (Object.keys(targets).length > 0 || base.enabled);
 	const defaultPolicy = explicitDefaultPolicy ?? base.defaultPolicy ?? Object.keys(policies)[0];
 

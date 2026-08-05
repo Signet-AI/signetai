@@ -330,6 +330,26 @@ function writeTarget(opts: {
 		st.aDel(workloadBase);
 		return;
 	}
+	// A target write must leave routing routable: targets/accounts/workloads
+	// without a policy dead-end every generation path in "No routing policy is
+	// configured." (#1072). Emit an explicit default policy bound to this target
+	// when none exists; leave user-authored policies alone.
+	const existingPolicies = st.get(st.agent, "inference", "policies");
+	if (
+		existingPolicies == null ||
+		typeof existingPolicies !== "object" ||
+		Array.isArray(existingPolicies) ||
+		Object.keys(existingPolicies).length === 0
+	) {
+		st.set(st.agent, ["inference", "policies", "default"], {
+			mode: "automatic",
+			defaultTargets: [`${targetName}/default`],
+			fallbackTargets: [`${targetName}/default`],
+		});
+		if (!st.aStr(["inference", "defaultPolicy"])) {
+			st.aSetStr(["inference", "defaultPolicy"], "default");
+		}
+	}
 	// A model is only valid for its own provider family, so a backend switch
 	// must clear the stale model (and its legacy label) to force a re-pick —
 	// otherwise switching ollama:gemma3 -> anthropic would leave the routing

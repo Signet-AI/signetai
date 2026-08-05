@@ -291,4 +291,41 @@ describe("applyAggregateRecallRoute", () => {
 		expect(inference.workloads.memoryExtraction).toBeDefined();
 		expect(inference.workloads.aggregateRecall).toBeDefined();
 	});
+
+	it("emits a default policy over all merged targets when none exist (#1072)", () => {
+		// Regression for #1072: targets/accounts/workloads without a policy
+		// dead-end every generation path in "No routing policy is configured.".
+		const config: Record<string, unknown> = {};
+		applyAggregateRecallRoute(config, buildSetupAggregateRecall("ollama", "qwen3:4b"));
+		const inference = config.inference as {
+			defaultPolicy: string;
+			policies: Record<string, { mode: string; defaultTargets: string[]; fallbackTargets: string[] }>;
+		};
+		expect(inference.defaultPolicy).toBe("default");
+		expect(inference.policies.default).toMatchObject({
+			mode: "automatic",
+			defaultTargets: ["aggregation/default"],
+			fallbackTargets: ["aggregation/default"],
+		});
+	});
+
+	it("does not clobber existing policies when merging the aggregate-recall route (#1072)", () => {
+		const config: Record<string, unknown> = {
+			inference: {
+				defaultPolicy: "custom",
+				policies: {
+					custom: {
+						mode: "automatic",
+						defaultTargets: ["background-acpx/default"],
+						fallbackTargets: ["background-acpx/default"],
+					},
+				},
+				targets: { "background-acpx": { executor: "acpx" } },
+			},
+		};
+		applyAggregateRecallRoute(config, buildSetupAggregateRecall("ollama", "qwen3:4b"));
+		const inference = config.inference as { defaultPolicy: string; policies: Record<string, unknown> };
+		expect(inference.defaultPolicy).toBe("custom");
+		expect(Object.keys(inference.policies)).toEqual(["custom"]);
+	});
 });

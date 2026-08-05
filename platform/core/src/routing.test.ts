@@ -903,5 +903,53 @@ describe("routing reference validation (#1005)", () => {
 		if (!parsed.ok) return;
 		expect(validateRoutingReferences(parsed.value)).toEqual([]);
 	});
+
+	it("synthesizes a default policy when targets exist but no policies are configured (#1072)", () => {
+		// Regression for #1072: the connect flow / aggregate-recall route emit
+		// targets + accounts + workloads but no policy, which previously dead-ended
+		// every routed generation path (dream trigger, daily brief, reflections,
+		// route explain) in "No routing policy is configured.".
+		const backgroundRef = makeRoutingTargetRef("background", "default");
+		const aggregationRef = makeRoutingTargetRef("aggregation", "default");
+		const parsed = parseRoutingConfig({
+			inference: {
+				targets: {
+					background: { executor: "ollama", models: { default: { model: "gemma3" } } },
+					aggregation: { executor: "ollama", models: { default: { model: "gemma3" } } },
+				},
+				workloads: {
+					memoryExtraction: { target: backgroundRef },
+					aggregateRecall: { target: aggregationRef },
+				},
+			},
+		});
+		expect(parsed.ok).toBe(true);
+		if (!parsed.ok) return;
+		expect(parsed.value.defaultPolicy).toBe("default");
+		expect(parsed.value.policies.default?.defaultTargets).toEqual([backgroundRef, aggregationRef]);
+		expect(validateRoutingReferences(parsed.value).filter((i) => i.severity === "error")).toEqual([]);
+
+		// session_synthesis (dreaming) must route instead of erroring.
+		const synthesis = resolveRoutingDecision(
+			parsed.value,
+			{ operation: "session_synthesis" },
+			{ targets: { [backgroundRef]: ready } },
+		);
+		expect(synthesis.ok).toBe(true);
+		if (!synthesis.ok) return;
+		expect(synthesis.value.policyId).toBe("default");
+		expect(synthesis.value.targetRef).toBe(backgroundRef);
+
+		// `route explain --target <healthy ref>` must bypass the policy search too.
+		const explicit = resolveRoutingDecision(
+			parsed.value,
+			{ operation: "interactive", explicitTargets: [aggregationRef] },
+			{ targets: { [aggregationRef]: ready } },
+		);
+		expect(explicit.ok).toBe(true);
+		if (!explicit.ok) return;
+		expect(explicit.value.policyId).toBe("default");
+		expect(explicit.value.targetRef).toBe(aggregationRef);
+	});
 });
 

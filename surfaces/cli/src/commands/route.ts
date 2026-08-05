@@ -262,6 +262,24 @@ export function registerRouteCommands(program: Command, deps: RouteDeps): void {
 					`${targetId}: ACPX model selection is agent-managed for ${target.acpx.agent}; verify the agent's native configuration matches the routed model`,
 				];
 			});
+			// #1072: a targets-bearing agent.yaml with no explicit policy still routes
+			// (the daemon synthesizes a default policy over all targets), but the user
+			// should pin it explicitly rather than rely on the implicit one.
+			const yaml = readAgentYaml(deps.AGENTS_DIR);
+			if (yaml.exists) {
+				const inference = isRecord(yaml.data.inference) ? yaml.data.inference : null;
+				const hasTargets =
+					inference !== null && isRecord(inference.targets) && Object.keys(inference.targets).length > 0;
+				const explicitPolicies =
+					inference !== null && isRecord(inference.policies) ? Object.keys(inference.policies) : [];
+				const explicitDefaultPolicy =
+					inference !== null ? (inference as { defaultPolicy?: unknown }).defaultPolicy : undefined;
+				if (hasTargets && explicitPolicies.length === 0 && explicitDefaultPolicy === undefined) {
+					warnings.push(
+						"No inference.policies / inference.defaultPolicy: routing auto-synthesizes a default policy over all targets. Add both to agent.yaml to pin routing explicitly (#1072).",
+					);
+				}
+			}
 			const summary = {
 				enabled: status.enabled,
 				source: status.source,

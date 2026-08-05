@@ -592,6 +592,14 @@ Named routing policies that agents and workloads reference.
 | `maxLatencyMs` | number | Hard latency ceiling used by routing |
 | `costCeiling` | string | Hard cost ceiling used by routing |
 
+Policies are optional: when targets exist but no `policies` (and no
+`defaultPolicy`) are configured, the router synthesizes an implicit
+`default` policy (`mode: automatic`, `defaultTargets`/`fallbackTargets` over
+all configured target refs) so every generation path keeps working. `signet
+route list` shows it like any other policy. Add an explicit policy to pin
+routing deterministically; `signet route doctor` warns when agent.yaml relies
+on the synthesized policy.
+
 ### inference.taskClasses
 
 Task-family hints for automatic routing.

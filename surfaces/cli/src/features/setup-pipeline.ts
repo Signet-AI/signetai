@@ -314,5 +314,35 @@ export function applyAggregateRecallRoute(
 	const accounts = aggregateRecall.accounts
 		? { ...((existing.accounts as Record<string, unknown>) ?? {}), ...aggregateRecall.accounts }
 		: (existing.accounts as Record<string, unknown> | undefined);
-	config.inference = { ...existing, targets, workloads, ...(accounts ? { accounts } : {}) };
+	const policies = (existing.policies as Record<string, unknown> | undefined) ?? {};
+	// Targets/accounts/workloads without a policy dead-end every generation path
+	// in "No routing policy is configured." (#1072). When the merged config has
+	// targets but zero policies, emit a default policy over all of them; leave
+	// user-authored or acpx-generated policies alone.
+	const refs =
+		Object.keys(policies).length === 0 && Object.keys(targets).length > 0
+			? Object.entries(targets).flatMap(([targetId, target]) =>
+					Object.keys((target as { models?: Record<string, unknown> })?.models ?? {}).map(
+						(modelId) => `${targetId}/${modelId}`,
+					),
+				)
+			: null;
+	config.inference = {
+		...existing,
+		targets,
+		workloads,
+		...(accounts ? { accounts } : {}),
+		...(refs
+			? {
+					defaultPolicy: "default",
+					policies: {
+						default: {
+							mode: "automatic",
+							defaultTargets: refs,
+							fallbackTargets: refs,
+						},
+					},
+				}
+			: {}),
+	};
 }
