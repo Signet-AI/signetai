@@ -605,10 +605,10 @@ describe("handleUserPromptSubmit entity context", () => {
 			makeDeps(),
 		);
 
-		expect(fetchEmbeddingMock.mock.calls.map((call) => call[0])).toEqual([
-			"collaboration style",
-			"collaboration style",
-		]);
+		// The shared semantic query is embedded exactly once, with every
+		// matched entity's terms stripped (not once per entity — the
+		// duplicate-fetch behavior was the #1059 scaling defect).
+		expect(fetchEmbeddingMock.mock.calls.map((call) => call[0])).toEqual(["collaboration style"]);
 	});
 
 	it("requires lexical support for generic prompt context semantic hits", async () => {
