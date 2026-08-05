@@ -161,7 +161,11 @@ const transformersWebRuntimePath = join(transformersDir, "dist", "transformers.w
 let patchedTransformersWebRuntimeSource = readFileSync(transformersWebRuntimePath, "utf8");
 for (const [specifier, resolved] of [
 	["onnxruntime-common", onnxRuntimeCommonEsmPath],
-	["onnxruntime-web", onnxRuntimeWebWasmPath],
+	// Transformers.js 4.x imports the WebGPU entry ("onnxruntime-web/webgpu")
+	// where 3.x imported the bare "onnxruntime-web" specifier. The compiled
+	// binary runs the custom-runtime branch, so both resolve to the same
+	// embedded WASM bundle.
+	["onnxruntime-web/webgpu", onnxRuntimeWebWasmPath],
 ] as const) {
 	const externalImport = `from ${JSON.stringify(specifier)};`;
 	if (patchedTransformersWebRuntimeSource.split(externalImport).length !== 2) {
@@ -172,22 +176,23 @@ for (const [specifier, resolved] of [
 		`from ${JSON.stringify(resolved)};`,
 	);
 }
-const customRuntimeAnchor = "    ONNX = globalThis[ORT_SYMBOL];\n";
+const customRuntimeAnchor = "  ONNX = globalThis[ORT_SYMBOL];\n";
 if (patchedTransformersWebRuntimeSource.split(customRuntimeAnchor).length !== 2) {
 	throw new Error("Unsupported @huggingface/transformers web runtime: custom ONNX runtime anchor changed");
 }
 patchedTransformersWebRuntimeSource = patchedTransformersWebRuntimeSource.replace(
 	customRuntimeAnchor,
-	`${customRuntimeAnchor}\n    // Transformers.js 3.8.1 does not populate device defaults for a custom runtime.\n    supportedDevices.push('wasm');\n    defaultDevices = ['wasm'];\n`,
+	`${customRuntimeAnchor}  // The custom-runtime branch does not populate device defaults; pin the\n  // WASM device like the web branch so inference defaults to 'wasm'.\n  supportedDevices.push('wasm');\n  defaultDevices = ['wasm'];\n`,
 );
-const nodeDeviceDefault = /device \?\? \([^\n)]+\.apis\.IS_NODE_ENV \? 'cpu' : 'wasm'\)/g;
+// Transformers.js 4.x decides the null-device default through defaultDevices
+// set per runtime branch (no device ?? ternary). The Node branch's 'cpu'
+// default must stay uniquely present so a future restructure of the
+// runtime-selection block fails loudly instead of silently changing the
+// default the custom-runtime branch overrides.
+const nodeDeviceDefault = /defaultDevices = \["cpu"\];/g;
 if ((patchedTransformersWebRuntimeSource.match(nodeDeviceDefault) ?? []).length !== 1) {
 	throw new Error("Unsupported @huggingface/transformers web runtime: Node device default changed");
 }
-patchedTransformersWebRuntimeSource = patchedTransformersWebRuntimeSource.replace(
-	nodeDeviceDefault,
-	"device ?? 'wasm'",
-);
 const patchedTransformersWebRuntimePath = join(buildDir, "transformers.web.js");
 writeFileSync(patchedTransformersWebRuntimePath, patchedTransformersWebRuntimeSource);
 const wasmAssets = ["ort-wasm-simd-threaded.mjs", "ort-wasm-simd-threaded.wasm"].map((name) => ({
