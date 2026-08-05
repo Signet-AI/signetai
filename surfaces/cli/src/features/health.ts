@@ -55,6 +55,32 @@ interface DaemonStatus {
 		readonly failed: number;
 		readonly dead: number;
 	} | null;
+	readonly health?: {
+		readonly score: number | null;
+		readonly status: string | null;
+	} | null;
+	readonly queue?: {
+		readonly memory: {
+			readonly pending: number;
+			readonly leased: number;
+			readonly completed: number;
+			readonly failed: number;
+			readonly dead: number;
+			readonly oldestAgeSec: number;
+			readonly oldestDeadAgeSec: number;
+			readonly lastError: string | null;
+		} | null;
+		readonly summary: {
+			readonly pending: number;
+			readonly leased: number;
+			readonly completed: number;
+			readonly failed: number;
+			readonly dead: number;
+			readonly oldestAgeSec: number;
+			readonly oldestDeadAgeSec: number;
+			readonly lastError: string | null;
+		} | null;
+	} | null;
 	readonly probe?: {
 		readonly status: "healthy" | "degraded" | "listener-unhealthy" | "process-unhealthy" | "stale-artifact" | "absent";
 		readonly detail: string;
@@ -302,7 +328,13 @@ export async function showStatus(options: { path?: string; json?: boolean }, dep
 
 	// Queue diagnostics include the live memory and summary workers.
 	if (report.daemon.running) {
-		await renderPipelineQueuesBlock(deps);
+		await renderPipelineQueuesBlock(deps, report.daemon.queue ?? undefined);
+		const daemonHealth = report.daemon.health;
+		if (daemonHealth?.status === "unhealthy") {
+			const score = typeof daemonHealth.score === "number" ? ` (score ${daemonHealth.score.toFixed(2)})` : "";
+			console.log(chalk.yellow(`  ⚠ Daemon reports unhealthy composite health${score}`));
+			console.log(chalk.dim("    Core memory processing may be failing; see the queue rows above."));
+		}
 	}
 
 	console.log();
@@ -403,9 +435,21 @@ function renderQueueRow(label: string, counts: QueueCountsForDisplay): string {
 	return `    ${chalk.bold(label.padEnd(10))} ${cells.join(" ")}`;
 }
 
-export async function renderPipelineQueuesBlock(deps: { defaultPort: number }): Promise<void> {
-	const base = getDaemonBaseUrl(deps.defaultPort);
-	const report = await fetchPipelineQueueReport(base);
+export async function renderPipelineQueuesBlock(
+	deps: { defaultPort: number },
+	captured?: NonNullable<DaemonStatus["queue"]>,
+): Promise<void> {
+	// Prefer the daemon's own /api/status queue block (always available when
+	// the daemon is up); fall back to the admin-guarded diagnostics endpoint
+	// for the richer age columns.
+	const report = captured
+		? ({
+				queues: {
+					memory: captured.memory,
+					summary: captured.summary,
+				},
+			} as PipelineQueueDisplayReport)
+		: await fetchPipelineQueueReport(getDaemonBaseUrl(deps.defaultPort));
 	if (!report?.queues) return;
 	const { memory, summary } = report.queues;
 	if (!memory || !summary) return;
@@ -415,7 +459,8 @@ export async function renderPipelineQueuesBlock(deps: { defaultPort: number }): 
 	console.log(`  ${heading}`);
 	console.log(renderQueueRow("memory", memory));
 	console.log(renderQueueRow("summary", summary));
-	if (summary.lastError) console.log(chalk.dim(`    last error: ${String(summary.lastError).slice(0, 120)}`));
+	if (memory.lastError) console.log(chalk.dim(`    memory last error: ${String(memory.lastError).slice(0, 120)}`));
+	if (summary.lastError) console.log(chalk.dim(`    summary last error: ${String(summary.lastError).slice(0, 120)}`));
 	console.log(chalk.dim("    (use 'signet repair queue {requeue|cancel|prune} [--apply]' to clean up)"));
 }
 
@@ -686,6 +731,43 @@ function addPhysicalMemoryFinding(report: StatusReport, findings: DoctorFinding[
 	});
 }
 
+function addQueueBacklogFindings(report: StatusReport, findings: DoctorFinding[]): void {
+	if (!report.daemon.running) return;
+	const queue = report.daemon.queue;
+	if (!queue) return;
+
+	const memory = queue.memory;
+	const summary = queue.summary;
+	const memoryDead = memory?.dead ?? 0;
+	const summaryDead = summary?.dead ?? 0;
+	const deadTotal = memoryDead + summaryDead;
+
+	const daemonHealth = report.daemon.health;
+	if (daemonHealth?.status === "unhealthy") {
+		const score = typeof daemonHealth.score === "number" ? ` (score ${daemonHealth.score.toFixed(2)})` : "";
+		findings.push({
+			level: "error",
+			code: "daemon_unhealthy",
+			message: `Daemon reports unhealthy composite health${score}.`,
+			fix: "Inspect the queue rows in `signet status`; dead jobs can be requeued with `signet repair queue requeue --apply`.",
+		});
+	}
+
+	if (deadTotal > 0) {
+		const lastError = memory?.lastError ?? summary?.lastError;
+		const detail = lastError ? ` Last error: ${lastError.slice(0, 160)}` : "";
+		const parts: string[] = [];
+		if (memoryDead > 0) parts.push(`${memoryDead} memory`);
+		if (summaryDead > 0) parts.push(`${summaryDead} summary`);
+		findings.push({
+			level: "error",
+			code: "dead_jobs_backlog",
+			message: `${deadTotal} permanently dead processing job(s) (${parts.join(", ")}).${detail}`,
+			fix: "Run `signet repair queue requeue --apply` to reset dead jobs, or `signet repair queue cancel --apply` to retire them.",
+		});
+	}
+}
+
 function getDoctorFindings(report: StatusReport, installations: SignetInstallationReport): DoctorFinding[] {
 	const findings: DoctorFinding[] = [];
 	addConcurrentInstallationFindings(installations, findings);
@@ -757,6 +839,7 @@ function getDoctorFindings(report: StatusReport, installations: SignetInstallati
 	addOpenClawRuntimeFindings(report, findings);
 	addOpenClawHeartbeatFindings(report, findings);
 	addPhysicalMemoryFinding(report, findings);
+	addQueueBacklogFindings(report, findings);
 
 	if (report.openclawWorkspaceUnprotected) {
 		findings.push({

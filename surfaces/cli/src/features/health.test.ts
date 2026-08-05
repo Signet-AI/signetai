@@ -914,6 +914,185 @@ describe("showStatus readiness labeling", () => {
 	});
 });
 
+describe("dead-job backlog surfacing (#1048)", () => {
+	const queueFixture = {
+		memory: {
+			pending: 0,
+			leased: 0,
+			completed: 8548,
+			failed: 0,
+			dead: 10952,
+			oldestAgeSec: 0,
+			oldestDeadAgeSec: 86400 * 9,
+			lastError: "LLM extraction failed: All routing candidates were blocked by policy or runtime state.",
+		},
+		summary: {
+			pending: 0,
+			leased: 0,
+			completed: 2204,
+			failed: 0,
+			dead: 275,
+			oldestAgeSec: 0,
+			oldestDeadAgeSec: 86400 * 3,
+			lastError: "All routed targets failed.",
+		},
+	};
+
+	function deadBacklogDeps(basePath: string, withHealth = true) {
+		return {
+			...depsFor(basePath),
+			getDaemonStatus: async () => ({
+				running: true,
+				pid: 3046866,
+				uptime: 54,
+				version: "0.156.4",
+				host: "127.0.0.1",
+				bindHost: "127.0.0.1",
+				networkMode: "local",
+				extraction: null,
+				transcripts: { pending: 0, failed: 0, dead: 0 },
+				health: withHealth ? { score: 0.817, status: "unhealthy" } : null,
+				queue: queueFixture,
+				probe: {
+					status: "healthy" as const,
+					detail: "/health responded",
+					url: "http://127.0.0.1:3850",
+					listenerPresent: true,
+					processPid: 42,
+					stalePid: null,
+				},
+				openclaw: null,
+			}),
+		};
+	}
+
+	async function captureStatus(deps: ReturnType<typeof deadBacklogDeps>): Promise<string> {
+		const lines: string[] = [];
+		const oldLog = console.log;
+		console.log = (...args: unknown[]) => {
+			lines.push(args.join(" "));
+		};
+		try {
+			await showStatus({}, deps);
+		} finally {
+			console.log = oldLog;
+		}
+		return lines.join("\n");
+	}
+
+	it("status visibly warns about the dead-job backlog and its last error", async () => {
+		const root = mkdtempSync(join(tmpdir(), "health-dead-backlog-"));
+		try {
+			const output = await captureStatus(deadBacklogDeps(root));
+			expect(output).toContain("Pipeline queues (dead jobs present)");
+			expect(output).toContain("d=10952");
+			expect(output).toContain("d=275");
+			expect(output).toContain("LLM extraction failed");
+			expect(output).toContain("signet repair queue");
+			expect(output).toContain("unhealthy composite health");
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("doctor flags the dead-job backlog as an error finding (ok becomes false)", async () => {
+		const root = mkdtempSync(join(tmpdir(), "doctor-dead-backlog-"));
+		try {
+			const jsonOut = await captureDoctorJson(deadBacklogDeps(root).getDaemonStatus);
+			expect(jsonOut.ok).toBe(false);
+			const deadFinding = jsonOut.findings.find((f) => f.code === "dead_jobs_backlog");
+			expect(deadFinding).toBeDefined();
+			expect(deadFinding?.level).toBe("error");
+			expect(deadFinding?.message).toContain("11227");
+			expect(deadFinding?.fix).toContain("signet repair queue requeue");
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("doctor flags unhealthy composite health even without a dead backlog", async () => {
+		const root = mkdtempSync(join(tmpdir(), "doctor-unhealthy-"));
+		try {
+			const jsonOut = await captureDoctorJson(deadBacklogDeps(root, true).getDaemonStatus);
+			expect(jsonOut.ok).toBe(false);
+			const unhealthy = jsonOut.findings.find((f) => f.code === "daemon_unhealthy");
+			expect(unhealthy).toBeDefined();
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("doctor stays ok for a running daemon with clean queues", async () => {
+		const root = mkdtempSync(join(tmpdir(), "doctor-clean-"));
+		try {
+			const workspace = join(root, "agents");
+			mkdirSync(workspace, { recursive: true });
+			writeFileSync(join(workspace, "agent.yaml"), "version: 1\n");
+			writeFileSync(join(workspace, "SOUL.md"), "soul\n");
+			writeFileSync(join(workspace, "IDENTITY.md"), "identity\n");
+			writeFileSync(join(workspace, "USER.md"), "user\n");
+			writeFileSync(join(workspace, "MEMORY.md"), "memory\n");
+			writeFileSync(join(workspace, "AGENTS.md"), "# agents\n");
+			mkdirSync(join(workspace, "memory"), { recursive: true });
+			writeFileSync(join(workspace, "memory", "memories.db"), "sqlite");
+			process.env.HOME = root;
+
+			const base = deadBacklogDeps(workspace);
+			base.getDaemonStatus = async () => ({
+				...(await deadBacklogDeps(workspace).getDaemonStatus()),
+				health: { score: 0.99, status: "healthy" },
+				queue: {
+					memory: { ...queueFixture.memory, dead: 0, lastError: null },
+					summary: { ...queueFixture.summary, dead: 0, lastError: null },
+				},
+			});
+			const jsonOut = await captureDoctorJson(base.getDaemonStatus);
+			expect(jsonOut.findings.some((f) => f.code === "dead_jobs_backlog")).toBe(false);
+			expect(jsonOut.findings.some((f) => f.code === "daemon_unhealthy")).toBe(false);
+		} finally {
+			process.env.HOME = originalHome;
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+});
+
+async function captureDoctorJson(
+	getDaemonStatus: () => Promise<Record<string, unknown>>,
+): Promise<{ ok: boolean; findings: Array<{ code?: string; level: string; message: string; fix?: string }> }> {
+	const lines: string[] = [];
+	const oldLog = console.log;
+	console.log = (...args: unknown[]) => {
+		lines.push(args.join(" "));
+	};
+	try {
+		await showDoctor(
+			{ json: true },
+			{
+				agentsDir: "/tmp/agents",
+				defaultPort: 3850,
+				detectExistingSetup: () => ({
+					agentsDir: true,
+					agentsMd: true,
+					agentYaml: true,
+					memoryDb: true,
+				}),
+				extractPathOption: () => null,
+				formatUptime: () => "0s",
+				getDaemonStatus,
+				normalizeAgentPath: (pathValue: string) => pathValue,
+				parseIntegerValue: (value: unknown) => (typeof value === "number" ? value : null),
+				signetLogo: () => "signet",
+			},
+		);
+	} finally {
+		console.log = oldLog;
+	}
+	return JSON.parse(lines.join("")) as {
+		ok: boolean;
+		findings: Array<{ code?: string; level: string; message: string; fix?: string }>;
+	};
+}
+
 describe("doctor unknown target", () => {
 	it("sets a non-zero exit code for an unsupported doctor target", async () => {
 		const lines: string[] = [];

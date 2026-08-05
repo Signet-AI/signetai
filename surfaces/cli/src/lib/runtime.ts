@@ -83,8 +83,29 @@ interface DaemonInstance {
 		readonly failed: number;
 		readonly dead: number;
 	} | null;
+	/** Daemon composite health from `/api/status` (score + status). */
+	readonly health: {
+		readonly score: number | null;
+		readonly status: string | null;
+	} | null;
+	/** Pipeline queue counts from `/api/status` (memory/summary). */
+	readonly queue: {
+		readonly memory: QueueCountsFromStatus | null;
+		readonly summary: QueueCountsFromStatus | null;
+	} | null;
 	readonly probe: DaemonHealthProbe;
 	readonly openclaw: DaemonOpenClawHealthSummary | null;
+}
+
+interface QueueCountsFromStatus {
+	readonly pending: number;
+	readonly leased: number;
+	readonly completed: number;
+	readonly failed: number;
+	readonly dead: number;
+	readonly oldestAgeSec: number;
+	readonly oldestDeadAgeSec: number;
+	readonly lastError: string | null;
 }
 
 interface DaemonProbeDeps {
@@ -357,6 +378,10 @@ async function getDaemonInstances(): Promise<DaemonInstance[]> {
 						host?: string;
 						bindHost?: string;
 						networkMode?: string;
+						health?: {
+							score?: number;
+							status?: string;
+						};
 						resources?: {
 							rss?: number | null;
 							heapUsed?: number | null;
@@ -395,6 +420,30 @@ async function getDaemonInstances(): Promise<DaemonInstance[]> {
 					const resources = data.resources;
 					const openclawReport = await fetchJsonOrNull<unknown>(baseUrl, "/api/diagnostics/openclaw");
 					const readiness = await fetchDaemonReadiness(baseUrl);
+					const healthRaw = data.health;
+					const pipelineRaw = data.pipeline;
+					const queueRaw =
+						typeof pipelineRaw === "object" && pipelineRaw !== null ? Reflect.get(pipelineRaw, "queue") : undefined;
+					const health =
+						typeof healthRaw === "object" && healthRaw !== null
+							? {
+									score:
+										typeof Reflect.get(healthRaw, "score") === "number"
+											? (Reflect.get(healthRaw, "score") as number)
+											: null,
+									status:
+										typeof Reflect.get(healthRaw, "status") === "string"
+											? (Reflect.get(healthRaw, "status") as string)
+											: null,
+								}
+							: null;
+					const queue =
+						typeof queueRaw === "object" && queueRaw !== null
+							? {
+									memory: normalizeQueueCountsFromStatus(Reflect.get(queueRaw, "memory")),
+									summary: normalizeQueueCountsFromStatus(Reflect.get(queueRaw, "summary")),
+								}
+							: null;
 					return {
 						baseUrl,
 						pid: data.pid ?? null,
@@ -443,6 +492,8 @@ async function getDaemonInstances(): Promise<DaemonInstance[]> {
 									dead: typeof transcripts.dead === "number" ? transcripts.dead : 0,
 								}
 							: null,
+						health,
+						queue,
 						probe: reachableDaemonProbe(baseUrl, data.pid ?? null, readiness),
 						openclaw: summarizeOpenClawHealth(openclawReport),
 					};
@@ -462,6 +513,8 @@ async function getDaemonInstances(): Promise<DaemonInstance[]> {
 				resources: null,
 				extraction: null,
 				transcripts: null,
+				health: null,
+				queue: null,
 				probe: reachableDaemonProbe(
 					baseUrl,
 					null,
@@ -512,6 +565,26 @@ export function shouldRebindDaemon(currentCommand: string | null, desiredExecuta
 function matchesDaemon(cmd: string, paths: readonly string[]): boolean {
 	const normalizedCmd = normalizeCmd(cmd);
 	return daemonMarks(paths).some((path) => normalizedCmd.includes(normalizeCmd(path)));
+}
+
+function normalizeQueueCountsFromStatus(value: unknown): QueueCountsFromStatus | null {
+	if (typeof value !== "object" || value === null) return null;
+	const record = value as Record<string, unknown>;
+	const toNumber = (key: string): number => {
+		const raw = record[key];
+		return typeof raw === "number" && Number.isFinite(raw) ? raw : 0;
+	};
+	const lastErrorRaw = record.lastError;
+	return {
+		pending: toNumber("pending"),
+		leased: toNumber("leased"),
+		completed: toNumber("completed"),
+		failed: toNumber("failed"),
+		dead: toNumber("dead"),
+		oldestAgeSec: toNumber("oldestAgeSec"),
+		oldestDeadAgeSec: toNumber("oldestDeadAgeSec"),
+		lastError: typeof lastErrorRaw === "string" && lastErrorRaw.trim().length > 0 ? lastErrorRaw : null,
+	};
 }
 
 function readCmd(pid: number): string | null {
@@ -623,6 +696,8 @@ export async function getDaemonStatus(): Promise<{
 	resources: DaemonResourceUsage | null;
 	extraction: DaemonInstance["extraction"];
 	transcripts: DaemonInstance["transcripts"];
+	health: DaemonInstance["health"];
+	queue: DaemonInstance["queue"];
 	probe: DaemonHealthProbe;
 	openclaw: DaemonOpenClawHealthSummary | null;
 }> {
@@ -641,6 +716,8 @@ export async function getDaemonStatus(): Promise<{
 			resources: preferred.resources,
 			extraction: preferred.extraction,
 			transcripts: preferred.transcripts,
+			health: preferred.health,
+			queue: preferred.queue,
 			probe: {
 				...preferred.probe,
 				processPid: preferred.probe.processPid ?? fallbackPid,
@@ -661,6 +738,8 @@ export async function getDaemonStatus(): Promise<{
 		resources: null,
 		extraction: null,
 		transcripts: null,
+		health: null,
+		queue: null,
 		probe,
 		openclaw: null,
 	};
