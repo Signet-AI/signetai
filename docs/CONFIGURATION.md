@@ -216,6 +216,7 @@ Vector embedding configuration for semantic memory search.
 | `base_url` | string | `"http://localhost:11434"` | Ollama API base URL |
 | `api_key` | string | — | API key or `$secret:NAME` reference |
 | `promptSubmitTimeoutMs` | number | `1000` | Explicit recall embedding timeout retained for compatibility, range 1000-300000 ms |
+| `warmNative` | boolean | `true` | Kill-switch for the native ONNX embedding path. Set `false` to never warm or route to native — useful on Intel Macs where the native ONNX runtime can wedge (see #1073). Callers fall through to the llama.cpp/ollama fallback chain. Env override: `SIGNET_EMBEDDING_WARM_NATIVE=0`. |
 
 Increase the embedding timeout when local embedding models are slow to
 cold-load. For example, Ollama with `mxbai-embed-large` may need `10000` ms

@@ -1423,8 +1423,10 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 		// Configure the main thread's own native embedding handle — but ONLY when
 		// the provider is actually native. On x86_64, native ONNX warmup wedges
 		// the event loop for 70+ seconds even when provider is ollama/openai
-		// (#1073). A non-native provider must not trigger native warming.
-		if (activeEmbeddingCfg.provider === "native") {
+		// (#1073). A non-native provider must not trigger native warming, and
+		// warmNative: false kills the native path outright even when the active
+		// embedding profile is native.
+		if (activeEmbeddingCfg.provider === "native" && activeEmbeddingCfg.warmNative !== false) {
 			const { configureNativeEmbeddingAssets } = await import("./native-embedding");
 			configureNativeEmbeddingAssets({
 				embeddingWorkerPath: resolveEmbeddedWorkerPath("embedding-worker"),

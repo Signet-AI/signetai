@@ -67,6 +67,41 @@ describe("loadMemoryConfig", () => {
 		expect(cfg.embedding.dimensions).toBe(384);
 	});
 
+	it("parses embedding.warmNative: false as the native kill-switch (#1073)", () => {
+		const agentsDir = makeTempAgentsDir();
+		writeFileSync(
+			join(agentsDir, "agent.yaml"),
+			`embedding:
+  provider: native
+  warmNative: false
+`,
+		);
+
+		const cfg = loadMemoryConfig(agentsDir);
+		expect(cfg.embedding.warmNative).toBe(false);
+	});
+
+	it("defaults warmNative to true when unset (#1073)", () => {
+		const agentsDir = makeTempAgentsDir();
+		writeFileSync(join(agentsDir, "agent.yaml"), "embedding:\n  provider: native\n");
+
+		const cfg = loadMemoryConfig(agentsDir);
+		expect(cfg.embedding.warmNative).toBe(true);
+	});
+
+	it("lets SIGNET_EMBEDDING_WARM_NATIVE override the yaml value (#1073)", () => {
+		const agentsDir = makeTempAgentsDir();
+		writeFileSync(join(agentsDir, "agent.yaml"), "embedding:\n  provider: native\n  warmNative: true\n");
+		const previous = process.env.SIGNET_EMBEDDING_WARM_NATIVE;
+		try {
+			process.env.SIGNET_EMBEDDING_WARM_NATIVE = "0";
+			const cfg = loadMemoryConfig(agentsDir);
+			expect(cfg.embedding.warmNative).toBe(false);
+		} finally {
+			process.env.SIGNET_EMBEDDING_WARM_NATIVE = previous;
+		}
+	});
+
 	it("falls back to AGENT.yaml memory.embeddings when agent.yaml is missing", () => {
 		const agentsDir = makeTempAgentsDir();
 		writeFileSync(

@@ -895,7 +895,9 @@ export const STATUS_CACHE_TTL = 30000;
 const embeddingStatusCache = new Map<string, { readonly status: EmbeddingStatus; readonly checkedAt: number }>();
 
 function embeddingStatusCacheKey(cfg: EmbeddingConfig): string {
-	return `${cfg.provider}\u0000${cfg.model}\u0000${resolveEmbeddingBaseUrl(cfg)}`;
+	// warmNative participates in the key: a cached native status from a
+	// warmNative-enabled probe must not mask the kill-switch (#1073).
+	return `${cfg.provider}\u0000${cfg.model}\u0000${resolveEmbeddingBaseUrl(cfg)}\u0000${cfg.warmNative === false ? "no-native" : "native"}`;
 }
 
 function cacheEmbeddingStatus(key: string, status: EmbeddingStatus, now: number): void {
@@ -933,6 +935,15 @@ export async function checkEmbeddingProvider(cfg: EmbeddingConfig): Promise<Embe
 
 	try {
 		if (cfg.provider === "native") {
+			// Kill-switch (#1073): warmNative: false never initializes the
+			// native worker — the probe itself must not touch native. Report
+			// unavailable and let callers fall through to their fallbacks.
+			if (cfg.warmNative === false) {
+				status.available = false;
+				status.error = "Native embedding disabled (embedding.warmNative: false)";
+				cacheEmbeddingStatus(cacheKey, status, now);
+				return status;
+			}
 			const mod = await import("../native-embedding");
 			const nativeStatus = await mod.checkNativeProvider();
 			status.modelCached = nativeStatus.modelCached;

@@ -27,6 +27,14 @@ export interface EmbeddingConfig {
 	api_key?: string;
 	promptSubmitTimeoutMs?: number;
 	llamaCppMaxInputTokens?: number;
+	/**
+	 * Kill-switch for the native ONNX path (#1073). When false, the daemon
+	 * never warms or routes to native even if the active embedding profile is
+	 * native — callers fall through to the llama.cpp/ollama fallback chain.
+	 * Defaults to true (native allowed). Set via config `embedding.warmNative`
+	 * or env `SIGNET_EMBEDDING_WARM_NATIVE`.
+	 */
+	warmNative?: boolean;
 }
 
 export interface MemorySearchConfig {
@@ -351,6 +359,16 @@ function resolveMaxLlmConcurrency(rawValue: unknown, defaultValue: number): numb
 		return clampPositive(rawValue, 1, 16, defaultValue);
 	}
 	return clampPositive(candidate, 1, 16, defaultValue);
+}
+
+/** Parse a boolean env override ("1"/"true"/"yes" vs "0"/"false"/"no"). */
+function envBool(name: string): boolean | undefined {
+	const value = process.env[name];
+	if (value === undefined) return undefined;
+	const normalized = value.trim().toLowerCase();
+	if (["1", "true", "yes", "on"].includes(normalized)) return true;
+	if (["0", "false", "no", "off"].includes(normalized)) return false;
+	return undefined;
 }
 
 function parseClaudeCodeConfig(raw: unknown, fallback: PipelineV2Config["claudeCode"]): PipelineV2Config["claudeCode"] {
@@ -968,6 +986,7 @@ export function loadMemoryConfig(agentsDir: string): ResolvedMemoryConfig {
 			base_url: "",
 			promptSubmitTimeoutMs: DEFAULT_PROMPT_SUBMIT_EMBEDDING_TIMEOUT_MS,
 			llamaCppMaxInputTokens: DEFAULT_LLAMACPP_MAX_INPUT_TOKENS,
+			warmNative: true,
 		},
 		search: {
 			alpha: 0.7,
@@ -1043,6 +1062,16 @@ export function loadMemoryConfig(agentsDir: string): ResolvedMemoryConfig {
 					defaults.embedding.base_url = explicitBaseUrl ?? defaults.embedding.base_url;
 				}
 				defaults.embedding.api_key = emb.api_key as string | undefined;
+
+				// Kill-switch for the native ONNX path (#1073): explicit config
+				// wins, env overrides, otherwise default (native allowed).
+				if (typeof emb.warmNative === "boolean") {
+					defaults.embedding.warmNative = emb.warmNative;
+				}
+				const envWarmNative = envBool("SIGNET_EMBEDDING_WARM_NATIVE");
+				if (envWarmNative !== undefined) {
+					defaults.embedding.warmNative = envWarmNative;
+				}
 			}
 
 			if (srch.alpha !== undefined) {

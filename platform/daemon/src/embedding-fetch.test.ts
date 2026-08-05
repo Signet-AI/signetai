@@ -152,6 +152,29 @@ describe("fetchEmbedding", () => {
 		expect(capturedUrl).toContain("/api/embeddings");
 	});
 
+	it("never touches native when warmNative is false and routes to the fallback chain (#1073)", async () => {
+		let capturedUrl: string | undefined;
+		globalThis.fetch = mock((url: string | URL | Request) => {
+			capturedUrl = url.toString();
+			return Promise.resolve(Response.json({ embedding: [0.5, 0.6, 0.7] }));
+		}) as unknown as typeof fetch;
+
+		// No fallback provider cached yet: the kill-switch must fall through
+		// to the probe chain (ollama is probed), never initialize native.
+		setNativeFallbackProvider(null);
+		const result = await fetchEmbedding("test", {
+			provider: "native",
+			model: "nomic-embed-text",
+			dimensions: 3,
+			base_url: "",
+			warmNative: false,
+		});
+
+		expect(result).toEqual([0.5, 0.6, 0.7]);
+		expect(capturedUrl).toContain("/api/embeddings");
+		expect(capturedUrl).toContain("localhost");
+	});
+
 	it("routes to llama.cpp when nativeFallbackProvider is 'llama-cpp'", async () => {
 		let capturedUrl: string | undefined;
 		let capturedBody: string | undefined;

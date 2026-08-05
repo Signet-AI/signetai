@@ -1,7 +1,7 @@
-import { logger } from "./logger";
 import { getDbAccessor, hasDbAccessor } from "./db-accessor";
 import { resolveActiveEmbeddingConfig } from "./embedding-index-state";
-import { formatEmbeddingInput, type EmbeddingRole } from "./embedding-profile";
+import { type EmbeddingRole, formatEmbeddingInput } from "./embedding-profile";
+import { logger } from "./logger";
 import type { EmbeddingConfig } from "./memory-config";
 import {
 	DEFAULT_LLAMACPP_BASE_URL,
@@ -349,6 +349,17 @@ export async function fetchEmbedding(
 	const formattedText = formatEmbeddingInput(text, effectiveCfg, role);
 	try {
 		if (effectiveCfg.provider === "native") {
+			// Kill-switch (#1073): warmNative: false means native is never
+			// warmed or routed to, even when the active embedding profile is
+			// native. Fall through to the llama.cpp/ollama fallback chain.
+			if (effectiveCfg.warmNative === false) {
+				return resolveNativeFallback(
+					formattedText,
+					effectiveCfg,
+					opts,
+					"native embedding disabled (embedding.warmNative: false)",
+				);
+			}
 			if (nativeFallbackProvider === "unavailable") return null;
 			if (nativeFallbackProvider) return fetchNativeFallback(nativeFallbackProvider, formattedText, effectiveCfg, opts);
 			try {
