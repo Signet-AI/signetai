@@ -23,6 +23,7 @@ const lineage = await import("./memory-lineage");
 const transcriptAudit = await import("./transcript-audit");
 const { deriveSessionEndFallbackId } = await import("./session-end-recovery");
 const { buildSignetSystemPrompt } = await import("./session-start-format");
+const { resetTokenizerStats, tokenizerStats } = await import("./pipeline/tokenizer");
 const {
 	handleSessionStart,
 	handlePreCompaction,
@@ -690,6 +691,27 @@ describe("handleSessionStart", () => {
 	test.serial("inject starts with memory status line", async () => {
 		const result = await handleSessionStart({ harness: "test" });
 		expect(result.inject).toContain("[memory active");
+	});
+
+	test.serial("keeps tokenizer encodes off the event loop for a populated recall pool (#1114)", async () => {
+		createMemoryDb(
+			Array.from({ length: 60 }, (_, i) => ({
+				content: `Memory ${i}: ${"the quick brown fox jumps over the lazy dog and keeps running. ".repeat(6)}`,
+				importance: 0.5 + (i % 5) / 10,
+			})),
+		);
+		resetTokenizerStats();
+
+		const result = await handleSessionStart({ harness: "claude-code" });
+
+		// Session-start used to run one full BPE encode per recall candidate (up
+		// to ~50) plus re-encodes of the reserved sections and the final inject —
+		// 55+ synchronous encodes blocking the daemon's event loop for seconds.
+		// Budget decisions now use the cheap char estimate; only the exact
+		// truncation path may encode, so the count must stay small and must not
+		// scale with the recall pool.
+		expect(tokenizerStats.encodeCalls).toBeLessThanOrEqual(3);
+		expect(result.inject.length).toBeGreaterThan(0);
 	});
 
 	test.serial("deduplicates resumed Codex session-start after normal session-end", async () => {

@@ -1,6 +1,12 @@
 import { describe, expect, it } from "bun:test";
-import { applyTokenBudget, selectWithBudget, selectWithBudgetSkippingOversized, selectWithTokenBudget } from "./context-budget";
-import { countTokens } from "./pipeline/tokenizer";
+import {
+	applyTokenBudget,
+	selectWithBudget,
+	selectWithBudgetSkippingOversized,
+	selectWithEstimatedTokenBudget,
+	selectWithTokenBudget,
+} from "./context-budget";
+import { countTokens, estimateTokens } from "./pipeline/tokenizer";
 
 describe("context budget helpers", () => {
 	it("preserves row types while selecting by character budget", () => {
@@ -30,6 +36,30 @@ describe("context budget helpers", () => {
 		const budget = countTokens(rows[0].content);
 
 		expect(selectWithTokenBudget(rows, budget)).toEqual([rows[0]]);
+	});
+
+	it("selects whole rows by estimated token budget without encoding", () => {
+		const rows = [
+			{ id: "a", content: "hello world" },
+			{ id: "b", content: "another short row" },
+		];
+		const budget = estimateTokens(rows[0].content);
+
+		expect(selectWithEstimatedTokenBudget(rows, budget)).toEqual([rows[0]]);
+	});
+
+	it("applyTokenBudget returns a fitting inject unchanged without truncation", () => {
+		const inject = "alpha beta gamma delta epsilon zeta eta theta";
+		const result = applyTokenBudget(inject, inject.length + 1000);
+
+		expect(result).toBe(inject);
+	});
+
+	it("applyTokenBudget short-circuits on a clearly fitting inject without encoding", () => {
+		const inject = "short inject";
+		const result = applyTokenBudget(inject, inject.length);
+
+		expect(result).toBe(inject);
 	});
 
 	it("truncates injected context without exceeding the token budget", () => {

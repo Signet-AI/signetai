@@ -22,7 +22,7 @@ import {
 	resolveStartupIdentityFiles,
 } from "@signet/core";
 import { ensureAgentRegistered, getAgentScope, resolveAgentId } from "./agent-id";
-import { applyTokenBudget, selectWithTokenBudget } from "./context-budget";
+import { applyTokenBudget, selectWithEstimatedTokenBudget } from "./context-budget";
 import {
 	clearContinuity,
 	consumeState,
@@ -75,7 +75,7 @@ import {
 	traverseKnowledgeGraph,
 } from "./pipeline/graph-traversal";
 import { enqueueSummaryJob } from "./pipeline/summary-worker";
-import { countTokens } from "./pipeline/tokenizer";
+import { estimateTokens } from "./pipeline/tokenizer";
 import { getDefaultPluginHost } from "./plugins/index";
 import type { PluginPromptTargetV1 } from "./plugins/types";
 import {
@@ -899,7 +899,7 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 		});
 	}
 	const tokenBudget = Math.max(1, rawTokenBudget);
-	let memories = selectWithTokenBudget(sortedCandidates.slice(0, recallLimit), tokenBudget);
+	let memories = selectWithEstimatedTokenBudget(sortedCandidates.slice(0, recallLimit), tokenBudget);
 
 	// Predicted context from recent session analysis is additive on top of main
 	// recall: it surfaces topics the user is likely to need next regardless of how
@@ -1153,8 +1153,12 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 
 	const duration = Date.now() - start;
 	const maxTokens = tokenBudget;
-	// Pre-reserve space for deterministic continuity sections so they are never truncated.
-	const reservedTokens = countTokens(recoverySection) + countTokens(constraintsSection) + countTokens(inheritedSection);
+	// Pre-reserve space for deterministic continuity sections so they are never
+	// truncated. The sections are character-budgeted upstream, so the cheap
+	// char-based estimate is sufficient — exact BPE encodes of these large
+	// sections block the event loop on every session start (#1114).
+	const reservedTokens =
+		estimateTokens(recoverySection) + estimateTokens(constraintsSection) + estimateTokens(inheritedSection);
 	const mainBudget = Math.max(0, maxTokens - reservedTokens);
 	let inject = injectParts.join("\n");
 	if (mainBudget === 0) {
@@ -1183,7 +1187,7 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 		traversalMemories,
 		traversalConstraints,
 		traversalTimedOut,
-		injectTokens: countTokens(inject),
+		injectTokens: estimateTokens(inject),
 		injectChars: inject.length,
 		durationMs: duration,
 		phaseMs: {

@@ -15,8 +15,36 @@ import cl100k_base from "js-tiktoken/ranks/cl100k_base";
 
 const tok = new Tiktoken(cl100k_base);
 
+/**
+ * Cheap character-based token estimate (~4 chars per token) for budget
+ * decisions where an exact BPE count is unnecessary. Never performs an
+ * encode, so it is safe on the daemon's main thread; keep `countTokens`
+ * for decisions that must land inside a hard token budget.
+ */
+export function estimateTokens(text: string): number {
+	return Math.ceil(text.length / 4);
+}
+
+/**
+ * Tokenizer encode accounting. Each full BPE encode is an O(n) pass that
+ * blocks the calling thread, so hot paths (session-start inject builds)
+ * must keep `encodeCalls` bounded per request. Tests reset these counters
+ * to assert hot paths do not re-encode large context sections.
+ */
+export const tokenizerStats = {
+	encodeCalls: 0,
+	encodeChars: 0,
+};
+
+export function resetTokenizerStats(): void {
+	tokenizerStats.encodeCalls = 0;
+	tokenizerStats.encodeChars = 0;
+}
+
 /** Count the BPE tokens in `text`. */
 export function countTokens(text: string): number {
+	tokenizerStats.encodeCalls += 1;
+	tokenizerStats.encodeChars += text.length;
 	return tok.encode(text).length;
 }
 
