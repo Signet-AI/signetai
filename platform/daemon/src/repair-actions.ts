@@ -217,6 +217,60 @@ const MAX_BATCH_HARD_CAP = 1000;
  * options compose, default behavior is preserved when `options` is
  * omitted (existing callers stay correct).
  */
+
+/**
+ * Allocate the bounded requeue budget across selected queues so a default
+ * both-queue repair makes progress in every non-empty queue (issue #1052).
+ *
+ * Each selected non-empty queue receives one reserved slot; the remaining
+ * capacity is split, and capacity a queue cannot use (fewer matches than its
+ * share) is refilled from the other queue. Single-table selections keep the
+ * full cap.
+ */
+function allocateRequeueBudgets(
+	memoryMatches: number,
+	summaryMatches: number,
+	maxBatch: number,
+	wantsMemory: boolean,
+	wantsSummary: boolean,
+): { memory: number; summary: number } {
+	if (!wantsMemory) {
+		return { memory: 0, summary: Math.min(summaryMatches, maxBatch) };
+	}
+	if (!wantsSummary) {
+		return { memory: Math.min(memoryMatches, maxBatch), summary: 0 };
+	}
+
+	if (memoryMatches <= 0) {
+		return { memory: 0, summary: Math.min(summaryMatches, maxBatch) };
+	}
+	if (summaryMatches <= 0) {
+		return { memory: Math.min(memoryMatches, maxBatch), summary: 0 };
+	}
+
+	// Both queues are non-empty: reserve one slot each, split the rest.
+	const reserved = 2;
+	if (maxBatch < reserved) {
+		// The batch is too small to reserve one slot per queue — give it all
+		// to memory (first queue). Summary still reports its match count
+		// even with a zero selection budget (issue #1052).
+		return { memory: Math.min(memoryMatches, maxBatch), summary: 0 };
+	}
+	const remainder = Math.max(0, maxBatch - reserved);
+	let memory = 1 + Math.ceil(remainder / 2);
+	let summary = 1 + Math.floor(remainder / 2);
+
+	// Refill unused capacity from the other queue.
+	const memoryUnused = Math.max(0, memory - memoryMatches);
+	const summaryUnused = Math.max(0, summary - summaryMatches);
+	memory = Math.min(memory, memoryMatches) + summaryUnused;
+	summary = Math.min(summary, summaryMatches) + memoryUnused;
+
+	return {
+		memory: Math.min(memory, memoryMatches),
+		summary: Math.min(summary, summaryMatches),
+	};
+}
 export function requeueDeadJobs(
 	accessor: DbAccessor,
 	cfg: PipelineV2Config,
@@ -247,17 +301,29 @@ export function requeueDeadJobs(
 		// --- memory_jobs ---
 		const wantsMemory = !options.tables || options.tables.includes("memory");
 		const wantsSummary = !options.tables || options.tables.includes("summary");
-		const memorySql = wantsMemory
-			? buildDeadRequeueSql(db, "memory_jobs", "memory_id", maxBatch, options)
-			: { sql: "", params: [], ids: [], totalMatching: 0 };
+		const memoryMatches = wantsMemory ? countDeadRequeueMatches(db, "memory_jobs", options) : 0;
+		const summaryMatches = wantsSummary ? countDeadRequeueMatches(db, "summary_jobs", options) : 0;
+		const { memory: memoryBudget, summary: summaryBudget } = allocateRequeueBudgets(
+			memoryMatches,
+			summaryMatches,
+			maxBatch,
+			wantsMemory,
+			wantsSummary,
+		);
+
+		const memorySql =
+			wantsMemory && memoryBudget > 0
+				? buildDeadRequeueSql(db, "memory_jobs", "memory_id", memoryBudget, options)
+				: { sql: "", params: [], ids: [], totalMatching: memoryMatches };
 		const memoryIds = memorySql.ids;
 
 		// Dry-run: collect without mutating.
 		if (dryRun) {
 			const memoryPreview: string[] = memoryIds.map((r) => r.id);
-			const summarySql = wantsSummary
-				? buildDeadRequeueSql(db, "summary_jobs", null, maxBatch - memoryPreview.length, options)
-				: { sql: "", params: [], ids: [], totalMatching: 0 };
+			const summarySql =
+				wantsSummary && summaryBudget > 0
+					? buildDeadRequeueSql(db, "summary_jobs", null, summaryBudget, options)
+					: { sql: "", params: [], ids: [], totalMatching: summaryMatches };
 			const summaryPreview: string[] = summarySql.ids.map((r) => r.id);
 			const previewIds = [...memoryPreview, ...summaryPreview].slice(0, PREVIEW_CAP);
 			const totalMatching = (memorySql.totalMatching ?? 0) + (summarySql.totalMatching ?? 0);
@@ -288,7 +354,6 @@ export function requeueDeadJobs(
 		}
 
 		// --- summary_jobs (issue #181) ---
-		const summaryBudget = maxBatch - memoryCount;
 		let summaryCount = 0;
 		if (wantsSummary && summaryBudget > 0 && tableExists(db, "summary_jobs")) {
 			const summarySql = buildDeadRequeueSql(db, "summary_jobs", null, summaryBudget, options);
@@ -313,7 +378,7 @@ export function requeueDeadJobs(
 			memoryCount,
 			summaryCount,
 			preview: undefined as readonly string[] | undefined,
-			totalMatching: undefined as number | undefined,
+			totalMatching: memoryMatches + summaryMatches,
 		};
 	});
 
@@ -2176,18 +2241,13 @@ interface BuiltSql {
  * uniquely identifies the row inside the table — `memory_id` for
  * `memory_jobs`, `null` for `summary_jobs` whose primary key is `id`.
  */
-function buildDeadRequeueSql(
+function buildDeadRequeueWhere(
 	db: ReadDb,
 	table: "memory_jobs" | "summary_jobs",
-	_placeholderIdColumn: "memory_id" | null,
-	limit: number,
 	options: JobFilterOptions,
-): BuiltSql {
-	if (limit <= 0) {
-		return { sql: "", params: [], ids: [], totalMatching: 0 };
-	}
+): { where: string[]; params: unknown[] } | null {
 	if (!tableExists(db, table)) {
-		return { sql: "", params: [], ids: [], totalMatching: 0 };
+		return null;
 	}
 
 	const where: string[] = ["status = 'dead'"];
@@ -2214,13 +2274,39 @@ function buildDeadRequeueSql(
 		params.push(`%${options.errorPattern}%`);
 	}
 
-	const baseWhere = `WHERE ${where.join(" AND ")}`;
-	const countStmt = db.prepare(`SELECT COUNT(*) AS cnt FROM ${table} ${baseWhere}`);
-	const totalMatching = (countStmt.get(...params) as { cnt: number } | undefined)?.cnt ?? 0;
+	return { where, params };
+}
 
+function countDeadRequeueMatches(db: ReadDb, table: "memory_jobs" | "summary_jobs", options: JobFilterOptions): number {
+	const built = buildDeadRequeueWhere(db, table, options);
+	if (!built) return 0;
+	const countStmt = db.prepare(`SELECT COUNT(*) AS cnt FROM ${table} WHERE ${built.where.join(" AND ")}`);
+	const row = countStmt.get(...built.params) as { cnt: number } | undefined;
+	return row?.cnt ?? 0;
+}
+
+function buildDeadRequeueSql(
+	db: ReadDb,
+	table: "memory_jobs" | "summary_jobs",
+	_placeholderIdColumn: "memory_id" | null,
+	limit: number,
+	options: JobFilterOptions,
+): BuiltSql {
+	// The match count is a property of the filter, not the selection budget:
+	// a zero budget must still report how many rows matched so dry-run totals
+	// never silently drop a backlog (issue #1052).
+	const totalMatching = countDeadRequeueMatches(db, table, options);
+	if (limit <= 0) {
+		return { sql: "", params: [], ids: [], totalMatching };
+	}
+	const built = buildDeadRequeueWhere(db, table, options);
+	if (!built) {
+		return { sql: "", params: [], ids: [], totalMatching };
+	}
+	const baseWhere = `WHERE ${built.where.join(" AND ")}`;
 	const stmt = db.prepare(`SELECT id FROM ${table} ${baseWhere} ORDER BY created_at ASC LIMIT ?`);
-	const ids = stmt.all(...params, limit) as unknown as DeadMatchRow[];
-	return { sql: "", params: [...params, limit], ids, totalMatching };
+	const ids = stmt.all(...built.params, limit) as unknown as DeadMatchRow[];
+	return { sql: "", params: [...built.params, limit], ids, totalMatching };
 }
 
 interface CancelPruneMatchRow {
