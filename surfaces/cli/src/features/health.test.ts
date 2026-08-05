@@ -913,3 +913,27 @@ describe("showStatus readiness labeling", () => {
 		}
 	});
 });
+
+describe("doctor unknown target", () => {
+	it("sets a non-zero exit code for an unsupported doctor target", async () => {
+		const lines: string[] = [];
+		const oldLog = console.log;
+		const previousExitCode = process.exitCode;
+		try {
+			Reflect.deleteProperty(process, "exitCode");
+			console.log = (...args: unknown[]) => {
+				lines.push(args.join(" "));
+			};
+
+			await showDoctor({ target: "nonexistent-target" }, depsFor("/tmp/doctor-unknown-target"));
+
+			expect(process.exitCode).toBe(1);
+			expect(lines.join("\n")).toContain("Unknown doctor target: nonexistent-target");
+			expect(lines.join("\n")).toContain("Supported targets: hermes");
+		} finally {
+			console.log = oldLog;
+			if (previousExitCode === undefined) Reflect.deleteProperty(process, "exitCode");
+			else process.exitCode = previousExitCode;
+		}
+	});
+});

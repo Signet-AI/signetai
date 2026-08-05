@@ -1,3 +1,4 @@
+import chalk from "chalk";
 import type { Command } from "commander";
 import { withJson, withPath } from "./shared.js";
 
@@ -186,4 +187,48 @@ export function registerAppCommands(program: Command, deps: AppDeps): void {
 		.command("sync")
 		.description("Sync hooks, extensions, built-in templates, and skills")
 		.action(() => deps.syncTemplates());
+}
+
+interface DefaultActionDeps {
+	readonly agentsDir: string;
+	readonly defaultPort: number;
+	readonly getStatusReport: (
+		basePath: string,
+		deps: unknown,
+	) => Promise<{
+		installed: boolean;
+		basePath: string;
+		daemon: { running: boolean };
+	}>;
+	readonly signetBanner: () => string;
+	readonly statusDeps: unknown;
+}
+
+/**
+ * Registers the top-level default action (bare `signet` invocation).
+ *
+ * Commander routes unmatched operands (unknown commands) to this action; reject
+ * them with a non-zero exit instead of silently rendering the status banner.
+ */
+export function registerDefaultAction(program: Command, deps: DefaultActionDeps): void {
+	program.action(async (_options: unknown, command: Command) => {
+		if (command.args.length > 0) {
+			program.error(`error: unknown command '${command.args[0]}'`);
+			return;
+		}
+
+		if (process.stdout.isTTY) {
+			console.log(deps.signetBanner());
+		}
+		program.outputHelp();
+		const report = await deps.getStatusReport(deps.agentsDir, deps.statusDeps);
+		console.log();
+		if (!report.installed) {
+			console.log(chalk.dim("Run `signet setup` to initialize a workspace."));
+		} else if (report.daemon.running) {
+			console.log(chalk.dim(`Daemon running at http://localhost:${deps.defaultPort} • ${report.basePath}`));
+		} else {
+			console.log(chalk.dim("Workspace found. Run `signet daemon start` or `signet doctor`."));
+		}
+	});
 }

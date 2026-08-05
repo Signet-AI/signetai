@@ -61,7 +61,7 @@ import ora from "ora";
 import { registerBrowseCommand } from "./browse.js";
 import { registerAgentCommands } from "./commands/agent.js";
 import { registerApiKeyCommands } from "./commands/api-key.js";
-import { registerAppCommands } from "./commands/app.js";
+import { registerAppCommands, registerDefaultAction } from "./commands/app.js";
 import { registerConnectorCommands } from "./commands/connector.js";
 import { registerContextCommands } from "./commands/context.js";
 import { registerDaemonCommands } from "./commands/daemon.js";
@@ -1197,27 +1197,15 @@ registerDreamCommands(program, {
 // Default action when no command specified
 // ============================================================================
 
-// ============================================================================
-// signet browse — CDP browser bridge (Phase 1a)
-// ============================================================================
-
 registerBrowseCommand(program);
 
 // Default action when no command specified
-program.action(async () => {
-	if (process.stdout.isTTY) {
-		console.log(signetBanner({ version: VERSION }));
-	}
-	program.outputHelp();
-	const report = await getStatusReport(AGENTS_DIR, healthDeps);
-	console.log();
-	if (!report.installed) {
-		console.log(chalk.dim("Run `signet setup` to initialize a workspace."));
-	} else if (report.daemon.running) {
-		console.log(chalk.dim(`Daemon running at http://localhost:${DEFAULT_PORT} • ${report.basePath}`));
-	} else {
-		console.log(chalk.dim("Workspace found. Run `signet daemon start` or `signet doctor`."));
-	}
+registerDefaultAction(program, {
+	agentsDir: AGENTS_DIR,
+	defaultPort: DEFAULT_PORT,
+	getStatusReport,
+	statusDeps: healthDeps,
+	signetBanner: () => signetBanner({ version: VERSION }),
 });
 
 if (isDaemonEntrypoint) {

@@ -484,6 +484,7 @@ export async function showDoctor(
 	if (options.target) {
 		console.log(chalk.red(`Unknown doctor target: ${options.target}`));
 		console.log(chalk.dim("Supported targets: hermes"));
+		process.exitCode = 1;
 		return;
 	}
 
