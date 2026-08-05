@@ -874,4 +874,42 @@ describe("showStatus readiness labeling", () => {
 			rmSync(root, { recursive: true, force: true });
 		}
 	});
+
+	// Regression (#1074): a daemon whose event loop is wedged keeps its TCP
+	// listener (and often its process) alive while /health times out. That is
+	// "unresponsive", not "stopped" — a restart re-triggers the same wedge, so
+	// the label must not send the operator down the restart path.
+	it("labels an alive-but-unresponsive daemon as unresponsive, not stopped", async () => {
+		const root = mkdtempSync(join(tmpdir(), "health-status-"));
+		try {
+			const deps = {
+				...depsFor(root),
+				getDaemonStatus: async () => ({
+					running: false,
+					pid: 42,
+					uptime: null,
+					version: null,
+					host: null,
+					bindHost: null,
+					networkMode: null,
+					probe: {
+						status: "listener-unhealthy" as const,
+						detail:
+							"TCP listener is present on http://127.0.0.1:3850, but /health did not return successfully within the probe timeout",
+						url: "http://127.0.0.1:3850",
+						listenerPresent: true,
+						processPid: 42,
+						stalePid: null,
+					},
+				}),
+			};
+			const output = await captureStatus(deps);
+			expect(output).toContain("Daemon unresponsive");
+			expect(output).toContain("not answering");
+			expect(output).not.toContain("Daemon stopped");
+			expect(output).not.toContain("signet daemon restart");
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
 });

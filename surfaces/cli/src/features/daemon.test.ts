@@ -136,6 +136,43 @@ describe("daemon lifecycle recovery", () => {
 		expect(stopped).toBe(true);
 	});
 
+	// Regression (#1074): under launchd KeepAlive the daemon respawns on exit,
+	// so "stop" must boot the job out even when the health endpoint says
+	// stopped — otherwise the reported stop is silently undone.
+	it("stop unloads the launchd keepalive when the daemon is unhealthy but launchd-managed", async () => {
+		let stopped = false;
+		const deps = makeDeps({
+			isDaemonRunning: async () => false,
+			hasDaemonProcess: async () => false,
+			isLaunchdDaemonLoaded: async () => true,
+			stopDaemon: async () => {
+				stopped = true;
+				return true;
+			},
+		});
+
+		await doStop({}, deps);
+
+		expect(stopped).toBe(true);
+	});
+
+	it("stop reports not running when nothing is alive and no launchd agent is loaded", async () => {
+		let stopped = false;
+		const deps = makeDeps({
+			isDaemonRunning: async () => false,
+			hasDaemonProcess: async () => false,
+			isLaunchdDaemonLoaded: async () => false,
+			stopDaemon: async () => {
+				stopped = true;
+				return true;
+			},
+		});
+
+		await doStop({}, deps);
+
+		expect(stopped).toBe(false);
+	});
+
 	it("restart runs signet sync when the user accepts the sync prompt", async () => {
 		let synced = false;
 		const deps = makeDeps({

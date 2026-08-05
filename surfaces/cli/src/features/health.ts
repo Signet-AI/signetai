@@ -278,9 +278,25 @@ export async function showStatus(options: { path?: string; json?: boolean }, dep
 			console.log(`    ${icon} OpenClaw plugin ${report.daemon.openclaw.status}`);
 		}
 	} else {
-		console.log(`  ${chalk.red("○")} Daemon ${chalk.red("stopped")}`);
-		if (report.daemon.probe && report.daemon.probe.status !== "absent") {
-			console.log(chalk.dim(`    ${report.daemon.probe.detail}`));
+		const probe = report.daemon.probe;
+		// The process can be alive while /health is unreachable (event loop
+		// blocked by a wedged worker). Label that "unresponsive", not
+		// "stopped": a restart often re-triggers the same wedge, and the
+		// operator should look at the logs first (#1074).
+		const unresponsive = probe?.status === "listener-unhealthy" || probe?.status === "process-unhealthy";
+		if (unresponsive) {
+			console.log(`  ${chalk.yellow("◐")} Daemon ${chalk.yellow("unresponsive")}`);
+			console.log(chalk.dim(`    ${probe.detail}`));
+			console.log(
+				chalk.dim(
+					"    The daemon process is alive but not answering. Check `signet daemon logs`; a restart may not clear a wedged worker.",
+				),
+			);
+		} else {
+			console.log(`  ${chalk.red("○")} Daemon ${chalk.red("stopped")}`);
+			if (probe && probe.status !== "absent") {
+				console.log(chalk.dim(`    ${probe.detail}`));
+			}
 		}
 	}
 

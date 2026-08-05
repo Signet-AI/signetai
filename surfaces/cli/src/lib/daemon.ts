@@ -13,6 +13,8 @@ export type DaemonFetchResult<T> =
 			readonly ok: false;
 			readonly reason: DaemonFetchFailure;
 			readonly status?: number;
+			/** Daemon-provided error message, when the HTTP error body carries one. */
+			readonly error?: string;
 	  };
 
 export type DaemonApiCall = (
@@ -33,6 +35,18 @@ function isTimeoutError(err: unknown): boolean {
 	if (name === "AbortError" || name === "TimeoutError") return true;
 	const code = typeof err === "object" && err !== null ? Reflect.get(err, "code") : undefined;
 	return code === "ABORT_ERR";
+}
+
+/** Extract a daemon-provided `{ error: string }` message from an HTTP error body. */
+async function readHttpErrorBody(res: Response): Promise<string | undefined> {
+	const text = await res.text().catch(() => "");
+	if (!text.trim()) return undefined;
+	try {
+		const parsed = JSON.parse(text) as { error?: unknown };
+		return typeof parsed?.error === "string" && parsed.error.trim() ? parsed.error : undefined;
+	} catch {
+		return undefined;
+	}
 }
 
 function readAuthToken(): string | undefined {
@@ -77,7 +91,12 @@ export function createDaemonClient(
 				signal: AbortSignal.timeout(timeout || 5_000),
 			});
 			if (!res.ok) {
-				return { ok: false, reason: "http", status: res.status };
+				// Surface the daemon's own error message (e.g. "A dreaming pass
+				// is already running", "No routing policy is configured.") so
+				// callers can name the real cause instead of a generic
+				// connectivity failure (#1074).
+				const error = await readHttpErrorBody(res);
+				return { ok: false, reason: "http", status: res.status, ...(error ? { error } : {}) };
 			}
 			try {
 				const data: T = await res.json();

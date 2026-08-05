@@ -53,6 +53,7 @@ interface Deps {
 	readonly sleep: (ms: number) => Promise<void>;
 	readonly startDaemon: (agentsDir?: string) => Promise<boolean>;
 	readonly stopDaemon: (agentsDir?: string) => Promise<boolean>;
+	readonly isLaunchdDaemonLoaded?: () => Promise<boolean>;
 	readonly confirmRestartSync?: () => Promise<boolean>;
 	readonly fetch?: FetchLike;
 	readonly isInteractive?: () => boolean;
@@ -213,15 +214,26 @@ export async function doStop(options: PathOptions, deps: Deps): Promise<void> {
 	const basePath = readPath(options, deps);
 	const running = await deps.isDaemonRunning();
 	const stale = running ? false : await deps.hasDaemonProcess(basePath);
-	if (!running && !stale) {
+	// Under launchd KeepAlive the daemon respawns on exit, so an unhealthy
+	// daemon still counts as managed: `stop` must boot the job out or the
+	// reported "stop" is silently undone moments later (#1074).
+	const launchdManaged = running ? false : await (deps.isLaunchdDaemonLoaded?.() ?? Promise.resolve(false));
+	if (!running && !stale && !launchdManaged) {
 		console.log(chalk.yellow("  Daemon is not running"));
 		return;
 	}
 
-	const spinner = ora("Stopping daemon...").start();
+	const spinner = ora(
+		launchdManaged ? "Stopping daemon (unloading launchd keepalive)..." : "Stopping daemon...",
+	).start();
 	const stopped = await deps.stopDaemon(basePath);
 	if (stopped) {
 		spinner.succeed("Daemon stopped");
+		if (launchdManaged) {
+			console.log(
+				chalk.dim("  launchd agent ai.signet.daemon unloaded; it will not respawn until `signet daemon start`."),
+			);
+		}
 		return;
 	}
 

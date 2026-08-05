@@ -10,6 +10,7 @@ import {
 	didLaunchdDaemonStart,
 	didSystemdDaemonStart,
 	getDaemonStatus,
+	isLaunchdDaemonLoaded,
 	launchdDaemonPlistPath,
 	macOSLaunchAgentAttributionNotice,
 	readDaemonStartFailureDiagnostics,
@@ -527,5 +528,36 @@ describe("getDaemonStatus", () => {
 		expect(status.probe.status).toBe("degraded");
 		expect(status.probe.readinessReasons).toEqual(["pending migrations"]);
 		expect(status.probe.detail).toContain("readiness degraded");
+	});
+});
+
+describe("isLaunchdDaemonLoaded", () => {
+	it("never probes launchctl off macOS", () => {
+		let spawned = false;
+		const loaded = isLaunchdDaemonLoaded({
+			platform: "linux",
+			spawnSync: (_command, _args, _options) => {
+				spawned = true;
+				return { status: 0 };
+			},
+		});
+		expect(loaded).toBe(false);
+		expect(spawned).toBe(false);
+	});
+
+	it("reports loaded when launchctl print succeeds", () => {
+		const loaded = isLaunchdDaemonLoaded({
+			platform: "darwin",
+			spawnSync: () => ({ status: 0 }),
+		});
+		expect(loaded).toBe(true);
+	});
+
+	it("reports not loaded when launchctl print fails (no such job)", () => {
+		const loaded = isLaunchdDaemonLoaded({
+			platform: "darwin",
+			spawnSync: () => ({ status: 3 }),
+		});
+		expect(loaded).toBe(false);
 	});
 });

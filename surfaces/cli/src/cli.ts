@@ -119,6 +119,7 @@ import {
 	getReachableDaemonUrls,
 	hasDaemonProcess,
 	isDaemonRunning,
+	isLaunchdDaemonLoaded,
 	sleep,
 	startDaemon,
 	stopDaemon,
@@ -956,6 +957,7 @@ const daemonDeps = {
 	getDaemonStatus,
 	hasDaemonProcess,
 	isDaemonRunning,
+	isLaunchdDaemonLoaded: () => Promise.resolve(isLaunchdDaemonLoaded()),
 	normalizeAgentPath,
 	signetLogo,
 	sleep,
@@ -1188,6 +1190,7 @@ registerSessionCommands(program, {
 
 registerDreamCommands(program, {
 	fetchFromDaemon,
+	fetchDaemonResult,
 });
 
 // ============================================================================

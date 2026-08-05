@@ -1,9 +1,19 @@
 import chalk from "chalk";
 import type { Command } from "commander";
+import type { DaemonFetch, DaemonFetchFailure, DaemonFetchResult } from "../lib/daemon.js";
 
 interface DreamDeps {
-	readonly fetchFromDaemon: <T>(path: string, opts?: RequestInit & { timeout?: number }) => Promise<T | null>;
+	readonly fetchFromDaemon: DaemonFetch;
+	readonly fetchDaemonResult: <T>(
+		path: string,
+		opts?: RequestInit & { timeout?: number },
+	) => Promise<DaemonFetchResult<T>>;
+	/** Poll cadence for `dream trigger` (test seams; defaults match production). */
+	readonly pollIntervalMs?: number;
+	readonly minWaitMs?: number;
 }
+
+export type { DreamDeps };
 
 interface DreamState {
 	readonly consecutiveFailures: number;
@@ -46,6 +56,25 @@ interface TriggerAccepted {
 	readonly error?: string;
 }
 
+/**
+ * Name the real cause instead of a generic connectivity message. A timed-out
+ * probe means the daemon process is up but its event loop is blocked (for
+ * example, a wedged worker) — a restart often re-triggers the same wedge, so
+ * point at the logs rather than advising one (#1074).
+ */
+function reportDaemonUnavailable(reason: DaemonFetchFailure, status: number | undefined, action: string): void {
+	if (reason === "timeout") {
+		console.error(chalk.red(`${action} — the daemon is not responding (its event loop may be blocked).`));
+		console.error(chalk.dim("  Check `signet daemon logs`; a restart may not clear a wedged worker."));
+		return;
+	}
+	if (reason === "http") {
+		console.error(chalk.red(`${action} — daemon returned HTTP ${status ?? "error"}.`));
+		return;
+	}
+	console.error(chalk.red(`${action} (is the daemon running?)`));
+}
+
 export function registerDreamCommands(program: Command, deps: DreamDeps): void {
 	const dream = program.command("dream").description("Manage dreaming memory consolidation");
 
@@ -54,9 +83,9 @@ export function registerDreamCommands(program: Command, deps: DreamDeps): void {
 		.description("List the daemon-owned Dreaming capability registry")
 		.option("--json", "Output as JSON")
 		.action(async (options: { json?: boolean }) => {
-			const data = await deps.fetchFromDaemon<{ readonly items?: readonly { readonly id: string; readonly description: string }[] }>(
-				"/api/dream/tools",
-			);
+			const data = await deps.fetchFromDaemon<{
+				readonly items?: readonly { readonly id: string; readonly description: string }[];
+			}>("/api/dream/tools");
 			if (!data) {
 				console.error(chalk.red("Failed to get Dreaming capabilities (is the daemon running?)"));
 				process.exit(1);
@@ -88,7 +117,7 @@ export function registerDreamCommands(program: Command, deps: DreamDeps): void {
 				process.exit(1);
 				return;
 			}
-			const data = await deps.fetchFromDaemon<unknown>(`/api/dream/tools/${encodeURIComponent(capability)}`, {
+			const result = await deps.fetchDaemonResult<unknown>(`/api/dream/tools/${encodeURIComponent(capability)}`, {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({
@@ -97,22 +126,31 @@ export function registerDreamCommands(program: Command, deps: DreamDeps): void {
 					...(options.passId ? { passId: options.passId } : {}),
 				}),
 			});
-			if (!data) {
-				console.error(chalk.red("Dreaming capability failed (is the daemon running?)"));
+			if (!result.ok) {
+				if (result.reason === "http" && result.error) {
+					console.error(chalk.red(`Dreaming capability failed: ${result.error}`));
+				} else {
+					reportDaemonUnavailable(result.reason, result.status, "Dreaming capability failed");
+				}
 				process.exit(1);
 			}
-			console.log(JSON.stringify(data, null, 2));
+			console.log(JSON.stringify(result.data, null, 2));
 		});
 
 	dream
 		.command("status")
 		.description("Show dreaming worker status and recent passes")
 		.action(async () => {
-			const data = await deps.fetchFromDaemon<DreamStatus>("/api/dream/status");
-			if (!data) {
-				console.error(chalk.red("Failed to get dreaming status (is the daemon running?)"));
+			const result = await deps.fetchDaemonResult<DreamStatus>("/api/dream/status");
+			if (!result.ok) {
+				if (result.reason === "http" && result.error) {
+					console.error(chalk.red(`Failed to get dreaming status: ${result.error}`));
+				} else {
+					reportDaemonUnavailable(result.reason, result.status, "Failed to get dreaming status");
+				}
 				process.exit(1);
 			}
+			const data = result.data;
 
 			console.log(chalk.bold("\n  Dreaming Status\n"));
 
@@ -180,21 +218,26 @@ export function registerDreamCommands(program: Command, deps: DreamDeps): void {
 				);
 				process.exit(1);
 			}
-			const maxWait = Math.max(30, parsedWait);
-			const pollInterval = 5_000;
-			const maxPolls = Math.ceil((maxWait * 1000) / pollInterval);
+			const pollInterval = deps.pollIntervalMs ?? 5_000;
+			const maxWait = Math.max(deps.minWaitMs ?? 30_000, parsedWait * 1000);
+			const maxPolls = Math.ceil(maxWait / pollInterval);
 			console.log(chalk.dim(`\n  Triggering ${mode} dreaming pass...\n`));
 
-			const accepted = await deps.fetchFromDaemon<TriggerAccepted>("/api/dream/trigger", {
+			const acceptedResult = await deps.fetchDaemonResult<TriggerAccepted>("/api/dream/trigger", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({ mode }),
 			});
 
-			if (!accepted) {
-				console.error(chalk.red("Failed to trigger dreaming pass (is the daemon running?)"));
+			if (!acceptedResult.ok) {
+				if (acceptedResult.reason === "http" && acceptedResult.error) {
+					console.error(chalk.red(`Failed to trigger dreaming pass: ${acceptedResult.error}`));
+				} else {
+					reportDaemonUnavailable(acceptedResult.reason, acceptedResult.status, "Failed to trigger dreaming pass");
+				}
 				process.exit(1);
 			}
+			const accepted = acceptedResult.data;
 
 			if (accepted.error) {
 				console.error(chalk.red(`  Error: ${accepted.error}`));
@@ -203,18 +246,50 @@ export function registerDreamCommands(program: Command, deps: DreamDeps): void {
 
 			console.log(chalk.dim(`  Pass ${accepted.passId} accepted, polling for result...\n`));
 
-			// Poll status until the pass completes or fails
+			// Poll status until the pass completes or fails. The first probe
+			// runs immediately so a fast terminal failure is surfaced without
+			// a full poll interval.
 			let pass: DreamPass | undefined;
+			let statusUnavailable: DaemonFetchFailure | null = null;
 			for (let i = 0; i < maxPolls; i++) {
-				await new Promise((r) => setTimeout(r, pollInterval));
-				const status = await deps.fetchFromDaemon<DreamStatus>("/api/dream/status");
-				if (!status) break;
-				pass = status.passes.find((p) => p.id === accepted.passId);
+				if (i > 0) await new Promise((r) => setTimeout(r, pollInterval));
+				const statusResult = await deps.fetchDaemonResult<DreamStatus>("/api/dream/status");
+				if (!statusResult.ok) {
+					statusUnavailable = statusResult.reason;
+					break;
+				}
+				pass = statusResult.data.passes.find((p) => p.id === accepted.passId);
 				if (pass && pass.status !== "running") break;
 			}
 
 			if (!pass) {
-				console.log(chalk.yellow("  Could not retrieve pass result. Check `signet dream status`."));
+				if (statusUnavailable === "timeout") {
+					console.log(
+						chalk.yellow("  Daemon is not responding (its event loop may be blocked); the pass result is unknown."),
+					);
+					console.log(
+						chalk.dim("  Check `signet daemon logs` for the pass error; a restart may not clear a wedged worker."),
+					);
+				} else if (statusUnavailable !== null) {
+					console.log(
+						chalk.yellow(
+							`  Could not retrieve pass result (${statusUnavailable === "offline" ? "daemon unreachable" : "daemon returned an error"}).`,
+						),
+					);
+					console.log(chalk.dim("  Check `signet dream status` once the daemon is healthy."));
+				} else {
+					console.log(
+						chalk.yellow(`  Pass ${accepted.passId} did not appear in status within ${Math.round(maxWait / 1000)}s.`),
+					);
+					console.log(chalk.dim("  Check `signet dream status` for the pass outcome."));
+				}
+				console.log();
+				return;
+			}
+
+			if (pass.status === "running") {
+				console.log(chalk.yellow(`  Pass ${pass.id} is still running after ${Math.round(maxWait / 1000)}s.`));
+				console.log(chalk.dim("  Check `signet dream status` for the outcome."));
 				console.log();
 				return;
 			}

@@ -952,6 +952,33 @@ export function buildLaunchdDaemonStopArgs(label: string = LAUNCHD_DAEMON_LABEL)
 	return ["bootout", `${currentLaunchdDomain()}/${label}`];
 }
 
+/** Minimal structural shape of the `launchctl print` probe so tests can stub it. */
+type LaunchctlProbeSpawnSync = (
+	command: string,
+	args: readonly string[],
+	options: { readonly stdio: "ignore"; readonly windowsHide: boolean; readonly timeout: number },
+) => {
+	readonly status: number | null;
+};
+
+/**
+ * Whether launchd currently has the Signet daemon job loaded. Under KeepAlive
+ * the job respawns the daemon on exit, so `stop`/`start` must coordinate with
+ * it. The check is darwin-only; other platforms return false.
+ */
+export function isLaunchdDaemonLoaded(
+	deps: { readonly platform?: NodeJS.Platform; readonly spawnSync?: LaunchctlProbeSpawnSync } = {},
+): boolean {
+	if ((deps.platform ?? process.platform) !== "darwin") return false;
+	const spawn = deps.spawnSync ?? spawnSync;
+	const result = spawn("launchctl", ["print", `${currentLaunchdDomain()}/${LAUNCHD_DAEMON_LABEL}`], {
+		stdio: "ignore",
+		windowsHide: true,
+		timeout: 3000,
+	});
+	return result.status === 0;
+}
+
 export function didSystemdDaemonStart(result: Pick<SpawnSyncReturns<Buffer>, "status" | "signal" | "error">): boolean {
 	return result.status === 0 && result.signal === null && result.error === undefined;
 }
@@ -1068,12 +1095,20 @@ export async function startDaemon(agentsDir: string = AGENTS_DIR, preferredDaemo
 				startupLogPath,
 			}),
 		);
-		const bootout = spawnSync("launchctl", buildLaunchdDaemonStopArgs(), {
-			stdio: ["ignore", "ignore", stderrTarget],
-			windowsHide: true,
-			env: daemonEnv,
-			timeout: 5000,
-		});
+		// Boot out any loaded job before (re)bootstrap. When no job is loaded
+		// (fresh start, or a restart that already booted it out), launchctl
+		// exits 3 with "Boot-out failed: 3: No such process" — launchd handoff
+		// noise, not a start failure. Skip the bootout in that case so the
+		// message never pollutes the startup log (#1074).
+		let bootout: SpawnSyncReturns<Buffer> | null = null;
+		if (isLaunchdDaemonLoaded()) {
+			bootout = spawnSync("launchctl", buildLaunchdDaemonStopArgs(), {
+				stdio: ["ignore", "ignore", stderrTarget],
+				windowsHide: true,
+				env: daemonEnv,
+				timeout: 5000,
+			});
+		}
 		const bootstrap = spawnSync("launchctl", buildLaunchdDaemonStartArgs(plistPath), {
 			stdio: ["ignore", "ignore", stderrTarget],
 			windowsHide: true,
@@ -1094,7 +1129,7 @@ export async function startDaemon(agentsDir: string = AGENTS_DIR, preferredDaemo
 				try {
 					appendFileSync(
 						startupLogPath,
-						`[launchd fallback] bootoutStatus=${bootout.status ?? "null"} bootstrapStatus=${bootstrap.status ?? "null"} kickstartStatus=${kickstart.status ?? "null"} bootoutError=${bootout.error?.message ?? ""} bootstrapError=${bootstrap.error?.message ?? ""} kickstartError=${kickstart.error?.message ?? ""}
+						`[launchd fallback] bootoutStatus=${bootout ? (bootout.status ?? "null") : "skipped"} bootstrapStatus=${bootstrap.status ?? "null"} kickstartStatus=${kickstart.status ?? "null"} bootoutError=${bootout?.error?.message ?? ""} bootstrapError=${bootstrap.error?.message ?? ""} kickstartError=${kickstart.error?.message ?? ""}
 `,
 					);
 				} catch {
