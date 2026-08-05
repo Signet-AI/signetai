@@ -133,6 +133,12 @@ export interface DbAccessor {
 	/** Open a readonly connection, run `fn`, close it. */
 	withReadDb<T>(fn: (db: ReadDb) => T): T;
 
+	/** Async variant of withReadDb. The connection stays checked out of the
+	 *  read pool for the whole `fn`, including across event-loop yields, so
+	 *  long readers can breathe without starving other readers (the pool
+	 *  grows on demand up to the connection limit). */
+	withReadDbAsync<T>(fn: (db: ReadDb) => Promise<T>): Promise<T>;
+
 	/** Checkpoint the WAL into the main DB file on the write connection,
 	 *  outside any transaction. Safe to call periodically or on startup. */
 	checkpointWal(): void;
@@ -1034,6 +1040,16 @@ function createAccessor(writeConn: SqliteDatabase): DbAccessor {
 			const conn = acquireRead();
 			try {
 				return fn(conn);
+			} finally {
+				releaseRead(conn);
+			}
+		},
+
+		async withReadDbAsync<T>(fn: (db: ReadDb) => Promise<T>): Promise<T> {
+			if (closed) throw new Error("DbAccessor is closed");
+			const conn = acquireRead();
+			try {
+				return await fn(conn);
 			} finally {
 				releaseRead(conn);
 			}

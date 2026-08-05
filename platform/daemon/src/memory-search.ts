@@ -1582,7 +1582,7 @@ export async function hybridRecall(
 	let scored: Array<{ id: string; score: number; source: string }> = [];
 
 	if (traversalPrimary) {
-		timings.time("traversal_primary", () => {
+		await timings.timeAsync("traversal_primary", async () => {
 			// Channel A: graph traversal (primary retrieval path per DP-6)
 			const traversalScored: Array<{ id: string; score: number; source: string }> = [];
 
@@ -1595,7 +1595,7 @@ export async function hybridRecall(
 						const focal = getFocalEntities(agentId);
 
 						if (focal.entityIds.length > 0) {
-							const traversal = getDbAccessor().withReadDb((db) =>
+							const traversal = await getDbAccessor().withReadDbAsync((db) =>
 								traverseKnowledgeGraph(focal.entityIds, db, agentId, {
 									maxAspectsPerEntity: traversalCfg.maxAspectsPerEntity,
 									maxAttributesPerAspect: traversalCfg.maxAttributesPerAspect,
@@ -1727,7 +1727,7 @@ export async function hybridRecall(
 		// --- KA traversal boost: structural one-hop retrieval via KA tables ---
 		if (cfg.pipelineV2.graph.enabled && cfg.pipelineV2.traversal?.enabled) {
 			try {
-				timings.time("traversal_boost", () => {
+				await timings.timeAsync("traversal_boost", async () => {
 					const traversalCfg = cfg.pipelineV2.traversal;
 					const queryTokens = getGraphQueryTokens();
 					if (traversalCfg && queryTokens.length > 0) {
@@ -1735,7 +1735,7 @@ export async function hybridRecall(
 						const focal = getFocalEntities(agentId);
 
 						if (focal.entityIds.length > 0) {
-							const traversal = getDbAccessor().withReadDb((db) =>
+							const traversal = await getDbAccessor().withReadDbAsync((db) =>
 								traverseKnowledgeGraph(focal.entityIds, db, agentId, {
 									maxAspectsPerEntity: traversalCfg.maxAspectsPerEntity,
 									maxAttributesPerAspect: traversalCfg.maxAttributesPerAspect,

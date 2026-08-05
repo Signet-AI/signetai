@@ -397,8 +397,8 @@ export function registerKnowledgeRoutes(app: Hono): void {
 
 		const primaryEntityId = focal.entityIds[0];
 
-		return getDbAccessor().withReadDb((db) => {
-			const traversal = traverseKnowledgeGraph(focal.entityIds, db, agentId, {
+		return getDbAccessor().withReadDbAsync(async (db) => {
+			const traversal = await traverseKnowledgeGraph(focal.entityIds, db, agentId, {
 				maxAspectsPerEntity: traversalCfg.maxAspectsPerEntity,
 				maxAttributesPerAspect: traversalCfg.maxAttributesPerAspect,
 				maxDependencyHops: traversalCfg.maxDependencyHops,

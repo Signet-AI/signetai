@@ -168,7 +168,7 @@ describe.skipIf(!existsSync(dbPath))("traversal comparison (old vs new)", () => 
 
 	afterAll(() => { db?.close?.(); });
 
-	function compareResults(project: string): void {
+	async function compareResults(project: string): Promise<void> {
 		const focal = resolveFocalEntities(db as unknown as ReadDb, agentId, { project });
 
 		console.log(`\n  Project: ${project}`);
@@ -187,7 +187,7 @@ describe.skipIf(!existsSync(dbPath))("traversal comparison (old vs new)", () => 
 		const oldMs = performance.now() - t0;
 
 		const t1 = performance.now();
-		const newResult = traverseKnowledgeGraph_NEW(focal.entityIds, db as unknown as ReadDb, agentId, config);
+		const newResult = await traverseKnowledgeGraph_NEW(focal.entityIds, db as unknown as ReadDb, agentId, config);
 		const newMs = performance.now() - t1;
 
 		console.log(`\n  === Performance ===`);
@@ -266,6 +266,6 @@ describe.skipIf(!existsSync(dbPath))("traversal comparison (old vs new)", () => 
 		}
 	}
 
-	test("signetai project", () => compareResults("/home/nicholai/signet/signetai"));
-	test(".agents project", () => compareResults("/home/nicholai/.agents"));
+	test("signetai project", async () => compareResults("/home/nicholai/signet/signetai"));
+	test(".agents project", async () => compareResults("/home/nicholai/.agents"));
 });

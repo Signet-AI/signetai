@@ -1,4 +1,13 @@
+import { yieldEvery } from "../async-yield";
 import type { ReadDb } from "../db-accessor";
+
+/**
+ * Yield cadence for long row loops inside the traversal. Row work is cheap
+ * per item but the batched queries can return tens of thousands of rows on
+ * large graphs — yielding every N rows keeps the event loop responsive
+ * (#1118: session-start traversal blocked the loop ~1.7s uninterrupted).
+ */
+const ROW_YIELD_BATCH = 500;
 
 export interface TraversalPath {
 	readonly entityIds: ReadonlyArray<string>;
@@ -346,21 +355,26 @@ function pathSize(path: TraversalPath): number {
  *
  * Produces identical output to the old collectForEntity loop, but collapses
  * up to 60+ sequential SQLite queries into 4 regardless of entity count.
+ *
+ * Async so the event loop breathes between batched query stages and inside
+ * long row loops (#1118) — query shapes and result identity are unchanged.
  */
-function batchCollectForEntities(
+async function batchCollectForEntities(
 	db: ReadDb,
 	entityIds: ReadonlyArray<string>,
 	agentId: string,
 	config: TraversalConfig,
 	budget: number,
-): {
+): Promise<{
 	readonly memoryIds: Set<string>;
 	readonly memoryScores: Map<string, number>;
 	readonly memoryPaths: Map<string, TraversalPath>;
 	readonly constraints: Array<{ readonly entityName: string; readonly content: string; readonly importance: number }>;
 	readonly activeAspectIds: Set<string>;
 	readonly visitedEntities: Set<string>;
-} {
+}> {
+	const stageYield = yieldEvery(1);
+	const rowYield = yieldEvery(ROW_YIELD_BATCH);
 	const memoryIds = new Set<string>();
 	const memoryScores = new Map<string, number>();
 	const memoryPaths = new Map<string, TraversalPath>();
@@ -406,7 +420,10 @@ function batchCollectForEntities(
 			content: row.content,
 			importance: row.importance,
 		});
+		await rowYield();
 	}
+
+	await stageYield();
 
 	// --- 2. Batch aspects for all entities ---
 	let aspectQuery: string;
@@ -440,7 +457,10 @@ function batchCollectForEntities(
 		if (list.length < config.maxAspectsPerEntity) {
 			list.push({ id: row.id });
 		}
+		await rowYield();
 	}
+
+	await stageYield();
 
 	// Collect the budgeted aspect IDs
 	const budgetedAspectIds: string[] = [];
@@ -516,8 +536,11 @@ function batchCollectForEntities(
 			if (current === undefined || row.importance > current) {
 				memoryScores.set(row.memory_id, row.importance);
 			}
+			await rowYield();
 		}
 	}
+
+	await stageYield();
 
 	// --- 4. Batch mentions for all entities (fallback) ---
 	if (memoryIds.size < budget) {
@@ -571,18 +594,24 @@ function batchCollectForEntities(
 			if (current === undefined || row.importance > current) {
 				memoryScores.set(row.memory_id, row.importance);
 			}
+			await rowYield();
 		}
 	}
 
 	return { memoryIds, memoryScores, memoryPaths, constraints, activeAspectIds, visitedEntities };
 }
 
-export function traverseKnowledgeGraph(
+/**
+ * Async since #1118: the walk yields to the event loop between batched
+ * query stages so concurrent session starts interleave instead of
+ * serializing on ~1.7s of uninterrupted main-thread work (large graphs).
+ */
+export async function traverseKnowledgeGraph(
 	focalEntityIds: ReadonlyArray<string>,
 	db: ReadDb,
 	agentId: string,
 	config: TraversalConfig,
-): TraversalResult {
+): Promise<TraversalResult> {
 	const empty: TraversalResult = {
 		memoryIds: new Set<string>(),
 		memoryScores: new Map<string, number>(),
@@ -600,12 +629,16 @@ export function traverseKnowledgeGraph(
 		const focalIds = sanitizeEntityIds(focalEntityIds);
 		if (focalIds.length === 0) return empty;
 
+		const stageYield = yieldEvery(1);
+		const rowYield = yieldEvery(ROW_YIELD_BATCH);
 		const deadline = Date.now() + config.timeoutMs;
 		const budget = config.maxTraversalPaths;
 
 		// --- Phase 1: Batch-collect for focal entities ---
-		const phase1 = batchCollectForEntities(db, focalIds, agentId, config, budget);
+		const phase1 = await batchCollectForEntities(db, focalIds, agentId, config, budget);
 		let timedOut = Date.now() > deadline;
+
+		await stageYield();
 
 		// --- Phase 2: Dependency expansion + batch collect for hops ---
 		if (!timedOut && phase1.memoryIds.size < budget) {
@@ -636,7 +669,7 @@ export function traverseKnowledgeGraph(
 
 			if (hopTargetIds.length > 0) {
 				const remainingBudget = budget - phase1.memoryIds.size;
-				const phase2 = batchCollectForEntities(db, hopTargetIds, agentId, config, remainingBudget);
+				const phase2 = await batchCollectForEntities(db, hopTargetIds, agentId, config, remainingBudget);
 
 				// Merge phase2 results into phase1
 				for (const mid of phase2.memoryIds) {
@@ -648,12 +681,14 @@ export function traverseKnowledgeGraph(
 					if (current === undefined || score > current) {
 						phase1.memoryScores.set(mid, score);
 					}
+					await rowYield();
 				}
 				for (const [mid, path] of phase2.memoryPaths) {
 					const prev = phase1.memoryPaths.get(mid);
 					if (!prev || pathSize(path) > pathSize(prev)) {
 						phase1.memoryPaths.set(mid, path);
 					}
+					await rowYield();
 				}
 				// Rebuild paths for hop entities with source/dependency provenance
 				const sourceByTarget = new Map<string, { sourceEntityId: string; dependencyId: string }>();
@@ -676,6 +711,7 @@ export function traverseKnowledgeGraph(
 							}
 						}
 					}
+					await rowYield();
 				}
 				phase1.constraints.push(...phase2.constraints);
 				// Deduplicate across phase1/phase2 boundary (in-place to respect readonly)

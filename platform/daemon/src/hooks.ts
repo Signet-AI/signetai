@@ -788,7 +788,7 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 			traversalEntityNames = focal.entityNames;
 
 			if (focal.entityIds.length > 0) {
-				const traversalResult = getDbAccessor().withReadDb((db) =>
+				const traversalResult = await getDbAccessor().withReadDbAsync((db) =>
 					traverseKnowledgeGraph(focal.entityIds, db, traversalAgentId, traversalRuntimeCfg),
 				);
 				traversalTimedOut = traversalResult.timedOut;
