@@ -572,6 +572,15 @@ and defaults to the daemon configured agent; `agent_id`, the `agentId` query
 parameter, the `agent_id` query parameter, and `x-signet-agent-id` are also
 accepted.
 
+Explicit triggers always run the combined `incremental` runbook (hygiene
+queue first, then content ingestion). The worker's scheduled sweep passes,
+in contrast, alternate between two focused runbooks when both kinds of work
+are pending — `incremental-hygiene` (attention queue only) and
+`incremental-content` (new evidence only) — so content ingestion gets a
+guaranteed turn even while the hygiene queue stays full (#1098). The pass
+row's `mode` column and the status response's `state.lastPassMode` record
+the runbook that actually ran.
+
 **Response** — `202 Accepted`
 
 ```json

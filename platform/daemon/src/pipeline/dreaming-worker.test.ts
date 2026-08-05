@@ -6,10 +6,16 @@ import { join } from "node:path";
 import type { DreamingConfig } from "@signet/core";
 import { runMigrations } from "../../../core/src/migrations";
 import type { DbAccessor } from "../db-accessor";
-import { DREAMING_AGENT_PROMPT, enqueueDreamingHygieneAttention } from "./dreaming";
+import {
+	DREAMING_AGENT_PROMPT,
+	type DreamingPassFocus,
+	dreamingFocusOfMode,
+	enqueueDreamingHygieneAttention,
+} from "./dreaming";
 import {
 	createAgentScopeSnapshot,
 	getDreamingWorkerAgentIds,
+	selectDreamingCheckMode,
 	shouldDeferDreamingSweep,
 	startDreamingWorker,
 } from "./dreaming-worker";
@@ -155,6 +161,35 @@ describe("dreaming worker agent scope", () => {
 		} finally {
 			worker.stop();
 		}
+	});
+
+	it("alternates hygiene and content runbooks across sweep checks (#1098)", () => {
+		// Regression for #1098: with the hygiene queue perpetually full, the
+		// sweep scheduled the combined runbook every cycle and content
+		// ingestion never got budget. When both hygiene and content work are
+		// pending, the sweep must alternate so content gets a guaranteed
+		// turn.
+		const now = new Date().toISOString();
+		db.prepare(
+			`INSERT INTO entities
+			 (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
+			 VALUES ('legacy-husk', 'Legacy Husk', 'legacy husk', 'project', 'default', 5, ?, ?)`,
+		).run(now, now);
+		db.prepare(
+			`INSERT INTO session_summaries
+			 (id, agent_id, content, token_count, depth, kind, source_type, earliest_at, latest_at, created_at)
+			 VALUES ('sweep-evidence', 'default', 'New episodic evidence awaiting a content pass.', 10, 0, 'session', 'summary', datetime('now'), datetime('now'), datetime('now'))`,
+		).run();
+		enqueueDreamingHygieneAttention(accessor, "default");
+
+		let focus: DreamingPassFocus | null = null;
+		const first = selectDreamingCheckMode(accessor, ["default"], focus);
+		expect(first).toBe("incremental-hygiene");
+		focus = dreamingFocusOfMode(first) ?? focus;
+		const second = selectDreamingCheckMode(accessor, ["default"], focus);
+		expect(second).toBe("incremental-content");
+		focus = dreamingFocusOfMode(second) ?? focus;
+		expect(selectDreamingCheckMode(accessor, ["default"], focus)).toBe("incremental-hygiene");
 	});
 
 	it("seeds deterministic hygiene attention for legacy graph rows", () => {

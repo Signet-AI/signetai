@@ -13,14 +13,18 @@ import { isSystemPressureHigh } from "../system-pressure";
 import {
 	type DreamingAgentExecutor,
 	type DreamingMode,
+	type DreamingPassFocus,
 	createDreamingPass,
+	dreamingFocusOfMode,
 	enqueueDreamingHygieneAttention,
 	getDreamingEpisodicTokenBacklog,
 	isDreamingHaltActive,
 	recordDreamingFailure,
 	runDreamingAgentPass,
+	selectDreamingPassMode,
 	shouldTriggerDreaming,
 } from "./dreaming";
+import { getDreamingAttentionInDb } from "./dreaming-attention";
 
 /** Thrown when a trigger is attempted while a pass is already in-flight. */
 export class AlreadyRunningError extends Error {
@@ -138,6 +142,24 @@ export function createAgentScopeSnapshot(
 	};
 }
 
+/**
+ * The runbook for the next scheduled sweep pass (#1098): read the pending
+ * work across every scope, then pick hygiene/content — alternating when both
+ * kinds are pending so content gets a guaranteed turn even while the hygiene
+ * queue stays full. Shared between check() and tests.
+ */
+export function selectDreamingCheckMode(
+	accessor: DbAccessor,
+	scopes: readonly string[],
+	lastScheduled: DreamingPassFocus | null,
+): DreamingMode {
+	const hasPendingAttention = scopes.some((scope) =>
+		accessor.withReadDb((db) => getDreamingAttentionInDb(db, scope, 1).length > 0),
+	);
+	const hasBacklog = scopes.some((scope) => getDreamingEpisodicTokenBacklog(accessor, scope) > 0);
+	return selectDreamingPassMode(lastScheduled, hasPendingAttention, hasBacklog);
+}
+
 export function startDreamingWorker(
 	accessor: DbAccessor,
 	cfg: DreamingConfig,
@@ -150,6 +172,10 @@ export function startDreamingWorker(
 	let activeAgent: string | null = null;
 	let stopped = false;
 	let activePassPromise: Promise<unknown> | null = null;
+	// The last focused runbook the periodic sweep scheduled, used to
+	// alternate hygiene → content → hygiene → … when both kinds of work are
+	// pending (#1098). Explicit triggers do not touch it.
+	let nextScheduledFocus: DreamingPassFocus | null = null;
 	const getAgentScopes = createAgentScopeSnapshot(AGENT_SCOPE_SNAPSHOT_REFRESH_MS, () =>
 		getDreamingWorkerAgentIds(accessor, defaultAgentId),
 	);
@@ -293,7 +319,14 @@ export function startDreamingWorker(
 			}
 		}
 		if (!triggered) return;
-		await runPass(defaultAgentId, "incremental", undefined, scopes);
+		// #1098: with the hygiene queue perpetually full, every pass used to
+		// drain flags first and run out of budget before content work. Give
+		// content a guaranteed turn: alternate the runbook per check cycle
+		// when both kinds of work are pending; run the only-pending kind
+		// directly otherwise.
+		const mode = selectDreamingCheckMode(accessor, scopes, nextScheduledFocus);
+		nextScheduledFocus = dreamingFocusOfMode(mode) ?? nextScheduledFocus;
+		await runPass(defaultAgentId, mode, undefined, scopes);
 	}
 
 	function schedule(): void {

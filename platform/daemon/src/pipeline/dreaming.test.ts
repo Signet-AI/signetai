@@ -5,10 +5,13 @@ import { runMigrations } from "../../../core/src/migrations";
 import type { DbAccessor } from "../db-accessor";
 import {
 	DREAMING_AGENT_PROMPT,
+	DREAMING_CONTENT_AGENT_PROMPT,
 	DREAMING_FAILURE_HALT_THRESHOLD,
 	DREAMING_HALT_COOLDOWN_MS,
+	DREAMING_HYGIENE_AGENT_PROMPT,
 	type DreamingState,
 	_testParseEpisodicCursor,
+	dreamingEarlyExitSummary,
 	enqueueDreamingHygieneAttention,
 	getDreamingEpisodicTokenBacklog,
 	getDreamingPasses,
@@ -19,6 +22,7 @@ import {
 	recordDreamingFailure,
 	requestDreamingEvidenceRequeue,
 	runDreamingAgentPass,
+	selectDreamingPassMode,
 	shouldTriggerDreaming,
 } from "./dreaming";
 import {
@@ -606,5 +610,129 @@ describe("Dreaming", () => {
 			),
 		).rejects.toThrow("agent timeout");
 		expect(getDreamingPasses(accessor, AGENT).find((pass) => pass.status === "failed")?.error).toBe("agent timeout");
+	});
+
+	it("selects the focused runbook, alternating when both kinds of work are pending (#1098)", () => {
+		// Regression for #1098: with the hygiene queue perpetually full, the
+		// old worker ran the combined runbook hygiene-first every pass and
+		// content ingestion never got budget. With both kinds of work
+		// pending, the worker must alternate so content gets a guaranteed
+		// turn.
+		expect(selectDreamingPassMode(null, true, true)).toBe("incremental-hygiene");
+		expect(selectDreamingPassMode("hygiene", true, true)).toBe("incremental-content");
+		expect(selectDreamingPassMode("content", true, true)).toBe("incremental-hygiene");
+		// Only one kind pending: run that kind directly, no alternation.
+		expect(selectDreamingPassMode("content", true, false)).toBe("incremental-hygiene");
+		expect(selectDreamingPassMode("hygiene", false, true)).toBe("incremental-content");
+	});
+
+	it("early-exits each focused pass mode on its own empty work (#1098)", () => {
+		// Hygiene exits on an empty attention queue even while evidence is
+		// pending; content exits on an empty backlog even while attention is
+		// pending; combined modes need both empty; compact never exits.
+		expect(dreamingEarlyExitSummary("incremental-hygiene", false, 100)).toBe("No hygiene attention to process");
+		expect(dreamingEarlyExitSummary("incremental-hygiene", true, 0)).toBeNull();
+		expect(dreamingEarlyExitSummary("incremental-content", true, 0)).toBe("No new episodic evidence to process");
+		expect(dreamingEarlyExitSummary("incremental-content", false, 1)).toBeNull();
+		expect(dreamingEarlyExitSummary("incremental", false, 0)).toBe(
+			"No new episodic evidence or semantic attention to process",
+		);
+		expect(dreamingEarlyExitSummary("incremental", true, 0)).toBeNull();
+		expect(dreamingEarlyExitSummary("compact", false, 0)).toBeNull();
+	});
+
+	it("uses the mode-specific runbook prompt for focused passes (#1098)", async () => {
+		accessor.withWriteTx((tx) => {
+			enqueueDreamingAttentionInTx(tx, {
+				agentId: AGENT,
+				kind: "hygiene",
+				subjectRef: "entity:legacy-husk",
+			});
+		});
+		let hygienePrompt = "";
+		await runDreamingAgentPass(
+			accessor,
+			{
+				async run(input) {
+					hygienePrompt = input.prompt;
+					return { summary: "Archived flagged husks" };
+				},
+			},
+			defaultCfg(),
+			"/tmp",
+			AGENT,
+			[AGENT],
+			"incremental-hygiene",
+		);
+		expect(hygienePrompt).toBe(DREAMING_HYGIENE_AGENT_PROMPT);
+		expect(hygienePrompt).not.toContain("find new evidence since the cutoff");
+
+		seedSummary(db, "content-prompt", "New evidence for the content runbook.", 8);
+		let contentPrompt = "";
+		await runDreamingAgentPass(
+			accessor,
+			{
+				async run(input) {
+					contentPrompt = input.prompt;
+					return { summary: "Extracted claims" };
+				},
+			},
+			defaultCfg(),
+			"/tmp",
+			AGENT,
+			[AGENT],
+			"incremental-content",
+		);
+		expect(contentPrompt).toBe(DREAMING_CONTENT_AGENT_PROMPT);
+		expect(contentPrompt).not.toContain("Process ALL pending hygiene records");
+	});
+
+	it("does not advance the evidence watermark for hygiene-only work (#1098)", async () => {
+		// Regression for #1098: a pass that only processed hygiene used to
+		// reset the evidence cursor anyway, so the unprocessed episodic
+		// backlog no longer counted as new and content ingestion never got
+		// budget. A hygiene pass must leave the watermark untouched so the
+		// next content pass still sees the backlog.
+		seedSummary(db, "starved-evidence", "New transcript evidence that content passes never reached.", 8);
+		accessor.withWriteTx((tx) => {
+			enqueueDreamingAttentionInTx(tx, {
+				agentId: AGENT,
+				kind: "hygiene",
+				subjectRef: "entity:legacy-husk",
+			});
+		});
+		expect(getDreamingEpisodicTokenBacklog(accessor, AGENT)).toBeGreaterThan(0);
+
+		await runDreamingAgentPass(
+			accessor,
+			{
+				async run() {
+					return { summary: "Archived flagged husks" };
+				},
+			},
+			defaultCfg(),
+			"/tmp",
+			AGENT,
+			[AGENT],
+			"incremental-hygiene",
+		);
+		// The hygiene pass consumed no evidence: the backlog still counts as
+		// new, so the next scheduled content pass gets it.
+		expect(getDreamingEpisodicTokenBacklog(accessor, AGENT)).toBeGreaterThan(0);
+
+		await runDreamingAgentPass(
+			accessor,
+			{
+				async run() {
+					return { summary: "Extracted claims" };
+				},
+			},
+			defaultCfg(),
+			"/tmp",
+			AGENT,
+			[AGENT],
+			"incremental-content",
+		);
+		expect(getDreamingEpisodicTokenBacklog(accessor, AGENT)).toBe(0);
 	});
 });

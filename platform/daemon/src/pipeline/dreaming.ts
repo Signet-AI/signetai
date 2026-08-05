@@ -55,7 +55,14 @@ import { countTokens } from "./tokenizer";
 // Types
 // ---------------------------------------------------------------------------
 
-export type DreamingMode = "incremental" | "compact";
+export type DreamingMode = "incremental" | "compact" | "incremental-hygiene" | "incremental-content";
+
+/**
+ * The focused runbook a scheduled pass follows (#1098): hygiene passes
+ * process the attention queue only, content passes ingest new evidence
+ * only. Combined modes ("incremental", "compact") keep the full runbook.
+ */
+export type DreamingPassFocus = "hygiene" | "content";
 
 export interface DreamingState {
 	readonly consecutiveFailures: number;
@@ -656,6 +663,178 @@ An install may have several agent scopes (listed in <agent_scopes> when there is
 - No writes attempted against pinned or source-root entities.
 `;
 
+/**
+ * The fixed prompt for a hygiene-only pass (#1098): the attention-queue
+ * runbook (combined-process steps 1-2 + 4). Content maintenance is out of
+ * scope — content passes own it, so a hygiene pass spends its whole budget
+ * on the queue instead of running out before step 3.
+ */
+export const DREAMING_HYGIENE_AGENT_PROMPT = `You are a bounded Signet maintenance agent. Your task is to maintain durable, evidence-cited semantic understanding as the relevant entities, relationships, and claims change over time. Attach each claim to its entity and aspect rather than allowing it to exist as standalone.
+
+## Process
+
+Purpose: maintain durable, evidence-cited semantic understanding in the knowledge graph. This is a HYGIENE pass: process the attention queue — inspect flagged targets and archive or merge them with attention provenance, minting flags for junk the queue missed. Content maintenance (claims, entities) belongs to content passes, which cite exact quotes from episodic evidence. Use the pass log (runbook_read) as the dedup source: the previous pass's changes are the cutoff.
+
+An install may have several agent scopes (listed in <agent_scopes> when there is more than one): the scoped tools take an agentId, so address any scope you need — each write is attributed to the agent you name. attention_list without an agentId lists the whole install's hygiene queue, with each record carrying its owning agentId.
+
+### State targets
+
+- Hygiene queue: dreaming_attention pending records (kind=hygiene)
+- Graph: entities, aspects, claims, links (active/archived/pinned)
+- Pass log: dreaming_passes + runbook notes (what changed, what was viewed)
+
+### Per-pass process
+
+1. Read the pass log (runbook_read). Establish cutoff: sources viewed, changes applied, deferred items.
+2. Query the attention queue (attention_list, kind=hygiene, status=pending). Process ALL pending hygiene records:
+   - Inspect the flagged target (get_entity — check aspects, claims, pinned).
+   - Archive or merge it, citing its attention id (provenance: "attention:<uuid>", or attention:$<index> for a flag you minted in the same batch).
+   - If you discover junk the queue did not flag, mint a flag op and archive in the same batch.
+3. Write the pass log (runbook_write): what changed, any flags left for a later pass, anything deferred with exact names.
+
+### Safe
+
+- Archive attention-flagged entities that are non-concrete (zero active aspects/claims, non-concrete type, legacy-only deps).
+- Merge exact-canonical duplicates (same canonical name, same scope).
+
+### Unsafe
+
+- Archive any entity with active aspects/claims.
+- Merge entities across agent scopes.
+- Any write without provenance: hygiene ops need an attention id.
+- Content writes: claims and entities need exact-quote citations from episodic evidence and belong to content passes.
+- Touch pinned entities, source-root entities, or topology entities.
+
+### Verification (before finishing)
+
+- Every write in the batch carries attention provenance.
+- Hygiene queue is drained, or remaining records are explicitly deferred with reasons in the pass log.
+- Pass log written with changes applied (this is the next pass's dedup).
+- No flag left unresolved for a target you archived.
+- No writes attempted against pinned or source-root entities.
+`;
+
+/**
+ * The fixed prompt for a content-only pass (#1098): the evidence runbook
+ * (combined-process steps 1, 3, 4). Hygiene archives are out of scope —
+ * hygiene passes own the attention queue, so a content pass spends its
+ * whole budget ingesting new evidence instead of being crowded out.
+ */
+export const DREAMING_CONTENT_AGENT_PROMPT = `You are a bounded Signet maintenance agent. Your task is to maintain durable, evidence-cited semantic understanding as the relevant entities, relationships, and claims change over time. Attach each claim to its entity and aspect rather than allowing it to exist as standalone.
+
+## Process
+
+Purpose: maintain durable, evidence-cited semantic understanding in the knowledge graph. This is a CONTENT pass: find new evidence since the cutoff and extract/update claims with exact-quote citations, creating entities for durable subjects. Hygiene archives/merges belong to hygiene passes, which process the attention queue. Use the pass log (runbook_read) as the dedup source: the previous pass's viewed sources and changes are the cutoff.
+
+An install may have several agent scopes (listed in <agent_scopes> when there is more than one): the scoped tools take an agentId, so address any scope you need — each write is attributed to the agent you name. attention_list without an agentId lists the whole install's hygiene queue, with each record carrying its owning agentId.
+
+### State targets
+
+- Graph: entities, aspects, claims, links (active/archived/pinned)
+- Evidence: episodic store (memories, artifacts, transcripts, summaries)
+- Pass log: dreaming_passes + runbook notes (what changed, what was viewed)
+
+### Per-pass process
+
+1. Read the pass log (runbook_read). Establish cutoff: sources viewed, changes applied, deferred items.
+2. Find new evidence since the cutoff. First LIST recent sources with search_evidence — pass since and omit the query so it returns the newest sources; only after seeing what is there, narrow with a query if the list is large. For each new source:
+   - search_entities for subjects it establishes.
+   - Extract/update claims with exact-quote evidence from that source.
+   - create_entity only for durable subjects clearly established by the source.
+   - Validate before writing (validate_proposal).
+3. Write the pass log (runbook_write): what changed, which sources were viewed, anything deferred with exact names.
+
+### Safe
+
+- Add/set/supersede claims with exact quotes from an episodic source.
+- Create entities for durable subjects the source clearly establishes.
+- Rename/update entities only with evidence.
+
+### Unsafe
+
+- Any write without provenance: content ops need an exact quote.
+- Claims without exact quotes, or relationships the source does not state.
+- Hygiene archives/merges: they need attention records, which hygiene passes process.
+- Touch pinned entities, source-root entities, or topology entities.
+- Rewrite existing claims without evidence that supersedes them.
+
+### Verification (before finishing)
+
+- Every write in the batch cites an exact quote from scoped episodic evidence.
+- Pass log written with sources viewed + changes applied (this is the next pass's dedup).
+- No claims without exact quotes, no relationships the source does not state.
+- No writes attempted against pinned or source-root entities.
+`;
+
+/** The fixed prompt contract for a pass mode: focused modes get their runbook, combined modes keep the full one. */
+export function dreamingPromptForMode(mode: DreamingMode): string {
+	if (mode === "incremental-hygiene") return DREAMING_HYGIENE_AGENT_PROMPT;
+	if (mode === "incremental-content") return DREAMING_CONTENT_AGENT_PROMPT;
+	return DREAMING_AGENT_PROMPT;
+}
+
+/** The focused runbook a pass mode follows, or null for the combined modes. */
+export function dreamingFocusOfMode(mode: DreamingMode): DreamingPassFocus | null {
+	if (mode === "incremental-hygiene") return "hygiene";
+	if (mode === "incremental-content") return "content";
+	return null;
+}
+
+/**
+ * Whether a pass mode consumes episodic evidence. A hygiene pass processes
+ * only the attention queue, so it must not advance the evidence watermark;
+ * every other mode reads evidence and resets the queue to pass start.
+ */
+function dreamingModeAdvancesEvidence(mode: DreamingMode): boolean {
+	return mode !== "incremental-hygiene";
+}
+
+/**
+ * The early-exit contract for a pass mode (#1098): a pass exits without
+ * invoking the agent when its own work is empty — hygiene on an empty
+ * attention queue, content on an empty episodic backlog. Combined modes
+ * exit only when both are empty; compact never early-exits.
+ */
+export function dreamingEarlyExitSummary(
+	mode: DreamingMode,
+	hasPendingAttention: boolean,
+	totalBacklog: number,
+): string | null {
+	if (mode === "incremental-hygiene") return hasPendingAttention ? null : "No hygiene attention to process";
+	if (mode === "incremental-content") return totalBacklog === 0 ? "No new episodic evidence to process" : null;
+	if (mode === "incremental") {
+		return !hasPendingAttention && totalBacklog === 0
+			? "No new episodic evidence or semantic attention to process"
+			: null;
+	}
+	return null; // compact never early-exits
+}
+
+/**
+ * Which runbook the next scheduled pass gets. When both hygiene and content
+ * work are pending, the worker alternates (hygiene → content → hygiene → …)
+ * so content gets a guaranteed turn even while the hygiene queue refills
+ * faster than passes drain it (#1098). When only one kind of work is
+ * pending, run that kind directly so no pass is spent on an empty runbook.
+ */
+export function selectDreamingPassMode(
+	lastScheduled: DreamingPassFocus | null,
+	hasPendingAttention: boolean,
+	hasBacklog: boolean,
+): DreamingMode {
+	if (hasPendingAttention && hasBacklog) {
+		// Tie: alternate so content gets a guaranteed turn even while the
+		// hygiene queue stays full, starting the cycle at hygiene.
+		return lastScheduled === "hygiene" ? "incremental-content" : "incremental-hygiene";
+	}
+	if (hasPendingAttention) return "incremental-hygiene";
+	if (hasBacklog) return "incremental-content";
+	// Unreachable through shouldTriggerDreaming (it fires only when attention
+	// or a backlog exists); the combined mode's early-exit gate is the
+	// defensive fallback.
+	return "incremental";
+}
+
 // ---------------------------------------------------------------------------
 // Main dreaming orchestrator
 // ---------------------------------------------------------------------------
@@ -679,8 +858,8 @@ export async function runDreamingAgentPass(
 	try {
 		const prompt =
 			scopes.length > 1
-				? `${DREAMING_AGENT_PROMPT}\n\n<agent_scopes>\n${scopes.join("\n")}\n</agent_scopes>`
-				: DREAMING_AGENT_PROMPT;
+				? `${dreamingPromptForMode(mode)}\n\n<agent_scopes>\n${scopes.join("\n")}\n</agent_scopes>`
+				: dreamingPromptForMode(mode);
 
 		// SQLite-format watermark so string comparisons against stored source
 		// dates stay consistent (ISO timestamps would mis-order).
@@ -696,17 +875,22 @@ export async function runDreamingAgentPass(
 			accessor.withReadDb((db) => getDreamingAttentionInDb(db, scope, 1).length > 0),
 		);
 		const totalBacklog = scopes.reduce((total, scope) => total + getDreamingEpisodicTokenBacklog(accessor, scope), 0);
-		if (mode === "incremental" && !hasPendingAttention && totalBacklog === 0) {
-			const summary = "No new episodic evidence or semantic attention to process";
+		const earlyExitSummary = dreamingEarlyExitSummary(mode, hasPendingAttention, totalBacklog);
+		if (earlyExitSummary !== null) {
 			accessor.withWriteTx((db) => {
 				db.prepare(
 					`UPDATE dreaming_passes SET status = 'completed', completed_at = datetime('now'),
 					 tokens_consumed = 0, mutations_applied = 0, mutations_skipped = 0,
 					 mutations_failed = 0, summary = ? WHERE id = ?`,
-				).run(summary, passId);
-				for (const scope of scopes) resetDreamingTokens(db, scope, passId, mode, null, cutoff);
+				).run(earlyExitSummary, passId);
+				// The evidence watermark only advances when nothing new
+				// remains: a focused pass that exits while the other mode's
+				// work is pending must not skip it for the next pass (#1098).
+				if (totalBacklog === 0) {
+					for (const scope of scopes) resetDreamingTokens(db, scope, passId, mode, null, cutoff);
+				}
 			});
-			return { passId, applied: 0, skipped: 0, failed: 0, summary };
+			return { passId, applied: 0, skipped: 0, failed: 0, summary: earlyExitSummary };
 		}
 
 		let applied = 0;
@@ -759,11 +943,15 @@ export async function runDreamingAgentPass(
 				 mutations_failed = ?, summary = ? WHERE id = ?`,
 			).run(tokensConsumed, applied, 0, failed, summary, passId);
 			recordDreamingEvidenceExclusionsInTx(db, agentId, passId, rejectedEvidence, "semantic_operation_rejected");
-			// The evidence queue resets to the pass watermark for EVERY scope:
-			// the next pass's backlog counts only sources captured after this
-			// pass began. The agent's own pass log (runbook_write) carries the
-			// viewed-source dedup.
-			for (const scope of scopes) resetDreamingTokens(db, scope, passId, mode, null, cutoff);
+			// The evidence queue resets to the pass watermark for EVERY scope
+			// the pass consumed evidence for: the next pass's backlog counts
+			// only sources captured after this pass began. A hygiene pass
+			// consumes no evidence, so it must not advance the watermark —
+			// advancing it would hide the unprocessed backlog from the next
+			// content pass and starve content again (#1098).
+			if (dreamingModeAdvancesEvidence(mode)) {
+				for (const scope of scopes) resetDreamingTokens(db, scope, passId, mode, null, cutoff);
+			}
 		});
 		return { passId, applied, skipped: 0, failed, summary };
 	} catch (error) {
