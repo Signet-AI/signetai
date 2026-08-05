@@ -106,14 +106,16 @@ export function parseCsvFlag(value: string | undefined): string[] {
  * repair selection (issue #1050).
  */
 export function parseTablesFlag(value: string | undefined): ("memory" | "summary")[] | undefined {
-	const parts = parseCsvFlag(value);
-	if (parts.length === 0) return undefined;
-	for (const part of parts) {
+	if (value === undefined) return undefined;
+	const parts: ("memory" | "summary")[] = [];
+	for (const rawPart of value.split(",")) {
+		const part = rawPart.trim();
 		if (part !== "memory" && part !== "summary") {
 			throw new Error(`invalid --tables value "${part}"; expected memory or summary`);
 		}
+		parts.push(part);
 	}
-	return parts as ("memory" | "summary")[];
+	return parts;
 }
 
 /** Parse `--older-than=7d` / `--older-than=12h` / `--older-than=30m` into ms. */

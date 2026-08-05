@@ -3,7 +3,7 @@
  */
 
 import { describe, expect, it } from "bun:test";
-import { parseCsvFlag, parseDurationFlag, runRepairQueue } from "./repair-queue.js";
+import { parseCsvFlag, parseDurationFlag, parseTablesFlag, runRepairQueue } from "./repair-queue.js";
 
 describe("parseCsvFlag", () => {
 	it("returns [] for undefined", () => {
@@ -31,6 +31,16 @@ describe("parseDurationFlag", () => {
 		expect(parseDurationFlag("30m")).toBe(30 * 60 * 1000);
 		expect(parseDurationFlag("45s")).toBe(45 * 1000);
 		expect(parseDurationFlag("600ms")).toBe(600);
+	});
+});
+
+describe("parseTablesFlag", () => {
+	it("preserves omitted tables as the both-queue default", () => {
+		expect(parseTablesFlag(undefined)).toBeUndefined();
+	});
+
+	it("rejects an explicitly empty selector", () => {
+		expect(() => parseTablesFlag(",")).toThrow('invalid --tables value ""; expected memory or summary');
 	});
 });
 
