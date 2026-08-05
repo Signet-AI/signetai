@@ -219,7 +219,9 @@ jobs:
       - name: Native release runtime smoke
         shell: bash
         env:
-          SIGNET_NATIVE_EMBEDDING_SMOKE: "1"
+          # Release CI validates the compiled binary and event-loop isolation
+          # separately. Avoid external model downloads and Hugging Face rate limits.
+          SIGNET_NATIVE_EMBEDDING_SMOKE: "0"
           SIGNET_NATIVE_SMOKE_BINARY: ./dist/native/${{ matrix.asset }}
         run: bun test scripts/native-embedding-runtime-smoke.test.ts
 
