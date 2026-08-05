@@ -10,8 +10,12 @@ import type { Command } from "commander";
 import { parseCsvFlag, parseDurationFlag, runRepairQueue } from "../features/repair-queue.js";
 
 export interface RepairQueueDeps {
+	readonly apiCall: (
+		method: string,
+		path: string,
+		body?: unknown,
+	) => Promise<{ readonly ok: boolean; readonly data: unknown }>;
 	readonly baseUrl: string;
-	readonly fetchJson: (path: string, init?: RequestInit) => Promise<Response>;
 }
 
 export function registerRepairQueueCommands(program: Command, deps: RepairQueueDeps): void {
@@ -32,7 +36,7 @@ export function registerRepairQueueCommands(program: Command, deps: RepairQueueD
 		.option("--apply", "mutate; without this the command only previews")
 		.action(async (opts: Record<string, unknown>) => {
 			const dryRun = opts.apply !== true;
-			await runRepairQueue(
+			const result = await runRepairQueue(
 				{
 					action: "requeue",
 					dryRun,
@@ -51,6 +55,9 @@ export function registerRepairQueueCommands(program: Command, deps: RepairQueueD
 					chalk,
 				},
 			);
+			if (!result.success) {
+				process.exitCode = 1;
+			}
 		});
 
 	queue
@@ -63,7 +70,7 @@ export function registerRepairQueueCommands(program: Command, deps: RepairQueueD
 		.option("--apply", "mutate; without this the command only previews")
 		.action(async (opts: Record<string, unknown>) => {
 			const dryRun = opts.apply !== true;
-			await runRepairQueue(
+			const result = await runRepairQueue(
 				{
 					action: "cancel",
 					dryRun,
@@ -81,6 +88,9 @@ export function registerRepairQueueCommands(program: Command, deps: RepairQueueD
 					chalk,
 				},
 			);
+			if (!result.success) {
+				process.exitCode = 1;
+			}
 		});
 
 	queue
@@ -93,7 +103,7 @@ export function registerRepairQueueCommands(program: Command, deps: RepairQueueD
 		.option("--apply", "mutate; without this the command only previews")
 		.action(async (opts: Record<string, unknown>) => {
 			const dryRun = opts.apply !== true;
-			await runRepairQueue(
+			const result = await runRepairQueue(
 				{
 					action: "prune",
 					dryRun,
@@ -111,5 +121,8 @@ export function registerRepairQueueCommands(program: Command, deps: RepairQueueD
 					chalk,
 				},
 			);
+			if (!result.success) {
+				process.exitCode = 1;
+			}
 		});
 }
