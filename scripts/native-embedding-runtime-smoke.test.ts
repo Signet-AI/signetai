@@ -130,6 +130,28 @@ afterEach(async () => {
 	for (const path of tempDirs.splice(0)) rmSync(path, { recursive: true, force: true });
 }, 30_000);
 
+/** Start an OAuth login against the compiled binary and read the SSE stream
+ *  until the provider's first interactive event (auth_url, select, error, or
+ *  done) arrives, then abort the stream so the daemon cancels the session. */
+async function startOAuthLoginSse(origin: string, providerId: string): Promise<string> {
+	const controller = new AbortController();
+	const response = await fetch(`${origin}/api/inference/oauth/login/${providerId}`, {
+		method: "POST",
+		signal: controller.signal,
+	});
+	if (!response.body) throw new Error(`OAuth login ${providerId}: response has no body`);
+	const reader = response.body.getReader();
+	const decoder = new TextDecoder();
+	let text = "";
+	while (!/event: (auth|select|error|done)\b/.test(text)) {
+		const next = await reader.read();
+		if (next.done) break;
+		text += decoder.decode(next.value, { stream: true });
+	}
+	controller.abort();
+	return text;
+}
+
 describe("native smoke binary path", () => {
 	test("resolves a relative SIGNET_NATIVE_SMOKE_BINARY override to an absolute path", () => {
 		const prev = process.env.SIGNET_NATIVE_SMOKE_BINARY;
@@ -418,5 +440,73 @@ describe("compiled native embedding runtime", () => {
 			}
 		},
 		2 * 60_000,
+	);
+});
+
+describe("compiled native OAuth sign-in", () => {
+	const smoke = enabled ? test : test.skip;
+
+	// Regression for dashboard sign-in failing with
+	// "ResolveMessage: Cannot find module './anthropic.js'" (and
+	// './openai-codex.js') from '/$bunfs/root/signet-linux-x64'. pi-ai 0.81+
+	// lazy-loads its OAuth flows through a variable-specifier dynamic import
+	// that survives into the compiled binary and resolves against the bundle
+	// root, where no such module exists. The daemon must register pi-ai's
+	// statically bundled flows (registerBunOAuthFlows) before any login.
+	smoke(
+		"starts anthropic and openai-codex sign-in without the pi-ai dynamic-import failure",
+		async () => {
+			const binary = nativeSmokeBinary();
+			if (!existsSync(binary)) {
+				throw new Error(`native binary not found at ${binary}; build it first (bun run build:native-bun)`);
+			}
+			const home = tempDir();
+			const workspace = join(home, ".agents");
+			mkdirSync(workspace, { recursive: true });
+			writeFileSync(
+				join(workspace, "agent.yaml"),
+				"version: 1\nschema: signet/v1\nagent:\n  name: Native OAuth Smoke\nmemory:\n  database: memory/memories.db\n  pipelineV2:\n    enabled: false\nembedding:\n  provider: none\n",
+			);
+			const port = await freePort();
+			const origin = `http://127.0.0.1:${port}`;
+			const child = spawn(binary, [], {
+				env: {
+					...process.env,
+					SIGNET_DAEMON_ENTRYPOINT: "1",
+					SIGNET_PATH: workspace,
+					SIGNET_PORT: String(port),
+					SIGNET_BIND: "127.0.0.1",
+					SIGNET_SKIP_AGENT_REGISTER: "1",
+				},
+				stdio: ["ignore", "pipe", "pipe"],
+			});
+			children.push(child);
+			const output: Buffer[] = [];
+			child.stdout.on("data", (chunk) => output.push(Buffer.from(chunk)));
+			child.stderr.on("data", (chunk) => output.push(Buffer.from(chunk)));
+
+			try {
+				await waitForHealth(origin, child);
+
+				// Anthropic: auth_url via a local callback server, emitted
+				// before any outbound call.
+				const anthropic = await startOAuthLoginSse(origin, "anthropic");
+				expect(anthropic).toContain("event: auth");
+				expect(anthropic).toContain("https://claude.ai/oauth/authorize");
+				expect(anthropic).not.toContain("Cannot find module");
+
+				// OpenAI Codex: login-method select prompt; device-code polling
+				// only starts after the user picks a method, so this is hermetic.
+				const codex = await startOAuthLoginSse(origin, "openai-codex");
+				expect(codex).toContain("event: select");
+				expect(codex).not.toContain("Cannot find module");
+			} catch (error) {
+				const logs = Buffer.concat(output).toString("utf8");
+				throw new Error(`${error instanceof Error ? error.message : String(error)}\n\nNative daemon output:\n${logs}`, {
+					cause: error,
+				});
+			}
+		},
+		60_000,
 	);
 });

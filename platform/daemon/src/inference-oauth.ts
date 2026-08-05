@@ -6,9 +6,20 @@ import type {
 	OAuthPrompt,
 	OAuthSelectPrompt,
 } from "@earendil-works/pi-ai";
+import { registerBunOAuthFlows } from "@earendil-works/pi-ai/bun-oauth";
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import { logger } from "./logger";
 import { deleteSecretFromActiveProvider, getSecret, putSecret } from "./secrets";
+
+// pi-ai 0.81+ loads its OAuth flows (anthropic, openai-codex, github-copilot,
+// xai, radius) through a variable-specifier dynamic import so browser bundlers
+// cannot follow it into Node-only flow code. In the compiled native binary
+// that runtime import resolves against the bundle root and fails with
+// "Cannot find module './anthropic.js'". Registering the statically bundled
+// flows routes every lazy OAuth load through the embedded module instead;
+// without it dashboard sign-in (and credential refresh) is broken on the
+// shipped binary.
+registerBunOAuthFlows();
 
 const OAUTH_SECRET_PREFIX = "SIGNET_OAUTH_";
 const OAUTH_SESSION_TTL_MS = 10 * 60_000;
