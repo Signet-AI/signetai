@@ -100,6 +100,13 @@ export function useAgentConfig(): AgentConfigStore {
 	const mutate = useCallback((fn: (draft: YamlObject) => void) => {
 		const draft: YamlObject = structuredClone(agentRef.current);
 		fn(draft);
+		// Write through to the ref synchronously: save() serializes
+		// agentRef.current, and React state (agentRef.current = agent on
+		// render) does not commit before the next paint. Without this, a
+		// mutation followed by an immediate save in the same tick (disconnect,
+		// target rewire) serializes the pre-mutation config and the change is
+		// silently lost on disk — the provider stays connected forever.
+		agentRef.current = draft;
 		setAgent(draft);
 		setDirty(true);
 	}, []);
