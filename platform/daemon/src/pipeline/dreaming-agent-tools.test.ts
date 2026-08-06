@@ -36,6 +36,7 @@ describe("dreaming-agent-tools", () => {
 		content: string,
 		agentId: string,
 		aspectName = "configuration",
+		memoryId: string | null = null,
 	): void {
 		getDbAccessor().withWriteTx((db) => {
 			db.prepare(
@@ -45,21 +46,34 @@ describe("dreaming-agent-tools", () => {
 			).run(aspectId, entityId, agentId, aspectName, aspectName.toLowerCase());
 			db.prepare(
 				`INSERT INTO entity_attributes
-				 (id, aspect_id, agent_id, kind, content, normalized_content,
+				 (id, aspect_id, agent_id, memory_id, kind, content, normalized_content,
 				  confidence, importance, status, group_key, claim_key,
 				  version, version_root_id, created_at, updated_at)
-				 VALUES (?, ?, ?, 'attribute', ?, ?, 0.8, 0.5, 'active', 'configuration', 'default', 1, ?, datetime('now'), datetime('now'))`,
-			).run(`${aspectId}-attribute`, aspectId, agentId, content, content.toLowerCase(), `${aspectId}-attribute`);
+				 VALUES (?, ?, ?, ?, 'attribute', ?, ?, 0.8, 0.5, 'active', 'configuration', 'default', 1, ?, datetime('now'), datetime('now'))`,
+			).run(
+				`${aspectId}-attribute`,
+				aspectId,
+				agentId,
+				memoryId,
+				content,
+				content.toLowerCase(),
+				`${aspectId}-attribute`,
+			);
 		});
 	}
 
-	function insertEpisodicMemory(id: string, content: string, agentId = "owner"): void {
+	function insertEpisodicMemory(
+		id: string,
+		content: string,
+		agentId = "owner",
+		reviewAfter: string | null = null,
+	): void {
 		getDbAccessor().withWriteTx((db) => {
 			db.prepare(
 				`INSERT INTO memories
-				 (id, content, source_type, memory_kind, visibility, agent_id, created_at, updated_at)
-				 VALUES (?, ?, 'manual', 'episodic', 'normal', ?, datetime('now'), datetime('now'))`,
-			).run(id, content, agentId);
+				 (id, content, source_type, memory_kind, visibility, agent_id, review_after, created_at, updated_at)
+				 VALUES (?, ?, 'manual', 'episodic', 'normal', ?, ?, datetime('now'), datetime('now'))`,
+			).run(id, content, agentId, reviewAfter);
 		});
 	}
 
@@ -418,6 +432,36 @@ describe("dreaming-agent-tools", () => {
 		const items = pending.items as Array<{ subjectRef: string; kind: string }>;
 		expect(items).toHaveLength(1);
 		expect(items[0]).toMatchObject({ subjectRef: "entity:e-husk", kind: "hygiene" });
+	});
+
+	it("attention_list exposes scoped expired and approaching temporal claims", async () => {
+		const expiredAt = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+		const approachingAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+		insertEntity("e-trip", "Trip", "trip", "owner");
+		insertEpisodicMemory("mem-expired", "Trip was planned for yesterday.", "owner", expiredAt);
+		insertEpisodicMemory("mem-approaching", "Trip is planned for tomorrow.", "owner", approachingAt);
+		insertEpisodicMemory("mem-intruder", "Other agent's expired plan.", "intruder", expiredAt);
+		insertActiveAttribute("e-trip", "a-trip", "Trip was planned for yesterday.", "owner", "plans", "mem-expired");
+		const tools = createDreamingAgentTools({ accessor: getDbAccessor(), agentId: "owner", actor: "owner" });
+
+		const result = readResult(
+			await findTool(tools, "attention_list").execute(
+				"call",
+				{ agentId: "owner", kind: "review_due", status: "pending" },
+				undefined,
+				undefined,
+				{} as never,
+			),
+		);
+		expect(result.ok).toBe(true);
+		const items = result.items as Array<{
+			agentId: string;
+			details: { phase: string; attributeId: string | null };
+			subjectRef: string;
+		}>;
+		expect(items.map((item) => item.details.phase)).toEqual(["expired", "approaching"]);
+		expect(items.every((item) => item.agentId === "owner")).toBe(true);
+		expect(items[0]).toMatchObject({ subjectRef: "memory:mem-expired", details: { attributeId: "a-trip-attribute" } });
 	});
 
 	it("flags and archives a junk entity in one apply batch", async () => {

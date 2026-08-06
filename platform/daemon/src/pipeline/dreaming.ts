@@ -630,20 +630,22 @@ An install may have several agent scopes (listed in <agent_scopes> when there is
    - Inspect the flagged target (get_entity — check aspects, claims, pinned).
    - Archive or merge it, citing its attention id (provenance: "attention:<uuid>", or attention:$<index> for a flag you minted in the same batch).
    - If you discover junk the queue did not flag, mint a flag op and archive in the same batch.
-3. Only when the hygiene queue is clear: find new evidence since the cutoff. First LIST recent sources with search_evidence — pass since and omit the query so it returns the newest sources; only after seeing what is there, narrow with a query if the list is large. Prefer evidence from completed sessions and their summaries; a transcript with completed: false is mid-stream — defer filing from it and note the deferral in the pass log, because its states may be contradicted by the session's end. For each new source:
+3. Query attention_list with kind=review_due. For expired records, inspect the cited memory with search_evidence using its subjectRef, then supersede the matching active claim with supersede_claim_value. Use the supplied entityId, aspectId, attributeId, and claimKey when present. The replacement must state that the planned event remains unconfirmed; never rewrite it as if the event happened. Cite an exact quote from the original memory. Do not supersede approaching records. When creating or setting a future temporal claim, set payload.reviewAfter to the referenced ISO timestamp.
+4. Only when the hygiene queue is clear: find new evidence since the cutoff. First LIST recent sources with search_evidence — pass since and omit the query so it returns the newest sources; only after seeing what is there, narrow with a query if the list is large. Prefer evidence from completed sessions and their summaries; a transcript with completed: false is mid-stream — defer filing from it and note the deferral in the pass log, because its states may be contradicted by the session's end. For each new source:
    - search_entities for subjects it establishes.
    - File claims only for what the source establishes as settled fact: outcomes, decisions, shipped changes, stable behavior. Do not file instructions that were merely suggested, hypotheses or diagnoses, open questions, or intermediate states of an ongoing investigation. When a source shows an attempt and its outcome, file the outcome.
    - Before adding a claim, check the target aspect's existing claims; if one covers the same key or is contradicted by the new evidence, supersede it (supersede_claim_value) instead of adding alongside.
    - The evidence source and the graph target must use the same agent scope: search evidence with the agentId of the entity you will update, then pass that same agentId to apply_ontology_ops. A source found in another scope cannot support a write here.
    - create_entity only for durable subjects clearly established by the source.
    - Validate before writing (validate_proposal).
-4. Write the pass log (runbook_write): what changed, which sources were viewed, anything deferred with exact names.
+5. Write the pass log (runbook_write): what changed, which sources were viewed, anything deferred with exact names.
 
 ### Safe
 
 - Archive attention-flagged entities that are non-concrete (zero active aspects/claims, non-concrete type, legacy-only deps).
 - Merge exact-canonical duplicates (same canonical name, same scope).
 - Add/set/supersede claims with exact quotes from an episodic source.
+- Set reviewAfter when adding or setting a future temporal claim; supersede expired claims as unconfirmed rather than asserting that the event occurred.
 - Create entities for durable subjects the source clearly establishes.
 - Rename/update entities only with evidence.
 
@@ -660,6 +662,7 @@ An install may have several agent scopes (listed in <agent_scopes> when there is
 
 - Every write in the batch has valid provenance.
 - Hygiene queue is drained, or remaining records are explicitly deferred with reasons in the pass log.
+- Expired temporal claims were reviewed, and only claims with exact source evidence were superseded.
 - Pass log written with sources viewed + changes applied (this is the next pass's dedup).
 - No flag left unresolved for a target you archived.
 - No writes attempted against pinned or source-root entities.
@@ -739,18 +742,20 @@ An install may have several agent scopes (listed in <agent_scopes> when there is
 ### Per-pass process
 
 1. Read the pass log (runbook_read). Establish cutoff: sources viewed, changes applied, deferred items.
-2. Find new evidence since the cutoff. First LIST recent sources with search_evidence — pass since and omit the query so it returns the newest sources; only after seeing what is there, narrow with a query if the list is large. Prefer evidence from completed sessions and their summaries; a transcript with completed: false is mid-stream — defer filing from it and note the deferral in the pass log, because its states may be contradicted by the session's end. For each new source:
+2. Query attention_list with kind=review_due. For expired records, inspect the cited memory with search_evidence using its subjectRef, then supersede the matching active claim with supersede_claim_value. Use the supplied entityId, aspectId, attributeId, and claimKey when present. The replacement must state that the planned event remains unconfirmed; never rewrite it as if the event happened. Cite an exact quote from the original memory. Do not supersede approaching records. When creating or setting a future temporal claim, set payload.reviewAfter to the referenced ISO timestamp.
+3. Find new evidence since the cutoff. First LIST recent sources with search_evidence — pass since and omit the query so it returns the newest sources; only after seeing what is there, narrow with a query if the list is large. Prefer evidence from completed sessions and their summaries; a transcript with completed: false is mid-stream — defer filing from it and note the deferral in the pass log, because its states may be contradicted by the session's end. For each new source:
    - search_entities for subjects it establishes.
    - File claims only for what the source establishes as settled fact: outcomes, decisions, shipped changes, stable behavior. Do not file instructions that were merely suggested, hypotheses or diagnoses, open questions, or intermediate states of an ongoing investigation. When a source shows an attempt and its outcome, file the outcome.
    - Before adding a claim, check the target aspect's existing claims; if one covers the same key or is contradicted by the new evidence, supersede it (supersede_claim_value) instead of adding alongside.
    - The evidence source and the graph target must use the same agent scope: search evidence with the agentId of the entity you will update, then pass that same agentId to apply_ontology_ops. A source found in another scope cannot support a write here.
    - create_entity only for durable subjects clearly established by the source.
    - Validate before writing (validate_proposal).
-3. Write the pass log (runbook_write): what changed, which sources were viewed, anything deferred with exact names.
+4. Write the pass log (runbook_write): what changed, which sources were viewed, anything deferred with exact names.
 
 ### Safe
 
 - Add/set/supersede claims with exact quotes from an episodic source.
+- Set reviewAfter when adding or setting a future temporal claim; supersede expired claims as unconfirmed rather than asserting that the event occurred.
 - Create entities for durable subjects the source clearly establishes.
 - Rename/update entities only with evidence.
 
@@ -765,6 +770,7 @@ An install may have several agent scopes (listed in <agent_scopes> when there is
 ### Verification (before finishing)
 
 - Every write in the batch cites an exact quote from episodic evidence in the same agent scope as the graph target.
+- Expired temporal claims were reviewed, and only claims with exact source evidence were superseded.
 - Pass log written with sources viewed + changes applied (this is the next pass's dedup).
 - No claims without exact quotes, no relationships the source does not state.
 - No writes attempted against pinned or source-root entities.

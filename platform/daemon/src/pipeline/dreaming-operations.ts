@@ -401,7 +401,15 @@ function toApplicatorPayload(
 			if (entityId === null || aspectId === null || claimKey === null || value === null) return null;
 			const name = lookupEntityName(accessor, agentId, entityId);
 			const aspect = lookupAspectName(accessor, agentId, entityId, aspectId);
-			return name === null || aspect === null ? null : { entity: name, aspect, claim_key: claimKey, value };
+			return name === null || aspect === null
+				? null
+				: {
+						entity: name,
+						aspect,
+						claim_key: claimKey,
+						value,
+						...(stringField(payload, "reviewAfter") ? { review_after: stringField(payload, "reviewAfter") } : {}),
+					};
 		}
 		case "supersede_claim_value": {
 			const entityId = stringField(payload, "entityId");

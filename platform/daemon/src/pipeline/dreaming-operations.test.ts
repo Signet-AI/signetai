@@ -39,13 +39,18 @@ describe("dreaming operations", () => {
 		});
 	}
 
-	function insertEpisodicMemory(id: string, content: string, agentId = "agent-a"): void {
+	function insertEpisodicMemory(
+		id: string,
+		content: string,
+		agentId = "agent-a",
+		reviewAfter: string | null = null,
+	): void {
 		getDbAccessor().withWriteTx((db) => {
 			db.prepare(
 				`INSERT INTO memories
-				 (id, content, source_type, memory_kind, visibility, agent_id, created_at, updated_at)
-				 VALUES (?, ?, 'manual', 'episodic', 'normal', ?, datetime('now'), datetime('now'))`,
-			).run(id, content, agentId);
+				 (id, content, source_type, memory_kind, visibility, agent_id, review_after, created_at, updated_at)
+				 VALUES (?, ?, 'manual', 'episodic', 'normal', ?, ?, datetime('now'), datetime('now'))`,
+			).run(id, content, agentId, reviewAfter);
 		});
 	}
 
@@ -292,6 +297,50 @@ describe("dreaming operations", () => {
 		});
 		expect(result.ok).toBe(false);
 		expect(result.error).toBe("Every operation must cite an exact quote from scoped episodic evidence");
+	});
+
+	it("stores review_after on a semantic memory for a future temporal claim", () => {
+		insertEntity("e-acme", "Acme", "acme");
+		insertAspect("a-main", "e-acme", "general");
+		insertEpisodicMemory("mem-temporal", "Acme plans to travel on 2026-08-03.");
+		const result = applyDreamingOperations({
+			accessor: getDbAccessor(),
+			agentId: "agent-a",
+			actor: "dreaming",
+			operations: [
+				{
+					operation: "set_claim_value",
+					payload: {
+						entityId: "e-acme",
+						aspectId: "a-main",
+						claimKey: "travel_plan",
+						value: "Acme plans to travel on 2026-08-03.",
+						reviewAfter: "2026-08-03T00:00:00-06:00",
+					},
+					evidence: [
+						{
+							source_ref: "memory:mem-temporal",
+							source_kind: "manual",
+							source_id: "mem-temporal",
+							quote: "Acme plans to travel on 2026-08-03.",
+						},
+					],
+				},
+			],
+		});
+		expect(result.ok).toBe(true);
+		const row = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare(
+						`SELECT m.review_after
+						   FROM memories m
+						   JOIN entity_attributes ea ON ea.memory_id = m.id
+						  WHERE ea.agent_id = ? AND ea.claim_key = ?`,
+					)
+					.get("agent-a", "travel_plan") as { review_after: string },
+		);
+		expect(row.review_after).toBe("2026-08-03T06:00:00.000Z");
 	});
 
 	it("supersedes the current active claim for a key without an explicit attribute id", () => {

@@ -34,6 +34,7 @@ import {
 	applyDreamingOperations,
 } from "./dreaming-operations";
 import { readDreamingRunbook, writeDreamingRunbook } from "./dreaming-runbook";
+import { collectReviewDueClaims } from "./memory-review-due";
 
 const bounded = (value: number | undefined, fallback: number, max: number): number =>
 	Math.min(Math.max(Math.floor(value ?? fallback), 1), max);
@@ -530,7 +531,7 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 		capability(
 			"attention_list",
 			"List attention",
-			"List attention records (the hygiene queue) by kind and resolution status. Omit agentId to see the whole install's queue (each record carries its owning agentId); pass agentId to narrow to one scope.",
+			"List attention records by kind and resolution status. Use kind hygiene for the queue, or review_due for expired and approaching temporal claims. Omit agentId to see the whole install; pass agentId to narrow to one scope.",
 			true,
 			z.object({
 				agentId: z.string().optional(),
@@ -538,21 +539,58 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 				status: z.enum(["pending", "resolved"]).optional(),
 				limit: z.number().finite().optional(),
 			}),
-			async ({ agentId: scopeId, kind, status, limit }) => ({
-				ok: true,
-				items:
-					scopeId !== undefined
-						? getDreamingAttentionScoped(accessor, scopeId, {
-								kind,
-								status: status ?? "pending",
-								limit: bounded(limit, 20, 100),
-							})
-						: getDreamingAttentionAcrossScopes(accessor, {
-								kind,
-								status: status ?? "pending",
-								limit: bounded(limit, 50, 200),
-							}),
-			}),
+			async ({ agentId: scopeId, kind, status, limit }) => {
+				if (kind === "review_due") {
+					if (status === "resolved") return { ok: true, items: [] };
+					const due = accessor.withReadDb((db) =>
+						collectReviewDueClaims(
+							{ all: <T>(sql: string, ...params: unknown[]) => db.prepare(sql).all(...params) as T[] },
+							new Date(),
+							{ agentId: scopeId, limit: bounded(limit, scopeId ? 50 : 100, scopeId ? 100 : 200) },
+						),
+					);
+					return {
+						ok: true,
+						items: [
+							...due.expired.map((item) => ({
+								id: item.id,
+								kind: "review_due",
+								status: "pending",
+								subjectRef: `memory:${item.id}`,
+								details: { phase: "expired", ...item },
+								priority: "high",
+								createdAt: item.createdAt,
+								agentId: item.agentId,
+							})),
+							...due.approaching.map((item) => ({
+								id: item.id,
+								kind: "review_due",
+								status: "pending",
+								subjectRef: `memory:${item.id}`,
+								details: { phase: "approaching", ...item },
+								priority: "normal",
+								createdAt: item.createdAt,
+								agentId: item.agentId,
+							})),
+						],
+					};
+				}
+				return {
+					ok: true,
+					items:
+						scopeId !== undefined
+							? getDreamingAttentionScoped(accessor, scopeId, {
+									kind,
+									status: status ?? "pending",
+									limit: bounded(limit, 20, 100),
+								})
+							: getDreamingAttentionAcrossScopes(accessor, {
+									kind,
+									status: status ?? "pending",
+									limit: bounded(limit, 50, 200),
+								}),
+				};
+			},
 		),
 		capability(
 			"apply_ontology_ops",

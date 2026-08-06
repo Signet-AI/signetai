@@ -388,6 +388,16 @@ function readString(record: Readonly<Record<string, unknown>>, key: string): str
 	return trimmed.length > 0 ? trimmed : null;
 }
 
+function readReviewAfter(payload: Readonly<Record<string, unknown>>): string | null {
+	const value = readString(payload, "review_after");
+	if (value === null) return null;
+	const parsed = new Date(value);
+	if (Number.isNaN(parsed.getTime())) {
+		throw new OntologyProposalError("payload.review_after must be a valid ISO timestamp", 400);
+	}
+	return parsed.toISOString();
+}
+
 function readNumber(record: Readonly<Record<string, unknown>>, key: string): number | null {
 	const value = record[key];
 	return typeof value === "number" && Number.isFinite(value) ? value : null;
@@ -806,6 +816,7 @@ function materializeAttributeMemoryInTx(
 		readonly content: string;
 		readonly normalizedContent: string;
 		readonly importance: number;
+		readonly reviewAfter: string | null;
 		readonly proposal: ProposalRow;
 	},
 ): string {
@@ -835,6 +846,7 @@ function materializeAttributeMemoryInTx(
 			sourcePath: input.proposal.source_path,
 			agentId: input.agentId,
 			visibility: "global",
+			reviewAfter: input.reviewAfter,
 			createdAt: now(),
 		});
 	}
@@ -973,6 +985,7 @@ function applyAddClaimValue(
 	const id = crypto.randomUUID();
 	const confidence = clamp01(readNumber(payload, "confidence") ?? proposal.confidence);
 	const importance = clamp01(readNumber(payload, "importance") ?? confidence);
+	const reviewAfter = readReviewAfter(payload);
 	const proposalEvidence = proposalAuditEvidence(proposal);
 	db.prepare(
 		`INSERT INTO entity_attributes
@@ -1010,6 +1023,7 @@ function applyAddClaimValue(
 		content: value,
 		normalizedContent: normalized,
 		importance,
+		reviewAfter,
 		proposal,
 	});
 	return { entityId, aspectId, attributeId: id, memoryId, deduped: false };
@@ -1078,6 +1092,7 @@ function applySetClaimValue(
 	const id = version === 1 ? rootId : crypto.randomUUID();
 	const confidence = clamp01(readNumber(payload, "confidence") ?? proposal.confidence);
 	const importance = clamp01(readNumber(payload, "importance") ?? confidence);
+	const reviewAfter = readReviewAfter(payload);
 	db.prepare(
 		`INSERT INTO entity_attributes
 		 (id, aspect_id, agent_id, kind, content, normalized_content,
@@ -1115,6 +1130,7 @@ function applySetClaimValue(
 		content: value,
 		normalizedContent: normalized,
 		importance,
+		reviewAfter,
 		proposal,
 	});
 

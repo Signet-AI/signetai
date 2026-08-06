@@ -25,6 +25,9 @@ const aspectName = text.describe("The specific domain of knowledge this claim be
 const aspectId = text.describe("The stable id of an existing aspect.");
 const claimValue = text.describe("A complete atomic assertion that is understandable on its own.");
 const claimKey = text.describe("A stable semantic slot key for versions of the same claim.");
+const reviewAfter = text
+	.describe("An ISO timestamp after which a future temporal claim must be reviewed. Omit for non-temporal claims.")
+	.optional();
 const linkType = z.enum(DEPENDENCY_TYPES).describe("The dependency type between the two entities.");
 
 function payload<T extends z.ZodRawShape>(shape: T) {
@@ -59,8 +62,8 @@ export const DREAMING_ONTOLOGY_PAYLOAD_SCHEMAS = {
 
 	// --- content-bearing ops: require evidence with exact quotes ---
 	create_entity: payload({ name: entityName, type: entityType }),
-	add_claim_value: payload({ entityId, aspectId, claimKey, value: claimValue }),
-	set_claim_value: payload({ entityId, aspectId, claimKey, value: claimValue }),
+	add_claim_value: payload({ entityId, aspectId, claimKey, value: claimValue, reviewAfter }),
+	set_claim_value: payload({ entityId, aspectId, claimKey, value: claimValue, reviewAfter }),
 	supersede_claim_value: payload({
 		entityId,
 		aspectId,
