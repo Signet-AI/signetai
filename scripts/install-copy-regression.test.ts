@@ -101,6 +101,29 @@ describe("install copy", () => {
 		expect(installer).not.toContain("better-sqlite3");
 	});
 
+	test("keeps the postinstall telemetry ping anonymous and opt-out", () => {
+		const installer = read("dist/signetai/scripts/install-native.js");
+
+		// Phase-1 install counter (issue #1026): a single anonymous ping with
+		// version+platform only. No identifier, no payload beyond the query
+		// params, and never a hard failure path.
+		expect(installer).toContain("telemetry.signetai.sh/ping");
+		expect(installer).toContain('searchParams.set("v", nativePackageVersion())');
+		expect(installer).toContain('searchParams.set("p", platform)');
+
+		// Homebrew-style opt-out: one env var disables the ping entirely.
+		expect(installer).toContain("SIGNET_TELEMETRY_OPTOUT");
+
+		// The ping must never block or fail the install: it is fire-and-forget
+		// with a bounded timeout, and errors are swallowed.
+		expect(installer).toContain("AbortSignal.timeout");
+		expect(installer).toContain(".catch(() => {})");
+
+		// Workspace installs (dev) must not ping.
+		expect(installer).toContain("isWorkspacePackage()");
+		expect(installer).toContain("SIGNET_SKIP_NATIVE_POSTINSTALL");
+	});
+
 	test("curl installer downloads and verifies the connector-asset tarball", () => {
 		const installer = read("web/marketing/public/install.sh");
 

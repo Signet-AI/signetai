@@ -24,6 +24,34 @@ const require = createRequire(import.meta.url);
 
 const CONNECTOR_COMPONENT = "connectors";
 
+// Phase-1 telemetry (issue #1026): a single anonymous counter ping per real
+// install. No identifier, no IP logging, no payload beyond version+platform.
+// Opt-out via SIGNET_TELEMETRY_OPTOUT=1 (Homebrew-style). Never blocks the
+// install and never fails it: the request is time-bounded and errors are
+// swallowed, so a telemetry outage cannot break postinstall.
+const TELEMETRY_ENDPOINT = "https://telemetry.signetai.sh/ping";
+const TELEMETRY_TIMEOUT_MS = 2000;
+const pendingPings = [];
+
+function telemetryEnabled() {
+	if (process.env.SIGNET_TELEMETRY_OPTOUT === "1" || process.env.SIGNET_TELEMETRY_OPTOUT === "true") {
+		return false;
+	}
+	if (process.env.SIGNET_SKIP_NATIVE_POSTINSTALL === "1" || isWorkspacePackage()) {
+		return false;
+	}
+	return true;
+}
+
+function fireInstallPing(platform) {
+	if (!telemetryEnabled()) return;
+	const url = new URL(TELEMETRY_ENDPOINT);
+	url.searchParams.set("v", nativePackageVersion());
+	url.searchParams.set("p", platform);
+	const promise = fetch(url, { signal: AbortSignal.timeout(TELEMETRY_TIMEOUT_MS) }).catch(() => {});
+	pendingPings.push(promise);
+}
+
 function isWorkspacePackage() {
 	const workspaceRoot = dirname(dirname(packageDir));
 	if (basename(dirname(packageDir)) !== "dist") return false;
@@ -66,6 +94,8 @@ async function main() {
 	}
 
 	const platform = detectNativePlatform();
+	// Anonymous install counter (issue #1026): one ping per real install.
+	fireInstallPing(platform);
 	const nativePackage = nativePlatforms[platform];
 	let source;
 	try {
@@ -208,7 +238,16 @@ async function installConnectorAssets() {
 	}
 }
 
-main().catch((err) => {
-	console.error(`Signet native install failed: ${err.message}`);
-	process.exit(1);
-});
+main()
+	.catch((err) => {
+		console.error(`Signet native install failed: ${err.message}`);
+		process.exit(1);
+	})
+	.finally(async () => {
+		// Give the fire-and-forget telemetry ping a bounded chance to flush.
+		// Each request self-times-out, so this never delays the install by
+		// more than TELEMETRY_TIMEOUT_MS even if the endpoint hangs.
+		if (pendingPings.length > 0) {
+			await Promise.allSettled(pendingPings);
+		}
+	});
