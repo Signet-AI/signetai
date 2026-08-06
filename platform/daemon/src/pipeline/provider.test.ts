@@ -187,7 +187,9 @@ printf 'ok\\n'
 			expect(args).toContain("--allowed-tools");
 			expect(args[args.indexOf("--allowed-tools") + 1]).toBe("");
 			expect(args.slice(args.indexOf("claude"))).toEqual(["claude", "exec", "--file", "-"]);
-			expect(readFileSync(cwdPath, "utf-8")).toBe(join(root, ".daemon", "acpx-background"));
+			// Child shells report $PWD as the kernel realpath; on macOS
+			// /var -> /private/var is a symlink, so compare resolved.
+			expect(readFileSync(cwdPath, "utf-8")).toBe(realpathSync(join(root, ".daemon", "acpx-background")));
 		} finally {
 			if (previousSignetPath === undefined) Reflect.deleteProperty(process.env, "SIGNET_PATH");
 			else process.env.SIGNET_PATH = previousSignetPath;
@@ -679,8 +681,10 @@ printf 'ok\n'
 			const args = readFileSync(argsPath, "utf-8").trim().split("\n");
 			const cwdIndex = args.indexOf("--cwd");
 			expect(cwdIndex).toBeGreaterThanOrEqual(0);
-			expect(args[cwdIndex + 1]).toBe(join(root, "workspace"));
-			expect(readFileSync(pwdPath, "utf-8").trim()).toBe(join(root, "workspace"));
+			// resolveAcpxCwd uses process.cwd(), which Node reports as the
+			// kernel realpath (macOS /var -> /private/var), so compare resolved.
+			expect(args[cwdIndex + 1]).toBe(realpathSync(join(root, "workspace")));
+			expect(readFileSync(pwdPath, "utf-8").trim()).toBe(realpathSync(join(root, "workspace")));
 		} finally {
 			process.chdir(previousCwd);
 			rmSync(root, { recursive: true, force: true });
@@ -705,13 +709,21 @@ wait
 
 		try {
 			const provider = createAcpxProvider({ agent: "codex", bin, hooks: "disabled" });
-			await expect(provider.generate("hang", { timeoutMs: 50 })).rejects.toThrow("codex via ACPX timeout after 50ms");
+			// Timeout must be generous enough for bash to start and write the
+			// grandchild pid before the provider kills the group; 50ms races
+			// shell startup under load (observed on macOS runners).
+			await expect(provider.generate("hang", { timeoutMs: 300 })).rejects.toThrow(/codex via ACPX timeout after \d+ms/);
 
 			let pid = 0;
-			for (let i = 0; i < 20; i += 1) {
+			for (let i = 0; i < 40; i += 1) {
+				// The pid file can exist but still be empty mid-write; only
+				// accept a valid numeric pid.
 				if (existsSync(childPidPath)) {
-					pid = Number(readFileSync(childPidPath, "utf-8"));
-					break;
+					const raw = readFileSync(childPidPath, "utf-8").trim();
+					if (raw.length > 0) {
+						pid = Number(raw);
+						if (pid > 0) break;
+					}
 				}
 				await new Promise((resolve) => setTimeout(resolve, 25));
 			}

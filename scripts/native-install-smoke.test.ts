@@ -1,7 +1,17 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+	chmodSync,
+	cpSync,
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	realpathSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { type Server, createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -556,7 +566,11 @@ describe("native install smoke", () => {
 			SIGNET_PRINT_WRAPPER_DIR: "1",
 		});
 		expect(directWrapper.status).toBe(0);
-		expect(directWrapper.stdout).toContain(`signet wrapper ${packageDir}`);
+		// Node resolves import.meta.url through fs.realpathSync when loading the
+		// entry module, so on macOS the wrapper sees /private/var/... (realpath)
+		// while tmpdir() returns the /var/... symlink form. Compare against the
+		// resolved path to be platform-agnostic.
+		expect(directWrapper.stdout).toContain(`signet wrapper ${realpathSync(packageDir)}`);
 		expect(directWrapper.stdout).toContain("fake native signet --version");
 
 		const install = await runCommand("node", [join(packageDir, "scripts", "install-native.js")], {
