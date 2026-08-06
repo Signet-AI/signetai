@@ -1007,6 +1007,7 @@ export function loadMemoryConfig(agentsDir: string): ResolvedMemoryConfig {
 	};
 
 	const paths = [join(agentsDir, "agent.yaml"), join(agentsDir, "AGENT.yaml"), join(agentsDir, "config.yaml")];
+	const envWarmNative = envBool("SIGNET_EMBEDDING_WARM_NATIVE");
 
 	for (const path of paths) {
 		if (!existsSync(path)) continue;
@@ -1031,6 +1032,9 @@ export function loadMemoryConfig(agentsDir: string): ResolvedMemoryConfig {
 				MAX_LLAMACPP_MAX_INPUT_TOKENS,
 				defaults.embedding.llamaCppMaxInputTokens ?? DEFAULT_LLAMACPP_MAX_INPUT_TOKENS,
 			);
+			if (typeof emb.warmNative === "boolean") {
+				defaults.embedding.warmNative = emb.warmNative;
+			}
 
 			if (emb.provider === "none") {
 				defaults.embedding.provider = "none";
@@ -1062,16 +1066,6 @@ export function loadMemoryConfig(agentsDir: string): ResolvedMemoryConfig {
 					defaults.embedding.base_url = explicitBaseUrl ?? defaults.embedding.base_url;
 				}
 				defaults.embedding.api_key = emb.api_key as string | undefined;
-
-				// Kill-switch for the native ONNX path (#1073): explicit config
-				// wins, env overrides, otherwise default (native allowed).
-				if (typeof emb.warmNative === "boolean") {
-					defaults.embedding.warmNative = emb.warmNative;
-				}
-				const envWarmNative = envBool("SIGNET_EMBEDDING_WARM_NATIVE");
-				if (envWarmNative !== undefined) {
-					defaults.embedding.warmNative = envWarmNative;
-				}
 			}
 
 			if (srch.alpha !== undefined) {
@@ -1109,6 +1103,9 @@ export function loadMemoryConfig(agentsDir: string): ResolvedMemoryConfig {
 			}
 			// ignore parse errors, try next file
 		}
+	}
+	if (envWarmNative !== undefined) {
+		defaults.embedding.warmNative = envWarmNative;
 	}
 
 	return defaults;

@@ -936,11 +936,18 @@ export async function checkEmbeddingProvider(cfg: EmbeddingConfig): Promise<Embe
 	try {
 		if (cfg.provider === "native") {
 			// Kill-switch (#1073): warmNative: false never initializes the
-			// native worker — the probe itself must not touch native. Report
-			// unavailable and let callers fall through to their fallbacks.
+			// native worker. Probe the same fallback chain used by fetchEmbedding
+			// so readiness, migration, and tracker callers see usable embeddings.
 			if (cfg.warmNative === false) {
-				status.available = false;
-				status.error = "Native embedding disabled (embedding.warmNative: false)";
+				const fallback = await fetchEmbedding("test", cfg);
+				if (fallback) {
+					status.available = true;
+					status.dimensions = fallback.length;
+					status.error = "Native embedding disabled (embedding.warmNative: false); using local fallback";
+					cacheEmbeddingStatus(cacheKey, status, now);
+					return status;
+				}
+				status.error = "Native embedding disabled (embedding.warmNative: false); no local fallback is available";
 				cacheEmbeddingStatus(cacheKey, status, now);
 				return status;
 			}
