@@ -16,35 +16,40 @@ import { join } from "node:path";
 /** Create a temp dir and guarantee it is removed when the process exits. */
 export function createTestTempDir(prefix: string): string {
 	const dir = mkdtempSync(join(tmpdir(), prefix));
-	registerExitCleanup(dir);
+	installCleanupHandlers();
+	registered.add(dir);
 	return dir;
 }
 
 const registered = new Set<string>();
+let cleanupHandlersInstalled = false;
 
-function registerExitCleanup(dir: string): void {
-	if (registered.has(dir)) return;
-	registered.add(dir);
-
-	const cleanup = (): void => {
-		if (!registered.has(dir)) return;
+function cleanupRegisteredDirs(): void {
+	for (const dir of registered) {
 		registered.delete(dir);
 		try {
 			rmSync(dir, { recursive: true, force: true });
 		} catch {
 			// Best-effort only — never mask the original failure.
 		}
-	};
-
-	process.on("exit", cleanup);
-	// SIGINT/SIGTERM: run cleanup, then re-raise so the process still exits
-	// with the conventional signal semantics.
-	for (const signal of ["SIGINT", "SIGTERM"] as const) {
-		process.on(signal as NodeJS.Signals, () => {
-			cleanup();
-			process.exit(128 + (signal === "SIGINT" ? 2 : 15));
-		});
 	}
+}
+
+function installCleanupHandlers(): void {
+	if (cleanupHandlersInstalled) return;
+	cleanupHandlersInstalled = true;
+	process.on("exit", cleanupRegisteredDirs);
+	// SIGINT/SIGTERM: clean every registered dir, then exit with the
+	// conventional signal status. One process-wide handler avoids leaving
+	// later dirs behind when process.exit stops listener dispatch.
+	process.once("SIGINT", () => {
+		cleanupRegisteredDirs();
+		process.exit(130);
+	});
+	process.once("SIGTERM", () => {
+		cleanupRegisteredDirs();
+		process.exit(143);
+	});
 }
 
 /** Remove a temp dir now (used by afterAll for normal-path cleanup). */

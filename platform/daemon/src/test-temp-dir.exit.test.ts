@@ -2,9 +2,10 @@ import { afterAll, describe, expect, it } from "bun:test";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { cleanupTestTempDir, createTestTempDir } from "./test-temp-dir";
 
-const helperPath = join(process.cwd(), "src", "test-temp-dir.ts");
+const helperPath = fileURLToPath(new URL("./test-temp-dir.ts", import.meta.url));
 const leaked: string[] = [];
 afterAll(() => {
 	for (const dir of leaked) {
@@ -26,8 +27,11 @@ function childScript(): string {
 import { join } from "node:path";
 import { createTestTempDir } from ${JSON.stringify(helperPath)};
 const dir = createTestTempDir("signet-test-tempdir-int-");
+const secondDir = createTestTempDir("signet-test-tempdir-int-");
 writeFileSync(join(dir, "marker.txt"), "x");
+writeFileSync(join(secondDir, "marker.txt"), "x");
 console.log("DIR:" + dir);
+console.log("DIR2:" + secondDir);
 `,
 	);
 	return scriptPath;
@@ -65,9 +69,13 @@ setInterval(() => {}, 1000);`;
 			setTimeout(() => reject(new Error("timeout waiting for child")), 15000);
 		});
 		const match = output.match(/DIR:(\S+)/);
+		const secondMatch = output.match(/DIR2:(\S+)/);
 		expect(match).not.toBeNull();
+		expect(secondMatch).not.toBeNull();
 		const dir = match?.[1] ?? "";
+		const secondDir = secondMatch?.[1] ?? "";
 		expect(existsSync(dir)).toBe(true);
+		expect(existsSync(secondDir)).toBe(true);
 
 		proc.kill("SIGTERM");
 		await proc.exited;
@@ -75,6 +83,7 @@ setInterval(() => {}, 1000);`;
 		// Give the exit handler a beat to run.
 		await new Promise((resolve) => setTimeout(resolve, 800));
 		expect(existsSync(dir)).toBe(false);
+		expect(existsSync(secondDir)).toBe(false);
 	});
 
 	it("still removes the dir on clean exit via the exit handler", async () => {
@@ -104,11 +113,15 @@ process.exit(0);`;
 			setTimeout(() => reject(new Error("timeout waiting for child")), 15000);
 		});
 		const match = output.match(/DIR:(\S+)/);
+		const secondMatch = output.match(/DIR2:(\S+)/);
 		expect(match).not.toBeNull();
+		expect(secondMatch).not.toBeNull();
 		const dir = match?.[1] ?? "";
+		const secondDir = secondMatch?.[1] ?? "";
 		await proc.exited;
 		await new Promise((resolve) => setTimeout(resolve, 800));
 		expect(existsSync(dir)).toBe(false);
+		expect(existsSync(secondDir)).toBe(false);
 	});
 });
 

@@ -38,7 +38,7 @@ describe("test-temp-dir (exit-safe cleanup)", () => {
 		expect(existsSync(dir)).toBe(false);
 	});
 
-	it("does not remove unrelated dirs", () => {
+	it("removes a supplied path even when it was not registered", () => {
 		const other = mkdtempSync(join(tmpdir(), "signet-test-tempdir-other-"));
 		leaked.push(other);
 		cleanupTestTempDir(other);
