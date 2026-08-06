@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Tiktoken } from "js-tiktoken/lite";
 import cl100k_base from "js-tiktoken/ranks/cl100k_base";
@@ -15,6 +14,7 @@ import {
 	writeSummaryArtifact,
 } from "./memory-lineage";
 import { NATIVE_MEMORY_BRIDGE_SOURCE_NODE_ID } from "./native-memory-constants";
+import { cleanupTestTempDir, createTestTempDir } from "./test-temp-dir";
 
 const tok = new Tiktoken(cl100k_base);
 
@@ -51,7 +51,7 @@ async function addSummary(input: {
 describe("memory-lineage", () => {
 	beforeAll(() => {
 		prev = process.env.SIGNET_PATH;
-		dir = mkdtempSync(join(tmpdir(), "signet-memory-lineage-"));
+		dir = createTestTempDir("signet-memory-lineage-");
 		process.env.SIGNET_PATH = dir;
 		writeFileSync(
 			join(dir, "agent.yaml"),
@@ -69,7 +69,7 @@ describe("memory-lineage", () => {
 
 	afterAll(() => {
 		closeDbAccessor();
-		rmSync(dir, { recursive: true, force: true });
+		cleanupTestTempDir(dir);
 		if (prev === undefined) {
 			Reflect.deleteProperty(process.env, "SIGNET_PATH");
 			return;

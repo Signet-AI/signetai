@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import { existsSync, lstatSync, readFileSync, statSync } from "node:fs";
-import { readdir } from "node:fs/promises";
+import { existsSync, lstatSync, statSync } from "node:fs";
+import { readFile, readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import {
@@ -283,7 +283,11 @@ function sourceRelativePath(root: string, filePath: string): string {
 	return relative(normalizedRoot(root), filePath.replace(/\\/g, "/")).replace(/\\/g, "/");
 }
 
-function codexSourceMeta(source: NativeMemorySource, filePath: string, content: string): Record<string, unknown> | undefined {
+function codexSourceMeta(
+	source: NativeMemorySource,
+	filePath: string,
+	content: string,
+): Record<string, unknown> | undefined {
 	if (source.harness !== "codex") return undefined;
 	const rel = safeRelativePath(source.root, filePath) ?? sourceRelativePath(source.root, filePath);
 	const normalized = content.replace(/\r\n?/g, "\n").replace(/\n$/, "");
@@ -438,7 +442,11 @@ export async function indexNativeMemoryFile(
 		const stat = statSync(filePath);
 		if (!stat.isFile()) return false;
 		mtimeMs = stat.mtimeMs;
-		content = readFileSync(filePath, "utf-8");
+		// Async read: a transiently locked file (EDEADLK from Obsidian or a
+		// sync service) must not block the daemon event loop for tens of
+		// seconds. Async readFile runs in the threadpool; the event loop stays
+		// responsive even while the lock is held.
+		content = await readFile(filePath, "utf-8");
 	} catch (err) {
 		logger.warn("watcher", "Failed reading native memory artifact", {
 			harness: source.harness,
@@ -485,7 +493,8 @@ export async function indexNativeMemoryFile(
 		const artifactChanged = persistedHash !== hash;
 		if (artifactChanged) {
 			const sourceExternalId = obsidian ? sourceRelativePath(source.root, filePath) : null;
-			const externalId = sourceExternalId ?? (source.harness === "codex" ? sourceRelativePath(source.root, filePath) : null);
+			const externalId =
+				sourceExternalId ?? (source.harness === "codex" ? sourceRelativePath(source.root, filePath) : null);
 			indexExternalMemoryArtifact({
 				agentId,
 				sourcePath: filePath,

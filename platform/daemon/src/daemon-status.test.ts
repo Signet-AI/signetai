@@ -1,8 +1,8 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Hono } from "hono";
+import { cleanupTestTempDir, createTestTempDir } from "./test-temp-dir";
 
 let app: Hono;
 let dir = "";
@@ -23,7 +23,7 @@ function streamFromString(value: string): ReadableStream<Uint8Array> {
 describe("daemon status contract", () => {
 	beforeAll(async () => {
 		prev = process.env.SIGNET_PATH;
-		dir = mkdtempSync(join(tmpdir(), "signet-daemon-status-"));
+		dir = createTestTempDir("signet-daemon-status-");
 		mkdirSync(join(dir, "memory"), { recursive: true });
 		writeFileSync(
 			join(dir, "agent.yaml"),
@@ -54,7 +54,7 @@ describe("daemon status contract", () => {
 			Reflect.deleteProperty(process.env, "SIGNET_PATH");
 		}
 		if (prev !== undefined) process.env.SIGNET_PATH = prev;
-		rmSync(dir, { recursive: true, force: true });
+		cleanupTestTempDir(dir);
 	});
 
 	afterEach(async () => {
