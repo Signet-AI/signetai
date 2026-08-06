@@ -6,10 +6,9 @@ import {
 	MANAGED_AGENT_ID_DEFAULT,
 	MANAGED_DAEMON_URL_DEFAULT,
 	type UninstallResult,
-	buildManagedExtensionEnvBootstrap,
+	buildManagedExtensionContent,
 	isManagedExtensionFile,
 	managedExtensionFilePath,
-	readManagedTrimmedEnv,
 	removeManagedExtensionFile,
 	resolveSignetAgentId,
 	resolveSignetApiKey,
@@ -31,31 +30,19 @@ const PI_EXTENSION_ENTRY = "dist/signet-pi.mjs";
 const PI_MANAGED_FILENAME = "signet-pi.js";
 const PI_MANAGED_MARKER = "SIGNET_MANAGED_PI_EXTENSION";
 
-function bundledExtensionContent(): string {
-	if (EXTENSION_BUNDLE.length === 0) {
-		throw new Error(
-			`Bundled pi extension content is empty. Rebuild ${PI_EXTENSION_PACKAGE} and rerun the connector build so ${PI_EXTENSION_ENTRY} is embedded.`,
-		);
-	}
-	return EXTENSION_BUNDLE;
-}
-
-function buildManagedExtensionContent(env: {
+function buildManagedPiExtensionContent(env: {
 	readonly signetPath: string;
 	readonly daemonUrl: string;
 	readonly agentId: string;
 	readonly apiKey?: string;
 }): string {
-	const bundle = bundledExtensionContent();
-	const bootstrap = buildManagedExtensionEnvBootstrap(env);
-	return `// ${PI_MANAGED_MARKER}
-// Managed by Signet (${PI_EXTENSION_PACKAGE})
-// Source: ${PI_EXTENSION_ENTRY}
-// DO NOT EDIT - this file is overwritten by Signet setup/sync.
-
-${bootstrap}
-
-${bundle}`;
+	return buildManagedExtensionContent({
+		bundle: EXTENSION_BUNDLE,
+		marker: PI_MANAGED_MARKER,
+		packageName: PI_EXTENSION_PACKAGE,
+		entry: PI_EXTENSION_ENTRY,
+		env,
+	});
 }
 
 export class PiConnector extends BaseConnector {
@@ -91,7 +78,7 @@ export class PiConnector extends BaseConnector {
 		}
 
 		mkdirSync(dirname(targetPath), { recursive: true });
-		const managedContent = buildManagedExtensionContent({
+		const managedContent = buildManagedPiExtensionContent({
 			signetPath: basePath || resolveSignetWorkspacePath(),
 			daemonUrl: resolveSignetDaemonUrl() || MANAGED_DAEMON_URL_DEFAULT,
 			agentId: resolveSignetAgentId(),

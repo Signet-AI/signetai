@@ -7,7 +7,11 @@ import {
 	type InstallResult,
 	type UninstallResult,
 	atomicWriteText,
+	buildManagedExtensionContent,
 	buildManagedExtensionEnvBootstrap,
+	isChildOf,
+	isJsonObject,
+	readTrimmedEnv,
 	removeManagedExtensionFile,
 	resolveSignetCliCommand,
 	resolveSignetDaemonUrl,
@@ -393,5 +397,73 @@ describe("removeManagedExtensionFile", () => {
 
 		expect(removeManagedExtensionFile(filePath, "signet-managed")).toBe(false);
 		expect(existsSync(filePath)).toBe(true);
+	});
+});
+
+describe("shared connector helpers (#957)", () => {
+	it("narrows plain records with isJsonObject", () => {
+		expect(isJsonObject({ a: 1 })).toBe(true);
+		expect(isJsonObject([])).toBe(false);
+		expect(isJsonObject(null)).toBe(false);
+		expect(isJsonObject("x")).toBe(false);
+		expect(isJsonObject(undefined)).toBe(false);
+	});
+
+	it("detects strict path containment with isChildOf", () => {
+		const parent = join(tmpdir(), "sig-957-parent");
+		expect(isChildOf(join(parent, "a", "b"), parent)).toBe(true);
+		expect(isChildOf(parent, parent)).toBe(false);
+		expect(isChildOf(join(parent, "..", "other"), parent)).toBe(false);
+		expect(isChildOf(join(parent, "sibling"), parent)).toBe(true);
+	});
+
+	it("reads trimmed non-empty env with readTrimmedEnv", () => {
+		const name = "SIGNET_957_TEST_ENV";
+		const previous = process.env[name];
+		try {
+			delete process.env[name];
+			expect(readTrimmedEnv(name)).toBeUndefined();
+			process.env[name] = "  value  ";
+			expect(readTrimmedEnv(name)).toBe("value");
+			process.env[name] = "   ";
+			expect(readTrimmedEnv(name)).toBeUndefined();
+		} finally {
+			process.env[name] = previous;
+		}
+	});
+
+	it("builds a managed extension with the injected constants", () => {
+		const content = buildManagedExtensionContent({
+			bundle: "BUNDLE_BODY",
+			marker: "SIGNET_MANAGED_TEST",
+			packageName: "@signet/test-extension",
+			entry: "dist/test.mjs",
+			env: {
+				signetPath: join(homedir(), ".agents"),
+				daemonUrl: "http://127.0.0.1:3850",
+				agentId: "default",
+			},
+		});
+		expect(content).toContain("SIGNET_MANAGED_TEST");
+		expect(content).toContain("@signet/test-extension");
+		expect(content).toContain("dist/test.mjs");
+		expect(content).toContain("BUNDLE_BODY");
+		expect(content.indexOf("BUNDLE_BODY")).toBeGreaterThan(content.indexOf("SIGNET_DAEMON_URL"));
+	});
+
+	it("throws when the bundled extension content is empty", () => {
+		expect(() =>
+			buildManagedExtensionContent({
+				bundle: "",
+				marker: "SIGNET_MANAGED_TEST",
+				packageName: "@signet/test-extension",
+				entry: "dist/test.mjs",
+				env: {
+					signetPath: join(homedir(), ".agents"),
+					daemonUrl: "http://127.0.0.1:3850",
+					agentId: "default",
+				},
+			}),
+		).toThrow(/empty/);
 	});
 });

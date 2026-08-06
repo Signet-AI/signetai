@@ -8,6 +8,7 @@ import {
 	type InstallResult,
 	type UninstallResult,
 	atomicWriteJson,
+	readTrimmedEnv,
 	resolveSignetCliCommand,
 	resolveSignetMcpCommand,
 } from "@signet/connector-base";
@@ -59,7 +60,7 @@ interface NativePluginCommandResult {
  * explicitly because it can launch an optional-dependency binary outside that
  * package when postinstall did not link a local native binary. */
 function resolveSignetEntry(): string | null {
-	const wrapperDir = readEnv("SIGNET_WRAPPER_DIR") ?? readEnv("SIGNET_DIR");
+	const wrapperDir = readTrimmedEnv("SIGNET_WRAPPER_DIR") ?? readTrimmedEnv("SIGNET_DIR");
 	const candidates = [
 		wrapperDir ? join(wrapperDir, "bin", "signet.js") : null,
 		join(dirname(process.execPath), "..", "bin", "signet.js"),
@@ -97,15 +98,8 @@ function resolveSignetMcp(runtime: string | null = null): SignetMcpConfig {
 	return resolveSignetMcpCommand();
 }
 
-function readEnv(name: string): string | undefined {
-	const value = process.env[name];
-	if (typeof value !== "string") return undefined;
-	const trimmed = value.trim();
-	return trimmed.length > 0 ? trimmed : undefined;
-}
-
 function resolveRemoteDaemonUrl(): string | null {
-	const explicit = readEnv("SIGNET_DAEMON_URL");
+	const explicit = readTrimmedEnv("SIGNET_DAEMON_URL");
 	if (!explicit) return null;
 	return resolveSignetDaemonUrl();
 }
@@ -388,7 +382,7 @@ function cmdEnvQuote(value: string): string {
 }
 
 function readAuthTokenEnv(): string | undefined {
-	return readEnv("SIGNET_API_KEY") ?? readEnv("SIGNET_TOKEN");
+	return readTrimmedEnv("SIGNET_API_KEY") ?? readTrimmedEnv("SIGNET_TOKEN");
 }
 
 function withRemoteDaemonEnv(command: string, remoteDaemonUrl: string | null): string {
@@ -895,7 +889,7 @@ export class CodexConnector extends BaseConnector {
 	}
 
 	protected supportsNativePluginInstall(): boolean {
-		if (readEnv("SIGNET_CODEX_DISABLE_NATIVE_PLUGIN") === "1") return false;
+		if (readTrimmedEnv("SIGNET_CODEX_DISABLE_NATIVE_PLUGIN") === "1") return false;
 		const result = spawnSync("codex", ["plugin", "--help"], {
 			stdio: "ignore",
 			env: { ...process.env, CODEX_HOME: this.getCodexHome() },
@@ -904,7 +898,7 @@ export class CodexConnector extends BaseConnector {
 	}
 
 	protected nativePluginProvidesHooks(): boolean {
-		return readEnv("SIGNET_CODEX_FORCE_COMPAT_HOOKS") !== "1";
+		return readTrimmedEnv("SIGNET_CODEX_FORCE_COMPAT_HOOKS") !== "1";
 	}
 
 	protected installNativePlugin(codexHome: string): NativePluginCommandResult {

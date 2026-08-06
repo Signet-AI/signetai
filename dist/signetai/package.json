@@ -1,6 +1,6 @@
 {
   "name": "signetai",
-  "version": "0.163.17",
+  "version": "0.163.18",
   "description": "Signet native CLI installer wrapper",
   "type": "module",
   "bin": {

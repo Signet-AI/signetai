@@ -35,7 +35,7 @@
 import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import {
 	type SymlinkOptions,
 	type SymlinkResult,
@@ -317,11 +317,34 @@ export function resolveSignetCliCommand(): ResolvedCommand {
 export const MANAGED_DAEMON_URL_DEFAULT = "http://127.0.0.1:3850";
 export const MANAGED_AGENT_ID_DEFAULT = "default";
 
-export function readManagedTrimmedEnv(name: string): string | undefined {
+/** Narrow an unknown value to a plain record (shared by connectors, #957). */
+export function isJsonObject(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** True when `candidate` is strictly inside `parent` on the filesystem (shared, #957). */
+export function isChildOf(candidate: string, parent: string): boolean {
+	const rel = relative(parent, candidate);
+	return rel !== "" && rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
+}
+
+/**
+ * Read a non-empty, trimmed env var (shared by connectors, #957).
+ * Newlines are stripped so multi-line values cannot smuggle into single-line
+ * config surfaces (the behavior forge/opencode standardized on).
+ */
+export function readTrimmedEnv(name: string): string | undefined {
 	const value = process.env[name];
 	if (typeof value !== "string") return undefined;
-	const trimmed = value.trim();
+	const trimmed = value.trim().replace(/[\r\n]+/g, "");
 	return trimmed.length > 0 ? trimmed : undefined;
+}
+
+/**
+ * @deprecated Use `readTrimmedEnv` (same semantics, canonical name).
+ */
+export function readManagedTrimmedEnv(name: string): string | undefined {
+	return readTrimmedEnv(name);
 }
 
 function isExistingDirectory(path: string): boolean {
@@ -413,6 +436,39 @@ ${signetPathBlock}		if (!__signetReadEnv("SIGNET_DAEMON_URL")) {
 
 export function managedExtensionFilePath(agentDir: string, filename: string): string {
 	return join(agentDir, "extensions", filename);
+}
+
+/**
+ * Build a managed extension file: a header naming the package/entry/marker,
+ * the Signet env bootstrap, then the embedded bundle. Shared by the pi and
+ * oh-my-pi connectors, which differ only in those constants (#957).
+ */
+export function buildManagedExtensionContent(params: {
+	readonly bundle: string;
+	readonly marker: string;
+	readonly packageName: string;
+	readonly entry: string;
+	readonly env: {
+		readonly signetPath: string;
+		readonly daemonUrl: string;
+		readonly agentId: string;
+		readonly apiKey?: string;
+	};
+}): string {
+	if (params.bundle.length === 0) {
+		throw new Error(
+			`Bundled extension content is empty. Rebuild ${params.packageName} and rerun the connector build so ${params.entry} is embedded.`,
+		);
+	}
+	const bootstrap = buildManagedExtensionEnvBootstrap(params.env);
+	return `// ${params.marker}
+// Managed by Signet (${params.packageName})
+// Source: ${params.entry}
+// DO NOT EDIT - this file is overwritten by Signet setup/sync.
+
+${bootstrap}
+
+${params.bundle}`;
 }
 
 export function isManagedExtensionFile(filePath: string, marker: string): boolean {
