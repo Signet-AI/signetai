@@ -520,12 +520,15 @@ export function normalizeTargetVersion(targetVersion: string | undefined): strin
 }
 
 interface FinalizeSuccessfulUpdateDeps {
-	syncWorkspaceSourceRepoAsync: (workspaceDir: string) => Promise<WorkspaceSourceRepoSyncResult>;
+	syncWorkspaceSourceRepoAsync?: (workspaceDir: string) => Promise<WorkspaceSourceRepoSyncResult>;
 	updateDesktopInstallAfterUpdate?: (
 		repoSync: WorkspaceSourceRepoSyncResult,
 		installedVersion: string,
 		activeExecutablePath: string,
 	) => Promise<DesktopUpdateResult>;
+	/** Lifecycle hook (issue #1026 Phase 2): fired with (from, to) after a
+	 *  successful install so the daemon can emit `version.upgraded`. */
+	onUpgraded?: (from: string, to: string) => void;
 }
 
 interface SuccessfulUpdateMetadata {
@@ -536,6 +539,9 @@ interface SuccessfulUpdateMetadata {
 interface RunUpdateDeps extends UpdateInstallDeps {
 	readonly detectInstallations?: () => SignetInstallationReport;
 	readonly finalizeSuccessfulUpdate?: typeof finalizeSuccessfulUpdateInstall;
+	/** Lifecycle hook (issue #1026 Phase 2): (from, to) after a successful
+	 *  install; forwarded into finalizeSuccessfulUpdateInstall. */
+	readonly onUpgraded?: (from: string, to: string) => void;
 }
 
 function updateFailure(
@@ -761,7 +767,9 @@ export async function finalizeSuccessfulUpdateInstall(
 
 	let repoSync: WorkspaceSourceRepoSyncResult;
 	try {
-		repoSync = await deps.syncWorkspaceSourceRepoAsync(agentsDir);
+		repoSync = await (
+			deps.syncWorkspaceSourceRepoAsync ?? ((workspaceDir) => syncWorkspaceSourceRepoAsync(workspaceDir))
+		)(agentsDir);
 	} catch (error) {
 		repoSync = {
 			status: "error",
@@ -808,6 +816,7 @@ export async function finalizeSuccessfulUpdateInstall(
 	}
 
 	logger.info("system", "Update installed successfully");
+	deps.onUpgraded?.(currentVersion, installedVersion);
 	return {
 		success: true,
 		message: "Update installed. Restart daemon to apply.",
@@ -917,12 +926,16 @@ export async function runUpdate(targetVersion?: string, deps: RunUpdateDeps = {}
 		}
 
 		try {
-			return await (deps.finalizeSuccessfulUpdate ?? finalizeSuccessfulUpdateInstall)(
+			const finalizer = deps.finalizeSuccessfulUpdate ?? finalizeSuccessfulUpdateInstall;
+			return await finalizer(
 				verification.installedVersion,
 				output,
 				{
 					installMethod,
 					activeExecutablePath: target.executablePath,
+				},
+				{
+					onUpgraded: deps.onUpgraded,
 				},
 			);
 		} catch (error) {
