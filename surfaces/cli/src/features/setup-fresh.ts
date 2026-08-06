@@ -219,6 +219,26 @@ export async function runFreshSetup(plan: SetupPlan, context: SetupApplyContext,
 			config.daemon = { url: plan.daemonUrl };
 		}
 
+		// Anonymous telemetry opt-in (issue #1026 Phase 2). Interactive setups
+		// get a clear yes/no; non-interactive (CI/scripted) setups stay
+		// opted-out by default. Telemetry is off unless explicitly enabled.
+		let telemetryOptIn = false;
+		if (!context.nonInteractive) {
+			telemetryOptIn = await import("@inquirer/prompts").then(({ confirm }) =>
+				confirm({
+					message:
+						"Share anonymous usage statistics (version, platform, command names) to help improve Signet? No memory content, code, or personal data. See ~/.agents/.daemon/telemetry/events.jsonl for exactly what is sent.",
+					default: false,
+				}),
+			);
+		}
+		if (telemetryOptIn) {
+			config.pipelineV2 = {
+				...(config.pipelineV2 as Record<string, unknown> | undefined),
+				telemetryEnabled: true,
+			};
+		}
+
 		writeFileSync(join(context.basePath, "agent.yaml"), formatYaml(config));
 
 		// Connect configured sources (config files the daemon indexes at boot).

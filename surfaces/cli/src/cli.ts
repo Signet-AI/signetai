@@ -101,6 +101,7 @@ import { importFromGitHub } from "./features/import.js";
 import { installNativeBinary, printNativeInstallResult } from "./features/native-install.js";
 import { setupWizard } from "./features/setup.js";
 import { copyDirRecursive, syncBuiltinSkills, syncTemplates } from "./features/sync.js";
+import { recordCommandInvoked } from "./features/telemetry.js";
 import { signetBanner } from "./lib/banner.js";
 import { createDaemonClient, ensureDaemonRunning } from "./lib/daemon.js";
 import { gitAddAndCommit, gitInit, isGitRepo } from "./lib/git.js";
@@ -922,6 +923,10 @@ program.hook("preAction", async (_thisCommand, actionCommand) => {
 	if (!existsSync(AGENTS_DIR)) {
 		return;
 	}
+
+	// Open telemetry log (issue #1026 Phase 2): record the command name
+	// (never arguments) when the user has opted in. Best-effort.
+	recordCommandInvoked(AGENTS_DIR, topLevelCommand);
 
 	await ensureOpenClawPluginPackage(AGENTS_DIR, { silent: true });
 });

@@ -1114,6 +1114,22 @@ leaving the explicit `session_search` MCP/API surface available.
 Anonymous usage telemetry. Only active when `telemetryEnabled: true`.
 Events are batched and flushed periodically.
 
+**Opt-in (issue #1026):** `signet setup` asks whether to share anonymous
+usage statistics (version, platform, command names) and writes
+`telemetryEnabled: true` when accepted. Non-interactive/CI setups stay
+opted-out. Telemetry is never enabled implicitly.
+
+**Open telemetry log:** every recorded event is appended as one JSON line
+to `<agentsDir>/.daemon/telemetry/events.jsonl` — the single inspectable
+audit surface for exactly what was sent (daemon events and CLI
+`command.invoked` lines). No memory content, code, file paths, or personal
+data are ever included.
+
+Lifecycle events fired when opted in: `daemon.started` (version, platform,
+uptime), `command.invoked` (command name only, never arguments),
+`error.occurred` (error type only, never stack/message), `version.upgraded`
+(from, to).
+
 | Field | Default | Range | Description |
 |-------|---------|-------|-------------|
 | `posthogHost` | `""` | — | PostHog instance URL (empty disables) |
