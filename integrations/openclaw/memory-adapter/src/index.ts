@@ -693,6 +693,7 @@ export async function memoryStore(
 		importance?: number;
 		tags?: string | readonly string[];
 		who?: string;
+		reviewAfter?: string;
 	} = {},
 ): Promise<string | null> {
 	const daemonUrl = options.daemonUrl || DEFAULT_DAEMON_URL;
@@ -703,6 +704,7 @@ export async function memoryStore(
 			importance: options.importance,
 			tags: options.tags,
 			who: options.who || "openclaw",
+			reviewAfter: options.reviewAfter,
 		}),
 		timeout: WRITE_TIMEOUT,
 	});
@@ -836,6 +838,7 @@ export async function remember(
 		importance?: number;
 		tags?: string | readonly string[];
 		who?: string;
+		reviewAfter?: string;
 	} = {},
 ): Promise<string | null> {
 	return memoryStore(content, options);

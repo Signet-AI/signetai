@@ -1336,6 +1336,7 @@ for vector in contract["vectors"]:
 		expect(plugin).toContain('"required": ["content", "hints"]');
 		expect(plugin).toContain('"minItems": 1');
 		expect(plugin).toContain('"transcript"');
+		expect(plugin).toContain('"review_after"');
 		expect(plugin).toContain('"structured"');
 		expect(plugin).toContain('"entityName"');
 		expect(plugin).toContain('"attributes"');
@@ -1344,10 +1345,13 @@ for vector in contract["vectors"]:
 		expect(plugin).toContain("Missing required parameter: hints");
 		expect(plugin).toContain('transcript=str(store_args.get("transcript", "") or "")');
 		expect(plugin).toContain("structured=structured");
+		expect(plugin).toContain('review_after=str(store_args.get("review_after", "") or "")');
 		expect(client).toContain("hints: Optional[List[str]] = None");
+		expect(client).toContain('review_after: str = ""');
 		expect(client).toContain('body["hints"] = hints');
 		expect(client).toContain('body["transcript"] = transcript');
 		expect(client).toContain('body["structured"] = structured');
+		expect(client).toContain('body["reviewAfter"] = review_after');
 		expect(client).toContain("def _read_json_response");
 		expect(client).toContain("if not body:");
 		expect(client).toContain("TimeoutError, ValueError");

@@ -74,6 +74,7 @@ const result = await signet.remember("Prefers TypeScript over JavaScript", {
   tags: "language,tooling",
   pinned: false,
   occurredAt: "2026-05-13T18:00:00Z",
+  reviewAfter: "2026-08-03T00:00:00.000Z",
   mode: "sync",         // "auto" | "sync" | "async"
   idempotencyKey: "pref-ts-001",
 });

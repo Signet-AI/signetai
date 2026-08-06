@@ -573,7 +573,7 @@ Database Schema
 SQLite with WAL mode. Migrations are numbered sequentially under
 `platform/core/src/migrations/`. Each migration is idempotent — safe
 to re-run against an existing database. Schema version is tracked in
-`schema_migrations`. The latest migration is `096-retire-legacy-ingestion.ts`.
+`schema_migrations`. The latest migration is `106-memory-review-after.ts`.
 
 **schema_migrations**
 

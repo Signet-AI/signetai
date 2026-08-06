@@ -468,6 +468,7 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		const id = await memoryStore("save this", {
 			daemonUrl: "http://daemon.test",
 			tags: ["alpha", " beta ", ""],
+			reviewAfter: "2026-08-03T00:00:00.000Z",
 		});
 
 		expect(id).toBe("mem-1");
@@ -475,6 +476,7 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 			content: "save this",
 			tags: "alpha,beta",
 			who: "openclaw",
+			reviewAfter: "2026-08-03T00:00:00.000Z",
 		});
 		expect(lastRememberBody).not.toHaveProperty("type");
 		expect(lastRememberBody).not.toHaveProperty("importance");

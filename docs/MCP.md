@@ -152,6 +152,7 @@ forwarded as request metadata.
 | `hints` | string[] | no | Prospective recall hints and alternate phrasings |
 | `transcript` | string | no | Raw source text to preserve alongside the extracted memory |
 | `structured` | object | no | Pre-extracted entity/aspect/attribute data retained as episodic evidence alongside the content; not applied directly to the knowledge graph from this tool |
+| `reviewAfter` | string | no | ISO timestamp after which Dreaming should surface the memory for temporal review |
 
 **Returns:** The created memory object with its assigned ID.
 

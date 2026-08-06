@@ -163,11 +163,16 @@ export function findApproachingReviewDueMemories(
  */
 export function collectReviewDueClaims(
 	accessor: ReviewDueAccessor,
-	now = new Date(),
-	opts: ReviewWindowOptions = {},
+	now: Date,
+	options: ReviewWindowOptions = {},
 ): { readonly expired: readonly ReviewDueMemory[]; readonly approaching: readonly ReviewDueMemory[] } {
+	const limit = options.limit ?? 50;
+	const expired = findExpiredReviewDueMemories(accessor, now, { ...options, limit });
 	return {
-		expired: findExpiredReviewDueMemories(accessor, now, opts),
-		approaching: findApproachingReviewDueMemories(accessor, now, opts),
+		expired,
+		approaching:
+			expired.length >= limit
+				? []
+				: findApproachingReviewDueMemories(accessor, now, { ...options, limit: limit - expired.length }),
 	};
 }

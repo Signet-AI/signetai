@@ -136,6 +136,7 @@ export class SignetClient extends SignetClientHelpers {
 			readonly sourceCreatedAt?: string;
 			readonly validFrom?: string;
 			readonly validUntil?: string;
+			readonly reviewAfter?: string;
 			readonly mode?: "auto" | "sync" | "async";
 			readonly idempotencyKey?: string;
 			readonly runtimePath?: string;

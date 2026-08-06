@@ -23,7 +23,7 @@ function hasColumn(db: MigrationDb, table: string, column: string): boolean {
  */
 export function up(db: MigrationDb): void {
 	if (!hasColumn(db, "memories", "review_after")) {
-		db.exec(`ALTER TABLE memories ADD COLUMN review_after TEXT;`);
+		db.exec("ALTER TABLE memories ADD COLUMN review_after TEXT;");
 	}
-	db.exec(`CREATE INDEX IF NOT EXISTS idx_memories_review_after ON memories(review_after);`);
+	db.exec("CREATE INDEX IF NOT EXISTS idx_memories_review_after ON memories(review_after);");
 }

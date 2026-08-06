@@ -575,6 +575,7 @@ Options:
 | `--source-created-at <iso>` | Source-system creation time for this memory |
 | `--valid-from <iso>` | Start of validity window for this memory |
 | `--valid-until <iso>` | End of validity window for this memory |
+| `--review-after <iso>` | Surface a future temporal claim for review after this timestamp |
 
 Output:
 

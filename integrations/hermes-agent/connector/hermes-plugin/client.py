@@ -417,6 +417,7 @@ class SignetClient:
         hints: Optional[List[str]] = None,
         transcript: str = "",
         structured: Optional[Dict[str, Any]] = None,
+        review_after: str = "",
         who: str = "hermes-agent",
     ) -> Optional[Dict[str, Any]]:
         """Store a memory via the daemon API."""
@@ -445,6 +446,8 @@ class SignetClient:
             body["transcript"] = transcript
         if structured:
             body["structured"] = structured
+        if review_after:
+            body["reviewAfter"] = review_after
         return self._post("/api/memory/remember", body, timeout=_LONG_TIMEOUT_SECS)
 
     def recall(

@@ -87,6 +87,7 @@ Body-level fields override prefix-parsed values.
   "sourceCreatedAt": "2026-02-20T15:05:00.000Z",
   "validFrom": "2026-02-20T00:00:00.000Z",
   "validUntil": "2026-03-01T00:00:00.000Z",
+  "reviewAfter": "2026-08-03T00:00:00.000Z",
   "agentId": "alice",
   "visibility": "global"
 }
@@ -112,6 +113,10 @@ attach explicit temporal edges to the memory without duplicating the memory
 content. Use them when the memory is saved later than the event, observation,
 source creation time, or validity window it describes. Each value must be a
 valid ISO timestamp; `validUntil` must be after `validFrom` when both are set.
+
+`reviewAfter` is an optional ISO timestamp for a future temporal claim. Dreaming
+uses it to surface the memory for review after the deadline instead of assuming
+that the planned event occurred.
 
 Row-level provenance fields are optional: `sourcePath`/`source_path` stores the
 original source path, `runtimePath`/`runtime_path` stores the runtime-relative

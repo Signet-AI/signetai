@@ -402,10 +402,12 @@ describe("rememberContent", () => {
 		await rememberContent(`http://127.0.0.1:${server.port}`, "test memory", {
 			critical: true,
 			tags: ["tag1", "tag2"],
+			reviewAfter: "2026-08-03T00:00:00.000Z",
 		});
 		expect(capturedBody.content).toBe("test memory");
 		expect(capturedBody.pinned).toBe(true);
 		expect(capturedBody.tags).toBe("tag1,tag2");
+		expect(capturedBody.reviewAfter).toBe("2026-08-03T00:00:00.000Z");
 	});
 
 	it("throws when the daemon returns an error status", async () => {

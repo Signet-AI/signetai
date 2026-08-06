@@ -90,6 +90,7 @@ async function storeMemory(
 		readonly importance?: number;
 		readonly tags?: readonly string[];
 		readonly pinned?: boolean;
+		readonly review_after?: string;
 	},
 ): Promise<{ readonly offline: true } | { readonly offline: false; readonly id?: string; readonly memoryId?: string }> {
 	const result = await client.post<{ readonly id?: string; readonly memoryId?: string }>(
@@ -99,6 +100,7 @@ async function storeMemory(
 			importance: args.importance,
 			tags: args.tags,
 			pinned: args.pinned,
+			reviewAfter: args.review_after,
 			who: HARNESS,
 		}),
 		WRITE_TIMEOUT,
@@ -140,6 +142,10 @@ export function createTools(client: DaemonClient): Record<string, ReturnType<typ
 				importance: tool.schema.number().optional().describe("Importance score 0-1"),
 				tags: tool.schema.array(tool.schema.string()).optional().describe("Tags for categorization"),
 				pinned: tool.schema.boolean().optional().describe("Pin this memory — prevents decay"),
+				review_after: tool.schema
+					.string()
+					.optional()
+					.describe("ISO timestamp after which this memory should be reviewed"),
 			},
 			async execute(args): Promise<string> {
 				const result = await storeMemory(client, args);
@@ -267,6 +273,10 @@ export function createTools(client: DaemonClient): Record<string, ReturnType<typ
 				importance: tool.schema.number().optional().describe("Importance 0-1"),
 				tags: tool.schema.array(tool.schema.string()).optional().describe("Tags"),
 				pinned: tool.schema.boolean().optional().describe("Pin this memory — prevents decay"),
+				review_after: tool.schema
+					.string()
+					.optional()
+					.describe("ISO timestamp after which this memory should be reviewed"),
 			},
 			async execute(args): Promise<string> {
 				const result = await storeMemory(client, args);

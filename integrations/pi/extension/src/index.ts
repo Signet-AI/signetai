@@ -165,9 +165,10 @@ export async function rememberContent(
 		critical?: boolean;
 		tags?: string[];
 		agentId?: string;
+		reviewAfter?: string;
 	} = {},
 ): Promise<void> {
-	const { critical = false, tags = [], agentId } = options;
+	const { critical = false, tags = [], agentId, reviewAfter } = options;
 
 	const response = await fetch(`${daemonUrl}/api/hooks/remember`, {
 		method: "POST",
@@ -178,6 +179,7 @@ export async function rememberContent(
 				pinned: critical,
 				tags,
 				agentId,
+				reviewAfter,
 				source: "pi-extension",
 				runtimePath: RUNTIME_PATH,
 			}),

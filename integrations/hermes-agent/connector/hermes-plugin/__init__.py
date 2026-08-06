@@ -171,6 +171,7 @@ MEMORY_STORE_SCHEMA = {
             "tags": {"type": "string", "description": "Comma-separated tags for categorization."},
             "pinned": {"type": "boolean", "description": "Pin this memory so it does not decay."},
             "project": {"type": "string", "description": "Optional project path. Defaults to the active Hermes Signet workspace."},
+            "review_after": {"type": "string", "description": "ISO timestamp after which Dreaming should surface this memory for temporal review."},
             "hints": {
                 "type": "array",
                 "items": {"type": "string"},
@@ -963,6 +964,7 @@ class SignetMemoryProvider(MemoryProvider):
                 hints=hints,
                 transcript=str(store_args.get("transcript", "") or ""),
                 structured=structured,
+                review_after=str(store_args.get("review_after", "") or ""),
                 who="hermes-agent",
             )
             if not result:

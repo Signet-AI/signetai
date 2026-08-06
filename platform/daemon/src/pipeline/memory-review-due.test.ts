@@ -119,4 +119,12 @@ describe("collectReviewDueClaims", () => {
 		expect(result.expired.map((r) => r.id)).toEqual(["expired"]);
 		expect(result.approaching.map((r) => r.id)).toEqual(["approaching"]);
 	});
+
+	it("bounds the combined expired and approaching result by limit", () => {
+		const accessor = new FakeAccessor();
+		accessor.rows = [memory("expired", "2026-03-15T00:00:00.000Z"), memory("approaching", "2026-08-03T00:00:00.000Z")];
+		const result = collectReviewDueClaims(accessor, new Date(NOW), { limit: 1 });
+		expect(result.expired.map((r) => r.id)).toEqual(["expired"]);
+		expect(result.approaching).toEqual([]);
+	});
 });
