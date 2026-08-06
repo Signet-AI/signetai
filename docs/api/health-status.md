@@ -386,10 +386,9 @@ Environment probe (issue #1001). Deliberately lightweight and **unauthenticated*
 ```json
 {
   "mode": "local",
-  "requiresAuth": true
+  "requiresAuth": false
 }
 ```
 
 - `mode`: the daemon's auth mode (`local`, `team`, or `hybrid`).
-- `requiresAuth`: always `true` — a reachable daemon always requires a token for data endpoints (Bearer auth only, no cookies, so CSRF is structurally impossible). The endpoint itself carries no data and exposes nothing beyond this shape.
-
+- `requiresAuth`: `false` in `local` mode, `true` in `team` and `hybrid` modes. The endpoint itself is always unauthenticated and carries no data beyond this documented shape. Authenticated data endpoints use Bearer tokens only, with no cookies.

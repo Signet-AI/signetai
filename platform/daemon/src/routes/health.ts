@@ -286,9 +286,9 @@ export function mountHealthRoutes(app: Hono): void {
 	// unauthenticated so the dashboard can distinguish "talking to a real
 	// daemon" (any hostname: localhost, Tailscale, .local, tunnel, LAN IP)
 	// from the marketing site or cloud app. `mode` reflects the daemon's
-	// auth mode; `requiresAuth` is always true — a reachable daemon always
-	// requires a token for data endpoints.
+	// auth mode; `requiresAuth` reflects whether data endpoints require a
+	// token in that mode.
 	app.get("/api/mode", (c) => {
-		return c.json({ mode: authConfig.mode, requiresAuth: true });
+		return c.json({ mode: authConfig.mode, requiresAuth: authConfig.mode !== "local" });
 	});
 }

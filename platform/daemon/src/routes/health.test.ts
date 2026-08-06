@@ -198,14 +198,13 @@ describe("GET /health (back-compat)", () => {
 });
 
 describe("GET /api/mode", () => {
-	test("returns the auth mode and requiresAuth without any token (issue #1001)", async () => {
+	test("reports the local mode auth contract without any token (issue #1001)", async () => {
 		const app = makeApp();
 		const res = await app.request("/api/mode");
 		expect(res.status).toBe(200);
 		const body = (await res.json()) as { mode: string; requiresAuth: boolean };
-		expect(typeof body.mode).toBe("string");
-		expect(body.mode.length).toBeGreaterThan(0);
-		expect(body.requiresAuth).toBe(true);
+		expect(body.mode).toBe("local");
+		expect(body.requiresAuth).toBe(false);
 	});
 
 	test("is reachable without an Authorization header (auth-open)", async () => {
