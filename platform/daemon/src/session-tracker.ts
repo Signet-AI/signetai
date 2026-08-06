@@ -90,6 +90,35 @@ export function normalizeSessionKey(sessionKey: string): string {
 	return trimmed;
 }
 
+function evictExpiredSession(key: string, claim: SessionClaim): void {
+	if (!sessions.delete(key)) return;
+	bypassedSessions.delete(key);
+	warnedSessions.delete(key);
+	expiredCount++;
+	logger.warn("session-tracker", "Session evicted (TTL expired)", {
+		sessionKey: key,
+		runtimePath: claim.runtimePath,
+		claimedAt: claim.claimedAt,
+	});
+
+	if (!evictionHandler) return;
+	try {
+		const outcome = evictionHandler({
+			sessionKey: key,
+			agentId: claim.agentId,
+			runtimePath: claim.runtimePath,
+			claimedAt: claim.claimedAt,
+		});
+		if (outcome === "skipped") unfinalizedCount++;
+	} catch (err) {
+		unfinalizedCount++;
+		logger.warn("session-tracker", "Session eviction handler failed", {
+			sessionKey: key,
+			error: err instanceof Error ? err.message : String(err),
+		});
+	}
+}
+
 /**
  * Claim a session for a given runtime path. Returns ok:true if the
  * session is unclaimed or already claimed by the same path. Returns
@@ -114,7 +143,7 @@ export function claimSession(sessionKey: string, runtimePath: RuntimePath, agent
 				previousPath: existing.runtimePath,
 				newPath: runtimePath,
 			});
-			sessions.delete(key);
+			evictExpiredSession(key, existing);
 			// Fall through to create new claim
 		} else {
 			return { ok: false, claimedBy: existing.runtimePath };
@@ -173,8 +202,7 @@ export function hasSession(sessionKey: string): boolean {
 	const claim = sessions.get(key);
 	if (!claim) return false;
 	if (Date.now() > claim.expiresAt) {
-		sessions.delete(key);
-		bypassedSessions.delete(key);
+		evictExpiredSession(key, claim);
 		return false;
 	}
 	return true;
@@ -189,8 +217,7 @@ export function getSessionPath(sessionKey: string): RuntimePath | undefined {
 	if (!claim) return undefined;
 
 	if (Date.now() > claim.expiresAt) {
-		sessions.delete(key);
-		bypassedSessions.delete(key);
+		evictExpiredSession(key, claim);
 		return undefined;
 	}
 
@@ -269,8 +296,7 @@ export function getActiveSessions(): readonly SessionInfo[] {
 
 	for (const [key, claim] of sessions) {
 		if (now > claim.expiresAt) {
-			sessions.delete(key);
-			bypassedSessions.delete(key);
+			evictExpiredSession(key, claim);
 			continue;
 		}
 		result.push({
@@ -315,9 +341,7 @@ export function renewSession(sessionKey: string): string | null {
 	if (!claim) return null;
 	// Reject renewal of already-expired sessions — caller should re-claim
 	if (claim.expiresAt <= Date.now()) {
-		sessions.delete(key);
-		bypassedSessions.delete(key);
-		warnedSessions.delete(key);
+		evictExpiredSession(key, claim);
 		return null;
 	}
 	claim.expiresAt = Date.now() + STALE_SESSION_MS;
@@ -341,31 +365,8 @@ function cleanupStaleSessions(): void {
 
 	for (const [key, claim] of sessions) {
 		if (now > claim.expiresAt) {
-			sessions.delete(key);
-			bypassedSessions.delete(key);
-			warnedSessions.delete(key);
+			evictExpiredSession(key, claim);
 			cleaned++;
-			expiredCount++;
-			logger.warn("session-tracker", "Session evicted (TTL expired)", {
-				sessionKey: key,
-				runtimePath: claim.runtimePath,
-				claimedAt: claim.claimedAt,
-			});
-			// Formal lifecycle transition (#902): hand the evicted claim to
-			// the daemon-registered handler so it can checkpoint the latest
-			// transcript and enqueue idempotent finalization before the
-			// in-memory state is gone. A "skipped" outcome means the
-			// finalization was intentionally not applied (e.g. synthesis
-			// disabled) and is counted as unfinalized.
-			if (evictionHandler) {
-				const outcome = evictionHandler({
-					sessionKey: key,
-					agentId: claim.agentId,
-					runtimePath: claim.runtimePath,
-					claimedAt: claim.claimedAt,
-				});
-				if (outcome === "skipped") unfinalizedCount++;
-			}
 		}
 	}
 

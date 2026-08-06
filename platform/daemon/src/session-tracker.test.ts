@@ -4,9 +4,12 @@ import {
 	_expireSessionForTest,
 	bypassSession,
 	claimSession,
+	getActiveSessions,
 	getBypassedSessionKeys,
 	getEndedSession,
+	getSessionPath,
 	getSessionTrackerStats,
+	hasSession,
 	isSessionBypassed,
 	markSessionEnded,
 	renewSession,
@@ -233,5 +236,36 @@ describe("TTL eviction lifecycle handler (#902)", () => {
 
 		expect(calls).toBe(0);
 		expect(getSessionTrackerStats().expired).toBe(0);
+	});
+
+	it("invokes the handler for every synchronous TTL eviction path", () => {
+		const evicted: string[] = [];
+		setSessionEvictionHandler((info) => {
+			evicted.push(info.sessionKey);
+			return "finalized";
+		});
+
+		claimSession("ttl-reclaim", "plugin");
+		_expireSessionForTest("ttl-reclaim");
+		claimSession("ttl-reclaim", "legacy");
+
+		claimSession("ttl-has", "plugin");
+		_expireSessionForTest("ttl-has");
+		hasSession("ttl-has");
+
+		claimSession("ttl-path", "plugin");
+		_expireSessionForTest("ttl-path");
+		getSessionPath("ttl-path");
+
+		claimSession("ttl-active", "plugin");
+		_expireSessionForTest("ttl-active");
+		getActiveSessions();
+
+		claimSession("ttl-renew", "plugin");
+		_expireSessionForTest("ttl-renew");
+		renewSession("ttl-renew");
+
+		expect(evicted).toEqual(["ttl-reclaim", "ttl-has", "ttl-path", "ttl-active", "ttl-renew"]);
+		expect(getSessionTrackerStats().expired).toBe(5);
 	});
 });

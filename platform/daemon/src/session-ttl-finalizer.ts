@@ -30,6 +30,7 @@ const MAX_TRANSCRIPT_CHARS = 100_000;
 export interface TtlFinalizerDeps {
 	readonly accessor: DbAccessor;
 	readonly maxCheckpointsPerSession: number;
+	readonly isSummarySynthesisAvailable: () => boolean;
 }
 
 function snapshotToCheckpoint(snap: ContinuityState, sessionKey: string): WriteCheckpointParams {
@@ -52,12 +53,21 @@ function snapshotToCheckpoint(snap: ContinuityState, sessionKey: string): WriteC
 	};
 }
 
+function summaryJobsHasContentHashColumn(deps: TtlFinalizerDeps): boolean {
+	return deps.accessor.withReadDb((db) =>
+		(db.prepare("PRAGMA table_info(summary_jobs)").all() as ReadonlyArray<Record<string, unknown>>).some(
+			(col) => col.name === "content_hash",
+		),
+	);
+}
+
 function summaryJobWithContentHashExists(
 	deps: TtlFinalizerDeps,
 	agentId: string,
 	sessionKey: string,
 	contentHash: string,
 ): boolean {
+	if (!summaryJobsHasContentHashColumn(deps)) return false;
 	return deps.accessor.withReadDb((db) => {
 		const row = db
 			.prepare(
@@ -71,20 +81,26 @@ function summaryJobWithContentHashExists(
 	});
 }
 
+function storeSummaryJobContentHash(deps: TtlFinalizerDeps, jobId: string, contentHash: string): void {
+	if (!summaryJobsHasContentHashColumn(deps)) return;
+	deps.accessor.withWriteTx((db) => {
+		db.prepare("UPDATE summary_jobs SET content_hash = ? WHERE id = ?").run(contentHash, jobId);
+	});
+}
+
 /**
  * Build the session-tracker eviction handler. Returns the handler to pass to
  * `setSessionEvictionHandler`.
  */
 export function createTtlEvictionHandler(deps: TtlFinalizerDeps): SessionEvictionHandler {
 	return (info: EvictedSessionInfo): "finalized" | "skipped" | undefined => {
-		let finalized = false;
+		let summaryFinalized = false;
 
 		// 1. Persist a ttl_expired checkpoint from residual continuity state.
 		const snap = getState(info.sessionKey);
 		if (snap && snap.totalPromptCount > 0) {
 			try {
 				writeCheckpoint(deps.accessor, snapshotToCheckpoint(snap, info.sessionKey), deps.maxCheckpointsPerSession);
-				finalized = true;
 				logger.info("session-tracker", "TTL-evicted session checkpointed", {
 					sessionKey: info.sessionKey,
 					promptCount: snap.totalPromptCount,
@@ -98,6 +114,13 @@ export function createTtlEvictionHandler(deps: TtlFinalizerDeps): SessionEvictio
 		}
 
 		// 2. Enqueue idempotent summary finalization from the stored transcript.
+		if (!deps.isSummarySynthesisAvailable()) {
+			logger.info("session-tracker", "TTL-evicted session finalization skipped", {
+				sessionKey: info.sessionKey,
+				reason: "synthesis-unavailable",
+			});
+			return "skipped";
+		}
 		try {
 			const stored = getSessionTranscriptContent(info.sessionKey, info.agentId);
 			if (stored && stored.trim().length >= MIN_FINALIZE_TRANSCRIPT_CHARS) {
@@ -107,10 +130,11 @@ export function createTtlEvictionHandler(deps: TtlFinalizerDeps): SessionEvictio
 						sessionKey: info.sessionKey,
 						contentHash,
 					});
+					summaryFinalized = true;
 				} else {
 					const summaryTranscript =
 						stored.length > MAX_TRANSCRIPT_CHARS ? `${stored.slice(0, MAX_TRANSCRIPT_CHARS)}\n[truncated]` : stored;
-					enqueueSummaryJob(deps.accessor, {
+					const jobId = enqueueSummaryJob(deps.accessor, {
 						harness: info.runtimePath,
 						transcript: summaryTranscript,
 						sessionKey: info.sessionKey,
@@ -119,7 +143,8 @@ export function createTtlEvictionHandler(deps: TtlFinalizerDeps): SessionEvictio
 						boundaryReason: "session_ttl_expired",
 						endedAt: new Date().toISOString(),
 					});
-					finalized = true;
+					storeSummaryJobContentHash(deps, jobId, contentHash);
+					summaryFinalized = true;
 					logger.info("session-tracker", "TTL-evicted session finalized", {
 						sessionKey: info.sessionKey,
 					});
@@ -135,7 +160,7 @@ export function createTtlEvictionHandler(deps: TtlFinalizerDeps): SessionEvictio
 		// 3. Classify the outcome: an eviction with no checkpoint and no
 		//    finalization (synthesis disabled / nothing to finalize) is
 		//    counted as unfinalized so diagnostics can surface it.
-		if (!finalized) {
+		if (!summaryFinalized) {
 			logger.info("session-tracker", "TTL-evicted session finalization skipped", {
 				sessionKey: info.sessionKey,
 			});

@@ -56,7 +56,7 @@ import { syncAgentWorkspaces } from "./identity-sync";
 import { type InferenceStatusSummary, getOrCreateInferenceRouter } from "./inference-router.js";
 import { closeInferenceProviderResolver, initInferenceProviderResolver } from "./llm";
 import { logger } from "./logger";
-import { DEFAULT_PIPELINE_V2, type ResolvedMemoryConfig, loadMemoryConfig } from "./memory-config";
+import { type ResolvedMemoryConfig, loadMemoryConfig } from "./memory-config";
 import { registerGlobalMiddleware } from "./middleware";
 import {
 	type NativeMemoryBridgeHandle,
@@ -1698,7 +1698,11 @@ async function main() {
 	setSessionEvictionHandler(
 		createTtlEvictionHandler({
 			accessor: getDbAccessor(),
-			maxCheckpointsPerSession: DEFAULT_PIPELINE_V2.continuity.maxCheckpointsPerSession,
+			maxCheckpointsPerSession: loadMemoryConfig(AGENTS_DIR).pipelineV2.continuity.maxCheckpointsPerSession,
+			isSummarySynthesisAvailable: () => {
+				const liveCfg = loadMemoryConfig(AGENTS_DIR);
+				return !liveCfg.pipelineV2.paused && providerRuntimeResolution.synthesis.effective !== null;
+			},
 		}),
 	);
 	logFdSnapshot("post-db-init");
