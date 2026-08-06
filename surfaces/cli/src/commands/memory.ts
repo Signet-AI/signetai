@@ -45,6 +45,7 @@ export function registerMemoryCommands(program: Command, deps: MemoryDeps): void
 		.option("--source-created-at <iso>", "Source-system creation time for this memory")
 		.option("--valid-from <iso>", "Start of validity window for this memory")
 		.option("--valid-until <iso>", "End of validity window for this memory")
+		.option("--review-after <iso>", "ISO timestamp when this temporal claim becomes due for review (issue #945)")
 		.option("--private", "Set visibility to private", false)
 		.action(async (content: string, options) => {
 			if (!(await deps.ensureDaemonForSecrets())) return;
@@ -65,6 +66,7 @@ export function registerMemoryCommands(program: Command, deps: MemoryDeps): void
 					sourceCreatedAt: options.sourceCreatedAt,
 					validFrom: options.validFrom,
 					validUntil: options.validUntil,
+					reviewAfter: options.reviewAfter,
 					visibility: options.private ? "private" : undefined,
 				}),
 			);

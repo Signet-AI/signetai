@@ -1127,6 +1127,8 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			validFrom?: string;
 			validUntil?: string;
 			sourceCreatedAt?: string;
+			/** ISO timestamp; due-for-review marker for temporal claims (#945). */
+			reviewAfter?: string;
 			scope?: string | null;
 			agentId?: string;
 			visibility?: "global" | "private" | "archived";
@@ -1179,6 +1181,10 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		}
 		const temporalInputs = collectExplicitTemporalInputs(body);
 		if (temporalInputs.error) return c.json({ error: temporalInputs.error }, 400);
+		const requestedReviewAfter = parseOptionalIsoTimestamp(body.reviewAfter);
+		if (body.reviewAfter !== undefined && !requestedReviewAfter) {
+			return c.json({ error: "reviewAfter must be a valid ISO timestamp" }, 400);
+		}
 		const scope = body.scope ?? null;
 		const rowProvenance = parseRememberRowProvenance(body as Record<string, unknown>);
 		const agentId = resolveAgentId({ agentId: body.agentId, sessionKey: c.req.header("x-signet-session-key") });
@@ -1382,6 +1388,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 							scope,
 							agentId,
 							visibility,
+							reviewAfter: requestedReviewAfter ?? undefined,
 							createdAt: now,
 						});
 					}
@@ -1557,6 +1564,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 					scope,
 					agentId,
 					visibility,
+					reviewAfter: requestedReviewAfter ?? undefined,
 					createdAt,
 				});
 				txInsertExplicitTemporalEdges({

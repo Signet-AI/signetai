@@ -45,6 +45,9 @@ export interface IngestEnvelope {
 	scope?: string | null;
 	agentId?: string;
 	visibility?: "global" | "private" | "archived";
+	/** ISO timestamp; when set, this memory is due for temporal review after
+	 *  this instant (issue #945). The dreaming pass queries it directly. */
+	reviewAfter?: string | null;
 	createdAt: string;
 }
 
@@ -265,8 +268,8 @@ export function txIngestEnvelope(db: WriteDb, mem: IngestEnvelope): string {
 		  importance, type, tags, pinned, is_deleted, extraction_status,
 		  embedding_model, extraction_model, created_at, updated_at, updated_by,
 		  source_type, source_id, source_path, runtime_path, idempotency_key, scope, agent_id, visibility,
-		  memory_kind, evidence_meta)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		  memory_kind, evidence_meta, review_after)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 	).run(
 		mem.id,
 		mem.content,
@@ -296,6 +299,7 @@ export function txIngestEnvelope(db: WriteDb, mem: IngestEnvelope): string {
 		mem.visibility ?? "global",
 		mem.memoryKind ?? null,
 		mem.evidenceMeta ?? null,
+		mem.reviewAfter ?? null,
 	);
 
 	// FTS sync handled by memories_ai AFTER INSERT trigger (migration 001)

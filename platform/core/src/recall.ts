@@ -162,6 +162,8 @@ export interface RememberRequestOptions {
 	readonly validFrom?: string;
 	readonly validUntil?: string;
 	readonly sourceCreatedAt?: string;
+	/** ISO timestamp; due-for-review marker for temporal claims (#945). */
+	readonly reviewAfter?: string;
 	readonly hints?: readonly string[];
 	readonly transcript?: string;
 	readonly structured?: unknown;
@@ -461,6 +463,7 @@ export function buildRememberRequestBody(
 		validFrom: options.validFrom,
 		validUntil: options.validUntil,
 		sourceCreatedAt: options.sourceCreatedAt,
+		reviewAfter: options.reviewAfter,
 		hints: options.hints,
 		transcript: options.transcript,
 		structured: normalizeStructuredMemoryPayload(options.structured),
