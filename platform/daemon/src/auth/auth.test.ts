@@ -471,9 +471,13 @@ describe("middleware - createAuthMiddleware", () => {
 		app.get("/", (c) => c.text("dashboard"));
 		app.get("/assets/app.js", (c) => c.text("asset"));
 		app.get("/api/auth/methods", (c) => c.json({ ok: true }));
+		// /api/mode is the unauthenticated environment probe the dashboard
+		// uses to detect a real daemon before any token exchange (issue #1001).
+		app.get("/api/mode", (c) => c.json({ mode: "team", requiresAuth: true }));
 		expect((await app.request(new Request("http://localhost/"))).status).toBe(200);
 		expect((await app.request(new Request("http://localhost/assets/app.js"))).status).toBe(200);
 		expect((await app.request(new Request("http://localhost/api/auth/methods"))).status).toBe(200);
+		expect((await app.request(new Request("http://localhost/api/mode"))).status).toBe(200);
 	});
 
 	test("team mode: invalid token returns 401", async () => {

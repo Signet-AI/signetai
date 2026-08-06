@@ -31,6 +31,7 @@ silently disappear from the API reference.
 | GET | `/api/readme` | platform/daemon/src/routes/changelog.ts |
 | GET | `/health/live` | platform/daemon/src/routes/health.ts |
 | GET | `/health/ready` | platform/daemon/src/routes/health.ts |
+| GET | `/api/mode` | platform/daemon/src/routes/health.ts |
 | POST | `/api/connectors/resync` | platform/daemon/src/routes/connectors-routes.ts |
 | GET | `/api/os/events` | platform/daemon/src/routes/event-bus.ts |
 | GET | `/api/os/events/stream` | platform/daemon/src/routes/event-bus.ts |

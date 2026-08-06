@@ -29,6 +29,10 @@ const LOOPBACK = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
 
 export function isAuthOpenPath(path: string): boolean {
 	if (path === "/health" || path === "/health/live" || path === "/health/ready") return true;
+	// Lightweight, unauthenticated environment probe so the dashboard can
+	// distinguish "talking to a real daemon" from the marketing site or
+	// cloud app without a token (issue #1001).
+	if (path === "/api/mode") return true;
 	if (path === "/api/auth/login" || path === "/api/auth/methods" || path === "/api/auth/whoami") return true;
 	if (path.startsWith("/api/auth/sso/") || path.startsWith("/api/auth/saml/")) return true;
 	return false;

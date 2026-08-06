@@ -376,3 +376,20 @@ Returns all runtime feature flags.
   "anotherFeature": false
 }
 ```
+
+### GET /api/mode
+
+Environment probe (issue #1001). Deliberately lightweight and **unauthenticated** — the dashboard uses it to distinguish "talking to a real daemon" (any hostname: localhost, Tailscale, `.local`, tunnel, LAN IP) from the marketing site or the cloud app. If this endpoint responds, there is a real daemon behind the URL.
+
+**Response**
+
+```json
+{
+  "mode": "local",
+  "requiresAuth": true
+}
+```
+
+- `mode`: the daemon's auth mode (`local`, `team`, or `hybrid`).
+- `requiresAuth`: always `true` — a reachable daemon always requires a token for data endpoints (Bearer auth only, no cookies, so CSRF is structurally impossible). The endpoint itself carries no data and exposes nothing beyond this shape.
+

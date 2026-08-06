@@ -196,3 +196,28 @@ describe("GET /health (back-compat)", () => {
 		expect(resources.peakPhysicalFootprint === null || typeof resources.peakPhysicalFootprint === "number").toBe(true);
 	});
 });
+
+describe("GET /api/mode", () => {
+	test("returns the auth mode and requiresAuth without any token (issue #1001)", async () => {
+		const app = makeApp();
+		const res = await app.request("/api/mode");
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as { mode: string; requiresAuth: boolean };
+		expect(typeof body.mode).toBe("string");
+		expect(body.mode.length).toBeGreaterThan(0);
+		expect(body.requiresAuth).toBe(true);
+	});
+
+	test("is reachable without an Authorization header (auth-open)", async () => {
+		const app = makeApp();
+		const res = await app.request("/api/mode", { headers: {} });
+		expect(res.status).toBe(200);
+	});
+
+	test("does not expose daemon internals beyond the documented shape", async () => {
+		const app = makeApp();
+		const res = await app.request("/api/mode");
+		const body = (await res.json()) as Record<string, unknown>;
+		expect(Object.keys(body).sort()).toEqual(["mode", "requiresAuth"]);
+	});
+});
