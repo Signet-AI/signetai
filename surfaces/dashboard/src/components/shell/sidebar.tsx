@@ -115,9 +115,14 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
 	const { view, setView } = useView();
 	const graphStats = useAsync(() => api.getKnowledgeStats(), { intervalMs: 30_000 }).data;
 	const secretsList = useAsync(() => api.getSecrets(), { intervalMs: 30_000 }).data;
+	const status = useAsync(() => api.getStatus(), { intervalMs: 30_000 }).data;
+	const agentCount = status?.agentId ? 1 : 0;
 	const groups = GROUPS.map((group) => ({
 		...group,
 		items: group.items.map((item) => {
+			if (item.view === "agents") {
+				return { ...item, badge: agentCount ? String(agentCount) : undefined };
+			}
 			if (item.view === "graph") {
 				return { ...item, badge: graphStats ? compactCount(graphStats.entityCount) : undefined };
 			}
@@ -140,7 +145,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
 					<SignetMark className="h-[22px] w-5 shrink-0" />
 					<span className="flex flex-1 flex-col gap-px overflow-hidden leading-[1.15]">
 						<span className="truncate text-sm leading-[1.15] font-semibold tracking-tight">Signet</span>
-						<span className="truncate font-mono text-[10.5px] text-muted-foreground">Personal · 3 agents</span>
+						<span className="truncate font-mono text-[10.5px] text-muted-foreground">Personal · {agentCount} agent{agentCount === 1 ? "" : "s"}</span>
 					</span>
 					<ChevronIcon className="size-[15px] shrink-0 text-muted-foreground" />
 				</button>
@@ -184,7 +189,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
 				</div>
 			</nav>
 
-			<AccountRow />
+			<AccountRow version={status?.version} />
 		</aside>
 	);
 }
@@ -269,20 +274,16 @@ function NavBadge({ children, active }: { children: React.ReactNode; active: boo
 	);
 }
 
-function AccountRow() {
+function AccountRow({ version }: { version?: string }) {
 	const { setOpen } = useSettings();
 	// Flush against the sidebar's bottom edge — no floating card chrome,
 	// just a hairline separator and the row itself.
 	return (
 		<div className="border-t border-sidebar-border px-3 py-2.5">
 			<div className="flex items-center gap-2.5">
-				<span className="relative grid size-6.5 shrink-0 place-items-center rounded-full bg-gradient-to-br from-[oklch(0.6_0.02_270)] to-[oklch(0.35_0.02_270)] text-[11px] font-semibold text-white">
-					NV
-					<span className="absolute -bottom-px -right-px size-2 rounded-full border-2 border-background bg-success [animation:health-pulse_2.4s_ease-in-out_infinite]" />
-				</span>
 				<span className="flex flex-1 flex-col gap-px leading-tight">
 					<span className="truncate text-[12.5px] font-medium text-sidebar-foreground">Signet</span>
-					<span className="truncate font-mono text-[10px] text-muted-foreground">daemon running</span>
+					<span className="truncate font-mono text-[10px] text-muted-foreground">{version ? `v${version}` : "daemon running"}</span>
 				</span>
 				<span className="flex shrink-0 items-center gap-px">
 					<ModeToggle />

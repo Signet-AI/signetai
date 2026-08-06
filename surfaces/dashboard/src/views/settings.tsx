@@ -17,7 +17,7 @@ import { Download, Loader2, Search, TriangleAlert, X } from "lucide-react";
 import { useSettings, type SettingsSection } from "@/lib/settings-context";
 import { api, type InferenceCatalog, type LogEntry } from "@/lib/api";
 import { useAsync } from "@/lib/use-async";
-import { useAgentConfig, type AgentConfigStore } from "@/lib/agent-config";
+import { isDreamingEnabled, useAgentConfig, type AgentConfigStore } from "@/lib/agent-config";
 import {
 	ACPX_AGENTS,
 	LOCAL_EXECUTORS,
@@ -679,6 +679,16 @@ function AdvToggle({
 	);
 }
 
+function DreamingToggle({ store }: { store: AgentConfigStore }) {
+	const dreamingEnabled = isDreamingEnabled(store.agent);
+
+	return (
+		<Row title="Dreaming" desc="Runs while the memory pipeline is not paused or frozen.">
+			<Switch checked={dreamingEnabled} disabled aria-label="Dreaming runtime status" />
+		</Row>
+	);
+}
+
 function AdvNum({
 	store,
 	path,
@@ -777,7 +787,7 @@ function AdvancedSection() {
 
 			<div className="sig-mcard flex flex-col gap-px">
 				<GroupLabel>Dreaming</GroupLabel>
-				<AdvToggle store={store} path={drm("enabled")} title="Dreaming" desc="Background ontology/maintenance passes over transcripts and memories. Off by default." />
+				<DreamingToggle store={store} />
 				<AdvNum store={store} path={drm("tokenThreshold")} title="Token threshold" desc="Accumulated transcript tokens that trigger a dreaming pass. Default 100,000." min={10000} max={1000000} step={10000} />
 				<AdvToggle store={store} path={drm("backfillOnFirstRun")} title="Backfill on first run" desc="Process existing transcripts the first time dreaming is enabled." />
 			</div>

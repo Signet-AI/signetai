@@ -51,6 +51,15 @@ function delPath(obj: YamlObject, path: readonly string[]): void {
 	if (path.length > 0) del(obj, 0);
 }
 
+export function isDreamingEnabled(agent: Record<string, unknown>): boolean {
+	const memory = agent.memory;
+	if (memory === null || typeof memory !== "object" || Array.isArray(memory)) return false;
+	const pipeline = (memory as Record<string, unknown>).pipelineV2;
+	if (pipeline === null || typeof pipeline !== "object" || Array.isArray(pipeline)) return true;
+	const gates = pipeline as Record<string, unknown>;
+	return gates.paused !== true && gates.mutationsFrozen !== true;
+}
+
 export interface AgentConfigStore {
 	ready: boolean;
 	dirty: boolean;

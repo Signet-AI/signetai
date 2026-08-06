@@ -6,6 +6,9 @@ All notable changes to Signet are documented here.
 
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
+### 2026-08-06
+- Bug fixes: reflect live agent and pipeline state.
+
 ### 2026-08-05
 - Features: redesign daily brief generation; disable stub nav tabs and secrets gate, rename account label; secrets vault, data-driven daily brief, and parity polish; replace Svelte dashboard with React + shadcn/ui; raise the pass timeout to 10 minutes; one universe pass over every agent scope, agentId threaded per operation; bounded agent surface — lean prompt, 11 tools, flag ops, search-on-demand.
 - Bug fixes: default requeue no longer starves summary jobs; reject cross-scope evidence; yield event loop in graph traversal; preserve full match counts; --max-batch is an aggregate cap across selected queues; bound dreaming evidence tools; estimate session-start token budgets; status and doctor surface dead-job backlog and unhealthy daemon health; dashboard no longer claims it started a healthy daemon; validate --tables enum list instead of silently dropping bad values; queue repair exits non-zero when the daemon request fails; reject invalid invocations; stop skill orphan loop; set safe Linux executable name; unblock compiled embedding runtime; alternate hygiene/content pass modes; unblock docker smoke build (dashboard tsconfig, native-bun 4.2.0 patch); persist disconnect config changes; register bundled OAuth flows; surface real daemon failures; aspect-first husk scan; assert native smoke on React dashboard assets; cap concurrent prompt-submit work with 503 backpressure; bound dreaming agent-scope discovery and halt after repeated failures; hoist entity-context hot paths; stop skill reconciler hot-loop; retire LLM enrichment, agent-scope entity names; synthesize a default policy when none is configured; never use the harness name as an agent scope; scan recent sources before narrowing — ingest steps list new evidence first; accept ids in get_evidence claim paths and derive citation kind/id from source_ref; accept redundant selectors that name the flagged entity in hygiene archives; stop surfacing the retired extraction pipeline in status output; let the agent cite and mint hygiene attention provenance.
@@ -33,11 +36,16 @@ Surface summary of the most recent release dates. See the release ledger below f
 ### 2026-07-28
 - Bug fixes: resolve wrapper entry after skipped postinstall; harden desktop runtime migration; migrate stale desktop runtimes; remove session synthesis routing.
 
-### 2026-07-27
-- Bug fixes: absolutize native smoke binary override path.
-- Docs: add plan-driven setup redesign draft spec.
-
 ## Release Ledger
+
+## [0.163.16] - 2026-08-06
+
+Release summary: 1 bug fix.
+Tag range: `v0.163.15..v0.163.16`.
+
+### Bug Fixes
+
+- **dashboard**: reflect live agent and pipeline state (#1125)
 
 ## [0.163.15] - 2026-08-05
 

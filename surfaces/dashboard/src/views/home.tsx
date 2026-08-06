@@ -24,6 +24,9 @@ export function HomeView() {
 
 	const kpis: KpiData[] = useMemo(() => {
 		const totalMemories = timeline?.totalMemories ?? stats?.entityCount;
+		// The dashboard is scoped to the configured agent returned by the daemon.
+		// Do not present the old mockup's three-agent fixture as live state.
+		const agentCount = status.data?.agentId ? 1 : 0;
 		return [
 			{
 				label: "Memories",
@@ -33,7 +36,7 @@ export function HomeView() {
 				live: true,
 			},
 			{ label: "Ontology nodes", value: stats?.entityCount?.toLocaleString() ?? "—", sub: "indexed", live: true },
-			{ label: "Agents", value: "3", sub: "2 of 3 active", ring: { value: 2 / 3, sub: "" } },
+			{ label: "Agents", value: String(agentCount), sub: `${agentCount} of ${agentCount} active`, ring: { value: agentCount > 0 ? 1 : 0, sub: "" } },
 			{
 				label: "Sources",
 				value: sources ? String(sources.length) : "—",
@@ -41,7 +44,7 @@ export function HomeView() {
 				ring: { value: sources ? sources.filter((s) => s.enabled).length / Math.max(1, sources.length) : 0, sub: "" },
 			},
 		];
-	}, [timeline, stats?.entityCount, sources]);
+	}, [status.data?.agentId, timeline, stats?.entityCount, sources]);
 
 	// The reference uses a full 36×7 contribution grid. Older daemons omit
 	// dailyBuckets, so retain the visual shape until they are upgraded.
