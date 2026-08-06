@@ -202,3 +202,23 @@ names: `queue`, `storage`, `index`, `provider`, `mutation`, `connector`.
 into the mutation domain for memory integrity monitoring).
 
 `GET /api/analytics/logs` — alias for structured log access.
+
+
+Release Download Stats
+---
+
+GitHub tracks download counts per release asset. Unlike npm download totals —
+which include CI pipelines, `npx` one-offs, and version-update churn — each
+release asset download is a real binary or connector-tarball fetch, so it is
+the cleaner install signal (issue #1026 Phase 3).
+
+```sh
+bun scripts/release-download-stats.ts              # markdown table
+bun scripts/release-download-stats.ts --json       # NDJSON for dashboards
+bun scripts/release-download-stats.ts --releases 5 # last N releases
+```
+
+The script queries the public GitHub REST API for `Signet-AI/signetai`
+releases (no auth required; unauthenticated rate limit of 60 req/hr is
+plenty) and aggregates `download_count` per release and per asset, sorted
+by downloads descending. Output includes the total across the window.
