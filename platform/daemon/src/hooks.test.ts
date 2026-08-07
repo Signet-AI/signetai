@@ -22,6 +22,7 @@ const hooks = await import("./hooks");
 const lineage = await import("./memory-lineage");
 const transcriptAudit = await import("./transcript-audit");
 const { deriveSessionEndFallbackId } = await import("./session-end-recovery");
+const { upsertSessionTranscript } = await import("./session-transcripts");
 const { buildSignetSystemPrompt } = await import("./session-start-format");
 const { resetTokenizerStats, tokenizerStats } = await import("./pipeline/tokenizer");
 const {
@@ -1776,9 +1777,10 @@ describe("handleSessionEnd", () => {
 	test.serial("preserves an imported session's capture time across canonical episodic records", async () => {
 		createMemoryDb([]);
 		const capturedAt = "2023-05-20T10:20:00.000Z";
-		const transcript = "User: retain the original session date for temporal reasoning.\nAssistant: the transcript remains immutable evidence.\n".repeat(
-			8,
-		);
+		const transcript =
+			"User: retain the original session date for temporal reasoning.\nAssistant: the transcript remains immutable evidence.\n".repeat(
+				8,
+			);
 
 		const result = await handleSessionEnd({
 			harness: "memorybench",
@@ -1797,15 +1799,13 @@ describe("handleSessionEnd", () => {
 		try {
 			const live = db
 				.prepare("SELECT created_at, updated_at FROM session_transcripts WHERE agent_id = ? AND session_key = ?")
-				.get("memorybench", "memorybench:case-1:session-1") as
-				| { created_at: string; updated_at: string }
-				| undefined;
+				.get("memorybench", "memorybench:case-1:session-1") as { created_at: string; updated_at: string } | undefined;
 			const artifact = db
-				.prepare(
-					"SELECT captured_at FROM memory_artifacts WHERE agent_id = ? AND source_kind = 'transcript' LIMIT 1",
-				)
+				.prepare("SELECT captured_at FROM memory_artifacts WHERE agent_id = ? AND source_kind = 'transcript' LIMIT 1")
 				.get("memorybench") as { captured_at: string } | undefined;
-			const memoryCount = db.prepare("SELECT COUNT(*) AS count FROM memories WHERE agent_id = ?").get("memorybench") as {
+			const memoryCount = db
+				.prepare("SELECT COUNT(*) AS count FROM memories WHERE agent_id = ?")
+				.get("memorybench") as {
 				count: number;
 			};
 
@@ -3001,6 +3001,86 @@ describe("handleSessionStart multi-agent identity", () => {
 
 	afterEach(() => {
 		closeDbAccessor();
+	});
+
+	describe("stale session-end sweep (#1172)", () => {
+		test.serial("fires the deferred session-end for stale sessions and dedupes already-ended ones", async () => {
+			const now = Date.now();
+			const staleKey = `sweep-stale-${now}`;
+			const freshKey = `sweep-fresh-${now}`;
+			const doneKey = `sweep-done-${now}`;
+			const staleContent = `User: ${"s".repeat(300)}\nAssistant: ${"t".repeat(300)}`;
+			const freshContent = `User: ${"f".repeat(300)}\nAssistant: ${"g".repeat(300)}`;
+			const doneContent = `User: ${"d".repeat(300)}\nAssistant: ${"e".repeat(300)}`;
+
+			// A desktop chat abandoned 3 days ago: live-retained, never signaled.
+			upsertSessionTranscript(
+				staleKey,
+				staleContent,
+				"hermes-agent",
+				null,
+				"default",
+				new Date(now - 3 * 24 * 60 * 60 * 1000).toISOString(),
+			);
+			// A live chat: last activity now — must not be swept.
+			upsertSessionTranscript(freshKey, freshContent, "hermes-agent", null, "default", new Date(now).toISOString());
+			// A stale chat whose content already has a summary job: the session-end
+			// already ran — must be skipped, never re-fired.
+			upsertSessionTranscript(
+				doneKey,
+				doneContent,
+				"hermes-agent",
+				null,
+				"default",
+				new Date(now - 3 * 24 * 60 * 60 * 1000).toISOString(),
+			);
+			const doneHash = createHash("sha256").update(doneContent).digest("hex");
+			getDbAccessor().withWriteTx((db) => {
+				db.prepare(
+					`INSERT INTO summary_jobs (id, session_key, harness, project, transcript, status,
+					attempts, max_attempts, created_at, agent_id, content_hash, trigger)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				).run(
+					`sweep-done-job-${now}`,
+					doneKey,
+					"hermes-agent",
+					null,
+					doneContent,
+					"pending",
+					0,
+					3,
+					new Date().toISOString(),
+					"default",
+					doneHash,
+					"session_end",
+				);
+			});
+
+			const result = await hooks.sweepStaleSessions({ staleOlderThanMs: 24 * 60 * 60 * 1000 });
+
+			// stale closed, done skipped (already summarized), fresh not matched.
+			expect(result.closed).toBe(1);
+			expect(result.skipped).toBe(1);
+			expect(result.totalMatching).toBe(2);
+
+			// The stale session got a real session-end: a summary job was queued
+			// for its content; the fresh session got none.
+			const staleJobs = getDbAccessor().withReadDb((db) =>
+				db.prepare("SELECT COUNT(*) AS n FROM summary_jobs WHERE session_key = ?").get(staleKey),
+			) as { n: number };
+			const freshJobs = getDbAccessor().withReadDb((db) =>
+				db.prepare("SELECT COUNT(*) AS n FROM summary_jobs WHERE session_key = ?").get(freshKey),
+			) as { n: number };
+			expect(staleJobs.n).toBe(1);
+			expect(freshJobs.n).toBe(0);
+		});
+
+		test.serial("does not fire when there is nothing stale", async () => {
+			const result = await hooks.sweepStaleSessions({ staleOlderThanMs: 24 * 60 * 60 * 1000 });
+			expect(result.closed).toBe(0);
+			expect(result.skipped).toBe(0);
+			expect(result.totalMatching).toBe(0);
+		});
 	});
 
 	afterAll(() => {

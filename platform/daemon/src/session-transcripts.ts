@@ -536,6 +536,58 @@ export function getSessionTranscriptContent(sessionKey: string, agentId: string)
 	}
 }
 
+export interface StaleLiveSession {
+	sessionKey: string;
+	agentId: string;
+	harness: string | null;
+	project: string | null;
+	content: string;
+	lastActivityAt: string;
+}
+
+/**
+ * Live-retained sessions whose last activity is older than `staleOlderThanMs`
+ * (#1172). Desktop/CLI chats that end without an explicit session-end signal
+ * (closed windows, abandoned sessions) stay in `session_transcripts` forever;
+ * this is the daemon-side fallback that surfaces them so the sweep can fire
+ * the deferred session-end.
+ */
+export function findStaleLiveSessions(staleOlderThanMs: number, limit = 50): StaleLiveSession[] {
+	if (staleOlderThanMs <= 0 || !tableExists("session_transcripts")) return [];
+	const cutoff = new Date(Date.now() - staleOlderThanMs).toISOString();
+	const lastActivity = hasUpdatedAt() ? "COALESCE(updated_at, created_at)" : "created_at";
+	try {
+		return getDbAccessor().withReadDb((db) => {
+			const rows = db
+				.prepare(
+					`SELECT session_key, agent_id, harness, project, content, ${lastActivity} AS last_activity
+					 FROM session_transcripts
+					 WHERE ${lastActivity} < ?
+					 ORDER BY ${lastActivity} ASC
+					 LIMIT ?`,
+				)
+				.all(cutoff, limit) as Array<{
+				session_key: string;
+				agent_id: string;
+				harness: string | null;
+				project: string | null;
+				content: string;
+				last_activity: string;
+			}>;
+			return rows.map((row) => ({
+				sessionKey: row.session_key,
+				agentId: row.agent_id,
+				harness: row.harness,
+				project: row.project,
+				content: row.content,
+				lastActivityAt: row.last_activity,
+			}));
+		});
+	} catch {
+		return [];
+	}
+}
+
 export function searchTranscriptFallback(params: {
 	readonly query: string;
 	readonly agentId: string;

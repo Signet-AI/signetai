@@ -126,6 +126,7 @@ import {
 import { getExpiryWarning } from "./session-tracker";
 import {
 	ensureCanonicalTranscriptHistory,
+	findStaleLiveSessions,
 	getSessionTranscriptContent,
 	upsertSessionTranscript,
 } from "./session-transcripts";
@@ -2008,6 +2009,57 @@ export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionE
 		jobId,
 		...(transcriptCaptureJobId ? { transcriptCaptureJobId } : {}),
 	};
+}
+
+/**
+ * Daemon-side fallback for harnesses that never signal session-end (#1172).
+ * Desktop chats that are closed or abandoned without an explicit
+ * on_session_end stay in live retention forever (completed: false semantics),
+ * so the dreaming content runbook defers their transcripts indefinitely.
+ * Sweep the stale sessions and fire the deferred session-end with the stored
+ * transcript snapshot, so summaries land and content passes stop deferring.
+ */
+export async function sweepStaleSessions(options: {
+	staleOlderThanMs: number;
+	limit?: number;
+}): Promise<{ closed: number; skipped: number; totalMatching: number }> {
+	const { staleOlderThanMs, limit = 50 } = options;
+	const stale = findStaleLiveSessions(staleOlderThanMs, limit);
+	let closed = 0;
+	let skipped = 0;
+	for (const session of stale) {
+		// Dedup: a summary job already exists for this exact content, so the
+		// session-end already ran (or is running) for it — never re-fire.
+		const contentHash = createHash("sha256").update(session.content).digest("hex");
+		if (session.harness && summaryJobWithContentHashExists(session.agentId, session.sessionKey, contentHash)) {
+			skipped++;
+			continue;
+		}
+		try {
+			await handleSessionEnd({
+				harness: session.harness ?? "hermes-agent",
+				sessionKey: session.sessionKey,
+				agentId: session.agentId,
+				cwd: session.project ?? undefined,
+				transcript: "",
+				reason: "stale-session-sweep",
+			});
+			closed++;
+		} catch (error) {
+			logger.warn("hooks", "Stale session-end sweep failed", {
+				error: error instanceof Error ? error.message : String(error),
+				sessionKey: session.sessionKey,
+			});
+		}
+	}
+	if (closed > 0 || skipped > 0) {
+		logger.info("hooks", "Stale session-end sweep", {
+			closed,
+			skipped,
+			totalMatching: stale.length,
+		});
+	}
+	return { closed, skipped, totalMatching: stale.length };
 }
 
 async function deferSessionEndWork(params: {

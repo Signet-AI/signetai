@@ -149,6 +149,7 @@ import { type TranscriptCaptureWorkerHandle, startTranscriptCaptureWorker } from
 import {
 	getSynthesisWorker as getSynthesisRenderWorker,
 	setSynthesisWorker as setSynthesisRenderWorker,
+	sweepStaleSessions,
 } from "./hooks";
 import { mountMcpRoute } from "./mcp";
 import { mountAppTrayRoutes } from "./routes/app-tray.js";
@@ -300,8 +301,15 @@ let nativeMemoryBridge: NativeMemoryBridgeHandle | null = null;
 const ingestedMemoryFiles = new Map<string, string>();
 const LEGACY_MARKDOWN_IMPORTER_VERSION = 1;
 const MEMORY_IMPORT_POLL_MS = 30_000;
+
+// #1172: harnesses that never signal session-end (closed/abandoned desktop
+// chats) leave live-retained transcripts unclosed; sweep the stale sessions
+// and fire the deferred session-end on a timer.
+const STALE_SESSION_SWEEP_INTERVAL_MS = 15 * 60 * 1000;
+const STALE_SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 const MEMORY_IMPORT_FILE_DELAY_MS = 50;
 let memoryImportTimer: ReturnType<typeof setInterval> | null = null;
+let staleSessionSweepTimer: ReturnType<typeof setInterval> | null = null;
 let memoryImportInFlight = false;
 
 let syncTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1028,6 +1036,28 @@ function stopMemoryImportPoller(): void {
 	memoryImportInFlight = false;
 }
 
+function startStaleSessionSweeper(): void {
+	if (staleSessionSweepTimer !== null) return;
+	staleSessionSweepTimer = setInterval(() => {
+		sweepStaleSessions({ staleOlderThanMs: STALE_SESSION_TTL_MS }).catch((e) => {
+			logger.error("daemon", "Stale session sweep failed", undefined, {
+				message: e instanceof Error ? e.message : String(e),
+			});
+		});
+	}, STALE_SESSION_SWEEP_INTERVAL_MS);
+	staleSessionSweepTimer.unref?.();
+	logger.debug("watcher", "Started stale session sweeper", {
+		intervalMs: STALE_SESSION_SWEEP_INTERVAL_MS,
+		ttlMs: STALE_SESSION_TTL_MS,
+	});
+}
+
+function stopStaleSessionSweeper(): void {
+	if (staleSessionSweepTimer === null) return;
+	clearInterval(staleSessionSweepTimer);
+	staleSessionSweepTimer = null;
+}
+
 function startFileWatcher() {
 	// Do NOT watch the memory/ directory directly — Bun's fs.watch()
 	// opens one O_RDONLY FD per file in a watched directory and never
@@ -1564,6 +1594,7 @@ async function cleanup() {
 		syncTimer = null;
 	}
 	stopMemoryImportPoller();
+	stopStaleSessionSweeper();
 	if (nativeMemoryBridge) {
 		await nativeMemoryBridge.close();
 		nativeMemoryBridge = null;
@@ -2106,6 +2137,7 @@ async function main() {
 			logger.error("daemon", "Failed to import existing memory files", undefined, errDetails);
 		});
 		startMemoryImportPoller();
+		startStaleSessionSweeper();
 
 		if (!nativeMemoryBridge) {
 			const startupSourceJobs = new Map<string, string>();
