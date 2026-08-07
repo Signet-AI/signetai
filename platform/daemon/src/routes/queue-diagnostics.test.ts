@@ -250,6 +250,152 @@ describe("repair action integration via the new dispatch path", () => {
 		}
 	});
 
+	/**
+	 * A memory backlog that alone exceeds the default maxBatch (50) plus a small
+	 * dead summary backlog — the #1052 starvation shape: the memory-first
+	 * selection used to give summary a zero budget and the dry-run total hid the
+	 * summary backlog entirely.
+	 */
+	function seedStarvationFixture(db: Database): void {
+		const oldIso = new Date(Date.now() - 45 * 24 * 60 * 60 * 1000).toISOString();
+		for (let i = 0; i < 60; i++) {
+			db.prepare(
+				`INSERT INTO memory_jobs (id, memory_id, job_type, status, attempts, max_attempts, created_at, updated_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			).run(`starv-mem-${i}`, `starv-memory-${i}`, "document_ingest", "dead", 3, 3, oldIso, oldIso);
+		}
+		for (const [id, session] of [
+			["starv-sum-1", "session-S1"],
+			["starv-sum-2", "session-S2"],
+		] as const) {
+			db.prepare(
+				`INSERT INTO summary_jobs (id, session_key, harness, project, transcript, status,
+				attempts, max_attempts, created_at, error)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			).run(id, session, "codex", "demo", "transcript", "dead", 3, 3, oldIso, id === "starv-sum-1" ? "boom" : null);
+		}
+	}
+
+	it("default requeue dry-run reports both table counts and previews both kinds (#1052)", () => {
+		const env = setup();
+		try {
+			seedStarvationFixture(env.db);
+			const result = requeueDeadJobs(
+				env.accessor,
+				{
+					autonomous: { enabled: true, frozen: false },
+					repair: { requeueCooldownMs: 0, requeueHourlyBudget: 100 },
+				} as unknown as Parameters<typeof requeueDeadJobs>[1],
+				{ reason: "test", actor: "test", actorType: "operator" },
+				createRateLimiter(),
+				{ dryRun: true },
+			);
+			// 61 dead memory (1 base + 60 seeded) + 4 dead summary (2 base + 2
+			// seeded): the total must include BOTH backlogs, and the preview
+			// must show a row from each table.
+			expect(result.totalMatching).toBe(65);
+			expect((result.preview ?? []).some((id) => id.startsWith("starv-mem-"))).toBe(true);
+			expect((result.preview ?? []).some((id) => id.startsWith("starv-sum-"))).toBe(true);
+		} finally {
+			env.db.close();
+		}
+	});
+
+	it("default requeue apply touches at least one job per table and never exceeds maxBatch (#1052)", () => {
+		const env = setup();
+		try {
+			seedStarvationFixture(env.db);
+			const result = requeueDeadJobs(
+				env.accessor,
+				{
+					autonomous: { enabled: true, frozen: false },
+					repair: { requeueCooldownMs: 0, requeueHourlyBudget: 100 },
+				} as unknown as Parameters<typeof requeueDeadJobs>[1],
+				{ reason: "test", actor: "test", actorType: "operator" },
+				createRateLimiter(),
+				{},
+			);
+			expect(result.affected).toBeGreaterThanOrEqual(2);
+			expect(result.affected).toBeLessThanOrEqual(50);
+			const requeuedMemory = (
+				env.db
+					.prepare("SELECT COUNT(*) AS n FROM memory_jobs WHERE status = 'pending' AND id LIKE 'starv-mem-%'")
+					.get() as {
+					n: number;
+				}
+			).n;
+			const requeuedSummary = (
+				env.db
+					.prepare("SELECT COUNT(*) AS n FROM summary_jobs WHERE status = 'pending' AND id LIKE 'starv-sum-%'")
+					.get() as {
+					n: number;
+				}
+			).n;
+			// The summary backlog is no longer starved behind the memory backlog.
+			expect(requeuedMemory).toBeGreaterThanOrEqual(1);
+			expect(requeuedSummary).toBeGreaterThanOrEqual(1);
+		} finally {
+			env.db.close();
+		}
+	});
+
+	it("--tables memory and --tables summary keep exclusive single-queue selections (#1052)", () => {
+		const env = setup();
+		try {
+			seedStarvationFixture(env.db);
+			const mem = requeueDeadJobs(
+				env.accessor,
+				{
+					autonomous: { enabled: true, frozen: false },
+					repair: { requeueCooldownMs: 0, requeueHourlyBudget: 100 },
+				} as unknown as Parameters<typeof requeueDeadJobs>[1],
+				{ reason: "test", actor: "test", actorType: "operator" },
+				createRateLimiter(),
+				{ dryRun: true, tables: ["memory"] },
+			);
+			expect(mem.totalMatching).toBe(61);
+			expect((mem.preview ?? []).some((id) => id.startsWith("starv-mem-"))).toBe(true);
+
+			const sum = requeueDeadJobs(
+				env.accessor,
+				{
+					autonomous: { enabled: true, frozen: false },
+					repair: { requeueCooldownMs: 0, requeueHourlyBudget: 100 },
+				} as unknown as Parameters<typeof requeueDeadJobs>[1],
+				{ reason: "test", actor: "test", actorType: "operator" },
+				createRateLimiter(),
+				{ dryRun: true, tables: ["summary"] },
+			);
+			expect(sum.totalMatching).toBe(4);
+			expect((sum.preview ?? []).some((id) => id.startsWith("starv-sum-"))).toBe(true);
+		} finally {
+			env.db.close();
+		}
+	});
+
+	it("a zero selection budget does not zero a table's matching count (#1052)", () => {
+		const env = setup();
+		try {
+			seedStarvationFixture(env.db);
+			// maxBatch 1 is below the two reserved slots, so summary gets a zero
+			// selection budget — but its match count must still be reported in
+			// the dry-run total.
+			const result = requeueDeadJobs(
+				env.accessor,
+				{
+					autonomous: { enabled: true, frozen: false },
+					repair: { requeueCooldownMs: 0, requeueHourlyBudget: 100 },
+				} as unknown as Parameters<typeof requeueDeadJobs>[1],
+				{ reason: "test", actor: "test", actorType: "operator" },
+				createRateLimiter(),
+				{ dryRun: true, maxBatch: 1 },
+			);
+			expect(result.totalMatching).toBe(65);
+		} finally {
+			env.db.close();
+		}
+	});
+
 	it("cancelObsoleteJobs apply moves dead summary rows to cancelled and writes audit row", () => {
 		const env = setup();
 		try {
