@@ -2030,8 +2030,10 @@ export async function sweepStaleSessions(options: {
 	for (const session of stale) {
 		// Dedup: a summary job already exists for this exact content, so the
 		// session-end already ran (or is running) for it — never re-fire.
+		// The guard is unconditional: a null harness must not turn the dedup
+		// off, or the session would re-fire on every sweep.
 		const contentHash = createHash("sha256").update(session.content).digest("hex");
-		if (session.harness && summaryJobWithContentHashExists(session.agentId, session.sessionKey, contentHash)) {
+		if (summaryJobWithContentHashExists(session.agentId, session.sessionKey, contentHash)) {
 			skipped++;
 			continue;
 		}
