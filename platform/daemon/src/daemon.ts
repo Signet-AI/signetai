@@ -136,7 +136,12 @@ import {
 } from "./source-index-progress";
 import { runStartupRecovery } from "./startup-recovery";
 import { reportStartupGrace } from "./system-pressure";
-import { type TelemetryCollector, createTelemetryCollector, setActiveTelemetry } from "./telemetry";
+import {
+	type TelemetryCollector,
+	createTelemetryCollector,
+	defaultTelemetryLogPath,
+	setActiveTelemetry,
+} from "./telemetry";
 import { type TranscriptCaptureWorkerHandle, startTranscriptCaptureWorker } from "./transcript-capture-worker";
 
 import {
@@ -1720,6 +1725,9 @@ process.on("SIGTERM", () => {
 
 process.on("uncaughtException", (err) => {
 	logger.error("daemon", "Uncaught exception", err);
+	// Lifecycle event (issue #1026 Phase 2): error type only — never the
+	// stack or message content.
+	telemetryRef?.record("error.occurred", { type: err?.name ?? "Error" });
 	requestShutdown("error:uncaughtException", 1, err);
 });
 
@@ -1730,6 +1738,11 @@ process.on("unhandledRejection", (reason) => {
 		reason instanceof Error ? reason : undefined,
 		reason instanceof Error ? undefined : { reason: String(reason) },
 	);
+	// Lifecycle event (issue #1026 Phase 2): error type only — never the
+	// stack or message content.
+	telemetryRef?.record("error.occurred", {
+		type: reason instanceof Error ? reason.name : "UnhandledRejection",
+	});
 	requestShutdown("error:unhandledRejection", 1, reason);
 });
 
@@ -1914,11 +1927,20 @@ async function main() {
 			...memoryCfg.pipelineV2.telemetry,
 			posthogApiKey,
 		};
-		telemetryCollector = createTelemetryCollector(getDbAccessor(), resolvedTelemetryCfg, CURRENT_VERSION);
+		telemetryCollector = createTelemetryCollector(getDbAccessor(), resolvedTelemetryCfg, CURRENT_VERSION, {
+			telemetryLogPath: defaultTelemetryLogPath(AGENTS_DIR),
+		});
 		telemetryCollector.start();
 		telemetryRef = telemetryCollector;
 		setTelemetryRef(telemetryCollector);
 		setActiveTelemetry(telemetryCollector);
+
+		// Lifecycle event (issue #1026 Phase 2): version + platform only.
+		telemetryCollector.record("daemon.started", {
+			version: CURRENT_VERSION,
+			platform: process.platform,
+			uptimeMs: 0,
+		});
 
 		const daemonStartTime = Date.now();
 		heartbeatTimer = setInterval(

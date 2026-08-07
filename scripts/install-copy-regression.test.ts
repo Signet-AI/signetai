@@ -101,6 +101,32 @@ describe("install copy", () => {
 		expect(installer).not.toContain("better-sqlite3");
 	});
 
+	test("keeps the postinstall telemetry ping anonymous and opt-out", () => {
+		const installer = read("dist/signetai/scripts/install-native.js");
+
+		// Phase-1 install counter (issue #1026): a single anonymous PostHog
+		// event with version+platform only. No identifier, no payload beyond
+		// the event properties, and never a hard failure path. The project
+		// API key is a public ingest key by PostHog design.
+		expect(installer).toContain("us.i.posthog.com");
+		expect(installer).toContain("/batch/");
+		expect(installer).toContain('event: "install.ping"');
+		expect(installer).toContain("randomUUID");
+		expect(installer).toContain("phc_");
+
+		// Homebrew-style opt-out: one env var disables the ping entirely.
+		expect(installer).toContain("SIGNET_TELEMETRY_OPTOUT");
+
+		// The ping must never block or fail the install: it is fire-and-forget
+		// with a bounded timeout, and errors are swallowed.
+		expect(installer).toContain("AbortSignal.timeout");
+		expect(installer).toContain(".catch(() => {})");
+
+		// Workspace installs (dev) must not ping.
+		expect(installer).toContain("isWorkspacePackage()");
+		expect(installer).toContain("SIGNET_SKIP_NATIVE_POSTINSTALL");
+	});
+
 	test("curl installer downloads and verifies the connector-asset tarball", () => {
 		const installer = read("web/marketing/public/install.sh");
 

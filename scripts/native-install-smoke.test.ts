@@ -310,6 +310,7 @@ describe("native install smoke", () => {
 		const result = await runCommand("node", [join(packageDir, "scripts", "install-native.js")], {
 			...process.env,
 			SIGNET_DOWNLOAD_BASE: release.downloadBase,
+			SIGNET_TELEMETRY_OPTOUT: "1",
 		});
 
 		expect(result.status).toBe(0);
@@ -414,6 +415,7 @@ describe("native install smoke", () => {
 		const result = await runCommand("node", [join(packageDir, "scripts", "install-native.js")], {
 			...process.env,
 			SIGNET_DOWNLOAD_BASE: `http://127.0.0.1:${address.port}/download`,
+			SIGNET_TELEMETRY_OPTOUT: "1",
 		});
 
 		expect(result.status).not.toBe(0);
@@ -557,7 +559,10 @@ describe("native install smoke", () => {
 		expect(directWrapper.stdout).toContain(`signet wrapper ${packageDir}`);
 		expect(directWrapper.stdout).toContain("fake native signet --version");
 
-		const install = await runCommand("node", [join(packageDir, "scripts", "install-native.js")], process.env);
+		const install = await runCommand("node", [join(packageDir, "scripts", "install-native.js")], {
+			...process.env,
+			SIGNET_TELEMETRY_OPTOUT: "1",
+		});
 
 		expect(install.status).toBe(0);
 		expect(install.stdout).toContain(`Linked Signet native binary for ${platform}`);
