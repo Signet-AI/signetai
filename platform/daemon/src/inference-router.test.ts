@@ -150,6 +150,81 @@ describe("InferenceRouter legacy API credentials", () => {
 		}
 	});
 
+	it("enforces the agent-session deadline when the agent loop never returns (#1168)", async () => {
+		// Regression for #1168: the router set an abort timer for the agent
+		// session but still awaited session.prompt() unconditionally — if the
+		// abort did not settle the prompt, runAgent (and the Dreaming pass)
+		// hung past every deadline. The prompt must be raced against the
+		// deadline so runAgent returns and disposes the session either way.
+		const dir = mkdtempSync(join(tmpdir(), "signet-router-agent-deadline-"));
+		const bin = join(dir, "fake-sleeping-agent.sh");
+		writeFileSync(
+			bin,
+			`#!/usr/bin/env bash
+printf '%s\\n' "$@" > ${JSON.stringify(join(dir, "args.txt"))}
+sleep 60
+printf 'never reached\\n'
+`,
+		);
+		chmodSync(bin, 0o755);
+		writeFileSync(
+			join(dir, "agent.yaml"),
+			`inference:
+  defaultPolicy: dreaming
+  targets:
+    dreaming:
+      executor: acpx
+      acpx:
+        agent: codex
+        bin: ${bin}
+        permissions: deny-all
+        hooks: disabled
+        terminal: false
+      models:
+        default:
+          model: gpt-5.4-mini
+  policies:
+    dreaming:
+      mode: strict
+      defaultTargets:
+        - dreaming/default
+  workloads:
+    memoryExtraction:
+      policy: dreaming
+`,
+		);
+		try {
+			const router = getOrCreateInferenceRouter(dir);
+			const startedAt = Date.now();
+			const result = await router.runAgent(
+				{ operation: "memory_extraction", promptPreview: "consolidate" },
+				"Use the supplied evidence and daemon tools.",
+				[],
+				{
+					timeoutMs: 200,
+					acpxMcp: {
+						agentId: "agent-deadline",
+						passId: "pass-deadline",
+						daemonUrl: "http://127.0.0.1:3850",
+						authorizationToken: "scoped-agent-token",
+					},
+				},
+			);
+			const elapsed = Date.now() - startedAt;
+			// The deadline is enforced: runAgent returned (no hang), failed the
+			// attempt with a timeout/deadline message, and finished in bounded
+			// time (the ACPX transport reports "timeout after Nms"; the
+			// pi-agent session path reports "exceeded the Nms deadline").
+			expect(elapsed).toBeLessThan(5_000);
+			expect(result.ok).toBe(false);
+			if (!result.ok) {
+				expect(JSON.stringify(result.error)).toMatch(/timeout|deadline/i);
+			}
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	it("isolates a rejected OAuth refresh from healthy fallback targets", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "signet-router-oauth-refresh-"));
 		try {

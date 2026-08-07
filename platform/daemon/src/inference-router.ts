@@ -854,13 +854,25 @@ export class InferenceRouter {
 						return { ok: true, value: { decision: decision.value, attempts } };
 					}
 					const session = await provider.createAgentSession(tools, { maxTokens: opts?.maxTokens });
+					const deadlineMs = opts?.timeoutMs ?? provider.agentSessionTimeoutMs;
 					let timer: ReturnType<typeof setTimeout> | null = null;
-					if ((opts?.timeoutMs ?? provider.agentSessionTimeoutMs) > 0) {
-						timer = setTimeout(() => void session.abort(), opts?.timeoutMs ?? provider.agentSessionTimeoutMs);
-					}
+					// The deadline must stop the router from waiting on a session
+					// whose agent loop ignores (or never sees) the abort signal:
+					// race the prompt against the deadline so runAgent returns and
+					// disposes the session either way. Without the race, a stuck
+					// loop hangs runAgent — and the Dreaming pass with it — past
+					// every deadline (#1168).
+					const timedOut = new Promise<never>((_, reject) => {
+						if (deadlineMs > 0) {
+							timer = setTimeout(() => {
+								void session.abort();
+								reject(new Error(`Agent session exceeded the ${deadlineMs}ms deadline`));
+							}, deadlineMs);
+						}
+					});
 					let sessionUsage: LlmUsage | null = null;
 					try {
-						await session.prompt(prompt);
+						await Promise.race([session.prompt(prompt), timedOut]);
 						const failure = session.getFailureMessage();
 						if (failure) throw new Error(failure);
 						// Read the session aggregate before dispose() tears the
