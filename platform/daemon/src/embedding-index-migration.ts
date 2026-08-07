@@ -9,9 +9,17 @@ import {
 } from "./embedding-index-state";
 import { beginEmbeddingIndexBuild, failEmbeddingIndexBuild } from "./embedding-index-state";
 import type { EmbeddingRole } from "./embedding-profile";
+import { logger } from "./logger";
 import type { EmbeddingConfig } from "./memory-config";
 
 const STAGING_VECTOR_TABLE = "vec_embeddings_staging";
+
+// #1160: after this many consecutive provider-unavailable checks the build is
+// aborted (state='failed') instead of retrying forever; the daemon restarts
+// the build on the next config change / daemon restart.
+const MAX_CONSECUTIVE_PROVIDER_FAILURES = 6;
+// Backoff grows pollMs * 2^n between failed checks, capped at this delay.
+const MAX_PROVIDER_BACKOFF_MS = 60_000;
 
 interface ActiveEmbeddingRow {
 	readonly content_hash: string;
@@ -311,6 +319,11 @@ export function startEmbeddingIndexMigration(input: {
 	let staged = 0;
 	let failed = 0;
 	let coverage: EmbeddingMigrationCoverage | null = null;
+	// Consecutive provider-unavailable checks drive exponential backoff and
+	// eventually fail the build (#1160) so a stale/stuck build cannot spin at
+	// ~100% CPU forever retrying an unreachable provider.
+	let consecutiveFailures = 0;
+	let nextDelayMs = input.pollMs;
 
 	const before = input.accessor.withReadDb((db) => readEmbeddingIndexState(db));
 	const initial = input.accessor.withWriteTx((db) => beginEmbeddingIndexBuild(db, input.configured));
@@ -333,14 +346,44 @@ export function startEmbeddingIndexMigration(input: {
 
 	const tick = async (): Promise<void> => {
 		if (!running) return;
+		nextDelayMs = input.pollMs;
 		try {
 			const state = input.accessor.withReadDb((db) => readEmbeddingIndexState(db));
 			if (state?.state !== "building" || !state.staging) return;
-			const providerCfg = configForProfile(state.staging, input.configured);
-			if (!(await input.checkProvider(providerCfg)).available) {
-				failed++;
+			// The persisted staging profile can go stale when agent.yaml
+			// changes mid-build; the migration then spins failing the old
+			// provider forever (#1160). Re-begin against the current config:
+			// a no-op when nothing changed, a restart when the config did.
+			const restarted = input.accessor.withWriteTx((db) => beginEmbeddingIndexBuild(db, input.configured));
+			const currentStaging = restarted.staging;
+			if (
+				currentStaging !== null &&
+				currentStaging !== undefined &&
+				currentStaging.fingerprint !== state.staging.fingerprint
+			) {
+				logger.warn(
+					"embedding",
+					"Embedding config changed during migration; restarting the staging build with the current profile",
+				);
+				input.accessor.withWriteTx((db) => resetStagingVectorIndex(db, currentStaging.dimensions));
+				consecutiveFailures = 0;
 				return;
 			}
+			const providerCfg = configForProfile(state.staging, input.configured);
+			if (!(await input.checkProvider(providerCfg)).available) {
+				consecutiveFailures++;
+				failed++;
+				if (consecutiveFailures >= MAX_CONSECUTIVE_PROVIDER_FAILURES) {
+					const message = `Embedding provider unavailable after ${consecutiveFailures} consecutive checks; aborting the build`;
+					logger.error("embedding", message);
+					input.accessor.withWriteTx((db) => failEmbeddingIndexBuild(db, message));
+					running = false;
+					return;
+				}
+				nextDelayMs = Math.min(input.pollMs * 2 ** Math.min(consecutiveFailures, 6), MAX_PROVIDER_BACKOFF_MS);
+				return;
+			}
+			consecutiveFailures = 0;
 			const result = await stageEmbeddingBatch(input);
 			staged += result.staged;
 			coverage = result.coverage;
@@ -349,12 +392,14 @@ export function startEmbeddingIndexMigration(input: {
 				input.onPromoted?.();
 			}
 		} catch (error) {
+			consecutiveFailures++;
 			failed++;
 			input.accessor.withWriteTx((db) =>
 				failEmbeddingIndexBuild(db, error instanceof Error ? error.message : String(error)),
 			);
+			running = false;
 		} finally {
-			if (running) timer = setTimeout(() => void tick(), input.pollMs);
+			if (running) timer = setTimeout(() => void tick(), nextDelayMs);
 		}
 	};
 	void tick();
