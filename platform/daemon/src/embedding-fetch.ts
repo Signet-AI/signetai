@@ -213,7 +213,7 @@ async function fetchNativeFallback(
 	}
 	const r = await fetchLlamaCppEmbedding(
 		text,
-		DEFAULT_LLAMACPP_BASE_URL,
+		resolveLlamaCppFallbackBaseUrl(cfg),
 		model ?? "nomic-embed-text",
 		opts,
 		5000,
@@ -227,16 +227,10 @@ async function probeNativeFallback(
 	cfg: EmbeddingConfig,
 	opts: EmbeddingFetchOptions,
 ): Promise<NativeFallbackProbeResult> {
-	const discoveredModel = await findLlamaCppEmbeddingModel();
+	const baseUrl = resolveLlamaCppFallbackBaseUrl(cfg);
+	const discoveredModel = await findLlamaCppEmbeddingModel(baseUrl);
 	if (discoveredModel) {
-		const r = await fetchLlamaCppEmbedding(
-			text,
-			DEFAULT_LLAMACPP_BASE_URL,
-			discoveredModel,
-			opts,
-			5000,
-			cfg.llamaCppMaxInputTokens,
-		);
+		const r = await fetchLlamaCppEmbedding(text, baseUrl, discoveredModel, opts, 5000, cfg.llamaCppMaxInputTokens);
 		if (r.embedding) {
 			return { provider: "llama-cpp", model: discoveredModel, embedding: r.embedding, tokenCount: r.tokenCount };
 		}
@@ -311,6 +305,16 @@ export function resolveEmbeddingBaseUrl(cfg: EmbeddingConfig): string {
 		return cfg.base_url.trim() || DEFAULT_LLAMACPP_BASE_URL;
 	}
 	return cfg.base_url;
+}
+
+/**
+ * The llama.cpp fallback target. Unlike {@link resolveEmbeddingBaseUrl}, this
+ * is used when the configured provider is anything else (e.g. `native`): the
+ * fallback still probes the user's configured llama.cpp base_url and only
+ * falls back to the compiled default when it is empty (#1159).
+ */
+function resolveLlamaCppFallbackBaseUrl(cfg: EmbeddingConfig): string {
+	return cfg.base_url.trim() || DEFAULT_LLAMACPP_BASE_URL;
 }
 
 export function requiresOpenAiApiKey(baseUrl: string): boolean {

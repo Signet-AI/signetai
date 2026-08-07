@@ -317,6 +317,39 @@ describe("fetchEmbedding", () => {
 		expect(capturedUrl).toContain("localhost:11434");
 	});
 
+	it("probes the configured llama.cpp base_url, not the compiled default (#1159)", async () => {
+		const llamaUrls: string[] = [];
+		globalThis.fetch = mock((url: string | URL | Request) => {
+			const urlStr = url.toString();
+			llamaUrls.push(urlStr);
+			if (urlStr.includes(":8081")) {
+				if (urlStr.endsWith("/v1/models")) {
+					return Promise.resolve(Response.json({ data: [{ id: "nomic-embed-text" }] }));
+				}
+				return Promise.resolve(Response.json({ data: [{ embedding: [0.5, 0.6] }] }));
+			}
+			if (urlStr.includes(":11434")) {
+				return Promise.resolve(Response.json({ embedding: [0.7, 0.8] }));
+			}
+			return Promise.resolve(new Response("unreachable", { status: 503 }));
+		}) as unknown as typeof fetch;
+
+		setNativeFallbackProvider(null);
+		setNativeEmbeddingProviderForTest(async () => {
+			throw new Error("native unavailable");
+		});
+		const result = await fetchEmbedding("test", {
+			provider: "native",
+			model: "nomic-embed-text-v1.5",
+			dimensions: 2,
+			base_url: "http://localhost:8081",
+		});
+
+		expect(result).toEqual([0.5, 0.6]);
+		expect(llamaUrls.some((u) => u.includes(":8081"))).toBe(true);
+		expect(llamaUrls.some((u) => u.includes(":8080"))).toBe(false);
+	});
+
 	it("single-flights failed local fallback discovery and negative-caches the result", async () => {
 		let nativeCalls = 0;
 		let llamaModelProbes = 0;
