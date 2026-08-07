@@ -202,6 +202,17 @@ const DEFAULT_REQUEUE_BATCH = 50;
 // FTS rebuilds are heavyweight; cap their hourly budget at 5
 const FTS_HOURLY_BUDGET = 5;
 
+// FTS rebuilds run synchronously and can block the daemon event loop for
+// seconds on large stores. Hold an autonomous rebuild until the same mismatch
+// is observed on a second check, so a transient spike from in-flight artifact
+// writes cannot trigger a rebuild on every maintenance cycle (#1142).
+let ftsMismatchPendingRebuild = false;
+
+/** Reset the FTS rebuild confirmation state (for tests). */
+export function resetFtsRebuildConfirmation(): void {
+	ftsMismatchPendingRebuild = false;
+}
+
 // ---- Issue #901 shared constants ----
 /** Capped number of ids returned in dry-run previews. */
 const PREVIEW_CAP = 100;
@@ -535,6 +546,8 @@ export function checkFtsConsistency(
 				recreateMemoriesFts(db);
 				writeRepairAudit(db, action, ctx, 1, "FTS recreated with unicode61 tokenizer");
 			});
+			// The recreate is itself a full rebuild; any prior mismatch is moot.
+			ftsMismatchPendingRebuild = false;
 		}
 
 		limiter.record(action);
@@ -560,31 +573,51 @@ export function checkFtsConsistency(
 	// the threshold in diagnostics.ts getIndexHealth().
 	const mismatch = memCount > 0 && ftsCount > memCount * 1.1;
 
+	let rebuilt = false;
 	if (mismatch && repair) {
-		accessor.withWriteTx((db) => {
-			db.prepare("INSERT INTO memories_fts(memories_fts) VALUES('rebuild')").run();
-			writeRepairAudit(db, action, ctx, 1, `FTS rebuilt: ${memCount} active vs ${ftsCount} FTS rows`);
-		});
+		// Operator-triggered repairs are explicit intent and rebuild at once;
+		// autonomous repair waits for a second observation so a transient
+		// mismatch cannot trigger a synchronous rebuild every cycle (#1142).
+		const confirmed = ctx.actorType === "operator" || ftsMismatchPendingRebuild;
+		if (confirmed) {
+			accessor.withWriteTx((db) => {
+				db.prepare("INSERT INTO memories_fts(memories_fts) VALUES('rebuild')").run();
+				writeRepairAudit(db, action, ctx, 1, `FTS rebuilt: ${memCount} active vs ${ftsCount} FTS rows`);
+			});
+			ftsMismatchPendingRebuild = false;
+			rebuilt = true;
+		} else {
+			ftsMismatchPendingRebuild = true;
+			logger.warn("pipeline", "repair: FTS mismatch observed, deferring rebuild until it persists", {
+				memCount,
+				ftsCount,
+				actor: ctx.actor,
+			});
+		}
+	} else if (!mismatch) {
+		ftsMismatchPendingRebuild = false;
 	}
 
 	limiter.record(action);
 
 	const message = mismatch
-		? `FTS mismatch: ${memCount} active memories vs ${ftsCount} FTS rows${repair ? " — rebuilt" : ""}`
+		? rebuilt
+			? `FTS mismatch: ${memCount} active vs ${ftsCount} FTS rows — rebuilt`
+			: `FTS mismatch: ${memCount} active vs ${ftsCount} FTS rows (rebuild deferred until mismatch persists)`
 		: `FTS consistent: ${memCount} active, ${ftsCount} FTS rows`;
 
 	logger.info("pipeline", "repair: FTS consistency check", {
 		memCount,
 		ftsCount,
 		mismatch,
-		repaired: mismatch && repair,
+		repaired: rebuilt,
 		actor: ctx.actor,
 	});
 
 	return {
 		action,
 		success: true,
-		affected: mismatch ? 1 : 0,
+		affected: rebuilt ? 1 : 0,
 		message,
 	};
 }

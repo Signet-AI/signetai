@@ -26,6 +26,7 @@ import {
 	reembedModelMigration,
 	releaseStaleLeases,
 	requeueDeadJobs,
+	resetFtsRebuildConfirmation,
 	resyncVectorIndex,
 	triggerRetentionSweep,
 } from "./repair-actions";
@@ -134,12 +135,28 @@ const CTX_AGENT = {
 	actorType: "agent" as const,
 };
 
+const CTX_DAEMON = {
+	reason: "test run",
+	actor: "test-daemon",
+	actorType: "daemon" as const,
+};
+
 function insertMemory(db: Database, id: string): void {
 	const now = new Date().toISOString();
 	db.prepare(
 		`INSERT INTO memories (id, content, type, created_at, updated_at, updated_by)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
 	).run(id, `content for ${id}`, "fact", now, now, "test");
+}
+
+function repairAuditCount(db: Database, action: string): number {
+	const rows = db.prepare("SELECT metadata FROM memory_history WHERE metadata LIKE ?").all(`%${action}%`) as Array<{
+		metadata: string;
+	}>;
+	return rows.filter((row) => {
+		const parsed = JSON.parse(row.metadata) as { repairAction?: string };
+		return parsed.repairAction === action;
+	}).length;
 }
 
 function insertJob(
@@ -750,6 +767,7 @@ describe("checkFtsConsistency", () => {
 		db = new Database(":memory:");
 		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
 		accessor = asAccessor(db);
+		resetFtsRebuildConfirmation();
 	});
 
 	afterEach(() => {
@@ -801,6 +819,41 @@ describe("checkFtsConsistency", () => {
 		const sql = readMemoriesFtsSql(toFtsSchemaQueryDb(db));
 		expect(sql).toContain("tokenize='unicode61'");
 		expect(sql).not.toContain("porter unicode61");
+	});
+
+	it("defers autonomous FTS rebuilds until the mismatch persists (#1142)", () => {
+		insertMemory(db, "mem-fts-defer");
+		// A soft-deleted (tombstoned) memory pushes the FTS backing count past
+		// the 10% tolerance — the mismatch signal the check acts on.
+		insertMemory(db, "mem-fts-defer-tombstone");
+		db.prepare("UPDATE memories SET is_deleted = 1 WHERE id = ?").run("mem-fts-defer-tombstone");
+
+		// First observation: held back so a transient spike cannot trigger a
+		// synchronous (event-loop-blocking) rebuild on every cycle.
+		const first = checkFtsConsistency(accessor, TEST_CFG, CTX_DAEMON, createRateLimiter(), true);
+		expect(first.success).toBe(true);
+		expect(first.affected).toBe(0);
+		expect(first.message).toMatch(/deferred/);
+		expect(repairAuditCount(db, "checkFtsConsistency")).toBe(0);
+
+		// Same mismatch on the next maintenance cycle: persistent, rebuild.
+		const second = checkFtsConsistency(accessor, TEST_CFG, CTX_DAEMON, createRateLimiter(), true);
+		expect(second.success).toBe(true);
+		expect(second.affected).toBe(1);
+		expect(second.message).toMatch(/rebuilt/);
+		expect(repairAuditCount(db, "checkFtsConsistency")).toBe(1);
+	});
+
+	it("rebuilds immediately when an operator explicitly triggers repair (#1142)", () => {
+		insertMemory(db, "mem-fts-operator");
+		insertMemory(db, "mem-fts-operator-tombstone");
+		db.prepare("UPDATE memories SET is_deleted = 1 WHERE id = ?").run("mem-fts-operator-tombstone");
+
+		const result = checkFtsConsistency(accessor, TEST_CFG, CTX_OPERATOR, createRateLimiter(), true);
+		expect(result.success).toBe(true);
+		expect(result.affected).toBe(1);
+		expect(result.message).toMatch(/rebuilt/);
+		expect(repairAuditCount(db, "checkFtsConsistency")).toBe(1);
 	});
 });
 

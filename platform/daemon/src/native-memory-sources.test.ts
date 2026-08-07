@@ -743,6 +743,84 @@ describe("native memory sources", () => {
 		expect(after).toEqual({ artifacts: 0, entities: 0, attrs: 0 });
 	});
 
+	it("drops a vanished artifact from the index on ENOENT and stops retrying it (#1142)", async () => {
+		const root = join(dir, "vault");
+		const source = obsidianNativeMemorySource(root, "Vault", "obsidian:enoent-vault");
+		const file = join(root, "permanent", "Vanished.md");
+		mkdirSync(join(root, "permanent"), { recursive: true });
+		writeFileSync(file, "# Vanished\n\nThis file is deleted between the scan listing and the read.\n");
+
+		expect(await indexNativeMemoryFile(source, file, "agent-native")).toBe(true);
+		expect(
+			getDbAccessor().withReadDb(
+				(db) =>
+					db
+						.prepare(
+							"SELECT COUNT(*) AS count FROM memory_artifacts WHERE agent_id = ? AND source_path = ? AND COALESCE(is_deleted, 0) = 0",
+						)
+						.get("agent-native", file) as { count: number },
+			).count,
+		).toBe(1);
+
+		// The file vanishes before the watcher reads it (ENOENT).
+		rmSync(file);
+
+		expect(await indexNativeMemoryFile(source, file, "agent-native")).toBe(false);
+		// The stale row is soft-deleted instead of being retried every scan.
+		const after = getDbAccessor().withReadDb((db) => ({
+			active: (
+				db
+					.prepare(
+						"SELECT COUNT(*) AS count FROM memory_artifacts WHERE agent_id = ? AND source_path = ? AND COALESCE(is_deleted, 0) = 0",
+					)
+					.get("agent-native", file) as { count: number }
+			).count,
+			softDeleted: (
+				db
+					.prepare(
+						"SELECT COUNT(*) AS count FROM memory_artifacts WHERE agent_id = ? AND source_path = ? AND COALESCE(is_deleted, 0) = 1",
+					)
+					.get("agent-native", file) as { count: number }
+			).count,
+		}));
+		expect(after.active).toBe(0);
+		expect(after.softDeleted).toBe(1);
+
+		// Re-attempting the gone path stays a no-op.
+		expect(await indexNativeMemoryFile(source, file, "agent-native")).toBe(false);
+	});
+
+	it("keeps artifact rows on transient read failures and backs off retries (#1142)", async () => {
+		const root = join(dir, ".codex");
+		const file = join(root, "memories", "memory_summary.md");
+		mkdirSync(join(root, "memories"), { recursive: true });
+		writeFileSync(file, "Codex remembered the locked-file contract.\n");
+
+		expect(await indexNativeMemoryFile(codexNativeMemorySource(root), file, "agent-native")).toBe(true);
+
+		// Make the path fail with a non-ENOENT error (parent replaced by a
+		// file -> ENOTDIR), standing in for a transiently locked file.
+		rmSync(root, { recursive: true, force: true });
+		writeFileSync(join(dir, ".codex"), "now a plain file\n");
+
+		expect(await indexNativeMemoryFile(codexNativeMemorySource(root), file, "agent-native")).toBe(false);
+		// Transient failures must NOT drop the artifact row (only ENOENT does).
+		expect(
+			getDbAccessor().withReadDb(
+				(db) =>
+					db
+						.prepare(
+							"SELECT COUNT(*) AS count FROM memory_artifacts WHERE agent_id = ? AND source_path = ? AND COALESCE(is_deleted, 0) = 0",
+						)
+						.get("agent-native", file) as { count: number },
+			).count,
+		).toBe(1);
+
+		// The path is in failure cooldown: the retry is skipped, still false,
+		// and the row is untouched.
+		expect(await indexNativeMemoryFile(codexNativeMemorySource(root), file, "agent-native")).toBe(false);
+	});
+
 	it("embeds heading-aware Obsidian source chunks when embedding options are provided", async () => {
 		const root = join(dir, "vault");
 		const file = join(root, "permanent", "Signet.md");

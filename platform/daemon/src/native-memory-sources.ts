@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, lstatSync, statSync } from "node:fs";
-import { readFile, readdir } from "node:fs/promises";
+import { lstat, readFile, readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import {
@@ -99,6 +98,25 @@ interface IndexedNativeMemory {
 const indexed = new Map<string, IndexedNativeMemory>();
 const DEFAULT_OBSIDIAN_SOURCE_FILE_DELAY_MS = 250;
 
+// Read failures that are not permanent (ENOENT) enter a per-path cooldown so
+// a failing file cannot monopolize the scan loop. ENOENT drops the path from
+// the index entirely — the file is gone, retrying it is pointless (#1142).
+const READ_FAILURE_BACKOFF_MS = 60_000;
+const readFailureBackoffUntil = new Map<string, number>();
+
+function isEnoentError(err: unknown): boolean {
+	return typeof err === "object" && err !== null && (err as NodeJS.ErrnoException).code === "ENOENT";
+}
+
+async function pathExists(path: string): Promise<boolean> {
+	try {
+		await stat(path);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
 function codexRoot(): string {
 	return join(homedir(), ".codex");
 }
@@ -178,7 +196,7 @@ export function configuredNativeMemorySources(agentsDir?: string): NativeMemoryS
 }
 
 async function* walkNativeMemoryFiles(dir: string): AsyncGenerator<string> {
-	if (!existsSync(dir)) return;
+	if (!(await pathExists(dir))) return;
 	const entries = await readdir(dir, { withFileTypes: true });
 	for (const entry of entries) {
 		if (entry.name === ".git") continue;
@@ -434,20 +452,40 @@ export async function indexNativeMemoryFile(
 	const pattern = matchesPattern(source, filePath);
 	if (!pattern) return false;
 
+	const key = fingerprintKey(source, filePath, agentId);
+	const cooldownUntil = readFailureBackoffUntil.get(key);
+	if (cooldownUntil !== undefined && Date.now() < cooldownUntil) return false;
+
 	let content = "";
 	let mtimeMs = 0;
 	try {
-		const linkStat = lstatSync(filePath);
+		const linkStat = await lstat(filePath);
 		if (linkStat.isSymbolicLink()) return false;
-		const stat = statSync(filePath);
-		if (!stat.isFile()) return false;
-		mtimeMs = stat.mtimeMs;
-		// Async read: a transiently locked file (EDEADLK from Obsidian or a
-		// sync service) must not block the daemon event loop for tens of
-		// seconds. Async readFile runs in the threadpool; the event loop stays
-		// responsive even while the lock is held.
+		const fileStat = await stat(filePath);
+		if (!fileStat.isFile()) return false;
+		mtimeMs = fileStat.mtimeMs;
+		// Async reads and stats run in the threadpool: a transiently locked
+		// file (EDEADLK from Obsidian or a sync service) or a stalled
+		// filesystem must not block the daemon event loop for seconds
+		// (#1135, #1142).
 		content = await readFile(filePath, "utf-8");
 	} catch (err) {
+		if (isEnoentError(err)) {
+			// The file vanished between the scan listing and the read — it is
+			// gone. Drop it from the index so later scans stop retrying the
+			// same ENOENT on every pass instead of accumulating stale
+			// artifact rows that desync the FTS index (#1142).
+			readFailureBackoffUntil.delete(key);
+			removeNativeMemoryFile(source, filePath, agentId);
+			logger.debug("watcher", "Dropped vanished native memory artifact", {
+				harness: source.harness,
+				path: filePath,
+			});
+			return false;
+		}
+		// Transient failures (locks, permission flaps) back off instead of
+		// being re-attempted on every scan iteration.
+		readFailureBackoffUntil.set(key, Date.now() + READ_FAILURE_BACKOFF_MS);
 		logger.warn("watcher", "Failed reading native memory artifact", {
 			harness: source.harness,
 			path: filePath,
@@ -455,9 +493,9 @@ export async function indexNativeMemoryFile(
 		});
 		return false;
 	}
+	readFailureBackoffUntil.delete(key);
 	if (!content.trim()) return false;
 
-	const key = fingerprintKey(source, filePath, agentId);
 	const hash = contentFingerprint(content);
 	const persistedHash = nativeArtifactContentHash(filePath, agentId);
 	const obsidian = source.harness === "obsidian" && pattern.kind === "source_obsidian_markdown";
@@ -667,7 +705,7 @@ export function startNativeMemoryBridge(
 			let scanned = 0;
 			const key = sourceStateKey(source, agentId);
 			const current = new Set<string>();
-			const rootExists = existsSync(source.root);
+			const rootExists = await pathExists(source.root);
 			if (rootExists) {
 				const files: string[] = [];
 				for await (const file of walkNativeMemoryFiles(source.root)) {
