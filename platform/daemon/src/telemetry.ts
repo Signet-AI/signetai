@@ -6,9 +6,34 @@
  * No memory content, user identity, or file paths are ever included.
  */
 
+import { appendFileSync, mkdirSync } from "node:fs";
+import { dirname, join } from "node:path";
 import type { PipelineTelemetryConfig } from "@signet/core";
 import type { DbAccessor } from "./db-accessor";
 import { logger } from "./logger";
+
+// ---------------------------------------------------------------------------
+// Open telemetry log (issue #1026 Phase 2)
+// ---------------------------------------------------------------------------
+
+/**
+ * Default location of the open telemetry log: one JSON line per recorded
+ * event, so users can inspect exactly what was sent. Configurable via
+ * `telemetryLogPath` on the collector; derived from the agents base path.
+ */
+export function defaultTelemetryLogPath(agentsDir: string): string {
+	return join(agentsDir, ".daemon", "telemetry", "events.jsonl");
+}
+
+function appendToTelemetryLog(logPath: string | null, line: string): void {
+	if (!logPath) return;
+	try {
+		mkdirSync(dirname(logPath), { recursive: true });
+		appendFileSync(logPath, `${line}\n`, "utf-8");
+	} catch {
+		// Telemetry must never break the daemon. Best-effort only.
+	}
+}
 
 // ---------------------------------------------------------------------------
 // Event types
@@ -27,6 +52,12 @@ export const TELEMETRY_EVENTS = [
 	"session.start",
 	"session.end",
 	"daemon.heartbeat",
+	// Lifecycle events (issue #1026 Phase 2): fired when the user has opted
+	// into anonymous telemetry. No PII, no code, no memory content.
+	"daemon.started",
+	"command.invoked",
+	"error.occurred",
+	"version.upgraded",
 ] as const;
 
 export type TelemetryEventType = (typeof TELEMETRY_EVENTS)[number];
@@ -171,8 +202,10 @@ export function createTelemetryCollector(
 	db: DbAccessor,
 	config: PipelineTelemetryConfig,
 	daemonVersion: string,
+	opts: { readonly telemetryLogPath?: string | null } = {},
 ): TelemetryCollector {
 	const buffer: TelemetryEvent[] = [];
+	const logPath = opts.telemetryLogPath ?? null;
 	let flushTimer: ReturnType<typeof setTimeout> | null = null;
 	let running = false;
 	let consecutiveFailures = 0;
@@ -311,6 +344,17 @@ export function createTelemetryCollector(
 				timestamp: new Date().toISOString(),
 				properties,
 			});
+
+			// Open telemetry log (issue #1026 Phase 2): mirror every event to
+			// the inspectable JSONL file so users can audit exactly what was
+			// sent. Best-effort — a full disk or unwritable path must never
+			// break recording.
+			if (logPath) {
+				const last = buffer[buffer.length - 1];
+				if (last) {
+					appendToTelemetryLog(logPath, JSON.stringify(last));
+				}
+			}
 
 			if (buffer.length >= MAX_BUFFER_SIZE) {
 				doFlush().catch(() => {});

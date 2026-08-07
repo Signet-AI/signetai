@@ -219,6 +219,28 @@ export async function runFreshSetup(plan: SetupPlan, context: SetupApplyContext,
 			config.daemon = { url: plan.daemonUrl };
 		}
 
+		// Anonymous telemetry disclosure (issue #1026 Phase 2). Telemetry is ON
+		// by default; interactive setups get a chance to disable it, and
+		// non-interactive (CI/scripted) setups keep the default. Every recorded
+		// event is mirrored to ~/.agents/.daemon/telemetry/events.jsonl so
+		// users can audit exactly what is sent.
+		let telemetryEnabled = true;
+		if (!context.nonInteractive) {
+			telemetryEnabled = await import("@inquirer/prompts").then(({ confirm }) =>
+				confirm({
+					message:
+						"Help improve Signet by sharing anonymous usage statistics (version, platform, command names)? No memory content, code, or personal data. Every event is logged to ~/.agents/.daemon/telemetry/events.jsonl; disable anytime with telemetryEnabled: false.",
+					default: true,
+				}),
+			);
+		}
+		// The daemon reads telemetryEnabled from memory.pipelineV2 — writing it
+		// at the top level would be silently ignored and the opt-out would not
+		// reach the daemon.
+		const memoryCfg = (config.memory as Record<string, unknown> | undefined) ?? {};
+		const pipelineCfg = (memoryCfg.pipelineV2 as Record<string, unknown> | undefined) ?? {};
+		config.memory = { ...memoryCfg, pipelineV2: { ...pipelineCfg, telemetryEnabled } };
+
 		writeFileSync(join(context.basePath, "agent.yaml"), formatYaml(config));
 
 		// Connect configured sources (config files the daemon indexes at boot).

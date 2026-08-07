@@ -24,6 +24,54 @@ const require = createRequire(import.meta.url);
 
 const CONNECTOR_COMPONENT = "connectors";
 
+// Phase-1 telemetry (issue #1026): a single anonymous install counter sent to
+// the Signet PostHog project. Payload is version+platform only — no
+// identifier, no IP logging. Each install generates a fresh anonymous id, so
+// every ping counts as one distinct install without persisting anything.
+// Opt-out via SIGNET_TELEMETRY_OPTOUT=1 (Homebrew-style). Never blocks the
+// install and never fails it: the request is time-bounded and errors are
+// swallowed, so a telemetry outage cannot break postinstall.
+const TELEMETRY_HOST = "https://us.i.posthog.com";
+const TELEMETRY_API_KEY = "phc_mLsvJmbmp6e9UarrX9Cq5QtTjVNiiphM9mvi5Xnddd8Q"; // public ingest key
+const TELEMETRY_TIMEOUT_MS = 2000;
+const pendingPings = [];
+
+function telemetryEnabled() {
+	if (process.env.SIGNET_TELEMETRY_OPTOUT === "1" || process.env.SIGNET_TELEMETRY_OPTOUT === "true") {
+		return false;
+	}
+	if (process.env.SIGNET_SKIP_NATIVE_POSTINSTALL === "1" || isWorkspacePackage()) {
+		return false;
+	}
+	return true;
+}
+
+function fireInstallPing(platform) {
+	if (!telemetryEnabled()) return;
+	const body = JSON.stringify({
+		api_key: TELEMETRY_API_KEY,
+		batch: [
+			{
+				event: "install.ping",
+				distinct_id: require("node:crypto").randomUUID(),
+				timestamp: new Date().toISOString(),
+				properties: {
+					version: nativePackageVersion(),
+					platform,
+					$lib: "signet-install",
+				},
+			},
+		],
+	});
+	const promise = fetch(`${TELEMETRY_HOST}/batch/`, {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body,
+		signal: AbortSignal.timeout(TELEMETRY_TIMEOUT_MS),
+	}).catch(() => {});
+	pendingPings.push(promise);
+}
+
 function isWorkspacePackage() {
 	const workspaceRoot = dirname(dirname(packageDir));
 	if (basename(dirname(packageDir)) !== "dist") return false;
@@ -66,6 +114,8 @@ async function main() {
 	}
 
 	const platform = detectNativePlatform();
+	// Anonymous install counter (issue #1026): one ping per real install.
+	fireInstallPing(platform);
 	const nativePackage = nativePlatforms[platform];
 	let source;
 	try {
@@ -208,7 +258,16 @@ async function installConnectorAssets() {
 	}
 }
 
-main().catch((err) => {
-	console.error(`Signet native install failed: ${err.message}`);
-	process.exit(1);
-});
+main()
+	.catch((err) => {
+		console.error(`Signet native install failed: ${err.message}`);
+		process.exit(1);
+	})
+	.finally(async () => {
+		// Give the fire-and-forget telemetry ping a bounded chance to flush.
+		// Each request self-times-out, so this never delays the install by
+		// more than TELEMETRY_TIMEOUT_MS even if the endpoint hangs.
+		if (pendingPings.length > 0) {
+			await Promise.allSettled(pendingPings);
+		}
+	});

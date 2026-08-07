@@ -115,6 +115,179 @@ describe("dreaming operations", () => {
 		).toEqual({ c: 0 });
 	});
 
+	it("archives an entity flagged without an entityId in details, pinned by subjectRef alone (#1168)", () => {
+		insertEntity("e-husk", "Legacy Husk", "legacy husk");
+		const result = applyDreamingOperations({
+			accessor: getDbAccessor(),
+			agentId: "agent-a",
+			actor: "dreaming",
+			passId: "pass-1",
+			operations: [
+				// Agent-minted flags carry inspection facts in details but no
+				// entityId; the subjectRef is the only id pin.
+				flag({ subjectRef: "entity:e-husk", details: { reason: "zero_active_attributes" } }),
+				{
+					operation: "archive_entity",
+					payload: { target: "e-husk", reason: "non-concrete" },
+					provenance: "attention:$0",
+				},
+			],
+		});
+		expect(result.ok).toBe(true);
+		expect(result.items[1]!.ok).toBe(true);
+		expect(
+			getDbAccessor().withReadDb((db) => db.prepare("SELECT status FROM entities WHERE id = ?").get("e-husk")),
+		).toEqual({ status: "archived" });
+		expect(
+			getDbAccessor().withReadDb(
+				(db) =>
+					db.prepare("SELECT COUNT(*) AS c FROM dreaming_attention WHERE resolved_at IS NULL").get() as { c: number },
+			),
+		).toEqual({ c: 0 });
+	});
+
+	it("archives an entity flagged without an entityId in a prior batch via attention:<uuid> (#1168)", () => {
+		insertEntity("e-husk", "Legacy Husk", "legacy husk");
+		const minted = applyDreamingOperations({
+			accessor: getDbAccessor(),
+			agentId: "agent-a",
+			actor: "dreaming",
+			operations: [flag({ subjectRef: "entity:e-husk", details: { reason: "zero_active_attributes" } })],
+		});
+		const attentionId = (minted.items[0]!.result as { attentionId: string | null }).attentionId!;
+		const result = applyDreamingOperations({
+			accessor: getDbAccessor(),
+			agentId: "agent-a",
+			actor: "dreaming",
+			passId: "pass-2",
+			operations: [
+				{ operation: "archive_entity", payload: { target: "e-husk" }, provenance: `attention:${attentionId}` },
+			],
+		});
+		expect(result.ok).toBe(true);
+		expect(
+			getDbAccessor().withReadDb((db) => db.prepare("SELECT status FROM entities WHERE id = ?").get("e-husk")),
+		).toEqual({ status: "archived" });
+	});
+
+	it("rejects an archive whose details id contradicts the flagged subjectRef", () => {
+		insertEntity("e-flagged", "Flagged", "flagged");
+		const result = applyDreamingOperations({
+			accessor: getDbAccessor(),
+			agentId: "agent-a",
+			actor: "dreaming",
+			operations: [
+				flag({ subjectRef: "entity:e-flagged", details: { entityId: "e-other", reason: "x" } }),
+				{ operation: "archive_entity", payload: { target: "e-flagged" }, provenance: "attention:$0" },
+			],
+		});
+		expect(result.ok).toBe(false);
+		expect(result.error).toBe("Hygiene archives require attention provenance (attention:$<index> or attention:<uuid>)");
+		expect(
+			getDbAccessor().withReadDb((db) => db.prepare("SELECT status FROM entities WHERE id = ?").get("e-flagged")),
+		).toEqual({ status: "active" });
+	});
+
+	it("merges a flagged duplicate group flagged without a canonicalName in details (#1168)", () => {
+		insertEntity("e-target", "Acme", "acme");
+		insertEntity("e-source", "Acme App", "acme");
+		const result = applyDreamingOperations({
+			accessor: getDbAccessor(),
+			agentId: "agent-a",
+			actor: "dreaming",
+			passId: "pass-3",
+			operations: [
+				// Agent-minted flags carry the canonical name only in the subjectRef.
+				flag({ subjectRef: "duplicate:acme", details: { reason: "duplicate_canonical_name" } }),
+				{
+					operation: "merge_entities",
+					payload: { targets: ["e-target", "e-source"], survivor: "e-target" },
+					provenance: "attention:$0",
+				},
+			],
+		});
+		expect(result.ok).toBe(true);
+		expect(
+			getDbAccessor().withReadDb((db) => db.prepare("SELECT id FROM entities WHERE id = ?").get("e-source")),
+		).toBeNull();
+		expect(
+			getDbAccessor().withReadDb((db) => db.prepare("SELECT id FROM entities WHERE id = ?").get("e-target")),
+		).not.toBeNull();
+	});
+
+
+	it("rejects a merge_aspects whose details aspectId contradicts the flagged subjectRef", () => {
+		insertEntity("e-merge3", "MergeThree", "mergethree");
+		insertAspect("a-t3", "e-merge3", "target");
+		insertAspect("a-s3", "e-merge3", "source");
+		const result = applyDreamingOperations({
+			accessor: getDbAccessor(),
+			agentId: "agent-a",
+			actor: "dreaming",
+			operations: [
+				// The details aspectId names a different aspect than the subjectRef pin.
+				flag({ subjectRef: "aspect:a-s3", details: { aspectId: "a-other", reason: "aspect_over_cap" } }),
+				{
+					operation: "merge_aspects",
+					payload: { entityId: "e-merge3", target: "a-t3", sources: ["a-other"] },
+					provenance: "attention:$0",
+				},
+			],
+		});
+		expect(result.ok).toBe(false);
+		expect(result.error).toContain("Hygiene archives require attention provenance");
+	});
+
+	it("rejects a duplicate merge flagged with an empty canonical name", () => {
+		insertEntity("e-1", "One", "");
+		insertEntity("e-2", "Two", "");
+		const result = applyDreamingOperations({
+			accessor: getDbAccessor(),
+			agentId: "agent-a",
+			actor: "dreaming",
+			operations: [
+				flag({ subjectRef: "duplicate:", details: { reason: "duplicate_canonical_name" } }),
+				{
+					operation: "merge_entities",
+					payload: { targets: ["e-1", "e-2"], survivor: "e-1" },
+					provenance: "attention:$0",
+				},
+			],
+		});
+		expect(result.ok).toBe(false);
+		expect(result.error).toContain("Hygiene archives require attention provenance");
+	});
+
+	it("consumes a flag after the first hygiene op citing it", () => {
+		insertEntity("e-a", "A", "acme");
+		insertEntity("e-b", "B", "acme");
+		insertEntity("e-c", "C", "acme");
+		insertEntity("e-d", "D", "acme");
+		const result = applyDreamingOperations({
+			accessor: getDbAccessor(),
+			agentId: "agent-a",
+			actor: "dreaming",
+			passId: "pass-4",
+			operations: [
+				flag({ subjectRef: "duplicate:acme", details: { canonicalName: "acme", reason: "duplicate_canonical_name" } }),
+				{
+					operation: "merge_entities",
+					payload: { targets: ["e-a", "e-b"], survivor: "e-a" },
+					provenance: "attention:$0",
+				},
+				{
+					operation: "merge_entities",
+					payload: { targets: ["e-c", "e-d"], survivor: "e-c" },
+					provenance: "attention:$0",
+				},
+			],
+		});
+		expect(result.ok).toBe(true);
+		expect(result.items[1]!.ok).toBe(true);
+		expect(result.items[2]!.ok).toBe(false);
+		expect(result.items[2]!.error).toContain("already consumed");
+	});
+
 	it("rejects a same-batch archive whose target is not the flagged entity", () => {
 		insertEntity("e-flagged", "Flagged", "flagged");
 		insertEntity("e-other", "Other", "other");
