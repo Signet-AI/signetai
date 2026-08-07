@@ -326,7 +326,18 @@ export function startDreamingWorker(
 		// directly otherwise.
 		const mode = selectDreamingCheckMode(accessor, scopes, nextScheduledFocus);
 		nextScheduledFocus = dreamingFocusOfMode(mode) ?? nextScheduledFocus;
-		await runPass(defaultAgentId, mode, undefined, scopes);
+		try {
+			await runPass(defaultAgentId, mode, undefined, scopes);
+		} catch (e) {
+			// runPass already records the failure in dreaming_state via
+			// recordDreamingFailure. The scheduled sweep must not let a failed
+			// pass propagate into the timer callback: an unhandled rejection
+			// would terminate the whole daemon (Bun exits on unhandled
+			// rejections), turning one bad inference call into a crash loop.
+			logger.error("dreaming-worker", "Dreaming pass failed during scheduled sweep", undefined, {
+				error: e instanceof Error ? e.message : String(e),
+			});
+		}
 	}
 
 	function schedule(): void {

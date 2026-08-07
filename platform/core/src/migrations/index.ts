@@ -111,6 +111,7 @@ import { up as attributeSemanticMemories } from "./102-attribute-semantic-memori
 import { up as semanticMemoryKind } from "./103-semantic-memory-kind";
 import { up as derivedMemoryProvenance } from "./104-derived-memory-provenance";
 import { up as agentScopedEntityName } from "./105-agent-scoped-entity-name";
+import { up as memoryMentionJoinIndex } from "./106-memory-mention-join-index";
 
 // -- Public interface consumed by Database.init() --
 
@@ -976,6 +977,11 @@ export const MIGRATIONS: readonly Migration[] = [
 		version: 105,
 		name: "agent-scoped-entity-name",
 		up: agentScopedEntityName,
+	},
+	{
+		version: 106,
+		name: "memory-mention-join-index",
+		up: memoryMentionJoinIndex,
 	},
 ];
 
