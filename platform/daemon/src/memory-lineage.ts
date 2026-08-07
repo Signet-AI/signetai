@@ -11,6 +11,7 @@ import { getAgentScope } from "./agent-id";
 import { yieldEvery } from "./async-yield";
 import type { WriteDb } from "./db-accessor";
 import { getDbAccessor } from "./db-accessor";
+import { EPISODIC_CAPTURED_AT_FLOOR, timestampMillis } from "./episodic-sources";
 import { logger } from "./logger";
 import { MEMORY_HEAD_MAX_TOKENS } from "./memory-head";
 import { buildAgentScopeClause } from "./memory-search";
@@ -646,7 +647,16 @@ function upsertArtifactRowInTx(
 	const sessionToken = sourcePath.match(/--([a-z2-7]{16})--/)?.[1] ?? deriveSessionToken(agentId, sessionId);
 	const project = typeof frontmatter.project === "string" ? frontmatter.project : null;
 	const harness = typeof frontmatter.harness === "string" ? frontmatter.harness : null;
-	const capturedAt = typeof frontmatter.captured_at === "string" ? frontmatter.captured_at : new Date().toISOString();
+	// Corrupt pre-epoch timestamps (the DOS epoch 1980 sentinel from
+	// timestamp-stripping filesystems/sync layers) are stamped as the index
+	// time instead: a rolling `since` watermark can never reach 1980, so a
+	// captured_at below the floor would make the row invisible to Dreaming
+	// forever (#1149). The raw mtime still lands in source_mtime_ms.
+	const capturedAt =
+		typeof frontmatter.captured_at === "string" &&
+		timestampMillis(frontmatter.captured_at) >= Date.parse(EPISODIC_CAPTURED_AT_FLOOR)
+			? frontmatter.captured_at
+			: new Date().toISOString();
 	const startedAt = typeof frontmatter.started_at === "string" ? frontmatter.started_at : null;
 	const endedAt = typeof frontmatter.ended_at === "string" ? frontmatter.ended_at : null;
 	const manifestPath = typeof frontmatter.manifest_path === "string" ? frontmatter.manifest_path : null;

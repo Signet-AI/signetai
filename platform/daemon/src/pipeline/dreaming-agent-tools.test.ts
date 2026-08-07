@@ -239,6 +239,59 @@ describe("dreaming-agent-tools", () => {
 		expect(JSON.stringify(entity).length).toBeLessThan(10_000);
 	});
 
+	it("search_evidence defaults since to the scope's evidence watermark when omitted (#1149)", async () => {
+		// Regression for #1149: the scan-first listing used to anchor `since`
+		// to pass-start (read off the runbook), so evidence captured between
+		// the last watermark and pass start was never listed. An omitted
+		// `since` must fall back to dreaming_state.last_pass_at — the
+		// frontier the last pass actually surfaced — so the unprocessed
+		// window is listed, and an explicit earlier `since` still reaches
+		// older evidence.
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare("INSERT INTO dreaming_state (agent_id, last_pass_at) VALUES (?, ?)").run(
+				"owner",
+				"2026-08-06T12:00:00.000Z",
+			);
+			for (const [id, content, createdAt] of [
+				["mem-old", "Old evidence before the watermark.", "2026-08-06T11:00:00.000Z"],
+				["mem-new", "New evidence after the watermark.", "2026-08-06T13:00:00.000Z"],
+			] as const) {
+				db.prepare(
+					`INSERT INTO memories
+					 (id, content, source_type, memory_kind, visibility, agent_id, created_at, updated_at)
+					 VALUES (?, ?, 'manual', 'episodic', 'normal', 'owner', ?, ?)`,
+				).run(id, content, createdAt, createdAt);
+			}
+		});
+		const tools = createDreamingAgentTools({ accessor: getDbAccessor(), agentId: "owner", actor: "owner" });
+
+		const listed = readResult(
+			await findTool(tools, "search_evidence").execute(
+				"call",
+				{ agentId: "owner" }, // scan-first listing: omit query and since
+				undefined,
+				undefined,
+				{} as never,
+			),
+		);
+		const refs = (listed.items as Array<{ sourceRef: string }>).map((item) => item.sourceRef);
+		expect(refs).toContain("memory:mem-new");
+		expect(refs).not.toContain("memory:mem-old");
+
+		const explicit = readResult(
+			await findTool(tools, "search_evidence").execute(
+				"call",
+				{ agentId: "owner", since: "2026-08-06T10:00:00.000Z" },
+				undefined,
+				undefined,
+				{} as never,
+			),
+		);
+		expect((explicit.items as Array<{ sourceRef: string }>).map((item) => item.sourceRef)).toEqual(
+			expect.arrayContaining(["memory:mem-old", "memory:mem-new"]),
+		);
+	});
+
 	it("search_evidence exposes completed on transcripts and settled records", async () => {
 		getDbAccessor().withWriteTx((db) => {
 			db.prepare(

@@ -3,6 +3,24 @@ import type { ReadDb } from "./db-accessor";
 /** Immutable evidence available to Dreaming and ontology extraction. */
 export type EpisodicSourceKind = "memory" | "artifact" | "transcript" | "summary";
 
+/**
+ * The sane floor for evidence timestamps. Pre-2000 values are corrupt
+ * sentinels (the DOS epoch 1980 default from timestamp-stripping
+ * filesystems and sync layers): a rolling `since` watermark can never reach
+ * them, so a since/cursor-filtered scan must still list them or they fall
+ * permanently behind the Dreaming evidence cursor with no catch-up (#1149).
+ */
+export const EPISODIC_CAPTURED_AT_FLOOR = "2000-01-01T00:00:00.000Z";
+
+/** Match SQLite julianday's UTC interpretation of timezone-less timestamps. */
+export function timestampMillis(value: string): number {
+	const normalized = /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d+)?$/.test(value)
+		? `${value.replace(" ", "T")}Z`
+		: value;
+	const parsed = Date.parse(normalized);
+	return Number.isFinite(parsed) ? parsed : 0;
+}
+
 /** A stable resume point across the merged episodic stores. */
 export interface EpisodicCursor {
 	readonly capturedAt: string;
@@ -73,6 +91,12 @@ function cursorPredicate(
 	newerThan: string | null,
 	cursor: EpisodicCursor | null | undefined,
 ): { readonly sql: string; readonly args: readonly (string | null)[] } {
+	// Rows stamped with a corrupt pre-epoch timestamp (EPISODIC_CAPTURED_AT_FLOOR)
+	// bypass a since watermark: no rolling cutoff can ever reach them, so the
+	// first listing must still surface them or they are silently lost to
+	// scan-first ingestion (#1149). Cursor pages do NOT re-admit them — they
+	// were surfaced by the initial page, and re-admitting them on every page
+	// would freeze cursor paging on the pre-2000 block forever.
 	if (cursor) {
 		const cursorRank = cursor.kind === null ? -1 : SOURCE_KIND_RANK[cursor.kind];
 		const rank = SOURCE_KIND_RANK[kind];
@@ -88,8 +112,8 @@ function cursorPredicate(
 		};
 	}
 	return {
-		sql: `(? IS NULL OR julianday(${timestampColumn}) > julianday(?))`,
-		args: [newerThan, newerThan],
+		sql: `(? IS NULL OR julianday(${timestampColumn}) > julianday(?) OR julianday(${timestampColumn}) < julianday(?))`,
+		args: [newerThan, newerThan, EPISODIC_CAPTURED_AT_FLOOR],
 	};
 }
 
@@ -100,15 +124,6 @@ function compareEpisodicSources(a: EpisodicSourceRecord, b: EpisodicSourceRecord
 	if (rank !== 0) return order === "oldest" ? rank : -rank;
 	const id = a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
 	return order === "oldest" ? id : -id;
-}
-
-/** Match SQLite julianday's UTC interpretation of timezone-less timestamps. */
-function timestampMillis(value: string): number {
-	const normalized = /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d+)?$/.test(value)
-		? `${value.replace(" ", "T")}Z`
-		: value;
-	const parsed = Date.parse(normalized);
-	return Number.isFinite(parsed) ? parsed : 0;
 }
 
 function readNonEmptyTrimmed(value: unknown): string | null {
@@ -706,9 +721,16 @@ export function searchEpisodicSources(
 	const like = `%${query}%`;
 	// An empty query still lists recent sources (runbook cutoff pattern); the
 	// LIKE below degrades to a match-all and the outer ORDER BY picks newest.
-	const timeArgs: unknown[] = [];
-	if (params.since !== undefined) timeArgs.push(params.since);
-	if (params.before !== undefined) timeArgs.push(params.before);
+	// Both the `since` and `before` bounds compare via julianday(): the
+	// watermark can now be ISO (`...T11:00:00.000Z` from an artifact) while
+	// rows use SQLite space format (`... 11:00:00`), and a raw string
+	// comparison would lexically misorder the two (0x20 < 0x54), silently
+	// dropping space-format rows captured after an ISO watermark (#1149).
+	// A `since` cutoff also re-lists corrupt pre-epoch rows: no watermark can
+	// reach them, so they must stay listable or they are lost to ingestion
+	// forever.
+	const sinceArgs: unknown[] = params.since !== undefined ? [params.since, EPISODIC_CAPTURED_AT_FLOOR] : [];
+	const beforeArgs: unknown[] = params.before !== undefined ? [params.before] : [];
 
 	const branches: Array<{ sql: string; args: unknown[] }> = [];
 	if (params.kind === undefined || params.kind === "memory") {
@@ -718,8 +740,9 @@ export function searchEpisodicSources(
 			      WHERE agent_id = ? AND memory_kind = 'episodic'
 			        AND COALESCE(is_deleted, 0) = 0 AND visibility != 'archived' AND scope IS NULL
 			        AND COALESCE(type, '') != 'session_summary' AND content LIKE ?
-			        ${params.since ? "AND created_at >= ?" : ""} ${params.before ? "AND created_at <= ?" : ""}`,
-			args: [params.agentId, like, ...timeArgs],
+			        ${params.since ? "AND (julianday(created_at) >= julianday(?) OR julianday(created_at) < julianday(?))" : ""}
+			        ${params.before ? "AND julianday(created_at) <= julianday(?)" : ""}`,
+			args: [params.agentId, like, ...sinceArgs, ...beforeArgs],
 		});
 	}
 	if (params.kind === undefined || params.kind === "artifact") {
@@ -732,7 +755,8 @@ export function searchEpisodicSources(
 			      FROM memory_artifacts ma
 			      WHERE ma.agent_id = ? AND COALESCE(ma.is_deleted, 0) = 0
 			        AND length(ma.content) > 0 AND ma.content LIKE ?
-			        ${params.since ? "AND ma.captured_at >= ?" : ""} ${params.before ? "AND ma.captured_at <= ?" : ""}
+			        ${params.since ? "AND (julianday(ma.captured_at) >= julianday(?) OR julianday(ma.captured_at) < julianday(?))" : ""}
+			        ${params.before ? "AND julianday(ma.captured_at) <= julianday(?)" : ""}
 			        AND (ma.source_sha256 IS NULL OR ma.source_sha256 = ''
 			             OR (ma.agent_id, ma.source_path) = (
 			               SELECT ma2.agent_id, ma2.source_path FROM memory_artifacts ma2
@@ -741,7 +765,7 @@ export function searchEpisodicSources(
 			               ORDER BY ma2.captured_at DESC, ma2.source_path ASC
 			               LIMIT 1
 			             ))`,
-			args: [params.agentId, like, ...timeArgs],
+			args: [params.agentId, like, ...sinceArgs, ...beforeArgs],
 		});
 	}
 	if (params.kind === undefined || params.kind === "transcript") {
@@ -749,9 +773,9 @@ export function searchEpisodicSources(
 			sql: `SELECT 'transcript' AS kind, session_key AS id, COALESCE(updated_at, created_at) AS captured_at
 			      FROM session_transcripts
 			      WHERE agent_id = ? AND content LIKE ?
-			        ${params.since ? "AND COALESCE(updated_at, created_at) >= ?" : ""}
-			        ${params.before ? "AND COALESCE(updated_at, created_at) <= ?" : ""}`,
-			args: [params.agentId, like, ...timeArgs],
+			        ${params.since ? "AND (julianday(COALESCE(updated_at, created_at)) >= julianday(?) OR julianday(COALESCE(updated_at, created_at)) < julianday(?))" : ""}
+			        ${params.before ? "AND julianday(COALESCE(updated_at, created_at)) <= julianday(?)" : ""}`,
+			args: [params.agentId, like, ...sinceArgs, ...beforeArgs],
 		});
 	}
 	if (params.kind === undefined || params.kind === "summary") {
@@ -761,8 +785,9 @@ export function searchEpisodicSources(
 			      WHERE agent_id = ? AND depth = 0
 			        AND COALESCE(source_type, 'summary') IN ('summary', 'compaction', 'checkpoint')
 			        AND content LIKE ?
-			        ${params.since ? "AND latest_at >= ?" : ""} ${params.before ? "AND latest_at <= ?" : ""}`,
-			args: [params.agentId, like, ...timeArgs],
+			        ${params.since ? "AND (julianday(latest_at) >= julianday(?) OR julianday(latest_at) < julianday(?))" : ""}
+			        ${params.before ? "AND julianday(latest_at) <= julianday(?)" : ""}`,
+			args: [params.agentId, like, ...sinceArgs, ...beforeArgs],
 		});
 	}
 

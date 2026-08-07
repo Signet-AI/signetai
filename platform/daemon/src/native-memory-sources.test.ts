@@ -12,6 +12,7 @@ import {
 	obsidianNativeMemorySource,
 	purgeNativeMemorySourceArtifacts,
 	removeNativeMemoryFile,
+	resetNativeMemoryIndexCache,
 	resolveEmbeddingBridgeOptions,
 	startNativeMemoryBridge,
 } from "./native-memory-sources";
@@ -70,6 +71,42 @@ describe("native memory sources", () => {
 		expect(row.content).toContain("Hermes bridge decision");
 	});
 
+	it("heals legacy pre-epoch captured_at rows on rescan (#1149)", async () => {
+		// Regression for #1149 (adversarial review F3): rows already stamped
+		// with the 1980 DOS-epoch sentinel stay permanently pending — no
+		// watermark can reach them, so content passes never early-exit and
+		// re-list the same stale row forever. The watcher must re-stamp them
+		// with the index time once.
+		const root = join(dir, ".codex");
+		mkdirSync(join(root, "memories", "rollout_summaries"), { recursive: true });
+		const file = join(root, "memories", "rollout_summaries", "sentinel-heal.md");
+		writeFileSync(file, "thread_id: sentinel\n\nLegacy artifact with a corrupt mtime.\n");
+		const source = codexNativeMemorySource(root);
+
+		expect(await indexNativeMemoryFile(source, file)).toBe(true);
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare("UPDATE memory_artifacts SET captured_at = ? WHERE agent_id = ? AND source_path = ?").run(
+				"1980-01-01T06:00:00.000Z",
+				"default",
+				file,
+			);
+		});
+
+		// Cold scan (fresh daemon): the unchanged-file path heals the row.
+		resetNativeMemoryIndexCache();
+		expect(await indexNativeMemoryFile(source, file)).toBe(false);
+
+		const healed = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare("SELECT captured_at FROM memory_artifacts WHERE agent_id = ? AND source_path = ?")
+					.get("default", file) as { captured_at: string } | undefined,
+		);
+		expect(healed).toBeDefined();
+		if (healed === undefined) throw new Error("artifact row missing");
+		expect(Date.parse(healed.captured_at)).toBeGreaterThan(Date.parse("2025-01-01T00:00:00.000Z"));
+	});
+
 	it("indexes Codex automation memory files as native artifacts", async () => {
 		const root = join(dir, ".codex");
 		const file = join(root, "automations", "obsidian-wiki", "memory.md");
@@ -108,7 +145,11 @@ describe("native memory sources", () => {
 
 		const rows = getDbAccessor().withReadDb(
 			(db) =>
-				db.prepare("SELECT source_kind, source_id, source_external_id, source_meta_json FROM memory_artifacts ORDER BY source_kind").all() as Array<{
+				db
+					.prepare(
+						"SELECT source_kind, source_id, source_external_id, source_meta_json FROM memory_artifacts ORDER BY source_kind",
+					)
+					.all() as Array<{
 					source_kind: string;
 					source_id: string | null;
 					source_external_id: string | null;
@@ -845,9 +886,7 @@ describe("native memory sources", () => {
 		const rows = getDbAccessor().withReadDb(
 			(db) =>
 				db
-					.prepare(
-						"SELECT source_id, chunk_text FROM embeddings WHERE source_type = 'source_chunk' ORDER BY source_id",
-					)
+					.prepare("SELECT source_id, chunk_text FROM embeddings WHERE source_type = 'source_chunk' ORDER BY source_id")
 					.all() as Array<{ source_id: string; chunk_text: string }>,
 		);
 		expect(rows.length).toBeGreaterThanOrEqual(1);

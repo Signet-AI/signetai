@@ -12,6 +12,7 @@ import {
 import { resolveDaemonAgentId } from "./agent-id";
 import { yieldEvery } from "./async-yield";
 import { getDbAccessor } from "./db-accessor";
+import { EPISODIC_CAPTURED_AT_FLOOR, timestampMillis } from "./episodic-sources";
 import { logger } from "./logger";
 import type { EmbeddingConfig } from "./memory-config";
 import { hashNormalizedBody, indexExternalMemoryArtifact, softDeleteArtifactRowsForPath } from "./memory-lineage";
@@ -96,6 +97,11 @@ interface IndexedNativeMemory {
 }
 
 const indexed = new Map<string, IndexedNativeMemory>();
+
+/** Test-only: drop the in-process content-hash cache so scans behave like a fresh daemon. */
+export function resetNativeMemoryIndexCache(): void {
+	indexed.clear();
+}
 const DEFAULT_OBSIDIAN_SOURCE_FILE_DELAY_MS = 250;
 
 // Read failures that are not permanent (ENOENT) enter a per-path cooldown so
@@ -349,6 +355,53 @@ function nativeArtifactContentHash(filePath: string, agentId: string): string | 
 	}
 }
 
+function nativeArtifactCapturedAt(filePath: string, agentId: string): string | null {
+	const sourcePath = filePath.replace(/\\/g, "/");
+	try {
+		return getDbAccessor().withReadDb((db) => {
+			const row = db
+				.prepare(
+					"SELECT captured_at FROM memory_artifacts WHERE agent_id = ? AND source_path = ? AND COALESCE(is_deleted, 0) = 0 LIMIT 1",
+				)
+				.get(agentId, sourcePath) as { captured_at: string } | undefined;
+			return row?.captured_at ?? null;
+		});
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * One-shot heal for rows already stamped with a corrupt pre-epoch captured_at
+ * (the DOS epoch 1980 sentinel): they are re-stamped with the index time so
+ * they stop blocking backlog termination and get a normal lifecycle. New
+ * indexes never mint sentinels (the memory-lineage clamp), so this only fires
+ * once per legacy row (#1149).
+ */
+function healSentinelCapturedAt(filePath: string, agentId: string, harness: string, capturedAt: string): void {
+	if (timestampMillis(capturedAt) >= Date.parse(EPISODIC_CAPTURED_AT_FLOOR)) return;
+	try {
+		const stampedAt = new Date().toISOString();
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`UPDATE memory_artifacts
+				 SET captured_at = ?, updated_at = ?
+				 WHERE agent_id = ? AND source_path = ? AND COALESCE(is_deleted, 0) = 0`,
+			).run(stampedAt, stampedAt, agentId, filePath.replace(/\\/g, "/"));
+		});
+		logger.warn("watcher", "Healed pre-epoch captured_at on native memory artifact", {
+			harness,
+			path: filePath,
+			was: capturedAt,
+		});
+	} catch (err) {
+		logger.warn("watcher", "Could not heal pre-epoch captured_at", {
+			path: filePath,
+			error: err instanceof Error ? err.message : String(err),
+		});
+	}
+}
+
 function obsidianGraphExists(agentId: string, sourceId: string, filePath: string): boolean {
 	try {
 		return getDbAccessor().withReadDb((db) => {
@@ -523,6 +576,13 @@ export async function indexNativeMemoryFile(
 		indexed.delete(key);
 	}
 	if (persistedHash === hash && semanticComplete) {
+		// One-shot heal for legacy rows with a corrupt pre-epoch captured_at:
+		// they stay permanently pending otherwise (no watermark can reach
+		// 1980), keeping content passes from ever early-exiting (#1149).
+		const persistedCapturedAt = nativeArtifactCapturedAt(filePath, agentId);
+		if (persistedCapturedAt !== null) {
+			healSentinelCapturedAt(filePath, agentId, source.harness, persistedCapturedAt);
+		}
 		indexed.set(key, { contentHash: hash });
 		return false;
 	}

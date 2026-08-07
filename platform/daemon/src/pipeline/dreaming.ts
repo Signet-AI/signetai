@@ -19,10 +19,12 @@ import {
 } from "@signet/core";
 import type { DbAccessor, ReadDb, WriteDb } from "../db-accessor";
 import {
+	EPISODIC_CAPTURED_AT_FLOOR,
 	type EpisodicCursor,
 	type EpisodicSourceRecord,
 	readEpisodicSource,
 	readRecentEpisodicSources,
+	timestampMillis,
 } from "../episodic-sources";
 import { type GraphHygieneCaps, getDreamingHygieneCandidatesInDb } from "../knowledge-graph-hygiene";
 import { logger } from "../logger";
@@ -338,6 +340,47 @@ export function recordDreamingFailure(accessor: DbAccessor, agentId: string): vo
 // Dreaming pass records
 // ---------------------------------------------------------------------------
 
+/** Timestamps at or below the corrupt pre-epoch floor never advance a watermark. */
+const EVIDENCE_WATERMARK_FLOOR_MS = Date.parse(EPISODIC_CAPTURED_AT_FLOOR);
+
+/**
+ * The newest captured_at `search_evidence` actually returned to a pass. The
+ * pass-end watermark may advance only this far: evidence captured after the
+ * surfaced frontier but before pass start was never shown to the agent and
+ * must stay pending for the next scan-first search (#1149).
+ */
+function surfacedEvidenceWatermark(items: readonly unknown[]): string | null {
+	let watermark: string | null = null;
+	for (const item of items) {
+		if (!isRecord(item)) continue;
+		const capturedAt = typeof item.capturedAt === "string" ? item.capturedAt : null;
+		if (capturedAt === null) continue;
+		const ms = timestampMillis(capturedAt);
+		// Corrupt pre-epoch rows can never advance a watermark; the sentinel
+		// bypass in the episodic readers keeps them listable regardless.
+		if (ms <= EVIDENCE_WATERMARK_FLOOR_MS) continue;
+		if (watermark === null || ms > timestampMillis(watermark)) watermark = capturedAt;
+	}
+	return watermark;
+}
+
+/**
+ * The pass-end evidence watermark: the newer of the previous watermark and
+ * the newest source the pass surfaced, never later than the pass started.
+ * A pass that surfaced nothing keeps its previous watermark, so skipped
+ * evidence is re-listed by the next scan-first search instead of being
+ * counted as processed (#1149).
+ */
+function nextEvidenceWatermark(surfaced: string, previous: string | null, cutoff: string): string | null {
+	const surfacedMs = timestampMillis(surfaced);
+	const cutoffMs = timestampMillis(cutoff);
+	// Clock skew can date a source after pass start; cap the watermark so
+	// the cursor never advances past the pass itself.
+	const capped = surfacedMs > cutoffMs ? cutoff : surfaced;
+	if (previous === null) return capped;
+	return timestampMillis(capped) > timestampMillis(previous) ? capped : previous;
+}
+
 export function createDreamingPass(accessor: DbAccessor, agentId: string, mode: DreamingMode): string {
 	const id = randomUUID();
 	accessor.withWriteTx((db) => {
@@ -638,7 +681,7 @@ An install may have several agent scopes (listed in <agent_scopes> when there is
    - \`attribute_over_cap\` / \`aspect_over_cap\` flags: the write gate rejects new claims or aspects past the cap, so consolidate the flagged target — merge_aspects to fold over-cap aspects together, supersede_claim_value to collapse duplicate claim keys, archive_claim_value for stale snapshots. Consolidation (merge_aspects) may exceed the attribute cap; it is the remedy the cap forces.
    - If you discover junk the queue did not flag, mint a flag op and archive in the same batch.
 3. Query attention_list with kind=review_due. For expired records, inspect the cited memory with search_evidence using its subjectRef, then supersede the matching active claim with supersede_claim_value. Use the supplied entityId, aspectId, attributeId, and claimKey when present. The replacement must state that the planned event remains unconfirmed; never rewrite it as if the event happened. Cite an exact quote from the original memory. Do not supersede approaching records. When creating or setting a future temporal claim, set payload.reviewAfter to the referenced ISO timestamp.
-4. Only when the hygiene queue is clear: find new evidence since the cutoff. First LIST recent sources with search_evidence — pass since and omit the query so it returns the newest sources; only after seeing what is there, narrow with a query if the list is large. Prefer evidence from completed sessions and their summaries; a transcript with completed: false is mid-stream — defer filing from it and note the deferral in the pass log, because its states may be contradicted by the session's end. For each new source:
+4. Only when the hygiene queue is clear: find new evidence since the cutoff. First LIST unprocessed sources with search_evidence — omit the query and omit since so it lists from the scope's evidence watermark (the frontier the last pass actually surfaced), newest first; only after seeing what is there, narrow with a query if the list is large. Prefer evidence from completed sessions and their summaries; a transcript with completed: false is mid-stream — defer filing from it and note the deferral in the pass log, because its states may be contradicted by the session's end. For each new source:
    - search_entities for subjects it establishes.
    - File claims only for what the source establishes as settled fact: outcomes, decisions, shipped changes, stable behavior. Do not file instructions that were merely suggested, hypotheses or diagnoses, open questions, or intermediate states of an ongoing investigation. When a source shows an attempt and its outcome, file the outcome.
    - Before adding a claim, check the target aspect's existing claims; if one covers the same key or is contradicted by the new evidence, supersede it (supersede_claim_value) instead of adding alongside.
@@ -750,7 +793,7 @@ An install may have several agent scopes (listed in <agent_scopes> when there is
 
 1. Read the pass log (runbook_read). Establish cutoff: sources viewed, changes applied, deferred items.
 2. Query attention_list with kind=review_due. For expired records, inspect the cited memory with search_evidence using its subjectRef, then supersede the matching active claim with supersede_claim_value. Use the supplied entityId, aspectId, attributeId, and claimKey when present. The replacement must state that the planned event remains unconfirmed; never rewrite it as if the event happened. Cite an exact quote from the original memory. Do not supersede approaching records. When creating or setting a future temporal claim, set payload.reviewAfter to the referenced ISO timestamp.
-3. Find new evidence since the cutoff. First LIST recent sources with search_evidence — pass since and omit the query so it returns the newest sources; only after seeing what is there, narrow with a query if the list is large. Prefer evidence from completed sessions and their summaries; a transcript with completed: false is mid-stream — defer filing from it and note the deferral in the pass log, because its states may be contradicted by the session's end. For each new source:
+3. Find new evidence since the cutoff. First LIST unprocessed sources with search_evidence — omit the query and omit since so it lists from the scope's evidence watermark (the frontier the last pass actually surfaced), newest first; only after seeing what is there, narrow with a query if the list is large. Prefer evidence from completed sessions and their summaries; a transcript with completed: false is mid-stream — defer filing from it and note the deferral in the pass log, because its states may be contradicted by the session's end. For each new source:
    - search_entities for subjects it establishes.
    - File claims only for what the source establishes as settled fact: outcomes, decisions, shipped changes, stable behavior. Do not file instructions that were merely suggested, hypotheses or diagnoses, open questions, or intermediate states of an ongoing investigation. When a source shows an attempt and its outcome, file the outcome.
    - Before adding a claim, check the target aspect's existing claims; if one covers the same key or is contradicted by the new evidence, supersede it (supersede_claim_value) instead of adding alongside.
@@ -879,8 +922,9 @@ export async function runDreamingAgentPass(
 				? `${dreamingPromptForMode(mode)}\n\n<agent_scopes>\n${scopes.join("\n")}\n</agent_scopes>`
 				: dreamingPromptForMode(mode);
 
-		// SQLite-format watermark so string comparisons against stored source
-		// dates stay consistent (ISO timestamps would mis-order).
+		// Pass-start cutoff, SQLite format. The stored watermark may also be
+		// the raw surfaced captured_at (ISO); every comparison goes through
+		// julianday(), so the mixed formats stay ordered (#1149).
 		const cutoff = accessor.withReadDb(
 			(db) => (db.prepare("SELECT datetime('now') AS now").get() as { now: string }).now,
 		);
@@ -902,9 +946,12 @@ export async function runDreamingAgentPass(
 					 mutations_failed = 0, summary = ? WHERE id = ?`,
 				).run(earlyExitSummary, passId);
 				// The evidence watermark only advances when nothing new
-				// remains: a focused pass that exits while the other mode's
-				// work is pending must not skip it for the next pass (#1098).
-				if (totalBacklog === 0) {
+				// remains AND the mode consumes evidence: a focused pass
+				// that exits while the other mode's work is pending must not
+				// skip it for the next pass, and a hygiene pass must never
+				// advance the watermark even on an empty backlog (#1098,
+				// #1149).
+				if (totalBacklog === 0 && dreamingModeAdvancesEvidence(mode)) {
 					for (const scope of scopes) resetDreamingTokens(db, scope, passId, mode, null, cutoff);
 				}
 			});
@@ -916,6 +963,9 @@ export async function runDreamingAgentPass(
 		let toolCallSequence = 0;
 		let applyCallbackReported = false;
 		const rejectedEvidence: EpisodicSourceRecord[] = [];
+		// The newest captured_at each scope's search_evidence surfaced this
+		// pass; the pass-end watermark may advance only to it (#1149).
+		const surfacedWatermarkByScope = new Map<string, string>();
 		const tools = createDreamingAgentTools({
 			accessor,
 			agentId,
@@ -931,6 +981,23 @@ export async function runDreamingAgentPass(
 			},
 			onToolCall(trace) {
 				recordDreamingToolCall(accessor, agentId, passId, ++toolCallSequence, trace);
+				if (trace.tool === "search_evidence" && trace.output.ok === true && Array.isArray(trace.output.items)) {
+					const input = isRecord(trace.input) ? trace.input : null;
+					// A sourceRef call reads a fragment of a source the
+					// listing already surfaced: it adds no new frontier (the
+					// listing's max covers it) and must not advance the
+					// watermark past the unread remainder (#1149).
+					if (input === null || typeof input.sourceRef !== "string") {
+						const scope = input !== null && typeof input.agentId === "string" ? input.agentId : agentId;
+						const surfaced = surfacedEvidenceWatermark(trace.output.items);
+						if (surfaced !== null) {
+							const current = surfacedWatermarkByScope.get(scope);
+							if (current === undefined || timestampMillis(surfaced) > timestampMillis(current)) {
+								surfacedWatermarkByScope.set(scope, surfaced);
+							}
+						}
+					}
+				}
 				if (trace.tool === "apply_ontology_ops") {
 					if (!trace.output.ok && !applyCallbackReported) {
 						rejectedEvidence.push(
@@ -955,6 +1022,18 @@ export async function runDreamingAgentPass(
 		});
 		const summary = `${outcome.summary?.trim() || "Agentic Dreaming pass completed"}`;
 		const tokensConsumed = countTokens(prompt);
+		// The watermark advances only to what this pass actually surfaced: a
+		// pass that completes without surfacing (or deferring) pending
+		// evidence must not skip it for the next scan-first search (#1149).
+		const nextWatermarkByScope = new Map<string, string | null>();
+		for (const scope of scopes) {
+			const previous = accessor.withReadDb((db) => readDreamingState(db, scope).lastPassAt);
+			const surfaced = surfacedWatermarkByScope.get(scope);
+			nextWatermarkByScope.set(
+				scope,
+				surfaced === undefined ? previous : nextEvidenceWatermark(surfaced, previous, cutoff),
+			);
+		}
 		accessor.withWriteTx((db) => {
 			db.prepare(
 				`UPDATE dreaming_passes SET status = 'completed', completed_at = datetime('now'),
@@ -964,12 +1043,14 @@ export async function runDreamingAgentPass(
 			recordDreamingEvidenceExclusionsInTx(db, agentId, passId, rejectedEvidence, "semantic_operation_rejected");
 			// The evidence queue resets to the pass watermark for EVERY scope
 			// the pass consumed evidence for: the next pass's backlog counts
-			// only sources captured after this pass began. A hygiene pass
-			// consumes no evidence, so it must not advance the watermark —
+			// only sources captured after the surfaced frontier. A hygiene
+			// pass consumes no evidence, so it must not advance the watermark —
 			// advancing it would hide the unprocessed backlog from the next
 			// content pass and starve content again (#1098).
 			if (dreamingModeAdvancesEvidence(mode)) {
-				for (const scope of scopes) resetDreamingTokens(db, scope, passId, mode, null, cutoff);
+				for (const scope of scopes) {
+					resetDreamingTokens(db, scope, passId, mode, null, nextWatermarkByScope.get(scope) ?? null);
+				}
 			}
 		});
 		return { passId, applied, skipped: 0, failed, summary };

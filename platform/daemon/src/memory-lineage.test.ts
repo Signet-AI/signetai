@@ -6,6 +6,7 @@ import cl100k_base from "js-tiktoken/ranks/cl100k_base";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import {
 	MEMORY_PROJECTION_MAX_TOKENS,
+	indexExternalMemoryArtifact,
 	purgeCanonicalNoiseSessions,
 	purgeCanonicalNoiseSessionsOnce,
 	reindexMemoryArtifacts,
@@ -944,6 +945,10 @@ describe("reindexMemoryArtifacts batch staging", () => {
 		resetWorkspace();
 	});
 
+	afterAll(() => {
+		closeDbAccessor();
+	});
+
 	it("threshold-crossing items are cached — second reindex is a no-op", async () => {
 		// Create >50 artifacts to exceed the batch size (50) and trigger a flush mid-loop.
 		// The regression: the 50th item's cache update was lost because it was only
@@ -999,5 +1004,51 @@ describe("reindexMemoryArtifacts batch staging", () => {
 		);
 
 		expect(afterSecond).toEqual(afterFirst);
+	});
+
+	it("stamps corrupt pre-epoch mtimes as the index time, not the DOS-epoch sentinel (#1149)", () => {
+		// Regression for #1149: files whose mtime is the 1980 DOS-epoch
+		// sentinel (timestamp-stripping filesystems/sync layers) used to get
+		// captured_at = 1980, which no rolling `since` watermark can reach —
+		// the row was invisible to Dreaming forever. The index time must be
+		// stamped instead; the raw mtime still lands in source_mtime_ms.
+		indexExternalMemoryArtifact({
+			agentId: "default",
+			sourcePath: "/vault/notes/sentinel.md",
+			sourceKind: "source_obsidian_markdown",
+			harness: "obsidian",
+			content: "sentinel artifact evidence",
+			sourceMtimeMs: Date.parse("1980-01-01T06:00:00.000Z"),
+		});
+		const sentinel = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare(
+						`SELECT captured_at, source_mtime_ms AS sourceMtimeMs FROM memory_artifacts
+					 WHERE agent_id = 'default' AND source_path = ?`,
+					)
+					.get("/vault/notes/sentinel.md") as { captured_at: string; sourceMtimeMs: number } | undefined,
+		);
+		expect(sentinel).toBeDefined();
+		if (sentinel === undefined) throw new Error("sentinel artifact row missing");
+		expect(Date.parse(sentinel.captured_at)).toBeGreaterThan(Date.parse("2025-01-01T00:00:00.000Z"));
+		expect(sentinel.sourceMtimeMs).toBe(Date.parse("1980-01-01T06:00:00.000Z"));
+
+		// A real mtime is still stamped verbatim.
+		indexExternalMemoryArtifact({
+			agentId: "default",
+			sourcePath: "/vault/notes/real.md",
+			sourceKind: "source_obsidian_markdown",
+			harness: "obsidian",
+			content: "real artifact evidence",
+			sourceMtimeMs: Date.parse("2026-05-24T00:00:00.000Z"),
+		});
+		const real = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare("SELECT captured_at FROM memory_artifacts WHERE agent_id = 'default' AND source_path = ?")
+					.get("/vault/notes/real.md") as { captured_at: string } | undefined,
+		);
+		expect(real?.captured_at).toBe("2026-05-24T00:00:00.000Z");
 	});
 });

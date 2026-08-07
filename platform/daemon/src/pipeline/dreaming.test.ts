@@ -104,7 +104,7 @@ describe("Dreaming", () => {
 		).toEqual({ capturedAt: "2026-03-01T00:00:00.000Z", kind: "summary", id: "fragment" });
 	});
 
-	it("uses the fixed agent prompt and resets the evidence backlog each pass", async () => {
+	it("uses the fixed agent prompt and resets the evidence backlog to the surfaced frontier", async () => {
 		seedSummary(db, "s1", "durable episodic evidence for the backlog.", 500);
 		expect(getDreamingEpisodicTokenBacklog(accessor, AGENT)).toBeGreaterThan(0);
 		let prompt = "";
@@ -113,6 +113,12 @@ describe("Dreaming", () => {
 			{
 				async run(input) {
 					prompt = input.prompt;
+					// The scan-first listing surfaces the pending evidence, so
+					// the pass-end watermark legitimately advances to it and
+					// the same evidence must not re-trigger the next pass.
+					const search = input.tools.find((tool) => tool.name === "search_evidence");
+					if (!search) throw new Error("Missing search_evidence");
+					await search.execute("call", { agentId: AGENT }, undefined, undefined, {} as never);
 					return { summary: "Done" };
 				},
 			},
@@ -124,8 +130,8 @@ describe("Dreaming", () => {
 		);
 		expect(result.summary).toBe("Done");
 		expect(prompt).toBe(DREAMING_AGENT_PROMPT);
-		// The evidence queue resets to pass start: the same evidence must not
-		// re-trigger the next pass.
+		// The evidence queue resets to the surfaced frontier: the same
+		// evidence must not re-trigger the next pass.
 		expect(getDreamingEpisodicTokenBacklog(accessor, AGENT)).toBe(0);
 	});
 
@@ -758,7 +764,13 @@ describe("Dreaming", () => {
 		await runDreamingAgentPass(
 			accessor,
 			{
-				async run() {
+				async run(input) {
+					// The content pass surfaces the starved evidence through
+					// the scan-first listing, so the watermark legitimately
+					// advances to it and the backlog drains.
+					const search = input.tools.find((tool) => tool.name === "search_evidence");
+					if (!search) throw new Error("Missing search_evidence");
+					await search.execute("call", { agentId: AGENT }, undefined, undefined, {} as never);
 					return { summary: "Extracted claims" };
 				},
 			},
@@ -769,5 +781,147 @@ describe("Dreaming", () => {
 			"incremental-content",
 		);
 		expect(getDreamingEpisodicTokenBacklog(accessor, AGENT)).toBe(0);
+	});
+
+	it("does not advance the evidence watermark past evidence a content pass never surfaced (#1149)", async () => {
+		// Regression for #1149: a content pass that completes without ever
+		// surfacing the pending evidence used to reset the watermark to
+		// pass-start anyway, so the un-surfaced window was counted as processed
+		// and the next scan-first search never re-listed it. A pass that
+		// surfaced nothing must leave the watermark untouched so the evidence
+		// stays pending.
+		seedSummary(db, "unread-evidence", "Evidence that a 0/0 content pass never surfaced.", 8);
+		await runDreamingAgentPass(
+			accessor,
+			{
+				async run() {
+					// The agent spent its budget elsewhere: no search_evidence
+					// call, so nothing was surfaced this pass.
+					return { summary: "Reviewed due claims only" };
+				},
+			},
+			defaultCfg(),
+			"/tmp",
+			AGENT,
+			[AGENT],
+			"incremental-content",
+		);
+		expect(getDreamingState(accessor, AGENT).lastPassAt).toBeNull();
+		expect(getDreamingEpisodicTokenBacklog(accessor, AGENT)).toBeGreaterThan(0);
+	});
+
+	it("advances the evidence watermark only to the evidence the pass surfaced (#1149)", async () => {
+		// Regression for #1149: the watermark must move to the newest source the
+		// pass actually surfaced, never to pass-start. Evidence captured after
+		// the surfaced frontier stays pending for the next scan-first search.
+		const seed = (id: string, latestAt: string): void => {
+			db.prepare(
+				`INSERT INTO session_summaries
+				 (id, agent_id, content, token_count, depth, kind, source_type, earliest_at, latest_at, created_at)
+				 VALUES (?, ?, ?, 8, 0, 'session', 'summary', ?, ?, datetime('now'))`,
+			).run(id, AGENT, `Summarized evidence for ${id}.`, latestAt, latestAt);
+		};
+		accessor.withWriteTx((tx) => {
+			tx.prepare("INSERT INTO dreaming_state (agent_id, last_pass_at) VALUES (?, ?)").run(
+				AGENT,
+				"2026-08-05T00:00:00.000Z",
+			);
+		});
+		seed("surfaced-old", "2026-08-06T00:00:00.000Z");
+		seed("surfaced-new", "2026-08-06T12:00:00.000Z");
+		seed("gap-evidence", "2026-08-07T00:00:00.000Z");
+
+		await runDreamingAgentPass(
+			accessor,
+			{
+				async run(input) {
+					const search = input.tools.find((tool) => tool.name === "search_evidence");
+					if (!search) throw new Error("Missing search_evidence");
+					// The listing is bounded below the gap evidence: only the two
+					// surfaced summaries are returned to the pass.
+					await search.execute(
+						"call",
+						{ agentId: AGENT, since: "2026-08-05T00:00:00.000Z", before: "2026-08-06T12:00:00.000Z" },
+						undefined,
+						undefined,
+						{} as never,
+					);
+					return { summary: "Filed surfaced summaries" };
+				},
+			},
+			defaultCfg(),
+			"/tmp",
+			AGENT,
+			[AGENT],
+			"incremental-content",
+		);
+		// The watermark advanced to the newest surfaced source, not pass-start.
+		expect(getDreamingState(accessor, AGENT).lastPassAt).toBe("2026-08-06T12:00:00.000Z");
+		// The gap evidence (captured after the surfaced frontier, before pass
+		// start) remains pending for the next scan-first search.
+		expect(getDreamingEpisodicTokenBacklog(accessor, AGENT)).toBeGreaterThan(0);
+	});
+
+	it("does not advance the watermark on a fragment read of an already-listed source (#1149)", async () => {
+		// Regression for #1149 (adversarial review F4): paging a sourceRef
+		// fragment is a content read of a source the listing already surfaced;
+		// it must not advance the frontier past the unread remainder.
+		db.prepare(
+			`INSERT INTO session_summaries
+			 (id, agent_id, content, token_count, depth, kind, source_type, earliest_at, latest_at, created_at)
+			 VALUES ('frag-source', ?, 'Fragment evidence for frontier checks.', 8, 0, 'session', 'summary',
+			  '2026-08-06T12:00:00.000Z', '2026-08-06T12:00:00.000Z', datetime('now'))`,
+		).run(AGENT);
+		accessor.withWriteTx((tx) => {
+			tx.prepare("INSERT INTO dreaming_state (agent_id, last_pass_at) VALUES (?, ?)").run(
+				AGENT,
+				"2026-08-05T00:00:00.000Z",
+			);
+		});
+
+		await runDreamingAgentPass(
+			accessor,
+			{
+				async run(input) {
+					const search = input.tools.find((tool) => tool.name === "search_evidence");
+					if (!search) throw new Error("Missing search_evidence");
+					await search.execute(
+						"call",
+						{ agentId: AGENT, sourceRef: "summary:frag-source", offset: 0, chunkSize: 10 },
+						undefined,
+						undefined,
+						{} as never,
+					);
+					return { summary: "Paged one fragment" };
+				},
+			},
+			defaultCfg(),
+			"/tmp",
+			AGENT,
+			[AGENT],
+			"incremental-content",
+		);
+		expect(getDreamingState(accessor, AGENT).lastPassAt).toBe("2026-08-05T00:00:00.000Z");
+	});
+
+	it("does not advance the evidence watermark when a hygiene pass early-exits (#1098, #1149)", async () => {
+		// Regression for #1149 (adversarial review F5): a hygiene pass that
+		// early-exits on an empty queue used to advance the watermark to
+		// pass-start anyway, violating the hygiene-never-advances contract
+		// and skipping evidence indexed in the TOCTOU gap.
+		await runDreamingAgentPass(
+			accessor,
+			{
+				async run() {
+					throw new Error("agent should not be invoked for an empty hygiene pass");
+				},
+			},
+			defaultCfg(),
+			"/tmp",
+			AGENT,
+			[AGENT],
+			"incremental-hygiene",
+		);
+		expect(getDreamingState(accessor, AGENT).lastPassAt).toBeNull();
 	});
 });

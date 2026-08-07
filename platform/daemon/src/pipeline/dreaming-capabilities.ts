@@ -9,7 +9,7 @@
  */
 import type { Entity } from "@signet/core";
 import { z } from "zod";
-import type { DbAccessor } from "../db-accessor";
+import type { DbAccessor, ReadDb } from "../db-accessor";
 import { classifyEntityQuality } from "../entity-quality";
 import type { EpisodicSourceRecord } from "../episodic-sources";
 import { readEpisodicSource, searchEpisodicSources } from "../episodic-sources";
@@ -47,6 +47,25 @@ const MAX_ENTITY_TEXT_CHARS = 2_000;
 function boundedText(value: string | undefined, maxChars: number): string | undefined {
 	if (value === undefined || value.length <= maxChars) return value;
 	return value.slice(0, maxChars);
+}
+
+/**
+ * The scope's evidence watermark (`dreaming_state.last_pass_at`): the
+ * frontier the last pass actually surfaced. `search_evidence` anchors its
+ * scan-first listing here (when the agent omits `since`) so the unprocessed
+ * window is listed instead of pass-start (#1149). Missing on first run, an
+ * old workspace, or a scope that never passed: returns null so the listing
+ * falls back to unbounded.
+ */
+function readEvidenceWatermark(db: ReadDb, agentId: string): string | null {
+	try {
+		const row = db.prepare("SELECT last_pass_at AS lastPassAt FROM dreaming_state WHERE agent_id = ?").get(agentId) as
+			| { lastPassAt: string | null }
+			| undefined;
+		return row?.lastPassAt ?? null;
+	} catch {
+		return null;
+	}
 }
 
 function evidenceExcerptStart(content: string, query: string, maxChars: number): number {
@@ -429,7 +448,7 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 		capability(
 			"search_evidence",
 			"Search episodic evidence",
-			"Full-text search immutable episodic memories, artifacts, transcripts, and summaries in one agent scope. Results contain exact bounded excerpts of the rendered evidence with contentOffset/contentLength; use sourceRef for citations, which are validated against the complete canonical source. Each record carries completed: memory, artifact, and summary records are settled captures (true); a transcript is true once a session-end summary job has been triggered for its session (the session ended), whether or not the summary itself landed, and false while the session is still running — do not file claims from a still-growing transcript, since its states may be contradicted by the session's end. If contentTruncated is true, page exact fragments with the same sourceRef and chunkSize: start at offset=0 when contentHasPrevious is true, then use offset=contentOffset+content.length from the fragment just returned until contentHasNext is false. Omit the query to list the most recent sources (e.g. with since as a cutoff). Artifacts are deduped by content hash: content-identical files across vault paths collapse to one canonical entry.",
+			"Full-text search immutable episodic memories, artifacts, transcripts, and summaries in one agent scope. Results contain exact bounded excerpts of the rendered evidence with contentOffset/contentLength; use sourceRef for citations, which are validated against the complete canonical source. Each record carries completed: memory, artifact, and summary records are settled captures (true); a transcript is true once a session-end summary job has been triggered for its session (the session ended), whether or not the summary itself landed, and false while the session is still running — do not file claims from a still-growing transcript, since its states may be contradicted by the session's end. If contentTruncated is true, page exact fragments with the same sourceRef and chunkSize: start at offset=0 when contentHasPrevious is true, then use offset=contentOffset+content.length from the fragment just returned until contentHasNext is false. Omit the query AND since to list the unprocessed window: the listing starts at the scope's evidence watermark (the last pass's surfaced frontier), so the newest unseen sources come first. Narrow with a query if the list is large; pass an explicit earlier since only when you need older history. Artifacts are deduped by content hash: content-identical files across vault paths collapse to one canonical entry.",
 			true,
 			z.object({
 				agentId: z.string().min(1),
@@ -456,10 +475,16 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 							? { ok: false, error: "Evidence fragment offset is outside the source" }
 							: { ok: true, items: [fragment] };
 					}
+					// The scan-first listing omits `since`; anchor it to the
+					// scope's evidence watermark instead of pass-start so the
+					// unprocessed window [last surfaced frontier -> now] is
+					// listed, never the fresh minutes after pass start only
+					// (#1149).
+					const effectiveSince = since ?? readEvidenceWatermark(db, scopeId);
 					const sources = searchEpisodicSources(db, {
 						agentId: scopeId,
 						query: query ?? "",
-						since,
+						since: effectiveSince ?? undefined,
 						before,
 						kind,
 						limit,
