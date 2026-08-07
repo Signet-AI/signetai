@@ -33,6 +33,8 @@ afterEach(() => {
 	}
 });
 
+process.env.SIGNET_TELEMETRY_OPTOUT = "1"; // keep CI/test daemons out of the PostHog project
+
 describe("native Hermes release smoke", () => {
 	const binary = process.env.SIGNET_NATIVE_SMOKE_BINARY?.trim();
 	const hermesFixture = process.env.SIGNET_HERMES_SMOKE_REPO?.trim();

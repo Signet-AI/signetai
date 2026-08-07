@@ -222,10 +222,33 @@ Privacy contract:
   but not identifiable.
 - Telemetry is on by default and can be disabled with
   `telemetryEnabled: false`.
+- Every recorded event is mirrored to an open, inspectable JSONL log at
+  `<agentsDir>/.daemon/telemetry/events.jsonl`, so users can audit
+  exactly what was sent.
 
-Events recorded today: `daemon.heartbeat` (every 5 minutes), the
-`inference.*` lifecycle (`route`, `execute`, `stream`, `fallback`),
-`llm.generate` (provider, latency, token and cost counts when reported,
-success — never prompt text), and `session.start` / `session.end`
-(harness and prompt count). The `pipeline.*` event types are declared
-for future use but not yet emitted.
+Events recorded: `daemon.heartbeat` (every 5 minutes), the `inference.*`
+lifecycle (`route`, `execute`, `stream`, `fallback`), `llm.generate`
+(provider, latency, token and cost counts when reported, success — never
+prompt text), `session.start` / `session.end` (harness and prompt count),
+and the lifecycle events `daemon.started`, `command.invoked`,
+`error.occurred`, and `version.upgraded`. The `pipeline.*` event types
+are declared for future use but not yet emitted.
+
+Release Download Stats
+---
+
+GitHub tracks download counts per release asset. Unlike npm download totals —
+which include CI pipelines, `npx` one-offs, and version-update churn — each
+release asset download is a real binary or connector-tarball fetch, so it is
+the cleaner install signal (issue #1026 Phase 3).
+
+```sh
+bun scripts/release-download-stats.ts              # markdown table
+bun scripts/release-download-stats.ts --json       # NDJSON for dashboards
+bun scripts/release-download-stats.ts --releases 5 # last N releases
+```
+
+The script queries the public GitHub REST API for `Signet-AI/signetai`
+releases (no auth required; unauthenticated rate limit of 60 req/hr is
+plenty) and aggregates `download_count` per release and per asset, sorted
+by downloads descending. Output includes the total across the window.

@@ -1123,6 +1123,27 @@ content, user identity, or file paths. Each install gets a random
 anonymous id (persisted in the workspace database) used as the PostHog
 `distinct_id`, so installs stay countable without being identifiable.
 
+**Disclosure (issue #1026):** `signet setup` tells users telemetry is on
+by default and asks whether to disable it. Declining writes
+`telemetryEnabled: false`; non-interactive/CI setups keep the default
+(enabled).
+
+**Runtime opt-out:** setting `SIGNET_TELEMETRY_OPTOUT=1` in the daemon's
+environment disables telemetry without touching config — the same knob the
+install ping honors. CI runners, containers, and scripted environments
+should set it so automated daemon boots don't count as installs.
+
+**Open telemetry log:** every recorded event is appended as one JSON line
+to `<agentsDir>/.daemon/telemetry/events.jsonl` — the single inspectable
+audit surface for exactly what was sent (daemon events and CLI
+`command.invoked` lines). No memory content, code, file paths, or personal
+data are ever included.
+
+Lifecycle events: `daemon.started` (version, platform,
+uptime), `command.invoked` (command name only, never arguments),
+`error.occurred` (error type only, never stack/message), `version.upgraded`
+(from, to).
+
 | Field | Default | Range | Description |
 |-------|---------|-------|-------------|
 | `posthogHost` | `https://us.i.posthog.com` | — | PostHog instance URL (empty disables) |

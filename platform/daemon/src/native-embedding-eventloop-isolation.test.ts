@@ -103,6 +103,8 @@ async function waitForHealth(
 	throw new Error("daemon did not become healthy in time");
 }
 
+process.env.SIGNET_TELEMETRY_OPTOUT = "1"; // keep CI/test daemons out of the PostHog project
+
 describe("native embedding event-loop isolation (e2e)", () => {
 	// Generous timeout: daemon startup + a 5s probe window.
 	it("/health stays within SLA while the embedding worker is stuck on a model download", async () => {

@@ -4,15 +4,24 @@
  * Names the bug they guard: the constant "signet-anonymous" distinct_id
  * collapsed every install into one PostHog user, making install and usage
  * analytics impossible. The remaining tests pin the send lifecycle
- * (batch shape, mark-sent, no-resend, backoff, retention pruning) so a
- * future change can't silently stop events from reaching PostHog.
+ * (batch shape, mark-sent, no-resend, backoff, retention pruning) and the
+ * open JSONL telemetry log (lifecycle events, issue #1026 Phase 2) so a
+ * future change can't silently stop events from reaching PostHog or the
+ * audit log.
  */
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "bun:test";
-import { mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
-import { type TelemetryCollector, createTelemetryCollector, nextFlushIntervalMs } from "./telemetry";
+import { type DbAccessor, closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
+import {
+	TELEMETRY_EVENTS,
+	type TelemetryCollector,
+	createTelemetryCollector,
+	defaultTelemetryLogPath,
+	nextFlushIntervalMs,
+	telemetryDisabledByEnv,
+} from "./telemetry";
 import { cleanupTestTempDir, createTestTempDir } from "./test-temp-dir";
 
 const TELEMETRY_CONFIG = {
@@ -34,6 +43,7 @@ interface CapturedBody {
 }
 
 let dir = "";
+let logPath = "";
 let captured: Array<{ readonly url: string; readonly body: CapturedBody }> = [];
 const originalFetch = globalThis.fetch;
 
@@ -51,12 +61,25 @@ function installFetchMock(): void {
 function resetWorkspace(): void {
 	closeDbAccessor();
 	rmSync(join(dir, "memory"), { recursive: true, force: true });
+	rmSync(join(dir, ".daemon"), { recursive: true, force: true });
 	mkdirSync(join(dir, "memory"), { recursive: true });
 	initDbAccessor(join(dir, "memory", "memories.db"));
 }
 
 function makeCollector(): TelemetryCollector {
 	return createTelemetryCollector(getDbAccessor(), TELEMETRY_CONFIG, "0.0.0-test");
+}
+
+/**
+ * Minimal DbAccessor for JSONL-log tests: the collector only touches
+ * withWriteTx/withReadDb there, and posthogHost is "" so nothing sends.
+ */
+function fakeDbAccessor(): DbAccessor {
+	const stmt = { run: () => ({}), get: () => undefined, all: () => [] };
+	return {
+		withWriteTx: (fn: (db: { prepare(sql: string): typeof stmt }) => unknown) => fn({ prepare: () => stmt }),
+		withReadDb: (fn: (db: { prepare(sql: string): typeof stmt }) => unknown) => fn({ prepare: () => stmt }),
+	} as unknown as DbAccessor;
 }
 
 function lastBatchDistinctId(): string {
@@ -83,24 +106,27 @@ function installRowCount(): number {
 	});
 }
 
+// Shared harness for both suites below: fresh workspace per test, including
+// a clean .daemon dir so the JSONL log cannot leak between tests.
+beforeAll(() => {
+	dir = createTestTempDir("signet-telemetry-");
+	installFetchMock();
+	resetWorkspace();
+});
+
+beforeEach(() => {
+	captured = [];
+	logPath = defaultTelemetryLogPath(dir);
+	resetWorkspace();
+});
+
+afterAll(() => {
+	globalThis.fetch = originalFetch;
+	closeDbAccessor();
+	cleanupTestTempDir(dir);
+});
+
 describe("telemetry collector", () => {
-	beforeAll(() => {
-		dir = createTestTempDir("signet-telemetry-");
-		installFetchMock();
-		resetWorkspace();
-	});
-
-	beforeEach(() => {
-		captured = [];
-		resetWorkspace();
-	});
-
-	afterAll(() => {
-		globalThis.fetch = originalFetch;
-		closeDbAccessor();
-		cleanupTestTempDir(dir);
-	});
-
 	it("uses a different anonymous id for different workspaces", async () => {
 		const collectorA = makeCollector();
 		collectorA.record("daemon.heartbeat", { uptimeMs: 1 });
@@ -160,6 +186,15 @@ describe("telemetry collector", () => {
 		expect(captured).toHaveLength(1);
 	});
 
+	it("honors SIGNET_TELEMETRY_OPTOUT as a runtime opt-out", () => {
+		// Regression: CI and test daemons boot with default config and the
+		// shipped key, so every smoke run became a fake PostHog install.
+		expect(telemetryDisabledByEnv({})).toBe(false);
+		expect(telemetryDisabledByEnv({ SIGNET_TELEMETRY_OPTOUT: "1" })).toBe(true);
+		expect(telemetryDisabledByEnv({ SIGNET_TELEMETRY_OPTOUT: "true" })).toBe(true);
+		expect(telemetryDisabledByEnv({ SIGNET_TELEMETRY_OPTOUT: "0" })).toBe(false);
+	});
+
 	it("backs off after three consecutive PostHog failures", () => {
 		expect(nextFlushIntervalMs(60000, 0)).toBe(60000);
 		expect(nextFlushIntervalMs(60000, 2)).toBe(60000);
@@ -187,5 +222,76 @@ describe("telemetry collector", () => {
 		);
 		expect(rows.map((r) => r.id)).not.toContain("old-1");
 		expect(rows.length).toBe(1);
+	});
+});
+
+describe("telemetry lifecycle events (issue #1026 Phase 2)", () => {
+	it("declares the Phase-2 lifecycle event types", () => {
+		for (const event of ["daemon.started", "command.invoked", "error.occurred", "version.upgraded"]) {
+			expect(TELEMETRY_EVENTS).toContain(event);
+		}
+	});
+
+	it("mirrors recorded events to the open JSONL log", () => {
+		const collector = createTelemetryCollector(
+			fakeDbAccessor(),
+			{
+				posthogHost: "",
+				posthogApiKey: "",
+				flushIntervalMs: 60000,
+				flushBatchSize: 50,
+				retentionDays: 90,
+				memorySearchQaEnabled: false,
+			},
+			"0.163.15",
+			{ telemetryLogPath: logPath },
+		);
+
+		collector.record("daemon.started", { version: "0.163.15", platform: process.platform, uptimeMs: 0 });
+		collector.record("command.invoked", { command: "status" });
+
+		expect(existsSync(logPath)).toBe(true);
+		const lines = readFileSync(logPath, "utf-8").trim().split("\n");
+		expect(lines).toHaveLength(2);
+		const first = JSON.parse(lines[0]) as { event: string; properties: { version: string } };
+		expect(first.event).toBe("daemon.started");
+		expect(first.properties.version).toBe("0.163.15");
+		const second = JSON.parse(lines[1]) as { event: string; properties: { command: string } };
+		expect(second.event).toBe("command.invoked");
+		expect(second.properties.command).toBe("status");
+	});
+
+	it("does not write a log when telemetryLogPath is omitted", () => {
+		const collector = createTelemetryCollector(
+			fakeDbAccessor(),
+			{
+				posthogHost: "",
+				posthogApiKey: "",
+				flushIntervalMs: 60000,
+				flushBatchSize: 50,
+				retentionDays: 90,
+				memorySearchQaEnabled: false,
+			},
+			"0.163.15",
+		);
+		collector.record("daemon.started", { version: "0.163.15" });
+		expect(existsSync(logPath)).toBe(false);
+	});
+
+	it("tolerates an unwritable log path without throwing", () => {
+		const collector = createTelemetryCollector(
+			fakeDbAccessor(),
+			{
+				posthogHost: "",
+				posthogApiKey: "",
+				flushIntervalMs: 60000,
+				flushBatchSize: 50,
+				retentionDays: 90,
+				memorySearchQaEnabled: false,
+			},
+			"0.163.15",
+			{ telemetryLogPath: "/dev/null/nonexistent/events.jsonl" },
+		);
+		expect(() => collector.record("daemon.started", { version: "0.163.15" })).not.toThrow();
 	});
 });

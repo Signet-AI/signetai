@@ -223,6 +223,9 @@ jobs:
           # separately. Avoid external model downloads and Hugging Face rate limits.
           SIGNET_NATIVE_EMBEDDING_SMOKE: "0"
           SIGNET_NATIVE_SMOKE_BINARY: ./dist/native/${{ matrix.asset }}
+          # The smoke boots a real default-config daemon; keep its telemetry
+          # out of the Signet PostHog project.
+          SIGNET_TELEMETRY_OPTOUT: "1"
         run: bun test scripts/native-embedding-runtime-smoke.test.ts
 
       - name: Upload to release

@@ -152,6 +152,8 @@ async function startOAuthLoginSse(origin: string, providerId: string): Promise<s
 	return text;
 }
 
+process.env.SIGNET_TELEMETRY_OPTOUT = "1"; // keep CI/test daemons out of the PostHog project
+
 describe("native smoke binary path", () => {
 	test("resolves a relative SIGNET_NATIVE_SMOKE_BINARY override to an absolute path", () => {
 		const prev = process.env.SIGNET_NATIVE_SMOKE_BINARY;

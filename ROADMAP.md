@@ -124,9 +124,12 @@ Fine-tune a small reasoning model from collected conversations (#984 feeds this)
 
 Pi 3B+ as minimum platform, idle RSS under 100 MB. Constrained ARM edge runtime PR open (#999).
 
-**[backlog] Usage analytics (#1026)**
+**[done] Usage analytics (#1026)**
 
-PostHog, non-intrusive, for understanding install and usage patterns.
+PostHog, non-intrusive, for understanding install and usage patterns. Anonymous
+telemetry on by default (opt-out via `telemetryEnabled: false`): per-install
+anonymous id, install counter, daemon lifecycle events, and an open JSONL
+audit log.
 
 ---
 

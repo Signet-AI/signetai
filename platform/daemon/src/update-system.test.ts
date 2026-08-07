@@ -135,6 +135,40 @@ describe("Issue 322: verify installed version after update install", () => {
 		expect(getUpdateState().pendingRestartVersion).toBe("0.78.1");
 	});
 
+	it("fires the onUpgraded lifecycle hook with (from, to) on success (issue #1026 Phase 2)", async () => {
+		const workspaceDir = join(tmpdir(), `signet-update-upgraded-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		initUpdateSystem("0.78.0", workspaceDir);
+
+		const upgrades: Array<{ from: string; to: string }> = [];
+		const result = await finalizeSuccessfulUpdateInstall(
+			"0.78.1",
+			"installed ok",
+			{
+				installMethod: "native",
+				activeExecutablePath: "/home/test/.local/bin/signet",
+			},
+			{
+				syncWorkspaceSourceRepoAsync: async (dir) => ({
+					status: "current",
+					path: join(dir, "signetai"),
+					message: "Signet source checkout is already current",
+					branch: "main",
+					defaultBranch: "main",
+				}),
+				updateDesktopInstallAfterUpdate: async () => ({
+					status: "skipped",
+					message: "Signet desktop app is not installed",
+				}),
+				onUpgraded: (from, to) => {
+					upgrades.push({ from, to });
+				},
+			},
+		);
+
+		expect(result.success).toBe(true);
+		expect(upgrades).toEqual([{ from: "0.78.0", to: "0.78.1" }]);
+	});
+
 	it("attempts managed desktop update after source checkout sync", async () => {
 		const workspaceDir = join(tmpdir(), `signet-update-desktop-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 		const calls: string[] = [];
