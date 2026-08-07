@@ -27,6 +27,16 @@ const INITIAL_CONFIG = `inference:
       kind: api
       providerFamily: minimax
       credentialRef: SIGNET_KEY_MINIMAX
+  targets:
+    background:
+      executor: openai-compatible
+      endpoint: http://127.0.0.1:1234/v1
+memory:
+  pipelineV2:
+    mutationsFrozen: true
+    maintenanceMode: execute
+x-custom-operator-key:
+  nested: keep-me
 `;
 
 let capturedSaveBody: string | null = null;
@@ -156,6 +166,28 @@ describe("agent config store", () => {
 		expect(body).toContain("anthropic");
 		expect(body).toContain("kind: subscription_session");
 		expect(body).toContain("providerFamily: anthropic");
+		await harness.unmount();
+	});
+
+	test("save round-trips unknown keys and operator edits instead of dropping them (#1164)", async () => {
+		capturedSaveBody = null;
+		const harness = await mountHarness();
+		expect(harness.store.ready).toBe(true);
+
+		// Saving without touching the settings must preserve everything the
+		// operator configured outside the dashboard (mutationsFrozen, custom
+		// executors, unknown top-level keys) — a full-model rewrite would drop
+		// them silently.
+		await act(async () => {
+			await harness.store.save();
+		});
+
+		const body = requireSaveBody(capturedSaveBody);
+		expect(body).toContain("mutationsFrozen: true");
+		expect(body).toContain("maintenanceMode: execute");
+		expect(body).toContain("executor: openai-compatible");
+		expect(body).toContain("x-custom-operator-key:");
+		expect(body).toContain("nested: keep-me");
 		await harness.unmount();
 	});
 });
