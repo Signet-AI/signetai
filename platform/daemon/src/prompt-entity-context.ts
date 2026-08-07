@@ -2,12 +2,18 @@ import { existsSync } from "node:fs";
 import { cosineSimilarity } from "@signet/core";
 import { selectWithBudgetSkippingOversized } from "./context-budget";
 import { type ReadDb, getDbAccessor, hasDbAccessor } from "./db-accessor";
+import type { EmbeddingFetchOptions } from "./embedding-fetch";
 import type { EmbeddingRole } from "./embedding-profile";
 import { logger } from "./logger";
 import type { EmbeddingConfig } from "./memory-config";
 import { countPromptTermOverlap, extractSubstantiveWords, stripUntrustedMetadata } from "./prompt-text";
 
-type FetchEmbedding = (text: string, cfg: EmbeddingConfig, role?: EmbeddingRole) => Promise<number[] | null>;
+type FetchEmbedding = (
+	text: string,
+	cfg: EmbeddingConfig,
+	role?: EmbeddingRole,
+	opts?: EmbeddingFetchOptions,
+) => Promise<number[] | null>;
 
 type PromptEntityMatch = {
 	readonly entityId: string;
@@ -675,7 +681,9 @@ export async function buildEntityPromptContext({
 	// calls that multiply embedding latency by the match count (#1059).
 	let sharedQueryVector: Float32Array | null = null;
 	try {
-		const vector = await fetchEmbedding(sharedSemanticQuery, embedding, "query");
+		const vector = await fetchEmbedding(sharedSemanticQuery, embedding, "query", {
+			usage: { source: "recall", agentId },
+		});
 		if (vector) sharedQueryVector = new Float32Array(vector);
 	} catch (error) {
 		logger.warn("hooks", "Entity attribute semantic scoring failed; using lexical attribute scoring", {

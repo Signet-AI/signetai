@@ -18,9 +18,10 @@ import {
 	readEmbeddingIndexState,
 	resolveActiveEmbeddingConfig,
 } from "../embedding-index-state";
+import type { EmbeddingRole } from "../embedding-profile";
 import { getInferenceRouterOrNull } from "../inference-router";
 import { logger } from "../logger";
-import { type ResolvedMemoryConfig, loadMemoryConfig } from "../memory-config";
+import { type EmbeddingConfig, type ResolvedMemoryConfig, loadMemoryConfig } from "../memory-config";
 import {
 	type RecallParams,
 	type RecallResponse,
@@ -531,6 +532,23 @@ function recordRecallQaTelemetry(input: {
 		response: input.result,
 		retentionDays: input.cfg.pipelineV2.telemetry.retentionDays,
 	});
+}
+
+/**
+ * Wrap an embed function so embeddings produced during a recall route are
+ * attributed to the recall source. Query-role embeddings (the search query
+ * vector) are "recall"; the document-role embed aggregateRecall performs on
+ * the synthesized aggregate memory content is a memory write, so it records
+ * as "memory-capture". Both carry the resolved agent id.
+ */
+function recallAttributedEmbedFn(
+	embedFn: typeof fetchEmbedding,
+	agentId: string,
+): (text: string, cfg: EmbeddingConfig, role?: EmbeddingRole) => Promise<number[] | null> {
+	return (text, cfg, role) =>
+		embedFn(text, cfg, role, {
+			usage: { source: role === "query" ? "recall" : "memory-capture", agentId },
+		});
 }
 
 function resolveAgentIdHint(input: { readonly agentId?: string; readonly sessionKey?: string }): string | undefined {
@@ -1447,7 +1465,9 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 					const chunkId = savedChunkIds[chunkIndex];
 					// Generate embedding async
 					try {
-						const vec = await fetchEmbedding(plan.normalized.storageContent, fullCfg.embedding);
+						const vec = await fetchEmbedding(plan.normalized.storageContent, fullCfg.embedding, "document", {
+							usage: { source: "memory-capture", agentId },
+						});
 						if (vec) {
 							if (vec.length !== fullCfg.embedding.dimensions) {
 								logger.warn("memory", "Embedding dimension mismatch, skipping vector insert", {
@@ -1700,7 +1720,9 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		try {
 			const baseCfg = loadMemoryConfig(AGENTS_DIR);
 			const cfg = withActiveEmbeddingConfig(baseCfg);
-			const vec = await fetchEmbedding(normalizedContent.storageContent, cfg.embedding);
+			const vec = await fetchEmbedding(normalizedContent.storageContent, cfg.embedding, "document", {
+				usage: { source: "memory-capture", agentId },
+			});
 			if (vec) {
 				if (vec.length !== cfg.embedding.dimensions) {
 					logger.warn("memory", "Embedding dimension mismatch, skipping vector insert", {
@@ -2293,7 +2315,9 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 
 		let embeddingVector: number[] | null = null;
 		if (parsedPatch.value.contentForEmbedding !== null) {
-			embeddingVector = await fetchEmbedding(parsedPatch.value.contentForEmbedding, cfg.embedding);
+			embeddingVector = await fetchEmbedding(parsedPatch.value.contentForEmbedding, cfg.embedding, "document", {
+				usage: { source: "memory-capture" },
+			});
 		}
 
 		const now = new Date().toISOString();
@@ -2910,7 +2934,9 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 
 			let embeddingVector: number[] | null = null;
 			if (parsedPatch.value.contentForEmbedding !== null) {
-				embeddingVector = await fetchEmbedding(parsedPatch.value.contentForEmbedding, cfg.embedding);
+				embeddingVector = await fetchEmbedding(parsedPatch.value.contentForEmbedding, cfg.embedding, "document", {
+					usage: { source: "memory-capture" },
+				});
 			}
 
 			const txResult = getDbAccessor().withWriteTx((db) =>
@@ -3036,9 +3062,9 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				body.aggregate === true
 					? await aggregateRecallFn(params, cfg, {
 							router: getInferenceRouterOrNullFn(),
-							embedFn: fetchEmbeddingFn,
+							embedFn: recallAttributedEmbedFn(fetchEmbeddingFn, agentId),
 						})
-					: await hybridRecallFn(params, cfg, fetchEmbeddingFn);
+					: await hybridRecallFn(params, cfg, recallAttributedEmbedFn(fetchEmbeddingFn, agentId));
 			recordRecallQaTelemetry({
 				route: "POST /api/memory/recall",
 				agentId,
@@ -3106,7 +3132,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				recallMode: "direct",
 				...(scopeProject ? { project: scopeProject } : {}),
 			};
-			const result = await hybridRecall(params, cfg, fetchEmbedding);
+			const result = await hybridRecall(params, cfg, recallAttributedEmbedFn(fetchEmbedding, agentId));
 			recordRecallQaTelemetry({
 				route: "GET /api/memory/search",
 				agentId,

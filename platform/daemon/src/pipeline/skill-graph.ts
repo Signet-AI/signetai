@@ -18,7 +18,9 @@
 import { createHash } from "node:crypto";
 import type { DbAccessor } from "../db-accessor";
 import { syncVecDeleteByEmbeddingIds, syncVecInsert, vectorToBlob } from "../db-helpers";
+import type { EmbeddingFetchOptions } from "../embedding-fetch";
 import { isActiveEmbeddingConfig, resolveActiveEmbeddingConfig } from "../embedding-index-state";
+import type { EmbeddingRole } from "../embedding-profile";
 import { logger } from "../logger";
 import type { EmbeddingConfig, PipelineV2Config } from "../memory-config";
 
@@ -152,7 +154,12 @@ export async function installSkillNode(
 	accessor: DbAccessor,
 	config: PipelineV2Config,
 	embeddingCfg: EmbeddingConfig,
-	fetchEmbedding: (text: string, cfg: EmbeddingConfig) => Promise<number[] | null>,
+	fetchEmbedding: (
+		text: string,
+		cfg: EmbeddingConfig,
+		role?: EmbeddingRole,
+		opts?: EmbeddingFetchOptions,
+	) => Promise<number[] | null>,
 ): Promise<SkillInstallResult> {
 	const agentId = input.agentId ?? "default";
 	let entityId = skillEntityId(agentId, input.frontmatter.name);
@@ -280,7 +287,9 @@ export async function installSkillNode(
 	let embeddingCreated = false;
 	const embeddingText = buildEmbeddingText(fm);
 	const writeConfig = accessor.withReadDb((db) => resolveActiveEmbeddingConfig(db, embeddingCfg));
-	const embVec = await fetchEmbedding(embeddingText, writeConfig);
+	const embVec = await fetchEmbedding(embeddingText, writeConfig, "document", {
+		usage: { source: "artifact-index", agentId },
+	});
 
 	if (embVec && embVec.length > 0) {
 		const embId = crypto.randomUUID();

@@ -21,6 +21,7 @@ import {
 } from "../cross-agent";
 import { getDbAccessor } from "../db-accessor";
 import { fetchEmbedding } from "../embedding-fetch";
+import type { EmbeddingRole } from "../embedding-profile";
 import {
 	type CheckpointExtractRequest,
 	type PreCompactionRequest,
@@ -41,7 +42,7 @@ import {
 } from "../hooks.js";
 import { getInferenceRouterOrNull } from "../inference-router";
 import { logger } from "../logger";
-import { loadMemoryConfig } from "../memory-config";
+import { type EmbeddingConfig, type ResolvedMemoryConfig, loadMemoryConfig } from "../memory-config";
 import { normalizeMarkdownBody, writeCompactionArtifact } from "../memory-lineage.js";
 import { type RecallParams, hybridRecall } from "../memory-search";
 import { getSynthesisWorker, readLastSynthesisTime } from "../pipeline";
@@ -780,9 +781,9 @@ function registerRecall(app: Hono): void {
 				body.aggregate === true
 					? await aggregateRecall(params, cfg, {
 							router: getInferenceRouterOrNull(),
-							embedFn: fetchEmbedding,
+							embedFn: recallAttributedEmbedFn(fetchEmbedding, agentId),
 						})
-					: await hybridRecall(params, cfg, fetchEmbedding);
+					: await hybridRecall(params, cfg, recallAttributedEmbedFn(fetchEmbedding, agentId));
 			return c.json(withHookRecallCompat(result));
 		} catch (e) {
 			logger.error("hooks", "Recall hook failed", e as Error);
@@ -1586,6 +1587,23 @@ function registerSynthesis(app: Hono): void {
 			config,
 		});
 	});
+}
+
+/**
+ * Wrap an embed function so embeddings produced during a recall hook are
+ * attributed to the recall source. Query-role embeddings (the search query
+ * vector) are "recall"; the document-role embed aggregateRecall performs on
+ * the synthesized aggregate memory content is a memory write, so it records
+ * as "memory-capture". Both carry the resolved agent id.
+ */
+function recallAttributedEmbedFn(
+	embedFn: typeof fetchEmbedding,
+	agentId: string,
+): (text: string, cfg: EmbeddingConfig, role?: EmbeddingRole) => Promise<number[] | null> {
+	return (text, cfg, role) =>
+		embedFn(text, cfg, role, {
+			usage: { source: role === "query" ? "recall" : "memory-capture", agentId },
+		});
 }
 
 export function registerHooksRoutes(app: Hono): void {

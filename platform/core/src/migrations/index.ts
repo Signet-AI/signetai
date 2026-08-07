@@ -113,6 +113,7 @@ import { up as derivedMemoryProvenance } from "./104-derived-memory-provenance";
 import { up as agentScopedEntityName } from "./105-agent-scoped-entity-name";
 import { up as memoryReviewAfter } from "./106-memory-review-after";
 import { up as dreamingPassUsage } from "./107-dreaming-pass-usage";
+import { up as embeddingUsage } from "./108-embedding-usage";
 
 // -- Public interface consumed by Database.init() --
 
@@ -999,6 +1000,14 @@ export const MIGRATIONS: readonly Migration[] = [
 				{ table: "dreaming_passes", column: "tokens_cache_write" },
 				{ table: "dreaming_passes", column: "tokens_cost" },
 			],
+		},
+	},
+	{
+		version: 108,
+		name: "embedding-usage",
+		up: embeddingUsage,
+		artifacts: {
+			tables: ["embedding_usage"],
 		},
 	},
 ];

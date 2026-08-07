@@ -1,12 +1,14 @@
 import { randomUUID } from "node:crypto";
 import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
 import { vectorToBlob } from "./db-helpers";
+import type { EmbeddingFetchOptions } from "./embedding-fetch";
 import {
 	type EmbeddingIndexState,
 	type PersistedEmbeddingProfile,
 	readEmbeddingIndexState,
 } from "./embedding-index-state";
 import { beginEmbeddingIndexBuild, failEmbeddingIndexBuild } from "./embedding-index-state";
+import type { EmbeddingRole } from "./embedding-profile";
 import type { EmbeddingConfig } from "./memory-config";
 
 const STAGING_VECTOR_TABLE = "vec_embeddings_staging";
@@ -158,7 +160,12 @@ function pruneStagingRows(accessor: DbAccessor): void {
 export async function stageEmbeddingBatch(input: {
 	readonly accessor: DbAccessor;
 	readonly configured: EmbeddingConfig;
-	readonly fetchEmbedding: (text: string, cfg: EmbeddingConfig, role?: "document") => Promise<number[] | null>;
+	readonly fetchEmbedding: (
+		text: string,
+		cfg: EmbeddingConfig,
+		role?: EmbeddingRole,
+		opts?: EmbeddingFetchOptions,
+	) => Promise<number[] | null>;
 	readonly batchSize: number;
 }): Promise<{ staged: number; coverage: EmbeddingMigrationCoverage | null }> {
 	const state = input.accessor.withReadDb((db) => readEmbeddingIndexState(db));
@@ -184,7 +191,9 @@ export async function stageEmbeddingBatch(input: {
 
 	let staged = 0;
 	for (const row of rows) {
-		const vector = await input.fetchEmbedding(row.chunk_text, configForProfile(profile, input.configured), "document");
+		const vector = await input.fetchEmbedding(row.chunk_text, configForProfile(profile, input.configured), "document", {
+			usage: { source: "artifact-index", agentId: row.agent_id ?? undefined },
+		});
 		if (!vector) continue;
 		if (vector.length !== profile.dimensions) {
 			throw new Error(
@@ -280,7 +289,12 @@ export function promoteStagingIndex(accessor: DbAccessor): boolean {
 export function startEmbeddingIndexMigration(input: {
 	readonly accessor: DbAccessor;
 	readonly configured: EmbeddingConfig;
-	readonly fetchEmbedding: (text: string, cfg: EmbeddingConfig, role?: "document") => Promise<number[] | null>;
+	readonly fetchEmbedding: (
+		text: string,
+		cfg: EmbeddingConfig,
+		role?: EmbeddingRole,
+		opts?: EmbeddingFetchOptions,
+	) => Promise<number[] | null>;
 	readonly checkProvider: (cfg: EmbeddingConfig) => Promise<{ available: boolean }>;
 	readonly pollMs: number;
 	readonly batchSize: number;

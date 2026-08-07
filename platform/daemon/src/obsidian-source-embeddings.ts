@@ -4,14 +4,21 @@ import { LEGACY_OBSIDIAN_CHUNK_SOURCE_TYPE, SOURCE_CHUNK_SOURCE_TYPE } from "@si
 import { yieldEvery } from "./async-yield";
 import { getDbAccessor } from "./db-accessor";
 import { syncVecDeleteByEmbeddingIds, syncVecInsert, vectorToBlob } from "./db-helpers";
+import type { EmbeddingFetchOptions } from "./embedding-fetch";
 import { isActiveEmbeddingConfig, resolveActiveEmbeddingConfig } from "./embedding-index-state";
+import type { EmbeddingRole } from "./embedding-profile";
 import type { EmbeddingConfig } from "./memory-config";
 
 export const OBSIDIAN_CHUNK_SOURCE_TYPE = SOURCE_CHUNK_SOURCE_TYPE;
 const OBSIDIAN_SOURCE_CHUNK_DELAY_MS = 100;
 const OBSIDIAN_CHUNK_SOURCE_TYPES = [SOURCE_CHUNK_SOURCE_TYPE, LEGACY_OBSIDIAN_CHUNK_SOURCE_TYPE] as const;
 
-export type SourceEmbeddingFetch = (text: string, cfg: EmbeddingConfig) => Promise<number[] | null>;
+export type SourceEmbeddingFetch = (
+	text: string,
+	cfg: EmbeddingConfig,
+	role?: EmbeddingRole,
+	opts?: EmbeddingFetchOptions,
+) => Promise<number[] | null>;
 
 export interface ObsidianSourceChunk {
 	readonly id: string;
@@ -251,7 +258,9 @@ export async function indexObsidianSourceEmbeddings(
 		let stored = false;
 		for (let attempt = 0; attempt < 2 && !stored; attempt += 1) {
 			const writeConfig = getDbAccessor().withReadDb((db) => resolveActiveEmbeddingConfig(db, input.embeddingConfig));
-			const vector = await input.fetchEmbedding(chunk.chunkText, writeConfig);
+			const vector = await input.fetchEmbedding(chunk.chunkText, writeConfig, "document", {
+				usage: { source: "artifact-index", agentId: input.agentId },
+			});
 			if (!vector || vector.length === 0) break;
 			stored = getDbAccessor().withWriteTx((db) => {
 				// Recheck after the asynchronous provider call: promotion may have

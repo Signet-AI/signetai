@@ -252,10 +252,35 @@ silent fallback or hard-blocked extraction after boot.
   "embedding": {
     "provider": "ollama",
     "model": "nomic-embed-text",
-    "available": true
+    "available": true,
+    "usage": {
+      "total": { "requests": 2084, "tokens": 812345 },
+      "today": { "requests": 12, "tokens": 4567 },
+      "bySource": [
+        { "source": "artifact-index", "requests": 2050, "tokens": 800000 },
+        { "source": "memory-capture", "requests": 30, "tokens": 12000 },
+        { "source": "recall", "requests": 4, "tokens": 345 }
+      ],
+      "byProvider": [
+        { "provider": "ollama", "requests": 2080, "tokens": 812000 },
+        { "provider": "llama-cpp", "requests": 4, "tokens": 345 }
+      ]
+    }
   }
 }
 ```
+
+The `embedding.usage` block reports embedding token consumption recorded at
+the shared embedding-fetch boundary (migration 108). Counts come from the
+real tokenizer (`countTokens`) applied to the text actually sent to the
+provider — never provider-reported usage, since Ollama's `/api/embeddings`
+returns none and the native ONNX path reports none either. `requests` counts
+successful embedding fetches; `tokens` sums their input token counts.
+`bySource` breaks totals down by `memory-capture`, `artifact-index`,
+`recall`, `dreaming`, and `other`; `byProvider` breaks them down by the
+provider that actually served (`ollama`, `llama-cpp`, `native`, `openai` —
+the native fallback chain reports the real serving provider). The block is
+omitted when the table does not exist (pre-migration database).
 
 The `bypassedSessions` field reports how many active sessions currently have
 bypass enabled (see [Sessions and hooks API](./sessions-hooks.md#sessions)).

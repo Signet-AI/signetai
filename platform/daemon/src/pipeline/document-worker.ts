@@ -12,7 +12,9 @@
 import { normalizeAndHashContent } from "../content-normalization";
 import type { DbAccessor, WriteDb } from "../db-accessor";
 import { syncVecInsert, vectorToBlob } from "../db-helpers";
+import type { EmbeddingFetchOptions } from "../embedding-fetch";
 import { isActiveEmbeddingConfig } from "../embedding-index-state";
+import type { EmbeddingRole } from "../embedding-profile";
 import { logger } from "../logger";
 import type { EmbeddingConfig, PipelineV2Config } from "../memory-config";
 import { isSystemPressureHigh } from "../system-pressure";
@@ -31,7 +33,12 @@ export interface DocumentWorkerHandle {
 export interface DocumentWorkerDeps {
 	readonly accessor: DbAccessor;
 	readonly embeddingCfg: EmbeddingConfig;
-	readonly fetchEmbedding: (text: string, cfg: EmbeddingConfig) => Promise<number[] | null>;
+	readonly fetchEmbedding: (
+		text: string,
+		cfg: EmbeddingConfig,
+		role?: EmbeddingRole,
+		opts?: EmbeddingFetchOptions,
+	) => Promise<number[] | null>;
 	readonly pipelineCfg: PipelineV2Config;
 }
 
@@ -300,7 +307,9 @@ async function processDocument(deps: DocumentWorkerDeps, job: DocumentJobRow): P
 		if (!chunkText || chunkText.trim().length === 0) continue;
 
 		// Embedding call is outside write lock
-		const vector = await fetchEmbedding(chunkText, embeddingCfg);
+		const vector = await fetchEmbedding(chunkText, embeddingCfg, "document", {
+			usage: { source: "artifact-index", agentId: documentScope.agentId },
+		});
 
 		// Each chunk's memory creation in its own transaction
 		accessor.withWriteTx((db) => {

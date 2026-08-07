@@ -6,6 +6,7 @@ import { resolveAgentId, resolveDaemonAgentId } from "../agent-id.js";
 import { requirePermission, requireRateLimit } from "../auth";
 import { getDbAccessor } from "../db-accessor.js";
 import { type QueueCounts, getQueueDiagnosticsSnapshot } from "../diagnostics-queue.js";
+import { readEmbeddingUsageSummary } from "../embedding-usage";
 import { getLlmProvider } from "../llm.js";
 import { graphWriteCaps, loadMemoryConfig } from "../memory-config.js";
 import {
@@ -320,6 +321,7 @@ export function registerPipelineRoutes(app: Hono): void {
 				...(cachedEmbeddingStatus && Date.now() - statusCacheTime < STATUS_CACHE_TTL
 					? { available: cachedEmbeddingStatus.available }
 					: {}),
+				usage: readEmbeddingUsageSummary(getDbAccessor()),
 			},
 		});
 	});

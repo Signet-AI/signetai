@@ -1,6 +1,7 @@
 import { getDbAccessor, hasDbAccessor } from "./db-accessor";
 import { resolveActiveEmbeddingConfig } from "./embedding-index-state";
 import { type EmbeddingRole, formatEmbeddingInput } from "./embedding-profile";
+import { type EmbeddingUsageAttribution, recordEmbeddingUsage } from "./embedding-usage";
 import { logger } from "./logger";
 import type { EmbeddingConfig } from "./memory-config";
 import {
@@ -52,6 +53,7 @@ type NativeFallbackProbeResult = {
 	readonly provider: NativeFallbackProvider | "unavailable";
 	readonly model: LlamaCppEmbeddingModel | null;
 	readonly embedding: number[] | null;
+	readonly tokenCount: number;
 };
 type NativeFallbackProbe = {
 	readonly promise: Promise<NativeFallbackProbeResult>;
@@ -71,9 +73,11 @@ export function setNativeEmbeddingProviderForTest(provider: ((text: string) => P
 	cachedNativeEmbed = provider;
 }
 
-type EmbeddingFetchOptions = {
+export type EmbeddingFetchOptions = {
 	readonly signal?: AbortSignal;
 	readonly timeoutMs?: number;
+	/** Optional usage attribution recorded with the fetch (source_kind, agent). */
+	readonly usage?: EmbeddingUsageAttribution;
 };
 
 function resolveEmbeddingTimeoutMs(opts: EmbeddingFetchOptions, fallback: number): number {
@@ -127,7 +131,7 @@ async function fetchOllamaEmbedding(
 	baseUrl: string,
 	model: string,
 	opts: EmbeddingFetchOptions = {},
-): Promise<number[] | null> {
+): Promise<{ readonly embedding: number[] | null; readonly tokenCount: number }> {
 	const res = await fetchWithEmbeddingTimeout(
 		`${baseUrl.replace(/\/$/, "")}/api/embeddings`,
 		{
@@ -143,20 +147,21 @@ async function fetchOllamaEmbedding(
 			status: res.status,
 			model,
 		});
-		return null;
+		return { embedding: null, tokenCount: countTokens(text) };
 	}
 	const data = (await res.json()) as { embedding: number[] };
-	return data.embedding ?? null;
+	return { embedding: data.embedding ?? null, tokenCount: countTokens(text) };
 }
 
-function boundLlamaCppEmbeddingInput(text: string, maxInputTokens: number): string {
+function boundLlamaCppEmbeddingInput(text: string, maxInputTokens: number): { text: string; tokenCount: number } {
 	const tokenCount = countTokens(text);
-	if (tokenCount <= maxInputTokens) return text;
+	if (tokenCount <= maxInputTokens) return { text, tokenCount };
 	logger.warn("embedding", "Truncating llama.cpp embedding input to physical-batch safety limit", {
 		inputTokens: tokenCount,
 		maxInputTokens,
 	});
-	return truncateToTokens(text, maxInputTokens);
+	const bounded = truncateToTokens(text, maxInputTokens);
+	return { text: bounded, tokenCount: countTokens(bounded) };
 }
 
 async function fetchLlamaCppEmbedding(
@@ -166,13 +171,14 @@ async function fetchLlamaCppEmbedding(
 	opts: EmbeddingFetchOptions,
 	timeoutMs: number,
 	maxInputTokens = DEFAULT_LLAMACPP_MAX_INPUT_TOKENS,
-): Promise<number[] | null> {
+): Promise<{ readonly embedding: number[] | null; readonly tokenCount: number }> {
+	const bounded = boundLlamaCppEmbeddingInput(text, maxInputTokens);
 	const res = await fetchWithEmbeddingTimeout(
 		`${baseUrl.replace(/\/$/, "")}/v1/embeddings`,
 		{
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ input: boundLlamaCppEmbeddingInput(text, maxInputTokens), model }),
+			body: JSON.stringify({ input: bounded.text, model }),
 		},
 		opts,
 		resolveEmbeddingTimeoutMs(opts, timeoutMs),
@@ -182,11 +188,17 @@ async function fetchLlamaCppEmbedding(
 			status: res.status,
 			model,
 		});
-		return null;
+		return { embedding: null, tokenCount: bounded.tokenCount };
 	}
 	const data = (await res.json()) as { data?: Array<{ embedding: number[] }> };
-	return data.data?.[0]?.embedding ?? null;
+	return { embedding: data.data?.[0]?.embedding ?? null, tokenCount: bounded.tokenCount };
 }
+
+type EmbeddingServeResult = {
+	readonly embedding: number[] | null;
+	readonly provider: string | null;
+	readonly tokenCount: number;
+};
 
 async function fetchNativeFallback(
 	provider: NativeFallbackProvider,
@@ -194,11 +206,12 @@ async function fetchNativeFallback(
 	cfg: EmbeddingConfig,
 	opts: EmbeddingFetchOptions,
 	model: LlamaCppEmbeddingModel | null = nativeFallbackModel,
-): Promise<number[] | null> {
+): Promise<EmbeddingServeResult> {
 	if (provider === "ollama") {
-		return fetchOllamaEmbedding(text, resolveOllamaUrl(), "nomic-embed-text", opts);
+		const r = await fetchOllamaEmbedding(text, resolveOllamaUrl(), "nomic-embed-text", opts);
+		return { embedding: r.embedding, provider: "ollama", tokenCount: r.tokenCount };
 	}
-	return fetchLlamaCppEmbedding(
+	const r = await fetchLlamaCppEmbedding(
 		text,
 		DEFAULT_LLAMACPP_BASE_URL,
 		model ?? "nomic-embed-text",
@@ -206,6 +219,7 @@ async function fetchNativeFallback(
 		5000,
 		cfg.llamaCppMaxInputTokens,
 	);
+	return { embedding: r.embedding, provider: "llama-cpp", tokenCount: r.tokenCount };
 }
 
 async function probeNativeFallback(
@@ -215,7 +229,7 @@ async function probeNativeFallback(
 ): Promise<NativeFallbackProbeResult> {
 	const discoveredModel = await findLlamaCppEmbeddingModel();
 	if (discoveredModel) {
-		const embedding = await fetchLlamaCppEmbedding(
+		const r = await fetchLlamaCppEmbedding(
 			text,
 			DEFAULT_LLAMACPP_BASE_URL,
 			discoveredModel,
@@ -223,21 +237,21 @@ async function probeNativeFallback(
 			5000,
 			cfg.llamaCppMaxInputTokens,
 		);
-		if (embedding) {
-			return { provider: "llama-cpp", model: discoveredModel, embedding };
+		if (r.embedding) {
+			return { provider: "llama-cpp", model: discoveredModel, embedding: r.embedding, tokenCount: r.tokenCount };
 		}
 	}
 
 	try {
-		const embedding = await fetchOllamaEmbedding(text, resolveOllamaUrl(), "nomic-embed-text", opts);
-		if (embedding) {
-			return { provider: "ollama", model: null, embedding };
+		const r = await fetchOllamaEmbedding(text, resolveOllamaUrl(), "nomic-embed-text", opts);
+		if (r.embedding) {
+			return { provider: "ollama", model: null, embedding: r.embedding, tokenCount: r.tokenCount };
 		}
 	} catch {
 		// The aggregate warning below is the single actionable diagnostic.
 	}
 
-	return { provider: "unavailable", model: null, embedding: null };
+	return { provider: "unavailable", model: null, embedding: null, tokenCount: 0 };
 }
 
 async function resolveNativeFallback(
@@ -245,15 +259,15 @@ async function resolveNativeFallback(
 	cfg: EmbeddingConfig,
 	opts: EmbeddingFetchOptions,
 	nativeError: string,
-): Promise<number[] | null> {
-	if (nativeFallbackProvider === "unavailable") return null;
+): Promise<EmbeddingServeResult> {
+	if (nativeFallbackProvider === "unavailable") return { embedding: null, provider: null, tokenCount: 0 };
 	if (nativeFallbackProvider) return fetchNativeFallback(nativeFallbackProvider, text, cfg, opts);
 
 	if (nativeFallbackProbe) {
 		const result = await nativeFallbackProbe.promise;
 		return result.provider !== "unavailable"
 			? fetchNativeFallback(result.provider, text, cfg, opts, result.model)
-			: null;
+			: { embedding: null, provider: null, tokenCount: 0 };
 	}
 
 	logger.warn("embedding", `Native embedding failed, probing local fallbacks: ${nativeError}`);
@@ -279,7 +293,11 @@ async function resolveNativeFallback(
 				});
 			}
 		}
-		return result.embedding;
+		return {
+			embedding: result.embedding,
+			provider: result.provider === "unavailable" ? null : result.provider,
+			tokenCount: result.tokenCount,
+		};
 	} finally {
 		if (nativeFallbackProbe === probe) nativeFallbackProbe = null;
 	}
@@ -348,82 +366,16 @@ export async function fetchEmbedding(
 	const opts = typeof roleOrOpts === "string" ? (typeof optsOrRole === "string" ? {} : optsOrRole) : roleOrOpts;
 	const formattedText = formatEmbeddingInput(text, effectiveCfg, role);
 	try {
-		if (effectiveCfg.provider === "native") {
-			// Kill-switch (#1073): warmNative: false means native is never
-			// warmed or routed to, even when the active embedding profile is
-			// native. Fall through to the llama.cpp/ollama fallback chain.
-			if (effectiveCfg.warmNative === false) {
-				return resolveNativeFallback(
-					formattedText,
-					effectiveCfg,
-					opts,
-					"native embedding disabled (embedding.warmNative: false)",
-				);
-			}
-			if (nativeFallbackProvider === "unavailable") return null;
-			if (nativeFallbackProvider) return fetchNativeFallback(nativeFallbackProvider, formattedText, effectiveCfg, opts);
-			try {
-				if (!cachedNativeEmbed) {
-					const mod = await import("./native-embedding");
-					cachedNativeEmbed = mod.nativeEmbed;
-				}
-				return await cachedNativeEmbed(formattedText);
-			} catch (nativeErr) {
-				return resolveNativeFallback(
-					formattedText,
-					effectiveCfg,
-					opts,
-					nativeErr instanceof Error ? nativeErr.message : String(nativeErr),
-				);
-			}
-		}
-		if (effectiveCfg.provider === "ollama") {
-			return await fetchOllamaEmbedding(formattedText, effectiveCfg.base_url, effectiveCfg.model, opts);
-		}
-
-		if (effectiveCfg.provider === "llama-cpp") {
-			const baseUrl = effectiveCfg.base_url.trim() || DEFAULT_LLAMACPP_BASE_URL;
-			return fetchLlamaCppEmbedding(
-				formattedText,
-				baseUrl,
-				effectiveCfg.model,
-				opts,
-				30000,
-				effectiveCfg.llamaCppMaxInputTokens,
-			);
-		}
-
-		const apiKey = await resolveEmbeddingApiKey(effectiveCfg.api_key);
-		const baseUrl = resolveEmbeddingBaseUrl(effectiveCfg);
-		if (!apiKey && requiresOpenAiApiKey(baseUrl)) {
-			logger.warn("embedding", "No API key configured for OpenAI embeddings, skipping request to api.openai.com");
-			return null;
-		}
-		const res = await fetchWithEmbeddingTimeout(
-			`${baseUrl.replace(/\/$/, "")}/embeddings`,
-			{
-				method: "POST",
-				headers: {
-					"Content-Type": "application/json",
-					...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
-				},
-				body: JSON.stringify({ model: effectiveCfg.model, input: formattedText }),
-			},
-			opts,
-			resolveEmbeddingTimeoutMs(opts, 30000),
-		);
-		if (!res.ok) {
-			logger.warn("embedding", "Embedding API request failed", {
-				status: res.status,
-				provider: effectiveCfg.provider,
-				model: effectiveCfg.model,
+		const serve = await serveEmbedding(formattedText, effectiveCfg, opts);
+		if (serve.embedding !== null && serve.provider !== null) {
+			recordEmbeddingUsage({
+				provider: serve.provider,
+				tokens: serve.tokenCount,
+				source: opts.usage?.source ?? "other",
+				agentId: opts.usage?.agentId,
 			});
-			return null;
 		}
-		const data = (await res.json()) as {
-			data: Array<{ embedding: number[] }>;
-		};
-		return data.data?.[0]?.embedding ?? null;
+		return serve.embedding;
 	} catch (e) {
 		logger.warn("embedding", "Embedding fetch error", {
 			provider: effectiveCfg.provider,
@@ -432,4 +384,101 @@ export async function fetchEmbedding(
 		});
 		return null;
 	}
+}
+
+/**
+ * Dispatch a formatted embedding request to the effective provider and report
+ * which provider actually served and how many tokens the sent text carried.
+ * The fallback chain (native -> llama.cpp/ollama) resolves the serving
+ * provider inside, so the boundary records the true provider rather than the
+ * configured one.
+ */
+async function serveEmbedding(
+	formattedText: string,
+	effectiveCfg: EmbeddingConfig,
+	opts: EmbeddingFetchOptions,
+): Promise<EmbeddingServeResult> {
+	if (effectiveCfg.provider === "native") {
+		// Kill-switch (#1073): warmNative: false means native is never
+		// warmed or routed to, even when the active embedding profile is
+		// native. Fall through to the llama.cpp/ollama fallback chain.
+		if (effectiveCfg.warmNative === false) {
+			return resolveNativeFallback(
+				formattedText,
+				effectiveCfg,
+				opts,
+				"native embedding disabled (embedding.warmNative: false)",
+			);
+		}
+		if (nativeFallbackProvider === "unavailable") return { embedding: null, provider: null, tokenCount: 0 };
+		if (nativeFallbackProvider) return fetchNativeFallback(nativeFallbackProvider, formattedText, effectiveCfg, opts);
+		try {
+			if (!cachedNativeEmbed) {
+				const mod = await import("./native-embedding");
+				cachedNativeEmbed = mod.nativeEmbed;
+			}
+			const embedding = await cachedNativeEmbed(formattedText);
+			return { embedding, provider: "native", tokenCount: countTokens(formattedText) };
+		} catch (nativeErr) {
+			return resolveNativeFallback(
+				formattedText,
+				effectiveCfg,
+				opts,
+				nativeErr instanceof Error ? nativeErr.message : String(nativeErr),
+			);
+		}
+	}
+	if (effectiveCfg.provider === "ollama") {
+		const r = await fetchOllamaEmbedding(formattedText, effectiveCfg.base_url, effectiveCfg.model, opts);
+		return { embedding: r.embedding, provider: "ollama", tokenCount: r.tokenCount };
+	}
+
+	if (effectiveCfg.provider === "llama-cpp") {
+		const baseUrl = effectiveCfg.base_url.trim() || DEFAULT_LLAMACPP_BASE_URL;
+		const r = await fetchLlamaCppEmbedding(
+			formattedText,
+			baseUrl,
+			effectiveCfg.model,
+			opts,
+			30000,
+			effectiveCfg.llamaCppMaxInputTokens,
+		);
+		return { embedding: r.embedding, provider: "llama-cpp", tokenCount: r.tokenCount };
+	}
+
+	const apiKey = await resolveEmbeddingApiKey(effectiveCfg.api_key);
+	const baseUrl = resolveEmbeddingBaseUrl(effectiveCfg);
+	if (!apiKey && requiresOpenAiApiKey(baseUrl)) {
+		logger.warn("embedding", "No API key configured for OpenAI embeddings, skipping request to api.openai.com");
+		return { embedding: null, provider: effectiveCfg.provider, tokenCount: countTokens(formattedText) };
+	}
+	const res = await fetchWithEmbeddingTimeout(
+		`${baseUrl.replace(/\/$/, "")}/embeddings`,
+		{
+			method: "POST",
+			headers: {
+				"Content-Type": "application/json",
+				...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+			},
+			body: JSON.stringify({ model: effectiveCfg.model, input: formattedText }),
+		},
+		opts,
+		resolveEmbeddingTimeoutMs(opts, 30000),
+	);
+	if (!res.ok) {
+		logger.warn("embedding", "Embedding API request failed", {
+			status: res.status,
+			provider: effectiveCfg.provider,
+			model: effectiveCfg.model,
+		});
+		return { embedding: null, provider: effectiveCfg.provider, tokenCount: countTokens(formattedText) };
+	}
+	const data = (await res.json()) as {
+		data: Array<{ embedding: number[] }>;
+	};
+	return {
+		embedding: data.data?.[0]?.embedding ?? null,
+		provider: effectiveCfg.provider,
+		tokenCount: countTokens(formattedText),
+	};
 }
