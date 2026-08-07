@@ -19,6 +19,7 @@ import type { Hono } from "hono";
 import { resolveDaemonAgentId } from "../agent-id";
 import { type ReadDb, getDbAccessor } from "../db-accessor";
 import { fetchEmbedding } from "../embedding-fetch";
+import { logger } from "../logger";
 import { loadMemoryConfig } from "../memory-config";
 import {
 	type NativeMemoryBridgeHandle,
@@ -118,7 +119,6 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 	const agentsDir = deps.agentsDir ?? process.env.SIGNET_PATH ?? `${homedir()}/.agents`;
 	const startBridge = deps.startBridge ?? startNativeMemoryBridge;
 	const purgeNativeSource = deps.purgeNativeSource ?? purgeNativeMemorySourceArtifacts;
-	cleanupSourceDeletionTombstones(agentsDir, purgeNativeSource);
 	app.get("/api/sources", (c) => {
 		const config = loadSourcesConfig(agentsDir);
 		const agentId = resolveDaemonAgentId();
@@ -438,9 +438,19 @@ function scheduleSourceIndexJob(input: SourceIndexJobInput, job: SourceIndexJob,
 	}, delayMs).unref?.();
 }
 
-function cleanupSourceDeletionTombstones(
-	agentsDir: string,
-	purgeNativeSource: typeof purgeNativeMemorySourceArtifacts,
+/**
+ * Purge artifacts of sources deleted while the daemon was down and drop their
+ * tombstones. Runs in the daemon startup sequence AFTER the DB accessor is
+ * initialized (#1143): route registration executes before DB init, so it must
+ * not trigger this — the old placement crashed the daemon with "DbAccessor not
+ * initialised" whenever a tombstone existed at boot.
+ *
+ * A failed purge is logged and its tombstone is kept for the next boot:
+ * tombstone processing must never brick startup.
+ */
+export function cleanupSourceDeletionTombstones(
+	agentsDir = process.env.SIGNET_PATH ?? `${homedir()}/.agents`,
+	purgeNativeSource: typeof purgeNativeMemorySourceArtifacts = purgeNativeMemorySourceArtifacts,
 ): void {
 	const tombstones = loadSourceDeletionTombstones(agentsDir);
 	if (tombstones.length === 0) return;
@@ -449,7 +459,17 @@ function cleanupSourceDeletionTombstones(
 	for (const tombstone of tombstones) {
 		if (configuredIds.has(tombstone.source.id)) continue;
 		const provider = getSourceProvider(tombstone.source.kind);
-		if (provider) purgeSource(provider, tombstone.source, tombstone.agentId, purgeNativeSource);
+		if (!provider) continue;
+		try {
+			purgeSource(provider, tombstone.source, tombstone.agentId, purgeNativeSource);
+		} catch (err) {
+			remaining.push(tombstone);
+			logger.warn(
+				"system",
+				`Source-deletion tombstone purge failed for source ${tombstone.source.id}; deferring to next boot`,
+				{ error: err instanceof Error ? err.message : String(err) },
+			);
+		}
 	}
 	saveSourceDeletionTombstones(remaining, agentsDir);
 }

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { addDiscordSource, addObsidianSource, loadSourcesConfig } from "@signet/core";
@@ -18,7 +18,7 @@ import {
 	markSourceIndexJobRunning,
 	updateSourceIndexJobProgress,
 } from "../source-index-progress";
-import { registerSourcesRoutes } from "./sources-routes";
+import { cleanupSourceDeletionTombstones, registerSourcesRoutes } from "./sources-routes";
 
 const originalFetch = globalThis.fetch;
 
@@ -386,7 +386,7 @@ describe("Sources routes", () => {
 		expect(purges).toBe(2);
 	});
 
-	it("purges tombstoned disconnected source artifacts when routes register after restart", async () => {
+	it("purges tombstoned disconnected source artifacts after DB init, not at route registration (#1143)", async () => {
 		let releaseScan = () => {};
 		let scanStarted = false;
 		let runtimePurges = 0;
@@ -409,18 +409,62 @@ describe("Sources routes", () => {
 		).toBe(200);
 		expect(runtimePurges).toBe(1);
 
+		// Route registration runs before the DB accessor is initialized, so it
+		// must not purge tombstones: the old behavior crashed the daemon with
+		// "DbAccessor not initialised" whenever a tombstone existed at boot.
 		const restarted = new Hono();
-		registerSourcesRoutes(restarted, {
-			agentsDir: dir,
-			purgeNativeSource: () => {
-				startupPurges++;
-				return 1;
-			},
+		expect(() =>
+			registerSourcesRoutes(restarted, {
+				agentsDir: dir,
+				purgeNativeSource: () => {
+					throw new Error("DbAccessor not initialised — call initDbAccessor() first");
+				},
+			}),
+		).not.toThrow();
+		expect(runtimePurges).toBe(1);
+
+		// The startup sequence runs the purge after DB init.
+		cleanupSourceDeletionTombstones(dir, () => {
+			startupPurges++;
+			return 1;
 		});
 		expect(startupPurges).toBe(1);
 
 		releaseScan();
 		await waitFor(() => runtimePurges === 2);
+	});
+
+	it("defers a failed tombstone purge instead of crashing startup", () => {
+		const tombstonePath = join(dir, ".daemon", "source-deletion-tombstones.json");
+		mkdirSync(join(dir, ".daemon"), { recursive: true });
+		writeFileSync(
+			tombstonePath,
+			`${JSON.stringify(
+				[
+					{
+						id: "tombstone-1",
+						source: { id: "ghost-vault", name: "Ghost Vault", kind: "obsidian", root: vault },
+						agentId: "test-agent",
+						deletedAt: new Date().toISOString(),
+					},
+				],
+				null,
+				2,
+			)}\n`,
+		);
+		let attempts = 0;
+		expect(() =>
+			cleanupSourceDeletionTombstones(dir, () => {
+				attempts++;
+				throw new Error("embedding store unavailable");
+			}),
+		).not.toThrow();
+		expect(attempts).toBe(1);
+		// The tombstone survives a failed purge so the next boot retries it.
+		expect(JSON.parse(readFileSync(tombstonePath, "utf8"))).toHaveLength(1);
+
+		cleanupSourceDeletionTombstones(dir, () => 1);
+		expect(JSON.parse(readFileSync(tombstonePath, "utf8"))).toHaveLength(0);
 	});
 
 	it("reports source chunk stats using source-owned chunk id prefixes", async () => {

@@ -183,7 +183,7 @@ import { registerSecretRoutes } from "./routes/secrets-routes.js";
 import { registerSessionRoutes } from "./routes/session-routes.js";
 import { mountSkillAnalyticsRoutes } from "./routes/skill-analytics.js";
 import { mountSkillsRoutes, setFetchEmbedding } from "./routes/skills.js";
-import { registerSourcesRoutes } from "./routes/sources-routes.js";
+import { cleanupSourceDeletionTombstones, registerSourcesRoutes } from "./routes/sources-routes.js";
 import { registerTelemetryRoutes } from "./routes/telemetry-routes.js";
 import { checkEmbeddingProvider } from "./routes/utils.js";
 import { mountWidgetRoutes } from "./routes/widget.js";
@@ -1717,6 +1717,14 @@ async function main() {
 	// registration) would interfere with the DB write connection if allowed
 	// to run between recovery batches (#1059).
 	runStartupRecovery(getDbAccessor());
+
+	// Purge artifacts of sources deleted while the daemon was down (e.g.
+	// crash-loop-disabled sources). This needs the DB accessor, so it runs
+	// here in the startup sequence — not at route registration, which
+	// executes before DB init and crashed the daemon whenever a tombstone
+	// existed at boot (#1143). Failures are tolerated inside the cleanup;
+	// failed purges defer to the next boot.
+	cleanupSourceDeletionTombstones(AGENTS_DIR);
 
 	const { extensionPath } = getVectorRuntimeStatus();
 	const bundled = join(__dirname, "synthesis-render-worker.js");
