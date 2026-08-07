@@ -41,6 +41,17 @@ export interface EpisodicSourceRecord {
 	 * writes at save time.
 	 */
 	readonly evidenceMeta: string | null;
+	/**
+	 * Whether the record is a settled, complete capture. Immutable kinds
+	 * (memory, artifact, summary) are always completed; a transcript is
+	 * completed once a session-end summary job has been triggered for its
+	 * session (the session ended and finalization began), whether or not the
+	 * summary itself landed — a summary job that times out or fails must not
+	 * keep the transcript classified as mid-stream forever. A running
+	 * session's still-growing transcript is not settled evidence: its
+	 * intermediate states may be contradicted by the session's end.
+	 */
+	readonly completed: boolean;
 }
 
 export interface ReadEpisodicSourceOptions {
@@ -168,6 +179,8 @@ export function readEpisodicMemory(db: ReadDb, agentId: string, id: string): Epi
 		// re-submit already-processed evidence to Dreaming.
 		capturedAt: row.created_at,
 		evidenceMeta: row.evidence_meta,
+		// A memory is a point-in-time capture: always settled.
+		completed: true,
 	};
 }
 
@@ -220,6 +233,8 @@ export function readEpisodicArtifact(db: ReadDb, agentId: string, id: string): E
 		harness: row.harness,
 		capturedAt: row.captured_at ?? row.updated_at,
 		evidenceMeta: null,
+		// An artifact is a captured file snapshot: always settled.
+		completed: true,
 	};
 }
 
@@ -228,10 +243,15 @@ export function readEpisodicTranscript(db: ReadDb, agentId: string, id: string):
 	const placeholders = ids.map(() => "?").join(", ");
 	const row = db
 		.prepare(
-			`SELECT session_key, content, harness, project, created_at, updated_at
-			 FROM session_transcripts
-			 WHERE agent_id = ? AND session_key IN (${placeholders})
-			 ORDER BY updated_at DESC, created_at DESC
+			`SELECT st.session_key, st.content, st.harness, st.project, st.created_at, st.updated_at,
+			        EXISTS (
+			          SELECT 1 FROM summary_jobs AS sj
+			          WHERE sj.agent_id = st.agent_id AND sj.session_key = st.session_key
+			            AND sj.trigger IN ('session_end', 'ttl_expired')
+			        ) AS completed
+			 FROM session_transcripts AS st
+			 WHERE st.agent_id = ? AND st.session_key IN (${placeholders})
+			 ORDER BY st.updated_at DESC, st.created_at DESC
 			 LIMIT 1`,
 		)
 		.get(agentId, ...ids) as
@@ -242,6 +262,7 @@ export function readEpisodicTranscript(db: ReadDb, agentId: string, id: string):
 				readonly project: string | null;
 				readonly created_at: string;
 				readonly updated_at: string | null;
+				readonly completed: number;
 		  }
 		| undefined;
 	if (!row) return null;
@@ -257,6 +278,13 @@ export function readEpisodicTranscript(db: ReadDb, agentId: string, id: string):
 		harness: row.harness,
 		capturedAt: row.updated_at ?? row.created_at,
 		evidenceMeta: null,
+		// A transcript is settled once a session-end summary job has been
+		// triggered for the session: that is the signal the session ended,
+		// whether or not the summary itself lands (a timed-out or failed
+		// summary must not keep the transcript mid-stream forever). A
+		// still-running session's transcript is mid-stream evidence, not
+		// settled fact.
+		completed: row.completed === 1,
 	};
 }
 
@@ -302,6 +330,8 @@ export function readEpisodicSummary(db: ReadDb, agentId: string, id: string): Ep
 		harness: row.harness,
 		capturedAt: row.latest_at,
 		evidenceMeta: null,
+		// A summary is the session's consolidated end state: always settled.
+		completed: true,
 	};
 }
 
@@ -403,6 +433,7 @@ export function readRecentEpisodicSources(
 						harness: readNonEmptyTrimmed(memory.who),
 						capturedAt: memory.created_at,
 						evidenceMeta: memory.evidence_meta,
+						completed: true,
 					} satisfies EpisodicSourceRecord;
 				})
 		: [];
@@ -475,18 +506,24 @@ export function readRecentEpisodicSources(
 						harness: artifact.harness,
 						capturedAt: artifact.captured_at ?? artifact.updated_at,
 						evidenceMeta: null,
+						completed: true,
 					} satisfies EpisodicSourceRecord;
 				})
 		: [];
 	const transcripts: EpisodicSourceRecord[] = wants("transcript")
 		? db
 				.prepare(
-					`SELECT session_key, content, harness, project, created_at, updated_at
-			 FROM session_transcripts
-			 WHERE agent_id = ?
-			   AND (${transcriptCursor.sql} OR ${transcriptRequeue})
-			 ORDER BY julianday(COALESCE(updated_at, created_at)) ${direction}, session_key ${direction}
-			 LIMIT ?`,
+					`SELECT st.session_key, st.content, st.harness, st.project, st.created_at, st.updated_at,
+					        EXISTS (
+					          SELECT 1 FROM summary_jobs AS sj
+					          WHERE sj.agent_id = st.agent_id AND sj.session_key = st.session_key
+					            AND sj.trigger IN ('session_end', 'ttl_expired')
+					        ) AS completed
+					 FROM session_transcripts AS st
+					 WHERE st.agent_id = ?
+					   AND (${transcriptCursor.sql} OR ${transcriptRequeue})
+					 ORDER BY julianday(COALESCE(st.updated_at, st.created_at)) ${direction}, st.session_key ${direction}
+					 LIMIT ?`,
 				)
 				.all(agentId, ...transcriptCursor.args, ...requeueArgs, boundedLimit)
 				.map((row) => {
@@ -497,6 +534,7 @@ export function readRecentEpisodicSources(
 						readonly project: string | null;
 						readonly created_at: string;
 						readonly updated_at: string | null;
+						readonly completed: number;
 					};
 					return {
 						kind: "transcript",
@@ -510,6 +548,7 @@ export function readRecentEpisodicSources(
 						harness: transcript.harness,
 						capturedAt: transcript.updated_at ?? transcript.created_at,
 						evidenceMeta: null,
+						completed: transcript.completed === 1,
 					} satisfies EpisodicSourceRecord;
 				})
 		: [];
@@ -549,6 +588,7 @@ export function readRecentEpisodicSources(
 						harness: summary.harness,
 						capturedAt: summary.latest_at,
 						evidenceMeta: null,
+						completed: true,
 					} satisfies EpisodicSourceRecord;
 				})
 		: [];

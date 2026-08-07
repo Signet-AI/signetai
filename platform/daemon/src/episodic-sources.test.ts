@@ -91,6 +91,75 @@ describe("episodic source selection", () => {
 		]);
 	});
 
+	it("marks transcripts completed when a session-end summary job is triggered, even if it fails", () => {
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO session_transcripts
+				 (session_key, content, harness, project, agent_id, created_at, updated_at)
+				 VALUES ('running-a', 'intermediate investigation states', 'pi', '/repo', 'ant',
+				  '2026-08-07T06:14:00.000Z', '2026-08-07T06:30:00.000Z')`,
+			).run();
+			db.prepare(
+				`INSERT INTO session_transcripts
+				 (session_key, content, harness, project, agent_id, created_at, updated_at)
+				 VALUES ('settled-b', 'settled outcome', 'pi', '/repo', 'ant',
+				  '2026-08-07T05:00:00.000Z', '2026-08-07T05:20:00.000Z')`,
+			).run();
+			db.prepare(
+				`INSERT INTO session_transcripts
+				 (session_key, content, harness, project, agent_id, created_at, updated_at)
+				 VALUES ('timed-out-c', 'outcome despite summary timeout', 'pi', '/repo', 'ant',
+				  '2026-08-07T04:00:00.000Z', '2026-08-07T04:30:00.000Z')`,
+			).run();
+			db.prepare(
+				`INSERT INTO session_transcripts
+				 (session_key, content, harness, project, agent_id, created_at, updated_at)
+				 VALUES ('checkpointed-d', 'mid-session checkpointed states', 'pi', '/repo', 'ant',
+				  '2026-08-07T07:00:00.000Z', '2026-08-07T07:10:00.000Z')`,
+			).run();
+			// Session ended normally: summary job triggered (status pending).
+			db.prepare(
+				`INSERT INTO summary_jobs
+				 (id, session_key, session_id, harness, project, agent_id, transcript,
+				  trigger, captured_at, started_at, ended_at, status, created_at)
+				 VALUES ('job-settled', 'settled-b', 'settled-b', 'pi', '/repo', 'ant',
+				  'settled outcome', 'session_end', '2026-08-07T05:20:00.000Z',
+				  '2026-08-07T05:20:00.000Z', '2026-08-07T05:20:00.000Z', 'pending',
+				  '2026-08-07T05:20:00.000Z')`,
+			).run();
+			// Summary timed out / failed: the job row still proves the session ended.
+			db.prepare(
+				`INSERT INTO summary_jobs
+				 (id, session_key, session_id, harness, project, agent_id, transcript,
+				  trigger, captured_at, started_at, ended_at, status, created_at)
+				 VALUES ('job-timed-out', 'timed-out-c', 'timed-out-c', 'pi', '/repo', 'ant',
+				  'outcome despite summary timeout', 'session_end', '2026-08-07T04:30:00.000Z',
+				  '2026-08-07T04:30:00.000Z', null, 'failed',
+				  '2026-08-07T04:30:00.000Z')`,
+			).run();
+			// A mid-session checkpoint extract is NOT a session-end signal.
+			db.prepare(
+				`INSERT INTO summary_jobs
+				 (id, session_key, session_id, harness, project, agent_id, transcript,
+				  trigger, captured_at, started_at, ended_at, status, created_at)
+				 VALUES ('job-checkpoint', 'checkpointed-d', 'checkpointed-d', 'pi', '/repo', 'ant',
+				  'mid-session checkpointed states', 'checkpoint_extract', '2026-08-07T07:10:00.000Z',
+				  '2026-08-07T07:10:00.000Z', null, 'completed',
+				  '2026-08-07T07:10:00.000Z')`,
+			).run();
+		});
+
+		const read = (from: string) => getDbAccessor().withReadDb((db) => readEpisodicSource(db, { agentId: "ant", from }));
+		// A still-running session has no session-end job yet: not settled evidence.
+		expect(read("transcript:running-a")).toMatchObject({ kind: "transcript", completed: false });
+		// A session-end summary job was triggered: settled, even while pending.
+		expect(read("transcript:settled-b")).toMatchObject({ kind: "transcript", completed: true });
+		// A failed/timed-out summary job still proves the session ended.
+		expect(read("transcript:timed-out-c")).toMatchObject({ kind: "transcript", completed: true });
+		// A mid-session checkpoint extract does not settle the session.
+		expect(read("transcript:checkpointed-d")).toMatchObject({ kind: "transcript", completed: false });
+	});
+
 	it("orders timezone-less artifact timestamps like SQLite's UTC cursor", () => {
 		getDbAccessor().withWriteTx((db) => {
 			db.prepare(

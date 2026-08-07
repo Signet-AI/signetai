@@ -14,6 +14,7 @@ const SOURCE: EpisodicSourceRecord = {
 	harness: "pi",
 	capturedAt: "2026-08-03T00:00:00.000Z",
 	evidenceMeta: JSON.stringify({ aspects: [{ entityName: "Signet", aspect: "architecture" }] }),
+	completed: true,
 };
 
 describe("dreaming evidence", () => {
@@ -43,6 +44,10 @@ describe("dreaming evidence", () => {
 		}
 		expect(fragments.length).toBeGreaterThan(1);
 		expect(fragments.map((fragment) => fragment.content).join("")).toBe(source.content);
-		expect(createDreamingAgentEvidence(fragments).map((evidence) => evidence.content).join("")).toBe(source.content);
+		expect(
+			createDreamingAgentEvidence(fragments)
+				.map((evidence) => evidence.content)
+				.join(""),
+		).toBe(source.content);
 	});
 });

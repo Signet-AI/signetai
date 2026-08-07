@@ -225,6 +225,106 @@ describe("dreaming-agent-tools", () => {
 		expect(JSON.stringify(entity).length).toBeLessThan(10_000);
 	});
 
+	it("search_evidence exposes completed on transcripts and settled records", async () => {
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO session_transcripts
+				 (session_key, content, harness, project, agent_id, created_at, updated_at)
+				 VALUES ('run-live', 'intermediate investigation states', 'pi', null, 'owner',
+				  '2026-08-07T06:14:00.000Z', '2026-08-07T06:30:00.000Z')`,
+			).run();
+			db.prepare(
+				`INSERT INTO session_transcripts
+				 (session_key, content, harness, project, agent_id, created_at, updated_at)
+				 VALUES ('run-done', 'settled outcome', 'pi', null, 'owner',
+				  '2026-08-07T05:00:00.000Z', '2026-08-07T05:20:00.000Z')`,
+			).run();
+			db.prepare(
+				`INSERT INTO session_transcripts
+				 (session_key, content, harness, project, agent_id, created_at, updated_at)
+				 VALUES ('run-failed-summary', 'outcome despite summary timeout', 'pi', null, 'owner',
+				  '2026-08-07T04:00:00.000Z', '2026-08-07T04:30:00.000Z')`,
+			).run();
+			db.prepare(
+				`INSERT INTO session_transcripts
+				 (session_key, content, harness, project, agent_id, created_at, updated_at)
+				 VALUES ('run-checkpoint', 'mid-session checkpointed states', 'pi', null, 'owner',
+				  '2026-08-07T07:00:00.000Z', '2026-08-07T07:10:00.000Z')`,
+			).run();
+			// Session ended: summary job triggered and pending.
+			db.prepare(
+				`INSERT INTO summary_jobs
+				 (id, session_key, session_id, harness, project, agent_id, transcript,
+				  trigger, captured_at, started_at, ended_at, status, created_at)
+				 VALUES ('job-done', 'run-done', 'run-done', 'pi', null, 'owner',
+				  'settled outcome', 'session_end', '2026-08-07T05:20:00.000Z',
+				  '2026-08-07T05:20:00.000Z', '2026-08-07T05:20:00.000Z', 'pending',
+				  '2026-08-07T05:20:00.000Z')`,
+			).run();
+			// Session ended but the summary failed/timed out: still settled.
+			db.prepare(
+				`INSERT INTO summary_jobs
+				 (id, session_key, session_id, harness, project, agent_id, transcript,
+				  trigger, captured_at, started_at, ended_at, status, created_at)
+				 VALUES ('job-failed', 'run-failed-summary', 'run-failed-summary', 'pi', null, 'owner',
+				  'outcome despite summary timeout', 'session_end', '2026-08-07T04:30:00.000Z',
+				  '2026-08-07T04:30:00.000Z', null, 'failed',
+				  '2026-08-07T04:30:00.000Z')`,
+			).run();
+			// Mid-session checkpoint extract: not a session-end signal.
+			db.prepare(
+				`INSERT INTO summary_jobs
+				 (id, session_key, session_id, harness, project, agent_id, transcript,
+				  trigger, captured_at, started_at, ended_at, status, created_at)
+				 VALUES ('job-checkpoint', 'run-checkpoint', 'run-checkpoint', 'pi', null, 'owner',
+				  'mid-session checkpointed states', 'checkpoint_extract', '2026-08-07T07:10:00.000Z',
+				  '2026-08-07T07:10:00.000Z', null, 'completed',
+				  '2026-08-07T07:10:00.000Z')`,
+			).run();
+		});
+		insertEpisodicMemory("mem-settled", "settled memory capture");
+
+		const tools = createDreamingAgentTools({ accessor: getDbAccessor(), agentId: "owner", actor: "owner" });
+		const res = readResult(
+			await findTool(tools, "search_evidence").execute(
+				"call",
+				{ agentId: "owner", limit: 10 },
+				undefined,
+				undefined,
+				{} as never,
+			),
+		);
+		expect(res.ok).toBe(true);
+		const items = res.items as Array<{ sourceRef: string; completed: boolean }>;
+		const byRef = new Map(items.map((item) => [item.sourceRef, item]));
+		// A session-end job was triggered: settled, even while pending.
+		expect(byRef.get("transcript:run-done")?.completed).toBe(true);
+		// A still-running transcript is not settled.
+		expect(byRef.get("transcript:run-live")?.completed).toBe(false);
+		// A failed/timed-out summary job still proves the session ended.
+		expect(byRef.get("transcript:run-failed-summary")?.completed).toBe(true);
+		// A mid-session checkpoint extract does not settle the session.
+		expect(byRef.get("transcript:run-checkpoint")?.completed).toBe(false);
+		// Memories are settled captures by construction.
+		expect(byRef.get("memory:mem-settled")?.completed).toBe(true);
+
+		// The fragment paging path carries the same flag.
+		const fragment = readResult(
+			await findTool(tools, "search_evidence").execute(
+				"call",
+				{ agentId: "owner", sourceRef: "transcript:run-live", offset: 0, chunkSize: 500 },
+				undefined,
+				undefined,
+				{} as never,
+			),
+		);
+		expect(fragment.ok).toBe(true);
+		expect((fragment.items as Array<{ sourceRef: string; completed: boolean }>)[0]).toMatchObject({
+			sourceRef: "transcript:run-live",
+			completed: false,
+		});
+	});
+
 	it("get_evidence resolves claim provenance and link provenance through one tool", async () => {
 		insertEntity("e-atlas", "Atlas", "atlas", "owner");
 		insertActiveAttribute("e-atlas", "a-config", "Feature is enabled by default.", "owner");

@@ -78,6 +78,7 @@ function projectEvidenceItem(
 		contentTruncated: contentOffset > 0 || contentOffset + content.length < contentLength,
 		contentHasPrevious: contentOffset > 0,
 		contentHasNext: contentOffset + content.length < contentLength,
+		completed: source.completed,
 		sourceKind: source.sourceKind,
 		sourceId: source.sourceId,
 		sourcePath: source.sourcePath,
@@ -425,7 +426,7 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 		capability(
 			"search_evidence",
 			"Search episodic evidence",
-			"Full-text search immutable episodic memories, artifacts, transcripts, and summaries in one agent scope. Results contain exact bounded excerpts of the rendered evidence with contentOffset/contentLength; use sourceRef for citations, which are validated against the complete canonical source. If contentTruncated is true, page exact fragments with the same sourceRef and chunkSize: start at offset=0 when contentHasPrevious is true, then use offset=contentOffset+content.length from the fragment just returned until contentHasNext is false. Omit the query to list the most recent sources (e.g. with since as a cutoff). Artifacts are deduped by content hash: content-identical files across vault paths collapse to one canonical entry.",
+			"Full-text search immutable episodic memories, artifacts, transcripts, and summaries in one agent scope. Results contain exact bounded excerpts of the rendered evidence with contentOffset/contentLength; use sourceRef for citations, which are validated against the complete canonical source. Each record carries completed: memory, artifact, and summary records are settled captures (true); a transcript is true once a session-end summary job has been triggered for its session (the session ended), whether or not the summary itself landed, and false while the session is still running — do not file claims from a still-growing transcript, since its states may be contradicted by the session's end. If contentTruncated is true, page exact fragments with the same sourceRef and chunkSize: start at offset=0 when contentHasPrevious is true, then use offset=contentOffset+content.length from the fragment just returned until contentHasNext is false. Omit the query to list the most recent sources (e.g. with since as a cutoff). Artifacts are deduped by content hash: content-identical files across vault paths collapse to one canonical entry.",
 			true,
 			z.object({
 				agentId: z.string().min(1),
