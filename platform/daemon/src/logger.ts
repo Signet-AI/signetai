@@ -90,6 +90,7 @@ export type LogCategory =
 	| "system-pressure" // Event-loop pressure signal and backpressure
 	| "yielding-writes" // Bounded write-batch drain with cooperative yielding
 	| "startup-recovery" // Automatic crash-loop damage cleanup on boot
+	| "db-vacuum" // SQLite free-page reclamation (VACUUM / incremental_vacuum)
 	| "transcripts" // Lossless transcript storage
 	| "shadow"; // Shadow logs for sensitive data (not written to disk, only emitted for real-time streaming)
 

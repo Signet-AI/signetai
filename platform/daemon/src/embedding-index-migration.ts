@@ -265,6 +265,9 @@ export function promoteStagingIndex(accessor: DbAccessor): boolean {
 			     state = 'ready', last_error = NULL, updated_at = ?
 			 WHERE id = 1`,
 		).run(new Date().toISOString());
+		// Reclaim pages freed by the vec0 shadow table rebuild (#1139).
+		// incremental_vacuum is transactional and safe inside BEGIN IMMEDIATE.
+		db.exec("PRAGMA incremental_vacuum");
 		return true;
 	});
 }

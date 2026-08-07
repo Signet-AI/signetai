@@ -235,6 +235,10 @@ export class Database {
 
 		// Enable WAL mode (skip for readonly)
 		if (!this.options?.readonly) {
+			// Set auto_vacuum = INCREMENTAL before any tables are created (#1139).
+			// Only affects fresh databases; existing databases are converted by
+			// the daemon's convertToIncrementalVacuum on startup.
+			this.getDb().exec("PRAGMA auto_vacuum = INCREMENTAL");
 			if (isBun) {
 				this.getDb().exec("PRAGMA journal_mode = WAL");
 			} else {

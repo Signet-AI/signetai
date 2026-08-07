@@ -9,6 +9,7 @@
  */
 
 import type { DbAccessor } from "../db-accessor";
+import { getFreePageRatio } from "../db-vacuum";
 import type { DiagnosticsReport, ProviderTracker } from "../diagnostics";
 import { getDiagnostics } from "../diagnostics";
 import { propagateMemoryStatus } from "../knowledge-graph";
@@ -389,6 +390,17 @@ export function startMaintenanceWorker(
 			}
 		} catch {
 			// Non-fatal — dead memory scan should never interrupt the maintenance cycle
+		}
+
+		// Reclaim free pages from DROP/DELETE/promotion operations (#1139).
+		// Only run when the free-page ratio is high and the system is not under pressure.
+		try {
+			const ratio = accessor.withReadDb((db) => getFreePageRatio(db));
+			if (ratio >= 0.2) {
+				accessor.incrementalVacuum();
+			}
+		} catch {
+			// Non-fatal — vacuum should never interrupt the maintenance cycle
 		}
 
 		return {

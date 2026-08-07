@@ -30,8 +30,9 @@ import {
 	recreateMemoriesFts,
 	runMigrations,
 } from "@signet/core";
-import { loadMemoryConfig } from "./memory-config";
+import { convertToIncrementalVacuum } from "./db-vacuum";
 import { ensureEmbeddingIndexState } from "./embedding-index-state";
+import { loadMemoryConfig } from "./memory-config";
 
 const isBun = typeof (globalThis as Record<string, unknown>).Bun !== "undefined";
 const require = createRequire(import.meta.url);
@@ -143,6 +144,13 @@ export interface DbAccessor {
 	 *  outside any transaction. Safe to call periodically or on startup. */
 	checkpointWal(): void;
 
+	/**
+	 * Run PRAGMA incremental_vacuum on the write connection outside any
+	 * transaction, reclaiming free pages from DROP/DELETE operations (#1139).
+	 * Returns the number of free pages remaining after vacuum.
+	 */
+	incrementalVacuum(): number;
+
 	/** Close all held connections. Safe to call multiple times. */
 	close(): void;
 }
@@ -164,6 +172,10 @@ let vecLoadError: string | null = null;
 // ---------------------------------------------------------------------------
 
 function configurePragmas(db: SqliteDatabase): void {
+	// Set auto_vacuum = INCREMENTAL before any tables are created. This only
+	// affects fresh databases; existing databases are converted by
+	// convertToIncrementalVacuum in finishDbAccessorInit (#1139).
+	db.exec("PRAGMA auto_vacuum = INCREMENTAL");
 	db.exec("PRAGMA journal_mode = WAL");
 	db.exec("PRAGMA busy_timeout = 5000");
 	db.exec("PRAGMA synchronous = NORMAL");
@@ -724,6 +736,12 @@ function finishDbAccessorInit(writeConn: SqliteDatabase, opts?: { readonly agent
 	// Failures here are fatal: the daemon must not start on bad schema.
 	runMigrations(toMigrationDb(writeConn));
 
+	// One-time conversion of legacy databases (auto_vacuum = 0) to
+	// incremental mode. Runs VACUUM outside any transaction. New databases
+	// already have auto_vacuum = INCREMENTAL from configurePragmas, so this
+	// is a no-op for them (#1139).
+	convertToIncrementalVacuum(toMigrationDb(writeConn));
+
 	// Ensure FTS5 virtual table exists — may be missing on upgrades from
 	// older installs where the table was dropped or never created.
 	ensureFtsTable(writeConn);
@@ -1058,6 +1076,13 @@ function createAccessor(writeConn: SqliteDatabase): DbAccessor {
 		checkpointWal(): void {
 			if (closed) throw new Error("DbAccessor is closed");
 			writeConn.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+		},
+
+		incrementalVacuum(): number {
+			if (closed) throw new Error("DbAccessor is closed");
+			writeConn.exec("PRAGMA incremental_vacuum");
+			const row = writeConn.prepare("PRAGMA freelist_count").get() as { freelist_count?: number } | undefined;
+			return typeof row?.freelist_count === "number" ? row.freelist_count : 0;
 		},
 
 		close(): void {
