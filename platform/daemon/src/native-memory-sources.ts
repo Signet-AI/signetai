@@ -110,6 +110,17 @@ const DEFAULT_OBSIDIAN_SOURCE_FILE_DELAY_MS = 250;
 const READ_FAILURE_BACKOFF_MS = 60_000;
 const readFailureBackoffUntil = new Map<string, number>();
 
+// iCloud / sync-evicted (dataless) files fail every read until the OS
+// materializes them. Track them per harness so the daemon logs ONE
+// consolidated warning per window instead of one line per file per retry
+// (#1161).
+const DATALESS_WARN_INTERVAL_MS = 60_000;
+const datalessReadFailuresByHarness = new Map<string, { count: number; lastLoggedAt: number }>();
+
+export function isDatalessReadError(message: string): boolean {
+	return /EDEADLK|EIO/.test(message);
+}
+
 function isEnoentError(err: unknown): boolean {
 	return typeof err === "object" && err !== null && (err as NodeJS.ErrnoException).code === "ENOENT";
 }
@@ -539,11 +550,30 @@ export async function indexNativeMemoryFile(
 		// Transient failures (locks, permission flaps) back off instead of
 		// being re-attempted on every scan iteration.
 		readFailureBackoffUntil.set(key, Date.now() + READ_FAILURE_BACKOFF_MS);
-		logger.warn("watcher", "Failed reading native memory artifact", {
-			harness: source.harness,
-			path: filePath,
-			error: err instanceof Error ? err.message : String(err),
-		});
+		const failureMessage = err instanceof Error ? err.message : String(err);
+		if (isDatalessReadError(failureMessage)) {
+			// Dataless/locked-file reads consolidate into a single warning
+			// per harness per window; the files are skipped (with backoff)
+			// until the OS materializes them.
+			const now = Date.now();
+			const prev = datalessReadFailuresByHarness.get(source.harness) ?? { count: 0, lastLoggedAt: 0 };
+			const next = { count: prev.count + 1, lastLoggedAt: prev.lastLoggedAt };
+			datalessReadFailuresByHarness.set(source.harness, next);
+			if (now - prev.lastLoggedAt >= DATALESS_WARN_INTERVAL_MS) {
+				next.lastLoggedAt = now;
+				logger.warn(
+					"watcher",
+					`Skipped ${next.count} native artifact read(s) on ${source.harness} that failed with a dataless/locked-file error (${failureMessage}) — likely iCloud-evicted files; retrying in ${Math.round(READ_FAILURE_BACKOFF_MS / 1000)}s`,
+					{ path: filePath },
+				);
+			}
+		} else {
+			logger.warn("watcher", "Failed reading native memory artifact", {
+				harness: source.harness,
+				path: filePath,
+				error: failureMessage,
+			});
+		}
 		return false;
 	}
 	readFailureBackoffUntil.delete(key);
