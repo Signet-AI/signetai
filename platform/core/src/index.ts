@@ -6,6 +6,12 @@
 export { Signet } from "./signet";
 export { Database, findSqliteVecExtension, loadSqliteVec } from "./database";
 export {
+	DEFAULT_TELEMETRY_FLUSH_BATCH_SIZE,
+	DEFAULT_TELEMETRY_FLUSH_INTERVAL_MS,
+	DEFAULT_TELEMETRY_POSTHOG_API_KEY,
+	DEFAULT_TELEMETRY_POSTHOG_HOST,
+} from "./telemetry-config";
+export {
 	MEMORY_TYPES,
 	EXTRACTION_STATUSES,
 	JOB_STATUSES,

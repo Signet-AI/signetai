@@ -234,7 +234,10 @@ Privacy contract:
   `telemetryEnabled: false`.
 - Every recorded event is mirrored to an open, inspectable JSONL log at
   `<agentsDir>/.daemon/telemetry/events.jsonl`, so users can audit
-  exactly what was sent.
+  exactly what was sent. CLI `command.invoked` events are also queued in the
+  workspace database and flushed to PostHog in bounded, best-effort batches
+  without awaiting the command; the CLI reads the same persisted install id
+  as the daemon.
 
 Events recorded: `daemon.heartbeat` (every 5 minutes), the `inference.*`
 lifecycle (`route`, `execute`, `stream`, `fallback`), `llm.generate`
@@ -246,12 +249,17 @@ paths stripped, top stack frames with home directories removed, uptime;
 plus rate-limited `EventLoopLag` reports with measured lag), and
 `version.upgraded`, `install.activated` (first daemon run of a new
 install — covers bun/desktop installs the npm postinstall ping never
+<<<<<<< HEAD
 sees), and `config.snapshot` (first-run feature flags, embedding provider
 and model, local/remote inference mode, and configured harnesses). The
 per-install harness mix is queryable from `session.start.harness` events
 because they share the same anonymous `distinct_id`. `pipeline.embedding`
 (tokens, provider, sourceKind — memory capture / artifact index / recall /
 dreaming), and `dreaming.pass`
+=======
+sees), `pipeline.embedding` (tokens, provider, sourceKind — memory
+capture / artifact index / recall / dreaming), and `dreaming.pass`
+>>>>>>> 170cb3c3e (feat(telemetry): flush CLI command events)
 (provider-reported input/output/cache tokens and cost per agentic
 pass). The remaining `pipeline.*` event types are declared
 for future use but not yet emitted.

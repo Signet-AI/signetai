@@ -3,6 +3,10 @@ import { join } from "node:path";
 import {
 	DEFAULT_PIPELINE_TIMEOUT_MS,
 	DEFAULT_PROVIDER_RATE_LIMIT,
+	DEFAULT_TELEMETRY_FLUSH_BATCH_SIZE,
+	DEFAULT_TELEMETRY_FLUSH_INTERVAL_MS,
+	DEFAULT_TELEMETRY_POSTHOG_API_KEY,
+	DEFAULT_TELEMETRY_POSTHOG_HOST,
 	type DreamingConfig,
 	PIPELINE_FLAGS,
 	type PipelineFlag,
@@ -202,10 +206,10 @@ export const DEFAULT_PIPELINE_V2: ResolvedPipelineV2Config = {
 		// runs in the wild; set telemetryEnabled: false to opt out. Sends
 		// only when both host and api key are configured. The project API
 		// key is a public ingest key (PostHog design); it is not a secret.
-		posthogHost: "https://us.i.posthog.com",
-		posthogApiKey: "phc_mLsvJmbmp6e9UarrX9Cq5QtTjVNiiphM9mvi5Xnddd8Q",
-		flushIntervalMs: 60000,
-		flushBatchSize: 50,
+		posthogHost: DEFAULT_TELEMETRY_POSTHOG_HOST,
+		posthogApiKey: DEFAULT_TELEMETRY_POSTHOG_API_KEY,
+		flushIntervalMs: DEFAULT_TELEMETRY_FLUSH_INTERVAL_MS,
+		flushBatchSize: DEFAULT_TELEMETRY_FLUSH_BATCH_SIZE,
 		retentionDays: 90,
 		memorySearchQaEnabled: false,
 	},
