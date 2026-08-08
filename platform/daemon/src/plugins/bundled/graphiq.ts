@@ -41,16 +41,6 @@ const surfaces: PluginSurfaceDeclarationsV1 = {
 			summary: "Find unreachable code in the active project",
 			requiredCapabilities: ["cli:command", "code:dead-code"],
 		},
-		{
-			path: ["graphiq", "clear"],
-			summary: "Clear the active GraphIQ index to a fresh empty database",
-			requiredCapabilities: ["cli:command", "code:clear"],
-		},
-		{
-			path: ["graphiq", "briefing"],
-			summary: "Get an architecture briefing for the active project",
-			requiredCapabilities: ["cli:command", "code:status"],
-		},
 	],
 	mcpTools: [
 		{
@@ -98,7 +88,7 @@ const surfaces: PluginSurfaceDeclarationsV1 = {
 		{
 			name: "signet_code_clear",
 			title: "Clear Index",
-			summary: "Delete the active index and leave a fresh empty database",
+			summary: "Delete the active index and leave a fresh empty database (requires confirm: true)",
 			requiredCapabilities: ["mcp:tool", "code:clear"],
 		},
 		{

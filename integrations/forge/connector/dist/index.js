@@ -10,14 +10,14 @@ import {
   unlinkSync as unlinkSync3,
   writeFileSync as writeFileSync3
 } from "node:fs";
-import { homedir as homedir5 } from "node:os";
-import { isAbsolute, join as join6, relative, resolve as resolve2, sep } from "node:path";
+import { homedir as homedir6 } from "node:os";
+import { join as join7, resolve as resolve3 } from "node:path";
 
 // ../../../libs/connector-base/dist/index.js
 import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync, renameSync, statSync as statSync2, unlinkSync as unlinkSync2, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname as dirname3, join as join3 } from "node:path";
+import { dirname as dirname5, isAbsolute, join as join3, relative, sep } from "node:path";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -27,9 +27,11 @@ import { existsSync as existsSync4, mkdirSync as mkdirSync2, readFileSync as rea
 import { homedir as homedir3 } from "node:os";
 import { dirname as dirname2, join as join5, resolve } from "node:path";
 import { createRequire as createRequire2 } from "node:module";
-import { homedir as homedir4, platform as platform2 } from "node:os";
+import { homedir as homedir4 } from "node:os";
+import { dirname as dirname3, join as join6, resolve as resolve2 } from "node:path";
+import { homedir as homedir5, platform as platform2 } from "node:os";
 import { basename, dirname as dirname4, resolve as resolve4 } from "node:path";
-import { homedir as homedir8 } from "node:os";
+import { homedir as homedir9 } from "node:os";
 import { existsSync as existsSync13, lstatSync, mkdirSync as mkdirSync9, readdirSync as readdirSync6, symlinkSync, unlinkSync } from "node:fs";
 import { join as join13 } from "node:path";
 var __create2 = Object.create;
@@ -3640,10 +3642,10 @@ var require_resolve_block_map = __commonJS2((exports) => {
     let offset = bm.offset;
     let commentEnd = null;
     for (const collItem of bm.items) {
-      const { start, key, sep, value } = collItem;
+      const { start, key, sep: sep2, value } = collItem;
       const keyProps = resolveProps.resolveProps(start, {
         indicator: "explicit-key-ind",
-        next: key ?? sep?.[0],
+        next: key ?? sep2?.[0],
         offset,
         onError,
         parentIndent: bm.indent,
@@ -3657,7 +3659,7 @@ var require_resolve_block_map = __commonJS2((exports) => {
           else if ("indent" in key && key.indent !== bm.indent)
             onError(offset, "BAD_INDENT", startColMsg);
         }
-        if (!keyProps.anchor && !keyProps.tag && !sep) {
+        if (!keyProps.anchor && !keyProps.tag && !sep2) {
           commentEnd = keyProps.end;
           if (keyProps.comment) {
             if (map.comment)
@@ -3682,7 +3684,7 @@ var require_resolve_block_map = __commonJS2((exports) => {
       ctx.atKey = false;
       if (utilMapIncludes.mapIncludes(ctx, map.items, keyNode))
         onError(keyStart, "DUPLICATE_KEY", "Map keys must be unique");
-      const valueProps = resolveProps.resolveProps(sep ?? [], {
+      const valueProps = resolveProps.resolveProps(sep2 ?? [], {
         indicator: "map-value-ind",
         next: value,
         offset: keyNode.range[2],
@@ -3698,7 +3700,7 @@ var require_resolve_block_map = __commonJS2((exports) => {
           if (ctx.options.strict && keyProps.start < valueProps.found.offset - 1024)
             onError(keyNode.range, "KEY_OVER_1024_CHARS", "The : indicator must be at most 1024 chars after the start of an implicit block mapping key");
         }
-        const valueNode = value ? composeNode(ctx, value, valueProps, onError) : composeEmptyNode(ctx, offset, sep, null, valueProps, onError);
+        const valueNode = value ? composeNode(ctx, value, valueProps, onError) : composeEmptyNode(ctx, offset, sep2, null, valueProps, onError);
         if (ctx.schema.compat)
           utilFlowIndentCheck.flowIndentCheck(bm.indent, value, onError);
         offset = valueNode.range[2];
@@ -3780,7 +3782,7 @@ var require_resolve_end = __commonJS2((exports) => {
     let comment = "";
     if (end) {
       let hasSpace = false;
-      let sep = "";
+      let sep2 = "";
       for (const token of end) {
         const { source, type } = token;
         switch (type) {
@@ -3794,13 +3796,13 @@ var require_resolve_end = __commonJS2((exports) => {
             if (!comment)
               comment = cb;
             else
-              comment += sep + cb;
-            sep = "";
+              comment += sep2 + cb;
+            sep2 = "";
             break;
           }
           case "newline":
             if (comment)
-              sep += source;
+              sep2 += source;
             hasSpace = true;
             break;
           default:
@@ -3838,18 +3840,18 @@ var require_resolve_flow_collection = __commonJS2((exports) => {
     let offset = fc.offset + fc.start.source.length;
     for (let i = 0;i < fc.items.length; ++i) {
       const collItem = fc.items[i];
-      const { start, key, sep, value } = collItem;
+      const { start, key, sep: sep2, value } = collItem;
       const props = resolveProps.resolveProps(start, {
         flow: fcName,
         indicator: "explicit-key-ind",
-        next: key ?? sep?.[0],
+        next: key ?? sep2?.[0],
         offset,
         onError,
         parentIndent: fc.indent,
         startOnNewline: false
       });
       if (!props.found) {
-        if (!props.anchor && !props.tag && !sep && !value) {
+        if (!props.anchor && !props.tag && !sep2 && !value) {
           if (i === 0 && props.comma)
             onError(props.comma, "UNEXPECTED_TOKEN", `Unexpected , in ${fcName}`);
           else if (i < fc.items.length - 1)
@@ -3901,8 +3903,8 @@ var require_resolve_flow_collection = __commonJS2((exports) => {
           }
         }
       }
-      if (!isMap && !sep && !props.found) {
-        const valueNode = value ? composeNode(ctx, value, props, onError) : composeEmptyNode(ctx, props.end, sep, null, props, onError);
+      if (!isMap && !sep2 && !props.found) {
+        const valueNode = value ? composeNode(ctx, value, props, onError) : composeEmptyNode(ctx, props.end, sep2, null, props, onError);
         coll.items.push(valueNode);
         offset = valueNode.range[2];
         if (isBlock(value))
@@ -3914,7 +3916,7 @@ var require_resolve_flow_collection = __commonJS2((exports) => {
         if (isBlock(key))
           onError(keyNode.range, "BLOCK_IN_FLOW", blockMsg);
         ctx.atKey = false;
-        const valueProps = resolveProps.resolveProps(sep ?? [], {
+        const valueProps = resolveProps.resolveProps(sep2 ?? [], {
           flow: fcName,
           indicator: "map-value-ind",
           next: value,
@@ -3925,8 +3927,8 @@ var require_resolve_flow_collection = __commonJS2((exports) => {
         });
         if (valueProps.found) {
           if (!isMap && !props.found && ctx.options.strict) {
-            if (sep)
-              for (const st of sep) {
+            if (sep2)
+              for (const st of sep2) {
                 if (st === valueProps.found)
                   break;
                 if (st.type === "newline") {
@@ -3943,7 +3945,7 @@ var require_resolve_flow_collection = __commonJS2((exports) => {
           else
             onError(valueProps.start, "MISSING_CHAR", `Missing , or : between ${fcName} items`);
         }
-        const valueNode = value ? composeNode(ctx, value, valueProps, onError) : valueProps.found ? composeEmptyNode(ctx, valueProps.end, sep, null, valueProps, onError) : null;
+        const valueNode = value ? composeNode(ctx, value, valueProps, onError) : valueProps.found ? composeEmptyNode(ctx, valueProps.end, sep2, null, valueProps, onError) : null;
         if (valueNode) {
           if (isBlock(value))
             onError(valueNode.range, "BLOCK_IN_FLOW", blockMsg);
@@ -4116,7 +4118,7 @@ var require_resolve_block_scalar = __commonJS2((exports) => {
         chompStart = i + 1;
     }
     let value = "";
-    let sep = "";
+    let sep2 = "";
     let prevMoreIndented = false;
     for (let i = 0;i < contentStart; ++i)
       value += lines[i][0].slice(trimIndent) + `
@@ -4134,33 +4136,33 @@ var require_resolve_block_scalar = __commonJS2((exports) => {
         indent = "";
       }
       if (type === Scalar.Scalar.BLOCK_LITERAL) {
-        value += sep + indent.slice(trimIndent) + content;
-        sep = `
+        value += sep2 + indent.slice(trimIndent) + content;
+        sep2 = `
 `;
       } else if (indent.length > trimIndent || content[0] === "\t") {
-        if (sep === " ")
-          sep = `
+        if (sep2 === " ")
+          sep2 = `
 `;
-        else if (!prevMoreIndented && sep === `
+        else if (!prevMoreIndented && sep2 === `
 `)
-          sep = `
+          sep2 = `
 
 `;
-        value += sep + indent.slice(trimIndent) + content;
-        sep = `
+        value += sep2 + indent.slice(trimIndent) + content;
+        sep2 = `
 `;
         prevMoreIndented = true;
       } else if (content === "") {
-        if (sep === `
+        if (sep2 === `
 `)
           value += `
 `;
         else
-          sep = `
+          sep2 = `
 `;
       } else {
-        value += sep + content;
-        sep = " ";
+        value += sep2 + content;
+        sep2 = " ";
         prevMoreIndented = false;
       }
     }
@@ -4339,27 +4341,27 @@ var require_resolve_flow_scalar = __commonJS2((exports) => {
     if (!match)
       return source;
     let res = match[1];
-    let sep = " ";
+    let sep2 = " ";
     let pos = first.lastIndex;
     line.lastIndex = pos;
     while (match = line.exec(source)) {
       if (match[1] === "") {
-        if (sep === `
+        if (sep2 === `
 `)
-          res += sep;
+          res += sep2;
         else
-          sep = `
+          sep2 = `
 `;
       } else {
-        res += sep + match[1];
-        sep = " ";
+        res += sep2 + match[1];
+        sep2 = " ";
       }
       pos = line.lastIndex;
     }
     const last = /[ \t]*(.*)/sy;
     last.lastIndex = pos;
     match = last.exec(source);
-    return res + sep + (match?.[1] ?? "");
+    return res + sep2 + (match?.[1] ?? "");
   }
   function doubleQuotedValue(source, onError) {
     let res = "";
@@ -5126,14 +5128,14 @@ var require_cst_stringify = __commonJS2((exports) => {
       }
     }
   }
-  function stringifyItem({ start, key, sep, value }) {
+  function stringifyItem({ start, key, sep: sep2, value }) {
     let res = "";
     for (const st of start)
       res += st.source;
     if (key)
       res += stringifyToken(key);
-    if (sep)
-      for (const st of sep)
+    if (sep2)
+      for (const st of sep2)
         res += st.source;
     if (value)
       res += stringifyToken(value);
@@ -6272,18 +6274,18 @@ var require_parser = __commonJS2((exports) => {
       if (this.type === "map-value-ind") {
         const prev = getPrevProps(this.peek(2));
         const start = getFirstKeyStartProps(prev);
-        let sep;
+        let sep2;
         if (scalar.end) {
-          sep = scalar.end;
-          sep.push(this.sourceToken);
+          sep2 = scalar.end;
+          sep2.push(this.sourceToken);
           delete scalar.end;
         } else
-          sep = [this.sourceToken];
+          sep2 = [this.sourceToken];
         const map = {
           type: "block-map",
           offset: scalar.offset,
           indent: scalar.indent,
-          items: [{ start, key: scalar, sep }]
+          items: [{ start, key: scalar, sep: sep2 }]
         };
         this.onKeyLine = true;
         this.stack[this.stack.length - 1] = map;
@@ -6437,15 +6439,15 @@ var require_parser = __commonJS2((exports) => {
               } else if (isFlowToken(it.key) && !includesToken(it.sep, "newline")) {
                 const start2 = getFirstKeyStartProps(it.start);
                 const key = it.key;
-                const sep = it.sep;
-                sep.push(this.sourceToken);
+                const sep2 = it.sep;
+                sep2.push(this.sourceToken);
                 delete it.key;
                 delete it.sep;
                 this.stack.push({
                   type: "block-map",
                   offset: this.offset,
                   indent: this.indent,
-                  items: [{ start: start2, key, sep }]
+                  items: [{ start: start2, key, sep: sep2 }]
                 });
               } else if (start.length > 0) {
                 it.sep = it.sep.concat(start, this.sourceToken);
@@ -6639,13 +6641,13 @@ var require_parser = __commonJS2((exports) => {
           const prev = getPrevProps(parent);
           const start = getFirstKeyStartProps(prev);
           fixFlowSeqItems(fc);
-          const sep = fc.end.splice(1, fc.end.length);
-          sep.push(this.sourceToken);
+          const sep2 = fc.end.splice(1, fc.end.length);
+          sep2.push(this.sourceToken);
           const map = {
             type: "block-map",
             offset: fc.offset,
             indent: fc.indent,
-            items: [{ start, key: fc, sep }]
+            items: [{ start, key: fc, sep: sep2 }]
           };
           this.onKeyLine = true;
           this.stack[this.stack.length - 1] = map;
@@ -6928,7 +6930,7 @@ var PIPELINE_PROVIDER_CHOICES = [
 var SYNTHESIS_PROVIDER_CHOICES = PIPELINE_PROVIDER_CHOICES.filter((provider) => provider !== "command");
 var PIPELINE_PROVIDER_SET = new Set(PIPELINE_PROVIDER_CHOICES);
 var SYNTHESIS_PROVIDER_SET = new Set(SYNTHESIS_PROVIDER_CHOICES);
-var DAEMON_DERIVED_MEMORY_SOURCE_TYPES = ["extract", "aggregate-recall", "session_end", "checkpoint"];
+var DAEMON_DERIVED_MEMORY_SOURCE_TYPES = ["extract", "aggregate-recall", "session_end", "checkpoint", "dreaming"];
 var MEMORIES_FTS_TOKENIZER = "unicode61";
 function normalizeSql(sql) {
   return sql.replace(/\s+/g, " ").trim().toLowerCase();
@@ -10115,6 +10117,293 @@ function up99(db) {
 			ON dreaming_tool_calls (agent_id, pass_id, sequence ASC);
 	`);
 }
+function up100(db) {
+  const columns = db.prepare("PRAGMA table_info(dreaming_passes)").all();
+  if (!columns.some((column) => column.name === "evidence_window_json")) {
+    db.exec("ALTER TABLE dreaming_passes ADD COLUMN evidence_window_json TEXT");
+  }
+  if (!columns.some((column) => column.name === "runbook_json")) {
+    db.exec("ALTER TABLE dreaming_passes ADD COLUMN runbook_json TEXT");
+  }
+}
+function up101(db) {
+  db.exec(`
+		CREATE TABLE IF NOT EXISTS dreaming_attention (
+			id TEXT PRIMARY KEY,
+			agent_id TEXT NOT NULL,
+			kind TEXT NOT NULL CHECK (kind IN ('review_due', 'hygiene', 'contested_claim', 'evidence_requeue')),
+			subject_ref TEXT NOT NULL,
+			details_json TEXT NOT NULL DEFAULT '{}',
+			priority INTEGER NOT NULL DEFAULT 0 CHECK (priority >= 0 AND priority <= 100),
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			generation INTEGER NOT NULL DEFAULT 0,
+			resolved_at TEXT,
+			resolved_by_pass_id TEXT,
+			UNIQUE(agent_id, kind, subject_ref)
+		);
+		CREATE INDEX IF NOT EXISTS idx_dreaming_attention_pending
+			ON dreaming_attention (agent_id, resolved_at, priority DESC, created_at ASC);
+	`);
+}
+function hasColumn15(db, table, column) {
+  return db.prepare(`PRAGMA table_info(${table})`).all().some((row) => row.name === column);
+}
+function up102(db) {
+  const requiredMemoryColumns = [
+    "content_hash",
+    "normalized_content",
+    "memory_kind",
+    "source_type",
+    "source_path",
+    "agent_id",
+    "visibility",
+    "is_deleted",
+    "extraction_status"
+  ];
+  if (!hasColumn15(db, "entity_attributes", "memory_id") || !requiredMemoryColumns.every((column) => hasColumn15(db, "memories", column))) {
+    return;
+  }
+  db.exec(`
+		INSERT OR IGNORE INTO memories
+		 (id, content, normalized_content, content_hash, who, why, project,
+		  importance, type, tags, pinned, is_deleted, extraction_status,
+		  created_at, updated_at, updated_by, source_type, source_id, source_path,
+		  agent_id, visibility, memory_kind)
+		SELECT attr.id, attr.content, attr.normalized_content,
+		       'semantic-attribute:' || attr.id, 'dreaming', 'Derived semantic attribute', NULL,
+		       attr.importance, 'semantic', 'semantic,attribute', 0,
+		       CASE WHEN attr.status = 'active' THEN 0 ELSE 1 END, 'completed',
+		       attr.created_at, attr.updated_at, 'dreaming', 'dreaming', attr.source_id, attr.source_path,
+		       attr.agent_id, 'global', 'derived'
+		FROM entity_attributes attr
+		WHERE attr.memory_id IS NULL
+	`);
+  db.exec(`
+		UPDATE entity_attributes
+		SET memory_id = id
+		WHERE memory_id IS NULL
+		  AND EXISTS (SELECT 1 FROM memories WHERE memories.id = entity_attributes.id)
+	`);
+  db.exec(`
+		INSERT OR IGNORE INTO memory_entity_mentions (memory_id, entity_id)
+		SELECT attr.memory_id, aspect.entity_id
+		FROM entity_attributes attr
+		JOIN entity_aspects aspect ON aspect.id = attr.aspect_id AND aspect.agent_id = attr.agent_id
+		WHERE attr.memory_id IS NOT NULL
+	`);
+  db.exec(`
+		UPDATE entities
+		SET mentions = (
+			SELECT COUNT(*) FROM memory_entity_mentions WHERE entity_id = entities.id
+		)
+		WHERE EXISTS (SELECT 1 FROM memory_entity_mentions WHERE entity_id = entities.id)
+	`);
+}
+function up103(db) {
+  const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('memories', 'entity_attributes')").all();
+  if (tables.length !== 2)
+    return;
+  const memoryColumns = db.prepare("PRAGMA table_info(memories)").all().map((row) => row.name);
+  const attributeColumns = db.prepare("PRAGMA table_info(entity_attributes)").all().map((row) => row.name);
+  if (!memoryColumns.includes("memory_kind") || !attributeColumns.includes("memory_id"))
+    return;
+  db.exec(`
+		UPDATE memories
+		SET memory_kind = 'derived'
+		WHERE memory_kind IS NULL
+		  AND id IN (
+			SELECT memory_id FROM entity_attributes WHERE memory_id IS NOT NULL
+		  )
+	`);
+}
+function tableExists(db, table) {
+  return db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(table) !== undefined;
+}
+function hasColumn16(db, table, column) {
+  return db.prepare(`PRAGMA table_info(${table})`).all().some((row) => row.name === column);
+}
+function up104(db) {
+  db.exec(`
+		CREATE TABLE IF NOT EXISTS derived_memory_sources (
+			derived_memory_id TEXT NOT NULL,
+			source_kind TEXT NOT NULL,
+			source_id TEXT NOT NULL,
+			source_path TEXT,
+			agent_id TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			PRIMARY KEY (derived_memory_id, source_kind, source_id)
+		);
+		CREATE INDEX IF NOT EXISTS idx_derived_memory_sources_derived
+			ON derived_memory_sources(agent_id, derived_memory_id);
+		CREATE INDEX IF NOT EXISTS idx_derived_memory_sources_source
+			ON derived_memory_sources(agent_id, source_kind, source_id);
+	`);
+  if (tableExists(db, "aggregate_evidence_sources")) {
+    db.exec(`
+			INSERT OR IGNORE INTO derived_memory_sources
+			 (derived_memory_id, source_kind, source_id, source_path, agent_id, created_at)
+			SELECT aggregate_memory_id, source_kind, source_id, source_path, agent_id, created_at
+			FROM aggregate_evidence_sources
+		`);
+  }
+  if (tableExists(db, "aggregate_memory_sources")) {
+    db.exec(`
+			INSERT OR IGNORE INTO derived_memory_sources
+			 (derived_memory_id, source_kind, source_id, source_path, agent_id, created_at)
+			SELECT aggregate_memory_id, 'memory', source_memory_id, NULL, agent_id, created_at
+			FROM aggregate_memory_sources
+		`);
+  }
+  if (tableExists(db, "memories") && !hasColumn16(db, "memories", "stale_at")) {
+    db.exec("ALTER TABLE memories ADD COLUMN stale_at TEXT");
+  }
+  if (tableExists(db, "memories")) {
+    db.exec(`
+			CREATE INDEX IF NOT EXISTS idx_memories_stale_derived
+			ON memories(agent_id, stale_at)
+			WHERE stale_at IS NOT NULL AND is_deleted = 0
+		`);
+  }
+}
+function up105(db) {
+  db.exec(`
+		DROP TRIGGER IF EXISTS entities_fts_ai;
+		DROP TRIGGER IF EXISTS entities_fts_ad;
+		DROP TRIGGER IF EXISTS entities_fts_au;
+	`);
+  db.exec(`
+		CREATE TABLE entities_105 (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL,
+			entity_type TEXT NOT NULL,
+			description TEXT,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			canonical_name TEXT,
+			mentions INTEGER DEFAULT 0,
+			embedding BLOB,
+			agent_id TEXT NOT NULL DEFAULT 'default',
+			pinned INTEGER NOT NULL DEFAULT 0,
+			pinned_at TEXT,
+			last_synthesized_at TEXT,
+			community_id TEXT REFERENCES entity_communities(id),
+			source_id TEXT,
+			source_kind TEXT,
+			source_path TEXT,
+			source_root TEXT,
+			status TEXT NOT NULL DEFAULT 'active',
+			archived_at TEXT,
+			archived_by TEXT,
+			archive_reason TEXT,
+			proposal_id TEXT,
+			proposal_evidence TEXT NOT NULL DEFAULT '[]',
+			UNIQUE(agent_id, name)
+		);
+	`);
+  db.exec(`
+		INSERT INTO entities_105 (
+			rowid, id, name, entity_type, description, created_at, updated_at,
+			canonical_name, mentions, embedding, agent_id, pinned, pinned_at,
+			last_synthesized_at, community_id, source_id, source_kind,
+			source_path, source_root, status, archived_at, archived_by,
+			archive_reason, proposal_id, proposal_evidence
+		)
+		SELECT
+			rowid, id, name, entity_type, description, created_at, updated_at,
+			canonical_name, mentions, embedding, agent_id, pinned, pinned_at,
+			last_synthesized_at, community_id, source_id, source_kind,
+			source_path, source_root, status, archived_at, archived_by,
+			archive_reason, proposal_id, proposal_evidence
+		FROM entities;
+	`);
+  db.exec(`
+		DROP TABLE entities;
+		ALTER TABLE entities_105 RENAME TO entities;
+	`);
+  db.exec(`
+		CREATE INDEX IF NOT EXISTS idx_entities_canonical_name ON entities(canonical_name);
+		CREATE INDEX IF NOT EXISTS idx_entities_agent ON entities(agent_id);
+		CREATE INDEX IF NOT EXISTS idx_entities_pinned ON entities(agent_id, pinned, pinned_at DESC);
+		CREATE INDEX IF NOT EXISTS idx_entities_order
+			ON entities(agent_id, pinned DESC, pinned_at DESC, mentions DESC, updated_at DESC, name);
+		CREATE INDEX IF NOT EXISTS idx_entities_extracted_mentions
+			ON entities(entity_type, mentions)
+			WHERE entity_type = 'extracted';
+		CREATE INDEX IF NOT EXISTS idx_entities_source ON entities(agent_id, source_id, source_path);
+		CREATE INDEX IF NOT EXISTS idx_entities_status ON entities(agent_id, status, updated_at DESC);
+		CREATE INDEX IF NOT EXISTS idx_entities_proposal ON entities(agent_id, proposal_id);
+	`);
+  db.exec(`
+		CREATE TRIGGER IF NOT EXISTS entities_fts_ai AFTER INSERT ON entities BEGIN
+			INSERT INTO entities_fts(rowid, name, canonical_name)
+			VALUES (new.rowid, new.name, new.canonical_name);
+		END;
+		CREATE TRIGGER IF NOT EXISTS entities_fts_ad AFTER DELETE ON entities BEGIN
+			INSERT INTO entities_fts(entities_fts, rowid, name, canonical_name)
+			VALUES ('delete', old.rowid, old.name, old.canonical_name);
+		END;
+		CREATE TRIGGER IF NOT EXISTS entities_fts_au AFTER UPDATE ON entities BEGIN
+			INSERT INTO entities_fts(entities_fts, rowid, name, canonical_name)
+			VALUES ('delete', old.rowid, old.name, old.canonical_name);
+			INSERT INTO entities_fts(rowid, name, canonical_name)
+			VALUES (new.rowid, new.name, new.canonical_name);
+		END;
+		INSERT INTO entities_fts(entities_fts) VALUES ('rebuild');
+	`);
+}
+function hasColumn17(db, table, column) {
+  return db.prepare(`PRAGMA table_info(${table})`).all().some((row) => row.name === column);
+}
+function up106(db) {
+  if (!hasColumn17(db, "memories", "review_after")) {
+    db.exec("ALTER TABLE memories ADD COLUMN review_after TEXT;");
+  }
+  db.exec("CREATE INDEX IF NOT EXISTS idx_memories_review_after ON memories(review_after);");
+}
+function hasColumn18(db, table, column) {
+  return db.prepare(`PRAGMA table_info(${table})`).all().some((row) => row.name === column);
+}
+var TOKEN_COLUMNS = [
+  ["tokens_input", "INTEGER"],
+  ["tokens_output", "INTEGER"],
+  ["tokens_cache_read", "INTEGER"],
+  ["tokens_cache_write", "INTEGER"],
+  ["tokens_cost", "REAL"]
+];
+function up107(db) {
+  for (const [column, type] of TOKEN_COLUMNS) {
+    if (!hasColumn18(db, "dreaming_passes", column)) {
+      db.exec(`ALTER TABLE dreaming_passes ADD COLUMN ${column} ${type};`);
+    }
+  }
+}
+function up108(db) {
+  db.exec(`
+		CREATE TABLE IF NOT EXISTS embedding_usage (
+			day TEXT NOT NULL,
+			agent_id TEXT NOT NULL DEFAULT '',
+			source_kind TEXT NOT NULL,
+			provider TEXT NOT NULL,
+			requests INTEGER NOT NULL DEFAULT 0,
+			tokens INTEGER NOT NULL DEFAULT 0,
+			PRIMARY KEY (day, agent_id, source_kind, provider)
+		);
+	`);
+}
+function up109(db) {
+  db.exec(`
+		CREATE TABLE IF NOT EXISTS telemetry_install (
+			id TEXT PRIMARY KEY,
+			created_at TEXT NOT NULL
+		);
+	`);
+}
+function up110(db) {
+  db.exec(`
+		CREATE INDEX IF NOT EXISTS idx_memory_entity_mentions_entity_memory
+			ON memory_entity_mentions(entity_id, memory_id);
+	`);
+}
 var MIGRATIONS = [
   {
     version: 1,
@@ -10906,6 +11195,90 @@ var MIGRATIONS = [
     name: "dreaming-tool-calls",
     up: up99,
     artifacts: { tables: ["dreaming_tool_calls"] }
+  },
+  {
+    version: 100,
+    name: "dreaming-runbook",
+    up: up100,
+    artifacts: {
+      columns: [
+        { table: "dreaming_passes", column: "evidence_window_json" },
+        { table: "dreaming_passes", column: "runbook_json" }
+      ]
+    }
+  },
+  {
+    version: 101,
+    name: "dreaming-attention",
+    up: up101,
+    artifacts: { tables: ["dreaming_attention"] }
+  },
+  {
+    version: 102,
+    name: "attribute-semantic-memories",
+    up: up102
+  },
+  {
+    version: 103,
+    name: "semantic-memory-kind",
+    up: up103
+  },
+  {
+    version: 104,
+    name: "derived-memory-provenance",
+    up: up104,
+    artifacts: {
+      tables: ["derived_memory_sources"],
+      columns: [{ table: "memories", column: "stale_at" }]
+    }
+  },
+  {
+    version: 105,
+    name: "agent-scoped-entity-name",
+    up: up105
+  },
+  {
+    version: 106,
+    name: "memory-review-after",
+    up: up106,
+    artifacts: {
+      columns: [{ table: "memories", column: "review_after" }]
+    }
+  },
+  {
+    version: 107,
+    name: "dreaming-pass-usage",
+    up: up107,
+    artifacts: {
+      columns: [
+        { table: "dreaming_passes", column: "tokens_input" },
+        { table: "dreaming_passes", column: "tokens_output" },
+        { table: "dreaming_passes", column: "tokens_cache_read" },
+        { table: "dreaming_passes", column: "tokens_cache_write" },
+        { table: "dreaming_passes", column: "tokens_cost" }
+      ]
+    }
+  },
+  {
+    version: 108,
+    name: "embedding-usage",
+    up: up108,
+    artifacts: {
+      tables: ["embedding_usage"]
+    }
+  },
+  {
+    version: 109,
+    name: "telemetry-install",
+    up: up109,
+    artifacts: {
+      tables: ["telemetry_install"]
+    }
+  },
+  {
+    version: 110,
+    name: "memory-mention-join-index",
+    up: up110
   }
 ];
 var LATEST_SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1]?.version ?? 0;
@@ -10921,6 +11294,79 @@ function expandHome(p, home = homedir2()) {
 }
 var LOCAL_BINDS = new Set(["127.0.0.1", "localhost", "::1", "::ffff:127.0.0.1"]);
 var import_yaml2 = __toESM2(require_dist(), 1);
+function readEnv(env, name) {
+  const value = env[name];
+  if (typeof value !== "string")
+    return;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+function normalizePort(raw, fallback) {
+  if (!raw)
+    return String(fallback);
+  if (!/^\d+$/.test(raw)) {
+    throw new Error(`SIGNET_PORT must be an integer between 1 and 65535: ${raw}`);
+  }
+  const port = Number.parseInt(raw, 10);
+  if (!Number.isFinite(port) || port < 1 || port > 65535) {
+    throw new Error(`SIGNET_PORT must be an integer between 1 and 65535: ${raw}`);
+  }
+  return String(port);
+}
+function bracketIpv6Host(host) {
+  if (host.startsWith("[") || !host.includes(":"))
+    return host;
+  return `[${host}]`;
+}
+function assertPlainHost(raw) {
+  if (raw.includes("/") || raw.includes("@") || raw.includes("?") || raw.includes("#")) {
+    throw new Error(`SIGNET_HOST must be a hostname or IP address, not a URL: ${raw}`);
+  }
+  const host = raw.startsWith("[") && raw.endsWith("]") ? raw.slice(1, -1) : raw;
+  if (host.includes(":")) {
+    if (/^[0-9A-Fa-f:.]+$/.test(host))
+      return;
+    throw new Error(`SIGNET_HOST must be a hostname or IP address: ${raw}`);
+  }
+  if (!/^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$/.test(host)) {
+    throw new Error(`SIGNET_HOST must be a hostname or IP address: ${raw}`);
+  }
+}
+function normalizeDaemonUrl(raw, source) {
+  let parsed;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new Error(`${source} must be an http(s) URL: ${raw}`);
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error(`${source} must use http or https: ${raw}`);
+  }
+  if (parsed.username || parsed.password) {
+    throw new Error(`${source} must not include username or password credentials`);
+  }
+  if (parsed.search || parsed.hash) {
+    throw new Error(`${source} must not include query strings or fragments`);
+  }
+  if (parsed.pathname !== "/" && parsed.pathname !== "") {
+    throw new Error(`${source} must point at the daemon origin, not a path: ${raw}`);
+  }
+  return parsed.toString().replace(/\/$/, "");
+}
+function resolveSignetDaemonUrl(opts = {}) {
+  const env = opts.env ?? process.env;
+  const fallbackHost = opts.defaultHost ?? "127.0.0.1";
+  const fallbackPort = opts.defaultPort ?? 3850;
+  const explicit = readEnv(env, "SIGNET_DAEMON_URL");
+  if (explicit)
+    return normalizeDaemonUrl(explicit, "SIGNET_DAEMON_URL");
+  if (opts.configUrl)
+    return normalizeDaemonUrl(opts.configUrl, "daemon.url");
+  const host = readEnv(env, "SIGNET_HOST") ?? fallbackHost;
+  assertPlainHost(host);
+  const port = normalizePort(readEnv(env, "SIGNET_PORT"), fallbackPort);
+  return normalizeDaemonUrl(`http://${bracketIpv6Host(host)}:${port}`, "SIGNET_HOST/SIGNET_PORT");
+}
 var WORKSPACE_ENV_KEYS = ["SIGNET_PATH", "SIGNET_WORKSPACE"];
 var DEFAULT_AGENTS_DIRNAME = ".agents";
 function normalizeWorkspacePath(pathValue, home = homedir3()) {
@@ -11029,6 +11475,7 @@ try {
   const esmRequire = createRequire2(import.meta.url);
   native = esmRequire("@signet/native");
 } catch {}
+var GRAPHIQ_DEFAULT_INSTALL_DIR = join6(homedir4(), ".local", "bin");
 var SIGNET_SOURCE_CHECKOUT_DIRNAME = "signetai";
 var SIGNET_GIT_ALLOWED_DIRECTORIES = ["skills", "tools", "dreaming"];
 var SIGNET_GIT_PROTECTED_PATHS = [
@@ -11098,11 +11545,11 @@ var VALID_GITHUB_RESOURCE_TYPES = new Set(DEFAULT_GITHUB_RESOURCE_TYPES);
 function defaultDiscordDesktopCachePath() {
   switch (platform2()) {
     case "darwin":
-      return resolve4(homedir4(), "Library", "Application Support", "discord");
+      return resolve4(homedir5(), "Library", "Application Support", "discord");
     case "win32":
-      return resolve4(process.env.APPDATA || resolve4(homedir4(), "AppData", "Roaming"), "discord");
+      return resolve4(process.env.APPDATA || resolve4(homedir5(), "AppData", "Roaming"), "discord");
     default:
-      return resolve4(process.env.XDG_CONFIG_HOME || resolve4(homedir4(), ".config"), "discord");
+      return resolve4(process.env.XDG_CONFIG_HOME || resolve4(homedir5(), ".config"), "discord");
   }
 }
 var IDENTITY_FILES = {
@@ -11233,7 +11680,7 @@ function symlinkSkills(sourceDir, targetDir, options = {}) {
   }
   return result;
 }
-var home = homedir8();
+var home = homedir9();
 var SIGNET_BLOCK_START = "<!-- SIGNET:START -->";
 var SIGNET_BLOCK_END = "<!-- SIGNET:END -->";
 function stripSignetBlock(content) {
@@ -11274,7 +11721,7 @@ class BaseConnector {
   generateHeader(sourcePath, targetName) {
     const name = targetName || this.name;
     const safe = (p) => p.replace(/[\n\r]/g, "");
-    const root = dirname3(sourcePath);
+    const root = dirname5(sourcePath);
     return `# Auto-generated from ${safe(sourcePath)}
 # Source: ${safe(sourcePath)}
 # Generated: ${new Date().toISOString()}
@@ -11311,7 +11758,7 @@ function isSignetGeneratedFile(raw) {
   return lines.some((line, i) => /^#\s+AUTO-GENERATED\s+from\s+.*\s+by\s+Signet/i.test(line) || /^#\s+Auto-generated\s+from\s+/.test(line) && i + 1 < lines.length && /^#\s+Source:\s+/.test(lines[i + 1]));
 }
 function atomicWriteText(path, content, mode) {
-  const tmp = join3(dirname3(path), `.${randomBytes(6).toString("hex")}.tmp`);
+  const tmp = join3(dirname5(path), `.${randomBytes(6).toString("hex")}.tmp`);
   let writeMode = mode;
   if (writeMode === undefined) {
     try {
@@ -11347,32 +11794,65 @@ function resolvePackagedSignetCommand(bareCommand, scriptDirectory, scriptName, 
 function resolveSignetMcpCommand() {
   return resolvePackagedSignetCommand("signet-mcp", "dist", "mcp-stdio.js", true);
 }
-function readManagedTrimmedEnv(name) {
+function isJsonObject(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function isChildOf(candidate, parent) {
+  const rel = relative(parent, candidate);
+  return rel !== "" && rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
+}
+function readTrimmedEnv2(name) {
   const value = process.env[name];
   if (typeof value !== "string")
     return;
-  const trimmed = value.trim();
+  const trimmed = value.trim().replace(/[\r\n]+/g, "");
   return trimmed.length > 0 ? trimmed : undefined;
+}
+function readManagedTrimmedEnv(name) {
+  return readTrimmedEnv2(name);
 }
 function resolveSignetWorkspacePath(home2 = homedir()) {
   return resolveWorkspacePath({ home: home2, strict: true, requireExistingEnvPath: true }).path;
 }
+function resolveSignetDaemonUrl2() {
+  return resolveSignetDaemonUrl();
+}
 function resolveSignetApiKey() {
   return readManagedTrimmedEnv("SIGNET_API_KEY") ?? readManagedTrimmedEnv("SIGNET_TOKEN");
+}
+function buildSignetRuntimeEnv(opts = {}) {
+  const env = {};
+  if (opts.basePath)
+    env.SIGNET_PATH = opts.basePath;
+  const daemonUrl = readManagedTrimmedEnv("SIGNET_DAEMON_URL");
+  const apiKey = resolveSignetApiKey();
+  const agentId = readManagedTrimmedEnv("SIGNET_AGENT_ID");
+  if (daemonUrl)
+    env.SIGNET_DAEMON_URL = resolveSignetDaemonUrl2();
+  if (apiKey)
+    env.SIGNET_API_KEY = apiKey;
+  if (agentId)
+    env.SIGNET_AGENT_ID = agentId;
+  return env;
+}
+function resolveRemoteDaemonUrl() {
+  return readManagedTrimmedEnv("SIGNET_DAEMON_URL") ? resolveSignetDaemonUrl2() : null;
 }
 
 // ../../../platform/core/dist/index.js
 import { createRequire as createRequire3 } from "node:module";
-import { dirname as dirname5, join as join4 } from "node:path";
+import { dirname as dirname6, join as join4 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 import { homedir as homedir22 } from "os";
 import { join as join22 } from "path";
 import { createRequire as createRequire22 } from "node:module";
-import { homedir as homedir42, platform as platform22 } from "node:os";
+import { homedir as homedir42 } from "node:os";
+import { dirname as dirname32, join as join62, resolve as resolve22 } from "node:path";
+import { homedir as homedir52, platform as platform22 } from "node:os";
 import { basename as basename2, dirname as dirname42, resolve as resolve42 } from "node:path";
 import { existsSync as existsSync11, readFileSync as readFileSync9, readdirSync as readdirSync4, realpathSync, statSync as statSync5 } from "node:fs";
 import { dirname as dirname7, join as join11 } from "node:path";
-import { homedir as homedir82 } from "node:os";
+import { homedir as homedir92 } from "node:os";
 var __create = Object.create;
 var __getProtoOf = Object.getPrototypeOf;
 var __defProp = Object.defineProperty;
@@ -14981,10 +15461,10 @@ var require_resolve_block_map2 = __commonJS((exports) => {
     let offset = bm.offset;
     let commentEnd = null;
     for (const collItem of bm.items) {
-      const { start, key, sep, value } = collItem;
+      const { start, key, sep: sep2, value } = collItem;
       const keyProps = resolveProps.resolveProps(start, {
         indicator: "explicit-key-ind",
-        next: key ?? sep?.[0],
+        next: key ?? sep2?.[0],
         offset,
         onError,
         parentIndent: bm.indent,
@@ -14998,7 +15478,7 @@ var require_resolve_block_map2 = __commonJS((exports) => {
           else if ("indent" in key && key.indent !== bm.indent)
             onError(offset, "BAD_INDENT", startColMsg);
         }
-        if (!keyProps.anchor && !keyProps.tag && !sep) {
+        if (!keyProps.anchor && !keyProps.tag && !sep2) {
           commentEnd = keyProps.end;
           if (keyProps.comment) {
             if (map.comment)
@@ -15023,7 +15503,7 @@ var require_resolve_block_map2 = __commonJS((exports) => {
       ctx.atKey = false;
       if (utilMapIncludes.mapIncludes(ctx, map.items, keyNode))
         onError(keyStart, "DUPLICATE_KEY", "Map keys must be unique");
-      const valueProps = resolveProps.resolveProps(sep ?? [], {
+      const valueProps = resolveProps.resolveProps(sep2 ?? [], {
         indicator: "map-value-ind",
         next: value,
         offset: keyNode.range[2],
@@ -15039,7 +15519,7 @@ var require_resolve_block_map2 = __commonJS((exports) => {
           if (ctx.options.strict && keyProps.start < valueProps.found.offset - 1024)
             onError(keyNode.range, "KEY_OVER_1024_CHARS", "The : indicator must be at most 1024 chars after the start of an implicit block mapping key");
         }
-        const valueNode = value ? composeNode(ctx, value, valueProps, onError) : composeEmptyNode(ctx, offset, sep, null, valueProps, onError);
+        const valueNode = value ? composeNode(ctx, value, valueProps, onError) : composeEmptyNode(ctx, offset, sep2, null, valueProps, onError);
         if (ctx.schema.compat)
           utilFlowIndentCheck.flowIndentCheck(bm.indent, value, onError);
         offset = valueNode.range[2];
@@ -15121,7 +15601,7 @@ var require_resolve_end2 = __commonJS((exports) => {
     let comment = "";
     if (end) {
       let hasSpace = false;
-      let sep = "";
+      let sep2 = "";
       for (const token of end) {
         const { source, type } = token;
         switch (type) {
@@ -15135,13 +15615,13 @@ var require_resolve_end2 = __commonJS((exports) => {
             if (!comment)
               comment = cb;
             else
-              comment += sep + cb;
-            sep = "";
+              comment += sep2 + cb;
+            sep2 = "";
             break;
           }
           case "newline":
             if (comment)
-              sep += source;
+              sep2 += source;
             hasSpace = true;
             break;
           default:
@@ -15179,18 +15659,18 @@ var require_resolve_flow_collection2 = __commonJS((exports) => {
     let offset = fc.offset + fc.start.source.length;
     for (let i = 0;i < fc.items.length; ++i) {
       const collItem = fc.items[i];
-      const { start, key, sep, value } = collItem;
+      const { start, key, sep: sep2, value } = collItem;
       const props = resolveProps.resolveProps(start, {
         flow: fcName,
         indicator: "explicit-key-ind",
-        next: key ?? sep?.[0],
+        next: key ?? sep2?.[0],
         offset,
         onError,
         parentIndent: fc.indent,
         startOnNewline: false
       });
       if (!props.found) {
-        if (!props.anchor && !props.tag && !sep && !value) {
+        if (!props.anchor && !props.tag && !sep2 && !value) {
           if (i === 0 && props.comma)
             onError(props.comma, "UNEXPECTED_TOKEN", `Unexpected , in ${fcName}`);
           else if (i < fc.items.length - 1)
@@ -15242,8 +15722,8 @@ var require_resolve_flow_collection2 = __commonJS((exports) => {
           }
         }
       }
-      if (!isMap && !sep && !props.found) {
-        const valueNode = value ? composeNode(ctx, value, props, onError) : composeEmptyNode(ctx, props.end, sep, null, props, onError);
+      if (!isMap && !sep2 && !props.found) {
+        const valueNode = value ? composeNode(ctx, value, props, onError) : composeEmptyNode(ctx, props.end, sep2, null, props, onError);
         coll.items.push(valueNode);
         offset = valueNode.range[2];
         if (isBlock(value))
@@ -15255,7 +15735,7 @@ var require_resolve_flow_collection2 = __commonJS((exports) => {
         if (isBlock(key))
           onError(keyNode.range, "BLOCK_IN_FLOW", blockMsg);
         ctx.atKey = false;
-        const valueProps = resolveProps.resolveProps(sep ?? [], {
+        const valueProps = resolveProps.resolveProps(sep2 ?? [], {
           flow: fcName,
           indicator: "map-value-ind",
           next: value,
@@ -15266,8 +15746,8 @@ var require_resolve_flow_collection2 = __commonJS((exports) => {
         });
         if (valueProps.found) {
           if (!isMap && !props.found && ctx.options.strict) {
-            if (sep)
-              for (const st of sep) {
+            if (sep2)
+              for (const st of sep2) {
                 if (st === valueProps.found)
                   break;
                 if (st.type === "newline") {
@@ -15284,7 +15764,7 @@ var require_resolve_flow_collection2 = __commonJS((exports) => {
           else
             onError(valueProps.start, "MISSING_CHAR", `Missing , or : between ${fcName} items`);
         }
-        const valueNode = value ? composeNode(ctx, value, valueProps, onError) : valueProps.found ? composeEmptyNode(ctx, valueProps.end, sep, null, valueProps, onError) : null;
+        const valueNode = value ? composeNode(ctx, value, valueProps, onError) : valueProps.found ? composeEmptyNode(ctx, valueProps.end, sep2, null, valueProps, onError) : null;
         if (valueNode) {
           if (isBlock(value))
             onError(valueNode.range, "BLOCK_IN_FLOW", blockMsg);
@@ -15457,7 +15937,7 @@ var require_resolve_block_scalar2 = __commonJS((exports) => {
         chompStart = i + 1;
     }
     let value = "";
-    let sep = "";
+    let sep2 = "";
     let prevMoreIndented = false;
     for (let i = 0;i < contentStart; ++i)
       value += lines[i][0].slice(trimIndent) + `
@@ -15475,33 +15955,33 @@ var require_resolve_block_scalar2 = __commonJS((exports) => {
         indent = "";
       }
       if (type === Scalar.Scalar.BLOCK_LITERAL) {
-        value += sep + indent.slice(trimIndent) + content;
-        sep = `
+        value += sep2 + indent.slice(trimIndent) + content;
+        sep2 = `
 `;
       } else if (indent.length > trimIndent || content[0] === "\t") {
-        if (sep === " ")
-          sep = `
+        if (sep2 === " ")
+          sep2 = `
 `;
-        else if (!prevMoreIndented && sep === `
+        else if (!prevMoreIndented && sep2 === `
 `)
-          sep = `
+          sep2 = `
 
 `;
-        value += sep + indent.slice(trimIndent) + content;
-        sep = `
+        value += sep2 + indent.slice(trimIndent) + content;
+        sep2 = `
 `;
         prevMoreIndented = true;
       } else if (content === "") {
-        if (sep === `
+        if (sep2 === `
 `)
           value += `
 `;
         else
-          sep = `
+          sep2 = `
 `;
       } else {
-        value += sep + content;
-        sep = " ";
+        value += sep2 + content;
+        sep2 = " ";
         prevMoreIndented = false;
       }
     }
@@ -15680,27 +16160,27 @@ var require_resolve_flow_scalar2 = __commonJS((exports) => {
     if (!match)
       return source;
     let res = match[1];
-    let sep = " ";
+    let sep2 = " ";
     let pos = first.lastIndex;
     line.lastIndex = pos;
     while (match = line.exec(source)) {
       if (match[1] === "") {
-        if (sep === `
+        if (sep2 === `
 `)
-          res += sep;
+          res += sep2;
         else
-          sep = `
+          sep2 = `
 `;
       } else {
-        res += sep + match[1];
-        sep = " ";
+        res += sep2 + match[1];
+        sep2 = " ";
       }
       pos = line.lastIndex;
     }
     const last = /[ \t]*(.*)/sy;
     last.lastIndex = pos;
     match = last.exec(source);
-    return res + sep + (match?.[1] ?? "");
+    return res + sep2 + (match?.[1] ?? "");
   }
   function doubleQuotedValue(source, onError) {
     let res = "";
@@ -16467,14 +16947,14 @@ var require_cst_stringify2 = __commonJS((exports) => {
       }
     }
   }
-  function stringifyItem({ start, key, sep, value }) {
+  function stringifyItem({ start, key, sep: sep2, value }) {
     let res = "";
     for (const st of start)
       res += st.source;
     if (key)
       res += stringifyToken(key);
-    if (sep)
-      for (const st of sep)
+    if (sep2)
+      for (const st of sep2)
         res += st.source;
     if (value)
       res += stringifyToken(value);
@@ -17613,18 +18093,18 @@ var require_parser2 = __commonJS((exports) => {
       if (this.type === "map-value-ind") {
         const prev = getPrevProps(this.peek(2));
         const start = getFirstKeyStartProps(prev);
-        let sep;
+        let sep2;
         if (scalar.end) {
-          sep = scalar.end;
-          sep.push(this.sourceToken);
+          sep2 = scalar.end;
+          sep2.push(this.sourceToken);
           delete scalar.end;
         } else
-          sep = [this.sourceToken];
+          sep2 = [this.sourceToken];
         const map = {
           type: "block-map",
           offset: scalar.offset,
           indent: scalar.indent,
-          items: [{ start, key: scalar, sep }]
+          items: [{ start, key: scalar, sep: sep2 }]
         };
         this.onKeyLine = true;
         this.stack[this.stack.length - 1] = map;
@@ -17778,15 +18258,15 @@ var require_parser2 = __commonJS((exports) => {
               } else if (isFlowToken(it.key) && !includesToken(it.sep, "newline")) {
                 const start2 = getFirstKeyStartProps(it.start);
                 const key = it.key;
-                const sep = it.sep;
-                sep.push(this.sourceToken);
+                const sep2 = it.sep;
+                sep2.push(this.sourceToken);
                 delete it.key;
                 delete it.sep;
                 this.stack.push({
                   type: "block-map",
                   offset: this.offset,
                   indent: this.indent,
-                  items: [{ start: start2, key, sep }]
+                  items: [{ start: start2, key, sep: sep2 }]
                 });
               } else if (start.length > 0) {
                 it.sep = it.sep.concat(start, this.sourceToken);
@@ -17980,13 +18460,13 @@ var require_parser2 = __commonJS((exports) => {
           const prev = getPrevProps(parent);
           const start = getFirstKeyStartProps(prev);
           fixFlowSeqItems(fc);
-          const sep = fc.end.splice(1, fc.end.length);
-          sep.push(this.sourceToken);
+          const sep2 = fc.end.splice(1, fc.end.length);
+          sep2.push(this.sourceToken);
           const map = {
             type: "block-map",
             offset: fc.offset,
             indent: fc.indent,
-            items: [{ start, key: fc, sep }]
+            items: [{ start, key: fc, sep: sep2 }]
           };
           this.onKeyLine = true;
           this.stack[this.stack.length - 1] = map;
@@ -18269,7 +18749,7 @@ var PIPELINE_PROVIDER_CHOICES2 = [
 var SYNTHESIS_PROVIDER_CHOICES2 = PIPELINE_PROVIDER_CHOICES2.filter((provider) => provider !== "command");
 var PIPELINE_PROVIDER_SET2 = new Set(PIPELINE_PROVIDER_CHOICES2);
 var SYNTHESIS_PROVIDER_SET2 = new Set(SYNTHESIS_PROVIDER_CHOICES2);
-var DAEMON_DERIVED_MEMORY_SOURCE_TYPES2 = ["extract", "aggregate-recall", "session_end", "checkpoint"];
+var DAEMON_DERIVED_MEMORY_SOURCE_TYPES2 = ["extract", "aggregate-recall", "session_end", "checkpoint", "dreaming"];
 var MEMORIES_FTS_TOKENIZER2 = "unicode61";
 function normalizeSql2(sql) {
   return sql.replace(/\s+/g, " ").trim().toLowerCase();
@@ -18320,7 +18800,7 @@ function memoriesFtsNeedsTokenizerRepair2(sql) {
     return true;
   return !normalized.includes(`tokenize='${MEMORIES_FTS_TOKENIZER2}'`);
 }
-function up100(db) {
+function up111(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS schema_migrations (
 			version INTEGER PRIMARY KEY,
@@ -18409,12 +18889,12 @@ function up100(db) {
   } catch {}
   createMemoriesFts2(db);
 }
-function hasColumn15(db, table, column) {
+function hasColumn19(db, table, column) {
   const rows = db.prepare(`PRAGMA table_info(${table})`).all();
   return rows.some((r) => r.name === column);
 }
 function addColumnIfMissing23(db, table, column, definition) {
-  if (!hasColumn15(db, table, column)) {
+  if (!hasColumn19(db, table, column)) {
     db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
   }
 }
@@ -18732,7 +19212,7 @@ function up910(db) {
   db.exec(`CREATE INDEX IF NOT EXISTS idx_summary_jobs_status
 		 ON summary_jobs(status)`);
 }
-function up102(db) {
+function up1010(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS umap_cache (
 			id INTEGER PRIMARY KEY,
@@ -21456,11 +21936,298 @@ function up992(db) {
 			ON dreaming_tool_calls (agent_id, pass_id, sequence ASC);
 	`);
 }
+function up1002(db) {
+  const columns = db.prepare("PRAGMA table_info(dreaming_passes)").all();
+  if (!columns.some((column) => column.name === "evidence_window_json")) {
+    db.exec("ALTER TABLE dreaming_passes ADD COLUMN evidence_window_json TEXT");
+  }
+  if (!columns.some((column) => column.name === "runbook_json")) {
+    db.exec("ALTER TABLE dreaming_passes ADD COLUMN runbook_json TEXT");
+  }
+}
+function up1012(db) {
+  db.exec(`
+		CREATE TABLE IF NOT EXISTS dreaming_attention (
+			id TEXT PRIMARY KEY,
+			agent_id TEXT NOT NULL,
+			kind TEXT NOT NULL CHECK (kind IN ('review_due', 'hygiene', 'contested_claim', 'evidence_requeue')),
+			subject_ref TEXT NOT NULL,
+			details_json TEXT NOT NULL DEFAULT '{}',
+			priority INTEGER NOT NULL DEFAULT 0 CHECK (priority >= 0 AND priority <= 100),
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			generation INTEGER NOT NULL DEFAULT 0,
+			resolved_at TEXT,
+			resolved_by_pass_id TEXT,
+			UNIQUE(agent_id, kind, subject_ref)
+		);
+		CREATE INDEX IF NOT EXISTS idx_dreaming_attention_pending
+			ON dreaming_attention (agent_id, resolved_at, priority DESC, created_at ASC);
+	`);
+}
+function hasColumn152(db, table, column) {
+  return db.prepare(`PRAGMA table_info(${table})`).all().some((row) => row.name === column);
+}
+function up1022(db) {
+  const requiredMemoryColumns = [
+    "content_hash",
+    "normalized_content",
+    "memory_kind",
+    "source_type",
+    "source_path",
+    "agent_id",
+    "visibility",
+    "is_deleted",
+    "extraction_status"
+  ];
+  if (!hasColumn152(db, "entity_attributes", "memory_id") || !requiredMemoryColumns.every((column) => hasColumn152(db, "memories", column))) {
+    return;
+  }
+  db.exec(`
+		INSERT OR IGNORE INTO memories
+		 (id, content, normalized_content, content_hash, who, why, project,
+		  importance, type, tags, pinned, is_deleted, extraction_status,
+		  created_at, updated_at, updated_by, source_type, source_id, source_path,
+		  agent_id, visibility, memory_kind)
+		SELECT attr.id, attr.content, attr.normalized_content,
+		       'semantic-attribute:' || attr.id, 'dreaming', 'Derived semantic attribute', NULL,
+		       attr.importance, 'semantic', 'semantic,attribute', 0,
+		       CASE WHEN attr.status = 'active' THEN 0 ELSE 1 END, 'completed',
+		       attr.created_at, attr.updated_at, 'dreaming', 'dreaming', attr.source_id, attr.source_path,
+		       attr.agent_id, 'global', 'derived'
+		FROM entity_attributes attr
+		WHERE attr.memory_id IS NULL
+	`);
+  db.exec(`
+		UPDATE entity_attributes
+		SET memory_id = id
+		WHERE memory_id IS NULL
+		  AND EXISTS (SELECT 1 FROM memories WHERE memories.id = entity_attributes.id)
+	`);
+  db.exec(`
+		INSERT OR IGNORE INTO memory_entity_mentions (memory_id, entity_id)
+		SELECT attr.memory_id, aspect.entity_id
+		FROM entity_attributes attr
+		JOIN entity_aspects aspect ON aspect.id = attr.aspect_id AND aspect.agent_id = attr.agent_id
+		WHERE attr.memory_id IS NOT NULL
+	`);
+  db.exec(`
+		UPDATE entities
+		SET mentions = (
+			SELECT COUNT(*) FROM memory_entity_mentions WHERE entity_id = entities.id
+		)
+		WHERE EXISTS (SELECT 1 FROM memory_entity_mentions WHERE entity_id = entities.id)
+	`);
+}
+function up1032(db) {
+  const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('memories', 'entity_attributes')").all();
+  if (tables.length !== 2)
+    return;
+  const memoryColumns = db.prepare("PRAGMA table_info(memories)").all().map((row) => row.name);
+  const attributeColumns = db.prepare("PRAGMA table_info(entity_attributes)").all().map((row) => row.name);
+  if (!memoryColumns.includes("memory_kind") || !attributeColumns.includes("memory_id"))
+    return;
+  db.exec(`
+		UPDATE memories
+		SET memory_kind = 'derived'
+		WHERE memory_kind IS NULL
+		  AND id IN (
+			SELECT memory_id FROM entity_attributes WHERE memory_id IS NOT NULL
+		  )
+	`);
+}
+function tableExists2(db, table) {
+  return db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(table) !== undefined;
+}
+function hasColumn162(db, table, column) {
+  return db.prepare(`PRAGMA table_info(${table})`).all().some((row) => row.name === column);
+}
+function up1042(db) {
+  db.exec(`
+		CREATE TABLE IF NOT EXISTS derived_memory_sources (
+			derived_memory_id TEXT NOT NULL,
+			source_kind TEXT NOT NULL,
+			source_id TEXT NOT NULL,
+			source_path TEXT,
+			agent_id TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			PRIMARY KEY (derived_memory_id, source_kind, source_id)
+		);
+		CREATE INDEX IF NOT EXISTS idx_derived_memory_sources_derived
+			ON derived_memory_sources(agent_id, derived_memory_id);
+		CREATE INDEX IF NOT EXISTS idx_derived_memory_sources_source
+			ON derived_memory_sources(agent_id, source_kind, source_id);
+	`);
+  if (tableExists2(db, "aggregate_evidence_sources")) {
+    db.exec(`
+			INSERT OR IGNORE INTO derived_memory_sources
+			 (derived_memory_id, source_kind, source_id, source_path, agent_id, created_at)
+			SELECT aggregate_memory_id, source_kind, source_id, source_path, agent_id, created_at
+			FROM aggregate_evidence_sources
+		`);
+  }
+  if (tableExists2(db, "aggregate_memory_sources")) {
+    db.exec(`
+			INSERT OR IGNORE INTO derived_memory_sources
+			 (derived_memory_id, source_kind, source_id, source_path, agent_id, created_at)
+			SELECT aggregate_memory_id, 'memory', source_memory_id, NULL, agent_id, created_at
+			FROM aggregate_memory_sources
+		`);
+  }
+  if (tableExists2(db, "memories") && !hasColumn162(db, "memories", "stale_at")) {
+    db.exec("ALTER TABLE memories ADD COLUMN stale_at TEXT");
+  }
+  if (tableExists2(db, "memories")) {
+    db.exec(`
+			CREATE INDEX IF NOT EXISTS idx_memories_stale_derived
+			ON memories(agent_id, stale_at)
+			WHERE stale_at IS NOT NULL AND is_deleted = 0
+		`);
+  }
+}
+function up1052(db) {
+  db.exec(`
+		DROP TRIGGER IF EXISTS entities_fts_ai;
+		DROP TRIGGER IF EXISTS entities_fts_ad;
+		DROP TRIGGER IF EXISTS entities_fts_au;
+	`);
+  db.exec(`
+		CREATE TABLE entities_105 (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL,
+			entity_type TEXT NOT NULL,
+			description TEXT,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			canonical_name TEXT,
+			mentions INTEGER DEFAULT 0,
+			embedding BLOB,
+			agent_id TEXT NOT NULL DEFAULT 'default',
+			pinned INTEGER NOT NULL DEFAULT 0,
+			pinned_at TEXT,
+			last_synthesized_at TEXT,
+			community_id TEXT REFERENCES entity_communities(id),
+			source_id TEXT,
+			source_kind TEXT,
+			source_path TEXT,
+			source_root TEXT,
+			status TEXT NOT NULL DEFAULT 'active',
+			archived_at TEXT,
+			archived_by TEXT,
+			archive_reason TEXT,
+			proposal_id TEXT,
+			proposal_evidence TEXT NOT NULL DEFAULT '[]',
+			UNIQUE(agent_id, name)
+		);
+	`);
+  db.exec(`
+		INSERT INTO entities_105 (
+			rowid, id, name, entity_type, description, created_at, updated_at,
+			canonical_name, mentions, embedding, agent_id, pinned, pinned_at,
+			last_synthesized_at, community_id, source_id, source_kind,
+			source_path, source_root, status, archived_at, archived_by,
+			archive_reason, proposal_id, proposal_evidence
+		)
+		SELECT
+			rowid, id, name, entity_type, description, created_at, updated_at,
+			canonical_name, mentions, embedding, agent_id, pinned, pinned_at,
+			last_synthesized_at, community_id, source_id, source_kind,
+			source_path, source_root, status, archived_at, archived_by,
+			archive_reason, proposal_id, proposal_evidence
+		FROM entities;
+	`);
+  db.exec(`
+		DROP TABLE entities;
+		ALTER TABLE entities_105 RENAME TO entities;
+	`);
+  db.exec(`
+		CREATE INDEX IF NOT EXISTS idx_entities_canonical_name ON entities(canonical_name);
+		CREATE INDEX IF NOT EXISTS idx_entities_agent ON entities(agent_id);
+		CREATE INDEX IF NOT EXISTS idx_entities_pinned ON entities(agent_id, pinned, pinned_at DESC);
+		CREATE INDEX IF NOT EXISTS idx_entities_order
+			ON entities(agent_id, pinned DESC, pinned_at DESC, mentions DESC, updated_at DESC, name);
+		CREATE INDEX IF NOT EXISTS idx_entities_extracted_mentions
+			ON entities(entity_type, mentions)
+			WHERE entity_type = 'extracted';
+		CREATE INDEX IF NOT EXISTS idx_entities_source ON entities(agent_id, source_id, source_path);
+		CREATE INDEX IF NOT EXISTS idx_entities_status ON entities(agent_id, status, updated_at DESC);
+		CREATE INDEX IF NOT EXISTS idx_entities_proposal ON entities(agent_id, proposal_id);
+	`);
+  db.exec(`
+		CREATE TRIGGER IF NOT EXISTS entities_fts_ai AFTER INSERT ON entities BEGIN
+			INSERT INTO entities_fts(rowid, name, canonical_name)
+			VALUES (new.rowid, new.name, new.canonical_name);
+		END;
+		CREATE TRIGGER IF NOT EXISTS entities_fts_ad AFTER DELETE ON entities BEGIN
+			INSERT INTO entities_fts(entities_fts, rowid, name, canonical_name)
+			VALUES ('delete', old.rowid, old.name, old.canonical_name);
+		END;
+		CREATE TRIGGER IF NOT EXISTS entities_fts_au AFTER UPDATE ON entities BEGIN
+			INSERT INTO entities_fts(entities_fts, rowid, name, canonical_name)
+			VALUES ('delete', old.rowid, old.name, old.canonical_name);
+			INSERT INTO entities_fts(rowid, name, canonical_name)
+			VALUES (new.rowid, new.name, new.canonical_name);
+		END;
+		INSERT INTO entities_fts(entities_fts) VALUES ('rebuild');
+	`);
+}
+function hasColumn172(db, table, column) {
+  return db.prepare(`PRAGMA table_info(${table})`).all().some((row) => row.name === column);
+}
+function up1062(db) {
+  if (!hasColumn172(db, "memories", "review_after")) {
+    db.exec("ALTER TABLE memories ADD COLUMN review_after TEXT;");
+  }
+  db.exec("CREATE INDEX IF NOT EXISTS idx_memories_review_after ON memories(review_after);");
+}
+function hasColumn182(db, table, column) {
+  return db.prepare(`PRAGMA table_info(${table})`).all().some((row) => row.name === column);
+}
+var TOKEN_COLUMNS2 = [
+  ["tokens_input", "INTEGER"],
+  ["tokens_output", "INTEGER"],
+  ["tokens_cache_read", "INTEGER"],
+  ["tokens_cache_write", "INTEGER"],
+  ["tokens_cost", "REAL"]
+];
+function up1072(db) {
+  for (const [column, type] of TOKEN_COLUMNS2) {
+    if (!hasColumn182(db, "dreaming_passes", column)) {
+      db.exec(`ALTER TABLE dreaming_passes ADD COLUMN ${column} ${type};`);
+    }
+  }
+}
+function up1082(db) {
+  db.exec(`
+		CREATE TABLE IF NOT EXISTS embedding_usage (
+			day TEXT NOT NULL,
+			agent_id TEXT NOT NULL DEFAULT '',
+			source_kind TEXT NOT NULL,
+			provider TEXT NOT NULL,
+			requests INTEGER NOT NULL DEFAULT 0,
+			tokens INTEGER NOT NULL DEFAULT 0,
+			PRIMARY KEY (day, agent_id, source_kind, provider)
+		);
+	`);
+}
+function up1092(db) {
+  db.exec(`
+		CREATE TABLE IF NOT EXISTS telemetry_install (
+			id TEXT PRIMARY KEY,
+			created_at TEXT NOT NULL
+		);
+	`);
+}
+function up1102(db) {
+  db.exec(`
+		CREATE INDEX IF NOT EXISTS idx_memory_entity_mentions_entity_memory
+			ON memory_entity_mentions(entity_id, memory_id);
+	`);
+}
 var MIGRATIONS2 = [
   {
     version: 1,
     name: "baseline",
-    up: up100,
+    up: up111,
     artifacts: { tables: ["memories", "conversations", "embeddings"] }
   },
   {
@@ -21520,7 +22287,7 @@ var MIGRATIONS2 = [
   {
     version: 10,
     name: "umap-cache",
-    up: up102,
+    up: up1010,
     artifacts: { tables: ["umap_cache"] }
   },
   {
@@ -22247,11 +23014,95 @@ var MIGRATIONS2 = [
     name: "dreaming-tool-calls",
     up: up992,
     artifacts: { tables: ["dreaming_tool_calls"] }
+  },
+  {
+    version: 100,
+    name: "dreaming-runbook",
+    up: up1002,
+    artifacts: {
+      columns: [
+        { table: "dreaming_passes", column: "evidence_window_json" },
+        { table: "dreaming_passes", column: "runbook_json" }
+      ]
+    }
+  },
+  {
+    version: 101,
+    name: "dreaming-attention",
+    up: up1012,
+    artifacts: { tables: ["dreaming_attention"] }
+  },
+  {
+    version: 102,
+    name: "attribute-semantic-memories",
+    up: up1022
+  },
+  {
+    version: 103,
+    name: "semantic-memory-kind",
+    up: up1032
+  },
+  {
+    version: 104,
+    name: "derived-memory-provenance",
+    up: up1042,
+    artifacts: {
+      tables: ["derived_memory_sources"],
+      columns: [{ table: "memories", column: "stale_at" }]
+    }
+  },
+  {
+    version: 105,
+    name: "agent-scoped-entity-name",
+    up: up1052
+  },
+  {
+    version: 106,
+    name: "memory-review-after",
+    up: up1062,
+    artifacts: {
+      columns: [{ table: "memories", column: "review_after" }]
+    }
+  },
+  {
+    version: 107,
+    name: "dreaming-pass-usage",
+    up: up1072,
+    artifacts: {
+      columns: [
+        { table: "dreaming_passes", column: "tokens_input" },
+        { table: "dreaming_passes", column: "tokens_output" },
+        { table: "dreaming_passes", column: "tokens_cache_read" },
+        { table: "dreaming_passes", column: "tokens_cache_write" },
+        { table: "dreaming_passes", column: "tokens_cost" }
+      ]
+    }
+  },
+  {
+    version: 108,
+    name: "embedding-usage",
+    up: up1082,
+    artifacts: {
+      tables: ["embedding_usage"]
+    }
+  },
+  {
+    version: 109,
+    name: "telemetry-install",
+    up: up1092,
+    artifacts: {
+      tables: ["telemetry_install"]
+    }
+  },
+  {
+    version: 110,
+    name: "memory-mention-join-index",
+    up: up1102
   }
 ];
 var LATEST_SCHEMA_VERSION2 = MIGRATIONS2[MIGRATIONS2.length - 1]?.version ?? 0;
 var __filename22 = fileURLToPath2(import.meta.url);
-var __dirname22 = dirname5(__filename22);
+var __dirname22 = dirname6(__filename22);
 var import_yaml3 = __toESM(require_dist2(), 1);
 function expandHome2(p, home2 = homedir22()) {
   if (p === "~")
@@ -22270,84 +23121,12 @@ function parseSimpleYaml(text) {
     return {};
   }
 }
-function readEnv(env, name) {
-  const value = env[name];
-  if (typeof value !== "string")
-    return;
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
-function normalizePort(raw, fallback) {
-  if (!raw)
-    return String(fallback);
-  if (!/^\d+$/.test(raw)) {
-    throw new Error(`SIGNET_PORT must be an integer between 1 and 65535: ${raw}`);
-  }
-  const port = Number.parseInt(raw, 10);
-  if (!Number.isFinite(port) || port < 1 || port > 65535) {
-    throw new Error(`SIGNET_PORT must be an integer between 1 and 65535: ${raw}`);
-  }
-  return String(port);
-}
-function bracketIpv6Host(host) {
-  if (host.startsWith("[") || !host.includes(":"))
-    return host;
-  return `[${host}]`;
-}
-function assertPlainHost(raw) {
-  if (raw.includes("/") || raw.includes("@") || raw.includes("?") || raw.includes("#")) {
-    throw new Error(`SIGNET_HOST must be a hostname or IP address, not a URL: ${raw}`);
-  }
-  const host = raw.startsWith("[") && raw.endsWith("]") ? raw.slice(1, -1) : raw;
-  if (host.includes(":")) {
-    if (/^[0-9A-Fa-f:.]+$/.test(host))
-      return;
-    throw new Error(`SIGNET_HOST must be a hostname or IP address: ${raw}`);
-  }
-  if (!/^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$/.test(host)) {
-    throw new Error(`SIGNET_HOST must be a hostname or IP address: ${raw}`);
-  }
-}
-function normalizeDaemonUrl(raw, source) {
-  let parsed;
-  try {
-    parsed = new URL(raw);
-  } catch {
-    throw new Error(`${source} must be an http(s) URL: ${raw}`);
-  }
-  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    throw new Error(`${source} must use http or https: ${raw}`);
-  }
-  if (parsed.username || parsed.password) {
-    throw new Error(`${source} must not include username or password credentials`);
-  }
-  if (parsed.search || parsed.hash) {
-    throw new Error(`${source} must not include query strings or fragments`);
-  }
-  if (parsed.pathname !== "/" && parsed.pathname !== "") {
-    throw new Error(`${source} must point at the daemon origin, not a path: ${raw}`);
-  }
-  return parsed.toString().replace(/\/$/, "");
-}
-function resolveSignetDaemonUrl(opts = {}) {
-  const env = opts.env ?? process.env;
-  const fallbackHost = opts.defaultHost ?? "127.0.0.1";
-  const fallbackPort = opts.defaultPort ?? 3850;
-  const explicit = readEnv(env, "SIGNET_DAEMON_URL");
-  if (explicit)
-    return normalizeDaemonUrl(explicit, "SIGNET_DAEMON_URL");
-  if (opts.configUrl)
-    return normalizeDaemonUrl(opts.configUrl, "daemon.url");
-  const host = readEnv(env, "SIGNET_HOST") ?? fallbackHost;
-  assertPlainHost(host);
-  const port = normalizePort(readEnv(env, "SIGNET_PORT"), fallbackPort);
-  return normalizeDaemonUrl(`http://${bracketIpv6Host(host)}:${port}`, "SIGNET_HOST/SIGNET_PORT");
-}
 var native2 = null;
 try {
   const esmRequire = createRequire22(import.meta.url);
   native2 = esmRequire("@signet/native");
 } catch {}
+var GRAPHIQ_DEFAULT_INSTALL_DIR2 = join62(homedir42(), ".local", "bin");
 var SIGNET_SOURCE_CHECKOUT_DIRNAME2 = "signetai";
 var SIGNET_GIT_ALLOWED_DIRECTORIES2 = ["skills", "tools", "dreaming"];
 var SIGNET_GIT_PROTECTED_PATHS2 = [
@@ -22417,11 +23196,11 @@ var VALID_GITHUB_RESOURCE_TYPES2 = new Set(DEFAULT_GITHUB_RESOURCE_TYPES2);
 function defaultDiscordDesktopCachePath2() {
   switch (platform22()) {
     case "darwin":
-      return resolve42(homedir42(), "Library", "Application Support", "discord");
+      return resolve42(homedir52(), "Library", "Application Support", "discord");
     case "win32":
-      return resolve42(process.env.APPDATA || resolve42(homedir42(), "AppData", "Roaming"), "discord");
+      return resolve42(process.env.APPDATA || resolve42(homedir52(), "AppData", "Roaming"), "discord");
     default:
-      return resolve42(process.env.XDG_CONFIG_HOME || resolve42(homedir42(), ".config"), "discord");
+      return resolve42(process.env.XDG_CONFIG_HOME || resolve42(homedir52(), ".config"), "discord");
   }
 }
 var IDENTITY_MODES = ["managed", "off"];
@@ -22524,23 +23303,13 @@ function loadIdentityMode(agentsDir) {
     return "managed";
   }
 }
-var home2 = homedir82();
+var home2 = homedir92();
 
 // src/index.ts
 var SIGNET_FORGE_MARKER = "Managed by Signet (@signet/connector-forge)";
-function isJsonObject(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-function readTrimmedEnv2(name) {
-  const value = process.env[name];
-  if (typeof value !== "string")
-    return;
-  const trimmed = value.trim().replace(/[\r\n]+/g, "");
-  return trimmed.length > 0 ? trimmed : undefined;
-}
 function getHomeDir() {
   const home3 = readTrimmedEnv2("HOME");
-  return home3 ?? homedir5();
+  return home3 ?? homedir6();
 }
 function readJsonObject(path) {
   if (!existsSync2(path))
@@ -22558,22 +23327,6 @@ function readMcpServers(config) {
     return { ...config.mcpServers };
   throw new Error("Forge MCP config field 'mcpServers' must be an object");
 }
-function signetRuntimeEnv(basePath) {
-  const env = { SIGNET_PATH: basePath };
-  const daemonUrl = readTrimmedEnv2("SIGNET_DAEMON_URL");
-  const apiKey = readTrimmedEnv2("SIGNET_API_KEY") ?? readTrimmedEnv2("SIGNET_TOKEN");
-  const agentId = readTrimmedEnv2("SIGNET_AGENT_ID");
-  if (daemonUrl)
-    env.SIGNET_DAEMON_URL = daemonUrl;
-  if (apiKey)
-    env.SIGNET_API_KEY = apiKey;
-  if (agentId)
-    env.SIGNET_AGENT_ID = agentId;
-  return env;
-}
-function resolveRemoteDaemonUrl() {
-  return readTrimmedEnv2("SIGNET_DAEMON_URL") ? resolveSignetDaemonUrl() : null;
-}
 function buildMcpServer(basePath) {
   const remoteDaemonUrl = resolveRemoteDaemonUrl();
   if (remoteDaemonUrl) {
@@ -22587,12 +23340,8 @@ function buildMcpServer(basePath) {
   return {
     command: mcp.command,
     ...mcp.args && mcp.args.length > 0 ? { args: mcp.args } : {},
-    env: signetRuntimeEnv(basePath)
+    env: buildSignetRuntimeEnv({ basePath })
   };
-}
-function isChildOf(candidate, parent) {
-  const rel = relative(parent, candidate);
-  return rel !== "" && rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
 }
 
 class ForgeConnector extends BaseConnector {
@@ -22601,11 +23350,11 @@ class ForgeConnector extends BaseConnector {
   getForgeHome() {
     const configured = readTrimmedEnv2("FORGE_CONFIG");
     if (configured)
-      return resolve2(expandHome2(configured));
-    const legacyPath = join6(getHomeDir(), "forge");
+      return resolve3(expandHome2(configured));
+    const legacyPath = join7(getHomeDir(), "forge");
     if (existsSync2(legacyPath))
       return legacyPath;
-    return join6(getHomeDir(), ".forge");
+    return join7(getHomeDir(), ".forge");
   }
   getConfigPath() {
     return this.getMcpConfigPath();
@@ -22613,7 +23362,7 @@ class ForgeConnector extends BaseConnector {
   async install(basePath) {
     const filesWritten = [];
     const configsPatched = [];
-    const expandedBasePath = expandHome2(basePath || join6(getHomeDir(), ".agents"));
+    const expandedBasePath = expandHome2(basePath || join7(getHomeDir(), ".agents"));
     const identityMode = loadIdentityMode(expandedBasePath);
     if (!hasValidIdentity(expandedBasePath)) {
       return {
@@ -22667,7 +23416,7 @@ class ForgeConnector extends BaseConnector {
         configsPatched
       };
     }
-    const skillsSource = join6(expandedBasePath, "skills");
+    const skillsSource = join7(expandedBasePath, "skills");
     if (existsSync2(skillsSource)) {
       this.symlinkSkills(skillsSource, this.getSkillsPath());
     }
@@ -22727,19 +23476,19 @@ class ForgeConnector extends BaseConnector {
   }
   static isHarnessInstalled() {
     const home3 = getHomeDir();
-    return existsSync2(readTrimmedEnv2("FORGE_CONFIG") ?? "") || existsSync2(join6(home3, "forge", ".mcp.json")) || existsSync2(join6(home3, ".forge", ".mcp.json")) || existsSync2(join6(home3, "forge")) || existsSync2(join6(home3, ".forge"));
+    return existsSync2(readTrimmedEnv2("FORGE_CONFIG") ?? "") || existsSync2(join7(home3, "forge", ".mcp.json")) || existsSync2(join7(home3, ".forge", ".mcp.json")) || existsSync2(join7(home3, "forge")) || existsSync2(join7(home3, ".forge"));
   }
   getAgentsPath() {
-    return join6(this.getForgeHome(), "AGENTS.md");
+    return join7(this.getForgeHome(), "AGENTS.md");
   }
   getSkillsPath() {
-    return join6(this.getForgeHome(), "skills");
+    return join7(this.getForgeHome(), "skills");
   }
   getMcpConfigPath() {
-    return join6(this.getForgeHome(), ".mcp.json");
+    return join7(this.getForgeHome(), ".mcp.json");
   }
   generateAgentsMd(basePath) {
-    const sourcePath = join6(basePath, "AGENTS.md");
+    const sourcePath = join7(basePath, "AGENTS.md");
     if (!existsSync2(sourcePath))
       return null;
     const raw = readFileSync2(sourcePath, "utf-8");
@@ -22787,7 +23536,7 @@ ${header}${body}
     const skillsDir = this.getSkillsPath();
     if (!existsSync2(skillsDir))
       return;
-    const skillsSource = resolve2(signetPath ?? resolveSignetWorkspacePath(), "skills");
+    const skillsSource = resolve3(signetPath ?? resolveSignetWorkspacePath(), "skills");
     let entries;
     try {
       entries = readdirSync(skillsDir);
@@ -22795,12 +23544,12 @@ ${header}${body}
       return;
     }
     for (const entry of entries) {
-      const entryPath = join6(skillsDir, entry);
+      const entryPath = join7(skillsDir, entry);
       try {
         if (!lstatSync2(entryPath).isSymbolicLink())
           continue;
         const rawTarget = readlinkSync(entryPath);
-        const target = resolve2(skillsDir, rawTarget);
+        const target = resolve3(skillsDir, rawTarget);
         if (!isChildOf(target, skillsSource))
           continue;
         unlinkSync3(entryPath);

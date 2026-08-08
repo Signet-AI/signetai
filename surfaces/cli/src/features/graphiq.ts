@@ -1,9 +1,10 @@
 import { spawn } from "node:child_process";
 import { constants, accessSync, existsSync, rmSync } from "node:fs";
-import { homedir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+	GRAPHIQ_DEFAULT_INSTALL_DIR,
+	GRAPHIQ_SYNCED_VERSION,
 	SIGNET_GRAPHIQ_PLUGIN_ID,
 	disableGraphiqState,
 	enableGraphiqState,
@@ -35,8 +36,6 @@ export interface GraphiqUninstallOptions {
 
 type GraphiqInstallSource = "script" | "homebrew" | "source" | "existing";
 
-const DEFAULT_INSTALL_DIR = join(homedir(), ".local", "bin");
-
 export function resolveInstallScriptPath(thisDir = dirname(fileURLToPath(import.meta.url))): string | null {
 	const candidates = [
 		resolve(thisDir, "../scripts/install-graphiq.sh"),
@@ -47,7 +46,7 @@ export function resolveInstallScriptPath(thisDir = dirname(fileURLToPath(import.
 
 function resolveGraphiqBinary(): string | null {
 	if (hasCommand("graphiq")) return "graphiq";
-	const direct = join(DEFAULT_INSTALL_DIR, "graphiq");
+	const direct = join(GRAPHIQ_DEFAULT_INSTALL_DIR, "graphiq");
 	return isExecutable(direct) ? direct : null;
 }
 
@@ -97,7 +96,14 @@ export async function ensureGraphiqInstalled(options: {
 	}
 
 	const spinner = ora("Installing GraphIQ...").start();
-	const result = await runCommand("bash", [script, "install"], { env: { GRAPHIQ_ALLOW_LATEST: "1" } });
+	const result = await runCommand("bash", [script, "install"], {
+		env: {
+			// Pin the release the bundled plugin is tested against, and keep the
+			// binary in a user-writable dir the resolvers check (no sudo).
+			GRAPHIQ_INSTALL_DIR: GRAPHIQ_DEFAULT_INSTALL_DIR,
+			GRAPHIQ_VERSION: GRAPHIQ_SYNCED_VERSION,
+		},
+	});
 	if (result.code !== 0) {
 		spinner.fail("GraphIQ install failed");
 		if (result.stderr.trim()) console.error(chalk.dim(result.stderr.trim()));

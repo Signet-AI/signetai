@@ -212,6 +212,8 @@ export {
 	enableGraphiqState,
 	getGraphiqProjectDbPath,
 	getGraphiqStatePath,
+	GRAPHIQ_DEFAULT_INSTALL_DIR,
+	GRAPHIQ_SYNCED_VERSION,
 	readGraphiqState,
 	setGraphiqActiveProject,
 	updateGraphiqActiveProject,

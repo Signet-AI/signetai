@@ -522,6 +522,13 @@ the main Signet memory architecture.
 | `signet_code_status` | Show GraphIQ status for the active project |
 | `signet_code_doctor` | Diagnose GraphIQ artifact health |
 | `signet_code_constants` | Find shared numeric and string constants |
+| `signet_code_clear` | Delete the active GraphIQ index and leave a fresh empty database (requires `confirm: true`) |
+| `signet_code_briefing` | Get an architecture overview: subsystems, public API, hub symbols (`compact` for a short version) |
+
+`signet_code_clear` is destructive: it deletes `<project>/.graphiq/graphiq.db` and
+`manifest.json`, it is not backed up, and the active index is shared by the whole
+workspace. The tool refuses to run unless `confirm: true` is passed, and the
+index must be rebuilt afterwards with `signet index <path>`.
 
 `signet_code_search` parameters:
 

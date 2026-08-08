@@ -388,6 +388,45 @@ describe("createMcpServer", () => {
 		expect(result.isError).toBeUndefined();
 	});
 
+	it("refuses to clear the index without explicit confirm", async () => {
+		const projectDir = join(tempAgentsDir, "project");
+		const dbPath = join(projectDir, ".graphiq", "graphiq.db");
+		mkdirSync(dirname(dbPath), { recursive: true });
+		writeFileSync(dbPath, "");
+		updateGraphiqActiveProject(tempAgentsDir, {
+			projectPath: projectDir,
+			indexedAt: new Date("2026-04-21T00:00:00.000Z"),
+		});
+		enableGraphiqPluginInRegistry(tempAgentsDir);
+
+		const capturePath = join(tempAgentsDir, "graphiq-clear-args.txt");
+		const binDir = join(tempAgentsDir, "bin");
+		const graphiqPath = join(binDir, "graphiq");
+		mkdirSync(binDir, { recursive: true });
+		writeFileSync(graphiqPath, `#!/bin/sh\necho "$@" > ${JSON.stringify(capturePath)}\n`);
+		chmodSync(graphiqPath, 0o755);
+		process.env.PATH = `${binDir}:${originalPath ?? ""}`;
+
+		const graphServer = await createMcpServer({
+			daemonUrl: "http://localhost:3850",
+			version: "0.0.1-test",
+			enableMarketplaceProxyTools: false,
+		});
+
+		const refused = await callTool(graphServer, "signet_code_clear", {});
+		expect(refused.isError).toBe(true);
+		expect(refused.content[0]?.text).toContain("refused");
+		expect(existsSync(capturePath)).toBe(false);
+
+		const refusedFalse = await callTool(graphServer, "signet_code_clear", { confirm: false });
+		expect(refusedFalse.isError).toBe(true);
+		expect(existsSync(capturePath)).toBe(false);
+
+		const confirmed = await callTool(graphServer, "signet_code_clear", { confirm: true });
+		expect(confirmed.isError).toBeUndefined();
+		expect(readFileSync(capturePath, "utf-8")).toContain(`clear --yes --db ${dbPath}`);
+	});
+
 	it("bounds GraphIQ code tool numeric inputs before subprocess calls", async () => {
 		const projectDir = join(tempAgentsDir, "project");
 		const dbPath = join(projectDir, ".graphiq", "graphiq.db");
@@ -530,7 +569,10 @@ describe("createMcpServer", () => {
 		});
 
 		expect(cap.url).toBe("http://localhost:3850/api/dream/operations");
-		expect(JSON.parse(cap.body ?? "{}")).toMatchObject({ agent_id: "agent-a", operations: [{ operation: "create_entity" }] });
+		expect(JSON.parse(cap.body ?? "{}")).toMatchObject({
+			agent_id: "agent-a",
+			operations: [{ operation: "create_entity" }],
+		});
 		expect(result.isError).toBeUndefined();
 	});
 

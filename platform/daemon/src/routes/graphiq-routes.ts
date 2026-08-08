@@ -1,6 +1,8 @@
 import { constants, accessSync, existsSync, readFileSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import {
+	GRAPHIQ_DEFAULT_INSTALL_DIR,
+	GRAPHIQ_SYNCED_VERSION,
 	disableGraphiqState,
 	enableGraphiqState,
 	readGraphiqState,
@@ -161,7 +163,10 @@ async function installGraphiq(): Promise<{
 	}
 
 	try {
-		const result = await runCommand("bash", [script, "install"], 120_000, { GRAPHIQ_ALLOW_LATEST: "1" });
+		const result = await runCommand("bash", [script, "install"], 120_000, {
+			GRAPHIQ_INSTALL_DIR: GRAPHIQ_DEFAULT_INSTALL_DIR,
+			GRAPHIQ_VERSION: GRAPHIQ_SYNCED_VERSION,
+		});
 		if (result.code === 0 && isGraphiqInstalled()) {
 			return { success: true, source: "script" };
 		}
@@ -179,7 +184,12 @@ async function updateGraphiq(): Promise<{ success: boolean; message?: string; er
 	}
 
 	try {
-		const result = await runCommand("bash", [script, "update"], 120_000, { GRAPHIQ_ALLOW_LATEST: "1" });
+		// The vendored upstream script has no `update` command; reinstalling the
+		// pinned version is the update path.
+		const result = await runCommand("bash", [script, "install"], 120_000, {
+			GRAPHIQ_INSTALL_DIR: GRAPHIQ_DEFAULT_INSTALL_DIR,
+			GRAPHIQ_VERSION: GRAPHIQ_SYNCED_VERSION,
+		});
 		if (result.code === 0) {
 			return { success: true, message: "GraphIQ updated via script" };
 		}

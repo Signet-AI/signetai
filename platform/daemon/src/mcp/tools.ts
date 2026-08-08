@@ -786,8 +786,21 @@ function registerGraphiqCompatAliases(server: McpServer, pluginHostProvider: Gra
 		{
 			alias: "code_clear",
 			canonical: "signet_code_clear",
-			schema: z.object({}),
-			buildArgs: () => ["clear", "--yes"],
+			schema: z.object({
+				confirm: z
+					.boolean()
+					.describe(
+						"Must be true to proceed. Deleting the active index affects every agent in the workspace and cannot be undone.",
+					),
+			}),
+			buildArgs: (a) => {
+				if (a.confirm !== true) {
+					throw new Error(
+						"code_clear refused: pass `confirm: true` to delete the active GraphIQ index (graphiq.db and manifest.json). The index is shared by the whole workspace, has no backup, and must be rebuilt with `signet index <path>`.",
+					);
+				}
+				return ["clear", "--yes"];
+			},
 			label: "Code clear failed",
 		},
 		{
@@ -2737,10 +2750,24 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 		"signet_code_clear",
 		{
 			title: "Clear Index",
-			description: "Delete the active GraphIQ index and leave a fresh empty database ready for a clean reindex.",
-			inputSchema: z.object({}),
+			description:
+				"Delete the active GraphIQ index (graphiq.db and manifest.json) and leave a fresh empty database ready for a clean reindex. DESTRUCTIVE: the active index is shared by the whole workspace, there is no backup, and reindexing with `signet index <path>` is required. Must pass confirm: true.",
+			inputSchema: z.object({
+				confirm: z
+					.boolean()
+					.describe(
+						"Must be true to proceed. Deleting the active index affects every agent in the workspace and cannot be undone.",
+					),
+			}),
 		},
-		async () => graphIqToolResult(["clear", "--yes"], "Code clear failed", "signet_code_clear", pluginHostProvider),
+		async ({ confirm }) => {
+			if (confirm !== true) {
+				return errorResult(
+					"signet_code_clear refused: pass `confirm: true` to delete the active GraphIQ index (graphiq.db and manifest.json). The index is shared by the whole workspace, has no backup, and must be rebuilt with `signet index <path>`.",
+				);
+			}
+			return graphIqToolResult(["clear", "--yes"], "Code clear failed", "signet_code_clear", pluginHostProvider);
+		},
 	);
 
 	server.registerTool(
