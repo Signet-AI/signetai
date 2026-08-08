@@ -240,13 +240,43 @@ function writeAtomic(path: string, contents: string): void {
 // rerun for v4 configs because the incomplete migration shipped to users.
 // Idempotent: a file already at v5+ is skipped.
 
-const LEGACY_FLAT_KEYS = ["extractionProvider", "extractionModel", "extractionStrength"] as const;
+const LEGACY_FLAT_KEYS = [
+	"extractionProvider",
+	"extractionModel",
+	"extractionEndpoint",
+	"extractionBaseUrl",
+	"extractionFallbackProvider",
+	"extractionStrength",
+] as const;
+
+const LEGACY_FLAT_ROUTING_KEYS = [
+	"extractionProvider",
+	"extractionModel",
+	"extractionEndpoint",
+	"extractionBaseUrl",
+	"extractionFallbackProvider",
+] as const;
+
+const LEGACY_HARNESS_AGENT: Readonly<Record<string, string>> = {
+	"claude-code": "claude",
+	codex: "codex",
+	opencode: "opencode",
+};
 
 /** Map a legacy provider to the account name/id this migration creates. */
 function legacyAccountFor(provider: string): { name: string; family: string; cred: string } | null {
 	if (provider === "openrouter") return { name: "legacy-openrouter", family: "openrouter", cred: "OPENROUTER_API_KEY" };
 	if (provider === "anthropic") return { name: "legacy-anthropic", family: "anthropic", cred: "ANTHROPIC_API_KEY" };
 	return null; // local providers (ollama/llama-cpp/openai-compatible-local) need no account
+}
+
+function legacyExecutorFor(provider: string): { executor: string; acpxAgent?: string } | null {
+	const acpxAgent = LEGACY_HARNESS_AGENT[provider];
+	if (acpxAgent) return { executor: "acpx", acpxAgent };
+	if (["acpx", "anthropic", "openrouter", "ollama", "llama-cpp", "openai-compatible"].includes(provider)) {
+		return { executor: provider };
+	}
+	return null;
 }
 
 export function migrateLegacyRoutingToRegistry(agentsDir: string): void {
@@ -276,9 +306,11 @@ export function migrateLegacyRoutingToRegistry(agentsDir: string): void {
 	const extraction = doc.getIn(["memory", "pipelineV2", "extraction"], true);
 	const synthesis = doc.getIn(["memory", "pipelineV2", "synthesis"], true);
 	const hasLegacyFlatKeys = isMap(pipeline) && LEGACY_FLAT_KEYS.some((key) => pipeline.has(key));
+	const hasLegacyFlatRouting = isMap(pipeline) && LEGACY_FLAT_ROUTING_KEYS.some((key) => pipeline.has(key));
 	const hasNestedLegacyRouting =
-		(isMap(extraction) && (extraction.has("provider") || extraction.has("model") || extraction.has("endpoint"))) ||
-		(isMap(synthesis) && (synthesis.has("provider") || synthesis.has("model") || synthesis.has("endpoint")));
+		(isMap(extraction) &&
+			["provider", "model", "endpoint", "baseUrl", "base_url"].some((key) => extraction.has(key))) ||
+		(isMap(synthesis) && ["provider", "model", "endpoint", "baseUrl", "base_url"].some((key) => synthesis.has(key)));
 
 	if (!hasNestedLegacyRouting && !hasLegacyFlatKeys) {
 		// Nothing to migrate; still stamp v5 so we don't re-parse every startup.
@@ -289,7 +321,7 @@ export function migrateLegacyRoutingToRegistry(agentsDir: string): void {
 
 	const mutations: string[] = [];
 
-	if (hasNestedLegacyRouting) {
+	if (hasNestedLegacyRouting || hasLegacyFlatRouting) {
 		// Ensure inference/accounts and inference/targets maps exist.
 		const inference =
 			doc.getIn(["inference"], true) ?? doc.setIn(["inference"], doc.createNode({})) ?? doc.getIn(["inference"], true);
@@ -307,17 +339,40 @@ export function migrateLegacyRoutingToRegistry(agentsDir: string): void {
 		}
 	}
 
+	const existingWorkloads = doc.getIn(["inference", "workloads"], true);
+	const existingTargets = doc.getIn(["inference", "targets"], true);
+	const existingExtractionBinding = isMap(existingWorkloads)
+		? existingWorkloads.get("memoryExtraction", true)
+		: undefined;
+	const canonicalTargetRef = isMap(existingExtractionBinding)
+		? String(existingExtractionBinding.get("target", true) ?? "")
+		: "";
+	const canonicalTargetName = canonicalTargetRef.split("/", 1)[0] ?? "";
+	const hasCanonicalExtractionRoute =
+		isMap(existingTargets) && canonicalTargetName !== "" && existingTargets.has(canonicalTargetName);
+
 	function compileTarget(
-		source: ReturnType<typeof doc.getIn>,
+		providerValue: unknown,
+		modelValue: unknown,
+		endpointValue: unknown,
 		targetName: string,
-		workloadKey: "memoryExtraction",
-	): void {
-		if (!isMap(source)) return;
-		const provider = String(source.get("provider", true) ?? "");
-		const model = source.get("model", true);
-		const endpoint = source.get("endpoint", true);
-		if (!provider || provider === "none" || provider === "command") return;
-		// Create the account if the provider needs one.
+	): boolean {
+		const rawProvider = String(providerValue ?? "").trim();
+		const provider = rawProvider || (modelValue != null || endpointValue != null ? "llama-cpp" : "");
+		if (!provider || provider === "none") return false;
+		const executor = legacyExecutorFor(provider);
+		if (!executor) {
+			logger.warn("config-migration", "Legacy inference provider requires manual reconfiguration", {
+				provider,
+				target: targetName,
+				file: path,
+				note: "The legacy routing fields were preserved; configure an inference.targets entry.",
+			});
+			return false;
+		}
+
+		const model = String(modelValue ?? "");
+		const endpoint = String(endpointValue ?? "");
 		const acct = legacyAccountFor(provider);
 		if (acct) {
 			doc.setIn(
@@ -329,34 +384,55 @@ export function migrateLegacyRoutingToRegistry(agentsDir: string): void {
 				}),
 			);
 		}
-		// Create/update the target.
 		const targetNode = doc.createNode({
-			executor: provider,
+			executor: executor.executor,
+			...(executor.acpxAgent ? { acpx: { agent: executor.acpxAgent } } : {}),
 			...(acct ? { account: acct.name } : {}),
-			...(endpoint ? { endpoint: String(endpoint) } : {}),
-			models: { default: { model: model ? String(model) : "", reasoning: "medium" } },
+			...(endpoint ? { endpoint } : {}),
+			models: { default: { model, reasoning: "medium" } },
 		});
 		doc.setIn(["inference", "targets", targetName], targetNode);
-		// Bind the workload to it.
 		doc.setIn(
-			["inference", "workloads", workloadKey],
+			["inference", "workloads", "memoryExtraction"],
 			doc.createNode({
 				target: `${targetName}/default`,
 			}),
 		);
-		mutations.push(`${workloadKey} -> inference.targets.${targetName} (executor: ${provider})`);
+		mutations.push(`memoryExtraction -> inference.targets.${targetName} (executor: ${executor.executor})`);
+		return true;
 	}
 
-	if (hasNestedLegacyRouting) {
-		compileTarget(extraction, "legacy-extraction", "memoryExtraction");
+	const flatProvider = isMap(pipeline) ? pipeline.get("extractionProvider", true) : undefined;
+	const flatModel = isMap(pipeline) ? pipeline.get("extractionModel", true) : undefined;
+	const flatEndpoint = isMap(pipeline)
+		? (pipeline.get("extractionEndpoint", true) ?? pipeline.get("extractionBaseUrl", true))
+		: undefined;
+	const flatProviderText = String(flatProvider ?? "").trim();
+	let compiledFlat = false;
+	if (hasLegacyFlatRouting && !hasCanonicalExtractionRoute) {
+		compiledFlat = compileTarget(flatProvider, flatModel, flatEndpoint, "legacy-extraction");
+	}
+	if (
+		!hasCanonicalExtractionRoute &&
+		(!hasLegacyFlatRouting || (!compiledFlat && flatProviderText !== "none")) &&
+		hasNestedLegacyRouting &&
+		isMap(extraction)
+	) {
+		compileTarget(
+			extraction.get("provider", true),
+			extraction.get("model", true),
+			extraction.get("endpoint", true) ?? extraction.get("baseUrl", true) ?? extraction.get("base_url", true),
+			"legacy-extraction",
+		);
 	}
 
 	// Null the legacy ROUTING keys (keep tuning: timeout, maxTokens, enabled).
 	function nullRoutingKeys(node: ReturnType<typeof doc.getIn>, label: string): void {
 		if (!isMap(node)) return;
-		// The command provider cannot be auto-mapped (arbitrary bin/args). Leave its
-		// entire block intact so the user can manually reconfigure it.
-		if (String(node.get("provider", true) ?? "") === "command") return;
+		const provider = String(node.get("provider", true) ?? "").trim();
+		// Preserve unmappable providers so the runtime can report an actionable
+		// configuration error instead of silently deleting the user's route.
+		if (provider && provider !== "none" && !legacyExecutorFor(provider)) return;
 		for (const key of ["provider", "model", "endpoint", "fallbackProvider", "command", "baseUrl", "base_url"]) {
 			if (node.has(key)) {
 				node.delete(key);
@@ -378,11 +454,17 @@ export function migrateLegacyRoutingToRegistry(agentsDir: string): void {
 			}
 			mutations.push("moved memory.pipelineV2.extractionStrength -> extraction.strength");
 		}
+		const flatProviderText = String(pipeline.get("extractionProvider", true) ?? "").trim();
+		const canRemoveFlatRouting =
+			!flatProviderText ||
+			flatProviderText === "none" ||
+			legacyExecutorFor(flatProviderText) !== null ||
+			hasCanonicalExtractionRoute;
 		for (const key of LEGACY_FLAT_KEYS) {
-			if (pipeline.has(key)) {
-				pipeline.delete(key);
-				mutations.push(`removed memory.pipelineV2.${key}`);
-			}
+			if (!pipeline.has(key)) continue;
+			if (key !== "extractionStrength" && !canRemoveFlatRouting) continue;
+			pipeline.delete(key);
+			mutations.push(`removed memory.pipelineV2.${key}`);
 		}
 	}
 

@@ -70,6 +70,87 @@ describe("migrateLegacyRoutingToRegistry (#947 v4, #1004 v5 cleanup)", () => {
 		}
 	});
 
+	it("compiles legacy flat extraction routing instead of deleting it", () => {
+		const dir = setupDir();
+		try {
+			writeFileSync(
+				join(dir, "agent.yaml"),
+				`memory:
+  pipelineV2:
+    extractionProvider: openrouter
+    extractionModel: anthropic/claude-haiku
+    extractionEndpoint: https://openrouter.ai/api/v1
+    extractionStrength: high
+`,
+			);
+			migrateLegacyRoutingToRegistry(dir);
+			const after = readFileSync(join(dir, "agent.yaml"), "utf-8");
+
+			expect(after).toMatch(/legacy-extraction:/);
+			expect(after).toMatch(/executor: openrouter/);
+			expect(after).toMatch(/model: anthropic\/claude-haiku/);
+			expect(after).toMatch(/target: legacy-extraction\/default/);
+			expect(after).toMatch(/strength: high/);
+			expect(after).not.toContain("extractionProvider:");
+			expect(after).not.toContain("extractionModel:");
+			expect(after).not.toContain("extractionEndpoint:");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("falls back to a valid nested route when flat routing is unsupported", () => {
+		const dir = setupDir();
+		try {
+			writeFileSync(
+				join(dir, "agent.yaml"),
+				`configVersion: 3
+memory:
+  pipelineV2:
+    extractionProvider: groq
+    extractionModel: groq/legacy
+    extraction:
+      provider: openrouter
+      model: anthropic/claude-haiku
+      endpoint: https://openrouter.ai/api/v1
+`,
+			);
+			migrateLegacyRoutingToRegistry(dir);
+			const after = readFileSync(join(dir, "agent.yaml"), "utf-8");
+
+			expect(after).toContain("extractionProvider: groq");
+			expect(after).toMatch(/executor: openrouter/);
+			expect(after).toMatch(/target: legacy-extraction\/default/);
+			expect(after).not.toMatch(/provider: openrouter/);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("preserves a nested base_url when compiling the legacy route", () => {
+		const dir = setupDir();
+		try {
+			writeFileSync(
+				join(dir, "agent.yaml"),
+				`memory:
+  pipelineV2:
+    extraction:
+      provider: openai-compatible
+      model: local-model
+      base_url: http://127.0.0.1:9999/v1
+`,
+			);
+			migrateLegacyRoutingToRegistry(dir);
+			const after = readFileSync(join(dir, "agent.yaml"), "utf-8");
+
+			expect(after).toMatch(/executor: openai-compatible/);
+			expect(after).toMatch(/endpoint: http:\/\/127\.0\.0\.1:9999\/v1/);
+			expect(after).not.toContain("base_url:");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	it("creates no account for local providers (ollama/llama-cpp/local-openai-compat)", () => {
 		const dir = setupDir();
 		try {
@@ -172,7 +253,7 @@ inference:
 memory:
   pipelineV2:
     enabled: true
-    extractionProvider: acpx
+    extractionProvider: openrouter
     extractionModel: gpt-5.3-codex-spark
     extractionStrength: medium
     extractionTimeout: 45000
