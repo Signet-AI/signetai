@@ -91,8 +91,10 @@ describe("transcript capture worker", () => {
 		expect(await runTranscriptCaptureOnce(getDbAccessor(), dir)).toBe(true);
 		expect(getTranscriptCaptureStatus(getDbAccessor(), "agent-a").completed).toBe(1);
 		const auditFiles = readdirSync(join(dir, ".daemon", "logs", "transcripts"));
-		expect(auditFiles.some((name) => name.endsWith("--latest.log"))).toBe(true);
+		// #1163: the capture archives the rolling latest by renaming it to the
+		// dated raw-transcript file, so the same content is never written twice.
 		expect(auditFiles.some((name) => name.endsWith("--raw-transcript.log"))).toBe(true);
+		expect(auditFiles.some((name) => name.endsWith("--latest.log"))).toBe(false);
 		expect(existsSync(join(dir, "memory", "pi", "transcripts", "transcript.jsonl"))).toBe(false);
 	});
 
