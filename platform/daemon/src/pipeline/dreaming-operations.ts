@@ -35,6 +35,7 @@ export interface ApplyDreamingOperationsResult {
 }
 
 const FLAG_OP = "flag";
+const DECLINE_ATTENTION_OP = "decline_attention";
 const HYGIENE_ARCHIVE_OPS = new Set([
 	"archive_entity",
 	"archive_aspect",
@@ -565,12 +566,22 @@ export function applyDreamingOperations(params: {
 	const validated: Array<{
 		readonly input: OntologyOperationInput | null;
 		readonly attentionId: string | null;
+		/** Queue-only op that resolves its cited attention record instead of an ontology write. */
+		readonly decline?: boolean;
 	}> = [];
 	for (let index = 0; index < params.operations.length; index += 1) {
 		const operation = params.operations[index]!;
 		if (operation.operation === FLAG_OP) {
 			const attentionId = minted.get(index) ?? null;
 			validated.push({ input: null, attentionId });
+			continue;
+		}
+		if (operation.operation === DECLINE_ATTENTION_OP) {
+			const attentionId = stringField(operation.payload, "attentionId");
+			if (attentionId === null) {
+				return { ok: false, items: [], error: "decline_attention requires payload.attentionId" };
+			}
+			validated.push({ input: null, attentionId, decline: true });
 			continue;
 		}
 		let provenance: DreamingOperationProvenance | null = null;
@@ -626,6 +637,32 @@ export function applyDreamingOperations(params: {
 		for (let index = 0; index < validated.length; index += 1) {
 			const entry = validated[index]!;
 			if (entry.input === null) {
+				if (entry.decline === true && entry.attentionId !== null) {
+					// Decline resolves the cited record in this tx: it must
+					// still be pending in the named agent's scope and is
+					// one-use, exactly like a flag consumed by an archive.
+					const pending = db
+						.prepare(
+							`SELECT 1 FROM dreaming_attention
+							 WHERE id = ? AND agent_id = ? AND resolved_at IS NULL`,
+						)
+						.get(entry.attentionId, params.agentId);
+					if (pending == null) {
+						items.push({
+							index,
+							ok: false,
+							error: "Attention record is not pending in this agent scope",
+						});
+						continue;
+					}
+					db.prepare(
+						`UPDATE dreaming_attention
+						 SET resolved_at = datetime('now'), resolved_by_pass_id = ?
+						 WHERE id = ? AND agent_id = ? AND resolved_at IS NULL`,
+					).run(params.passId ?? null, entry.attentionId, params.agentId);
+					items.push({ index, ok: true, result: { attentionId: entry.attentionId } });
+					continue;
+				}
 				// flag op: nothing to apply; surface the minted attention id
 				items.push({ index, ok: true, result: { attentionId: entry.attentionId } });
 				continue;

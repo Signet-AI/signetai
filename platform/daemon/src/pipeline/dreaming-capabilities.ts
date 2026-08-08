@@ -622,7 +622,7 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 		capability(
 			"apply_ontology_ops",
 			"Apply ontology operations",
-			'Apply every semantic write through the daemon audit seam in one batch, in one agent scope (pass the agentId whose graph you are maintaining — hygiene attention records belong to the agent that flagged them). Ops are processed in array order. Hygiene ops (flag, archive_*, merge_entities) cite provenance: "attention:$<index>" for a flag earlier in the same batch, or "attention:<uuid>" from a prior batch. Content-bearing ops cite evidence with exact quotes from canonical episodic evidence in that scope.',
+			'Apply every semantic write through the daemon audit seam in one batch, in one agent scope (pass the agentId whose graph you are maintaining — hygiene attention records belong to the agent that flagged them). Ops are processed in array order. Hygiene ops (flag, archive_*, merge_entities) cite provenance: "attention:$<index>" for a flag earlier in the same batch, or "attention:<uuid>" from a prior batch. decline_attention closes a pending attention record you inspected and judged to keep. Content-bearing ops cite evidence with exact quotes from canonical episodic evidence in that scope.',
 			false,
 			z.object({
 				agentId: z.string().min(1),

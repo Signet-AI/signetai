@@ -50,6 +50,11 @@ export const DREAMING_ONTOLOGY_PAYLOAD_SCHEMAS = {
 		details: z.record(z.string(), z.string()).describe("Inspection facts about the flagged target.").optional(),
 		priority: z.number().finite().min(0).max(100).describe("Priority of the flag (0-100).").optional(),
 	}),
+	decline_attention: payload({
+		attentionId: text.describe(
+			"The stable id of a pending attention record you inspected and judged to keep. Declining is an affirmative judgment: never decline a record you did not examine, and never use it to skip records you could not complete this pass (defer those in the pass log instead).",
+		),
+	}),
 	archive_entity: payload({ target: entityId, ...reasonField }),
 	archive_aspect: payload({ target: aspectId, ...reasonField }),
 	archive_claim_value: payload({ target: text.describe("The stable id of the claim attribute."), ...reasonField }),
@@ -104,6 +109,7 @@ export const DREAMING_ONTOLOGY_PAYLOAD_SCHEMAS = {
 export const DREAMING_OPERATION_IDS = [
 	...ONTOLOGY_PROPOSAL_OPERATIONS.filter((op) => op !== "restore_claim_version" && op !== "attach_interface"),
 	"flag",
+	"decline_attention",
 ] as const;
 
 const operationBase = {
@@ -149,4 +155,5 @@ export const DREAMING_ONTOLOGY_OPERATION_SCHEMA = z.discriminatedUnion("operatio
 	operation("create_action_type"),
 	operation("create_interface"),
 	operation("flag"),
+	operation("decline_attention"),
 ]);

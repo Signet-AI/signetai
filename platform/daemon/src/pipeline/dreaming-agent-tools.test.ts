@@ -517,6 +517,114 @@ describe("dreaming-agent-tools", () => {
 		expect(items[0]).toMatchObject({ subjectRef: "memory:mem-expired", details: { attributeId: "a-trip-attribute" } });
 	});
 
+	it("decline_attention resolves a pending flag and is one-use and scoped", async () => {
+		insertEntity("e-husk", "Legacy Husk", "legacy husk", "owner");
+		const tools = createDreamingAgentTools({
+			accessor: getDbAccessor(),
+			agentId: "owner",
+			actor: "owner",
+			passId: "pass-1",
+		});
+		const minted = readResult(
+			await findTool(tools, "apply_ontology_ops").execute(
+				"call",
+				{
+					agentId: "owner",
+					operations: [
+						{
+							operation: "flag",
+							payload: {
+								subjectRef: "entity:e-husk",
+								details: { entityId: "e-husk", reason: "zero_active_attributes" },
+							},
+						},
+					],
+				},
+				undefined,
+				undefined,
+				{} as never,
+			),
+		);
+		expect(minted.ok).toBe(true);
+		const mintedItems = minted.items as Array<{ result?: { attentionId?: string } }>;
+		const attentionId = mintedItems[0]?.result?.attentionId;
+		if (attentionId === undefined) throw new Error("flag op did not surface an attention id");
+
+		// Declining from another scope fails closed: the record is untouched.
+		const otherScope = createDreamingAgentTools({
+			accessor: getDbAccessor(),
+			agentId: "intruder",
+			actor: "intruder",
+			passId: "pass-1",
+		});
+		const crossScope = readResult(
+			await findTool(otherScope, "apply_ontology_ops").execute(
+				"call",
+				{
+					agentId: "intruder",
+					operations: [{ operation: "decline_attention", payload: { attentionId } }],
+				},
+				undefined,
+				undefined,
+				{} as never,
+			),
+		);
+		expect((crossScope.items as Array<{ ok: boolean }>)[0]?.ok).toBe(false);
+		const stillPending = readResult(
+			await findTool(tools, "attention_list").execute(
+				"call",
+				{ kind: "hygiene", status: "pending" },
+				undefined,
+				undefined,
+				{} as never,
+			),
+		);
+		expect(stillPending.items as Array<unknown>).toHaveLength(1);
+
+		// The owning scope declines it once: resolved.
+		const declined = readResult(
+			await findTool(tools, "apply_ontology_ops").execute(
+				"call",
+				{
+					agentId: "owner",
+					operations: [{ operation: "decline_attention", payload: { attentionId } }],
+				},
+				undefined,
+				undefined,
+				{} as never,
+			),
+		);
+		expect(declined.ok).toBe(true);
+		expect((declined.items as Array<{ ok: boolean }>)[0]?.ok).toBe(true);
+
+		// A flag is one-use: a second decline of the same record is rejected.
+		const twice = readResult(
+			await findTool(tools, "apply_ontology_ops").execute(
+				"call",
+				{
+					agentId: "owner",
+					operations: [{ operation: "decline_attention", payload: { attentionId } }],
+				},
+				undefined,
+				undefined,
+				{} as never,
+			),
+		);
+		expect((twice.items as Array<{ ok: boolean }>)[0]?.ok).toBe(false);
+
+		const resolved = readResult(
+			await findTool(tools, "attention_list").execute(
+				"call",
+				{ kind: "hygiene", status: "resolved" },
+				undefined,
+				undefined,
+				{} as never,
+			),
+		);
+		expect(resolved.ok).toBe(true);
+		expect(resolved.items as Array<unknown>).toHaveLength(1);
+	});
+
 	it("flags and archives a junk entity in one apply batch", async () => {
 		insertEntity("e-husk", "Legacy Husk", "legacy husk", "owner");
 		const tools = createDreamingAgentTools({

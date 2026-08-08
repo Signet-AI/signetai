@@ -690,6 +690,7 @@ An install may have several agent scopes (listed in <agent_scopes> when there is
    - Archive or merge it, citing its attention id (provenance: "attention:<uuid>", or attention:$<index> for a flag you minted in the same batch).
    - \`attribute_over_cap\` / \`aspect_over_cap\` flags: the write gate rejects new claims or aspects past the cap, so consolidate the flagged target — merge_aspects to fold over-cap aspects together, supersede_claim_value to collapse duplicate claim keys, archive_claim_value for stale snapshots. Consolidation (merge_aspects) may exceed the attribute cap; it is the remedy the cap forces.
    - If you discover junk the queue did not flag, mint a flag op and archive in the same batch.
+   - If you inspect a flagged target and judge it should stay as it is (a deliberate keep — e.g. a live entity with a non-concrete type, or an over-cap aspect you chose not to consolidate), close the record with decline_attention citing its attention id. Declining is an affirmative judgment: only decline records you actually inspected, and never decline records you could not complete this pass — defer those in the pass log so they stay pending.
 3. Query attention_list with kind=review_due. For expired records, inspect the cited memory with search_evidence using its subjectRef, then supersede the matching active claim with supersede_claim_value. Use the supplied entityId, aspectId, attributeId, and claimKey when present. The replacement must state that the planned event remains unconfirmed; never rewrite it as if the event happened. Cite an exact quote from the original memory. Do not supersede approaching records. When creating or setting a future temporal claim, set payload.reviewAfter to the referenced ISO timestamp.
 4. Only when the hygiene queue is clear: find new evidence since the cutoff. First LIST unprocessed sources with search_evidence — omit the query and omit since so it lists from the scope's evidence watermark (the frontier the last pass actually surfaced), newest first; only after seeing what is there, narrow with a query if the list is large. Prefer evidence from completed sessions and their summaries; a transcript with completed: false is mid-stream — defer filing from it and note the deferral in the pass log, because its states may be contradicted by the session's end. For each new source:
    - search_entities for subjects it establishes.
@@ -725,6 +726,7 @@ An install may have several agent scopes (listed in <agent_scopes> when there is
 - Expired temporal claims were reviewed, and only claims with exact source evidence were superseded.
 - Pass log written with sources viewed + changes applied (this is the next pass's dedup).
 - No flag left unresolved for a target you archived.
+- Records you judged to keep are closed with decline_attention; records you could not complete this pass stay pending and are deferred in the pass log.
 - No writes attempted against pinned or source-root entities.
 `;
 
@@ -755,6 +757,7 @@ An install may have several agent scopes (listed in <agent_scopes> when there is
    - Inspect the flagged target (get_entity — check aspects, claims, pinned).
    - Archive or merge it, citing its attention id (provenance: "attention:<uuid>", or attention:$<index> for a flag you minted in the same batch).
    - If you discover junk the queue did not flag, mint a flag op and archive in the same batch.
+   - If you inspect a flagged target and judge it should stay as it is (a deliberate keep — e.g. a live entity with a non-concrete type, or an over-cap aspect you chose not to consolidate), close the record with decline_attention citing its attention id. Declining is an affirmative judgment: only decline records you actually inspected, and never decline records you could not complete this pass — defer those in the pass log so they stay pending.
 3. Write the pass log (runbook_write) last. Its summary is read back by a human who did not watch the pass: write natural-language prose — what was examined, what changed (mutations by type and count, entities touched), why (the dominant reason driving the work), and what was deferred or left flagged and why. No bullet lists, no tool names; a few clear sentences. Put deferred items and open questions in the runbook's deferred and openQuestions fields, not only in the summary.
 
 ### Safe
@@ -776,6 +779,7 @@ An install may have several agent scopes (listed in <agent_scopes> when there is
 - Hygiene queue is drained, or remaining records are explicitly deferred with reasons in the pass log.
 - Pass log written with changes applied (this is the next pass's dedup).
 - No flag left unresolved for a target you archived.
+- Records you judged to keep are closed with decline_attention; records you could not complete this pass stay pending and are deferred in the pass log.
 - No writes attempted against pinned or source-root entities.
 `;
 

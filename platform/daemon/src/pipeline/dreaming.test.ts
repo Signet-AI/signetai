@@ -252,6 +252,110 @@ describe("Dreaming", () => {
 		expect(getDreamingAttention(accessor, AGENT)).toHaveLength(1);
 	});
 
+	it("resolves attention the agent explicitly declined with decline_attention (#1185)", async () => {
+		let attentionId = "";
+		accessor.withWriteTx((tx) => {
+			attentionId = enqueueDreamingAttentionInTx(tx, {
+				agentId: AGENT,
+				kind: "hygiene",
+				subjectRef: "entity:aster",
+				details: { reason: "flagged for archive review" },
+				priority: 90,
+			});
+		});
+		expect(shouldTriggerDreaming(accessor, defaultCfg(), AGENT)).toBe(true);
+
+		const result = await runDreamingAgentPass(
+			accessor,
+			{
+				async run(input) {
+					// The agent surfaces the flag via attention_list, inspects
+					// the target, and judges it a deliberate keep — the
+					// affirmative decline closes the record.
+					const apply = input.tools.find((tool) => tool.name === "apply_ontology_ops");
+					if (!apply) throw new Error("Missing apply_ontology_ops");
+					const out = (await apply.execute(
+						"call",
+						{
+							agentId: AGENT,
+							operations: [{ operation: "decline_attention", payload: { attentionId } }],
+						},
+						undefined,
+						undefined,
+						{} as never,
+					)) as { content?: Array<{ text?: string }> };
+					const parsed = JSON.parse(out.content?.[0]?.text ?? "") as { ok: boolean };
+					if (!parsed.ok) throw new Error(`decline_attention failed: ${out.content?.[0]?.text}`);
+					return { summary: "Reviewed and kept" };
+				},
+			},
+			defaultCfg(),
+			"/tmp",
+			AGENT,
+			[AGENT],
+			"incremental",
+		);
+
+		expect(result.summary).toBe("Reviewed and kept");
+		// The agent judged the flag and kept the target: the explicit decline
+		// closes it, so declined work stops re-triggering passes.
+		expect(getDreamingAttention(accessor, AGENT)).toHaveLength(0);
+	});
+
+	it("leaves listed-but-unfinished attention pending when the pass defers it (over-resolution regression)", async () => {
+		const ids: string[] = [];
+		accessor.withWriteTx((tx) => {
+			for (const subject of ["entity:aster", "entity:birch", "entity:cedar"]) {
+				ids.push(
+					enqueueDreamingAttentionInTx(tx, {
+						agentId: AGENT,
+						kind: "hygiene",
+						subjectRef: subject,
+						details: { reason: "flagged for archive review" },
+						priority: 90,
+					}),
+				);
+			}
+		});
+		expect(shouldTriggerDreaming(accessor, defaultCfg(), AGENT)).toBe(true);
+
+		await runDreamingAgentPass(
+			accessor,
+			{
+				async run(input) {
+					// The agent works the queue, closes one flag it judged to
+					// keep, and defers the rest with reasons in the pass log —
+					// the runbook-sanctioned state. Mere listing must not
+					// resolve the deferred records.
+					const apply = input.tools.find((tool) => tool.name === "apply_ontology_ops");
+					if (!apply) throw new Error("Missing apply_ontology_ops");
+					const out = (await apply.execute(
+						"call",
+						{
+							agentId: AGENT,
+							operations: [{ operation: "decline_attention", payload: { attentionId: ids[0] } }],
+						},
+						undefined,
+						undefined,
+						{} as never,
+					)) as { content?: Array<{ text?: string }> };
+					const parsed = JSON.parse(out.content?.[0]?.text ?? "") as { ok: boolean };
+					if (!parsed.ok) throw new Error(`decline_attention failed: ${out.content?.[0]?.text}`);
+					return { summary: "Declined aster; deferred birch and cedar in the pass log" };
+				},
+			},
+			defaultCfg(),
+			"/tmp",
+			AGENT,
+			[AGENT],
+			"incremental",
+		);
+
+		// Exactly the declined record resolves; the deferred two stay pending
+		// for a later pass instead of being silently dropped.
+		expect(getDreamingAttention(accessor, AGENT)).toHaveLength(2);
+	});
+
 	it("navigates semantic state through scoped tools instead of a partial graph snapshot", async () => {
 		const evidence = "The deployment is now handled by Aster.";
 		seedSummary(db, "navigation-summary", evidence, 8);

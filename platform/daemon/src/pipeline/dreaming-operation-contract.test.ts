@@ -37,3 +37,18 @@ test("flag ops are part of the Dreaming vocabulary", () => {
 		}).success,
 	).toBe(true);
 });
+
+test("decline_attention is part of the Dreaming vocabulary and requires an attentionId", () => {
+	expect(
+		DREAMING_ONTOLOGY_OPERATION_SCHEMA.safeParse({
+			operation: "decline_attention",
+			payload: { attentionId: "attention-uuid" },
+		}).success,
+	).toBe(true);
+	expect(
+		DREAMING_ONTOLOGY_OPERATION_SCHEMA.safeParse({
+			operation: "decline_attention",
+			payload: {},
+		}).success,
+	).toBe(false);
+});

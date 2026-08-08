@@ -430,8 +430,11 @@ semantic operation. Oversized immutable evidence is instead resumed at a safe
 boundary across passes and is not quarantined.
 
 An attention item is selected with the next scoped pass and rendered as
-non-evidentiary context. It is resolved only after that pass completes; a
-failed pass leaves it pending. The worker can run for pending attention even
+non-evidentiary context. It resolves when the pass applies a hygiene operation
+citing it, or when the agent explicitly declines it (the `decline_attention`
+operation, used when the agent inspects the target and judges it should stay as
+is). Records the agent could not complete stay pending, and a failed pass
+leaves everything pending. The worker can run for pending attention even
 when no new episodic evidence has arrived, while normal failure backoff still
 applies.
 
