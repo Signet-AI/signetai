@@ -85,7 +85,10 @@ describe("cli telemetry (issue #1206)", () => {
 				timestamp TEXT NOT NULL,
 				properties TEXT NOT NULL,
 				sent_to_posthog INTEGER NOT NULL DEFAULT 0,
-				created_at TEXT NOT NULL
+				created_at TEXT NOT NULL,
+				source TEXT NOT NULL DEFAULT 'daemon',
+				claim_token TEXT,
+				claimed_at TEXT
 			);
 			INSERT INTO telemetry_install (id, created_at) VALUES ('install-from-daemon', '2026-01-01T00:00:00.000Z');
 		`);
@@ -113,6 +116,62 @@ describe("cli telemetry (issue #1206)", () => {
 		const check = createDatabase(join(memoryDir, "memories.db"), { readonly: true });
 		const row = check.prepare("SELECT sent_to_posthog FROM telemetry_events").get() as { sent_to_posthog: number };
 		expect(row.sent_to_posthog).toBe(1);
+		check.close();
+	});
+
+	it("claims CLI rows so overlapping flushes send each event once", async () => {
+		writeAgentYaml(true);
+		const memoryDir = join(dir, "memory");
+		mkdirSync(memoryDir, { recursive: true });
+		const db = createDatabase(join(memoryDir, "memories.db"));
+		db.exec(`
+			CREATE TABLE telemetry_install (id TEXT PRIMARY KEY, created_at TEXT NOT NULL);
+			CREATE TABLE telemetry_events (
+				id TEXT PRIMARY KEY,
+				event TEXT NOT NULL,
+				timestamp TEXT NOT NULL,
+				properties TEXT NOT NULL,
+				sent_to_posthog INTEGER NOT NULL DEFAULT 0,
+				created_at TEXT NOT NULL,
+				source TEXT NOT NULL DEFAULT 'daemon',
+				claim_token TEXT,
+				claimed_at TEXT
+			);
+			INSERT INTO telemetry_install (id, created_at) VALUES ('install-from-daemon', '2026-01-01T00:00:00.000Z');
+		`);
+		db.close();
+
+		recordCommandInvoked(dir, "status");
+		let calls = 0;
+		let enteredResolve = (): void => {};
+		const entered = new Promise<void>((resolve) => {
+			enteredResolve = resolve;
+		});
+		let releaseResolve = (): void => {};
+		const release = new Promise<void>((resolve) => {
+			releaseResolve = resolve;
+		});
+		globalThis.fetch = (async () => {
+			calls++;
+			enteredResolve();
+			await release;
+			return new Response("1", { status: 200 });
+		}) as unknown as typeof fetch;
+
+		const first = flushCliTelemetry(dir, "0.176.9");
+		await entered;
+		const second = flushCliTelemetry(dir, "0.176.9");
+		releaseResolve();
+		await Promise.all([first, second]);
+
+		expect(calls).toBe(1);
+		const check = createDatabase(join(memoryDir, "memories.db"), { readonly: true });
+		const row = check.prepare("SELECT sent_to_posthog, claim_token FROM telemetry_events").get() as {
+			sent_to_posthog: number;
+			claim_token: string | null;
+		};
+		expect(row.sent_to_posthog).toBe(1);
+		expect(row.claim_token).toBeNull();
 		check.close();
 	});
 

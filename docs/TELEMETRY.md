@@ -149,7 +149,7 @@ All telemetry keys live under `memory.pipelineV2` in `agent.yaml`:
 |---|---|---|---|
 | `telemetryEnabled` | `true` | boolean | Master switch; `false` opts out |
 | `telemetry.posthogHost` | `https://us.i.posthog.com` | — | PostHog instance URL; empty disables sending |
-| `telemetry.posthogApiKey` | public ingest key | — | PostHog project API key; when empty, falls back to the `POSTHOG_API_KEY` secret |
+| `telemetry.posthogApiKey` | public ingest key | — | PostHog project API key shared by daemon and CLI |
 | `telemetry.flushIntervalMs` | `60000` | 5s-10min | Time between event flushes |
 | `telemetry.flushBatchSize` | `50` | 1-500 | Max events per flush batch |
 | `telemetry.retentionDays` | `90` | 1-365 | Days before local telemetry data is purged |

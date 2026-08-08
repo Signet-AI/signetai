@@ -191,6 +191,36 @@ describe("telemetry collector", () => {
 		expect(captured).toHaveLength(1);
 	});
 
+	it("does not claim CLI-owned command events", async () => {
+		const collector = makeCollector();
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO telemetry_events
+				 (id, event, timestamp, properties, sent_to_posthog, created_at, source)
+				 VALUES (?, ?, ?, ?, 0, ?, 'cli')`,
+			).run(
+				"cli-event",
+				"command.invoked",
+				new Date().toISOString(),
+				JSON.stringify({ command: "status" }),
+				new Date().toISOString(),
+			);
+		});
+
+		await collector.flush();
+
+		const events = captured.flatMap((request) => request.body.batch.map((event) => event.event));
+		expect(events).not.toContain("command.invoked");
+		expect(
+			getDbAccessor().withReadDb((db) => {
+				const row = db.prepare("SELECT sent_to_posthog FROM telemetry_events WHERE id = ?").get("cli-event") as {
+					readonly sent_to_posthog: number;
+				};
+				return row.sent_to_posthog;
+			}),
+		).toBe(0);
+	});
+
 	it("emits install.activated exactly once per install", async () => {
 		// Regression: the npm postinstall ping never fires for bun global or
 		// desktop installs, so the install counter missed them. The daemon

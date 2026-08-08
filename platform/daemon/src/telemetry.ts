@@ -281,11 +281,17 @@ interface PostHogBatchEvent {
 	readonly properties: Record<string, string | number | boolean | null>;
 }
 
+interface ClaimedTelemetryEvents {
+	readonly token: string;
+	readonly events: readonly TelemetryEvent[];
+}
+
 const MAX_BUFFER_SIZE = 200;
 const MAX_BUFFER_EVENTS = 5000;
 const MAX_CONSECUTIVE_FAILURES = 3;
 const BACKOFF_MULTIPLIER = 5;
 const PRUNE_EVERY_N_FLUSHES = 10;
+const TELEMETRY_CLAIM_TIMEOUT_MS = 10 * 60 * 1_000;
 
 /**
  * Interval used after `failures` consecutive PostHog failures. Pure so the
@@ -417,47 +423,72 @@ export function createTelemetryCollector(
 		}
 	}
 
-	function markSent(ids: readonly string[]): void {
-		if (ids.length === 0) return;
+	function markSent(token: string): void {
 		try {
 			db.withWriteTx((w) => {
-				const stmt = w.prepare("UPDATE telemetry_events SET sent_to_posthog = 1 WHERE id = ?");
-				for (const id of ids) {
-					stmt.run(id);
-				}
+				w.prepare(
+					"UPDATE telemetry_events SET sent_to_posthog = 1, claim_token = NULL, claimed_at = NULL WHERE claim_token = ?",
+				).run(token);
 			});
 		} catch {
 			// best effort
 		}
 	}
 
-	function loadUnsent(limit: number): readonly TelemetryEvent[] {
+	function releaseClaim(token: string): void {
 		try {
-			return db.withReadDb((r) => {
-				const rows = r
+			db.withWriteTx((w) => {
+				w.prepare("UPDATE telemetry_events SET claim_token = NULL, claimed_at = NULL WHERE claim_token = ?").run(token);
+			});
+		} catch {
+			// best effort; stale claims are recoverable on a later flush
+		}
+	}
+
+	function claimUnsent(limit: number): ClaimedTelemetryEvents | null {
+		const token = crypto.randomUUID();
+		const now = new Date();
+		const staleBefore = new Date(now.getTime() - TELEMETRY_CLAIM_TIMEOUT_MS).toISOString();
+		try {
+			return db.withWriteTx((w) => {
+				w.prepare(
+					`UPDATE telemetry_events
+					 SET claim_token = ?, claimed_at = ?
+					 WHERE id IN (
+						 SELECT id FROM telemetry_events
+						 WHERE source = 'daemon' AND sent_to_posthog = 0
+							 AND (claim_token IS NULL OR claimed_at < ?)
+						 ORDER BY timestamp ASC
+						 LIMIT ?
+					 )`,
+				).run(token, now.toISOString(), staleBefore, limit);
+				const rows = w
 					.prepare(
 						`SELECT id, event, timestamp, properties
 						 FROM telemetry_events
-						 WHERE sent_to_posthog = 0
-						 ORDER BY timestamp ASC
-						 LIMIT ?`,
+						 WHERE claim_token = ?
+						 ORDER BY timestamp ASC`,
 					)
-					.all(limit) as unknown as readonly {
+					.all(token) as unknown as readonly {
 					id: string;
 					event: string;
 					timestamp: string;
 					properties: string;
 				}[];
-
-				return rows.map((row) => ({
-					id: row.id,
-					event: row.event as TelemetryEventType,
-					timestamp: row.timestamp,
-					properties: JSON.parse(row.properties) as TelemetryProperties,
-				}));
+				return rows.length > 0
+					? {
+							token,
+							events: rows.map((row) => ({
+								id: row.id,
+								event: row.event as TelemetryEventType,
+								timestamp: row.timestamp,
+								properties: JSON.parse(row.properties) as TelemetryProperties,
+							})),
+						}
+					: null;
 			});
 		} catch {
-			return [];
+			return null;
 		}
 	}
 
@@ -481,14 +512,21 @@ export function createTelemetryCollector(
 
 		// Send to PostHog if configured
 		if (posthogConfigured) {
-			const unsent = loadUnsent(config.flushBatchSize);
-			if (unsent.length > 0) {
-				const ok = await sendToPostHog(config.posthogHost, config.posthogApiKey, installId, unsent, daemonVersion);
+			const claimed = claimUnsent(config.flushBatchSize);
+			if (claimed) {
+				const ok = await sendToPostHog(
+					config.posthogHost,
+					config.posthogApiKey,
+					installId,
+					claimed.events,
+					daemonVersion,
+				);
 				if (ok) {
-					markSent(unsent.map((e) => e.id));
+					markSent(claimed.token);
 					consecutiveFailures = 0;
 					effectiveIntervalMs = config.flushIntervalMs;
 				} else {
+					releaseClaim(claimed.token);
 					consecutiveFailures++;
 					effectiveIntervalMs = nextFlushIntervalMs(config.flushIntervalMs, consecutiveFailures);
 					if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {

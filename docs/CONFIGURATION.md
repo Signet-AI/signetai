@@ -1154,7 +1154,7 @@ rate-limited `EventLoopLag` reports with measured lag), `version.upgraded`
 | Field | Default | Range | Description |
 |-------|---------|-------|-------------|
 | `posthogHost` | `https://us.i.posthog.com` | — | PostHog instance URL (empty disables) |
-| `posthogApiKey` | `phc_mLsvJmbmp6e9UarrX9Cq5QtTjVNiiphM9mvi5Xnddd8Q` | — | PostHog project API key. Public ingest key by design; overrides the `POSTHOG_API_KEY` secret when set |
+| `posthogApiKey` | `phc_mLsvJmbmp6e9UarrX9Cq5QtTjVNiiphM9mvi5Xnddd8Q` | — | PostHog project API key. Public ingest key by design; shared by daemon and CLI |
 | `flushIntervalMs` | `60000` | 5s-10min | Time between event flushes |
 | `flushBatchSize` | `50` | 1-500 | Max events per flush batch |
 | `retentionDays` | `90` | 1-365 | Days before local telemetry data is purged |

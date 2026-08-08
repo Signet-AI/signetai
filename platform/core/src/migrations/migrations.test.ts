@@ -1828,4 +1828,11 @@ describe("migration framework", () => {
 		}>;
 		expect(columns.map((row) => row.name)).toEqual(["entity_id", "memory_id"]);
 	});
+	test("migration 112 separates telemetry queue ownership and claims", () => {
+		db = createFreshDb();
+		runMigrations(db);
+
+		const columns = db.query("PRAGMA table_info(telemetry_events)").all() as Array<{ name: string }>;
+		expect(columns.map((row) => row.name)).toEqual(expect.arrayContaining(["source", "claim_token", "claimed_at"]));
+	});
 });

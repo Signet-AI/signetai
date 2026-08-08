@@ -20,6 +20,7 @@ import { createDatabase } from "../sqlite.js";
 
 export const TELEMETRY_EVENT = "command.invoked";
 const TELEMETRY_FLUSH_TIMEOUT_MS = 2_000;
+const TELEMETRY_CLAIM_TIMEOUT_MS = 10 * 60 * 1_000;
 const MIN_BATCH_SIZE = 1;
 const MAX_BATCH_SIZE = 500;
 
@@ -35,6 +36,22 @@ interface QueuedEvent {
 	readonly event: string;
 	readonly timestamp: string;
 	readonly properties: Record<string, string | number | boolean | null>;
+}
+
+interface ClaimedEvents {
+	readonly token: string;
+	readonly rows: readonly {
+		readonly id: string;
+		readonly event: string;
+		readonly timestamp: string;
+		readonly properties: string;
+	}[];
+}
+
+function createTelemetryDatabase(dbPath: string): ReturnType<typeof createDatabase> {
+	const db = createDatabase(dbPath);
+	db.exec("PRAGMA busy_timeout = 5000");
+	return db;
 }
 
 /**
@@ -62,7 +79,7 @@ function readTelemetrySettings(agentsDir: string): CliTelemetrySettings | null {
 		const posthogHost =
 			typeof telemetry?.posthogHost === "string" ? telemetry.posthogHost : DEFAULT_TELEMETRY_POSTHOG_HOST;
 		const configuredKey = typeof telemetry?.posthogApiKey === "string" ? telemetry.posthogApiKey : "";
-		const posthogApiKey = configuredKey || process.env.POSTHOG_API_KEY || DEFAULT_TELEMETRY_POSTHOG_API_KEY;
+		const posthogApiKey = configuredKey || DEFAULT_TELEMETRY_POSTHOG_API_KEY;
 		const configuredBatchSize = telemetry?.flushBatchSize;
 		const flushBatchSize =
 			typeof configuredBatchSize === "number"
@@ -113,17 +130,66 @@ function queueCommandEvent(agentsDir: string, event: QueuedEvent): void {
 
 	let db: ReturnType<typeof createDatabase> | null = null;
 	try {
-		db = createDatabase(dbPath);
+		db = createTelemetryDatabase(dbPath);
 		if (!getOrCreateInstallId(db)) return;
 		db.prepare(
 			`INSERT OR IGNORE INTO telemetry_events
-			 (id, event, timestamp, properties, sent_to_posthog, created_at)
-			 VALUES (?, ?, ?, ?, 0, ?)`,
+			 (id, event, timestamp, properties, sent_to_posthog, created_at, source)
+			 VALUES (?, ?, ?, ?, 0, ?, 'cli')`,
 		).run(event.id, event.event, event.timestamp, JSON.stringify(event.properties), new Date().toISOString());
 	} catch {
 		// Older workspaces may not have the telemetry migrations yet.
 	} finally {
 		db?.close();
+	}
+}
+
+function claimEvents(db: ReturnType<typeof createDatabase>, limit: number): ClaimedEvents | null {
+	const token = randomUUID();
+	const now = new Date();
+	const staleBefore = new Date(now.getTime() - TELEMETRY_CLAIM_TIMEOUT_MS).toISOString();
+	const claimedAt = now.toISOString();
+	try {
+		db.prepare(
+			`UPDATE telemetry_events
+			 SET claim_token = ?, claimed_at = ?
+			 WHERE id IN (
+				 SELECT id FROM telemetry_events
+				 WHERE event = ? AND source = 'cli' AND sent_to_posthog = 0
+					 AND (claim_token IS NULL OR claimed_at < ?)
+				 ORDER BY timestamp ASC
+				 LIMIT ?
+			 )`,
+		).run(token, claimedAt, TELEMETRY_EVENT, staleBefore, limit);
+		const rows = db
+			.prepare(
+				`SELECT id, event, timestamp, properties
+				 FROM telemetry_events
+				 WHERE claim_token = ?
+				 ORDER BY timestamp ASC`,
+			)
+			.all(token) as unknown as ClaimedEvents["rows"];
+		return rows.length > 0 ? { token, rows } : null;
+	} catch {
+		return null;
+	}
+}
+
+function releaseClaim(db: ReturnType<typeof createDatabase>, token: string): void {
+	try {
+		db.prepare("UPDATE telemetry_events SET claim_token = NULL, claimed_at = NULL WHERE claim_token = ?").run(token);
+	} catch {
+		// Best effort. Stale claims are recoverable on a later flush.
+	}
+}
+
+function markClaimedSent(db: ReturnType<typeof createDatabase>, token: string): void {
+	try {
+		db.prepare(
+			"UPDATE telemetry_events SET sent_to_posthog = 1, claim_token = NULL, claimed_at = NULL WHERE claim_token = ?",
+		).run(token);
+	} catch {
+		// Best effort. Stale claims are recoverable on a later flush.
 	}
 }
 
@@ -167,27 +233,16 @@ export async function flushCliTelemetry(agentsDir: string, cliVersion: string): 
 	if (!existsSync(dbPath)) return;
 
 	let db: ReturnType<typeof createDatabase> | null = null;
+	let claimToken: string | null = null;
 	try {
-		db = createDatabase(dbPath);
+		db = createTelemetryDatabase(dbPath);
 		const installId = getOrCreateInstallId(db);
 		if (!installId) return;
-		const rows = db
-			.prepare(
-				`SELECT id, event, timestamp, properties
-				 FROM telemetry_events
-				 WHERE event = ? AND sent_to_posthog = 0
-				 ORDER BY timestamp ASC
-				 LIMIT ?`,
-			)
-			.all(TELEMETRY_EVENT, settings.flushBatchSize) as unknown as readonly {
-			id: string;
-			event: string;
-			timestamp: string;
-			properties: string;
-		}[];
-		if (rows.length === 0) return;
+		const claimed = claimEvents(db, settings.flushBatchSize);
+		if (!claimed) return;
+		claimToken = claimed.token;
 
-		const batch = rows.map((row) => ({
+		const batch = claimed.rows.map((row) => ({
 			event: row.event,
 			distinct_id: installId,
 			timestamp: row.timestamp,
@@ -203,11 +258,15 @@ export async function flushCliTelemetry(agentsDir: string, cliVersion: string): 
 			body: JSON.stringify({ api_key: settings.posthogApiKey, batch }),
 			signal: AbortSignal.timeout(TELEMETRY_FLUSH_TIMEOUT_MS),
 		});
-		if (!response.ok) return;
+		if (!response.ok) {
+			releaseClaim(db, claimToken);
+			return;
+		}
 
-		const markSent = db.prepare("UPDATE telemetry_events SET sent_to_posthog = 1 WHERE id = ?");
-		for (const row of rows) markSent.run(row.id);
+		markClaimedSent(db, claimToken);
+		claimToken = null;
 	} catch {
+		if (db && claimToken) releaseClaim(db, claimToken);
 		// Best effort. Unsent rows remain queued for the daemon or next CLI run.
 	} finally {
 		db?.close();

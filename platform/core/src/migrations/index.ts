@@ -117,6 +117,7 @@ import { up as embeddingUsage } from "./108-embedding-usage";
 import { up as telemetryInstall } from "./109-telemetry-install";
 import { up as memoryMentionJoinIndex } from "./110-memory-mention-join-index";
 import { up as telemetryFirstUse } from "./111-telemetry-first-use";
+import { up as telemetryQueueOwnership } from "./112-telemetry-queue-ownership";
 
 // -- Public interface consumed by Database.init() --
 
@@ -1034,6 +1035,18 @@ export const MIGRATIONS: readonly Migration[] = [
 			columns: [
 				{ table: "telemetry_install", column: "first_remember_at" },
 				{ table: "telemetry_install", column: "first_recall_at" },
+			],
+		},
+	},
+	{
+		version: 112,
+		name: "telemetry-queue-ownership",
+		up: telemetryQueueOwnership,
+		artifacts: {
+			columns: [
+				{ table: "telemetry_events", column: "source" },
+				{ table: "telemetry_events", column: "claim_token" },
+				{ table: "telemetry_events", column: "claimed_at" },
 			],
 		},
 	},
