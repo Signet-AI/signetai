@@ -168,6 +168,8 @@ function pruneStagingRows(accessor: DbAccessor): void {
 export async function stageEmbeddingBatch(input: {
 	readonly accessor: DbAccessor;
 	readonly configured: EmbeddingConfig;
+	/** Live re-read of the current config; falls back to `configured` when unset (#1160). */
+	readonly readConfigured?: () => EmbeddingConfig;
 	readonly fetchEmbedding: (
 		text: string,
 		cfg: EmbeddingConfig,
@@ -179,6 +181,7 @@ export async function stageEmbeddingBatch(input: {
 	const state = input.accessor.withReadDb((db) => readEmbeddingIndexState(db));
 	if (state?.state !== "building" || !state.staging) return { staged: 0, coverage: null };
 	const profile = state.staging;
+	const configured = input.readConfigured ? input.readConfigured() : input.configured;
 	// Writes and source purges continue against the active slot during a build.
 	// Without this cleanup, an obsolete staging row would keep the count-based
 	// readiness gate false forever after its active counterpart disappears.
@@ -199,7 +202,7 @@ export async function stageEmbeddingBatch(input: {
 
 	let staged = 0;
 	for (const row of rows) {
-		const vector = await input.fetchEmbedding(row.chunk_text, configForProfile(profile, input.configured), "document", {
+		const vector = await input.fetchEmbedding(row.chunk_text, configForProfile(profile, configured), "document", {
 			usage: { source: "artifact-index", agentId: row.agent_id ?? undefined },
 		});
 		if (!vector) continue;
@@ -297,6 +300,8 @@ export function promoteStagingIndex(accessor: DbAccessor): boolean {
 export function startEmbeddingIndexMigration(input: {
 	readonly accessor: DbAccessor;
 	readonly configured: EmbeddingConfig;
+	/** Live re-read of the current config; falls back to `configured` when unset (#1160). */
+	readonly readConfigured?: () => EmbeddingConfig;
 	readonly fetchEmbedding: (
 		text: string,
 		cfg: EmbeddingConfig,
@@ -352,15 +357,20 @@ export function startEmbeddingIndexMigration(input: {
 			if (state?.state !== "building" || !state.staging) return;
 			// The persisted staging profile can go stale when agent.yaml
 			// changes mid-build; the migration then spins failing the old
-			// provider forever (#1160). Re-begin against the current config:
-			// a no-op when nothing changed, a restart when the config did.
-			const restarted = input.accessor.withWriteTx((db) => beginEmbeddingIndexBuild(db, input.configured));
+			// provider forever (#1160). Re-begin against the LIVE config (re-read
+			// from disk each tick): a no-op when nothing changed, a restart when
+			// the config did.
+			const configured = input.readConfigured ? input.readConfigured() : input.configured;
+			const restarted = input.accessor.withWriteTx((db) => beginEmbeddingIndexBuild(db, configured));
+			if (restarted.state !== "building" || !restarted.staging) {
+				// The live config now matches the active generation, so begin
+				// abandoned the in-flight build; stop polling until a new build
+				// is wanted.
+				running = false;
+				return;
+			}
 			const currentStaging = restarted.staging;
-			if (
-				currentStaging !== null &&
-				currentStaging !== undefined &&
-				currentStaging.fingerprint !== state.staging.fingerprint
-			) {
+			if (currentStaging.fingerprint !== state.staging.fingerprint) {
 				logger.warn(
 					"embedding",
 					"Embedding config changed during migration; restarting the staging build with the current profile",
@@ -369,7 +379,7 @@ export function startEmbeddingIndexMigration(input: {
 				consecutiveFailures = 0;
 				return;
 			}
-			const providerCfg = configForProfile(state.staging, input.configured);
+			const providerCfg = configForProfile(state.staging, configured);
 			if (!(await input.checkProvider(providerCfg)).available) {
 				consecutiveFailures++;
 				failed++;

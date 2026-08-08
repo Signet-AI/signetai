@@ -1465,6 +1465,10 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 		embeddingIndexMigrationHandle = startEmbeddingIndexMigration({
 			accessor: getDbAccessor(),
 			configured: memoryCfg.embedding,
+			// Re-read agent.yaml each tick so a mid-build config edit restarts
+			// the build against the new profile instead of spinning on the
+			// stale persisted one (#1160).
+			readConfigured: () => loadMemoryConfig(AGENTS_DIR).embedding,
 			fetchEmbedding,
 			checkProvider: checkEmbeddingProvider,
 			pollMs: memoryCfg.pipelineV2.embeddingTracker.pollMs,

@@ -82,6 +82,36 @@ describe("embedding index state", () => {
 		expect(staging.staging?.model).toBe("custom-b");
 	});
 
+	it("abandons an in-flight build when the config flips back to the active generation (#1160)", () => {
+		const raw = new Database(":memory:");
+		embeddingIndexGenerations(raw as unknown as Parameters<typeof embeddingIndexGenerations>[0]);
+		raw.exec(
+			"CREATE TABLE embeddings_staging (id TEXT PRIMARY KEY, content_hash TEXT UNIQUE, vector BLOB, dimensions INTEGER, source_type TEXT, source_id TEXT, chunk_text TEXT, created_at TEXT, agent_id TEXT)",
+		);
+		const db = raw as unknown as WriteDb;
+		// Unknown models get the identity profile on both sides, so a config
+		// whose fingerprint equals the active generation's must NOT keep an
+		// in-flight build alive — that build would promote a generation the
+		// current config no longer wants.
+		const activeConfig: EmbeddingConfig = {
+			provider: "ollama",
+			model: "custom-a",
+			dimensions: 3,
+			base_url: "http://127.0.0.1:11434",
+		};
+		ensureEmbeddingIndexState(db, activeConfig);
+		beginEmbeddingIndexBuild(db, { ...activeConfig, model: "custom-b" });
+		db.prepare(
+			"INSERT INTO embeddings_staging (id, content_hash, vector, dimensions) VALUES ('s1', 'h1', X'00', 3)",
+		).run();
+		const cancelled = beginEmbeddingIndexBuild(db, activeConfig);
+		expect(cancelled.state).toBe("ready");
+		expect(cancelled.staging).toBeNull();
+		expect(db.prepare("SELECT COUNT(*) AS n FROM embeddings_staging").get() as { n: number }).toEqual({
+			n: 0,
+		});
+	});
+
 	it("rejects writes that captured a superseded active generation", () => {
 		const raw = new Database(":memory:");
 		embeddingIndexGenerations(raw as unknown as Parameters<typeof embeddingIndexGenerations>[0]);

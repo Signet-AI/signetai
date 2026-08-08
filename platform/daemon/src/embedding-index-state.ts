@@ -158,7 +158,22 @@ export function beginEmbeddingIndexBuild(
 	};
 	const staging = profileForStorage(stagingConfig);
 	if (current.state === "building" && current.staging?.fingerprint === staging.fingerprint) return current;
-	if (current.active.fingerprint === staging.fingerprint) return current;
+	if (current.active.fingerprint === staging.fingerprint) {
+		// The configured profile IS the active generation: nothing to build.
+		// If a build of a different generation is in flight (the live config
+		// flipped back to the active profile mid-build, #1160), abandon it
+		// instead of promoting a generation the config no longer wants.
+		if (current.state === "building") {
+			db.exec("DELETE FROM embeddings_staging");
+			db.prepare(
+				`UPDATE embedding_index_state
+				 SET staging_profile_json = NULL, state = 'ready', last_error = NULL, updated_at = ?
+				 WHERE id = 1`,
+			).run(now);
+			return { active: current.active, staging: null, state: "ready", lastError: null };
+		}
+		return current;
+	}
 
 	db.exec("DELETE FROM embeddings_staging");
 	db.prepare(
