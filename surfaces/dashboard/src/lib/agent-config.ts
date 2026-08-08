@@ -72,6 +72,8 @@ export interface AgentConfigStore {
 	aSetNum: (path: readonly string[], value: number) => void;
 	/** Delete a key and prune now-empty parents (keeps YAML canonical). */
 	aDel: (path: readonly string[]) => void;
+	/** Apply one synchronous mutation to the current draft. */
+	aUpdate: (fn: (draft: Record<string, unknown>) => void) => void;
 	save: () => Promise<boolean>;
 	reload: () => Promise<void>;
 	saving: boolean;
@@ -158,6 +160,7 @@ export function useAgentConfig(): AgentConfigStore {
 		[mutate],
 	);
 	const aDel = useCallback((path: readonly string[]) => mutate((draft) => delPath(draft, path)), [mutate]);
+	const aUpdate = useCallback((fn: (draft: YamlObject) => void) => mutate(fn), [mutate]);
 
 	const save = useCallback(async () => {
 		if (!fileName) return false;
@@ -168,5 +171,5 @@ export function useAgentConfig(): AgentConfigStore {
 		return result.ok;
 	}, [fileName]);
 
-	return { ready, dirty, agent, aStr, aBool, aSetStr, aSetBool, aSetNum, aDel, save, reload, saving };
+	return { ready, dirty, agent, aStr, aBool, aSetStr, aSetBool, aSetNum, aDel, aUpdate, save, reload, saving };
 }

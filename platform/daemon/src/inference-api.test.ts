@@ -67,6 +67,8 @@ inference:
     interactive:
       policy: auto
       taskClass: casual_chat
+    aggregateRecall:
+      target: local/gemma
 `,
 	);
 }
@@ -623,11 +625,13 @@ describe("inference routing api", () => {
 			source?: string;
 			targetRefs?: string[];
 			policies?: string[];
+			workloadBindings?: { aggregateRecall?: string };
 		};
 		expect(body.enabled).toBe(true);
 		expect(body.source).toBe("explicit");
 		expect(body.targetRefs).toContain("local/gemma");
 		expect(body.policies).toContain("auto");
+		expect(body.workloadBindings?.aggregateRecall).toBe("local/gemma");
 	});
 
 	it("exposes the pi-ai provider, OAuth, and model catalog without hiding resolver failures", async () => {

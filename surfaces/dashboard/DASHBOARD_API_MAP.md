@@ -145,6 +145,8 @@ native `EventSource` with headers, so auth is pumped manually).
 | `regenerateHarnesses` | POST | `/api/harnesses/regenerate` | Regenerate harness configs |
 | `getInferenceCatalog` | GET 🔐 | `/api/inference/catalog` | Model/provider catalog |
 | `getInferenceStatus` | GET 🔐 | `/api/inference/status` | Active provider/auth status |
+| `getInferenceDecision` | POST 🔐 | `/api/inference/explain` | Explain an effective route |
+| `executeInferenceProbe` | POST 🔐 | `/api/inference/execute` | Run a bounded route health probe |
 | `startOAuthLogin` | POST 🔐 (SSE) | `/api/inference/oauth/login/{provider}` | OAuth login stream (pi-ai: Claude Max/Codex/Copilot) |
 | `completeOAuthInteraction` | POST 🔐 | `/api/inference/oauth/complete` | Finish OAuth |
 | `disconnectOAuthProvider` | POST 🔐 | `/api/inference/oauth/disconnect/{provider}` | Revoke |

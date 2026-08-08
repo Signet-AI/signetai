@@ -1,0 +1,126 @@
+import { describe, expect, it } from "bun:test";
+import { ensureInferenceRoute } from "./inference-route-config";
+
+describe("ensureInferenceRoute", () => {
+	it("creates an explicit policy, workload bindings, and extraction task class", () => {
+		const agent: Record<string, unknown> = {
+			inference: {
+				targets: {
+					background: { executor: "llama-cpp", models: { default: { model: "gemma" } } },
+					aggregation: { executor: "llama-cpp", models: { default: { model: "qwen" } } },
+				},
+			},
+		};
+
+		ensureInferenceRoute(agent);
+
+		expect(agent.inference).toEqual({
+			targets: {
+				background: { executor: "llama-cpp", models: { default: { model: "gemma" } } },
+				aggregation: { executor: "llama-cpp", models: { default: { model: "qwen" } } },
+			},
+			workloads: {
+				memoryExtraction: { target: "background/default", taskClass: "memory_extraction" },
+				aggregateRecall: { target: "aggregation/default" },
+			},
+			taskClasses: {
+				memory_extraction: { reasoning: "low", toolsRequired: true, privacy: "restricted_remote" },
+			},
+			defaultPolicy: "default",
+			policies: {
+				default: {
+					mode: "automatic",
+					defaultTargets: ["background/default"],
+					fallbackTargets: ["background/default"],
+				},
+			},
+		});
+	});
+
+	it("keeps the generated policy scoped to primary when aggregation is added later", () => {
+		const agent: Record<string, unknown> = {
+			inference: {
+				targets: { background: { models: { default: { model: "gemma" } } } },
+			},
+		};
+
+		ensureInferenceRoute(agent);
+		(agent.inference as Record<string, unknown>).targets = {
+			background: { models: { default: { model: "gemma" } } },
+			aggregation: { models: { default: { model: "qwen" } } },
+		};
+		ensureInferenceRoute(agent);
+
+		const policy = ((agent.inference as Record<string, unknown>).policies as Record<string, unknown>).default as Record<
+			string,
+			unknown
+		>;
+		expect(policy.defaultTargets).toEqual(["background/default"]);
+		expect(policy.fallbackTargets).toEqual(["background/default"]);
+	});
+
+	it("does not promote aggregation into the generic default route", () => {
+		const agent: Record<string, unknown> = {
+			inference: {
+				targets: { aggregation: { models: { default: { model: "qwen" } } } },
+			},
+		};
+
+		ensureInferenceRoute(agent);
+
+		const inference = agent.inference as Record<string, unknown>;
+		expect(inference.defaultPolicy).toBe("default");
+		expect((inference.policies as Record<string, unknown>).default).toEqual({
+			mode: "automatic",
+			defaultTargets: [],
+			fallbackTargets: [],
+		});
+		expect(inference.workloads).toEqual({ aggregateRecall: { target: "aggregation/default" } });
+	});
+
+	it("repairs a named missing default policy without replacing custom task classes", () => {
+		const customTaskClass = { reasoning: "high", privacy: "local_only" };
+		const agent: Record<string, unknown> = {
+			inference: {
+				defaultPolicy: "local-llama",
+				policies: {},
+				taskClasses: { memory_extraction: customTaskClass },
+				targets: { background: { models: { default: { model: "gemma" } } } },
+			},
+		};
+
+		ensureInferenceRoute(agent);
+
+		const inference = agent.inference as Record<string, unknown>;
+		expect(inference.defaultPolicy).toBe("local-llama");
+		expect((inference.policies as Record<string, unknown>)["local-llama"]).toEqual({
+			mode: "automatic",
+			defaultTargets: ["background/default"],
+			fallbackTargets: ["background/default"],
+		});
+		expect((inference.taskClasses as Record<string, unknown>).memory_extraction).toBe(customTaskClass);
+	});
+
+	it("does not invent a route before a target has a model", () => {
+		const agent: Record<string, unknown> = { inference: { targets: { background: { executor: "llama-cpp" } } } };
+
+		ensureInferenceRoute(agent);
+
+		expect(agent.inference).toEqual({ targets: { background: { executor: "llama-cpp" } } });
+	});
+
+	it("preserves a custom workload binding when the dashboard target is incomplete", () => {
+		const agent: Record<string, unknown> = {
+			inference: {
+				targets: { background: { executor: "llama-cpp" } },
+				workloads: { memoryExtraction: { target: "remote/default", taskClass: "memory_extraction" } },
+			},
+		};
+
+		ensureInferenceRoute(agent);
+
+		expect((agent.inference as Record<string, unknown>).workloads).toEqual({
+			memoryExtraction: { target: "remote/default", taskClass: "memory_extraction" },
+		});
+	});
+});

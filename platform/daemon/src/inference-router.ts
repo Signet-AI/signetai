@@ -138,6 +138,7 @@ export interface InferenceStatusSummary {
 		readonly default?: string;
 		readonly interactive?: string;
 		readonly memoryExtraction?: string;
+		readonly aggregateRecall?: string;
 		readonly widgetGeneration?: string;
 		readonly repair?: string;
 	};
@@ -1304,6 +1305,9 @@ export class InferenceRouter {
 					memoryExtraction:
 						loaded.value.config.workloads?.memoryExtraction?.policy ??
 						loaded.value.config.workloads?.memoryExtraction?.target,
+					aggregateRecall:
+						loaded.value.config.workloads?.aggregateRecall?.policy ??
+						loaded.value.config.workloads?.aggregateRecall?.target,
 					widgetGeneration:
 						loaded.value.config.workloads?.widgetGeneration?.policy ??
 						loaded.value.config.workloads?.widgetGeneration?.target,

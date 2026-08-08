@@ -13,7 +13,7 @@ import {
 	SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
-import { Download, Loader2, Search, TriangleAlert, X } from "lucide-react";
+import { CheckCircle, Download, Loader2, RefreshCw, Search, TriangleAlert, X } from "lucide-react";
 import { useSettings, type SettingsSection } from "@/lib/settings-context";
 import { api, type InferenceCatalog, type LogEntry } from "@/lib/api";
 import { useAsync } from "@/lib/use-async";
@@ -33,6 +33,7 @@ import {
 } from "@/lib/providers";
 import { ConnectProviderDialog } from "@/components/settings/connect-dialog";
 import { cn } from "@/lib/utils";
+import { ensureInferenceRoute } from "@/lib/inference-route-config";
 
 const NAV: { id: SettingsSection; label: string; icon: React.ReactNode }[] = [
 	{
@@ -305,6 +306,7 @@ function InferenceSection() {
 				/>
 				<EmbeddingEditor store={store} />
 			</div>
+			<RouteHealthPanel />
 
 			{/* BOTTOM ZONE: connected providers matrix */}
 			<div className="sig-mcard flex flex-col gap-px">
@@ -400,6 +402,120 @@ function InferenceSection() {
 	);
 }
 
+type RouteCheckReport = {
+	status: Awaited<ReturnType<typeof api.getInferenceStatusDetailed>>["data"];
+	statusError: string | null;
+	memoryExtraction: Awaited<ReturnType<typeof api.getInferenceDecision>>;
+	aggregateRecall: Awaited<ReturnType<typeof api.getInferenceDecision>>;
+	probeOk: boolean | null;
+};
+
+function RouteHealthPanel() {
+	const statusQuery = useAsync(() => api.getInferenceStatusDetailed(), { intervalMs: 60_000 });
+	const [checking, setChecking] = useState(false);
+	const [report, setReport] = useState<RouteCheckReport | null>(null);
+	const status = report?.status ?? statusQuery.data?.data;
+	const statusError = report?.statusError ?? statusQuery.data?.error;
+	const issues = status?.configIssues ?? [];
+	const targets = Object.entries(status?.runtimeSnapshot?.targets ?? {}) as Array<[
+		string,
+		{ available?: boolean; unavailableReason?: string } | undefined,
+	]>;
+
+	const checkRoutes = async () => {
+		setChecking(true);
+		const nextStatusResult = await api.getInferenceStatusDetailed(true);
+		const nextStatus = nextStatusResult.data;
+		const [memoryExtraction, aggregateRecall, probe] = await Promise.all([
+			api.getInferenceDecision({ operation: "memory_extraction", refresh: true }),
+			nextStatus?.workloadBindings?.aggregateRecall
+				? api.getInferenceDecision({ operation: "aggregate_recall", refresh: true })
+				: Promise.resolve(null),
+			nextStatus?.workloadBindings?.memoryExtraction
+				? api.executeInferenceProbe({
+						operation: "memory_extraction",
+						prompt: "Respond with exactly OK.",
+						maxTokens: 8,
+						timeoutMs: 15_000,
+						refresh: true,
+					})
+				: Promise.resolve(null),
+		]);
+		setReport({ status: nextStatus, statusError: nextStatusResult.error, memoryExtraction, aggregateRecall, probeOk: probe !== null });
+		setChecking(false);
+	};
+
+	return (
+		<div className="sig-mcard flex flex-col gap-px">
+			<div className="flex items-center justify-between px-1.5">
+				<GroupLabel suffix={report ? report.probeOk ? "· probe passed" : "· probe failed" : "· route resolution + executor availability"}>Runtime route</GroupLabel>
+				<button
+					type="button"
+					onClick={() => void checkRoutes()}
+					disabled={checking}
+					className="mb-1 flex items-center gap-1.5 rounded-[var(--radius)] border border-[oklch(1_0_0/0.14)] px-2 py-1 font-mono text-[9.5px] text-muted-foreground transition-colors hover:border-[oklch(1_0_0/0.28)] hover:text-foreground disabled:opacity-50 [html:not(.dark)_&]:border-[oklch(0_0_0/0.14)]"
+				>
+					<RefreshCw className={cn("size-3", checking && "animate-spin")} />
+					{checking ? "Checking…" : "Check routes"}
+				</button>
+			</div>
+			{status ? (
+				<>
+					<div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4">
+						<RouteMeta label="Policy" value={status.defaultPolicy ?? "not set"} />
+						<RouteMeta label="Policies" value={String(status.policies?.length ?? 0)} />
+						<RouteMeta label="Task classes" value={String(status.taskClasses?.length ?? 0)} />
+						<RouteMeta label="Targets" value={String(status.targetRefs?.length ?? 0)} />
+					</div>
+					<div className="mt-1.5 flex flex-col gap-1">
+						<RouteDecisionRow label="Memory extraction" decision={report?.memoryExtraction} />
+						{status.workloadBindings?.aggregateRecall && (
+							<RouteDecisionRow label="Aggregate recall" decision={report?.aggregateRecall} />
+						)}
+					</div>
+					{targets.length > 0 && (
+						<div className="mt-1.5 flex flex-wrap gap-1.5">
+							{targets.map(([ref, state]) => (
+								<span key={ref} className={cn("rounded bg-[color-mix(in_oklch,var(--foreground)_5%,transparent)] px-1.5 py-1 font-mono text-[9px]", state?.available ? "text-success" : "text-muted-foreground")}>
+									{state?.available ? "●" : "○"} {ref}
+								</span>
+							))}
+						</div>
+					)}
+					{issues.length > 0 && (
+						<div className="mt-1.5 flex flex-col gap-1 rounded-[var(--radius)] bg-[oklch(0.7_0.15_85/0.08)] px-2.5 py-2 font-mono text-[9.5px] text-[oklch(0.72_0.15_85)]">
+							{issues.map((issue) => <span key={`${issue.field}:${issue.ref}`}>{issue.severity}: {issue.message}</span>)}
+						</div>
+					)}
+				</>
+			) : (
+				<div className="px-2.5 pb-1 text-[11px] text-muted-foreground">{statusError ?? "Route status is unavailable. Check routes to read the daemon&apos;s effective configuration."}</div>
+			)}
+		</div>
+	);
+}
+
+function RouteMeta({ label, value }: { label: string; value: string }) {
+	return (
+		<div className="rounded-[var(--radius)] bg-[color-mix(in_oklch,var(--foreground)_3%,transparent)] px-2.5 py-1.5">
+			<div className="font-mono text-[8.5px] uppercase tracking-[0.06em] text-muted-foreground">{label}</div>
+			<div className="mt-0.5 truncate font-mono text-[10.5px] font-medium">{value}</div>
+		</div>
+	);
+}
+
+function RouteDecisionRow({ label, decision }: { label: string; decision: Awaited<ReturnType<typeof api.getInferenceDecision>> | undefined }) {
+	return (
+		<div className="flex items-center gap-2 rounded-[var(--radius)] px-2.5 py-1.5 text-[11px]">
+			{decision ? <CheckCircle className="size-3.5 shrink-0 text-success" /> : <TriangleAlert className="size-3.5 shrink-0 text-[oklch(0.75_0.14_75)]" />}
+			<span className="font-medium">{label}</span>
+			<span className="truncate font-mono text-[9.5px] text-muted-foreground">
+				{decision ? `${decision.targetRef} · ${decision.policyId}` : "not resolved — check routes"}
+			</span>
+		</div>
+	);
+}
+
 /** One model-assignment row group (backend + model + endpoint + optional key).
  * Logic ported from the Svelte InferenceSection's writeTarget — field clearing
  * keeps stale config from a prior selection from leaking into agent.yaml. */
@@ -490,19 +606,23 @@ function TargetEditor({
 				}
 			}
 		}
+		store.aUpdate(ensureInferenceRoute);
 		void store.save();
 	};
 
 	const setModel = (v: string) => {
 		store.aSetStr([...targetBase, "models", "default", "model"], v);
+		store.aUpdate(ensureInferenceRoute);
 		void store.save();
 	};
 	const setEndpoint = (v: string) => {
 		store.aSetStr([...targetBase, "endpoint"], v);
+		store.aUpdate(ensureInferenceRoute);
 		void store.save();
 	};
 	const setAcpxAgent = (v: string) => {
 		store.aSetStr([...targetBase, "acpx", "agent"], v);
+		store.aUpdate(ensureInferenceRoute);
 		void store.save();
 	};
 	const setApiKey = (v: string) => {
@@ -514,6 +634,7 @@ function TargetEditor({
 			store.aDel([...targetBase, "account"]);
 			store.aDel(accountBase);
 		}
+		store.aUpdate(ensureInferenceRoute);
 		void store.save();
 	};
 

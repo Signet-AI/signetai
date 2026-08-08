@@ -22,15 +22,31 @@ function authHeaders(): HeadersInit {
 }
 
 async function getJSON<T>(path: string, init?: RequestInit): Promise<T | null> {
+	return (await getJSONResult<T>(path, init)).data;
+}
+
+export interface ApiReadResult<T> {
+	readonly data: T | null;
+	readonly error: string | null;
+}
+
+async function getJSONResult<T>(path: string, init?: RequestInit): Promise<ApiReadResult<T>> {
 	try {
 		const res = await fetch(`${API_BASE}${path}`, {
 			...init,
 			headers: { Accept: "application/json", ...authHeaders(), ...(init?.headers ?? {}) },
 		});
-		if (!res.ok) return null;
-		return (await res.json()) as T;
+		const body = (await res.json().catch(() => null)) as { error?: unknown } | T | null;
+		if (!res.ok) {
+			const error =
+				typeof body === "object" && body !== null && "error" in body && typeof body.error === "string"
+					? body.error
+					: `request failed (${res.status})`;
+			return { data: null, error };
+		}
+		return { data: body as T, error: null };
 	} catch {
-		return null;
+		return { data: null, error: "request failed" };
 	}
 }
 
@@ -103,9 +119,30 @@ export interface InferenceCatalog {
 
 /** Subset of the inference router status the settings screens consume. */
 export interface InferenceStatus {
+	enabled?: boolean;
+	source?: string;
+	defaultPolicy?: string;
+	policies?: string[];
+	taskClasses?: string[];
+	targetRefs?: string[];
+	workloadBindings?: Record<string, string | undefined>;
+	configIssues?: Array<{ severity: "error" | "warning"; field: string; ref: string; message: string }>;
 	runtimeSnapshot?: {
 		targets?: Record<string, { available?: boolean; unavailableReason?: string } | undefined>;
 	};
+}
+
+export interface InferenceRouteDecision {
+	policyId: string;
+	mode: string;
+	taskClass: string;
+	targetRef: string;
+	fallbackTargetRefs: string[];
+}
+
+export interface InferenceProbeResult {
+	readonly text: string;
+	readonly decision?: InferenceRouteDecision;
 }
 
 export type OAuthLoginEvent =
@@ -745,6 +782,17 @@ export const api = {
 	},
 	getInferenceStatus: (refresh = false) =>
 		getJSON<InferenceStatus>(`/api/inference/status${refresh ? "?refresh=1" : ""}`),
+	getInferenceStatusDetailed: (refresh = false) =>
+		getJSONResult<InferenceStatus>(`/api/inference/status${refresh ? "?refresh=1" : ""}`),
+	getInferenceDecision: (body: { operation: string; refresh?: boolean }) =>
+		postJSON<InferenceRouteDecision>("/api/inference/explain", body),
+	executeInferenceProbe: (body: {
+		operation: string;
+		prompt: string;
+		maxTokens: number;
+		timeoutMs: number;
+		refresh: boolean;
+	}) => postJSON<InferenceProbeResult>("/api/inference/execute", body),
 
 	// Config files (settings: agent.yaml read/write)
 	getConfigFiles: async (): Promise<ConfigFile[]> => {
