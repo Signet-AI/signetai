@@ -313,7 +313,7 @@ export function resolveEmbeddingBaseUrl(cfg: EmbeddingConfig): string {
  * fallback still probes the user's configured llama.cpp base_url and only
  * falls back to the compiled default when it is empty (#1159).
  */
-function resolveLlamaCppFallbackBaseUrl(cfg: EmbeddingConfig): string {
+export function resolveLlamaCppFallbackBaseUrl(cfg: EmbeddingConfig): string {
 	return cfg.base_url.trim() || DEFAULT_LLAMACPP_BASE_URL;
 }
 

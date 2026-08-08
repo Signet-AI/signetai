@@ -12,6 +12,7 @@ import {
 	findLlamaCppEmbeddingModel,
 	resolveEmbeddingApiKey,
 	resolveEmbeddingBaseUrl,
+	resolveLlamaCppFallbackBaseUrl,
 	resolveOllamaUrl,
 	setNativeFallbackProvider,
 } from "../embedding-fetch";
@@ -963,7 +964,7 @@ export async function checkEmbeddingProvider(cfg: EmbeddingConfig): Promise<Embe
 				try {
 					let fallbackUsed = false;
 
-					const discoveredModel = await findLlamaCppEmbeddingModel();
+					const discoveredModel = await findLlamaCppEmbeddingModel(resolveLlamaCppFallbackBaseUrl(cfg));
 					if (discoveredModel) {
 						status.available = true;
 						status.dimensions = 768;
