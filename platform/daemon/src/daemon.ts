@@ -1752,6 +1752,7 @@ process.on("unhandledRejection", (reason) => {
 
 async function main() {
 	logger.info("daemon", "Signet Daemon starting");
+	logger.info("daemon", `File logging to ${logger.logFilePath}`);
 	logger.info("daemon", "Agents directory", { path: AGENTS_DIR });
 	logger.info("daemon", "Network configured", { port: PORT, host: HOST, bindHost: BIND_HOST });
 

@@ -174,14 +174,6 @@ export class Logger extends EventEmitter {
 		this.currentLogFile = this.getLogFileName();
 		this.ensureLogDir();
 		this.startFlushTimer();
-		// #1162: surface the resolved destination so a misconfigured log path
-		// is visible at startup instead of the daemon silently writing nowhere.
-		this.write({
-			timestamp: new Date().toISOString(),
-			level: "info",
-			category: "daemon",
-			message: `File logging to ${this.currentLogFile}`,
-		});
 	}
 
 	private ensureLogDir() {
@@ -202,6 +194,14 @@ export class Logger extends EventEmitter {
 		}
 		const date = new Date().toISOString().split("T")[0];
 		return join(this.config.logDir, `signet-${date}.log`);
+	}
+
+	// The resolved file destination, logged by the daemon at boot (#1162).
+	// Kept out of the constructor so module import has no file-write side
+	// effects (any process importing logger.ts would otherwise append to the
+	// daemon's log file).
+	get logFilePath(): string {
+		return this.currentLogFile;
 	}
 
 	private shouldLog(level: LogLevel): boolean {
@@ -312,22 +312,35 @@ export class Logger extends EventEmitter {
 		this.checkRotation();
 	}
 
-	private flush() {
+	private flush(force = false) {
 		if (this.buffer.length === 0) return;
 
-		const lines = `${this.buffer
-			.map((entry) => (this.config.jsonFormat ? this.formatJson(entry) : this.formatConsole(entry)))
-			.join("\n")}\n`;
-
-		if (!this.fileOutputEnabled) {
+		if (!this.fileOutputEnabled && !force) {
 			// A previous append failed. Retry periodically instead of disabling
 			// file logging forever, so a transient error (disk full, sync lock,
 			// moved directory) recovers without a daemon restart (#1162). The
 			// buffer is retained (bounded) so the retry re-appends the entries.
 			const backoffMs = this.config.flushRetryBackoffMs ?? 30_000;
-			if (Date.now() - this.lastFlushFailureAt < backoffMs) return;
+			if (Date.now() - this.lastFlushFailureAt < backoffMs) {
+				this.trimBuffer();
+				return;
+			}
 			console.error(`[logger] retrying file logging to ${this.currentLogFile}`);
 		}
+
+		this.appendBuffered();
+	}
+
+	private trimBuffer() {
+		if (this.buffer.length > Logger.MAX_BUFFERED_ENTRIES) {
+			this.buffer = this.buffer.slice(-Logger.MAX_BUFFERED_ENTRIES);
+		}
+	}
+
+	private appendBuffered() {
+		const lines = `${this.buffer
+			.map((entry) => (this.config.jsonFormat ? this.formatJson(entry) : this.formatConsole(entry)))
+			.join("\n")}\n`;
 
 		try {
 			// Check if date changed (new log file)
@@ -345,9 +358,7 @@ export class Logger extends EventEmitter {
 		} catch (e) {
 			this.fileOutputEnabled = false;
 			this.lastFlushFailureAt = Date.now();
-			if (this.buffer.length > Logger.MAX_BUFFERED_ENTRIES) {
-				this.buffer = this.buffer.slice(-Logger.MAX_BUFFERED_ENTRIES);
-			}
+			this.trimBuffer();
 			console.error(`Failed to write logs to ${this.currentLogFile}, disabling file logging (retrying):`, e);
 		}
 	}
@@ -583,7 +594,11 @@ export class Logger extends EventEmitter {
 
 	// Cleanup
 	shutdown() {
-		this.flush();
+		// Final best-effort flush. Bypass the retry backoff so the retained
+		// buffer survives a shutdown that lands inside the backoff window
+		// (e.g. SIGTERM shortly after a failed append) — otherwise the crash
+		// trail the retry exists to preserve is dropped on exit.
+		this.flush(true);
 		if (this.flushTimer) {
 			clearInterval(this.flushTimer);
 		}

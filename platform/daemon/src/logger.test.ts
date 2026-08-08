@@ -1,8 +1,8 @@
 import { describe, expect, it } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { Logger, resolveLoggerConfig } from "./logger";
+import { type LogEntry, Logger, resolveLoggerConfig } from "./logger";
 
 describe("logger config", () => {
 	it("uses SIGNET_PATH for the default daemon log directory", () => {
@@ -39,6 +39,23 @@ describe("logger config", () => {
 			logDir: join("/home/test", ".agents", ".daemon", "logs"),
 		});
 	});
+
+	it("exposes the resolved log file path for the daemon boot line (#1162)", () => {
+		const root = mkdtempSync(join(tmpdir(), "signet-logger-"));
+		try {
+			const log = new Logger({
+				logDir: root,
+				consoleOutput: false,
+				jsonFormat: false,
+				level: "info",
+			});
+			const today = new Date().toISOString().split("T")[0];
+			expect(log.logFilePath).toBe(join(root, `signet-${today}.log`));
+			log.shutdown();
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
 });
 
 // Regression for issue #1148: the daemon exit path calls logger.shutdown()
@@ -67,16 +84,23 @@ describe("logger shutdown flush", () => {
 		}
 	});
 
-	it("logs the resolved log file path at startup (#1162)", () => {
+	it("does not create the log file until the first flush (#1180)", () => {
 		const root = mkdtempSync(join(tmpdir(), "signet-logger-"));
 		try {
-			const log = new Logger({ logDir: root, consoleOutput: false, jsonFormat: false, level: "info" });
-			log.shutdown();
+			const log = new Logger({
+				logDir: root,
+				consoleOutput: false,
+				jsonFormat: false,
+				level: "info",
+			});
 			const today = new Date().toISOString().split("T")[0];
-			const expected = join(root, `signet-${today}.log`);
-			const content = readFileSync(expected, "utf-8");
-			expect(content).toContain("File logging to");
-			expect(content).toContain(expected);
+			const logPath = join(root, `signet-${today}.log`);
+			// Regression for the #1180 review finding: the constructor used
+			// to write a startup line, so any process importing logger.ts
+			// (tests, CLI, MCP) appended to the daemon's log file at import.
+			expect(existsSync(logPath)).toBe(false);
+			log.shutdown();
+			expect(existsSync(logPath)).toBe(false);
 		} finally {
 			rmSync(root, { recursive: true, force: true });
 		}
@@ -112,6 +136,66 @@ describe("logger shutdown flush", () => {
 			const content = readFileSync(logPath, "utf-8");
 			expect(content).toContain("before failure");
 			expect(content).toContain("after recovery");
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("flushes the retained buffer on shutdown even inside the retry backoff (#1180)", async () => {
+		const root = mkdtempSync(join(tmpdir(), "signet-logger-"));
+		try {
+			const blocker = join(root, "blocker");
+			writeFileSync(blocker, "i am a file, not a directory");
+			const logPath = join(blocker, "logs", "signet.log");
+			const log = new Logger({
+				logFilePath: logPath,
+				logDir: dirname(logPath),
+				consoleOutput: false,
+				jsonFormat: false,
+				level: "info",
+				flushRetryBackoffMs: 60_000, // long backoff: no timer retry can fire
+			});
+			log.info("daemon", "crash trail entry");
+			// Let the 1s flush timer fail the append once.
+			await new Promise((resolve) => setTimeout(resolve, 1100));
+			// Disk recovers, but the next timer retry is 60s away. A SIGTERM
+			// here must not drop the retained buffer (the #1148 crash-trail
+			// failure class): shutdown() force-flushes past the backoff gate.
+			rmSync(blocker, { force: true });
+			mkdirSync(dirname(logPath), { recursive: true });
+			log.shutdown();
+			const content = readFileSync(logPath, "utf-8");
+			expect(content).toContain("crash trail entry");
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("caps the retained buffer during the retry backoff window (#1180)", async () => {
+		const root = mkdtempSync(join(tmpdir(), "signet-logger-"));
+		try {
+			const blocker = join(root, "blocker");
+			writeFileSync(blocker, "i am a file, not a directory");
+			const log = new Logger({
+				logFilePath: join(blocker, "logs", "signet.log"),
+				logDir: join(blocker, "logs"),
+				consoleOutput: false,
+				jsonFormat: false,
+				level: "info",
+				flushRetryBackoffMs: 60_000,
+			});
+			log.info("daemon", "first entry");
+			// First append fails; the retry gate then holds the buffer.
+			await new Promise((resolve) => setTimeout(resolve, 1100));
+			for (let i = 0; i < 5000; i++) {
+				log.info("daemon", `entry ${i}`);
+			}
+			// The next flush tick must trim to the cap even though it cannot
+			// append yet (it is inside the backoff window).
+			await new Promise((resolve) => setTimeout(resolve, 1100));
+			const buffered = (log as unknown as { buffer: LogEntry[] }).buffer;
+			expect(buffered.length).toBeLessThanOrEqual(2000);
+			log.shutdown();
 		} finally {
 			rmSync(root, { recursive: true, force: true });
 		}
