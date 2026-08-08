@@ -27,6 +27,14 @@ describe("dataless / EDEADLK native artifact reads (#1161)", () => {
 		expect(isDatalessReadError("read error EIO on iosurface")).toBe(true);
 		expect(isDatalessReadError("EACCES: permission denied")).toBe(false);
 		expect(isDatalessReadError("ENOENT: no such file")).toBe(false);
+		// The errno code is authoritative, and an ordinary failure on a path
+		// containing "eio" must not be misclassified as dataless (#1161).
+		expect(
+			isDatalessReadError(
+				Object.assign(new Error("EACCES: permission denied, open '/vault/veio/note.md'"), { code: "EACCES" }),
+			),
+		).toBe(false);
+		expect(isDatalessReadError(Object.assign(new Error("deadlock"), { code: "EDEADLK" }))).toBe(true);
 	});
 
 	it("backs off after an EDEADLK read and logs one consolidated warning for the batch", async () => {

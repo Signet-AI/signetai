@@ -117,8 +117,18 @@ const readFailureBackoffUntil = new Map<string, number>();
 const DATALESS_WARN_INTERVAL_MS = 60_000;
 const datalessReadFailuresByHarness = new Map<string, { count: number; lastLoggedAt: number }>();
 
-export function isDatalessReadError(message: string): boolean {
-	return /EDEADLK|EIO/.test(message);
+export function isDatalessReadError(err: unknown): boolean {
+	// The errno code is authoritative. Message matching is only a fallback
+	// for errors that carry no code: node embeds the file path in the
+	// message, and a path containing "eio" (e.g. "veio", "deionized")
+	// would misclassify an ordinary EACCES as dataless and silently drop
+	// its per-file diagnostic.
+	if (typeof err === "object" && err !== null) {
+		const code = (err as NodeJS.ErrnoException).code;
+		if (code === "EDEADLK" || code === "EIO") return true;
+	}
+	const message = err instanceof Error ? err.message : String(err);
+	return /\b(?:EDEADLK|EIO)\b/.test(message);
 }
 
 function isEnoentError(err: unknown): boolean {
@@ -551,7 +561,7 @@ export async function indexNativeMemoryFile(
 		// being re-attempted on every scan iteration.
 		readFailureBackoffUntil.set(key, Date.now() + READ_FAILURE_BACKOFF_MS);
 		const failureMessage = err instanceof Error ? err.message : String(err);
-		if (isDatalessReadError(failureMessage)) {
+		if (isDatalessReadError(err)) {
 			// Dataless/locked-file reads consolidate into a single warning
 			// per harness per window; the files are skipped (with backoff)
 			// until the OS materializes them.
