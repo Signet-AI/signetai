@@ -1815,4 +1815,17 @@ describe("migration framework", () => {
 			expect.arrayContaining(["evidence_window_json", "runbook_json"]),
 		);
 	});
+	test("migration 110 adds the memory_entity_mentions entity-side composite index (#1158)", () => {
+		db = createFreshDb();
+		runMigrations(db);
+
+		const indexes = db.query("PRAGMA index_list(memory_entity_mentions)").all() as Array<{ name: string }>;
+		expect(indexes.map((row) => row.name)).toContain("idx_memory_entity_mentions_entity_memory");
+
+		// The composite drives entity-side joins and covers both columns.
+		const columns = db.query("PRAGMA index_info(idx_memory_entity_mentions_entity_memory)").all() as Array<{
+			name: string;
+		}>;
+		expect(columns.map((row) => row.name)).toEqual(["entity_id", "memory_id"]);
+	});
 });

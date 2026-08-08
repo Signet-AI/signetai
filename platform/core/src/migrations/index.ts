@@ -115,6 +115,7 @@ import { up as memoryReviewAfter } from "./106-memory-review-after";
 import { up as dreamingPassUsage } from "./107-dreaming-pass-usage";
 import { up as embeddingUsage } from "./108-embedding-usage";
 import { up as telemetryInstall } from "./109-telemetry-install";
+import { up as memoryMentionJoinIndex } from "./110-memory-mention-join-index";
 
 // -- Public interface consumed by Database.init() --
 
@@ -1018,6 +1019,11 @@ export const MIGRATIONS: readonly Migration[] = [
 		artifacts: {
 			tables: ["telemetry_install"],
 		},
+	},
+	{
+		version: 110,
+		name: "memory-mention-join-index",
+		up: memoryMentionJoinIndex,
 	},
 ];
 
