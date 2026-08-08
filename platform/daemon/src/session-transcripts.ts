@@ -545,17 +545,49 @@ export interface StaleLiveSession {
 	lastActivityAt: string;
 }
 
+/** Minimum content length to bother firing session-end (matches handleSessionEnd). */
+const MIN_SWEEP_TRANSCRIPT_CHARS = 500;
+
+function summaryJobsTableExists(): boolean {
+	try {
+		return getDbAccessor().withReadDb((db) => tableExistsIn(db, "summary_jobs"));
+	} catch {
+		return false;
+	}
+}
+
 /**
  * Live-retained sessions whose last activity is older than `staleOlderThanMs`
  * (#1172). Desktop/CLI chats that end without an explicit session-end signal
  * (closed windows, abandoned sessions) stay in `session_transcripts` forever;
  * this is the daemon-side fallback that surfaces them so the sweep can fire
  * the deferred session-end.
+ *
+ * Filters:
+ * - Content shorter than 500 chars is excluded — handleSessionEnd skips
+ *   summaries below that threshold, so sweeping them would create no dedup
+ *   marker and re-fire every TTL cycle.
+ * - Sessions that already have a summary job (pending / processing /
+ *   completed) are excluded in-SQL so they never enter the LIMIT window.
+ *   Without this, a backlog of already-ended sessions permanently blocks
+ *   unprocessed ones behind the limit (the dedup-skip path in the sweep
+ *   loop does not refresh updated_at, so those sessions stay at the head
+ *   of the oldest-first ordering).
+ * - Uses `updated_at` directly (not COALESCE) when the column exists, so
+ *   the existing index `idx_st_agent_updated` can drive the scan.
  */
 export function findStaleLiveSessions(staleOlderThanMs: number, limit = 50): StaleLiveSession[] {
 	if (staleOlderThanMs <= 0 || !tableExists("session_transcripts")) return [];
 	const cutoff = new Date(Date.now() - staleOlderThanMs).toISOString();
-	const lastActivity = hasUpdatedAt() ? "COALESCE(updated_at, created_at)" : "created_at";
+	const lastActivity = hasUpdatedAt() ? "updated_at" : "created_at";
+	const dedupClause = summaryJobsTableExists()
+		? `AND NOT EXISTS (
+				SELECT 1 FROM summary_jobs sj
+				WHERE sj.agent_id = session_transcripts.agent_id
+				  AND sj.session_key = session_transcripts.session_key
+				  AND sj.status IN ('pending', 'processing', 'completed')
+			)`
+		: "";
 	try {
 		return getDbAccessor().withReadDb((db) => {
 			const rows = db
@@ -563,10 +595,12 @@ export function findStaleLiveSessions(staleOlderThanMs: number, limit = 50): Sta
 					`SELECT session_key, agent_id, harness, project, content, ${lastActivity} AS last_activity
 					 FROM session_transcripts
 					 WHERE ${lastActivity} < ?
+					   AND length(content) >= ?
+					   ${dedupClause}
 					 ORDER BY ${lastActivity} ASC
 					 LIMIT ?`,
 				)
-				.all(cutoff, limit) as Array<{
+				.all(cutoff, MIN_SWEEP_TRANSCRIPT_CHARS, limit) as Array<{
 				session_key: string;
 				agent_id: string;
 				harness: string | null;

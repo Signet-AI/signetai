@@ -3025,7 +3025,7 @@ describe("handleSessionStart multi-agent identity", () => {
 			// A live chat: last activity now — must not be swept.
 			upsertSessionTranscript(freshKey, freshContent, "hermes-agent", null, "default", new Date(now).toISOString());
 			// A stale chat whose content already has a summary job: the session-end
-			// already ran — must be skipped, never re-fired.
+			// already ran — filtered out in SQL, never enters the LIMIT window.
 			upsertSessionTranscript(
 				doneKey,
 				doneContent,
@@ -3058,10 +3058,10 @@ describe("handleSessionStart multi-agent identity", () => {
 
 			const result = await hooks.sweepStaleSessions({ staleOlderThanMs: 24 * 60 * 60 * 1000 });
 
-			// stale closed, done skipped (already summarized), fresh not matched.
+			// stale closed; done filtered in SQL (not in totalMatching); fresh not matched.
 			expect(result.closed).toBe(1);
-			expect(result.skipped).toBe(1);
-			expect(result.totalMatching).toBe(2);
+			expect(result.skipped).toBe(0);
+			expect(result.totalMatching).toBe(1);
 
 			// The stale session got a real session-end: a summary job was queued
 			// for its content; the fresh session got none.
