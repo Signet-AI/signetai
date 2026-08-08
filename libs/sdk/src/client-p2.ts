@@ -110,6 +110,7 @@ export class SignetClientP2 {
 		readonly sessionId?: string;
 		readonly agentId?: string;
 		readonly capturedAt?: string;
+		readonly reason?: string;
 	}): Promise<SessionEndResponse> {
 		return this.transport.post<SessionEndResponse>("/api/hooks/session-end", opts);
 	}

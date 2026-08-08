@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Hono } from "hono";
 import { __setPromptSubmitAdmissionForTests, createPromptSubmitAdmission } from "./routes/hooks-routes";
+import { resetSessionEndTelemetry } from "./session-end-state";
+import { createTelemetryCollector, setActiveTelemetry } from "./telemetry";
 
 let app: Hono;
 let dir = "";
@@ -115,6 +117,66 @@ memory:
 		expect(body.memories).toEqual(body.results);
 		expect(body.count).toBe(body.results.length);
 		expect(body.message).toBe("No matching memories found.");
+	});
+
+	it("records session.deleted as one real session.end at the route boundary", async () => {
+		if (!getDbAccessor) throw new Error("db accessor unavailable");
+		const collector = createTelemetryCollector(
+			getDbAccessor(),
+			{
+				posthogHost: "",
+				posthogApiKey: "test-key",
+				flushIntervalMs: 60000,
+				flushBatchSize: 50,
+				retentionDays: 90,
+				memorySearchQaEnabled: false,
+			},
+			"0.0.0-test",
+		);
+		setActiveTelemetry(collector);
+		resetSessionEndTelemetry();
+		try {
+			const sessionKey = "opencode-route-boundary";
+			const headers = { "Content-Type": "application/json" };
+			const start = await app.request("/api/hooks/session-start", {
+				method: "POST",
+				headers,
+				body: JSON.stringify({ harness: "opencode", sessionKey }),
+			});
+			expect(start.status).toBe(200);
+
+			const end = await app.request("/api/hooks/session-end", {
+				method: "POST",
+				headers,
+				body: JSON.stringify({ harness: "opencode", sessionKey, reason: "session.deleted" }),
+			});
+			expect(end.status).toBe(200);
+
+			const duplicate = await app.request("/api/hooks/session-end", {
+				method: "POST",
+				headers,
+				body: JSON.stringify({ harness: "opencode", sessionKey, reason: "session.deleted" }),
+			});
+			expect(duplicate.status).toBe(200);
+
+			await collector.flush();
+			const ends = collector.query().filter((event) => event.event === "session.end");
+			expect(ends).toHaveLength(1);
+			expect(ends[0]?.properties.reason).toBe("session.deleted");
+		} finally {
+			setActiveTelemetry(undefined);
+			resetSessionEndTelemetry();
+		}
+	});
+
+	it("treats a non-string session-end reason as a non-boundary call", async () => {
+		const resp = await app.request("/api/hooks/session-end", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ harness: "opencode", sessionKey: "malformed-reason", reason: 123 }),
+		});
+
+		expect(resp.status).toBe(200);
 	});
 
 	it("rejects requests missing harness", async () => {

@@ -2302,13 +2302,12 @@ memory:
 	});
 
 	// ------------------------------------------------------------------
-	// #1212 — session.end telemetry fired per session-end hook call,
-	// inflating the counter ~9x vs dedup'd session.start. The per-turn
-	// event is now session.turn; session.end fires only at real session
-	// boundaries (explicit clear or TTL eviction), once per lifetime.
+	// #1212/#1231 — session.end telemetry must not fire per session-end hook
+	// call, but explicit lifecycle reasons are real boundaries. The per-turn
+	// event is session.turn; session.end is once per lifetime.
 	// ------------------------------------------------------------------
 
-	test.serial("session-end hook calls emit session.turn, never session.end (#1212)", async () => {
+	test.serial("non-boundary session-end calls emit session.turn (#1212/#1231)", async () => {
 		createMemoryDb([]);
 		ensureTelemetryTables();
 		const collector = createTelemetryCollector(getDbAccessor(), TEST_TELEMETRY_CONFIG, "0.0.0-test");
@@ -2316,7 +2315,7 @@ memory:
 		try {
 			await handleSessionEnd({ harness: "test", sessionKey: "sess-turn-a" });
 			await handleSessionEnd({ harness: "test", sessionKey: "sess-turn-a" });
-			await handleSessionEnd({ harness: "test", sessionKey: "sess-turn-b" });
+			await handleSessionEnd({ harness: "test", sessionKey: "sess-turn-b", reason: "session.idle" });
 			await collector.flush();
 
 			const turns = collector.query().filter((e) => e.event === "session.turn");
@@ -2325,6 +2324,31 @@ memory:
 			expect(ends).toHaveLength(0);
 			expect(turns[0]?.properties.harness).toBe("test");
 			expect(typeof turns[0]?.properties.sessionHash).toBe("string");
+		} finally {
+			setActiveTelemetry(undefined);
+			resetSessionEndTelemetry();
+		}
+	});
+
+	test.serial("explicit lifecycle reasons emit one session.end per boundary (#1231)", async () => {
+		createMemoryDb([]);
+		ensureTelemetryTables();
+		const collector = createTelemetryCollector(getDbAccessor(), TEST_TELEMETRY_CONFIG, "0.0.0-test");
+		setActiveTelemetry(collector);
+		try {
+			const reasons = ["session.deleted", "session_branch", "session_fork", "session_shutdown", "session_switch"];
+			const inputs = [" SESSION.DELETED ", ...reasons.slice(1)];
+			for (const [index, reason] of inputs.entries()) {
+				await handleSessionEnd({ harness: "test", sessionKey: `sess-boundary-${index}`, reason });
+			}
+			await handleSessionEnd({ harness: "test", sessionKey: "sess-boundary-0", reason: "session.deleted" });
+			await collector.flush();
+
+			const ends = collector.query().filter((e) => e.event === "session.end");
+			const turns = collector.query().filter((e) => e.event === "session.turn");
+			expect(ends).toHaveLength(reasons.length);
+			expect(ends.map((event) => event.properties.reason).sort()).toEqual([...reasons].sort());
+			expect(turns).toHaveLength(0);
 		} finally {
 			setActiveTelemetry(undefined);
 			resetSessionEndTelemetry();

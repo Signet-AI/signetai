@@ -102,6 +102,7 @@ import {
 	hasSessionEndTelemetry,
 	hashSessionKey,
 	markSessionEndTelemetry,
+	normalizeSessionBoundaryReason,
 	pruneSessionEndTelemetry,
 } from "./session-end-state";
 import {
@@ -1748,6 +1749,7 @@ export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionE
 	const agentId = resolveAgentId({ agentId: req.agentId, sessionKey: req.sessionKey || req.sessionId });
 	ensureAgentRegistered(agentId);
 	const endedAt = req.capturedAt ?? new Date().toISOString();
+	const boundaryReason = normalizeSessionBoundaryReason(req.reason);
 
 	// Keep session-start dedup across normal Stop/session-end hooks. Codex can
 	// emit Stop between turns and then emit SessionStart again when an idle
@@ -1763,7 +1765,7 @@ export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionE
 		});
 	}
 
-	if (req.reason === "clear") {
+	if (boundaryReason === "clear") {
 		// Caller intends to discard session context — skip checkpoint, just clean up
 		clearSessionStartDedupe(req);
 		clearRawSessionStartDedupeKey(sessionKey);
@@ -1797,12 +1799,25 @@ export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionE
 	// this hook per turn (Stop/session.idle) to persist messages, so this
 	// is a "turns persisted" volume counter — not a session boundary.
 	// Real session termination is emitted separately as session.end on
-	// explicit clear or TTL eviction (#1212).
-	getActiveTelemetry()?.record("session.turn", {
-		harness: req.harness,
-		promptCount: snap?.totalPromptCount ?? null,
-		sessionHash: hashSessionKey(sessionKey),
-	});
+	// explicit lifecycle reasons or TTL eviction (#1212/#1231).
+	if (boundaryReason !== null) {
+		// Explicit lifecycle signals are real session boundaries, unlike the
+		// per-turn Stop/session.idle calls that also use this hook (#1231).
+		if (!hasSessionEndTelemetry({ agentId, harness: req.harness, sessionKey })) {
+			getActiveTelemetry()?.record("session.end", {
+				harness: req.harness,
+				reason: boundaryReason,
+				sessionHash: hashSessionKey(sessionKey),
+			});
+			markSessionEndTelemetry({ agentId, harness: req.harness, sessionKey });
+		}
+	} else {
+		getActiveTelemetry()?.record("session.turn", {
+			harness: req.harness,
+			promptCount: snap?.totalPromptCount ?? null,
+			sessionHash: hashSessionKey(sessionKey),
+		});
+	}
 	if (snap && snap.totalPromptCount > 0) {
 		try {
 			const cfg = loadMemoryConfig(getAgentsDir()).pipelineV2.continuity;

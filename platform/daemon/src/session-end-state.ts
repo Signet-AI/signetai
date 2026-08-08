@@ -12,6 +12,14 @@ import { resolveAgentId } from "./agent-id";
 
 const sessionEndSeen = new Map<string, number>();
 const SESSION_END_SEEN_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const SESSION_BOUNDARY_REASONS = new Set([
+	"clear",
+	"session.deleted",
+	"session_branch",
+	"session_fork",
+	"session_shutdown",
+	"session_switch",
+]);
 
 export type SessionEndIdentity = {
 	readonly harness?: string;
@@ -19,6 +27,13 @@ export type SessionEndIdentity = {
 	readonly sessionKey?: string;
 	readonly sessionId?: string;
 };
+
+/** Return the canonical boundary reason, or null for ordinary hook calls. */
+export function normalizeSessionBoundaryReason(reason: unknown): string | null {
+	if (typeof reason !== "string") return null;
+	const normalized = reason.trim().toLowerCase();
+	return SESSION_BOUNDARY_REASONS.has(normalized) ? normalized : null;
+}
 
 /**
  * Normalize a session key: trim and strip the "session:" prefix harnesses

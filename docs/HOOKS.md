@@ -27,6 +27,38 @@ Hooks are HTTP endpoints exposed by the Signet [[daemon]]. Harnesses call them a
 
 ---
 
+## Session-end Boundary Reasons
+
+**`POST /api/hooks/session-end`** accepts an optional `reason` field. Harnesses
+must send an explicit lifecycle reason when the request represents a real
+session boundary:
+
+| Reason | Boundary |
+|--------|----------|
+| `clear` | The caller discards the current session context |
+| `session.deleted` | OpenCode deleted the session |
+| `session_branch` | Oh My Pi forked the current session |
+| `session_fork` | pi forked the current session |
+| `session_shutdown` | pi shut down the current session |
+| `session_switch` | pi switched to another session |
+
+These reasons emit one anonymous `session.end` telemetry event per session
+lifetime. Repeated end requests for the same session are deduplicated.
+
+Requests without a recognized boundary reason, including ordinary
+`session.idle` calls, emit `session.turn` telemetry instead. They still persist
+the transcript and queue normal session-end processing.
+
+```json
+{
+  "harness": "opencode",
+  "sessionKey": "session-identifier",
+  "reason": "session.deleted"
+}
+```
+
+---
+
 ## Per-Session Bypass
 
 Bypass silences all Signet hooks for a single session without stopping the
