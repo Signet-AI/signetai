@@ -59,6 +59,7 @@ PostHog failures, and never throws into the daemon.
 | `llm.generate` | every LLM call | `provider`, `latencyMs`, `success`, `inputTokens`, `outputTokens`, `cacheReadTokens`, `cacheCreationTokens`, `totalCost` |
 | `pipeline.embedding` | every embedding fetch, at the usage-recording boundary | `tokens`, `provider`, `sourceKind` (`memory-capture` / `artifact-index` / `recall` / `dreaming` / `other`) |
 | `recall.performed` | every completed shared recall search | `type` (`semantic` / `keyword` / `temporal` / `graph`), `results`, `latencyMs`, `truncated` |
+| `pipeline.error` | categorized extraction, decision, or embedding failure | `stage`, `code` only; no message or stack content |
 | `dreaming.pass` | completed agentic dreaming pass (early-exit passes emit nothing) | `mode`, `tokensInput`, `tokensOutput`, `tokensCacheRead`, `tokensCacheWrite`, `cost` |
 | `inference.route` | inference control-plane routing decision | `surface`, `agentId`, `operation`, `taskClass`, `policyId`, `selectedTarget`, `candidateCount`, `blockedCount`, `allowedCount`, `privacy`, `durationMs`, `success`, `errorCode` |
 | `inference.execute` / `inference.stream` | per-execution outcome | `surface`, `agentId`, `operation`, `taskClass`, `policyId`, `selectedTarget`, `finalTarget`, `attemptPath`, `failedTargets`, `attemptCount`, `failedCount`, `fallbackCount`, `privacy`, `durationMs`, `inputTokens`, `outputTokens`, `success`, `cancelled`, `errorCode` |
@@ -67,9 +68,8 @@ PostHog failures, and never throws into the daemon.
 | `version.upgraded` | daemon auto-update path only | `from`, `to` |
 | `command.invoked` | CLI command (name only, never arguments) | `command` |
 
-Declared but **not yet emitted**: `pipeline.extraction`, `pipeline.decision`,
-`pipeline.error` (issue #1205 covers firing `pipeline.error`). Docs must not
-claim them.
+Declared but **not yet emitted**: `pipeline.extraction` and
+`pipeline.decision`.
 
 Notes on individual events:
 

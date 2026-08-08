@@ -10,6 +10,7 @@ import {
 	DEFAULT_OLLAMA_BASE_URL,
 	DEFAULT_OPENAI_BASE_URL,
 } from "./memory-config";
+import { isPipelineTimeout, recordPipelineError } from "./pipeline-error";
 import { countTokens, truncateToTokens } from "./pipeline/tokenizer";
 import { getSecret } from "./secrets.js";
 
@@ -371,6 +372,9 @@ export async function fetchEmbedding(
 	const formattedText = formatEmbeddingInput(text, effectiveCfg, role);
 	try {
 		const serve = await serveEmbedding(formattedText, effectiveCfg, opts);
+		if (serve.embedding === null) {
+			recordPipelineError("embedding", "EMBEDDING_PROVIDER_DOWN");
+		}
 		if (serve.embedding !== null && serve.provider !== null) {
 			recordEmbeddingUsage({
 				provider: serve.provider,
@@ -381,6 +385,7 @@ export async function fetchEmbedding(
 		}
 		return serve.embedding;
 	} catch (e) {
+		recordPipelineError("embedding", isPipelineTimeout(e) ? "EMBEDDING_TIMEOUT" : "EMBEDDING_PROVIDER_DOWN");
 		logger.warn("embedding", "Embedding fetch error", {
 			provider: effectiveCfg.provider,
 			model: effectiveCfg.model,

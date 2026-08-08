@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import type { DreamingConfig } from "@signet/core";
 import { runMigrations } from "../../../core/src/migrations";
 import type { DbAccessor } from "../db-accessor";
+import { type TelemetryCollector, type TelemetryEvent, setActiveTelemetry } from "../telemetry";
 import {
 	DREAMING_AGENT_PROMPT,
 	DREAMING_CONTENT_AGENT_PROMPT,
@@ -66,6 +67,23 @@ function wrapDb(db: Database): DbAccessor {
 	} as unknown as DbAccessor;
 }
 
+function captureTelemetry(): { readonly collector: TelemetryCollector; readonly events: TelemetryEvent[] } {
+	const events: TelemetryEvent[] = [];
+	const collector: TelemetryCollector = {
+		enabled: true,
+		record(event, properties): void {
+			events.push({ id: "test", event, timestamp: "2026-01-01T00:00:00.000Z", properties });
+		},
+		async flush(): Promise<void> {},
+		start(): void {},
+		async stop(): Promise<void> {},
+		query(): readonly TelemetryEvent[] {
+			return events;
+		},
+	};
+	return { collector, events };
+}
+
 function seedSummary(db: Database, id: string, content: string, tokens: number): void {
 	db.prepare(
 		`INSERT INTO session_summaries
@@ -84,7 +102,10 @@ describe("Dreaming", () => {
 		accessor = wrapDb(db);
 	});
 
-	afterEach(() => db.close());
+	afterEach(() => {
+		setActiveTelemetry(undefined);
+		db.close();
+	});
 
 	it("round-trips only canonical episodic cursor kinds", () => {
 		for (const kind of ["memory", "artifact", "transcript", "summary"] as const) {
@@ -480,6 +501,8 @@ describe("Dreaming", () => {
 	});
 
 	it("keeps semantic attention pending when its pass fails", async () => {
+		const telemetry = captureTelemetry();
+		setActiveTelemetry(telemetry.collector);
 		accessor.withWriteTx((tx) => {
 			enqueueDreamingAttentionInTx(tx, {
 				agentId: AGENT,
@@ -504,6 +527,12 @@ describe("Dreaming", () => {
 				"incremental",
 			),
 		).rejects.toThrow("provider unavailable");
+		expect(telemetry.events).toContainEqual(
+			expect.objectContaining({
+				event: "pipeline.error",
+				properties: { stage: "decision", code: "DECISION_INVALID" },
+			}),
+		);
 		expect(getDreamingAttention(accessor, AGENT)).toContainEqual(
 			expect.objectContaining({ kind: "contested_claim", subjectRef: "claim:aster:owner" }),
 		);

@@ -235,7 +235,13 @@ Aggregated telemetry statistics since daemon start or since a given timestamp.
       { "type": "semantic", "calls": 50 }
     ]
   },
-  "pipelineErrors": 3
+  "pipelineErrors": 3,
+  "pipelineErrorsByStage": { "extraction": 1, "decision": 1, "embedding": 1 },
+  "pipelineErrorsByCode": {
+    "EXTRACTION_PARSE_FAIL": 1,
+    "DECISION_TIMEOUT": 1,
+    "EMBEDDING_PROVIDER_DOWN": 1
+  }
 }
 ```
 

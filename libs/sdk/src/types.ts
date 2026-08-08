@@ -484,6 +484,8 @@ export interface TelemetryStatsEnabledResponse {
 		readonly p95: number;
 	};
 	readonly pipelineErrors: number;
+	readonly pipelineErrorsByStage: Readonly<Record<string, number>>;
+	readonly pipelineErrorsByCode: Readonly<Record<string, number>>;
 }
 
 export type TelemetryStatsResponse = TelemetryStatsDisabledResponse | TelemetryStatsEnabledResponse;

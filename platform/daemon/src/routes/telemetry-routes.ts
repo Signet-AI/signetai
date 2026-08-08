@@ -202,6 +202,8 @@ export function registerTelemetryRoutes(app: Hono): void {
 		let llmCalls = 0;
 		let llmErrors = 0;
 		let pipelineErrors = 0;
+		const pipelineErrorsByStage = new Map<string, number>();
+		const pipelineErrorsByCode = new Map<string, number>();
 		let embeddingCalls = 0;
 		let embeddingTokens = 0;
 		const embeddingBySource = new Map<string, number>();
@@ -243,7 +245,15 @@ export function registerTelemetryRoutes(app: Hono): void {
 				if (typeof e.properties.tokensCacheWrite === "number") dreamingCacheWrite += e.properties.tokensCacheWrite;
 				if (typeof e.properties.cost === "number") dreamingCost += e.properties.cost;
 			}
-			if (e.event === "pipeline.error") pipelineErrors++;
+			if (e.event === "pipeline.error") {
+				pipelineErrors++;
+				if (typeof e.properties.stage === "string") {
+					pipelineErrorsByStage.set(e.properties.stage, (pipelineErrorsByStage.get(e.properties.stage) ?? 0) + 1);
+				}
+				if (typeof e.properties.code === "string") {
+					pipelineErrorsByCode.set(e.properties.code, (pipelineErrorsByCode.get(e.properties.code) ?? 0) + 1);
+				}
+			}
 			if (e.event === "recall.performed") {
 				recallCalls++;
 				if (typeof e.properties.latencyMs === "number") recallLatencies.push(e.properties.latencyMs);
@@ -288,6 +298,8 @@ export function registerTelemetryRoutes(app: Hono): void {
 					.sort((a, b) => a.type.localeCompare(b.type)),
 			},
 			pipelineErrors,
+			pipelineErrorsByStage: Object.fromEntries(pipelineErrorsByStage),
+			pipelineErrorsByCode: Object.fromEntries(pipelineErrorsByCode),
 		});
 	});
 

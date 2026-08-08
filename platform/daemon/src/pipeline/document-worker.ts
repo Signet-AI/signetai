@@ -17,6 +17,7 @@ import { isActiveEmbeddingConfig } from "../embedding-index-state";
 import type { EmbeddingRole } from "../embedding-profile";
 import { logger } from "../logger";
 import type { EmbeddingConfig, PipelineV2Config } from "../memory-config";
+import { isPipelineTimeout, recordPipelineError } from "../pipeline-error";
 import { isSystemPressureHigh } from "../system-pressure";
 import { txIngestEnvelope } from "../transactions";
 import { fetchUrlContent } from "./url-fetcher";
@@ -241,14 +242,19 @@ async function processDocument(deps: DocumentWorkerDeps, job: DocumentJobRow): P
 	let content: string;
 	let title = doc.title;
 
-	if (doc.source_type === "url" && doc.source_url) {
-		const result = await fetchUrlContent(doc.source_url, {
-			maxBytes: pipelineCfg.documents.maxContentBytes,
-		});
-		content = result.content;
-		if (result.title && !title) title = result.title;
-	} else {
-		content = doc.raw_content ?? "";
+	try {
+		if (doc.source_type === "url" && doc.source_url) {
+			const result = await fetchUrlContent(doc.source_url, {
+				maxBytes: pipelineCfg.documents.maxContentBytes,
+			});
+			content = result.content;
+			if (result.title && !title) title = result.title;
+		} else {
+			content = doc.raw_content ?? "";
+		}
+	} catch (err) {
+		recordPipelineError("extraction", isPipelineTimeout(err) ? "EXTRACTION_TIMEOUT" : "EXTRACTION_PARSE_FAIL");
+		throw err;
 	}
 
 	let deletedAfterExtraction = false;
@@ -261,6 +267,7 @@ async function processDocument(deps: DocumentWorkerDeps, job: DocumentJobRow): P
 	if (deletedAfterExtraction) return;
 
 	if (content.length === 0) {
+		recordPipelineError("extraction", "EXTRACTION_PARSE_FAIL");
 		accessor.withWriteTx((db) => {
 			if (isDocumentDeleted(db, docId)) {
 				completeJob(db, job.id);

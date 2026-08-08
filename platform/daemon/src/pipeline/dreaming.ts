@@ -30,6 +30,7 @@ import {
 import { type GraphHygieneCaps, getDreamingHygieneCandidatesInDb } from "../knowledge-graph-hygiene";
 import { logger } from "../logger";
 import type { GraphWriteCaps } from "../ontology-proposals";
+import { isPipelineTimeout, recordPipelineError } from "../pipeline-error";
 import { getActiveTelemetry } from "../telemetry";
 import { createDreamingAgentTools } from "./dreaming-agent-tools";
 import {
@@ -1122,6 +1123,7 @@ export async function runDreamingAgentPass(
 		return { passId, applied, skipped: 0, failed, summary };
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
+		recordPipelineError("decision", isPipelineTimeout(error) ? "DECISION_TIMEOUT" : "DECISION_INVALID");
 		logger.error("dreaming", "Agentic dreaming pass failed", undefined, { error: message });
 		failDreamingPass(accessor, passId, message);
 		throw error;

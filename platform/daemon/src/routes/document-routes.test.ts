@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Hono } from "hono";
 import type { DbAccessor } from "../db-accessor";
+import { type TelemetryCollector, type TelemetryEvent, setActiveTelemetry } from "../telemetry";
 
 const previousSignetPath = process.env.SIGNET_PATH;
 let agentsDir: string;
@@ -17,6 +18,23 @@ let createToken: typeof import("../auth").createToken;
 let loadMemoryConfig: typeof import("../memory-config").loadMemoryConfig;
 let startDocumentWorker: typeof import("../pipeline/document-worker").startDocumentWorker;
 let state: typeof import("./state.js");
+
+function captureTelemetry(): { readonly collector: TelemetryCollector; readonly events: TelemetryEvent[] } {
+	const events: TelemetryEvent[] = [];
+	const collector: TelemetryCollector = {
+		enabled: true,
+		record(event, properties): void {
+			events.push({ id: "test", event, timestamp: "2026-01-01T00:00:00.000Z", properties });
+		},
+		async flush(): Promise<void> {},
+		start(): void {},
+		async stop(): Promise<void> {},
+		query(): readonly TelemetryEvent[] {
+			return events;
+		},
+	};
+	return { collector, events };
+}
 
 function writeAuthConfig(mode: "local" | "team"): void {
 	writeFileSync(
@@ -148,6 +166,7 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
+	setActiveTelemetry(undefined);
 	getDbAccessor().withWriteTx((db) => {
 		db.prepare("DELETE FROM document_memories").run();
 		db.prepare("DELETE FROM documents").run();
@@ -166,6 +185,104 @@ afterAll(() => {
 });
 
 describe("document routes", () => {
+	it("emits extraction parse-failure telemetry for empty document content", async () => {
+		const telemetry = captureTelemetry();
+		setActiveTelemetry(telemetry.collector);
+		const now = new Date().toISOString();
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO agents (id, name, read_policy, policy_group, created_at, updated_at)
+				 VALUES ('agent-empty', 'agent-empty', 'isolated', NULL, ?, ?)`,
+			).run(now, now);
+			db.prepare(
+				`INSERT INTO documents
+				 (id, source_type, content_type, content_hash, title, raw_content, status,
+				  chunk_count, memory_count, agent_id, project, created_at, updated_at)
+				 VALUES ('doc-empty', 'text', 'text/plain', 'doc-empty-hash', NULL, NULL, 'queued', 0, 0,
+				         'agent-empty', NULL, ?, ?)`,
+			).run(now, now);
+			db.prepare(
+				`INSERT INTO memory_jobs
+				 (id, memory_id, document_id, job_type, status, attempts, max_attempts, created_at, updated_at)
+				 VALUES ('job-empty', NULL, 'doc-empty', 'document_ingest', 'pending', 0, 3, ?, ?)`,
+			).run(now, now);
+		});
+
+		const cfg = loadMemoryConfig(agentsDir);
+		const worker = startDocumentWorker({
+			accessor: getDbAccessor(),
+			embeddingCfg: cfg.embedding,
+			fetchEmbedding: async () => null,
+			pipelineCfg: {
+				...cfg.pipelineV2,
+				documents: {
+					...cfg.pipelineV2.documents,
+					workerIntervalMs: 5,
+				},
+			},
+		});
+		try {
+			await waitFor(() =>
+				getDbAccessor().withReadDb((db) => {
+					const row = db.prepare("SELECT status FROM documents WHERE id = 'doc-empty'").get() as { status: string };
+					return row.status === "failed";
+				}),
+			);
+		} finally {
+			await worker.stop();
+			setActiveTelemetry(undefined);
+		}
+
+		expect(telemetry.events).toContainEqual(
+			expect.objectContaining({
+				event: "pipeline.error",
+				properties: { stage: "extraction", code: "EXTRACTION_PARSE_FAIL" },
+			}),
+		);
+	});
+
+	it("does not label job validation failures as extraction errors", async () => {
+		const telemetry = captureTelemetry();
+		setActiveTelemetry(telemetry.collector);
+		const now = new Date().toISOString();
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO memory_jobs
+				 (id, memory_id, document_id, job_type, status, attempts, max_attempts, created_at, updated_at)
+				 VALUES ('job-invalid', NULL, NULL, 'document_ingest', 'pending', 0, 3, ?, ?)`,
+			).run(now, now);
+		});
+
+		const cfg = loadMemoryConfig(agentsDir);
+		const worker = startDocumentWorker({
+			accessor: getDbAccessor(),
+			embeddingCfg: cfg.embedding,
+			fetchEmbedding: async () => null,
+			pipelineCfg: {
+				...cfg.pipelineV2,
+				documents: {
+					...cfg.pipelineV2.documents,
+					workerIntervalMs: 5,
+				},
+			},
+		});
+		try {
+			await waitFor(() =>
+				getDbAccessor().withReadDb((db) => {
+					const row = db.prepare("SELECT attempts FROM memory_jobs WHERE id = 'job-invalid'").get() as {
+						attempts: number;
+					};
+					return row.attempts >= 1;
+				}),
+			);
+		} finally {
+			await worker.stop();
+			setActiveTelemetry(undefined);
+		}
+
+		expect(telemetry.events.filter((event) => event.event === "pipeline.error")).toHaveLength(0);
+	});
+
 	it("lists document chunks in local mode", async () => {
 		seedDocument(getDbAccessor(), { documentId: "doc-local", memoryId: "mem-local", agentId: "default" });
 		const app = await makeApp("local");

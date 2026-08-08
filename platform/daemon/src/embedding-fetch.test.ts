@@ -6,9 +6,27 @@ import {
 	setNativeFallbackProvider,
 } from "./embedding-fetch";
 import { countTokens } from "./pipeline/tokenizer";
+import { type TelemetryCollector, type TelemetryEvent, setActiveTelemetry } from "./telemetry";
 
 const originalFetch = globalThis.fetch;
 const originalOpenAiApiKey = process.env.OPENAI_API_KEY;
+
+function captureTelemetry(): { readonly collector: TelemetryCollector; readonly events: TelemetryEvent[] } {
+	const events: TelemetryEvent[] = [];
+	const collector: TelemetryCollector = {
+		enabled: true,
+		record(event, properties): void {
+			events.push({ id: "test", event, timestamp: "2026-01-01T00:00:00.000Z", properties });
+		},
+		async flush(): Promise<void> {},
+		start(): void {},
+		async stop(): Promise<void> {},
+		query(): readonly TelemetryEvent[] {
+			return events;
+		},
+	};
+	return { collector, events };
+}
 
 describe("requiresOpenAiApiKey", () => {
 	it("requires a key for official OpenAI endpoints", () => {
@@ -27,6 +45,7 @@ describe("requiresOpenAiApiKey", () => {
 describe("fetchEmbedding", () => {
 	afterEach(() => {
 		globalThis.fetch = originalFetch;
+		setActiveTelemetry(undefined);
 		setNativeEmbeddingProviderForTest(null);
 		setNativeFallbackProvider(null);
 		if (originalOpenAiApiKey === undefined) {
@@ -106,6 +125,8 @@ describe("fetchEmbedding", () => {
 	});
 
 	it("uses configured timeout for provider requests", async () => {
+		const telemetry = captureTelemetry();
+		setActiveTelemetry(telemetry.collector);
 		let capturedSignal: AbortSignal | null | undefined;
 		globalThis.fetch = mock((_url: string | URL | Request, init?: RequestInit) => {
 			capturedSignal = init?.signal;
@@ -131,6 +152,12 @@ describe("fetchEmbedding", () => {
 		expect(result).toBeNull();
 		expect(capturedSignal?.aborted).toBe(true);
 		expect(Date.now() - start).toBeLessThan(1000);
+		expect(telemetry.events).toContainEqual(
+			expect.objectContaining({
+				event: "pipeline.error",
+				properties: { stage: "embedding", code: "EMBEDDING_TIMEOUT" },
+			}),
+		);
 	});
 
 	it("routes to ollama when nativeFallbackProvider is 'ollama'", async () => {
@@ -219,6 +246,8 @@ describe("fetchEmbedding", () => {
 	});
 
 	it("returns null when llama.cpp fallback provider is set but server unreachable", async () => {
+		const telemetry = captureTelemetry();
+		setActiveTelemetry(telemetry.collector);
 		globalThis.fetch = mock(() => {
 			return Promise.resolve(new Response("not found", { status: 500 }));
 		}) as unknown as typeof fetch;
@@ -232,6 +261,12 @@ describe("fetchEmbedding", () => {
 		});
 
 		expect(result).toBeNull();
+		expect(telemetry.events).toContainEqual(
+			expect.objectContaining({
+				event: "pipeline.error",
+				properties: { stage: "embedding", code: "EMBEDDING_PROVIDER_DOWN" },
+			}),
+		);
 	});
 
 	it("falls back to llama.cpp when native fails, skipping ollama", async () => {
