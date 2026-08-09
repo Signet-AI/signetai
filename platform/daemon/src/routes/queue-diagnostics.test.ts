@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { Hono } from "hono";
 import { runMigrations } from "../../../core/src/migrations";
 import type { DbAccessor, ReadDb, WriteDb } from "../db-accessor";
-import { createRateLimiter, requeueDeadJobs } from "../repair-actions";
+import { createRateLimiter } from "../repair-actions";
 import { registerPipelineRoutes } from "./pipeline-routes";
 import { registerQueueDiagnosticsRoutes } from "./queue-diagnostics";
 

@@ -889,6 +889,28 @@ describe("migration framework", () => {
 		expect(db.prepare("SELECT COUNT(*) AS count FROM summary_jobs").get()).toEqual({ count: 0 });
 	});
 
+	test("migration 117 creates a compatible completion index without updated_at", () => {
+		db = createFreshDb();
+		db.exec(`
+			CREATE TABLE session_transcripts (
+				session_key TEXT NOT NULL,
+				content TEXT NOT NULL,
+				harness TEXT,
+				project TEXT,
+				agent_id TEXT NOT NULL,
+				created_at TEXT NOT NULL,
+				PRIMARY KEY (agent_id, session_key)
+			);
+		`);
+
+		expect(() => retireSummaryWorker(db)).not.toThrow();
+		expect(() => retireSummaryWorker(db)).not.toThrow();
+		const indexColumns = db.prepare("PRAGMA index_info(idx_st_agent_completed)").all() as ReadonlyArray<{
+			name?: unknown;
+		}>;
+		expect(indexColumns.map((column) => column.name)).toEqual(["agent_id", "completed_at"]);
+	});
+
 	test("migration 048 treats source_ref=session_key as session-scoped lane", () => {
 		db = createFreshDb();
 		db.exec(`

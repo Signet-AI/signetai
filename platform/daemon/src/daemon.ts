@@ -164,6 +164,7 @@ import {
 	telemetryDisabledByEnv,
 } from "./telemetry";
 import { type TranscriptCaptureWorkerHandle, startTranscriptCaptureWorker } from "./transcript-capture-worker";
+import { type TranscriptRecoveryWorkerHandle, startTranscriptRecoveryWorker } from "./transcript-recovery-worker";
 
 import {
 	getSynthesisWorker as getSynthesisRenderWorker,
@@ -231,6 +232,7 @@ let embeddingPromotionRestart: Promise<void> | null = null;
 let skillReconcilerHandle: ReturnType<typeof startReconciler> | null = null;
 let schedulerHandle: { stop(): Promise<void> } | null = null;
 let transcriptCaptureWorkerHandle: TranscriptCaptureWorkerHandle | null = null;
+let transcriptRecoveryWorkerHandle: TranscriptRecoveryWorkerHandle | null = null;
 // These are mirrored into state.ts via setters for read access by
 // route modules. Only daemon.ts should assign or clear them.
 let telemetryRef: TelemetryCollector | undefined;
@@ -1273,6 +1275,12 @@ async function stopPipelineRuntime(): Promise<void> {
 		schedulerHandle = null;
 	}
 
+	if (transcriptRecoveryWorkerHandle) {
+		try {
+			await transcriptRecoveryWorkerHandle.stop();
+		} catch {}
+		transcriptRecoveryWorkerHandle = null;
+	}
 	if (transcriptCaptureWorkerHandle) {
 		try {
 			transcriptCaptureWorkerHandle.stop();
@@ -2163,6 +2171,9 @@ async function main() {
 	schedulerHandle = startSchedulerWorker(getDbAccessor());
 	if (!transcriptCaptureWorkerHandle) {
 		transcriptCaptureWorkerHandle = startTranscriptCaptureWorker(getDbAccessor(), AGENTS_DIR);
+	}
+	if (!transcriptRecoveryWorkerHandle) {
+		transcriptRecoveryWorkerHandle = startTranscriptRecoveryWorker(getDbAccessor(), AGENTS_DIR, resolveDaemonAgentId());
 	}
 
 	checkpointPruneTimer = setInterval(() => {

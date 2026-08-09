@@ -279,9 +279,11 @@ export function up(db: MigrationDb): void {
 		db.exec("DELETE FROM summary_jobs");
 	}
 
+	const completionIndexColumns = ["agent_id", "completed_at"];
+	if (tableColumns(db, "session_transcripts").has("updated_at")) completionIndexColumns.push("updated_at");
 	db.exec(`
 		CREATE INDEX IF NOT EXISTS idx_st_agent_completed
-			ON session_transcripts(agent_id, completed_at, updated_at);
+			ON session_transcripts(${completionIndexColumns.join(", ")});
 		CREATE INDEX IF NOT EXISTS idx_st_agent_hash
 			ON session_transcripts(agent_id, content_hash);
 	`);
