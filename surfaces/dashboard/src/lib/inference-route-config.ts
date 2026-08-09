@@ -37,9 +37,7 @@ export function ensureInferenceRoute(agent: ConfigRecord): void {
 		};
 		if (taskClasses.memory_extraction == null) {
 			taskClasses.memory_extraction = {
-				reasoning: "low",
-				toolsRequired: true,
-				privacy: "restricted_remote",
+				reasoning: "medium",
 			};
 		}
 	}

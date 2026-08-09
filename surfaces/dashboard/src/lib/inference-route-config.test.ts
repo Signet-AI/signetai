@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { parseRoutingConfig, resolveRoutingDecision } from "@signet/core";
 import { ensureInferenceRoute } from "./inference-route-config";
 
 describe("ensureInferenceRoute", () => {
@@ -24,7 +25,7 @@ describe("ensureInferenceRoute", () => {
 				aggregateRecall: { target: "aggregation/default" },
 			},
 			taskClasses: {
-				memory_extraction: { reasoning: "low", toolsRequired: true, privacy: "restricted_remote" },
+				memory_extraction: { reasoning: "medium" },
 			},
 			defaultPolicy: "default",
 			policies: {
@@ -35,6 +36,36 @@ describe("ensureInferenceRoute", () => {
 				},
 			},
 		});
+	});
+
+	it("routes generated memory extraction config through a dashboard target", () => {
+		const agent: Record<string, unknown> = {
+			inference: {
+				targets: { background: { executor: "llama-cpp", models: { default: { model: "gemma" } } } },
+			},
+		};
+
+		ensureInferenceRoute(agent);
+		const parsed = parseRoutingConfig(agent);
+		expect(parsed.ok).toBe(true);
+		if (!parsed.ok) return;
+
+		const decision = resolveRoutingDecision(
+			parsed.value,
+			{ operation: "memory_extraction" },
+			{
+				targets: {
+					"background/default": {
+						available: true,
+						health: "healthy",
+						circuitOpen: false,
+						accountState: "ready",
+					},
+				},
+			},
+		);
+		expect(decision.ok).toBe(true);
+		if (decision.ok) expect(decision.value.targetRef).toBe("background/default");
 	});
 
 	it("keeps the generated policy scoped to primary when aggregation is added later", () => {

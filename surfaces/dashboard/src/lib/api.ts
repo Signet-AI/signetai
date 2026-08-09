@@ -142,7 +142,8 @@ export interface InferenceRouteDecision {
 
 export interface InferenceProbeResult {
 	readonly text: string;
-	readonly decision?: InferenceRouteDecision;
+	readonly decision: InferenceRouteDecision;
+	readonly attempts: readonly { readonly targetRef: string; readonly ok: boolean }[];
 }
 
 export type OAuthLoginEvent =

@@ -441,14 +441,27 @@ function RouteHealthPanel() {
 					})
 				: Promise.resolve(null),
 		]);
-		setReport({ status: nextStatus, statusError: nextStatusResult.error, memoryExtraction, aggregateRecall, probeOk: probe !== null });
+		const probeOk =
+			probe !== null &&
+			probe.text.trim().length > 0 &&
+			probe.decision.targetRef.length > 0 &&
+			probe.attempts.some((attempt) => attempt.ok);
+		setReport({ status: nextStatus, statusError: nextStatusResult.error, memoryExtraction, aggregateRecall, probeOk });
 		setChecking(false);
 	};
 
 	return (
 		<div className="sig-mcard flex flex-col gap-px">
 			<div className="flex items-center justify-between px-1.5">
-				<GroupLabel suffix={report ? report.probeOk ? "· probe passed" : "· probe failed" : "· route resolution + executor availability"}>Runtime route</GroupLabel>
+				<GroupLabel
+					suffix={
+						report?.probeOk == null
+							? "· route resolution + executor availability"
+							: report.probeOk
+								? "· probe passed"
+								: "· probe failed"
+					}
+				>Runtime route</GroupLabel>
 				<button
 					type="button"
 					onClick={() => void checkRoutes()}
