@@ -504,7 +504,13 @@ describe("telemetry collector", () => {
 
 describe("telemetry lifecycle events (issue #1026 Phase 2)", () => {
 	it("declares the Phase-2 lifecycle event types", () => {
-		for (const event of ["daemon.started", "command.invoked", "error.occurred", "version.upgraded"]) {
+		for (const event of [
+			"daemon.started",
+			"daemon.previous_exit",
+			"command.invoked",
+			"error.occurred",
+			"version.upgraded",
+		]) {
 			expect(TELEMETRY_EVENTS).toContain(event);
 		}
 	});

@@ -61,6 +61,7 @@ export const TELEMETRY_EVENTS = [
 	// Lifecycle events (issue #1026 Phase 2): fired when the user has opted
 	// into anonymous telemetry. No PII, no code, no memory content.
 	"daemon.started",
+	"daemon.previous_exit",
 	"install.activated",
 	// First-use milestones (issue #1202): fired exactly once per install,
 	// at the first successful remember / recall. Guards the activation

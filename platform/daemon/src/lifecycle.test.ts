@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { lifecyclePath, readDaemonLifecycle, writeDaemonLifecycle } from "./lifecycle";
+import { classifyPreviousDaemonExit, lifecyclePath, readDaemonLifecycle, writeDaemonLifecycle } from "./lifecycle";
 
 // Regression tests for issue #1148: a daemon death must be distinguishable as
 // clean, error, or unrecorded (killed/crashed) from the durable lifecycle
@@ -94,6 +94,99 @@ describe("daemon lifecycle record (#1148)", () => {
 		} finally {
 			rmSync(root, { recursive: true, force: true });
 		}
+	});
+
+	it("classifies a prior clean exit with bounded restart metadata (#1255)", () => {
+		const result = classifyPreviousDaemonExit(
+			{
+				state: "clean",
+				pid: 4242,
+				version: "0.165.0",
+				startedAt: "2026-08-07T00:00:00.000Z",
+				reason: "signal:SIGTERM",
+				exitCode: 0,
+				exitedAt: "2026-08-07T01:00:00.000Z",
+			},
+			"2026-08-07T01:05:00.000Z",
+		);
+		expect(result).toEqual({
+			classification: "clean",
+			previousVersion: "0.165.0",
+			previousUptimeMs: 3_600_000,
+			reasonCategory: "signal",
+			exitCode: 0,
+			restartDelayMs: 300_000,
+		});
+	});
+
+	it("classifies a catchable error without exporting its raw reason or message (#1255)", () => {
+		const result = classifyPreviousDaemonExit(
+			{
+				state: "error",
+				pid: 9,
+				version: "0.165.0",
+				startedAt: "2026-08-07T00:00:00.000Z",
+				reason: "error:uncaughtException",
+				exitCode: 1,
+				exitedAt: "2026-08-07T00:00:30.000Z",
+				error: "secret local error text",
+			},
+			"2026-08-07T00:02:00.000Z",
+		);
+		expect(result).toEqual({
+			classification: "error",
+			previousVersion: "0.165.0",
+			previousUptimeMs: 30_000,
+			reasonCategory: "uncaught_exception",
+			exitCode: 1,
+			restartDelayMs: 90_000,
+		});
+	});
+
+	it("bounds previous-exit fields and drops arbitrary reasons (#1255)", () => {
+		const result = classifyPreviousDaemonExit(
+			{
+				state: "error",
+				pid: 7,
+				version: "x".repeat(100),
+				startedAt: "2020-01-01T00:00:00.000Z",
+				reason: "error:secret local reason",
+				exitCode: 9999,
+				exitedAt: "2021-01-01T00:00:00.000Z",
+			},
+			"2022-01-01T00:00:00.000Z",
+		);
+		expect(result).toEqual({
+			classification: "error",
+			previousVersion: "x".repeat(64),
+			previousUptimeMs: 365 * 24 * 60 * 60 * 1000,
+			reasonCategory: "other",
+			exitCode: 255,
+			restartDelayMs: 365 * 24 * 60 * 60 * 1000,
+		});
+	});
+
+	it("classifies starting and running records as unrecorded deaths (#1255)", () => {
+		for (const state of ["starting", "running"] as const) {
+			const result = classifyPreviousDaemonExit(
+				{
+					state,
+					pid: 7,
+					version: "0.165.0",
+					startedAt: "2026-08-07T00:00:00.000Z",
+				},
+				"2026-08-07T01:00:00.000Z",
+			);
+			expect(result).toEqual({
+				classification: "unrecorded",
+				previousVersion: "0.165.0",
+				previousUptimeMs: 3_600_000,
+			});
+		}
+	});
+
+	it("does not classify a first boot without a prior lifecycle record (#1255)", () => {
+		expect(classifyPreviousDaemonExit(null, "2026-08-07T01:00:00.000Z")).toBeNull();
 	});
 
 	it("replaces the previous record in place without leaving a temp file", () => {

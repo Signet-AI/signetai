@@ -52,6 +52,7 @@ PostHog failures, and never throws into the daemon.
 | `install.activated` | first daemon run of a new install (persisted install id first created) | `version`, `platform` |
 | `first.remember` / `first.recall` | first successful remember / recall per install, exactly once | `version`, `platform` |
 | `daemon.started` | daemon boot | `version`, `platform`, `uptimeMs` |
+| `daemon.previous_exit` | next successful boot reconciles the prior lifecycle record, exactly once when one exists | `classification` (`clean` / `error` / `unrecorded`), `reasonCategory`, `exitCode`, `previousVersion`, `previousUptimeMs`, `restartDelayMs` |
 | `daemon.heartbeat` | every 5 minutes | `uptimeMs`, `memoryCount`, `connectorsActive`, `pipelineMode`, `extractionProvider`, `embeddingProvider` |
 | `session.start` | real session start (deduped; stubs and clear/reset paths don't count) | `harness`, `sessionHash` |
 | `session.turn` | every non-boundary `session-end` hook call (per turn, see notes) | `harness`, `promptCount`, `sessionHash` |
@@ -73,6 +74,15 @@ Declared but **not yet emitted**: `pipeline.extraction` and
 
 Notes on individual events:
 
+- **`daemon.previous_exit`** — emitted once by the next successful boot when
+  a valid prior lifecycle record exists. `clean` and `error` come from terminal
+  records; `starting` and `running` become `unrecorded`, because the prior
+  process died before it could write a terminal state. The event never claims
+  SIGKILL versus OOM, which the local record cannot distinguish. `reasonCategory`
+  is a bounded category (`signal`, `update`, `uncaught_exception`,
+  `unhandled_rejection`, `startup`, or `other`), and the duration, version, and
+  exit-code fields are bounded. The raw lifecycle reason, error, PID, systemd
+  unit, and local paths are not sent.
 - **`install.ping`** — the wrapper postinstall counter. Each ping uses a
   *fresh throwaway UUID*, so it never joins the daemon's persisted id: one
   physical install is two PostHog users across ping and daemon events. Bun
@@ -276,6 +286,7 @@ vault mirrors the key PostHog aggregates for daily review via
 | 0.174.0 | `dreaming.pass` with provider-reported token usage and cost |
 | 0.176.0 | Sanitized crash reports: full `error.occurred` payload (truncated, home-stripped message + top-8 stack frames) and rate-limited `EventLoopLag` wedge reports |
 | next | `session.turn` + real `session.end` split (#1212): the per-turn event renamed from the old `session.end`; `session.end` now fires only at real terminations, deduped per lifetime; `sessionHash` added to all three session events |
+| Unreleased | Previous daemon-exit reconciliation: `daemon.previous_exit` reports bounded `clean`, `error`, or `unrecorded` classification on the next boot (#1255) |
 | Unreleased | `recall.performed` with anonymous recall type, result count, latency, and truncation metrics (#1203) |
 | Unreleased | First-run activation funnel: `first.remember` / `first.recall`, exactly once per install (#1202) |
 | Unreleased | `pipeline.embedding` cost rates and collector-derived session token/cost totals (#1201) |

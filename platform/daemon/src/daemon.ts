@@ -57,7 +57,13 @@ import { writeFileIfChangedAsync } from "./file-sync";
 import { createSignetHttpServer } from "./http-server";
 import { syncAgentWorkspaces } from "./identity-sync";
 import { type InferenceStatusSummary, getOrCreateInferenceRouter } from "./inference-router.js";
-import { type DaemonLifecycle, writeDaemonLifecycle } from "./lifecycle";
+import {
+	type DaemonLifecycle,
+	classifyPreviousDaemonExit,
+	previousExitTelemetryProperties,
+	readDaemonLifecycle,
+	writeDaemonLifecycle,
+} from "./lifecycle";
 import { closeInferenceProviderResolver, initInferenceProviderResolver } from "./llm";
 import { logger } from "./logger";
 import { type ResolvedMemoryConfig, graphWriteCaps, loadMemoryConfig } from "./memory-config";
@@ -1873,7 +1879,9 @@ async function main() {
 		} catch {}
 	});
 
+	const previousLifecycle = readDaemonLifecycle(AGENTS_DIR);
 	lifecycleStartedAt = new Date().toISOString();
+	const previousExit = classifyPreviousDaemonExit(previousLifecycle, lifecycleStartedAt);
 	writeDaemonLifecycle(AGENTS_DIR, buildLifecycleRecord("starting"));
 
 	// Config migrations must precede every initialization path that resolves
@@ -2038,6 +2046,10 @@ async function main() {
 		telemetryRef = telemetryCollector;
 		setTelemetryRef(telemetryCollector);
 		setActiveTelemetry(telemetryCollector);
+
+		if (previousExit !== null) {
+			telemetryCollector.record("daemon.previous_exit", previousExitTelemetryProperties(previousExit));
+		}
 
 		// Lifecycle event (issue #1026 Phase 2): version + platform only.
 		telemetryCollector.record("daemon.started", {
