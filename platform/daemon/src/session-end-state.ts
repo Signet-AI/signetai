@@ -19,6 +19,7 @@ const SESSION_BOUNDARY_REASONS = new Set([
 	"session_fork",
 	"session_shutdown",
 	"session_switch",
+	"stale-session-sweep",
 ]);
 
 export type SessionEndIdentity = {

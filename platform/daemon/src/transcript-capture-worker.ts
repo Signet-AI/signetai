@@ -3,6 +3,7 @@ import type { DbAccessor, WriteDb } from "./db-accessor";
 import { logger } from "./logger";
 import { indexCanonicalTranscriptJsonl, writeTranscriptArtifact } from "./memory-lineage";
 import { isNoiseSession } from "./session-noise";
+import { awaitPressureClear, isSystemPressureHigh } from "./system-pressure";
 import { writeTranscriptAudit } from "./transcript-audit";
 import { writeCanonicalTranscriptFromSnapshot } from "./transcript-capture";
 import { canonicalTranscriptRelativePath } from "./transcript-jsonl";
@@ -55,6 +56,12 @@ export interface TranscriptCaptureJobReceipt {
 
 const DEFAULT_MAX_ATTEMPTS = 5;
 const POLL_INTERVAL_MS = 30_000;
+const MAX_JOBS_PER_DRAIN_TICK = 5;
+let captureRunTail: Promise<void> = Promise.resolve();
+
+function yieldToEventLoop(): Promise<void> {
+	return new Promise((resolve) => setImmediate(resolve));
+}
 
 function nowIso(): string {
 	return new Date().toISOString();
@@ -309,7 +316,7 @@ function markFailed(dbAccessor: DbAccessor, job: TranscriptCaptureJobRow, error:
 	});
 }
 
-export async function runTranscriptCaptureOnce(dbAccessor: DbAccessor, basePath: string): Promise<boolean> {
+async function runTranscriptCaptureOnceInternal(dbAccessor: DbAccessor, basePath: string): Promise<boolean> {
 	const job = leaseJob(dbAccessor);
 	if (!job) return false;
 	try {
@@ -320,6 +327,15 @@ export async function runTranscriptCaptureOnce(dbAccessor: DbAccessor, basePath:
 		throw error;
 	}
 	return true;
+}
+
+export function runTranscriptCaptureOnce(dbAccessor: DbAccessor, basePath: string): Promise<boolean> {
+	const run = captureRunTail.then(() => runTranscriptCaptureOnceInternal(dbAccessor, basePath));
+	captureRunTail = run.then(
+		() => undefined,
+		() => undefined,
+	);
+	return run;
 }
 
 export function startTranscriptCaptureWorker(dbAccessor: DbAccessor, basePath: string): TranscriptCaptureWorkerHandle {
@@ -340,19 +356,27 @@ export function startTranscriptCaptureWorker(dbAccessor: DbAccessor, basePath: s
 	const drain = async (): Promise<void> => {
 		if (stopped || running) return;
 		running = true;
+		let nextDelayMs = POLL_INTERVAL_MS;
 		try {
 			let processed = false;
+			let processedThisTick = 0;
 			do {
+				if (isSystemPressureHigh()) await awaitPressureClear();
 				processed = await runTranscriptCaptureOnce(dbAccessor, basePath).catch((error) => {
 					logger.warn("transcripts", "Transcript capture job failed", {
 						error: error instanceof Error ? error.message : String(error),
 					});
 					return false;
 				});
-			} while (processed && !stopped);
+				if (processed && !stopped) {
+					processedThisTick++;
+					await yieldToEventLoop();
+				}
+				if (processedThisTick >= MAX_JOBS_PER_DRAIN_TICK) nextDelayMs = 0;
+			} while (processed && !stopped && processedThisTick < MAX_JOBS_PER_DRAIN_TICK);
 		} finally {
 			running = false;
-			schedule(POLL_INTERVAL_MS);
+			schedule(nextDelayMs);
 		}
 	};
 

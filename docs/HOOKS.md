@@ -41,6 +41,7 @@ session boundary:
 | `session_fork` | pi forked the current session |
 | `session_shutdown` | pi shut down the current session |
 | `session_switch` | pi switched to another session |
+| `stale-session-sweep` | The daemon finalized an abandoned live-retained session after the stale-session TTL |
 
 These reasons emit one anonymous `session.end` telemetry event per session
 lifetime. Repeated end requests for the same session are deduplicated.
@@ -48,6 +49,16 @@ lifetime. Repeated end requests for the same session are deduplicated.
 Requests without a recognized boundary reason, including ordinary
 `session.idle` calls, emit `session.turn` telemetry instead. They still persist
 the transcript and queue normal session-end processing.
+
+The daemon's stale-session sweeper processes at most 10 abandoned sessions per
+15-minute timer tick. It is single-flight, yields between finalizations, pauses
+when system pressure is elevated, and defers when downstream capture or summary
+work has reached its backlog threshold. Reproduce the 50-session liveness eval
+in an isolated temporary database with:
+
+```sh
+bun scripts/load-test-stale-session-sweep.ts
+```
 
 ```json
 {

@@ -1053,7 +1053,10 @@ function stopMemoryImportPoller(): void {
 function startStaleSessionSweeper(): void {
 	if (staleSessionSweepTimer !== null) return;
 	staleSessionSweepTimer = setInterval(() => {
-		sweepStaleSessions({ staleOlderThanMs: STALE_SESSION_TTL_MS }).catch((e) => {
+		// Keep each timer tick small. The sweep is single-flight and yields
+		// between finalizations, so a large abandoned-session backlog cannot
+		// monopolize the daemon or fan out downstream capture work.
+		sweepStaleSessions({ staleOlderThanMs: STALE_SESSION_TTL_MS, limit: 10 }).catch((e) => {
 			logger.error("daemon", "Stale session sweep failed", undefined, {
 				message: e instanceof Error ? e.message : String(e),
 			});

@@ -56,7 +56,7 @@ PostHog failures, and never throws into the daemon.
 | `daemon.heartbeat` | every 5 minutes | `uptimeMs`, `memoryCount`, `connectorsActive`, `pipelineMode`, `extractionProvider`, `embeddingProvider` |
 | `session.start` | real session start (deduped; stubs and clear/reset paths don't count) | `harness`, `sessionHash` |
 | `session.turn` | every non-boundary `session-end` hook call (per turn, see notes) | `harness`, `promptCount`, `sessionHash` |
-| `session.end` | real session termination: an explicit boundary reason or a TTL-evicted (abandoned) session claim | `harness`, `reason` (`clear` / `session.deleted` / `session_branch` / `session_fork` / `session_shutdown` / `session_switch` / `expired`), `sessionHash`, `tokensInput`, `tokensOutput`, `tokensCacheRead`, `tokensCacheWrite`, `cost` |
+| `session.end` | real session termination: an explicit boundary reason or a TTL-evicted (abandoned) session claim | `harness`, `reason` (`clear` / `session.deleted` / `session_branch` / `session_fork` / `session_shutdown` / `session_switch` / `stale-session-sweep` / `expired`), `sessionHash`, `tokensInput`, `tokensOutput`, `tokensCacheRead`, `tokensCacheWrite`, `cost` |
 | `llm.generate` | every LLM call | `provider`, `latencyMs`, `success`, `inputTokens`, `outputTokens`, `cacheReadTokens`, `cacheCreationTokens`, `totalCost` |
 | `pipeline.embedding` | every embedding fetch, at the usage-recording boundary | `tokens`, `provider`, `sourceKind` (`memory-capture` / `artifact-index` / `recall` / `dreaming` / `other`), `cost` (USD) |
 | `recall.performed` | every completed shared recall search | `type` (`semantic` / `keyword` / `temporal` / `graph`), `results`, `latencyMs`, `truncated` |
@@ -99,7 +99,8 @@ Notes on individual events:
   harnesses invoke per turn to persist messages — a *turns persisted* volume
   counter; `session.end` fires only at real terminations (recognized explicit
   boundary reasons `clear`, `session.deleted`, `session_branch`, `session_fork`,
-  `session_shutdown`, or `session_switch`, or TTL-evicted abandoned claims), deduped once per
+  `session_shutdown`, `session_switch`, or the internal `stale-session-sweep` reason, or
+  TTL-evicted abandoned claims), deduped once per
   session lifetime via `session-end-state.ts` (in-memory, cleared on real and
   clear session starts). All three carry `sessionHash`, a 16-hex sha256 of the
   normalized session key, so distinct sessions and concurrency are countable

@@ -585,7 +585,7 @@ export function findStaleLiveSessions(staleOlderThanMs: number, limit = 50): Sta
 				SELECT 1 FROM summary_jobs sj
 				WHERE sj.agent_id = session_transcripts.agent_id
 				  AND sj.session_key = session_transcripts.session_key
-				  AND sj.status IN ('pending', 'processing', 'completed')
+				  AND sj.status IN ('pending', 'processing', 'leased', 'completed')
 			)`
 		: "";
 	try {

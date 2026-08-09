@@ -140,11 +140,16 @@ import {
 } from "./session-transcripts";
 import { type StructuralCandidateSource, type StructuralFeatures, getStructuralFeatures } from "./structural-features";
 import { assembleInheritedContextBlock, resolveParentSession } from "./subagent-context";
+import { awaitPressureClear, isSystemPressureHigh } from "./system-pressure";
 import { getActiveTelemetry } from "./telemetry";
 import { searchTemporalFallback } from "./temporal-fallback";
 import { writeTranscriptAudit } from "./transcript-audit";
 import * as transcriptCapture from "./transcript-capture";
-import { enqueueTranscriptCaptureJob, runTranscriptCaptureOnce } from "./transcript-capture-worker";
+import {
+	enqueueTranscriptCaptureJob,
+	getTranscriptCaptureStatus,
+	runTranscriptCaptureOnce,
+} from "./transcript-capture-worker";
 import {
 	normalizeCodexTranscript,
 	normalizeJsonConversationTranscript,
@@ -161,6 +166,15 @@ function getMemoryDbPath(): string {
 }
 
 const deferredSessionEndWork = new Set<Promise<void>>();
+let deferredSessionEndWorkTail: Promise<void> = Promise.resolve();
+let staleSessionSweepInFlight: Promise<{ closed: number; skipped: number; totalMatching: number }> | null = null;
+const STALE_SESSION_SWEEP_DEFAULT_LIMIT = 10;
+const STALE_SESSION_SWEEP_MAX_LIMIT = 50;
+const STALE_SESSION_SWEEP_MAX_DOWNSTREAM_BACKLOG = 20;
+
+function yieldToEventLoop(): Promise<void> {
+	return new Promise((resolve) => setImmediate(resolve));
+}
 
 function summaryJobsHasColumn(column: string): boolean {
 	try {
@@ -184,7 +198,7 @@ function summaryJobWithContentHashExists(
 			.prepare(
 				`SELECT id FROM summary_jobs
 				 WHERE agent_id = ? AND session_key = ? AND content_hash = ?
-				 AND status IN ('pending', 'processing', 'completed')
+				 AND status IN ('pending', 'processing', 'leased', 'completed')
 				 LIMIT 1`,
 			)
 			.get(agentId, sessionKey, contentHash) as { id: string } | undefined;
@@ -201,6 +215,34 @@ function storeSummaryJobContentHash(jobId: string | undefined, contentHash: stri
 
 export async function flushDeferredSessionEndWorkForTests(): Promise<void> {
 	await Promise.allSettled([...deferredSessionEndWork]);
+}
+
+function scheduleDeferredSessionEndWork(params: {
+	readonly sessionKey: string | undefined;
+	readonly agentId: string;
+	readonly memoryCfg: ResolvedMemoryConfig;
+}): void {
+	const dbAccessor = loadDbAccessor();
+	if (!dbAccessor) return;
+	const basePath = getAgentsDir();
+	const work = deferredSessionEndWorkTail.then(async () => {
+		await yieldToEventLoop();
+		try {
+			await runTranscriptCaptureOnce(dbAccessor, basePath);
+		} catch (error) {
+			logger.warn("hooks", "Deferred transcript capture job failed", {
+				error: error instanceof Error ? error.message : String(error),
+				sessionKey: params.sessionKey,
+			});
+		}
+		await deferSessionEndWork(params);
+	});
+	deferredSessionEndWorkTail = work.catch(() => undefined);
+	deferredSessionEndWork.add(work);
+	void work.then(
+		() => deferredSessionEndWork.delete(work),
+		() => deferredSessionEndWork.delete(work),
+	);
 }
 
 function loadDbAccessor() {
@@ -2030,35 +2072,10 @@ export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionE
 		}
 	}
 
-	setImmediate(() => {
-		let work: Promise<void>;
-		try {
-			work = runTranscriptCaptureOnce(getDbAccessor(), getAgentsDir())
-				.then(() => undefined)
-				.catch((error) => {
-					logger.warn("hooks", "Deferred transcript capture job failed", {
-						error: error instanceof Error ? error.message : String(error),
-						sessionKey,
-					});
-				});
-		} catch (error) {
-			logger.warn("hooks", "Deferred transcript capture job failed", {
-				error: error instanceof Error ? error.message : String(error),
-				sessionKey,
-			});
-			return;
-		}
-		work = work.then(() =>
-			deferSessionEndWork({
-				sessionKey,
-				agentId,
-				memoryCfg,
-			}),
-		);
-		deferredSessionEndWork.add(work);
-		void work.finally(() => {
-			deferredSessionEndWork.delete(work);
-		});
+	scheduleDeferredSessionEndWork({
+		sessionKey,
+		agentId,
+		memoryCfg,
 	});
 
 	return {
@@ -2077,15 +2094,68 @@ export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionE
  * Sweep the stale sessions and fire the deferred session-end with the stored
  * transcript snapshot, so summaries land and content passes stop deferring.
  */
-export async function sweepStaleSessions(options: {
+type StaleSessionSweepResult = { closed: number; skipped: number; totalMatching: number };
+
+async function waitForCurrentDeferredSessionEndWork(): Promise<void> {
+	await yieldToEventLoop();
+	const pending = [...deferredSessionEndWork];
+	if (pending.length === 0) return;
+	await Promise.allSettled(pending);
+}
+
+function shouldDeferStaleSessionSweep(): boolean {
+	if (deferredSessionEndWork.size > 0) {
+		logger.debug("hooks", "Stale session-end sweep deferred while session-end work is pending", {
+			deferredWork: deferredSessionEndWork.size,
+		});
+		return true;
+	}
+	const dbAccessor = loadDbAccessor();
+	if (!dbAccessor) return true;
+	try {
+		const capture = getTranscriptCaptureStatus(dbAccessor);
+		const summary = dbAccessor.withReadDb(
+			(db) =>
+				db
+					.prepare("SELECT COUNT(*) AS count FROM summary_jobs WHERE status IN ('pending', 'processing', 'leased')")
+					.get() as {
+					count?: number;
+				} | null,
+		);
+		const downstreamBacklog =
+			capture.pending + capture.processing + (typeof summary?.count === "number" ? summary.count : 0);
+		if (downstreamBacklog < STALE_SESSION_SWEEP_MAX_DOWNSTREAM_BACKLOG) return false;
+		logger.debug("hooks", "Stale session-end sweep deferred while downstream work is backlogged", {
+			capturePending: capture.pending,
+			captureProcessing: capture.processing,
+			summaryPending: summary?.count ?? 0,
+			backlogLimit: STALE_SESSION_SWEEP_MAX_DOWNSTREAM_BACKLOG,
+		});
+		return true;
+	} catch (error) {
+		logger.warn("hooks", "Stale session-end sweep backlog check failed closed", {
+			error: error instanceof Error ? error.message : String(error),
+		});
+		return true;
+	}
+}
+
+async function runStaleSessionSweep(options: {
 	staleOlderThanMs: number;
 	limit?: number;
-}): Promise<{ closed: number; skipped: number; totalMatching: number }> {
-	const { staleOlderThanMs, limit = 50 } = options;
-	const stale = findStaleLiveSessions(staleOlderThanMs, limit);
+}): Promise<StaleSessionSweepResult> {
+	if (shouldDeferStaleSessionSweep()) return { closed: 0, skipped: 0, totalMatching: 0 };
+
+	const requestedLimit = options.limit ?? STALE_SESSION_SWEEP_DEFAULT_LIMIT;
+	const limit = Number.isFinite(requestedLimit)
+		? Math.max(0, Math.min(STALE_SESSION_SWEEP_MAX_LIMIT, Math.trunc(requestedLimit)))
+		: STALE_SESSION_SWEEP_DEFAULT_LIMIT;
+	const stale = findStaleLiveSessions(options.staleOlderThanMs, limit);
 	let closed = 0;
 	let skipped = 0;
 	for (const session of stale) {
+		if (isSystemPressureHigh()) await awaitPressureClear();
+		await yieldToEventLoop();
 		// Dedup: a summary job already exists for this exact content, so the
 		// session-end already ran (or is running) for it — never re-fire.
 		// The guard is unconditional: a null harness must not turn the dedup
@@ -2105,6 +2175,7 @@ export async function sweepStaleSessions(options: {
 				reason: "stale-session-sweep",
 			});
 			closed++;
+			await waitForCurrentDeferredSessionEndWork();
 		} catch (error) {
 			logger.warn("hooks", "Stale session-end sweep failed", {
 				error: error instanceof Error ? error.message : String(error),
@@ -2120,6 +2191,20 @@ export async function sweepStaleSessions(options: {
 		});
 	}
 	return { closed, skipped, totalMatching: stale.length };
+}
+
+export async function sweepStaleSessions(options: {
+	staleOlderThanMs: number;
+	limit?: number;
+}): Promise<StaleSessionSweepResult> {
+	if (staleSessionSweepInFlight) return staleSessionSweepInFlight;
+	const work = runStaleSessionSweep(options);
+	staleSessionSweepInFlight = work;
+	try {
+		return await work;
+	} finally {
+		if (staleSessionSweepInFlight === work) staleSessionSweepInFlight = null;
+	}
 }
 
 async function deferSessionEndWork(params: {

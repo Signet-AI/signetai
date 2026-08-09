@@ -538,7 +538,8 @@ beforeEach(() => {
 	ensureDir(TEST_DIR);
 });
 
-afterEach(() => {
+afterEach(async () => {
+	await flushSessionEndDeferredWork();
 	resetProjectionPurgeState();
 	closeDbAccessor();
 	if (existsSync(TEST_DIR)) {
@@ -2336,7 +2337,14 @@ memory:
 		const collector = createTelemetryCollector(getDbAccessor(), TEST_TELEMETRY_CONFIG, "0.0.0-test");
 		setActiveTelemetry(collector);
 		try {
-			const reasons = ["session.deleted", "session_branch", "session_fork", "session_shutdown", "session_switch"];
+			const reasons = [
+				"session.deleted",
+				"session_branch",
+				"session_fork",
+				"session_shutdown",
+				"session_switch",
+				"stale-session-sweep",
+			];
 			const inputs = [" SESSION.DELETED ", ...reasons.slice(1)];
 			for (const [index, reason] of inputs.entries()) {
 				await handleSessionEnd({ harness: "test", sessionKey: `sess-boundary-${index}`, reason });
@@ -3162,7 +3170,7 @@ describe("handleSessionStart multi-agent identity", () => {
 					"hermes-agent",
 					null,
 					doneContent,
-					"pending",
+					"leased",
 					0,
 					3,
 					new Date().toISOString(),
@@ -3189,6 +3197,88 @@ describe("handleSessionStart multi-agent identity", () => {
 			) as { n: number };
 			expect(staleJobs.n).toBe(1);
 			expect(freshJobs.n).toBe(0);
+		});
+
+		test.serial(
+			"classifies a 50-session stale backlog as session.end without session.turn",
+			async () => {
+				const now = Date.now();
+				const staleAt = new Date(now - 3 * 24 * 60 * 60 * 1000).toISOString();
+				const content = `User: ${"s".repeat(300)}\nAssistant: ${"t".repeat(300)}`;
+				for (let index = 0; index < 50; index++) {
+					upsertSessionTranscript(
+						`sweep-stale-batch-${now}-${index}`,
+						content,
+						"hermes-agent",
+						null,
+						"default",
+						staleAt,
+					);
+				}
+				ensureTelemetryTables();
+				const collector = createTelemetryCollector(getDbAccessor(), TEST_TELEMETRY_CONFIG, "0.0.0-test");
+				setActiveTelemetry(collector);
+				try {
+					const result = await hooks.sweepStaleSessions({
+						staleOlderThanMs: 24 * 60 * 60 * 1000,
+						limit: 50,
+					});
+					await collector.flush();
+
+					const ends = collector.query().filter((event) => event.event === "session.end");
+					const turns = collector.query().filter((event) => event.event === "session.turn");
+					expect(result.closed).toBe(50);
+					expect(result.totalMatching).toBe(50);
+					expect(ends).toHaveLength(50);
+					expect(ends.every((event) => event.properties.reason === "stale-session-sweep")).toBe(true);
+					expect(turns).toHaveLength(0);
+				} finally {
+					setActiveTelemetry(undefined);
+					resetSessionEndTelemetry();
+				}
+			},
+			120_000,
+		);
+
+		test.serial("defers while the downstream finalization backlog is at capacity", async () => {
+			const now = Date.now();
+			const staleKey = `sweep-backlogged-${now}`;
+			const staleContent = `User: ${"s".repeat(300)}\nAssistant: ${"t".repeat(300)}`;
+			upsertSessionTranscript(
+				staleKey,
+				staleContent,
+				"hermes-agent",
+				null,
+				"default",
+				new Date(now - 3 * 24 * 60 * 60 * 1000).toISOString(),
+			);
+			getDbAccessor().withWriteTx((db) => {
+				const insert = db.prepare(
+					`INSERT INTO summary_jobs (id, session_key, harness, project, transcript, status,
+					 attempts, max_attempts, created_at, agent_id, content_hash, trigger)
+				 VALUES (?, ?, ?, ?, ?, ?, 0, 3, ?, ?, ?, 'session_end')`,
+				);
+				for (let index = 0; index < 20; index++) {
+					insert.run(
+						`sweep-backlog-job-${now}-${index}`,
+						`sweep-backlog-existing-${now}-${index}`,
+						"hermes-agent",
+						null,
+						staleContent,
+						index % 2 === 0 ? "leased" : "pending",
+						new Date().toISOString(),
+						"default",
+						null,
+					);
+				}
+			});
+
+			const result = await hooks.sweepStaleSessions({ staleOlderThanMs: 24 * 60 * 60 * 1000 });
+			expect(result).toEqual({ closed: 0, skipped: 0, totalMatching: 0 });
+			const staleJobs = getDbAccessor().withReadDb((db) =>
+				db.prepare("SELECT COUNT(*) AS n FROM summary_jobs WHERE session_key = ?").get(staleKey),
+			) as { n: number };
+			expect(staleJobs.n).toBe(0);
 		});
 
 		test.serial("does not fire when there is nothing stale", async () => {
