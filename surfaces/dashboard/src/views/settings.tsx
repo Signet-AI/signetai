@@ -22,7 +22,7 @@ import { type SettingsSection, useSettings } from "@/lib/settings-context";
 import { useAsync } from "@/lib/use-async";
 import { cn } from "@/lib/utils";
 import { CheckCircle, Download, Loader2, RefreshCw, Search, TriangleAlert, X } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { type ComponentProps, useEffect, useMemo, useState } from "react";
 
 const NAV: { id: SettingsSection; label: string; icon: React.ReactNode }[] = [
 	{
@@ -69,7 +69,7 @@ export function SettingsModal() {
 							type="button"
 							onClick={() => setSection(n.id)}
 							className={cn(
-								"flex shrink-0 items-center gap-2.5 rounded-[var(--radius)] px-2.5 py-1.5 text-left text-[13px] transition-colors sm:py-2",
+								"flex min-h-11 touch-manipulation shrink-0 items-center gap-2.5 rounded-[var(--radius)] px-2.5 py-1.5 text-left text-[13px] transition-colors sm:min-h-0 sm:py-2",
 								section === n.id
 									? "bg-[color-mix(in_oklch,var(--foreground)_9%,transparent)] font-medium text-foreground shadow-[inset_0_1px_0_oklch(1_0_0/0.08)]"
 									: "text-muted-foreground hover:bg-[color-mix(in_oklch,var(--foreground)_6%,transparent)] hover:text-foreground",
@@ -91,7 +91,7 @@ export function SettingsModal() {
 							<button
 								type="button"
 								onClick={() => setOpen(false)}
-								className="grid size-7 place-items-center rounded-[var(--radius)] text-muted-foreground hover:bg-[var(--active-overlay)] hover:text-foreground"
+								className="grid size-11 touch-manipulation place-items-center rounded-[var(--radius)] text-muted-foreground hover:bg-[var(--active-overlay)] hover:text-foreground sm:size-7"
 								aria-label="Close"
 							>
 								<X className="size-4" />
@@ -134,6 +134,14 @@ function Row({ title, desc, children }: { title: string; desc?: string; children
 	);
 }
 
+function TouchSwitch(props: ComponentProps<typeof Switch>) {
+	return (
+		<span className="inline-flex min-h-11 min-w-11 touch-manipulation items-center justify-center sm:contents">
+			<Switch {...props} />
+		</span>
+	);
+}
+
 function CtrlSelect({
 	value,
 	options,
@@ -149,7 +157,7 @@ function CtrlSelect({
 		<Select value={value || NONE} onValueChange={(v) => onChange(v === NONE ? "" : v)}>
 			<SelectTrigger
 				size="sm"
-				className="h-7.5 w-full justify-between gap-2 rounded-[var(--radius)] border-[oklch(1_0_0/0.16)] bg-[color-mix(in_oklch,var(--foreground)_5%,transparent)] px-2.5 font-mono text-[11.5px] font-medium hover:border-[oklch(1_0_0/0.3)] sm:w-[220px] [html:not(.dark)_&]:border-[oklch(0_0_0/0.14)]"
+				className="h-11 w-full touch-manipulation justify-between gap-2 rounded-[var(--radius)] border-[oklch(1_0_0/0.16)] bg-[color-mix(in_oklch,var(--foreground)_5%,transparent)] px-2.5 font-mono text-[11.5px] font-medium hover:border-[oklch(1_0_0/0.3)] sm:h-7.5 sm:w-[220px] [html:not(.dark)_&]:border-[oklch(0_0_0/0.14)]"
 			>
 				<SelectValue placeholder={placeholder} />
 			</SelectTrigger>
@@ -175,7 +183,7 @@ function CtrlInput({
 	type?: string;
 }) {
 	return (
-		<div className="ctrl ctrl--field w-full sm:w-[220px]">
+		<div className="ctrl ctrl--field min-h-11 w-full touch-manipulation sm:min-h-0 sm:w-[220px]">
 			<input
 				type={type}
 				value={value}
@@ -225,10 +233,10 @@ function NetworkSection() {
 			<div className="sig-mcard flex flex-col gap-px">
 				<GroupLabel>Sync</GroupLabel>
 				<Row title="Cloud sync" desc="Encrypted backup of memories, ontology, and skills.">
-					<Switch checked={gitEnabled} onCheckedChange={(v) => apply(["git", "enabled"], v)} />
+					<TouchSwitch checked={gitEnabled} onCheckedChange={(v) => apply(["git", "enabled"], v)} />
 				</Row>
 				<Row title="Auto-commit changes" desc="Debounced git commits on workspace file changes.">
-					<Switch checked={autoCommit} onCheckedChange={(v) => apply(["git", "autoCommit"], v)} />
+					<TouchSwitch checked={autoCommit} onCheckedChange={(v) => apply(["git", "autoCommit"], v)} />
 				</Row>
 			</div>
 		</div>
@@ -865,7 +873,7 @@ function NumCtrl({
 		setText(String(clamped));
 	};
 	return (
-		<div className="ctrl ctrl--field w-full sm:w-[220px]">
+		<div className="ctrl ctrl--field min-h-11 w-full touch-manipulation sm:min-h-0 sm:w-[220px]">
 			<input
 				type="number"
 				value={text}
@@ -895,7 +903,7 @@ function AdvToggle({
 }) {
 	return (
 		<Row title={title} desc={desc}>
-			<Switch
+			<TouchSwitch
 				checked={store.aBool(path)}
 				onCheckedChange={(v) => {
 					store.aSetBool(path, v);
@@ -911,7 +919,7 @@ function DreamingToggle({ store }: { store: AgentConfigStore }) {
 
 	return (
 		<Row title="Dreaming" desc="Runs while the memory pipeline is not paused or frozen.">
-			<Switch checked={dreamingEnabled} disabled aria-label="Dreaming runtime status" />
+			<TouchSwitch checked={dreamingEnabled} disabled aria-label="Dreaming runtime status" />
 		</Row>
 	);
 }
