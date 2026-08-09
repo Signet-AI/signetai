@@ -1,4 +1,4 @@
-import type { ErrorCode, ErrorStage } from "./analytics";
+import type { ERROR_CODES, ErrorCode, ErrorStage } from "./analytics";
 import { getActiveTelemetry } from "./telemetry";
 
 export type PipelineErrorStage = Extract<ErrorStage, "extraction" | "decision" | "embedding">;
@@ -13,10 +13,27 @@ export type PipelineErrorCode = Extract<
 	| "EMBEDDING_TIMEOUT"
 >;
 
+type PipelineErrorCodeForStage<Stage extends PipelineErrorStage> = {
+	[Code in PipelineErrorCode]: (typeof ERROR_CODES)[Code] extends Stage ? Code : never;
+}[PipelineErrorCode];
+
+export type PipelineErrorPair = {
+	[Stage in PipelineErrorStage]: [stage: Stage, code: PipelineErrorCodeForStage<Stage>];
+}[PipelineErrorStage];
+
 /** Record a stage/code pair without exposing provider messages or stack data. */
-export function recordPipelineError(stage: PipelineErrorStage, code: PipelineErrorCode): void {
+export function recordPipelineError(...pair: PipelineErrorPair): void {
+	const [stage, code] = pair;
 	getActiveTelemetry()?.record("pipeline.error", { stage, code });
 }
+
+// Compile-time regression check: a code from another stage must not be accepted.
+type Assert<T extends true> = T;
+type IsAssignable<From, To> = [From] extends [To] ? true : false;
+type PipelineErrorParameters = Parameters<typeof recordPipelineError>;
+type MismatchedPipelineErrorPairIsRejected = Assert<
+	IsAssignable<["embedding", "DECISION_TIMEOUT"], PipelineErrorParameters> extends false ? true : false
+>;
 
 export function isPipelineTimeout(error: unknown): boolean {
 	if (error instanceof DOMException && error.name === "AbortError") return true;
