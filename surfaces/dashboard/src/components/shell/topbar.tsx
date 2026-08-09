@@ -20,14 +20,14 @@ export function Topbar({
 	return (
 		<header
 			className={cn(
-				"sig-drag relative z-[60] flex h-[52px] shrink-0 items-center gap-2 bg-transparent px-4 md:gap-3.5 md:px-6",
+				"sig-drag relative z-[60] flex h-[52px] shrink-0 items-center gap-2 bg-transparent px-4 sm:gap-3.5 sm:px-6",
 				platform !== "mac" && "pr-0",
 			)}
 		>
 			<button
 				type="button"
 				onClick={onMenuClick}
-				className="sig-no-drag grid size-11 touch-manipulation place-items-center rounded-[var(--radius)] text-muted-foreground hover:bg-accent hover:text-foreground md:hidden"
+				className="sig-no-drag grid size-11 touch-manipulation place-items-center rounded-[var(--radius)] text-muted-foreground hover:bg-accent hover:text-foreground sm:hidden"
 				aria-controls="dashboard-navigation"
 				aria-expanded={menuOpen}
 				aria-label={menuOpen ? "Close navigation" : "Open navigation"}
@@ -40,17 +40,17 @@ export function Topbar({
 			</div>
 			<div className="flex-1" />
 			<div
-				className="sig-no-drag relative grid size-11 place-items-center rounded-[var(--radius)] text-muted-foreground hover:bg-accent hover:text-foreground md:size-8"
+				className="sig-no-drag relative grid size-11 place-items-center rounded-[var(--radius)] text-muted-foreground hover:bg-accent hover:text-foreground sm:size-8"
 				title="Notifications"
 			>
 				<Bell className="size-[17px]" />
-				<span className="absolute top-[11px] right-[11px] size-1.5 rounded-full bg-primary md:top-[7px] md:right-[7px]" />
+				<span className="absolute top-[11px] right-[11px] size-1.5 rounded-full bg-primary sm:top-[7px] sm:right-[7px]" />
 			</div>
-			<ModeToggle className="!size-11 touch-manipulation md:hidden" />
+			<ModeToggle className="!size-11 touch-manipulation sm:hidden" />
 			<button
 				type="button"
 				onClick={() => setSettingsOpen(true)}
-				className="sig-no-drag grid size-11 touch-manipulation place-items-center rounded-[var(--radius)] text-muted-foreground hover:bg-accent hover:text-foreground md:hidden"
+				className="sig-no-drag grid size-11 touch-manipulation place-items-center rounded-[var(--radius)] text-muted-foreground hover:bg-accent hover:text-foreground sm:hidden"
 				title="Settings"
 				aria-label="Settings"
 			>

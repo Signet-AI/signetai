@@ -221,7 +221,7 @@ function NavRow({ item, active, onClick }: { item: NavItem; active: boolean; onC
 								type="button"
 								disabled
 								aria-disabled="true"
-								className="flex w-full cursor-not-allowed items-center gap-2.5 rounded-[var(--radius)] px-2.5 py-1.5 text-[13px] text-muted-foreground/60 opacity-60 max-md:min-h-11 max-md:touch-manipulation [html:not(.dark)_&]:text-muted-foreground/50"
+								className="flex w-full cursor-not-allowed items-center gap-2.5 rounded-[var(--radius)] px-2.5 py-1.5 text-[13px] text-muted-foreground/60 opacity-60 max-sm:min-h-11 max-sm:touch-manipulation [html:not(.dark)_&]:text-muted-foreground/50"
 							>
 								<Icon className="size-4 shrink-0 text-current" />
 								<span className="flex-1 text-left">{item.label}</span>
@@ -243,7 +243,7 @@ function NavRow({ item, active, onClick }: { item: NavItem; active: boolean; onC
 				type="button"
 				onClick={onClick}
 				className={cn(
-					"flex w-full items-center gap-2.5 rounded-[var(--radius)] px-2.5 py-1.5 text-[13px] opacity-72 transition-[opacity,background,color] hover:opacity-100 max-md:min-h-11 max-md:touch-manipulation",
+					"flex w-full items-center gap-2.5 rounded-[var(--radius)] px-2.5 py-1.5 text-[13px] opacity-72 transition-[opacity,background,color] hover:opacity-100 max-sm:min-h-11 max-sm:touch-manipulation",
 					active
 						? "sig-surface bg-[color-mix(in_oklch,var(--foreground)_7%,transparent)] font-medium text-sidebar-foreground opacity-100"
 						: "sig-nav-resting hover:bg-sidebar-accent hover:text-sidebar-foreground",
@@ -291,14 +291,14 @@ function AccountRow({ version }: { version?: string }) {
 					<span className="truncate font-mono text-[10px] text-muted-foreground">{version ? `v${version}` : "daemon running"}</span>
 				</span>
 				<span className="flex shrink-0 items-center gap-px">
-					<ModeToggle className="max-md:!size-11 max-md:touch-manipulation" />
+					<ModeToggle className="max-sm:!size-11 max-sm:touch-manipulation" />
 					<Button
 						variant="ghost"
 						size="icon"
 						onClick={() => setOpen(true)}
 						title="Settings"
 						aria-label="Settings"
-						className="size-[26px] rounded-[var(--radius)] max-md:size-11 max-md:touch-manipulation"
+						className="size-[26px] rounded-[var(--radius)] max-sm:size-11 max-sm:touch-manipulation"
 					>
 						<SettingsIcon className="size-3.5" />
 					</Button>

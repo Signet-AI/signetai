@@ -7,12 +7,14 @@ describe("dashboard responsive shell", () => {
 		expect(appSource).toMatch(/sig-content[\s\S]*overflow-y-auto[\s\S]*overflow-x-hidden/);
 	});
 
-	test("uses the opaque sidebar surface when navigation becomes a mobile drawer", () => {
-		expect(appSource).toMatch(/max-md:bg-sidebar/);
+	test("uses the 640px mobile cutoff so constrained desktop windows retain the desktop shell", () => {
+		expect(appSource).toContain("sm:grid-cols-[248px_1fr]");
+		expect(appSource).toMatch(/max-sm:bg-sidebar/);
+		expect(appSource).not.toContain("max-md:fixed max-md:inset-x-0");
 	});
 
 	test("drops mobile navigation down from the top and lets the same menu button close it", () => {
-		expect(appSource).toMatch(/max-md:top-\[52px\][\s\S]*max-md:-translate-y-full[\s\S]*max-md:invisible/);
+		expect(appSource).toMatch(/max-sm:top-\[52px\][\s\S]*max-sm:-translate-y-full[\s\S]*max-sm:invisible/);
 		expect(appSource).toContain("setNavOpen((open) => !open)");
 	});
 });

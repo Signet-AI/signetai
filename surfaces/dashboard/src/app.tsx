@@ -32,20 +32,20 @@ function Shell() {
 	useSettingsHotkey();
 	const [navOpen, setNavOpen] = useState(false);
 	return (
-		<div className="shell-stage grid h-full grid-cols-1 bg-background text-foreground md:grid-cols-[248px_1fr]">
+		<div className="shell-stage grid h-full grid-cols-1 bg-background text-foreground sm:grid-cols-[248px_1fr]">
 			{/* Sidebar — desktop rail; opaque top-down navigation panel on mobile. */}
 			<div
 				id="dashboard-navigation"
 				className={cn(
 					"flex flex-col",
-					"max-md:fixed max-md:inset-x-0 max-md:top-[52px] max-md:z-50 max-md:max-h-[calc(100dvh-52px)]",
-					"max-md:overflow-x-hidden max-md:overflow-y-auto max-md:border-b max-md:border-sidebar-border max-md:bg-sidebar max-md:shadow-2xl max-md:transition-transform max-md:duration-200 max-md:ease-out",
+					"max-sm:fixed max-sm:inset-x-0 max-sm:top-[52px] max-sm:z-50 max-sm:max-h-[calc(100dvh-52px)]",
+					"max-sm:overflow-x-hidden max-sm:overflow-y-auto max-sm:border-b max-sm:border-sidebar-border max-sm:bg-sidebar max-sm:shadow-2xl max-sm:transition-transform max-sm:duration-200 max-sm:ease-out",
 					navOpen
-						? "max-md:visible max-md:translate-y-0"
-						: "max-md:pointer-events-none max-md:-translate-y-full max-md:invisible",
+						? "max-sm:visible max-sm:translate-y-0"
+						: "max-sm:pointer-events-none max-sm:-translate-y-full max-sm:invisible",
 				)}
 			>
-				<div className="max-md:hidden">
+				<div className="max-sm:hidden">
 					<WindowChrome />
 				</div>
 				<Sidebar onNavigate={() => setNavOpen(false)} />
@@ -55,13 +55,13 @@ function Shell() {
 					type="button"
 					aria-label="Close navigation"
 					onClick={() => setNavOpen(false)}
-					className="fixed inset-0 z-40 bg-black/50 md:hidden"
+					className="fixed inset-0 z-40 bg-black/50 sm:hidden"
 				/>
 			)}
 
 			<main className="flex min-h-0 min-w-0 flex-col">
 				<Topbar menuOpen={navOpen} onMenuClick={() => setNavOpen((open) => !open)} />
-				<div className="sig-content relative m-0 mb-3.5 flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto overflow-x-hidden rounded-[12px] border border-[oklch(1_0_0/0.05)] bg-sidebar px-5.5 pb-4 pt-4.5 shadow-[0_1px_0_0_oklch(0_0_0/0.25),inset_0_1px_0_oklch(1_0_0/0.04)] [html:not(.dark)_&]:border-[oklch(0_0_0/0.06)] [html:not(.dark)_&]:shadow-[0_1px_2px_oklch(0_0_0/0.05),inset_0_1px_0_oklch(1_0_0/0.8)] md:mx-3.5">
+				<div className="sig-content relative m-0 mb-3.5 flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto overflow-x-hidden rounded-[12px] border border-[oklch(1_0_0/0.05)] bg-sidebar px-5.5 pb-4 pt-4.5 shadow-[0_1px_0_0_oklch(0_0_0/0.25),inset_0_1px_0_oklch(1_0_0/0.04)] [html:not(.dark)_&]:border-[oklch(0_0_0/0.06)] [html:not(.dark)_&]:shadow-[0_1px_2px_oklch(0_0_0/0.05),inset_0_1px_0_oklch(1_0_0/0.8)] sm:mx-3.5">
 					<ViewSwitch />
 				</div>
 			</main>

@@ -74,7 +74,7 @@ export function MemoryView() {
 	};
 
 	return (
-		<div className="flex flex-col gap-3.5 md:min-h-0 md:flex-1">
+		<div className="flex flex-col gap-3.5 sm:min-h-0 sm:flex-1">
 			<Surface className="flex h-10 shrink-0 items-center gap-2.5 px-3.5">
 				<Stat label="memories" value={summary?.stats ? summary.stats.total.toLocaleString() : "—"} />
 				<Stat label="indexed" value={coverage === null ? "—" : `${coverage}%`} />
@@ -115,7 +115,7 @@ export function MemoryView() {
 				<kbd className="hidden rounded border border-border px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground sm:inline">⌘K</kbd>
 			</div>
 
-			<details className="md:hidden">
+			<details className="sm:hidden">
 				<summary className="cursor-pointer rounded-[var(--radius)] border border-[oklch(1_0_0/0.1)] bg-[color-mix(in_oklch,var(--foreground)_3%,transparent)] px-3 py-2 font-mono text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground marker:text-muted-foreground">
 					Filters
 				</summary>
@@ -131,8 +131,8 @@ export function MemoryView() {
 				</div>
 			</details>
 
-			<div className="memory-workspace grid grid-cols-1 gap-4 md:min-h-0 md:flex-1 md:grid-rows-[minmax(0,1fr)] md:grid-cols-[minmax(0,1fr)_152px]">
-				<div className="flex flex-col gap-2 pr-1 md:min-h-0 md:overflow-y-auto">
+			<div className="memory-workspace grid grid-cols-1 gap-4 sm:min-h-0 sm:flex-1 sm:grid-rows-[minmax(0,1fr)] sm:grid-cols-[minmax(0,1fr)_152px]">
+				<div className="flex flex-col gap-2 pr-1 sm:min-h-0 sm:overflow-y-auto">
 					{groups.map((group) => (
 						<div key={group.label ?? "search"} className="mb-2.5 last:mb-0">
 							{group.label && <GroupHeader label={group.label} count={group.memories.length} />}
@@ -152,7 +152,7 @@ export function MemoryView() {
 					)}
 				</div>
 
-				<div className="hidden min-h-0 flex-col gap-3.5 overflow-y-auto pr-0.5 md:flex">
+				<div className="hidden min-h-0 flex-col gap-3.5 overflow-y-auto pr-0.5 sm:flex">
 					<MemoryFilterGroups
 						memoryTypes={memoryTypes}
 						topTopics={topTopics}
