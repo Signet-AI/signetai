@@ -211,6 +211,10 @@ stage/code-only properties. The remaining `pipeline.extraction` and
 `pipeline.decision` event types are declared for future use but not yet
 emitted.
 
+Source lifecycle telemetry uses fixed source classes and bounded lifecycle
+summaries. Local-only hashed state correlates first indexed, searchable, and
+first-recall milestones; the hash itself is never sent.
+
 Privacy contract:
 
 - Events carry no memory content, user identity, agent ids, or file paths.

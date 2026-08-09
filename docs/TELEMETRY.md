@@ -62,6 +62,7 @@ PostHog failures, and never throws into the daemon.
 | `recall.performed` | every completed shared recall search | `surface`, `type` (`semantic` / `keyword` / `temporal` / `graph`), `results`, `latencyMs`, `truncated` |
 | `recall.attempted` | every valid recall request or automatic prompt-context retrieval attempt | `surface` (`explicit_api` / `tool_call` / `prompt_injection` / `dashboard` / `other`) |
 | `recall.outcome` | result and delivery boundary for a recall attempt | `surface`, `resultState` (`empty` / `non_empty` / `truncated` / `error`), `deliveryState` (`returned` / `injected` / `consumed` / `not_delivered`), `results` |
+| `source.lifecycle` | bounded source connect, index, readiness, first-recall, and recurring freshness milestones | `phase`, fixed `sourceClass`, bounded outcomes/counts/buckets |
 | `pipeline.error` | categorized extraction, decision, or embedding failure | `stage`, `code` only; no message or stack content |
 | `dreaming.pass` | completed agentic dreaming pass (early-exit passes emit nothing) | `mode`, `tokensInput`, `tokensOutput`, `tokensCacheRead`, `tokensCacheWrite`, `cost` |
 | `inference.route` | inference control-plane routing decision | `surface`, `agentId`, `operation`, `taskClass`, `policyId`, `selectedTarget`, `candidateCount`, `blockedCount`, `allowedCount`, `privacy`, `durationMs`, `success`, `errorCode` |
@@ -151,6 +152,12 @@ Notes on individual events:
   are included. Local stats expose attempted, returned, and delivered counts
   by surface; they read the flushed telemetry table and can lag the in-memory
   event buffer by one flush interval.
+- **`source.lifecycle` (#1276)** — emitted at operation boundaries, never once
+  per document, message, chunk, or embedding. `phase` is `connect`, `index`,
+  `readiness`, `first_recall`, or `freshness`; source identity is represented
+  only by fixed source classes and local correlation state. Counts, sizes,
+  durations, and freshness lag use bounded buckets; names, roots, URLs,
+  identifiers, error text, queries, and content are omitted.
 
 ## Privacy contract
 
