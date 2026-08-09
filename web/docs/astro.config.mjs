@@ -8,6 +8,11 @@ export default defineConfig({
 	integrations: [
 		starlight({
 			title: "Signet Docs",
+			logo: {
+				light: "./src/assets/Signet-Logo-Black.png",
+				dark: "./src/assets/Signet-Logo-White.png",
+				alt: "Signet",
+			},
 			description: "Install, use, operate, and extend Signet.",
 			favicon: "/favicon.svg",
 			customCss: ["./src/styles/custom.css"],
@@ -37,11 +42,12 @@ export default defineConfig({
 				},
 			],
 			sidebar: [
-				{ label: "Intro", slug: "what-is-signet" },
+				{ label: "Quickstart", slug: "quickstart" },
+				{ label: "What is Signet", slug: "what-is-signet" },
 				{
 					label: "Getting Started",
+					collapsed: true,
 					items: [
-						{ label: "Quickstart", slug: "quickstart" },
 						{ label: "Install", slug: "getting-started/install" },
 						{ label: "Set up Signet", slug: "getting-started/setup" },
 						{ label: "Connect a harness", slug: "harnesses" },
@@ -52,6 +58,7 @@ export default defineConfig({
 				},
 				{
 					label: "Using Signet",
+					collapsed: true,
 					items: [
 						{ label: "Dashboard", slug: "dashboard" },
 						{ label: "Memory and recall", slug: "memory" },
@@ -65,6 +72,7 @@ export default defineConfig({
 				},
 				{
 					label: "Concepts",
+					collapsed: true,
 					items: [
 						{ label: "Knowledge architecture", slug: "knowledge-architecture" },
 						{ label: "Knowledge graph", slug: "knowledge-graph" },
@@ -88,6 +96,7 @@ export default defineConfig({
 				},
 				{
 					label: "Operate",
+					collapsed: true,
 					items: [
 						{
 							label: "Configuration",
@@ -110,6 +119,7 @@ export default defineConfig({
 				},
 				{
 					label: "Reference",
+					collapsed: true,
 					items: [
 						{
 							label: "CLI",
@@ -186,6 +196,7 @@ export default defineConfig({
 				},
 				{
 					label: "Develop",
+					collapsed: true,
 					items: [
 						{
 							label: "Architecture",

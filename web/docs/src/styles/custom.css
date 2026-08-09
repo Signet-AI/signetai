@@ -4,7 +4,8 @@
 		--sl-font-mono: "IBM Plex Mono", ui-monospace, monospace;
 		--sl-font-system: var(--sl-font);
 		--sl-content-width: 52rem;
-		--sl-sidebar-width: 17.5rem;
+		--sl-sidebar-width: 18.5rem;
+		--sl-nav-height: 4rem;
 		--sl-color-accent-low: #14234d;
 		--sl-color-accent: #4d7cfe;
 		--sl-color-accent-high: #c5d3ff;
@@ -16,57 +17,49 @@
 		--sl-color-gray-5: #28303b;
 		--sl-color-gray-6: #171d26;
 		--sl-color-black: #0c1119;
-		--signet-grid: rgb(122 135 158 / 0.08);
-		--signet-panel: rgb(15 21 31 / 0.82);
-		--signet-border: rgb(132 146 169 / 0.18);
-		--signet-shadow: 0 20px 70px rgb(0 0 0 / 0.2);
+		--signet-border: rgb(132 146 169 / 0.2);
+		--signet-nav-hover: rgb(255 255 255 / 0.045);
+		--signet-nav-active: rgb(255 255 255 / 0.075);
 	}
 
 	:root[data-theme="light"] {
 		--sl-color-accent-low: #e8eeff;
 		--sl-color-accent: #365fd4;
 		--sl-color-accent-high: #17358f;
-		--sl-color-white: #111827;
-		--sl-color-gray-1: #202938;
-		--sl-color-gray-2: #475365;
-		--sl-color-gray-3: #697588;
-		--sl-color-gray-4: #98a2b1;
-		--sl-color-gray-5: #d9dee7;
-		--sl-color-gray-6: #edf0f5;
-		--sl-color-gray-7: #f5f6f8;
-		--sl-color-black: #faf9f6;
-		--signet-grid: rgb(36 52 78 / 0.06);
-		--signet-panel: rgb(250 249 246 / 0.86);
-		--signet-border: rgb(39 53 77 / 0.14);
-		--signet-shadow: 0 20px 60px rgb(36 45 60 / 0.08);
+		--sl-color-white: #18191d;
+		--sl-color-gray-1: #292b31;
+		--sl-color-gray-2: #555962;
+		--sl-color-gray-3: #767b85;
+		--sl-color-gray-4: #a4a8af;
+		--sl-color-gray-5: #d9dadd;
+		--sl-color-gray-6: #eeeeef;
+		--sl-color-gray-7: #f6f6f5;
+		--sl-color-black: #fbfbfa;
+		--signet-border: rgb(31 35 43 / 0.14);
+		--signet-nav-hover: rgb(24 25 29 / 0.035);
+		--signet-nav-active: rgb(24 25 29 / 0.06);
 	}
 
-	html {
+	html,
+	body {
 		background: var(--sl-color-black);
 	}
 
 	body {
-		background-color: var(--sl-color-black);
-		background-image:
-			linear-gradient(var(--signet-grid) 1px, transparent 1px),
-			linear-gradient(90deg, var(--signet-grid) 1px, transparent 1px);
-		background-size: 40px 40px;
-		background-attachment: fixed;
 		font-variation-settings: "opsz" 24;
 	}
 
 	h1,
 	h2,
 	h3,
-	h4,
-	.site-title {
-		font-family: "Chakra Petch", var(--sl-font);
+	h4 {
+		font-family: var(--sl-font-mono);
 		font-weight: 600;
 		letter-spacing: -0.025em;
 	}
 
 	h1 {
-		letter-spacing: -0.045em;
+		letter-spacing: -0.035em;
 	}
 
 	code,
@@ -81,113 +74,98 @@
 @layer components {
 	.header {
 		border-bottom: 1px solid var(--signet-border);
-		background: color-mix(in srgb, var(--sl-color-black) 88%, transparent);
-		backdrop-filter: blur(18px) saturate(125%);
+		background: var(--sl-color-black);
+		backdrop-filter: none;
 	}
 
 	.site-title {
-		font-size: 0.9rem;
+		color: var(--sl-color-white);
+		font-family: "Chakra Petch", var(--sl-font);
+		font-size: 0.96rem;
 		font-weight: 700;
-		letter-spacing: 0.08em;
+		letter-spacing: 0.04em;
 		text-transform: uppercase;
 	}
 
-	.site-title::before {
-		content: "S";
-		display: grid;
-		place-items: center;
-		inline-size: 1.75rem;
-		block-size: 1.75rem;
-		margin-inline-end: 0.65rem;
-		border: 1px solid var(--sl-color-accent);
-		border-radius: 0.28rem;
-		color: var(--sl-color-accent-high);
-		font-family: "Chakra Petch", sans-serif;
-		font-size: 1rem;
-		font-weight: 700;
-		box-shadow: inset 0 0 18px color-mix(in srgb, var(--sl-color-accent) 17%, transparent);
+	.site-title img {
+		inline-size: 1.4rem;
+		block-size: 1.4rem;
+		object-fit: contain;
 	}
 
 	.sidebar-pane {
 		border-inline-end: 1px solid var(--signet-border);
-		background: color-mix(in srgb, var(--sl-color-black) 94%, transparent);
+		background: var(--sl-color-black);
 	}
 
-	.right-sidebar-panel {
-		border-inline-start: 1px solid var(--signet-border);
+	.sidebar-content {
+		font-size: 0.82rem;
+	}
+
+	.sidebar-content .top-level {
+		--sl-sidebar-item-padding-inline: 0.72rem;
+	}
+
+	.sidebar-content .top-level > li + li {
+		margin-top: 0.12rem;
+	}
+
+	.sidebar-content a,
+	.sidebar-content details > summary {
+		border-radius: 0;
+		font-size: 0.82rem;
+		letter-spacing: -0.015em;
+		line-height: 1.45;
 	}
 
 	.sidebar-content a {
-		border-radius: 0.22rem;
-		font-size: 0.76rem;
-		letter-spacing: -0.01em;
+		padding-block: 0.35rem;
 	}
 
-	.sidebar-content a[aria-current="page"] {
-		background: color-mix(in srgb, var(--sl-color-accent) 12%, transparent);
-		box-shadow: inset 2px 0 var(--sl-color-accent);
+	.sidebar-content details > summary {
+		padding-block: 0.35rem;
 	}
 
+	.sidebar-content a:hover,
+	.sidebar-content a:focus,
+	.sidebar-content details > summary:hover,
+	.sidebar-content details > summary:focus-visible {
+		background: var(--signet-nav-hover);
+	}
+
+	.sidebar-content a[aria-current="page"],
+	.sidebar-content a[aria-current="page"]:hover,
+	.sidebar-content a[aria-current="page"]:focus {
+		background: var(--signet-nav-active);
+		box-shadow: inset 2px 0 var(--sl-color-white);
+		color: var(--sl-color-white);
+		font-weight: 600;
+	}
+
+	.sidebar-content .large,
 	.group-label .large {
-		font-family: "Chakra Petch", var(--sl-font);
-		font-size: 0.73rem;
-		font-weight: 600;
-		letter-spacing: 0.08em;
-		text-transform: uppercase;
-	}
-
-	.hero {
-		padding-block: clamp(4rem, 11vw, 8rem) clamp(2.5rem, 7vw, 5rem);
-	}
-
-	.hero .tagline {
-		max-width: 47rem;
-		color: var(--sl-color-gray-2);
-		font-size: clamp(1rem, 2.1vw, 1.25rem);
-		line-height: 1.7;
-	}
-
-	.hero h1 {
-		max-width: 58rem;
-		font-size: clamp(3rem, 8vw, 6.4rem);
-		line-height: 0.92;
-		text-wrap: balance;
-	}
-
-	.sl-link-button.primary {
-		border-color: #4d7cfe;
-		background: #4d7cfe;
-		color: #fff;
-	}
-
-	.sl-link-button.primary:hover {
-		border-color: #6f94ff;
-		background: #6f94ff;
-	}
-
-	.sl-link-button {
-		border-radius: 0.3rem;
+		color: var(--sl-color-white);
 		font-family: var(--sl-font-mono);
-		font-size: 0.76rem;
+		font-size: 0.8rem;
 		font-weight: 600;
-		letter-spacing: 0.02em;
+		letter-spacing: -0.01em;
+		text-transform: none;
 	}
 
-	.card-grid > * {
-		border: 1px solid var(--signet-border);
-		border-radius: 0.45rem;
-		background: var(--signet-panel);
-		box-shadow: var(--signet-shadow);
+	.sidebar-content .caret {
+		color: var(--sl-color-gray-3);
 	}
 
-	.card-grid h2,
-	.card-grid h3 {
-		font-size: 1rem;
-		letter-spacing: 0;
+	.right-sidebar-panel {
+		border-inline-start: 0;
+	}
+
+	.right-sidebar {
+		font-size: 0.76rem;
 	}
 
 	.main-pane .content-panel {
-		background: color-mix(in srgb, var(--sl-color-black) 91%, transparent);
+		background: transparent;
 	}
 
 	.sl-markdown-content > :where(h2, h3, h4) {
@@ -207,14 +185,14 @@
 
 	.sl-markdown-content :not(pre) > code {
 		border: 1px solid var(--signet-border);
-		border-radius: 0.24rem;
+		border-radius: 0.15rem;
 		background: color-mix(in srgb, var(--sl-color-gray-6) 76%, transparent);
 		padding: 0.1em 0.34em;
 		font-size: 0.84em;
 	}
 
 	expressive-code {
-		--ec-brdRad: 0.42rem;
+		--ec-brdRad: 0.15rem;
 		--ec-brdWd: 1px;
 		--ec-brdCol: var(--signet-border);
 	}
@@ -222,23 +200,48 @@
 	starlight-theme-select select,
 	button[data-open-modal] {
 		border-color: var(--signet-border);
-		border-radius: 0.3rem;
+		border-radius: 0.2rem;
 		background: transparent;
 	}
 
 	.pagination-links a {
 		border-color: var(--signet-border);
-		border-radius: 0.35rem;
-		background: var(--signet-panel);
+		border-radius: 0.2rem;
+		background: transparent;
 	}
 }
 
-@media (max-width: 50rem) {
-	.hero {
-		padding-top: 3.5rem;
-	}
+/* Starlight's core sidebar and title rules live in a named layer. These
+   unlayered overrides keep the shell deliberately quiet and reference-led. */
+.site-title {
+	color: var(--sl-color-white);
+}
 
-	.hero h1 {
-		font-size: clamp(2.8rem, 15vw, 4.5rem);
-	}
+.site-title img {
+	inline-size: 1.5rem;
+	block-size: 1.5rem;
+}
+
+.sidebar-content .large,
+.sidebar-content .group-label .large {
+	font-family: var(--sl-font-mono);
+	font-size: 0.8rem;
+	font-weight: 600;
+	letter-spacing: -0.01em;
+	text-transform: none;
+}
+
+.sidebar-content a,
+.sidebar-content details > summary {
+	border-radius: 0;
+	font-size: 0.82rem;
+}
+
+.sidebar-content a[aria-current="page"],
+.sidebar-content a[aria-current="page"]:hover,
+.sidebar-content a[aria-current="page"]:focus {
+	background-color: var(--signet-nav-active);
+	box-shadow: inset 2px 0 var(--sl-color-white);
+	color: var(--sl-color-white);
+	font-weight: 600;
 }

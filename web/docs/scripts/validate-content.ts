@@ -119,7 +119,6 @@ function main(): number {
 	}
 
 	const required = [
-		"/",
 		"/quickstart/",
 		"/configuration/",
 		"/cli/",
