@@ -72,6 +72,7 @@ PostHog failures, and never throws into the daemon.
 | `recall.performed` | every completed shared recall search | `surface`, `type` (`semantic` / `keyword` / `temporal` / `graph`), `results`, `latencyMs`, `truncated` |
 | `recall.attempted` | every valid recall request or automatic prompt-context retrieval attempt | `surface` (`explicit_api` / `tool_call` / `prompt_injection` / `dashboard` / `other`) |
 | `recall.outcome` | result and delivery boundary for a recall attempt | `surface`, `resultState` (`empty` / `non_empty` / `truncated` / `error`), `deliveryState` (`returned` / `injected` / `consumed` / `not_delivered`), `results` |
+| `source.lifecycle` | bounded source connect, index, readiness, first-recall, and recurring freshness milestones | `phase`, fixed `sourceClass`, bounded outcomes/counts/buckets |
 | `pipeline.error` | categorized extraction, decision, or embedding failure | `stage`, `code` only; no message or stack content |
 | `dreaming.pass` | every terminal agentic dreaming pass, including no-op, failed, and cancelled passes | `mode`, `outcome`, `outcomeCode`, `tokensInput`, `tokensOutput`, `tokensCacheRead`, `tokensCacheWrite`, `cost`, `artifactsConsidered`, `memoriesCreated`, `memoriesUpdated`, `memoriesSuperseded`, `memoriesRetired`, `claimsChanged`, `relationshipsChanged`, `provenanceLinksChanged`, `toolCalls`, `durationMs` |
 | `inference.route` | inference control-plane routing decision | `surface`, `agentId`, `operation`, `taskClass`, `policyId`, `selectedTarget`, `candidateCount`, `blockedCount`, `allowedCount`, `privacy`, `durationMs`, `success`, `errorCode` |
@@ -206,6 +207,12 @@ Notes on individual events:
   content are never included. The same event is available in the local JSONL
   audit log and, when a telemetry SQLite database with its tables is present,
   the SQLite queue.
+- **`source.lifecycle` (#1276)** — emitted at operation boundaries, never once
+  per document, message, chunk, or embedding. `phase` is `connect`, `index`,
+  `readiness`, `first_recall`, or `freshness`; source identity is represented
+  only by fixed source classes and local correlation state. Counts, sizes,
+  durations, and freshness lag use bounded buckets; names, roots, URLs,
+  identifiers, error text, queries, and content are omitted.
 
 ## Privacy contract
 

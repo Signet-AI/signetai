@@ -49,6 +49,7 @@ import {
 	scoreStructuredPathEvidence,
 } from "./pipeline/structured-path-evidence";
 import { type RecallDedupeMeta, applyRecallDedupe } from "./session-recall-dedupe";
+import { recordFirstSourceRecall } from "./source-lifecycle-telemetry";
 import { escapeLike } from "./sql-utils";
 import { getActiveTelemetry } from "./telemetry";
 import { type TemporalTimeOptions, hasFreshnessIntent, resolveTemporalRecall } from "./temporal-recall";
@@ -840,6 +841,7 @@ function annotateCurrentness(content: string, info: CurrentnessInfo | undefined)
 
 interface NativeArtifactRecallHit {
 	readonly rowid: number;
+	readonly sourceId: string | null;
 	readonly sourcePath: string;
 	readonly sourceKind: string;
 	readonly harness: string | null;
@@ -1090,7 +1092,7 @@ function buildNativeArtifactRecallHits(
 			if (!table) return [];
 
 			const parts = [
-				"SELECT ma.rowid, ma.source_path, ma.source_kind, ma.harness, ma.project,",
+				"SELECT ma.rowid, ma.source_id, ma.source_path, ma.source_kind, ma.harness, ma.project,",
 				"COALESCE(ma.updated_at, ma.captured_at) AS updated_at, ma.content,",
 				"bm25(memory_artifacts_fts) AS rank",
 				"FROM memory_artifacts_fts",
@@ -1112,6 +1114,7 @@ function buildNativeArtifactRecallHits(
 
 			const rows = db.prepare(parts.join("\n")).all(...args) as Array<{
 				rowid: number;
+				source_id: string | null;
 				source_path: string;
 				source_kind: string;
 				harness: string | null;
@@ -1125,6 +1128,7 @@ function buildNativeArtifactRecallHits(
 			return rows
 				.map((row) => ({
 					rowid: row.rowid,
+					sourceId: row.source_id,
 					sourcePath: row.source_path,
 					sourceKind: row.source_kind,
 					harness: row.harness,
@@ -1213,6 +1217,7 @@ export async function hybridRecall(
 	const needsPostFilter = params.scope !== undefined || !!params.project || !!params.agentId;
 	const timings = createRecallTimingCollector();
 	const selectionSuppressedIds = new Set<string>();
+	const lifecycleSourceResults = new Map<string, { readonly source?: string; readonly source_id?: string }>();
 	const selectionDedupeEnabled = !!params.sessionKey?.trim() && params.includeRecalled !== true;
 	const suppressPreviouslyRecalledForSelection = <T extends RecallResult>(items: T[]): T[] => {
 		if (!selectionDedupeEnabled || items.length === 0) return items;
@@ -1288,6 +1293,11 @@ export async function hybridRecall(
 			latencyMs: recallTimings.totalMs,
 			truncated: response.results.length >= limit,
 		});
+		const selectedLifecycleSources = response.results.flatMap((row) => {
+			const source = lifecycleSourceResults.get(row.id);
+			return source ? [source] : [];
+		});
+		recordFirstSourceRecall(params.agentId ?? "default", [...response.results, ...selectedLifecycleSources]);
 		if (recallTimings.totalMs >= RECALL_TIMING_LOG_THRESHOLD_MS) {
 			logger.warn("memory", "Recall stage timings", {
 				agentId: params.agentId ?? "default",
@@ -2293,6 +2303,11 @@ export async function hybridRecall(
 					const content = nativeArtifactRecallContent(hit);
 					const truncated = content.length > recallTruncate;
 					const sourceId = nativeArtifactPublicId(hit);
+					if (hit.sourceId)
+						lifecycleSourceResults.set(`native-artifact:${hit.rowid}`, {
+							source: nativeArtifactRecallSource(hit),
+							source_id: hit.sourceId,
+						});
 					return {
 						id: `native-artifact:${hit.rowid}`,
 						content: truncated ? `${content.slice(0, recallTruncate)} [truncated]` : content,
@@ -2462,6 +2477,11 @@ export async function hybridRecall(
 			const content = nativeArtifactRecallContent(hit);
 			const truncated = content.length > recallTruncate;
 			const sourceId = nativeArtifactPublicId(hit);
+			if (hit.sourceId)
+				lifecycleSourceResults.set(`native-artifact:${hit.rowid}`, {
+					source: nativeArtifactRecallSource(hit),
+					source_id: hit.sourceId,
+				});
 			return {
 				id: `native-artifact:${hit.rowid}`,
 				content: truncated ? `${content.slice(0, recallTruncate)} [truncated]` : content,

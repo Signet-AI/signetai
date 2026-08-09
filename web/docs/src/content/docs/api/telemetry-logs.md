@@ -193,6 +193,14 @@ result-state, delivery-state, and count fields: `explicit_api`, `tool_call`,
 `not_delivered`. They never include query text, prompt text, memory content,
 identifiers, citations, or feedback prose.
 
+Source indexing emits bounded `source.lifecycle` summaries. The `sourceClass`
+taxonomy is fixed (`transcript`, `document`, `repository`, `note_vault`,
+`browser`, `other`); lifecycle phases cover connection, indexing, readiness,
+first recall, and recurring freshness. Counts, source size, duration, and
+freshness lag are bucketed or capped, and operation summaries replace
+per-document events. Source names, identifiers, paths, URLs, titles, error
+messages, and content are never included.
+
 ### GET /api/telemetry/stats
 
 Aggregated telemetry statistics since daemon start or since a given timestamp.

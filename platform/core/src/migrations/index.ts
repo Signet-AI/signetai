@@ -125,6 +125,7 @@ import { up as acpDeliveryReconciliation } from "./116-acp-delivery-reconciliati
 import { up as retireSummaryWorker } from "./117-retire-summary-worker";
 import { up as queuePressureIndices } from "./118-queue-pressure-indices";
 import { up as telemetryVersionObservation } from "./119-telemetry-version-observation";
+import { up as sourceLifecycleTelemetry } from "./120-source-lifecycle-telemetry";
 
 // -- Public interface consumed by Database.init() --
 
@@ -1119,6 +1120,12 @@ export const MIGRATIONS: readonly Migration[] = [
 		name: "telemetry-version-observation",
 		up: telemetryVersionObservation,
 		artifacts: { columns: [{ table: "telemetry_install", column: "last_seen_version" }] },
+	},
+	{
+		version: 120,
+		name: "source-lifecycle-telemetry",
+		up: sourceLifecycleTelemetry,
+		artifacts: { tables: ["source_lifecycle_state"] },
 	},
 ];
 

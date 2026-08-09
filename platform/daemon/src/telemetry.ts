@@ -94,6 +94,7 @@ export const TELEMETRY_EVENTS = [
 	// boundaries so search execution cannot be mistaken for delivered context.
 	"recall.attempted",
 	"recall.outcome",
+	"source.lifecycle",
 	"config.snapshot",
 ] as const;
 
