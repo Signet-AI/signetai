@@ -307,12 +307,13 @@ export function migrateLegacyRoutingToRegistry(agentsDir: string): void {
 	const synthesis = doc.getIn(["memory", "pipelineV2", "synthesis"], true);
 	const hasLegacyFlatKeys = isMap(pipeline) && LEGACY_FLAT_KEYS.some((key) => pipeline.has(key));
 	const hasLegacyFlatRouting = isMap(pipeline) && LEGACY_FLAT_ROUTING_KEYS.some((key) => pipeline.has(key));
+	const hasSynthesisBlock = isMap(pipeline) && pipeline.has("synthesis");
 	const hasNestedLegacyRouting =
 		(isMap(extraction) &&
 			["provider", "model", "endpoint", "baseUrl", "base_url"].some((key) => extraction.has(key))) ||
 		(isMap(synthesis) && ["provider", "model", "endpoint", "baseUrl", "base_url"].some((key) => synthesis.has(key)));
 
-	if (!hasNestedLegacyRouting && !hasLegacyFlatKeys) {
+	if (!hasNestedLegacyRouting && !hasLegacyFlatKeys && !hasSynthesisBlock) {
 		// Nothing to migrate; still stamp v5 so we don't re-parse every startup.
 		stampConfigVersion(doc, 5);
 		writeAtomic(path, doc.toString());
@@ -320,6 +321,11 @@ export function migrateLegacyRoutingToRegistry(agentsDir: string): void {
 	}
 
 	const mutations: string[] = [];
+
+	if (hasSynthesisBlock && isMap(pipeline)) {
+		pipeline.delete("synthesis");
+		mutations.push("removed memory.pipelineV2.synthesis");
+	}
 
 	if (hasNestedLegacyRouting || hasLegacyFlatRouting) {
 		// Ensure inference/accounts and inference/targets maps exist.
@@ -441,7 +447,6 @@ export function migrateLegacyRoutingToRegistry(agentsDir: string): void {
 		}
 	}
 	nullRoutingKeys(extraction, "extraction");
-	nullRoutingKeys(synthesis, "synthesis");
 
 	if (isMap(pipeline)) {
 		const flatStrength = pipeline.get("extractionStrength");
@@ -589,12 +594,23 @@ export function migrateRetiredExtractionWriterConfig(agentsDir: string): void {
 }
 
 // ---------------------------------------------------------------------------
-// v8: canonicalize dashboard embedding endpoint spelling (#1264)
+// v8: canonicalize embedding endpoints and remove retired memory-pipeline routing
 // ---------------------------------------------------------------------------
 // The dashboard briefly wrote `baseUrl`, while the daemon's canonical embedding
-// schema uses `base_url`. Rewrite both current and legacy embedding blocks once
-// at startup so existing files do not keep an endpoint the runtime ignores.
-export function migrateEmbeddingBaseUrl(agentsDir: string): void {
+// schema uses `base_url`. v5-v7 configs may also contain retired memory-pipeline
+// routing keys. Apply both changes in one v8 migration so neither operation can
+// stamp version 8 before the other has run.
+const RETIRED_MEMORY_ROUTING_KEYS = [
+	"allowRemoteProviders",
+	"extractionProvider",
+	"extractionModel",
+	"extractionEndpoint",
+	"extractionBaseUrl",
+	"extractionFallbackProvider",
+	"extractionCommand",
+] as const;
+
+function migrateV8(agentsDir: string): void {
 	const path = findConfigPath(agentsDir);
 	if (!path) return;
 
@@ -610,7 +626,7 @@ export function migrateEmbeddingBaseUrl(agentsDir: string): void {
 
 	const doc = parseDocument(text);
 	if (doc.errors.length > 0) {
-		logger.warn("config-migration", "Skipping embedding migration: agent.yaml has parse errors", {
+		logger.warn("config-migration", "Skipping v8 config migration: agent.yaml has parse errors", {
 			file: path,
 			errors: doc.errors.map((error) => error.message).slice(0, 3),
 		});
@@ -636,9 +652,47 @@ export function migrateEmbeddingBaseUrl(agentsDir: string): void {
 		block.delete("endpoint");
 	}
 
+	const pipeline = doc.getIn(["memory", "pipelineV2"], true);
+	if (isMap(pipeline)) {
+		if (pipeline.has("synthesis")) {
+			pipeline.delete("synthesis");
+			mutations.push("removed memory.pipelineV2.synthesis");
+		}
+		for (const key of RETIRED_MEMORY_ROUTING_KEYS) {
+			if (!pipeline.has(key)) continue;
+			pipeline.delete(key);
+			mutations.push(`removed memory.pipelineV2.${key}`);
+		}
+		const extraction = pipeline.get("extraction", true);
+		if (isMap(extraction)) {
+			for (const key of [
+				"provider",
+				"model",
+				"endpoint",
+				"baseUrl",
+				"base_url",
+				"fallbackProvider",
+				"allowRemoteProviders",
+				"command",
+			]) {
+				if (!extraction.has(key)) continue;
+				extraction.delete(key);
+				mutations.push(`removed memory.pipelineV2.extraction.${key}`);
+			}
+		}
+	}
+
 	stampConfigVersion(doc, 8);
 	writeAtomic(path, doc.toString());
 	if (mutations.length > 0) {
-		logger.info("config-migration", "Canonicalized embedding endpoint configuration", { mutations, file: path });
+		logger.info("config-migration", "Applied v8 config migration", { mutations, file: path });
 	}
+}
+
+export function migrateEmbeddingBaseUrl(agentsDir: string): void {
+	migrateV8(agentsDir);
+}
+
+export function migrateRetiredMemoryPipelineRouting(agentsDir: string): void {
+	migrateV8(agentsDir);
 }
