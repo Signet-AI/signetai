@@ -470,6 +470,10 @@
 .graph-view-root { position: relative; display: flex; flex: 1; min-height: 0; overflow: hidden; }
 .graph-stage { position: absolute; inset: 0; background-image: radial-gradient(oklch(1 0 0 / 0.03) 1px, transparent 1px); background-size: 28px 28px; }
 :root:not(.dark) .graph-stage { background-image: radial-gradient(oklch(0 0 0 / 0.03) 1px, transparent 1px); }
+@keyframes graph-density-reveal {
+	from { opacity: 0; transform: scale(0.985); }
+	to { opacity: 1; transform: scale(1); }
+}
 
 /* floating HUD telemetry overlay (CAD-style viewport anchor) */
 .graph-hud { position: absolute; top: 12px; left: 16px; z-index: 4; display: flex; align-items: center; gap: 10px;

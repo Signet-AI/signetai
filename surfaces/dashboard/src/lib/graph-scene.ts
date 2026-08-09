@@ -37,6 +37,11 @@ export interface GraphSceneData {
 	edges: readonly SceneEdge[];
 }
 
+export interface GraphSceneOptions {
+	/** Fade a rebuilt scene in after a density change instead of popping it in. */
+	fadeIn?: boolean;
+}
+
 export interface GraphSceneHandle {
 	/** Orbit-tween to a node and highlight its neighborhood. */
 	focusNode(id: string, drawerOpen?: boolean): void;
@@ -74,7 +79,11 @@ const hashSeed = (s: string, salt: number) => {
 	return Math.abs(h);
 };
 
-export function createGraphScene(container: HTMLElement, data: GraphSceneData): GraphSceneHandle {
+export function createGraphScene(
+	container: HTMLElement,
+	data: GraphSceneData,
+	options: GraphSceneOptions = {},
+): GraphSceneHandle {
 	const NODES: LayoutNode[] = [];
 	const byId = new Map<string, LayoutNode>();
 
@@ -102,7 +111,10 @@ export function createGraphScene(container: HTMLElement, data: GraphSceneData): 
 
 	const hubCount = hubs.length;
 	const deg = new Float32Array(hubCount);
-	for (const [a, b] of hubEdges) { deg[a]++; deg[b]++; }
+	for (const [a, b] of hubEdges) {
+		deg[a]++;
+		deg[b]++;
+	}
 	const pos = new Float32Array(hubCount * 3);
 	{
 		// Fibonacci sphere start — deterministic, avoids degenerate symmetry.
@@ -140,8 +152,12 @@ export function createGraphScene(container: HTMLElement, data: GraphSceneData): 
 				const fx = (dx / d) * f;
 				const fy = (dy / d) * f;
 				const fz = (dz / d) * f;
-				disp[a * 3] += fx; disp[a * 3 + 1] += fy; disp[a * 3 + 2] += fz;
-				disp[b * 3] -= fx; disp[b * 3 + 1] -= fy; disp[b * 3 + 2] -= fz;
+				disp[a * 3] += fx;
+				disp[a * 3 + 1] += fy;
+				disp[a * 3 + 2] += fz;
+				disp[b * 3] -= fx;
+				disp[b * 3 + 1] -= fy;
+				disp[b * 3 + 2] -= fz;
 			}
 		}
 		// linear attraction along edges — long links pull gently, so
@@ -155,8 +171,12 @@ export function createGraphScene(container: HTMLElement, data: GraphSceneData): 
 			const fx = dx * f;
 			const fy = dy * f;
 			const fz = dz * f;
-			disp[a * 3] += fx; disp[a * 3 + 1] += fy; disp[a * 3 + 2] += fz;
-			disp[b * 3] -= fx; disp[b * 3 + 1] -= fy; disp[b * 3 + 2] -= fz;
+			disp[a * 3] += fx;
+			disp[a * 3 + 1] += fy;
+			disp[a * 3 + 2] += fz;
+			disp[b * 3] -= fx;
+			disp[b * 3 + 1] -= fy;
+			disp[b * 3 + 2] -= fz;
 		}
 		// weak gravity + cooling temperature
 		const stepMax = 12 * (1 - iter / iterations) + 0.3;
@@ -208,7 +228,10 @@ export function createGraphScene(container: HTMLElement, data: GraphSceneData): 
 	for (const n of data.nodes) {
 		if (isHubKind(n.kind)) continue;
 		const parent = parentOf.get(n.id);
-		if (!parent) { orphans.push(n); continue; }
+		if (!parent) {
+			orphans.push(n);
+			continue;
+		}
 		if (hubIndex.has(parent)) {
 			const list = aspectsByHub.get(parent) ?? [];
 			list.push(n);
@@ -231,7 +254,10 @@ export function createGraphScene(container: HTMLElement, data: GraphSceneData): 
 	});
 	attrsByAspect.forEach((attrs, aspectId) => {
 		const aspect = byId.get(aspectId);
-		if (!aspect) { orphans.push(...attrs); return; }
+		if (!aspect) {
+			orphans.push(...attrs);
+			return;
+		}
 		const radius = 8 + attrs.length * 1.4;
 		attrs.forEach((attr, j) => {
 			const v = aspect.pos.clone().add(fanOffset(j, attrs.length, radius, hashSeed(aspectId, j + 7)));
@@ -256,6 +282,10 @@ export function createGraphScene(container: HTMLElement, data: GraphSceneData): 
 	labelContainer.style.cssText = "position:absolute;inset:0;pointer-events:none;z-index:1";
 	container.appendChild(canvas);
 	container.appendChild(labelContainer);
+	if (options.fadeIn) {
+		canvas.style.animation = "graph-density-reveal 260ms cubic-bezier(0.22, 1, 0.36, 1) both";
+		labelContainer.style.animation = "graph-density-reveal 260ms cubic-bezier(0.22, 1, 0.36, 1) both";
+	}
 
 	const scene = new THREE.Scene();
 	scene.fog = new THREE.FogExp2(0x050505, 0.0018);
@@ -286,7 +316,12 @@ export function createGraphScene(container: HTMLElement, data: GraphSceneData): 
 	controls.maxDistance = 1200;
 
 	// ── wireframe bounding sphere (Walrus anchor) ──
-	const sphereMat = new THREE.LineBasicMaterial({ color: 0x10b981, transparent: true, opacity: 0.28, depthWrite: false });
+	const sphereMat = new THREE.LineBasicMaterial({
+		color: 0x10b981,
+		transparent: true,
+		opacity: 0.28,
+		depthWrite: false,
+	});
 	const sphereModel = new OBJLoader().parse(sphereObj);
 	sphereModel.traverse((child) => {
 		if ((child as THREE.LineSegments).isLineSegments) {
@@ -309,15 +344,21 @@ export function createGraphScene(container: HTMLElement, data: GraphSceneData): 
 	const crossTex = makeShapeTexture((ctx) => {
 		ctx.lineWidth = 1.5;
 		ctx.beginPath();
-		ctx.moveTo(8, 2); ctx.lineTo(8, 14);
-		ctx.moveTo(2, 8); ctx.lineTo(14, 8);
+		ctx.moveTo(8, 2);
+		ctx.lineTo(8, 14);
+		ctx.moveTo(2, 8);
+		ctx.lineTo(14, 8);
 		ctx.stroke();
 	});
 	const diamondTex = makeShapeTexture((ctx) => {
 		ctx.lineWidth = 1.5;
 		ctx.beginPath();
-		ctx.moveTo(8, 2); ctx.lineTo(14, 8); ctx.lineTo(8, 14); ctx.lineTo(2, 8);
-		ctx.closePath(); ctx.stroke();
+		ctx.moveTo(8, 2);
+		ctx.lineTo(14, 8);
+		ctx.lineTo(8, 14);
+		ctx.lineTo(2, 8);
+		ctx.closePath();
+		ctx.stroke();
 	});
 	const squareTex = makeShapeTexture((ctx) => {
 		ctx.fillRect(6, 6, 4, 4);
@@ -325,11 +366,20 @@ export function createGraphScene(container: HTMLElement, data: GraphSceneData): 
 
 	// ── nodes rendered as multiple Points layers by kind ──
 	const KIND_TEX: Record<SceneNodeKind, THREE.CanvasTexture> = {
-		entity: diamondTex, source: crossTex, aspect: squareTex, attribute: squareTex, memory: squareTex,
+		entity: diamondTex,
+		source: crossTex,
+		aspect: squareTex,
+		attribute: squareTex,
+		memory: squareTex,
 	};
 	const KIND_SIZE: Record<SceneNodeKind, number> = { entity: 24, source: 27, aspect: 12, attribute: 9, memory: 9 };
 	const baseColors: THREE.Color[] = [];
-	interface NodeLayer { pts: THREE.Points; geo: THREE.BufferGeometry; colArr: Float32Array; origIndices: number[] }
+	interface NodeLayer {
+		pts: THREE.Points;
+		geo: THREE.BufferGeometry;
+		colArr: Float32Array;
+		origIndices: number[];
+	}
 	const nodeLayers: Partial<Record<SceneNodeKind, NodeLayer>> = {};
 	(["entity", "source", "aspect", "attribute", "memory"] as const).forEach((kind) => {
 		const kindNodes = NODES.map((n, i) => ({ n, i })).filter(({ n }) => n.kind === kind);
@@ -338,31 +388,49 @@ export function createGraphScene(container: HTMLElement, data: GraphSceneData): 
 		const pos = new Float32Array(kindNodes.length * 3);
 		const col = new Float32Array(kindNodes.length * 3);
 		kindNodes.forEach(({ n, i: origIdx }, j) => {
-			pos[j * 3] = n.pos.x; pos[j * 3 + 1] = n.pos.y; pos[j * 3 + 2] = n.pos.z;
+			pos[j * 3] = n.pos.x;
+			pos[j * 3 + 1] = n.pos.y;
+			pos[j * 3 + 2] = n.pos.z;
 			const c = new THREE.Color(COLORS[kind]);
-			col[j * 3] = c.r; col[j * 3 + 1] = c.g; col[j * 3 + 2] = c.b;
+			col[j * 3] = c.r;
+			col[j * 3 + 1] = c.g;
+			col[j * 3 + 2] = c.b;
 			if (baseColors[origIdx] === undefined) baseColors[origIdx] = c.clone();
 		});
 		geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
 		geo.setAttribute("color", new THREE.BufferAttribute(col, 3));
 		const mat = new THREE.PointsMaterial({
-			size: KIND_SIZE[kind], map: KIND_TEX[kind], vertexColors: true,
-			transparent: true, depthWrite: false, sizeAttenuation: true,
+			size: KIND_SIZE[kind],
+			map: KIND_TEX[kind],
+			vertexColors: true,
+			transparent: true,
+			depthWrite: false,
+			sizeAttenuation: true,
 		});
 		const pts = new THREE.Points(geo, mat);
 		pts.userData = { kind };
 		scene.add(pts);
 		nodeLayers[kind] = { pts, geo, colArr: col, origIndices: kindNodes.map(({ i }) => i) };
 	});
-	NODES.forEach((n, i) => { if (!baseColors[i]) baseColors[i] = new THREE.Color(COLORS[n.kind]); });
+	NODES.forEach((n, i) => {
+		if (!baseColors[i]) baseColors[i] = new THREE.Color(COLORS[n.kind]);
+	});
 
 	// ── CSS2D labels (hubs + high-weight aspects) with leader lines ──
-	interface LabelEntry { obj: CSS2DObject; div: HTMLDivElement; pos: THREE.Vector3; dir: THREE.Vector3; leader: THREE.Line }
+	interface LabelEntry {
+		obj: CSS2DObject;
+		div: HTMLDivElement;
+		pos: THREE.Vector3;
+		dir: THREE.Vector3;
+		leader: THREE.Line;
+	}
 	const labelObjs: Record<string, LabelEntry> = {};
 	// Adaptive label budget: the 40 most prominent hubs earn labels (plus
 	// all sources and high-weight aspects) so dense scenes stay readable.
 	const hubLabelThreshold = (() => {
-		const weights = NODES.filter((n) => n.kind === "entity").map((n) => n.weight).sort((a, b) => b - a);
+		const weights = NODES.filter((n) => n.kind === "entity")
+			.map((n) => n.weight)
+			.sort((a, b) => b - a);
 		return weights.length > 40 ? Math.max(0.35, weights[40]) : 0.35;
 	})();
 	NODES.forEach((n) => {
@@ -373,7 +441,8 @@ export function createGraphScene(container: HTMLElement, data: GraphSceneData): 
 		if (!labelable && (n.kind !== "aspect" || n.weight < 0.75)) return;
 		const div = document.createElement("div");
 		div.textContent = n.label;
-		div.style.cssText = "font-family:var(--font-mono);font-size:10px;color:#f4f4f5;" +
+		div.style.cssText =
+			"font-family:var(--font-mono);font-size:10px;color:#f4f4f5;" +
 			"background:rgba(9,9,11,0.9);padding:1px 4px;border-radius:3px;border:1px solid oklch(1 0 0 / 0.08);" +
 			"white-space:nowrap;opacity:0;transition:opacity .4s;letter-spacing:0.02em;font-weight:500";
 		const obj = new CSS2DObject(div);
@@ -381,11 +450,19 @@ export function createGraphScene(container: HTMLElement, data: GraphSceneData): 
 		scene.add(obj);
 		const lOffset = 10;
 		const leaderGeo = new THREE.BufferGeometry();
-		leaderGeo.setAttribute("position", new THREE.Float32BufferAttribute([
-			n.pos.x, n.pos.y, n.pos.z,
-			n.pos.x + lOffset * 0.7, n.pos.y + lOffset, n.pos.z + lOffset * 0.7,
-		], 3));
-		const leaderMat = new THREE.LineBasicMaterial({ color: 0x71717a, transparent: true, opacity: 0.5, depthWrite: false });
+		leaderGeo.setAttribute(
+			"position",
+			new THREE.Float32BufferAttribute(
+				[n.pos.x, n.pos.y, n.pos.z, n.pos.x + lOffset * 0.7, n.pos.y + lOffset, n.pos.z + lOffset * 0.7],
+				3,
+			),
+		);
+		const leaderMat = new THREE.LineBasicMaterial({
+			color: 0x71717a,
+			transparent: true,
+			opacity: 0.5,
+			depthWrite: false,
+		});
 		const leader = new THREE.Line(leaderGeo, leaderMat);
 		scene.add(leader);
 		labelObjs[n.id] = { obj, div, pos: n.pos.clone(), dir: n.dir, leader };
@@ -419,7 +496,19 @@ export function createGraphScene(container: HTMLElement, data: GraphSceneData): 
 	}
 	const gridGeo = new THREE.BufferGeometry();
 	gridGeo.setAttribute("position", new THREE.Float32BufferAttribute(gridPos, 3));
-	scene.add(new THREE.Points(gridGeo, new THREE.PointsMaterial({ size: 1.5, color: 0x1a3a30, transparent: true, opacity: 0.3, sizeAttenuation: true, depthWrite: false })));
+	scene.add(
+		new THREE.Points(
+			gridGeo,
+			new THREE.PointsMaterial({
+				size: 1.5,
+				color: 0x1a3a30,
+				transparent: true,
+				opacity: 0.3,
+				sizeAttenuation: true,
+				depthWrite: false,
+			}),
+		),
+	);
 
 	// ── dashed drop lines from hubs to floor ──
 	const dropPositions: number[] = [];
@@ -430,7 +519,17 @@ export function createGraphScene(container: HTMLElement, data: GraphSceneData): 
 	if (dropPositions.length > 0) {
 		const dropGeo = new THREE.BufferGeometry();
 		dropGeo.setAttribute("position", new THREE.Float32BufferAttribute(dropPositions, 3));
-		const dropLines = new THREE.LineSegments(dropGeo, new THREE.LineDashedMaterial({ color: 0x1a4a3a, transparent: true, opacity: 0.15, dashSize: 3, gapSize: 6, depthWrite: false }));
+		const dropLines = new THREE.LineSegments(
+			dropGeo,
+			new THREE.LineDashedMaterial({
+				color: 0x1a4a3a,
+				transparent: true,
+				opacity: 0.15,
+				dashSize: 3,
+				gapSize: 6,
+				depthWrite: false,
+			}),
+		);
 		dropLines.computeLineDistances();
 		scene.add(dropLines);
 	}
@@ -448,17 +547,36 @@ export function createGraphScene(container: HTMLElement, data: GraphSceneData): 
 	}
 	const dustGeo = new THREE.BufferGeometry();
 	dustGeo.setAttribute("position", new THREE.BufferAttribute(dustPos, 3));
-	scene.add(new THREE.Points(dustGeo, new THREE.PointsMaterial({ size: 1.5, color: 0x52525b, transparent: true, opacity: 0.4, sizeAttenuation: true, depthWrite: false })));
+	scene.add(
+		new THREE.Points(
+			dustGeo,
+			new THREE.PointsMaterial({
+				size: 1.5,
+				color: 0x52525b,
+				transparent: true,
+				opacity: 0.4,
+				sizeAttenuation: true,
+				depthWrite: false,
+			}),
+		),
+	);
 
 	// ── origin reticle crosshair ⊕ ──
 	const reticleR = 8;
 	const reticleGeo = new THREE.BufferGeometry();
-	reticleGeo.setAttribute("position", new THREE.Float32BufferAttribute([
-		-reticleR, 0, 0, reticleR, 0, 0,
-		0, -reticleR, 0, 0, reticleR, 0,
-		0, 0, -reticleR, 0, 0, reticleR,
-	], 3));
-	scene.add(new THREE.LineSegments(reticleGeo, new THREE.LineBasicMaterial({ color: 0x10b981, transparent: true, opacity: 0.4, depthWrite: false })));
+	reticleGeo.setAttribute(
+		"position",
+		new THREE.Float32BufferAttribute(
+			[-reticleR, 0, 0, reticleR, 0, 0, 0, -reticleR, 0, 0, reticleR, 0, 0, 0, -reticleR, 0, 0, reticleR],
+			3,
+		),
+	);
+	scene.add(
+		new THREE.LineSegments(
+			reticleGeo,
+			new THREE.LineBasicMaterial({ color: 0x10b981, transparent: true, opacity: 0.4, depthWrite: false }),
+		),
+	);
 
 	// ── node targeting bracket + readout (CAD-style hover reticle) ──
 	const targetBracket = new THREE.Group();
@@ -466,7 +584,14 @@ export function createGraphScene(container: HTMLElement, data: GraphSceneData): 
 	const bracketR = 14;
 	const bracketCorner = 5;
 	const cornerPts: number[] = [];
-	([[-1, -1], [1, -1], [-1, 1], [1, 1]] as const).forEach(([sx, sy]) => {
+	(
+		[
+			[-1, -1],
+			[1, -1],
+			[-1, 1],
+			[1, 1],
+		] as const
+	).forEach(([sx, sy]) => {
 		const x = sx * bracketR;
 		const y = sy * bracketR;
 		cornerPts.push(x, y, 0, x - sx * bracketCorner, y, 0);
@@ -474,11 +599,17 @@ export function createGraphScene(container: HTMLElement, data: GraphSceneData): 
 	});
 	const bracketGeo = new THREE.BufferGeometry();
 	bracketGeo.setAttribute("position", new THREE.Float32BufferAttribute(cornerPts, 3));
-	targetBracket.add(new THREE.LineSegments(bracketGeo, new THREE.LineBasicMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.8, depthWrite: false })));
+	targetBracket.add(
+		new THREE.LineSegments(
+			bracketGeo,
+			new THREE.LineBasicMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.8, depthWrite: false }),
+		),
+	);
 	scene.add(targetBracket);
 
 	const targetReadout = document.createElement("div");
-	targetReadout.style.cssText = "position:absolute;display:none;font-family:var(--font-mono);font-size:9px;" +
+	targetReadout.style.cssText =
+		"position:absolute;display:none;font-family:var(--font-mono);font-size:9px;" +
 		"color:#f4f4f5;background:rgba(9,9,11,0.92);padding:5px 8px;border-radius:4px;border:1px solid oklch(1 0 0 / 0.1);" +
 		"pointer-events:none;line-height:1.5;z-index:10;white-space:nowrap";
 	labelContainer.appendChild(targetReadout);
@@ -495,10 +626,16 @@ export function createGraphScene(container: HTMLElement, data: GraphSceneData): 
 
 	// ── turntable camera rig ──
 	interface CamTween {
-		t0: number; dur: number;
-		fromTheta: number; fromPhi: number; dTheta: number; dPhi: number;
-		fromRadius: number; toRadius: number;
-		fromTarget: THREE.Vector3; toTarget: THREE.Vector3;
+		t0: number;
+		dur: number;
+		fromTheta: number;
+		fromPhi: number;
+		dTheta: number;
+		dPhi: number;
+		fromRadius: number;
+		toRadius: number;
+		fromTarget: THREE.Vector3;
+		toTarget: THREE.Vector3;
 	}
 	let camTween: CamTween | null = null;
 	let homeView = true;
@@ -506,9 +643,8 @@ export function createGraphScene(container: HTMLElement, data: GraphSceneData): 
 		const d = dir.clone().normalize();
 		return { theta: Math.atan2(d.x, d.z), phi: Math.acos(Math.max(-1, Math.min(1, d.y))) };
 	};
-	const anglesToDir = (theta: number, phi: number) => new THREE.Vector3(
-		Math.sin(phi) * Math.sin(theta), Math.cos(phi), Math.sin(phi) * Math.cos(theta),
-	);
+	const anglesToDir = (theta: number, phi: number) =>
+		new THREE.Vector3(Math.sin(phi) * Math.sin(theta), Math.cos(phi), Math.sin(phi) * Math.cos(theta));
 	const ORIGIN = new THREE.Vector3(0, 0, 0);
 	const startTween = (toTheta: number, toPhi: number, toRadius: number, toTarget: THREE.Vector3, dur = 1680) => {
 		const a = dirToAngles(camera.position.clone().sub(ORIGIN));
@@ -519,10 +655,16 @@ export function createGraphScene(container: HTMLElement, data: GraphSceneData): 
 		while (dPhi > Math.PI) dPhi -= 2 * Math.PI;
 		while (dPhi < -Math.PI) dPhi += 2 * Math.PI;
 		camTween = {
-			t0: performance.now(), dur,
-			fromTheta: a.theta, fromPhi: a.phi, dTheta, dPhi,
-			fromRadius: camera.position.clone().sub(ORIGIN).length(), toRadius,
-			fromTarget: controls.target.clone(), toTarget: toTarget.clone(),
+			t0: performance.now(),
+			dur,
+			fromTheta: a.theta,
+			fromPhi: a.phi,
+			dTheta,
+			dPhi,
+			fromRadius: camera.position.clone().sub(ORIGIN).length(),
+			toRadius,
+			fromTarget: controls.target.clone(),
+			toTarget: toTarget.clone(),
 		};
 	};
 
@@ -540,7 +682,10 @@ export function createGraphScene(container: HTMLElement, data: GraphSceneData): 
 	};
 	const neighbors = (id: string) => {
 		const set = new Set([id]);
-		EDGES.forEach(({ from, to }) => { if (from === id) set.add(to); if (to === id) set.add(from); });
+		EDGES.forEach(({ from, to }) => {
+			if (from === id) set.add(to);
+			if (to === id) set.add(from);
+		});
 		return set;
 	};
 	const focusNode = (id: string, drawerOpen = false) => {
@@ -637,7 +782,9 @@ export function createGraphScene(container: HTMLElement, data: GraphSceneData): 
 			layer.geo.getAttribute("color").needsUpdate = true;
 		});
 		if (highlightMix > 0) {
-			edgeMeshes.forEach((e) => { (e.material as THREE.LineBasicMaterial).opacity = 0.13 - 0.1 * highlightMix; });
+			edgeMeshes.forEach((e) => {
+				(e.material as THREE.LineBasicMaterial).opacity = 0.13 - 0.1 * highlightMix;
+			});
 		}
 		Object.values(labelObjs).forEach((lb) => {
 			const dot = lb.dir.dot(camDir);
