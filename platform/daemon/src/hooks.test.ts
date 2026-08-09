@@ -2577,6 +2577,7 @@ describe("handleSynthesisRequest", () => {
 				sessionId: "sess-pr390",
 				cwd: "/home/user/signetai",
 			});
+			await flushSessionEndDeferredWork();
 
 			await reindexMemoryArtifacts("default");
 			const before = await handleSynthesisRequest({ trigger: "manual" });
@@ -2790,7 +2791,7 @@ describe("memory-lineage", () => {
 	test.serial("compaction backfills only the manifest and keeps immutable transcript content unchanged", async () => {
 		createMemoryDb([]);
 
-		const transcript = writeTranscriptArtifact({
+		const transcript = await writeTranscriptArtifact({
 			agentId: "default",
 			sessionId: "sess-compaction",
 			sessionKey: "sess-compaction",
@@ -3004,7 +3005,7 @@ describe("memory-lineage", () => {
 				for (let idx = 0; idx < 50; idx++) {
 					const at = new Date(now - day * 24 * 60 * 60 * 1000 - idx * 1000).toISOString();
 					const sessionId = `sess-${day}-${idx}`;
-					writeTranscriptArtifact({
+					await writeTranscriptArtifact({
 						agentId: "default",
 						sessionId,
 						sessionKey: sessionId,
@@ -3035,7 +3036,7 @@ describe("memory-lineage", () => {
 		const defaultStamp = new Date(Date.now() - 1_000).toISOString();
 		const agentStamp = new Date().toISOString();
 
-		writeTranscriptArtifact({
+		await writeTranscriptArtifact({
 			agentId: "default",
 			sessionId: "sess-shared",
 			sessionKey: "sess-shared",
@@ -3050,7 +3051,7 @@ describe("memory-lineage", () => {
 				),
 		});
 
-		writeTranscriptArtifact({
+		await writeTranscriptArtifact({
 			agentId: "agent-b",
 			sessionId: "sess-shared",
 			sessionKey: "sess-shared",

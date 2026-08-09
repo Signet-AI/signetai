@@ -235,20 +235,29 @@ function lockOwnerPid(path: string): number | null {
 	}
 }
 
+function lockOwnerToken(path: string): string | null {
+	try {
+		const parsed = JSON.parse(readFileSync(join(path, "owner.json"), "utf8")) as { readonly token?: unknown };
+		return typeof parsed.token === "string" ? parsed.token : null;
+	} catch {
+		return null;
+	}
+}
+
 function processIsRunning(pid: number): boolean {
 	try {
 		process.kill(pid, 0);
 		return true;
-	} catch {
-		return false;
+	} catch (error) {
+		return error instanceof Error && "code" in error && error.code === "EPERM";
 	}
 }
 
 function lockCanBeReaped(path: string, now: number): boolean {
 	try {
-		if (now - statSync(path).mtimeMs <= LOCK_DEAD_OWNER_STALE_MS) return false;
 		const pid = lockOwnerPid(path);
-		return pid === null || !processIsRunning(pid);
+		if (pid !== null) return !processIsRunning(pid);
+		return now - statSync(path).mtimeMs > LOCK_DEAD_OWNER_STALE_MS;
 	} catch {
 		return false;
 	}
@@ -265,6 +274,7 @@ async function acquireTranscriptFileLock(path: string): Promise<{ readonly lockP
 				JSON.stringify({ pid: process.pid, token, created_at: new Date().toISOString() }),
 				"utf8",
 			);
+			if (lockOwnerToken(lockPath) !== token) continue;
 			return { lockPath, token };
 		} catch (error) {
 			const code = error instanceof Error && "code" in error ? error.code : null;

@@ -1,7 +1,7 @@
 import type { Database } from "bun:sqlite";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import type { LlmProvider } from "@signet/core";
 import { resolveDefaultBasePath } from "@signet/core";
@@ -1180,17 +1180,6 @@ function ensureManifestRecord(seed: {
 	return manifest;
 }
 
-function saveManifest(path: string, frontmatter: Record<string, unknown>, body: string): ManifestState {
-	const content = `${serializeFrontmatter(frontmatter)}\n${normalizeMarkdownBody(body)}\n`;
-	writeAtomic(path, content);
-	const manifest = loadManifest(path);
-	if (!manifest) {
-		throw new Error(`Failed to reload manifest ${path}`);
-	}
-	upsertArtifactRow(path, manifest.frontmatter, manifest.body);
-	return manifest;
-}
-
 async function writeAtomicAsync(path: string, content: string): Promise<void> {
 	await mkdir(getMemoryDir(), { recursive: true });
 	const tmp = `${path}.tmp-${process.pid}-${Date.now()}`;
@@ -1198,7 +1187,7 @@ async function writeAtomicAsync(path: string, content: string): Promise<void> {
 	await rename(tmp, path);
 }
 
-async function saveManifestAsync(
+async function saveManifestAsyncUnlocked(
 	path: string,
 	frontmatter: Record<string, unknown>,
 	body: string,
@@ -1270,40 +1259,165 @@ export function ensureCanonicalManifest(seed: {
 	});
 }
 
-function withManifestLock<T>(path: string, fn: () => T): T {
-	const lockPath = `${path}.lock`;
-	const startedAt = Date.now();
-	while (true) {
-		try {
-			mkdirSync(lockPath);
-			break;
-		} catch (error) {
-			try {
-				const ageMs = Date.now() - statSync(lockPath).mtimeMs;
-				if (ageMs > 30_000) rmSync(lockPath, { recursive: true, force: true });
-			} catch {}
-			if (Date.now() - startedAt > 5_000) {
-				throw new Error(`Timed out waiting for manifest lock: ${path}`, { cause: error });
-			}
-			Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
-		}
-	}
+const MANIFEST_LOCK_TIMEOUT_MS = 5_000;
+const MANIFEST_LOCK_STALE_MS = 30_000;
+const MANIFEST_LOCK_RETRY_MS = 25;
+
+interface ManifestLockOwner {
+	readonly pid: number;
+	readonly token: string;
+}
+
+interface ManifestFileUpdate {
+	readonly frontmatter: Record<string, unknown>;
+	readonly body: string;
+}
+
+function manifestLockErrorCode(error: unknown): string | null {
+	if (!(error instanceof Error) || !("code" in error)) return null;
+	const code = error.code;
+	return typeof code === "string" ? code : null;
+}
+
+function parseManifestLockOwner(raw: string): ManifestLockOwner | null {
 	try {
-		return fn();
-	} finally {
-		rmSync(lockPath, { recursive: true, force: true });
+		const value: unknown = JSON.parse(raw);
+		if (typeof value !== "object" || value === null) return null;
+		const pid = Reflect.get(value, "pid");
+		const token = Reflect.get(value, "token");
+		if (!Number.isInteger(pid) || pid <= 0 || typeof token !== "string" || token.length === 0) return null;
+		return { pid, token };
+	} catch {
+		return null;
 	}
 }
 
-export function updateManifest(
+async function readManifestLockOwner(lockPath: string): Promise<ManifestLockOwner | null> {
+	try {
+		return parseManifestLockOwner(await readFile(join(lockPath, "owner.json"), "utf8"));
+	} catch {
+		return null;
+	}
+}
+
+async function manifestLockOwnedBy(lockPath: string, token: string): Promise<boolean> {
+	const owner = await readManifestLockOwner(lockPath);
+	return owner?.pid === process.pid && owner.token === token;
+}
+
+function isProcessAlive(pid: number): boolean {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch (error) {
+		return error instanceof Error && "code" in error && error.code === "EPERM";
+	}
+}
+
+async function recoverManifestLock(lockPath: string): Promise<void> {
+	try {
+		const lockStat = await stat(lockPath);
+		const owner = await readManifestLockOwner(lockPath);
+		if (owner) {
+			if (!isProcessAlive(owner.pid)) {
+				await rm(lockPath, { recursive: true, force: true });
+			}
+			return;
+		}
+		if (Date.now() - lockStat.mtimeMs > MANIFEST_LOCK_STALE_MS) {
+			await rm(lockPath, { recursive: true, force: true });
+		}
+	} catch {}
+}
+
+function delayManifestLockRetry(): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, MANIFEST_LOCK_RETRY_MS));
+}
+
+async function acquireManifestLock(lockPath: string, path: string): Promise<string> {
+	const startedAt = Date.now();
+	const token = randomUUID();
+	while (true) {
+		let lastError: unknown = null;
+		let owned = false;
+		try {
+			await mkdir(lockPath);
+			let ownerWriteError: unknown = null;
+			try {
+				await writeFile(join(lockPath, "owner.json"), JSON.stringify({ pid: process.pid, token }), "utf8");
+			} catch (error) {
+				if (await manifestLockOwnedBy(lockPath, token)) {
+					await rm(lockPath, { recursive: true, force: true });
+				}
+				ownerWriteError = error;
+			}
+			const ownerWriteCode = manifestLockErrorCode(ownerWriteError);
+			if (ownerWriteError && ownerWriteCode !== "EEXIST" && ownerWriteCode !== "ENOENT") {
+				throw ownerWriteError;
+			}
+			lastError = ownerWriteError;
+			if (!ownerWriteError) {
+				owned = await manifestLockOwnedBy(lockPath, token);
+				if (owned) return token;
+			}
+		} catch (error) {
+			if (manifestLockErrorCode(error) !== "EEXIST") throw error;
+			lastError = error;
+		}
+		if (manifestLockErrorCode(lastError) === "EEXIST") await recoverManifestLock(lockPath);
+		if (Date.now() - startedAt > MANIFEST_LOCK_TIMEOUT_MS) {
+			throw new Error(`Timed out waiting for manifest lock: ${path}`, { cause: lastError });
+		}
+		await delayManifestLockRetry();
+	}
+}
+
+async function releaseManifestLock(lockPath: string, token: string): Promise<void> {
+	if (!(await manifestLockOwnedBy(lockPath, token))) return;
+	await rm(lockPath, { recursive: true, force: true });
+}
+
+async function withManifestLock<T>(path: string, fn: () => Promise<T> | T): Promise<T> {
+	const lockPath = `${path}.lock`;
+	const token = await acquireManifestLock(lockPath, path);
+	try {
+		return await fn();
+	} finally {
+		await releaseManifestLock(lockPath, token);
+	}
+}
+
+let manifestUpdateTail: Promise<void> = Promise.resolve();
+
+function enqueueManifestUpdate<T>(work: () => Promise<T>): Promise<T> {
+	const run = manifestUpdateTail.catch(() => {}).then(work);
+	manifestUpdateTail = run.then(
+		() => undefined,
+		() => undefined,
+	);
+	return run;
+}
+
+async function mutateManifest(
+	path: string,
+	mutate: (current: ManifestState) => ManifestFileUpdate | null,
+): Promise<ManifestState | null> {
+	return enqueueManifestUpdate(() =>
+		withManifestLock(path, async () => {
+			const current = await loadManifestAsync(path);
+			if (!current) return null;
+			const next = mutate(current);
+			if (!next) return current;
+			return saveManifestAsyncUnlocked(path, next.frontmatter, next.body);
+		}),
+	);
+}
+
+export async function updateManifest(
 	path: string,
 	mutate: (frontmatter: Record<string, unknown>) => Record<string, unknown>,
-): ManifestState {
-	return withManifestLock(path, () => {
-		const current = loadManifest(path);
-		if (!current) {
-			throw new Error(`Manifest not found: ${path}`);
-		}
+): Promise<ManifestState> {
+	const result = await mutateManifest(path, (current) => {
 		const next = mutate({ ...current.frontmatter });
 		const revision = typeof next.revision === "number" ? next.revision : current.revision;
 		next.revision = revision + 1;
@@ -1314,15 +1428,17 @@ export function updateManifest(
 		if (!("hash_scope" in next)) {
 			next.hash_scope = HASH_SCOPE;
 		}
-		return saveManifest(path, next, current.body);
+		return { frontmatter: next, body: current.body };
 	});
+	if (!result) throw new Error(`Manifest not found: ${path}`);
+	return result;
 }
 
 function relativePath(path: string): string {
 	return path.replace(`${getAgentsDir()}/`, "").replace(/\\/g, "/");
 }
 
-export function writeTranscriptArtifact(params: {
+export async function writeTranscriptArtifact(params: {
 	readonly agentId: string;
 	readonly sessionId: string;
 	readonly sessionKey: string | null;
@@ -1333,7 +1449,7 @@ export function writeTranscriptArtifact(params: {
 	readonly endedAt: string | null;
 	readonly transcript: string;
 	readonly summaryStatus?: "pending" | "skipped" | "not_requested";
-}): { readonly manifestPath: string; readonly transcriptPath: string } {
+}): Promise<{ readonly manifestPath: string; readonly transcriptPath: string }> {
 	const manifest = ensureCanonicalManifest(params);
 	const sessionToken = deriveSessionToken(params.agentId, params.sessionId);
 	const body = sanitizeTranscriptV1(params.transcript);
@@ -1360,7 +1476,7 @@ export function writeTranscriptArtifact(params: {
 	});
 	const parsed = parseFrontmatterDocument(readFileSync(fullPath, "utf8"));
 	upsertArtifactRow(fullPath, parsed.frontmatter, normalizeMarkdownBody(parsed.body));
-	updateManifest(manifest.path, (frontmatter) => {
+	await updateManifest(manifest.path, (frontmatter) => {
 		const existingSummaryStatus = manifestValue(frontmatter, "summary_status");
 		const terminalSummaryStatus =
 			existingSummaryStatus === "completed" ||
@@ -1419,7 +1535,7 @@ export async function writeSummaryArtifact(params: {
 	});
 	const parsed = parseFrontmatterDocument(readFileSync(fullPath, "utf8"));
 	upsertArtifactRow(fullPath, parsed.frontmatter, normalizeMarkdownBody(parsed.body));
-	updateManifest(manifest.path, (frontmatter) => ({
+	await updateManifest(manifest.path, (frontmatter) => ({
 		...frontmatter,
 		summary_path: relativePath(fullPath),
 		summary_status: "completed",
@@ -1469,7 +1585,7 @@ export async function writeCompactionArtifact(params: {
 	});
 	const parsed = parseFrontmatterDocument(readFileSync(fullPath, "utf8"));
 	upsertArtifactRow(fullPath, parsed.frontmatter, normalizeMarkdownBody(parsed.body));
-	updateManifest(manifest.path, (frontmatter) => ({
+	await updateManifest(manifest.path, (frontmatter) => ({
 		...frontmatter,
 		compaction_path: relativePath(fullPath),
 		ended_at: params.endedAt,
@@ -1894,37 +2010,34 @@ async function syncManifestRefs(
 	}
 	const yielder = yieldEvery(20);
 	for (const path of files) {
-		const state = await loadManifestAsync(path);
-		if (!state) {
-			await yielder();
-			continue;
-		}
-		const rel = relativePath(path);
-		const nextRefs = set.has(rel) ? [LEDGER_HEADING] : [];
-		const nextBody =
-			nextRefs.length > 0 ? `## ${LEDGER_HEADING}\n\nThis session currently appears in the working memory ledger.` : "";
-		const currentRefs = Array.isArray(state.frontmatter.memory_md_refs)
-			? state.frontmatter.memory_md_refs.filter((value): value is string => typeof value === "string")
-			: [];
-		if (
-			currentRefs.length === nextRefs.length &&
-			currentRefs.every((value, idx) => value === nextRefs[idx]) &&
-			normalizeMarkdownBody(state.body) === nextBody
-		) {
-			await yielder();
-			continue;
-		}
-		await saveManifestAsync(
-			path,
-			{
-				...state.frontmatter,
-				memory_md_refs: nextRefs,
-				revision: state.revision + 1,
-				updated_at: new Date().toISOString(),
-				content_sha256: hashNormalizedBody(nextBody),
-			},
-			nextBody,
-		);
+		await mutateManifest(path, (state) => {
+			const rel = relativePath(path);
+			const nextRefs = set.has(rel) ? [LEDGER_HEADING] : [];
+			const nextBody =
+				nextRefs.length > 0
+					? `## ${LEDGER_HEADING}\n\nThis session currently appears in the working memory ledger.`
+					: "";
+			const currentRefs = Array.isArray(state.frontmatter.memory_md_refs)
+				? state.frontmatter.memory_md_refs.filter((value): value is string => typeof value === "string")
+				: [];
+			if (
+				currentRefs.length === nextRefs.length &&
+				currentRefs.every((value, idx) => value === nextRefs[idx]) &&
+				normalizeMarkdownBody(state.body) === nextBody
+			) {
+				return null;
+			}
+			return {
+				frontmatter: {
+					...state.frontmatter,
+					memory_md_refs: nextRefs,
+					revision: state.revision + 1,
+					updated_at: new Date().toISOString(),
+					content_sha256: hashNormalizedBody(nextBody),
+				},
+				body: nextBody,
+			};
+		});
 		await yielder();
 	}
 }

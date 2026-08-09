@@ -6,12 +6,14 @@ import cl100k_base from "js-tiktoken/ranks/cl100k_base";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import {
 	MEMORY_PROJECTION_MAX_TOKENS,
+	ensureCanonicalManifest,
 	indexExternalMemoryArtifact,
 	purgeCanonicalNoiseSessions,
 	purgeCanonicalNoiseSessionsOnce,
 	reindexMemoryArtifacts,
 	renderMemoryProjection,
 	resetProjectionPurgeState,
+	updateManifest,
 	writeSummaryArtifact,
 } from "./memory-lineage";
 import { NATIVE_MEMORY_BRIDGE_SOURCE_NODE_ID } from "./native-memory-constants";
@@ -170,6 +172,71 @@ describe("memory-lineage", () => {
 
 		expect(purgeCanonicalNoiseSessions("default", "test cleanup")).toBe(1);
 		expect(existsSync(join(dir, row.source_path))).toBe(false);
+	});
+
+	it("manifest lock contention yields to the event loop and removes dead owners", async () => {
+		const stamp = new Date().toISOString();
+		const manifest = ensureCanonicalManifest({
+			agentId: "default",
+			sessionId: "manifest-lock-contention",
+			sessionKey: "manifest-lock-contention",
+			project: "/home/user/project",
+			harness: "codex",
+			capturedAt: stamp,
+			startedAt: stamp,
+			endedAt: stamp,
+		});
+		const lockPath = `${manifest.path}.lock`;
+
+		mkdirSync(lockPath);
+		writeFileSync(`${lockPath}/owner.json`, JSON.stringify({ pid: process.pid, token: "live-test-owner" }));
+		const startedAt = performance.now();
+		const timer = new Promise<number>((resolve) => setTimeout(() => resolve(performance.now() - startedAt), 10));
+		const update = updateManifest(manifest.path, (frontmatter) => ({
+			...frontmatter,
+			summary_status: "completed",
+		}));
+
+		const eventLoopLag = await timer;
+		expect(eventLoopLag).toBeLessThan(100);
+		rmSync(lockPath, { recursive: true, force: true });
+		const updated = await update;
+		expect(updated.frontmatter.summary_status).toBe("completed");
+
+		mkdirSync(lockPath);
+		writeFileSync(`${lockPath}/owner.json`, JSON.stringify({ pid: process.pid + 100_000, token: "dead-test-owner" }));
+		const recovered = await updateManifest(manifest.path, (frontmatter) => ({
+			...frontmatter,
+			transcript_status: "completed",
+		}));
+		expect(recovered.frontmatter.transcript_status).toBe("completed");
+		expect(existsSync(lockPath)).toBe(false);
+	});
+
+	it("concurrent manifest updates are serialized without losing revisions", async () => {
+		const stamp = new Date().toISOString();
+		const manifest = ensureCanonicalManifest({
+			agentId: "default",
+			sessionId: "manifest-lock-queue",
+			sessionKey: "manifest-lock-queue",
+			project: "/home/user/project",
+			harness: "codex",
+			capturedAt: stamp,
+			startedAt: stamp,
+			endedAt: stamp,
+		});
+
+		const updates = Array.from({ length: 12 }, (_, index) =>
+			updateManifest(manifest.path, (frontmatter) => ({
+				...frontmatter,
+				last_writer: index,
+			})),
+		);
+		const results = await Promise.all(updates);
+		const revisions = results.map((result) => result.revision).sort((a, b) => a - b);
+
+		expect(revisions).toEqual(Array.from({ length: 12 }, (_, index) => index + 2));
+		expect(results[results.length - 1]?.frontmatter.last_writer).toBe(11);
 	});
 
 	it("writeSummaryArtifact is idempotent for identical content and rejects content mutation", async () => {

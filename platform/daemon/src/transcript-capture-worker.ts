@@ -261,7 +261,7 @@ async function processTranscriptCaptureJob(basePath: string, job: TranscriptCapt
 		capturedAt: job.capturedAt,
 		transcriptPath: job.transcriptPath ?? undefined,
 	});
-	const transcriptArtifact = writeTranscriptArtifact({
+	const transcriptArtifact = await writeTranscriptArtifact({
 		agentId: job.agentId,
 		sessionId: job.sessionId,
 		sessionKey: job.sessionKey,

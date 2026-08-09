@@ -352,7 +352,11 @@ export function tracksSessionSummaryArtifact(job: SummaryJobRow): boolean {
 	);
 }
 
-function updateSummaryArtifactStatus(job: SummaryJobRow, status: "failed" | "skipped", errorMessage?: string): void {
+async function updateSummaryArtifactStatus(
+	job: SummaryJobRow,
+	status: "failed" | "skipped",
+	errorMessage?: string,
+): Promise<void> {
 	if (!tracksSessionSummaryArtifact(job)) return;
 	try {
 		const manifest = ensureCanonicalManifest({
@@ -365,7 +369,7 @@ function updateSummaryArtifactStatus(job: SummaryJobRow, status: "failed" | "ski
 			startedAt: job.started_at,
 			endedAt: job.ended_at,
 		});
-		updateManifest(manifest.path, (frontmatter) => ({
+		await updateManifest(manifest.path, (frontmatter) => ({
 			...frontmatter,
 			summary_path: frontmatter.summary_path ?? null,
 			summary_status: frontmatter.summary_path ? "completed" : status,
@@ -381,12 +385,12 @@ function updateSummaryArtifactStatus(job: SummaryJobRow, status: "failed" | "ski
 	}
 }
 
-function markSummaryArtifactSkipped(job: SummaryJobRow): void {
-	updateSummaryArtifactStatus(job, "skipped");
+async function markSummaryArtifactSkipped(job: SummaryJobRow): Promise<void> {
+	await updateSummaryArtifactStatus(job, "skipped");
 }
 
-function markSummaryArtifactFailed(job: SummaryJobRow, errorMessage: string): void {
-	updateSummaryArtifactStatus(job, "failed", errorMessage);
+async function markSummaryArtifactFailed(job: SummaryJobRow, errorMessage: string): Promise<void> {
+	await updateSummaryArtifactStatus(job, "failed", errorMessage);
 }
 
 async function processJob(
@@ -401,7 +405,7 @@ async function processJob(
 	}
 
 	if (!passesSignificanceGate(accessor, job, memoryCfg)) {
-		markSummaryArtifactSkipped(job);
+		await markSummaryArtifactSkipped(job);
 		return;
 	}
 
@@ -1079,7 +1083,7 @@ export function recoverSummaryJobs(accessor: DbAccessor, limit: number = RECOVER
 		return { selected: rows.length, updated };
 	});
 	for (const row of deadRows) {
-		markSummaryArtifactFailed(row, "summary job recovered as dead after daemon restart");
+		void markSummaryArtifactFailed(row, "summary job recovered as dead after daemon restart");
 	}
 	return result;
 }
@@ -1316,7 +1320,7 @@ export function startSummaryWorker(accessor: DbAccessor, options: SummaryWorkerO
 						}
 					});
 					if (deadJobRow) {
-						markSummaryArtifactFailed(deadJobRow, errorMessage);
+						await markSummaryArtifactFailed(deadJobRow, errorMessage);
 					}
 				}
 			} catch {

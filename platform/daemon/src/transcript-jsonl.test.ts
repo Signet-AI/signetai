@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -68,6 +68,52 @@ await appendCanonicalTranscriptTurns({
 		rmSync(lock, { recursive: true, force: true });
 		expect(await proc.exited).toBe(0);
 		expect(readFileSync(path, "utf8")).toContain("queued while lock is held");
+	});
+
+	test("reaps a known-dead owner without waiting for the stale-age threshold", async () => {
+		const root = makeRoot("dead-owner");
+		const path = canonicalTranscriptPath(root, "codex");
+		const lock = `${path}.lock`;
+		mkdirSync(lock, { recursive: true });
+		writeFileSync(join(lock, "owner.json"), JSON.stringify({ pid: process.pid + 100_000, token: "dead-owner-test" }));
+
+		const startedAt = performance.now();
+		await appendCanonicalTranscriptTurns({
+			basePath: root,
+			agentId: "default",
+			harness: "codex",
+			sessionKey: "dead-owner-session",
+			sourceFormat: "live",
+			turns: [{ role: "user", content: "recovered after dead owner" }],
+		});
+
+		expect(performance.now() - startedAt).toBeLessThan(500);
+		expect(readFileSync(path, "utf8")).toContain("recovered after dead owner");
+	});
+
+	test("does not reap a live owner merely because the lock is old", async () => {
+		const root = makeRoot("live-owner");
+		const path = canonicalTranscriptPath(root, "codex");
+		const lock = `${path}.lock`;
+		mkdirSync(lock, { recursive: true });
+		writeFileSync(join(lock, "owner.json"), JSON.stringify({ pid: process.pid, token: "live-owner-test" }));
+		const old = new Date(Date.now() - 60_000);
+		utimesSync(lock, old, old);
+
+		const write = appendCanonicalTranscriptTurns({
+			basePath: root,
+			agentId: "default",
+			harness: "codex",
+			sessionKey: "live-owner-session",
+			sourceFormat: "live",
+			turns: [{ role: "user", content: "waited for live owner" }],
+		});
+
+		await Bun.sleep(25);
+		expect(existsSync(path)).toBe(false);
+		rmSync(lock, { recursive: true, force: true });
+		await write;
+		expect(readFileSync(path, "utf8")).toContain("waited for live owner");
 	});
 
 	test("retries legacy markdown backfill after a transient read failure", async () => {
