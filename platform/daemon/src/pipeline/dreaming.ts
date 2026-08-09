@@ -932,6 +932,9 @@ export function selectDreamingPassMode(
  */
 export function recordDreamingPassTelemetry(input: {
 	readonly mode: string;
+	readonly outcome: DreamingPassOutcome;
+	readonly outcomeCode: DreamingPassOutcomeCode;
+	readonly effects: DreamingPassEffects;
 	readonly usage: {
 		readonly inputTokens: number | null;
 		readonly outputTokens: number | null;
@@ -940,14 +943,310 @@ export function recordDreamingPassTelemetry(input: {
 		readonly totalCost: number | null;
 	} | null;
 }): void {
-	getActiveTelemetry()?.record("dreaming.pass", {
-		mode: input.mode,
-		tokensInput: input.usage?.inputTokens ?? null,
-		tokensOutput: input.usage?.outputTokens ?? null,
-		tokensCacheRead: input.usage?.cacheReadTokens ?? null,
-		tokensCacheWrite: input.usage?.cacheCreationTokens ?? null,
-		cost: input.usage?.totalCost ?? null,
+	try {
+		getActiveTelemetry()?.record("dreaming.pass", {
+			mode: input.mode,
+			outcome: input.outcome,
+			outcomeCode: input.outcomeCode,
+			tokensInput: input.usage?.inputTokens ?? null,
+			tokensOutput: input.usage?.outputTokens ?? null,
+			tokensCacheRead: input.usage?.cacheReadTokens ?? null,
+			tokensCacheWrite: input.usage?.cacheCreationTokens ?? null,
+			cost: input.usage?.totalCost ?? null,
+			artifactsConsidered: input.effects.artifactsConsidered,
+			memoriesCreated: input.effects.memoriesCreated,
+			memoriesUpdated: input.effects.memoriesUpdated,
+			memoriesSuperseded: input.effects.memoriesSuperseded,
+			memoriesRetired: input.effects.memoriesRetired,
+			claimsChanged: input.effects.claimsChanged,
+			relationshipsChanged: input.effects.relationshipsChanged,
+			provenanceLinksChanged: input.effects.provenanceLinksChanged,
+			toolCalls: input.effects.toolCalls,
+			durationMs: input.effects.durationMs,
+		});
+	} catch {
+		// A telemetry collector is an observer, never part of the pass result.
+	}
+}
+
+export type DreamingPassOutcome = "completed" | "no-op" | "failed" | "cancelled";
+
+export type DreamingPassOutcomeCode =
+	| "completed"
+	| "no_work"
+	| "no_effects"
+	| "partial_failure"
+	| "mutation_failure"
+	| "timeout"
+	| "cancelled"
+	| "error";
+
+export interface DreamingPassEffects {
+	readonly artifactsConsidered: number;
+	readonly memoriesCreated: number;
+	readonly memoriesUpdated: number;
+	readonly memoriesSuperseded: number;
+	readonly memoriesRetired: number;
+	readonly claimsChanged: number;
+	readonly relationshipsChanged: number;
+	readonly provenanceLinksChanged: number;
+	readonly toolCalls: number;
+	readonly durationMs: number;
+}
+
+interface DreamingPassEffectState {
+	readonly consideredArtifacts: Set<string>;
+	readonly createdMemoryIds: Set<string>;
+	readonly supersededMemoryIds: Set<string>;
+	readonly retiredMemoryIds: Set<string>;
+	claimsChanged: number;
+	relationshipsChanged: number;
+	provenanceLinksChanged: number;
+	usefulEffects: number;
+}
+
+type DreamingRetirementCandidates = ReadonlyMap<number, ReadonlySet<string>>;
+
+function createDreamingPassEffectState(): DreamingPassEffectState {
+	return {
+		consideredArtifacts: new Set(),
+		createdMemoryIds: new Set(),
+		supersededMemoryIds: new Set(),
+		retiredMemoryIds: new Set(),
+		claimsChanged: 0,
+		relationshipsChanged: 0,
+		provenanceLinksChanged: 0,
+		usefulEffects: 0,
+	};
+}
+
+function dreamingPassEffects(
+	state: DreamingPassEffectState,
+	toolCalls: number,
+	startedAtMs: number,
+): DreamingPassEffects {
+	return {
+		artifactsConsidered: state.consideredArtifacts.size,
+		memoriesCreated: state.createdMemoryIds.size,
+		// Dreaming semantic updates are represented as a new version plus a
+		// supersession, rather than an in-place memory update.
+		memoriesUpdated: 0,
+		memoriesSuperseded: state.supersededMemoryIds.size,
+		memoriesRetired: state.retiredMemoryIds.size,
+		claimsChanged: state.claimsChanged,
+		relationshipsChanged: state.relationshipsChanged,
+		provenanceLinksChanged: state.provenanceLinksChanged,
+		toolCalls,
+		durationMs: Math.max(0, Date.now() - startedAtMs),
+	};
+}
+
+function isDreamingPassCancellation(error: unknown): boolean {
+	if (error instanceof DOMException && error.name === "AbortError") return true;
+	const message = error instanceof Error ? error.message : String(error);
+	return /\bcancel(?:led|ed)?\b/i.test(message) || (error instanceof Error && error.name === "AbortError");
+}
+
+function asResultRecord(value: unknown): Record<string, unknown> | null {
+	return isRecord(value) ? value : null;
+}
+
+function countDreamingEvidenceLinks(evidence: readonly unknown[] | undefined): number {
+	if (!evidence) return 0;
+	const refs = new Set<string>();
+	for (const item of evidence) {
+		if (!isRecord(item)) continue;
+		const sourceRef = typeof item.source_ref === "string" ? item.source_ref : null;
+		const sourceKind = typeof item.source_kind === "string" ? item.source_kind : null;
+		const sourceId = typeof item.source_id === "string" ? item.source_id : null;
+		if (sourceRef !== null) refs.add(sourceRef);
+		else if (sourceKind !== null && sourceId !== null) refs.add(`${sourceKind}:${sourceId}`);
+	}
+	return refs.size;
+}
+
+function addAttributeMemoryId(accessor: DbAccessor, agentId: string, attributeId: string, set: Set<string>): void {
+	const row = accessor.withReadDb(
+		(db) =>
+			db
+				.prepare("SELECT memory_id AS memoryId FROM entity_attributes WHERE id = ? AND agent_id = ?")
+				.get(attributeId, agentId) as { memoryId: string | null } | undefined,
+	);
+	if (typeof row?.memoryId === "string") set.add(row.memoryId);
+}
+
+function collectDreamingRetirementCandidates(
+	accessor: DbAccessor,
+	agentId: string,
+	operations: readonly DreamingOperationRequest[],
+): DreamingRetirementCandidates {
+	const candidates = new Map<number, ReadonlySet<string>>();
+	for (let index = 0; index < operations.length; index += 1) {
+		const operation = operations[index];
+		if (!operation) continue;
+		const target = typeof operation.payload.target === "string" ? operation.payload.target : null;
+		if (target === null) continue;
+		const rows = accessor.withReadDb((db) => {
+			if (operation.operation === "archive_claim_value") {
+				return db
+					.prepare(
+						"SELECT memory_id AS memoryId FROM entity_attributes WHERE id = ? AND agent_id = ? AND status = 'active' AND memory_id IS NOT NULL",
+					)
+					.all(target, agentId) as Array<{ memoryId: string }>;
+			}
+			if (operation.operation === "archive_aspect") {
+				return db
+					.prepare(
+						"SELECT memory_id AS memoryId FROM entity_attributes WHERE aspect_id = ? AND agent_id = ? AND status = 'active' AND memory_id IS NOT NULL",
+					)
+					.all(target, agentId) as Array<{ memoryId: string }>;
+			}
+			if (operation.operation === "archive_entity") {
+				return db
+					.prepare(
+						`SELECT attr.memory_id AS memoryId
+						 FROM entity_attributes attr
+						 JOIN entity_aspects asp ON asp.id = attr.aspect_id AND asp.agent_id = attr.agent_id
+						 WHERE asp.entity_id = ? AND attr.agent_id = ? AND attr.status = 'active' AND attr.memory_id IS NOT NULL`,
+					)
+					.all(target, agentId) as Array<{ memoryId: string }>;
+			}
+			return [];
+		});
+		if (rows.length > 0) candidates.set(index, new Set(rows.map((row) => row.memoryId)));
+	}
+	return candidates;
+}
+
+function createdMemoryIdsRetiredByDreamingArchive(
+	accessor: DbAccessor,
+	agentId: string,
+	operation: DreamingOperationRequest,
+	createdMemoryIds: ReadonlySet<string>,
+): readonly string[] {
+	const target = typeof operation.payload.target === "string" ? operation.payload.target : null;
+	if (target === null) return [];
+	const rows = accessor.withReadDb((db) => {
+		if (operation.operation === "archive_claim_value") {
+			return db
+				.prepare(
+					"SELECT memory_id AS memoryId FROM entity_attributes WHERE id = ? AND agent_id = ? AND memory_id IS NOT NULL",
+				)
+				.all(target, agentId) as Array<{
+				memoryId: string;
+			}>;
+		}
+		if (operation.operation === "archive_aspect") {
+			return db
+				.prepare(
+					"SELECT memory_id AS memoryId FROM entity_attributes WHERE aspect_id = ? AND agent_id = ? AND memory_id IS NOT NULL",
+				)
+				.all(target, agentId) as Array<{ memoryId: string }>;
+		}
+		if (operation.operation === "archive_entity") {
+			return db
+				.prepare(
+					`SELECT attr.memory_id AS memoryId
+					 FROM entity_attributes attr
+					 JOIN entity_aspects asp ON asp.id = attr.aspect_id AND asp.agent_id = attr.agent_id
+					 WHERE asp.entity_id = ? AND attr.agent_id = ? AND attr.memory_id IS NOT NULL`,
+				)
+				.all(target, agentId) as Array<{ memoryId: string }>;
+		}
+		return [];
 	});
+	return rows.map((row) => row.memoryId).filter((memoryId) => createdMemoryIds.has(memoryId));
+}
+
+function recordDreamingOperationEffects(
+	accessor: DbAccessor,
+	agentId: string,
+	state: DreamingPassEffectState,
+	result: ApplyDreamingOperationsResult,
+	operations: readonly DreamingOperationRequest[],
+	retirementCandidates: DreamingRetirementCandidates,
+): void {
+	for (const item of result.items) {
+		if (!item.ok) continue;
+		const operation = operations[item.index];
+		if (!operation) continue;
+		const details = asResultRecord(item.result);
+		const deduped = details?.deduped === true;
+		if (operation.operation === "flag" || operation.operation === "decline_attention") {
+			continue;
+		}
+		if (deduped) continue;
+		state.usefulEffects++;
+		const isClaimOperation =
+			operation.operation === "add_claim_value" ||
+			operation.operation === "set_claim_value" ||
+			operation.operation === "supersede_claim_value" ||
+			operation.operation === "archive_claim_value" ||
+			operation.operation === "create_policy";
+		if (isClaimOperation) state.claimsChanged += 1;
+		if (
+			operation.operation === "create_link" ||
+			operation.operation === "update_link" ||
+			operation.operation === "archive_link"
+		) {
+			state.relationshipsChanged += 1;
+		}
+		if (operation.operation === "merge_entities" && typeof details?.relationshipsChanged === "number") {
+			state.relationshipsChanged += Math.max(0, details.relationshipsChanged);
+		}
+		const materializesMemory =
+			operation.operation === "add_claim_value" ||
+			operation.operation === "set_claim_value" ||
+			operation.operation === "create_policy" ||
+			(operation.operation === "supersede_claim_value" && details?.replacementCreated === true);
+		if (materializesMemory) state.provenanceLinksChanged += countDreamingEvidenceLinks(operation.evidence);
+
+		if (
+			operation.operation === "add_claim_value" ||
+			operation.operation === "set_claim_value" ||
+			operation.operation === "create_policy"
+		) {
+			if (typeof details?.memoryId === "string") state.createdMemoryIds.add(details.memoryId);
+			const supersededAttributeIds = Array.isArray(details?.supersededAttributeIds)
+				? details.supersededAttributeIds
+				: details?.previousWasActive === true && typeof details.previousAttributeId === "string"
+					? [details.previousAttributeId]
+					: [];
+			for (const id of supersededAttributeIds) {
+				if (typeof id === "string") addAttributeMemoryId(accessor, agentId, id, state.supersededMemoryIds);
+			}
+		}
+		if (operation.operation === "supersede_claim_value") {
+			const replacementAttributeId =
+				typeof details?.replacementAttributeId === "string" ? details.replacementAttributeId : null;
+			if (Array.isArray(details?.supersededAttributeIds)) {
+				for (const id of details.supersededAttributeIds) {
+					if (typeof id === "string") {
+						addAttributeMemoryId(
+							accessor,
+							agentId,
+							id,
+							replacementAttributeId === null ? state.retiredMemoryIds : state.supersededMemoryIds,
+						);
+					}
+				}
+			}
+			if (replacementAttributeId !== null && details?.replacementCreated === true) {
+				addAttributeMemoryId(accessor, agentId, replacementAttributeId, state.createdMemoryIds);
+			}
+		}
+		for (const memoryId of retirementCandidates.get(item.index) ?? []) {
+			state.retiredMemoryIds.add(memoryId);
+		}
+		for (const memoryId of createdMemoryIdsRetiredByDreamingArchive(
+			accessor,
+			agentId,
+			operation,
+			state.createdMemoryIds,
+		)) {
+			state.retiredMemoryIds.add(memoryId);
+		}
+	}
 }
 export async function runDreamingAgentPass(
 	accessor: DbAccessor,
@@ -961,7 +1260,9 @@ export async function runDreamingAgentPass(
 	writeCaps?: GraphWriteCaps,
 ): Promise<{ passId: string; applied: number; skipped: number; failed: number; summary: string }> {
 	const passId = existingPassId ?? createDreamingPass(accessor, agentId, mode);
-	const passStartedAt = new Date().toISOString();
+	const passStartedAtMs = Date.now();
+	const effects = createDreamingPassEffectState();
+	let toolCallSequence = 0;
 	try {
 		const prompt =
 			scopes.length > 1
@@ -1001,13 +1302,20 @@ export async function runDreamingAgentPass(
 					for (const scope of scopes) resetDreamingTokens(db, scope, passId, mode, null, cutoff);
 				}
 			});
+			recordDreamingPassTelemetry({
+				mode,
+				outcome: "no-op",
+				outcomeCode: "no_work",
+				effects: dreamingPassEffects(effects, 0, passStartedAtMs),
+				usage: null,
+			});
 			return { passId, applied: 0, skipped: 0, failed: 0, summary: earlyExitSummary };
 		}
 
 		let applied = 0;
 		let failed = 0;
-		let toolCallSequence = 0;
 		let applyCallbackReported = false;
+		let retirementCandidates: DreamingRetirementCandidates = new Map();
 		const rejectedEvidence: EpisodicSourceRecord[] = [];
 		// The newest captured_at each scope's search_evidence surfaced this
 		// pass; the pass-end watermark may advance only to it (#1149).
@@ -1019,11 +1327,16 @@ export async function runDreamingAgentPass(
 			actor: "dreaming",
 			passId,
 			writeCaps,
-			onOperationsApplied(result, operations) {
+			onOperationsAboutToApply(operations, scopeId) {
+				retirementCandidates = collectDreamingRetirementCandidates(accessor, scopeId, operations);
+			},
+			onOperationsApplied(result, operations, scopeId) {
 				applyCallbackReported = true;
 				applied += result.items.filter((item) => item.ok).length;
 				failed += result.items.filter((item) => !item.ok).length;
 				if (!result.ok && result.items.length === 0) failed++;
+				recordDreamingOperationEffects(accessor, scopeId, effects, result, operations, retirementCandidates);
+				retirementCandidates = new Map();
 				rejectedEvidence.push(...rejectedAgentEvidence(result, operations, []));
 			},
 			onToolCall(trace) {
@@ -1033,9 +1346,14 @@ export async function runDreamingAgentPass(
 					const scope = input !== null && typeof input.agentId === "string" ? input.agentId : agentId;
 					const transcriptRefs = surfacedTranscriptRefsByScope.get(scope) ?? new Set<string>();
 					for (const item of trace.output.items) {
-						if (!isRecord(item)) continue;
-						const ref = typeof item.sourceRef === "string" ? item.sourceRef : "";
-						if (ref.startsWith("transcript:")) transcriptRefs.add(ref);
+						const record = isRecord(item) ? item : null;
+						const sourceRef = typeof record?.sourceRef === "string" ? record.sourceRef : null;
+						const kind = typeof record?.kind === "string" ? record.kind : null;
+						const id = typeof record?.id === "string" ? record.id : null;
+						if (sourceRef !== null) effects.consideredArtifacts.add(sourceRef);
+						else if (kind !== null && id !== null) effects.consideredArtifacts.add(`${kind}:${id}`);
+						else effects.consideredArtifacts.add(`anonymous:${effects.consideredArtifacts.size}`);
+						if (sourceRef?.startsWith("transcript:")) transcriptRefs.add(sourceRef);
 					}
 					if (transcriptRefs.size > 0) surfacedTranscriptRefsByScope.set(scope, transcriptRefs);
 					// A sourceRef call reads a fragment of a source the
@@ -1068,18 +1386,18 @@ export async function runDreamingAgentPass(
 			mode,
 			promptChars: prompt.length,
 		});
-		const outcome = await executor.run({
+		const executorResult = await executor.run({
 			passId,
 			prompt,
 			tools,
 			timeoutMs: cfg.timeout,
 			maxTokens: cfg.maxOutputTokens,
 		});
-		const summary = `${outcome.summary?.trim() || "Agentic Dreaming pass completed"}`;
+		const summary = `${executorResult.summary?.trim() || "Agentic Dreaming pass completed"}`;
 		// Provider-reported aggregate when the executor surfaced it (pi-backed
 		// agent sessions); otherwise fall back to the local prompt estimate so
 		// acpx-backed passes keep a meaningful total.
-		const usage = outcome.usage ?? null;
+		const usage = executorResult.usage ?? null;
 		const tokensConsumed = usage?.totalTokens ?? countTokens(prompt);
 		// The watermark advances only to what this pass actually surfaced: a
 		// pass that completes without surfacing (or deferring) pending
@@ -1144,8 +1462,27 @@ export async function runDreamingAgentPass(
 				}
 			}
 		});
+		const outcome: DreamingPassOutcome =
+			failed > 0
+				? effects.usefulEffects === 0
+					? "failed"
+					: "completed"
+				: effects.usefulEffects === 0
+					? "no-op"
+					: "completed";
+		const outcomeCode: DreamingPassOutcomeCode =
+			effects.usefulEffects === 0
+				? failed > 0
+					? "mutation_failure"
+					: "no_effects"
+				: failed > 0
+					? "partial_failure"
+					: "completed";
 		recordDreamingPassTelemetry({
 			mode,
+			outcome,
+			outcomeCode,
+			effects: dreamingPassEffects(effects, toolCallSequence, passStartedAtMs),
 			usage,
 		});
 
@@ -1154,7 +1491,17 @@ export async function runDreamingAgentPass(
 		const message = error instanceof Error ? error.message : String(error);
 		recordPipelineError("decision", isPipelineTimeout(error) ? "DECISION_TIMEOUT" : "DECISION_INVALID");
 		logger.error("dreaming", "Agentic dreaming pass failed", undefined, { error: message });
-		failDreamingPass(accessor, passId, message);
+		try {
+			failDreamingPass(accessor, passId, message);
+		} finally {
+			recordDreamingPassTelemetry({
+				mode,
+				outcome: isDreamingPassCancellation(error) ? "cancelled" : "failed",
+				outcomeCode: isDreamingPassCancellation(error) ? "cancelled" : isPipelineTimeout(error) ? "timeout" : "error",
+				effects: dreamingPassEffects(effects, toolCallSequence, passStartedAtMs),
+				usage: null,
+			});
+		}
 		throw error;
 	}
 }

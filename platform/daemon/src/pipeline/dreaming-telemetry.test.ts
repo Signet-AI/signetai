@@ -44,6 +44,20 @@ describe("dreaming telemetry", () => {
 
 		recordDreamingPassTelemetry({
 			mode: "agentic",
+			outcome: "completed",
+			outcomeCode: "completed",
+			effects: {
+				artifactsConsidered: 12,
+				memoriesCreated: 2,
+				memoriesUpdated: 1,
+				memoriesSuperseded: 3,
+				memoriesRetired: 1,
+				claimsChanged: 4,
+				relationshipsChanged: 2,
+				provenanceLinksChanged: 5,
+				toolCalls: 7,
+				durationMs: 3210,
+			},
 			usage: {
 				inputTokens: 384561,
 				outputTokens: 18227,
@@ -52,7 +66,24 @@ describe("dreaming telemetry", () => {
 				totalCost: 0.14574042,
 			},
 		});
-		recordDreamingPassTelemetry({ mode: "hygiene", usage: null });
+		recordDreamingPassTelemetry({
+			mode: "hygiene",
+			outcome: "no-op",
+			outcomeCode: "no_work",
+			effects: {
+				artifactsConsidered: 0,
+				memoriesCreated: 0,
+				memoriesUpdated: 0,
+				memoriesSuperseded: 0,
+				memoriesRetired: 0,
+				claimsChanged: 0,
+				relationshipsChanged: 0,
+				provenanceLinksChanged: 0,
+				toolCalls: 0,
+				durationMs: 4,
+			},
+			usage: null,
+		});
 		await collector.flush();
 
 		const passes = collector.query().filter((e) => e.event === "dreaming.pass");
@@ -63,8 +94,22 @@ describe("dreaming telemetry", () => {
 		expect(full?.properties.tokensCacheRead).toBe(100000);
 		expect(full?.properties.tokensCacheWrite).toBe(5000);
 		expect(full?.properties.cost).toBe(0.14574042);
+		expect(full?.properties.outcome).toBe("completed");
+		expect(full?.properties.outcomeCode).toBe("completed");
+		expect(full?.properties.artifactsConsidered).toBe(12);
+		expect(full?.properties.memoriesCreated).toBe(2);
+		expect(full?.properties.memoriesUpdated).toBe(1);
+		expect(full?.properties.memoriesSuperseded).toBe(3);
+		expect(full?.properties.memoriesRetired).toBe(1);
+		expect(full?.properties.claimsChanged).toBe(4);
+		expect(full?.properties.relationshipsChanged).toBe(2);
+		expect(full?.properties.provenanceLinksChanged).toBe(5);
+		expect(full?.properties.toolCalls).toBe(7);
+		expect(full?.properties.durationMs).toBe(3210);
 		const bare = passes.find((e) => e.properties.mode === "hygiene");
 		expect(bare?.properties.tokensInput).toBeNull();
 		expect(bare?.properties.cost).toBeNull();
+		expect(bare?.properties.outcome).toBe("no-op");
+		expect(bare?.properties.outcomeCode).toBe("no_work");
 	});
 });

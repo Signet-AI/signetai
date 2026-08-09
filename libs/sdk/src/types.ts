@@ -502,6 +502,35 @@ export interface TelemetryStatsEnabledResponse {
 		readonly tokensCacheRead: number;
 		readonly tokensCacheWrite: number;
 		readonly cost: number;
+		readonly artifactsConsidered: number;
+		readonly memoriesCreated: number;
+		readonly memoriesUpdated: number;
+		readonly memoriesSuperseded: number;
+		readonly memoriesRetired: number;
+		readonly claimsChanged: number;
+		readonly relationshipsChanged: number;
+		readonly provenanceLinksChanged: number;
+		readonly toolCalls: number;
+		readonly durationMs: number;
+		readonly outcomes: readonly { readonly outcome: string; readonly calls: number }[];
+		readonly outcomeCodes: readonly { readonly code: string; readonly calls: number }[];
+		readonly byMode: readonly {
+			readonly mode: string;
+			readonly calls: number;
+			readonly tokensInput: number;
+			readonly tokensOutput: number;
+			readonly cost: number;
+			readonly artifactsConsidered: number;
+			readonly memoriesCreated: number;
+			readonly memoriesUpdated: number;
+			readonly memoriesSuperseded: number;
+			readonly memoriesRetired: number;
+			readonly claimsChanged: number;
+			readonly relationshipsChanged: number;
+			readonly provenanceLinksChanged: number;
+			readonly toolCalls: number;
+			readonly durationMs: number;
+		}[];
 	};
 	readonly recall: {
 		readonly calls: number;

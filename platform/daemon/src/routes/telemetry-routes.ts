@@ -214,6 +214,37 @@ export function registerTelemetryRoutes(app: Hono): void {
 		let dreamingCacheRead = 0;
 		let dreamingCacheWrite = 0;
 		let dreamingCost = 0;
+		let dreamingArtifacts = 0;
+		let dreamingMemoriesCreated = 0;
+		let dreamingMemoriesUpdated = 0;
+		let dreamingMemoriesSuperseded = 0;
+		let dreamingMemoriesRetired = 0;
+		let dreamingClaimsChanged = 0;
+		let dreamingRelationshipsChanged = 0;
+		let dreamingProvenanceLinksChanged = 0;
+		let dreamingToolCalls = 0;
+		let dreamingDurationMs = 0;
+		const dreamingOutcomes = new Map<string, number>();
+		const dreamingOutcomeCodes = new Map<string, number>();
+		const dreamingByMode = new Map<
+			string,
+			{
+				calls: number;
+				tokensInput: number;
+				tokensOutput: number;
+				cost: number;
+				artifactsConsidered: number;
+				memoriesCreated: number;
+				memoriesUpdated: number;
+				memoriesSuperseded: number;
+				memoriesRetired: number;
+				claimsChanged: number;
+				relationshipsChanged: number;
+				provenanceLinksChanged: number;
+				toolCalls: number;
+				durationMs: number;
+			}
+		>();
 		let recallCalls = 0;
 		let recallAttempts = 0;
 		let recallReturned = 0;
@@ -257,6 +288,55 @@ export function registerTelemetryRoutes(app: Hono): void {
 				if (typeof e.properties.tokensCacheRead === "number") dreamingCacheRead += e.properties.tokensCacheRead;
 				if (typeof e.properties.tokensCacheWrite === "number") dreamingCacheWrite += e.properties.tokensCacheWrite;
 				if (typeof e.properties.cost === "number") dreamingCost += e.properties.cost;
+				const numberProperty = (name: string): number =>
+					typeof e.properties[name] === "number" && Number.isFinite(e.properties[name]) ? e.properties[name] : 0;
+				const outcome = typeof e.properties.outcome === "string" ? e.properties.outcome : "unknown";
+				const outcomeCode = typeof e.properties.outcomeCode === "string" ? e.properties.outcomeCode : "unknown";
+				dreamingOutcomes.set(outcome, (dreamingOutcomes.get(outcome) ?? 0) + 1);
+				dreamingOutcomeCodes.set(outcomeCode, (dreamingOutcomeCodes.get(outcomeCode) ?? 0) + 1);
+				dreamingArtifacts += numberProperty("artifactsConsidered");
+				dreamingMemoriesCreated += numberProperty("memoriesCreated");
+				dreamingMemoriesUpdated += numberProperty("memoriesUpdated");
+				dreamingMemoriesSuperseded += numberProperty("memoriesSuperseded");
+				dreamingMemoriesRetired += numberProperty("memoriesRetired");
+				dreamingClaimsChanged += numberProperty("claimsChanged");
+				dreamingRelationshipsChanged += numberProperty("relationshipsChanged");
+				dreamingProvenanceLinksChanged += numberProperty("provenanceLinksChanged");
+				dreamingToolCalls += numberProperty("toolCalls");
+				dreamingDurationMs += numberProperty("durationMs");
+
+				const mode = typeof e.properties.mode === "string" ? e.properties.mode : "unknown";
+				const byMode = dreamingByMode.get(mode) ?? {
+					calls: 0,
+					tokensInput: 0,
+					tokensOutput: 0,
+					cost: 0,
+					artifactsConsidered: 0,
+					memoriesCreated: 0,
+					memoriesUpdated: 0,
+					memoriesSuperseded: 0,
+					memoriesRetired: 0,
+					claimsChanged: 0,
+					relationshipsChanged: 0,
+					provenanceLinksChanged: 0,
+					toolCalls: 0,
+					durationMs: 0,
+				};
+				byMode.calls++;
+				byMode.tokensInput += numberProperty("tokensInput");
+				byMode.tokensOutput += numberProperty("tokensOutput");
+				byMode.cost += numberProperty("cost");
+				byMode.artifactsConsidered += numberProperty("artifactsConsidered");
+				byMode.memoriesCreated += numberProperty("memoriesCreated");
+				byMode.memoriesUpdated += numberProperty("memoriesUpdated");
+				byMode.memoriesSuperseded += numberProperty("memoriesSuperseded");
+				byMode.memoriesRetired += numberProperty("memoriesRetired");
+				byMode.claimsChanged += numberProperty("claimsChanged");
+				byMode.relationshipsChanged += numberProperty("relationshipsChanged");
+				byMode.provenanceLinksChanged += numberProperty("provenanceLinksChanged");
+				byMode.toolCalls += numberProperty("toolCalls");
+				byMode.durationMs += numberProperty("durationMs");
+				dreamingByMode.set(mode, byMode);
 			}
 			if (e.event === "pipeline.error") {
 				pipelineErrors++;
@@ -329,6 +409,25 @@ export function registerTelemetryRoutes(app: Hono): void {
 				tokensCacheRead: dreamingCacheRead,
 				tokensCacheWrite: dreamingCacheWrite,
 				cost: dreamingCost,
+				artifactsConsidered: dreamingArtifacts,
+				memoriesCreated: dreamingMemoriesCreated,
+				memoriesUpdated: dreamingMemoriesUpdated,
+				memoriesSuperseded: dreamingMemoriesSuperseded,
+				memoriesRetired: dreamingMemoriesRetired,
+				claimsChanged: dreamingClaimsChanged,
+				relationshipsChanged: dreamingRelationshipsChanged,
+				provenanceLinksChanged: dreamingProvenanceLinksChanged,
+				toolCalls: dreamingToolCalls,
+				durationMs: dreamingDurationMs,
+				outcomes: [...dreamingOutcomes.entries()]
+					.map(([outcome, calls]) => ({ outcome, calls }))
+					.sort((a, b) => a.outcome.localeCompare(b.outcome)),
+				outcomeCodes: [...dreamingOutcomeCodes.entries()]
+					.map(([code, calls]) => ({ code, calls }))
+					.sort((a, b) => a.code.localeCompare(b.code)),
+				byMode: [...dreamingByMode.entries()]
+					.map(([mode, totals]) => ({ mode, ...totals }))
+					.sort((a, b) => a.mode.localeCompare(b.mode)),
 			},
 			recall: {
 				calls: recallCalls,

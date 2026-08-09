@@ -244,7 +244,11 @@ because they share the same anonymous `distinct_id`. `pipeline.embedding`
 (tokens, provider, sourceKind — memory capture / artifact index / recall /
 dreaming), and `dreaming.pass`
 (provider-reported input/output/cache tokens and cost per agentic
-pass). The remaining `pipeline.*` event types are declared
+pass, plus bounded outcomes and content-free artifact, durable-effect,
+tool-call, and duration counters). `dreaming.pass` never includes artifact
+names, memory text, prompts, tool arguments, source paths, or raw agent
+identities; unavailable provider usage remains null rather than inferred zero
+usage. The remaining `pipeline.*` event types are declared
 for future use but not yet emitted.
 
 ## Release Download Stats

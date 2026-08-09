@@ -810,6 +810,8 @@ describe("Dreaming", () => {
 	});
 
 	it("records empty and failed bounded-agent passes honestly", async () => {
+		const telemetry = captureTelemetry();
+		setActiveTelemetry(telemetry.collector);
 		const empty = await runDreamingAgentPass(
 			accessor,
 			{
@@ -825,6 +827,12 @@ describe("Dreaming", () => {
 		);
 		expect(empty.summary).toBe("No new episodic evidence or semantic attention to process");
 		expect(empty.applied).toBe(0);
+		expect(telemetry.events).toContainEqual(
+			expect.objectContaining({
+				event: "dreaming.pass",
+				properties: expect.objectContaining({ outcome: "no-op", outcomeCode: "no_work" }),
+			}),
+		);
 
 		// Seed evidence with a future watermark so it is unambiguously newer
 		// than the previous pass's cutoff (same-second seeds are racy).
@@ -845,6 +853,12 @@ describe("Dreaming", () => {
 			),
 		).rejects.toThrow("agent timeout");
 		expect(getDreamingPasses(accessor, AGENT).find((pass) => pass.status === "failed")?.error).toBe("agent timeout");
+		expect(telemetry.events).toContainEqual(
+			expect.objectContaining({
+				event: "dreaming.pass",
+				properties: expect.objectContaining({ outcome: "failed", outcomeCode: "timeout" }),
+			}),
+		);
 	});
 
 	it("selects the focused runbook, alternating when both kinds of work are pending (#1098)", () => {

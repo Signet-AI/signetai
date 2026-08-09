@@ -223,7 +223,9 @@ export interface CreateDreamingCapabilitiesParams {
 	readonly onOperationsApplied?: (
 		result: ApplyDreamingOperationsResult,
 		operations: readonly DreamingOperationRequest[],
+		agentId: string,
 	) => void;
+	readonly onOperationsAboutToApply?: (operations: readonly DreamingOperationRequest[], agentId: string) => void;
 	readonly onToolCall?: (trace: DreamingToolCallTrace) => void;
 }
 
@@ -632,6 +634,7 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 				operations: z.array(DREAMING_ONTOLOGY_OPERATION_SCHEMA).min(1).max(100),
 			}),
 			async ({ agentId: scopeId, operations }) => {
+				params.onOperationsAboutToApply?.(operations, scopeId);
 				const result = applyDreamingOperations({
 					accessor,
 					agentId: scopeId,
@@ -640,7 +643,7 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 					passId: params.passId,
 					writeCaps: params.writeCaps,
 				});
-				params.onOperationsApplied?.(result, operations);
+				params.onOperationsApplied?.(result, operations, scopeId);
 				return { ok: result.ok, ...(result.error ? { error: result.error } : {}), items: result.items };
 			},
 		),

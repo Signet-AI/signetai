@@ -73,7 +73,7 @@ PostHog failures, and never throws into the daemon.
 | `recall.attempted` | every valid recall request or automatic prompt-context retrieval attempt | `surface` (`explicit_api` / `tool_call` / `prompt_injection` / `dashboard` / `other`) |
 | `recall.outcome` | result and delivery boundary for a recall attempt | `surface`, `resultState` (`empty` / `non_empty` / `truncated` / `error`), `deliveryState` (`returned` / `injected` / `consumed` / `not_delivered`), `results` |
 | `pipeline.error` | categorized extraction, decision, or embedding failure | `stage`, `code` only; no message or stack content |
-| `dreaming.pass` | completed agentic dreaming pass (early-exit passes emit nothing) | `mode`, `tokensInput`, `tokensOutput`, `tokensCacheRead`, `tokensCacheWrite`, `cost` |
+| `dreaming.pass` | every terminal agentic dreaming pass, including no-op, failed, and cancelled passes | `mode`, `outcome`, `outcomeCode`, `tokensInput`, `tokensOutput`, `tokensCacheRead`, `tokensCacheWrite`, `cost`, `artifactsConsidered`, `memoriesCreated`, `memoriesUpdated`, `memoriesSuperseded`, `memoriesRetired`, `claimsChanged`, `relationshipsChanged`, `provenanceLinksChanged`, `toolCalls`, `durationMs` |
 | `inference.route` | inference control-plane routing decision | `surface`, `agentId`, `operation`, `taskClass`, `policyId`, `selectedTarget`, `candidateCount`, `blockedCount`, `allowedCount`, `privacy`, `durationMs`, `success`, `errorCode` |
 | `inference.execute` / `inference.stream` | per-execution outcome | `surface`, `agentId`, `operation`, `taskClass`, `policyId`, `selectedTarget`, `finalTarget`, `attemptPath`, `failedTargets`, `attemptCount`, `failedCount`, `fallbackCount`, `privacy`, `durationMs`, `inputTokens`, `outputTokens`, `success`, `cancelled`, `errorCode` |
 | `inference.fallback` | emitted alongside execute/stream when a target failed and routing fell back | same fields as execute/stream |
@@ -140,7 +140,18 @@ Notes on individual events:
   concurrent sessions are never guessed together.
 - **`dreaming.pass`** — dreaming is the largest token consumer (millions of
   input tokens per heavy install), so always include it in token/cost
-  aggregates.
+  aggregates. `outcome` is one of `completed`, `no-op`, `failed`, or
+  `cancelled`; `outcomeCode` is bounded (`completed`, `no_work`,
+  `no_effects`, `partial_failure`, `mutation_failure`, `timeout`,
+  `cancelled`, or `error`). A successful pass with no durable graph effect is
+  `no-op`; a focused pass that has no work is `no_work`. Provider usage fields
+  remain null when unavailable, which is distinct from a no-op. Effect fields
+  contain counts only: they never include artifact names, memory text,
+  prompts, tool arguments, source paths, or raw agent identities. Semantic
+  memory version replacements are counted as created/superseded rather than
+  in-place updates. `artifactsConsidered` counts unique evidence references
+  surfaced by the pass, `toolCalls` counts completed capability calls, and
+  `durationMs` is the bounded wall-clock pass duration.
 - **`recall.performed`** — emitted at the shared `hybridRecall` boundary with
   counts and timing only. Aggregate recall can emit one event for the main
   search and additional events for decomposed subqueries. It measures search
@@ -358,6 +369,7 @@ vault mirrors the key PostHog aggregates for daily review via
 | 0.172.0 | `pipeline.embedding` with stats (#1181) |
 | 0.173.0 | `install.activated` on first daemon run |
 | 0.174.0 | `dreaming.pass` with provider-reported token usage and cost |
+| Unreleased | `dreaming.pass` effect counters and bounded terminal outcomes (#1281) |
 | 0.176.0 | Sanitized crash reports: full `error.occurred` payload (truncated, home-stripped message + top-8 stack frames) and rate-limited `EventLoopLag` wedge reports |
 | next | `session.turn` + real `session.end` split (#1212): the per-turn event renamed from the old `session.end`; `session.end` now fires only at real terminations, deduped per lifetime; `sessionHash` added to all three session events |
 | Unreleased | Previous daemon-exit reconciliation: `daemon.previous_exit` reports bounded `clean`, `error`, or `unrecorded` classification on the next boot (#1255) |

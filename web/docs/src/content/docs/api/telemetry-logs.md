@@ -233,7 +233,44 @@ Aggregated telemetry statistics since daemon start or since a given timestamp.
     "tokensOutput": 24000,
     "tokensCacheRead": 60000,
     "tokensCacheWrite": 0,
-    "cost": 0.45
+    "cost": 0.45,
+    "artifactsConsidered": 36,
+    "memoriesCreated": 8,
+    "memoriesUpdated": 0,
+    "memoriesSuperseded": 3,
+    "memoriesRetired": 1,
+    "claimsChanged": 11,
+    "relationshipsChanged": 4,
+    "provenanceLinksChanged": 14,
+    "toolCalls": 96,
+    "durationMs": 182000,
+    "outcomes": [
+      { "outcome": "completed", "calls": 8 },
+      { "outcome": "no-op", "calls": 4 }
+    ],
+    "outcomeCodes": [
+      { "code": "completed", "calls": 8 },
+      { "code": "no_work", "calls": 4 }
+    ],
+    "byMode": [
+      {
+        "mode": "incremental",
+        "calls": 12,
+        "tokensInput": 180000,
+        "tokensOutput": 24000,
+        "cost": 0.45,
+        "artifactsConsidered": 36,
+        "memoriesCreated": 8,
+        "memoriesUpdated": 0,
+        "memoriesSuperseded": 3,
+        "memoriesRetired": 1,
+        "claimsChanged": 11,
+        "relationshipsChanged": 4,
+        "provenanceLinksChanged": 14,
+        "toolCalls": 96,
+        "durationMs": 182000
+      }
+    ]
   },
   "sessions": {
     "ended": 18,
