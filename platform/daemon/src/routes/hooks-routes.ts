@@ -59,6 +59,7 @@ import {
 	isNotificationCompatibleHook,
 } from "../notifications/cross-agent-notifications";
 import { getSynthesisWorker, readLastSynthesisTime } from "../pipeline";
+import { effectiveRecallLimit, recordRecallAttempt, recordRecallOutcome } from "../recall-telemetry";
 import { isNoiseSession } from "../session-noise";
 import { advanceRecallContextEpoch } from "../session-recall-dedupe";
 import {
@@ -290,6 +291,8 @@ function registerSessionStart(app: Hono): void {
 		if (isInternalCall(c)) {
 			return c.json({ inject: "", memories: [] });
 		}
+		let recallAttempted = false;
+		let recallOutcomeRecorded = false;
 		try {
 			const body = (await c.req.json()) as SessionStartRequest;
 
@@ -348,16 +351,26 @@ function registerSessionStart(app: Hono): void {
 				return c.json({ sessionKnown: true });
 			}
 
+			recordRecallAttempt("prompt_injection");
+			recallAttempted = true;
 			const result = await handleSessionStart(body);
-			return c.json(
-				withCrossAgentNotifications(result, {
-					harness: body.harness,
-					hook: "SessionStart",
-					agentId: scopedAgent.agentId,
-					sessionKey: parseOptionalString(body.sessionKey),
-				}),
-			);
+			const response = withCrossAgentNotifications(result, {
+				harness: body.harness,
+				hook: "SessionStart",
+				agentId: scopedAgent.agentId,
+				sessionKey: parseOptionalString(body.sessionKey),
+			});
+			recordRecallOutcome({
+				surface: "prompt_injection",
+				resultCount: result.memories.length,
+				delivery: result.memories.length > 0 ? "injected" : "not_delivered",
+			});
+			recallOutcomeRecorded = true;
+			return c.json(response);
 		} catch (e) {
+			if (recallAttempted && !recallOutcomeRecorded) {
+				recordRecallOutcome({ surface: "prompt_injection", error: true, delivery: "not_delivered" });
+			}
 			logger.error("hooks", "Session start hook failed", e as Error);
 			return c.json({ error: "Hook execution failed" }, 500);
 		}
@@ -822,6 +835,7 @@ function registerRecall(app: Hono): void {
 		if (isInternalCall(c)) {
 			return c.json(emptyHookRecallResponse("", { internal: true }));
 		}
+		let recallAttempted = false;
 		try {
 			const body = (await c.req.json()) as RecallRequest;
 
@@ -884,6 +898,7 @@ function registerRecall(app: Hono): void {
 
 			const agentScope = getAgentScope(agentId);
 			const cfg = loadMemoryConfig(AGENTS_DIR);
+			const recallSurface = "tool_call" as const;
 			if (body.aggregate === true && authConfig.mode !== "local") {
 				const actor = c.get("auth")?.claims?.sub ?? "anonymous";
 				const check = authRecallLlmLimiter.check(actor);
@@ -896,6 +911,8 @@ function registerRecall(app: Hono): void {
 			const requestedProject = parseOptionalString(body.project);
 			const scopedP = resolveScopedProject(c, requestedProject);
 			if (scopedP.error) return c.json({ error: scopedP.error }, 403);
+			recordRecallAttempt(recallSurface);
+			recallAttempted = true;
 			const project = scopedP.project ?? requestedProject;
 			const params: RecallParams = {
 				query: body.query,
@@ -921,6 +938,7 @@ function registerRecall(app: Hono): void {
 				includeRecalled: body.includeRecalled === true,
 				recallSurface: "api.hooks.recall",
 				recallMode: "hook",
+				telemetrySurface: recallSurface,
 			};
 			const result =
 				body.aggregate === true
@@ -929,8 +947,15 @@ function registerRecall(app: Hono): void {
 							embedFn: recallAttributedEmbedFn(fetchEmbedding, agentId),
 						})
 					: await hybridRecall(params, cfg, recallAttributedEmbedFn(fetchEmbedding, agentId));
+			recordRecallOutcome({
+				surface: recallSurface,
+				resultCount: result.results.length,
+				truncated: result.results.length >= effectiveRecallLimit(params.limit),
+				delivery: "returned",
+			});
 			return c.json(withHookRecallCompat(result));
 		} catch (e) {
+			if (recallAttempted) recordRecallOutcome({ surface: "tool_call", error: true, delivery: "not_delivered" });
 			logger.error("hooks", "Recall hook failed", e as Error);
 			return c.json({ error: "Hook execution failed" }, 500);
 		}

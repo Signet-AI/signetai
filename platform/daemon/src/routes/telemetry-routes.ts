@@ -215,6 +215,10 @@ export function registerTelemetryRoutes(app: Hono): void {
 		let dreamingCacheWrite = 0;
 		let dreamingCost = 0;
 		let recallCalls = 0;
+		let recallAttempts = 0;
+		let recallReturned = 0;
+		let recallDelivered = 0;
+		const recallOutcomesBySurface = new Map<string, { attempted: number; returned: number; delivered: number }>();
 		const recallLatencies: number[] = [];
 		const recallByType = new Map<string, number>();
 		let sessionEnds = 0;
@@ -278,6 +282,25 @@ export function registerTelemetryRoutes(app: Hono): void {
 					recallByType.set(e.properties.type, (recallByType.get(e.properties.type) ?? 0) + 1);
 				}
 			}
+			if (e.event === "recall.attempted") {
+				recallAttempts++;
+				const surface = typeof e.properties.surface === "string" ? e.properties.surface : "other";
+				const totals = recallOutcomesBySurface.get(surface) ?? { attempted: 0, returned: 0, delivered: 0 };
+				totals.attempted++;
+				recallOutcomesBySurface.set(surface, totals);
+			}
+			if (e.event === "recall.outcome") {
+				const surface = typeof e.properties.surface === "string" ? e.properties.surface : "other";
+				const delivery = e.properties.deliveryState;
+				const returned = delivery === "returned";
+				const delivered = delivery === "injected" || delivery === "consumed";
+				if (returned) recallReturned++;
+				if (delivered) recallDelivered++;
+				const totals = recallOutcomesBySurface.get(surface) ?? { attempted: 0, returned: 0, delivered: 0 };
+				if (returned) totals.returned++;
+				if (delivered) totals.delivered++;
+				recallOutcomesBySurface.set(surface, totals);
+			}
 		}
 
 		latencies.sort((a, b) => a - b);
@@ -309,6 +332,14 @@ export function registerTelemetryRoutes(app: Hono): void {
 			},
 			recall: {
 				calls: recallCalls,
+				outcomes: {
+					attempted: recallAttempts,
+					returned: recallReturned,
+					delivered: recallDelivered,
+					bySurface: [...recallOutcomesBySurface.entries()]
+						.map(([surface, totals]) => ({ surface, ...totals }))
+						.sort((a, b) => a.surface.localeCompare(b.surface)),
+				},
 				p50: recallP50,
 				p95: recallP95,
 				byType: [...recallByType.entries()]

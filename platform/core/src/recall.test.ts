@@ -99,10 +99,11 @@ describe("recall surface helpers", () => {
 		expect(text).not.toContain("No matching memories found.");
 	});
 
-	it("builds recall request bodies without forwarding client-side score thresholds", () => {
+	it("builds recall request bodies with bounded score thresholds", () => {
 		expect(
 			buildRecallRequestBody("graph", {
 				limit: 5,
+				minScore: 0.8,
 				keyword_query: "graph OR entity",
 				pinned: false,
 				expand: false,
@@ -114,6 +115,7 @@ describe("recall surface helpers", () => {
 			query: "graph",
 			keywordQuery: "graph OR entity",
 			limit: 5,
+			minScore: 0.8,
 			agentId: "default",
 			sessionKey: "sess-1",
 			includeRecalled: true,
@@ -124,6 +126,14 @@ describe("recall surface helpers", () => {
 		expect(buildRecallRequestBody("graph")).toEqual({
 			query: "graph",
 			limit: 10,
+		});
+	});
+
+	it("forwards only the bounded recall surface attribution", () => {
+		expect(buildRecallRequestBody("graph", { recallSurface: "tool_call" })).toEqual({
+			query: "graph",
+			limit: 10,
+			recallSurface: "tool_call",
 		});
 	});
 

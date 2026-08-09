@@ -84,6 +84,7 @@ import {
 	buildEntityPromptContext,
 } from "./prompt-entity-context";
 import { buildRecallQueryShape, queryAnchorsMissingFromRecall, stripUntrustedMetadata } from "./prompt-text";
+import { recordRecallAttempt, recordRecallOutcome } from "./recall-telemetry";
 import { listSecrets } from "./secrets";
 import {
 	flushPendingCheckpoints,
@@ -1706,6 +1707,10 @@ export async function handleUserPromptSubmit(
 		);
 	}
 
+	let promptRecallAttempted = false;
+	let promptRecallOutcomeRecorded = false;
+	recordRecallAttempt("prompt_injection");
+	promptRecallAttempted = true;
 	try {
 		const cfg = deps.loadMemoryConfig(getAgentsDir());
 		const injectBudget = submitCfg.maxInjectChars ?? cfg.pipelineV2.guardrails.contextBudgetChars;
@@ -1730,6 +1735,12 @@ export async function handleUserPromptSubmit(
 				startedAt: start,
 				engine: entityContext.engine,
 			});
+			recordRecallOutcome({
+				surface: "prompt_injection",
+				resultCount: 0,
+				delivery: "not_delivered",
+			});
+			promptRecallOutcomeRecorded = true;
 			return finalizeUserPromptSubmitSuccess(
 				req,
 				userMessage,
@@ -1757,12 +1768,19 @@ export async function handleUserPromptSubmit(
 			engine: "entity-context",
 		});
 		const pluginContext = buildPluginPromptContributionSection("user-prompt-submit", deps.logger);
+		const inject = buildEntityContextInject(metadataHeader, entityContext.lines, pluginContext);
+		recordRecallOutcome({
+			surface: "prompt_injection",
+			resultCount: entityContext.memoryCount,
+			delivery: "injected",
+		});
+		promptRecallOutcomeRecorded = true;
 		return finalizeUserPromptSubmitSuccess(
 			req,
 			userMessage,
 			start,
 			{
-				inject: buildEntityContextInject(metadataHeader, entityContext.lines, pluginContext),
+				inject,
 				memoryCount: entityContext.memoryCount,
 				queryTerms: keywordTerms.join(" ") || undefined,
 				engine: "entity-context",
@@ -1771,6 +1789,9 @@ export async function handleUserPromptSubmit(
 			deps.logger,
 		);
 	} catch (e) {
+		if (promptRecallAttempted && !promptRecallOutcomeRecorded) {
+			recordRecallOutcome({ surface: "prompt_injection", error: true, delivery: "not_delivered" });
+		}
 		deps.logger.error("hooks", "User prompt submit failed", e as Error);
 		return {
 			inject: "",

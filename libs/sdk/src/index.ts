@@ -151,7 +151,10 @@ export class SignetClient extends SignetClientHelpers {
 	async recall(query: string, opts?: SdkRecallOptions): Promise<RecallResponse> {
 		const { minScore, ...requestOptions } = opts ?? {};
 		return applyRecallMinScore(
-			await this.transport.post<RecallResponse>("/api/memory/recall", buildRecallRequestBody(query, requestOptions)),
+			await this.transport.post<RecallResponse>(
+				"/api/memory/recall",
+				buildRecallRequestBody(query, { ...requestOptions, minScore }),
+			),
 			minScore,
 		);
 	}

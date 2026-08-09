@@ -87,7 +87,7 @@ Advanced controls:
 | `--keyword-query <query>` | Override the keyword/FTS query used for recall |
 | `--pinned` | Only return pinned memories |
 | `--importance-min <n>` | Only return memories at or above this importance |
-| `--min-score <n>` | Minimum recall score threshold, applied client-side |
+| `--min-score <n>` | Minimum recall score threshold, applied at the daemon response boundary |
 | `--agent <name>` | Filter by agent ID |
 | `--aggregate` | Synthesize one aggregate answer from bounded recall evidence |
 | `--aggregate-budget <budget>` | Aggregate recall budget: `small`, `medium`, or `large` |

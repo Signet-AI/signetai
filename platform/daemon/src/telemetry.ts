@@ -81,6 +81,10 @@ export const TELEMETRY_EVENTS = [
 	"cloud.sync",
 	"cloud.storage",
 	"recall.performed",
+	// Retrieval-outcome contract (#1277): attempt and delivery are separate
+	// boundaries so search execution cannot be mistaken for delivered context.
+	"recall.attempted",
+	"recall.outcome",
 	"config.snapshot",
 ] as const;
 

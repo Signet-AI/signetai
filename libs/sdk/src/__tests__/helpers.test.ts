@@ -168,7 +168,7 @@ describe("SignetClientHelpers", () => {
 		expect(result.meta.totalReturned).toBe(1);
 	});
 
-	test("recallOrThrow() throws when client-side minScore filtering removes all results", async () => {
+	test("recallOrThrow() throws when minScore filtering removes all results", async () => {
 		const { client } = mockDaemon(() => ({
 			results: [
 				{
@@ -199,7 +199,7 @@ describe("SignetClientHelpers", () => {
 		await expect(client.recallOrThrow("nonexistent", { minScore: 0.5 })).rejects.toThrow(
 			'No memories found for query: "nonexistent"',
 		);
-		expect(lastRequest().body).toEqual({ query: "nonexistent", limit: 10 });
+		expect(lastRequest().body).toEqual({ query: "nonexistent", limit: 10, minScore: 0.5 });
 	});
 
 	test("getMemoryOrThrow() returns memory when found", async () => {

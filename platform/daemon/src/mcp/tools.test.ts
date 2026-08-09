@@ -660,7 +660,7 @@ describe("createMcpServer", () => {
 			expect(body.aggregate).toBe(true);
 			expect(body.aggregateBudget).toBe("medium");
 			expect(body.saveAggregate).toBe(false);
-			expect(body.min_score).toBeUndefined();
+			expect(body.minScore).toBe(0.8);
 			expect(body.score_min).toBeUndefined();
 			expect(result.isError).toBeUndefined();
 			expect(result.content[0]?.text).toContain("Found 1 memory (hybrid).");
@@ -867,6 +867,7 @@ describe("createMcpServer", () => {
 			expect(body.sessionKey).toBe("session-a");
 			expect(body.agentId).toBe("agent-a");
 			expect(body.includeRecalled).toBe(true);
+			expect(body.recallSurface).toBe("tool_call");
 			expect(body.sourceOnly).toBe(true);
 			expect(result.isError).toBeUndefined();
 			expect(result.content[0]?.text).toContain("Source-backed context");

@@ -329,10 +329,10 @@ afterEach(async () => {
 describe("signet-memory-openclaw lifecycle hooks", () => {
 	it("delegates recall defaults and bounds to the canonical request builder", async () => {
 		await memoryRecall("default recall", { daemonUrl: "http://daemon.test" });
-		expect(lastMemoryRecallBody).toEqual({ query: "default recall", limit: 10 });
+		expect(lastMemoryRecallBody).toEqual({ query: "default recall", limit: 10, recallSurface: "tool_call" });
 
 		await memoryRecall("bounded recall", { daemonUrl: "http://daemon.test", limit: 5000 });
-		expect(lastMemoryRecallBody).toEqual({ query: "bounded recall", limit: 100 });
+		expect(lastMemoryRecallBody).toEqual({ query: "bounded recall", limit: 100, recallSurface: "tool_call" });
 	});
 
 	it("forwards session_search requests to the transcript search endpoint", async () => {
@@ -381,6 +381,8 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 			sessionKey: "ctx-session",
 			agentId: "agent-openclaw",
 			includeRecalled: true,
+			minScore: 0.5,
+			recallSurface: "tool_call",
 		});
 		expect(result?.details).toMatchObject({
 			count: 1,
