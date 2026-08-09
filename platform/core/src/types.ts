@@ -264,22 +264,7 @@ export const DEFAULT_PROVIDER_RATE_LIMIT: Required<ProviderRateLimitConfig> = {
 };
 
 export interface PipelineExtractionConfig {
-	readonly provider:
-		| "none"
-		| "acpx"
-		| "llama-cpp"
-		| "ollama"
-		| "claude-code"
-		| "opencode"
-		| "codex"
-		| "anthropic"
-		| "openrouter"
-		| "openai-compatible";
-	readonly fallbackProvider?: "llama-cpp" | "ollama" | "none";
-	readonly allowRemoteProviders?: boolean;
-	readonly model: string;
 	readonly strength: "low" | "medium" | "high";
-	readonly endpoint?: string;
 	readonly timeout: number;
 	readonly minConfidence: number;
 	readonly structuredOutput?: boolean;
@@ -414,7 +399,6 @@ export interface PipelineV2Config {
 	readonly semanticContradictionEnabled: boolean;
 	readonly semanticContradictionTimeoutMs: number;
 	readonly telemetryEnabled: boolean;
-	readonly allowRemoteProviders?: boolean;
 
 	// Grouped sub-objects
 	readonly extraction: PipelineExtractionConfig;
@@ -431,7 +415,6 @@ export interface PipelineV2Config {
 	readonly continuity: PipelineContinuityConfig;
 	readonly subagents?: PipelineSubagentsConfig;
 	readonly embeddingTracker: PipelineEmbeddingTrackerConfig;
-	readonly synthesis: PipelineSynthesisConfig;
 	readonly procedural: PipelineProceduralConfig;
 	readonly feedback: PipelineFeedbackConfig;
 	readonly significance?: PipelineSignificanceConfig;
@@ -457,28 +440,6 @@ export interface PipelineEmbeddingTrackerConfig {
 	readonly enabled: boolean;
 	readonly pollMs: number;
 	readonly batchSize: number;
-}
-
-export interface PipelineSynthesisConfig {
-	readonly enabled: boolean;
-	readonly provider:
-		| "none"
-		| "acpx"
-		| "llama-cpp"
-		| "ollama"
-		| "claude-code"
-		| "codex"
-		| "opencode"
-		| "anthropic"
-		| "openrouter"
-		| "openai-compatible";
-	readonly model: string;
-	readonly endpoint?: string;
-	readonly timeout: number;
-	readonly maxTokens: number;
-	readonly idleGapMinutes: number;
-	readonly structuredOutput?: boolean;
-	readonly rateLimit?: ProviderRateLimitConfig;
 }
 
 export interface PipelineProceduralConfig {

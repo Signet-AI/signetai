@@ -392,169 +392,24 @@ describe("loadMemoryConfig", () => {
 		expect(cfg.pipelineV2.extraction.minConfidence).toBe(0.82);
 	});
 
-	it("loads codex extraction settings from agent.yaml", () => {
-		const agentsDir = makeTempAgentsDir();
-		writeFileSync(
-			join(agentsDir, "agent.yaml"),
-			`memory:
-  pipelineV2:
-    extractionProvider: codex
-    extractionModel: gpt-5.3-codex
-`,
-		);
+	it("rejects retired memory-pipeline routing keys instead of applying a local fallback", () => {
+		const cases = [
+			{ extractionProvider: "codex" },
+			{ extractionModel: "gpt-5.3-codex" },
+			{ extractionEndpoint: "https://gateway.example.test/v1" },
+			{ extractionFallbackProvider: "none" },
+			{ allowRemoteProviders: false },
+			{ extraction: { provider: "ollama" } },
+			{ extraction: { model: "qwen3:8b" } },
+			{ extraction: { endpoint: "http://127.0.0.1:11434" } },
+			{ synthesis: { provider: "ollama" } },
+			{ synthesis: { model: "qwen3:8b" } },
+			{ synthesis: { endpoint: "http://127.0.0.1:11434" } },
+		] as const;
 
-		const cfg = loadMemoryConfig(agentsDir);
-		expect(cfg.pipelineV2.extraction.provider).toBe("codex");
-		expect(cfg.pipelineV2.extraction.model).toBe("gpt-5.3-codex");
-	});
-
-	it("loads extraction fallbackProvider from nested config", () => {
-		const agentsDir = makeTempAgentsDir();
-		writeFileSync(
-			join(agentsDir, "agent.yaml"),
-			`memory:
-  pipelineV2:
-    extraction:
-      provider: claude-code
-      fallbackProvider: none
-`,
-		);
-
-		const cfg = loadMemoryConfig(agentsDir);
-		expect(cfg.pipelineV2.extraction.provider).toBe("claude-code");
-		expect(cfg.pipelineV2.extraction.fallbackProvider).toBe("none");
-	});
-
-	it("loads extractionFallbackProvider from flat config", () => {
-		const cfg = loadPipelineConfig({
-			memory: {
-				pipelineV2: {
-					extractionProvider: "claude-code",
-					extractionFallbackProvider: "none",
-				},
-			},
-		});
-
-		expect(cfg.extraction.provider).toBe("claude-code");
-		expect(cfg.extraction.fallbackProvider).toBe("none");
-	});
-
-	it("rejects invalid extraction fallbackProvider values", () => {
-		expect(() =>
-			loadPipelineConfig({
-				memory: {
-					pipelineV2: {
-						extraction: {
-							fallbackProvider: "codex",
-						},
-					},
-				},
-			}),
-		).toThrow('Invalid extraction fallbackProvider "codex"');
-	});
-
-	it("propagates invalid extraction fallbackProvider from agent config files", () => {
-		const agentsDir = makeTempAgentsDir();
-		writeFileSync(
-			join(agentsDir, "agent.yaml"),
-			`memory:
-  pipelineV2:
-    extraction:
-      provider: claude-code
-      fallbackProvider: codex
-`,
-		);
-
-		expect(() => loadMemoryConfig(agentsDir)).toThrow('Invalid extraction fallbackProvider "codex"');
-	});
-
-	it("loads openrouter extraction settings from agent.yaml", () => {
-		const agentsDir = makeTempAgentsDir();
-		writeFileSync(
-			join(agentsDir, "agent.yaml"),
-			`memory:
-  pipelineV2:
-    extractionProvider: openrouter
-    extractionModel: openai/gpt-4o-mini
-`,
-		);
-
-		const cfg = loadMemoryConfig(agentsDir);
-		expect(cfg.pipelineV2.extraction.provider).toBe("openrouter");
-		expect(cfg.pipelineV2.extraction.model).toBe("openai/gpt-4o-mini");
-	});
-
-	it("loads openai-compatible extraction settings from agent.yaml", () => {
-		const agentsDir = makeTempAgentsDir();
-		writeFileSync(
-			join(agentsDir, "agent.yaml"),
-			`memory:
-  pipelineV2:
-    extraction:
-      provider: openai-compatible
-      model: gpt-4o-mini
-      endpoint: https://gateway.example.test/v1
-`,
-		);
-
-		const cfg = loadMemoryConfig(agentsDir);
-		expect(cfg.pipelineV2.extraction.provider).toBe("openai-compatible");
-		expect(cfg.pipelineV2.extraction.model).toBe("gpt-4o-mini");
-		expect(cfg.pipelineV2.extraction.endpoint).toBe("https://gateway.example.test/v1");
-	});
-
-	it("keeps local openai-compatible extraction when remote providers are locked", () => {
-		const result = loadPipelineConfig({
-			memory: {
-				pipelineV2: {
-					allowRemoteProviders: false,
-					extraction: {
-						provider: "openai-compatible",
-						model: "local-model",
-						endpoint: "http://127.0.0.1:1234/v1",
-					},
-				},
-			},
-		});
-		expect(result.extraction.provider).toBe("openai-compatible");
-		expect(result.extraction.model).toBe("local-model");
-		expect(result.extraction.endpoint).toBe("http://127.0.0.1:1234/v1");
-	});
-
-	it("falls back from remote openai-compatible extraction when remote providers are locked", () => {
-		const result = loadPipelineConfig({
-			memory: {
-				pipelineV2: {
-					allowRemoteProviders: false,
-					extraction: {
-						provider: "openai-compatible",
-						model: "gpt-4o-mini",
-						endpoint: "https://gateway.example.test/v1",
-					},
-				},
-			},
-		});
-		expect(result.extraction.provider).toBe("llama-cpp");
-		expect(result.extraction.model).toBe("qwen3:4b");
-		expect(result.extraction.endpoint).toBeUndefined();
-	});
-
-	it("loads disabled extraction settings from agent.yaml", () => {
-		const agentsDir = makeTempAgentsDir();
-		writeFileSync(
-			join(agentsDir, "agent.yaml"),
-			`memory:
-  pipelineV2:
-    enabled: false
-    extractionProvider: none
-    extractionModel: ""
-`,
-		);
-
-		const cfg = loadMemoryConfig(agentsDir);
-		expect(cfg.pipelineV2.enabled).toBe(false);
-		expect(cfg.pipelineV2.extraction.provider).toBe("none");
-		expect(cfg.pipelineV2.extraction.model).toBe("");
+		for (const legacy of cases) {
+			expect(() => loadPipelineConfig({ memory: { pipelineV2: legacy } })).toThrow("is retired");
+		}
 	});
 
 	it("rejects retired command extraction rather than silently falling back", () => {
@@ -562,7 +417,7 @@ describe("loadMemoryConfig", () => {
 			loadPipelineConfig({
 				memory: { pipelineV2: { extraction: { provider: "command" } } },
 			}),
-		).toThrow("command configuration is retired");
+		).toThrow("is retired");
 	});
 });
 
@@ -577,53 +432,27 @@ describe("loadPipelineConfig", () => {
 		expect(result).toEqual(DEFAULT_PIPELINE_V2);
 	});
 
-	it("flat provider keys (dashboard) take priority over nested", () => {
+	it("loads extraction tuning without provider routing", () => {
 		const result = loadPipelineConfig({
 			memory: {
 				pipelineV2: {
-					extractionProvider: "ollama",
-					extractionModel: "qwen3:4b",
-					extraction: {
-						provider: "codex",
-						model: "gpt-5.3-codex",
-					},
+					extraction: { strength: "high", timeout: 30000, minConfidence: 0.8 },
 				},
 			},
 		});
 
-		// Flat keys win as a pair — dashboard writes flat, so they must take priority
-		expect(result.extraction.provider).toBe("ollama");
-		expect(result.extraction.model).toBe("qwen3:4b");
+		expect(result.extraction.strength).toBe("high");
+		expect(result.extraction.timeout).toBe(30000);
+		expect(result.extraction.minConfidence).toBe(0.8);
+		expect(result.extraction).not.toHaveProperty("provider");
+		expect(result.extraction).not.toHaveProperty("model");
+		expect(result).not.toHaveProperty("synthesis");
 	});
 
-	it("parses extraction endpoint aliases", () => {
-		const result = loadPipelineConfig({
-			memory: {
-				pipelineV2: {
-					extraction: {
-						provider: "ollama",
-						model: "qwen3:1.7b",
-						endpoint: "http://172.17.0.1:11434",
-					},
-				},
-			},
-		});
-		expect(result.extraction.endpoint).toBe("http://172.17.0.1:11434");
-	});
-
-	it("parses synthesis base_url as endpoint alias", () => {
-		const result = loadPipelineConfig({
-			memory: {
-				pipelineV2: {
-					synthesis: {
-						provider: "ollama",
-						model: "qwen3:4b",
-						base_url: "http://172.17.0.1:11434",
-					},
-				},
-			},
-		});
-		expect(result.synthesis.endpoint).toBe("http://172.17.0.1:11434");
+	it("rejects the retired synthesis block", () => {
+		expect(() => loadPipelineConfig({ memory: { pipelineV2: { synthesis: { enabled: true } } } })).toThrow(
+			"memory.pipelineV2.synthesis is retired",
+		);
 	});
 
 	it("defaults reflections to 6am in the detected local timezone with 3 briefs", () => {
@@ -656,178 +485,16 @@ describe("loadPipelineConfig", () => {
 		expect(valid.reflections.count).toBe(2);
 	});
 
-	it("accepts openrouter synthesis provider", () => {
-		const result = loadPipelineConfig({
-			memory: {
-				pipelineV2: {
-					synthesis: {
-						provider: "openrouter",
-						model: "openai/gpt-4o-mini",
-					},
-				},
-			},
-		});
-		expect(result.synthesis.provider).toBe("openrouter");
-		expect(result.synthesis.model).toBe("openai/gpt-4o-mini");
-	});
+	it("rejects synthesis provider/model/endpoint routing", () => {
+		const cases = [
+			{ provider: "openrouter" },
+			{ model: "gpt-4o-mini" },
+			{ endpoint: "https://gateway.example.test/v1" },
+		] as const;
 
-	it("accepts openai-compatible synthesis provider", () => {
-		const result = loadPipelineConfig({
-			memory: {
-				pipelineV2: {
-					synthesis: {
-						provider: "openai-compatible",
-						model: "gpt-4o-mini",
-						endpoint: "https://gateway.example.test/v1",
-					},
-				},
-			},
-		});
-		expect(result.synthesis.provider).toBe("openai-compatible");
-		expect(result.synthesis.model).toBe("gpt-4o-mini");
-		expect(result.synthesis.endpoint).toBe("https://gateway.example.test/v1");
-	});
-
-	it("accepts codex synthesis provider", () => {
-		const result = loadPipelineConfig({
-			memory: {
-				pipelineV2: {
-					synthesis: {
-						provider: "codex",
-						model: "gpt-5.4-mini",
-					},
-				},
-			},
-		});
-		expect(result.synthesis.provider).toBe("codex");
-		expect(result.synthesis.model).toBe("gpt-5.4-mini");
-	});
-
-	it("flat provider without flat model uses provider default", () => {
-		const result = loadPipelineConfig({
-			memory: {
-				pipelineV2: {
-					extractionProvider: "codex",
-					extraction: {
-						provider: "ollama",
-						model: "qwen3:8b",
-					},
-				},
-			},
-		});
-
-		// Flat provider wins — model must NOT bleed from nested config
-		expect(result.extraction.provider).toBe("codex");
-		expect(result.extraction.model).toBe("gpt-5.4-mini");
-	});
-
-	it("defaults missing synthesis to the resolved extraction provider and model", () => {
-		const result = loadPipelineConfig({
-			memory: {
-				pipelineV2: {
-					extractionProvider: "ollama",
-					extractionModel: "qwen3:4b",
-					extractionEndpoint: "http://127.0.0.1:11434",
-				},
-			},
-		});
-
-		expect(result.synthesis.provider).toBe("ollama");
-		expect(result.synthesis.model).toBe("qwen3:4b");
-		expect(result.synthesis.endpoint).toBe("http://127.0.0.1:11434");
-		expect(result.synthesis.timeout).toBe(result.extraction.timeout);
-	});
-
-	it("disables inherited synthesis when extraction resolves to none", () => {
-		const result = loadPipelineConfig({
-			memory: {
-				pipelineV2: {
-					extractionProvider: "none",
-				},
-			},
-		});
-
-		expect(result.synthesis.provider).toBe("none");
-		expect(result.synthesis.enabled).toBe(false);
-	});
-
-	it("disables explicit synthesis when provider is none", () => {
-		const result = loadPipelineConfig({
-			memory: {
-				pipelineV2: {
-					synthesis: {
-						enabled: true,
-						provider: "none",
-					},
-				},
-			},
-		});
-
-		expect(result.synthesis.provider).toBe("none");
-		expect(result.synthesis.enabled).toBe(false);
-	});
-
-	it("keeps inheriting extraction values when synthesis only sets enabled", () => {
-		const result = loadPipelineConfig({
-			memory: {
-				pipelineV2: {
-					extractionProvider: "ollama",
-					extractionModel: "qwen3:4b",
-					extractionEndpoint: "http://127.0.0.1:11434",
-					extractionTimeout: 75000,
-					synthesis: {
-						enabled: true,
-					},
-				},
-			},
-		});
-
-		expect(result.synthesis.provider).toBe("ollama");
-		expect(result.synthesis.model).toBe("qwen3:4b");
-		expect(result.synthesis.endpoint).toBe("http://127.0.0.1:11434");
-		expect(result.synthesis.timeout).toBe(75000);
-	});
-
-	it("keeps inherited synthesis provider overrides field-specific", () => {
-		const result = loadPipelineConfig({
-			memory: {
-				pipelineV2: {
-					extractionProvider: "ollama",
-					extractionModel: "qwen3:4b",
-					extractionEndpoint: "http://127.0.0.1:11434",
-					synthesis: {
-						model: "qwen3:8b",
-					},
-				},
-			},
-		});
-
-		expect(result.synthesis.provider).toBe("ollama");
-		expect(result.synthesis.model).toBe("qwen3:8b");
-		expect(result.synthesis.endpoint).toBe("http://127.0.0.1:11434");
-		expect(result.synthesis.timeout).toBe(result.extraction.timeout);
-	});
-
-	it("keeps explicit synthesis separate from extraction", () => {
-		const result = loadPipelineConfig({
-			memory: {
-				pipelineV2: {
-					extractionProvider: "ollama",
-					extractionModel: "qwen3:4b",
-					synthesis: {
-						provider: "claude-code",
-						model: "haiku",
-						timeout: 180000,
-					},
-				},
-			},
-		});
-
-		expect(result.extraction.provider).toBe("ollama");
-		expect(result.extraction.model).toBe("qwen3:4b");
-		expect(result.synthesis.provider).toBe("claude-code");
-		expect(result.synthesis.model).toBe("haiku");
-		expect(result.synthesis.timeout).toBe(180000);
+		for (const synthesis of cases) {
+			expect(() => loadPipelineConfig({ memory: { pipelineV2: { synthesis } } })).toThrow("is retired");
+		}
 	});
 
 	it("loads explicit Claude Code API key env inheritance and budget controls", () => {
@@ -870,49 +537,8 @@ describe("loadPipelineConfig", () => {
 		expect(result.claudeCode.cooldownMs).toBeGreaterThan(0);
 	});
 
-	it("flat model without flat provider is honoured (not silently discarded)", () => {
-		const result = loadPipelineConfig({
-			memory: {
-				pipelineV2: {
-					extractionModel: "qwen3:8b",
-				},
-			},
-		});
-
-		// No provider set → defaults to "llama-cpp"; flat model must propagate
-		expect(result.extraction.provider).toBe("llama-cpp");
-		expect(result.extraction.model).toBe("qwen3:8b");
-	});
-
-	it("preserves the extraction model label for a provider family outside the legacy vocab (#1017)", () => {
-		// The dashboard writes the routing target (inference.targets.background)
-		// and mirrors only the model into the legacy label when the executor is a
-		// provider family (e.g. minimax) the narrower pipeline vocab can't express.
-		// The model — the only field logs/telemetry/DB read — must propagate.
-		const result = loadPipelineConfig({
-			memory: {
-				pipelineV2: {
-					extractionModel: "MiniMax-M2.7",
-				},
-			},
-		});
-		expect(result.extraction.model).toBe("MiniMax-M2.7");
-	});
-
-	it("nested provider used when no flat key is set", () => {
-		const result = loadPipelineConfig({
-			memory: {
-				pipelineV2: {
-					extraction: {
-						provider: "codex",
-						model: "gpt-5.3-codex",
-					},
-				},
-			},
-		});
-
-		expect(result.extraction.provider).toBe("codex");
-		expect(result.extraction.model).toBe("gpt-5.3-codex");
+	it("rejects flat extraction model routing", () => {
+		expect(() => loadPipelineConfig({ memory: { pipelineV2: { extractionModel: "qwen3:8b" } } })).toThrow("is retired");
 	});
 
 	it("loads all flags correctly when all set to true (flat keys)", () => {
@@ -1089,13 +715,11 @@ describe("loadPipelineConfig", () => {
 			memory: {
 				pipelineV2: {
 					extraction: { rateLimit: {} },
-					synthesis: { rateLimit: {} },
 				},
 			},
 		});
 
 		expect(result.extraction.rateLimit).toBeUndefined();
-		expect(result.synthesis.rateLimit).toBeUndefined();
 	});
 
 	it("preserves explicit maxCallsPerHour disable in rateLimit config", () => {
@@ -1369,8 +993,6 @@ describe("loadPipelineConfig", () => {
 				pipelineV2: {
 					enabled: true,
 					extraction: {
-						provider: "ollama",
-						model: "qwen3:8b",
 						timeout: 30000,
 						minConfidence: 0.8,
 					},
@@ -1388,8 +1010,6 @@ describe("loadPipelineConfig", () => {
 		});
 
 		expect(result.enabled).toBe(true);
-		expect(result.extraction.provider).toBe("ollama");
-		expect(result.extraction.model).toBe("qwen3:8b");
 		expect(result.extraction.timeout).toBe(30000);
 		expect(result.extraction.minConfidence).toBe(0.8);
 		expect(result.graph.enabled).toBe(true);

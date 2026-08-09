@@ -17,7 +17,6 @@ import { fileURLToPath } from "node:url";
 import { Worker } from "node:worker_threads";
 import {
 	type AgentDefinition,
-	type PipelineSynthesisConfig,
 	buildArchitectureDoc,
 	configuredRoutingTargetRefs,
 	identityModeManagesFiles,
@@ -1403,12 +1402,7 @@ function targetIsRemote(target: {
 	return !LOCAL_INFERENCE_EXECUTORS.has(target.executor);
 }
 
-function configuredInferenceMode(agentsDir: string, memoryCfg: ResolvedMemoryConfig): "local" | "remote" {
-	const legacyRemote = [
-		[memoryCfg.pipelineV2.extraction.provider, memoryCfg.pipelineV2.extraction.endpoint],
-		[memoryCfg.pipelineV2.synthesis.provider, memoryCfg.pipelineV2.synthesis.endpoint],
-	].some(([provider, endpoint]) => isRemotePipelineProviderForEndpoint(provider, endpoint));
-
+function configuredInferenceMode(agentsDir: string): "local" | "remote" {
 	for (const name of INFERENCE_CONFIG_FILES) {
 		const path = join(agentsDir, name);
 		if (!existsSync(path)) continue;
@@ -1423,12 +1417,13 @@ function configuredInferenceMode(agentsDir: string, memoryCfg: ResolvedMemoryCon
 				return targets.some((target) => targetIsRemote(target)) ? "remote" : "local";
 			}
 		} catch {
-			// Fall through to the resolved legacy pipeline configuration.
+			// An invalid router config is reported by the router itself. Do not
+			// infer a mode from retired memory.pipelineV2 provider fields.
 		}
 		break;
 	}
 
-	return legacyRemote ? "remote" : "local";
+	return "local";
 }
 
 function buildTelemetryConfigSnapshot(agentsDir: string, memoryCfg: ResolvedMemoryConfig): TelemetryConfigSnapshot {
@@ -1439,7 +1434,7 @@ function buildTelemetryConfigSnapshot(agentsDir: string, memoryCfg: ResolvedMemo
 		semanticContradictionEnabled: memoryCfg.pipelineV2.semanticContradictionEnabled,
 		embeddingProvider: memoryCfg.embedding.provider,
 		embeddingModel: memoryCfg.embedding.model,
-		inferenceMode: configuredInferenceMode(agentsDir, memoryCfg),
+		inferenceMode: configuredInferenceMode(agentsDir),
 		harnesses: [...new Set(loadConfiguredHarnesses(agentsDir))].sort().join(","),
 	};
 }

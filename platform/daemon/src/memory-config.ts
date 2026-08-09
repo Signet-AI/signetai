@@ -11,16 +11,11 @@ import {
 	PIPELINE_FLAGS,
 	type PipelineFlag,
 	type PipelineV2Config,
-	TELEMETRY_DEPLOYMENT_ROLES,
-	TELEMETRY_INSTALL_CHANNELS,
-	defaultPipelineModel,
-	isPipelineProvider,
 	parseSimpleYaml,
 } from "@signet/core";
 import { type AuthConfig, parseAuthConfig } from "./auth";
 import type { EmbeddingCostProvider, EmbeddingCostRates } from "./embedding-cost";
 import { logger } from "./logger";
-import { isRemotePipelineProviderForEndpoint, providerFallbackForLock } from "./provider-safety";
 
 export interface EmbeddingConfig {
 	provider: "native" | "llama-cpp" | "ollama" | "openai" | "none";
@@ -95,12 +90,7 @@ class PipelineConfigValidationError extends Error {
 	}
 }
 
-type ExtractionFallbackProvider = NonNullable<PipelineV2Config["extraction"]["fallbackProvider"]>;
-
-export type ResolvedPipelineV2Config = Omit<PipelineV2Config, "extraction"> & {
-	readonly extraction: Omit<PipelineV2Config["extraction"], "fallbackProvider"> & {
-		readonly fallbackProvider: ExtractionFallbackProvider;
-	};
+export type ResolvedPipelineV2Config = Omit<PipelineV2Config, "guardrails"> & {
 	readonly guardrails: Omit<PipelineV2Config["guardrails"], "contextBudgetChars"> & {
 		readonly contextBudgetChars: number;
 	};
@@ -113,14 +103,8 @@ export const DEFAULT_PIPELINE_V2: ResolvedPipelineV2Config = {
 	mutationsFrozen: false,
 	semanticContradictionEnabled: true,
 	semanticContradictionTimeoutMs: 120000,
-	allowRemoteProviders: true,
 	extraction: {
-		provider: "llama-cpp",
-		fallbackProvider: "none",
-		allowRemoteProviders: true,
-		model: defaultPipelineModel("llama-cpp"),
 		strength: "low",
-		endpoint: undefined,
 		timeout: DEFAULT_PIPELINE_TIMEOUT_MS,
 		minConfidence: 0.7,
 	},
@@ -217,22 +201,11 @@ export const DEFAULT_PIPELINE_V2: ResolvedPipelineV2Config = {
 		flushBatchSize: DEFAULT_TELEMETRY_FLUSH_BATCH_SIZE,
 		retentionDays: 90,
 		memorySearchQaEnabled: false,
-		deploymentRole: "unknown",
-		installChannel: "unknown",
 	},
 	embeddingTracker: {
 		enabled: true,
 		pollMs: 5000,
 		batchSize: 8,
-	},
-	synthesis: {
-		enabled: true,
-		provider: "ollama",
-		model: "qwen3:4b",
-		endpoint: undefined,
-		timeout: 120000,
-		maxTokens: 8000,
-		idleGapMinutes: 15,
 	},
 	procedural: {
 		enabled: true,
@@ -308,12 +281,6 @@ function clampPositive(raw: unknown, min: number, max: number, fallback: number)
 	return Math.max(min, Math.min(max, raw));
 }
 
-function resolveTelemetryValue<T extends string>(raw: unknown, allowed: readonly T[], fallback: T): T {
-	if (typeof raw !== "string") return fallback;
-	const normalized = raw.trim().toLowerCase();
-	return (allowed as readonly string[]).includes(normalized) ? (normalized as T) : fallback;
-}
-
 function clampNonNegative(raw: unknown, max: number, fallback: number): number {
 	if (typeof raw !== "number" || !Number.isFinite(raw) || raw < 0) return fallback;
 	return Math.min(max, raw);
@@ -350,27 +317,6 @@ function clampFraction(raw: unknown, fallback: number): number {
 
 function isExtractionStrength(v: unknown): v is "low" | "medium" | "high" {
 	return typeof v === "string" && ["low", "medium", "high"].includes(v);
-}
-
-function isExtractionFallbackProvider(v: unknown): v is "llama-cpp" | "ollama" | "none" {
-	return v === "llama-cpp" || v === "ollama" || v === "none";
-}
-
-function resolveExtractionFallbackProvider(
-	raw: unknown,
-	fallback: ExtractionFallbackProvider,
-): ExtractionFallbackProvider {
-	if (raw === undefined || raw === null) return fallback;
-	if (isExtractionFallbackProvider(raw)) return raw;
-	throw new MemoryConfigValidationError(
-		`Invalid extraction fallbackProvider "${String(raw)}"; expected "llama-cpp", "ollama", or "none"`,
-	);
-}
-
-function parseOptionalUrl(raw: unknown): string | undefined {
-	if (typeof raw !== "string") return undefined;
-	const trimmed = raw.trim();
-	return trimmed.length > 0 ? trimmed : undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -457,7 +403,8 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): ResolvedPipel
 	const continuityRaw = raw.continuity as Record<string, unknown> | undefined;
 	const subagentsRaw = raw.subagents as Record<string, unknown> | undefined;
 	const embeddingTrackerRaw = raw.embeddingTracker as Record<string, unknown> | undefined;
-	const synthesisRaw = raw.synthesis as Record<string, unknown> | undefined;
+	const synthesisValue = raw.synthesis;
+	const synthesisRaw = isRecord(synthesisValue) ? synthesisValue : undefined;
 	const proceduralRaw = raw.procedural as Record<string, unknown> | undefined;
 	const feedbackRaw = raw.feedback as Record<string, unknown> | undefined;
 	const significanceRaw = raw.significance as Record<string, unknown> | undefined;
@@ -474,25 +421,43 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): ResolvedPipel
 		return fallback;
 	}
 
-	// -- Extraction provider resolution --
-	// Flat keys win when set (dashboard writes these); nested is fallback.
-	// Provider and model must stay paired — if flat provider won, use flat model.
-	const nestedProvider = extractionRaw?.provider;
-	const flatProvider = raw.extractionProvider;
-	const flatModel = raw.extractionModel;
-	if (
-		nestedProvider === "command" ||
-		flatProvider === "command" ||
-		extractionRaw?.command !== undefined ||
-		raw.extractionCommand !== undefined
-	) {
+	// Provider and model selection belongs to inference.workloads. Keep the
+	// legacy keys as a loud error instead of allowing a stale config to select a
+	// local fallback with an unrelated model (#1266, #1267).
+	const legacyRoutingKeys = [
+		["memory.pipelineV2.extractionProvider", raw.extractionProvider],
+		["memory.pipelineV2.extractionModel", raw.extractionModel],
+		["memory.pipelineV2.extractionEndpoint", raw.extractionEndpoint],
+		["memory.pipelineV2.extractionBaseUrl", raw.extractionBaseUrl],
+		["memory.pipelineV2.extractionFallbackProvider", raw.extractionFallbackProvider],
+		["memory.pipelineV2.allowRemoteProviders", raw.allowRemoteProviders],
+		["memory.pipelineV2.extraction.provider", extractionRaw?.provider],
+		["memory.pipelineV2.extraction.model", extractionRaw?.model],
+		["memory.pipelineV2.extraction.endpoint", extractionRaw?.endpoint],
+		["memory.pipelineV2.extraction.base_url", extractionRaw?.base_url],
+		["memory.pipelineV2.extraction.baseUrl", extractionRaw?.baseUrl],
+		["memory.pipelineV2.extraction.fallbackProvider", extractionRaw?.fallbackProvider],
+		["memory.pipelineV2.extraction.allowRemoteProviders", extractionRaw?.allowRemoteProviders],
+		["memory.pipelineV2.synthesis.provider", synthesisRaw?.provider],
+		["memory.pipelineV2.synthesis.model", synthesisRaw?.model],
+		["memory.pipelineV2.synthesis.endpoint", synthesisRaw?.endpoint],
+		["memory.pipelineV2.synthesis.base_url", synthesisRaw?.base_url],
+		["memory.pipelineV2.synthesis.baseUrl", synthesisRaw?.baseUrl],
+	];
+	const legacyRoutingKey = legacyRoutingKeys.find(([, value]) => value !== undefined);
+	if (legacyRoutingKey) {
+		throw new PipelineConfigValidationError(
+			`${legacyRoutingKey[0]} is retired; configure the canonical inference workload instead.`,
+		);
+	}
+	if (extractionRaw?.command !== undefined || raw.extractionCommand !== undefined) {
 		throw new PipelineConfigValidationError(
 			"memory.pipelineV2.extraction command configuration is retired; configure the canonical inference workload instead.",
 		);
 	}
-	if (synthesisRaw?.provider === "command") {
+	if (synthesisValue !== undefined) {
 		throw new PipelineConfigValidationError(
-			"memory.pipelineV2.synthesis.provider='command' is retired; configure the canonical inference workload instead.",
+			"memory.pipelineV2.synthesis is retired; configure the canonical inference workload instead.",
 		);
 	}
 	if (
@@ -512,124 +477,12 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): ResolvedPipel
 		);
 	}
 
-	type ProviderKind = Exclude<Parameters<typeof defaultPipelineModel>[0], "command">;
-	type SynthesisProviderKind = ProviderKind;
-	const isExtractionProvider = (value: unknown): value is ProviderKind =>
-		isPipelineProvider(value) && value !== "command";
-	const isSynthesisProvider = (value: unknown): value is SynthesisProviderKind => isExtractionProvider(value);
-
-	function resolveModel(provider: ProviderKind, raw: unknown, fallback?: string): string {
-		if (typeof raw === "string" && raw.trim().length > 0) {
-			return raw;
-		}
-		if (typeof fallback === "string" && fallback.trim().length > 0) {
-			return fallback;
-		}
-		return defaultPipelineModel(provider);
-	}
-
-	const flatProviderWon = isExtractionProvider(flatProvider);
-	const nestedProviderWon = isExtractionProvider(nestedProvider);
-	// Model-only flat key: no provider set anywhere, but extractionModel is
-	// present.  Default to "llama-cpp" so the model isn't silently discarded.
-	const flatModelOnly = !flatProviderWon && !nestedProviderWon && typeof flatModel === "string";
-	const resolvedProvider: ProviderKind = flatProviderWon
-		? flatProvider
-		: nestedProviderWon
-			? nestedProvider
-			: flatModelOnly
-				? "llama-cpp"
-				: d.extraction.provider;
-	const resolvedModel = flatProviderWon
-		? resolveModel(resolvedProvider, flatModel)
-		: nestedProviderWon && typeof extractionRaw?.model === "string"
-			? extractionRaw.model
-			: flatModelOnly
-				? resolveModel(resolvedProvider, flatModel)
-				: resolveModel(resolvedProvider, undefined, d.extraction.model);
-	const resolvedEndpoint =
-		parseOptionalUrl(extractionRaw?.endpoint) ??
-		parseOptionalUrl(extractionRaw?.base_url) ??
-		parseOptionalUrl(raw.extractionEndpoint) ??
-		parseOptionalUrl(raw.extractionBaseUrl);
 	const resolvedTimeout = clampPositive(
 		extractionRaw?.timeout ?? raw.extractionTimeout,
 		5000,
 		300000,
 		d.extraction.timeout,
 	);
-	const resolvedFallbackProvider = resolveExtractionFallbackProvider(
-		extractionRaw?.fallbackProvider ?? raw.extractionFallbackProvider,
-		d.extraction.fallbackProvider ?? "llama-cpp",
-	);
-	const topLevelRemote = typeof raw.allowRemoteProviders === "boolean" ? raw.allowRemoteProviders : undefined;
-	const extractionRemote =
-		typeof extractionRaw?.allowRemoteProviders === "boolean" ? extractionRaw.allowRemoteProviders : undefined;
-	const allowRemoteProviders = topLevelRemote ?? extractionRemote ?? d.allowRemoteProviders ?? true;
-	if (topLevelRemote !== undefined && extractionRemote !== undefined && topLevelRemote !== extractionRemote) {
-		logger.warn(
-			"config",
-			"pipelineV2.allowRemoteProviders and extraction.allowRemoteProviders conflict; top-level takes precedence",
-			{ topLevel: topLevelRemote, extraction: extractionRemote },
-		);
-	}
-	const effectiveProvider: ProviderKind =
-		!allowRemoteProviders && isRemotePipelineProviderForEndpoint(resolvedProvider, resolvedEndpoint)
-			? (providerFallbackForLock(
-					resolvedProvider,
-					resolvedFallbackProvider === "none" ? "llama-cpp" : resolvedFallbackProvider,
-					resolvedEndpoint,
-				) as ProviderKind)
-			: resolvedProvider;
-	const effectiveModel =
-		effectiveProvider === resolvedProvider ? resolvedModel : defaultPipelineModel(effectiveProvider);
-	const effectiveEndpoint = effectiveProvider === resolvedProvider ? resolvedEndpoint : undefined;
-
-	const synthesisRawProvider = synthesisRaw?.provider;
-	const synthesisProviderWon = isSynthesisProvider(synthesisRawProvider);
-	const resolveSynthesisProvider = (): SynthesisProviderKind => {
-		if (isSynthesisProvider(synthesisRawProvider)) return synthesisRawProvider;
-		return effectiveProvider;
-	};
-	const requestedSynthesisProvider: SynthesisProviderKind = resolveSynthesisProvider();
-	const requestedSynthesisEndpoint =
-		parseOptionalUrl(synthesisRaw?.endpoint) ??
-		parseOptionalUrl(synthesisRaw?.base_url) ??
-		(synthesisProviderWon ? undefined : effectiveEndpoint);
-	const resolveLockedSynthesisProvider = (): SynthesisProviderKind => {
-		if (
-			!allowRemoteProviders &&
-			isRemotePipelineProviderForEndpoint(requestedSynthesisProvider, requestedSynthesisEndpoint)
-		) {
-			const fallback = providerFallbackForLock(
-				requestedSynthesisProvider,
-				resolvedFallbackProvider,
-				requestedSynthesisEndpoint,
-			);
-			return isSynthesisProvider(fallback) ? fallback : "none";
-		}
-		return requestedSynthesisProvider;
-	};
-	const resolvedSynthesisProvider: SynthesisProviderKind = resolveLockedSynthesisProvider();
-	const synthesisProviderChangedForLock = resolvedSynthesisProvider !== requestedSynthesisProvider;
-	const resolvedSynthesisModel = synthesisProviderChangedForLock
-		? defaultPipelineModel(resolvedSynthesisProvider)
-		: typeof synthesisRaw?.model === "string" && synthesisRaw.model.trim().length > 0
-			? synthesisRaw.model
-			: synthesisProviderWon
-				? defaultPipelineModel(resolvedSynthesisProvider)
-				: synthesisProviderWon
-					? defaultPipelineModel(resolvedSynthesisProvider)
-					: effectiveModel;
-	const resolvedSynthesisEndpoint = synthesisProviderChangedForLock ? undefined : requestedSynthesisEndpoint;
-	const resolvedSynthesisTimeout = clampPositive(
-		synthesisRaw?.timeout,
-		5000,
-		300000,
-		synthesisProviderWon ? d.synthesis.timeout : resolvedTimeout,
-	);
-	const resolvedSynthesisEnabled =
-		resolvedSynthesisProvider === "none" ? false : resolveBool(synthesisRaw?.enabled, undefined, d.synthesis.enabled);
 
 	// Normalize aspect weights: clamp independently, then enforce min <= max
 	const maxAW = clampFraction(feedbackRaw?.maxAspectWeight, d.feedback.maxAspectWeight);
@@ -651,19 +504,13 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): ResolvedPipel
 			300000,
 			d.semanticContradictionTimeoutMs,
 		),
-		allowRemoteProviders,
 
 		extraction: {
-			provider: effectiveProvider,
-			fallbackProvider: resolvedFallbackProvider,
-			allowRemoteProviders,
-			model: effectiveModel,
 			strength: (() => {
 				// Flat keys win when set (dashboard writes these); nested is fallback
 				const candidate = raw.extractionStrength ?? extractionRaw?.strength;
 				return isExtractionStrength(candidate) ? candidate : d.extraction.strength;
 			})(),
-			endpoint: effectiveEndpoint,
 			timeout: resolvedTimeout,
 			minConfidence: clampFraction(
 				extractionRaw?.minConfidence ?? raw.minFactConfidenceForWrite,
@@ -906,16 +753,6 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): ResolvedPipel
 				undefined,
 				d.telemetry.memorySearchQaEnabled,
 			),
-			deploymentRole: resolveTelemetryValue(
-				telemetryRaw?.deploymentRole,
-				TELEMETRY_DEPLOYMENT_ROLES,
-				d.telemetry.deploymentRole ?? "unknown",
-			),
-			installChannel: resolveTelemetryValue(
-				telemetryRaw?.installChannel,
-				TELEMETRY_INSTALL_CHANNELS,
-				d.telemetry.installChannel ?? "unknown",
-			),
 		},
 
 		embeddingTracker: {
@@ -924,22 +761,6 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): ResolvedPipel
 			batchSize: clampPositive(embeddingTrackerRaw?.batchSize, 1, 20, d.embeddingTracker.batchSize),
 		},
 
-		synthesis: {
-			enabled: resolvedSynthesisEnabled,
-			provider: resolvedSynthesisProvider,
-			model: resolvedSynthesisModel,
-			endpoint: resolvedSynthesisEndpoint,
-			timeout: resolvedSynthesisTimeout,
-			maxTokens: clampPositive(synthesisRaw?.maxTokens ?? synthesisRaw?.max_tokens, 1000, 32000, d.synthesis.maxTokens),
-			idleGapMinutes: clampPositive(synthesisRaw?.idleGapMinutes, 1, 1440, d.synthesis.idleGapMinutes),
-			structuredOutput: (() => {
-				const candidate = synthesisRaw?.structuredOutput;
-				if (typeof candidate === "boolean") return candidate;
-				const extractionCandidate = extractionRaw?.structuredOutput;
-				return typeof extractionCandidate === "boolean" ? extractionCandidate : undefined;
-			})(),
-			rateLimit: parseRateLimitConfig(synthesisRaw?.rateLimit),
-		},
 		procedural: {
 			enabled: resolveBool(proceduralRaw?.enabled, undefined, d.procedural.enabled),
 			decayRate: clampFraction(proceduralRaw?.decayRate, d.procedural.decayRate),

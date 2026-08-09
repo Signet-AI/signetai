@@ -169,7 +169,7 @@ export function registerMiscRoutes(app: Hono): void {
 	app.post("/api/config", async (c) => {
 		try {
 			const { file, content: rawContent } = await c.req.json();
-			let content = rawContent;
+			const content = rawContent;
 
 			if (!file || typeof content !== "string") {
 				return c.json({ error: "Invalid request" }, 400);
@@ -190,7 +190,6 @@ export function registerMiscRoutes(app: Hono): void {
 			const filePath = join(AGENTS_DIR, file);
 			const beforeContent = existsSync(filePath) ? readFileSync(filePath, "utf-8") : undefined;
 			const isGuardedConfig = GUARDED_CONFIG_FILES_CI.has(file.toLowerCase());
-			let lockPreservedCommentsStripped = false;
 			if (isGuardedConfig) {
 				const guardAuth = c.get("auth");
 				const guardDecision = checkPermission(guardAuth?.claims ?? null, "admin", authConfig.mode);
@@ -221,11 +220,6 @@ export function registerMiscRoutes(app: Hono): void {
 									400,
 								);
 							}
-							content = preserveLockInYaml(content);
-							logger.warn("api", "Config save omits allowRemoteProviders while lock is active; lock preserved", {
-								file,
-							});
-							lockPreservedCommentsStripped = true;
 						}
 					}
 				}
@@ -251,7 +245,6 @@ export function registerMiscRoutes(app: Hono): void {
 				success: true,
 				providerTransitions: transitions.map(({ actor: _, ...rest }) => rest),
 				...(auditError ? { auditError } : {}),
-				...(lockPreservedCommentsStripped ? { commentsStripped: true } : {}),
 			});
 		} catch (e) {
 			logger.error("api", "Error saving config file", e as Error);

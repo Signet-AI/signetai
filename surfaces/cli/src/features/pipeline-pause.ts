@@ -2,7 +2,6 @@ import { readPipelineConfigData, readPipelinePauseState, setPipelinePaused } fro
 
 const DEFAULT_OLLAMA_URL = "http://127.0.0.1:11434";
 const DEFAULT_EXTRACTION_MODEL = "qwen3:4b";
-const DEFAULT_SYNTHESIS_MODEL = "qwen3:4b";
 const DEFAULT_EMBEDDING_MODEL = "nomic-embed-text-v1.5";
 
 export { readPipelinePauseState, setPipelinePaused };
@@ -88,32 +87,30 @@ function addTarget(
 }
 
 export function readOllamaReleaseTargets(dir: string): readonly OllamaReleaseTarget[] {
-	const { root, memory, pipeline } = readPipelineConfigData(dir);
+	const { root, memory } = readPipelineConfigData(dir);
 	if (root === null) return [];
 
 	const out: OllamaReleaseTarget[] = [];
 	const seen = new Set<string>();
 
-	const extraction = pipeline && isObject(pipeline.extraction) ? pipeline.extraction : null;
-	if (extraction?.provider === "ollama") {
-		addTarget(
-			out,
-			seen,
-			"extraction",
-			trimText(extraction.model) ?? DEFAULT_EXTRACTION_MODEL,
-			normalizeUrl(extraction.endpoint ?? extraction.base_url, DEFAULT_OLLAMA_URL),
-		);
-	}
-
-	const synthesis = pipeline && isObject(pipeline.synthesis) ? pipeline.synthesis : null;
-	if (synthesis?.provider === "ollama") {
-		addTarget(
-			out,
-			seen,
-			"synthesis",
-			trimText(synthesis.model) ?? DEFAULT_SYNTHESIS_MODEL,
-			normalizeUrl(synthesis.endpoint ?? synthesis.base_url, DEFAULT_OLLAMA_URL),
-		);
+	const inference = root && isObject(root.inference) ? root.inference : null;
+	const targets = inference && isObject(inference.targets) ? inference.targets : null;
+	const workloads = inference && isObject(inference.workloads) ? inference.workloads : null;
+	if (targets && workloads) {
+		for (const [workload, binding] of Object.entries(workloads)) {
+			if (!isObject(binding) || typeof binding.target !== "string") continue;
+			const separator = binding.target.indexOf("/");
+			if (separator <= 0) continue;
+			const targetId = binding.target.slice(0, separator);
+			const modelId = binding.target.slice(separator + 1);
+			const target = targets[targetId];
+			if (!isObject(target) || target.executor !== "ollama") continue;
+			const models = isObject(target.models) ? target.models : null;
+			const modelConfig = models && isObject(models[modelId]) ? models[modelId] : null;
+			const model = trimText(modelConfig?.model) ?? (modelId === "default" ? DEFAULT_EXTRACTION_MODEL : modelId);
+			const label = workload === "sessionSynthesis" ? "synthesis" : "extraction";
+			addTarget(out, seen, label, model, normalizeUrl(target.endpoint ?? target.base_url, DEFAULT_OLLAMA_URL));
+		}
 	}
 
 	const embedding = isObject(root.embedding)

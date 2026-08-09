@@ -77,7 +77,6 @@ export type {
 	TelemetryInstallChannel,
 	PipelineEmbeddingTrackerConfig,
 	PipelineContinuityConfig,
-	PipelineSynthesisConfig,
 	ProviderRateLimitConfig,
 	PipelineProceduralConfig,
 	ExtractedFact,

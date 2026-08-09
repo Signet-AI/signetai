@@ -91,14 +91,6 @@ export function isRemotePipelineProviderForEndpoint(
 	return isRemotePipelineProvider(provider);
 }
 
-export function providerFallbackForLock(
-	provider: PipelineProviderChoice,
-	fallback: "llama-cpp" | "ollama" | "none" | undefined,
-	endpoint?: string,
-): PipelineProviderChoice {
-	return isRemotePipelineProviderForEndpoint(provider, endpoint) ? (fallback ?? "none") : provider;
-}
-
 export function readProviderSafetySnapshot(content: string): ProviderSafetySnapshot {
 	const root = asRecord(parse(content)) ?? {};
 	const memory = asRecord(root.memory);

@@ -182,9 +182,10 @@ export function startPipeline(
 		});
 	}
 
-	// Synthesis worker — session-activity-based MEMORY.md regeneration
-	if (!synthesisWorkerHandle && pipelineCfg.synthesis.enabled) {
-		synthesisWorkerHandle = startSynthesisWorker(pipelineCfg.synthesis);
+	// Synthesis worker — session-activity-based MEMORY.md regeneration.
+	// Its operational tuning is internal; model selection belongs to the router.
+	if (!synthesisWorkerHandle) {
+		synthesisWorkerHandle = startSynthesisWorker();
 	}
 
 	// Prospective indexing worker — generates hypothetical future queries

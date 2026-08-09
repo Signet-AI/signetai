@@ -13,18 +13,6 @@ export const EXTRACTION_SAFETY_WARNING =
 
 export interface SetupPipelineConfig {
 	readonly enabled: boolean;
-	readonly extraction: {
-		readonly provider: ExtractionProviderChoice;
-		readonly model: string;
-		readonly endpoint?: string;
-	};
-	readonly synthesis: {
-		readonly enabled: boolean;
-		readonly provider: ExtractionProviderChoice;
-		readonly model: string;
-		readonly endpoint?: string;
-		readonly timeout: number;
-	};
 	readonly semanticContradictionEnabled?: boolean;
 	readonly graph?: {
 		readonly enabled: boolean;
@@ -45,46 +33,17 @@ export function defaultExtractionModel(provider: DirectExtractionProviderChoice)
 	return defaultPipelineModel(provider);
 }
 
-export function buildSetupPipeline(
-	provider: ExtractionProviderChoice,
-	model?: string,
-	endpoint?: string,
-): SetupPipelineConfig {
-	const resolved = model?.trim() || (provider === "acpx" ? "" : defaultExtractionModel(provider));
-	const resolvedEndpoint = endpoint?.trim() || undefined;
+export function buildSetupPipeline(provider: ExtractionProviderChoice): SetupPipelineConfig {
 	if (provider === "none") {
 		return {
 			enabled: false,
-			extraction: {
-				provider: "none",
-				model: "",
-			},
-			synthesis: {
-				enabled: false,
-				provider: "none",
-				model: "",
-				timeout: 120000,
-			},
 		};
 	}
 
-	// Session synthesis runs on the same provider as extraction — there is no
-	// distinct "synthesis provider". The only per-operation override is
-	// aggregate recall, configured separately via the routing config.
+	// Provider/model selection is written to inference.workloads. The memory
+	// pipeline retains only operation tuning and worker enablement.
 	return {
 		enabled: true,
-		extraction: {
-			provider,
-			model: resolved,
-			...(resolvedEndpoint ? { endpoint: resolvedEndpoint } : {}),
-		},
-		synthesis: {
-			enabled: true,
-			provider,
-			model: resolved,
-			...(resolvedEndpoint ? { endpoint: resolvedEndpoint } : {}),
-			timeout: 120000,
-		},
 		semanticContradictionEnabled: true,
 		graph: { enabled: true },
 		reranker: { enabled: true },

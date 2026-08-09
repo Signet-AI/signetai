@@ -27,7 +27,7 @@ import {
 	type LlmGenerateResult,
 	type LlmProvider,
 	type LlmUsage,
-	type PipelineExtractionConfig,
+	type PipelineProviderChoice,
 	type ProviderRateLimitConfig,
 	resolveAcpxModelSelection,
 	resolveDefaultBasePath,
@@ -282,7 +282,7 @@ export class TokenBucketRateLimiter {
 	}
 }
 
-type RemoteProvider = Exclude<PipelineExtractionConfig["provider"], "none" | "llama-cpp" | "ollama" | "command">;
+type RemoteProvider = Exclude<PipelineProviderChoice, "none" | "llama-cpp" | "ollama" | "command">;
 
 const RATE_LIMIT_PROVIDERS: ReadonlySet<string> = new Set([
 	"acpx",

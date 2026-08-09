@@ -2,7 +2,6 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { parseSimpleYaml } from "@signet/core";
 import type { Context } from "hono";
 import { normalizeAndHashContent } from "../content-normalization";
 import { getAgentPresenceForSession } from "../cross-agent";
@@ -1059,44 +1058,6 @@ export async function checkEmbeddingProvider(cfg: EmbeddingConfig): Promise<Embe
 
 	cacheEmbeddingStatus(cacheKey, status, now);
 	return status;
-}
-
-export function getConfiguredProviderHints(agentsDir: string): {
-	readonly extraction: string | null;
-	readonly synthesis: string | null;
-} {
-	const paths = [join(agentsDir, "agent.yaml"), join(agentsDir, "AGENT.yaml"), join(agentsDir, "config.yaml")];
-	let extraction: string | null = null;
-	let synthesis: string | null = null;
-
-	for (const path of paths) {
-		if (!existsSync(path)) continue;
-		try {
-			const yaml = toRecord(parseSimpleYaml(readFileSync(path, "utf-8")));
-			const mem = toRecord(yaml?.memory);
-			const pipeline = toRecord(mem?.pipelineV2);
-			const extractionObj = toRecord(pipeline?.extraction);
-			const synthesisObj = toRecord(pipeline?.synthesis);
-			const extractionInFile =
-				typeof pipeline?.extractionProvider === "string"
-					? pipeline.extractionProvider
-					: typeof extractionObj?.provider === "string"
-						? extractionObj.provider
-						: null;
-			const synthesisInFile = typeof synthesisObj?.provider === "string" ? synthesisObj.provider : null;
-			if (extraction === null && extractionInFile !== null) {
-				extraction = extractionInFile;
-			}
-			if (synthesis === null && synthesisInFile !== null) {
-				synthesis = synthesisInFile;
-			}
-			if (extraction !== null && synthesis !== null) {
-				break;
-			}
-		} catch {}
-	}
-
-	return { extraction, synthesis };
 }
 
 export interface FilterParams {

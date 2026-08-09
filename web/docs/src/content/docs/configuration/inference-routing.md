@@ -8,11 +8,15 @@ description: "Configure inference accounts, targets, policies, workloads, and ag
 Signet's shared inference control plane is configured under the top-level
 `inference` key in `agent.yaml`.
 
-If `inference` is omitted, Signet preserves the old behavior by compiling
-`memory.pipelineV2.extraction` and `memory.pipelineV2.synthesis` into an
-implicit inference profile. That keeps existing agents working without change.
+Background workloads resolve only through this control plane. Configure the
+`memoryExtraction` workload binding explicitly (the Dashboard writes it with
+the selected model). The internal `session_synthesis` operation inherits the
+same route. Signet no longer
+compiles `memory.pipelineV2.extraction` or `memory.pipelineV2.synthesis` into
+an implicit provider, and a missing or invalid binding is reported as a
+routing error rather than silently falling back to `llama-cpp`.
 
-Use `inference` when you want Signet to choose models across harnesses,
+Use the same `inference` control plane to choose models across harnesses,
 accounts, APIs, and local runtimes per turn or per subtask.
 
 Example:

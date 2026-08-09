@@ -6,10 +6,8 @@
  */
 
 import type { TaskHarness } from "@signet/core";
-import { resolveDefaultBasePath } from "@signet/core";
 import type { DbAccessor, ReadDb } from "../db-accessor";
 import { logger } from "../logger";
-import { loadMemoryConfig } from "../memory-config";
 import { recordSkillInvocation } from "../skill-invocations";
 import { computeNextRun } from "./cron";
 import { resolveSkillPrompt } from "./skill-resolver";
@@ -23,23 +21,6 @@ export interface SchedulerHandle {
 
 const POLL_INTERVAL_MS = 15_000;
 const MAX_CONCURRENT = 3;
-const TASK_MODEL_CACHE_TTL_MS = 5_000;
-
-interface TaskModelCacheEntry {
-	readonly model: string | undefined;
-	readonly expiresAt: number;
-}
-
-const taskModelCache = new Map<string, TaskModelCacheEntry>();
-
-function taskModelCacheKey(harness: "claude-code" | "codex", agentsDir: string): string {
-	return `${agentsDir}:${harness}`;
-}
-
-function getAgentsDir(): string {
-	return resolveDefaultBasePath();
-}
-
 function isTaskHarness(value: string): value is TaskHarness {
 	return value === "claude-code" || value === "opencode" || value === "codex";
 }
@@ -79,31 +60,17 @@ export function selectDueTasks(db: ReadDb, nowIso: string, limit: number): Reado
 		.all(nowIso, limit) as ReadonlyArray<DueTaskRow>;
 }
 
-export function resolveTaskModel(
-	harness: DueTaskRow["harness"],
-	agentsDir: string = getAgentsDir(),
-): string | undefined {
-	if (harness !== "codex" && harness !== "claude-code") return undefined;
-
-	const now = Date.now();
-	const cacheKey = taskModelCacheKey(harness, agentsDir);
-	const cached = taskModelCache.get(cacheKey);
-	if (cached && cached.expiresAt > now) {
-		return cached.model;
-	}
-
-	const cfg = loadMemoryConfig(agentsDir);
-	const extraction = cfg.pipelineV2.extraction;
-	const model = extraction.provider === harness ? extraction.model : undefined;
-	taskModelCache.set(cacheKey, {
-		model,
-		expiresAt: now + TASK_MODEL_CACHE_TTL_MS,
-	});
-	return model;
+export function resolveTaskModel(harness: DueTaskRow["harness"], _agentsDir?: string): string | undefined {
+	// Scheduled tasks do not inherit a model from the retired memory pipeline.
+	// The harness/provider owns its model selection; memory workloads route via
+	// inference.workloads.
+	void harness;
+	return undefined;
 }
 
 export function clearTaskModelCache(): void {
-	taskModelCache.clear();
+	// Kept as a compatibility no-op for callers that used to invalidate the
+	// retired memory-pipeline model cache.
 }
 
 type ExecuteTaskDeps = {
@@ -259,7 +226,8 @@ export async function executeTask(
 		if (!isTaskHarness(task.harness)) {
 			throw new Error(`Unsupported harness: ${task.harness}`);
 		}
-		const model = task.harness === "claude-code" || task.harness === "codex" ? deps.resolveTaskModel(task.harness) : undefined;
+		const model =
+			task.harness === "claude-code" || task.harness === "codex" ? deps.resolveTaskModel(task.harness) : undefined;
 		result = await deps.spawnTask(
 			task.harness,
 			effectivePrompt,

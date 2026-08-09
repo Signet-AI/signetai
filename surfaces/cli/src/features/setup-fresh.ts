@@ -158,7 +158,7 @@ export async function runFreshSetup(plan: SetupPlan, context: SetupApplyContext,
 		}
 
 		const memory = readRecord(config.memory);
-		memory.pipelineV2 = buildSetupPipeline(plan.extractionProvider, plan.extractionModel, plan.extractionEndpoint);
+		memory.pipelineV2 = buildSetupPipeline(plan.extractionProvider);
 		if (plan.dreamingEnabled) {
 			memory.dreaming = {};
 		}

@@ -226,7 +226,7 @@ export async function runExistingSetupWizard(
 					? defaultAcpxModel(detectedHarnesses, options.availableExtractionProviders)
 					: defaultExtractionModel(options.extractionProvider));
 			const memory = readRecord(config.memory);
-			memory.pipelineV2 = buildSetupPipeline(options.extractionProvider, model, options.extractionEndpoint);
+			memory.pipelineV2 = buildSetupPipeline(options.extractionProvider);
 			config.memory = memory;
 			const inference = buildSetupInference(
 				options.extractionProvider,

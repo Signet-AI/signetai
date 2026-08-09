@@ -61,6 +61,7 @@ import {
 import { getSynthesisWorker, readLastSynthesisTime } from "../pipeline";
 import { type PipelineCauseFamily, normalizePipelineCause, recordPipelineOperation } from "../pipeline-operation";
 import { effectiveRecallLimit, recordRecallAttempt, recordRecallOutcome } from "../recall-telemetry";
+import { DEFAULT_SYNTHESIS_WORKER_CONFIG } from "../pipeline/synthesis-worker";
 import { isNoiseSession } from "../session-noise";
 import { advanceRecallContextEpoch } from "../session-recall-dedupe";
 import {
@@ -1814,7 +1815,7 @@ function registerCrossAgentStream(app: Hono): void {
 function registerSynthesis(app: Hono): void {
 	// Get synthesis config
 	app.get("/api/hooks/synthesis/config", (c) => {
-		const config = loadMemoryConfig(AGENTS_DIR).pipelineV2.synthesis;
+		const config = DEFAULT_SYNTHESIS_WORKER_CONFIG;
 		return c.json(config);
 	});
 
@@ -1917,7 +1918,7 @@ function registerSynthesis(app: Hono): void {
 	// Synthesis worker status
 	app.get("/api/synthesis/status", (c) => {
 		const worker = getSynthesisWorker();
-		const config = loadMemoryConfig(AGENTS_DIR).pipelineV2.synthesis;
+		const config = DEFAULT_SYNTHESIS_WORKER_CONFIG;
 		const lastRunAt = readLastSynthesisTime();
 		return c.json({
 			running: worker?.running ?? false,

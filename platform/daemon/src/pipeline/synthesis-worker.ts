@@ -11,7 +11,6 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { PipelineSynthesisConfig } from "@signet/core";
 import { resolveDefaultBasePath } from "@signet/core";
 import { getDbAccessor } from "../db-accessor";
 import { logger } from "../logger";
@@ -180,19 +179,29 @@ function getLastSessionEndTime(deps: SynthesisDeps): number {
 type SynthesisResult = "ok" | "empty" | "failed" | "busy";
 export type SynthesisDrainResult = "completed" | "timeout";
 
+export interface SynthesisWorkerConfig {
+	readonly timeout: number;
+	readonly maxTokens: number;
+	readonly idleGapMinutes: number;
+}
+
+export const DEFAULT_SYNTHESIS_WORKER_CONFIG: SynthesisWorkerConfig = {
+	timeout: 120000,
+	maxTokens: 8000,
+	idleGapMinutes: 15,
+};
+
 function shouldRecordSuccess(result: SynthesisResult): boolean {
 	return result === "ok" || result === "empty";
 }
 
 async function runSynthesisWithDeps(
 	deps: SynthesisDeps,
-	config: PipelineSynthesisConfig,
+	config: SynthesisWorkerConfig,
 	agentId?: string,
 ): Promise<SynthesisResult> {
 	const scopeAgentId = normalizeAgentId(agentId);
 	deps.logger.info("synthesis", "Starting scheduled synthesis", {
-		provider: config.provider,
-		model: config.model,
 		agentId: scopeAgentId,
 	});
 
@@ -271,7 +280,7 @@ export interface SynthesisWorkerHandle {
 }
 
 export function startSynthesisWorker(
-	config: PipelineSynthesisConfig,
+	config: SynthesisWorkerConfig = DEFAULT_SYNTHESIS_WORKER_CONFIG,
 	deps: SynthesisDeps = DEFAULT_DEPS,
 ): SynthesisWorkerHandle {
 	type PendingForce = {
@@ -462,8 +471,6 @@ export function startSynthesisWorker(
 	scheduleTick(STARTUP_DELAY_MS);
 
 	deps.logger.info("synthesis", "Synthesis worker started", {
-		provider: config.provider,
-		model: config.model,
 		idleGapMinutes: config.idleGapMinutes,
 	});
 
