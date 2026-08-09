@@ -25,6 +25,7 @@ import { createDatabase } from "../sqlite.js";
 export const TELEMETRY_EVENT = "command.invoked";
 const TELEMETRY_FLUSH_TIMEOUT_MS = 2_000;
 const TELEMETRY_CLAIM_TIMEOUT_MS = 10 * 60 * 1_000;
+const MAX_CLI_PENDING_EVENTS = 5_000;
 const MIN_BATCH_SIZE = 1;
 const MAX_BATCH_SIZE = 500;
 
@@ -187,8 +188,19 @@ function queueCommandEvent(agentsDir: string, event: QueuedEvent): void {
 		db.prepare(
 			`INSERT OR IGNORE INTO telemetry_events
 			 (id, event, timestamp, properties, sent_to_posthog, created_at, source)
-			 VALUES (?, ?, ?, ?, 0, ?, 'cli')`,
+				VALUES (?, ?, ?, ?, 0, ?, 'cli')`,
 		).run(event.id, event.event, event.timestamp, JSON.stringify(event.properties), new Date().toISOString());
+		// CLI commands can continue to run while the daemon or PostHog is down.
+		// Keep the shared durable queue bounded without touching daemon-owned rows.
+		db.prepare(
+			`DELETE FROM telemetry_events
+			 WHERE source = 'cli' AND sent_to_posthog = 0 AND claim_token IS NULL
+			   AND id NOT IN (
+				   SELECT id FROM telemetry_events
+				   WHERE source = 'cli' AND sent_to_posthog = 0 AND claim_token IS NULL
+				   ORDER BY timestamp DESC LIMIT ?
+			   )`,
+		).run(MAX_CLI_PENDING_EVENTS);
 	} catch {
 		// Older workspaces may not have the telemetry migrations yet.
 	} finally {
@@ -316,6 +328,7 @@ export async function flushCliTelemetry(
 			timestamp: row.timestamp,
 			properties: {
 				...(JSON.parse(row.properties) as Record<string, string | number | boolean | null>),
+				$insert_id: row.id,
 				$lib: "signet-cli",
 				$lib_version: cliVersion,
 			},

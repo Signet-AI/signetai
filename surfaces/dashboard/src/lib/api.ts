@@ -198,6 +198,25 @@ export interface LogEntry {
 	data?: Record<string, unknown>;
 }
 
+export interface TelemetryHealth {
+	status: "healthy" | "degraded" | "local-only";
+	deliveryConfigured: boolean;
+	bufferedEventCount: number;
+	queuedUnsentEventCount: number;
+	oldestUnsentEventAgeSec: number | null;
+	lastDaemonEventAgeSec: number | null;
+	lastAttemptAgeSec: number | null;
+	lastSuccessfulDeliveryAgeSec: number | null;
+	recentDeliverySuccessCount: number;
+	recentDeliveryFailureCount: number;
+	consecutiveFailures: number;
+	backoffActive: boolean;
+	droppedEventCount: number;
+	flushIntervalMs: number;
+}
+
+export type TelemetryHealthResponse = { enabled: false } | ({ enabled: true } & TelemetryHealth);
+
 // 1Password service-account integration (daemon routes/secrets-routes.ts).
 export interface OnePasswordVault {
 	id: string;
@@ -835,6 +854,7 @@ export const api = {
 
 	// Daemon logs (settings → Logs section)
 	getLogs: (limit = 200) => getJSON<{ logs: LogEntry[]; count: number }>(`/api/logs?limit=${limit}`),
+	getTelemetryHealth: () => getJSON<TelemetryHealthResponse>("/api/telemetry/health"),
 };
 
 // postJSON is exported for future mutation surfaces (review-queue apply/reject,

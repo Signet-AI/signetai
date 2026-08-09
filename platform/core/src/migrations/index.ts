@@ -126,6 +126,7 @@ import { up as retireSummaryWorker } from "./117-retire-summary-worker";
 import { up as queuePressureIndices } from "./118-queue-pressure-indices";
 import { up as telemetryVersionObservation } from "./119-telemetry-version-observation";
 import { up as sourceLifecycleTelemetry } from "./120-source-lifecycle-telemetry";
+import { up as telemetryDeliveryHealth } from "./121-telemetry-delivery-health";
 
 // -- Public interface consumed by Database.init() --
 
@@ -1126,6 +1127,20 @@ export const MIGRATIONS: readonly Migration[] = [
 		name: "source-lifecycle-telemetry",
 		up: sourceLifecycleTelemetry,
 		artifacts: { tables: ["source_lifecycle_state"] },
+	},
+	{
+		version: 121,
+		name: "telemetry-delivery-health",
+		up: telemetryDeliveryHealth,
+		artifacts: {
+			tables: ["telemetry_delivery_state"],
+			columns: [
+				{ table: "telemetry_events", column: "delivery_attempts" },
+				{ table: "telemetry_events", column: "last_attempt_at" },
+				{ table: "telemetry_events", column: "sent_at" },
+				{ table: "telemetry_events", column: "last_failure_code" },
+			],
+		},
 	},
 ];
 

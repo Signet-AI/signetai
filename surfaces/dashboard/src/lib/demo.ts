@@ -32,6 +32,7 @@ import type {
 	MemoryTimeline,
 	OnePasswordStatus,
 	SourcesResponse,
+	TelemetryHealth,
 	TodayReflectionResponse,
 } from "./api";
 
@@ -566,6 +567,24 @@ const demoLogs: { logs: LogEntry[]; count: number } = {
 	],
 };
 
+const demoTelemetryHealth: { enabled: true } & TelemetryHealth = {
+	enabled: true,
+	status: "healthy",
+	deliveryConfigured: true,
+	bufferedEventCount: 0,
+	queuedUnsentEventCount: 0,
+	oldestUnsentEventAgeSec: null,
+	lastDaemonEventAgeSec: 21,
+	lastAttemptAgeSec: 21,
+	lastSuccessfulDeliveryAgeSec: 21,
+	recentDeliverySuccessCount: 84,
+	recentDeliveryFailureCount: 0,
+	consecutiveFailures: 0,
+	backoffActive: false,
+	droppedEventCount: 0,
+	flushIntervalMs: 60_000,
+};
+
 const demoOnePassword: OnePasswordStatus = {
 	configured: false,
 	connected: false,
@@ -613,6 +632,7 @@ export function installDemoApi(target: ApiClient): void {
 	target.pickDirectory = async () => ({ ok: false, unavailable: true });
 	target.getSourceSnapshot = async () => null;
 	target.getLogs = async () => demoLogs;
+	target.getTelemetryHealth = async () => demoTelemetryHealth;
 	target.getConfigFiles = async () => [];
 	target.getOnePasswordStatus = async () => demoOnePassword;
 }

@@ -1047,6 +1047,52 @@ function formatLogTime(ts: string): string {
 	return `${base}.${String(d.getMilliseconds()).padStart(3, "0")}`;
 }
 
+function formatAge(seconds: number | null): string {
+	if (seconds === null) return "never";
+	if (seconds < 60) return `${Math.round(seconds)}s ago`;
+	if (seconds < 3600) return `${Math.round(seconds / 60)}m ago`;
+	return `${Math.round(seconds / 3600)}h ago`;
+}
+
+function TelemetryHealthPanel() {
+	const healthQuery = useAsync(() => api.getTelemetryHealth(), { intervalMs: 30_000 });
+	const health = healthQuery.data;
+	const status = !health ? "unavailable" : !health.enabled ? "disabled" : health.status;
+	const statusClass =
+		status === "healthy"
+			? "text-success"
+			: status === "degraded"
+				? "text-[oklch(0.78_0.15_85)]"
+				: "text-muted-foreground";
+	return (
+		<div className="mb-3 rounded-[var(--radius)] border border-[oklch(1_0_0/0.08)] bg-[color-mix(in_oklch,var(--foreground)_3%,transparent)] px-3 py-2.5 [html:not(.dark)_&]:border-[oklch(0_0_0/0.08)]">
+			<div className="flex items-center justify-between gap-3">
+				<GroupLabel suffix="local queue + remote delivery">Telemetry delivery</GroupLabel>
+				<span className={cn("font-mono text-[9.5px] font-semibold uppercase", statusClass)}>{status}</span>
+			</div>
+			{health?.enabled ? (
+				<div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4">
+					<HealthMeta label="Daemon activity" value={formatAge(health.lastDaemonEventAgeSec)} />
+					<HealthMeta label="Queued" value={String(health.queuedUnsentEventCount)} />
+					<HealthMeta label="Last delivery" value={formatAge(health.lastSuccessfulDeliveryAgeSec)} />
+					<HealthMeta label="Recent failures" value={String(health.recentDeliveryFailureCount)} />
+				</div>
+			) : (
+				<div className="font-mono text-[10px] text-muted-foreground">Collector health is unavailable from this daemon.</div>
+			)}
+		</div>
+	);
+}
+
+function HealthMeta({ label, value }: { label: string; value: string }) {
+	return (
+		<div className="rounded-[var(--radius)] bg-[color-mix(in_oklch,var(--foreground)_4%,transparent)] px-2 py-1.5">
+			<div className="font-mono text-[8px] uppercase tracking-[0.06em] text-muted-foreground">{label}</div>
+			<div className="mt-0.5 truncate font-mono text-[10px] font-medium">{value}</div>
+		</div>
+	);
+}
+
 function LogsSection() {
 	const [level, setLevel] = useState<LogLevel | "all">("all");
 	const [query, setQuery] = useState("");
@@ -1077,6 +1123,7 @@ function LogsSection() {
 
 	return (
 		<div className="-m-5 flex h-full flex-col">
+			<TelemetryHealthPanel />
 			<div className="flex items-center gap-2.5 border-b border-[oklch(1_0_0/0.06)] px-6 pb-3 pt-1.5 [html:not(.dark)_&]:border-[oklch(0_0_0/0.06)]">
 				<button
 					type="button"

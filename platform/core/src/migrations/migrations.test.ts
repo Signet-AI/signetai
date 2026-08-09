@@ -2173,3 +2173,24 @@ describe("migration 116: ACP delivery reconciliation", () => {
 		});
 	});
 });
+
+describe("migration 121: telemetry delivery health", () => {
+	test("persists bounded delivery state and retry metadata idempotently", () => {
+		const db = createFreshDb();
+		runMigrations(db);
+		runMigrations(db);
+
+		const columns = db.query("PRAGMA table_info(telemetry_events)").all() as Array<{ name: string }>;
+		expect(columns.map((row) => row.name)).toEqual(
+			expect.arrayContaining(["delivery_attempts", "last_attempt_at", "sent_at", "last_failure_code"]),
+		);
+		const state = db.query("SELECT * FROM telemetry_delivery_state WHERE id = 1").get() as {
+			window_started_at: string;
+			success_count: number;
+			failure_count: number;
+		};
+		expect(state.window_started_at).toEqual(expect.any(String));
+		expect(state.success_count).toBe(0);
+		expect(state.failure_count).toBe(0);
+	});
+});

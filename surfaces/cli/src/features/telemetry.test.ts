@@ -224,6 +224,7 @@ describe("cli telemetry (issue #1280)", () => {
 			command: "remember",
 			deploymentRole: "unknown",
 			installChannel: "unknown",
+			$insert_id: expect.any(String),
 			$lib: "signet-cli",
 			$lib_version: "0.176.8",
 		});

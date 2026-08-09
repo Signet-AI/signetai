@@ -546,7 +546,14 @@ describe("auth guard co-location", () => {
 		});
 	});
 
-	describe("telemetry routes need analytics guards", () => {
+		describe("telemetry routes need analytics guards", () => {
+		it("GET /api/telemetry/health returns 403 without auth", async () => {
+			const app = await makeApp();
+			const { registerTelemetryRoutes } = await import("./routes/telemetry-routes");
+			registerTelemetryRoutes(app);
+			expect(await status(app, "GET", "/api/telemetry/health")).toBe(403);
+		});
+
 		it("GET /api/telemetry/memory-search returns 403 without auth", async () => {
 			const app = await makeApp();
 			const { registerTelemetryRoutes } = await import("./routes/telemetry-routes");

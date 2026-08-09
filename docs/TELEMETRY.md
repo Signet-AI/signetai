@@ -52,7 +52,23 @@ later attempt.
 
 The collector buffers events in memory (auto-flush at 200 events, hard cap
 5000), flushes on the configured interval, backs off 5x after 3 consecutive
-PostHog failures, and never throws into the daemon.
+PostHog failures, and never throws into the daemon. Every scheduled flush
+also emits one bounded `telemetry.health` event. Its local-only aggregate
+fields include queue depth, oldest unsent age, daemon activity freshness,
+delivery success/failure counts for the last 24 hours, backoff state, and
+dropped-buffer count. The event is logged locally before the delivery attempt,
+so it remains diagnostically useful during a remote outage.
+
+Delivery state is persisted in `telemetry_delivery_state` and queue rows keep
+stable event IDs for PostHog `$insert_id` de-duplication across retries. A
+timeout remains an indeterminate remote result, so the row is retried rather
+than marked sent. Retention pruning removes delivered rows only; daemon-owned
+unsent rows remain available for later delivery up to the bounded 20,000-row
+queue. CLI command rows have their own bounded 5,000-row queue because they
+are flushed by short-lived CLI processes rather than the daemon. The authenticated
+`GET /api/telemetry/health` route and the dashboard Logs panel expose the same
+aggregate state without exposing event payloads, install IDs, credentials,
+paths, or user identity.
 
 ## Event catalog
 

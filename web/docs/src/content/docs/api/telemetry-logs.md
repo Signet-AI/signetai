@@ -172,6 +172,38 @@ Query raw telemetry events.
 }
 ```
 
+### GET /api/telemetry/health
+
+Returns a bounded, payload-free summary of the daemon collector. This route
+requires `analytics` permission and is also the dashboard's source for
+distinguishing daemon silence from a delivery outage.
+
+```json
+{
+  "enabled": true,
+  "status": "degraded",
+  "deliveryConfigured": true,
+  "bufferedEventCount": 0,
+  "queuedUnsentEventCount": 12,
+  "oldestUnsentEventAgeSec": 184,
+  "lastDaemonEventAgeSec": 9,
+  "lastSuccessfulDeliveryAgeSec": 902,
+  "recentDeliverySuccessCount": 31,
+  "recentDeliveryFailureCount": 3,
+  "consecutiveFailures": 3,
+  "backoffActive": true,
+  "droppedEventCount": 0,
+  "flushIntervalMs": 300000
+}
+```
+
+`status` is `local-only` when no remote sink is configured, `healthy` when
+delivery is current, and `degraded` when delivery is failing or an unsent
+queue is aging. `enabled: false` means the daemon collector is disabled. Age
+values are seconds and may be `null` when no event or successful delivery has
+ever been observed. The response never includes install identifiers, endpoint
+credentials, paths, event properties, response bodies, or user identity.
+
 Inference emits additional local-first telemetry events:
 
 - `inference.route`

@@ -141,6 +141,7 @@ silently disappear from the API reference.
 | POST | `/api/sessions/:key/renew` | platform/daemon/src/routes/session-routes.ts |
 | GET | `/api/skills/browse` | platform/daemon/src/routes/skills.ts |
 | GET | `/api/telemetry/memory-search` | platform/daemon/src/routes/telemetry-routes.ts |
+| GET | `/api/telemetry/health` | platform/daemon/src/routes/telemetry-routes.ts |
 | GET | `/api/telemetry/memory-search/export` | platform/daemon/src/routes/telemetry-routes.ts |
 | POST | `/api/os/widget/generate` | platform/daemon/src/routes/widget.ts |
 | GET | `/api/os/widget/:id` | platform/daemon/src/routes/widget.ts |
