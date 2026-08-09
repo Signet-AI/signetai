@@ -24,6 +24,7 @@ import { up as agentScopedEntityName } from "./105-agent-scoped-entity-name";
 import { up as crossAgentMessageNotifications } from "./115-cross-agent-message-notifications";
 import { up as acpDeliveryReconciliation } from "./116-acp-delivery-reconciliation";
 import { up as retireSummaryWorker } from "./117-retire-summary-worker";
+import { up as telemetryVersionObservation } from "./117-telemetry-version-observation";
 import { MIGRATIONS, hasPendingMigrations, runMigrations } from "./index";
 
 function createFreshDb(): Database {
@@ -2086,6 +2087,15 @@ describe("migration framework", () => {
 
 		const columns = db.query("PRAGMA table_info(telemetry_events)").all() as Array<{ name: string }>;
 		expect(columns.map((row) => row.name)).toEqual(expect.arrayContaining(["source", "claim_token", "claimed_at"]));
+	});
+	test("migration 117 adds the last observed telemetry version idempotently", () => {
+		db = createFreshDb();
+		db.exec("CREATE TABLE telemetry_install (id TEXT PRIMARY KEY, created_at TEXT NOT NULL)");
+		telemetryVersionObservation(db);
+		telemetryVersionObservation(db);
+
+		const columns = db.query("PRAGMA table_info(telemetry_install)").all() as Array<{ name: string }>;
+		expect(columns.map((row) => row.name)).toContain("last_seen_version");
 	});
 });
 

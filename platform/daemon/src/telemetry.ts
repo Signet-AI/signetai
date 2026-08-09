@@ -9,7 +9,13 @@
 import { createHash } from "node:crypto";
 import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
-import type { PipelineTelemetryConfig } from "@signet/core";
+import {
+	type PipelineTelemetryConfig,
+	TELEMETRY_DEPLOYMENT_ROLES,
+	TELEMETRY_INSTALL_CHANNELS,
+	type TelemetryDeploymentRole,
+	type TelemetryInstallChannel,
+} from "@signet/core";
 import type { DbAccessor } from "./db-accessor";
 import { logger } from "./logger";
 
@@ -73,6 +79,9 @@ export const TELEMETRY_EVENTS = [
 	"command.invoked",
 	"error.occurred",
 	"version.upgraded",
+	// Observed at daemon start; unlike version.upgraded, this makes no claim
+	// about the mechanism that changed the installed version.
+	"version.observed",
 	// Cloud events (issue #1207): declared now so the future cloud-connect
 	// layer inherits the typed contract instead of retrofitting it. Nothing
 	// emits them until the Signet Cloud surface exists. Same anonymous
@@ -254,6 +263,41 @@ export function telemetryDeployment(env: NodeJS.ProcessEnv = process.env): Telem
 	return env.SIGNET_TELEMETRY_ENV?.trim().toLowerCase() === "dev" ? "dev" : undefined;
 }
 
+function validTelemetryValue<T extends string>(value: unknown, allowed: readonly T[]): T | undefined {
+	return typeof value === "string" && (allowed as readonly string[]).includes(value.trim().toLowerCase())
+		? (value.trim().toLowerCase() as T)
+		: undefined;
+}
+
+/**
+ * Resolve a bounded deployment declaration. The dev marker remains a
+ * compatible shorthand for the existing development-fleet behavior. No
+ * paths, process names, repository names, or network data participate.
+ */
+export function telemetryDeploymentRole(
+	configured: TelemetryDeploymentRole | undefined,
+	env: NodeJS.ProcessEnv = process.env,
+): TelemetryDeploymentRole {
+	if (telemetryDeployment(env) === "dev") return "development";
+	return (
+		validTelemetryValue(env.SIGNET_TELEMETRY_DEPLOYMENT_ROLE, TELEMETRY_DEPLOYMENT_ROLES) ??
+		validTelemetryValue(configured, TELEMETRY_DEPLOYMENT_ROLES) ??
+		"unknown"
+	);
+}
+
+/** Resolve installation provenance only from an explicit config or env value. */
+export function telemetryInstallChannel(
+	configured: TelemetryInstallChannel | undefined,
+	env: NodeJS.ProcessEnv = process.env,
+): TelemetryInstallChannel {
+	return (
+		validTelemetryValue(env.SIGNET_TELEMETRY_INSTALL_CHANNEL, TELEMETRY_INSTALL_CHANNELS) ??
+		validTelemetryValue(configured, TELEMETRY_INSTALL_CHANNELS) ??
+		"unknown"
+	);
+}
+
 /**
  * Keep development builds visible in version breakdowns without changing the
  * daemon's operational version or update behavior.
@@ -274,29 +318,70 @@ export function telemetryReportedVersion(version: string, deployment: TelemetryD
  * desktop, and npm installs alike; the wrapper postinstall ping misses bun
  * and desktop entirely).
  */
-function getOrCreateInstallId(db: DbAccessor): { readonly id: string; readonly created: boolean } {
+function getOrCreateInstallId(
+	db: DbAccessor,
+	daemonVersion: string,
+): { readonly id: string; readonly created: boolean; readonly previousVersion?: string } {
 	try {
 		return db.withWriteTx((w) => {
-			const existing = w.prepare("SELECT id FROM telemetry_install ORDER BY created_at ASC LIMIT 1").get() as
-				| { readonly id: string }
-				| null
-				| undefined;
-			if (existing?.id) return { id: existing.id, created: false };
+			const existing = w
+				.prepare("SELECT id, last_seen_version FROM telemetry_install ORDER BY created_at ASC LIMIT 1")
+				.get() as { readonly id: string; readonly last_seen_version?: string | null } | null | undefined;
+			if (existing?.id) {
+				if (!existing.last_seen_version) {
+					// Establish a baseline for installs upgraded from pre-117
+					// schemas without fabricating a transition event.
+					w.prepare("UPDATE telemetry_install SET last_seen_version = ? WHERE id = ?").run(daemonVersion, existing.id);
+				}
+				return {
+					id: existing.id,
+					created: false,
+					...(existing.last_seen_version ? { previousVersion: existing.last_seen_version } : {}),
+				};
+			}
 
 			const id = crypto.randomUUID();
 			const result = w
-				.prepare("INSERT OR IGNORE INTO telemetry_install (id, created_at) VALUES (?, ?)")
-				.run(id, new Date().toISOString());
+				.prepare("INSERT OR IGNORE INTO telemetry_install (id, created_at, last_seen_version) VALUES (?, ?, ?)")
+				.run(id, new Date().toISOString(), daemonVersion);
 			if (result.changes > 0) return { id, created: true };
 
-			const inserted = w.prepare("SELECT id FROM telemetry_install ORDER BY created_at ASC LIMIT 1").get() as
-				| { readonly id: string }
-				| null
-				| undefined;
-			return inserted?.id ? { id: inserted.id, created: false } : { id, created: false };
+			const inserted = w
+				.prepare("SELECT id, last_seen_version FROM telemetry_install ORDER BY created_at ASC LIMIT 1")
+				.get() as { readonly id: string; readonly last_seen_version?: string | null } | null | undefined;
+			return inserted?.id
+				? {
+						id: inserted.id,
+						created: false,
+						...(inserted.last_seen_version ? { previousVersion: inserted.last_seen_version } : {}),
+					}
+				: { id, created: false };
 		});
 	} catch {
-		return { id: crypto.randomUUID(), created: false };
+		// Test harnesses and partially upgraded workspaces can still expose the
+		// pre-117 telemetry_install shape. Preserve telemetry there without
+		// claiming a transition; the next normal migration adds the column.
+		try {
+			return db.withWriteTx((w) => {
+				const existing = w.prepare("SELECT id FROM telemetry_install ORDER BY created_at ASC LIMIT 1").get() as
+					| { readonly id: string }
+					| null
+					| undefined;
+				if (existing?.id) return { id: existing.id, created: false };
+				const id = crypto.randomUUID();
+				const result = w
+					.prepare("INSERT OR IGNORE INTO telemetry_install (id, created_at) VALUES (?, ?)")
+					.run(id, new Date().toISOString());
+				if (result.changes > 0) return { id, created: true };
+				const inserted = w.prepare("SELECT id FROM telemetry_install ORDER BY created_at ASC LIMIT 1").get() as
+					| { readonly id: string }
+					| null
+					| undefined;
+				return inserted?.id ? { id: inserted.id, created: false } : { id, created: false };
+			});
+		} catch {
+			return { id: crypto.randomUUID(), created: false };
+		}
 	}
 }
 
@@ -461,6 +546,8 @@ export function createTelemetryCollector(
 	const logPath = opts.telemetryLogPath ?? null;
 	const deployment = telemetryDeployment(opts.env);
 	const reportedVersion = telemetryReportedVersion(daemonVersion, deployment);
+	const deploymentRole = telemetryDeploymentRole(config.deploymentRole, opts.env);
+	const installChannel = telemetryInstallChannel(config.installChannel, opts.env);
 	let flushTimer: ReturnType<typeof setTimeout> | null = null;
 	let running = false;
 	let flushInFlight: Promise<void> | null = null;
@@ -468,18 +555,25 @@ export function createTelemetryCollector(
 	let consecutiveFailures = 0;
 	let flushCount = 0;
 	let effectiveIntervalMs = config.flushIntervalMs;
-	const { id: installId, created: installActivated } = getOrCreateInstallId(db);
+	const { id: installId, created: installActivated, previousVersion } = getOrCreateInstallId(db, daemonVersion);
 
 	const posthogConfigured = config.posthogHost.length > 0 && config.posthogApiKey.length > 0;
 
-	function addContext(properties: TelemetryProperties): TelemetryProperties {
+	function addContext(event: TelemetryEventType, properties: TelemetryProperties): TelemetryProperties {
 		return {
 			...properties,
+			deploymentRole,
+			installChannel,
 			...(deployment ? { deployment } : {}),
 			...(typeof properties.version === "string"
 				? { version: telemetryReportedVersion(properties.version, deployment) }
 				: {}),
-			...(typeof properties.from === "string" ? { from: telemetryReportedVersion(properties.from, deployment) } : {}),
+			...(typeof properties.from === "string"
+				? {
+						from:
+							event === "version.observed" ? properties.from : telemetryReportedVersion(properties.from, deployment),
+					}
+				: {}),
 			...(typeof properties.to === "string" ? { to: telemetryReportedVersion(properties.to, deployment) } : {}),
 		};
 	}
@@ -500,7 +594,7 @@ export function createTelemetryCollector(
 			id: crypto.randomUUID(),
 			event: FIRST_USE_EVENTS[kind],
 			timestamp: new Date().toISOString(),
-			properties: addContext({
+			properties: addContext(FIRST_USE_EVENTS[kind], {
 				version: daemonVersion,
 				platform: process.platform,
 			}),
@@ -545,6 +639,12 @@ export function createTelemetryCollector(
 				const now = new Date().toISOString();
 				for (const e of events) {
 					stmt.run(e.id, e.event, e.timestamp, JSON.stringify(e.properties), now);
+				}
+				// Advance the observation marker in the same transaction as the
+				// event. A crash before flush therefore repeats the observation
+				// instead of losing it permanently.
+				if (events.some((event) => event.event === "version.observed")) {
+					w.prepare("UPDATE telemetry_install SET last_seen_version = ? WHERE id = ?").run(daemonVersion, installId);
 				}
 			});
 		} catch (err) {
@@ -778,7 +878,7 @@ export function createTelemetryCollector(
 			id: crypto.randomUUID(),
 			event,
 			timestamp: new Date().toISOString(),
-			properties: addContext(enrichSessionEvent(event, properties)),
+			properties: addContext(event, enrichSessionEvent(event, properties)),
 		});
 		if (options.persistAuditLog && logPath) {
 			const last = buffer[buffer.length - 1];
@@ -923,6 +1023,12 @@ export function createTelemetryCollector(
 		if (opts.configSnapshot) {
 			collector.record("config.snapshot", { ...opts.configSnapshot });
 		}
+	}
+	if (previousVersion && previousVersion !== daemonVersion) {
+		collector.record("version.observed", {
+			from: previousVersion,
+			to: daemonVersion,
+		});
 	}
 
 	return collector;

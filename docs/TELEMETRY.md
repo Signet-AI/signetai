@@ -48,8 +48,8 @@ PostHog failures, and never throws into the daemon.
 
 | Event | When | Key payload fields |
 |---|---|---|
-| `install.ping` | npm wrapper postinstall (native binary install) | `version`, `platform` |
-| `install.activated` | first daemon run of a new install (persisted install id first created) | `version`, `platform` |
+| `install.ping` | npm wrapper postinstall (native binary install) | `version`, `platform`, `deploymentRole`, `installChannel` (`package-manager`) |
+| `install.activated` | first daemon run of a new install (persisted install id first created) | `version`, `platform`, `deploymentRole`, `installChannel` |
 | `first.remember` / `first.recall` | first successful remember / recall per install, exactly once | `version`, `platform` |
 | `daemon.started` | daemon boot | `version`, `platform`, `uptimeMs` |
 | `daemon.previous_exit` | next successful boot reconciles the prior lifecycle record, exactly once when one exists | `classification` (`clean` / `error` / `unrecorded`), `reasonCategory`, `exitCode`, `previousVersion`, `previousUptimeMs`, `restartDelayMs` |
@@ -69,7 +69,8 @@ PostHog failures, and never throws into the daemon.
 | `inference.fallback` | emitted alongside execute/stream when a target failed and routing fell back | same fields as execute/stream |
 | `error.occurred` | process-level crash, unhandled rejection, or event-loop wedge | `type`, `message`, `stack`, `uptimeMs`; `EventLoopLag` reports add `lagMs` and the latest bounded runtime-pressure buckets |
 | `version.upgraded` | daemon auto-update path only | `from`, `to` |
-| `command.invoked` | CLI command (name only, never arguments) | `command` |
+| `version.observed` | daemon start sees a different persisted version (any update mechanism) | `from`, `to` |
+| `command.invoked` | CLI command (name only, never arguments) | `command`, `deploymentRole`, `installChannel` |
 
 Declared but **not yet emitted**: `pipeline.extraction` and
 `pipeline.decision`.
@@ -94,6 +95,12 @@ Notes on individual events:
   id is first created. It covers bun, desktop, and npm uniformly and is the
   **active installs** metric. Count distinct ids with `install.activated`;
   never sum ping and activated counts.
+- **Deployment metadata** — every daemon and CLI event carries bounded
+  `deploymentRole` and `installChannel` values. Both default to `unknown` and
+  are set only by explicit configuration or the documented environment
+  variables. `SIGNET_TELEMETRY_ENV=dev` remains compatible and maps the role
+  to `development` while retaining `deployment: dev` and the `-dev` version
+  suffix. `version.observed` is an observation, not an auto-update claim.
 - **Session events (#1212/#1231)** — the three events measure different things and
   are deliberately not comparable with each other: `session.start` fires once
   per real session start (deduped per session key; resumed sessions do not
@@ -199,6 +206,8 @@ All telemetry keys live under `memory.pipelineV2` in `agent.yaml`:
 | `telemetry.flushIntervalMs` | `60000` | 5s-10min | Time between event flushes |
 | `telemetry.flushBatchSize` | `50` | 1-500 | Max events per flush batch |
 | `telemetry.retentionDays` | `90` | 1-365 | Days before local telemetry data is purged |
+| `telemetry.deploymentRole` | `unknown` | `personal` / `service` / `automation` / `development` / `ci` / `unknown` | Explicit deployment role; invalid or absent values are `unknown` |
+| `telemetry.installChannel` | `unknown` | `desktop` / `package-manager` / `source` / `container` / `unknown` | Explicit installation provenance; invalid or absent values are `unknown` |
 | `memorySearchQaEnabled` | `false` | boolean | Local-only recall QA ledger (never sent) |
 
 Embedding billing rates are configured separately under the canonical
@@ -237,6 +246,13 @@ the library version with a `-dev` suffix. The daemon and CLI `bun run dev`
 scripts set this marker automatically; direct source launches can set it
 explicitly. The marker is not an opt-out. `SIGNET_TELEMETRY_OPTOUT=1` or
 `true` silences daemon, CLI, and install-ping telemetry.
+
+For process-managed deployments, the equivalent explicit overrides are
+`SIGNET_TELEMETRY_DEPLOYMENT_ROLE` and `SIGNET_TELEMETRY_INSTALL_CHANNEL`.
+Accepted values are the config values above; invalid values are ignored and
+resolve to the configured value or `unknown`. No paths, package URLs, process
+names, repository names, IP addresses, or memory content are used to infer
+either field.
 
 **Disclosure:** `signet setup` tells users telemetry is on by default and
 asks whether to disable it. Declining writes `telemetryEnabled: false`;

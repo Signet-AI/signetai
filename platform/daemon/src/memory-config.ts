@@ -11,6 +11,8 @@ import {
 	PIPELINE_FLAGS,
 	type PipelineFlag,
 	type PipelineV2Config,
+	TELEMETRY_DEPLOYMENT_ROLES,
+	TELEMETRY_INSTALL_CHANNELS,
 	defaultPipelineModel,
 	isPipelineProvider,
 	parseSimpleYaml,
@@ -215,6 +217,8 @@ export const DEFAULT_PIPELINE_V2: ResolvedPipelineV2Config = {
 		flushBatchSize: DEFAULT_TELEMETRY_FLUSH_BATCH_SIZE,
 		retentionDays: 90,
 		memorySearchQaEnabled: false,
+		deploymentRole: "unknown",
+		installChannel: "unknown",
 	},
 	embeddingTracker: {
 		enabled: true,
@@ -302,6 +306,12 @@ function clampPositive(raw: unknown, min: number, max: number, fallback: number)
 	if (typeof raw !== "number" || !Number.isFinite(raw)) return fallback;
 	// Bounds are inclusive; a few config fields intentionally use 0 as a disable sentinel.
 	return Math.max(min, Math.min(max, raw));
+}
+
+function resolveTelemetryValue<T extends string>(raw: unknown, allowed: readonly T[], fallback: T): T {
+	if (typeof raw !== "string") return fallback;
+	const normalized = raw.trim().toLowerCase();
+	return (allowed as readonly string[]).includes(normalized) ? (normalized as T) : fallback;
 }
 
 function clampNonNegative(raw: unknown, max: number, fallback: number): number {
@@ -895,6 +905,16 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): ResolvedPipel
 				telemetryRaw?.memorySearchQaEnabled,
 				undefined,
 				d.telemetry.memorySearchQaEnabled,
+			),
+			deploymentRole: resolveTelemetryValue(
+				telemetryRaw?.deploymentRole,
+				TELEMETRY_DEPLOYMENT_ROLES,
+				d.telemetry.deploymentRole ?? "unknown",
+			),
+			installChannel: resolveTelemetryValue(
+				telemetryRaw?.installChannel,
+				TELEMETRY_INSTALL_CHANNELS,
+				d.telemetry.installChannel ?? "unknown",
 			),
 		},
 

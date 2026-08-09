@@ -14,6 +14,10 @@ import {
 	DEFAULT_TELEMETRY_FLUSH_BATCH_SIZE,
 	DEFAULT_TELEMETRY_POSTHOG_API_KEY,
 	DEFAULT_TELEMETRY_POSTHOG_HOST,
+	TELEMETRY_DEPLOYMENT_ROLES,
+	TELEMETRY_INSTALL_CHANNELS,
+	type TelemetryDeploymentRole,
+	type TelemetryInstallChannel,
 	parseSimpleYaml,
 } from "@signet/core";
 import { createDatabase } from "../sqlite.js";
@@ -29,6 +33,8 @@ interface CliTelemetrySettings {
 	readonly posthogHost: string;
 	readonly posthogApiKey: string;
 	readonly flushBatchSize: number;
+	readonly deploymentRole: TelemetryDeploymentRole;
+	readonly installChannel: TelemetryInstallChannel;
 }
 
 interface QueuedEvent {
@@ -58,6 +64,35 @@ export type CliTelemetryDeployment = "dev";
 
 export function cliTelemetryDeployment(env: NodeJS.ProcessEnv = process.env): CliTelemetryDeployment | undefined {
 	return env.SIGNET_TELEMETRY_ENV?.trim().toLowerCase() === "dev" ? "dev" : undefined;
+}
+
+function validTelemetryValue<T extends string>(value: unknown, allowed: readonly T[]): T | undefined {
+	if (typeof value !== "string") return undefined;
+	const normalized = value.trim().toLowerCase();
+	return (allowed as readonly string[]).includes(normalized) ? (normalized as T) : undefined;
+}
+
+export function cliTelemetryDeploymentRole(
+	configured: unknown,
+	env: NodeJS.ProcessEnv = process.env,
+): TelemetryDeploymentRole {
+	if (cliTelemetryDeployment(env) === "dev") return "development";
+	return (
+		validTelemetryValue(env.SIGNET_TELEMETRY_DEPLOYMENT_ROLE, TELEMETRY_DEPLOYMENT_ROLES) ??
+		validTelemetryValue(configured, TELEMETRY_DEPLOYMENT_ROLES) ??
+		"unknown"
+	);
+}
+
+export function cliTelemetryInstallChannel(
+	configured: unknown,
+	env: NodeJS.ProcessEnv = process.env,
+): TelemetryInstallChannel {
+	return (
+		validTelemetryValue(env.SIGNET_TELEMETRY_INSTALL_CHANNEL, TELEMETRY_INSTALL_CHANNELS) ??
+		validTelemetryValue(configured, TELEMETRY_INSTALL_CHANNELS) ??
+		"unknown"
+	);
 }
 
 function cliTelemetryDisabledByEnv(env: NodeJS.ProcessEnv): boolean {
@@ -96,7 +131,14 @@ function readTelemetrySettings(agentsDir: string, env: NodeJS.ProcessEnv = proce
 				? Math.min(MAX_BATCH_SIZE, Math.max(MIN_BATCH_SIZE, Math.floor(configuredBatchSize)))
 				: DEFAULT_TELEMETRY_FLUSH_BATCH_SIZE;
 
-		return { enabled: true, posthogHost, posthogApiKey, flushBatchSize };
+		return {
+			enabled: true,
+			posthogHost,
+			posthogApiKey,
+			flushBatchSize,
+			deploymentRole: cliTelemetryDeploymentRole(telemetry?.deploymentRole, env),
+			installChannel: cliTelemetryInstallChannel(telemetry?.installChannel, env),
+		};
 	} catch {
 		return null;
 	}
@@ -222,7 +264,12 @@ export function recordCommandInvoked(
 			id: randomUUID(),
 			event: TELEMETRY_EVENT,
 			timestamp: new Date().toISOString(),
-			properties: { command: commandName, ...(deployment ? { deployment } : {}) },
+			properties: {
+				command: commandName,
+				deploymentRole: settings.deploymentRole,
+				installChannel: settings.installChannel,
+				...(deployment ? { deployment } : {}),
+			},
 		};
 		const logPath = cliTelemetryLogPath(agentsDir);
 		mkdirSync(dirname(logPath), { recursive: true });

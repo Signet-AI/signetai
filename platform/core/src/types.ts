@@ -332,6 +332,21 @@ export interface PipelineGuardrailsConfig {
 	readonly contextBudgetChars?: number;
 }
 
+export const TELEMETRY_DEPLOYMENT_ROLES = [
+	"personal",
+	"service",
+	"automation",
+	"development",
+	"ci",
+	"unknown",
+] as const;
+
+export type TelemetryDeploymentRole = (typeof TELEMETRY_DEPLOYMENT_ROLES)[number];
+
+export const TELEMETRY_INSTALL_CHANNELS = ["desktop", "package-manager", "source", "container", "unknown"] as const;
+
+export type TelemetryInstallChannel = (typeof TELEMETRY_INSTALL_CHANNELS)[number];
+
 export interface PipelineTelemetryConfig {
 	readonly posthogHost: string;
 	readonly posthogApiKey: string;
@@ -339,6 +354,10 @@ export interface PipelineTelemetryConfig {
 	readonly flushBatchSize: number;
 	readonly retentionDays: number;
 	readonly memorySearchQaEnabled: boolean;
+	/** Explicit operator declaration; absent or invalid values resolve to unknown. */
+	readonly deploymentRole?: TelemetryDeploymentRole;
+	/** Explicit installation provenance; absent or invalid values resolve to unknown. */
+	readonly installChannel?: TelemetryInstallChannel;
 }
 
 export interface PipelineContinuityConfig {

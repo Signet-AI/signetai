@@ -85,6 +85,9 @@ describe("install copy", () => {
 		expect(launcher).toContain("resolveNativePackageBinaryPath");
 		expect(launcher).toContain("require.resolve");
 		expect(launcher).toContain("SIGNET_DIR");
+		expect(launcher).toContain(
+			'SIGNET_TELEMETRY_INSTALL_CHANNEL: process.env.SIGNET_TELEMETRY_INSTALL_CHANNEL ?? "package-manager"',
+		);
 		expect(nativePlatforms).toContain('"linux-x64"');
 		expect(nativePlatforms).toContain('"linux-arm64"');
 		expect(nativePlatforms).toContain('"darwin-x64"');
@@ -109,10 +112,9 @@ describe("install copy", () => {
 	test("keeps the postinstall telemetry ping anonymous and opt-out", () => {
 		const installer = read("dist/signetai/scripts/install-native.js");
 
-		// Phase-1 install counter (issue #1026): a single anonymous PostHog
-		// event with version+platform only. No identifier, no payload beyond
-		// the event properties, and never a hard failure path. The project
-		// API key is a public ingest key by PostHog design.
+		// Phase-1 install counter (issue #1026) plus bounded provenance metadata
+		// (issue #1274). No identifier, paths, or owner data enter the payload,
+		// and the request is never a hard failure path.
 		expect(installer).toContain("us.i.posthog.com");
 		expect(installer).toContain("/batch/");
 		expect(installer).toContain('event: "install.ping"');
@@ -123,6 +125,8 @@ describe("install copy", () => {
 		expect(installer).toContain("SIGNET_TELEMETRY_OPTOUT");
 		expect(installer).toContain("SIGNET_TELEMETRY_ENV");
 		expect(installer).toContain("telemetryReportedVersion(nativePackageVersion())");
+		expect(installer).toContain("SIGNET_TELEMETRY_DEPLOYMENT_ROLE");
+		expect(installer).toContain('installChannel: "package-manager"');
 
 		// The ping must never block or fail the install: it is fire-and-forget
 		// with a bounded timeout, and errors are swallowed.

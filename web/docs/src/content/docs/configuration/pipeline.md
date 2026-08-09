@@ -507,7 +507,8 @@ uptime), `command.invoked` (command name only, never arguments),
 `error.occurred` (sanitized crash report — truncated message with user paths
 stripped, top stack frames with home directories removed, uptime, and
 rate-limited `EventLoopLag` reports with measured lag), `version.upgraded`
-(from, to).
+(from, to), and `version.observed` (from, to for any observed daemon-start
+transition).
 
 **Development fleet marker:** setting `SIGNET_TELEMETRY_ENV=dev` keeps operator
 development checkouts in the dataset while making them filterable. The daemon
@@ -517,6 +518,12 @@ and `-dev` version suffix when the environment is present. The daemon and CLI
 `bun run dev` scripts set this marker automatically. The marker does not
 disable telemetry; use `SIGNET_TELEMETRY_OPTOUT=1` when development or
 automated events should be silenced entirely.
+
+Every daemon and CLI event carries `deploymentRole` and `installChannel`.
+Both default to `unknown` and are populated only from the explicit config
+keys below or `SIGNET_TELEMETRY_DEPLOYMENT_ROLE` and
+`SIGNET_TELEMETRY_INSTALL_CHANNEL`. The `SIGNET_TELEMETRY_ENV=dev` marker
+remains compatible and maps the role to `development`.
 | Field | Default | Range | Description |
 |-------|---------|-------|-------------|
 | `posthogHost` | `https://us.i.posthog.com` | — | PostHog instance URL (empty disables) |
@@ -524,6 +531,8 @@ automated events should be silenced entirely.
 | `flushIntervalMs` | `60000` | 5s-10min | Time between event flushes |
 | `flushBatchSize` | `50` | 1-500 | Max events per flush batch |
 | `retentionDays` | `90` | 1-365 | Days before local telemetry data is purged |
+| `deploymentRole` | `unknown` | `personal`, `service`, `automation`, `development`, `ci`, `unknown` | Explicit deployment role |
+| `installChannel` | `unknown` | `desktop`, `package-manager`, `source`, `container`, `unknown` | Explicit installation provenance |
 | `memorySearchQaEnabled` | `false` | boolean | Capture local-only recall QA rows with query text and result snapshots |
 
 `memorySearchQaEnabled` is separate from anonymous telemetry. It writes a

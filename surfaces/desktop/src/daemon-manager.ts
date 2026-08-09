@@ -282,6 +282,7 @@ export class DaemonManager {
 				SIGNET_PATH: this.#workspacePath,
 				SIGNET_WORKSPACE: this.#workspacePath,
 				SIGNET_DESKTOP: "1",
+			SIGNET_TELEMETRY_INSTALL_CHANNEL: process.env.SIGNET_TELEMETRY_INSTALL_CHANNEL ?? "desktop",
 			},
 		});
 		this.#owned = true;

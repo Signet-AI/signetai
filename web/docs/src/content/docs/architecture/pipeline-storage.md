@@ -266,7 +266,7 @@ error message. The job follows standard retry logic — up to
 SQLite with WAL mode. Migrations are numbered sequentially under
 `platform/core/src/migrations/`. Each migration is idempotent — safe
 to re-run against an existing database. Schema version is tracked in
-`schema_migrations`. The latest migration is `117-retire-summary-worker.ts`.
+`schema_migrations`. The latest migration is `117-telemetry-version-observation.ts`.
 
 **schema_migrations**
 

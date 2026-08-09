@@ -5,7 +5,9 @@ import { join } from "node:path";
 import { createDatabase } from "../sqlite";
 import {
 	cliTelemetryDeployment,
+	cliTelemetryDeploymentRole,
 	cliTelemetryEnabled,
+	cliTelemetryInstallChannel,
 	cliTelemetryLogPath,
 	flushCliTelemetry,
 	recordCommandInvoked,
@@ -78,9 +80,20 @@ describe("cli telemetry (issue #1206)", () => {
 		expect(cliTelemetryDeployment({ SIGNET_TELEMETRY_ENV: "DEV" })).toBe("dev");
 		recordCommandInvoked(dir, "remember", { SIGNET_TELEMETRY_ENV: "dev" });
 		const line = JSON.parse(readFileSync(cliTelemetryLogPath(dir), "utf-8").trim()) as {
-			properties: { deployment: string };
+			properties: { deployment: string; deploymentRole: string; installChannel: string };
 		};
 		expect(line.properties.deployment).toBe("dev");
+		expect(line.properties.deploymentRole).toBe("development");
+		expect(line.properties.installChannel).toBe("unknown");
+	});
+
+	it("accepts only bounded explicit role and channel declarations", () => {
+		expect(cliTelemetryDeploymentRole("service", {})).toBe("service");
+		expect(cliTelemetryInstallChannel("container", {})).toBe("container");
+		expect(cliTelemetryDeploymentRole("service", { SIGNET_TELEMETRY_DEPLOYMENT_ROLE: "CI" })).toBe("ci");
+		expect(cliTelemetryInstallChannel("container", { SIGNET_TELEMETRY_INSTALL_CHANNEL: "bad" })).toBe("container");
+		expect(cliTelemetryDeploymentRole("bad", {})).toBe("unknown");
+		expect(cliTelemetryInstallChannel("bad", {})).toBe("unknown");
 	});
 
 	it("honors the runtime telemetry opt-out", () => {

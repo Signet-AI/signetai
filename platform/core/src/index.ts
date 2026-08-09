@@ -30,6 +30,8 @@ export {
 	EPISTEMIC_ASSERTION_STATUSES,
 	TASK_HARNESSES,
 	DEFAULT_PROVIDER_RATE_LIMIT,
+	TELEMETRY_DEPLOYMENT_ROLES,
+	TELEMETRY_INSTALL_CHANNELS,
 } from "./types";
 export type {
 	Agent,
@@ -67,6 +69,8 @@ export type {
 	PipelineDocumentsConfig,
 	PipelineGuardrailsConfig,
 	PipelineTelemetryConfig,
+	TelemetryDeploymentRole,
+	TelemetryInstallChannel,
 	PipelineEmbeddingTrackerConfig,
 	PipelineContinuityConfig,
 	PipelineSynthesisConfig,

@@ -46,6 +46,12 @@ function telemetryReportedVersion(version) {
 	return `${version}-dev`;
 }
 
+function telemetryDeploymentRole() {
+	if (telemetryDeployment() === "dev") return "development";
+	const role = process.env.SIGNET_TELEMETRY_DEPLOYMENT_ROLE?.trim().toLowerCase();
+	return ["personal", "service", "automation", "development", "ci", "unknown"].includes(role) ? role : "unknown";
+}
+
 function telemetryEnabled() {
 	if (process.env.SIGNET_TELEMETRY_OPTOUT === "1" || process.env.SIGNET_TELEMETRY_OPTOUT === "true") {
 		return false;
@@ -68,6 +74,8 @@ function fireInstallPing(platform) {
 				properties: {
 					version: telemetryReportedVersion(nativePackageVersion()),
 					platform,
+					deploymentRole: telemetryDeploymentRole(),
+					installChannel: "package-manager",
 					...(telemetryDeployment() ? { deployment: telemetryDeployment() } : {}),
 					$lib: "signet-install",
 				},

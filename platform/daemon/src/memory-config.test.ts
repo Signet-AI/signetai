@@ -944,6 +944,28 @@ describe("loadPipelineConfig", () => {
 		expect(result.autonomous.frozen).toBe(DEFAULT_PIPELINE_V2.autonomous.frozen);
 	});
 
+	it("bounds explicit telemetry deployment role and install channel declarations", () => {
+		const configured = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					telemetry: { deploymentRole: "SERVICE", installChannel: "container" },
+				},
+			},
+		});
+		expect(configured.telemetry.deploymentRole).toBe("service");
+		expect(configured.telemetry.installChannel).toBe("container");
+
+		const invalid = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					telemetry: { deploymentRole: "owner", installChannel: "local-path" },
+				},
+			},
+		});
+		expect(invalid.telemetry.deploymentRole).toBe("unknown");
+		expect(invalid.telemetry.installChannel).toBe("unknown");
+	});
+
 	it("loads feedback config and clamps weights", () => {
 		const result = loadPipelineConfig({
 			memory: {

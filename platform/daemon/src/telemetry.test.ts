@@ -331,7 +331,14 @@ describe("telemetry collector", () => {
 		expect(recallEvent).toBeDefined();
 		// No content: the event carries only the fact of first use.
 		expect(rememberEvent?.properties).toMatchObject({ version: "0.0.0-test", platform: process.platform });
-		expect(Object.keys(rememberEvent?.properties ?? {})).toEqual(["version", "platform", "$lib", "$lib_version"]);
+		expect(Object.keys(rememberEvent?.properties ?? {})).toEqual([
+			"version",
+			"platform",
+			"deploymentRole",
+			"installChannel",
+			"$lib",
+			"$lib_version",
+		]);
 		const firstBatch = captured.flatMap((c) => c.body.batch.map((e) => e.event));
 		expect(firstBatch.filter((e) => e === "first.remember")).toHaveLength(1);
 		expect(firstBatch.filter((e) => e === "first.recall")).toHaveLength(1);
@@ -515,6 +522,69 @@ describe("telemetry collector", () => {
 		for (const line of lines) {
 			expect((JSON.parse(line) as { properties: { deployment: string } }).properties.deployment).toBe("dev");
 		}
+	});
+
+	it("uses explicit bounded deployment metadata and keeps unknown as the fallback", async () => {
+		const collector = createTelemetryCollector(
+			getDbAccessor(),
+			{
+				...TELEMETRY_CONFIG,
+				deploymentRole: "service",
+				installChannel: "container",
+			},
+			"0.176.8",
+			{ telemetryLogPath: logPath },
+		);
+		collector.record("daemon.started", { version: "0.176.8", platform: process.platform });
+		await collector.flush();
+
+		const event = captured[0]?.body.batch.at(-1);
+		expect(event?.properties.deploymentRole).toBe("service");
+		expect(event?.properties.installChannel).toBe("container");
+
+		const unknown = createTelemetryCollector(getDbAccessor(), TELEMETRY_CONFIG, "0.176.8", {
+			env: {
+				SIGNET_TELEMETRY_DEPLOYMENT_ROLE: "not-a-role",
+				SIGNET_TELEMETRY_INSTALL_CHANNEL: "not-a-channel",
+			},
+		});
+		unknown.record("daemon.heartbeat", { uptimeMs: 1 });
+		await unknown.flush();
+		const unknownEvent = captured.at(-1)?.body.batch.at(-1);
+		expect(unknownEvent?.properties.deploymentRole).toBe("unknown");
+		expect(unknownEvent?.properties.installChannel).toBe("unknown");
+
+		const envRole = createTelemetryCollector(getDbAccessor(), TELEMETRY_CONFIG, "0.176.8", {
+			env: { SIGNET_TELEMETRY_DEPLOYMENT_ROLE: "CI" },
+		});
+		envRole.record("daemon.heartbeat", { uptimeMs: 2 });
+		await envRole.flush();
+		expect(captured.at(-1)?.body.batch.at(-1)?.properties.deploymentRole).toBe("ci");
+	});
+
+	it("reports observed version transitions without calling them upgrades", async () => {
+		const first = createTelemetryCollector(getDbAccessor(), TELEMETRY_CONFIG, "0.176.8");
+		await first.flush();
+		const second = createTelemetryCollector(getDbAccessor(), TELEMETRY_CONFIG, "0.176.9");
+		await second.flush();
+
+		const observed = second.query({ event: "version.observed" })[0];
+		expect(observed?.properties).toMatchObject({ from: "0.176.8", to: "0.176.9" });
+		expect(second.query({ event: "version.upgraded" })).toHaveLength(0);
+	});
+
+	it("keeps an observed prior version raw when the deployment marker changes", async () => {
+		const first = createTelemetryCollector(getDbAccessor(), TELEMETRY_CONFIG, "0.176.8");
+		await first.flush();
+		const second = createTelemetryCollector(getDbAccessor(), TELEMETRY_CONFIG, "0.176.9", {
+			env: { SIGNET_TELEMETRY_ENV: "dev" },
+		});
+		await second.flush();
+
+		expect(second.query({ event: "version.observed" })[0]?.properties).toMatchObject({
+			from: "0.176.8",
+			to: "0.176.9-dev",
+		});
 	});
 
 	it("marks both sides of development upgrade events", async () => {
