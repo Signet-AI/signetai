@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import type { AgentRosterReadPolicy } from "@signet/core";
+import { yieldEvery } from "./async-yield";
 import { getDbAccessor } from "./db-accessor";
 import { logger } from "./logger";
 import { effectiveScore } from "./memory-classification";
@@ -117,55 +118,69 @@ export function buildActiveConstraintsSection(
 	return compressedSection;
 }
 
-export function fetchTraversalCandidates(
+/** Maximum number of traversal IDs hydrated during one session start. */
+export const MAX_TRAVERSAL_CANDIDATE_IDS = 500;
+const TRAVERSAL_CANDIDATE_BATCH_SIZE = 50;
+
+export async function fetchTraversalCandidates(
 	memoryDbPath: string,
 	memoryIds: ReadonlyArray<string>,
 	agentId: string,
-): ScoredMemory[] {
+): Promise<ScoredMemory[]> {
 	if (memoryIds.length === 0 || !existsSync(memoryDbPath)) return [];
 
+	const boundedMemoryIds = memoryIds.slice(0, MAX_TRAVERSAL_CANDIDATE_IDS);
+	if (boundedMemoryIds.length < memoryIds.length) {
+		logger.warn("hooks", "Traversal candidate hydration exceeded its hard cap", {
+			requested: memoryIds.length,
+			cap: MAX_TRAVERSAL_CANDIDATE_IDS,
+		});
+	}
+
 	try {
-		const placeholders = memoryIds.map(() => "?").join(", ");
-		return getDbAccessor()
-			.withReadDb(
-				(db) =>
-					db
-						.prepare(
-							`SELECT
-							 m.id,
-							 m.content,
-							 m.type,
+		const rows = await getDbAccessor().withReadDbAsync(async (db) => {
+			const rows: ScoredMemory[] = [];
+			const yieldBetweenBatches = yieldEvery(1);
+
+			for (let offset = 0; offset < boundedMemoryIds.length; offset += TRAVERSAL_CANDIDATE_BATCH_SIZE) {
+				const batch = boundedMemoryIds.slice(offset, offset + TRAVERSAL_CANDIDATE_BATCH_SIZE);
+				const placeholders = batch.map(() => "?").join(", ");
+				const batchRows = db
+					.prepare(
+						`SELECT
+						 m.id,
+						 m.content,
+						 m.type,
+						 m.importance,
+						 m.tags,
+						 m.pinned,
+						 m.project,
+						 m.created_at,
+						 COALESCE(m.access_count, 0) AS access_count,
+						 COALESCE(
+							(SELECT MAX(ea.importance)
+							 FROM entity_attributes ea
+							 WHERE ea.memory_id = m.id
+							   AND ea.agent_id = ?
+							   AND ea.status = 'active'),
 							 m.importance,
-							 m.tags,
-							 m.pinned,
-							 m.project,
-							 m.created_at,
-							 COALESCE(m.access_count, 0) AS access_count,
-							 COALESCE(MAX(ea.importance), m.importance, 0.5) AS effScore
-						 FROM memories m
-						 LEFT JOIN entity_attributes ea
-						   ON ea.memory_id = m.id
-						  AND ea.agent_id = ?
-						  AND ea.status = 'active'
-						 WHERE m.id IN (${placeholders})
-						   AND m.is_deleted = 0
-						 GROUP BY
-							 m.id,
-							 m.content,
-							 m.type,
-							 m.importance,
-							 m.tags,
-							 m.pinned,
-							 m.project,
-							 m.created_at,
-							 m.access_count`,
-						)
-						.all(agentId, ...memoryIds) as unknown as ScoredMemory[],
-			)
-			.map((row) => ({
-				...row,
-				effScore: clampScore01(row.effScore),
-			}));
+							 0.5
+						 ) AS effScore
+					 FROM memories m
+					 WHERE m.id IN (${placeholders})
+					   AND m.is_deleted = 0`,
+					)
+					.all(agentId, ...batch) as unknown as ScoredMemory[];
+				rows.push(...batchRows);
+				await yieldBetweenBatches();
+			}
+
+			return rows;
+		});
+		return rows.map((row) => ({
+			...row,
+			effScore: clampScore01(row.effScore),
+		}));
 	} catch {
 		return [];
 	}

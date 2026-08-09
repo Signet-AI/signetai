@@ -119,6 +119,7 @@ import { up as memoryMentionJoinIndex } from "./110-memory-mention-join-index";
 import { up as telemetryFirstUse } from "./111-telemetry-first-use";
 import { up as telemetryQueueOwnership } from "./112-telemetry-queue-ownership";
 import { up as sessionClaims } from "./113-session-claims";
+import { up as memoryTraversalHydrationIndex } from "./114-memory-traversal-hydration-index";
 
 // -- Public interface consumed by Database.init() --
 
@@ -1064,6 +1065,11 @@ export const MIGRATIONS: readonly Migration[] = [
 				{ table: "session_claims", column: "end_marker" },
 			],
 		},
+	},
+	{
+		version: 114,
+		name: "memory-traversal-hydration-index",
+		up: memoryTraversalHydrationIndex,
 	},
 ];
 

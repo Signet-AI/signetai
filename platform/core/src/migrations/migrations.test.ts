@@ -1828,6 +1828,18 @@ describe("migration framework", () => {
 		}>;
 		expect(columns.map((row) => row.name)).toEqual(["entity_id", "memory_id"]);
 	});
+	test("migration 114 adds the memory-side traversal hydration index (#1250)", () => {
+		db = createFreshDb();
+		runMigrations(db);
+
+		const indexes = db.query("PRAGMA index_list(entity_attributes)").all() as Array<{ name: string }>;
+		expect(indexes.map((row) => row.name)).toContain("idx_entity_attributes_memory_agent_status");
+
+		const columns = db.query("PRAGMA index_info(idx_entity_attributes_memory_agent_status)").all() as Array<{
+			name: string;
+		}>;
+		expect(columns.map((row) => row.name)).toEqual(["memory_id", "agent_id", "status", "importance"]);
+	});
 	test("migration 112 separates telemetry queue ownership and claims", () => {
 		db = createFreshDb();
 		runMigrations(db);

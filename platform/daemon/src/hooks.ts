@@ -470,7 +470,7 @@ function getSessionGapSummary(): string | undefined {
 	}
 }
 
-function fetchTraversalCandidates(memoryIds: ReadonlyArray<string>, agentId: string): ScoredMemory[] {
+async function fetchTraversalCandidates(memoryIds: ReadonlyArray<string>, agentId: string): Promise<ScoredMemory[]> {
 	return memoryCandidates.fetchTraversalCandidates(getMemoryDbPath(), memoryIds, agentId);
 }
 
@@ -844,7 +844,7 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 					}
 				}
 
-				const traversalRows = fetchTraversalCandidates([...traversalResult.memoryIds], traversalAgentId);
+				const traversalRows = await fetchTraversalCandidates([...traversalResult.memoryIds], traversalAgentId);
 				for (const row of traversalRows) {
 					const existing = candidateById.get(row.id);
 					if (existing) {
