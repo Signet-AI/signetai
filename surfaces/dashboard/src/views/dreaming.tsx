@@ -228,7 +228,7 @@ export function DreamsView() {
 	return (
 		<div className="flex flex-col gap-3.5">
 			{/* Telemetry wraps into legible rows when the window narrows. */}
-			<Surface className="dream-header flex flex-wrap items-center gap-x-5 gap-y-2 px-4 py-2">
+			<Surface className="dream-header grid grid-cols-2 gap-x-4 gap-y-3 px-4 py-3 min-[560px]:grid-cols-4">
 				<Stat label="state" value={running ? "running" : "idle"} live={running} />
 				<Stat
 					label="pass"
@@ -245,7 +245,7 @@ export function DreamsView() {
 				<Stat label="attention" value={String(pendingAttention.length)} />
 				<Stat label="backlog" value={fmtTokens(status.data?.episodicTokensPending ?? null)} />
 				<Stat label="failures" value={failures > 0 ? String(failures) : "0"} tone={failures > 0 ? "warn" : "ok"} />
-				<span className="ml-auto flex shrink-0 items-center gap-3">
+				<span className="col-span-full flex flex-wrap items-center justify-end gap-3">
 					<span className="flex items-center gap-1.5 font-mono text-[10px] text-slate-500 dark:text-slate-400">
 						<span className="size-1.5 rounded-full bg-success shadow-[0_0_6px_color-mix(in_oklch,var(--success)_70%,transparent)]" />
 						daemon healthy
@@ -290,7 +290,7 @@ function Stat({
 	tone?: "ok" | "warn";
 }) {
 	return (
-		<span className="flex h-full min-w-0 shrink-0 flex-col justify-center gap-[3px]">
+		<span className="flex min-w-0 flex-col justify-center gap-[3px]">
 			<span className="font-mono text-[10px] font-semibold uppercase leading-none tracking-[0.08em] text-slate-500 dark:text-slate-400">
 				{label}
 			</span>
@@ -300,7 +300,7 @@ function Stat({
 				)}
 				<span
 					className={cn(
-						"truncate font-mono text-[14px] font-semibold leading-none text-foreground",
+						"font-mono text-[clamp(0.6875rem,2vw,0.875rem)] font-semibold leading-none text-foreground",
 						tone === "warn" && "text-destructive",
 						tone === "ok" && "text-success",
 					)}
