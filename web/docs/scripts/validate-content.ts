@@ -83,6 +83,20 @@ function stripCode(source: string): string {
 	return source.replace(/```[\s\S]*?```|`[^`\n]+`/g, "");
 }
 
+function linksToRetiredDocsOrigin(source: string): boolean {
+	for (const match of source.matchAll(/https?:\/\/[^\s)<>'"]+/g)) {
+		try {
+			const url = new URL(match[0]);
+			if (url.protocol === "https:" && url.hostname === "signetai.sh") {
+				if (url.pathname === "/docs" || url.pathname.startsWith("/docs/")) return true;
+			}
+		} catch {
+			// Ignore malformed URL-shaped prose; Markdown link validation handles local targets below.
+		}
+	}
+	return false;
+}
+
 function main(): number {
 	const errors: string[] = [];
 	const contentFiles = filesUnder(CONTENT).filter((path) => [".md", ".mdx"].includes(extname(path)));
@@ -100,7 +114,7 @@ function main(): number {
 		const prose = stripCode(source);
 
 		if (!source.startsWith("---\n")) errors.push(`${rel}: missing frontmatter`);
-		if (source.includes("https://signetai.sh/docs")) errors.push(`${rel}: links to the retired docs origin`);
+		if (linksToRetiredDocsOrigin(source)) errors.push(`${rel}: links to the retired docs origin`);
 		if (/\[\[[^\]]+\]\]/.test(prose)) errors.push(`${rel}: contains an unresolved wikilink`);
 		if (/^(?:<<<<<<<|=======|>>>>>>>)(?: .*)?$/m.test(source)) {
 			errors.push(`${rel}: contains an unresolved merge-conflict marker`);
