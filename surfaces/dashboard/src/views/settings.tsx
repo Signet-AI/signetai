@@ -55,12 +55,12 @@ export function SettingsModal() {
 	return (
 		<Dialog open={open} onOpenChange={setOpen}>
 			<DialogContent
-				className="sig-modal flex h-[560px] max-h-[calc(100vh-48px)] w-[840px] max-w-[calc(100vw-48px)] gap-0 overflow-hidden rounded-[12px] border border-[oklch(1_0_0/0.1)] bg-card p-0 sm:max-w-[840px] [html:not(.dark)_&]:border-[oklch(0_0_0/0.1)]"
+				className="sig-modal flex h-[560px] max-h-[calc(100dvh-24px)] w-[calc(100vw-24px)] max-w-[840px] flex-col gap-0 overflow-hidden rounded-[12px] border border-[oklch(1_0_0/0.1)] bg-card p-0 sm:max-w-[840px] sm:flex-row [html:not(.dark)_&]:border-[oklch(0_0_0/0.1)]"
 				showCloseButton={false}
 			>
 				{/* internal sidebar */}
-				<aside className="flex w-[220px] shrink-0 flex-col gap-1 border-r border-[oklch(1_0_0/0.06)] bg-[color-mix(in_oklch,var(--background)_60%,var(--card))] p-3 pt-4.5 [html:not(.dark)_&]:border-[oklch(0_0_0/0.06)]">
-					<div className="px-2.5 pb-2 font-mono text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
+				<aside className="flex w-full shrink-0 flex-row items-center gap-1 overflow-x-auto border-b border-[oklch(1_0_0/0.06)] bg-[color-mix(in_oklch,var(--background)_60%,var(--card))] p-2 sm:w-[220px] sm:flex-col sm:items-stretch sm:overflow-visible sm:border-b-0 sm:border-r sm:p-3 sm:pt-4.5 [html:not(.dark)_&]:border-[oklch(0_0_0/0.06)]">
+					<div className="hidden px-2.5 pb-2 font-mono text-[10px] uppercase tracking-[0.08em] text-muted-foreground sm:block">
 						Settings
 					</div>
 					{NAV.map((n) => (
@@ -69,7 +69,7 @@ export function SettingsModal() {
 							type="button"
 							onClick={() => setSection(n.id)}
 							className={cn(
-								"flex items-center gap-2.5 rounded-[var(--radius)] px-2.5 py-2 text-left text-[13px] transition-colors",
+								"flex shrink-0 items-center gap-2.5 rounded-[var(--radius)] px-2.5 py-1.5 text-left text-[13px] transition-colors sm:py-2",
 								section === n.id
 									? "bg-[color-mix(in_oklch,var(--foreground)_9%,transparent)] font-medium text-foreground shadow-[inset_0_1px_0_oklch(1_0_0/0.08)]"
 									: "text-muted-foreground hover:bg-[color-mix(in_oklch,var(--foreground)_6%,transparent)] hover:text-foreground",
@@ -81,7 +81,7 @@ export function SettingsModal() {
 					))}
 				</aside>
 
-				<div className="flex min-w-0 flex-1 flex-col">
+				<div className="flex min-h-0 min-w-0 flex-1 flex-col">
 					<DialogHeader className="flex-row items-center justify-between border-b border-[oklch(1_0_0/0.06)] px-5 py-4 [html:not(.dark)_&]:border-[oklch(0_0_0/0.06)]">
 						<DialogTitle className="text-[15px] font-semibold tracking-tight">
 							{NAV.find((n) => n.id === section)?.label}
@@ -99,7 +99,7 @@ export function SettingsModal() {
 						</div>
 					</DialogHeader>
 
-					<div className="min-h-0 flex-1 overflow-y-auto p-5">
+					<div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-3 sm:p-5" aria-label="Settings section content" tabIndex={0}>
 						{section === "network" && <NetworkSection />}
 						{section === "inference" && <InferenceSection />}
 						{section === "logs" && <LogsSection />}
@@ -124,12 +124,12 @@ function GroupLabel({ children, suffix }: { children: React.ReactNode; suffix?: 
 
 function Row({ title, desc, children }: { title: string; desc?: string; children: React.ReactNode }) {
 	return (
-		<div className="flex items-center justify-between gap-4 rounded-[var(--radius)] px-2.5 py-2 hover:bg-[var(--accent-subtle)]">
+		<div className="flex flex-col gap-2 rounded-[var(--radius)] px-2.5 py-2 hover:bg-[var(--accent-subtle)] sm:flex-row sm:items-center sm:justify-between sm:gap-4">
 			<div className="min-w-0">
 				<div className="text-[13px] font-medium">{title}</div>
 				{desc && <div className="mt-0.5 text-[11.5px] leading-snug text-muted-foreground">{desc}</div>}
 			</div>
-			<div className="flex shrink-0 items-center">{children}</div>
+			<div className="flex w-full shrink-0 items-center sm:w-auto">{children}</div>
 		</div>
 	);
 }
@@ -149,7 +149,7 @@ function CtrlSelect({
 		<Select value={value || NONE} onValueChange={(v) => onChange(v === NONE ? "" : v)}>
 			<SelectTrigger
 				size="sm"
-				className="h-7.5 w-[220px] justify-between gap-2 rounded-[var(--radius)] border-[oklch(1_0_0/0.16)] bg-[color-mix(in_oklch,var(--foreground)_5%,transparent)] px-2.5 font-mono text-[11.5px] font-medium hover:border-[oklch(1_0_0/0.3)] [html:not(.dark)_&]:border-[oklch(0_0_0/0.14)]"
+				className="h-7.5 w-full justify-between gap-2 rounded-[var(--radius)] border-[oklch(1_0_0/0.16)] bg-[color-mix(in_oklch,var(--foreground)_5%,transparent)] px-2.5 font-mono text-[11.5px] font-medium hover:border-[oklch(1_0_0/0.3)] sm:w-[220px] [html:not(.dark)_&]:border-[oklch(0_0_0/0.14)]"
 			>
 				<SelectValue placeholder={placeholder} />
 			</SelectTrigger>
@@ -175,7 +175,7 @@ function CtrlInput({
 	type?: string;
 }) {
 	return (
-		<div className="ctrl ctrl--field w-[220px]">
+		<div className="ctrl ctrl--field w-full sm:w-[220px]">
 			<input
 				type={type}
 				value={value}
@@ -190,7 +190,7 @@ function CtrlInput({
 
 function CtrlReadonly({ value, sub }: { value: string; sub?: string }) {
 	return (
-		<span className="ctrl ctrl--readonly w-[220px]">
+		<span className="ctrl ctrl--readonly w-full sm:w-[220px]">
 			<span className="ctrl__value">{value}</span>
 			{sub && <span className="ctrl__sub">{sub}</span>}
 		</span>
@@ -734,7 +734,7 @@ function TargetEditor({
 
 	return (
 		<>
-			<div className="flex items-center justify-between gap-3 rounded-[var(--radius)] px-2.5 py-1.75 hover:bg-[var(--accent-subtle)]">
+			<div className="flex flex-col gap-2 rounded-[var(--radius)] px-2.5 py-1.75 hover:bg-[var(--accent-subtle)] sm:flex-row sm:items-center sm:justify-between sm:gap-3">
 				<div className="flex min-w-0 items-baseline gap-1.75">
 					<span className="text-[12.5px] font-medium">{label}</span>
 					<span className="font-mono text-[9px] text-muted-foreground">{tag}</span>
@@ -748,7 +748,7 @@ function TargetEditor({
 			)}
 			{executor !== "" && kind !== "acpx" && (
 				<Row title="Model" desc={kind === "local" ? "The model id your server exposes." : "From the pi-ai catalog — or type a custom id."}>
-					<div className="flex w-[220px] flex-col gap-1.5">
+					<div className="flex w-full flex-col gap-1.5 sm:w-[220px]">
 						{modelOptions.length > 0 && <CtrlSelect value={modelId} options={modelOptions} onChange={setModel} />}
 						<CtrlInput value={modelId} placeholder="custom model id" onChange={setModel} />
 					</div>
@@ -808,7 +808,7 @@ function EmbeddingEditor({ store }: { store: AgentConfigStore }) {
 
 	return (
 		<>
-			<div className="flex items-center justify-between gap-3 rounded-[var(--radius)] px-2.5 py-1.75 hover:bg-[var(--accent-subtle)]">
+			<div className="flex flex-col gap-2 rounded-[var(--radius)] px-2.5 py-1.75 hover:bg-[var(--accent-subtle)] sm:flex-row sm:items-center sm:justify-between sm:gap-3">
 				<div className="flex min-w-0 items-baseline gap-1.75">
 					<span className="text-[12.5px] font-medium">Embeddings</span>
 					<span className="font-mono text-[9px] text-muted-foreground">vectors</span>
@@ -865,7 +865,7 @@ function NumCtrl({
 		setText(String(clamped));
 	};
 	return (
-		<div className="ctrl ctrl--field w-[220px]">
+		<div className="ctrl ctrl--field w-full sm:w-[220px]">
 			<input
 				type="number"
 				value={text}

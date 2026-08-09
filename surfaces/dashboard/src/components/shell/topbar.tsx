@@ -4,14 +4,20 @@ import { cn } from "@/lib/utils";
 import { useView } from "@/lib/view-context";
 import { Bell, Menu } from "lucide-react";
 
-export function Topbar({ onMenuClick }: { onMenuClick: () => void }) {
+export function Topbar({
+	onMenuClick,
+	menuOpen,
+}: {
+	onMenuClick: () => void;
+	menuOpen: boolean;
+}) {
 	const { view, label } = useView();
 	const platform = typeof navigator !== "undefined" ? detectPlatform() : "mac";
 
 	return (
 		<header
 			className={cn(
-				"sig-drag flex h-[52px] shrink-0 items-center gap-3.5 bg-transparent px-6",
+				"sig-drag relative z-[60] flex h-[52px] shrink-0 items-center gap-3.5 bg-transparent px-6",
 				platform !== "mac" && "pr-0",
 			)}
 		>
@@ -19,7 +25,9 @@ export function Topbar({ onMenuClick }: { onMenuClick: () => void }) {
 				type="button"
 				onClick={onMenuClick}
 				className="sig-no-drag grid size-8 place-items-center rounded-[var(--radius)] text-muted-foreground hover:bg-accent hover:text-foreground md:hidden"
-				aria-label="Menu"
+				aria-controls="dashboard-navigation"
+				aria-expanded={menuOpen}
+				aria-label={menuOpen ? "Close navigation" : "Open navigation"}
 			>
 				<Menu className="size-4" />
 			</button>

@@ -10,4 +10,9 @@ describe("dashboard responsive shell", () => {
 	test("uses the opaque sidebar surface when navigation becomes a mobile drawer", () => {
 		expect(appSource).toMatch(/max-md:bg-sidebar/);
 	});
+
+	test("drops mobile navigation down from the top and lets the same menu button close it", () => {
+		expect(appSource).toMatch(/max-md:top-\[52px\][\s\S]*max-md:-translate-y-full[\s\S]*max-md:invisible/);
+		expect(appSource).toContain("setNavOpen((open) => !open)");
+	});
 });
