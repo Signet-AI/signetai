@@ -66,9 +66,15 @@ export function MemoryView() {
 	const memoryTypes = useMemo(() => getMemoryTypes(filterRows), [filterRows]);
 	const topTopics = useMemo(() => getTopTopics(filterRows), [filterRows]);
 	const coverage = coveragePercent(embeddingHealth);
+	const toggleMemoryType = (type: string) => {
+		setMemoryType((current) => current === type ? null : type);
+	};
+	const toggleMemoryTopic = (topic: string) => {
+		setTopics((current) => toggleTopic(current, topic));
+	};
 
 	return (
-		<div className="flex flex-1 flex-col gap-3.5 min-h-0">
+		<div className="flex flex-col gap-3.5 md:min-h-0 md:flex-1">
 			<Surface className="flex h-10 shrink-0 items-center gap-2.5 px-3.5">
 				<Stat label="memories" value={summary?.stats ? summary.stats.total.toLocaleString() : "—"} />
 				<Stat label="indexed" value={coverage === null ? "—" : `${coverage}%`} />
@@ -109,8 +115,24 @@ export function MemoryView() {
 				<kbd className="hidden rounded border border-border px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground sm:inline">⌘K</kbd>
 			</div>
 
-			<div className="grid min-h-0 flex-1 grid-cols-1 grid-rows-[minmax(0,1fr)] gap-4 md:grid-cols-[1fr_240px]">
-				<div className="flex min-h-0 flex-col gap-2 overflow-y-auto pr-1">
+			<details className="md:hidden">
+				<summary className="cursor-pointer rounded-[var(--radius)] border border-[oklch(1_0_0/0.1)] bg-[color-mix(in_oklch,var(--foreground)_3%,transparent)] px-3 py-2 font-mono text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground marker:text-muted-foreground">
+					Filters
+				</summary>
+				<div className="mt-2 rounded-[var(--radius)] border border-[oklch(1_0_0/0.06)] p-3">
+					<MemoryFilterGroups
+						memoryTypes={memoryTypes}
+						topTopics={topTopics}
+						memoryType={memoryType}
+						topics={topics}
+						onMemoryTypeToggle={toggleMemoryType}
+						onTopicToggle={toggleMemoryTopic}
+					/>
+				</div>
+			</details>
+
+			<div className="grid grid-cols-1 gap-4 md:min-h-0 md:flex-1 md:grid-rows-[minmax(0,1fr)] md:grid-cols-[1fr_240px]">
+				<div className="flex flex-col gap-2 pr-1 md:min-h-0 md:overflow-y-auto">
 					{groups.map((group) => (
 						<div key={group.label ?? "search"} className="mb-2.5 last:mb-0">
 							{group.label && <GroupHeader label={group.label} count={group.memories.length} />}
@@ -130,37 +152,15 @@ export function MemoryView() {
 					)}
 				</div>
 
-					<div className="hidden min-h-0 flex-col gap-3.5 overflow-y-auto pr-0.5 md:flex">
-						<SideGroup label="Memory type">
-							{memoryTypes.map((chip) => (
-								<SideChip
-									key={chip.type}
-									label={typeLabel(chip.type)}
-									count={chip.count}
-									icon={typeIcon(chip.type)}
-									active={memoryType === chip.type}
-									onClick={() => setMemoryType((current) => current === chip.type ? null : chip.type)}
-								/>
-							))}
-					</SideGroup>
-					<SideGroup label="Recurring topics">
-						<div className="flex flex-wrap gap-1.5 rounded-[var(--radius)] border border-[oklch(1_0_0/0.06)] bg-[color-mix(in_oklch,var(--foreground)_4%,transparent)] p-2">
-							{topTopics.map(({ tag }) => (
-								<button
-									type="button"
-									key={tag}
-									onClick={() => setTopics((current) => toggleTopic(current, tag))}
-									aria-pressed={topics.has(tag)}
-									className={cn(
-										"inline-flex items-center gap-1.25 rounded-full border border-[oklch(1_0_0/0.08)] bg-[color-mix(in_oklch,var(--foreground)_5%,transparent)] px-2 py-0.75 font-mono text-[10px] text-muted-foreground transition-colors hover:border-[oklch(1_0_0/0.24)] hover:text-foreground",
-										topics.has(tag) && "border-[oklch(1_0_0/0.18)] bg-[color-mix(in_oklch,var(--foreground)_10%,transparent)] text-foreground",
-									)}
-								>
-									#{tag}
-								</button>
-							))}
-						</div>
-					</SideGroup>
+				<div className="hidden min-h-0 flex-col gap-3.5 overflow-y-auto pr-0.5 md:flex">
+					<MemoryFilterGroups
+						memoryTypes={memoryTypes}
+						topTopics={topTopics}
+						memoryType={memoryType}
+						topics={topics}
+						onMemoryTypeToggle={toggleMemoryType}
+						onTopicToggle={toggleMemoryTopic}
+					/>
 				</div>
 			</div>
 		</div>
@@ -376,6 +376,57 @@ function Stat({ label, value }: { label: string; value: string }) {
 			<span className="font-mono text-[13px] font-medium">{value}</span>
 			<span className="text-[11px] text-muted-foreground">{label}</span>
 		</span>
+	);
+}
+
+function MemoryFilterGroups({
+	memoryTypes,
+	topTopics,
+	memoryType,
+	topics,
+	onMemoryTypeToggle,
+	onTopicToggle,
+}: {
+	memoryTypes: ReadonlyArray<{ type: string; count: number }>;
+	topTopics: ReadonlyArray<{ tag: string; count: number }>;
+	memoryType: string | null;
+	topics: ReadonlySet<string>;
+	onMemoryTypeToggle: (type: string) => void;
+	onTopicToggle: (topic: string) => void;
+}) {
+	return (
+		<>
+			<SideGroup label="Memory type">
+				{memoryTypes.map((chip) => (
+					<SideChip
+						key={chip.type}
+						label={typeLabel(chip.type)}
+						count={chip.count}
+						icon={typeIcon(chip.type)}
+						active={memoryType === chip.type}
+						onClick={() => onMemoryTypeToggle(chip.type)}
+					/>
+				))}
+			</SideGroup>
+			<SideGroup label="Recurring topics">
+				<div className="flex flex-wrap gap-1.5 rounded-[var(--radius)] border border-[oklch(1_0_0/0.06)] bg-[color-mix(in_oklch,var(--foreground)_4%,transparent)] p-2">
+					{topTopics.map(({ tag }) => (
+						<button
+							type="button"
+							key={tag}
+							onClick={() => onTopicToggle(tag)}
+							aria-pressed={topics.has(tag)}
+							className={cn(
+								"inline-flex items-center gap-1.25 rounded-full border border-[oklch(1_0_0/0.08)] bg-[color-mix(in_oklch,var(--foreground)_5%,transparent)] px-2 py-0.75 font-mono text-[10px] text-muted-foreground transition-colors hover:border-[oklch(1_0_0/0.24)] hover:text-foreground",
+								topics.has(tag) && "border-[oklch(1_0_0/0.18)] bg-[color-mix(in_oklch,var(--foreground)_10%,transparent)] text-foreground",
+							)}
+						>
+							#{tag}
+						</button>
+					))}
+				</div>
+			</SideGroup>
+		</>
 	);
 }
 

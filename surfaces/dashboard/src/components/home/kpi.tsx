@@ -19,9 +19,7 @@ export function KpiRow({ cards, children }: { cards: KpiData[]; children?: React
 			{cards.map((c) => (
 				<KpiCard key={c.label} {...c} />
 			))}
-			{/* Trailing controls land in row 2, col 1 — mirrors the mockup's
-			    `.kpirow` where `.controls` is the 5th grid item. */}
-			{children}
+			{children && <div className="col-span-full min-w-0">{children}</div>}
 		</div>
 	);
 }

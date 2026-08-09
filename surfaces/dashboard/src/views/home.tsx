@@ -257,16 +257,16 @@ const REVIEW_ROWS: { text: React.ReactNode; actions: readonly [string, string] }
 function HomeControls() {
 	const [range, setRange] = useState("14d");
 	return (
-		<div className="flex items-center gap-2">
-			<div className="inline-flex h-7.5 overflow-hidden rounded-[var(--radius)] border border-[oklch(1_0_0/0.1)] [html:not(.dark)_&]:border-border">
+		<div className="flex flex-wrap items-center gap-2">
+			<div className="flex flex-wrap gap-1">
 				{["24h", "7d", "14d", "30d"].map((r) => (
 					<button
 						key={r}
 						type="button"
 						onClick={() => setRange(r)}
 						className={cn(
-							"h-full border-r border-[oklch(1_0_0/0.08)] bg-none px-2.25 font-mono text-[10.5px] last:border-r-0",
-							range === r ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground",
+							"h-7.5 rounded-[var(--radius)] border border-[oklch(1_0_0/0.1)] px-2.25 font-mono text-[10.5px] [html:not(.dark)_&]:border-border",
+							range === r ? "border-primary bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground",
 						)}
 					>
 						{r}
