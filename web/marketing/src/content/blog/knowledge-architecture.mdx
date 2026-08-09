@@ -29,7 +29,7 @@ Knowledge doesn't arrive structured. It arrives messy.
 
 A session produces hundreds of observations. A document produces thousands of sentences. The agent encounters facts in passing, half-formed, buried in context. None of it is immediately useful in the form it arrives.
 
-The extraction [[pipeline]] is the refinery. It runs outside the conversation — the agent is never involved. No memory tools, no "remember this" commands. The distillation engine reviews sessions after they end, and over time, continuously and in the background, it takes raw material and distills it:
+The extraction [Pipeline](https://docs.signetai.sh/pipeline/) is the refinery. It runs outside the conversation — the agent is never involved. No memory tools, no "remember this" commands. The distillation engine reviews sessions after they end, and over time, continuously and in the background, it takes raw material and distills it:
 
 ```
 sparse facts
@@ -106,7 +106,7 @@ Conflating tasks and entities would mean completed work accumulating importance 
 
 The goal of this architecture is not to build the most complete knowledge graph. It is to build the most *useful* substrate for context selection.
 
-A database full of atomic facts, organized under entities, structured by aspects, connected through explicit dependencies, with constraints that always surface, gives the system a much better starting point than a flat pile of transcripts. The structure does real work. But it is still substrate. The point is not "we have a graph." The point is that the graph makes it easier to build a bounded, coherent set of candidates that the system can rank, trim, and learn over time. For technical implementation details, see the [[docs/knowledge-architecture|knowledge architecture docs]].
+A database full of atomic facts, organized under entities, structured by aspects, connected through explicit dependencies, with constraints that always surface, gives the system a much better starting point than a flat pile of transcripts. The structure does real work. But it is still substrate. The point is not "we have a graph." The point is that the graph makes it easier to build a bounded, coherent set of candidates that the system can rank, trim, and learn over time. For technical implementation details, see the [knowledge architecture docs](https://docs.signetai.sh/knowledge-architecture/).
 
 ## Constraint Confidence
 
@@ -116,7 +116,7 @@ An entity with a rich constraint set is one the agent understands well. It knows
 
 This is an internal signal, not a user-facing one. The agent uses constraint density to calibrate how autonomously it acts on a given entity. The user never manages it, configures it, or even sees it directly. It's just behavior: the agent is more cautious around unfamiliar entities, more decisive around well-mapped ones.
 
-In the [[dashboard|constellation view]], this manifests as node brightness. Entities with dense constraint graphs are luminous. New entities are dim. The visual tells you, at a glance, where the agent is operating on solid ground.
+In the [constellation view](https://docs.signetai.sh/dashboard/), this manifests as node brightness. Entities with dense constraint graphs are luminous. New entities are dim. The visual tells you, at a glance, where the agent is operating on solid ground.
 
 ## Context Is Bounded by Design
 
@@ -141,7 +141,7 @@ This is the broader principle: the memory system is set and forget. **The user's
 
 ## The Graph Shapes the Candidate Pool
 
-We call this concept [[docs/desire-paths|desire paths]] — like the worn trails in a park that reveal where people actually walk, the knowledge graph learns which traversals are productive and reinforces them over time. But the real shift is not from *search* to *traversal*. It is from naive retrieval to context selection.
+We call this concept desire paths — like the worn trails in a park that reveal where people actually walk, the knowledge graph learns which traversals are productive and reinforces them over time. But the real shift is not from *search* to *traversal*. It is from naive retrieval to context selection.
 
 Current memory systems find relevant knowledge by asking: what is semantically similar to this query? They embed the query, embed the memories, compute cosine distances, retrieve the closest matches. This works. It's also expensive, probabilistic, and structurally blind — it finds things that *sound related*, not things that *are structurally required*.
 
@@ -149,7 +149,7 @@ In Signet's knowledge architecture, session-start can ask a different question: 
 
 Signet's predictive scorer runs on top of this. The structure gives it something coherent to learn over: which aspects matter most for which kinds of sessions, which attributes to prioritize, which dependencies are worth following, and which retrieved context keeps showing up without actually helping. The goal is for the system to learn from regret, not just reuse, so stale or distracting context gradually loses influence instead of haunting the window forever.
 
-The floor is better. The ceiling is higher. For the deterministic guarantees that protect knowledge during distillation, see [[docs/lcm-patterns|Lossless Context Patterns]].
+The floor is better. The ceiling is higher. For the deterministic guarantees that protect knowledge during distillation, see Lossless Context Patterns.
 
 ## What You'll See
 

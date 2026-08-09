@@ -1,0 +1,77 @@
+name: Deploy Documentation
+
+on:
+  pull_request:
+    paths:
+      - "web/docs/**"
+      - "CONTRIBUTING.md"
+      - "ROADMAP.md"
+      - "scripts/sync-root-docs.ts"
+      - ".github/workflows/deploy-docs.yml"
+  push:
+    branches: [main]
+    paths:
+      - "web/docs/**"
+      - "CONTRIBUTING.md"
+      - "ROADMAP.md"
+      - "scripts/sync-root-docs.ts"
+      - ".github/workflows/deploy-docs.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.11
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Verify root-derived docs
+        run: bun scripts/sync-root-docs.ts --check
+
+      - name: Validate public content
+        run: bun run --cwd web/docs validate:content
+
+      - name: Typecheck documentation site
+        run: bun run --cwd web/docs check
+
+      - name: Build documentation site
+        run: bun run --cwd web/docs build
+
+      - name: Select Cloudflare branch
+        id: branch
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            branch="${GITHUB_HEAD_REF//\//-}"
+          else
+            branch="main"
+          fi
+          echo "name=$branch" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy to Cloudflare Pages
+        id: deploy
+        if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: a19f770b9be1b20e78b8d25bdcfd3bbd
+          workingDirectory: web/docs
+          command: pages deploy dist --project-name=signet-docs --branch=${{ steps.branch.outputs.name }}
+          packageManager: bun
+
+      - name: Record deployment URL
+        if: steps.deploy.outcome == 'success'
+        run: echo "Documentation deployment ${{ steps.deploy.outputs.deployment-url }}" >> "$GITHUB_STEP_SUMMARY"

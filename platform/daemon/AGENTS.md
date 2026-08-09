@@ -2,8 +2,8 @@
 
 The daemon owns Signet's HTTP surface, pipeline, hooks, auth enforcement,
 background work, and dashboard serving. Load only the references relevant to
-the task: `docs/API.md`, `docs/AUTH.md`, `docs/PIPELINE.md`,
-`docs/SOURCES.md`, and `docs/ARCHITECTURE.md`.
+the task: `web/docs/src/content/docs/api.md`, `web/docs/src/content/docs/auth.md`, `web/docs/src/content/docs/pipeline.md`,
+`web/docs/src/content/docs/sources.md`, and `web/docs/src/content/docs/architecture.md`.
 
 ## Scope and provenance
 
@@ -36,7 +36,7 @@ the task: `docs/API.md`, `docs/AUTH.md`, `docs/PIPELINE.md`,
 
 ## API and runtime proof
 
-- Keep `docs/API.md` synchronized with route methods, bodies, responses, and
+- Keep `web/docs/src/content/docs/api.md` synchronized with route methods, bodies, responses, and
   auth behavior. Update the other daemon references when pipeline, source, or
   lifecycle contracts change.
 - Add focused behavioral coverage near the changed route or pipeline stage,

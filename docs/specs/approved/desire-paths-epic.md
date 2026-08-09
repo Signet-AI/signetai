@@ -18,7 +18,7 @@ This epic unifies four documents into an incremental build plan:
 
 - `docs/specs/planning/DESIRE-PATHS.md` — the vision
 - `docs/specs/planning/LCM-PATTERNS.md` — five foundation patterns
-- `docs/KNOWLEDGE-GRAPH.md` — current implementation
+- `web/docs/src/content/docs/knowledge-graph.md` — current implementation
 - `docs/research/technical/RESEARCH-GITNEXUS-PATTERNS.md` — bootstrapping techniques
 
 Hard dependencies on existing specs:

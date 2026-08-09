@@ -137,9 +137,9 @@ export default function NavSearch() {
 						value={query}
 						onChange={(e) => setQuery(e.target.value)}
 						onKeyDown={onKeyDown}
-						placeholder="Search docs..."
+						placeholder="Search Signet..."
 						autoComplete="off"
-						aria-label="Search documentation"
+						aria-label="Search the Signet website"
 						aria-expanded={results.length > 0}
 						aria-controls="nav-search-results"
 						aria-activedescendant={results[selected] ? `nav-search-option-${selected}` : undefined}
@@ -159,7 +159,7 @@ export default function NavSearch() {
 									>
 										<a href={r.item.url} onClick={() => setOpen(false)}>
 											<span className="nav-search-result-title">{r.item.title}</span>
-											<span className="nav-search-result-section">{r.item.sectionTitle || r.item.section || "Docs"}</span>
+											<span className="nav-search-result-section">{r.item.sectionTitle || r.item.section || "Site"}</span>
 										</a>
 									</div>
 								);

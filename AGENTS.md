@@ -28,10 +28,10 @@ surrounding code determine ordinary implementation choices.
 
 | Area | Path | Read when relevant |
 |---|---|---|
-| Core data, DB, search | `platform/core` | `platform/core/AGENTS.md`, `docs/ARCHITECTURE.md`, `docs/SOURCES.md` |
-| Daemon, API, pipeline | `platform/daemon` | `platform/daemon/AGENTS.md`, `docs/API.md`, `docs/AUTH.md`, `docs/PIPELINE.md` |
-| Harness integrations | `integrations` | `integrations/AGENTS.md`, `docs/HOOKS.md`, matching repo under `references/` |
-| CLI and apps | `surfaces` | `surfaces/AGENTS.md`; area source and tests; `docs/DASHBOARD.md` for dashboard work |
+| Core data, DB, search | `platform/core` | `platform/core/AGENTS.md`, `web/docs/src/content/docs/architecture.md`, `web/docs/src/content/docs/sources.md` |
+| Daemon, API, pipeline | `platform/daemon` | `platform/daemon/AGENTS.md`, `web/docs/src/content/docs/api.md`, `web/docs/src/content/docs/auth.md`, `web/docs/src/content/docs/pipeline.md` |
+| Harness integrations | `integrations` | `integrations/AGENTS.md`, `web/docs/src/content/docs/hooks.md`, matching repo under `references/` |
+| CLI and apps | `surfaces` | `surfaces/AGENTS.md`; area source and tests; `web/docs/src/content/docs/dashboard.md` for dashboard work |
 | Reusable packages | `libs`, `plugins`, `dist/signetai` | area `AGENTS.md`, package manifest, and consumers |
 | Benchmarks | `memorybench` | `memorybench/AGENTS.md` and its focused READMEs |
 | Marketing and docs site | `web` | `web/AGENTS.md`, local package scripts, and content source |
@@ -98,10 +98,11 @@ question directly.
 ## Documentation parity
 
 - Update behavior, API, schema, and user-facing documentation together when
-  the change affects them. Keep `docs/API.md` aligned with daemon routes.
-- Root documents duplicated under `docs/` are generated. Edit the root source,
-  then run `bun scripts/sync-root-docs.ts`; do not hand-edit generated copies
-  such as `docs/CONTRIBUTING.md` or `docs/ROADMAP.md`.
+  the change affects them. Public documentation lives under
+  `web/docs/src/content/docs/`; keep its API reference aligned with daemon routes.
+- Public copies of root `CONTRIBUTING.md` and `ROADMAP.md` are generated into
+  `web/docs/src/content/docs/`. Edit the root source, then run
+  `bun scripts/sync-root-docs.ts`; do not hand-edit the generated copies.
 - Use `bun scripts/doc-drift.ts` when architecture or migration documentation
   may have drifted.
 

@@ -5,8 +5,8 @@ on:
     paths:
       - "CONTRIBUTING.md"
       - "ROADMAP.md"
-      - "docs/CONTRIBUTING.md"
-      - "docs/ROADMAP.md"
+      - "web/docs/src/content/docs/contributing.md"
+      - "web/docs/src/content/docs/roadmap.md"
       - "scripts/sync-root-docs.ts"
       - ".github/workflows/root-doc-sync.yml"
   push:
@@ -14,8 +14,8 @@ on:
     paths:
       - "CONTRIBUTING.md"
       - "ROADMAP.md"
-      - "docs/CONTRIBUTING.md"
-      - "docs/ROADMAP.md"
+      - "web/docs/src/content/docs/contributing.md"
+      - "web/docs/src/content/docs/roadmap.md"
       - "scripts/sync-root-docs.ts"
       - ".github/workflows/root-doc-sync.yml"
 

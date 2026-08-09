@@ -1,1 +1,3 @@
 /install  /install.sh  200
+/docs  https://docs.signetai.sh/  301
+/docs/*  https://docs.signetai.sh/:splat  301

@@ -5,7 +5,7 @@ This document describes what Signet is, what it isn't, and where it's going. Thi
 
 Project overview and developer docs: [`README.md`](README.md)
 Near-term priorities: [`ROADMAP.md`](ROADMAP.md)
-Architecture: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
+Architecture: [`web/docs/src/content/docs/architecture.md`](web/docs/src/content/docs/architecture.md)
 
 ---
 

@@ -4,9 +4,12 @@ on:
   push:
     branches: [main]
     paths:
-      - 'web/**'
-      - 'docs/**'
-      - '!**/*.test.*'
+      - "web/marketing/**"
+      - ".github/workflows/deploy-web.yml"
+      - "!**/*.test.*"
+
+permissions:
+  contents: read
 
 jobs:
   deploy:
@@ -19,10 +22,10 @@ jobs:
       - uses: oven-sh/setup-bun@v2
 
       - name: Install dependencies
-        run: cd web/marketing && bun install
+        run: bun install --frozen-lockfile
 
       - name: Build
-        run: cd web/marketing && bun run build
+        run: bun run --cwd web/marketing build
 
       - name: Deploy to Cloudflare
         uses: cloudflare/wrangler-action@v3

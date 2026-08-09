@@ -2,7 +2,7 @@
 
 `@signet/core` owns shared types, SQLite access, migrations, search, manifests,
 and identity primitives consumed by multiple runtimes. Read the owning source,
-its consumers, and `docs/ARCHITECTURE.md` or `docs/SOURCES.md` when the change
+its consumers, and `web/docs/src/content/docs/architecture.md` or `web/docs/src/content/docs/sources.md` when the change
 touches their contracts.
 
 ## SQLite and migrations

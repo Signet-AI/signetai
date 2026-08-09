@@ -123,7 +123,7 @@ If you're a developer using AI as a coding assistant, the web-based migration co
 
 This is where the ChatGPT-to-Claude migration intersects with a deeper problem: **AI memory isn't portable.** ChatGPT memories live on OpenAI's servers. Claude memories live on Anthropic's servers. Neither gives you a local, inspectable copy. Neither lets you use the same context across multiple platforms. And both rely on the AI itself to decide what's worth remembering — the same stateless model that forgets everything between sessions is in charge of its own memory.
 
-[Signet](/) takes a different approach entirely. Your agent's [[memory]] lives locally in a SQLite database on your machine. A distillation engine extracts knowledge from sessions after they end — no agent involvement, no memory tools. A predictive model injects the right context before every prompt. The same memory and preferences work across Claude Code, [OpenClaw](https://github.com/openclaw/openclaw), OpenCode, Cursor — whatever you use. No cloud dependency, no vendor lock-in, no starting over when you switch tools.
+[Signet](/) takes a different approach entirely. Your agent's [Memory](https://docs.signetai.sh/memory/) lives locally in a SQLite database on your machine. A distillation engine extracts knowledge from sessions after they end — no agent involvement, no memory tools. A predictive model injects the right context before every prompt. The same memory and preferences work across Claude Code, [OpenClaw](https://github.com/openclaw/openclaw), OpenCode, Cursor — whatever you use. No cloud dependency, no vendor lock-in, no starting over when you switch tools.
 
 For a ChatGPT-to-Claude migration specifically, Signet means:
 
@@ -132,15 +132,15 @@ For a ChatGPT-to-Claude migration specifically, Signet means:
 - **Memory survives platform changes** — if you switch assistants again in six months, you don't repeat this process
 - **You can inspect, edit, and version-control your memories** like any other configuration
 
-If you're already using Claude Code, getting started with Signet takes about two minutes. The [quickstart guide](/docs) walks you through installation and setup — it detects your existing Claude Code installation and wires everything together. Your agent gains persistent memory and encrypted [[secrets]] management across platforms — things the web interface can't provide.
+If you're already using Claude Code, getting started with Signet takes about two minutes. The [quickstart guide](https://docs.signetai.sh/quickstart/) walks you through installation and setup — it detects your existing Claude Code installation and wires everything together. Your agent gains persistent memory and encrypted [Secrets](https://docs.signetai.sh/secrets/) management across platforms — things the web interface can't provide.
 
-Read more about [why local-first memory matters](/blog/why-local-first-memory/) or check the [documentation](/docs) for the full setup guide.
+Read more about [why local-first memory matters](/blog/why-local-first-memory/) or check the [documentation](https://docs.signetai.sh/) for the full setup guide.
 
 ## For Power Users: OpenClaw and Multi-Platform Workflows
 
 If you're using — or considering — [OpenClaw](https://github.com/openclaw/openclaw) as your coding agent, Signet provides a runtime plugin that gives your OpenClaw agent access to the same memory and secrets as your Claude Code agent. Same context and credentials, different platform.
 
-This matters for the ChatGPT migration story because it means the context you import into Claude isn't trapped there. Signet's [[connectors|connector system]] synchronizes workspace instructions across every supported [[harnesses|platform]] automatically. Change a preference in Claude Code, and it's reflected in OpenClaw. Add a memory through the web dashboard, and every connected tool picks it up.
+This matters for the ChatGPT migration story because it means the context you import into Claude isn't trapped there. Signet's [connector system](https://docs.signetai.sh/connectors/) synchronizes workspace instructions across every supported [platform](https://docs.signetai.sh/harnesses/) automatically. Change a preference in Claude Code, and it's reflected in OpenClaw. Add a memory through the web dashboard, and every connected tool picks it up.
 
 The agent isn't the platform. Memory and secrets should live below the platform. That's the actual solution to the portability problem that makes migrations like this necessary in the first place.
 
@@ -154,4 +154,4 @@ Until then, the steps above will get you moved over. And if you want to make sur
 
 ---
 
-*Written by Nicholai and Mr. Claude. Have questions about the migration process? Check the [Signet docs](/docs) or [open an issue on GitHub](https://github.com/nicholai/signetai).*
+*Written by Nicholai and Mr. Claude. Have questions about the migration process? Check the [Signet docs](https://docs.signetai.sh/) or [open an issue on GitHub](https://github.com/nicholai/signetai).*

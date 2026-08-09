@@ -272,7 +272,7 @@ select properties.provider as provider, count() as calls, sum(properties.totalCo
 
 The local daemon also exposes `/api/telemetry/stats` (LLM, embedding, recall,
 dreaming, and session aggregates from the local `telemetry_events` table) — see
-[docs/api/telemetry-logs.md](./api/telemetry-logs.md). A local analytics
+[public telemetry API reference](https://docs.signetai.sh/api/telemetry-logs/). A local analytics
 vault mirrors the key PostHog aggregates for daily review via
 `scripts/sync-analytics.py`.
 

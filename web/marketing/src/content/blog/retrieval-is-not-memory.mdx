@@ -49,7 +49,7 @@ That second number is the one worth sitting with. Hit@10 means the correct memor
 
 Here's how we got there: **zero LLM calls at retrieval time**.
 
-Signet's retrieval is entirely algorithmic. It walks a [[blog/knowledge-architecture|knowledge graph]], runs FTS5 keyword search, computes vector similarity against pre-embedded memories, then applies three stages of post-fusion dampening to separate signal from noise. No agents reading through findings. No parallel orchestrators. No ensemble voting. Just data structures, indexes, and math.
+Signet's retrieval is entirely algorithmic. It walks a [knowledge graph](/blog/knowledge-architecture/), runs FTS5 keyword search, computes vector similarity against pre-embedded memories, then applies three stages of post-fusion dampening to separate signal from noise. No agents reading through findings. No parallel orchestrators. No ensemble voting. Just data structures, indexes, and math.
 
 The graph walk identifies focal entities from session context, traverses their aspects and attributes, follows dependency edges to related entities. FTS5 catches terminology variations that the graph hasn't connected. Vector search surfaces semantically related content the other channels missed. Then post-fusion dampening runs three corrections: gravity dampening removes semantic ghosts (high cosine similarity but zero vocabulary overlap), hub dampening demotes well-connected entities that appear in everything, and resolution boosting elevates actionable knowledge like decisions and constraints.
 
@@ -63,7 +63,7 @@ There's a philosophical difference between "throw more LLMs at the retrieval pro
 
 The core insight they demonstrated is real: vector search alone fails on temporal data and contradictions. Semantic similarity can't distinguish between an old fact and a recent correction. That's the right problem. ASMR, the satirical solution, replaced vector search with agentic reasoning. High accuracy, zero scalability. Built to fail at production scale, on purpose.
 
-Signet took a different path. Instead of replacing search with more intelligence at query time, we built structure that makes candidate generation bounded and coherent. The [[blog/knowledge-architecture|knowledge graph]] contains entities, aspects, attributes, constraints, and explicit dependency edges. When the system needs context about a project, it doesn't start from "search everything and hope." It can walk to the project entity, read its aspects, follow its dependencies, then let flatter retrieval layers and learned ranking handle the rest. Deterministic where possible. Bounded by design.
+Signet took a different path. Instead of replacing search with more intelligence at query time, we built structure that makes candidate generation bounded and coherent. The [knowledge graph](/blog/knowledge-architecture/) contains entities, aspects, attributes, constraints, and explicit dependency edges. When the system needs context about a project, it doesn't start from "search everything and hope." It can walk to the project entity, read its aspects, follow its dependencies, then let flatter retrieval layers and learned ranking handle the rest. Deterministic where possible. Bounded by design.
 
 This is why a local system running on SQLite can hit 100% retrieval accuracy in our sample. The graph contains the relationships. FTS catches the terms. Vectors find the surprises. Dampening removes the noise. No LLM required.
 
@@ -81,7 +81,7 @@ These are not retrieval problems. They're persistence and continuity problems. T
 
 Signet addresses them because we think they're the actual hard problem.
 
-**Durable instructions.** Signet treats workspace instructions, preferences, and behavioral guidelines as memory. These files travel across platforms with the rest of the context. The model is a guest in a persistent environment, not the owner of it. We wrote about this architecture in [[blog/you-think-signet-is-a-memory-system|Signet Is More Than a Memory API]].
+**Durable instructions.** Signet treats workspace instructions, preferences, and behavioral guidelines as memory. These files travel across platforms with the rest of the context. The model is a guest in a persistent environment, not the owner of it. We wrote about this architecture in [Signet Is More Than a Memory API](/blog/you-think-signet-is-a-memory-system/).
 
 **Decision tracking.** Fourteen regex patterns detect decision language at write time: "chose X over Y," "switched from," "going with," "opted for." Detected decisions auto-promote to constraints, knowledge that *always* surfaces in recall regardless of relevance scoring. The agent doesn't forget why it made a choice. It carries that forward, forever.
 
@@ -133,4 +133,4 @@ The question is what the agent already knows when it walks into the room.
 
 ---
 
-*Signet is open source. The [[blog/knowledge-architecture|knowledge architecture]], the [[docs/desire-paths|desire paths]] traversal system, and the [[pipeline|extraction pipeline]] are all part of the shipped substrate. [[blog/why-local-first-memory|Local-first]]. User-owned. No API keys required for retrieval. If retrieval were memory, we'd be done. We're not done.*
+*Signet is open source. The [knowledge architecture](/blog/knowledge-architecture/), the desire paths traversal system, and the [extraction pipeline](https://docs.signetai.sh/pipeline/) are all part of the shipped substrate. [Local-first](/blog/why-local-first-memory/). User-owned. No API keys required for retrieval. If retrieval were memory, we'd be done. We're not done.*

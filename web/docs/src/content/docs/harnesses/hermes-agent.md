@@ -1,0 +1,82 @@
+---
+title: "Hermes Agent"
+description: "Connect Signet to Hermes Agent."
+---
+
+## Hermes Agent
+
+Hermes Agent is an open-source terminal AI agent by Nous Research. Signet
+integrates as a pluggable memory provider via Hermes's `MemoryProvider` ABC,
+deploying a Python plugin that bridges all Signet daemon hooks into the
+Hermes lifecycle.
+
+### Files managed by Signet
+
+| Location | Description |
+|----------|-------------|
+| `~/.hermes/plugins/signet/__init__.py` | User-level Signet `MemoryProvider` implementation |
+| `~/.hermes/plugins/signet/client.py` | User-level HTTP client for the Signet daemon API |
+| `~/.hermes/plugins/signet/plugin.yaml` | User-level plugin metadata |
+| `~/.hermes/plugins/signet/signet.install.json` | Install marker with connector version and plugin source hash |
+| `<hermes-repo>/plugins/memory/signet/__init__.py` | Signet `MemoryProvider` implementation |
+| `<hermes-repo>/plugins/memory/signet/client.py` | HTTP client for the Signet daemon API |
+| `<hermes-repo>/plugins/memory/signet/plugin.yaml` | Plugin metadata |
+| `<hermes-repo>/plugins/memory/signet/signet.install.json` | Install marker with connector version and plugin source hash |
+| `~/.hermes/config.yaml` | `memory.provider: signet` activation |
+| `~/.hermes/.env` | Daemon connection environment variables |
+
+### How it works
+
+1. `signet setup` (with `hermes-agent` selected) copies the Python plugin
+   into both `~/.hermes/plugins/signet/` and, when discovered,
+   `<hermes-repo>/plugins/memory/signet/`.
+2. The connector writes install markers, daemon connection env vars to
+   `~/.hermes/.env`, and activates the provider by setting
+   `memory.provider: signet` in Hermes config.
+3. At session start, Hermes calls `initialize()` on the plugin, which fires
+   `POST /api/hooks/session-start` to load identity, memories, and system
+   prompt injection from the daemon.
+4. On each user turn, `queue_prefetch()` fires
+   `POST /api/hooks/user-prompt-submit` for entity current-view context when
+   the prompt mentions a known entity or active alias.
+5. At session end, `on_session_end()` sends the accumulated transcript via
+   `POST /api/hooks/session-end` for async pipeline extraction.
+
+### Tools exposed to the agent
+
+| Tool | Description |
+|------|-------------|
+| `memory_search` | Hybrid memory search (keyword + semantic + knowledge graph) |
+| `session_search` | Search active or completed session transcripts |
+| `memory_store` | Store a fact/preference/decision with auto entity extraction |
+| `memory_get` | Retrieve a memory by ID |
+| `memory_list` | List memories with optional filters |
+| `memory_modify` | Edit an existing memory |
+| `memory_forget` | Soft-delete a memory |
+| `recall` / `remember` | Compatibility aliases for search/store |
+
+### Supported hooks
+
+| Hook | Supported |
+|------|-----------|
+| session-start | yes — identity + memories via `system_prompt_block()` |
+| user-prompt-submit | yes — entity current-view context via `queue_prefetch()` / `prefetch()` |
+| pre-compaction | yes — daemon-generated summary guidelines via `on_pre_compress()` |
+| compaction-complete | yes — saves summary as session memory via `on_compaction_complete()` |
+| checkpoint-extract | yes — periodic mid-session delta extraction every 30 turns |
+| session-end | yes — transcript extraction via `on_session_end()` |
+
+### Delegation support
+
+When Hermes delegates to subagents, the parent's `on_delegation()` hook
+stores the task+result pair as a Signet memory tagged `["delegation", "subagent"]`.
+
+### Prerequisites
+
+- Hermes Agent installed (repo with `plugins/memory/` directory)
+- Signet daemon running (`signet start`)
+- `signet setup --harness hermes-agent`
+- `signet doctor hermes` reports daemon health, plugin freshness, config
+  activation, and Hermes tool routing
+
+---

@@ -13,8 +13,8 @@ Source of truth for dependency metadata:
 - `docs/specs/dependencies.yaml`
 
 Conceptual north stars:
-- `docs/KNOWLEDGE-ARCHITECTURE.md`
-- `docs/NORTH-STAR-ONTOLOGY.md`
+- `web/docs/src/content/docs/knowledge-architecture.md`
+- `web/docs/src/content/docs/north-star-ontology.md`
 
 ---
 
@@ -201,7 +201,7 @@ own usage stats, decay, and relation edges.
 
 ### 2. Importance is structural, not arbitrary
 
-`docs/KNOWLEDGE-ARCHITECTURE.md` is authoritative on importance.
+`web/docs/src/content/docs/knowledge-architecture.md` is authoritative on importance.
 
 Importance is NOT a float assigned by heuristic. It is computed from
 structural density:
@@ -321,7 +321,7 @@ cannot suppress them. This is a hard retrieval invariant.
   front-loading importance before behavioral evidence accumulates.
   Pinned entities are training data for the predictor — the manual
   exploration mechanism that the predictor eventually learns to
-  replicate autonomously. See `docs/KNOWLEDGE-ARCHITECTURE.md`
+  replicate autonomously. See `web/docs/src/content/docs/knowledge-architecture.md`
   section "Love, Hate, and the Exploration Problem" for rationale.
 
 ### Knowledge Architecture <-> Session Continuity
@@ -570,7 +570,7 @@ Phase ordering based on hard dependencies and integration contracts.
 - **Knowledge Architecture KA-5**: continuity + dashboard — COMPLETE
 - **Knowledge Architecture KA-6**: entity pinning + behavioral feedback loop — COMPLETE
   loop (FTS overlap → aspect weight, aspect decay, per-entity health,
-  superseded propagation). See `docs/KNOWLEDGE-ARCHITECTURE.md` section
+  superseded propagation). See `web/docs/src/content/docs/knowledge-architecture.md` section
   "Love, Hate, and the Exploration Problem" for rationale.
 - **Signet Runtime Phase 3**: HTTP channel + adapter retrofit
 - **Multi-Agent Phase 4+**: daemon API, harness sync, CLI, dashboard

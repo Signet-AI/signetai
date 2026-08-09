@@ -41,7 +41,7 @@ This is why the write pipeline matters more than the read pipeline for cross-dom
 
 In Signet, the write pipeline runs outside the conversation. The agent never pauses, never calls a memory tool, never says "let me save that." Sessions are processed asynchronously after they end by a local LLM (currently qwen3:4b) that extracts facts, evaluates them against existing knowledge, and makes a decision for each one: add, update, delete, or skip.
 
-The extraction refinery distills raw session content through progressive stages, from sparse observations to atomic facts, the form where a single statement captures a complete, self-contained piece of knowledge. We covered this in detail in [[blog/knowledge-architecture|The Database Knows What You Did Last Summer]]. The critical design principle for this post is simpler:
+The extraction refinery distills raw session content through progressive stages, from sparse observations to atomic facts, the form where a single statement captures a complete, self-contained piece of knowledge. We covered this in detail in [The Database Knows What You Did Last Summer](/blog/knowledge-architecture/). The critical design principle for this post is simpler:
 
 **Distillation is additive. It never destroys the layer below.**
 
@@ -99,9 +99,9 @@ A significance gate sits at the entry point. Three independent signals, turn cou
 
 This is where the MemAware hard tier gets addressed directly. Two mechanisms work together to bridge the semantic gap between how information is stored and how it is later needed.
 
-The first is graph traversal. Signet's [[blog/knowledge-architecture|knowledge graph]] organizes facts under entities, with typed aspects, attributes, and explicit dependency edges. When a query activates an entity, the system can walk to related entities through those edges. The user entity connects to both a vehicles aspect (Ford Mustang, maintenance history) and a shopping aspect (Target loyalty card, discount programs). The connection between car maintenance and loyalty discounts is not a retrieval match. It is a structural path through the graph, two hops from the same root entity.
+The first is graph traversal. Signet's [knowledge graph](/blog/knowledge-architecture/) organizes facts under entities, with typed aspects, attributes, and explicit dependency edges. When a query activates an entity, the system can walk to related entities through those edges. The user entity connects to both a vehicles aspect (Ford Mustang, maintenance history) and a shopping aspect (Target loyalty card, discount programs). The connection between car maintenance and loyalty discounts is not a retrieval match. It is a structural path through the graph, two hops from the same root entity.
 
-We call this concept [[docs/desire-paths|desire paths]]. The paths people actually walk get worn into the ground. Pave those. Over time, traversal routes that produce useful context get reinforced. Routes that lead to noise get deprioritized. The graph develops a learned topology based on actual use patterns, not a static schema someone designed up front.
+We call this concept desire paths. The paths people actually walk get worn into the ground. Pave those. Over time, traversal routes that produce useful context get reinforced. Routes that lead to noise get deprioritized. The graph develops a learned topology based on actual use patterns, not a static schema someone designed up front.
 
 ```
 query: "Ford Mustang needs air filter, where can I
@@ -128,7 +128,7 @@ Together, graph traversal and prospective indexing attack the cross-domain probl
 
 Honesty is worth more than positioning.
 
-Signet has not run MemAware. The LoCoMo benchmark validates retrieval quality (87.5% accuracy, 100% Hit@10 in our [[blog/retrieval-is-not-memory|full-stack configuration]]), but LoCoMo tests different failure modes than MemAware's cross-domain implicit context. Strong LoCoMo numbers do not predict MemAware performance. They measure different things.
+Signet has not run MemAware. The LoCoMo benchmark validates retrieval quality (87.5% accuracy, 100% Hit@10 in our [full-stack configuration](/blog/retrieval-is-not-memory/)), but LoCoMo tests different failure modes than MemAware's cross-domain implicit context. Strong LoCoMo numbers do not predict MemAware performance. They measure different things.
 
 The architectural approach described in this post, graph traversal, prospective indexing, tiered retention with always-loaded context, is designed to address exactly the problem MemAware quantifies. But "designed to address" is not the same as "benchmarked against." That work is planned. When results are ready, we will publish them, whatever they are.
 
@@ -138,4 +138,4 @@ The field is early. The MemAware benchmark showed that most of the industry's ap
 
 ---
 
-*Signet is open source. The [[blog/knowledge-architecture|knowledge architecture]], the [[docs/desire-paths|desire paths]] traversal system, and the [[pipeline|extraction pipeline]] are all part of the shipped substrate. [[blog/why-local-first-memory|Local-first]]. User-owned. No API keys required for retrieval.*
+*Signet is open source. The [knowledge architecture](/blog/knowledge-architecture/), the desire paths traversal system, and the [extraction pipeline](https://docs.signetai.sh/pipeline/) are all part of the shipped substrate. [Local-first](/blog/why-local-first-memory/). User-owned. No API keys required for retrieval.*

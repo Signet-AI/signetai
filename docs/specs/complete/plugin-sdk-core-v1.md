@@ -564,7 +564,7 @@ Rules:
   `signet.secrets` to enabled; new interactive installs explain Signet Secrets
   and ask whether to enable it.
 - Add degraded-mode tests.
-- Update `docs/API.md`, `docs/SECRETS.md`, `docs/SDK.md`, `docs/MCP.md`, and
+- Update `web/docs/src/content/docs/api.md`, `web/docs/src/content/docs/secrets.md`, `web/docs/src/content/docs/sdk.md`, `web/docs/src/content/docs/mcp.md`, and
   dashboard docs where behavior or ownership changed.
 
 ## Validation and Tests
@@ -609,14 +609,14 @@ for the contracts above.
 
 When implemented, update:
 
-- `docs/API.md` for plugin diagnostics routes and secrets ownership notes.
-- `docs/SECRETS.md` for `signet.secrets`, local provider compatibility, and the
+- `web/docs/src/content/docs/api.md` for plugin diagnostics routes and secrets ownership notes.
+- `web/docs/src/content/docs/secrets.md` for `signet.secrets`, local provider compatibility, and the
   no-raw-secret-read invariant.
-- `docs/SDK.md` to remove or correct any implication that ordinary SDK callers
+- `web/docs/src/content/docs/sdk.md` to remove or correct any implication that ordinary SDK callers
   can retrieve raw secret values.
-- `docs/MCP.md` to state that secret tools use injection/listing only and are
+- `web/docs/src/content/docs/mcp.md` to state that secret tools use injection/listing only and are
   plugin-owned.
-- `docs/DASHBOARD.md` to describe plugin-owned Secrets settings and provider
+- `web/docs/src/content/docs/dashboard.md` to describe plugin-owned Secrets settings and provider
   status.
 - `docs/specs/INDEX.md` and `docs/specs/dependencies.yaml` when status changes.
 

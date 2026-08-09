@@ -1,0 +1,25 @@
+{
+	"name": "@signet/docs",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"dev": "astro dev",
+		"build": "astro build",
+		"preview": "astro preview",
+		"check": "astro check",
+		"typecheck": "astro check",
+		"validate:content": "bun scripts/validate-content.ts"
+	},
+	"dependencies": {
+		"@astrojs/starlight": "^0.41.7",
+		"astro": "^7.1.6",
+		"sharp": "^0.35.3",
+		"cookie": "^2.0.1"
+	},
+	"devDependencies": {
+		"@astrojs/check": "^0.9.6",
+		"typescript": "^5.7.0",
+		"wrangler": "^4.119.0"
+	}
+}

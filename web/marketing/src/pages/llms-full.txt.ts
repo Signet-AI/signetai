@@ -3,71 +3,31 @@ import type { APIContext } from "astro";
 
 export const prerender = true;
 
-export async function GET(context: APIContext) {
+export async function GET(context: APIContext): Promise<Response> {
 	const site = context.site?.toString().replace(/\/$/, "") ?? "https://signetai.sh";
-	const docs = await getCollection("docs");
 	const blog = await getCollection("blog");
-
-	const sorted = [...docs]
-		.filter((doc) => doc.data.title)
-		.sort((a, b) => (a.data.order ?? 999) - (b.data.order ?? 999));
-
 	const sections: string[] = [
-		"# SignetAI — Full Documentation",
+		"# SignetAI",
 		"",
-		"> Self-hosted memory and secrets for AI agents. Portable across models and harnesses including Hermes Agent and OpenClaw.",
+		"> Local-first memory and secrets for AI agents. Portable across models and harnesses.",
 		"",
-		`Source: ${site}`,
-		"",
-		"## Direct Answer",
-		"",
-		"Signet is a self-hosted AI memory system for Hermes Agent and OpenClaw, also matching the query \"self hosted AI memory\". It runs a local daemon, stores memory in SQLite, exposes MCP and HTTP APIs, and installs a Hermes Agent MemoryProvider plugin plus an OpenClaw runtime memory plugin.",
+		`Website: ${site}`,
+		"Documentation: https://docs.signetai.sh/",
+		"Full documentation: https://docs.signetai.sh/llms-full.txt",
 		"",
 		"---",
 		"",
+		"# Blog",
+		"",
 	];
-
-	for (const doc of sorted) {
-		const slug = doc.id.replace(/\.md$/, "").toLowerCase();
-
-		// Use the raw body if available, otherwise note it
-		if (doc.body) {
-			sections.push(`## ${doc.data.title}`);
-			sections.push(`URL: ${site}/docs/${slug}/`);
-			sections.push("");
-			sections.push(doc.body);
-			sections.push("");
-			sections.push("---");
-			sections.push("");
-		}
+	const posts = blog.filter((post) => !post.data.draft).sort((a, b) => b.data.date.getTime() - a.data.date.getTime());
+	for (const post of posts) {
+		sections.push(`## ${post.data.title}`);
+		sections.push(`URL: ${site}/blog/${post.id}/`);
+		sections.push(`Date: ${post.data.date.toISOString().slice(0, 10)}`);
+		sections.push(`Author: ${post.data.author}`, "");
+		if (post.body) sections.push(post.body);
+		sections.push("", "---", "");
 	}
-
-	const blogPosts = [...blog]
-		.filter((post) => !post.data.draft)
-		.sort((a, b) => b.data.date.getTime() - a.data.date.getTime());
-
-	if (blogPosts.length > 0) {
-		sections.push("# Blog");
-		sections.push("");
-
-		for (const post of blogPosts) {
-			sections.push(`## ${post.data.title}`);
-			sections.push(`URL: ${site}/blog/${post.id}/`);
-			sections.push(`Date: ${post.data.date.toISOString().slice(0, 10)}`);
-			sections.push(`Author: ${post.data.author}`);
-			sections.push("");
-			if (post.body) {
-				sections.push(post.body);
-			}
-			sections.push("");
-			sections.push("---");
-			sections.push("");
-		}
-	}
-
-	return new Response(sections.join("\n"), {
-		headers: {
-			"Content-Type": "text/plain; charset=utf-8",
-		},
-	});
+	return new Response(sections.join("\n"), { headers: { "Content-Type": "text/plain; charset=utf-8" } });
 }

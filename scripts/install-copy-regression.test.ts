@@ -13,8 +13,8 @@ describe("install copy", () => {
 	test("uses the native binary policy across public install paths", () => {
 		const primarySurfaces = [
 			"README.md",
-			"docs/QUICKSTART.md",
-			"docs/CLI.md",
+			"web/docs/src/content/docs/getting-started/install.md",
+			"web/docs/src/content/docs/cli/getting-started.md",
 			"web/marketing/src/components/landing/Hero.astro",
 			"web/marketing/src/components/landing/InstallCta.astro",
 			"web/marketing/src/components/landing/Quickstart.astro",
@@ -25,7 +25,12 @@ describe("install copy", () => {
 			expect(read(path)).toContain(nativeInstallCommand);
 		}
 
-		for (const path of ["README.md", "docs/QUICKSTART.md", "docs/CLI.md", "dist/signetai/README.md"]) {
+		for (const path of [
+			"README.md",
+			"web/docs/src/content/docs/getting-started/install.md",
+			"web/docs/src/content/docs/cli/getting-started.md",
+			"dist/signetai/README.md",
+		]) {
 			const content = read(path);
 			expect(content).toContain("same compiled Signet binary");
 			expect(content).toContain("native package");

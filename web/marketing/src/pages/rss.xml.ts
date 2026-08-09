@@ -1,79 +1,23 @@
-import { readdirSync, statSync } from "node:fs";
-import { resolve } from "node:path";
 import { getCollection } from "astro:content";
 import rss from "@astrojs/rss";
 import type { APIContext } from "astro";
 
 export const prerender = true;
 
-// Anchor the docs dir to the package root via process.cwd() (every build/dev
-// invocation runs from web/marketing — CI, dev:web, deploy:web). import.meta.url
-// is unreliable here: astro 7 prerenders the bundled chunk from
-// dist/.prerender/chunks, shifting the relative depth.
-const docsDir = resolve(process.cwd(), "../../docs");
-
-// Build a lookup from lowercase-no-ext ID to actual file path
-function buildFileIndex(dir: string, base: string = dir): Map<string, string> {
-	const map = new Map<string, string>();
-	for (const entry of readdirSync(dir, { withFileTypes: true })) {
-		if (entry.isDirectory() && entry.name !== "wip") {
-			for (const [k, v] of buildFileIndex(resolve(dir, entry.name), base)) {
-				map.set(k, v);
-			}
-		} else if (entry.name.endsWith(".md")) {
-			const fullPath = resolve(dir, entry.name);
-			const rel = fullPath.slice(base.length + 1);
-			const id = rel.replace(/\.md$/, "").toLowerCase();
-			map.set(id, fullPath);
-		}
-	}
-	return map;
-}
-
-const fileIndex = buildFileIndex(docsDir);
-
-function getFileMtime(docId: string): Date {
-	const filePath = fileIndex.get(docId);
-	if (filePath) {
-		try {
-			return statSync(filePath).mtime;
-		} catch {
-			// fall through
-		}
-	}
-	return new Date();
-}
-
-export async function GET(context: APIContext) {
-	const docs = await getCollection("docs");
+export async function GET(context: APIContext): Promise<Response> {
 	const blog = await getCollection("blog");
-
-	const docItems = docs
-		.filter((doc) => doc.data.title && doc.id !== "readme")
-		.map((doc) => {
-			const slug = doc.id.replace(/\.md$/, "").toLowerCase();
-			return {
-				title: doc.data.title,
-				description: doc.data.description ?? `Signet documentation: ${doc.data.title}`,
-				link: `/docs/${slug}/`,
-				pubDate: getFileMtime(doc.id),
-			};
-		});
-
-	const blogItems = blog
+	const items = blog
 		.filter((post) => !post.data.draft)
 		.map((post) => ({
 			title: post.data.title,
 			description: post.data.description,
 			link: `/blog/${post.id}/`,
 			pubDate: post.data.date,
-		}));
-
-	const items = [...docItems, ...blogItems].sort((a, b) => (b.pubDate?.getTime() ?? 0) - (a.pubDate?.getTime() ?? 0));
-
+		}))
+		.sort((a, b) => b.pubDate.getTime() - a.pubDate.getTime());
 	return rss({
-		title: "SignetAI",
-		description: "Local-first memory and secrets for AI agents. Portable across models and harnesses.",
+		title: "SignetAI Blog",
+		description: "Writing about durable memory, context selection, and infrastructure for AI agents.",
 		site: context.site?.toString() ?? "https://signetai.sh",
 		items,
 		customData: "<language>en-us</language>",

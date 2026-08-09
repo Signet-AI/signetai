@@ -17,6 +17,7 @@
     "integrations/*/*",
     "libs/*",
     "dist/*",
+    "web/docs",
     "web/marketing",
     "web/workers/*"
   ],

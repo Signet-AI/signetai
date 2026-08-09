@@ -1,443 +1,4 @@
 {
-  "docs/acp-integration": {
-    "title": "ACP and ACPX Integration",
-    "url": "/docs/acp-integration/",
-    "tags": [],
-    "links": [],
-    "collection": "docs"
-  },
-  "docs/analytics": {
-    "title": "Analytics",
-    "url": "/docs/analytics/",
-    "tags": [],
-    "links": [
-      "docs/daemon",
-      "docs/diagnostics",
-      "docs/api",
-      "docs/memory",
-      "docs/connectors"
-    ],
-    "collection": "docs"
-  },
-  "docs/api": {
-    "title": "HTTP API",
-    "url": "/docs/api/",
-    "tags": [],
-    "links": [
-      "docs/daemon",
-      "docs/configuration",
-      "docs/auth"
-    ],
-    "collection": "docs"
-  },
-  "docs/architecture": {
-    "title": "Architecture",
-    "url": "/docs/architecture/",
-    "tags": [],
-    "links": [
-      "docs/daemon",
-      "docs/api",
-      "docs/cli",
-      "docs/analytics",
-      "docs/pipeline",
-      "docs/harnesses"
-    ],
-    "collection": "docs"
-  },
-  "docs/auth": {
-    "title": "Authentication",
-    "url": "/docs/auth/",
-    "tags": [],
-    "links": [
-      "docs/daemon",
-      "docs/remote-connectors",
-      "docs/api",
-      "docs/configuration"
-    ],
-    "collection": "docs"
-  },
-  "docs/benchmarking-progress": {
-    "title": "benchmarking-progress",
-    "url": "/docs/benchmarking-progress/",
-    "tags": [],
-    "links": [],
-    "collection": "docs"
-  },
-  "docs/benchmarking": {
-    "title": "Benchmarks",
-    "url": "/docs/benchmarking/",
-    "tags": [],
-    "links": [],
-    "collection": "docs"
-  },
-  "docs/cli": {
-    "title": "CLI Reference",
-    "url": "/docs/cli/",
-    "tags": [],
-    "links": [
-      "docs/daemon",
-      "docs/api",
-      "docs/quickstart",
-      "docs/secrets",
-      "docs/skills",
-      "docs/harnesses",
-      "docs/remote-connectors"
-    ],
-    "collection": "docs"
-  },
-  "docs/configuration": {
-    "title": "Configuration",
-    "url": "/docs/configuration/",
-    "tags": [],
-    "links": [
-      "docs/quickstart",
-      "docs/daemon",
-      "docs/architecture",
-      "docs/pipeline",
-      "docs/harnesses",
-      "docs/hooks"
-    ],
-    "collection": "docs"
-  },
-  "docs/connectors": {
-    "title": "Connectors",
-    "url": "/docs/connectors/",
-    "tags": [],
-    "links": [
-      "docs/documents",
-      "docs/daemon",
-      "docs/api",
-      "docs/remote-connectors"
-    ],
-    "collection": "docs"
-  },
-  "docs/contributing": {
-    "title": "Contributing",
-    "url": "/docs/contributing/",
-    "tags": [],
-    "links": [],
-    "collection": "docs"
-  },
-  "docs/daemon": {
-    "title": "Daemon",
-    "url": "/docs/daemon/",
-    "tags": [],
-    "links": [
-      "docs/api",
-      "docs/dashboard",
-      "docs/harnesses",
-      "docs/mcp",
-      "docs/pipeline",
-      "docs/analytics",
-      "docs/diagnostics"
-    ],
-    "collection": "docs"
-  },
-  "docs/dashboard": {
-    "title": "Dashboard",
-    "url": "/docs/dashboard/",
-    "tags": [],
-    "links": [
-      "docs/daemon",
-      "docs/memory",
-      "docs/cli",
-      "docs/harnesses"
-    ],
-    "collection": "docs"
-  },
-  "docs/diagnostics": {
-    "title": "Diagnostics",
-    "url": "/docs/diagnostics/",
-    "tags": [],
-    "links": [
-      "docs/daemon",
-      "docs/pipeline",
-      "docs/auth",
-      "docs/api"
-    ],
-    "collection": "docs"
-  },
-  "docs/documents": {
-    "title": "Documents",
-    "url": "/docs/documents/",
-    "tags": [],
-    "links": [
-      "docs/memory",
-      "docs/configuration",
-      "docs/api",
-      "docs/daemon"
-    ],
-    "collection": "docs"
-  },
-  "docs/first-pr": {
-    "title": "Your First PR",
-    "url": "/docs/first-pr/",
-    "tags": [],
-    "links": [],
-    "collection": "docs"
-  },
-  "docs/harnesses": {
-    "title": "Harnesses",
-    "url": "/docs/harnesses/",
-    "tags": [],
-    "links": [
-      "docs/remote-connectors",
-      "docs/daemon",
-      "docs/hooks",
-      "docs/cli"
-    ],
-    "collection": "docs"
-  },
-  "docs/hooks": {
-    "title": "Hooks",
-    "url": "/docs/hooks/",
-    "tags": [],
-    "links": [
-      "docs/harnesses",
-      "docs/memory",
-      "docs/daemon",
-      "docs/configuration"
-    ],
-    "collection": "docs"
-  },
-  "docs/knowledge-architecture": {
-    "title": "Knowledge Architecture",
-    "url": "/docs/knowledge-architecture/",
-    "tags": [],
-    "links": [],
-    "collection": "docs"
-  },
-  "docs/knowledge-graph": {
-    "title": "Knowledge Graph",
-    "url": "/docs/knowledge-graph/",
-    "tags": [],
-    "links": [],
-    "collection": "docs"
-  },
-  "docs/mcp": {
-    "title": "MCP Server",
-    "url": "/docs/mcp/",
-    "tags": [],
-    "links": [
-      "docs/daemon",
-      "docs/harnesses",
-      "docs/memory",
-      "docs/hooks"
-    ],
-    "collection": "docs"
-  },
-  "docs/memory-skills": {
-    "title": "Memory Skills",
-    "url": "/docs/memory-skills/",
-    "tags": [],
-    "links": [
-      "docs/cli",
-      "docs/skills",
-      "docs/memory",
-      "docs/daemon"
-    ],
-    "collection": "docs"
-  },
-  "docs/memory": {
-    "title": "Memory System",
-    "url": "/docs/memory/",
-    "tags": [],
-    "links": [
-      "docs/daemon",
-      "docs/pipeline",
-      "docs/configuration",
-      "docs/api"
-    ],
-    "collection": "docs"
-  },
-  "docs/north-star-ontology": {
-    "title": "North Star Ontology",
-    "url": "/docs/north-star-ontology/",
-    "tags": [],
-    "links": [],
-    "collection": "docs"
-  },
-  "docs/pipeline": {
-    "title": "Memory Pipeline",
-    "url": "/docs/pipeline/",
-    "tags": [],
-    "links": [
-      "docs/memory",
-      "docs/daemon",
-      "docs/configuration"
-    ],
-    "collection": "docs"
-  },
-  "docs/procedural-memory": {
-    "title": "Procedural Memory",
-    "url": "/docs/procedural-memory/",
-    "tags": [],
-    "links": [],
-    "collection": "docs"
-  },
-  "docs/quickstart": {
-    "title": "Quickstart",
-    "url": "/docs/quickstart/",
-    "tags": [],
-    "links": [
-      "docs/configuration",
-      "docs/cli",
-      "docs/architecture",
-      "docs/daemon",
-      "docs/dashboard",
-      "docs/pipeline"
-    ],
-    "collection": "docs"
-  },
-  "docs/release_channels": {
-    "title": "release_channels",
-    "url": "/docs/release_channels/",
-    "tags": [],
-    "links": [],
-    "collection": "docs"
-  },
-  "docs/remote-connectors": {
-    "title": "Remote Harness Connectors",
-    "url": "/docs/remote-connectors/",
-    "tags": [],
-    "links": [
-      "docs/self-hosting",
-      "docs/auth",
-      "docs/harnesses",
-      "docs/cli"
-    ],
-    "collection": "docs"
-  },
-  "docs/repo_map": {
-    "title": "repo_map",
-    "url": "/docs/repo_map/",
-    "tags": [],
-    "links": [],
-    "collection": "docs"
-  },
-  "docs/roadmap": {
-    "title": "Roadmap",
-    "url": "/docs/roadmap/",
-    "tags": [],
-    "links": [],
-    "collection": "docs"
-  },
-  "docs/scheduling": {
-    "title": "Scheduled Tasks",
-    "url": "/docs/scheduling/",
-    "tags": [],
-    "links": [
-      "docs/daemon",
-      "docs/cli",
-      "docs/dashboard"
-    ],
-    "collection": "docs"
-  },
-  "docs/sdk": {
-    "title": "SDK",
-    "url": "/docs/sdk/",
-    "tags": [],
-    "links": [
-      "docs/daemon",
-      "docs/api",
-      "docs/auth"
-    ],
-    "collection": "docs"
-  },
-  "docs/secrets": {
-    "title": "Secrets",
-    "url": "/docs/secrets/",
-    "tags": [],
-    "links": [
-      "docs/daemon",
-      "docs/cli",
-      "docs/dashboard"
-    ],
-    "collection": "docs"
-  },
-  "docs/self-hosting": {
-    "title": "Self-Hosting",
-    "url": "/docs/self-hosting/",
-    "tags": [],
-    "links": [
-      "docs/daemon",
-      "docs/memory",
-      "docs/dashboard",
-      "docs/auth"
-    ],
-    "collection": "docs"
-  },
-  "docs/skills": {
-    "title": "Skills",
-    "url": "/docs/skills/",
-    "tags": [],
-    "links": [
-      "docs/harnesses",
-      "docs/memory",
-      "docs/memory-skills",
-      "docs/dashboard"
-    ],
-    "collection": "docs"
-  },
-  "docs/sources": {
-    "title": "Sources",
-    "url": "/docs/sources/",
-    "tags": [],
-    "links": [],
-    "collection": "docs"
-  },
-  "docs/tray": {
-    "title": "Desktop Tray",
-    "url": "/docs/tray/",
-    "tags": [],
-    "links": [],
-    "collection": "docs"
-  },
-  "docs/upgrading": {
-    "title": "upgrading",
-    "url": "/docs/upgrading/",
-    "tags": [],
-    "links": [],
-    "collection": "docs"
-  },
-  "docs/what-is-signet": {
-    "title": "What Is Signet",
-    "url": "/docs/what-is-signet/",
-    "tags": [],
-    "links": [],
-    "collection": "docs"
-  },
-  "docs/ai-memory-hermes-openclaw": {
-    "title": "AI Memory for Hermes Agent and OpenClaw",
-    "url": "/docs/ai-memory-hermes-openclaw/",
-    "tags": [],
-    "links": [
-      "docs/harnesses",
-      "docs/self-hosting"
-    ],
-    "collection": "docs"
-  },
-  "docs/dreaming-skill-runbook": {
-    "title": "dreaming-skill-runbook",
-    "url": "/docs/dreaming-skill-runbook/",
-    "tags": [],
-    "links": [],
-    "collection": "docs"
-  },
-  "docs/knowledge-graph-control-plane": {
-    "title": "knowledge-graph-control-plane",
-    "url": "/docs/knowledge-graph-control-plane/",
-    "tags": [],
-    "links": [],
-    "collection": "docs"
-  },
-  "docs/ontology-control-plane-progress": {
-    "title": "ontology-control-plane-progress",
-    "url": "/docs/ontology-control-plane-progress/",
-    "tags": [],
-    "links": [],
-    "collection": "docs"
-  },
   "blog/bring-both-kinds-of-memory": {
     "title": "Bring Both Kinds of Memory",
     "url": "/blog/bring-both-kinds-of-memory/",
@@ -459,11 +20,7 @@
       "announcement"
     ],
     "links": [
-      "docs/memory",
-      "docs/secrets",
       "blog/knowledge-architecture",
-      "docs/knowledge-architecture",
-      "docs/skills",
       "blog/why-local-first-memory"
     ],
     "collection": "blog"
@@ -477,11 +34,7 @@
       "knowledge-graph",
       "technical"
     ],
-    "links": [
-      "docs/pipeline",
-      "docs/knowledge-architecture",
-      "docs/dashboard"
-    ],
+    "links": [],
     "collection": "blog"
   },
   "blog/migrate-chatgpt-memory-to-claude": {
@@ -495,10 +48,7 @@
       "chatgpt"
     ],
     "links": [
-      "docs/memory",
-      "docs/secrets",
-      "docs/connectors",
-      "docs/harnesses"
+      "blog/why-local-first-memory"
     ],
     "collection": "blog"
   },
@@ -514,7 +64,6 @@
     "links": [
       "blog/knowledge-architecture",
       "blog/you-think-signet-is-a-memory-system",
-      "docs/pipeline",
       "blog/why-local-first-memory"
     ],
     "collection": "blog"
@@ -532,7 +81,6 @@
     "links": [
       "blog/knowledge-architecture",
       "blog/retrieval-is-not-memory",
-      "docs/pipeline",
       "blog/why-local-first-memory"
     ],
     "collection": "blog"
@@ -547,11 +95,7 @@
       "openclaw",
       "integrations"
     ],
-    "links": [
-      "docs/ai-memory-hermes-openclaw",
-      "docs/harnesses",
-      "docs/self-hosting"
-    ],
+    "links": [],
     "collection": "blog"
   },
   "blog/the-obsidian-of-ai-memory-systems": {
@@ -599,12 +143,7 @@
       "privacy",
       "memory"
     ],
-    "links": [
-      "docs/skills",
-      "docs/daemon",
-      "docs/harnesses",
-      "docs/pipeline"
-    ],
+    "links": [],
     "collection": "blog"
   },
   "blog/you-think-signet-is-a-memory-system": {

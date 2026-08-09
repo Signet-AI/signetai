@@ -262,9 +262,9 @@ Compatibility-only mode:
 
 The following documents must stay aligned with the shipped runtime:
 
-- `docs/API.md`
-- `docs/HOOKS.md`
-- `docs/HARNESSES.md`
+- `web/docs/src/content/docs/api.md`
+- `web/docs/src/content/docs/hooks.md`
+- `web/docs/src/content/docs/harnesses.md`
 - `docs/specs/INDEX.md`
 - `docs/specs/dependencies.yaml`
 
@@ -293,7 +293,7 @@ Minimum contract:
   in the same PR
 - touched endpoints keep parity guard coverage so divergences are visible
 - behavior deltas that cannot be mirrored in-wave are explicitly documented
-  in `docs/HARNESSES.md` degraded-mode notes
+  in `web/docs/src/content/docs/harnesses.md` degraded-mode notes
 
 Broader runtime parity completion remains tracked by the separate parity and
 cutover specs.

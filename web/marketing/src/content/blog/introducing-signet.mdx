@@ -11,7 +11,7 @@ Signet is the layer between AI agents and AI models.
 
 Models are reasoning engines. They're powerful, but stateless — every session starts fresh, every tool switch resets everything, and the model has no memory of who you are or what you've been working on.
 
-Signet fixes that by giving agents a persistent home. [[memory|Memory]] and [[secrets]] live there, independent of whichever model or harness happens to be running. Workspace instructions are part of that durable memory. The model is a guest: it reads what it needs, does its work, and writes back what it learned.
+Signet fixes that by giving agents a persistent home. [Memory](https://docs.signetai.sh/memory/) and [Secrets](https://docs.signetai.sh/secrets/) live there, independent of whichever model or harness happens to be running. Workspace instructions are part of that durable memory. The model is a guest: it reads what it needs, does its work, and writes back what it learned.
 
 The simplest analogy: Signet is a home directory for AI agents.
 
@@ -65,18 +65,18 @@ Signet takes a fundamentally different approach. A distillation engine runs outs
 
 Over time, the database gets *smaller and smarter*, not larger and noisier. A heavy week of sessions might produce thousands of memories. Leave the system alone and the pipeline prunes, deduplicates, and organizes — what remains is dense, connected, and useful.
 
-This is the difference between "here's everything that was said" and "here's what the system actually learned." But storage and structure are only the beginning. The real problem is deciding what should actually enter the model's context window at the moment of use. For the full technical deep dive, see [[blog/knowledge-architecture|The Database Knows What You Did Last Summer]].
+This is the difference between "here's everything that was said" and "here's what the system actually learned." But storage and structure are only the beginning. The real problem is deciding what should actually enter the model's context window at the moment of use. For the full technical deep dive, see [The Database Knows What You Did Last Summer](/blog/knowledge-architecture/).
 
 
 ## Entities and the Knowledge Graph
 
-Everything in Signet's [[docs/knowledge-architecture|knowledge base]] is organized around entities — people, projects, tools, concepts. An entity is anything that can be identified and that accumulates knowledge over time.
+Everything in Signet's [knowledge base](https://docs.signetai.sh/knowledge-architecture/) is organized around entities — people, projects, tools, concepts. An entity is anything that can be identified and that accumulates knowledge over time.
 
 Each entity has aspects (dimensions of what matters about it), attributes (specific facts organized under those aspects), and constraints (rules that always surface, no matter what). Entities connect to each other through explicit dependencies, forming a graph.
 
 When a session starts, the system doesn't just search through thousands of memories looking for what's relevant. It identifies which entities matter for this session and walks the graph — loading aspects, attributes, constraints, and following dependencies. The result is a bounded, structured candidate set that's deterministic and fast.
 
-This is part of what we call [[docs/desire-paths|desire paths]]. Like the worn trails in a park that reveal where people actually walk, the graph learns which traversals are productive and reinforces them. Embedding search still exists for discovering things the graph hasn't connected yet, but the graph is not the whole thesis. It is substrate for context selection. For the deterministic guarantees underneath, see [[docs/lcm-patterns|Lossless Context Patterns]].
+This is part of what we call desire paths. Like the worn trails in a park that reveal where people actually walk, the graph learns which traversals are productive and reinforces them. Embedding search still exists for discovering things the graph hasn't connected yet, but the graph is not the whole thesis. It is substrate for context selection. For the deterministic guarantees underneath, see Lossless Context Patterns.
 
 
 ## The Predictive Scorer
@@ -92,14 +92,14 @@ Nobody else has this data. Much of the market is building better search. Signet 
 
 ## Skills
 
-[[skills|Skills]] are portable capabilities that extend what an agent can do. They're installed into the agent's home directory and travel with it across platforms.
+[Skills](https://docs.signetai.sh/skills/) are portable capabilities that extend what an agent can do. They're installed into the agent's home directory and travel with it across platforms.
 
 A skill might teach the agent how to write in a specific style, follow a particular workflow, or interact with a specialized tool. Skills are almost inseparable from the agent itself — they become part of its expertise. Highly skilled individuals embed their niche knowledge into their agents, creating differentiated capabilities that reflect their own expertise.
 
 
 ## Secrets and Safety
 
-Signet includes an encrypted [[secrets]] vault. API keys, passwords, and tokens are stored encrypted at rest and injected into subprocesses as environment variables at runtime. The agent never sees raw secret values — they're redacted from all output automatically.
+Signet includes an encrypted [Secrets](https://docs.signetai.sh/secrets/) vault. API keys, passwords, and tokens are stored encrypted at rest and injected into subprocesses as environment variables at runtime. The agent never sees raw secret values — they're redacted from all output automatically.
 
 This is a safety boundary between the model and your infrastructure. The agent can use tools that require credentials without ever having access to the credentials themselves.
 
@@ -124,7 +124,7 @@ secret.
 
 ## Local-First, Open Standard
 
-Everything lives on your machine. SQLite database, markdown files, YAML configuration. No cloud dependency, no telemetry, no vendor lock-in. For the philosophy behind this choice, see [[blog/why-local-first-memory|Why Local-First Memory Matters]].
+Everything lives on your machine. SQLite database, markdown files, YAML configuration. No cloud dependency, no telemetry, no vendor lock-in. For the philosophy behind this choice, see [Why Local-First Memory Matters](/blog/why-local-first-memory/).
 
 Signet is an open specification. The format is documented, the implementation is open source, and anyone can build tools that read and write the same data. Your agent's home directory is yours — not a proprietary format locked behind an API.
 

@@ -1,13 +1,8 @@
-/**
- * Astro integration that generates contentIndex.json at build time.
- *
- * Scans all docs and blog posts for [[wikilinks]] and writes a JSON
- * graph index to public/contentIndex.json for the client-side graph viewer.
- */
+/** Generate the marketing blog graph index at build time. */
 
-import type { AstroIntegration } from "astro";
 import { writeFileSync } from "node:fs";
 import { resolve } from "node:path";
+import type { AstroIntegration } from "astro";
 import { buildContentIndex } from "../lib/content-graph";
 
 export default function graphIndex(): AstroIntegration {
@@ -15,23 +10,14 @@ export default function graphIndex(): AstroIntegration {
 		name: "graph-index",
 		hooks: {
 			"astro:config:setup"({ config, logger }) {
-				// Generate the index early so it's available during dev and build
 				const root = config.root ? new URL(config.root).pathname : process.cwd();
-				generateIndex(root, logger);
+				const blog = resolve(root, "src", "content", "blog");
+				const output = resolve(root, "public", "contentIndex.json");
+				const index = buildContentIndex(blog);
+				const links = Object.values(index).reduce((sum, node) => sum + node.links.length, 0);
+				writeFileSync(output, JSON.stringify(index, null, 2));
+				logger.info(`graph-index: ${Object.keys(index).length} posts, ${links} links`);
 			},
 		},
 	};
-}
-
-function generateIndex(root: string, logger: { info(msg: string): void }) {
-	const docsDir = resolve(root, "..", "..", "docs");
-	const blogDir = resolve(root, "src", "content", "blog");
-	const outPath = resolve(root, "public", "contentIndex.json");
-
-	const index = buildContentIndex(docsDir, blogDir);
-	const nodeCount = Object.keys(index).length;
-	const linkCount = Object.values(index).reduce((sum, n) => sum + n.links.length, 0);
-
-	writeFileSync(outPath, JSON.stringify(index, null, 2));
-	logger.info(`graph-index: ${nodeCount} nodes, ${linkCount} edges → public/contentIndex.json`);
 }

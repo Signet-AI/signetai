@@ -123,7 +123,7 @@ export function migrateConfig(agentsDir: string): void {
 // `command` executor and legacy `memory.pipelineV2.*.provider` fields cannot
 // be mapped deterministically (arbitrary bin/args, or implicit-target
 // compilation) and are left to the structured runtime error, which points at
-// docs/UPGRADING.md.
+// https://docs.signetai.sh/upgrading/.
 //
 // Guarded by `configVersion: 3`. Uses the yaml package's Document API so
 // comments and formatting are preserved (regex is unsafe for block insertion).
@@ -203,7 +203,7 @@ export function migrateInferenceProviders(agentsDir: string): void {
 	logger.info("config-migration", "Migrated folded inference executors to acpx", {
 		mutations,
 		file: path,
-		note: "command executor and legacy pipelineV2.*.provider fields require manual reconfiguration (see docs/UPGRADING.md)",
+		note: "command executor and legacy pipelineV2.*.provider fields require manual reconfiguration (see https://docs.signetai.sh/upgrading/)",
 	});
 }
 

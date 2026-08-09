@@ -4,11 +4,11 @@ Contributing to Signet
 This guide is for developers contributing to the `signetai/` monorepo,
 the reference implementation of the Signet open standard.
 
-**New to git or GitHub?** Start with [Your First PR](./docs/FIRST-PR.md),
+**New to git or GitHub?** Start with [Your First PR](https://docs.signetai.sh/first-pr/),
 a step-by-step walkthrough of making your first contribution.
 
 This guide is for contributing from source. If you just want to use
-Signet as a product, follow [Quickstart](./docs/QUICKSTART.md) and
+Signet as a product, follow [Quickstart](https://docs.signetai.sh/quickstart/) and
 install the global `signet` CLI instead of cloning the repo.
 
 Development Setup

@@ -1,7 +1,7 @@
 # Integration guidance
 
 This subtree connects Signet to external agent harnesses. Read the matching
-integration package, `docs/HOOKS.md`, and the harness's own source before
+integration package, `web/docs/src/content/docs/hooks.md`, and the harness's own source before
 changing its contract.
 
 ## Verify the real harness

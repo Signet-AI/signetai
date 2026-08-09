@@ -12,7 +12,7 @@
 >
 > **Superseded in part:** #946 retired the extraction queue slice described
 > below. Current queue diagnostics cover only live memory and summary work;
-> see `docs/PIPELINE.md` for the current response shape.
+> see `web/docs/src/content/docs/pipeline.md` for the current response shape.
 
 ## Problem
 
@@ -283,11 +283,11 @@ that today are invisible or unsafe:
 
 ## Phase 8 — Documentation
 
-- [ ] `docs/PIPELINE.md` — add a "Queue health and repair" section
+- [ ] `web/docs/src/content/docs/pipeline.md` — add a "Queue health and repair" section
       with thresholds + the new CLI + HTTP surfaces.
-- [ ] `docs/api/health-status.md` — document `/api/diagnostics/queue`
+- [ ] `web/docs/src/content/docs/api/health-status.md` — document `/api/diagnostics/queue`
       and `/api/diagnostics/queue/repair`.
-- [ ] `docs/api/route-inventory.md` — list the two new routes.
+- [ ] `web/docs/src/content/docs/api/route-inventory.md` — list the two new routes.
 - [ ] `docs/api/diagnostics.md` — example payloads for the new
       endpoints.
 - [ ] `CHANGELOG.md` — entry under `Unreleased` referencing #901.
@@ -317,7 +317,7 @@ that today are invisible or unsafe:
   without a re-baseline. New visibility comes through
   `/api/diagnostics/queue`, `/api/status.pipeline.queue`, and the
   CLI's `Pipeline queues` block.
-- Thresholds default to the values already cited in `docs/PIPELINE.md`
+- Thresholds default to the values already cited in `web/docs/src/content/docs/pipeline.md`
   §"Maintenance Worker"; no surprise defaults for existing operators.
 - The schema-light approach (audit table for cancel, archive table
   for prune) preserves provenance without a breaking migration on

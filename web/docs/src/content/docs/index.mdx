@@ -1,0 +1,46 @@
+---
+title: Signet documentation
+description: Install, use, operate, and extend Signet.
+template: splash
+hero:
+  title: Memory infrastructure for agents that need continuity.
+  tagline: Install Signet, connect your harness, and understand every layer from first recall to multi-agent operation.
+  actions:
+    - text: Start the quickstart
+      link: /quickstart/
+      icon: right-arrow
+    - text: Install Signet
+      link: /getting-started/install/
+      icon: download
+      variant: minimal
+---
+
+import { Card, CardGrid } from "@astrojs/starlight/components";
+
+## Choose your path
+
+<CardGrid>
+	<Card title="Use Signet" icon="rocket">
+		Install the daemon, connect a supported harness, and give your agent durable memory. [Start with the quickstart](/quickstart/).
+	</Card>
+	<Card title="Operate Signet" icon="setting">
+		Configure inference, authentication, remote access, diagnostics, and lifecycle policy. [Open the operations guide](/configuration/).
+	</Card>
+	<Card title="Build with Signet" icon="puzzle">
+		Use the HTTP API, typed SDK, MCP server, connectors, and architecture references. [Browse the API](/api/).
+	</Card>
+	<Card title="Contribute" icon="open-book">
+		Understand the monorepo, make a focused change, and validate it against Signet’s contracts. [Read the contributor guide](/contributing/).
+	</Card>
+</CardGrid>
+
+## What Signet gives your agents
+
+Signet keeps memory, identity, sources, and secrets outside any single model or harness. The daemon persists the raw record first, distills durable knowledge in the background, and selects bounded context when an agent needs it.
+
+- Local-first storage with explicit provenance and soft deletion
+- Hybrid recall across full-text search, embeddings, and the knowledge graph
+- Portable identity and working memory across Claude Code, Codex, OpenCode, OpenClaw, Hermes Agent, Pi, and Oh My Pi
+- Typed APIs and self-hosting controls for teams and custom integrations
+
+[Understand how Signet works](/what-is-signet/) or [inspect the architecture](/architecture/).

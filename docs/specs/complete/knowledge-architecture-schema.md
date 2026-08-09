@@ -24,7 +24,7 @@ Spec metadata:
 - Registry: `docs/specs/INDEX.md`
 
 Related docs:
-- `docs/KNOWLEDGE-ARCHITECTURE.md` (conceptual model)
+- `web/docs/src/content/docs/knowledge-architecture.md` (conceptual model)
 - `docs/specs/planning/predictive-memory-scorer.md` (learned ranking)
 - `docs/specs/complete/memory-pipeline-plan.md` (pipeline contracts)
 - `docs/specs/approved/procedural-memory-plan.md` (skills as procedural memory)

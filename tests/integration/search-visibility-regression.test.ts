@@ -11,7 +11,7 @@ function read(path: string): string {
 
 describe("search visibility regression guard", () => {
 	it("keeps the Hermes Agent and OpenClaw memory discovery path explicit", () => {
-		const guide = read("docs/ai-memory-hermes-openclaw.md");
+		const guide = read("web/docs/src/content/docs/ai-memory-hermes-openclaw.md");
 		const post = read("web/marketing/src/content/blog/self-hosted-ai-memory-hermes-openclaw.mdx");
 		const pkg = JSON.parse(read("dist/signetai/package.json")) as {
 			readonly keywords?: readonly string[];

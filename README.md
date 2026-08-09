@@ -13,12 +13,12 @@
 <a href="https://github.com/Signet-AI/signetai/releases"><img src="https://img.shields.io/github/v/release/Signet-AI/signetai?include_prereleases&style=for-the-badge" alt="GitHub release"></a>
 <a href="https://www.npmjs.com/package/signetai"><img src="https://img.shields.io/npm/v/signetai?style=for-the-badge" alt="npm"></a>
 <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg?style=for-the-badge" alt="Apache-2.0 License"></a>
-<a href="./docs/BENCHMARKING.md#current-longmemeval-score"><img src="https://img.shields.io/badge/LongMemEval-97.6%25-black?style=for-the-badge" alt="LongMemEval 97.6% answer accuracy"></a>
+<a href="https://docs.signetai.sh/benchmarking/#current-longmemeval-score"><img src="https://img.shields.io/badge/LongMemEval-97.6%25-black?style=for-the-badge" alt="LongMemEval 97.6% answer accuracy"></a>
 
 **97.6% average LongMemEval answer accuracy**<br />
 Local-first context · source-backed recall · repairable memory · portable across agents
 
-[Quick start](#quick-start-about-5-minutes) · [Why Signet](#why-signet) · [Benchmarks](./docs/BENCHMARKING.md) · [Docs](https://signetai.sh/docs) · [Discord](https://discord.gg/Psdeg7sQm7)
+[Quick start](#quick-start-about-5-minutes) · [Why Signet](#why-signet) · [Benchmarks](https://docs.signetai.sh/benchmarking/) · [Docs](https://docs.signetai.sh) · [Discord](https://discord.gg/Psdeg7sQm7)
 
 </div>
 
@@ -161,7 +161,7 @@ That profile keeps the benchmark contract strict: memories are ingested through
 `/api/memory/remember`, recalled through `/api/memory/recall`, and answered
 from bounded daemon recall results. Search does not call an LLM.
 
-See [Benchmarks](./docs/BENCHMARKING.md#current-longmemeval-score) for the
+See [Benchmarks](https://docs.signetai.sh/benchmarking/#current-longmemeval-score) for the
 methodology, scoring note, and run workflow.
 
 ## Install (detailed)
@@ -270,7 +270,7 @@ source when the semantic layer is not enough.
 After setup, there is no per-session memory ceremony. The pipeline runs
 in the background and the agent wakes up with its memory intact.
 
-Read more: [Why Signet](./docs/QUICKSTART.md#why-signet) · [Architecture](./docs/ARCHITECTURE.md) · [Knowledge Graph](./docs/KNOWLEDGE-GRAPH.md) · [Pipeline](./docs/PIPELINE.md)
+Read more: [Why Signet](https://docs.signetai.sh/quickstart/#why-signet) · [Architecture](https://docs.signetai.sh/architecture/) · [Knowledge Graph](https://docs.signetai.sh/knowledge-graph/) · [Pipeline](https://docs.signetai.sh/pipeline/)
 
 ## Architecture
 
@@ -321,21 +321,21 @@ surfaces, and ownership boundaries.
 
 ## Documentation
 
-- [Quickstart](./docs/QUICKSTART.md)
-- [CLI Reference](./docs/CLI.md)
-- [Configuration](./docs/CONFIGURATION.md)
+- [Quickstart](https://docs.signetai.sh/quickstart/)
+- [CLI Reference](https://docs.signetai.sh/cli/)
+- [Configuration](https://docs.signetai.sh/configuration/)
 - [Telemetry](./docs/TELEMETRY.md)
-- [Hooks](./docs/HOOKS.md)
-- [Harnesses](./docs/HARNESSES.md)
-- [Secrets](./docs/SECRETS.md)
-- [Skills](./docs/SKILLS.md)
-- [Auth](./docs/AUTH.md)
-- [Dashboard](./docs/DASHBOARD.md)
-- [SDK](./docs/SDK.md)
-- [API Reference](./docs/API.md)
-- [Knowledge Architecture](./docs/KNOWLEDGE-ARCHITECTURE.md)
-- [Knowledge Graph](./docs/KNOWLEDGE-GRAPH.md)
-- [Benchmarks](./docs/BENCHMARKING.md)
+- [Hooks](https://docs.signetai.sh/hooks/)
+- [Harnesses](https://docs.signetai.sh/harnesses/)
+- [Secrets](https://docs.signetai.sh/secrets/)
+- [Skills](https://docs.signetai.sh/skills/)
+- [Auth](https://docs.signetai.sh/auth/)
+- [Dashboard](https://docs.signetai.sh/dashboard/)
+- [SDK](https://docs.signetai.sh/sdk/)
+- [API Reference](https://docs.signetai.sh/api/)
+- [Knowledge Architecture](https://docs.signetai.sh/knowledge-architecture/)
+- [Knowledge Graph](https://docs.signetai.sh/knowledge-graph/)
+- [Benchmarks](https://docs.signetai.sh/benchmarking/)
 - [Roadmap](./ROADMAP.md)
 - [Repository Map](./docs/REPO_MAP.md)
 
@@ -385,9 +385,9 @@ Embeddings (choose one):
 
 ## Contributing
 
-New to open source? Start with [Your First PR](./docs/FIRST-PR.md).
+New to open source? Start with [Your First PR](https://docs.signetai.sh/first-pr/).
 For code conventions and project structure, see
-[CONTRIBUTING.md](./docs/CONTRIBUTING.md). Open an issue before
+[CONTRIBUTING.md](https://docs.signetai.sh/contributing/). Open an issue before
 contributing significant features. Read the
 [AI Policy](./AI_POLICY.md) before submitting AI-assisted work.
 
@@ -415,7 +415,7 @@ Apache-2.0.
 ---
 
 [signetai.sh](https://signetai.sh) ·
-[docs](https://signetai.sh/docs) ·
+[docs](https://docs.signetai.sh) ·
 [spec](https://signetai.sh/spec) ·
 [discussions](https://github.com/Signet-AI/signetai/discussions) ·
 [issues](https://github.com/Signet-AI/signetai/issues)

@@ -1,191 +1,167 @@
 #!/usr/bin/env bun
 
 import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
-import { dirname, join, posix, resolve } from "node:path";
+import { dirname, join, posix, relative, resolve } from "node:path";
 
 const ROOT = resolve(import.meta.dirname, "..");
+const DOCS_CONTENT = join(ROOT, "web/docs/src/content/docs");
+const REPO_BLOB_BASE = "https://github.com/Signet-AI/signetai/blob/main";
 
-type DocMeta = {
+type DerivedDoc = {
 	readonly title: string;
 	readonly description: string;
-	readonly order: number;
-	readonly section: string;
+	readonly target: string;
 };
 
-const DUPLICATED_ROOT_DOCS = {
+const ROOT_DERIVED_DOCS = {
 	"CONTRIBUTING.md": {
 		title: "Contributing",
 		description: "How to contribute to Signet.",
-		order: 24,
-		section: "Project",
+		target: "web/docs/src/content/docs/contributing.md",
 	},
 	"ROADMAP.md": {
 		title: "Roadmap",
 		description: "Current focus and planned features.",
-		order: 25,
-		section: "Project",
+		target: "web/docs/src/content/docs/roadmap.md",
 	},
-} satisfies Record<string, DocMeta>;
+} satisfies Record<string, DerivedDoc>;
 
-const REPO_BLOB_BASE = "https://github.com/Signet-AI/signetai/blob/main";
+function read(path: string): string {
+	const absolute = join(ROOT, path);
+	if (!existsSync(absolute)) throw new Error(`Missing required file: ${path}`);
+	return readFileSync(absolute, "utf8");
+}
 
-function read(relPath: string): string {
-	const abs = join(ROOT, relPath);
-	if (!existsSync(abs)) {
-		throw new Error(`Missing required file: ${relPath}`);
+function contentFiles(dir: string): readonly string[] {
+	const files: string[] = [];
+	for (const entry of readdirSync(dir, { withFileTypes: true })) {
+		const path = join(dir, entry.name);
+		if (entry.isDirectory()) files.push(...contentFiles(path));
+		else if (entry.name.endsWith(".md") || entry.name.endsWith(".mdx")) files.push(path);
 	}
-	return readFileSync(abs, "utf8");
+	return files;
 }
 
-function renderFrontmatter(meta: DocMeta): string {
-	return [
-		"---",
-		`title: "${meta.title}"`,
-		`description: "${meta.description}"`,
-		`order: ${meta.order}`,
-		`section: "${meta.section}"`,
-		"---",
-	].join("\n");
+function routeFor(path: string): string {
+	const id = relative(DOCS_CONTENT, path)
+		.split("\\")
+		.join("/")
+		.replace(/\.mdx?$/, "");
+	return id === "index" ? "/" : `/${id.replace(/\/index$/, "")}/`;
 }
 
-function maskCodeSegments(body: string): {
-	readonly masked: string;
-	readonly restore: (input: string) => string;
-} {
+function buildPublicRoutes(): ReadonlyMap<string, string> {
+	const candidates = contentFiles(DOCS_CONTENT)
+		.map((path) => ({ path, route: routeFor(path) }))
+		.sort((a, b) => a.route.split("/").length - b.route.split("/").length || a.route.localeCompare(b.route));
+	const routes = new Map<string, string>();
+	for (const candidate of candidates) {
+		const name = candidate.path
+			.split("/")
+			.at(-1)
+			?.replace(/\.mdx?$/, "")
+			.toLowerCase();
+		if (name && !routes.has(name)) routes.set(name, candidate.route);
+	}
+	return routes;
+}
+
+function renderFrontmatter(doc: DerivedDoc): string {
+	return ["---", `title: "${doc.title}"`, `description: "${doc.description}"`, "---"].join("\n");
+}
+
+function maskCode(body: string): { readonly text: string; readonly restore: (value: string) => string } {
 	const segments: string[] = [];
-	const masked = body.replace(/```[\s\S]*?```|`[^`\n]+`/g, (match) => {
+	const text = body.replace(/```[\s\S]*?```|`[^`\n]+`/g, (match) => {
 		const index = segments.push(match) - 1;
 		return `__SIGNET_DOC_CODE_${index}__`;
 	});
-
 	return {
-		masked,
-		restore: (input: string) =>
-			input.replace(/__SIGNET_DOC_CODE_(\d+)__/g, (_full, rawIndex: string) => {
-				const index = Number(rawIndex);
-				return segments[index] ?? "";
-			}),
+		text,
+		restore: (value: string) =>
+			value.replace(/__SIGNET_DOC_CODE_(\d+)__/g, (_match, index: string) => segments[Number(index)] ?? ""),
 	};
 }
 
-function rewriteMarkdownLinks(sourceName: string, body: string): string {
-	const sourceDir = dirname(sourceName);
-	const targetDir = posix.join("docs", posix.dirname(sourceName));
-	const { masked, restore } = maskCodeSegments(body);
+function normalizeRepoPath(source: string, target: string): string {
+	return posix.normalize(posix.join(posix.dirname(source), target));
+}
 
+function rewriteMarkdownLinks(source: string, body: string, routes: ReadonlyMap<string, string>): string {
+	const { text, restore } = maskCode(body);
 	return restore(
-		masked.replace(/(?<!!)\[([^\]]+)\]\(([^)]+)\)/g, (full, text: string, href: string) => {
+		text.replace(/(?<!!)\[([^\]]+)\]\(([^)]+)\)/g, (full, label: string, href: string) => {
 			if (
 				href.startsWith("#") ||
 				href.startsWith("http://") ||
 				href.startsWith("https://") ||
 				href.startsWith("mailto:")
-			) {
+			)
 				return full;
-			}
-
 			const [rawPath, hash = ""] = href.split("#", 2);
 			if (!rawPath.endsWith(".md") && !rawPath.endsWith(".mdx")) return full;
-
-			const sourceTarget = posix.normalize(posix.join(sourceDir, rawPath));
-			const docsTarget = sourceTarget.startsWith("docs/")
-				? sourceTarget
-				: Object.hasOwn(DUPLICATED_ROOT_DOCS, sourceTarget)
-					? posix.join("docs", sourceTarget)
-					: undefined;
-
+			const target = normalizeRepoPath(source, rawPath);
+			const name =
+				target
+					.split("/")
+					.at(-1)
+					?.replace(/\.mdx?$/, "")
+					.toLowerCase() ?? "";
 			const suffix = hash ? `#${hash}` : "";
-			if (docsTarget) {
-				const nextHref = posix.relative(targetDir, docsTarget) || ".";
-				return `[${text}](${nextHref}${suffix})`;
-			}
-
-			return `[${text}](${REPO_BLOB_BASE}/${sourceTarget}${suffix})`;
+			const publicRoute = routes.get(name);
+			if (publicRoute) return `[${label}](${publicRoute}${suffix})`;
+			return `[${label}](${REPO_BLOB_BASE}/${target}${suffix})`;
 		}),
 	);
 }
 
-function renderDerivedDoc(name: string, meta: DocMeta, body: string): string {
-	const source = rewriteMarkdownLinks(name, body).trimEnd();
-	return `${renderFrontmatter(meta)}
+function renderDerivedDoc(source: string, doc: DerivedDoc, routes: ReadonlyMap<string, string>): string {
+	const body = rewriteMarkdownLinks(source, read(source), routes).trimEnd();
+	return `${renderFrontmatter(doc)}
 
-<!-- GENERATED FROM /${name} by \`bun scripts/sync-root-docs.ts\`. Do not edit this file directly. -->
+<!-- GENERATED FROM /${source} by \`bun scripts/sync-root-docs.ts\`. Do not edit this file directly. -->
 
-${source}
+${body}
 `;
 }
 
-function parseArgs(argv: string[]): { readonly check: boolean } {
-	if (argv.length === 0) return { check: false };
-	if (argv.length === 1 && argv[0] === "--check") return { check: true };
+function parseArgs(args: readonly string[]): { readonly check: boolean } {
+	if (args.length === 0) return { check: false };
+	if (args.length === 1 && args[0] === "--check") return { check: true };
 	throw new Error("Usage: bun scripts/sync-root-docs.ts [--check]");
-}
-
-function findDuplicatedRootDocs(): string[] {
-	const rootNames = new Set(readdirSync(ROOT).filter((name) => name.endsWith(".md") && existsSync(join(ROOT, name))));
-	const docsDir = join(ROOT, "docs");
-	const docNames = new Set(
-		readdirSync(docsDir).filter((name) => name.endsWith(".md") && existsSync(join(docsDir, name))),
-	);
-
-	return [...rootNames].filter((name) => docNames.has(name)).sort();
 }
 
 function main(): number {
 	const args = parseArgs(process.argv.slice(2));
-	const duplicates = findDuplicatedRootDocs();
-	const configured = Object.keys(DUPLICATED_ROOT_DOCS).sort();
-	const missingConfig = duplicates.filter((name) => !configured.includes(name));
-	const staleConfig = configured.filter((name) => !duplicates.includes(name));
-
-	if (missingConfig.length > 0 || staleConfig.length > 0) {
-		const lines = ["Duplicated root-doc config is out of sync."];
-		if (missingConfig.length > 0) {
-			lines.push("Missing config for duplicated docs:");
-			for (const name of missingConfig) lines.push(`- ${name}`);
-		}
-		if (staleConfig.length > 0) {
-			lines.push("Configured files are no longer duplicated:");
-			for (const name of staleConfig) lines.push(`- ${name}`);
-		}
-		throw new Error(lines.join("\n"));
-	}
-
+	const routes = buildPublicRoutes();
 	const changed: string[] = [];
 
-	for (const [name, meta] of Object.entries(DUPLICATED_ROOT_DOCS)) {
-		const sourcePath = name;
-		const targetPath = join("docs", name);
-		const next = renderDerivedDoc(name, meta, read(sourcePath));
-		const current = existsSync(join(ROOT, targetPath)) ? read(targetPath) : "";
-
-		if (current === next) continue;
-
-		changed.push(targetPath);
-		if (!args.check) writeFileSync(join(ROOT, targetPath), next);
+	for (const [source, doc] of Object.entries(ROOT_DERIVED_DOCS)) {
+		const next = renderDerivedDoc(source, doc, routes);
+		const current = existsSync(join(ROOT, doc.target)) ? read(doc.target) : "";
+		if (next === current) continue;
+		changed.push(doc.target);
+		if (!args.check) writeFileSync(join(ROOT, doc.target), next);
 	}
 
 	if (changed.length === 0) {
 		console.log("Root-derived docs are in sync.");
 		return 0;
 	}
-
 	if (args.check) {
 		console.error("Root-derived docs are out of sync:");
-		for (const file of changed) console.error(`- ${file}`);
+		for (const path of changed) console.error(`- ${path}`);
 		console.error("Run: bun scripts/sync-root-docs.ts");
 		return 1;
 	}
-
 	console.log("Updated root-derived docs:");
-	for (const file of changed) console.log(`- ${file}`);
+	for (const path of changed) console.log(`- ${path}`);
 	return 0;
 }
 
 try {
 	process.exit(main());
-} catch (err) {
-	const msg = err instanceof Error ? err.message : String(err);
-	console.error(msg);
+} catch (error) {
+	console.error(error instanceof Error ? error.message : String(error));
 	process.exit(2);
 }

@@ -35,11 +35,25 @@ function globDir(dir: string, pattern: RegExp): string[] {
 	return readdirSync(absDir).filter((f) => pattern.test(f));
 }
 
-function readApiReferenceDocs(): string {
-	const apiDocs = ["docs/API.md"];
-	for (const file of globDir("docs/api", /\.md$/).sort()) {
-		apiDocs.push(`docs/api/${file}`);
+function listMarkdownFilesRecursive(dir: string): string[] {
+	const absolute = join(ROOT, dir);
+	if (!existsSync(absolute) || !statSync(absolute).isDirectory()) return [];
+	const files: string[] = [];
+	function walk(current: string, prefix: string): void {
+		for (const entry of readdirSync(current, { withFileTypes: true })) {
+			const next = join(current, entry.name);
+			const relativePath = prefix ? `${prefix}/${entry.name}` : entry.name;
+			if (entry.isDirectory()) walk(next, relativePath);
+			else if (entry.name.endsWith(".md")) files.push(`${dir}/${relativePath}`);
+		}
 	}
+	walk(absolute, "");
+	return files.sort();
+}
+
+function readApiReferenceDocs(): string {
+	const root = "web/docs/src/content/docs";
+	const apiDocs = [`${root}/api.md`, ...listMarkdownFilesRecursive(`${root}/api`)];
 	return apiDocs.map((file) => read(file)).join("\n\n");
 }
 
@@ -249,7 +263,7 @@ function checkMigrationDrift(architectureMd: string): MigrationDrift {
 	const maxNum = actualMax.match(/^(\d{3})/)?.[1] ?? "000";
 
 	const references: { location: string; text: string }[] = [];
-	const sectionHeader = "Database Schema\n---------------";
+	const sectionHeader = "## Database Schema";
 	const sectionStart = architectureMd.indexOf(sectionHeader);
 	const migSection = sliceSection(architectureMd, sectionHeader);
 	const lineOffset = sectionStart === -1 ? 0 : architectureMd.slice(0, sectionStart).split("\n").length - 1;
@@ -258,7 +272,10 @@ function checkMigrationDrift(architectureMd: string): MigrationDrift {
 		const line = lines[i];
 		const latestMatch = line.match(/latest migration is `?(\d{3}[\w.-]+)`?/i);
 		if (latestMatch) {
-			references.push({ location: `docs/ARCHITECTURE.md:${lineOffset + i + 1}`, text: latestMatch[1] });
+			references.push({
+				location: `web/docs/src/content/docs/architecture/pipeline-storage.md:${lineOffset + i + 1}`,
+				text: latestMatch[1],
+			});
 		}
 	}
 
@@ -462,7 +479,7 @@ interface DriftReport {
 function generateReport(): DriftReport {
 	const claudeMd = read("CLAUDE.md");
 	const apiMd = readApiReferenceDocs();
-	const architectureMd = read("docs/ARCHITECTURE.md");
+	const architectureMd = read("web/docs/src/content/docs/architecture/pipeline-storage.md");
 	const routes = checkRouteDrift(apiMd);
 	const migrations = checkMigrationDrift(architectureMd);
 	const keyFiles = checkKeyFilesDrift(claudeMd);
@@ -552,7 +569,7 @@ function formatMarkdown(report: DriftReport): string {
 		}
 		if (report.migrations.documentedReferences.length === 0) {
 			lines.push(
-				"_No latest migration reference found in docs/ARCHITECTURE.md. The `Database Schema` section should state the current latest migration file._",
+				"_No latest migration reference found in web/docs/src/content/docs/architecture/pipeline-storage.md. The `Database Schema` section should state the current latest migration file._",
 				"",
 			);
 		} else {
