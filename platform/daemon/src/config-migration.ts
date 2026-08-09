@@ -432,7 +432,7 @@ export function migrateLegacyRoutingToRegistry(agentsDir: string): void {
 		);
 	}
 
-	// Null the legacy ROUTING keys (keep tuning: timeout, maxTokens, enabled).
+	// Remove legacy extraction routing keys; the obsolete synthesis block is deleted.
 	function nullRoutingKeys(node: ReturnType<typeof doc.getIn>, label: string): void {
 		if (!isMap(node)) return;
 		const provider = String(node.get("provider", true) ?? "").trim();
@@ -480,7 +480,7 @@ export function migrateLegacyRoutingToRegistry(agentsDir: string): void {
 		logger.info("config-migration", "Migrated legacy routing fields to inference registry", {
 			mutations,
 			file: path,
-			note: "Routing now flows through inference.*; pipelineV2 tuning fields (timeout, maxTokens, enabled) preserved.",
+			note: "Routing now flows through inference.*; extraction tuning fields remain.",
 		});
 	}
 }
