@@ -336,6 +336,12 @@
         "sqlite-vec-linux-x64": "^0.1.7-alpha.2",
         "sqlite-vec-windows-x64": "^0.1.7-alpha.2",
       },
+      "peerDependencies": {
+        "better-sqlite3": "*",
+      },
+      "optionalPeers": [
+        "better-sqlite3",
+      ],
     },
     "platform/daemon": {
       "name": "@signet/daemon",
@@ -446,6 +452,7 @@
         "yaml": "^2.9.0",
       },
       "devDependencies": {
+        "@signet/core": "workspace:*",
         "@tailwindcss/vite": "^4.2.0",
         "@types/react": "^19.2.0",
         "@types/react-dom": "^19.2.0",

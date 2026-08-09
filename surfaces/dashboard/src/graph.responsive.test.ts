@@ -9,7 +9,9 @@ describe("graph responsive overlays", () => {
 
 	test("reserves space for the legend and wraps the mobile density HUD", () => {
 		expect(stylesheet).toMatch(/\.graph-hud \{[^}]*max-width: calc\(100% - 76px\);[^}]*flex-wrap: wrap;/);
-		expect(stylesheet).toMatch(/@media \(max-width: 640px\)[\s\S]*\.graph-hud-density input\[type="range"\] \{ width: 56px;/);
+		expect(stylesheet).toMatch(
+			/@media \(max-width: 640px\)[\s\S]*\.graph-hud-density input\[type="range"\] \{ width: 56px;/,
+		);
 	});
 
 	test("lets the query input shrink instead of forcing the graph dock out of view", () => {

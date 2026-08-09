@@ -29,6 +29,7 @@
 		"yaml": "^2.9.0"
 	},
 	"devDependencies": {
+		"@signet/core": "workspace:*",
 		"@tailwindcss/vite": "^4.2.0",
 		"@types/react": "^19.2.0",
 		"@types/react-dom": "^19.2.0",
