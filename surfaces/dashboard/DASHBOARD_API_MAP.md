@@ -164,6 +164,7 @@ native `EventSource` with headers, so auth is pumped manually).
 | `getBlackBoxSessions` / `getBlackBoxSession` | GET 🔐 | `/api/sessions/blackbox{,/{key}}` | Black-box session traces |
 | `toggleSessionBypass` | POST | `/api/sessions/{key}/bypass` | Toggle hook bypass |
 | Logs | GET (SSE) | `/api/logs/stream` | Live log tail (`AuthEventStream`) |
+| `getTelemetryHealth` | GET 🔐 | `/api/telemetry/health` | Privacy-safe collector queue and delivery health |
 | Presence | GET | `/api/cross-agent/presence` | Cross-agent presence (issue #944) |
 | `fetchChangelog` / `fetchRoadmap` / `fetchReadme` | GET | `/api/changelog`, `/api/roadmap`, `/api/readme` | Docs tabs (+ raw GitHub fetch) |
 

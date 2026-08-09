@@ -161,6 +161,11 @@ export function registerTelemetryRoutes(app: Hono): void {
 		return c.json({ events, enabled: true });
 	});
 
+	app.get("/api/telemetry/health", (c) => {
+		if (!telemetryRef) return c.json({ enabled: false });
+		return c.json({ enabled: true, ...telemetryRef.deliveryHealth() });
+	});
+
 	app.get("/api/telemetry/memory-search", (c) => {
 		const agent = resolveScopedAgentId(c, c.req.query("agent_id") ?? c.req.query("agentId"));
 		if (agent.error) return c.json({ error: agent.error }, 403);

@@ -119,13 +119,18 @@ describe("cli telemetry (issue #1206)", () => {
 		db.close();
 
 		recordCommandInvoked(dir, "remember");
-		const request: { current: { api_key: string; batch: Array<{ distinct_id: string; event: string }> } | null } = {
+		const request: {
+			current: {
+				api_key: string;
+				batch: Array<{ distinct_id: string; event: string; properties: { $insert_id: string } }>;
+			} | null;
+		} = {
 			current: null,
 		};
 		globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
 			request.current = JSON.parse(String(init?.body ?? "{}")) as {
 				api_key: string;
-				batch: Array<{ distinct_id: string; event: string }>;
+				batch: Array<{ distinct_id: string; event: string; properties: { $insert_id: string } }>;
 			};
 			return new Response("1", { status: 200 });
 		}) as typeof fetch;
@@ -136,6 +141,7 @@ describe("cli telemetry (issue #1206)", () => {
 		expect(request.current?.batch).toHaveLength(1);
 		expect(request.current?.batch[0]?.event).toBe("command.invoked");
 		expect(request.current?.batch[0]?.distinct_id).toBe("install-from-daemon");
+		expect(request.current?.batch[0]?.properties.$insert_id).toEqual(expect.any(String));
 
 		const check = createDatabase(join(memoryDir, "memories.db"), { readonly: true });
 		const row = check.prepare("SELECT sent_to_posthog FROM telemetry_events").get() as { sent_to_posthog: number };

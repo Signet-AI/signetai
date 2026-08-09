@@ -58,6 +58,7 @@ export const TELEMETRY_EVENTS = [
 	// TTL eviction), dedup'd once per session lifetime (#1212/#1231).
 	"session.end",
 	"daemon.heartbeat",
+	"telemetry.health",
 	// Lifecycle events (issue #1026 Phase 2): fired when the user has opted
 	// into anonymous telemetry. No PII, no code, no memory content.
 	"daemon.started",
@@ -110,6 +111,26 @@ export interface TelemetryEvent {
 	readonly event: TelemetryEventType;
 	readonly timestamp: string;
 	readonly properties: TelemetryProperties;
+}
+
+export type TelemetryDeliveryStatus = "healthy" | "degraded" | "local-only";
+
+/** Aggregate collector state safe for local diagnostics and PostHog. */
+export interface TelemetryDeliveryHealth {
+	readonly status: TelemetryDeliveryStatus;
+	readonly deliveryConfigured: boolean;
+	readonly bufferedEventCount: number;
+	readonly queuedUnsentEventCount: number;
+	readonly oldestUnsentEventAgeSec: number | null;
+	readonly lastDaemonEventAgeSec: number | null;
+	readonly lastAttemptAgeSec: number | null;
+	readonly lastSuccessfulDeliveryAgeSec: number | null;
+	readonly recentDeliverySuccessCount: number;
+	readonly recentDeliveryFailureCount: number;
+	readonly consecutiveFailures: number;
+	readonly backoffActive: boolean;
+	readonly droppedEventCount: number;
+	readonly flushIntervalMs: number;
 }
 
 interface SessionCostAccumulator {
@@ -189,6 +210,7 @@ export interface TelemetryCollector {
 	recordFirstUse(kind: FirstUseKind): void;
 
 	flush(): Promise<void>;
+	deliveryHealth(): TelemetryDeliveryHealth;
 	start(): void;
 	stop(): Promise<void>;
 
@@ -363,6 +385,22 @@ interface PostHogBatchEvent {
 	readonly properties: Record<string, string | number | boolean | null>;
 }
 
+interface PostHogDeliveryResult {
+	readonly ok: boolean;
+	readonly failureCode?: "http" | "timeout" | "network";
+}
+
+interface TelemetryDeliveryState {
+	readonly windowStartedAt: string;
+	readonly successCount: number;
+	readonly failureCount: number;
+	readonly consecutiveFailures: number;
+	readonly lastAttemptAt: string | null;
+	readonly lastSuccessAt: string | null;
+	readonly lastFailureCode: string | null;
+	readonly droppedEventCount: number;
+}
+
 interface ClaimedTelemetryEvents {
 	readonly token: string;
 	readonly events: readonly TelemetryEvent[];
@@ -374,6 +412,9 @@ const MAX_CONSECUTIVE_FAILURES = 3;
 const BACKOFF_MULTIPLIER = 5;
 const PRUNE_EVERY_N_FLUSHES = 10;
 const TELEMETRY_CLAIM_TIMEOUT_MS = 10 * 60 * 1_000;
+const DELIVERY_HEALTH_WINDOW_MS = 24 * 60 * 60 * 1_000;
+const MAX_HEALTH_FAILURE_CODE_LENGTH = 24;
+const MAX_PERSISTED_QUEUE_EVENTS = 20_000;
 
 /**
  * Interval used after `failures` consecutive PostHog failures. Pure so the
@@ -389,13 +430,14 @@ async function sendToPostHog(
 	distinctId: string,
 	events: readonly TelemetryEvent[],
 	daemonVersion: string,
-): Promise<boolean> {
+): Promise<PostHogDeliveryResult> {
 	const batch: readonly PostHogBatchEvent[] = events.map((e) => ({
 		event: e.event,
 		distinct_id: distinctId,
 		timestamp: e.timestamp,
 		properties: {
 			...e.properties,
+			$insert_id: e.id,
 			$lib: "signet-daemon",
 			$lib_version: daemonVersion,
 		},
@@ -408,9 +450,12 @@ async function sendToPostHog(
 			body: JSON.stringify({ api_key: apiKey, batch }),
 			signal: AbortSignal.timeout(10000),
 		});
-		return res.ok;
-	} catch {
-		return false;
+		return res.ok ? { ok: true } : { ok: false, failureCode: "http" };
+	} catch (error) {
+		return {
+			ok: false,
+			failureCode: error instanceof DOMException && error.name === "TimeoutError" ? "timeout" : "network",
+		};
 	}
 }
 
@@ -456,9 +501,67 @@ export function createTelemetryCollector(
 	let consecutiveFailures = 0;
 	let flushCount = 0;
 	let effectiveIntervalMs = config.flushIntervalMs;
+	let droppedEventCount = 0;
+	let pendingDroppedEventCount = 0;
+	let flushPromise: Promise<void> | null = null;
+	let deliveryStatePersistenceFailed = false;
 	const { id: installId, created: installActivated } = getOrCreateInstallId(db);
 
 	const posthogConfigured = config.posthogHost.length > 0 && config.posthogApiKey.length > 0;
+
+	function readDeliveryState(): TelemetryDeliveryState {
+		try {
+			const row = db.withReadDb(
+				(r) =>
+					r
+						.prepare(
+							`SELECT window_started_at AS windowStartedAt,
+							success_count AS successCount, failure_count AS failureCount,
+							consecutive_failures AS consecutiveFailures,
+							last_attempt_at AS lastAttemptAt, last_success_at AS lastSuccessAt,
+							last_failure_code AS lastFailureCode,
+							dropped_event_count AS droppedEventCount
+					 FROM telemetry_delivery_state WHERE id = 1`,
+						)
+						.get() as TelemetryDeliveryState | undefined,
+			);
+			if (row) {
+				droppedEventCount = Math.max(droppedEventCount, row.droppedEventCount ?? 0);
+				return row;
+			}
+		} catch {
+			// Test doubles and pre-migration workspaces fall back to in-memory state.
+			deliveryStatePersistenceFailed = true;
+		}
+		return {
+			windowStartedAt: new Date().toISOString(),
+			successCount: 0,
+			failureCount: 0,
+			consecutiveFailures,
+			lastAttemptAt: null,
+			lastSuccessAt: null,
+			lastFailureCode: null,
+			droppedEventCount,
+		};
+	}
+
+	function recordDroppedEvents(count: number): void {
+		droppedEventCount += count;
+		pendingDroppedEventCount += count;
+	}
+
+	function persistPendingDroppedEvents(w: { prepare(sql: string): { run(...args: unknown[]): unknown } }): void {
+		if (pendingDroppedEventCount === 0) return;
+		w.prepare(
+			`UPDATE telemetry_delivery_state
+			 SET dropped_event_count = dropped_event_count + ? WHERE id = 1`,
+		).run(pendingDroppedEventCount);
+		pendingDroppedEventCount = 0;
+	}
+
+	const initialDeliveryState = readDeliveryState();
+	consecutiveFailures = initialDeliveryState.consecutiveFailures;
+	effectiveIntervalMs = nextFlushIntervalMs(config.flushIntervalMs, consecutiveFailures);
 
 	/**
 	 * Atomically claim a first-use milestone for this install. Only the
@@ -499,47 +602,148 @@ export function createTelemetryCollector(
 		};
 	}
 
-	function writeToDb(events: readonly TelemetryEvent[]): void {
-		if (events.length === 0) return;
+	function writeToDb(events: readonly TelemetryEvent[]): boolean {
+		if (events.length === 0) return true;
 		try {
 			db.withWriteTx((w) => {
 				const stmt = w.prepare(
 					`INSERT OR IGNORE INTO telemetry_events
-					 (id, event, timestamp, properties, sent_to_posthog, created_at)
-					 VALUES (?, ?, ?, ?, 0, ?)`,
+					 (id, event, timestamp, properties, sent_to_posthog, created_at, source)
+					 VALUES (?, ?, ?, ?, 0, ?, 'daemon')`,
 				);
 				const now = new Date().toISOString();
 				for (const e of events) {
 					stmt.run(e.id, e.event, e.timestamp, JSON.stringify(e.properties), now);
 				}
+				persistPendingDroppedEvents(w);
+				const overflow = w
+					.prepare(
+						`SELECT COUNT(*) AS count FROM telemetry_events
+						 WHERE source = 'daemon' AND sent_to_posthog = 0 AND claim_token IS NULL`,
+					)
+					.get() as { count?: number } | undefined;
+				const dropCount = Math.max(0, (overflow?.count ?? 0) - MAX_PERSISTED_QUEUE_EVENTS);
+				if (dropCount > 0) {
+					w.prepare(
+						`DELETE FROM telemetry_events WHERE id IN (
+						 SELECT id FROM telemetry_events
+						 WHERE source = 'daemon' AND sent_to_posthog = 0 AND claim_token IS NULL
+						 ORDER BY timestamp ASC LIMIT ?
+					 )`,
+					).run(dropCount);
+					w.prepare(
+						"UPDATE telemetry_delivery_state SET dropped_event_count = dropped_event_count + ? WHERE id = 1",
+					).run(dropCount);
+					droppedEventCount += dropCount;
+					logger.warn("telemetry", "Persisted telemetry queue reached capacity", {
+						dropped: dropCount,
+						maxQueueEvents: MAX_PERSISTED_QUEUE_EVENTS,
+					});
+				}
 			});
+			return true;
 		} catch (err) {
 			logger.warn("telemetry", "Failed to write events to db", {
 				error: err instanceof Error ? err.message : String(err),
 			});
+			return false;
 		}
 	}
 
 	function markSent(token: string): void {
+		const now = new Date().toISOString();
+		let stateUpdated = false;
 		try {
 			db.withWriteTx((w) => {
 				w.prepare(
-					"UPDATE telemetry_events SET sent_to_posthog = 1, claim_token = NULL, claimed_at = NULL WHERE claim_token = ?",
-				).run(token);
+					"UPDATE telemetry_events SET sent_to_posthog = 1, sent_at = ?, claim_token = NULL, claimed_at = NULL WHERE claim_token = ?",
+				).run(now, token);
+				const row = w.prepare("SELECT id FROM telemetry_delivery_state WHERE id = 1").get();
+				if (row) {
+					w.prepare(
+						`UPDATE telemetry_delivery_state
+						 SET success_count = CASE WHEN julianday(?) - julianday(window_started_at) >= ? / 86400000.0 THEN 1 ELSE success_count + 1 END,
+						     failure_count = CASE WHEN julianday(?) - julianday(window_started_at) >= ? / 86400000.0 THEN 0 ELSE failure_count END,
+						     window_started_at = CASE WHEN julianday(?) - julianday(window_started_at) >= ? / 86400000.0 THEN ? ELSE window_started_at END,
+						     consecutive_failures = 0, last_attempt_at = ?, last_success_at = ?, last_failure_code = NULL
+						 WHERE id = 1`,
+					).run(
+						now,
+						DELIVERY_HEALTH_WINDOW_MS,
+						now,
+						DELIVERY_HEALTH_WINDOW_MS,
+						now,
+						DELIVERY_HEALTH_WINDOW_MS,
+						now,
+						now,
+						now,
+					);
+					stateUpdated = true;
+				}
 			});
 		} catch {
-			// best effort
+			// Older/partially migrated workspaces still need the event marked sent
+			// after PostHog accepted it; otherwise the claim would be retried.
+			try {
+				db.withWriteTx((w) => {
+					w.prepare(
+						"UPDATE telemetry_events SET sent_to_posthog = 1, claim_token = NULL, claimed_at = NULL WHERE claim_token = ?",
+					).run(token);
+				});
+			} catch {
+				// best effort
+			}
 		}
+		deliveryStatePersistenceFailed = !stateUpdated;
+		consecutiveFailures = 0;
+		effectiveIntervalMs = config.flushIntervalMs;
 	}
 
-	function releaseClaim(token: string): void {
+	function releaseClaim(token: string, failureCode?: string): void {
+		const now = new Date().toISOString();
+		let stateUpdated = false;
 		try {
 			db.withWriteTx((w) => {
-				w.prepare("UPDATE telemetry_events SET claim_token = NULL, claimed_at = NULL WHERE claim_token = ?").run(token);
+				w.prepare(
+					"UPDATE telemetry_events SET last_attempt_at = ?, last_failure_code = ?, claim_token = NULL, claimed_at = NULL WHERE claim_token = ?",
+				).run(now, failureCode?.slice(0, MAX_HEALTH_FAILURE_CODE_LENGTH) ?? "unknown", token);
+				const row = w.prepare("SELECT id FROM telemetry_delivery_state WHERE id = 1").get();
+				if (row) {
+					w.prepare(
+						`UPDATE telemetry_delivery_state
+						 SET failure_count = CASE WHEN julianday(?) - julianday(window_started_at) >= ? / 86400000.0 THEN 1 ELSE failure_count + 1 END,
+						     success_count = CASE WHEN julianday(?) - julianday(window_started_at) >= ? / 86400000.0 THEN 0 ELSE success_count END,
+						     window_started_at = CASE WHEN julianday(?) - julianday(window_started_at) >= ? / 86400000.0 THEN ? ELSE window_started_at END,
+						     consecutive_failures = consecutive_failures + 1, last_attempt_at = ?, last_failure_code = ?
+						 WHERE id = 1`,
+					).run(
+						now,
+						DELIVERY_HEALTH_WINDOW_MS,
+						now,
+						DELIVERY_HEALTH_WINDOW_MS,
+						now,
+						DELIVERY_HEALTH_WINDOW_MS,
+						now,
+						now,
+						failureCode?.slice(0, MAX_HEALTH_FAILURE_CODE_LENGTH) ?? "unknown",
+					);
+					stateUpdated = true;
+				}
 			});
 		} catch {
-			// best effort; stale claims are recoverable on a later flush
+			try {
+				db.withWriteTx((w) => {
+					w.prepare("UPDATE telemetry_events SET claim_token = NULL, claimed_at = NULL WHERE claim_token = ?").run(
+						token,
+					);
+				});
+			} catch {
+				// Stale claims remain recoverable on a later flush.
+			}
 		}
+		deliveryStatePersistenceFailed = !stateUpdated;
+		consecutiveFailures++;
+		effectiveIntervalMs = nextFlushIntervalMs(config.flushIntervalMs, consecutiveFailures);
 	}
 
 	function claimUnsent(limit: number): ClaimedTelemetryEvents | null {
@@ -551,6 +755,7 @@ export function createTelemetryCollector(
 				w.prepare(
 					`UPDATE telemetry_events
 					 SET claim_token = ?, claimed_at = ?
+					     , delivery_attempts = delivery_attempts + 1, last_attempt_at = ?
 					 WHERE id IN (
 						 SELECT id FROM telemetry_events
 						 WHERE source = 'daemon' AND sent_to_posthog = 0
@@ -558,7 +763,7 @@ export function createTelemetryCollector(
 						 ORDER BY timestamp ASC
 						 LIMIT ?
 					 )`,
-				).run(token, now.toISOString(), staleBefore, limit);
+				).run(token, now.toISOString(), now.toISOString(), staleBefore, limit);
 				const rows = w
 					.prepare(
 						`SELECT id, event, timestamp, properties
@@ -594,38 +799,144 @@ export function createTelemetryCollector(
 		cutoff.setDate(cutoff.getDate() - config.retentionDays);
 		try {
 			db.withWriteTx((w) => {
-				w.prepare("DELETE FROM telemetry_events WHERE timestamp < ?").run(cutoff.toISOString());
+				// Never prune a row that is still waiting for remote delivery.
+				w.prepare("DELETE FROM telemetry_events WHERE timestamp < ? AND sent_to_posthog = 1").run(cutoff.toISOString());
 			});
 		} catch {
 			// best effort
 		}
 	}
 
-	async function doFlush(): Promise<void> {
+	function ageSec(timestamp: string | null): number | null {
+		if (!timestamp) return null;
+		const parsed = new Date(timestamp).getTime();
+		return Number.isFinite(parsed) ? Math.max(0, (Date.now() - parsed) / 1000) : null;
+	}
+
+	function deliveryHealth(): TelemetryDeliveryHealth {
+		const state = readDeliveryState();
+		let queuedUnsentEventCount = buffer.length;
+		let oldestUnsentTimestamp: string | null = null;
+		let lastDaemonEventTimestamp: string | null = null;
+		try {
+			db.withReadDb((r) => {
+				const queue = r
+					.prepare(
+						`SELECT COUNT(*) AS count, MIN(timestamp) AS oldestTimestamp
+						 FROM telemetry_events WHERE source = 'daemon' AND sent_to_posthog = 0`,
+					)
+					.get() as { count?: number; oldestTimestamp?: string | null } | undefined;
+				queuedUnsentEventCount += queue?.count ?? 0;
+				oldestUnsentTimestamp = queue?.oldestTimestamp ?? null;
+				const latest = r
+					.prepare(
+						"SELECT MAX(timestamp) AS timestamp FROM telemetry_events WHERE source = 'daemon' AND event <> 'telemetry.health'",
+					)
+					.get() as { timestamp?: string | null } | undefined;
+				lastDaemonEventTimestamp = latest?.timestamp ?? null;
+			});
+		} catch {
+			// Keep local in-memory health available when SQLite is unavailable.
+		}
+		const bufferedOldest = buffer[0]?.timestamp ?? null;
+		if (bufferedOldest && (oldestUnsentTimestamp === null || bufferedOldest.localeCompare(oldestUnsentTimestamp) < 0)) {
+			oldestUnsentTimestamp = bufferedOldest;
+		}
+		const bufferedLatest = buffer.at(-1)?.timestamp ?? null;
+		if (
+			bufferedLatest &&
+			(lastDaemonEventTimestamp === null || bufferedLatest.localeCompare(lastDaemonEventTimestamp) > 0)
+		) {
+			lastDaemonEventTimestamp = bufferedLatest;
+		}
+		const windowExpired = Date.now() - new Date(state.windowStartedAt).getTime() >= DELIVERY_HEALTH_WINDOW_MS;
+		const recentSuccesses = windowExpired ? 0 : state.successCount;
+		const recentFailures = windowExpired ? 0 : state.failureCount;
+		const oldestAge = ageSec(oldestUnsentTimestamp);
+		const effectiveConsecutiveFailures = deliveryStatePersistenceFailed
+			? consecutiveFailures
+			: Math.max(state.consecutiveFailures, consecutiveFailures);
+		const degraded =
+			posthogConfigured &&
+			(effectiveConsecutiveFailures > 0 ||
+				recentFailures > 0 ||
+				(oldestAge !== null && oldestAge > (effectiveIntervalMs / 1000) * 2));
+		return {
+			status: !posthogConfigured ? "local-only" : degraded ? "degraded" : "healthy",
+			deliveryConfigured: posthogConfigured,
+			bufferedEventCount: buffer.length,
+			queuedUnsentEventCount,
+			oldestUnsentEventAgeSec: oldestAge,
+			lastDaemonEventAgeSec: ageSec(lastDaemonEventTimestamp),
+			lastAttemptAgeSec: ageSec(state.lastAttemptAt),
+			lastSuccessfulDeliveryAgeSec: ageSec(state.lastSuccessAt),
+			recentDeliverySuccessCount: recentSuccesses,
+			recentDeliveryFailureCount: recentFailures,
+			consecutiveFailures: effectiveConsecutiveFailures,
+			backoffActive: effectiveConsecutiveFailures >= MAX_CONSECUTIVE_FAILURES,
+			droppedEventCount: Math.max(droppedEventCount, state.droppedEventCount),
+			flushIntervalMs: effectiveIntervalMs,
+		};
+	}
+
+	function appendBufferedEvent(event: TelemetryEventType, properties: TelemetryProperties): void {
+		if (buffer.length >= MAX_BUFFER_EVENTS) {
+			const dropCount = buffer.length - MAX_BUFFER_EVENTS + 1;
+			buffer.splice(0, dropCount);
+			recordDroppedEvents(dropCount);
+			logger.warn("telemetry", "Buffer exceeded max capacity, dropping oldest events", {
+				dropped: dropCount,
+				maxBufferEvents: MAX_BUFFER_EVENTS,
+			});
+		}
+		const next: TelemetryEvent = {
+			id: crypto.randomUUID(),
+			event,
+			timestamp: new Date().toISOString(),
+			properties: addContext(enrichSessionEvent(event, properties)),
+		};
+		buffer.push(next);
+		if (logPath) appendToTelemetryLog(logPath, JSON.stringify(next));
+	}
+
+	function drainBuffer(): void {
+		const pending = buffer.splice(0, buffer.length);
+		if (writeToDb(pending)) return;
+		// Preserve events for a later attempt when SQLite is temporarily locked.
+		buffer.unshift(...pending);
+		if (buffer.length > MAX_BUFFER_EVENTS) {
+			const dropped = buffer.length - MAX_BUFFER_EVENTS;
+			buffer.splice(0, dropped);
+			recordDroppedEvents(dropped);
+		}
+	}
+
+	async function doFlush(emitHealth: boolean): Promise<void> {
 		flushCount++;
 		// Drain buffer to SQLite
-		const pending = buffer.splice(0, buffer.length);
-		writeToDb(pending);
+		drainBuffer();
+		if (emitHealth) {
+			// Snapshot before adding this diagnostic event. Its local value must not
+			// depend on the success of the request that carries the snapshot.
+			appendBufferedEvent("telemetry.health", { ...deliveryHealth() });
+			drainBuffer();
+		}
 
 		// Send to PostHog if configured
 		if (posthogConfigured) {
 			const claimed = claimUnsent(config.flushBatchSize);
 			if (claimed) {
-				const ok = await sendToPostHog(
+				const result = await sendToPostHog(
 					config.posthogHost,
 					config.posthogApiKey,
 					installId,
 					claimed.events,
 					reportedVersion,
 				);
-				if (ok) {
+				if (result.ok) {
 					markSent(claimed.token);
-					consecutiveFailures = 0;
-					effectiveIntervalMs = config.flushIntervalMs;
 				} else {
-					releaseClaim(claimed.token);
-					consecutiveFailures++;
-					effectiveIntervalMs = nextFlushIntervalMs(config.flushIntervalMs, consecutiveFailures);
+					releaseClaim(claimed.token, result.failureCode);
 					if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
 						logger.warn("telemetry", "PostHog unreachable, backing off", {
 							intervalMs: effectiveIntervalMs,
@@ -639,6 +950,18 @@ export function createTelemetryCollector(
 		if (flushCount % PRUNE_EVERY_N_FLUSHES === 0) {
 			pruneOldEvents();
 		}
+	}
+
+	function flushInternal(emitHealth: boolean): Promise<void> {
+		if (flushPromise) return flushPromise;
+		flushPromise = doFlush(emitHealth)
+			.catch(() => {
+				// Telemetry must never surface a flush failure to the daemon.
+			})
+			.finally(() => {
+				flushPromise = null;
+			});
+		return flushPromise;
 	}
 
 	function sessionKeyFor(properties: TelemetryProperties): string | null {
@@ -717,40 +1040,16 @@ export function createTelemetryCollector(
 	const collector: TelemetryCollector = {
 		enabled: true,
 		reopenSession,
+		deliveryHealth,
 		anonymizeAgentId(agentId: string): string {
 			return createHash("sha256").update(`${agentId}:${installId}`).digest("hex").slice(0, 16);
 		},
 
 		record(event, properties): void {
-			if (buffer.length >= MAX_BUFFER_EVENTS) {
-				const dropCount = buffer.length - MAX_BUFFER_EVENTS + 1;
-				buffer.splice(0, dropCount);
-				logger.warn("telemetry", "Buffer exceeded max capacity, dropping oldest events", {
-					dropped: dropCount,
-					maxBufferEvents: MAX_BUFFER_EVENTS,
-				});
-			}
-
-			buffer.push({
-				id: crypto.randomUUID(),
-				event,
-				timestamp: new Date().toISOString(),
-				properties: addContext(enrichSessionEvent(event, properties)),
-			});
-
-			// Open telemetry log (issue #1026 Phase 2): mirror every event to
-			// the inspectable JSONL file so users can audit exactly what was
-			// sent. Best-effort — a full disk or unwritable path must never
-			// break recording.
-			if (logPath) {
-				const last = buffer[buffer.length - 1];
-				if (last) {
-					appendToTelemetryLog(logPath, JSON.stringify(last));
-				}
-			}
+			appendBufferedEvent(event, properties);
 
 			if (buffer.length >= MAX_BUFFER_SIZE) {
-				doFlush().catch(() => {});
+				void flushInternal(false);
 			}
 		},
 
@@ -766,7 +1065,7 @@ export function createTelemetryCollector(
 		},
 
 		async flush(): Promise<void> {
-			await doFlush();
+			await flushInternal(false);
 		},
 
 		start(): void {
@@ -777,9 +1076,7 @@ export function createTelemetryCollector(
 				if (!running) return;
 				flushTimer = setTimeout(() => {
 					flushTimer = null;
-					doFlush()
-						.catch(() => {})
-						.finally(() => scheduleFlush());
+					flushInternal(true).finally(() => scheduleFlush());
 				}, effectiveIntervalMs);
 			}
 
@@ -796,7 +1093,7 @@ export function createTelemetryCollector(
 				clearTimeout(flushTimer);
 				flushTimer = null;
 			}
-			await doFlush();
+			await flushInternal(true);
 			logger.info("telemetry", "Telemetry collector stopped");
 		},
 

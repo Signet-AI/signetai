@@ -49,6 +49,7 @@ interface CapturedBody {
 let dir = "";
 let logPath = "";
 let captured: Array<{ readonly url: string; readonly body: CapturedBody }> = [];
+let fetchStatus = 200;
 const originalFetch = globalThis.fetch;
 
 function installFetchMock(): void {
@@ -58,7 +59,7 @@ function installFetchMock(): void {
 			url: String(input),
 			body: JSON.parse(String(init?.body ?? "{}")) as CapturedBody,
 		});
-		return new Response("1", { status: 200 });
+		return new Response(fetchStatus === 200 ? "1" : "failure", { status: fetchStatus });
 	}) as typeof fetch;
 }
 
@@ -120,6 +121,7 @@ beforeAll(() => {
 
 beforeEach(() => {
 	captured = [];
+	fetchStatus = 200;
 	logPath = defaultTelemetryLogPath(dir);
 	resetWorkspace();
 });
@@ -331,7 +333,13 @@ describe("telemetry collector", () => {
 		expect(recallEvent).toBeDefined();
 		// No content: the event carries only the fact of first use.
 		expect(rememberEvent?.properties).toMatchObject({ version: "0.0.0-test", platform: process.platform });
-		expect(Object.keys(rememberEvent?.properties ?? {})).toEqual(["version", "platform", "$lib", "$lib_version"]);
+		expect(Object.keys(rememberEvent?.properties ?? {})).toEqual([
+			"version",
+			"platform",
+			"$insert_id",
+			"$lib",
+			"$lib_version",
+		]);
 		const firstBatch = captured.flatMap((c) => c.body.batch.map((e) => e.event));
 		expect(firstBatch.filter((e) => e === "first.remember")).toHaveLength(1);
 		expect(firstBatch.filter((e) => e === "first.recall")).toHaveLength(1);
@@ -478,11 +486,80 @@ describe("telemetry collector", () => {
 		expect(nextFlushIntervalMs(60000, 9)).toBe(300000);
 	});
 
-	it("prunes events older than the retention window", async () => {
+	it("persists delivery health and retries failed events with stable insert ids", async () => {
+		fetchStatus = 503;
+		const collector = makeCollector();
+		collector.record("daemon.heartbeat", { uptimeMs: 1 });
+		await collector.flush();
+
+		const failedHealth = collector.deliveryHealth();
+		expect(failedHealth.status).toBe("degraded");
+		expect(failedHealth.queuedUnsentEventCount).toBeGreaterThan(0);
+		expect(failedHealth.recentDeliveryFailureCount).toBe(1);
+		expect(failedHealth.backoffActive).toBe(false);
+		const firstIds = captured[0]?.body.batch.map((event) => event.properties.$insert_id);
+		expect(firstIds?.every((id) => typeof id === "string")).toBe(true);
+		const attempts = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare("SELECT delivery_attempts, last_failure_code FROM telemetry_events WHERE event = ?")
+					.all("daemon.heartbeat") as Array<{
+					readonly delivery_attempts: number;
+					readonly last_failure_code: string;
+				}>,
+		);
+		expect(attempts[0]).toMatchObject({ delivery_attempts: 1, last_failure_code: "http" });
+
+		fetchStatus = 200;
+		await collector.flush();
+		expect(captured[1]?.body.batch.map((event) => event.properties.$insert_id)).toEqual(firstIds);
+		expect(collector.deliveryHealth().queuedUnsentEventCount).toBe(0);
+		expect(collector.deliveryHealth().lastSuccessfulDeliveryAgeSec).not.toBeNull();
+	});
+
+	it("emits a bounded local health event without exposing delivery secrets", async () => {
+		const collector = createTelemetryCollector(getDbAccessor(), TELEMETRY_CONFIG, "0.0.0-test", {
+			telemetryLogPath: logPath,
+		});
+		collector.record("daemon.heartbeat", { uptimeMs: 1 });
+		await collector.stop();
+
+		const health = collector.query({ event: "telemetry.health" })[0];
+		expect(health).toBeDefined();
+		expect(health?.properties).toMatchObject({
+			queuedUnsentEventCount: 2,
+			deliveryConfigured: true,
+		});
+		expect(health?.properties).not.toHaveProperty("posthogApiKey");
+		expect(health?.properties).not.toHaveProperty("posthogHost");
+		expect(health?.properties).not.toHaveProperty("installId");
+		expect(readFileSync(logPath, "utf-8")).toContain('"event":"telemetry.health"');
+	});
+
+	it("retains old unsent events during retention pruning", async () => {
 		const old = new Date(Date.now() - 91 * 24 * 60 * 60 * 1000).toISOString();
 		getDbAccessor().withWriteTx((w) => {
 			w.prepare(
 				"INSERT INTO telemetry_events (id, event, timestamp, properties, sent_to_posthog, created_at) VALUES (?, ?, ?, ?, 0, ?)",
+			).run("old-unsent", "daemon.heartbeat", old, "{}", old);
+		});
+		const collector = createTelemetryCollector(
+			getDbAccessor(),
+			{ ...TELEMETRY_CONFIG, posthogHost: "", posthogApiKey: "" },
+			"0.0.0-test",
+		);
+		for (let i = 0; i < 10; i++) await collector.flush();
+		const row = getDbAccessor().withReadDb((db) =>
+			db.prepare("SELECT id FROM telemetry_events WHERE id = ?").get("old-unsent"),
+		);
+		expect(row).toBeDefined();
+	});
+
+	it("prunes events older than the retention window", async () => {
+		const old = new Date(Date.now() - 91 * 24 * 60 * 60 * 1000).toISOString();
+		getDbAccessor().withWriteTx((w) => {
+			w.prepare(
+				"INSERT INTO telemetry_events (id, event, timestamp, properties, sent_to_posthog, created_at) VALUES (?, ?, ?, ?, 1, ?)",
 			).run("old-1", "daemon.heartbeat", old, "{}", old);
 		});
 
