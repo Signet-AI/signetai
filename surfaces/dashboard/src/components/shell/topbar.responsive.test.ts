@@ -5,11 +5,11 @@ const sidebarSource = await Bun.file(new URL("./sidebar.tsx", import.meta.url)).
 const settingsSource = await Bun.file(new URL("../../views/settings.tsx", import.meta.url)).text();
 
 describe("mobile dashboard controls", () => {
-	test("keeps theme and Settings alongside notifications only in the mobile layout", () => {
-		expect(topbarSource).toContain('<ModeToggle className="!size-11 touch-manipulation sm:hidden" />');
+	test("keeps theme and Settings alongside notifications only in a true mobile shell", () => {
+		expect(topbarSource).toContain("mobileShell && <ModeToggle");
+		expect(topbarSource).toContain('mobileShell && (');
 		expect(topbarSource).toContain('aria-label="Settings"');
-		expect(topbarSource).toMatch(/!size-11 touch-manipulation sm:hidden[\s\S]*<Settings/);
-		expect(topbarSource).toMatch(/title="Notifications"[\s\S]*size-11/);
+		expect(topbarSource).toContain('mobileShell ? "size-11" : "size-8"');
 	});
 
 	test("gives drawer routes and Settings categories mobile-sized hit areas", () => {

@@ -14,6 +14,7 @@ import { SecretsView } from "@/views/secrets";
 import { SkillsView, AgentsView } from "@/views/stubs";
 import { DreamsView } from "@/views/dreaming";
 import { GraphView } from "@/views/graph";
+import { useMobileShell } from "@/lib/mobile-shell";
 import { cn } from "@/lib/utils";
 
 export function App() {
@@ -31,37 +32,48 @@ export function App() {
 function Shell() {
 	useSettingsHotkey();
 	const [navOpen, setNavOpen] = useState(false);
+	const mobileShell = useMobileShell();
 	return (
-		<div className="shell-stage grid h-full grid-cols-1 bg-background text-foreground sm:grid-cols-[248px_1fr]">
-			{/* Sidebar — desktop rail; opaque top-down navigation panel on mobile. */}
+		<div
+			className={cn(
+				"shell-stage grid h-full bg-background text-foreground",
+				mobileShell ? "grid-cols-1" : "grid-cols-[248px_1fr]",
+			)}
+		>
+			{/* Sidebar — desktop rail; opaque top-down navigation panel on true mobile. */}
 			<div
 				id="dashboard-navigation"
 				className={cn(
 					"flex flex-col",
-					"max-sm:fixed max-sm:inset-x-0 max-sm:top-[52px] max-sm:z-50 max-sm:max-h-[calc(100dvh-52px)]",
-					"max-sm:overflow-x-hidden max-sm:overflow-y-auto max-sm:border-b max-sm:border-sidebar-border max-sm:bg-sidebar max-sm:shadow-2xl max-sm:transition-transform max-sm:duration-200 max-sm:ease-out",
-					navOpen
-						? "max-sm:visible max-sm:translate-y-0"
-						: "max-sm:pointer-events-none max-sm:-translate-y-full max-sm:invisible",
+					mobileShell && "fixed inset-x-0 top-[52px] z-50 max-h-[calc(100dvh-52px)]",
+					mobileShell &&
+						"overflow-x-hidden overflow-y-auto border-b border-sidebar-border bg-sidebar shadow-2xl transition-transform duration-200 ease-out",
+					mobileShell &&
+						(navOpen
+							? "visible translate-y-0"
+							: "pointer-events-none -translate-y-full invisible"),
 				)}
 			>
-				<div className="max-sm:hidden">
-					<WindowChrome />
-				</div>
+				{!mobileShell && <WindowChrome />}
 				<Sidebar onNavigate={() => setNavOpen(false)} />
 			</div>
-			{navOpen && (
+			{mobileShell && navOpen && (
 				<button
 					type="button"
 					aria-label="Close navigation"
 					onClick={() => setNavOpen(false)}
-					className="fixed inset-0 z-40 bg-black/50 sm:hidden"
+					className="fixed inset-0 z-40 bg-black/50"
 				/>
 			)}
 
 			<main className="flex min-h-0 min-w-0 flex-col">
-				<Topbar menuOpen={navOpen} onMenuClick={() => setNavOpen((open) => !open)} />
-				<div className="sig-content relative m-0 mb-3.5 flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto overflow-x-hidden rounded-[12px] border border-[oklch(1_0_0/0.05)] bg-sidebar px-5.5 pb-4 pt-4.5 shadow-[0_1px_0_0_oklch(0_0_0/0.25),inset_0_1px_0_oklch(1_0_0/0.04)] [html:not(.dark)_&]:border-[oklch(0_0_0/0.06)] [html:not(.dark)_&]:shadow-[0_1px_2px_oklch(0_0_0/0.05),inset_0_1px_0_oklch(1_0_0/0.8)] sm:mx-3.5">
+				<Topbar mobileShell={mobileShell} menuOpen={navOpen} onMenuClick={() => setNavOpen((open) => !open)} />
+				<div
+					className={cn(
+						"sig-content relative flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto overflow-x-hidden rounded-[12px] border border-[oklch(1_0_0/0.05)] bg-sidebar px-5.5 pb-4 pt-4.5 shadow-[0_1px_0_0_oklch(0_0_0/0.25),inset_0_1px_0_oklch(1_0_0/0.04)] [html:not(.dark)_&]:border-[oklch(0_0_0/0.06)] [html:not(.dark)_&]:shadow-[0_1px_2px_oklch(0_0_0/0.05),inset_0_1px_0_oklch(1_0_0/0.8)]",
+						mobileShell ? "m-0 mb-3.5" : "m-3.5 mt-0",
+					)}
+				>
 					<ViewSwitch />
 				</div>
 			</main>

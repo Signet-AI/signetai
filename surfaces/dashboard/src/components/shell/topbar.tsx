@@ -9,9 +9,11 @@ import { Bell, Menu, Settings } from "lucide-react";
 export function Topbar({
 	onMenuClick,
 	menuOpen,
+	mobileShell,
 }: {
 	onMenuClick: () => void;
 	menuOpen: boolean;
+	mobileShell: boolean;
 }) {
 	const { view, label } = useView();
 	const { setOpen: setSettingsOpen } = useSettings();
@@ -20,42 +22,55 @@ export function Topbar({
 	return (
 		<header
 			className={cn(
-				"sig-drag relative z-[60] flex h-[52px] shrink-0 items-center gap-2 bg-transparent px-4 sm:gap-3.5 sm:px-6",
+				"sig-drag relative z-[60] flex h-[52px] shrink-0 items-center bg-transparent",
+				mobileShell ? "gap-2 px-4" : "gap-3.5 px-6",
 				platform !== "mac" && "pr-0",
 			)}
 		>
-			<button
-				type="button"
-				onClick={onMenuClick}
-				className="sig-no-drag grid size-11 touch-manipulation place-items-center rounded-[var(--radius)] text-muted-foreground hover:bg-accent hover:text-foreground sm:hidden"
-				aria-controls="dashboard-navigation"
-				aria-expanded={menuOpen}
-				aria-label={menuOpen ? "Close navigation" : "Open navigation"}
-			>
-				<Menu className="size-4" />
-			</button>
+			{mobileShell && (
+				<button
+					type="button"
+					onClick={onMenuClick}
+					className="sig-no-drag grid size-11 touch-manipulation place-items-center rounded-[var(--radius)] text-muted-foreground hover:bg-accent hover:text-foreground"
+					aria-controls="dashboard-navigation"
+					aria-expanded={menuOpen}
+					aria-label={menuOpen ? "Close navigation" : "Open navigation"}
+				>
+					<Menu className="size-4" />
+				</button>
+			)}
 			<div className="sig-no-drag flex min-w-0 items-center gap-2 text-[13px]">
 				<span className="shrink-0 text-muted-foreground">Signet /</span>
 				<span className="truncate">{label(view)}</span>
 			</div>
 			<div className="flex-1" />
 			<div
-				className="sig-no-drag relative grid size-11 place-items-center rounded-[var(--radius)] text-muted-foreground hover:bg-accent hover:text-foreground sm:size-8"
+				className={cn(
+					"sig-no-drag relative grid place-items-center rounded-[var(--radius)] text-muted-foreground hover:bg-accent hover:text-foreground",
+					mobileShell ? "size-11" : "size-8",
+				)}
 				title="Notifications"
 			>
 				<Bell className="size-[17px]" />
-				<span className="absolute top-[11px] right-[11px] size-1.5 rounded-full bg-primary sm:top-[7px] sm:right-[7px]" />
+				<span
+					className={cn(
+						"absolute size-1.5 rounded-full bg-primary",
+						mobileShell ? "top-[11px] right-[11px]" : "top-[7px] right-[7px]",
+					)}
+				/>
 			</div>
-			<ModeToggle className="!size-11 touch-manipulation sm:hidden" />
-			<button
-				type="button"
-				onClick={() => setSettingsOpen(true)}
-				className="sig-no-drag grid size-11 touch-manipulation place-items-center rounded-[var(--radius)] text-muted-foreground hover:bg-accent hover:text-foreground sm:hidden"
-				title="Settings"
-				aria-label="Settings"
-			>
-				<Settings className="size-4" />
-			</button>
+			{mobileShell && <ModeToggle className="!size-11 touch-manipulation" />}
+			{mobileShell && (
+				<button
+					type="button"
+					onClick={() => setSettingsOpen(true)}
+					className="sig-no-drag grid size-11 touch-manipulation place-items-center rounded-[var(--radius)] text-muted-foreground hover:bg-accent hover:text-foreground"
+					title="Settings"
+					aria-label="Settings"
+				>
+					<Settings className="size-4" />
+				</button>
+			)}
 			{platform !== "mac" && <CaptionButtons />}
 		</header>
 	);
