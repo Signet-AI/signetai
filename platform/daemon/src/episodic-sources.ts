@@ -62,11 +62,8 @@ export interface EpisodicSourceRecord {
 	/**
 	 * Whether the record is a settled, complete capture. Immutable kinds
 	 * (memory, artifact, summary) are always completed; a transcript is
-	 * completed once a session-end summary job has been triggered for its
-	 * session (the session ended and finalization began), whether or not the
-	 * summary itself landed — a summary job that times out or fails must not
-	 * keep the transcript classified as mid-stream forever. A running
-	 * session's still-growing transcript is not settled evidence: its
+	 * completed only by the session-end marker on its own retained row. A
+	 * running session's still-growing transcript is not settled evidence: its
 	 * intermediate states may be contradicted by the session's end.
 	 */
 	readonly completed: boolean;
@@ -128,6 +125,15 @@ function compareEpisodicSources(a: EpisodicSourceRecord, b: EpisodicSourceRecord
 
 function readNonEmptyTrimmed(value: unknown): string | null {
 	return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
+function tableHasColumn(db: ReadDb, table: string, column: string): boolean {
+	try {
+		const rows = db.prepare(`PRAGMA table_info(${table})`).all() as ReadonlyArray<Record<string, unknown>>;
+		return rows.some((row) => row.name === column);
+	} catch {
+		return false;
+	}
 }
 
 export function sourceIdCandidates(value: string): string[] {
@@ -256,17 +262,20 @@ export function readEpisodicArtifact(db: ReadDb, agentId: string, id: string): E
 export function readEpisodicTranscript(db: ReadDb, agentId: string, id: string): EpisodicSourceRecord | null {
 	const ids = sourceIdCandidates(id);
 	const placeholders = ids.map(() => "?").join(", ");
+	const hasUpdated = tableHasColumn(db, "session_transcripts", "updated_at");
+	const hasCompleted = tableHasColumn(db, "session_transcripts", "completed_at");
+	const updatedAt = hasUpdated ? "st.updated_at" : "NULL";
+	const completedAt = hasCompleted ? "st.completed_at" : "NULL";
+	const capturedAt = `COALESCE(${completedAt}, ${updatedAt}, st.created_at)`;
+	const orderBy = `${capturedAt} DESC, st.created_at DESC`;
+	const completed = hasCompleted ? "st.completed_at IS NOT NULL" : "0";
 	const row = db
 		.prepare(
-			`SELECT st.session_key, st.content, st.harness, st.project, st.created_at, st.updated_at,
-			        EXISTS (
-			          SELECT 1 FROM summary_jobs AS sj
-			          WHERE sj.agent_id = st.agent_id AND sj.session_key = st.session_key
-			            AND sj.trigger IN ('session_end', 'ttl_expired')
-			        ) AS completed
+			`SELECT st.session_key, st.content, st.harness, st.project, st.created_at, ${updatedAt} AS updated_at,
+			        ${completedAt} AS completed_at, ${completed} AS completed
 			 FROM session_transcripts AS st
 			 WHERE st.agent_id = ? AND st.session_key IN (${placeholders})
-			 ORDER BY st.updated_at DESC, st.created_at DESC
+			 ORDER BY ${orderBy}
 			 LIMIT 1`,
 		)
 		.get(agentId, ...ids) as
@@ -277,6 +286,7 @@ export function readEpisodicTranscript(db: ReadDb, agentId: string, id: string):
 				readonly project: string | null;
 				readonly created_at: string;
 				readonly updated_at: string | null;
+				readonly completed_at: string | null;
 				readonly completed: number;
 		  }
 		| undefined;
@@ -291,14 +301,11 @@ export function readEpisodicTranscript(db: ReadDb, agentId: string, id: string):
 		sourcePath: null,
 		project: row.project,
 		harness: row.harness,
-		capturedAt: row.updated_at ?? row.created_at,
+		capturedAt: row.completed_at ?? row.updated_at ?? row.created_at,
 		evidenceMeta: null,
-		// A transcript is settled once a session-end summary job has been
-		// triggered for the session: that is the signal the session ended,
-		// whether or not the summary itself lands (a timed-out or failed
-		// summary must not keep the transcript mid-stream forever). A
-		// still-running session's transcript is mid-stream evidence, not
-		// settled fact.
+		// A transcript is settled only after the session-end machinery writes
+		// its completion marker. The marker is independent of any derived
+		// summary, so a failed or retired worker cannot block ingestion.
 		completed: row.completed === 1,
 	};
 }
@@ -370,13 +377,13 @@ export function readRecentEpisodicSources(
 	const direction = order === "oldest" ? "ASC" : "DESC";
 	const memoryCursor = cursorPredicate("created_at", "id", "memory", newer, cursor);
 	const artifactCursor = cursorPredicate("captured_at", "source_path", "artifact", newer, cursor);
-	const transcriptCursor = cursorPredicate(
-		"COALESCE(updated_at, created_at)",
-		"session_key",
-		"transcript",
-		newer,
-		cursor,
-	);
+	const transcriptHasUpdated = tableHasColumn(db, "session_transcripts", "updated_at");
+	const transcriptHasCompleted = tableHasColumn(db, "session_transcripts", "completed_at");
+	const transcriptUpdatedAt = transcriptHasUpdated ? "st.updated_at" : "NULL";
+	const transcriptCompletedAt = transcriptHasCompleted ? "st.completed_at" : "NULL";
+	const transcriptTime = `COALESCE(${transcriptCompletedAt}, ${transcriptUpdatedAt}, st.created_at)`;
+	const transcriptCompleted = transcriptHasCompleted ? "st.completed_at IS NOT NULL" : "0";
+	const transcriptCursor = cursorPredicate(transcriptTime, "session_key", "transcript", newer, cursor);
 	const summaryCursor = cursorPredicate("latest_at", "id", "summary", newer, cursor);
 	const allowedKinds = kinds ? new Set(kinds) : null;
 	const wants = (kind: EpisodicSourceKind): boolean => allowedKinds === null || allowedKinds.has(kind);
@@ -528,17 +535,15 @@ export function readRecentEpisodicSources(
 	const transcripts: EpisodicSourceRecord[] = wants("transcript")
 		? db
 				.prepare(
-					`SELECT st.session_key, st.content, st.harness, st.project, st.created_at, st.updated_at,
-					        EXISTS (
-					          SELECT 1 FROM summary_jobs AS sj
-					          WHERE sj.agent_id = st.agent_id AND sj.session_key = st.session_key
-					            AND sj.trigger IN ('session_end', 'ttl_expired')
-					        ) AS completed
-					 FROM session_transcripts AS st
-					 WHERE st.agent_id = ?
-					   AND (${transcriptCursor.sql} OR ${transcriptRequeue})
-					 ORDER BY julianday(COALESCE(st.updated_at, st.created_at)) ${direction}, st.session_key ${direction}
-					 LIMIT ?`,
+					`SELECT st.session_key, st.content, st.harness, st.project, st.created_at,
+					        ${transcriptUpdatedAt} AS updated_at, ${transcriptCompletedAt} AS completed_at,
+					        ${transcriptTime} AS captured_at, ${transcriptCompleted} AS completed
+				 FROM session_transcripts AS st
+				 WHERE st.agent_id = ?
+				   AND ${transcriptCompleted}
+				   AND (${transcriptCursor.sql} OR ${transcriptRequeue})
+				 ORDER BY julianday(${transcriptTime}) ${direction}, st.session_key ${direction}
+				 LIMIT ?`,
 				)
 				.all(agentId, ...transcriptCursor.args, ...requeueArgs, boundedLimit)
 				.map((row) => {
@@ -549,6 +554,8 @@ export function readRecentEpisodicSources(
 						readonly project: string | null;
 						readonly created_at: string;
 						readonly updated_at: string | null;
+						readonly completed_at: string | null;
+						readonly captured_at: string;
 						readonly completed: number;
 					};
 					return {
@@ -561,7 +568,8 @@ export function readRecentEpisodicSources(
 						sourcePath: null,
 						project: transcript.project,
 						harness: transcript.harness,
-						capturedAt: transcript.updated_at ?? transcript.created_at,
+						capturedAt:
+							transcript.captured_at ?? transcript.completed_at ?? transcript.updated_at ?? transcript.created_at,
 						evidenceMeta: null,
 						completed: transcript.completed === 1,
 					} satisfies EpisodicSourceRecord;
@@ -731,6 +739,12 @@ export function searchEpisodicSources(
 	// forever.
 	const sinceArgs: unknown[] = params.since !== undefined ? [params.since, EPISODIC_CAPTURED_AT_FLOOR] : [];
 	const beforeArgs: unknown[] = params.before !== undefined ? [params.before] : [];
+	const transcriptSearchTime = tableHasColumn(db, "session_transcripts", "updated_at")
+		? "COALESCE(updated_at, created_at)"
+		: "created_at";
+	const transcriptCompleted = tableHasColumn(db, "session_transcripts", "completed_at")
+		? "completed_at IS NOT NULL"
+		: "0";
 
 	const branches: Array<{ sql: string; args: unknown[] }> = [];
 	if (params.kind === undefined || params.kind === "memory") {
@@ -770,15 +784,15 @@ export function searchEpisodicSources(
 	}
 	if (params.kind === undefined || params.kind === "transcript") {
 		branches.push({
-			sql: `SELECT 'transcript' AS kind, session_key AS id, COALESCE(updated_at, created_at) AS captured_at
+			sql: `SELECT 'transcript' AS kind, session_key AS id, ${transcriptSearchTime} AS captured_at
 			      FROM session_transcripts
-			      WHERE agent_id = ? AND content LIKE ?
-			        ${params.since ? "AND (julianday(COALESCE(updated_at, created_at)) >= julianday(?) OR julianday(COALESCE(updated_at, created_at)) < julianday(?))" : ""}
-			        ${params.before ? "AND julianday(COALESCE(updated_at, created_at)) <= julianday(?)" : ""}`,
+			      WHERE agent_id = ? AND ${transcriptCompleted} AND content LIKE ?
+			        ${params.since ? `AND (julianday(${transcriptSearchTime}) >= julianday(?) OR julianday(${transcriptSearchTime}) < julianday(?))` : ""}
+			        ${params.before ? `AND julianday(${transcriptSearchTime}) <= julianday(?)` : ""}`,
 			args: [params.agentId, like, ...sinceArgs, ...beforeArgs],
 		});
 	}
-	if (params.kind === undefined || params.kind === "summary") {
+	if (params.kind === "summary") {
 		branches.push({
 			sql: `SELECT 'summary' AS kind, id, latest_at AS captured_at
 			      FROM session_summaries

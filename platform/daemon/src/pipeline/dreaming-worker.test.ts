@@ -181,9 +181,9 @@ describe("dreaming worker agent scope", () => {
 		// record the failure (recordDreamingFailure + failDreamingPass), log
 		// it, and keep scheduling future checks.
 		db.prepare(
-			`INSERT INTO session_summaries
-		 (id, agent_id, content, token_count, depth, kind, source_type, earliest_at, latest_at, created_at)
-		 VALUES ('sweep-failure-evidence', 'alpha', 'Episodic evidence awaiting a doomed pass.', 10, 0, 'session', 'summary',
+			`INSERT INTO session_transcripts
+		 (session_key, agent_id, content, harness, created_at, updated_at, completed_at)
+		 VALUES ('sweep-failure-evidence', 'alpha', 'Episodic evidence awaiting a doomed pass.', 'pi',
 		         datetime('now'), datetime('now'), datetime('now'))`,
 		).run();
 
@@ -249,9 +249,9 @@ describe("dreaming worker agent scope", () => {
 			 VALUES ('legacy-husk', 'Legacy Husk', 'legacy husk', 'project', 'default', 5, ?, ?)`,
 		).run(now, now);
 		db.prepare(
-			`INSERT INTO session_summaries
-			 (id, agent_id, content, token_count, depth, kind, source_type, earliest_at, latest_at, created_at)
-			 VALUES ('sweep-evidence', 'default', 'New episodic evidence awaiting a content pass.', 10, 0, 'session', 'summary', datetime('now'), datetime('now'), datetime('now'))`,
+			`INSERT INTO session_transcripts
+			 (session_key, agent_id, content, harness, created_at, updated_at, completed_at)
+			 VALUES ('sweep-evidence', 'default', 'New episodic evidence awaiting a content pass.', 'pi', datetime('now'), datetime('now'), datetime('now'))`,
 		).run();
 		enqueueDreamingHygieneAttention(accessor, "default");
 
@@ -293,16 +293,14 @@ describe("dreaming worker agent scope", () => {
 
 		// Seed distinct episodic evidence for each agent.
 		db.prepare(
-			`INSERT INTO session_summaries
-			 (id, agent_id, content, token_count, depth, kind, source_type, earliest_at, latest_at, created_at)
-			 VALUES ('summary-alpha', ?, ?, 10, 0, 'session', 'summary',
-			         datetime('now'), datetime('now'), datetime('now'))`,
+			`INSERT INTO session_transcripts
+			 (session_key, agent_id, content, harness, created_at, updated_at, completed_at)
+			 VALUES ('summary-alpha', ?, ?, 'pi', datetime('now'), datetime('now'), datetime('now'))`,
 		).run(ALPHA, alphaEvidence);
 		db.prepare(
-			`INSERT INTO session_summaries
-			 (id, agent_id, content, token_count, depth, kind, source_type, earliest_at, latest_at, created_at)
-			 VALUES ('summary-beta', ?, ?, 10, 0, 'session', 'summary',
-			         datetime('now'), datetime('now'), datetime('now'))`,
+			`INSERT INTO session_transcripts
+			 (session_key, agent_id, content, harness, created_at, updated_at, completed_at)
+			 VALUES ('summary-beta', ?, ?, 'pi', datetime('now'), datetime('now'), datetime('now'))`,
 		).run(BETA, betaEvidence);
 
 		// Deterministic provider: one universe pass consolidates BOTH scopes
@@ -327,8 +325,8 @@ describe("dreaming worker agent scope", () => {
 							confidence: 0.9,
 							evidence: [
 								{
-									source_ref: "summary:summary-alpha",
-									source_kind: "summary",
+									source_ref: "transcript:summary-alpha",
+									source_kind: "transcript",
 									source_id: "summary-alpha",
 									quote: alphaEvidence,
 								},
@@ -346,8 +344,8 @@ describe("dreaming worker agent scope", () => {
 							confidence: 0.9,
 							evidence: [
 								{
-									source_ref: "summary:summary-beta",
-									source_kind: "summary",
+									source_ref: "transcript:summary-beta",
+									source_kind: "transcript",
 									source_id: "summary-beta",
 									quote: betaEvidence,
 								},

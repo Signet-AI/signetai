@@ -1,14 +1,15 @@
 /**
  * Dreaming agent — periodic smart-model consolidation of the knowledge graph.
  *
- * Reads accumulated session summaries and the current entity graph,
+ * Reads accumulated completed transcript projections and the current entity graph,
  * produces structured graph mutations (create, merge, update, delete,
  * supersede), and applies them transactionally.
  *
  * See docs/specs/approved/dreaming-memory-consolidation.md
  */
 
-import { randomUUID } from "node:crypto";
+import type { Database } from "bun:sqlite";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -32,6 +33,7 @@ import { logger } from "../logger";
 import type { GraphWriteCaps } from "../ontology-proposals";
 import { isPipelineTimeout, recordPipelineError } from "../pipeline-error";
 import { getActiveTelemetry } from "../telemetry";
+import { upsertThreadHead } from "../thread-heads";
 import { createDreamingAgentTools } from "./dreaming-agent-tools";
 import {
 	type DreamingAttention,
@@ -621,7 +623,7 @@ function fetchEpisodicEvidence(
 	limit: number,
 	cursor: EpisodicCursor | null,
 ): readonly EpisodicSourceRecord[] {
-	const sources = readRecentEpisodicSources(db, agentId, limit, undefined, since, "oldest", cursor);
+	const sources = readRecentEpisodicSources(db, agentId, limit, DREAMING_EVIDENCE_KINDS, since, "oldest", cursor);
 	if (!cursor?.fragmentOffset || cursor.kind === null) return sources;
 	const resumed = readEpisodicSource(db, { agentId, from: `${cursor.kind}:${cursor.id}` });
 	if (!resumed) return sources;
@@ -680,7 +682,7 @@ An install may have several agent scopes (listed in <agent_scopes> when there is
 
 - Hygiene queue: dreaming_attention pending records (kind=hygiene)
 - Graph: entities, aspects, claims, links (active/archived/pinned)
-- Evidence: episodic store (memories, artifacts, transcripts, summaries)
+- Evidence: episodic store (memories, artifacts, completed transcripts)
 - Pass log: dreaming_passes + runbook notes (what changed, what was viewed)
 
 ### Per-pass process
@@ -693,7 +695,7 @@ An install may have several agent scopes (listed in <agent_scopes> when there is
    - If you discover junk the queue did not flag, mint a flag op and archive in the same batch.
    - If you inspect a flagged target and judge it should stay as it is (a deliberate keep — e.g. a live entity with a non-concrete type, or an over-cap aspect you chose not to consolidate), close the record with decline_attention citing its attention id. Declining is an affirmative judgment: only decline records you actually inspected, and never decline records you could not complete this pass — defer those with a named blocker instead.
 3. Query attention_list with kind=review_due. For expired records, inspect the cited memory with search_evidence using its subjectRef, then supersede the matching active claim with supersede_claim_value. Use the supplied entityId, aspectId, attributeId, and claimKey when present. The replacement must state that the planned event remains unconfirmed; never rewrite it as if the event happened. Cite an exact quote from the original memory. Do not supersede approaching records. When creating or setting a future temporal claim, set payload.reviewAfter to the referenced ISO timestamp.
-4. Only when the hygiene queue is clear: find new evidence since the cutoff. First LIST unprocessed sources with search_evidence — omit the query and omit since so it lists from the scope's evidence watermark (the frontier the last pass actually surfaced), newest first; only after seeing what is there, narrow with a query if the list is large. Prefer evidence from completed sessions and their summaries; a transcript with completed: false is mid-stream — defer filing from it with the named blocker "transcript still mid-stream" (re-check completed each pass: a session still active when re-checked is a re-verified blocker, not a repeated one), and note the deferral in the pass log, because its states may be contradicted by the session's end. For each new source:
+4. Only when the hygiene queue is clear: find new evidence since the cutoff. First LIST unprocessed sources with search_evidence — omit the query and omit since so it lists from the scope's evidence watermark (the frontier the last pass actually surfaced), newest first; only after seeing what is there, narrow with a query if the list is large. Prefer evidence from completed transcript sessions; historical summary rows are not part of the default delivery path. A transcript with completed: false is mid-stream — defer filing from it with the named blocker "transcript still mid-stream" (re-check completed each pass: a session still active when re-checked is a re-verified blocker, not a repeated one), and note the deferral in the pass log, because its states may be contradicted by the session's end. For each new source:
    - search_entities for subjects it establishes.
    - File claims only for what the source establishes as settled fact: outcomes, decisions, shipped changes, stable behavior. Do not file instructions that were merely suggested, hypotheses or diagnoses, open questions, or intermediate states of an ongoing investigation. When a source shows an attempt and its outcome, file the outcome.
    - A claim must be a complete statement: it names the subject and the fact about it. A bare label ("SHIP-WITH-FIXES"), a fragment ("Root cause confirmed."), or an implementation detail without its subject is not a claim — do not file it.
@@ -701,7 +703,7 @@ An install may have several agent scopes (listed in <agent_scopes> when there is
    - The evidence source and the graph target must use the same agent scope: search evidence with the agentId of the entity you will update, then pass that same agentId to apply_ontology_ops. A source found in another scope cannot support a write here.
    - create_entity only for durable subjects clearly established by the source.
    - Validate before writing (validate_proposal).
-5. Write the pass log (runbook_write) last. Its summary is read back by a human who did not watch the pass: write a specific entity-named change manifest, not process narration. Use Markdown, max 2000 chars, with these sections when applicable: ## Updated, ## Created, ## Deferred, ## No-op. Under every section, each line must name the entity or entity id, state the exact change (claim filed or superseded, aspect touched, entity/aspect/link archived or merged, or why no change was needed), and cite the source or provenance reference (transcript, artifact, or summary as kind:id; hygiene attention:<id>). Deferred and No-op lines must state the specific blocker or reason; never use generic categories such as "content-related" or "ongoing structural process". Omit empty sections. Put the same deferred items and open questions in the runbook's deferred and openQuestions fields.
+5. Write the pass log (runbook_write) last. Its summary is read back by a human who did not watch the pass: write a specific entity-named change manifest, not process narration. Use Markdown, max 2000 chars, with these sections when applicable: ## Updated, ## Created, ## Deferred, ## No-op. Under every section, each line must name the entity or entity id, state the exact change (claim filed or superseded, aspect touched, entity/aspect/link archived or merged, or why no change was needed), and cite the source or provenance reference (memory, artifact, or transcript as kind:id; hygiene attention:<id>). Deferred and No-op lines must state the specific blocker or reason; never use generic categories such as "content-related" or "ongoing structural process". Omit empty sections. Put the same deferred items and open questions in the runbook's deferred and openQuestions fields.
 
 ### What counts as durable
 
@@ -759,7 +761,7 @@ An install may have several agent scopes (listed in <agent_scopes> when there is
    - Archive or merge it, citing its attention id (provenance: "attention:<uuid>", or attention:$<index> for a flag you minted in the same batch).
    - If you discover junk the queue did not flag, mint a flag op and archive in the same batch.
    - If you inspect a flagged target and judge it should stay as it is (a deliberate keep — e.g. a live entity with a non-concrete type, or an over-cap aspect you chose not to consolidate), close the record with decline_attention citing its attention id. Declining is an affirmative judgment: only decline records you actually inspected, and never decline records you could not complete this pass — defer those with a named blocker instead.
-3. Write the pass log (runbook_write) last. Its summary is read back by a human who did not watch the pass: write a specific entity-named change manifest, not process narration. Use Markdown, max 2000 chars, with these sections when applicable: ## Updated, ## Created, ## Deferred, ## No-op. Under every section, each line must name the entity or entity id, state the exact change (claim filed or superseded, aspect touched, entity/aspect/link archived or merged, or why no change was needed), and cite the source or provenance reference (transcript, artifact, or summary as kind:id; hygiene attention:<id>). Deferred and No-op lines must state the specific blocker or reason; never use generic categories such as "content-related" or "ongoing structural process". Omit empty sections. Put the same deferred items and open questions in the runbook's deferred and openQuestions fields.
+3. Write the pass log (runbook_write) last. Its summary is read back by a human who did not watch the pass: write a specific entity-named change manifest, not process narration. Use Markdown, max 2000 chars, with these sections when applicable: ## Updated, ## Created, ## Deferred, ## No-op. Under every section, each line must name the entity or entity id, state the exact change (claim filed or superseded, aspect touched, entity/aspect/link archived or merged, or why no change was needed), and cite the source or provenance reference (memory, artifact, or transcript as kind:id; hygiene attention:<id>). Deferred and No-op lines must state the specific blocker or reason; never use generic categories such as "content-related" or "ongoing structural process". Omit empty sections. Put the same deferred items and open questions in the runbook's deferred and openQuestions fields.
 
 ### What counts as durable
 
@@ -802,14 +804,14 @@ An install may have several agent scopes (listed in <agent_scopes> when there is
 ### State targets
 
 - Graph: entities, aspects, claims, links (active/archived/pinned)
-- Evidence: episodic store (memories, artifacts, transcripts, summaries)
+- Evidence: episodic store (memories, artifacts, completed transcripts)
 - Pass log: dreaming_passes + runbook notes (what changed, what was viewed)
 
 ### Per-pass process
 
 1. Read the pass log (runbook_read). Establish cutoff: sources viewed, changes applied, deferred items.
 2. Query attention_list with kind=review_due. For expired records, inspect the cited memory with search_evidence using its subjectRef, then supersede the matching active claim with supersede_claim_value. Use the supplied entityId, aspectId, attributeId, and claimKey when present. The replacement must state that the planned event remains unconfirmed; never rewrite it as if the event happened. Cite an exact quote from the original memory. Do not supersede approaching records. When creating or setting a future temporal claim, set payload.reviewAfter to the referenced ISO timestamp.
-3. Find new evidence since the cutoff. First LIST unprocessed sources with search_evidence — omit the query and omit since so it lists from the scope's evidence watermark (the frontier the last pass actually surfaced), newest first; only after seeing what is there, narrow with a query if the list is large. Prefer evidence from completed sessions and their summaries; a transcript with completed: false is mid-stream — defer filing from it with the named blocker "transcript still mid-stream" (re-check completed each pass: a session still active when re-checked is a re-verified blocker, not a repeated one), and note the deferral in the pass log, because its states may be contradicted by the session's end. For each new source:
+3. Find new evidence since the cutoff. First LIST unprocessed sources with search_evidence — omit the query and omit since so it lists from the scope's evidence watermark (the frontier the last pass actually surfaced), newest first; only after seeing what is there, narrow with a query if the list is large. Prefer evidence from completed transcript sessions; historical summary rows are not part of the default delivery path. A transcript with completed: false is mid-stream — defer filing from it with the named blocker "transcript still mid-stream" (re-check completed each pass: a session still active when re-checked is a re-verified blocker, not a repeated one), and note the deferral in the pass log, because its states may be contradicted by the session's end. For each new source:
    - search_entities for subjects it establishes.
    - File claims only for what the source establishes as settled fact: outcomes, decisions, shipped changes, stable behavior. Do not file instructions that were merely suggested, hypotheses or diagnoses, open questions, or intermediate states of an ongoing investigation. When a source shows an attempt and its outcome, file the outcome.
    - A claim must be a complete statement: it names the subject and the fact about it. A bare label ("SHIP-WITH-FIXES"), a fragment ("Root cause confirmed."), or an implementation detail without its subject is not a claim — do not file it.
@@ -817,7 +819,7 @@ An install may have several agent scopes (listed in <agent_scopes> when there is
    - The evidence source and the graph target must use the same agent scope: search evidence with the agentId of the entity you will update, then pass that same agentId to apply_ontology_ops. A source found in another scope cannot support a write here.
    - create_entity only for durable subjects clearly established by the source.
    - Validate before writing (validate_proposal).
-4. Write the pass log (runbook_write) last. Its summary is read back by a human who did not watch the pass: write a specific entity-named change manifest, not process narration. Use Markdown, max 2000 chars, with these sections when applicable: ## Updated, ## Created, ## Deferred, ## No-op. Under every section, each line must name the entity or entity id, state the exact change (claim filed or superseded, aspect touched, entity/aspect/link archived or merged, or why no change was needed), and cite the source or provenance reference (transcript, artifact, or summary as kind:id; hygiene attention:<id>). Deferred and No-op lines must state the specific blocker or reason; never use generic categories such as "content-related" or "ongoing structural process". Omit empty sections. Put the same deferred items and open questions in the runbook's deferred and openQuestions fields.
+4. Write the pass log (runbook_write) last. Its summary is read back by a human who did not watch the pass: write a specific entity-named change manifest, not process narration. Use Markdown, max 2000 chars, with these sections when applicable: ## Updated, ## Created, ## Deferred, ## No-op. Under every section, each line must name the entity or entity id, state the exact change (claim filed or superseded, aspect touched, entity/aspect/link archived or merged, or why no change was needed), and cite the source or provenance reference (memory, artifact, or transcript as kind:id; hygiene attention:<id>). Deferred and No-op lines must state the specific blocker or reason; never use generic categories such as "content-related" or "ongoing structural process". Omit empty sections. Put the same deferred items and open questions in the runbook's deferred and openQuestions fields.
 
 ### What counts as durable
 
@@ -1010,6 +1012,7 @@ export async function runDreamingAgentPass(
 		// The newest captured_at each scope's search_evidence surfaced this
 		// pass; the pass-end watermark may advance only to it (#1149).
 		const surfacedWatermarkByScope = new Map<string, string>();
+		const surfacedTranscriptRefsByScope = new Map<string, Set<string>>();
 		const tools = createDreamingAgentTools({
 			accessor,
 			agentId,
@@ -1027,6 +1030,14 @@ export async function runDreamingAgentPass(
 				recordDreamingToolCall(accessor, agentId, passId, ++toolCallSequence, trace);
 				if (trace.tool === "search_evidence" && trace.output.ok === true && Array.isArray(trace.output.items)) {
 					const input = isRecord(trace.input) ? trace.input : null;
+					const scope = input !== null && typeof input.agentId === "string" ? input.agentId : agentId;
+					const transcriptRefs = surfacedTranscriptRefsByScope.get(scope) ?? new Set<string>();
+					for (const item of trace.output.items) {
+						if (!isRecord(item)) continue;
+						const ref = typeof item.sourceRef === "string" ? item.sourceRef : "";
+						if (ref.startsWith("transcript:")) transcriptRefs.add(ref);
+					}
+					if (transcriptRefs.size > 0) surfacedTranscriptRefsByScope.set(scope, transcriptRefs);
 					// A sourceRef call reads a fragment of a source the
 					// listing already surfaced: it adds no new frontier (the
 					// listing's max covers it) and must not advance the
@@ -1082,7 +1093,25 @@ export async function runDreamingAgentPass(
 				surfaced === undefined ? previous : nextEvidenceWatermark(surfaced, previous, cutoff),
 			);
 		}
+		// Any pass that surfaces transcript evidence owns its direct temporal
+		// projection. Combined passes can ingest content too; gating this on the
+		// focused-mode name would advance the watermark without writing the
+		// manifest.
+		const transcriptManifestEntries = [...surfacedTranscriptRefsByScope.entries()].flatMap(([scope, refs]) =>
+			accessor.withReadDb((db) =>
+				[...refs].flatMap((sourceRef) => {
+					const source = readEpisodicSource(db, { agentId: scope, from: sourceRef });
+					return source === null || !source.completed
+						? []
+						: [{ scope, source, content: renderDreamingEvidence(source) }];
+				}),
+			),
+		);
 		accessor.withWriteTx((db) => {
+			writeDreamingTranscriptManifestInTx(db, {
+				passId,
+				entries: transcriptManifestEntries,
+			});
 			db.prepare(
 				`UPDATE dreaming_passes SET status = 'completed', completed_at = datetime('now'),
 				 tokens_consumed = ?, tokens_input = ?, tokens_output = ?,
@@ -1137,6 +1166,90 @@ export async function runDreamingAgentPass(
 // Max backoff: 5min * 2^6 = ~5.3 hours.
 const MAX_FAILURE_BACKOFF_MULTIPLIER = 6;
 const FAILURE_BACKOFF_BASE_MS = 5 * 60 * 1000;
+const DREAMING_EVIDENCE_KINDS = ["memory", "artifact", "transcript"] as const;
+
+function writeDreamingTranscriptManifestInTx(
+	db: WriteDb,
+	params: {
+		readonly passId: string;
+		readonly entries: readonly {
+			readonly scope: string;
+			readonly source: EpisodicSourceRecord;
+			readonly content: string;
+		}[];
+	},
+): void {
+	const table = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'session_summaries'").get();
+	if (table == null) return;
+	const statement = db.prepare(
+		`INSERT INTO session_summaries (
+			id, project, depth, kind, content, token_count,
+			earliest_at, latest_at, session_key, harness,
+			agent_id, source_type, source_ref, meta_json, created_at
+		) VALUES (?, ?, 0, 'session', ?, ?, ?, ?, ?, ?, ?, 'transcript', ?, ?, ?)
+		 ON CONFLICT(id) DO UPDATE SET
+			project = excluded.project,
+			content = excluded.content,
+			token_count = excluded.token_count,
+			earliest_at = excluded.earliest_at,
+			latest_at = excluded.latest_at,
+			session_key = excluded.session_key,
+			harness = excluded.harness,
+			agent_id = excluded.agent_id,
+			source_type = excluded.source_type,
+			source_ref = excluded.source_ref,
+			meta_json = excluded.meta_json`,
+	);
+	const now = new Date().toISOString();
+	for (const entry of params.entries) {
+		if (!entry.source.completed || entry.content.trim().length === 0) continue;
+		const content = entry.content.trim();
+		const contentHash = createHash("sha256").update(content).digest("hex");
+		// Reuse an existing depth-0 row for this agent/session. The historical
+		// summary path used a different id, and the partial unique index cannot
+		// be handled by ON CONFLICT(id) alone. Updating it in place preserves
+		// child/memory lineage while replacing the derived content source.
+		const existing = db
+			.prepare(
+				`SELECT id FROM session_summaries
+				 WHERE agent_id = ? AND session_key = ? AND depth = 0
+				   AND COALESCE(source_type, 'summary') IN ('summary', 'checkpoint')
+				 LIMIT 1`,
+			)
+			.get(entry.scope, entry.source.id) as { id: string } | null;
+		const nodeId = existing?.id ?? `transcript:${entry.scope}:${entry.source.id}`;
+		statement.run(
+			nodeId,
+			entry.source.project,
+			content,
+			countTokens(content),
+			entry.source.capturedAt,
+			entry.source.capturedAt,
+			entry.source.id,
+			entry.source.harness,
+			entry.scope,
+			entry.source.id,
+			JSON.stringify({
+				source: "dreaming-content-pass",
+				passId: params.passId,
+				sourceRef: `transcript:${entry.source.id}`,
+				contentHash,
+			}),
+			now,
+		);
+		upsertThreadHead(db as unknown as Database, {
+			agentId: entry.scope,
+			nodeId,
+			content,
+			latestAt: now,
+			project: entry.source.project,
+			sessionKey: entry.source.id,
+			sourceType: "transcript",
+			sourceRef: entry.source.id,
+			harness: entry.source.harness,
+		});
+	}
+}
 
 // A scope that fails this many consecutive passes is halted: automatic
 // scheduling stops for the cooldown below instead of retrying forever on
@@ -1172,7 +1285,7 @@ export function getDreamingEpisodicTokenBacklogInDb(db: ReadDb, agentId: string)
 		db,
 		agentId,
 		500,
-		undefined,
+		DREAMING_EVIDENCE_KINDS,
 		state.evidenceCursor ? null : state.lastPassAt,
 		"newest",
 		state.evidenceCursor,

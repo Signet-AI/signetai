@@ -126,7 +126,7 @@ silently disappear from the API reference.
 | GET | `/api/pipeline/models/by-provider` | platform/daemon/src/routes/pipeline-routes.ts |
 | POST | `/api/pipeline/models/refresh` | platform/daemon/src/routes/pipeline-routes.ts |
 | POST | `/api/repair/resync-vec` | platform/daemon/src/routes/repair-routes.ts |
-| POST | `/api/repair/backfill-skipped` | platform/daemon/src/routes/repair-routes.ts |
+| POST | `/api/repair/backfill-skipped` | platform/daemon/src/routes/repair-routes.ts (retired; returns HTTP 410; direct completed transcripts are consumed by Dreaming) |
 | POST | `/api/repair/prune-chunk-groups` | platform/daemon/src/routes/repair-routes.ts |
 | POST | `/api/repair/prune-singleton-entities` | platform/daemon/src/routes/repair-routes.ts |
 | POST | `/api/repair/prune-generic-entities` | platform/daemon/src/routes/repair-routes.ts |

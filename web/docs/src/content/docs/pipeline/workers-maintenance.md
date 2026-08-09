@@ -164,10 +164,11 @@ recommendations (i.e., health is good).
 
 ### Queue Health and Repair (issue #901)
 
-Two live tables hold backlog that the legacy `QueueHealth` aggregate never
-exposed: `memory_jobs` and `summary_jobs` (the durable summary queue).
-Operators can inspect and repair both queues without treating retired
-extraction jobs as active work.
+The live maintenance backlog is held in `memory_jobs`; the legacy
+`QueueHealth` aggregate and retired `summary_jobs` queue are no longer active
+work surfaces. Migration 117 drains historical summary jobs after preserving
+any transcript payloads, and operators can inspect and repair `memory_jobs`
+without treating retired extraction work as active.
 
 `/api/diagnostics/queue` returns a structured per-queue report:
 
@@ -176,7 +177,6 @@ extraction jobs as active work.
   "timestamp": "...",
   "queues": {
     "memory":     { "pending": 0, "leased": 0, "completed": 0, "failed": 0, "dead": 0, "oldestAgeSec": 0, "oldestDeadAgeSec": 0, "lastError": null },
-    "summary":    { "...": "..." }
   },
   "oldestDeadSummaryJob":    { "id": "...", "harness": "...", "sessionKey": "...", "createdAt": "...", "attempts": 0, "error": null },
   "oldestDeadMemoryJob":     { "...": "..." },

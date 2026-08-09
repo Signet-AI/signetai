@@ -5,12 +5,11 @@
  * - onSessionStart: provide context/memories to inject
  * - onPreCompaction: provide summary instructions, receive summary
  * - onUserPromptSubmit: inject relevant memories per prompt
- * - onSessionEnd: retain transcript and queue summary lineage for Dreaming
+ * - onSessionEnd: retain and complete the transcript for Dreaming
  * - onRemember: explicit memory save
  * - onRecall: explicit memory query
  */
 
-import { createHash } from "node:crypto";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -67,14 +66,13 @@ import {
 	setSynthesisWorker,
 	writeMemoryMd,
 } from "./memory-synthesis";
-import { getFeedbackTelemetry, recordFeedbackTelemetry } from "./pipeline/aspect-feedback";
+import { recordFeedbackTelemetry } from "./pipeline/aspect-feedback";
 import {
 	invalidateTraversalCache,
 	resolveFocalEntities,
 	setTraversalStatus,
 	traverseKnowledgeGraph,
 } from "./pipeline/graph-traversal";
-import { enqueueSummaryJob } from "./pipeline/summary-worker";
 import { estimateTokens } from "./pipeline/tokenizer";
 import { getDefaultPluginHost } from "./plugins/index";
 import type { PluginPromptTargetV1 } from "./plugins/types";
@@ -113,7 +111,6 @@ import {
 	recordSessionCandidates,
 	trackFtsHits,
 } from "./session-memories";
-import { isNoiseSession } from "./session-noise";
 import { advanceRecallContextEpoch, claimRecallItems } from "./session-recall-dedupe";
 import {
 	buildSignetSystemPrompt,
@@ -137,6 +134,7 @@ import {
 	ensureCanonicalTranscriptHistory,
 	findStaleLiveSessions,
 	getSessionTranscriptContent,
+	markSessionTranscriptCompleted,
 	upsertSessionTranscript,
 } from "./session-transcripts";
 import { type StructuralCandidateSource, type StructuralFeatures, getStructuralFeatures } from "./structural-features";
@@ -175,43 +173,6 @@ const STALE_SESSION_SWEEP_MAX_DOWNSTREAM_BACKLOG = 20;
 
 function yieldToEventLoop(): Promise<void> {
 	return new Promise((resolve) => setImmediate(resolve));
-}
-
-function summaryJobsHasColumn(column: string): boolean {
-	try {
-		return getDbAccessor().withReadDb((db) => {
-			const cols = db.prepare("PRAGMA table_info(summary_jobs)").all() as ReadonlyArray<Record<string, unknown>>;
-			return cols.some((col) => col.name === column);
-		});
-	} catch {
-		return false;
-	}
-}
-
-function summaryJobWithContentHashExists(
-	agentId: string,
-	sessionKey: string | undefined,
-	contentHash: string,
-): boolean {
-	if (!sessionKey || !summaryJobsHasColumn("content_hash")) return false;
-	return getDbAccessor().withReadDb((db) => {
-		const row = db
-			.prepare(
-				`SELECT id FROM summary_jobs
-				 WHERE agent_id = ? AND session_key = ? AND content_hash = ?
-				 AND status IN ('pending', 'processing', 'leased', 'completed')
-				 LIMIT 1`,
-			)
-			.get(agentId, sessionKey, contentHash) as { id: string } | undefined;
-		return Boolean(row);
-	});
-}
-
-function storeSummaryJobContentHash(jobId: string | undefined, contentHash: string): void {
-	if (!jobId || !summaryJobsHasColumn("content_hash")) return;
-	getDbAccessor().withWriteTx((db) => {
-		db.prepare("UPDATE summary_jobs SET content_hash = ? WHERE id = ?").run(contentHash, jobId);
-	});
 }
 
 export async function flushDeferredSessionEndWorkForTests(): Promise<void> {
@@ -474,10 +435,11 @@ function getSessionGapSummary(): string | undefined {
 
 	try {
 		return getDbAccessor().withReadDb((db) => {
-			// Find last completed session end time
-			const lastSession = db
-				.prepare("SELECT MAX(completed_at) as last_end FROM summary_jobs WHERE status = 'completed'")
-				.get() as { last_end: string | null } | undefined;
+			// The completion marker covers explicit ends and daemon recovery/TTL
+			// boundaries; all are settled session activity for this brief.
+			const lastSession = db.prepare("SELECT MAX(completed_at) as last_end FROM session_transcripts").get() as
+				| { last_end: string | null }
+				| undefined;
 
 			if (!lastSession?.last_end) return undefined;
 
@@ -503,7 +465,7 @@ function getSessionGapSummary(): string | undefined {
 
 			// Count sessions since last session
 			const sessionCount = db
-				.prepare("SELECT COUNT(*) as cnt FROM summary_jobs WHERE completed_at > ? AND status = 'completed'")
+				.prepare("SELECT COUNT(*) as cnt FROM session_transcripts WHERE completed_at > ?")
 				.get(lastEnd) as { cnt: number };
 
 			return `[since last session: ${memCount.cnt} new memories, ${sessionCount.cnt} sessions captured, last active ${gapStr}]`;
@@ -660,7 +622,7 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 
 	if (isClearSessionStart(req)) {
 		const sessionKey = req.sessionKey?.trim();
-		const recoveredJobId = recoverMissingSessionEndOnClearStart(req, agentId, memoryCfg, new Date().toISOString());
+		const recoveredSessionEnd = recoverMissingSessionEndOnClearStart(req, agentId, new Date().toISOString());
 		clearSessionStartDedupe(req);
 		// A reset also opens a new session lifetime — any prior session.end
 		// marker must not suppress a termination event for the new one (#1212).
@@ -683,7 +645,7 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 			harness: req.harness,
 			project: req.project,
 			sessionKey,
-			recoveredSummaryJob: recoveredJobId,
+			recoveredSessionEnd,
 		});
 	}
 
@@ -1953,120 +1915,39 @@ export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionE
 		transcript = storedTranscript;
 	}
 
-	// Keep retention/indexing lossless. The summary worker receives a
-	// capped copy below, but transcript artifacts and live transcript
-	// storage must preserve the full canonical transcript.
+	// Retain the complete transcript first. Dreaming reads this row directly;
+	// no derived summary job is inserted or required for completion.
 	const retainedTranscript = transcript;
-
-	// Derive a session-end artifact identity from the stable harness identity
-	// plus transcript path/content. Some harnesses reuse the same sessionId
-	// when a conversation is resumed; raw reuse would make immutable summary
-	// artifacts collide with an earlier close of the same conversation.
-	// `sessionKey` remains the continuity/grouping key, while this sessionId is
-	// the immutable artifact identity for this particular session-end snapshot.
-	// When the transcript is empty, deriveSessionEndFallbackId returns a random
-	// UUID; empty sessions skip summaries and transcript artifacts below, and
-	// very short transcript artifacts intentionally prefer uniqueness over
-	// mutating a prior immutable artifact.
 	const sessionId = deriveSessionEndFallbackId(
 		req.sessionId?.trim() || sessionKey,
 		req.transcriptPath,
 		retainedTranscript,
 	);
-
-	// Lossless retention: keep the live transcript snapshot available to
-	// subsequent hook calls before returning. The heavier canonical JSONL
-	// rewrite/indexing work is deferred below so the session-end response
-	// is not held open by large transcript rewrites.
+	let transcriptRetained = false;
 	if (retainedTranscript && sessionKey) {
 		try {
-			upsertSessionTranscript(sessionKey, retainedTranscript, req.harness, req.cwd ?? null, agentId, endedAt);
+			transcriptRetained = upsertSessionTranscript(
+				sessionKey,
+				retainedTranscript,
+				req.harness,
+				req.cwd ?? null,
+				agentId,
+				endedAt,
+			);
 		} catch (e) {
 			logger.warn("hooks", "Live transcript retention failed (non-fatal)", {
 				error: e instanceof Error ? e.message : String(e),
 			});
 		}
 	}
-
-	// Safety cap against degenerate inputs (corrupt files, etc).
-	// The summary worker handles long transcripts via chunked
-	// map-reduce summarization, so this is a last-resort guard for
-	// summary input only — not for transcript retention.
-	const MAX_TRANSCRIPT_CHARS = 100_000;
-	let summaryTranscript = retainedTranscript;
-	let truncated = false;
-	if (summaryTranscript.length > MAX_TRANSCRIPT_CHARS) {
-		logger.warn("hooks", "Transcript exceeds safety cap, truncating summary input", {
-			original: summaryTranscript.length,
-			cap: MAX_TRANSCRIPT_CHARS,
-		});
-		summaryTranscript = `${summaryTranscript.slice(0, MAX_TRANSCRIPT_CHARS)}\n[truncated]`;
-		truncated = true;
-	}
-
-	const pipelineEnabled = memoryCfg.pipelineV2.enabled || memoryCfg.pipelineV2.shadowMode;
-	const hasSummaryLength = summaryTranscript.length >= 500;
-	let summaryStatus: "pending" | "skipped" | "not_requested" = pipelineEnabled ? "skipped" : "not_requested";
-	let jobId: string | undefined;
-
-	// Queue for async processing by the summary worker instead of
-	// blocking on LLM inference. The worker produces immutable summary lineage;
-	// Dreaming later derives any semantic state from that evidence.
-	const noiseSession = isNoiseSession({
-		project: req.cwd ?? null,
-		sessionKey: sessionKey ?? null,
-		sessionId,
-		harness: req.harness,
-	});
-
-	if (!pipelineEnabled) {
-		logger.info("hooks", "Session end summary skipped — pipeline disabled");
-	} else if (noiseSession) {
-		logger.debug("hooks", "Session end summary skipped for noise session", {
-			harness: req.harness,
-			project: req.cwd,
-			sessionKey,
-			sessionId,
-		});
-	} else if (hasSummaryLength) {
-		const contentHash = createHash("sha256").update(retainedTranscript).digest("hex");
-		if (summaryJobWithContentHashExists(agentId, sessionKey, contentHash)) {
-			summaryStatus = "skipped";
-			logger.info("hooks", "Session end summary skipped duplicate content", {
-				agentId,
+	if (transcriptRetained && sessionKey) {
+		const completed = markSessionTranscriptCompleted(sessionKey, agentId, endedAt);
+		if (!completed) {
+			logger.warn("hooks", "Session-end transcript completion marker was not written", {
 				sessionKey,
-				contentHash,
-			});
-		} else {
-			summaryStatus = "pending";
-			jobId = enqueueSummaryJob(getDbAccessor(), {
-				harness: req.harness,
-				transcript: retainedTranscript,
-				sessionKey,
-				sessionId,
-				project: req.cwd,
 				agentId,
-				trigger: "session_end",
-				boundaryReason: "session_closed",
-				capturedAt: endedAt,
-				endedAt,
-			});
-			storeSummaryJobContentHash(jobId, contentHash);
-
-			logger.info("hooks", "Session end queued for summary", {
-				jobId,
-				feedbackTelemetry: getFeedbackTelemetry(),
 			});
 		}
-		logger.info("hooks", "Session end transcript queued", {
-			harness: req.harness,
-			project: req.cwd,
-			sessionKey,
-			transcriptPath: req.transcriptPath,
-			transcriptChars: summaryTranscript.length,
-			truncated,
-			preview: summaryTranscript.slice(0, 500),
-		});
 	}
 
 	let transcriptCaptureJobId: string | null = null;
@@ -2083,7 +1964,7 @@ export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionE
 				transcriptPath: req.transcriptPath ?? null,
 				capturedAt: endedAt,
 				endedAt,
-				summaryStatus,
+				summaryStatus: "not_requested",
 			});
 		} catch (error) {
 			logger.warn("hooks", "Transcript capture enqueue failed", {
@@ -2101,8 +1982,7 @@ export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionE
 
 	return {
 		memoriesSaved: 0,
-		queued: Boolean(jobId),
-		jobId,
+		queued: Boolean(transcriptCaptureJobId),
 		...(transcriptCaptureJobId ? { transcriptCaptureJobId } : {}),
 	};
 }
@@ -2113,7 +1993,8 @@ export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionE
  * on_session_end stay in live retention forever (completed: false semantics),
  * so the dreaming content runbook defers their transcripts indefinitely.
  * Sweep the stale sessions and fire the deferred session-end with the stored
- * transcript snapshot, so summaries land and content passes stop deferring.
+ * transcript snapshot, so the direct content pass can consume it instead of
+ * deferring indefinitely.
  */
 type StaleSessionSweepResult = { closed: number; skipped: number; totalMatching: number };
 
@@ -2135,21 +2016,11 @@ function shouldDeferStaleSessionSweep(): boolean {
 	if (!dbAccessor) return true;
 	try {
 		const capture = getTranscriptCaptureStatus(dbAccessor);
-		const summary = dbAccessor.withReadDb(
-			(db) =>
-				db
-					.prepare("SELECT COUNT(*) AS count FROM summary_jobs WHERE status IN ('pending', 'processing', 'leased')")
-					.get() as {
-					count?: number;
-				} | null,
-		);
-		const downstreamBacklog =
-			capture.pending + capture.processing + (typeof summary?.count === "number" ? summary.count : 0);
+		const downstreamBacklog = capture.pending + capture.processing;
 		if (downstreamBacklog < STALE_SESSION_SWEEP_MAX_DOWNSTREAM_BACKLOG) return false;
 		logger.debug("hooks", "Stale session-end sweep deferred while downstream work is backlogged", {
 			capturePending: capture.pending,
 			captureProcessing: capture.processing,
-			summaryPending: summary?.count ?? 0,
 			backlogLimit: STALE_SESSION_SWEEP_MAX_DOWNSTREAM_BACKLOG,
 		});
 		return true;
@@ -2173,19 +2044,13 @@ async function runStaleSessionSweep(options: {
 		: STALE_SESSION_SWEEP_DEFAULT_LIMIT;
 	const stale = findStaleLiveSessions(options.staleOlderThanMs, limit);
 	let closed = 0;
-	let skipped = 0;
+	const skipped = 0;
 	for (const session of stale) {
 		if (isSystemPressureHigh()) await awaitPressureClear();
 		await yieldToEventLoop();
-		// Dedup: a summary job already exists for this exact content, so the
-		// session-end already ran (or is running) for it — never re-fire.
-		// The guard is unconditional: a null harness must not turn the dedup
-		// off, or the session would re-fire on every sweep.
-		const contentHash = createHash("sha256").update(session.content).digest("hex");
-		if (summaryJobWithContentHashExists(session.agentId, session.sessionKey, contentHash)) {
-			skipped++;
-			continue;
-		}
+		// findStaleLiveSessions only returns rows without a completion marker.
+		// Marking the row is the atomic dedup boundary for this sweep.
+
 		try {
 			await handleSessionEnd({
 				harness: session.harness ?? "hermes-agent",
@@ -2260,63 +2125,6 @@ async function deferSessionEndWork(params: {
 // Mid-session checkpoint extraction (long-lived sessions)
 // ---------------------------------------------------------------------------
 
-/**
- * Read (or upsert) the extract cursor for delta tracking.
- * Returns the last_offset for the given session/agent pair.
- */
-/** Read the extract cursor for a session, returning last_offset (0 if none). */
-function readExtractCursor(sessionKey: string, agentId: string): number {
-	try {
-		return getDbAccessor().withReadDb((db) => {
-			const row = db
-				.prepare("SELECT last_offset FROM session_extract_cursors WHERE session_key = ? AND agent_id = ?")
-				.get(sessionKey, agentId) as { last_offset: number } | undefined;
-			return row?.last_offset ?? 0;
-		});
-	} catch {
-		return 0;
-	}
-}
-
-/**
- * Advance the extract cursor to `offset` for this session.
- * Called AFTER the summary job is enqueued so a crash between enqueue and
- * cursor advance causes a redundant re-extraction (acceptable) rather than
- * permanently skipping a delta window (data loss).
- */
-function advanceExtractCursor(sessionKey: string, agentId: string, offset: number): void {
-	const now = new Date().toISOString();
-	try {
-		getDbAccessor().withWriteTx((db) => {
-			db.prepare(
-				`INSERT INTO session_extract_cursors (session_key, agent_id, last_offset, last_extract_at)
-				 VALUES (?, ?, ?, ?)
-				 ON CONFLICT(session_key, agent_id) DO UPDATE SET
-				   last_offset = excluded.last_offset,
-				   last_extract_at = excluded.last_extract_at`,
-			).run(sessionKey, agentId, offset, now);
-		});
-	} catch (e) {
-		logger.warn("hooks", "advanceExtractCursor failed (non-fatal)", {
-			error: e instanceof Error ? e.message : String(e),
-		});
-	}
-}
-
-/**
- * Mid-session checkpoint extraction. Simplified version of handleSessionEnd
- * for long-lived sessions that never call session-end.
- *
- * Key differences from handleSessionEnd:
- * - Does NOT release the session claim (session continues after this call)
- * - Calls consumeState() to flush accumulated continuity data, then
- *   initContinuity() to restart the tracking window for the next interval
- * - Only extracts the delta since the last extraction (cursor via
- *   readExtractCursor / advanceExtractCursor; cursor is advanced AFTER
- *   enqueueSummaryJob succeeds to preserve crash-safety)
- * - Skips if delta is < 500 bytes (not worth extracting)
- * - Writes a checkpoint with trigger 'mid_session_extract'
- */
 export function handleCheckpointExtract(req: CheckpointExtractRequest): CheckpointExtractResponse {
 	const agentId = resolveAgentId({ agentId: req.agentId, sessionKey: req.sessionKey });
 	ensureAgentRegistered(agentId);
@@ -2363,9 +2171,9 @@ export function handleCheckpointExtract(req: CheckpointExtractRequest): Checkpoi
 
 	// Upsert transcript for lossless retention, but only when new content is
 	// provided (not merely re-reading the stored transcript) and only when it
-	// is at least as long as what is already stored.  Upserting a shorter
-	// payload would move the extraction cursor past valid content and cause
-	// future checkpoints to permanently skip that range.
+	// is at least as long as what is already stored. Upserting a shorter
+	// payload would discard valid canonical content before the final completion
+	// marker is written.
 	if (!fromStore) {
 		const prev = getSessionTranscriptContent(req.sessionKey, agentId);
 		if (!prev || transcript.length >= prev.length) {
@@ -2379,24 +2187,8 @@ export function handleCheckpointExtract(req: CheckpointExtractRequest): Checkpoi
 		}
 	}
 
-	// Read current cursor; skip if delta is too small.
-	// Cursor is stored as a UTF-8 byte offset. Slice transcript by bytes to
-	// keep the cursor unit consistent.
-	const cursor = readExtractCursor(req.sessionKey, agentId);
-	const transcriptBuf = Buffer.from(transcript, "utf8");
-	const deltaBuf = transcriptBuf.subarray(cursor);
-	if (deltaBuf.byteLength < 500) {
-		logger.info("hooks", "Checkpoint extract skipped — delta too small", {
-			sessionKey: req.sessionKey,
-			deltaBytes: deltaBuf.byteLength,
-			cursor,
-		});
-		return { skipped: true };
-	}
-	// Convert delta buffer to string; safety cap against degenerate inputs
-	const delta = deltaBuf.toString("utf8");
-	const MAX_DELTA_CHARS = 100_000;
-	const capped = delta.length > MAX_DELTA_CHARS ? `${delta.slice(0, MAX_DELTA_CHARS)}\n[truncated]` : delta;
+	// Mid-session evidence remains live and is intentionally not delivered to Dreaming.
+	// The completed session transcript is the single canonical delivery path.
 
 	// Flush accumulated continuity data into a checkpoint, then re-init the
 	// tracking window so subsequent turns continue accumulating. Unlike
@@ -2405,9 +2197,8 @@ export function handleCheckpointExtract(req: CheckpointExtractRequest): Checkpoi
 	// Note: consumeState/initContinuity are session-key-scoped (not agentId-
 	// scoped) — matching the same design in handleSessionEnd. In the OpenClaw
 	// multi-agent model each agent run always has a unique session key, so
-	// session-key scoping is sufficient in practice. agentId is used for
-	// cursor and transcript dedup in session_extract_cursors /
-	// session_transcripts, where it matters for correct per-agent scoping.
+	// session-key scoping is sufficient in practice. agentId remains used for
+	// transcript retention and per-agent scope enforcement.
 	try {
 		const snap = consumeState(req.sessionKey);
 		if (snap && snap.totalPromptCount > 0) {
@@ -2445,51 +2236,7 @@ export function handleCheckpointExtract(req: CheckpointExtractRequest): Checkpoi
 		// Non-fatal — continuity will re-init on the next prompt
 	}
 
-	// Enqueue summary job for the delta only.
-	// Cursor is advanced AFTER the enqueue so a crash between the two steps
-	// causes a redundant re-extraction next time rather than silently
-	// skipping a delta window.
-	//
-	// Content-hash dedup: if the same delta was already enqueued (e.g. two
-	// checkpoints fired before the cursor advanced), skip the duplicate.
-	const checkpointContentHash = createHash("sha256").update(capped).digest("hex");
-	if (summaryJobWithContentHashExists(agentId, req.sessionKey, checkpointContentHash)) {
-		logger.info("hooks", "Checkpoint extract skipped duplicate content", {
-			agentId,
-			sessionKey: req.sessionKey,
-			contentHash: checkpointContentHash,
-		});
-		return { skipped: true };
-	}
-	const jobId = enqueueSummaryJob(getDbAccessor(), {
-		harness: req.harness,
-		transcript: capped,
-		sessionKey: req.sessionKey,
-		// Intentionally sessionKey: checkpoint extracts reuse the same
-		// session identity so all checkpoint artifacts share a single
-		// canonical manifest.  findExistingManifest looks up by session_id,
-		// which matches because session_id is persisted as sessionKey.
-		sessionId: req.sessionKey,
-		project: req.project,
-		agentId,
-		trigger: "checkpoint_extract",
-		boundaryReason: "checkpoint",
-		capturedAt: new Date().toISOString(),
-	});
-	storeSummaryJobContentHash(jobId, checkpointContentHash);
-	// Advance cursor using UTF-8 byte length so the stored offset stays
-	// a stable byte offset into the transcript.
-	advanceExtractCursor(req.sessionKey, agentId, Buffer.byteLength(transcript, "utf8"));
-
-	logger.info("hooks", "Checkpoint extract queued", {
-		jobId,
-		sessionKey: req.sessionKey,
-		deltaChars: capped.length,
-		cursor,
-		newCursor: Buffer.byteLength(transcript, "utf8"),
-	});
-
-	return { queued: true, jobId };
+	return { skipped: true };
 }
 
 export function normalizeSessionTranscript(harness: string, raw: string): string {

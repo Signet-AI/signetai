@@ -37,9 +37,10 @@ higher-order condensed nodes, and drill-down lineage.
 `MEMORY.md` is the rendered temporal head of Signet's lossless working
 memory system.
 
-- transcript context is retained in `session_transcripts` as a cleaned
-  conversation-only view for retrieval and continuity
-- temporal abstractions are stored in `session_summaries`
+- lossless transcript context is retained in `session_transcripts`; the
+  Dreaming content pass creates a sanitized read-time projection
+- temporal manifest nodes are written to `session_summaries` by the
+  Dreaming content pass
 - `MEMORY.md` is a materialized working document rendered from scored
   database state, not assembled from markdown files
 
@@ -53,7 +54,8 @@ The rendered document has two layers:
 
 2. **Machine-facing lineage**
    - temporal node identifiers
-   - provenance (`summary`, `chunk`, `compaction`, `condensation`)
+   - provenance (`transcript`, `summary` for historical rows, `chunk`,
+    `compaction`, `condensation`)
    - parent/child traversal handles
    - transcript/session references for drill-down
 
@@ -62,7 +64,9 @@ The rendered document has two layers:
 The existing `session_summaries` DAG remains the temporal backbone, but
 depth-0 artifacts are distinguished by provenance:
 
-- `summary` — summary-worker session node
+- `transcript` — direct completed-transcript session node written by
+  Dreaming's content pass
+- `summary` — historical session node retained for provenance only
 - `chunk` — transcript-derived leaf node
 - `compaction` — harness compaction artifact
 - `condensation` — arc/epoch nodes

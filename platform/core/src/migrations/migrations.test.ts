@@ -1,5 +1,6 @@
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { readMemoriesFtsSql } from "../fts-schema";
 
 /**
@@ -22,6 +23,7 @@ import { up as dreamingRunbook } from "./100-dreaming-runbook";
 import { up as agentScopedEntityName } from "./105-agent-scoped-entity-name";
 import { up as crossAgentMessageNotifications } from "./115-cross-agent-message-notifications";
 import { up as acpDeliveryReconciliation } from "./116-acp-delivery-reconciliation";
+import { up as retireSummaryWorker } from "./117-retire-summary-worker";
 import { MIGRATIONS, hasPendingMigrations, runMigrations } from "./index";
 
 function createFreshDb(): Database {
@@ -671,6 +673,220 @@ describe("migration framework", () => {
 			)
 			.all();
 		expect(rows).toEqual([{ content: "newer transcript with more detail" }]);
+	});
+
+	test("migration 117 deletes retired summary jobs but promotes their session completion marker", () => {
+		db = createFreshDb();
+		db.exec(`
+			CREATE TABLE session_transcripts (
+				session_key TEXT NOT NULL,
+				content TEXT NOT NULL,
+				harness TEXT,
+				project TEXT,
+				agent_id TEXT NOT NULL,
+				created_at TEXT NOT NULL,
+				updated_at TEXT,
+				PRIMARY KEY (agent_id, session_key)
+			);
+			CREATE TABLE summary_jobs (
+				id TEXT PRIMARY KEY,
+				session_key TEXT NOT NULL,
+				agent_id TEXT NOT NULL,
+				trigger TEXT,
+				boundary_reason TEXT,
+				status TEXT NOT NULL,
+				completed_at TEXT,
+				created_at TEXT NOT NULL
+			);
+		`);
+		db.prepare(`INSERT INTO session_transcripts
+			(session_key, content, agent_id, created_at, updated_at)
+			VALUES ('sess-pending', 'retained transcript', 'agent-a', '2026-08-09T10:00:00.000Z', '2026-08-09T10:00:00.000Z')`).run();
+		db.prepare(`INSERT INTO summary_jobs
+			(id, session_key, agent_id, trigger, boundary_reason, status, completed_at, created_at)
+			VALUES ('job-pending', 'sess-pending', 'agent-a', 'session_end', 'session_closed', 'pending', NULL, '2026-08-09T10:01:00.000Z')`).run();
+		db.prepare(`INSERT INTO summary_jobs
+			(id, session_key, agent_id, trigger, boundary_reason, status, completed_at, created_at)
+			VALUES ('job-checkpoint', 'sess-pending', 'agent-a', 'checkpoint_extract', 'checkpoint', 'completed', '2026-08-09T10:02:00.000Z', '2026-08-09T10:02:00.000Z')`).run();
+
+		expect(() => retireSummaryWorker(db)).not.toThrow();
+		const transcript = db
+			.prepare(
+				"SELECT completed_at, content_hash FROM session_transcripts WHERE agent_id = 'agent-a' AND session_key = 'sess-pending'",
+			)
+			.get() as { completed_at: string | null; content_hash: string | null };
+		expect(transcript.completed_at).toBe("2026-08-09T10:01:00.000Z");
+		expect(transcript.content_hash).toBe(createHash("sha256").update("retained transcript", "utf8").digest("hex"));
+		expect(db.prepare("SELECT COUNT(*) AS count FROM summary_jobs").get()).toEqual({ count: 0 });
+	});
+
+	test("migration 117 retains a backlog transcript when no canonical row exists", () => {
+		db = createFreshDb();
+		db.exec(`
+			CREATE TABLE session_transcripts (
+				session_key TEXT NOT NULL,
+				content TEXT NOT NULL,
+				harness TEXT,
+				project TEXT,
+				agent_id TEXT NOT NULL,
+				created_at TEXT NOT NULL,
+				updated_at TEXT,
+				PRIMARY KEY (agent_id, session_key)
+			);
+			CREATE TABLE summary_jobs (
+				id TEXT PRIMARY KEY,
+				session_key TEXT NOT NULL,
+				agent_id TEXT NOT NULL,
+				harness TEXT,
+				project TEXT,
+				transcript TEXT NOT NULL,
+				trigger TEXT,
+				boundary_reason TEXT,
+				captured_at TEXT,
+				ended_at TEXT,
+				status TEXT NOT NULL,
+				completed_at TEXT,
+				created_at TEXT NOT NULL
+			);
+		`);
+		db.prepare(`INSERT INTO summary_jobs
+			(id, session_key, agent_id, harness, project, transcript, trigger, boundary_reason, captured_at, ended_at, status, created_at)
+			VALUES ('job-backlog', 'sess-backlog', 'agent-a', 'codex', '/repo', 'backlog transcript with tool output', 'session_end', 'session_closed', '2026-08-09T11:00:00.000Z', NULL, 'pending', '2026-08-09T11:01:00.000Z')`).run();
+
+		expect(() => retireSummaryWorker(db)).not.toThrow();
+		const transcript = db
+			.prepare(
+				"SELECT content, completed_at, content_hash FROM session_transcripts WHERE agent_id = 'agent-a' AND session_key = 'sess-backlog'",
+			)
+			.get() as { content: string; completed_at: string | null; content_hash: string | null };
+		expect(transcript.content).toBe("backlog transcript with tool output");
+		expect(transcript.completed_at).toBe("2026-08-09T11:00:00.000Z");
+		expect(transcript.content_hash).toBe(
+			createHash("sha256").update("backlog transcript with tool output", "utf8").digest("hex"),
+		);
+		expect(db.prepare("SELECT COUNT(*) AS count FROM summary_jobs").get()).toEqual({ count: 0 });
+	});
+
+	test("migration 117 retains checkpoint payloads as incomplete transcripts", () => {
+		db = createFreshDb();
+		db.exec(`
+			CREATE TABLE session_transcripts (
+				session_key TEXT NOT NULL,
+				content TEXT NOT NULL,
+				harness TEXT,
+				project TEXT,
+				agent_id TEXT NOT NULL,
+				created_at TEXT NOT NULL,
+				updated_at TEXT,
+				PRIMARY KEY (agent_id, session_key)
+			);
+			CREATE TABLE summary_jobs (
+				id TEXT PRIMARY KEY,
+				session_key TEXT NOT NULL,
+				agent_id TEXT NOT NULL,
+				harness TEXT,
+				project TEXT,
+				transcript TEXT NOT NULL,
+				trigger TEXT,
+				boundary_reason TEXT,
+				captured_at TEXT,
+				ended_at TEXT,
+				status TEXT NOT NULL,
+				completed_at TEXT,
+				created_at TEXT NOT NULL
+			);
+		`);
+		db.prepare(`INSERT INTO summary_jobs
+			(id, session_key, agent_id, harness, project, transcript, trigger, boundary_reason, captured_at, status, created_at)
+			VALUES (?, ?, ?, ?, ?, ?, 'checkpoint_extract', 'checkpoint', ?, 'completed', ?)`).run(
+			"job-checkpoint-1",
+			"sess-checkpoint",
+			"agent-a",
+			"codex",
+			"/repo",
+			"first checkpoint payload",
+			"2026-08-09T12:00:00.000Z",
+			"2026-08-09T12:00:00.000Z",
+		);
+		db.prepare(`INSERT INTO summary_jobs
+			(id, session_key, agent_id, harness, project, transcript, trigger, boundary_reason, captured_at, status, created_at)
+			VALUES (?, ?, ?, ?, ?, ?, 'checkpoint_extract', 'checkpoint', ?, 'completed', ?)`).run(
+			"job-checkpoint-2",
+			"sess-checkpoint",
+			"agent-a",
+			"codex",
+			"/repo",
+			"second checkpoint payload",
+			"2026-08-09T12:01:00.000Z",
+			"2026-08-09T12:01:00.000Z",
+		);
+
+		expect(() => retireSummaryWorker(db)).not.toThrow();
+		const transcript = db
+			.prepare(
+				"SELECT content, completed_at FROM session_transcripts WHERE agent_id = 'agent-a' AND session_key = 'sess-checkpoint'",
+			)
+			.get() as { content: string; completed_at: string | null };
+		expect(transcript.content).toContain("first checkpoint payload");
+		expect(transcript.content).toContain("second checkpoint payload");
+		expect(transcript.completed_at).toBeNull();
+		expect(db.prepare("SELECT COUNT(*) AS count FROM summary_jobs").get()).toEqual({ count: 0 });
+	});
+
+	test("migration 117 handles a legacy summary queue with only created_at", () => {
+		db = createFreshDb();
+		db.exec(`
+			CREATE TABLE session_transcripts (
+				session_key TEXT NOT NULL,
+				content TEXT NOT NULL,
+				harness TEXT,
+				project TEXT,
+				agent_id TEXT NOT NULL,
+				created_at TEXT NOT NULL,
+				updated_at TEXT,
+				PRIMARY KEY (agent_id, session_key)
+			);
+			CREATE TABLE summary_jobs (
+				id TEXT PRIMARY KEY,
+				session_key TEXT,
+				harness TEXT NOT NULL,
+				project TEXT,
+				transcript TEXT NOT NULL,
+				status TEXT NOT NULL,
+				created_at TEXT NOT NULL
+			);
+		`);
+		db.prepare(
+			`INSERT INTO session_transcripts (session_key, content, agent_id, created_at, updated_at)
+			 VALUES ('legacy-session', 'legacy canonical content', 'default', '2026-08-09T14:00:00.000Z', '2026-08-09T14:00:00.000Z')`,
+		).run();
+		db.prepare(
+			`INSERT INTO summary_jobs (id, session_key, harness, transcript, status, created_at)
+			 VALUES ('legacy-job', 'legacy-session', 'codex', 'legacy job content', 'pending', '2026-08-09T14:01:00.000Z')`,
+		).run();
+		db.prepare(
+			`INSERT INTO summary_jobs (id, session_key, harness, transcript, status, created_at)
+			 VALUES ('legacy-null', NULL, 'codex', 'orphaned legacy payload', 'pending', '2026-08-09T14:02:00.000Z')`,
+		).run();
+
+		expect(() => retireSummaryWorker(db)).not.toThrow();
+		const transcript = db
+			.prepare(
+				"SELECT content, completed_at FROM session_transcripts WHERE agent_id = 'default' AND session_key = 'legacy-session'",
+			)
+			.get() as { content: string; completed_at: string | null };
+		expect(transcript.content).toContain("legacy canonical content");
+		expect(transcript.content).toContain("legacy job content");
+		expect(transcript.completed_at).toBe("2026-08-09T14:01:00.000Z");
+		const orphan = db
+			.prepare(
+				"SELECT session_key, content, completed_at FROM session_transcripts WHERE session_key = 'legacy-summary-job:legacy-null'",
+			)
+			.get() as { session_key: string; content: string; completed_at: string | null };
+		expect(orphan.session_key).toBe("legacy-summary-job:legacy-null");
+		expect(orphan.content).toBe("orphaned legacy payload");
+		expect(orphan.completed_at).toBeNull();
+		expect(db.prepare("SELECT COUNT(*) AS count FROM summary_jobs").get()).toEqual({ count: 0 });
 	});
 
 	test("migration 048 treats source_ref=session_key as session-scoped lane", () => {

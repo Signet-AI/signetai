@@ -1,8 +1,8 @@
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { extractAnchorTerms } from "./anchor-terms";
-import { getDbAccessor } from "./db-accessor";
-import { tableExists as tableExistsIn } from "./db-helpers";
+import { type DbAccessor, type WriteDb, getDbAccessor } from "./db-accessor";
 import { logger } from "./logger";
 import { sanitizeFtsQuery } from "./memory-search";
 import {
@@ -51,6 +51,13 @@ export interface StoredTranscriptInfo {
 	readonly project: string | null;
 	readonly createdAt: string;
 	readonly updatedAt: string | null;
+	readonly completedAt: string | null;
+	readonly contentHash: string | null;
+}
+
+export interface SessionTranscriptUpsertOptions {
+	readonly completedAt?: string;
+	readonly preserveExistingContent?: boolean;
 }
 
 export interface TranscriptHit {
@@ -90,7 +97,7 @@ function markBackfillCanonical(classification: TranscriptSessionKeyClassificatio
 
 function tableExists(name: string): boolean {
 	try {
-		return getDbAccessor().withReadDb((db) => tableExistsIn(db, name));
+		return getDbAccessor().withReadDb((db) => tableExistsInDatabase(db, name));
 	} catch {
 		return false;
 	}
@@ -423,53 +430,138 @@ export function upsertSessionTranscript(
 	project: string | null,
 	agentId: string,
 	capturedAt?: string,
-): void {
-	if (sessionKey.trim().length === 0 || transcript.trim().length === 0) return;
+	accessor?: DbAccessor,
+	options?: SessionTranscriptUpsertOptions,
+): boolean {
+	if (sessionKey.trim().length === 0 || transcript.trim().length === 0) return false;
 
 	try {
-		getDbAccessor().withWriteTx((db) => {
+		return (accessor ?? getDbAccessor()).withWriteTx((db) => {
 			const row = db
 				.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_transcripts'`)
 				.get();
-			if (!row) return;
+			if (!row) return false;
+			const existing = options?.preserveExistingContent
+				? (db
+						.prepare(
+							`SELECT content
+							 FROM session_transcripts
+							 WHERE session_key = ? AND agent_id = ?`,
+						)
+						.get(sessionKey, agentId) as { content?: string } | null | undefined)
+				: undefined;
+			const retainedTranscript = mergeTranscriptContent(existing?.content ?? "", transcript);
 
 			// Imported sessions retain their original event time. Live harnesses do
 			// not pass one and keep the existing wall-clock behavior.
 			const now = capturedAt ?? new Date().toISOString();
 			const cols = db.prepare("PRAGMA table_info(session_transcripts)").all() as ReadonlyArray<Record<string, unknown>>;
 			const hasUpdated = cols.some((col) => col.name === "updated_at");
+			const hasCompleted = cols.some((col) => col.name === "completed_at");
+			const hasHash = cols.some((col) => col.name === "content_hash");
+			const contentHash = createHash("sha256").update(retainedTranscript).digest("hex");
+			const insertColumns = ["session_key", "content", "harness", "project", "agent_id", "created_at"];
+			const values: unknown[] = [sessionKey, retainedTranscript, harness, project, agentId, now];
+			const updates = [
+				"content = excluded.content",
+				"harness = excluded.harness",
+				"project = excluded.project",
+				"agent_id = excluded.agent_id",
+			];
+			const sameContent = hasHash
+				? "(session_transcripts.content_hash = excluded.content_hash OR (session_transcripts.content_hash IS NULL AND session_transcripts.content = excluded.content))"
+				: "session_transcripts.content = excluded.content";
 			if (hasUpdated) {
-				db.prepare(
-					`INSERT INTO session_transcripts (
-						session_key, content, harness, project, agent_id, created_at, updated_at
-					)
-					VALUES (?, ?, ?, ?, ?, ?, ?)
-					ON CONFLICT(agent_id, session_key) DO UPDATE SET
-						content = excluded.content,
-						harness = excluded.harness,
-						project = excluded.project,
-						agent_id = excluded.agent_id,
-						updated_at = excluded.updated_at`,
-				).run(sessionKey, transcript, harness, project, agentId, now, now);
-				return;
+				insertColumns.push("updated_at");
+				values.push(now);
+				updates.push(
+					`updated_at = CASE WHEN ${sameContent} THEN session_transcripts.updated_at ELSE excluded.updated_at END`,
+				);
 			}
-
+			if (hasCompleted) {
+				insertColumns.push("completed_at");
+				values.push(options?.completedAt ?? null);
+				updates.push(
+					options?.completedAt
+						? "completed_at = CASE WHEN session_transcripts.completed_at IS NULL THEN excluded.completed_at ELSE session_transcripts.completed_at END"
+						: `completed_at = CASE WHEN ${sameContent} THEN session_transcripts.completed_at ELSE NULL END`,
+				);
+			}
+			if (hasHash) {
+				insertColumns.push("content_hash");
+				values.push(contentHash);
+				updates.push("content_hash = excluded.content_hash");
+			}
 			db.prepare(
-				`INSERT INTO session_transcripts (session_key, content, harness, project, agent_id, created_at)
-				 VALUES (?, ?, ?, ?, ?, ?)
-				 ON CONFLICT(agent_id, session_key) DO UPDATE SET
-				   content = excluded.content,
-				   harness = excluded.harness,
-				   project = excluded.project,
-				   agent_id = excluded.agent_id`,
-			).run(sessionKey, transcript, harness, project, agentId, now);
+				`INSERT INTO session_transcripts (${insertColumns.join(", ")})
+				 VALUES (${insertColumns.map(() => "?").join(", ")})
+				 ON CONFLICT(agent_id, session_key) DO UPDATE SET ${updates.join(", ")}`,
+			).run(...values);
+			return true;
 		});
 	} catch (error) {
 		logger.warn("transcripts", "Transcript upsert failed", {
 			error: error instanceof Error ? error.message : String(error),
 			sessionKey,
 		});
+		return false;
 	}
+}
+
+function mergeTranscriptContent(existing: string, incoming: string): string {
+	if (existing.length === 0) return incoming;
+	if (incoming.length === 0 || existing === incoming || existing.includes(incoming)) return existing;
+	if (incoming.includes(existing)) return incoming;
+	return `${existing}\n${incoming}`;
+}
+
+/** Mark one retained transcript complete inside an existing write transaction. */
+export function markSessionTranscriptCompletedInTx(
+	db: WriteDb,
+	sessionKey: string,
+	agentId: string,
+	completedAt: string,
+): boolean {
+	const columns = db.prepare("PRAGMA table_info(session_transcripts)").all() as ReadonlyArray<Record<string, unknown>>;
+	if (!columns.some((column) => column.name === "completed_at")) return false;
+	const hasUpdated = columns.some((column) => column.name === "updated_at");
+	const set = hasUpdated ? "completed_at = ?, updated_at = ?" : "completed_at = ?";
+	const args = hasUpdated ? [completedAt, completedAt, sessionKey, agentId] : [completedAt, sessionKey, agentId];
+	const result = db
+		.prepare(`UPDATE session_transcripts SET ${set} WHERE session_key = ? AND agent_id = ? AND completed_at IS NULL`)
+		.run(...args);
+	// bun:sqlite includes FTS-trigger writes in changes; any direct row update
+	// is a successful completion marker even when the count is greater than one.
+	return result.changes > 0;
+}
+
+/** Mark one retained transcript complete at the session-end boundary. */
+export function markSessionTranscriptCompleted(
+	sessionKey: string,
+	agentId: string,
+	completedAt = new Date().toISOString(),
+	accessor?: DbAccessor,
+): boolean {
+	if (sessionKey.trim().length === 0 || agentId.trim().length === 0) return false;
+	try {
+		return (accessor ?? getDbAccessor()).withWriteTx((db) => {
+			if (!tableExistsInDatabase(db, "session_transcripts")) return false;
+			return markSessionTranscriptCompletedInTx(db, sessionKey, agentId, completedAt);
+		});
+	} catch (error) {
+		logger.warn("transcripts", "Transcript completion marker failed", {
+			error: error instanceof Error ? error.message : String(error),
+			sessionKey,
+		});
+		return false;
+	}
+}
+
+function tableExistsInDatabase(
+	db: { prepare(sql: string): { get(...args: unknown[]): unknown } },
+	table: string,
+): boolean {
+	return db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(table) != null;
 }
 
 /** Read the stored transcript content for a session. */
@@ -478,13 +570,17 @@ export function getStoredSessionTranscriptInfo(sessionKey: string, agentId: stri
 	const aliases = [...new Set([sessionKey, canonicalizeTranscriptLookup(sessionKey)])];
 	const placeholders = aliases.map(() => "?").join(", ");
 	const hasUpdated = hasUpdatedAt();
+	const hasCompleted = sessionTranscriptsHasColumn("completed_at");
+	const hasHash = sessionTranscriptsHasColumn("content_hash");
 	const updatedAtExpr = hasUpdated ? "updated_at" : "NULL AS updated_at";
+	const completedAtExpr = hasCompleted ? "completed_at" : "NULL AS completed_at";
+	const contentHashExpr = hasHash ? "content_hash" : "NULL AS content_hash";
 	const seenExpr = hasUpdated ? "COALESCE(updated_at, created_at)" : "created_at";
 	try {
 		return getDbAccessor().withReadDb((db) => {
 			const row = db
 				.prepare(
-					`SELECT session_key, agent_id, harness, project, created_at, ${updatedAtExpr}
+					`SELECT session_key, agent_id, harness, project, created_at, ${updatedAtExpr}, ${completedAtExpr}, ${contentHashExpr}
 					 FROM session_transcripts
 					 WHERE agent_id = ? AND session_key IN (${placeholders})
 					 ORDER BY CASE WHEN session_key = ? THEN 0 ELSE 1 END, ${seenExpr} DESC
@@ -498,6 +594,8 @@ export function getStoredSessionTranscriptInfo(sessionKey: string, agentId: stri
 						project: string | null;
 						created_at: string;
 						updated_at?: string | null;
+						completed_at?: string | null;
+						content_hash?: string | null;
 				  }
 				| undefined;
 			if (!row) return undefined;
@@ -508,6 +606,8 @@ export function getStoredSessionTranscriptInfo(sessionKey: string, agentId: stri
 				project: row.project,
 				createdAt: row.created_at,
 				updatedAt: row.updated_at ?? null,
+				completedAt: row.completed_at ?? null,
+				contentHash: row.content_hash ?? null,
 			};
 		});
 	} catch {
@@ -545,49 +645,18 @@ export interface StaleLiveSession {
 	lastActivityAt: string;
 }
 
-/** Minimum content length to bother firing session-end (matches handleSessionEnd). */
-const MIN_SWEEP_TRANSCRIPT_CHARS = 500;
-
-function summaryJobsTableExists(): boolean {
-	try {
-		return getDbAccessor().withReadDb((db) => tableExistsIn(db, "summary_jobs"));
-	} catch {
-		return false;
-	}
-}
-
 /**
- * Live-retained sessions whose last activity is older than `staleOlderThanMs`
- * (#1172). Desktop/CLI chats that end without an explicit session-end signal
- * (closed windows, abandoned sessions) stay in `session_transcripts` forever;
- * this is the daemon-side fallback that surfaces them so the sweep can fire
- * the deferred session-end.
+ * Live-retained sessions whose last activity is older than `staleOlderThanMs`.
  *
- * Filters:
- * - Content shorter than 500 chars is excluded — handleSessionEnd skips
- *   summaries below that threshold, so sweeping them would create no dedup
- *   marker and re-fire every TTL cycle.
- * - Sessions that already have a summary job (pending / processing /
- *   completed) are excluded in-SQL so they never enter the LIMIT window.
- *   Without this, a backlog of already-ended sessions permanently blocks
- *   unprocessed ones behind the limit (the dedup-skip path in the sweep
- *   loop does not refresh updated_at, so those sessions stay at the head
- *   of the oldest-first ordering).
- * - Uses `updated_at` directly (not COALESCE) when the column exists, so
- *   the existing index `idx_st_agent_updated` can drive the scan.
+ * Completion is owned by the transcript row itself. A stale session is a
+ * session-end boundary, so it must not depend on a summary job or a minimum
+ * transcript length to become eligible for Dreaming.
  */
 export function findStaleLiveSessions(staleOlderThanMs: number, limit = 50): StaleLiveSession[] {
-	if (staleOlderThanMs <= 0 || !tableExists("session_transcripts")) return [];
+	if (staleOlderThanMs <= 0 || !tableExists("session_transcripts") || !sessionTranscriptsHasColumn("completed_at"))
+		return [];
 	const cutoff = new Date(Date.now() - staleOlderThanMs).toISOString();
 	const lastActivity = hasUpdatedAt() ? "updated_at" : "created_at";
-	const dedupClause = summaryJobsTableExists()
-		? `AND NOT EXISTS (
-				SELECT 1 FROM summary_jobs sj
-				WHERE sj.agent_id = session_transcripts.agent_id
-				  AND sj.session_key = session_transcripts.session_key
-				  AND sj.status IN ('pending', 'processing', 'leased', 'completed')
-			)`
-		: "";
 	try {
 		return getDbAccessor().withReadDb((db) => {
 			const rows = db
@@ -595,12 +664,12 @@ export function findStaleLiveSessions(staleOlderThanMs: number, limit = 50): Sta
 					`SELECT session_key, agent_id, harness, project, content, ${lastActivity} AS last_activity
 					 FROM session_transcripts
 					 WHERE ${lastActivity} < ?
-					   AND length(content) >= ?
-					   ${dedupClause}
+					   AND completed_at IS NULL
+					   AND length(content) > 0
 					 ORDER BY ${lastActivity} ASC
 					 LIMIT ?`,
 				)
-				.all(cutoff, MIN_SWEEP_TRANSCRIPT_CHARS, limit) as Array<{
+				.all(cutoff, limit) as Array<{
 				session_key: string;
 				agent_id: string;
 				harness: string | null;

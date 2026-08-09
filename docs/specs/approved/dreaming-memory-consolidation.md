@@ -1,6 +1,6 @@
 ---
 title: "Dreaming: Token-Budget Memory Consolidation"
-description: "Replace granular pipeline workers with periodic smart-model reasoning passes that consolidate session summaries into a dense, accurate knowledge graph."
+description: "Replace granular pipeline workers with periodic smart-model reasoning passes that consolidate completed transcript projections into a dense, accurate knowledge graph."
 order: 1
 section: "Memory Architecture"
 informed_by:
@@ -13,7 +13,7 @@ success_criteria:
   - "Stale or junk attributes are pruned without manual intervention"
   - "Users without large-model access fall back to the existing extraction pipeline with no degradation"
   - "Token spend per dreaming pass is bounded and configurable"
-scope_boundary: "This spec covers the consolidation agent, trigger mechanism, and backfill strategy. It does not cover changes to the session capture system (transcripts, summaries) which remains as-is, nor does it cover the system prompt extraction from AGENTS.md (separate spec)."
+scope_boundary: "This spec covers the consolidation agent, direct completed-transcript projection, trigger mechanism, and backfill strategy. It does not cover the system prompt extraction from AGENTS.md (separate spec)."
 ---
 
 Dreaming: Token-Budget Memory Consolidation
@@ -47,17 +47,17 @@ the full picture. The results:
   dedup pass, significance gate), making the system harder to maintain
   without proportionally better results.
 
-Meanwhile, session summaries produced by the summary-worker are
-already good. The LCM lineage system captures coherent session-level
-artifacts. The raw material is fine — it's the processing that's the
-bottleneck.
+Meanwhile, completed transcript projections are the canonical session
+input. The LCM lineage system captures coherent session-level artifacts,
+and the raw transcript remains lossless. Dreaming sanitizes only its
+read-time view, so tool results never become reasoning evidence.
 
 
 ## Core Idea
 
 Replace the granular extract-decide-write-embed pipeline with periodic
 **dreaming passes**: a single smart-model reasoning step that reads
-accumulated session summaries and the current entity graph, then
+accumulated completed transcript projections and the current entity graph, then
 produces a set of graph mutations (create, merge, update, delete,
 supersede).
 
@@ -72,9 +72,10 @@ graph cleanly.
 
 ### What stays
 
-- **Session capture.** Transcripts and summaries continue to be
-  written by the existing summary-worker. The LCM artifact system
-  (`writeImmutableArtifact`) is unchanged.
+- **Session capture.** Raw transcripts remain lossless. Session-end,
+  recovery, clear-start, and TTL boundaries mark the retained transcript
+  complete; Dreaming reads one sanitized projection. The LCM artifact
+  system (`writeImmutableArtifact`) is unchanged.
 - **The knowledge graph schema.** Entities, aspects, attributes —
   the data model is good. The problem is the writer, not the schema.
 - **The extraction pipeline (as fallback).** Users who don't want to
@@ -84,13 +85,13 @@ graph cleanly.
 
 ### What changes
 
-- **Dreaming agent.** A new background job that runs a reasoning pass
-  over accumulated session summaries. It reads the current entity
+- **Dreaming agent.** A background worker that runs a reasoning pass
+  over accumulated completed transcript projections. It reads the current entity
   graph, identifies what changed, and produces structured mutations.
 - **Token-budget trigger.** Dreaming is triggered by accumulated
-  summary tokens, not by a fixed schedule. Once unprocessed summaries
-  cross a configurable threshold (default: ~100k tokens), a dreaming
-  job is queued.
+  completed-transcript evidence tokens, not by a fixed schedule. Once
+  unprocessed projections cross a configurable threshold (default:
+  ~100k tokens), a dreaming pass is queued.
 - **Backfill / compaction mode.** A one-time (or on-demand) variant
   that reads the full entity graph and densifies it — merging
   duplicates, pruning junk, collapsing near-identical attributes.
@@ -99,9 +100,9 @@ graph cleanly.
 
 ## Trigger Mechanism
 
-The daemon tracks accumulated summary tokens since the last dreaming
-pass. This is a simple counter: each time a session summary is written,
-its token count is added to a running total persisted in the database.
+The daemon tracks accumulated completed-transcript evidence tokens since
+the last dreaming pass. Each newly surfaced projection contributes to a
+watermark-backed total persisted in the database.
 
 ```
 dreaming_state:
@@ -175,14 +176,14 @@ This means:
   I should have kept them separate." The feedback loop tightens
   naturally.
 - **No special infrastructure.** The daemon doesn't need a separate
-  session type, a separate transcript store, or a separate summary
+  session type, a separate transcript store, or a separate delivery
   pipeline for dreaming. It's the same code path. The only difference
   is what triggers the session and what the initial prompt says.
 
 The dreaming prompt is simple:
 
 > You're taking some time to reflect on your recent sessions. Here
-> are the session summaries since your last reflection. Here is your
+> are the completed transcript projections since your last reflection. Here is your
 > current knowledge graph. Please review what happened, what you
 > learned, and update your memory accordingly.
 
@@ -197,9 +198,10 @@ The dreaming agent receives (via normal session-start hook):
    `identity.startup.load` in `agent.yaml`. Minimal agents may load only
    `AGENTS.md`; richer presets can load `SOUL.md`, `IDENTITY.md`,
    `USER.md`, and `MEMORY.md` according to their configured order.
-2. **Unprocessed session summaries** — all summaries written since the
-   last dreaming pass, ordered chronologically. These are the session
-   DAG nodes at depth 0 with `kind = "session"`.
+2. **Unprocessed completed transcript projections** — transcript sources
+   surfaced since the last content watermark, ordered chronologically.
+   The retained source is never rewritten; the projection removes tool
+   results and preserves tool-call markers.
 3. **Current entity graph snapshot** — all entities with their aspects
    and attributes, plus relationship edges. This is the agent's view
    of existing long-term memory.
@@ -210,15 +212,16 @@ The dreaming agent receives (via normal session-start hook):
 
 ### Self-Improvement Loop
 
-Because dreaming sessions are normal sessions that get summarized and
-stored, a natural self-improvement cycle emerges:
+Because Dreaming sessions are normal sessions whose transcripts are
+retained and completed through the same lifecycle, a natural
+self-improvement cycle emerges:
 
 1. **Dream pass N** — agent reviews sessions, updates graph, makes
    judgment calls about what to merge/prune/keep.
-2. **Dream pass N is summarized** — the dreaming session's transcript
-   and decisions become part of the agent's history.
-3. **Dream pass N+1** — agent sees the summary of dream pass N in its
-   session history. It can evaluate: did those merges make retrieval
+2. **Dream pass N is retained** — the Dreaming session's transcript and
+   decisions become part of the agent's history.
+3. **Dream pass N+1** — the agent sees the completed transcript projection
+   of Dream pass N in its session history. It can evaluate: did those merges make retrieval
    better? Did pruning go too far? Were the right things prioritized?
 4. **Adjustments compound** — the agent refines its approach to memory
    management over time, based on observing its own results.
@@ -256,14 +259,14 @@ or invalid mutations are logged but don't block the rest.
 Dreaming passes operate on deltas, not full graph snapshots. The
 daemon tracks what changed since the last pass:
 
-- New session summaries (already tracked via token counter)
+- New completed transcript projections (tracked by the content watermark)
 - Entities/attributes created or modified since last pass (via
   `updated_at` timestamp or a monotonic version column)
 
 The dreaming model receives:
 
 1. Identity context (AGENTS.md, SOUL.md, etc.)
-2. New session summaries since last pass
+2. New completed transcript projections since last pass
 3. Only entities/attributes in the delta (created or modified)
 4. A graph query tool to pull adjacent entities on demand (e.g.
    if the model suspects a merge candidate exists outside the delta)
@@ -283,14 +286,14 @@ On first run (or on-demand via API/CLI), dreaming runs in compaction
 mode:
 
 1. Load the full entity graph (entities + aspects + attributes)
-2. Load a sample of recent session summaries for context
+2. Load a sample of recent completed transcript projections for context
 3. Reason about the graph: find duplicates, merge them, prune junk
    attributes, collapse redundant aspects
 4. Output the same mutation format
 
 This is how we clean up existing bloated databases. It's the same
 agent with a different input emphasis: graph-heavy instead of
-summary-heavy.
+transcript-heavy.
 
 A CLI command triggers it explicitly:
 
@@ -310,8 +313,8 @@ One writer for the knowledge graph at a time.
 | Config                    | Behavior                                              |
 |---------------------------|-------------------------------------------------------|
 | `dreaming.enabled: false` | Pipeline V2 (current behavior, default)               |
-| `dreaming.enabled: true`  | Pipeline V2 off. Summaries accumulate, dreaming       |
-|                           | consolidates the knowledge graph on token threshold   |
+| `dreaming.enabled: true`  | Pipeline V2 off. Completed transcript projections accumulate; |
+|                           | Dreaming consolidates the knowledge graph on token threshold |
 
 This is an architectural simplification, not an additive layer. The
 existing database schema (entities, aspects, attributes) is preserved

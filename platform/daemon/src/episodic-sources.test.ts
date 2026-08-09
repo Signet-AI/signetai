@@ -9,6 +9,7 @@ import {
 	readRecentEpisodicSources,
 	searchEpisodicSources,
 } from "./episodic-sources";
+import { markSessionTranscriptCompleted, upsertSessionTranscript } from "./session-transcripts";
 
 describe("episodic source selection", () => {
 	let dir = "";
@@ -83,86 +84,70 @@ describe("episodic source selection", () => {
 		expect(read("summary:chunk-a")).toBeNull();
 		expect(getDbAccessor().withReadDb((db) => readRecentEpisodicSources(db, "ant", 10))).toMatchObject([
 			{ kind: "summary", id: "compaction-a" },
-			{ kind: "transcript", id: "live-a" },
 			{ kind: "artifact", id: "sources/note.md" },
 		]);
 		expect(
 			getDbAccessor().withReadDb((db) =>
 				readRecentEpisodicSources(db, "ant", 10, undefined, "2026-08-01T10:30:00.000Z"),
 			),
-		).toMatchObject([
-			{ kind: "summary", id: "compaction-a" },
-			{ kind: "transcript", id: "live-a" },
-		]);
+		).toMatchObject([{ kind: "summary", id: "compaction-a" }]);
 	});
 
-	it("marks transcripts completed when a session-end summary job is triggered, even if it fails", () => {
+	it("marks transcripts completed by the session-end marker, independent of the retired summary queue", () => {
 		getDbAccessor().withWriteTx((db) => {
 			db.prepare(
 				`INSERT INTO session_transcripts
-				 (session_key, content, harness, project, agent_id, created_at, updated_at)
+				 (session_key, content, harness, project, agent_id, created_at, updated_at, completed_at)
 				 VALUES ('running-a', 'intermediate investigation states', 'pi', '/repo', 'ant',
-				  '2026-08-07T06:14:00.000Z', '2026-08-07T06:30:00.000Z')`,
+				  '2026-08-07T06:14:00.000Z', '2026-08-07T06:30:00.000Z', NULL)`,
 			).run();
 			db.prepare(
 				`INSERT INTO session_transcripts
-				 (session_key, content, harness, project, agent_id, created_at, updated_at)
+				 (session_key, content, harness, project, agent_id, created_at, updated_at, completed_at)
 				 VALUES ('settled-b', 'settled outcome', 'pi', '/repo', 'ant',
-				  '2026-08-07T05:00:00.000Z', '2026-08-07T05:20:00.000Z')`,
+				  '2026-08-07T05:00:00.000Z', '2026-08-07T05:20:00.000Z', '2026-08-07T05:20:00.000Z')`,
 			).run();
 			db.prepare(
 				`INSERT INTO session_transcripts
-				 (session_key, content, harness, project, agent_id, created_at, updated_at)
+				 (session_key, content, harness, project, agent_id, created_at, updated_at, completed_at)
 				 VALUES ('timed-out-c', 'outcome despite summary timeout', 'pi', '/repo', 'ant',
-				  '2026-08-07T04:00:00.000Z', '2026-08-07T04:30:00.000Z')`,
-			).run();
-			db.prepare(
-				`INSERT INTO session_transcripts
-				 (session_key, content, harness, project, agent_id, created_at, updated_at)
-				 VALUES ('checkpointed-d', 'mid-session checkpointed states', 'pi', '/repo', 'ant',
-				  '2026-08-07T07:00:00.000Z', '2026-08-07T07:10:00.000Z')`,
-			).run();
-			// Session ended normally: summary job triggered (status pending).
-			db.prepare(
-				`INSERT INTO summary_jobs
-				 (id, session_key, session_id, harness, project, agent_id, transcript,
-				  trigger, captured_at, started_at, ended_at, status, created_at)
-				 VALUES ('job-settled', 'settled-b', 'settled-b', 'pi', '/repo', 'ant',
-				  'settled outcome', 'session_end', '2026-08-07T05:20:00.000Z',
-				  '2026-08-07T05:20:00.000Z', '2026-08-07T05:20:00.000Z', 'pending',
-				  '2026-08-07T05:20:00.000Z')`,
-			).run();
-			// Summary timed out / failed: the job row still proves the session ended.
-			db.prepare(
-				`INSERT INTO summary_jobs
-				 (id, session_key, session_id, harness, project, agent_id, transcript,
-				  trigger, captured_at, started_at, ended_at, status, created_at)
-				 VALUES ('job-timed-out', 'timed-out-c', 'timed-out-c', 'pi', '/repo', 'ant',
-				  'outcome despite summary timeout', 'session_end', '2026-08-07T04:30:00.000Z',
-				  '2026-08-07T04:30:00.000Z', null, 'failed',
-				  '2026-08-07T04:30:00.000Z')`,
-			).run();
-			// A mid-session checkpoint extract is NOT a session-end signal.
-			db.prepare(
-				`INSERT INTO summary_jobs
-				 (id, session_key, session_id, harness, project, agent_id, transcript,
-				  trigger, captured_at, started_at, ended_at, status, created_at)
-				 VALUES ('job-checkpoint', 'checkpointed-d', 'checkpointed-d', 'pi', '/repo', 'ant',
-				  'mid-session checkpointed states', 'checkpoint_extract', '2026-08-07T07:10:00.000Z',
-				  '2026-08-07T07:10:00.000Z', null, 'completed',
-				  '2026-08-07T07:10:00.000Z')`,
+				  '2026-08-07T04:00:00.000Z', '2026-08-07T04:30:00.000Z', '2026-08-07T04:30:00.000Z')`,
 			).run();
 		});
 
 		const read = (from: string) => getDbAccessor().withReadDb((db) => readEpisodicSource(db, { agentId: "ant", from }));
-		// A still-running session has no session-end job yet: not settled evidence.
 		expect(read("transcript:running-a")).toMatchObject({ kind: "transcript", completed: false });
-		// A session-end summary job was triggered: settled, even while pending.
 		expect(read("transcript:settled-b")).toMatchObject({ kind: "transcript", completed: true });
-		// A failed/timed-out summary job still proves the session ended.
 		expect(read("transcript:timed-out-c")).toMatchObject({ kind: "transcript", completed: true });
-		// A mid-session checkpoint extract does not settle the session.
-		expect(read("transcript:checkpointed-d")).toMatchObject({ kind: "transcript", completed: false });
+
+		const completedOnly = getDbAccessor().withReadDb((db) =>
+			readRecentEpisodicSources(db, "ant", 10, ["transcript"], null, "oldest"),
+		);
+		expect(completedOnly.map((source) => source.id)).toEqual(["timed-out-c", "settled-b"]);
+		upsertSessionTranscript("settled-b", "settled outcome", "pi", "/repo", "ant", "2026-08-07T07:05:00.000Z");
+		const unchanged = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare(
+						"SELECT updated_at, completed_at, content_hash FROM session_transcripts WHERE session_key = 'settled-b'",
+					)
+					.get() as {
+					updated_at: string;
+					completed_at: string;
+					content_hash: string;
+				},
+		);
+		expect(unchanged).toEqual({
+			updated_at: "2026-08-07T05:20:00.000Z",
+			completed_at: "2026-08-07T05:20:00.000Z",
+			content_hash: expect.any(String),
+		});
+		expect(markSessionTranscriptCompleted("running-a", "ant", "2026-08-07T07:00:00.000Z")).toBe(true);
+		expect(markSessionTranscriptCompleted("running-a", "ant", "2026-08-07T07:01:00.000Z")).toBe(false);
+		const newlyCompleted = getDbAccessor().withReadDb((db) =>
+			readRecentEpisodicSources(db, "ant", 10, ["transcript"], "2026-08-07T06:30:00.000Z", "oldest"),
+		);
+		expect(newlyCompleted.map((source) => source.id)).toEqual(["running-a"]);
 	});
 
 	it("orders timezone-less artifact timestamps like SQLite's UTC cursor", () => {
@@ -335,11 +320,9 @@ describe("episodic source selection", () => {
 		const searched = getDbAccessor().withReadDb((db) =>
 			searchEpisodicSources(db, { agentId: "ant", query: "", since }),
 		);
-		expect(searched.map((source) => source.id)).toEqual(expect.arrayContaining(["sources/sentinel.md"]));
-	});
-
-	it("compares the since bound across ISO and space timestamp formats (#1149)", () => {
-		// Regression for #1149: the watermark can be ISO (an artifact's
+		expect(searched.map((source) => source.id)).toEqual(
+			expect.arrayContaining(["sources/sentinel.md", "sources/modern.md"]),
+		);
 		// captured_at) while rows use SQLite space format. A raw string
 		// comparison would lexically misorder them (' ' < 'T'), silently
 		// dropping a space-format row captured after an ISO watermark.
@@ -364,11 +347,11 @@ describe("episodic source selection", () => {
 
 		// ISO watermark: both space-format rows are captured after it and
 		// must be listed.
-		const searched = getDbAccessor().withReadDb((db) =>
+		const isoSearched = getDbAccessor().withReadDb((db) =>
 			searchEpisodicSources(db, { agentId: "ant", query: "", since: "2026-08-01T11:00:00.000Z" }),
 		);
-		expect(searched.map((source) => source.id)).toEqual(
-			expect.arrayContaining(["sources/space-format.md", "space-summary"]),
+		expect(isoSearched.map((source) => source.id)).toEqual(
+			expect.arrayContaining(["sources/space-format.md", "sources/modern.md", "sources/sentinel.md"]),
 		);
 
 		// A space-format before bound still excludes rows captured after it.
@@ -381,7 +364,7 @@ describe("episodic source selection", () => {
 			}),
 		);
 		expect(bounded.map((source) => source.id)).toEqual(
-			expect.arrayContaining(["sources/space-format.md", "space-summary"]),
+			expect.arrayContaining(["sources/space-format.md", "sources/modern.md", "sources/sentinel.md"]),
 		);
 	});
 

@@ -268,6 +268,8 @@ function createMemoryDb(
 			project TEXT,
 			created_at TEXT NOT NULL,
 			updated_at TEXT NOT NULL,
+			completed_at TEXT,
+			content_hash TEXT,
 			PRIMARY KEY (session_key, agent_id)
 		)
 	`);
@@ -481,6 +483,28 @@ function createMemoryDb(
 function openTestDb(): Database {
 	const dbPath = join(TEST_DIR, "memory", "memories.db");
 	return new Database(dbPath);
+}
+
+function insertCompletedTranscript(
+	db: Database,
+	options: { sessionKey: string; content: string; agentId?: string; harness?: string; project?: string },
+): void {
+	const agentId = options.agentId ?? "default";
+	const timestamp = "2026-03-25T10:00:00.000Z";
+	db.prepare(
+		`INSERT INTO session_transcripts
+			(session_key, content, harness, project, agent_id, created_at, updated_at, completed_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+	).run(
+		options.sessionKey,
+		options.content,
+		options.harness ?? "codex",
+		options.project ?? null,
+		agentId,
+		timestamp,
+		timestamp,
+		timestamp,
+	);
 }
 
 function writeAgentYaml(content: string): void {
@@ -772,85 +796,6 @@ describe("handleSessionStart", () => {
 
 		expect(restarted.memories.length).toBe(1);
 		expect(restarted.inject).toContain("Fresh startup memory");
-	});
-
-	test.serial("clear session-start recovers missing session-end from stored prompt transcript", async () => {
-		createMemoryDb([{ content: "Reset startup memory", importance: 0.9 }]);
-		const sessionKey = "claude-reset-recovery-session";
-		const project = "/home/user/signetai";
-		const transcript =
-			"User: please preserve this reset session transcript for summary recovery.\nAssistant: the prompt-submit snapshot should be summarized when clear starts the next session.\n".repeat(
-				8,
-			);
-
-		const initial = await handleSessionStart({ harness: "claude-code", sessionKey, project });
-		expect(initial.memories.length).toBe(1);
-
-		await handleUserPromptSubmit({
-			harness: "claude-code",
-			sessionKey,
-			project,
-			userPrompt: "please preserve this reset session transcript",
-			transcript,
-		});
-
-		const promptDb = openTestDb();
-		try {
-			const stored = promptDb
-				.prepare("SELECT content FROM session_transcripts WHERE session_key = ? AND agent_id = ?")
-				.get(sessionKey, "default") as { content: string } | undefined;
-			expect(stored?.content).toContain("preserve this reset session transcript");
-		} finally {
-			promptDb.close();
-		}
-
-		const restarted = await handleSessionStart({
-			harness: "claude-code",
-			sessionKey: "claude-reset-after-clear-session",
-			project,
-			source: "clear",
-		});
-		expect(restarted.memories.length).toBe(1);
-		expect(restarted.inject).toContain("Reset startup memory");
-
-		await handleSessionStart({
-			harness: "claude-code",
-			sessionKey: "claude-reset-after-clear-session-2",
-			project,
-			source: "clear",
-		});
-
-		const db = openTestDb();
-		try {
-			const jobs = db
-				.prepare(
-					`SELECT session_key, harness, project, agent_id, transcript, trigger, status
-					 FROM summary_jobs
-					 WHERE session_key = ?
-					 ORDER BY created_at ASC`,
-				)
-				.all(sessionKey) as Array<{
-				session_key: string | null;
-				harness: string;
-				project: string | null;
-				agent_id: string;
-				transcript: string;
-				trigger: string;
-				status: string;
-			}>;
-			const stored = db.prepare("SELECT content FROM session_transcripts WHERE session_key = ?").get(sessionKey);
-
-			expect(jobs).toHaveLength(1);
-			expect(jobs[0]?.harness).toBe("claude-code");
-			expect(jobs[0]?.project).toBe(project);
-			expect(jobs[0]?.agent_id).toBe("default");
-			expect(jobs[0]?.trigger).toBe("session_end");
-			expect(jobs[0]?.status).toBe("pending");
-			expect(jobs[0]?.transcript).toContain("preserve this reset session transcript");
-			expect(stored).toBeNull();
-		} finally {
-			db.close();
-		}
 	});
 
 	test.serial("deduplicates session-start by agent and harness scope", async () => {
@@ -1325,148 +1270,6 @@ memory:
 		expect(result.memories.some((memory) => memory.content === "Shared release checklist")).toBe(true);
 		expect(result.memories.some((memory) => memory.content === "Hidden private note")).toBe(false);
 	});
-
-	test.serial("predictive context honors shared visibility", async () => {
-		const project = "/tmp/shared-prediction";
-		createMemoryDb([
-			...Array.from({ length: 51 }, (_, i) => ({
-				content: `Noise memory ${i}`,
-				importance: 0.95,
-				agent_id: "agent-shared",
-				visibility: "global",
-			})),
-			{
-				content: "Shared shardaware rollout memory",
-				importance: 0.2,
-				agent_id: "agent-owner",
-				visibility: "global",
-				project,
-			},
-		]);
-		upsertAgent("agent-shared", "shared");
-
-		const db = openTestDb();
-		db.prepare(
-			`INSERT INTO summary_jobs (
-				id, session_key, harness, project, agent_id, transcript,
-				status, attempts, max_attempts, created_at, completed_at
-			) VALUES (?, ?, ?, ?, ?, ?, 'completed', 1, 3, ?, ?)`,
-		).run(
-			"job-1",
-			"sess-1",
-			"codex",
-			project,
-			"agent-shared",
-			"We discussed shardaware rollout planning for the release train.",
-			"2026-03-25T10:00:00.000Z",
-			"2026-03-25T10:01:00.000Z",
-		);
-		db.prepare(
-			`INSERT INTO summary_jobs (
-				id, session_key, harness, project, agent_id, transcript,
-				status, attempts, max_attempts, created_at, completed_at
-			) VALUES (?, ?, ?, ?, ?, ?, 'completed', 1, 3, ?, ?)`,
-		).run(
-			"job-2",
-			"sess-2",
-			"codex",
-			project,
-			"agent-shared",
-			"We revisited shardaware rollout coordination and deployment notes.",
-			"2026-03-25T11:00:00.000Z",
-			"2026-03-25T11:01:00.000Z",
-		);
-		db.close();
-
-		const result = await handleSessionStart({
-			harness: "test",
-			agentId: "agent-shared",
-			project,
-		});
-
-		expect(result.memories.some((memory) => memory.content === "Shared shardaware rollout memory")).toBe(true);
-	});
-
-	test.serial("predictive context ignores recurring stopwords", async () => {
-		const project = "/tmp/stopword-prediction";
-		createMemoryDb([
-			{
-				content: "user path issue check this that with only",
-				importance: 0.1,
-				project,
-			},
-		]);
-
-		const db = openTestDb();
-		for (let i = 1; i <= 2; i += 1) {
-			db.prepare(
-				`INSERT INTO summary_jobs (
-					id, session_key, harness, project, agent_id, transcript,
-					status, attempts, max_attempts, created_at, completed_at
-				) VALUES (?, ?, ?, ?, 'default', ?, 'completed', 1, 3, ?, ?)`,
-			).run(
-				`stopword-job-${i}`,
-				`stopword-sess-${i}`,
-				"codex",
-				project,
-				"user path issue check this that with only",
-				`2026-03-25T1${i}:00:00.000Z`,
-				`2026-03-25T1${i}:01:00.000Z`,
-			);
-		}
-		db.close();
-
-		const result = await handleSessionStart({ harness: "test", project });
-
-		expect(result.memories.some((memory) => memory.content === "user path issue check this that with only")).toBe(
-			false,
-		);
-	});
-
-	test.serial("predictive context is scoped to the active project", async () => {
-		const projectA = "/tmp/prediction-a";
-		const projectB = "/tmp/prediction-b";
-		createMemoryDb([
-			...Array.from({ length: 51 }, (_, i) => ({
-				content: `High priority noise ${i}`,
-				importance: 0.95,
-			})),
-			{
-				content: "Project A shardaware rollout memory",
-				importance: 0.1,
-				project: projectA,
-			},
-			{
-				content: "Project B shardaware rollout memory",
-				importance: 0.1,
-				project: projectB,
-			},
-		]);
-
-		const db = openTestDb();
-		for (let i = 1; i <= 2; i += 1) {
-			db.prepare(
-				`INSERT INTO summary_jobs (
-					id, session_key, harness, project, agent_id, transcript,
-					status, attempts, max_attempts, created_at, completed_at
-				) VALUES (?, ?, ?, ?, 'default', ?, 'completed', 1, 3, ?, ?)`,
-			).run(
-				`project-job-${i}`,
-				`project-sess-${i}`,
-				"codex",
-				projectA,
-				"shardaware rollout coordination stayed active across sessions.",
-				`2026-03-25T1${i}:00:00.000Z`,
-				`2026-03-25T1${i}:01:00.000Z`,
-			);
-		}
-		db.close();
-
-		const result = await handleSessionStart({ harness: "test", project: projectA });
-
-		expect(result.memories.some((memory) => memory.content === "Project A shardaware rollout memory")).toBe(true);
-		expect(result.memories.some((memory) => memory.content === "Project B shardaware rollout memory")).toBe(false);
-	});
 });
 
 // ============================================================================
@@ -1516,6 +1319,282 @@ hooks:
 		const result = handlePreCompaction({ harness: "test" });
 
 		expect(result.summaryPrompt).not.toContain("Should not appear");
+	});
+});
+
+describe("direct transcript regressions", () => {
+	test.serial("clear session-start completes the stored prompt transcript directly", async () => {
+		createMemoryDb([{ content: "Reset startup memory", importance: 0.9 }]);
+		const sessionKey = "claude-reset-recovery-session";
+		const transcript =
+			"User: please preserve this reset session transcript.\nAssistant: the prompt-submit snapshot must survive clear recovery.\n".repeat(
+				8,
+			);
+
+		await handleSessionStart({ harness: "claude-code", sessionKey, project: "/home/user/signetai" });
+		await handleUserPromptSubmit({
+			harness: "claude-code",
+			sessionKey,
+			project: "/home/user/signetai",
+			userPrompt: "please preserve this reset session transcript",
+			transcript,
+		});
+		await handleSessionStart({
+			harness: "claude-code",
+			sessionKey: "claude-reset-after-clear-session",
+			project: "/home/user/signetai",
+			source: "clear",
+		});
+
+		const db = openTestDb();
+		try {
+			const stored = db
+				.prepare(
+					"SELECT content, completed_at, content_hash FROM session_transcripts WHERE session_key = ? AND agent_id = ?",
+				)
+				.get(sessionKey, "default") as
+				| { content: string; completed_at: string | null; content_hash: string | null }
+				| undefined;
+			expect(stored?.content).toContain("preserve this reset session transcript");
+			expect(stored?.completed_at).toBeTruthy();
+			expect(stored?.content_hash).toEqual(expect.any(String));
+			expect(db.prepare("SELECT COUNT(*) AS count FROM summary_jobs").get()).toEqual({ count: 0 });
+		} finally {
+			db.close();
+		}
+	});
+
+	test.serial("predictive context honors shared visibility from completed transcripts", async () => {
+		const project = "/tmp/shared-prediction";
+		createMemoryDb([
+			...Array.from({ length: 51 }, (_, i) => ({
+				content: `Noise memory ${i}`,
+				importance: 0.95,
+				agent_id: "agent-shared",
+				visibility: "global",
+			})),
+			{
+				content: "Shared shardaware rollout memory",
+				importance: 0.2,
+				agent_id: "agent-owner",
+				visibility: "global",
+				project,
+			},
+		]);
+		const db = openTestDb();
+		insertCompletedTranscript(db, {
+			sessionKey: "sess-shared-1",
+			content: "We discussed shardaware rollout planning for the release train.",
+			agentId: "agent-shared",
+			project,
+		});
+		insertCompletedTranscript(db, {
+			sessionKey: "sess-shared-2",
+			content: "We revisited shardaware rollout coordination and deployment notes.",
+			agentId: "agent-shared",
+			project,
+		});
+		db.close();
+
+		const result = await handleSessionStart({ harness: "test", agentId: "agent-shared", project });
+		expect(result.memories.some((memory) => memory.content === "Shared shardaware rollout memory")).toBe(true);
+	});
+
+	test.serial("predictive context ignores recurring stopwords in completed transcripts", async () => {
+		const project = "/tmp/stopword-prediction";
+		createMemoryDb([{ content: "user path issue check this that with only", importance: 0.1, project }]);
+		const db = openTestDb();
+		insertCompletedTranscript(db, {
+			sessionKey: "stopword-sess-1",
+			content: "user path issue check this that with only",
+			project,
+		});
+		insertCompletedTranscript(db, {
+			sessionKey: "stopword-sess-2",
+			content: "user path issue check this that with only",
+			project,
+		});
+		db.close();
+
+		const result = await handleSessionStart({ harness: "test", project });
+		expect(result.memories.some((memory) => memory.content === "user path issue check this that with only")).toBe(
+			false,
+		);
+	});
+
+	test.serial("predictive context is scoped to the active project", async () => {
+		const projectA = "/tmp/prediction-a";
+		const projectB = "/tmp/prediction-b";
+		createMemoryDb([
+			...Array.from({ length: 51 }, (_, i) => ({ content: `High priority noise ${i}`, importance: 0.95 })),
+			{ content: "Project A shardaware rollout memory", importance: 0.1, project: projectA },
+			{ content: "Project B shardaware rollout memory", importance: 0.1, project: projectB },
+		]);
+		const db = openTestDb();
+		insertCompletedTranscript(db, {
+			sessionKey: "project-sess-1",
+			content: "shardaware rollout coordination stayed active across sessions.",
+			project: projectA,
+		});
+		insertCompletedTranscript(db, {
+			sessionKey: "project-sess-2",
+			content: "shardaware rollout coordination stayed active across sessions.",
+			project: projectA,
+		});
+		db.close();
+
+		const result = await handleSessionStart({ harness: "test", project: projectA });
+		expect(result.memories.some((memory) => memory.content === "Project A shardaware rollout memory")).toBe(true);
+		expect(result.memories.some((memory) => memory.content === "Project B shardaware rollout memory")).toBe(false);
+	});
+
+	test.serial("writes full canonical transcript content without a summary input copy", async () => {
+		createMemoryDb([]);
+		const transcriptPath = join(TEST_DIR, "long-transcript.txt");
+		const tailMarker = "LOSSLESS_RETENTION_TAIL_MARKER";
+		const longTranscript = `User: ${"a".repeat(101_000)} ${tailMarker}\nAssistant: retained the full canonical transcript.\n`;
+		writeFileSync(transcriptPath, longTranscript);
+
+		const result = await handleSessionEnd({
+			harness: "test",
+			transcriptPath,
+			sessionKey: "sess-long-retention",
+			sessionId: "sess-long-retention",
+			cwd: "/home/user/signetai",
+		});
+		expect(result.queued).toBe(true);
+		await flushSessionEndDeferredWork();
+
+		const transcript = readFileSync(join(TEST_DIR, "memory", "test", "transcripts", "transcript.jsonl"), "utf-8");
+		expect(transcript).toContain(tailMarker);
+		expect(transcript).not.toContain("[truncated]");
+
+		const db = openTestDb();
+		try {
+			const stored = db
+				.prepare("SELECT content FROM session_transcripts WHERE session_key = ? AND agent_id = ?")
+				.get("sess-long-retention", "default") as { content: string } | undefined;
+			expect(stored?.content).toContain(tailMarker);
+			expect(
+				db.prepare("SELECT COUNT(*) AS count FROM summary_jobs WHERE session_key = ?").get("sess-long-retention"),
+			).toEqual({
+				count: 0,
+			});
+		} finally {
+			db.close();
+		}
+	});
+
+	test.serial("keeps immutable transcript artifacts distinct when a harness reuses its session ID", async () => {
+		createMemoryDb([]);
+		const transcriptAPath = join(TEST_DIR, "resumed-claude-a.txt");
+		const transcriptBPath = join(TEST_DIR, "resumed-claude-b.txt");
+		writeFileSync(
+			transcriptAPath,
+			"User: first close asked about release channels.\nAssistant: first close retained release-channel evidence.\n".repeat(
+				8,
+			),
+		);
+		writeFileSync(
+			transcriptBPath,
+			"User: resumed close investigated daemon startup failures.\nAssistant: resumed close retained daemon evidence.\n".repeat(
+				8,
+			),
+		);
+
+		await handleSessionEnd({
+			harness: "claude-code",
+			transcriptPath: transcriptAPath,
+			sessionKey: "claude-resumed-session",
+			sessionId: "reused-claude-uuid",
+			cwd: "/home/user/signetai",
+		});
+		await handleSessionEnd({
+			harness: "claude-code",
+			transcriptPath: transcriptBPath,
+			sessionKey: "claude-resumed-session",
+			sessionId: "reused-claude-uuid",
+			cwd: "/home/user/signetai",
+		});
+		await flushSessionEndDeferredWork();
+
+		const db = openTestDb();
+		try {
+			const artifacts = (
+				db.prepare("SELECT source_kind, session_id, session_key, source_path FROM memory_artifacts").all() as Array<{
+					source_kind: string;
+					session_id: string;
+					session_key: string | null;
+					source_path: string;
+				}>
+			).filter(
+				(row) =>
+					row.source_kind === "transcript" &&
+					row.session_key === "claude-resumed-session" &&
+					row.source_path.endsWith("--transcript.md"),
+			);
+			expect(artifacts).toHaveLength(2);
+			expect(artifacts[0]?.session_id).not.toBe(artifacts[1]?.session_id);
+		} finally {
+			db.close();
+		}
+	});
+
+	test.serial("creates distinct transcript artifacts when session-end events reuse a session key", async () => {
+		createMemoryDb([]);
+		const transcriptAPath = join(TEST_DIR, "transcript-a.txt");
+		const transcriptBPath = join(TEST_DIR, "transcript-b.txt");
+		writeFileSync(
+			transcriptAPath,
+			"User: keep the periodic heartbeat transcript separate from prior runs.\nAssistant: confirmed the first heartbeat evidence.\n".repeat(
+				8,
+			),
+		);
+		writeFileSync(
+			transcriptBPath,
+			"User: make sure the second heartbeat session does not overwrite the first one.\nAssistant: confirmed the second heartbeat evidence.\n".repeat(
+				8,
+			),
+		);
+
+		const first = await handleSessionEnd({
+			harness: "test",
+			transcriptPath: transcriptAPath,
+			sessionKey: "agent:main:main",
+			cwd: "/home/user/signetai",
+		});
+		const second = await handleSessionEnd({
+			harness: "test",
+			transcriptPath: transcriptBPath,
+			sessionKey: "agent:main:main",
+			cwd: "/home/user/signetai",
+		});
+		expect(first.queued).toBe(true);
+		expect(second.queued).toBe(true);
+		await flushSessionEndDeferredWork();
+
+		const db = openTestDb();
+		try {
+			const artifacts = (
+				db.prepare("SELECT source_kind, session_key, source_path, captured_at FROM memory_artifacts").all() as Array<{
+					source_kind: string;
+					session_key: string | null;
+					source_path: string;
+					captured_at: string;
+				}>
+			)
+				.filter(
+					(row) =>
+						row.source_kind === "transcript" &&
+						row.session_key === "agent:main:main" &&
+						row.source_path.endsWith("--transcript.md"),
+				)
+				.sort((a, b) => a.captured_at.localeCompare(b.captured_at));
+			expect(artifacts).toHaveLength(2);
+			expect(artifacts[0]?.source_path).not.toBe(artifacts[1]?.source_path);
+		} finally {
+			db.close();
+		}
 	});
 });
 
@@ -1692,117 +1771,83 @@ describe("handleSessionEnd", () => {
 		expect(transcript).toContain('"role":"user"');
 		expect(transcript).toContain("please update packages/daemon/src/hooks.ts");
 		expect(manifest).toContain("summary_path: null");
-		expect(manifest).toContain('summary_status: "pending"');
+		expect(manifest).toContain('summary_status: "not_requested"');
 		expect(manifest).toContain('transcript_path: "memory/');
 		expect(manifest).toContain('transcript_status: "completed"');
 		expect(manifest).toContain('canonical_transcript_path: "memory/test/transcripts/transcript.jsonl"');
-	});
-
-	test.serial("resumed session-end with same harness session id gets distinct immutable artifact ids", async () => {
-		createMemoryDb([]);
-		const transcriptPath = join(TEST_DIR, "resumed-claude-transcript.txt");
-		const sessionKey = "claude-resumed-session";
-		const harnessSessionId = "reused-claude-uuid";
-		const project = "/home/user/signetai";
-
-		writeFileSync(
-			transcriptPath,
-			"User: first part asked about release channels.\nAssistant: first close summarized release-channel work.\n".repeat(
-				8,
-			),
-		);
-		expect(
-			(
-				await handleSessionEnd({
-					harness: "claude-code",
-					transcriptPath,
-					sessionKey,
-					sessionId: harnessSessionId,
-					cwd: project,
-				})
-			).queued,
-		).toBe(true);
-
-		writeFileSync(
-			transcriptPath,
-			"User: resumed part investigated daemon startup failures and backup pruning.\nAssistant: resumed close summarized daemon migration backup fixes.\n".repeat(
-				8,
-			),
-		);
-		expect(
-			(
-				await handleSessionEnd({
-					harness: "claude-code",
-					transcriptPath,
-					sessionKey,
-					sessionId: harnessSessionId,
-					cwd: project,
-				})
-			).queued,
-		).toBe(true);
-
 		const db = openTestDb();
 		try {
-			const jobs = db
+			const row = db
 				.prepare(
-					`SELECT id, session_id, session_key, captured_at, transcript
-					 FROM summary_jobs
-					 WHERE session_key = ?
-					 ORDER BY rowid ASC`,
+					"SELECT completed_at, content_hash FROM session_transcripts WHERE agent_id = 'default' AND session_key = 'sess-ledger'",
 				)
-				.all(sessionKey) as Array<{
-				id: string;
-				session_id: string;
-				session_key: string;
-				captured_at: string;
-				transcript: string;
-			}>;
-
-			expect(jobs).toHaveLength(2);
-			expect(jobs[0].session_key).toBe(sessionKey);
-			expect(jobs[1].session_key).toBe(sessionKey);
-			expect(jobs[0].session_id).not.toBe(harnessSessionId);
-			expect(jobs[1].session_id).not.toBe(harnessSessionId);
-			expect(jobs[0].session_id).not.toBe(jobs[1].session_id);
-			expect(jobs[0].session_id).toStartWith(`session-end:path:${transcriptPath}:`);
-			expect(jobs[1].session_id).toStartWith(`session-end:path:${transcriptPath}:`);
-
-			await writeSummaryArtifact({
-				agentId: "default",
-				sessionId: jobs[0].session_id,
-				sessionKey,
-				project,
-				harness: "claude-code",
-				capturedAt: jobs[0].captured_at,
-				startedAt: null,
-				endedAt: jobs[0].captured_at,
-				summary: "# First resumed session notes\n\nFirst close content.",
-				provider: null,
-			});
-			await writeSummaryArtifact({
-				agentId: "default",
-				sessionId: jobs[1].session_id,
-				sessionKey,
-				project,
-				harness: "claude-code",
-				capturedAt: jobs[1].captured_at,
-				startedAt: null,
-				endedAt: jobs[1].captured_at,
-				summary: "# Second resumed session notes\n\nDifferent close content.",
-				provider: null,
-			});
-
-			const summaries = db
-				.prepare(
-					`SELECT COUNT(*) AS count
-					 FROM memory_artifacts
-					 WHERE session_key = ? AND source_kind = 'summary'`,
-				)
-				.get(sessionKey) as { count: number };
-			expect(summaries.count).toBe(2);
+				.get() as { completed_at: string | null; content_hash: string | null } | undefined;
+			expect(row?.completed_at).toBeTruthy();
+			expect(row?.content_hash).toEqual(expect.any(String));
 		} finally {
 			db.close();
 		}
+	});
+
+	test.serial("makes session-end completion and content hashing idempotent without a summary job", async () => {
+		createMemoryDb([]);
+		const firstTranscript =
+			"User: inspect the release boundary and preserve the original transcript.\nAssistant: the direct Dreaming path is ready.\n".repeat(
+				8,
+			);
+		await handleSessionEnd({
+			harness: "test",
+			sessionKey: "hash-session",
+			sessionId: "hash-session",
+			transcript: firstTranscript,
+		});
+		const firstDb = openTestDb();
+		const first = firstDb
+			.prepare(
+				"SELECT completed_at, content_hash, updated_at FROM session_transcripts WHERE agent_id = 'default' AND session_key = 'hash-session'",
+			)
+			.get() as { completed_at: string | null; content_hash: string; updated_at: string };
+		firstDb.close();
+		expect(first.completed_at).toBeTruthy();
+		expect(first.content_hash).toEqual(expect.any(String));
+
+		await handleSessionEnd({
+			harness: "test",
+			sessionKey: "hash-session",
+			sessionId: "hash-session",
+			transcript: firstTranscript,
+		});
+		const secondDb = openTestDb();
+		const second = secondDb
+			.prepare(
+				"SELECT completed_at, content_hash, updated_at FROM session_transcripts WHERE agent_id = 'default' AND session_key = 'hash-session'",
+			)
+			.get() as { completed_at: string | null; content_hash: string; updated_at: string };
+		const sameContentJobs = secondDb
+			.prepare(
+				"SELECT COUNT(*) AS count FROM transcript_capture_jobs WHERE agent_id = 'default' AND session_key = 'hash-session'",
+			)
+			.get() as { count: number };
+		secondDb.close();
+		expect(second).toEqual(first);
+		expect(sameContentJobs.count).toBe(1);
+
+		const changedTranscript = `${firstTranscript}\nAssistant: the completion marker must move only for changed content.`;
+		await handleSessionEnd({
+			harness: "test",
+			sessionKey: "hash-session",
+			sessionId: "hash-session",
+			transcript: changedTranscript,
+		});
+		const changedDb = openTestDb();
+		const changed = changedDb
+			.prepare(
+				"SELECT completed_at, content_hash FROM session_transcripts WHERE agent_id = 'default' AND session_key = 'hash-session'",
+			)
+			.get() as { completed_at: string | null; content_hash: string };
+		changedDb.close();
+		expect(changed.completed_at).toBeTruthy();
+		expect(changed.content_hash).not.toBe(first.content_hash);
 	});
 
 	test.serial("preserves an imported session's capture time across canonical episodic records", async () => {
@@ -1872,45 +1917,6 @@ describe("handleSessionEnd", () => {
 
 		await flushSessionEndDeferredWork();
 		expect(existsSync(canonicalPath)).toBe(true);
-	});
-
-	test.serial("writes full canonical transcript artifacts while capping summary input", async () => {
-		createMemoryDb([]);
-		const transcriptPath = join(TEST_DIR, "long-transcript.txt");
-		const tailMarker = "LOSSLESS_RETENTION_TAIL_MARKER";
-		const longTranscript = `User: ${"a".repeat(101_000)} ${tailMarker}\nAssistant: retained the full canonical transcript.\n`;
-		writeFileSync(transcriptPath, longTranscript);
-
-		const result = await handleSessionEnd({
-			harness: "test",
-			transcriptPath,
-			sessionKey: "sess-long-retention",
-			sessionId: "sess-long-retention",
-			cwd: "/home/user/signetai",
-		});
-
-		expect(result.queued).toBe(true);
-		await flushSessionEndDeferredWork();
-
-		const transcript = readFileSync(join(TEST_DIR, "memory", "test", "transcripts", "transcript.jsonl"), "utf-8");
-		expect(transcript).toContain(tailMarker);
-		expect(transcript).not.toContain("[truncated]");
-
-		const db = openTestDb();
-		try {
-			const stored = db
-				.prepare("SELECT content FROM session_transcripts WHERE session_key = ? AND agent_id = ?")
-				.get("sess-long-retention", "default") as { content: string } | undefined;
-			const queued = db
-				.prepare("SELECT transcript FROM summary_jobs WHERE session_key = ?")
-				.get("sess-long-retention") as { transcript: string } | undefined;
-
-			expect(stored?.content).toContain(tailMarker);
-			expect(queued?.transcript).toContain(tailMarker);
-			expect(queued?.transcript).not.toContain("[truncated]");
-		} finally {
-			db.close();
-		}
 	});
 
 	test.serial("skips deferred graph feedback when pipeline is disabled", async () => {
@@ -1988,7 +1994,7 @@ memory:
 			cwd: "/home/user/signetai",
 		});
 
-		expect(result.queued).toBe(false);
+		expect(result.queued).toBe(true);
 		await flushSessionEndDeferredWork();
 
 		const transcript = readFileSync(join(TEST_DIR, "memory", "test", "transcripts", "transcript.jsonl"), "utf-8");
@@ -2189,69 +2195,6 @@ memory:
 		expect(latestName).toBe(`${expectedToken}--latest.log`);
 	});
 
-	test.serial(
-		"creates fresh canonical artifacts when distinct session-end events reuse the same sessionKey",
-		async () => {
-			createMemoryDb([]);
-			const transcriptAPath = join(TEST_DIR, "transcript-a.txt");
-			const transcriptBPath = join(TEST_DIR, "transcript-b.txt");
-			writeFileSync(
-				transcriptAPath,
-				"User: keep the periodic heartbeat summary separate from prior runs.\nAssistant: confirmed the first heartbeat transcript should get its own immutable artifact set.\n".repeat(
-					8,
-				),
-			);
-			writeFileSync(
-				transcriptBPath,
-				"User: make sure the second heartbeat session does not overwrite the first one.\nAssistant: confirmed the second heartbeat transcript should produce fresh artifacts even with the same shared session key.\n".repeat(
-					8,
-				),
-			);
-
-			const first = await handleSessionEnd({
-				harness: "test",
-				transcriptPath: transcriptAPath,
-				sessionKey: "agent:main:main",
-				cwd: "/home/user/signetai",
-			});
-			const second = await handleSessionEnd({
-				harness: "test",
-				transcriptPath: transcriptBPath,
-				sessionKey: "agent:main:main",
-				cwd: "/home/user/signetai",
-			});
-
-			expect(first.queued).toBe(true);
-			expect(second.queued).toBe(true);
-			await flushSessionEndDeferredWork();
-
-			const files = readdirSync(join(TEST_DIR, "memory")).sort();
-			expect(files.filter((name) => name.endsWith("--manifest.md"))).toHaveLength(2);
-			const transcript = readFileSync(join(TEST_DIR, "memory", "test", "transcripts", "transcript.jsonl"), "utf-8");
-			expect(transcript).toContain("periodic heartbeat summary");
-			expect(transcript).toContain("second heartbeat session");
-
-			const db = openTestDb();
-			try {
-				const sessionIds = db.prepare("SELECT session_id FROM summary_jobs ORDER BY created_at ASC").all() as Array<{
-					session_id: string | null;
-				}>;
-				expect(sessionIds).toHaveLength(2);
-				// Path-based fallback IDs include a content digest suffix so
-				// rotating log files that reuse the same path produce distinct IDs.
-				expect(sessionIds[0]?.session_id).toMatch(
-					new RegExp(`^session-end:path:${transcriptAPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}:[0-9a-f]{16}$`),
-				);
-				expect(sessionIds[1]?.session_id).toMatch(
-					new RegExp(`^session-end:path:${transcriptBPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}:[0-9a-f]{16}$`),
-				);
-				expect(sessionIds[0]?.session_id).not.toBe(sessionIds[1]?.session_id);
-			} finally {
-				db.close();
-			}
-		},
-	);
-
 	test("adds a random suffix when transcript context is unavailable", () => {
 		const first = deriveSessionEndFallbackId("agent:main:main", undefined, "");
 		const second = deriveSessionEndFallbackId("agent:main:main", undefined, "");
@@ -2259,47 +2202,6 @@ memory:
 		expect(first).toMatch(/^session-end:agent:main:main:[0-9a-f-]{36}$/);
 		expect(second).toMatch(/^session-end:agent:main:main:[0-9a-f-]{36}$/);
 		expect(first).not.toBe(second);
-	});
-
-	test.serial("enqueues summary job when pipelineV2 is enabled", async () => {
-		writeAgentYaml(`memory:
-  pipelineV2:
-    enabled: true
-`);
-		createMemoryDb([]);
-		const transcriptPath = join(TEST_DIR, "transcript.txt");
-		writeFileSync(transcriptPath, "x".repeat(1000));
-
-		const result = await handleSessionEnd({
-			harness: "test",
-			transcriptPath,
-			sessionKey: "sess-dreaming",
-			sessionId: "sess-dreaming",
-			cwd: "/home/user/signetai",
-		});
-
-		expect(result.queued).toBe(true);
-		expect(typeof result.jobId).toBe("string");
-	});
-
-	test.serial("skips enqueueing when pipelineV2 is disabled", async () => {
-		writeAgentYaml(`memory:
-  pipelineV2:
-    enabled: false
-`);
-		createMemoryDb([]);
-		const transcriptPath = join(TEST_DIR, "transcript.txt");
-		writeFileSync(transcriptPath, "x".repeat(1000));
-
-		const result = await handleSessionEnd({
-			harness: "test",
-			transcriptPath,
-			sessionKey: "sess-both-disabled",
-			sessionId: "sess-both-disabled",
-			cwd: "/home/user/signetai",
-		});
-
-		expect(result.queued).toBe(false);
 	});
 
 	// ------------------------------------------------------------------
@@ -2738,6 +2640,31 @@ describe("memory-lineage", () => {
 		expect(sentence.text).toMatch(/[.!?]$/);
 	});
 
+	test.serial("preserves terminal historical summary status when writing direct transcript evidence", async () => {
+		createMemoryDb([]);
+		const params = {
+			agentId: "default",
+			sessionId: "historical-status-session",
+			sessionKey: "historical-status-session",
+			project: "/repo",
+			harness: "test",
+			capturedAt: "2026-08-09T13:00:00.000Z",
+			startedAt: null,
+			endedAt: "2026-08-09T13:00:00.000Z",
+			transcript: "User: preserve historical terminal provenance\nAssistant: direct evidence remains lossless.",
+			summaryStatus: "not_requested" as const,
+		};
+		const existing = ensureCanonicalManifest({ ...params, summaryStatus: "skipped" });
+		const manifestPath = join(TEST_DIR, existing.path.replace(`${TEST_DIR}/`, ""));
+		writeFileSync(
+			manifestPath,
+			readFileSync(manifestPath, "utf8").replace('summary_status: "not_requested"', 'summary_status: "failed"'),
+		);
+		const result = await writeTranscriptArtifact(params);
+		const manifest = readFileSync(join(TEST_DIR, result.manifestPath), "utf8");
+		expect(manifest).toContain('summary_status: "failed"');
+	});
+
 	test.serial(
 		"summary artifacts are idempotent for identical content and reject mutation for different content",
 		async () => {
@@ -3129,7 +3056,7 @@ describe("handleSessionStart multi-agent identity", () => {
 	});
 
 	describe("stale session-end sweep (#1172)", () => {
-		test.serial("fires the deferred session-end for stale sessions and dedupes already-ended ones", async () => {
+		test.serial("fires the deferred session-end for stale sessions and dedupes completed transcripts", async () => {
 			const now = Date.now();
 			const staleKey = `sweep-stale-${now}`;
 			const freshKey = `sweep-fresh-${now}`;
@@ -3137,67 +3064,29 @@ describe("handleSessionStart multi-agent identity", () => {
 			const staleContent = `User: ${"s".repeat(300)}\nAssistant: ${"t".repeat(300)}`;
 			const freshContent = `User: ${"f".repeat(300)}\nAssistant: ${"g".repeat(300)}`;
 			const doneContent = `User: ${"d".repeat(300)}\nAssistant: ${"e".repeat(300)}`;
-
-			// A desktop chat abandoned 3 days ago: live-retained, never signaled.
-			upsertSessionTranscript(
-				staleKey,
-				staleContent,
-				"hermes-agent",
-				null,
-				"default",
-				new Date(now - 3 * 24 * 60 * 60 * 1000).toISOString(),
-			);
-			// A live chat: last activity now — must not be swept.
+			const staleAt = new Date(now - 3 * 24 * 60 * 60 * 1000).toISOString();
+			upsertSessionTranscript(staleKey, staleContent, "hermes-agent", null, "default", staleAt);
 			upsertSessionTranscript(freshKey, freshContent, "hermes-agent", null, "default", new Date(now).toISOString());
-			// A stale chat whose content already has a summary job: the session-end
-			// already ran — filtered out in SQL, never enters the LIMIT window.
-			upsertSessionTranscript(
-				doneKey,
-				doneContent,
-				"hermes-agent",
-				null,
-				"default",
-				new Date(now - 3 * 24 * 60 * 60 * 1000).toISOString(),
-			);
-			const doneHash = createHash("sha256").update(doneContent).digest("hex");
+			upsertSessionTranscript(doneKey, doneContent, "hermes-agent", null, "default", staleAt);
 			getDbAccessor().withWriteTx((db) => {
-				db.prepare(
-					`INSERT INTO summary_jobs (id, session_key, harness, project, transcript, status,
-					attempts, max_attempts, created_at, agent_id, content_hash, trigger)
-				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-				).run(
-					`sweep-done-job-${now}`,
+				db.prepare("UPDATE session_transcripts SET completed_at = ? WHERE session_key = ? AND agent_id = ?").run(
+					staleAt,
 					doneKey,
-					"hermes-agent",
-					null,
-					doneContent,
-					"leased",
-					0,
-					3,
-					new Date().toISOString(),
 					"default",
-					doneHash,
-					"session_end",
 				);
 			});
 
 			const result = await hooks.sweepStaleSessions({ staleOlderThanMs: 24 * 60 * 60 * 1000 });
-
-			// stale closed; done filtered in SQL (not in totalMatching); fresh not matched.
-			expect(result.closed).toBe(1);
-			expect(result.skipped).toBe(0);
-			expect(result.totalMatching).toBe(1);
-
-			// The stale session got a real session-end: a summary job was queued
-			// for its content; the fresh session got none.
-			const staleJobs = getDbAccessor().withReadDb((db) =>
-				db.prepare("SELECT COUNT(*) AS n FROM summary_jobs WHERE session_key = ?").get(staleKey),
-			) as { n: number };
-			const freshJobs = getDbAccessor().withReadDb((db) =>
-				db.prepare("SELECT COUNT(*) AS n FROM summary_jobs WHERE session_key = ?").get(freshKey),
-			) as { n: number };
-			expect(staleJobs.n).toBe(1);
-			expect(freshJobs.n).toBe(0);
+			expect(result).toEqual({ closed: 1, skipped: 0, totalMatching: 1 });
+			const rows = getDbAccessor().withReadDb(
+				(db) =>
+					db
+						.prepare("SELECT session_key, completed_at FROM session_transcripts WHERE session_key IN (?, ?, ?)")
+						.all(staleKey, freshKey, doneKey) as Array<{ session_key: string; completed_at: string | null }>,
+			);
+			expect(rows.find((row) => row.session_key === staleKey)?.completed_at).not.toBeNull();
+			expect(rows.find((row) => row.session_key === freshKey)?.completed_at).toBeNull();
+			expect(rows.find((row) => row.session_key === doneKey)?.completed_at).not.toBeNull();
 		});
 
 		test.serial(
@@ -3240,47 +3129,6 @@ describe("handleSessionStart multi-agent identity", () => {
 			},
 			120_000,
 		);
-
-		test.serial("defers while the downstream finalization backlog is at capacity", async () => {
-			const now = Date.now();
-			const staleKey = `sweep-backlogged-${now}`;
-			const staleContent = `User: ${"s".repeat(300)}\nAssistant: ${"t".repeat(300)}`;
-			upsertSessionTranscript(
-				staleKey,
-				staleContent,
-				"hermes-agent",
-				null,
-				"default",
-				new Date(now - 3 * 24 * 60 * 60 * 1000).toISOString(),
-			);
-			getDbAccessor().withWriteTx((db) => {
-				const insert = db.prepare(
-					`INSERT INTO summary_jobs (id, session_key, harness, project, transcript, status,
-					 attempts, max_attempts, created_at, agent_id, content_hash, trigger)
-				 VALUES (?, ?, ?, ?, ?, ?, 0, 3, ?, ?, ?, 'session_end')`,
-				);
-				for (let index = 0; index < 20; index++) {
-					insert.run(
-						`sweep-backlog-job-${now}-${index}`,
-						`sweep-backlog-existing-${now}-${index}`,
-						"hermes-agent",
-						null,
-						staleContent,
-						index % 2 === 0 ? "leased" : "pending",
-						new Date().toISOString(),
-						"default",
-						null,
-					);
-				}
-			});
-
-			const result = await hooks.sweepStaleSessions({ staleOlderThanMs: 24 * 60 * 60 * 1000 });
-			expect(result).toEqual({ closed: 0, skipped: 0, totalMatching: 0 });
-			const staleJobs = getDbAccessor().withReadDb((db) =>
-				db.prepare("SELECT COUNT(*) AS n FROM summary_jobs WHERE session_key = ?").get(staleKey),
-			) as { n: number };
-			expect(staleJobs.n).toBe(0);
-		});
 
 		test.serial("does not fire when there is nothing stale", async () => {
 			const result = await hooks.sweepStaleSessions({ staleOlderThanMs: 24 * 60 * 60 * 1000 });
@@ -3738,59 +3586,6 @@ describe("handleCheckpointExtract", () => {
 		expect(result.queued).toBeUndefined();
 	});
 
-	test.serial("returns queued with jobId when delta is sufficient", () => {
-		createMemoryDb([]);
-
-		const result = handleCheckpointExtract({
-			harness: "test",
-			sessionKey: "ckpt-sufficient",
-			transcript: "x".repeat(600),
-		});
-
-		expect(result.queued).toBe(true);
-		expect(typeof result.jobId).toBe("string");
-	});
-
-	test.serial("advances cursor — second call with no new content is skipped", () => {
-		createMemoryDb([]);
-		const transcript = "x".repeat(600);
-
-		const first = handleCheckpointExtract({
-			harness: "test",
-			sessionKey: "ckpt-cursor",
-			transcript,
-		});
-		expect(first.queued).toBe(true);
-
-		// Same transcript — delta from cursor to end is 0 chars
-		const second = handleCheckpointExtract({
-			harness: "test",
-			sessionKey: "ckpt-cursor",
-			transcript,
-		});
-		expect(second.skipped).toBe(true);
-	});
-
-	test.serial("new content beyond cursor is extracted on second call", () => {
-		createMemoryDb([]);
-		const initial = "x".repeat(600);
-		const extended = initial + "y".repeat(600);
-
-		const first = handleCheckpointExtract({
-			harness: "test",
-			sessionKey: "ckpt-extend",
-			transcript: initial,
-		});
-		expect(first.queued).toBe(true);
-
-		const second = handleCheckpointExtract({
-			harness: "test",
-			sessionKey: "ckpt-extend",
-			transcript: extended,
-		});
-		expect(second.queued).toBe(true);
-	});
-
 	test.serial("truncated inline transcript does not overwrite stored lossless transcript", () => {
 		createMemoryDb([]);
 		const full = "x".repeat(600);
@@ -3835,23 +3630,6 @@ describe("handleCheckpointExtract", () => {
 		expect(result.queued).toBeUndefined();
 	});
 
-	test.serial("enqueues checkpoint when pipelineV2 is enabled", () => {
-		writeAgentYaml(`memory:
-  pipelineV2:
-    enabled: true
-`);
-		createMemoryDb([]);
-
-		const result = handleCheckpointExtract({
-			harness: "test",
-			sessionKey: "ckpt-dreaming",
-			transcript: "x".repeat(600),
-		});
-
-		expect(result.queued).toBe(true);
-		expect(typeof result.jobId).toBe("string");
-	});
-
 	test.serial("skips checkpoint when pipelineV2 is disabled", () => {
 		writeAgentYaml(`memory:
   pipelineV2:
@@ -3873,91 +3651,6 @@ describe("handleCheckpointExtract", () => {
 // Summary worker tick gate — verifies the worker processes jobs when
 // dreaming is enabled even with pipelineV2 disabled (regression for #812).
 // ============================================================================
-
-describe("summary worker tick gate", () => {
-	test.serial(
-		"does not burn attempts when the synthesis resolver is uninitialised despite the router gate passing",
-		async () => {
-			// Regression (#1155): the router's session_synthesis gate can pass
-			// while the module-level inference resolver is not wired up yet
-			// (init-order window during cold boot or pipeline restart). The
-			// worker previously called getInferenceProvider() unguarded,
-			// hard-failed the job, recorded the error, and burned an attempt
-			// on a transient condition — repeatedly failing every queued
-			// transcript. It must instead treat the missing resolver as
-			// workload-unavailable: restore the lease and retry later.
-			writeAgentYaml(`memory:
-  pipelineV2:
-    enabled: true
-`);
-			createMemoryDb([]);
-
-			const enq = handleCheckpointExtract({
-				harness: "test",
-				sessionKey: "ckpt-worker-dreaming",
-				transcript: "x".repeat(600),
-			});
-			expect(enq.queued).toBe(true);
-			expect(typeof enq.jobId).toBe("string");
-			if (!enq.jobId) throw new Error("expected checkpoint enqueue to return a job id");
-			const jobId = enq.jobId;
-
-			const { startSummaryWorker } = await import("./pipeline/summary-worker");
-			// Router gate passes (synthesis "available") but no
-			// initInferenceProviderResolver() call — the #1155 window.
-			const handle = startSummaryWorker(getDbAccessor(), { isSynthesisAvailable: async () => true });
-
-			// First tick fires after POLL_INTERVAL_MS (5s)
-			await new Promise((resolve) => setTimeout(resolve, 5500));
-			handle.stop();
-
-			const db = openTestDb();
-			const job = db.prepare("SELECT status, attempts FROM summary_jobs WHERE id = ?").get(jobId) as
-				| { status: string; attempts: number }
-				| undefined;
-			db.close();
-
-			expect(job).toBeDefined();
-			// Tick ran and recognized the uninitialised resolver: the lease
-			// was restored, so no attempt was consumed and no failure was
-			// recorded against the job.
-			expect(job?.status).toBe("pending");
-			expect(job?.attempts).toBe(0);
-		},
-		15_000,
-	);
-
-	test.serial(
-		"leaves jobs unchanged when synthesis is unavailable",
-		async () => {
-			writeAgentYaml(`memory:
-  pipelineV2:
-    enabled: true
-`);
-			createMemoryDb([]);
-			const enq = handleCheckpointExtract({
-				harness: "test",
-				sessionKey: "ckpt-worker-no-route",
-				transcript: "x".repeat(600),
-			});
-			if (!enq.jobId) throw new Error("expected checkpoint enqueue to return a job id");
-
-			const { startSummaryWorker } = await import("./pipeline/summary-worker");
-			const handle = startSummaryWorker(getDbAccessor());
-			await new Promise((resolve) => setTimeout(resolve, 5500));
-			handle.stop();
-
-			const db = openTestDb();
-			const job = db.prepare("SELECT status, attempts FROM summary_jobs WHERE id = ?").get(enq.jobId) as {
-				status: string;
-				attempts: number;
-			};
-			db.close();
-			expect(job).toEqual({ status: "pending", attempts: 0 });
-		},
-		15_000,
-	);
-});
 
 describe("buildSignetSystemPrompt", () => {
 	it("lists primary signet retrieval tools with namespaced ids", () => {
@@ -4172,106 +3865,6 @@ describe("queryAnchorsMissingFromRecall", () => {
 		]);
 		expect(missing).toBe(false);
 	});
-});
-
-test.serial("session-end queues stored transcript and content-hash summary job", async () => {
-	createMemoryDb([]);
-	const transcript =
-		"User: session end should store transcript and queue summary job.\nAssistant: summary queue should receive session_end trigger.\n".repeat(
-			8,
-		);
-
-	const result = await handleSessionEnd({
-		harness: "test",
-		transcript,
-		sessionKey: "sess-content-hash",
-		sessionId: "sess-content-hash",
-		agentId: "noam",
-		cwd: "/home/user/signetai",
-	});
-
-	expect(result.queued).toBe(true);
-	const db = openTestDb();
-	try {
-		const stored = db
-			.prepare("SELECT content FROM session_transcripts WHERE session_key = ? AND agent_id = ?")
-			.get("sess-content-hash", "noam") as { content: string } | undefined;
-		const jobs = db
-			.prepare("SELECT trigger, content_hash FROM summary_jobs WHERE session_key = ? AND agent_id = ?")
-			.all("sess-content-hash", "noam") as Array<{ trigger: string; content_hash: string | null }>;
-		expect(stored?.content).toContain("session end should store transcript");
-		expect(jobs).toHaveLength(1);
-		expect(jobs[0]?.trigger).toBe("session_end");
-		expect(jobs[0]?.content_hash).toBe(createHash("sha256").update(transcript).digest("hex"));
-	} finally {
-		db.close();
-	}
-});
-
-test.serial("session-end skips duplicate summary job for identical content hash", async () => {
-	createMemoryDb([]);
-	const transcript =
-		"User: identical transcript should dedupe summary queue.\nAssistant: same content should not queue twice.\n".repeat(
-			8,
-		);
-	const req = {
-		harness: "test",
-		transcript,
-		sessionKey: "sess-dedupe-hash",
-		sessionId: "sess-dedupe-hash",
-		agentId: "noam",
-		cwd: "/home/user/signetai",
-	} as const;
-
-	const first = await handleSessionEnd(req);
-	const second = await handleSessionEnd(req);
-
-	expect(first.queued).toBe(true);
-	expect(second.queued).toBe(false);
-	const db = openTestDb();
-	try {
-		const row = db
-			.prepare("SELECT COUNT(*) count FROM summary_jobs WHERE session_key = ? AND agent_id = ?")
-			.get("sess-dedupe-hash", "noam") as { count: number };
-		expect(row.count).toBe(1);
-	} finally {
-		db.close();
-	}
-});
-
-test.serial("session-end queues second job when transcript content changes", async () => {
-	createMemoryDb([]);
-	const firstTranscript = "User: first transcript content for hash one.\nAssistant: first response.\n".repeat(8);
-	const secondTranscript = `${firstTranscript}User: added later OMP content.\nAssistant: second response.\n`;
-
-	await handleSessionEnd({
-		harness: "test",
-		transcript: firstTranscript,
-		sessionKey: "sess-changed-hash",
-		sessionId: "sess-changed-hash",
-		agentId: "noam",
-		cwd: "/home/user/signetai",
-	});
-	const second = await handleSessionEnd({
-		harness: "test",
-		transcript: secondTranscript,
-		sessionKey: "sess-changed-hash",
-		sessionId: "sess-changed-hash",
-		agentId: "noam",
-		cwd: "/home/user/signetai",
-	});
-
-	expect(second.queued).toBe(true);
-	const db = openTestDb();
-	try {
-		const rows = db
-			.prepare("SELECT content_hash FROM summary_jobs WHERE session_key = ? AND agent_id = ? ORDER BY created_at ASC")
-			.all("sess-changed-hash", "noam") as Array<{ content_hash: string | null }>;
-		expect(rows).toHaveLength(2);
-		expect(new Set(rows.map((row) => row.content_hash)).size).toBe(2);
-	} finally {
-		db.close();
-	}
 });
 
 describe("normalizeSessionTranscript", () => {

@@ -6,7 +6,7 @@
  * the length/4 character heuristic.
  *
  * The Tiktoken instance is initialised once at module load and shared across
- * all callers (dreaming, summary-worker, memory-head) so we only pay the
+ * all callers (dreaming, memory-head) so we only pay the
  * vocabulary-load cost once per daemon process.
  */
 

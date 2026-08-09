@@ -75,16 +75,7 @@ import {
 	startNativeMemoryBridge,
 } from "./native-memory-sources";
 import { materializeEmbeddedWasmAssets, resolveEmbeddedWorkerPath } from "./native-runtime-assets";
-import {
-	DEFAULT_RETENTION,
-	ensureRetentionWorker,
-	ensureSummaryRecovery,
-	ensureSummaryWorker,
-	getPipelineWorkerStatus,
-	setDreamingWorker,
-	startPipeline,
-	stopPipeline,
-} from "./pipeline";
+import { DEFAULT_RETENTION, ensureRetentionWorker, setDreamingWorker, startPipeline, stopPipeline } from "./pipeline";
 import { type DreamingWorkerHandle, startDreamingWorker } from "./pipeline/dreaming-worker";
 import { retireLegacyExtractionJobs } from "./pipeline/extraction-fallback";
 import { invalidateTraversalCache } from "./pipeline/graph-traversal";
@@ -1540,28 +1531,6 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 		default: await router.hasWorkload("default"),
 	});
 
-	// Summary worker — shared infrastructure, owned here not by startPipeline.
-	// The summary worker produces session summaries for DAG/continuity.
-	// Dreaming consumes these summaries for consolidation. Requires an
-	// effective session_synthesis route.
-	const isSummarySynthesisAvailable = async (): Promise<boolean> =>
-		(await router.explain({ agentId: defaultAgentId, operation: "session_synthesis" }, true)).ok;
-	const summarySynthesisAvailable = await isSummarySynthesisAvailable();
-	if (!pipelinePaused && summarySynthesisAvailable) {
-		ensureSummaryWorker(getDbAccessor(), {
-			isSynthesisAvailable: isSummarySynthesisAvailable,
-		});
-	} else {
-		ensureSummaryRecovery(getDbAccessor(), {
-			workerOptions: { isSynthesisAvailable: isSummarySynthesisAvailable },
-			shouldStartWorker: async () => {
-				const liveCfg = loadMemoryConfig(AGENTS_DIR);
-				if (liveCfg.pipelineV2.paused) return false;
-				return await isSummarySynthesisAvailable();
-			},
-		});
-	}
-
 	if (memoryCfg.pipelineV2.enabled && !pipelinePaused) {
 		startPipeline(
 			getDbAccessor(),
@@ -1965,16 +1934,12 @@ async function main() {
 	startSessionCleanup();
 	// Formal TTL lifecycle (#902): when stale-session cleanup evicts a claim
 	// whose harness never sent session-end, checkpoint the residual continuity
-	// state and enqueue idempotent summary finalization instead of silently
+	// state and mark the retained transcript complete instead of silently
 	// dropping the in-memory lifecycle state.
 	setSessionEvictionHandler(
 		createTtlEvictionHandler({
 			accessor: getDbAccessor(),
 			maxCheckpointsPerSession: loadMemoryConfig(AGENTS_DIR).pipelineV2.continuity.maxCheckpointsPerSession,
-			isSummarySynthesisAvailable: () => {
-				const liveCfg = loadMemoryConfig(AGENTS_DIR);
-				return !liveCfg.pipelineV2.paused && providerRuntimeResolution.synthesis.effective !== null;
-			},
 		}),
 	);
 	const restoredSessions = restorePersistedSessions();

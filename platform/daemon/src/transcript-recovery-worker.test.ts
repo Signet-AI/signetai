@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import { deriveSessionEndFallbackId } from "./session-end-recovery";
+import { markSessionTranscriptCompleted, upsertSessionTranscript } from "./session-transcripts";
 import { enqueueTranscriptCaptureJob, runTranscriptCaptureOnce } from "./transcript-capture-worker";
 import { normalizeSessionTranscript } from "./transcript-normalization";
 import { runTranscriptRecoveryScan } from "./transcript-recovery-worker";
@@ -197,6 +198,70 @@ describe("transcript recovery worker", () => {
 		expect(
 			getDbAccessor().withReadDb((db) => db.prepare("SELECT COUNT(*) AS count FROM transcript_capture_jobs").get()),
 		).toEqual({ count: 1 });
+	});
+
+	it("does not replace a completed canonical transcript with a legacy snapshot", async () => {
+		const path = join(claudeRoot, "-repo", "completed-session.jsonl");
+		writeSettled(
+			path,
+			JSON.stringify({
+				sessionId: "completed-session",
+				message: { role: "user", content: "legacy partial snapshot" },
+			}),
+		);
+		upsertSessionTranscript(
+			"completed-session",
+			"canonical complete transcript",
+			"claude-code",
+			"/repo",
+			"agent-a",
+			"2099-01-01T00:00:00.000Z",
+		);
+		expect(markSessionTranscriptCompleted("completed-session", "agent-a", "2099-01-01T00:00:00.000Z")).toBe(true);
+
+		const result = await scan();
+		expect(result.enqueued).toBe(0);
+		expect(result.deduplicated).toBe(1);
+		expect(
+			getDbAccessor().withReadDb((db) =>
+				db
+					.prepare("SELECT content, completed_at FROM session_transcripts WHERE agent_id = ? AND session_key = ?")
+					.get("agent-a", "completed-session"),
+			),
+		).toEqual({ content: "canonical complete transcript", completed_at: "2099-01-01T00:00:00.000Z" });
+	});
+
+	it("preserves an incomplete canonical transcript when recovery is partial", async () => {
+		const path = join(claudeRoot, "-repo", "partial-session.jsonl");
+		writeSettled(
+			path,
+			JSON.stringify({
+				sessionId: "partial-session",
+				message: { role: "user", content: "legacy partial snapshot" },
+			}),
+		);
+		upsertSessionTranscript(
+			"partial-session",
+			"canonical transcript that must survive",
+			"claude-code",
+			"/repo",
+			"agent-a",
+			"2099-01-01T00:00:00.000Z",
+		);
+
+		const result = await scan();
+		expect(result.enqueued).toBe(1);
+		const row = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare("SELECT content, completed_at FROM session_transcripts WHERE agent_id = ? AND session_key = ?")
+					.get("agent-a", "partial-session") as { content: string; completed_at: string | null } | null,
+		);
+		expect(row).not.toBeNull();
+		if (!row) throw new Error("expected retained transcript");
+		expect(row.content).toContain("canonical transcript that must survive");
+		expect(row.content).toContain("legacy partial snapshot");
+		expect(row.completed_at).not.toBeNull();
 	});
 
 	it("keeps recovery fingerprints and capture jobs agent-scoped", async () => {

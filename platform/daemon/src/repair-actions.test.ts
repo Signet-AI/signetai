@@ -580,18 +580,18 @@ describe("repair --max-batch aggregate cap (#1053)", () => {
 			expect(countSummaryByStatus("cancelled")).toBe(0);
 		});
 
-		it("single-table selection still affects up to the requested cap from that table", () => {
+		it("single-table selection still affects up to the requested cap from the memory table", () => {
 			seedBothQueues(1001);
 
 			const result = cancelObsoleteJobs(accessor, TEST_CFG, CTX_OPERATOR, createRateLimiter(), {
 				olderThanMs: 0,
 				maxBatch: 50,
-				tables: ["summary"],
+				tables: ["memory"],
 			});
 
 			expect(result.success).toBe(true);
 			expect(result.affected).toBe(50);
-			expect(countSummaryByStatus("cancelled")).toBe(50);
+			expect(countMemoryByStatus("cancelled")).toBe(50);
 		});
 
 		it("dry-run preview is selected from the same globally bounded set as apply", () => {
@@ -605,7 +605,7 @@ describe("repair --max-batch aggregate cap (#1053)", () => {
 
 			expect(result.success).toBe(true);
 			expect(result.affected).toBe(0);
-			expect(result.totalMatching).toBe(2002);
+			expect(result.totalMatching).toBe(1001);
 			expect(result.preview?.length ?? 0).toBeLessThanOrEqual(50);
 			// Preview ids come only from the memory queue (the first table),
 			// matching the apply-time selection order.
@@ -643,18 +643,18 @@ describe("repair --max-batch aggregate cap (#1053)", () => {
 			expect(countSummaryByStatus("dead")).toBe(1001);
 		});
 
-		it("single-table selection still affects up to the requested cap from that table", () => {
+		it("single-table selection still affects up to the requested cap from the memory table", () => {
 			seedBothQueues(1001);
 
 			const result = pruneTerminalJobs(accessor, TEST_CFG, CTX_OPERATOR, createRateLimiter(), {
 				retentionMs: 0,
 				maxBatch: 50,
-				tables: ["summary"],
+				tables: ["memory"],
 			});
 
 			expect(result.success).toBe(true);
 			expect(result.affected).toBe(50);
-			expect(countSummaryByStatus("dead")).toBe(951);
+			expect(countMemoryByStatus("dead")).toBe(951);
 		});
 
 		it("dry-run preview is selected from the same globally bounded set as apply", () => {
@@ -668,7 +668,7 @@ describe("repair --max-batch aggregate cap (#1053)", () => {
 
 			expect(result.success).toBe(true);
 			expect(result.affected).toBe(0);
-			expect(result.totalMatching).toBe(2002);
+			expect(result.totalMatching).toBe(1001);
 			expect(result.preview?.length ?? 0).toBeLessThanOrEqual(50);
 			expect(result.preview?.every((id) => id.startsWith("memory_jobs:mem-job-"))).toBe(true);
 			expect(countMemoryByStatus("dead")).toBe(1001);

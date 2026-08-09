@@ -4,11 +4,9 @@ import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
 import { logger } from "./logger";
-import { loadMemoryConfig } from "./memory-config";
 import { deriveSessionToken } from "./memory-lineage";
-import { enqueueSummaryJob } from "./pipeline/summary-worker";
 import { deriveSessionEndFallbackId } from "./session-end-recovery";
-import { isNoiseSession } from "./session-noise";
+import { getStoredSessionTranscriptInfo, upsertSessionTranscript } from "./session-transcripts";
 import { enqueueTranscriptCaptureJob } from "./transcript-capture-worker";
 import { canonicalTranscriptRelativePath } from "./transcript-jsonl";
 import { normalizeSessionTranscript } from "./transcript-normalization";
@@ -228,68 +226,13 @@ function markScanned(
 	);
 }
 
-function enqueueRecoverySummary(
-	dbAccessor: DbAccessor,
-	basePath: string,
-	input: {
-		readonly agentId: string;
-		readonly harness: string;
-		readonly sessionKey: string;
-		readonly sessionId: string;
-		readonly project: string | null;
-		readonly transcript: string;
-		readonly capturedAt: string;
-	},
-): "pending" | "skipped" | "not_requested" {
-	const config = loadMemoryConfig(basePath);
-	const pipelineEnabled = config.pipelineV2.enabled || config.pipelineV2.shadowMode;
-	if (!pipelineEnabled) return "not_requested";
-	if (
-		input.transcript.length < 500 ||
-		isNoiseSession({
-			project: input.project,
-			sessionKey: input.sessionKey,
-			sessionId: input.sessionId,
-			harness: input.harness,
-		})
-	) {
-		return "skipped";
-	}
-
-	const contentHash = createHash("sha256").update(input.transcript).digest("hex");
-	const duplicate = dbAccessor.withReadDb((db) =>
-		Boolean(
-			db
-				.prepare(
-					`SELECT id FROM summary_jobs
-					 WHERE agent_id = ? AND session_key = ? AND content_hash = ?
-					   AND status IN ('pending', 'processing', 'completed')
-					 LIMIT 1`,
-				)
-				.get(input.agentId, input.sessionKey, contentHash),
-		),
-	);
-	if (duplicate) return "skipped";
-
-	const jobId = enqueueSummaryJob(dbAccessor, {
-		...input,
-		project: input.project ?? undefined,
-		trigger: "session_end",
-		boundaryReason: "session_closed",
-		endedAt: input.capturedAt,
-	});
-	dbAccessor.withWriteTx((db) => {
-		db.prepare("UPDATE summary_jobs SET content_hash = ? WHERE id = ?").run(contentHash, jobId);
-	});
-	return "pending";
-}
-
 export async function runTranscriptRecoveryScan(
 	dbAccessor: DbAccessor,
 	basePath: string,
 	agentId: string,
 	options: TranscriptRecoveryScanOptions = {},
 ): Promise<TranscriptRecoveryScanResult> {
+	void basePath;
 	const roots = { ...defaultRoots(), ...options.roots };
 	const nowMs = options.nowMs ?? Date.now();
 	const settleMs = options.settleMs ?? TRANSCRIPT_RECOVERY_SETTLE_MS;
@@ -366,15 +309,39 @@ export async function runTranscriptRecoveryScan(
 			continue;
 		}
 
-		const summaryStatus = enqueueRecoverySummary(dbAccessor, basePath, {
-			agentId,
-			harness: candidate.harness,
-			sessionKey: metadata.sessionKey,
-			sessionId,
-			project: metadata.project,
-			transcript,
-			capturedAt: metadata.capturedAt,
-		});
+		const existingTranscript = getStoredSessionTranscriptInfo(metadata.sessionKey, agentId);
+		// A completed canonical row is authoritative. Recovery files are legacy
+		// snapshots and may be older or partial; allowing one to reset the row
+		// would clobber lossless content and regress the Dreaming watermark.
+		if (existingTranscript?.completedAt) {
+			dbAccessor.withWriteTx((db) =>
+				markScanned(db, agentId, candidate, contentSha256, sessionId, new Date(nowMs).toISOString()),
+			);
+			deduplicated++;
+			continue;
+		}
+
+		try {
+			const retained = upsertSessionTranscript(
+				metadata.sessionKey,
+				transcript,
+				candidate.harness,
+				metadata.project,
+				agentId,
+				metadata.capturedAt,
+				dbAccessor,
+				{ completedAt: metadata.capturedAt, preserveExistingContent: true },
+			);
+			if (!retained)
+				logger.warn("transcripts", "Recovered transcript retention or completion failed", {
+					sessionKey: metadata.sessionKey,
+				});
+		} catch (error) {
+			logger.warn("transcripts", "Recovered transcript retention failed", {
+				error: error instanceof Error ? error.message : String(error),
+				sessionKey: metadata.sessionKey,
+			});
+		}
 		const jobId = enqueueTranscriptCaptureJob(dbAccessor, {
 			agentId,
 			harness: candidate.harness,
@@ -386,7 +353,7 @@ export async function runTranscriptRecoveryScan(
 			transcriptPath: candidate.path,
 			capturedAt: metadata.capturedAt,
 			endedAt: metadata.capturedAt,
-			summaryStatus,
+			summaryStatus: "not_requested",
 		});
 		if (!jobId) {
 			skippedInvalid++;
