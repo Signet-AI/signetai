@@ -455,6 +455,12 @@ describe("loadPipelineConfig", () => {
 		);
 	});
 
+	it("rejects the retired top-level synthesis config", () => {
+		expect(() => loadPipelineConfig({ memory: { synthesis: { harness: "openclaw" } } })).toThrow(
+			"memory.synthesis is retired",
+		);
+	});
+
 	it("defaults reflections to 6am in the detected local timezone with 3 briefs", () => {
 		const result = loadPipelineConfig({});
 		expect(result.reflections.schedule).toBe("0 6 * * *");

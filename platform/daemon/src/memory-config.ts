@@ -386,6 +386,11 @@ function parseClaudeCodeConfig(raw: unknown, fallback: PipelineV2Config["claudeC
 export function loadPipelineConfig(yaml: Record<string, unknown>): ResolvedPipelineV2Config {
 	const mem = yaml.memory as Record<string, unknown> | undefined;
 	const raw = mem?.pipelineV2 as Record<string, unknown> | undefined;
+	if (mem?.synthesis !== undefined) {
+		throw new PipelineConfigValidationError(
+			"memory.synthesis is retired; MEMORY.md synthesis follows the canonical inference workload instead.",
+		);
+	}
 	if (!raw) return { ...DEFAULT_PIPELINE_V2 };
 
 	// Read nested sub-objects (may be undefined for old flat configs)

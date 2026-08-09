@@ -328,14 +328,9 @@ Special session files are not startup context. `DREAMING.md` is the prompt for
 reflection/consolidation runs and costs zero tokens in ordinary sessions.
 
 
-### memory.synthesis
+### MEMORY.md synthesis
 
-Configuration for periodic `MEMORY.md` regeneration. The synthesis
-process reads all memories and asks a model to write a coherent summary.
-
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `harness` | string | `"openclaw"` | Which harness runs synthesis (`openclaw`, `claude-code`, `codex`, `opencode`) |
-| `model` | string | `"sonnet"` | Model identifier |
-| `schedule` | string | `"daily"` | `"daily"`, `"weekly"`, or `"on-demand"` |
-| `max_tokens` | number | `4000` | Max output tokens |
+`MEMORY.md` regeneration is driven by session lifecycle and the internal
+synthesis worker. Its model selection follows the canonical
+`inference.workloads.memoryExtraction` route; the retired `memory.synthesis`
+configuration is rejected during config loading.

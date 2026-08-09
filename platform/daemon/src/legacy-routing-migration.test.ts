@@ -79,6 +79,9 @@ describe("migrateLegacyRoutingToRegistry (#947 v4, #1004 v5 cleanup)", () => {
 				join(dir, "agent.yaml"),
 				`configVersion: 7
 memory:
+  synthesis:
+    harness: openclaw
+    model: sonnet
   pipelineV2:
     enabled: true
     allowRemoteProviders: false
@@ -98,7 +101,7 @@ memory:
 			expect(after).toMatch(/^configVersion: 8/m);
 			expect(after).not.toContain("allowRemoteProviders");
 			expect(after).not.toContain("provider: openrouter");
-			expect(after).not.toContain("synthesis:");
+			expect(after).not.toMatch(/^\s+synthesis:/m);
 			expect(after).toContain("strength: high");
 			expect(() => loadMemoryConfig(dir)).not.toThrow();
 		} finally {

@@ -82,21 +82,6 @@ memory:
   # Importance decay rate per day (0.95 = 5% decay/day)
   decay_rate: 0.95
   
-  # MEMORY.md synthesis configuration
-  synthesis:
-    # Which harness performs the synthesis (openclaw, claude-code, codex, opencode)
-    harness: openclaw
-    
-    # Model to use for synthesis (harness-specific format)
-    # Examples: "sonnet", "claude-sonnet-4", "gpt-4o", "gemini-pro"
-    model: sonnet
-    
-    # How often to regenerate MEMORY.md (daily, weekly, on-demand)
-    schedule: daily
-    
-    # Maximum tokens for synthesis output
-    max_tokens: 4000
-
   # Pipeline V2 — automatic memory extraction from conversations
   pipelineV2:
     # Master switch (true = run pipeline workers)

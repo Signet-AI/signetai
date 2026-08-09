@@ -652,6 +652,12 @@ function migrateV8(agentsDir: string): void {
 		block.delete("endpoint");
 	}
 
+	const memory = doc.getIn(["memory"], true);
+	if (isMap(memory) && memory.has("synthesis")) {
+		memory.delete("synthesis");
+		mutations.push("removed memory.synthesis");
+	}
+
 	const pipeline = doc.getIn(["memory", "pipelineV2"], true);
 	if (isMap(pipeline)) {
 		if (pipeline.has("synthesis")) {
