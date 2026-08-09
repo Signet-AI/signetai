@@ -1,8 +1,22 @@
 import { describe, expect, it } from "bun:test";
 import { parseRoutingConfig, resolveRoutingDecision } from "@signet/core";
-import { ensureInferenceRoute } from "./inference-route-config";
+import { allowRemoteMemoryExtraction, ensureInferenceRoute } from "./inference-route-config";
 
 describe("ensureInferenceRoute", () => {
+	it("records explicit consent before a remote memory extraction route is saved", () => {
+		const agent: Record<string, unknown> = {
+			inference: {
+				taskClasses: { memory_extraction: { reasoning: "low", privacy: "restricted_remote" } },
+			},
+		};
+
+		allowRemoteMemoryExtraction(agent);
+
+		expect((agent.inference as Record<string, unknown>).taskClasses).toEqual({
+			memory_extraction: { reasoning: "low", privacy: "remote_ok" },
+		});
+	});
+
 	it("creates an explicit policy, workload bindings, and extraction task class", () => {
 		const agent: Record<string, unknown> = {
 			inference: {

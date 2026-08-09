@@ -77,3 +77,13 @@ export function ensureInferenceRoute(agent: ConfigRecord): void {
 	if (Object.keys(targets).length > 0) inference.targets = targets;
 	agent.inference = inference;
 }
+
+/** Persist the explicit user decision to allow remote memory extraction. */
+export function allowRemoteMemoryExtraction(agent: ConfigRecord): void {
+	const inference = record(agent.inference);
+	const taskClasses = record(inference.taskClasses);
+	const existing = record(taskClasses.memory_extraction);
+	taskClasses.memory_extraction = { ...existing, privacy: "remote_ok" };
+	inference.taskClasses = taskClasses;
+	agent.inference = inference;
+}

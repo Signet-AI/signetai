@@ -1,25 +1,14 @@
-import { useEffect, useMemo, useState } from "react";
-import {
-	Dialog,
-	DialogContent,
-	DialogHeader,
-	DialogTitle,
-} from "@/components/ui/dialog";
-import {
-	Select,
-	SelectContent,
-	SelectItem,
-	SelectTrigger,
-	SelectValue,
-} from "@/components/ui/select";
+import { ConnectProviderDialog } from "@/components/settings/connect-dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
-import { CheckCircle, Download, Loader2, RefreshCw, Search, TriangleAlert, X } from "lucide-react";
-import { useSettings, type SettingsSection } from "@/lib/settings-context";
-import { api, type InferenceCatalog, type LogEntry } from "@/lib/api";
-import { useAsync } from "@/lib/use-async";
-import { isDreamingEnabled, useAgentConfig, type AgentConfigStore } from "@/lib/agent-config";
+import { type AgentConfigStore, isDreamingEnabled, useAgentConfig } from "@/lib/agent-config";
+import { type InferenceCatalog, type LogEntry, api } from "@/lib/api";
+import { allowRemoteMemoryExtraction, ensureInferenceRoute } from "@/lib/inference-route-config";
 import {
 	ACPX_AGENTS,
+	type AccountsMap,
+	type ConnectableProvider,
 	LOCAL_EXECUTORS,
 	PROVIDER_NAMES,
 	accountForFamily,
@@ -28,12 +17,12 @@ import {
 	connectableProviders,
 	secretNameFor,
 	titleCase,
-	type AccountsMap,
-	type ConnectableProvider,
 } from "@/lib/providers";
-import { ConnectProviderDialog } from "@/components/settings/connect-dialog";
+import { type SettingsSection, useSettings } from "@/lib/settings-context";
+import { useAsync } from "@/lib/use-async";
 import { cn } from "@/lib/utils";
-import { ensureInferenceRoute } from "@/lib/inference-route-config";
+import { CheckCircle, Download, Loader2, RefreshCw, Search, TriangleAlert, X } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 
 const NAV: { id: SettingsSection; label: string; icon: React.ReactNode }[] = [
 	{
@@ -273,6 +262,8 @@ function InferenceSection() {
 	const accounts = readAccounts(store);
 	const providers = useMemo(() => connectableProviders(catalog, accounts), [catalog, accounts]);
 	const refreshCatalog = () => catalogQuery.refresh();
+	const [routeRefreshKey, setRouteRefreshKey] = useState(0);
+	const refreshRoutes = () => setRouteRefreshKey((value) => value + 1);
 
 	const visible = providers.filter((p) => p.name.toLowerCase().includes(filter.toLowerCase()));
 	const connectedCount = providers.filter((p) => p.connected).length;
@@ -283,7 +274,7 @@ function InferenceSection() {
 			<div className="sig-mcard flex flex-col gap-px">
 				<GroupLabel suffix={store.saving ? "· saving…" : undefined}>Model assignment</GroupLabel>
 				<TargetEditor
-					role="Backend inference"
+					label="Backend inference"
 					tag="primary"
 					targetName="background"
 					workloadKey="memoryExtraction"
@@ -292,9 +283,10 @@ function InferenceSection() {
 					store={store}
 					accounts={accounts}
 					providers={providers}
+					onRouteChanged={refreshRoutes}
 				/>
 				<TargetEditor
-					role="Aggregation"
+					label="Aggregation"
 					tag="fallback"
 					targetName="aggregation"
 					workloadKey="aggregateRecall"
@@ -303,10 +295,11 @@ function InferenceSection() {
 					store={store}
 					accounts={accounts}
 					providers={providers}
+					onRouteChanged={refreshRoutes}
 				/>
 				<EmbeddingEditor store={store} />
 			</div>
-			<RouteHealthPanel />
+			<RouteHealthPanel refreshKey={routeRefreshKey} />
 
 			{/* BOTTOM ZONE: connected providers matrix */}
 			<div className="sig-mcard flex flex-col gap-px">
@@ -405,13 +398,14 @@ function InferenceSection() {
 type RouteCheckReport = {
 	status: Awaited<ReturnType<typeof api.getInferenceStatusDetailed>>["data"];
 	statusError: string | null;
-	memoryExtraction: Awaited<ReturnType<typeof api.getInferenceDecision>>;
-	aggregateRecall: Awaited<ReturnType<typeof api.getInferenceDecision>>;
+	memoryExtraction: Awaited<ReturnType<typeof api.getInferenceDecision>> | null;
+	aggregateRecall: Awaited<ReturnType<typeof api.getInferenceDecision>> | null;
 	probeOk: boolean | null;
 };
 
-function RouteHealthPanel() {
-	const statusQuery = useAsync(() => api.getInferenceStatusDetailed(), { intervalMs: 60_000 });
+function RouteHealthPanel({ refreshKey }: { refreshKey: number }) {
+	const statusQuery = useAsync(() => api.getInferenceStatusDetailed(), { intervalMs: 60_000, deps: [refreshKey] });
+	const memoryDecisionQuery = useAsync(() => api.getInferenceDecision({ operation: "memory_extraction" }), { intervalMs: 60_000, deps: [refreshKey] });
 	const [checking, setChecking] = useState(false);
 	const [report, setReport] = useState<RouteCheckReport | null>(null);
 	const status = report?.status ?? statusQuery.data?.data;
@@ -450,6 +444,12 @@ function RouteHealthPanel() {
 		setChecking(false);
 	};
 
+	// The refresh key is the intentional trigger; checkRoutes is recreated from live query state.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: refreshKey intentionally controls the route check.
+	useEffect(() => {
+		if (refreshKey > 0) void checkRoutes();
+	}, [refreshKey]);
+
 	return (
 		<div className="sig-mcard flex flex-col gap-px">
 			<div className="flex items-center justify-between px-1.5">
@@ -481,7 +481,7 @@ function RouteHealthPanel() {
 						<RouteMeta label="Targets" value={String(status.targetRefs?.length ?? 0)} />
 					</div>
 					<div className="mt-1.5 flex flex-col gap-1">
-						<RouteDecisionRow label="Memory extraction" decision={report?.memoryExtraction} />
+						<RouteDecisionRow label="Memory extraction" decision={report?.memoryExtraction ?? memoryDecisionQuery.data} />
 						{status.workloadBindings?.aggregateRecall && (
 							<RouteDecisionRow label="Aggregate recall" decision={report?.aggregateRecall} />
 						)}
@@ -517,13 +517,36 @@ function RouteMeta({ label, value }: { label: string; value: string }) {
 	);
 }
 
-function RouteDecisionRow({ label, decision }: { label: string; decision: Awaited<ReturnType<typeof api.getInferenceDecision>> | undefined }) {
+function routeBlockedBy(details: unknown): string[] {
+	if (details == null || typeof details !== "object" || Array.isArray(details)) return [];
+	const trace = (details as Record<string, unknown>).trace;
+	if (trace == null || typeof trace !== "object" || Array.isArray(trace)) return [];
+	const candidates = (trace as Record<string, unknown>).candidates;
+	if (!Array.isArray(candidates)) return [];
+	return candidates.flatMap((candidate) => {
+		if (candidate == null || typeof candidate !== "object" || Array.isArray(candidate)) return [];
+		const row = candidate as Record<string, unknown>;
+		const blockedBy = Array.isArray(row.blockedBy) ? row.blockedBy.filter((reason): reason is string => typeof reason === "string") : [];
+		if (blockedBy.length === 0) return [];
+		const targetRef = typeof row.targetRef === "string" ? row.targetRef : "candidate";
+		return [`${targetRef}: ${blockedBy.join(", ")}`];
+	});
+}
+
+function RouteDecisionRow({ label, decision }: { label: string; decision: Awaited<ReturnType<typeof api.getInferenceDecision>> | undefined | null }) {
+	const route = decision?.data;
+	const blockedBy = routeBlockedBy(decision?.details);
+	const value = route
+		? `${route.targetRef} · ${route.policyId}`
+		: blockedBy.length > 0
+			? `blocked: ${blockedBy.join(", ")}`
+			: decision?.error ?? "not resolved — check routes";
 	return (
 		<div className="flex items-center gap-2 rounded-[var(--radius)] px-2.5 py-1.5 text-[11px]">
-			{decision ? <CheckCircle className="size-3.5 shrink-0 text-success" /> : <TriangleAlert className="size-3.5 shrink-0 text-[oklch(0.75_0.14_75)]" />}
+			{route ? <CheckCircle className="size-3.5 shrink-0 text-success" /> : <TriangleAlert className="size-3.5 shrink-0 text-[oklch(0.75_0.14_75)]" />}
 			<span className="font-medium">{label}</span>
-			<span className="truncate font-mono text-[9.5px] text-muted-foreground">
-				{decision ? `${decision.targetRef} · ${decision.policyId}` : "not resolved — check routes"}
+			<span className="truncate font-mono text-[9.5px] text-muted-foreground" title={value}>
+				{value}
 			</span>
 		</div>
 	);
@@ -533,7 +556,7 @@ function RouteDecisionRow({ label, decision }: { label: string; decision: Awaite
  * Logic ported from the Svelte InferenceSection's writeTarget — field clearing
  * keeps stale config from a prior selection from leaking into agent.yaml. */
 function TargetEditor({
-	role,
+	label,
 	tag,
 	targetName,
 	workloadKey,
@@ -542,8 +565,9 @@ function TargetEditor({
 	store,
 	accounts,
 	providers,
+	onRouteChanged,
 }: {
-	role: string;
+	label: string;
 	tag: string;
 	targetName: string;
 	workloadKey: string;
@@ -552,6 +576,7 @@ function TargetEditor({
 	store: AgentConfigStore;
 	accounts: AccountsMap;
 	providers: ConnectableProvider[];
+	onRouteChanged: () => void;
 }) {
 	const accountName = targetName; // per-target account for local openai-compatible keys
 	const targetBase = ["inference", "targets", targetName] as const;
@@ -563,8 +588,16 @@ function TargetEditor({
 	const endpoint = store.aStr([...targetBase, "endpoint"]);
 	const acpxAgent = store.aStr([...targetBase, "acpx", "agent"]) || "claude";
 	const apiKeyRef = store.aStr([...accountBase, "credentialRef"]);
+	const [pendingRemote, setPendingRemote] = useState<string | null>(null);
+	const [remoteConsentDismissed, setRemoteConsentDismissed] = useState(false);
+	const memoryPrivacy = store.aStr(["inference", "taskClasses", "memory_extraction", "privacy"]);
 
 	const kind = backendKind(executor);
+	useEffect(() => {
+		if (!remoteConsentDismissed && pendingRemote === null && targetName === "background" && kind === "provider" && memoryPrivacy !== "remote_ok") {
+			setPendingRemote(executor);
+		}
+	}, [executor, kind, memoryPrivacy, pendingRemote, remoteConsentDismissed, targetName]);
 	const family = backendFamily(executor);
 	const modelOptions = (catalog?.models[family] ?? []).map((m) => ({ value: m.id, label: `${m.name} (${m.id})` }));
 
@@ -583,8 +616,13 @@ function TargetEditor({
 		store.aSetStr([...accountBase, "kind"], "api");
 		store.aSetStr([...accountBase, "providerFamily"], fam);
 	};
+	const saveAndCheck = () => {
+		void store.save().then((saved) => {
+			if (saved) onRouteChanged();
+		});
+	};
 
-	const writeTarget = (next: string) => {
+	const applyTarget = (next: string, remoteConsent = false) => {
 		if (!next) {
 			store.aDel([...targetBase, "executor"]);
 			store.aDel([...targetBase, "account"]);
@@ -601,7 +639,7 @@ function TargetEditor({
 			if (nextKind !== "local") store.aDel([...targetBase, "endpoint"]);
 			if (nextKind === "provider") {
 				// Reference a connected account for this family (resolved by family,
-				// not literal name — accounts may be named e.g. `openrouter-api`).
+				// not literal name — accounts may be named e.g. `openrouter-api`.
 				store.aSetStr([...targetBase, "account"], accountForFamily(accounts, next) ?? next);
 				store.aDel(accountBase);
 			} else if (nextKind === "acpx") {
@@ -619,24 +657,41 @@ function TargetEditor({
 				}
 			}
 		}
-		store.aUpdate(ensureInferenceRoute);
-		void store.save();
+		if (remoteConsent) {
+			store.aUpdate((draft) => {
+				allowRemoteMemoryExtraction(draft);
+				ensureInferenceRoute(draft);
+			});
+		} else {
+			store.aUpdate(ensureInferenceRoute);
+		}
+		saveAndCheck();
+	};
+
+	const writeTarget = (next: string) => {
+		const privacy = store.aStr(["inference", "taskClasses", "memory_extraction", "privacy"]);
+		if (targetName === "background" && backendKind(next) === "provider" && privacy !== "remote_ok") {
+			setRemoteConsentDismissed(false);
+			setPendingRemote(next);
+			return;
+		}
+		applyTarget(next);
 	};
 
 	const setModel = (v: string) => {
 		store.aSetStr([...targetBase, "models", "default", "model"], v);
 		store.aUpdate(ensureInferenceRoute);
-		void store.save();
+		saveAndCheck();
 	};
 	const setEndpoint = (v: string) => {
 		store.aSetStr([...targetBase, "endpoint"], v);
 		store.aUpdate(ensureInferenceRoute);
-		void store.save();
+		saveAndCheck();
 	};
 	const setAcpxAgent = (v: string) => {
 		store.aSetStr([...targetBase, "acpx", "agent"], v);
 		store.aUpdate(ensureInferenceRoute);
-		void store.save();
+		saveAndCheck();
 	};
 	const setApiKey = (v: string) => {
 		store.aSetStr([...accountBase, "credentialRef"], v);
@@ -648,14 +703,14 @@ function TargetEditor({
 			store.aDel(accountBase);
 		}
 		store.aUpdate(ensureInferenceRoute);
-		void store.save();
+		saveAndCheck();
 	};
 
 	return (
 		<>
 			<div className="flex items-center justify-between gap-3 rounded-[var(--radius)] px-2.5 py-1.75 hover:bg-[var(--accent-subtle)]">
 				<div className="flex min-w-0 items-baseline gap-1.75">
-					<span className="text-[12.5px] font-medium">{role}</span>
+					<span className="text-[12.5px] font-medium">{label}</span>
 					<span className="font-mono text-[9px] text-muted-foreground">{tag}</span>
 				</div>
 				<CtrlSelect value={executor} options={backendOptions} onChange={writeTarget} placeholder="— none —" />
@@ -682,6 +737,17 @@ function TargetEditor({
 				<Row title="API key (secret name)" desc="The Signet secret holding the key. Optional for local servers.">
 					<CtrlInput value={apiKeyRef} placeholder={secretNameFor(executor)} onChange={setApiKey} />
 				</Row>
+			)}
+			{pendingRemote && (
+				<div className="mt-2 rounded-[var(--radius)] border border-[oklch(0.72_0.15_85/0.3)] bg-[oklch(0.72_0.15_85/0.08)] px-3 py-2.5">
+					<div className="text-[12px] font-semibold">Use {PROVIDER_NAMES[pendingRemote] ?? titleCase(pendingRemote)} for memory extraction?</div>
+					<div className="mt-1 text-[11.5px] leading-snug text-muted-foreground">Selected memory sources and transcript text may be sent to the remote provider to extract durable facts.</div>
+					<div className="mt-2 flex flex-wrap gap-1.5">
+						<button type="button" onClick={() => { applyTarget(pendingRemote, true); setPendingRemote(null); }} className="rounded-[var(--radius)] bg-foreground px-2.5 py-1.5 text-[10.5px] font-medium text-background">Use remotely</button>
+						<button type="button" onClick={() => { setRemoteConsentDismissed(true); setPendingRemote(null); }} className="rounded-[var(--radius)] border border-[oklch(1_0_0/0.16)] px-2.5 py-1.5 text-[10.5px] text-muted-foreground hover:text-foreground [html:not(.dark)_&]:border-[oklch(0_0_0/0.14)]">Keep memory extraction local</button>
+						<button type="button" onClick={() => { setRemoteConsentDismissed(true); setPendingRemote(null); }} className="px-2 py-1.5 text-[10.5px] text-muted-foreground hover:text-foreground">Cancel</button>
+					</div>
+				</div>
 			)}
 		</>
 	);

@@ -28,6 +28,7 @@ async function getJSON<T>(path: string, init?: RequestInit): Promise<T | null> {
 export interface ApiReadResult<T> {
 	readonly data: T | null;
 	readonly error: string | null;
+	readonly details?: unknown;
 }
 
 async function getJSONResult<T>(path: string, init?: RequestInit): Promise<ApiReadResult<T>> {
@@ -36,13 +37,14 @@ async function getJSONResult<T>(path: string, init?: RequestInit): Promise<ApiRe
 			...init,
 			headers: { Accept: "application/json", ...authHeaders(), ...(init?.headers ?? {}) },
 		});
-		const body = (await res.json().catch(() => null)) as { error?: unknown } | T | null;
+		const body = (await res.json().catch(() => null)) as { error?: unknown; details?: unknown } | T | null;
 		if (!res.ok) {
 			const error =
 				typeof body === "object" && body !== null && "error" in body && typeof body.error === "string"
 					? body.error
 					: `request failed (${res.status})`;
-			return { data: null, error };
+			const details = typeof body === "object" && body !== null && "details" in body ? body.details : undefined;
+			return { data: null, error, details };
 		}
 		return { data: body as T, error: null };
 	} catch {
@@ -786,7 +788,11 @@ export const api = {
 	getInferenceStatusDetailed: (refresh = false) =>
 		getJSONResult<InferenceStatus>(`/api/inference/status${refresh ? "?refresh=1" : ""}`),
 	getInferenceDecision: (body: { operation: string; refresh?: boolean }) =>
-		postJSON<InferenceRouteDecision>("/api/inference/explain", body),
+		getJSONResult<InferenceRouteDecision>("/api/inference/explain", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify(body),
+		}),
 	executeInferenceProbe: (body: {
 		operation: string;
 		prompt: string;
