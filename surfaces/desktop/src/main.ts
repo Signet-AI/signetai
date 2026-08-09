@@ -1,9 +1,10 @@
 import { stat } from "node:fs/promises";
 import { extname, normalize, relative, sep } from "node:path";
 import { pathToFileURL } from "node:url";
-import { BrowserWindow, Menu, type OpenDialogOptions, app, dialog, ipcMain, net, protocol, shell } from "electron";
+import { net, BrowserWindow, Menu, type OpenDialogOptions, app, dialog, ipcMain, protocol, shell } from "electron";
 import { DaemonManager } from "./daemon-manager.js";
 import { checkForDesktopUpdate, configureDesktopUpdates } from "./desktop-updates.js";
+import { validateExternalUrl } from "./external-url.js";
 import { dashboardRoot, iconPath, preloadPath } from "./paths.js";
 import { daemonRouteTarget, isDaemonRouteUrl } from "./protocol-routes.js";
 import { DesktopTray } from "./tray.js";
@@ -342,6 +343,7 @@ function registerIpc(): void {
 	ipcMain.handle("desktop:quickCapture", (_event, content: string) => quickCapture(content));
 	ipcMain.handle("desktop:searchMemories", (_event, query: string, limit?: number) => searchMemories(query, limit));
 	ipcMain.handle("desktop:pickDirectory", (_event, options?: { title?: string }) => pickDirectory(options));
+	ipcMain.handle("desktop:openExternal", (_event, url: string) => shell.openExternal(validateExternalUrl(url)));
 	ipcMain.handle("desktop:checkForUpdate", () => checkForDesktopUpdate({ showNoUpdateDialog: true }));
 	ipcMain.handle("desktop:quit", () => app.quit());
 }

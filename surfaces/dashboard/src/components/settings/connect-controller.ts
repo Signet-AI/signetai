@@ -43,8 +43,7 @@ export interface ConnectControllerOptions {
 	readonly providerId: string;
 	readonly supportsOAuth: boolean;
 	readonly supportsApiKey: boolean;
-	/** Fired when the daemon emits a URL the user must open — the caller
-	 * navigates a popup opened synchronously in the click gesture. */
+	/** Fired when the daemon emits a URL the user must open. */
 	readonly onNavigate?: (url: string) => void;
 	/** Fired once when the login stores the credential daemon-side. */
 	readonly onConnected?: () => void;

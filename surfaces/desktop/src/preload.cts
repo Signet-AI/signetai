@@ -22,6 +22,7 @@ contextBridge.exposeInMainWorld("signetDesktop", {
 	searchMemories: (query: string, limit?: number) => ipcRenderer.invoke("desktop:searchMemories", query, limit),
 	pickDirectory: (options?: { title?: string }) => ipcRenderer.invoke("desktop:pickDirectory", options),
 	checkForUpdate: () => ipcRenderer.invoke("desktop:checkForUpdate"),
+	openExternal: (url: string) => ipcRenderer.invoke("desktop:openExternal", url),
 	quit: () => ipcRenderer.invoke("desktop:quit"),
 	onWindowStateChange: (callback: (state: { readonly maximized: boolean }) => void) => {
 		const listener = (_event: Electron.IpcRendererEvent, state: { readonly maximized: boolean }) => callback(state);
