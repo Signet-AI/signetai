@@ -473,7 +473,7 @@
 
 /* floating HUD telemetry overlay (CAD-style viewport anchor) */
 .graph-hud { position: absolute; top: 12px; left: 16px; z-index: 4; display: flex; align-items: center; gap: 10px;
-	font-family: var(--font-mono); font-size: 10px; color: var(--muted-foreground); pointer-events: none; }
+	font-family: var(--font-mono); font-size: 10px; color: var(--muted-foreground); pointer-events: none; max-width: calc(100% - 76px); flex-wrap: wrap; row-gap: 4px; }
 .graph-hud b { color: var(--foreground); font-weight: 600; }
 .graph-hud__sep { color: oklch(0.4 0 0); }
 :root:not(.dark) .graph-hud__sep { color: oklch(0.6 0 0); }
@@ -508,7 +508,7 @@
 .graph-dock.responded { opacity: 0; pointer-events: none; transform: translateX(-50%) translateY(16px); }
 .dock-row { display: flex; align-items: center; gap: 0; padding: 0 8px 0 16px; height: 52px; }
 .gd-icon { width: 26px; height: 26px; display: grid; place-items: center; flex-shrink: 0; color: var(--foreground); margin-right: 12px; }
-.gd-input { flex: 1; border: none; background: none; outline: none; color: var(--foreground); font: inherit; font-size: 14px; height: 100%; }
+.gd-input { flex: 1; min-width: 0; border: none; background: none; outline: none; color: var(--foreground); font: inherit; font-size: 14px; height: 100%; }
 .gd-input::placeholder { color: var(--muted-foreground); }
 .gd-kbd { font-family: var(--font-mono); font-size: 10px; padding: 2px 6px; border: 1px solid oklch(1 0 0 / 0.12); border-radius: 4px; color: var(--muted-foreground); margin-right: 8px; flex-shrink: 0; }
 .gd-send { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 11px; border: none; cursor: pointer; flex-shrink: 0;
@@ -583,6 +583,25 @@
 .graph-hud-density input[type="range"]::-webkit-slider-thumb:hover { transform: scale(1.2); }
 .graph-hud-density input[type="range"]::-moz-range-thumb { width: 9px; height: 9px; border-radius: 2px; background: var(--foreground); border: 1px solid oklch(0 0 0 / 0.4); }
 .graph-hud-density input[type="range"]:disabled { opacity: 0.35; cursor: default; }
+
+@media (max-width: 900px) {
+	.graph-view-root { min-height: 360px; }
+	.graph-dock { bottom: 16px; max-width: calc(100% - 32px); }
+}
+
+@media (max-width: 640px) {
+	.graph-hud { top: 10px; left: 12px; gap: 6px; max-width: calc(100% - 64px); }
+	.graph-hud__sep { display: none; }
+	.graph-hud-density { gap: 5px; }
+	.graph-hud-density input[type="range"] { width: 56px; }
+	.graph-legend-btn { top: 10px; right: 12px; }
+	.graph-legend-pop { right: 12px; }
+	.graph-dock { bottom: 12px; max-width: calc(100% - 24px); border-radius: 12px; }
+	.dock-row { height: 46px; padding-left: 10px; }
+	.gd-icon { margin-right: 7px; }
+	.gd-kbd { display: none; }
+	.gd-send { width: 34px; height: 34px; border-radius: 9px; }
+}
 
 /* ════════════════════════════════════════════════════════════════
    Connect-provider dialog — floats above the settings modal
