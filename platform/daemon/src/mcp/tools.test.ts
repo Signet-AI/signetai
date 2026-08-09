@@ -265,6 +265,7 @@ describe("createMcpServer", () => {
 		expect(names).toContain("session_search");
 		expect(names).toContain("agent_peers");
 		expect(names).toContain("agent_message_send");
+		expect(names).toContain("agent_message_retry");
 		expect(names).toContain("agent_message_inbox");
 		expect(names).toContain("agent_message_ack");
 		expect(names).toContain("mcp_server_list");
@@ -286,7 +287,7 @@ describe("createMcpServer", () => {
 		for (const alias of GRAPHIQ_COMPAT_ALIASES) {
 			expect(names).toContain(alias);
 		}
-		expect(names.length).toBe(63);
+		expect(names.length).toBe(64);
 	});
 
 	it("registers generic code tools when GraphIQ has an active project", async () => {
@@ -1273,6 +1274,20 @@ describe("createMcpServer", () => {
 			expect(body.acp.baseUrl).toBe("https://acp.example.com");
 			expect(body.acp.targetAgentName).toBe("peer-helper");
 			expect(body.acp.timeoutMs).toBe(7000);
+		});
+
+		it("agent_message_retry posts the scoped retry", async () => {
+			const cap: { url?: string; method?: string; body?: string } = {};
+			mockFetch(200, { message: { deliveryState: "delivered" } }, cap);
+
+			await callTool(server, "agent_message_retry", {
+				message_id: "msg-1",
+				agent_id: "alpha",
+			});
+
+			expect(cap.method).toBe("POST");
+			expect(cap.url).toContain("/api/cross-agent/messages/msg-1/retry");
+			expect(JSON.parse(cap.body ?? "{}")).toEqual({ agentId: "alpha" });
 		});
 
 		it("agent_message_inbox calls messages endpoint", async () => {

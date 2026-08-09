@@ -293,8 +293,18 @@ local daemon delivery or an ACP relay path:
 }
 ```
 
-That path is about message delivery between agents. The ACPX inference backend
-is about daemon-owned background LLM calls. They are complementary:
+That path is about message delivery between agents. ACP relay attempts are
+persisted before the remote request, carry a stable `Idempotency-Key`, and use a
+lease so startup/background reconciliation can mark only abandoned attempts.
+Inspect `deliveryState` on the stored message: `indeterminate` means Signet
+cannot prove whether the remote run happened. Reconciliation does not resend
+such attempts automatically. Use `POST /api/cross-agent/messages/:messageId/retry`
+or the SDK `retryAgentMessage` method for the bounded retry, which reuses the
+same idempotency key. The limit is three total attempts; after exhaustion the
+endpoint returns `409` and leaves the row indeterminate for manual review. Remote ACP implementations that do not honor idempotency
+or offer run lookup cannot provide stronger remote truth.
+
+The ACPX inference backend is about daemon-owned background LLM calls. They are complementary:
 
 - **MCP messaging / ACP relay:** agent-to-agent communication.
 - **ACPX inference target:** daemon-to-harness inference for Signet workloads.

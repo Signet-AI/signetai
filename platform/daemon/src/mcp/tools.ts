@@ -1560,6 +1560,32 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 	);
 
 	// ------------------------------------------------------------------
+	// agent_message_retry — retry an indeterminate ACP delivery
+	// ------------------------------------------------------------------
+	registerMcpTool(
+		server,
+		"agent_message_retry",
+		{
+			title: "Retry ACP Agent Message",
+			description: "Retry an indeterminate ACP delivery with the same durable idempotency key; retries are bounded.",
+			inputSchema: z.object({
+				message_id: z.string().describe("Message id returned by agent_message_send"),
+				agent_id: z.string().optional().describe("Sending agent id (defaults to authenticated scope/current agent)"),
+			}),
+			annotations: { readOnlyHint: false },
+		},
+		async ({ message_id, agent_id }) => {
+			const result = await fetchDaemon<unknown>(
+				baseUrl,
+				`/api/cross-agent/messages/${encodeURIComponent(message_id)}/retry`,
+				{ method: "POST", body: { agentId: agent_id } },
+			);
+			if (!result.ok) return errorResult(`Retry failed: ${result.error}`);
+			return textResult(result.data);
+		},
+	);
+
+	// ------------------------------------------------------------------
 	// agent_message_inbox — read recent inbound messages
 	// ------------------------------------------------------------------
 	registerMcpTool(

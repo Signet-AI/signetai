@@ -383,6 +383,14 @@ Supports local daemon delivery and optional ACP relay.
 
 **Daemon endpoint:** `POST /api/cross-agent/messages`
 
+ACP responses include `deliveryState`: `pending`, `in_flight`, `indeterminate`,
+`delivered`, or `failed`. `indeterminate` means the remote outcome is unknown
+after a transport failure, 5xx response, or crash. Signet does not resend
+automatically; use `POST /api/cross-agent/messages/:messageId/retry` or the SDK
+`retryAgentMessage` method for the bounded retry. There are three total attempts
+(initial send plus two retries); after that, retry returns `409` and the row
+remains indeterminate for manual review. Retries reuse the same idempotency key.
+
 ### agent_message_inbox
 
 Read recent inbound cross-agent messages for an agent/session.

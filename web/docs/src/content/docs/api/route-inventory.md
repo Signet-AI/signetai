@@ -45,6 +45,7 @@ silently disappear from the API reference.
 | GET | `/api/cross-agent/messages` | platform/daemon/src/routes/hooks-routes.ts |
 | POST | `/api/cross-agent/messages` | platform/daemon/src/routes/hooks-routes.ts |
 | POST | `/api/cross-agent/messages/:messageId/ack` | platform/daemon/src/routes/hooks-routes.ts |
+| POST | `/api/cross-agent/messages/:messageId/retry` | platform/daemon/src/routes/hooks-routes.ts |
 | GET | `/api/cross-agent/stream` | platform/daemon/src/routes/hooks-routes.ts |
 | POST | `/api/synthesis/trigger` | platform/daemon/src/routes/hooks-routes.ts |
 | GET | `/api/synthesis/status` | platform/daemon/src/routes/hooks-routes.ts |

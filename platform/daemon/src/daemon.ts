@@ -46,7 +46,7 @@ import {
 	migrateSessionSynthesisRoute,
 } from "./config-migration";
 import { listConnectors } from "./connectors/registry";
-import { clearAllPresence } from "./cross-agent";
+import { clearAllPresence, reconcileAcpDeliveries } from "./cross-agent";
 import { closeDbAccessor, getDbAccessor, getVectorRuntimeStatus, initDbAccessorAsync } from "./db-accessor";
 import { fetchEmbedding } from "./embedding-fetch";
 import { type EmbeddingIndexMigrationHandle, startEmbeddingIndexMigration } from "./embedding-index-migration";
@@ -320,10 +320,12 @@ const MEMORY_IMPORT_POLL_MS = 30_000;
 // chats) leave live-retained transcripts unclosed; sweep the stale sessions
 // and fire the deferred session-end on a timer.
 const STALE_SESSION_SWEEP_INTERVAL_MS = 15 * 60 * 1000;
+const ACP_DELIVERY_RECONCILIATION_INTERVAL_MS = 30_000;
 const STALE_SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 const MEMORY_IMPORT_FILE_DELAY_MS = 50;
 let memoryImportTimer: ReturnType<typeof setInterval> | null = null;
 let staleSessionSweepTimer: ReturnType<typeof setInterval> | null = null;
+let acpDeliveryReconciliationTimer: ReturnType<typeof setInterval> | null = null;
 let memoryImportInFlight = false;
 
 let syncTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1075,6 +1077,30 @@ function stopStaleSessionSweeper(): void {
 	staleSessionSweepTimer = null;
 }
 
+function startAcpDeliveryReconciliation(): void {
+	if (acpDeliveryReconciliationTimer !== null) return;
+	acpDeliveryReconciliationTimer = setInterval(() => {
+		try {
+			const reconciled = reconcileAcpDeliveries();
+			if (reconciled > 0) logger.info("daemon", "Reconciled abandoned ACP delivery attempts", { reconciled });
+		} catch (error) {
+			logger.warn("daemon", "ACP delivery reconciliation failed", {
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
+	}, ACP_DELIVERY_RECONCILIATION_INTERVAL_MS);
+	acpDeliveryReconciliationTimer.unref?.();
+	logger.debug("watcher", "Started ACP delivery reconciliation", {
+		intervalMs: ACP_DELIVERY_RECONCILIATION_INTERVAL_MS,
+	});
+}
+
+function stopAcpDeliveryReconciliation(): void {
+	if (acpDeliveryReconciliationTimer === null) return;
+	clearInterval(acpDeliveryReconciliationTimer);
+	acpDeliveryReconciliationTimer = null;
+}
+
 function startFileWatcher() {
 	// Do NOT watch the memory/ directory directly — Bun's fs.watch()
 	// opens one O_RDONLY FD per file in a watched directory and never
@@ -1670,6 +1696,7 @@ async function cleanup() {
 	}
 	stopMemoryImportPoller();
 	stopStaleSessionSweeper();
+	stopAcpDeliveryReconciliation();
 	if (nativeMemoryBridge) {
 		await nativeMemoryBridge.close();
 		nativeMemoryBridge = null;
@@ -2226,6 +2253,7 @@ async function main() {
 		});
 		startMemoryImportPoller();
 		startStaleSessionSweeper();
+		startAcpDeliveryReconciliation();
 
 		if (!nativeMemoryBridge) {
 			const startupSourceJobs = new Map<string, string>();

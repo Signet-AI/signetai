@@ -4,11 +4,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
 	acknowledgeAgentMessage,
+	claimAcpMessageDelivery,
+	completeAcpMessageDelivery,
 	createAgentMessage,
 	isMessageVisibleToAgent,
 	listAgentMessagePage,
 	listAgentMessages,
 	listAgentPresence,
+	reconcileAcpDeliveries,
 	relayMessageViaAcp,
 	removeAgentPresence,
 	resetCrossAgentStateForTest,
@@ -316,14 +319,86 @@ describe("cross-agent messages", () => {
 	});
 });
 
+describe("ACP delivery reconciliation", () => {
+	it("marks a committed ACP row indeterminate if the process dies before claiming it", () => {
+		const message = createAgentMessage({
+			fromAgentId: "alpha",
+			content: "queued before crash",
+			deliveryPath: "acp",
+			deliveryStatus: "queued",
+			acpBaseUrl: "https://acp.example.com",
+			acpTargetAgentName: "helper",
+		});
+
+		expect(reconcileAcpDeliveries(undefined, Date.parse(message.createdAt) + 31_000)).toBe(1);
+		const recovered = listAgentMessages({ agentId: "alpha", includeSent: true })[0];
+		expect(recovered?.deliveryState).toBe("indeterminate");
+		expect(recovered?.deliveryError).toBe("ACP relay was queued but never started");
+	});
+
+	it("uses a lease so a second daemon cannot reconcile an active relay", () => {
+		const message = createAgentMessage({
+			fromAgentId: "alpha",
+			content: "lease me",
+			deliveryPath: "acp",
+			deliveryStatus: "queued",
+			acpBaseUrl: "https://acp.example.com",
+			acpTargetAgentName: "helper",
+		});
+		const first = claimAcpMessageDelivery({ messageId: message.id, agentId: "alpha", nowMs: 1_000 });
+		expect(() => reconcileAcpDeliveries(undefined, 80_000)).not.toThrow();
+		expect(() => claimAcpMessageDelivery({ messageId: message.id, agentId: "alpha", nowMs: 20_000 })).toThrow(
+			"already active",
+		);
+		expect(first.idempotencyKey).toBe(`signet-acp-${message.deliveryAttemptId}`);
+		expect(completeAcpMessageDelivery(message.id, first.leaseToken, { status: "delivered" }).deliveryState).toBe(
+			"delivered",
+		);
+	});
+
+	it("marks a fetch-complete but locally-uncommitted relay indeterminate and retries with the same idempotency key", () => {
+		const message = createAgentMessage({
+			fromAgentId: "alpha",
+			content: "recover me",
+			deliveryPath: "acp",
+			deliveryStatus: "queued",
+			acpBaseUrl: "https://acp.example.com",
+			acpTargetAgentName: "helper",
+		});
+		const first = claimAcpMessageDelivery({ messageId: message.id, agentId: "alpha", nowMs: 1_000 });
+		expect(reconcileAcpDeliveries(undefined, 200_000)).toBe(1);
+		const indeterminate = listAgentMessages({ agentId: "alpha", includeSent: true })[0];
+		expect(indeterminate?.deliveryState).toBe("indeterminate");
+		expect(indeterminate?.deliveryStatus).toBe("queued");
+		expect(() =>
+			claimAcpMessageDelivery({
+				messageId: message.id,
+				agentId: "other-agent",
+				retryIndeterminate: true,
+				nowMs: 101_000,
+			}),
+		).toThrow();
+
+		const retry = claimAcpMessageDelivery({
+			messageId: message.id,
+			agentId: "alpha",
+			retryIndeterminate: true,
+			nowMs: 201_000,
+		});
+		expect(retry.idempotencyKey).toBe(first.idempotencyKey);
+		expect(retry.message.deliveryAttempts).toBe(2);
+	});
+});
+
 describe("ACP relay", () => {
 	it("posts a run request and returns run id", async () => {
 		const originalFetch = globalThis.fetch;
-		const capture: { url?: string; body?: string } = {};
+		const capture: { url?: string; body?: string; idempotencyKey?: string } = {};
 
 		globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
 			capture.url = typeof input === "string" ? input : input.toString();
 			capture.body = typeof init?.body === "string" ? init.body : "";
+			capture.idempotencyKey = new Headers(init?.headers).get("Idempotency-Key") ?? undefined;
 			return new Response(JSON.stringify({ run_id: "run-123", status: "running" }), {
 				status: 201,
 				headers: { "Content-Type": "application/json" },
@@ -336,6 +411,7 @@ describe("ACP relay", () => {
 			content: "Can you verify this deployment plan?",
 			fromAgentId: "alpha",
 			fromSessionKey: "sess-a",
+			idempotencyKey: "signet-acp-attempt-123",
 		});
 
 		globalThis.fetch = originalFetch;
@@ -344,8 +420,32 @@ describe("ACP relay", () => {
 		const body = JSON.parse(capture.body ?? "{}");
 		expect(body.agent_name).toBe("helper-agent");
 		expect(body.input?.[0]?.parts?.[0]?.content).toContain("deployment plan");
+		expect(capture.idempotencyKey).toBe("signet-acp-attempt-123");
 		expect(result.ok).toBe(true);
 		expect(result.runId).toBe("run-123");
+	});
+
+	it("treats ACP 5xx responses as indeterminate", async () => {
+		const originalFetch = globalThis.fetch;
+		globalThis.fetch = mock(
+			async () =>
+				new Response(JSON.stringify({ error: "upstream overloaded" }), {
+					status: 503,
+					headers: { "Content-Type": "application/json" },
+				}),
+		) as unknown as typeof fetch;
+
+		try {
+			const result = await relayMessageViaAcp({
+				baseUrl: "https://acp.example.com/",
+				targetAgentName: "helper-agent",
+				content: "retry safely",
+			});
+			expect(result.ok).toBe(false);
+			expect(result.indeterminate).toBe(true);
+		} finally {
+			globalThis.fetch = originalFetch;
+		}
 	});
 
 	it("rejects private ACP origins unless allowlisted", async () => {

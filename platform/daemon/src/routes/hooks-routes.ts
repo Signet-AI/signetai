@@ -7,11 +7,14 @@ import { getAgentScope, resolveAgentId } from "../agent-id";
 import { aggregateRecall, parseAggregateRecallBudget, readAggregateRecallBudgetInput } from "../aggregate-recall";
 import { checkScope, requirePermission, requireRateLimit } from "../auth";
 import {
+	type AcpDeliveryAttempt,
 	type AgentMessage,
 	AgentMessageCapacityError,
 	AgentMessageNotFoundError,
 	type AgentMessageType,
 	acknowledgeAgentMessage,
+	claimAcpMessageDelivery,
+	completeAcpMessageDelivery,
 	createAgentMessage,
 	isMessageVisibleToAgent,
 	listAgentMessagePage,
@@ -21,7 +24,6 @@ import {
 	removeAgentPresence,
 	subscribeCrossAgentEvents,
 	touchAgentPresence,
-	updateAgentMessageDelivery,
 	upsertAgentPresence,
 } from "../cross-agent";
 import { getDbAccessor } from "../db-accessor";
@@ -1350,6 +1352,20 @@ function registerCrossAgentPresence(app: Hono): void {
 	});
 }
 
+async function relayClaimedAcpMessage(attempt: AcpDeliveryAttempt): Promise<AgentMessage> {
+	const relay = await relayMessageViaAcp({
+		...attempt.request,
+		idempotencyKey: attempt.idempotencyKey,
+	});
+	const receipt: Record<string, unknown> = { status: relay.status, idempotencyKey: attempt.idempotencyKey };
+	if (relay.runId) receipt.runId = relay.runId;
+	return completeAcpMessageDelivery(attempt.message.id, attempt.leaseToken, {
+		status: relay.ok ? "delivered" : relay.indeterminate ? "indeterminate" : "failed",
+		error: relay.error,
+		receipt,
+	});
+}
+
 function registerCrossAgentMessages(app: Hono): void {
 	app.get("/api/cross-agent/messages", (c) => {
 		const requestedAgentId = parseOptionalString(c.req.query("agent_id"));
@@ -1424,6 +1440,39 @@ function registerCrossAgentMessages(app: Hono): void {
 				error instanceof Error ? error : new Error(String(error)),
 			);
 			return c.json({ error: "Failed to acknowledge cross-agent message" }, 500);
+		}
+	});
+
+	app.post("/api/cross-agent/messages/:messageId/retry", async (c) => {
+		const payload = await readOptionalJsonObject(c);
+		if (payload === null) return c.json({ error: "invalid request body" }, 400);
+		const messageId = parseOptionalString(c.req.param("messageId"));
+		if (!messageId) return c.json({ error: "messageId is required" }, 400);
+		const requestedAgentId =
+			parseOptionalString(payload.agentId) ?? parseOptionalString(c.req.header("x-signet-agent-id"));
+		const scopedAgent = resolveScopedAgentId(c, requestedAgentId, "default");
+		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+
+		try {
+			const attempt = claimAcpMessageDelivery({
+				messageId,
+				agentId: scopedAgent.agentId,
+				retryIndeterminate: true,
+			});
+			const message = await relayClaimedAcpMessage(attempt);
+			return c.json({ message });
+		} catch (error) {
+			if (error instanceof AgentMessageNotFoundError) return c.json({ error: error.message }, 404);
+			const message = error instanceof Error ? error.message : String(error);
+			if (
+				message.includes("already active") ||
+				message.includes("retry limit") ||
+				message.includes("not indeterminate")
+			) {
+				return c.json({ error: message }, 409);
+			}
+			logger.error("hooks", "ACP retry failed", error instanceof Error ? error : new Error(message));
+			return c.json({ error: "ACP retry could not be completed" }, 500);
 		}
 	});
 
@@ -1507,6 +1556,10 @@ function registerCrossAgentMessages(app: Hono): void {
 				broadcast,
 				deliveryPath,
 				deliveryStatus: acpRequest ? "queued" : "delivered",
+				acpBaseUrl: acpRequest?.baseUrl,
+				acpTargetAgentName: acpRequest?.targetAgentName,
+				acpTimeoutMs: acpRequest?.timeoutMs,
+				acpMetadata: acpRequest?.metadata,
 			});
 		} catch (error) {
 			if (error instanceof AgentMessageCapacityError) {
@@ -1517,22 +1570,15 @@ function registerCrossAgentMessages(app: Hono): void {
 		}
 
 		if (acpRequest) {
-			const relay = await relayMessageViaAcp({
-				...acpRequest,
-				content,
-				fromAgentId: scopedSender.agentId,
-				fromSessionKey,
-			});
-			const receipt: Record<string, unknown> = { status: relay.status };
-			if (relay.runId) receipt.runId = relay.runId;
 			try {
-				message = updateAgentMessageDelivery(message.id, {
-					status: relay.ok ? "delivered" : "failed",
-					error: relay.error,
-					receipt,
-				});
+				const attempt = claimAcpMessageDelivery({ messageId: message.id, agentId: scopedSender.agentId });
+				message = await relayClaimedAcpMessage(attempt);
 			} catch (error) {
-				logger.error("hooks", "Failed to persist ACP delivery result", error as Error);
+				logger.error(
+					"hooks",
+					"Failed to persist ACP delivery result",
+					error instanceof Error ? error : new Error(String(error)),
+				);
 				return c.json({ error: "ACP delivery result could not be persisted", message }, 500);
 			}
 		}

@@ -420,6 +420,11 @@ export interface AgentMessage {
 	readonly expiresAt: string;
 	readonly deliveryPath: "local" | "acp";
 	readonly deliveryStatus: "queued" | "delivered" | "failed";
+	readonly deliveryState: "pending" | "in_flight" | "indeterminate" | "delivered" | "failed";
+	readonly deliveryAttemptId?: string;
+	readonly deliveryAttempts: number;
+	readonly deliveryAttemptStartedAt?: string;
+	readonly deliveryUpdatedAt?: string;
 	readonly deliveryError?: string;
 	readonly deliveryReceipt?: Readonly<Record<string, unknown>>;
 	readonly acknowledgedAt?: string;

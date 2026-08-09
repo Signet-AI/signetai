@@ -753,6 +753,12 @@ export class SignetClientP2 {
 		readonly content: string;
 		readonly broadcast?: boolean;
 		readonly via?: "local" | "acp";
+		readonly acp?: {
+			readonly baseUrl: string;
+			readonly targetAgentName: string;
+			readonly timeoutMs?: number;
+			readonly metadata?: Readonly<Record<string, unknown>>;
+		};
 	}): Promise<AgentMessageSendResponse> {
 		return this.transport.post<AgentMessageSendResponse>("/api/cross-agent/messages", opts);
 	}
@@ -764,6 +770,14 @@ export class SignetClientP2 {
 	): Promise<AgentMessageAcknowledgeResponse> {
 		return this.transport.post<AgentMessageAcknowledgeResponse>(
 			`/api/cross-agent/messages/${encodeURIComponent(messageId)}/ack`,
+			opts ?? {},
+		);
+	}
+
+	/** Retry an indeterminate ACP delivery using the same durable idempotency key. */
+	async retryAgentMessage(messageId: string, opts?: { readonly agentId?: string }): Promise<AgentMessageSendResponse> {
+		return this.transport.post<AgentMessageSendResponse>(
+			`/api/cross-agent/messages/${encodeURIComponent(messageId)}/retry`,
 			opts ?? {},
 		);
 	}

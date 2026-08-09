@@ -16,6 +16,7 @@
  * (no HTTP server, no workers, no competing load).
  */
 
+import { reconcileAcpDeliveries } from "./cross-agent";
 import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
 import { logger } from "./logger";
 
@@ -24,6 +25,7 @@ export interface StartupRecoveryReport {
 	readonly deadJobsPurged: number;
 	readonly stagingRowsCleaned: number;
 	readonly orphanedPassesSwept: number;
+	readonly acpDeliveriesReconciled: number;
 	readonly durationMs: number;
 }
 
@@ -108,7 +110,9 @@ export function runStartupRecovery(accessor: DbAccessor): StartupRecoveryReport 
 				.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'embedding_index_state'")
 				.get() as { n: number } | undefined;
 			if (!tableExists?.n) return false;
-			const state = db.prepare("SELECT state FROM embedding_index_state WHERE id = 1").get() as { state: string } | undefined;
+			const state = db.prepare("SELECT state FROM embedding_index_state WHERE id = 1").get() as
+				| { state: string }
+				| undefined;
 			return state?.state === "building";
 		});
 
@@ -170,16 +174,26 @@ export function runStartupRecovery(accessor: DbAccessor): StartupRecoveryReport 
 		});
 	}
 
+	let acpDeliveriesReconciled = 0;
+	try {
+		acpDeliveriesReconciled = reconcileAcpDeliveries(accessor);
+	} catch (err) {
+		logger.warn("startup-recovery", "ACP delivery reconciliation failed", {
+			error: err instanceof Error ? err.message : String(err),
+		});
+	}
+
 	const durationMs = Date.now() - startedAt;
 	const report: StartupRecoveryReport = {
 		walCheckpointed: false,
 		deadJobsPurged,
 		stagingRowsCleaned,
 		orphanedPassesSwept,
+		acpDeliveriesReconciled,
 		durationMs,
 	};
 
-	const totalCleaned = deadJobsPurged + stagingRowsCleaned + orphanedPassesSwept;
+	const totalCleaned = deadJobsPurged + stagingRowsCleaned + orphanedPassesSwept + acpDeliveriesReconciled;
 	if (totalCleaned > 0) {
 		logger.info("startup-recovery", "Recovery complete", { ...report });
 	} else {

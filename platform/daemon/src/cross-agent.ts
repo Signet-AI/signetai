@@ -1,11 +1,12 @@
 import { randomUUID } from "node:crypto";
-import { type ReadDb, type WriteDb, getDbAccessor, hasDbAccessor } from "./db-accessor";
+import { type DbAccessor, type ReadDb, type WriteDb, getDbAccessor, hasDbAccessor } from "./db-accessor";
 export { relayMessageViaAcp, type AcpRelayRequest, type AcpRelayResult } from "./cross-agent-acp";
 
 export type AgentMessageType = "assist_request" | "decision_update" | "info" | "question";
 
 export type AgentMessageDeliveryPath = "local" | "acp";
 export type AgentMessageDeliveryStatus = "queued" | "delivered" | "failed";
+export type AgentMessageDeliveryState = "pending" | "in_flight" | "indeterminate" | "delivered" | "failed";
 
 export interface AgentPresence {
 	readonly key: string;
@@ -62,6 +63,11 @@ export interface AgentMessage {
 	readonly broadcast: boolean;
 	readonly deliveryPath: AgentMessageDeliveryPath;
 	readonly deliveryStatus: AgentMessageDeliveryStatus;
+	readonly deliveryState: AgentMessageDeliveryState;
+	readonly deliveryAttemptId?: string;
+	readonly deliveryAttempts: number;
+	readonly deliveryAttemptStartedAt?: string;
+	readonly deliveryUpdatedAt?: string;
 	readonly deliveryError?: string;
 	readonly deliveryReceipt?: Record<string, unknown>;
 	readonly acknowledgedAt?: string;
@@ -84,6 +90,17 @@ interface CrossAgentMessageRow {
 	readonly delivery_error: string | null;
 	readonly delivery_receipt_json: string | null;
 	readonly acknowledged_at: string | null;
+	readonly delivery_state: AgentMessageDeliveryState;
+	readonly delivery_attempt_id: string | null;
+	readonly delivery_attempts: number;
+	readonly delivery_lease_token: string | null;
+	readonly delivery_lease_expires_at: string | null;
+	readonly delivery_attempt_started_at: string | null;
+	readonly delivery_updated_at: string | null;
+	readonly acp_base_url: string | null;
+	readonly acp_target_agent_name: string | null;
+	readonly acp_timeout_ms: number | null;
+	readonly acp_metadata_json: string | null;
 }
 
 export interface CreateAgentMessageInput {
@@ -98,6 +115,10 @@ export interface CreateAgentMessageInput {
 	readonly deliveryStatus?: AgentMessageDeliveryStatus;
 	readonly deliveryError?: string;
 	readonly deliveryReceipt?: Record<string, unknown>;
+	readonly acpBaseUrl?: string;
+	readonly acpTargetAgentName?: string;
+	readonly acpTimeoutMs?: number;
+	readonly acpMetadata?: Record<string, unknown>;
 }
 
 export interface ListAgentMessageOptions {
@@ -171,6 +192,9 @@ const DEFAULT_MESSAGE_LIMIT = 100;
 const MAX_MESSAGE_LIMIT = 500;
 const MAX_MESSAGE_CONTENT_CHARS = 65_536;
 const MAX_DURABLE_MESSAGES = 10_000;
+const ACP_RELAY_LEASE_MS = 150_000; // 120s max ACP timeout plus a 30s reconciliation grace period
+const ACP_PENDING_GRACE_MS = 30_000;
+const ACP_MAX_RETRY_ATTEMPTS = 3;
 
 const presenceByKey = new Map<string, MutableAgentPresence>();
 const subscribers = new Set<(event: CrossAgentEvent) => void>();
@@ -455,6 +479,11 @@ function rowToAgentMessage(row: CrossAgentMessageRow): AgentMessage {
 		broadcast: row.broadcast === 1,
 		deliveryPath: row.delivery_path,
 		deliveryStatus: row.delivery_status,
+		deliveryState: row.delivery_state,
+		deliveryAttemptId: row.delivery_attempt_id ?? undefined,
+		deliveryAttempts: row.delivery_attempts,
+		deliveryAttemptStartedAt: row.delivery_attempt_started_at ?? undefined,
+		deliveryUpdatedAt: row.delivery_updated_at ?? undefined,
 		deliveryError: row.delivery_error ?? undefined,
 		deliveryReceipt: parseDeliveryReceipt(row.delivery_receipt_json),
 		acknowledgedAt: row.acknowledged_at ?? undefined,
@@ -593,8 +622,22 @@ export function createAgentMessage(input: CreateAgentMessageInput): AgentMessage
 		broadcast: broadcast ? 1 : 0,
 		delivery_path: deliveryPath,
 		delivery_status: input.deliveryStatus ?? "delivered",
+		delivery_state: deliveryPath === "acp" ? "pending" : "delivered",
+		delivery_attempt_id: randomUUID(),
+		delivery_attempts: 0,
+		delivery_lease_token: null,
+		delivery_lease_expires_at: null,
+		delivery_attempt_started_at: null,
+		delivery_updated_at: now,
 		delivery_error: normalizeText(input.deliveryError) ?? null,
 		delivery_receipt_json: serializeDeliveryReceipt(input.deliveryReceipt),
+		acp_base_url: normalizeText(input.acpBaseUrl) ?? null,
+		acp_target_agent_name: normalizeText(input.acpTargetAgentName) ?? null,
+		acp_timeout_ms:
+			typeof input.acpTimeoutMs === "number" && Number.isFinite(input.acpTimeoutMs)
+				? Math.round(input.acpTimeoutMs)
+				: null,
+		acp_metadata_json: serializeDeliveryReceipt(input.acpMetadata),
 		acknowledged_at: null,
 	};
 
@@ -609,8 +652,11 @@ export function createAgentMessage(input: CreateAgentMessageInput): AgentMessage
 			`INSERT INTO cross_agent_messages (
 				id, from_agent_id, from_session_key, to_agent_id, to_session_key,
 				to_session_agent_id, broadcast, message_type, content, delivery_path,
-				delivery_status, delivery_error, delivery_receipt_json, created_at, expires_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				delivery_status, delivery_state, delivery_attempt_id, delivery_attempts,
+				delivery_lease_token, delivery_lease_expires_at, delivery_attempt_started_at,
+				delivery_updated_at, delivery_error, delivery_receipt_json, acp_base_url,
+				acp_target_agent_name, acp_timeout_ms, acp_metadata_json, created_at, expires_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		).run(
 			row.id,
 			row.from_agent_id,
@@ -623,8 +669,19 @@ export function createAgentMessage(input: CreateAgentMessageInput): AgentMessage
 			row.content,
 			row.delivery_path,
 			row.delivery_status,
+			row.delivery_state,
+			row.delivery_attempt_id,
+			row.delivery_attempts,
+			row.delivery_lease_token,
+			row.delivery_lease_expires_at,
+			row.delivery_attempt_started_at,
+			row.delivery_updated_at,
 			row.delivery_error,
 			row.delivery_receipt_json,
+			row.acp_base_url,
+			row.acp_target_agent_name,
+			row.acp_timeout_ms,
+			row.acp_metadata_json,
 			row.created_at,
 			row.expires_at,
 		);
@@ -633,6 +690,149 @@ export function createAgentMessage(input: CreateAgentMessageInput): AgentMessage
 	const out = rowToAgentMessage(row);
 	emit({ type: "message", message: out, timestamp: now });
 	return out;
+}
+
+export class AgentMessageDeliveryLeaseError extends Error {
+	constructor(messageId: string) {
+		super(`ACP delivery lease was lost for message ${messageId}`);
+		this.name = "AgentMessageDeliveryLeaseError";
+	}
+}
+
+export interface AcpDeliveryAttempt {
+	readonly message: AgentMessage;
+	readonly leaseToken: string;
+	readonly idempotencyKey: string;
+	readonly request: {
+		readonly baseUrl: string;
+		readonly targetAgentName: string;
+		readonly content: string;
+		readonly fromAgentId: string;
+		readonly fromSessionKey?: string;
+		readonly metadata?: Readonly<Record<string, unknown>>;
+		readonly timeoutMs?: number;
+	};
+}
+
+function readMessageRow(db: ReadDb | WriteDb, messageId: string): CrossAgentMessageRow | null {
+	return (
+		(db.prepare("SELECT m.*, NULL AS acknowledged_at FROM cross_agent_messages m WHERE m.id = ?").get(messageId) as
+			| CrossAgentMessageRow
+			| null
+			| undefined) ?? null
+	);
+}
+
+function buildAcpAttempt(row: CrossAgentMessageRow): AcpDeliveryAttempt {
+	const baseUrl = normalizeText(row.acp_base_url ?? undefined);
+	const targetAgentName = normalizeText(row.acp_target_agent_name ?? undefined);
+	const attemptId = normalizeText(row.delivery_attempt_id ?? undefined);
+	const leaseToken = normalizeText(row.delivery_lease_token ?? undefined);
+	if (!baseUrl || !targetAgentName || !attemptId || !leaseToken) {
+		throw new Error("ACP delivery attempt is missing durable target or lease state");
+	}
+	return {
+		message: rowToAgentMessage(row),
+		leaseToken,
+		idempotencyKey: `signet-acp-${attemptId}`,
+		request: {
+			baseUrl,
+			targetAgentName,
+			content: row.content,
+			fromAgentId: row.from_agent_id,
+			fromSessionKey: row.from_session_key ?? undefined,
+			metadata: parseDeliveryReceipt(row.acp_metadata_json),
+			timeoutMs: row.acp_timeout_ms ?? undefined,
+		},
+	};
+}
+
+export function claimAcpMessageDelivery(input: {
+	readonly messageId: string;
+	readonly agentId?: string;
+	readonly retryIndeterminate?: boolean;
+	readonly nowMs?: number;
+}): AcpDeliveryAttempt {
+	const messageId = normalizeText(input.messageId);
+	if (!messageId) throw new Error("messageId is required");
+	const agentId = normalizeText(input.agentId);
+	const nowMs = input.nowMs ?? Date.now();
+	const now = new Date(nowMs).toISOString();
+	const leaseExpiresAt = new Date(nowMs + ACP_RELAY_LEASE_MS).toISOString();
+	const leaseToken = randomUUID();
+	const allowedState = input.retryIndeterminate ? "indeterminate" : "pending";
+	let attempt: AcpDeliveryAttempt | null = null;
+
+	getDbAccessor().withWriteTx((db) => {
+		const result = db
+			.prepare(
+				`UPDATE cross_agent_messages
+				 SET delivery_state = 'in_flight', delivery_status = 'queued',
+				     delivery_attempts = delivery_attempts + 1,
+				     delivery_lease_token = ?, delivery_lease_expires_at = ?,
+				     delivery_attempt_started_at = ?, delivery_updated_at = ?
+				 WHERE id = ? AND delivery_path = 'acp'
+				   AND delivery_state = ? AND delivery_attempts < ?
+				   AND (delivery_lease_expires_at IS NULL OR delivery_lease_expires_at <= ?)`,
+			)
+			.run(leaseToken, leaseExpiresAt, now, now, messageId, allowedState, ACP_MAX_RETRY_ATTEMPTS, now);
+		if (result.changes !== 1) {
+			const row = readMessageRow(db, messageId);
+			if (row == null) throw new AgentMessageNotFoundError(messageId);
+			if (row.delivery_state === "in_flight") throw new Error("ACP delivery is already active");
+			if (row.delivery_attempts >= ACP_MAX_RETRY_ATTEMPTS) throw new Error("ACP retry limit reached");
+			throw new Error(`ACP delivery is not ${allowedState}`);
+		}
+		const row = readMessageRow(db, messageId);
+		if (row == null) throw new AgentMessageNotFoundError(messageId);
+		if (agentId && row.from_agent_id !== agentId) throw new AgentMessageNotFoundError(messageId);
+		attempt = buildAcpAttempt(row);
+	});
+	if (attempt == null) throw new AgentMessageNotFoundError(messageId);
+	return attempt;
+}
+
+export function completeAcpMessageDelivery(
+	messageId: string,
+	leaseToken: string,
+	input: {
+		readonly status: "delivered" | "failed" | "indeterminate";
+		readonly error?: string;
+		readonly receipt?: Record<string, unknown>;
+	},
+): AgentMessage {
+	const normalizedId = normalizeText(messageId);
+	const normalizedToken = normalizeText(leaseToken);
+	if (!normalizedId) throw new Error("messageId is required");
+	if (!normalizedToken) throw new Error("leaseToken is required");
+	const now = new Date().toISOString();
+	let updated: AgentMessage | null = null;
+	getDbAccessor().withWriteTx((db) => {
+		const result = db
+			.prepare(
+				`UPDATE cross_agent_messages
+				 SET delivery_state = ?, delivery_status = ?, delivery_error = ?,
+				     delivery_receipt_json = ?, delivery_lease_token = NULL,
+				     delivery_lease_expires_at = NULL, delivery_updated_at = ?
+				 WHERE id = ? AND delivery_state = 'in_flight' AND delivery_lease_token = ?`,
+			)
+			.run(
+				input.status,
+				input.status === "delivered" ? "delivered" : input.status === "failed" ? "failed" : "queued",
+				normalizeText(input.error) ?? null,
+				serializeDeliveryReceipt(input.receipt),
+				now,
+				normalizedId,
+				normalizedToken,
+			);
+		if (result.changes !== 1) throw new AgentMessageDeliveryLeaseError(normalizedId);
+		const row = readMessageRow(db, normalizedId);
+		if (row == null) throw new AgentMessageNotFoundError(normalizedId);
+		updated = rowToAgentMessage(row);
+	});
+	if (updated == null) throw new AgentMessageNotFoundError(normalizedId);
+	emit({ type: "message", message: updated, timestamp: now });
+	return updated;
 }
 
 export function updateAgentMessageDelivery(
@@ -646,21 +846,54 @@ export function updateAgentMessageDelivery(
 	const normalizedId = normalizeText(messageId);
 	if (!normalizedId) throw new Error("messageId is required");
 	let updated: AgentMessage | null = null;
+	const state: AgentMessageDeliveryState =
+		input.status === "delivered" ? "delivered" : input.status === "failed" ? "failed" : "pending";
+	const now = new Date().toISOString();
 	getDbAccessor().withWriteTx((db) => {
 		db.prepare(
 			`UPDATE cross_agent_messages
-			 SET delivery_status = ?, delivery_error = ?, delivery_receipt_json = ?
+			 SET delivery_status = ?, delivery_state = ?, delivery_error = ?,
+			     delivery_receipt_json = ?, delivery_lease_token = NULL,
+			     delivery_lease_expires_at = NULL, delivery_updated_at = ?
 			 WHERE id = ?`,
-		).run(input.status, normalizeText(input.error) ?? null, serializeDeliveryReceipt(input.receipt), normalizedId);
-		const row = db
-			.prepare("SELECT m.*, NULL AS acknowledged_at FROM cross_agent_messages m WHERE m.id = ?")
-			.get(normalizedId) as CrossAgentMessageRow | null | undefined;
+		).run(
+			input.status,
+			state,
+			normalizeText(input.error) ?? null,
+			serializeDeliveryReceipt(input.receipt),
+			now,
+			normalizedId,
+		);
+		const row = readMessageRow(db, normalizedId);
 		if (row == null) throw new AgentMessageNotFoundError(normalizedId);
 		updated = rowToAgentMessage(row);
 	});
 	if (updated == null) throw new AgentMessageNotFoundError(normalizedId);
-	emit({ type: "message", message: updated, timestamp: new Date().toISOString() });
+	emit({ type: "message", message: updated, timestamp: now });
 	return updated;
+}
+
+export function reconcileAcpDeliveries(accessor: DbAccessor = getDbAccessor(), nowMs = Date.now()): number {
+	const now = new Date(nowMs).toISOString();
+	const pendingCutoff = new Date(nowMs - ACP_PENDING_GRACE_MS).toISOString();
+	return accessor.withWriteTx((db) => {
+		const result = db
+			.prepare(
+				`UPDATE cross_agent_messages
+				 SET delivery_state = 'indeterminate', delivery_status = 'queued',
+				     delivery_error = CASE
+				       WHEN delivery_state = 'in_flight' THEN 'ACP relay interrupted; remote outcome is unknown'
+				       ELSE 'ACP relay was queued but never started'
+				     END,
+				     delivery_lease_token = NULL, delivery_lease_expires_at = NULL,
+				     delivery_updated_at = ?
+				 WHERE delivery_path = 'acp'
+				   AND ((delivery_state = 'in_flight' AND delivery_lease_expires_at <= ?)
+				     OR (delivery_state = 'pending' AND delivery_updated_at <= ?))`,
+			)
+			.run(now, now, pendingCutoff);
+		return result.changes;
+	});
 }
 
 export function listAgentMessagePage(options: ListAgentMessageOptions = {}): AgentMessagePage {

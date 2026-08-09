@@ -21,6 +21,7 @@ import { up as retireLegacyIngestion } from "./096-retire-legacy-ingestion";
 import { up as dreamingRunbook } from "./100-dreaming-runbook";
 import { up as agentScopedEntityName } from "./105-agent-scoped-entity-name";
 import { up as crossAgentMessageNotifications } from "./115-cross-agent-message-notifications";
+import { up as acpDeliveryReconciliation } from "./116-acp-delivery-reconciliation";
 import { MIGRATIONS, hasPendingMigrations, runMigrations } from "./index";
 
 function createFreshDb(): Database {
@@ -1889,5 +1890,38 @@ describe("migration 115: cross-agent message notifications", () => {
 		const receipt = db.query("SELECT message_id FROM cross_agent_message_receipts").get();
 		expect(receipt).toBeNull();
 		db.close();
+	});
+});
+
+describe("migration 116: ACP delivery reconciliation", () => {
+	test("adds lease, attempt, target, and explicit state columns idempotently", () => {
+		const db = createFreshDb();
+		crossAgentMessageNotifications(db);
+		db.prepare(
+			`INSERT INTO cross_agent_messages (
+				id, from_agent_id, content, message_type, delivery_path, delivery_status, created_at, expires_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		).run("acp-1", "alpha", "pending", "info", "acp", "queued", "2026-08-08T00:00:00.000Z", "2026-08-15T00:00:00.000Z");
+
+		acpDeliveryReconciliation(db);
+		acpDeliveryReconciliation(db);
+		const columns = db.query("PRAGMA table_info(cross_agent_messages)").all() as Array<{ name: string }>;
+		expect(columns.map((column) => column.name)).toEqual(
+			expect.arrayContaining([
+				"delivery_state",
+				"delivery_attempt_id",
+				"delivery_attempts",
+				"delivery_lease_token",
+				"delivery_lease_expires_at",
+				"acp_base_url",
+				"acp_target_agent_name",
+			]),
+		);
+		expect(
+			db.prepare("SELECT delivery_state, delivery_attempt_id FROM cross_agent_messages WHERE id = ?").get("acp-1"),
+		).toEqual({
+			delivery_state: "pending",
+			delivery_attempt_id: "acp-1",
+		});
 	});
 });

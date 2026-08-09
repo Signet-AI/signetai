@@ -121,6 +121,7 @@ import { up as telemetryQueueOwnership } from "./112-telemetry-queue-ownership";
 import { up as sessionClaims } from "./113-session-claims";
 import { up as memoryTraversalHydrationIndex } from "./114-memory-traversal-hydration-index";
 import { up as crossAgentMessageNotifications } from "./115-cross-agent-message-notifications";
+import { up as acpDeliveryReconciliation } from "./116-acp-delivery-reconciliation";
 
 // -- Public interface consumed by Database.init() --
 
@@ -1078,6 +1079,20 @@ export const MIGRATIONS: readonly Migration[] = [
 		up: crossAgentMessageNotifications,
 		artifacts: {
 			tables: ["cross_agent_messages", "cross_agent_message_receipts"],
+		},
+	},
+	{
+		version: 116,
+		name: "acp-delivery-reconciliation",
+		up: acpDeliveryReconciliation,
+		artifacts: {
+			columns: [
+				{ table: "cross_agent_messages", column: "delivery_state" },
+				{ table: "cross_agent_messages", column: "delivery_attempt_id" },
+				{ table: "cross_agent_messages", column: "delivery_lease_expires_at" },
+				{ table: "cross_agent_messages", column: "acp_base_url" },
+				{ table: "cross_agent_messages", column: "acp_target_agent_name" },
+			],
 		},
 	},
 ];

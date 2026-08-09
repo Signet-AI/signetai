@@ -8,6 +8,7 @@ export interface AcpRelayRequest {
 	readonly fromSessionKey?: string;
 	readonly metadata?: Readonly<Record<string, unknown>>;
 	readonly timeoutMs?: number;
+	readonly idempotencyKey?: string;
 }
 
 export interface AcpRelayResult {
@@ -15,10 +16,12 @@ export interface AcpRelayResult {
 	readonly status: number;
 	readonly runId?: string;
 	readonly error?: string;
+	readonly indeterminate?: boolean;
 }
 
 const ACP_TIMEOUT_MS = 20_000;
 const ACP_ALLOWED_ORIGINS_ENV = "SIGNET_ACP_ALLOWED_ORIGINS";
+const MAX_ACP_TIMEOUT_MS = 120_000;
 
 function normalizeText(value: unknown): string | undefined {
 	if (typeof value !== "string") return undefined;
@@ -172,7 +175,10 @@ export async function relayMessageViaAcp(request: AcpRelayRequest): Promise<AcpR
 	const content = normalizeText(request.content);
 	if (!content) return { ok: false, status: 0, error: "content is required" };
 
-	const timeoutMs = typeof request.timeoutMs === "number" && request.timeoutMs > 0 ? request.timeoutMs : ACP_TIMEOUT_MS;
+	const timeoutMs =
+		typeof request.timeoutMs === "number" && request.timeoutMs > 0
+			? Math.min(MAX_ACP_TIMEOUT_MS, request.timeoutMs)
+			: ACP_TIMEOUT_MS;
 	const runsUrl = resolveAcpRunsUrl(baseUrl);
 	if (!runsUrl.ok) return { ok: false, status: 0, error: runsUrl.error };
 
@@ -200,7 +206,10 @@ export async function relayMessageViaAcp(request: AcpRelayRequest): Promise<AcpR
 	try {
 		const response = await fetch(runsUrl.url, {
 			method: "POST",
-			headers: { "Content-Type": "application/json" },
+			headers: {
+				"Content-Type": "application/json",
+				...(normalizeText(request.idempotencyKey) ? { "Idempotency-Key": normalizeText(request.idempotencyKey) } : {}),
+			},
 			body: JSON.stringify(payload),
 			signal: AbortSignal.timeout(timeoutMs),
 		});
@@ -217,7 +226,12 @@ export async function relayMessageViaAcp(request: AcpRelayRequest): Promise<AcpR
 				isRecord(parsedBody) && typeof parsedBody.error === "string"
 					? parsedBody.error
 					: `ACP request failed with ${response.status}`;
-			return { ok: false, status: response.status, error };
+			return {
+				ok: false,
+				status: response.status,
+				error,
+				indeterminate: response.status >= 500,
+			};
 		}
 
 		return { ok: true, status: response.status, runId: extractRunId(parsedBody) };
@@ -226,6 +240,7 @@ export async function relayMessageViaAcp(request: AcpRelayRequest): Promise<AcpR
 			ok: false,
 			status: 0,
 			error: error instanceof Error ? error.message : String(error),
+			indeterminate: true,
 		};
 	}
 }

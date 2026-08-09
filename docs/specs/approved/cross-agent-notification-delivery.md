@@ -102,8 +102,29 @@ seeing the block.
 ### ACP relay
 
 An ACP message is committed locally with `queued` status before the remote
-request begins. Relay completion updates that durable row to `delivered` or
-`failed` with the bounded receipt. If local capacity or persistence fails, the
+request begins. Each ACP row also has a stable attempt identity, bounded retry
+count, lease, persisted target, and an explicit `delivery_state`: `pending`,
+`in_flight`, `indeterminate`, `delivered`, or `failed`. A relay claims the row
+with a lease before making the remote request. Another daemon may reconcile only
+an expired lease, so an active relay is not failed by startup recovery.
+
+The stable attempt identity is sent as the HTTP `Idempotency-Key` header. A
+successful response updates the row to `delivered`; a definitive non-2xx
+response updates it to `failed`. A timeout, transport error, crash, or local
+status-write failure leaves or moves the row to `indeterminate` because remote
+truth is unknown. Reconciliation never resends automatically. Operators can
+inspect the persisted attempt/error and use the bounded retry endpoint. There
+are three total attempts: the initial relay and at most two retries. Once that
+limit is reached, the row remains explicitly `indeterminate` and the retry
+endpoint returns `409` for manual review rather than silently sending more
+requests. Retries reuse the same idempotency key and therefore do not silently
+create a duplicate when the remote ACP implementation honors that key. If the remote does not
+provide idempotency or run lookup, the row remains an explicit indeterminate
+outcome rather than pretending delivery is known. Rows created before this
+reconciliation migration had no idempotency key on their original request;
+those legacy rows require manual review before treating a retry as duplicate-safe.
+
+If local capacity or persistence fails before the durable row is committed, the
 remote relay is not attempted.
 
 ## Failure behavior
