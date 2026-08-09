@@ -547,6 +547,28 @@ describe("telemetry lifecycle events (issue #1026 Phase 2)", () => {
 		expect(third.properties.command).toBe("status");
 	});
 
+	it("defers wedge persistence until the normal flush", async () => {
+		const collector = createTelemetryCollector(
+			fakeDbAccessor(),
+			{
+				posthogHost: "",
+				posthogApiKey: "",
+				flushIntervalMs: 60000,
+				flushBatchSize: 50,
+				retentionDays: 90,
+				memorySearchQaEnabled: false,
+			},
+			"0.163.15",
+			{ telemetryLogPath: logPath },
+		);
+
+		const before = readFileSync(logPath, "utf-8");
+		collector.recordDeferred?.("error.occurred", { type: "EventLoopLag", lagMs: 900 });
+		expect(readFileSync(logPath, "utf-8")).toBe(before);
+		await collector.flush();
+		expect(readFileSync(logPath, "utf-8")).toContain('"event":"error.occurred"');
+	});
+
 	it("does not write a log when telemetryLogPath is omitted", () => {
 		const collector = createTelemetryCollector(
 			fakeDbAccessor(),

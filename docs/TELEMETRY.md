@@ -53,7 +53,7 @@ PostHog failures, and never throws into the daemon.
 | `first.remember` / `first.recall` | first successful remember / recall per install, exactly once | `version`, `platform` |
 | `daemon.started` | daemon boot | `version`, `platform`, `uptimeMs` |
 | `daemon.previous_exit` | next successful boot reconciles the prior lifecycle record, exactly once when one exists | `classification` (`clean` / `error` / `unrecorded`), `reasonCategory`, `exitCode`, `previousVersion`, `previousUptimeMs`, `restartDelayMs` |
-| `daemon.heartbeat` | every 5 minutes | `uptimeMs`, `memoryCount`, `connectorsActive`, `pipelineMode`, `extractionProvider`, `embeddingProvider` |
+| `daemon.heartbeat` | every 5 minutes | `uptimeMs`, `memoryCount`, `connectorsActive`, `pipelineMode`, `extractionProvider`, `embeddingProvider`, bounded runtime-pressure buckets |
 | `session.start` | real session start (deduped; stubs and clear/reset paths don't count) | `harness`, `sessionHash` |
 | `session.turn` | every non-boundary `session-end` hook call (per turn, see notes) | `harness`, `promptCount`, `sessionHash` |
 | `session.end` | real session termination: an explicit boundary reason or a TTL-evicted (abandoned) session claim | `harness`, `reason` (`clear` / `session.deleted` / `session_branch` / `session_fork` / `session_shutdown` / `session_switch` / `stale-session-sweep` / `expired`), `sessionHash`, `tokensInput`, `tokensOutput`, `tokensCacheRead`, `tokensCacheWrite`, `cost` |
@@ -65,7 +65,7 @@ PostHog failures, and never throws into the daemon.
 | `inference.route` | inference control-plane routing decision | `surface`, `agentId`, `operation`, `taskClass`, `policyId`, `selectedTarget`, `candidateCount`, `blockedCount`, `allowedCount`, `privacy`, `durationMs`, `success`, `errorCode` |
 | `inference.execute` / `inference.stream` | per-execution outcome | `surface`, `agentId`, `operation`, `taskClass`, `policyId`, `selectedTarget`, `finalTarget`, `attemptPath`, `failedTargets`, `attemptCount`, `failedCount`, `fallbackCount`, `privacy`, `durationMs`, `inputTokens`, `outputTokens`, `success`, `cancelled`, `errorCode` |
 | `inference.fallback` | emitted alongside execute/stream when a target failed and routing fell back | same fields as execute/stream |
-| `error.occurred` | process-level crash, unhandled rejection, or event-loop wedge | `type`, `message`, `stack`, `uptimeMs`; `EventLoopLag` reports add `lagMs` |
+| `error.occurred` | process-level crash, unhandled rejection, or event-loop wedge | `type`, `message`, `stack`, `uptimeMs`; `EventLoopLag` reports add `lagMs` and the latest bounded runtime-pressure buckets |
 | `version.upgraded` | daemon auto-update path only | `from`, `to` |
 | `command.invoked` | CLI command (name only, never arguments) | `command` |
 
@@ -127,6 +127,15 @@ Notes on individual events:
   search and additional events for decomposed subqueries. Local stats read the
   flushed telemetry table, so they can lag the in-memory event buffer by one
   flush interval.
+- **Runtime-pressure buckets (#1282)** — heartbeats and rate-limited
+  `EventLoopLag` reports carry `runtimePressureVersion`, queue-depth and
+  oldest-job-age buckets, active-worker and configured batch-size buckets,
+  database and embedding latency buckets, process memory/CPU pressure buckets,
+  `recoveryOutcome`, and a coarse `snapshotAgeBucket`. The daemon keeps only
+  the latest observations in memory; the wedge path never queries SQLite,
+  touches the filesystem, or starts provider work. `recoveryOutcome` is
+  `still_degraded` during an episode, `recovered` after the pressure state
+  clears, and `restarted` on the first heartbeat after an abnormal prior exit.
 
 ## Privacy contract
 
@@ -143,6 +152,11 @@ Notes on individual events:
   reports (the event-loop-wedge class) are rate-limited to once per 10
   minutes per process so a stuck loop can't flood the project. No memory
   content is ever captured anywhere, so errors cannot carry it by design.
+- **Bounded wedge context.** Runtime pressure contains fixed bucket labels,
+  never raw queue counts, ages, latencies, RSS, CPU percentages, provider
+  messages, queue errors, payloads, source names, paths, PIDs, or additional
+  stack data. The existing once-per-10-minute `EventLoopLag` rate limit applies
+  to the complete event, including its pressure envelope.
 - **Agent ids in `inference.*` are hashed.** Inference events carry
   `agentId` as a SHA-256 hash salted with the per-install install id (16 hex
   chars). Stable within an install (per-agent analysis still works), not

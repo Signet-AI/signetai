@@ -35,8 +35,13 @@ describe("getResourceSnapshot", () => {
 			"other",
 			"rss",
 			"heapUsed",
+			"cpuPercent",
 		];
 		for (const key of keys) {
+			if (key === "cpuPercent") {
+				expect(snap[key] === null || typeof snap[key] === "number").toBe(true);
+				continue;
+			}
 			expect(typeof snap[key]).toBe("number");
 		}
 		expect(snap.physicalFootprint === null || typeof snap.physicalFootprint === "number").toBe(true);

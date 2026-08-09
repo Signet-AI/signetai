@@ -33,6 +33,7 @@ import {
 import { convertToIncrementalVacuum } from "./db-vacuum";
 import { ensureEmbeddingIndexState } from "./embedding-index-state";
 import { loadMemoryConfig } from "./memory-config";
+import { observeDbLatency } from "./runtime-pressure";
 
 const isBun = typeof (globalThis as Record<string, unknown>).Bun !== "undefined";
 const require = createRequire(import.meta.url);
@@ -746,9 +747,9 @@ function finishDbAccessorInit(writeConn: SqliteDatabase, opts?: { readonly agent
 	// older installs where the table was dropped or never created.
 	ensureFtsTable(writeConn);
 	const configuredEmbedding = loadMemoryConfig(opts?.agentsDir ?? resolveSqliteAgentsDir()).embedding;
-	const legacyVecSql = writeConn.prepare("SELECT sql FROM sqlite_master WHERE name = 'vec_embeddings' AND type = 'table'").get() as
-		| { sql?: string }
-		| undefined;
+	const legacyVecSql = writeConn
+		.prepare("SELECT sql FROM sqlite_master WHERE name = 'vec_embeddings' AND type = 'table'")
+		.get() as { sql?: string } | undefined;
 	const legacyDimensions = readVecEmbeddingDimensions(legacyVecSql?.sql);
 	const embeddingIndexState = ensureEmbeddingIndexState(
 		writeConn,
@@ -1042,47 +1043,66 @@ function createAccessor(writeConn: SqliteDatabase): DbAccessor {
 	return {
 		withWriteTx<T>(fn: (db: WriteDb) => T): T {
 			if (closed) throw new Error("DbAccessor is closed");
-			writeConn.exec("BEGIN IMMEDIATE");
+			const startedAt = performance.now();
 			try {
-				const result = fn(writeConn);
-				writeConn.exec("COMMIT");
-				return result;
-			} catch (err) {
-				writeConn.exec("ROLLBACK");
-				throw err;
+				writeConn.exec("BEGIN IMMEDIATE");
+				try {
+					const result = fn(writeConn);
+					writeConn.exec("COMMIT");
+					return result;
+				} catch (err) {
+					writeConn.exec("ROLLBACK");
+					throw err;
+				}
+			} finally {
+				observeDbLatency(performance.now() - startedAt);
 			}
 		},
 
 		withReadDb<T>(fn: (db: ReadDb) => T): T {
 			if (closed) throw new Error("DbAccessor is closed");
+			const startedAt = performance.now();
 			const conn = acquireRead();
 			try {
 				return fn(conn);
 			} finally {
 				releaseRead(conn);
+				observeDbLatency(performance.now() - startedAt);
 			}
 		},
 
 		async withReadDbAsync<T>(fn: (db: ReadDb) => Promise<T>): Promise<T> {
 			if (closed) throw new Error("DbAccessor is closed");
+			const startedAt = performance.now();
 			const conn = acquireRead();
 			try {
 				return await fn(conn);
 			} finally {
 				releaseRead(conn);
+				observeDbLatency(performance.now() - startedAt);
 			}
 		},
 
 		checkpointWal(): void {
 			if (closed) throw new Error("DbAccessor is closed");
-			writeConn.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+			const startedAt = performance.now();
+			try {
+				writeConn.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+			} finally {
+				observeDbLatency(performance.now() - startedAt);
+			}
 		},
 
 		incrementalVacuum(): number {
 			if (closed) throw new Error("DbAccessor is closed");
-			writeConn.exec("PRAGMA incremental_vacuum");
-			const row = writeConn.prepare("PRAGMA freelist_count").get() as { freelist_count?: number } | undefined;
-			return typeof row?.freelist_count === "number" ? row.freelist_count : 0;
+			const startedAt = performance.now();
+			try {
+				writeConn.exec("PRAGMA incremental_vacuum");
+				const row = writeConn.prepare("PRAGMA freelist_count").get() as { freelist_count?: number } | undefined;
+				return typeof row?.freelist_count === "number" ? row.freelist_count : 0;
+			} finally {
+				observeDbLatency(performance.now() - startedAt);
+			}
 		},
 
 		close(): void {

@@ -48,6 +48,7 @@ import {
 import { listConnectors } from "./connectors/registry";
 import { clearAllPresence, reconcileAcpDeliveries } from "./cross-agent";
 import { closeDbAccessor, getDbAccessor, getVectorRuntimeStatus, initDbAccessorAsync } from "./db-accessor";
+import { getQueueDiagnosticsSnapshot } from "./diagnostics-queue";
 import { fetchEmbedding } from "./embedding-fetch";
 import { type EmbeddingIndexMigrationHandle, startEmbeddingIndexMigration } from "./embedding-index-migration";
 import { resolveActiveEmbeddingConfig } from "./embedding-index-state";
@@ -79,6 +80,7 @@ import {
 	ensureRetentionWorker,
 	ensureSummaryRecovery,
 	ensureSummaryWorker,
+	getPipelineWorkerStatus,
 	setDreamingWorker,
 	startPipeline,
 	stopPipeline,
@@ -91,7 +93,13 @@ import { configureLlmConcurrency } from "./pipeline/provider";
 import { type ReflectionWorkerHandle, startReflectionWorker } from "./pipeline/reflection-worker";
 import { startReconciler } from "./pipeline/skill-reconciler";
 import { isRemotePipelineProviderForEndpoint } from "./provider-safety";
-import { logFdSnapshot, startEventLoopMonitor, startFdPollMonitor, stopResourceMonitors } from "./resource-monitor";
+import {
+	getResourceSnapshot,
+	logFdSnapshot,
+	startEventLoopMonitor,
+	startFdPollMonitor,
+	stopResourceMonitors,
+} from "./resource-monitor";
 import {
 	AGENTS_DIR,
 	BIND_HOST,
@@ -124,6 +132,12 @@ import {
 	embeddingTrackerHandle as sharedEmbeddingTrackerHandle,
 	shuttingDown,
 } from "./routes/state.js";
+import {
+	type PressureRecoveryOutcome,
+	buildRuntimePressureEnvelope,
+	countActiveWorkers,
+	setRuntimePressureEnvelope,
+} from "./runtime-pressure";
 import { startSchedulerWorker } from "./scheduler";
 import { getSecret } from "./secrets.js";
 import { flushPendingCheckpoints, initCheckpointFlush, pruneCheckpoints } from "./session-checkpoints";
@@ -148,7 +162,7 @@ import {
 	updateSourceIndexJobProgress,
 } from "./source-index-progress";
 import { runStartupRecovery } from "./startup-recovery";
-import { reportStartupGrace } from "./system-pressure";
+import { getPressureRecoveryOutcome, reportStartupGrace } from "./system-pressure";
 import {
 	type TelemetryCollector,
 	type TelemetryConfigSnapshot,
@@ -1783,11 +1797,27 @@ function buildLifecycleRecord(state: DaemonLifecycle["state"], extra: Partial<Da
 	};
 }
 
-function flushAndExit(exitCode: number): void {
-	// The logger buffers file writes and flushes on a 1s timer; without an
-	// explicit flush the final log lines can be lost on exit.
-	logger.shutdown();
-	process.exit(exitCode);
+let exitFlushInFlight: Promise<void> | null = null;
+
+async function flushAndExit(exitCode: number): Promise<void> {
+	if (exitFlushInFlight) return exitFlushInFlight;
+	exitFlushInFlight = (async () => {
+		// Update handoffs and repeated signals bypass normal cleanup. Give the
+		// telemetry collector a bounded final drain before process.exit so a
+		// wedge/crash record is not discarded on those paths.
+		if (telemetryRef) {
+			const timeout = new Promise<void>((resolve) => {
+				const timer = setTimeout(resolve, 2_000);
+				if (timer.unref) timer.unref();
+			});
+			await Promise.race([telemetryRef.stop(), timeout]).catch(() => {});
+		}
+		// The logger buffers file writes and flushes on a 1s timer; without an
+		// explicit flush the final log lines can be lost on exit.
+		logger.shutdown();
+		process.exit(exitCode);
+	})();
+	return exitFlushInFlight;
 }
 
 function buildTerminalLifecycleRecord(reason: string, exitCode: number, error?: unknown): DaemonLifecycle {
@@ -1823,13 +1853,14 @@ function requestShutdown(reason: string, exitCode: number, error?: unknown, runC
 		// A second signal while draining must not wedge the process; flush and
 		// exit immediately so the operator is never stuck with a zombie — and
 		// the final log lines still land.
-		flushAndExit(exitCode);
+		void flushAndExit(exitCode);
+		return;
 	}
 	setShuttingDown(true);
 	logger.info("daemon", `Received ${reason}; shutting down`, { exitCode });
 	if (!runCleanup) {
 		writeDaemonLifecycle(AGENTS_DIR, buildTerminalLifecycleRecord(reason, exitCode, error));
-		flushAndExit(exitCode);
+		void flushAndExit(exitCode);
 		return;
 	}
 	const cleanupDeadline = setTimeout(() => {
@@ -1839,14 +1870,14 @@ function requestShutdown(reason: string, exitCode: number, error?: unknown, runC
 			deadlineMs: SHUTDOWN_CLEANUP_DEADLINE_MS,
 		});
 		writeDaemonLifecycle(AGENTS_DIR, buildTerminalLifecycleRecord(reason, exitCode, error));
-		flushAndExit(exitCode);
+		void flushAndExit(exitCode);
 	}, SHUTDOWN_CLEANUP_DEADLINE_MS);
 	cleanup()
 		.catch(() => {})
 		.finally(() => {
 			clearTimeout(cleanupDeadline);
 			writeDaemonLifecycle(AGENTS_DIR, buildTerminalLifecycleRecord(reason, exitCode, error));
-			flushAndExit(exitCode);
+			void flushAndExit(exitCode);
 		});
 }
 
@@ -1912,6 +1943,7 @@ async function main() {
 	const previousLifecycle = readDaemonLifecycle(AGENTS_DIR);
 	lifecycleStartedAt = new Date().toISOString();
 	const previousExit = classifyPreviousDaemonExit(previousLifecycle, lifecycleStartedAt);
+	let restartedHeartbeatPending = previousExit !== null && previousExit.classification !== "clean";
 	writeDaemonLifecycle(AGENTS_DIR, buildLifecycleRecord("starting"));
 
 	// Config migrations must precede every initialization path that resolves
@@ -2101,6 +2133,40 @@ async function main() {
 						return row?.cnt ?? 0;
 					});
 					const connectors = listConnectors(getDbAccessor());
+					let runtimePressure: ReturnType<typeof buildRuntimePressureEnvelope> | undefined;
+					try {
+						const queue = getDbAccessor().withReadDb((db) => getQueueDiagnosticsSnapshot(db, { fresh: true }));
+						const workers = getPipelineWorkerStatus();
+						const resources = getResourceSnapshot();
+						const recoveryOutcome: PressureRecoveryOutcome = restartedHeartbeatPending
+							? "restarted"
+							: getPressureRecoveryOutcome();
+						runtimePressure = buildRuntimePressureEnvelope({
+							memoryQueueDepth: queue.memory.pending + queue.memory.leased,
+							summaryQueueDepth: queue.summary.pending + queue.summary.leased,
+							oldestJobAgeSec: Math.max(queue.memory.oldestAgeSec, queue.summary.oldestAgeSec),
+							activeWorkers: countActiveWorkers(
+								[
+									workers.summary.running,
+									workers.document.running,
+									workers.retention.running,
+									workers.maintenance.running,
+									workers.synthesis.running,
+									workers.hints.running,
+									workers.dreaming.running,
+								],
+								workers.llmConcurrency.concurrency.running,
+							),
+							batchSize: liveCfg.pipelineV2.embeddingTracker.batchSize,
+							memoryRssMb: resources.rss,
+							cpuPercent: resources.cpuPercent,
+							recoveryOutcome,
+						});
+						setRuntimePressureEnvelope(runtimePressure);
+					} catch {
+						// Pressure context is best-effort; a slow or unavailable
+						// subsystem must never suppress the liveness heartbeat.
+					}
 					telemetryRef.record("daemon.heartbeat", {
 						uptimeMs: Date.now() - daemonStartTime,
 						memoryCount,
@@ -2108,7 +2174,11 @@ async function main() {
 						pipelineMode: readPipelineMode(liveCfg.pipelineV2),
 						extractionProvider: providerRuntimeResolution.extraction.effective,
 						embeddingProvider: liveCfg.embedding.provider,
+						...(runtimePressure ?? {}),
 					});
+					if (runtimePressure?.recoveryOutcome === "restarted") {
+						restartedHeartbeatPending = false;
+					}
 				} catch {}
 			},
 			5 * 60 * 1000,
