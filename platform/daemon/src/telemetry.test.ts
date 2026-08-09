@@ -347,6 +347,63 @@ describe("telemetry collector", () => {
 		expect(lastBatch.map((e) => e.event)).toEqual(["daemon.heartbeat"]);
 	});
 
+	it("recovers first-use events after termination before the normal flush", async () => {
+		// Regression (issue #1275): claiming first use in one transaction and
+		// buffering its event for a later transaction let a crash permanently
+		// consume the milestone. The event must already be in the durable queue
+		// before the process can terminate.
+		const first = makeCollector();
+		first.recordFirstUse("remember");
+		first.recordFirstUse("remember");
+		first.recordFirstUse("recall");
+		first.recordFirstUse("recall");
+
+		const beforeRestart = getDbAccessor().withReadDb(
+			(db) =>
+				db.prepare("SELECT first_remember_at, first_recall_at FROM telemetry_install").get() as {
+					first_remember_at: string | null;
+					first_recall_at: string | null;
+				},
+		);
+		const pendingEvents = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare(
+						"SELECT event, sent_to_posthog FROM telemetry_events WHERE event IN ('first.remember', 'first.recall') ORDER BY event",
+					)
+					.all() as Array<{ readonly event: string; readonly sent_to_posthog: number }>,
+		);
+		expect(beforeRestart.first_remember_at).not.toBeNull();
+		expect(beforeRestart.first_recall_at).not.toBeNull();
+		expect(pendingEvents).toEqual([
+			{ event: "first.recall", sent_to_posthog: 0 },
+			{ event: "first.remember", sent_to_posthog: 0 },
+		]);
+
+		// Simulate a process crash: the in-memory buffer (including the
+		// activation event) disappears, but the atomically persisted
+		// first-use rows survive and are recoverable by the next daemon.
+		closeDbAccessor();
+		initDbAccessor(join(dir, "memory", "memories.db"));
+		const restarted = makeCollector();
+		restarted.recordFirstUse("remember");
+		restarted.recordFirstUse("recall");
+		await restarted.flush();
+		await restarted.flush();
+
+		const delivered = captured.flatMap((request) => request.body.batch.map((event) => event.event));
+		expect(delivered).toEqual(["first.remember", "first.recall"]);
+		expect(
+			getDbAccessor().withReadDb((db) =>
+				db
+					.prepare(
+						"SELECT event FROM telemetry_events WHERE event IN ('first.remember', 'first.recall') AND sent_to_posthog = 0",
+					)
+					.all(),
+			),
+		).toEqual([]);
+	});
+
 	it("emits one config snapshot alongside install activation", async () => {
 		const snapshot: TelemetryConfigSnapshot = {
 			graphEnabled: true,

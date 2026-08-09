@@ -460,33 +460,6 @@ export function createTelemetryCollector(
 
 	const posthogConfigured = config.posthogHost.length > 0 && config.posthogApiKey.length > 0;
 
-	/**
-	 * Atomically claim a first-use milestone for this install. Only the
-	 * first caller wins (changes === 1); every later call is a no-op, so
-	 * concurrent remembers can't double-fire. When the install id fell
-	 * back to an in-memory value (broken DB) the UPDATE matches no row
-	 * and the milestone never fires — acceptable, telemetry is degraded
-	 * anyway.
-	 */
-	function claimFirstUse(kind: FirstUseKind): boolean {
-		try {
-			const column = FIRST_USE_COLUMNS[kind];
-			let claimed = false;
-			db.withWriteTx((w) => {
-				const result = w
-					.prepare(
-						`UPDATE telemetry_install SET ${column} = ?
-						 WHERE id = ? AND ${column} IS NULL`,
-					)
-					.run(new Date().toISOString(), installId);
-				claimed = result.changes > 0;
-			});
-			return claimed;
-		} catch {
-			return false;
-		}
-	}
-
 	function addContext(properties: TelemetryProperties): TelemetryProperties {
 		return {
 			...properties,
@@ -497,6 +470,55 @@ export function createTelemetryCollector(
 			...(typeof properties.from === "string" ? { from: telemetryReportedVersion(properties.from, deployment) } : {}),
 			...(typeof properties.to === "string" ? { to: telemetryReportedVersion(properties.to, deployment) } : {}),
 		};
+	}
+
+	/**
+	 * Claim and persist a first-use event in one transaction. Only the first
+	 * caller wins (changes === 1); every later call is a no-op, so concurrent
+	 * remembers can't double-fire. Keeping the event in the same transaction
+	 * as the claim means a process can be terminated before the normal buffer
+	 * flush without losing the milestone.
+	 *
+	 * When the install id fell back to an in-memory value (broken DB), the
+	 * UPDATE matches no row and the milestone never fires — acceptable,
+	 * telemetry is degraded anyway.
+	 */
+	function persistFirstUse(kind: FirstUseKind): TelemetryEvent | null {
+		const event: TelemetryEvent = {
+			id: crypto.randomUUID(),
+			event: FIRST_USE_EVENTS[kind],
+			timestamp: new Date().toISOString(),
+			properties: addContext({
+				version: daemonVersion,
+				platform: process.platform,
+			}),
+		};
+
+		try {
+			const column = FIRST_USE_COLUMNS[kind];
+			let claimed = false;
+			db.withWriteTx((w) => {
+				const result = w
+					.prepare(
+						`UPDATE telemetry_install SET ${column} = ?
+						 WHERE id = ? AND ${column} IS NULL`,
+					)
+					.run(event.timestamp, installId);
+				if (result.changes === 0) return;
+
+				w.prepare(
+					`INSERT INTO telemetry_events
+					 (id, event, timestamp, properties, sent_to_posthog, created_at, source)
+					 VALUES (?, ?, ?, ?, 0, ?, 'daemon')`,
+				).run(event.id, event.event, event.timestamp, JSON.stringify(event.properties), event.timestamp);
+				claimed = true;
+			});
+			return claimed ? event : null;
+		} catch {
+			// The transaction rolls back both the claim and event on any
+			// failure, allowing a later successful call to retry the milestone.
+			return null;
+		}
 	}
 
 	function writeToDb(events: readonly TelemetryEvent[]): void {
@@ -755,14 +777,11 @@ export function createTelemetryCollector(
 		},
 
 		recordFirstUse(kind): void {
-			// Best-effort: a failed claim (no row, broken DB) means the
-			// milestone stays unclaimed and may fire on a later run —
-			// still exactly once overall.
-			if (!claimFirstUse(kind)) return;
-			collector.record(FIRST_USE_EVENTS[kind], {
-				version: daemonVersion,
-				platform: process.platform,
-			});
+			const event = persistFirstUse(kind);
+			if (!event) return;
+			// The database row is durable before the open log mirror is written.
+			// A failed log write must not affect the claim or delivery queue.
+			appendToTelemetryLog(logPath, JSON.stringify(event));
 		},
 
 		async flush(): Promise<void> {
