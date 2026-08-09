@@ -7,6 +7,7 @@ import { useConnectController } from "@/components/settings/connect-controller";
 import { api } from "@/lib/api";
 import { getDesktopBridge } from "@/lib/desktop";
 import { apiKeyFormat, providerKeySecretName } from "@/lib/inference-keys";
+import { createOAuthNavigation, safeOAuthHref, type OAuthNavigation } from "@/lib/oauth-navigation";
 import { cn } from "@/lib/utils";
 import { CheckCircle, Eye, EyeOff, KeyRound, Loader2, TriangleAlert, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -18,12 +19,6 @@ export interface ConnectableProvider {
 	supportsApiKey: boolean;
 	connected: boolean;
 	isOAuth: boolean;
-}
-
-/** Allowlist http(s) for any daemon-sourced URL we bind to href. */
-function safeHref(uri: string | undefined): string | null {
-	if (!uri) return null;
-	return /^https?:\/\//i.test(uri) ? uri : null;
 }
 
 function hostnameOf(uri: string): string {
@@ -57,49 +52,20 @@ export function ConnectProviderDialog({
 }) {
 	// Desktop uses the context-isolated external-navigation bridge. Browser
 	// sessions keep the synchronous popup fallback for popup blockers.
-	const oauthWindowRef = useRef<Window | null>(null);
 	const [oauthOpenError, setOAuthOpenError] = useState<string | null>(null);
-	const openOAuthWindow = (): boolean => {
-		if (getDesktopBridge()) return true;
-		if (oauthWindowRef.current && !oauthWindowRef.current.closed) return true;
-		const win = window.open("about:blank", "signet-oauth", "width=640,height=760");
-		if (!win) return false;
-		oauthWindowRef.current = win;
-		return true;
-	};
-	const navigateOAuthWindow = (url: string) => {
-		const href = safeHref(url);
-		if (!href) {
-			setOAuthOpenError("The provider returned an invalid sign-in URL.");
-			return;
-		}
-		const bridge = getDesktopBridge();
-		if (bridge) {
-			void bridge.openExternal(href).then(
-				() => setOAuthOpenError(null),
-				() => setOAuthOpenError("Could not open the sign-in page. Use the link below to continue."),
-			);
-			return;
-		}
-		const win = oauthWindowRef.current;
-		if (!win || win.closed) return;
-		try {
-			win.location.href = url;
-		} catch {
-			/* cross-origin navigation in progress — the window still lands */
-		}
-	};
-	const closeOAuthWindow = () => {
-		const win = oauthWindowRef.current;
-		if (win && !win.closed) {
-			try {
-				win.close();
-			} catch {
-				/* noop */
-			}
-		}
-		oauthWindowRef.current = null;
-	};
+	const oauthNavigationRef = useRef<OAuthNavigation | null>(null);
+	const oauthNavigation =
+		oauthNavigationRef.current ??
+		createOAuthNavigation({
+			bridge: getDesktopBridge(),
+			popup: () => window.open("about:blank", "signet-oauth", "width=640,height=760"),
+			reportError: setOAuthOpenError,
+			clearError: () => setOAuthOpenError(null),
+		});
+	oauthNavigationRef.current = oauthNavigation;
+	const openOAuthWindow = (): boolean => oauthNavigation.open();
+	const navigateOAuthWindow = (url: string): void => oauthNavigation.navigate(url);
+	const closeOAuthWindow = (): void => oauthNavigation.close();
 
 	const controller = useConnectController({
 		providerId: provider.id,
@@ -114,7 +80,7 @@ export function ConnectProviderDialog({
 	const { phase } = controller;
 
 	// Auto-enter the only available path. OAuth is NEVER auto-started — the
-	// popup must open inside a real click gesture.
+	// navigation must begin inside a real click gesture.
 	const [autoEntered, setAutoEntered] = useState(false);
 	useEffect(() => {
 		if (autoEntered || provider.connected) return;
@@ -126,8 +92,9 @@ export function ConnectProviderDialog({
 
 	// Close the popup once OAuth resolves (any non-running phase).
 	useEffect(() => {
-		if (phase.kind !== "oauth-running") closeOAuthWindow();
-	}, [phase.kind]);
+		if (phase.kind !== "oauth-running") oauthNavigation.close();
+	}, [phase.kind, oauthNavigation]);
+	useEffect(() => () => oauthNavigation.dispose(), [oauthNavigation]);
 
 	const [promptInput, setPromptInput] = useState("");
 	const [disconnecting, setDisconnecting] = useState(false);
@@ -244,13 +211,13 @@ export function ConnectProviderDialog({
 								<Loader2 className="size-3.5 animate-spin" />
 								{phase.progress ?? "Waiting for sign-in…"}
 							</div>
-							{oauthOpenError && (
+							{oauthOpenError && !phase.prompt && (
 								<div className="cp-error">
 									<TriangleAlert className="size-3.5 shrink-0" /> {oauthOpenError}
 								</div>
 							)}
-							{phase.url && safeHref(phase.url) && (
-								<a className="cp-link" href={safeHref(phase.url)!} target="_blank" rel="noreferrer">
+							{phase.url && safeOAuthHref(phase.url) && (
+								<a className="cp-link" href={safeOAuthHref(phase.url)!} target="_blank" rel="noreferrer">
 									Open {hostnameOf(phase.url)} to continue →
 								</a>
 							)}
