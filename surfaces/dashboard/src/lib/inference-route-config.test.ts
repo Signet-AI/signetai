@@ -140,6 +140,33 @@ describe("ensureInferenceRoute", () => {
 		expect(agent.inference).toEqual({ targets: { background: { executor: "llama-cpp" } } });
 	});
 
+	it("preserves an explicit workload pin when the dashboard target is complete", () => {
+		const agent: Record<string, unknown> = {
+			inference: {
+				targets: { background: { executor: "llama-cpp", models: { default: { model: "gemma" } } } },
+				workloads: { memoryExtraction: { target: "background/gemma", taskClass: "memory_extraction" } },
+			},
+		};
+
+		ensureInferenceRoute(agent);
+
+		const workloads = (agent.inference as Record<string, unknown>).workloads as Record<string, unknown>;
+		expect(workloads.memoryExtraction).toEqual({ target: "background/gemma", taskClass: "memory_extraction" });
+	});
+
+	it("does not pin default policy to arbitrary existing policy order", () => {
+		const agent: Record<string, unknown> = {
+			inference: {
+				targets: { background: { executor: "llama-cpp", models: { default: { model: "gemma" } } } },
+				policies: { privacy: { mode: "strict", defaultTargets: ["background/default"] } },
+			},
+		};
+
+		ensureInferenceRoute(agent);
+
+		expect((agent.inference as Record<string, unknown>).defaultPolicy).toBeUndefined();
+	});
+
 	it("preserves a custom workload binding when the dashboard target is incomplete", () => {
 		const agent: Record<string, unknown> = {
 			inference: {

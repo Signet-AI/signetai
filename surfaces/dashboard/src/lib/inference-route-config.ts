@@ -27,9 +27,10 @@ export function ensureInferenceRoute(agent: ConfigRecord): void {
 
 	if (backgroundRef) {
 		const existing = record(workloads.memoryExtraction);
+		const existingTarget = typeof existing.target === "string" ? existing.target : undefined;
 		workloads.memoryExtraction = {
 			...existing,
-			target: backgroundRef,
+			target: existingTarget ?? backgroundRef,
 			taskClass:
 				typeof existing.taskClass === "string" && existing.taskClass.length > 0
 					? existing.taskClass
@@ -44,7 +45,11 @@ export function ensureInferenceRoute(agent: ConfigRecord): void {
 
 	if (aggregationRef) {
 		const existing = record(workloads.aggregateRecall);
-		workloads.aggregateRecall = { ...existing, target: aggregationRef };
+		const existingTarget = typeof existing.target === "string" ? existing.target : undefined;
+		workloads.aggregateRecall = {
+			...existing,
+			target: existingTarget ?? aggregationRef,
+		};
 	}
 
 	const refs = backgroundRef ? [backgroundRef] : [];
@@ -53,15 +58,17 @@ export function ensureInferenceRoute(agent: ConfigRecord): void {
 			typeof inference.defaultPolicy === "string" && inference.defaultPolicy.length > 0
 				? inference.defaultPolicy
 				: undefined;
-		const policyId = configuredDefault ?? Object.keys(policies)[0] ?? "default";
-		if (policies[policyId] == null) {
-			policies[policyId] = {
-				mode: "automatic",
-				defaultTargets: refs,
-				fallbackTargets: refs,
-			};
+		const policyId = configuredDefault ?? (Object.keys(policies).length === 0 ? "default" : undefined);
+		if (policyId != null) {
+			if (policies[policyId] == null) {
+				policies[policyId] = {
+					mode: "automatic",
+					defaultTargets: refs,
+					fallbackTargets: refs,
+				};
+			}
+			if (inference.defaultPolicy == null) inference.defaultPolicy = policyId;
 		}
-		if (inference.defaultPolicy == null) inference.defaultPolicy = policyId;
 	}
 
 	if (Object.keys(workloads).length > 0) inference.workloads = workloads;
