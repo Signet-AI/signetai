@@ -575,7 +575,7 @@ function probeHermesProvider(hermesRepo: string): HermesProbeResult {
 		"print(json.dumps({'toolNames': names, 'missing': [name for name in required if name not in names]}))",
 	].join("\n");
 
-	const python = process.env.PYTHON?.trim() || "python";
+	const python = process.env.PYTHON?.trim() || "python3";
 	const result = spawnSync(python, ["-c", script], {
 		cwd: hermesRepo,
 		env: { ...process.env, PYTHONPATH: hermesRepo },

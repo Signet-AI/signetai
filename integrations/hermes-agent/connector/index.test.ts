@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -8,6 +8,8 @@ import { HermesAgentConnector, diagnoseHermesIntegration } from "./src/index.js"
 
 const originalEnv = {
 	HOME: process.env.HOME,
+	PATH: process.env.PATH,
+	PYTHON: process.env.PYTHON,
 	HERMES_REPO: process.env.HERMES_REPO,
 	HERMES_HOME: process.env.HERMES_HOME,
 	SIGNET_AGENT_ID: process.env.SIGNET_AGENT_ID,
@@ -153,6 +155,8 @@ beforeEach(() => {
 	tmpRoot = mkdtempSync(join(tmpdir(), "signet-hermes-connector-"));
 	process.env.HOME = tmpRoot;
 	// biome-ignore lint/performance/noDelete: ensure no stale value from outer env
+	delete process.env.PYTHON;
+	// biome-ignore lint/performance/noDelete: ensure no stale value from outer env
 	delete process.env.HERMES_REPO;
 	// biome-ignore lint/performance/noDelete: ensure no stale value from outer env
 	delete process.env.HERMES_HOME;
@@ -181,6 +185,8 @@ beforeEach(() => {
 
 afterEach(() => {
 	restoreEnv("HOME");
+	restoreEnv("PATH");
+	restoreEnv("PYTHON");
 	restoreEnv("HERMES_REPO");
 	restoreEnv("HERMES_HOME");
 	restoreEnv("SIGNET_AGENT_ID");
@@ -1760,6 +1766,35 @@ describe("HermesAgentConnector — native bundle (SIGNET_DIR) plugin resolution"
 		}
 	});
 
+	it("uses python3 for Hermes diagnostics when python is unavailable", async () => {
+		const hermesRepo = join(tmpRoot, "hermes-agent");
+		const hermesHome = join(tmpRoot, ".hermes");
+		const pythonBinDir = join(tmpRoot, "bin");
+		const python3Path = spawnSync("python3", ["-c", "import sys; print(sys.executable)"], {
+			encoding: "utf-8",
+		}).stdout.trim();
+
+		expect(python3Path).not.toBe("");
+		mkdirSync(pythonBinDir, { recursive: true });
+		symlinkSync(python3Path, join(pythonBinDir, "python3"));
+		writeHermesMemoryFixture(hermesRepo);
+		process.env.HERMES_HOME = hermesHome;
+		process.env.HERMES_REPO = hermesRepo;
+		process.env.PATH = pythonBinDir;
+		// biome-ignore lint/performance/noDelete: exercise the python3 default
+		delete process.env.PYTHON;
+
+		await new HermesAgentConnector().install(tmpRoot);
+		const report = await diagnoseHermesIntegration({
+			hermesHome,
+			hermesRepo: hermesRepo,
+			daemonUrl: "http://127.0.0.1:1",
+		});
+		const checks = Object.fromEntries(report.checks.map((check) => [check.id, check]));
+
+		expect(checks["tool-routing"]?.ok).toBe(true);
+	});
+
 	it("leaves Signet discoverable and active to Hermes without running hermes memory setup", async () => {
 		const signetDir = join(tmpRoot, "signet-bundle");
 		const bundlePluginDir = join(signetDir, "runtime", "connectors", "hermes-agent", "hermes-plugin");
@@ -1778,7 +1813,7 @@ describe("HermesAgentConnector — native bundle (SIGNET_DIR) plugin resolution"
 		expect(result.warnings.some((warning) => warning.includes("Hermes Signet provider installed"))).toBe(false);
 
 		const probe = spawnSync(
-			process.env.PYTHON?.trim() || "python",
+			process.env.PYTHON?.trim() || "python3",
 			[
 				"-c",
 				[
