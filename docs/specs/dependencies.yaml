@@ -17,7 +17,7 @@ specs:
     success_criteria:
       - "Memory extraction captures context that was previously lost between sessions"
       - "Pipeline processes hook payloads without blocking agent response time"
-      - "Session summary synthesis never falls back to a hidden provider when `memory.pipelineV2.synthesis` is omitted; runtime uses the resolved extraction provider until an explicit synthesis override is saved"
+      - "Session summary synthesis resolves through the canonical `memoryExtraction` workload; retired pipeline provider fields are rejected and missing routing is surfaced"
     decision: null
 
   - id: session-continuity-protocol

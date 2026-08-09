@@ -84,17 +84,17 @@ overwrite session summaries.
 - deep history stays in drill-down tools and temporal lineage, not in
   the visible summary body
 
-## Provider Resolution
+## Routing Resolution
 
-`MEMORY.md` rendering must respect the current pipeline synthesis
-contract introduced in PR #335:
+`MEMORY.md` model selection must use the canonical inference workload:
 
-- explicit `memory.pipelineV2.synthesis.*` settings override defaults
-- when the synthesis block is omitted, runtime inherits the resolved
-  extraction provider/model/endpoint/timeout
-- `provider: none` or `enabled: false` disables background synthesis
+- the internal `session_synthesis` operation inherits the routed
+  `memoryExtraction` workload
+- retired `memory.pipelineV2.synthesis.*` settings are rejected instead of
+  selecting or inheriting a provider
+- missing or invalid workload routing is surfaced as an error
 - deterministic portions of MEMORY.md rendering must continue to work
-  even when LLM-backed synthesis is disabled
+  even when LLM-backed synthesis is unavailable
 
 ## Integration Notes
 

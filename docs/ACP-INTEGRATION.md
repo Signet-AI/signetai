@@ -226,8 +226,8 @@ Setup behavior
 ---------------
 
 The setup flow can choose ACPX when an ACPX-capable harness is detected or
-selected. The generated config writes an explicit `inference:` block rather
-than relying on legacy `memory.pipelineV2.extraction.provider` alone.
+selected. The generated config writes an explicit `inference:` block; model
+selection is never written under `memory.pipelineV2`.
 
 Agent selection is based on the same evidence used to choose ACPX:
 
@@ -239,8 +239,9 @@ Agent selection is based on the same evidence used to choose ACPX:
 Legacy pipeline compatibility
 -----------------------------
 
-`memory.pipelineV2.extraction.provider: acpx` can appear as a setup
-compatibility marker, but by itself it is not enough to run ACPX.
+Older configs may contain `memory.pipelineV2.extraction.provider: acpx`; migration
+consumes that value and rewrites it as a canonical inference target. The old
+field is not a setup marker and is rejected if it remains after migration.
 
 ACPX needs an agent, model, hook mode, permission mode, timeout, and workload
 binding. Those belong in top-level `inference:` routing. Keep the generated
@@ -335,8 +336,9 @@ Migration guidance
 For background inference, prefer this progression:
 
 ```text
-legacy direct harness provider
+retired pipeline provider field
   memory.pipelineV2.extraction.provider: codex | claude-code | opencode
+  (migrate; do not add to new configs)
 
         ↓
 
