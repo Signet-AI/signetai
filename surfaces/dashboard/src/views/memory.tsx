@@ -131,7 +131,7 @@ export function MemoryView() {
 				</div>
 			</details>
 
-			<div className="grid grid-cols-1 gap-4 md:min-h-0 md:flex-1 md:grid-rows-[minmax(0,1fr)] md:grid-cols-[1fr_240px]">
+			<div className="memory-workspace grid grid-cols-1 gap-4 md:min-h-0 md:flex-1 md:grid-rows-[minmax(0,1fr)] md:grid-cols-[minmax(0,1fr)_152px]">
 				<div className="flex flex-col gap-2 pr-1 md:min-h-0 md:overflow-y-auto">
 					{groups.map((group) => (
 						<div key={group.label ?? "search"} className="mb-2.5 last:mb-0">

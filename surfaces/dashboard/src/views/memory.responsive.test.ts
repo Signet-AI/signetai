@@ -11,4 +11,9 @@ describe("memory responsive layout", () => {
 	test("lets the mobile feed flow through the main page scroll owner", () => {
 		expect(memorySource).toMatch(/md:overflow-y-auto/);
 	});
+
+	test("makes the right filter rail materially narrower than the memory cards", () => {
+		expect(memorySource).toMatch(/memory-workspace/);
+		expect(memorySource).toMatch(/md:grid-cols-\[minmax\(0,1fr\)_152px\]/);
+	});
 });
