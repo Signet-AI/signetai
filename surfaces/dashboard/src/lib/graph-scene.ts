@@ -11,6 +11,7 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { CSS2DRenderer, CSS2DObject } from "three/addons/renderers/CSS2DRenderer.js";
 import { OBJLoader } from "three/addons/loaders/OBJLoader.js";
 import sphereObj from "@/assets/bounding-sphere.obj?raw";
+import { graphHomeCameraDistance } from "@/lib/graph-camera";
 
 export type SceneNodeKind = "entity" | "aspect" | "attribute" | "source" | "memory";
 
@@ -54,6 +55,7 @@ const COLORS: Record<SceneNodeKind, string> = {
 };
 
 const SPHERE_R = 260;
+const HOME_DIRECTION = new THREE.Vector3(0, 0.15, 1).normalize();
 const seededRand = (s: number) => {
 	const x = Math.sin(s * 9999 + 1) * 10000;
 	return x - Math.floor(x);
@@ -260,7 +262,7 @@ export function createGraphScene(container: HTMLElement, data: GraphSceneData): 
 	const w = container.clientWidth || 800;
 	const h = container.clientHeight || 500;
 	const camera = new THREE.PerspectiveCamera(55, w / h, 0.1, 3000);
-	camera.position.set(0, 80, 520);
+	camera.position.copy(HOME_DIRECTION).multiplyScalar(graphHomeCameraDistance(w, h));
 
 	const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
 	renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -499,6 +501,7 @@ export function createGraphScene(container: HTMLElement, data: GraphSceneData): 
 		fromTarget: THREE.Vector3; toTarget: THREE.Vector3;
 	}
 	let camTween: CamTween | null = null;
+	let homeView = true;
 	const dirToAngles = (dir: THREE.Vector3) => {
 		const d = dir.clone().normalize();
 		return { theta: Math.atan2(d.x, d.z), phi: Math.acos(Math.max(-1, Math.min(1, d.y))) };
@@ -543,6 +546,7 @@ export function createGraphScene(container: HTMLElement, data: GraphSceneData): 
 	const focusNode = (id: string, drawerOpen = false) => {
 		const n = byId.get(id);
 		if (!n) return;
+		homeView = false;
 		controls.autoRotate = false;
 		const targetDir = n.pos.clone().normalize();
 		const a = dirToAngles(targetDir);
@@ -555,10 +559,10 @@ export function createGraphScene(container: HTMLElement, data: GraphSceneData): 
 		setHighlight(neighbors(id));
 	};
 	const resetView = () => {
+		homeView = true;
 		controls.autoRotate = true;
-		const homeDir = new THREE.Vector3(0, 0.15, 1).normalize();
-		const a = dirToAngles(homeDir);
-		startTween(a.theta, a.phi, 520, ORIGIN.clone());
+		const a = dirToAngles(HOME_DIRECTION);
+		startTween(a.theta, a.phi, graphHomeCameraDistance(container.clientWidth, container.clientHeight), ORIGIN.clone());
 		setHighlight(null);
 	};
 
@@ -680,11 +684,18 @@ export function createGraphScene(container: HTMLElement, data: GraphSceneData): 
 		if (nw === 0 || nh === 0) return;
 		camera.aspect = nw / nh;
 		camera.updateProjectionMatrix();
+		if (homeView) {
+			const direction = camera.position.clone().sub(controls.target).normalize();
+			camera.position.copy(controls.target).add(direction.multiplyScalar(graphHomeCameraDistance(nw, nh)));
+		}
 		renderer.setSize(nw, nh, false);
 		labelRenderer.setSize(nw, nh);
 	});
 	ro.observe(container);
-	const stopAutoRotate = () => { controls.autoRotate = false; };
+	const stopAutoRotate = () => {
+		homeView = false;
+		controls.autoRotate = false;
+	};
 	controls.addEventListener("start", stopAutoRotate);
 
 	return {
