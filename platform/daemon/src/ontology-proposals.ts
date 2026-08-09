@@ -1218,6 +1218,8 @@ function applySetClaimValue(
 		version,
 		versionRootId: rootId,
 		previousAttributeId: previous?.id ?? null,
+		previousWasActive: previous?.status === "active",
+		supersededAttributeIds: active.map((row) => row.id),
 	};
 }
 
@@ -1269,6 +1271,7 @@ function applySupersedeClaimValue(
 
 	const replacementValue = readString(payload, "new_value");
 	let replacementId: string | null = null;
+	let replacementCreated = false;
 	if (replacementValue !== null) {
 		if (oldValue !== null && canonical(replacementValue) === canonical(oldValue)) {
 			throw new OntologyProposalError("payload.new_value must differ from payload.old_value", 400);
@@ -1285,6 +1288,7 @@ function applySupersedeClaimValue(
 			entity_type: readString(payload, "entity_type") ?? undefined,
 		});
 		replacementId = typeof replacement.attributeId === "string" ? replacement.attributeId : null;
+		replacementCreated = replacement.deduped !== true && replacementId !== null;
 	}
 
 	const requestedReplacementId = readString(payload, "superseded_by");
@@ -1316,7 +1320,7 @@ function applySupersedeClaimValue(
 		}
 	}
 
-	return { supersededAttributeIds: ids, replacementAttributeId: replacementId };
+	return { supersededAttributeIds: ids, replacementAttributeId: replacementId, replacementCreated };
 }
 
 function applyRenameEntity(
@@ -1659,26 +1663,30 @@ function mergeEntityAspects(db: WriteDb, agentId: string, sourceId: string, targ
 	return aspects.length;
 }
 
-function mergeEntityEdges(db: WriteDb, agentId: string, sourceId: string, targetId: string): void {
-	db.prepare("UPDATE entity_dependencies SET source_entity_id = ? WHERE source_entity_id = ? AND agent_id = ?").run(
-		targetId,
-		sourceId,
-		agentId,
-	);
-	db.prepare("UPDATE entity_dependencies SET target_entity_id = ? WHERE target_entity_id = ? AND agent_id = ?").run(
-		targetId,
-		sourceId,
-		agentId,
-	);
-	db.prepare("DELETE FROM entity_dependencies WHERE source_entity_id = target_entity_id AND agent_id = ?").run(agentId);
+function mergeEntityEdges(db: WriteDb, agentId: string, sourceId: string, targetId: string): number {
+	let relationshipChanges = 0;
+	relationshipChanges += db
+		.prepare("UPDATE entity_dependencies SET source_entity_id = ? WHERE source_entity_id = ? AND agent_id = ?")
+		.run(targetId, sourceId, agentId).changes;
+	relationshipChanges += db
+		.prepare("UPDATE entity_dependencies SET target_entity_id = ? WHERE target_entity_id = ? AND agent_id = ?")
+		.run(targetId, sourceId, agentId).changes;
+	relationshipChanges += db
+		.prepare("DELETE FROM entity_dependencies WHERE source_entity_id = target_entity_id AND agent_id = ?")
+		.run(agentId).changes;
 
-	db.prepare("UPDATE relations SET source_entity_id = ? WHERE source_entity_id = ?").run(targetId, sourceId);
-	db.prepare("UPDATE relations SET target_entity_id = ? WHERE target_entity_id = ?").run(targetId, sourceId);
-	db.prepare("DELETE FROM relations WHERE source_entity_id = target_entity_id").run();
+	relationshipChanges += db
+		.prepare("UPDATE relations SET source_entity_id = ? WHERE source_entity_id = ?")
+		.run(targetId, sourceId).changes;
+	relationshipChanges += db
+		.prepare("UPDATE relations SET target_entity_id = ? WHERE target_entity_id = ?")
+		.run(targetId, sourceId).changes;
+	relationshipChanges += db.prepare("DELETE FROM relations WHERE source_entity_id = target_entity_id").run().changes;
 	db.prepare(
 		"INSERT OR IGNORE INTO memory_entity_mentions (memory_id, entity_id) SELECT memory_id, ? FROM memory_entity_mentions WHERE entity_id = ?",
 	).run(targetId, sourceId);
 	db.prepare("DELETE FROM memory_entity_mentions WHERE entity_id = ?").run(sourceId);
+	return relationshipChanges;
 }
 
 function applyMergeEntities(
@@ -1698,9 +1706,10 @@ function applyMergeEntities(
 	if (plan.blocked) throw new OntologyProposalError(`Merge blocked: ${plan.warnings.join("; ")}`, 409);
 
 	const merged: Array<{ readonly name: string; readonly entityId: string; readonly movedAspects: number }> = [];
+	let relationshipChanges = 0;
 	for (const source of plan.sources) {
 		const movedAspects = mergeEntityAspects(db, agentId, source.id, plan.target.id);
-		mergeEntityEdges(db, agentId, source.id, plan.target.id);
+		relationshipChanges += mergeEntityEdges(db, agentId, source.id, plan.target.id);
 		db.prepare(
 			`UPDATE entities
 			 SET mentions = COALESCE(mentions, 0) + COALESCE((SELECT mentions FROM entities WHERE id = ?), 0),
@@ -1716,6 +1725,7 @@ function applyMergeEntities(
 		targetEntityName: plan.target.name,
 		mergedEntities: merged,
 		warnings: plan.warnings,
+		relationshipsChanged: relationshipChanges,
 	};
 }
 
