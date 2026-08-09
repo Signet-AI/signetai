@@ -1,95 +1,94 @@
 ---
 title: "Quickstart"
-description: "Get Signet running in about five minutes."
+description: "Install Signet, connect a harness, and give your agent persistent memory."
 ---
 
-Get Signet running in about five minutes.
+Install Signet, connect a harness, and give your agent memory that survives the session.
+
+<figure class="quickstart-dashboard">
+  <img
+    src="/dashboard-home-16x9.png"
+    alt="Signet Dashboard showing memory, ontology, agent, source, activity, and review data"
+    width="1920"
+    height="1080"
+    loading="eager"
+    decoding="async"
+  />
+</figure>
 
 ## Why Signet
 
-Your agent starts every session from zero. It doesn't know what you
-worked on yesterday. It doesn't know your preferences, your projects,
-or the decisions you've already made together. Every session is a
-first date.
+An agent's memory records your projects, relationships, habits, preferences, decisions, and constraints. Together, this is your pattern of life.
 
-The industry's answer to this has often been to give agents memory tools
-— "remember this," "recall that." That's not memory. That's a filing
-cabinet the agent sometimes opens. It puts the LLM in charge of
-micromanaging what to store and when to retrieve it.
+Memory storage and retrieval are becoming commodity capabilities. Ownership is not. Whoever owns the memory owns the record of your pattern-of-life behavior. They can also control whether your agents keep working when you change models, tools, or vendors.
 
-Signet takes a different approach. The goal is ambient context
-selection: turn interactions into durable memory substrate, preserve the
-record of what actually happened, and surface the right pieces when the
-next session begins.
+For agents deployed at scale, memory is infrastructure. Keep it outside the model and the harness. Keep it in a system that you can inspect, move, and operate.
 
-### The distillation layer
+Signet stores this state in a local-first workspace that you control. The same memory can support multiple models, harnesses, and agents without locking the accumulated context inside one platform.
 
-At the end of every conversation, Signet reviews the session and
-distills it. A local LLM breaks the conversation into atomic facts,
-checks them against what's already known, and decides whether to add new
-facts, skip duplicates, or record proposals for more complex changes.
-Your agent won't store "prefers dark mode" fourteen times.
+## Dreaming
 
-### The knowledge graph
+Dreaming turns new evidence into useful semantic knowledge. It reads episodic records, compares them with the current semantic state, and applies audited ontology operations.
 
-Named entities — people, projects, tools, concepts — are extracted
-and linked. When you ask about a project, Signet traverses the graph:
-the project's architecture, the people involved, the tools it depends
-on, the constraints that apply. This structure improves the quality of
-candidate context instead of treating memory as a flat pile of fragments.
+Dreaming can use local inference or a provider that you configure. You control the provider and model. Dreaming does not replace the source evidence. It derives semantic state from it.
 
-### Context selection
+Read [Memory lifecycle and Dreaming](/memory/#dreaming) for the full processing model.
 
-The structured candidate pool gives Signet something better than a flat
-list of snippets. Retrieval can combine graph traversal, keyword search,
-semantic similarity, provenance, scope, recency, and feedback without
-hiding the result behind an opaque ranking model.
+## The semantic ontology
 
-The aim is practical precision: surface the context that helps the agent
-work now, and keep noisy or repeatedly unhelpful memories from haunting
-the context window forever.
+The semantic ontology is Signet's current model of people, projects, systems, tools, decisions, constraints, and relationships.
 
-### Retrieval
+It organizes knowledge as entities, aspects, groups, and claims. Claims are scoped, versioned, and auditable. This structure lets Signet follow relevant relationships without treating memory as a flat list of text fragments.
 
-Retrieval blends graph traversal, keyword search, and semantic
-similarity into a bounded candidate set, then reranks and filters it.
-The constellation view in the dashboard lets you inspect the agent's
-knowledge topology.
+The Dashboard shows this ontology as a navigable graph. Read [Knowledge architecture](/knowledge-architecture/) for the data model and retrieval role.
 
-### Document ingest
+## Episodic
 
-Feed any document into the distillation layer. PDFs, specs, reference
-pages, URLs. They're chunked, embedded, and indexed alongside your
-agent's insights.
+Episodic memory is the source record. It includes transcripts, summaries, explicit memories, notes, documents, and connected source artifacts.
 
-### Safety guarantees
+Signet stores these records as immutable evidence with source information. Dreaming can derive new semantic knowledge from them, but it does not rewrite what happened.
 
-- **Raw-first**: content is persisted before any LLM processing begins
-- **Pinned insights are sacred**: the distillation layer cannot modify
-  them. Only you can.
-- **Everything is recoverable**: deletions are soft, with a recovery
-  window and full audit trail
+Read [Memory lifecycle](/memory/#memory-lifecycle) for the write path.
 
-Automatic destructive memory mutations remain conservative and gated in
-the current implementation. Explicit user/operator repair flows are the
-reliable path today.
+## Semantic
 
-The same agent follows you across Claude Code, OpenCode, and OpenClaw.
-Same personality, same knowledge, same secrets. Switch tools without
-starting over.
+Semantic memory is the current operational view of the episodic record. It includes entities, aspects, claims, relationships, keywords, and embeddings.
 
-For deeper technical details, see [Architecture](/architecture/). For the long-term
-vision, see [VISION.md](https://github.com/Signet-AI/signetai/blob/main/VISION.md).
+Dreaming maintains this layer through audited operations. Each claim can keep its evidence and version history. This makes the semantic state useful and repairable.
 
----
+Read [Knowledge architecture](/knowledge-architecture/#source-truth-and-current-truth) for the boundary between evidence and current truth.
 
-## In this section
+## Query
 
-- [Install](/getting-started/install/)
-  Install Signet and choose the right distribution path.
-- [Set up Signet](/getting-started/setup/)
-  Run the setup wizard and understand the workspace it creates.
-- [Your first session](/getting-started/first-session/)
-  Use memory, secrets, skills, and the dashboard in a first Signet session.
-- [Operate your installation](/getting-started/operate/)
-  Run Signet as a service, edit the agent, secure access, and troubleshoot it.
+At query time, Signet selects a bounded set of context for the current task. It combines keyword search, vector similarity, semantic ontology traversal, source evidence, recency, and feedback.
+
+Signet checks agent and project scope before it reads candidate content. It then ranks and shapes the permitted evidence. If an optional search stage fails, recall falls back to simpler channels instead of failing the full request.
+
+Read [Hybrid recall](/memory/#hybrid-recall) for the retrieval path and [Recall API](/api/memory/recall-search/) for the request surface.
+
+## Sources
+
+Signet can index local documents, URLs, Obsidian vaults, Discord servers, and GitHub repositories. Source artifacts stay separate from semantic claims, so you can inspect where the knowledge came from.
+
+Read [Sources](/sources/) for supported connectors and source behavior.
+
+## Safety
+
+- Raw evidence is stored before LLM processing starts.
+- Pinned memories cannot be changed by Dreaming.
+- Deletes are recoverable and recorded in the audit history.
+- Memory reads and writes follow agent scope.
+- Secrets stay encrypted and outside model context.
+
+Automatic destructive changes remain conservative. Use explicit repair operations when the semantic state is wrong.
+
+## Continuity
+
+The same agent state can work across Claude Code, OpenCode, OpenClaw, Codex, and Hermes Agent. You can change the model or harness without resetting the agent's memory.
+
+## Start
+
+- [Install](/getting-started/install/): Install the Signet binary.
+- [Set up Signet](/getting-started/setup/): Create the workspace and connect a harness.
+- [Your first session](/getting-started/first-session/): Use memory, secrets, skills, and the Dashboard.
+- [Operate your installation](/getting-started/operate/): Run, secure, update, and troubleshoot Signet.
