@@ -40,6 +40,13 @@ break the daemon.
   `<agentsDir>/.daemon/telemetry/events.jsonl`, the inspectable audit surface
   (see [below](#the-open-audit-log)).
 
+CLI `command.invoked` events follow the same contract as daemon events: they
+are written to the local JSONL log and, when PostHog delivery is configured,
+the SQLite queue, then best-effort flushed to PostHog using the persisted
+per-install id. CLI delivery is bounded by the configured batch size and a
+two-second request timeout; a failed request leaves the event queued for a
+later attempt.
+
 The collector buffers events in memory (auto-flush at 200 events, hard cap
 5000), flushes on the configured interval, backs off 5x after 3 consecutive
 PostHog failures, and never throws into the daemon.
@@ -158,6 +165,10 @@ Notes on individual events:
   are included. Local stats expose attempted, returned, and delivered counts
   by surface; they read the flushed telemetry table and can lag the in-memory
   event buffer by one flush interval.
+- **`command.invoked`** — CLI commands send only the bounded top-level command
+  name to PostHog. Arguments, paths, user-defined names, and other command
+  content are never included. The same event is available in the local JSONL
+  audit log and SQLite queue.
 
 ## Privacy contract
 
@@ -255,8 +266,9 @@ names, repository names, IP addresses, or memory content are used to infer
 either field.
 
 **Disclosure:** `signet setup` tells users telemetry is on by default and
-asks whether to disable it. Declining writes `telemetryEnabled: false`;
-non-interactive/CI setups keep the default (enabled).
+asks whether to disable it, including sharing top-level CLI command names with
+PostHog. Declining writes `telemetryEnabled: false`; non-interactive/CI setups
+keep the default (enabled).
 
 ## The open audit log
 
@@ -264,10 +276,12 @@ Every recorded event is appended as one JSON line to
 `<agentsDir>/.daemon/telemetry/events.jsonl` — daemon events and CLI
 `command.invoked` lines alike. It is the single inspectable surface for
 exactly what was recorded: users can audit the file without trusting the
-sink. The CLI appends `command.invoked` (command name only) locally,
-best-effort, with no daemon round-trip or auth, gated on the same
-`memory.pipelineV2.telemetryEnabled` flag. `command.invoked` is JSONL-only —
-it is never flushed to PostHog.
+sink. The CLI always appends `command.invoked` (command name only) locally and
+queues it for best-effort PostHog delivery when a PostHog host and key are
+configured, with no daemon round-trip or auth. Both local recording and remote
+delivery are gated on the same
+`memory.pipelineV2.telemetryEnabled` flag and
+`SIGNET_TELEMETRY_OPTOUT` runtime opt-out.
 
 ## Known semantics quirks
 

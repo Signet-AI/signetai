@@ -925,7 +925,7 @@ program.hook("preAction", async (_thisCommand, actionCommand) => {
 	}
 
 	// Open telemetry log (issue #1026 Phase 2): record the command name
-	// (never arguments) when the user has opted in. Best-effort.
+	// (never arguments) while telemetry is enabled. Best-effort.
 	recordCommandInvoked(AGENTS_DIR, topLevelCommand);
 	void flushCliTelemetry(AGENTS_DIR, VERSION);
 

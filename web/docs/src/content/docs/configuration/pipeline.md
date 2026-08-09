@@ -484,21 +484,23 @@ event catalog, privacy contract, the open JSONL audit log, runtime opt-out
 (`SIGNET_TELEMETRY_OPTOUT=1`), and how to query the data.
 
 **Disclosure (issue #1026):** `signet setup` tells users telemetry is on
-by default and asks whether to disable it. Declining writes
-`telemetryEnabled: false`; non-interactive/CI setups keep the default
-(enabled).
+by default and asks whether to disable it, including sharing top-level CLI
+command names with PostHog. Declining writes `telemetryEnabled: false`;
+non-interactive/CI setups keep the default (enabled).
 
-**Runtime opt-out:** setting `SIGNET_TELEMETRY_OPTOUT=1` in the daemon's
-environment disables telemetry without touching config — the same knob the
-install ping honors. CI runners, containers, and scripted environments
-should set it so automated daemon boots don't count as installs.
+**Runtime opt-out:** setting `SIGNET_TELEMETRY_OPTOUT=1` in the daemon or CLI
+process environment disables telemetry without touching config — the same knob
+the install ping honors. CI runners, containers, and scripted environments
+should set it in every process so automated daemon boots and CLI invocations do
+not count as installs or usage.
 
 **Open telemetry log:** every recorded event is appended as one JSON line
 to `<agentsDir>/.daemon/telemetry/events.jsonl` — the single inspectable
-audit surface for exactly what was sent (daemon events and CLI
+audit surface for exactly what was recorded (daemon events and CLI
 `command.invoked` lines). CLI command events are also queued in the workspace
-database and flushed to PostHog in bounded, best-effort batches without
-awaiting the command. The CLI and daemon use the same persisted install id.
+database when remote delivery is configured and flushed to PostHog in bounded,
+best-effort batches without awaiting the command. The CLI and daemon use the
+same persisted install id.
 No memory content, code, file paths, or personal
 data are ever included.
 
@@ -513,7 +515,7 @@ transition).
 **Development fleet marker:** setting `SIGNET_TELEMETRY_ENV=dev` keeps operator
 development checkouts in the dataset while making them filterable. The daemon
 adds `deployment: dev` to its local and PostHog events, while the CLI adds it
-to its JSONL-only command events. The native install ping applies the marker
+to its local and PostHog command events. The native install ping applies the marker
 and `-dev` version suffix when the environment is present. The daemon and CLI
 `bun run dev` scripts set this marker automatically. The marker does not
 disable telemetry; use `SIGNET_TELEMETRY_OPTOUT=1` when development or

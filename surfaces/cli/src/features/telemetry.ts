@@ -287,8 +287,12 @@ export function recordCommandInvoked(
  * await this function from command hooks. The batch size and request timeout
  * bound the work, while SQLite preserves events when the request fails.
  */
-export async function flushCliTelemetry(agentsDir: string, cliVersion: string): Promise<void> {
-	const settings = readTelemetrySettings(agentsDir);
+export async function flushCliTelemetry(
+	agentsDir: string,
+	cliVersion: string,
+	env: NodeJS.ProcessEnv = process.env,
+): Promise<void> {
+	const settings = readTelemetrySettings(agentsDir, env);
 	if (!settings || settings.posthogHost.length === 0 || settings.posthogApiKey.length === 0) return;
 
 	const dbPath = join(agentsDir, "memory", "memories.db");

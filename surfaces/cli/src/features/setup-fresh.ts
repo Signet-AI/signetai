@@ -223,13 +223,13 @@ export async function runFreshSetup(plan: SetupPlan, context: SetupApplyContext,
 		// by default; interactive setups get a chance to disable it, and
 		// non-interactive (CI/scripted) setups keep the default. Every recorded
 		// event is mirrored to ~/.agents/.daemon/telemetry/events.jsonl so
-		// users can audit exactly what is sent.
+		// users can audit exactly what is recorded and sent.
 		let telemetryEnabled = true;
 		if (!context.nonInteractive) {
 			telemetryEnabled = await import("@inquirer/prompts").then(({ confirm }) =>
 				confirm({
 					message:
-						"Help improve Signet by sharing anonymous usage statistics (version, platform, command names)? No memory content, code, or personal data. Every event is logged to ~/.agents/.daemon/telemetry/events.jsonl; disable anytime with telemetryEnabled: false.",
+						"Help improve Signet by sharing anonymous usage statistics (version, platform, command names) with PostHog? No memory content, code, arguments, paths, or personal data. Events are logged to ~/.agents/.daemon/telemetry/events.jsonl and, when remote delivery is configured, queued locally before best-effort delivery; disable anytime with telemetryEnabled: false.",
 					default: true,
 				}),
 			);
