@@ -30,6 +30,7 @@ Environment variables:
 - `SIGNET_AGENT_WORKSPACE` — Optional named-agent workspace path (for example `~/.agents/agents/dot`)
 - `SIGNET_AGENT_READ_POLICY` — Optional named-agent memory policy for first registration: `shared` (default), `isolated`, or `group`
 - `SIGNET_AGENT_POLICY_GROUP` — Required when `SIGNET_AGENT_READ_POLICY=group`
+- `PYTHON` — Optional Python interpreter command or path for connector probes; defaults to `python3` then `python` on Unix and `py -3`, `python`, then `python3` on Windows
 
 ## Tools
 

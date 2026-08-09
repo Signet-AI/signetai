@@ -575,39 +575,59 @@ function probeHermesProvider(hermesRepo: string): HermesProbeResult {
 		"print(json.dumps({'toolNames': names, 'missing': [name for name in required if name not in names]}))",
 	].join("\n");
 
-	const python = process.env.PYTHON?.trim() || "python3";
-	const result = spawnSync(python, ["-c", script], {
-		cwd: hermesRepo,
-		env: { ...process.env, PYTHONPATH: hermesRepo },
-		encoding: "utf-8",
-		timeout: 5_000,
-	});
+	const configuredPython = process.env.PYTHON?.trim();
+	const candidates = configuredPython
+		? [{ command: configuredPython, args: [] }]
+		: process.platform === "win32"
+			? [
+					{ command: "py", args: ["-3"] },
+					{ command: "python", args: [] },
+					{ command: "python3", args: [] },
+				]
+			: [
+					{ command: "python3", args: [] },
+					{ command: "python", args: [] },
+				];
+	const errors: string[] = [];
 
-	if (result.error) {
-		return { ok: false, toolNames: [], error: result.error.message };
-	}
-	if (result.status !== 0) {
-		const err = `${result.stderr || result.stdout || `python exited ${result.status}`}`.trim();
-		return { ok: false, toolNames: [], error: err };
+	for (const candidate of candidates) {
+		const result = spawnSync(candidate.command, [...candidate.args, "-c", script], {
+			cwd: hermesRepo,
+			env: { ...process.env, PYTHONPATH: hermesRepo },
+			encoding: "utf-8",
+			timeout: 5_000,
+		});
+
+		if (result.error) {
+			errors.push(`${candidate.command}: ${result.error.message}`);
+			continue;
+		}
+		if (result.status !== 0) {
+			const err = `${result.stderr || result.stdout || `${candidate.command} exited ${result.status}`}`.trim();
+			errors.push(`${candidate.command}: ${err}`);
+			continue;
+		}
+
+		try {
+			const parsed = JSON.parse(result.stdout.trim()) as { toolNames?: unknown; missing?: unknown };
+			const toolNames = Array.isArray(parsed.toolNames)
+				? parsed.toolNames.filter((name): name is string => typeof name === "string")
+				: [];
+			const missing = Array.isArray(parsed.missing)
+				? parsed.missing.filter((name): name is string => typeof name === "string")
+				: [];
+			return {
+				ok: missing.length === 0,
+				toolNames,
+				error: missing.length > 0 ? `Missing tools: ${missing.join(", ")}` : null,
+			};
+		} catch (e) {
+			const msg = e instanceof Error ? e.message : String(e);
+			errors.push(`${candidate.command}: Could not parse Hermes provider probe output: ${msg}`);
+		}
 	}
 
-	try {
-		const parsed = JSON.parse(result.stdout.trim()) as { toolNames?: unknown; missing?: unknown };
-		const toolNames = Array.isArray(parsed.toolNames)
-			? parsed.toolNames.filter((name): name is string => typeof name === "string")
-			: [];
-		const missing = Array.isArray(parsed.missing)
-			? parsed.missing.filter((name): name is string => typeof name === "string")
-			: [];
-		return {
-			ok: missing.length === 0,
-			toolNames,
-			error: missing.length > 0 ? `Missing tools: ${missing.join(", ")}` : null,
-		};
-	} catch (e) {
-		const msg = e instanceof Error ? e.message : String(e);
-		return { ok: false, toolNames: [], error: `Could not parse Hermes provider probe output: ${msg}` };
-	}
+	return { ok: false, toolNames: [], error: errors.join("; ") || "No Python interpreter found" };
 }
 
 async function checkDaemon(daemonUrl: string): Promise<{ ok: boolean; detail: string }> {

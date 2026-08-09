@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -25,6 +25,39 @@ const originalEnv = {
 	SIGNET_DIR: process.env.SIGNET_DIR,
 	SIGNET_CONNECTOR_ASSETS_DIR: process.env.SIGNET_CONNECTOR_ASSETS_DIR,
 };
+
+function resolveTestPythonPath(): string {
+	const candidates =
+		process.platform === "win32"
+			? [
+					{ command: "py", args: ["-3"] },
+					{ command: "python", args: [] },
+					{ command: "python3", args: [] },
+				]
+			: [
+					{ command: "python3", args: [] },
+					{ command: "python", args: [] },
+				];
+	for (const candidate of candidates) {
+		const result = spawnSync(candidate.command, [...candidate.args, "-c", "import sys; print(sys.executable)"], {
+			encoding: "utf-8",
+		});
+		const executable = result.stdout.trim();
+		if (result.status === 0 && executable) return executable;
+	}
+	throw new Error("A Python 3 interpreter is required for the Hermes connector tests");
+}
+
+function writeTestPythonLauncher(source: string, destination: string): void {
+	if (process.platform === "win32") {
+		writeFileSync(`${destination}.cmd`, `@echo off\r\n"${source}" %*\r\n`);
+		return;
+	}
+
+	const escapedSource = source.replaceAll("'", "'\\''");
+	writeFileSync(destination, `#!/bin/sh\nexec '${escapedSource}' "$@"\n`);
+	chmodSync(destination, 0o755);
+}
 
 let tmpRoot = "";
 
@@ -933,9 +966,13 @@ for vector in contract["vectors"]:
     if actual != vector["expected"]:
         raise AssertionError(f"{vector['name']}: {actual!r} != {vector['expected']!r}")
 `;
-		const result = spawnSync(process.env.PYTHON?.trim() || "python3", ["-c", script, clientPath, contractPath], {
-			encoding: "utf-8",
-		});
+		const result = spawnSync(
+			process.env.PYTHON?.trim() || resolveTestPythonPath(),
+			["-c", script, clientPath, contractPath],
+			{
+				encoding: "utf-8",
+			},
+		);
 
 		expect(result.status, result.stderr || result.stdout).toBe(0);
 	});
@@ -1008,7 +1045,7 @@ assert calls == [{
 }]
 `;
 
-		const result = spawnSync(process.env.PYTHON?.trim() || "python3", ["-c", script, clientPath], {
+		const result = spawnSync(process.env.PYTHON?.trim() || resolveTestPythonPath(), ["-c", script, clientPath], {
 			encoding: "utf-8",
 		});
 
@@ -1025,7 +1062,7 @@ assert calls == [{
 		writeFileSync(join(fixture, "agent", "memory_provider.py"), "class MemoryProvider:\n    pass\n");
 
 		const result = spawnSync(
-			"python",
+			resolveTestPythonPath(),
 			[
 				"-c",
 				[
@@ -1072,7 +1109,7 @@ assert calls == [{
 		);
 
 		const result = spawnSync(
-			"python",
+			resolveTestPythonPath(),
 			[
 				"-c",
 				[
@@ -1100,7 +1137,7 @@ assert calls == [{
 		writeFileSync(join(fixture, "agent", "memory_provider.py"), "class MemoryProvider:\n    pass\n");
 
 		const result = spawnSync(
-			"python",
+			resolveTestPythonPath(),
 			[
 				"-c",
 				[
@@ -1140,7 +1177,7 @@ assert calls == [{
 		writeFileSync(join(fixture, "agent", "memory_provider.py"), "class MemoryProvider:\n    pass\n");
 
 		const result = spawnSync(
-			"python",
+			resolveTestPythonPath(),
 			[
 				"-c",
 				[
@@ -1194,7 +1231,7 @@ assert calls == [{
 		);
 
 		const result = spawnSync(
-			"python",
+			resolveTestPythonPath(),
 			[
 				"-c",
 				[
@@ -1236,7 +1273,7 @@ assert calls == [{
 		writeFileSync(join(fixture, "agent", "memory_provider.py"), "class MemoryProvider:\n    pass\n");
 
 		const result = spawnSync(
-			"python",
+			resolveTestPythonPath(),
 			[
 				"-c",
 				[
@@ -1280,7 +1317,7 @@ assert calls == [{
 	it("only forwards SIGNET_TOKEN to trusted daemon origins", () => {
 		const clientPath = join(import.meta.dir, "hermes-plugin", "client.py");
 		const result = spawnSync(
-			"python",
+			resolveTestPythonPath(),
 			[
 				"-c",
 				[
@@ -1351,7 +1388,7 @@ assert calls == [{
 		cpSync(join(import.meta.dir, "hermes-plugin"), pluginDir, { recursive: true });
 
 		const result = spawnSync(
-			"python",
+			resolveTestPythonPath(),
 			[
 				"-c",
 				[
@@ -1770,18 +1807,41 @@ describe("HermesAgentConnector — native bundle (SIGNET_DIR) plugin resolution"
 		const hermesRepo = join(tmpRoot, "hermes-agent");
 		const hermesHome = join(tmpRoot, ".hermes");
 		const pythonBinDir = join(tmpRoot, "bin");
-		const python3Path = spawnSync("python3", ["-c", "import sys; print(sys.executable)"], {
-			encoding: "utf-8",
-		}).stdout.trim();
+		const pythonPath = resolveTestPythonPath();
 
-		expect(python3Path).not.toBe("");
 		mkdirSync(pythonBinDir, { recursive: true });
-		symlinkSync(python3Path, join(pythonBinDir, "python3"));
+		writeTestPythonLauncher(pythonPath, join(pythonBinDir, "python3"));
 		writeHermesMemoryFixture(hermesRepo);
 		process.env.HERMES_HOME = hermesHome;
 		process.env.HERMES_REPO = hermesRepo;
 		process.env.PATH = pythonBinDir;
 		// biome-ignore lint/performance/noDelete: exercise the python3 default
+		delete process.env.PYTHON;
+
+		await new HermesAgentConnector().install(tmpRoot);
+		const report = await diagnoseHermesIntegration({
+			hermesHome,
+			hermesRepo: hermesRepo,
+			daemonUrl: "http://127.0.0.1:1",
+		});
+		const checks = Object.fromEntries(report.checks.map((check) => [check.id, check]));
+
+		expect(checks["tool-routing"]?.ok).toBe(true);
+	});
+
+	it("uses python when python3 is unavailable", async () => {
+		const hermesRepo = join(tmpRoot, "hermes-agent");
+		const hermesHome = join(tmpRoot, ".hermes");
+		const pythonBinDir = join(tmpRoot, "bin");
+		const pythonPath = resolveTestPythonPath();
+
+		mkdirSync(pythonBinDir, { recursive: true });
+		writeTestPythonLauncher(pythonPath, join(pythonBinDir, "python"));
+		writeHermesMemoryFixture(hermesRepo);
+		process.env.HERMES_HOME = hermesHome;
+		process.env.HERMES_REPO = hermesRepo;
+		process.env.PATH = pythonBinDir;
+		// biome-ignore lint/performance/noDelete: exercise the python fallback
 		delete process.env.PYTHON;
 
 		await new HermesAgentConnector().install(tmpRoot);
@@ -1813,7 +1873,7 @@ describe("HermesAgentConnector — native bundle (SIGNET_DIR) plugin resolution"
 		expect(result.warnings.some((warning) => warning.includes("Hermes Signet provider installed"))).toBe(false);
 
 		const probe = spawnSync(
-			process.env.PYTHON?.trim() || "python3",
+			process.env.PYTHON?.trim() || resolveTestPythonPath(),
 			[
 				"-c",
 				[
