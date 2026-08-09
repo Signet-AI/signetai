@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { parseRoutingConfig, resolveRoutingDecision } from "@signet/core";
-import { allowRemoteMemoryExtraction, ensureInferenceRoute } from "./inference-route-config";
+import { allowRemoteMemoryExtraction, ensureInferenceRoute, requiresRemoteMemoryConsent } from "./inference-route-config";
 
 describe("ensureInferenceRoute", () => {
 	it("records explicit consent before a remote memory extraction route is saved", () => {
@@ -15,6 +15,13 @@ describe("ensureInferenceRoute", () => {
 		expect((agent.inference as Record<string, unknown>).taskClasses).toEqual({
 			memory_extraction: { reasoning: "low", privacy: "remote_ok" },
 		});
+	});
+
+	it("requires consent for remote ACPX and gateway executors but not local endpoints", () => {
+		expect(requiresRemoteMemoryConsent("acpx", "acpx", "", "restricted_remote")).toBe(true);
+		expect(requiresRemoteMemoryConsent("local", "openai-compatible", "https://api.example.test/v1", "restricted_remote")).toBe(true);
+		expect(requiresRemoteMemoryConsent("local", "openai-compatible", "http://127.0.0.1:1234/v1", "restricted_remote")).toBe(false);
+		expect(requiresRemoteMemoryConsent("provider", "openai-codex", "", "remote_ok")).toBe(false);
 	});
 
 	it("creates an explicit policy, workload bindings, and extraction task class", () => {

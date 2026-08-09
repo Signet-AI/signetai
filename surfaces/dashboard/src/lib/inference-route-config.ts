@@ -87,3 +87,27 @@ export function allowRemoteMemoryExtraction(agent: ConfigRecord): void {
 	inference.taskClasses = taskClasses;
 	agent.inference = inference;
 }
+
+export type InferenceBackendKind = "none" | "provider" | "local" | "acpx";
+
+function isRemoteInferenceEndpoint(endpoint: string): boolean {
+	if (!endpoint.trim()) return false;
+	try {
+		const hostname = new URL(endpoint).hostname;
+		return !["127.0.0.1", "localhost", "::1", "[::1]"].includes(hostname);
+	} catch {
+		return false;
+	}
+}
+
+/** Return whether a background executor needs explicit remote-memory consent. */
+export function requiresRemoteMemoryConsent(
+	kind: InferenceBackendKind,
+	executor: string,
+	endpoint: string,
+	privacy: string,
+): boolean {
+	if (privacy === "remote_ok") return false;
+	if (kind === "provider" || kind === "acpx") return true;
+	return kind === "local" && executor === "openai-compatible" && isRemoteInferenceEndpoint(endpoint);
+}

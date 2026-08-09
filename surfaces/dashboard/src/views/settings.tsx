@@ -4,7 +4,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch";
 import { type AgentConfigStore, isDreamingEnabled, useAgentConfig } from "@/lib/agent-config";
 import { type InferenceCatalog, type LogEntry, api } from "@/lib/api";
-import { allowRemoteMemoryExtraction, ensureInferenceRoute } from "@/lib/inference-route-config";
+import { allowRemoteMemoryExtraction, ensureInferenceRoute, requiresRemoteMemoryConsent } from "@/lib/inference-route-config";
 import {
 	ACPX_AGENTS,
 	type AccountsMap,
@@ -588,16 +588,18 @@ function TargetEditor({
 	const endpoint = store.aStr([...targetBase, "endpoint"]);
 	const acpxAgent = store.aStr([...targetBase, "acpx", "agent"]) || "claude";
 	const apiKeyRef = store.aStr([...accountBase, "credentialRef"]);
-	const [pendingRemote, setPendingRemote] = useState<string | null>(null);
+	type RemoteConsent = { readonly endpoint?: string; readonly executor: string };
+	const [pendingRemote, setPendingRemote] = useState<RemoteConsent | null>(null);
 	const [remoteConsentDismissed, setRemoteConsentDismissed] = useState(false);
+	const [saveError, setSaveError] = useState<string | null>(null);
 	const memoryPrivacy = store.aStr(["inference", "taskClasses", "memory_extraction", "privacy"]);
 
 	const kind = backendKind(executor);
 	useEffect(() => {
-		if (!remoteConsentDismissed && pendingRemote === null && targetName === "background" && kind === "provider" && memoryPrivacy !== "remote_ok") {
-			setPendingRemote(executor);
+		if (!remoteConsentDismissed && pendingRemote === null && targetName === "background" && requiresRemoteMemoryConsent(kind, executor, endpoint, memoryPrivacy)) {
+			setPendingRemote({ executor, ...(endpoint ? { endpoint } : {}) });
 		}
-	}, [executor, kind, memoryPrivacy, pendingRemote, remoteConsentDismissed, targetName]);
+	}, [endpoint, executor, kind, memoryPrivacy, pendingRemote, remoteConsentDismissed, targetName]);
 	const family = backendFamily(executor);
 	const modelOptions = (catalog?.models[family] ?? []).map((m) => ({ value: m.id, label: `${m.name} (${m.id})` }));
 
@@ -616,13 +618,16 @@ function TargetEditor({
 		store.aSetStr([...accountBase, "kind"], "api");
 		store.aSetStr([...accountBase, "providerFamily"], fam);
 	};
-	const saveAndCheck = () => {
+	const saveAndCheck = (onFailure?: () => void) => {
 		void store.save().then((saved) => {
-			if (saved) onRouteChanged();
+			if (saved) {
+				setSaveError(null);
+				onRouteChanged();
+			} else onFailure?.();
 		});
 	};
 
-	const applyTarget = (next: string, remoteConsent = false) => {
+	const applyTarget = (next: string, remoteConsent = false, remoteEndpoint?: string) => {
 		if (!next) {
 			store.aDel([...targetBase, "executor"]);
 			store.aDel([...targetBase, "account"]);
@@ -648,6 +653,7 @@ function TargetEditor({
 			} else {
 				// local: keyless unless a per-target openai-compatible key exists
 				const hasKey = !!store.aStr([...accountBase, "credentialRef"]);
+				if (next === "openai-compatible" && remoteEndpoint) store.aSetStr([...targetBase, "endpoint"], remoteEndpoint);
 				if (next === "openai-compatible" && hasKey) {
 					store.aSetStr([...targetBase, "account"], accountName);
 					ensureAccount("openai");
@@ -665,14 +671,27 @@ function TargetEditor({
 		} else {
 			store.aUpdate(ensureInferenceRoute);
 		}
-		saveAndCheck();
+		saveAndCheck(
+			remoteConsent
+				? () => {
+						void store.reload().then(() => {
+							setRemoteConsentDismissed(false);
+							setSaveError("Could not save the remote-extraction decision. The persisted privacy gate is still active.");
+							setPendingRemote({ executor: next, ...(remoteEndpoint ? { endpoint: remoteEndpoint } : {}) });
+						});
+					}
+				: undefined,
+		);
 	};
 
 	const writeTarget = (next: string) => {
 		const privacy = store.aStr(["inference", "taskClasses", "memory_extraction", "privacy"]);
-		if (targetName === "background" && backendKind(next) === "provider" && privacy !== "remote_ok") {
+		const nextKind = backendKind(next);
+		const nextEndpoint = next === "openai-compatible" ? endpoint : "";
+		if (targetName === "background" && requiresRemoteMemoryConsent(nextKind, next, nextEndpoint, privacy)) {
+			setSaveError(null);
 			setRemoteConsentDismissed(false);
-			setPendingRemote(next);
+			setPendingRemote({ executor: next, ...(nextEndpoint ? { endpoint: nextEndpoint } : {}) });
 			return;
 		}
 		applyTarget(next);
@@ -684,6 +703,13 @@ function TargetEditor({
 		saveAndCheck();
 	};
 	const setEndpoint = (v: string) => {
+		const privacy = store.aStr(["inference", "taskClasses", "memory_extraction", "privacy"]);
+		if (targetName === "background" && requiresRemoteMemoryConsent("local", "openai-compatible", v, privacy)) {
+			setSaveError(null);
+			setRemoteConsentDismissed(false);
+			setPendingRemote({ executor: "openai-compatible", endpoint: v });
+			return;
+		}
 		store.aSetStr([...targetBase, "endpoint"], v);
 		store.aUpdate(ensureInferenceRoute);
 		saveAndCheck();
@@ -740,11 +766,12 @@ function TargetEditor({
 			)}
 			{pendingRemote && (
 				<div className="mt-2 rounded-[var(--radius)] border border-[oklch(0.72_0.15_85/0.3)] bg-[oklch(0.72_0.15_85/0.08)] px-3 py-2.5">
-					<div className="text-[12px] font-semibold">Use {PROVIDER_NAMES[pendingRemote] ?? titleCase(pendingRemote)} for memory extraction?</div>
-					<div className="mt-1 text-[11.5px] leading-snug text-muted-foreground">Selected memory sources and transcript text may be sent to the remote provider to extract durable facts.</div>
+					{saveError && <div className="mb-1 text-[11px] text-[oklch(0.72_0.15_25)]">{saveError}</div>}
+					<div className="text-[12px] font-semibold">Use {pendingRemote.executor === "acpx" ? `ACPX (${acpxAgent})` : pendingRemote.executor === "openai-compatible" ? "OpenAI-compatible endpoint" : PROVIDER_NAMES[pendingRemote.executor] ?? titleCase(pendingRemote.executor)} for memory extraction?</div>
+					<div className="mt-1 text-[11.5px] leading-snug text-muted-foreground">Selected memory sources and transcript text may be sent to this remote executor to extract durable facts.</div>
 					<div className="mt-2 flex flex-wrap gap-1.5">
-						<button type="button" onClick={() => { applyTarget(pendingRemote, true); setPendingRemote(null); }} className="rounded-[var(--radius)] bg-foreground px-2.5 py-1.5 text-[10.5px] font-medium text-background">Use remotely</button>
-						<button type="button" onClick={() => { setRemoteConsentDismissed(true); setPendingRemote(null); }} className="rounded-[var(--radius)] border border-[oklch(1_0_0/0.16)] px-2.5 py-1.5 text-[10.5px] text-muted-foreground hover:text-foreground [html:not(.dark)_&]:border-[oklch(0_0_0/0.14)]">Keep memory extraction local</button>
+						<button type="button" onClick={() => { const consent = pendingRemote; applyTarget(consent.executor, true, consent.endpoint); setPendingRemote(null); }} className="rounded-[var(--radius)] bg-foreground px-2.5 py-1.5 text-[10.5px] font-medium text-background">Use remotely</button>
+						<button type="button" onClick={() => { setRemoteConsentDismissed(true); setPendingRemote(null); }} className="rounded-[var(--radius)] border border-[oklch(1_0_0/0.16)] px-2.5 py-1.5 text-[10.5px] text-muted-foreground hover:text-foreground [html:not(.dark)_&]:border-[oklch(0_0_0/0.14)]">Keep privacy gate</button>
 						<button type="button" onClick={() => { setRemoteConsentDismissed(true); setPendingRemote(null); }} className="px-2 py-1.5 text-[10.5px] text-muted-foreground hover:text-foreground">Cancel</button>
 					</div>
 				</div>
