@@ -75,6 +75,26 @@ describe("fetchEmbedding", () => {
 		});
 	});
 
+	it("does not record provider-down telemetry when the official OpenAI provider is not configured", async () => {
+		const telemetry = captureTelemetry();
+		setActiveTelemetry(telemetry.collector);
+		Reflect.deleteProperty(process.env, "OPENAI_API_KEY");
+		globalThis.fetch = mock(() => {
+			throw new Error("the provider must not be contacted");
+		}) as unknown as typeof fetch;
+
+		await expect(
+			fetchEmbedding("hello", {
+				provider: "openai",
+				model: "text-embedding-3-small",
+				dimensions: 3,
+				base_url: "https://api.openai.com/v1",
+			}),
+		).resolves.toBeNull();
+
+		expect(telemetry.events.filter((event) => event.event === "pipeline.error")).toHaveLength(0);
+	});
+
 	it("uses the query formatter when role is passed before request options", async () => {
 		let capturedInput = "";
 		globalThis.fetch = mock((_url: string | URL | Request, init?: RequestInit) => {
@@ -200,6 +220,51 @@ describe("fetchEmbedding", () => {
 		expect(result).toEqual([0.5, 0.6, 0.7]);
 		expect(capturedUrl).toContain("/api/embeddings");
 		expect(capturedUrl).toContain("localhost");
+	});
+
+	it("does not record provider-down telemetry when native embeddings are disabled without a fallback", async () => {
+		const telemetry = captureTelemetry();
+		setActiveTelemetry(telemetry.collector);
+		setNativeFallbackProvider("unavailable");
+
+		await expect(
+			fetchEmbedding("test", {
+				provider: "native",
+				model: "nomic-embed-text",
+				dimensions: 3,
+				base_url: "",
+				warmNative: false,
+			}),
+		).resolves.toBeNull();
+
+		expect(telemetry.events.filter((event) => event.event === "pipeline.error")).toHaveLength(0);
+	});
+
+	it("records provider-down telemetry when native inference fails without a fallback", async () => {
+		const telemetry = captureTelemetry();
+		setActiveTelemetry(telemetry.collector);
+		globalThis.fetch = mock(() =>
+			Promise.resolve(new Response("unreachable", { status: 503 })),
+		) as unknown as typeof fetch;
+		setNativeEmbeddingProviderForTest(async () => {
+			throw new Error("native unavailable");
+		});
+
+		await expect(
+			fetchEmbedding("test", {
+				provider: "native",
+				model: "nomic-embed-text",
+				dimensions: 3,
+				base_url: "",
+			}),
+		).resolves.toBeNull();
+
+		expect(telemetry.events).toContainEqual(
+			expect.objectContaining({
+				event: "pipeline.error",
+				properties: { stage: "embedding", code: "EMBEDDING_PROVIDER_DOWN" },
+			}),
+		);
 	});
 
 	it("routes to llama.cpp when nativeFallbackProvider is 'llama-cpp'", async () => {

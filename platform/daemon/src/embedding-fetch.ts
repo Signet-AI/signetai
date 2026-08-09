@@ -372,7 +372,7 @@ export async function fetchEmbedding(
 	const formattedText = formatEmbeddingInput(text, effectiveCfg, role);
 	try {
 		const serve = await serveEmbedding(formattedText, effectiveCfg, opts);
-		if (serve.embedding === null) {
+		if (serve.embedding === null && serve.provider !== null) {
 			recordPipelineError("embedding", "EMBEDDING_PROVIDER_DOWN");
 		}
 		if (serve.embedding !== null && serve.provider !== null) {
@@ -432,12 +432,13 @@ async function serveEmbedding(
 			const embedding = await cachedNativeEmbed(formattedText);
 			return { embedding, provider: "native", tokenCount: countTokens(formattedText) };
 		} catch (nativeErr) {
-			return resolveNativeFallback(
+			const fallback = await resolveNativeFallback(
 				formattedText,
 				effectiveCfg,
 				opts,
 				nativeErr instanceof Error ? nativeErr.message : String(nativeErr),
 			);
+			return fallback.provider === null ? { ...fallback, provider: "native" } : fallback;
 		}
 	}
 	if (effectiveCfg.provider === "ollama") {
@@ -462,7 +463,7 @@ async function serveEmbedding(
 	const baseUrl = resolveEmbeddingBaseUrl(effectiveCfg);
 	if (!apiKey && requiresOpenAiApiKey(baseUrl)) {
 		logger.warn("embedding", "No API key configured for OpenAI embeddings, skipping request to api.openai.com");
-		return { embedding: null, provider: effectiveCfg.provider, tokenCount: countTokens(formattedText) };
+		return { embedding: null, provider: null, tokenCount: countTokens(formattedText) };
 	}
 	const res = await fetchWithEmbeddingTimeout(
 		`${baseUrl.replace(/\/$/, "")}/embeddings`,
