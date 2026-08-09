@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { createDebouncedValue } from "./graph-density";
 
+const graphViewSource = await Bun.file(new URL("../views/graph.tsx", import.meta.url)).text();
+
 const graphSceneSource = await Bun.file(new URL("./graph-scene.ts", import.meta.url)).text();
 const stylesheet = await Bun.file(new URL("../index.css", import.meta.url)).text();
 
@@ -28,6 +30,11 @@ describe("graph density updates", () => {
 		await wait(30);
 
 		expect(committed).toEqual([]);
+	});
+
+	test("keeps the requested thumb position after the rounded graph response arrives", () => {
+		expect(graphViewSource).toContain("const displayPct = sliderPct ?? shownPct;");
+		expect(graphViewSource).not.toContain("setSliderPct(null);");
 	});
 
 	test("reveals a rebuilt constellation instead of popping it into view", () => {

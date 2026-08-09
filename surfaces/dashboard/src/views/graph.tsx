@@ -162,8 +162,6 @@ export function GraphView() {
 				sceneRef.current = createGraphScene(stageRef.current, sceneData, { fadeIn });
 				builtSigRef.current = dataSig;
 				densityRebuildRef.current = false;
-				// Rebuilt: the label falls back to the measured percentage.
-				setSliderPct(null);
 			})
 			.catch((err: unknown) => {
 				console.error("[graph] scene init failed", err);
