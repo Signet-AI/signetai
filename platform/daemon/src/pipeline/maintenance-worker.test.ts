@@ -1,10 +1,10 @@
-import { describe, expect, it } from "bun:test";
 import { Database } from "bun:sqlite";
+import { describe, expect, it } from "bun:test";
 import { runMigrations } from "../../../core/src/migrations";
 import type { DbAccessor, ReadDb, WriteDb } from "../db-accessor";
+import { createProviderTracker } from "../diagnostics";
 import { DEFAULT_PIPELINE_V2 } from "../memory-config";
 import type { PipelineV2Config } from "../memory-config";
-import { createProviderTracker } from "../diagnostics";
 import { startMaintenanceWorker } from "./maintenance-worker";
 
 // ---------------------------------------------------------------------------
@@ -199,6 +199,37 @@ describe("maintenance-worker", () => {
 		expect(result.report.composite.status).toBe("healthy");
 
 		handle.stop();
+		db.close();
+	});
+
+	it("coalesces ticks while a maintenance cycle is still pending", async () => {
+		const db = freshDb();
+		const accessor = asAccessor(db);
+		const tracker = createProviderTracker();
+
+		// A recommendation makes doTick await the repair execution, leaving
+		// the first cycle pending at the point where the second tick is called.
+		for (let i = 0; i < 2; i++) {
+			db.prepare(
+				`INSERT INTO memory_jobs (id, memory_id, job_type, status, attempts, max_attempts, failed_at, created_at, updated_at)
+				 VALUES (?, ?, 'repair', 'dead', 3, 3, ?, ?, ?)`,
+			).run(`dead-single-flight-${i}`, `mem-single-flight-${i}`, now, now, now);
+		}
+		db.prepare(
+			`INSERT INTO memory_jobs (id, memory_id, job_type, status, attempts, max_attempts, completed_at, created_at, updated_at)
+			 VALUES (?, ?, 'extract', 'completed', 1, 3, ?, ?, ?)`,
+		).run("comp-single-flight", "mem-comp-single-flight", now, now, now);
+
+		const handle = startMaintenanceWorker(accessor, BASE_CFG, tracker, null);
+		handle.stop();
+
+		const first = handle.tick();
+		const second = handle.tick();
+
+		// The same promise proves the second dispatch coalesced rather than
+		// entering a second maintenance cycle concurrently.
+		expect(second).toBe(first);
+		await first;
 		db.close();
 	});
 

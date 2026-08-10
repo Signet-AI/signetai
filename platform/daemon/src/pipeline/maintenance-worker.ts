@@ -5,7 +5,8 @@
  * the appropriate repair action. Starts in observe-only mode by
  * default; graduates to execute mode via config.
  *
- * Same interval/stop pattern as the retention worker.
+ * The interval is single-flight: a slow cycle is allowed to finish before
+ * another cycle starts.
  */
 
 import type { DbAccessor } from "../db-accessor";
@@ -202,6 +203,7 @@ export function startMaintenanceWorker(
 ): MaintenanceHandle {
 	let running = true;
 	let timer: ReturnType<typeof setInterval> | null = null;
+	let inFlight: Promise<MaintenanceCycleResult> | null = null;
 	const limiter = createRateLimiter();
 	const haltTracker = createHaltTracker();
 
@@ -387,11 +389,30 @@ export function startMaintenanceWorker(
 		};
 	}
 
+	function tick(): Promise<MaintenanceCycleResult> {
+		if (inFlight) {
+			logger.info("maintenance", "Cycle skipped; previous cycle still running");
+			return inFlight;
+		}
+
+		const cycle = doTick();
+		inFlight = cycle;
+		void cycle.then(
+			() => {
+				if (inFlight === cycle) inFlight = null;
+			},
+			() => {
+				if (inFlight === cycle) inFlight = null;
+			},
+		);
+		return cycle;
+	}
+
 	// Only start the interval if autonomous maintenance is allowed
 	if (cfg.autonomous.enabled && !cfg.autonomous.frozen) {
 		timer = setInterval(() => {
 			if (!running) return;
-			doTick().catch((e) => {
+			tick().catch((e) => {
 				logger.warn("maintenance", "Cycle error", {
 					error: e instanceof Error ? e.message : String(e),
 				});
@@ -415,6 +436,6 @@ export function startMaintenanceWorker(
 			if (timer) clearInterval(timer);
 			logger.info("maintenance", "Worker stopped");
 		},
-		tick: doTick,
+		tick,
 	};
 }
