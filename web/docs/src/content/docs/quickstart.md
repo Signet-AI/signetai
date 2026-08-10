@@ -5,90 +5,209 @@ description: "Install Signet, connect a harness, and give your agent persistent 
 
 Install Signet, connect a harness, and give your agent memory that survives the session.
 
-<figure class="quickstart-dashboard">
-  <img
-    src="/dashboard-home-16x9.png"
-    alt="Signet Dashboard showing memory, ontology, agent, source, activity, and review data"
-    width="1920"
-    height="1080"
-    loading="eager"
-    decoding="async"
-  />
-</figure>
+By the end of this guide, Signet will have a workspace, a daemon, an embedding provider, and a memory you can write and recall from the CLI.
 
-## Why Signet
+## Before you start
 
-An agent's memory records your projects, relationships, habits, preferences, decisions, and constraints. Together, this is your pattern of life.
+You need:
 
-Memory storage and retrieval are becoming commodity capabilities. Ownership is not. Whoever owns the memory owns the record of your pattern-of-life behavior. They can also control whether your agents keep working when you change models, tools, or vendors.
+- A macOS or Linux machine for the direct native installer, or Node.js with npm or Bun on Windows.
+- One harness to connect. Signet currently supports Claude Code, Codex, OpenCode, ForgeCode, OpenClaw, Oh My Pi, Pi, Hermes Agent, and Gemini CLI.
+- A decision about where embeddings and background inference should run.
 
-For agents deployed at scale, memory is infrastructure. Keep it outside the model and the harness. Keep it in a system that you can inspect, move, and operate.
+Signet uses two different kinds of providers:
 
-Signet stores this state in a local-first workspace that you control. The same memory can support multiple models, harnesses, and agents without locking the accumulated context inside one platform.
+- Embeddings turn text into vectors for semantic search. The built-in native provider is the default, uses `nomic-embed-text-v1.5` at 768 dimensions, and runs locally without another service. Ollama and OpenAI are alternatives.
+- Extraction and background inference turn evidence into summaries or other derived state. They use a harness, an API provider, or no provider, depending on your setup. Remote providers can cost money and send data outside the machine.
 
-## Dreaming
+Keep raw credentials out of memories, source files, and prompts. The setup wizard uses Signet's secret handling for provider credentials.
 
-Dreaming turns new evidence into useful semantic knowledge. It reads episodic records, compares them with the current semantic state, and applies audited ontology operations.
+If you are configuring OpenClaw, back up its workspace before applying changes. Signet can patch a detected OpenClaw workspace, and you should be able to restore it if the integration is not what you want.
 
-Dreaming can use local inference or a provider that you configure. You control the provider and model. Dreaming does not replace the source evidence. It derives semantic state from it.
+## Install Signet
 
-Read [Memory lifecycle and Dreaming](/memory/#dreaming) for the full processing model.
+On macOS or Linux, the direct installer is the simplest path:
 
-## The semantic ontology
+```bash
+curl -fsSL https://signetai.sh/install.sh | bash
+```
 
-The semantic ontology is Signet's current model of people, projects, systems, tools, decisions, constraints, and relationships.
+The same compiled CLI is also available through npm and Bun:
 
-It organizes knowledge as entities, aspects, groups, and claims. Claims are scoped, versioned, and auditable. This structure lets Signet follow relevant relationships without treating memory as a flat list of text fragments.
+```bash
+npm install -g signetai
+# or
+bun add -g signetai
+```
 
-The Dashboard shows this ontology as a navigable graph. Read [Knowledge architecture](/knowledge-architecture/) for the data model and retrieval role.
+On Windows, use the npm or Bun installation. The direct shell installer is for Unix-like systems.
 
-## Episodic
+Verify the binary before configuring anything:
 
-Episodic memory is the source record. It includes transcripts, summaries, explicit memories, notes, documents, and connected source artifacts.
+```bash
+signet --version
+```
 
-Signet stores these records as immutable evidence with source information. Dreaming can derive new semantic knowledge from them, but it does not rewrite what happened.
+Signet stores its workspace at `~/.agents` by default. Set `SIGNET_PATH` or `SIGNET_WORKSPACE` when you need another location. A custom workspace is useful when you want the memory database, identity files, and configuration on a separate disk or under a project-specific backup policy.
 
-Read [Memory lifecycle](/memory/#memory-lifecycle) for the write path.
+## Create the workspace
 
-## Semantic
+Start the interactive setup wizard:
 
-Semantic memory is the current operational view of the episodic record. It includes entities, aspects, claims, relationships, keywords, and embeddings.
+```bash
+signet setup
+```
 
-Dreaming maintains this layer through audited operations. Each claim can keep its evidence and version history. This makes the semantic state useful and repairable.
+Choose `Create new workspace` when this is a new installation. The wizard reviews the plan before it writes anything. It initializes the workspace, configures the selected harnesses, creates the memory database, starts the daemon, and can open the Dashboard when setup finishes.
 
-Read [Knowledge architecture](/knowledge-architecture/#source-truth-and-current-truth) for the boundary between evidence and current truth.
+### What the wizard asks
 
-## Query
+The exact prompts depend on your harness choices and whether the workspace already exists. A fresh workspace normally moves through these decisions:
 
-At query time, Signet selects a bounded set of context for the current task. It combines keyword search, vector similarity, semantic ontology traversal, source evidence, recency, and feedback.
+1. Choose a new workspace or import from GitHub.
+2. Decide whether Signet should manage identity and instruction files. If it should, choose an identity preset and give the agent a name.
+3. Select one or more harnesses. OpenClaw has an additional workspace-patch and integration-mode decision.
+4. Add an optional agent description.
+5. Choose whether to install the Signet Secrets core plugin and whether to install GraphIQ for code retrieval.
+6. Choose how the daemon is reachable: localhost only, local network or Tailscale, or a remote origin.
+7. Choose an embedding provider. The built-in native provider is recommended for a local-first setup. Ollama asks for a model and checks the local service. OpenAI asks for API configuration. You can also skip embeddings.
+8. Choose the search balance between semantic and keyword results. Balanced is the default recommendation.
+9. Configure background inference, or disable it. The wizard supports harness login, API keys, ACPX, and OpenAI-compatible endpoints.
+10. Optionally configure a separate aggregate-recall provider and advanced recall limits.
+11. Optionally enable Dreaming.
+12. Choose whether to initialize Git, add named agents, and import Obsidian vaults as sources.
+13. Review the plan, apply it, and choose whether to open the Dashboard.
 
-Signet checks agent and project scope before it reads candidate content. It then ranks and shapes the permitted evidence. If an optional search stage fails, recall falls back to simpler channels instead of failing the full request.
+The setup wizard also explains telemetry before it records anything. Telemetry is limited to anonymous usage data such as versions and command names. It does not include memory content, code, arguments, paths, or personal data. You can disable it with `telemetryEnabled: false` in the managed configuration.
 
-Read [Hybrid recall](/memory/#hybrid-recall) for the retrieval path and [Recall API](/api/memory/recall-search/) for the request surface.
+The interactive wizard does not ask for a separate deployment-context answer. `--deployment-type` is a command-line setting used for non-interactive setup and reconfiguration. It accepts `local`, `vps`, or `server` and helps infer defaults such as the extraction provider. Explicit provider flags take precedence.
 
-## Sources
+For a scripted setup, use the same current command surface and choose providers explicitly:
 
-Signet can index local documents, URLs, Obsidian vaults, Discord servers, and GitHub repositories. Source artifacts stay separate from semantic claims, so you can inspect where the knowledge came from.
+```bash
+signet setup --non-interactive \
+  --name "My Agent" \
+  --harness claude-code \
+  --deployment-type local \
+  --embedding-provider native \
+  --extraction-provider none
+```
 
-Read [Sources](/sources/) for supported connectors and source behavior.
+Use `signet setup --help` before adapting this example for a different harness or deployment. Non-interactive setup is useful for repeatable machines, but the interactive wizard is the better first run because it exposes the choices that affect data movement and provider cost.
 
-## Safety
+### What setup creates
 
-- Raw evidence is stored before LLM processing starts.
-- Pinned memories cannot be changed by Dreaming.
-- Deletes are recoverable and recorded in the audit history.
-- Memory reads and writes follow agent scope.
-- Secrets stay encrypted and outside model context.
+The exact files depend on the identity mode, preset, harnesses, and optional plugins. The workspace normally contains:
 
-Automatic destructive changes remain conservative. Use explicit repair operations when the semantic state is wrong.
+```text
+$SIGNET_WORKSPACE/
+├── agent.yaml
+├── memory/memories.db
+├── harnesses/
+├── skills/
+├── signetai/
+└── identity files when managed identity is enabled
+```
 
-## Continuity
+`agent.yaml` is managed by Signet. Do not hand-edit it to work around a setup problem. Rerun setup or use the supported configuration command instead.
 
-The same agent state can work across Claude Code, OpenCode, OpenClaw, Codex, and Hermes Agent. You can change the model or harness without resetting the agent's memory.
+If managed identity is enabled, setup prints `/onboarding` as the next step. That command belongs to the connected harness and personalizes the agent's identity files. It is not a replacement for `signet setup`.
 
-## Start
+## Verify the first run
 
-- [Install](/getting-started/install/): Install the Signet binary.
-- [Set up Signet](/getting-started/setup/): Create the workspace and connect a harness.
-- [Your first session](/getting-started/first-session/): Use memory, secrets, skills, and the Dashboard.
-- [Operate your installation](/getting-started/operate/): Run, secure, update, and troubleshoot Signet.
+Check the daemon and workspace state:
+
+```bash
+signet status
+```
+
+Check the health endpoint directly when diagnosing a daemon problem:
+
+```bash
+curl -fsS http://127.0.0.1:3850/health
+```
+
+A successful response means the endpoint was reachable and reports the daemon's health state. The CLI status command also checks the configured workspace and provider state.
+
+Open the Dashboard:
+
+```bash
+signet dashboard
+```
+
+Write a small test memory:
+
+```bash
+signet remember "The quickstart memory is ready to recall." --tags quickstart
+```
+
+Recall it through the normal hybrid search path:
+
+```bash
+signet recall "What did I save during the quickstart?" --limit 5
+```
+
+Use `--json` when another tool needs machine-readable recall output. Recall results depend on the memories and providers in your workspace, so this guide does not promise a fixed ranking or response body.
+
+## `signet setup` and `/onboarding` are different
+
+Use `signet setup` for installation and system configuration:
+
+- Create or import the workspace.
+- Configure harness connections and hooks.
+- Choose embeddings, extraction, inference, and network behavior.
+- Initialize the database and daemon.
+
+Use `/onboarding` later from a harness that supports it for the personal interview:
+
+- Describe how you work and what the agent should know about you.
+- Refine identity and instruction files.
+- Establish behavior and collaboration preferences.
+
+Run setup first. Then run `/onboarding` when managed identity is enabled and you want to personalize the agent.
+
+## If something goes wrong
+
+If the daemon is not running:
+
+```bash
+signet status
+signet daemon start
+signet daemon logs -n 100
+```
+
+If it starts and stops again, inspect the logs before changing configuration. The health endpoint is also useful when a Dashboard connection fails:
+
+```bash
+curl -fsS http://127.0.0.1:3850/health
+```
+
+If embedding setup fails, use the built-in native provider by rerunning setup, or complete the provider's local prerequisites before retrying. For the recommended Ollama model, the expected local commands are:
+
+```bash
+ollama serve
+ollama pull nomic-embed-text
+```
+
+If a provider or harness was selected incorrectly, rerun the wizard or open the supported configuration surface:
+
+```bash
+signet setup
+signet configure
+```
+
+After changing daemon or provider settings, restart the daemon and check status again:
+
+```bash
+signet daemon restart
+signet status
+```
+
+## Continue
+
+- [Install](/getting-started/install/): installation choices, supported platforms, and provider prerequisites.
+- [Set up Signet](/getting-started/setup/): the full configuration reference.
+- [Your first session](/getting-started/first-session/): memory, secrets, skills, and Dashboard usage.
+- [Operate your installation](/getting-started/operate/): logs, updates, security, and troubleshooting.
+- [CLI getting started](/cli/getting-started/): command options and scripting details.
+- [Claude Code](/harnesses/claude-code/), [Codex](/harnesses/codex/), [OpenCode](/harnesses/opencode/), and [OpenClaw](/harnesses/openclaw/): harness-specific setup and behavior.
