@@ -782,12 +782,32 @@ export interface DaemonStartArgsInput {
 	readonly unitName?: string;
 	// Service managers do not inherit this debugger setting unless it is explicit.
 	readonly bunInspect?: string;
+	/** Source environment for the allowlisted telemetry variables below. */
+	readonly telemetryEnv?: NodeJS.ProcessEnv;
 }
 
 export type SystemdDaemonStartArgsInput = DaemonStartArgsInput;
 
 export interface LaunchdDaemonPlistInput extends DaemonStartArgsInput {
 	readonly label?: string;
+}
+
+const TELEMETRY_ENVIRONMENT_KEYS = [
+	"SIGNET_TELEMETRY_ENV",
+	"SIGNET_TELEMETRY_OPTOUT",
+	"SIGNET_TELEMETRY_DEPLOYMENT_ROLE",
+	"SIGNET_TELEMETRY_INSTALL_CHANNEL",
+] as const;
+
+type TelemetryEnvironmentKey = (typeof TELEMETRY_ENVIRONMENT_KEYS)[number];
+
+function resolveTelemetryEnvironment(env: NodeJS.ProcessEnv): Partial<Record<TelemetryEnvironmentKey, string>> {
+	const resolved: Partial<Record<TelemetryEnvironmentKey, string>> = {};
+	for (const key of TELEMETRY_ENVIRONMENT_KEYS) {
+		const value = env[key];
+		if (value) resolved[key] = value;
+	}
+	return resolved;
 }
 
 export function buildSystemdDaemonStartArgs(input: SystemdDaemonStartArgsInput): string[] {
@@ -804,6 +824,9 @@ export function buildSystemdDaemonStartArgs(input: SystemdDaemonStartArgsInput):
 		`--setenv=SIGNET_BIND=${input.bind}`,
 		`--setenv=SIGNET_PATH=${input.agentsDir}`,
 		"--setenv=SIGNET_DAEMON_ENTRYPOINT=1",
+		...Object.entries(resolveTelemetryEnvironment(input.telemetryEnv ?? process.env)).map(
+			([key, value]) => `--setenv=${key}=${value}`,
+		),
 		...(input.unitName ? [`--setenv=SIGNET_DAEMON_UNIT=${input.unitName}`] : []),
 		...(input.bunInspect ? [`--setenv=BUN_INSPECT=${input.bunInspect}`] : []),
 		...resolveDaemonLaunchCommand(input.daemonPath),
@@ -982,6 +1005,7 @@ export function buildLaunchdDaemonPlist(input: LaunchdDaemonPlistInput): string 
 		SIGNET_BIND: input.bind,
 		SIGNET_PATH: input.agentsDir,
 		SIGNET_DAEMON_ENTRYPOINT: "1",
+		...resolveTelemetryEnvironment(input.telemetryEnv ?? process.env),
 		...(input.bunInspect ? { BUN_INSPECT: input.bunInspect } : {}),
 		...(process.env.SIGNET_DIR ? { SIGNET_DIR: process.env.SIGNET_DIR } : {}),
 		...(process.env.SIGNET_DASHBOARD_DIR ? { SIGNET_DASHBOARD_DIR: process.env.SIGNET_DASHBOARD_DIR } : {}),
@@ -1135,6 +1159,7 @@ export async function startDaemon(agentsDir: string = AGENTS_DIR, preferredDaemo
 			startupLogPath,
 			unitName: systemdUnitName,
 			bunInspect: process.env.BUN_INSPECT,
+			telemetryEnv: process.env,
 		});
 		const result = spawnSync("systemd-run", systemdArgs, {
 			stdio: ["ignore", "ignore", stderrTarget],
@@ -1166,6 +1191,7 @@ export async function startDaemon(agentsDir: string = AGENTS_DIR, preferredDaemo
 				bind: net.bind,
 				startupLogPath,
 				bunInspect: process.env.BUN_INSPECT,
+				telemetryEnv: process.env,
 			}),
 		);
 		// Boot out any loaded job before (re)bootstrap. When no job is loaded

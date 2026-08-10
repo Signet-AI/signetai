@@ -142,6 +142,42 @@ describe("buildSystemdDaemonStartArgs", () => {
 		expect(args).toContain("--setenv=BUN_INSPECT=127.0.0.1:9230");
 	});
 
+	it("forwards only allowlisted telemetry variables through service-manager boundaries", () => {
+		const input = {
+			daemonPath: "/opt/signet/dist/daemon.js",
+			agentsDir: "/home/user/.agents",
+			port: 3850,
+			host: "127.0.0.1",
+			bind: "0.0.0.0",
+			startupLogPath: "/home/user/.agents/.daemon/logs/startup.log",
+			telemetryEnv: {
+				SIGNET_TELEMETRY_ENV: "dev",
+				SIGNET_TELEMETRY_OPTOUT: "1",
+				SIGNET_TELEMETRY_DEPLOYMENT_ROLE: "ci",
+				SIGNET_TELEMETRY_INSTALL_CHANNEL: "package-manager",
+				SIGNET_TELEMETRY_SECRET: "must-not-cross-boundary",
+			},
+		};
+
+		const args = buildSystemdDaemonStartArgs(input);
+		const plist = buildLaunchdDaemonPlist(input);
+
+		expect(args).toEqual(
+			expect.arrayContaining([
+				"--setenv=SIGNET_TELEMETRY_ENV=dev",
+				"--setenv=SIGNET_TELEMETRY_OPTOUT=1",
+				"--setenv=SIGNET_TELEMETRY_DEPLOYMENT_ROLE=ci",
+				"--setenv=SIGNET_TELEMETRY_INSTALL_CHANNEL=package-manager",
+			]),
+		);
+		expect(plist).toContain("<key>SIGNET_TELEMETRY_ENV</key>");
+		expect(plist).toContain("<key>SIGNET_TELEMETRY_OPTOUT</key>");
+		expect(plist).toContain("<key>SIGNET_TELEMETRY_DEPLOYMENT_ROLE</key>");
+		expect(plist).toContain("<key>SIGNET_TELEMETRY_INSTALL_CHANNEL</key>");
+		expect(args.join(" ")).not.toContain("SIGNET_TELEMETRY_SECRET");
+		expect(plist).not.toContain("SIGNET_TELEMETRY_SECRET");
+	});
+
 	it("omits empty inspector settings", () => {
 		const input = {
 			daemonPath: "/opt/signet/dist/daemon.js",
