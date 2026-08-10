@@ -78,6 +78,7 @@ export interface SourceIndexTelemetryInput {
 	readonly failureClass?: SourceFailureClass;
 	readonly searchable?: boolean;
 	readonly sourceBytes?: number;
+	readonly updateFreshness?: boolean;
 }
 
 export interface SourceRecallTelemetryResult {
@@ -246,6 +247,7 @@ function ensureState(
 }
 
 export function recordSourceConnected(source: SignetSourceEntry, agentId: string, mode = sourceModeFor(source)): void {
+	if (!getActiveTelemetry()?.enabled) return;
 	const now = new Date().toISOString();
 	try {
 		let claimed = false;
@@ -291,13 +293,25 @@ export function recordSourceConnectionFailure(kind: string, error: unknown, mode
 function sourceSizeBytes(source: SourceLifecycleSource, agentId: string): number | undefined {
 	try {
 		return getDbAccessor().withReadDb((db) => {
+			const rootPrefix = `${(source.root ?? "").replace(/\\/g, "/").replace(/\/$/, "")}/`;
+			const legacyObsidianClause =
+				source.kind === "obsidian"
+					? "OR (harness = 'obsidian' AND source_id IS NULL AND source_path >= ? AND source_path < ?)"
+					: "";
 			const row = db
 				.prepare(`
 				SELECT SUM(length(content)) AS bytes
 				FROM memory_artifacts
-				WHERE agent_id = ? AND source_id = ? AND COALESCE(is_deleted, 0) = 0
-			`)
-				.get(agentId, source.id) as { bytes?: unknown } | undefined;
+				WHERE agent_id = ?
+				  AND (
+					source_id = ?
+					${legacyObsidianClause}
+				  )
+				  AND COALESCE(is_deleted, 0) = 0
+				`)
+				.get(agentId, source.id, ...(source.kind === "obsidian" ? [rootPrefix, `${rootPrefix}\uffff`] : [])) as
+				| { bytes?: unknown }
+				| undefined;
 			return typeof row?.bytes === "number" && Number.isFinite(row.bytes) ? row.bytes : undefined;
 		});
 	} catch {
@@ -311,20 +325,24 @@ export function sourceHasSearchableArtifacts(source: SignetSourceEntry, agentId:
 	try {
 		return getDbAccessor().withReadDb((db) => {
 			const rootPrefix = `${source.root.replace(/\\/g, "/").replace(/\/$/, "")}/`;
+			const legacyObsidianClause =
+				source.kind === "obsidian"
+					? "OR (harness = 'obsidian' AND source_id IS NULL AND source_path >= ? AND source_path < ?)"
+					: "";
 			const row = db
 				.prepare(
 					`SELECT 1 AS n FROM memory_artifacts
 					 WHERE agent_id = ?
 					   AND (
 						 source_id = ?
-						 OR (harness = 'obsidian' AND source_id IS NULL AND source_path >= ? AND source_path < ?)
+						 ${legacyObsidianClause}
 					   )
 					   AND COALESCE(is_deleted, 0) = 0
 					   AND COALESCE(source_kind, '') NOT LIKE 'source_%_failure'
 					   AND COALESCE(source_kind, '') NOT LIKE 'source_%_checkpoint'
 					 LIMIT 1`,
 				)
-				.get(agentId, source.id, rootPrefix, `${rootPrefix}\uffff`);
+				.get(agentId, source.id, ...(source.kind === "obsidian" ? [rootPrefix, `${rootPrefix}\uffff`] : []));
 			return Boolean(row);
 		});
 	} catch {
@@ -343,6 +361,7 @@ function freshnessEventNeeded(
 }
 
 export function recordSourceIndexOperation(input: SourceIndexTelemetryInput): void {
+	if (!getActiveTelemetry()?.enabled) return;
 	const mode = input.mode ?? sourceModeFor(input.source);
 	const now = new Date();
 	const nowIso = now.toISOString();
@@ -365,11 +384,15 @@ export function recordSourceIndexOperation(input: SourceIndexTelemetryInput): vo
 			const before = readState(db, input.agentId, ensured.key);
 			if (accepted > 0 && !before?.firstIndexedAt) firstIndexed = true;
 			if (searchable && !before?.firstSearchableAt) firstSearchable = true;
-			const success = input.outcome === "success";
+			const success = input.outcome === "success" && input.updateFreshness !== false;
 			const nextSuccessAt = success ? nowIso : (before?.lastSuccessAt ?? null);
 			const freshnessState: SourceFreshnessState = success ? "healthy" : before?.lastSuccessAt ? "stale" : "unknown";
 			const lagMs = before?.lastSuccessAt ? now.getTime() - Date.parse(before.lastSuccessAt) : null;
-			if (mode === "recurring" && freshnessEventNeeded(before, freshnessState, now.getTime())) {
+			if (
+				mode === "recurring" &&
+				input.updateFreshness !== false &&
+				freshnessEventNeeded(before, freshnessState, now.getTime())
+			) {
 				freshness = { state: freshnessState, lag: sourceLagBucket(success ? 0 : lagMs) };
 			}
 			db.prepare(`
@@ -440,6 +463,7 @@ export function recordSourceFreshness(
 	lastActivityAt?: string,
 	nowMs = Date.now(),
 ): void {
+	if (!getActiveTelemetry()?.enabled) return;
 	const mode = sourceModeFor(source);
 	if (mode !== "recurring") return;
 	const now = new Date(nowMs);
@@ -556,6 +580,7 @@ function recallSourceId(agentId: string, result: SourceRecallTelemetryResult): s
 }
 
 export function recordFirstSourceRecall(agentId: string, results: readonly SourceRecallTelemetryResult[]): void {
+	if (!getActiveTelemetry()?.enabled) return;
 	const byClass = new Map<SourceClass, string[]>();
 	for (const result of results) {
 		const klass = recallClass(result);

@@ -36,6 +36,7 @@ import {
 	consumeCanceledSourceIndexJob,
 	failSourceIndexJob,
 	getSourceIndexJob,
+	invalidateSourceIndexJob,
 	isCurrentSourceIndexJob,
 	isSourceIndexInFlight,
 	markSourceIndexInFlight,
@@ -120,6 +121,41 @@ export interface RegisterSourcesRoutesDeps {
 	readonly agentsDir?: string;
 	readonly startBridge?: typeof startNativeMemoryBridge;
 	readonly purgeNativeSource?: typeof purgeNativeMemorySourceArtifacts;
+}
+
+const sourceIndexRuns = new Set<{
+	readonly sourceId: string;
+	readonly jobId: string;
+	readonly input: SourceIndexJobInput;
+	readonly run: Promise<void>;
+}>();
+const sourceIndexTimers = new Set<ReturnType<typeof setTimeout>>();
+const routeSourceJobs = new Map<string, { readonly job: SourceIndexJob; readonly input: SourceIndexJobInput }>();
+let sourceIndexStopping = false;
+
+/** Stop route-owned source work before the daemon closes telemetry and SQLite. */
+export async function stopSourceIndexJobs(): Promise<void> {
+	sourceIndexStopping = true;
+	for (const timer of sourceIndexTimers) clearTimeout(timer);
+	sourceIndexTimers.clear();
+	for (const [sourceId, routeJob] of routeSourceJobs) {
+		const current = getSourceIndexJob(sourceId);
+		if (current?.id !== routeJob.job.id || (current.status !== "queued" && current.status !== "running")) continue;
+		recordSourceIndexOperation({
+			source: routeJob.input.source,
+			agentId: resolveDaemonAgentId(),
+			discovered: current.total ?? current.scanned ?? 0,
+			accepted: current.indexed ?? 0,
+			durationMs: Math.max(0, Date.now() - Date.parse(current.startedAt ?? current.queuedAt)),
+			outcome: "cancelled",
+			failureClass: "cancelled",
+			searchable: false,
+		});
+		invalidateSourceIndexJob(sourceId);
+	}
+	await Promise.allSettled([...sourceIndexRuns].map(({ run }) => run));
+	sourceIndexRuns.clear();
+	routeSourceJobs.clear();
 }
 
 export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps = {}): void {
@@ -273,6 +309,7 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 	});
 
 	app.post("/api/sources/:sourceId/snapshot/import", async (c) => {
+		const startedAt = Date.now();
 		const sourceId = c.req.param("sourceId");
 		const source = findConfiguredSource(sourceId, agentsDir);
 		if (!source) return c.json({ error: "Source not found" }, 404);
@@ -285,6 +322,18 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 			try {
 				body = await c.req.json();
 			} catch {
+				recordSourceIndexOperation({
+					source,
+					agentId: resolveDaemonAgentId(),
+					discovered: 0,
+					accepted: 0,
+					failed: 1,
+					durationMs: Date.now() - startedAt,
+					outcome: "failed",
+					failureClass: "parse",
+					updateFreshness: false,
+					searchable: false,
+				});
 				return c.json({ error: "Invalid JSON body" }, 400);
 			}
 			const result = importSourceSnapshot({
@@ -293,7 +342,33 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 				snapshot: body,
 				includeLocalDiscord: c.req.query("includeLocalDiscord") === "true",
 			});
-			if (result.ok === false) return c.json({ error: result.error }, 400);
+			if (result.ok === false) {
+				recordSourceIndexOperation({
+					source,
+					agentId: resolveDaemonAgentId(),
+					discovered: 0,
+					accepted: 0,
+					failed: 1,
+					durationMs: Date.now() - startedAt,
+				outcome: "failed",
+				failureClass: sourceFailureClass(result.error),
+				updateFreshness: false,
+				searchable: false,
+				});
+				return c.json({ error: result.error }, 400);
+			}
+			markSourceIndexed(source.id, undefined, agentsDir);
+			recordSourceIndexOperation({
+				source,
+				agentId: resolveDaemonAgentId(),
+				discovered: result.imported + result.skipped.localDiscordArtifacts,
+				accepted: result.imported,
+				skipped: result.skipped.localDiscordArtifacts,
+				durationMs: Date.now() - startedAt,
+				outcome: "success",
+				updateFreshness: false,
+				searchable: sourceHasSearchableArtifacts(source, resolveDaemonAgentId()),
+			});
 			return c.json(result);
 		} finally {
 			clearSourceIndexInFlight(source.id);
@@ -388,6 +463,7 @@ function isSourceImportBlocked(sourceId: string): boolean {
 
 function enqueueSourceIndexJob(input: SourceIndexJobInput): SourceIndexJob {
 	const job = beginSourceIndexJob(input.source.id);
+	if (job.id.startsWith("source-index:")) routeSourceJobs.set(input.source.id, { job, input });
 	scheduleSourceIndexJob(input, job, 0);
 	return job;
 }
@@ -505,7 +581,7 @@ async function runSourceIndexJob(input: SourceIndexJobInput, job: SourceIndexJob
 		});
 	} finally {
 		await bridge?.close().catch(() => undefined);
-		if (consumeCanceledSourceIndexJob(job.id)) {
+		if (consumeCanceledSourceIndexJob(job.id) && !sourceIndexStopping) {
 			const provider = getSourceProvider(input.source.kind);
 			if (provider) purgeSource(provider, input.source, resolveDaemonAgentId(), input.purgeNativeSource);
 			clearSourceDeletionTombstone(input.source.id, resolveDaemonAgentId(), input.agentsDir);
@@ -515,10 +591,19 @@ async function runSourceIndexJob(input: SourceIndexJobInput, job: SourceIndexJob
 }
 
 function scheduleSourceIndexJob(input: SourceIndexJobInput, job: SourceIndexJob, delayMs: number): void {
-	setTimeout(() => {
+	if (sourceIndexStopping) return;
+	const timer = setTimeout(() => {
+		sourceIndexTimers.delete(timer);
 		if (!isCurrentSourceIndexJob(input.source.id, job.id)) return;
-		void runSourceIndexJob(input, job);
-	}, delayMs).unref?.();
+		const run = runSourceIndexJob(input, job);
+		const activeRun = { sourceId: input.source.id, jobId: job.id, input, run };
+		sourceIndexRuns.add(activeRun);
+		void run.finally(() => {
+			sourceIndexRuns.delete(activeRun);
+		});
+	}, delayMs);
+	sourceIndexTimers.add(timer);
+	timer.unref?.();
 }
 
 /**
