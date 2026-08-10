@@ -200,10 +200,11 @@ describe("registerMemoryCommands recall", () => {
 			"--json",
 		]);
 
-		expect(capturedBody).toEqual({
+			expect(capturedBody).toEqual({
 			query: "deploy checklist",
 			keywordQuery: "deploy OR rollback",
 			limit: 10,
+			minScore: 0.8,
 			project: "/tmp/proj",
 			type: "decision",
 			tags: "release",

@@ -81,6 +81,10 @@ export const TELEMETRY_EVENTS = [
 	"cloud.sync",
 	"cloud.storage",
 	"recall.performed",
+	// Retrieval-outcome contract (#1277): attempt and delivery are separate
+	// boundaries so search execution cannot be mistaken for delivered context.
+	"recall.attempted",
+	"recall.outcome",
 	"config.snapshot",
 ] as const;
 
@@ -179,6 +183,12 @@ function sessionCostProperties(cost: SessionCostAccumulator): TelemetryPropertie
 
 export interface TelemetryCollector {
 	record(event: TelemetryEventType, properties: TelemetryProperties): void;
+	/**
+	 * Record with a bounded synchronous JSONL audit append while deferring
+	 * SQLite persistence. The local line survives a hard process kill; the
+	 * wedge path does not enter SQLite or provider work.
+	 */
+	recordDeferred?(event: TelemetryEventType, properties: TelemetryProperties): void;
 	reopenSession(sessionHash: string): void;
 
 	/**
@@ -453,39 +463,14 @@ export function createTelemetryCollector(
 	const reportedVersion = telemetryReportedVersion(daemonVersion, deployment);
 	let flushTimer: ReturnType<typeof setTimeout> | null = null;
 	let running = false;
+	let flushInFlight: Promise<void> | null = null;
+	let recordingStopped = false;
 	let consecutiveFailures = 0;
 	let flushCount = 0;
 	let effectiveIntervalMs = config.flushIntervalMs;
 	const { id: installId, created: installActivated } = getOrCreateInstallId(db);
 
 	const posthogConfigured = config.posthogHost.length > 0 && config.posthogApiKey.length > 0;
-
-	/**
-	 * Atomically claim a first-use milestone for this install. Only the
-	 * first caller wins (changes === 1); every later call is a no-op, so
-	 * concurrent remembers can't double-fire. When the install id fell
-	 * back to an in-memory value (broken DB) the UPDATE matches no row
-	 * and the milestone never fires — acceptable, telemetry is degraded
-	 * anyway.
-	 */
-	function claimFirstUse(kind: FirstUseKind): boolean {
-		try {
-			const column = FIRST_USE_COLUMNS[kind];
-			let claimed = false;
-			db.withWriteTx((w) => {
-				const result = w
-					.prepare(
-						`UPDATE telemetry_install SET ${column} = ?
-						 WHERE id = ? AND ${column} IS NULL`,
-					)
-					.run(new Date().toISOString(), installId);
-				claimed = result.changes > 0;
-			});
-			return claimed;
-		} catch {
-			return false;
-		}
-	}
 
 	function addContext(properties: TelemetryProperties): TelemetryProperties {
 		return {
@@ -497,6 +482,55 @@ export function createTelemetryCollector(
 			...(typeof properties.from === "string" ? { from: telemetryReportedVersion(properties.from, deployment) } : {}),
 			...(typeof properties.to === "string" ? { to: telemetryReportedVersion(properties.to, deployment) } : {}),
 		};
+	}
+
+	/**
+	 * Claim and persist a first-use event in one transaction. Only the first
+	 * caller wins (changes === 1); every later call is a no-op, so concurrent
+	 * remembers can't double-fire. Keeping the event in the same transaction
+	 * as the claim means a process can be terminated before the normal buffer
+	 * flush without losing the milestone.
+	 *
+	 * When the install id fell back to an in-memory value (broken DB), the
+	 * UPDATE matches no row and the milestone never fires — acceptable,
+	 * telemetry is degraded anyway.
+	 */
+	function persistFirstUse(kind: FirstUseKind): TelemetryEvent | null {
+		const event: TelemetryEvent = {
+			id: crypto.randomUUID(),
+			event: FIRST_USE_EVENTS[kind],
+			timestamp: new Date().toISOString(),
+			properties: addContext({
+				version: daemonVersion,
+				platform: process.platform,
+			}),
+		};
+
+		try {
+			const column = FIRST_USE_COLUMNS[kind];
+			let claimed = false;
+			db.withWriteTx((w) => {
+				const result = w
+					.prepare(
+						`UPDATE telemetry_install SET ${column} = ?
+						 WHERE id = ? AND ${column} IS NULL`,
+					)
+					.run(event.timestamp, installId);
+				if (result.changes === 0) return;
+
+				w.prepare(
+					`INSERT INTO telemetry_events
+					 (id, event, timestamp, properties, sent_to_posthog, created_at, source)
+					 VALUES (?, ?, ?, ?, 0, ?, 'daemon')`,
+				).run(event.id, event.event, event.timestamp, JSON.stringify(event.properties), event.timestamp);
+				claimed = true;
+			});
+			return claimed ? event : null;
+		} catch {
+			// The transaction rolls back both the claim and event on any
+			// failure, allowing a later successful call to retry the milestone.
+			return null;
+		}
 	}
 
 	function writeToDb(events: readonly TelemetryEvent[]): void {
@@ -641,6 +675,15 @@ export function createTelemetryCollector(
 		}
 	}
 
+	/** Serialize timer, threshold, explicit, and shutdown flushes. */
+	function flush(): Promise<void> {
+		if (flushInFlight) return flushInFlight;
+		flushInFlight = doFlush().finally(() => {
+			flushInFlight = null;
+		});
+		return flushInFlight;
+	}
+
 	function sessionKeyFor(properties: TelemetryProperties): string | null {
 		const hashed = properties.sessionHash;
 		if (typeof hashed === "string" && hashed.length > 0) return hashed;
@@ -714,6 +757,44 @@ export function createTelemetryCollector(
 		return cost ? { ...properties, ...sessionCostProperties(cost) } : properties;
 	}
 
+	function recordEvent(
+		event: TelemetryEventType,
+		properties: TelemetryProperties,
+		options: { readonly persistAuditLog: boolean; readonly flushWhenFull: boolean },
+	): void {
+		if (recordingStopped) return;
+		if (buffer.length >= MAX_BUFFER_EVENTS) {
+			const dropCount = buffer.length - MAX_BUFFER_EVENTS + 1;
+			buffer.splice(0, dropCount);
+			if (options.persistAuditLog) {
+				logger.warn("telemetry", "Buffer exceeded max capacity, dropping oldest events", {
+					dropped: dropCount,
+					maxBufferEvents: MAX_BUFFER_EVENTS,
+				});
+			}
+		}
+
+		buffer.push({
+			id: crypto.randomUUID(),
+			event,
+			timestamp: new Date().toISOString(),
+			properties: addContext(enrichSessionEvent(event, properties)),
+		});
+		if (options.persistAuditLog && logPath) {
+			const last = buffer[buffer.length - 1];
+			if (last) {
+				appendToTelemetryLog(logPath, JSON.stringify(last));
+			}
+		}
+
+		// Deferred records skip the eager flush. Calling doFlush here would
+		// synchronously enter SQLite before its first await, defeating the wedge
+		// path's non-blocking guarantee.
+		if (options.flushWhenFull && buffer.length >= MAX_BUFFER_SIZE) {
+			flush().catch(() => {});
+		}
+	}
+
 	const collector: TelemetryCollector = {
 		enabled: true,
 		reopenSession,
@@ -722,51 +803,23 @@ export function createTelemetryCollector(
 		},
 
 		record(event, properties): void {
-			if (buffer.length >= MAX_BUFFER_EVENTS) {
-				const dropCount = buffer.length - MAX_BUFFER_EVENTS + 1;
-				buffer.splice(0, dropCount);
-				logger.warn("telemetry", "Buffer exceeded max capacity, dropping oldest events", {
-					dropped: dropCount,
-					maxBufferEvents: MAX_BUFFER_EVENTS,
-				});
-			}
+			recordEvent(event, properties, { persistAuditLog: true, flushWhenFull: true });
+		},
 
-			buffer.push({
-				id: crypto.randomUUID(),
-				event,
-				timestamp: new Date().toISOString(),
-				properties: addContext(enrichSessionEvent(event, properties)),
-			});
-
-			// Open telemetry log (issue #1026 Phase 2): mirror every event to
-			// the inspectable JSONL file so users can audit exactly what was
-			// sent. Best-effort — a full disk or unwritable path must never
-			// break recording.
-			if (logPath) {
-				const last = buffer[buffer.length - 1];
-				if (last) {
-					appendToTelemetryLog(logPath, JSON.stringify(last));
-				}
-			}
-
-			if (buffer.length >= MAX_BUFFER_SIZE) {
-				doFlush().catch(() => {});
-			}
+		recordDeferred(event, properties): void {
+			recordEvent(event, properties, { persistAuditLog: true, flushWhenFull: false });
 		},
 
 		recordFirstUse(kind): void {
-			// Best-effort: a failed claim (no row, broken DB) means the
-			// milestone stays unclaimed and may fire on a later run —
-			// still exactly once overall.
-			if (!claimFirstUse(kind)) return;
-			collector.record(FIRST_USE_EVENTS[kind], {
-				version: daemonVersion,
-				platform: process.platform,
-			});
+			const event = persistFirstUse(kind);
+			if (!event) return;
+			// The database row is durable before the open log mirror is written.
+			// A failed log write must not affect the claim or delivery queue.
+			appendToTelemetryLog(logPath, JSON.stringify(event));
 		},
 
 		async flush(): Promise<void> {
-			await doFlush();
+			await flush();
 		},
 
 		start(): void {
@@ -777,7 +830,7 @@ export function createTelemetryCollector(
 				if (!running) return;
 				flushTimer = setTimeout(() => {
 					flushTimer = null;
-					doFlush()
+					flush()
 						.catch(() => {})
 						.finally(() => scheduleFlush());
 				}, effectiveIntervalMs);
@@ -796,7 +849,16 @@ export function createTelemetryCollector(
 				clearTimeout(flushTimer);
 				flushTimer = null;
 			}
-			await doFlush();
+			try {
+				await flush();
+			} catch {}
+			// Stop accepting new events only after the first flush has completed,
+			// so events produced while an outbound request was awaiting are
+			// drained by this final serialized flush.
+			recordingStopped = true;
+			try {
+				await flush();
+			} catch {}
 			logger.info("telemetry", "Telemetry collector stopped");
 		},
 

@@ -235,10 +235,10 @@ No additional permission level is required beyond `recall`.
 
 | Client | Canonical default/bounds | Scope surface | Score threshold | Intentional override |
 |---|---|---|---|---|
-| Core, SDK | `10`, `1..100` | Any daemon scope string | SDK `minScore` is local | None |
-| OpenClaw | `10`, `1..100` | Not exposed by its tool schema | `min_score` is local | Product schema exposes a focused subset |
-| OpenCode | `10`, `1..100` | Exact daemon scope string | `min_score` is local | None |
-| Hermes Agent | `10`, `1..100` | Agent opt-in through `agent_scoped` | `score_min` is local | Product schema exposes a focused subset |
+| Core, SDK | `10`, `1..100` | Any daemon scope string | `minScore` is applied at the daemon response boundary and checked defensively by clients | None |
+| OpenClaw | `10`, `1..100` | Not exposed by its tool schema | `min_score` is applied at the daemon response boundary and checked defensively by the adapter | Product schema exposes a focused subset |
+| OpenCode | `10`, `1..100` | Exact daemon scope string | `min_score` is applied at the daemon response boundary and checked defensively by the plugin | None |
+| Hermes Agent | `10`, `1..100` | Agent opt-in through `agent_scoped` | `score_min` is applied at the daemon response boundary and checked defensively by the plugin | Product schema exposes a focused subset |
 | Unreal | NPC default `6`, `1..20` | World/player namespace | Not exposed | Always sets `includeRecalled: true` |
 
 The versioned cross-runtime request vectors live in

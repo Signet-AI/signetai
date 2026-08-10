@@ -218,6 +218,16 @@ export function resetFtsRebuildConfirmation(): void {
 const PREVIEW_CAP = 100;
 /** Hard cap on rows touched by a single apply/cancel/prune call. */
 const MAX_BATCH_HARD_CAP = 1000;
+const RETIRED_SUMMARY_REPAIR_MESSAGE =
+	"summary worker retired; session transcripts are completed at session end and delivered directly to Dreaming";
+
+function rejectRetiredSummaryRepair(
+	action: string,
+	options: { readonly tables?: readonly ("memory" | "summary")[] },
+): RepairResult | null {
+	if (!options.tables?.includes("summary")) return null;
+	return { action, success: false, affected: 0, message: RETIRED_SUMMARY_REPAIR_MESSAGE };
+}
 
 /**
  * Reset dead jobs to pending so the worker will retry them.
@@ -238,50 +248,6 @@ const MAX_BATCH_HARD_CAP = 1000;
  * share) is refilled from the other queue. Single-table selections keep the
  * full cap.
  */
-function allocateRequeueBudgets(
-	memoryMatches: number,
-	summaryMatches: number,
-	maxBatch: number,
-	wantsMemory: boolean,
-	wantsSummary: boolean,
-): { memory: number; summary: number } {
-	if (!wantsMemory) {
-		return { memory: 0, summary: Math.min(summaryMatches, maxBatch) };
-	}
-	if (!wantsSummary) {
-		return { memory: Math.min(memoryMatches, maxBatch), summary: 0 };
-	}
-
-	if (memoryMatches <= 0) {
-		return { memory: 0, summary: Math.min(summaryMatches, maxBatch) };
-	}
-	if (summaryMatches <= 0) {
-		return { memory: Math.min(memoryMatches, maxBatch), summary: 0 };
-	}
-
-	// Both queues are non-empty: reserve one slot each, split the rest.
-	const reserved = 2;
-	if (maxBatch < reserved) {
-		// The batch is too small to reserve one slot per queue — give it all
-		// to memory (first queue). Summary still reports its match count
-		// even with a zero selection budget (issue #1052).
-		return { memory: Math.min(memoryMatches, maxBatch), summary: 0 };
-	}
-	const remainder = Math.max(0, maxBatch - reserved);
-	let memory = 1 + Math.ceil(remainder / 2);
-	let summary = 1 + Math.floor(remainder / 2);
-
-	// Refill unused capacity from the other queue.
-	const memoryUnused = Math.max(0, memory - memoryMatches);
-	const summaryUnused = Math.max(0, summary - summaryMatches);
-	memory = Math.min(memory, memoryMatches) + summaryUnused;
-	summary = Math.min(summary, summaryMatches) + memoryUnused;
-
-	return {
-		memory: Math.min(memory, memoryMatches),
-		summary: Math.min(summary, summaryMatches),
-	};
-}
 export function requeueDeadJobs(
 	accessor: DbAccessor,
 	cfg: PipelineV2Config,
@@ -294,137 +260,60 @@ export function requeueDeadJobs(
 		typeof maxBatchOrOptions === "number" ? { maxBatch: maxBatchOrOptions } : maxBatchOrOptions;
 	const maxBatch = options.maxBatch ?? DEFAULT_REQUEUE_BATCH;
 	const dryRun = options.dryRun === true;
+	const retired = rejectRetiredSummaryRepair(action, options);
+	if (retired) return retired;
 
 	const gate = checkRepairGate(cfg, ctx, limiter, action, cfg.repair.requeueCooldownMs, cfg.repair.requeueHourlyBudget);
-
 	if (!gate.allowed) {
-		return {
-			action,
-			success: false,
-			affected: 0,
-			message: gate.reason ?? "denied by policy gate",
-		};
+		return { action, success: false, affected: 0, message: gate.reason ?? "denied by policy gate" };
 	}
 
-	// Requeue both memory_jobs and summary_jobs in a single transaction
-	// so the rate limiter only records on full success.
-	const { memoryCount, summaryCount, preview, totalMatching } = accessor.withWriteTx((db) => {
-		// --- memory_jobs ---
+	const result = accessor.withWriteTx((db) => {
 		const wantsMemory = !options.tables || options.tables.includes("memory");
-		const wantsSummary = !options.tables || options.tables.includes("summary");
-		const memoryMatches = wantsMemory ? countDeadRequeueMatches(db, "memory_jobs", options) : 0;
-		const summaryMatches = wantsSummary ? countDeadRequeueMatches(db, "summary_jobs", options) : 0;
-		const { memory: memoryBudget, summary: summaryBudget } = allocateRequeueBudgets(
-			memoryMatches,
-			summaryMatches,
-			maxBatch,
-			wantsMemory,
-			wantsSummary,
-		);
-
-		const memorySql =
-			wantsMemory && memoryBudget > 0
-				? buildDeadRequeueSql(db, "memory_jobs", "memory_id", memoryBudget, options)
-				: { sql: "", params: [], ids: [], totalMatching: memoryMatches };
-		const memoryIds = memorySql.ids;
-
-		// Dry-run: collect without mutating.
+		const selected = wantsMemory
+			? buildDeadRequeueSql(db, "memory_jobs", maxBatch, options)
+			: { sql: "", params: [], ids: [], totalMatching: 0 };
+		const ids = selected.ids;
 		if (dryRun) {
-			const memoryPreview: string[] = memoryIds.map((r) => r.id);
-			const summarySql =
-				wantsSummary && summaryBudget > 0
-					? buildDeadRequeueSql(db, "summary_jobs", null, summaryBudget, options)
-					: { sql: "", params: [], ids: [], totalMatching: summaryMatches };
-			const summaryPreview: string[] = summarySql.ids.map((r) => r.id);
-			const previewIds = [...memoryPreview, ...summaryPreview].slice(0, PREVIEW_CAP);
-			const totalMatching = (memorySql.totalMatching ?? 0) + (summarySql.totalMatching ?? 0);
 			return {
-				memoryCount: 0,
-				summaryCount: 0,
-				preview: previewIds,
-				totalMatching,
+				affected: 0,
+				preview: ids.map((row) => row.id).slice(0, PREVIEW_CAP),
+				totalMatching: selected.totalMatching,
 			};
 		}
-
-		let memoryCount = 0;
-		if (memoryIds.length > 0) {
-			const placeholders = memoryIds.map(() => "?").join(", ");
-			const ids = memoryIds.map((r) => r.id);
-			const now = new Date().toISOString();
-			const result = db
-				.prepare(
-					`UPDATE memory_jobs
-					 SET status = 'pending', attempts = 0, updated_at = ?
-					 WHERE id IN (${placeholders})`,
-				)
-				.run(now, ...ids);
-
-			memoryCount = countChanges(result);
-			const msg = `requeued ${memoryCount} dead job(s) to pending`;
-			writeRepairAudit(db, action, ctx, memoryCount, msg);
-		}
-
-		// --- summary_jobs (issue #181) ---
-		let summaryCount = 0;
-		if (wantsSummary && summaryBudget > 0 && tableExists(db, "summary_jobs")) {
-			const summarySql = buildDeadRequeueSql(db, "summary_jobs", null, summaryBudget, options);
-			const summaryIds = summarySql.ids;
-			if (summaryIds.length > 0) {
-				const placeholders = summaryIds.map(() => "?").join(", ");
-				const ids = summaryIds.map((r) => r.id);
-				const result = db
-					.prepare(
-						`UPDATE summary_jobs
-						 SET status = 'pending', attempts = 0, error = NULL
-						 WHERE id IN (${placeholders})`,
-					)
-					.run(...ids);
-				summaryCount = countChanges(result);
-				const msg = `requeued ${summaryCount} dead summary job(s) to pending`;
-				writeRepairAudit(db, action, ctx, summaryCount, msg);
-			}
-		}
-
-		return {
-			memoryCount,
-			summaryCount,
-			preview: undefined as readonly string[] | undefined,
-			totalMatching: memoryMatches + summaryMatches,
-		};
+		if (ids.length === 0)
+			return { affected: 0, preview: [] as readonly string[], totalMatching: selected.totalMatching };
+		const placeholders = ids.map(() => "?").join(", ");
+		const now = new Date().toISOString();
+		const changed = db
+			.prepare(`UPDATE memory_jobs SET status = 'pending', attempts = 0, updated_at = ? WHERE id IN (${placeholders})`)
+			.run(now, ...ids.map((row) => row.id));
+		const affected = countChanges(changed);
+		writeRepairAudit(db, action, ctx, affected, `requeued ${affected} dead memory job(s) to pending`);
+		return { affected, preview: [] as readonly string[], totalMatching: selected.totalMatching };
 	});
 
-	const totalAffected = memoryCount + summaryCount;
-
-	if (!dryRun) {
-		limiter.record(action);
-	}
-	logger.info("pipeline", "repair: requeued dead jobs", {
-		memoryJobs: memoryCount,
-		summaryJobs: summaryCount,
-		total: totalAffected,
+	if (!dryRun) limiter.record(action);
+	logger.info("pipeline", "repair: requeued dead memory jobs", {
+		affected: result.affected,
 		dryRun,
-		previewCount: preview?.length ?? 0,
-		totalMatching,
+		previewCount: result.preview.length,
+		totalMatching: result.totalMatching,
 		actor: ctx.actor,
 		reason: ctx.reason,
 	});
-
-	const baseMessage = dryRun
-		? `dry-run: ${totalMatching} job(s) match requeue filter; preview shows ${preview?.length ?? 0}`
-		: `requeued ${memoryCount} dead memory job(s) and ${summaryCount} dead summary job(s) to pending`;
 	return {
 		action,
 		success: true,
-		affected: dryRun ? 0 : totalAffected,
-		message: baseMessage,
-		preview: dryRun ? preview : undefined,
-		totalMatching: dryRun ? totalMatching : undefined,
+		affected: dryRun ? 0 : result.affected,
+		message: dryRun
+			? `dry-run: ${result.totalMatching} memory job(s) match requeue filter; preview shows ${result.preview.length}`
+			: `requeued ${result.affected} dead memory job(s) to pending`,
+		preview: dryRun ? result.preview : undefined,
+		totalMatching: dryRun ? result.totalMatching : undefined,
 	};
 }
 
-/**
- * Release jobs stuck in 'leased' state past the lease timeout.
- */
 export function releaseStaleLeases(
 	accessor: DbAccessor,
 	cfg: PipelineV2Config,
@@ -1982,94 +1871,6 @@ export function pruneGenericEntities(
 }
 
 // ---------------------------------------------------------------------------
-// backfillSkippedSessions
-// ---------------------------------------------------------------------------
-
-/**
- * Find summary_jobs that completed without producing a session summary
- * (skipped by the significance gate) and re-enqueue them for extraction.
- */
-export function backfillSkippedSessions(
-	accessor: DbAccessor,
-	cfg: PipelineV2Config,
-	ctx: RepairContext,
-	limiter: RateLimiter,
-	options?: { limit?: number; dryRun?: boolean },
-): RepairResult {
-	const action = "backfillSkippedSessions";
-	const gate = checkRepairGate(cfg, ctx, limiter, action, 60_000, 20);
-	if (!gate.allowed) {
-		return { action, success: false, affected: 0, message: gate.reason ?? "denied" };
-	}
-
-	const limit = options?.limit ?? 50;
-
-	const tableExists = accessor.withReadDb((db) => {
-		const jobs = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'summary_jobs'").get();
-		const summaries = db
-			.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_summaries'")
-			.get();
-		return jobs && summaries;
-	});
-	if (!tableExists) {
-		return { action, success: true, affected: 0, message: "required tables not found" };
-	}
-
-	const skipped = accessor.withReadDb(
-		(db) =>
-			db
-				.prepare(
-					`SELECT sj.id FROM summary_jobs sj
-				 LEFT JOIN session_summaries ss ON ss.session_key = sj.session_key
-				 WHERE sj.status = 'completed'
-				   AND ss.id IS NULL
-				 LIMIT ?`,
-				)
-				.all(limit) as Array<{ id: string }>,
-	);
-
-	if (skipped.length === 0 || options?.dryRun) {
-		return {
-			action,
-			success: true,
-			affected: skipped.length,
-			message: options?.dryRun
-				? `dry-run: would re-enqueue ${skipped.length} skipped session(s)`
-				: "no skipped sessions found",
-		};
-	}
-
-	const count = accessor.withWriteTx((db) => {
-		const placeholders = skipped.map(() => "?").join(", ");
-		const ids = skipped.map((r) => r.id);
-		const result = db
-			.prepare(
-				`UPDATE summary_jobs
-				 SET status = 'pending', attempts = 0, error = NULL
-				 WHERE id IN (${placeholders})`,
-			)
-			.run(...ids);
-		const affected = countChanges(result);
-		writeRepairAudit(db, action, ctx, affected, `re-enqueued ${affected} skipped session(s)`);
-		return affected;
-	});
-
-	limiter.record(action);
-	logger.info("pipeline", "repair: backfill skipped sessions", {
-		affected: count,
-		actor: ctx.actor,
-		reason: ctx.reason,
-	});
-
-	return {
-		action,
-		success: true,
-		affected: count,
-		message: `re-enqueued ${count} skipped session(s) for extraction`,
-	};
-}
-
-// ---------------------------------------------------------------------------
 // Dead memory hygiene
 // ---------------------------------------------------------------------------
 
@@ -2271,12 +2072,11 @@ interface BuiltSql {
 /**
  * Build a parameterized SELECT that enumerates dead rows matching the
  * filter. The `placeholderIdColumn` arg identifies the column that
- * uniquely identifies the row inside the table — `memory_id` for
- * `memory_jobs`, `null` for `summary_jobs` whose primary key is `id`.
+ * uniquely identifies the row inside the memory queue.
  */
 function buildDeadRequeueWhere(
 	db: ReadDb,
-	table: "memory_jobs" | "summary_jobs",
+	table: "memory_jobs",
 	options: JobFilterOptions,
 ): { where: string[]; params: unknown[] } | null {
 	if (!tableExists(db, table)) {
@@ -2310,7 +2110,7 @@ function buildDeadRequeueWhere(
 	return { where, params };
 }
 
-function countDeadRequeueMatches(db: ReadDb, table: "memory_jobs" | "summary_jobs", options: JobFilterOptions): number {
+function countDeadRequeueMatches(db: ReadDb, table: "memory_jobs", options: JobFilterOptions): number {
 	const built = buildDeadRequeueWhere(db, table, options);
 	if (!built) return 0;
 	const countStmt = db.prepare(`SELECT COUNT(*) AS cnt FROM ${table} WHERE ${built.where.join(" AND ")}`);
@@ -2318,13 +2118,7 @@ function countDeadRequeueMatches(db: ReadDb, table: "memory_jobs" | "summary_job
 	return row?.cnt ?? 0;
 }
 
-function buildDeadRequeueSql(
-	db: ReadDb,
-	table: "memory_jobs" | "summary_jobs",
-	_placeholderIdColumn: "memory_id" | null,
-	limit: number,
-	options: JobFilterOptions,
-): BuiltSql {
+function buildDeadRequeueSql(db: ReadDb, table: "memory_jobs", limit: number, options: JobFilterOptions): BuiltSql {
 	// The match count is a property of the filter, not the selection budget:
 	// a zero budget must still report how many rows matched so dry-run totals
 	// never silently drop a backlog (issue #1052).
@@ -2360,7 +2154,7 @@ interface CancelPruneBuilt {
  */
 function buildCancelPruneSql(
 	db: ReadDb,
-	table: "memory_jobs" | "summary_jobs",
+	table: "memory_jobs",
 	statusList: readonly string[],
 	options: JobFilterOptions & { retentionMsByStatus?: Record<string, number> },
 ): CancelPruneBuilt {
@@ -2425,6 +2219,9 @@ export function cancelObsoleteJobs(
 	options: JobFilterOptions = {},
 ): RepairResult {
 	const action = "cancelObsoleteJobs";
+	const retired = rejectRetiredSummaryRepair(action, options);
+	if (retired) return retired;
+
 	const dryRun = options.dryRun === true;
 
 	const gate = checkRepairGate(cfg, ctx, limiter, action, cfg.repair.requeueCooldownMs, cfg.repair.requeueHourlyBudget);
@@ -2439,8 +2236,6 @@ export function cancelObsoleteJobs(
 
 	const olderThanMs = options.olderThanMs ?? 30 * 24 * 60 * 60 * 1000;
 	const wantsMemory = !options.tables || options.tables.includes("memory");
-	const wantsSummary = !options.tables || options.tables.includes("summary");
-
 	const result = accessor.withWriteTx<CancelResultMeta>((db) => {
 		if (!tableExists(db, "job_cancellations")) {
 			throw new Error("job_cancellations table missing; run migrations");
@@ -2452,7 +2247,7 @@ export function cancelObsoleteJobs(
 			maxBatch: options.maxBatch ?? MAX_BATCH_HARD_CAP,
 		};
 		const targets: Array<{
-			readonly table: "memory_jobs" | "summary_jobs";
+			readonly table: "memory_jobs";
 			readonly rows: readonly CancelPruneMatchRow[];
 			readonly totalMatching: number;
 		}> = [];
@@ -2468,13 +2263,6 @@ export function cancelObsoleteJobs(
 			});
 			targets.push({ table: "memory_jobs", rows: r.rows, totalMatching: r.totalMatching });
 			remaining = Math.max(0, remaining - r.rows.length);
-		}
-		if (wantsSummary) {
-			const r = buildCancelPruneSql(db, "summary_jobs", ["dead", "completed"], {
-				...selection,
-				maxBatch: remaining,
-			});
-			targets.push({ table: "summary_jobs", rows: r.rows, totalMatching: r.totalMatching });
 		}
 
 		const totalMatching = targets.reduce((acc, t) => acc + t.totalMatching, 0);
@@ -2566,6 +2354,9 @@ export function pruneTerminalJobs(
 	options: JobFilterOptions = {},
 ): RepairResult {
 	const action = "pruneTerminalJobs";
+	const retired = rejectRetiredSummaryRepair(action, options);
+	if (retired) return retired;
+
 	const dryRun = options.dryRun === true;
 
 	const gate = checkRepairGate(cfg, ctx, limiter, action, cfg.repair.requeueCooldownMs, cfg.repair.requeueHourlyBudget);
@@ -2579,28 +2370,19 @@ export function pruneTerminalJobs(
 	}
 
 	const wantsMemory = !options.tables || options.tables.includes("memory");
-	const wantsSummary = !options.tables || options.tables.includes("summary");
-
 	const result = accessor.withWriteTx<PruneResultMeta>((db) => {
 		if (!tableExists(db, "job_archive")) {
 			throw new Error("job_archive table missing; run migrations");
 		}
 
 		const targets: Array<{
-			readonly table: "memory_jobs" | "summary_jobs";
+			readonly table: "memory_jobs";
 			readonly statusList: readonly string[];
 			readonly cutoff: number;
 		}> = [];
 		if (wantsMemory) {
 			targets.push({
 				table: "memory_jobs",
-				statusList: ["dead", "cancelled", "completed"],
-				cutoff: options.retentionMs ?? 90 * 24 * 60 * 60 * 1000,
-			});
-		}
-		if (wantsSummary) {
-			targets.push({
-				table: "summary_jobs",
 				statusList: ["dead", "cancelled", "completed"],
 				cutoff: options.retentionMs ?? 90 * 24 * 60 * 60 * 1000,
 			});

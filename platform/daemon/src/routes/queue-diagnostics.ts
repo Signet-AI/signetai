@@ -135,8 +135,9 @@ function resolveRepairContext(c: { req: { header(name: string): string | undefin
 	return { reason, actor, actorType, requestId };
 }
 
-function repairHttpStatus(result: RepairResult): 200 | 429 | 500 {
+function repairHttpStatus(result: RepairResult): 200 | 410 | 429 | 500 {
 	if (result.success) return 200;
+	if (/summary worker retired/i.test(result.message)) return 410;
 	if (
 		/cooldown active|hourly budget exhausted|denied by policy gate|autonomous\.|agents cannot trigger repairs/i.test(
 			result.message,
@@ -201,7 +202,7 @@ export function registerQueueDiagnosticsRoutes(
 		}
 		if (result.success && !parsed.dryRun) invalidateQueueDiagnosticsCache();
 		const code = repairHttpStatus(result);
-		return c.json(result, code as 200 | 429 | 500);
+		return c.json(result, code as 200 | 410 | 429 | 500);
 	});
 }
 

@@ -97,7 +97,7 @@ function writeLastSynthesisTime(deps: SynthesisDeps, timestamp: number, agentId?
 
 /**
  * Get the timestamp of the most recent session end from checkpoints.
- * Falls back to the latest completed summary job when no checkpoint exists.
+ * Falls back to the latest completed retained transcript when no checkpoint exists.
  */
 function parseLastEndTimestamp(row: unknown): number {
 	if (typeof row !== "object" || row === null || !("last_end" in row)) {
@@ -148,21 +148,23 @@ function getLastSessionEndTime(deps: SynthesisDeps): number {
 	}
 
 	try {
-		const summaryRow = deps.getDbAccessor().withReadDb((db) => {
+		const transcriptRow = deps.getDbAccessor().withReadDb((db) => {
+			// completed_at is the canonical settled-session boundary, including
+			// stale/TTL finalization when no explicit hook arrived.
 			return db
 				.prepare(`
 					SELECT MAX(completed_at) as last_end
-					FROM summary_jobs
-					WHERE status = 'completed'
+					FROM session_transcripts
+					WHERE completed_at IS NOT NULL
 				`)
 				.get();
 		});
-		return parseLastEndTimestamp(summaryRow);
+		return parseLastEndTimestamp(transcriptRow);
 	} catch (error) {
-		if (!isExpectedSessionActivityLookupError(error, "summary_jobs")) {
+		if (!isExpectedSessionActivityLookupError(error, "session_transcripts")) {
 			deps.logger.error(
 				"synthesis",
-				"Failed to query summary_jobs for synthesis scheduling",
+				"Failed to query session_transcripts for synthesis scheduling",
 				error instanceof Error ? error : new Error(String(error)),
 			);
 			throw error;

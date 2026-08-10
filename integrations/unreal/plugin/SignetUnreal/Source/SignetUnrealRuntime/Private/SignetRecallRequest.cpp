@@ -15,6 +15,7 @@ TSharedRef<FJsonObject> BuildNpcBody(
 	Body->SetStringField(TEXT("scope"), Scope);
 	Body->SetNumberField(TEXT("limit"), FMath::Clamp(Limit, MinimumNpcLimit, MaximumNpcLimit));
 	Body->SetBoolField(TEXT("includeRecalled"), true);
+	Body->SetStringField(TEXT("recallSurface"), TEXT("tool_call"));
 	return Body;
 }
 }

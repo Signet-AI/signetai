@@ -87,7 +87,9 @@ function citeEvidence(accessor: DbAccessor, agentId: string, citation: unknown):
 	if (requested === null) return { evidence: null, sourceAgentIds: [] };
 	const result = accessor.withReadDb((db) => {
 		const source = readEpisodicSource(db, { agentId, from: requested.sourceRef });
-		if (source !== null) return { evidence: createDreamingAgentEvidence([source]), sourceAgentIds: [] };
+		if (source !== null && (source.kind !== "transcript" || source.completed)) {
+			return { evidence: createDreamingAgentEvidence([source]), sourceAgentIds: [] };
+		}
 		return { evidence: [], sourceAgentIds: findEpisodicSourceAgentIds(db, requested.sourceRef) };
 	});
 	return {

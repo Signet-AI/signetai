@@ -12,11 +12,26 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ReadDb, WriteDb } from "./db-accessor";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
-import { getSystemPressure, reportEventLoopLag } from "./system-pressure";
+import {
+	buildRuntimePressureEnvelope,
+	resetRuntimePressureState,
+	setRuntimePressureEnvelope,
+} from "./runtime-pressure";
+import {
+	getPressureRecoveryOutcome,
+	getSystemPressure,
+	reportEventLoopLag,
+	resetPressureState,
+} from "./system-pressure";
 import { drainWriteBatches } from "./yielding-writes";
 
 const dbFiles = ["memories.db", "memories.db-shm", "memories.db-wal"];
 let agentsDir = "";
+
+afterEach(() => {
+	resetPressureState();
+	resetRuntimePressureState();
+});
 
 function resetDbFiles(): void {
 	for (const file of dbFiles) rmSync(join(agentsDir, "memory", file), { force: true });
@@ -144,6 +159,11 @@ describe("drainWriteBatches", () => {
 		// pause by showing drainDone is false after 200ms while pressure is
 		// critical. The .catch() on drainPromise handles teardown.
 	}, 1000); // 1s timeout — proves it pauses, doesn't need to finish
+
+	it("classifies elevated lag as still degraded", () => {
+		reportEventLoopLag(100);
+		expect(getPressureRecoveryOutcome()).toBe("still_degraded");
+	});
 });
 
 describe("event-loop wedge telemetry", () => {
@@ -172,11 +192,23 @@ describe("event-loop wedge telemetry", () => {
 				"0.0.0-test",
 			);
 			setActiveTelemetry(collector);
-
 			// Base the injected clock a day in the future — earlier tests in
 			// this file may already have set the wedge cooldown with real
 			// timestamps, so t0 must clear that window deterministically.
 			const t0 = Date.now() + 24 * 60 * 60 * 1000;
+			setRuntimePressureEnvelope(
+				buildRuntimePressureEnvelope({
+					memoryQueueDepth: 51,
+					summaryQueueDepth: 3,
+					oldestJobAgeSec: 90,
+					activeWorkers: 4,
+					batchSize: 8,
+					memoryRssMb: 700,
+					cpuPercent: 82,
+				}),
+				t0,
+			);
+
 			reportEventLoopLag(1500, t0);
 			reportEventLoopLag(2000, t0 + 1_000); // within cooldown: suppressed
 			await collector.flush();
@@ -184,6 +216,11 @@ describe("event-loop wedge telemetry", () => {
 			expect(events).toHaveLength(1);
 			expect(events[0]?.properties.type).toBe("EventLoopLag");
 			expect(events[0]?.properties.lagMs).toBe(1500);
+			expect(events[0]?.properties.runtimePressureVersion).toBe(1);
+			expect(events[0]?.properties.memoryQueueDepthBucket).toBe("51-200");
+			expect(events[0]?.properties.embeddingLatencyBucket).toBe("unknown");
+			expect(events[0]?.properties.recoveryOutcome).toBe("still_degraded");
+			expect(events[0]?.properties.message).not.toContain("/Users/");
 
 			// After the cooldown elapses, a new wedge is reported.
 			reportEventLoopLag(999, t0 + 601_000);

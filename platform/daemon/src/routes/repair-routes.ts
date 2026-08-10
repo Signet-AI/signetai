@@ -10,7 +10,6 @@ import { DEFAULT_RETENTION, runRetentionSweepOnce } from "../pipeline/retention-
 import {
 	type RepairContext,
 	type RepairResult,
-	backfillSkippedSessions,
 	checkFtsConsistency,
 	cleanOrphanedEmbeddings,
 	deduplicateMemories,
@@ -234,24 +233,15 @@ export function registerRepairRoutes(
 		return c.json(result, repairHttpStatus(result));
 	});
 
-	app.post("/api/repair/backfill-skipped", async (c) => {
-		const cfg = loadMemoryConfig(AGENTS_DIR);
-		const ctx = resolveRepairContext(c);
-		let limit = 50;
-		let dryRun = false;
-		try {
-			const body = await c.req.json();
-			if (typeof body?.limit === "number") limit = body.limit;
-			if (typeof body?.dryRun === "boolean") dryRun = body.dryRun;
-		} catch {
-			// no body or invalid JSON — use defaults
-		}
-		const result = backfillSkippedSessions(getDbAccessor(), cfg.pipelineV2, ctx, repairLimiter, {
-			limit,
-			dryRun,
-		});
-		return c.json(result, repairHttpStatus(result));
-	});
+	app.post("/api/repair/backfill-skipped", (c) =>
+		c.json(
+			{
+				error:
+					"backfill-skipped is retired; session transcripts are completed at session end and consumed directly by Dreaming",
+			},
+			410,
+		),
+	);
 
 	app.post("/api/repair/prune-chunk-groups", async (c) => {
 		const cfg = loadMemoryConfig(AGENTS_DIR);

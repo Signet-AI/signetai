@@ -8,29 +8,22 @@
  *
  *  1. Persists a `ttl_expired` checkpoint from whatever continuity state
  *     the session still holds (so the latest transcript cursor survives).
- *  2. Enqueues idempotent summary finalization from the stored transcript
- *     when the pipeline is enabled — the same content-hash dedup the
- *     session-end path uses, so a later real session-end cannot double-fire.
- *  3. Returns "skipped" (counted as unfinalized) when synthesis is disabled
- *     or there is nothing to finalize.
+ *  2. Marks the retained transcript complete. The completion marker is
+ *     idempotent, so a later real session-end cannot re-expose the same
+ *     transcript.
+ *  3. Returns "skipped" when no retained transcript can be completed.
  */
 
-import { createHash } from "node:crypto";
 import { type ContinuityState, type StructuralSnapshot, getState } from "./continuity-state";
 import type { DbAccessor } from "./db-accessor";
 import { logger } from "./logger";
-import { enqueueSummaryJob } from "./pipeline/summary-worker";
 import { type WriteCheckpointParams, writeCheckpoint } from "./session-checkpoints";
 import type { EvictedSessionInfo, SessionEvictionHandler } from "./session-tracker";
-import { getSessionTranscriptContent } from "./session-transcripts";
-
-const MIN_FINALIZE_TRANSCRIPT_CHARS = 500;
-const MAX_TRANSCRIPT_CHARS = 100_000;
+import { markSessionTranscriptCompletedInTx } from "./session-transcripts";
 
 export interface TtlFinalizerDeps {
 	readonly accessor: DbAccessor;
 	readonly maxCheckpointsPerSession: number;
-	readonly isSummarySynthesisAvailable: () => boolean;
 }
 
 function snapshotToCheckpoint(snap: ContinuityState, sessionKey: string): WriteCheckpointParams {
@@ -53,48 +46,13 @@ function snapshotToCheckpoint(snap: ContinuityState, sessionKey: string): WriteC
 	};
 }
 
-function summaryJobsHasContentHashColumn(deps: TtlFinalizerDeps): boolean {
-	return deps.accessor.withReadDb((db) =>
-		(db.prepare("PRAGMA table_info(summary_jobs)").all() as ReadonlyArray<Record<string, unknown>>).some(
-			(col) => col.name === "content_hash",
-		),
-	);
-}
-
-function summaryJobWithContentHashExists(
-	deps: TtlFinalizerDeps,
-	agentId: string,
-	sessionKey: string,
-	contentHash: string,
-): boolean {
-	if (!summaryJobsHasContentHashColumn(deps)) return false;
-	return deps.accessor.withReadDb((db) => {
-		const row = db
-			.prepare(
-				`SELECT id FROM summary_jobs
-				 WHERE agent_id = ? AND session_key = ? AND content_hash = ?
-				 AND status IN ('pending', 'processing', 'completed')
-				 LIMIT 1`,
-			)
-			.get(agentId, sessionKey, contentHash) as { id: string } | undefined;
-		return Boolean(row);
-	});
-}
-
-function storeSummaryJobContentHash(deps: TtlFinalizerDeps, jobId: string, contentHash: string): void {
-	if (!summaryJobsHasContentHashColumn(deps)) return;
-	deps.accessor.withWriteTx((db) => {
-		db.prepare("UPDATE summary_jobs SET content_hash = ? WHERE id = ?").run(contentHash, jobId);
-	});
-}
-
 /**
  * Build the session-tracker eviction handler. Returns the handler to pass to
  * `setSessionEvictionHandler`.
  */
 export function createTtlEvictionHandler(deps: TtlFinalizerDeps): SessionEvictionHandler {
 	return (info: EvictedSessionInfo): "finalized" | "skipped" | undefined => {
-		let summaryFinalized = false;
+		let transcriptFinalized = false;
 
 		// 1. Persist a ttl_expired checkpoint from residual continuity state.
 		const snap = getState(info.sessionKey);
@@ -113,59 +71,41 @@ export function createTtlEvictionHandler(deps: TtlFinalizerDeps): SessionEvictio
 			}
 		}
 
-		// 2. Enqueue idempotent summary finalization from the stored transcript.
-		if (!deps.isSummarySynthesisAvailable()) {
-			logger.info("session-tracker", "TTL-evicted session finalization skipped", {
-				sessionKey: info.sessionKey,
-				reason: "synthesis-unavailable",
-			});
-			return "skipped";
-		}
+		// 2. TTL is a session-end boundary for the retained transcript. The
+		// marker is idempotent and does not depend on a worker or length gate.
 		try {
-			const stored = getSessionTranscriptContent(info.sessionKey, info.agentId);
-			if (stored && stored.trim().length >= MIN_FINALIZE_TRANSCRIPT_CHARS) {
-				const contentHash = createHash("sha256").update(stored).digest("hex");
-				if (summaryJobWithContentHashExists(deps, info.agentId, info.sessionKey, contentHash)) {
-					logger.debug("session-tracker", "TTL-eviction summary skipped duplicate content", {
-						sessionKey: info.sessionKey,
-						contentHash,
-					});
-					summaryFinalized = true;
-				} else {
-					const summaryTranscript =
-						stored.length > MAX_TRANSCRIPT_CHARS ? `${stored.slice(0, MAX_TRANSCRIPT_CHARS)}\n[truncated]` : stored;
-					const jobId = enqueueSummaryJob(deps.accessor, {
-						harness: info.runtimePath,
-						transcript: summaryTranscript,
-						sessionKey: info.sessionKey,
-						agentId: info.agentId,
-						trigger: "ttl_expired",
-						boundaryReason: "session_ttl_expired",
-						endedAt: new Date().toISOString(),
-					});
-					storeSummaryJobContentHash(deps, jobId, contentHash);
-					summaryFinalized = true;
-					logger.info("session-tracker", "TTL-evicted session finalized", {
-						sessionKey: info.sessionKey,
-					});
-				}
-			}
+			const completedAt = new Date().toISOString();
+			const alreadyCompleted = deps.accessor.withReadDb((db) => {
+				const columns = db.prepare("PRAGMA table_info(session_transcripts)").all() as ReadonlyArray<
+					Record<string, unknown>
+				>;
+				if (!columns.some((column) => column.name === "completed_at")) return false;
+				const row = db
+					.prepare("SELECT completed_at FROM session_transcripts WHERE session_key = ? AND agent_id = ? LIMIT 1")
+					.get(info.sessionKey, info.agentId) as { completed_at?: string | null } | undefined;
+				return row?.completed_at != null;
+			});
+			transcriptFinalized =
+				alreadyCompleted ||
+				deps.accessor.withWriteTx((db) =>
+					markSessionTranscriptCompletedInTx(db, info.sessionKey, info.agentId, completedAt),
+				);
 		} catch (err) {
-			logger.warn("session-tracker", "TTL-eviction finalization failed (non-fatal)", {
+			logger.warn("session-tracker", "TTL-eviction transcript completion failed (non-fatal)", {
 				sessionKey: info.sessionKey,
 				error: err instanceof Error ? err.message : String(err),
 			});
 		}
 
-		// 3. Classify the outcome: an eviction with no checkpoint and no
-		//    finalization (synthesis disabled / nothing to finalize) is
-		//    counted as unfinalized so diagnostics can surface it.
-		if (!summaryFinalized) {
-			logger.info("session-tracker", "TTL-evicted session finalization skipped", {
+		if (!transcriptFinalized) {
+			logger.info("session-tracker", "TTL-evicted session completion skipped", {
 				sessionKey: info.sessionKey,
 			});
 			return "skipped";
 		}
+		logger.info("session-tracker", "TTL-evicted transcript marked complete", {
+			sessionKey: info.sessionKey,
+		});
 		return "finalized";
 	};
 }

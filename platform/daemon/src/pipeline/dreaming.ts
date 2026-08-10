@@ -1318,6 +1318,7 @@ export async function runDreamingAgentPass(
 		// The newest captured_at each scope's search_evidence surfaced this
 		// pass; the pass-end watermark may advance only to it (#1149).
 		const surfacedWatermarkByScope = new Map<string, string>();
+		const surfacedTranscriptRefsByScope = new Map<string, Set<string>>();
 		const tools = createDreamingAgentTools({
 			accessor,
 			agentId,
@@ -1349,6 +1350,14 @@ export async function runDreamingAgentPass(
 						else if (kind !== null && id !== null) effects.consideredArtifacts.add(`${kind}:${id}`);
 						else effects.consideredArtifacts.add(`anonymous:${effects.consideredArtifacts.size}`);
 					}
+					const scope = input !== null && typeof input.agentId === "string" ? input.agentId : agentId;
+					const transcriptRefs = surfacedTranscriptRefsByScope.get(scope) ?? new Set<string>();
+					for (const item of trace.output.items) {
+						if (!isRecord(item)) continue;
+						const ref = typeof item.sourceRef === "string" ? item.sourceRef : "";
+						if (ref.startsWith("transcript:")) transcriptRefs.add(ref);
+					}
+					if (transcriptRefs.size > 0) surfacedTranscriptRefsByScope.set(scope, transcriptRefs);
 					// A sourceRef call reads a fragment of a source the
 					// listing already surfaced: it adds no new frontier (the
 					// listing's max covers it) and must not advance the

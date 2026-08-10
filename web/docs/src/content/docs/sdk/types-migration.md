@@ -37,7 +37,7 @@ try {
   const { results, meta } = await signet.recallOrThrow("user preferences", {
     type: "preference",
     limit: 5,
-    minScore: 0.5, // applied locally; never sent to the daemon
+    minScore: 0.5, // applied at the daemon response boundary; also checked locally
     agentId: "my-agent",
   });
   // Guaranteed to have at least one result

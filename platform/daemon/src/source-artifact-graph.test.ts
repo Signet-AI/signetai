@@ -4,10 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { DreamingConfig } from "@signet/core";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
+import { runDreamingAgentPass } from "./pipeline/dreaming";
 import { indexSourceArtifactStructure, purgeSourceArtifactStructure } from "./source-artifact-graph";
 import { purgeSourceOwnedRows } from "./source-purge";
 import { txIngestEnvelope } from "./transactions";
-import { runDreamingAgentPass } from "./pipeline/dreaming";
 
 const DREAMING_CONFIG: DreamingConfig = {
 	tokenThreshold: 1,
@@ -298,10 +298,11 @@ describe("source artifact graph structure", () => {
 					await apply.execute(
 						"source-owned-call",
 						{
+							agentId: "default",
 							operations: [
 								{
 									operation: "create_entity",
-									payload: { name: "Nightly Drift Detection", entity_type: "workflow" },
+									payload: { name: "Nightly Drift Detection", type: "workflow" },
 									reason: "The source names a durable operational workflow.",
 									evidence: [
 										{
@@ -325,6 +326,7 @@ describe("source artifact graph structure", () => {
 			DREAMING_CONFIG,
 			dir,
 			"default",
+			["default"],
 			"incremental",
 		);
 
@@ -347,7 +349,10 @@ describe("source artifact graph structure", () => {
 		purgeSourceOwnedRows({ agentId: "default", sourceId: "obsidian:nightly" });
 		expect(
 			getDbAccessor().withReadDb(
-				(db) => db.prepare("SELECT COUNT(*) AS count FROM entities WHERE name = ?").get("Nightly Drift Detection") as { count: number },
+				(db) =>
+					db.prepare("SELECT COUNT(*) AS count FROM entities WHERE name = ?").get("Nightly Drift Detection") as {
+						count: number;
+					},
 			).count,
 		).toBe(0);
 	});

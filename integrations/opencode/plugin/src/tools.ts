@@ -46,6 +46,8 @@ async function searchMemory(
 			agentId: args.agent_id,
 			includeRecalled: args.include_recalled,
 			scope: args.scope,
+			minScore: args.min_score,
+			recallSurface: "tool_call",
 		}),
 		READ_TIMEOUT,
 	);

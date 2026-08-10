@@ -20,8 +20,14 @@ describe("createTools", () => {
 		);
 
 		expect(captured).toEqual([
-			{ query: "default recall", limit: 10 },
-			{ query: "bounded recall", limit: 100, scope: "world:alpha", includeRecalled: true },
+			{ query: "default recall", limit: 10, recallSurface: "tool_call" },
+			{
+				query: "bounded recall",
+				limit: 100,
+				scope: "world:alpha",
+				includeRecalled: true,
+				recallSurface: "tool_call",
+			},
 		]);
 	});
 

@@ -73,7 +73,7 @@ native `EventSource` with headers, so auth is pumped manually).
 | `repairCleanOrphans` | POST | `/api/repair/clean-orphans` | Remove orphan rows |
 | `repairReEmbed` | POST | `/api/repair/re-embed` | Re-embed memories |
 | `repairResyncVectorIndex` | POST | `/api/repair/resync-vec` | Rebuild vector index |
-| + repair actions | POST | `/api/repair/{retention-sweep, requeue-dead, release-leases, reclassify-entities, prune-singleton-entities, prune-chunk-groups, deduplicate, dedup-stats, cold-stats, check-fts, backfill-skipped}` | Maintenance ops surfaced in Audit tab |
+| + repair actions | POST | `/api/repair/{retention-sweep, requeue-dead, release-leases, reclassify-entities, prune-singleton-entities, prune-chunk-groups, deduplicate, dedup-stats, cold-stats, check-fts}` | Maintenance ops surfaced in Audit tab |
 
 ### 1.4 Knowledge graph / ontology
 | Fn | Method | Path | Purpose |
