@@ -26,7 +26,7 @@ Environment variables:
 - `SIGNET_HOST` / `SIGNET_PORT` — Host and port separately
 - `SIGNET_TOKEN` — Optional daemon bearer token; sent to loopback daemon URLs by default
 - `SIGNET_TRUSTED_DAEMON_ORIGINS` — Comma-separated remote daemon origins allowed to receive `SIGNET_TOKEN`
-- `SIGNET_AGENT_ID` — Agent scope identifier (default: `hermes-agent`)
+- `SIGNET_AGENT_ID` — Agent scope identifier (unset: inherit the daemon's configured agent, usually `default`)
 - `SIGNET_AGENT_WORKSPACE` — Optional named-agent workspace path (for example `~/.agents/agents/dot`)
 - `SIGNET_AGENT_READ_POLICY` — Optional named-agent memory policy for first registration: `shared` (default), `isolated`, or `group`
 - `SIGNET_AGENT_POLICY_GROUP` — Required when `SIGNET_AGENT_READ_POLICY=group`
@@ -63,3 +63,24 @@ The plugin bridges Hermes Agent's memory lifecycle to the Signet daemon:
 3. **Session end** — Sends a transcript with internal Signet memory delimiters removed to Signet's session-end hook, which queues it for the memory pipeline: extraction, knowledge graph updates, retention decay, and MEMORY.md synthesis.
 
 4. **Explicit tools** — The agent can call canonical Signet tools such as `memory_search` and `memory_store` directly during conversation for on-demand memory operations. Legacy `signet_*` names are handled for compatibility but are not advertised to the model.
+
+## Built-in memory synchronization
+
+The plugin uses a **synchronization** model for Hermes's built-in
+`on_memory_write()` hook:
+
+- `add` creates an immutable episodic Signet row tagged with
+  `hermes-builtin` and the Hermes target (`memory` or `user`).
+- `replace` creates a new episodic row and atomically supersedes the mirrored
+  row identified by Hermes's `old_text`.
+- `remove` soft-deletes the matching mirrored row.
+
+Superseded and soft-deleted rows remain available as historical evidence and
+audit history, but Signet's current recall/list views exclude them. The
+connector queues hook callbacks on one FIFO worker, so operations emitted for
+an already-committed Hermes batch retain their order. Each operation carries
+session, project, agent, source, and a deterministic idempotency key. Mirror
+rows use Signet's default `global` visibility, matching the connector's prior
+write contract; agent and project filters still bound lookup and mutation.
+Retrying the same callback does not create a second current row. A failed
+lookup never falls back to mutating an untagged Signet memory.

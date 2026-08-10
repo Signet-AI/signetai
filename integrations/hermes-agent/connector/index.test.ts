@@ -999,7 +999,7 @@ for vector in contract["vectors"]:
 		expect(plugin).toContain("metadata: Optional[Dict[str, Any]] = None");
 		expect(plugin).toContain('metadata.get("write_origin", "")');
 		expect(plugin).toContain('metadata.get("tool_call_id", "")');
-		expect(plugin).toContain('source_type="hermes-memory-write" if source_id else ""');
+		expect(plugin).toContain("source_type=HERMES_MEMORY_SOURCE_TYPE");
 		expect(plugin).toContain('self._inject_cache = ""');
 		expect(plugin).toContain("self._prefetch_generation += 1");
 	});
@@ -1162,12 +1162,13 @@ assert calls == [{
 					"from plugins.memory.signet import SignetMemoryProvider",
 					"class FakeClient:",
 					"    def __init__(self): self.calls = []",
-					"    def remember(self, content, **kwargs): self.calls.append({'content': content, **kwargs})",
+					"    def remember(self, content, **kwargs): self.calls.append({'content': content, **kwargs}); return {'id': 'memory-id', 'content': content}",
 					"provider = SignetMemoryProvider()",
 					"provider._client = FakeClient()",
 					"provider._project = '/tmp/project'",
 					"provider._session_key = 'session-a'",
 					"provider.on_memory_write('add', 'memory', 'durable fact', metadata={'write_origin': 'assistant_tool', 'execution_context': 'foreground', 'platform': 'cli', 'session_id': 'session-a', 'tool_call_id': 'call-123'})",
+					"assert provider.flush_mirror_writes()",
 					"provider._client.calls and print(json.dumps(provider._client.calls[0], sort_keys=True))",
 				].join("\n"),
 			],
@@ -1182,6 +1183,70 @@ assert calls == [{
 		expect(result.stdout).toContain('"context:foreground"');
 		expect(result.stdout).toContain('"platform:cli"');
 		expect(result.stdout).toContain('"session:session-a"');
+	});
+
+	it("mirrors add, replace, and remove in order without reviving stale context", () => {
+		const fixture = join(tmpRoot, "python-memory-mirror-fixture");
+		cpSync(join(import.meta.dir, "hermes-plugin"), join(fixture, "plugins", "memory", "signet"), { recursive: true });
+		mkdirSync(join(fixture, "agent"), { recursive: true });
+		writeFileSync(join(fixture, "agent", "__init__.py"), "");
+		writeFileSync(join(fixture, "plugins", "__init__.py"), "");
+		writeFileSync(join(fixture, "plugins", "memory", "__init__.py"), "");
+		writeFileSync(join(fixture, "agent", "memory_provider.py"), "class MemoryProvider:\n    pass\n");
+
+		const result = spawnSync(
+			resolveTestPythonPath(),
+			[
+				"-c",
+				[
+					"import json",
+					"from plugins.memory.signet import SignetMemoryProvider",
+					"class FakeClient:",
+					"    def __init__(self): self.rows = []; self.mutations = []",
+					"    def search(self, query, **kwargs):",
+					"        return [row for row in self.rows if row.get('active') and query in row['content']]",
+					"    def recall(self, query, **kwargs): return {'results': self.search(query, **kwargs)}",
+					"    def remember(self, content, **kwargs):",
+					"        old_id = kwargs.get('supersedes')",
+					"        if old_id:",
+					"            for row in self.rows:",
+					"                if row['id'] == old_id: row['active'] = False",
+					"            memory_id = 'replacement'",
+					"            self.mutations.append(('replace', old_id, memory_id))",
+					"        else:",
+					"            memory_id = 'original'",
+					"            self.mutations.append(('add', memory_id))",
+					"        self.rows.append({'id': memory_id, 'content': content, 'tags': kwargs['tags'], 'source_id': kwargs['source_id'], 'active': True})",
+					"        return {'id': memory_id, 'content': content}",
+					"    def forget_memory(self, memory_id, **kwargs):",
+					"        for row in self.rows:",
+					"            if row['id'] == memory_id: row['active'] = False",
+					"        self.mutations.append(('remove', memory_id))",
+					"        return {'id': memory_id, 'status': 'deleted'}",
+					"provider = SignetMemoryProvider()",
+					"provider._client = FakeClient()",
+					"provider._project = '/tmp/project'",
+					"provider._session_key = 'session-a'",
+					"metadata = {'session_id': 'session-a', 'tool_call_id': 'batch-call'}",
+					"provider.on_memory_write('add', 'memory', 'old preference', metadata=metadata)",
+					"provider.on_memory_write('replace', 'memory', 'new preference', metadata={**metadata, 'old_text': 'old preference'})",
+					"provider.on_memory_write('replace', 'memory', 'new preference', metadata={**metadata, 'old_text': 'old preference'})",
+					"provider.on_memory_write('remove', 'memory', '', metadata={**metadata, 'old_text': 'new preference'})",
+					"provider.on_memory_write('remove', 'memory', '', metadata={**metadata, 'old_text': 'new preference'})",
+					"assert provider.flush_mirror_writes()",
+					"assert provider._client.mutations == [('add', 'original'), ('replace', 'original', 'replacement'), ('remove', 'replacement')]",
+					"assert [row['content'] for row in provider._client.rows] == ['old preference', 'new preference']",
+					"assert not any(row['active'] for row in provider._client.rows)",
+					"assert provider._client.recall('preference')['results'] == []",
+					"print(json.dumps(provider._client.mutations))",
+				].join("\n"),
+			],
+			{ env: { ...process.env, PYTHONPATH: fixture }, encoding: "utf-8" },
+		);
+
+		expect(result.status, result.stderr || result.stdout).toBe(0);
+		expect(result.stdout).toContain("replace");
+		expect(result.stdout).toContain("remove");
 	});
 
 	it("stores Hermes delegation memories with project scope", () => {
@@ -1433,6 +1498,82 @@ assert calls == [{
 		expect(result.stdout).toContain('"path": "/api/sessions/search"');
 		expect(result.stdout).toContain('"agentId": "research-agent"');
 		expect(result.stdout).toContain('"agentId": "explicit-agent"');
+	});
+
+	it("sends mirror lineage, visibility, and audit provenance to the daemon", () => {
+		const clientPath = join(import.meta.dir, "hermes-plugin", "client.py");
+		const script = String.raw`
+import importlib.util
+
+spec = importlib.util.spec_from_file_location("signet_client", __import__("sys").argv[1])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+client = module.SignetClient(agent_id="research-agent", harness="hermes-agent")
+posts = []
+deletes = []
+gets = []
+def fake_post(path, body, **kwargs):
+    posts.append((path, body, kwargs))
+    return {"id": "replacement-id", "content": body.get("content", "")}
+def fake_delete(path, **kwargs):
+    deletes.append((path, kwargs))
+    return {"status": "deleted"}
+def fake_get(path, **kwargs):
+    gets.append((path, kwargs))
+    return {"results": []}
+client._post = fake_post
+client._delete = fake_delete
+client._get = fake_get
+client.remember(
+    "new preference",
+    project="/tmp/project",
+    visibility="global",
+    source_type="hermes-memory-write",
+    source_id="call-123:replace:abc",
+    idempotency_key="hermes-memory-write:operation",
+    supersedes="old-id",
+    reason="Hermes built-in memory replacement",
+    session_id="session-a",
+    request_id="request-a",
+)
+client.supersede_memory(
+    "old-id",
+    "replacement-id",
+    reason="Hermes built-in memory replacement",
+    session_id="session-a",
+    request_id="request-a",
+)
+client.forget_memory(
+    "replacement-id",
+    reason="Hermes built-in memory removal",
+    session_id="session-a",
+    request_id="request-b",
+)
+client.search("new preference", tags="hermes-builtin", project="/tmp/project")
+assert posts[0][0] == "/api/memory/remember"
+assert posts[0][1]["agentId"] == "research-agent"
+assert posts[0][1]["visibility"] == "global"
+assert posts[0][1]["supersedes"] == "old-id"
+assert posts[0][1]["idempotencyKey"] == "hermes-memory-write:operation"
+assert posts[0][2]["extra_headers"] == {
+    "x-signet-session-id": "session-a",
+    "x-signet-request-id": "request-a",
+}
+assert posts[1] == (
+    "/api/memories/old-id/supersede",
+    {"superseded_by": "replacement-id", "reason": "Hermes built-in memory replacement"},
+    {"extra_headers": {"x-signet-session-id": "session-a", "x-signet-request-id": "request-a"}},
+)
+assert deletes[0] == (
+    "/api/memory/replacement-id?reason=Hermes+built-in+memory+removal",
+    {"extra_headers": {"x-signet-session-id": "session-a", "x-signet-request-id": "request-b"}},
+)
+assert gets[0][0] == "/api/memory/search?q=new%20preference&limit=10&tags=hermes-builtin&project=%2Ftmp%2Fproject"
+`;
+
+		const result = spawnSync(resolveTestPythonPath(), ["-c", script, clientPath], { encoding: "utf-8" });
+
+		expect(result.status, result.stderr || result.stdout).toBe(0);
 	});
 
 	it("uses longer timeouts for recall paths", () => {

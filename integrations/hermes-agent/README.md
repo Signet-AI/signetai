@@ -41,3 +41,13 @@ The connector package exposes programmatic cleanup that restores the previous me
 ```
 
 The connector extends `BaseConnector` from `@signet/connector-base` and ships a bundled Python plugin (`__init__.py`, `client.py`, `plugin.yaml`).
+
+## Built-in memory mirror
+
+Committed Hermes built-in memory writes are synchronized into Signet: adds
+create episodic evidence, replacements create a new row that supersedes the
+old mirrored row, and removals soft-delete it. Historical rows remain
+auditable, while superseded/deleted rows are excluded from current recall.
+Callbacks are processed FIFO after Hermes's atomic batch commit and carry
+agent, project, session, source, visibility, and deterministic idempotency
+provenance so retries cannot recreate stale current context.

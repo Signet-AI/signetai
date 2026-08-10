@@ -41,13 +41,33 @@ Hermes lifecycle.
    the prompt mentions a known entity or active alias.
 5. At session end, `on_session_end()` sends the accumulated transcript via
    `POST /api/hooks/session-end` for async pipeline extraction.
+6. Committed Hermes built-in memory writes are mirrored through a serialized
+   FIFO queue so add/replace/remove callbacks retain their batch order.
+
+### Built-in memory mirror semantics
+
+The Hermes connector uses synchronization rather than leaving Signet with an
+add-only copy of Hermes memory:
+
+- `add` creates immutable episodic evidence in Signet.
+- `replace` creates a new row and atomically supersedes the row matched by
+  Hermes's `old_text`.
+- `remove` soft-deletes the matched row.
+
+Superseded and deleted rows remain available for provenance and audit history,
+but current Signet recall and list views exclude them. Mirror rows are tagged
+with their Hermes target and use Signet's default `global` visibility, matching
+the connector's existing write contract. They carry agent, project, session,
+source, and a deterministic idempotency key. Retrying a callback is therefore
+safe, and a missing or ambiguous mirrored match is never treated as permission
+to mutate an unrelated Signet memory.
 
 ### Tools exposed to the agent
 
 | Tool | Description |
 |------|-------------|
 | `memory_search` | Hybrid memory search (keyword + semantic + knowledge graph) |
-| `session_search` | Search active or completed session transcripts |
+| `signet_session_search` | Search active or completed session transcripts |
 | `memory_store` | Store a fact/preference/decision with auto entity extraction |
 | `memory_get` | Retrieve a memory by ID |
 | `memory_list` | List memories with optional filters |

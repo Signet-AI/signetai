@@ -194,6 +194,22 @@ class SignetClient:
             h.update(extra)
         return h
 
+    @staticmethod
+    def _mutation_context_headers(
+        *,
+        session_id: str = "",
+        request_id: str = "",
+    ) -> Optional[Dict[str, str]]:
+        """Build optional audit headers for a mirrored memory mutation."""
+        headers: Dict[str, str] = {}
+        clean_session_id = _sanitize(session_id)
+        clean_request_id = _sanitize(request_id)
+        if clean_session_id:
+            headers["x-signet-session-id"] = clean_session_id
+        if clean_request_id:
+            headers["x-signet-request-id"] = clean_request_id
+        return headers or None
+
     def _post(
         self,
         path: str,
@@ -261,10 +277,11 @@ class SignetClient:
         path: str,
         *,
         timeout: float = _TIMEOUT_SECS,
+        extra_headers: Optional[Dict[str, str]] = None,
     ) -> Optional[Dict[str, Any]]:
         """DELETE from the daemon. Returns parsed response or None on failure."""
         url = f"{self._base_url}{path}"
-        req = urllib.request.Request(url, headers=self._headers(), method="DELETE")
+        req = urllib.request.Request(url, headers=self._headers(extra_headers), method="DELETE")
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 return _read_json_response(resp)
@@ -449,6 +466,12 @@ class SignetClient:
         structured: Optional[Dict[str, Any]] = None,
         review_after: str = "",
         who: str = "hermes-agent",
+        visibility: str = "",
+        supersedes: str = "",
+        reason: str = "",
+        idempotency_key: str = "",
+        session_id: str = "",
+        request_id: str = "",
     ) -> Optional[Dict[str, Any]]:
         """Store a memory via the daemon API."""
         body: Dict[str, Any] = {
@@ -478,6 +501,22 @@ class SignetClient:
             body["structured"] = structured
         if review_after:
             body["reviewAfter"] = review_after
+        if visibility in {"global", "private", "archived"}:
+            body["visibility"] = visibility
+        if supersedes:
+            body["supersedes"] = supersedes
+        if reason:
+            body["reason"] = reason
+        if idempotency_key:
+            body["idempotencyKey"] = idempotency_key
+        context_headers = self._mutation_context_headers(session_id=session_id, request_id=request_id)
+        if context_headers:
+            return self._post(
+                "/api/memory/remember",
+                body,
+                timeout=_LONG_TIMEOUT_SECS,
+                extra_headers=context_headers,
+            )
         return self._post("/api/memory/remember", body, timeout=_LONG_TIMEOUT_SECS)
 
     def recall(
@@ -611,10 +650,36 @@ class SignetClient:
         memory_id: str,
         *,
         reason: str,
+        session_id: str = "",
+        request_id: str = "",
     ) -> Optional[Dict[str, Any]]:
         """Soft-delete a memory by ID."""
         params = urllib.parse.urlencode({"reason": reason})
-        return self._delete(f"/api/memory/{urllib.parse.quote(memory_id)}?{params}")
+        path = f"/api/memory/{urllib.parse.quote(memory_id, safe='')}?{params}"
+        context_headers = self._mutation_context_headers(session_id=session_id, request_id=request_id)
+        if context_headers:
+            return self._delete(path, extra_headers=context_headers)
+        return self._delete(path)
+
+    def supersede_memory(
+        self,
+        memory_id: str,
+        superseded_by: str,
+        *,
+        reason: str,
+        session_id: str = "",
+        request_id: str = "",
+    ) -> Optional[Dict[str, Any]]:
+        """Mark one memory as superseded by another in an audited transaction."""
+        path = f"/api/memories/{urllib.parse.quote(memory_id, safe='')}/supersede"
+        body = {
+            "superseded_by": superseded_by,
+            "reason": reason,
+        }
+        context_headers = self._mutation_context_headers(session_id=session_id, request_id=request_id)
+        if context_headers:
+            return self._post(path, body, extra_headers=context_headers)
+        return self._post(path, body)
 
     def search(
         self,
@@ -622,11 +687,17 @@ class SignetClient:
         *,
         limit: int = 10,
         memory_type: str = "",
+        tags: str = "",
+        project: str = "",
     ) -> List[Dict[str, Any]]:
         """Search memories. Returns list of memory objects."""
-        params = f"?q={urllib.parse.quote(query)}&limit={limit}"
+        params = f"?q={urllib.parse.quote(query, safe='')}&limit={limit}"
         if memory_type:
-            params += f"&type={urllib.parse.quote(memory_type)}"
+            params += f"&type={urllib.parse.quote(memory_type, safe='')}"
+        if tags:
+            params += f"&tags={urllib.parse.quote(tags, safe='')}"
+        if project:
+            params += f"&project={urllib.parse.quote(project, safe='')}"
         result = self._get(f"/api/memory/search{params}")
         if result and isinstance(result, dict):
             return result.get("results", result.get("memories", []))

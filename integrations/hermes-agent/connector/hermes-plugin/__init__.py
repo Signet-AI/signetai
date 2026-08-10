@@ -20,12 +20,15 @@ Config:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
 import re
 import threading
+import time
 from pathlib import Path
+from queue import Empty, Queue
 from typing import Any, Dict, List, Optional
 
 from agent.memory_provider import MemoryProvider
@@ -302,6 +305,11 @@ ALL_TOOL_SCHEMAS = [
     REMEMBER_ALIAS_SCHEMA,
 ]
 
+HERMES_MEMORY_SOURCE_TYPE = "hermes-memory-write"
+HERMES_MEMORY_TAG = "hermes-builtin"
+MIRROR_SEARCH_LIMIT = 100
+
+
 def _sanitize_env(value: str) -> str:
     return value.strip().replace("\r", "").replace("\n", "")
 
@@ -337,6 +345,7 @@ class SignetMemoryProvider(MemoryProvider):
 
     def __init__(self):
         self._client = None  # SignetClient
+        self._agent_id = ""
         self._session_key = ""
         self._project = ""
         self._inject_cache = ""
@@ -362,6 +371,13 @@ class SignetMemoryProvider(MemoryProvider):
         _CHECKPOINT_INTERVAL = 30
         self._checkpoint_interval = _CHECKPOINT_INTERVAL
         self._last_checkpoint_turn = 0
+        # Hermes calls on_memory_write once per committed operation, including
+        # once for each operation in an atomic batch. Keep one FIFO worker so
+        # replace/remove cannot overtake the add that established their target.
+        self._mirror_queue: Queue = Queue()
+        self._mirror_worker: Optional[threading.Thread] = None
+        self._mirror_state_lock = threading.Lock()
+        self._mirror_shutdown = False
 
     @property
     def name(self) -> str:
@@ -431,6 +447,10 @@ class SignetMemoryProvider(MemoryProvider):
             # No explicit agent id: the daemon resolves its configured agent
             # (its own SIGNET_AGENT_ID, or 'default' for the default workspace).
             logger.debug("SIGNET_AGENT_ID is not set; the daemon's configured agent scope applies.")
+
+        self._agent_id = agent_id
+        with self._mirror_state_lock:
+            self._mirror_shutdown = False
 
         # Skip for cron/flush contexts — no memory injection needed
         agent_context = kwargs.get("agent_context", "")
@@ -698,7 +718,7 @@ class SignetMemoryProvider(MemoryProvider):
             self._prefetch_result = ""
             self._notification_result = ""
 
-        agent_id = os.environ.get("SIGNET_AGENT_ID", "").strip() or "hermes-agent"
+        agent_id = self._agent_id
         self._project = _resolve_agent_workspace(agent_id, kwargs)
         client = self._client
         if not client:
@@ -723,49 +743,406 @@ class SignetMemoryProvider(MemoryProvider):
         except Exception as e:
             logger.debug("Signet session switch failed: %s", e)
 
-    def on_memory_write(self, action: str, target: str, content: str, metadata: Optional[Dict[str, Any]] = None) -> None:
-        """Mirror built-in memory writes to Signet."""
-        if action != "add" or not content:
+    @staticmethod
+    def _mirror_tags(raw: Any) -> set[str]:
+        if isinstance(raw, list):
+            return {str(tag).strip() for tag in raw if str(tag).strip()}
+        if isinstance(raw, str):
+            return {tag.strip() for tag in raw.split(",") if tag.strip()}
+        return set()
+
+    @staticmethod
+    def _mirror_tag(prefix: str, value: str) -> str:
+        clean = value.replace("\n", " ").replace("\r", " ").strip()
+        return f"{prefix}:{clean[:80]}" if clean else ""
+
+    def _mirror_operation_details(
+        self,
+        action: str,
+        target: str,
+        content: str,
+        metadata: Dict[str, Any],
+    ) -> Dict[str, str]:
+        """Derive durable, retry-stable identity for one Hermes write."""
+        old_text = str(metadata.get("old_text", "") or "").strip()
+        session_id = str(
+            metadata.get("session_id", "")
+            or metadata.get("_mirror_session_key", "")
+            or self._session_key
+        ).strip()
+        parent_session_id = str(metadata.get("parent_session_id", "") or "").strip()
+        tool_call_id = str(metadata.get("tool_call_id", "") or "").strip()
+        project = str(metadata.get("_mirror_project", self._project) or "").strip()
+        agent_id = str(metadata.get("_mirror_agent_id", self._agent_id) or "").strip()
+        seed = "\0".join(
+            (
+                agent_id,
+                project,
+                session_id,
+                parent_session_id,
+                target,
+                action,
+                old_text,
+                content,
+                tool_call_id,
+            )
+        )
+        digest = hashlib.sha256(seed.encode("utf-8")).hexdigest()
+        operation_key = f"hermes-memory-write:{digest}"
+
+        # Preserve Hermes's tool-call id as the source id for the common add
+        # path. Replacements get an operation-specific suffix because every
+        # operation in a Hermes batch shares one tool-call id.
+        if tool_call_id and action == "add":
+            source_id = tool_call_id
+        elif tool_call_id:
+            source_id = f"{tool_call_id}:{action}:{digest[:16]}"
+        else:
+            source_id = f"hermes-memory-write:{digest}"
+
+        return {
+            "old_text": old_text,
+            "session_id": session_id,
+            "request_id": operation_key,
+            "source_id": source_id,
+            "idempotency_key": operation_key,
+            "mirror_tag": f"mirror:{digest[:24]}",
+            "project": project,
+            "agent_id": agent_id,
+        }
+
+    def _mirror_write_tags(
+        self,
+        target: str,
+        metadata: Dict[str, Any],
+        operation_tag: str,
+        session_id: str,
+    ) -> List[str]:
+        tags = [HERMES_MEMORY_TAG, target, operation_tag]
+        for tag in (
+            self._mirror_tag(
+                "origin",
+                str(metadata.get("write_origin", "") or metadata.get("source", "")),
+            ),
+            self._mirror_tag("context", str(metadata.get("execution_context", "") or "")),
+            self._mirror_tag("platform", str(metadata.get("platform", "") or "")),
+            self._mirror_tag("session", session_id),
+            self._mirror_tag("parent-session", str(metadata.get("parent_session_id", "") or "")),
+            self._mirror_tag("tool", str(metadata.get("tool_name", "") or "")),
+        ):
+            if tag:
+                tags.append(tag)
+        return tags
+
+    def _find_mirrored_entries(
+        self,
+        query: str,
+        target: str,
+        *,
+        client: Any = None,
+        project: str = "",
+        source_id: str = "",
+        operation_tag: str = "",
+    ) -> List[Dict[str, Any]]:
+        """Find active Hermes rows without crossing project/agent boundaries."""
+        client = client or self._client
+        if not client:
+            return []
+        scoped_project = project or self._project
+        rows = client.search(
+            query,
+            limit=MIRROR_SEARCH_LIMIT,
+            tags=HERMES_MEMORY_TAG,
+            project=scoped_project,
+        )
+
+        matches: List[Dict[str, Any]] = []
+        for row in rows or []:
+            if not isinstance(row, dict):
+                continue
+            content = str(row.get("content", "") or "")
+            tags = self._mirror_tags(row.get("tags"))
+            row_source_id = str(row.get("source_id", "") or row.get("sourceId", "") or "")
+            if HERMES_MEMORY_TAG not in tags or target not in tags:
+                continue
+            if source_id and row_source_id != source_id and operation_tag not in tags:
+                continue
+            if operation_tag and operation_tag not in tags:
+                continue
+            if query and query not in content:
+                continue
+            matches.append(row)
+        return matches
+
+    def _remember_mirror(
+        self,
+        content: str,
+        *,
+        client: Any = None,
+        tags: List[str],
+        project: str,
+        source_id: str,
+        operation_key: str,
+        visibility: str = "global",
+        supersedes: str = "",
+        reason: str = "",
+        session_id: str = "",
+        request_id: str = "",
+    ) -> Optional[Dict[str, Any]]:
+        """Write one mirror row, retrying a source-id collision safely."""
+        client = client or self._client
+        if not client:
+            return None
+        result = client.remember(
+            content,
+            importance=0.6,
+            tags=tags,
+            project=project,
+            visibility=visibility,
+            source_type=HERMES_MEMORY_SOURCE_TYPE,
+            source_id=source_id,
+            idempotency_key=operation_key,
+            supersedes=supersedes,
+            reason=reason,
+            session_id=session_id,
+            request_id=request_id,
+        )
+        if not result or not isinstance(result, dict):
+            return result
+
+        # A tool-call id is shared by every operation in a Hermes batch. If an
+        # earlier add claimed that source id, retry the new operation with its
+        # content-derived id rather than accepting a false dedupe.
+        returned_content = str(result.get("content", "") or "").strip()
+        if result.get("deduped") is True and returned_content and returned_content != content.strip():
+            fallback_source_id = f"{source_id}:{operation_key[-16:]}"
+            return client.remember(
+                content,
+                importance=0.6,
+                tags=tags,
+                project=project,
+                visibility=visibility,
+                source_type=HERMES_MEMORY_SOURCE_TYPE,
+                source_id=fallback_source_id,
+                idempotency_key=operation_key,
+                supersedes=supersedes,
+                reason=reason,
+                session_id=session_id,
+                request_id=request_id,
+            )
+        return result
+
+    def _mirror_operation(
+        self,
+        client: Any,
+        action: str,
+        target: str,
+        content: str,
+        metadata: Dict[str, Any],
+    ) -> None:
+        if not client:
+            return
+
+        details = self._mirror_operation_details(action, target, content, metadata)
+        old_text = details["old_text"]
+        session_id = details["session_id"]
+        source_id = details["source_id"]
+        operation_key = details["idempotency_key"]
+        operation_tag = details["mirror_tag"]
+        tags = self._mirror_write_tags(target, metadata, operation_tag, session_id)
+        request_id = details["request_id"]
+        project = details["project"]
+
+        if action == "add":
+            result = self._remember_mirror(
+                content,
+                client=client,
+                tags=tags,
+                project=project,
+                source_id=source_id,
+                operation_key=operation_key,
+                session_id=session_id,
+                request_id=request_id,
+            )
+            if result is None:
+                logger.warning("Signet Hermes add mirror returned no response")
+            return
+
+        if not old_text:
+            logger.warning("Signet Hermes %s mirror skipped: old_text was not supplied", action)
+            return
+
+        if action == "replace":
+            if not content:
+                logger.warning("Signet Hermes replace mirror skipped: content was empty")
+                return
+
+            # A completed replace is found by its operation tag/source id. This
+            # makes a retry a no-op even though the old row is no longer in the
+            # current recall view.
+            completed = self._find_mirrored_entries(
+                content,
+                target,
+                client=client,
+                project=project,
+                source_id=source_id,
+                operation_tag=operation_tag,
+            )
+            if completed:
+                return
+
+            matches = self._find_mirrored_entries(old_text, target, client=client, project=project)
+            distinct_contents = {str(row.get("content", "")) for row in matches}
+            if len(distinct_contents) > 1:
+                logger.warning(
+                    "Signet Hermes replace mirror skipped: old_text matched multiple mirrored entries"
+                )
+                return
+            if not matches:
+                # The old row may already have been superseded by a prior
+                # delivery. No current stale row can be reintroduced.
+                logger.debug("Signet Hermes replace mirror found no active source row")
+                return
+
+            old_id = str(matches[0].get("id", "") or "").strip()
+            if not old_id:
+                logger.warning("Signet Hermes replace mirror skipped: matched row had no id")
+                return
+            result = self._remember_mirror(
+                content,
+                client=client,
+                tags=tags,
+                project=project,
+                source_id=source_id,
+                operation_key=operation_key,
+                supersedes=old_id,
+                reason="Hermes built-in memory replacement",
+                session_id=session_id,
+                request_id=request_id,
+            )
+            if not result:
+                logger.warning("Signet Hermes replace mirror returned no response")
+                return
+
+            # A content/source dedupe can return an existing current row before
+            # the daemon sees `supersedes`. Link that row explicitly so the old
+            # Hermes entry still cannot remain current.
+            if result.get("deduped") is True:
+                replacement_id = str(result.get("id", "") or "").strip()
+                if replacement_id and replacement_id != old_id and hasattr(client, "supersede_memory"):
+                    linked = client.supersede_memory(
+                        old_id,
+                        replacement_id,
+                        reason="Hermes built-in memory replacement",
+                        session_id=session_id,
+                        request_id=request_id,
+                    )
+                    if linked is None:
+                        logger.warning("Signet Hermes replace mirror could not link a deduped replacement")
+            return
+
+        if action == "remove":
+            matches = self._find_mirrored_entries(old_text, target, client=client, project=project)
+            distinct_contents = {str(row.get("content", "")) for row in matches}
+            if len(distinct_contents) > 1:
+                logger.warning(
+                    "Signet Hermes remove mirror skipped: old_text matched multiple mirrored entries"
+                )
+                return
+            if not matches:
+                # Soft-delete is idempotent from the current-view perspective:
+                # a prior delivery already removed this row, or it was never
+                # mirrored. In neither case should a stale row be recreated.
+                return
+            memory_id = str(matches[0].get("id", "") or "").strip()
+            if not memory_id:
+                logger.warning("Signet Hermes remove mirror skipped: matched row had no id")
+                return
+            result = client.forget_memory(
+                memory_id,
+                reason="Hermes built-in memory removal",
+                session_id=session_id,
+                request_id=request_id,
+            )
+            if result is None:
+                logger.warning("Signet Hermes remove mirror returned no response")
+
+    def _mirror_worker_loop(self) -> None:
+        while True:
+            try:
+                client, action, target, content, metadata = self._mirror_queue.get(timeout=0.1)
+            except Empty:
+                with self._mirror_state_lock:
+                    if self._mirror_shutdown or self._mirror_queue.empty():
+                        self._mirror_worker = None
+                        return
+                continue
+            try:
+                self._mirror_operation(client, action, target, content, metadata)
+            except Exception as e:
+                logger.warning(
+                    "Signet Hermes memory mirror failed for %s/%s: %s",
+                    action,
+                    target,
+                    e,
+                )
+            finally:
+                self._mirror_queue.task_done()
+
+    def flush_mirror_writes(self, timeout: float = 5.0) -> bool:
+        """Wait for queued mirror operations, primarily for shutdown/tests."""
+        deadline = time.monotonic() + max(0.0, timeout)
+        while self._mirror_queue.unfinished_tasks > 0 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        return self._mirror_queue.unfinished_tasks == 0
+
+    def on_memory_write(
+        self,
+        action: str,
+        target: str,
+        content: str,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Mirror committed Hermes memory writes in FIFO order.
+
+        Hermes only calls this after the built-in memory tool commits. The
+        single daemon worker therefore preserves the order of atomic batch
+        operations without blocking the agent turn on a network request.
+        """
+        if not isinstance(action, str) or not isinstance(target, str) or not isinstance(content, str):
+            logger.warning("Signet Hermes memory mirror skipped malformed operation")
+            return
+        action = action.strip()
+        target = target.strip()
+        content = content.strip()
+        if action not in {"add", "replace", "remove"}:
+            return
+        if action in {"add", "replace"} and not content:
+            return
+        if target not in {"memory", "user"}:
+            logger.warning("Signet Hermes memory mirror skipped unknown target: %s", target)
             return
         client = self._client
         if not client:
             return
-        project = self._project
-        metadata = metadata if isinstance(metadata, dict) else {}
-        write_origin = str(metadata.get("write_origin", "") or metadata.get("source", "")).strip()
-        execution_context = str(metadata.get("execution_context", "")).strip()
-        platform = str(metadata.get("platform", "")).strip()
-        source_id = str(metadata.get("tool_call_id", "") or "").strip()
-        session_id = str(metadata.get("session_id", "") or self._session_key).strip()
-
-        def _tag(prefix: str, value: str) -> str:
-            clean = value.replace("\n", " ").replace("\r", " ").strip()
-            return f"{prefix}:{clean[:80]}" if clean else ""
-
-        def _write():
-            try:
-                tags = ["hermes-builtin", target]
-                for tag in (
-                    _tag("origin", write_origin),
-                    _tag("context", execution_context),
-                    _tag("platform", platform),
-                    _tag("session", session_id),
-                ):
-                    if tag:
-                        tags.append(tag)
-                client.remember(
-                    content,
-                    importance=0.6,
-                    tags=tags,
-                    project=project,
-                    source_type="hermes-memory-write" if source_id else "",
-                    source_id=source_id,
+        snapshot = dict(metadata) if isinstance(metadata, dict) else {}
+        snapshot["_mirror_project"] = self._project
+        snapshot["_mirror_agent_id"] = self._agent_id or str(
+            getattr(client, "_agent_id", "") or ""
+        )
+        snapshot["_mirror_session_key"] = self._session_key
+        with self._mirror_state_lock:
+            if self._mirror_shutdown:
+                logger.debug("Signet Hermes memory mirror rejected after shutdown")
+                return
+            self._mirror_queue.put((client, action, target, content, snapshot))
+            if self._mirror_worker is None or not self._mirror_worker.is_alive():
+                self._mirror_worker = threading.Thread(
+                    target=self._mirror_worker_loop,
+                    daemon=True,
+                    name="signet-memwrite-serial",
                 )
-            except Exception as e:
-                logger.debug("Signet memory mirror failed: %s", e)
-
-        t = threading.Thread(target=_write, daemon=True, name="signet-memwrite")
-        t.start()
+                self._mirror_worker.start()
 
     def on_session_end(self, messages: List[Dict[str, Any]]) -> None:
         """Call session-end hook to trigger memory extraction from transcript."""
@@ -1134,6 +1511,12 @@ class SignetMemoryProvider(MemoryProvider):
 
     def shutdown(self) -> None:
         """Clean shutdown — wait for background threads."""
+        with self._mirror_state_lock:
+            self._mirror_shutdown = True
+            mirror_worker = self._mirror_worker
+        self.flush_mirror_writes(timeout=5.0)
+        if mirror_worker and mirror_worker.is_alive():
+            mirror_worker.join(timeout=0.1)
         if self._prefetch_thread and self._prefetch_thread.is_alive():
             self._prefetch_thread.join(timeout=5.0)
 
